@@ -20,8 +20,8 @@ Main Agent (OpenAI Agents SDK)
     │  通过 RunContextWrapper[RunContext] 访问任务状态
     │  返回 JSON 字符串
     ▼
-确定性 Pipeline (run_research_pipeline)
-    │  正式产物必须走 Pipeline + Validation Gate
+Dataset Construction Runtime (execute_dataset_build)
+    │  正式产物必须走 V2 build + release-invariants gate
     ▼
 validated artifacts/
 ```
@@ -29,7 +29,7 @@ validated artifacts/
 **核心原则**：
 - Skill 由 manifest、operation Tool、支持的数据源和运行状态组成
 - Agent 只直接装载稳定网关；业务 Tool 由 `invoke_skill` 解析 Catalog 快照后执行
-- 正式产物必须通过 `run_research_pipeline` 进入 Pipeline，Skill 不直接拼装最终 CSV
+- 正式产物必须通过 `execute_dataset_build` 进入 V2 build，Skill 不直接拼装最终数据集
 - `pipeline_supported=false` 的自定义数据库只能作为 Agent 动态能力
 
 ---
@@ -786,7 +786,7 @@ skill_registry.register(my_source_skill)
 ### learned skill
 
 - 位置：`backend/app/skills/learned/<category>/<name>/`
-- 默认禁用，不能绕过 Pipeline 和 Validation Gate
+- 默认禁用，不能绕过 `execute_dataset_build` 的 release-invariants 发布门禁
 - 通过 [evolution.py](../backend/app/skills/evolution.py) 的 `save_learned_skill()` 自动生成
 - 当前未接入 `create_agent()` 的自动加载流程
 

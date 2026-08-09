@@ -32,22 +32,23 @@ Key points:
   [app/api/ws.py](backend/app/api/ws.py) (WebSocket). The application lifespan
   (owned by `app.main:create_app`) initializes the durable runtime:
   `TaskManager`, `TaskRepository`, `EventHub`, and `TaskIndex`.
-- The Main Agent is built on the OpenAI Agents SDK and enters the deterministic
-  pipeline through a single `run_research_pipeline` Function Tool
-  ([app/pipeline/tool.py](backend/app/pipeline/tool.py)). The Agent never
-  assembles the final CSV directly.
-- The deterministic Pipeline Runner
-  ([app/pipeline/runner.py](backend/app/pipeline/runner.py)) executes five
-  stages: **Discovery → Acquisition → Processing → Artifact Build → Validation
-  Gate**. Only artifacts that pass the Validation Gate are published to
-  `artifacts/`.
+- The Main Agent is built on the OpenAI Agents SDK and enters the Dataset
+  Construction Runtime through the `execute_dataset_build` Function Tool
+  ([app/pipeline/dataset_build_tool.py](backend/app/pipeline/dataset_build_tool.py)),
+  with `validate_dataset_build_spec` for spec pre-checks. The Agent never
+  assembles the final dataset files directly.
+- Execution is driven by the V2 kernel (ExpressionBuildRunner +
+  DatasetBuildExecutor) with the release-invariants gate; validated builds are
+  published to `artifacts/` as immutable publications, and a V1 legacy mirror
+  ([app/datasets/build/v1_bridge.py](backend/app/datasets/build/v1_bridge.py))
+  keeps the artifact API compatible.
 - The durable runtime is event-sourced: `TaskManager` owns the Run lifecycle
   (`QUEUED → RUNNING → FINALIZING → COMPLETED/FAILED/CANCELLED/INTERRUPTED`),
   `TaskRepository` + `EventStore` provide the authoritative event log
   (`<task_id>/events.jsonl`), and `TaskSnapshot` is rebuilt via a pure reducer
-  (`app.runtime.state.reduce_task_event`). The pipeline's in-memory
-  `runner.events` list is bridged to the runtime event log by
-  `FixtureRunExecutor`.
+  (`app.runtime.state.reduce_task_event`). The dataset kernel's events are
+  bridged to the runtime event log by `FixtureRunExecutor` (fixed-spec V2
+  builds) and by the Agent tool path in agent runs.
 - The WebSocket endpoint is `/api/v1/ws`; the durable event session is served
   by `app/api/ws_events.py:_run_event_session`.
 - The skill repository is organized into four categories — discovery,

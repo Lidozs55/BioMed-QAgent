@@ -268,10 +268,10 @@ supersedes_publication_id
 | `SourceAsset` 内容 hash 标识 | `domain/contracts/source.py` | 保留 |
 | `DownloadAttempt` 成功/失败记录 | `domain/contracts/source.py` | 保留 |
 | Attempt 输入/参数/输出摘要 | `domain/contracts/pipeline.py` | 保留，语义从"阶段"泛化为"步骤" |
-| 任务锁、checkpoint、timeout/cancel | `pipeline/runner.py`、`runtime/manager.py` | 保留 |
+| 任务锁、checkpoint、timeout/cancel | `runtime/manager.py` | 保留（V1 `pipeline/runner.py` 已删） |
 | durable event 持久化与重放 | `runtime/event_store.py`、`runtime/hub.py` | 保留 |
-| staging 区与原子发布 | `pipeline/stages/validation/publish.py` | 保留 |
-| Validation Gate | `pipeline/stages/validation/` | 保留门禁，替换为 Profile 驱动（§10） |
+| staging 区与原子发布 | `datasets/build/expression_runner.py`（immutable publication）、`datasets/build/v1_bridge.py`（legacy 镜像） | 保留（V1 `pipeline/stages/validation/publish.py` 已删） |
+| Validation Gate | `datasets/build/profiles.py`（`VALIDATION_PROFILES`）+ `datasets/spec_validator.py` + `datasets/build/invariants.py`（release 不变量） | 保留门禁，Profile 驱动（§10） |
 | fixture / live 区分 | 测试标记与 `mode` 参数 | 保留 |
 | 网络访问、安全下载、沙箱、egress 边界 | `integrations/`、BrowserPool | 保留 |
 
@@ -886,7 +886,7 @@ Main Agent 不直接装载全部业务 Tool 或拼接每个 Skill 的 instructio
 - `find_skill` / `invoke_skill` 网关（由 `build_skill_gateway` 构造，绑定
   `SkillCatalog`）；
 - `validate_dataset_build_spec` / `execute_dataset_build`：校验并提交自包含
-  `DatasetBuildSpec`；旧 `run_research_pipeline` 仅作为迁移期兼容 facade；
+  `DatasetBuildSpec`（V1 确定性 pipeline 已退役，这是唯一正式产物入口）；
 - 文件读写工具（`read_file` / `read_file_head` / `search_file` / `write_file` /
   `list_files`）；
 - `compress_query_log` / `review_query_strategy`；

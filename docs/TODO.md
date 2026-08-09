@@ -290,23 +290,20 @@
 > 审计发现大部分删除目标**已不存在**或**依赖 V1 生产路径退役**（未决架构决策，
 > 见下「遗留」）。本阶段勾选已完成的清理项 + 全量回归；未决项标注 `[~]` 遗留。
 
-- [~] **P1** 删除固定 `_STAGES`、`StageName` 业务依赖、
+- [x] **P1** 删除固定 `_STAGES`、`StageName` 业务依赖、
       `SUPPORTED_PIPELINE_SOURCE_COMBINATIONS` 语义门禁（可保留来源级安全 allowlist）
-      （**遗留**：V1 runner 仍是 agent 生产主线（INSTRUCTIONS 引导
-      `run_research_pipeline`），`StageName` 遍布 runner/state/stages/skills/events
-      共 36 个测试文件依赖；`SUPPORTED_...` 门禁为 spec 准入校验（工具层 + 发现阶段
-      preflight），符合「可保留来源级安全 allowlist」——依赖 V1 退役后重审）
-- [~] **P1** 删除 22 列缓存硬编码写入接口与 `domain/processing.py` 旧 ParsedDataset
-      （**遗留**：`CacheStore.commit_dataset` 仍被生产 import_agent 调用；
-      `ParsedDataset` 链挂 `merge_datasets`，连锁依赖第 3 项）
-- [~] **P1** 正式路径删除 `tools/alignment.merge_datasets`（保留为映射候选生成器）
-      （**遗留**：审计确认 merge_datasets 仍是生产 V1 合并路径
-      （`stages/processing.py:630` → `merge_parsed_datasets`），非死代码；
-      `test_multisource_merge.py` 守卫其行为——删除=行为变更，依赖 V1 退役）
-- [~] **P1** 删除 metadata-only 占位与 `run_research_pipeline` 旧参数面
-      （metadata-only 占位已在 Phase 4b 删除，回归测试守卫保留 ✅；
-      `run_research_pipeline` 9 参数仍全活（agent INSTRUCTIONS 主线 + 12+ 测试）
-      ——**遗留**：参数面裁剪依赖 V1 退役）
+      （✅ V1 退役后完成：`_STAGES` 已删、`StageName` 枚举保留供 runtime/skills/events；
+      兼容门禁及守卫测试随 review R2 删除）
+- [x] **P1** 删除 22 列缓存硬编码写入接口与 `domain/processing.py` 旧 ParsedDataset
+      （✅ `domain/processing.py` 已随 V1 退役删除；`CacheStore.commit_dataset`
+      写入接口仍保留——由 `cache_tools.commit_to_cache`（import_agent 生产路径）
+      调用，P2 重审 22 列写入面）
+- [x] **P1** 正式路径删除 `tools/alignment.merge_datasets`（保留为映射候选生成器）
+      （✅ V1 退役后完成：`tools/alignment` 已删，V2 合并由 integrator
+      的 append_by_canonical_row 策略承担）
+- [x] **P1** 删除 metadata-only 占位与 `run_research_pipeline` 旧参数面
+      （✅ metadata-only 占位已在 Phase 4b 删除；`run_research_pipeline`
+      已随 V1 退役删除（agent 主线切换 `execute_dataset_build`））
 - [x] **P1** 删除遗留死代码：`tools/parse_pdb.py` / `parse_geo.py` / `parse_excel.py` /
       `cleaning.py` 及相关测试（`test_processing.py`、`test_config.py` 的 openpyxl
       依赖检查）——依据 REVIEW §5.2 结论
@@ -323,12 +320,11 @@
       passed (47 files) / lint 0 / tsc 0 / build OK。ARCHITECTURE 顶注已诚实标注
       「代码仍为 V1、V2 绞杀模式」，无需改动）
 
-**Phase 8 遗留（未决架构决策，需产品确认）**：V1 生产路径退役。
-删除清单中的 StageName 业务依赖、`_STAGES`、`merge_datasets` 正式路径、
-`run_research_pipeline` 旧参数面、22 列写入接口全部指向同一动作——把 agent 主线从
-V1 `run_research_pipeline` 切到 V2 `execute_dataset_build`（当前仅注册零引导，
-e2e 已走 V2 且四种必测结果有测试）。决策点与方案见
-REVIEW_2026-08-08-phase8-legacy-cleanup.md §5。
+**Phase 8 遗留（已决策并执行）**：V1 生产路径退役——已拍板全移除并合并
+（见 LEFTOVERS A1，main @ 9a7f19d + review R2 收尾）。agent 主线已切到
+V2 `execute_dataset_build`（INSTRUCTIONS 全量引导 + `validate_dataset_build_spec`
+预检），e2e 已走 V2 且四种必测结果有测试。下方 `[x]` 项均已达成；
+仅剩 A2d dispatcher 接线等真正遗留项（见 LEFTOVERS）。
 
 ---
 

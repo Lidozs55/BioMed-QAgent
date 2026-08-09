@@ -291,7 +291,7 @@ async def test_artifact_api_hides_unknown_ids_and_unsafe_tasks(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
-async def test_unexpected_manifest_storage_error_remains_500(
+async def test_unexpected_manifest_storage_error_downgrades_to_legacy(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

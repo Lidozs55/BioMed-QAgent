@@ -60,29 +60,6 @@ DATABASE_IDENTIFIER_ALIASES: dict[str, Database] = {
     "browser": Database.BROWSER,
 }
 
-# Source-level capability is necessary but not sufficient: the deterministic
-# Pipeline only closes the following end-to-end combinations. Keep this table
-# canonical so Agent admission and direct Pipeline callers fail identically.
-SUPPORTED_PIPELINE_SOURCE_COMBINATIONS: frozenset[frozenset[Database]] = frozenset(
-    {
-        frozenset({Database.GEO}),
-        frozenset({Database.PUBMED, Database.GEO}),
-        frozenset({Database.GDC}),
-        frozenset({Database.UCSC_XENA}),
-        frozenset({Database.GDC, Database.UCSC_XENA}),
-        frozenset({Database.REACTOME}),
-    }
-)
-
-
-def is_supported_pipeline_source_combination(
-    databases: set[Database] | frozenset[Database],
-) -> bool:
-    """Return whether the deterministic Pipeline implements this source set."""
-
-    return frozenset(databases) in SUPPORTED_PIPELINE_SOURCE_COMBINATIONS
-
-
 class DataLevel(StrEnum):
     RAW_SEQUENCE = "raw_sequence"
     SUBMITTER_PROCESSED = "submitter_processed"
