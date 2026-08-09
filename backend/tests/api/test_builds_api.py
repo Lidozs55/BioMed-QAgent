@@ -420,3 +420,113 @@ def _partial_build_result(publication_id: str):
         reason_codes=[],
         user_summary="partial",
     )
+
+
+def _seed_no_data_build_dir(repository: object, task_id: str, build_id: str) -> None:
+    """Write a zero-row manifest build dir (NO_DATA shape: manifest present,
+    no publish version) the way ``execute_dataset_build`` leaves it."""
+    import hashlib
+
+
+    build_dir = repository.tasks_dir / task_id / "datasets_build" / build_id
+    build_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = build_dir / "dataset_manifest.json"
+    payload = {
+        "manifest_id": f"manifest_{build_id}",
+        "task_id": task_id,
+        "build_id": build_id,
+        "dataset_family": "gene_expression",
+        "row_granularity": "probe_sample_measurement",
+        "schema_ref": "gene_expression.probe_long.v1",
+        "primary_key": ["record_id"],
+        "row_count": 0,
+        "sha256": "a" * 64,
+        "artifacts": [],
+        "source_summary": {"src_geo": 1},
+        "validation_summary": {"status": "passed"},
+        "confidence_summary": {},
+        "provenance_summary": {"source_count": 1},
+    }
+    manifest_path.write_text(
+        json.dumps(payload, ensure_ascii=False), "utf-8"
+    )
+    payload["sha256"] = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    manifest_path.write_text(
+        json.dumps(payload, ensure_ascii=False) + "\n", "utf-8"
+    )
+
+
+@pytest.mark.asyncio
+async def test_builds_api_no_data_carries_durable_envelope_fields(
+    tmp_path: Path,
+) -> None:
+    """C1e (F7-03): a NO_DATA build's listing item must carry the durable
+    envelope's real user_summary/reason_codes — not the generic manifest
+    projection — even though publication_id is None."""
+    async with api_client(tmp_path) as (application, client):
+        repository = application.state.task_repository
+        _seed_no_data_build_dir(repository, "task_nodata", "build_nodata")
+        await repository.save_snapshot(
+            TaskSnapshot(
+                task=TaskSummary(
+                    task_id="task_nodata",
+                    mode=TaskMode.FIXTURE,
+                    databases=["geo"],
+                    title="task_nodata",
+                    status=RunStatus.COMPLETED,
+                    created_at=NOW,
+                    updated_at=NOW,
+                ),
+                runs=[
+                    RunRecord(
+                        run_id="run_nodata",
+                        task_id="task_nodata",
+                        request_id="request_nodata",
+                        status=RunStatus.RUNNING,
+                        input="task_nodata",
+                        created_at=NOW,
+                        updated_at=NOW,
+                        started_at=NOW,
+                    )
+                ],
+            )
+        )
+        await repository.append_event_payload(
+            task_id="task_nodata",
+            run_id="run_nodata",
+            payload=RunFinalizingPayload(),
+        )
+        await repository.append_event_payload(
+            task_id="task_nodata",
+            run_id="run_nodata",
+            payload=RunCompletedPayload(
+                build_result=BuildResult(
+                    status=BuildResultStatus.NO_DATA,
+                    valid_row_count=0,
+                    rejected_sources=["binding_geo"],
+                    reason_codes=["no_primary_data"],
+                    user_summary=(
+                        "GEO 数据源未产生可发布表达数据，请检查平台注释或更换数据集。"
+                    ),
+                    recommended_next_action="更换 GEO 数据集后重试。",
+                    build_id="build_nodata",
+                )
+            ),
+        )
+
+        response = await client.get("/api/v1/builds")
+        payload = response.json()
+
+    assert response.status_code == 200
+    item = next(
+        entry for entry in payload["items"] if entry["build_id"] == "build_nodata"
+    )
+    assert item["status"] == "no_data"
+    assert item["publication_id"] is None
+    result = item["build_result"]
+    assert result is not None
+    # 真实信封字段（非通用投影 "build build_nodata produced no publishable data"）
+    assert result["reason_codes"] == ["no_primary_data"]
+    assert result["user_summary"] == (
+        "GEO 数据源未产生可发布表达数据，请检查平台注释或更换数据集。"
+    )

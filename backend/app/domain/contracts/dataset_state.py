@@ -52,6 +52,10 @@ class BuildResult(ContractModel):
     reason_codes: list[str] = Field(default_factory=list)
     user_summary: str = ""
     recommended_next_action: str = ""
+    # C1e (F7-03): NO_DATA builds have no publication_id to correlate in the
+    # builds API — this stable build identity lets the API tie a durable
+    # ``RunCompletedPayload.build_result`` envelope back to its build dir.
+    build_id: str | None = None
 
     @model_validator(mode="after")
     def validate_state(self) -> BuildResult:

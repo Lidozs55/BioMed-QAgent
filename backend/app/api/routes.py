@@ -1375,9 +1375,9 @@ async def _resolve_build_result(
     manifest alone cannot express. Falls back to the manifest projection.
     """
 
+    if events is None:
+        events = await repository.list_events(task_id)
     if publication is not None:
-        if events is None:
-            events = await repository.list_events(task_id)
         for event in reversed(events):
             payload = event.payload
             if (
@@ -1387,6 +1387,17 @@ async def _resolve_build_result(
                 == publication.publication_id
             ):
                 return payload.build_result
+        return _derive_build_result(manifest, publication)
+    # C1e (F7-03): NO_DATA builds have no publication to correlate; match the
+    # durable envelope by its stable build identity (stamped by the tool).
+    for event in reversed(events):
+        payload = event.payload
+        if (
+            isinstance(payload, RunCompletedPayload)
+            and payload.build_result is not None
+            and payload.build_result.build_id == manifest.build_id
+        ):
+            return payload.build_result
     return _derive_build_result(manifest, publication)
 
 
@@ -1462,9 +1473,10 @@ async def list_builds(
         if loaded is None:
             continue
         _resolved_build_dir, manifest, publication = loaded
-        events = (
-            await events_for(task_id) if publication is not None else []
-        )
+        # NO_DATA builds carry no publication but the durable
+        # ``RunCompletedPayload.build_result`` envelope is still authoritative
+        # (C1e, F7-03) — load the task events for correlation either way.
+        events = await events_for(task_id)
         build_result = await _resolve_build_result(
             repository,
             task_id,

@@ -649,7 +649,10 @@ def _install_dataset_build_outcome(
         PendingDatasetBuild(
             run_id=managed_run_id,
             build_id=build_id,
-            build_result=result,
+            # C1e (F7-03): stamp the stable build identity onto the durable
+            # envelope so the builds API can correlate NO_DATA results (which
+            # have no publication_id) back to their build dir.
+            build_result=result.model_copy(update={"build_id": build_id}),
             publication=publication,
             manifest_sha256=manifest_sha256,
         )
