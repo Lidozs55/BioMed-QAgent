@@ -4,24 +4,45 @@
 > 与 review-loop 记录的可选补强。细节与根因见各来源文档（本清单只做摘要+指针，
 > 不重复内容，避免漂移）。**修改 TODO / REVIEW / ISSUES 时须同步本清单。**
 >
-> 快照：2026-08-08，main @ 3b87877；基线 后端 2722 passed / 前端 726 passed (47 files)。
+> 快照：2026-08-09，main @ bdd23a6 → 分支 `feat/v2-mainline-v1-removal`。
 > 状态图例：🔴 阻塞决策 · 🟠 产品/功能未完成 · 🟡 技术债（已评估）· ⚪ 可选补强 · ⚫ 已知问题（ISSUES.md）
 
 ---
 
-## 🔴 A. 未决架构/产品决策（唯一阻塞项）
+## 🔴 A. 阻塞决策（已决策，执行中）
 
-### A1. V1 生产路径退役（TODO Phase 8 `[~]`×4，REVIEW phase8 §5）
-V2 `execute_dataset_build` 已闭环（四种必测结果 e2e 覆盖）但 **agent INSTRUCTIONS 仍引导 V1
-`run_research_pipeline` 为正式产物入口**（仅注册零引导）。退役候选方案 4 步已写入
-REVIEW §5（INSTRUCTIONS 切换 → V1 降级/删除 → 测试迁移 → 全量回归）。依赖 A1 的删除子项：
+### A1. V1 生产路径退役（**已拍板：V1 全移除，主线只留 V2** — REVIEW_2026-08-09-v2-gap-audit.md，分支 `feat/v2-mainline-v1-removal`）
+
+执行顺序（审计报告 §4）：**Phase A** V2 纵向链补全（validate 工具 → 真实 acquisition 血缘 → dispatcher 接线 → INSTRUCTIONS 切换 → fail-fast 隔离）→ **Phase B** V1 删除（runner/`_STAGES`/StageName/allowlist/22 列写/merge_datasets + 36 测试迁移）→ **Phase C** 发布层缺口。V2 内核已闭环但 V2 end-to-end **未**闭环（见 A2 缺口），故 Phase A 必须先于 Phase B。
+
+### A2. V2 纵向链缺口（审计确认，P0 — REVIEW_2026-08-09 §2）
+
+| ID | 缺口 | 证据 |
+| --- | --- | --- |
+| A2a | 无 Agent-facing `validate_dataset_build_spec` 工具 | 仓库 grep 零实现（SpecValidator 已在 tool 内部调用） |
+| A2b | V2 acquisition 未接通：`execute_dataset_build` 要求 caller 预置 asset，`_acquire()` 只取字典 | expression_runner.py:332-352 |
+| A2c | 下载血缘伪造：`successful_attempt_id` 无对应 DownloadAttempt | dataset_build_tool.py:275 |
+| A2d | WorkflowRecipeSourceFetcher / acquire_series_asset 生产零消费者 | 仅测试引用 |
+| A2e | V1/V2 同 Run 混用无 fail-fast，隐式"V1 优先" | runner.py:1287-1300 |
+
+### A3. V1 已知缺陷（2026-08-09 日志调试，**不修复，退役即消失** — REVIEW_2026-08-09 §3）
+
+| # | 缺陷 |
+| --- | --- |
+| A3a | GDC live source_id 断链 → FK 60662 全败（discovery.specification 未写回 ctx；acquisition 回退 data-URL 派生） |
+| A3b | Reactome live participants 解析 100% 失败（真实结构 identifier 在 refEntities 内层） |
+| A3c | Xena hub 名当 dataset 键（"GDC Brenner" 含空格非对象键） |
+| A3d | fixture 模式缺 gdc_clinical.tsv 资产 |
+| A3e | GDC live 只取 1 个文件（sorted(hits)[0]），单样本矩阵 |
+
+### A4. 待 V1 退役后执行的删除子项（原 A1a–A1d，随 Phase B 一并）
 
 | 子项 | 现状 |
 | --- | --- |
-| A1a `_STAGES` / `StageName` 业务依赖 / `SUPPORTED_PIPELINE_SOURCE_COMBINATIONS` 门禁 | V1 runner 主线 + 36 测试文件依赖；门禁本身符合"可保留 allowlist" |
-| A1b 22 列缓存写入接口（`CacheStore.commit_dataset`）+ `domain/processing.py` 旧 ParsedDataset | 写入接口仍被生产 import_agent 调用；ParsedDataset 链挂 A1c |
-| A1c `alignment.merge_datasets` 正式路径（**非死代码**，`stages/processing.py:630` 生产合并） | 删除=行为变更；`test_multisource_merge.py` 守卫 |
-| A1d `run_research_pipeline` 旧参数面（9 参数全活） | agent 主线 + 12+ 测试 |
+| A4a `_STAGES` / `StageName` 业务依赖 / `SUPPORTED_PIPELINE_SOURCE_COMBINATIONS` 门禁 | V1 runner 主线 + 36 测试文件依赖；门禁本身符合"可保留 allowlist" |
+| A4b 22 列缓存写入接口（`CacheStore.commit_dataset`）+ `domain/processing.py` 旧 ParsedDataset | 写入接口仍被生产 import_agent 调用；ParsedDataset 链挂 A4c |
+| A4c `alignment.merge_datasets` 正式路径（非死代码，`stages/processing.py:630` 生产合并） | 删除=行为变更；`test_multisource_merge.py` 守卫 |
+| A4d `run_research_pipeline` 旧参数面（9 参数全活） | agent 主线 + 12+ 测试 |
 
 ---
 
@@ -30,7 +51,7 @@ REVIEW §5（INSTRUCTIONS 切换 → V1 降级/删除 → 测试迁移 → 全�
 | ID | 级别 | 项 | 来源 |
 | --- | --- | --- | --- |
 | B1 | P0 | 新 Run 携带版本化 `TaskSpecification`（原 §1.6） | TODO:63 |
-| B2 | P2 | 删除 `validated_intermediate`/`validated_final` 状态（ADR-010 否决，任务/会话改 `current_publication_id`） | TODO:71 |
+| B2 | ~~P2~~ | ~~删除 `validated_intermediate`/`validated_final` 状态（ADR-010 否决，任务/会话改 `current_publication_id`）~~ **已过时**：2026-08-09 审计确认仓库已无旧状态实现（当前即 `current_publication_id` 模型） | TODO:71 |
 | B3 | P2 | Agent INSTRUCTIONS 增加"达 max_turns 输出 `[MAX_TURNS_REACHED]`" | TODO:365 |
 | B4 | P2 | UniProt / ChEMBL Agent-only 来源能力（不接入 Pipeline） | TODO:367 |
 | B5 | P2 | §3.5 通用 UI：**command/menubar 跳过、对话路由延后**（缓存导出按钮已完成） | TODO:278 `[~]` |
