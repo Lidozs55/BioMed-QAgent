@@ -39,6 +39,22 @@ _DOMAIN_INTENTS: dict[str, tuple[str, ...]] = {
     "网页": ("web", "page", "html"),
     "浏览器": ("browser", "web", "rendered"),
     "截图": ("capture", "screenshot", "visual"),
+    # 科研数据指导技能组（research_data_guidance，docs/REVIEW_2026-08-09
+    # §7.2 P1）：主 Agent 以中文提问检索，须让中文能力词命中其英文元数据。
+    "科研数据": ("research", "data"),
+    "数据策略": ("strategy", "guidance"),
+    "研究设计": ("study", "design"),
+    "数据获取": ("acquisition",),
+    "数据清洗": ("cleaning",),
+    "清洗": ("cleaning",),
+    "可分析性": ("analyzability",),
+    "组学": ("omics", "expression"),
+    "表达谱": ("expression",),
+    "临床数据": ("clinical", "trial"),
+    "试验数据": ("clinical", "trial"),
+    "溯源": ("provenance",),
+    "复现": ("reproducibility",),
+    "数据来源": ("source", "sources"),
 }
 _IDENTITY_WEIGHT = 12
 _OPERATION_WEIGHT = 6
