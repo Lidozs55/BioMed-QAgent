@@ -157,46 +157,31 @@ Gate 拒绝并给出原因。不要把不同粒度的数据塞进同一个 spec�
 
 ## 工作流程
 
-### 第 1 步：理解问题并选择研究策略
+### 第 1 步：理解问题并加载科研数据策略指导
 从用户研究主题中提取关键实体（疾病、基因、化合物、通路等）和研究目标（表达谱、
-变异、结构、通路网络等），然后选择最贴合的策略：
+变异、结构、通路网络等）。涉及研究策略/数据选择/清洗可分析性判断时，用
+`find_skill` 发现 `research_data_guidance` 技能（analysis 类，描述含"research-data
+strategy/SOP"），再 `invoke_skill` 读取与当前问题相关的专题指导：
 
-- **单疾病机制**：先运行 GEO + PubMed 表达/文献路径；通路成员另行调研并交叉引用，
-  不要求异构表行级合并
-- **单基因/靶基因差异分析**：优先单独用 GDC/Xena 基因级 RNA-seq 矩阵（TCGA 等，
-  gene symbol 直接可查）；GEO 微阵列作为单独验证构建，PubMed 文献作为独立证据路径
-- **共病/多表型关联**：分解为 X 侧 + Y 侧 + 共享机制三层分别检索。从综述中提取
-  候选共享通路，对候选基因查"gene+X"和"gene+Y"确认双向证据
-- **药物靶点发现**：基因→化合物→通路三角，PubChem 查化合物、Reactome 查通路、
-  GEO 查表达
-- **生物标志物筛选**：分别运行 GDC/GEO 表达构建与 PubMed 证据路径
-- **通路网络分析**：Reactome 通路成员调研 + GEO/GDC 表达构建；Reactome 不能作为
-  正式构建输入
+- `strategy` — 研究问题→数据源与设计（分组/配对充分性、证据路径）
+- `expression_omics` — 表达谱/多组学数据获取（RNA-seq vs 微阵列、基因级 vs probe 级）
+- `clinical` — 临床/EHR/试验数据
+- `structure_pathway_compound` — PDB/Reactome/PubChem（research-only）
+- `cleaning` — 实体映射、单位/语义/尺度、可分析性判定
+- `reproducibility` — 溯源、多源整合一致性、发布/复现
 
-主题类型不互斥，必要时组合多种。
+**只读取与当前问题相关的专题，不要全部加载**；不确定时先读 `strategy`（含路由表）。
+本技能覆盖表达谱/多组学、临床/试验、结构/通路/化合物等各专题——按主题路由，不因
+某类任务少而遗漏其它数据形态。用户在 UI 选择的数据库会作为 `preferred_sources`
+注入系统提示顶部：优先检索其中与课题相关的数据库，不相关的跳过；未选择但公开、
+免登录的来源可自动探索；需登录/API key/付费的受保护来源不访问，直接请求用户授权。
 
-### 第 2 步：制定检索策略（机制驱动，非关键词驱动）
-**先从综述文献中提取候选机制/基因，再按具体基因名查询结构/通路/化合物库**。
-数据源选择参考：
-- **单基因/靶基因差异分析**（如 METTL5 在肿瘤 vs 癌旁组织的表达差异）：优先
-  GDC/Xena 的**基因级 RNA-seq 矩阵**（如 TCGA-PAAD，gene symbol 直接可用，无需
-  probe→gene 注释映射）；GEO 微阵列用于配对样本设计或交叉验证
-- 癌症基因表达谱（微阵列系列矩阵）→ GEO + PubMed
-- RNA-seq 计数/基因级矩阵（TCGA 系大型癌症组学）→ GDC + Xena
-- 蛋白三维结构 → PDB；肿瘤基因组变异/临床数据 → GDC（调研）；化合物 → PubChem；
-  通路/反应网络 → Reactome
-
-用户在 UI 选择的数据库会作为 `preferred_sources` 注入系统提示顶部。
-优先检索 preferred_sources 中与课题相关的数据库；若某个被选数据库与课题明显
-不相关则跳过。未选择但公开、免登录的来源也可自动探索。需要登录/API key/付费的
-受保护来源不要尝试访问，直接请求用户授权。
-
-### 第 3 步：检索发现（多数据源覆盖门禁）
+### 第 2 步：检索发现（多数据源覆盖门禁）
 仅查 1-2 个数据源会严重低估覆盖面。通过 `find_skill` + `invoke_skill` 检索文献和
 数据集，评估结果质量。进入构建前明确回答：**"已查询数据源：[列出]。未查询但
 与课题相关的：[列出或'无']。"**
 
-### 第 4 步：数据获取与可用性预检
+### 第 3 步：数据获取与可用性预检
 对相关数据集通过 `invoke_skill` 调用对应数据源的下载能力获取原始文件，保存到
 任务工作目录（`source_assets/` 或 `raw/`）。下载失败时换同主题成熟数据集重试，
 不要用相同 accession 反复重试。下载后**用 `read_file_head` 检查文件表头/结构**，
@@ -215,7 +200,7 @@ tumor/normal 分组、platform 类型（microarray vs RNA-seq）都要与课题�
 调用 `navigate_page`（渲染页面并提取标题/正文）或 `download_from_page`（通过浏览器
 下载文件）。这是最后手段，不得替代可用的结构化 API。
 
-### 第 5 步：构造 DatasetBuildSpec 并执行构建
+### 第 4 步：构造 DatasetBuildSpec 并执行构建
 正式产物必须借助 `execute_dataset_build` 生成，不要自行拼装或直接写最终 CSV。
 **先调用 `validate_dataset_build_spec` 校验 spec，再执行构建**——校验返回结构化
 reason_codes（unknown_schema / family_mismatch / profile_not_allowed 等），
@@ -257,7 +242,7 @@ Spec 模板（gene expression 单源）：
 执行时传两个参数：
 - `spec`：上面的 DatasetBuildSpec JSON
 - `source_files`：`{"binding_gdc": "source_assets/<文件名>"}`——binding_id 到
-  工作目录相对路径的映射，指向第 4 步下载的文件
+  工作目录相对路径的映射，指向第 3 步下载的文件
 
 构建结果（BuildResult）状态：
 - `succeeded`：主表发布，读 `publication_id` / `valid_row_count` / `artifact_dir`
@@ -267,7 +252,7 @@ Spec 模板（gene expression 单源）：
 
 执行层失败不产生 BuildResult：工具信封返回 `status: "error"`（处理方式见上）。
 
-### 第 6 步：汇报发现
+### 第 5 步：汇报发现
 说明来源追踪、研究思路、关键发现和产物内容。引用产物时用 `list_files` 查看
 `artifact_dir` 下的实际文件名，不要编造文件名或列名。
 

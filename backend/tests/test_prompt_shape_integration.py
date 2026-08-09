@@ -56,18 +56,21 @@ def test_instructions_guide_single_gene_analysis_to_gene_level_matrix() -> None:
     """REVIEW §3.2 (0805): the Agent prompt must guide single-gene differential
     analysis toward GDC/Xena gene-level matrices (gene symbol directly
     queryable, no probe→gene annotation step) instead of defaulting to
-    probe-level GEO arrays."""
+    probe-level GEO arrays.
+
+    0809 §7.2 后：详细策略移入 research_data_guidance 技能（expression_omics
+    /cleaning 专题），prompt 保留路由入口 + 兜底纪律。
+    """
     from app.agent_loop.agent import INSTRUCTIONS
 
-    # Strategy list (step 1) names the single-gene analysis path.
-    assert "单基因/靶基因差异分析" in INSTRUCTIONS
-    assert "GDC/Xena 基因级 RNA-seq 矩阵" in INSTRUCTIONS
-    # Channel reference (step 2) prioritizes gene-level matrices for it.
-    assert "基因级 RNA-seq 矩阵" in INSTRUCTIONS
-    assert "probe→gene 注释映射" in INSTRUCTIONS
-    # The core_data_existence recovery guidance no longer unconditionally
-    # pushes microarray; it redirects single-gene goals to GDC/Xena first.
+    # 路由入口（第 1 步）：通过技能加载表达谱/多组学专题指导，点名基因级 vs probe 级。
+    assert "research_data_guidance" in INSTRUCTIONS
+    assert "RNA-seq vs 微阵列" in INSTRUCTIONS
+    assert "基因级 vs probe 级" in INSTRUCTIONS
+    # 兜底纪律仍在 prompt：单基因/靶基因目标优先改用 GDC/Xena 基因级矩阵，
+    # 不默认落到 probe 级 GEO 阵列。
     assert "若目标是单基因/靶基因分析" in INSTRUCTIONS
+    assert "GDC/Xena 的基因级矩阵" in INSTRUCTIONS
     assert "microarray 优先于" in INSTRUCTIONS
 
 

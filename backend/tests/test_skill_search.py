@@ -178,3 +178,38 @@ def test_chinese_browser_intents_expand_to_browser_skills() -> None:
     assert "browser_fallback" in [item.name for item in browser_hits]
     assert "web_visual_capture" in [item.name for item in screenshot]
     assert "pubmed" not in [item.name for item in web]
+
+
+def test_chinese_research_data_intents_expand_to_guidance_skill() -> None:
+    """中文能力词（科研数据策略/数据清洗/组学/临床数据等）必须命中英文元数据的
+    research_data_guidance Skill（docs/REVIEW_2026-08-09 §7.2 P1 修复）。"""
+    strategy = LexicalSkillSearchStrategy()
+    guidance = _descriptor(
+        "research_data_guidance",
+        "Load topic-specific research-data strategy and SOP guidance for "
+        "biomedical data tasks: data-source selection and study design, "
+        "expression/omics acquisition, clinical/trial data, "
+        "structure/pathway/compound research-only sources, cleaning and "
+        "analyzability diagnosis, and provenance/reproducibility.",
+        sources=[],
+        category=SkillCategory.ANALYSIS,
+    )
+    pubmed = _descriptor(
+        "pubmed",
+        "Search biomedical literature and research papers.",
+        sources=["pubmed"],
+        category=SkillCategory.DISCOVERY,
+    )
+    candidates = (pubmed, guidance)
+
+    strategy_hit = strategy.search(candidates, "科研数据策略")
+    cleaning_hit = strategy.search(candidates, "数据清洗与可分析性")
+    omics_hit = strategy.search(candidates, "组学数据获取")
+    clinical_hit = strategy.search(candidates, "临床数据")
+    provenance_hit = strategy.search(candidates, "溯源与复现")
+
+    assert guidance.name in [item.name for item in strategy_hit]
+    assert guidance.name in [item.name for item in cleaning_hit]
+    assert guidance.name in [item.name for item in omics_hit]
+    assert guidance.name in [item.name for item in clinical_hit]
+    assert guidance.name in [item.name for item in provenance_hit]
