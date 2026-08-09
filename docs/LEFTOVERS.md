@@ -4,45 +4,40 @@
 > 与 review-loop 记录的可选补强。细节与根因见各来源文档（本清单只做摘要+指针，
 > 不重复内容，避免漂移）。**修改 TODO / REVIEW / ISSUES 时须同步本清单。**
 >
-> 快照：2026-08-09，main @ bdd23a6 → 分支 `feat/v2-mainline-v1-removal`。
+> 快照：2026-08-09，main @ bdd23a6 → 分支 `feat/v2-mainline-v1-removal`（8 commits，已推送）。
 > 状态图例：🔴 阻塞决策 · 🟠 产品/功能未完成 · 🟡 技术债（已评估）· ⚪ 可选补强 · ⚫ 已知问题（ISSUES.md）
 
 ---
 
-## 🔴 A. 阻塞决策（已决策，执行中）
+## 🔴 A. 阻塞决策（已执行，分支合入中）
 
 ### A1. V1 生产路径退役（**已拍板：V1 全移除，主线只留 V2** — REVIEW_2026-08-09-v2-gap-audit.md，分支 `feat/v2-mainline-v1-removal`）
 
-执行顺序（审计报告 §4）：**Phase A** V2 纵向链补全（validate 工具 → 真实 acquisition 血缘 → dispatcher 接线 → INSTRUCTIONS 切换 → fail-fast 隔离）→ **Phase B** V1 删除（runner/`_STAGES`/StageName/allowlist/22 列写/merge_datasets + 36 测试迁移）→ **Phase C** 发布层缺口。V2 内核已闭环但 V2 end-to-end **未**闭环（见 A2 缺口），故 Phase A 必须先于 Phase B。
+**执行状态（2026-08-09）**：Phase A 全部完成（A2a/A2c/A2e，A2d 延后）；Phase B 完成（V1 生产代码全删 + 测试迁移/删除）；Phase C 完成 C1d；T2 residual 顺手修复。全量 2233 passed / ruff clean / 前端 726 / 冒烟 OK。待 review loop 后合并。
 
-### A2. V2 纵向链缺口（审计确认，P0 — REVIEW_2026-08-09 §2）
+### A2. V2 纵向链缺口（REVIEW_2026-08-09 §2）
 
-| ID | 缺口 | 证据 |
+| ID | 缺口 | 状态 |
 | --- | --- | --- |
-| A2a | 无 Agent-facing `validate_dataset_build_spec` 工具 | 仓库 grep 零实现（SpecValidator 已在 tool 内部调用） |
-| A2b | V2 acquisition 未接通：`execute_dataset_build` 要求 caller 预置 asset，`_acquire()` 只取字典 | expression_runner.py:332-352 |
-| A2c | 下载血缘伪造：`successful_attempt_id` 无对应 DownloadAttempt | dataset_build_tool.py:275 |
-| A2d | WorkflowRecipeSourceFetcher / acquire_series_asset 生产零消费者 | 仅测试引用 |
-| A2e | V1/V2 同 Run 混用无 fail-fast，隐式"V1 优先" | runner.py:1287-1300 |
+| A2a | 无 Agent-facing `validate_dataset_build_spec` 工具 | ✅ 完成（SpecValidator 包装 + 注册 + 4 TDD 用例） |
+| A2b/c | V2 acquisition 血缘伪造 | ✅ 完成（真实 DownloadAttempt 登记 + provenance 暴露 + 2 TDD 用例） |
+| A2d | Acquisition Dispatcher 接线（WorkflowRecipeSourceFetcher / acquire_series_asset 生产消费者） | ⏳ **延后**（agent skills 已覆盖取数，不阻塞主线；待后续架构增强） |
+| A2e | V1/V2 混用无 fail-fast | ✅ 完成（V1 工具已删除，混用面不复存在） |
 
-### A3. V1 已知缺陷（2026-08-09 日志调试，**不修复，退役即消失** — REVIEW_2026-08-09 §3）
+### A3. V1 已知缺陷（2026-08-09 日志调试，**不修复，已随 V1 删除** — REVIEW_2026-08-09 §3）
 
-| # | 缺陷 |
+| # | 缺陷 | 处置 |
+| --- | --- | --- |
+| A3a-e | GDC source_id 断链 / Reactome 解析 / Xena hub 键 / fixture 缺资产 / 单文件下载 | ✅ 随 V1 五阶段链删除（已不存在） |
+
+### A4. 删除子项（随 Phase B 一并完成）
+
+| 子项 | 状态 |
 | --- | --- |
-| A3a | GDC live source_id 断链 → FK 60662 全败（discovery.specification 未写回 ctx；acquisition 回退 data-URL 派生） |
-| A3b | Reactome live participants 解析 100% 失败（真实结构 identifier 在 refEntities 内层） |
-| A3c | Xena hub 名当 dataset 键（"GDC Brenner" 含空格非对象键） |
-| A3d | fixture 模式缺 gdc_clinical.tsv 资产 |
-| A3e | GDC live 只取 1 个文件（sorted(hits)[0]），单样本矩阵 |
-
-### A4. 待 V1 退役后执行的删除子项（原 A1a–A1d，随 Phase B 一并）
-
-| 子项 | 现状 |
-| --- | --- |
-| A4a `_STAGES` / `StageName` 业务依赖 / `SUPPORTED_PIPELINE_SOURCE_COMBINATIONS` 门禁 | V1 runner 主线 + 36 测试文件依赖；门禁本身符合"可保留 allowlist" |
-| A4b 22 列缓存写入接口（`CacheStore.commit_dataset`）+ `domain/processing.py` 旧 ParsedDataset | 写入接口仍被生产 import_agent 调用；ParsedDataset 链挂 A4c |
-| A4c `alignment.merge_datasets` 正式路径（非死代码，`stages/processing.py:630` 生产合并） | 删除=行为变更；`test_multisource_merge.py` 守卫 |
-| A4d `run_research_pipeline` 旧参数面（9 参数全活） | agent 主线 + 12+ 测试 |
+| A4a `_STAGES` / `StageName` 业务依赖 / `SUPPORTED_PIPELINE_SOURCE_COMBINATIONS` 门禁 | ✅ 删除（StageName 枚举本身保留——runtime/skills/events 仍用） |
+| A4b 22 列缓存写入接口 + `domain/processing.py` | ✅ 删除（`CacheStore` 读侧保留——V2 legacy_cache/API 用） |
+| A4c `alignment.merge_datasets` 正式路径 | ✅ 删除（V2 自有 merge_strategy） |
+| A4d `run_research_pipeline` 旧参数面 | ✅ 删除（agent 工具表无 V1 工具） |
 
 ---
 
@@ -75,7 +70,7 @@
 ### C3. cache/builds 一致性（REVIEW phase7 §5）
 - **C3a F7-04**：content-addressed `artifact_id` 不含 path → 同字节双路径碰撞（修复方向：digest 含 `relative_path`）
 - **C3b T1 residual**：V2 build 不发 `artifact_produced`（builds API 为 serving surface）；单 run 单 outcome slot
-- **C3c T2 residual**：build-tool cache root（模块 `settings.output_dir`）与 API 配置 root 可能不一致
+- **~~C3c T2 residual~~** ✅ 已修复（2026-08-09）：build-tool cache root 改从 workdir 推导（`work_dir.root.parents[2] / "cache"`），与 API `_cache_root` 恒等
 - **C3d R1C-04**：`list_artifacts` 每请求重哈希 artifact（O(bytes)，GB CSV 慢）→ 缓存已验证 digest
 - **C3e R1C-05/R1S-03**：`useTaskBuildId` 只取 `/builds` 首页（limit 50）→ 超 50 条静默 legacy 回退
 
