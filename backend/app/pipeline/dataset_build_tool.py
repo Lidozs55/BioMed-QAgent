@@ -24,7 +24,6 @@ from agents import RunContextWrapper, function_tool
 from pydantic import ValidationError
 
 from app.agent_loop.context import PendingDatasetBuild, RunContext
-from app.config import settings
 from app.datasets.build.cache import DatasetCacheV2
 from app.datasets.build.expression_runner import (
     _PUBLICATION_REFUSED_PREFIX,

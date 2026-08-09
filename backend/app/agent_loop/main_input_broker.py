@@ -1,3 +1,4 @@
+
 """Main-run human-input broker — the tool → execution channel for Phase 4c.
 
 Mirrors ``AgentRunExecutor._await_max_turns_resume`` (UserInputSubmitter +
@@ -41,13 +42,13 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from app.agent_loop.context import UserInputSubmitter
-
-#: 人工输入等待超时（原 V1 pipeline.runner 常量，随 V1 退役内联）。
-_USER_INPUT_TIMEOUT: float = 300.0
 from app.domain.contracts import UserInputRequiredPayload, UserInputResumedPayload
 from app.runtime.compaction import CompactionCancelledError
 
 logger = logging.getLogger(__name__)
+
+#: 人工输入等待超时（原 V1 pipeline.runner 常量，随 V1 退役内联）。
+_USER_INPUT_TIMEOUT: float = 300.0
 
 _CORRECTIONS_TODO_FILENAME = "corrections_todo.csv"
 _CORRECTIONS_TODO_COLUMNS = (
