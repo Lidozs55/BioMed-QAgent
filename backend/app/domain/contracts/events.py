@@ -219,6 +219,7 @@ class RunQueuedPayload(ContractModel):
         default=None,
         pattern=r"^[0-9a-f]{64}$",
     )
+    specification: TaskSpecification | None = None  # B1: 新 Run 携带版本化 spec
 
 
 class RunStartedPayload(ContractModel):

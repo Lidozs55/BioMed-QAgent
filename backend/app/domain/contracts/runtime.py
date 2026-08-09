@@ -19,6 +19,7 @@ from app.domain.contracts.enums import (
     SubagentType,
     TaskMode,
 )
+from app.domain.contracts.task import TaskSpecification
 
 
 class RunSummary(ContractModel):
@@ -57,6 +58,7 @@ class RunRecord(ContractModel):
     finished_at: datetime | None = None
     error: str | None = Field(default=None, min_length=1)
     summary: RunSummary | None = Field(default=None)
+    specification: TaskSpecification | None = None  # B1: 新 Run 携带版本化 spec
 
     @model_validator(mode="after")
     def validate_timestamps(self) -> Self:

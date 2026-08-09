@@ -225,6 +225,7 @@ def reduce_task_event(
                 request_fingerprint=payload.request_fingerprint,
                 status=RunStatus.QUEUED,
                 input=payload.input,
+                specification=payload.specification,
                 created_at=event.timestamp,
                 updated_at=event.timestamp,
             )
