@@ -324,7 +324,8 @@
 （见 LEFTOVERS A1，main @ 9a7f19d + review R2 收尾）。agent 主线已切到
 V2 `execute_dataset_build`（INSTRUCTIONS 全量引导 + `validate_dataset_build_spec`
 预检），e2e 已走 V2 且四种必测结果有测试。下方 `[x]` 项均已达成；
-仅剩 A2d dispatcher 接线等真正遗留项（见 LEFTOVERS）。
+后续批次：P3 前端（B3/B5/C2a/C3e/E 类 UI）、P4 测试补强与性能（D1-D5/
+C5a/C5b/C6a）——真实遗留项见 LEFTOVERS。
 
 ---
 
@@ -360,4 +361,5 @@ V2 `execute_dataset_build`（INSTRUCTIONS 全量引导 + `validate_dataset_build
       绝对路径；`.env.example` 补充文档；5 项新测试）
 - [ ] **P2** Agent INSTRUCTIONS 增加"达到 max_turns 后输出 `[MAX_TURNS_REACHED]`"
       指导（原 §4.5）
-- [ ] **P2** 新增 UniProt / ChEMBL 等 Agent-only 来源能力（不接入 Pipeline）（原 §1.4）
+- [x] **P2** 新增 UniProt / ChEMBL 等 Agent-only 来源能力（不接入 Pipeline）（原 §1.4）
+      ✅ 已修（2026-08-09, feat/leftovers-p2, commit 7d5893a）

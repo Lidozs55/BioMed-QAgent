@@ -2324,3 +2324,102 @@ async def test_executor_does_not_start_sdk_run_after_compaction_cancellation(
 
 
 
+
+
+@pytest.mark.asyncio
+async def test_no_data_outcome_with_manifest_artifacts_emits_zero_artifact_events(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """C3b gate: NO_DATA outcome（publication=None）即使 manifest 含 artifact
+    条目也绝不发 artifact_produced。
+
+    Reviewer 场景：probe-coverage 失败 / zero-row manifest-signal 等 NO_DATA
+    流会在磁盘留下带 entries 的 manifest；镜像若无 publication 门禁就会为
+    这些 NO_DATA build 发 artifact_produced——与 BuildResult 的
+    ``available_artifact_roles=[]`` 矛盾、inflate reducer artifact_count、
+    污染前端 NO_DATA UI。本测试直接驱动 ``_transfer_dataset_build_outcome``
+    （真实 executor 路径），断言 NO_DATA 零产物事件。
+    """
+    from app.agent_loop.context import PendingDatasetBuild
+    from app.datasets.contracts import BuildResult, BuildResultStatus
+
+    context = RunContext(
+        task_id="task_no_data_gate",
+        base_dir=tmp_path,
+        managed_run_id="run_no_data_gate",
+    )
+    outcome = PendingDatasetBuild(
+        run_id="run_no_data_gate",
+        build_id="build_no_data_gate",
+        build_result=BuildResult(
+            status=BuildResultStatus.NO_DATA,
+            valid_row_count=0,
+            reason_codes=["no_primary_data"],
+            build_id="build_no_data_gate",
+        ),
+        publication=None,
+        manifest_artifacts=(
+            ArtifactManifestEntry(
+                artifact_id="artifact_schema",
+                role=ArtifactRole.SCHEMA,
+                name="schema.json",
+                relative_path="artifacts/schema.json",
+                media_type="application/json",
+                size_bytes=2,
+                sha256="1" * 64,
+                generated_by_step_id="step_dataset_build_v2",
+            ),
+            ArtifactManifestEntry(
+                artifact_id="artifact_audit",
+                role=ArtifactRole.AUDIT_REPORT,
+                name="audit.csv",
+                relative_path="artifacts/canonical/audit.csv",
+                media_type="text/csv",
+                size_bytes=2,
+                sha256="2" * 64,
+                generated_by_step_id="step_dataset_build_v2",
+            ),
+        ),
+    )
+    context.install_dataset_build_outcome(outcome)
+    execution = RunExecution(
+        task_id=context.task_id,
+        run_id="run_no_data_gate",
+        request_id="request_no_data_gate",
+        input="no data gate",
+        context=context,
+    )
+
+    class FakeResult:
+        async def stream_events(self):
+            if False:
+                yield None
+
+    build = SimpleNamespace(
+        agent=object(),
+        skill_names=(),
+        model=SimpleNamespace(close=AsyncMock()),
+    )
+    monkeypatch.setattr(
+        runner_module, "build_agent", lambda databases=None: build
+    )
+    monkeypatch.setattr(
+        runner_module.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: FakeResult(),
+    )
+    await make_executor(
+        SimpleNamespace(task_session=run_scoped_session(object()))
+    )(execution)
+
+    execution.seal_completion()
+    completion = await execution.commit_completion()
+    produced = [
+        event
+        for event in completion
+        if isinstance(event.payload, ArtifactProducedPayload)
+    ]
+    assert execution.build_result.status is BuildResultStatus.NO_DATA
+    # ← 修复目标：NO_DATA 零产物事件（当前红：镜像无条件发 2 条）
+    assert produced == []

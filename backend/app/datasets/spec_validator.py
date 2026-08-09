@@ -14,6 +14,11 @@ from app.datasets.build.adapters import GeoExpressionAdapter
 from app.datasets.build.profiles import get_normalization_profile, get_validation_profile
 from app.datasets.contracts import AdapterParams, DatasetBuildSpec
 from app.datasets.schema_registry import SchemaRegistry
+from app.domain.contracts import (
+    DATABASE_IDENTIFIER_ALIASES,
+    SOURCE_CAPABILITIES,
+    SourceCapability,
+)
 
 
 @dataclass(frozen=True)
@@ -155,6 +160,23 @@ class SpecValidator:
             spec.normalization_profile_ref
         )
         for binding in spec.source_bindings:
+            # B4 Agent-only guarantee: a binding whose ``source`` resolves to a
+            # RESEARCH_ONLY database (e.g. uniprot/chembl — Agent-only research
+            # channels) must never be admitted as a verified build source.
+            # Unknown identifiers are left to the runtime adapter resolution so
+            # the pre-check stays fail-open for identifiers this table cannot
+            # know (the runtime still rejects unknown adapters).
+            resolved = DATABASE_IDENTIFIER_ALIASES.get(binding.source.strip().lower())
+            if (
+                resolved is not None
+                and SOURCE_CAPABILITIES[resolved] is not SourceCapability.PIPELINE_SUPPORTED
+            ):
+                codes.append("source_not_pipeline_supported")
+                reasons.append(
+                    f"binding {binding.binding_id!r} source {binding.source!r} "
+                    f"is {SOURCE_CAPABILITIES[resolved].value} — Agent-only "
+                    "research sources are never accepted as build sources"
+                )
             if binding.adapter_id == GeoExpressionAdapter.adapter_id:
                 if not binding.parameters:
                     codes.append("invalid_adapter_parameters")

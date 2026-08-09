@@ -19,6 +19,7 @@ import tempfile
 import threading
 from contextlib import suppress
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -843,6 +844,40 @@ async def list_task_events(
 # Artifacts
 # ---------------------------------------------------------------------------
 
+# C2b: HIL 超时请求落盘在任务 artifacts 目录（main_input_broker
+# `_write_corrections_todo`），独立于任何 manifest。list_artifacts 把该文件
+# 追加为审计类条目；下载端点按固定 artifact_id 解析。
+_CORRECTIONS_TODO_ARTIFACT_ID = "corrections_todo"
+_CORRECTIONS_TODO_FILENAME = "corrections_todo.csv"
+_CORRECTIONS_TODO_MEDIA_TYPE = "text/csv"
+
+
+def _corrections_todo_path(repository: TaskRepositoryDep, task_id: str) -> Path:
+    """Return the task-scoped corrections todo path (may not exist)."""
+
+    return (
+        repository.tasks_dir / task_id / "artifacts" / _CORRECTIONS_TODO_FILENAME
+    )
+
+
+def _corrections_todo_entry(
+    repository: TaskRepositoryDep,
+    task_id: str,
+) -> dict[str, object] | None:
+    """Return the listing entry for an existing corrections todo file, else None."""
+
+    path = _corrections_todo_path(repository, task_id)
+    if not path.is_file():
+        return None
+    return {
+        "artifact_id": _CORRECTIONS_TODO_ARTIFACT_ID,
+        "name": _CORRECTIONS_TODO_FILENAME,
+        "role": ArtifactRole.AUDIT_REPORT.value,
+        "size": path.stat().st_size,
+        "sha256": _listing_sha256(path),
+        "media_type": _CORRECTIONS_TODO_MEDIA_TYPE,
+    }
+
 
 @router.get("/tasks/{task_id}/artifacts")
 async def list_artifacts(task_id: str, repository: TaskRepositoryDep) -> dict:
@@ -865,7 +900,7 @@ async def list_artifacts(task_id: str, repository: TaskRepositoryDep) -> dict:
                 "name": "dataset_manifest.json",
                 "role": ArtifactRole.SCHEMA.value,
                 "size": manifest_path.stat().st_size,
-                "sha256": _file_sha256(manifest_path),
+                "sha256": _listing_sha256(manifest_path),
                 "media_type": "application/json",
             }
         ]
@@ -873,11 +908,11 @@ async def list_artifacts(task_id: str, repository: TaskRepositoryDep) -> dict:
             file_path = _verified_cache_artifact_path(entry_dir, entry.relative_path)
             if (
                 file_path.stat().st_size != entry.size_bytes
-                or _file_sha256(file_path) != entry.sha256
+                or _listing_sha256(file_path) != entry.sha256
             ):
-                raise HTTPException(
-                    status_code=409, detail="Artifact integrity check failed"
-                )
+                # C2c：cache 文件完整性校验失败 → 跳过该 cache entry，
+                # 回退 legacy 镜像面（坏 manifest 的 continue 语义同源）。
+                break
             artifacts.append(
                 {
                     "artifact_id": entry.artifact_id,
@@ -888,10 +923,17 @@ async def list_artifacts(task_id: str, repository: TaskRepositoryDep) -> dict:
                     "media_type": entry.media_type,
                 }
             )
-        return {"artifacts": artifacts, "degraded": False}
+        else:
+            if corrections := _corrections_todo_entry(repository, task_id):
+                artifacts.append(corrections)
+            return {"artifacts": artifacts, "degraded": False}
     loaded = _load_validated_manifest(repository.tasks_dir, task_id, snapshot)
     if loaded is None:
-        return {"artifacts": [], "degraded": False}
+        corrections = _corrections_todo_entry(repository, task_id)
+        return {
+            "artifacts": [corrections] if corrections else [],
+            "degraded": False,
+        }
     manifest, artifacts_dir, degraded = loaded
     manifest_path = artifacts_dir / "run_manifest.json"
     artifacts = [
@@ -900,7 +942,7 @@ async def list_artifacts(task_id: str, repository: TaskRepositoryDep) -> dict:
             "name": "run_manifest.json",
             "role": ArtifactRole.SCHEMA.value,
             "size": manifest_path.stat().st_size,
-            "sha256": _file_sha256(manifest_path),
+            "sha256": _listing_sha256(manifest_path),
             "media_type": "application/json",
         }
     ]
@@ -908,7 +950,7 @@ async def list_artifacts(task_id: str, repository: TaskRepositoryDep) -> dict:
         file_path = _verified_artifact_path(artifacts_dir, entry.relative_path)
         if (
             file_path.stat().st_size != entry.size_bytes
-            or _file_sha256(file_path) != entry.sha256
+            or _listing_sha256(file_path) != entry.sha256
         ):
             raise HTTPException(
                 status_code=409, detail="Artifact integrity check failed"
@@ -923,6 +965,8 @@ async def list_artifacts(task_id: str, repository: TaskRepositoryDep) -> dict:
                 "media_type": entry.media_type,
             }
         )
+    if corrections := _corrections_todo_entry(repository, task_id):
+        artifacts.append(corrections)
     return {"artifacts": artifacts, "degraded": degraded}
 
 
@@ -946,6 +990,12 @@ async def get_artifact_file(
         if artifact_id == "run_manifest":
             file_path = entry_dir / "dataset_manifest.json"
             media_type = "application/json"
+        elif artifact_id == _CORRECTIONS_TODO_ARTIFACT_ID:
+            corrections_path = _corrections_todo_path(repository, task_id)
+            if not corrections_path.is_file():
+                raise HTTPException(status_code=404, detail="Artifact not found")
+            file_path = corrections_path
+            media_type = _CORRECTIONS_TODO_MEDIA_TYPE
         else:
             entry = next(
                 (
@@ -972,6 +1022,17 @@ async def get_artifact_file(
             str(file_path), filename=file_path.name, media_type=media_type
         )
     loaded = _load_validated_manifest(repository.tasks_dir, task_id, snapshot)
+    if artifact_id == _CORRECTIONS_TODO_ARTIFACT_ID:
+        # C2b fix: corrections 独立于 manifest 存在（HIL 超时落盘），必须在
+        # ``loaded is None`` 守卫之前解析——与 list 的 loaded-None 分支一致。
+        corrections_path = _corrections_todo_path(repository, task_id)
+        if not corrections_path.is_file():
+            raise HTTPException(status_code=404, detail="Artifact not found")
+        return FileResponse(
+            str(corrections_path),
+            filename=corrections_path.name,
+            media_type=_CORRECTIONS_TODO_MEDIA_TYPE,
+        )
     if loaded is None:
         raise HTTPException(status_code=404, detail="Artifact not found")
     manifest, artifacts_dir, _degraded = loaded
@@ -998,6 +1059,28 @@ async def get_artifact_file(
 
 
 _HASH_CHUNK_SIZE = 1 << 20  # 1 MiB — bounded memory per artifact read
+
+
+@lru_cache(maxsize=256)
+def _cached_digest(path: str, mtime_ns: int, size: int) -> str:
+    """Digest keyed by (path, mtime_ns, size) so edits invalidate the cache."""
+
+    return _file_sha256(Path(path))
+
+
+def _listing_sha256(path: Path) -> str:
+    """Listing-verification digest with an mtime+size-invalidated cache (C3d).
+
+    Only listing paths use this: ``list_artifacts`` re-verifies every artifact
+    file on every request (O(bytes), slow for GB CSVs). The cache key embeds
+    mtime and size, so a modified file recomputes its digest and the existing
+    integrity/fallback semantics are untouched. Download endpoints keep
+    calling ``_file_sha256`` directly so the file being served is always
+    hashed fresh.
+    """
+
+    stat = path.stat()
+    return _cached_digest(str(path), stat.st_mtime_ns, stat.st_size)
 
 
 def _file_sha256(path: Path, chunk_size: int = _HASH_CHUNK_SIZE) -> str:
@@ -1351,9 +1434,9 @@ async def _resolve_build_result(
     manifest alone cannot express. Falls back to the manifest projection.
     """
 
+    if events is None:
+        events = await repository.list_events(task_id)
     if publication is not None:
-        if events is None:
-            events = await repository.list_events(task_id)
         for event in reversed(events):
             payload = event.payload
             if (
@@ -1363,6 +1446,17 @@ async def _resolve_build_result(
                 == publication.publication_id
             ):
                 return payload.build_result
+        return _derive_build_result(manifest, publication)
+    # C1e (F7-03): NO_DATA builds have no publication to correlate; match the
+    # durable envelope by its stable build identity (stamped by the tool).
+    for event in reversed(events):
+        payload = event.payload
+        if (
+            isinstance(payload, RunCompletedPayload)
+            and payload.build_result is not None
+            and payload.build_result.build_id == manifest.build_id
+        ):
+            return payload.build_result
     return _derive_build_result(manifest, publication)
 
 
@@ -1413,8 +1507,9 @@ async def list_builds(
         ]
 
     # Durable event correlation is per-task; load each task's events at most
-    # once per request (published builds only — NO_DATA builds have no
-    # publication id to correlate and use the manifest projection).
+    # once per request (NO_DATA builds carry no publication but the durable
+    # ``RunCompletedPayload.build_result`` envelope is still authoritative —
+    # C1e, F7-03 — so events load for every build).
     events_by_task: dict[str, list[EventEnvelope]] = {}
 
     async def events_for(task_id: str) -> list[EventEnvelope]:
@@ -1438,9 +1533,10 @@ async def list_builds(
         if loaded is None:
             continue
         _resolved_build_dir, manifest, publication = loaded
-        events = (
-            await events_for(task_id) if publication is not None else []
-        )
+        # NO_DATA builds carry no publication but the durable
+        # ``RunCompletedPayload.build_result`` envelope is still authoritative
+        # (C1e, F7-03) — load the task events for correlation either way.
+        events = await events_for(task_id)
         build_result = await _resolve_build_result(
             repository,
             task_id,
@@ -1514,11 +1610,10 @@ async def get_build(
     if loaded is None:
         raise HTTPException(status_code=404, detail="Build not found")
     _resolved_build_dir, manifest, publication = loaded
-    events = (
-        await repository.list_events(resolved_task_id)
-        if publication is not None
-        else []
-    )
+    # C1e (F7-03): NO_DATA builds have no publication but the durable
+    # ``RunCompletedPayload.build_result`` envelope is still authoritative —
+    # load the task events for build_id correlation either way.
+    events = await repository.list_events(resolved_task_id)
     build_result = await _resolve_build_result(
         repository, resolved_task_id, manifest, publication, events=events
     )

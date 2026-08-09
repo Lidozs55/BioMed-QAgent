@@ -215,8 +215,9 @@ async def test_artifact_api_never_exposes_cancelled_run_publication(
         # cache 分支内校验失败 → 409。
         ("traversal", 409, "Invalid cache artifact path"),
         ("missing_file", 409, "Registered artifact is missing"),
-        ("size_mismatch", 409, "Artifact integrity check failed"),
-        ("hash_mismatch", 409, "Artifact integrity check failed"),
+        # C2c：cache 文件损坏 → 跳过该 cache entry 回退 legacy 镜像面（200）
+        ("size_mismatch", 200, ""),
+        ("hash_mismatch", 200, ""),
     ],
 )
 async def test_artifact_api_preserves_manifest_and_integrity_conflicts(
@@ -667,8 +668,14 @@ async def test_artifact_api_cache_path_requires_completed_run(
 
 
 @pytest.mark.asyncio
-async def test_artifact_api_cache_path_integrity_conflict(tmp_path: Path) -> None:
-    """A tampered cached artifact fails the same integrity gate as legacy."""
+async def test_artifact_api_cache_integrity_conflict_falls_back_to_legacy(
+    tmp_path: Path,
+) -> None:
+    """A tampered cached artifact skips the cache entry and falls back.
+
+    C2c: the listing no longer 409s on a corrupt cache file — it degrades to
+    the legacy mirror. Without a mirror the listing is empty, not an error.
+    """
     task_id = "task_cache_corrupt"
     run_id = "run_cache_corrupt"
     async with api_client(tmp_path) as (application, client):
@@ -682,8 +689,8 @@ async def test_artifact_api_cache_path_integrity_conflict(tmp_path: Path) -> Non
 
         listed = await client.get(f"/api/v1/tasks/{task_id}/artifacts")
 
-    assert listed.status_code == 409
-    assert listed.json() == {"detail": "Artifact integrity check failed"}
+    assert listed.status_code == 200
+    assert listed.json() == {"artifacts": [], "degraded": False}
 
 
 @pytest.mark.asyncio
@@ -785,3 +792,248 @@ def test_verified_cache_artifact_path_rejects_traversal(tmp_path: Path) -> None:
     assert _verified_cache_artifact_path(entry_dir, "ok.json") == (
         entry_dir / "ok.json"
     ).resolve()
+
+
+@pytest.mark.asyncio
+async def test_list_artifacts_caches_verified_digests_and_invalidates_on_touch(
+    tmp_path: Path,
+) -> None:
+    """C3d: listing digests are cached (mtime+size key); touching a file
+    invalidates exactly that entry; downloads stay out of the cache."""
+    import os
+
+    from app.api import routes as routes_module
+    from app.datasets.build.cache import DatasetCacheV2
+
+    async with api_client(tmp_path) as (application, client):
+        await seed_fixture(application, "task_cached_digests")
+        repository = application.state.task_repository
+        cache = DatasetCacheV2(repository.tasks_dir.parent.parent / "cache")
+        entry = next(
+            candidate
+            for candidate in cache.list(namespace="build", limit=10_000)
+            if candidate.build_id == _DUAL_READ_BUILD_ID
+        )
+
+        calls: list[Path] = []
+        real_hash = routes_module._file_sha256
+
+        def counting_hash(
+            path: Path,
+            chunk_size: int = routes_module._HASH_CHUNK_SIZE,
+        ) -> str:
+            calls.append(path)
+            return real_hash(path, chunk_size)
+
+        routes_module._file_sha256 = counting_hash
+        try:
+            first = await client.get("/api/v1/tasks/task_cached_digests/artifacts")
+            assert first.status_code == 200
+            first_delta = len(calls)
+            assert first_delta >= 3  # dataset_manifest.json + primary.csv + schema.json
+
+            # 第二次 list：全部命中缓存，不重新读文件（delta == 0）
+            second = await client.get("/api/v1/tasks/task_cached_digests/artifacts")
+            assert second.status_code == 200
+            second_delta = len(calls) - first_delta
+            assert second_delta == 0
+
+            # touch 一个 artifact（仅改 mtime，内容不变）→ 只重算该文件
+            touched = entry.directory / "merged" / "primary.csv"
+            stat = touched.stat()
+            os.utime(
+                touched,
+                ns=(stat.st_atime_ns, stat.st_mtime_ns + 2_000_000_000),
+            )
+            third = await client.get("/api/v1/tasks/task_cached_digests/artifacts")
+            assert third.status_code == 200
+            third_delta = len(calls) - first_delta - second_delta
+            assert third_delta == 1
+            assert Path(calls[-1]) == touched
+        finally:
+            routes_module._file_sha256 = real_hash
+
+
+@pytest.mark.asyncio
+async def test_list_artifacts_includes_corrections_todo_csv(tmp_path: Path) -> None:
+    """C2b: HIL 超时落盘的 corrections_todo.csv 必须出现在 list_artifacts 且可下载。
+
+    cache-first 面（seed_fixture 双写 V2 cache + legacy 镜像）：corrections 文件
+    独立于 manifest，两分支都应追加该条目。
+    """
+    async with api_client(tmp_path) as (application, client):
+        repository = application.state.task_repository
+        await seed_fixture(application, "task_corrections")
+        artifacts_dir = repository.tasks_dir / "task_corrections" / "artifacts"
+        (artifacts_dir / "corrections_todo.csv").write_text(
+            "request_id,summary\nreq_1,GSE 数据源确认超时\n", "utf-8-sig"
+        )
+
+        response = await client.get("/api/v1/tasks/task_corrections/artifacts")
+        assert response.status_code == 200
+        entries = response.json()["artifacts"]
+        corrections = next(
+            (entry for entry in entries if entry["artifact_id"] == "corrections_todo"),
+            None,
+        )
+        assert corrections is not None
+        assert corrections["name"] == "corrections_todo.csv"
+        assert corrections["role"] == "audit_report"
+        assert corrections["media_type"] == "text/csv"
+        assert corrections["size"] == (
+            artifacts_dir / "corrections_todo.csv"
+        ).stat().st_size
+
+        download = await client.get(
+            "/api/v1/tasks/task_corrections/artifacts/corrections_todo"
+        )
+        assert download.status_code == 200
+        assert b"request_id" in download.content
+
+
+@pytest.mark.asyncio
+async def test_list_artifacts_without_corrections_file_unchanged(tmp_path: Path) -> None:
+    """C2b: 无 corrections_todo.csv 时列表保持不变（无该条目，200）。"""
+
+    async with api_client(tmp_path) as (application, client):
+        repository = application.state.task_repository
+        await seed_fixture(application, "task_no_corrections")
+        assert not (
+            repository.tasks_dir / "task_no_corrections" / "artifacts"
+            / "corrections_todo.csv"
+        ).exists()
+
+        response = await client.get("/api/v1/tasks/task_no_corrections/artifacts")
+        assert response.status_code == 200
+        artifact_ids = [entry["artifact_id"] for entry in response.json()["artifacts"]]
+        assert "corrections_todo" not in artifact_ids
+
+
+@pytest.mark.asyncio
+async def test_legacy_only_task_lists_corrections_todo(tmp_path: Path) -> None:
+    """C2b: 无 cache 的 legacy 面（loaded None 分支）也列出 corrections 条目。"""
+
+    async with api_client(tmp_path) as (application, client):
+        repository = application.state.task_repository
+        task_id = "task_legacy_corrections"
+        await repository.save_snapshot(
+            snapshot_with_run(task_id, f"run_{task_id}", RunStatus.COMPLETED)
+        )
+        artifacts_dir = repository.tasks_dir / task_id / "artifacts"
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        (artifacts_dir / "corrections_todo.csv").write_text(
+            "request_id,summary\nreq_2,遗留任务超时\n", "utf-8-sig"
+        )
+
+        response = await client.get(f"/api/v1/tasks/{task_id}/artifacts")
+        assert response.status_code == 200
+        entries = response.json()["artifacts"]
+        assert any(entry["artifact_id"] == "corrections_todo" for entry in entries)
+
+
+@pytest.mark.asyncio
+async def test_legacy_loaded_none_downloads_corrections_todo(tmp_path: Path) -> None:
+    """C2b fix: loaded-None 分支 list 列出 corrections 后，下载也必须 200。
+
+    Reviewer finding (Medium): 下载端点在 ``loaded is None`` 守卫前 404，
+    导致 legacy 面（无 manifest 镜像，仅 HIL 超时落盘）列出但下载不了。
+    """
+
+    async with api_client(tmp_path) as (application, client):
+        repository = application.state.task_repository
+        task_id = "task_legacy_corrections_dl"
+        await repository.save_snapshot(
+            snapshot_with_run(task_id, f"run_{task_id}", RunStatus.COMPLETED)
+        )
+        artifacts_dir = repository.tasks_dir / task_id / "artifacts"
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        payload = "request_id,summary\nreq_2,遗留任务超时\n"
+        (artifacts_dir / "corrections_todo.csv").write_text(payload, "utf-8-sig")
+
+        listed = await client.get(f"/api/v1/tasks/{task_id}/artifacts")
+        download = await client.get(
+            f"/api/v1/tasks/{task_id}/artifacts/corrections_todo"
+        )
+
+    assert listed.status_code == 200
+    assert any(
+        entry["artifact_id"] == "corrections_todo"
+        for entry in listed.json()["artifacts"]
+    )
+    assert download.status_code == 200
+    assert download.content.endswith(payload.encode("utf-8"))
+
+
+@pytest.mark.asyncio
+async def test_legacy_normal_branch_lists_and_downloads_corrections_todo(
+    tmp_path: Path,
+) -> None:
+    """C2b fix: legacy 正常分支（有效 manifest + corrections）list 与 download 均可用。"""
+
+    from datetime import timedelta
+
+    from app.domain.contracts import TaskState
+    from app.domain.contracts.pipeline import (
+        ArtifactManifestEntry,
+        RunManifest,
+        ValidationSummary,
+    )
+
+    async with api_client(tmp_path) as (application, client):
+        repository = application.state.task_repository
+        task_id = "task_legacy_normal_corrections"
+        run_id = f"run_{task_id}"
+        await repository.save_snapshot(
+            snapshot_with_run(task_id, run_id, RunStatus.COMPLETED)
+        )
+        artifacts_dir = repository.tasks_dir / task_id / "artifacts"
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        primary_bytes = b"record_id,gene_id\nrow_1,TP53\n"
+        (artifacts_dir / "primary.csv").write_bytes(primary_bytes)
+        corrections_payload = "request_id,summary\nreq_9,超时记录\n"
+        (artifacts_dir / "corrections_todo.csv").write_text(
+            corrections_payload, "utf-8-sig"
+        )
+        manifest = RunManifest(
+            task_id=task_id,
+            id_generation_version="1.0",
+            request={"topic": "TP53 表达差异"},
+            specification={"topic": "TP53 表达差异"},
+            task_state=TaskState.COMPLETED,
+            artifacts=[
+                ArtifactManifestEntry(
+                    artifact_id="artifact_primary",
+                    role="primary_dataset",
+                    name="primary.csv",
+                    relative_path="artifacts/primary.csv",
+                    media_type="text/csv",
+                    size_bytes=len(primary_bytes),
+                    sha256=__import__("hashlib").sha256(primary_bytes).hexdigest(),
+                    generated_by_step_id="step_1",
+                )
+            ],
+            validation=ValidationSummary(
+                status="valid",
+                checked_count=1,
+                failed_count=0,
+                report_path="validation_report.json",
+            ),
+            pipeline_version="1.0",
+            started_at=NOW,
+            finished_at=NOW + timedelta(seconds=1),
+        )
+        (artifacts_dir / "run_manifest.json").write_text(
+            manifest.model_dump_json(), "utf-8"
+        )
+
+        listed = await client.get(f"/api/v1/tasks/{task_id}/artifacts")
+        download = await client.get(
+            f"/api/v1/tasks/{task_id}/artifacts/corrections_todo"
+        )
+
+    assert listed.status_code == 200
+    listed_ids = [entry["artifact_id"] for entry in listed.json()["artifacts"]]
+    assert "corrections_todo" in listed_ids
+    assert "artifact_primary" in listed_ids
+    assert download.status_code == 200
+    assert download.content.endswith(corrections_payload.encode("utf-8"))
