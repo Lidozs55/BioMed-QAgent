@@ -33,8 +33,10 @@ from app.datasets.build.v1_bridge import mirror_build_to_legacy_artifacts
 from app.datasets.contracts import (
     CHECK_ID_PROBE_COVERAGE_REQUIRED_GENE_LEVEL,
     REASON_PROBE_MAPPING_UNAVAILABLE_REQUIRED_GENE_LEVEL,
+    AcquisitionMode,
     AdapterParams,
     BindingRejection,
+    BindingRejectionKind,
     DatasetBuildSpec,
     DatasetManifest,
     DatasetPublication,
@@ -196,6 +198,90 @@ def _build_spec_validator() -> SpecValidator:
     )
 
 
+def _workflow_recipe_fetcher(
+    run_ctx: RunContext,
+) -> object | None:
+    """Lazily build the WORKFLOW_RECIPE acquisition bridge for one Run.
+
+    Returns a :class:`app.recipes.source_fetcher.WorkflowRecipeSourceFetcher`
+    when the trusted Recipe services are bound, else ``None``.
+
+    A2d: the fetcher reuses the lifespan-owned Recipe services already bound
+    on the Run as ``create_skill_runtime`` (executor + store), so no extra
+    wiring is needed and the construction cost is paid only when a spec
+    actually declares a ``workflow_recipe`` binding. Returns ``None`` when
+    the runtime is not available (unit-test contexts / subagents without the
+    trusted Recipe services) — the caller then rejects the binding.
+    """
+
+    from app.recipes.source_fetcher import WorkflowRecipeSourceFetcher
+
+    try:
+        runtime = run_ctx.create_skill_runtime
+    except RuntimeError:
+        return None
+    if runtime.executor is None:
+        return None
+    return WorkflowRecipeSourceFetcher(
+        executor=runtime.executor,
+        store=runtime.store,
+    )
+
+
+async def _acquire_workflow_recipe_bindings(
+    run_ctx: RunContext,
+    build_spec: DatasetBuildSpec,
+    assets: dict[str, SourceAsset],
+    paths: dict[str, Path],
+    per_binding_outcomes: dict[str, BindingRejection],
+) -> None:
+    """Acquire every WORKFLOW_RECIPE binding through the recipe fetcher.
+
+    A2d: a ``workflow_recipe`` binding is acquired by replaying its pinned
+    PROMOTED recipe instead of an agent-pre-downloaded file. The fetched
+    SourceAsset and its real DownloadAttempt join the build exactly like a
+    pre-acquired file (the attempt is recorded on the RunContext so the
+    provenance chain closes). Acquisition failures — no run-time fetcher,
+    missing/non-PROMOTED recipe, workspace validation failure — reject the
+    binding through ``per_binding_outcomes`` so the executor skips its
+    phase-A operations and the BuildResult reports it under
+    ``rejected_sources``.
+    """
+
+    fetcher = _workflow_recipe_fetcher(run_ctx)
+    for binding in build_spec.source_bindings:
+        if binding.acquisition.mode is not AcquisitionMode.WORKFLOW_RECIPE:
+            continue
+        if fetcher is None:
+            per_binding_outcomes[binding.binding_id] = BindingRejection(
+                binding_id=binding.binding_id,
+                kind=BindingRejectionKind.ERROR,
+                reason_code="build_error",
+                message=(
+                    "workflow_recipe acquisition is not available in this run "
+                    "(no trusted Recipe runtime)"
+                ),
+            )
+            continue
+        try:
+            fetched = await fetcher.fetch(
+                binding=binding,
+                workspace=run_ctx.source_asset_workspace(),
+            )
+        except Exception as exc:  # noqa: BLE001 — recipe failures reject the binding
+            per_binding_outcomes[binding.binding_id] = BindingRejection(
+                binding_id=binding.binding_id,
+                kind=BindingRejectionKind.ERROR,
+                reason_code="build_error",
+                message=f"workflow recipe acquisition failed: {exc}",
+            )
+            continue
+        run_ctx.record_download_attempt(fetched.download_attempt)
+        asset = fetched.source_asset
+        assets[binding.binding_id] = asset
+        paths[binding.binding_id] = run_ctx.work_dir.root / asset.relative_path
+
+
 @function_tool(
     name_override="execute_dataset_build",
     description_override=(
@@ -299,7 +385,15 @@ async def execute_dataset_build(
         )
 
     binding_ids = {binding.binding_id for binding in build_spec.source_bindings}
-    missing = sorted(binding_ids - set(files_mapping))
+    # A2d: WORKFLOW_RECIPE bindings are acquired by replaying a pinned recipe
+    # (see ``_acquire_workflow_recipe_bindings``); only pre-downloaded
+    # (non-recipe) bindings must appear in ``source_files``.
+    recipe_binding_ids = {
+        binding.binding_id
+        for binding in build_spec.source_bindings
+        if binding.acquisition.mode is AcquisitionMode.WORKFLOW_RECIPE
+    }
+    missing = sorted((binding_ids - recipe_binding_ids) - set(files_mapping))
     if missing:
         return json.dumps(
             {
@@ -320,6 +414,11 @@ async def execute_dataset_build(
     # publication provenance chain is closed — never a bare generated uuid.
     assets: dict[str, SourceAsset] = {}
     paths: dict[str, Path] = {}
+    # Phase 5 T7: the per-binding fan-out outcomes map is shared by the
+    # runner (records rejections), the executor (skips phase B when every
+    # binding is rejected) and this tool (classification). Created before
+    # acquisition so A2d recipe failures can pre-populate rejections.
+    per_binding_outcomes: dict[str, BindingRejection] = {}
     bindings_by_id = {
         binding.binding_id: binding for binding in build_spec.source_bindings
     }
@@ -360,6 +459,13 @@ async def execute_dataset_build(
             },
             ensure_ascii=False,
         )
+    await _acquire_workflow_recipe_bindings(
+        run_ctx,
+        build_spec,
+        assets,
+        paths,
+        per_binding_outcomes,
+    )
 
     build_root = run_ctx.work_dir.root / "datasets_build"
     build_root.mkdir(parents=True, exist_ok=True)
@@ -374,10 +480,9 @@ async def execute_dataset_build(
             },
             ensure_ascii=False,
         )
-    # Phase 5 T7: the per-binding fan-out outcomes map is shared by the
+    # Phase 5 T7 D5: the per-binding fan-out outcomes map is shared by the
     # runner (records rejections), the executor (skips phase B when every
     # binding is rejected) and this tool (classification).
-    per_binding_outcomes: dict[str, BindingRejection] = {}
     runner = ExpressionBuildRunner(
         spec=build_spec,
         registry=SchemaRegistry(
