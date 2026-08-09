@@ -25,7 +25,10 @@
 
 ### Xena S3 hub 返回 HTTP 403
 
-- [ ] `search_xena` 通过 crawler facade 请求 `https://toil-xena-hub.s3.us-east-1.amazonaws.com/?list-type=2&prefix=download/` 返回 HTTP 403。可能是 S3 区域限制、UA 被拒或临时限流。影响：Agent 无法通过 Xena 发现 TCGA PAAD 等数据集。修复方向：调查 UA 是否被 S3 拒绝；考虑使用 browser_fallback 作为 Xena API 后备；若 S3 持续 403，考虑使用 Xena 的 HTTPS 网页接口替代 S3 REST API。
+- [x] `search_xena` 通过 crawler facade 请求 `https://toil-xena-hub.s3.us-east-1.amazonaws.com/?list-type=2&prefix=download/` 返回 HTTP 403（S3 桶策略拒绝）。
+      **已修复（2026-08-08，见 docs/TODO.md 独立维护项）**：`search_xena` 改走官方 hub 查询 API
+      `POST https://toil.xenahubs.net/data/`（xenaPython 同款查询），S3 XML 列表保留为兜底；
+      `test_all_data_sources_live.py` xfail 移除，END-TO-END 实测返回 27 个 TCGA 数据集。
 
 ### DurableTaskSession `_replay_cache` 全量历史驻留 + 深拷贝放大
 
@@ -57,9 +60,12 @@
 - [ ] `app/subagents/supervisor.py:115-127` — `_entries`、`_run_semaphores`、`_admissions`、`_owner_lifecycle_sinks` 字典在 `start_batch` 中 `setdefault` 创建，仅 `release_run` 清理。
 - **审查结论（2026-08-04）**：**暂缓**。清理路径已存在且被调用：`_terminate_owned_subagents`（manager.py:2032-2068）在 `_append_status` 和 `_append_completion_status` 中对 `RunCompleted/Failed/Cancelled/Interrupted` payload 无条件调用 `cancel_run` + `release_run`。`_finalize_run` 的 `finally` 保证 `_append_completion_status` 必然执行。泄漏仅在工作线程被强制取消且 `finally` 未跑完时发生——此时进程通常也在关闭（`shutdown` 会清理全部 entry）。修复方向（极低优先级）：在 `manager.close` 中增加 supervisor 兜底清理断言。
 
-### Processing 阶段 `_CLEANING_MAX_ROWS = 500_000` 静默截断数据（治标）
+### Processing 阶段 `_CLEANING_MAX_ROWS` 硬截断数据（治标）
 
-- [ ] `app/pipeline/stages/processing.py:41,165-170` — 数据清洗阶段对 CSV 行数硬截断在 500,000 行，超出部分仅 `logger.warning` 后 `break`，不进入清洗产物。GSE183795（4,695,780 行）等大型表达谱矩阵会被截断到 500k 行，导致产物数据不完整。
+- [ ] `app/pipeline/stages/processing.py:41,59-62,165-170` — 数据清洗阶段对 CSV 行数硬截断。
+      **现状（2026-08-08）**：原 500,000 行上限经 REVIEW 2026-08-05 P0-1 提高到 `5_000_000`
+      （GSE183795 4,695,780 行不再被截断），超出部分仍 `logger.warning` 后 `break`，
+      不进入清洗产物——仍是硬截断治标，未改为流式/分批清洗。
 - **根因**：`_clean_csv` 使用 `csv.DictReader` 全量加载行到 `all_rows: list[dict]`，4.7M 行 × 每行 dict 开销 → 内存溢出 + 超时。500k 截断是紧急止血，不是正确解。
 - **影响**：Agent 对大型数据集的产物缺少后 4.2M 行数据，但不会报错——用户可能不知道数据被截断。
 - **修复方向**：改为流式清洗（`csv.reader` 逐行处理 + 流式写出），不累积 `all_rows` 列表；或在截断时向 `RunContext.warnings` 追加用户可见警告，让 Agent 知晓数据不完整。
