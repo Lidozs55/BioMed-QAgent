@@ -51,6 +51,7 @@ from app.domain.contracts import (
 from app.domain.contracts.dataset_state import BuildResult, BuildResultStatus
 from app.domain.contracts.enums import ErrorCode
 from app.domain.contracts.runtime import validate_task_databases
+from app.domain.contracts.task import TaskSpecification
 from app.logging_setup import set_log_context
 from app.model_config import RunModelSettings
 from app.model_settings import get_current_model_configuration
@@ -959,6 +960,7 @@ class TaskManager:
                     accepted,
                     request.input,
                     prepare_task,
+                    specification=request.specification,
                 )
             )
 
@@ -1017,6 +1019,7 @@ class TaskManager:
         accepted: TaskRunAccepted,
         input_value: str,
         prepare_task: PrepareTask | None,
+        specification: TaskSpecification | None = None,
     ) -> TaskRunAccepted:
         try:
             await self.repository.save_snapshot(snapshot)
@@ -1033,12 +1036,15 @@ class TaskManager:
                     f"{type(rollback_error).__name__}: {rollback_error}"
                 )
             raise
-        return await self._admit_run_locked(accepted, input_value)
+        return await self._admit_run_locked(
+            accepted, input_value, specification=specification
+        )
 
     async def _admit_run_locked(
         self,
         accepted: TaskRunAccepted,
         input_value: str,
+        specification: TaskSpecification | None = None,
     ) -> TaskRunAccepted:
         _, event = await self.repository.append_event_payload(
             task_id=accepted.task_id,
@@ -1047,6 +1053,7 @@ class TaskManager:
                 request_id=accepted.request_id,
                 input=input_value,
                 request_fingerprint=accepted.request_fingerprint,
+                specification=specification,
             ),
         )
         try:

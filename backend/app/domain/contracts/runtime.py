@@ -244,6 +244,8 @@ def validate_task_databases(mode: TaskMode | str, databases: list[str]) -> None:
 class StartTaskRequest(_StartRequest):
     databases: list[str] = Field(default_factory=list)
     mode: TaskMode = TaskMode.AGENT
+    # B1: 新 Run 携带版本化 TaskSpecification（可选，向后兼容）。
+    specification: TaskSpecification | None = None
 
     @model_validator(mode="after")
     def validate_databases(self) -> Self:
