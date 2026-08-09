@@ -307,3 +307,47 @@ def test_build_confidence_summary_missing_report(tmp_path: Path) -> None:
     from app.datasets.build.manifest import build_confidence_summary
 
     assert build_confidence_summary(tmp_path) == {}
+
+
+def test_artifact_id_includes_relative_path(tmp_path: Path) -> None:
+    """C3a: identical bytes at two relative paths must not collide.
+
+    Content-addressed ids previously hashed only the file bytes, so two
+    artifacts with the same content produced the same ``artifact_`` id even
+    though they live at different relative paths. The id digest now includes
+    the relative path, keeping the wire shape (``artifact_`` + 32 hex).
+    """
+
+    from app.datasets.build.manifest import _entry
+
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    first = tmp_path / "a" / "dup.csv"
+    second = tmp_path / "b" / "dup.csv"
+    first.write_bytes(b"identical bytes\n")
+    second.write_bytes(b"identical bytes\n")
+
+    first_entry = _entry(ArtifactRole.AUDIT_REPORT, first, tmp_path)
+    second_entry = _entry(ArtifactRole.AUDIT_REPORT, second, tmp_path)
+
+    assert first_entry.relative_path == "a/dup.csv"
+    assert second_entry.relative_path == "b/dup.csv"
+    assert first_entry.sha256 == second_entry.sha256
+    assert first_entry.artifact_id != second_entry.artifact_id
+    assert first_entry.artifact_id.startswith("artifact_")
+    assert len(first_entry.artifact_id) == len("artifact_") + 32
+
+
+def test_artifact_id_stable_for_same_relative_path(tmp_path: Path) -> None:
+    """The id is deterministic: same path + same bytes → same id."""
+
+    from app.datasets.build.manifest import _entry
+
+    (tmp_path / "a").mkdir()
+    path = tmp_path / "a" / "dup.csv"
+    path.write_bytes(b"identical bytes\n")
+
+    first_entry = _entry(ArtifactRole.AUDIT_REPORT, path, tmp_path)
+    second_entry = _entry(ArtifactRole.AUDIT_REPORT, path, tmp_path)
+
+    assert first_entry.artifact_id == second_entry.artifact_id
