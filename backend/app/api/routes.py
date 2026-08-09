@@ -1022,18 +1022,23 @@ async def get_artifact_file(
             str(file_path), filename=file_path.name, media_type=media_type
         )
     loaded = _load_validated_manifest(repository.tasks_dir, task_id, snapshot)
+    if artifact_id == _CORRECTIONS_TODO_ARTIFACT_ID:
+        # C2b fix: corrections 独立于 manifest 存在（HIL 超时落盘），必须在
+        # ``loaded is None`` 守卫之前解析——与 list 的 loaded-None 分支一致。
+        corrections_path = _corrections_todo_path(repository, task_id)
+        if not corrections_path.is_file():
+            raise HTTPException(status_code=404, detail="Artifact not found")
+        return FileResponse(
+            str(corrections_path),
+            filename=corrections_path.name,
+            media_type=_CORRECTIONS_TODO_MEDIA_TYPE,
+        )
     if loaded is None:
         raise HTTPException(status_code=404, detail="Artifact not found")
     manifest, artifacts_dir, _degraded = loaded
     if artifact_id == "run_manifest":
         file_path = artifacts_dir / "run_manifest.json"
         media_type = "application/json"
-    elif artifact_id == _CORRECTIONS_TODO_ARTIFACT_ID:
-        corrections_path = _corrections_todo_path(repository, task_id)
-        if not corrections_path.is_file():
-            raise HTTPException(status_code=404, detail="Artifact not found")
-        file_path = corrections_path
-        media_type = _CORRECTIONS_TODO_MEDIA_TYPE
     else:
         entry = next(
             (item for item in manifest.artifacts if item.artifact_id == artifact_id),
