@@ -792,3 +792,63 @@ def test_verified_cache_artifact_path_rejects_traversal(tmp_path: Path) -> None:
     assert _verified_cache_artifact_path(entry_dir, "ok.json") == (
         entry_dir / "ok.json"
     ).resolve()
+
+
+@pytest.mark.asyncio
+async def test_list_artifacts_caches_verified_digests_and_invalidates_on_touch(
+    tmp_path: Path,
+) -> None:
+    """C3d: listing digests are cached (mtime+size key); touching a file
+    invalidates exactly that entry; downloads stay out of the cache."""
+    import os
+
+    from app.api import routes as routes_module
+    from app.datasets.build.cache import DatasetCacheV2
+
+    async with api_client(tmp_path) as (application, client):
+        await seed_fixture(application, "task_cached_digests")
+        repository = application.state.task_repository
+        cache = DatasetCacheV2(repository.tasks_dir.parent.parent / "cache")
+        entry = next(
+            candidate
+            for candidate in cache.list(namespace="build", limit=10_000)
+            if candidate.build_id == _DUAL_READ_BUILD_ID
+        )
+
+        calls: list[Path] = []
+        real_hash = routes_module._file_sha256
+
+        def counting_hash(
+            path: Path,
+            chunk_size: int = routes_module._HASH_CHUNK_SIZE,
+        ) -> str:
+            calls.append(path)
+            return real_hash(path, chunk_size)
+
+        routes_module._file_sha256 = counting_hash
+        try:
+            first = await client.get("/api/v1/tasks/task_cached_digests/artifacts")
+            assert first.status_code == 200
+            first_delta = len(calls)
+            assert first_delta >= 3  # dataset_manifest.json + primary.csv + schema.json
+
+            # 第二次 list：全部命中缓存，不重新读文件（delta == 0）
+            second = await client.get("/api/v1/tasks/task_cached_digests/artifacts")
+            assert second.status_code == 200
+            second_delta = len(calls) - first_delta
+            assert second_delta == 0
+
+            # touch 一个 artifact（仅改 mtime，内容不变）→ 只重算该文件
+            touched = entry.directory / "merged" / "primary.csv"
+            stat = touched.stat()
+            os.utime(
+                touched,
+                ns=(stat.st_atime_ns, stat.st_mtime_ns + 2_000_000_000),
+            )
+            third = await client.get("/api/v1/tasks/task_cached_digests/artifacts")
+            assert third.status_code == 200
+            third_delta = len(calls) - first_delta - second_delta
+            assert third_delta == 1
+            assert Path(calls[-1]) == touched
+        finally:
+            routes_module._file_sha256 = real_hash

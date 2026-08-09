@@ -19,6 +19,7 @@ import tempfile
 import threading
 from contextlib import suppress
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -865,7 +866,7 @@ async def list_artifacts(task_id: str, repository: TaskRepositoryDep) -> dict:
                 "name": "dataset_manifest.json",
                 "role": ArtifactRole.SCHEMA.value,
                 "size": manifest_path.stat().st_size,
-                "sha256": _file_sha256(manifest_path),
+                "sha256": _listing_sha256(manifest_path),
                 "media_type": "application/json",
             }
         ]
@@ -873,7 +874,7 @@ async def list_artifacts(task_id: str, repository: TaskRepositoryDep) -> dict:
             file_path = _verified_cache_artifact_path(entry_dir, entry.relative_path)
             if (
                 file_path.stat().st_size != entry.size_bytes
-                or _file_sha256(file_path) != entry.sha256
+                or _listing_sha256(file_path) != entry.sha256
             ):
                 # C2c：cache 文件完整性校验失败 → 跳过该 cache entry，
                 # 回退 legacy 镜像面（坏 manifest 的 continue 语义同源）。
@@ -901,7 +902,7 @@ async def list_artifacts(task_id: str, repository: TaskRepositoryDep) -> dict:
             "name": "run_manifest.json",
             "role": ArtifactRole.SCHEMA.value,
             "size": manifest_path.stat().st_size,
-            "sha256": _file_sha256(manifest_path),
+            "sha256": _listing_sha256(manifest_path),
             "media_type": "application/json",
         }
     ]
@@ -909,7 +910,7 @@ async def list_artifacts(task_id: str, repository: TaskRepositoryDep) -> dict:
         file_path = _verified_artifact_path(artifacts_dir, entry.relative_path)
         if (
             file_path.stat().st_size != entry.size_bytes
-            or _file_sha256(file_path) != entry.sha256
+            or _listing_sha256(file_path) != entry.sha256
         ):
             raise HTTPException(
                 status_code=409, detail="Artifact integrity check failed"
@@ -999,6 +1000,28 @@ async def get_artifact_file(
 
 
 _HASH_CHUNK_SIZE = 1 << 20  # 1 MiB — bounded memory per artifact read
+
+
+@lru_cache(maxsize=256)
+def _cached_digest(path: str, mtime_ns: int, size: int) -> str:
+    """Digest keyed by (path, mtime_ns, size) so edits invalidate the cache."""
+
+    return _file_sha256(Path(path))
+
+
+def _listing_sha256(path: Path) -> str:
+    """Listing-verification digest with an mtime+size-invalidated cache (C3d).
+
+    Only listing paths use this: ``list_artifacts`` re-verifies every artifact
+    file on every request (O(bytes), slow for GB CSVs). The cache key embeds
+    mtime and size, so a modified file recomputes its digest and the existing
+    integrity/fallback semantics are untouched. Download endpoints keep
+    calling ``_file_sha256`` directly so the file being served is always
+    hashed fresh.
+    """
+
+    stat = path.stat()
+    return _cached_digest(str(path), stat.st_mtime_ns, stat.st_size)
 
 
 def _file_sha256(path: Path, chunk_size: int = _HASH_CHUNK_SIZE) -> str:
