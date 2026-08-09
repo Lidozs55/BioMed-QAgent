@@ -13,7 +13,7 @@
 
 ### A1. V1 生产路径退役（**已拍板：V1 全移除，主线只留 V2** — REVIEW_2026-08-09-v2-gap-audit.md，分支 `feat/v2-mainline-v1-removal`）
 
-**执行状态（2026-08-09）**：Phase A 全部完成（A2a/A2c/A2e，A2d 延后）；Phase B 完成（V1 生产代码全删 + 测试迁移/删除）；Phase C 完成 C1d；T2 residual 顺手修复。全量 2233 passed / ruff clean / 前端 726 / 冒烟 OK。待 review loop 后合并。
+**执行状态（2026-08-09）**：✅ **已合并 main @ 9a7f19d**。Phase A 全部完成（A2a/A2c/A2e，A2d 延后）；Phase B 完成（V1 生产代码全删 + 测试迁移/删除）；Phase C 完成 C1d；T2 residual 与 v1_bridge legacy 镜像 409 bug 顺手修复；review loop 双 PASS（R1A ACCURATE / R1B ADEQUATE）。终态：后端 2252 passed / ruff clean / 前端 726 / 冒烟 OK。
 
 ### A2. V2 纵向链缺口（REVIEW_2026-08-09 §2）
 
