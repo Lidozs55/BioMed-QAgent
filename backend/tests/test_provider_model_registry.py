@@ -118,6 +118,47 @@ def test_store_model_import_preserves_extra_params_and_profiles(tmp_path: Path) 
     } <= fallback_keys
 
 
+def test_provider_param_profiles_match_official_ranges() -> None:
+    """Penalty ranges and vendor-specific options should match official docs."""
+    for provider_id in ("openai", "deepseek", "groq"):
+        specs = {spec.key: spec for spec in param_specs_for(provider_id)}
+        assert specs["presence_penalty"].min == -2
+        assert specs["presence_penalty"].max == 2
+        assert specs["frequency_penalty"].min == -2
+        assert specs["frequency_penalty"].max == 2
+
+    zhipu = {spec.key: spec for spec in param_specs_for("zhipu")}
+    assert zhipu["thinking"].type == "string"
+    effort_options = {option["value"] for option in zhipu["reasoning_effort"].options}
+    assert effort_options == {"max", "xhigh", "high", "medium", "low", "minimal", "none"}
+    assert zhipu["reasoning_effort"].default == "max"
+    assert zhipu["max_tokens"].default == 65536
+    assert zhipu["max_tokens"].max == 131072
+    assert zhipu["stream"].type == "boolean"
+
+    moonshot = {spec.key: spec for spec in param_specs_for("moonshot")}
+    assert moonshot["thinking"].type == "string"
+    assert {"auto", "none", "required"} <= {
+        option["value"] for option in moonshot["tool_choice"].options
+    }
+
+    for provider_id in ("groq", "xai", "mistral"):
+        specs = {spec.key: spec for spec in param_specs_for(provider_id)}
+        assert "max_tokens" in specs
+        assert "temperature" in specs
+        assert "top_p" in specs
+    xai = {spec.key: spec for spec in param_specs_for("xai")}
+    assert xai["reasoning_effort"].default == "high"
+    assert {option["value"] for option in xai["reasoning_effort"].options} == {
+        "low",
+        "medium",
+        "high",
+    }
+    mistral = {spec.key: spec for spec in param_specs_for("mistral")}
+    assert mistral["random_seed"].type == "integer"
+    assert mistral["safe_prompt"].type == "boolean"
+
+
 def test_store_model_update_merges_and_delete_cascades(tmp_path: Path) -> None:
     store = make_store(tmp_path)
     provider = store.create_provider(

@@ -129,7 +129,17 @@ class ProviderModelStore:
                 ),
             )
         ]
-        for provider_id in ("dashscope", "openai", "deepseek", "zhipu", "moonshot", "baichuan"):
+        for provider_id in (
+            "dashscope",
+            "openai",
+            "deepseek",
+            "zhipu",
+            "moonshot",
+            "baichuan",
+            "groq",
+            "xai",
+            "mistral",
+        ):
             rows.append(
                 (
                     provider_id,

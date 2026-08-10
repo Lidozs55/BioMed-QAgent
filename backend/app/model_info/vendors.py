@@ -62,6 +62,24 @@ VENDORS: list[Vendor] = [
         base_url="https://api.baichuan-ai.com/v1",
         description="百川智能 API",
     ),
+    Vendor(
+        id="groq",
+        name="Groq",
+        base_url="https://api.groq.com/openai/v1",
+        description="Groq 高速推理 API，提供 Llama 等开源模型",
+    ),
+    Vendor(
+        id="xai",
+        name="xAI",
+        base_url="https://api.x.ai/v1",
+        description="xAI Grok 系列模型 API",
+    ),
+    Vendor(
+        id="mistral",
+        name="Mistral AI",
+        base_url="https://api.mistral.ai/v1",
+        description="Mistral 官方 API",
+    ),
 ]
 
 

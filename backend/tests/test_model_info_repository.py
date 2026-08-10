@@ -227,6 +227,31 @@ class TestModelInfoRepository:
         assert "zhipu" in vendors
         assert "baichuan" in vendors
 
+    def test_new_providers_registered(self) -> None:
+        repo = ModelInfoRepository()
+        vendors = repo.list_vendors()
+        assert "groq" in vendors
+        assert "xai" in vendors
+        assert "mistral" in vendors
+        assert repo.get_model("grok-4.5") is not None
+        assert repo.get_model("meta-llama/llama-4-scout-17b-16e-instruct") is not None
+        assert repo.get_model("mistral-large-latest") is not None
+        assert repo.get_model("kimi/kimi-k3") is not None
+        assert repo.get_model("kimi-k2.6") is not None
+        assert repo.get_model("kimi-k2.7-code") is not None
+
+    def test_kimi_k3_context_window_corrected(self) -> None:
+        repo = ModelInfoRepository()
+        model = repo.get_model("kimi/kimi-k3")
+        assert model is not None
+        assert model.input_context_window == 1_048_576
+        assert model.max_output_tokens == 131_072
+
+    def test_zhipu_new_models_present(self) -> None:
+        repo = ModelInfoRepository()
+        for model_id in ("glm-5-turbo", "glm-4.5", "glm-4.5-air", "glm-4.6v-flash"):
+            assert repo.get_model(model_id) is not None
+
     def test_search(self) -> None:
         repo = ModelInfoRepository()
         results = repo.search("qwen-plus")

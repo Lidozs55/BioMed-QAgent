@@ -21,12 +21,15 @@ from functools import lru_cache
 from .providers import (
     _register_baichuan,
     _register_deepseek,
+    _register_groq,
     _register_kuaishou,
     _register_minimax,
+    _register_mistral,
     _register_moonshot,
     _register_openai,
     _register_qwen,
     _register_tripo,
+    _register_xai,
     _register_zhipu,
 )
 from .schemas import ModelCapabilities, ModelDetail
@@ -60,6 +63,9 @@ class ModelInfoRepository:
             _register_moonshot,
             _register_zhipu,
             _register_baichuan,
+            _register_groq,
+            _register_xai,
+            _register_mistral,
         _register_minimax,
         _register_kuaishou,
         _register_tripo,
