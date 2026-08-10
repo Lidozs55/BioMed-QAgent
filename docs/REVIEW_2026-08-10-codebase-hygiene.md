@@ -115,3 +115,72 @@
 
 - 本审查期间未修改任何生产代码（纯只读）。
 - `main` 本地领先 `origin/main` 2 个提交（上轮 P3/P4/K2/K3 因网络中断未推送），需网络恢复后手动 `git push`。
+
+---
+
+## 9. B1/B2 执行记录（2026-08-10，分支 `chore/b1-b2-code-hygiene`）
+
+### B1 已落地
+
+**后端删除**：
+- `datasets/build/chain.py` + `tests/test_dataset_build_chain.py`：同步清理
+  `build/__init__.py` 导出（`BuildChainResult` / `build_expression_dataset`）与
+  `expression_runner.py` docstring 中 chain 提及。
+- `app/settings_manager.py` + `tests/test_settings_manager.py`：
+  `test_run_model_settings.py` / `test_model_credentials.py` 移除对
+  `settings_manager.get_settings` 的 monkeypatch——生产实际读取 `app.model_settings`，
+  原 monkeypatch 是目标不存在的假拦截，删除不改变测试行为。
+- `app/tools/_registry.py` + `tests/test_tool_registry.py`：`test_import_api.py`
+  的 ensure-import 行一并移除。
+- `config.py` 的 `crawler_ua` / `stage_timeouts` / `_parse_stage_timeouts`
+  （保留 `rate_limit_seconds`，`main.py:147` 仍消费；同步清理 `.env.example` 注释）。
+- `app/core/` 空包（仅一行 docstring，零引用）。
+
+**前端删除**：
+- `components/DataTabs.tsx` + `ui/toggle` / `toggle-group` / `avatar` / `command` 死组件链。
+- `lib/contextBudget.ts` + 其单测；`eventValidatorHelpers.assertRecord`（`assertObject` 别名，零消费者）；
+  `apiEnvelopeParsers.ts` 冗余 re-export；`databaseDraft.HTTP_METHODS` 常量（`HttpMethod` 改手写 union）。
+- 依赖：`cmdk` 移除；`shadcn` CLI 从 dependencies 移入 devDependencies。
+
+**文档漂移**：
+- AGENTS.md：路由表（`PUT /settings`、`POST /models`、`/model-info/{model_id}`，补 20+ 缺失路由）；
+  事件清单补全（`publication_created` / `tool_called` / `task_cancelled` / 10 个 `subagent_*`）；
+  `stage_*` 镜像表述改为事实（仅 `stage_progress` 有发射+镜像）。
+- ARCHITECTURE.md：§14.2 事件计数 22→27、未落地的 `build_spec_ready` 等清单修正；
+  §15 `/tasks/{task_id}/builds` 🚧 → 已实现的全局 `/builds` ✅。
+- TODO.md：:71 勾选；:58 引用已删除的 `pipeline/runner.py` 加注。
+- backend/README.md 目录树 / 扩展指南（`_registry.py` → 自动发现）；frontend/README.md 组件清单（36→32）。
+
+### 执行中修正的审查误判（原报告 §2 #15、§4 部分条目）
+
+- `EMPTY_DATABASE`（databaseDraft.ts:68）被 `SettingsPage.tsx` 生产引用 → **保留**（原列死代码有误）。
+- `startRuntime`（controller.ts:49）被 `runtime-controller.test.ts` 大量使用 → **保留**
+  （测试入口，非生产死代码；删除需改大量测试）。
+- `@shadcn/react` 被 `ui/message-scroller.tsx` 生产引用 → **保留**（原报告"可移除"有误）。
+- `HttpMethod` 类型被 `parseHttpMethod` 返回类型使用 → 仅删 `HTTP_METHODS` 数组常量。
+- `xena.py:_decompress_gz` 是落盘解压而非"透明打开"，不属于 gzip 打开重复 → **保留**。
+
+### B2 已落地
+
+- Retry-After 解析合并：`geo.py:_retry_delay` 复用
+  `integrations/ncbi/client.py:parse_retry_after`（保留指数退避 fallback）。
+- gzip 透明打开统一：`tools/io.py:_open_text` → 公开 `open_text(path, *, encoding, errors, newline)`
+  （魔数检测）；`adapters._open_table` 委托之，行为不变量保持
+  （adapters 仍传 `encoding="utf-8"` + `newline=""`）。
+
+### 验证结果
+
+| 检查 | 结果 |
+| --- | --- |
+| 后端 `uv run ruff check app/ tests/ launcher.py` | ✅ 0 告警 |
+| 后端定向测试（137 项：config / model_credentials / run_model_settings / import_api / ncbi client / geo adapter / expression_runner） | ✅ 全过 |
+| 后端全量 `uv run pytest` | 2306 通过 + 2 项既有 `test_artifact_api` BOM/CRLF 失败（基线问题，与本次改动无关） |
+| 前端 `pnpm lint` / `pnpm tsc` | ✅ 0 错误 |
+| 前端 `pnpm build` | ✅ |
+| 前端 `pnpm test` | ✅ 702 通过 |
+
+### 未执行（保持原决策）
+
+- B1 契约面符号（§2 #7-12）与 `multi_build.py`（Phase 7 预留 seam，设计未完工）**保留**。
+- B3（前端补 `build_result` / `binding_failures` 字段）、B4（循环导入 / 死参数 /
+  事件转发合并、V1 下线计划）未动，留待后续批次。

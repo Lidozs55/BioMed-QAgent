@@ -8,7 +8,6 @@ import json
 import logging
 import re
 from datetime import UTC, datetime
-from email.utils import parsedate_to_datetime
 from typing import Any
 from urllib.parse import urlparse
 
@@ -18,6 +17,7 @@ from agents import RunContextWrapper, function_tool
 from app.agent_loop.context import RunContext
 from app.domain.contracts import Database, DataLevel, QueryStatus, SourceRecord, StageName
 from app.integrations.acquisition import acquire_source
+from app.integrations.ncbi.client import parse_retry_after
 from app.integrations.ncbi.discovery import (
     describe_geo_series,
     search_geo_series,
@@ -40,15 +40,8 @@ def _retry_delay(response: httpx.Response | None, attempt: int) -> float:
     value = response.headers.get("Retry-After")
     if not value:
         return fallback
-    try:
-        return max(0.0, float(value))
-    except ValueError:
-        try:
-            retry_at = parsedate_to_datetime(value)
-            now = datetime.now(retry_at.tzinfo or UTC)
-            return max(0.0, (retry_at - now).total_seconds())
-        except (TypeError, ValueError, OverflowError):
-            return fallback
+    delay = parse_retry_after(value, now=datetime.now(UTC))
+    return delay if delay > 0 else fallback
 
 
 async def _get_geo_listing(

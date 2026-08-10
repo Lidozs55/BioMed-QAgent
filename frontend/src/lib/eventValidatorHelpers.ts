@@ -92,10 +92,6 @@ export function assertOptionalNull<T>(v: unknown, path: string, guard: (x: unkno
   return guard(v, path);
 }
 
-export function assertRecord(v: unknown, path: string): Record<string, unknown> {
-  return assertObject(v, path);
-}
-
 export function assertHex64(v: unknown, path: string): string {
   const s = assertString(v, path);
   if (!/^[0-9a-f]{64}$/.test(s)) throw new APIError(502, `Expected 64-char hex string at ${path}`);

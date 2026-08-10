@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import gzip
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, TextIO
 
 from agents import RunContextWrapper, function_tool
 
@@ -110,18 +110,26 @@ def _read_line_bounded(f: Any, limit: int = _IO_LINE_HARD_LIMIT) -> str | None:
     return chunk[:limit] + "…"
 
 
-def _open_text(path: Path) -> Any:
+def open_text(
+    path: Path,
+    *,
+    encoding: str = "utf-8-sig",
+    errors: str = "replace",
+    newline: str | None = None,
+) -> TextIO:
     """Open a file for text reading, transparently decompressing gzip.
 
     GEO series matrices and supplementary files are gzip-compressed; reading
     them raw yields binary garbage.  Detect the gzip magic bytes and open with
-    ``gzip.open`` so ``read_file_head`` can preview real table headers.
+    ``gzip.open`` so ``read_file_head`` and dataset adapters see real text.
+    ``encoding``/``errors``/``newline`` are forwarded so each caller keeps its
+    exact text policy (single shared gzip-detection implementation).
     """
     with path.open("rb") as handle:
         magic = handle.read(2)
     if magic == b"\x1f\x8b":
-        return gzip.open(path, "rt", encoding="utf-8", errors="replace")
-    return path.open(encoding="utf-8-sig", errors="replace")
+        return gzip.open(path, "rt", encoding=encoding, errors=errors, newline=newline)
+    return path.open("r", encoding=encoding, errors=errors, newline=newline)
 
 
 @function_tool
@@ -167,7 +175,7 @@ def read_file_head(
         return "参数错误: max_lines 必须大于 0"
     file_size = safe_path.stat().st_size
     lines: list[str] = []
-    with _open_text(safe_path) as f:
+    with open_text(safe_path) as f:
         while len(lines) < max_lines:
             line = _read_line_bounded(f)
             if line is None:
