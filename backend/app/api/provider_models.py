@@ -140,8 +140,9 @@ async def discover_models(
     if not provider.enabled:
         raise HTTPException(status_code=409, detail="供应商已停用")
     param_specs = store.get_param_specs(provider.preset_id or provider.name, "")
+    provider_key = provider.preset_id or provider.name
     try:
-        return await discover_provider_models(
+        discovered = await discover_provider_models(
             provider.base_url,
             provider.api_key,
             request.app.state.model_preview_client.send,
@@ -151,6 +152,14 @@ async def discover_models(
         raise HTTPException(status_code=422, detail=f"供应商 Base URL 不可用：{error}") from error
     except (httpx.HTTPError, ValueError) as error:
         raise HTTPException(status_code=502, detail="模型发现失败") from error
+    # Attach model-specific parameter profiles so each discovered model only
+    # offers the parameters it actually supports.
+    return [
+        item.model_copy(
+            update={"param_specs": store.get_param_specs(provider_key, item.id)}
+        )
+        for item in discovered
+    ]
 
 
 @router.get(

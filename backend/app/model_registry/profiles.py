@@ -172,6 +172,7 @@ PROFILE_PROVIDER_SPECS: dict[str, list[ParameterSpec]] = {
             "thinking",
             "思考模式（JSON 对象）",
             "string",
+            default='{"type":"enabled"}',
             description=(
                 "智谱 thinking 为 JSON 对象，如 {\"type\":\"enabled\"} 或 "
                 "{\"type\":\"disabled\"}；仅 GLM-4.5 及以上支持。"
@@ -183,6 +184,7 @@ PROFILE_PROVIDER_SPECS: dict[str, list[ParameterSpec]] = {
         _spec("max_tokens", "最大输出 Tokens", "integer", default=32768, min=1, max=131072),
         _spec("temperature", "Temperature", "number", default=1.0, min=0, max=2),
         _spec("top_p", "Top P", "number", default=0.95, min=0, max=1),
+        _spec("stream", "流式输出", "boolean", default=True, advanced=True),
         _spec("enable_search", "联网搜索", "boolean", default=False, advanced=True),
         _spec("stop", "停止词（多个用英文逗号分隔）", "string", advanced=True),
         _spec("seed", "随机种子", "integer", min=0, advanced=True),
@@ -203,6 +205,7 @@ PROFILE_PROVIDER_SPECS: dict[str, list[ParameterSpec]] = {
             "thinking",
             "思考模式（JSON 对象）",
             "string",
+            default='{"type":"enabled"}',
             description=(
                 "Kimi K2.x 的 thinking 为 JSON 对象，如 {\"type\":\"enabled\"}、"
                 "{\"type\":\"disabled\"} 或 {\"type\":\"enabled\",\"keep\":\"all\"}；"
@@ -302,13 +305,224 @@ PROFILE_PROVIDER_SPECS: dict[str, list[ParameterSpec]] = {
 }
 
 
-def param_specs_for(provider_id: str) -> list[ParameterSpec]:
-    """Return the parameter profile for a provider, falling back to all params."""
+_GPT_5_6_REASONING_EFFORT = _spec(
+    "reasoning_effort",
+    "思考强度",
+    "select",
+    default="medium",
+    options=[
+        {"value": "none", "label": "none"},
+        {"value": "low", "label": "低"},
+        {"value": "medium", "label": "中"},
+        {"value": "high", "label": "高"},
+        {"value": "xhigh", "label": "xhigh"},
+        {"value": "max", "label": "最大"},
+    ],
+    advanced=True,
+)
+
+_O_SERIES_REASONING_EFFORT = _spec(
+    "reasoning_effort",
+    "思考强度",
+    "select",
+    default="medium",
+    options=[
+        {"value": "low", "label": "低"},
+        {"value": "medium", "label": "中"},
+        {"value": "high", "label": "高"},
+    ],
+    advanced=True,
+)
+
+_KIMI_K2_TOOL_CHOICE = _spec(
+    "tool_choice",
+    "工具调用",
+    "select",
+    default="auto",
+    options=[
+        {"value": "auto", "label": "自动"},
+        {"value": "none", "label": "禁用"},
+    ],
+    description="Kimi K2.6 / K2.7-code 不支持 required。",
+    advanced=True,
+)
+
+_KIMI_K2_7_THINKING = _spec(
+    "thinking",
+    "思考模式（JSON 对象）",
+    "string",
+    default='{"type":"enabled","keep":"all"}',
+    description=(
+        "Kimi K2.7-code 思考默认开启且不可关闭，仅接受 "
+        '{"type":"enabled","keep":"all"}。'
+    ),
+    advanced=True,
+)
+
+
+def _model_specs(
+    provider_id: str,
+    *,
+    drop: set[str] | None = None,
+    replace: dict[str, ParameterSpec] | None = None,
+) -> list[ParameterSpec]:
+    """Derive a model-specific profile from its provider profile.
+
+    ``drop`` removes parameters the model does not support, and ``replace``
+    swaps individual definitions (options/ranges/defaults).  Entries are
+    deep-copied so callers can never mutate the shared catalog.
+    """
+
+    dropped = drop or set()
+    base = [
+        spec.model_copy(deep=True)
+        for spec in PROFILE_PROVIDER_SPECS.get(provider_id, FALLBACK_PARAM_SPECS)
+        if spec.key not in dropped
+    ]
+    if replace:
+        base = [replace.get(spec.key, spec) for spec in base]
+    return base
+
+
+MODEL_PARAM_SPECS: dict[str, dict[str, list[ParameterSpec]]] = {
+    "openai": {
+        "gpt-5.6": _model_specs("openai", replace={"reasoning_effort": _GPT_5_6_REASONING_EFFORT}),
+        "gpt-5.6-luna": _model_specs(
+            "openai", replace={"reasoning_effort": _GPT_5_6_REASONING_EFFORT}
+        ),
+        "gpt-5.6-terra": _model_specs(
+            "openai", replace={"reasoning_effort": _GPT_5_6_REASONING_EFFORT}
+        ),
+        "gpt-5.6-sol": _model_specs(
+            "openai", replace={"reasoning_effort": _GPT_5_6_REASONING_EFFORT}
+        ),
+        "gpt-4o": _model_specs("openai", drop={"reasoning_effort"}),
+        "gpt-4o-mini": _model_specs("openai", drop={"reasoning_effort"}),
+        "gpt-4-turbo": _model_specs("openai", drop={"reasoning_effort"}),
+        "gpt-4": _model_specs("openai", drop={"reasoning_effort"}),
+        "o1": _model_specs(
+            "openai",
+            drop={
+                "temperature",
+                "top_p",
+                "presence_penalty",
+                "frequency_penalty",
+                "logprobs",
+                "top_logprobs",
+                "n",
+                "response_format",
+            },
+            replace={"reasoning_effort": _O_SERIES_REASONING_EFFORT},
+        ),
+        "o3-mini": _model_specs(
+            "openai",
+            drop={
+                "temperature",
+                "top_p",
+                "presence_penalty",
+                "frequency_penalty",
+                "logprobs",
+                "top_logprobs",
+                "n",
+                "response_format",
+            },
+            replace={"reasoning_effort": _O_SERIES_REASONING_EFFORT},
+        ),
+    },
+    "deepseek": {
+        "deepseek-reasoner": _model_specs(
+            "deepseek",
+            drop={
+                "temperature",
+                "top_p",
+                "presence_penalty",
+                "frequency_penalty",
+                "logprobs",
+                "top_logprobs",
+            },
+        ),
+    },
+    "zhipu": {
+        "glm-5.1": _model_specs("zhipu", drop={"reasoning_effort"}),
+        "glm-5": _model_specs("zhipu", drop={"reasoning_effort"}),
+        "glm-5-turbo": _model_specs("zhipu", drop={"reasoning_effort"}),
+        "glm-5v-turbo": _model_specs("zhipu", drop={"reasoning_effort"}),
+        "glm-4.7": _model_specs("zhipu", drop={"reasoning_effort"}),
+        "glm-4.6": _model_specs("zhipu", drop={"reasoning_effort"}),
+        "glm-4.6v": _model_specs("zhipu", drop={"reasoning_effort"}),
+        "glm-4.6v-flash": _model_specs("zhipu", drop={"reasoning_effort"}),
+        "glm-4.6v-flashx": _model_specs("zhipu", drop={"reasoning_effort"}),
+        "glm-4.5": _model_specs("zhipu", drop={"reasoning_effort"}),
+        "glm-4.5-air": _model_specs("zhipu", drop={"reasoning_effort"}),
+        "glm-4.5-flash": _model_specs("zhipu", drop={"reasoning_effort"}),
+        "glm-4v-flash": _model_specs("zhipu", drop={"reasoning_effort", "thinking"}),
+        "glm-4-flash-250414": _model_specs(
+            "zhipu", drop={"reasoning_effort", "thinking"}
+        ),
+        "glm-4-plus": _model_specs("zhipu", drop={"reasoning_effort", "thinking"}),
+        "glm-4-flash": _model_specs("zhipu", drop={"reasoning_effort", "thinking"}),
+        "glm-4-long": _model_specs("zhipu", drop={"reasoning_effort", "thinking"}),
+        "glm-4v-plus": _model_specs("zhipu", drop={"reasoning_effort", "thinking"}),
+    },
+    "moonshot": {
+        "kimi/kimi-k3": _model_specs(
+            "moonshot",
+            drop={"temperature", "top_p", "seed", "stop", "thinking"},
+        ),
+        "kimi-k2.6": _model_specs(
+            "moonshot",
+            drop={"temperature", "top_p", "seed", "stop", "reasoning_effort"},
+            replace={"tool_choice": _KIMI_K2_TOOL_CHOICE},
+        ),
+        "kimi-k2.7-code": _model_specs(
+            "moonshot",
+            drop={"temperature", "top_p", "seed", "stop", "reasoning_effort"},
+            replace={
+                "tool_choice": _KIMI_K2_TOOL_CHOICE,
+                "thinking": _KIMI_K2_7_THINKING,
+            },
+        ),
+        "moonshot-v1-8k": _model_specs(
+            "moonshot", drop={"reasoning_effort", "thinking", "tool_choice"}
+        ),
+        "moonshot-v1-32k": _model_specs(
+            "moonshot", drop={"reasoning_effort", "thinking", "tool_choice"}
+        ),
+        "moonshot-v1-128k": _model_specs(
+            "moonshot", drop={"reasoning_effort", "thinking", "tool_choice"}
+        ),
+    },
+    "xai": {
+        "grok-4.5": _model_specs(
+            "xai",
+            drop={"presence_penalty", "frequency_penalty", "stop", "seed"},
+        ),
+    },
+}
+
+
+def param_specs_for(provider_id: str, model_id: str | None = None) -> list[ParameterSpec]:
+    """Return the parameter profile for a provider, falling back to all params.
+
+    When ``model_id`` is given and the model has a catalog entry, the
+    model-specific profile (official API support) wins over the provider
+    profile.
+    """
 
     key = provider_id.strip().lower()
+    if model_id:
+        model_key = model_id.strip().lower()
+        model_specs = MODEL_PARAM_SPECS.get(key, {}).get(model_key)
+        if model_specs is not None:
+            return [spec.model_copy(deep=True) for spec in model_specs]
     if key in PROFILE_PROVIDER_SPECS:
         return [spec.model_copy(deep=True) for spec in PROFILE_PROVIDER_SPECS[key]]
     return [spec.model_copy(deep=True) for spec in FALLBACK_PARAM_SPECS]
 
 
-__all__ = ["FALLBACK_PARAM_SPECS", "PROFILE_PROVIDER_SPECS", "param_specs_for"]
+__all__ = [
+    "FALLBACK_PARAM_SPECS",
+    "MODEL_PARAM_SPECS",
+    "PROFILE_PROVIDER_SPECS",
+    "param_specs_for",
+]

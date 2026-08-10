@@ -16,6 +16,27 @@
   window / max output / capabilities are enriched from the local model
   catalog (`app/model_info/providers/*`), not from the upstream response.
 
+## Model-level parameter profiles (2026-08-10)
+
+- `profiles.py` now carries `MODEL_PARAM_SPECS` (keyed provider → model id)
+  so each known model only exposes the parameters it actually supports per
+  official docs. Examples: `glm-4.5` has `thinking` but not
+  `reasoning_effort` (GLM-5.2+ only); `kimi-k3` has
+  `reasoning_effort`/`tool_choice` but not `temperature` (fixed); `grok-4.5`
+  has no presence/frequency penalty or `stop` (errors on reasoning models);
+  `deepseek-reasoner` drops temperature/top_p/penalties/logprobs.
+- Precedence in `ProviderModelStore.get_param_specs`: DB model-pattern
+  override → code model profile → DB generic provider row → code provider
+  profile → all-params fallback.
+- Discovery re-attaches per-model specs after `/v1/models` is fetched, so
+  imported models carry their own `param_specs` snapshot.
+- The graphical editor shows main parameters and collapses the advanced
+  section; the JSON config view serializes **every** supported parameter
+  (spec defaults + current values), so nothing is hidden.
+- The `parameter_profiles` table stays an override layer; per-model support
+  data lives in code because it tracks official API docs and changes with
+  model releases.
+
 ## Verified parameter facts (2026-08-10)
 
 ### 智谱 GLM (`docs.bigmodel.cn/cn/guide/start/concept-param`)

@@ -403,10 +403,17 @@ class ProviderModelStore:
                 " ORDER BY provider_id DESC, priority ASC",
                 (provider_key,),
             ).fetchall()
+        # 1. Explicit model-pattern overrides (non-empty pattern) win.
         for row in rows:
             pattern = row["model_pattern"]
-            if pattern and not model_id.casefold().startswith(pattern.rstrip("*").casefold()):
-                continue
+            if pattern and model_id.casefold().startswith(pattern.rstrip("*").casefold()):
+                return _parse_param_specs(row["specs_json"])
+        # 2. Code-level per-model specs (from official API docs) beat the
+        #    generic provider row, so model-specific support is applied.
+        if model_id:
+            return param_specs_for(provider_key, model_id)
+        # 3. Generic provider rows (or the '*' fallback) as a last resort.
+        for row in rows:
             return _parse_param_specs(row["specs_json"])
         return param_specs_for(provider_key)
 

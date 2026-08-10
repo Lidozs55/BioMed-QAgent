@@ -336,7 +336,14 @@ export function ModelImportSheet({
     selected?.source === "api" || selected?.source === "catalog";
 
   const openJson = () => {
-    setJsonText(JSON.stringify(params, null, 2));
+    const allParams: Record<string, unknown> = {};
+    for (const spec of selectedSpecs) {
+      if (spec.default !== undefined) allParams[spec.key] = spec.default;
+    }
+    for (const [key, value] of Object.entries(params)) {
+      allParams[key] = value;
+    }
+    setJsonText(JSON.stringify(allParams, null, 2));
     setJsonError(null);
     setView("json");
   };

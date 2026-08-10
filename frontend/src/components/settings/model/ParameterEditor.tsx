@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { TrashIcon } from "@phosphor-icons/react";
 
 import { Input } from "@/components/ui/input";
@@ -118,6 +119,7 @@ function SpecField({
 }
 
 export function ParameterEditor({ specs, params, onChange }: ParameterEditorProps) {
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const specKeys = new Set(specs.map((spec) => spec.key));
   const extraKeys = Object.keys(params).filter((key) => !specKeys.has(key));
   const advancedSpecs = specs.filter((spec) => spec.advanced);
@@ -156,28 +158,37 @@ export function ParameterEditor({ specs, params, onChange }: ParameterEditorProp
       ))}
       {advancedSpecs.length > 0 && (
         <div className="border-t pt-2">
-          <p className="mb-2 text-xs font-medium text-muted-foreground">高级参数</p>
-          <div className="space-y-2">
-            {advancedSpecs.map((spec) => (
-              <div key={spec.key} className="flex items-center justify-between gap-3">
-                <label
-                  htmlFor={`param-${spec.key}`}
-                  className="text-sm text-foreground"
-                  title={spec.description}
-                >
-                  {spec.label}
-                </label>
-                <div className="w-40 shrink-0">
-                  <SpecField
-                    spec={spec}
-                    value={currentValue(params, spec)}
-                    controlId={`param-${spec.key}`}
-                    onChange={(next) => patch(spec.key, next)}
-                  />
+          <button
+            type="button"
+            className="flex w-full items-center justify-between text-xs font-medium text-muted-foreground hover:text-foreground"
+            onClick={() => setAdvancedOpen((next) => !next)}
+          >
+            <span>高级参数（{advancedSpecs.length}）</span>
+            <span>{advancedOpen ? "收起" : "展开"}</span>
+          </button>
+          {advancedOpen && (
+            <div className="mt-2 space-y-2">
+              {advancedSpecs.map((spec) => (
+                <div key={spec.key} className="flex items-center justify-between gap-3">
+                  <label
+                    htmlFor={`param-${spec.key}`}
+                    className="text-sm text-foreground"
+                    title={spec.description}
+                  >
+                    {spec.label}
+                  </label>
+                  <div className="w-40 shrink-0">
+                    <SpecField
+                      spec={spec}
+                      value={currentValue(params, spec)}
+                      controlId={`param-${spec.key}`}
+                      onChange={(next) => patch(spec.key, next)}
+                    />
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
       {extraKeys.length > 0 && (
