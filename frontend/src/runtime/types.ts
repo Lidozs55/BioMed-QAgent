@@ -265,6 +265,11 @@ export interface ArtifactItem extends ConversationItemBase {
   sizeBytes: number;
   mediaType: string;
 }
+export interface BuildReportItem extends ConversationItemBase {
+  kind: "build_report";
+  taskId: string;
+  buildId: string;
+}
 
 export type ConversationItem =
   | UserMessageItem
@@ -275,7 +280,8 @@ export type ConversationItem =
   | OperationItem
   | ProgressItem
   | WarningItem
-  | ArtifactItem;
+  | ArtifactItem
+  | BuildReportItem;
 
 export interface SequenceGapMarker {
   expected: number;

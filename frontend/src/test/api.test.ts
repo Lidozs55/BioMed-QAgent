@@ -267,6 +267,7 @@ describe("runtime REST client", () => {
       reason_codes: [],
       user_summary: "ok",
       recommended_next_action: "",
+      build_id: "build_1",
     };
     const manifest = {
       manifest_id: "manifest_1",
@@ -335,6 +336,7 @@ describe("runtime REST client", () => {
     const detail = await api.fetchBuild("build_1");
     expect(detail.manifest.dataset_family).toBe("gene_expression");
     expect(detail.build_result?.valid_row_count).toBe(4);
+    expect(detail.build_result?.build_id).toBe("build_1");
     expect(fetcher).toHaveBeenNthCalledWith(2, "/api/v1/builds/build_1", undefined);
     expect(api.getBuildArtifactUrl("build_1", "artifact_x")).toBe(
       "/api/v1/builds/build_1/artifacts/artifact_x",

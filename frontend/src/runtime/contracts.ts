@@ -55,6 +55,8 @@ export interface BuildResult {
   reason_codes: string[];
   user_summary: string;
   recommended_next_action: string;
+  /** Stable V2 build identity stamped onto run_completed for per-run UI correlation. */
+  build_id?: string | null;
 }
 
 /** V2 build artifact role (mirrors backend ArtifactRole). */

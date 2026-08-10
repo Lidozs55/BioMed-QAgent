@@ -1,5 +1,5 @@
 import type { ConversationItem } from "@/runtime/types";
-import { ArtifactStep } from "./ArtifactStep";
+import { BuildReportCard } from "./BuildReportCard";
 import { AssistantSegment } from "./AssistantSegment";
 import { OperationStep } from "./OperationStep";
 import { ProgressStep } from "./ProgressStep";
@@ -8,7 +8,6 @@ import { StageStep } from "./StageStep";
 import { ToolCallStep } from "./ToolCallStep";
 import { UserMessageBubble } from "./UserMessageBubble";
 import { WarningStep } from "./WarningStep";
-
 interface ConversationStepProps {
   item: ConversationItem;
   isActive: boolean;
@@ -32,8 +31,8 @@ export function ConversationStep({ item }: ConversationStepProps) {
       return <ProgressStep item={item} />;
     case "warning":
       return <WarningStep item={item} />;
-    case "artifact":
-      return <ArtifactStep item={item} />;
+    case "build_report":
+      return <BuildReportCard item={item} />;
     default:
       return null;
   }
