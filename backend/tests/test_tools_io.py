@@ -386,6 +386,39 @@ def test_read_file_head_handles_oversized_line(tmp_path: Path) -> None:
     assert len(result) < 100 * 1024  # never materialized the full 200KB line
 
 
+def test_read_file_head_decompresses_gzip(tmp_path: Path) -> None:
+    """read_file_head must transparently decompress gzip files.
+
+    GEO series matrices are gzip-compressed; reading them raw yields binary
+    garbage.  The tool must show real table headers so the agent can preview
+    structure (e.g. ``!series_matrix_table_begin``) before building.
+    (See docs/REVIEW_2026-08-10-task-9ce0124f.md §5.1 T3.)
+    """
+    import gzip
+
+    rc = _isolated_run_ctx(tmp_path, "test_head_gzip")
+    raw = (
+        '!Series_title = "Test"\n'
+        '!series_matrix_table_begin\n'
+        '"ID_REF"\t"GSM1"\t"GSM2"\n'
+    )
+    (rc.work_dir.source_assets / "GSE1_series_matrix.txt.gz").write_bytes(
+        gzip.compress(raw.encode("utf-8"))
+    )
+
+    ctx = _make_ctx(rc, "read_file_head")
+    result = _call(
+        read_file_head,
+        ctx,
+        path="source_assets/GSE1_series_matrix.txt.gz",
+        max_lines=5,
+    )
+
+    assert "!Series_title" in result
+    assert "!series_matrix_table_begin" in result
+    assert '"ID_REF"' in result
+
+
 # ── list_files tests ────────────────────────────────────────────────
 
 

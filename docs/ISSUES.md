@@ -69,3 +69,15 @@
 - **根因**：`_clean_csv` 使用 `csv.DictReader` 全量加载行到 `all_rows: list[dict]`，4.7M 行 × 每行 dict 开销 → 内存溢出 + 超时。500k 截断是紧急止血，不是正确解。
 - **影响**：Agent 对大型数据集的产物缺少后 4.2M 行数据，但不会报错——用户可能不知道数据被截断。
 - **修复方向**：改为流式清洗（`csv.reader` 逐行处理 + 流式写出），不累积 `all_rows` 列表；或在截断时向 `RunContext.warnings` 追加用户可见警告，让 Agent 知晓数据不完整。
+
+### `search_geo` 对个别 GSE 记录 `n_samples=""` 崩溃
+
+- [x] **已修复（2026-08-10，见 docs/REVIEW_2026-08-10-task-9ce0124f.md §5.1 T1）**：`app/integrations/ncbi/parsers.py:153` — `sample_count=int(item.get("n_samples", len(samples)))`：NCBI esummary 对个别 GSE 返回 `n_samples` 为空字符串时 `int("")` 抛 `ValueError`，整个 esummary batch 解析失败，`search_geo` 向 Agent 返回 `error: invalid literal for int() with base 10: ''`，触发无效换词重试。
+- **根因**：对 esummary 字段做了无守卫的 `int()` 转换。
+- **修复**：新增 `_safe_int()`（空/非数字回退 `len(samples)`），单条记录失败不拖垮整批；新增回归测试 `test_parse_geo_esummary_tolerates_empty_n_samples`。
+
+### GEO series matrix 元数据-only 无内容预检（fail-fast 缺失）
+
+- [x] **已修复（2026-08-10，见 docs/REVIEW_2026-08-10-task-9ce0124f.md §5.1 T2）**：`app/skills/builtin/acquisition/geo.py` `download_geo_adapter` / `_resolve_download` — 下载 matrix 类型只校验 HTTP/大小/哈希，不校验 gzip 内容是否含 `!series_matrix_table_begin`。NCBI 对 RNA-seq（2021 起）及部分阵列系列只生成"元数据头"矩阵文件（实测 GSE173954/GSE327021/GSE266328/GSE160389 全部如此），下载被报告为"成功"，数据问题推迟到 build parse 阶段才以 `no_primary_data` 暴露。
+- **根因**：下载成功 ≠ 数据表存在，内容级校验缺失。
+- **修复**：`download_geo_adapter` 对 `matrix` 类型下载后解压头部校验 `!series_matrix_table_begin`，缺失时返回结构化 `reason_code: empty_series_matrix` 并提示改用 `file_type='soft'/'suppl'`，且不登记为可用 source asset；`read_file_head` 支持 .gz 解压；`unsupported file_type` 错误信息列出合法值；系统提示补多 binding 兜底 + supplementary 路径。新增回归测试 `test_download_geo_matrix_fails_fast_on_metadata_only_gzip`、`test_download_geo_unsupported_file_type_lists_valid_values`、`test_read_file_head_decompresses_gzip`。

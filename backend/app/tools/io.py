@@ -12,6 +12,7 @@ context 参数为 RunContextWrapper，由 SDK 自动注入，不暴露给 LLM。
 """
 from __future__ import annotations
 
+import gzip
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -109,6 +110,20 @@ def _read_line_bounded(f: Any, limit: int = _IO_LINE_HARD_LIMIT) -> str | None:
     return chunk[:limit] + "…"
 
 
+def _open_text(path: Path) -> Any:
+    """Open a file for text reading, transparently decompressing gzip.
+
+    GEO series matrices and supplementary files are gzip-compressed; reading
+    them raw yields binary garbage.  Detect the gzip magic bytes and open with
+    ``gzip.open`` so ``read_file_head`` can preview real table headers.
+    """
+    with path.open("rb") as handle:
+        magic = handle.read(2)
+    if magic == b"\x1f\x8b":
+        return gzip.open(path, "rt", encoding="utf-8", errors="replace")
+    return path.open(encoding="utf-8-sig", errors="replace")
+
+
 @function_tool
 def read_file(ctx: RunContextWrapper[Any], path: str) -> str:
     """读取任务工作目录内的文件内容。path 为相对于任务根目录的相对路径。"""
@@ -152,7 +167,7 @@ def read_file_head(
         return "参数错误: max_lines 必须大于 0"
     file_size = safe_path.stat().st_size
     lines: list[str] = []
-    with safe_path.open(encoding="utf-8-sig", errors="replace") as f:
+    with _open_text(safe_path) as f:
         while len(lines) < max_lines:
             line = _read_line_bounded(f)
             if line is None:

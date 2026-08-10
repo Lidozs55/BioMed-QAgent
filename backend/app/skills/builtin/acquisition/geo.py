@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
 import json
 import logging
 import re
@@ -195,6 +196,30 @@ async def describe_geo_adapter(
         )
 
 
+_GEO_FILE_TYPES = ("matrix", "soft", "suppl")
+
+
+def _matrix_has_data_table(path: Any) -> bool:
+    """Return True if a GEO series-matrix gzip contains an expression table.
+
+    NCBI serves metadata-only series matrices for RNA-seq series (and some
+    array series): the gzip decompresses to ``!Series_*`` header lines but has
+    no ``!series_matrix_table_begin`` block, so the expression adapter would
+    later fail with ``no_primary_data``.  Detecting this at download time lets
+    the tool fail fast and steer the agent to ``soft/`` or ``suppl/`` instead
+    of burning a build attempt.  (See docs/REVIEW_2026-08-10-task-9ce0124f.md
+    §5.1 T2.)
+    """
+    try:
+        with gzip.open(path, "rt", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                if line.startswith("!series_matrix_table_begin"):
+                    return True
+    except (OSError, EOFError, UnicodeDecodeError):
+        return False
+    return False
+
+
 async def _resolve_download(
     accession: str,
     file_type: str,
@@ -241,7 +266,10 @@ async def _resolve_download(
         selected_filename = candidates[0].filename
         url = candidates[0].url
     else:
-        raise ValueError(f"unsupported file_type: {file_type}")
+        raise ValueError(
+            f"unsupported file_type: {file_type!r}; "
+            f"expected one of {', '.join(_GEO_FILE_TYPES)}"
+        )
 
     parsed = urlparse(url)
     if parsed.scheme != "https" or parsed.hostname != "ftp.ncbi.nlm.nih.gov":
@@ -353,6 +381,33 @@ async def download_geo_adapter(
                 path = run_ctx.source_asset_path(asset)
             else:
                 path = run_ctx.work_dir.root / asset.relative_path
+            # Fail fast on metadata-only series matrices: NCBI serves these
+            # for RNA-seq (and some array) series, and the expression adapter
+            # would otherwise fail later with no_primary_data.  Surface the
+            # real data locations so the agent can self-correct instead of
+            # burning a build attempt.  (See docs/REVIEW_2026-08-10-task-9ce0124f.md
+            # §5.1 T2.)
+            if (
+                file_type.lower().strip() == "matrix"
+                and not _matrix_has_data_table(path)
+            ):
+                return json.dumps(
+                    {
+                        "source": "geo",
+                        "accession": source.accession,
+                        "source_url": source.url,
+                        "error": (
+                            "series matrix contains no expression table "
+                            "(metadata-only). The expression data for this "
+                            "series lives in soft/ or suppl/ — try "
+                            "download_geo(file_type='soft') or "
+                            "download_geo(file_type='suppl') after "
+                            "list_geo_supplementary_files."
+                        ),
+                        "reason_code": "empty_series_matrix",
+                    },
+                    ensure_ascii=False,
+                )
             run_ctx.record_source_asset_id(asset.asset_id)
             run_ctx.add_source(source)
             run_ctx.add_raw_asset(str(path))

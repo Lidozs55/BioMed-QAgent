@@ -288,8 +288,18 @@ Spec 模板（gene expression 单源）：
    含 "Expression profiling by array" 的 microarray 数据集，其 series_matrix
    通常包含完整表达矩阵——microarray 优先于 "Expression profiling by high
    throughput sequencing"
-3. **不要用相同参数重试**：相同参数必然导致相同失败
-4. **适时止损**：若 2-3 次调整后仍无合适数据，停止重试，向用户如实汇报已尝试的
+3. **矩阵健康预检**：下载 GEO series matrix 后，用 `read_file_head` 检查是否含
+   `!series_matrix_table_begin` 表达块。若 `download_geo` 返回
+   `reason_code: empty_series_matrix`（元数据-only），**不要用该文件构建**——该系列
+   的真实表达数据在 `soft/` 或 `suppl/`：先 `list_geo_supplementary_files`，再
+   `download_geo(file_type='suppl')`（RNA-seq 系列通常有 supplementary counts，
+   用 `format: supplementary_matrix` 构建），或 `download_geo(file_type='soft')`
+4. **多 binding 兜底**：候选数据集中 ≥2 个可解析数据集时，放进同一个
+   `execute_dataset_build` spec（同 family/granularity，`merge_strategy:
+   append_by_canonical_row`），单个 binding 空表不拖垮整个 build；单 binding 失败后
+   必须换一个已下载/可下载的候选再构建一次才允许收尾
+5. **不要用相同参数重试**：相同参数必然导致相同失败
+6. **适时止损**：若 2-3 次调整后仍无合适数据，停止重试，向用户如实汇报已尝试的
    方案和失败原因
 
 **禁止行为**：构建失败意味着没有通过 validation 的结构化产物，不得用
