@@ -948,7 +948,9 @@ async def test_legacy_loaded_none_downloads_corrections_todo(tmp_path: Path) -> 
         artifacts_dir = repository.tasks_dir / task_id / "artifacts"
         artifacts_dir.mkdir(parents=True, exist_ok=True)
         payload = "request_id,summary\nreq_2,遗留任务超时\n"
-        (artifacts_dir / "corrections_todo.csv").write_text(payload, "utf-8-sig")
+        (artifacts_dir / "corrections_todo.csv").write_bytes(
+            payload.encode("utf-8-sig")
+        )
 
         listed = await client.get(f"/api/v1/tasks/{task_id}/artifacts")
         download = await client.get(
@@ -991,8 +993,8 @@ async def test_legacy_normal_branch_lists_and_downloads_corrections_todo(
         primary_bytes = b"record_id,gene_id\nrow_1,TP53\n"
         (artifacts_dir / "primary.csv").write_bytes(primary_bytes)
         corrections_payload = "request_id,summary\nreq_9,超时记录\n"
-        (artifacts_dir / "corrections_todo.csv").write_text(
-            corrections_payload, "utf-8-sig"
+        (artifacts_dir / "corrections_todo.csv").write_bytes(
+            corrections_payload.encode("utf-8-sig")
         )
         manifest = RunManifest(
             task_id=task_id,
