@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import closing
 from pathlib import Path
 
 import httpx
@@ -241,6 +242,86 @@ def test_store_model_specific_param_specs(tmp_path: Path) -> None:
     assert "reasoning_effort" in k3_keys
     assert "temperature" not in k3_keys
     assert "thinking" not in k3_keys
+
+
+def test_seed_profiles_syncs_stale_rows(tmp_path: Path) -> None:
+    """Startup must refresh generic profiles seeded by older app versions."""
+    import json as json_module
+    import sqlite3
+
+    db_path = tmp_path / "model_registry.db"
+    connection = sqlite3.connect(db_path)
+    connection.executescript(
+        "CREATE TABLE parameter_profiles ("
+        " provider_id TEXT NOT NULL, model_pattern TEXT NOT NULL DEFAULT '',"
+        " priority INTEGER NOT NULL DEFAULT 10, specs_json TEXT NOT NULL,"
+        " PRIMARY KEY (provider_id, model_pattern))"
+    )
+    connection.execute(
+        "INSERT INTO parameter_profiles"
+        " (provider_id, model_pattern, priority, specs_json)"
+        " VALUES ('dashscope', '', 10, ?)",
+        (
+            json_module.dumps(
+                [{"key": "max_tokens", "label": "max_tokens", "type": "integer"}]
+            ),
+        ),
+    )
+    connection.commit()
+    connection.close()
+
+    store = ProviderModelStore(db_path)
+    keys = {spec.key for spec in store.get_param_specs("dashscope", "")}
+    assert {"enable_thinking", "thinking_budget", "top_k", "stop", "enable_search"} <= keys
+    with closing(store._connect()) as connection:
+        provider_ids = {
+            row[0]
+            for row in connection.execute(
+                "SELECT provider_id FROM parameter_profiles"
+                " WHERE model_pattern = ''"
+            ).fetchall()
+        }
+    assert {"groq", "xai", "mistral"} <= provider_ids
+
+
+def test_list_models_refreshes_stale_param_specs(tmp_path: Path) -> None:
+    """The maintained-model list serves the current profile, not old snapshots."""
+    import json as json_module
+    import sqlite3
+
+    store = make_store(tmp_path)
+    provider = store.create_provider(
+        ProviderCreate(
+            name="dashscope",
+            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+            preset_id="dashscope",
+        )
+    )
+    model = store.create_model(
+        ManagedModelCreate(provider_id=provider.id, model_id="qwen-plus")
+    )
+    connection = sqlite3.connect(store.path)
+    connection.execute(
+        "UPDATE managed_models SET param_specs = ? WHERE id = ?",
+        (
+            json_module.dumps(
+                [{"key": "max_tokens", "label": "max_tokens", "type": "integer"}]
+            ),
+            model.id,
+        ),
+    )
+    connection.commit()
+    connection.close()
+
+    listed = store.list_models_with_provider()
+    assert len(listed) == 1
+    listed_model, _ = listed[0]
+    keys = {spec.key for spec in listed_model.param_specs}
+    assert {"enable_thinking", "thinking_budget", "top_k", "stop"} <= keys
+    # The persisted snapshot stays untouched; only the served view refreshes.
+    stored = store.get_model(model.id)
+    assert stored is not None
+    assert [spec.key for spec in stored.param_specs] == ["max_tokens"]
 
 
 def test_store_model_update_merges_and_delete_cascades(tmp_path: Path) -> None:

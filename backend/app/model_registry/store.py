@@ -113,11 +113,14 @@ class ProviderModelStore:
             self._seed_profiles(connection)
 
     def _seed_profiles(self, connection: sqlite3.Connection) -> None:
-        count = connection.execute(
-            "SELECT COUNT(*) FROM parameter_profiles"
-        ).fetchone()[0]
-        if count > 0:
-            return
+        """Synchronize generic provider profiles with the code catalog.
+
+        Profiles are code-derived metadata, so every startup refreshes the
+        empty-pattern rows (INSERT OR REPLACE) instead of seeding only once.
+        This picks up enriched parameter sets and newly added providers on
+        existing databases.  Non-empty model-pattern override rows are never
+        touched.
+        """
         rows = [
             (
                 "*",
@@ -255,20 +258,31 @@ class ProviderModelStore:
     def list_models_with_provider(
         self,
     ) -> list[tuple[ManagedModelRecord, ProviderRecord]]:
-        with self._lock:
-            with closing(self._connect()) as connection:
-                rows = connection.execute(
-                    "SELECT m.*, p.id AS p_id, p.name AS p_name, p.base_url AS p_base_url,"
-                    " p.api_key AS p_api_key, p.preset_id AS p_preset_id,"
-                    " p.description AS p_description, p.enabled AS p_enabled,"
-                    " p.created_at AS p_created_at, p.updated_at AS p_updated_at"
-                    " FROM managed_models m JOIN providers p ON p.id = m.provider_id"
-                    " ORDER BY p.name, m.model_id"
-                ).fetchall()
-            return [
-                (self._model_from_row(row), self._provider_from_row(row, prefix="p_"))
-                for row in rows
-            ]
+        with self._lock, closing(self._connect()) as connection:
+            rows = connection.execute(
+                "SELECT m.*, p.id AS p_id, p.name AS p_name, p.base_url AS p_base_url,"
+                " p.api_key AS p_api_key, p.preset_id AS p_preset_id,"
+                " p.description AS p_description, p.enabled AS p_enabled,"
+                " p.created_at AS p_created_at, p.updated_at AS p_updated_at"
+                " FROM managed_models m JOIN providers p ON p.id = m.provider_id"
+                " ORDER BY p.name, m.model_id"
+            ).fetchall()
+        result: list[tuple[ManagedModelRecord, ProviderRecord]] = []
+        for row in rows:
+            model = self._model_from_row(row)
+            provider = self._provider_from_row(row, prefix="p_")
+            provider_key = provider.preset_id or provider.name
+            # Always serve the current model-aware profile instead of a stale
+            # snapshot captured at import time.
+            model = model.model_copy(
+                update={
+                    "param_specs": self.get_param_specs(
+                        provider_key, model.model_id
+                    )
+                }
+            )
+            result.append((model, provider))
+        return result
 
     def get_model(self, model_id: str) -> ManagedModelRecord | None:
         with self._lock:
@@ -344,6 +358,12 @@ class ProviderModelStore:
         current = self.get_model(model_id)
         if current is None:
             return None
+        provider = self.get_provider(current.provider_id)
+        provider_key = (
+            (provider.preset_id or provider.name)
+            if provider is not None
+            else current.provider_id
+        )
         updates = data.model_dump(exclude_unset=True, exclude_none=True)
         params = current.params
         if data.params is not None or data.model_extra:
@@ -354,6 +374,15 @@ class ProviderModelStore:
         if "params" in updates:
             updates.pop("params")
         updates["params"] = json.dumps(params, ensure_ascii=False)
+        # Keep the stored spec snapshot in sync with the current provider/model
+        # profile so stale imports pick up newly added parameters on save.
+        updates["param_specs"] = json.dumps(
+            [
+                spec.model_dump(mode="json")
+                for spec in self.get_param_specs(provider_key, current.model_id)
+            ],
+            ensure_ascii=False,
+        )
         updates["capabilities"] = updates.get("capabilities", current.capabilities)
         capabilities = updates["capabilities"]
         if isinstance(capabilities, Capabilities):

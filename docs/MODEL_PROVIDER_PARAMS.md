@@ -30,6 +30,11 @@
   profile → all-params fallback.
 - Discovery re-attaches per-model specs after `/v1/models` is fetched, so
   imported models carry their own `param_specs` snapshot.
+- On startup `ProviderModelStore` re-syncs the generic (empty-pattern)
+  `parameter_profiles` rows with the code catalog (`INSERT OR REPLACE`), so
+  databases seeded by older app versions pick up enriched parameter sets and
+  new providers automatically.  The maintained-model list always serves the
+  current model-aware profile instead of stale import-time snapshots.
 - The graphical editor shows main parameters and collapses the advanced
   section; the JSON config view serializes **every** supported parameter
   (spec defaults + current values), so nothing is hidden.
