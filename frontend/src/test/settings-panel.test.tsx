@@ -267,6 +267,7 @@ describe("SettingsPanel model registry", () => {
     fireEvent.click(await screen.findByRole("button", { name: "添加模型" }));
 
     // Provider is auto-selected and the list is discovered automatically.
+    await screen.findByText("DeepSeek Chat");
     const importButton = await screen.findByRole("button", { name: "导入" });
     fireEvent.click(importButton);
 
@@ -291,6 +292,7 @@ describe("SettingsPanel model registry", () => {
     renderSettings(api);
 
     fireEvent.click(await screen.findByRole("button", { name: "添加模型" }));
+    await screen.findByText("DeepSeek Chat");
     const manualInput = await screen.findByLabelText("手动模型名称");
     fireEvent.change(manualInput, { target: { value: "custom-model" } });
     fireEvent.click(screen.getByRole("button", { name: "添加" }));

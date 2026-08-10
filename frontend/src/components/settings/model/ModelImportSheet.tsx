@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowSquareInIcon,
   MagnifyingGlassIcon,
@@ -85,6 +85,7 @@ export function ModelImportSheet({
   const [manualName, setManualName] = useState("");
   const [saving, setSaving] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const wasOpenRef = useRef(false);
 
   const providerModels = useMemo(
     () => managedModels.filter((model) => model.provider_id === providerId),
@@ -126,7 +127,12 @@ export function ModelImportSheet({
   );
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      wasOpenRef.current = false;
+      return;
+    }
+    if (wasOpenRef.current) return;
+    wasOpenRef.current = true;
     const timer = window.setTimeout(() => {
       if (
         initialProviderId &&
