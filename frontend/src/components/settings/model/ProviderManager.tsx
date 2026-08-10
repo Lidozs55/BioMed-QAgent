@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { EyeClosedIcon, EyeIcon, PlusIcon, WarningIcon } from "@phosphor-icons/react";
 import { toast } from "sonner";
 
@@ -19,6 +19,9 @@ import type { ProviderInfo, ProviderInput, SettingsAPIClient, VendorInfo } from 
 
 interface ProviderManagerProps {
   api: SettingsAPIClient;
+  providers: ProviderInfo[];
+  loading: boolean;
+  onChanged: () => void;
 }
 
 interface ProviderDraft {
@@ -39,10 +42,8 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : "请求失败";
 }
 
-export function ProviderManager({ api }: ProviderManagerProps) {
-  const [providers, setProviders] = useState<ProviderInfo[]>([]);
+export function ProviderManager({ api, providers, loading, onChanged }: ProviderManagerProps) {
   const [vendors, setVendors] = useState<VendorInfo[]>([]);
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<ProviderInfo | null>(null);
@@ -50,27 +51,25 @@ export function ProviderManager({ api }: ProviderManagerProps) {
   const [showKey, setShowKey] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
-    try {
-      const [nextProviders, nextVendors] = await Promise.all([
-        api.fetchProviders(),
-        api.fetchVendors(),
-      ]);
-      setProviders(nextProviders);
-      setVendors(nextVendors);
-    } catch (error) {
-      toast.error("供应商加载失败", { description: errorText(error) });
-    } finally {
-      setLoading(false);
-    }
-  }, [api]);
-
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      void refresh();
+      void api
+        .fetchVendors()
+        .then(setVendors)
+        .catch((error) => {
+          toast.error("供应商预设加载失败", { description: errorText(error) });
+        });
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [refresh]);
+  }, [api]);
+
+  const afterMutation = async () => {
+    try {
+      await onChanged();
+    } catch (error) {
+      toast.error("供应商列表刷新失败", { description: errorText(error) });
+    }
+  };
 
   const openCreate = () => {
     setEditing(null);
@@ -132,7 +131,7 @@ export function ProviderManager({ api }: ProviderManagerProps) {
         toast.success("供应商已添加");
       }
       setDialogOpen(false);
-      await refresh();
+      await afterMutation();
     } catch (error) {
       toast.error("保存失败", { description: errorText(error) });
     } finally {
@@ -144,7 +143,7 @@ export function ProviderManager({ api }: ProviderManagerProps) {
     try {
       await api.deleteProvider(provider.id);
       toast.success(`供应商 "${provider.name}" 已删除`);
-      await refresh();
+      await afterMutation();
     } catch (error) {
       toast.error("删除失败", { description: errorText(error) });
     } finally {

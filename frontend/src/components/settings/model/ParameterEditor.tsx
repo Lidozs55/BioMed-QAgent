@@ -24,16 +24,19 @@ function currentValue(params: Record<string, unknown>, spec: ParameterSpec): unk
 function NumberInput({
   value,
   spec,
+  controlId,
   onCommit,
 }: {
   value: unknown;
   spec: ParameterSpec;
+  controlId: string;
   onCommit: (next: unknown) => void;
 }) {
   const isInteger = spec.type === "integer";
   const numeric = typeof value === "number" ? value : Number(value);
   return (
     <Input
+      id={controlId}
       type="number"
       min={spec.min ?? undefined}
       max={spec.max ?? undefined}
@@ -55,15 +58,18 @@ function NumberInput({
 function SpecField({
   spec,
   value,
+  controlId,
   onChange,
 }: {
   spec: ParameterSpec;
   value: unknown;
+  controlId: string;
   onChange: (next: unknown) => void;
 }) {
   if (spec.type === "boolean") {
     return (
       <Switch
+        id={controlId}
         checked={value === true}
         aria-label={spec.label}
         onCheckedChange={(checked) => onChange(checked)}
@@ -74,6 +80,7 @@ function SpecField({
     const options = spec.options ?? [];
     return (
       <Select
+        id={controlId}
         value={value === undefined ? "" : String(value)}
         onValueChange={(next) => onChange(next)}
       >
@@ -91,10 +98,18 @@ function SpecField({
     );
   }
   if (spec.type === "integer" || spec.type === "number") {
-    return <NumberInput value={value} spec={spec} onCommit={onChange} />;
+    return (
+      <NumberInput
+        value={value}
+        spec={spec}
+        controlId={controlId}
+        onCommit={onChange}
+      />
+    );
   }
   return (
     <Input
+      id={controlId}
       value={value === undefined || value === null ? "" : String(value)}
       aria-label={spec.label}
       onChange={(event) => onChange(event.target.value)}
@@ -122,13 +137,18 @@ export function ParameterEditor({ specs, params, onChange }: ParameterEditorProp
     <div className="space-y-3">
       {regularSpecs.map((spec) => (
         <div key={spec.key} className="flex items-center justify-between gap-3">
-          <label className="text-sm text-foreground" title={spec.description}>
+          <label
+            htmlFor={`param-${spec.key}`}
+            className="text-sm text-foreground"
+            title={spec.description}
+          >
             {spec.label}
           </label>
           <div className="w-44 shrink-0">
             <SpecField
               spec={spec}
               value={currentValue(params, spec)}
+              controlId={`param-${spec.key}`}
               onChange={(next) => patch(spec.key, next)}
             />
           </div>
@@ -140,13 +160,18 @@ export function ParameterEditor({ specs, params, onChange }: ParameterEditorProp
           <div className="space-y-3">
             {advancedSpecs.map((spec) => (
               <div key={spec.key} className="flex items-center justify-between gap-3">
-                <label className="text-sm text-foreground" title={spec.description}>
+                <label
+                  htmlFor={`param-${spec.key}`}
+                  className="text-sm text-foreground"
+                  title={spec.description}
+                >
                   {spec.label}
                 </label>
                 <div className="w-44 shrink-0">
                   <SpecField
                     spec={spec}
                     value={currentValue(params, spec)}
+                    controlId={`param-${spec.key}`}
                     onChange={(next) => patch(spec.key, next)}
                   />
                 </div>

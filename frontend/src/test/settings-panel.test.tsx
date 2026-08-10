@@ -217,12 +217,32 @@ describe("SettingsPanel model registry", () => {
   });
 
   it("quick-fills a preset and creates a provider", async () => {
+    let providers: ProviderInfo[] = [];
     const api = mockApi({
-      fetchProviders: vi.fn().mockResolvedValue([]),
+      fetchProviders: vi.fn().mockImplementation(async () => providers),
       fetchManagedModels: vi.fn().mockResolvedValue([]),
+      createProvider: vi.fn().mockImplementation(async (input) => {
+        const created: ProviderInfo = {
+          id: "provider-new",
+          name: input.name,
+          base_url: input.base_url,
+          api_key: input.api_key ?? "",
+          api_key_configured: Boolean(input.api_key),
+          preset_id: input.preset_id ?? null,
+          description: "",
+          enabled: true,
+          created_at: "2026-08-10T00:00:00+00:00",
+          updated_at: "2026-08-10T00:00:00+00:00",
+        };
+        providers = [created];
+        return created;
+      }),
     });
     renderSettings(api);
 
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "添加模型" })).toBeDisabled();
+    });
     fireEvent.click(await screen.findByRole("button", { name: "添加供应商" }));
     fireEvent.click(screen.getByRole("button", { name: "DeepSeek" }));
 
@@ -243,6 +263,50 @@ describe("SettingsPanel model registry", () => {
       preset_id: "deepseek",
       api_key: "sk-test-key",
     });
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "添加模型" })).not.toBeDisabled();
+    });
+  });
+
+  it("hides the current model panel when no model is selected", async () => {
+    const api = mockApi({
+      fetchSettings: vi.fn().mockResolvedValue({
+        ...TEST_SETTINGS,
+        model_name: "",
+      }),
+    });
+    renderSettings(api);
+
+    await screen.findByText("供应商管理");
+    expect(screen.queryByText("当前模型")).not.toBeInTheDocument();
+  });
+
+  it("renders the active model parameters from its configuration", async () => {
+    const api = mockApi({
+      fetchManagedModels: vi.fn().mockResolvedValue([
+        {
+          ...TEST_MODELS[0],
+          model_id: "deepseek-chat",
+          name: "DeepSeek Chat",
+          params: { temperature: 0.7, max_tokens: 8192 },
+          param_specs: SPECS,
+        },
+      ]),
+    });
+    renderSettings(api);
+
+    expect(await screen.findByRole("button", { name: "保存参数" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Temperature")).toHaveValue(0.7);
+    fireEvent.change(screen.getByLabelText("Temperature"), {
+      target: { value: "0.9" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存参数" }));
+
+    await waitFor(() => expect(api.updateManagedModel).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.updateManagedModel).mock.calls[0]?.[1]).toMatchObject({
+      params: { temperature: 0.9 },
+    });
+    await waitFor(() => expect(api.activateManagedModel).toHaveBeenCalledTimes(1));
   });
 
   it("imports a model from the provider list and saves its parameters", async () => {
@@ -323,7 +387,7 @@ describe("SettingsPanel model registry", () => {
 
     await waitFor(() => expect(api.activateManagedModel).toHaveBeenCalledWith("model-1"));
     await waitFor(() => {
-      expect(screen.getAllByText("deepseek-reasoner").length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/deepseek-reasoner/).length).toBeGreaterThan(0);
     });
   });
 

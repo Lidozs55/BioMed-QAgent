@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import { PlusIcon, StarIcon } from "@phosphor-icons/react";
 import { toast } from "sonner";
 
@@ -15,8 +15,12 @@ import type {
 
 interface ModelListManagerProps {
   api: SettingsAPIClient;
+  providers: ProviderInfo[];
+  managedModels: ManagedModelInfo[];
+  loading: boolean;
   activeModelName: string | null;
   onActivated: (settings: ModelSettings) => void;
+  onChanged: () => void;
 }
 
 function errorText(error: unknown): string {
@@ -36,37 +40,20 @@ function sourceLabel(source: ManagedModelInfo["source"]): string {
   return "手动";
 }
 
-export function ModelListManager({ api, activeModelName, onActivated }: ModelListManagerProps) {
-  const [providers, setProviders] = useState<ProviderInfo[]>([]);
-  const [models, setModels] = useState<ManagedModelInfo[]>([]);
-  const [loading, setLoading] = useState(true);
+export function ModelListManager({
+  api,
+  providers,
+  managedModels,
+  loading,
+  activeModelName,
+  onActivated,
+  onChanged,
+}: ModelListManagerProps) {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
   const [editingModelId, setEditingModelId] = useState<string | null>(null);
   const [activatingId, setActivatingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-
-  const refresh = useCallback(async () => {
-    try {
-      const [nextProviders, nextModels] = await Promise.all([
-        api.fetchProviders(),
-        api.fetchManagedModels(),
-      ]);
-      setProviders(nextProviders);
-      setModels(nextModels);
-    } catch (error) {
-      toast.error("模型列表加载失败", { description: errorText(error) });
-    } finally {
-      setLoading(false);
-    }
-  }, [api]);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void refresh();
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [refresh]);
 
   const openAdd = () => {
     setEditingProviderId(null);
@@ -86,7 +73,7 @@ export function ModelListManager({ api, activeModelName, onActivated }: ModelLis
       const updated = await api.activateManagedModel(model.id);
       onActivated(updated);
       toast.success(`已切换当前模型为 ${model.name}`);
-      await refresh();
+      onChanged();
     } catch (error) {
       toast.error("切换失败", { description: errorText(error) });
     } finally {
@@ -98,7 +85,7 @@ export function ModelListManager({ api, activeModelName, onActivated }: ModelLis
     try {
       await api.deleteManagedModel(model.id);
       toast.success(`已移除 ${model.name}`);
-      await refresh();
+      onChanged();
     } catch (error) {
       toast.error("移除失败", { description: errorText(error) });
     } finally {
@@ -132,13 +119,13 @@ export function ModelListManager({ api, activeModelName, onActivated }: ModelLis
         <div className="flex items-center justify-center py-8 text-muted-foreground">
           <Spinner />
         </div>
-      ) : models.length === 0 ? (
+      ) : managedModels.length === 0 ? (
         <div className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">
           还没有维护的模型，点击“添加模型”开始。
         </div>
       ) : (
         <ul className="space-y-2">
-          {models.map((model) => {
+          {managedModels.map((model) => {
             const isActive = model.model_id === activeModelName;
             return (
               <li
@@ -205,8 +192,8 @@ export function ModelListManager({ api, activeModelName, onActivated }: ModelLis
         onOpenChange={setSheetOpen}
         api={api}
         providers={providers}
-        managedModels={models}
-        onSaved={() => void refresh()}
+        managedModels={managedModels}
+        onSaved={onChanged}
         initialProviderId={editingProviderId}
         initialModelId={editingModelId}
       />
