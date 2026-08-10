@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeftIcon,
-  ArrowSquareInIcon,
   MagnifyingGlassIcon,
   PlusIcon,
 } from "@phosphor-icons/react";
@@ -106,7 +105,7 @@ export function ModelImportSheet({
   const [discoverError, setDiscoverError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [detailOpen, setDetailOpen] = useState(false);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   const [params, setParams] = useState<Record<string, unknown>>({});
   const [saving, setSaving] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -133,7 +132,7 @@ export function ModelImportSheet({
     setDiscoverError(null);
     setSearch("");
     setSelectedId(null);
-    setDetailOpen(false);
+    setExpandedId(null);
     setParams({});
     setManualOpen(false);
     setManualDraft(EMPTY_MANUAL_DRAFT);
@@ -225,7 +224,7 @@ export function ModelImportSheet({
       toast.success(`已导入 ${created.name}`);
       await onSaved();
       setSelectedId(created.id);
-      setDetailOpen(true);
+      setExpandedId(created.id);
       setParams(created.params);
     } catch (error) {
       toast.error("导入失败", { description: errorText(error) });
@@ -278,7 +277,7 @@ export function ModelImportSheet({
       toast.success(`已添加 ${created.name}`);
       await onSaved();
       setSelectedId(created.id);
-      setDetailOpen(true);
+      setExpandedId(created.id);
       setParams(created.params);
       setManualOpen(false);
       setManualDraft(EMPTY_MANUAL_DRAFT);
@@ -309,9 +308,9 @@ export function ModelImportSheet({
       await api.deleteManagedModel(model.id);
       toast.success(`已移除 ${model.name}`);
       await onSaved();
-      if (selectedId === model.id) {
+      if (selectedId === model.id || expandedId === model.id) {
         setSelectedId(null);
-        setDetailOpen(false);
+        setExpandedId(null);
         setParams({});
       }
     } catch (error) {
@@ -319,6 +318,18 @@ export function ModelImportSheet({
     } finally {
       setConfirmDeleteId(null);
     }
+  };
+
+  const selectModel = (model: ManagedModelInfo) => {
+    setSelectedId(model.id);
+    setParams(model.params);
+    setExpandedId(model.id);
+  };
+
+  const toggleDetail = (model: ManagedModelInfo) => {
+    setSelectedId(model.id);
+    setParams(model.params);
+    setExpandedId((current) => (current === model.id ? null : model.id));
   };
 
   const selectedIsOfficial =
@@ -416,15 +427,6 @@ export function ModelImportSheet({
               </SelectContent>
             </Select>
           </div>
-          <Button
-            size="sm"
-            className="shrink-0"
-            onClick={() => void openManual()}
-            disabled={!providerId || saving}
-          >
-            <PlusIcon data-icon="inline-start" />
-            添加模型
-          </Button>
         </div>
 
         {providerId && view === "list" && (
@@ -524,123 +526,126 @@ export function ModelImportSheet({
                   <span className="text-muted-foreground">({providerModels.length})</span>
                 </p>
                 <Button
-                  variant="ghost"
                   size="sm"
                   className="shrink-0"
-                  disabled={!selected}
-                  onClick={() => setDetailOpen((next) => !next)}
+                  onClick={() => void openManual()}
+                  disabled={!providerId || saving}
                 >
-                  {detailOpen ? "收起详情" : "详情"}
+                  <PlusIcon data-icon="inline-start" />
+                  添加模型
                 </Button>
               </div>
-              <ScrollArea className="max-h-40 shrink-0 border-b">
+              <ScrollArea className="min-h-0 flex-1">
                 {providerModels.length === 0 ? (
                   <div className="p-4 text-center text-sm text-muted-foreground">
                     还没有维护模型，从左侧导入或手动添加。
                   </div>
                 ) : (
                   <ul className="divide-y">
-                    {providerModels.map((model) => (
-                      <li
-                        key={model.id}
-                        className={cn(
-                          "flex items-center justify-between gap-2 px-3 py-2",
-                          selectedId === model.id && "bg-accent",
-                        )}
-                      >
-                        <button
-                          type="button"
-                          className="min-w-0 flex-1 text-left"
-                          onClick={() => {
-                            setSelectedId(model.id);
-                            setDetailOpen(true);
-                            setParams(model.params);
-                          }}
-                        >
-                          <span className="flex items-center gap-1.5">
-                            <span className="truncate text-sm">{model.name}</span>
-                            <Badge variant="outline" className="shrink-0">
-                              {model.source === "manual" ? "个人" : "官方"}
-                            </Badge>
-                          </span>
-                          <span className="mt-0.5 block truncate text-xs text-muted-foreground">
-                            {model.model_id}
-                          </span>
-                        </button>
-                        {confirmDeleteId === model.id ? (
-                          <Button
-                            variant="destructive"
-                            size="sm"
-                            className="shrink-0"
-                            onClick={() => void removeModel(model)}
+                    {providerModels.map((model) => {
+                      const expanded = expandedId === model.id;
+                      return (
+                        <li key={model.id}>
+                          <div
+                            className={cn(
+                              "flex items-center justify-between gap-2 px-3 py-2",
+                              expanded && "bg-accent",
+                            )}
                           >
-                            确认移除
-                          </Button>
-                        ) : (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="shrink-0 text-destructive"
-                            onClick={() => setConfirmDeleteId(model.id)}
-                          >
-                            移除
-                          </Button>
-                        )}
-                      </li>
-                    ))}
+                            <button
+                              type="button"
+                              className="min-w-0 flex-1 text-left"
+                              onClick={() => selectModel(model)}
+                            >
+                              <span className="flex items-center gap-1.5">
+                                <span className="truncate text-sm">{model.name}</span>
+                                <Badge variant="outline" className="shrink-0">
+                                  {model.source === "manual" ? "个人" : "官方"}
+                                </Badge>
+                              </span>
+                              <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+                                {model.model_id}
+                              </span>
+                            </button>
+                            <div className="flex shrink-0 items-center gap-1">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="shrink-0"
+                                onClick={() => toggleDetail(model)}
+                              >
+                                {expanded ? "收起详情" : "详情"}
+                              </Button>
+                              {confirmDeleteId === model.id ? (
+                                <Button
+                                  variant="destructive"
+                                  size="sm"
+                                  className="shrink-0"
+                                  onClick={() => void removeModel(model)}
+                                >
+                                  确认移除
+                                </Button>
+                              ) : (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="shrink-0 text-destructive"
+                                  onClick={() => setConfirmDeleteId(model.id)}
+                                >
+                                  移除
+                                </Button>
+                              )}
+                            </div>
+                          </div>
+                          {expanded && selected && (
+                            <div className="space-y-3 border-t bg-muted/30 px-3 py-3">
+                              <div>
+                                <p className="text-sm font-medium">{model.name}</p>
+                                <p className="mt-0.5 text-xs text-muted-foreground">
+                                  {model.model_id} · 上下文{" "}
+                                  {formatWindow(model.context_window)}
+                                </p>
+                              </div>
+                              <ParameterEditor
+                                specs={model.param_specs}
+                                params={params}
+                                onChange={setParams}
+                              />
+                              <div className="flex items-center justify-between gap-3 border-t pt-3">
+                                {selectedIsOfficial && (
+                                  <p className="text-xs text-amber-600 dark:text-amber-400">
+                                    官方提供的参数，请谨慎修改
+                                  </p>
+                                )}
+                                <div
+                                  className={cn(
+                                    "flex items-center gap-2",
+                                    !selectedIsOfficial && "ml-auto",
+                                  )}
+                                >
+                                  <Button variant="outline" size="sm" onClick={openJson}>
+                                    配置 JSON
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    onClick={() => void saveSelected()}
+                                    disabled={saving}
+                                  >
+                                    {saving && <Spinner data-icon="inline-start" />}
+                                    保存参数
+                                  </Button>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </li>
+                      );
+                    })}
                   </ul>
                 )}
               </ScrollArea>
-
-              {selected && detailOpen ? (
-                <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
-                  <div>
-                    <p className="text-sm font-medium">{selected.name}</p>
-                    <p className="mt-0.5 text-xs text-muted-foreground">
-                      {selected.model_id} · 上下文 {formatWindow(selected.context_window)}
-                    </p>
-                  </div>
-                  <ParameterEditor specs={selectedSpecs} params={params} onChange={setParams} />
-                  <div className="flex items-center justify-between gap-3 border-t pt-3">
-                    {selectedIsOfficial && (
-                      <p className="text-xs text-amber-600 dark:text-amber-400">
-                        官方提供的参数，请谨慎修改
-                      </p>
-                    )}
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className={selectedIsOfficial ? "" : "ml-auto"}
-                      onClick={openJson}
-                    >
-                      配置 JSON
-                    </Button>
-                  </div>
-                </div>
-              ) : selected ? (
-                <div className="min-h-0 flex-1 overflow-y-auto p-3">
-                  <p className="text-xs text-muted-foreground">
-                    已选择 {selected.name}，点击“详情”展开参数配置。
-                  </p>
-                </div>
-              ) : (
-                <div className="min-h-0 flex-1 overflow-y-auto p-3">
-                  <p className="text-xs text-muted-foreground">
-                    从左侧导入模型到维护列表，或点击“添加模型”手动添加。
-                  </p>
-                </div>
-              )}
             </div>
           </div>
-        )}
-
-        {providerId && selected && view === "list" && (
-          <DialogFooter className="mx-0 mb-0 border-t px-5 py-3">
-            <Button onClick={() => void saveSelected()} disabled={saving}>
-              <ArrowSquareInIcon data-icon="inline-start" />
-              保存参数
-            </Button>
-          </DialogFooter>
         )}
 
         {view === "json" && selected && (
