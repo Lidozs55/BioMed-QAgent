@@ -312,8 +312,8 @@ export function SessionSidebar({
   return (
     <>
       <Sidebar>
-        <SidebarHeader className="gap-1 p-1">
-          <div className="flex min-w-0 items-center px-1">
+        <SidebarHeader className="gap-1 p-2">
+          <div className="flex min-w-0 items-center">
             <img
               src={biomedLogoV2}
               alt="BioMed QAgent"
@@ -323,11 +323,11 @@ export function SessionSidebar({
           </div>
           <Button
             variant="outline"
-            size="lg"
-            className="h-11 w-full justify-start gap-2 px-3"
+            size="default"
+            className="w-full justify-start gap-2 rounded-md p-2"
             onClick={showNewDraft}
           >
-            <PlusCircleIcon data-icon="inline-start" className="size-5" />
+            <PlusCircleIcon data-icon="inline-start" className="size-4" />
             <span className="truncate">新建研究</span>
             <span className="ml-auto flex shrink-0 items-center gap-1">
               <kbd className="rounded-md border border-sidebar-border bg-sidebar-accent px-1.5 py-0.5 font-mono text-[10px] font-medium text-sidebar-foreground/70">
