@@ -281,7 +281,7 @@ describe("SettingsPanel model registry", () => {
     expect(screen.queryByText("当前模型")).not.toBeInTheDocument();
   });
 
-  it("renders the active model parameters from its configuration", async () => {
+  it("shows active model information without parameter editing controls", async () => {
     const api = mockApi({
       fetchManagedModels: vi.fn().mockResolvedValue([
         {
@@ -295,18 +295,12 @@ describe("SettingsPanel model registry", () => {
     });
     renderSettings(api);
 
-    expect(await screen.findByRole("button", { name: "保存参数" })).toBeInTheDocument();
-    expect(screen.getByLabelText("Temperature")).toHaveValue(0.7);
-    fireEvent.change(screen.getByLabelText("Temperature"), {
-      target: { value: "0.9" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "保存参数" }));
-
-    await waitFor(() => expect(api.updateManagedModel).toHaveBeenCalledTimes(1));
-    expect(vi.mocked(api.updateManagedModel).mock.calls[0]?.[1]).toMatchObject({
-      params: { temperature: 0.9 },
-    });
-    await waitFor(() => expect(api.activateManagedModel).toHaveBeenCalledTimes(1));
+    expect((await screen.findAllByText("DeepSeek Chat")).length).toBeGreaterThan(0);
+    expect(screen.getByText("Temperature")).toBeInTheDocument();
+    expect(screen.getByText("0.7")).toBeInTheDocument();
+    expect(screen.getByText("8192")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Temperature")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "保存参数" })).not.toBeInTheDocument();
   });
 
   it("imports a model from the provider list and saves its parameters", async () => {
@@ -328,7 +322,9 @@ describe("SettingsPanel model registry", () => {
     });
     renderSettings(api);
 
-    fireEvent.click(await screen.findByRole("button", { name: "添加模型" }));
+    const addModel = await screen.findByRole("button", { name: "添加模型" });
+    await waitFor(() => expect(addModel).not.toBeDisabled());
+    fireEvent.click(addModel);
 
     // Provider is auto-selected and the list is discovered automatically.
     await screen.findByText("DeepSeek Chat");
@@ -355,7 +351,9 @@ describe("SettingsPanel model registry", () => {
     });
     renderSettings(api);
 
-    fireEvent.click(await screen.findByRole("button", { name: "添加模型" }));
+    const addModel = await screen.findByRole("button", { name: "添加模型" });
+    await waitFor(() => expect(addModel).not.toBeDisabled());
+    fireEvent.click(addModel);
     await screen.findByText("DeepSeek Chat");
     const manualInput = await screen.findByLabelText("手动模型名称");
     fireEvent.change(manualInput, { target: { value: "custom-model" } });
@@ -391,17 +389,4 @@ describe("SettingsPanel model registry", () => {
     });
   });
 
-  it("saves advanced generation parameters", async () => {
-    const api = mockApi();
-    renderSettings(api);
-
-    const outputTokens = await screen.findByLabelText("最大输出 Tokens");
-    fireEvent.change(outputTokens, { target: { value: "16384" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存模型设置" }));
-
-    await waitFor(() => expect(api.saveSettings).toHaveBeenCalledTimes(1));
-    expect(vi.mocked(api.saveSettings).mock.calls[0]?.[0]).toMatchObject({
-      max_tokens: 16384,
-    });
-  });
 });

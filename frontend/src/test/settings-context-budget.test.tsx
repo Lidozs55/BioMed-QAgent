@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { SettingsPanel } from "@/components/SettingsPanel";
@@ -66,7 +66,7 @@ function mockApi(overrides: Partial<SettingsAPIClient> = {}): SettingsAPIClient 
   return { ...base, ...overrides };
 }
 
-describe("SettingsPanel current-model context budget", () => {
+describe("SettingsPanel current-model info", () => {
   beforeAll(() => {
     window.matchMedia = vi.fn().mockImplementation((query: string) => ({
       matches: false,
@@ -80,57 +80,29 @@ describe("SettingsPanel current-model context budget", () => {
     }));
   });
 
-  it("uses a fixed output-token range without the legacy context override form", async () => {
+  it("shows current model information without editable controls", async () => {
     render(<SettingsPanel open onOpenChange={() => undefined} api={mockApi()} />);
 
-    const outputTokens = await screen.findByLabelText("最大输出 Tokens");
-    expect(outputTokens).toHaveAttribute("type", "number");
-    expect(outputTokens).toHaveAttribute("min", "512");
-    expect(outputTokens).toHaveAttribute("max", "131072");
-    expect(screen.queryByLabelText("Context Window Override")).not.toBeInTheDocument();
+    expect(await screen.findByText("qwen-max")).toBeInTheDocument();
+    expect(screen.getByText("https://dashscope.aliyuncs.com/compatible-mode/v1")).toBeInTheDocument();
+    expect(screen.getByText("32K")).toBeInTheDocument();
+    expect(screen.getByText("4096")).toBeInTheDocument();
+    expect(screen.getByText("Temperature")).toBeInTheDocument();
+
+    // No editable controls: no context-window combobox, no number inputs, no save button.
+    expect(screen.queryByRole("combobox", { name: "上下文窗口" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("最大输出 Tokens")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "保存模型设置" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "保存参数" })).not.toBeInTheDocument();
   });
 
-  it("selects a context window preset from a dropdown", async () => {
-    const api = mockApi();
+  it("hides the current model panel when no model is selected", async () => {
+    const api = mockApi({
+      fetchSettings: vi.fn().mockResolvedValue({ ...SETTINGS, model_name: "" }),
+    });
     render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
 
-    fireEvent.click(await screen.findByRole("combobox", { name: "上下文窗口" }));
-    const option = await screen.findByRole("option", { name: "128K" });
-    fireEvent.pointerDown(option, { pointerType: "mouse", button: 0, buttons: 1 });
-    fireEvent.click(option, { pointerType: "mouse" });
-
-    await waitFor(() =>
-      expect(api.saveSettings).toHaveBeenCalledWith({ context_window: 131072 }),
-    );
-  });
-
-  it("persists changes from the output-token field", async () => {
-    const api = mockApi();
-    render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
-
-    fireEvent.change(await screen.findByLabelText("最大输出 Tokens"), {
-      target: { value: "16384" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "保存模型设置" }));
-
-    await waitFor(() => expect(api.saveSettings).toHaveBeenCalledTimes(1));
-    expect(vi.mocked(api.saveSettings).mock.calls[0]?.[0]).toEqual({
-      max_tokens: 16384,
-    });
-  });
-
-  it("persists generation parameter changes together", async () => {
-    const api = mockApi();
-    render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
-
-    fireEvent.change(await screen.findByLabelText("Temperature"), {
-      target: { value: "0.9" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "保存模型设置" }));
-
-    await waitFor(() => expect(api.saveSettings).toHaveBeenCalledTimes(1));
-    expect(vi.mocked(api.saveSettings).mock.calls[0]?.[0]).toEqual({
-      temperature: 0.9,
-    });
+    await screen.findByText("供应商管理");
+    expect(screen.queryByText("当前模型")).not.toBeInTheDocument();
   });
 });
