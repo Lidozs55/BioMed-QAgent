@@ -186,6 +186,7 @@ function parseBuildResult(json: unknown, path: string): BuildResult {
     reason_codes: assertArray(Reflect.get(obj, "reason_codes"), `${path}.reason_codes`, (value, index) => assertString(value, `${path}.reason_codes[${index}]`)),
     user_summary: assertString(Reflect.get(obj, "user_summary"), `${path}.user_summary`),
     recommended_next_action: assertString(Reflect.get(obj, "recommended_next_action"), `${path}.recommended_next_action`),
+    build_id: assertOptionalNull(Reflect.get(obj, "build_id"), `${path}.build_id`, (value, p) => assertString(value, p, true)),
   };
 }
 

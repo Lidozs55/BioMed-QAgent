@@ -11,16 +11,16 @@ export interface TaskBuildState {
 /**
  * Resolve the V2 build of a task from the builds API.
  *
- * The durable run summary carries a structured BuildResult but no build_id
- * (the backend correlates builds via `datasets_build/<build_id>` directories; the fetch key includes the latest run id so a second build-producing run refetches
- * served by `GET /builds`). This hook maps a task to its newest manifest
- * build by listing builds and matching `task_id`. Tasks without a completed
- * run summary (or without a build_result) never hit the network — the
- * legacy artifact path stays untouched.
+ * Completed run summaries now carry a stable `build_id` when the backend
+ * emits one. This hook remains a task-level legacy fallback: it lists builds
+ * and resolves the newest manifest for old surfaces that do not have a
+ * per-run report item. Tasks without a completed run summary (or without a
+ * build_result) never hit the network, so the legacy artifact path stays
+ * untouched.
  *
- * The fetch result is keyed by (taskId, hasBuildResult) and the exposed
- * status is derived, so switching tasks never shows a stale build and the
- * effect never calls setState synchronously.
+ * The fetch result is keyed by the task's latest run id and build-result
+ * presence, and the exposed status is derived so switching tasks never shows
+ * a stale build or calls setState synchronously.
  */
 export function useTaskBuildId(taskId: string | null): TaskBuildState {
   const api = useAPI();

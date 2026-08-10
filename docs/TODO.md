@@ -268,6 +268,8 @@
 - [x] **P1** 前端：ResultsViewer Tabs 分离主数据/来源/处理/警告（原 §3.1）
       （Phase 7 T4：shadcn Tabs 主数据/来源/处理/警告，复用 Table/CsvPreview；
       legacy 无 manifest 路径保留回退）
+      报告卡约定（2026-08-10）：事件/API parser 保留 `BuildResult.build_id`，reducer 以
+      `report:<runId>` 投影每轮独立卡片；卡片使用紧凑 `CsvPreview.maxRows=10` 和 `detail.artifacts` 文件列表（按 artifact_id 保留重复文件名，展示文件名/大小），展示来源/处理/警告摘要、Dialog tabs 与全量下载；会话列表在包装 `MessageScrollerItem` 前过滤已由 report card 接管的 `artifact` item，runtime artifact projection 仍供 legacy ResultsViewer/ArtifactSheet 使用；`ArtifactFab` 仅作为无 V2 build 时的 legacy fallback。
 - [x] **P1** 前端：对话流任务节点自动折叠（以 `tool_completed` 归组）（原 §3.4）
       （Phase 7 T5：operation/tool 事件按完成归组折叠为紧凑摘要行，手动开关保留）
 - [x] **P2** `toolLabels` 新增 `invoke_skill` / `find_skill` formatter（原 §3.2）

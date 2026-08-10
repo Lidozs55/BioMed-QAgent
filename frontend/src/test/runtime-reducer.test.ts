@@ -874,6 +874,49 @@ describe("runtime event projection", () => {
     expect(state.tasksById.task_a.runsById.run_second.status).toBe("running");
     expect(state.tasksById.task_a.summary.active_run_id).toBe("run_second");
   });
+  it("projects one build report per completed run with its exact build id", () => {
+    let state = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_reports")),
+      false,
+    );
+    const completed = (runId: string, buildId: string, sequence: number) =>
+      envelope("task_reports", runId, sequence, {
+        type: "run_completed",
+        build_result: {
+          status: "succeeded",
+          valid_row_count: 3,
+          successful_sources: ["source_a"],
+          rejected_sources: [],
+          available_artifact_roles: ["primary_dataset"],
+          publication_id: "pub_" + buildId,
+          reason_codes: [],
+          user_summary: "完成",
+          recommended_next_action: "",
+          build_id: buildId,
+        },
+      } as EventPayload);
+
+    state = reduceRuntimeEvent(state, completed("run_first", "build_first", 1));
+    state = reduceRuntimeEvent(state, completed("run_second", "build_second", 2));
+
+    expect(
+      state.tasksById.task_reports.items.filter((item) => item.kind === "build_report"),
+    ).toEqual([
+      expect.objectContaining({
+        itemId: "report:run_first",
+        runId: "run_first",
+        taskId: "task_reports",
+        buildId: "build_first",
+      }),
+      expect.objectContaining({
+        itemId: "report:run_second",
+        runId: "run_second",
+        taskId: "task_reports",
+        buildId: "build_second",
+      }),
+    ]);
+  });
 
   it("binds pending user input to the authoritative Run", () => {
     const initial = mergeTaskPage(

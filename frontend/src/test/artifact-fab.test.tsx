@@ -41,6 +41,17 @@ describe("artifact FAB", () => {
     expect(screen.getByText("main_data.csv")).toBeVisible();
   });
 });
+  it("keeps the legacy FAB hidden when a V2 build is available", () => {
+    render(
+      <ArtifactFab
+        artifacts={[artifact("main_data.csv")]}
+        taskId="task-artifacts"
+        buildId="build-v2"
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /查看/ })).not.toBeInTheDocument();
+  });
 
 describe("artifact sheet", () => {
   it("labels artifacts by role instead of the generic extension fallback (F7)", () => {

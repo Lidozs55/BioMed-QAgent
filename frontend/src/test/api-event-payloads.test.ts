@@ -184,6 +184,7 @@ describe("parseEventPayload — runtime event family", () => {
           rejected_sources: [],
           available_artifact_roles: [],
           publication_id: null,
+          build_id: "build_parser_1",
           reason_codes: ["no_primary_data"],
           user_summary: "",
           recommended_next_action: "",
@@ -195,6 +196,7 @@ describe("parseEventPayload — runtime event family", () => {
     if (r.type !== "run_completed") throw new Error();
     expect(r.build_result?.user_summary).toBe("");
     expect(r.build_result?.recommended_next_action).toBe("");
+    expect(r.build_result?.build_id).toBe("build_parser_1");
   });
 
   it("publication_created — parses the full publication payload", () => {
