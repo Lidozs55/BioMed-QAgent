@@ -336,7 +336,7 @@ async def download_geo_adapter(
     *,
     services: NcbiServices,
     filename: str | None = None,
-    max_size_mb: int = 100,
+    max_size_mb: int = 1024,
     expected_size: int | None = None,
     expected_sha256: str | None = None,
 ) -> str:
@@ -499,6 +499,9 @@ async def list_geo_supplementary_files(
     description_override=(
         "Download a GEO matrix, SOFT, or supplementary file as an immutable "
         "repository-processed SourceAsset. Compressed files remain compressed. "
+        "max_size_mb caps the download size (default 1024 MiB — large enough "
+        "for real series matrices like GSE33000's 107 MiB file); raise it "
+        "explicitly for very large supplementary files. "
         "For file_type='suppl', call list_geo_supplementary_files first to get "
         "the exact filename."
     ),
@@ -508,7 +511,7 @@ async def download_geo(
     accession: str,
     file_type: str = "matrix",
     filename: str | None = None,
-    max_size_mb: int = 100,
+    max_size_mb: int = 1024,
 ) -> str:
     async with open_ncbi_services() as services:
         return await download_geo_adapter(

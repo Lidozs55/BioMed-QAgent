@@ -290,6 +290,98 @@ async def test_download_geo_unsupported_file_type_lists_valid_values(
     assert "unsupported file_type" in payload["error"]
     assert "matrix, soft, suppl" in payload["error"]
 
+@pytest.mark.asyncio
+async def test_download_geo_default_cap_accepts_large_series_matrix(
+    tmp_path: Path,
+) -> None:
+    """Regression: the default download cap must accommodate real GEO series
+    matrices.  GSE33000's matrix is 112,099,269 bytes (~107 MiB) — above the
+    old 100 MiB default, so download_geo failed with
+    ``declared content length exceeds maximum`` and the AD/HD/control build
+    could not fetch its source.  The default is now 1024 MiB; the bounded
+    download guard itself is covered by
+    test_download_geo_explicit_cap_still_rejects_oversize."""
+    import gzip
+    import os
+
+    matrix_gzip = gzip.compress(
+        b"!series_matrix_table_begin\n" + os.urandom(105 * 1024 * 1024)
+    )
+    assert len(matrix_gzip) > 100 * 1024 * 1024
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("_series_matrix.txt.gz")
+        return httpx.Response(
+            200,
+            content=matrix_gzip,
+            headers={
+                "Content-Length": str(len(matrix_gzip)),
+                "Content-Type": "application/x-gzip",
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        services = NcbiServices(
+            eutils=FixtureNcbiClient(),
+            http=http,
+            cache=ContentCache(tmp_path / "cache"),
+        )
+        context = run_context(tmp_path)
+        # No explicit max_size_mb: the DEFAULT must handle a >100 MiB matrix.
+        payload = json.loads(
+            await download_geo_adapter(
+                context,
+                "GSE178352",
+                "matrix",
+                services=services,
+            )
+        )
+
+    assert "error" not in payload, payload
+    assert payload["asset"]["size_bytes"] > 100 * 1024 * 1024
+    assert payload["asset"]["data_level"] == "repository_processed"
+
+
+@pytest.mark.asyncio
+async def test_download_geo_explicit_cap_still_rejects_oversize(
+    tmp_path: Path,
+) -> None:
+    """The bounded-download guard must stay: an explicit small cap still
+    rejects a large declared Content-Length before streaming any bytes
+    (the real GSE33000 matrix size, 112,099,269 bytes)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("_series_matrix.txt.gz")
+        return httpx.Response(
+            200,
+            content=b"body is never read",
+            headers={
+                "Content-Length": "112099269",
+                "Content-Type": "application/x-gzip",
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        services = NcbiServices(
+            eutils=FixtureNcbiClient(),
+            http=http,
+            cache=ContentCache(tmp_path / "cache"),
+        )
+        context = run_context(tmp_path)
+        payload = json.loads(
+            await download_geo_adapter(
+                context,
+                "GSE178352",
+                "matrix",
+                services=services,
+                max_size_mb=100,
+            )
+        )
+
+    assert payload["attempt"]["status"] == "failed"
+    assert payload["attempt"]["error_code"] == "download_incomplete"
+    assert payload["error"] == "declared content length exceeds maximum"
+
 
 def test_matrix_has_data_table_positive_and_negative(tmp_path: Path) -> None:
     """K3: the series-matrix content pre-check detects a real expression table
