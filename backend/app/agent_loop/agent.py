@@ -264,6 +264,12 @@ Spec 模板（gene expression 单源）：
 说明来源追踪、研究思路、关键发现和产物内容。引用产物时用 `list_files` 查看
 `artifact_dir` 下的实际文件名，不要编造文件名或列名。
 
+**引用纪律（P3）**：汇报中的每个机制/通路/治疗/数据集论断必须携带可溯源证据——
+文献论断附 PMID（或 DOI/PubMed 链接），数据集论断附 GSE accession（或来源 URL），
+通路论断附 Reactome pathway_id；证据来自工具输出，不要凭记忆编造引用。无法溯源或
+未经核验的论断（如未检索到的机制、推测性治疗策略）必须标注"待核验"，不得裸列成
+已证结论。
+
 ## 工作目录与文件管理
 任务有独立工作目录 `data/output/tasks/<task_id>/`，主要子目录：
 - `source_assets/` — 原始数据文件（下载产物、截图、PDF 等）
@@ -294,12 +300,17 @@ Spec 模板（gene expression 单源）：
    的真实表达数据在 `soft/` 或 `suppl/`：先 `list_geo_supplementary_files`，再
    `download_geo(file_type='suppl')`（RNA-seq 系列通常有 supplementary counts，
    用 `format: supplementary_matrix` 构建），或 `download_geo(file_type='soft')`
-4. **多 binding 兜底**：候选数据集中 ≥2 个可解析数据集时，放进同一个
+4. **两段式判定（P4）**：区分两类失败——(a) **该文件无数据表**（如
+   `empty_series_matrix` / "series matrix contains no data rows"）：按第 3 条换
+   soft/suppl 文件即可，数据源本身可用；(b) **该 accession 无任何可解析表达数据**
+   （soft/suppl 也没有矩阵或 counts，如仅剩 RAW 压缩包）：此时才判定数据源不可用，
+   换其它数据集。不要把 (a) 泛化成"GEO 无数据"。
+5. **多 binding 兜底**：候选数据集中 ≥2 个可解析数据集时，放进同一个
    `execute_dataset_build` spec（同 family/granularity，`merge_strategy:
    append_by_canonical_row`），单个 binding 空表不拖垮整个 build；单 binding 失败后
    必须换一个已下载/可下载的候选再构建一次才允许收尾
-5. **不要用相同参数重试**：相同参数必然导致相同失败
-6. **适时止损**：若 2-3 次调整后仍无合适数据，停止重试，向用户如实汇报已尝试的
+6. **不要用相同参数重试**：相同参数必然导致相同失败
+7. **适时止损**：若 2-3 次调整后仍无合适数据，停止重试，向用户如实汇报已尝试的
    方案和失败原因
 
 **禁止行为**：构建失败意味着没有通过 validation 的结构化产物，不得用

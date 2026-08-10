@@ -33,6 +33,23 @@ class ArtifactRole(StrEnum):
     AUDIT_REPORT = "audit_report"
 
 
+class BindingFailureDetail(ContractModel):
+    """Per-binding failure detail surfaced on a NO_DATA ``BuildResult`` (K2).
+
+    Mirrors ``app.datasets.contracts.BindingRejection``'s stable fields
+    without importing the ``app.datasets`` package (see module docstring).
+    Lets a ``no_data`` result carry an actionable trace of *why* each source
+    binding was rejected instead of a single collapsed ``no_primary_data``.
+    (See docs/REVIEW_2026-08-10-task-9ce0124f.md §5.3 K2.)
+    """
+
+    binding_id: str = Field(min_length=1)
+    #: Stable reason code: ``no_primary_data``, ``parse_error``,
+    #: ``build_error``, or ``probe_mapping_unavailable_required_gene_level``.
+    reason_code: str = Field(min_length=1)
+    message: str = ""
+
+
 class BuildResult(ContractModel):
     """Business outcome of a normally completed build (ARCHITECTURE §9.1).
 
@@ -52,6 +69,12 @@ class BuildResult(ContractModel):
     reason_codes: list[str] = Field(default_factory=list)
     user_summary: str = ""
     recommended_next_action: str = ""
+    # K2 (docs/REVIEW_2026-08-10-task-9ce0124f.md §5.3): per-binding failure
+    # detail on NO_DATA builds so consumers can act on *why* each source was
+    # rejected (e.g. a metadata-only series matrix) instead of a collapsed
+    # ``no_primary_data``.  Optional and backward compatible: older serialized
+    # events simply lack the field.
+    binding_failures: list[BindingFailureDetail] = Field(default_factory=list)
     # C1e (F7-03): NO_DATA builds have no publication_id to correlate in the
     # builds API — this stable build identity lets the API tie a durable
     # ``RunCompletedPayload.build_result`` envelope back to its build dir.

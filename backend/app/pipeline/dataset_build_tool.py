@@ -59,6 +59,7 @@ from app.domain.contracts import (
     generate_prefixed_uuid,
 )
 from app.domain.contracts.dataset_state import (
+    BindingFailureDetail,
     BuildResult,
     BuildResultStatus,
 )
@@ -66,6 +67,17 @@ from app.tools.workdir import resolve_task_local_file
 
 _NO_DATA_SUMMARY = "任务完成，但未产出可发布的主数据。"
 _NO_DATA_NEXT_ACTION = "检查数据源可用性或调整查询后重试。"
+
+#: K2 (docs/REVIEW_2026-08-10-task-9ce0124f.md §5.3): actionable recovery
+#: hint for the most common NO_DATA root cause — a metadata-only series
+#: matrix.  The generic "检查数据源可用性" message previously told the agent
+#: the data source was at fault when the expression table actually lives in
+#: the series' soft/ or suppl/ files.
+_NO_DATA_NEXT_ACTION_EMPTY_SERIES_MATRIX = (
+    "series matrix 为元数据-only（无表达表）：改用 "
+    "download_geo(file_type='soft'/'suppl') 获取该系列的表达数据，"
+    "或换用 series matrix 含表达表的可用数据集后重试。"
+)
 
 #: H3 (Phase 4 review): structured reason code carried by the parse layer for
 #: an empty source and propagated through the outcome error details.
@@ -911,6 +923,7 @@ def _classify_failed_outcome(
         return _no_data_envelope(
             binding_ids,
             _reason_codes_for_all_rejected(per_binding),
+            binding_failures=_binding_failures_from(per_binding),
         )
 
     if reason_code == _REASON_NO_PRIMARY_DATA:
@@ -972,15 +985,55 @@ def _classify_failed_outcome(
     return _no_data_envelope(binding_ids, [_REASON_NO_PRIMARY_DATA])
 
 
+def _binding_failures_from(
+    per_binding: dict[str, BindingRejection],
+) -> list[BindingFailureDetail]:
+    """Flatten per-binding rejections into BuildResult failure details (K2)."""
+    return [
+        BindingFailureDetail(
+            binding_id=rejection.binding_id,
+            reason_code=rejection.reason_code,
+            message=rejection.message,
+        )
+        for rejection in sorted(
+            per_binding.values(), key=lambda rejection: rejection.binding_id
+        )
+    ]
+
+
+def _next_action_for_failures(failures: list[BindingFailureDetail]) -> str:
+    """Actionable NO_DATA next action derived from per-binding failures (K2).
+
+    Replaces the generic "检查数据源可用性" with a concrete recovery step:
+    a metadata-only series matrix should route to the series' soft/ or suppl/
+    files instead of being reported as a data-source absence.  Falls back to
+    the generic message when no failure matches a known root cause.
+    """
+    for detail in failures:
+        message = detail.message
+        if "series matrix" in message and "no data rows" in message:
+            return _NO_DATA_NEXT_ACTION_EMPTY_SERIES_MATRIX
+    return _NO_DATA_NEXT_ACTION
+
+
 def _no_data_envelope(
     binding_ids: list[str],
     reason_codes: list[str],
     *,
     rejected_sources: list[str] | None = None,
     summary: str = _NO_DATA_SUMMARY,
-    next_action: str = _NO_DATA_NEXT_ACTION,
+    next_action: str | None = None,
+    binding_failures: list[BindingFailureDetail] | None = None,
 ) -> BuildResult:
-    """A NO_DATA BuildResult with zero valid rows and no publication."""
+    """A NO_DATA BuildResult with zero valid rows and no publication.
+
+    When per-binding failure details are available, ``recommended_next_action``
+    is derived from the root cause (K2) instead of always using the generic
+    message; an explicitly passed ``next_action`` still wins.
+    """
+    failures = binding_failures or []
+    if next_action is None:
+        next_action = _next_action_for_failures(failures)
     return BuildResult(
         status=BuildResultStatus.NO_DATA,
         valid_row_count=0,
@@ -991,6 +1044,7 @@ def _no_data_envelope(
         reason_codes=reason_codes,
         user_summary=summary,
         recommended_next_action=next_action,
+        binding_failures=failures,
     )
 
 

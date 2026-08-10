@@ -29,6 +29,9 @@ from app.domain.contracts.dataset_state import (
     ArtifactRole,
 )
 from app.domain.contracts.dataset_state import (
+    BindingFailureDetail as BindingFailureDetail,
+)
+from app.domain.contracts.dataset_state import (
     BuildResult as BuildResult,
 )
 from app.domain.contracts.dataset_state import (
