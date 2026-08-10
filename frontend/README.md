@@ -374,20 +374,18 @@ server: {
 
 ### shadcn 组件清单
 
-`src/components/ui/` 包含 36 个组件：
+`src/components/ui/` 包含 32 个组件：
 
 | 组件 | 用途 |
 |------|------|
 | `accordion` | 可折叠区域 |
 | `alert` / `alert-dialog` | 警告框 / 警告对话框 |
 | `attachment` | 附件展示 |
-| `avatar` | 用户/机器人头像 |
 | `badge` | 状态标签 |
 | `bubble` | 消息气泡 |
 | `button` | 按钮（default/outline/ghost） |
 | `card` | 卡片容器 |
 | `combobox` | 组合下拉框 |
-| `command` | 命令面板（cmdk） |
 | `dialog` | 模态对话框 |
 | `dropdown-menu` | 下拉菜单 |
 | `empty` | 空状态 |
@@ -408,7 +406,6 @@ server: {
 | `table` | 数据表格 |
 | `tabs` | 标签页导航 |
 | `textarea` | 多行文本输入 |
-| `toggle` / `toggle-group` | 单一切换按钮 / 多选切换组 |
 | `tooltip` | 悬浮提示 |
 
 ## 测试

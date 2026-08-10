@@ -3,9 +3,7 @@ import type { DeclarativeSkillManifest } from "@/hooks/useAPI";
 /* ------------------------------------------------------------------ */
 /*  Database draft state                                                */
 /* ------------------------------------------------------------------ */
-export const HTTP_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"] as const;
-
-export type HttpMethod = (typeof HTTP_METHODS)[number];
+export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS";
 
 export function parseHttpMethod(raw: string): HttpMethod {
   const upper = raw.trim().toUpperCase();

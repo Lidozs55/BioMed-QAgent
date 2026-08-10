@@ -62,22 +62,46 @@ Key points:
 | ------ | ------------------------------------------------- | ---------------------------------- |
 | GET    | `/api/v1/health`                                  | Health check                       |
 | GET    | `/api/v1/databases`                               | List user-selectable databases     |
+| POST   | `/api/v1/databases`                               | Register a skill-backed database   |
+| PUT    | `/api/v1/databases/{name}`                        | Update a database entry            |
+| DELETE | `/api/v1/databases/{name}`                        | Remove a database entry            |
 | GET    | `/api/v1/settings`                                | Get masked user model settings     |
-| POST   | `/api/v1/settings`                                | Persist user model settings        |
+| PUT    | `/api/v1/settings`                                | Persist user model settings        |
 | GET    | `/api/v1/vendors`                                 | List known model vendors           |
-| GET    | `/api/v1/models`                                  | Discover available provider models |
-| GET    | `/api/v1/models/{model_id}`                       | Get built-in model details         |
+| POST   | `/api/v1/models`                                  | Discover available provider models |
+| GET    | `/api/v1/model-info`                              | List built-in model info entries   |
+| GET    | `/api/v1/model-info/{model_id}`                   | Get built-in model details         |
+| GET    | `/api/v1/skills`                                  | List skills with catalog metadata  |
+| GET    | `/api/v1/skills/{name}`                           | Get skill detail + versions        |
+| POST   | `/api/v1/skills/{name}/enable`                    | Enable a skill                     |
+| POST   | `/api/v1/skills/{name}/disable`                   | Disable a skill                    |
+| POST   | `/api/v1/skills/{name}/rollback`                  | Roll a skill back to a version     |
+| PUT    | `/api/v1/skills/{name}/manifest`                  | Update a skill manifest            |
+| PUT    | `/api/v1/skills/{name}/package`                   | Replace a skill package            |
+| DELETE | `/api/v1/skills/{name}`                           | Delete a user skill                |
+| POST   | `/api/v1/skills/validate`                         | Validate a skill manifest          |
+| POST   | `/api/v1/skills/upload`                           | Upload a skill package             |
 | GET    | `/api/v1/tasks`                                   | List active tasks + paginated history |
 | POST   | `/api/v1/tasks`                                   | Create a durable task and enqueue its first run |
+| POST   | `/api/v1/import/tasks`                            | Create an import task with uploaded files |
 | GET    | `/api/v1/tasks/{task_id}`                         | Task snapshot (authoritative state) |
 | DELETE | `/api/v1/tasks/{task_id}`                         | Delete a terminal task and its history |
+| POST   | `/api/v1/tasks/{task_id}/compact`                 | Compact a task's conversation      |
 | POST   | `/api/v1/tasks/{task_id}/runs`                    | Enqueue another user turn for an idle Agent task |
 | POST   | `/api/v1/tasks/{task_id}/runs/{run_id}/cancel`    | Request cancellation of a queued or running run |
 | POST   | `/api/v1/tasks/{task_id}/runs/{run_id}/resume`    | Submit a human-in-the-loop resume decision to a paused run |
+| POST   | `/api/v1/tasks/{task_id}/runs/{run_id}/subagents/{subagent_id}/cancel` | Request cancellation of a nonterminal child agent |
 | GET    | `/api/v1/tasks/{task_id}/messages`                | Paginated task messages            |
 | GET    | `/api/v1/tasks/{task_id}/events`                  | Replay durable events (`?after_sequence=N&limit=N`) |
 | GET    | `/api/v1/tasks/{task_id}/artifacts`               | List validated artifact files      |
 | GET    | `/api/v1/tasks/{task_id}/artifacts/{artifact_id}` | Download a specific artifact       |
+| GET    | `/api/v1/builds`                                  | List builds (global)               |
+| GET    | `/api/v1/builds/{build_id}`                       | Build detail (result/validation/manifest/publication) |
+| GET    | `/api/v1/builds/{build_id}/artifacts/{artifact_id}` | Download a build artifact          |
+| GET    | `/api/v1/cache/datasets`                          | List cached datasets               |
+| GET    | `/api/v1/cache/datasets/{dataset_id}`             | Cached dataset detail              |
+| GET    | `/api/v1/cache/datasets/{dataset_id}/artifacts/{artifact_id}` | Download a cached dataset artifact |
+| GET    | `/api/v1/cache/export`                            | Export the local cache as a zip    |
 
 **Durable Event WebSocket**
 
@@ -92,27 +116,36 @@ Key points:
    - `{"type":"ping"}` — keepalive; server responds with `{"type":"pong"}`
 4. The server pushes `EventEnvelope` objects (same schema as
    `GET /tasks/{task_id}/events`) and control frames:
-   - `EventEnvelope` — a task event. Common types: `run_queued`,
-     `run_started`, `run_finalizing`, `run_completed`, `run_failed`,
-     `run_cancelled`, `run_interrupted`, `run_cancel_requested`,
-     `tool_started`, `tool_completed`, `assistant_delta`,
-     `assistant_reasoning_delta`, `stage_started`, `stage_completed`,
-     `stage_failed`, `stage_skipped`, `stage_progress`,
-     `operation_started`, `operation_progress`, `operation_completed`,
-     `operation_failed`,
-     `artifact_produced`, `warning`, `user_input_required`,
-     `user_input_resumed`, `plan_ready`, `conversation_compacted`,
-     `task_created`, `task_cancel_requested`, `task_recovered`,
-     `task_completed`, `task_failed`. See
+   - `EventEnvelope` — a task event. Types (full union of
+     `PipelineEventType` + `RuntimeEventType`, see
      [backend/app/domain/contracts/events.py](backend/app/domain/contracts/events.py)
-     for the authoritative payload schemas.
+     for the authoritative payload schemas):
+     `task_created`, `plan_ready`, `user_input_required`,
+     `user_input_resumed`, `stage_started`, `stage_completed`,
+     `stage_failed`, `stage_skipped`, `stage_progress`, `tool_called`,
+     `tool_completed`, `warning`, `artifact_produced`,
+     `task_cancel_requested`, `task_cancelled`, `task_recovered`,
+     `task_completed`, `task_failed` (pipeline); `run_queued`,
+     `run_started`, `run_finalizing`, `run_completed`, `run_failed`,
+     `run_cancel_requested`, `run_cancelled`, `run_interrupted`,
+     `publication_created`, `assistant_delta`,
+     `assistant_reasoning_delta`, `tool_started`,
+     `conversation_compacted`, `operation_started`,
+     `operation_progress`, `operation_completed`, `operation_failed`,
+     `subagent_queued`, `subagent_started`, `subagent_progress`,
+     `subagent_completed`, `subagent_failed`,
+     `subagent_cancel_requested`, `subagent_cancelled`,
+     `subagent_interrupted`, `subagent_input_required`,
+     `subagent_input_resumed` (runtime).
 
      > Phase 7 T3: the fixed `stage_*` union is superseded by generic
      > `operation_*` events carrying `operation_id` / `label` / `category`
      > (stable strings the UI groups/icons by). During the compatibility
-     > period every `stage_*` event is still emitted **and** mirrored by an
-     > `operation_*` event; the frontend should render by operation identity
-     > (see docs/ARCHITECTURE.md §14.2 / §17.2).
+     > period only `stage_progress` is still emitted **and** mirrored by an
+     > `operation_progress` event; `stage_started`/`completed`/`failed`/
+     > `skipped` have no production emitter anymore (kept for replaying
+     > legacy events.jsonl). The frontend should render by operation
+     > identity (see docs/ARCHITECTURE.md §14.2 / §17.2).
    - `{"type":"pong"}` — response to ping
    - `{"type":"error","message":"..."}` — protocol error (e.g. unsupported command)
 
