@@ -213,6 +213,85 @@ async def test_download_geo_returns_compressed_repository_processed_asset(
 
 
 @pytest.mark.asyncio
+async def test_download_geo_matrix_fails_fast_on_metadata_only_gzip(
+    tmp_path: Path,
+) -> None:
+    """A series matrix with no expression table must fail fast, not report success.
+
+    NCBI serves metadata-only series matrices for RNA-seq (and some array)
+    series.  Previously download_geo reported them as a successful source
+    asset and the failure surfaced only later at build parse time.  Now the
+    adapter returns a structured ``empty_series_matrix`` error and does not
+    record the asset as a usable source.  (See docs/REVIEW_2026-08-10-task-9ce0124f.md
+    §5.1 T2.)
+    """
+    import gzip
+
+    metadata_only = gzip.compress(
+        b'!Series_title = "metadata only"\n!Series_geo_accession = "GSE178352"\n'
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("GSE178352_series_matrix.txt.gz")
+        return httpx.Response(
+            200,
+            content=metadata_only,
+            headers={
+                "Content-Length": str(len(metadata_only)),
+                "Content-Type": "application/gzip",
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        services = NcbiServices(
+            eutils=FixtureNcbiClient(),
+            http=http,
+            cache=ContentCache(tmp_path / "cache"),
+        )
+        context = run_context(tmp_path)
+        payload = json.loads(
+            await download_geo_adapter(
+                context,
+                "GSE178352",
+                "matrix",
+                services=services,
+                max_size_mb=1,
+            )
+        )
+
+    assert payload.get("reason_code") == "empty_series_matrix"
+    assert "suppl" in payload["error"]
+    assert "asset" not in payload
+    assert context.source_asset_ids == []
+
+
+@pytest.mark.asyncio
+async def test_download_geo_unsupported_file_type_lists_valid_values(
+    tmp_path: Path,
+) -> None:
+    """The unsupported file_type error must list the valid values so the agent
+    can self-correct without another guess.  (docs/REVIEW_2026-08-10 §5.1 T4.)"""
+    async with httpx.AsyncClient() as http:
+        services = NcbiServices(
+            eutils=FixtureNcbiClient(),
+            http=http,
+            cache=ContentCache(tmp_path / "cache"),
+        )
+        context = run_context(tmp_path)
+        payload = json.loads(
+            await download_geo_adapter(
+                context,
+                "GSE178352",
+                "series_matrix",
+                services=services,
+            )
+        )
+
+    assert "unsupported file_type" in payload["error"]
+    assert "matrix, soft, suppl" in payload["error"]
+
+
+@pytest.mark.asyncio
 async def test_child_download_geo_commits_asset_outside_child_staging(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
