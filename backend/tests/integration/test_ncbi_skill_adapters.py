@@ -17,6 +17,7 @@ from app.integrations.ncbi.factory import NcbiServices
 from app.skills.builtin.acquisition.geo import (
     describe_geo_adapter,
     download_geo_adapter,
+    download_geo_platform_annotation_adapter,
     search_geo,
     search_geo_adapter,
 )
@@ -270,6 +271,106 @@ async def test_child_download_geo_commits_asset_outside_child_staging(
     assert committed.read_bytes() == b"child geo bytes"
     assert not (child.work_dir.root / payload["asset"]["relative_path"]).exists()
     assert child.source_asset_ids == [asset.asset_id]
+
+
+@pytest.mark.asyncio
+async def test_download_geo_platform_annotation_returns_asset(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """P0 wiring (REVIEW_2026-08-09 §7.1): the annotation download locates the
+    platform table (discovery is stubbed), acquires it as a provenance-tracked
+    SourceAsset and reports the local path for ``mapping_files``."""
+    compressed = b"gzip platform table bytes"
+    located = ("annot", "GPL570.annot.gz")
+    monkeypatch.setattr(geo_module, "discover_annotation_file", lambda *_a, **_k: located)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/annot/GPL570.annot.gz")
+        return httpx.Response(
+            200,
+            content=compressed,
+            headers={
+                "Content-Length": str(len(compressed)),
+                "Content-Type": "application/gzip",
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        services = NcbiServices(
+            eutils=FixtureNcbiClient(),
+            http=http,
+            cache=ContentCache(tmp_path / "cache"),
+        )
+        context = run_context(tmp_path)
+        payload = json.loads(
+            await download_geo_platform_annotation_adapter(
+                context,
+                "GPL570",
+                services=services,
+                max_size_mb=1,
+            )
+        )
+
+    assert payload["platform"] == "GPL570"
+    assert payload["asset"]["data_level"] == "repository_processed"
+    relative_path = payload["asset"]["relative_path"]
+    downloaded = context.work_dir.root / relative_path
+    assert downloaded.name == "GPL570.annot.gz"
+    assert downloaded.read_bytes() == compressed
+    assert payload["local_files"] == [str(downloaded)]
+    assert context.raw_assets == [str(downloaded)]
+
+
+@pytest.mark.asyncio
+async def test_download_geo_platform_annotation_no_file_returns_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A platform without a downloadable annotation table fails cleanly (no
+    exception, structured error the agent can act on)."""
+    monkeypatch.setattr(geo_module, "discover_annotation_file", lambda *_a, **_k: None)
+
+    services = NcbiServices(
+        eutils=FixtureNcbiClient(),
+        http=httpx.AsyncClient(),
+        cache=ContentCache(tmp_path / "cache"),
+    )
+    context = run_context(tmp_path)
+    payload = json.loads(
+        await download_geo_platform_annotation_adapter(
+            context,
+            "GPL19072",
+            services=services,
+        )
+    )
+    await services.http.aclose()
+
+    assert payload["platform"] == "GPL19072"
+    assert "no downloadable annotation table" in payload["error"]
+
+
+@pytest.mark.asyncio
+async def test_download_geo_platform_annotation_rejects_invalid_gpl(
+    tmp_path: Path,
+) -> None:
+    """Malformed GPL accessions are rejected before any network work."""
+    services = NcbiServices(
+        eutils=FixtureNcbiClient(),
+        http=httpx.AsyncClient(),
+        cache=ContentCache(tmp_path / "cache"),
+    )
+    context = run_context(tmp_path)
+    payload = json.loads(
+        await download_geo_platform_annotation_adapter(
+            context,
+            "not-a-gpl",
+            services=services,
+        )
+    )
+    await services.http.aclose()
+
+    assert "must match" in payload["error"]
 
 
 @pytest.mark.asyncio

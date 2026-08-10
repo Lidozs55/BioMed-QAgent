@@ -94,8 +94,15 @@ def _stage_fixture(run_ctx: RunContext, fixture_rel: str, dest_name: str) -> str
     return f"source_assets/{dest_name}"
 
 
-def _call_tool(ctx: ToolContext, spec: str, source_files: str) -> dict[str, object]:
-    args = json.dumps({"spec": spec, "source_files": source_files})
+def _call_tool(
+    ctx: ToolContext,
+    spec: str,
+    source_files: str,
+    mapping_files: str = "{}",
+) -> dict[str, object]:
+    args = json.dumps(
+        {"spec": spec, "source_files": source_files, "mapping_files": mapping_files}
+    )
     result = asyncio.run(execute_dataset_build.on_invoke_tool(ctx, args))
     return json.loads(result)
 
@@ -716,6 +723,23 @@ def _stage_geo_matrix(
     return f"source_assets/{name}"
 
 
+def _stage_geo_annotation(
+    run_ctx: RunContext,
+    mapping: dict[str, str],
+    name: str = "GPL570.annot.gz",
+) -> str:
+    """Stage a gzip SOFT platform annotation into the run workdir."""
+    import gzip
+
+    dest = run_ctx.work_dir.source_asset_file(name)
+    lines = ["!platform_table_begin", '"ID"\t"GENE_SYMBOL"']
+    lines.extend(f'"{probe}"\t"{gene}"' for probe, gene in sorted(mapping.items()))
+    lines.append("!platform_table_end")
+    with gzip.open(dest, "wt", encoding="utf-8") as handle:
+        handle.write("\n".join(lines) + "\n")
+    return f"source_assets/{name}"
+
+
 def test_execute_dataset_build_gene_required_probe_source_is_no_data_with_probe_code(
     tmp_path: Path,
 ) -> None:
@@ -746,6 +770,82 @@ def test_execute_dataset_build_gene_required_probe_source_is_no_data_with_probe_
     build_root = run_ctx.work_dir.root / "datasets_build" / "build_tool_test"
     assert list((build_root / "canonical").glob("binding_geo*"))
     assert not list((build_root / "publish").glob("build_tool_test_*"))
+
+
+def test_execute_dataset_build_mapping_files_enables_gene_level_from_probe(
+    tmp_path: Path,
+) -> None:
+    """P0 wiring (REVIEW_2026-08-09 §7.1): passing the GPL platform
+    annotation via ``mapping_files`` lets a gene-required probe build publish
+    the gene primary (probe rows re-namespaced to genes, full coverage) —
+    the same scenario that NO_DATA's without the annotation."""
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+    rel = _stage_geo_matrix(run_ctx, [("AFFX-BioB-5", "1.5", "2.0")])
+    annotation_rel = _stage_geo_annotation(run_ctx, {"AFFX-BioB-5": "TP53"})
+
+    data = _call_tool(
+        ctx,
+        _geo_spec_json(),
+        json.dumps({"binding_geo": rel}),
+        mapping_files=json.dumps({"binding_geo": annotation_rel}),
+    )
+
+    assert data["status"] == "ok"
+    result = data["result"]
+    assert result["status"] == "succeeded"
+    assert result["valid_row_count"] == 2
+    assert result["reason_codes"] == []
+    assert result["publication_id"]
+
+    build_root = run_ctx.work_dir.root / "datasets_build" / "build_tool_test"
+    primary = build_root / "merged" / "primary.csv"
+    with primary.open(encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert {row["gene_id"] for row in rows} == {"TP53"}
+    assert {row["gene_id_namespace"] for row in rows} == {"gene_symbol"}
+    assert (build_root / "canonical" / "binding_geo_probe_mapping.csv").is_file()
+
+
+def test_execute_dataset_build_mapping_files_unknown_binding_rejected(
+    tmp_path: Path,
+) -> None:
+    """A mapping_files entry referencing a binding not in the spec is
+    rejected as invalid_input before any file is touched."""
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+    rel = _stage_geo_matrix(run_ctx, [("AFFX-BioB-5", "1.5", "2.0")])
+
+    data = _call_tool(
+        ctx,
+        _geo_spec_json(),
+        json.dumps({"binding_geo": rel}),
+        mapping_files=json.dumps({"binding_geo": rel, "binding_ghost": rel}),
+    )
+
+    assert data["status"] == "invalid_input"
+    assert "binding_ghost" in data["message"]
+    assert data["retryable"] is False
+
+
+def test_execute_dataset_build_mapping_files_unresolvable_path_is_retryable(
+    tmp_path: Path,
+) -> None:
+    """A mapping_files entry whose path does not resolve returns a retryable
+    error (same semantics as source_files)."""
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+    rel = _stage_geo_matrix(run_ctx, [("AFFX-BioB-5", "1.5", "2.0")])
+
+    data = _call_tool(
+        ctx,
+        _geo_spec_json(),
+        json.dumps({"binding_geo": rel}),
+        mapping_files=json.dumps({"binding_geo": "source_assets/missing.annot.gz"}),
+    )
+
+    assert data["status"] == "error"
+    assert data["retryable"] is True
 
 
 def test_execute_dataset_build_probe_level_publishes_probe_primary(tmp_path: Path) -> None:

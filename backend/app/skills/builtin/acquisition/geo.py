@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from typing import Any
@@ -22,6 +23,10 @@ from app.integrations.ncbi.discovery import (
 )
 from app.integrations.ncbi.factory import NcbiServices, open_ncbi_services
 from app.integrations.ncbi.parsers import resolve_geo_supplementary_assets
+from app.pipeline.processing.geo_annotation import (
+    discover_annotation_file,
+    geo_platform_dir,
+)
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
 
 logger = logging.getLogger(__name__)
@@ -468,6 +473,158 @@ async def download_geo(
         )
 
 
+_ANNOTATION_FTP_ROOT = "https://ftp.ncbi.nlm.nih.gov/geo/platforms"
+_GPL_RE = re.compile(r"^GPL\d+$")
+
+
+async def download_geo_platform_annotation_adapter(
+    run_ctx: RunContext,
+    gpl: str,
+    *,
+    services: NcbiServices,
+    max_size_mb: int = 50,
+) -> str:
+    """Download the GEO SOFT platform annotation table for *gpl*.
+
+    Locates the annotation file (``suppl/{gpl}_*.txt.gz`` Agilent-style or
+    ``annot/{gpl}.annot.gz`` Affymetrix-style), acquires it through the
+    content-addressed ``acquire_source`` path (so the file lands in the task
+    workdir as a provenance-tracked SourceAsset) and returns the agent-facing
+    JSON envelope.  The returned file is what ``execute_dataset_build``
+    expects under ``mapping_files`` for a probe-platform binding.
+    """
+
+    if not _GPL_RE.fullmatch(gpl or ""):
+        return json.dumps(
+            {
+                "source": "geo",
+                "platform": gpl,
+                "error": "gpl must match ^GPL\\d+$ (e.g. 'GPL570')",
+            },
+            ensure_ascii=False,
+        )
+    try:
+        # Platform annotation discovery is a tiny FTP HTML listing; reuse the
+        # shared V1/V2 discovery helper (single implementation of the
+        # GPL-prefix + file-layout rules, review-loop R2b-02).
+        with httpx.Client(
+            follow_redirects=True,
+            timeout=httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0),
+            headers={"User-Agent": "Mozilla/5.0 (BioMedQAgent pipeline)"},
+        ) as client:
+            located = discover_annotation_file(client, gpl)
+        if located is None:
+            return json.dumps(
+                {
+                    "source": "geo",
+                    "platform": gpl,
+                    "error": (
+                        f"no downloadable annotation table for {gpl}; the "
+                        "platform ships no SOFT annotation (some custom/Agilent "
+                        "platforms ship only sequence columns)"
+                    ),
+                },
+                ensure_ascii=False,
+            )
+        subdir, filename = located
+        url = (
+            f"{_ANNOTATION_FTP_ROOT}/{geo_platform_dir(gpl)}"
+            f"/{gpl}/{subdir}/{filename}"
+        )
+        source = SourceRecord(
+            source_id=f"src_geo_{gpl.lower()}_annotation",
+            database=Database.GEO,
+            accession=gpl,
+            url=url,
+            title=f"GEO platform annotation {gpl}",
+            retrieved_at=datetime.now(UTC),
+        )
+        result = await acquire_source(
+            source=source,
+            filename=filename,
+            workdir=run_ctx.work_dir,
+            cache=services.cache,
+            http=services.http,
+            data_level=DataLevel.REPOSITORY_PROCESSED,
+            max_bytes=max_size_mb * 1024 * 1024,
+            accept="application/gzip, text/plain",
+        )
+        payload: dict[str, Any] = {
+            "source": "geo",
+            "platform": gpl,
+            "source_url": source.url,
+            "attempt": result.attempt.model_dump(mode="json"),
+            "asset": (result.asset.model_dump(mode="json") if result.asset else None),
+        }
+        if result.asset:
+            asset = result.asset
+            if run_ctx.subagent_id is not None:
+                asset = await asyncio.to_thread(
+                    run_ctx.commit_staged_source_asset,
+                    asset,
+                )
+                path = run_ctx.source_asset_path(asset)
+            else:
+                path = run_ctx.work_dir.root / asset.relative_path
+            run_ctx.record_source_asset_id(asset.asset_id)
+            run_ctx.add_source(source)
+            run_ctx.add_raw_asset(str(path))
+            payload["local_files"] = [str(path)]
+            payload["asset"] = asset.model_dump(mode="json")
+            payload["format_hint"] = "platform_annotation"
+            await run_ctx.emit_progress(
+                stage=StageName.ACQUISITION,
+                kind="downloaded_bytes",
+                current=asset.size_bytes,
+                total=None,
+                detail={
+                    "source": "geo",
+                    "platform": gpl,
+                    "filename": filename,
+                    "records": 1,
+                },
+            )
+        else:
+            payload["error"] = result.attempt.error_message
+        return json.dumps(payload, ensure_ascii=False)
+    except Exception as exc:
+        logger.exception(
+            "GEO platform annotation download failed for gpl=%r", gpl
+        )
+        return json.dumps(
+            {"source": "geo", "platform": gpl, "error": str(exc)},
+            ensure_ascii=False,
+        )
+
+
+@function_tool(
+    name_override="download_geo_platform_annotation",
+    description_override=(
+        "Download the NCBI GEO platform annotation table (SOFT) for a GPL "
+        "platform as an immutable SourceAsset. The annotation maps probe IDs "
+        "to gene identifiers and is required for a probe-platform (microarray) "
+        "GEO build to produce gene-level rows — pass the returned file via "
+        "the ``mapping_files`` parameter of execute_dataset_build "
+        "(binding_id -> annotation path). Parameters: ``gpl`` (required, "
+        "e.g. 'GPL570'), ``max_size_mb`` (optional, default 50). Returns JSON "
+        "with platform, asset and local_files. Fails cleanly when the "
+        "platform ships no downloadable annotation table."
+    ),
+)
+async def download_geo_platform_annotation(
+    ctx: RunContextWrapper[Any],
+    gpl: str,
+    max_size_mb: int = 50,
+) -> str:
+    async with open_ncbi_services() as services:
+        return await download_geo_platform_annotation_adapter(
+            ctx.context,
+            gpl,
+            services=services,
+            max_size_mb=max_size_mb,
+        )
+
+
 geo_skill = SkillDef(
     name="geo",
     category=SkillCategory.ACQUISITION,
@@ -480,11 +637,20 @@ geo_skill = SkillDef(
         "metadata, list_geo_supplementary_files to enumerate supplementary "
         "files before downloading, and download_geo to retrieve verified "
         "compressed source assets. For supplementary downloads, always specify "
-        "filename (from list_geo_supplementary_files)."
+        "filename (from list_geo_supplementary_files). For probe-platform "
+        "(microarray) datasets, call download_geo_platform_annotation with the "
+        "platform GPL (from describe_geo) and pass the annotation file via "
+        "execute_dataset_build's mapping_files so probe rows map to genes."
     ),
-    tools=[search_geo, describe_geo, list_geo_supplementary_files, download_geo],
+    tools=[
+        search_geo,
+        describe_geo,
+        list_geo_supplementary_files,
+        download_geo,
+        download_geo_platform_annotation,
+    ],
     supported_sources=["geo", "ncbi_geo"],
-    version="0.3.0",
+    version="0.4.0",
 )
 
 skill_registry.register(geo_skill)

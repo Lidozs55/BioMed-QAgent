@@ -50,7 +50,7 @@
 | B3 | P2 | Agent INSTRUCTIONS 增加"达 max_turns 输出 `[MAX_TURNS_REACHED]`" | TODO:365 |
 | B4 | P2 | ~~UniProt / ChEMBL Agent-only 来源能力（不接入 Pipeline）~~ ✅ **已修（2026-08-09, feat/leftovers-p2, commit 7d5893a）**：`Database.UNIPROT/CHEMBL` + alias + RESEARCH_ONLY 能力声明；`spec_validator` 硬门禁拒绝 research_only binding 进 build；两个 discovery skill（`search_uniprot`/`search_chembl`，reactome 模式：httpx→crawl 回退、log_query 审计、usage_hint 宣传 research_only）；`/databases` 投影为 Agent-only 来源（TDD 16 用例） | TODO:367 |
 | B5 | P2 | §3.5 通用 UI：**command/menubar 跳过、对话路由延后**（缓存导出按钮已完成） | TODO:278 `[~]` |
-| B6 | P0 | GEO probe→gene 映射接线：GPL 注释下载 → `mapping_paths`/`mapping_assets` 注入 `ExpressionBuildRunner`，使探针平台数据集可产出基因级或 probe-primary（`gene_expression.probe_release.v1`）产物。当前 spec 预检只保证 fail-fast（`unknown_unit` 等 reason code），不保证 GEO 探针数据可用 | REVIEW_2026-08-09-task-3eb85407 §7.1 |
+| B6 | P0 | ~~GEO probe→gene 映射接线：GPL 注释下载 → `mapping_paths`/`mapping_assets` 注入 `ExpressionBuildRunner`，使探针平台数据集可产出基因级或 probe-primary（`gene_expression.probe_release.v1`）产物~~ ✅ **已修（2026-08-09, feat/probe-gene-mapping-wiring）**：GEO 技能新增 `download_geo_platform_annotation(gpl)`（`geo_annotation.discover_annotation_file` 发现 + `acquire_source` 下载，带 provenance）；`execute_dataset_build` 新增可选 `mapping_files`（binding_id → 注释路径）注入 runner/executor；executor input digest 纳入 mapping_assets 哈希（换注释重跑不复用陈旧 canonicalize）；agent.py INSTRUCTIONS 指导探针平台先下注释再传 mapping_files、无注释退回 GDC/Xena 或 probe 级。TDD 8 项新测试 | REVIEW_2026-08-09-task-3eb85407 §7.1 |
 
 ---
 
