@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowLeftIcon, UploadSimpleIcon } from "@phosphor-icons/react";
 import { toast } from "sonner";
 
@@ -13,7 +13,6 @@ import { DatabaseSettingsSection } from "@/components/settings/sections/Database
 import { GeneralSettingsSection } from "@/components/settings/sections/GeneralSettingsSection";
 import { ModelSettingsSection } from "@/components/settings/sections/ModelSettingsSection";
 import { SkillsSettingsSection } from "@/components/settings/sections/SkillsSettingsSection";
-import type { ModelDraftState } from "@/components/settings/types";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   AlertDialog,
@@ -53,7 +52,6 @@ import {
 import { cn } from "@/lib/utils";
 import type {
   ModelSettings,
-  ModelSettingsUpdate,
   SettingsAPIClient,
   SkillDetail,
   SkillManifest,
@@ -67,7 +65,7 @@ export interface SettingsPageProps {
 }
 
 const SECTION_DESCRIPTIONS: Record<string, string> = {
-  model: "配置模型连接、上下文窗口与生成参数。",
+  model: "管理模型供应商与维护模型列表，并查看当前模型信息。",
   databases: "管理可选择的声明式检索数据库。",
   skills: "筛选、启停、回滚或安装 Agent 技能包。",
   appearance: "调整主题模式、强调色与界面字体。",
@@ -78,31 +76,9 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : "请求失败";
 }
 
-const INITIAL_DRAFT: ModelDraftState = {
-  baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-  apiKey: "",
-  modelName: "",
-  maxTokens: 8192,
-  temperature: 0.7,
-  topP: 1,
-  enableSearch: false,
-  thinkingMode: false,
-  modelSearch: "",
-  showModelDropdown: false,
-  showApiKey: false,
-};
-
 export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps) {
-  const apiKeyDirtyRef = useRef(false);
-  const saveSeqRef = useRef(0);
-
   const [loading, setLoading] = useState(true);
   const [settings, setSettings] = useState<ModelSettings | null>(null);
-
-  const [draft, setDraft] = useState<ModelDraftState>(INITIAL_DRAFT);
-  const [dirty, setDirty] = useState(false);
-  const [modelError, setModelError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
 
   const [skills, setSkills] = useState<SkillManifest[]>([]);
   const [skillFilter, setSkillFilter] = useState("");
@@ -151,19 +127,6 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
       ]);
       setSettings(nextSettings);
       setSkills(nextSkills);
-      setDraft({
-        ...INITIAL_DRAFT,
-        apiKey: nextSettings.api_key_configured ? nextSettings.api_key : "",
-        modelName: nextSettings.model_name,
-        maxTokens: nextSettings.max_tokens,
-        temperature: nextSettings.advanced.temperature ?? 0.7,
-        topP: nextSettings.advanced.top_p ?? 1,
-        enableSearch: nextSettings.advanced.enable_search ?? false,
-        thinkingMode: nextSettings.advanced.thinking_mode ?? false,
-      });
-      apiKeyDirtyRef.current = false;
-      setDirty(false);
-      setModelError(null);
     } catch (error) {
       toast.error("设置加载失败", { description: errorText(error) });
     } finally {
@@ -178,97 +141,8 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
     return () => window.clearTimeout(timer);
   }, [load]);
 
-  const patchDraft = useCallback(
-    (patch: Partial<ModelDraftState>) => {
-      if (patch.apiKey !== undefined) apiKeyDirtyRef.current = true;
-      setDraft((previous) => ({ ...previous, ...patch }));
-      setDirty(true);
-      setModelError(null);
-    },
-    [],
-  );
-
-  const patchUi = useCallback((patch: Partial<ModelDraftState>) => {
-    setDraft((previous) => ({ ...previous, ...patch }));
-  }, []);
-
-  const saveModel = async () => {
-    if (!draft.modelName.trim()) {
-      return;
-    }
-    setModelError(null);
-
-    const seq = ++saveSeqRef.current;
-    setSaving(true);
-    try {
-      const payload: Record<string, unknown> = {};
-      if (draft.maxTokens !== settings?.max_tokens) payload.max_tokens = draft.maxTokens;
-      if (draft.temperature !== (settings?.advanced.temperature ?? 0.7)) {
-        payload.temperature = draft.temperature;
-      }
-      if (draft.topP !== (settings?.advanced.top_p ?? 1)) payload.top_p = draft.topP;
-      if (draft.enableSearch !== (settings?.advanced.enable_search ?? false)) {
-        payload.enable_search = draft.enableSearch;
-      }
-      if (draft.thinkingMode !== (settings?.advanced.thinking_mode ?? false)) {
-        payload.thinking_mode = draft.thinkingMode;
-      }
-
-      if (Object.keys(payload).length === 0) {
-        setDirty(false);
-        return;
-      }
-
-      const updated = await api.saveSettings(payload as ModelSettingsUpdate);
-      if (saveSeqRef.current !== seq) return;
-
-      setSettings(updated);
-      setDraft((previous) => ({
-        ...previous,
-        apiKey: updated.api_key_configured ? updated.api_key : "",
-      }));
-      apiKeyDirtyRef.current = false;
-      setDirty(false);
-      toast.success("模型设置已保存");
-    } catch (error) {
-      const message = errorText(error);
-      setModelError(message);
-      toast.error("模型设置保存失败", { description: message });
-    } finally {
-      if (saveSeqRef.current === seq) setSaving(false);
-    }
-  };
-
-  const handleContextWindowChange = useCallback(
-    (tokens: number) => {
-      void api
-        .saveSettings({ context_window: tokens })
-        .then((updated) => {
-          setSettings(updated);
-          toast.success(`上下文窗口已调整为 ${tokens.toLocaleString()} tokens`);
-        })
-        .catch((error) => {
-          toast.error("调整失败", { description: errorText(error) });
-        });
-    },
-    [api],
-  );
-
   const handleActivated = useCallback((updated: ModelSettings) => {
     setSettings(updated);
-    setDraft((previous) => ({
-      ...previous,
-      modelName: updated.model_name,
-      apiKey: updated.api_key_configured ? updated.api_key : "",
-      maxTokens: updated.max_tokens,
-      temperature: updated.advanced.temperature ?? 0.7,
-      topP: updated.advanced.top_p ?? 1,
-      enableSearch: updated.advanced.enable_search ?? false,
-      thinkingMode: updated.advanced.thinking_mode ?? false,
-    }));
-    apiKeyDirtyRef.current = false;
-    setDirty(false);
-    setModelError(null);
   }, []);
 
   const mutateSkill = useCallback(
@@ -506,16 +380,7 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
                     <ModelSettingsSection
                       api={api}
                       settings={settings}
-                      draft={draft}
-                      dirty={dirty}
-                      saving={saving}
-                      modelError={modelError}
                       highlightAnchor={highlight?.anchor ?? null}
-                      highlightNonce={highlight?.nonce ?? 0}
-                      onDraftChange={patchDraft}
-                      onUiChange={patchUi}
-                      onContextWindowChange={handleContextWindowChange}
-                      onSave={() => void saveModel()}
                       onActivated={handleActivated}
                     />
                   )}

@@ -394,11 +394,11 @@ C5a/C5b/C6a）——真实遗留项见 LEFTOVERS。
       - `ProviderManager`：供应商列表 + 添加/编辑弹窗 + 常用供应商快捷填入。
       - `ModelListManager`：维护模型列表（设为当前 / 编辑 / 删除），无供应商时
         禁用“添加模型”。
-      - `ModelImportSheet`：非全屏浮层（Sheet），先选母供应商 → 左右分栏，
+      - `ModelImportSheet`：屏幕中央独立大浮窗（Dialog，最大约 5xl），先选母供应商 → 左右分栏，
         左栏自动拉取供应商返回模型列表，右栏为已选维护模型 + 动态参数编辑器
         （含保底参数与额外参数 key-value 编辑）。
-      - “当前模型”区块保留上下文窗口/最大输出/生成参数等既有保存逻辑；
-        激活模型通过 `activateManagedModel` 回写 settings。
+      - “当前模型”区块只读展示模型与参数信息（参数在模型列表中维护），激活模型通过
+        `activateManagedModel` 回写 settings。
   - API client（`settingsContracts.ts` / `useAPI.ts`）新增供应商与模型 CRUD、
     发现、激活方法；前端测试随 UI 重写/补全。
 - [ ] **P2** 待办：供应商/模型列表分页与搜索后端支持（当前全量返回）；

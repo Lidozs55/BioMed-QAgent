@@ -7,6 +7,14 @@ import {
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -16,14 +24,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetFooter,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
 import { Spinner } from "@/components/ui/spinner";
 import { ParameterEditor } from "@/components/settings/model/ParameterEditor";
 import type {
@@ -51,8 +51,8 @@ function errorText(error: unknown): string {
 
 function formatWindow(tokens: number | null | undefined): string {
   if (!tokens || tokens <= 0) return "未知";
-  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
-  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(0)}K`;
+  if (tokens >= 1_048_576) return `${(tokens / 1_048_576).toFixed(1)}M`;
+  if (tokens >= 1_024) return `${(tokens / 1_024).toFixed(0)}K`;
   return String(tokens);
 }
 
@@ -265,16 +265,16 @@ export function ModelImportSheet({
   const selectedSpecs = selected?.param_specs ?? [];
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-full sm:max-w-3xl">
-        <SheetHeader>
-          <SheetTitle>添加 / 管理模型</SheetTitle>
-          <SheetDescription>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex max-h-[calc(100svh-2rem)] w-full flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl">
+        <DialogHeader className="border-b px-5 py-4">
+          <DialogTitle>添加 / 管理模型</DialogTitle>
+          <DialogDescription>
             先选择供应商，从左侧导入模型到右侧维护列表，或手动添加模型。
-          </SheetDescription>
-        </SheetHeader>
+          </DialogDescription>
+        </DialogHeader>
 
-        <div className="px-4">
+        <div className="border-b px-5 py-3">
           <Select
             value={providerId}
             onValueChange={(next) => {
@@ -297,7 +297,7 @@ export function ModelImportSheet({
         </div>
 
         {providerId && (
-          <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 px-4 md:grid-cols-2">
+          <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-hidden px-5 py-4 md:grid-cols-2">
             {/* Left: provider returned model list */}
             <div className="flex min-h-0 flex-col rounded-xl border bg-card">
               <div className="flex items-center gap-2 border-b p-3">
@@ -473,14 +473,14 @@ export function ModelImportSheet({
         )}
 
         {providerId && selected && (
-          <SheetFooter>
+          <DialogFooter className="mx-0 mb-0 border-t px-5 py-3">
             <Button onClick={() => void saveSelected()} disabled={saving}>
               <ArrowSquareInIcon data-icon="inline-start" />
               保存参数
             </Button>
-          </SheetFooter>
+          </DialogFooter>
         )}
-      </SheetContent>
-    </Sheet>
+      </DialogContent>
+    </Dialog>
   );
 }
