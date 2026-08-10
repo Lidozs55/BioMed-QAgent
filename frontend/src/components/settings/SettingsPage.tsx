@@ -40,7 +40,6 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
-import { RichModelInfo } from "@/components/model-info-card";
 import {
   EMPTY_DATABASE,
   databaseManifest,
@@ -59,7 +58,6 @@ import type {
   SkillDetail,
   SkillManifest,
   SkillValidation,
-  VendorInfo,
 } from "@/hooks/useAPI";
 
 export interface SettingsPageProps {
@@ -97,13 +95,9 @@ const INITIAL_DRAFT: ModelDraftState = {
 export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps) {
   const apiKeyDirtyRef = useRef(false);
   const saveSeqRef = useRef(0);
-  const abortRef = useRef<AbortController | null>(null);
 
   const [loading, setLoading] = useState(true);
   const [settings, setSettings] = useState<ModelSettings | null>(null);
-  const [vendors, setVendors] = useState<VendorInfo[]>([]);
-  const [models, setModels] = useState<RichModelInfo[]>([]);
-  const [modelsLoading, setModelsLoading] = useState(false);
 
   const [draft, setDraft] = useState<ModelDraftState>(INITIAL_DRAFT);
   const [dirty, setDirty] = useState(false);
@@ -151,13 +145,11 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [nextSettings, nextVendors, nextSkills] = await Promise.all([
+      const [nextSettings, nextSkills] = await Promise.all([
         api.fetchSettings(),
-        api.fetchVendors(),
         api.fetchSkills(),
       ]);
       setSettings(nextSettings);
-      setVendors(nextVendors);
       setSkills(nextSkills);
       setDraft({
         ...INITIAL_DRAFT,
@@ -170,7 +162,6 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
         thinkingMode: nextSettings.advanced.thinking_mode ?? false,
       });
       apiKeyDirtyRef.current = false;
-      setModels([]);
       setDirty(false);
       setModelError(null);
     } catch (error) {
@@ -178,7 +169,6 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
     } finally {
       setLoading(false);
     }
-    abortRef.current = null;
   }, [api]);
 
   useEffect(() => {
@@ -194,79 +184,16 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
       setDraft((previous) => ({ ...previous, ...patch }));
       setDirty(true);
       setModelError(null);
-      if (patch.modelName !== undefined && patch.modelName !== draft.modelName) {
-        setDraft((previous) => ({ ...previous, modelSearch: "", showModelDropdown: false }));
-        const model = models.find((item) => item.id === patch.modelName);
-        if (model && model.context_window > 0) {
-          void api
-            .saveSettings({ model_name: patch.modelName, context_window: model.context_window })
-            .then((updated) => setSettings(updated))
-            .catch(() => {
-              // Save is retried on the explicit save action.
-            });
-        }
-      }
     },
-    [api, draft.modelName, models],
+    [],
   );
 
   const patchUi = useCallback((patch: Partial<ModelDraftState>) => {
     setDraft((previous) => ({ ...previous, ...patch }));
   }, []);
 
-  /**
-   * Mirror the explicit-selection context adaptation for the model that is
-   * default-selected after a list load (the saved/current model). Skip when
-   * the user already overrode the context window so a reload never clobbers
-   * their choice, and skip redundant writes when nothing changed.
-   */
-  const applyModelContext = useCallback(
-    (modelId: string, modelList: RichModelInfo[], baseUrl: string, current: ModelSettings | null) => {
-      if (!current) return;
-      if (baseUrl.replace(/\/+$/, "") !== current.base_url.replace(/\/+$/, "")) return;
-      const model = modelList.find((item) => item.id === modelId);
-      if (!model || model.context_window <= 0) return;
-      if (current.context_window_source === "user") return;
-      if (model.context_window === current.context_window) return;
-      void api
-        .saveSettings({ model_name: modelId, context_window: model.context_window })
-        .then((updated) => setSettings(updated))
-        .catch(() => {
-          // Non-fatal: the explicit save action retries.
-        });
-    },
-    [api],
-  );
-  const previewModels = useCallback(async () => {
-    abortRef.current?.abort();
-    const abort = new AbortController();
-    abortRef.current = abort;
-    setModelsLoading(true);
-    try {
-      const fresh = (await api.fetchModels({
-        baseUrl: draft.baseUrl,
-        apiKey: apiKeyDirtyRef.current ? draft.apiKey : undefined,
-      })) as RichModelInfo[];
-      if (!abort.signal.aborted) {
-        setModels(fresh);
-        applyModelContext(draft.modelName, fresh, draft.baseUrl, settings);
-      }
-    } catch (error) {
-      if (!abort.signal.aborted) {
-        toast.error("模型列表加载失败", { description: errorText(error) });
-      }
-    } finally {
-      if (!abort.signal.aborted) setModelsLoading(false);
-    }
-  }, [api, draft.baseUrl, draft.apiKey, draft.modelName, settings, applyModelContext]);
-
   const saveModel = async () => {
     if (!draft.modelName.trim()) {
-      setModelError("请填写模型名称，例如 qwen-plus");
-      return;
-    }
-    if (models.length > 0 && !models.find((model) => model.id === draft.modelName)) {
-      setModelError(`模型名称 "${draft.modelName}" 不在可用列表中，请检查拼写是否正确，或从下拉菜单中选择`);
       return;
     }
     setModelError(null);
@@ -274,21 +201,7 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
     const seq = ++saveSeqRef.current;
     setSaving(true);
     try {
-      try {
-        await api.fetchModels({
-          baseUrl: draft.baseUrl,
-          apiKey: apiKeyDirtyRef.current ? draft.apiKey : undefined,
-        });
-      } catch {
-        setSaving(false);
-        setModelError("API 密钥验证失败，请检查密钥是否正确或与 Base URL 是否匹配");
-        return;
-      }
-
       const payload: Record<string, unknown> = {};
-      if (apiKeyDirtyRef.current) payload.api_key = draft.apiKey;
-      if (draft.baseUrl !== settings?.base_url) payload.base_url = draft.baseUrl;
-      if (draft.modelName !== settings?.model_name) payload.model_name = draft.modelName;
       if (draft.maxTokens !== settings?.max_tokens) payload.max_tokens = draft.maxTokens;
       if (draft.temperature !== (settings?.advanced.temperature ?? 0.7)) {
         payload.temperature = draft.temperature;
@@ -317,21 +230,6 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
       apiKeyDirtyRef.current = false;
       setDirty(false);
       toast.success("模型设置已保存");
-
-      setModelsLoading(true);
-      try {
-        const freshModels = (await api.fetchModels({
-          baseUrl: updated.base_url,
-        })) as RichModelInfo[];
-        if (saveSeqRef.current === seq) {
-          setModels(freshModels);
-          applyModelContext(updated.model_name, freshModels, updated.base_url, updated);
-        }
-      } catch {
-        // Discovery failure must not revert the save success.
-      } finally {
-        if (saveSeqRef.current === seq) setModelsLoading(false);
-      }
     } catch (error) {
       const message = errorText(error);
       setModelError(message);
@@ -355,6 +253,23 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
     },
     [api],
   );
+
+  const handleActivated = useCallback((updated: ModelSettings) => {
+    setSettings(updated);
+    setDraft((previous) => ({
+      ...previous,
+      modelName: updated.model_name,
+      apiKey: updated.api_key_configured ? updated.api_key : "",
+      maxTokens: updated.max_tokens,
+      temperature: updated.advanced.temperature ?? 0.7,
+      topP: updated.advanced.top_p ?? 1,
+      enableSearch: updated.advanced.enable_search ?? false,
+      thinkingMode: updated.advanced.thinking_mode ?? false,
+    }));
+    apiKeyDirtyRef.current = false;
+    setDirty(false);
+    setModelError(null);
+  }, []);
 
   const mutateSkill = useCallback(
     async (action: () => Promise<void>, success: string) => {
@@ -589,10 +504,8 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
                 <>
                   {activeSection === "model" && (
                     <ModelSettingsSection
+                      api={api}
                       settings={settings}
-                      vendors={vendors}
-                      models={models}
-                      modelsLoading={modelsLoading}
                       draft={draft}
                       dirty={dirty}
                       saving={saving}
@@ -601,9 +514,9 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
                       highlightNonce={highlight?.nonce ?? 0}
                       onDraftChange={patchDraft}
                       onUiChange={patchUi}
-                      onPreviewModels={() => void previewModels()}
                       onContextWindowChange={handleContextWindowChange}
                       onSave={() => void saveModel()}
+                      onActivated={handleActivated}
                     />
                   )}
                   {activeSection === "databases" && (

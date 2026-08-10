@@ -16,7 +16,7 @@ import type {
 } from "@/runtime/contracts";
 
 // Re-export all settings contracts for backward compatibility
-export type { CapabilitySource, ModelSettings, ModelSettingsUpdate, ModelPreviewRequest, VendorInfo, ModelInfo, SettingsAPIClient, DeclarativeOperation, DeclarativeSkillManifest, DatabaseOperationUpdatePatch, DatabaseUpdatePatch, SkillManifest, SkillDetail, SkillValidation } from "@/hooks/settingsContracts";
+export type { CapabilitySource, ModelSettings, ModelSettingsUpdate, ModelPreviewRequest, VendorInfo, ModelInfo, SettingsAPIClient, DeclarativeOperation, DeclarativeSkillManifest, DatabaseOperationUpdatePatch, DatabaseUpdatePatch, SkillManifest, SkillDetail, SkillValidation, ParameterSpec, ModelCapabilities, ProviderInfo, ProviderInput, ProviderUpdateInput, ManagedModelInfo, ManagedModelInput, DiscoveredModelInfo } from "@/hooks/settingsContracts";
 export type { ContextBudgetSettings } from "@/hooks/settingsContracts";
 
 // Re-export APIError class, normalizer, and runtime parsers
@@ -24,6 +24,11 @@ export { APIError, normalizeErrorDetail } from "@/hooks/settingsContracts";
 export { parseModelSettings, parseVendorsEnvelope, parseModelsEnvelope } from "@/hooks/settingsParsers";
 import { APIError } from "@/hooks/settingsContracts";
 import { parseModelSettings, parseVendorsEnvelope, parseModelsEnvelope } from "@/hooks/settingsParsers";
+import type {
+  DiscoveredModelInfo,
+  ManagedModelInfo,
+  ProviderInfo,
+} from "@/hooks/settingsContracts";
 import {
   parseEventPage, parseMessagePage, parseTaskPage,
   parseTaskRunAccepted, parseTaskSnapshot,
@@ -210,6 +215,16 @@ export function createAPIClient(options: APIClientOptions = {}): APIClient & Set
     saveSettings: (changes) => fetcher(`${baseUrl}/settings`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(changes) }).then((r) => parseResponse(r).then((b) => parseModelSettings(b))),
     fetchVendors: () => fetcher(`${baseUrl}/vendors`).then((r) => parseResponse(r).then((b) => parseVendorsEnvelope(b)).then(({ vendors }) => vendors)),
     fetchModels: (preview) => fetcher(`${baseUrl}/models`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ preview_base_url: preview.baseUrl, preview_api_key: preview.apiKey ?? "", ...(preview.query === undefined ? {} : { query: preview.query }) }) }).then((r) => parseResponse(r).then((b) => parseModelsEnvelope(b)).then(({ models }) => models)),
+    fetchProviders: () => request(`${baseUrl}/model-registry/providers`).then((b) => b as ProviderInfo[]),
+    createProvider: (input) => request(`${baseUrl}/model-registry/providers`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) }).then((b) => b as ProviderInfo),
+    updateProvider: (id, patch) => request(`${baseUrl}/model-registry/providers/${encodeId(id)}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) }).then((b) => b as ProviderInfo),
+    deleteProvider: (id) => requestVoid(`${baseUrl}/model-registry/providers/${encodeId(id)}`, { method: "DELETE" }),
+    discoverProviderModels: (id) => request(`${baseUrl}/model-registry/providers/${encodeId(id)}/discover`, { method: "POST" }).then((b) => b as DiscoveredModelInfo[]),
+    fetchManagedModels: () => request(`${baseUrl}/model-registry/models`).then((b) => b as ManagedModelInfo[]),
+    createManagedModel: (input) => request(`${baseUrl}/model-registry/models`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) }).then((b) => b as ManagedModelInfo),
+    updateManagedModel: (id, patch) => request(`${baseUrl}/model-registry/models/${encodeId(id)}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) }).then((b) => b as ManagedModelInfo),
+    deleteManagedModel: (id) => requestVoid(`${baseUrl}/model-registry/models/${encodeId(id)}`, { method: "DELETE" }),
+    activateManagedModel: (id) => request(`${baseUrl}/model-registry/models/${encodeId(id)}/activate`, { method: "POST" }).then((b) => parseModelSettings(b)),
     fetchSkills: () => request(`${baseUrl}/skills`).then((b) => parseSkillsEnvelope(b)).then(({ skills }) => skills),
     fetchSkill: (name) => request(`${baseUrl}/skills/${encodeId(name)}`).then((b) => parseSkillDetail(b)),
     setSkillEnabled: (name, enabled) => requestVoid(`${baseUrl}/skills/${encodeId(name)}/${enabled ? "enable" : "disable"}`, { method: "POST" }),

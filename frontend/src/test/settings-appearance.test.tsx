@@ -43,6 +43,16 @@ function mockApi(overrides: Partial<SettingsAPIClient> = {}): SettingsAPIClient 
     saveSettings: vi.fn().mockResolvedValue(SAVED_SETTINGS),
     fetchVendors: vi.fn().mockResolvedValue(VENDORS),
     fetchModels: vi.fn().mockResolvedValue([]),
+    fetchProviders: vi.fn().mockResolvedValue([]),
+    createProvider: vi.fn(),
+    updateProvider: vi.fn(),
+    deleteProvider: vi.fn(),
+    discoverProviderModels: vi.fn().mockResolvedValue([]),
+    fetchManagedModels: vi.fn().mockResolvedValue([]),
+    createManagedModel: vi.fn(),
+    updateManagedModel: vi.fn(),
+    deleteManagedModel: vi.fn(),
+    activateManagedModel: vi.fn(),
     fetchSkills: vi.fn().mockResolvedValue([]),
     fetchSkill: vi.fn(),
     setSkillEnabled: vi.fn().mockResolvedValue(undefined),
@@ -97,7 +107,7 @@ describe("settings appearance font import", () => {
   it("imports a local font, registers a font face, and makes it selectable", async () => {
     const api = mockApi();
     render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
-    await screen.findByLabelText("API Key");
+    await screen.findByText("供应商管理");
     fireEvent.click(
       within(screen.getByRole("navigation", { name: "设置分类" })).getByRole("button", {
         name: "外观",

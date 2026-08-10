@@ -795,7 +795,7 @@ SDK 的 `Agent.get_system_prompt()` 公共边界固定。
 
 统一前缀 `/api/v1`。下表为 V2 目标 API 面（V1 已实现的标注 ✅，待落地的标注
 🚧）。完整路由注册见 `backend/app/api/routes.py`、`api/skills.py`、
-`api/settings.py`、`api/model_info_router.py`、`api/ws.py`。
+`api/settings.py`、`api/model_info_router.py`、`api/provider_models.py`、`api/ws.py`。
 
 | Method | Path | Purpose | 状态 |
 | --- | --- | --- | --- |
@@ -809,6 +809,16 @@ SDK 的 `Agent.get_system_prompt()` 公共边界固定。
 | GET | `/vendors` | 列出已知模型供应商 | ✅ |
 | GET | `/models` | 可用模型列表，支持 `?query=`/`?preview_base_url=`/`?use_current_settings=` | ✅ |
 | GET | `/models/{model_id}` | 单个内置模型详情 | ✅ |
+| GET | `/model-registry/providers` | 列出用户配置的模型供应商（密钥掩码） | ✅ |
+| POST | `/model-registry/providers` | 新建供应商（名称代号 / Base URL / API Key / 预设） | ✅ |
+| PUT | `/model-registry/providers/{provider_id}` | 更新供应商（api_key 省略不变、空串清除） | ✅ |
+| DELETE | `/model-registry/providers/{provider_id}` | 删除供应商（关联 model 级联删除） | ✅ |
+| POST | `/model-registry/providers/{provider_id}/discover` | 拉取该供应商 `GET /models` 并用内置目录富化 | ✅ |
+| GET | `/model-registry/models` | 列出维护的模型列表（含 param_specs 与 params） | ✅ |
+| POST | `/model-registry/models` | 添加维护模型（多余参数不报错，写入 params 保留） | ✅ |
+| PUT | `/model-registry/models/{model_id}` | 更新模型 / 参数 | ✅ |
+| DELETE | `/model-registry/models/{model_id}` | 删除维护模型 | ✅ |
+| POST | `/model-registry/models/{model_id}/activate` | 切换为当前模型（回写 `/settings` 运行时设置） | ✅ |
 | GET | `/tasks` | 返回全部 active Task 与 cursor 分页的历史 Task | ✅ |
 | POST | `/tasks` | 创建 durable Task 并排队首个 Run | ✅ |
 | GET | `/tasks/{task_id}` | 返回权威 `TaskSnapshot` | ✅ |

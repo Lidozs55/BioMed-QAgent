@@ -1,9 +1,4 @@
-import type { RichModelInfo } from "@/components/model-info-card";
-import type {
-  ModelSettings,
-  SkillManifest,
-  VendorInfo,
-} from "@/hooks/useAPI";
+import type { ModelSettings, SettingsAPIClient, SkillManifest } from "@/hooks/useAPI";
 
 export interface ModelDraftState {
   baseUrl: string;
@@ -20,10 +15,8 @@ export interface ModelDraftState {
 }
 
 export interface ModelSettingsSectionProps {
+  api: SettingsAPIClient;
   settings: ModelSettings | null;
-  vendors: VendorInfo[];
-  models: RichModelInfo[];
-  modelsLoading: boolean;
   draft: ModelDraftState;
   dirty: boolean;
   saving: boolean;
@@ -32,9 +25,9 @@ export interface ModelSettingsSectionProps {
   highlightNonce: number;
   onDraftChange: (patch: Partial<ModelDraftState>) => void;
   onUiChange: (patch: Partial<ModelDraftState>) => void;
-  onPreviewModels: () => void;
   onContextWindowChange: (tokens: number) => void;
   onSave: () => void;
+  onActivated: (settings: ModelSettings) => void;
 }
 
 export interface DatabaseSettingsSectionProps {

@@ -2,24 +2,26 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { SettingsPanel } from "@/components/SettingsPanel";
-import type { ModelInfo, SettingsAPIClient } from "@/hooks/useAPI";
+import type {
+  DiscoveredModelInfo,
+  ManagedModelInfo,
+  ProviderInfo,
+  SettingsAPIClient,
+} from "@/hooks/useAPI";
 
-/* ------------------------------------------------------------------ */
-/*  Shared test data                                                    */
-/* ------------------------------------------------------------------ */
 const TEST_SETTINGS = {
-  base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  base_url: "https://api.deepseek.com/v1",
   api_key: "sk-****",
   api_key_configured: true,
-  model_name: "qwen-plus",
+  model_name: "deepseek-chat",
   max_tokens: 4096,
-  context_window: 131072,
+  context_window: 65536,
   context_window_source: "catalog" as const,
   safety_reserve_ratio: 0.05,
-  safety_reserve_tokens: 16384,
+  safety_reserve_tokens: 8192,
   compaction_trigger_ratio: 0.85,
-  compaction_target_ratio: 0.60,
-  available_input_tokens: 110592,
+  compaction_target_ratio: 0.6,
+  available_input_tokens: 49152,
   advanced: {
     temperature: 0.7,
     top_p: 1.0,
@@ -30,23 +32,136 @@ const TEST_SETTINGS = {
 };
 
 const TEST_VENDORS = [
-  { id: "dashscope", name: "DashScope", base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1", description: "Default", recommended: true },
+  {
+    id: "deepseek",
+    name: "DeepSeek",
+    base_url: "https://api.deepseek.com/v1",
+    description: "",
+    recommended: false,
+  },
 ];
 
-const TEST_MODELS: ModelInfo[] = [
-  { id: "qwen-plus", name: "Qwen Plus", description: "Balanced", context_window: 131072, suggested_max_tokens: 8192, max_output_tokens: 8192, recommended: false, api_available: true, capability_source: "catalog", capabilities: { text: true, image: false, video: false, audio: false }, vendor_id: "dashscope", knowledge_cutoff: null, pricing_input_per_1m: null, pricing_output_per_1m: null, model_family: null, function_calling: true, supports_streaming: true },
-  { id: "qwen-max", name: "Qwen Max", description: "Powerful", context_window: 32768, suggested_max_tokens: 4096, max_output_tokens: 4096, recommended: false, api_available: true, capability_source: "catalog", capabilities: { text: true, image: false, video: false, audio: false }, vendor_id: "dashscope", knowledge_cutoff: null, pricing_input_per_1m: null, pricing_output_per_1m: null, model_family: null, function_calling: true, supports_streaming: true },
+const TEST_PROVIDERS: ProviderInfo[] = [
+  {
+    id: "provider-1",
+    name: "DeepSeek",
+    base_url: "https://api.deepseek.com/v1",
+    api_key: "sk-****",
+    api_key_configured: true,
+    preset_id: "deepseek",
+    description: "",
+    enabled: true,
+    created_at: "2026-08-10T00:00:00+00:00",
+    updated_at: "2026-08-10T00:00:00+00:00",
+  },
 ];
 
-/* ------------------------------------------------------------------ */
-/*  API mock factory                                                    */
-/* ------------------------------------------------------------------ */
+const SPECS = [
+  {
+    key: "temperature",
+    label: "Temperature",
+    type: "number" as const,
+    default: 0.7,
+    min: 0,
+    max: 2,
+  },
+  {
+    key: "max_tokens",
+    label: "最大输出 Tokens",
+    type: "integer" as const,
+    default: 8192,
+    min: 1,
+    max: 262144,
+  },
+];
+
+const DISCOVERED: DiscoveredModelInfo[] = [
+  {
+    id: "deepseek-chat",
+    name: "DeepSeek Chat",
+    description: "",
+    context_window: 65536,
+    suggested_max_tokens: 8192,
+    max_output_tokens: 8192,
+    capabilities: { text: true, image: false, video: false, audio: false },
+    recommended: false,
+    param_specs: SPECS,
+    capability_source: "api",
+  },
+];
+
+const TEST_MODELS: ManagedModelInfo[] = [
+  {
+    id: "model-1",
+    provider_id: "provider-1",
+    provider_name: "DeepSeek",
+    provider_base_url: "https://api.deepseek.com/v1",
+    provider_api_key_configured: true,
+    model_id: "deepseek-reasoner",
+    name: "DeepSeek Reasoner",
+    description: "",
+    context_window: 65536,
+    max_output_tokens: 8192,
+    suggested_max_tokens: 8192,
+    capabilities: { text: true, image: false, video: false, audio: false },
+    params: { temperature: 0.5 },
+    param_specs: SPECS,
+    source: "api",
+    active: false,
+    created_at: "2026-08-10T00:00:00+00:00",
+    updated_at: "2026-08-10T00:00:00+00:00",
+  },
+];
+
 function mockApi(overrides: Partial<SettingsAPIClient> = {}): SettingsAPIClient {
   const base: SettingsAPIClient = {
     fetchSettings: vi.fn().mockResolvedValue(TEST_SETTINGS),
     saveSettings: vi.fn().mockResolvedValue(TEST_SETTINGS),
     fetchVendors: vi.fn().mockResolvedValue(TEST_VENDORS),
-    fetchModels: vi.fn().mockResolvedValue(TEST_MODELS),
+    fetchModels: vi.fn().mockResolvedValue([]),
+    fetchProviders: vi.fn().mockResolvedValue(TEST_PROVIDERS),
+    createProvider: vi.fn().mockImplementation((input) =>
+      Promise.resolve({
+        id: "provider-new",
+        name: input.name,
+        base_url: input.base_url,
+        api_key: input.api_key ?? "",
+        api_key_configured: Boolean(input.api_key),
+        preset_id: input.preset_id ?? null,
+        description: input.description ?? "",
+        enabled: true,
+        created_at: "2026-08-10T00:00:00+00:00",
+        updated_at: "2026-08-10T00:00:00+00:00",
+      }),
+    ),
+    updateProvider: vi.fn(),
+    deleteProvider: vi.fn().mockResolvedValue(undefined),
+    discoverProviderModels: vi.fn().mockResolvedValue(DISCOVERED),
+    fetchManagedModels: vi.fn().mockResolvedValue(TEST_MODELS),
+    createManagedModel: vi.fn().mockImplementation((input) =>
+      Promise.resolve({
+        ...TEST_MODELS[0],
+        id: "model-imported",
+        provider_id: input.provider_id,
+        model_id: input.model_id,
+        name: input.name ?? input.model_id,
+        params: input.params ?? {},
+        param_specs: SPECS,
+        source: input.source ?? "manual",
+      }),
+    ),
+    updateManagedModel: vi.fn().mockImplementation((id, patch) =>
+      Promise.resolve({
+        ...TEST_MODELS[0],
+        id,
+        params: patch.params ?? TEST_MODELS[0].params,
+      }),
+    ),
+    deleteManagedModel: vi.fn().mockResolvedValue(undefined),
+    activateManagedModel: vi.fn().mockResolvedValue({
+      ...TEST_SETTINGS,
+      model_name: "deepseek-chat",
+    }),
     fetchSkills: vi.fn().mockResolvedValue([]),
     fetchSkill: vi.fn(),
     setSkillEnabled: vi.fn().mockResolvedValue(undefined),
@@ -61,17 +176,11 @@ function mockApi(overrides: Partial<SettingsAPIClient> = {}): SettingsAPIClient 
   return { ...base, ...overrides };
 }
 
-async function loadModels() {
-  fireEvent.click(screen.getByRole("button", { name: /加载模型/ }));
-  await waitFor(() => {
-    expect(document.querySelector<HTMLButtonElement>("#settings-model")).not.toBeNull();
-  });
+function renderSettings(api: SettingsAPIClient = mockApi()) {
+  render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
 }
 
-/* ------------------------------------------------------------------ */
-/*  Tests                                                              */
-/* ------------------------------------------------------------------ */
-describe("SettingsPanel", () => {
+describe("SettingsPanel model registry", () => {
   beforeAll(() => {
     window.matchMedia = vi.fn().mockImplementation((query: string) => ({
       matches: false,
@@ -85,188 +194,148 @@ describe("SettingsPanel", () => {
     }));
   });
 
-  /* ================================================================ */
-  /*  Model settings — key persistence / explicit clear / scrollability */
-  /* ================================================================ */
-
-  it("persists a typed api_key after connection validation", async () => {
+  it("shows configured providers from the backend", async () => {
     const api = mockApi();
-    render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
+    renderSettings(api);
 
-    const secret = await screen.findByLabelText("API Key");
-    fireEvent.change(secret, { target: { value: "sk-validation-key" } });
-    await loadModels();
+    expect(await screen.findByText("DeepSeek")).toBeInTheDocument();
+    expect(screen.getAllByText("https://api.deepseek.com/v1").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "添加供应商" })).toBeInTheDocument();
+  });
 
-    const slider = screen.getByLabelText("最大输出 Tokens");
-    fireEvent.change(slider, { target: { value: "16384" } });
+  it("disables add-model until a provider exists", async () => {
+    const api = mockApi({
+      fetchProviders: vi.fn().mockResolvedValue([]),
+      fetchManagedModels: vi.fn().mockResolvedValue([]),
+    });
+    renderSettings(api);
 
-    fireEvent.click(screen.getByRole("button", { name: "保存模型设置" }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "添加模型" })).toBeDisabled();
+    });
+    expect(screen.getByText("添加第一个供应商后即可添加模型。")).toBeInTheDocument();
+  });
 
-    await waitFor(() => expect(api.saveSettings).toHaveBeenCalledTimes(1));
-    const payload = vi.mocked(api.saveSettings).mock.calls[0]?.[0];
-    expect(payload).toMatchObject({
-      api_key: "sk-validation-key",
-      max_tokens: 16384,
+  it("quick-fills a preset and creates a provider", async () => {
+    const api = mockApi({
+      fetchProviders: vi.fn().mockResolvedValue([]),
+      fetchManagedModels: vi.fn().mockResolvedValue([]),
+    });
+    renderSettings(api);
+
+    fireEvent.click(await screen.findByRole("button", { name: "添加供应商" }));
+    fireEvent.click(screen.getByRole("button", { name: "DeepSeek" }));
+
+    const baseUrl = screen.getByLabelText("Base URL") as HTMLInputElement;
+    expect(baseUrl.value).toBe("https://api.deepseek.com/v1");
+    fireEvent.change(screen.getByLabelText("供应商名称（代号）"), {
+      target: { value: "我的 DeepSeek" },
+    });
+    fireEvent.change(screen.getByLabelText("API Key"), {
+      target: { value: "sk-test-key" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(api.createProvider).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.createProvider).mock.calls[0]?.[0]).toMatchObject({
+      name: "我的 DeepSeek",
+      base_url: "https://api.deepseek.com/v1",
+      preset_id: "deepseek",
+      api_key: "sk-test-key",
     });
   });
 
-  it("uses and persists a typed API key for validation", async () => {
-    const api = mockApi();
-    render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
+  it("imports a model from the provider list and saves its parameters", async () => {
+    let managed: ManagedModelInfo[] = [];
+    const imported: ManagedModelInfo = {
+      ...TEST_MODELS[0],
+      id: "model-imported",
+      model_id: "deepseek-chat",
+      name: "DeepSeek Chat",
+      params: { temperature: 0.7, max_tokens: 8192 },
+      source: "api",
+    };
+    const api = mockApi({
+      fetchManagedModels: vi.fn().mockImplementation(async () => managed),
+    createManagedModel: vi.fn().mockImplementation(async () => {
+        managed = [imported];
+        return imported;
+      }),
+    });
+    renderSettings(api);
 
-    const secret = await screen.findByLabelText("API Key");
-    fireEvent.change(secret, { target: { value: "sk-new-secret-key" } });
-    await loadModels();
+    fireEvent.click(await screen.findByRole("button", { name: "添加模型" }));
 
-    // Mark dirty
-    const slider = screen.getByLabelText("最大输出 Tokens");
-    fireEvent.change(slider, { target: { value: "16384" } });
+    // Provider is auto-selected and the list is discovered automatically.
+    const importButton = await screen.findByRole("button", { name: "导入" });
+    fireEvent.click(importButton);
 
-    fireEvent.click(screen.getByRole("button", { name: "保存模型设置" }));
+    await waitFor(() => expect(api.createManagedModel).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.createManagedModel).mock.calls[0]?.[0]).toMatchObject({
+      provider_id: "provider-1",
+      model_id: "deepseek-chat",
+      source: "api",
+    });
 
-    await waitFor(() => expect(api.saveSettings).toHaveBeenCalledTimes(1));
-    const payload = vi.mocked(api.saveSettings).mock.calls[0]?.[0];
-    expect(api.fetchModels).toHaveBeenCalledWith(expect.objectContaining({
-      apiKey: "sk-new-secret-key",
-    }));
-    expect(payload).toHaveProperty("api_key", "sk-new-secret-key");
+    // The imported model now appears in the maintained list and can be saved.
+    await waitFor(() => expect(api.fetchManagedModels).toHaveBeenCalled());
+    expect(screen.getByRole("button", { name: "保存参数" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "保存参数" }));
+    await waitFor(() => expect(api.updateManagedModel).toHaveBeenCalledTimes(1));
   });
 
-  it("persists an explicit API key clear when a key was configured", async () => {
+  it("adds a model manually with source manual", async () => {
+    const api = mockApi({
+      fetchManagedModels: vi.fn().mockResolvedValue([]),
+    });
+    renderSettings(api);
+
+    fireEvent.click(await screen.findByRole("button", { name: "添加模型" }));
+    const manualInput = await screen.findByLabelText("手动模型名称");
+    fireEvent.change(manualInput, { target: { value: "custom-model" } });
+    fireEvent.click(screen.getByRole("button", { name: "添加" }));
+
+    await waitFor(() => expect(api.createManagedModel).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.createManagedModel).mock.calls[0]?.[0]).toMatchObject({
+      provider_id: "provider-1",
+      model_id: "custom-model",
+      source: "manual",
+    });
+  });
+
+  it("activates a maintained model and updates the current model panel", async () => {
+    const api = mockApi({
+      fetchManagedModels: vi
+        .fn()
+        .mockResolvedValueOnce(TEST_MODELS)
+        .mockResolvedValue([{ ...TEST_MODELS[0], active: true }]),
+      activateManagedModel: vi.fn().mockResolvedValue({
+        ...TEST_SETTINGS,
+        model_name: "deepseek-reasoner",
+      }),
+    });
+    renderSettings(api);
+
+    const activate = await screen.findByRole("button", { name: "设为当前" });
+    fireEvent.click(activate);
+
+    await waitFor(() => expect(api.activateManagedModel).toHaveBeenCalledWith("model-1"));
+    await waitFor(() => {
+      expect(screen.getAllByText("deepseek-reasoner").length).toBeGreaterThan(0);
+    });
+  });
+
+  it("saves advanced generation parameters", async () => {
     const api = mockApi();
-    render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
+    renderSettings(api);
 
-    const secret = await screen.findByLabelText("API Key");
-    await loadModels();
-    // Type a key first
-    fireEvent.change(secret, { target: { value: "sk-temp" } });
-    // Then clear it
-    fireEvent.change(secret, { target: { value: "" } });
-
-    // Mark dirty
-    const slider = screen.getByLabelText("最大输出 Tokens");
-    fireEvent.change(slider, { target: { value: "16384" } });
-
-    const save = screen.getByRole("button", { name: "保存模型设置" });
-    expect(save).not.toBeDisabled();
-    fireEvent.click(save);
+    const outputTokens = await screen.findByLabelText("最大输出 Tokens");
+    fireEvent.change(outputTokens, { target: { value: "16384" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存模型设置" }));
 
     await waitFor(() => expect(api.saveSettings).toHaveBeenCalledTimes(1));
     expect(vi.mocked(api.saveSettings).mock.calls[0]?.[0]).toMatchObject({
-      api_key: "",
       max_tokens: 16384,
     });
   });
-
-  it("does not put the API key value into visible DOM text", async () => {
-    const api = mockApi();
-    render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
-
-    await screen.findByLabelText("API Key");
-
-    // The saved masked key "sk-****" must not appear in rendered DOM
-    expect(screen.queryByText("sk-****")).not.toBeInTheDocument();
-  });
-
-  it("reopens with the saved API key shown as a masked value", async () => {
-    const api = mockApi();
-    render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
-
-    const secret = (await screen.findByLabelText("API Key")) as HTMLInputElement;
-    expect(secret.value).toBe("sk-****");
-    expect(secret.type).toBe("password");
-  });
-
-  it("shows the saved model name in the manual input before loading the model list and allows editing it", async () => {
-    const api = mockApi();
-    render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
-
-    // Wait for settings to load; the model input is rendered because no models have been fetched.
-    const modelInput = (await screen.findByPlaceholderText(
-      "输入模型名称（如 qwen-plus）",
-    )) as HTMLInputElement;
-
-    // Regression: previously value was forced to "" when modelsLoaded was false,
-    // which prevented the user from seeing or editing the saved model name.
-    expect(modelInput.value).toBe("qwen-plus");
-
-    // The user must be able to type a custom model name without loading the list first.
-    fireEvent.change(modelInput, { target: { value: "qwen-custom" } });
-    expect(modelInput.value).toBe("qwen-custom");
-  });
-
-  it("model dropdown options contain no descendant interactive elements and capability icons have accessible labels", async () => {
-    const api = mockApi({
-      // Return settings with a valid base URL so model fetch works
-      fetchSettings: vi.fn().mockResolvedValue({
-        ...TEST_SETTINGS,
-        base_url: "https://test.url/v1",
-      }),
-      fetchModels: vi.fn().mockResolvedValue(TEST_MODELS),
-    });
-    render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
-
-    // Wait for dialog to load
-    await screen.findByLabelText("API Key");
-
-    // Click "加载模型" to fetch and populate the model list
-    fireEvent.click(screen.getByRole("button", { name: /加载模型/ }));
-    // The trigger changes from input to dropdown once models load.
-    // The dropdown trigger button has id="settings-model"
-    await waitFor(() => {
-      const trigger = document.querySelector<HTMLButtonElement>("#settings-model");
-      expect(trigger).not.toBeNull();
-    });
-
-    // Open the dropdown
-    const trigger = document.querySelector<HTMLButtonElement>("#settings-model");
-    if (trigger === null) throw new Error("Expected #settings-model button");
-    fireEvent.click(trigger);
-
-    // Find option buttons inside the dropdown's ScrollArea
-    const scrollArea = document.querySelector<HTMLElement>('[data-slot="scroll-area"]');
-    expect(scrollArea).not.toBeNull();
-    if (scrollArea === null) throw new Error("Expected scroll-area element");
-    const optionButtons = scrollArea.querySelectorAll<HTMLButtonElement>("button");
-    expect(optionButtons.length).toBeGreaterThanOrEqual(2);
-
-    // No option button contains a nested button or role="button"
-    optionButtons.forEach((btn) => {
-      expect(btn.querySelectorAll('button, [role="button"]')).toHaveLength(0);
-    });
-  });
-
-  it("model dropdown scroll-area uses explicit h-72 instead of max-h-72", async () => {
-    const api = mockApi({
-      fetchSettings: vi.fn().mockResolvedValue({
-        ...TEST_SETTINGS,
-        base_url: "https://test.url/v1",
-      }),
-      fetchModels: vi.fn().mockResolvedValue(TEST_MODELS),
-    });
-    render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
-
-    // Wait for dialog to load
-    await screen.findByLabelText("API Key");
-
-    // Load models
-    fireEvent.click(screen.getByRole("button", { name: /加载模型/ }));
-    await waitFor(() => {
-      const trigger = document.querySelector<HTMLButtonElement>("#settings-model");
-      expect(trigger).not.toBeNull();
-    });
-
-    // Open dropdown
-    const trigger = document.querySelector<HTMLButtonElement>("#settings-model");
-    if (trigger === null) throw new Error("Expected #settings-model button");
-    fireEvent.click(trigger);
-
-    // The ScrollArea root should have h-72 (not max-h-72)
-    const scrollArea = document.querySelector<HTMLElement>('[data-slot="scroll-area"]');
-    expect(scrollArea).not.toBeNull();
-    if (scrollArea === null) throw new Error("Expected [data-slot=\"scroll-area\"]");
-    expect(scrollArea).toHaveClass("h-72");
-    expect(scrollArea).not.toHaveClass("max-h-72");
-  });
-
 });

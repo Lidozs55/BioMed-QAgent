@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+﻿import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { SettingsPanel } from "@/components/SettingsPanel";
@@ -32,6 +32,16 @@ function mockApi(overrides: Partial<SettingsAPIClient> = {}): SettingsAPIClient 
     saveSettings: vi.fn().mockResolvedValue(SAVED_SETTINGS),
     fetchVendors: vi.fn().mockResolvedValue(VENDORS),
     fetchModels: vi.fn().mockResolvedValue([]),
+    fetchProviders: vi.fn().mockResolvedValue([]),
+    createProvider: vi.fn(),
+    updateProvider: vi.fn(),
+    deleteProvider: vi.fn(),
+    discoverProviderModels: vi.fn().mockResolvedValue([]),
+    fetchManagedModels: vi.fn().mockResolvedValue([]),
+    createManagedModel: vi.fn(),
+    updateManagedModel: vi.fn(),
+    deleteManagedModel: vi.fn(),
+    activateManagedModel: vi.fn(),
     fetchSkills: vi.fn().mockResolvedValue([]),
     fetchSkill: vi.fn(), setSkillEnabled: vi.fn().mockResolvedValue(undefined),
     rollbackSkill: vi.fn(), deleteSkill: vi.fn(),
@@ -56,7 +66,7 @@ describe("database creation submits through createDatabase", () => {
   it("fills and saves new database, calls createDatabase with manifest", async () => {
     const api = mockApi();
     render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
-    await screen.findByLabelText("API Key");
+    await screen.findByText("供应商管理");
     fireEvent.click(within(screen.getByRole("navigation", { name: "设置分类" })).getByRole("button", { name: "数据库" }));
 
     fireEvent.click(screen.getByRole("button", { name: /新建数据库/ }));
@@ -84,7 +94,7 @@ describe("database creation submits through createDatabase", () => {
       validateSkill: vi.fn().mockResolvedValue(VALIDATION_RESULT),
     });
     render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
-    await screen.findByLabelText("API Key");
+    await screen.findByText("供应商管理");
     fireEvent.click(within(screen.getByRole("navigation", { name: "设置分类" })).getByRole("button", { name: "数据库" }));
 
     const fileInput = screen.getByLabelText<HTMLInputElement>("上传数据库包");
@@ -105,7 +115,7 @@ describe("database creation submits through createDatabase", () => {
       validateSkill: vi.fn().mockResolvedValue(VALIDATION_RESULT),
     });
     render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
-    await screen.findByLabelText("API Key");
+    await screen.findByText("供应商管理");
     fireEvent.click(within(screen.getByRole("navigation", { name: "设置分类" })).getByRole("button", { name: "技能" }));
 
     const fileInput = screen.getByLabelText<HTMLInputElement>("上传技能");

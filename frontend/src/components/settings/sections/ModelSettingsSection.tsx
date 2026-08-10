@@ -1,7 +1,6 @@
-import { EyeClosedIcon, EyeIcon, Image, SpeakerHigh, VideoCamera } from "@phosphor-icons/react";
-
-import { ModelInfoCard } from "@/components/model-info-card";
 import { ContextWindowSelect } from "@/components/ContextWindowSelect";
+import { ModelListManager } from "@/components/settings/model/ModelListManager";
+import { ProviderManager } from "@/components/settings/model/ProviderManager";
 import {
   NumberField,
   SettingCard,
@@ -10,307 +9,74 @@ import {
 } from "@/components/settings/primitives";
 import type { ModelSettingsSectionProps } from "@/components/settings/types";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
-import { cn } from "@/lib/utils";
-
-function SelectedModelCapabilities({ model }: { model: NonNullable<ModelSettingsSectionProps["models"]>[number] }) {
-  return (
-    <div className="mt-1 flex shrink-0 gap-1.5">
-      {model.capabilities?.image && (
-        <span
-          role="img"
-          className="text-emerald-600 dark:text-emerald-400"
-          title="支持图像"
-          aria-label="支持图像"
-        >
-          <Image weight="fill" className="size-3" />
-        </span>
-      )}
-      {model.capabilities?.video && (
-        <span
-          role="img"
-          className="text-emerald-600 dark:text-emerald-400"
-          title="支持视频"
-          aria-label="支持视频"
-        >
-          <VideoCamera weight="fill" className="size-3" />
-        </span>
-      )}
-      {model.capabilities?.audio && (
-        <span
-          role="img"
-          className="text-emerald-600 dark:text-emerald-400"
-          title="支持音频"
-          aria-label="支持音频"
-        >
-          <SpeakerHigh weight="fill" className="size-3" />
-        </span>
-      )}
-    </div>
-  );
-}
 
 export function ModelSettingsSection({
+  api,
   settings,
-  vendors,
-  models,
-  modelsLoading,
   draft,
   dirty,
   saving,
   modelError,
   highlightAnchor,
   onDraftChange,
-  onUiChange,
-  onPreviewModels,
   onContextWindowChange,
   onSave,
+  onActivated,
 }: ModelSettingsSectionProps) {
-  const selectedVendor = vendors.find((vendor) => vendor.base_url === draft.baseUrl);
-  const selectedModel = models.find((model) => model.id === draft.modelName) ?? null;
-  const showThinking = selectedModel?.id.startsWith("qwq") ?? false;
-  const saveDisabled =
-    !dirty ||
-    saving ||
-    (!draft.apiKey.trim() && !settings?.api_key_configured);
+  const activeModelId = settings?.model_name ?? "";
+  const showThinking = activeModelId.startsWith("qwq");
+  const saveDisabled = !dirty || saving;
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-10">
       <SettingSection
-        title="模型连接"
-        description="新任务会使用保存后的配置；运行中的模型实例保持不变。"
-      >
-        <SettingCard>
-          <SettingRow
-            id="settings-vendor"
-            title="服务商"
-            description="快速填充兼容 OpenAI 协议的接口地址。"
-            highlight={highlightAnchor === "settings-vendor"}
-            control={
-              <Select
-                value={selectedVendor?.id ?? undefined}
-                onValueChange={(vendorId) => {
-                  const vendor = vendors.find((item) => item.id === vendorId);
-                  if (vendor) onDraftChange({ baseUrl: vendor.base_url });
-                }}
-              >
-                <SelectTrigger className="w-56" aria-label="服务商">
-                  <SelectValue placeholder="选择服务商" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    {vendors.map((vendor) => (
-                      <SelectItem key={vendor.id} value={vendor.id}>
-                        {vendor.name}
-                        {vendor.recommended ? " · 推荐" : ""}
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-            }
-          />
-          <SettingRow
-            id="settings-baseurl"
-            title="Base URL"
-            description="OpenAI 兼容模式的接口根地址。"
-            controlId="settings-baseurl"
-            highlight={highlightAnchor === "settings-baseurl"}
-            controlClassName="w-full sm:w-96"
-            control={
-              <Input
-                id="settings-baseurl"
-                value={draft.baseUrl}
-                onChange={(event) => onDraftChange({ baseUrl: event.target.value })}
-                placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1"
-                className="w-full"
-              />
-            }
-          />
-          <SettingRow
-            id="settings-apikey"
-            title="API Key"
-            description="已保存的密钥以掩码形式回显，保留首尾字符；输入新值可覆盖，留空并保存可清除。"
-            controlId="settings-apikey"
-            highlight={highlightAnchor === "settings-apikey"}
-            controlClassName="w-full sm:w-96"
-            control={
-              <div className="relative w-full">
-                <Input
-                  id="settings-apikey"
-                  type={draft.showApiKey ? "text" : "password"}
-                  value={draft.apiKey}
-                  onFocus={(event) => event.target.select()}
-                  onChange={(event) => onDraftChange({ apiKey: event.target.value })}
-                  placeholder={settings?.api_key_configured ? "输入新值以覆盖已配置密钥" : "sk-..."}
-                  className="w-full pr-8"
-                />
-                <button
-                  type="button"
-                  className="absolute top-1/2 right-2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                  onClick={() => onUiChange({ showApiKey: !draft.showApiKey })}
-                  tabIndex={-1}
-                  aria-label={draft.showApiKey ? "隐藏 API Key" : "显示 API Key"}
-                >
-                  {draft.showApiKey ? <EyeClosedIcon className="size-4" /> : <EyeIcon className="size-4" />}
-                </button>
-              </div>
-            }
-          />
-          <SettingRow
-            id="settings-model"
-            title="模型"
-            description="从接口发现列表中选择，或手动输入模型名称。"
-            highlight={highlightAnchor === "settings-model"}
-            controlClassName="w-full sm:w-96"
-            control={
-              <div className="w-full">
-                <div className="flex gap-2">
-                  <div className="relative min-w-0 flex-1">
-                    {models.length === 0 ? (
-                      <Input
-                        id="settings-model"
-                        value={draft.modelName}
-                        onChange={(event) => {
-                          onDraftChange({ modelName: event.target.value });
-                        }}
-                        placeholder="输入模型名称（如 qwen-plus）"
-                        className="w-full"
-                      />
-                    ) : (
-                      <Popover
-                        open={draft.showModelDropdown}
-                        onOpenChange={(next) => onUiChange({ showModelDropdown: next })}
-                      >
-                        <PopoverTrigger
-                          render={
-                            <button
-                              type="button"
-                              id="settings-model"
-                              className="flex h-8 w-full items-center justify-between gap-2 rounded-lg border border-input bg-transparent px-2.5 text-sm ring-offset-background focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
-                            >
-                              {modelsLoading ? (
-                                <span className="flex items-center gap-2 text-muted-foreground">
-                                  <Spinner className="size-3.5" />
-                                  正在加载模型列表...
-                                </span>
-                              ) : (
-                                <span className="truncate">
-                                  {selectedModel ? selectedModel.name : "选择模型"}
-                                </span>
-                              )}
-                              <span className="shrink-0 text-xs text-muted-foreground">
-                                {models.length > 0 ? `${models.length} 个可用` : ""}
-                              </span>
-                            </button>
-                          }
-                        />
-                        <PopoverContent
-                          align="start"
-                          sideOffset={4}
-                          className="w-96 max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg border bg-popover p-0 shadow-md"
-                        >
-                          <div className="p-2">
-                            <Input
-                              placeholder="搜索模型..."
-                              value={draft.modelSearch}
-                              onChange={(event) => onUiChange({ modelSearch: event.target.value })}
-                              className="h-9 text-sm"
-                              autoFocus
-                            />
-                          </div>
-                          <ScrollArea className="h-72">
-                            {models.length === 0 ? (
-                              <div className="p-4 text-center text-sm text-muted-foreground">
-                                没有匹配的模型
-                              </div>
-                            ) : (
-                              models
-                                .filter((model) => {
-                                  const query = draft.modelSearch.trim().toLowerCase();
-                                  return (
-                                    !query ||
-                                    model.name.toLowerCase().includes(query) ||
-                                    model.id.toLowerCase().includes(query)
-                                  );
-                                })
-                                .map((model) => (
-                                  <button
-                                    key={model.id}
-                                    type="button"
-                                    className={cn(
-                                      "flex w-full items-center justify-between px-3 py-2.5 text-left text-sm hover:bg-accent",
-                                      model.id === draft.modelName && "bg-accent font-medium",
-                                    )}
-                                    onClick={() => onDraftChange({ modelName: model.id })}
-                                  >
-                                    <div className="min-w-0">
-                                      <div className="flex items-center gap-2">
-                                        <span className="truncate">{model.name}</span>
-                                        {model.recommended && (
-                                          <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
-                                            推荐
-                                          </span>
-                                        )}
-                                      </div>
-                                      <p className="truncate text-xs text-muted-foreground">
-                                        {model.description}
-                                      </p>
-                                    </div>
-                                    <div className="ml-3 flex shrink-0 items-center">
-                                      <SelectedModelCapabilities model={model} />
-                                    </div>
-                                  </button>
-                                ))
-                            )}
-                          </ScrollArea>
-                        </PopoverContent>
-                      </Popover>
-                    )}
-                  </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={onPreviewModels}
-                    disabled={modelsLoading}
-                  >
-                    {modelsLoading && <Spinner data-icon="inline-start" />}
-                    加载模型
-                  </Button>
-                </div>
-                {modelError && (
-                  <p className="mt-2 text-xs text-destructive" role="alert">
-                    {modelError}
-                  </p>
-                )}
-              </div>
-            }
-          />
-        </SettingCard>
-        {selectedModel && <ModelInfoCard model={selectedModel} />}
-      </SettingSection>
-
-      <SettingSection
-        title="上下文与输出"
-        description="控制单次任务可用的输入窗口与生成长度上限。"
+        title="供应商管理"
+        description="配置模型供应商的代号、Base URL 与 API Key，可从常用供应商快捷填入。"
       >
         <SettingCard>
           <div className="px-5 py-4">
+            <ProviderManager api={api} />
+          </div>
+        </SettingCard>
+      </SettingSection>
+
+      <SettingSection
+        title="模型列表"
+        description="维护各供应商下的模型列表：从供应商返回的模型列表导入，或手动配置。"
+      >
+        <SettingCard>
+          <div className="px-5 py-4">
+            <ModelListManager
+              api={api}
+              activeModelName={activeModelId || null}
+              onActivated={onActivated}
+            />
+          </div>
+        </SettingCard>
+      </SettingSection>
+
+      <SettingSection
+        title="当前模型"
+        description="当前任务使用的模型与生成参数，通过“模型列表”中的“设为当前”切换模型。"
+      >
+        <SettingCard>
+          <div className="px-5 py-4">
+            <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border bg-muted/30 px-4 py-3">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium">{activeModelId || "未选择模型"}</p>
+                <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                  {settings?.base_url ?? ""}
+                </p>
+              </div>
+              {settings?.api_key_configured && (
+                <span className="shrink-0 text-xs text-muted-foreground">已配置密钥</span>
+              )}
+            </div>
             <ContextWindowSelect
               value={settings?.context_window ?? 0}
-              maxCatalogWindow={selectedModel?.context_window ?? 0}
+              maxCatalogWindow={0}
               source={settings?.context_window_source ?? "unknown"}
               onChange={onContextWindowChange}
             />
@@ -431,7 +197,13 @@ export function ModelSettingsSection({
 
       <div className="flex items-center justify-between gap-4 rounded-xl border bg-muted/40 px-5 py-3">
         <p className="min-w-0 text-xs leading-relaxed text-muted-foreground">
-          保存前会先验证连接；保存后新任务使用新配置。
+          {modelError ? (
+            <span className="text-destructive" role="alert">
+              {modelError}
+            </span>
+          ) : (
+            "保存后新任务使用新的生成参数。"
+          )}
         </p>
         <Button onClick={onSave} disabled={saveDisabled}>
           {saving && <Spinner data-icon="inline-start" />}
