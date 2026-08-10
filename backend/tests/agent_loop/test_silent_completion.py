@@ -142,6 +142,75 @@ async def test_executor_raises_when_final_output_empty(
     assert not any(isinstance(p, RunCompletedPayload) for p in emitted)
     build.model.close.assert_awaited_once_with()
 
+    # 空输出重试耗尽：每次空输出都发射 llm_empty_output_retry warning，
+    # 耗尽后才抛 RuntimeError（保持 fail-loud 语义）。
+    retry_warnings = [
+        p for p in emitted
+        if isinstance(p, WarningPayload) and p.code == "llm_empty_output_retry"
+    ]
+    assert len(retry_warnings) == runner_module.EMPTY_OUTPUT_RETRY_LIMIT
+
+
+@pytest.mark.asyncio
+async def test_executor_recovers_from_empty_final_output_with_retry(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """空 final_output（reasoning-only 回合）经重新提示恢复，不 fail。
+
+    覆盖 qwen 类模型偶发"仅推理、无文本/工具调用"回合（SDK 对无
+    MessageOutputItem 的响应把 final_output 置为空串）：前两次空输出触发
+    llm_empty_output_retry warning 并重跑，第三次产出文本后正常收尾。
+    """
+
+    emitted: list[object] = []
+    calls = {"count": 0}
+
+    async def emit(payload: object):
+        emitted.append(payload)
+
+    build = _make_build()
+    context = _make_context(tmp_path, "task_empty_recovered", "run_empty_recovered")
+    execution = RunExecution(
+        task_id="task_empty_recovered",
+        run_id="run_empty_recovered",
+        request_id="request_empty_recovered",
+        input="produce nothing first",
+        context=context,
+        _event_emitter=emit,
+    )
+
+    class FakeResult:
+        @property
+        def final_output(self) -> str:
+            calls["count"] += 1
+            return "" if calls["count"] <= 2 else "recovered output"
+
+        async def stream_events(self):
+            if False:
+                yield None
+
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(
+        runner_module.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: FakeResult(),
+    )
+    repository = SimpleNamespace(
+        task_session=run_scoped_session(object()),
+    )
+
+    await make_executor(repository)(execution)
+
+    retry_warnings = [
+        p for p in emitted
+        if isinstance(p, WarningPayload) and p.code == "llm_empty_output_retry"
+    ]
+    assert len(retry_warnings) == runner_module.EMPTY_OUTPUT_RETRY_LIMIT
+    # 恢复后真实 SDK result 有 final_output 属性 → agent_executed 标记
+    assert execution.agent_executed
+    build.model.close.assert_awaited_once_with()
+
 
 @pytest.mark.asyncio
 async def test_executor_warns_when_no_pending_publication(
