@@ -374,6 +374,50 @@ describe("SettingsPanel model registry", () => {
     });
   });
 
+  it("edits model config via JSON view, restores defaults, and keeps it in sync", async () => {
+    const api = mockApi({
+      fetchManagedModels: vi.fn().mockResolvedValue([
+        {
+          ...TEST_MODELS[0],
+          model_id: "deepseek-chat",
+          name: "DeepSeek Chat",
+          params: { temperature: 0.7, max_tokens: 8192 },
+          param_specs: SPECS,
+        },
+      ]),
+    });
+    renderSettings(api);
+
+    const addModel = await screen.findByRole("button", { name: "添加模型" });
+    await waitFor(() => expect(addModel).not.toBeDisabled());
+    fireEvent.click(addModel);
+    await screen.findAllByText("DeepSeek Chat");
+
+    fireEvent.click(await screen.findByRole("button", { name: "详情" }));
+    fireEvent.click(screen.getByRole("button", { name: "配置 JSON" }));
+
+    const jsonArea = screen.getByRole("textbox", {
+      name: "配置 JSON",
+    }) as HTMLTextAreaElement;
+    expect(jsonArea.value).toContain('"temperature"');
+
+    fireEvent.click(screen.getByRole("button", { name: "恢复默认" }));
+    expect(jsonArea.value).toContain('"temperature": 0.7');
+
+    fireEvent.change(jsonArea, {
+      target: { value: '{\n  "temperature": 0.9\n}' },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "格式化" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    expect(screen.getByLabelText("Temperature")).toHaveValue(0.9);
+    fireEvent.click(screen.getByRole("button", { name: "保存参数" }));
+    await waitFor(() => expect(api.updateManagedModel).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.updateManagedModel).mock.calls[0]?.[1]).toMatchObject({
+      params: { temperature: 0.9 },
+    });
+  });
+
   it("activates a maintained model and updates the current model panel", async () => {
     const api = mockApi({
       fetchManagedModels: vi

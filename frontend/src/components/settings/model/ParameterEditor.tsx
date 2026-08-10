@@ -134,7 +134,7 @@ export function ParameterEditor({ specs, params, onChange }: ParameterEditorProp
   };
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-2">
       {regularSpecs.map((spec) => (
         <div key={spec.key} className="flex items-center justify-between gap-3">
           <label
@@ -144,7 +144,7 @@ export function ParameterEditor({ specs, params, onChange }: ParameterEditorProp
           >
             {spec.label}
           </label>
-          <div className="w-44 shrink-0">
+          <div className="w-40 shrink-0">
             <SpecField
               spec={spec}
               value={currentValue(params, spec)}
@@ -155,9 +155,9 @@ export function ParameterEditor({ specs, params, onChange }: ParameterEditorProp
         </div>
       ))}
       {advancedSpecs.length > 0 && (
-        <div className="border-t pt-3">
+        <div className="border-t pt-2">
           <p className="mb-2 text-xs font-medium text-muted-foreground">高级参数</p>
-          <div className="space-y-3">
+          <div className="space-y-2">
             {advancedSpecs.map((spec) => (
               <div key={spec.key} className="flex items-center justify-between gap-3">
                 <label
@@ -167,7 +167,7 @@ export function ParameterEditor({ specs, params, onChange }: ParameterEditorProp
                 >
                   {spec.label}
                 </label>
-                <div className="w-44 shrink-0">
+                <div className="w-40 shrink-0">
                   <SpecField
                     spec={spec}
                     value={currentValue(params, spec)}
@@ -181,7 +181,7 @@ export function ParameterEditor({ specs, params, onChange }: ParameterEditorProp
         </div>
       )}
       {extraKeys.length > 0 && (
-        <div className="border-t pt-3">
+        <div className="border-t pt-2">
           <p className="mb-2 text-xs font-medium text-muted-foreground">额外参数（供应商特有）</p>
           <div className="space-y-2">
             {extraKeys.map((key) => (

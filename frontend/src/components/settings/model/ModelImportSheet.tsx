@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArrowLeftIcon,
   ArrowSquareInIcon,
   MagnifyingGlassIcon,
   PlusIcon,
 } from "@phosphor-icons/react";
 import { toast } from "sonner";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -25,6 +27,7 @@ import {
   SelectTrigger,
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
+import { Textarea } from "@/components/ui/textarea";
 import { ParameterEditor } from "@/components/settings/model/ParameterEditor";
 import type {
   DiscoveredModelInfo,
@@ -106,6 +109,9 @@ export function ModelImportSheet({
   const [params, setParams] = useState<Record<string, unknown>>({});
   const [saving, setSaving] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [view, setView] = useState<"list" | "json">("list");
+  const [jsonText, setJsonText] = useState("");
+  const [jsonError, setJsonError] = useState<string | null>(null);
 
   const [manualOpen, setManualOpen] = useState(false);
   const [manualLoading, setManualLoading] = useState(false);
@@ -129,6 +135,9 @@ export function ModelImportSheet({
     setParams({});
     setManualOpen(false);
     setManualDraft(EMPTY_MANUAL_DRAFT);
+    setView("list");
+    setJsonText("");
+    setJsonError(null);
   }, []);
 
   const discover = useCallback(
@@ -307,6 +316,55 @@ export function ModelImportSheet({
     }
   };
 
+  const selectedIsOfficial =
+    selected?.source === "api" || selected?.source === "catalog";
+
+  const openJson = () => {
+    setJsonText(JSON.stringify(params, null, 2));
+    setJsonError(null);
+    setView("json");
+  };
+
+  const backToList = () => {
+    setView("list");
+    setJsonError(null);
+  };
+
+  const formatJson = () => {
+    try {
+      const parsed: unknown = JSON.parse(jsonText);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("配置必须是 JSON 对象");
+      }
+      setJsonText(JSON.stringify(parsed, null, 2));
+      setJsonError(null);
+    } catch (error) {
+      setJsonError(error instanceof Error ? error.message : "JSON 格式错误");
+    }
+  };
+
+  const restoreDefaults = () => {
+    const defaults = defaultParamsFromSpecs(selectedSpecs);
+    setJsonText(JSON.stringify(defaults, null, 2));
+    setJsonError(null);
+    toast.success("已恢复为默认参数");
+  };
+
+  const saveJson = () => {
+    try {
+      const parsed: unknown = JSON.parse(jsonText);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("配置必须是 JSON 对象");
+      }
+      setParams(parsed as Record<string, unknown>);
+      setView("list");
+      setJsonError(null);
+      toast.success("JSON 配置已应用，记得保存参数");
+    } catch (error) {
+      setJsonError(error instanceof Error ? error.message : "JSON 格式错误");
+    }
+  };
+
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
     if (!query) return discovered;
@@ -321,45 +379,50 @@ export function ModelImportSheet({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[calc(100svh-2rem)] w-full flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl">
-        <DialogHeader className="flex-row items-start justify-between gap-4 border-b px-5 py-4">
-          <div className="min-w-0">
-            <DialogTitle>添加 / 管理模型</DialogTitle>
-            <DialogDescription>
-              先选择供应商，从左侧导入模型到右侧维护列表，或手动添加模型。
-            </DialogDescription>
+        <DialogHeader className="border-b px-5 py-4">
+          <DialogTitle>添加 / 管理模型</DialogTitle>
+          <DialogDescription>
+            先选择供应商，从左侧导入模型到右侧维护列表，或手动添加模型。
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="flex items-end gap-2 border-b px-5 py-3">
+          <div className="min-w-0 flex-1">
+            <p className="mb-1.5 text-xs font-medium text-muted-foreground">供应商</p>
+            <Select
+              value={providerId}
+              onValueChange={(next) => {
+                if (!next) return;
+                resetForProvider(next);
+                void discover(next);
+              }}
+            >
+              <SelectTrigger className="w-full" aria-label="选择供应商">
+                <span className="truncate">
+                  {selectedProvider?.name ?? "选择供应商"}
+                </span>
+              </SelectTrigger>
+              <SelectContent>
+                {providers.map((provider) => (
+                  <SelectItem key={provider.id} value={provider.id}>
+                    {provider.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
-          <Button size="sm" onClick={() => void openManual()} disabled={!providerId || saving}>
+          <Button
+            size="sm"
+            className="shrink-0"
+            onClick={() => void openManual()}
+            disabled={!providerId || saving}
+          >
             <PlusIcon data-icon="inline-start" />
             添加模型
           </Button>
-        </DialogHeader>
-
-        <div className="border-b px-5 py-3">
-          <p className="mb-1.5 text-xs font-medium text-muted-foreground">供应商</p>
-          <Select
-            value={providerId}
-            onValueChange={(next) => {
-              if (!next) return;
-              resetForProvider(next);
-              void discover(next);
-            }}
-          >
-            <SelectTrigger className="w-full" aria-label="选择供应商">
-              <span className="truncate">
-                {selectedProvider?.name ?? "选择供应商"}
-              </span>
-            </SelectTrigger>
-            <SelectContent>
-              {providers.map((provider) => (
-                <SelectItem key={provider.id} value={provider.id}>
-                  {provider.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
         </div>
 
-        {providerId && (
+        {providerId && view === "list" && (
           <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-hidden px-5 py-4 md:grid-cols-2">
             {/* Left: provider returned model list */}
             <div className="flex min-h-0 flex-col overflow-hidden rounded-xl border bg-card">
@@ -421,7 +484,12 @@ export function ModelImportSheet({
                             className="min-w-0 flex-1 text-left"
                             onClick={() => selectDiscovered(item)}
                           >
-                            <span className="block truncate text-sm font-medium">{item.name}</span>
+                            <span className="flex items-center gap-1.5">
+                              <span className="truncate text-sm font-medium">{item.name}</span>
+                              <Badge variant="outline" className="shrink-0">
+                                {item.capability_source === "catalog" ? "官方" : "API"}
+                              </Badge>
+                            </span>
                             <span className="mt-0.5 block truncate text-xs text-muted-foreground">
                               {item.id} · {formatWindow(item.context_window)}
                             </span>
@@ -474,11 +542,27 @@ export function ModelImportSheet({
                             setParams(model.params);
                           }}
                         >
-                          <span className="block truncate text-sm">{model.name}</span>
+                          <span className="flex items-center gap-1.5">
+                            <span className="truncate text-sm">{model.name}</span>
+                            <Badge variant="outline" className="shrink-0">
+                              {model.source === "manual" ? "个人" : "官方"}
+                            </Badge>
+                          </span>
                           <span className="mt-0.5 block truncate text-xs text-muted-foreground">
                             {model.model_id}
                           </span>
                         </button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="shrink-0"
+                          onClick={() => {
+                            setSelectedId(model.id);
+                            setParams(model.params);
+                          }}
+                        >
+                          详情
+                        </Button>
                         {confirmDeleteId === model.id ? (
                           <Button
                             variant="destructive"
@@ -513,11 +597,26 @@ export function ModelImportSheet({
                     </p>
                   </div>
                   <ParameterEditor specs={selectedSpecs} params={params} onChange={setParams} />
+                  <div className="flex items-center justify-between gap-3 border-t pt-3">
+                    {selectedIsOfficial && (
+                      <p className="text-xs text-amber-600 dark:text-amber-400">
+                        官方提供的参数，请谨慎修改
+                      </p>
+                    )}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className={selectedIsOfficial ? "" : "ml-auto"}
+                      onClick={openJson}
+                    >
+                      配置 JSON
+                    </Button>
+                  </div>
                 </div>
               ) : (
                 <div className="min-h-0 flex-1 overflow-y-auto p-3">
                   <p className="text-xs text-muted-foreground">
-                    从左侧导入模型到维护列表，或在右上角点击“添加模型”手动添加。
+                    从左侧导入模型到维护列表，或点击“添加模型”手动添加。
                   </p>
                 </div>
               )}
@@ -525,13 +624,63 @@ export function ModelImportSheet({
           </div>
         )}
 
-        {providerId && selected && (
+        {providerId && selected && view === "list" && (
           <DialogFooter className="mx-0 mb-0 border-t px-5 py-3">
             <Button onClick={() => void saveSelected()} disabled={saving}>
               <ArrowSquareInIcon data-icon="inline-start" />
               保存参数
             </Button>
           </DialogFooter>
+        )}
+
+        {view === "json" && selected && (
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+            <DialogHeader className="border-b px-5 py-3">
+              <div className="flex items-center gap-2">
+                <Button variant="ghost" size="sm" onClick={backToList}>
+                  <ArrowLeftIcon data-icon="inline-start" />
+                  返回
+                </Button>
+                <DialogTitle className="text-sm">配置 JSON</DialogTitle>
+              </div>
+              <DialogDescription>
+                直接编辑 {selected.name} 的参数配置；官方提供的参数请谨慎修改。
+              </DialogDescription>
+            </DialogHeader>
+            {selectedIsOfficial && (
+              <div className="shrink-0 border-b bg-amber-50 px-5 py-2 text-xs text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
+                官方提供的参数，请谨慎修改
+              </div>
+            )}
+            <div className="min-h-0 flex-1 p-4">
+              <Textarea
+                value={jsonText}
+                onChange={(event) => {
+                  setJsonText(event.target.value);
+                  setJsonError(null);
+                }}
+                className="h-full w-full resize-none font-mono text-xs"
+                spellCheck={false}
+                aria-label="配置 JSON"
+              />
+            </div>
+            {jsonError && (
+              <p className="shrink-0 px-5 pb-2 text-xs text-destructive" role="alert">
+                {jsonError}
+              </p>
+            )}
+            <DialogFooter className="mx-0 mb-0 border-t px-5 py-3">
+              <Button variant="outline" onClick={restoreDefaults}>
+                恢复默认
+              </Button>
+              <Button variant="outline" onClick={formatJson}>
+                格式化
+              </Button>
+              <Button onClick={saveJson} disabled={saving}>
+                保存
+              </Button>
+            </DialogFooter>
+          </div>
         )}
       </DialogContent>
 

@@ -81,13 +81,17 @@ def test_store_model_import_preserves_extra_params_and_profiles(tmp_path: Path) 
     assert model.params["max_tokens"] == 4096
     assert model.params["provider_extra"] == "保留"
     assert model.params["extra_param"] == "顶层多余参数"
-    assert {spec.key for spec in model.param_specs} == {
+    spec_keys = {spec.key for spec in model.param_specs}
+    assert {
         "max_tokens",
         "temperature",
         "top_p",
         "presence_penalty",
         "frequency_penalty",
-    }
+        "stop",
+        "logprobs",
+        "top_logprobs",
+    } <= spec_keys
     assert store.get_model(model.id) is not None
 
     fallback_keys = {spec.key for spec in param_specs_for("unknown-provider")}
