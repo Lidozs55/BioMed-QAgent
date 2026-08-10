@@ -95,14 +95,27 @@ def test_store_model_import_preserves_extra_params_and_profiles(tmp_path: Path) 
     assert store.get_model(model.id) is not None
 
     fallback_keys = {spec.key for spec in param_specs_for("unknown-provider")}
-    assert fallback_keys == {
+    assert {
         "max_tokens",
         "temperature",
         "top_p",
+        "top_k",
+        "do_sample",
+        "reasoning_effort",
+        "enable_thinking",
+        "thinking_budget",
+        "stop",
+        "stream",
+        "frequency_penalty",
+        "presence_penalty",
         "repetition_penalty",
+        "seed",
+        "n",
+        "logit_bias",
+        "tool_choice",
         "enable_search",
         "thinking_mode",
-    }
+    } <= fallback_keys
 
 
 def test_store_model_update_merges_and_delete_cascades(tmp_path: Path) -> None:

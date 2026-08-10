@@ -393,7 +393,15 @@ describe("SettingsPanel model registry", () => {
     fireEvent.click(addModel);
     await screen.findAllByText("DeepSeek Chat");
 
-    fireEvent.click(await screen.findByRole("button", { name: "详情" }));
+    // Select the model in the right column (left list + right row both match).
+    const modelRows = await screen.findAllByRole("button", { name: /DeepSeek Chat/ });
+    fireEvent.click(modelRows[1]);
+
+    // The detail toggle in the header collapses and re-opens the detail area.
+    fireEvent.click(screen.getByRole("button", { name: "收起详情" }));
+    expect(screen.queryByRole("button", { name: "配置 JSON" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "详情" }));
+
     fireEvent.click(screen.getByRole("button", { name: "配置 JSON" }));
 
     const jsonArea = screen.getByRole("textbox", {

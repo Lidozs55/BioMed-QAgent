@@ -106,6 +106,7 @@ export function ModelImportSheet({
   const [discoverError, setDiscoverError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
   const [params, setParams] = useState<Record<string, unknown>>({});
   const [saving, setSaving] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -132,6 +133,7 @@ export function ModelImportSheet({
     setDiscoverError(null);
     setSearch("");
     setSelectedId(null);
+    setDetailOpen(false);
     setParams({});
     setManualOpen(false);
     setManualDraft(EMPTY_MANUAL_DRAFT);
@@ -223,6 +225,7 @@ export function ModelImportSheet({
       toast.success(`已导入 ${created.name}`);
       await onSaved();
       setSelectedId(created.id);
+      setDetailOpen(true);
       setParams(created.params);
     } catch (error) {
       toast.error("导入失败", { description: errorText(error) });
@@ -275,6 +278,7 @@ export function ModelImportSheet({
       toast.success(`已添加 ${created.name}`);
       await onSaved();
       setSelectedId(created.id);
+      setDetailOpen(true);
       setParams(created.params);
       setManualOpen(false);
       setManualDraft(EMPTY_MANUAL_DRAFT);
@@ -307,6 +311,7 @@ export function ModelImportSheet({
       await onSaved();
       if (selectedId === model.id) {
         setSelectedId(null);
+        setDetailOpen(false);
         setParams({});
       }
     } catch (error) {
@@ -513,11 +518,20 @@ export function ModelImportSheet({
 
             {/* Right: selected / maintained models */}
             <div className="flex min-h-0 flex-col overflow-hidden rounded-xl border bg-card">
-              <div className="shrink-0 border-b p-3">
+              <div className="flex shrink-0 items-center justify-between gap-3 border-b p-3">
                 <p className="text-sm font-medium">
                   已选模型{" "}
                   <span className="text-muted-foreground">({providerModels.length})</span>
                 </p>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="shrink-0"
+                  disabled={!selected}
+                  onClick={() => setDetailOpen((next) => !next)}
+                >
+                  {detailOpen ? "收起详情" : "详情"}
+                </Button>
               </div>
               <ScrollArea className="max-h-40 shrink-0 border-b">
                 {providerModels.length === 0 ? (
@@ -539,6 +553,7 @@ export function ModelImportSheet({
                           className="min-w-0 flex-1 text-left"
                           onClick={() => {
                             setSelectedId(model.id);
+                            setDetailOpen(true);
                             setParams(model.params);
                           }}
                         >
@@ -552,17 +567,6 @@ export function ModelImportSheet({
                             {model.model_id}
                           </span>
                         </button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="shrink-0"
-                          onClick={() => {
-                            setSelectedId(model.id);
-                            setParams(model.params);
-                          }}
-                        >
-                          详情
-                        </Button>
                         {confirmDeleteId === model.id ? (
                           <Button
                             variant="destructive"
@@ -588,7 +592,7 @@ export function ModelImportSheet({
                 )}
               </ScrollArea>
 
-              {selected ? (
+              {selected && detailOpen ? (
                 <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
                   <div>
                     <p className="text-sm font-medium">{selected.name}</p>
@@ -612,6 +616,12 @@ export function ModelImportSheet({
                       配置 JSON
                     </Button>
                   </div>
+                </div>
+              ) : selected ? (
+                <div className="min-h-0 flex-1 overflow-y-auto p-3">
+                  <p className="text-xs text-muted-foreground">
+                    已选择 {selected.name}，点击“详情”展开参数配置。
+                  </p>
                 </div>
               ) : (
                 <div className="min-h-0 flex-1 overflow-y-auto p-3">
