@@ -814,6 +814,7 @@ SDK 的 `Agent.get_system_prompt()` 公共边界固定。
 | PUT | `/model-registry/providers/{provider_id}` | 更新供应商（api_key 省略不变、空串清除） | ✅ |
 | DELETE | `/model-registry/providers/{provider_id}` | 删除供应商（关联 model 级联删除） | ✅ |
 | POST | `/model-registry/providers/{provider_id}/discover` | 拉取该供应商 `GET /models` 并用内置目录富化 | ✅ |
+| GET | `/model-registry/providers/{provider_id}/param-specs` | 返回该供应商可选的参数定义（含保底回退），供手动添加表单使用 | ✅ |
 | GET | `/model-registry/models` | 列出维护的模型列表（含 param_specs 与 params） | ✅ |
 | POST | `/model-registry/models` | 添加维护模型（多余参数不报错，写入 params 保留） | ✅ |
 | PUT | `/model-registry/models/{model_id}` | 更新模型 / 参数 | ✅ |

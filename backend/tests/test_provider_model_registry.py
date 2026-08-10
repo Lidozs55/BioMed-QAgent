@@ -296,3 +296,36 @@ async def test_discover_endpoint_uses_provider_credentials(
 
     assert discovered.status_code == 200
     assert discovered.json()[0]["id"] == "discovered-1"
+
+
+@pytest.mark.asyncio
+async def test_provider_param_specs_endpoint(tmp_path: Path) -> None:
+    application = create_app(Settings(output_dir=str(tmp_path / "output")))
+    async with application.router.lifespan_context(application), httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application), base_url="http://localhost"
+    ) as client:
+        deepseek = await client.post(
+            "/api/v1/model-registry/providers",
+            json={
+                "name": "deepseek",
+                "base_url": "https://api.deepseek.com/v1",
+                "preset_id": "deepseek",
+            },
+        )
+        specs = await client.get(
+            f"/api/v1/model-registry/providers/{deepseek.json()['id']}/param-specs"
+        )
+        custom = await client.post(
+            "/api/v1/model-registry/providers",
+            json={"name": "自定义", "base_url": "https://custom.example/v1"},
+        )
+        fallback = await client.get(
+            f"/api/v1/model-registry/providers/{custom.json()['id']}/param-specs"
+        )
+
+    assert specs.status_code == 200
+    assert "presence_penalty" in {spec["key"] for spec in specs.json()}
+    assert fallback.status_code == 200
+    assert {"enable_search", "thinking_mode", "repetition_penalty"} <= {
+        spec["key"] for spec in fallback.json()
+    }

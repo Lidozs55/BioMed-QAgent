@@ -27,6 +27,7 @@ import { parseModelSettings, parseVendorsEnvelope, parseModelsEnvelope } from "@
 import type {
   DiscoveredModelInfo,
   ManagedModelInfo,
+  ParameterSpec,
   ProviderInfo,
 } from "@/hooks/settingsContracts";
 import {
@@ -220,6 +221,7 @@ export function createAPIClient(options: APIClientOptions = {}): APIClient & Set
     updateProvider: (id, patch) => request(`${baseUrl}/model-registry/providers/${encodeId(id)}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) }).then((b) => b as ProviderInfo),
     deleteProvider: (id) => requestVoid(`${baseUrl}/model-registry/providers/${encodeId(id)}`, { method: "DELETE" }),
     discoverProviderModels: (id) => request(`${baseUrl}/model-registry/providers/${encodeId(id)}/discover`, { method: "POST" }).then((b) => b as DiscoveredModelInfo[]),
+    fetchProviderParamSpecs: (id) => request(`${baseUrl}/model-registry/providers/${encodeId(id)}/param-specs`).then((b) => b as ParameterSpec[]),
     fetchManagedModels: () => request(`${baseUrl}/model-registry/models`).then((b) => b as ManagedModelInfo[]),
     createManagedModel: (input) => request(`${baseUrl}/model-registry/models`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) }).then((b) => b as ManagedModelInfo),
     updateManagedModel: (id, patch) => request(`${baseUrl}/model-registry/models/${encodeId(id)}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) }).then((b) => b as ManagedModelInfo),

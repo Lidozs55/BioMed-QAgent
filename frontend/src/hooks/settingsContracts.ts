@@ -289,6 +289,7 @@ export interface SettingsAPIClient {
   updateProvider: (id: string, patch: ProviderUpdateInput) => Promise<ProviderInfo>;
   deleteProvider: (id: string) => Promise<void>;
   discoverProviderModels: (id: string) => Promise<DiscoveredModelInfo[]>;
+  fetchProviderParamSpecs: (id: string) => Promise<ParameterSpec[]>;
   fetchManagedModels: () => Promise<ManagedModelInfo[]>;
   createManagedModel: (input: ManagedModelInput) => Promise<ManagedModelInfo>;
   updateManagedModel: (

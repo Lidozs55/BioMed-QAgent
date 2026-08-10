@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { SettingsPanel } from "@/components/SettingsPanel";
@@ -137,6 +137,7 @@ function mockApi(overrides: Partial<SettingsAPIClient> = {}): SettingsAPIClient 
     updateProvider: vi.fn(),
     deleteProvider: vi.fn().mockResolvedValue(undefined),
     discoverProviderModels: vi.fn().mockResolvedValue(DISCOVERED),
+    fetchProviderParamSpecs: vi.fn().mockResolvedValue(SPECS),
     fetchManagedModels: vi.fn().mockResolvedValue(TEST_MODELS),
     createManagedModel: vi.fn().mockImplementation((input) =>
       Promise.resolve({
@@ -355,8 +356,14 @@ describe("SettingsPanel model registry", () => {
     await waitFor(() => expect(addModel).not.toBeDisabled());
     fireEvent.click(addModel);
     await screen.findByText("DeepSeek Chat");
-    const manualInput = await screen.findByLabelText("手动模型名称");
-    fireEvent.change(manualInput, { target: { value: "custom-model" } });
+
+    // Manual add now lives behind the top-right button in the sheet header.
+    const sheetDialog = await screen.findByRole("dialog", { name: "添加 / 管理模型" });
+    fireEvent.click(
+      within(sheetDialog).getByRole("button", { name: "添加模型" }),
+    );
+    const manualId = await screen.findByLabelText("模型 ID *");
+    fireEvent.change(manualId, { target: { value: "custom-model" } });
     fireEvent.click(screen.getByRole("button", { name: "添加" }));
 
     await waitFor(() => expect(api.createManagedModel).toHaveBeenCalledTimes(1));

@@ -21,6 +21,7 @@ from app.model_registry.schemas import (
     ManagedModelPublic,
     ManagedModelRecord,
     ManagedModelUpdate,
+    ParameterSpec,
     ProviderCreate,
     ProviderPublic,
     ProviderRecord,
@@ -150,6 +151,19 @@ async def discover_models(
         raise HTTPException(status_code=422, detail=f"供应商 Base URL 不可用：{error}") from error
     except (httpx.HTTPError, ValueError) as error:
         raise HTTPException(status_code=502, detail="模型发现失败") from error
+
+
+@router.get(
+    "/providers/{provider_id}/param-specs",
+    response_model=list[ParameterSpec],
+)
+def provider_param_specs(provider_id: str, store: StoreDep) -> list[ParameterSpec]:
+    """Return the provider's selectable parameter definitions (with fallback)."""
+
+    provider = store.get_provider(provider_id)
+    if provider is None:
+        raise HTTPException(status_code=404, detail="供应商不存在")
+    return store.get_param_specs(provider.preset_id or provider.name, "")
 
 
 # ----------------------------------------------------------------------

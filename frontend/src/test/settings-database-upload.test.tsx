@@ -37,6 +37,7 @@ function mockApi(overrides: Partial<SettingsAPIClient> = {}): SettingsAPIClient 
     updateProvider: vi.fn(),
     deleteProvider: vi.fn(),
     discoverProviderModels: vi.fn().mockResolvedValue([]),
+    fetchProviderParamSpecs: vi.fn().mockResolvedValue([]),
     fetchManagedModels: vi.fn().mockResolvedValue([]),
     createManagedModel: vi.fn(),
     updateManagedModel: vi.fn(),

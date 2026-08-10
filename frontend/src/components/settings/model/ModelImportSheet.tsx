@@ -15,6 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -22,13 +23,13 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { ParameterEditor } from "@/components/settings/model/ParameterEditor";
 import type {
   DiscoveredModelInfo,
   ManagedModelInfo,
+  ParameterSpec,
   ProviderInfo,
   SettingsAPIClient,
 } from "@/hooks/useAPI";
@@ -45,6 +46,20 @@ interface ModelImportSheetProps {
   initialModelId?: string | null;
 }
 
+interface ManualDraft {
+  modelId: string;
+  name: string;
+  contextWindow: string;
+  params: Record<string, unknown>;
+}
+
+const EMPTY_MANUAL_DRAFT: ManualDraft = {
+  modelId: "",
+  name: "",
+  contextWindow: "",
+  params: {},
+};
+
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : "请求失败";
 }
@@ -59,6 +74,14 @@ function formatWindow(tokens: number | null | undefined): string {
 function defaultParams(discovered: DiscoveredModelInfo): Record<string, unknown> {
   const params: Record<string, unknown> = {};
   for (const spec of discovered.param_specs ?? []) {
+    if (spec.default !== undefined) params[spec.key] = spec.default;
+  }
+  return params;
+}
+
+function defaultParamsFromSpecs(specs: ParameterSpec[]): Record<string, unknown> {
+  const params: Record<string, unknown> = {};
+  for (const spec of specs) {
     if (spec.default !== undefined) params[spec.key] = spec.default;
   }
   return params;
@@ -81,12 +104,16 @@ export function ModelImportSheet({
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [params, setParams] = useState<Record<string, unknown>>({});
-  const [manualId, setManualId] = useState("");
-  const [manualName, setManualName] = useState("");
   const [saving, setSaving] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
+  const [manualOpen, setManualOpen] = useState(false);
+  const [manualLoading, setManualLoading] = useState(false);
+  const [manualSpecs, setManualSpecs] = useState<ParameterSpec[]>([]);
+  const [manualDraft, setManualDraft] = useState<ManualDraft>(EMPTY_MANUAL_DRAFT);
   const wasOpenRef = useRef(false);
 
+  const selectedProvider = providers.find((provider) => provider.id === providerId) ?? null;
   const providerModels = useMemo(
     () => managedModels.filter((model) => model.provider_id === providerId),
     [managedModels, providerId],
@@ -100,8 +127,8 @@ export function ModelImportSheet({
     setSearch("");
     setSelectedId(null);
     setParams({});
-    setManualId("");
-    setManualName("");
+    setManualOpen(false);
+    setManualDraft(EMPTY_MANUAL_DRAFT);
   }, []);
 
   const discover = useCallback(
@@ -195,26 +222,53 @@ export function ModelImportSheet({
     }
   };
 
-  const addManual = async () => {
-    const modelId = manualId.trim();
+  const openManual = async () => {
+    if (!providerId) return;
+    setManualOpen(true);
+    setManualLoading(true);
+    setManualDraft(EMPTY_MANUAL_DRAFT);
+    try {
+      const specs = await api.fetchProviderParamSpecs(providerId);
+      setManualSpecs(specs);
+      setManualDraft((previous) => ({
+        ...previous,
+        params: defaultParamsFromSpecs(specs),
+      }));
+    } catch (error) {
+      setManualSpecs([]);
+      toast.error("模型参数加载失败", { description: errorText(error) });
+    } finally {
+      setManualLoading(false);
+    }
+  };
+
+  const saveManual = async () => {
+    const modelId = manualDraft.modelId.trim();
     if (!providerId || !modelId) {
-      toast.error("请输入模型名称");
+      toast.error("请输入模型 ID");
       return;
     }
     setSaving(true);
     try {
+      const rawWindow = manualDraft.contextWindow.trim();
+      const parsedWindow = rawWindow === "" ? null : Number(rawWindow);
       const created = await api.createManagedModel({
         provider_id: providerId,
         model_id: modelId,
-        name: manualName.trim() || modelId,
+        name: manualDraft.name.trim() || modelId,
+        context_window:
+          parsedWindow !== null && Number.isFinite(parsedWindow) && parsedWindow > 0
+            ? parsedWindow
+            : null,
         source: "manual",
+        params: manualDraft.params,
       });
       toast.success(`已添加 ${created.name}`);
       await onSaved();
       setSelectedId(created.id);
       setParams(created.params);
-      setManualId("");
-      setManualName("");
+      setManualOpen(false);
+      setManualDraft(EMPTY_MANUAL_DRAFT);
     } catch (error) {
       toast.error("添加失败", { description: errorText(error) });
     } finally {
@@ -267,14 +321,21 @@ export function ModelImportSheet({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[calc(100svh-2rem)] w-full flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl">
-        <DialogHeader className="border-b px-5 py-4">
-          <DialogTitle>添加 / 管理模型</DialogTitle>
-          <DialogDescription>
-            先选择供应商，从左侧导入模型到右侧维护列表，或手动添加模型。
-          </DialogDescription>
+        <DialogHeader className="flex-row items-start justify-between gap-4 border-b px-5 py-4">
+          <div className="min-w-0">
+            <DialogTitle>添加 / 管理模型</DialogTitle>
+            <DialogDescription>
+              先选择供应商，从左侧导入模型到右侧维护列表，或手动添加模型。
+            </DialogDescription>
+          </div>
+          <Button size="sm" onClick={() => void openManual()} disabled={!providerId || saving}>
+            <PlusIcon data-icon="inline-start" />
+            添加模型
+          </Button>
         </DialogHeader>
 
         <div className="border-b px-5 py-3">
+          <p className="mb-1.5 text-xs font-medium text-muted-foreground">供应商</p>
           <Select
             value={providerId}
             onValueChange={(next) => {
@@ -284,7 +345,9 @@ export function ModelImportSheet({
             }}
           >
             <SelectTrigger className="w-full" aria-label="选择供应商">
-              <SelectValue placeholder="选择供应商" />
+              <span className="truncate">
+                {selectedProvider?.name ?? "选择供应商"}
+              </span>
             </SelectTrigger>
             <SelectContent>
               {providers.map((provider) => (
@@ -299,12 +362,12 @@ export function ModelImportSheet({
         {providerId && (
           <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-hidden px-5 py-4 md:grid-cols-2">
             {/* Left: provider returned model list */}
-            <div className="flex min-h-0 flex-col rounded-xl border bg-card">
-              <div className="flex items-center gap-2 border-b p-3">
+            <div className="flex min-h-0 flex-col overflow-hidden rounded-xl border bg-card">
+              <div className="flex shrink-0 items-center gap-2 border-b p-3">
                 <div className="relative min-w-0 flex-1">
                   <MagnifyingGlassIcon
                     data-icon="inline-start"
-                    className="text-muted-foreground"
+                    className="absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
                   />
                   <Input
                     value={search}
@@ -313,13 +376,19 @@ export function ModelImportSheet({
                     className="pl-8"
                   />
                 </div>
-                <Button variant="outline" size="sm" onClick={() => void discover()} disabled={discovering}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0"
+                  onClick={() => void discover()}
+                  disabled={discovering}
+                >
                   {discovering ? <Spinner data-icon="inline-start" /> : null}
                   获取列表
                 </Button>
               </div>
               {discoverError && (
-                <p className="border-b px-3 py-2 text-xs text-destructive" role="alert">
+                <p className="shrink-0 border-b px-3 py-2 text-xs text-destructive" role="alert">
                   {discoverError}
                 </p>
               )}
@@ -343,7 +412,7 @@ export function ModelImportSheet({
                         <li
                           key={item.id}
                           className={cn(
-                            "flex items-center justify-between gap-2 px-3 py-2.5",
+                            "flex items-center justify-between gap-3 px-3 py-2.5",
                             active && "bg-accent",
                           )}
                         >
@@ -353,13 +422,14 @@ export function ModelImportSheet({
                             onClick={() => selectDiscovered(item)}
                           >
                             <span className="block truncate text-sm font-medium">{item.name}</span>
-                            <span className="block truncate text-xs text-muted-foreground">
+                            <span className="mt-0.5 block truncate text-xs text-muted-foreground">
                               {item.id} · {formatWindow(item.context_window)}
                             </span>
                           </button>
                           <Button
                             variant={imported ? "ghost" : "outline"}
                             size="sm"
+                            className="shrink-0"
                             disabled={imported || saving}
                             onClick={() => void importModel(item)}
                           >
@@ -374,10 +444,11 @@ export function ModelImportSheet({
             </div>
 
             {/* Right: selected / maintained models */}
-            <div className="flex min-h-0 flex-col rounded-xl border bg-card">
-              <div className="border-b p-3">
+            <div className="flex min-h-0 flex-col overflow-hidden rounded-xl border bg-card">
+              <div className="shrink-0 border-b p-3">
                 <p className="text-sm font-medium">
-                  已选模型 <span className="text-muted-foreground">({providerModels.length})</span>
+                  已选模型{" "}
+                  <span className="text-muted-foreground">({providerModels.length})</span>
                 </p>
               </div>
               <ScrollArea className="max-h-40 shrink-0 border-b">
@@ -404,7 +475,7 @@ export function ModelImportSheet({
                           }}
                         >
                           <span className="block truncate text-sm">{model.name}</span>
-                          <span className="block truncate text-xs text-muted-foreground">
+                          <span className="mt-0.5 block truncate text-xs text-muted-foreground">
                             {model.model_id}
                           </span>
                         </button>
@@ -412,6 +483,7 @@ export function ModelImportSheet({
                           <Button
                             variant="destructive"
                             size="sm"
+                            className="shrink-0"
                             onClick={() => void removeModel(model)}
                           >
                             确认移除
@@ -420,7 +492,7 @@ export function ModelImportSheet({
                           <Button
                             variant="ghost"
                             size="sm"
-                            className="text-destructive"
+                            className="shrink-0 text-destructive"
                             onClick={() => setConfirmDeleteId(model.id)}
                           >
                             移除
@@ -436,36 +508,17 @@ export function ModelImportSheet({
                 <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
                   <div>
                     <p className="text-sm font-medium">{selected.name}</p>
-                    <p className="text-xs text-muted-foreground">
+                    <p className="mt-0.5 text-xs text-muted-foreground">
                       {selected.model_id} · 上下文 {formatWindow(selected.context_window)}
                     </p>
                   </div>
                   <ParameterEditor specs={selectedSpecs} params={params} onChange={setParams} />
                 </div>
               ) : (
-                <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
+                <div className="min-h-0 flex-1 overflow-y-auto p-3">
                   <p className="text-xs text-muted-foreground">
-                    选择左侧模型导入后可在此修改参数；也可以手动添加模型：
+                    从左侧导入模型到维护列表，或在右上角点击“添加模型”手动添加。
                   </p>
-                  <div className="flex gap-2">
-                    <Input
-                      value={manualId}
-                      onChange={(event) => setManualId(event.target.value)}
-                      placeholder="模型名称（如 gpt-4o-mini）"
-                      aria-label="手动模型名称"
-                    />
-                    <Input
-                      value={manualName}
-                      onChange={(event) => setManualName(event.target.value)}
-                      placeholder="显示名（可选）"
-                      aria-label="手动模型显示名"
-                      className="hidden sm:block"
-                    />
-                    <Button variant="outline" size="sm" onClick={() => void addManual()} disabled={saving}>
-                      <PlusIcon data-icon="inline-start" />
-                      添加
-                    </Button>
-                  </div>
                 </div>
               )}
             </div>
@@ -481,6 +534,79 @@ export function ModelImportSheet({
           </DialogFooter>
         )}
       </DialogContent>
+
+      <Dialog open={manualOpen} onOpenChange={setManualOpen}>
+        <DialogContent className="max-h-[calc(100svh-2rem)] overflow-auto sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>手动添加模型</DialogTitle>
+            <DialogDescription>填写模型信息与支持的参数；带 * 为必填。</DialogDescription>
+          </DialogHeader>
+          <FieldGroup className="space-y-3">
+            <Field>
+              <FieldLabel htmlFor="manual-model-id">模型 ID *</FieldLabel>
+              <Input
+                id="manual-model-id"
+                value={manualDraft.modelId}
+                onChange={(event) =>
+                  setManualDraft({ ...manualDraft, modelId: event.target.value })
+                }
+                placeholder="如 gpt-4o-mini"
+              />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="manual-model-name">显示名（可选）</FieldLabel>
+              <Input
+                id="manual-model-name"
+                value={manualDraft.name}
+                onChange={(event) =>
+                  setManualDraft({ ...manualDraft, name: event.target.value })
+                }
+                placeholder="如 GPT-4o Mini"
+              />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="manual-context-window">上下文窗口（Tokens，可选）</FieldLabel>
+              <Input
+                id="manual-context-window"
+                type="number"
+                min={1}
+                value={manualDraft.contextWindow}
+                onChange={(event) =>
+                  setManualDraft({ ...manualDraft, contextWindow: event.target.value })
+                }
+                placeholder="如 131072"
+              />
+            </Field>
+            <div className="border-t pt-3">
+              <p className="mb-3 text-sm font-medium">模型参数</p>
+              {manualLoading ? (
+                <div className="flex items-center gap-2 py-2 text-xs text-muted-foreground">
+                  <Spinner />
+                  正在加载参数...
+                </div>
+              ) : (
+                <ParameterEditor
+                  specs={manualSpecs}
+                  params={manualDraft.params}
+                  onChange={(next) => setManualDraft({ ...manualDraft, params: next })}
+                />
+              )}
+            </div>
+          </FieldGroup>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setManualOpen(false)}>
+              取消
+            </Button>
+            <Button
+              onClick={() => void saveManual()}
+              disabled={saving || !manualDraft.modelId.trim()}
+            >
+              {saving && <Spinner data-icon="inline-start" />}
+              添加
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Dialog>
   );
 }
