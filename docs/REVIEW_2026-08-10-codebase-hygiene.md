@@ -84,7 +84,7 @@
 2. **AGENTS.md / ARCHITECTURE.md 事件清单**：缺 `publication_created`、`tool_called`、10 个 `subagent_*`；"every `stage_*` event is still emitted and mirrored by an `operation_*` event" 与事实不符——**stage_started/completed/failed/skipped 后端已无任何生产 emit 方**（仅 `stage_progress` 有镜像，`agent_loop/runner.py:937-950`），该表述需改为事实。
 3. **ARCHITECTURE.md §14.2**：RuntimeEventType 声称 22 类实际 27 类；"build_spec_ready/source_candidate_found/rejected/compatibility_evaluated/build_result_ready" 清单从未落地；§15 `/tasks/{task_id}/builds` 🚧 实为已实现的全局 `/builds`。
 4. **TODO.md:71**："删除 validated_intermediate/validated_final" 代码已无残留，应勾选；TODO.md:58 引用的 `pipeline/runner.py` 已删除。
-5. **前后端字段丢失**：`task_completed.build_result`（后端 `events.py:203-207` 有，前端 `contracts.ts:492-501` 与 `eventParsersPipeline.ts:144-153` 未读）；`BuildResult.build_id` 与 `binding_failures`（K2 新增）前端均未解析——NO_DATA 的逐来源失败原因前端不可见。
+5. **前后端字段丢失**：`task_completed.build_result`（后端 `events.py:203-207` 有，前端 `contracts.ts:492-501` 与 `eventParsersPipeline.ts:144-153` 未读）；`BuildResult.build_id` 与 `binding_failures`（K2 新增）前端均未解析——NO_DATA 的逐来源失败原因前端不可见。✅ **B3 已修复（2026-08-10，见 §10）**
 6. **stage 标签三处同步**：后端 `events.py:611-617 _STAGE_OPERATION_LABELS` / 前端 `stageLabels.ts:3-9` / `operationMeta.ts:36-62` 同一组中文标签写三份，应以 operation 端为唯一事实源。
 
 ---
@@ -100,14 +100,15 @@
 
 ## 7. 清理批次（小批次 + 验证 + 可回滚）
 
+> **B1（零风险删减）与 B2（收敛）已于 2026-08-10 完成**（commit `781d2d2`，
+> 见 §9 执行记录），不再列于待办。
+
 | 批次 | 内容 | 验证 | 回滚 |
 | --- | --- | --- | --- |
-| B1（零风险删减） | 死代码 1-6、13-15 + 依赖清理；文档漂移 1-4 | `uv run pytest` + `pnpm test` + 双端 lint/tsc/build | 每项独立 commit 可 revert |
-| B2（收敛） | §4 重复实现合并（Retry-After、facade、gzip、事件类型注册表、StepBubble） | 定向单测 + 全量 pytest/vitest | 每项独立 commit |
 | B3（契约修正） | §5.5 前端补 `build_result`/`binding_failures` 字段 | 前端类型检查 + 事件回放测试 | 独立 commit |
 | B4（需评审） | §3 循环导入/死参数/事件转发合并；§6 V1 下线计划 | 先出设计，代码后行 | 单列 |
 
-**停止条件**：每批次全量 `uv run pytest`（当前 2331 通过 + 2 项既有 `test_artifact_api` 失败）+ `pnpm lint && pnpm tsc && pnpm build` 全绿才推进下一批。
+**停止条件**：每批次全量 `uv run pytest`（当前 2306 通过 + 2 项既有 `test_artifact_api` 失败）+ `pnpm lint && pnpm tsc && pnpm build` 全绿才推进下一批。
 
 ---
 
@@ -184,3 +185,40 @@
 - B1 契约面符号（§2 #7-12）与 `multi_build.py`（Phase 7 预留 seam，设计未完工）**保留**。
 - B3（前端补 `build_result` / `binding_failures` 字段）、B4（循环导入 / 死参数 /
   事件转发合并、V1 下线计划）未动，留待后续批次。
+
+---
+
+## 10. B3 执行记录（契约修正，2026-08-10）
+
+### 改动
+
+- **`runtime/contracts.ts`**：新增 `BindingFailureDetail` 接口；`BuildResult` 补
+  `build_id?: string | null` 与 `binding_failures?: BindingFailureDetail[]`（可选字段，
+  旧事件回放不破坏）；`task_completed` 事件补 `build_result?: BuildResult | null`。
+- **解析器三处补齐**：
+  - `lib/eventParsersRuntime.ts` `parseBuildResult`：解析 `build_id` + `binding_failures`
+    （run_completed 事件路径，K2 真实数据通道）。
+  - `lib/apiResponseParsers.ts` `parseBuildResult`：同上（`/builds/{id}` REST 路径）。
+  - `lib/eventParsersPipeline.ts` `task_completed`：解析可选 `build_result`
+    （契约完整性；该事件后端当前无生产发射方，供旧事件回放与未来 fixture 路径兼容）。
+- **UI 可见性**：`BuildResultsViewer.BuildBanner` 对 NO_DATA 展示逐来源失败
+  `binding_id / reason_code / message` 列表——修复"逐来源失败原因前端不可见"。
+
+### 边界判断
+
+- `task_completed` 事件后端无生产发射方（Agent 路径统一走 `run_completed`），
+  因此 **reducer 未对 fixture 路径新增 build_result 投影**（避免改动 V1 遗留状态机；
+  解析器已保证字段可达）。`binding_failures` 的真实可见路径是 `run_completed` →
+  `run.summary.build_result` → `BuildResultsViewer`。
+
+### 验证
+
+| 检查 | 结果 |
+| --- | --- |
+| 前端 `pnpm lint` / `pnpm tsc` | ✅ 0 错误 |
+| `api-event-payloads`（39）+ `terminal-state`（10）+ `api`（9）+ `build-results-viewer`（11） | ✅ 69 通过 |
+| `pnpm build` | ✅ |
+
+### 待办
+
+- B4（§3 循环导入 / 死参数 / 事件转发合并；§6 V1 下线计划）需评审后推进。

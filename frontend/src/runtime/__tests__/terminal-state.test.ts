@@ -101,12 +101,16 @@ describe("terminal state projection", () => {
             status: "no_data",
             valid_row_count: 0,
             successful_sources: [],
-            rejected_sources: [],
+            rejected_sources: ["gse"],
             available_artifact_roles: [],
             publication_id: null,
             reason_codes: ["no_primary_data"],
             user_summary: "任务完成，但未产出可发布的主数据。",
             recommended_next_action: "调整检索条件后重试。",
+            build_id: "build_run_1",
+            binding_failures: [
+              { binding_id: "gse", reason_code: "empty_series_matrix", message: "metadata only" },
+            ],
           },
         },
       }),
@@ -114,6 +118,10 @@ describe("terminal state projection", () => {
     const run = task.runsById["run_1"];
     expect(run.summary?.run_status).toBe("completed");
     expect(run.summary?.build_result?.status).toBe("no_data");
+    expect(run.summary?.build_result?.build_id).toBe("build_run_1");
+    expect(run.summary?.build_result?.binding_failures).toEqual([
+      { binding_id: "gse", reason_code: "empty_series_matrix", message: "metadata only" },
+    ]);
     expect(run.summary?.user_message).toBe("任务完成，但未产出可发布的主数据。");
   });
 

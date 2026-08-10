@@ -247,6 +247,10 @@ describe("BuildResultsViewer", () => {
       reason_codes: ["no_records"],
       user_summary: "所选数据源未返回任何记录",
       recommended_next_action: "调整检索词后重试",
+      build_id: "build_abc",
+      binding_failures: [
+        { binding_id: "binding_pubmed", reason_code: "empty_series_matrix", message: "series matrix 无数据表" },
+      ],
     };
     stubBuildFetch(buildDetail({}, noDataResult));
 
@@ -256,10 +260,15 @@ describe("BuildResultsViewer", () => {
 
     expect(await screen.findByText("所选数据源未返回任何记录")).toBeInTheDocument();
     expect(screen.getByText("调整检索词后重试")).toBeInTheDocument();
+    // K2: per-binding rejection trace is surfaced on the banner.
+    expect(screen.getByText("binding_pubmed")).toBeInTheDocument();
+    expect(screen.getByText("empty_series_matrix")).toBeInTheDocument();
+    expect(screen.getByText("series matrix 无数据表")).toBeInTheDocument();
 
     const banner = container.querySelector('[data-status="no_data"]');
     expect(banner).not.toBeNull();
     expect(banner?.textContent).toContain("所选数据源未返回任何记录");
+    expect(banner?.textContent).toContain("binding_pubmed");
     // NO_DATA is informational — never destructive/red.
     expect(banner?.className).not.toContain("destructive");
     expect(banner?.className).not.toContain("bg-red");
