@@ -85,6 +85,9 @@ coverage.xml
 
 # ===== 其他 =====
 .cache
+
+# Local MCP server builds (configure-glm-vision skill)
+outputs/
 *.bak
 .sisyphus/
 .worktree/
