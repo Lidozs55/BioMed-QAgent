@@ -195,6 +195,14 @@ tumor/normal 分组、platform 类型（microarray vs RNA-seq）都要与课题�
 （format / value_semantics / value_scale / expression_unit / platform_ids 等），
 否则 geo.expression.v1 适配器会拒绝。
 
+**probe 平台（微阵列）基因级构建必须提供 GPL 平台注释**：下载 series matrix 后，
+用 `invoke_skill` 调用 `download_geo_platform_annotation`（gpl=platform_ids 中的
+平台号）获取 probe→gene 注释表，然后在 `execute_dataset_build` 的 `mapping_files`
+参数里按 `{"binding_id": "<注释文件相对路径>"}` 传入——构建内核据此把 probe 行
+映射为基因行。若平台无可用注释（下载失败/注释列全空），**不要用 probe 数据冒充
+基因级结果**：优先改用 GDC/Xena 基因级矩阵，或改用 probe 级构建
+（`gene_expression.probe_release.v1` 发布 probe-primary 并如实告知限制）。
+
 当结构化 API（GEO/PubMed/Xena 等）返回 HTTP 403/404 或网络错误时，可通过
 `find_skill(source="browser")` 发现 `browser_fallback` 技能，再用 `invoke_skill`
 调用 `navigate_page`（渲染页面并提取标题/正文）或 `download_from_page`（通过浏览器

@@ -40,6 +40,7 @@ from app.datasets.contracts import (
     DatasetBuildSpec,
     DatasetManifest,
     DatasetPublication,
+    SourceBinding,
 )
 from app.datasets.runtime import DatasetBuildExecutor, build_operation_plan
 from app.datasets.schema_registry import (
@@ -282,6 +283,55 @@ async def _acquire_workflow_recipe_bindings(
         paths[binding.binding_id] = run_ctx.work_dir.root / asset.relative_path
 
 
+def _resolve_local_assets(
+    run_ctx: RunContext,
+    files_mapping: dict[str, str],
+    bindings_by_id: dict[str, SourceBinding],
+    *,
+    role: str,
+) -> tuple[dict[str, SourceAsset], dict[str, Path]]:
+    """Wrap pre-downloaded local files into content-addressed SourceAssets.
+
+    Shared by the ``source_files`` and ``mapping_files`` resolution paths.
+    Every file is backed by a REAL DownloadAttempt recorded on the
+    RunContext (A2c) so the asset's ``successful_attempt_id`` resolves to a
+    persisted attempt and the publication provenance chain is closed.
+    Raises ``FileNotFoundError``/``OSError`` when a path does not resolve —
+    the caller turns that into a retryable error.
+    """
+
+    assets: dict[str, SourceAsset] = {}
+    paths: dict[str, Path] = {}
+    for binding_id, relative in files_mapping.items():
+        path = resolve_task_local_file(run_ctx.work_dir, str(relative))
+        checksum = hashlib.sha256(path.read_bytes()).hexdigest()
+        binding = bindings_by_id.get(binding_id)
+        now = datetime.now(UTC)
+        attempt = DownloadAttempt(
+            attempt_id=generate_prefixed_uuid("download_attempt"),
+            source_id=binding.source if binding else binding_id,
+            url=f"local://{relative}",
+            status=DownloadStatus.SUCCEEDED,
+            bytes_received=path.stat().st_size,
+            started_at=now,
+            finished_at=now,
+        )
+        run_ctx.record_download_attempt(attempt)
+        assets[binding_id] = SourceAsset(
+            asset_id=asset_id_from_sha256(checksum),
+            kind="source",
+            relative_path=str(relative),
+            sha256=checksum,
+            size_bytes=path.stat().st_size,
+            media_type=_infer_media_type(path),
+            source_id=binding_id,
+            successful_attempt_id=attempt.attempt_id,
+            data_level=DataLevel.REPOSITORY_PROCESSED,
+        )
+        paths[binding_id] = path
+    return assets, paths
+
+
 @function_tool(
     name_override="execute_dataset_build",
     description_override=(
@@ -292,13 +342,18 @@ async def _acquire_workflow_recipe_bindings(
         "validate profile -> publish) through the execution kernel and "
         "publishes an immutable version with a supersedes chain. "
         "Prefer this for expression-data builds when the required source files "
-        "have already been downloaded (e.g. GDC/Xena matrices)."
+        "have already been downloaded (e.g. GDC/Xena matrices). "
+        "For probe-platform (microarray) GEO bindings, pass the GPL platform "
+        "annotation file downloaded by download_geo_platform_annotation via "
+        "the optional mapping_files parameter (JSON {binding_id: annotation "
+        "path}) so probe rows map to genes."
     ),
 )
 async def execute_dataset_build(
     ctx: RunContextWrapper[RunContext],
     spec: str,
     source_files: str,
+    mapping_files: str = "{}",
 ) -> str:
     """Run one V2 dataset build over already-acquired source files.
 
@@ -308,6 +363,10 @@ async def execute_dataset_build(
             merge_strategy, validation_profile_ref, ...).
         source_files: JSON object mapping binding_id to a workdir-relative
             file path for every source binding.
+        mapping_files: optional JSON object mapping binding_id to a
+            workdir-relative GPL platform annotation file (probe→gene table)
+            for a probe-platform binding — the probe mapper consumes it so
+            probe rows can be re-namespaced to gene symbols.
 
     Returns:
         JSON string with status, build outcome, publication_id, row counts
@@ -336,6 +395,17 @@ async def execute_dataset_build(
             {
                 "status": "invalid_input",
                 "message": f"could not parse spec/source_files: {exc}",
+                "retryable": False,
+            },
+            ensure_ascii=False,
+        )
+    try:
+        mapping_mapping = json.loads(mapping_files)
+    except (ValueError, json.JSONDecodeError) as exc:
+        return json.dumps(
+            {
+                "status": "invalid_input",
+                "message": f"could not parse mapping_files: {exc}",
                 "retryable": False,
             },
             ensure_ascii=False,
@@ -407,13 +477,6 @@ async def execute_dataset_build(
             ensure_ascii=False,
         )
 
-    # Resolve files and build content-addressed SourceAssets. A2c: every
-    # pre-acquired source file is backed by a REAL DownloadAttempt recorded on
-    # the RunContext (status=succeeded), so the SourceAsset's
-    # ``successful_attempt_id`` resolves to a persisted attempt and the
-    # publication provenance chain is closed — never a bare generated uuid.
-    assets: dict[str, SourceAsset] = {}
-    paths: dict[str, Path] = {}
     # Phase 5 T7: the per-binding fan-out outcomes map is shared by the
     # runner (records rejections), the executor (skips phase B when every
     # binding is rejected) and this tool (classification). Created before
@@ -422,39 +485,46 @@ async def execute_dataset_build(
     bindings_by_id = {
         binding.binding_id: binding for binding in build_spec.source_bindings
     }
+    if not isinstance(mapping_mapping, dict):
+        return json.dumps(
+            {
+                "status": "invalid_input",
+                "message": "mapping_files must be a JSON object {binding_id: path}",
+                "retryable": False,
+            },
+            ensure_ascii=False,
+        )
+    unknown_mapping_bindings = sorted(set(mapping_mapping) - binding_ids)
+    if unknown_mapping_bindings:
+        return json.dumps(
+            {
+                "status": "invalid_input",
+                "message": (
+                    "mapping_files reference unknown bindings: "
+                    + ", ".join(unknown_mapping_bindings)
+                ),
+                "retryable": False,
+            },
+            ensure_ascii=False,
+        )
     try:
-        for binding_id, relative in files_mapping.items():
-            path = resolve_task_local_file(run_ctx.work_dir, str(relative))
-            checksum = hashlib.sha256(path.read_bytes()).hexdigest()
-            binding = bindings_by_id.get(binding_id)
-            now = datetime.now(UTC)
-            attempt = DownloadAttempt(
-                attempt_id=generate_prefixed_uuid("download_attempt"),
-                source_id=binding.source if binding else binding_id,
-                url=f"local://{relative}",
-                status=DownloadStatus.SUCCEEDED,
-                bytes_received=path.stat().st_size,
-                started_at=now,
-                finished_at=now,
-            )
-            run_ctx.record_download_attempt(attempt)
-            assets[binding_id] = SourceAsset(
-                asset_id=asset_id_from_sha256(checksum),
-                kind="source",
-                relative_path=str(relative),
-                sha256=checksum,
-                size_bytes=path.stat().st_size,
-                media_type=_infer_media_type(path),
-                source_id=binding_id,
-                successful_attempt_id=attempt.attempt_id,
-                data_level=DataLevel.REPOSITORY_PROCESSED,
-            )
-            paths[binding_id] = path
+        assets, paths = _resolve_local_assets(
+            run_ctx,
+            files_mapping,
+            bindings_by_id,
+            role="source",
+        )
+        mapping_assets, mapping_paths = _resolve_local_assets(
+            run_ctx,
+            mapping_mapping,
+            bindings_by_id,
+            role="mapping",
+        )
     except (FileNotFoundError, OSError) as exc:
         return json.dumps(
             {
                 "status": "error",
-                "message": f"could not resolve a source file: {exc}",
+                "message": f"could not resolve a file: {exc}",
                 "retryable": True,
             },
             ensure_ascii=False,
@@ -490,6 +560,8 @@ async def execute_dataset_build(
         ),
         source_assets=assets,
         source_paths=paths,
+        mapping_assets=mapping_assets,
+        mapping_paths=mapping_paths,
         output_dir=output_dir,
         cancellation_requested=run_ctx.cancellation_requested,
         pending_check=lambda: run_ctx.main_input_pending,
@@ -530,6 +602,7 @@ async def execute_dataset_build(
         plan=plan,
         run_operation=runner,
         source_assets=assets,
+        mapping_assets=mapping_assets,
         parameter_scope=parameter_scope,
         per_binding_outcomes=per_binding_outcomes,
         cancellation_requested=run_ctx.cancellation_requested,

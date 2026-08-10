@@ -91,6 +91,17 @@ def test_describe_geo_is_mandatory_vetting_gate_before_pipeline() -> None:
     assert "AdapterParams" in INSTRUCTIONS
 
 
+def test_instructions_require_gpl_annotation_via_mapping_files_for_probe_builds() -> None:
+    """REVIEW_2026-08-09 §7.1 P0: probe 平台（微阵列）的基因级构建必须在
+    prompt 中要求先下载 GPL 平台注释，并经 execute_dataset_build 的
+    mapping_files 参数传入；无注释时不得用 probe 数据冒充基因级结果。"""
+    from app.agent_loop.agent import INSTRUCTIONS
+
+    assert "download_geo_platform_annotation" in INSTRUCTIONS
+    assert "mapping_files" in INSTRUCTIONS
+    assert "probe_release.v1" in INSTRUCTIONS
+
+
 # ---------------------------------------------------------------------------
 # C1/N1: SDK callback → shared resolver → estimator integration
 # ---------------------------------------------------------------------------

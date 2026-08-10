@@ -2053,6 +2053,8 @@ async def _run_executor_with_paths(
         plan=plan,
         run_operation=runner,
         per_binding_outcomes=per_binding_outcomes,
+        source_assets=assets,
+        mapping_assets=mapping_assets,
         implementation_versions={op.operation_id: "1.0.0" for op in plan},
     )
     outcome = await executor.run()
@@ -2344,6 +2346,47 @@ async def test_t7_gene_required_full_coverage_publishes_gene_primary(
     assert len(rows) == 2
     assert {row["gene_id_namespace"] for row in rows} == {"gene_symbol"}
     assert any((output_dir / "publish").glob("build_runner_test_*"))
+
+
+@pytest.mark.asyncio
+async def test_mapping_asset_change_invalidates_canonicalize_checkpoint(
+    tmp_path: Path,
+) -> None:
+    """P0 wiring (REVIEW_2026-08-09 §7.1): the GPL annotation asset joins the
+    executor input digest, so re-running the same build with a different
+    annotation file must NOT reuse the stale canonicalize checkpoint — the
+    published gene rows reflect the NEW annotation."""
+    matrix = tmp_path / "probe_matrix.txt.gz"
+    _write_series_matrix(matrix, [("PROBE1", "1.5", "2.0")])
+    annotation_a = tmp_path / "annot_a.txt.gz"
+    _write_platform_annotation(annotation_a, {"PROBE1": "TP53"})
+    annotation_b = tmp_path / "annot_b.txt.gz"
+    _write_platform_annotation(annotation_b, {"PROBE1": "BRCA1"})
+
+    per_binding_a: dict = {}
+    outcome_a, output_dir, _ = await _run_executor_with_paths(
+        tmp_path,
+        [_geo_binding()],
+        {"binding_geo": matrix},
+        per_binding_outcomes=per_binding_a,
+        mapping_paths={"binding_geo": annotation_a},
+    )
+    assert outcome_a.status == "completed"
+    assert {row["gene_id"] for row in _primary_rows(output_dir)} == {"TP53"}
+
+    # Second run: same source matrix + same build identity (state dir
+    # reused), but a different annotation — the changed mapping asset must
+    # invalidate the canonicalize checkpoint so the primary reflects it.
+    per_binding_b: dict = {}
+    outcome_b, output_dir_b, _ = await _run_executor_with_paths(
+        tmp_path,
+        [_geo_binding()],
+        {"binding_geo": matrix},
+        per_binding_outcomes=per_binding_b,
+        mapping_paths={"binding_geo": annotation_b},
+    )
+    assert outcome_b.status == "completed"
+    assert {row["gene_id"] for row in _primary_rows(output_dir_b)} == {"BRCA1"}
 
 
 @pytest.mark.asyncio
