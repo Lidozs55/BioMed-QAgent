@@ -53,7 +53,7 @@ BROWSER_HEADERS: dict[str, str] = {
 # Rate limiting: 2s between requests (project_memory L11)
 DEFAULT_RATE_LIMIT_SECONDS = 2.0
 MAX_CRAWLER_RESPONSE_BYTES = 10 * 1024 * 1024
-MAX_CRAWLER_DOWNLOAD_BYTES = 100 * 1024 * 1024
+MAX_CRAWLER_DOWNLOAD_BYTES = 4096 * 1024 * 1024  # 4 GiB: dataset-scale file downloads
 MAX_CRAWLER_REDIRECTS = 10
 
 

@@ -298,7 +298,7 @@ async def test_download_geo_default_cap_accepts_large_series_matrix(
     matrices.  GSE33000's matrix is 112,099,269 bytes (~107 MiB) — above the
     old 100 MiB default, so download_geo failed with
     ``declared content length exceeds maximum`` and the AD/HD/control build
-    could not fetch its source.  The default is now 1024 MiB; the bounded
+    could not fetch its source.  The default is now 4096 MiB; the bounded
     download guard itself is covered by
     test_download_geo_explicit_cap_still_rejects_oversize."""
     import gzip
