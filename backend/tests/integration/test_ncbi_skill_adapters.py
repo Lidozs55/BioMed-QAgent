@@ -291,6 +291,30 @@ async def test_download_geo_unsupported_file_type_lists_valid_values(
     assert "matrix, soft, suppl" in payload["error"]
 
 
+def test_matrix_has_data_table_positive_and_negative(tmp_path: Path) -> None:
+    """K3: the series-matrix content pre-check detects a real expression table
+    and rejects a metadata-only gzip.  (docs/REVIEW_2026-08-10 §5.1 T2.)"""
+    import gzip
+
+    from app.skills.builtin.acquisition.geo import _matrix_has_data_table
+
+    with_table = tmp_path / "with_table.txt.gz"
+    with_table.write_bytes(
+        gzip.compress(
+            b'!Series_title = "x"\n'
+            b'!series_matrix_table_begin\n'
+            b'"ID_REF"\t"GSM1"\t"GSM2"\n'
+        )
+    )
+    metadata_only = tmp_path / "meta_only.txt.gz"
+    metadata_only.write_bytes(
+        gzip.compress(b'!Series_title = "x"\n!Sample_data_row_count = 0\n')
+    )
+
+    assert _matrix_has_data_table(with_table) is True
+    assert _matrix_has_data_table(metadata_only) is False
+
+
 @pytest.mark.asyncio
 async def test_child_download_geo_commits_asset_outside_child_staging(
     tmp_path: Path,

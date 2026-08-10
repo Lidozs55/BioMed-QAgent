@@ -543,6 +543,59 @@ def test_execute_dataset_build_all_empty_mixed_sources_is_no_data(tmp_path: Path
     assert result.get("publication_id") is None
 
 
+def test_no_data_envelope_carries_binding_failures_and_actionable_next_action() -> None:
+    """K2: a metadata-only series matrix rejection surfaces per-binding failure
+    detail and an actionable next action instead of the generic
+    "检查数据源可用性" message.  (docs/REVIEW_2026-08-10-task-9ce0124f.md §5.3.)"""
+    from app.datasets.contracts import BindingFailureDetail
+    from app.pipeline.dataset_build_tool import _no_data_envelope
+
+    envelope = _no_data_envelope(
+        ["binding_geo_ad"],
+        ["no_primary_data"],
+        binding_failures=[
+            BindingFailureDetail(
+                binding_id="binding_geo_ad",
+                reason_code="no_primary_data",
+                message="series matrix contains no data rows",
+            )
+        ],
+    )
+
+    assert envelope.status == "no_data"
+    assert envelope.valid_row_count == 0
+    assert envelope.rejected_sources == ["binding_geo_ad"]
+    assert len(envelope.binding_failures) == 1
+    detail = envelope.binding_failures[0]
+    assert detail.binding_id == "binding_geo_ad"
+    assert detail.message == "series matrix contains no data rows"
+    assert "soft" in envelope.recommended_next_action
+    assert "检查数据源可用性" not in envelope.recommended_next_action
+
+
+def test_no_data_envelope_keeps_generic_action_when_cause_unknown() -> None:
+    """K2: failures that do not match a known root cause keep the generic
+    next action; binding_failures still carry the per-binding detail."""
+    from app.datasets.contracts import BindingFailureDetail
+    from app.pipeline.dataset_build_tool import _no_data_envelope
+
+    envelope = _no_data_envelope(
+        ["binding_x"],
+        ["no_primary_data"],
+        binding_failures=[
+            BindingFailureDetail(
+                binding_id="binding_x",
+                reason_code="no_primary_data",
+                message="source yielded zero valid rows after canonicalization",
+            )
+        ],
+    )
+
+    assert envelope.binding_failures[0].binding_id == "binding_x"
+    assert envelope.binding_failures[0].reason_code == "no_primary_data"
+    assert envelope.recommended_next_action == "检查数据源可用性或调整查询后重试。"
+
+
 @pytest.mark.asyncio
 async def test_execute_dataset_build_refuses_publication_when_correction_pending_mid_build(
     tmp_path: Path,
