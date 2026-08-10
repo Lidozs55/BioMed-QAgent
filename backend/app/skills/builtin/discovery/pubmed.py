@@ -282,7 +282,7 @@ async def download_supplementary_adapter(
     pmid: str,
     *,
     services: NcbiServices,
-    max_size_mb: int = 50,
+    max_size_mb: int = 4096,
 ) -> str:
     """Download PMC supplementary materials through ``NcbiServices``.
 
@@ -499,7 +499,7 @@ async def download_supplementary_adapter(
 async def download_supplementary(
     ctx: RunContextWrapper[Any],
     pmid: str,
-    max_size_mb: int = 50,
+    max_size_mb: int = 4096,
 ) -> str:
     """Download supplementary materials from PMC for a given PMID.
 
