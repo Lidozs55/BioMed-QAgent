@@ -501,6 +501,301 @@ MODEL_PARAM_SPECS: dict[str, dict[str, list[ParameterSpec]]] = {
 }
 
 
+def _dashscope_chat_specs(
+    *,
+    thinking_default: bool = False,
+    thinking_budget_max: int | None = None,
+    reasoning_effort: bool = False,
+    preserve_thinking: bool = False,
+    pure_thinking: bool = False,
+    vision: bool = False,
+    extra: list[ParameterSpec] | None = None,
+) -> list[ParameterSpec]:
+    """Build a DashScope-compatible chat parameter set for one model family.
+
+    Parameter support follows the official Model Studio docs (2026-08):
+    ``enable_thinking`` is the thinking toggle, ``thinking_budget`` caps the
+    reasoning tokens (limits differ per family), ``reasoning_effort`` is
+    qwen3.8-max-only and conflicts with ``thinking_budget``, and
+    ``preserve_thinking`` carries reasoning across turns.
+    """
+
+    specs: list[ParameterSpec] = [
+        _spec("max_tokens", "最大输出 Tokens", "integer", default=8192, min=1, max=262144),
+        _spec(
+            "temperature",
+            "Temperature",
+            "number",
+            default=0.6 if vision else 0.7,
+            min=0,
+            max=2,
+        ),
+        _spec("top_p", "Top P", "number", default=0.95 if vision else 1.0, min=0, max=1),
+    ]
+    if vision:
+        specs.append(
+            _spec("top_k", "Top K", "integer", default=20, min=1, max=100, advanced=True)
+        )
+        specs.append(
+            _spec(
+                "presence_penalty",
+                "存在惩罚",
+                "number",
+                default=0,
+                min=-2,
+                max=2,
+                advanced=True,
+            )
+        )
+        specs.append(
+            _spec("do_sample", "随机采样", "boolean", default=True, advanced=True)
+        )
+        specs.append(_spec("seed", "随机种子", "integer", min=0, advanced=True))
+    else:
+        specs.append(_spec("top_k", "Top K", "integer", min=1, max=100, advanced=True))
+    specs.append(
+        _spec(
+            "repetition_penalty",
+            "重复惩罚",
+            "number",
+            default=1.0,
+            min=1.0,
+            max=2.0,
+            advanced=True,
+        )
+    )
+    specs.append(_spec("stop", "停止词（多个用英文逗号分隔）", "string", advanced=True))
+    has_thinking = (
+        thinking_default
+        or thinking_budget_max is not None
+        or reasoning_effort
+        or preserve_thinking
+        or pure_thinking
+    )
+    if has_thinking:
+        if not pure_thinking:
+            specs.append(
+                _spec(
+                    "enable_thinking",
+                    "思考模式",
+                    "boolean",
+                    default=thinking_default,
+                    advanced=True,
+                )
+            )
+        if thinking_budget_max is not None:
+            specs.append(
+                _spec(
+                    "thinking_budget",
+                    "思考预算（Tokens）",
+                    "integer",
+                    min=0,
+                    max=thinking_budget_max,
+                    advanced=True,
+                )
+            )
+        if reasoning_effort:
+            specs.append(
+                _spec(
+                    "reasoning_effort",
+                    "思考强度",
+                    "select",
+                    default="xhigh",
+                    options=[
+                        {"value": "low", "label": "低"},
+                        {"value": "medium", "label": "中"},
+                        {"value": "xhigh", "label": "xhigh"},
+                    ],
+                    description=(
+                        "qwen3.8-max 专属（默认 xhigh）；与 thinking_budget 互斥，"
+                        "同时传入会报错。"
+                    ),
+                    advanced=True,
+                )
+            )
+        if preserve_thinking:
+            specs.append(
+                _spec(
+                    "preserve_thinking",
+                    "保留思考过程",
+                    "boolean",
+                    default=True,
+                    advanced=True,
+                )
+            )
+    specs.append(_spec("enable_search", "联网搜索", "boolean", default=False, advanced=True))
+    specs.append(_spec("stream", "流式输出", "boolean", default=True, advanced=True))
+    if extra:
+        specs.extend(spec.model_copy(deep=True) for spec in extra)
+    return specs
+
+
+_QWEN38_EXTRA_SPECS = [
+    _spec(
+        "presence_penalty",
+        "存在惩罚",
+        "number",
+        default=0,
+        min=-2,
+        max=2,
+        advanced=True,
+    ),
+    _spec("seed", "随机种子", "integer", min=0, advanced=True),
+    _spec(
+        "response_format",
+        "响应格式",
+        "select",
+        default="text",
+        options=[
+            {"value": "text", "label": "文本"},
+            {"value": "json_object", "label": "JSON 对象"},
+        ],
+        advanced=True,
+    ),
+    _spec(
+        "tool_choice",
+        "工具调用",
+        "select",
+        default="auto",
+        options=[
+            {"value": "auto", "label": "自动"},
+            {"value": "none", "label": "禁用"},
+            {"value": "required", "label": "必须调用"},
+        ],
+        advanced=True,
+    ),
+]
+
+_IMAGE_GEN_SPECS = [
+    _spec("size", "图像尺寸", "string", default="1024*1024"),
+    _spec("n", "生成数量", "integer", default=1, min=1, max=4),
+    _spec("negative_prompt", "反向提示词", "string", advanced=True),
+    _spec("prompt_extend", "提示词智能改写", "boolean", default=True, advanced=True),
+    _spec("watermark", "添加水印", "boolean", default=False, advanced=True),
+    _spec("seed", "随机种子", "integer", min=0, advanced=True),
+]
+
+_EMBEDDING_SPECS = [
+    _spec(
+        "dimension",
+        "向量维度",
+        "integer",
+        default=1024,
+        min=64,
+        max=2048,
+        description="text-embedding-v4 支持 64/128/256/512/768/1024/1536/2048。",
+    ),
+]
+
+_ASR_SPECS: list[ParameterSpec] = []
+_MUSIC_SPECS: list[ParameterSpec] = []
+
+
+def _keyword_model_specs(
+    provider_key: str, model_key: str
+) -> list[ParameterSpec] | None:
+    """Return a non-chat family profile for DashScope by model-name keywords."""
+
+    if provider_key != "dashscope":
+        return None
+    if "text-embedding" in model_key or "embedding" in model_key:
+        return _EMBEDDING_SPECS
+    if model_key.startswith(("qwen-image", "wan")):
+        return _IMAGE_GEN_SPECS
+    if model_key.startswith(("qwen-audio", "fun-asr")):
+        return _ASR_SPECS
+    if model_key.startswith("fun-music"):
+        return _MUSIC_SPECS
+    return None
+
+
+MODEL_PARAM_PREFIXES: dict[str, dict[str, list[ParameterSpec]]] = {
+    "dashscope": {
+        # Qwen3.8: reasoning_effort family (default xhigh).
+        "qwen3.8": _dashscope_chat_specs(
+            thinking_default=True,
+            reasoning_effort=True,
+            preserve_thinking=True,
+            extra=_QWEN38_EXTRA_SPECS,
+        ),
+        # Qwen3.7: thinking_budget up to 256K, preserve_thinking supported.
+        "qwen3.7": _dashscope_chat_specs(
+            thinking_default=True,
+            thinking_budget_max=262144,
+            preserve_thinking=True,
+        ),
+        # Qwen3.6: thinking_budget up to 128K.
+        "qwen3.6": _dashscope_chat_specs(
+            thinking_default=True,
+            thinking_budget_max=131072,
+            preserve_thinking=True,
+        ),
+        "qwen3.5": _dashscope_chat_specs(
+            thinking_default=True,
+            thinking_budget_max=131072,
+        ),
+        # Qwen3 commercial max series: thinking off by default.
+        "qwen3-max": _dashscope_chat_specs(
+            thinking_default=False,
+            thinking_budget_max=131072,
+        ),
+        "qwen3-vl": _dashscope_chat_specs(
+            thinking_default=True,
+            thinking_budget_max=131072,
+            vision=True,
+        ),
+        "qwen3-coder": _dashscope_chat_specs(
+            thinking_default=True,
+            thinking_budget_max=131072,
+        ),
+        # Open-weight Qwen3: thinking on by default.
+        "qwen3": _dashscope_chat_specs(
+            thinking_default=True,
+            thinking_budget_max=131072,
+        ),
+        # Pure-thinking variants (thinking cannot be toggled).
+        "qwen3-next-80b-a3b-thinking": _dashscope_chat_specs(
+            pure_thinking=True,
+            thinking_budget_max=131072,
+        ),
+        "qwen3-235b-a22b-thinking-2507": _dashscope_chat_specs(
+            pure_thinking=True,
+            thinking_budget_max=131072,
+        ),
+        "qwen3-30b-a3b-thinking-2507": _dashscope_chat_specs(
+            pure_thinking=True,
+            thinking_budget_max=131072,
+        ),
+        "qwq": _dashscope_chat_specs(pure_thinking=True),
+        # Legacy commercial chat families: thinking off by default.
+        "qwen-max": _dashscope_chat_specs(
+            thinking_default=False,
+            thinking_budget_max=131072,
+        ),
+        "qwen-plus": _dashscope_chat_specs(
+            thinking_default=False,
+            thinking_budget_max=131072,
+        ),
+        "qwen-flash": _dashscope_chat_specs(
+            thinking_default=False,
+            thinking_budget_max=131072,
+        ),
+        "qwen-turbo": _dashscope_chat_specs(
+            thinking_default=False,
+            thinking_budget_max=131072,
+        ),
+        # Basic chat families.
+        "qwen2.5-vl": _dashscope_chat_specs(),
+        "qwen-vl": _dashscope_chat_specs(),
+        "qwen-omni": _dashscope_chat_specs(),
+        "qwen2-audio": _dashscope_chat_specs(),
+        "qwen2.5": _dashscope_chat_specs(),
+        "qwen2-": _dashscope_chat_specs(),
+        "qwen-coder": _dashscope_chat_specs(),
+    },
+}
+
+
 def param_specs_for(provider_id: str, model_id: str | None = None) -> list[ParameterSpec]:
     """Return the parameter profile for a provider, falling back to all params.
 
@@ -512,9 +807,17 @@ def param_specs_for(provider_id: str, model_id: str | None = None) -> list[Param
     key = provider_id.strip().lower()
     if model_id:
         model_key = model_id.strip().lower()
-        model_specs = MODEL_PARAM_SPECS.get(key, {}).get(model_key)
-        if model_specs is not None:
-            return [spec.model_copy(deep=True) for spec in model_specs]
+        exact_specs = MODEL_PARAM_SPECS.get(key, {}).get(model_key)
+        if exact_specs is not None:
+            return [spec.model_copy(deep=True) for spec in exact_specs]
+        keyword_specs = _keyword_model_specs(key, model_key)
+        if keyword_specs is not None:
+            return [spec.model_copy(deep=True) for spec in keyword_specs]
+        prefix_map = MODEL_PARAM_PREFIXES.get(key, {})
+        for prefix in sorted(prefix_map, key=len, reverse=True):
+            if model_key.startswith(prefix):
+                matched = prefix_map[prefix]
+                return [spec.model_copy(deep=True) for spec in matched]
     if key in PROFILE_PROVIDER_SPECS:
         return [spec.model_copy(deep=True) for spec in PROFILE_PROVIDER_SPECS[key]]
     return [spec.model_copy(deep=True) for spec in FALLBACK_PARAM_SPECS]
@@ -523,6 +826,7 @@ def param_specs_for(provider_id: str, model_id: str | None = None) -> list[Param
 __all__ = [
     "FALLBACK_PARAM_SPECS",
     "MODEL_PARAM_SPECS",
+    "MODEL_PARAM_PREFIXES",
     "PROFILE_PROVIDER_SPECS",
     "param_specs_for",
 ]

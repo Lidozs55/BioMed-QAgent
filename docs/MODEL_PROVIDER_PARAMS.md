@@ -25,6 +25,14 @@
   `reasoning_effort`/`tool_choice` but not `temperature` (fixed); `grok-4.5`
   has no presence/frequency penalty or `stop` (errors on reasoning models);
   `deepseek-reasoner` drops temperature/top_p/penalties/logprobs.
+- DashScope families are covered by `MODEL_PARAM_PREFIXES` (longest-prefix
+  match, plus keyword rules for non-chat models): Qwen3.8 uses
+  `reasoning_effort` (`low/medium/xhigh`, default `xhigh`, mutually exclusive
+  with `thinking_budget`), Qwen3.7/3.6/3.5 use `enable_thinking` +
+  `thinking_budget` (caps 256K/128K), Qwen3-VL adds `presence_penalty` /
+  `do_sample` / `seed`, image models (`qwen-image-*`, `wan*`) expose
+  `size`/`n`/`negative_prompt`/`prompt_extend`/`watermark`, embeddings expose
+  `dimension`, and ASR/music models expose no chat parameters at all.
 - Precedence in `ProviderModelStore.get_param_specs`: DB model-pattern
   override → code model profile → DB generic provider row → code provider
   profile → all-params fallback.

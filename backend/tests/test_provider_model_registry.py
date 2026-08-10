@@ -324,6 +324,55 @@ def test_list_models_refreshes_stale_param_specs(tmp_path: Path) -> None:
     assert [spec.key for spec in stored.param_specs] == ["max_tokens"]
 
 
+def test_dashscope_model_family_param_specs() -> None:
+    """DashScope families expose only the parameters they officially support."""
+    qwen38 = {spec.key: spec for spec in param_specs_for("dashscope", "qwen3.8-max")}
+    assert "reasoning_effort" in qwen38
+    assert {option["value"] for option in qwen38["reasoning_effort"].options} == {
+        "low",
+        "medium",
+        "xhigh",
+    }
+    assert qwen38["reasoning_effort"].default == "xhigh"
+    assert {"enable_thinking", "preserve_thinking"} <= set(qwen38)
+    # Official docs: reasoning_effort conflicts with thinking_budget.
+    assert "thinking_budget" not in qwen38
+    assert {"presence_penalty", "response_format", "tool_choice"} <= set(qwen38)
+
+    qwen37 = {spec.key: spec for spec in param_specs_for("dashscope", "qwen3.7-flash")}
+    assert "enable_thinking" in qwen37
+    assert "thinking_budget" in qwen37
+    assert "reasoning_effort" not in qwen37
+    assert qwen37["enable_thinking"].default is True
+
+    qwen3_max = {spec.key: spec for spec in param_specs_for("dashscope", "qwen3-max")}
+    assert qwen3_max["enable_thinking"].default is False
+
+    qwen_vl = {
+        spec.key: spec for spec in param_specs_for("dashscope", "qwen3-vl-8b-instruct")
+    }
+    assert {"presence_penalty", "do_sample", "seed"} <= set(qwen_vl)
+    assert "enable_thinking" in qwen_vl
+
+    qwq = {spec.key: spec for spec in param_specs_for("dashscope", "qwq-plus")}
+    assert "enable_thinking" not in qwq
+    assert "max_tokens" in qwq
+
+    image = {
+        spec.key: spec for spec in param_specs_for("dashscope", "qwen-image-3.0-pro")
+    }
+    assert {"size", "n", "negative_prompt", "prompt_extend", "watermark"} <= set(image)
+    assert "temperature" not in image
+
+    embedding = {
+        spec.key: spec
+        for spec in param_specs_for("dashscope", "qwen3.7-text-embedding")
+    }
+    assert set(embedding) == {"dimension"}
+
+    assert param_specs_for("dashscope", "qwen-audio-3.0-asr-flash") == []
+
+
 def test_store_model_update_merges_and_delete_cascades(tmp_path: Path) -> None:
     store = make_store(tmp_path)
     provider = store.create_provider(
