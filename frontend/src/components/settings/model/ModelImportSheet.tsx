@@ -138,6 +138,7 @@ export function ModelImportSheet({
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [multiSelect, setMultiSelect] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [params, setParams] = useState<Record<string, unknown>>({});
   const [saving, setSaving] = useState(false);
@@ -167,6 +168,7 @@ export function ModelImportSheet({
     setSelectedId(null);
     setExpandedId(null);
     setSelectedIds(new Set());
+    setMultiSelect(false);
     setParams({});
     setManualOpen(false);
     setManualDraft(EMPTY_MANUAL_DRAFT);
@@ -524,6 +526,19 @@ export function ModelImportSheet({
             {/* Left: provider returned model list */}
             <div className="flex min-h-0 flex-col overflow-hidden rounded-xl border bg-card">
               <div className="flex shrink-0 items-center gap-2 border-b p-3">
+                <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    className="size-3.5 cursor-pointer"
+                    checked={multiSelect}
+                    onChange={(event) => {
+                      setMultiSelect(event.target.checked);
+                      if (!event.target.checked) setSelectedIds(new Set());
+                    }}
+                    aria-label="复选"
+                  />
+                  复选
+                </label>
                 <div className="relative min-w-0 flex-1">
                   <MagnifyingGlassIcon
                     data-icon="inline-start"
@@ -586,13 +601,15 @@ export function ModelImportSheet({
                             active && "bg-accent",
                           )}
                         >
-                          <input
-                            type="checkbox"
-                            className="size-4 shrink-0 cursor-pointer"
-                            checked={selectedIds.has(item.id)}
-                            onChange={() => toggleSelect(item.id)}
-                            aria-label={`选择 ${item.name}`}
-                          />
+                          {multiSelect && (
+                            <input
+                              type="checkbox"
+                              className="size-4 shrink-0 cursor-pointer"
+                              checked={selectedIds.has(item.id)}
+                              onChange={() => toggleSelect(item.id)}
+                              aria-label={`选择 ${item.name}`}
+                            />
+                          )}
                           <button
                             type="button"
                             className="min-w-0 flex-1 truncate text-left"

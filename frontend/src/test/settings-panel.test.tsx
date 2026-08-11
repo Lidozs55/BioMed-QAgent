@@ -499,6 +499,11 @@ describe("SettingsPanel model registry", () => {
     fireEvent.click(addModel);
 
     await screen.findByText("DeepSeek Chat");
+    // 行级复选框默认隐藏，勾选“复选”后才显示。
+    expect(
+      screen.queryByRole("checkbox", { name: "选择 DeepSeek Chat" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("checkbox", { name: "复选" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "选择 DeepSeek Chat" }));
     fireEvent.click(screen.getByRole("button", { name: "导入所选 (1)" }));
 
