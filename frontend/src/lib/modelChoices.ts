@@ -1,70 +1,21 @@
-import type { ModelInfo } from "@/hooks/useAPI";
+import type { ManagedModelInfo, ModelInfo } from "@/hooks/useAPI";
 
 /**
- * Small offline fallback shown only when the real models endpoint is
- * unreachable/empty (``GET /api/v1/models`` proxy): keeps the searchable
- * selector usable instead of a dead-end. Never a substitute for the fetched
- * list — the settings dialog is the authoritative source.
+ * Map the configured managed-model list (``GET /api/v1/model-registry/models``)
+ * into the workspace model selector choices.  The selector id is the real
+ * model identifier (``model_id``) so switching persists ``model_name``; the
+ * active model is marked as recommended.
  */
-export const OFFLINE_MODEL_FALLBACK: readonly ModelInfo[] = [
-  {
-    id: "qwen-plus",
-    name: "Qwen Plus",
-    description: "离线备选模型",
-    context_window: 131072,
-    suggested_max_tokens: 8192,
-    capabilities: { text: true, image: true, video: false, audio: false },
-    recommended: false,
-    api_available: true,
+export function managedModelsToChoices(models: ManagedModelInfo[]): ModelInfo[] {
+  return models.map((model) => ({
+    id: model.model_id,
+    name: model.name || model.model_id,
+    description: `${model.provider_name} · ${model.model_id}`,
+    context_window: model.context_window ?? 131072,
+    suggested_max_tokens: model.suggested_max_tokens ?? model.max_output_tokens ?? 8192,
+    capabilities: model.capabilities,
+    recommended: model.active,
+    api_available: model.provider_api_key_configured,
     capability_source: "catalog",
-  },
-  {
-    id: "qwen-max",
-    name: "Qwen Max",
-    description: "离线备选模型",
-    context_window: 131072,
-    suggested_max_tokens: 8192,
-    capabilities: { text: true, image: true, video: false, audio: false },
-    recommended: false,
-    api_available: true,
-    capability_source: "catalog",
-  },
-  {
-    id: "qwen-turbo",
-    name: "Qwen Turbo",
-    description: "离线备选模型",
-    context_window: 131072,
-    suggested_max_tokens: 8192,
-    capabilities: { text: true, image: true, video: false, audio: false },
-    recommended: false,
-    api_available: true,
-    capability_source: "catalog",
-  },
-  {
-    id: "qwq-plus",
-    name: "QWQ Plus",
-    description: "离线备选模型",
-    context_window: 131072,
-    suggested_max_tokens: 8192,
-    capabilities: { text: true, image: true, video: false, audio: false },
-    recommended: false,
-    api_available: true,
-    capability_source: "catalog",
-  },
-];
-
-/**
- * Resolve which model list the searchable selector shows. The fetched
- * endpoint list wins; when the API key is configured but the endpoint is
- * unreachable/empty the small offline fallback keeps the box usable.
- */
-export function resolveModelChoices(
-  models: ModelInfo[] | undefined,
-  hasApiKey: boolean,
-): { choices: ModelInfo[]; offline: boolean } {
-  const fetched = models ?? [];
-  if (!hasApiKey || fetched.length > 0) {
-    return { choices: fetched, offline: false };
-  }
-  return { choices: [...OFFLINE_MODEL_FALLBACK], offline: true };
+  }));
 }
