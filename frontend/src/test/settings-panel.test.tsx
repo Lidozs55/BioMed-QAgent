@@ -209,7 +209,7 @@ describe("SettingsPanel model registry", () => {
     const api = mockApi();
     renderSettings(api);
 
-    expect(await screen.findByText("DeepSeek")).toBeInTheDocument();
+    expect((await screen.findAllByText("DeepSeek")).length).toBeGreaterThan(0);
     expect(screen.getAllByText("https://api.deepseek.com/v1").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "添加供应商" })).toBeInTheDocument();
   });
@@ -339,6 +339,8 @@ describe("SettingsPanel model registry", () => {
 
     // Provider is auto-selected and the list is discovered automatically.
     await screen.findByText("DeepSeek Chat");
+    // API 发现且不在目录里的模型，上下文显示“未知”而不是猜测数字。
+    expect(screen.getAllByText("未知").length).toBeGreaterThan(0);
     const importButton = await screen.findByRole("button", { name: "导入" });
     fireEvent.click(importButton);
 
@@ -455,6 +457,73 @@ describe("SettingsPanel model registry", () => {
     await waitFor(() => expect(api.activateManagedModel).toHaveBeenCalledWith("model-1"));
     await waitFor(() => {
       expect(screen.getAllByText(/deepseek-reasoner/).length).toBeGreaterThan(0);
+    });
+  });
+
+  it("edits a maintained model inline without opening the add-model dialog", async () => {
+    const api = mockApi();
+    renderSettings(api);
+
+    const modelRow = (await screen.findByText("DeepSeek Reasoner")).closest("li");
+    expect(modelRow).not.toBeNull();
+    fireEvent.click(within(modelRow as HTMLElement).getByRole("button", { name: "编辑" }));
+    expect(screen.getByRole("button", { name: "保存参数" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "配置 JSON" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("dialog", { name: "添加 / 管理模型" }),
+    ).not.toBeInTheDocument();
+    // 来源标签显示供应商名称，而不是 “API 导入”。
+    expect(screen.queryByText("API 导入")).not.toBeInTheDocument();
+    expect(screen.getAllByText("DeepSeek").length).toBeGreaterThan(0);
+  });
+
+  it("shows a manual-config badge for manually added models", async () => {
+    const api = mockApi({
+      fetchManagedModels: vi
+        .fn()
+        .mockResolvedValue([{ ...TEST_MODELS[0], source: "manual" }]),
+    });
+    renderSettings(api);
+    expect(await screen.findByText("手动配置")).toBeInTheDocument();
+  });
+
+  it("imports selected models via the checkbox in the provider list", async () => {
+    let managed: ManagedModelInfo[] = [];
+    const api = mockApi({
+      fetchManagedModels: vi.fn().mockImplementation(async () => managed),
+      createManagedModel: vi.fn().mockImplementation(async (input) => {
+        const created: ManagedModelInfo = {
+          ...TEST_MODELS[0],
+          id: "model-batch",
+          provider_id: input.provider_id,
+          model_id: input.model_id,
+          name: input.name ?? input.model_id,
+          source: "api",
+        };
+        managed = [created];
+        return created;
+      }),
+    });
+    renderSettings(api);
+
+    const addModel = await screen.findByRole("button", { name: "添加模型" });
+    await waitFor(() => expect(addModel).not.toBeDisabled());
+    fireEvent.click(addModel);
+
+    await screen.findByText("DeepSeek Chat");
+    // 行级复选框默认隐藏，勾选“复选”后才显示。
+    expect(
+      screen.queryByRole("checkbox", { name: "选择 DeepSeek Chat" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("checkbox", { name: "复选" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择 DeepSeek Chat" }));
+    fireEvent.click(screen.getByRole("button", { name: "导入所选 (1)" }));
+
+    await waitFor(() => expect(api.createManagedModel).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.createManagedModel).mock.calls[0]?.[0]).toMatchObject({
+      provider_id: "provider-1",
+      model_id: "deepseek-chat",
+      source: "api",
     });
   });
 

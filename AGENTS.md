@@ -317,6 +317,31 @@ The following checks **must all pass** before pushing a branch **and** before me
 - **Commit message**
   - Format: `[TASK-XXX] summary` or `feat/fix/chore: summary`. Prefer conventional commit message style.
 
+#### 7.4 Parallel Tasks Must Use Separate Worktrees
+
+Multiple agents may work in this repository at the same time and they all
+share the **same working directory**. Never `git switch` the shared branch to
+start a new task — that changes the files every other agent sees and can
+clobber their uncommitted work. Instead, isolate each task in its own
+worktree:
+
+```bash
+# From the repo root: create an isolated workspace for a branch
+git worktree add ../BioMed-QAgent-<branch-name> <branch-name>
+# Work inside the new directory, commit there, then remove it when done
+git -C ../BioMed-QAgent-<branch-name> push -u origin <branch-name>
+git worktree remove ../BioMed-QAgent-<branch-name>
+```
+
+Rules:
+
+- The main working directory keeps the branch the user/other agents are
+  actively using; do not switch it for your own task.
+- Scratch files (`_tmp_*`, test artifacts, build output) belong in your task's
+  worktree, never in the shared directory.
+- Run `git worktree list` before starting and reuse an existing worktree for
+  the same branch instead of creating duplicates.
+
 ### 8. Documentation First
 
 Proactively capture knowledge under `docs/`:
