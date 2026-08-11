@@ -43,8 +43,10 @@ class CooperativeCancellationExecutor:
     class StreamingResult:
         def __init__(self) -> None:
             self.cancel_called = asyncio.Event()
+            self.cancel_modes: list[str] = []
 
         def cancel(self, mode: str) -> None:
+            self.cancel_modes.append(mode)
             self.cancel_called.set()
 
     def __init__(self) -> None:
@@ -85,7 +87,8 @@ async def test_steer_without_active_run_queues_new_run(tmp_path: Path) -> None:
 
         snapshot = await repository.get_snapshot(task_id)
         assert snapshot is not None
-        assert snapshot.runs[-1].input == "注意：补充说明"
+        assert "注意：补充说明" in snapshot.runs[-1].input
+        assert "方向调整" in snapshot.runs[-1].input
         # 注入文本进入模型可见的历史，而不是只做展示。
         session = repository.task_session(task_id)
         model_items = await session.get_items()
@@ -97,7 +100,7 @@ async def test_steer_without_active_run_queues_new_run(tmp_path: Path) -> None:
             for message in page.json()["messages"]
             if message["role"] == "user"
         ]
-        assert "注意：补充说明" in contents
+        assert any("注意：补充说明" in content for content in contents)
 
 
 @pytest.mark.asyncio
@@ -124,6 +127,7 @@ async def test_steer_cancels_active_run_and_starts_new_run(tmp_path: Path) -> No
             json={"text": "转向：先查 README", "expected_run_id": active_run_id},
         )
         assert steered.status_code == 202
+        assert "immediate" in executor._result.cancel_modes
         accepted = TaskRunAccepted.model_validate(steered.json())
         assert accepted.run_id != active_run_id
         await manager.wait_until_idle()
@@ -133,12 +137,12 @@ async def test_steer_cancels_active_run_and_starts_new_run(tmp_path: Path) -> No
         old_run = next(run for run in snapshot.runs if run.run_id == active_run_id)
         assert old_run.status is RunStatus.CANCELLED
         new_run = next(run for run in snapshot.runs if run.run_id == accepted.run_id)
-        assert new_run.input == "转向：先查 README"
+        assert "转向：先查 README" in new_run.input
         events = await repository.list_events(task_id)
         assert any(isinstance(event.payload, RunCancelledPayload) for event in events)
         assert any(
             isinstance(event.payload, RunQueuedPayload)
-            and event.payload.input == "转向：先查 README"
+            and "转向：先查 README" in event.payload.input
             for event in events
         )
         session = repository.task_session(task_id)
