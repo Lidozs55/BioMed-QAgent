@@ -53,6 +53,42 @@ const FONT_FORMATS: Record<string, string> = {
   woff2: "woff2",
 };
 
+const LIGHT_BACKGROUND_OPTIONS = [
+  "#FFFFFF",
+  "#F8FAFC",
+  "#F1F5F9",
+  "#EEF2F7",
+  "#FEF7EE",
+  "#F5F3FF",
+];
+
+const LIGHT_FOREGROUND_OPTIONS = [
+  "#1A1C1F",
+  "#0F172A",
+  "#334155",
+  "#4B5563",
+  "#1F2937",
+  "#3F3F46",
+];
+
+const DARK_BACKGROUND_OPTIONS = [
+  "#181818",
+  "#0F1115",
+  "#111827",
+  "#1E293B",
+  "#1F2937",
+  "#0B0F19",
+];
+
+const DARK_FOREGROUND_OPTIONS = [
+  "#FFFFFF",
+  "#F1F5F9",
+  "#E2E8F0",
+  "#D1D5DB",
+  "#CBD5E1",
+  "#A1A1AA",
+];
+
 function CustomAccentField({
   value,
   onApply,
@@ -383,54 +419,50 @@ export function AppearanceSettingsSection() {
 
       <SettingSection
         title="自定义颜色"
-        description="分别调整浅色 / 深色主题的背景与前景色；留空使用主题默认值。"
+        description="从预设色板中选择浅色 / 深色主题的背景与前景色，也可输入自定义色值；选择“默认”恢复主题默认。"
       >
         <SettingCard>
-          <SettingRow
+          <div className="flex items-center justify-between gap-3 px-5 py-4">
+            <p className="text-sm font-semibold">浅色主题</p>
+            <span className="text-xs text-muted-foreground">
+              默认背景 #FFFFFF · 默认前景 #1A1C1F
+            </span>
+          </div>
+          <ThemeColorPicker
             id="settings-light-background"
-            title="浅色主题背景"
-            description="浅色模式下页面与卡片的底色。"
-            control={
-              <ColorSwatch
-                value={lightColors.background}
-                onChange={(next) => setLightColors({ background: next })}
-                ariaLabel="浅色主题背景色（留空使用默认）"
-              />
-            }
+            label="背景"
+            description="页面与卡片底色"
+            value={lightColors.background}
+            options={LIGHT_BACKGROUND_OPTIONS}
+            onChange={(next) => setLightColors({ background: next })}
           />
-          <SettingRow
-            title="浅色主题前景"
-            description="浅色模式下主要文字颜色。"
-            control={
-              <ColorSwatch
-                value={lightColors.foreground}
-                onChange={(next) => setLightColors({ foreground: next })}
-                ariaLabel="浅色主题前景色（留空使用默认）"
-              />
-            }
+          <ThemeColorPicker
+            label="前景"
+            description="主要文字颜色"
+            value={lightColors.foreground}
+            options={LIGHT_FOREGROUND_OPTIONS}
+            onChange={(next) => setLightColors({ foreground: next })}
           />
-          <SettingRow
+          <div className="flex items-center justify-between gap-3 px-5 py-4">
+            <p className="text-sm font-semibold">深色主题</p>
+            <span className="text-xs text-muted-foreground">
+              默认背景 #181818 · 默认前景 #FFFFFF
+            </span>
+          </div>
+          <ThemeColorPicker
             id="settings-dark-background"
-            title="深色主题背景"
-            description="深色模式下页面与卡片的底色。"
-            control={
-              <ColorSwatch
-                value={darkColors.background}
-                onChange={(next) => setDarkColors({ background: next })}
-                ariaLabel="深色主题背景色（留空使用默认）"
-              />
-            }
+            label="背景"
+            description="页面与卡片底色"
+            value={darkColors.background}
+            options={DARK_BACKGROUND_OPTIONS}
+            onChange={(next) => setDarkColors({ background: next })}
           />
-          <SettingRow
-            title="深色主题前景"
-            description="深色模式下主要文字颜色。"
-            control={
-              <ColorSwatch
-                value={darkColors.foreground}
-                onChange={(next) => setDarkColors({ foreground: next })}
-                ariaLabel="深色主题前景色（留空使用默认）"
-              />
-            }
+          <ThemeColorPicker
+            label="前景"
+            description="主要文字颜色"
+            value={darkColors.foreground}
+            options={DARK_FOREGROUND_OPTIONS}
+            onChange={(next) => setDarkColors({ foreground: next })}
           />
         </SettingCard>
       </SettingSection>
@@ -525,6 +557,74 @@ export function AppearanceSettingsSection() {
           />
         </SettingCard>
       </SettingSection>
+    </div>
+  );
+}
+
+function ThemeColorPicker({
+  id,
+  label,
+  description,
+  value,
+  options,
+  onChange,
+}: {
+  id?: string;
+  label: string;
+  description?: string;
+  value: string;
+  options: string[];
+  onChange: (hex: string) => void;
+}) {
+  return (
+    <div
+      data-anchor={id}
+      data-setting-id={id}
+      className="flex flex-col gap-3 px-5 py-4"
+    >
+      <div className="flex items-baseline justify-between gap-3">
+        <p className="text-sm font-medium">{label}</p>
+        {description && (
+          <p className="text-xs text-muted-foreground">{description}</p>
+        )}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          aria-pressed={value === ""}
+          onClick={() => onChange("")}
+          className={cn(
+            "h-7 rounded-full border px-2.5 text-xs transition-colors",
+            value === ""
+              ? "border-primary bg-primary/10 font-medium text-primary"
+              : "border-border text-muted-foreground hover:border-muted-foreground/40",
+          )}
+        >
+          默认
+        </button>
+        {options.map((hex) => {
+          const selected = value.toLowerCase() === hex.toLowerCase();
+          return (
+            <button
+              key={hex}
+              type="button"
+              aria-label={`${label} ${hex}`}
+              aria-pressed={selected}
+              onClick={() => onChange(hex)}
+              className={cn(
+                "size-7 rounded-full ring-1 ring-foreground/15 transition-transform",
+                selected && "scale-110 ring-2 ring-foreground/40",
+              )}
+              style={{ backgroundColor: hex }}
+            />
+          );
+        })}
+        <ColorSwatch
+          value={value}
+          onChange={onChange}
+          ariaLabel={`${label}自定义色值`}
+        />
+      </div>
     </div>
   );
 }

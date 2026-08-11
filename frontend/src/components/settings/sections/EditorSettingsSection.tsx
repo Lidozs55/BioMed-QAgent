@@ -1,4 +1,9 @@
-import { SettingCard, SettingRow, SettingSection } from "@/components/settings/primitives";
+import {
+  SegmentedControl,
+  SettingCard,
+  SettingRow,
+  SettingSection,
+} from "@/components/settings/primitives";
 import {
   Select,
   SelectContent,
@@ -9,6 +14,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import {
+  FOLLOW_UP_MODE_OPTIONS,
   SEND_SHORTCUT_OPTIONS,
   usePreferencesStore,
 } from "@/stores/preferencesStore";
@@ -16,8 +22,10 @@ import {
 export function EditorSettingsSection() {
   const showContextUsage = usePreferencesStore((state) => state.showContextUsage);
   const sendShortcut = usePreferencesStore((state) => state.sendShortcut);
+  const followUpMode = usePreferencesStore((state) => state.followUpMode);
   const setShowContextUsage = usePreferencesStore((state) => state.setShowContextUsage);
   const setSendShortcut = usePreferencesStore((state) => state.setSendShortcut);
+  const setFollowUpMode = usePreferencesStore((state) => state.setFollowUpMode);
 
   return (
     <div className="flex flex-col gap-8">
@@ -51,6 +59,30 @@ export function EditorSettingsSection() {
                   </SelectGroup>
                 </SelectContent>
               </Select>
+            }
+          />
+        </SettingCard>
+      </SettingSection>
+
+      <SettingSection
+        title="跟进处理方式"
+        description="任务运行中发送后续消息时的处理策略。"
+      >
+        <SettingCard>
+          <SettingRow
+            id="settings-follow-up-mode"
+            title="发送后续消息"
+            description="加入队列：当前回答结束后自动发送；调整方向：取消当前回答，立即用新消息重新引导。按住 Ctrl+⌘ 发送可对单条消息执行相反操作。"
+            control={
+              <SegmentedControl
+                value={followUpMode}
+                options={FOLLOW_UP_MODE_OPTIONS.map((option) => ({
+                  value: option.value,
+                  label: option.label,
+                }))}
+                onChange={setFollowUpMode}
+                ariaLabel="跟进处理方式"
+              />
             }
           />
         </SettingCard>

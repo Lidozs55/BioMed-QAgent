@@ -8,6 +8,7 @@ import { useThemeStore } from "@/stores/themeStore";
 
 export type SendShortcut = "enter" | "ctrl-enter";
 export type ReducedMotion = "system" | "on" | "off";
+export type FollowUpMode = "queue" | "steer";
 
 export interface ThemeColorOverrides {
   /** Empty string means "use the theme default". */
@@ -20,6 +21,8 @@ export interface Preferences {
   showContextUsage: boolean;
   /** 编辑器：Enter 直接发送，还是 Ctrl/⌘+Enter 发送。 */
   sendShortcut: SendShortcut;
+  /** 编辑器：任务运行中发送后续消息的策略（加入队列 / 调整方向）。 */
+  followUpMode: FollowUpMode;
   /** 外观：半透明侧边栏。 */
   translucentSidebar: boolean;
   /** 外观：文字对比度（0-100，50 = 默认）。 */
@@ -49,6 +52,23 @@ export const REDUCED_MOTION_OPTIONS: { value: ReducedMotion; label: string; hint
   { value: "system", label: "系统", hint: "跟随系统设置" },
   { value: "on", label: "开启", hint: "停用动画与过渡" },
   { value: "off", label: "关闭", hint: "保持动画，忽略系统减弱设置" },
+];
+
+export const FOLLOW_UP_MODE_OPTIONS: {
+  value: FollowUpMode;
+  label: string;
+  hint: string;
+}[] = [
+  {
+    value: "queue",
+    label: "加入队列",
+    hint: "当前回答结束后自动发送",
+  },
+  {
+    value: "steer",
+    label: "调整方向",
+    hint: "取消当前回答并用新消息重新引导",
+  },
 ];
 
 export const UI_FONT_SIZE_MIN = 12;
@@ -143,7 +163,7 @@ function applyColors(root: HTMLElement, prefs: Preferences): void {
 
   if (prefs.translucentSidebar) {
     const sidebarBase = custom ? bg : readComputedVar(root, "--sidebar") || baseBg;
-    root.style.setProperty("--sidebar", mix(sidebarBase, 70, "transparent"));
+    root.style.setProperty("--sidebar", mix(sidebarBase, 65, "transparent"));
   }
 }
 
@@ -173,6 +193,7 @@ export function applyPreferencesToDocument(prefs: Preferences): void {
 const DEFAULT_PREFS: Preferences = {
   showContextUsage: true,
   sendShortcut: "enter",
+  followUpMode: "queue",
   translucentSidebar: false,
   contrast: CONTRAST_DEFAULT,
   pointerCursor: true,
@@ -212,6 +233,8 @@ function readPrefs(): Preferences {
           : DEFAULT_PREFS.showContextUsage,
       sendShortcut:
         parsed.sendShortcut === "ctrl-enter" ? "ctrl-enter" : DEFAULT_PREFS.sendShortcut,
+      followUpMode:
+        parsed.followUpMode === "steer" ? "steer" : DEFAULT_PREFS.followUpMode,
       translucentSidebar:
         typeof parsed.translucentSidebar === "boolean"
           ? parsed.translucentSidebar
@@ -262,6 +285,7 @@ export function isSubmitKey(
 interface PreferencesState extends Preferences {
   setShowContextUsage: (value: boolean) => void;
   setSendShortcut: (value: SendShortcut) => void;
+  setFollowUpMode: (value: FollowUpMode) => void;
   setTranslucentSidebar: (value: boolean) => void;
   setContrast: (value: number) => void;
   setPointerCursor: (value: boolean) => void;
@@ -284,6 +308,11 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
 
   setSendShortcut: (value) => {
     set({ sendShortcut: value });
+    applyPreferencesToDocument(get());
+  },
+
+  setFollowUpMode: (value) => {
+    set({ followUpMode: value });
     applyPreferencesToDocument(get());
   },
 

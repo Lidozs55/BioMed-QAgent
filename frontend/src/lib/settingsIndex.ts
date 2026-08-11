@@ -187,6 +187,13 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     anchor: "settings-send-shortcut",
   },
   {
+    id: "editor.follow-up-mode",
+    title: "跟进处理方式",
+    keywords: ["队列", "排队", "调整方向", "引导", "steer", "queue", "跟进"],
+    section: "editor",
+    anchor: "settings-follow-up-mode",
+  },
+  {
     id: "editor.context-usage",
     title: "显示上下文窗口使用情况",
     keywords: ["上下文", "context", "用量", "tokens", "指示器"],

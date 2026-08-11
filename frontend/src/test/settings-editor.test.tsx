@@ -97,6 +97,7 @@ describe("settings editor section", () => {
     usePreferencesStore.setState({
       showContextUsage: true,
       sendShortcut: "enter",
+      followUpMode: "queue",
       translucentSidebar: false,
       contrast: 50,
       pointerCursor: true,
@@ -139,5 +140,21 @@ describe("settings editor section", () => {
     await waitFor(() => {
       expect(usePreferencesStore.getState().sendShortcut).toBe("ctrl-enter");
     });
+  });
+
+  it("switches the follow-up handling mode", async () => {
+    const api = mockApi();
+    render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
+    await screen.findByText("供应商管理");
+
+    fireEvent.click(
+      within(screen.getByRole("navigation", { name: "设置分类" })).getByRole("button", {
+        name: "编辑器",
+      }),
+    );
+
+    expect(await screen.findByText("跟进处理方式")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "调整方向" }));
+    expect(usePreferencesStore.getState().followUpMode).toBe("steer");
   });
 });

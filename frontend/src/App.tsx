@@ -206,6 +206,7 @@ export default function App() {
                 continueTask={(taskId, input) =>
                   controller.continueTask(taskId, input)
                 }
+                cancelRun={(taskId, runId) => controller.cancelRun(taskId, runId)}
                 resumeRun={(taskId, runId, input) =>
                   controller.resumeRun(taskId, runId, input)
                 }

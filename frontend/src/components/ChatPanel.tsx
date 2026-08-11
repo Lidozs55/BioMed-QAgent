@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ArrowUpIcon,
   CheckCircleIcon,
@@ -44,7 +44,11 @@ import {
   selectConnectionIsConnected,
 } from "@/stores/agentSelectors";
 import { useAgentStore } from "@/stores/agentStore";
-import { isSubmitKey, usePreferencesStore } from "@/stores/preferencesStore";
+import {
+  isSubmitKey,
+  type FollowUpMode,
+  usePreferencesStore,
+} from "@/stores/preferencesStore";
 import type { ModelInfo } from "@/hooks/useAPI";
 
 interface ChatPanelProps {
@@ -54,6 +58,8 @@ interface ChatPanelProps {
     taskId: string,
     input: { input: string },
   ) => Promise<TaskRunAccepted>;
+  /** Cancels the currently running run (used by “调整方向” follow-up mode). */
+  cancelRun?: (taskId: string, runId: string) => Promise<void>;
   resumeRun?: (
     taskId: string,
     runId: string,
@@ -193,6 +199,7 @@ export function ChatPanel({
   startTask,
   uploadFiles,
   continueTask,
+  cancelRun,
   resumeRun,
   loadOlderMessages,
   compactTask,
@@ -212,6 +219,7 @@ export function ChatPanel({
   const connected = useAgentStore(selectConnectionIsConnected);
   const sendShortcut = usePreferencesStore((state) => state.sendShortcut);
   const showContextUsage = usePreferencesStore((state) => state.showContextUsage);
+  const followUpMode = usePreferencesStore((state) => state.followUpMode);
   const draftInput = useAgentStore((state) => state.draft.input);
   const selectedDatabases = useAgentStore(
     (state) => state.draft.selectedDatabaseIds,
@@ -251,6 +259,9 @@ export function ChatPanel({
   const [continuationDrafts, setContinuationDrafts] = useState<Record<string, string>>({});
   const [continuationPendingByTask, setContinuationPendingByTask] = useState<Record<string, boolean>>({});
   const [continuationErrors, setContinuationErrors] = useState<Record<string, string>>({});
+  const [pendingFollowUps, setPendingFollowUps] = useState<
+    Record<string, { input: string; steer: boolean }>
+  >({});
   const [olderMessagesPendingByTask, setOlderMessagesPendingByTask] = useState<Record<string, boolean>>({});
   const [olderMessagesErrors, setOlderMessagesErrors] = useState<Record<string, string>>({});
 
@@ -277,12 +288,18 @@ export function ChatPanel({
     activeTask !== undefined &&
     activeTask.summary.mode === "agent" &&
     continueTask !== undefined;
-  const continuationCanSend =
-    continuationEditable &&
-    activeTask.summary.active_run_id === null &&
-    latestRunIsTerminal(activeTask) &&
-    !continuationPending;
   const activeRunId = activeTask?.summary.active_run_id ?? null;
+  const pendingFollowUp =
+    activeTaskId === null ? undefined : pendingFollowUps[activeTaskId];
+  const steeringPending = pendingFollowUp?.steer === true;
+  // 运行中也可以发送：加入队列等待当前回答结束，或调整方向取消并重引导。
+  const continuationSendable =
+    continuationEditable &&
+    !continuationPending &&
+    !steeringPending &&
+    (activeRunId === null
+      ? latestRunIsTerminal(activeTask)
+      : activeTask !== undefined);
   const subagentCount = activeTask?.subagentOrder.length ?? 0;
   const activeSubagentCount = activeTask?.subagentOrder.reduce(
     (count, subagentId) => {
@@ -383,11 +400,39 @@ export function ChatPanel({
     }
   };
 
-  const sendContinuation = async () => {
-    if (!continuationCanSend || activeTaskId === null || continueTask === undefined) return;
+  const sendContinuationWithMode = async (mode: FollowUpMode) => {
+    if (
+      !continuationSendable ||
+      activeTaskId === null ||
+      activeTask === undefined ||
+      continueTask === undefined
+    ) {
+      return;
+    }
     const taskId = activeTaskId;
     const input = continuationInput.trim();
     if (!input) return;
+
+    if (activeRunId !== null) {
+      setPendingFollowUps((current) => ({
+        ...current,
+        [taskId]: { input, steer: mode === "steer" },
+      }));
+      setContinuationDrafts((current) =>
+        current[taskId] === input ? { ...current, [taskId]: "" } : current,
+      );
+      if (mode === "steer" && cancelRun !== undefined) {
+        try {
+          await cancelRun(taskId, activeRunId);
+        } catch (error) {
+          toast.error("取消当前回答失败", {
+            description: errorMessage(error, "新指令仍将在当前回答结束后自动发送"),
+          });
+        }
+      }
+      return;
+    }
+
     setContinuationPendingByTask((current) => ({ ...current, [taskId]: true }));
     setContinuationErrors((current) => {
       const next = { ...current };
@@ -408,6 +453,56 @@ export function ChatPanel({
       setContinuationPendingByTask((current) => ({ ...current, [taskId]: false }));
     }
   };
+
+  const sendContinuation = () => {
+    void sendContinuationWithMode(followUpMode);
+  };
+
+  const submitQueuedInput = useCallback(
+    async (taskId: string, input: string) => {
+      if (continueTask === undefined) return;
+      setContinuationPendingByTask((current) => ({ ...current, [taskId]: true }));
+      setContinuationErrors((current) => {
+        const next = { ...current };
+        delete next[taskId];
+        return next;
+      });
+      try {
+        await continueTask(taskId, { input });
+        setContinuationDrafts((current) =>
+          current[taskId] === input ? { ...current, [taskId]: "" } : current,
+        );
+      } catch (error) {
+        setContinuationErrors((current) => ({
+          ...current,
+          [taskId]: errorMessage(error, "继续提问失败"),
+        }));
+      } finally {
+        setContinuationPendingByTask((current) => {
+          const next = { ...current };
+          delete next[taskId];
+          return next;
+        });
+      }
+    },
+    [continueTask],
+  );
+
+  // 队列 / 调整方向：当前回答结束后自动发送已暂存的消息。
+  useEffect(() => {
+    if (activeTaskId === null || activeTask === undefined) return;
+    const pending = pendingFollowUps[activeTaskId];
+    if (pending === undefined) return;
+    if (activeTask.summary.active_run_id !== null || !latestRunIsTerminal(activeTask)) {
+      return;
+    }
+    setPendingFollowUps((current) => {
+      const next = { ...current };
+      delete next[activeTaskId];
+      return next;
+    });
+    void submitQueuedInput(activeTaskId, pending.input);
+  }, [activeTask, activeTaskId, pendingFollowUps, submitQueuedInput]);
 
   const loadEarlierMessages = async () => {
     if (!hasOlderMessages || activeTaskId === null || loadOlderMessages === undefined || olderMessagesPending) return;
@@ -439,7 +534,14 @@ export function ChatPanel({
   const handleContinuationKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (!isSubmitKey(event, sendShortcut)) return;
     event.preventDefault();
-    void sendContinuation();
+    const inverted = event.ctrlKey && event.metaKey;
+    if (inverted) {
+      void sendContinuationWithMode(
+        followUpMode === "queue" ? "steer" : "queue",
+      );
+      return;
+    }
+    void sendContinuationWithMode(followUpMode);
   };
 
   if (activeTaskId === null) {
@@ -602,12 +704,20 @@ export function ChatPanel({
                 }}
                 onSubmit={() => void sendContinuation()}
                 onKeyDown={handleContinuationKeyDown}
-                placeholder={continuationEditable ? "继续提问..." : continuationDisabledReason}
+                placeholder={
+                  !continuationEditable
+                    ? continuationDisabledReason
+                    : activeRunId !== null
+                      ? followUpMode === "queue"
+                        ? "输入后续指令，发送后自动排队…"
+                        : "输入新指令，将中断当前回答并切换方向…"
+                      : "继续提问..."
+                }
                 ariaLabel="继续提问"
                 sendAriaLabel="发送继续问题"
                 disabled={!continuationEditable}
                 pending={continuationPending || importPending}
-                sendDisabled={!continuationCanSend || !continuationInput.trim()}
+                sendDisabled={!continuationSendable || !continuationInput.trim()}
                 compact
                 className="shadow-md"
                 onSubmitFiles={
@@ -626,6 +736,13 @@ export function ChatPanel({
                 onCompact={handleCompact}
               />
               {continuationError && <p role="alert" className="mt-2 px-2 text-xs text-destructive">{continuationError}</p>}
+              {pendingFollowUp && (
+                <p role="status" className="mt-2 px-2 text-xs text-muted-foreground">
+                  {pendingFollowUp.steer
+                    ? "正在切换方向：已取消当前回答，新指令将自动发送…"
+                    : "已加入队列：当前回答结束后将自动发送。"}
+                </p>
+              )}
             </div>
           </div>
         </div>

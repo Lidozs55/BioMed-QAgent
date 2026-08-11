@@ -10,6 +10,7 @@ function resetPreferences(): void {
   usePreferencesStore.setState({
     showContextUsage: true,
     sendShortcut: "enter",
+    followUpMode: "queue",
     translucentSidebar: false,
     contrast: 50,
     pointerCursor: true,
@@ -41,6 +42,7 @@ describe("preferences store", () => {
     const state = usePreferencesStore.getState();
     expect(state.showContextUsage).toBe(true);
     expect(state.sendShortcut).toBe("enter");
+    expect(state.followUpMode).toBe("queue");
     expect(state.translucentSidebar).toBe(false);
     expect(state.contrast).toBe(50);
     expect(state.reducedMotion).toBe("system");
@@ -96,6 +98,22 @@ describe("preferences store", () => {
     expect(root.style.getPropertyValue("--background")).toBe("#f8fafc");
     expect(root.style.getPropertyValue("--foreground")).toBe("#0f172a");
     expect(root.style.getPropertyValue("--muted-foreground")).toContain("color-mix");
+  });
+
+  it("applies the translucent sidebar override", () => {
+    usePreferencesStore.getState().setTranslucentSidebar(true);
+
+    const root = document.documentElement;
+    expect(root.dataset.translucentSidebar).toBe("on");
+    expect(root.style.getPropertyValue("--sidebar")).toContain("color-mix");
+  });
+
+  it("persists the follow-up mode", () => {
+    usePreferencesStore.getState().setFollowUpMode("steer");
+
+    expect(usePreferencesStore.getState().followUpMode).toBe("steer");
+    const persisted = JSON.parse(window.localStorage.getItem("biomed.preferences") ?? "{}");
+    expect(persisted.followUpMode).toBe("steer");
   });
 
   it("keeps the theme default when contrast stays at 50 without custom colors", () => {

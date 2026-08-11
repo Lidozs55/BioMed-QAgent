@@ -10,6 +10,7 @@ import type {
 } from "@/runtime/contracts";
 import { createInitialRuntimeState } from "@/runtime/reducer";
 import { useAgentStore } from "@/stores/agentStore";
+import { usePreferencesStore } from "@/stores/preferencesStore";
 
 const CREATED_AT = "2026-07-14T00:00:00Z";
 
@@ -169,6 +170,18 @@ describe("ChatPanel", () => {
 
   beforeEach(() => {
     setViewportWidth(1024);
+    usePreferencesStore.setState({
+      showContextUsage: true,
+      sendShortcut: "enter",
+      followUpMode: "queue",
+      translucentSidebar: false,
+      contrast: 50,
+      pointerCursor: true,
+      reducedMotion: "system",
+      uiFontSize: 16,
+      lightColors: { background: "", foreground: "" },
+      darkColors: { background: "", foreground: "" },
+    });
     useAgentStore.setState({
       ...createInitialRuntimeState(),
       connectionStatus: "connected",
@@ -1015,12 +1028,21 @@ describe("ChatPanel", () => {
     expect(screen.queryByRole("tab", { name: "结果" })).not.toBeInTheDocument();
   });
 
-  it("keeps active Agent drafting editable while disabling only Send", () => {
+  it("queues a follow-up while the agent runs and sends it once idle", async () => {
     seedBackgroundTask();
     useAgentStore.getState().setActiveTaskId("task_background");
-    const continueTask = vi.fn();
-    const { rerender } = render(
-      <ChatPanel startTask={vi.fn()} continueTask={continueTask} />,
+    const continueTask = vi.fn().mockResolvedValue({
+      request_id: "req_follow",
+      task_id: "task_background",
+      run_id: "run_follow",
+      status: "queued",
+    } satisfies TaskRunAccepted);
+    render(
+      <ChatPanel
+        startTask={vi.fn()}
+        continueTask={continueTask}
+        cancelRun={vi.fn()}
+      />,
     );
 
     const input = screen.getByRole("textbox", { name: "继续提问" });
@@ -1028,16 +1050,128 @@ describe("ChatPanel", () => {
     expect(input).toBeEnabled();
     fireEvent.change(input, { target: { value: "send this when ready" } });
     expect(input).toHaveValue("send this when ready");
-    expect(send).toBeDisabled();
+    expect(send).toBeEnabled();
     fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
     expect(continueTask).not.toHaveBeenCalled();
+    expect(screen.getByText(/已加入队列/)).toBeVisible();
 
     const composer = input.closest('[data-slot="agent-composer"]');
     expect(composer).toContainElement(send);
 
-    act(() => seedTerminalTask("fixture"));
-    rerender(<ChatPanel startTask={vi.fn()} continueTask={continueTask} />);
-    expect(screen.getByRole("textbox", { name: "继续提问" })).toBeDisabled();
+    // 当前回答结束后自动发送排队消息
+    act(() => {
+      useAgentStore.setState((state) => {
+        const task = state.tasksById.task_background;
+        return {
+          tasksById: {
+            ...state.tasksById,
+            task_background: {
+              ...task,
+              summary: {
+                ...task.summary,
+                status: "completed",
+                active_run_id: null,
+              },
+              runsById: {
+                ...task.runsById,
+                run_background: {
+                  runId: "run_background",
+                  taskId: "task_background",
+                  requestId: "req_bg",
+                  status: "completed",
+                  input: "initial",
+                  createdAt: CREATED_AT,
+                  updatedAt: CREATED_AT,
+                  startedAt: CREATED_AT,
+                  finishedAt: CREATED_AT,
+                  error: null,
+                  summary: null,
+                },
+              },
+              runOrder: ["run_background"],
+            },
+          },
+        };
+      });
+    });
+
+    await waitFor(() =>
+      expect(continueTask).toHaveBeenCalledWith("task_background", {
+        input: "send this when ready",
+      }),
+    );
+  });
+
+  it("steers the running agent by cancelling and sending the new direction when idle", async () => {
+    seedBackgroundTask();
+    useAgentStore.getState().setActiveTaskId("task_background");
+    usePreferencesStore.getState().setFollowUpMode("steer");
+    const cancelRun = vi.fn().mockResolvedValue(undefined);
+    const continueTask = vi.fn().mockResolvedValue({
+      request_id: "req_steer",
+      task_id: "task_background",
+      run_id: "run_steer",
+      status: "queued",
+    } satisfies TaskRunAccepted);
+    render(
+      <ChatPanel
+        startTask={vi.fn()}
+        continueTask={continueTask}
+        cancelRun={cancelRun}
+      />,
+    );
+
+    const input = screen.getByRole("textbox", { name: "继续提问" });
+    fireEvent.change(input, { target: { value: "new direction" } });
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+
+    await waitFor(() =>
+      expect(cancelRun).toHaveBeenCalledWith("task_background", "run_background"),
+    );
+    expect(continueTask).not.toHaveBeenCalled();
+    expect(screen.getByText(/正在切换方向/)).toBeVisible();
+
+    act(() => {
+      useAgentStore.setState((state) => {
+        const task = state.tasksById.task_background;
+        return {
+          tasksById: {
+            ...state.tasksById,
+            task_background: {
+              ...task,
+              summary: {
+                ...task.summary,
+                status: "cancelled",
+                active_run_id: null,
+              },
+              runsById: {
+                ...task.runsById,
+                run_background: {
+                  runId: "run_background",
+                  taskId: "task_background",
+                  requestId: "req_bg",
+                  status: "cancelled",
+                  input: "initial",
+                  createdAt: CREATED_AT,
+                  updatedAt: CREATED_AT,
+                  startedAt: CREATED_AT,
+                  finishedAt: CREATED_AT,
+                  error: null,
+                  summary: null,
+                },
+              },
+              runOrder: ["run_background"],
+            },
+          },
+        };
+      });
+    });
+
+    await waitFor(() =>
+      expect(continueTask).toHaveBeenCalledWith("task_background", {
+        input: "new direction",
+      }),
+    );
   });
 
   it("keeps continuation text and projection unchanged on a 409 response", async () => {
