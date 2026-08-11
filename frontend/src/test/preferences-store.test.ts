@@ -14,7 +14,7 @@ function resetPreferences(): void {
     contrast: 50,
     pointerCursor: true,
     reducedMotion: "system",
-    uiFontSize: 14,
+    uiFontSize: 16,
     lightColors: { background: "", foreground: "" },
     darkColors: { background: "", foreground: "" },
   });
@@ -44,7 +44,7 @@ describe("preferences store", () => {
     expect(state.translucentSidebar).toBe(false);
     expect(state.contrast).toBe(50);
     expect(state.reducedMotion).toBe("system");
-    expect(state.uiFontSize).toBe(14);
+    expect(state.uiFontSize).toBe(16);
     expect(state.lightColors).toEqual({ background: "", foreground: "" });
     expect(state.darkColors).toEqual({ background: "", foreground: "" });
   });

@@ -101,7 +101,7 @@ describe("settings editor section", () => {
       contrast: 50,
       pointerCursor: true,
       reducedMotion: "system",
-      uiFontSize: 14,
+      uiFontSize: 16,
       lightColors: { background: "", foreground: "" },
       darkColors: { background: "", foreground: "" },
     });

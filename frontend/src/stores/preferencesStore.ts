@@ -53,7 +53,8 @@ export const REDUCED_MOTION_OPTIONS: { value: ReducedMotion; label: string; hint
 
 export const UI_FONT_SIZE_MIN = 12;
 export const UI_FONT_SIZE_MAX = 18;
-export const DEFAULT_UI_FONT_SIZE = 14;
+// 当前应用基准字号为浏览器默认 16px；默认值保持现状，只有用户调整才生效。
+export const DEFAULT_UI_FONT_SIZE = 16;
 export const CONTRAST_DEFAULT = 50;
 
 const STORAGE_KEY = "biomed.preferences";
