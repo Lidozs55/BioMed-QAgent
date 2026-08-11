@@ -69,7 +69,7 @@ def test_resolve_context_budget_recognizes_qwen38_max_catalog_window() -> None:
 
 def test_resolve_context_budget_falls_back_to_model_info_warehouse() -> None:
     # Given - these models live only in the model_info warehouse.
-    for model_id, expected_window in [("gpt-5.6", 1_000_000), ("glm-5.2", 1_000_000)]:
+    for model_id, expected_window in [("gpt-5.6", 1_050_000), ("glm-5.2", 1_000_000)]:
         settings = UserSettings(model_name=model_id, max_tokens=4096)
 
         # When

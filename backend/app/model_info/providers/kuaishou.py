@@ -13,8 +13,7 @@ MODELS: dict[str, ModelDetail] = {
         input_context_window=1,
         max_output_tokens=1,
         suggested_max_tokens=1,
-        capabilities=ModelCapabilities(text=True, video=True),
-        knowledge_cutoff="2026-06",
+        capabilities=ModelCapabilities(text=True, image=False, video=True, audio=False),
         model_family="happyhorse",
     ),
     "happyhorse-1.1-i2v": ModelDetail(
@@ -25,8 +24,7 @@ MODELS: dict[str, ModelDetail] = {
         input_context_window=1,
         max_output_tokens=1,
         suggested_max_tokens=1,
-        capabilities=ModelCapabilities(text=True, image=True, video=True),
-        knowledge_cutoff="2026-06",
+        capabilities=ModelCapabilities(text=True, image=True, video=True, audio=False),
         model_family="happyhorse",
     ),
     "happyhorse-1.1-r2v": ModelDetail(
@@ -37,8 +35,7 @@ MODELS: dict[str, ModelDetail] = {
         input_context_window=1,
         max_output_tokens=1,
         suggested_max_tokens=1,
-        capabilities=ModelCapabilities(text=True, video=True),
-        knowledge_cutoff="2026-06",
+        capabilities=ModelCapabilities(text=True, image=False, video=True, audio=False),
         model_family="happyhorse",
     ),
     "happyhorse-1.1-t2v": ModelDetail(
@@ -49,24 +46,23 @@ MODELS: dict[str, ModelDetail] = {
         input_context_window=1,
         max_output_tokens=1,
         suggested_max_tokens=1,
-        capabilities=ModelCapabilities(text=True, video=True),
-        knowledge_cutoff="2026-06",
+        capabilities=ModelCapabilities(text=True, image=False, video=True, audio=False),
         model_family="happyhorse",
     ),
-    "xiaomi/mimo-v2.5-pro": ModelDetail(
-        id="xiaomi/mimo-v2.5-pro",
+    "mimo-v2.5-pro": ModelDetail(
+        id="mimo-v2.5-pro",
         name="Xiaomi MiMo 2.5 Pro",
-        description="小米澎湃 Mimo 2.5 Pro 视频生成模型。",
+        description="小米 MiMo 2.5 Pro 视频生成模型（DashScope 三方直供）。",
         vendor_id="kuaishou",
         input_context_window=1,
         max_output_tokens=1,
         suggested_max_tokens=1,
-        capabilities=ModelCapabilities(text=True, video=True),
-        knowledge_cutoff="2026-06",
+        capabilities=ModelCapabilities(text=True, image=False, video=True, audio=False),
         model_family="mimo",
     ),
 }
 
+
 def register(target: dict[str, ModelDetail]) -> None:
-    """Merge Kuaishou models into the target repository dictionary."""
+    """Merge Kuaishou/HappyHorse video models into the target repository dictionary."""
     target.update(MODELS)

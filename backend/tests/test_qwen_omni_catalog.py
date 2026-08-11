@@ -11,17 +11,17 @@ _OMNI = Capabilities(text=True, image=True, video=True, audio=True)
 @pytest.mark.parametrize(
     ("model_id", "context_window", "suggested_max_tokens"),
     (
-        pytest.param("qwen3.5-omni-plus", 256_000, 64_000, id="plus"),
+        pytest.param("qwen3.5-omni-plus", 262_144, 64_000, id="plus"),
         pytest.param(
             "qwen3.5-omni-plus-2026-03-15",
-            256_000,
+            262_144,
             64_000,
             id="plus-snapshot",
         ),
-        pytest.param("qwen3.5-omni-flash", 256_000, 64_000, id="flash"),
+        pytest.param("qwen3.5-omni-flash", 262_144, 64_000, id="flash"),
         pytest.param(
             "qwen3.5-omni-flash-2026-03-15",
-            256_000,
+            262_144,
             64_000,
             id="flash-snapshot",
         ),

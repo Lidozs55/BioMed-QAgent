@@ -1,4 +1,4 @@
-"""Mistral AI model data provider (OpenAI-compatible)."""
+"""Mistral AI model data provider."""
 
 from __future__ import annotations
 
@@ -8,36 +8,46 @@ MODELS: dict[str, ModelDetail] = {
     "mistral-large-latest": ModelDetail(
         id="mistral-large-latest",
         name="Mistral Large",
-        description="Mistral 旗舰模型，256K 上下文，支持图像输入与工具调用。",
+        description="Mistral Large 3 旗舰模型，262K 上下文，开源多模态。",
         vendor_id="mistral",
         input_context_window=262_144,
-        max_output_tokens=16_384,
-        suggested_max_tokens=16_384,
-        capabilities=ModelCapabilities(text=True, image=True),
-        pricing_input_per_1m=0.50,
-        pricing_output_per_1m=1.50,
+        max_output_tokens=262_144,
+        suggested_max_tokens=32_768,
+        capabilities=ModelCapabilities(text=True, image=True, video=False, audio=False),
+        pricing_input_per_1m=0.5,
+        pricing_output_per_1m=1.5,
         recommended=True,
         model_family="mistral",
-        function_calling=True,
-        supports_streaming=True,
     ),
     "mistral-medium-latest": ModelDetail(
         id="mistral-medium-latest",
         name="Mistral Medium",
-        description="Mistral 中端模型，256K 上下文，兼顾性能与成本。",
+        description="Mistral Medium 3.5 前沿多模态模型，262K 上下文。",
         vendor_id="mistral",
         input_context_window=262_144,
-        max_output_tokens=8_192,
-        suggested_max_tokens=8_192,
-        capabilities=ModelCapabilities(text=True, image=True),
-        recommended=False,
+        max_output_tokens=262_144,
+        suggested_max_tokens=32_768,
+        capabilities=ModelCapabilities(text=True, image=True, video=False, audio=False),
+        pricing_input_per_1m=1.5,
+        pricing_output_per_1m=7.5,
         model_family="mistral",
-        function_calling=True,
-        supports_streaming=True,
+    ),
+    "mistral-small-latest": ModelDetail(
+        id="mistral-small-latest",
+        name="Mistral Small",
+        description="Mistral Small 4 混合模型，256K 上下文，统一指令、推理与编码。",
+        vendor_id="mistral",
+        input_context_window=256_000,
+        max_output_tokens=256_000,
+        suggested_max_tokens=32_768,
+        capabilities=ModelCapabilities(text=True, image=True, video=False, audio=False),
+        pricing_input_per_1m=0.15,
+        pricing_output_per_1m=0.6,
+        model_family="mistral",
     ),
 }
 
 
 def register(target: dict[str, ModelDetail]) -> None:
-    """Merge Mistral models into the target repository dictionary."""
+    """Merge Mistral AI models into the target repository dictionary."""
     target.update(MODELS)
