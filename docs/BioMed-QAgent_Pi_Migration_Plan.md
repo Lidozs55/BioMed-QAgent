@@ -503,7 +503,7 @@ workspace_exec
 ## 8. 当前模块迁移矩阵
 
 | 当前模块 | 目标 | 处理方式 |
-|---|---|---|
+| --- | --- | --- |
 | `backend/app/agent_loop/` | Pi AgentSession | 删除 |
 | `agent_loop/agent.py` | Pi session + prompt/context | 重建，不翻译 |
 | `agent_loop/context.py` | Pi Session + BioMed task context | 拆分 |
@@ -886,7 +886,7 @@ Python
 ### 14.1 可直接删除的 Python 依赖职责
 
 | 当前依赖/用途 | 迁移 |
-|---|---|
+| --- | --- |
 | FastAPI | TS Host |
 | uvicorn | TS Host |
 | openai-agents | Pi |
@@ -898,7 +898,7 @@ Python
 ### 14.2 需要功能替代后才能删除
 
 | 当前用途 | 目标 |
-|---|---|
+| --- | --- |
 | Playwright | Node Playwright |
 | HTTP acquisition | TS HTTP client |
 | BeautifulSoup | TS HTML parser |
@@ -1359,6 +1359,7 @@ backend Python 不再承担 acquisition / parsing / analysis
 -能导入模型；
 -能设 active model；
 -不同模型参数正确传给 Pi/provider；
+
 - API Key 不以明文返回前端；
 -旧数据库可一次性迁移。
 
@@ -1609,6 +1610,7 @@ Pi Session != BioMed Task != DatasetBuild
 会同时失去：
 
 -现有 E2E；
+
 - V2 可靠性；
 -前端兼容；
 -故障定位能力。
@@ -1684,16 +1686,16 @@ Phase 8 后删除 feature flag 和 legacy code。
 
 ### P1
 
-6. Skills 迁移；
-7. Dataset Core TS parity；
-8. WebSocket/API compatibility；
-9. model settings。
+1. Skills 迁移；
+2. Dataset Core TS parity；
+3. WebSocket/API compatibility；
+4. model settings。
 
 ### P2
 
-10. browser/crawler/PDF/statistics；
-11. cache/DB bridge；
-12. subagent（只有证明需要时）。
+ 1. browser/crawler/PDF/statistics；
+ 2. cache/DB bridge；
+ 3. subagent（只有证明需要时）。
 
 ---
 
