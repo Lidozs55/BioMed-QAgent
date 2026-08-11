@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   ArrowLeftIcon,
   MagnifyingGlassIcon,
@@ -6,7 +13,6 @@ import {
 } from "@phosphor-icons/react";
 import { toast } from "sonner";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -89,6 +95,32 @@ function defaultParamsFromSpecs(specs: ParameterSpec[]): Record<string, unknown>
   return params;
 }
 
+function capabilityChips(
+  capabilities: DiscoveredModelInfo["capabilities"] | undefined,
+): ReactNode {
+  const caps = capabilities ?? {};
+  const labels: Array<[boolean, string]> = [
+    [Boolean(caps.text), "文"],
+    [Boolean(caps.image), "图"],
+    [Boolean(caps.video), "视"],
+    [Boolean(caps.audio), "音"],
+  ];
+  return (
+    <span className="flex shrink-0 items-center gap-0.5">
+      {labels
+        .filter(([enabled]) => enabled)
+        .map(([, label]) => (
+          <span
+            key={label}
+            className="rounded bg-muted px-1 py-0.5 text-[10px] font-medium text-muted-foreground"
+          >
+            {label}
+          </span>
+        ))}
+    </span>
+  );
+}
+
 export function ModelImportSheet({
   open,
   onOpenChange,
@@ -105,6 +137,7 @@ export function ModelImportSheet({
   const [discoverError, setDiscoverError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [params, setParams] = useState<Record<string, unknown>>({});
   const [saving, setSaving] = useState(false);
@@ -133,6 +166,7 @@ export function ModelImportSheet({
     setSearch("");
     setSelectedId(null);
     setExpandedId(null);
+    setSelectedIds(new Set());
     setParams({});
     setManualOpen(false);
     setManualDraft(EMPTY_MANUAL_DRAFT);
@@ -204,33 +238,6 @@ export function ModelImportSheet({
   const selectDiscovered = (item: DiscoveredModelInfo) => {
     setSelectedId(item.id);
     setParams(defaultParams(item));
-  };
-
-  const importModel = async (item: DiscoveredModelInfo) => {
-    if (!providerId) return;
-    setSaving(true);
-    try {
-      const created = await api.createManagedModel({
-        provider_id: providerId,
-        model_id: item.id,
-        name: item.name || item.id,
-        description: item.description,
-        context_window: item.context_window ?? null,
-        max_output_tokens: item.max_output_tokens ?? item.suggested_max_tokens ?? null,
-        suggested_max_tokens: item.suggested_max_tokens ?? null,
-        source: "api",
-        params: defaultParams(item),
-      });
-      toast.success(`已导入 ${created.name}`);
-      await onSaved();
-      setSelectedId(created.id);
-      setExpandedId(created.id);
-      setParams(created.params);
-    } catch (error) {
-      toast.error("导入失败", { description: errorText(error) });
-    } finally {
-      setSaving(false);
-    }
   };
 
   const openManual = async () => {
@@ -399,6 +406,82 @@ export function ModelImportSheet({
   const importedIds = new Set(providerModels.map((model) => model.model_id));
   const selectedSpecs = selected?.param_specs ?? [];
 
+  const createFromDiscovered = async (
+    item: DiscoveredModelInfo,
+  ): Promise<ManagedModelInfo> => {
+    if (!providerId) throw new Error("未选择供应商");
+    return api.createManagedModel({
+      provider_id: providerId,
+      model_id: item.id,
+      name: item.name || item.id,
+      description: item.description,
+      context_window: item.context_window ?? null,
+      max_output_tokens: item.max_output_tokens ?? item.suggested_max_tokens ?? null,
+      suggested_max_tokens: item.suggested_max_tokens ?? null,
+      source: "api",
+      params: defaultParams(item),
+    });
+  };
+
+  const importModel = async (item: DiscoveredModelInfo) => {
+    setSaving(true);
+    try {
+      const created = await createFromDiscovered(item);
+      toast.success(`已导入 ${created.name}`);
+      await onSaved();
+      setSelectedId(created.id);
+      setExpandedId(created.id);
+      setParams(created.params);
+      setSelectedIds(new Set());
+    } catch (error) {
+      toast.error("导入失败", { description: errorText(error) });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const toggleSelect = (modelId: string) => {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(modelId)) {
+        next.delete(modelId);
+      } else {
+        next.add(modelId);
+      }
+      return next;
+    });
+  };
+
+  const importSelected = async () => {
+    const pending = filtered.filter(
+      (item) => selectedIds.has(item.id) && !importedIds.has(item.id),
+    );
+    if (pending.length === 0) {
+      toast.info("所选模型均已导入");
+      setSelectedIds(new Set());
+      return;
+    }
+    setSaving(true);
+    try {
+      let last: ManagedModelInfo | null = null;
+      for (const item of pending) {
+        last = await createFromDiscovered(item);
+      }
+      toast.success(`已导入 ${pending.length} 个模型`);
+      await onSaved();
+      if (last) {
+        setSelectedId(last.id);
+        setExpandedId(last.id);
+        setParams(last.params);
+      }
+      setSelectedIds(new Set());
+    } catch (error) {
+      toast.error("批量导入失败", { description: errorText(error) });
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[calc(100svh-2rem)] w-full flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl">
@@ -463,6 +546,16 @@ export function ModelImportSheet({
                   {discovering ? <Spinner data-icon="inline-start" /> : null}
                   获取列表
                 </Button>
+                {selectedIds.size > 0 && (
+                  <Button
+                    size="sm"
+                    className="shrink-0"
+                    disabled={saving}
+                    onClick={() => void importSelected()}
+                  >
+                    导入所选 ({selectedIds.size})
+                  </Button>
+                )}
               </div>
               {discoverError && (
                 <p className="shrink-0 border-b px-3 py-2 text-xs text-destructive" role="alert">
@@ -489,25 +582,30 @@ export function ModelImportSheet({
                         <li
                           key={item.id}
                           className={cn(
-                            "flex items-center justify-between gap-3 px-3 py-2.5",
+                            "flex items-center gap-2 px-3 py-2.5",
                             active && "bg-accent",
                           )}
                         >
+                          <input
+                            type="checkbox"
+                            className="size-4 shrink-0 cursor-pointer"
+                            checked={selectedIds.has(item.id)}
+                            onChange={() => toggleSelect(item.id)}
+                            aria-label={`选择 ${item.name}`}
+                          />
                           <button
                             type="button"
-                            className="min-w-0 flex-1 text-left"
+                            className="min-w-0 flex-1 truncate text-left"
                             onClick={() => selectDiscovered(item)}
                           >
-                            <span className="flex items-center gap-1.5">
-                              <span className="truncate text-sm font-medium">{item.name}</span>
-                              <Badge variant="outline" className="shrink-0">
-                                {item.capability_source === "catalog" ? "官方" : "API"}
-                              </Badge>
-                            </span>
-                            <span className="mt-0.5 block truncate text-xs text-muted-foreground">
-                              {item.id} · {formatWindow(item.context_window)}
-                            </span>
+                            <span className="truncate text-sm font-medium">{item.name}</span>
                           </button>
+                          <div className="flex shrink-0 items-center gap-2">
+                            <span className="text-xs text-muted-foreground">
+                              {formatWindow(item.context_window)}
+                            </span>
+                            {capabilityChips(item.capabilities)}
+                          </div>
                           <Button
                             variant={imported ? "ghost" : "outline"}
                             size="sm"
@@ -564,12 +662,7 @@ export function ModelImportSheet({
                               className="min-w-0 flex-1 text-left"
                               onClick={() => selectModel(model)}
                             >
-                              <span className="flex items-center gap-1.5">
-                                <span className="truncate text-sm">{model.name}</span>
-                                <Badge variant="outline" className="shrink-0">
-                                  {model.source === "manual" ? "个人" : "官方"}
-                                </Badge>
-                              </span>
+                              <span className="truncate text-sm">{model.name}</span>
                               <span className="mt-0.5 block truncate text-xs text-muted-foreground">
                                 {model.model_id}
                               </span>
