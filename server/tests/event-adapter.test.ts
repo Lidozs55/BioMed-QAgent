@@ -1,0 +1,172 @@
+import { describe, expect, test, vi } from "vitest";
+
+import type { BioMedAgentEvent } from "../src/agent/contracts.js";
+import { PiEventAdapter } from "../src/agent/event-adapter.js";
+
+const taskId = "task-live-1";
+const runId = "run-live-1";
+
+function createAdapter(onDiagnostic = vi.fn()) {
+  let id = 0;
+  return {
+    adapter: new PiEventAdapter({
+      taskId,
+      onDiagnostic,
+      id: () => `event-${++id}`,
+      now: () => new Date("2026-08-12T00:00:00.000Z"),
+    }),
+    onDiagnostic,
+  };
+}
+
+describe("PiEventAdapter", () => {
+  test("maps assistant, reasoning, tool success, and completion in order", () => {
+    const { adapter } = createAdapter();
+    const source: BioMedAgentEvent[] = [
+      { type: "turn_started" },
+      { type: "assistant_delta", delta: "hello" },
+      { type: "reasoning_delta", delta: "check evidence" },
+      {
+        type: "tool_started",
+        toolCallId: "call-1",
+        toolName: "workspace_read",
+        arguments: { path: "parsed/data.csv" },
+      },
+      {
+        type: "tool_completed",
+        toolCallId: "call-1",
+        toolName: "workspace_read",
+        result: { rows: 2 },
+        isError: false,
+      },
+      { type: "turn_completed" },
+    ];
+
+    const events = source.flatMap((event) => adapter.adapt(runId, event));
+
+    expect(events.map((event) => event.type)).toEqual([
+      "run_started",
+      "assistant_delta",
+      "assistant_reasoning_delta",
+      "tool_started",
+      "tool_called",
+      "tool_completed",
+      "run_completed",
+    ]);
+    expect(events.map((event) => event.sequence)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(events.every((event) => event.task_id === taskId)).toBe(true);
+    expect(events.every((event) => event.run_id === runId)).toBe(true);
+    expect(events[3]?.payload).toEqual({
+      type: "tool_started",
+      tool_call_id: "call-1",
+      tool_name: "workspace_read",
+      arguments: { path: "parsed/data.csv" },
+    });
+    expect(events[4]?.payload).toMatchObject({
+      type: "tool_called",
+      tool_name: "workspace_read",
+      arguments: { path: "parsed/data.csv", tool_call_id: "call-1" },
+    });
+    expect(events[5]?.payload).toEqual({
+      type: "tool_completed",
+      tool_name: "workspace_read",
+      tool_call_id: "call-1",
+      output: '{"rows":2}',
+      output_digest: null,
+      is_error: false,
+    });
+  });
+
+  test("maps tool errors without failing an otherwise completed turn", () => {
+    const { adapter } = createAdapter();
+    const events = [
+      ...adapter.adapt(runId, {
+        type: "tool_completed",
+        toolCallId: "call-2",
+        toolName: "workspace_exec",
+        result: { code: "POLICY_DENIED", message: "not allowed" },
+        isError: true,
+      }),
+      ...adapter.adapt(runId, { type: "turn_completed" }),
+    ];
+
+    expect(events.map((event) => event.type)).toEqual([
+      "tool_completed",
+      "run_completed",
+    ]);
+    expect(events[0]?.payload).toMatchObject({ is_error: true });
+  });
+
+  test("maps stable failure and cancellation request/ack", () => {
+    const { adapter } = createAdapter();
+    const request = adapter.cancellationRequested(runId, "user requested");
+    const ack = adapter.adapt(runId, {
+      type: "turn_cancelled",
+      reason: "user requested",
+    });
+    const failure = adapter.failed("run-live-2", new Error("Bearer secret-value at C:\\private\\trace.ts"));
+
+    expect(request.payload).toEqual({
+      type: "run_cancel_requested",
+      reason: "user requested",
+    });
+    expect(ack[0]?.payload).toEqual({
+      type: "run_cancelled",
+      reason: "user requested",
+    });
+    expect(failure[0]?.payload).toEqual({
+      type: "run_failed",
+      error: "Experimental Pi turn failed",
+      error_code: "internal_error",
+    });
+    expect(JSON.stringify(failure)).not.toContain("secret-value");
+    expect(JSON.stringify(failure)).not.toContain("private");
+  });
+
+  test("suppresses duplicate terminal events and ignores unknown input diagnostically", () => {
+    const { adapter, onDiagnostic } = createAdapter();
+    const first = adapter.adapt(runId, { type: "turn_completed" });
+    const duplicate = adapter.adapt(runId, { type: "turn_completed" });
+    const unknown = adapter.adapt(
+      runId,
+      { type: "provider_raw", credential: "secret", payload: "x".repeat(10_000) } as never,
+    );
+
+    expect(first).toHaveLength(1);
+    expect(duplicate).toEqual([]);
+    expect(unknown).toEqual([]);
+    expect(onDiagnostic).toHaveBeenCalledOnce();
+    expect(JSON.stringify(onDiagnostic.mock.calls)).not.toContain("secret");
+    expect(JSON.stringify(onDiagnostic.mock.calls).length).toBeLessThan(1_000);
+  });
+
+  test("bounds and redacts browser payloads while sequences continue across runs", () => {
+    const { adapter } = createAdapter();
+    const oversized = "z".repeat(10_000);
+    const events = [
+      ...adapter.adapt(runId, { type: "assistant_delta", delta: oversized }),
+      ...adapter.adapt(runId, {
+        type: "tool_started",
+        toolCallId: "call-3",
+        toolName: "bridge",
+        arguments: {
+          api_key: "credential-value",
+          absolute: "C:\\Users\\private\\secret.txt",
+          nested: { one: { two: { three: { four: "hidden" } } } },
+          list: Array.from({ length: 40 }, (_, index) => index),
+          text: oversized,
+        },
+      }),
+      ...adapter.adapt("run-live-2", { type: "turn_started" }),
+    ];
+    const serialized = JSON.stringify(events);
+
+    expect(events.map((event) => event.sequence)).toEqual([1, 2, 3, 4]);
+    expect((events[0]?.payload as { delta: string }).delta.length).toBeLessThanOrEqual(4_096);
+    expect(serialized).not.toContain("credential-value");
+    expect(serialized).not.toContain("Users\\\\private");
+    expect(serialized).not.toContain(oversized);
+    expect(serialized).toContain("[redacted]");
+    expect(serialized).toContain("[truncated]");
+  });
+});

@@ -140,6 +140,9 @@ importers:
 
   server:
     dependencies:
+      '@biomed/contracts':
+        specifier: workspace:*
+        version: link:../packages/contracts
       '@earendil-works/pi-coding-agent':
         specifier: 0.82.1
         version: 0.82.1(@modelcontextprotocol/sdk@1.29.0(zod@3.25.76))(ws@8.21.3)(zod@3.25.76)

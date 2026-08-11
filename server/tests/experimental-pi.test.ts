@@ -73,7 +73,7 @@ describe("experimental Pi Host composition", () => {
     expect(factory).not.toHaveBeenCalled();
   });
 
-  test("executes one deterministic fake-adapter turn under the experimental path", async () => {
+  test("creates one deterministic fake-adapter task under the experimental path", async () => {
     const legacy = createServer((_request, response) => response.end("legacy"));
     legacyServers.push(legacy);
     const legacyPort = await listen(legacy);
@@ -88,6 +88,10 @@ describe("experimental Pi Host composition", () => {
       experimentalPi: () =>
         createExperimentalPiRuntime({
           adapter,
+          id: (() => {
+            const values = ["1", "1"];
+            return () => values.shift() ?? "extra";
+          })(),
           workspaceFactory: async () => ({
             root: path.join(process.cwd(), "server"),
             tools: [],
@@ -102,28 +106,24 @@ describe("experimental Pi Host composition", () => {
     hosts.push(host);
     const port = (host.server.address() as AddressInfo).port;
 
-    const response = await fetch(`http://127.0.0.1:${port}/experimental/pi/sessions`, {
+    const response = await fetch(`http://127.0.0.1:${port}/experimental/pi/tasks`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ task_id: "task-1", run_id: "run-1", input: "hello" }),
+      body: JSON.stringify({ input: "hello" }),
     });
 
     expect(response.status).toBe(201);
     expect(await response.json()).toEqual({
-      task_id: "task-1",
-      run_id: "run-1",
-      pi_session_id: "pi-run-1",
-      events: [
-        { type: "turn_started" },
-        { type: "assistant_delta", delta: "echo:hello" },
-        { type: "turn_completed" },
-      ],
+      task_id: "task_1",
+      run_id: "run_1",
+      session_id: "pi-run_1",
+      status: "running",
       durable: false,
     });
     expect(adapter.created).toHaveLength(1);
     expect(adapter.created[0]).toMatchObject({
-      taskId: "task-1",
-      runId: "run-1",
+      taskId: "task_1",
+      runId: "run_1",
       cwd: path.join(process.cwd(), "server"),
       tools: [],
     });
@@ -132,8 +132,10 @@ describe("experimental Pi Host composition", () => {
   test("runs a later sequential turn through the same mapped session", async () => {
     const adapter = new FakeAdapter();
     const disposeWorkspace = vi.fn(async () => undefined);
+    const values = ["1", "1", "2"];
     const runtime = await createExperimentalPiRuntime({
       adapter,
+      id: () => values.shift() ?? "extra",
       workspaceFactory: async () => ({
         root: path.join(process.cwd(), "server"),
         tools: [],
@@ -143,15 +145,15 @@ describe("experimental Pi Host composition", () => {
     const server = createServer((request, response) => runtime.handle(request, response));
     legacyServers.push(server);
     const port = await listen(server);
-    const create = await fetch(`http://127.0.0.1:${port}/experimental/pi/sessions`, {
+    const create = await fetch(`http://127.0.0.1:${port}/experimental/pi/tasks`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ task_id: "task-1", run_id: "run-1", input: "one" }),
+      body: JSON.stringify({ input: "one" }),
     });
     expect(create.status).toBe(201);
 
     const next = await fetch(
-      `http://127.0.0.1:${port}/experimental/pi/sessions/run-1/turns`,
+      `http://127.0.0.1:${port}/experimental/pi/tasks/task_1/runs`,
       {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -159,10 +161,11 @@ describe("experimental Pi Host composition", () => {
       },
     );
 
-    expect(next.status).toBe(200);
+    expect(next.status).toBe(202);
     expect((await next.json()) as object).toMatchObject({
-      run_id: "run-1",
-      pi_session_id: "pi-run-1",
+      task_id: "task_1",
+      run_id: "run_2",
+      session_id: "pi-run_1",
     });
     expect(adapter.created).toHaveLength(1);
     await runtime.close();

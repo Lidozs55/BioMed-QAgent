@@ -14,6 +14,7 @@ export interface ApplicationHostOptions {
   initializeLifecycle?: (lifecycle: LifecycleRegistry) => void | Promise<void>;
   experimentalPi?: () => Promise<{
     handle: (request: IncomingMessage, response: ServerResponse) => boolean;
+    handleUpgrade: (request: IncomingMessage, socket: Duplex, head: Buffer) => boolean;
     close: () => Promise<void>;
   }>;
 }
@@ -147,6 +148,12 @@ export async function createApplicationHost(
       const requestPath = pathname(request);
       if (isInternalMigration(requestPath)) {
         socket.destroy();
+        return;
+      }
+      if (requestPath === "/experimental/pi/ws") {
+        if (experimentalPi?.handleUpgrade(request, socket, head) !== true) {
+          socket.destroy();
+        }
         return;
       }
       if (requestPath === "/api/v1/ws") proxy.ws(request, socket, head);
