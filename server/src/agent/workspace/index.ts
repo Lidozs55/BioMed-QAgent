@@ -48,6 +48,8 @@ export interface TaskWorkspace {
   readonly taskId: string;
   readonly runId: string;
   readonly piSessionId?: string;
+  readonly activeCommandCount: number;
+  setRunId(runId: string): void;
   read(input: { path: string; offset?: number; length?: number }): Promise<WorkspaceReadResult>;
   list(input: { path: string; depth?: number }): Promise<WorkspaceListResult>;
   search(input: { path: string; query: string }): Promise<WorkspaceSearchResult>;
@@ -67,15 +69,25 @@ export interface TaskWorkspace {
 
 class GovernedTaskWorkspace implements TaskWorkspace {
   readonly taskId: string;
-  readonly runId: string;
   readonly piSessionId?: string;
   #disposed = false;
   readonly #processes = new WorkspaceProcessRegistry();
 
   constructor(private readonly context: WorkspaceContext) {
     this.taskId = context.taskId;
-    this.runId = context.runId;
     this.piSessionId = context.piSessionId;
+  }
+
+  get runId(): string {
+    return this.context.runId;
+  }
+
+  get activeCommandCount(): number {
+    return this.#processes.activeCount;
+  }
+
+  setRunId(runId: string): void {
+    this.context.runId = runId;
   }
 
   async #audited<T>(

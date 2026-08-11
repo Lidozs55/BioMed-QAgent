@@ -26,17 +26,29 @@ export interface ExperimentalPiRuntime {
   handle(request: IncomingMessage, response: ServerResponse): boolean;
   handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): boolean;
   close(): Promise<void>;
+  diagnostics(): ExperimentalPiRuntimeDiagnostics;
+}
+
+export interface ExperimentalPiRuntimeDiagnostics {
+  tasks: number;
+  activeRuns: number;
+  listeners: number;
+  webSockets: number;
+  activeCommands: number;
 }
 
 export interface ExperimentalPiRuntimeOptions {
   adapter: BioMedAgentAdapter;
+  fixtureProfileAdapter?: (profile: string) => BioMedAgentAdapter;
   workspaceFactory: (identity: {
     taskId: string;
     runId: string;
+    fixtureProfile?: string;
   }) => Promise<{
     root: string;
     tools: readonly BioMedAgentTool[];
     setRunId?: (runId: string) => void;
+    activeCommandCount?: () => number;
     dispose(): Promise<void>;
   }>;
   eventBus?: ExperimentalEventBus;
@@ -51,6 +63,7 @@ interface ExperimentalTask {
   adapter: PiEventAdapter;
   disposeWorkspace: () => Promise<void>;
   setWorkspaceRunId?: (runId: string) => void;
+  activeCommandCount: () => number;
   activeRunId?: string;
 }
 
@@ -243,16 +256,38 @@ export async function createExperimentalPiRuntime(
         "fixture_profile must be a string or null",
       );
     }
+    const fixtureProfile = typeof body.fixture_profile === "string"
+      ? body.fixture_profile
+      : undefined;
+    if (fixtureProfile !== undefined && options.fixtureProfileAdapter === undefined) {
+      throw new BioMedAgentError(
+        "INVALID_SESSION_CONFIG",
+        "fixture_profile is unavailable",
+      );
+    }
     const taskId = newId("task");
     const runId = newId("run");
-    const workspace = await options.workspaceFactory({ taskId, runId });
+    const workspace = await options.workspaceFactory({
+      taskId,
+      runId,
+      ...(fixtureProfile === undefined ? {} : { fixtureProfile }),
+    });
     let disposePromise: Promise<void> | undefined;
     const disposeWorkspace = (): Promise<void> => {
       disposePromise ??= workspace.dispose();
       return disposePromise;
     };
     try {
-      const session = await options.adapter.createSession({
+      const adapter = fixtureProfile === undefined
+        ? options.adapter
+        : options.fixtureProfileAdapter?.(fixtureProfile);
+      if (adapter === undefined) {
+        throw new BioMedAgentError(
+          "INVALID_SESSION_CONFIG",
+          "fixture_profile is unavailable",
+        );
+      }
+      const session = await adapter.createSession({
         taskId,
         runId,
         cwd: workspace.root,
@@ -265,6 +300,7 @@ export async function createExperimentalPiRuntime(
         adapter: new PiEventAdapter({ taskId, onDiagnostic }),
         disposeWorkspace,
         setWorkspaceRunId: workspace.setRunId,
+        activeCommandCount: workspace.activeCommandCount ?? (() => 0),
       };
       tasks.set(taskId, task);
       bus.registerTask(taskId);
@@ -459,5 +495,15 @@ export async function createExperimentalPiRuntime(
         throw new AggregateError(errors, "Experimental Pi cleanup failed");
       }
     },
+    diagnostics: () => ({
+      tasks: tasks.size,
+      activeRuns: [...tasks.values()].filter((task) => task.activeRunId !== undefined).length,
+      listeners: bus.listenerCount,
+      webSockets: webSocketServer.clients.size,
+      activeCommands: [...tasks.values()].reduce(
+        (total, task) => total + task.activeCommandCount(),
+        0,
+      ),
+    }),
   };
 }

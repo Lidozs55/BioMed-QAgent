@@ -185,6 +185,26 @@ export function ExperimentalPiApp({
                           </Message>
                         </MessageScrollerItem>
                       ),
+                      run.datasetBuild === null ? null : (
+                        <MessageScrollerItem key={`${run.runId}:dataset-build`} messageId={`${run.runId}:dataset-build`}>
+                          <Alert variant={run.datasetBuild.status === "spec_rejected" ? "destructive" : "default"}>
+                            <AlertTitle>
+                              {run.datasetBuild.status === "succeeded"
+                                ? "DatasetBuild 已发布"
+                                : "DatasetBuild 未发布"}
+                            </AlertTitle>
+                            <AlertDescription>
+                              {run.datasetBuild.status === "succeeded"
+                                ? [
+                                    run.datasetBuild.publicationId,
+                                    run.datasetBuild.manifestId,
+                                    run.datasetBuild.artifactId,
+                                  ].filter(Boolean).join(" · ")
+                                : run.datasetBuild.reasonCodes.join(" · ")}
+                            </AlertDescription>
+                          </Alert>
+                        </MessageScrollerItem>
+                      ),
                       ...run.tools.map((tool) => (
                         <MessageScrollerItem key={`${run.runId}:${tool.toolCallId}`} messageId={`${run.runId}:${tool.toolCallId}`}>
                           <Message align="start">

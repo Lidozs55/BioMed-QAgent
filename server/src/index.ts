@@ -3,18 +3,10 @@ import { fileURLToPath } from "node:url";
 
 import { createApplicationHost } from "./app/create-app.js";
 import { LifecycleRegistry } from "./app/lifecycle.js";
-import { createExperimentalPiRuntime } from "./agent/experimental-pi.js";
-import { createDatasetBuildTools } from "./agent/tools/dataset-build.js";
-import { PiAgentAdapter } from "./agent/pi-adapter.js";
-import {
-  AppendOnlyTaskAuditSink,
-  createTaskWorkspace,
-} from "./agent/workspace/index.js";
-import { createWorkspaceTools } from "./agent/workspace/tools.js";
+import { createPhase1ExperimentalRuntime } from "./agent/phase1-composition.js";
 import { parseHostConfig } from "./config.js";
 import { createViteMiddleware } from "./dev/vite-middleware.js";
 import { createLegacyBackend } from "./legacy/backend-process.js";
-import { DatasetCoreClient } from "./legacy/dataset-core-client.js";
 
 async function main(): Promise<void> {
   const config = parseHostConfig(process.env);
@@ -40,36 +32,12 @@ async function main(): Promise<void> {
     initializeLifecycle: async () => undefined,
     experimentalPi: config.flags.piExperimental
       ? ({ target, bridgeSecret }) =>
-          createExperimentalPiRuntime({
-            adapter: new PiAgentAdapter({ environment: process.env }),
-            workspaceFactory: async ({ taskId, runId }) => {
-              let currentRunId = runId;
-              const root = path.join(tasksRoot, taskId);
-              const workspace = await createTaskWorkspace({
-                taskId,
-                runId,
-                root,
-                audit: new AppendOnlyTaskAuditSink(root),
-                ...(config.workspaceDevExec
-                  ? { developmentExec: { enabled: true as const } }
-                  : {}),
-              });
-              return {
-                root,
-                tools: [
-                  ...createWorkspaceTools(workspace),
-                  ...createDatasetBuildTools({
-                    client: new DatasetCoreClient({ baseUrl: target, secret: bridgeSecret }),
-                    taskId,
-                    runId: () => currentRunId,
-                  }),
-                ],
-                setRunId: (nextRunId) => {
-                  currentRunId = nextRunId;
-                },
-                dispose: () => workspace.dispose(),
-              };
-            },
+          createPhase1ExperimentalRuntime({
+            repositoryRoot,
+            tasksRoot,
+            legacyTarget: target,
+            bridgeSecret,
+            workspaceDevExec: config.workspaceDevExec,
           })
       : undefined,
     frontend: (httpServer) =>

@@ -79,6 +79,7 @@ export interface BioMedSessionConfig {
   model?: BioMedModelConfig;
   resourceRoots?: readonly string[];
   skillRoots?: readonly string[];
+  systemPrompt?: string;
   tools?: readonly BioMedAgentTool[];
   cleanup?: () => Promise<void>;
 }

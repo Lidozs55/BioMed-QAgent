@@ -1,4 +1,4 @@
-import { stat } from "node:fs/promises";
+import { access, stat } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -21,6 +21,7 @@ import {
   type BioMedSessionConfig,
   type RunOptions,
 } from "./contracts.js";
+import { PHASE1_SYSTEM_PROMPT, phase1ResourceRoots } from "./phase1-prompt.js";
 
 type Environment = Record<string, string | undefined>;
 
@@ -48,6 +49,8 @@ export interface PiAgentAdapterOptions {
   createUpstreamSession?: (
     config: BioMedSessionConfig,
   ) => Promise<PiUpstreamSession>;
+  phase1SkillRoot?: string;
+  onResourceDiagnostic?: (message: string) => void;
 }
 
 interface QueueItem {
@@ -253,6 +256,7 @@ async function createRealUpstreamSession(
     noPromptTemplates: (config.resourceRoots?.length ?? 0) === 0,
     noThemes: true,
     noContextFiles: true,
+    systemPrompt: config.systemPrompt,
   });
   await resourceLoader.reload();
   const { session } = await createAgentSession({
@@ -466,18 +470,45 @@ export class PiAgentAdapter implements BioMedAgentAdapter {
   private readonly createUpstreamSession: (
     config: BioMedSessionConfig,
   ) => Promise<PiUpstreamSession>;
+  private readonly phase1SkillRoot: string;
+  private readonly onResourceDiagnostic: (message: string) => void;
 
   constructor(options: PiAgentAdapterOptions = {}) {
     this.environment = options.environment ?? process.env;
     this.createUpstreamSession =
       options.createUpstreamSession ??
       ((config) => createRealUpstreamSession(config, this.environment));
+    this.phase1SkillRoot = options.phase1SkillRoot ?? phase1ResourceRoots().skillRoot;
+    this.onResourceDiagnostic = options.onResourceDiagnostic ?? (() => undefined);
+  }
+
+  private async optionalSkillRoots(): Promise<string[]> {
+    try {
+      await Promise.all([
+        access(path.join(this.phase1SkillRoot, "migration-smoke", "SKILL.md")),
+        access(path.join(this.phase1SkillRoot, "dataset-construction", "SKILL.md")),
+      ]);
+      return [this.phase1SkillRoot];
+    } catch {
+      this.onResourceDiagnostic(
+        "Optional Phase 1 Pi Skill resources are unavailable; continuing without them".slice(
+          0,
+          256,
+        ),
+      );
+      return [];
+    }
   }
 
   async createSession(config: BioMedSessionConfig): Promise<BioMedAgentSession> {
     let validated: BioMedSessionConfig | undefined;
     try {
-      validated = await validateSessionConfig(config);
+      const optionalSkillRoots = await this.optionalSkillRoots();
+      validated = await validateSessionConfig({
+        ...config,
+        systemPrompt: PHASE1_SYSTEM_PROMPT,
+        skillRoots: [...optionalSkillRoots, ...(config.skillRoots ?? [])],
+      });
       const upstream = await this.createUpstreamSession(validated);
       return new PiBioMedAgentSession(upstream, validated);
     } catch (error) {

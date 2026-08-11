@@ -37,6 +37,10 @@ interface ActiveCommand {
 export class WorkspaceProcessRegistry {
   readonly #active = new Set<ActiveCommand>();
 
+  get activeCount(): number {
+    return this.#active.size;
+  }
+
   register(cancel: () => void): () => void {
     let complete!: () => void;
     const done = new Promise<void>((resolve) => {

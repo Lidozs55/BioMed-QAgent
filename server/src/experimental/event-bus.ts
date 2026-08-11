@@ -7,6 +7,10 @@ export class ExperimentalEventBus {
   private readonly listeners = new Map<string, Set<EventListener>>();
   private closed = false;
 
+  get listenerCount(): number {
+    return [...this.listeners.values()].reduce((total, listeners) => total + listeners.size, 0);
+  }
+
   registerTask(taskId: string): void {
     if (this.closed) throw new Error("Experimental event bus is closed");
     this.tasks.add(taskId);

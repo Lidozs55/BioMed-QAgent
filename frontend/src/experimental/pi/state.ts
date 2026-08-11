@@ -10,6 +10,15 @@ export interface ExperimentalToolState {
   status: "running" | "completed" | "error";
 }
 
+export interface ExperimentalDatasetBuildState {
+  status: "succeeded" | "spec_rejected";
+  buildId: string | null;
+  publicationId: string | null;
+  manifestId: string | null;
+  artifactId: string | null;
+  reasonCodes: string[];
+}
+
 export interface ExperimentalRunState {
   runId: string;
   input: string;
@@ -18,6 +27,7 @@ export interface ExperimentalRunState {
   tools: ExperimentalToolState[];
   status: "running" | "cancel_requested" | "completed" | "failed" | "cancelled";
   error: string | null;
+  datasetBuild: ExperimentalDatasetBuildState | null;
 }
 
 export interface ExperimentalPiState {
@@ -72,6 +82,7 @@ export function recordAcceptedRun(
         tools: [],
         status: "running",
         error: null,
+        datasetBuild: null,
       },
     ],
   };
@@ -95,6 +106,54 @@ function updateRun(
   };
 }
 
+function object(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function stringOrNull(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function datasetBuildFromTool(
+  toolName: string,
+  output: string | null | undefined,
+  isError: boolean,
+): ExperimentalDatasetBuildState | null {
+  if (output === null || output === undefined) return null;
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = object(JSON.parse(output) as unknown);
+  } catch {
+    return null;
+  }
+  if (toolName === "execute_dataset_build" && !isError && parsed.code === "ok") {
+    const data = object(parsed.data);
+    return {
+      status: "succeeded",
+      buildId: stringOrNull(data.build_id),
+      publicationId: stringOrNull(data.publication_id),
+      manifestId: stringOrNull(object(data.manifest).manifest_id),
+      artifactId: null,
+      reasonCodes: [],
+    };
+  }
+  if (toolName === "validate_dataset_build" && parsed.code === "spec_rejected") {
+    return {
+      status: "spec_rejected",
+      buildId: null,
+      publicationId: null,
+      manifestId: null,
+      artifactId: null,
+      reasonCodes: Array.isArray(parsed.reason_codes)
+        ? parsed.reason_codes.filter((item): item is string => typeof item === "string")
+        : [],
+    };
+  }
+  return null;
+}
+
 export function applyExperimentalEvent(
   state: ExperimentalPiState,
   event: EventEnvelope,
@@ -112,7 +171,19 @@ export function applyExperimentalEvent(
     const payload = event.payload;
     switch (payload.type) {
       case "assistant_delta":
-        return { ...run, assistant: run.assistant + payload.delta };
+        return {
+          ...run,
+          assistant: run.assistant + payload.delta,
+          datasetBuild: run.datasetBuild?.status === "succeeded" &&
+            run.datasetBuild.artifactId === null
+            ? {
+                ...run.datasetBuild,
+                artifactId: /\bArtifact ([A-Za-z0-9._-]+)/.exec(
+                  run.assistant + payload.delta,
+                )?.[1]?.replace(/\.$/, "") ?? null,
+              }
+            : run.datasetBuild,
+        };
       case "assistant_reasoning_delta":
         return { ...run, reasoning: run.reasoning + payload.delta };
       case "tool_started":
@@ -130,8 +201,15 @@ export function applyExperimentalEvent(
           ],
         };
       case "tool_completed":
+        {
+          const datasetBuild = datasetBuildFromTool(
+            payload.tool_name,
+            payload.output,
+            payload.is_error,
+          );
         return {
           ...run,
+          datasetBuild: datasetBuild ?? run.datasetBuild,
           tools: run.tools.map((tool) =>
             tool.toolCallId === payload.tool_call_id
               ? {
@@ -142,6 +220,7 @@ export function applyExperimentalEvent(
               : tool,
           ),
         };
+        }
       case "run_cancel_requested":
         return { ...run, status: "cancel_requested" };
       case "run_cancelled":

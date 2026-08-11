@@ -213,6 +213,82 @@ describe("experimental Pi frontend isolation", () => {
     expect(state.liveGap).toBe(true);
   });
 
+  test("projects real Dataset Core publication references and structured rejection", () => {
+    let success = recordAcceptedRun(createExperimentalPiState(), {
+      task_id: "task-live",
+      run_id: "run-success",
+      session_id: "fixture-session",
+      status: "running",
+      durable: false,
+    }, "run dataset_success");
+    success = applyExperimentalEvent(success, envelope(1, "run-success", {
+      type: "tool_started",
+      tool_call_id: "fixture-execute",
+      tool_name: "execute_dataset_build",
+      arguments: {},
+    }));
+    success = applyExperimentalEvent(success, envelope(2, "run-success", {
+      type: "tool_completed",
+      tool_call_id: "fixture-execute",
+      tool_name: "execute_dataset_build",
+      output_digest: null,
+      output: JSON.stringify({
+        code: "ok",
+        data: {
+          build_id: "golden_succeeded",
+          publication_id: "pub_actual",
+          manifest: { manifest_id: "manifest_actual" },
+          artifacts: ["[truncated]"],
+        },
+      }),
+      is_error: false,
+    }));
+    success = applyExperimentalEvent(success, envelope(3, "run-success", {
+      type: "assistant_delta",
+      delta: "DatasetBuild golden_succeeded SUCCEEDED. Publication pub_actual. Manifest manifest_actual. Artifact artifact_actual.",
+    }));
+
+    expect(success.runs[0]?.datasetBuild).toEqual({
+      status: "succeeded",
+      buildId: "golden_succeeded",
+      publicationId: "pub_actual",
+      manifestId: "manifest_actual",
+      artifactId: "artifact_actual",
+      reasonCodes: [],
+    });
+
+    let rejected = recordAcceptedRun(createExperimentalPiState(), {
+      task_id: "task-live",
+      run_id: "run-rejected",
+      session_id: "fixture-session",
+      status: "running",
+      durable: false,
+    }, "run spec_rejected");
+    rejected = applyExperimentalEvent(rejected, envelope(1, "run-rejected", {
+      type: "tool_started",
+      tool_call_id: "fixture-validate",
+      tool_name: "validate_dataset_build",
+      arguments: {},
+    }));
+    rejected = applyExperimentalEvent(rejected, envelope(2, "run-rejected", {
+      type: "tool_completed",
+      tool_call_id: "fixture-validate",
+      tool_name: "validate_dataset_build",
+      output_digest: null,
+      output: JSON.stringify({ code: "spec_rejected", reason_codes: ["unknown_schema"] }),
+      is_error: true,
+    }));
+
+    expect(rejected.runs[0]?.datasetBuild).toEqual({
+      status: "spec_rejected",
+      buildId: null,
+      publicationId: null,
+      manifestId: null,
+      artifactId: null,
+      reasonCodes: ["unknown_schema"],
+    });
+  });
+
   test("renders create/live tool/cancel/multi-turn without mutating the legacy store", async () => {
     useAgentStore.setState(createInitialRuntimeState());
     const legacyBefore = useAgentStore.getState();
@@ -281,12 +357,45 @@ describe("experimental Pi frontend isolation", () => {
         }),
       );
       handlers.onEvent(
-        envelope(4, "run-1", { type: "run_completed", build_result: null }),
+        envelope(4, "run-1", {
+          type: "tool_started",
+          tool_call_id: "fixture-execute",
+          tool_name: "execute_dataset_build",
+          arguments: {},
+        }),
+      );
+      handlers.onEvent(
+        envelope(5, "run-1", {
+          type: "tool_completed",
+          tool_call_id: "fixture-execute",
+          tool_name: "execute_dataset_build",
+          output: JSON.stringify({
+            code: "ok",
+            data: {
+              build_id: "golden_succeeded",
+              publication_id: "pub_actual",
+              manifest: { manifest_id: "manifest_actual" },
+            },
+          }),
+          output_digest: null,
+          is_error: false,
+        }),
+      );
+      handlers.onEvent(
+        envelope(6, "run-1", {
+          type: "assistant_delta",
+          delta: " Publication pub_actual. Manifest manifest_actual. Artifact artifact_actual.",
+        }),
+      );
+      handlers.onEvent(
+        envelope(7, "run-1", { type: "run_completed", build_result: null }),
       );
     });
-    expect(await screen.findByText("live answer")).toBeInTheDocument();
+    expect(await screen.findByText(/live answer/)).toBeInTheDocument();
     expect(screen.getByText("workspace_read")).toBeInTheDocument();
     expect(screen.getByText("2 rows")).toBeInTheDocument();
+    expect(screen.getByText("DatasetBuild 已发布")).toBeInTheDocument();
+    expect(screen.getAllByText(/pub_actual.*manifest_actual.*artifact_actual/)).toHaveLength(2);
 
     fireEvent.change(screen.getByLabelText("实验消息"), { target: { value: "second" } });
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
