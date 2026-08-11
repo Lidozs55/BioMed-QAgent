@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "tsc -p tsconfig.json && node dist/index.js",
+    "dev": "tsc -p tsconfig.json && node --env-file-if-exists=../.env dist/index.js",
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
     "lint": "eslint . --max-warnings 0",

@@ -1,6 +1,7 @@
 # Phase 0/1 Migration Boundary Index
 
-These documents freeze Phase 1 operating contracts before Pi/Host implementation.
+These documents define the Phase 1 operating contracts now implemented by the
+TypeScript Host, Pi experimental adapter, governed Workspace, and Python V2 Core bridge.
 They are subordinate to [ARCHITECTURE.md](../ARCHITECTURE.md) and the
 [ADR index](../adr/README.md); they do not duplicate the full execution sequence in
 [BioMed-QAgent_Pi_Migration_Phase0_1_Detailed.md](../BioMed-QAgent_Pi_Migration_Phase0_1_Detailed.md).
@@ -15,5 +16,14 @@ They are subordinate to [ARCHITECTURE.md](../ARCHITECTURE.md) and the
 | Pi-to-BioMed experimental event mapping and sequence meaning | [Pi event adapter](pi-event-adapter.md) |
 | Single Host startup/shutdown, flags, valid combinations, rollback | [Single-Host lifecycle and flags](single-host-lifecycle-and-flags.md) |
 
-The boundary set implements Phase 0C documentation only. It does not enable Pi,
-change package behavior, expose a bridge route, or alter runtime/test configuration.
+## Implemented Phase 0/1 status
+
+- root `pnpm dev` is the normal single-port TypeScript Host entry;
+- formal `/api/v1` and durable replay remain private FastAPI authority;
+- `/experimental/pi/*` is explicit, live-only, and non-durable;
+- `/internal/migration/*` is loopback-only and excluded from the public proxy;
+- rollback and standalone commands remain migration/debug-only.
+
+The boundary documents remain contracts, not proof by themselves. Exact implementation
+and E2E evidence is recorded in `.superpowers/sdd/task-5-report.md` through
+`task-12-report.md`; code and tests remain the source of truth.

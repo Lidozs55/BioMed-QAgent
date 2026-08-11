@@ -46,13 +46,13 @@ describe("feature flags", () => {
     ).toThrow();
   });
 
-  test("uses an explicit proxy-only default and requires TS topology", () => {
+  test("uses the normal Phase 1 transition by default and requires TS topology", () => {
     expect(parseHostConfig({})).toMatchObject({
       flags: {
         appHost: "ts",
         agentRuntime: "legacy",
         datasetCore: "python",
-        piExperimental: false,
+        piExperimental: true,
       },
       publicHost: "127.0.0.1",
       publicPort: 5173,

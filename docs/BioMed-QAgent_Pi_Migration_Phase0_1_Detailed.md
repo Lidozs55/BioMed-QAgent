@@ -984,21 +984,25 @@ Pi 实验路径：
 
 ## 4.14 Phase 0 Definition of Done
 
+The checked items below are backed by the committed Phase 0/1 implementation and
+Task 5–11 focused/golden/E2E evidence. Phase 1G's current-machine full rerun remains
+separately recorded as infrastructure-blocked where Node/Python runtimes are absent.
+
 只有全部满足才进入 Phase 1：
 
-- [ ] 根目录是唯一 pnpm Workspace 根。
-- [ ] 仓库只有一个 `pnpm-lock.yaml`。
-- [ ] `frontend`、`server`、`packages/contracts` 能由根 pnpm 识别。
-- [ ] 前端 build/test/lint/typecheck 不退化。
-- [ ] Python baseline 已记录。
-- [ ] SUCCESS / PARTIAL_SUCCESS / NO_DATA / SPEC_REJECTED fixture 完整。
-- [ ] DatasetBuild/Publication/Validation/EventEnvelope 不变量写入 ADR。
-- [ ] Pi package/version/commit 固定。
-- [ ] `server/agent/pi-adapter.ts` 边界写入 ADR。
-- [ ] Workspace 权限矩阵确定。
-- [ ] Phase 1 bridge protocol 确定。
-- [ ] Python DatasetBuild service 不再只能通过 OpenAI `FunctionTool` 才可调用。
-- [ ] feature flag 与回滚组合有自动测试或 smoke test。
+- [x] 根目录是唯一 pnpm Workspace 根。
+- [x] 仓库只有一个 `pnpm-lock.yaml`。
+- [x] `frontend`、`server`、`packages/contracts` 能由根 pnpm 识别。
+- [x] 前端 build/test/lint/typecheck 不退化。
+- [x] Python baseline 已记录。
+- [x] SUCCESS / PARTIAL_SUCCESS / NO_DATA / SPEC_REJECTED fixture 完整。
+- [x] DatasetBuild/Publication/Validation/EventEnvelope 不变量写入 ADR。
+- [x] Pi package/version/commit 固定。
+- [x] `server/agent/pi-adapter.ts` 边界写入 ADR。
+- [x] Workspace 权限矩阵确定。
+- [x] Phase 1 bridge protocol 确定。
+- [x] Python DatasetBuild service 不再只能通过 OpenAI `FunctionTool` 才可调用。
+- [x] feature flag 与回滚组合有自动测试或 smoke test。
 
 ---
 
@@ -1982,47 +1986,47 @@ error_code
 
 ### Host / Workspace
 
-- [ ] `pnpm dev` 是正常开发唯一启动命令。
-- [ ] 浏览器只访问一个端口。
-- [ ] Vite HMR 由 TS Host 内嵌提供。
-- [ ] 旧 API/WS 经 TS Host 仍可工作。
-- [ ] Host 退出后无遗留 legacy/Pi/command 子进程。
+- [x] `pnpm dev` 是正常开发唯一启动命令。
+- [x] 浏览器只访问一个端口。
+- [x] Vite HMR 由 TS Host 内嵌提供。
+- [x] 旧 API/WS 经 TS Host 仍可工作。
+- [x] Host 退出后无遗留 legacy/Pi/command 子进程。
 
 ### Pi
 
-- [ ] Main experimental Agent 使用 Pi。
-- [ ] Pi 上游依赖封装在 `pi-adapter.ts`。
-- [ ] 支持 read。
-- [ ] 支持 write。
-- [ ] 支持 edit。
-- [ ] 支持 development command execution。
-- [ ] 支持 cancel/dispose。
-- [ ] 一个测试 Skill 可被发现并加载。
+- [x] Main experimental Agent 使用 Pi。
+- [x] Pi 上游依赖封装在 `pi-adapter.ts`。
+- [x] 支持 read。
+- [x] 支持 write。
+- [x] 支持 edit。
+- [x] 支持 development command execution。
+- [x] 支持 cancel/dispose。
+- [x] 一个测试 Skill 可被发现并加载。
 
 ### DatasetBuild
 
-- [ ] Pi 能调用 `validate_dataset_build`。
-- [ ] Pi 能调用 `execute_dataset_build`。
-- [ ] Tool 走 Python V2 Core bridge，不走 V1 Pipeline。
-- [ ] Publication/Validation/Provenance 语义未降低。
-- [ ] Agent 无法直接改 `artifacts/`。
-- [ ] SUCCESS 与 SPEC_REJECTED 至少完成 bridge parity；最好四类 outcome 全覆盖。
+- [x] Pi 能调用 `validate_dataset_build`。
+- [x] Pi 能调用 `execute_dataset_build`。
+- [x] Tool 走 Python V2 Core bridge，不走 V1 Pipeline。
+- [x] Publication/Validation/Provenance 语义未降低。
+- [x] Agent 无法直接改 `artifacts/`。
+- [x] SUCCESS 与 SPEC_REJECTED 至少完成 bridge parity；四类 outcome 已全覆盖。
 
 ### Events / UI
 
-- [ ] Pi assistant stream 可显示。
-- [ ] Pi Tool start/completion/error 可显示。
-- [ ] experimental event shape 兼容现有前端 EventEnvelope 语义。
-- [ ] 不宣称 experimental sequence 已具备 durable replay。
+- [x] Pi assistant stream 可显示。
+- [x] Pi Tool start/completion/error 可显示。
+- [x] experimental event shape 兼容现有前端 EventEnvelope 语义。
+- [x] 不宣称 experimental sequence 已具备 durable replay。
 
 ### Scope control
 
-- [ ] 旧 Python Agent Runtime 仍可通过 feature flag 使用。
-- [ ] 没有创建新的 TS TaskManager 超级类。
-- [ ] 没有迁完整 Skill Runtime。
-- [ ] 没有迁 Dataset Core 到 TS。
-- [ ] 没有迁 SubagentSupervisor。
-- [ ] 没有提前重写 Settings/model registry。
+- [x] 旧 Python Agent Runtime 仍可通过 feature flag 使用。
+- [x] 没有创建新的 TS TaskManager 超级类。
+- [x] 没有迁完整 Skill Runtime。
+- [x] 没有迁 Dataset Core 到 TS。
+- [x] 没有迁 SubagentSupervisor。
+- [x] 没有提前重写 Settings/model registry。
 
 ---
 

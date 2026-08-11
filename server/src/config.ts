@@ -23,7 +23,7 @@ export const DEFAULT_HOST_CONFIG = {
   APP_HOST: "ts",
   AGENT_RUNTIME: "legacy",
   DATASET_CORE: "python",
-  PI_EXPERIMENTAL: "0",
+  PI_EXPERIMENTAL: "1",
   HOST: "127.0.0.1",
   PORT: "5173",
   LEGACY_BACKEND_PORT: "8000",

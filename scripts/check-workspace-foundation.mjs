@@ -33,7 +33,16 @@ assert.equal(
 for (const script of ["test", "lint", "typecheck", "build"]) {
   assert.equal(typeof rootPackage.scripts?.[script], "string", `Missing root ${script} script`);
 }
-assert.equal(rootPackage.scripts?.dev, undefined, "Phase 0A must not replace the dev entrypoint");
+assert.equal(rootPackage.scripts?.dev, "pnpm --filter @biomed/server dev");
+for (const script of [
+  "dev:frontend-standalone",
+  "dev:legacy-backend",
+  "dev:host-proxy-only",
+  "dev:legacy-rollback",
+]) {
+  assert.equal(typeof rootPackage.scripts?.[script], "string", `Missing root ${script} script`);
+}
+requireFile("scripts/dev-profile.mjs");
 
 requireFile("pnpm-workspace.yaml");
 const workspace = readFileSync(pathFromRoot("pnpm-workspace.yaml"), "utf8");

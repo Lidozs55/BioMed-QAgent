@@ -4,7 +4,9 @@ BioMed-QAgent 是一个面向生物医学研究数据的 **Agent + 确定性 Pip
 
 项目的目标是让数据处理过程**可追溯、可验证、可恢复**，而不是让大语言模型直接“猜”出一个 CSV。系统可以展示统计结果和可视化数据，但不会在缺少数据证据时生成科研或临床结论。
 
-> 当前项目仍处于持续开发阶段。实际支持的数据库、Skill 和产物格式以代码及 [架构文档](docs/ARCHITECTURE.md) 为准。
+> 当前项目处于 Pi/TypeScript Host 的 Phase 1 迁移态。正式 `/api/v1` 与 durable
+> runtime 仍由 private FastAPI 权威实现；`/experimental/pi/*` 仅用于 live、非 durable
+> 迁移验证。实际边界以代码及 [架构文档](docs/ARCHITECTURE.md) 为准。
 
 ## 核心能力
 
@@ -21,26 +23,19 @@ BioMed-QAgent 是一个面向生物医学研究数据的 **Agent + 确定性 Pip
 
 ```text
 ┌──────────────────────────────────────────────────────────────┐
-│ Frontend: React 19 + Vite + Tailwind CSS v4 + shadcn/ui     │
-│ REST API + durable WebSocket event stream                   │
+│ TypeScript Application Host（唯一公开端口）                  │
+│ Vite middleware · /api/v1 proxy · /experimental/pi/*       │
 └───────────────────────────────┬──────────────────────────────┘
-                                │
+                    ┌───────────┴───────────┐
+                    ▼                       ▼
+      experimental Pi Agent       Private loopback FastAPI
+      live-only session/event      formal API + durable runtime
+                    └───────────┬───────────┘
+                                │ trusted DatasetBuild Tool/bridge
                                 ▼
 ┌──────────────────────────────────────────────────────────────┐
-│ FastAPI: app.main:app                                       │
-│ TaskManager · TaskRepository · EventHub · TaskIndex         │
-└───────────────────────────────┬──────────────────────────────┘
-                                │
-                                ▼
-┌──────────────────────────────────────────────────────────────┐
-│ Main Agent: OpenAI Agents SDK + Qwen                         │
-│ 理解意图、选择 Skill、生成 TaskSpecification、解释结果        │
-└───────────────────────────────┬──────────────────────────────┘
-                                │ run_research_pipeline tool
-                                ▼
-┌──────────────────────────────────────────────────────────────┐
-│ Deterministic Pipeline Runner                                │
-│ Discovery → Acquisition → Processing → Artifact → Validation │
+│ Python V2 Dataset Construction Runtime                       │
+│ Spec → Acquire/Parse → Normalize/Integrate → Validate/Publish│
 └───────────────────────────────┬──────────────────────────────┘
                                 │ 仅发布通过验证的 Artifact
                                 ▼
@@ -49,8 +44,9 @@ BioMed-QAgent 是一个面向生物医学研究数据的 **Agent + 确定性 Pip
 
 职责边界如下：
 
-- **Agent** 负责理解用户意图、选择数据库和 Skill、生成查询参数，并调用唯一的 Pipeline Function Tool。
-- **Pipeline** 负责按照契约执行数据处理、记录审计信息、检查完整性，并拒绝未经验证的产物。
+- **formal Agent** 暂由 private FastAPI 的 OpenAI Agents SDK runtime 持有；其 Task、Run 和事件可持久恢复。
+- **experimental Pi Agent** 只在 `/experimental/pi/*` 验证新 Agent/Workspace/Tool 边界，不宣称 durable。
+- **Dataset Core** 负责按照契约执行处理、记录审计信息、检查完整性，并拒绝未经验证的产物；两类 Agent 都不能直接制造 publication。
 - **Skill** 是 instructions 与 Function Tools 的能力包，按 `discovery/`、`acquisition/`、`processing/`、`analysis/` 分类。
 - **Runtime** 负责任务生命周期和事件持久化；前端状态是后端事件的投影，不是事实来源。
 
@@ -63,28 +59,29 @@ BioMed-QAgent 是一个面向生物医学研究数据的 **Agent + 确定性 Pip
 | 组件            | 要求                                          |
 | --------------- | --------------------------------------------- |
 | Python          | 3.12+                                         |
-| Node.js         | 18+                                           |
+| Node.js         | 22.19+                                        |
 | Python 包管理器 | [uv](https://docs.astral.sh/uv/)               |
 | Node 包管理器   | [pnpm](https://pnpm.io/)（不要使用 npm）       |
 | LLM             | DashScope API Key，或其他 OpenAI 兼容模型配置 |
 | 可选            | Playwright Chromium，用于网页视觉证据采集     |
 
-### 1. 配置后端
+### 1. 配置应用
 
-在项目根目录复制环境变量模板，然后编辑 `backend/.env`：
+在项目根目录复制环境变量模板，然后编辑根 `.env`；正常 `pnpm dev` 会读取它，
+并把所需变量传给 Host 管理的 private FastAPI：
 
 **Windows PowerShell**：
 
 ```powershell
-Copy-Item .env.example backend/.env
-notepad backend/.env
+Copy-Item .env.example .env
+notepad .env
 ```
 
 **macOS / Linux / Git Bash**：
 
 ```bash
-cp .env.example backend/.env
-$EDITOR backend/.env
+cp .env.example .env
+$EDITOR .env
 ```
 
 至少配置：
@@ -97,32 +94,28 @@ MODEL_NAME=qwen-plus
 
 若使用 NCBI E-utilities，建议同时填写真实的 `NCBI_EMAIL` 和 `NCBI_USER_AGENT`。完整变量说明见 [.env.example](.env.example)。
 
-安装依赖并启动 FastAPI：
+安装 Python 与根 pnpm Workspace 依赖：
 
 ```bash
 cd backend
 uv sync
-uv run uvicorn app.main:app --reload
+cd ..
+pnpm install --frozen-lockfile
 ```
 
-后端默认监听 `http://127.0.0.1:8000`。
-
-### 2. 启动前端
-
-另开一个终端：
+### 2. 启动单端口应用
 
 ```bash
-cd frontend
-pnpm install
 pnpm dev
 ```
 
-前端默认运行在 `http://localhost:5173`。启动后可访问：
+浏览器只访问 TypeScript Host 的 `http://127.0.0.1:5173`。Host 内嵌 Vite，
+管理 private FastAPI，并代理正式 HTTP/WS；`/internal/migration/*` 不会公开。
+Swagger/ReDoc 在正常拓扑中不作为公开入口，需要时使用 legacy diagnostic script。
+启动后可访问：
 
-- Web 界面：[http://localhost:5173](http://localhost:5173)
-- Swagger：[http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
-- ReDoc：[http://127.0.0.1:8000/redoc](http://127.0.0.1:8000/redoc)
-- 健康检查：[http://127.0.0.1:8000/api/v1/health](http://127.0.0.1:8000/api/v1/health)
+- Web 界面：[http://127.0.0.1:5173](http://127.0.0.1:5173)
+- 健康检查：[http://127.0.0.1:5173/api/v1/health](http://127.0.0.1:5173/api/v1/health)
 
 ### 3. 运行后端演示
 
@@ -192,7 +185,8 @@ Skill 管理 API 还提供启用、禁用、回滚、上传、校验和删除操
 
 ### Durable WebSocket
 
-前端连接：`ws://127.0.0.1:8000/api/v1/ws`。
+正常拓扑中前端连接 `ws://127.0.0.1:5173/api/v1/ws`，由 Host 转发到 private
+FastAPI durable WebSocket。端口 8000 只用于 standalone legacy diagnostic。
 
 客户端只发送以下命令：
 
@@ -210,6 +204,9 @@ WebSocket 不负责创建 Run，也不提供 SSE；创建任务和提交新一�
 
 ```text
 BioMed-QAgent/
+├── server/                 # TypeScript Host、Pi adapter、Workspace、legacy proxy
+├── packages/contracts/     # 前端/Host 共享 wire DTO
+├── .pi/skills/             # Phase 1 最小实验 Skills
 ├── backend/
 │   ├── app/
 │   │   ├── agent_loop/       # Agent 创建、运行、上下文和模型适配
@@ -233,8 +230,10 @@ BioMed-QAgent/
 │   │   ├── hooks/             # API、实时流和主题 Hook
 │   │   └── styles/            # Tailwind CSS v4 样式
 │   ├── package.json
-│   ├── pnpm-lock.yaml
 │   └── vite.config.ts
+├── package.json            # root Workspace 与唯一正常 dev 入口
+├── pnpm-workspace.yaml
+├── pnpm-lock.yaml          # 唯一 Node lockfile
 ├── docs/
 │   ├── ARCHITECTURE.md        # 权威架构和数据契约
 │   ├── DEVELOPER_QUICKSTART.md # 开发者快速入门
@@ -249,7 +248,7 @@ BioMed-QAgent/
 | 层级           | 技术                                                   |
 | -------------- | ------------------------------------------------------ |
 | 后端           | Python 3.12+、FastAPI、uvicorn                         |
-| Agent          | OpenAI Agents SDK、Qwen / DashScope OpenAI 兼容接口    |
+| Agent          | formal OpenAI Agents SDK + experimental Pi adapter    |
 | 数据契约       | Pydantic v2、dataclass                                 |
 | 数据获取与解析 | httpx、BeautifulSoup、pdfplumber、openpyxl、Playwright |
 | 科学计算       | matplotlib、SciPy、seaborn                             |
@@ -270,9 +269,15 @@ BioMed-QAgent/
 | `NCBI_EMAIL`         | `biomed-qagent@example.com` | NCBI E-utilities 联系邮箱                       |
 | `NCBI_TOOL`          | `BioMedQAgent`              | NCBI E-utilities tool 名称                      |
 | `NCBI_API_KEY`       | 空                            | 可选的 NCBI API Key                             |
-| `HOST`               | `127.0.0.1`                 | 后端监听地址                                    |
-| `PORT`               | `8000`                      | 后端监听端口                                    |
-| `OUTPUT_DIR`         | `data/output`               | durable task 和产物输出目录                     |
+| `HOST` / `PORT`      | `127.0.0.1` / `5173`        | TS Host 唯一公开监听地址                        |
+| `LEGACY_BACKEND_PORT` | `8000`                     | Host 管理的 private loopback FastAPI 端口       |
+| `APP_HOST` / `AGENT_RUNTIME` / `DATASET_CORE` | `ts` / `legacy` / `python` | Phase 1 正常权威组合 |
+| `PI_EXPERIMENTAL`    | `1`                         | 仅暴露非 durable `/experimental/pi/*`           |
+| `PI_PROVIDER` / `PI_MODEL` | `dashscope` / `MODEL_NAME` | Pi provider 与模型选择                    |
+| `PI_API_KEY` / `PI_BASE_URL` | 回退 DashScope 配置    | Pi credentials；不要提交真实密钥                |
+| `WORKSPACE_DEV_EXEC` | `0`                         | 受控开发命令 gate                               |
+| `LEGACY_READINESS_TIMEOUT_MS` / `SHUTDOWN_TIMEOUT_MS` | `30000` / `10000` | 子进程就绪与回收超时 |
+| `OUTPUT_DIR`         | `backend/data/output`       | 覆盖时必须使用绝对路径                          |
 | `LOG_LEVEL`          | `INFO`                      | 日志级别                                        |
 
 模型设置也可以通过 `/api/v1/settings` 持久化到 `data/user_settings.json`。保存的用户设置会在 Run 创建时形成不可变快照，避免并发运行中的配置变更影响已开始的任务。
@@ -295,7 +300,18 @@ uv run ruff check app/ tests/ launcher.py
 
 Windows 下启动 smoke test 时，建议直接运行 `backend/.venv/Scripts/python.exe -m uvicorn ...`，并在测试结束后显式终止该进程；不要用可能脱离子进程的 `Start-Process uv run ...` 组合。
 
-### 前端
+### Node Workspace
+
+正常质量门从仓库根目录执行：
+
+```bash
+pnpm test
+pnpm lint
+pnpm typecheck
+pnpm build
+```
+
+### 前端 package（定向诊断）
 
 所有前端命令从 `frontend/` 目录执行：
 

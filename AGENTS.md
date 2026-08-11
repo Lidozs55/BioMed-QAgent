@@ -15,7 +15,9 @@
 
 | Layer                | Technology                                                 |
 | -------------------- | ---------------------------------------------------------- |
-| Backend              | Python 3.12+, FastAPI, OpenAI Agents SDK, Qwen (DashScope) |
+| Application Host     | Node.js 22.19+, TypeScript, Vite middleware                |
+| Legacy Runtime/Core  | Python 3.12+, FastAPI, OpenAI Agents SDK, Qwen (DashScope) |
+| Experimental Agent   | Pi (adapter-confined, non-durable Phase 1 surface)         |
 | Frontend             | React 19, Vite, Tailwind CSS v4, shadcn/ui                 |
 | Package Manager (FE) | pnpm (**never npm**)                                       |
 | Package Manager (BE) | uv (`uv.lock`)                                             |
@@ -26,7 +28,14 @@ The current architecture is a **dual-layer structure: Agent + Deterministic
 Pipeline**. Full details are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §2.
 Key points:
 
-- The frontend (React/Vite) communicates with FastAPI via HTTP + WebSocket.
+- Normal development starts from root `pnpm dev`. The TypeScript Application
+  Host owns the single browser-facing port, embeds Vite middleware, exposes the
+  explicit non-durable `/experimental/pi/*` surface, and proxies formal
+  `/api/v1/*` HTTP/WS traffic to private loopback FastAPI.
+- FastAPI remains the Phase 1 authority for the formal durable product API,
+  Task/Run state, settings, Skills, and Python V2 Dataset Core. It is a
+  Host-managed private child during normal development, not a second browser
+  entrypoint.
 - The FastAPI entry point is `app.main:app`, with routes registered in
   [app/api/routes.py](backend/app/api/routes.py) (HTTP) and
   [app/api/ws.py](backend/app/api/ws.py) (WebSocket). The application lifespan
@@ -105,7 +114,8 @@ Key points:
 
 **Durable Event WebSocket**
 
-1. The client connects to `ws://<host>:8000/api/v1/ws`.
+1. The client connects to `ws://<host>:5173/api/v1/ws` through the TypeScript
+   Host (or directly to port 8000 only for an explicit legacy diagnostic).
 2. `app/api/ws.py:agent_ws` accepts the connection and delegates to
    `app/api/ws_events.py:_run_event_session`.
 3. The client sends commands:
@@ -180,14 +190,30 @@ Before starting any task, consult:
 
 ### 4. Common Commands
 
-#### Backend (cwd: `backend/`)
+#### Normal development (cwd: repository root)
+
+```bash
+pnpm install --frozen-lockfile             # Install the single workspace lockfile
+pnpm dev                                   # Start TS Host + private FastAPI + Vite
+pnpm test                                  # Contracts + server + frontend tests
+pnpm lint                                  # Workspace lint
+pnpm typecheck                             # Workspace TypeScript checks
+pnpm build                                 # Workspace production builds
+```
+
+`pnpm dev` is the only normal startup command. `dev:frontend-standalone`,
+`dev:legacy-backend`, `dev:host-proxy-only`, and `dev:legacy-rollback` are
+migration/debug-only scripts; see `docs/DEVELOPER_QUICKSTART.md` for their
+topology and environment requirements.
+
+#### Legacy backend diagnostics and Python checks (cwd: `backend/`)
 
 All backend commands must be run from the `backend/` directory (where
 `pyproject.toml` lives).
 
 ```bash
 uv sync                                    # Install dependencies
-uv run uvicorn app.main:app --reload       # Start dev server (default 127.0.0.1:8000)
+uv run uvicorn app.main:app --reload       # Standalone legacy diagnostic only
 uv run pytest                              # Run tests (excludes @pytest.mark.live by default)
 uv run pytest -m live                      # Run live network tests only
 uv run pytest tests/test_runner.py         # Run a single test file
@@ -209,13 +235,13 @@ Notes:
   `uv` may exit or remain detached from its child, leaving the smoke test hung.
   See `docs/DEVELOPER_QUICKSTART.md` §4.1 for the verified PowerShell template.
 
-#### Frontend (cwd: `frontend/`)
+#### Frontend package checks (cwd: `frontend/`)
 
 All frontend commands must be run from the `frontend/` directory.
 
 ```bash
 pnpm install                               # Install dependencies
-pnpm dev                                   # Start Vite dev server (default :5173)
+pnpm dev                                   # Standalone frontend diagnostic only
 pnpm build                                 # Production build (tsc -b && vite build)
 pnpm lint                                  # ESLint (--max-warnings 0)
 pnpm tsc                                   # TypeScript type check (runs tsc --noEmit)
@@ -237,6 +263,10 @@ pnpm test:watch                            # Run unit tests in watch mode (vites
   vitest with jsdom.
 - **Frontend components**: use the shadcn skill to discover existing components;
   do not reinvent the wheel (see [frontend/AGENTS.md](frontend/AGENTS.md)).
+- **Phase 1 migration boundaries**: new TS code must not add dependencies on
+  `backend/app/agent_loop`; Pi imports stay in `server/src/agent/pi-adapter.ts`;
+  no second TaskManager is introduced; Pi Workspace cannot write publications;
+  and new wire DTOs enter `@biomed/contracts` first.
 
 ### 6. Development Principles
 
