@@ -1,5 +1,6 @@
 import { APIError } from "@/hooks/settingsContracts";
 import type {
+  BindingFailureDetail,
   BuildResult,
   BuildResultStatus,
   ErrorCode,
@@ -156,7 +157,24 @@ function parseBuildResult(value: unknown, path: string): BuildResult {
     reason_codes: assertStringArray(Reflect.get(result, "reason_codes"), `${path}.reason_codes`),
     user_summary: assertString(Reflect.get(result, "user_summary"), `${path}.user_summary`),
     recommended_next_action: assertString(Reflect.get(result, "recommended_next_action"), `${path}.recommended_next_action`),
+    build_id: assertOptionalNull(Reflect.get(result, "build_id"), `${path}.build_id`, assertRequiredString),
+    binding_failures: parseBindingFailures(Reflect.get(result, "binding_failures"), `${path}.binding_failures`),
   };
+}
+
+function parseBindingFailures(value: unknown, path: string): BindingFailureDetail[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) {
+    throw new APIError(502, `Expected binding failure array at ${path}`);
+  }
+  return value.map((entry, index) => {
+    const obj = assertJsonRecord(entry, `${path}[${index}]`);
+    return {
+      binding_id: assertRequiredString(Reflect.get(obj, "binding_id"), `${path}[${index}].binding_id`),
+      reason_code: assertRequiredString(Reflect.get(obj, "reason_code"), `${path}[${index}].reason_code`),
+      message: assertString(Reflect.get(obj, "message"), `${path}[${index}].message`),
+    };
+  });
 }
 
 function assertHex64(value: unknown, path: string): string {

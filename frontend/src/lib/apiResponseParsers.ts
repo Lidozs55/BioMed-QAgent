@@ -5,6 +5,7 @@
 
 import { APIError } from "@/hooks/settingsContracts";
 import type {
+  BindingFailureDetail,
   BuildDetail,
   BuildPage,
   BuildResult,
@@ -186,7 +187,21 @@ function parseBuildResult(json: unknown, path: string): BuildResult {
     reason_codes: assertArray(Reflect.get(obj, "reason_codes"), `${path}.reason_codes`, (value, index) => assertString(value, `${path}.reason_codes[${index}]`)),
     user_summary: assertString(Reflect.get(obj, "user_summary"), `${path}.user_summary`),
     recommended_next_action: assertString(Reflect.get(obj, "recommended_next_action"), `${path}.recommended_next_action`),
+    build_id: assertOptionalNull(Reflect.get(obj, "build_id"), `${path}.build_id`, (value, p) => assertString(value, p, true)),
+    binding_failures: parseBindingFailures(Reflect.get(obj, "binding_failures"), `${path}.binding_failures`),
   };
+}
+
+function parseBindingFailures(value: unknown, path: string): BindingFailureDetail[] {
+  if (value === undefined || value === null) return [];
+  return assertArray(value, path, (entry, index) => {
+    const obj = assertObject(entry, `${path}[${index}]`);
+    return {
+      binding_id: assertString(Reflect.get(obj, "binding_id"), `${path}[${index}].binding_id`, true),
+      reason_code: assertString(Reflect.get(obj, "reason_code"), `${path}[${index}].reason_code`, true),
+      message: assertString(Reflect.get(obj, "message"), `${path}[${index}].message`),
+    };
+  });
 }
 
 function parseRunSummary(json: unknown, path: string): RunSummary {

@@ -28,26 +28,22 @@ export function ArtifactFab({
   const activeTask = useAgentStore(selectActiveTask);
   const artifacts = artifactOverride ?? activeArtifacts;
   const taskId = taskIdOverride ?? activeTask?.summary.task_id ?? null;
-  // Resolve the task's V2 build (if any) so the FAB also appears for
-  // completed builds whose files live in the builds API, not the legacy
-  // artifact store (Phase 7 T1).
+  // V2 report cards own completed and loading build results; keep this FAB for legacy files only.
   const buildState = useTaskBuildId(
     buildIdOverride == null ? taskId : null,
   );
   const resolvedBuildId = buildIdOverride ?? buildState.buildId;
 
   if (
-    (artifacts.length === 0 && resolvedBuildId === null) ||
-    taskId === null
+    taskId === null ||
+    buildState.status === "loading" ||
+    resolvedBuildId !== null ||
+    artifacts.length === 0
   ) {
     return null;
   }
 
-  const label =
-    artifacts.length > 0
-      ? `查看 ${artifacts.length} 个产物`
-      : "查看构建结果";
-
+  const label = `查看 ${artifacts.length} 个产物`;
   return (
     <>
       <Button
@@ -58,7 +54,7 @@ export function ArtifactFab({
         aria-label={label}
       >
         <FilesIcon data-icon="inline-start" aria-hidden="true" />
-        {artifacts.length > 0 ? artifacts.length : "结果"}
+        {artifacts.length}
       </Button>
       <ArtifactSheet
         open={open}

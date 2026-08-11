@@ -68,7 +68,6 @@ backend/
 │   ├── main.py                       # FastAPI lifespan 入口（TaskManager / Repository / EventHub / TaskIndex）
 │   ├── config.py                     # Settings dataclass（含 NCBI + Runtime 配置）
 │   ├── model_config/                 # 模型配置 schema + 目录 + 供应商（UserSettings / RunModelSettings / AdvancedParams / QwenModelEntry）
-│   ├── settings_manager.py           # 用户设置 CRUD（JSON 持久化 + 环境变量回退）
 │   ├── agent_loop/                   # Agent 运行核心
 │   │   ├── agent.py                  # build_agent / AGENT_MAX_TURNS=15 / INSTRUCTIONS
 │   │   ├── runner.py                 # AgentRunExecutor：durable Run + typed 事件转换 + finish_reason 校验
@@ -82,8 +81,6 @@ backend/
 │   │   ├── model_info_router.py      # 模型信息仓库 REST（GET /model-info、/model-info/{id}）
 │   │   ├── ws.py                     # WebSocket 入口（/api/v1/ws）
 │   │   └── ws_events.py              # durable event session（subscribe/replay/ping）
-│   ├── core/
-│   │   └── metrics.py                # MetricsTracker：阶段级指标追踪 + 消融报告导出
 │   ├── domain/                       # 领域模型（Pydantic v2）
 │   │   ├── contracts/                # 正式契约（base/ids/enums/events/runtime/task/source/pipeline/discovery）
 │   │   ├── events.py / task.py / processing.py
@@ -110,7 +107,7 @@ backend/
 │   │   │   └── analysis/             #   stats
 │   │   └── learned/                  # 后天 Skill（默认禁用；AST + 路径白名单安全校验）
 │   └── tools/                        # Function Tools
-│       ├── _registry.py / io.py / workdir.py / crawler.py
+│       ├── io.py / workdir.py / crawler.py
 │       ├── alignment.py / content_cache.py / network_safety.py
 ├── tests/                            # pytest（86 文件 / 1025+ 测试，详见下方）
 │   ├── agent_loop/ api/ contracts/ integration/ integrations/ live/
@@ -395,7 +392,7 @@ pyinstaller --onefile --name BioMed-QAgent --add-data "dist;dist" --hidden-impor
 2. 实现 `search_*`、`describe_*`、`download_*` 三个 Tool 函数
 3. 使用 `@function_tool` 装饰器注册到 SDK
 4. 模块底部调用 `skill_registry.register(SkillDef(...))`
-5. 在 `app/tools/_registry.py:BUILTIN_SKILL_MODULES` 追加模块
+5. 无需手工注册——内置 skill 由 `app/skills/builtin` 包通过 `load_builtin_skill_descriptors()` 自动发现（pkgutil walk 导入所有子模块）
 6. 若需走 Pipeline 产出 `SourceAsset`，在 `integrations/acquisition.py:_ALLOWED_HOSTS` 添加域名
 7. 编写对应测试（检索、元数据、下载分离测试）
 

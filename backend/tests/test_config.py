@@ -45,25 +45,10 @@ def test_output_dir_default_is_absolute() -> None:
     assert Path(configured.output_dir).is_absolute()
 
 
-def test_crawler_settings_defaults() -> None:
-    """crawler_ua / rate_limit_seconds 提供可配置默认值。"""
+def test_rate_limit_settings_default() -> None:
+    """rate_limit_seconds 提供可配置默认值。"""
     configured = Settings()
-    # 未配置 CRAWLER_UA 时为空（调用方回退到内置 BROWSER_UA）
-    assert isinstance(configured.crawler_ua, str)
     assert configured.rate_limit_seconds == 2.0
-
-
-def test_stage_timeouts_env_parsing(monkeypatch) -> None:
-    """STAGE_TIMEOUTS JSON env 被解析为 float map，无效值回退空。"""
-    monkeypatch.setenv("STAGE_TIMEOUTS", '{"discovery": 60, "acquisition": 120}')
-    configured = Settings()
-    assert configured.stage_timeouts == {"discovery": 60.0, "acquisition": 120.0}
-
-    monkeypatch.setenv("STAGE_TIMEOUTS", "not-json")
-    assert Settings().stage_timeouts == {}
-
-    monkeypatch.setenv("STAGE_TIMEOUTS", "")
-    assert Settings().stage_timeouts == {}
 
 
 def test_settings_is_frozen() -> None:

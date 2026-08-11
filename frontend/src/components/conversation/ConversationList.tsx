@@ -10,7 +10,7 @@ interface ConversationListProps {
 export function ConversationList({ items, activeRunId }: ConversationListProps) {
   return (
     <>
-      {items.map((item) => (
+      {items.filter((item) => item.kind !== "artifact").map((item) => (
         <MessageScrollerItem
           key={item.itemId}
           messageId={item.itemId}

@@ -45,6 +45,13 @@ export type ErrorCode =
   | "cancelled"
   | "internal_error";
 
+/** Per-binding failure detail on a NO_DATA ``BuildResult`` (backend BindingFailureDetail, K2). */
+export interface BindingFailureDetail {
+  binding_id: string;
+  reason_code: string;
+  message: string;
+}
+
 export interface BuildResult {
   status: BuildResultStatus;
   valid_row_count: number;
@@ -55,6 +62,10 @@ export interface BuildResult {
   reason_codes: string[];
   user_summary: string;
   recommended_next_action: string;
+  /** Stable build identity correlating the envelope back to its build dir (C1e). */
+  build_id?: string | null;
+  /** Per-source rejection trace on NO_DATA builds (K2); absent on older payloads. */
+  binding_failures?: BindingFailureDetail[];
 }
 
 /** V2 build artifact role (mirrors backend ArtifactRole). */
@@ -498,6 +509,7 @@ export type EventPayload =
         failed_count: number;
         report_path: string;
       };
+      build_result?: BuildResult | null;
     }
   | { type: "task_failed"; error: ErrorDetail }
   | { type: "run_queued"; request_id: string; input: string }

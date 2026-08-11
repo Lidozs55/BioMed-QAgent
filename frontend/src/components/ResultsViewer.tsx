@@ -116,9 +116,11 @@ function parseSourceManifest(activities: readonly ActivityProjection[]): SourceE
 export function CsvPreview({
   artifactUrl,
   noDataMessage,
+  maxRows = 100,
 }: {
   artifactUrl: string;
   noDataMessage?: string;
+  maxRows?: number;
 }) {
   const [state, setState] = useState<{
     url: string;
@@ -185,7 +187,7 @@ export function CsvPreview({
           </TableRow>
         </TableHeader>
         <TableBody>
-          {state.data.rows.slice(0, 100).map((row, rowIndex) => (
+            {state.data.rows.slice(0, maxRows).map((row, rowIndex) => (
             <TableRow key={`row-${rowIndex}`}>
               {row.map((cell, cellIndex) => (
                 <TableCell key={`${rowIndex}-${cellIndex}`} className="whitespace-nowrap text-xs">
@@ -196,8 +198,10 @@ export function CsvPreview({
           ))}
         </TableBody>
       </Table>
-      {state.data.truncated && (
-        <p className="px-2 py-1 text-xs text-muted-foreground">仅显示前 100 行</p>
+      {(state.data.truncated || state.data.rows.length > maxRows) && (
+        <p className="px-2 py-1 text-xs text-muted-foreground">
+          仅显示前 {maxRows} 行
+        </p>
       )}
     </div>
   );

@@ -63,13 +63,17 @@ Instructions for INSTRUCTIONS
 ─────────────────────────────
 This constant is the system prompt for the main research Agent (BioMedResearcher).
 At runtime it is wrapped by a dynamic instructions callable that appends
-``preferred_sources`` and ``query_log`` sections (see ``resolve_agent_instructions``).
+``preferred_sources``, ``query_log`` and a work-progress briefing (产物状态 /
+数据源使用 / 浏览器工具) sections (see ``resolve_agent_instructions``).
 
 Design Principles
 ─────────────────
-1. Iron rules at top and bottom. The four non-negotiable constraints appear in
-   the opening ``铁律`` block and are echoed in the closing ``输出纪律``
-   section. Long-context models attend to首尾; middle detail is diluted.
+1. Iron rules at top and bottom. The opening ``铁律`` block is authoritative.
+   The closing ``输出纪律`` restates the artifact rules once (``产物铁律``) and
+   the function-call channel rule; no other section repeats the iron rules
+   verbatim — context-adjacent guidance (e.g. 第 5 步's ``list_files``) stays
+   local to where it applies. Long-context models attend to首尾; middle detail
+   is diluted.
 
 2. Three-layer terminology, never conflated:
    • 数据源 (data source) — the external database: GEO, PubMed, PDB …
@@ -262,6 +266,10 @@ Spec 模板（gene expression 单源）：
 执行层失败不产生 BuildResult：工具信封返回 `status: "error"`（处理方式见上）。
 
 ### 第 5 步：汇报发现
+汇报前先确认产物状态：正式汇报前先检查"本 run 是否已产出正式产物（publication）"。
+若尚未产出，且课题存在可构建的数据源（GEO/GDC/Xena 表达谱等），执行
+`execute_dataset_build` 完成至少一次构建再汇报；若判定课题无可构建数据源，
+须在汇报中说明判定依据。
 说明来源追踪、研究思路、关键发现和产物内容。引用产物时用 `list_files` 查看
 `artifact_dir` 下的实际文件名，不要编造文件名或列名。
 
@@ -314,13 +322,9 @@ Spec 模板（gene expression 单源）：
 7. **适时止损**：若 2-3 次调整后仍无合适数据，停止重试，向用户如实汇报已尝试的
    方案和失败原因
 
-**禁止行为**：构建失败意味着没有通过 validation 的结构化产物，不得用
-`write_file` 写"研究汇报"文件冒充产物，只能在文本回复中汇报失败原因。
-
 ## 产物与汇报
 构建成功后会产出不可变 publication（版本目录 + supersedes 链）。工具返回的 JSON 中
-`artifact_dir` 字段指示产物所在目录。**引用产物时用 `list_files` 查看 `artifact_dir`
-下的实际文件名，不要编造文件名或列名**——字段含义参考 `field_descriptions.csv` 的
+`artifact_dir` 字段指示产物所在目录，字段含义参考 `field_descriptions.csv` 的
 `description` 列。
 
 ## 上下文管理
@@ -372,9 +376,8 @@ Spec 模板（gene expression 单源）：
 - 工具结果会自动以结构化卡片展示给用户，只需在文本中给出自然语言的结论
 - 工具失败时用一句话说明原因和调整方向，不得声称调用了不存在的工具
 - 向用户汇报的检索计划摘要限制在 1-2 句内；内部推理可以详尽
-
-**再次强调**：正式产物仅由 `execute_dataset_build` 生成。构建失败时不编造文件，
-不冒充产物。
+- **产物铁律**：正式产物仅由 `execute_dataset_build` 生成；构建失败不编造文件
+  冒充产物，只能在文本回复中汇报；引用产物用 `list_files` 核对实际文件名
 
 """
 
@@ -452,6 +455,45 @@ def _format_personalization_section() -> str:
     return personalization_section()
 
 
+def _format_progress_briefing_section(run_ctx: RunContext) -> str:
+    """格式化"工作进度简报"小节（A1）。
+
+    让 LLM 每轮都能看到当前产物状态与数据源探索进度，避免长上下文下
+    遗忘"产出正式产物"这一交付目标（docs/REVIEW_2026-08-11-task-25d12608.md
+    §5.4 A1）。内容刻意保持简报式：只给状态，不给指令。
+    """
+    used_sources: list[str] = []
+    for entry in run_ctx.query_log:
+        source = entry.get("source")
+        if source and source not in used_sources:
+            used_sources.append(source)
+    for source in run_ctx.sources:
+        database = getattr(source, "database", None)
+        value = getattr(database, "value", None) or str(database)
+        if value and value not in used_sources:
+            used_sources.append(value)
+
+    unused_sources = [
+        db for db in run_ctx.preferred_sources if db not in used_sources
+    ]
+    browser_used = any(
+        source in used_sources
+        for source in ("browser", "browser_fallback", "web_visual_capture")
+    )
+    publication = "有" if run_ctx.has_pending_publication else "无"
+
+    return (
+        "## 工作进度简报（当前状态，非指令）\n"
+        f"- 正式产物（publication）：{publication}\n"
+        f"- 构建尝试：{run_ctx.pipeline_attempt_count} 次；"
+        f"已下载原始文件：{len(run_ctx.raw_assets)} 个\n"
+        f"- 已使用数据源：{', '.join(used_sources) if used_sources else '无'}\n"
+        f"- 未使用数据源（课题相关可继续探索）："
+        f"{', '.join(unused_sources) if unused_sources else '无'}\n"
+        f"- 浏览器自动化工具：{'已使用' if browser_used else '未使用'}"
+    )
+
+
 def resolve_agent_instructions(base: str, run_ctx: RunContext) -> str:
     """Return the exact dynamic instruction string the Agent will receive.
 
@@ -462,9 +504,11 @@ def resolve_agent_instructions(base: str, run_ctx: RunContext) -> str:
     personal_section = _format_personalization_section()
     sources_section = _format_preferred_sources_section(run_ctx)
     search_section = _format_query_log_section(run_ctx)
+    briefing_section = _format_progress_briefing_section(run_ctx)
     return (
         f"{base}\n\n---\n\n{personal_section}\n\n---\n\n"
         f"{sources_section}\n\n---\n\n{search_section}"
+        f"\n\n---\n\n{briefing_section}"
     )
 
 

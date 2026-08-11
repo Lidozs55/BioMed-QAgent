@@ -133,6 +133,17 @@ function BuildBanner({ result }: { result: BuildResult }) {
             ))}
           </div>
         )}
+        {result.binding_failures !== undefined && result.binding_failures.length > 0 && (
+          <ul className="mt-2 space-y-1 border-t pt-2 text-xs text-muted-foreground">
+            {result.binding_failures.map((failure) => (
+              <li key={failure.binding_id} className="flex flex-wrap items-baseline gap-x-2">
+                <span className="font-medium text-foreground">{failure.binding_id}</span>
+                <Badge variant="outline">{failure.reason_code}</Badge>
+                {failure.message !== "" && <span>{failure.message}</span>}
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
     </div>
   );

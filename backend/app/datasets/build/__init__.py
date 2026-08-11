@@ -18,7 +18,6 @@ from app.datasets.build.adapters import (
     get_adapter,
 )
 from app.datasets.build.canonicalizer import CanonicalizationResult, canonicalize
-from app.datasets.build.chain import BuildChainResult, build_expression_dataset
 from app.datasets.build.compat_gate import (
     CompatibilityReport,
     check_expression_compatibility,
@@ -50,7 +49,6 @@ __all__ = [
     "SourceAdapter",
     "XenaMatrixAdapter",
     "assemble_manifest",
-    "build_expression_dataset",
     "build_manifest",
     "build_provenance_document",
     "canonicalize",

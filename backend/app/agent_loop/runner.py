@@ -98,6 +98,9 @@ OFFICIAL_FIXTURE_DIR = (
 MAX_TURNS_RESUME_LIMIT: int = 3
 #: Qwen 偶发返回非 JSON 的 function.arguments 导致 400，最多重试次数。
 QWEN_FUNCTION_ARGS_RETRY_LIMIT: int = 2
+#: Qwen 类模型偶发"仅 reasoning、无文本/工具调用"的回合（SDK 把
+#: final_output 置为空串），最多重新提示次数；耗尽后仍 fail-loud。
+EMPTY_OUTPUT_RETRY_LIMIT: int = 2
 
 
 def resolve_max_turns_resume_limit(
@@ -1021,6 +1024,7 @@ class AgentRunExecutor:
         result = None
         resume_count = 0
         qwen_retry_count = 0
+        empty_output_retry_count = 0
         runtime_limits = getattr(model_settings, "runtime_limits", None)
         no_progress_detector = (
             NoProgressDetector(
@@ -1158,6 +1162,39 @@ class AgentRunExecutor:
                 raise
             finally:
                 await text_buffer.flush()
+            # 空输出恢复：Qwen 类模型偶发"仅 reasoning、无文本/工具调用"的
+            # 回合（SDK 对无 MessageOutputItem 的响应把 final_output 置为
+            # 空串），常见于工具报错后的瞬时抖动。重新提示继续，而不是
+            # 立即 fail；重试耗尽后仍由下方守卫 fail-loud（保持
+            # REVIEW_2026-07-18 §2 语义）。
+            final_output = getattr(result, "final_output", None)
+            if (
+                not execution.context.cancellation_requested.is_set()
+                and isinstance(final_output, str)
+                and not final_output.strip()
+                and empty_output_retry_count < EMPTY_OUTPUT_RETRY_LIMIT
+            ):
+                empty_output_retry_count += 1
+                await execution.emit(
+                    WarningPayload(
+                        code="llm_empty_output_retry",
+                        message=(
+                            "LLM 返回空输出（无文本或工具调用）；重新提示继续 "
+                            f"({empty_output_retry_count}/{EMPTY_OUTPUT_RETRY_LIMIT})"
+                        ),
+                    )
+                )
+                agent_input = [
+                    {
+                        "role": "user",
+                        "content": (
+                            "你上一轮没有产生任何文本或工具调用（空回复）。"
+                            "请立即继续当前任务：要么调用必要的工具，"
+                            "要么用中文文本直接回答用户。"
+                        ),
+                    }
+                ]
+                continue
             # 消耗成功后，记录权威输入 usage 残差供未来 Run 校准。
             # 缺失/不支持/零 input usage 为 no-op；活跃 Run 的预算不变。
             record_calibration_from_result(

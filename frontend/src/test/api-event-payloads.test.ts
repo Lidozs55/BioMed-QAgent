@@ -83,6 +83,43 @@ describe("parseEventPayload — pipeline event family", () => {
     if (r.type !== "task_completed") throw new Error();
     expect(r.validation.checked_count).toBe(5);
   });
+
+  it("task_completed — parses optional build_result with binding failures", () => {
+    const r = parseEventPayload(
+      o({
+        type: "task_completed",
+        validation: { status: "invalid", checked_count: 1, failed_count: 1, report_path: "/r" },
+        build_result: {
+          status: "no_data",
+          valid_row_count: 0,
+          successful_sources: [],
+          rejected_sources: ["gse"],
+          available_artifact_roles: [],
+          publication_id: null,
+          reason_codes: ["no_primary_data"],
+          user_summary: "",
+          recommended_next_action: "",
+          build_id: "build_task_1",
+          binding_failures: [
+            { binding_id: "gse", reason_code: "empty_series_matrix", message: "metadata only" },
+          ],
+        },
+      }),
+      "task_completed",
+      "p",
+    );
+    if (r.type !== "task_completed") throw new Error();
+    expect(r.build_result?.build_id).toBe("build_task_1");
+    expect(r.build_result?.binding_failures).toEqual([
+      { binding_id: "gse", reason_code: "empty_series_matrix", message: "metadata only" },
+    ]);
+  });
+
+  it("task_completed — build_result absent yields null", () => {
+    const r = parseEventPayload(o({ type: "task_completed", validation: { status: "valid", checked_count: 1, failed_count: 0, report_path: "/r" } }), "task_completed", "p");
+    if (r.type !== "task_completed") throw new Error();
+    expect(r.build_result).toBeNull();
+  });
 });
 
 describe("parseEventPayload — runtime event family", () => {
@@ -184,6 +221,7 @@ describe("parseEventPayload — runtime event family", () => {
           rejected_sources: [],
           available_artifact_roles: [],
           publication_id: null,
+          build_id: "build_parser_1",
           reason_codes: ["no_primary_data"],
           user_summary: "",
           recommended_next_action: "",
@@ -195,6 +233,41 @@ describe("parseEventPayload — runtime event family", () => {
     if (r.type !== "run_completed") throw new Error();
     expect(r.build_result?.user_summary).toBe("");
     expect(r.build_result?.recommended_next_action).toBe("");
+    expect(r.build_result?.build_id).toBe("build_parser_1");
+  });
+
+  it("run_completed — parses build_id and per-binding failure details (K2)", () => {
+    const r = parseEventPayload(
+      o({
+        type: "run_completed",
+        build_result: {
+          status: "no_data",
+          valid_row_count: 0,
+          successful_sources: [],
+          rejected_sources: ["gse", "gdc"],
+          available_artifact_roles: [],
+          publication_id: null,
+          reason_codes: ["no_primary_data"],
+          user_summary: "",
+          recommended_next_action: "",
+          build_id: "build_run_1",
+          binding_failures: [
+            { binding_id: "gse", reason_code: "empty_series_matrix", message: "metadata only" },
+            { binding_id: "gdc", reason_code: "build_error", message: "checksum mismatch" },
+          ],
+        },
+      }),
+      "run_completed",
+      "p",
+    );
+    if (r.type !== "run_completed") throw new Error();
+    expect(r.build_result?.build_id).toBe("build_run_1");
+    expect(r.build_result?.binding_failures).toHaveLength(2);
+    expect(r.build_result?.binding_failures?.[0]).toEqual({
+      binding_id: "gse",
+      reason_code: "empty_series_matrix",
+      message: "metadata only",
+    });
   });
 
   it("publication_created — parses the full publication payload", () => {

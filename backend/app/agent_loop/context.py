@@ -718,6 +718,20 @@ class RunContext:
 
         return self._pipeline_attempt_count
 
+    @property
+    def has_pending_publication(self) -> bool:
+        """Whether this Run has produced a publication or dataset-build outcome.
+
+        Read by the dynamic-instructions work-progress briefing so the LLM
+        always sees whether a formal artifact has been produced yet (A1,
+        docs/REVIEW_2026-08-11-task-25d12608.md §5.4).
+        """
+
+        return (
+            self._pending_publication is not None
+            or self._pending_dataset_build is not None
+        )
+
     def bind_managed_run(self, run_id: str) -> None:
         """Bind this context to the manager's authoritative Run identity."""
 

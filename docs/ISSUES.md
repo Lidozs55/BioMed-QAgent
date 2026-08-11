@@ -81,3 +81,9 @@
 - [x] **已修复（2026-08-10，见 docs/REVIEW_2026-08-10-task-9ce0124f.md §5.1 T2）**：`app/skills/builtin/acquisition/geo.py` `download_geo_adapter` / `_resolve_download` — 下载 matrix 类型只校验 HTTP/大小/哈希，不校验 gzip 内容是否含 `!series_matrix_table_begin`。NCBI 对 RNA-seq（2021 起）及部分阵列系列只生成"元数据头"矩阵文件（实测 GSE173954/GSE327021/GSE266328/GSE160389 全部如此），下载被报告为"成功"，数据问题推迟到 build parse 阶段才以 `no_primary_data` 暴露。
 - **根因**：下载成功 ≠ 数据表存在，内容级校验缺失。
 - **修复**：`download_geo_adapter` 对 `matrix` 类型下载后解压头部校验 `!series_matrix_table_begin`，缺失时返回结构化 `reason_code: empty_series_matrix` 并提示改用 `file_type='soft'/'suppl'`，且不登记为可用 source asset；`read_file_head` 支持 .gz 解压；`unsupported file_type` 错误信息列出合法值；系统提示补多 binding 兜底 + supplementary 路径。新增回归测试 `test_download_geo_matrix_fails_fast_on_metadata_only_gzip`、`test_download_geo_unsupported_file_type_lists_valid_values`、`test_read_file_head_decompresses_gzip`。
+
+### 后端测试在 Windows 上的 3 个环境性失败（非本次改动引入）
+
+- [ ] `tests/test_config.py::test_output_dir_default_is_absolute` — 期望 `Settings.output_dir` 是绝对路径，但 Windows 下 `Path('data/output')` 相对路径断言为 False。
+- [ ] `tests/api/test_artifact_api.py::test_legacy_loaded_none_downloads_corrections_todo` / `test_legacy_normal_branch_lists_and_downloads_corrections_todo` — 断言失败，疑似 Windows 路径/编码差异。
+- **确认（2026-08-10，fix/geo-download-size-cap）**：在干净 `main`（stash 改动后）上复现同一 3 个失败，非本次改动回归；全量套件其余 2315 个测试通过。

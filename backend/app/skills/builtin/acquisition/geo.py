@@ -8,7 +8,6 @@ import json
 import logging
 import re
 from datetime import UTC, datetime
-from email.utils import parsedate_to_datetime
 from typing import Any
 from urllib.parse import urlparse
 
@@ -18,6 +17,7 @@ from agents import RunContextWrapper, function_tool
 from app.agent_loop.context import RunContext
 from app.domain.contracts import Database, DataLevel, QueryStatus, SourceRecord, StageName
 from app.integrations.acquisition import acquire_source
+from app.integrations.ncbi.client import parse_retry_after
 from app.integrations.ncbi.discovery import (
     describe_geo_series,
     search_geo_series,
@@ -40,15 +40,8 @@ def _retry_delay(response: httpx.Response | None, attempt: int) -> float:
     value = response.headers.get("Retry-After")
     if not value:
         return fallback
-    try:
-        return max(0.0, float(value))
-    except ValueError:
-        try:
-            retry_at = parsedate_to_datetime(value)
-            now = datetime.now(retry_at.tzinfo or UTC)
-            return max(0.0, (retry_at - now).total_seconds())
-        except (TypeError, ValueError, OverflowError):
-            return fallback
+    delay = parse_retry_after(value, now=datetime.now(UTC))
+    return delay if delay > 0 else fallback
 
 
 async def _get_geo_listing(
@@ -343,7 +336,7 @@ async def download_geo_adapter(
     *,
     services: NcbiServices,
     filename: str | None = None,
-    max_size_mb: int = 100,
+    max_size_mb: int = 4096,
     expected_size: int | None = None,
     expected_sha256: str | None = None,
 ) -> str:
@@ -506,6 +499,9 @@ async def list_geo_supplementary_files(
     description_override=(
         "Download a GEO matrix, SOFT, or supplementary file as an immutable "
         "repository-processed SourceAsset. Compressed files remain compressed. "
+        "max_size_mb caps the download size (default 4096 MiB — large enough "
+        "for real series matrices like GSE33000's 107 MiB file); raise it "
+        "explicitly for very large supplementary files. "
         "For file_type='suppl', call list_geo_supplementary_files first to get "
         "the exact filename."
     ),
@@ -515,7 +511,7 @@ async def download_geo(
     accession: str,
     file_type: str = "matrix",
     filename: str | None = None,
-    max_size_mb: int = 100,
+    max_size_mb: int = 4096,
 ) -> str:
     async with open_ncbi_services() as services:
         return await download_geo_adapter(
@@ -537,7 +533,7 @@ async def download_geo_platform_annotation_adapter(
     gpl: str,
     *,
     services: NcbiServices,
-    max_size_mb: int = 50,
+    max_size_mb: int = 4096,
 ) -> str:
     """Download the GEO SOFT platform annotation table for *gpl*.
 
@@ -661,7 +657,7 @@ async def download_geo_platform_annotation_adapter(
         "GEO build to produce gene-level rows — pass the returned file via "
         "the ``mapping_files`` parameter of execute_dataset_build "
         "(binding_id -> annotation path). Parameters: ``gpl`` (required, "
-        "e.g. 'GPL570'), ``max_size_mb`` (optional, default 50). Returns JSON "
+        "e.g. 'GPL570'), ``max_size_mb`` (optional, default 4096). Returns JSON "
         "with platform, asset and local_files. Fails cleanly when the "
         "platform ships no downloadable annotation table."
     ),
@@ -669,7 +665,7 @@ async def download_geo_platform_annotation_adapter(
 async def download_geo_platform_annotation(
     ctx: RunContextWrapper[Any],
     gpl: str,
-    max_size_mb: int = 50,
+    max_size_mb: int = 4096,
 ) -> str:
     async with open_ncbi_services() as services:
         return await download_geo_platform_annotation_adapter(

@@ -59,7 +59,8 @@
       （V1 不动；`app/pipeline/runner.py` docstring 标注 `[V1 Legacy facade — Phase 2/8]`；
       新 V2 入口为 `execute_dataset_build` function_tool（`app/pipeline/dataset_build_tool.py`，
       spec JSON + source_files 包装为 content-addressed SourceAsset 后走
-      `ExpressionBuildRunner` + `DatasetBuildExecutor`）
+      `ExpressionBuildRunner` + `DatasetBuildExecutor`）。注：`app/pipeline/runner.py`
+      已随 V2 全量落地删除（2026-08 代码卫生清理），V2 入口即 `execute_dataset_build`）
 - [x] **P0** 新 Run 支持携带版本化 `TaskSpecification`（原 §1.6）✅（2026-08-09, feat/leftovers-p1 commits 767d0ba/f69537c：`RunQueuedPayload`/`RunRecord` 携带可选 spec + `POST /tasks` 接受并持久化，向后兼容）
 - [x] **P0** 完整重跑完成新版本 Publication 的原子发布与旧版本保留（supersedes 链）
       （`expression_runner._publish` 写 `publication.json`：`publication_id` / manifest_ref /
@@ -68,7 +69,7 @@
 - [x] **P1** 受控局部重跑 `rerun_from` + 依赖一致性测试；禁止 Agent 任意 `skip_stages`（原 §1.6）
       （`DatasetBuildExecutor.resume_from`：服务端受控起点，目标 Operation 强制重跑、
       下游经 digest 闭包重新校验，起点外 Operation 不得被跳过；4 项测试）
-- [ ] **P2** 删除 `validated_intermediate` / `validated_final` 状态（ADR-010 否决），
+- [x] **P2** 删除 `validated_intermediate` / `validated_final` 状态（ADR-010 否决），
       任务/会话改为 `current_publication_id`（归 Phase 4，随 Publication 一起）
 - [x] **P2** Agent 决策日志持久化 `agent_results/`（吸收原 §1.5.5）
       （`TaskWorkDir.agent_results/query_log.jsonl`：`log_query` 追加持久化，
@@ -268,6 +269,8 @@
 - [x] **P1** 前端：ResultsViewer Tabs 分离主数据/来源/处理/警告（原 §3.1）
       （Phase 7 T4：shadcn Tabs 主数据/来源/处理/警告，复用 Table/CsvPreview；
       legacy 无 manifest 路径保留回退）
+      报告卡约定（2026-08-10）：事件/API parser 保留 `BuildResult.build_id`，reducer 以
+      `report:<runId>` 投影每轮独立卡片；卡片使用紧凑 `CsvPreview.maxRows=10` 和 `detail.artifacts` 文件列表（按 artifact_id 保留重复文件名，展示文件名/大小），展示来源/处理/警告摘要、Dialog tabs 与全量下载；会话列表在包装 `MessageScrollerItem` 前过滤已由 report card 接管的 `artifact` item，runtime artifact projection 仍供 legacy ResultsViewer/ArtifactSheet 使用；`ArtifactFab` 仅作为无 V2 build 时的 legacy fallback。
 - [x] **P1** 前端：对话流任务节点自动折叠（以 `tool_completed` 归组）（原 §3.4）
       （Phase 7 T5：operation/tool 事件按完成归组折叠为紧凑摘要行，手动开关保留）
 - [x] **P2** `toolLabels` 新增 `invoke_skill` / `find_skill` formatter（原 §3.2）

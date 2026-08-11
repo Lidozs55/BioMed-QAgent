@@ -1,16 +1,16 @@
 """Real operation runner wiring the expression build components into the
 Phase 2 execution kernel (Phase 3 P2; Design §16 Phase 3).
 
-``build_expression_dataset`` (``chain.py``) runs the whole skeleton as one
-function; this runner splits the same fixed skeleton into per-operation
-handlers so the ``DatasetBuildExecutor`` can execute and checkpoint each
-Operation (acquire/parse/canonicalize/compatibility_gate/integrate/
-validate_profile/publish) with digest reuse and crash recovery.
+This runner splits the fixed build skeleton into per-operation handlers so
+the ``DatasetBuildExecutor`` can execute and checkpoint each Operation
+(acquire/parse/canonicalize/compatibility_gate/integrate/validate_profile/
+publish) with digest reuse and crash recovery. It supersedes the former
+single-function ``chain.build_expression_dataset`` demo orchestration.
 
-The runner delegates to the same server-side components as the chain
-(adapters, canonicalizer, compatibility gate, integrator, validation
-profile, manifest) and adds the Phase 6 architecture-level release
-invariants gate on the ``publish`` operation.
+The runner delegates to the server-side components (adapters, canonicalizer,
+compatibility gate, integrator, validation profile, manifest) and adds the
+Phase 6 architecture-level release invariants gate on the ``publish``
+operation.
 """
 from __future__ import annotations
 

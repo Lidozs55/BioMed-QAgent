@@ -709,13 +709,15 @@ Agent Tool 桥接的 V1 Pipeline / V2 DatasetBuild 事件都使用 `schema_versi
   `USER_INPUT_REQUIRED/RESUMED`、`STAGE_*`、`TOOL_CALLED/COMPLETED`、
   `WARNING`、`ARTIFACT_PRODUCED`、`TASK_CANCEL_*`、`TASK_RECOVERED`、
   `TASK_COMPLETED/FAILED`；
-- `RuntimeEventType`（22 类）：`RUN_*`、`ASSISTANT_DELTA/REASONING_DELTA`、
-  `TOOL_STARTED`、`CONVERSATION_COMPACTED`、10 个 `SUBAGENT_*` 事件。
+- `RuntimeEventType`（27 类）：`RUN_*`（8）、`PUBLICATION_CREATED`、
+  `ASSISTANT_DELTA/REASONING_DELTA`、`TOOL_STARTED`、
+  `CONVERSATION_COMPACTED`、`OPERATION_*`（4）、10 个 `SUBAGENT_*` 事件。
 
-V2 逐步新增通用构建事件（`build_spec_ready`、`operation_started/progress/
-completed/failed`、`source_candidate_found/rejected`、`compatibility_evaluated`、
-`build_result_ready`）。兼容期与旧 `stage_*` 并存；前端基于 `operation_id`、
-`label` 和 `category` 渲染，不再依赖固定 `StageName` union。
+V2 通用构建事件：`operation_started/progress/completed/failed`（Phase 7 T3，
+携带 `operation_id` / `label` / `category`，前端据此渲染）。兼容期内
+`stage_progress` 仍发射并镜像为 `operation_progress`；`stage_started` /
+`completed` / `failed` / `skipped` 已无生产发射方（仅为回放旧 events.jsonl
+保留），前端不依赖固定 `StageName` union。
 
 `tool_started` 携带可选 `arguments` dict（深度截断 3、字符串 200 字符、列表 20
 项），`tool_completed.output` 截断到 4096 个字符，前端据此渲染"检索 PubMed · 查询:
@@ -858,8 +860,9 @@ Ctrl+⌘ 可对单条消息执行相反操作。半透明侧边栏开启时，�
 | GET | `/tasks/{task_id}/events` | 按 `after_sequence` 重放 durable events | ✅ |
 | GET | `/tasks/{task_id}/artifacts` | 列出 manifest 注册且已验证的 Artifact | ✅ |
 | GET | `/tasks/{task_id}/artifacts/{artifact_id}` | 按 Artifact ID 下载并校验文件 | ✅ |
-| GET | `/tasks/{task_id}/builds` | 列出 Task 下的 Build 摘要、RunStatus、BuildResult 与当前 Publication | 🚧 |
-| GET | `/tasks/{task_id}/builds/{build_id}` | 单个 Build 的 BuildResult、ValidationResult、Manifest 与当前 Publication | 🚧 |
+| GET | `/builds` | 列出全局 Build 摘要、RunStatus、BuildResult 与当前 Publication | ✅ |
+| GET | `/builds/{build_id}` | 单个 Build 的 BuildResult、ValidationResult、Manifest 与当前 Publication | ✅ |
+| GET | `/builds/{build_id}/artifacts/{artifact_id}` | 下载单个 Build 的 Artifact | ✅ |
 | POST | `/import/tasks` | 多部分上传 → IMPORT AgentLoop | ✅ |
 | GET | `/cache/export` | 全量缓存 ZIP 导出 | ✅ |
 | WS | `/ws` | durable events + realtime assistant stream | ✅ |

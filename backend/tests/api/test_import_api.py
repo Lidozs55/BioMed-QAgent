@@ -25,7 +25,6 @@ from app.domain.contracts import StartTaskRequest, TaskRunAccepted
 from app.main import create_app
 from app.runtime.manager import TaskManager
 from app.runtime.repository import TaskRepository
-from app.tools._registry import BUILTIN_SKILL_MODULES  # noqa: F401 — ensure import
 from app.tools.workdir import create_task_workdir
 from fastapi import HTTPException, Request
 from starlette.datastructures import UploadFile

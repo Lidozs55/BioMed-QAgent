@@ -295,7 +295,7 @@ async def download_pdb_adapter(
     file_type: str,
     *,
     services: PdbServices,
-    max_size_mb: int = 50,
+    max_size_mb: int = 4096,
 ) -> str:
     """Download one PDB/mmCIF file through ``acquire_source``.
 
