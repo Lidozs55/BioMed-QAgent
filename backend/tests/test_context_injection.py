@@ -75,5 +75,14 @@ async def test_inject_context_endpoint(tmp_path: Path) -> None:
             assert injected.status_code == 202
             assert injected.json()["pending"] == 1
             assert store.pending(task_id) == ["注意：补充说明"]
+            # 注入内容持久化为对话记录中的用户消息。
+            page = await client.get(f"/api/v1/tasks/{task_id}/messages")
+            assert page.status_code == 200
+            contents = [
+                message["content"]
+                for message in page.json()["messages"]
+                if message["role"] == "user"
+            ]
+            assert "注意：补充说明" in contents
         finally:
             store.clear(task_id)
