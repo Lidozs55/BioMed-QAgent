@@ -2,7 +2,15 @@
 /*  Settings/model response parsers — reject malformed JSON at boundary */
 /* ------------------------------------------------------------------ */
 
-import { APIError, type CapabilitySource, type ModelInfo, type ModelSettings, type VendorInfo } from "@/hooks/settingsContracts";
+import {
+  APIError,
+  type CapabilitySource,
+  type ModelInfo,
+  type ModelSettings,
+  type Personality,
+  type PersonalizationSettings,
+  type VendorInfo,
+} from "@/hooks/settingsContracts";
 
 /* ---- Type assertions ---- */
 
@@ -157,5 +165,29 @@ function parseCapabilities(v: unknown, path: string): ModelInfo["capabilities"] 
     image: assertBoolean(Reflect.get(obj, "image"), `${path}.image`),
     video: assertBoolean(Reflect.get(obj, "video"), `${path}.video`),
     audio: assertBoolean(Reflect.get(obj, "audio"), `${path}.audio`),
+  };
+}
+
+function assertPersonality(v: unknown, path: string): Personality {
+  if (v === "pragmatic" || v === "warm" || v === "rigorous") return v;
+  throw new APIError(502, `Expected pragmatic|warm|rigorous at ${path}, got ${String(v)}`);
+}
+
+/** Parse a personalization response body into PersonalizationSettings. */
+export function parsePersonalization(body: unknown): PersonalizationSettings {
+  const obj = assertObject(body, "personalization");
+  return {
+    custom_instructions: assertString(
+      Reflect.get(obj, "custom_instructions"),
+      "personalization.custom_instructions",
+    ),
+    personality: assertPersonality(
+      Reflect.get(obj, "personality"),
+      "personalization.personality",
+    ),
+    personality_label: assertString(
+      Reflect.get(obj, "personality_label"),
+      "personalization.personality_label",
+    ),
   };
 }

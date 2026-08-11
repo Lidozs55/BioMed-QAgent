@@ -4,6 +4,8 @@ import { toast } from "sonner";
 
 import {
   ColorSwatch,
+  NumberField,
+  SegmentedControl,
   SettingCard,
   SettingRow,
   SettingSection,
@@ -19,6 +21,13 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
+import {
+  REDUCED_MOTION_OPTIONS,
+  UI_FONT_SIZE_MAX,
+  UI_FONT_SIZE_MIN,
+  usePreferencesStore,
+} from "@/stores/preferencesStore";
 import {
   ACCENT_PRESETS,
   FONT_OPTIONS,
@@ -134,6 +143,21 @@ export function AppearanceSettingsSection() {
   const addImportedFont = useThemeStore((state) => state.addImportedFont);
   const removeImportedFont = useThemeStore((state) => state.removeImportedFont);
   const fontInputRef = useRef<HTMLInputElement>(null);
+
+  const translucentSidebar = usePreferencesStore((state) => state.translucentSidebar);
+  const contrast = usePreferencesStore((state) => state.contrast);
+  const pointerCursor = usePreferencesStore((state) => state.pointerCursor);
+  const reducedMotion = usePreferencesStore((state) => state.reducedMotion);
+  const uiFontSize = usePreferencesStore((state) => state.uiFontSize);
+  const lightColors = usePreferencesStore((state) => state.lightColors);
+  const darkColors = usePreferencesStore((state) => state.darkColors);
+  const setTranslucentSidebar = usePreferencesStore((state) => state.setTranslucentSidebar);
+  const setContrast = usePreferencesStore((state) => state.setContrast);
+  const setPointerCursor = usePreferencesStore((state) => state.setPointerCursor);
+  const setReducedMotion = usePreferencesStore((state) => state.setReducedMotion);
+  const setUiFontSize = usePreferencesStore((state) => state.setUiFontSize);
+  const setLightColors = usePreferencesStore((state) => state.setLightColors);
+  const setDarkColors = usePreferencesStore((state) => state.setDarkColors);
 
   const presetHex =
     accent === "custom" ? customAccent : ACCENT_PRESETS[accent as Exclude<ThemeAccent, "custom">].light;
@@ -354,6 +378,151 @@ export function AppearanceSettingsSection() {
               </p>
             </div>
           </div>
+        </SettingCard>
+      </SettingSection>
+
+      <SettingSection
+        title="自定义颜色"
+        description="分别调整浅色 / 深色主题的背景与前景色；留空使用主题默认值。"
+      >
+        <SettingCard>
+          <SettingRow
+            id="settings-light-background"
+            title="浅色主题背景"
+            description="浅色模式下页面与卡片的底色。"
+            control={
+              <ColorSwatch
+                value={lightColors.background}
+                onChange={(next) => setLightColors({ background: next })}
+                ariaLabel="浅色主题背景色（留空使用默认）"
+              />
+            }
+          />
+          <SettingRow
+            title="浅色主题前景"
+            description="浅色模式下主要文字颜色。"
+            control={
+              <ColorSwatch
+                value={lightColors.foreground}
+                onChange={(next) => setLightColors({ foreground: next })}
+                ariaLabel="浅色主题前景色（留空使用默认）"
+              />
+            }
+          />
+          <SettingRow
+            id="settings-dark-background"
+            title="深色主题背景"
+            description="深色模式下页面与卡片的底色。"
+            control={
+              <ColorSwatch
+                value={darkColors.background}
+                onChange={(next) => setDarkColors({ background: next })}
+                ariaLabel="深色主题背景色（留空使用默认）"
+              />
+            }
+          />
+          <SettingRow
+            title="深色主题前景"
+            description="深色模式下主要文字颜色。"
+            control={
+              <ColorSwatch
+                value={darkColors.foreground}
+                onChange={(next) => setDarkColors({ foreground: next })}
+                ariaLabel="深色主题前景色（留空使用默认）"
+              />
+            }
+          />
+        </SettingCard>
+      </SettingSection>
+
+      <SettingSection
+        title="侧边栏与对比度"
+        description="调整侧边栏半透明效果与界面文字对比度。"
+      >
+        <SettingCard>
+          <SettingRow
+            id="settings-translucent-sidebar"
+            title="半透明侧边栏"
+            description="开启后侧边栏呈现半透明毛玻璃效果。"
+            control={
+              <Switch
+                checked={translucentSidebar}
+                onCheckedChange={setTranslucentSidebar}
+                aria-label="半透明侧边栏"
+              />
+            }
+          />
+          <SettingRow
+            id="settings-contrast"
+            title="对比度"
+            description="数值越高文字与背景的对比越强；50 为默认值。"
+            control={
+              <NumberField
+                id="settings-contrast-input"
+                value={contrast}
+                min={0}
+                max={100}
+                onChange={setContrast}
+                ariaLabel="对比度"
+                marks={[
+                  { value: 0, label: "低" },
+                  { value: 50, label: "默认" },
+                  { value: 100, label: "高" },
+                ]}
+              />
+            }
+          />
+        </SettingCard>
+      </SettingSection>
+
+      <SettingSection
+        title="偏好设置"
+        description="与界面交互相关的通用偏好。"
+      >
+        <SettingCard>
+          <SettingRow
+            id="settings-pointer-cursor"
+            title="使用指针光标"
+            description="悬停按钮、链接等交互元素时切换为指针光标。"
+            control={
+              <Switch
+                checked={pointerCursor}
+                onCheckedChange={setPointerCursor}
+                aria-label="使用指针光标"
+              />
+            }
+          />
+          <SettingRow
+            id="settings-reduced-motion"
+            title="减少动态效果"
+            description="减少动画与过渡效果，或匹配系统设置。"
+            control={
+              <SegmentedControl
+                value={reducedMotion}
+                options={REDUCED_MOTION_OPTIONS.map((option) => ({
+                  value: option.value,
+                  label: option.label,
+                }))}
+                onChange={setReducedMotion}
+                ariaLabel="减少动态效果"
+              />
+            }
+          />
+          <SettingRow
+            id="settings-ui-font-size"
+            title="UI 字号"
+            description={`调整界面使用的基准字号（${UI_FONT_SIZE_MIN}–${UI_FONT_SIZE_MAX}px）。`}
+            control={
+              <NumberField
+                id="settings-ui-font-size-input"
+                value={uiFontSize}
+                min={UI_FONT_SIZE_MIN}
+                max={UI_FONT_SIZE_MAX}
+                onChange={setUiFontSize}
+                ariaLabel="UI 字号"
+              />
+            }
+          />
         </SettingCard>
       </SettingSection>
     </div>

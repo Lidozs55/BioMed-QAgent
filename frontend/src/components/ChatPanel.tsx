@@ -44,6 +44,7 @@ import {
   selectConnectionIsConnected,
 } from "@/stores/agentSelectors";
 import { useAgentStore } from "@/stores/agentStore";
+import { isSubmitKey, usePreferencesStore } from "@/stores/preferencesStore";
 import type { ModelInfo } from "@/hooks/useAPI";
 
 interface ChatPanelProps {
@@ -209,6 +210,8 @@ export function ChatPanel({
   const items = useAgentStore(selectActiveItems);
   const activeItem = useAgentStore(selectActiveItem);
   const connected = useAgentStore(selectConnectionIsConnected);
+  const sendShortcut = usePreferencesStore((state) => state.sendShortcut);
+  const showContextUsage = usePreferencesStore((state) => state.showContextUsage);
   const draftInput = useAgentStore((state) => state.draft.input);
   const selectedDatabases = useAgentStore(
     (state) => state.draft.selectedDatabaseIds,
@@ -428,13 +431,13 @@ export function ChatPanel({
   };
 
   const handleDraftKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+    if (!isSubmitKey(event, sendShortcut)) return;
     event.preventDefault();
     void submitTask();
   };
 
   const handleContinuationKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+    if (!isSubmitKey(event, sendShortcut)) return;
     event.preventDefault();
     void sendContinuation();
   };
@@ -618,7 +621,7 @@ export function ChatPanel({
                 onOpenSettings={onOpenSettings}
                 onModelChange={onModelChange}
                 selectedModelId={selectedModelId}
-                contextWindow={contextWindow}
+                contextWindow={showContextUsage ? contextWindow : undefined}
                 contextTokensUsed={estimatedTokens}
                 onCompact={handleCompact}
               />

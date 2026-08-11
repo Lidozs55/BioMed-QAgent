@@ -16,14 +16,14 @@ import type {
 } from "@/runtime/contracts";
 
 // Re-export all settings contracts for backward compatibility
-export type { CapabilitySource, ModelSettings, ModelSettingsUpdate, ModelPreviewRequest, VendorInfo, ModelInfo, SettingsAPIClient, DeclarativeOperation, DeclarativeSkillManifest, DatabaseOperationUpdatePatch, DatabaseUpdatePatch, SkillManifest, SkillDetail, SkillValidation, ParameterSpec, ModelCapabilities, ProviderInfo, ProviderInput, ProviderUpdateInput, ManagedModelInfo, ManagedModelInput, DiscoveredModelInfo } from "@/hooks/settingsContracts";
+export type { CapabilitySource, ModelSettings, ModelSettingsUpdate, ModelPreviewRequest, VendorInfo, ModelInfo, SettingsAPIClient, DeclarativeOperation, DeclarativeSkillManifest, DatabaseOperationUpdatePatch, DatabaseUpdatePatch, SkillManifest, SkillDetail, SkillValidation, ParameterSpec, ModelCapabilities, ProviderInfo, ProviderInput, ProviderUpdateInput, ManagedModelInfo, ManagedModelInput, DiscoveredModelInfo, Personality, PersonalizationSettings, PersonalizationUpdate } from "@/hooks/settingsContracts";
 export type { ContextBudgetSettings } from "@/hooks/settingsContracts";
 
 // Re-export APIError class, normalizer, and runtime parsers
 export { APIError, normalizeErrorDetail } from "@/hooks/settingsContracts";
-export { parseModelSettings, parseVendorsEnvelope, parseModelsEnvelope } from "@/hooks/settingsParsers";
+export { parseModelSettings, parseVendorsEnvelope, parseModelsEnvelope, parsePersonalization } from "@/hooks/settingsParsers";
 import { APIError } from "@/hooks/settingsContracts";
-import { parseModelSettings, parseVendorsEnvelope, parseModelsEnvelope } from "@/hooks/settingsParsers";
+import { parseModelSettings, parseVendorsEnvelope, parseModelsEnvelope, parsePersonalization } from "@/hooks/settingsParsers";
 import type {
   DiscoveredModelInfo,
   ManagedModelInfo,
@@ -214,6 +214,8 @@ export function createAPIClient(options: APIClientOptions = {}): APIClient & Set
       ),
     fetchSettings: () => fetcher(`${baseUrl}/settings`).then((r) => parseResponse(r).then((b) => parseModelSettings(b))),
     saveSettings: (changes) => fetcher(`${baseUrl}/settings`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(changes) }).then((r) => parseResponse(r).then((b) => parseModelSettings(b))),
+    fetchPersonalization: () => request(`${baseUrl}/personalization`).then((b) => parsePersonalization(b)),
+    savePersonalization: (changes) => request(`${baseUrl}/personalization`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(changes) }).then((b) => parsePersonalization(b)),
     fetchVendors: () => fetcher(`${baseUrl}/vendors`).then((r) => parseResponse(r).then((b) => parseVendorsEnvelope(b)).then(({ vendors }) => vendors)),
     fetchModels: (preview) => fetcher(`${baseUrl}/models`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ preview_base_url: preview.baseUrl, preview_api_key: preview.apiKey ?? "", ...(preview.query === undefined ? {} : { query: preview.query }) }) }).then((r) => parseResponse(r).then((b) => parseModelsEnvelope(b)).then(({ models }) => models)),
     fetchProviders: () => request(`${baseUrl}/model-registry/providers`).then((b) => b as ProviderInfo[]),

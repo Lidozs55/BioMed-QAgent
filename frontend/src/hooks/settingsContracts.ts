@@ -53,6 +53,21 @@ export interface ModelSettingsUpdate {
   compaction_target_ratio?: number;
 }
 
+/* ---- Personalization ---- */
+
+export type Personality = "pragmatic" | "warm" | "rigorous";
+
+export interface PersonalizationSettings {
+  custom_instructions: string;
+  personality: Personality;
+  personality_label: string;
+}
+
+export interface PersonalizationUpdate {
+  custom_instructions?: string;
+  personality?: Personality;
+}
+
 export interface ModelPreviewRequest {
   baseUrl: string;
   apiKey?: string;
@@ -282,6 +297,8 @@ export interface DatabaseUpdatePatch {
 export interface SettingsAPIClient {
   fetchSettings: () => Promise<ModelSettings>;
   saveSettings: (changes: ModelSettingsUpdate) => Promise<ModelSettings>;
+  fetchPersonalization: () => Promise<PersonalizationSettings>;
+  savePersonalization: (changes: PersonalizationUpdate) => Promise<PersonalizationSettings>;
   fetchVendors: () => Promise<VendorInfo[]>;
   fetchModels: (preview: ModelPreviewRequest) => Promise<ModelInfo[]>;
   fetchProviders: () => Promise<ProviderInfo[]>;

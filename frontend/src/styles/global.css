@@ -183,3 +183,45 @@
     animation: none;
   }
 }
+
+/* ------------------------------------------------------------------ */
+/*  User preferences — driven by data attributes set from             */
+/*  stores/preferencesStore.ts (编辑器 / 外观 / 偏好设置)                */
+/* ------------------------------------------------------------------ */
+
+:root {
+  --ui-contrast: 50;
+}
+
+[data-pointer-cursor="on"] button:not(:disabled),
+[data-pointer-cursor="on"] [role="button"]:not([aria-disabled="true"]),
+[data-pointer-cursor="on"] a,
+[data-pointer-cursor="on"] select,
+[data-pointer-cursor="on"] input[type="checkbox"],
+[data-pointer-cursor="on"] input[type="radio"],
+[data-pointer-cursor="on"] summary,
+[data-pointer-cursor="on"] label[for] {
+  cursor: pointer;
+}
+
+[data-reduced-motion="on"] *,
+[data-reduced-motion="on"] *::before,
+[data-reduced-motion="on"] *::after {
+  animation: none !important;
+  transition: none !important;
+  scroll-behavior: auto !important;
+}
+
+/* 用户选择“关闭”减弱动态时，恢复内置动画（覆盖上面的媒体查询）。 */
+[data-reduced-motion="off"] .markdown-content[data-streaming="true"] > :last-child::after {
+  animation: assistant-stream-cursor-blink 1s steps(1, end) infinite;
+}
+
+[data-reduced-motion="off"] .settings-highlight {
+  animation: settings-highlight-flash 1.6s ease-out;
+}
+
+[data-translucent-sidebar="on"] [data-slot="sidebar"] {
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}

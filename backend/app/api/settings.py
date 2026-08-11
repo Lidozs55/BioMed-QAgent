@@ -6,7 +6,7 @@ from typing import Annotated, Any, Literal
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from app.model_config.catalog import get_known_model, guess_context_window
 from app.model_config.context_budget import (
@@ -15,9 +15,67 @@ from app.model_config.context_budget import (
 )
 from app.model_info.vendors import list_vendors as _list_vendor_dicts
 from app.model_settings import ModelConfiguration, ModelSettingsStore, mask_api_key
+from app.personalization import (
+    PERSONALITY_LABELS,
+    Personality,
+    PersonalizationSettings,
+    get_personalization,
+    update_personalization,
+)
 from app.tools.network_safety import UnsafeUrlError, resolve_public_http_target
 
 router = APIRouter(prefix="/api/v1", tags=["settings"])
+
+
+class PersonalizationUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    custom_instructions: str | None = None
+    personality: Personality | None = None
+
+
+class PersonalizationPublic(BaseModel):
+    custom_instructions: str
+    personality: Personality
+    personality_label: str
+
+
+@router.get("/personalization", response_model=PersonalizationPublic)
+async def get_personalization_settings() -> PersonalizationPublic:
+    """Return the user's custom instructions and default tone."""
+    current = get_personalization()
+    return PersonalizationPublic(
+        custom_instructions=current.custom_instructions,
+        personality=current.personality,
+        personality_label=PERSONALITY_LABELS[current.personality],
+    )
+
+
+@router.put("/personalization", response_model=PersonalizationPublic)
+async def put_personalization_settings(
+    body: PersonalizationUpdate,
+) -> PersonalizationPublic:
+    """Merge explicitly-provided personalization fields and persist."""
+    changes = body.model_dump(exclude_unset=True)
+    current = get_personalization()
+    try:
+        # Re-validate on purpose: model_copy(update=...) skips validation,
+        # so max_length / personality enum violations would otherwise be
+        # persisted silently.
+        merged = PersonalizationSettings(
+            **{
+                **current.model_dump(),
+                **{key: value for key, value in changes.items() if value is not None},
+            }
+        )
+    except ValidationError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    updated = update_personalization(merged)
+    return PersonalizationPublic(
+        custom_instructions=updated.custom_instructions,
+        personality=updated.personality,
+        personality_label=PERSONALITY_LABELS[updated.personality],
+    )
 
 
 class SettingsUpdate(BaseModel):

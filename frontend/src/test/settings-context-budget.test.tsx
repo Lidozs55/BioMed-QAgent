@@ -40,6 +40,16 @@ function mockApi(overrides: Partial<SettingsAPIClient> = {}): SettingsAPIClient 
   const base: SettingsAPIClient = {
     fetchSettings: vi.fn().mockResolvedValue(SETTINGS),
     saveSettings: vi.fn().mockResolvedValue(SETTINGS),
+    fetchPersonalization: vi.fn().mockResolvedValue({
+      custom_instructions: "",
+      personality: "pragmatic",
+      personality_label: "务实",
+    }),
+    savePersonalization: vi.fn().mockResolvedValue({
+      custom_instructions: "",
+      personality: "pragmatic",
+      personality_label: "务实",
+    }),
     fetchVendors: vi.fn().mockResolvedValue(VENDORS),
     fetchModels: vi.fn().mockResolvedValue([]),
     fetchProviders: vi.fn().mockResolvedValue([]),

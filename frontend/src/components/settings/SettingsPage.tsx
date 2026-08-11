@@ -10,8 +10,10 @@ import {
 } from "@/components/settings/settingsNavConfig";
 import { AppearanceSettingsSection } from "@/components/settings/sections/AppearanceSettingsSection";
 import { DatabaseSettingsSection } from "@/components/settings/sections/DatabaseSettingsSection";
+import { EditorSettingsSection } from "@/components/settings/sections/EditorSettingsSection";
 import { GeneralSettingsSection } from "@/components/settings/sections/GeneralSettingsSection";
 import { ModelSettingsSection } from "@/components/settings/sections/ModelSettingsSection";
+import { PersonalizationSettingsSection } from "@/components/settings/sections/PersonalizationSettingsSection";
 import { SkillsSettingsSection } from "@/components/settings/sections/SkillsSettingsSection";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
@@ -68,8 +70,10 @@ const SECTION_DESCRIPTIONS: Record<string, string> = {
   model: "管理模型供应商与维护模型列表，并查看当前模型信息。",
   databases: "管理可选择的声明式检索数据库。",
   skills: "筛选、启停、回滚或安装 Agent 技能包。",
+  editor: "调整消息发送方式与上下文用量指示。",
   appearance: "调整主题模式、强调色与界面字体。",
   general: "管理本地数据与查看版本信息。",
+  personalization: "配置适用于所有任务的额外指令与默认回复语气。",
 };
 
 function errorText(error: unknown): string {
@@ -440,7 +444,11 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
                       }
                     />
                   )}
+                  {activeSection === "editor" && <EditorSettingsSection />}
                   {activeSection === "appearance" && <AppearanceSettingsSection />}
+                  {activeSection === "personalization" && (
+                    <PersonalizationSettingsSection api={api} />
+                  )}
                   {activeSection === "general" && (
                     <GeneralSettingsSection onExportCache={onExportCache ?? (() => undefined)} />
                   )}
