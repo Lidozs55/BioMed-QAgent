@@ -218,11 +218,13 @@ class DurableTaskSession:
     async def add_items(
         self,
         items: list[TResponseInputItem],
-    ) -> None:
+    ) -> list[str]:
+        """Append items and return the projected message ids (empty if none)."""
+
         if not items:
-            return
+            return []
         normalized = [_json_item(item) for item in items]
-        await self._run_storage(self._add_items, normalized)
+        return await self._run_storage(self._add_items, normalized)
 
     async def add_run_input_once(self, run_id: str, input_value: str) -> bool:
         """Project one manager-owned Run input into history exactly once."""
@@ -384,7 +386,8 @@ class DurableTaskSession:
     def _add_items(
         self,
         items: list[dict[str, Any]],
-    ) -> None:
+    ) -> list[str]:
+        message_ids: list[str] = []
         with path_lock(self.path):
             active, highest_ordinal = self._replay()
             admitted = next(
@@ -431,6 +434,8 @@ class DurableTaskSession:
                         else None
                     ),
                 }
+                if message is not None and message.message_id is not None:
+                    message_ids.append(message.message_id)
                 if reconciles_admitted_input:
                     record["sdk_input_copy_for"] = self.run_id
                     input_reconciled = True
@@ -438,6 +443,7 @@ class DurableTaskSession:
             append_jsonl_records(self.path, records)
             active.extend(records)
             self._remember(active, highest_ordinal + len(records))
+        return message_ids
 
     def _add_run_input_once(
         self,

@@ -28,6 +28,7 @@ import {
 import type {
   AgentRuntimeData,
   ConnectionStatus,
+  ConversationItem,
   HistoryStatus,
   SequenceGapMarker,
   TaskProjection,
@@ -76,6 +77,7 @@ export interface AgentStore extends AgentRuntimeData {
   setDraftSelectedDatabaseIds: (databaseIds: string[]) => void;
   setDraftMode: (mode: TaskMode) => void;
   setDraftError: (error: string | null) => void;
+  appendSteerMessage: (taskId: string, content: string, messageId: string) => void;
   showNewDraft: () => void;
   removeTask: (taskId: string) => void;
 }
@@ -367,6 +369,32 @@ export const useAgentStore = create<AgentStore>()(
 
       setDraftError: (error) =>
         set((state) => ({ draft: { ...state.draft, error } })),
+
+      appendSteerMessage: (taskId, content, messageId) =>
+        set((state) => {
+          const task = state.tasksById[taskId];
+          if (!task) return state;
+          const createdAt = new Date().toISOString();
+          const lastSequence =
+            task.items.length > 0
+              ? task.items[task.items.length - 1].sequence
+              : 0;
+          const item: ConversationItem = {
+            kind: "user_message",
+            // 与后端投影的会话消息使用同一 itemId，刷新/拉历史时不重复。
+            itemId: `msg:${messageId}`,
+            runId: "",
+            sequence: lastSequence + 1,
+            createdAt,
+            content,
+          };
+          return {
+            tasksById: {
+              ...state.tasksById,
+              [taskId]: { ...task, items: [...task.items, item] },
+            },
+          };
+        }),
 
       showNewDraft: () =>
         set((state) => ({

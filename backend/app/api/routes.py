@@ -866,113 +866,79 @@ def _resolve_steer_target(
     return active_run_id, None
 
 
-async def _cancel_steer_run(
-    manager: TaskManager,
-    task_id: str,
-    run_id: str,
-    *,
-    tolerate_uncancellable: bool = False,
-) -> None:
-    """Cancel one run for steering, mapping manager errors to HTTP codes."""
-
-    try:
-        await manager.cancel_run(
-            task_id,
-            run_id,
-            reason="user_steer",
-            immediate=True,
-        )
-    except RuntimeError as error:
-        detail = str(error)
-        if detail == "task manager is not running":
-            raise HTTPException(
-                status_code=503,
-                detail="Task runtime is unavailable",
-            ) from error
-        if detail in {
-            f"run {run_id} is not cancellable",
-            f"run {run_id} has no live execution",
-            f"run {run_id} left cancellation state",
-        }:
-            if tolerate_uncancellable:
-                return
-            raise HTTPException(
-                status_code=409,
-                detail="Run is not cancellable",
-            ) from error
-        raise
-
-
 @router.post(
     "/tasks/{task_id}/inject-context",
     status_code=202,
-    response_model=TaskRunAccepted,
 )
 async def inject_task_context(
     task_id: str,
     body: ContextInjectionRequest,
     repository: TaskRepositoryDep,
     manager: TaskManagerDep,
-) -> TaskRunAccepted:
+) -> dict[str, str | int | None]:
     """Steer the task's active run with an additional user instruction.
 
-    Mirrors Codex's ``turn/steer``: the text is appended to the currently
-    active run and the model re-plans along the new direction immediately,
-    instead of waiting for the next run.  The Agents SDK stream cannot accept
-    script-triggered mid-generation input, so the practical realization is:
-
-    1. if a run is active, cancel it (with an optional ``expected_run_id``
-       precondition like Codex's ``expectedTurnId``);
-    2. submit a fresh run whose input is the injected text.
-
-    The text is persisted as the new run's user input, so it is visible to the
-    model, appears in the conversation as a user bubble, and remains part of
-    history for later runs.
+    Mirrors Codex's ``turn/steer``: the labeled text is appended to the
+    *current* run's conversation and the in-flight model generation is
+    interrupted immediately, so the model continues on the same run along the
+    new direction -- no run cancellation, no restart, no loss of context.
+    When the task is idle, the labeled text is submitted as a new run.
     """
 
-    snapshot = await _require_snapshot(repository, task_id)
-    target_run_id, error_detail = _resolve_steer_target(
-        snapshot,
-        body.expected_run_id,
-    )
-    if error_detail is not None:
-        raise HTTPException(status_code=409, detail=error_detail)
+    labeled_text = f"{_STEER_FRAMING}{body.text}"
     for attempt in range(_STEER_MAX_ATTEMPTS):
-        if target_run_id is not None:
-            await _cancel_steer_run(
-                manager,
-                task_id,
-                target_run_id,
-                tolerate_uncancellable=attempt > 0,
-            )
-            target_run_id = None
+        snapshot = await _require_snapshot(repository, task_id)
+        active_run_id, error_detail = _resolve_steer_target(
+            snapshot,
+            body.expected_run_id,
+        )
+        if error_detail is not None:
+            raise HTTPException(status_code=409, detail=error_detail)
+        if active_run_id is not None:
+            break
         try:
-            return await manager.submit_run(
+            accepted = await manager.submit_run(
                 task_id,
                 StartRunRequest(
                     request_id=generate_prefixed_uuid("steer"),
-                    input=f"{_STEER_FRAMING}{body.text}",
+                    input=labeled_text,
                 ),
             )
+            return {
+                "status": "steered",
+                "task_id": task_id,
+                "run_id": accepted.run_id,
+            }
         except TaskRunConflictError:
-            # A concurrent admission (another steer, a normal continuation, or
-            # a retried request) won the race between cancel and submit.  Re-read
-            # the task state and cancel the winner too, so the injected text
-            # still steers the current round instead of erroring out.
+            # 空闲路径的提交被并发抢占：稍后重试，重试时改为中途转向新 run。
             if attempt + 1 >= _STEER_MAX_ATTEMPTS:
                 break
             await asyncio.sleep(0.15 * (attempt + 1))
-            snapshot = await _require_snapshot(repository, task_id)
-            target_run_id, error_detail = _resolve_steer_target(
-                snapshot,
-                body.expected_run_id,
-            )
-            if error_detail is not None:
-                raise HTTPException(status_code=409, detail=error_detail)
-    raise HTTPException(
-        status_code=409,
-        detail="Task already has an active run; please retry",
+    if active_run_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Task already has an active run; please retry",
+        )
+    # 中途转向：把标注后的调整文本写入会话，并立即中断当前生成。
+    # run 本身不取消，下一轮模型调用会从会话历史接续。
+    session = repository.task_session(task_id)
+    message_ids = await session.add_items(
+        [{"role": "user", "content": labeled_text}]
     )
+    steered = await manager.request_steer(
+        task_id,
+        active_run_id,
+        text=labeled_text,
+    )
+    if not steered:
+        raise HTTPException(status_code=409, detail="Run is no longer active")
+    return {
+        "status": "steered",
+        "task_id": task_id,
+        "run_id": active_run_id,
+        "message_id": message_ids[0] if message_ids else None,
+        "content": labeled_text,
+    }
 
 
 @router.get("/tasks/{task_id}/messages", response_model=MessagePage)

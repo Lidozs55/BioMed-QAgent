@@ -1177,7 +1177,13 @@ describe("ChatPanel", () => {
   it("shows queued follow-ups above the composer with inject/delete/edit actions", async () => {
     seedBackgroundTask();
     useAgentStore.getState().setActiveTaskId("task_background");
-    const injectTaskContext = vi.fn().mockResolvedValue({ status: "injected" });
+    const injectTaskContext = vi.fn().mockResolvedValue({
+      status: "steered",
+      task_id: "task_background",
+      run_id: "run_background",
+      message_id: "message_steer",
+      content: "【方向调整】转向：first queued",
+    });
     render(
       <ChatPanel
         startTask={vi.fn()}
@@ -1225,10 +1231,11 @@ describe("ChatPanel", () => {
         "run_background",
       ),
     );
-    // 队列条目移除；注入文本作为新 run 的用户输入由 run_queued 事件展示。
+    // 队列条目移除；标注后的调整文本以用户气泡立即显示。
     expect(
       screen.queryByRole("button", { name: "注入上下文：first queued" }),
     ).not.toBeInTheDocument();
+    expect(screen.getByText("【方向调整】转向：first queued")).toBeVisible();
     expect(screen.getByText("second queued")).toBeVisible();
     expect(screen.getByText("third queued")).toBeVisible();
 
