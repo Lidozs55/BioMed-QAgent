@@ -51,9 +51,6 @@ export function EditorSettingsSection() {
                     {SEND_SHORTCUT_OPTIONS.map((option) => (
                       <SelectItem key={option.value} value={option.value}>
                         {option.label}
-                        <span className="ml-2 text-xs text-muted-foreground">
-                          {option.hint}
-                        </span>
                       </SelectItem>
                     ))}
                   </SelectGroup>
