@@ -53,7 +53,7 @@ import {
   getExtension,
   triggerArtifactDownload,
 } from "@/lib/fileUtils";
-import { parseCSV } from "@/lib/csvUtils";
+import { fetchPreviewText, parseCSV } from "@/lib/csvUtils";
 import { isActiveStatus } from "@/runtime/reducer";
 
 interface SourceEntry {
@@ -130,11 +130,7 @@ export function CsvPreview({
 
   useEffect(() => {
     let cancelled = false;
-    void fetch(artifactUrl)
-      .then((response) => {
-        if (!response.ok) throw new Error("fetch failed");
-        return response.text();
-      })
+    fetchPreviewText(artifactUrl)
       .then((text) => {
         if (!cancelled) setState({ url: artifactUrl, data: parseCSV(text), error: false });
       })
