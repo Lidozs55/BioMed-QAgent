@@ -789,6 +789,23 @@ SDK 的 `Agent.get_system_prompt()` 公共边界固定。
 
 > 决策依据：ADR-003（保留可信内核）。
 
+### 14.7 个性化设置契约（自定义指令 / 回复语气）
+
+`app/personalization.py` 提供独立于模型设置的个性化持久化
+（`data/personalization.json`，原子写入）：`custom_instructions`（默认空串）
+与 `personality`（`pragmatic` / `warm` / `rigorous`）。REST 见 §15
+（GET/PUT `/personalization`）。
+
+注入契约：`agent_loop/agent.py::resolve_agent_instructions` 在系统提示词顶部
+（`preferred_sources` 之前）追加「用户自定义指令 + 回复语气」小节；子 Agent 与
+prompt-shape 估算复用同一函数，保证主 Agent / 子 Agent / token 估算读到完全
+一致的内容。指令为空时不注入自定义指令段，仅注入语气行，避免无谓占用上下文。
+
+前端设置：编辑器 / 外观 / 偏好类设置存 `localStorage["biomed.preferences"]`
+（`stores/preferencesStore.ts`），通过 `documentElement` 的 data-* 属性与 CSS
+变量（`--ui-contrast`、`--background` / `--foreground` 等 color-mix 派生值）
+即时生效；自定义颜色留空时保持主题默认。
+
 ---
 
 ## 15. API 面
@@ -806,6 +823,8 @@ SDK 的 `Agent.get_system_prompt()` 公共边界固定。
 | DELETE | `/databases/{name}` | 删除用户数据库包 | ✅ |
 | GET | `/settings` | 当前用户模型设置（api_key 掩码） | ✅ |
 | POST | `/settings` | 更新并持久化用户模型设置 | ✅ |
+| GET | `/personalization` | 当前自定义指令与回复语气 | ✅ |
+| PUT | `/personalization` | 更新并持久化个性化设置 | ✅ |
 | GET | `/vendors` | 列出已知模型供应商 | ✅ |
 | GET | `/models` | 可用模型列表，支持 `?query=`/`?preview_base_url=`/`?use_current_settings=` | ✅ |
 | GET | `/models/{model_id}` | 单个内置模型详情 | ✅ |
