@@ -279,6 +279,9 @@ export function ChatPanel({
   const [queuedFollowUps, setQueuedFollowUps] = useState<
     Record<string, QueuedMessage[]>
   >({});
+  const [steeringTaskIds, setSteeringTaskIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [olderMessagesPendingByTask, setOlderMessagesPendingByTask] = useState<Record<string, boolean>>({});
   const [olderMessagesErrors, setOlderMessagesErrors] = useState<Record<string, string>>({});
   // Sentinel observed while the conversation starts scrolled to the newest
@@ -548,8 +551,14 @@ export function ChatPanel({
         (item) => item.id === messageId,
       );
       if (entry === undefined || injectTaskContext === undefined) return;
+      if (steeringTaskIds.has(taskId)) return;
       const task = useAgentStore.getState().tasksById[taskId];
       const activeRunId = task?.summary.active_run_id ?? null;
+      setSteeringTaskIds((current) => {
+        const next = new Set(current);
+        next.add(taskId);
+        return next;
+      });
       try {
         await injectTaskContext(taskId, entry.input, activeRunId);
         removeQueued(taskId, messageId);
@@ -558,9 +567,15 @@ export function ChatPanel({
         toast.error("调整方向失败", {
           description: errorMessage(error, "请稍后重试"),
         });
+      } finally {
+        setSteeringTaskIds((current) => {
+          const next = new Set(current);
+          next.delete(taskId);
+          return next;
+        });
       }
     },
-    [injectTaskContext, queuedFollowUps, removeQueued],
+    [injectTaskContext, queuedFollowUps, removeQueued, steeringTaskIds],
   );
 
   const reorderQueued = useCallback(
@@ -823,6 +838,7 @@ export function ChatPanel({
                 <div className="mb-2">
                   <QueuedMessages
                     entries={activeQueue}
+                    steering={activeTaskId !== null && steeringTaskIds.has(activeTaskId)}
                     onDelete={(messageId) => {
                       if (activeTaskId !== null) {
                         removeQueued(activeTaskId, messageId);

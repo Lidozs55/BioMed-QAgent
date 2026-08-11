@@ -14,6 +14,7 @@ export interface QueuedMessage {
 
 interface QueuedMessagesProps {
   entries: QueuedMessage[];
+  steering?: boolean;
   onDelete: (id: string) => void;
   onEdit: (id: string) => void;
   onInject: (id: string) => void;
@@ -26,6 +27,7 @@ interface QueuedMessagesProps {
  */
 export function QueuedMessages({
   entries,
+  steering = false,
   onDelete,
   onEdit,
   onInject,
@@ -89,10 +91,20 @@ export function QueuedMessages({
           <div className="flex shrink-0 items-center gap-0.5">
             <button
               type="button"
-              className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+              className={cn(
+                "rounded p-1 text-muted-foreground",
+                steering
+                  ? "cursor-wait opacity-50"
+                  : "hover:bg-accent hover:text-foreground",
+              )}
               onClick={() => onInject(entry.id)}
               aria-label={`注入上下文：${entry.input}`}
-              title="立即把这段文字注入当前轮次并重新生成（类似 Codex 的调整方向）"
+              disabled={steering}
+              title={
+                steering
+                  ? "正在调整方向，请稍候…"
+                  : "立即把这段文字注入当前轮次并重新生成（类似 Codex 的调整方向）"
+              }
             >
               <ArrowDownLeftIcon className="size-3.5" />
             </button>
