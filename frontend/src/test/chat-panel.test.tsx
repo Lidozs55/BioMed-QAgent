@@ -11,6 +11,7 @@ import type {
 import { createInitialRuntimeState } from "@/runtime/reducer";
 import { useAgentStore } from "@/stores/agentStore";
 import { usePreferencesStore } from "@/stores/preferencesStore";
+import { STEER_FRAMING_PREFIX } from "@/lib/utils";
 
 const CREATED_AT = "2026-07-14T00:00:00Z";
 
@@ -1182,7 +1183,7 @@ describe("ChatPanel", () => {
       task_id: "task_background",
       run_id: "run_background",
       message_id: "message_steer",
-      content: "【方向调整】转向：first queued",
+      content: `${STEER_FRAMING_PREFIX}转向：first queued`,
     });
     render(
       <ChatPanel
@@ -1235,7 +1236,7 @@ describe("ChatPanel", () => {
     expect(
       screen.queryByRole("button", { name: "注入上下文：first queued" }),
     ).not.toBeInTheDocument();
-    expect(screen.getByText("【方向调整】转向：first queued")).toBeVisible();
+    expect(screen.getByText("转向：first queued")).toBeVisible();
     expect(screen.getByText("second queued")).toBeVisible();
     expect(screen.getByText("third queued")).toBeVisible();
 
