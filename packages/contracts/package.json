@@ -3,11 +3,21 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    }
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "test": "tsc --noEmit -p tsconfig.test.json && vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.test.json"
   },
   "devDependencies": {
+    "@types/node": "^26.1.1",
+    "vitest": "3.2.7",
     "typescript": "^5.6.3"
   }
 }

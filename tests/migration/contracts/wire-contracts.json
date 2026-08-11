@@ -1,0 +1,192 @@
+{
+  "event_envelopes": [
+    {
+      "schema_version": "1.0",
+      "event_id": "event_fixture_001",
+      "type": "task_created",
+      "task_id": "task_fixture_001",
+      "run_id": null,
+      "stage_attempt_id": null,
+      "sequence": 41,
+      "timestamp": "2026-08-11T08:00:00Z",
+      "payload": {
+        "type": "task_created",
+        "topic": "contract parity"
+      }
+    },
+    {
+      "schema_version": "2.0",
+      "event_id": "event_fixture_002",
+      "type": "run_started",
+      "task_id": "task_fixture_001",
+      "run_id": "run_fixture_001",
+      "stage_attempt_id": null,
+      "sequence": 42,
+      "timestamp": "2026-08-11T08:00:01Z",
+      "payload": {
+        "type": "run_started"
+      }
+    }
+  ],
+  "build_results": [
+    {
+      "status": "succeeded",
+      "valid_row_count": 2,
+      "successful_sources": ["source_a"],
+      "rejected_sources": [],
+      "available_artifact_roles": ["primary_dataset", "schema"],
+      "publication_id": "publication_fixture_001",
+      "reason_codes": [],
+      "user_summary": "Build succeeded.",
+      "recommended_next_action": "Review the publication.",
+      "build_id": "build_fixture_001",
+      "binding_failures": []
+    },
+    {
+      "status": "partial_success",
+      "valid_row_count": 1,
+      "successful_sources": ["source_a"],
+      "rejected_sources": ["source_b"],
+      "available_artifact_roles": ["primary_dataset", "audit_report"],
+      "publication_id": "publication_fixture_002",
+      "reason_codes": ["source_b_rejected"],
+      "user_summary": "Build partially succeeded.",
+      "recommended_next_action": "Review rejected sources.",
+      "build_id": "build_fixture_002",
+      "binding_failures": [
+        {
+          "binding_id": "source_b",
+          "reason_code": "no_primary_data",
+          "message": "No primary rows were available."
+        }
+      ]
+    },
+    {
+      "status": "no_data",
+      "valid_row_count": 0,
+      "successful_sources": [],
+      "rejected_sources": ["source_a"],
+      "available_artifact_roles": ["audit_report"],
+      "publication_id": null,
+      "reason_codes": ["no_primary_data"],
+      "user_summary": "No data matched.",
+      "recommended_next_action": "Broaden the request.",
+      "build_id": "build_fixture_003",
+      "binding_failures": []
+    },
+    {
+      "status": "spec_rejected",
+      "valid_row_count": 0,
+      "successful_sources": [],
+      "rejected_sources": [],
+      "available_artifact_roles": [],
+      "publication_id": null,
+      "reason_codes": ["invalid_spec"],
+      "user_summary": "Specification rejected.",
+      "recommended_next_action": "Correct the specification.",
+      "build_id": "build_fixture_004",
+      "binding_failures": []
+    }
+  ],
+  "dataset_manifest": {
+    "manifest_id": "manifest_fixture_001",
+    "task_id": "task_fixture_001",
+    "build_id": "build_fixture_001",
+    "dataset_family": "gene_expression",
+    "row_granularity": "gene_sample",
+    "schema_ref": "gene_expression.long.v1",
+    "primary_key": ["gene_id", "sample_id"],
+    "row_count": 2,
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "artifacts": [
+      {
+        "artifact_id": "artifact_primary",
+        "role": "primary_dataset",
+        "relative_path": "data.csv",
+        "media_type": "text/csv",
+        "size_bytes": 128,
+        "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      {
+        "artifact_id": "artifact_supporting",
+        "role": "supporting_dataset",
+        "relative_path": "samples.csv",
+        "media_type": "text/csv",
+        "size_bytes": 64,
+        "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+      },
+      {
+        "artifact_id": "artifact_schema",
+        "role": "schema",
+        "relative_path": "schema.json",
+        "media_type": "application/json",
+        "size_bytes": 32,
+        "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      {
+        "artifact_id": "artifact_provenance",
+        "role": "provenance",
+        "relative_path": "provenance.json",
+        "media_type": "application/json",
+        "size_bytes": 48,
+        "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+      },
+      {
+        "artifact_id": "artifact_audit",
+        "role": "audit_report",
+        "relative_path": "audit.json",
+        "media_type": "application/json",
+        "size_bytes": 24,
+        "sha256": "5555555555555555555555555555555555555555555555555555555555555555"
+      }
+    ],
+    "source_summary": {"source_count": 1},
+    "validation_summary": {"status": "passed"},
+    "confidence_summary": {"warning_count": 0},
+    "provenance_summary": {"coverage_ratio": 1}
+  },
+  "dataset_publication": {
+    "publication_id": "publication_fixture_001",
+    "manifest_ref": "dataset_manifest.json",
+    "validation_result_ref": "validation_report.json",
+    "published_at": "2026-08-11T08:01:00Z",
+    "supersedes_publication_id": "publication_fixture_000"
+  },
+  "task_modes": ["agent", "fixture", "import"],
+  "run_statuses": [
+    "queued",
+    "running",
+    "finalizing",
+    "cancel_requested",
+    "awaiting_user_input",
+    "completed",
+    "failed",
+    "cancelled",
+    "interrupted"
+  ],
+  "task_summary": {
+    "schema_version": "1.0",
+    "task_id": "task_fixture_001",
+    "mode": "agent",
+    "databases": ["pubmed"],
+    "title": "Contract parity",
+    "status": "running",
+    "active_run_id": "run_fixture_001",
+    "created_at": "2026-08-11T08:00:00Z",
+    "updated_at": "2026-08-11T08:00:01Z",
+    "latest_sequence": 42,
+    "artifact_count": 5,
+    "latest_build_status": null
+  },
+  "run_records": [
+    {"schema_version":"1.0","run_id":"run_queued","task_id":"task_fixture_001","request_id":"request_queued","status":"queued","input":"Build a dataset","created_at":"2026-08-11T08:00:00Z","updated_at":"2026-08-11T08:00:00Z","started_at":null,"finished_at":null,"error":null,"summary":null},
+    {"schema_version":"1.0","run_id":"run_running","task_id":"task_fixture_001","request_id":"request_running","status":"running","input":"Build a dataset","created_at":"2026-08-11T08:00:00Z","updated_at":"2026-08-11T08:00:01Z","started_at":"2026-08-11T08:00:01Z","finished_at":null,"error":null,"summary":null},
+    {"schema_version":"1.0","run_id":"run_finalizing","task_id":"task_fixture_001","request_id":"request_finalizing","status":"finalizing","input":"Build a dataset","created_at":"2026-08-11T08:00:00Z","updated_at":"2026-08-11T08:00:02Z","started_at":"2026-08-11T08:00:01Z","finished_at":null,"error":null,"summary":null},
+    {"schema_version":"1.0","run_id":"run_cancel_requested","task_id":"task_fixture_001","request_id":"request_cancel_requested","status":"cancel_requested","input":"Build a dataset","created_at":"2026-08-11T08:00:00Z","updated_at":"2026-08-11T08:00:02Z","started_at":"2026-08-11T08:00:01Z","finished_at":null,"error":null,"summary":null},
+    {"schema_version":"1.0","run_id":"run_awaiting_user_input","task_id":"task_fixture_001","request_id":"request_awaiting_user_input","status":"awaiting_user_input","input":"Build a dataset","created_at":"2026-08-11T08:00:00Z","updated_at":"2026-08-11T08:00:02Z","started_at":"2026-08-11T08:00:01Z","finished_at":null,"error":null,"summary":null},
+    {"schema_version":"1.0","run_id":"run_completed","task_id":"task_fixture_001","request_id":"request_completed","status":"completed","input":"Build a dataset","created_at":"2026-08-11T08:00:00Z","updated_at":"2026-08-11T08:00:03Z","started_at":"2026-08-11T08:00:01Z","finished_at":"2026-08-11T08:00:03Z","error":null,"summary":null},
+    {"schema_version":"1.0","run_id":"run_failed","task_id":"task_fixture_001","request_id":"request_failed","status":"failed","input":"Build a dataset","created_at":"2026-08-11T08:00:00Z","updated_at":"2026-08-11T08:00:03Z","started_at":"2026-08-11T08:00:01Z","finished_at":"2026-08-11T08:00:03Z","error":"failed","summary":null},
+    {"schema_version":"1.0","run_id":"run_cancelled","task_id":"task_fixture_001","request_id":"request_cancelled","status":"cancelled","input":"Build a dataset","created_at":"2026-08-11T08:00:00Z","updated_at":"2026-08-11T08:00:03Z","started_at":"2026-08-11T08:00:01Z","finished_at":"2026-08-11T08:00:03Z","error":null,"summary":null},
+    {"schema_version":"1.0","run_id":"run_interrupted","task_id":"task_fixture_001","request_id":"request_interrupted","status":"interrupted","input":"Build a dataset","created_at":"2026-08-11T08:00:00Z","updated_at":"2026-08-11T08:00:03Z","started_at":"2026-08-11T08:00:01Z","finished_at":"2026-08-11T08:00:03Z","error":null,"summary":null}
+  ]
+}
