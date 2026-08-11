@@ -36,6 +36,7 @@ export {
   mergeOlderMessagePage,
   hydrateTaskSnapshot,
   prepareTaskSnapshotReplay,
+  restoreTaskProjection,
   markTaskContiguous,
 } from "./shared";
 

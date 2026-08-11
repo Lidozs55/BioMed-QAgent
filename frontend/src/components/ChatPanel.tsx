@@ -52,8 +52,6 @@ import {
 } from "@/stores/preferencesStore";
 import type { ModelInfo } from "@/hooks/useAPI";
 
-const LOADING_SCREEN_DELAY_MS = 250;
-
 interface ChatPanelProps {
   startTask: (input: StartTaskInput) => Promise<TaskRunAccepted>;
   uploadFiles?: (files: File[], note: string) => Promise<unknown>;
@@ -225,18 +223,6 @@ export function ChatPanel({
     activeTaskId !== null &&
     activeTaskId === hydratingTaskId &&
     activeTask !== undefined;
-  const [showLoadingScreen, setShowLoadingScreen] = useState(false);
-  useEffect(() => {
-    if (!activeTaskHydrating) {
-      setShowLoadingScreen(false);
-      return;
-    }
-    const timer = window.setTimeout(
-      () => setShowLoadingScreen(true),
-      LOADING_SCREEN_DELAY_MS,
-    );
-    return () => window.clearTimeout(timer);
-  }, [activeTaskHydrating]);
   const sendShortcut = usePreferencesStore((state) => state.sendShortcut);
   const showContextUsage = usePreferencesStore((state) => state.showContextUsage);
   const followUpMode = usePreferencesStore((state) => state.followUpMode);
@@ -614,7 +600,7 @@ export function ChatPanel({
     );
   }
 
-  if (showLoadingScreen) {
+  if (activeTaskHydrating) {
     return <LoadingScreen />;
   }
 

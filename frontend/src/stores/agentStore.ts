@@ -19,6 +19,7 @@ import {
   mergeOlderMessagePage as projectOlderMessagePage,
   mergeTaskPage as projectTaskPage,
   prepareTaskSnapshotReplay as projectTaskSnapshotReplay,
+  restoreTaskProjection as projectRestoreTaskProjection,
   markTaskContiguous as projectMarkTaskContiguous,
   deactivateAssistantStreams as projectDeactivateAssistantStreams,
   reduceAssistantStreamFrames,
@@ -49,6 +50,7 @@ export interface AgentStore extends AgentRuntimeData {
   ) => void;
   hydrateTaskSnapshot: (snapshot: TaskSnapshot) => void;
   prepareTaskSnapshotReplay: (snapshot: TaskSnapshot) => void;
+  restoreTaskProjection: (taskId: string, cached: TaskProjection) => void;
   mergeOlderMessagePage: (
     taskId: string,
     requestedCursor: string,
@@ -310,6 +312,9 @@ export const useAgentStore = create<AgentStore>()(
 
       prepareTaskSnapshotReplay: (snapshot) =>
         set((state) => projectTaskSnapshotReplay(state, snapshot)),
+
+      restoreTaskProjection: (taskId, cached) =>
+        set((state) => projectRestoreTaskProjection(state, taskId, cached)),
 
       mergeOlderMessagePage: (taskId, requestedCursor, page) =>
         set((state) =>
