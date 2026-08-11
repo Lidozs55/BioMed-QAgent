@@ -27,6 +27,7 @@ MANIFEST
 node_modules/
 dist/
 build/
+*.tsbuildinfo
 # V2 dataset build-chain source package lives under app/datasets/build
 !backend/app/datasets/build/
 .npm
