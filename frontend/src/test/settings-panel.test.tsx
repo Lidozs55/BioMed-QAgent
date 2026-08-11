@@ -329,6 +329,8 @@ describe("SettingsPanel model registry", () => {
 
     // Provider is auto-selected and the list is discovered automatically.
     await screen.findByText("DeepSeek Chat");
+    // API 发现且不在目录里的模型，上下文显示“未知”而不是猜测数字。
+    expect(screen.getAllByText("未知").length).toBeGreaterThan(0);
     const importButton = await screen.findByRole("button", { name: "导入" });
     fireEvent.click(importButton);
 

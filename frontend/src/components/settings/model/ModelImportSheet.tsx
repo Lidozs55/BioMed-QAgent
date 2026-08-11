@@ -74,7 +74,7 @@ function errorText(error: unknown): string {
 
 function formatWindow(tokens: number | null | undefined): string {
   if (!tokens || tokens <= 0) return "未知";
-  if (tokens >= 1_048_576) return `${(tokens / 1_048_576).toFixed(1)}M`;
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
   if (tokens >= 1_024) return `${(tokens / 1_024).toFixed(0)}K`;
   return String(tokens);
 }
@@ -619,7 +619,9 @@ export function ModelImportSheet({
                           </button>
                           <div className="flex shrink-0 items-center gap-2">
                             <span className="text-xs text-muted-foreground">
-                              {formatWindow(item.context_window)}
+                              {item.capability_source === "api"
+                                ? "未知"
+                                : formatWindow(item.context_window)}
                             </span>
                             {capabilityChips(item.capabilities)}
                           </div>
