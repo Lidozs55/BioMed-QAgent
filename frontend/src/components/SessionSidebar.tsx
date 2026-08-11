@@ -11,7 +11,7 @@ import {
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
-import biomedLogoV2 from "../../../assets/logo/biomed-qagent-logo-v2.svg";
+import biomedLogoV2 from "../../../assets/logo/Logo-title.svg";
 
 import { TaskStatusIcon } from "@/components/taskStatus";
 import { TASK_STATUS_META } from "@/components/taskStatusMeta";
@@ -318,7 +318,7 @@ export function SessionSidebar({
               src={biomedLogoV2}
               alt="BioMed QAgent"
               draggable={false}
-              className="h-[95.04px] w-auto max-w-full"
+              className="h-auto w-full max-w-full"
             />
           </div>
           <Button

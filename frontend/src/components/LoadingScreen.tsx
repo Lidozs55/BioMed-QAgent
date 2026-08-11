@@ -1,4 +1,4 @@
-import loadingMark from "../../../assets/logo/biomed-qagent-loading-mark.svg";
+import loadingMark from "../../../assets/logo/Logo.svg";
 
 export function LoadingScreen() {
   return (
