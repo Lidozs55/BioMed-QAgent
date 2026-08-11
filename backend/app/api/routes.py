@@ -824,6 +824,10 @@ _STEER_TERMINAL_STATUSES = frozenset(
     }
 )
 _STEER_MAX_ATTEMPTS = 3
+_STEER_FRAMING = (
+    "【方向调整】用户中断了上一次作答并调整了方向。"
+    "请接续上一次的任务内容，按下面的调整方向继续作答：\n"
+)
 
 
 def _resolve_steer_target(
@@ -871,7 +875,12 @@ async def _cancel_steer_run(
     """Cancel one run for steering, mapping manager errors to HTTP codes."""
 
     try:
-        await manager.cancel_run(task_id, run_id, reason="user_steer")
+        await manager.cancel_run(
+            task_id,
+            run_id,
+            reason="user_steer",
+            immediate=True,
+        )
     except RuntimeError as error:
         detail = str(error)
         if detail == "task manager is not running":
@@ -941,7 +950,7 @@ async def inject_task_context(
                 task_id,
                 StartRunRequest(
                     request_id=generate_prefixed_uuid("steer"),
-                    input=body.text,
+                    input=f"{_STEER_FRAMING}{body.text}",
                 ),
             )
         except TaskRunConflictError:

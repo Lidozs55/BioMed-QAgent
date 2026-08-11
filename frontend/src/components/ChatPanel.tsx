@@ -279,8 +279,8 @@ export function ChatPanel({
   const [queuedFollowUps, setQueuedFollowUps] = useState<
     Record<string, QueuedMessage[]>
   >({});
-  const [steeringTaskIds, setSteeringTaskIds] = useState<Set<string>>(
-    () => new Set(),
+  const [steeringRuns, setSteeringRuns] = useState<Record<string, string | null>>(
+    {},
   );
   const [olderMessagesPendingByTask, setOlderMessagesPendingByTask] = useState<Record<string, boolean>>({});
   const [olderMessagesErrors, setOlderMessagesErrors] = useState<Record<string, string>>({});
@@ -424,6 +424,32 @@ export function ChatPanel({
     }
   };
 
+  const steerTask = useCallback(
+    async (taskId: string, text: string): Promise<boolean> => {
+      if (injectTaskContext === undefined) return false;
+      if (steeringRuns[taskId] !== undefined) return false;
+      const task = useAgentStore.getState().tasksById[taskId];
+      const activeRunId = task?.summary.active_run_id ?? null;
+      setSteeringRuns((current) => ({ ...current, [taskId]: activeRunId }));
+      try {
+        await injectTaskContext(taskId, text, activeRunId);
+        toast.success("已调整方向，正在重新生成…");
+        return true;
+      } catch (error) {
+        toast.error("调整方向失败", {
+          description: errorMessage(error, "请稍后重试"),
+        });
+        setSteeringRuns((current) => {
+          const next = { ...current };
+          delete next[taskId];
+          return next;
+        });
+        return false;
+      }
+    },
+    [injectTaskContext, steeringRuns],
+  );
+
   const sendContinuationWithMode = async (mode: FollowUpMode) => {
     if (
       !continuationSendable ||
@@ -438,6 +464,19 @@ export function ChatPanel({
     if (!input) return;
 
     if (activeRunId !== null || activeQueue.length > 0) {
+      if (
+        mode === "steer" &&
+        activeRunId !== null &&
+        injectTaskContext !== undefined
+      ) {
+        const steered = await steerTask(taskId, input);
+        if (steered) {
+          setContinuationDrafts((current) =>
+            current[taskId] === input ? { ...current, [taskId]: "" } : current,
+          );
+        }
+        return;
+      }
       const entry: QueuedMessage = { id: crypto.randomUUID(), input };
       setQueuedFollowUps((current) => {
         const queue = current[taskId] ?? [];
@@ -550,32 +589,13 @@ export function ChatPanel({
       const entry = (queuedFollowUps[taskId] ?? []).find(
         (item) => item.id === messageId,
       );
-      if (entry === undefined || injectTaskContext === undefined) return;
-      if (steeringTaskIds.has(taskId)) return;
-      const task = useAgentStore.getState().tasksById[taskId];
-      const activeRunId = task?.summary.active_run_id ?? null;
-      setSteeringTaskIds((current) => {
-        const next = new Set(current);
-        next.add(taskId);
-        return next;
-      });
-      try {
-        await injectTaskContext(taskId, entry.input, activeRunId);
+      if (entry === undefined) return;
+      const steered = await steerTask(taskId, entry.input);
+      if (steered) {
         removeQueued(taskId, messageId);
-        toast.success("已调整方向，正在重新生成…");
-      } catch (error) {
-        toast.error("调整方向失败", {
-          description: errorMessage(error, "请稍后重试"),
-        });
-      } finally {
-        setSteeringTaskIds((current) => {
-          const next = new Set(current);
-          next.delete(taskId);
-          return next;
-        });
       }
     },
-    [injectTaskContext, queuedFollowUps, removeQueued, steeringTaskIds],
+    [queuedFollowUps, removeQueued, steerTask],
   );
 
   const reorderQueued = useCallback(
@@ -602,6 +622,9 @@ export function ChatPanel({
   // 队列：当前回答结束后自动发送队首消息。
   useEffect(() => {
     if (activeTaskId === null || activeTask === undefined) return;
+    // 调整方向进行中时不要自动发送队首：steer 会立即开启新 run，
+    // 避免与 steer 的新 run 在切换间隙抢跑（Task already has an active run）。
+    if (steeringRuns[activeTaskId] !== undefined) return;
     const queue = queuedFollowUps[activeTaskId];
     if (queue === undefined || queue.length === 0) return;
     if (activeTask.summary.active_run_id !== null || !latestRunIsTerminal(activeTask)) {
@@ -614,7 +637,24 @@ export function ChatPanel({
       [activeTaskId]: rest,
     }));
     void submitQueuedInput(activeTaskId, first.input);
-  }, [activeTask, activeTaskId, queuedFollowUps, submitQueuedInput]);
+  }, [activeTask, activeTaskId, queuedFollowUps, steeringRuns, submitQueuedInput]);
+
+  // steer 成功后保持“调整方向中”状态，直到新的 run（不同于被调整的 run）出现，
+  // 这样队列自动发送 effect 在 run 切换间隙不会抢跑 continueTask。
+  useEffect(() => {
+    if (activeTaskId === null || activeTask === undefined) return;
+    const steeredRunId = steeringRuns[activeTaskId];
+    if (steeredRunId === undefined) return;
+    const activeRunId = activeTask.summary.active_run_id;
+    if (activeRunId !== null && activeRunId !== steeredRunId) {
+      setSteeringRuns((current) => {
+        if (current[activeTaskId] === undefined) return current;
+        const next = { ...current };
+        delete next[activeTaskId];
+        return next;
+      });
+    }
+  }, [activeTask, activeTaskId, steeringRuns]);
 
   const loadEarlierMessages = async () => {
     if (!hasOlderMessages || activeTaskId === null || loadOlderMessages === undefined || olderMessagesPending) return;
@@ -838,7 +878,9 @@ export function ChatPanel({
                 <div className="mb-2">
                   <QueuedMessages
                     entries={activeQueue}
-                    steering={activeTaskId !== null && steeringTaskIds.has(activeTaskId)}
+                    steering={
+                      activeTaskId !== null && steeringRuns[activeTaskId] !== undefined
+                    }
                     onDelete={(messageId) => {
                       if (activeTaskId !== null) {
                         removeQueued(activeTaskId, messageId);
