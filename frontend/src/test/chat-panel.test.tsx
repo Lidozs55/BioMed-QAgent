@@ -1222,13 +1222,13 @@ describe("ChatPanel", () => {
       expect(injectTaskContext).toHaveBeenCalledWith(
         "task_background",
         "first queued",
+        "run_background",
       ),
     );
-    // 队列条目移除，注入内容以用户消息气泡出现在对话中。
+    // 队列条目移除；注入文本作为新 run 的用户输入由 run_queued 事件展示。
     expect(
       screen.queryByRole("button", { name: "注入上下文：first queued" }),
     ).not.toBeInTheDocument();
-    expect(screen.getAllByText("first queued").length).toBeGreaterThan(0);
     expect(screen.getByText("second queued")).toBeVisible();
     expect(screen.getByText("third queued")).toBeVisible();
 

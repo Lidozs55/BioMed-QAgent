@@ -92,7 +92,7 @@ export function QueuedMessages({
               className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
               onClick={() => onInject(entry.id)}
               aria-label={`注入上下文：${entry.input}`}
-              title="把这段文字注入当前任务上下文（不打断当前回答）"
+              title="立即把这段文字注入当前轮次并重新生成（类似 Codex 的调整方向）"
             >
               <ArrowDownLeftIcon className="size-3.5" />
             </button>
