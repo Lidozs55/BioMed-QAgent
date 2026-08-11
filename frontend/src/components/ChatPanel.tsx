@@ -8,6 +8,10 @@ import { toast } from "sonner";
 
 import { AgentComposer } from "@/components/AgentComposer";
 import { LoadingScreen } from "@/components/LoadingScreen";
+import {
+  QueuedMessages,
+  type QueuedMessage,
+} from "@/components/QueuedMessages";
 import { ConversationList } from "@/components/conversation/ConversationList";
 import { formatToolCall } from "@/components/conversation/toolLabels";
 import { operationDisplayLabel } from "@/components/conversation/operationMeta";
@@ -265,8 +269,8 @@ export function ChatPanel({
   const [continuationDrafts, setContinuationDrafts] = useState<Record<string, string>>({});
   const [continuationPendingByTask, setContinuationPendingByTask] = useState<Record<string, boolean>>({});
   const [continuationErrors, setContinuationErrors] = useState<Record<string, string>>({});
-  const [pendingFollowUps, setPendingFollowUps] = useState<
-    Record<string, { input: string; steer: boolean }>
+  const [queuedFollowUps, setQueuedFollowUps] = useState<
+    Record<string, QueuedMessage[]>
   >({});
   const [olderMessagesPendingByTask, setOlderMessagesPendingByTask] = useState<Record<string, boolean>>({});
   const [olderMessagesErrors, setOlderMessagesErrors] = useState<Record<string, string>>({});
@@ -301,14 +305,12 @@ export function ChatPanel({
     activeTask.summary.mode === "agent" &&
     continueTask !== undefined;
   const activeRunId = activeTask?.summary.active_run_id ?? null;
-  const pendingFollowUp =
-    activeTaskId === null ? undefined : pendingFollowUps[activeTaskId];
-  const steeringPending = pendingFollowUp?.steer === true;
+  const activeQueue =
+    activeTaskId === null ? [] : (queuedFollowUps[activeTaskId] ?? []);
   // 运行中也可以发送：加入队列等待当前回答结束，或调整方向取消并重引导。
   const continuationSendable =
     continuationEditable &&
     !continuationPending &&
-    !steeringPending &&
     (activeRunId === null
       ? latestRunIsTerminal(activeTask)
       : activeTask !== undefined);
@@ -425,15 +427,23 @@ export function ChatPanel({
     const input = continuationInput.trim();
     if (!input) return;
 
-    if (activeRunId !== null) {
-      setPendingFollowUps((current) => ({
-        ...current,
-        [taskId]: { input, steer: mode === "steer" },
-      }));
+    if (activeRunId !== null || activeQueue.length > 0) {
+      const entry: QueuedMessage = { id: crypto.randomUUID(), input };
+      setQueuedFollowUps((current) => {
+        const queue = current[taskId] ?? [];
+        return {
+          ...current,
+          [taskId]: mode === "steer" ? [entry, ...queue] : [...queue, entry],
+        };
+      });
       setContinuationDrafts((current) =>
         current[taskId] === input ? { ...current, [taskId]: "" } : current,
       );
-      if (mode === "steer" && cancelRun !== undefined) {
+      if (
+        mode === "steer" &&
+        activeRunId !== null &&
+        cancelRun !== undefined
+      ) {
         try {
           await cancelRun(taskId, activeRunId);
         } catch (error) {
@@ -500,21 +510,92 @@ export function ChatPanel({
     [continueTask],
   );
 
-  // 队列 / 调整方向：当前回答结束后自动发送已暂存的消息。
+  const removeQueued = useCallback((taskId: string, messageId: string) => {
+    setQueuedFollowUps((current) => {
+      const queue = current[taskId] ?? [];
+      return {
+        ...current,
+        [taskId]: queue.filter((entry) => entry.id !== messageId),
+      };
+    });
+  }, []);
+
+  const editQueued = useCallback(
+    (taskId: string, messageId: string) => {
+      const entry = (queuedFollowUps[taskId] ?? []).find(
+        (item) => item.id === messageId,
+      );
+      if (entry === undefined) return;
+      setContinuationDrafts((current) => ({
+        ...current,
+        [taskId]: entry.input,
+      }));
+      removeQueued(taskId, messageId);
+    },
+    [queuedFollowUps, removeQueued],
+  );
+
+  const steerQueued = useCallback(
+    async (taskId: string, messageId: string) => {
+      setQueuedFollowUps((current) => {
+        const queue = current[taskId] ?? [];
+        const entry = queue.find((item) => item.id === messageId);
+        if (entry === undefined) return current;
+        return {
+          ...current,
+          [taskId]: [entry, ...queue.filter((item) => item.id !== messageId)],
+        };
+      });
+      if (activeRunId !== null && cancelRun !== undefined) {
+        try {
+          await cancelRun(taskId, activeRunId);
+        } catch (error) {
+          toast.error("取消当前回答失败", {
+            description: errorMessage(error, "该消息仍将自动发送"),
+          });
+        }
+      }
+    },
+    [activeRunId, cancelRun],
+  );
+
+  const reorderQueued = useCallback(
+    (taskId: string, fromIndex: number, toIndex: number) => {
+      setQueuedFollowUps((current) => {
+        const queue = [...(current[taskId] ?? [])];
+        if (
+          fromIndex < 0 ||
+          fromIndex >= queue.length ||
+          toIndex < 0 ||
+          toIndex >= queue.length
+        ) {
+          return current;
+        }
+        const [moved] = queue.splice(fromIndex, 1);
+        if (moved === undefined) return current;
+        queue.splice(toIndex, 0, moved);
+        return { ...current, [taskId]: queue };
+      });
+    },
+    [],
+  );
+
+  // 队列：当前回答结束后自动发送队首消息。
   useEffect(() => {
     if (activeTaskId === null || activeTask === undefined) return;
-    const pending = pendingFollowUps[activeTaskId];
-    if (pending === undefined) return;
+    const queue = queuedFollowUps[activeTaskId];
+    if (queue === undefined || queue.length === 0) return;
     if (activeTask.summary.active_run_id !== null || !latestRunIsTerminal(activeTask)) {
       return;
     }
-    setPendingFollowUps((current) => {
-      const next = { ...current };
-      delete next[activeTaskId];
-      return next;
-    });
-    void submitQueuedInput(activeTaskId, pending.input);
-  }, [activeTask, activeTaskId, pendingFollowUps, submitQueuedInput]);
+    const [first, ...rest] = queue;
+    if (first === undefined) return;
+    setQueuedFollowUps((current) => ({
+      ...current,
+      [activeTaskId]: rest,
+    }));
+    void submitQueuedInput(activeTaskId, first.input);
+  }, [activeTask, activeTaskId, queuedFollowUps, submitQueuedInput]);
 
   const loadEarlierMessages = async () => {
     if (!hasOlderMessages || activeTaskId === null || loadOlderMessages === undefined || olderMessagesPending) return;
@@ -734,6 +815,33 @@ export function ChatPanel({
 
           <div className="shrink-0 bg-background px-4 pb-4 pt-2">
             <div className="mx-auto max-w-3xl">
+              {activeQueue.length > 0 && (
+                <div className="mb-2">
+                  <QueuedMessages
+                    entries={activeQueue}
+                    onDelete={(messageId) => {
+                      if (activeTaskId !== null) {
+                        removeQueued(activeTaskId, messageId);
+                      }
+                    }}
+                    onEdit={(messageId) => {
+                      if (activeTaskId !== null) {
+                        editQueued(activeTaskId, messageId);
+                      }
+                    }}
+                    onSteer={(messageId) => {
+                      if (activeTaskId !== null) {
+                        void steerQueued(activeTaskId, messageId);
+                      }
+                    }}
+                    onReorder={(from, to) => {
+                      if (activeTaskId !== null) {
+                        reorderQueued(activeTaskId, from, to);
+                      }
+                    }}
+                  />
+                </div>
+              )}
               <AgentComposer
                 value={continuationInput}
                 onChange={(value) => {
@@ -773,13 +881,6 @@ export function ChatPanel({
                 onCompact={handleCompact}
               />
               {continuationError && <p role="alert" className="mt-2 px-2 text-xs text-destructive">{continuationError}</p>}
-              {pendingFollowUp && (
-                <p role="status" className="mt-2 px-2 text-xs text-muted-foreground">
-                  {pendingFollowUp.steer
-                    ? "正在切换方向：已取消当前回答，新指令将自动发送…"
-                    : "已加入队列：当前回答结束后将自动发送。"}
-                </p>
-              )}
             </div>
           </div>
         </div>
