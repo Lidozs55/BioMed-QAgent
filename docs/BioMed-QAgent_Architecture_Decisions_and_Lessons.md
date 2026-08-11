@@ -5,6 +5,7 @@
 > 输入依据：当前代码仓库、赛题说明、历史 Review/Survey，以及本轮关于 Pipeline、DAG、Recipe、状态和产物边界的讨论  
 > 用途：约束后续设计，解释为什么改变方向，防止团队再次沿错误抽象继续扩张  
 > V2 变更：删除正式 DatasetRequest 和 BuildRecipe，明确 WorkflowRecipe 仅服务 Acquisition，并拆分 RunStatus、BuildResult、ValidationResult 与 DatasetPublication
+> ADR 序列续篇：Pi 迁移的 ADR-017 至 ADR-024 使用独立记录，见 [ADR 索引](adr/README.md)。
 
 ---
 
@@ -600,6 +601,10 @@ Demo 或小表可以内联关键来源字段，但 Manifest 和 sidecar 仍为�
 ### 原因
 
 现有 Pipeline 有大量可靠性测试和复杂恢复语义。大爆炸重写风险高，且很容易丢掉比业务流程更成熟的基础设施。WorkflowRecipe 和状态体系也有现存消费者，必须以兼容层和特征测试保护迁移。
+
+> **ADR 序列续篇：** Pi Agent / Host 迁移决策为 ADR-017 至 ADR-024，见
+> [docs/adr/README.md](adr/README.md)。此处保留既有章节编号，避免打断
+> `ADR §N` 历史交叉引用。
 
 ## 19. 被否决或修正的方案
 
