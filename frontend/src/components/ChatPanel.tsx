@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowUpIcon,
   CheckCircleIcon,
@@ -270,6 +270,12 @@ export function ChatPanel({
   >({});
   const [olderMessagesPendingByTask, setOlderMessagesPendingByTask] = useState<Record<string, boolean>>({});
   const [olderMessagesErrors, setOlderMessagesErrors] = useState<Record<string, string>>({});
+  // Sentinel observed while the conversation starts scrolled to the newest
+  // messages; when the user scrolls up far enough to reach it, earlier
+  // messages are fetched automatically (the explicit button remains as a
+  // keyboard-accessible fallback).
+  const olderSentinelRef = useRef<HTMLDivElement | null>(null);
+  const loadEarlierMessagesRef = useRef<() => Promise<void>>(async () => {});
 
   const continuationInput =
     activeTaskId === null ? "" : continuationDrafts[activeTaskId] ?? "";
@@ -530,6 +536,24 @@ export function ChatPanel({
       setOlderMessagesPendingByTask((current) => ({ ...current, [taskId]: false }));
     }
   };
+  // Keep the ref pointing at the latest closure so the observer never needs
+  // to be re-created when `loadEarlierMessages` identity changes.
+  loadEarlierMessagesRef.current = loadEarlierMessages;
+
+  useEffect(() => {
+    const node = olderSentinelRef.current;
+    if (!hasOlderMessages || node === null) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          void loadEarlierMessagesRef.current();
+        }
+      },
+      { rootMargin: "96px 0px" },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [hasOlderMessages]);
 
   const handleDraftKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (!isSubmitKey(event, sendShortcut)) return;
@@ -654,7 +678,10 @@ export function ChatPanel({
               <MessageScrollerContent className="mx-auto w-full max-w-3xl gap-3 px-5 py-6">
                 {hasOlderMessages && (
                   <MessageScrollerItem messageId={`older-messages:${activeTaskId}`}>
-                    <div className="flex flex-col items-center gap-1">
+                    <div
+                      ref={olderSentinelRef}
+                      className="flex flex-col items-center gap-1"
+                    >
                       <Button
                         type="button"
                         variant="ghost"

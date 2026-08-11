@@ -864,6 +864,42 @@ describe("runtime orchestration", () => {
     );
   });
 
+  it("windows a cold event replay to the tail when the event log is long", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      page([], [summary("task_window", "completed", 5000, "fixture")]),
+      false,
+    );
+    const tailStart = 5000 - 3000 + 1; // EVENT_REPLAY_WINDOW_SIZE = 3000
+    const tailEvents: EventEnvelope[] = [];
+    for (let sequence = tailStart; sequence <= 5000; sequence += 1) {
+      tailEvents.push(stageStartedEvent("task_window", sequence));
+    }
+    const apiClient = api({
+      fetchTask: vi.fn(async () => snapshot("task_window", 5000, "fixture")),
+      fetchEvents: vi.fn(async (_taskId, options) => {
+        const after = options?.afterSequence ?? 0;
+        return tailEvents
+          .filter((event) => event.sequence > after)
+          .slice(0, 1000);
+      }),
+      fetchArtifacts: vi.fn().mockResolvedValue([]),
+    });
+    const eventTransport = transport({ subscribe: vi.fn() });
+    const controller = new RuntimeController(apiClient, eventTransport);
+
+    await controller.selectTask("task_window");
+
+    // The full log runs 1..5000; a cold hydration must not replay it all —
+    // it starts at the window lower edge (2001) instead of sequence 0.
+    expect(apiClient.fetchEvents).toHaveBeenCalledWith("task_window", {
+      afterSequence: 2000,
+      limit: 1000,
+    });
+    expect(
+      useAgentStore.getState().tasksById.task_window.lastSequence,
+    ).toBe(5000);
+  });
+
   it("restarts summary event replay from zero after a later replay page fails", async () => {
     useAgentStore.getState().mergeTaskPage(
       page([], [summary("task_replay_retry", "completed", 1001, "fixture")]),

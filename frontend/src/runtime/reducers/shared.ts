@@ -27,6 +27,25 @@ const ACTIVE_STATUSES = new Set<RunStatus>([
   "awaiting_user_input",
 ]);
 
+//: Upper bound for the rendered timeline. Live event application only ever
+//: appends newer items, so without a cap a long session grows memory and DOM
+//: without limit. Anything older than the window is dropped; earlier messages
+//: stay reachable through ``olderMessagesCursor`` pagination
+//: (``mergeOlderMessagePage``). Tool/activity items outside the window are not
+//: recoverable by design — the message pagination API serves messages only.
+export const ITEMS_CAP = 500;
+
+export function capTaskItems(task: TaskProjection): TaskProjection {
+  if (task.items.length <= ITEMS_CAP) return task;
+  const dropped = task.items.length - ITEMS_CAP;
+  const items = task.items.slice(dropped);
+  const keptIds = new Set(items.map((item) => item.itemId));
+  const itemSequences = Object.fromEntries(
+    Object.entries(task.itemSequences).filter(([itemId]) => keptIds.has(itemId)),
+  );
+  return { ...task, items, itemSequences };
+}
+
 export function isActiveStatus(status: RunStatus): boolean {
   return ACTIVE_STATUSES.has(status);
 }

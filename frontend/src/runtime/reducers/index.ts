@@ -1,6 +1,6 @@
 import type { EventEnvelope } from "../contracts";
 import type { AgentRuntimeData } from "../types";
-import { updateClassification } from "./shared";
+import { capTaskItems, updateClassification } from "./shared";
 import {
   applyAssistantEvent,
   applyStageProgressEvent,
@@ -186,6 +186,11 @@ export function reduceRuntimeEvent(
   // operation items, its stage/progress items are pruned (legacy replays
   // without operation events are unaffected).
   task = pruneStageItemsForOperationRuns(task);
+
+  // Timeline bound: drop the oldest items once a session grows past the cap
+  // (streaming never removes anything on its own). Earlier messages remain
+  // reachable via ``olderMessagesCursor`` pagination.
+  task = capTaskItems(task);
 
   task = {
     ...task,

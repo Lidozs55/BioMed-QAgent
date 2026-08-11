@@ -528,6 +528,38 @@ describe("runtime event projection", () => {
     expect(after.summary.latest_sequence).toBe(4);
   });
 
+  it("caps the rendered timeline and drops the oldest items past ITEMS_CAP", () => {
+    let state = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_cap", "running", 0)),
+      false,
+    );
+    // 600 distinct tool calls → 600 tool items; the timeline must hold at
+    // most ITEMS_CAP and keep only the newest tail.
+    const ITEMS_CAP = 500;
+    for (let sequence = 1; sequence <= 600; sequence += 1) {
+      state = reduceRuntimeEvent(
+        state,
+        envelope("task_cap", "run_cap", sequence, {
+          type: "tool_started",
+          tool_call_id: `call_${sequence}`,
+          tool_name: "search_literature",
+        }),
+      );
+    }
+    const task = state.tasksById.task_cap;
+    expect(task.items).toHaveLength(ITEMS_CAP);
+    // Oldest tool items were evicted; the newest tail survives.
+    expect(
+      task.items.some((item) => item.itemId === "tool:run_cap:call_1"),
+    ).toBe(false);
+    expect(
+      task.items.some((item) => item.itemId === "tool:run_cap:call_600"),
+    ).toBe(true);
+    // itemSequences stays aligned with the surviving items.
+    expect(Object.keys(task.itemSequences)).toHaveLength(ITEMS_CAP);
+  });
+
   it("suppresses stage/progress timeline items for runs carrying operation events (R1S-01)", () => {
     let state = mergeTaskPage(
       createInitialRuntimeState(),

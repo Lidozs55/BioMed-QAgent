@@ -21,6 +21,11 @@ import {
 
 const TASK_PAGE_SIZE = 10;
 const EVENT_REPLAY_PAGE_SIZE = 1000;
+//: Cold hydration replays only the tail of the event log. Anything older than
+//: the window is not re-reduced; earlier messages stay reachable through the
+//: snapshot's ``older_messages_cursor`` pagination. Keeps opening a long
+//: session bounded instead of re-applying every event since sequence 1.
+const EVENT_REPLAY_WINDOW_SIZE = 3000;
 
 export interface EventTransport {
   connect(): Promise<void>;
@@ -338,6 +343,25 @@ export class RuntimeController {
     let afterSequence =
       useAgentStore.getState().tasksById[taskId]?.lastSequence ?? 0;
     if (targetSequence <= afterSequence) return;
+    // Window the cold replay: only reduce the tail of the event log. Advance
+    // lastSequence to the window lower edge so the reducer's contiguity check
+    // (``sequence > lastSequence + 1``) does not misread the window's first
+    // event as a dropped frame; the snapshot's ``older_messages_cursor`` then
+    // backfills anything older on demand.
+    const windowLow = Math.max(0, targetSequence - EVENT_REPLAY_WINDOW_SIZE + 1);
+    if (afterSequence < windowLow) {
+      useAgentStore.setState((state) => {
+        const current = state.tasksById[taskId];
+        if (current === undefined) return state;
+        return {
+          tasksById: {
+            ...state.tasksById,
+            [taskId]: { ...current, lastSequence: windowLow - 1 },
+          },
+        };
+      });
+      afterSequence = windowLow - 1;
+    }
     for (;;) {
       const events = await this.api.fetchEvents(taskId, {
         afterSequence,

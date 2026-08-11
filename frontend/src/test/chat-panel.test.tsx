@@ -1355,6 +1355,54 @@ describe("ChatPanel", () => {
     ).toBeEnabled();
   });
 
+  it("auto-fetches earlier messages when the older-messages sentinel scrolls into view", async () => {
+    seedTerminalTask("agent", "task_history", "cursor_before_latest");
+    const loadOlderMessages = vi.fn().mockResolvedValue(undefined);
+
+    // Controllable IntersectionObserver: capture the callback so the test can
+    // simulate the sentinel entering the viewport (scroll-triggered load).
+    let intersect: (() => void) | null = null;
+    class Observer {
+      callback: IntersectionObserverCallback;
+      constructor(callback: IntersectionObserverCallback) {
+        this.callback = callback;
+      }
+      observe(): void {
+        intersect = () =>
+          this.callback(
+            [{ isIntersecting: true } as IntersectionObserverEntry],
+            this as unknown as IntersectionObserver,
+          );
+      }
+      unobserve(): void {}
+      disconnect(): void {}
+      takeRecords(): IntersectionObserverEntry[] {
+        return [];
+      }
+      readonly root = null;
+      readonly rootMargin = "0px";
+      readonly thresholds: ReadonlyArray<number> = [];
+    }
+    vi.stubGlobal(
+      "IntersectionObserver",
+      Observer as unknown as typeof IntersectionObserver,
+    );
+
+    render(
+      <ChatPanel
+        startTask={vi.fn()}
+        loadOlderMessages={loadOlderMessages}
+      />,
+    );
+
+    await act(async () => {
+      intersect?.();
+    });
+
+    expect(loadOlderMessages).toHaveBeenCalledWith("task_history");
+    vi.unstubAllGlobals();
+  });
+
   it("keeps load-earlier errors scoped to the task when switching", async () => {
     seedTerminalTask("agent", "task_a", "cursor_a");
     seedTerminalTask("agent", "task_b", "cursor_b");
