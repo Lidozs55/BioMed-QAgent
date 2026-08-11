@@ -25,7 +25,10 @@
 - Pi Extensions 注册受信任业务 Tool；
 - Dataset Construction Core 保留确定性执行、验证、溯源、原子发布等可靠性约束，并迁至 TypeScript；
 - Python 最终只保留数据库桥接层；如果未来数据库也迁至 TypeScript，上层接口无需变化；
-- React 前端尽量保持现有产品逻辑，通过兼容层逐步切换到新的 TS Host。
+- React 前端尽量保持现有产品逻辑，通过兼容层逐步切换到新的 TS Host；
+- 前后端共享同一个 Node/pnpm Workspace、同一 Node 版本、同一 `pnpm-lock.yaml`；
+- 开发和生产都采用单一应用入口：开发时 TS Host 内嵌 Vite middleware，生产时 TS Host 直接托管前端构建产物；
+- 开发者只需要执行一次 `pnpm dev`，不再分别启动 frontend 和 backend。
 
 最终目标不是“用 TypeScript 重写现在的 FastAPI 后端”，而是：
 
@@ -1063,7 +1066,312 @@ Main Session
 
 ---
 
-## 18. 推荐目录结构
+## 18. Node Workspace 与单入口开发模式
+
+### 18.1 单一 pnpm Workspace
+
+迁移后项目根目录成为唯一 Node Workspace 根：
+
+```text
+BioMed-QAgent/
+├── frontend/
+├── server/
+├── packages/
+├── .pi/
+├── database/
+├── package.json
+├── pnpm-workspace.yaml
+├── pnpm-lock.yaml
+└── tsconfig.base.json
+```
+
+原则：
+
+- 根目录只保留一个 `pnpm-lock.yaml`；
+- 前端和 TS Host 使用同一个 Node 版本；
+- 根 `package.json` 提供项目唯一开发/构建/启动入口；
+- `frontend/` 与 `server/` 可以继续拥有各自 `package.json`，但都属于同一 pnpm workspace；
+- 通用 TypeScript 类型、事件契约和 Dataset contract 可以放在 `packages/`，避免前后端复制类型；
+- 不使用 frontend/backend 两套独立 `node_modules` 管理流程；
+- Python 的 `uv` 环境只服务最终保留的 `database/` bridge，不参与应用主进程启动。
+
+建议 `pnpm-workspace.yaml`：
+
+```yaml
+packages:
+  - frontend
+  - server
+  - packages/*
+```
+
+建议根 `package.json` 提供：
+
+```json
+{
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --filter @biomed/server dev",
+    "build": "pnpm --filter @biomed/frontend build && pnpm --filter @biomed/server build",
+    "start": "pnpm --filter @biomed/server start",
+    "test": "pnpm -r test",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck"
+  }
+}
+```
+
+这里 `dev` 只启动 TS Host，因为 Vite 由 TS Host 自己创建，不需要再运行独立 `pnpm --filter frontend dev`。
+
+### 18.2 开发环境：TS Host 内嵌 Vite
+
+推荐开发拓扑：
+
+```text
+pnpm dev
+   │
+   ▼
+TS Application Host
+   │
+   ├── /api/*        → BioMed API
+   ├── /api/v1/ws    → WebSocket
+   ├── Pi AgentSession
+   ├── Dataset Core
+   │
+   └── Vite middleware
+          │
+          ├── React dev assets
+          └── HMR WebSocket
+```
+
+浏览器只访问：
+
+```text
+http://localhost:<app-port>
+```
+
+而不是：
+
+```text
+localhost:5173  frontend
+localhost:8000  backend
+```
+
+应用启动逻辑示意：
+
+```ts
+import { createServer as createViteServer } from "vite";
+
+async function createApp() {
+  const app = createHttpApplication();
+
+  registerApiRoutes(app);
+  registerWebSocketRoutes(app);
+
+  if (process.env.NODE_ENV !== "production") {
+    const vite = await createViteServer({
+      server: {
+        middlewareMode: true,
+      },
+      appType: "spa",
+    });
+
+    app.use(vite.middlewares);
+  } else {
+    registerFrontendStaticAssets(app);
+  }
+
+  return app;
+}
+```
+
+这样仍然保留 Vite HMR，但开发者只启动一个 Node 应用。
+
+### 18.3 生产环境：同一个 Host 托管前端
+
+构建：
+
+```text
+pnpm build
+```
+
+产生：
+
+```text
+frontend/dist/
+server/dist/
+```
+
+启动：
+
+```text
+pnpm start
+```
+
+只有：
+
+```text
+server/dist/index.js
+```
+
+一个应用进程。
+
+TS Host：
+
+```text
+/api/*          → API
+/api/v1/ws      → WS
+/assets/*       → frontend/dist/assets
+/*              → frontend/dist/index.html
+```
+
+因此项目不会在生产环境再维护“前端服务器 + 后端服务器”两个独立进程。
+
+### 18.4 开发时仍保持代码层前后端分离
+
+“单入口”不等于将前端和后端代码混在一起。
+
+继续保留：
+
+```text
+frontend/
+server/
+packages/
+```
+
+只是：
+
+```text
+运行环境统一
+依赖管理统一
+启动入口统一
+端口统一
+```
+
+而代码职责仍然清晰：
+
+```text
+frontend
+= UI
+
+server
+= Pi + API + Dataset Core host
+
+packages/contracts
+= 前后端共享契约
+```
+
+### 18.5 推荐共享 package
+
+建议增加：
+
+```text
+packages/
+├── contracts/
+│   ├── task.ts
+│   ├── run.ts
+│   ├── event.ts
+│   ├── dataset-build.ts
+│   └── artifact.ts
+│
+├── config/
+│   └── ...
+│
+└── test-utils/
+    └── ...
+```
+
+其中 `contracts` 同时由 frontend 和 server 引用。
+
+这样可直接消除当前：
+
+```text
+Python Pydantic contract
+↔
+Frontend TypeScript type
+```
+
+两边手工同步导致的漂移。
+
+迁移后目标变成：
+
+```text
+packages/contracts
+        │
+        ├── frontend
+        └── server
+```
+
+对于数据库 bridge 所需 contract，再通过 JSON Schema 或协议版本导出，不让 Python 成为主契约来源。
+
+### 18.6 一键启动要求
+
+开发环境 Definition of Done 增加：
+
+```text
+pnpm install
+pnpm dev
+```
+
+之后即可完整使用：
+
+- React UI；
+- Pi Main Agent；
+- API；
+- WebSocket；
+- Dataset Core；
+- DB bridge（若需要，由 TS Host 自动拉起并管理）；
+- Vite HMR。
+
+开发者不应再执行：
+
+```text
+cd frontend && pnpm dev
+cd backend && uv run uvicorn ...
+```
+
+如果 Python DB bridge 仍存在，其生命周期由 TS Host 管理：
+
+```text
+pnpm dev
+   ↓
+TS Host
+   └── spawn database bridge when needed
+```
+
+应用退出时同步关闭 bridge。
+
+开发者无需单独启动 Python。
+
+### 18.7 Node 版本与工具链统一
+
+项目根目录固定：
+
+```text
+packageManager
+Node engine/version
+pnpm-lock.yaml
+tsconfig.base.json
+eslint config
+```
+
+前端、server、共享 package 统一继承。
+
+建议所有主工程命令都从仓库根目录执行：
+
+```text
+pnpm dev
+pnpm build
+pnpm start
+pnpm test
+pnpm lint
+pnpm typecheck
+```
+
+这也应成为新的 `AGENTS.md` 开发约定。
+
+---
+
+## 19. 推荐目录结构
 
 ```text
 BioMed-QAgent/
@@ -1134,7 +1442,7 @@ BioMed-QAgent/
 
 ---
 
-## 19. 分阶段迁移计划
+## 20. 分阶段迁移计划
 
 ## Phase 0：冻结边界与迁移 ADR
 
@@ -1451,7 +1759,7 @@ uv run python database/bridge.py --self-test
 
 ---
 
-## 20. 测试策略
+## 21. 测试策略
 
 ### 20.1 Contract Tests
 
@@ -1529,7 +1837,7 @@ TS new core
 
 ---
 
-## 21. 安全边界
+## 22. 安全边界
 
 ### 21.1 Agent 不可直接发布
 
@@ -1573,7 +1881,7 @@ Agent-facing tool 使用 named operation，不开放任意 SQL。
 
 ---
 
-## 22. 主要风险
+## 23. 主要风险
 
 ### 22.1 把 Pi Session 当 Task Runtime
 
@@ -1634,7 +1942,7 @@ server/agent/pi-adapter.ts
 
 ---
 
-## 23. 回滚策略
+## 24. 回滚策略
 
 每个阶段必须可回滚。
 
@@ -1672,7 +1980,7 @@ Phase 8 后删除 feature flag 和 legacy code。
 
 ---
 
-## 24. 优先级建议
+## 25. 优先级建议
 
 实际执行顺序建议：
 
@@ -1699,7 +2007,7 @@ Phase 8 后删除 feature flag 和 legacy code。
 
 ---
 
-## 25. 最终 Definition of Done
+## 26. 最终 Definition of Done
 
 迁移完成必须同时满足：
 
@@ -1735,6 +2043,17 @@ Phase 8 后删除 feature flag 和 legacy code。
 - [ ] replay/reconnect 保持；
 - [ ] cancel/recovery 保持。
 
+### Workspace / Developer Experience
+
+- [ ] 前后端属于同一 pnpm workspace；
+- [ ] 仓库只有一个 `pnpm-lock.yaml`；
+- [ ] 前后端使用同一 Node 版本；
+- [ ] `pnpm dev` 一条命令启动完整开发环境；
+- [ ] 开发时 TS Host 内嵌 Vite middleware；
+- [ ] 生产环境只启动一个 TS Host 进程；
+- [ ] Python DB bridge 如仍存在，由 TS Host 自动管理生命周期；
+- [ ] 浏览器只需要访问一个应用端口。
+
 ### Backend
 
 - [ ] FastAPI 删除；
@@ -1762,7 +2081,7 @@ Phase 8 后删除 feature flag 和 legacy code。
 
 ---
 
-## 26. 建议先执行的第一个 PR
+## 27. 建议先执行的第一个 PR
 
 第一个 PR 不应删除 Python。
 
@@ -1799,7 +2118,7 @@ feat/pi-dataset-build-bridge
 
 ---
 
-## 27. 最终架构判断
+## 28. 最终架构判断
 
 本次迁移应遵循一句话：
 
