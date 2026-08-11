@@ -3,6 +3,7 @@ import { describe, expect, test, vi } from "vitest";
 import { BioMedAgentError } from "../src/agent/contracts.js";
 import {
   PiAgentAdapter,
+  toPiCustomTools,
   type PiUpstreamEvent,
   type PiUpstreamSession,
 } from "../src/agent/pi-adapter.js";
@@ -63,6 +64,40 @@ async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
 }
 
 describe("PiAgentAdapter", () => {
+  test("converts project tool descriptors only at the Pi boundary", async () => {
+    const execute = vi.fn(async () => ({
+      content: "bounded",
+      details: { path: "parsed/data.txt" },
+    }));
+    const [tool] = toPiCustomTools([
+      {
+        name: "workspace_read",
+        label: "Read Workspace text",
+        description: "Read bounded text",
+        parameters: {
+          type: "object",
+          properties: { path: { type: "string" } },
+          required: ["path"],
+        },
+        execute,
+      },
+    ]);
+
+    const result = await Reflect.apply(tool!.execute, undefined, [
+      "call-1",
+      { path: "parsed/data.txt" },
+      undefined,
+      undefined,
+      undefined,
+    ]);
+
+    expect(execute).toHaveBeenCalledWith({ path: "parsed/data.txt" }, undefined);
+    expect(result).toEqual({
+      content: [{ type: "text", text: "bounded" }],
+      details: { path: "parsed/data.txt" },
+    });
+  });
+
   test("streams assistant and tool events through the bounded BioMed union", async () => {
     const upstream = new FakeUpstreamSession();
     upstream.promptImplementation = async () => {
@@ -213,6 +248,32 @@ describe("PiAgentAdapter", () => {
 
     expect(upstream.listenerCount).toBe(0);
     expect(upstream.dispose).toHaveBeenCalledOnce();
+  });
+
+  test("session disposal invokes the project lifecycle cleanup once", async () => {
+    const upstream = new FakeUpstreamSession();
+    const cleanup = vi.fn(async () => undefined);
+    const session = await new PiAgentAdapter({
+      createUpstreamSession: async () => upstream,
+    }).createSession({ ...sessionConfig, cleanup });
+
+    await session.dispose();
+    await session.dispose();
+
+    expect(cleanup).toHaveBeenCalledOnce();
+  });
+
+  test("invalid session configuration invokes project lifecycle cleanup", async () => {
+    const cleanup = vi.fn(async () => undefined);
+    const adapter = new PiAgentAdapter({
+      createUpstreamSession: vi.fn(async () => new FakeUpstreamSession()),
+    });
+
+    await expect(
+      adapter.createSession({ ...sessionConfig, cwd: "relative", cleanup }),
+    ).rejects.toMatchObject({ code: "INVALID_SESSION_CONFIG" });
+
+    expect(cleanup).toHaveBeenCalledOnce();
   });
 
   test("missing model credentials fail only when real session creation is requested", async () => {

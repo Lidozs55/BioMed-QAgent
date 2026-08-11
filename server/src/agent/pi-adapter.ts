@@ -8,6 +8,7 @@ import {
   SessionManager,
   SettingsManager,
   type AgentSessionEvent,
+  type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 
 import {
@@ -15,6 +16,7 @@ import {
   type BioMedAgentAdapter,
   type BioMedAgentEvent,
   type BioMedAgentSession,
+  type BioMedAgentTool,
   type BioMedModelConfig,
   type BioMedSessionConfig,
   type RunOptions,
@@ -211,12 +213,6 @@ async function createRealUpstreamSession(
   config: BioMedSessionConfig,
   environment: Environment,
 ): Promise<PiUpstreamSession> {
-  if ((config.tools?.length ?? 0) > 0) {
-    throw new BioMedAgentError(
-      "INVALID_CONFIGURATION",
-      "Project tool registration is not enabled in Phase 1B",
-    );
-  }
   const selected = config.model ?? modelFromEnvironment(environment);
   const modelRuntime = await ModelRuntime.create({
     allowModelNetwork: false,
@@ -266,7 +262,8 @@ async function createRealUpstreamSession(
     resourceLoader,
     sessionManager: SessionManager.inMemory(config.cwd),
     settingsManager,
-    noTools: "all",
+    noTools: (config.tools?.length ?? 0) > 0 ? "builtin" : "all",
+    customTools: toPiCustomTools(config.tools ?? []),
   });
   return {
     sessionId: session.sessionId,
@@ -279,6 +276,25 @@ async function createRealUpstreamSession(
   };
 }
 
+export function toPiCustomTools(
+  tools: readonly BioMedAgentTool[],
+): ToolDefinition[] {
+  return tools.map((tool) => ({
+    name: tool.name,
+    label: tool.label,
+    description: tool.description,
+    parameters: tool.parameters,
+    async execute(_toolCallId, parameters, signal) {
+      const result = await tool.execute(parameters, signal);
+      if (result.isError === true) throw new Error(result.content);
+      return {
+        content: [{ type: "text", text: result.content }],
+        details: result.details,
+      };
+    },
+  }));
+}
+
 class PiBioMedAgentSession implements BioMedAgentSession {
   readonly piSessionId: string;
   readonly taskId: string;
@@ -286,6 +302,7 @@ class PiBioMedAgentSession implements BioMedAgentSession {
   private activeTurn?: ActiveTurn;
   private readonly unsubscribe: () => void;
   private disposePromise?: Promise<void>;
+  private readonly cleanup?: () => Promise<void>;
 
   constructor(
     private readonly upstream: PiUpstreamSession,
@@ -294,6 +311,7 @@ class PiBioMedAgentSession implements BioMedAgentSession {
     this.piSessionId = upstream.sessionId;
     this.taskId = config.taskId;
     this.runId = config.runId;
+    this.cleanup = config.cleanup;
     this.unsubscribe = upstream.subscribe((event) => this.handleEvent(event));
   }
 
@@ -428,9 +446,16 @@ class PiBioMedAgentSession implements BioMedAgentSession {
 
   dispose(): Promise<void> {
     this.disposePromise ??= (async () => {
-      await this.cancel("session disposed");
-      this.unsubscribe();
-      this.upstream.dispose();
+      try {
+        await this.cancel("session disposed");
+      } finally {
+        try {
+          this.unsubscribe();
+          this.upstream.dispose();
+        } finally {
+          await this.cleanup?.();
+        }
+      }
     })();
     return this.disposePromise;
   }
@@ -450,11 +475,13 @@ export class PiAgentAdapter implements BioMedAgentAdapter {
   }
 
   async createSession(config: BioMedSessionConfig): Promise<BioMedAgentSession> {
-    const validated = await validateSessionConfig(config);
+    let validated: BioMedSessionConfig | undefined;
     try {
+      validated = await validateSessionConfig(config);
       const upstream = await this.createUpstreamSession(validated);
       return new PiBioMedAgentSession(upstream, validated);
     } catch (error) {
+      await (validated?.cleanup ?? config.cleanup)?.();
       if (error instanceof BioMedAgentError) throw error;
       throw new BioMedAgentError(
         "UPSTREAM_FAILURE",

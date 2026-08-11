@@ -15,6 +15,7 @@ export interface HostConfig {
   legacyUrl?: string;
   legacyReadinessTimeoutMs: number;
   shutdownTimeoutMs: number;
+  workspaceDevExec: boolean;
 }
 
 export const DEFAULT_HOST_CONFIG = {
@@ -27,6 +28,7 @@ export const DEFAULT_HOST_CONFIG = {
   LEGACY_BACKEND_PORT: "8000",
   LEGACY_READINESS_TIMEOUT_MS: "30000",
   SHUTDOWN_TIMEOUT_MS: "10000",
+  WORKSPACE_DEV_EXEC: "0",
 } as const;
 
 function parseChoice<const Values extends readonly string[]>(
@@ -128,5 +130,12 @@ export function parseHostConfig(environment: Environment): HostConfig {
       "SHUTDOWN_TIMEOUT_MS",
       environment.SHUTDOWN_TIMEOUT_MS ?? DEFAULT_HOST_CONFIG.SHUTDOWN_TIMEOUT_MS,
     ),
+    workspaceDevExec:
+      parseChoice(
+        "WORKSPACE_DEV_EXEC",
+        environment.WORKSPACE_DEV_EXEC,
+        DEFAULT_HOST_CONFIG.WORKSPACE_DEV_EXEC,
+        ["0", "1"] as const,
+      ) === "1",
   };
 }

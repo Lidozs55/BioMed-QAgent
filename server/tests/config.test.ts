@@ -57,7 +57,15 @@ describe("feature flags", () => {
       publicHost: "127.0.0.1",
       publicPort: 5173,
       legacyPrivatePort: 8000,
+      workspaceDevExec: false,
     });
     expect(() => parseHostConfig({ APP_HOST: "fastapi" })).toThrow(/APP_HOST=ts/);
+  });
+
+  test("requires an explicit validated development exec flag", () => {
+    expect(parseHostConfig({ WORKSPACE_DEV_EXEC: "1" }).workspaceDevExec).toBe(true);
+    expect(() => parseHostConfig({ WORKSPACE_DEV_EXEC: "true" })).toThrow(
+      /WORKSPACE_DEV_EXEC/,
+    );
   });
 });

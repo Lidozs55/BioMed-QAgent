@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import path from "node:path";
 
 import { afterEach, describe, expect, test, vi } from "vitest";
 
@@ -85,7 +86,14 @@ describe("experimental Pi Host composition", () => {
         close: async () => undefined,
       }),
       experimentalPi: () =>
-        createExperimentalPiRuntime({ adapter, cwd: process.cwd() }),
+        createExperimentalPiRuntime({
+          adapter,
+          workspaceFactory: async () => ({
+            root: path.join(process.cwd(), "server"),
+            tools: [],
+            dispose: async () => undefined,
+          }),
+        }),
       frontend: async () => ({
         middleware: (_request, response) => response.end("frontend"),
         close: async () => undefined,
@@ -112,14 +120,26 @@ describe("experimental Pi Host composition", () => {
       ],
       durable: false,
     });
-    expect(adapter.created).toEqual([
-      { taskId: "task-1", runId: "run-1", cwd: process.cwd() },
-    ]);
+    expect(adapter.created).toHaveLength(1);
+    expect(adapter.created[0]).toMatchObject({
+      taskId: "task-1",
+      runId: "run-1",
+      cwd: path.join(process.cwd(), "server"),
+      tools: [],
+    });
   });
 
   test("runs a later sequential turn through the same mapped session", async () => {
     const adapter = new FakeAdapter();
-    const runtime = await createExperimentalPiRuntime({ adapter, cwd: process.cwd() });
+    const disposeWorkspace = vi.fn(async () => undefined);
+    const runtime = await createExperimentalPiRuntime({
+      adapter,
+      workspaceFactory: async () => ({
+        root: path.join(process.cwd(), "server"),
+        tools: [],
+        dispose: disposeWorkspace,
+      }),
+    });
     const server = createServer((request, response) => runtime.handle(request, response));
     legacyServers.push(server);
     const port = await listen(server);
@@ -146,5 +166,6 @@ describe("experimental Pi Host composition", () => {
     });
     expect(adapter.created).toHaveLength(1);
     await runtime.close();
+    expect(disposeWorkspace).toHaveBeenCalledOnce();
   });
 });

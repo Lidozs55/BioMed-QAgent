@@ -4,6 +4,8 @@ import {
   BioMedAgentError,
   type BioMedAgentAdapter,
   type BioMedAgentEvent,
+  type BioMedAgentSession,
+  type BioMedAgentTool,
 } from "./contracts.js";
 import { SessionRegistry } from "./session-registry.js";
 
@@ -14,7 +16,14 @@ export interface ExperimentalPiRuntime {
 
 export interface ExperimentalPiRuntimeOptions {
   adapter: BioMedAgentAdapter;
-  cwd: string;
+  workspaceFactory: (identity: {
+    taskId: string;
+    runId: string;
+  }) => Promise<{
+    root: string;
+    tools: readonly BioMedAgentTool[];
+    dispose(): Promise<void>;
+  }>;
 }
 
 interface JsonBody {
@@ -95,6 +104,7 @@ export async function createExperimentalPiRuntime(
   options: ExperimentalPiRuntimeOptions,
 ): Promise<ExperimentalPiRuntime> {
   const registry = new SessionRegistry(options.adapter);
+  const workspaceDisposals = new Map<string, () => Promise<void>>();
 
   async function dispatch(request: IncomingMessage, response: ServerResponse): Promise<void> {
     try {
@@ -104,7 +114,27 @@ export async function createExperimentalPiRuntime(
         const taskId = requireString(body, "task_id");
         const runId = requireString(body, "run_id");
         const input = requireString(body, "input");
-        const session = await registry.create({ taskId, runId, cwd: options.cwd });
+        const workspace = await options.workspaceFactory({ taskId, runId });
+        let disposePromise: Promise<void> | undefined;
+        const cleanup = (): Promise<void> => {
+          workspaceDisposals.delete(runId);
+          disposePromise ??= workspace.dispose();
+          return disposePromise;
+        };
+        workspaceDisposals.set(runId, cleanup);
+        let session: BioMedAgentSession;
+        try {
+          session = await registry.create({
+            taskId,
+            runId,
+            cwd: workspace.root,
+            tools: workspace.tools,
+            cleanup,
+          });
+        } catch (error) {
+          await cleanup();
+          throw error;
+        }
         const events = await collect(session.run(input));
         sendJson(response, 201, {
           task_id: taskId,
@@ -169,6 +199,23 @@ export async function createExperimentalPiRuntime(
       void dispatch(request, response);
       return true;
     },
-    close: () => registry.disposeAll(),
+    close: async () => {
+      let registryError: unknown;
+      try {
+        await registry.disposeAll();
+      } catch (error) {
+        registryError = error;
+      }
+      const results = await Promise.allSettled(
+        [...workspaceDisposals.values()].map((dispose) => dispose()),
+      );
+      const errors = results.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      if (registryError !== undefined) errors.unshift(registryError);
+      if (errors.length > 0) {
+        throw new AggregateError(errors, "Experimental Pi Workspace cleanup failed");
+      }
+    },
   };
 }

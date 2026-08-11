@@ -75,6 +75,7 @@ export interface BioMedSessionConfig {
   resourceRoots?: readonly string[];
   skillRoots?: readonly string[];
   tools?: readonly BioMedAgentTool[];
+  cleanup?: () => Promise<void>;
 }
 
 export interface RunOptions {
