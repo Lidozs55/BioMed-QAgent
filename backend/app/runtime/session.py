@@ -215,11 +215,16 @@ class DurableTaskSession:
         selected = visible if limit is None else visible[-limit:] if limit else []
         return [copy.deepcopy(record["item"]) for record in selected]
 
-    async def add_items(self, items: list[TResponseInputItem]) -> None:
+    async def add_items(
+        self,
+        items: list[TResponseInputItem],
+        *,
+        display_only: bool = False,
+    ) -> None:
         if not items:
             return
         normalized = [_json_item(item) for item in items]
-        await self._run_storage(self._add_items, normalized)
+        await self._run_storage(self._add_items, normalized, display_only)
 
     async def add_run_input_once(self, run_id: str, input_value: str) -> bool:
         """Project one manager-owned Run input into history exactly once."""
@@ -378,7 +383,11 @@ class DurableTaskSession:
             highest_ordinal=highest_ordinal,
         )
 
-    def _add_items(self, items: list[dict[str, Any]]) -> None:
+    def _add_items(
+        self,
+        items: list[dict[str, Any]],
+        display_only: bool = False,
+    ) -> None:
         with path_lock(self.path):
             active, highest_ordinal = self._replay()
             admitted = next(
@@ -396,10 +405,13 @@ class DurableTaskSession:
             records: list[dict[str, Any]] = []
             for offset, item in enumerate(items, start=1):
                 ordinal = highest_ordinal + offset
-                reconciles_admitted_input = bool(
-                    admitted is not None
-                    and not input_reconciled
-                    and _same_user_input(item, admitted["item"])
+                reconciles_admitted_input = (
+                    not display_only
+                    and bool(
+                        admitted is not None
+                        and not input_reconciled
+                        and _same_user_input(item, admitted["item"])
+                    )
                 )
                 message = (
                     None
@@ -423,6 +435,8 @@ class DurableTaskSession:
                         else None
                     ),
                 }
+                if display_only:
+                    record["display_only"] = True
                 if reconciles_admitted_input:
                     record["sdk_input_copy_for"] = self.run_id
                     input_reconciled = True
@@ -478,7 +492,8 @@ class DurableTaskSession:
         return [
             record
             for record in active
-            if not (
+            if record.get("display_only") is not True
+            and not (
                 record.get("manager_run_input") is True
                 and (
                     record.get("source_run_id") == self.run_id

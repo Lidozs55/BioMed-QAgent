@@ -828,10 +828,14 @@ async def inject_task_context(
 
     await _require_snapshot(repository, task_id)
     pending = get_context_injection_store().inject(task_id, body.text)
-    # 持久化到任务会话：注入内容会以用户消息形式出现在对话记录中，
-    # 并随后续 Run 的会话历史一起进入模型上下文。
+    # 持久化到任务会话（仅用于对话展示，模型历史读不到）：
+    # 注入内容以用户消息形式出现在对话记录末尾，但不会作为模型输入、
+    # 不会打断当前回答。
     session = repository.task_session(task_id)
-    await session.add_items([{"role": "user", "content": body.text}])
+    await session.add_items(
+        [{"role": "user", "content": body.text}],
+        display_only=True,
+    )
     return {"status": "injected", "task_id": task_id, "pending": pending}
 
 
