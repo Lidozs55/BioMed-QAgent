@@ -12,6 +12,11 @@ export function UserMessageBubble({ item }: UserMessageBubbleProps) {
       <MessageContent>
         <Bubble variant="default" align="end">
           <BubbleContent>
+            {item.injected && (
+              <span className="mb-1 block text-right text-[10px] font-medium text-muted-foreground">
+                注入的上下文
+              </span>
+            )}
             <span className="whitespace-pre-wrap">{item.content}</span>
           </BubbleContent>
         </Bubble>

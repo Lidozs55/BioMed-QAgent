@@ -199,6 +199,8 @@ export interface ConversationItemBase {
 export interface UserMessageItem extends ConversationItemBase {
   kind: "user_message";
   content: string;
+  /** 用户中途注入到上下文的消息（非手动输入）。 */
+  injected?: boolean;
 }
 
 export interface AssistantSegmentItem extends ConversationItemBase {

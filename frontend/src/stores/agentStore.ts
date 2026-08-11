@@ -386,6 +386,7 @@ export const useAgentStore = create<AgentStore>()(
             sequence: lastSequence + 1,
             createdAt,
             content: text,
+            injected: true,
           };
           return {
             tasksById: {

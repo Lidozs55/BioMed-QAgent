@@ -84,5 +84,11 @@ async def test_inject_context_endpoint(tmp_path: Path) -> None:
                 if message["role"] == "user"
             ]
             assert "注意：补充说明" in contents
+            # 注入内容只用于展示，不进入模型可见的会话历史。
+            repository = application.state.task_repository
+            model_items = await repository.task_session(task_id).get_items()
+            assert all(
+                "注意：补充说明" not in str(item) for item in model_items
+            )
         finally:
             store.clear(task_id)
