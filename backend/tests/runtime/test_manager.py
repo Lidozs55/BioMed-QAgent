@@ -3970,8 +3970,9 @@ async def test_unreadable_publication_marker_warns_and_skips(
 
 @pytest.mark.asyncio
 async def test_recovery_reconciles_valid_publication_marker(tmp_path) -> None:
-    """A valid .runtime-publication.json marker for a COMPLETED run must be
-    reconciled into a publication_created event on startup, not crash it."""
+    """A valid marker for a COMPLETED run must be reconciled into a
+    publication_created event on startup; C1b tolerates it as a late event
+    (counted, no second publication), never crashing recovery."""
     manager_module = importlib.import_module("app.runtime.manager")
     output_dir = tmp_path / "output"
     task_id = "task_valid_marker"
@@ -4027,9 +4028,14 @@ async def test_recovery_reconciles_valid_publication_marker(tmp_path) -> None:
     try:
         snapshot = await repository.get_snapshot(task_id)
         assert snapshot is not None
-        assert any(
-            pub.publication_id == f"pub-{run_id}"
-            and pub.manifest_sha256 == manifest_sha256
+        # C1b: publication_created on a terminal run is a non-authoritative
+        # late event — recovery persists the fact to the event log (auditable)
+        # while the reducer tolerates it via the dropped-late counter without
+        # producing a second publication or rewriting authoritative state.
+        run = next(run for run in snapshot.runs if run.run_id == run_id)
+        assert run.dropped_late_events == 1
+        assert all(
+            pub.publication_id != f"pub-{run_id}"
             for pub in snapshot.publications
         )
         events = await repository.list_events(task_id)
