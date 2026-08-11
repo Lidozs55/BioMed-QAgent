@@ -1224,7 +1224,11 @@ describe("ChatPanel", () => {
         "first queued",
       ),
     );
-    expect(screen.queryByText("first queued")).not.toBeInTheDocument();
+    // 队列条目移除，注入内容以用户消息气泡出现在对话中。
+    expect(
+      screen.queryByRole("button", { name: "注入上下文：first queued" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getAllByText("first queued").length).toBeGreaterThan(0);
     expect(screen.getByText("second queued")).toBeVisible();
     expect(screen.getByText("third queued")).toBeVisible();
 

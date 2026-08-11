@@ -546,6 +546,7 @@ export function ChatPanel({
       if (entry === undefined || injectTaskContext === undefined) return;
       try {
         await injectTaskContext(taskId, entry.input);
+        useAgentStore.getState().appendUserMessage(taskId, entry.input);
         removeQueued(taskId, messageId);
         toast.success("已注入上下文");
       } catch (error) {
