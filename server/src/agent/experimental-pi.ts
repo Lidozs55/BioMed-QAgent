@@ -36,6 +36,7 @@ export interface ExperimentalPiRuntimeOptions {
   }) => Promise<{
     root: string;
     tools: readonly BioMedAgentTool[];
+    setRunId?: (runId: string) => void;
     dispose(): Promise<void>;
   }>;
   eventBus?: ExperimentalEventBus;
@@ -49,6 +50,7 @@ interface ExperimentalTask {
   session: BioMedAgentSession;
   adapter: PiEventAdapter;
   disposeWorkspace: () => Promise<void>;
+  setWorkspaceRunId?: (runId: string) => void;
   activeRunId?: string;
 }
 
@@ -221,6 +223,7 @@ export async function createExperimentalPiRuntime(
     if (task.activeRunId !== undefined) {
       throw new BioMedAgentError("SESSION_BUSY", "Experimental task already has an active run");
     }
+    task.setWorkspaceRunId?.(runId);
     task.activeRunId = runId;
     queueMicrotask(() => void consumeRun(task, runId, input));
   }
@@ -261,6 +264,7 @@ export async function createExperimentalPiRuntime(
         session,
         adapter: new PiEventAdapter({ taskId, onDiagnostic }),
         disposeWorkspace,
+        setWorkspaceRunId: workspace.setRunId,
       };
       tasks.set(taskId, task);
       bus.registerTask(taskId);

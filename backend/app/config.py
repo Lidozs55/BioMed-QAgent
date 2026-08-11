@@ -37,6 +37,10 @@ class Settings:
         "OUTPUT_DIR",
         str(Path.cwd().resolve() / "data" / "output"),
     )
+    # Temporary private Host -> Python Dataset Core migration bridge secret.
+    pi_dataset_bridge_secret: str | None = (
+        os.getenv("PI_DATASET_BRIDGE_SECRET") or None
+    )
     # 爬虫行为（原 §5.3）：真实浏览器 UA 与请求间隔限速
     rate_limit_seconds: float = float(os.getenv("RATE_LIMIT_SECONDS", "2.0"))
     # User-installed skills live outside the bundled Python package.  When

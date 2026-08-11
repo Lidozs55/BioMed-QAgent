@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { createApplicationHost } from "./app/create-app.js";
 import { LifecycleRegistry } from "./app/lifecycle.js";
 import { createExperimentalPiRuntime } from "./agent/experimental-pi.js";
+import { createDatasetBuildTools } from "./agent/tools/dataset-build.js";
 import { PiAgentAdapter } from "./agent/pi-adapter.js";
 import {
   AppendOnlyTaskAuditSink,
@@ -13,6 +14,7 @@ import { createWorkspaceTools } from "./agent/workspace/tools.js";
 import { parseHostConfig } from "./config.js";
 import { createViteMiddleware } from "./dev/vite-middleware.js";
 import { createLegacyBackend } from "./legacy/backend-process.js";
+import { DatasetCoreClient } from "./legacy/dataset-core-client.js";
 
 async function main(): Promise<void> {
   const config = parseHostConfig(process.env);
@@ -31,15 +33,17 @@ async function main(): Promise<void> {
         repositoryRoot,
         privatePort: config.legacyPrivatePort,
         legacyUrl: config.legacyUrl,
+        bridgeSecret: config.legacyBridgeSecret,
         readinessTimeoutMs: config.legacyReadinessTimeoutMs,
         shutdownTimeoutMs: config.shutdownTimeoutMs,
       }),
     initializeLifecycle: async () => undefined,
     experimentalPi: config.flags.piExperimental
-      ? () =>
+      ? ({ target, bridgeSecret }) =>
           createExperimentalPiRuntime({
             adapter: new PiAgentAdapter({ environment: process.env }),
             workspaceFactory: async ({ taskId, runId }) => {
+              let currentRunId = runId;
               const root = path.join(tasksRoot, taskId);
               const workspace = await createTaskWorkspace({
                 taskId,
@@ -52,7 +56,17 @@ async function main(): Promise<void> {
               });
               return {
                 root,
-                tools: createWorkspaceTools(workspace),
+                tools: [
+                  ...createWorkspaceTools(workspace),
+                  ...createDatasetBuildTools({
+                    client: new DatasetCoreClient({ baseUrl: target, secret: bridgeSecret }),
+                    taskId,
+                    runId: () => currentRunId,
+                  }),
+                ],
+                setRunId: (nextRunId) => {
+                  currentRunId = nextRunId;
+                },
                 dispose: () => workspace.dispose(),
               };
             },

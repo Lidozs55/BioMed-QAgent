@@ -22,6 +22,8 @@ from app.api.routes import router as routes_router
 from app.api.settings import router as settings_router
 from app.api.skills import router as skills_router
 from app.api.ws import router as ws_router
+from app.compat.pi_dataset_bridge import PiDatasetBridge
+from app.compat.pi_dataset_bridge import router as pi_dataset_bridge_router
 from app.config import Settings, settings
 from app.domain.contracts import TaskMode, generate_prefixed_uuid
 from app.logging_setup import configure_logging
@@ -223,6 +225,10 @@ def create_app(
         application.state.assistant_stream_hub = assistant_stream_hub
         application.state.task_manager = manager
         application.state.task_context_factory = task_context_factory
+        application.state.pi_dataset_bridge = PiDatasetBridge(
+            task_context_factory,
+            secret=configured.pi_dataset_bridge_secret,
+        )
         application.state.workflow_recipe_store = workflow_recipe_store
         application.state.browser_pool = browser_pool
         application.state.crawler_facade = crawler_facade
@@ -306,6 +312,7 @@ def create_app(
     application.include_router(model_info_router)
     application.include_router(provider_models_router)
     application.include_router(ws_router)
+    application.include_router(pi_dataset_bridge_router)
     application.add_api_route("/api/v1/health", health, methods=["GET"])
     return application
 

@@ -49,6 +49,10 @@ export interface BioMedToolResult {
   isError?: boolean;
 }
 
+export interface BioMedToolExecutionContext {
+  toolCallId: string;
+}
+
 export interface BioMedAgentTool {
   name: string;
   label: string;
@@ -57,6 +61,7 @@ export interface BioMedAgentTool {
   execute: (
     argumentsValue: unknown,
     signal?: AbortSignal,
+    context?: BioMedToolExecutionContext,
   ) => Promise<BioMedToolResult>;
 }
 

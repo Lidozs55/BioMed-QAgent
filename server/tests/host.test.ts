@@ -155,4 +155,29 @@ describe("application host", () => {
     expect(listenPublic).not.toHaveBeenCalled();
     expect(earlier).toHaveBeenCalledOnce();
   });
+
+  test("passes private legacy bridge metadata only to the experimental composition", async () => {
+    const experimentalPi = vi.fn(async () => ({
+      handle: () => false,
+      handleUpgrade: () => false,
+      close: async () => undefined,
+    }));
+    const host = await createApplicationHost({
+      publicHost: "127.0.0.1",
+      publicPort: 0,
+      legacy: async () => ({
+        target: "http://127.0.0.1:8123",
+        bridgeSecret: "private-secret",
+        close: async () => undefined,
+      }),
+      experimentalPi,
+      frontend: async () => ({ middleware: (_request, response) => response.end("frontend"), close: async () => undefined }),
+    });
+    hosts.push(host);
+
+    expect(experimentalPi).toHaveBeenCalledWith({
+      target: "http://127.0.0.1:8123",
+      bridgeSecret: "private-secret",
+    });
+  });
 });

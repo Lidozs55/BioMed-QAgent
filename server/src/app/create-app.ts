@@ -8,11 +8,18 @@ import { LifecycleRegistry } from "./lifecycle.js";
 export interface ApplicationHostOptions {
   publicHost: string;
   publicPort: number;
-  legacy: () => Promise<{ target: string; close: () => Promise<void> }>;
+  legacy: () => Promise<{
+    target: string;
+    bridgeSecret?: string;
+    close: () => Promise<void>;
+  }>;
   frontend: (server: Server) => Promise<ViteMiddlewareHandle>;
   lifecycle?: LifecycleRegistry;
   initializeLifecycle?: (lifecycle: LifecycleRegistry) => void | Promise<void>;
-  experimentalPi?: () => Promise<{
+  experimentalPi?: (legacy: {
+    target: string;
+    bridgeSecret?: string;
+  }) => Promise<{
     handle: (request: IncomingMessage, response: ServerResponse) => boolean;
     handleUpgrade: (request: IncomingMessage, socket: Duplex, head: Buffer) => boolean;
     close: () => Promise<void>;
@@ -130,7 +137,10 @@ export async function createApplicationHost(
 
     await options.initializeLifecycle?.(lifecycle);
 
-    const experimentalPi = await options.experimentalPi?.();
+    const experimentalPi = await options.experimentalPi?.({
+      target: legacy.target,
+      bridgeSecret: legacy.bridgeSecret,
+    });
     if (experimentalPi !== undefined) {
       lifecycle.add("experimental Pi sessions", experimentalPi.close);
     }

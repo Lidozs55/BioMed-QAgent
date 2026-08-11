@@ -1,5 +1,6 @@
 import { once } from "node:events";
 import { type ChildProcess, spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import path from "node:path";
 
 export interface LegacyBackendOptions {
@@ -9,17 +10,20 @@ export interface LegacyBackendOptions {
   platform?: NodeJS.Platform;
   readinessTimeoutMs?: number;
   shutdownTimeoutMs?: number;
+  bridgeSecret?: string;
 }
 
 export interface SpawnChildInput {
   command: string;
   args: string[];
   cwd: string;
+  environment?: Record<string, string>;
 }
 
 export interface LegacyBackendHandle {
   target: string;
   owned: boolean;
+  bridgeSecret?: string;
   close: () => Promise<void>;
 }
 
@@ -74,7 +78,12 @@ export async function startLegacyBackend<Child>(
   if (options.legacyUrl !== undefined) {
     const target = requireLoopbackLegacyUrl(options.legacyUrl);
     await dependencies.waitUntilReady(new URL("/api/v1/health", target).toString());
-    return { target: target.origin, owned: false, close: async () => undefined };
+    return {
+      target: target.origin,
+      owned: false,
+      bridgeSecret: options.bridgeSecret,
+      close: async () => undefined,
+    };
   }
 
   const platform = options.platform ?? process.platform;
@@ -84,6 +93,7 @@ export async function startLegacyBackend<Child>(
       ? [".venv", "Scripts", "python.exe"]
       : [".venv", "bin", "python"];
   const target = `http://127.0.0.1:${options.privatePort}`;
+  const bridgeSecret = options.bridgeSecret ?? randomBytes(32).toString("hex");
   const child = dependencies.spawnChild({
     command: path.join(backendRoot, ...pythonRelative),
     args: [
@@ -96,6 +106,7 @@ export async function startLegacyBackend<Child>(
       String(options.privatePort),
     ],
     cwd: backendRoot,
+    environment: { PI_DATASET_BRIDGE_SECRET: bridgeSecret },
   });
   const close = onceAsync(() => dependencies.terminateChild(child));
   try {
@@ -104,7 +115,7 @@ export async function startLegacyBackend<Child>(
     await close();
     throw error;
   }
-  return { target, owned: true, close };
+  return { target, owned: true, bridgeSecret, close };
 }
 
 function delay(milliseconds: number): Promise<void> {
@@ -140,6 +151,7 @@ export function spawnLegacyChild(input: SpawnChildInput): ChildProcess {
     cwd: input.cwd,
     stdio: "inherit",
     windowsHide: true,
+    env: { ...process.env, ...input.environment },
   });
 }
 

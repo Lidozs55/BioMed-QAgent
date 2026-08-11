@@ -285,7 +285,7 @@ export function toPiCustomTools(
     description: tool.description,
     parameters: tool.parameters,
     async execute(_toolCallId, parameters, signal) {
-      const result = await tool.execute(parameters, signal);
+      const result = await tool.execute(parameters, signal, { toolCallId: _toolCallId });
       if (result.isError === true) throw new Error(result.content);
       return {
         content: [{ type: "text", text: result.content }],

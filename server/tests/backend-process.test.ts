@@ -51,6 +51,7 @@ describe("legacy backend ownership", () => {
         privatePort: 8123,
         repositoryRoot: "C:\\repo",
         platform: "win32",
+        bridgeSecret: "bridge-secret",
       },
       { spawnChild, terminateChild, waitUntilReady },
     );
@@ -67,7 +68,9 @@ describe("legacy backend ownership", () => {
         "8123",
       ],
       cwd: path.join("C:\\repo", "backend"),
+      environment: { PI_DATASET_BRIDGE_SECRET: "bridge-secret" },
     });
+    expect(handle.bridgeSecret).toBe("bridge-secret");
     expect(waitUntilReady).toHaveBeenCalledWith("http://127.0.0.1:8123/api/v1/health");
 
     await handle.close();

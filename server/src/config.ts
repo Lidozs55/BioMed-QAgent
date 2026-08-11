@@ -13,6 +13,7 @@ export interface HostConfig {
   publicPort: number;
   legacyPrivatePort: number;
   legacyUrl?: string;
+  legacyBridgeSecret?: string;
   legacyReadinessTimeoutMs: number;
   shutdownTimeoutMs: number;
   workspaceDevExec: boolean;
@@ -121,6 +122,7 @@ export function parseHostConfig(environment: Environment): HostConfig {
       environment.LEGACY_BACKEND_PORT ?? DEFAULT_HOST_CONFIG.LEGACY_BACKEND_PORT,
     ),
     legacyUrl: environment.LEGACY_BACKEND_URL,
+    legacyBridgeSecret: environment.PI_DATASET_BRIDGE_SECRET,
     legacyReadinessTimeoutMs: parsePositiveInteger(
       "LEGACY_READINESS_TIMEOUT_MS",
       environment.LEGACY_READINESS_TIMEOUT_MS ??

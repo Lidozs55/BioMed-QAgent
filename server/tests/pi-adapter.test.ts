@@ -91,7 +91,11 @@ describe("PiAgentAdapter", () => {
       undefined,
     ]);
 
-    expect(execute).toHaveBeenCalledWith({ path: "parsed/data.txt" }, undefined);
+    expect(execute).toHaveBeenCalledWith(
+      { path: "parsed/data.txt" },
+      undefined,
+      { toolCallId: "call-1" },
+    );
     expect(result).toEqual({
       content: [{ type: "text", text: "bounded" }],
       details: { path: "parsed/data.txt" },

@@ -1,6 +1,43 @@
 import type { ManifestArtifactEntry } from "./artifacts.js";
 import type { JsonValue } from "./json.js";
 
+export interface DatasetBuildSourceAcquisition {
+  schema_version?: "1.0";
+  mode: "builtin" | "workflow_recipe";
+  provider_id: string | null;
+  recipe_id: string | null;
+  recipe_version: number | null;
+}
+
+export interface DatasetBuildSourceBinding {
+  schema_version?: "1.0";
+  binding_id: string;
+  source: string;
+  acquisition: DatasetBuildSourceAcquisition;
+  adapter_id: string;
+  accession: string | null;
+  parameters: Record<string, JsonValue>;
+}
+
+/** Frozen V2 DatasetBuildSpec wire DTO accepted by both Agent runtimes. */
+export interface DatasetBuildSpec {
+  schema_version?: "1.0";
+  build_id: string;
+  objective: string;
+  dataset_family: string;
+  row_granularity: string;
+  entities: Record<string, string[]>;
+  cohort_filters: Record<string, string[]>;
+  required_fields: string[];
+  schema_ref: string;
+  source_bindings: DatasetBuildSourceBinding[];
+  normalization_profile_ref: string | null;
+  merge_strategy: string;
+  validation_profile_ref: string;
+  output_format: string;
+  target_entity_level: "gene" | "probe" | null;
+}
+
 export type BuildResultStatus =
   | "succeeded"
   | "partial_success"
