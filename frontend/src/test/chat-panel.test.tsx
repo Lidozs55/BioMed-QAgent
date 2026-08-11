@@ -1053,7 +1053,7 @@ describe("ChatPanel", () => {
     expect(send).toBeEnabled();
     fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
     expect(continueTask).not.toHaveBeenCalled();
-    expect(screen.getByText(/已加入队列/)).toBeVisible();
+    expect(screen.getByText("send this when ready")).toBeVisible();
 
     const composer = input.closest('[data-slot="agent-composer"]');
     expect(composer).toContainElement(send);
@@ -1129,7 +1129,7 @@ describe("ChatPanel", () => {
       expect(cancelRun).toHaveBeenCalledWith("task_background", "run_background"),
     );
     expect(continueTask).not.toHaveBeenCalled();
-    expect(screen.getByText(/正在切换方向/)).toBeVisible();
+    expect(screen.getByText("new direction")).toBeVisible();
 
     act(() => {
       useAgentStore.setState((state) => {
@@ -1172,6 +1172,56 @@ describe("ChatPanel", () => {
         input: "new direction",
       }),
     );
+  });
+
+  it("shows queued follow-ups above the composer with delete/edit actions", async () => {
+    seedBackgroundTask();
+    useAgentStore.getState().setActiveTaskId("task_background");
+    render(
+      <ChatPanel
+        startTask={vi.fn()}
+        continueTask={vi.fn().mockResolvedValue({
+          request_id: "req_follow",
+          task_id: "task_background",
+          run_id: "run_follow",
+          status: "queued",
+        } satisfies TaskRunAccepted)}
+        cancelRun={vi.fn()}
+      />,
+    );
+
+    const input = screen.getByRole("textbox", { name: "继续提问" });
+    fireEvent.change(input, { target: { value: "first queued" } });
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+    fireEvent.change(input, { target: { value: "second queued" } });
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+
+    expect(screen.getByText("first queued")).toBeVisible();
+    expect(screen.getByText("second queued")).toBeVisible();
+    // 队列面板渲染在输入框上方。
+    const composer = input.closest('[data-slot="agent-composer"]');
+    const queuePanel = screen
+      .getByText("first queued")
+      .closest('[data-slot="queued-messages"]');
+    expect(composer).not.toBeNull();
+    expect(queuePanel).not.toBeNull();
+    expect(
+      (queuePanel as HTMLElement).compareDocumentPosition(
+        composer as HTMLElement,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    // 删除一条队列消息。
+    fireEvent.click(screen.getByRole("button", { name: "删除：first queued" }));
+    expect(screen.queryByText("first queued")).not.toBeInTheDocument();
+    expect(screen.getByText("second queued")).toBeVisible();
+
+    // 编辑：把内容回填到输入框并移出队列。
+    fireEvent.click(screen.getByRole("button", { name: "编辑：second queued" }));
+    expect(input).toHaveValue("second queued");
+    expect(
+      screen.queryByRole("button", { name: "删除：second queued" }),
+    ).not.toBeInTheDocument();
   });
 
   it("keeps continuation text and projection unchanged on a 409 response", async () => {
