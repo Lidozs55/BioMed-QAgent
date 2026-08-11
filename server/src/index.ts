@@ -3,6 +3,8 @@ import { fileURLToPath } from "node:url";
 
 import { createApplicationHost } from "./app/create-app.js";
 import { LifecycleRegistry } from "./app/lifecycle.js";
+import { createExperimentalPiRuntime } from "./agent/experimental-pi.js";
+import { PiAgentAdapter } from "./agent/pi-adapter.js";
 import { parseHostConfig } from "./config.js";
 import { createViteMiddleware } from "./dev/vite-middleware.js";
 import { createLegacyBackend } from "./legacy/backend-process.js";
@@ -25,6 +27,13 @@ async function main(): Promise<void> {
       }),
     // Later Pi integration registers session cleanup through this lifecycle seam.
     initializeLifecycle: async () => undefined,
+    experimentalPi: config.flags.piExperimental
+      ? () =>
+          createExperimentalPiRuntime({
+            adapter: new PiAgentAdapter({ environment: process.env }),
+            cwd: repositoryRoot,
+          })
+      : undefined,
     frontend: (httpServer) =>
       createViteMiddleware({
         frontendRoot: path.join(repositoryRoot, "frontend"),

@@ -25,7 +25,11 @@ function readJson(path) {
 const rootPackage = readJson("package.json");
 assert.equal(rootPackage.private, true, "Root package must be private");
 assert.match(rootPackage.packageManager ?? "", /^pnpm@11\.14\.0(?:\+|$)/);
-assert.match(rootPackage.engines?.node ?? "", /\d/, "Root package must constrain Node.js");
+assert.equal(
+  rootPackage.engines?.node,
+  ">=22.19.0",
+  "Root Node.js floor must satisfy the pinned Pi runtime",
+);
 for (const script of ["test", "lint", "typecheck", "build"]) {
   assert.equal(typeof rootPackage.scripts?.[script], "string", `Missing root ${script} script`);
 }

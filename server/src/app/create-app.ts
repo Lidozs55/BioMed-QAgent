@@ -12,6 +12,10 @@ export interface ApplicationHostOptions {
   frontend: (server: Server) => Promise<ViteMiddlewareHandle>;
   lifecycle?: LifecycleRegistry;
   initializeLifecycle?: (lifecycle: LifecycleRegistry) => void | Promise<void>;
+  experimentalPi?: () => Promise<{
+    handle: (request: IncomingMessage, response: ServerResponse) => boolean;
+    close: () => Promise<void>;
+  }>;
 }
 
 export interface ApplicationHostDependencies {
@@ -45,12 +49,25 @@ function isInternalMigration(requestPath: string): boolean {
 function routeRequest(
   proxy: LegacyProxy,
   frontend: FrontendMiddleware,
+  experimentalPi?: {
+    handle: (request: IncomingMessage, response: ServerResponse) => boolean;
+  },
 ): (request: IncomingMessage, response: ServerResponse) => void {
   return (request, response) => {
     const requestPath = pathname(request);
     if (isInternalMigration(requestPath)) {
       response.writeHead(404);
       response.end("Not Found");
+      return;
+    }
+    if (
+      requestPath === "/experimental/pi" ||
+      requestPath.startsWith("/experimental/pi/")
+    ) {
+      if (experimentalPi?.handle(request, response) !== true) {
+        response.writeHead(404);
+        response.end("Not Found");
+      }
       return;
     }
     if (isLegacyApi(requestPath)) {
@@ -112,12 +129,17 @@ export async function createApplicationHost(
 
     await options.initializeLifecycle?.(lifecycle);
 
+    const experimentalPi = await options.experimentalPi?.();
+    if (experimentalPi !== undefined) {
+      lifecycle.add("experimental Pi sessions", experimentalPi.close);
+    }
+
     const proxy = (dependencies.createProxy ?? createLegacyProxy)(legacy.target);
     lifecycle.add("legacy proxy", () => proxy.close());
 
     const frontend = await options.frontend(server);
     lifecycle.add("Vite middleware", frontend.close);
-    requestHandler = routeRequest(proxy, frontend.middleware);
+    requestHandler = routeRequest(proxy, frontend.middleware, experimentalPi);
 
     server.on("upgrade", (request, socket, head) => {
       upgradedSockets.add(socket);

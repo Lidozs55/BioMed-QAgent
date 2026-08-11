@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.test.json"
   },
   "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.82.1",
     "http-proxy-3": "^1.23.3",
     "vite": "^5.4.11"
   },
