@@ -124,13 +124,46 @@ async def test_corrupt_fallback_raises_when_fixed_prompt_exceeds_target() -> Non
     assert estimate(request, []).total > request.budget.target_tokens
     assert estimate(request, []).total <= request.budget.input_capacity
 
+    # When
+    preparation = await ConversationCompactor(
+        _UnalignableRepository(_Session(items)),
+        summarize=summarize,
+    ).prepare(
+        "task_corrupt_fixed_overflow",
+        model_handle=SimpleNamespace(),
+        emit=emit,
+        request=request,
+    )
+
+    # Then: 固定 prompt 超 target 但未超硬容量 → 保底保留最新完整组，
+    # 永不产生空输入（空输入会让续跑以 "Prepared model input is empty" 失败）。
+    effective = await preparation.session.get_items()
+    assert preparation.fallback is True
+    assert effective
+    assert preparation.estimate.total <= request.budget.input_capacity
+
+
+@pytest.mark.asyncio
+async def test_fixed_prompt_over_hard_capacity_raises_before_fallback() -> None:
+    # Given
+    request = _request(agent_input="x" * 300_000, target_tokens=400)
+    items = _complete_groups(1, 250)
+
+    async def summarize(**kwargs: object) -> str:
+        raise AssertionError("capacity overflow must not call the summarizer")
+
+    async def emit(payload: object) -> None:
+        return None
+
+    assert estimate(request, []).total > request.budget.input_capacity
+
     # When / Then
     with pytest.raises(ContextBudgetOverflowError):
         await ConversationCompactor(
             _UnalignableRepository(_Session(items)),
             summarize=summarize,
         ).prepare(
-            "task_corrupt_fixed_overflow",
+            "task_corrupt_capacity_overflow",
             model_handle=SimpleNamespace(),
             emit=emit,
             request=request,

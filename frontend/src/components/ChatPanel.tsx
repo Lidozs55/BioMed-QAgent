@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { AgentComposer } from "@/components/AgentComposer";
 import { ConversationList } from "@/components/conversation/ConversationList";
 import { formatToolCall } from "@/components/conversation/toolLabels";
+import { operationDisplayLabel } from "@/components/conversation/operationMeta";
 import { STAGE_LABELS } from "@/components/conversation/stageLabels";
 import { openSubagentPanel } from "@/components/subagentPanelControl";
 import { TaskStatusIcon } from "@/components/taskStatus";
@@ -118,6 +119,10 @@ function formatActiveItemStatus(item: ConversationItem): string {
       return item.isStreaming ? "正在思考…" : STATUS_LABELS.running;
     case "stage":
       return STATUS_LABELS.running;
+    case "operation":
+      return item.status === "running"
+        ? operationDisplayLabel(item)
+        : STATUS_LABELS.running;
     default:
       return STATUS_LABELS.running;
   }

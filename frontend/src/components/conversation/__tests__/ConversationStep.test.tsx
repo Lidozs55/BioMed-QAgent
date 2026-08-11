@@ -11,6 +11,9 @@ vi.mock("@/components/MarkdownContent", () => ({
     </div>
   ),
 }));
+vi.mock("@/components/conversation/BuildReportCard", () => ({
+  BuildReportCard: () => <div>加载构建结果...</div>,
+}));
 
 const TIMESTAMP = "2026-07-20T00:00:00Z";
 
@@ -25,6 +28,15 @@ function makeItem(partial: Partial<ConversationItem> & { kind: ConversationItem[
 }
 
 describe("ConversationStep dispatcher", () => {
+  it("renders build_report items as an inline report card", () => {
+    const item = makeItem({
+      kind: "build_report",
+      taskId: "task-report",
+      buildId: "build-report",
+    });
+    render(<ConversationStep item={item} isActive={false} />);
+    expect(screen.getByText("加载构建结果...")).toBeInTheDocument();
+  });
   it("renders user_message items via UserMessageBubble", () => {
     const item = makeItem({
       kind: "user_message",
@@ -87,6 +99,21 @@ describe("ConversationStep dispatcher", () => {
     expect(screen.getByText("运行中")).toBeInTheDocument();
   });
 
+  it("renders operation items via OperationStep (label + category badge)", () => {
+    const item = makeItem({
+      kind: "operation",
+      operationId: "stage:validation",
+      label: "结果验证",
+      category: "validation",
+      status: "running",
+      progress: null,
+      error: null,
+    });
+    render(<ConversationStep item={item} isActive={false} />);
+    expect(screen.getByText("结果验证")).toBeInTheDocument();
+    expect(screen.getByText("运行中")).toBeInTheDocument();
+  });
+
   it("renders progress items via ProgressStep", () => {
     const item = makeItem({
       kind: "progress",
@@ -110,7 +137,7 @@ describe("ConversationStep dispatcher", () => {
     expect(screen.queryByText("partial_results")).not.toBeInTheDocument();
   });
 
-  it("renders artifact items via ArtifactStep with formatted bytes", () => {
+  it("does not render legacy artifact bubbles", () => {
     const item = makeItem({
       kind: "artifact",
       artifactId: "art-1",
@@ -118,8 +145,7 @@ describe("ConversationStep dispatcher", () => {
       sizeBytes: 2048,
       mediaType: "text/csv",
     });
-    render(<ConversationStep item={item} isActive={false} />);
-    expect(screen.getByText("生成产物：result.csv")).toBeInTheDocument();
-    expect(screen.getByText("2.0 KB")).toBeInTheDocument();
+    const { container } = render(<ConversationStep item={item} isActive={false} />);
+    expect(container).toBeEmptyDOMElement();
   });
 });

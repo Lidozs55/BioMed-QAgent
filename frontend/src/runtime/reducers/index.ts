@@ -19,7 +19,12 @@ import {
   applySubagentStatusEvent,
   applyWarningEvent,
 } from "./runtime";
-import { applyArtifactProducedEvent, applyStageTransitionEvent } from "./pipeline";
+import {
+  applyArtifactProducedEvent,
+  applyOperationEvent,
+  applyStageTransitionEvent,
+  pruneStageItemsForOperationRuns,
+} from "./pipeline";
 import { applyUserInputEvent } from "./hil";
 
 export {
@@ -165,9 +170,21 @@ export function reduceRuntimeEvent(
       task = applyStageProgressEvent(task, envelope, payload);
       break;
     }
+    case "operation_started":
+    case "operation_progress":
+    case "operation_completed":
+    case "operation_failed": {
+      task = applyOperationEvent(task, envelope, payload);
+      break;
+    }
     default:
       break;
   }
+
+  // R1S-01: keep the timeline by operation identity — once a run has
+  // operation items, its stage/progress items are pruned (legacy replays
+  // without operation events are unaffected).
+  task = pruneStageItemsForOperationRuns(task);
 
   task = {
     ...task,

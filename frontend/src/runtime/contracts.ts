@@ -45,6 +45,13 @@ export type ErrorCode =
   | "cancelled"
   | "internal_error";
 
+/** Per-binding failure detail on a NO_DATA ``BuildResult`` (backend BindingFailureDetail, K2). */
+export interface BindingFailureDetail {
+  binding_id: string;
+  reason_code: string;
+  message: string;
+}
+
 export interface BuildResult {
   status: BuildResultStatus;
   valid_row_count: number;
@@ -55,6 +62,88 @@ export interface BuildResult {
   reason_codes: string[];
   user_summary: string;
   recommended_next_action: string;
+  /** Stable build identity correlating the envelope back to its build dir (C1e). */
+  build_id?: string | null;
+  /** Per-source rejection trace on NO_DATA builds (K2); absent on older payloads. */
+  binding_failures?: BindingFailureDetail[];
+}
+
+/** V2 build artifact role (mirrors backend ArtifactRole). */
+export type ArtifactRole =
+  | "primary_dataset"
+  | "supporting_dataset"
+  | "schema"
+  | "provenance"
+  | "audit_report";
+
+/** One manifest-registered artifact of a V2 build (backend ManifestArtifactEntry). */
+export interface ManifestArtifactEntry {
+  artifact_id: string;
+  role: ArtifactRole;
+  relative_path: string;
+  media_type: string;
+  size_bytes: number;
+  sha256: string;
+}
+
+/** Immutable V2 dataset manifest summary (backend DatasetManifest). */
+export interface DatasetManifest {
+  manifest_id: string;
+  task_id: string;
+  build_id: string;
+  dataset_family: string;
+  row_granularity: string;
+  schema_ref: string;
+  primary_key: string[];
+  row_count: number;
+  sha256: string;
+  artifacts: ManifestArtifactEntry[];
+  source_summary: Record<string, JsonValue>;
+  validation_summary: Record<string, JsonValue>;
+  confidence_summary: Record<string, JsonValue>;
+  provenance_summary: Record<string, JsonValue>;
+}
+
+/** Immutable publication record of a V2 build (backend DatasetPublication). */
+export interface DatasetPublication {
+  publication_id: string;
+  manifest_ref: string;
+  validation_result_ref: string;
+  published_at: string;
+  supersedes_publication_id: string | null;
+}
+
+/** One V2 build listing entry (backend BuildSummary). */
+export interface BuildSummary {
+  build_id: string;
+  task_id: string;
+  dataset_family: string;
+  row_granularity: string;
+  schema_ref: string;
+  row_count: number;
+  status: BuildResultStatus;
+  publication_id: string | null;
+  manifest_ref: string;
+  manifest_sha256: string;
+  published_at: string | null;
+  build_result: BuildResult | null;
+}
+
+/** One ascending page of V2 builds, newest manifest first (backend BuildPage). */
+export interface BuildPage {
+  items: BuildSummary[];
+  next_cursor: string | null;
+}
+
+/** One build's authoritative BuildResult + manifest summary (backend BuildDetail). */
+export interface BuildDetail {
+  build_id: string;
+  task_id: string;
+  manifest_ref: string;
+  build_result: BuildResult | null;
+  manifest: DatasetManifest;
+  publication: DatasetPublication | null;
+  artifacts: ManifestArtifactEntry[];
 }
 
 export interface RunSummary {
@@ -137,6 +226,11 @@ export interface TaskSummary {
   latest_sequence: number;
   /** Number of validated artifacts produced by the task (absent in older snapshots). */
   artifact_count?: number;
+  /**
+   * Outcome of the most recent terminal run (absent in older snapshots).
+   * Lets the history list classify a conversation before its runs hydrate.
+   */
+  latest_build_status?: BuildResultStatus | null;
 }
 
 export interface RunRecord {
@@ -415,6 +509,7 @@ export type EventPayload =
         failed_count: number;
         report_path: string;
       };
+      build_result?: BuildResult | null;
     }
   | { type: "task_failed"; error: ErrorDetail }
   | { type: "run_queued"; request_id: string; input: string }

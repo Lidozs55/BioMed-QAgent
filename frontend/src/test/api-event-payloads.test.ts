@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseEventPayload } from "@/lib/eventParsers";
-import { assertRunStatus, assertTaskMode, assertMessageRole, assertEventType } from "@/lib/apiResponseParsers";
+import { assertRunStatus, assertTaskMode, assertMessageRole, assertEventType, parseEventPage } from "@/lib/apiResponseParsers";
 import { APIError } from "@/hooks/settingsContracts";
 
 function o(data: Record<string, unknown>): Record<string, unknown> {
@@ -82,6 +82,43 @@ describe("parseEventPayload — pipeline event family", () => {
     const r = parseEventPayload(o({ type: "task_completed", validation: val }), "task_completed", "p");
     if (r.type !== "task_completed") throw new Error();
     expect(r.validation.checked_count).toBe(5);
+  });
+
+  it("task_completed — parses optional build_result with binding failures", () => {
+    const r = parseEventPayload(
+      o({
+        type: "task_completed",
+        validation: { status: "invalid", checked_count: 1, failed_count: 1, report_path: "/r" },
+        build_result: {
+          status: "no_data",
+          valid_row_count: 0,
+          successful_sources: [],
+          rejected_sources: ["gse"],
+          available_artifact_roles: [],
+          publication_id: null,
+          reason_codes: ["no_primary_data"],
+          user_summary: "",
+          recommended_next_action: "",
+          build_id: "build_task_1",
+          binding_failures: [
+            { binding_id: "gse", reason_code: "empty_series_matrix", message: "metadata only" },
+          ],
+        },
+      }),
+      "task_completed",
+      "p",
+    );
+    if (r.type !== "task_completed") throw new Error();
+    expect(r.build_result?.build_id).toBe("build_task_1");
+    expect(r.build_result?.binding_failures).toEqual([
+      { binding_id: "gse", reason_code: "empty_series_matrix", message: "metadata only" },
+    ]);
+  });
+
+  it("task_completed — build_result absent yields null", () => {
+    const r = parseEventPayload(o({ type: "task_completed", validation: { status: "valid", checked_count: 1, failed_count: 0, report_path: "/r" } }), "task_completed", "p");
+    if (r.type !== "task_completed") throw new Error();
+    expect(r.build_result).toBeNull();
   });
 });
 
@@ -184,6 +221,7 @@ describe("parseEventPayload — runtime event family", () => {
           rejected_sources: [],
           available_artifact_roles: [],
           publication_id: null,
+          build_id: "build_parser_1",
           reason_codes: ["no_primary_data"],
           user_summary: "",
           recommended_next_action: "",
@@ -195,6 +233,41 @@ describe("parseEventPayload — runtime event family", () => {
     if (r.type !== "run_completed") throw new Error();
     expect(r.build_result?.user_summary).toBe("");
     expect(r.build_result?.recommended_next_action).toBe("");
+    expect(r.build_result?.build_id).toBe("build_parser_1");
+  });
+
+  it("run_completed — parses build_id and per-binding failure details (K2)", () => {
+    const r = parseEventPayload(
+      o({
+        type: "run_completed",
+        build_result: {
+          status: "no_data",
+          valid_row_count: 0,
+          successful_sources: [],
+          rejected_sources: ["gse", "gdc"],
+          available_artifact_roles: [],
+          publication_id: null,
+          reason_codes: ["no_primary_data"],
+          user_summary: "",
+          recommended_next_action: "",
+          build_id: "build_run_1",
+          binding_failures: [
+            { binding_id: "gse", reason_code: "empty_series_matrix", message: "metadata only" },
+            { binding_id: "gdc", reason_code: "build_error", message: "checksum mismatch" },
+          ],
+        },
+      }),
+      "run_completed",
+      "p",
+    );
+    if (r.type !== "run_completed") throw new Error();
+    expect(r.build_result?.build_id).toBe("build_run_1");
+    expect(r.build_result?.binding_failures).toHaveLength(2);
+    expect(r.build_result?.binding_failures?.[0]).toEqual({
+      binding_id: "gse",
+      reason_code: "empty_series_matrix",
+      message: "metadata only",
+    });
   });
 
   it("publication_created — parses the full publication payload", () => {
@@ -219,10 +292,124 @@ describe("parseEventPayload — runtime event family", () => {
   });
 });
 
+/* ---- V2 operation lifecycle family (T3 stage mirror) ---- */
+describe("parseEventPayload — operation lifecycle family", () => {
+  it("operation_started — parses label/category/attempt", () => {
+    const r = parseEventPayload(
+      o({ type: "operation_started", operation_id: "stage:discovery", label: "文献/数据发现", category: "discovery", attempt: 1 }),
+      "operation_started",
+      "p",
+    );
+    if (r.type !== "operation_started") throw new Error();
+    expect(r.operation_id).toBe("stage:discovery");
+    expect(r.label).toBe("文献/数据发现");
+    expect(r.category).toBe("discovery");
+    expect(r.attempt).toBe(1);
+  });
+
+  it("operation_started — tolerates missing optional fields", () => {
+    const r = parseEventPayload(o({ type: "operation_started", operation_id: "op_1" }), "operation_started", "p");
+    if (r.type !== "operation_started") throw new Error();
+    expect(r.operation_id).toBe("op_1");
+  });
+
+  it("operation_progress — preserves kind/current/total/detail", () => {
+    const r = parseEventPayload(
+      o({ type: "operation_progress", operation_id: "stage:discovery", kind: "discovered_records", current: 10, total: 64, detail: { source: "geo" } }),
+      "operation_progress",
+      "p",
+    );
+    if (r.type !== "operation_progress") throw new Error();
+    expect(r.kind).toBe("discovered_records");
+    expect(r.current).toBe(10);
+    expect(r.total).toBe(64);
+    const detail = r.detail;
+    if (typeof detail !== "object" || detail === null) throw new Error("Expected object detail");
+    expect("source" in detail && detail.source).toBe("geo");
+  });
+
+  it("operation_completed — defaults status to succeeded", () => {
+    const r = parseEventPayload(
+      o({ type: "operation_completed", operation_id: "op_1", output_digest: "a".repeat(64) }),
+      "operation_completed",
+      "p",
+    );
+    if (r.type !== "operation_completed") throw new Error();
+    expect(r.status).toBe("succeeded");
+    expect(r.output_digest).toBe("a".repeat(64));
+  });
+
+  it("operation_completed — accepts skipped and rejects unknown status", () => {
+    const r = parseEventPayload(o({ type: "operation_completed", operation_id: "op_1", status: "skipped" }), "operation_completed", "p");
+    if (r.type !== "operation_completed") throw new Error();
+    expect(r.status).toBe("skipped");
+    expect(() => parseEventPayload(o({ type: "operation_completed", operation_id: "op_1", status: "bogus" }), "operation_completed", "p")).toThrow(APIError);
+  });
+
+  it("operation_failed — parses error detail and status", () => {
+    const r = parseEventPayload(
+      o({ type: "operation_failed", operation_id: "op_1", status: "failed", error: { code: "parse_error", message: "boom", retryable: false, stage: null, details: {} } }),
+      "operation_failed",
+      "p",
+    );
+    if (r.type !== "operation_failed") throw new Error();
+    expect(r.status).toBe("failed");
+    expect(r.error?.code).toBe("parse_error");
+    expect(() => parseEventPayload(o({ type: "operation_failed", operation_id: "op_1", status: "succeeded" }), "operation_failed", "p")).toThrow(APIError);
+  });
+});
+
+/* ---- EventEnvelope replay (REST GET /tasks/{id}/events) ---- */
+describe("parseEventPage — operation events in full envelopes", () => {
+  function envelope(type: string, sequence: number, payload: Record<string, unknown>) {
+    return {
+      schema_version: "2.0",
+      event_id: `event_${sequence}`,
+      type,
+      task_id: "task_1",
+      run_id: "run_1",
+      stage_attempt_id: null,
+      subagent_id: null,
+      parent_tool_call_id: null,
+      sequence,
+      timestamp: "2026-08-09T13:12:00.000000Z",
+      payload: o({ schema_version: "1.0", ...payload }),
+    };
+  }
+
+  it("operation_progress envelope replays without Unknown event type", () => {
+    const page = { events: [
+      envelope("run_queued", 1, { type: "run_queued", request_id: "req_1", input: "x" }),
+      envelope("stage_progress", 99, { type: "stage_progress", stage: "discovery", kind: "discovered_records", current: 10, total: 64, detail: {} }),
+      envelope("operation_progress", 100, { type: "operation_progress", operation_id: "stage:discovery", label: "文献/数据发现", category: "discovery", kind: "discovered_records", current: 10, total: 64, detail: { source: "geo" } }),
+    ] };
+    const r = parseEventPage(page);
+    expect(r.events.map((e) => e.type)).toEqual(["run_queued", "stage_progress", "operation_progress"]);
+    if (r.events[2].payload.type !== "operation_progress") throw new Error();
+    expect(r.events[2].payload.operation_id).toBe("stage:discovery");
+  });
+
+  it("operation_completed/operation_failed envelopes replay", () => {
+    const page = { events: [
+      envelope("operation_completed", 150, { type: "operation_completed", operation_id: "op_1", status: "succeeded", output_digest: "a".repeat(64) }),
+      envelope("operation_failed", 151, { type: "operation_failed", operation_id: "op_2", status: "failed", error: { code: "parse_error", message: "boom", retryable: false, stage: null, details: {} } }),
+    ] };
+    const r = parseEventPage(page);
+    expect(r.events.map((e) => e.type)).toEqual(["operation_completed", "operation_failed"]);
+  });
+});
+
 /* ---- finite union parsers ---- */
 describe("finite union parsers return narrowed literals", () => {
   it("assertRunStatus", () => { expect(assertRunStatus("queued", "p")).toBe("queued"); });
   it("assertTaskMode", () => { expect(assertTaskMode("agent", "p")).toBe("agent"); });
   it("assertMessageRole", () => { expect(assertMessageRole("user", "p")).toBe("user"); });
   it("assertEventType", () => { expect(assertEventType("run_queued", "p")).toBe("run_queued"); });
+  it("assertEventType — operation lifecycle types accepted", () => {
+    expect(assertEventType("operation_started", "p")).toBe("operation_started");
+    expect(assertEventType("operation_progress", "p")).toBe("operation_progress");
+    expect(assertEventType("operation_completed", "p")).toBe("operation_completed");
+    expect(assertEventType("operation_failed", "p")).toBe("operation_failed");
+    expect(() => assertEventType("bogus_event", "p")).toThrow(APIError);
+  });
 });

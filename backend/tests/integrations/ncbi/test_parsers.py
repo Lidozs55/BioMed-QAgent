@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import date
 from pathlib import Path
 
@@ -76,6 +77,23 @@ def test_parse_geo_esummary_maps_series_uid_to_typed_gse_record() -> None:
     assert record.pubmed_ids == ["34180400"]
     assert record.bioproject == "PRJNA738534"
     assert record.ftp_root.endswith("/GSE178352/")
+
+
+def test_parse_geo_esummary_tolerates_empty_n_samples() -> None:
+    """A GSE record with ``n_samples=""`` must not abort the whole batch.
+
+    NCBI esummary occasionally returns an empty string for ``n_samples``; a
+    bare ``int("")`` raises ValueError and drops every record in the batch.
+    The parser must fall back to the sample list length instead.
+    (See docs/REVIEW_2026-08-10-task-9ce0124f.md §5.1 T1.)
+    """
+    payload = fixture_bytes("geo_esummary.json")
+    data = json.loads(payload.decode("utf-8-sig"))
+    data["result"]["200178352"]["n_samples"] = ""
+    records = parse_geo_esummary(json.dumps(data).encode("utf-8"))
+
+    assert len(records) == 1
+    assert records[0].sample_count == 12  # falls back to len(samples)
 
 
 def test_supplementary_listing_resolver_finds_counts_asset_separately() -> None:

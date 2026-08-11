@@ -7,7 +7,6 @@ from unittest.mock import ANY, AsyncMock, Mock
 
 import app.agent_loop.model as model_module
 import app.agent_loop.runner as runner_module
-import app.settings_manager as settings_manager
 import pytest
 from app.agent_loop.context import RunContext
 from app.agent_loop.import_agent import build_attachment_parsing_agent
@@ -83,7 +82,6 @@ async def test_executor_keeps_run_start_settings_before_first_model_call(
         model_name="updated-model",
     )
     settings_getter = Mock(return_value=initial_settings)
-    monkeypatch.setattr(settings_manager, "get_settings", settings_getter)
     monkeypatch.setattr(
         runner_module,
         "get_current_model_configuration",
@@ -199,7 +197,6 @@ def test_attachment_agent_uses_active_run_settings_snapshot(
             model_name="updated-model",
         )
     )
-    monkeypatch.setattr(settings_manager, "get_settings", runtime_getter)
     client = object()
     client_factory = Mock(return_value=client)
     delegate_factory = Mock(return_value=Mock(stream_response=Mock(return_value="stream")))

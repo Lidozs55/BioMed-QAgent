@@ -59,8 +59,9 @@
       （V1 不动；`app/pipeline/runner.py` docstring 标注 `[V1 Legacy facade — Phase 2/8]`；
       新 V2 入口为 `execute_dataset_build` function_tool（`app/pipeline/dataset_build_tool.py`，
       spec JSON + source_files 包装为 content-addressed SourceAsset 后走
-      `ExpressionBuildRunner` + `DatasetBuildExecutor`）
-- [ ] **P0** 新 Run 支持携带版本化 `TaskSpecification`（原 §1.6）
+      `ExpressionBuildRunner` + `DatasetBuildExecutor`）。注：`app/pipeline/runner.py`
+      已随 V2 全量落地删除（2026-08 代码卫生清理），V2 入口即 `execute_dataset_build`）
+- [x] **P0** 新 Run 支持携带版本化 `TaskSpecification`（原 §1.6）✅（2026-08-09, feat/leftovers-p1 commits 767d0ba/f69537c：`RunQueuedPayload`/`RunRecord` 携带可选 spec + `POST /tasks` 接受并持久化，向后兼容）
 - [x] **P0** 完整重跑完成新版本 Publication 的原子发布与旧版本保留（supersedes 链）
       （`expression_runner._publish` 写 `publication.json`：`publication_id` / manifest_ref /
       validation_result_ref / `published_at` / `supersedes_publication_id`（`_find_latest_publication`
@@ -68,7 +69,7 @@
 - [x] **P1** 受控局部重跑 `rerun_from` + 依赖一致性测试；禁止 Agent 任意 `skip_stages`（原 §1.6）
       （`DatasetBuildExecutor.resume_from`：服务端受控起点，目标 Operation 强制重跑、
       下游经 digest 闭包重新校验，起点外 Operation 不得被跳过；4 项测试）
-- [ ] **P2** 删除 `validated_intermediate` / `validated_final` 状态（ADR-010 否决），
+- [x] **P2** 删除 `validated_intermediate` / `validated_final` 状态（ADR-010 否决），
       任务/会话改为 `current_publication_id`（归 Phase 4，随 Publication 一起）
 - [x] **P2** Agent 决策日志持久化 `agent_results/`（吸收原 §1.5.5）
       （`TaskWorkDir.agent_results/query_log.jsonl`：`log_query` 追加持久化，
@@ -211,9 +212,15 @@
       （`manifest.compute_provenance_coverage`：primary 行 `traced_rows` / `untraced_rows` /
       `coverage_ratio`，asset 集合来自 provenance.json 的 source assets；coverage 写入
       `dataset_manifest.json` 的 `provenance_summary.coverage`）
-- [ ] **P2** `extract_tables` OCR 回退 + 中文支持（原 §2.7.3）
-- [ ] **P2** DE 分析 BH FDR 校正与 `padj` 输出（原 §2.7.4）
-- [ ] **P2** `extract_tables` 真实 pdfplumber 路径测试与最小 PDF fixture（原 §2.7.5）
+- [x] **P2** `extract_tables` OCR 回退 + 中文支持（原 §2.7.3）
+      （Qwen-VL 已替代传统 OCR（pyproject 注释）；落地为扫描 PDF 无文本层诊断 + VLM 通道
+      warning + regex 回退 CJK/UTF-16 解码；修复 `_decompress_pdf_streams` FlateDecode
+      匹配 bug——原 decompression 为静默 no-op）
+- [x] **P2** DE 分析 BH FDR 校正与 `padj` 输出（原 §2.7.4）
+      （`run_differential_expression`：BH 校正全集 p 值（截断前），DEG 条目新增 `padj`，
+      排序保持原始 pvalue，NaN 收敛为 1.0；10 项新测试）
+- [x] **P2** `extract_tables` 真实 pdfplumber 路径测试与最小 PDF fixture（原 §2.7.5）
+      （`tests/fixtures/pdf/minimal_table.pdf` + `scanned_image.pdf`，真实解析无 mock）
 
 ---
 
@@ -222,7 +229,7 @@
 > 目标：Schema-aware Cache、Manifest-driven 前端、通用 operation 事件、API 状态分离。
 > 验收见 Design §16 Phase 7。
 
-- [ ] **P0** V2 Dataset Cache：`cache/datasets/<namespace>/<dataset_id>/`
+- [x] **P0** V2 Dataset Cache：`cache/datasets/<namespace>/<dataset_id>/`
       （manifest + data + schema + provenance）；键含 family / Schema version /
       source binding / Adapter version / normalization profile / query / asset digest；
       关键词仅用于检索
@@ -230,21 +237,51 @@
       `dataset_id`（`derive_dataset_id` 覆盖 family/schema_ref/bindings/adapter/
       normalization/merge/asset digests，关键词仅检索）、原子写（staging+rename）、
       幂等 commit；`execute_dataset_build` 发布成功后 commit 到 `build` namespace；
-      6 项测试。API/检索端点与双读双写迁移待后续）
-- [ ] **P0** Manifest-driven ResultsViewer：读 `dataset_manifest.json`，展示 family /
+      6 项测试。✅ API/检索端点（Phase 7 T2）已落地：`GET /cache/datasets` /
+      `GET /cache/datasets/{id}` / 缓存 artifact 下载 + 旧 artifact API 双读双写迁移）
+- [x] **P0** Manifest-driven ResultsViewer：读 `dataset_manifest.json`，展示 family /
       row grain / Schema / 有效行数 / 来源覆盖 / Validation / confidence /
       provenance 覆盖率 / 部分成功或 NO_DATA 原因（原 §3.1 改写）
-- [ ] **P0** 通用 operation events 前端渲染（`operation_id` / `label` / `category`，
+      （Phase 7 T4：`BuildResultsViewer`——`GET /builds/{build_id}` + `?task_id=`，
+      family/grain/schema 徽章、有效行数、来源覆盖、validation、confidence、
+      provenance 覆盖率；NO_DATA/partial/spec-rejected 横幅带原因，NO_DATA 用
+      sky/info 样式绝不红色；`useTaskBuildId` 从最新 run 派生 build_id；11 项测试）
+- [x] **P0** 通用 operation events 前端渲染（`operation_id` / `label` / `category`，
       替代固定 StageName union；兼容期保留旧 `stage_*`）
-- [ ] **P0** API 分别返回 RunStatus / BuildResult / ValidationResult / Publication；
+      （Phase 7 T3 后端 + T5 前端：复用既有 `operation_started/progress/completed/
+      failed` 事件类型（label/category 可选，旧 events.jsonl 回放走 pydantic 默认
+      `""`，reducer 纯游标推进）；pipeline stage 发射侧镜像；前端按 operation_id
+      归组为 `OperationItem`（label→operation_id→category 回退、分类图标/色、状态徽章）
+      + 完成后自动折叠为可展开摘要行（`tool_completed` 归组，保留手动开关））
+- [x] **P0** API 分别返回 RunStatus / BuildResult / ValidationResult / Publication；
       新增 builds 端点（BuildResult 与 manifest 产物）
-- [ ] **P1** 旧缓存与旧 artifact API 双读双写迁移；旧 `main_data.csv` 包装为
-      `gene_expression.long.legacy.v1`
-- [ ] **P1** 前端：ResultsViewer Tabs 分离主数据/来源/处理/警告（原 §3.1）
-- [ ] **P1** 前端：对话流任务节点自动折叠（以 `tool_completed` 归组）（原 §3.4）
-- [ ] **P2** `toolLabels` 新增 `invoke_skill` / `find_skill` formatter（原 §3.2）
-- [ ] **P2** 模型搜索框恢复与 `LEGACY_MODELS` 硬编码清理（原 §3.3）
-- [ ] **P2** 通用 UI 改进（command/menubar、缓存导出按钮、对话路由等）（原 §3.5）
+      （Phase 7 T1：`GET /builds`（分页 BuildResult + manifest 指针）、
+      `GET /builds/{build_id}`（BuildResult + manifest + publication + artifacts，
+      支持 `?task_id=` 消歧）、`GET /builds/{build_id}/artifacts/{artifact_id}`；
+      durable `execution.build_result`：`execute_dataset_build` 安装 PendingDatasetBuild，
+      executor `_transfer_dataset_build_outcome` 写入 `execution.build_result` 并发射
+      真实 PublicationCreatedPayload；F4：V2 probe-primary 发布发射 PlatformRecord
+      （`platform_audit.csv` + NOT_ATTEMPTED 记录））
+- [x] **P1** 旧缓存与旧 artifact API 双读双写迁移；旧 `main_data.csv` 包装为
+      `gene_expression.long.legacy.v1`（Phase 7 T2：`build/legacy_cache.py` 只读投影 +
+      `build/v1_bridge.py` 双写 artifacts/ 面 + artifact API 双读；测试见
+      `test_legacy_cache_wrapper.py` / `test_cache_api.py` / `test_artifact_api.py`）
+- [x] **P1** 前端：ResultsViewer Tabs 分离主数据/来源/处理/警告（原 §3.1）
+      （Phase 7 T4：shadcn Tabs 主数据/来源/处理/警告，复用 Table/CsvPreview；
+      legacy 无 manifest 路径保留回退）
+      报告卡约定（2026-08-10）：事件/API parser 保留 `BuildResult.build_id`，reducer 以
+      `report:<runId>` 投影每轮独立卡片；卡片使用紧凑 `CsvPreview.maxRows=10` 和 `detail.artifacts` 文件列表（按 artifact_id 保留重复文件名，展示文件名/大小），展示来源/处理/警告摘要、Dialog tabs 与全量下载；会话列表在包装 `MessageScrollerItem` 前过滤已由 report card 接管的 `artifact` item，runtime artifact projection 仍供 legacy ResultsViewer/ArtifactSheet 使用；`ArtifactFab` 仅作为无 V2 build 时的 legacy fallback。
+- [x] **P1** 前端：对话流任务节点自动折叠（以 `tool_completed` 归组）（原 §3.4）
+      （Phase 7 T5：operation/tool 事件按完成归组折叠为紧凑摘要行，手动开关保留）
+- [x] **P2** `toolLabels` 新增 `invoke_skill` / `find_skill` formatter（原 §3.2）
+      （T6 核实：工具标签映射已含两者（19 项测试），无需新增）
+- [x] **P2** 模型搜索框恢复与 `LEGACY_MODELS` 硬编码清理（原 §3.3）
+      （Phase 7 T6：删除死 `LEGACY_MODELS` 分支，搜索框始终走真实 `GET /models`
+      端点 + 4 项小离线回退 `lib/modelChoices.ts`）
+- [~] **P2** 通用 UI 改进（command/menubar、缓存导出按钮、对话路由等）（原 §3.5）
+      （Phase 7 T6 部分完成：缓存导出按钮已接线（sidebar + settings，复用既有
+      `GET /cache/export`）；command/menubar 跳过（无现有模式、成本高）与对话路由
+      延后——见 REVIEW §5 遗留）
 
 ---
 
@@ -252,28 +289,80 @@
 
 > 前提：V2 闭环通过四种必测结果（成功/部分成功/无数据/执行失败）。
 > 删除清单见 Design §16 Phase 8 与 ARCHITECTURE §2。
+> 收窄执行（2026-08-08，见 REVIEW_2026-08-08-phase8-legacy-cleanup.md）：
+> 审计发现大部分删除目标**已不存在**或**依赖 V1 生产路径退役**（未决架构决策，
+> 见下「遗留」）。本阶段勾选已完成的清理项 + 全量回归；未决项标注 `[~]` 遗留。
 
-- [ ] **P1** 删除固定 `_STAGES`、`StageName` 业务依赖、
+- [x] **P1** 删除固定 `_STAGES`、`StageName` 业务依赖、
       `SUPPORTED_PIPELINE_SOURCE_COMBINATIONS` 语义门禁（可保留来源级安全 allowlist）
-- [ ] **P1** 删除 22 列缓存硬编码写入接口与 `domain/processing.py` 旧 ParsedDataset
-- [ ] **P1** 正式路径删除 `tools/alignment.merge_datasets`（保留为映射候选生成器）
-- [ ] **P1** 删除 metadata-only 占位与 `run_research_pipeline` 旧参数面
-- [ ] **P1** 删除遗留死代码：`tools/parse_pdb.py` / `parse_geo.py` / `parse_excel.py` /
+      （✅ V1 退役后完成：`_STAGES` 已删、`StageName` 枚举保留供 runtime/skills/events；
+      兼容门禁及守卫测试随 review R2 删除）
+- [x] **P1** 删除 22 列缓存硬编码写入接口与 `domain/processing.py` 旧 ParsedDataset
+      （✅ `domain/processing.py` 已随 V1 退役删除；`CacheStore.commit_dataset`
+      写入接口仍保留——由 `cache_tools.commit_to_cache`（import_agent 生产路径）
+      调用，P2 重审 22 列写入面）
+- [x] **P1** 正式路径删除 `tools/alignment.merge_datasets`（保留为映射候选生成器）
+      （✅ V1 退役后完成：`tools/alignment` 已删，V2 合并由 integrator
+      的 append_by_canonical_row 策略承担）
+- [x] **P1** 删除 metadata-only 占位与 `run_research_pipeline` 旧参数面
+      （✅ metadata-only 占位已在 Phase 4b 删除；`run_research_pipeline`
+      已随 V1 退役删除（agent 主线切换 `execute_dataset_build`））
+- [x] **P1** 删除遗留死代码：`tools/parse_pdb.py` / `parse_geo.py` / `parse_excel.py` /
       `cleaning.py` 及相关测试（`test_processing.py`、`test_config.py` 的 openpyxl
       依赖检查）——依据 REVIEW §5.2 结论
-- [ ] **P2** 删除任何 V2 `DatasetRequest` / `BuildRecipe` 临时实现
-- [ ] **P2** 全量回归：`uv run pytest`、Ruff、前端 `pnpm lint/tsc/build/test` 通过，
+      （审计确认：四文件均不存在；`test_processing.py` 不存在；openpyxl/xlrd 不在
+      `pyproject.toml` 依赖且 app/tests 零导入；`test_config.py:144-160` 死依赖检查
+      仅覆盖 biopython/geoparse 且已通过。REVIEW §5.2 删除清单已达成，仅剩
+      `domain/processing.py` 与 `tools/alignment.py`——见上遗留项）
+- [x] **P2** 删除任何 V2 `DatasetRequest` / `BuildRecipe` 临时实现
+      （审计确认：代码中已不存在，仅 docs 提及（TODO/ARCHITECTURE/design 与
+      `datasets/runtime/operations.py:6` 注释））
+- [x] **P2** 全量回归：`uv run pytest`、Ruff、前端 `pnpm lint/tsc/build/test` 通过，
       `uvicorn app.main:app` 干净启动；ARCHITECTURE 标记与代码一致
+      （2026-08-08 收尾：后端 2722 passed / ruff clean / import OK；前端 726
+      passed (47 files) / lint 0 / tsc 0 / build OK。ARCHITECTURE 顶注已诚实标注
+      「代码仍为 V1、V2 绞杀模式」，无需改动）
+
+**Phase 8 遗留（已决策并执行）**：V1 生产路径退役——已拍板全移除并合并
+（见 LEFTOVERS A1，main @ 9a7f19d + review R2 收尾）。agent 主线已切到
+V2 `execute_dataset_build`（INSTRUCTIONS 全量引导 + `validate_dataset_build_spec`
+预检），e2e 已走 V2 且四种必测结果有测试。下方 `[x]` 项均已达成；
+后续批次：P3 前端（B3/B5/C2a/C3e/E 类 UI）、P4 测试补强与性能（D1-D5/
+C5a/C5b/C6a）——真实遗留项见 LEFTOVERS。
 
 ---
 
 ## 独立维护项（不阻塞 V2 主线，随阶段推进）
 
-- [ ] **P1** 结构化日志（structlog / python-json-logger）（原 §4.4）
-- [ ] **P1** Xena 403 修复：移除 `test_all_data_sources_live.py` 的 xfail（原 §2.2）
-- [ ] **P2** 监控并发 Chromium 实例数，超阈值排队（原 §5.2）
-- [ ] **P2** `config.py` 扩展（crawler_ua / rate_limit / stage_timeouts）、
+- [x] **P1** 结构化日志（structlog / python-json-logger）（原 §4.4）
+      （零新依赖标准库实现 `app/logging_setup.py`：`JsonFormatter` 输出
+      `logs/app.jsonl` JSON 行 + `RotatingFileHandler` 轮转（1MB×5）；
+      `set_log_context` 基于 contextvars 绑定 task_id/run_id/stage，
+      manager `_execute` 绑定 task/run、runner `_run_stage` 绑定 stage
+      （`asyncio.to_thread` 自动传播 context 到 stage 线程）；控制台保持
+      人类可读文本；事件审计 pipeline.jsonl 通道不变；7 项新测试。
+      附带修复：`_recover` 补发 PublicationCreatedPayload 时
+      `request_fingerprint="recovery"` 违反 `^[0-9a-f]{64}$` 契约导致
+      带历史 marker 数据启动崩溃 → 改确定性 sha256 指纹）
+- [x] **P1** Xena 403 修复：移除 `test_all_data_sources_live.py` 的 xfail（原 §2.2）
+      （根因是 S3 ListObjectsV2 桶策略拒绝（403）；`search_xena` 改走官方
+      hub 查询 API `POST https://toil.xenahubs.net/data/`（all-datasets，
+      text/plain body，xenaPython 同款查询），S3 XML 列表保留为兜底；
+      crawler `api_request` 新增 `raw_body` 支持；live xfail 移除；
+      END-TO-END 实测返回 27 个 TCGA 数据集）
+- [x] **P2** 监控并发 Chromium 实例数，超阈值排队（原 §5.2）
+      （BrowserPool 已由 Semaphore 保证排队；补充监控：`active_operations` /
+      `queued_operations` / `max_contexts` 只读属性，`_begin_operation` 维护
+      排队计数（acquire 取消时正确归还），1 项新测试验证 2 active + 2 queued）
+- [x] **P2** `config.py` 扩展（crawler_ua / rate_limit / stage_timeouts）、
       `DASHSCOPE_API_KEY` 启动校验、`OUTPUT_DIR` 绝对路径默认值（原 §5.3）
+      （`Settings` 新增 crawler_ua / rate_limit_seconds / stage_timeouts（frozen
+      dataclass 用 `field(default_factory=...)` 解析 `STAGE_TIMEOUTS` JSON）；
+      `main.py` lifespan 接线 `CrawlerFacade(min_interval=rate_limit_seconds)`
+      并校验 `DASHSCOPE_API_KEY` 缺失告警；`tool.py` 新增
+      `_stage_timeouts_from_settings` 映射 StageName；`OUTPUT_DIR` 默认解析为
+      绝对路径；`.env.example` 补充文档；5 项新测试）
 - [ ] **P2** Agent INSTRUCTIONS 增加"达到 max_turns 后输出 `[MAX_TURNS_REACHED]`"
       指导（原 §4.5）
-- [ ] **P2** 新增 UniProt / ChEMBL 等 Agent-only 来源能力（不接入 Pipeline）（原 §1.4）
+- [x] **P2** 新增 UniProt / ChEMBL 等 Agent-only 来源能力（不接入 Pipeline）（原 §1.4）
+      ✅ 已修（2026-08-09, feat/leftovers-p2, commit 7d5893a）

@@ -509,7 +509,7 @@ def test_find_latest_publication_scopes_to_build_id(tmp_path: Path) -> None:
     """Phase 5 T6: ``find_latest_publication(..., build_id=...)`` must only
     consider version directories of THAT build — distinct builds sharing one
     publish directory never see each other's versions."""
-    from datetime import UTC, datetime
+    from datetime import UTC, datetime, timedelta
 
     from app.datasets.build.invariants import find_latest_publication as _find_latest_publication
 
@@ -529,9 +529,12 @@ def test_find_latest_publication_scopes_to_build_id(tmp_path: Path) -> None:
             "utf-8",
         )
 
+    # 同一 build 的两个版本用不同 published_at 区分新旧；相同时间戳时
+    # “先到者胜”依赖目录遍历顺序（Windows NTFS 与 Linux 不同），会造成
+    # 跨平台 flaky。Build 作用域隔离才是本测试的意图。
     _write("build_a", "aaaaaaaaaaaaaaaa", base)
     _write("build_b", "bbbbbbbbbbbbbbbb", base)
-    _write("build_a", "cccccccccccccccc", base)
+    _write("build_a", "cccccccccccccccc", base + timedelta(seconds=1))
 
     # build-scoped: each build sees only its own newest version.
     assert _find_latest_publication(publish_dir, build_id="build_a") == "pub_build_a_cccccccccccccccc"
@@ -2050,6 +2053,8 @@ async def _run_executor_with_paths(
         plan=plan,
         run_operation=runner,
         per_binding_outcomes=per_binding_outcomes,
+        source_assets=assets,
+        mapping_assets=mapping_assets,
         implementation_versions={op.operation_id: "1.0.0" for op in plan},
     )
     outcome = await executor.run()
@@ -2341,3 +2346,68 @@ async def test_t7_gene_required_full_coverage_publishes_gene_primary(
     assert len(rows) == 2
     assert {row["gene_id_namespace"] for row in rows} == {"gene_symbol"}
     assert any((output_dir / "publish").glob("build_runner_test_*"))
+
+
+@pytest.mark.asyncio
+async def test_mapping_asset_change_invalidates_canonicalize_checkpoint(
+    tmp_path: Path,
+) -> None:
+    """P0 wiring (REVIEW_2026-08-09 §7.1): the GPL annotation asset joins the
+    executor input digest, so re-running the same build with a different
+    annotation file must NOT reuse the stale canonicalize checkpoint — the
+    published gene rows reflect the NEW annotation."""
+    matrix = tmp_path / "probe_matrix.txt.gz"
+    _write_series_matrix(matrix, [("PROBE1", "1.5", "2.0")])
+    annotation_a = tmp_path / "annot_a.txt.gz"
+    _write_platform_annotation(annotation_a, {"PROBE1": "TP53"})
+    annotation_b = tmp_path / "annot_b.txt.gz"
+    _write_platform_annotation(annotation_b, {"PROBE1": "BRCA1"})
+
+    per_binding_a: dict = {}
+    outcome_a, output_dir, _ = await _run_executor_with_paths(
+        tmp_path,
+        [_geo_binding()],
+        {"binding_geo": matrix},
+        per_binding_outcomes=per_binding_a,
+        mapping_paths={"binding_geo": annotation_a},
+    )
+    assert outcome_a.status == "completed"
+    assert {row["gene_id"] for row in _primary_rows(output_dir)} == {"TP53"}
+
+    # Second run: same source matrix + same build identity (state dir
+    # reused), but a different annotation — the changed mapping asset must
+    # invalidate the canonicalize checkpoint so the primary reflects it.
+    per_binding_b: dict = {}
+    outcome_b, output_dir_b, _ = await _run_executor_with_paths(
+        tmp_path,
+        [_geo_binding()],
+        {"binding_geo": matrix},
+        per_binding_outcomes=per_binding_b,
+        mapping_paths={"binding_geo": annotation_b},
+    )
+    assert outcome_b.status == "completed"
+    assert {row["gene_id"] for row in _primary_rows(output_dir_b)} == {"BRCA1"}
+
+
+@pytest.mark.asyncio
+async def test_published_version_contains_validation_report(tmp_path: Path) -> None:
+    """C1d: the publication's ``validation_result_ref`` must resolve inside the
+    immutable version directory — validation_report.json is copied alongside
+    the manifest so the reference closure is never dangling.
+    """
+    outcome, output_dir = await _run_executor(
+        tmp_path,
+        [_binding("binding_gdc", "gdc", "gdc.expression.v1")],
+        {"binding_gdc": "gdc/gdc_expression.tsv"},
+    )
+    assert outcome.status == "completed"
+    version_dir = next((output_dir / "publish").glob("build_runner_test_*"))
+    publication = json.loads(
+        (version_dir / "publication.json").read_text("utf-8")
+    )
+    ref = publication["validation_result_ref"]
+    assert (version_dir / ref).is_file(), (
+        f"validation_result_ref {ref!r} is dangling: file not copied "
+        f"into the version directory"
+    )
+    assert ref == "validation_report.json"

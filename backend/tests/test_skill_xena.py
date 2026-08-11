@@ -136,8 +136,25 @@ def test_managed_search_xena_uses_bound_crawler_facade(
     facade_calls: list[str] = []
 
     class ManagedFacade:
+        async def api_request(
+            self,
+            url: str,
+            *,
+            method: str = "GET",
+            json_body: dict[str, object] | None = None,
+            raw_body: str | None = None,
+        ) -> FetchResult:
+            facade_calls.append(f"{method} {url}")
+            return FetchResult(
+                url=url,
+                content='[{"name": "TCGA.BRCA.sampleMap/HiSeqV2", "type": "genomicMatrix"}]',
+                status_code=200,
+                elapsed_ms=1,
+                method_used="api",
+            )
+
         async def api(self, url: str) -> FetchResult:
-            facade_calls.append(url)
+            facade_calls.append(f"GET {url}")
             return FetchResult(
                 url=url,
                 content=_make_s3_xml([]).decode("utf-8"),
@@ -167,8 +184,11 @@ def test_managed_search_xena_uses_bound_crawler_facade(
         search_xena.on_invoke_tool(ctx, json.dumps({"term": "BRCA"}))
     )
 
-    assert json.loads(result)["count"] == 0
-    assert facade_calls
+    data = json.loads(result)
+    assert data["count"] == 1
+    # official query API (POST /data/) is the primary facade path
+    assert "POST https://toil.xenahubs.net/data/" in facade_calls
+    assert "GET " not in facade_calls
 
 
 def test_child_download_xena_commits_compressed_source_asset(
@@ -256,6 +276,95 @@ def test_search_xena_empty_term_returns_all() -> None:
 
 
 # ---------------------------------------------------------------------------
+# official hub query API (replaces 403-blocked S3 listing)
+# ---------------------------------------------------------------------------
+
+
+def _mock_query_urlopen(json_text: str) -> MagicMock:
+    """Mock urlopen for the official hub /data/ POST returning JSON."""
+    mock_resp = MagicMock()
+    mock_resp.__enter__.return_value = mock_resp
+    mock_resp.__exit__.return_value = False
+    mock_resp.read.return_value = json_text.encode("utf-8")
+    return mock_resp
+
+
+def test_fetch_hub_index_prefers_official_query_api() -> None:
+    """_fetch_hub_index uses the official hub query API before S3 listing."""
+    from app.skills.builtin.acquisition.xena import _fetch_hub_index
+
+    json_text = (
+        '[{"name": "TCGA.BRCA.sampleMap/HiSeqV2", "type": "genomicMatrix"},'
+        '{"name": "TCGA.BRCA.sampleMap/clinical", "type": "clinicalMatrix"}]'
+    )
+    with patch(
+        "urllib.request.urlopen",
+        return_value=_mock_query_urlopen(json_text),
+    ) as mock_open:
+        records = _fetch_hub_index()
+
+    # query path hit; S3 listing must not be attempted
+    assert mock_open.call_count == 1
+    req: MagicMock = mock_open.call_args.args[0]
+    assert req.full_url == "https://toil.xenahubs.net/data/"
+    assert req.get_method() == "POST"
+    assert req.headers.get("Content-type") == "text/plain"
+    assert len(records) == 2
+    assert records[0]["dataset_id"] == "TCGA.BRCA.sampleMap/HiSeqV2"
+    assert records[0]["type"] == "gene_expression"
+    assert records[1]["type"] == "clinical"
+
+
+def test_fetch_hub_index_falls_back_to_s3_listing() -> None:
+    """_fetch_hub_index falls back to S3 listing when the query API fails."""
+    from app.skills.builtin.acquisition.xena import _fetch_hub_index
+
+    s3_xml = _make_s3_xml([
+        ("download/TCGA.BRCA.sampleMap/HiSeqV2.gz", 50000, "2024-01-01"),
+    ])
+
+    class _S3Resp:
+        def __init__(self) -> None:
+            self._done = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
+        def read(self, *_args):
+            if self._done:
+                return b""
+            self._done = True
+            return s3_xml
+
+    with patch(
+        "urllib.request.urlopen",
+        side_effect=[ConnectionError("hub query down"), _S3Resp()],
+    ) as mock_open:
+        records = _fetch_hub_index()
+
+    assert mock_open.call_count == 2
+    assert len(records) == 1
+    assert records[0]["dataset_id"] == "TCGA.BRCA.sampleMap/HiSeqV2"
+    assert records[0]["size_bytes"] == 50000
+
+
+def test_hub_records_from_query_json_unknown_type_classified() -> None:
+    """Unknown official types fall back to name-based classification."""
+    from app.skills.builtin.acquisition.xena import _hub_records_from_query_json
+
+    records = _hub_records_from_query_json(
+        '[{"name": "TCGA.BRCA.sampleMap/HiSeqV2", "type": "genomicMatrix"},'
+        '{"name": "probeMap/hugo_gencode_v24", "type": "probeMap"}]'
+    )
+    assert records[0]["type"] == "gene_expression"
+    assert records[0]["cohort"] == "TCGA.BRCA"
+    assert records[1]["type"] == "probe_map"
+
+
+# ---------------------------------------------------------------------------
 # download_xena
 # ---------------------------------------------------------------------------
 
@@ -288,6 +397,32 @@ def test_download_xena_success() -> None:
     assert len(rc.raw_assets) == 1
     assert len(rc.sources) == 1
     assert rc.sources[0].database.value == "ucsc_xena"
+
+
+def test_download_xena_accepts_cohort() -> None:
+    """download_xena accepts the optional ``cohort`` label (previously
+    rejected as an unknown property).
+
+    REVIEW_2026-08-09-task-3eb85407: the agent passed ``cohort`` and the
+    schema rejected it, forcing two wasted download attempts.
+    """
+    raw_content = b"gene\tsample1\nBRCA1\t1.5\n"
+    gz_content = gzip.compress(raw_content)
+    mock_resp = _mock_urlopen_streaming(gz_content)
+
+    ctx = _make_ctx(task_id="test_xena_download_cohort")
+    ctx.tool_name = "download_xena"
+    with patch("urllib.request.urlopen", return_value=mock_resp):
+        args = json.dumps({
+            "dataset_id": "TCGA.PAAD.sampleMap/HiSeqV2",
+            "cohort": "TCGA Pancreatic Cancer (PAAD)",
+        })
+        result = asyncio.run(download_xena.on_invoke_tool(ctx, args))
+
+    data = json.loads(result)
+    assert data["source"] == "xena"
+    assert data["cohort"] == "TCGA Pancreatic Cancer (PAAD)"
+    assert len(data["local_files"]) == 2
 
 
 def test_download_xena_network_error_returns_error_json() -> None:

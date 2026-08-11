@@ -52,10 +52,22 @@ def _entry(
     role: ArtifactRole, path: Path, output_dir: Path, media_type: str = "text/csv"
 ) -> ManifestArtifactEntry:
     checksum = file_sha256(path)
+    relative_path = path.relative_to(output_dir).as_posix()
+    # C3a: content-addressed ids must not collide when identical bytes appear
+    # at two relative paths — include the path in the digest. Wire shape
+    # unchanged (``artifact_`` + 32 hex); digest is deterministic and
+    # re-computed from the manifest file on every read (no migration needed
+    # for previously written entries).
+    artifact_id = (
+        "artifact_"
+        + hashlib.sha256(
+            (relative_path + "\0" + checksum).encode("utf-8")
+        ).hexdigest()[:32]
+    )
     return ManifestArtifactEntry(
-        artifact_id=f"artifact_{checksum[:32]}",
+        artifact_id=artifact_id,
         role=role,
-        relative_path=path.relative_to(output_dir).as_posix(),
+        relative_path=relative_path,
         media_type=media_type,
         size_bytes=path.stat().st_size,
         sha256=checksum,
@@ -103,6 +115,7 @@ def build_provenance_document(
                 "source_id": asset.source_id,
                 "logical_file": asset.relative_path.split("/")[-1],
                 "sha256": asset.sha256,
+                "successful_attempt_id": asset.successful_attempt_id,
             }
             for binding_id, asset in sorted(source_assets.items())
         ],

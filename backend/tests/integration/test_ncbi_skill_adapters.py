@@ -17,6 +17,7 @@ from app.integrations.ncbi.factory import NcbiServices
 from app.skills.builtin.acquisition.geo import (
     describe_geo_adapter,
     download_geo_adapter,
+    download_geo_platform_annotation_adapter,
     search_geo,
     search_geo_adapter,
 )
@@ -212,6 +213,201 @@ async def test_download_geo_returns_compressed_repository_processed_asset(
 
 
 @pytest.mark.asyncio
+async def test_download_geo_matrix_fails_fast_on_metadata_only_gzip(
+    tmp_path: Path,
+) -> None:
+    """A series matrix with no expression table must fail fast, not report success.
+
+    NCBI serves metadata-only series matrices for RNA-seq (and some array)
+    series.  Previously download_geo reported them as a successful source
+    asset and the failure surfaced only later at build parse time.  Now the
+    adapter returns a structured ``empty_series_matrix`` error and does not
+    record the asset as a usable source.  (See docs/REVIEW_2026-08-10-task-9ce0124f.md
+    §5.1 T2.)
+    """
+    import gzip
+
+    metadata_only = gzip.compress(
+        b'!Series_title = "metadata only"\n!Series_geo_accession = "GSE178352"\n'
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("GSE178352_series_matrix.txt.gz")
+        return httpx.Response(
+            200,
+            content=metadata_only,
+            headers={
+                "Content-Length": str(len(metadata_only)),
+                "Content-Type": "application/gzip",
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        services = NcbiServices(
+            eutils=FixtureNcbiClient(),
+            http=http,
+            cache=ContentCache(tmp_path / "cache"),
+        )
+        context = run_context(tmp_path)
+        payload = json.loads(
+            await download_geo_adapter(
+                context,
+                "GSE178352",
+                "matrix",
+                services=services,
+                max_size_mb=1,
+            )
+        )
+
+    assert payload.get("reason_code") == "empty_series_matrix"
+    assert "suppl" in payload["error"]
+    assert "asset" not in payload
+    assert context.source_asset_ids == []
+
+
+@pytest.mark.asyncio
+async def test_download_geo_unsupported_file_type_lists_valid_values(
+    tmp_path: Path,
+) -> None:
+    """The unsupported file_type error must list the valid values so the agent
+    can self-correct without another guess.  (docs/REVIEW_2026-08-10 §5.1 T4.)"""
+    async with httpx.AsyncClient() as http:
+        services = NcbiServices(
+            eutils=FixtureNcbiClient(),
+            http=http,
+            cache=ContentCache(tmp_path / "cache"),
+        )
+        context = run_context(tmp_path)
+        payload = json.loads(
+            await download_geo_adapter(
+                context,
+                "GSE178352",
+                "series_matrix",
+                services=services,
+            )
+        )
+
+    assert "unsupported file_type" in payload["error"]
+    assert "matrix, soft, suppl" in payload["error"]
+
+@pytest.mark.asyncio
+async def test_download_geo_default_cap_accepts_large_series_matrix(
+    tmp_path: Path,
+) -> None:
+    """Regression: the default download cap must accommodate real GEO series
+    matrices.  GSE33000's matrix is 112,099,269 bytes (~107 MiB) — above the
+    old 100 MiB default, so download_geo failed with
+    ``declared content length exceeds maximum`` and the AD/HD/control build
+    could not fetch its source.  The default is now 4096 MiB; the bounded
+    download guard itself is covered by
+    test_download_geo_explicit_cap_still_rejects_oversize."""
+    import gzip
+    import os
+
+    matrix_gzip = gzip.compress(
+        b"!series_matrix_table_begin\n" + os.urandom(105 * 1024 * 1024)
+    )
+    assert len(matrix_gzip) > 100 * 1024 * 1024
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("_series_matrix.txt.gz")
+        return httpx.Response(
+            200,
+            content=matrix_gzip,
+            headers={
+                "Content-Length": str(len(matrix_gzip)),
+                "Content-Type": "application/x-gzip",
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        services = NcbiServices(
+            eutils=FixtureNcbiClient(),
+            http=http,
+            cache=ContentCache(tmp_path / "cache"),
+        )
+        context = run_context(tmp_path)
+        # No explicit max_size_mb: the DEFAULT must handle a >100 MiB matrix.
+        payload = json.loads(
+            await download_geo_adapter(
+                context,
+                "GSE178352",
+                "matrix",
+                services=services,
+            )
+        )
+
+    assert "error" not in payload, payload
+    assert payload["asset"]["size_bytes"] > 100 * 1024 * 1024
+    assert payload["asset"]["data_level"] == "repository_processed"
+
+
+@pytest.mark.asyncio
+async def test_download_geo_explicit_cap_still_rejects_oversize(
+    tmp_path: Path,
+) -> None:
+    """The bounded-download guard must stay: an explicit small cap still
+    rejects a large declared Content-Length before streaming any bytes
+    (the real GSE33000 matrix size, 112,099,269 bytes)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("_series_matrix.txt.gz")
+        return httpx.Response(
+            200,
+            content=b"body is never read",
+            headers={
+                "Content-Length": "112099269",
+                "Content-Type": "application/x-gzip",
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        services = NcbiServices(
+            eutils=FixtureNcbiClient(),
+            http=http,
+            cache=ContentCache(tmp_path / "cache"),
+        )
+        context = run_context(tmp_path)
+        payload = json.loads(
+            await download_geo_adapter(
+                context,
+                "GSE178352",
+                "matrix",
+                services=services,
+                max_size_mb=100,
+            )
+        )
+
+    assert payload["attempt"]["status"] == "failed"
+    assert payload["attempt"]["error_code"] == "download_incomplete"
+    assert payload["error"] == "declared content length exceeds maximum"
+
+
+def test_matrix_has_data_table_positive_and_negative(tmp_path: Path) -> None:
+    """K3: the series-matrix content pre-check detects a real expression table
+    and rejects a metadata-only gzip.  (docs/REVIEW_2026-08-10 §5.1 T2.)"""
+    import gzip
+
+    from app.skills.builtin.acquisition.geo import _matrix_has_data_table
+
+    with_table = tmp_path / "with_table.txt.gz"
+    with_table.write_bytes(
+        gzip.compress(
+            b'!Series_title = "x"\n'
+            b'!series_matrix_table_begin\n'
+            b'"ID_REF"\t"GSM1"\t"GSM2"\n'
+        )
+    )
+    metadata_only = tmp_path / "meta_only.txt.gz"
+    metadata_only.write_bytes(
+        gzip.compress(b'!Series_title = "x"\n!Sample_data_row_count = 0\n')
+    )
+
+    assert _matrix_has_data_table(with_table) is True
+    assert _matrix_has_data_table(metadata_only) is False
+
+
+@pytest.mark.asyncio
 async def test_child_download_geo_commits_asset_outside_child_staging(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -270,6 +466,106 @@ async def test_child_download_geo_commits_asset_outside_child_staging(
     assert committed.read_bytes() == b"child geo bytes"
     assert not (child.work_dir.root / payload["asset"]["relative_path"]).exists()
     assert child.source_asset_ids == [asset.asset_id]
+
+
+@pytest.mark.asyncio
+async def test_download_geo_platform_annotation_returns_asset(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """P0 wiring (REVIEW_2026-08-09 §7.1): the annotation download locates the
+    platform table (discovery is stubbed), acquires it as a provenance-tracked
+    SourceAsset and reports the local path for ``mapping_files``."""
+    compressed = b"gzip platform table bytes"
+    located = ("annot", "GPL570.annot.gz")
+    monkeypatch.setattr(geo_module, "discover_annotation_file", lambda *_a, **_k: located)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/annot/GPL570.annot.gz")
+        return httpx.Response(
+            200,
+            content=compressed,
+            headers={
+                "Content-Length": str(len(compressed)),
+                "Content-Type": "application/gzip",
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        services = NcbiServices(
+            eutils=FixtureNcbiClient(),
+            http=http,
+            cache=ContentCache(tmp_path / "cache"),
+        )
+        context = run_context(tmp_path)
+        payload = json.loads(
+            await download_geo_platform_annotation_adapter(
+                context,
+                "GPL570",
+                services=services,
+                max_size_mb=1,
+            )
+        )
+
+    assert payload["platform"] == "GPL570"
+    assert payload["asset"]["data_level"] == "repository_processed"
+    relative_path = payload["asset"]["relative_path"]
+    downloaded = context.work_dir.root / relative_path
+    assert downloaded.name == "GPL570.annot.gz"
+    assert downloaded.read_bytes() == compressed
+    assert payload["local_files"] == [str(downloaded)]
+    assert context.raw_assets == [str(downloaded)]
+
+
+@pytest.mark.asyncio
+async def test_download_geo_platform_annotation_no_file_returns_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A platform without a downloadable annotation table fails cleanly (no
+    exception, structured error the agent can act on)."""
+    monkeypatch.setattr(geo_module, "discover_annotation_file", lambda *_a, **_k: None)
+
+    services = NcbiServices(
+        eutils=FixtureNcbiClient(),
+        http=httpx.AsyncClient(),
+        cache=ContentCache(tmp_path / "cache"),
+    )
+    context = run_context(tmp_path)
+    payload = json.loads(
+        await download_geo_platform_annotation_adapter(
+            context,
+            "GPL19072",
+            services=services,
+        )
+    )
+    await services.http.aclose()
+
+    assert payload["platform"] == "GPL19072"
+    assert "no downloadable annotation table" in payload["error"]
+
+
+@pytest.mark.asyncio
+async def test_download_geo_platform_annotation_rejects_invalid_gpl(
+    tmp_path: Path,
+) -> None:
+    """Malformed GPL accessions are rejected before any network work."""
+    services = NcbiServices(
+        eutils=FixtureNcbiClient(),
+        http=httpx.AsyncClient(),
+        cache=ContentCache(tmp_path / "cache"),
+    )
+    context = run_context(tmp_path)
+    payload = json.loads(
+        await download_geo_platform_annotation_adapter(
+            context,
+            "not-a-gpl",
+            services=services,
+        )
+    )
+    await services.http.aclose()
+
+    assert "must match" in payload["error"]
 
 
 @pytest.mark.asyncio

@@ -96,4 +96,5 @@ fix_ruff.py
 # omo
 
 .omo/
+*.tsbuildinfo.worktrees/
 *.tsbuildinfo

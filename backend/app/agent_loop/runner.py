@@ -7,22 +7,28 @@ import hashlib
 import json
 import logging
 import re
+import shutil
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
-from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from agents import Runner
 from agents.exceptions import MaxTurnsExceeded
 from agents.stream_events import RawResponsesStreamEvent, RunItemStreamEvent
+from agents.tool_context import ToolContext
 
 from app.agent_loop.agent import (
     AGENT_MAX_TURNS as AGENT_MAX_TURNS,  # noqa: F401 — 测试契约 re-export
 )
 from app.agent_loop.agent import AgentBuild, build_agent, resolve_agent_max_turns
-from app.agent_loop.context import ManagedPipelineBridge, RunContext
+from app.agent_loop.context import (
+    ManagedPipelineBridge,
+    PendingDatasetBuild,
+    PendingPublicationCleanup,
+    RunContext,
+)
 from app.agent_loop.import_agent import (
     ATTACHMENT_PARSING_MAX_TURNS,
     build_attachment_parsing_agent,
@@ -34,6 +40,7 @@ from app.agent_loop.invocation import (
 from app.agent_loop.main_input_broker import MainInputBroker
 from app.agent_loop.model import run_model_settings_scope, to_run_model_settings
 from app.domain.contracts import (
+    ArtifactManifestEntry,
     ArtifactProducedPayload,
     AssistantDeltaPayload,
     AssistantReasoningDeltaPayload,
@@ -41,18 +48,19 @@ from app.domain.contracts import (
     AssistantStreamEndFrame,
     CancelRequestedPayload,
     EventEnvelope,
+    OperationProgressPayload,
     PublicationCreatedPayload,
     StageName,
     StageProgressPayload,
     TaskCompletedPayload,
     TaskMode,
-    TaskState,
     ToolCompletedPayload,
     ToolStartedPayload,
     UserInputRequiredPayload,
     UserInputResumedPayload,
     WarningPayload,
     build_event,
+    stage_operation_spec,
 )
 from app.domain.contracts.dataset_state import BuildResultStatus
 from app.domain.contracts.runtime import validate_task_databases
@@ -62,8 +70,7 @@ from app.model_config.token_estimation import (
     ChatCompletionsStructuralPolicy,
 )
 from app.model_settings import get_current_model_configuration
-from app.pipeline.runner import PendingPublicationCleanup, PipelineRunner
-from app.pipeline.stages import PipelineCancelledError
+from app.pipeline.dataset_build_tool import execute_dataset_build
 from app.runtime.compaction import CompactionCancelledError, ConversationCompactor
 from app.skills.catalog import SkillCatalog
 from app.subagents.agents import ManagedChildAgentRunner
@@ -77,6 +84,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# C3b: V2 dataset-build 产物的 step 标识（与 v1_bridge 的镜像步同值，
+# 保证 legacy 面与事件面的 generated_by_step_id 语义一致）。
+_DATASET_BUILD_STEP_ID = "step_dataset_build_v2"
+
 ASSISTANT_FLUSH_INTERVAL_SECONDS = 0.1
 ASSISTANT_FLUSH_MAX_BYTES = 1024
 OFFICIAL_FIXTURE_DIR = (
@@ -87,6 +98,9 @@ OFFICIAL_FIXTURE_DIR = (
 MAX_TURNS_RESUME_LIMIT: int = 3
 #: Qwen 偶发返回非 JSON 的 function.arguments 导致 400，最多重试次数。
 QWEN_FUNCTION_ARGS_RETRY_LIMIT: int = 2
+#: Qwen 类模型偶发"仅 reasoning、无文本/工具调用"的回合（SDK 把
+#: final_output 置为空串），最多重新提示次数；耗尽后仍 fail-loud。
+EMPTY_OUTPUT_RETRY_LIMIT: int = 2
 
 
 def resolve_max_turns_resume_limit(
@@ -99,6 +113,10 @@ def resolve_max_turns_resume_limit(
     if model_settings is not None:
         return model_settings.runtime_limits.max_turns_resume_limit
     return get_runtime_limits().max_turns_resume_limit
+
+
+class _AgentRunCancelled(RuntimeError):
+    """Agent run cancelled by a user decision (no-progress or max-turns reject)."""
 
 
 class NoProgressDetected(Exception):
@@ -919,6 +937,20 @@ class AgentRunExecutor:
                         detail=detail,
                     )
                 )
+                # T3 (Phase 7): mirror the stage_progress event with an
+                # operation_progress event (ARCHITECTURE §14.2).
+                operation_id, label, category = stage_operation_spec(stage)
+                await execution.emit(
+                    OperationProgressPayload(
+                        operation_id=operation_id,
+                        label=label,
+                        category=category,
+                        kind=kind,
+                        current=current,
+                        total=total,
+                        detail=detail,
+                    )
+                )
 
             bind_progress_emitter(emit_progress)
         try:
@@ -992,6 +1024,7 @@ class AgentRunExecutor:
         result = None
         resume_count = 0
         qwen_retry_count = 0
+        empty_output_retry_count = 0
         runtime_limits = getattr(model_settings, "runtime_limits", None)
         no_progress_detector = (
             NoProgressDetector(
@@ -1049,7 +1082,7 @@ class AgentRunExecutor:
                     detector=exc,
                 )
                 if decision.decision == "reject":
-                    raise PipelineCancelledError(
+                    raise _AgentRunCancelled(
                         "agent run cancelled by user after no-progress detected"
                     ) from None
                 # 用户选择继续：保留 durable Session 续跑，清空无进展计数
@@ -1074,7 +1107,7 @@ class AgentRunExecutor:
                     resume_count=resume_count,
                 )
                 if decision.decision == "reject":
-                    raise PipelineCancelledError(
+                    raise _AgentRunCancelled(
                         "agent run cancelled by user after max_turns reached"
                     ) from None
                 resume_count += 1
@@ -1129,6 +1162,39 @@ class AgentRunExecutor:
                 raise
             finally:
                 await text_buffer.flush()
+            # 空输出恢复：Qwen 类模型偶发"仅 reasoning、无文本/工具调用"的
+            # 回合（SDK 对无 MessageOutputItem 的响应把 final_output 置为
+            # 空串），常见于工具报错后的瞬时抖动。重新提示继续，而不是
+            # 立即 fail；重试耗尽后仍由下方守卫 fail-loud（保持
+            # REVIEW_2026-07-18 §2 语义）。
+            final_output = getattr(result, "final_output", None)
+            if (
+                not execution.context.cancellation_requested.is_set()
+                and isinstance(final_output, str)
+                and not final_output.strip()
+                and empty_output_retry_count < EMPTY_OUTPUT_RETRY_LIMIT
+            ):
+                empty_output_retry_count += 1
+                await execution.emit(
+                    WarningPayload(
+                        code="llm_empty_output_retry",
+                        message=(
+                            "LLM 返回空输出（无文本或工具调用）；重新提示继续 "
+                            f"({empty_output_retry_count}/{EMPTY_OUTPUT_RETRY_LIMIT})"
+                        ),
+                    )
+                )
+                agent_input = [
+                    {
+                        "role": "user",
+                        "content": (
+                            "你上一轮没有产生任何文本或工具调用（空回复）。"
+                            "请立即继续当前任务：要么调用必要的工具，"
+                            "要么用中文文本直接回答用户。"
+                        ),
+                    }
+                ]
+                continue
             # 消耗成功后，记录权威输入 usage 残差供未来 Run 校准。
             # 缺失/不支持/零 input usage 为 no-op；活跃 Run 的预算不变。
             record_calibration_from_result(
@@ -1270,6 +1336,14 @@ class AgentRunExecutor:
             return
         pending = take_pending()
         if pending is None:
+            take_build = getattr(
+                execution.context, "take_dataset_build_outcome", None
+            )
+            if callable(take_build):
+                outcome = take_build()
+                if outcome is not None:
+                    await _transfer_dataset_build_outcome(execution, outcome)
+                    return
             # Agent 未产出 pending publication(未调 tool 或 tool 未产出 artifact)。
             # 发射 warning 让用户知道无 artifact 产出。
             # manager 的成功证据校验会把空 completion_events 转 RunFailed
@@ -1367,6 +1441,80 @@ class AgentRunExecutor:
             raise
 
 
+async def _transfer_dataset_build_outcome(
+    execution: RunExecution, outcome: PendingDatasetBuild
+) -> None:
+    """Bridge a V2 ``execute_dataset_build`` outcome into the durable Run.
+
+    Bug-sweep REVIEW §3 (V2-dup): sets ``execution.build_result`` to the
+    tool's authoritative BuildResult and registers the publication completion
+    event so the Run completes with the real outcome (never the generic
+    NO_DATA fallback).  No files are moved — the build outputs already live
+    under the task's ``datasets_build/<build_id>/`` directory and are served
+    by the builds API.
+    """
+
+    if outcome.run_id != execution.run_id:
+        raise RuntimeError("pending dataset build run_id does not match execution")
+    execution.set_build_result(outcome.build_result)
+    publication = outcome.publication
+    manifest_sha256 = outcome.manifest_sha256
+
+    async def commit_dataset_build() -> list[EventEnvelope]:
+        # C3b: 镜像 artifact_produced（与 AGENT 路径 commit_agent_artifacts 的
+        # 事件面一致——reducer artifact_count / H6 dedup 状态重建 / 前端 WS
+        # 事件流均消费 artifact_produced）。产物事件在前，publication 在后。
+        # 门禁与 publication 事件同源：仅实际发布（publication 非 None）的
+        # build 才镜像产物——NO_DATA build（probe-coverage 失败 / zero-row
+        # manifest-signal 等仍会留下带 entries 的 manifest）零产物事件，否则
+        # 事件流与 BuildResult 的 available_artifact_roles=[] 矛盾。
+        events: list[EventEnvelope] = []
+        if publication is not None:
+            for index, entry in enumerate(outcome.manifest_artifacts, start=1):
+                events.append(
+                    build_event(
+                        task_id=execution.task_id,
+                        run_id=execution.run_id,
+                        sequence=index,
+                        payload=ArtifactProducedPayload(
+                            artifact=ArtifactManifestEntry(
+                                artifact_id=entry.artifact_id,
+                                role=entry.role,
+                                name=Path(entry.relative_path).name,
+                                relative_path=f"artifacts/{entry.relative_path}",
+                                media_type=entry.media_type,
+                                size_bytes=entry.size_bytes,
+                                sha256=entry.sha256,
+                                generated_by_step_id=_DATASET_BUILD_STEP_ID,
+                            )
+                        ),
+                    )
+                )
+        if publication is not None and manifest_sha256 is not None:
+            events.append(
+                build_event(
+                    task_id=execution.task_id,
+                    run_id=execution.run_id,
+                    sequence=len(events) + 1,
+                    payload=PublicationCreatedPayload(
+                        publication_id=publication.publication_id,
+                        run_id=execution.run_id,
+                        manifest_sha256=manifest_sha256,
+                        supersedes_publication_id=publication.supersedes_publication_id,
+                        published_at=publication.published_at,
+                    ),
+                )
+            )
+        return events
+
+    async def noop_abort_dataset_build() -> None:
+        return None
+
+    execution.set_completion_operations(
+        commit_dataset_build, noop_abort_dataset_build
+    )
+
+
 async def _run_sync_operation[ResultT](
     operation: Callable[[], ResultT],
 ) -> ResultT:
@@ -1386,44 +1534,23 @@ async def _run_sync_operation[ResultT](
         raise
 
 
-async def _run_pipeline_with_cancellation(execution, runner):
-    """Await an async PipelineRunner while draining it after cancellation."""
-
-    worker_task = asyncio.create_task(runner.run())
-    try:
-        return await asyncio.shield(worker_task)
-    except asyncio.CancelledError:
-        execution.context.cancellation_requested.set()
-        while not worker_task.done():
-            try:
-                await asyncio.shield(worker_task)
-            except asyncio.CancelledError:
-                continue
-            except BaseException:
-                break
-        if not worker_task.cancelled():
-            worker_task.exception()
-        raise
-
-
-def _check_fixture_bridge_cancellation(execution) -> None:
-    if execution.context.cancellation_requested.is_set():
-        raise PipelineCancelledError("fixture pipeline was cancelled")
-
-
 class FixtureRunExecutor:
-    """Run the deterministic PipelineRunner and bridge its v1 audit events."""
+    """Run the fixed V2 fixture build and bridge its durable outcome/events.
+
+    V1 退役后 FIXTURE 模式的 V2 实现：把官方 fixture 资产（GDC 表达矩阵）复制进
+    任务工作目录，用固定 DatasetBuildSpec 驱动 ``execute_dataset_build`` 内核，
+    再复用 ``_transfer_pending_publication`` 把 BuildResult 与 publication 事件
+    桥接到 durable Run（与 AGENT 模式同一转移路径）。
+    """
 
     def __init__(
         self,
         repository,
         *,
         fixture_dir: Path = OFFICIAL_FIXTURE_DIR,
-        pipeline_runner_factory=PipelineRunner,
     ) -> None:
         self._repository = repository
         self._fixture_dir = fixture_dir
-        self._pipeline_runner_factory = pipeline_runner_factory
 
     async def __call__(self, execution) -> None:
         validate_task_databases(execution.mode, execution.databases)
@@ -1431,139 +1558,63 @@ class FixtureRunExecutor:
             execution.run_id,
             execution.input,
         )
-        streamed_event_ids: set[str] = set()
-        completion_events: list[EventEnvelope] = []
+        # V2 工具只解析任务工作目录内的文件：先把 fixture 资产复制进去。
+        workdir = execution.context.work_dir
+        source_rel = "source_assets/fixture_gdc_expression.tsv"
+        asset_path = workdir.root / source_rel
+        asset_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(_fixture_gdc_expression(self._fixture_dir), asset_path)
 
-        async def persist_pipeline_event(event: EventEnvelope) -> None:
-            if event.event_id in streamed_event_ids:
-                return
-            if isinstance(event.payload, CancelRequestedPayload):
-                streamed_event_ids.add(event.event_id)
-                return
-            if isinstance(
-                event.payload,
-                (ArtifactProducedPayload, TaskCompletedPayload),
-            ):
-                completion_events.append(event)
-            else:
-                await execution.emit(
-                    event.payload,
-                    stage_attempt_id=event.stage_attempt_id,
-                    timestamp=event.timestamp,
-                )
-            streamed_event_ids.add(event.event_id)
-
-        runner = self._pipeline_runner_factory(
-            task_id=execution.task_id,
-            base_dir=self._repository.tasks_dir,
-            fixture_dir=self._fixture_dir,
-            topic=execution.input,
-            cancellation_requested=execution.context.cancellation_requested,
-            defer_publication=True,
-            run_id=execution.run_id,
+        spec = {
+            "build_id": "fixture_build",
+            "objective": execution.input or "fixture dataset build",
+            "dataset_family": "gene_expression",
+            "row_granularity": "gene_sample_measurement",
+            "schema_ref": "gene_expression.long.v1",
+            "source_bindings": [
+                {
+                    "binding_id": "binding_gdc",
+                    "source": "gdc",
+                    "acquisition": {"mode": "builtin", "provider_id": "gdc.v1"},
+                    "adapter_id": "gdc.expression.v1",
+                    "accession": "TCGA-FIXTURE",
+                }
+            ],
+            "merge_strategy": "append_by_canonical_row",
+            "validation_profile_ref": "gene_expression.release.v1",
+            "normalization_profile_ref": "gene_expression.normalization.v1",
+        }
+        tool = ToolContext(
+            context=execution.context,
+            tool_name="execute_dataset_build",
+            tool_call_id="fixture_build",
+            tool_arguments="{}",
         )
-        abort = getattr(runner, "abort", None)
-        transferred = False
-        set_event_sink = getattr(runner, "set_event_sink", None)
-        streams_events = callable(set_event_sink)
-        if callable(set_event_sink):
-            set_event_sink(persist_pipeline_event)
-        submitter = getattr(runner, "submit_user_input", None)
-        if callable(submitter):
-            execution.set_user_input_submitter(submitter)
-        try:
-            manifest = await _run_pipeline_with_cancellation(execution, runner)
-            if not streams_events:
-                for event in list(runner.events):
-                    await persist_pipeline_event(event)
-            if manifest.task_state is TaskState.CANCELLED:
-                raise PipelineCancelledError("fixture pipeline was cancelled")
-            if manifest.task_state is TaskState.FAILED:
-                raise RuntimeError("fixture pipeline failed validation or execution")
-            _check_fixture_bridge_cancellation(execution)
-            execution.set_build_result(manifest.build_result)
-
-            pending_factory = getattr(runner, "pending_publication", None)
-            pending = pending_factory() if callable(pending_factory) else None
-            publish = pending.publish if pending is not None else getattr(
-                runner,
-                "publish",
-                None,
+        raw = await execute_dataset_build.on_invoke_tool(
+            tool,
+            json.dumps(
+                {
+                    "spec": json.dumps(spec),
+                    "source_files": json.dumps({"binding_gdc": source_rel}),
+                }
+            ),
+        )
+        envelope = json.loads(raw)
+        if envelope.get("status") != "ok":
+            raise RuntimeError(
+                f"fixture build failed: {envelope.get('message', envelope)}"
             )
-            abort = pending.abort if pending is not None else abort
-            if pending is not None:
-                completion_events.insert(
-                    0,
-                    build_event(
-                        task_id=execution.task_id,
-                        run_id=execution.run_id,
-                        sequence=1,
-                        payload=ArtifactProducedPayload(
-                            artifact=pending.manifest_entry
-                        ),
-                    ),
-                )
-            if callable(publish) or completion_events or callable(abort):
+        await AgentRunExecutor._transfer_pending_publication(execution)
 
-                async def commit_fixture_completion() -> list[EventEnvelope]:
-                    if callable(publish):
-                        operation = (
-                            publish
-                            if pending is not None
-                            else partial(publish, execution.run_id)
-                        )
-                        await _run_sync_operation(operation)
-                    if pending is not None:
-                        publication_id = f"pub-{execution.run_id}"
-                        # Phase 4b T4: see commit_agent_artifacts — NO_DATA
-                        # build results must not carry a publication_id.
-                        if (
-                            execution.build_result is not None
-                            and execution.build_result.status
-                            in (BuildResultStatus.SUCCEEDED, BuildResultStatus.PARTIAL_SUCCESS)
-                        ):
-                            execution.set_build_result(
-                                execution.build_result.model_copy(
-                                    update={"publication_id": publication_id}
-                                )
-                            )
-                        publication_event = build_event(
-                            task_id=execution.task_id,
-                            run_id=execution.run_id,
-                            sequence=len(completion_events) + 1,
-                            payload=PublicationCreatedPayload(
-                                publication_id=publication_id,
-                                run_id=execution.run_id,
-                                manifest_sha256=pending.manifest_entry.sha256,
-                                supersedes_publication_id=None,
-                                published_at=datetime.now(UTC),
-                            ),
-                        )
-                        return completion_events + [publication_event]
-                    return completion_events
 
-                async def abort_fixture_completion() -> None:
-                    if callable(abort):
-                        await _run_sync_operation(abort)
+def _fixture_gdc_expression(fixture_dir: Path) -> Path:
+    """Locate the official GDC expression fixture asset.
 
-                execution.set_completion_operations(
-                    commit_fixture_completion,
-                    abort_fixture_completion,
-                )
-                transferred = True
-        except BaseException:
-            if not transferred and callable(abort):
-                try:
-                    await _run_sync_operation(abort)
-                except BaseException:
-
-                    async def abort_fixture_cleanup() -> None:
-                        await _run_sync_operation(abort)
-
-                    execution.set_completion_cleanup(abort_fixture_cleanup)
-                    transferred = True
-                    raise
-            raise
+    ``fixture_dir`` points at the GEO series fixture
+    (``tests/fixtures/ncbi/gse178352/``); the GDC expression fixture lives at
+    the shared fixture root (``tests/fixtures/gdc/gdc_expression.tsv``).
+    """
+    return fixture_dir.parents[1] / "gdc" / "gdc_expression.tsv"
 
 
 class ModeDispatchRunExecutor:

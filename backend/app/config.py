@@ -32,8 +32,13 @@ class Settings:
     # 后端
     host: str = os.getenv("HOST", "127.0.0.1")
     port: int = int(os.getenv("PORT", "8000"))
-    # 数据产物目录
-    output_dir: str = os.getenv("OUTPUT_DIR", "data/output")
+    # 数据产物目录 — 默认解析为绝对路径，避免 cwd 变化导致输出散落
+    output_dir: str = os.getenv(
+        "OUTPUT_DIR",
+        str(Path.cwd().resolve() / "data" / "output"),
+    )
+    # 爬虫行为（原 §5.3）：真实浏览器 UA 与请求间隔限速
+    rate_limit_seconds: float = float(os.getenv("RATE_LIMIT_SECONDS", "2.0"))
     # User-installed skills live outside the bundled Python package.  When
     # unset, derive a sibling of OUTPUT_DIR so packaged application upgrades
     # cannot overwrite user data.

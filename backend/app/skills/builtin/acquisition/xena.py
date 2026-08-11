@@ -39,6 +39,15 @@ logger = logging.getLogger(__name__)
 
 _XENA_HUB_BASE = "https://toil-xena-hub.s3.us-east-1.amazonaws.com"
 _XENA_DOWNLOAD_BASE = f"{_XENA_HUB_BASE}/download"
+#: Official Xena hub query endpoint (replaces the S3 ListObjectsV2 listing,
+#: which the bucket policy denies with HTTP 403). Accepts a Clojure-style
+#: query via POST with a text/plain body, as used by the official xenaPython
+#: client.
+_XENA_QUERY_URL = "https://toil.xenahubs.net/data/"
+#: ``allDatasets.xq`` — name + type for every dataset on the hub.
+_XENA_QUERY_ALL_DATASETS = (
+    "(fn [] (query {:select [:name :type] :from [:dataset]}))"
+)
 
 
 def _rate_limit() -> None:
@@ -160,14 +169,75 @@ def _parse_hub_page(
     return None
 
 
-def _fetch_hub_index() -> list[dict[str, Any]]:
-    """Fetch and parse the S3 ListObjectsV2 XML listing from the Xena public data hub.
+_XENA_TYPE_MAP = {
+    "genomicMatrix": "gene_expression",
+    "clinicalMatrix": "clinical",
+    "phenotypeMatrix": "clinical",
+    "sparseMatrix": "mutation",
+    "segmented": "copy_number",
+    "probeMap": "probe_map",
+    "genePredExt": "gene_model",
+}
 
-    Uses the S3 REST API ``?list-type=2&prefix=download/`` to enumerate objects
-    under the ``download/`` prefix, paginating via ``NextContinuationToken``.
 
-    Returns a list of dataset metadata dicts with keys:
-        dataset_id, name, type, cohort, size_bytes, last_modified
+def _hub_record_from_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Map one official hub query row (``name`` + ``type``) to a record."""
+    name = str(row.get("name", "")).strip()
+    if not name:
+        raise ValueError("hub query row missing dataset name")
+    dataset_id = name
+    for ext in (".gz", ".tsv", ".json"):
+        if dataset_id.endswith(ext):
+            dataset_id = dataset_id[: -len(ext)]
+            break
+    raw_type = str(row.get("type", "")).strip()
+    return {
+        "dataset_id": dataset_id,
+        "name": name,
+        "type": _XENA_TYPE_MAP.get(raw_type) or _classify_dataset_type(name),
+        "cohort": _extract_cohort(name),
+        "size_bytes": 0,
+        "last_modified": "",
+    }
+
+
+def _hub_records_from_query_json(content: str) -> list[dict[str, Any]]:
+    """Parse the official hub ``all-datasets`` JSON response into records."""
+    rows = json.loads(content)
+    if not isinstance(rows, list):
+        raise ValueError("hub query response is not a JSON array")
+    return [_hub_record_from_row(r) for r in rows if isinstance(r, dict)]
+
+
+def _hub_query_body() -> str:
+    """Build the POST body for the official all-datasets query."""
+    return f"({_XENA_QUERY_ALL_DATASETS} )"
+
+
+def _fetch_hub_index_via_query() -> list[dict[str, Any]]:
+    """Fetch the dataset index from the official hub query API (urllib)."""
+    request = urllib.request.Request(
+        _XENA_QUERY_URL,
+        data=_hub_query_body().encode("utf-8"),
+        headers={
+            "User-Agent": BROWSER_UA,
+            "Content-Type": "text/plain",
+            "Accept": "application/json",
+        },
+        method="POST",
+    )
+    _rate_limit()
+    with urllib.request.urlopen(request, timeout=60) as resp:
+        content = resp.read().decode("utf-8", errors="replace")
+    return _hub_records_from_query_json(content)
+
+
+def _fetch_hub_index_via_s3() -> list[dict[str, Any]]:
+    """Fetch the dataset index via the S3 ListObjectsV2 XML listing.
+
+    Retained as a fallback when the official query API is unreachable.
+    S3 listing may itself fail with HTTP 403 (bucket policy), in which case
+    the caller surfaces the error.
     """
     datasets: dict[str, dict[str, Any]] = {}
     continuation_token: str | None = None
@@ -190,8 +260,32 @@ def _fetch_hub_index() -> list[dict[str, Any]]:
     return list(datasets.values())
 
 
+def _fetch_hub_index() -> list[dict[str, Any]]:
+    """Fetch the Xena dataset index.
+
+    Primary path is the official hub query API (``POST /data/``), which the
+    S3 bucket policy does not block; the S3 ListObjectsV2 XML listing is kept
+    as a fallback for older deployments where the query endpoint is
+    unreachable.  Records carry dataset_id / name / type / cohort;
+    size_bytes and last_modified are only populated by the S3 fallback.
+    """
+    try:
+        return _fetch_hub_index_via_query()
+    except Exception as exc:
+        logger.warning(
+            "Xena hub query API failed (%s); falling back to S3 listing", exc
+        )
+        return _fetch_hub_index_via_s3()
+
+
 async def _fetch_hub_index_for_run(run_ctx: RunContext) -> list[dict[str, Any]]:
-    """Fetch Xena XML through the Run-bound crawler when available."""
+    """Fetch the Xena dataset index through the Run-bound crawler.
+
+    Primary path is the official hub query API (``POST /data/`` with a
+    text/plain body, sent via ``facade.api_request``).  When the facade does
+    not support ``api_request`` or the query fails, falls back to the S3
+    ListObjectsV2 XML listing.
+    """
 
     facade = run_ctx.crawler_facade_or_none
     if facade is None:
@@ -199,6 +293,24 @@ async def _fetch_hub_index_for_run(run_ctx: RunContext) -> list[dict[str, Any]]:
             raise RuntimeError("crawler facade is not bound to the child Run")
         return await asyncio.to_thread(_fetch_hub_index)
 
+    # Preferred: official query API via facade
+    if hasattr(facade, "api_request"):
+        try:
+            result = await facade.api_request(
+                _XENA_QUERY_URL,
+                method="POST",
+                raw_body=_hub_query_body(),
+            )
+            if not result.ok:
+                raise RuntimeError(result.error or f"HTTP {result.status_code}")
+            return _hub_records_from_query_json(result.content)
+        except Exception as exc:
+            logger.warning(
+                "Xena hub query API via facade failed (%s); falling back to S3 listing",
+                exc,
+            )
+
+    # Fallback: S3 listing
     datasets: dict[str, dict[str, Any]] = {}
     continuation_token: str | None = None
     while True:
@@ -318,11 +430,20 @@ async def search_xena(
     }, ensure_ascii=False)
 
 
-@function_tool
+@function_tool(
+    description_override=(
+        "Download a specific UCSC Xena dataset file by dataset_id "
+        "(e.g. 'TCGA.PAAD.sampleMap/HiSeqV2'). "
+        "Parameters: ``dataset_id`` (required), ``file_type`` (optional, "
+        "'tsv'), ``cohort`` (optional, informational cohort label). "
+        "Writes the decompressed file into the task raw directory."
+    ),
+)
 async def download_xena(
     ctx: RunContextWrapper[Any],
     dataset_id: str,
     file_type: str = "tsv",
+    cohort: str | None = None,
 ) -> str:
     """Download a specific UCSC Xena dataset file.
 
@@ -345,6 +466,8 @@ async def download_xena(
         file_type: Hint for the file format ("tsv" or "json"). Used only for
             the ``format_hint`` field in the response; the URL is always
             ``{dataset_id}.gz`` because Xena stores files with that naming.
+        cohort: Optional informational cohort label (e.g. "TCGA Pancreatic
+            Cancer (PAAD)"). Echoed back in the response for traceability.
 
     Returns:
         JSON with source, dataset_id, source_url, local_files, format_hint,
@@ -433,6 +556,7 @@ async def download_xena(
     return json.dumps({
         "source": "xena",
         "dataset_id": dataset_id,
+        "cohort": cohort,
         "source_url": url,
         "local_files": local_files,
         "format_hint": f"xena_{file_type}",

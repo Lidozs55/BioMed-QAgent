@@ -233,6 +233,17 @@ export interface StageItem extends ConversationItemBase {
   error: string | null;
 }
 
+export interface OperationItem extends ConversationItemBase {
+  kind: "operation";
+  operationId: string;
+  /** Display label from the wire event (may be empty); fallbacks applied at render. */
+  label: string | null;
+  category: string | null;
+  status: "running" | "completed" | "failed" | "skipped" | "cancelled";
+  progress: { kind: string; current: number; total: number | null } | null;
+  error: string | null;
+}
+
 export interface ProgressItem extends ConversationItemBase {
   kind: "progress";
   stage: StageName;
@@ -254,6 +265,11 @@ export interface ArtifactItem extends ConversationItemBase {
   sizeBytes: number;
   mediaType: string;
 }
+export interface BuildReportItem extends ConversationItemBase {
+  kind: "build_report";
+  taskId: string;
+  buildId: string;
+}
 
 export type ConversationItem =
   | UserMessageItem
@@ -261,9 +277,11 @@ export type ConversationItem =
   | ReasoningItem
   | ToolCallItem
   | StageItem
+  | OperationItem
   | ProgressItem
   | WarningItem
-  | ArtifactItem;
+  | ArtifactItem
+  | BuildReportItem;
 
 export interface SequenceGapMarker {
   expected: number;

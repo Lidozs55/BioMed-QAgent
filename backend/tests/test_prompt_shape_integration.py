@@ -56,18 +56,21 @@ def test_instructions_guide_single_gene_analysis_to_gene_level_matrix() -> None:
     """REVIEW §3.2 (0805): the Agent prompt must guide single-gene differential
     analysis toward GDC/Xena gene-level matrices (gene symbol directly
     queryable, no probe→gene annotation step) instead of defaulting to
-    probe-level GEO arrays."""
+    probe-level GEO arrays.
+
+    0809 §7.2 后：详细策略移入 research_data_guidance 技能（expression_omics
+    /cleaning 专题），prompt 保留路由入口 + 兜底纪律。
+    """
     from app.agent_loop.agent import INSTRUCTIONS
 
-    # Strategy list (step 1) names the single-gene analysis path.
-    assert "单基因/靶基因差异分析" in INSTRUCTIONS
-    assert "GDC/Xena 基因级 RNA-seq 矩阵" in INSTRUCTIONS
-    # Channel reference (step 2) prioritizes gene-level matrices for it.
-    assert "基因级 RNA-seq 矩阵" in INSTRUCTIONS
-    assert "probe→gene 注释映射" in INSTRUCTIONS
-    # The core_data_existence recovery guidance no longer unconditionally
-    # pushes microarray; it redirects single-gene goals to GDC/Xena first.
+    # 路由入口（第 1 步）：通过技能加载表达谱/多组学专题指导，点名基因级 vs probe 级。
+    assert "research_data_guidance" in INSTRUCTIONS
+    assert "RNA-seq vs 微阵列" in INSTRUCTIONS
+    assert "基因级 vs probe 级" in INSTRUCTIONS
+    # 兜底纪律仍在 prompt：单基因/靶基因目标优先改用 GDC/Xena 基因级矩阵，
+    # 不默认落到 probe 级 GEO 阵列。
     assert "若目标是单基因/靶基因分析" in INSTRUCTIONS
+    assert "GDC/Xena 的基因级矩阵" in INSTRUCTIONS
     assert "microarray 优先于" in INSTRUCTIONS
 
 
@@ -77,17 +80,26 @@ def test_describe_geo_is_mandatory_vetting_gate_before_pipeline() -> None:
     聚焦阵列做共病机制）根因是未 vetting 即提交，工具已存在（skill 层），
     需要的是执行纪律的 prompt gate。"""
     from app.agent_loop.agent import INSTRUCTIONS
-    from app.pipeline.tool import run_research_pipeline
 
     # INSTRUCTIONS 必须把 describe_geo 设为 GEO 提交前的强制步骤，
-    # 并要求不匹配主题的数据集不得提交。
+    # 并要求不匹配主题的数据集不得提交（V1 工具已退役，vetting gate 纪律
+    # 完全由 prompt 承载）。
     assert "describe_geo" in INSTRUCTIONS
     assert "vetting" in INSTRUCTIONS.lower() or "不匹配" in INSTRUCTIONS
-    # 工具描述必须把 describe_geo 提升为提交 gse 前的强制 vetting，
-    # 而非仅提及工具名。
-    description = run_research_pipeline.description
-    assert "describe_geo" in description
-    assert "must" in description.lower() or "必须" in description
+    assert "未 vetting 的 GSE 不得提交给 `execute_dataset_build`" in INSTRUCTIONS
+    # probe 平台必须在 spec 声明 AdapterParams（vetting 的 spec 侧纪律）。
+    assert "AdapterParams" in INSTRUCTIONS
+
+
+def test_instructions_require_gpl_annotation_via_mapping_files_for_probe_builds() -> None:
+    """REVIEW_2026-08-09 §7.1 P0: probe 平台（微阵列）的基因级构建必须在
+    prompt 中要求先下载 GPL 平台注释，并经 execute_dataset_build 的
+    mapping_files 参数传入；无注释时不得用 probe 数据冒充基因级结果。"""
+    from app.agent_loop.agent import INSTRUCTIONS
+
+    assert "download_geo_platform_annotation" in INSTRUCTIONS
+    assert "mapping_files" in INSTRUCTIONS
+    assert "probe_release.v1" in INSTRUCTIONS
 
 
 # ---------------------------------------------------------------------------

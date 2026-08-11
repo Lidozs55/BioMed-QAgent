@@ -8,7 +8,9 @@ from app.domain.contracts import (
     ArtifactManifestEntry,
     ArtifactProducedPayload,
     AssistantDeltaPayload,
+    AssistantReasoningDeltaPayload,
     EventEnvelope,
+    OperationStartedPayload,
     PublicationCreatedPayload,
     RunCancelledPayload,
     RunCancelRequestedPayload,
@@ -23,6 +25,8 @@ from app.domain.contracts import (
     TaskMode,
     TaskSnapshot,
     TaskSummary,
+    ToolStartedPayload,
+    WarningPayload,
     build_event,
 )
 from app.domain.contracts.dataset_state import ArtifactRole
@@ -232,19 +236,85 @@ def test_reducer_accepts_new_run_after_prior_run_is_terminal() -> None:
     assert snapshot.task.status is RunStatus.QUEUED
 
 
-def test_terminal_run_is_immutable() -> None:
+def _completed_snapshot() -> TaskSnapshot:
     snapshot = queued_snapshot()
     for sequence, payload in enumerate(
         [RunStartedPayload(), RunFinalizingPayload(), RunCompletedPayload()],
         start=2,
     ):
         snapshot = reduce_task_event(snapshot, runtime_event(sequence, payload))
+    return snapshot
 
-    with pytest.raises(ValueError, match="terminal"):
-        reduce_task_event(
-            snapshot,
-            runtime_event(5, AssistantDeltaPayload(delta="too late")),
+
+@pytest.mark.parametrize(
+    "late_payload",
+    [
+        AssistantDeltaPayload(delta="too late"),
+        OperationStartedPayload(operation_id="op_1", label="检索", category="discovery", attempt=1),
+        ToolStartedPayload(tool_call_id="call_1", tool_name="search"),
+        WarningPayload(message="late warning", code="late"),
+    ],
+)
+def test_late_tolerable_event_after_terminal_run_is_ignored_with_counter(
+    late_payload: object,
+) -> None:
+    # C5c: 非权威迟到事件（assistant/tool/operation/warning 等）不再抛
+    # "terminal run is immutable"——replay 安全：忽略并累计 dropped 计数。
+    snapshot = _completed_snapshot()
+
+    reduced = reduce_task_event(snapshot, runtime_event(5, late_payload))
+
+    assert reduced.runs[0].status is RunStatus.COMPLETED
+    assert reduced.runs[0].dropped_late_events == 1
+    assert reduced.task.latest_sequence == 5
+
+
+def test_late_tolerable_events_accumulate_counter_and_keep_sequence_advancing() -> None:
+    snapshot = _completed_snapshot()
+    for sequence, payload in enumerate(
+        [
+            AssistantDeltaPayload(delta="a"),
+            OperationStartedPayload(operation_id="op_1", label="l", category="c", attempt=1),
+            AssistantReasoningDeltaPayload(delta="r"),
+        ],
+        start=5,
+    ):
+        snapshot = reduce_task_event(snapshot, runtime_event(sequence, payload))
+
+    assert snapshot.runs[0].dropped_late_events == 3
+    assert snapshot.runs[0].status is RunStatus.COMPLETED
+    assert snapshot.task.latest_sequence == 7
+
+
+def test_late_authoritative_event_after_terminal_run_still_rejected() -> None:
+    # C5c: 权威事件（run 生命周期转换）迟到仍保持严格——防静默覆盖终态。
+    snapshot = _completed_snapshot()
+
+    with pytest.raises(ValueError, match="terminal run is immutable"):
+        reduce_task_event(snapshot, runtime_event(5, RunStartedPayload()))
+    with pytest.raises(ValueError, match="terminal run is immutable"):
+        reduce_task_event(snapshot, runtime_event(6, RunFailedPayload(error="x")))
+
+
+def test_late_artifact_produced_after_terminal_run_is_ignored() -> None:
+    snapshot = _completed_snapshot()
+    payload = ArtifactProducedPayload(
+        artifact=ArtifactManifestEntry(
+            artifact_id="artifact_1",
+            role=ArtifactRole.PRIMARY_DATASET,
+            name="primary.csv",
+            relative_path="artifacts/primary.csv",
+            media_type="text/csv",
+            size_bytes=10,
+            sha256="0" * 64,
+            generated_by_step_id="stage_1",
         )
+    )
+
+    reduced = reduce_task_event(snapshot, runtime_event(5, payload))
+
+    assert reduced.runs[0].dropped_late_events == 1
+    assert reduced.task.artifact_count == 0  # 迟到产物不计入 artifact_count
 
 
 def test_queued_run_can_be_cancelled_without_starting() -> None:
@@ -312,6 +382,47 @@ def _snapshot_fixture() -> TaskSnapshot:
     )
 
 
+def _active_run_fixture() -> TaskSnapshot:
+    """Two FINALIZING runs; publication events may reference either.
+
+    C1b: publication_created is only accepted on non-terminal runs (the
+    dedicated branch). Terminal-run publication tests now assert the
+    ignore-with-counter path instead, so these fixture usages moved to an
+    ACTIVE run to keep exercising the dedicated branch.
+    """
+    return TaskSnapshot(
+        task=TaskSummary(
+            task_id="task_1",
+            mode=TaskMode.AGENT,
+            title="TP53 datasets",
+            status=RunStatus.FINALIZING,
+            active_run_id="run_1",
+            created_at=NOW,
+            updated_at=NOW,
+        ),
+        runs=[
+            RunRecord(
+                run_id="run_1",
+                task_id="task_1",
+                request_id="req_1",
+                status=RunStatus.FINALIZING,
+                input="first question",
+                created_at=NOW,
+                updated_at=NOW,
+            ),
+            RunRecord(
+                run_id="run_2",
+                task_id="task_1",
+                request_id="req_2",
+                status=RunStatus.FINALIZING,
+                input="second question",
+                created_at=NOW,
+                updated_at=NOW,
+            ),
+        ],
+    )
+
+
 def _queued_run_fixture() -> TaskSnapshot:
     """One QUEUED run that can legally reach any terminal status."""
     return TaskSnapshot(
@@ -339,7 +450,7 @@ def _queued_run_fixture() -> TaskSnapshot:
 
 
 def test_publication_events_build_chain() -> None:
-    snapshot = _snapshot_fixture()
+    snapshot = _active_run_fixture()
     first = reduce_task_event(
         snapshot,
         _envelope(
@@ -370,16 +481,16 @@ def test_publication_events_build_chain() -> None:
     assert second.current_publication_id == "pub-run_2"
     assert second.publications[1].supersedes_publication_id == "pub-run_1"
     # Publication events never touch run or task status.
-    assert second.task.status is RunStatus.COMPLETED
+    assert second.task.status is RunStatus.FINALIZING
     assert [run.status for run in second.runs] == [
-        RunStatus.COMPLETED,
-        RunStatus.COMPLETED,
+        RunStatus.FINALIZING,
+        RunStatus.FINALIZING,
     ]
 
 
 def test_publication_events_honor_explicit_supersedes() -> None:
     reduced = reduce_task_event(
-        _snapshot_fixture(),
+        _active_run_fixture(),
         _envelope(
             2,
             PublicationCreatedPayload(
@@ -401,7 +512,7 @@ def test_duplicate_publication_event_is_a_no_op() -> None:
     # Identical duplicates (same sha256, same published_at, same supersedes)
     # are a no-op; conflicting duplicates raise ValueError.
     published_at = NOW + timedelta(seconds=2)
-    snapshot = _snapshot_fixture()
+    snapshot = _active_run_fixture()
     first = reduce_task_event(
         snapshot,
         _envelope(
@@ -436,7 +547,7 @@ def test_duplicate_publication_event_is_a_no_op() -> None:
 def test_duplicate_publication_event_with_different_fields_raises() -> None:
     # A re-delivered publication_created event with different immutable fields
     # (manifest_sha256, published_at, or supersedes) must raise ValueError.
-    snapshot = _snapshot_fixture()
+    snapshot = _active_run_fixture()
     first = reduce_task_event(
         snapshot,
         _envelope(
@@ -478,6 +589,46 @@ def test_publication_event_rejects_payload_envelope_run_id_mismatch() -> None:
                 ),
             ),
         )
+
+
+def _completed_run_fixture() -> TaskSnapshot:
+    """Transition a QUEUED run through to COMPLETED (a terminal run)."""
+    snapshot = _queued_run_fixture()
+    for sequence, payload in enumerate(
+        [RunStartedPayload(), RunFinalizingPayload(), RunCompletedPayload()],
+        start=2,
+    ):
+        snapshot = reduce_task_event(snapshot, _envelope(sequence, payload))
+    return snapshot
+
+
+def test_publication_created_on_terminal_run_is_ignored_with_counter() -> None:
+    # C1b: reducer must not accept a publication_created for a run that has
+    # already reached a terminal state. A late/out-of-order publication event
+    # is non-authoritative — ignore it (no second publication, no raise) and
+    # count it via the C5c dropped-late mechanism.
+    snapshot = _completed_run_fixture()
+    assert snapshot.runs[0].status is RunStatus.COMPLETED
+
+    reduced = reduce_task_event(
+        snapshot,
+        _envelope(
+            5,
+            PublicationCreatedPayload(
+                publication_id="pub-late",
+                run_id="run_1",
+                manifest_sha256="d" * 64,
+                published_at=NOW + timedelta(seconds=5),
+            ),
+        ),
+    )
+
+    # 不抛错、不产生 second publication、current_publication_id 不变。
+    assert reduced.publications == []
+    assert reduced.current_publication_id is None
+    assert reduced.runs[0].status is RunStatus.COMPLETED
+    assert reduced.runs[0].dropped_late_events == 1
+    assert reduced.task.latest_sequence == 5
 
 
 def test_terminal_events_populate_run_summary() -> None:

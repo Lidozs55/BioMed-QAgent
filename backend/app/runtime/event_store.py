@@ -319,6 +319,11 @@ class EventStore:
             latest_sequence=latest_sequence,
         )
 
+    def forget(self, task_id: str) -> None:
+        """Drop in-memory checkpoint state for a deleted task (C5d hygiene)."""
+
+        self._checkpoints.pop(task_id, None)
+
     @staticmethod
     def _validate_event(
         value: dict[str, Any] | None,

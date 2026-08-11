@@ -39,6 +39,18 @@ def test_settings_has_output_dir() -> None:
     assert len(settings.output_dir) > 0
 
 
+def test_output_dir_default_is_absolute() -> None:
+    """OUTPUT_DIR 默认值是绝对路径，避免 cwd 变化导致输出散落。"""
+    configured = Settings()
+    assert Path(configured.output_dir).is_absolute()
+
+
+def test_rate_limit_settings_default() -> None:
+    """rate_limit_seconds 提供可配置默认值。"""
+    configured = Settings()
+    assert configured.rate_limit_seconds == 2.0
+
+
 def test_settings_is_frozen() -> None:
     """Settings 是 frozen dataclass，不可变。"""
     import pytest

@@ -5,10 +5,16 @@
 
 import { APIError } from "@/hooks/settingsContracts";
 import type {
+  BindingFailureDetail,
+  BuildDetail,
+  BuildPage,
   BuildResult,
   BuildResultStatus,
+  DatasetManifest,
+  DatasetPublication,
   ErrorCode,
   EventPage,
+  ManifestArtifactEntry,
   MessagePage,
   PublicationSummary,
   RunSummary,
@@ -19,7 +25,7 @@ import type {
 } from "@/runtime/contracts";
 import { parseEventPayload } from "@/lib/eventParsers";
 import {
-  assertString, assertNumber, assertObject, assertArray, assertStringOrNull, assertOptionalNull, assertFinite, optSchemaVersion, assertHex64, assertNonNegativeInt,
+  assertString, assertNumber, assertObject, assertArray, assertStringOrNull, assertOptionalNull, assertFinite, optSchemaVersion, assertHex64, assertNonNegativeInt, assertJsonRecord,
 } from "@/lib/eventValidatorHelpers";
 
 function optionalNumber(value: unknown): number | undefined {
@@ -33,6 +39,7 @@ const RUNTIME_EVENT_TYPES = new Set([
   "run_queued", "run_started", "run_finalizing", "run_completed", "run_failed",
   "run_cancel_requested", "run_cancelled", "run_interrupted", "publication_created",
   "assistant_delta", "assistant_reasoning_delta", "tool_started", "conversation_compacted",
+  "operation_started", "operation_progress", "operation_completed", "operation_failed",
   "subagent_queued", "subagent_started", "subagent_progress", "subagent_completed",
   "subagent_failed", "subagent_cancel_requested", "subagent_cancelled",
   "subagent_interrupted", "subagent_input_required", "subagent_input_resumed",
@@ -78,7 +85,7 @@ function assertEventSchemaVersion(v: unknown, path: string): "1.0" | "2.0" {
   throw new APIError(502, `Expected "1.0"|"2.0" at ${path}, got ${String(v)}`);
 }
 
-export function assertEventType(v: unknown, path: string): "task_created" | "plan_ready" | "user_input_required" | "user_input_resumed" | "stage_started" | "stage_completed" | "stage_failed" | "stage_skipped" | "stage_progress" | "tool_called" | "tool_completed" | "tool_started" | "warning" | "artifact_produced" | "task_cancel_requested" | "task_cancelled" | "task_recovered" | "task_completed" | "task_failed" | "run_queued" | "run_started" | "run_finalizing" | "run_completed" | "run_failed" | "run_cancel_requested" | "run_cancelled" | "run_interrupted" | "publication_created" | "assistant_delta" | "assistant_reasoning_delta" | "conversation_compacted" | "subagent_queued" | "subagent_started" | "subagent_progress" | "subagent_completed" | "subagent_failed" | "subagent_cancel_requested" | "subagent_cancelled" | "subagent_interrupted" | "subagent_input_required" | "subagent_input_resumed" {
+export function assertEventType(v: unknown, path: string): "task_created" | "plan_ready" | "user_input_required" | "user_input_resumed" | "stage_started" | "stage_completed" | "stage_failed" | "stage_skipped" | "stage_progress" | "tool_called" | "tool_completed" | "tool_started" | "warning" | "artifact_produced" | "task_cancel_requested" | "task_cancelled" | "task_recovered" | "task_completed" | "task_failed" | "run_queued" | "run_started" | "run_finalizing" | "run_completed" | "run_failed" | "run_cancel_requested" | "run_cancelled" | "run_interrupted" | "publication_created" | "assistant_delta" | "assistant_reasoning_delta" | "conversation_compacted" | "operation_started" | "operation_progress" | "operation_completed" | "operation_failed" | "subagent_queued" | "subagent_started" | "subagent_progress" | "subagent_completed" | "subagent_failed" | "subagent_cancel_requested" | "subagent_cancelled" | "subagent_interrupted" | "subagent_input_required" | "subagent_input_resumed" {
   if (typeof v !== "string") throw new APIError(502, `Expected event type string at ${path}, got ${typeof v}`);
   switch (v) {
     case "task_created": case "plan_ready": case "user_input_required": case "user_input_resumed":
@@ -88,6 +95,7 @@ export function assertEventType(v: unknown, path: string): "task_created" | "pla
     case "run_queued": case "run_started": case "run_finalizing": case "run_completed": case "run_failed":
     case "run_cancel_requested": case "run_cancelled": case "run_interrupted": case "publication_created":
     case "assistant_delta": case "assistant_reasoning_delta": case "conversation_compacted":
+    case "operation_started": case "operation_progress": case "operation_completed": case "operation_failed":
     case "subagent_queued": case "subagent_started": case "subagent_progress": case "subagent_completed":
     case "subagent_failed": case "subagent_cancel_requested": case "subagent_cancelled":
     case "subagent_interrupted": case "subagent_input_required": case "subagent_input_resumed":
@@ -179,7 +187,21 @@ function parseBuildResult(json: unknown, path: string): BuildResult {
     reason_codes: assertArray(Reflect.get(obj, "reason_codes"), `${path}.reason_codes`, (value, index) => assertString(value, `${path}.reason_codes[${index}]`)),
     user_summary: assertString(Reflect.get(obj, "user_summary"), `${path}.user_summary`),
     recommended_next_action: assertString(Reflect.get(obj, "recommended_next_action"), `${path}.recommended_next_action`),
+    build_id: assertOptionalNull(Reflect.get(obj, "build_id"), `${path}.build_id`, (value, p) => assertString(value, p, true)),
+    binding_failures: parseBindingFailures(Reflect.get(obj, "binding_failures"), `${path}.binding_failures`),
   };
+}
+
+function parseBindingFailures(value: unknown, path: string): BindingFailureDetail[] {
+  if (value === undefined || value === null) return [];
+  return assertArray(value, path, (entry, index) => {
+    const obj = assertObject(entry, `${path}[${index}]`);
+    return {
+      binding_id: assertString(Reflect.get(obj, "binding_id"), `${path}[${index}].binding_id`, true),
+      reason_code: assertString(Reflect.get(obj, "reason_code"), `${path}[${index}].reason_code`, true),
+      message: assertString(Reflect.get(obj, "message"), `${path}[${index}].message`),
+    };
+  });
 }
 
 function parseRunSummary(json: unknown, path: string): RunSummary {
@@ -297,6 +319,11 @@ export function parseTaskSnapshot(json: unknown): TaskSnapshot {
       updated_at: assertString(Reflect.get(task, "updated_at"), "task.updated_at"),
       latest_sequence: assertNumber(Reflect.get(task, "latest_sequence"), "task.latest_sequence"),
       artifact_count: optionalNumber(Reflect.get(task, "artifact_count")),
+      latest_build_status: assertOptionalNull(
+        Reflect.get(task, "latest_build_status"),
+        "task.latest_build_status",
+        assertBuildResultStatus,
+      ),
     },
     runs: assertArray(Reflect.get(obj, "runs"), "runs", parseRunRecord),
     messages: assertArray(Reflect.get(obj, "messages"), "messages", parseMessageRecord),
@@ -335,6 +362,11 @@ function parseTaskSummary(json: unknown, path: string): TaskPage["active_items"]
     updated_at: assertString(Reflect.get(obj, "updated_at"), `${path}.updated_at`),
     latest_sequence: assertNumber(Reflect.get(obj, "latest_sequence"), `${path}.latest_sequence`),
     artifact_count: optionalNumber(Reflect.get(obj, "artifact_count")),
+    latest_build_status: assertOptionalNull(
+      Reflect.get(obj, "latest_build_status"),
+      `${path}.latest_build_status`,
+      assertBuildResultStatus,
+    ),
   };
 }
 
@@ -438,5 +470,112 @@ function parseEventEnvelope(json: unknown, idx: number): EventPage["events"][num
     sequence: sequence,
     timestamp: assertString(Reflect.get(obj, "timestamp"), `events[${idx}].timestamp`),
     payload,
+  };
+}
+
+/* ---- V2 builds (Phase 7 T1 backend contract) ---- */
+
+function parseArtifactRole(
+  v: unknown,
+  path: string,
+): ManifestArtifactEntry["role"] {
+  if (typeof v !== "string") throw new APIError(502, `Expected ArtifactRole string at ${path}, got ${typeof v}`);
+  switch (v) {
+    case "primary_dataset":
+    case "supporting_dataset":
+    case "schema":
+    case "provenance":
+    case "audit_report":
+      return v;
+    default:
+      throw new APIError(502, `Invalid ArtifactRole "${v}" at ${path}`);
+  }
+}
+
+function parseManifestArtifactEntry(
+  json: unknown,
+  path: string,
+): ManifestArtifactEntry {
+  const obj = assertObject(json, path);
+  return {
+    artifact_id: assertString(Reflect.get(obj, "artifact_id"), `${path}.artifact_id`, true),
+    role: parseArtifactRole(Reflect.get(obj, "role"), `${path}.role`),
+    relative_path: assertString(Reflect.get(obj, "relative_path"), `${path}.relative_path`, true),
+    media_type: assertString(Reflect.get(obj, "media_type"), `${path}.media_type`, true),
+    size_bytes: assertNonNegativeInt(Reflect.get(obj, "size_bytes"), `${path}.size_bytes`),
+    sha256: assertString(Reflect.get(obj, "sha256"), `${path}.sha256`, true),
+  };
+}
+
+function parseDatasetManifest(json: unknown, path: string): DatasetManifest {
+  const obj = assertObject(json, path);
+  return {
+    manifest_id: assertString(Reflect.get(obj, "manifest_id"), `${path}.manifest_id`, true),
+    task_id: assertString(Reflect.get(obj, "task_id"), `${path}.task_id`, true),
+    build_id: assertString(Reflect.get(obj, "build_id"), `${path}.build_id`, true),
+    dataset_family: assertString(Reflect.get(obj, "dataset_family"), `${path}.dataset_family`, true),
+    row_granularity: assertString(Reflect.get(obj, "row_granularity"), `${path}.row_granularity`, true),
+    schema_ref: assertString(Reflect.get(obj, "schema_ref"), `${path}.schema_ref`, true),
+    primary_key: assertArray(Reflect.get(obj, "primary_key"), `${path}.primary_key`, (value, index) => assertString(value, `${path}.primary_key[${index}]`)),
+    row_count: assertNonNegativeInt(Reflect.get(obj, "row_count"), `${path}.row_count`),
+    sha256: assertString(Reflect.get(obj, "sha256"), `${path}.sha256`, true),
+    artifacts: assertArray(Reflect.get(obj, "artifacts"), `${path}.artifacts`, (value, index) => parseManifestArtifactEntry(value, `${path}.artifacts[${index}]`)),
+    source_summary: assertJsonRecord(Reflect.get(obj, "source_summary"), `${path}.source_summary`),
+    validation_summary: assertJsonRecord(Reflect.get(obj, "validation_summary"), `${path}.validation_summary`),
+    confidence_summary: assertJsonRecord(Reflect.get(obj, "confidence_summary"), `${path}.confidence_summary`),
+    provenance_summary: assertJsonRecord(Reflect.get(obj, "provenance_summary"), `${path}.provenance_summary`),
+  };
+}
+
+function parseDatasetPublication(
+  json: unknown,
+  path: string,
+): DatasetPublication {
+  const obj = assertObject(json, path);
+  return {
+    publication_id: assertString(Reflect.get(obj, "publication_id"), `${path}.publication_id`, true),
+    manifest_ref: assertString(Reflect.get(obj, "manifest_ref"), `${path}.manifest_ref`, true),
+    validation_result_ref: assertString(Reflect.get(obj, "validation_result_ref"), `${path}.validation_result_ref`, true),
+    published_at: assertString(Reflect.get(obj, "published_at"), `${path}.published_at`, true),
+    supersedes_publication_id: assertStringOrNull(Reflect.get(obj, "supersedes_publication_id"), `${path}.supersedes_publication_id`),
+  };
+}
+
+function parseBuildSummary(json: unknown, path: string): BuildPage["items"][number] {
+  const obj = assertObject(json, path);
+  return {
+    build_id: assertString(Reflect.get(obj, "build_id"), `${path}.build_id`, true),
+    task_id: assertString(Reflect.get(obj, "task_id"), `${path}.task_id`, true),
+    dataset_family: assertString(Reflect.get(obj, "dataset_family"), `${path}.dataset_family`, true),
+    row_granularity: assertString(Reflect.get(obj, "row_granularity"), `${path}.row_granularity`, true),
+    schema_ref: assertString(Reflect.get(obj, "schema_ref"), `${path}.schema_ref`, true),
+    row_count: assertNonNegativeInt(Reflect.get(obj, "row_count"), `${path}.row_count`),
+    status: assertBuildResultStatus(Reflect.get(obj, "status"), `${path}.status`),
+    publication_id: assertStringOrNull(Reflect.get(obj, "publication_id"), `${path}.publication_id`),
+    manifest_ref: assertString(Reflect.get(obj, "manifest_ref"), `${path}.manifest_ref`, true),
+    manifest_sha256: assertString(Reflect.get(obj, "manifest_sha256"), `${path}.manifest_sha256`, true),
+    published_at: assertOptionalNull(Reflect.get(obj, "published_at"), `${path}.published_at`, (value, p) => assertString(value, p)),
+    build_result: assertOptionalNull(Reflect.get(obj, "build_result"), `${path}.build_result`, (value, p) => parseBuildResult(value, p)),
+  };
+}
+
+export function parseBuildPage(json: unknown): BuildPage {
+  const obj = assertObject(json, "builds response");
+  return {
+    items: assertArray(Reflect.get(obj, "items"), "builds response.items", (value, index) => parseBuildSummary(value, `builds response.items[${index}]`)),
+    next_cursor: assertStringOrNull(Reflect.get(obj, "next_cursor"), "builds response.next_cursor"),
+  };
+}
+
+export function parseBuildDetail(json: unknown): BuildDetail {
+  const obj = assertObject(json, "build response");
+  return {
+    build_id: assertString(Reflect.get(obj, "build_id"), "build response.build_id", true),
+    task_id: assertString(Reflect.get(obj, "task_id"), "build response.task_id", true),
+    manifest_ref: assertString(Reflect.get(obj, "manifest_ref"), "build response.manifest_ref", true),
+    build_result: assertOptionalNull(Reflect.get(obj, "build_result"), "build response.build_result", (value, p) => parseBuildResult(value, p)),
+    manifest: parseDatasetManifest(Reflect.get(obj, "manifest"), "build response.manifest"),
+    publication: assertOptionalNull(Reflect.get(obj, "publication"), "build response.publication", (value, p) => parseDatasetPublication(value, p)),
+    artifacts: assertArray(Reflect.get(obj, "artifacts"), "build response.artifacts", (value, index) => parseManifestArtifactEntry(value, `build response.artifacts[${index}]`)),
   };
 }

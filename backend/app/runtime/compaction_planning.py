@@ -41,6 +41,10 @@ _TERMINAL_RUN_STATUSES = {
 class HistoryAlignmentError(ValueError):
     """Raised when raw conversational groups have no unique Run mapping."""
 
+    def __init__(self, message: str, *, reason: str = "impossible") -> None:
+        super().__init__(message)
+        self.reason = reason
+
 
 class CompactionCancelledError(RuntimeError):
     """Raised when cancellation wins before a new Agent Run starts."""
@@ -197,9 +201,13 @@ def align_groups_to_records(
 
     count = mapping_count(0, 0)
     if count == 0:
-        raise HistoryAlignmentError("conversation history alignment is impossible")
+        raise HistoryAlignmentError(
+            "conversation history alignment is impossible", reason="impossible"
+        )
     if count > 1:
-        raise HistoryAlignmentError("conversation history alignment is ambiguous")
+        raise HistoryAlignmentError(
+            "conversation history alignment is ambiguous", reason="ambiguous"
+        )
 
     aligned: list[ConversationRun] = []
     record_index = 0
@@ -213,6 +221,40 @@ def align_groups_to_records(
                 break
             record_index += 1
     return aligned
+
+
+def align_groups_with_in_flight(
+    groups: list[tuple[TResponseInputItem, ...]],
+    records: list[Any],
+) -> tuple[list[ConversationRun], list[tuple[TResponseInputItem, ...]]]:
+    """Align the longest uniquely-alignable prefix, peeling the live tail.
+
+    Continuation preflights run while the current Run is still ``RUNNING``: its
+    live group (SDK input copy + assistant/tool items) sits in the session with
+    no terminal Run record, which made ``align_groups_to_records`` raise
+    ``impossible`` and the fallback empty the session ("Prepared model input is
+    empty" run failure). Trailing groups without a record are the live
+    in-flight conversation: they are peeled off before alignment and returned
+    so the caller can retain them verbatim. ``ambiguous`` mappings (duplicate
+    inputs) keep their conservative fallback semantics and propagate.
+    """
+
+    try:
+        return align_groups_to_records(groups, records), []
+    except HistoryAlignmentError as error:
+        if error.reason == "ambiguous":
+            raise
+    for split in range(len(groups) - 1, -1, -1):
+        try:
+            aligned = align_groups_to_records(groups[:split], records)
+        except HistoryAlignmentError as error:
+            if error.reason == "ambiguous":
+                raise
+            continue
+        return aligned, groups[split:]
+    raise HistoryAlignmentError(
+        "conversation history alignment is impossible", reason="impossible"
+    )
 
 
 def flatten(runs: list[ConversationRun]) -> list[TResponseInputItem]:
@@ -295,14 +337,15 @@ def build_history_view(
 
     records = terminal_runs(snapshot)
     if not record:
-        runs = align_groups_to_records(groups, records)
+        aligned, in_flight = align_groups_with_in_flight(groups, records)
+        segments = [ConversationSegment((run.run_id,), run.items) for run in aligned]
+        if in_flight:
+            segments.append(ConversationSegment((), tuple(flatten_groups(in_flight))))
         return HistoryView(
             summary=None,
             covered_runs=(),
             covered_through_run_id=None,
-            segments=tuple(
-                ConversationSegment((run.run_id,), run.items) for run in runs
-            ),
+            segments=tuple(segments),
             degraded_alignment=False,
         )
     summary, covered_index, covered_count = validate_summary_anchor(record, records, groups)
@@ -314,7 +357,7 @@ def build_history_view(
     suffix_groups = groups[covered_count:]
     suffix_records = records[covered_index + 1 :]
     try:
-        suffix = align_groups_to_records(suffix_groups, suffix_records)
+        suffix, in_flight = align_groups_with_in_flight(suffix_groups, suffix_records)
     except HistoryAlignmentError:
         return HistoryView(
             summary=summary,
@@ -323,11 +366,14 @@ def build_history_view(
             segments=(ConversationSegment((), tuple(flatten_groups(suffix_groups))),),
             degraded_alignment=True,
         )
+    segments = [ConversationSegment((run.run_id,), run.items) for run in suffix]
+    if in_flight:
+        segments.append(ConversationSegment((), tuple(flatten_groups(in_flight))))
     return HistoryView(
         summary=summary,
         covered_runs=tuple(covered_runs),
         covered_through_run_id=covered_runs[-1].run_id,
-        segments=tuple(ConversationSegment((run.run_id,), run.items) for run in suffix),
+        segments=tuple(segments),
         degraded_alignment=False,
     )
 
@@ -410,8 +456,10 @@ def select_coverage_prefix(
         > request.budget.target_tokens
     ):
         segment = candidate.pop(0)
-        if segment.run_ids:
-            to_cover.append(ConversationRun(segment.run_ids[0], segment.items))
+        if not segment.run_ids:
+            # 尾部在飞段（无 durable run）是活动会话，永不进摘要。
+            break
+        to_cover.append(ConversationRun(segment.run_ids[0], segment.items))
     return to_cover
 
 

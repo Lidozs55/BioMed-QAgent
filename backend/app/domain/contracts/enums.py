@@ -14,6 +14,9 @@ class Database(StrEnum):
     REACTOME = "reactome"
     PUBCHEM = "pubchem"
     BROWSER = "browser"
+    # B4: Agent-only research sources — never accepted as verified build sources.
+    UNIPROT = "uniprot"
+    CHEMBL = "chembl"
 
 
 class SourceCapability(StrEnum):
@@ -44,9 +47,11 @@ SOURCE_CAPABILITIES: dict[Database, SourceCapability] = {
     Database.PDB: SourceCapability.RESEARCH_ONLY,
     Database.PUBCHEM: SourceCapability.RESEARCH_ONLY,
     Database.BROWSER: SourceCapability.RESEARCH_ONLY,
+    Database.UNIPROT: SourceCapability.RESEARCH_ONLY,
+    Database.CHEMBL: SourceCapability.RESEARCH_ONLY,
 }
 
-# Stable identifier aliases users may pass to run_research_pipeline
+# Stable identifier aliases users may pass to pipeline/skill entry points
 # (e.g. "xena" for ucsc_xena). Keys are user-facing identifiers.
 DATABASE_IDENTIFIER_ALIASES: dict[str, Database] = {
     "pubmed": Database.PUBMED,
@@ -58,30 +63,9 @@ DATABASE_IDENTIFIER_ALIASES: dict[str, Database] = {
     "reactome": Database.REACTOME,
     "pubchem": Database.PUBCHEM,
     "browser": Database.BROWSER,
+    "uniprot": Database.UNIPROT,
+    "chembl": Database.CHEMBL,
 }
-
-# Source-level capability is necessary but not sufficient: the deterministic
-# Pipeline only closes the following end-to-end combinations. Keep this table
-# canonical so Agent admission and direct Pipeline callers fail identically.
-SUPPORTED_PIPELINE_SOURCE_COMBINATIONS: frozenset[frozenset[Database]] = frozenset(
-    {
-        frozenset({Database.GEO}),
-        frozenset({Database.PUBMED, Database.GEO}),
-        frozenset({Database.GDC}),
-        frozenset({Database.UCSC_XENA}),
-        frozenset({Database.GDC, Database.UCSC_XENA}),
-        frozenset({Database.REACTOME}),
-    }
-)
-
-
-def is_supported_pipeline_source_combination(
-    databases: set[Database] | frozenset[Database],
-) -> bool:
-    """Return whether the deterministic Pipeline implements this source set."""
-
-    return frozenset(databases) in SUPPORTED_PIPELINE_SOURCE_COMBINATIONS
-
 
 class DataLevel(StrEnum):
     RAW_SEQUENCE = "raw_sequence"

@@ -18,7 +18,6 @@ aborting the whole source.
 from __future__ import annotations
 
 import csv
-import gzip
 import math
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -40,6 +39,7 @@ from app.datasets.contracts import (
     SourceBinding,
 )
 from app.domain.contracts import SourceAsset, asset_id_from_sha256, make_record_id
+from app.tools.io import open_text
 
 # Source-long layout emitted by every expression adapter.  ``gene_id_raw`` is
 # verbatim; namespace/version authorization and unit policy are applied later
@@ -90,9 +90,7 @@ _GDC_ANNOTATION_COLUMNS = frozenset(
 
 
 def _open_table(path: Path) -> TextIO:
-    if path.suffix.lower() == ".gz":
-        return gzip.open(path, "rt", encoding="utf-8", newline="")
-    return path.open("r", encoding="utf-8", newline="")
+    return open_text(path, encoding="utf-8", newline="")
 
 
 def _verify_sha256(path: Path, expected: str) -> None:

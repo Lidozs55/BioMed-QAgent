@@ -19,9 +19,6 @@ import {
   DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -41,17 +38,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { formatSize } from "@/lib/fileUtils";
 import { cn } from "@/lib/utils";
 import type { ModelInfo } from "@/hooks/useAPI";
+import { resolveModelChoices } from "@/lib/modelChoices";
 
 export const MAX_IMPORT_FILES = 10;
 export const MAX_IMPORT_FILE_BYTES = 500 * 1024 * 1024;
 export const MAX_IMPORT_TOTAL_BYTES = 2 * 1024 * 1024 * 1024;
-
-const LEGACY_MODELS = [
-  { id: "qwen-plus", label: "Qwen Plus" },
-  { id: "qwen-max", label: "Qwen Max" },
-  { id: "qwen-turbo", label: "Qwen Turbo" },
-  { id: "qwq-plus", label: "QWQ Plus" },
-];
 
 function sanitizeUploadFilename(name: string): string {
   const parts = name.split(/[\\/]/);
@@ -130,29 +121,27 @@ export function AgentComposer({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
 
-  // Model selector state (new settings integration)
+  // Model selector state (settings integration)
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const [modelSearch, setModelSearch] = useState("");
 
-  // Legacy model selector (backward compat when models prop is absent)
-  const [model, setModel] = useState("default");
-
-  const modelsList = useMemo(() => models ?? [], [models]);
+  const { choices: modelChoices, offline: modelChoicesOffline } =
+    useMemo(() => resolveModelChoices(models, hasApiKey), [models, hasApiKey]);
 
   const sortedModels = useMemo(() => {
-    if (modelsList.length === 0) return [];
-    return [...modelsList].sort((a, b) => {
+    if (modelChoices.length === 0) return [];
+    return [...modelChoices].sort((a, b) => {
       const aQwen = a.id.toLowerCase().startsWith("qwen") || a.name.toLowerCase().startsWith("qwen") ? 1 : 0;
       const bQwen = b.id.toLowerCase().startsWith("qwen") || b.name.toLowerCase().startsWith("qwen") ? 1 : 0;
       if (aQwen !== bQwen) return bQwen - aQwen;
       if (a.recommended !== b.recommended) return a.recommended ? -1 : 1;
       return a.id.localeCompare(b.id);
     });
-  }, [modelsList]);
+  }, [modelChoices]);
 
   const selectedModelDisplay = useMemo(
-    () => modelsList.find((m) => m.id === selectedModelId),
-    [modelsList, selectedModelId],
+    () => sortedModels.find((m) => m.id === selectedModelId),
+    [sortedModels, selectedModelId],
   );
 
   const filteredModels = useMemo(
@@ -371,117 +360,17 @@ export function AgentComposer({
 
         <div className="ml-auto flex min-w-0 items-center gap-1.5">
           <div className="relative">
-            {models !== undefined ? (
-              // New searchable model selector (settings integration)
-              hasApiKey && sortedModels.length > 0 ? (
-                <Popover
-                  open={modelDropdownOpen}
-                  onOpenChange={(next) => {
-                    setModelDropdownOpen(next);
-                    if (next) setModelSearch("");
-                  }}
-                >
-                  <PopoverTrigger
-                    render={
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        className="max-w-40 gap-1 px-2 text-muted-foreground"
-                        disabled={disabled}
-                        aria-label={selectedModelDisplay ? `当前模型 ${selectedModelDisplay.name}，点击切换` : "点击选择模型"}
-                      >
-                        <span className="truncate max-w-28">{selectedModelDisplay?.name ?? selectedModelId ?? "选择模型"}</span>
-                        <CaretDownIcon aria-hidden="true" className="size-3.5 shrink-0" />
-                      </Button>
-                    }
-                  />
-                  <PopoverContent
-                    align="end"
-                    side="top"
-                    sideOffset={4}
-                    className="w-64 gap-0 overflow-hidden rounded-lg border bg-popover p-0 shadow-md"
-                  >
-                    <div className="p-2 pb-1">
-                      <div className="relative">
-                        <MagnifyingGlassIcon className="absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-                        <Input
-                          placeholder="搜索模型..."
-                          value={modelSearch}
-                          onChange={(e) => setModelSearch(e.target.value)}
-                          className="h-8 pl-7 text-sm"
-                          autoFocus
-                        />
-                      </div>
-                    </div>
-                    <div className="max-h-72 overflow-y-auto [scrollbar-width:thin]">
-                      <div className="p-1 pt-0">
-                        {filteredModels.length === 0 ? (
-                          <div className="px-3 py-4 text-center text-sm text-muted-foreground">
-                            {modelSearch ? "没有匹配的模型" : "暂无可用模型"}
-                          </div>
-                        ) : (
-                          <>
-                            {filteredModels.map((m) => (
-                              <button
-                                key={m.id}
-                                type="button"
-                                className={cn(
-                                  "flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-accent transition-colors",
-                                  m.id === selectedModelId && "bg-accent font-medium",
-                                )}
-                                onClick={() => {
-                                  onModelChange?.(m.id);
-                                  setModelDropdownOpen(false);
-                                  setModelSearch("");
-                                }}
-                              >
-                                <span className="flex-1 truncate">{m.name}</span>
-                                {m.recommended && (
-                                  <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">推荐</span>
-                                )}
-                                {m.capabilities?.image && (
-                                  <span className="shrink-0 rounded bg-emerald-100 px-1 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">图</span>
-                                )}
-                              </button>
-                            ))}
-                            <div className="border-t mt-1 px-3 py-2 text-center text-[11px] text-muted-foreground">
-                              管理模型请前往
-                              <button
-                                type="button"
-                                className="ml-1 text-primary underline-offset-2 hover:underline"
-                                onClick={() => {
-                                  setModelDropdownOpen(false);
-                                  handleOpenSettings();
-                                }}
-                              >
-                                设置
-                              </button>
-                            </div>
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  </PopoverContent>
-                </Popover>
-              ) : (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="max-w-40 gap-1 px-2 text-muted-foreground"
-                  onClick={handleOpenSettings}
-                  disabled={disabled}
-                  aria-label="未配置 API Key，点击前往设置"
-                >
-                  <span className="truncate">无可用模型</span>
-                  <CaretDownIcon aria-hidden="true" className="size-3.5 shrink-0" />
-                </Button>
-              )
-            ) : (
-              // Legacy model selector (backward compat)
-              <DropdownMenu>
-                <DropdownMenuTrigger
+            {hasApiKey ? (
+              // Searchable model selector against the real models endpoint
+              // (offline fallback list when the endpoint is unreachable).
+              <Popover
+                open={modelDropdownOpen}
+                onOpenChange={(next) => {
+                  setModelDropdownOpen(next);
+                  if (next) setModelSearch("");
+                }}
+              >
+                <PopoverTrigger
                   render={
                     <Button
                       type="button"
@@ -489,27 +378,97 @@ export function AgentComposer({
                       size="sm"
                       className="max-w-40 gap-1 px-2 text-muted-foreground"
                       disabled={disabled}
-                      aria-label="切换主模型"
+                      aria-label={selectedModelDisplay ? `当前模型 ${selectedModelDisplay.name}，点击切换` : "点击选择模型"}
                     >
-                      <span className="truncate">{LEGACY_MODELS.find((item) => item.id === model)?.label ?? "默认模型"}</span>
-                      <CaretDownIcon aria-hidden="true" />
+                      <span className="truncate max-w-28">{selectedModelDisplay?.name ?? selectedModelId ?? "选择模型"}</span>
+                      <CaretDownIcon aria-hidden="true" className="size-3.5 shrink-0" />
                     </Button>
                   }
                 />
-                <DropdownMenuContent align="end" side="top">
-                  <DropdownMenuGroup>
-                    <DropdownMenuLabel>主模型</DropdownMenuLabel>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuRadioGroup value={model} onValueChange={setModel}>
-                      {LEGACY_MODELS.map((item) => (
-                        <DropdownMenuRadioItem key={item.id} value={item.id}>
-                          {item.label}
-                        </DropdownMenuRadioItem>
-                      ))}
-                    </DropdownMenuRadioGroup>
-                  </DropdownMenuGroup>
-                </DropdownMenuContent>
-              </DropdownMenu>
+                <PopoverContent
+                  align="end"
+                  side="top"
+                  sideOffset={4}
+                  className="w-64 gap-0 overflow-hidden rounded-lg border bg-popover p-0 shadow-md"
+                >
+                  <div className="p-2 pb-1">
+                    <div className="relative">
+                      <MagnifyingGlassIcon className="absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                      <Input
+                        placeholder="搜索模型..."
+                        value={modelSearch}
+                        onChange={(e) => setModelSearch(e.target.value)}
+                        className="h-8 pl-7 text-sm"
+                        autoFocus
+                      />
+                    </div>
+                  </div>
+                  <div className="max-h-72 overflow-y-auto [scrollbar-width:thin]">
+                    <div className="p-1 pt-0">
+                      {filteredModels.length === 0 ? (
+                        <div className="px-3 py-4 text-center text-sm text-muted-foreground">
+                          {modelSearch ? "没有匹配的模型" : "暂无可用模型"}
+                        </div>
+                      ) : (
+                        <>
+                          {filteredModels.map((m) => (
+                            <button
+                              key={m.id}
+                              type="button"
+                              className={cn(
+                                "flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-accent transition-colors",
+                                m.id === selectedModelId && "bg-accent font-medium",
+                              )}
+                              onClick={() => {
+                                onModelChange?.(m.id);
+                                setModelDropdownOpen(false);
+                                setModelSearch("");
+                              }}
+                            >
+                              <span className="flex-1 truncate">{m.name}</span>
+                              {m.recommended && (
+                                <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">推荐</span>
+                              )}
+                              {m.capabilities?.image && (
+                                <span className="shrink-0 rounded bg-emerald-100 px-1 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">图</span>
+                              )}
+                            </button>
+                          ))}
+                          <div className="border-t mt-1 px-3 py-2 text-center text-[11px] text-muted-foreground">
+                            {modelChoicesOffline && (
+                              <span className="mr-1 text-amber-600 dark:text-amber-400">离线备选</span>
+                            )}
+                            管理模型请前往
+                            <button
+                              type="button"
+                              className="ml-1 text-primary underline-offset-2 hover:underline"
+                              onClick={() => {
+                                setModelDropdownOpen(false);
+                                handleOpenSettings();
+                              }}
+                            >
+                              设置
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </PopoverContent>
+              </Popover>
+            ) : (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="max-w-40 gap-1 px-2 text-muted-foreground"
+                onClick={handleOpenSettings}
+                disabled={disabled}
+                aria-label="未配置 API Key，点击前往设置"
+              >
+                <span className="truncate">无可用模型</span>
+                <CaretDownIcon aria-hidden="true" className="size-3.5 shrink-0" />
+              </Button>
             )}
           </div>
           <Button

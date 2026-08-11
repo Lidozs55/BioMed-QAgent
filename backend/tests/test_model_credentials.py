@@ -5,7 +5,6 @@ from unittest.mock import ANY, AsyncMock, Mock
 
 import app.agent_loop.model as model_module
 import app.config as config_module
-import app.settings_manager as settings_manager
 import httpx
 import pytest
 from app.agent_loop.agent import create_agent
@@ -34,7 +33,6 @@ def configure_model(
         frozen_config_settings,
     )
     runtime_getter = Mock(return_value=runtime_settings)
-    monkeypatch.setattr(settings_manager, "get_settings", runtime_getter)
     def current_configuration() -> ModelConfiguration:
         current = runtime_getter()
         return ModelConfiguration(

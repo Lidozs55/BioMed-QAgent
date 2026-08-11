@@ -247,6 +247,7 @@ class DatasetBuildExecutor:
         parameter_scope: dict[str, Any] | None = None,
         implementation_versions: Mapping[str, str] | None = None,
         source_assets: Mapping[str, SourceAsset] | None = None,
+        mapping_assets: Mapping[str, SourceAsset] | None = None,
         operation_timeout: float = 120.0,
         lock_timeout: float = 5.0,
         straggler_grace: float = 10.0,
@@ -269,6 +270,7 @@ class DatasetBuildExecutor:
         self._parameter_scope = parameter_scope or {}
         self._implementation_versions = implementation_versions or {}
         self._source_assets = dict(source_assets or {})
+        self._mapping_assets = dict(mapping_assets or {})
         self._operation_timeout = operation_timeout
         self._lock_timeout = lock_timeout
         # K1 residual (Phase 4 review): the operation timeout cancels only
@@ -1039,6 +1041,18 @@ class DatasetBuildExecutor:
                     "size_bytes": asset.size_bytes,
                 }
                 for binding_id, asset in sorted(self._source_assets.items())
+            }
+        if self._mapping_assets:
+            # P0 wiring (REVIEW_2026-08-09 §7.1): GPL platform annotation
+            # assets feed the probe→gene map, so they must join the digest
+            # closure like source assets — reusing a canonicalize checkpoint
+            # after the annotation file changed would serve a stale mapping.
+            payload["mapping_assets"] = {
+                binding_id: {
+                    "sha256": asset.sha256,
+                    "size_bytes": asset.size_bytes,
+                }
+                for binding_id, asset in sorted(self._mapping_assets.items())
             }
         return _sha256_json(payload)
 

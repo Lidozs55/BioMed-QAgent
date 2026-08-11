@@ -20,7 +20,12 @@ from app.domain.contracts import (
     TaskSummary,
     build_event,
 )
-from app.domain.contracts.dataset_state import ArtifactRole
+from app.domain.contracts.dataset_state import (
+    ArtifactRole,
+    BuildResult,
+    BuildResultStatus,
+)
+from app.domain.contracts.runtime import RunSummary
 from app.runtime.event_store import CorruptEventLogError, EventStore
 from app.runtime.index import SingleThreadExecutor, TaskIndex
 
@@ -183,6 +188,134 @@ async def test_index_persists_artifact_count(tmp_path) -> None:
         assert listed.tasks[0].artifact_count == 3
     finally:
         await index.close()
+
+
+@pytest.mark.asyncio
+async def test_index_persists_latest_build_status_from_run_summary(tmp_path) -> None:
+    tasks_dir = tmp_path / "tasks"
+    index = TaskIndex(tasks_dir)
+    await index.initialize()
+    try:
+        base = snapshot(
+            "task_build_status",
+            request_id="req_1",
+            run_id="run_1",
+        )
+        base.runs[0] = base.runs[0].model_copy(
+            update={
+                "status": RunStatus.COMPLETED,
+                "started_at": NOW,
+                "finished_at": NOW,
+                "summary": RunSummary(
+                    run_status=RunStatus.COMPLETED,
+                    build_result=BuildResult(
+                        status=BuildResultStatus.SUCCEEDED,
+                        valid_row_count=10,
+                        successful_sources=["pubmed"],
+                        publication_id="pub-run_1",
+                    ),
+                ),
+            }
+        )
+        await index.upsert_snapshot(base)
+        listed = await index.list_tasks()
+        assert listed.tasks[0].latest_build_status is BuildResultStatus.SUCCEEDED
+    finally:
+        await index.close()
+
+
+@pytest.mark.asyncio
+async def test_index_normalizes_legacy_no_artifact_failure(tmp_path) -> None:
+    tasks_dir = tmp_path / "tasks"
+    index = TaskIndex(tasks_dir)
+    await index.initialize()
+    try:
+        legacy = snapshot(
+            "task_legacy_no_data",
+            status=RunStatus.FAILED,
+            request_id="req_legacy",
+            run_id="run_legacy",
+        )
+        legacy.runs[0] = legacy.runs[0].model_copy(
+            update={
+                "status": RunStatus.FAILED,
+                "started_at": NOW,
+                "finished_at": NOW,
+                "error": "run failed without producing any artifacts",
+            }
+        )
+        genuine = snapshot(
+            "task_genuine_error",
+            status=RunStatus.FAILED,
+            request_id="req_genuine",
+            run_id="run_genuine",
+        )
+        genuine.runs[0] = genuine.runs[0].model_copy(
+            update={
+                "status": RunStatus.FAILED,
+                "started_at": NOW,
+                "finished_at": NOW,
+                "error": "model request failed: connection refused",
+            }
+        )
+        await index.upsert_snapshot(legacy)
+        await index.upsert_snapshot(genuine)
+        listed = await index.list_tasks()
+        by_id = {task.task_id: task for task in listed.tasks}
+        assert by_id["task_legacy_no_data"].latest_build_status is (
+            BuildResultStatus.NO_DATA
+        )
+        assert by_id["task_genuine_error"].latest_build_status is None
+    finally:
+        await index.close()
+
+
+@pytest.mark.asyncio
+async def test_index_rebuild_backfills_latest_build_status(tmp_path) -> None:
+    tasks_dir = tmp_path / "tasks"
+    index = TaskIndex(tasks_dir)
+    await index.initialize()
+    try:
+        await index.upsert_snapshot(
+            snapshot(
+                "task_backfill",
+                status=RunStatus.COMPLETED,
+                request_id="req_old",
+                run_id="run_old",
+            )
+        )
+    finally:
+        await index.close()
+
+    state_dir = tasks_dir / "task_backfill" / "state"
+    state_dir.mkdir(parents=True)
+    legacy = snapshot(
+        "task_backfill",
+        status=RunStatus.FAILED,
+        request_id="req_old",
+        run_id="run_old",
+    )
+    legacy.runs[0] = legacy.runs[0].model_copy(
+        update={
+            "status": RunStatus.FAILED,
+            "started_at": NOW,
+            "finished_at": NOW,
+            "error": "manifest missing or unchanged",
+        }
+    )
+    (state_dir / "task_snapshot.json").write_text(
+        legacy.model_dump_json(indent=2) + "\n",
+        "utf-8",
+    )
+
+    reopened = TaskIndex(tasks_dir)
+    await reopened.initialize()
+    try:
+        await reopened.rebuild()
+        rebuilt = await reopened.list_tasks()
+        assert rebuilt.tasks[0].latest_build_status is BuildResultStatus.NO_DATA
+    finally:
+        await reopened.close()
 
 
 @pytest.mark.asyncio
@@ -690,7 +823,7 @@ async def test_index_rebuild_loads_legacy_snapshot_with_no_artifact_failure_fiel
 
 
 @pytest.mark.asyncio
-async def test_active_and_inactive_tasks_are_globally_ordered_on_every_page(
+async def test_active_and_inactive_tasks_are_ordered_and_active_bounded(
     tmp_path,
 ) -> None:
     index = TaskIndex(tmp_path / "tasks")
@@ -724,15 +857,23 @@ async def test_active_and_inactive_tasks_are_globally_ordered_on_every_page(
         first = await index.list_tasks(limit=1)
         second = await index.list_tasks(limit=1, cursor=first.next_cursor)
 
+        # C5e: the active list is bounded by limit (newest active first); the
+        # inactive history keeps its cursor pagination.
+        assert [task.task_id for task in first.active_items] == [
+            "task_active_middle"
+        ]
+        assert [task.task_id for task in first.items] == ["task_inactive_new"]
         assert [task.task_id for task in first.tasks] == [
             "task_inactive_new",
             "task_active_middle",
-            "task_active_oldest",
         ]
+        assert [task.task_id for task in second.active_items] == [
+            "task_active_middle"
+        ]
+        assert [task.task_id for task in second.items] == ["task_inactive_old"]
         assert [task.task_id for task in second.tasks] == [
             "task_active_middle",
             "task_inactive_old",
-            "task_active_oldest",
         ]
         assert first.next_cursor is not None
         assert second.next_cursor is None
@@ -759,5 +900,31 @@ async def test_index_uses_configured_task_page_default_and_maximum(tmp_path) -> 
         assert page.next_cursor is not None
         with pytest.raises(ValueError, match="between 1 and 3"):
             await index.list_tasks(limit=4)
+    finally:
+        await index.close()
+
+
+@pytest.mark.asyncio
+async def test_list_tasks_active_list_bounded_by_limit(tmp_path) -> None:
+    """C5e: active tasks must be truncated by limit, not serialized unbounded."""
+
+    index = TaskIndex(tmp_path / "tasks")
+    await index.initialize()
+    try:
+        for number in range(5):
+            await index.upsert_snapshot(
+                snapshot(
+                    f"task_active_{number}",
+                    status=RunStatus.RUNNING,
+                    request_id=f"req_active_{number}",
+                    run_id=f"run_active_{number}",
+                    created_at=NOW + timedelta(minutes=number),
+                )
+            )
+        page = await index.list_tasks(limit=3)
+        assert len(page.active_items) <= 3
+        # The newest active tasks win; no active task leaks into history page.
+        assert page.active_items[0].task_id == "task_active_4"
+        assert all(item.task_id not in page.items for item in page.active_items)
     finally:
         await index.close()

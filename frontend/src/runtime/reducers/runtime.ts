@@ -394,9 +394,23 @@ export function applyRunTerminalEvent(
   }
   next = deactivateRunAssistantStream(next, runId);
   next = deactivateRunStreamingItems(next, runId);
+  if (payload.type === "run_completed") {
+    const buildId = payload.build_result?.build_id;
+    if (buildId !== undefined && buildId !== null) {
+      next = upsertItem(next, {
+        kind: "build_report",
+        itemId: `report:${runId}`,
+        runId,
+        sequence: envelope.sequence,
+        createdAt: envelope.timestamp,
+        taskId: envelope.task_id,
+        buildId,
+      });
+    }
+  }
   return next;
-}
 
+}
 export function applyPublicationCreatedEvent(
   task: TaskProjection,
   envelope: EventEnvelope,

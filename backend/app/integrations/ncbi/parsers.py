@@ -127,6 +127,23 @@ def parse_geo_esearch(payload: bytes) -> NcbiSearchPage:
     return parse_ncbi_esearch(payload)
 
 
+def _safe_int(value: object, fallback: int) -> int:
+    """Parse an integer field defensively.
+
+    NCBI esummary occasionally returns an empty string for numeric fields
+    (e.g. ``n_samples=""`` on some GSE records).  A bare ``int()`` then raises
+    ``ValueError`` and aborts the whole esummary batch, dropping every record
+    in it.  Fall back to ``fallback`` instead so one malformed record cannot
+    take down the batch.  (See docs/REVIEW_2026-08-10-task-9ce0124f.md §5.1 T1.)
+    """
+    if isinstance(value, int):
+        return value
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return fallback
+
+
 def parse_geo_esummary(payload: bytes) -> list[GeoSeriesRecord]:
     result = json.loads(payload.decode("utf-8-sig"))["result"]
     records: list[GeoSeriesRecord] = []
@@ -150,7 +167,7 @@ def parse_geo_esummary(payload: bytes) -> list[GeoSeriesRecord]:
             summary=item.get("summary", ""),
             organism=item.get("taxon", ""),
             experiment_type=item.get("gdstype", ""),
-            sample_count=int(item.get("n_samples", len(samples))),
+            sample_count=_safe_int(item.get("n_samples"), len(samples)),
             samples=samples,
             platform_ids=platform_ids,
             pubmed_ids=[str(value) for value in item.get("pubmedids", [])],

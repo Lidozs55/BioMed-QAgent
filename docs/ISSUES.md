@@ -11,10 +11,6 @@
 
 - [ ] 所有模型的上下文窗口固定显示 0，失去参考价值。
 
-### 对话红色标识逻辑不合理
-
-- [ ] 模型记录部分将对话左侧标注为红色"问题对话"标识，但判断逻辑存在不合理：未生成产物并不代表模型未完成工作。当给出综述性问题时（如"请帮我研究有哪些蛋白可能诱发糖尿病"），模型判断无需给出结构化产物，此时对话仍被标注为红色。
-
 ### 对话窗口滚动不稳定（待验证）
 
 - [ ] 模型进行思考工作时，如果窗口未跟随最新进度，可能跳转到最初对话条目。触发条件未查明。
@@ -29,7 +25,10 @@
 
 ### Xena S3 hub 返回 HTTP 403
 
-- [ ] `search_xena` 通过 crawler facade 请求 `https://toil-xena-hub.s3.us-east-1.amazonaws.com/?list-type=2&prefix=download/` 返回 HTTP 403。可能是 S3 区域限制、UA 被拒或临时限流。影响：Agent 无法通过 Xena 发现 TCGA PAAD 等数据集。修复方向：调查 UA 是否被 S3 拒绝；考虑使用 browser_fallback 作为 Xena API 后备；若 S3 持续 403，考虑使用 Xena 的 HTTPS 网页接口替代 S3 REST API。
+- [x] `search_xena` 通过 crawler facade 请求 `https://toil-xena-hub.s3.us-east-1.amazonaws.com/?list-type=2&prefix=download/` 返回 HTTP 403（S3 桶策略拒绝）。
+      **已修复（2026-08-08，见 docs/TODO.md 独立维护项）**：`search_xena` 改走官方 hub 查询 API
+      `POST https://toil.xenahubs.net/data/`（xenaPython 同款查询），S3 XML 列表保留为兜底；
+      `test_all_data_sources_live.py` xfail 移除，END-TO-END 实测返回 27 个 TCGA 数据集。
 
 ### DurableTaskSession `_replay_cache` 全量历史驻留 + 深拷贝放大
 
@@ -61,9 +60,30 @@
 - [ ] `app/subagents/supervisor.py:115-127` — `_entries`、`_run_semaphores`、`_admissions`、`_owner_lifecycle_sinks` 字典在 `start_batch` 中 `setdefault` 创建，仅 `release_run` 清理。
 - **审查结论（2026-08-04）**：**暂缓**。清理路径已存在且被调用：`_terminate_owned_subagents`（manager.py:2032-2068）在 `_append_status` 和 `_append_completion_status` 中对 `RunCompleted/Failed/Cancelled/Interrupted` payload 无条件调用 `cancel_run` + `release_run`。`_finalize_run` 的 `finally` 保证 `_append_completion_status` 必然执行。泄漏仅在工作线程被强制取消且 `finally` 未跑完时发生——此时进程通常也在关闭（`shutdown` 会清理全部 entry）。修复方向（极低优先级）：在 `manager.close` 中增加 supervisor 兜底清理断言。
 
-### Processing 阶段 `_CLEANING_MAX_ROWS = 500_000` 静默截断数据（治标）
+### Processing 阶段 `_CLEANING_MAX_ROWS` 硬截断数据（治标）
 
-- [ ] `app/pipeline/stages/processing.py:41,165-170` — 数据清洗阶段对 CSV 行数硬截断在 500,000 行，超出部分仅 `logger.warning` 后 `break`，不进入清洗产物。GSE183795（4,695,780 行）等大型表达谱矩阵会被截断到 500k 行，导致产物数据不完整。
+- [ ] `app/pipeline/stages/processing.py:41,59-62,165-170` — 数据清洗阶段对 CSV 行数硬截断。
+      **现状（2026-08-08）**：原 500,000 行上限经 REVIEW 2026-08-05 P0-1 提高到 `5_000_000`
+      （GSE183795 4,695,780 行不再被截断），超出部分仍 `logger.warning` 后 `break`，
+      不进入清洗产物——仍是硬截断治标，未改为流式/分批清洗。
 - **根因**：`_clean_csv` 使用 `csv.DictReader` 全量加载行到 `all_rows: list[dict]`，4.7M 行 × 每行 dict 开销 → 内存溢出 + 超时。500k 截断是紧急止血，不是正确解。
 - **影响**：Agent 对大型数据集的产物缺少后 4.2M 行数据，但不会报错——用户可能不知道数据被截断。
 - **修复方向**：改为流式清洗（`csv.reader` 逐行处理 + 流式写出），不累积 `all_rows` 列表；或在截断时向 `RunContext.warnings` 追加用户可见警告，让 Agent 知晓数据不完整。
+
+### `search_geo` 对个别 GSE 记录 `n_samples=""` 崩溃
+
+- [x] **已修复（2026-08-10，见 docs/REVIEW_2026-08-10-task-9ce0124f.md §5.1 T1）**：`app/integrations/ncbi/parsers.py:153` — `sample_count=int(item.get("n_samples", len(samples)))`：NCBI esummary 对个别 GSE 返回 `n_samples` 为空字符串时 `int("")` 抛 `ValueError`，整个 esummary batch 解析失败，`search_geo` 向 Agent 返回 `error: invalid literal for int() with base 10: ''`，触发无效换词重试。
+- **根因**：对 esummary 字段做了无守卫的 `int()` 转换。
+- **修复**：新增 `_safe_int()`（空/非数字回退 `len(samples)`），单条记录失败不拖垮整批；新增回归测试 `test_parse_geo_esummary_tolerates_empty_n_samples`。
+
+### GEO series matrix 元数据-only 无内容预检（fail-fast 缺失）
+
+- [x] **已修复（2026-08-10，见 docs/REVIEW_2026-08-10-task-9ce0124f.md §5.1 T2）**：`app/skills/builtin/acquisition/geo.py` `download_geo_adapter` / `_resolve_download` — 下载 matrix 类型只校验 HTTP/大小/哈希，不校验 gzip 内容是否含 `!series_matrix_table_begin`。NCBI 对 RNA-seq（2021 起）及部分阵列系列只生成"元数据头"矩阵文件（实测 GSE173954/GSE327021/GSE266328/GSE160389 全部如此），下载被报告为"成功"，数据问题推迟到 build parse 阶段才以 `no_primary_data` 暴露。
+- **根因**：下载成功 ≠ 数据表存在，内容级校验缺失。
+- **修复**：`download_geo_adapter` 对 `matrix` 类型下载后解压头部校验 `!series_matrix_table_begin`，缺失时返回结构化 `reason_code: empty_series_matrix` 并提示改用 `file_type='soft'/'suppl'`，且不登记为可用 source asset；`read_file_head` 支持 .gz 解压；`unsupported file_type` 错误信息列出合法值；系统提示补多 binding 兜底 + supplementary 路径。新增回归测试 `test_download_geo_matrix_fails_fast_on_metadata_only_gzip`、`test_download_geo_unsupported_file_type_lists_valid_values`、`test_read_file_head_decompresses_gzip`。
+
+### 后端测试在 Windows 上的 3 个环境性失败（非本次改动引入）
+
+- [ ] `tests/test_config.py::test_output_dir_default_is_absolute` — 期望 `Settings.output_dir` 是绝对路径，但 Windows 下 `Path('data/output')` 相对路径断言为 False。
+- [ ] `tests/api/test_artifact_api.py::test_legacy_loaded_none_downloads_corrections_todo` / `test_legacy_normal_branch_lists_and_downloads_corrections_todo` — 断言失败，疑似 Windows 路径/编码差异。
+- **确认（2026-08-10，fix/geo-download-size-cap）**：在干净 `main`（stash 改动后）上复现同一 3 个失败，非本次改动回归；全量套件其余 2315 个测试通过。

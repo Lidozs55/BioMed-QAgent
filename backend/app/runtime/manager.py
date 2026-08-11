@@ -51,6 +51,8 @@ from app.domain.contracts import (
 from app.domain.contracts.dataset_state import BuildResult, BuildResultStatus
 from app.domain.contracts.enums import ErrorCode
 from app.domain.contracts.runtime import validate_task_databases
+from app.domain.contracts.task import TaskSpecification
+from app.logging_setup import set_log_context
 from app.model_config import RunModelSettings
 from app.model_settings import get_current_model_configuration
 from app.runtime.hub import AssistantStreamHub, EventHub
@@ -204,6 +206,9 @@ class RunExecution:
     _cancel_sent: bool = field(default=False, init=False, repr=False)
     _completion_sealed: bool = field(default=False, init=False, repr=False)
     _completion_committed: bool = field(default=False, init=False, repr=False)
+    # C1a: “发布事实已持久化”以 publication_created 事件成功落盘为准（而非
+    # _completion_committed——那只是 committer 返回、事件已构造但可能尚未持久化）。
+    _publication_persisted: bool = field(default=False, init=False, repr=False)
     _completion_abort_error: BaseException | None = field(
         default=None,
         init=False,
@@ -958,6 +963,7 @@ class TaskManager:
                     accepted,
                     request.input,
                     prepare_task,
+                    specification=request.specification,
                 )
             )
 
@@ -978,6 +984,10 @@ class TaskManager:
             lock = self._task_locks.setdefault(task_id, asyncio.Lock())
             async with lock:
                 await self._shield_and_drain_locked(self._delete_task_locked(task_id))
+            # C5d: deletion only succeeds for fully-terminal tasks under the
+            # admission lock (no new runs can be admitted for a deleted task),
+            # so the strong-key entry is safe to drop once the delete returns.
+            self._task_locks.pop(task_id, None)
 
     async def _shield_and_drain_locked(
         self,
@@ -1016,6 +1026,7 @@ class TaskManager:
         accepted: TaskRunAccepted,
         input_value: str,
         prepare_task: PrepareTask | None,
+        specification: TaskSpecification | None = None,
     ) -> TaskRunAccepted:
         try:
             await self.repository.save_snapshot(snapshot)
@@ -1032,12 +1043,15 @@ class TaskManager:
                     f"{type(rollback_error).__name__}: {rollback_error}"
                 )
             raise
-        return await self._admit_run_locked(accepted, input_value)
+        return await self._admit_run_locked(
+            accepted, input_value, specification=specification
+        )
 
     async def _admit_run_locked(
         self,
         accepted: TaskRunAccepted,
         input_value: str,
+        specification: TaskSpecification | None = None,
     ) -> TaskRunAccepted:
         _, event = await self.repository.append_event_payload(
             task_id=accepted.task_id,
@@ -1046,6 +1060,7 @@ class TaskManager:
                 request_id=accepted.request_id,
                 input=input_value,
                 request_fingerprint=accepted.request_fingerprint,
+                specification=specification,
             ),
         )
         try:
@@ -1360,6 +1375,14 @@ class TaskManager:
 
     async def _recover(self) -> None:
         summaries: dict[str, TaskSummary] = {}
+        # 恢复扫描必须看到全部 active 任务（含超出 task_page_max_size 的最老
+        # 活跃任务）：分页 list_tasks 的 active 列表受 limit 截断（C5e），
+        # 用它扫描会在饱和队列重启时漏掉最老的 QUEUED/RUNNING 任务——
+        # 其 run 永不重新排队/永不中断，且每次重启都复发。
+        summaries.update(
+            (summary.task_id, summary)
+            for summary in await self.repository.list_active_tasks()
+        )
         cursor: str | None = None
         while True:
             page = await self.repository.list_tasks(
@@ -1385,6 +1408,44 @@ class TaskManager:
             snapshot = await self.repository.get_snapshot(summary.task_id)
             if snapshot is None:
                 raise LookupError(summary.task_id)
+            # C1a: 重启闭合——FINALIZING 且发布事实已持久化（publication_created
+            # 已落盘但 run_completed 缺失，如事件追加中途崩溃）→ 补发
+            # run_completed，避免恢复把它标 INTERRUPTED 留下“已发布但 run 非
+            # 成功”的孤立产物。build_result 无法从事件流还原（唯一载体是
+            # RunCompletedPayload 自身），按 NO_DATA 兜底并告警。
+            if (
+                summary.status is RunStatus.FINALIZING
+                and summary.active_run_id is not None
+                and any(
+                    # 按 run_id 关联发布事实：AGENT 格式 pub-{run_id} 与 V2
+                    # 数据集构建格式 pub_{build_id}_{sha[:16]} 都携带正确
+                    # run_id（events.py PublicationCreatedPayload.run_id），
+                    # 不能按 id 字符串形状匹配（V2 主线会漏闭合）。
+                    publication.run_id == summary.active_run_id
+                    for publication in snapshot.publications
+                )
+            ):
+                accepted = TaskRunAccepted(
+                    request_id="recovery",
+                    task_id=summary.task_id,
+                    run_id=summary.active_run_id,
+                    request_fingerprint=hashlib.sha256(
+                        f"recovery:{summary.task_id}:{summary.active_run_id}".encode()
+                    ).hexdigest(),
+                )
+                lock = self._task_locks.setdefault(summary.task_id, asyncio.Lock())
+                async with lock:
+                    await self._append_status(
+                        accepted,
+                        RunCompletedPayload(build_result=_no_data_build_result()),
+                    )
+                logger.warning(
+                    "Recovered FINALIZING run %s of task %s to COMPLETED after "
+                    "publication was already persisted (run_completed lost)",
+                    summary.active_run_id,
+                    summary.task_id,
+                )
+                continue
             if (
                 summary.status in recoverable
                 and summary.active_run_id is not None
@@ -1427,6 +1488,22 @@ class TaskManager:
                         asyncio.Lock(),
                     )
                     async with lock:
+                        # C1c: 重启后 pending HIL 请求（AWAITING_USER_INPUT）
+                        # 没有 live executor 可恢复——显式失效（warning
+                        # code=prompt_invalidated），前端据此展示"该请求已失效"，
+                        # 而不是随 run_interrupted 静默丢弃。失效事件先于
+                        # run_interrupted 追加。
+                        if run.status is RunStatus.AWAITING_USER_INPUT:
+                            await self._append_status(
+                                accepted,
+                                WarningPayload(
+                                    message=(
+                                        f"重启后人工请求已失效（run {run.run_id}），"
+                                        "如需继续请重新发起该操作"
+                                    ),
+                                    code="prompt_invalidated",
+                                ),
+                            )
                         await self._append_status(
                             accepted,
                             RunInterruptedPayload(reason="server restarted"),
@@ -1508,7 +1585,10 @@ class TaskManager:
                     request_id="recovery",
                     task_id=summary.task_id,
                     run_id=run.run_id,
-                    request_fingerprint=run.request_fingerprint,
+                    # 确定性指纹满足 ^[0-9a-f]{64}$ 契约，避免补发事件被幂等校验拒绝
+                    request_fingerprint=hashlib.sha256(
+                        f"recovery:{summary.task_id}:{run.run_id}".encode()
+                    ).hexdigest(),
                 )
                 lock = self._task_locks.setdefault(summary.task_id, asyncio.Lock())
                 async with lock:
@@ -1679,10 +1759,16 @@ class TaskManager:
         state = await self._prepare_execution(queued)
         if state is None:
             return
-        try:
-            await self._dispatch_run(state)
-        finally:
-            await self._finalize_run(state)
+        # 结构化日志上下文（REVIEW 2026-07-18 §9.3）：绑定 task_id/run_id，
+        # 使 run 生命周期内（Agent loop / pipeline 工具链）的日志可跨模块关联。
+        async with set_log_context(
+            task_id=queued.accepted.task_id,
+            run_id=queued.accepted.run_id,
+        ):
+            try:
+                await self._dispatch_run(state)
+            finally:
+                await self._finalize_run(state)
 
     async def _prepare_execution(self, queued: _QueuedRun) -> _ExecutionState | None:
         """Acquire lock, read snapshot, validate state, and build RunExecution.
@@ -1852,13 +1938,23 @@ class TaskManager:
                         stage_attempt_id=completion_event.stage_attempt_id,
                         timestamp=completion_event.timestamp,
                     )
+                    if isinstance(
+                        completion_event.payload, PublicationCreatedPayload
+                    ):
+                        # C1a: 发布事实已持久化的唯一可靠判定点是
+                        # publication_created 事件成功落盘之后——committer
+                        # 返回只说明事件已构造，尚未进入事件日志。
+                        execution._publication_persisted = True
                 # phase 4a：零产物完成不再是失败。空 completion_events + agent
-                # 确实跑过 → COMPLETED + BuildResult(NO_DATA)，由 manager 构造；
-                # 有产物时透传 executor 的 build_result（Task 5），否则同样落 NO_DATA。
+                # 确实跑过且未附上结构化 build_result → COMPLETED + BuildResult(NO_DATA)，
+                # 由 manager 构造；有产物时透传 executor 的 build_result（Task 5），
+                # 否则同样落 NO_DATA。Phase 7 T1（bug-sweep §3 V2-dup）：executor
+                # 显式附上的结构化 build_result（含 NO_DATA 信封）始终优先于通用兑底。
                 if (
                     execution.mode is TaskMode.AGENT
                     and execution.agent_executed
                     and not completion_events
+                    and execution.build_result is None
                     and not execution.context.cancellation_requested.is_set()
                 ):
                     await self._append_completion_status(
@@ -1904,6 +2000,30 @@ class TaskManager:
                     if candidate.run_id == accepted.run_id
                 )
                 if run.status is RunStatus.COMPLETED:
+                    outcome.completion_durable = True
+                    execution.discard_completion()
+                    return
+                # C1a: 发布事实已持久化（publication_created 事件已成功落盘、
+                # 产物已落盘）时，事件追加失败不得把 run 标 FAILED——
+                # 幂等补发 run_completed，收敛为 COMPLETED，避免“已发布但 run
+                # 非成功”的孤立产物。判定用 _publication_persisted（事件落盘），
+                # 不用 _completion_committed（只是 committer 返回、事件未持久化
+                # 时收敛 COMPLETED 会静默丢失 durable 发布记录）。
+                if execution._publication_persisted:
+                    try:
+                        await self._append_completion_status(
+                            accepted,
+                            RunCompletedPayload(
+                                build_result=(
+                                    execution.build_result
+                                    if execution.build_result is not None
+                                    else _no_data_build_result()
+                                )
+                            ),
+                        )
+                    except BaseException:
+                        outcome.retain_cancellation = True
+                        raise
                     outcome.completion_durable = True
                     execution.discard_completion()
                     return

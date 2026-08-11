@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 import json
 import shutil
 from pathlib import Path
@@ -11,7 +12,8 @@ import pytest
 from agents.tool_context import ToolContext
 from app.agent_loop.context import RunContext
 from app.agent_loop.main_input_broker import MainInputBroker
-from app.pipeline.dataset_build_tool import execute_dataset_build
+from app.domain.contracts import RunManifest, TaskState
+from app.pipeline.dataset_build_tool import execute_dataset_build, validate_dataset_build_spec
 from app.tools.workdir import create_task_workdir
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -92,9 +94,22 @@ def _stage_fixture(run_ctx: RunContext, fixture_rel: str, dest_name: str) -> str
     return f"source_assets/{dest_name}"
 
 
-def _call_tool(ctx: ToolContext, spec: str, source_files: str) -> dict[str, object]:
-    args = json.dumps({"spec": spec, "source_files": source_files})
+def _call_tool(
+    ctx: ToolContext,
+    spec: str,
+    source_files: str,
+    mapping_files: str = "{}",
+) -> dict[str, object]:
+    args = json.dumps(
+        {"spec": spec, "source_files": source_files, "mapping_files": mapping_files}
+    )
     result = asyncio.run(execute_dataset_build.on_invoke_tool(ctx, args))
+    return json.loads(result)
+
+
+def _call_validate_tool(ctx: ToolContext, spec_json: str) -> dict[str, object]:
+    args = json.dumps({"spec": spec_json})
+    result = asyncio.run(validate_dataset_build_spec.on_invoke_tool(ctx, args))
     return json.loads(result)
 
 
@@ -129,6 +144,64 @@ def test_execute_dataset_build_succeeds(tmp_path: Path) -> None:
     )
     assert publication["publication_id"] == result["publication_id"]
     assert publication["supersedes_publication_id"] is None
+
+
+def test_execute_dataset_build_dual_writes_legacy_artifact_surface(
+    tmp_path: Path,
+) -> None:
+    """Phase 7 T2 dual-write: a successful managed build mirrors its outputs
+    onto the legacy ``artifacts/`` surface with a valid V1 ``run_manifest.json``
+    (no ``.runtime-publication.json`` marker — the marker would make the
+    runtime reconcile loop synthesize a fake publication record)."""
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+    run_ctx.managed_run_id = "run_dual_write"
+    rel = _stage_fixture(run_ctx, "gdc/gdc_expression.tsv", "gdc_expression.tsv")
+
+    data = _call_tool(ctx, _spec_json(), json.dumps({"binding_gdc": rel}))
+
+    assert data["status"] == "ok"
+    artifacts_dir = run_ctx.work_dir.root / "artifacts"
+    manifest_path = artifacts_dir / "run_manifest.json"
+    assert manifest_path.is_file()
+    run_manifest = RunManifest.model_validate_json(
+        manifest_path.read_text("utf-8")
+    )
+    assert run_manifest.task_id == "test_build_tool"
+    assert run_manifest.task_state is TaskState.COMPLETED
+    assert run_manifest.validation.status == "valid"
+    assert run_manifest.validation.failed_count == 0
+    # Every declared artifact is artifacts/-prefixed and present on disk.
+    assert run_manifest.artifacts
+    for entry in run_manifest.artifacts:
+        assert entry.relative_path.startswith("artifacts/")
+        assert (
+            artifacts_dir / entry.relative_path.removeprefix("artifacts/")
+        ).is_file()
+    # The V2 dataset manifest itself is bridged as an artifact.
+    assert any(
+        entry.artifact_id == "dataset_manifest" for entry in run_manifest.artifacts
+    )
+    # The primary dataset was copied under its V2 relative layout.
+    assert (artifacts_dir / "merged" / "primary.csv").is_file()
+    # No marker: the legacy surface is served in degraded mode after the run
+    # completes, and the runtime reconcile never fabricates a publication.
+    assert not (artifacts_dir / ".runtime-publication.json").exists()
+
+
+def test_execute_dataset_build_skips_legacy_bridge_without_managed_run(
+    tmp_path: Path,
+) -> None:
+    """Direct (unmanaged) tool invocations keep writing only the build dir;
+    no legacy artifact surface is fabricated for them."""
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+    rel = _stage_fixture(run_ctx, "gdc/gdc_expression.tsv", "gdc_expression.tsv")
+
+    data = _call_tool(ctx, _spec_json(), json.dumps({"binding_gdc": rel}))
+
+    assert data["status"] == "ok"
+    assert not (run_ctx.work_dir.root / "artifacts" / "run_manifest.json").exists()
 
 
 def test_execute_dataset_build_invalid_spec(tmp_path: Path) -> None:
@@ -470,6 +543,59 @@ def test_execute_dataset_build_all_empty_mixed_sources_is_no_data(tmp_path: Path
     assert result.get("publication_id") is None
 
 
+def test_no_data_envelope_carries_binding_failures_and_actionable_next_action() -> None:
+    """K2: a metadata-only series matrix rejection surfaces per-binding failure
+    detail and an actionable next action instead of the generic
+    "检查数据源可用性" message.  (docs/REVIEW_2026-08-10-task-9ce0124f.md §5.3.)"""
+    from app.datasets.contracts import BindingFailureDetail
+    from app.pipeline.dataset_build_tool import _no_data_envelope
+
+    envelope = _no_data_envelope(
+        ["binding_geo_ad"],
+        ["no_primary_data"],
+        binding_failures=[
+            BindingFailureDetail(
+                binding_id="binding_geo_ad",
+                reason_code="no_primary_data",
+                message="series matrix contains no data rows",
+            )
+        ],
+    )
+
+    assert envelope.status == "no_data"
+    assert envelope.valid_row_count == 0
+    assert envelope.rejected_sources == ["binding_geo_ad"]
+    assert len(envelope.binding_failures) == 1
+    detail = envelope.binding_failures[0]
+    assert detail.binding_id == "binding_geo_ad"
+    assert detail.message == "series matrix contains no data rows"
+    assert "soft" in envelope.recommended_next_action
+    assert "检查数据源可用性" not in envelope.recommended_next_action
+
+
+def test_no_data_envelope_keeps_generic_action_when_cause_unknown() -> None:
+    """K2: failures that do not match a known root cause keep the generic
+    next action; binding_failures still carry the per-binding detail."""
+    from app.datasets.contracts import BindingFailureDetail
+    from app.pipeline.dataset_build_tool import _no_data_envelope
+
+    envelope = _no_data_envelope(
+        ["binding_x"],
+        ["no_primary_data"],
+        binding_failures=[
+            BindingFailureDetail(
+                binding_id="binding_x",
+                reason_code="no_primary_data",
+                message="source yielded zero valid rows after canonicalization",
+            )
+        ],
+    )
+
+    assert envelope.binding_failures[0].binding_id == "binding_x"
+    assert envelope.binding_failures[0].reason_code == "no_primary_data"
+    assert envelope.recommended_next_action == "检查数据源可用性或调整查询后重试。"
+
+
 @pytest.mark.asyncio
 async def test_execute_dataset_build_refuses_publication_when_correction_pending_mid_build(
     tmp_path: Path,
@@ -650,6 +776,23 @@ def _stage_geo_matrix(
     return f"source_assets/{name}"
 
 
+def _stage_geo_annotation(
+    run_ctx: RunContext,
+    mapping: dict[str, str],
+    name: str = "GPL570.annot.gz",
+) -> str:
+    """Stage a gzip SOFT platform annotation into the run workdir."""
+    import gzip
+
+    dest = run_ctx.work_dir.source_asset_file(name)
+    lines = ["!platform_table_begin", '"ID"\t"GENE_SYMBOL"']
+    lines.extend(f'"{probe}"\t"{gene}"' for probe, gene in sorted(mapping.items()))
+    lines.append("!platform_table_end")
+    with gzip.open(dest, "wt", encoding="utf-8") as handle:
+        handle.write("\n".join(lines) + "\n")
+    return f"source_assets/{name}"
+
+
 def test_execute_dataset_build_gene_required_probe_source_is_no_data_with_probe_code(
     tmp_path: Path,
 ) -> None:
@@ -680,6 +823,82 @@ def test_execute_dataset_build_gene_required_probe_source_is_no_data_with_probe_
     build_root = run_ctx.work_dir.root / "datasets_build" / "build_tool_test"
     assert list((build_root / "canonical").glob("binding_geo*"))
     assert not list((build_root / "publish").glob("build_tool_test_*"))
+
+
+def test_execute_dataset_build_mapping_files_enables_gene_level_from_probe(
+    tmp_path: Path,
+) -> None:
+    """P0 wiring (REVIEW_2026-08-09 §7.1): passing the GPL platform
+    annotation via ``mapping_files`` lets a gene-required probe build publish
+    the gene primary (probe rows re-namespaced to genes, full coverage) —
+    the same scenario that NO_DATA's without the annotation."""
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+    rel = _stage_geo_matrix(run_ctx, [("AFFX-BioB-5", "1.5", "2.0")])
+    annotation_rel = _stage_geo_annotation(run_ctx, {"AFFX-BioB-5": "TP53"})
+
+    data = _call_tool(
+        ctx,
+        _geo_spec_json(),
+        json.dumps({"binding_geo": rel}),
+        mapping_files=json.dumps({"binding_geo": annotation_rel}),
+    )
+
+    assert data["status"] == "ok"
+    result = data["result"]
+    assert result["status"] == "succeeded"
+    assert result["valid_row_count"] == 2
+    assert result["reason_codes"] == []
+    assert result["publication_id"]
+
+    build_root = run_ctx.work_dir.root / "datasets_build" / "build_tool_test"
+    primary = build_root / "merged" / "primary.csv"
+    with primary.open(encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert {row["gene_id"] for row in rows} == {"TP53"}
+    assert {row["gene_id_namespace"] for row in rows} == {"gene_symbol"}
+    assert (build_root / "canonical" / "binding_geo_probe_mapping.csv").is_file()
+
+
+def test_execute_dataset_build_mapping_files_unknown_binding_rejected(
+    tmp_path: Path,
+) -> None:
+    """A mapping_files entry referencing a binding not in the spec is
+    rejected as invalid_input before any file is touched."""
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+    rel = _stage_geo_matrix(run_ctx, [("AFFX-BioB-5", "1.5", "2.0")])
+
+    data = _call_tool(
+        ctx,
+        _geo_spec_json(),
+        json.dumps({"binding_geo": rel}),
+        mapping_files=json.dumps({"binding_geo": rel, "binding_ghost": rel}),
+    )
+
+    assert data["status"] == "invalid_input"
+    assert "binding_ghost" in data["message"]
+    assert data["retryable"] is False
+
+
+def test_execute_dataset_build_mapping_files_unresolvable_path_is_retryable(
+    tmp_path: Path,
+) -> None:
+    """A mapping_files entry whose path does not resolve returns a retryable
+    error (same semantics as source_files)."""
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+    rel = _stage_geo_matrix(run_ctx, [("AFFX-BioB-5", "1.5", "2.0")])
+
+    data = _call_tool(
+        ctx,
+        _geo_spec_json(),
+        json.dumps({"binding_geo": rel}),
+        mapping_files=json.dumps({"binding_geo": "source_assets/missing.annot.gz"}),
+    )
+
+    assert data["status"] == "error"
+    assert data["retryable"] is True
 
 
 def test_execute_dataset_build_probe_level_publishes_probe_primary(tmp_path: Path) -> None:
@@ -713,6 +932,54 @@ def test_execute_dataset_build_probe_level_publishes_probe_primary(tmp_path: Pat
     assert "probe_coverage" in warnings
     assert list((build_root / "publish").glob("build_tool_test_*"))
     assert (build_root / "probe_mapping_summaries.csv").is_file()
+
+
+def test_execute_dataset_build_probe_level_emits_platform_records(
+    tmp_path: Path,
+) -> None:
+    """F4 (Phase 5 review §3): the V2 probe-primary publication emits a
+    PlatformRecord per GPL attempt (platform_audit.csv), mirroring the V1
+    platform audit — the audit lands in the manifest and in the immutable
+    publication package even when no annotation asset was supplied
+    (NOT_ATTEMPTED)."""
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+    rel = _stage_geo_matrix(run_ctx, [("AFFX-BioB-5", "1.5", "2.0")])
+
+    data = _call_tool(
+        ctx,
+        _geo_spec_json(
+            schema_ref="gene_expression.probe_long.v1",
+            row_granularity="probe_sample_measurement",
+            profile_ref="gene_expression.probe_release.v1",
+        ),
+        json.dumps({"binding_geo": rel}),
+    )
+
+    assert data["status"] == "ok"
+    build_root = run_ctx.work_dir.root / "datasets_build" / "build_tool_test"
+    audit_path = build_root / "platform_audit.csv"
+    assert audit_path.is_file()
+    with audit_path.open("r", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert rows and rows[0]["platform_id"] == "GPL570"
+    assert rows[0]["annotation_status"] == "not_attempted"
+    assert rows[0]["source_id"] == "binding_geo"
+
+    # The audit is registered in the manifest (audit_report role) and copied
+    # into the immutable publication package.
+    manifest = json.loads(
+        (build_root / "dataset_manifest.json").read_text("utf-8")
+    )
+    audit_artifacts = [
+        entry
+        for entry in manifest["artifacts"]
+        if entry["role"] == "audit_report"
+        and entry["relative_path"] == "platform_audit.csv"
+    ]
+    assert len(audit_artifacts) == 1
+    version_dir = list((build_root / "publish").glob("build_tool_test_*"))[0]
+    assert (version_dir / "platform_audit.csv").is_file()
 
 
 def test_execute_dataset_build_empty_geo_tximport_is_no_data_no_primary(
@@ -873,3 +1140,102 @@ def test_execute_dataset_build_rejects_target_entity_level_mismatch_as_invalid_i
     assert data["retryable"] is False
     assert "entity_level" in data["message"]
     assert not (run_ctx.work_dir.root / "datasets_build").exists()
+
+
+def test_validate_dataset_build_spec_accepts_valid_spec(tmp_path: Path) -> None:
+    """A2a: the Agent-facing spec validator accepts a valid gene-expression spec."""
+    ctx = _make_ctx(tmp_path)
+    data = _call_validate_tool(ctx, _spec_json())
+    assert data["status"] == "valid"
+    assert data["valid"] is True
+    assert data["reason_codes"] == []
+
+
+def test_validate_dataset_build_spec_rejects_unknown_schema(tmp_path: Path) -> None:
+    """A2a: an unregistered schema_ref is reported with structured reasons."""
+    ctx = _make_ctx(tmp_path)
+    spec = json.loads(_spec_json())
+    spec["schema_ref"] = "no.such.schema.v1"
+    data = _call_validate_tool(ctx, json.dumps(spec))
+    assert data["status"] == "invalid"
+    assert data["valid"] is False
+    assert "unknown_schema" in data["reason_codes"]
+
+
+def test_validate_dataset_build_spec_rejects_unallowed_profile(tmp_path: Path) -> None:
+    """A2a: a validation profile outside the server allowlist is fail-closed."""
+    ctx = _make_ctx(tmp_path)
+    spec = json.loads(_spec_json())
+    spec["validation_profile_ref"] = "mutation.release.v1"
+    data = _call_validate_tool(ctx, json.dumps(spec))
+    assert data["status"] == "invalid"
+    assert "profile_not_allowed" in data["reason_codes"]
+
+
+def test_validate_dataset_build_spec_handles_bad_json(tmp_path: Path) -> None:
+    """A2a: malformed spec JSON is invalid_input, never a crash."""
+    ctx = _make_ctx(tmp_path)
+    data = _call_validate_tool(ctx, "{not json")
+    assert data["status"] == "invalid_input"
+    assert data["retryable"] is False
+
+
+
+
+
+def test_execute_dataset_build_records_real_download_attempts(tmp_path: Path) -> None:
+    """A2c: source assets carry a real, recorded DownloadAttempt (lineage closed).
+
+    Every pre-acquired source file must be backed by a persisted
+    ``DownloadAttempt`` on the RunContext instead of a bare generated uuid:
+    the SourceAsset's ``successful_attempt_id`` must resolve to a real
+    attempt with status ``succeeded``, and the published provenance.json must
+    expose the attempt reference.
+    """
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+    rel = _stage_fixture(run_ctx, "gdc/gdc_expression.tsv", "gdc_expression.tsv")
+
+    data = _call_tool(ctx, _spec_json(), json.dumps({"binding_gdc": rel}))
+
+    attempts = run_ctx.download_attempts
+    assert len(attempts) == 1
+    attempt = attempts[0]
+    assert attempt.status.value == "succeeded"
+    assert attempt.attempt_id.startswith("download_attempt_")
+    assert attempt.source_id == "gdc"
+
+    # The published asset lineage points at the real attempt.
+    output_dir = Path(data["output_dir"])
+    publish_dirs = list((output_dir / "publish").glob("build_tool_test_*"))
+    provenance = json.loads(
+        (publish_dirs[0] / "provenance.json").read_text("utf-8")
+    )
+    assert provenance["sources"] == [
+        {
+            "binding_id": "binding_gdc",
+            "asset_id": provenance["sources"][0]["asset_id"],
+            "source_id": "binding_gdc",
+            "logical_file": "gdc_expression.tsv",
+            "sha256": provenance["sources"][0]["sha256"],
+            "successful_attempt_id": attempt.attempt_id,
+        }
+    ]
+
+
+def test_execute_dataset_build_records_attempt_per_binding(tmp_path: Path) -> None:
+    """A2c: one real attempt per source binding, each with its own asset link."""
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+    rel_gdc = _stage_fixture(run_ctx, "gdc/gdc_expression.tsv", "gdc_expression.tsv")
+    rel_xena = _stage_fixture(run_ctx, "gdc/gdc_expression.tsv", "xena_expression.tsv")
+
+    data = _call_tool(ctx, _mixed_spec_json(), json.dumps(
+        {"binding_gdc": rel_gdc, "binding_xena": rel_xena}
+    ))
+
+    assert data["status"] == "ok"
+    attempts = run_ctx.download_attempts
+    assert len(attempts) == 2
+    assert {a.source_id for a in attempts} == {"gdc", "ucsc_xena"}
+    assert all(a.status.value == "succeeded" for a in attempts)

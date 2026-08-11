@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import FrozenInstanceError
+from datetime import UTC, datetime
 
 import pytest
 from agents import RunContextWrapper, function_tool
@@ -9,10 +10,14 @@ from agents.tool_context import ToolContext
 from app.agent_loop.agent import (
     INSTRUCTIONS,
     AgentBuild,
+    _format_progress_briefing_section,
     build_agent,
     resolve_agent_instructions,
 )
-from app.agent_loop.context import RunContext
+from app.agent_loop.context import PendingDatasetBuild, RunContext
+from app.domain.contracts.dataset_state import BuildResult, BuildResultStatus
+from app.domain.contracts.enums import Database
+from app.domain.contracts.source import SourceRecord
 from app.skills.catalog import SkillCatalog, SkillDescriptor
 from app.skills.registry import SkillCategory, SkillDef
 
@@ -48,7 +53,7 @@ def test_agent_exposes_only_gateway_and_core_runtime_tools() -> None:
     assert [tool.name for tool in build.agent.tools] == [
         "find_skill",
         "invoke_skill",
-        "run_research_pipeline",
+        "validate_dataset_build_spec",
         "request_human_correction",
         "execute_dataset_build",
         "read_file",
@@ -87,8 +92,73 @@ def test_agent_prompt_distinguishes_results_from_capability_gaps() -> None:
     assert "不等于能力缺失" in instructions
     assert "capability_gap" in instructions
     assert "同一 domain+capability 最多一次" in instructions
-    assert "优先检索 preferred_sources" in instructions
-    assert "公开、免登录" in instructions
+    assert "优先检索其中与课题相关的数据库" in instructions
+    assert "免登录的来源可自动探索" in instructions
+
+
+def test_agent_step5_requires_artifact_status_check_before_reporting() -> None:
+    """A3: 汇报前必须确认产物状态；输出纪律以产物铁律收尾。
+
+    (docs/REVIEW_2026-08-11-task-25d12608.md §5.4 A3.)"""
+
+    assert "汇报前先确认产物状态" in INSTRUCTIONS
+    assert "是否已产出正式产物" in INSTRUCTIONS
+    assert "执行\n`execute_dataset_build` 完成至少一次构建再汇报" in INSTRUCTIONS
+    assert "产物铁律" in INSTRUCTIONS
+
+
+def test_progress_briefing_reports_used_unused_sources_and_empty_state() -> None:
+    """A1: 简报反映已用/未用数据源、产物状态、构建次数、浏览器工具。"""
+
+    context = RunContext(preferred_sources=["geo", "pubmed", "xena"])
+    context.log_query("AD osteoporosis", "pubmed", "success", 10)
+    context.log_query("AD brain", "geo", "success", 5)
+
+    briefing = _format_progress_briefing_section(context)
+
+    assert "## 工作进度简报（当前状态，非指令）" in briefing
+    assert "正式产物（publication）：无" in briefing
+    assert "构建尝试：0 次" in briefing
+    assert "已下载原始文件：0 个" in briefing
+    assert "已使用数据源：pubmed, geo" in briefing
+    assert "未使用数据源（课题相关可继续探索）：xena" in briefing
+    assert "浏览器自动化工具：未使用" in briefing
+
+
+def test_progress_briefing_reports_publication_downloads_and_browser_use() -> None:
+    """A1: 有产物、有下载、用过浏览器自动化时，简报如实反映。"""
+
+    context = RunContext(task_id="task_briefing", managed_run_id="run_x")
+    context.install_dataset_build_outcome(
+        PendingDatasetBuild(
+            run_id="run_x",
+            build_id="build_x",
+            build_result=BuildResult(
+                status=BuildResultStatus.SUCCEEDED,
+                valid_row_count=42,
+                successful_sources=["binding_geo"],
+                publication_id="pub_build_x",
+            ),
+        )
+    )
+    context.add_raw_asset("source_assets/GSE116925_series_matrix.txt.gz")
+    context.add_source(
+        SourceRecord(
+            source_id="src_browser",
+            database=Database.BROWSER,
+            accession="supplement.html",
+            url="https://example.org/supplement.html",
+            title="Browser download supplement.html",
+            retrieved_at=datetime.now(UTC),
+        )
+    )
+
+    briefing = _format_progress_briefing_section(context)
+
+    assert "正式产物（publication）：有" in briefing
+    assert "构建尝试：0 次" in briefing
+    assert "已下载原始文件：1 个" in briefing
+    assert "浏览器自动化工具：已使用" in briefing
 
 
 @pytest.mark.asyncio

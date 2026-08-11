@@ -16,6 +16,10 @@ import biomedLogoV2 from "../../../assets/logo/biomed-qagent-logo-v2.svg";
 import { TaskStatusIcon } from "@/components/taskStatus";
 import { TASK_STATUS_META } from "@/components/taskStatusMeta";
 import {
+  latestBuildStatus,
+  taskOutcome,
+} from "@/components/taskOutcome";
+import {
   Alert,
   AlertDescription,
   AlertTitle,
@@ -104,23 +108,15 @@ function TaskRow({
   const { summary } = task;
   const status = TASK_STATUS_META[summary.status];
   const active = isActiveStatus(summary.status);
-  const latestRunId = task.runOrder[task.runOrder.length - 1];
-  const latestRun =
-    latestRunId === undefined ? null : task.runsById[latestRunId] ?? null;
-  const buildStatus = latestRun?.summary?.build_result?.status ?? null;
+  const buildStatus = latestBuildStatus(task);
+  const outcome = taskOutcome(task);
   const statusIconClass = active
     ? "text-primary"
-    : buildStatus === "no_data"
-      ? "text-sky-600 dark:text-sky-400"
-      : buildStatus === "spec_rejected"
-        ? "text-amber-600 dark:text-amber-400"
-        : buildStatus === "succeeded" || buildStatus === "partial_success"
-          ? "text-emerald-600 dark:text-emerald-400"
-          : summary.status === "failed" ||
-              summary.status === "cancelled" ||
-              summary.status === "interrupted"
-            ? "text-destructive"
-            : undefined;
+    : outcome === "data"
+      ? "text-emerald-600 dark:text-emerald-400"
+      : outcome === "problem"
+        ? "text-destructive"
+        : undefined;
   const cancelling = summary.status === "cancel_requested" || pendingCancel;
 
   return (
@@ -316,8 +312,8 @@ export function SessionSidebar({
   return (
     <>
       <Sidebar>
-        <SidebarHeader className="gap-1 p-1">
-          <div className="flex min-w-0 items-center px-1">
+        <SidebarHeader className="gap-1 p-2">
+          <div className="flex min-w-0 items-center">
             <img
               src={biomedLogoV2}
               alt="BioMed QAgent"
@@ -327,11 +323,11 @@ export function SessionSidebar({
           </div>
           <Button
             variant="outline"
-            size="lg"
-            className="h-11 w-full justify-start gap-2 px-3"
+            size="default"
+            className="w-full justify-start gap-2 rounded-md p-2"
             onClick={showNewDraft}
           >
-            <PlusCircleIcon data-icon="inline-start" className="size-5" />
+            <PlusCircleIcon data-icon="inline-start" className="size-4" />
             <span className="truncate">新建研究</span>
             <span className="ml-auto flex shrink-0 items-center gap-1">
               <kbd className="rounded-md border border-sidebar-border bg-sidebar-accent px-1.5 py-0.5 font-mono text-[10px] font-medium text-sidebar-foreground/70">

@@ -12,8 +12,6 @@ import {
   optBoolean,
 } from "@/lib/eventValidatorHelpers";
 
-export { assertDeclarativeManifest } from "@/lib/apiDeclarativeParsers";
-
 /* ---- Databases ---- */
 
 export function parseDatabasesEnvelope(json: unknown): { databases: DatabaseRecord[] } {

@@ -680,9 +680,19 @@ async def test_fixture_create_returns_202_then_completes_with_durable_bridge(
     ]
     assert lifecycle_types[-2:] == ["run_finalizing", "run_completed"]
     assert artifact_response.status_code == 200
-    assert artifact_response.json()["artifacts"][0]["artifact_id"] == "run_manifest"
+    assert (
+        artifact_response.json()["artifacts"][0]["artifact_id"]
+        == "run_manifest"
+    )
     assert manifest_response.status_code == 200
-    assert manifest_response.json()["request"]["topic"] == topic.strip()
+    manifest = manifest_response.json()
+    # V2 语义：run_manifest 是 DatasetManifest 格式（V1 的 request.topic 面已退役）。
+    assert manifest["build_id"] == "fixture_build"
+    assert manifest["dataset_family"] == "gene_expression"
+    assert manifest["row_count"] == 4
+    assert any(
+        entry["role"] == "primary_dataset" for entry in manifest["artifacts"]
+    )
     assert new_continuation.status_code == retried_request_id.status_code == 409
     assert (
         new_continuation.json()

@@ -413,25 +413,3 @@ def test_all_empty_sources_never_fabricate_identity(tmp_path: Path) -> None:
     assert "namespace_mismatch" not in report.reasons
 
 
-def test_v1_pipeline_allowlist_unchanged() -> None:
-    """T5: the V1 deterministic-pipeline allowlist is untouched by GEO V2 work."""
-    from app.domain.contracts import Database
-    from app.domain.contracts.enums import SUPPORTED_PIPELINE_SOURCE_COMBINATIONS
-
-    expected = {
-        frozenset({Database.GEO}),
-        frozenset({Database.PUBMED, Database.GEO}),
-        frozenset({Database.GDC}),
-        frozenset({Database.UCSC_XENA}),
-        frozenset({Database.GDC, Database.UCSC_XENA}),
-        frozenset({Database.REACTOME}),
-    }
-    assert expected == SUPPORTED_PIPELINE_SOURCE_COMBINATIONS
-    # GEO never merges with GDC/Xena in the deterministic pipeline (the D4
-    # gate is the only cross-source GEO path, and it is V2-only).
-    assert frozenset({Database.GEO, Database.GDC}) not in (
-        SUPPORTED_PIPELINE_SOURCE_COMBINATIONS
-    )
-    assert frozenset({Database.GEO, Database.UCSC_XENA}) not in (
-        SUPPORTED_PIPELINE_SOURCE_COMBINATIONS
-    )
