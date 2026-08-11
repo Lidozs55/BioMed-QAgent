@@ -1,0 +1,144 @@
+{
+  "field_mappings": [
+    {
+      "confidence_level": "high",
+      "evidence": "GDC files API: gene_id column header",
+      "mapping_id": "map_binding_gdc_gene_id_to_raw",
+      "mapping_method": "adapter_declared",
+      "source_field": "gene_id",
+      "target_field": "gene_id_raw",
+      "transform": "identity"
+    },
+    {
+      "confidence_level": "high",
+      "evidence": "matrix sample column header",
+      "mapping_id": "map_binding_gdc_sample_id_S1",
+      "mapping_method": "adapter_declared",
+      "source_field": "S1",
+      "target_field": "sample_id",
+      "transform": "wide_to_long_sample_id"
+    },
+    {
+      "confidence_level": "high",
+      "evidence": "matrix sample column header",
+      "mapping_id": "map_binding_gdc_value_S1",
+      "mapping_method": "adapter_declared",
+      "source_field": "S1",
+      "target_field": "expression_value",
+      "transform": "wide_to_long_value"
+    },
+    {
+      "confidence_level": "high",
+      "evidence": "matrix sample column header",
+      "mapping_id": "map_binding_gdc_sample_id_S2",
+      "mapping_method": "adapter_declared",
+      "source_field": "S2",
+      "target_field": "sample_id",
+      "transform": "wide_to_long_sample_id"
+    },
+    {
+      "confidence_level": "high",
+      "evidence": "matrix sample column header",
+      "mapping_id": "map_binding_gdc_value_S2",
+      "mapping_method": "adapter_declared",
+      "source_field": "S2",
+      "target_field": "expression_value",
+      "transform": "wide_to_long_value"
+    }
+  ],
+  "merge_strategy": "append_by_canonical_row",
+  "normalization_rules": [
+    {
+      "binding_id": "binding_gdc",
+      "namespaces": [
+        "ensembl_gene"
+      ],
+      "normalization_log_file": "canonical/binding_gdc_normalization_log.csv"
+    }
+  ],
+  "sample_backtraces": [
+    {
+      "asset_id": "asset_e0a607a1ca084789778113f316ef2afd93019984ddb4645f02ebf312275f58c7",
+      "gene_id": "ENSG00000141510",
+      "gene_id_namespace": "ensembl_gene",
+      "record_id": "rec_5158b04e90b8f88ad5f85a790077d47e",
+      "sample_id": "S1",
+      "source_column_name": "S1",
+      "source_line_number": "2",
+      "source_logical_file": "gdc_expression.tsv",
+      "source_raw_value": "1.5",
+      "transforms": [
+        {
+          "input": "TP53",
+          "output": "ENSG00000141510",
+          "transform": "namespace_authorize"
+        }
+      ]
+    },
+    {
+      "asset_id": "asset_e0a607a1ca084789778113f316ef2afd93019984ddb4645f02ebf312275f58c7",
+      "gene_id": "ENSG00000141510",
+      "gene_id_namespace": "ensembl_gene",
+      "record_id": "rec_6e50da28d89d507ca222b70d98077020",
+      "sample_id": "S2",
+      "source_column_name": "S2",
+      "source_line_number": "2",
+      "source_logical_file": "gdc_expression.tsv",
+      "source_raw_value": "2",
+      "transforms": [
+        {
+          "input": "TP53",
+          "output": "ENSG00000141510",
+          "transform": "namespace_authorize"
+        }
+      ]
+    },
+    {
+      "asset_id": "asset_e0a607a1ca084789778113f316ef2afd93019984ddb4645f02ebf312275f58c7",
+      "gene_id": "ENSG00000012048",
+      "gene_id_namespace": "ensembl_gene",
+      "record_id": "rec_613c38e6a7551625d2d00a39bc4152c0",
+      "sample_id": "S1",
+      "source_column_name": "S1",
+      "source_line_number": "3",
+      "source_logical_file": "gdc_expression.tsv",
+      "source_raw_value": "3",
+      "transforms": [
+        {
+          "input": "BRCA1",
+          "output": "ENSG00000012048",
+          "transform": "namespace_authorize"
+        }
+      ]
+    },
+    {
+      "asset_id": "asset_e0a607a1ca084789778113f316ef2afd93019984ddb4645f02ebf312275f58c7",
+      "gene_id": "ENSG00000012048",
+      "gene_id_namespace": "ensembl_gene",
+      "record_id": "rec_5c7d1bc1d61d247a1f9f1a7dbb03ab74",
+      "sample_id": "S2",
+      "source_column_name": "S2",
+      "source_line_number": "3",
+      "source_logical_file": "gdc_expression.tsv",
+      "source_raw_value": "4.25",
+      "transforms": [
+        {
+          "input": "BRCA1",
+          "output": "ENSG00000012048",
+          "transform": "namespace_authorize"
+        }
+      ]
+    }
+  ],
+  "schema_ref": "gene_expression.long.v1",
+  "sources": [
+    {
+      "asset_id": "asset_e0a607a1ca084789778113f316ef2afd93019984ddb4645f02ebf312275f58c7",
+      "binding_id": "binding_gdc",
+      "logical_file": "gdc_expression.tsv",
+      "sha256": "e0a607a1ca084789778113f316ef2afd93019984ddb4645f02ebf312275f58c7",
+      "source_id": "src_binding_gdc",
+      "successful_attempt_id": "attempt_binding_gdc"
+    }
+  ]
+}

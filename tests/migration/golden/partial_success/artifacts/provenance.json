@@ -1,0 +1,144 @@
+{
+  "field_mappings": [
+    {
+      "confidence_level": "high",
+      "evidence": "Xena matrix gene_id column header",
+      "mapping_id": "map_binding_xena_gene_id_to_raw",
+      "mapping_method": "adapter_declared",
+      "source_field": "gene_id",
+      "target_field": "gene_id_raw",
+      "transform": "identity"
+    },
+    {
+      "confidence_level": "high",
+      "evidence": "matrix sample column header",
+      "mapping_id": "map_binding_xena_sample_id_S1",
+      "mapping_method": "adapter_declared",
+      "source_field": "S1",
+      "target_field": "sample_id",
+      "transform": "wide_to_long_sample_id"
+    },
+    {
+      "confidence_level": "high",
+      "evidence": "matrix sample column header",
+      "mapping_id": "map_binding_xena_value_S1",
+      "mapping_method": "adapter_declared",
+      "source_field": "S1",
+      "target_field": "expression_value",
+      "transform": "wide_to_long_value"
+    },
+    {
+      "confidence_level": "high",
+      "evidence": "matrix sample column header",
+      "mapping_id": "map_binding_xena_sample_id_S2",
+      "mapping_method": "adapter_declared",
+      "source_field": "S2",
+      "target_field": "sample_id",
+      "transform": "wide_to_long_sample_id"
+    },
+    {
+      "confidence_level": "high",
+      "evidence": "matrix sample column header",
+      "mapping_id": "map_binding_xena_value_S2",
+      "mapping_method": "adapter_declared",
+      "source_field": "S2",
+      "target_field": "expression_value",
+      "transform": "wide_to_long_value"
+    }
+  ],
+  "merge_strategy": "append_by_canonical_row",
+  "normalization_rules": [
+    {
+      "binding_id": "binding_xena",
+      "namespaces": [
+        "ensembl_gene"
+      ],
+      "normalization_log_file": "canonical/binding_xena_normalization_log.csv"
+    }
+  ],
+  "sample_backtraces": [
+    {
+      "asset_id": "asset_512306f761ce90bf89e3dd43b634a2b1e134e533afb9f1f78cb820d4ecd50e02",
+      "gene_id": "ENSG00000141510",
+      "gene_id_namespace": "ensembl_gene",
+      "record_id": "rec_988f0fd4cee44485802d5a1b45368434",
+      "sample_id": "S1",
+      "source_column_name": "S1",
+      "source_line_number": "2",
+      "source_logical_file": "xena_matrix.tsv",
+      "source_raw_value": "1.5",
+      "transforms": [
+        {
+          "input": "TP53",
+          "output": "ENSG00000141510",
+          "transform": "namespace_authorize"
+        }
+      ]
+    },
+    {
+      "asset_id": "asset_512306f761ce90bf89e3dd43b634a2b1e134e533afb9f1f78cb820d4ecd50e02",
+      "gene_id": "ENSG00000141510",
+      "gene_id_namespace": "ensembl_gene",
+      "record_id": "rec_cc9cfdb31ee7eb665d3773a6bc8058ef",
+      "sample_id": "S2",
+      "source_column_name": "S2",
+      "source_line_number": "2",
+      "source_logical_file": "xena_matrix.tsv",
+      "source_raw_value": "9.9",
+      "transforms": [
+        {
+          "input": "TP53",
+          "output": "ENSG00000141510",
+          "transform": "namespace_authorize"
+        }
+      ]
+    },
+    {
+      "asset_id": "asset_512306f761ce90bf89e3dd43b634a2b1e134e533afb9f1f78cb820d4ecd50e02",
+      "gene_id": "ENSG00000012048",
+      "gene_id_namespace": "ensembl_gene",
+      "record_id": "rec_b2546875e6136702dc46be16af53fb36",
+      "sample_id": "S1",
+      "source_column_name": "S1",
+      "source_line_number": "3",
+      "source_logical_file": "xena_matrix.tsv",
+      "source_raw_value": "3",
+      "transforms": [
+        {
+          "input": "BRCA1",
+          "output": "ENSG00000012048",
+          "transform": "namespace_authorize"
+        }
+      ]
+    },
+    {
+      "asset_id": "asset_512306f761ce90bf89e3dd43b634a2b1e134e533afb9f1f78cb820d4ecd50e02",
+      "gene_id": "ENSG00000012048",
+      "gene_id_namespace": "ensembl_gene",
+      "record_id": "rec_c1e79354c2181c0fd220207166e7d6fe",
+      "sample_id": "S2",
+      "source_column_name": "S2",
+      "source_line_number": "3",
+      "source_logical_file": "xena_matrix.tsv",
+      "source_raw_value": "4.25",
+      "transforms": [
+        {
+          "input": "BRCA1",
+          "output": "ENSG00000012048",
+          "transform": "namespace_authorize"
+        }
+      ]
+    }
+  ],
+  "schema_ref": "gene_expression.long.v1",
+  "sources": [
+    {
+      "asset_id": "asset_512306f761ce90bf89e3dd43b634a2b1e134e533afb9f1f78cb820d4ecd50e02",
+      "binding_id": "binding_xena",
+      "logical_file": "xena_matrix.tsv",
+      "sha256": "512306f761ce90bf89e3dd43b634a2b1e134e533afb9f1f78cb820d4ecd50e02",
+      "source_id": "src_binding_xena",
+      "successful_attempt_id": "attempt_binding_xena"
+    }
+  ]
+}

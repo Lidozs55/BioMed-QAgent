@@ -1,0 +1,311 @@
+{
+  "artifact_fixtures": [
+    {
+      "artifact_id": "artifact_683e6645486e9a3f0159f6cfdf6b4114",
+      "relative_path": "merged/primary.csv",
+      "repo_relative_path": "tests/migration/golden/partial_success/artifacts/merged/primary.csv",
+      "role": "primary_dataset",
+      "sha256": "ba1fad3e81a40d16322138acae0f042a40cee066be99ed6a138502ab8006a390",
+      "size_bytes": 1492
+    },
+    {
+      "artifact_id": "artifact_9ae7d3ef04a0fc8fb38c4bb94963a239",
+      "relative_path": "schema.json",
+      "repo_relative_path": "tests/migration/golden/partial_success/artifacts/schema.json",
+      "role": "schema",
+      "sha256": "a9c62815e6161c13bd2e221e07c9d006372ae67500924e2628f826a04ae8f624",
+      "size_bytes": 8096
+    },
+    {
+      "artifact_id": "artifact_9842a864a0d526e8965237f7748461c3",
+      "relative_path": "provenance.json",
+      "repo_relative_path": "tests/migration/golden/partial_success/artifacts/provenance.json",
+      "role": "provenance",
+      "sha256": "e98b73eab77cf07a42d5e40fce22646bf6f3442ac9a627852202091e05861fa4",
+      "size_bytes": 4691
+    },
+    {
+      "artifact_id": "artifact_ae7fa0e459e3cbae7744c3ed2714cacf",
+      "relative_path": "batches/binding_xena_rejected.csv",
+      "repo_relative_path": "tests/migration/golden/partial_success/artifacts/batches/binding_xena_rejected.csv",
+      "role": "audit_report",
+      "sha256": "11f4eec0859378db407915f7395282a6f2c0946cc071a4a4aa8992118e17c525",
+      "size_bytes": 119
+    },
+    {
+      "artifact_id": "artifact_f2bb2cc3cd494790f9e06e1f6bd017ca",
+      "relative_path": "canonical/binding_xena_field_mappings.csv",
+      "repo_relative_path": "tests/migration/golden/partial_success/artifacts/canonical/binding_xena_field_mappings.csv",
+      "role": "audit_report",
+      "sha256": "3e00715b27bc1a4f811404e6662f840843cef6842ee5fdf51cb825d46144f30d",
+      "size_bytes": 1028
+    },
+    {
+      "artifact_id": "artifact_b4dc83abe1db3360e753ed23e744f464",
+      "relative_path": "canonical/binding_xena_normalization_log.csv",
+      "repo_relative_path": "tests/migration/golden/partial_success/artifacts/canonical/binding_xena_normalization_log.csv",
+      "role": "audit_report",
+      "sha256": "6a8e15c4a5c90be30fa763fb931d1094e5f07eefd9b02360c6dc337c4e845c6d",
+      "size_bytes": 600
+    },
+    {
+      "artifact_id": "artifact_a2aa4688e3fee53be993072c687242f5",
+      "relative_path": "canonical/binding_xena_rejected.csv",
+      "repo_relative_path": "tests/migration/golden/partial_success/artifacts/canonical/binding_xena_rejected.csv",
+      "role": "audit_report",
+      "sha256": "11f4eec0859378db407915f7395282a6f2c0946cc071a4a4aa8992118e17c525",
+      "size_bytes": 119
+    }
+  ],
+  "build_result": {
+    "available_artifact_roles": [],
+    "binding_failures": [],
+    "build_id": "golden_partial_success",
+    "publication_id": "pub_golden_partial_success_f34a6ef4ae4dc39e",
+    "reason_codes": [],
+    "recommended_next_action": "",
+    "rejected_sources": [
+      "binding_gdc"
+    ],
+    "schema_version": "1.0",
+    "status": "partial_success",
+    "successful_sources": [
+      "binding_xena"
+    ],
+    "user_summary": "build golden_partial_success partially published: 1 source(s) published, 1 rejected",
+    "valid_row_count": 4
+  },
+  "event_envelope": {
+    "event_id": "event_partial_success_golden",
+    "parent_tool_call_id": null,
+    "payload": {
+      "build_result": {
+        "available_artifact_roles": [],
+        "binding_failures": [],
+        "build_id": "golden_partial_success",
+        "publication_id": "pub_golden_partial_success_f34a6ef4ae4dc39e",
+        "reason_codes": [],
+        "recommended_next_action": "",
+        "rejected_sources": [
+          "binding_gdc"
+        ],
+        "schema_version": "1.0",
+        "status": "partial_success",
+        "successful_sources": [
+          "binding_xena"
+        ],
+        "user_summary": "build golden_partial_success partially published: 1 source(s) published, 1 rejected",
+        "valid_row_count": 4
+      },
+      "schema_version": "1.0",
+      "type": "run_completed"
+    },
+    "run_id": "run_golden_partial_success",
+    "schema_version": "2.0",
+    "sequence": 1,
+    "stage_attempt_id": null,
+    "subagent_id": null,
+    "task_id": "task_golden_partial_success",
+    "timestamp": "2026-08-11T00:00:00Z",
+    "type": "run_completed"
+  },
+  "fixture_version": 1,
+  "manifest": {
+    "artifacts": [
+      {
+        "artifact_id": "artifact_683e6645486e9a3f0159f6cfdf6b4114",
+        "media_type": "text/csv",
+        "relative_path": "merged/primary.csv",
+        "role": "primary_dataset",
+        "schema_version": "1.0",
+        "sha256": "ba1fad3e81a40d16322138acae0f042a40cee066be99ed6a138502ab8006a390",
+        "size_bytes": 1492
+      },
+      {
+        "artifact_id": "artifact_9ae7d3ef04a0fc8fb38c4bb94963a239",
+        "media_type": "application/json",
+        "relative_path": "schema.json",
+        "role": "schema",
+        "schema_version": "1.0",
+        "sha256": "a9c62815e6161c13bd2e221e07c9d006372ae67500924e2628f826a04ae8f624",
+        "size_bytes": 8096
+      },
+      {
+        "artifact_id": "artifact_9842a864a0d526e8965237f7748461c3",
+        "media_type": "application/json",
+        "relative_path": "provenance.json",
+        "role": "provenance",
+        "schema_version": "1.0",
+        "sha256": "e98b73eab77cf07a42d5e40fce22646bf6f3442ac9a627852202091e05861fa4",
+        "size_bytes": 4691
+      },
+      {
+        "artifact_id": "artifact_ae7fa0e459e3cbae7744c3ed2714cacf",
+        "media_type": "text/csv",
+        "relative_path": "batches/binding_xena_rejected.csv",
+        "role": "audit_report",
+        "schema_version": "1.0",
+        "sha256": "11f4eec0859378db407915f7395282a6f2c0946cc071a4a4aa8992118e17c525",
+        "size_bytes": 119
+      },
+      {
+        "artifact_id": "artifact_f2bb2cc3cd494790f9e06e1f6bd017ca",
+        "media_type": "text/csv",
+        "relative_path": "canonical/binding_xena_field_mappings.csv",
+        "role": "audit_report",
+        "schema_version": "1.0",
+        "sha256": "3e00715b27bc1a4f811404e6662f840843cef6842ee5fdf51cb825d46144f30d",
+        "size_bytes": 1028
+      },
+      {
+        "artifact_id": "artifact_b4dc83abe1db3360e753ed23e744f464",
+        "media_type": "text/csv",
+        "relative_path": "canonical/binding_xena_normalization_log.csv",
+        "role": "audit_report",
+        "schema_version": "1.0",
+        "sha256": "6a8e15c4a5c90be30fa763fb931d1094e5f07eefd9b02360c6dc337c4e845c6d",
+        "size_bytes": 600
+      },
+      {
+        "artifact_id": "artifact_a2aa4688e3fee53be993072c687242f5",
+        "media_type": "text/csv",
+        "relative_path": "canonical/binding_xena_rejected.csv",
+        "role": "audit_report",
+        "schema_version": "1.0",
+        "sha256": "11f4eec0859378db407915f7395282a6f2c0946cc071a4a4aa8992118e17c525",
+        "size_bytes": 119
+      }
+    ],
+    "build_id": "golden_partial_success",
+    "confidence_summary": {
+      "detected_anomaly_count": 0,
+      "report_file": "confidence_report.csv"
+    },
+    "dataset_family": "gene_expression",
+    "manifest_id": "manifest_f34a6ef4ae4dc39e",
+    "primary_key": [
+      "dataset_id",
+      "sample_id",
+      "gene_id",
+      "measurement_type"
+    ],
+    "provenance_summary": {
+      "conflict_count": 0,
+      "coverage": {
+        "coverage_ratio": 1.0,
+        "traced_rows": 4,
+        "untraced_rows": 0
+      },
+      "dedup_count": 0,
+      "field_mapping_count": 5,
+      "normalization_log_entries": 4,
+      "rejected_count": 0,
+      "source_count": 1
+    },
+    "row_count": 4,
+    "row_granularity": "gene_sample_measurement",
+    "schema_ref": "gene_expression.long.v1",
+    "schema_version": "1.0",
+    "sha256": "f34a6ef4ae4dc39ea9ef09c5f4e75f5af8f32b0597c8e0c137d7ff4447ad2cf4",
+    "source_summary": {
+      "binding_xena": {
+        "adapter_id": "xena.matrix.v1",
+        "asset_id": "asset_512306f761ce90bf89e3dd43b634a2b1e134e533afb9f1f78cb820d4ecd50e02",
+        "entity_level": "gene",
+        "namespace": "ensembl_gene",
+        "rejected_count": 0,
+        "row_count": 4,
+        "source_id": "src_binding_xena",
+        "unit": "expression_value"
+      }
+    },
+    "task_id": "golden_partial_success",
+    "validation_summary": {
+      "checked_count": 10,
+      "failed_count": 0,
+      "profile_ref": "gene_expression.release.v1",
+      "report_path": "validation_report.json",
+      "status": "passed"
+    }
+  },
+  "outcome": "partial_success",
+  "publication": {
+    "manifest_ref": "manifest_f34a6ef4ae4dc39e",
+    "publication_id": "pub_golden_partial_success_f34a6ef4ae4dc39e",
+    "published_at": "2026-08-11T00:00:00Z",
+    "schema_version": "1.0",
+    "supersedes_publication_id": null,
+    "validation_result_ref": "validation_report.json"
+  },
+  "source_fixtures": [
+    {
+      "binding_id": "binding_gdc",
+      "repo_relative_path": "tests/migration/sources/header_only.tsv",
+      "sha256": "0e3decb00d7e19c075803171c03d8ce5ab8ef4e9627c4a85375c061f88db0910",
+      "size_bytes": 14
+    },
+    {
+      "binding_id": "binding_xena",
+      "repo_relative_path": "backend/tests/fixtures/ncbi/gse178352/xena_matrix.tsv",
+      "sha256": "512306f761ce90bf89e3dd43b634a2b1e134e533afb9f1f78cb820d4ecd50e02",
+      "size_bytes": 40
+    }
+  ],
+  "spec": {
+    "build_id": "golden_partial_success",
+    "cohort_filters": {},
+    "dataset_family": "gene_expression",
+    "entities": {},
+    "merge_strategy": "append_by_canonical_row",
+    "normalization_profile_ref": "gene_expression.normalization.v1",
+    "objective": "Freeze the deterministic gene expression migration baseline",
+    "output_format": "csv",
+    "required_fields": [],
+    "row_granularity": "gene_sample_measurement",
+    "schema_ref": "gene_expression.long.v1",
+    "schema_version": "1.0",
+    "source_bindings": [
+      {
+        "accession": null,
+        "acquisition": {
+          "mode": "builtin",
+          "provider_id": "gdc.v1",
+          "recipe_id": null,
+          "recipe_version": null,
+          "schema_version": "1.0"
+        },
+        "adapter_id": "gdc.expression.v1",
+        "binding_id": "binding_gdc",
+        "parameters": {},
+        "schema_version": "1.0",
+        "source": "gdc"
+      },
+      {
+        "accession": null,
+        "acquisition": {
+          "mode": "builtin",
+          "provider_id": "ucsc_xena.v1",
+          "recipe_id": null,
+          "recipe_version": null,
+          "schema_version": "1.0"
+        },
+        "adapter_id": "xena.matrix.v1",
+        "binding_id": "binding_xena",
+        "parameters": {},
+        "schema_version": "1.0",
+        "source": "ucsc_xena"
+      }
+    ],
+    "target_entity_level": null,
+    "validation_profile_ref": "gene_expression.release.v1"
+  },
+  "validation_result": {
+    "checked_count": 10,
+    "failed_count": 0,
+    "manifest_digest": "f34a6ef4ae4dc39ea9ef09c5f4e75f5af8f32b0597c8e0c137d7ff4447ad2cf4",
+    "profile_ref": "gene_expression.release.v1",
+    "report_path": "validation_report.json",
+    "schema_version": "1.0",
+    "status": "passed"
+  }
+}

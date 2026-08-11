@@ -1,0 +1,6 @@
+mapping_id,source_schema_ref,target_schema_ref,source_field,target_field,transform,mapping_method,confidence_level,evidence,review_status
+map_binding_xena_gene_id_to_raw,binding_binding_xena.source,gene_expression.long.v1,gene_id,gene_id_raw,identity,adapter_declared,high,Xena matrix gene_id column header,accepted
+map_binding_xena_sample_id_S1,binding_binding_xena.source,gene_expression.long.v1,S1,sample_id,wide_to_long_sample_id,adapter_declared,high,matrix sample column header,accepted
+map_binding_xena_value_S1,binding_binding_xena.source,gene_expression.long.v1,S1,expression_value,wide_to_long_value,adapter_declared,high,matrix sample column header,accepted
+map_binding_xena_sample_id_S2,binding_binding_xena.source,gene_expression.long.v1,S2,sample_id,wide_to_long_sample_id,adapter_declared,high,matrix sample column header,accepted
+map_binding_xena_value_S2,binding_binding_xena.source,gene_expression.long.v1,S2,expression_value,wide_to_long_value,adapter_declared,high,matrix sample column header,accepted

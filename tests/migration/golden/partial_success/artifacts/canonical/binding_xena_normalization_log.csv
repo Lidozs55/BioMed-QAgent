@@ -1,0 +1,5 @@
+record_id,gene_id_raw,gene_id,gene_id_namespace,gene_id_version,rule_id,evidence
+rec_988f0fd4cee44485802d5a1b45368434,TP53,ENSG00000141510,ensembl_gene,,gene_symbol_map,local gene symbol map (symbol->ensembl)
+rec_cc9cfdb31ee7eb665d3773a6bc8058ef,TP53,ENSG00000141510,ensembl_gene,,gene_symbol_map,local gene symbol map (symbol->ensembl)
+rec_b2546875e6136702dc46be16af53fb36,BRCA1,ENSG00000012048,ensembl_gene,,gene_symbol_map,local gene symbol map (symbol->ensembl)
+rec_c1e79354c2181c0fd220207166e7d6fe,BRCA1,ENSG00000012048,ensembl_gene,,gene_symbol_map,local gene symbol map (symbol->ensembl)

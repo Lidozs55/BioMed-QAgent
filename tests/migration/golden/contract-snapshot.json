@@ -1,0 +1,3762 @@
+{
+  "contracts": {
+    "BuildResult": {
+      "$defs": {
+        "ArtifactRole": {
+          "enum": [
+            "primary_dataset",
+            "supporting_dataset",
+            "schema",
+            "provenance",
+            "audit_report"
+          ],
+          "title": "ArtifactRole",
+          "type": "string"
+        },
+        "BindingFailureDetail": {
+          "additionalProperties": false,
+          "description": "Per-binding failure detail surfaced on a NO_DATA ``BuildResult`` (K2).\n\nMirrors ``app.datasets.contracts.BindingRejection``'s stable fields\nwithout importing the ``app.datasets`` package (see module docstring).\nLets a ``no_data`` result carry an actionable trace of *why* each source\nbinding was rejected instead of a single collapsed ``no_primary_data``.\n(See docs/REVIEW_2026-08-10-task-9ce0124f.md §5.3 K2.)",
+          "properties": {
+            "binding_id": {
+              "minLength": 1,
+              "title": "Binding Id",
+              "type": "string"
+            },
+            "message": {
+              "default": "",
+              "title": "Message",
+              "type": "string"
+            },
+            "reason_code": {
+              "minLength": 1,
+              "title": "Reason Code",
+              "type": "string"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            }
+          },
+          "required": [
+            "binding_id",
+            "reason_code"
+          ],
+          "title": "BindingFailureDetail",
+          "type": "object"
+        },
+        "BuildResultStatus": {
+          "enum": [
+            "succeeded",
+            "partial_success",
+            "no_data",
+            "spec_rejected"
+          ],
+          "title": "BuildResultStatus",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Business outcome of a normally completed build (ARCHITECTURE §9.1).\n\nOnly produced when ``RunStatus == COMPLETED``; execution failures and\nuser cancellation are expressed by RunStatus, not by this enum.",
+      "properties": {
+        "available_artifact_roles": {
+          "items": {
+            "$ref": "#/$defs/ArtifactRole"
+          },
+          "title": "Available Artifact Roles",
+          "type": "array"
+        },
+        "binding_failures": {
+          "items": {
+            "$ref": "#/$defs/BindingFailureDetail"
+          },
+          "title": "Binding Failures",
+          "type": "array"
+        },
+        "build_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Build Id"
+        },
+        "publication_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Publication Id"
+        },
+        "reason_codes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Reason Codes",
+          "type": "array"
+        },
+        "recommended_next_action": {
+          "default": "",
+          "title": "Recommended Next Action",
+          "type": "string"
+        },
+        "rejected_sources": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Rejected Sources",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/BuildResultStatus"
+        },
+        "successful_sources": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Successful Sources",
+          "type": "array"
+        },
+        "user_summary": {
+          "default": "",
+          "title": "User Summary",
+          "type": "string"
+        },
+        "valid_row_count": {
+          "minimum": 0,
+          "title": "Valid Row Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "status",
+        "valid_row_count"
+      ],
+      "title": "BuildResult",
+      "type": "object"
+    },
+    "DatasetBuildSpec": {
+      "$defs": {
+        "AcquisitionMode": {
+          "enum": [
+            "builtin",
+            "workflow_recipe"
+          ],
+          "title": "AcquisitionMode",
+          "type": "string"
+        },
+        "JsonValue": {},
+        "SourceBinding": {
+          "additionalProperties": false,
+          "description": "One source selected by the Agent for a build (Design §8.3).",
+          "properties": {
+            "accession": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Accession"
+            },
+            "acquisition": {
+              "$ref": "#/$defs/SourceBindingAcquisition"
+            },
+            "adapter_id": {
+              "minLength": 1,
+              "title": "Adapter Id",
+              "type": "string"
+            },
+            "binding_id": {
+              "minLength": 1,
+              "title": "Binding Id",
+              "type": "string"
+            },
+            "parameters": {
+              "additionalProperties": {
+                "$ref": "#/$defs/JsonValue"
+              },
+              "title": "Parameters",
+              "type": "object"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "source": {
+              "minLength": 1,
+              "title": "Source",
+              "type": "string"
+            }
+          },
+          "required": [
+            "binding_id",
+            "source",
+            "acquisition",
+            "adapter_id"
+          ],
+          "title": "SourceBinding",
+          "type": "object"
+        },
+        "SourceBindingAcquisition": {
+          "additionalProperties": false,
+          "description": "How a source is acquired: trusted builtin or a promoted WorkflowRecipe.",
+          "properties": {
+            "mode": {
+              "$ref": "#/$defs/AcquisitionMode"
+            },
+            "provider_id": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Provider Id"
+            },
+            "recipe_id": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Recipe Id"
+            },
+            "recipe_version": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Recipe Version"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "title": "SourceBindingAcquisition",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Self-contained build input produced by the Agent (ARCHITECTURE §3.1).\n\nThe Agent cannot embed executable steps or acceptance thresholds; unknown\nfields are rejected by the base model.",
+      "properties": {
+        "build_id": {
+          "minLength": 1,
+          "title": "Build Id",
+          "type": "string"
+        },
+        "cohort_filters": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": "Cohort Filters",
+          "type": "object"
+        },
+        "dataset_family": {
+          "minLength": 1,
+          "title": "Dataset Family",
+          "type": "string"
+        },
+        "entities": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": "Entities",
+          "type": "object"
+        },
+        "merge_strategy": {
+          "default": "append_by_canonical_row",
+          "title": "Merge Strategy",
+          "type": "string"
+        },
+        "normalization_profile_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalization Profile Ref"
+        },
+        "objective": {
+          "minLength": 1,
+          "title": "Objective",
+          "type": "string"
+        },
+        "output_format": {
+          "default": "csv",
+          "title": "Output Format",
+          "type": "string"
+        },
+        "required_fields": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Fields",
+          "type": "array"
+        },
+        "row_granularity": {
+          "minLength": 1,
+          "title": "Row Granularity",
+          "type": "string"
+        },
+        "schema_ref": {
+          "minLength": 1,
+          "title": "Schema Ref",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_bindings": {
+          "items": {
+            "$ref": "#/$defs/SourceBinding"
+          },
+          "minItems": 1,
+          "title": "Source Bindings",
+          "type": "array"
+        },
+        "target_entity_level": {
+          "anyOf": [
+            {
+              "enum": [
+                "gene",
+                "probe"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Entity Level"
+        },
+        "validation_profile_ref": {
+          "minLength": 1,
+          "title": "Validation Profile Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "build_id",
+        "objective",
+        "dataset_family",
+        "row_granularity",
+        "schema_ref",
+        "source_bindings",
+        "validation_profile_ref"
+      ],
+      "title": "DatasetBuildSpec",
+      "type": "object"
+    },
+    "DatasetManifest": {
+      "$defs": {
+        "ArtifactRole": {
+          "enum": [
+            "primary_dataset",
+            "supporting_dataset",
+            "schema",
+            "provenance",
+            "audit_report"
+          ],
+          "title": "ArtifactRole",
+          "type": "string"
+        },
+        "JsonValue": {},
+        "ManifestArtifactEntry": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_id": {
+              "minLength": 1,
+              "title": "Artifact Id",
+              "type": "string"
+            },
+            "media_type": {
+              "minLength": 1,
+              "title": "Media Type",
+              "type": "string"
+            },
+            "relative_path": {
+              "minLength": 1,
+              "title": "Relative Path",
+              "type": "string"
+            },
+            "role": {
+              "$ref": "#/$defs/ArtifactRole"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "sha256": {
+              "minLength": 1,
+              "title": "Sha256",
+              "type": "string"
+            },
+            "size_bytes": {
+              "minimum": 0,
+              "title": "Size Bytes",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "artifact_id",
+            "role",
+            "relative_path",
+            "media_type",
+            "size_bytes",
+            "sha256"
+          ],
+          "title": "ManifestArtifactEntry",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Immutable artifact inventory, role-based (ARCHITECTURE §3.6; Design §8.9).",
+      "properties": {
+        "artifacts": {
+          "items": {
+            "$ref": "#/$defs/ManifestArtifactEntry"
+          },
+          "title": "Artifacts",
+          "type": "array"
+        },
+        "build_id": {
+          "minLength": 1,
+          "title": "Build Id",
+          "type": "string"
+        },
+        "confidence_summary": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Confidence Summary",
+          "type": "object"
+        },
+        "dataset_family": {
+          "minLength": 1,
+          "title": "Dataset Family",
+          "type": "string"
+        },
+        "manifest_id": {
+          "minLength": 1,
+          "title": "Manifest Id",
+          "type": "string"
+        },
+        "primary_key": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Primary Key",
+          "type": "array"
+        },
+        "provenance_summary": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Provenance Summary",
+          "type": "object"
+        },
+        "row_count": {
+          "minimum": 0,
+          "title": "Row Count",
+          "type": "integer"
+        },
+        "row_granularity": {
+          "minLength": 1,
+          "title": "Row Granularity",
+          "type": "string"
+        },
+        "schema_ref": {
+          "minLength": 1,
+          "title": "Schema Ref",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "sha256": {
+          "minLength": 1,
+          "title": "Sha256",
+          "type": "string"
+        },
+        "source_summary": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Source Summary",
+          "type": "object"
+        },
+        "task_id": {
+          "minLength": 1,
+          "title": "Task Id",
+          "type": "string"
+        },
+        "validation_summary": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Validation Summary",
+          "type": "object"
+        }
+      },
+      "required": [
+        "manifest_id",
+        "task_id",
+        "build_id",
+        "dataset_family",
+        "row_granularity",
+        "schema_ref",
+        "row_count",
+        "sha256"
+      ],
+      "title": "DatasetManifest",
+      "type": "object"
+    },
+    "DatasetPublication": {
+      "additionalProperties": false,
+      "description": "Atomically promoted immutable version (ARCHITECTURE §9.1; Design §8.9).\n\n``final`` is just the session pointer ``current_publication_id``, never an\nintrinsic artifact state.",
+      "properties": {
+        "manifest_ref": {
+          "minLength": 1,
+          "title": "Manifest Ref",
+          "type": "string"
+        },
+        "publication_id": {
+          "minLength": 1,
+          "title": "Publication Id",
+          "type": "string"
+        },
+        "published_at": {
+          "format": "date-time",
+          "title": "Published At",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "supersedes_publication_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Supersedes Publication Id"
+        },
+        "validation_result_ref": {
+          "minLength": 1,
+          "title": "Validation Result Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "publication_id",
+        "manifest_ref",
+        "validation_result_ref",
+        "published_at"
+      ],
+      "title": "DatasetPublication",
+      "type": "object"
+    },
+    "EventEnvelope": {
+      "$defs": {
+        "ArtifactManifestEntry": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_id": {
+              "minLength": 1,
+              "title": "Artifact Id",
+              "type": "string"
+            },
+            "generated_by_step_id": {
+              "minLength": 1,
+              "title": "Generated By Step Id",
+              "type": "string"
+            },
+            "media_type": {
+              "minLength": 1,
+              "title": "Media Type",
+              "type": "string"
+            },
+            "name": {
+              "minLength": 1,
+              "title": "Name",
+              "type": "string"
+            },
+            "relative_path": {
+              "title": "Relative Path",
+              "type": "string"
+            },
+            "role": {
+              "$ref": "#/$defs/ArtifactRole"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "sha256": {
+              "title": "Sha256",
+              "type": "string"
+            },
+            "size_bytes": {
+              "minimum": 0,
+              "title": "Size Bytes",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "artifact_id",
+            "role",
+            "name",
+            "relative_path",
+            "media_type",
+            "size_bytes",
+            "sha256",
+            "generated_by_step_id"
+          ],
+          "title": "ArtifactManifestEntry",
+          "type": "object"
+        },
+        "ArtifactProducedPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact": {
+              "$ref": "#/$defs/ArtifactManifestEntry"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "type": {
+              "const": "artifact_produced",
+              "default": "artifact_produced",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "artifact"
+          ],
+          "title": "ArtifactProducedPayload",
+          "type": "object"
+        },
+        "ArtifactRole": {
+          "enum": [
+            "primary_dataset",
+            "supporting_dataset",
+            "schema",
+            "provenance",
+            "audit_report"
+          ],
+          "title": "ArtifactRole",
+          "type": "string"
+        },
+        "AssistantDeltaPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "delta": {
+              "minLength": 1,
+              "title": "Delta",
+              "type": "string"
+            },
+            "from_chunk_index": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "From Chunk Index"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "stream_id": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Stream Id"
+            },
+            "through_chunk_index": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Through Chunk Index"
+            },
+            "type": {
+              "const": "assistant_delta",
+              "default": "assistant_delta",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "delta"
+          ],
+          "title": "AssistantDeltaPayload",
+          "type": "object"
+        },
+        "AssistantReasoningDeltaPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "delta": {
+              "minLength": 1,
+              "title": "Delta",
+              "type": "string"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "type": {
+              "const": "assistant_reasoning_delta",
+              "default": "assistant_reasoning_delta",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "delta"
+          ],
+          "title": "AssistantReasoningDeltaPayload",
+          "type": "object"
+        },
+        "BindingFailureDetail": {
+          "additionalProperties": false,
+          "description": "Per-binding failure detail surfaced on a NO_DATA ``BuildResult`` (K2).\n\nMirrors ``app.datasets.contracts.BindingRejection``'s stable fields\nwithout importing the ``app.datasets`` package (see module docstring).\nLets a ``no_data`` result carry an actionable trace of *why* each source\nbinding was rejected instead of a single collapsed ``no_primary_data``.\n(See docs/REVIEW_2026-08-10-task-9ce0124f.md §5.3 K2.)",
+          "properties": {
+            "binding_id": {
+              "minLength": 1,
+              "title": "Binding Id",
+              "type": "string"
+            },
+            "message": {
+              "default": "",
+              "title": "Message",
+              "type": "string"
+            },
+            "reason_code": {
+              "minLength": 1,
+              "title": "Reason Code",
+              "type": "string"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            }
+          },
+          "required": [
+            "binding_id",
+            "reason_code"
+          ],
+          "title": "BindingFailureDetail",
+          "type": "object"
+        },
+        "BuildResult": {
+          "additionalProperties": false,
+          "description": "Business outcome of a normally completed build (ARCHITECTURE §9.1).\n\nOnly produced when ``RunStatus == COMPLETED``; execution failures and\nuser cancellation are expressed by RunStatus, not by this enum.",
+          "properties": {
+            "available_artifact_roles": {
+              "items": {
+                "$ref": "#/$defs/ArtifactRole"
+              },
+              "title": "Available Artifact Roles",
+              "type": "array"
+            },
+            "binding_failures": {
+              "items": {
+                "$ref": "#/$defs/BindingFailureDetail"
+              },
+              "title": "Binding Failures",
+              "type": "array"
+            },
+            "build_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Build Id"
+            },
+            "publication_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Publication Id"
+            },
+            "reason_codes": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Reason Codes",
+              "type": "array"
+            },
+            "recommended_next_action": {
+              "default": "",
+              "title": "Recommended Next Action",
+              "type": "string"
+            },
+            "rejected_sources": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Rejected Sources",
+              "type": "array"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/$defs/BuildResultStatus"
+            },
+            "successful_sources": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Successful Sources",
+              "type": "array"
+            },
+            "user_summary": {
+              "default": "",
+              "title": "User Summary",
+              "type": "string"
+            },
+            "valid_row_count": {
+              "minimum": 0,
+              "title": "Valid Row Count",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "status",
+            "valid_row_count"
+          ],
+          "title": "BuildResult",
+          "type": "object"
+        },
+        "BuildResultStatus": {
+          "enum": [
+            "succeeded",
+            "partial_success",
+            "no_data",
+            "spec_rejected"
+          ],
+          "title": "BuildResultStatus",
+          "type": "string"
+        },
+        "CancelRequestedPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reason"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "type": {
+              "const": "task_cancel_requested",
+              "default": "task_cancel_requested",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "title": "CancelRequestedPayload",
+          "type": "object"
+        },
+        "ConversationCompactedPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "covered_through_run_id": {
+              "minLength": 1,
+              "title": "Covered Through Run Id",
+              "type": "string"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "summary_digest": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Summary Digest",
+              "type": "string"
+            },
+            "type": {
+              "const": "conversation_compacted",
+              "default": "conversation_compacted",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "covered_through_run_id",
+            "summary_digest"
+          ],
+          "title": "ConversationCompactedPayload",
+          "type": "object"
+        },
+        "Database": {
+          "enum": [
+            "pubmed",
+            "geo",
+            "gdc",
+            "ucsc_xena",
+            "pdb",
+            "reactome",
+            "pubchem",
+            "browser",
+            "uniprot",
+            "chembl"
+          ],
+          "title": "Database",
+          "type": "string"
+        },
+        "DatasetSelection": {
+          "additionalProperties": false,
+          "properties": {
+            "accession": {
+              "minLength": 1,
+              "title": "Accession",
+              "type": "string"
+            },
+            "data_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Data Type"
+            },
+            "database": {
+              "$ref": "#/$defs/Database"
+            },
+            "dataset_id": {
+              "minLength": 1,
+              "title": "Dataset Id",
+              "type": "string"
+            },
+            "reason": {
+              "minLength": 1,
+              "title": "Reason",
+              "type": "string"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "source_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Source Id"
+            }
+          },
+          "required": [
+            "dataset_id",
+            "database",
+            "accession",
+            "reason"
+          ],
+          "title": "DatasetSelection",
+          "type": "object"
+        },
+        "ErrorCode": {
+          "enum": [
+            "configuration_error",
+            "network_error",
+            "timeout",
+            "download_incomplete",
+            "checksum_mismatch",
+            "parse_error",
+            "validation_error",
+            "cancelled",
+            "internal_error"
+          ],
+          "title": "ErrorCode",
+          "type": "string"
+        },
+        "ErrorDetail": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/ErrorCode"
+            },
+            "details": {
+              "additionalProperties": {
+                "$ref": "#/$defs/JsonValue"
+              },
+              "title": "Details",
+              "type": "object"
+            },
+            "message": {
+              "minLength": 1,
+              "title": "Message",
+              "type": "string"
+            },
+            "retryable": {
+              "title": "Retryable",
+              "type": "boolean"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "stage": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StageName"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retryable"
+          ],
+          "title": "ErrorDetail",
+          "type": "object"
+        },
+        "JsonValue": {},
+        "OperationCompletedPayload": {
+          "additionalProperties": false,
+          "description": "One operation reached a terminal success/skip state.\n\n``label`` / ``category`` are optional (T3); see OperationProgressPayload.",
+          "properties": {
+            "category": {
+              "default": "",
+              "title": "Category",
+              "type": "string"
+            },
+            "label": {
+              "default": "",
+              "title": "Label",
+              "type": "string"
+            },
+            "operation_id": {
+              "minLength": 1,
+              "title": "Operation Id",
+              "type": "string"
+            },
+            "output_digest": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Output Digest",
+              "type": "string"
+            },
+            "reused_operation_attempt_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reused Operation Attempt Id"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "status": {
+              "default": "succeeded",
+              "enum": [
+                "succeeded",
+                "skipped"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "type": {
+              "const": "operation_completed",
+              "default": "operation_completed",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation_id",
+            "output_digest"
+          ],
+          "title": "OperationCompletedPayload",
+          "type": "object"
+        },
+        "OperationFailedPayload": {
+          "additionalProperties": false,
+          "description": "One operation failed or was cancelled.\n\n``label`` / ``category`` are optional (T3); see OperationProgressPayload.",
+          "properties": {
+            "category": {
+              "default": "",
+              "title": "Category",
+              "type": "string"
+            },
+            "error": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ErrorDetail"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "label": {
+              "default": "",
+              "title": "Label",
+              "type": "string"
+            },
+            "operation_id": {
+              "minLength": 1,
+              "title": "Operation Id",
+              "type": "string"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "failed",
+                "cancelled"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "type": {
+              "const": "operation_failed",
+              "default": "operation_failed",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation_id",
+            "status"
+          ],
+          "title": "OperationFailedPayload",
+          "type": "object"
+        },
+        "OperationProgressPayload": {
+          "additionalProperties": false,
+          "description": "Mid-operation progress (rows parsed, candidates found, ...).\n\n``label`` / ``category`` are optional (T3): pre-T3 events.jsonl and the V2\nexecutor's emissions omit them; the pipeline stage mirror fills them.",
+          "properties": {
+            "category": {
+              "default": "",
+              "title": "Category",
+              "type": "string"
+            },
+            "current": {
+              "minimum": 0,
+              "title": "Current",
+              "type": "integer"
+            },
+            "detail": {
+              "additionalProperties": {
+                "$ref": "#/$defs/JsonValue"
+              },
+              "title": "Detail",
+              "type": "object"
+            },
+            "kind": {
+              "minLength": 1,
+              "title": "Kind",
+              "type": "string"
+            },
+            "label": {
+              "default": "",
+              "title": "Label",
+              "type": "string"
+            },
+            "operation_id": {
+              "minLength": 1,
+              "title": "Operation Id",
+              "type": "string"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "total": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Total"
+            },
+            "type": {
+              "const": "operation_progress",
+              "default": "operation_progress",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation_id",
+            "kind",
+            "current"
+          ],
+          "title": "OperationProgressPayload",
+          "type": "object"
+        },
+        "OperationStartedPayload": {
+          "additionalProperties": false,
+          "description": "One operation started (V2 build execution; Design §15.1; T3 stage mirror).\n\n``label`` / ``category`` are stable display strings the frontend groups and\nicons by (ARCHITECTURE §14.2). V2 skeleton operations emit them here;\nthe pipeline stage mirror (``stage_operation_spec``) emits them on every\noperation event so the UI never needs the StageName union.",
+          "properties": {
+            "attempt": {
+              "minimum": 1,
+              "title": "Attempt",
+              "type": "integer"
+            },
+            "category": {
+              "default": "",
+              "title": "Category",
+              "type": "string"
+            },
+            "label": {
+              "default": "",
+              "title": "Label",
+              "type": "string"
+            },
+            "operation_id": {
+              "minLength": 1,
+              "title": "Operation Id",
+              "type": "string"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "type": {
+              "const": "operation_started",
+              "default": "operation_started",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation_id",
+            "attempt"
+          ],
+          "title": "OperationStartedPayload",
+          "type": "object"
+        },
+        "PipelineEventType": {
+          "enum": [
+            "task_created",
+            "plan_ready",
+            "user_input_required",
+            "user_input_resumed",
+            "stage_started",
+            "stage_completed",
+            "stage_failed",
+            "stage_skipped",
+            "stage_progress",
+            "tool_called",
+            "tool_completed",
+            "warning",
+            "artifact_produced",
+            "task_cancel_requested",
+            "task_cancelled",
+            "task_recovered",
+            "task_completed",
+            "task_failed"
+          ],
+          "title": "PipelineEventType",
+          "type": "string"
+        },
+        "PlanReadyPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "specification": {
+              "$ref": "#/$defs/TaskSpecification"
+            },
+            "type": {
+              "const": "plan_ready",
+              "default": "plan_ready",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "specification"
+          ],
+          "title": "PlanReadyPayload",
+          "type": "object"
+        },
+        "PublicationCreatedPayload": {
+          "additionalProperties": false,
+          "description": "Immutable publication record appended to the event log (ARCHITECTURE §9.3).\n\n``supersedes_publication_id`` is optional: the reducer derives the chain\nhead from the task's prior ``current_publication_id`` when the field is\nabsent, so the emit path never needs the current snapshot.",
+          "properties": {
+            "manifest_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Manifest Sha256",
+              "type": "string"
+            },
+            "publication_id": {
+              "minLength": 1,
+              "title": "Publication Id",
+              "type": "string"
+            },
+            "published_at": {
+              "format": "date-time",
+              "title": "Published At",
+              "type": "string"
+            },
+            "run_id": {
+              "minLength": 1,
+              "title": "Run Id",
+              "type": "string"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "supersedes_publication_id": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Supersedes Publication Id"
+            },
+            "type": {
+              "const": "publication_created",
+              "default": "publication_created",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "publication_id",
+            "run_id",
+            "manifest_sha256",
+            "published_at"
+          ],
+          "title": "PublicationCreatedPayload",
+          "type": "object"
+        },
+        "QuerySpecification": {
+          "additionalProperties": false,
+          "properties": {
+            "database": {
+              "$ref": "#/$defs/Database"
+            },
+            "generated_by": {
+              "enum": [
+                "user",
+                "agent",
+                "pipeline"
+              ],
+              "title": "Generated By",
+              "type": "string"
+            },
+            "max_results": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Max Results"
+            },
+            "order": {
+              "exclusiveMinimum": 0,
+              "title": "Order",
+              "type": "integer"
+            },
+            "page_size": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Page Size"
+            },
+            "purpose": {
+              "minLength": 1,
+              "title": "Purpose",
+              "type": "string"
+            },
+            "query": {
+              "minLength": 1,
+              "title": "Query",
+              "type": "string"
+            },
+            "query_id": {
+              "minLength": 1,
+              "title": "Query Id",
+              "type": "string"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            }
+          },
+          "required": [
+            "query_id",
+            "database",
+            "query",
+            "generated_by",
+            "purpose",
+            "order"
+          ],
+          "title": "QuerySpecification",
+          "type": "object"
+        },
+        "RequestedOutput": {
+          "enum": [
+            "main_data",
+            "literature",
+            "dataset_catalog",
+            "sample_metadata"
+          ],
+          "title": "RequestedOutput",
+          "type": "string"
+        },
+        "RunCancelRequestedPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "reason": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reason"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "type": {
+              "const": "run_cancel_requested",
+              "default": "run_cancel_requested",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "title": "RunCancelRequestedPayload",
+          "type": "object"
+        },
+        "RunCancelledPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "cancelled_at_stage": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StageName"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reason"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "type": {
+              "const": "run_cancelled",
+              "default": "run_cancelled",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "title": "RunCancelledPayload",
+          "type": "object"
+        },
+        "RunCompletedPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "build_result": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BuildResult"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "type": {
+              "const": "run_completed",
+              "default": "run_completed",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "title": "RunCompletedPayload",
+          "type": "object"
+        },
+        "RunFailedPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "minLength": 1,
+              "title": "Error",
+              "type": "string"
+            },
+            "error_code": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ErrorCode"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "type": {
+              "const": "run_failed",
+              "default": "run_failed",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "error"
+          ],
+          "title": "RunFailedPayload",
+          "type": "object"
+        },
+        "RunFinalizingPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "type": {
+              "const": "run_finalizing",
+              "default": "run_finalizing",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "title": "RunFinalizingPayload",
+          "type": "object"
+        },
+        "RunInterruptedPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "reason": {
+              "minLength": 1,
+              "title": "Reason",
+              "type": "string"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "type": {
+              "const": "run_interrupted",
+              "default": "run_interrupted",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "reason"
+          ],
+          "title": "RunInterruptedPayload",
+          "type": "object"
+        },
+        "RunQueuedPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "input": {
+              "minLength": 1,
+              "title": "Input",
+              "type": "string"
+            },
+            "request_fingerprint": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Request Fingerprint"
+            },
+            "request_id": {
+              "minLength": 1,
+              "title": "Request Id",
+              "type": "string"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "specification": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TaskSpecification"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "type": {
+              "const": "run_queued",
+              "default": "run_queued",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "request_id",
+            "input"
+          ],
+          "title": "RunQueuedPayload",
+          "type": "object"
+        },
+        "RunStartedPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "type": {
+              "const": "run_started",
+              "default": "run_started",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "title": "RunStartedPayload",
+          "type": "object"
+        },
+        "RuntimeEventType": {
+          "enum": [
+            "run_queued",
+            "run_started",
+            "run_finalizing",
+            "run_completed",
+            "run_failed",
+            "run_cancel_requested",
+            "run_cancelled",
+            "run_interrupted",
+            "publication_created",
+            "assistant_delta",
+            "assistant_reasoning_delta",
+            "tool_started",
+            "conversation_compacted",
+            "operation_started",
+            "operation_progress",
+            "operation_completed",
+            "operation_failed",
+            "subagent_queued",
+            "subagent_started",
+            "subagent_progress",
+            "subagent_completed",
+            "subagent_failed",
+            "subagent_cancel_requested",
+            "subagent_cancelled",
+            "subagent_interrupted",
+            "subagent_input_required",
+            "subagent_input_resumed"
+          ],
+          "title": "RuntimeEventType",
+          "type": "string"
+        },
+        "SourceCapability": {
+          "description": "Pipeline input-level capability of a data source (TODO §1.4).\n\nDistinguishes sources the deterministic Pipeline has accepted\n(search/metadata/download/parse/validate closed loop) from sources that\nare Agent-only research channels or pending integration. A source marked\n``research_only`` may be used for investigation but must never be routed\ninto the Pipeline as if it were a verified data source.",
+          "enum": [
+            "pipeline_supported",
+            "research_only",
+            "pending"
+          ],
+          "title": "SourceCapability",
+          "type": "string"
+        },
+        "SourceCapabilityDeclaration": {
+          "additionalProperties": false,
+          "description": "Pipeline input-level capability declaration for one source (TODO §1.4).\n\n``database`` is the canonical ``Database`` member; ``identifier`` records\nthe user-facing identifier that was selected (e.g. ``xena`` for\n``ucsc_xena``) so the declaration stays truthful to what was requested.",
+          "properties": {
+            "capability": {
+              "$ref": "#/$defs/SourceCapability"
+            },
+            "database": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Database"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "identifier": {
+              "default": "",
+              "title": "Identifier",
+              "type": "string"
+            },
+            "note": {
+              "default": "",
+              "title": "Note",
+              "type": "string"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            }
+          },
+          "required": [
+            "database",
+            "capability"
+          ],
+          "title": "SourceCapabilityDeclaration",
+          "type": "object"
+        },
+        "StageCompletedPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "output_digest": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Output Digest",
+              "type": "string"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "stage": {
+              "$ref": "#/$defs/StageName"
+            },
+            "status": {
+              "const": "succeeded",
+              "default": "succeeded",
+              "title": "Status",
+              "type": "string"
+            },
+            "type": {
+              "const": "stage_completed",
+              "default": "stage_completed",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "stage",
+            "output_digest"
+          ],
+          "title": "StageCompletedPayload",
+          "type": "object"
+        },
+        "StageFailedPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "$ref": "#/$defs/ErrorDetail"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "stage": {
+              "$ref": "#/$defs/StageName"
+            },
+            "status": {
+              "const": "failed",
+              "default": "failed",
+              "title": "Status",
+              "type": "string"
+            },
+            "type": {
+              "const": "stage_failed",
+              "default": "stage_failed",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "stage",
+            "error"
+          ],
+          "title": "StageFailedPayload",
+          "type": "object"
+        },
+        "StageName": {
+          "enum": [
+            "discovery",
+            "acquisition",
+            "processing",
+            "artifact_build",
+            "validation"
+          ],
+          "title": "StageName",
+          "type": "string"
+        },
+        "StageProgressPayload": {
+          "additionalProperties": false,
+          "description": "Mid-stage progress update (records discovered, bytes downloaded, rows cleaned).\n\nEmitted by Skills (Agent mode via RunContext.emit_progress) or Pipeline\nstages (Pipeline mode via StageContext.emit_progress). Lets the frontend\nshow concrete numbers (\"found 23 papers\", \"cleaned 4821 rows\") instead of\nonly a single \"running\" stage badge. See docs/REVIEW_2026-07-18.md §4.",
+          "properties": {
+            "current": {
+              "minimum": 0,
+              "title": "Current",
+              "type": "integer"
+            },
+            "detail": {
+              "additionalProperties": true,
+              "title": "Detail",
+              "type": "object"
+            },
+            "kind": {
+              "minLength": 1,
+              "title": "Kind",
+              "type": "string"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "stage": {
+              "$ref": "#/$defs/StageName"
+            },
+            "total": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Total"
+            },
+            "type": {
+              "const": "stage_progress",
+              "default": "stage_progress",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "stage",
+            "kind",
+            "current"
+          ],
+          "title": "StageProgressPayload",
+          "type": "object"
+        },
+        "StageSkippedPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "reason": {
+              "minLength": 1,
+              "title": "Reason",
+              "type": "string"
+            },
+            "reused_stage_attempt_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reused Stage Attempt Id"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "stage": {
+              "$ref": "#/$defs/StageName"
+            },
+            "status": {
+              "const": "skipped",
+              "default": "skipped",
+              "title": "Status",
+              "type": "string"
+            },
+            "type": {
+              "const": "stage_skipped",
+              "default": "stage_skipped",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "stage",
+            "reason"
+          ],
+          "title": "StageSkippedPayload",
+          "type": "object"
+        },
+        "StageStartedPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "attempt": {
+              "minimum": 1,
+              "title": "Attempt",
+              "type": "integer"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "stage": {
+              "$ref": "#/$defs/StageName"
+            },
+            "type": {
+              "const": "stage_started",
+              "default": "stage_started",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "stage",
+            "attempt"
+          ],
+          "title": "StageStartedPayload",
+          "type": "object"
+        },
+        "SubagentCancelRequestedPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "reason": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reason"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "subagent_id": {
+              "minLength": 1,
+              "title": "Subagent Id",
+              "type": "string"
+            },
+            "type": {
+              "const": "subagent_cancel_requested",
+              "default": "subagent_cancel_requested",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "subagent_id"
+          ],
+          "title": "SubagentCancelRequestedPayload",
+          "type": "object"
+        },
+        "SubagentCancelledPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "result": {
+              "$ref": "#/$defs/SubagentResult"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "subagent_id": {
+              "minLength": 1,
+              "title": "Subagent Id",
+              "type": "string"
+            },
+            "type": {
+              "const": "subagent_cancelled",
+              "default": "subagent_cancelled",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "subagent_id",
+            "result"
+          ],
+          "title": "SubagentCancelledPayload",
+          "type": "object"
+        },
+        "SubagentCompletedPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "result": {
+              "$ref": "#/$defs/SubagentResult"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "subagent_id": {
+              "minLength": 1,
+              "title": "Subagent Id",
+              "type": "string"
+            },
+            "type": {
+              "const": "subagent_completed",
+              "default": "subagent_completed",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "subagent_id",
+            "result"
+          ],
+          "title": "SubagentCompletedPayload",
+          "type": "object"
+        },
+        "SubagentErrorCode": {
+          "enum": [
+            "not_found",
+            "capability_gap",
+            "extraction_failed",
+            "auth_required",
+            "captcha_required",
+            "credential_required",
+            "payment_required",
+            "policy_denied",
+            "rate_limited",
+            "timed_out",
+            "cancelled",
+            "internal_error",
+            "max_turns_exceeded"
+          ],
+          "title": "SubagentErrorCode",
+          "type": "string"
+        },
+        "SubagentFailedPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "result": {
+              "$ref": "#/$defs/SubagentResult"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "subagent_id": {
+              "minLength": 1,
+              "title": "Subagent Id",
+              "type": "string"
+            },
+            "type": {
+              "const": "subagent_failed",
+              "default": "subagent_failed",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "subagent_id",
+            "result"
+          ],
+          "title": "SubagentFailedPayload",
+          "type": "object"
+        },
+        "SubagentInputRequiredPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "detail": {
+              "additionalProperties": {
+                "$ref": "#/$defs/JsonValue"
+              },
+              "title": "Detail",
+              "type": "object"
+            },
+            "expires_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expires At"
+            },
+            "prompt_kind": {
+              "enum": [
+                "authentication",
+                "captcha",
+                "api_key_or_credential",
+                "payment",
+                "terms_approval",
+                "confirmation"
+              ],
+              "title": "Prompt Kind",
+              "type": "string"
+            },
+            "request_id": {
+              "minLength": 1,
+              "title": "Request Id",
+              "type": "string"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "subagent_id": {
+              "minLength": 1,
+              "title": "Subagent Id",
+              "type": "string"
+            },
+            "summary": {
+              "minLength": 1,
+              "title": "Summary",
+              "type": "string"
+            },
+            "type": {
+              "const": "subagent_input_required",
+              "default": "subagent_input_required",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "subagent_id",
+            "request_id",
+            "summary",
+            "prompt_kind"
+          ],
+          "title": "SubagentInputRequiredPayload",
+          "type": "object"
+        },
+        "SubagentInputResumedPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "decision": {
+              "enum": [
+                "approve",
+                "reject"
+              ],
+              "title": "Decision",
+              "type": "string"
+            },
+            "detail": {
+              "additionalProperties": {
+                "$ref": "#/$defs/JsonValue"
+              },
+              "title": "Detail",
+              "type": "object"
+            },
+            "request_id": {
+              "minLength": 1,
+              "title": "Request Id",
+              "type": "string"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "subagent_id": {
+              "minLength": 1,
+              "title": "Subagent Id",
+              "type": "string"
+            },
+            "type": {
+              "const": "subagent_input_resumed",
+              "default": "subagent_input_resumed",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "subagent_id",
+            "request_id",
+            "decision"
+          ],
+          "title": "SubagentInputResumedPayload",
+          "type": "object"
+        },
+        "SubagentInterruptedPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "result": {
+              "$ref": "#/$defs/SubagentResult"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "subagent_id": {
+              "minLength": 1,
+              "title": "Subagent Id",
+              "type": "string"
+            },
+            "type": {
+              "const": "subagent_interrupted",
+              "default": "subagent_interrupted",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "subagent_id",
+            "result"
+          ],
+          "title": "SubagentInterruptedPayload",
+          "type": "object"
+        },
+        "SubagentProgressPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "current": {
+              "minimum": 0,
+              "title": "Current",
+              "type": "integer"
+            },
+            "message": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Message"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "subagent_id": {
+              "minLength": 1,
+              "title": "Subagent Id",
+              "type": "string"
+            },
+            "total": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Total"
+            },
+            "type": {
+              "const": "subagent_progress",
+              "default": "subagent_progress",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "subagent_id",
+            "current"
+          ],
+          "title": "SubagentProgressPayload",
+          "type": "object"
+        },
+        "SubagentQueuedPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/SubagentRequest"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "subagent_id": {
+              "minLength": 1,
+              "title": "Subagent Id",
+              "type": "string"
+            },
+            "type": {
+              "const": "subagent_queued",
+              "default": "subagent_queued",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "subagent_id",
+            "request"
+          ],
+          "title": "SubagentQueuedPayload",
+          "type": "object"
+        },
+        "SubagentRequest": {
+          "additionalProperties": false,
+          "properties": {
+            "agent_type": {
+              "$ref": "#/$defs/SubagentType"
+            },
+            "capability": {
+              "minLength": 1,
+              "title": "Capability",
+              "type": "string"
+            },
+            "domain": {
+              "minLength": 1,
+              "title": "Domain",
+              "type": "string"
+            },
+            "inputs": {
+              "additionalProperties": {
+                "$ref": "#/$defs/JsonValue"
+              },
+              "title": "Inputs",
+              "type": "object"
+            },
+            "objective": {
+              "minLength": 1,
+              "title": "Objective",
+              "type": "string"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "target_source": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Target Source"
+            }
+          },
+          "required": [
+            "agent_type",
+            "objective",
+            "domain",
+            "capability"
+          ],
+          "title": "SubagentRequest",
+          "type": "object"
+        },
+        "SubagentResult": {
+          "additionalProperties": false,
+          "properties": {
+            "error_code": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SubagentErrorCode"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "error_message": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Error Message"
+            },
+            "recipe_id": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Recipe Id"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "source_asset_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Source Asset Ids",
+              "type": "array"
+            },
+            "status": {
+              "$ref": "#/$defs/SubagentStatus"
+            },
+            "subagent_id": {
+              "minLength": 1,
+              "title": "Subagent Id",
+              "type": "string"
+            },
+            "summary": {
+              "minLength": 1,
+              "title": "Summary",
+              "type": "string"
+            },
+            "warnings": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Warnings",
+              "type": "array"
+            }
+          },
+          "required": [
+            "subagent_id",
+            "status",
+            "summary"
+          ],
+          "title": "SubagentResult",
+          "type": "object"
+        },
+        "SubagentStartedPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "subagent_id": {
+              "minLength": 1,
+              "title": "Subagent Id",
+              "type": "string"
+            },
+            "type": {
+              "const": "subagent_started",
+              "default": "subagent_started",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "subagent_id"
+          ],
+          "title": "SubagentStartedPayload",
+          "type": "object"
+        },
+        "SubagentStatus": {
+          "enum": [
+            "queued",
+            "running",
+            "completed",
+            "failed",
+            "cancel_requested",
+            "cancelled",
+            "interrupted"
+          ],
+          "title": "SubagentStatus",
+          "type": "string"
+        },
+        "SubagentType": {
+          "enum": [
+            "source_research",
+            "skill_builder"
+          ],
+          "title": "SubagentType",
+          "type": "string"
+        },
+        "TaskCancelledPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "reason": {
+              "minLength": 1,
+              "title": "Reason",
+              "type": "string"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "type": {
+              "const": "task_cancelled",
+              "default": "task_cancelled",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "reason"
+          ],
+          "title": "TaskCancelledPayload",
+          "type": "object"
+        },
+        "TaskCompletedPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "build_result": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BuildResult"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "type": {
+              "const": "task_completed",
+              "default": "task_completed",
+              "title": "Type",
+              "type": "string"
+            },
+            "validation": {
+              "$ref": "#/$defs/ValidationSummary"
+            }
+          },
+          "required": [
+            "validation"
+          ],
+          "title": "TaskCompletedPayload",
+          "type": "object"
+        },
+        "TaskCreatedPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "topic": {
+              "minLength": 1,
+              "title": "Topic",
+              "type": "string"
+            },
+            "type": {
+              "const": "task_created",
+              "default": "task_created",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "topic"
+          ],
+          "title": "TaskCreatedPayload",
+          "type": "object"
+        },
+        "TaskFailedPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "$ref": "#/$defs/ErrorDetail"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "type": {
+              "const": "task_failed",
+              "default": "task_failed",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "error"
+          ],
+          "title": "TaskFailedPayload",
+          "type": "object"
+        },
+        "TaskRecoveredPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "recovered_from_sequence": {
+              "minimum": 0,
+              "title": "Recovered From Sequence",
+              "type": "integer"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "type": {
+              "const": "task_recovered",
+              "default": "task_recovered",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "recovered_from_sequence"
+          ],
+          "title": "TaskRecoveredPayload",
+          "type": "object"
+        },
+        "TaskSpecification": {
+          "additionalProperties": false,
+          "properties": {
+            "datasets": {
+              "items": {
+                "$ref": "#/$defs/DatasetSelection"
+              },
+              "title": "Datasets",
+              "type": "array"
+            },
+            "queries": {
+              "items": {
+                "$ref": "#/$defs/QuerySpecification"
+              },
+              "title": "Queries",
+              "type": "array"
+            },
+            "requested_outputs": {
+              "items": {
+                "$ref": "#/$defs/RequestedOutput"
+              },
+              "title": "Requested Outputs",
+              "type": "array"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "source_capabilities": {
+              "items": {
+                "$ref": "#/$defs/SourceCapabilityDeclaration"
+              },
+              "title": "Source Capabilities",
+              "type": "array"
+            },
+            "topic": {
+              "minLength": 1,
+              "title": "Topic",
+              "type": "string"
+            }
+          },
+          "required": [
+            "topic"
+          ],
+          "title": "TaskSpecification",
+          "type": "object"
+        },
+        "ToolCalledPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "arguments": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Arguments"
+            },
+            "arguments_digest": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Arguments Digest",
+              "type": "string"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "tool_name": {
+              "minLength": 1,
+              "title": "Tool Name",
+              "type": "string"
+            },
+            "type": {
+              "const": "tool_called",
+              "default": "tool_called",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "tool_name",
+            "arguments_digest"
+          ],
+          "title": "ToolCalledPayload",
+          "type": "object"
+        },
+        "ToolCompletedPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "is_error": {
+              "default": false,
+              "title": "Is Error",
+              "type": "boolean"
+            },
+            "output": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Output"
+            },
+            "output_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Output Digest"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "tool_call_id": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Tool Call Id"
+            },
+            "tool_name": {
+              "minLength": 1,
+              "title": "Tool Name",
+              "type": "string"
+            },
+            "type": {
+              "const": "tool_completed",
+              "default": "tool_completed",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "tool_name"
+          ],
+          "title": "ToolCompletedPayload",
+          "type": "object"
+        },
+        "ToolStartedPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "arguments": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/JsonValue"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Arguments"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "tool_call_id": {
+              "minLength": 1,
+              "title": "Tool Call Id",
+              "type": "string"
+            },
+            "tool_name": {
+              "minLength": 1,
+              "title": "Tool Name",
+              "type": "string"
+            },
+            "type": {
+              "const": "tool_started",
+              "default": "tool_started",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "tool_call_id",
+            "tool_name"
+          ],
+          "title": "ToolStartedPayload",
+          "type": "object"
+        },
+        "UserInputRequiredPayload": {
+          "additionalProperties": false,
+          "description": "Unified human-in-the-loop pause request.\n\nThe pipeline emits this payload when it needs a human decision before\ncontinuing. ``prompt_kind`` discriminates between plan confirmation\n(``plan_confirmation``), data correction (``data_correction``), and\nAgent max_turns exhaustion (``max_turns_reached``). When\n``fixture_exempt`` is true the run is in fixture mode and the request is\ninformational only — the pipeline auto-approves and does not block.",
+          "properties": {
+            "detail": {
+              "additionalProperties": true,
+              "title": "Detail",
+              "type": "object"
+            },
+            "expires_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expires At"
+            },
+            "fixture_exempt": {
+              "default": false,
+              "title": "Fixture Exempt",
+              "type": "boolean"
+            },
+            "prompt_kind": {
+              "enum": [
+                "plan_confirmation",
+                "data_correction",
+                "max_turns_reached",
+                "no_progress"
+              ],
+              "title": "Prompt Kind",
+              "type": "string"
+            },
+            "request_id": {
+              "minLength": 1,
+              "title": "Request Id",
+              "type": "string"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "summary": {
+              "minLength": 1,
+              "title": "Summary",
+              "type": "string"
+            },
+            "type": {
+              "const": "user_input_required",
+              "default": "user_input_required",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "request_id",
+            "prompt_kind",
+            "summary"
+          ],
+          "title": "UserInputRequiredPayload",
+          "type": "object"
+        },
+        "UserInputResumedPayload": {
+          "additionalProperties": false,
+          "description": "Resume decision submitted via ``POST /runs/{run_id}/resume``.",
+          "properties": {
+            "decision": {
+              "enum": [
+                "approve",
+                "reject"
+              ],
+              "title": "Decision",
+              "type": "string"
+            },
+            "detail": {
+              "additionalProperties": true,
+              "title": "Detail",
+              "type": "object"
+            },
+            "request_id": {
+              "minLength": 1,
+              "title": "Request Id",
+              "type": "string"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "type": {
+              "const": "user_input_resumed",
+              "default": "user_input_resumed",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "request_id",
+            "decision"
+          ],
+          "title": "UserInputResumedPayload",
+          "type": "object"
+        },
+        "ValidationSummary": {
+          "additionalProperties": false,
+          "properties": {
+            "checked_count": {
+              "minimum": 0,
+              "title": "Checked Count",
+              "type": "integer"
+            },
+            "failed_count": {
+              "minimum": 0,
+              "title": "Failed Count",
+              "type": "integer"
+            },
+            "report_path": {
+              "title": "Report Path",
+              "type": "string"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "valid",
+                "invalid"
+              ],
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "checked_count",
+            "failed_count",
+            "report_path"
+          ],
+          "title": "ValidationSummary",
+          "type": "object"
+        },
+        "WarningPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Code"
+            },
+            "message": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Message"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "type": {
+              "const": "warning",
+              "default": "warning",
+              "title": "Type",
+              "type": "string"
+            },
+            "warning": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WarningRecord"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "title": "WarningPayload",
+          "type": "object"
+        },
+        "WarningRecord": {
+          "additionalProperties": false,
+          "properties": {
+            "asset_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Asset Id"
+            },
+            "code": {
+              "minLength": 1,
+              "title": "Code",
+              "type": "string"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "message": {
+              "minLength": 1,
+              "title": "Message",
+              "type": "string"
+            },
+            "record_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Record Id"
+            },
+            "schema_version": {
+              "const": "1.0",
+              "default": "1.0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "severity": {
+              "$ref": "#/$defs/WarningSeverity"
+            },
+            "source_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Source Id"
+            },
+            "stage": {
+              "$ref": "#/$defs/StageName"
+            },
+            "warning_id": {
+              "minLength": 1,
+              "title": "Warning Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "warning_id",
+            "severity",
+            "stage",
+            "code",
+            "message",
+            "created_at"
+          ],
+          "title": "WarningRecord",
+          "type": "object"
+        },
+        "WarningSeverity": {
+          "enum": [
+            "info",
+            "warning",
+            "error"
+          ],
+          "title": "WarningSeverity",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "event_id": {
+          "minLength": 1,
+          "title": "Event Id",
+          "type": "string"
+        },
+        "parent_tool_call_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Tool Call Id"
+        },
+        "payload": {
+          "discriminator": {
+            "mapping": {
+              "artifact_produced": "#/$defs/ArtifactProducedPayload",
+              "assistant_delta": "#/$defs/AssistantDeltaPayload",
+              "assistant_reasoning_delta": "#/$defs/AssistantReasoningDeltaPayload",
+              "conversation_compacted": "#/$defs/ConversationCompactedPayload",
+              "operation_completed": "#/$defs/OperationCompletedPayload",
+              "operation_failed": "#/$defs/OperationFailedPayload",
+              "operation_progress": "#/$defs/OperationProgressPayload",
+              "operation_started": "#/$defs/OperationStartedPayload",
+              "plan_ready": "#/$defs/PlanReadyPayload",
+              "publication_created": "#/$defs/PublicationCreatedPayload",
+              "run_cancel_requested": "#/$defs/RunCancelRequestedPayload",
+              "run_cancelled": "#/$defs/RunCancelledPayload",
+              "run_completed": "#/$defs/RunCompletedPayload",
+              "run_failed": "#/$defs/RunFailedPayload",
+              "run_finalizing": "#/$defs/RunFinalizingPayload",
+              "run_interrupted": "#/$defs/RunInterruptedPayload",
+              "run_queued": "#/$defs/RunQueuedPayload",
+              "run_started": "#/$defs/RunStartedPayload",
+              "stage_completed": "#/$defs/StageCompletedPayload",
+              "stage_failed": "#/$defs/StageFailedPayload",
+              "stage_progress": "#/$defs/StageProgressPayload",
+              "stage_skipped": "#/$defs/StageSkippedPayload",
+              "stage_started": "#/$defs/StageStartedPayload",
+              "subagent_cancel_requested": "#/$defs/SubagentCancelRequestedPayload",
+              "subagent_cancelled": "#/$defs/SubagentCancelledPayload",
+              "subagent_completed": "#/$defs/SubagentCompletedPayload",
+              "subagent_failed": "#/$defs/SubagentFailedPayload",
+              "subagent_input_required": "#/$defs/SubagentInputRequiredPayload",
+              "subagent_input_resumed": "#/$defs/SubagentInputResumedPayload",
+              "subagent_interrupted": "#/$defs/SubagentInterruptedPayload",
+              "subagent_progress": "#/$defs/SubagentProgressPayload",
+              "subagent_queued": "#/$defs/SubagentQueuedPayload",
+              "subagent_started": "#/$defs/SubagentStartedPayload",
+              "task_cancel_requested": "#/$defs/CancelRequestedPayload",
+              "task_cancelled": "#/$defs/TaskCancelledPayload",
+              "task_completed": "#/$defs/TaskCompletedPayload",
+              "task_created": "#/$defs/TaskCreatedPayload",
+              "task_failed": "#/$defs/TaskFailedPayload",
+              "task_recovered": "#/$defs/TaskRecoveredPayload",
+              "tool_called": "#/$defs/ToolCalledPayload",
+              "tool_completed": "#/$defs/ToolCompletedPayload",
+              "tool_started": "#/$defs/ToolStartedPayload",
+              "user_input_required": "#/$defs/UserInputRequiredPayload",
+              "user_input_resumed": "#/$defs/UserInputResumedPayload",
+              "warning": "#/$defs/WarningPayload"
+            },
+            "propertyName": "type"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/TaskCreatedPayload"
+            },
+            {
+              "$ref": "#/$defs/PlanReadyPayload"
+            },
+            {
+              "$ref": "#/$defs/StageStartedPayload"
+            },
+            {
+              "$ref": "#/$defs/StageCompletedPayload"
+            },
+            {
+              "$ref": "#/$defs/StageFailedPayload"
+            },
+            {
+              "$ref": "#/$defs/StageSkippedPayload"
+            },
+            {
+              "$ref": "#/$defs/StageProgressPayload"
+            },
+            {
+              "$ref": "#/$defs/ToolCalledPayload"
+            },
+            {
+              "$ref": "#/$defs/ToolCompletedPayload"
+            },
+            {
+              "$ref": "#/$defs/WarningPayload"
+            },
+            {
+              "$ref": "#/$defs/ArtifactProducedPayload"
+            },
+            {
+              "$ref": "#/$defs/CancelRequestedPayload"
+            },
+            {
+              "$ref": "#/$defs/TaskCancelledPayload"
+            },
+            {
+              "$ref": "#/$defs/TaskRecoveredPayload"
+            },
+            {
+              "$ref": "#/$defs/TaskCompletedPayload"
+            },
+            {
+              "$ref": "#/$defs/TaskFailedPayload"
+            },
+            {
+              "$ref": "#/$defs/RunQueuedPayload"
+            },
+            {
+              "$ref": "#/$defs/RunStartedPayload"
+            },
+            {
+              "$ref": "#/$defs/RunFinalizingPayload"
+            },
+            {
+              "$ref": "#/$defs/RunCompletedPayload"
+            },
+            {
+              "$ref": "#/$defs/RunFailedPayload"
+            },
+            {
+              "$ref": "#/$defs/RunCancelRequestedPayload"
+            },
+            {
+              "$ref": "#/$defs/RunCancelledPayload"
+            },
+            {
+              "$ref": "#/$defs/RunInterruptedPayload"
+            },
+            {
+              "$ref": "#/$defs/PublicationCreatedPayload"
+            },
+            {
+              "$ref": "#/$defs/UserInputRequiredPayload"
+            },
+            {
+              "$ref": "#/$defs/UserInputResumedPayload"
+            },
+            {
+              "$ref": "#/$defs/AssistantDeltaPayload"
+            },
+            {
+              "$ref": "#/$defs/AssistantReasoningDeltaPayload"
+            },
+            {
+              "$ref": "#/$defs/ToolStartedPayload"
+            },
+            {
+              "$ref": "#/$defs/ConversationCompactedPayload"
+            },
+            {
+              "$ref": "#/$defs/OperationStartedPayload"
+            },
+            {
+              "$ref": "#/$defs/OperationProgressPayload"
+            },
+            {
+              "$ref": "#/$defs/OperationCompletedPayload"
+            },
+            {
+              "$ref": "#/$defs/OperationFailedPayload"
+            },
+            {
+              "$ref": "#/$defs/SubagentQueuedPayload"
+            },
+            {
+              "$ref": "#/$defs/SubagentStartedPayload"
+            },
+            {
+              "$ref": "#/$defs/SubagentProgressPayload"
+            },
+            {
+              "$ref": "#/$defs/SubagentCompletedPayload"
+            },
+            {
+              "$ref": "#/$defs/SubagentFailedPayload"
+            },
+            {
+              "$ref": "#/$defs/SubagentCancelRequestedPayload"
+            },
+            {
+              "$ref": "#/$defs/SubagentCancelledPayload"
+            },
+            {
+              "$ref": "#/$defs/SubagentInterruptedPayload"
+            },
+            {
+              "$ref": "#/$defs/SubagentInputRequiredPayload"
+            },
+            {
+              "$ref": "#/$defs/SubagentInputResumedPayload"
+            }
+          ],
+          "title": "Payload"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Run Id"
+        },
+        "schema_version": {
+          "default": "1.0",
+          "enum": [
+            "1.0",
+            "2.0"
+          ],
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "sequence": {
+          "minimum": 1,
+          "title": "Sequence",
+          "type": "integer"
+        },
+        "stage_attempt_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stage Attempt Id"
+        },
+        "subagent_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Subagent Id"
+        },
+        "task_id": {
+          "minLength": 1,
+          "title": "Task Id",
+          "type": "string"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        },
+        "type": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PipelineEventType"
+            },
+            {
+              "$ref": "#/$defs/RuntimeEventType"
+            }
+          ],
+          "title": "Type"
+        }
+      },
+      "required": [
+        "event_id",
+        "type",
+        "task_id",
+        "sequence",
+        "timestamp",
+        "payload"
+      ],
+      "title": "EventEnvelope",
+      "type": "object"
+    },
+    "ValidationResult": {
+      "$defs": {
+        "ValidationResultStatus": {
+          "enum": [
+            "passed",
+            "failed"
+          ],
+          "title": "ValidationResultStatus",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Whether a manifest digest passed a profile (ARCHITECTURE §9.1).",
+      "properties": {
+        "checked_count": {
+          "minimum": 0,
+          "title": "Checked Count",
+          "type": "integer"
+        },
+        "failed_count": {
+          "minimum": 0,
+          "title": "Failed Count",
+          "type": "integer"
+        },
+        "manifest_digest": {
+          "minLength": 1,
+          "title": "Manifest Digest",
+          "type": "string"
+        },
+        "profile_ref": {
+          "minLength": 1,
+          "title": "Profile Ref",
+          "type": "string"
+        },
+        "report_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Report Path"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/ValidationResultStatus"
+        }
+      },
+      "required": [
+        "manifest_digest",
+        "profile_ref",
+        "status",
+        "checked_count",
+        "failed_count"
+      ],
+      "title": "ValidationResult",
+      "type": "object"
+    }
+  },
+  "snapshot_version": 1
+}

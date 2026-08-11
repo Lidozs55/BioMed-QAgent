@@ -1,0 +1,7 @@
+# Artifact/source hashes describe exact committed bytes; never normalize them.
+golden/**/artifacts/** binary
+sources/** binary
+
+# Machine-readable fixture documents are canonical UTF-8 with LF endings.
+golden/contract-snapshot.json text eol=lf
+golden/**/fixture.json text eol=lf
