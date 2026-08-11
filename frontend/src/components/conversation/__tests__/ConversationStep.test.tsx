@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { ConversationStep } from "@/components/conversation/ConversationStep";
+import { STEER_FRAMING_PREFIX } from "@/lib/utils";
 import type { ConversationItem } from "@/runtime/types";
 
 vi.mock("@/components/MarkdownContent", () => ({
@@ -44,6 +45,16 @@ describe("ConversationStep dispatcher", () => {
     });
     render(<ConversationStep item={item} isActive={false} />);
     expect(screen.getByText("你好，请帮我查文献")).toBeInTheDocument();
+  });
+
+  it("hides the steering framing prefix from user bubbles", () => {
+    const item = makeItem({
+      kind: "user_message",
+      content: `${STEER_FRAMING_PREFIX}转向：先查 README`,
+    });
+    render(<ConversationStep item={item} isActive={false} />);
+    expect(screen.getByText("转向：先查 README")).toBeInTheDocument();
+    expect(screen.queryByText(/【方向调整】/)).not.toBeInTheDocument();
   });
 
   it("renders assistant_segment items via AssistantSegment", () => {
