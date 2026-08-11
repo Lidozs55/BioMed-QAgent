@@ -238,6 +238,9 @@ class RunExecution:
 
         self._streaming_result = None
         self._stream_ready.clear()
+        # 新一轮流挂载后，取消通道重置，避免前一次 cancel（如中途转向）消耗掉
+        # 后续手动取消的能力。
+        self._cancel_sent = False
 
     def set_user_input_submitter(self, submitter: UserInputSubmitter) -> None:
         """Attach the executor-side resume channel (e.g. PipelineRunner)."""
@@ -1081,6 +1084,28 @@ class TaskManager:
                 )
             )
         return accepted
+
+    async def request_steer(
+        self,
+        task_id: str,
+        run_id: str,
+        *,
+        text: str,
+    ) -> bool:
+        """Signal a live run to steer mid-generation without cancelling it.
+
+        The caller must have already appended the steering text to the durable
+        session.  This stops the current SDK stream (immediate) and flags the
+        run loop so its next model call continues from session history, keeping
+        the same run alive instead of cancel + restart.
+        """
+
+        execution = self._running.get((task_id, run_id))
+        if execution is None:
+            return False
+        execution.context.request_steer(text)
+        await execution.cancel_after_turn(immediate=True)
+        return True
 
     async def cancel_run(
         self,

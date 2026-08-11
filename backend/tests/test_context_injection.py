@@ -1,8 +1,9 @@
 """Tests for steering context into a task's active run (Codex turn/steer pattern).
 
-Injected text must affect the *current* round: the endpoint cancels the active
-run and immediately submits a fresh run with the text as its user input, so the
-model re-plans along the new direction instead of waiting for the next run.
+Steering must interrupt only the *current* generation and let the same run
+continue from session history along the new direction -- no run cancellation,
+no restart, and no loss of the conversation so far.  When the task is idle the
+labeled text is submitted as a fresh run.
 """
 
 from __future__ import annotations
@@ -15,12 +16,7 @@ from pathlib import Path
 import httpx
 import pytest
 from app.config import Settings
-from app.domain.contracts import (
-    RunCancelledPayload,
-    RunQueuedPayload,
-    RunStatus,
-    TaskRunAccepted,
-)
+from app.domain.contracts import RunStatus
 from app.main import create_app
 from fastapi import FastAPI
 
@@ -38,7 +34,7 @@ async def api_client(
 
 
 class CooperativeCancellationExecutor:
-    """Replaces the run executor; a run stays active until cancellation is sent."""
+    """Replaces the run executor; the run stays alive until the stream cancel fires."""
 
     class StreamingResult:
         def __init__(self) -> None:
@@ -60,7 +56,9 @@ class CooperativeCancellationExecutor:
 
 
 @pytest.mark.asyncio
-async def test_steer_without_active_run_queues_new_run(tmp_path: Path) -> None:
+async def test_steer_without_active_run_submits_labeled_new_run(
+    tmp_path: Path,
+) -> None:
     async def complete(_execution: object) -> None:
         return None
 
@@ -81,30 +79,25 @@ async def test_steer_without_active_run_queues_new_run(tmp_path: Path) -> None:
             json={"text": "注意：补充说明"},
         )
         assert steered.status_code == 202
-        accepted = TaskRunAccepted.model_validate(steered.json())
-        assert accepted.task_id == task_id
-        assert accepted.status == "queued"
+        body = steered.json()
+        assert body["status"] == "steered"
+        assert body["run_id"] != ""
 
         snapshot = await repository.get_snapshot(task_id)
         assert snapshot is not None
         assert "注意：补充说明" in snapshot.runs[-1].input
         assert "方向调整" in snapshot.runs[-1].input
-        # 注入文本进入模型可见的历史，而不是只做展示。
+        # 标注后的文本进入模型可见的历史，而不是只做展示。
         session = repository.task_session(task_id)
         model_items = await session.get_items()
-        assert any("注意：补充说明" in str(item) for item in model_items)
-        page = await client.get(f"/api/v1/tasks/{task_id}/messages")
-        assert page.status_code == 200
-        contents = [
-            message["content"]
-            for message in page.json()["messages"]
-            if message["role"] == "user"
-        ]
-        assert any("注意：补充说明" in content for content in contents)
+        joined = " | ".join(str(item) for item in model_items)
+        assert "注意：补充说明" in joined
 
 
 @pytest.mark.asyncio
-async def test_steer_cancels_active_run_and_starts_new_run(tmp_path: Path) -> None:
+async def test_steer_mid_run_keeps_same_run_and_appends_message(
+    tmp_path: Path,
+) -> None:
     executor = CooperativeCancellationExecutor()
     async with api_client(tmp_path) as (application, client):
         manager = application.state.task_manager
@@ -127,27 +120,33 @@ async def test_steer_cancels_active_run_and_starts_new_run(tmp_path: Path) -> No
             json={"text": "转向：先查 README", "expected_run_id": active_run_id},
         )
         assert steered.status_code == 202
+        body = steered.json()
+        assert body["status"] == "steered"
+        # 中途转向：仍是同一个 run，不产生新 run，也不取消 run。
+        assert body["run_id"] == active_run_id
+        assert isinstance(body["message_id"], str) and body["message_id"]
+        assert "方向调整" in body["content"]
         assert "immediate" in executor._result.cancel_modes
-        accepted = TaskRunAccepted.model_validate(steered.json())
-        assert accepted.run_id != active_run_id
         await manager.wait_until_idle()
 
         snapshot = await repository.get_snapshot(task_id)
         assert snapshot is not None
-        old_run = next(run for run in snapshot.runs if run.run_id == active_run_id)
-        assert old_run.status is RunStatus.CANCELLED
-        new_run = next(run for run in snapshot.runs if run.run_id == accepted.run_id)
-        assert "转向：先查 README" in new_run.input
-        events = await repository.list_events(task_id)
-        assert any(isinstance(event.payload, RunCancelledPayload) for event in events)
-        assert any(
-            isinstance(event.payload, RunQueuedPayload)
-            and "转向：先查 README" in event.payload.input
-            for event in events
-        )
+        runs = {run.run_id: run for run in snapshot.runs}
+        assert active_run_id in runs
+        assert runs[active_run_id].status is not RunStatus.CANCELLED
+        assert len(snapshot.runs) == 1
+        # 标注后的调整文本作为用户消息进入模型可见的会话历史。
         session = repository.task_session(task_id)
         model_items = await session.get_items()
-        assert any("转向：先查 README" in str(item) for item in model_items)
+        joined = " | ".join(str(item) for item in model_items)
+        assert "转向：先查 README" in joined
+        page = await client.get(f"/api/v1/tasks/{task_id}/messages")
+        contents = [
+            message["content"]
+            for message in page.json()["messages"]
+            if message["role"] == "user"
+        ]
+        assert any("转向：先查 README" in content for content in contents)
 
 
 @pytest.mark.asyncio
@@ -176,7 +175,7 @@ async def test_steer_expected_run_id_precondition(tmp_path: Path) -> None:
         assert mismatch.status_code == 409
 
         # 释放活动 run，让它正常结束；之后带过期 expected_run_id 的 steer
-        # 会优雅地重定向为新 run（不报错）。
+        # 会优雅地作为新一轮提交（不报错）。
         executor._result.cancel_called.set()
         await manager.wait_until_idle()
         re_steer = await client.post(
@@ -184,13 +183,12 @@ async def test_steer_expected_run_id_precondition(tmp_path: Path) -> None:
             json={"text": "later", "expected_run_id": active_run_id},
         )
         assert re_steer.status_code == 202
-        accepted = TaskRunAccepted.model_validate(re_steer.json())
-        assert accepted.run_id != active_run_id
+        assert re_steer.json()["status"] == "steered"
 
 
 @pytest.mark.asyncio
 async def test_concurrent_steer_requests_do_not_conflict(tmp_path: Path) -> None:
-    """Two racing steers (double-click) must both succeed, not 409-conflict."""
+    """Two racing steers (double-click) must both succeed and both land in history."""
 
     executor = CooperativeCancellationExecutor()
     async with api_client(tmp_path) as (application, client):
@@ -222,10 +220,6 @@ async def test_concurrent_steer_requests_do_not_conflict(tmp_path: Path) -> None
         assert first.status_code == second.status_code == 202
         await manager.wait_until_idle()
 
-        snapshot = await repository.get_snapshot(task_id)
-        assert snapshot is not None
-        old_run = next(run for run in snapshot.runs if run.run_id == active_run_id)
-        assert old_run.status is RunStatus.CANCELLED
         session = repository.task_session(task_id)
         model_items = await session.get_items()
         joined = " | ".join(str(item) for item in model_items)
