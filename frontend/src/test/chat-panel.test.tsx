@@ -1174,9 +1174,10 @@ describe("ChatPanel", () => {
     );
   });
 
-  it("shows queued follow-ups above the composer with delete/edit actions", async () => {
+  it("shows queued follow-ups above the composer with inject/delete/edit actions", async () => {
     seedBackgroundTask();
     useAgentStore.getState().setActiveTaskId("task_background");
+    const injectTaskContext = vi.fn().mockResolvedValue({ status: "injected" });
     render(
       <ChatPanel
         startTask={vi.fn()}
@@ -1187,6 +1188,7 @@ describe("ChatPanel", () => {
           status: "queued",
         } satisfies TaskRunAccepted)}
         cancelRun={vi.fn()}
+        injectTaskContext={injectTaskContext}
       />,
     );
 
@@ -1195,9 +1197,12 @@ describe("ChatPanel", () => {
     fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
     fireEvent.change(input, { target: { value: "second queued" } });
     fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+    fireEvent.change(input, { target: { value: "third queued" } });
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
 
     expect(screen.getByText("first queued")).toBeVisible();
     expect(screen.getByText("second queued")).toBeVisible();
+    expect(screen.getByText("third queued")).toBeVisible();
     // 队列面板渲染在输入框上方。
     const composer = input.closest('[data-slot="agent-composer"]');
     const queuePanel = screen
@@ -1211,16 +1216,28 @@ describe("ChatPanel", () => {
       ) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
 
-    // 删除一条队列消息。
-    fireEvent.click(screen.getByRole("button", { name: "删除：first queued" }));
+    // 注入上下文：调用接口并把该条移出队列。
+    fireEvent.click(screen.getByRole("button", { name: "注入上下文：first queued" }));
+    await waitFor(() =>
+      expect(injectTaskContext).toHaveBeenCalledWith(
+        "task_background",
+        "first queued",
+      ),
+    );
     expect(screen.queryByText("first queued")).not.toBeInTheDocument();
     expect(screen.getByText("second queued")).toBeVisible();
+    expect(screen.getByText("third queued")).toBeVisible();
+
+    // 删除一条队列消息。
+    fireEvent.click(screen.getByRole("button", { name: "删除：second queued" }));
+    expect(screen.queryByText("second queued")).not.toBeInTheDocument();
+    expect(screen.getByText("third queued")).toBeVisible();
 
     // 编辑：把内容回填到输入框并移出队列。
-    fireEvent.click(screen.getByRole("button", { name: "编辑：second queued" }));
-    expect(input).toHaveValue("second queued");
+    fireEvent.click(screen.getByRole("button", { name: "编辑：third queued" }));
+    expect(input).toHaveValue("third queued");
     expect(
-      screen.queryByRole("button", { name: "删除：second queued" }),
+      screen.queryByRole("button", { name: "删除：third queued" }),
     ).not.toBeInTheDocument();
   });
 

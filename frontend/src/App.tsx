@@ -214,6 +214,9 @@ export default function App() {
                   controller.loadOlderMessages(taskId)
                 }
                 compactTask={(taskId) => api.compactTask(taskId)}
+                injectTaskContext={(taskId, text) =>
+                  api.injectTaskContext(taskId, text)
+                }
                 models={models}
                 hasApiKey={models.length > 0}
                 selectedModelId={selectedModelId}

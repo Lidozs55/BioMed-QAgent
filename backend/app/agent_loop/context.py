@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from app.agent_loop.context_injection import get_context_injection_store
 from app.datasets.contracts import ManifestArtifactEntry
 from app.domain.contracts import (
     ArtifactManifestEntry,
@@ -356,6 +357,16 @@ class RunContext:
             raise RuntimeError("run model settings are already bound")
         self.model_settings = model_settings
         self._model_settings_bound = True
+
+    def pending_context_injections(self) -> list[str]:
+        """Return a snapshot of user-injected context lines for this task."""
+
+        return get_context_injection_store().pending(self.task_id)
+
+    def drain_context_injections(self) -> list[str]:
+        """Consume the pending user-injected context lines (one-shot)."""
+
+        return get_context_injection_store().drain(self.task_id)
 
     def bind_create_skill_runtime(self, runtime: CreateSkillRuntime) -> None:
         """Bind the trusted Recipe services available to this Run exactly once."""

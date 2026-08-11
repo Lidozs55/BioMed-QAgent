@@ -18,7 +18,7 @@ describe("QueuedMessages", () => {
         entries={ENTRIES}
         onDelete={vi.fn()}
         onEdit={vi.fn()}
-        onSteer={vi.fn()}
+        onInject={vi.fn()}
         onReorder={vi.fn()}
       />,
     );
@@ -29,16 +29,16 @@ describe("QueuedMessages", () => {
     expect(screen.getByText("message two")).toBeInTheDocument();
   });
 
-  it("invokes delete/edit/steer handlers with the entry id", () => {
+  it("invokes delete/edit/inject handlers with the entry id", () => {
     const onDelete = vi.fn();
     const onEdit = vi.fn();
-    const onSteer = vi.fn();
+    const onInject = vi.fn();
     render(
       <QueuedMessages
         entries={ENTRIES}
         onDelete={onDelete}
         onEdit={onEdit}
-        onSteer={onSteer}
+        onInject={onInject}
         onReorder={vi.fn()}
       />,
     );
@@ -47,8 +47,8 @@ describe("QueuedMessages", () => {
     expect(onDelete).toHaveBeenCalledWith("a");
     fireEvent.click(screen.getByRole("button", { name: "编辑：message two" }));
     expect(onEdit).toHaveBeenCalledWith("b");
-    fireEvent.click(screen.getByRole("button", { name: "调整方向：message one" }));
-    expect(onSteer).toHaveBeenCalledWith("a");
+    fireEvent.click(screen.getByRole("button", { name: "注入上下文：message one" }));
+    expect(onInject).toHaveBeenCalledWith("a");
   });
 
   it("reorders entries via drag and drop", () => {
@@ -58,7 +58,7 @@ describe("QueuedMessages", () => {
         entries={ENTRIES}
         onDelete={vi.fn()}
         onEdit={vi.fn()}
-        onSteer={vi.fn()}
+        onInject={vi.fn()}
         onReorder={onReorder}
       />,
     );
