@@ -9,6 +9,7 @@ Endpoints:
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import hashlib
@@ -814,6 +815,84 @@ class ContextInjectionRequest(BaseModel):
     expected_run_id: str | None = Field(default=None, min_length=1)
 
 
+_STEER_TERMINAL_STATUSES = frozenset(
+    {
+        RunStatus.COMPLETED,
+        RunStatus.FAILED,
+        RunStatus.CANCELLED,
+        RunStatus.INTERRUPTED,
+    }
+)
+_STEER_MAX_ATTEMPTS = 3
+
+
+def _resolve_steer_target(
+    snapshot: TaskSnapshot,
+    expected_run_id: str | None,
+) -> tuple[str | None, str | None]:
+    """Resolve which run a steer should cancel (Codex ``expectedTurnId``).
+
+    Returns ``(active_run_id_or_None, error_detail_or_None)``.  A stale
+    expectation is tolerated: when the pinned run is already terminal, the
+    steer re-targets whatever run is active, or starts a fresh run when the
+    task is idle.  A genuine mismatch (the pinned run is still live but is not
+    the active run) is reported as an error.
+    """
+
+    active_run_id = snapshot.task.active_run_id
+    if expected_run_id is None:
+        return active_run_id, None
+    if expected_run_id == active_run_id:
+        return active_run_id, None
+    expected_run = next(
+        (run for run in snapshot.runs if run.run_id == expected_run_id),
+        None,
+    )
+    if expected_run is None:
+        return None, (
+            f"expected active run {expected_run_id} "
+            f"but task has run {active_run_id}"
+        )
+    if expected_run.status not in _STEER_TERMINAL_STATUSES:
+        return None, (
+            f"expected active run {expected_run_id} "
+            f"but task has run {active_run_id}"
+        )
+    return active_run_id, None
+
+
+async def _cancel_steer_run(
+    manager: TaskManager,
+    task_id: str,
+    run_id: str,
+    *,
+    tolerate_uncancellable: bool = False,
+) -> None:
+    """Cancel one run for steering, mapping manager errors to HTTP codes."""
+
+    try:
+        await manager.cancel_run(task_id, run_id, reason="user_steer")
+    except RuntimeError as error:
+        detail = str(error)
+        if detail == "task manager is not running":
+            raise HTTPException(
+                status_code=503,
+                detail="Task runtime is unavailable",
+            ) from error
+        if detail in {
+            f"run {run_id} is not cancellable",
+            f"run {run_id} has no live execution",
+            f"run {run_id} left cancellation state",
+        }:
+            if tolerate_uncancellable:
+                return
+            raise HTTPException(
+                status_code=409,
+                detail="Run is not cancellable",
+            ) from error
+        raise
+
+
 @router.post(
     "/tasks/{task_id}/inject-context",
     status_code=202,
@@ -842,85 +921,48 @@ async def inject_task_context(
     """
 
     snapshot = await _require_snapshot(repository, task_id)
-    active_run_id = snapshot.task.active_run_id
-    if body.expected_run_id is not None and active_run_id is None:
-        raise HTTPException(
-            status_code=409,
-            detail="Task has no active run to steer",
-        )
-    if active_run_id is not None:
-        if body.expected_run_id is not None and body.expected_run_id != active_run_id:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"expected active run {body.expected_run_id} "
-                    f"but task has run {active_run_id}"
+    target_run_id, error_detail = _resolve_steer_target(
+        snapshot,
+        body.expected_run_id,
+    )
+    if error_detail is not None:
+        raise HTTPException(status_code=409, detail=error_detail)
+    for attempt in range(_STEER_MAX_ATTEMPTS):
+        if target_run_id is not None:
+            await _cancel_steer_run(
+                manager,
+                task_id,
+                target_run_id,
+                tolerate_uncancellable=attempt > 0,
+            )
+            target_run_id = None
+        try:
+            return await manager.submit_run(
+                task_id,
+                StartRunRequest(
+                    request_id=generate_prefixed_uuid("steer"),
+                    input=body.text,
                 ),
             )
-        try:
-            await manager.cancel_run(
-                task_id,
-                active_run_id,
-                reason="user_steer",
+        except TaskRunConflictError:
+            # A concurrent admission (another steer, a normal continuation, or
+            # a retried request) won the race between cancel and submit.  Re-read
+            # the task state and cancel the winner too, so the injected text
+            # still steers the current round instead of erroring out.
+            if attempt + 1 >= _STEER_MAX_ATTEMPTS:
+                break
+            await asyncio.sleep(0.15 * (attempt + 1))
+            snapshot = await _require_snapshot(repository, task_id)
+            target_run_id, error_detail = _resolve_steer_target(
+                snapshot,
+                body.expected_run_id,
             )
-        except RuntimeError as error:
-            detail = str(error)
-            if detail == "task manager is not running":
-                raise HTTPException(
-                    status_code=503,
-                    detail="Task runtime is unavailable",
-                ) from error
-            if detail in {
-                f"run {active_run_id} is not cancellable",
-                f"run {active_run_id} has no live execution",
-                f"run {active_run_id} left cancellation state",
-            }:
-                raise HTTPException(
-                    status_code=409,
-                    detail="Run is not cancellable",
-                ) from error
-            raise
-    try:
-        return await manager.submit_run(
-            task_id,
-            StartRunRequest(
-                request_id=generate_prefixed_uuid("steer"),
-                input=body.text,
-            ),
-        )
-    except RunAdmissionRejectedError as error:
-        raise HTTPException(status_code=422, detail=error.reason) from error
-    except RequestIdConflictError as error:
-        raise HTTPException(
-            status_code=409,
-            detail="Request ID belongs to another task",
-        ) from error
-    except RequestIdSemanticConflictError as error:
-        raise HTTPException(
-            status_code=409,
-            detail="Request ID was reused with different request content",
-        ) from error
-    except TaskRunConflictError as error:
-        raise HTTPException(
-            status_code=409,
-            detail="Task already has an active run",
-        ) from error
-    except FixtureTaskContinuationError as error:
-        raise HTTPException(
-            status_code=409,
-            detail="Fixture tasks cannot be continued",
-        ) from error
-    except RunQueueFullError as error:
-        raise HTTPException(status_code=429, detail="Run queue is full") from error
-    except LookupError as error:
-        raise HTTPException(status_code=404, detail="Task not found") from error
-    except RuntimeError as error:
-        if str(error) == "task manager is not running":
-            raise HTTPException(
-                status_code=503,
-                detail="Task runtime is unavailable",
-            ) from error
-        raise
+            if error_detail is not None:
+                raise HTTPException(status_code=409, detail=error_detail)
+    raise HTTPException(
+        status_code=409,
+        detail="Task already has an active run; please retry",
+    )
 
 
 @router.get("/tasks/{task_id}/messages", response_model=MessagePage)
