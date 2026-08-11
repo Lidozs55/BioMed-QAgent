@@ -73,6 +73,8 @@ interface ChatPanelProps {
   loadOlderMessages?: (taskId: string) => Promise<void>;
   /** Trigger context compaction on a task */
   compactTask?: (taskId: string) => Promise<void>;
+  /** Inject a short text into a task's running context (non-interrupting) */
+  injectTaskContext?: (taskId: string, text: string) => Promise<unknown>;
   /** Available models from settings */
   models?: ModelInfo[];
   /** Whether the user has configured an API key */
@@ -208,6 +210,7 @@ export function ChatPanel({
   resumeRun,
   loadOlderMessages,
   compactTask,
+  injectTaskContext,
   models,
   hasApiKey,
   onOpenSettings,
@@ -535,28 +538,23 @@ export function ChatPanel({
     [queuedFollowUps, removeQueued],
   );
 
-  const steerQueued = useCallback(
+  const injectQueued = useCallback(
     async (taskId: string, messageId: string) => {
-      setQueuedFollowUps((current) => {
-        const queue = current[taskId] ?? [];
-        const entry = queue.find((item) => item.id === messageId);
-        if (entry === undefined) return current;
-        return {
-          ...current,
-          [taskId]: [entry, ...queue.filter((item) => item.id !== messageId)],
-        };
-      });
-      if (activeRunId !== null && cancelRun !== undefined) {
-        try {
-          await cancelRun(taskId, activeRunId);
-        } catch (error) {
-          toast.error("取消当前回答失败", {
-            description: errorMessage(error, "该消息仍将自动发送"),
-          });
-        }
+      const entry = (queuedFollowUps[taskId] ?? []).find(
+        (item) => item.id === messageId,
+      );
+      if (entry === undefined || injectTaskContext === undefined) return;
+      try {
+        await injectTaskContext(taskId, entry.input);
+        removeQueued(taskId, messageId);
+        toast.success("已注入上下文");
+      } catch (error) {
+        toast.error("注入上下文失败", {
+          description: errorMessage(error, "请稍后重试"),
+        });
       }
     },
-    [activeRunId, cancelRun],
+    [injectTaskContext, queuedFollowUps, removeQueued],
   );
 
   const reorderQueued = useCallback(
@@ -829,9 +827,9 @@ export function ChatPanel({
                         editQueued(activeTaskId, messageId);
                       }
                     }}
-                    onSteer={(messageId) => {
+                    onInject={(messageId) => {
                       if (activeTaskId !== null) {
-                        void steerQueued(activeTaskId, messageId);
+                        void injectQueued(activeTaskId, messageId);
                       }
                     }}
                     onReorder={(from, to) => {

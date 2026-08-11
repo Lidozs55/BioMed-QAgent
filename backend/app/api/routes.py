@@ -36,6 +36,7 @@ from fastapi import (
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from app.agent_loop.context_injection import get_context_injection_store
 from app.api.skills import SkillStoreDep
 from app.datasets.build.cache import CacheEntry, DatasetCacheV2
 from app.datasets.build.legacy_cache import (
@@ -802,6 +803,32 @@ async def request_compaction(
     # Signal compaction via the manager's event system
     await manager.request_compaction(task_id, active_run_id)
     return {"status": "compaction_requested", "task_id": task_id, "run_id": active_run_id}
+
+
+class ContextInjectionRequest(BaseModel):
+    """Body for injecting a short text into a task's context."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(min_length=1, max_length=4000)
+
+
+@router.post("/tasks/{task_id}/inject-context", status_code=202)
+async def inject_task_context(
+    task_id: str,
+    body: ContextInjectionRequest,
+    repository: TaskRepositoryDep,
+) -> dict[str, str | int]:
+    """Inject a short text into a task's context without interrupting it.
+
+    The text is stored per task and included in the agent's next model call
+    (dynamic instructions), then consumed once.  This works while a run is
+    actively generating; the current answer is not interrupted.
+    """
+
+    await _require_snapshot(repository, task_id)
+    pending = get_context_injection_store().inject(task_id, body.text)
+    return {"status": "injected", "task_id": task_id, "pending": pending}
 
 
 @router.get("/tasks/{task_id}/messages", response_model=MessagePage)

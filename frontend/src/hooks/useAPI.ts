@@ -68,6 +68,7 @@ export interface APIClient {
     subagentId: string,
   ) => Promise<TaskSnapshot>;
   compactTask: (taskId: string) => Promise<void>;
+  injectTaskContext: (taskId: string, text: string) => Promise<unknown>;
   resumeRun: (taskId: string, runId: string, input: ResumeRunInput) => Promise<TaskSnapshot>;
   deleteTask: (taskId: string) => Promise<void>;
   fetchArtifacts: (taskId: string) => Promise<ArtifactRecord[]>;
@@ -189,6 +190,12 @@ export function createAPIClient(options: APIClientOptions = {}): APIClient & Set
       request(`${baseUrl}/tasks/${encodeId(taskId)}/runs/${encodeId(runId)}/subagents/${encodeId(subagentId)}/cancel`, { method: "POST" }).then((b) => parseTaskSnapshot(b)),
     compactTask: (taskId) =>
       requestVoid(`${baseUrl}/tasks/${encodeId(taskId)}/compact`, { method: "POST" }),
+    injectTaskContext: (taskId, text) =>
+      request(`${baseUrl}/tasks/${encodeId(taskId)}/inject-context`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      }),
     resumeRun: (taskId, runId, input) =>
       request(`${baseUrl}/tasks/${encodeId(taskId)}/runs/${encodeId(runId)}/resume`, {
         method: "POST", headers: { "Content-Type": "application/json" },

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import {
-  ArrowBendUpLeftIcon,
+  ArrowDownLeftIcon,
   PencilSimpleIcon,
   TrashIcon,
 } from "@phosphor-icons/react";
@@ -16,19 +16,19 @@ interface QueuedMessagesProps {
   entries: QueuedMessage[];
   onDelete: (id: string) => void;
   onEdit: (id: string) => void;
-  onSteer: (id: string) => void;
+  onInject: (id: string) => void;
   onReorder: (fromIndex: number, toIndex: number) => void;
 }
 
 /**
  * 待发送队列：显示在文本输入框上方。每条消息占一行，超出用省略号截断；
- * 左侧 2×3 圆点手柄可拖动排序，右侧提供调整方向 / 编辑 / 删除操作。
+ * 左侧 2×3 圆点手柄可拖动排序，右侧提供注入上下文 / 编辑 / 删除操作。
  */
 export function QueuedMessages({
   entries,
   onDelete,
   onEdit,
-  onSteer,
+  onInject,
   onReorder,
 }: QueuedMessagesProps) {
   const [draggingId, setDraggingId] = useState<string | null>(null);
@@ -90,11 +90,11 @@ export function QueuedMessages({
             <button
               type="button"
               className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-              onClick={() => onSteer(entry.id)}
-              aria-label={`调整方向：${entry.input}`}
-              title="调整方向（取消当前回答并优先发送）"
+              onClick={() => onInject(entry.id)}
+              aria-label={`注入上下文：${entry.input}`}
+              title="把这段文字注入当前任务上下文（不打断当前回答）"
             >
-              <ArrowBendUpLeftIcon className="size-3.5" />
+              <ArrowDownLeftIcon className="size-3.5" />
             </button>
             <button
               type="button"

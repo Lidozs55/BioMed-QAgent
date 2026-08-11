@@ -214,6 +214,7 @@ function api(overrides: Partial<APIClient> = {}): APIClient {
     cancelRun: vi.fn(),
     cancelSubagent: vi.fn(),
     compactTask: vi.fn(),
+    injectTaskContext: vi.fn(),
     resumeRun: vi.fn(),
     deleteTask: vi.fn(),
     fetchArtifacts: vi.fn(),
