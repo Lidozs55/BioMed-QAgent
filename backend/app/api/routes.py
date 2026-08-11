@@ -36,7 +36,6 @@ from fastapi import (
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from app.agent_loop.context_injection import get_context_injection_store
 from app.api.skills import SkillStoreDep
 from app.datasets.build.cache import CacheEntry, DatasetCacheV2
 from app.datasets.build.legacy_cache import (
@@ -71,6 +70,7 @@ from app.domain.contracts.dataset_state import (
     BuildResult,
     BuildResultStatus,
 )
+from app.domain.contracts.ids import generate_prefixed_uuid
 from app.runtime.manager import (
     FixtureTaskContinuationError,
     RequestIdConflictError,
@@ -806,37 +806,121 @@ async def request_compaction(
 
 
 class ContextInjectionRequest(BaseModel):
-    """Body for injecting a short text into a task's context."""
+    """Body for steering a short text into a task's active run."""
 
     model_config = ConfigDict(extra="forbid")
 
     text: str = Field(min_length=1, max_length=4000)
+    expected_run_id: str | None = Field(default=None, min_length=1)
 
 
-@router.post("/tasks/{task_id}/inject-context", status_code=202)
+@router.post(
+    "/tasks/{task_id}/inject-context",
+    status_code=202,
+    response_model=TaskRunAccepted,
+)
 async def inject_task_context(
     task_id: str,
     body: ContextInjectionRequest,
     repository: TaskRepositoryDep,
-) -> dict[str, str | int]:
-    """Inject a short text into a task's context without interrupting it.
+    manager: TaskManagerDep,
+) -> TaskRunAccepted:
+    """Steer the task's active run with an additional user instruction.
 
-    The text is stored per task and included in the agent's next model call
-    (dynamic instructions), then consumed once.  This works while a run is
-    actively generating; the current answer is not interrupted.
+    Mirrors Codex's ``turn/steer``: the text is appended to the currently
+    active run and the model re-plans along the new direction immediately,
+    instead of waiting for the next run.  The Agents SDK stream cannot accept
+    script-triggered mid-generation input, so the practical realization is:
+
+    1. if a run is active, cancel it (with an optional ``expected_run_id``
+       precondition like Codex's ``expectedTurnId``);
+    2. submit a fresh run whose input is the injected text.
+
+    The text is persisted as the new run's user input, so it is visible to the
+    model, appears in the conversation as a user bubble, and remains part of
+    history for later runs.
     """
 
-    await _require_snapshot(repository, task_id)
-    pending = get_context_injection_store().inject(task_id, body.text)
-    # 持久化到任务会话（仅用于对话展示，模型历史读不到）：
-    # 注入内容以用户消息形式出现在对话记录末尾，但不会作为模型输入、
-    # 不会打断当前回答。
-    session = repository.task_session(task_id)
-    await session.add_items(
-        [{"role": "user", "content": body.text}],
-        display_only=True,
-    )
-    return {"status": "injected", "task_id": task_id, "pending": pending}
+    snapshot = await _require_snapshot(repository, task_id)
+    active_run_id = snapshot.task.active_run_id
+    if body.expected_run_id is not None and active_run_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Task has no active run to steer",
+        )
+    if active_run_id is not None:
+        if body.expected_run_id is not None and body.expected_run_id != active_run_id:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"expected active run {body.expected_run_id} "
+                    f"but task has run {active_run_id}"
+                ),
+            )
+        try:
+            await manager.cancel_run(
+                task_id,
+                active_run_id,
+                reason="user_steer",
+            )
+        except RuntimeError as error:
+            detail = str(error)
+            if detail == "task manager is not running":
+                raise HTTPException(
+                    status_code=503,
+                    detail="Task runtime is unavailable",
+                ) from error
+            if detail in {
+                f"run {active_run_id} is not cancellable",
+                f"run {active_run_id} has no live execution",
+                f"run {active_run_id} left cancellation state",
+            }:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Run is not cancellable",
+                ) from error
+            raise
+    try:
+        return await manager.submit_run(
+            task_id,
+            StartRunRequest(
+                request_id=generate_prefixed_uuid("steer"),
+                input=body.text,
+            ),
+        )
+    except RunAdmissionRejectedError as error:
+        raise HTTPException(status_code=422, detail=error.reason) from error
+    except RequestIdConflictError as error:
+        raise HTTPException(
+            status_code=409,
+            detail="Request ID belongs to another task",
+        ) from error
+    except RequestIdSemanticConflictError as error:
+        raise HTTPException(
+            status_code=409,
+            detail="Request ID was reused with different request content",
+        ) from error
+    except TaskRunConflictError as error:
+        raise HTTPException(
+            status_code=409,
+            detail="Task already has an active run",
+        ) from error
+    except FixtureTaskContinuationError as error:
+        raise HTTPException(
+            status_code=409,
+            detail="Fixture tasks cannot be continued",
+        ) from error
+    except RunQueueFullError as error:
+        raise HTTPException(status_code=429, detail="Run queue is full") from error
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail="Task not found") from error
+    except RuntimeError as error:
+        if str(error) == "task manager is not running":
+            raise HTTPException(
+                status_code=503,
+                detail="Task runtime is unavailable",
+            ) from error
+        raise
 
 
 @router.get("/tasks/{task_id}/messages", response_model=MessagePage)

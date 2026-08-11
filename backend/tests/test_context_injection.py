@@ -1,94 +1,182 @@
-"""Tests for mid-run context injection (store, instructions, HTTP endpoint)."""
+"""Tests for steering context into a task's active run (Codex turn/steer pattern).
+
+Injected text must affect the *current* round: the endpoint cancels the active
+run and immediately submits a fresh run with the text as its user input, so the
+model re-plans along the new direction instead of waiting for the next run.
+"""
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
 import pytest
-from app.agent_loop.agent import resolve_agent_instructions
-from app.agent_loop.context import RunContext
-from app.agent_loop.context_injection import get_context_injection_store
 from app.config import Settings
+from app.domain.contracts import (
+    RunCancelledPayload,
+    RunQueuedPayload,
+    RunStatus,
+    TaskRunAccepted,
+)
 from app.main import create_app
-
-TASK_ID = "task-injection-test"
-
-
-@pytest.fixture(autouse=True)
-def _clean_injections() -> None:
-    store = get_context_injection_store()
-    store.clear(TASK_ID)
-    yield
-    store.clear(TASK_ID)
+from fastapi import FastAPI
 
 
-def test_store_inject_pending_drain() -> None:
-    store = get_context_injection_store()
-    assert store.inject(TASK_ID, "  first  ") == 1
-    assert store.inject(TASK_ID, "second") == 2
-    assert store.pending(TASK_ID) == ["first", "second"]
-    assert store.drain(TASK_ID) == ["first", "second"]
-    assert store.pending(TASK_ID) == []
-    assert store.drain(TASK_ID) == []
-
-
-def test_injected_text_appears_in_instructions_once(tmp_path: Path) -> None:
-    store = get_context_injection_store()
-    store.inject(TASK_ID, "请优先查看 README.md")
-    run_ctx = RunContext(task_id=TASK_ID, base_dir=tmp_path)
-
-    first = resolve_agent_instructions("BASE", run_ctx)
-    assert "用户中途注入的上下文" in first
-    assert "请优先查看 README.md" in first
-
-    # 本轮模型调用后一次性消费：drain 后不再出现。
-    run_ctx.drain_context_injections()
-    second = resolve_agent_instructions("BASE", run_ctx)
-    assert "用户中途注入的上下文" not in second
-
-
-@pytest.mark.asyncio
-async def test_inject_context_endpoint(tmp_path: Path) -> None:
+@asynccontextmanager
+async def api_client(
+    tmp_path: Path,
+) -> AsyncIterator[tuple[FastAPI, httpx.AsyncClient]]:
     application = create_app(Settings(output_dir=str(tmp_path / "output")))
     async with application.router.lifespan_context(application), httpx.AsyncClient(
         transport=httpx.ASGITransport(app=application),
         base_url="http://localhost",
     ) as client:
+        yield application, client
+
+
+class CooperativeCancellationExecutor:
+    """Replaces the run executor; a run stays active until cancellation is sent."""
+
+    class StreamingResult:
+        def __init__(self) -> None:
+            self.cancel_called = asyncio.Event()
+
+        def cancel(self, mode: str) -> None:
+            self.cancel_called.set()
+
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self._result = self.StreamingResult()
+
+    async def __call__(self, execution: object) -> None:
+        execution.set_streaming_result(self._result)  # type: ignore[attr-defined]
+        self.started.set()
+        await self._result.cancel_called.wait()
+
+
+@pytest.mark.asyncio
+async def test_steer_without_active_run_queues_new_run(tmp_path: Path) -> None:
+    async def complete(_execution: object) -> None:
+        return None
+
+    async with api_client(tmp_path) as (application, client):
+        manager = application.state.task_manager
+        repository = application.state.task_repository
+        manager.run_executor = complete
         created = await client.post(
             "/api/v1/tasks",
-            json={
-                "request_id": "req-inject-test",
-                "input": "research",
-                "databases": [],
-            },
+            json={"request_id": "req-steer-idle", "input": "research"},
         )
         assert created.status_code == 202
         task_id = created.json()["task_id"]
-        store = get_context_injection_store()
-        store.clear(task_id)
-        try:
-            injected = await client.post(
-                f"/api/v1/tasks/{task_id}/inject-context",
-                json={"text": "注意：补充说明"},
-            )
-            assert injected.status_code == 202
-            assert injected.json()["pending"] == 1
-            assert store.pending(task_id) == ["注意：补充说明"]
-            # 注入内容持久化为对话记录中的用户消息。
-            page = await client.get(f"/api/v1/tasks/{task_id}/messages")
-            assert page.status_code == 200
-            contents = [
-                message["content"]
-                for message in page.json()["messages"]
-                if message["role"] == "user"
-            ]
-            assert "注意：补充说明" in contents
-            # 注入内容只用于展示，不进入模型可见的会话历史。
-            repository = application.state.task_repository
-            model_items = await repository.task_session(task_id).get_items()
-            assert all(
-                "注意：补充说明" not in str(item) for item in model_items
-            )
-        finally:
-            store.clear(task_id)
+        await manager.wait_until_idle()
+
+        steered = await client.post(
+            f"/api/v1/tasks/{task_id}/inject-context",
+            json={"text": "注意：补充说明"},
+        )
+        assert steered.status_code == 202
+        accepted = TaskRunAccepted.model_validate(steered.json())
+        assert accepted.task_id == task_id
+        assert accepted.status == "queued"
+
+        snapshot = await repository.get_snapshot(task_id)
+        assert snapshot is not None
+        assert snapshot.runs[-1].input == "注意：补充说明"
+        # 注入文本进入模型可见的历史，而不是只做展示。
+        session = repository.task_session(task_id)
+        model_items = await session.get_items()
+        assert any("注意：补充说明" in str(item) for item in model_items)
+        page = await client.get(f"/api/v1/tasks/{task_id}/messages")
+        assert page.status_code == 200
+        contents = [
+            message["content"]
+            for message in page.json()["messages"]
+            if message["role"] == "user"
+        ]
+        assert "注意：补充说明" in contents
+
+
+@pytest.mark.asyncio
+async def test_steer_cancels_active_run_and_starts_new_run(tmp_path: Path) -> None:
+    executor = CooperativeCancellationExecutor()
+    async with api_client(tmp_path) as (application, client):
+        manager = application.state.task_manager
+        repository = application.state.task_repository
+        manager.run_executor = executor
+        created = await client.post(
+            "/api/v1/tasks",
+            json={"request_id": "req-steer-active", "input": "original"},
+        )
+        assert created.status_code == 202
+        task_id = created.json()["task_id"]
+        await asyncio.wait_for(executor.started.wait(), timeout=1)
+        snapshot = await repository.get_snapshot(task_id)
+        assert snapshot is not None
+        active_run_id = snapshot.task.active_run_id
+        assert active_run_id is not None
+
+        steered = await client.post(
+            f"/api/v1/tasks/{task_id}/inject-context",
+            json={"text": "转向：先查 README", "expected_run_id": active_run_id},
+        )
+        assert steered.status_code == 202
+        accepted = TaskRunAccepted.model_validate(steered.json())
+        assert accepted.run_id != active_run_id
+        await manager.wait_until_idle()
+
+        snapshot = await repository.get_snapshot(task_id)
+        assert snapshot is not None
+        old_run = next(run for run in snapshot.runs if run.run_id == active_run_id)
+        assert old_run.status is RunStatus.CANCELLED
+        new_run = next(run for run in snapshot.runs if run.run_id == accepted.run_id)
+        assert new_run.input == "转向：先查 README"
+        events = await repository.list_events(task_id)
+        assert any(isinstance(event.payload, RunCancelledPayload) for event in events)
+        assert any(
+            isinstance(event.payload, RunQueuedPayload)
+            and event.payload.input == "转向：先查 README"
+            for event in events
+        )
+        session = repository.task_session(task_id)
+        model_items = await session.get_items()
+        assert any("转向：先查 README" in str(item) for item in model_items)
+
+
+@pytest.mark.asyncio
+async def test_steer_expected_run_id_precondition(tmp_path: Path) -> None:
+    executor = CooperativeCancellationExecutor()
+    async with api_client(tmp_path) as (application, client):
+        manager = application.state.task_manager
+        repository = application.state.task_repository
+        manager.run_executor = executor
+        created = await client.post(
+            "/api/v1/tasks",
+            json={"request_id": "req-steer-precondition", "input": "original"},
+        )
+        assert created.status_code == 202
+        task_id = created.json()["task_id"]
+        await asyncio.wait_for(executor.started.wait(), timeout=1)
+        snapshot = await repository.get_snapshot(task_id)
+        assert snapshot is not None
+        active_run_id = snapshot.task.active_run_id
+        assert active_run_id is not None
+
+        mismatch = await client.post(
+            f"/api/v1/tasks/{task_id}/inject-context",
+            json={"text": "stale", "expected_run_id": "run_stale"},
+        )
+        assert mismatch.status_code == 409
+
+        # 释放活动 run，让它正常结束；之后带 expected_run_id 的 steer 应拒绝。
+        executor._result.cancel_called.set()
+        await manager.wait_until_idle()
+        no_active = await client.post(
+            f"/api/v1/tasks/{task_id}/inject-context",
+            json={"text": "later", "expected_run_id": active_run_id},
+        )
+        assert no_active.status_code == 409
+        assert no_active.json() == {"detail": "Task has no active run to steer"}

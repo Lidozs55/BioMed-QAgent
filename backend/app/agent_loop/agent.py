@@ -506,24 +506,7 @@ def resolve_agent_instructions(base: str, run_ctx: RunContext) -> str:
     search_section = _format_query_log_section(run_ctx)
     briefing_section = _format_progress_briefing_section(run_ctx)
     sections = [base, personal_section, sources_section, search_section, briefing_section]
-    injection_section = _format_context_injections_section(run_ctx)
-    if injection_section:
-        sections.append(injection_section)
     return "\n\n---\n\n".join(sections)
-
-
-def _format_context_injections_section(run_ctx: RunContext) -> str:
-    """Format user-injected context lines as an instruction section (or "")."""
-
-    lines = run_ctx.pending_context_injections()
-    if not lines:
-        return ""
-    body = "\n".join(f"- {line}" for line in lines)
-    return (
-        "## 用户中途注入的上下文\n"
-        "以下内容由用户在任务进行中注入，请结合当前工作一并处理：\n"
-        f"{body}"
-    )
 
 
 def _make_instructions_fn(
@@ -535,11 +518,7 @@ def _make_instructions_fn(
         ctx: RunContextWrapper[RunContext],
         _agent: Agent[RunContext],
     ) -> str:
-        try:
-            return resolve_agent_instructions(base, ctx.context)
-        finally:
-            # 注入内容一次性消费：本轮模型调用包含后即清除，避免重复出现。
-            ctx.context.drain_context_injections()
+        return resolve_agent_instructions(base, ctx.context)
 
     return _fn
 

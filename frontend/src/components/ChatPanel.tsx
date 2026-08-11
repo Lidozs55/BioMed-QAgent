@@ -73,8 +73,12 @@ interface ChatPanelProps {
   loadOlderMessages?: (taskId: string) => Promise<void>;
   /** Trigger context compaction on a task */
   compactTask?: (taskId: string) => Promise<void>;
-  /** Inject a short text into a task's running context (non-interrupting) */
-  injectTaskContext?: (taskId: string, text: string) => Promise<unknown>;
+  /** Steer a short text into a task's active run (interrupt + regenerate) */
+  injectTaskContext?: (
+    taskId: string,
+    text: string,
+    expectedRunId?: string | null,
+  ) => Promise<TaskRunAccepted>;
   /** Available models from settings */
   models?: ModelInfo[];
   /** Whether the user has configured an API key */
@@ -544,13 +548,14 @@ export function ChatPanel({
         (item) => item.id === messageId,
       );
       if (entry === undefined || injectTaskContext === undefined) return;
+      const task = useAgentStore.getState().tasksById[taskId];
+      const activeRunId = task?.summary.active_run_id ?? null;
       try {
-        await injectTaskContext(taskId, entry.input);
-        useAgentStore.getState().appendUserMessage(taskId, entry.input);
+        await injectTaskContext(taskId, entry.input, activeRunId);
         removeQueued(taskId, messageId);
-        toast.success("已注入上下文");
+        toast.success("已调整方向，正在重新生成…");
       } catch (error) {
-        toast.error("注入上下文失败", {
+        toast.error("调整方向失败", {
           description: errorMessage(error, "请稍后重试"),
         });
       }
