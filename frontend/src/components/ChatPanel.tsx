@@ -7,6 +7,7 @@ import {
 import { toast } from "sonner";
 
 import { AgentComposer } from "@/components/AgentComposer";
+import { LoadingScreen } from "@/components/LoadingScreen";
 import { ConversationList } from "@/components/conversation/ConversationList";
 import { formatToolCall } from "@/components/conversation/toolLabels";
 import { operationDisplayLabel } from "@/components/conversation/operationMeta";
@@ -50,6 +51,8 @@ import {
   usePreferencesStore,
 } from "@/stores/preferencesStore";
 import type { ModelInfo } from "@/hooks/useAPI";
+
+const LOADING_SCREEN_DELAY_MS = 250;
 
 interface ChatPanelProps {
   startTask: (input: StartTaskInput) => Promise<TaskRunAccepted>;
@@ -217,6 +220,23 @@ export function ChatPanel({
   const items = useAgentStore(selectActiveItems);
   const activeItem = useAgentStore(selectActiveItem);
   const connected = useAgentStore(selectConnectionIsConnected);
+  const hydratingTaskId = useAgentStore((state) => state.hydratingTaskId);
+  const activeTaskHydrating =
+    activeTaskId !== null &&
+    activeTaskId === hydratingTaskId &&
+    activeTask !== undefined;
+  const [showLoadingScreen, setShowLoadingScreen] = useState(false);
+  useEffect(() => {
+    if (!activeTaskHydrating) {
+      setShowLoadingScreen(false);
+      return;
+    }
+    const timer = window.setTimeout(
+      () => setShowLoadingScreen(true),
+      LOADING_SCREEN_DELAY_MS,
+    );
+    return () => window.clearTimeout(timer);
+  }, [activeTaskHydrating]);
   const sendShortcut = usePreferencesStore((state) => state.sendShortcut);
   const showContextUsage = usePreferencesStore((state) => state.showContextUsage);
   const followUpMode = usePreferencesStore((state) => state.followUpMode);
@@ -592,6 +612,10 @@ export function ChatPanel({
         </div>
       </div>
     );
+  }
+
+  if (showLoadingScreen) {
+    return <LoadingScreen />;
   }
 
   return (

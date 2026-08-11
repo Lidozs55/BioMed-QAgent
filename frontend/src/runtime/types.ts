@@ -332,6 +332,8 @@ export interface AgentRuntimeData {
   tasksById: Record<string, TaskProjection>;
   taskOrder: string[];
   activeTaskId: string | null;
+  /** Task whose selection hydration is still in flight (drives the loading screen). */
+  hydratingTaskId: string | null;
   activeItems: string[];
   nextCursor: string | null;
   connectionStatus: ConnectionStatus;
