@@ -19,7 +19,13 @@ import {
 import { Toaster } from "@/components/ui/sonner";
 import { Button } from "@/components/ui/button";
 import { useAgentStream } from "@/hooks/useAgentStream";
-import { useAPI, type ModelInfo, type ModelSettings } from "@/hooks/useAPI";
+import {
+  useAPI,
+  type ManagedModelInfo,
+  type ModelInfo,
+  type ModelSettings,
+} from "@/hooks/useAPI";
+import { managedModelsToChoices } from "@/lib/modelChoices";
 import { errorMessage } from "@/lib/utils";
 import { RuntimeController } from "@/runtime/controller";
 
@@ -27,6 +33,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settings, setSettings] = useState<ModelSettings | null>(null);
   const [models, setModels] = useState<ModelInfo[]>([]);
+  const [managedModels, setManagedModels] = useState<ManagedModelInfo[]>([]);
   const [selectedModelId, setSelectedModelId] = useState("");
   const prevSettingsOpenRef = useRef(settingsOpen);
   const api = useAPI();
@@ -87,12 +94,9 @@ export default function App() {
       const currentSettings = await api.fetchSettings();
       setSettings(currentSettings);
       setSelectedModelId(currentSettings.model_name);
-      if (currentSettings.api_key_configured && currentSettings.base_url) {
-        const discovered = await api.fetchModels({ baseUrl: currentSettings.base_url });
-        setModels(discovered);
-      } else {
-        setModels([]);
-      }
+      const managed = await api.fetchManagedModels().catch(() => []);
+      setManagedModels(managed);
+      setModels(managedModelsToChoices(managed));
     } catch {
       setModels([]);
     }
@@ -116,15 +120,18 @@ export default function App() {
 
   const handleModelChange = useCallback(
     async (modelId: string) => {
+      const model = managedModels.find((entry) => entry.model_id === modelId);
+      if (!model) return;
       try {
-        const updated = await api.saveSettings({ model_name: modelId });
+        const updated = await api.activateManagedModel(model.id);
         setSettings(updated);
-        setSelectedModelId(modelId);
+        setSelectedModelId(updated.model_name);
+        toast.success(`已切换当前模型为 ${model.name}`);
       } catch {
         toast.error("模型切换失败");
       }
     },
-    [api],
+    [api, managedModels],
   );
 
   const exportCache = useCallback(() => {
@@ -199,6 +206,7 @@ export default function App() {
                 continueTask={(taskId, input) =>
                   controller.continueTask(taskId, input)
                 }
+                cancelRun={(taskId, runId) => controller.cancelRun(taskId, runId)}
                 resumeRun={(taskId, runId, input) =>
                   controller.resumeRun(taskId, runId, input)
                 }
@@ -207,7 +215,7 @@ export default function App() {
                 }
                 compactTask={(taskId) => api.compactTask(taskId)}
                 models={models}
-                hasApiKey={settings?.api_key_configured ?? false}
+                hasApiKey={models.length > 0}
                 selectedModelId={selectedModelId}
                 onModelChange={handleModelChange}
                 onOpenSettings={() => setSettingsOpen(true)}

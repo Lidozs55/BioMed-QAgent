@@ -1,40 +1,10 @@
-import type { RichModelInfo } from "@/components/model-info-card";
-import type {
-  ModelSettings,
-  SkillManifest,
-  VendorInfo,
-} from "@/hooks/useAPI";
-
-export interface ModelDraftState {
-  baseUrl: string;
-  apiKey: string;
-  modelName: string;
-  maxTokens: number;
-  temperature: number;
-  topP: number;
-  enableSearch: boolean;
-  thinkingMode: boolean;
-  modelSearch: string;
-  showModelDropdown: boolean;
-  showApiKey: boolean;
-}
+import type { ModelSettings, SettingsAPIClient, SkillManifest } from "@/hooks/useAPI";
 
 export interface ModelSettingsSectionProps {
+  api: SettingsAPIClient;
   settings: ModelSettings | null;
-  vendors: VendorInfo[];
-  models: RichModelInfo[];
-  modelsLoading: boolean;
-  draft: ModelDraftState;
-  dirty: boolean;
-  saving: boolean;
-  modelError: string | null;
   highlightAnchor: string | null;
-  highlightNonce: number;
-  onDraftChange: (patch: Partial<ModelDraftState>) => void;
-  onUiChange: (patch: Partial<ModelDraftState>) => void;
-  onPreviewModels: () => void;
-  onContextWindowChange: (tokens: number) => void;
-  onSave: () => void;
+  onActivated: (settings: ModelSettings) => void;
 }
 
 export interface DatabaseSettingsSectionProps {

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+﻿import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { SettingsPanel } from "@/components/SettingsPanel";
@@ -24,8 +24,29 @@ function mockApi(overrides: Partial<SettingsAPIClient> = {}): SettingsAPIClient 
   const base: SettingsAPIClient = {
     fetchSettings: vi.fn().mockResolvedValue(SAVED_SETTINGS),
     saveSettings: vi.fn().mockResolvedValue(SAVED_SETTINGS),
+    fetchPersonalization: vi.fn().mockResolvedValue({
+      custom_instructions: "",
+      personality: "pragmatic",
+      personality_label: "务实",
+    }),
+    savePersonalization: vi.fn().mockResolvedValue({
+      custom_instructions: "",
+      personality: "pragmatic",
+      personality_label: "务实",
+    }),
     fetchVendors: vi.fn().mockResolvedValue(VENDORS),
     fetchModels: vi.fn().mockResolvedValue([]),
+    fetchProviders: vi.fn().mockResolvedValue([]),
+    createProvider: vi.fn(),
+    updateProvider: vi.fn(),
+    deleteProvider: vi.fn(),
+    discoverProviderModels: vi.fn().mockResolvedValue([]),
+    fetchProviderParamSpecs: vi.fn().mockResolvedValue([]),
+    fetchManagedModels: vi.fn().mockResolvedValue([]),
+    createManagedModel: vi.fn(),
+    updateManagedModel: vi.fn(),
+    deleteManagedModel: vi.fn(),
+    activateManagedModel: vi.fn(),
     fetchSkills: vi.fn().mockResolvedValue([]),
     fetchSkill: vi.fn(), setSkillEnabled: vi.fn().mockResolvedValue(undefined),
     rollbackSkill: vi.fn(), deleteSkill: vi.fn(),
@@ -54,7 +75,7 @@ describe("database draft validation", () => {
       ]),
     });
     render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
-    await screen.findByLabelText("API Key");
+    await screen.findByText("供应商管理");
     fireEvent.click(within(screen.getByRole("navigation", { name: "设置分类" })).getByRole("button", { name: "技能" }));
     const filter = await screen.findByPlaceholderText("筛选技能");
     fireEvent.change(filter, { target: { value: "missing" } });
@@ -86,7 +107,7 @@ describe("database draft validation", () => {
       fetchSkill: vi.fn().mockResolvedValue(detail),
     });
     render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
-    await screen.findByLabelText("API Key");
+    await screen.findByText("供应商管理");
     fireEvent.click(within(screen.getByRole("navigation", { name: "设置分类" })).getByRole("button", { name: "数据库" }));
     fireEvent.click(await screen.findByRole("button", { name: "编辑 PubMed" }));
 
@@ -115,7 +136,7 @@ describe("database draft validation", () => {
     ];
     const api = mockApi({ fetchSkills: vi.fn().mockResolvedValue(skills) });
     render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
-    await screen.findByLabelText("API Key");
+    await screen.findByText("供应商管理");
     fireEvent.click(within(screen.getByRole("navigation", { name: "设置分类" })).getByRole("button", { name: "数据库" }));
     const builtinSwitch = await screen.findByRole("switch", { name: "停用 Builtin DB" });
     expect(builtinSwitch).toHaveAttribute("aria-disabled", "true");
@@ -129,7 +150,7 @@ describe("database draft validation", () => {
   it("new database method input stores raw string without coercion", async () => {
     const api = mockApi();
     render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
-    await screen.findByLabelText("API Key");
+    await screen.findByText("供应商管理");
     fireEvent.click(within(screen.getByRole("navigation", { name: "设置分类" })).getByRole("button", { name: "数据库" }));
     fireEvent.click(screen.getByRole("button", { name: /新建数据库/ }));
     const methodInput = screen.getByLabelText("Method");
@@ -153,7 +174,7 @@ describe("database draft validation", () => {
   ])("preserves invalid %s drafts and blocks persistence at save time", async (label, value) => {
     const api = mockApi();
     render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
-    await screen.findByLabelText("API Key");
+    await screen.findByText("供应商管理");
     fireEvent.click(within(screen.getByRole("navigation", { name: "设置分类" })).getByRole("button", { name: "数据库" }));
     fireEvent.click(screen.getByRole("button", { name: /新建数据库/ }));
 

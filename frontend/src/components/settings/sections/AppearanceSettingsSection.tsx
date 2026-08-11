@@ -4,6 +4,8 @@ import { toast } from "sonner";
 
 import {
   ColorSwatch,
+  NumberField,
+  SegmentedControl,
   SettingCard,
   SettingRow,
   SettingSection,
@@ -19,6 +21,13 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
+import {
+  REDUCED_MOTION_OPTIONS,
+  UI_FONT_SIZE_MAX,
+  UI_FONT_SIZE_MIN,
+  usePreferencesStore,
+} from "@/stores/preferencesStore";
 import {
   ACCENT_PRESETS,
   FONT_OPTIONS,
@@ -43,6 +52,42 @@ const FONT_FORMATS: Record<string, string> = {
   woff: "woff",
   woff2: "woff2",
 };
+
+const LIGHT_BACKGROUND_OPTIONS = [
+  "#FFFFFF",
+  "#F8FAFC",
+  "#F1F5F9",
+  "#EEF2F7",
+  "#FEF7EE",
+  "#F5F3FF",
+];
+
+const LIGHT_FOREGROUND_OPTIONS = [
+  "#1A1C1F",
+  "#0F172A",
+  "#334155",
+  "#4B5563",
+  "#1F2937",
+  "#3F3F46",
+];
+
+const DARK_BACKGROUND_OPTIONS = [
+  "#181818",
+  "#0F1115",
+  "#111827",
+  "#1E293B",
+  "#1F2937",
+  "#0B0F19",
+];
+
+const DARK_FOREGROUND_OPTIONS = [
+  "#FFFFFF",
+  "#F1F5F9",
+  "#E2E8F0",
+  "#D1D5DB",
+  "#CBD5E1",
+  "#A1A1AA",
+];
 
 function CustomAccentField({
   value,
@@ -134,6 +179,21 @@ export function AppearanceSettingsSection() {
   const addImportedFont = useThemeStore((state) => state.addImportedFont);
   const removeImportedFont = useThemeStore((state) => state.removeImportedFont);
   const fontInputRef = useRef<HTMLInputElement>(null);
+
+  const translucentSidebar = usePreferencesStore((state) => state.translucentSidebar);
+  const contrast = usePreferencesStore((state) => state.contrast);
+  const pointerCursor = usePreferencesStore((state) => state.pointerCursor);
+  const reducedMotion = usePreferencesStore((state) => state.reducedMotion);
+  const uiFontSize = usePreferencesStore((state) => state.uiFontSize);
+  const lightColors = usePreferencesStore((state) => state.lightColors);
+  const darkColors = usePreferencesStore((state) => state.darkColors);
+  const setTranslucentSidebar = usePreferencesStore((state) => state.setTranslucentSidebar);
+  const setContrast = usePreferencesStore((state) => state.setContrast);
+  const setPointerCursor = usePreferencesStore((state) => state.setPointerCursor);
+  const setReducedMotion = usePreferencesStore((state) => state.setReducedMotion);
+  const setUiFontSize = usePreferencesStore((state) => state.setUiFontSize);
+  const setLightColors = usePreferencesStore((state) => state.setLightColors);
+  const setDarkColors = usePreferencesStore((state) => state.setDarkColors);
 
   const presetHex =
     accent === "custom" ? customAccent : ACCENT_PRESETS[accent as Exclude<ThemeAccent, "custom">].light;
@@ -356,6 +416,215 @@ export function AppearanceSettingsSection() {
           </div>
         </SettingCard>
       </SettingSection>
+
+      <SettingSection
+        title="自定义颜色"
+        description="从预设色板中选择浅色 / 深色主题的背景与前景色，也可输入自定义色值；选择“默认”恢复主题默认。"
+      >
+        <SettingCard>
+          <div className="flex items-center justify-between gap-3 px-5 py-4">
+            <p className="text-sm font-semibold">浅色主题</p>
+            <span className="text-xs text-muted-foreground">
+              默认背景 #FFFFFF · 默认前景 #1A1C1F
+            </span>
+          </div>
+          <ThemeColorPicker
+            id="settings-light-background"
+            label="背景"
+            description="页面与卡片底色"
+            value={lightColors.background}
+            options={LIGHT_BACKGROUND_OPTIONS}
+            onChange={(next) => setLightColors({ background: next })}
+          />
+          <ThemeColorPicker
+            label="前景"
+            description="主要文字颜色"
+            value={lightColors.foreground}
+            options={LIGHT_FOREGROUND_OPTIONS}
+            onChange={(next) => setLightColors({ foreground: next })}
+          />
+          <div className="flex items-center justify-between gap-3 px-5 py-4">
+            <p className="text-sm font-semibold">深色主题</p>
+            <span className="text-xs text-muted-foreground">
+              默认背景 #181818 · 默认前景 #FFFFFF
+            </span>
+          </div>
+          <ThemeColorPicker
+            id="settings-dark-background"
+            label="背景"
+            description="页面与卡片底色"
+            value={darkColors.background}
+            options={DARK_BACKGROUND_OPTIONS}
+            onChange={(next) => setDarkColors({ background: next })}
+          />
+          <ThemeColorPicker
+            label="前景"
+            description="主要文字颜色"
+            value={darkColors.foreground}
+            options={DARK_FOREGROUND_OPTIONS}
+            onChange={(next) => setDarkColors({ foreground: next })}
+          />
+        </SettingCard>
+      </SettingSection>
+
+      <SettingSection
+        title="侧边栏与对比度"
+        description="调整侧边栏半透明效果与界面文字对比度。"
+      >
+        <SettingCard>
+          <SettingRow
+            id="settings-translucent-sidebar"
+            title="半透明侧边栏"
+            description="开启后侧边栏呈现半透明毛玻璃效果。"
+            control={
+              <Switch
+                checked={translucentSidebar}
+                onCheckedChange={setTranslucentSidebar}
+                aria-label="半透明侧边栏"
+              />
+            }
+          />
+          <SettingRow
+            id="settings-contrast"
+            title="对比度"
+            description="数值越高文字与背景的对比越强；50 为默认值。"
+            control={
+              <NumberField
+                id="settings-contrast-input"
+                value={contrast}
+                min={0}
+                max={100}
+                onChange={setContrast}
+                ariaLabel="对比度"
+                marks={[
+                  { value: 0, label: "低" },
+                  { value: 50, label: "默认" },
+                  { value: 100, label: "高" },
+                ]}
+              />
+            }
+          />
+        </SettingCard>
+      </SettingSection>
+
+      <SettingSection
+        title="偏好设置"
+        description="与界面交互相关的通用偏好。"
+      >
+        <SettingCard>
+          <SettingRow
+            id="settings-pointer-cursor"
+            title="使用指针光标"
+            description="悬停按钮、链接等交互元素时切换为指针光标。"
+            control={
+              <Switch
+                checked={pointerCursor}
+                onCheckedChange={setPointerCursor}
+                aria-label="使用指针光标"
+              />
+            }
+          />
+          <SettingRow
+            id="settings-reduced-motion"
+            title="减少动态效果"
+            description="减少动画与过渡效果，或匹配系统设置。"
+            control={
+              <SegmentedControl
+                value={reducedMotion}
+                options={REDUCED_MOTION_OPTIONS.map((option) => ({
+                  value: option.value,
+                  label: option.label,
+                }))}
+                onChange={setReducedMotion}
+                ariaLabel="减少动态效果"
+              />
+            }
+          />
+          <SettingRow
+            id="settings-ui-font-size"
+            title="UI 字号"
+            description={`调整界面使用的基准字号（${UI_FONT_SIZE_MIN}–${UI_FONT_SIZE_MAX}px）。`}
+            control={
+              <NumberField
+                id="settings-ui-font-size-input"
+                value={uiFontSize}
+                min={UI_FONT_SIZE_MIN}
+                max={UI_FONT_SIZE_MAX}
+                onChange={setUiFontSize}
+                ariaLabel="UI 字号"
+              />
+            }
+          />
+        </SettingCard>
+      </SettingSection>
+    </div>
+  );
+}
+
+function ThemeColorPicker({
+  id,
+  label,
+  description,
+  value,
+  options,
+  onChange,
+}: {
+  id?: string;
+  label: string;
+  description?: string;
+  value: string;
+  options: string[];
+  onChange: (hex: string) => void;
+}) {
+  return (
+    <div
+      data-anchor={id}
+      data-setting-id={id}
+      className="flex flex-col gap-3 px-5 py-4"
+    >
+      <div className="flex items-baseline justify-between gap-3">
+        <p className="text-sm font-medium">{label}</p>
+        {description && (
+          <p className="text-xs text-muted-foreground">{description}</p>
+        )}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          aria-pressed={value === ""}
+          onClick={() => onChange("")}
+          className={cn(
+            "h-7 rounded-full border px-2.5 text-xs transition-colors",
+            value === ""
+              ? "border-primary bg-primary/10 font-medium text-primary"
+              : "border-border text-muted-foreground hover:border-muted-foreground/40",
+          )}
+        >
+          默认
+        </button>
+        {options.map((hex) => {
+          const selected = value.toLowerCase() === hex.toLowerCase();
+          return (
+            <button
+              key={hex}
+              type="button"
+              aria-label={`${label} ${hex}`}
+              aria-pressed={selected}
+              onClick={() => onChange(hex)}
+              className={cn(
+                "size-7 rounded-full ring-1 ring-foreground/15 transition-transform",
+                selected && "scale-110 ring-2 ring-foreground/40",
+              )}
+              style={{ backgroundColor: hex }}
+            />
+          );
+        })}
+        <ColorSwatch
+          value={value}
+          onChange={onChange}
+          ariaLabel={`${label}自定义色值`}
+        />
+      </div>
     </div>
   );
 }

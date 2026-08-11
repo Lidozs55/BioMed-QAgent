@@ -364,5 +364,49 @@ C5a/C5b/C6a）——真实遗留项见 LEFTOVERS。
       绝对路径；`.env.example` 补充文档；5 项新测试）
 - [ ] **P2** Agent INSTRUCTIONS 增加"达到 max_turns 后输出 `[MAX_TURNS_REACHED]`"
       指导（原 §4.5）
+
 - [x] **P2** 新增 UniProt / ChEMBL 等 Agent-only 来源能力（不接入 Pipeline）（原 §1.4）
       ✅ 已修（2026-08-09, feat/leftovers-p2, commit 7d5893a）
+
+
+---
+
+## 设置页模型配置重构（Provider Management + Model List）
+
+> 目标：把设置页模型配置拆成“供应商管理 + 模型列表管理”两大部分，模型列表
+> 成为后续维护的主数据源；供应商模型支持从返回的 `/models` 列表导入（可改参数）
+> 或手动添加。分支：`feat/model-provider-management`（未推送远端）。
+
+- [x] **P0** 后端新增 SQLite 注册库 `app/model_registry/`（`store.py` / `schemas.py` /
+      `profiles.py` / `discovery.py`）：
+      - `providers`（名称代号 / base_url / api_key / preset_id）+ `managed_models`
+        （provider 级联删除，`UNIQUE(provider_id, model_id)`）+ `parameter_profiles`
+        （供应商参数档案，建库时从内置档案播种）。
+      - 参数档案按供应商区分（dashscope / openai / deepseek / zhipu / moonshot /
+        baichuan），未知供应商回退到“全部参数可选”的保底档案。
+      - **多余参数不报错**：创建/更新 payload 允许未知顶层字段并入 `params`；
+        发现接口对供应商返回的未知字段直接忽略。
+  - 路由注册于 `backend/app/api/provider_models.py`，统一前缀
+    `/api/v1/model-registry`（避免与旧 `POST /api/v1/models` 预览接口冲突），
+    端点见 `docs/ARCHITECTURE.md` §15 表格。
+  - `POST /model-registry/models/{id}/activate` 回写现有
+    `ModelSettingsStore`（model.json），复用 `_public` 序列化，保证运行时不变。
+  - 供应商 API Key 落库存储，响应一律 `mask_api_key`；发现请求复用
+    `model_preview_client` + `resolve_public_http_target` 安全约束。
+- [x] **P1** 前端设置页模型区块重构（`components/settings/model/`）：
+      - `ProviderManager`：供应商列表 + 添加/编辑弹窗 + 常用供应商快捷填入。
+      - `ModelListManager`：维护模型列表（设为当前 / 编辑 / 删除），无供应商时
+        禁用“添加模型”。
+      - `ModelImportSheet`：屏幕中央独立大浮窗（Dialog，最大约 5xl），先选母供应商 → 左右分栏，
+        左栏自动拉取供应商返回模型列表，右栏为已选维护模型 + 动态参数编辑器（含保底参数与
+        额外参数 key-value 编辑，参数档案已按大模型参数文档扩充（采样/推理/输出/惩罚/高级参数，含平台特色如 enable_thinking、reasoning_effort）；每个模型标注 官方/个人 并提供“详情”入口（再点可收起，按钮位于“已选模型”头部右侧），详情末尾可进入
+        “配置 JSON”视图（替换当前浮窗、带返回键/格式化/恢复默认，官方参数给出谨慎修改提示，
+        JSON 与图形配置共用同一份 params 状态保持双向一致）；手动添加改为弹窗右上角入口，
+        可填模型 ID/显示名/上下文窗口及全部参数；供应商下拉显示名称而非内部 id。
+      - “当前模型”区块只读展示模型与参数信息（参数在模型列表中维护），激活模型通过
+        `activateManagedModel` 回写 settings。
+  - API client（`settingsContracts.ts` / `useAPI.ts`）新增供应商与模型 CRUD、
+    发现、激活方法；前端测试随 UI 重写/补全。
+- [ ] **P2** 待办：供应商/模型列表分页与搜索后端支持（当前全量返回）；
+      provider 预设档案后续可按需扩展为按模型前缀匹配。
+ (feat: settings model config rework - provider management and model list registry)

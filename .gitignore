@@ -27,6 +27,7 @@ MANIFEST
 node_modules/
 dist/
 build/
+*.tsbuildinfo
 # V2 dataset build-chain source package lives under app/datasets/build
 !backend/app/datasets/build/
 .npm
@@ -85,6 +86,9 @@ coverage.xml
 
 # ===== 其他 =====
 .cache
+
+# Local MCP server builds (configure-glm-vision skill)
+outputs/
 *.bak
 .sisyphus/
 .worktree/

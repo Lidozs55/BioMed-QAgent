@@ -17,6 +17,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from app.agent_loop.context import RunContext
 from app.agent_loop.runner import ModeDispatchRunExecutor
 from app.api.model_info_router import router as model_info_router
+from app.api.provider_models import router as provider_models_router
 from app.api.routes import router as routes_router
 from app.api.settings import router as settings_router
 from app.api.skills import router as skills_router
@@ -28,6 +29,7 @@ from app.model_config.context_budget import (
     ContextBudgetConfigurationError,
     resolve_context_budget,
 )
+from app.model_registry import ProviderModelStore
 from app.model_settings import (
     ModelSettingsStore,
     get_runtime_limits,
@@ -130,6 +132,11 @@ def create_app(
             defaults=configured,
         )
         set_current_model_settings_store(model_settings_store)
+        provider_model_store = ProviderModelStore(
+            Path(configured.output_dir).expanduser().resolve().parent
+            / "settings"
+            / "model_registry.db"
+        )
         model_preview_client = httpx.AsyncClient(
             timeout=10.0,
             follow_redirects=False,
@@ -232,6 +239,7 @@ def create_app(
         application.state.skill_catalog = skill_catalog
         application.state.skill_store = skill_store
         application.state.model_settings_store = model_settings_store
+        application.state.provider_model_store = provider_model_store
         application.state.model_preview_client = model_preview_client
         try:
             await browser_pool.start()
@@ -296,6 +304,7 @@ def create_app(
     application.include_router(skills_router)
     application.include_router(settings_router)
     application.include_router(model_info_router)
+    application.include_router(provider_models_router)
     application.include_router(ws_router)
     application.add_api_route("/api/v1/health", health, methods=["GET"])
     return application

@@ -23,6 +23,7 @@ from app.model_config.token_estimation import (
     ChatCompletionsStructuralPolicy,
     serialize_function_tool_schemas,
 )
+from app.personalization import personalization_section
 from app.pipeline.dataset_build_tool import (
     execute_dataset_build,
     validate_dataset_build_spec,
@@ -443,6 +444,17 @@ def _format_preferred_sources_section(run_ctx: RunContext) -> str:
     )
 
 
+def _format_personalization_section() -> str:
+    """格式化"用户自定义指令 + 回复语气"小节。
+
+    Custom instructions are empty by default, so a fresh install injects only
+    the tone line. Kept as a separate function so prompt-shape estimation and
+    child agents resolve the exact same text via ``resolve_agent_instructions``.
+    """
+
+    return personalization_section()
+
+
 def _format_progress_briefing_section(run_ctx: RunContext) -> str:
     """格式化"工作进度简报"小节（A1）。
 
@@ -489,11 +501,13 @@ def resolve_agent_instructions(base: str, run_ctx: RunContext) -> str:
     construction and prompt estimation so they share one prompt-shape source.
     """
 
+    personal_section = _format_personalization_section()
     sources_section = _format_preferred_sources_section(run_ctx)
     search_section = _format_query_log_section(run_ctx)
     briefing_section = _format_progress_briefing_section(run_ctx)
     return (
-        f"{base}\n\n---\n\n{sources_section}\n\n---\n\n{search_section}"
+        f"{base}\n\n---\n\n{personal_section}\n\n---\n\n"
+        f"{sources_section}\n\n---\n\n{search_section}"
         f"\n\n---\n\n{briefing_section}"
     )
 

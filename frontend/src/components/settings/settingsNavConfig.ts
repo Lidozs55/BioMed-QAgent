@@ -2,9 +2,11 @@ import {
   type LucideIcon,
   Cpu,
   Database,
+  Keyboard,
   Palette,
   Puzzle,
   SlidersHorizontal,
+  Sparkles,
 } from "lucide-react";
 
 export interface SettingsNavItem {
@@ -25,6 +27,14 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
     label: "个人",
     items: [
       { id: "general", label: "常规", icon: SlidersHorizontal },
+      { id: "personalization", label: "个性化", icon: Sparkles },
+    ],
+  },
+  {
+    id: "interface",
+    label: "界面",
+    items: [
+      { id: "editor", label: "编辑器", icon: Keyboard },
       { id: "appearance", label: "外观", icon: Palette },
     ],
   },

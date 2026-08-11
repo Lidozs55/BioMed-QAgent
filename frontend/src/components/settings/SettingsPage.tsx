@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowLeftIcon, UploadSimpleIcon } from "@phosphor-icons/react";
 import { toast } from "sonner";
 
@@ -10,10 +10,11 @@ import {
 } from "@/components/settings/settingsNavConfig";
 import { AppearanceSettingsSection } from "@/components/settings/sections/AppearanceSettingsSection";
 import { DatabaseSettingsSection } from "@/components/settings/sections/DatabaseSettingsSection";
+import { EditorSettingsSection } from "@/components/settings/sections/EditorSettingsSection";
 import { GeneralSettingsSection } from "@/components/settings/sections/GeneralSettingsSection";
 import { ModelSettingsSection } from "@/components/settings/sections/ModelSettingsSection";
+import { PersonalizationSettingsSection } from "@/components/settings/sections/PersonalizationSettingsSection";
 import { SkillsSettingsSection } from "@/components/settings/sections/SkillsSettingsSection";
-import type { ModelDraftState } from "@/components/settings/types";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   AlertDialog,
@@ -40,7 +41,6 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
-import { RichModelInfo } from "@/components/model-info-card";
 import {
   EMPTY_DATABASE,
   databaseManifest,
@@ -54,12 +54,10 @@ import {
 import { cn } from "@/lib/utils";
 import type {
   ModelSettings,
-  ModelSettingsUpdate,
   SettingsAPIClient,
   SkillDetail,
   SkillManifest,
   SkillValidation,
-  VendorInfo,
 } from "@/hooks/useAPI";
 
 export interface SettingsPageProps {
@@ -69,46 +67,22 @@ export interface SettingsPageProps {
 }
 
 const SECTION_DESCRIPTIONS: Record<string, string> = {
-  model: "配置模型连接、上下文窗口与生成参数。",
+  model: "管理模型供应商与维护模型列表，并查看当前模型信息。",
   databases: "管理可选择的声明式检索数据库。",
   skills: "筛选、启停、回滚或安装 Agent 技能包。",
+  editor: "调整消息发送方式与上下文用量指示。",
   appearance: "调整主题模式、强调色与界面字体。",
   general: "管理本地数据与查看版本信息。",
+  personalization: "配置适用于所有任务的额外指令与默认回复语气。",
 };
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : "请求失败";
 }
 
-const INITIAL_DRAFT: ModelDraftState = {
-  baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-  apiKey: "",
-  modelName: "",
-  maxTokens: 8192,
-  temperature: 0.7,
-  topP: 1,
-  enableSearch: false,
-  thinkingMode: false,
-  modelSearch: "",
-  showModelDropdown: false,
-  showApiKey: false,
-};
-
 export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps) {
-  const apiKeyDirtyRef = useRef(false);
-  const saveSeqRef = useRef(0);
-  const abortRef = useRef<AbortController | null>(null);
-
   const [loading, setLoading] = useState(true);
   const [settings, setSettings] = useState<ModelSettings | null>(null);
-  const [vendors, setVendors] = useState<VendorInfo[]>([]);
-  const [models, setModels] = useState<RichModelInfo[]>([]);
-  const [modelsLoading, setModelsLoading] = useState(false);
-
-  const [draft, setDraft] = useState<ModelDraftState>(INITIAL_DRAFT);
-  const [dirty, setDirty] = useState(false);
-  const [modelError, setModelError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
 
   const [skills, setSkills] = useState<SkillManifest[]>([]);
   const [skillFilter, setSkillFilter] = useState("");
@@ -151,34 +125,17 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [nextSettings, nextVendors, nextSkills] = await Promise.all([
+      const [nextSettings, nextSkills] = await Promise.all([
         api.fetchSettings(),
-        api.fetchVendors(),
         api.fetchSkills(),
       ]);
       setSettings(nextSettings);
-      setVendors(nextVendors);
       setSkills(nextSkills);
-      setDraft({
-        ...INITIAL_DRAFT,
-        apiKey: nextSettings.api_key_configured ? nextSettings.api_key : "",
-        modelName: nextSettings.model_name,
-        maxTokens: nextSettings.max_tokens,
-        temperature: nextSettings.advanced.temperature ?? 0.7,
-        topP: nextSettings.advanced.top_p ?? 1,
-        enableSearch: nextSettings.advanced.enable_search ?? false,
-        thinkingMode: nextSettings.advanced.thinking_mode ?? false,
-      });
-      apiKeyDirtyRef.current = false;
-      setModels([]);
-      setDirty(false);
-      setModelError(null);
     } catch (error) {
       toast.error("设置加载失败", { description: errorText(error) });
     } finally {
       setLoading(false);
     }
-    abortRef.current = null;
   }, [api]);
 
   useEffect(() => {
@@ -188,173 +145,9 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
     return () => window.clearTimeout(timer);
   }, [load]);
 
-  const patchDraft = useCallback(
-    (patch: Partial<ModelDraftState>) => {
-      if (patch.apiKey !== undefined) apiKeyDirtyRef.current = true;
-      setDraft((previous) => ({ ...previous, ...patch }));
-      setDirty(true);
-      setModelError(null);
-      if (patch.modelName !== undefined && patch.modelName !== draft.modelName) {
-        setDraft((previous) => ({ ...previous, modelSearch: "", showModelDropdown: false }));
-        const model = models.find((item) => item.id === patch.modelName);
-        if (model && model.context_window > 0) {
-          void api
-            .saveSettings({ model_name: patch.modelName, context_window: model.context_window })
-            .then((updated) => setSettings(updated))
-            .catch(() => {
-              // Save is retried on the explicit save action.
-            });
-        }
-      }
-    },
-    [api, draft.modelName, models],
-  );
-
-  const patchUi = useCallback((patch: Partial<ModelDraftState>) => {
-    setDraft((previous) => ({ ...previous, ...patch }));
+  const handleActivated = useCallback((updated: ModelSettings) => {
+    setSettings(updated);
   }, []);
-
-  /**
-   * Mirror the explicit-selection context adaptation for the model that is
-   * default-selected after a list load (the saved/current model). Skip when
-   * the user already overrode the context window so a reload never clobbers
-   * their choice, and skip redundant writes when nothing changed.
-   */
-  const applyModelContext = useCallback(
-    (modelId: string, modelList: RichModelInfo[], baseUrl: string, current: ModelSettings | null) => {
-      if (!current) return;
-      if (baseUrl.replace(/\/+$/, "") !== current.base_url.replace(/\/+$/, "")) return;
-      const model = modelList.find((item) => item.id === modelId);
-      if (!model || model.context_window <= 0) return;
-      if (current.context_window_source === "user") return;
-      if (model.context_window === current.context_window) return;
-      void api
-        .saveSettings({ model_name: modelId, context_window: model.context_window })
-        .then((updated) => setSettings(updated))
-        .catch(() => {
-          // Non-fatal: the explicit save action retries.
-        });
-    },
-    [api],
-  );
-  const previewModels = useCallback(async () => {
-    abortRef.current?.abort();
-    const abort = new AbortController();
-    abortRef.current = abort;
-    setModelsLoading(true);
-    try {
-      const fresh = (await api.fetchModels({
-        baseUrl: draft.baseUrl,
-        apiKey: apiKeyDirtyRef.current ? draft.apiKey : undefined,
-      })) as RichModelInfo[];
-      if (!abort.signal.aborted) {
-        setModels(fresh);
-        applyModelContext(draft.modelName, fresh, draft.baseUrl, settings);
-      }
-    } catch (error) {
-      if (!abort.signal.aborted) {
-        toast.error("模型列表加载失败", { description: errorText(error) });
-      }
-    } finally {
-      if (!abort.signal.aborted) setModelsLoading(false);
-    }
-  }, [api, draft.baseUrl, draft.apiKey, draft.modelName, settings, applyModelContext]);
-
-  const saveModel = async () => {
-    if (!draft.modelName.trim()) {
-      setModelError("请填写模型名称，例如 qwen-plus");
-      return;
-    }
-    if (models.length > 0 && !models.find((model) => model.id === draft.modelName)) {
-      setModelError(`模型名称 "${draft.modelName}" 不在可用列表中，请检查拼写是否正确，或从下拉菜单中选择`);
-      return;
-    }
-    setModelError(null);
-
-    const seq = ++saveSeqRef.current;
-    setSaving(true);
-    try {
-      try {
-        await api.fetchModels({
-          baseUrl: draft.baseUrl,
-          apiKey: apiKeyDirtyRef.current ? draft.apiKey : undefined,
-        });
-      } catch {
-        setSaving(false);
-        setModelError("API 密钥验证失败，请检查密钥是否正确或与 Base URL 是否匹配");
-        return;
-      }
-
-      const payload: Record<string, unknown> = {};
-      if (apiKeyDirtyRef.current) payload.api_key = draft.apiKey;
-      if (draft.baseUrl !== settings?.base_url) payload.base_url = draft.baseUrl;
-      if (draft.modelName !== settings?.model_name) payload.model_name = draft.modelName;
-      if (draft.maxTokens !== settings?.max_tokens) payload.max_tokens = draft.maxTokens;
-      if (draft.temperature !== (settings?.advanced.temperature ?? 0.7)) {
-        payload.temperature = draft.temperature;
-      }
-      if (draft.topP !== (settings?.advanced.top_p ?? 1)) payload.top_p = draft.topP;
-      if (draft.enableSearch !== (settings?.advanced.enable_search ?? false)) {
-        payload.enable_search = draft.enableSearch;
-      }
-      if (draft.thinkingMode !== (settings?.advanced.thinking_mode ?? false)) {
-        payload.thinking_mode = draft.thinkingMode;
-      }
-
-      if (Object.keys(payload).length === 0) {
-        setDirty(false);
-        return;
-      }
-
-      const updated = await api.saveSettings(payload as ModelSettingsUpdate);
-      if (saveSeqRef.current !== seq) return;
-
-      setSettings(updated);
-      setDraft((previous) => ({
-        ...previous,
-        apiKey: updated.api_key_configured ? updated.api_key : "",
-      }));
-      apiKeyDirtyRef.current = false;
-      setDirty(false);
-      toast.success("模型设置已保存");
-
-      setModelsLoading(true);
-      try {
-        const freshModels = (await api.fetchModels({
-          baseUrl: updated.base_url,
-        })) as RichModelInfo[];
-        if (saveSeqRef.current === seq) {
-          setModels(freshModels);
-          applyModelContext(updated.model_name, freshModels, updated.base_url, updated);
-        }
-      } catch {
-        // Discovery failure must not revert the save success.
-      } finally {
-        if (saveSeqRef.current === seq) setModelsLoading(false);
-      }
-    } catch (error) {
-      const message = errorText(error);
-      setModelError(message);
-      toast.error("模型设置保存失败", { description: message });
-    } finally {
-      if (saveSeqRef.current === seq) setSaving(false);
-    }
-  };
-
-  const handleContextWindowChange = useCallback(
-    (tokens: number) => {
-      void api
-        .saveSettings({ context_window: tokens })
-        .then((updated) => {
-          setSettings(updated);
-          toast.success(`上下文窗口已调整为 ${tokens.toLocaleString()} tokens`);
-        })
-        .catch((error) => {
-          toast.error("调整失败", { description: errorText(error) });
-        });
-    },
-    [api],
-  );
 
   const mutateSkill = useCallback(
     async (action: () => Promise<void>, success: string) => {
@@ -589,21 +382,10 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
                 <>
                   {activeSection === "model" && (
                     <ModelSettingsSection
+                      api={api}
                       settings={settings}
-                      vendors={vendors}
-                      models={models}
-                      modelsLoading={modelsLoading}
-                      draft={draft}
-                      dirty={dirty}
-                      saving={saving}
-                      modelError={modelError}
                       highlightAnchor={highlight?.anchor ?? null}
-                      highlightNonce={highlight?.nonce ?? 0}
-                      onDraftChange={patchDraft}
-                      onUiChange={patchUi}
-                      onPreviewModels={() => void previewModels()}
-                      onContextWindowChange={handleContextWindowChange}
-                      onSave={() => void saveModel()}
+                      onActivated={handleActivated}
                     />
                   )}
                   {activeSection === "databases" && (
@@ -662,7 +444,11 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
                       }
                     />
                   )}
+                  {activeSection === "editor" && <EditorSettingsSection />}
                   {activeSection === "appearance" && <AppearanceSettingsSection />}
+                  {activeSection === "personalization" && (
+                    <PersonalizationSettingsSection api={api} />
+                  )}
                   {activeSection === "general" && (
                     <GeneralSettingsSection onExportCache={onExportCache ?? (() => undefined)} />
                   )}

@@ -38,7 +38,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { formatSize } from "@/lib/fileUtils";
 import { cn } from "@/lib/utils";
 import type { ModelInfo } from "@/hooks/useAPI";
-import { resolveModelChoices } from "@/lib/modelChoices";
 
 export const MAX_IMPORT_FILES = 10;
 export const MAX_IMPORT_FILE_BYTES = 500 * 1024 * 1024;
@@ -125,19 +124,14 @@ export function AgentComposer({
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const [modelSearch, setModelSearch] = useState("");
 
-  const { choices: modelChoices, offline: modelChoicesOffline } =
-    useMemo(() => resolveModelChoices(models, hasApiKey), [models, hasApiKey]);
-
   const sortedModels = useMemo(() => {
-    if (modelChoices.length === 0) return [];
-    return [...modelChoices].sort((a, b) => {
-      const aQwen = a.id.toLowerCase().startsWith("qwen") || a.name.toLowerCase().startsWith("qwen") ? 1 : 0;
-      const bQwen = b.id.toLowerCase().startsWith("qwen") || b.name.toLowerCase().startsWith("qwen") ? 1 : 0;
-      if (aQwen !== bQwen) return bQwen - aQwen;
+    const choices = models ?? [];
+    if (choices.length === 0) return [];
+    return [...choices].sort((a, b) => {
       if (a.recommended !== b.recommended) return a.recommended ? -1 : 1;
-      return a.id.localeCompare(b.id);
+      return a.name.localeCompare(b.name);
     });
-  }, [modelChoices]);
+  }, [models]);
 
   const selectedModelDisplay = useMemo(
     () => sortedModels.find((m) => m.id === selectedModelId),
@@ -410,21 +404,21 @@ export function AgentComposer({
                           {modelSearch ? "没有匹配的模型" : "暂无可用模型"}
                         </div>
                       ) : (
-                        <>
-                          {filteredModels.map((m) => (
-                            <button
-                              key={m.id}
-                              type="button"
-                              className={cn(
-                                "flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-accent transition-colors",
-                                m.id === selectedModelId && "bg-accent font-medium",
-                              )}
-                              onClick={() => {
-                                onModelChange?.(m.id);
-                                setModelDropdownOpen(false);
-                                setModelSearch("");
-                              }}
-                            >
+                        filteredModels.map((m) => (
+                          <button
+                            key={m.id}
+                            type="button"
+                            className={cn(
+                              "flex w-full flex-col gap-0.5 rounded-md px-3 py-2 text-left text-sm hover:bg-accent transition-colors",
+                              m.id === selectedModelId && "bg-accent font-medium",
+                            )}
+                            onClick={() => {
+                              onModelChange?.(m.id);
+                              setModelDropdownOpen(false);
+                              setModelSearch("");
+                            }}
+                          >
+                            <span className="flex items-center gap-2">
                               <span className="flex-1 truncate">{m.name}</span>
                               {m.recommended && (
                                 <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">推荐</span>
@@ -432,26 +426,26 @@ export function AgentComposer({
                               {m.capabilities?.image && (
                                 <span className="shrink-0 rounded bg-emerald-100 px-1 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">图</span>
                               )}
-                            </button>
-                          ))}
-                          <div className="border-t mt-1 px-3 py-2 text-center text-[11px] text-muted-foreground">
-                            {modelChoicesOffline && (
-                              <span className="mr-1 text-amber-600 dark:text-amber-400">离线备选</span>
-                            )}
-                            管理模型请前往
-                            <button
-                              type="button"
-                              className="ml-1 text-primary underline-offset-2 hover:underline"
-                              onClick={() => {
-                                setModelDropdownOpen(false);
-                                handleOpenSettings();
-                              }}
-                            >
-                              设置
-                            </button>
-                          </div>
-                        </>
+                            </span>
+                            <span className="block w-full truncate text-xs text-muted-foreground">
+                              {m.description}
+                            </span>
+                          </button>
+                        ))
                       )}
+                      <div className="border-t mt-1 px-3 py-2 text-center text-[11px] text-muted-foreground">
+                        管理模型请前往
+                        <button
+                          type="button"
+                          className="ml-1 text-primary underline-offset-2 hover:underline"
+                          onClick={() => {
+                            setModelDropdownOpen(false);
+                            handleOpenSettings();
+                          }}
+                        >
+                          设置
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </PopoverContent>

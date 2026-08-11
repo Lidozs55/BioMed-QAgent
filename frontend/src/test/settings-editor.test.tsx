@@ -3,7 +3,8 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { SettingsPanel } from "@/components/SettingsPanel";
 import type { SettingsAPIClient } from "@/hooks/useAPI";
-import { customFontId, useThemeStore } from "@/stores/themeStore";
+import { usePreferencesStore } from "@/stores/preferencesStore";
+import { useThemeStore } from "@/stores/themeStore";
 
 const SAVED_SETTINGS = {
   base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
@@ -78,18 +79,7 @@ function mockApi(overrides: Partial<SettingsAPIClient> = {}): SettingsAPIClient 
   return { ...base, ...overrides };
 }
 
-class MockFileReader {
-  result: string | null = null;
-  onload: (() => void) | null = null;
-  onerror: ((error: unknown) => void) | null = null;
-
-  readAsDataURL(): void {
-    this.result = "data:font/ttf;base64,AAEAAA==";
-    this.onload?.();
-  }
-}
-
-describe("settings appearance font import", () => {
+describe("settings editor section", () => {
   beforeAll(() => {
     window.matchMedia = vi.fn().mockImplementation((query: string) => ({
       matches: false,
@@ -101,10 +91,21 @@ describe("settings appearance font import", () => {
       removeListener: vi.fn(),
       dispatchEvent: vi.fn(),
     }));
-    vi.stubGlobal("FileReader", MockFileReader);
   });
 
   afterEach(() => {
+    usePreferencesStore.setState({
+      showContextUsage: true,
+      sendShortcut: "enter",
+      followUpMode: "queue",
+      translucentSidebar: false,
+      contrast: 50,
+      pointerCursor: true,
+      reducedMotion: "system",
+      uiFontSize: 16,
+      lightColors: { background: "", foreground: "" },
+      darkColors: { background: "", foreground: "" },
+    });
     useThemeStore.setState({
       mode: "system",
       accent: "sky",
@@ -112,41 +113,48 @@ describe("settings appearance font import", () => {
       customAccent: "",
       importedFonts: [],
     });
-    document.getElementById("imported-font-faces")?.remove();
   });
 
-  it("imports a local font, registers a font face, and makes it selectable", async () => {
+  it("toggles the context usage indicator and changes the send shortcut", async () => {
     const api = mockApi();
     render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
     await screen.findByText("供应商管理");
+
     fireEvent.click(
       within(screen.getByRole("navigation", { name: "设置分类" })).getByRole("button", {
-        name: "外观",
+        name: "编辑器",
       }),
     );
 
-    const fileInput = screen.getByLabelText<HTMLInputElement>("导入字体");
-    const file = new File(["font-data"], "Demo Font.ttf", { type: "font/ttf" });
-    fireEvent.change(fileInput, { target: { files: [file] } });
-
-    await waitFor(() => {
-      const imported = useThemeStore.getState().importedFonts[0];
-      expect(imported?.name).toBe("Demo Font");
-      expect(imported?.format).toBe("truetype");
+    expect(await screen.findByText("发送快捷键")).toBeInTheDocument();
+    const usageToggle = screen.getByRole("switch", {
+      name: "显示上下文窗口使用情况",
     });
+    fireEvent.click(usageToggle);
+    expect(usePreferencesStore.getState().showContextUsage).toBe(false);
 
-    expect(document.getElementById("imported-font-faces")?.textContent).toContain("@font-face");
-
-    const imported = useThemeStore.getState().importedFonts[0];
-    useThemeStore.getState().setFont(customFontId(imported.id));
+    fireEvent.click(screen.getByRole("combobox", { name: "发送快捷键" }));
+    const option = await screen.findByRole("option", { name: /Ctrl\+Enter 发送/ });
+    fireEvent.pointerDown(option);
+    fireEvent.click(option);
     await waitFor(() => {
-      expect(screen.getAllByText("Demo Font").length).toBeGreaterThanOrEqual(2);
+      expect(usePreferencesStore.getState().sendShortcut).toBe("ctrl-enter");
     });
+  });
 
-    fireEvent.click(screen.getByRole("button", { name: "删除字体 Demo Font" }));
-    await waitFor(() => {
-      expect(useThemeStore.getState().importedFonts).toHaveLength(0);
-      expect(useThemeStore.getState().font).toBe("inter");
-    });
+  it("switches the follow-up handling mode", async () => {
+    const api = mockApi();
+    render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
+    await screen.findByText("供应商管理");
+
+    fireEvent.click(
+      within(screen.getByRole("navigation", { name: "设置分类" })).getByRole("button", {
+        name: "编辑器",
+      }),
+    );
+
+    expect(await screen.findByText("跟进处理方式")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "调整方向" }));
+    expect(usePreferencesStore.getState().followUpMode).toBe("steer");
   });
 });

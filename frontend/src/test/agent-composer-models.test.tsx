@@ -5,8 +5,8 @@ import { describe, expect, it } from "vitest";
 import {
   AgentComposer,
 } from "@/components/AgentComposer";
-import { OFFLINE_MODEL_FALLBACK, resolveModelChoices } from "@/lib/modelChoices";
-import type { ModelInfo } from "@/hooks/useAPI";
+import { managedModelsToChoices } from "@/lib/modelChoices";
+import type { ManagedModelInfo, ModelInfo } from "@/hooks/useAPI";
 
 const REAL_MODELS: ModelInfo[] = [
   {
@@ -30,6 +30,49 @@ const REAL_MODELS: ModelInfo[] = [
     recommended: false,
     api_available: true,
     capability_source: "api",
+  },
+];
+
+const MANAGED_MODELS: ManagedModelInfo[] = [
+  {
+    id: "managed-1",
+    provider_id: "provider-1",
+    provider_name: "DashScope",
+    provider_base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    provider_api_key_configured: true,
+    model_id: "qwen3.7-flash",
+    name: "Qwen3.7 Flash",
+    description: "",
+    context_window: 262144,
+    max_output_tokens: 32768,
+    suggested_max_tokens: 16384,
+    capabilities: { text: true, image: false, video: false, audio: false },
+    params: {},
+    param_specs: [],
+    source: "api",
+    active: true,
+    created_at: "2026-08-11T00:00:00+00:00",
+    updated_at: "2026-08-11T00:00:00+00:00",
+  },
+  {
+    id: "managed-2",
+    provider_id: "provider-2",
+    provider_name: "DeepSeek",
+    provider_base_url: "https://api.deepseek.com/v1",
+    provider_api_key_configured: true,
+    model_id: "deepseek-chat",
+    name: "DeepSeek Chat",
+    description: "",
+    context_window: 65536,
+    max_output_tokens: 8192,
+    suggested_max_tokens: 8192,
+    capabilities: { text: true, image: false, video: false, audio: false },
+    params: {},
+    param_specs: [],
+    source: "api",
+    active: false,
+    created_at: "2026-08-11T00:00:00+00:00",
+    updated_at: "2026-08-11T00:00:00+00:00",
   },
 ];
 
@@ -60,46 +103,40 @@ async function openModelSelector() {
   });
 }
 
-describe("resolveModelChoices (model endpoint / offline fallback)", () => {
-  it("returns the endpoint models when present", () => {
-    expect(resolveModelChoices(REAL_MODELS, true)).toEqual({
-      choices: REAL_MODELS,
-      offline: false,
+describe("managedModelsToChoices (configured model list)", () => {
+  it("maps managed models into selector choices keyed by model_id", () => {
+    const choices = managedModelsToChoices(MANAGED_MODELS);
+    expect(choices).toHaveLength(2);
+    expect(choices[0]).toMatchObject({
+      id: "qwen3.7-flash",
+      name: "Qwen3.7 Flash",
+      description: "DashScope · qwen3.7-flash",
+      context_window: 262144,
+      suggested_max_tokens: 16384,
+      recommended: true,
+      api_available: true,
     });
-  });
-
-  it("falls back to the small offline list when the endpoint is unreachable", () => {
-    expect(resolveModelChoices([], true)).toEqual({
-      choices: OFFLINE_MODEL_FALLBACK,
-      offline: true,
-    });
-    expect(OFFLINE_MODEL_FALLBACK.length).toBeLessThanOrEqual(4);
-  });
-
-  it("returns an empty list without an API key", () => {
-    expect(resolveModelChoices([], false)).toEqual({
-      choices: [],
-      offline: false,
-    });
+    expect(choices[1].id).toBe("deepseek-chat");
+    expect(choices[1].recommended).toBe(false);
   });
 });
 
 describe("AgentComposer model selector", () => {
-  it("searches the real endpoint models in the popover", async () => {
+  it("searches the configured models in the popover", async () => {
     renderComposer({ models: REAL_MODELS, hasApiKey: true });
     await openModelSelector();
     expect(screen.getByText("Qwen Max")).toBeInTheDocument();
     expect(screen.getByText("DeepSeek V3")).toBeInTheDocument();
   });
 
-  it("keeps the search box usable with offline fallbacks when the endpoint returns nothing", async () => {
+  it("shows an empty state with a settings link when no models are configured", async () => {
     renderComposer({ models: [], hasApiKey: true });
     await openModelSelector();
-    expect(screen.getByText("Qwen Plus")).toBeInTheDocument();
-    expect(screen.getByText("离线备选")).toBeInTheDocument();
+    expect(screen.getByText("暂无可用模型")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "设置" })).toBeInTheDocument();
   });
 
-  it("shows the settings affordance instead of a legacy hardcoded dropdown without an API key", () => {
+  it("shows the settings affordance without an API key", () => {
     renderComposer({ hasApiKey: false });
     expect(
       screen.getByRole("button", { name: /未配置 API Key/ }),

@@ -2,8 +2,11 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { SettingsPanel } from "@/components/SettingsPanel";
-import type { SettingsAPIClient } from "@/hooks/useAPI";
-import { customFontId, useThemeStore } from "@/stores/themeStore";
+import type {
+  PersonalizationSettings,
+  SettingsAPIClient,
+} from "@/hooks/useAPI";
+import { useThemeStore } from "@/stores/themeStore";
 
 const SAVED_SETTINGS = {
   base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
@@ -37,20 +40,18 @@ const VENDORS = [
   },
 ];
 
+const DEFAULT_PERSONALIZATION: PersonalizationSettings = {
+  custom_instructions: "",
+  personality: "pragmatic",
+  personality_label: "务实",
+};
+
 function mockApi(overrides: Partial<SettingsAPIClient> = {}): SettingsAPIClient {
   const base: SettingsAPIClient = {
     fetchSettings: vi.fn().mockResolvedValue(SAVED_SETTINGS),
     saveSettings: vi.fn().mockResolvedValue(SAVED_SETTINGS),
-    fetchPersonalization: vi.fn().mockResolvedValue({
-      custom_instructions: "",
-      personality: "pragmatic",
-      personality_label: "务实",
-    }),
-    savePersonalization: vi.fn().mockResolvedValue({
-      custom_instructions: "",
-      personality: "pragmatic",
-      personality_label: "务实",
-    }),
+    fetchPersonalization: vi.fn().mockResolvedValue(DEFAULT_PERSONALIZATION),
+    savePersonalization: vi.fn().mockResolvedValue(DEFAULT_PERSONALIZATION),
     fetchVendors: vi.fn().mockResolvedValue(VENDORS),
     fetchModels: vi.fn().mockResolvedValue([]),
     fetchProviders: vi.fn().mockResolvedValue([]),
@@ -78,18 +79,16 @@ function mockApi(overrides: Partial<SettingsAPIClient> = {}): SettingsAPIClient 
   return { ...base, ...overrides };
 }
 
-class MockFileReader {
-  result: string | null = null;
-  onload: (() => void) | null = null;
-  onerror: ((error: unknown) => void) | null = null;
-
-  readAsDataURL(): void {
-    this.result = "data:font/ttf;base64,AAEAAA==";
-    this.onload?.();
-  }
+async function openPersonalization(): Promise<void> {
+  fireEvent.click(
+    within(screen.getByRole("navigation", { name: "设置分类" })).getByRole("button", {
+      name: "个性化",
+    }),
+  );
+  await screen.findByRole("textbox", { name: "自定义指令" });
 }
 
-describe("settings appearance font import", () => {
+describe("settings personalization section", () => {
   beforeAll(() => {
     window.matchMedia = vi.fn().mockImplementation((query: string) => ({
       matches: false,
@@ -101,7 +100,6 @@ describe("settings appearance font import", () => {
       removeListener: vi.fn(),
       dispatchEvent: vi.fn(),
     }));
-    vi.stubGlobal("FileReader", MockFileReader);
   });
 
   afterEach(() => {
@@ -112,41 +110,57 @@ describe("settings appearance font import", () => {
       customAccent: "",
       importedFonts: [],
     });
-    document.getElementById("imported-font-faces")?.remove();
   });
 
-  it("imports a local font, registers a font face, and makes it selectable", async () => {
-    const api = mockApi();
+  it("loads existing custom instructions and saves changes", async () => {
+    const save = vi.fn().mockResolvedValue({
+      ...DEFAULT_PERSONALIZATION,
+      custom_instructions: "先查 GEO，再补 Xena。",
+    });
+    const api = mockApi({
+      fetchPersonalization: vi.fn().mockResolvedValue({
+        ...DEFAULT_PERSONALIZATION,
+        custom_instructions: "先查 GEO。",
+      }),
+      savePersonalization: save,
+    });
     render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
     await screen.findByText("供应商管理");
-    fireEvent.click(
-      within(screen.getByRole("navigation", { name: "设置分类" })).getByRole("button", {
-        name: "外观",
-      }),
-    );
+    await openPersonalization();
 
-    const fileInput = screen.getByLabelText<HTMLInputElement>("导入字体");
-    const file = new File(["font-data"], "Demo Font.ttf", { type: "font/ttf" });
-    fireEvent.change(fileInput, { target: { files: [file] } });
-
-    await waitFor(() => {
-      const imported = useThemeStore.getState().importedFonts[0];
-      expect(imported?.name).toBe("Demo Font");
-      expect(imported?.format).toBe("truetype");
+    const textarea = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "自定义指令",
     });
+    expect(textarea).toHaveValue("先查 GEO。");
 
-    expect(document.getElementById("imported-font-faces")?.textContent).toContain("@font-face");
+    fireEvent.change(textarea, { target: { value: "先查 GEO，再补 Xena。" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
 
-    const imported = useThemeStore.getState().importedFonts[0];
-    useThemeStore.getState().setFont(customFontId(imported.id));
     await waitFor(() => {
-      expect(screen.getAllByText("Demo Font").length).toBeGreaterThanOrEqual(2);
+      expect(save).toHaveBeenCalledWith({
+        custom_instructions: "先查 GEO，再补 Xena。",
+      });
     });
+  });
 
-    fireEvent.click(screen.getByRole("button", { name: "删除字体 Demo Font" }));
+  it("persists the selected personality immediately", async () => {
+    const save = vi.fn().mockResolvedValue({
+      ...DEFAULT_PERSONALIZATION,
+      personality: "rigorous",
+      personality_label: "严谨",
+    });
+    const api = mockApi({ savePersonalization: save });
+    render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
+    await screen.findByText("供应商管理");
+    await openPersonalization();
+
+    fireEvent.click(screen.getByRole("combobox", { name: "回复语气" }));
+    const option = await screen.findByRole("option", { name: /严谨/ });
+    fireEvent.pointerDown(option);
+    fireEvent.click(option);
+
     await waitFor(() => {
-      expect(useThemeStore.getState().importedFonts).toHaveLength(0);
-      expect(useThemeStore.getState().font).toBe("inter");
+      expect(save).toHaveBeenCalledWith({ personality: "rigorous" });
     });
   });
 });
