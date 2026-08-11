@@ -5,6 +5,22 @@
 > and `backend/app/model_info/` (vendor presets + model catalog). Facts below
 > were verified against official docs on 2026-08-10.
 
+## Model catalog maintenance (verified 2026-08-11)
+
+- The **single source of truth** for model metadata (context window, max
+  output, capabilities, pricing, family) is
+  `backend/app/model_info/providers/*.py`. `qwen.py` contains only
+  DashScope-native Qwen models plus third-party model IDs actually served by
+  Alibaba Model Studio (`deepseek-v4-flash-0731`, `kimi/kimi-k3`, ...);
+  other vendors live in their own provider files.
+- `backend/app/model_config/catalog_qwen.py` and
+  `catalog_compatible.py` are **generated mirrors** of the warehouse — do not
+  edit them by hand. After changing any provider file, regenerate them with:
+  `backend/.venv/Scripts/python.exe backend/scripts/regenerate_model_info.py`.
+- Data was re-verified against official pages (OpenAI, DeepSeek, Alibaba
+  Model Studio, Kimi, Zhipu, MiniMax, Groq, xAI, Mistral, Baichuan) and the
+  relay-standard database models.dev on 2026-08-11.
+
 ## How the pieces fit
 
 - `GET /api/v1/vendors` serves quick-fill presets from

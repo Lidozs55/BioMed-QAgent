@@ -165,7 +165,7 @@ class TestModelInfoRepository:
         assert model is not None
         assert model.vendor_id == "dashscope"
         assert model.input_context_window == 1_000_000
-        assert model.max_output_tokens == 64_000
+        assert model.max_output_tokens == 131_072
         assert model.capabilities.image is True
         assert model.capabilities.video is True
 
