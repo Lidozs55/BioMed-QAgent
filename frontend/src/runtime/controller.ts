@@ -1,4 +1,9 @@
 import type { APIClient } from "@/hooks/useAPI";
+import {
+  clearTaskProjection,
+  loadTaskProjection,
+  saveTaskProjection,
+} from "@/runtime/hydrationCache";
 import type {
   ContinueTaskInput,
   ResumeRunInput,
@@ -131,10 +136,13 @@ export class RuntimeController {
   async selectTask(taskId: string): Promise<void> {
     const generation = ++this.foregroundIntentGeneration;
     const previousActiveTaskId = useAgentStore.getState().activeTaskId;
-    if (
-      !this.deletedTaskIds.has(taskId) &&
-      useAgentStore.getState().tasksById[taskId] !== undefined
-    ) {
+    const task = useAgentStore.getState().tasksById[taskId];
+    if (task !== undefined && task.hydration !== "snapshot") {
+      // Only a cold selection needs the loading screen; already-hydrated
+      // tasks render instantly and must not flash a loading page.
+      useAgentStore.getState().setHydratingTaskId(taskId);
+    }
+    if (!this.deletedTaskIds.has(taskId) && task !== undefined) {
       useAgentStore.getState().setActiveTaskId(taskId);
     }
     try {
@@ -158,6 +166,14 @@ export class RuntimeController {
         previousActiveTaskId,
       );
       throw error;
+    } finally {
+      this.finishTaskHydration(taskId);
+    }
+  }
+
+  private finishTaskHydration(taskId: string): void {
+    if (useAgentStore.getState().hydratingTaskId === taskId) {
+      useAgentStore.getState().setHydratingTaskId(null);
     }
   }
 
@@ -248,11 +264,17 @@ export class RuntimeController {
       const needsFullReplay =
         useAgentStore.getState().tasksById[taskId]?.hydration === "summary";
       if (needsFullReplay) {
-        useAgentStore.getState().prepareTaskSnapshotReplay(snapshot);
+        const cached = loadTaskProjection(taskId);
+        if (cached !== null) {
+          useAgentStore.getState().restoreTaskProjection(taskId, cached);
+        } else {
+          useAgentStore.getState().prepareTaskSnapshotReplay(snapshot);
+        }
       }
       await this.replayTaskEvents(taskId, snapshot.task.latest_sequence);
       if (!this.isCurrentTaskHandoff(taskId, generation)) return false;
       useAgentStore.getState().hydrateTaskSnapshot(snapshot);
+      this.persistTaskProjection(taskId);
       // F1 (final review): resume the live subscription only while the task
       // is still active after hydration — the same shouldSubscribe check the
       // transport applies to live terminal events. Selecting a terminal
@@ -275,6 +297,13 @@ export class RuntimeController {
         this.transport.subscribe(taskId, lastSequence);
       }
       throw error;
+    }
+  }
+
+  private persistTaskProjection(taskId: string): void {
+    const task = useAgentStore.getState().tasksById[taskId];
+    if (task !== undefined && task.hydration === "snapshot") {
+      saveTaskProjection(task);
     }
   }
 
@@ -432,6 +461,7 @@ export class RuntimeController {
       return false;
     }
     useAgentStore.getState().hydrateTaskSnapshot(snapshot);
+    this.persistTaskProjection(accepted.task_id);
     if (foregroundIntentGeneration === this.foregroundIntentGeneration) {
       useAgentStore.getState().setActiveTaskId(accepted.task_id);
     }
@@ -605,6 +635,7 @@ export class RuntimeController {
 
   async deleteTask(taskId: string): Promise<void> {
     await this.api.deleteTask(taskId);
+    clearTaskProjection(taskId);
     this.deletedTaskIds.add(taskId);
     this.advanceTaskHandoffGeneration(taskId);
     if (this.transport.isSubscribed(taskId)) {

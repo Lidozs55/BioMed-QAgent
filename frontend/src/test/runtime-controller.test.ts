@@ -15,7 +15,8 @@ import {
   startRuntime,
   type EventTransport,
 } from "@/runtime/controller";
-import { createInitialRuntimeState } from "@/runtime/reducer";
+import { saveTaskProjection } from "@/runtime/hydrationCache";
+import { createInitialRuntimeState, createTaskProjection } from "@/runtime/reducer";
 import { addAcceptedTask, useAgentStore } from "@/stores/agentStore";
 
 const CREATED_AT = "2026-07-14T00:00:00Z";
@@ -3120,5 +3121,95 @@ describe("runtime orchestration", () => {
     await controller.loadOlderMessages("task_messages");
 
     expect(apiClient.fetchMessages).not.toHaveBeenCalled();
+  });
+
+  it("marks the selected task as hydrating until selection finishes", async () => {
+    const taskId = "task_hydrating_marker";
+    useAgentStore.getState().mergeTaskPage(
+      page([], [summary(taskId, "completed", 3)]),
+      false,
+    );
+    const snapshotRequest = deferred<TaskSnapshot>();
+    const apiClient = api({
+      fetchTask: vi.fn(() => snapshotRequest.promise),
+      fetchArtifacts: vi.fn().mockResolvedValue([]),
+    });
+    const controller = new RuntimeController(apiClient, transport());
+
+    const selection = controller.selectTask(taskId);
+    expect(useAgentStore.getState().hydratingTaskId).toBe(taskId);
+
+    snapshotRequest.resolve(snapshot(taskId, 3, "agent", "completed"));
+    await selection;
+
+    expect(useAgentStore.getState().hydratingTaskId).toBeNull();
+  });
+
+  it("clears the hydration marker when selection fails", async () => {
+    const taskId = "task_hydrating_failure";
+    useAgentStore.getState().mergeTaskPage(
+      page([], [summary(taskId, "completed", 3)]),
+      false,
+    );
+    const apiClient = api({
+      fetchTask: vi.fn(() => Promise.reject(new Error("snapshot failed"))),
+      fetchArtifacts: vi.fn().mockResolvedValue([]),
+    });
+    const controller = new RuntimeController(apiClient, transport());
+
+    await expect(controller.selectTask(taskId)).rejects.toThrow(
+      "snapshot failed",
+    );
+    expect(useAgentStore.getState().hydratingTaskId).toBeNull();
+  });
+
+  it("opens a cached historical conversation instantly without replaying its event log", async () => {
+    localStorage.clear();
+    const taskId = "task_cached_history";
+    const cached = createTaskProjection(summary(taskId, "completed", 5));
+    cached.hydration = "snapshot";
+    cached.lastSequence = 5;
+    cached.items = [
+      {
+        itemId: `assistant:live:${taskId}:0`,
+        kind: "assistant_segment",
+        runId: `run_${taskId}`,
+        sequence: 4,
+        createdAt: CREATED_AT,
+        streamId: `live:${taskId}:0`,
+        content: "cached answer",
+        isStreaming: false,
+        finishReason: null,
+      },
+    ];
+    saveTaskProjection(cached);
+
+    useAgentStore.getState().mergeTaskPage(
+      page([], [summary(taskId, "completed", 5)]),
+      false,
+    );
+
+    const fetchEvents = vi.fn<APIClient["fetchEvents"]>();
+    const apiClient = api({
+      fetchTask: vi
+        .fn()
+        .mockResolvedValue(snapshot(taskId, 5, "agent", "completed")),
+      fetchEvents,
+      fetchArtifacts: vi.fn().mockResolvedValue([]),
+    });
+    const eventTransport = transport();
+    const controller = new RuntimeController(apiClient, eventTransport);
+
+    await controller.selectTask(taskId);
+
+    const task = useAgentStore.getState().tasksById[taskId];
+    expect(task.hydration).toBe("snapshot");
+    expect(
+      task.items.some(
+        (item) => "content" in item && item.content === "cached answer",
+      ),
+    ).toBe(true);
+    expect(fetchEvents).not.toHaveBeenCalled();
+    expect(eventTransport.subscribe).not.toHaveBeenCalled();
   });
 });

@@ -36,6 +36,7 @@ export function createInitialRuntimeState(): AgentRuntimeData {
     tasksById: {},
     taskOrder: [],
     activeTaskId: null,
+    hydratingTaskId: null,
     activeItems: [],
     nextCursor: null,
     connectionStatus: "idle",
@@ -479,6 +480,28 @@ export function prepareTaskSnapshotReplay(
         hydration: "summary",
       },
     },
+  };
+}
+
+export function restoreTaskProjection(
+  state: AgentRuntimeData,
+  taskId: string,
+  cached: TaskProjection,
+): AgentRuntimeData {
+  const existing = state.tasksById[taskId];
+  const restored: TaskProjection = {
+    ...cached,
+    summary: existing?.summary ?? cached.summary,
+    hydration: "snapshot",
+    sequenceGap: null,
+  };
+  const next = {
+    ...state,
+    tasksById: { ...state.tasksById, [taskId]: restored },
+  };
+  return {
+    ...next,
+    ...updateClassification(next, restored),
   };
 }
 

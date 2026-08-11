@@ -1528,4 +1528,20 @@ describe("ChatPanel", () => {
       container.querySelector('[data-slot="resizable-panel-group"]'),
     ).not.toBeInTheDocument();
   });
+
+  it("shows the loading screen until the selected task finishes hydrating", async () => {
+    useAgentStore.setState(createInitialRuntimeState());
+    useAgentStore.getState().setActiveTaskId("task_terminal");
+    useAgentStore.getState().setHydratingTaskId("task_terminal");
+    seedTerminalTask();
+
+    render(<ChatPanel startTask={vi.fn()} />);
+
+    expect(await screen.findByText("正在加载对话…")).toBeInTheDocument();
+
+    useAgentStore.getState().setHydratingTaskId(null);
+    await waitFor(() => {
+      expect(screen.queryByText("正在加载对话…")).not.toBeInTheDocument();
+    });
+  });
 });

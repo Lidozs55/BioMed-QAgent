@@ -7,6 +7,7 @@ import {
 import { toast } from "sonner";
 
 import { AgentComposer } from "@/components/AgentComposer";
+import { LoadingScreen } from "@/components/LoadingScreen";
 import { ConversationList } from "@/components/conversation/ConversationList";
 import { formatToolCall } from "@/components/conversation/toolLabels";
 import { operationDisplayLabel } from "@/components/conversation/operationMeta";
@@ -217,6 +218,11 @@ export function ChatPanel({
   const items = useAgentStore(selectActiveItems);
   const activeItem = useAgentStore(selectActiveItem);
   const connected = useAgentStore(selectConnectionIsConnected);
+  const hydratingTaskId = useAgentStore((state) => state.hydratingTaskId);
+  const activeTaskHydrating =
+    activeTaskId !== null &&
+    activeTaskId === hydratingTaskId &&
+    activeTask !== undefined;
   const sendShortcut = usePreferencesStore((state) => state.sendShortcut);
   const showContextUsage = usePreferencesStore((state) => state.showContextUsage);
   const followUpMode = usePreferencesStore((state) => state.followUpMode);
@@ -592,6 +598,10 @@ export function ChatPanel({
         </div>
       </div>
     );
+  }
+
+  if (activeTaskHydrating) {
+    return <LoadingScreen />;
   }
 
   return (
