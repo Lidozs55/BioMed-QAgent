@@ -15,6 +15,8 @@ They are subordinate to [ARCHITECTURE.md](../ARCHITECTURE.md) and the
 | Task Workspace permissions, exec modes, Windows/Linux security cases | [Phase 1 Workspace policy](workspace-policy-phase1.md) |
 | Pi-to-BioMed experimental event mapping and sequence meaning | [Pi event adapter](pi-event-adapter.md) |
 | Single Host startup/shutdown, flags, valid combinations, rollback | [Single-Host lifecycle and flags](single-host-lifecycle-and-flags.md) |
+| Node/pnpm, Python/uv, environment variables, local data, validation, rollback | [Phase 0/1 environment migration](ENVIRONMENT_MIGRATION.md) |
+| Final whole-branch findings, fixes, quality gates, and startup evidence | [Phase 0/1 final verification](PHASE0_1_FINAL_VERIFICATION.md) |
 
 ## Implemented Phase 0/1 status
 

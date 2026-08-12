@@ -249,7 +249,9 @@ http://127.0.0.1:5173/api/v1/health
 | `pnpm dev:legacy-rollback` | standalone Vite + FastAPI 的完整旧双端口回滚 |
 
 附加外部 backend 时设置 `LEGACY_BACKEND_URL`，并在 Host/后端两侧使用同一
-`PI_DATASET_BRIDGE_SECRET`；managed backend 默认由 Host 生成每进程 secret。
+`PI_DATASET_BRIDGE_SECRET`；managed backend 默认由 Host 生成每进程 secret，并在
+受保护的 internal bridge 上验证本次启动身份。`LEGACY_BACKEND_PORT=0` 是正常默认值，
+由 Host 分配空闲 loopback 端口；attach/debug 模式必须显式配置非空 secret。
 
 ---
 

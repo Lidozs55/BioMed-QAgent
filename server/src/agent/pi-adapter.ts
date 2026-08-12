@@ -392,7 +392,7 @@ class PiBioMedAgentSession implements BioMedAgentSession {
     };
     this.activeTurn = active;
     const onAbort = (): void => {
-      void this.cancel("aborted");
+      void this.cancel("aborted").catch(() => undefined);
     };
     options.signal?.addEventListener("abort", onAbort, { once: true });
     active.queue.push({ event: { type: "turn_started" } });
@@ -439,13 +439,20 @@ class PiBioMedAgentSession implements BioMedAgentSession {
     active.reason = reason;
     try {
       await this.upstream.abort();
-    } finally {
-      this.finish(active, {
-        event: reason === undefined
-          ? { type: "turn_cancelled" }
-          : { type: "turn_cancelled", reason: boundedText(reason) },
-      });
+    } catch (error) {
+      const failure = new BioMedAgentError(
+        "UPSTREAM_FAILURE",
+        "Agent runtime cancellation failed",
+        { cause: error },
+      );
+      this.finish(active, { error: failure });
+      throw failure;
     }
+    this.finish(active, {
+      event: reason === undefined
+        ? { type: "turn_cancelled" }
+        : { type: "turn_cancelled", reason: boundedText(reason) },
+    });
   }
 
   dispose(): Promise<void> {

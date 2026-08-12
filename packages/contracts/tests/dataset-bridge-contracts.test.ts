@@ -46,6 +46,8 @@ function request() {
     request_id: "request_bridge_1",
     task_id: "task_bridge_1",
     run_id: "run_bridge_1",
+    pi_session_id: "pi_bridge_1",
+    tool_call_id: "tool_bridge_1",
     op: "execute_dataset_build",
     args: {
       spec,

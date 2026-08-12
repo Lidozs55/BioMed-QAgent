@@ -72,7 +72,17 @@ class FakeAdapter implements BioMedAgentAdapter {
   }
 }
 
-async function startRuntime(adapter = new FakeAdapter()) {
+async function startRuntime(): Promise<{
+  adapter: FakeAdapter;
+  runtime: Awaited<ReturnType<typeof createExperimentalPiRuntime>>;
+  port: number;
+}>;
+async function startRuntime<Adapter extends BioMedAgentAdapter>(adapter: Adapter): Promise<{
+  adapter: Adapter;
+  runtime: Awaited<ReturnType<typeof createExperimentalPiRuntime>>;
+  port: number;
+}>;
+async function startRuntime(adapter: BioMedAgentAdapter = new FakeAdapter()) {
   const runtime = await createExperimentalPiRuntime({
     adapter,
     workspaceFactory: async () => ({
@@ -117,7 +127,129 @@ function createInbox(socket: WebSocket): { next(label: string): Promise<unknown>
   };
 }
 
+async function nextType(
+  inbox: { next(label: string): Promise<unknown> },
+  type: string,
+): Promise<Record<string, unknown>> {
+  for (let index = 0; index < 16; index += 1) {
+    const frame = await inbox.next(type);
+    if (
+      frame !== null &&
+      typeof frame === "object" &&
+      !Array.isArray(frame) &&
+      (frame as Record<string, unknown>).type === type
+    ) {
+      return frame as Record<string, unknown>;
+    }
+  }
+  throw new Error(`missing ${type} frame within bounded handoff`);
+}
+
 describe("experimental Pi HTTP and WebSocket protocol", () => {
+  test("hands off zero-delay first-run events to the first live subscriber", async () => {
+    class ImmediateAdapter implements BioMedAgentAdapter {
+      async createSession(config: BioMedSessionConfig): Promise<BioMedAgentSession> {
+        return {
+          piSessionId: "pi-immediate",
+          taskId: config.taskId,
+          runId: config.runId,
+          async *run() {
+            yield { type: "turn_started" as const };
+            yield { type: "assistant_delta" as const, delta: "immediate" };
+            yield { type: "turn_completed" as const };
+          },
+          cancel: async () => undefined,
+          dispose: async () => undefined,
+        };
+      }
+    }
+    const { port } = await startRuntime(new ImmediateAdapter());
+    const created = (await (
+      await fetch(`http://127.0.0.1:${port}/experimental/pi/tasks`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ input: "first" }),
+      })
+    ).json()) as { task_id: string; run_id: string };
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/experimental/pi/ws`);
+    await once(socket, "open");
+    const inbox = createInbox(socket);
+
+    socket.send(JSON.stringify({ type: "subscribe", task_id: created.task_id }));
+    expect(await inbox.next("subscribed")).toEqual({
+      type: "subscribed",
+      task_id: created.task_id,
+    });
+    expect(await nextType(inbox, "run_started")).toMatchObject({
+      type: "run_started",
+      run_id: created.run_id,
+    });
+    expect(await nextType(inbox, "assistant_delta")).toMatchObject({
+      type: "assistant_delta",
+      payload: { type: "assistant_delta", delta: "immediate" },
+    });
+    expect(await nextType(inbox, "run_completed")).toMatchObject({
+      type: "run_completed",
+      run_id: created.run_id,
+    });
+    socket.close();
+  });
+
+  test("hands off immediate later-run failures after a subscriber gap", async () => {
+    class FailingSecondAdapter implements BioMedAgentAdapter {
+      private runs = 0;
+      async createSession(config: BioMedSessionConfig): Promise<BioMedAgentSession> {
+        return {
+          piSessionId: "pi-later-failure",
+          taskId: config.taskId,
+          runId: config.runId,
+          run: async function* (this: FailingSecondAdapter) {
+            this.runs += 1;
+            yield { type: "turn_started" as const };
+            if (this.runs === 1) yield { type: "turn_completed" as const };
+            else throw new Error("immediate later failure");
+          }.bind(this),
+          cancel: async () => undefined,
+          dispose: async () => undefined,
+        };
+      }
+    }
+    const { port } = await startRuntime(new FailingSecondAdapter());
+    const first = (await (
+      await fetch(`http://127.0.0.1:${port}/experimental/pi/tasks`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ input: "first" }),
+      })
+    ).json()) as { task_id: string };
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const second = (await (
+      await fetch(`http://127.0.0.1:${port}/experimental/pi/tasks/${first.task_id}/runs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ input: "second" }),
+      })
+    ).json()) as { run_id: string };
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/experimental/pi/ws`);
+    await once(socket, "open");
+    const inbox = createInbox(socket);
+
+    socket.send(JSON.stringify({ type: "subscribe", task_id: first.task_id }));
+    await inbox.next("subscribed");
+    const frames = [
+      await inbox.next("buffered frame 1"),
+      await inbox.next("buffered frame 2"),
+      await inbox.next("buffered frame 3"),
+      await inbox.next("buffered frame 4"),
+    ];
+    expect(frames).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "run_failed", run_id: second.run_id }),
+      ]),
+    );
+    socket.close();
+  });
+
   test("creates a task with distinct task, run, and Pi session identities", async () => {
     const { port } = await startRuntime();
     const response = await fetch(`http://127.0.0.1:${port}/experimental/pi/tasks`, {
@@ -157,10 +289,10 @@ describe("experimental Pi HTTP and WebSocket protocol", () => {
     socket.send(JSON.stringify({ type: "subscribe", task_id: created.task_id }));
     expect(await inbox.next("subscribed")).toEqual({ type: "subscribed", task_id: created.task_id });
     socket.send(JSON.stringify({ type: "ping" }));
-    expect(await inbox.next("pong")).toEqual({ type: "pong" });
+    expect(await nextType(inbox, "pong")).toEqual({ type: "pong" });
 
     adapter.gates[0]?.resolve(undefined);
-    const terminal = await inbox.next("terminal");
+    const terminal = await nextType(inbox, "run_completed");
     expect(terminal).toMatchObject({
       type: "run_completed",
       task_id: created.task_id,
@@ -232,11 +364,11 @@ describe("experimental Pi HTTP and WebSocket protocol", () => {
       status: "cancel_requested",
     });
     expect(adapter.cancel).toHaveBeenCalledOnce();
-    expect(await inbox.next("cancel request")).toMatchObject({
+    expect(await nextType(inbox, "run_cancel_requested")).toMatchObject({
       type: "run_cancel_requested",
       run_id: created.run_id,
     });
-    expect(await inbox.next("cancel acknowledgement")).toMatchObject({
+    expect(await nextType(inbox, "run_cancelled")).toMatchObject({
       type: "run_cancelled",
       run_id: created.run_id,
     });

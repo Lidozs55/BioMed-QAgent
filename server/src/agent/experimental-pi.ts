@@ -48,6 +48,7 @@ export interface ExperimentalPiRuntimeOptions {
     root: string;
     tools: readonly BioMedAgentTool[];
     setRunId?: (runId: string) => void;
+    setPiSessionId?: (piSessionId: string) => void;
     activeCommandCount?: () => number;
     dispose(): Promise<void>;
   }>;
@@ -294,6 +295,7 @@ export async function createExperimentalPiRuntime(
         tools: workspace.tools,
         cleanup: disposeWorkspace,
       });
+      workspace.setPiSessionId?.(session.piSessionId);
       const task: ExperimentalTask = {
         taskId,
         session,

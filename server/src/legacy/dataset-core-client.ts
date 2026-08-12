@@ -36,6 +36,8 @@ export interface DatasetCoreClientOptions {
 interface Identity {
   taskId: string;
   runId: string;
+  piSessionId: string;
+  toolCallId: string;
   signal?: AbortSignal;
 }
 
@@ -64,13 +66,16 @@ function unavailable(message: string, cause?: unknown): DatasetCoreBridgeError {
 
 export class DatasetCoreClient implements DatasetCoreClientLike {
   private readonly baseUrl: URL;
-  private readonly secret?: string;
+  private readonly secret: string;
   private readonly fetch: Fetch;
   private readonly requestId: () => string;
   private readonly cancellationTimeoutMs: number;
 
   constructor(options: DatasetCoreClientOptions) {
     this.baseUrl = requireLoopbackLegacyUrl(options.baseUrl);
+    if (options.secret === undefined || options.secret.trim() === "") {
+      throw new Error("Dataset Core bridge secret must be configured");
+    }
     this.secret = options.secret;
     this.fetch = options.fetch ?? globalThis.fetch;
     this.requestId = options.requestId ?? (() => `request_${randomUUID()}`);
@@ -114,6 +119,8 @@ export class DatasetCoreClient implements DatasetCoreClientLike {
       request_id: requestId,
       task_id: input.taskId,
       run_id: input.runId,
+      pi_session_id: input.piSessionId,
+      tool_call_id: input.toolCallId,
       op: input.op,
       args: input.args,
     });
@@ -155,9 +162,7 @@ export class DatasetCoreClient implements DatasetCoreClientLike {
   }
 
   private headers(): Record<string, string> {
-    return this.secret === undefined
-      ? { "content-type": "application/json" }
-      : { "content-type": "application/json", [SECRET_HEADER]: this.secret };
+    return { "content-type": "application/json", [SECRET_HEADER]: this.secret };
   }
 
   private async readResponse(response: Response, requestId: string): Promise<DatasetBridgeResponse> {

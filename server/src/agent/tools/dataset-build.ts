@@ -14,6 +14,9 @@ const MAX_ID = 128;
 const MAX_CONTENT = 4_096;
 
 export interface DatasetBuildToolDiagnostic {
+  taskId: string;
+  runId: string;
+  piSessionId: string;
   toolCallId: string;
   toolName: "validate_dataset_build" | "execute_dataset_build";
   requestId?: string;
@@ -26,6 +29,7 @@ export interface DatasetBuildToolOptions {
   client: DatasetCoreClientLike;
   taskId: string;
   runId: () => string;
+  piSessionId: () => string;
   onDiagnostic?: (diagnostic: DatasetBuildToolDiagnostic) => void;
   now?: () => number;
 }
@@ -78,6 +82,9 @@ function diagnostic(
   buildId?: string,
 ): void {
   options.onDiagnostic?.({
+    taskId: options.taskId.slice(0, MAX_ID),
+    runId: options.runId().slice(0, MAX_ID),
+    piSessionId: options.piSessionId().slice(0, MAX_ID),
     toolCallId: (context?.toolCallId ?? "unknown").slice(0, MAX_ID),
     toolName,
     requestId: response?.request_id.slice(0, MAX_ID),
@@ -126,6 +133,8 @@ export function createDatasetBuildTools(
           response = await options.client.validate({
             taskId: options.taskId,
             runId: options.runId(),
+            piSessionId: options.piSessionId(),
+            toolCallId: context?.toolCallId ?? "unknown",
             spec: specArgument(object(value)),
             signal,
           });
@@ -169,6 +178,8 @@ export function createDatasetBuildTools(
           const identity = {
             taskId: options.taskId,
             runId: options.runId(),
+            piSessionId: options.piSessionId(),
+            toolCallId: context?.toolCallId ?? "unknown",
             spec,
             signal,
           };

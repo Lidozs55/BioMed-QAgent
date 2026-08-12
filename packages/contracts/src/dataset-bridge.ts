@@ -13,6 +13,8 @@ interface DatasetBridgeRequestBase {
   request_id: string;
   task_id: string;
   run_id: string;
+  pi_session_id: string;
+  tool_call_id: string;
 }
 
 export type DatasetBridgeRequest =
@@ -245,11 +247,16 @@ function validateReferenceMap(value: unknown, name: string): Record<string, stri
 
 export function parseDatasetBridgeRequest(value: unknown): DatasetBridgeRequest {
   const request = record(value, "bridge request");
-  exact(request, ["version", "request_id", "task_id", "run_id", "op", "args"], "bridge request");
+  exact(request, [
+    "version", "request_id", "task_id", "run_id", "pi_session_id",
+    "tool_call_id", "op", "args",
+  ], "bridge request");
   if (request.version !== DATASET_BRIDGE_VERSION) throw new TypeError("bridge version must be 1");
   safeId(request.request_id, "request_id");
   safeId(request.task_id, "task_id");
   safeId(request.run_id, "run_id");
+  safeId(request.pi_session_id, "pi_session_id");
+  safeId(request.tool_call_id, "tool_call_id");
   const args = record(request.args, "args");
   if (request.op === "validate_dataset_build_spec") {
     exact(args, ["spec"], "validate args");

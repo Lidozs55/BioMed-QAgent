@@ -56,10 +56,13 @@ describe("feature flags", () => {
       },
       publicHost: "127.0.0.1",
       publicPort: 5173,
-      legacyPrivatePort: 8000,
+      legacyPrivatePort: 0,
       workspaceDevExec: false,
     });
-    expect(() => parseHostConfig({ APP_HOST: "fastapi" })).toThrow(/APP_HOST=ts/);
+    expect(() => parseHostConfig({
+      APP_HOST: "fastapi",
+      PI_EXPERIMENTAL: "0",
+    })).toThrow(/APP_HOST=ts/);
   });
 
   test("requires an explicit validated development exec flag", () => {

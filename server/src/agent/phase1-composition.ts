@@ -56,6 +56,7 @@ export function createPhase1ExperimentalRuntime(
     },
     workspaceFactory: async ({ taskId, runId, fixtureProfile }) => {
       let currentRunId = runId;
+      let currentPiSessionId = "pi_session_pending";
       const root = path.join(options.tasksRoot, taskId);
       await prepareTaskRoot(options.repositoryRoot, root, fixtureProfile);
       const workspace = await createTaskWorkspace({
@@ -79,11 +80,18 @@ export function createPhase1ExperimentalRuntime(
             client,
             taskId,
             runId: () => currentRunId,
+            piSessionId: () => currentPiSessionId,
+            onDiagnostic: (diagnostic) => {
+              console.info("tool.dataset_build", diagnostic);
+            },
           }),
         ],
         setRunId: (nextRunId: string) => {
           currentRunId = nextRunId;
           workspace.setRunId(nextRunId);
+        },
+        setPiSessionId: (piSessionId: string) => {
+          currentPiSessionId = piSessionId;
         },
         activeCommandCount: () => workspace.activeCommandCount,
         dispose: () => workspace.dispose(),

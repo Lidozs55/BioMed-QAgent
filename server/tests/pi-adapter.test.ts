@@ -224,6 +224,30 @@ describe("PiAgentAdapter", () => {
     expect(events).not.toContainEqual({ type: "turn_completed" });
   });
 
+  test("reports upstream abort rejection as failure instead of cancellation", async () => {
+    const upstream = new FakeUpstreamSession();
+    const pending = deferred<void>();
+    upstream.promptImplementation = () => pending.promise;
+    upstream.abort.mockRejectedValue(new Error("provider abort failed"));
+    const session = await new PiAgentAdapter({
+      createUpstreamSession: async () => upstream,
+    }).createSession(sessionConfig);
+    const eventsPromise = collect(session.run("cancel me")).catch(
+      (reason: unknown) => reason,
+    );
+    await Promise.resolve();
+
+    await expect(session.cancel("user requested")).rejects.toMatchObject({
+      code: "UPSTREAM_FAILURE",
+    });
+    const result = await eventsPromise;
+
+    expect(result).toMatchObject({ code: "UPSTREAM_FAILURE" });
+    expect(result).not.toEqual(
+      expect.arrayContaining([{ type: "turn_cancelled", reason: "user requested" }]),
+    );
+  });
+
   test("aborts upstream work when the event consumer stops early", async () => {
     const upstream = new FakeUpstreamSession();
     const pending = deferred<void>();

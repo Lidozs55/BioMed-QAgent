@@ -7,6 +7,13 @@ import {
 import { datasetBuildSpec as spec } from "./dataset-bridge-fixture.js";
 
 describe("DatasetCoreClient", () => {
+  const identity = {
+    taskId: "task_1",
+    runId: "run_1",
+    piSessionId: "pi_1",
+    toolCallId: "tool_1",
+  } as const;
+
   test("requires a loopback target and validates response correlation", async () => {
     expect(() => new DatasetCoreClient({ baseUrl: "https://example.com", fetch: vi.fn() })).toThrow(/loopback/i);
     const fetch = vi.fn(async (_url: string, init: RequestInit) => {
@@ -19,9 +26,18 @@ describe("DatasetCoreClient", () => {
         error: null,
       }));
     });
-    const client = new DatasetCoreClient({ baseUrl: "http://127.0.0.1:8000", fetch, requestId: () => "request_1" });
+    const client = new DatasetCoreClient({ baseUrl: "http://127.0.0.1:8000", secret: "secret", fetch, requestId: () => "request_1" });
 
-    await expect(client.validate({ taskId: "task_1", runId: "run_1", spec })).rejects.toMatchObject({ code: "bridge_unavailable" });
+    await expect(client.validate({ ...identity, spec })).rejects.toMatchObject({ code: "bridge_unavailable" });
+  });
+
+  test("requires a non-empty bridge secret", () => {
+    expect(
+      () => new DatasetCoreClient({ baseUrl: "http://127.0.0.1:8000" }),
+    ).toThrow(/bridge secret/i);
+    expect(
+      () => new DatasetCoreClient({ baseUrl: "http://127.0.0.1:8000", secret: "  " }),
+    ).toThrow(/bridge secret/i);
   });
 
   test("maps transport failures to bridge_unavailable", async () => {
@@ -30,12 +46,13 @@ describe("DatasetCoreClient", () => {
     });
     const client = new DatasetCoreClient({
       baseUrl: "http://127.0.0.1:8000",
+      secret: "secret",
       fetch,
       requestId: () => "request_unavailable",
     });
 
     await expect(
-      client.validate({ taskId: "task_1", runId: "run_1", spec }),
+      client.validate({ ...identity, spec }),
     ).rejects.toMatchObject({ code: "bridge_unavailable" });
   });
 
@@ -45,7 +62,7 @@ describe("DatasetCoreClient", () => {
       data: { valid: true, reason_codes: [], reasons: [] }, error: null,
     })));
     const client = new DatasetCoreClient({ baseUrl: "http://localhost:8000", secret: "secret", fetch, requestId: () => "request_1" });
-    await client.validate({ taskId: "task_1", runId: "run_1", spec });
+    await client.validate({ ...identity, spec });
 
     expect(fetch).toHaveBeenCalledWith(
       "http://localhost:8000/internal/migration/pi/dataset/operations",
@@ -66,10 +83,10 @@ describe("DatasetCoreClient", () => {
       }
       return original;
     });
-    const client = new DatasetCoreClient({ baseUrl: "http://127.0.0.1:8000", fetch, requestId: () => "request_cancel", cancellationTimeoutMs: 1000 });
+    const client = new DatasetCoreClient({ baseUrl: "http://127.0.0.1:8000", secret: "secret", fetch, requestId: () => "request_cancel", cancellationTimeoutMs: 1000 });
     const controller = new AbortController();
     const result = client.execute({
-      taskId: "task_1", runId: "run_1", spec,
+      ...identity, spec,
       sourceFiles: { binding: "source_assets/file.tsv" }, mappingFiles: {}, signal: controller.signal,
     });
     controller.abort();
@@ -83,12 +100,47 @@ describe("DatasetCoreClient", () => {
       if (url.endsWith("/cancel")) return new Response("{}", { status: 202 });
       return new Promise<Response>(() => undefined);
     });
-    const client = new DatasetCoreClient({ baseUrl: "http://127.0.0.1:8000", fetch, requestId: () => "request_timeout", cancellationTimeoutMs: 5 });
+    const client = new DatasetCoreClient({ baseUrl: "http://127.0.0.1:8000", secret: "secret", fetch, requestId: () => "request_timeout", cancellationTimeoutMs: 5 });
     const controller = new AbortController();
-    const result = client.execute({ taskId: "task_1", runId: "run_1", spec, sourceFiles: {}, mappingFiles: {}, signal: controller.signal });
+    const result = client.execute({ ...identity, spec, sourceFiles: {}, mappingFiles: {}, signal: controller.signal });
     controller.abort();
     const error = await result.catch((reason: unknown) => reason);
     expect(error).toBeInstanceOf(DatasetCoreBridgeError);
     expect(error).toMatchObject({ code: "bridge_unavailable" });
+  });
+
+  test("sends complete cross-layer correlation in the request envelope", async () => {
+    const fetch = vi.fn(async (_url: string, init: RequestInit) => {
+      const request = JSON.parse(String(init.body));
+      return new Response(JSON.stringify({
+        version: 1,
+        request_id: request.request_id,
+        ok: true,
+        data: { valid: true, reason_codes: [], reasons: [] },
+        error: null,
+      }));
+    });
+    const client = new DatasetCoreClient({
+      baseUrl: "http://127.0.0.1:8000",
+      secret: "secret",
+      fetch,
+      requestId: () => "request_correlated",
+    });
+
+    await client.validate({
+      taskId: "task_1",
+      runId: "run_1",
+      piSessionId: "pi_1",
+      toolCallId: "tool_1",
+      spec,
+    });
+
+    expect(JSON.parse(String(fetch.mock.calls[0]?.[1].body))).toMatchObject({
+      request_id: "request_correlated",
+      task_id: "task_1",
+      run_id: "run_1",
+      pi_session_id: "pi_1",
+      tool_call_id: "tool_1",
+    });
   });
 });

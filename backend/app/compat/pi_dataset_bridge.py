@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections.abc import Callable
+from hmac import compare_digest
 from pathlib import PurePosixPath
+from time import monotonic
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Request
@@ -31,6 +34,7 @@ _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 _MAX_ACTIVE_REQUESTS = 128
 _MAX_REASON_ITEMS = 32
 _MAX_REASON_LENGTH = 512
+logger = logging.getLogger(__name__)
 
 
 class _StrictModel(BaseModel):
@@ -69,8 +73,16 @@ class _RequestBase(_StrictModel):
     request_id: str
     task_id: str
     run_id: str
+    pi_session_id: str
+    tool_call_id: str
 
-    @field_validator("request_id", "task_id", "run_id")
+    @field_validator(
+        "request_id",
+        "task_id",
+        "run_id",
+        "pi_session_id",
+        "tool_call_id",
+    )
     @classmethod
     def validate_id(cls, value: str) -> str:
         if _SAFE_ID.fullmatch(value) is None:
@@ -205,7 +217,7 @@ class PiDatasetBridge:
         registry: ActiveBridgeRequestRegistry | None = None,
     ) -> None:
         self._context_factory = context_factory
-        self.secret = secret if secret else None
+        self.secret = secret if secret is not None and secret.strip() else None
         self._registry = registry or ActiveBridgeRequestRegistry()
 
     @property
@@ -239,6 +251,7 @@ class PiDatasetBridge:
             )
 
         context = self._context_factory(request.task_id)
+        context.bind_managed_run(request.run_id)
         if isinstance(request, GetBuildRequest):
             try:
                 lookup = get_build_result(context, request.args.build_id)
@@ -495,8 +508,44 @@ def _authorized(request: Request, service: PiDatasetBridge) -> bool:
     if not _is_loopback(request.client.host if request.client else None):
         return False
     if service.secret is None:
-        return True
-    return request.headers.get(BRIDGE_SECRET_HEADER) == service.secret
+        return False
+    supplied = request.headers.get(BRIDGE_SECRET_HEADER)
+    return supplied is not None and compare_digest(supplied, service.secret)
+
+
+def _response_build_id(response: BridgeResponse) -> str | None:
+    if isinstance(response.data, BridgeBuildData):
+        return response.data.build_id
+    if response.error is not None:
+        return response.error.details.build_id
+    return None
+
+
+def _log_response(
+    request: BridgeRequest,
+    response: BridgeResponse,
+    started: float,
+) -> None:
+    build_id = _response_build_id(response)
+    if build_id is None and isinstance(request, (ExecuteRequest, GetBuildRequest)):
+        build_id = (
+            request.args.spec.build_id
+            if isinstance(request, ExecuteRequest)
+            else request.args.build_id
+        )
+    logger.info(
+        "legacy.bridge.response",
+        extra={
+            "request_id": request.request_id,
+            "task_id": request.task_id,
+            "run_id": request.run_id,
+            "pi_session_id": request.pi_session_id,
+            "tool_call_id": request.tool_call_id,
+            "build_id": build_id,
+            "duration_ms": max(0, round((monotonic() - started) * 1000)),
+            "outcome": "ok" if response.ok else response.error.code,
+        },
+    )
 
 
 @router.post("/operations")
@@ -525,7 +574,10 @@ async def invoke_operation(request: Request) -> JSONResponse:
             ),
             status=400,
         )
-    return _response(await service.handle(parsed))
+    started = monotonic()
+    response = await service.handle(parsed)
+    _log_response(parsed, response, started)
+    return _response(response)
 
 
 @router.post("/requests/{request_id}/cancel", status_code=202)

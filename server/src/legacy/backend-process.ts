@@ -1,6 +1,7 @@
 import { once } from "node:events";
-import { type ChildProcess, spawn } from "node:child_process";
+import { execFile, type ChildProcess, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { createServer } from "node:net";
 import path from "node:path";
 
 export interface LegacyBackendOptions {
@@ -30,7 +31,9 @@ export interface LegacyBackendHandle {
 export interface LegacyBackendDependencies<Child = ChildProcess> {
   spawnChild: (input: SpawnChildInput) => Child;
   terminateChild: (child: Child) => Promise<void>;
-  waitUntilReady: (healthUrl: string) => Promise<void>;
+  waitUntilReady: (target: string, secret: string, child?: Child) => Promise<void>;
+  generateSecret?: () => string;
+  allocatePrivatePort?: () => Promise<number>;
 }
 
 function isLoopbackHostname(hostname: string): boolean {
@@ -77,7 +80,10 @@ export async function startLegacyBackend<Child>(
 ): Promise<LegacyBackendHandle> {
   if (options.legacyUrl !== undefined) {
     const target = requireLoopbackLegacyUrl(options.legacyUrl);
-    await dependencies.waitUntilReady(new URL("/api/v1/health", target).toString());
+    if (options.bridgeSecret === undefined || options.bridgeSecret.trim() === "") {
+      throw new Error("Attach mode requires a non-empty Dataset Core bridge secret");
+    }
+    await dependencies.waitUntilReady(target.origin, options.bridgeSecret);
     return {
       target: target.origin,
       owned: false,
@@ -92,8 +98,12 @@ export async function startLegacyBackend<Child>(
     platform === "win32"
       ? [".venv", "Scripts", "python.exe"]
       : [".venv", "bin", "python"];
-  const target = `http://127.0.0.1:${options.privatePort}`;
-  const bridgeSecret = options.bridgeSecret ?? randomBytes(32).toString("hex");
+  const privatePort = options.privatePort === 0
+    ? await (dependencies.allocatePrivatePort ?? allocateLoopbackPort)()
+    : options.privatePort;
+  const target = `http://127.0.0.1:${privatePort}`;
+  const bridgeSecret =
+    dependencies.generateSecret?.() ?? randomBytes(32).toString("hex");
   const child = dependencies.spawnChild({
     command: path.join(backendRoot, ...pythonRelative),
     args: [
@@ -103,14 +113,14 @@ export async function startLegacyBackend<Child>(
       "--host",
       "127.0.0.1",
       "--port",
-      String(options.privatePort),
+      String(privatePort),
     ],
     cwd: backendRoot,
     environment: { PI_DATASET_BRIDGE_SECRET: bridgeSecret },
   });
   const close = onceAsync(() => dependencies.terminateChild(child));
   try {
-    await dependencies.waitUntilReady(`${target}/api/v1/health`);
+    await dependencies.waitUntilReady(target, bridgeSecret, child);
   } catch (error) {
     await close();
     throw error;
@@ -122,21 +132,92 @@ function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+export function allocateLoopbackPort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (address === null || typeof address === "string") {
+        server.close();
+        reject(new Error("Could not allocate a private legacy backend port"));
+        return;
+      }
+      server.close((error) => {
+        if (error !== undefined) reject(error);
+        else resolve(address.port);
+      });
+    });
+  });
+}
+
 export async function waitForLegacyReadiness(
-  healthUrl: string,
+  target: string,
+  secret: string,
   timeoutMs: number,
+  child?: ChildProcess,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   let lastError: unknown;
+  let childExit: Promise<{ code: number | null; signal: NodeJS.Signals | null }> | undefined;
+  if (child !== undefined) {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      throw new Error(
+        `Legacy backend exited before readiness (code=${String(child.exitCode)}, ` +
+          `signal=${String(child.signalCode)})`,
+      );
+    }
+    childExit = once(child, "exit").then(([code, signal]) => ({
+      code: typeof code === "number" ? code : null,
+      signal: typeof signal === "string" ? signal as NodeJS.Signals : null,
+    }));
+  }
   while (Date.now() < deadline) {
     const remaining = deadline - Date.now();
     try {
-      const response = await fetch(healthUrl, {
-        signal: AbortSignal.timeout(Math.max(1, Math.min(1_000, remaining))),
-      });
-      if (response.ok) return;
-      lastError = new Error(`legacy health returned ${response.status}`);
+      const probe = fetch(
+        new URL("/internal/migration/pi/dataset/operations", target),
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-biomed-bridge-secret": secret,
+          },
+          body: JSON.stringify({
+            version: 1,
+            request_id: "readiness_probe",
+            task_id: "readiness_probe",
+            run_id: "readiness_probe",
+            pi_session_id: "readiness_probe",
+            tool_call_id: "readiness_probe",
+            op: "get_build_result",
+            args: { build_id: "readiness_probe" },
+          }),
+          signal: AbortSignal.timeout(Math.max(1, Math.min(1_000, remaining))),
+        },
+      );
+      const result = childExit === undefined
+        ? { kind: "response" as const, response: await probe }
+        : await Promise.race([
+            probe.then((response) => ({ kind: "response" as const, response })),
+            childExit.then(({ code, signal }) => ({
+              kind: "exit" as const,
+              code,
+              signal,
+            })),
+          ]);
+      if (result.kind === "exit") {
+        throw new Error(
+          `Legacy backend exited before readiness (code=${String(result.code)}, ` +
+            `signal=${String(result.signal)})`,
+        );
+      }
+      if (await acceptsReadinessProbe(result.response)) return;
+      lastError = new Error(`legacy identity probe returned ${result.response.status}`);
     } catch (error) {
+      if (error instanceof Error && error.message.includes("exited before readiness")) {
+        throw error;
+      }
       lastError = error;
     }
     await delay(Math.max(1, Math.min(100, deadline - Date.now())));
@@ -146,11 +227,29 @@ export async function waitForLegacyReadiness(
   });
 }
 
+async function acceptsReadinessProbe(response: Response): Promise<boolean> {
+  if (response.status !== 200) return false;
+  try {
+    const value: unknown = await response.json();
+    if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+    const record = value as Record<string, unknown>;
+    if (record.version !== 1 || record.request_id !== "readiness_probe" || record.ok !== false) {
+      return false;
+    }
+    const error = record.error;
+    return error !== null && typeof error === "object" && !Array.isArray(error) &&
+      (error as Record<string, unknown>).code === "invalid_input";
+  } catch {
+    return false;
+  }
+}
+
 export function spawnLegacyChild(input: SpawnChildInput): ChildProcess {
   return spawn(input.command, input.args, {
     cwd: input.cwd,
     stdio: "inherit",
     windowsHide: true,
+    detached: process.platform !== "win32",
     env: { ...process.env, ...input.environment },
   });
 }
@@ -168,16 +267,89 @@ async function waitForExit(child: ChildProcess, timeoutMs: number): Promise<void
   }
 }
 
+function execFileAsync(file: string, args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile(file, args, { windowsHide: true }, (error) => {
+      if (error === null) resolve();
+      else reject(error);
+    });
+  });
+}
+
+function windowsTreeTerminationScript(processId: number): string {
+  return [
+    `$rootPid = [int]${processId}`,
+    "$processes = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)",
+    "$children = @{}",
+    "foreach ($item in $processes) {",
+    "  $parent = [int]$item.ParentProcessId",
+    "  if (-not $children.ContainsKey($parent)) { $children[$parent] = @() }",
+    "  $children[$parent] += [int]$item.ProcessId",
+    "}",
+    "$pending = [System.Collections.Generic.Stack[int]]::new()",
+    "$pending.Push($rootPid)",
+    "$targets = [System.Collections.Generic.List[int]]::new()",
+    "while ($pending.Count -gt 0) {",
+    "  $current = $pending.Pop()",
+    "  if ($children.ContainsKey($current)) {",
+    "    foreach ($childPid in $children[$current]) {",
+    "      $targets.Add($childPid)",
+    "      $pending.Push($childPid)",
+    "    }",
+    "  }",
+    "}",
+    "[array]::Reverse($targets.ToArray())",
+    "foreach ($targetPid in $targets) {",
+    "  if (Get-Process -Id $targetPid -ErrorAction SilentlyContinue) {",
+    "    Stop-Process -Id $targetPid -Force -ErrorAction Stop",
+    "  }",
+    "}",
+    "if (Get-Process -Id $rootPid -ErrorAction SilentlyContinue) {",
+    "  Stop-Process -Id $rootPid -Force -ErrorAction Stop",
+    "}",
+  ].join("\n");
+}
+
+async function terminateWindowsTree(processId: number): Promise<void> {
+  try {
+    await execFileAsync("powershell.exe", [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      windowsTreeTerminationScript(processId),
+    ]);
+  } catch (error) {
+    const code = error !== null && typeof error === "object" && "code" in error
+      ? String(error.code)
+      : "";
+    if (code !== "128") throw error;
+  }
+}
+
 export async function terminateLegacyChild(
   child: ChildProcess,
   timeoutMs: number,
 ): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  child.kill("SIGTERM");
+  if (child.pid === undefined) return;
+  if (process.platform === "win32") {
+    await terminateWindowsTree(child.pid);
+    return;
+  }
+  const processGroup = -child.pid;
+  try {
+    process.kill(processGroup, "SIGTERM");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+    return;
+  }
   try {
     await waitForExit(child, timeoutMs);
   } catch {
-    child.kill("SIGKILL");
+    try {
+      process.kill(processGroup, "SIGKILL");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+    }
     await waitForExit(child, timeoutMs);
   }
 }
@@ -188,6 +360,8 @@ export function createLegacyBackend(options: LegacyBackendOptions): Promise<Lega
   return startLegacyBackend(options, {
     spawnChild: spawnLegacyChild,
     terminateChild: (child) => terminateLegacyChild(child, shutdownTimeoutMs),
-    waitUntilReady: (healthUrl) => waitForLegacyReadiness(healthUrl, readinessTimeoutMs),
+    waitUntilReady: (target, secret, child) =>
+      waitForLegacyReadiness(target, secret, readinessTimeoutMs, child),
+    allocatePrivatePort: allocateLoopbackPort,
   });
 }

@@ -18,6 +18,7 @@ describe("Pi DatasetBuild tools", () => {
       client: { validate, execute },
       taskId: "task_tool",
       runId: () => "run_tool",
+      piSessionId: () => "pi_tool",
     });
     const controller = new AbortController();
 
@@ -28,8 +29,16 @@ describe("Pi DatasetBuild tools", () => {
       { toolCallId: "call_execute" },
     );
 
-    expect(validate).toHaveBeenCalledWith(expect.objectContaining({ signal: controller.signal }));
-    expect(execute).toHaveBeenCalledWith(expect.objectContaining({ signal: controller.signal }));
+    expect(validate).toHaveBeenCalledWith(expect.objectContaining({
+      signal: controller.signal,
+      piSessionId: "pi_tool",
+      toolCallId: "call_validate",
+    }));
+    expect(execute).toHaveBeenCalledWith(expect.objectContaining({
+      signal: controller.signal,
+      piSessionId: "pi_tool",
+      toolCallId: "call_execute",
+    }));
     expect(result).toMatchObject({ isError: true, details: { code: "no_data" } });
   });
 
@@ -41,7 +50,7 @@ describe("Pi DatasetBuild tools", () => {
     const execute = vi.fn();
     const diagnostic = vi.fn();
     const tools = createDatasetBuildTools({
-      client: { validate, execute }, taskId: "task_tool", runId: () => "run_tool", onDiagnostic: diagnostic,
+      client: { validate, execute }, taskId: "task_tool", runId: () => "run_tool", piSessionId: () => "pi_tool", onDiagnostic: diagnostic,
     });
     const result = await tools[1]!.execute(
       { spec, source_files: {}, mapping_files: {} },
@@ -51,6 +60,13 @@ describe("Pi DatasetBuild tools", () => {
 
     expect(execute).not.toHaveBeenCalled();
     expect(result).toMatchObject({ isError: true, details: { code: "spec_rejected" } });
-    expect(diagnostic).toHaveBeenCalledWith(expect.objectContaining({ toolCallId: "x".repeat(128), toolName: "execute_dataset_build", requestId: "request_reject" }));
+    expect(diagnostic).toHaveBeenCalledWith(expect.objectContaining({
+      taskId: "task_tool",
+      runId: "run_tool",
+      piSessionId: "pi_tool",
+      toolCallId: "x".repeat(128),
+      toolName: "execute_dataset_build",
+      requestId: "request_reject",
+    }));
   });
 });

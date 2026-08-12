@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import shutil
 from pathlib import Path
 
@@ -25,6 +26,7 @@ from app.pipeline.dataset_build_tool import (
 FIXTURES = Path(__file__).parent / "fixtures"
 REPO_ROOT = Path(__file__).parents[2]
 GOLDEN_ROOT = REPO_ROOT / "tests" / "migration" / "golden"
+BRIDGE_SECRET = "bridge-secret"
 
 
 def _spec(*, build_id: str = "build_bridge", schema_ref: str = "gene_expression.long.v1") -> dict[str, object]:
@@ -73,9 +75,26 @@ def _request(
         "request_id": request_id,
         "task_id": task_id,
         "run_id": "run_bridge",
+        "pi_session_id": "pi_bridge",
+        "tool_call_id": "tool_bridge",
         "op": op,
         "args": args,
     }
+
+
+def _settings(tmp_path: Path) -> Settings:
+    return Settings(
+        output_dir=str(tmp_path / "output"),
+        pi_dataset_bridge_secret=BRIDGE_SECRET,
+    )
+
+
+def _client(application, *, host: str = "127.0.0.1") -> httpx.AsyncClient:  # type: ignore[no-untyped-def]
+    return httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application, client=(host, 5000)),
+        base_url="http://localhost",
+        headers={BRIDGE_SECRET_HEADER: BRIDGE_SECRET},
+    )
 
 
 @pytest.mark.asyncio
@@ -103,13 +122,89 @@ async def test_bridge_requires_loopback_and_configured_secret(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_bridge_validates_strict_dto_and_spec_rejection(tmp_path: Path) -> None:
+async def test_bridge_rejects_loopback_requests_when_secret_is_not_configured(
+    tmp_path: Path,
+) -> None:
     application = create_app(Settings(output_dir=str(tmp_path / "output")))
+    async with application.router.lifespan_context(application), httpx.AsyncClient(
+        transport=httpx.ASGITransport(
+            app=application,
+            client=("127.0.0.1", 5000),
+        ),
+        base_url="http://localhost",
+    ) as client:
+        response = await client.post(
+            "/internal/migration/pi/dataset/operations",
+            json=_request("validate_dataset_build_spec", {"spec": _spec()}),
+        )
+
+        assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_bridge_binds_outer_run_and_logs_bounded_correlation(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.compat import pi_dataset_bridge
+    from app.datasets.service import DatasetBuildExecutionError
+
+    observed_run_ids: list[str | None] = []
+
+    async def observe(run_ctx, spec, source_files, mapping_files):  # type: ignore[no-untyped-def]
+        del spec, source_files, mapping_files
+        observed_run_ids.append(run_ctx.managed_run_id)
+        return DatasetBuildExecutionError(message="failed", retryable=False)
+
+    monkeypatch.setattr(pi_dataset_bridge, "execute_dataset_build", observe)
+    application = create_app(
+        Settings(
+            output_dir=str(tmp_path / "output"),
+            pi_dataset_bridge_secret="bridge-secret",
+        )
+    )
+    caplog.set_level(logging.INFO, logger="app.compat.pi_dataset_bridge")
+    async with application.router.lifespan_context(application), httpx.AsyncClient(
+        transport=httpx.ASGITransport(
+            app=application,
+            client=("127.0.0.1", 5000),
+        ),
+        base_url="http://localhost",
+        headers={BRIDGE_SECRET_HEADER: "bridge-secret"},
+    ) as client:
+        response = await client.post(
+            "/internal/migration/pi/dataset/operations",
+            json={
+                **_request(
+                    "execute_dataset_build",
+                    {"spec": _spec(), "source_files": {}, "mapping_files": {}},
+                    request_id="request_correlated",
+                ),
+                "pi_session_id": "pi_session_correlated",
+                "tool_call_id": "tool_call_correlated",
+            },
+        )
+
+    assert response.json()["error"]["code"] == "core_execution_error"
+    assert observed_run_ids == ["run_bridge"]
+    record = next(
+        record for record in caplog.records if record.getMessage() == "legacy.bridge.response"
+    )
+    assert record.request_id == "request_correlated"
+    assert record.task_id == "task_bridge"
+    assert record.run_id == "run_bridge"
+    assert record.pi_session_id == "pi_session_correlated"
+    assert record.tool_call_id == "tool_call_correlated"
+    assert record.outcome == "core_execution_error"
+    assert record.duration_ms >= 0
+
+
+@pytest.mark.asyncio
+async def test_bridge_validates_strict_dto_and_spec_rejection(tmp_path: Path) -> None:
+    application = create_app(_settings(tmp_path))
     async with application.router.lifespan_context(application):
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=application, client=("::1", 5000)),
-            base_url="http://localhost",
-        ) as client:
+        async with _client(application, host="::1") as client:
             rejected = await client.post(
                 "/internal/migration/pi/dataset/operations",
                 json=_request("validate_dataset_build_spec", {"spec": _spec(schema_ref="unknown.schema.v1")}),
@@ -171,14 +266,11 @@ async def test_bridge_validates_strict_dto_and_spec_rejection(tmp_path: Path) ->
 
 @pytest.mark.asyncio
 async def test_bridge_executes_and_returns_logical_read_only_refs(tmp_path: Path) -> None:
-    application = create_app(Settings(output_dir=str(tmp_path / "output")))
+    application = create_app(_settings(tmp_path))
     async with application.router.lifespan_context(application):
         context = application.state.task_context_factory("task_bridge")
         shutil.copy(FIXTURES / "gdc" / "gdc_expression.tsv", context.work_dir.source_asset_file("gdc.tsv"))
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=application, client=("127.0.0.1", 5000)),
-            base_url="http://localhost",
-        ) as client:
+        async with _client(application) as client:
             response = await client.post(
                 "/internal/migration/pi/dataset/operations",
                 json=_request("execute_dataset_build", {
@@ -215,11 +307,8 @@ async def test_bridge_executes_and_returns_logical_read_only_refs(tmp_path: Path
 @pytest.mark.asyncio
 @pytest.mark.parametrize("source_ref", ["../escape.tsv", "C:/secret.tsv", "/etc/passwd"])
 async def test_bridge_rejects_non_task_relative_sources_without_publication(tmp_path: Path, source_ref: str) -> None:
-    application = create_app(Settings(output_dir=str(tmp_path / "output")))
-    async with application.router.lifespan_context(application), httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=application, client=("127.0.0.1", 5000)),
-        base_url="http://localhost",
-    ) as client:
+    application = create_app(_settings(tmp_path))
+    async with application.router.lifespan_context(application), _client(application) as client:
         response = await client.post(
             "/internal/migration/pi/dataset/operations",
             json=_request("execute_dataset_build", {
@@ -234,7 +323,7 @@ async def test_bridge_rejects_non_task_relative_sources_without_publication(tmp_
 
 @pytest.mark.asyncio
 async def test_bridge_rejects_source_symlink_escape_without_publication(tmp_path: Path) -> None:
-    application = create_app(Settings(output_dir=str(tmp_path / "output")))
+    application = create_app(_settings(tmp_path))
     async with application.router.lifespan_context(application):
         context = application.state.task_context_factory("task_bridge")
         outside = tmp_path / "outside.tsv"
@@ -244,10 +333,7 @@ async def test_bridge_rejects_source_symlink_escape_without_publication(tmp_path
             linked.symlink_to(outside)
         except OSError as error:
             pytest.skip(f"symlink creation is unavailable: {error}")
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=application, client=("127.0.0.1", 5000)),
-            base_url="http://localhost",
-        ) as client:
+        async with _client(application) as client:
             response = await client.post(
                 "/internal/migration/pi/dataset/operations",
                 json=_request(
@@ -274,11 +360,8 @@ async def test_bridge_bounds_core_exception_without_leaking_details(
         raise RuntimeError(f"secret-token at {tmp_path}")
 
     monkeypatch.setattr(pi_dataset_bridge, "execute_dataset_build", explode)
-    application = create_app(Settings(output_dir=str(tmp_path / "output")))
-    async with application.router.lifespan_context(application), httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=application, client=("127.0.0.1", 5000)),
-        base_url="http://localhost",
-    ) as client:
+    application = create_app(_settings(tmp_path))
+    async with application.router.lifespan_context(application), _client(application) as client:
         response = await client.post(
             "/internal/migration/pi/dataset/operations",
             json=_request(
@@ -311,12 +394,9 @@ async def test_cancel_side_channel_waits_for_core_observation_and_registry_clean
         return DatasetBuildExecutionError(message="build ended with status cancelled", retryable=False)
 
     monkeypatch.setattr(pi_dataset_bridge, "execute_dataset_build", cooperative)
-    application = create_app(Settings(output_dir=str(tmp_path / "output")))
+    application = create_app(_settings(tmp_path))
     async with application.router.lifespan_context(application):
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=application, client=("127.0.0.1", 5000)),
-            base_url="http://localhost",
-        ) as client:
+        async with _client(application) as client:
             original = asyncio.create_task(client.post(
                 "/internal/migration/pi/dataset/operations",
                 json=_request("execute_dataset_build", {
@@ -350,17 +430,14 @@ async def test_cancel_side_channel_interrupts_real_core_before_publication(
         return result
 
     monkeypatch.setattr(ExpressionBuildRunner, "_validate_profile", held_validate)
-    application = create_app(Settings(output_dir=str(tmp_path / "output")))
+    application = create_app(_settings(tmp_path))
     async with application.router.lifespan_context(application):
         context = application.state.task_context_factory("task_real_cancel")
         shutil.copy(
             FIXTURES / "gdc" / "gdc_expression.tsv",
             context.work_dir.source_asset_file("gdc.tsv"),
         )
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=application, client=("127.0.0.1", 5000)),
-            base_url="http://localhost",
-        ) as client:
+        async with _client(application) as client:
             original = asyncio.create_task(client.post(
                 "/internal/migration/pi/dataset/operations",
                 json=_request(
@@ -413,11 +490,9 @@ async def test_bridge_rejects_active_request_id_collision_and_cleans_registry(tm
         return DatasetBuildExecutionError(message="cancelled", retryable=False)
 
     monkeypatch.setattr(pi_dataset_bridge, "execute_dataset_build", cooperative)
-    application = create_app(Settings(output_dir=str(tmp_path / "output")))
+    application = create_app(_settings(tmp_path))
     async with application.router.lifespan_context(application):
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=application, client=("127.0.0.1", 5000)), base_url="http://localhost",
-        ) as client:
+        async with _client(application) as client:
             payload = _request("execute_dataset_build", {
                 "spec": _spec(), "source_files": {"binding_gdc": "source_assets/gdc.tsv"}, "mapping_files": {},
             }, request_id="request_collision")
@@ -454,7 +529,7 @@ async def test_bridge_matches_legacy_function_tool_and_phase0d_goldens(
 ) -> None:
     golden = json.loads((GOLDEN_ROOT / outcome / "fixture.json").read_text("utf-8"))
     spec = golden["spec"]
-    application = create_app(Settings(output_dir=str(tmp_path / "output")))
+    application = create_app(_settings(tmp_path))
     async with application.router.lifespan_context(application):
         bridge_task = f"bridge_{outcome}"
         legacy_task = f"legacy_{outcome}"
@@ -478,10 +553,7 @@ async def test_bridge_matches_legacy_function_tool_and_phase0d_goldens(
             tool_call_id=f"legacy_{outcome}",
             tool_arguments="{}",
         )
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=application, client=("127.0.0.1", 5000)),
-            base_url="http://localhost",
-        ) as client:
+        async with _client(application) as client:
             if outcome == "spec_rejected":
                 bridge_response = await client.post(
                     "/internal/migration/pi/dataset/operations",

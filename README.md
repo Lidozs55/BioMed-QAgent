@@ -270,7 +270,7 @@ BioMed-QAgent/
 | `NCBI_TOOL`          | `BioMedQAgent`              | NCBI E-utilities tool 名称                      |
 | `NCBI_API_KEY`       | 空                            | 可选的 NCBI API Key                             |
 | `HOST` / `PORT`      | `127.0.0.1` / `5173`        | TS Host 唯一公开监听地址                        |
-| `LEGACY_BACKEND_PORT` | `8000`                     | Host 管理的 private loopback FastAPI 端口       |
+| `LEGACY_BACKEND_PORT` | `0`                        | Host 动态分配的 private loopback FastAPI 端口；调试时可固定 |
 | `APP_HOST` / `AGENT_RUNTIME` / `DATASET_CORE` | `ts` / `legacy` / `python` | Phase 1 正常权威组合 |
 | `PI_EXPERIMENTAL`    | `1`                         | 仅暴露非 durable `/experimental/pi/*`           |
 | `PI_PROVIDER` / `PI_MODEL` | `dashscope` / `MODEL_NAME` | Pi provider 与模型选择                    |
@@ -331,9 +331,10 @@ pnpm build      # tsc -b && vite build
 建议按以下顺序阅读：
 
 1. [docs/DEVELOPER_QUICKSTART.md](docs/DEVELOPER_QUICKSTART.md)：环境配置、启动和常见问题；
-2. [AGENTS.md](AGENTS.md)：代码规范、工作流和质量门禁；
-3. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)：系统边界、事件模型和数据契约；
-4. [docs/TODO.md](docs/TODO.md)：当前未完成工作与已批准决策；
+2. [docs/migration/ENVIRONMENT_MIGRATION.md](docs/migration/ENVIRONMENT_MIGRATION.md)：从旧双入口环境迁移到 root pnpm Workspace 与单 Host；
+3. [AGENTS.md](AGENTS.md)：代码规范、工作流和质量门禁；
+4. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)：系统边界、事件模型和数据契约；
+5. [docs/TODO.md](docs/TODO.md)：当前未完成工作与已批准决策；
 5. [PROBLEM.md](PROBLEM.md)：项目背景与评测要求。
 
 ## 桌面打包
@@ -369,6 +370,7 @@ pyinstaller --onefile --name BioMed-QAgent --add-data "dist;dist" --hidden-impor
 | ----------------------------------------------------------- | --------------------------------------- |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)                 | 权威架构、数据流、契约、事件和安全模型  |
 | [docs/DEVELOPER_QUICKSTART.md](docs/DEVELOPER_QUICKSTART.md) | 开发环境、启动、测试和 AI-Native 工作流 |
+| [docs/migration/ENVIRONMENT_MIGRATION.md](docs/migration/ENVIRONMENT_MIGRATION.md) | Phase 0/1 环境、配置和本地数据迁移 |
 | [docs/TODO.md](docs/TODO.md)                                 | P0/P1/P2 开发任务与架构决策             |
 | [PROBLEM.md](PROBLEM.md)                                     | 赛题背景、目标和评价标准                |
 | [backend/README.md](backend/README.md)                       | 后端 API、Skill、测试、打包与故障排查   |

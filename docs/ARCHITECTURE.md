@@ -100,7 +100,9 @@ Dataset Construction Runtime  (服务端固定构建骨架)
 ```
 
 Phase 1 的 internal Dataset Core bridge 仅接受 loopback + per-process secret，且
-`/internal/migration/*` 不经 Host 公开代理。方括号步骤可以按来源并发；fan-out / fan-in 属于 Runtime 内部控制流，不形成 Agent
+未配置 secret 时 fail closed。managed Host 动态分配 private loopback 端口，并用
+本次 per-process secret 验证启动身份；`/internal/migration/*` 不经 Host 公开代理。
+方括号步骤可以按来源并发；fan-out / fan-in 属于 Runtime 内部控制流，不形成 Agent
 可编排 DAG，也不形成数据集级 Recipe。
 
 **保留自 V1 的可靠性内核**（见 §4）：SourceAsset、DownloadAttempt、内容 hash、
