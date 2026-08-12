@@ -8,6 +8,7 @@ export type ArtifactRole =
 
 /** One manifest-registered artifact of a V2 build (backend ManifestArtifactEntry). */
 export interface ManifestArtifactEntry {
+  schema_version?: "1.0";
   artifact_id: string;
   role: ArtifactRole;
   relative_path: string;

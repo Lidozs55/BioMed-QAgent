@@ -46,12 +46,14 @@ export type BuildResultStatus =
 
 /** Per-binding failure detail on a NO_DATA ``BuildResult`` (backend BindingFailureDetail, K2). */
 export interface BindingFailureDetail {
+  schema_version?: "1.0";
   binding_id: string;
   reason_code: string;
   message: string;
 }
 
 export interface BuildResult {
+  schema_version?: "1.0";
   status: BuildResultStatus;
   valid_row_count: number;
   successful_sources: string[];
@@ -69,6 +71,7 @@ export interface BuildResult {
 
 /** Immutable V2 dataset manifest summary (backend DatasetManifest). */
 export interface DatasetManifest {
+  schema_version?: "1.0";
   manifest_id: string;
   task_id: string;
   build_id: string;
@@ -87,6 +90,7 @@ export interface DatasetManifest {
 
 /** Immutable publication record of a V2 build (backend DatasetPublication). */
 export interface DatasetPublication {
+  schema_version?: "1.0";
   publication_id: string;
   manifest_ref: string;
   validation_result_ref: string;
