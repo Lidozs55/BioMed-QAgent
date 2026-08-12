@@ -215,11 +215,16 @@ class DurableTaskSession:
         selected = visible if limit is None else visible[-limit:] if limit else []
         return [copy.deepcopy(record["item"]) for record in selected]
 
-    async def add_items(self, items: list[TResponseInputItem]) -> None:
+    async def add_items(
+        self,
+        items: list[TResponseInputItem],
+    ) -> list[str]:
+        """Append items and return the projected message ids (empty if none)."""
+
         if not items:
-            return
+            return []
         normalized = [_json_item(item) for item in items]
-        await self._run_storage(self._add_items, normalized)
+        return await self._run_storage(self._add_items, normalized)
 
     async def add_run_input_once(self, run_id: str, input_value: str) -> bool:
         """Project one manager-owned Run input into history exactly once."""
@@ -378,7 +383,11 @@ class DurableTaskSession:
             highest_ordinal=highest_ordinal,
         )
 
-    def _add_items(self, items: list[dict[str, Any]]) -> None:
+    def _add_items(
+        self,
+        items: list[dict[str, Any]],
+    ) -> list[str]:
+        message_ids: list[str] = []
         with path_lock(self.path):
             active, highest_ordinal = self._replay()
             admitted = next(
@@ -396,10 +405,12 @@ class DurableTaskSession:
             records: list[dict[str, Any]] = []
             for offset, item in enumerate(items, start=1):
                 ordinal = highest_ordinal + offset
-                reconciles_admitted_input = bool(
-                    admitted is not None
-                    and not input_reconciled
-                    and _same_user_input(item, admitted["item"])
+                reconciles_admitted_input = (
+                    bool(
+                        admitted is not None
+                        and not input_reconciled
+                        and _same_user_input(item, admitted["item"])
+                    )
                 )
                 message = (
                     None
@@ -423,6 +434,8 @@ class DurableTaskSession:
                         else None
                     ),
                 }
+                if message is not None and message.message_id is not None:
+                    message_ids.append(message.message_id)
                 if reconciles_admitted_input:
                     record["sdk_input_copy_for"] = self.run_id
                     input_reconciled = True
@@ -430,6 +443,7 @@ class DurableTaskSession:
             append_jsonl_records(self.path, records)
             active.extend(records)
             self._remember(active, highest_ordinal + len(records))
+        return message_ids
 
     def _add_run_input_once(
         self,

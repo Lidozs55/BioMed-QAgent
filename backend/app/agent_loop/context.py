@@ -288,6 +288,12 @@ class RunContext:
         repr=False,
     )
     _model_settings_bound: bool = field(default=False, init=False, repr=False)
+    _pending_steer: list[str] = field(default_factory=list, init=False, repr=False)
+    _steer_lock: threading.Lock = field(
+        default_factory=threading.Lock,
+        init=False,
+        repr=False,
+    )
     _create_skill_runtime: CreateSkillRuntime | None = field(
         default=None,
         init=False,
@@ -356,6 +362,32 @@ class RunContext:
             raise RuntimeError("run model settings are already bound")
         self.model_settings = model_settings
         self._model_settings_bound = True
+
+    def request_steer(self, text: str) -> None:
+        """Signal the run loop to interrupt the current generation and continue
+        with new user input (already appended to the durable session).
+
+        This is a mid-run direction change: the run itself is NOT cancelled,
+        only the in-flight model stream is stopped so the next model call picks
+        up the steering message from the session history.
+        """
+
+        with self._steer_lock:
+            self._pending_steer.append(text)
+
+    def pending_steer(self) -> bool:
+        """Return True when a steering request is waiting to be consumed."""
+
+        with self._steer_lock:
+            return bool(self._pending_steer)
+
+    def take_pending_steer(self) -> list[str]:
+        """Consume and return all pending steering texts (signal only)."""
+
+        with self._steer_lock:
+            pending = self._pending_steer
+            self._pending_steer = []
+            return pending
 
     def bind_create_skill_runtime(self, runtime: CreateSkillRuntime) -> None:
         """Bind the trusted Recipe services available to this Run exactly once."""

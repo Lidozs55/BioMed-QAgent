@@ -505,11 +505,8 @@ def resolve_agent_instructions(base: str, run_ctx: RunContext) -> str:
     sources_section = _format_preferred_sources_section(run_ctx)
     search_section = _format_query_log_section(run_ctx)
     briefing_section = _format_progress_briefing_section(run_ctx)
-    return (
-        f"{base}\n\n---\n\n{personal_section}\n\n---\n\n"
-        f"{sources_section}\n\n---\n\n{search_section}"
-        f"\n\n---\n\n{briefing_section}"
-    )
+    sections = [base, personal_section, sources_section, search_section, briefing_section]
+    return "\n\n---\n\n".join(sections)
 
 
 def _make_instructions_fn(

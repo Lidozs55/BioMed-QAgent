@@ -52,6 +52,14 @@ export interface AdmissionOptions {
   requestId?: string;
 }
 
+export interface SteerResponse {
+  status: "steered";
+  task_id: string;
+  run_id: string;
+  message_id?: string | null;
+  content?: string | null;
+}
+
 export interface APIClient {
   fetchDatabases: () => Promise<DatabaseRecord[]>;
   fetchTasks: (params?: { limit?: number; cursor?: string | null }) => Promise<TaskPage>;
@@ -68,6 +76,11 @@ export interface APIClient {
     subagentId: string,
   ) => Promise<TaskSnapshot>;
   compactTask: (taskId: string) => Promise<void>;
+  injectTaskContext: (
+    taskId: string,
+    text: string,
+    expectedRunId?: string | null,
+  ) => Promise<SteerResponse>;
   resumeRun: (taskId: string, runId: string, input: ResumeRunInput) => Promise<TaskSnapshot>;
   deleteTask: (taskId: string) => Promise<void>;
   fetchArtifacts: (taskId: string) => Promise<ArtifactRecord[]>;
@@ -125,6 +138,26 @@ async function errorDetail(response: Response): Promise<unknown> {
   } catch {
     return response.statusText || `API request failed (${response.status})`;
   }
+}
+
+function parseSteerResponse(json: unknown): SteerResponse {
+  const obj = json as Record<string, unknown> | null;
+  if (
+    obj === null ||
+    typeof obj !== "object" ||
+    obj["status"] !== "steered" ||
+    typeof obj["task_id"] !== "string" ||
+    typeof obj["run_id"] !== "string"
+  ) {
+    throw new APIError(502, "Invalid steer response");
+  }
+  return {
+    status: "steered",
+    task_id: obj["task_id"],
+    run_id: obj["run_id"],
+    message_id: typeof obj["message_id"] === "string" ? obj["message_id"] : null,
+    content: typeof obj["content"] === "string" ? obj["content"] : null,
+  };
 }
 
 export function createAPIClient(options: APIClientOptions = {}): APIClient & SettingsAPIClient {
@@ -189,6 +222,15 @@ export function createAPIClient(options: APIClientOptions = {}): APIClient & Set
       request(`${baseUrl}/tasks/${encodeId(taskId)}/runs/${encodeId(runId)}/subagents/${encodeId(subagentId)}/cancel`, { method: "POST" }).then((b) => parseTaskSnapshot(b)),
     compactTask: (taskId) =>
       requestVoid(`${baseUrl}/tasks/${encodeId(taskId)}/compact`, { method: "POST" }),
+    injectTaskContext: (taskId, text, expectedRunId = null) =>
+      request(`${baseUrl}/tasks/${encodeId(taskId)}/inject-context`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text,
+          expected_run_id: expectedRunId,
+        }),
+      }).then((b) => parseSteerResponse(b)),
     resumeRun: (taskId, runId, input) =>
       request(`${baseUrl}/tasks/${encodeId(taskId)}/runs/${encodeId(runId)}/resume`, {
         method: "POST", headers: { "Content-Type": "application/json" },

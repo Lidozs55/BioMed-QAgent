@@ -238,6 +238,9 @@ class RunExecution:
 
         self._streaming_result = None
         self._stream_ready.clear()
+        # 新一轮流挂载后，取消通道重置，避免前一次 cancel（如中途转向）消耗掉
+        # 后续手动取消的能力。
+        self._cancel_sent = False
 
     def set_user_input_submitter(self, submitter: UserInputSubmitter) -> None:
         """Attach the executor-side resume channel (e.g. PipelineRunner)."""
@@ -474,13 +477,13 @@ class RunExecution:
     async def wait_until_drained(self) -> None:
         await self._drained.wait()
 
-    async def cancel_after_turn(self) -> None:
+    async def cancel_after_turn(self, *, immediate: bool = False) -> None:
         async with self._cancel_lock:
             if self._cancel_sent:
                 return
             streaming_result = await self.wait_for_streaming_result()
             if streaming_result is not None:
-                streaming_result.cancel("after_turn")
+                streaming_result.cancel("immediate" if immediate else "after_turn")
             self._cancel_sent = True
 
     def _mark_drained(self) -> None:
@@ -1082,12 +1085,35 @@ class TaskManager:
             )
         return accepted
 
+    async def request_steer(
+        self,
+        task_id: str,
+        run_id: str,
+        *,
+        text: str,
+    ) -> bool:
+        """Signal a live run to steer mid-generation without cancelling it.
+
+        The caller must have already appended the steering text to the durable
+        session.  This stops the current SDK stream (immediate) and flags the
+        run loop so its next model call continues from session history, keeping
+        the same run alive instead of cancel + restart.
+        """
+
+        execution = self._running.get((task_id, run_id))
+        if execution is None:
+            return False
+        execution.context.request_steer(text)
+        await execution.cancel_after_turn(immediate=True)
+        return True
+
     async def cancel_run(
         self,
         task_id: str,
         run_id: str,
         *,
         reason: str | None = None,
+        immediate: bool = False,
     ) -> TaskSnapshot:
         if not self._started or self._closing:
             raise RuntimeError("task manager is not running")
@@ -1104,7 +1130,7 @@ class TaskManager:
             self._cancellations_drained.clear()
         try:
             return await self._shield_and_drain_locked(
-                self._cancel_run(task_id, run_id, reason=reason)
+                self._cancel_run(task_id, run_id, reason=reason, immediate=immediate)
             )
         finally:
             self._active_cancellations.discard(caller)
@@ -1117,6 +1143,7 @@ class TaskManager:
         run_id: str,
         *,
         reason: str | None = None,
+        immediate: bool = False,
     ) -> TaskSnapshot:
         live_execution = self._running.get((task_id, run_id))
         if live_execution is not None:
@@ -1192,7 +1219,7 @@ class TaskManager:
                 )
                 return await self._require_snapshot(task_id)
 
-        await execution.cancel_after_turn()
+        await execution.cancel_after_turn(immediate=immediate)
         await execution.wait_until_drained()
         if execution.completion_abort_error is not None:
             raise RuntimeError("completion abort failed") from (

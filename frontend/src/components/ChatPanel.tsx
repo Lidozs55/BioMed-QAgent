@@ -8,6 +8,10 @@ import { toast } from "sonner";
 
 import { AgentComposer } from "@/components/AgentComposer";
 import { LoadingScreen } from "@/components/LoadingScreen";
+import {
+  QueuedMessages,
+  type QueuedMessage,
+} from "@/components/QueuedMessages";
 import { ConversationList } from "@/components/conversation/ConversationList";
 import { formatToolCall } from "@/components/conversation/toolLabels";
 import { operationDisplayLabel } from "@/components/conversation/operationMeta";
@@ -50,7 +54,7 @@ import {
   type FollowUpMode,
   usePreferencesStore,
 } from "@/stores/preferencesStore";
-import type { ModelInfo } from "@/hooks/useAPI";
+import type { ModelInfo, SteerResponse } from "@/hooks/useAPI";
 
 interface ChatPanelProps {
   startTask: (input: StartTaskInput) => Promise<TaskRunAccepted>;
@@ -69,6 +73,12 @@ interface ChatPanelProps {
   loadOlderMessages?: (taskId: string) => Promise<void>;
   /** Trigger context compaction on a task */
   compactTask?: (taskId: string) => Promise<void>;
+  /** Steer a short text into a task's active run (interrupt + regenerate) */
+  injectTaskContext?: (
+    taskId: string,
+    text: string,
+    expectedRunId?: string | null,
+  ) => Promise<SteerResponse>;
   /** Available models from settings */
   models?: ModelInfo[];
   /** Whether the user has configured an API key */
@@ -204,6 +214,7 @@ export function ChatPanel({
   resumeRun,
   loadOlderMessages,
   compactTask,
+  injectTaskContext,
   models,
   hasApiKey,
   onOpenSettings,
@@ -265,9 +276,12 @@ export function ChatPanel({
   const [continuationDrafts, setContinuationDrafts] = useState<Record<string, string>>({});
   const [continuationPendingByTask, setContinuationPendingByTask] = useState<Record<string, boolean>>({});
   const [continuationErrors, setContinuationErrors] = useState<Record<string, string>>({});
-  const [pendingFollowUps, setPendingFollowUps] = useState<
-    Record<string, { input: string; steer: boolean }>
+  const [queuedFollowUps, setQueuedFollowUps] = useState<
+    Record<string, QueuedMessage[]>
   >({});
+  const [steeringRuns, setSteeringRuns] = useState<Record<string, string | null>>(
+    {},
+  );
   const [olderMessagesPendingByTask, setOlderMessagesPendingByTask] = useState<Record<string, boolean>>({});
   const [olderMessagesErrors, setOlderMessagesErrors] = useState<Record<string, string>>({});
   // Sentinel observed while the conversation starts scrolled to the newest
@@ -301,14 +315,12 @@ export function ChatPanel({
     activeTask.summary.mode === "agent" &&
     continueTask !== undefined;
   const activeRunId = activeTask?.summary.active_run_id ?? null;
-  const pendingFollowUp =
-    activeTaskId === null ? undefined : pendingFollowUps[activeTaskId];
-  const steeringPending = pendingFollowUp?.steer === true;
+  const activeQueue =
+    activeTaskId === null ? [] : (queuedFollowUps[activeTaskId] ?? []);
   // 运行中也可以发送：加入队列等待当前回答结束，或调整方向取消并重引导。
   const continuationSendable =
     continuationEditable &&
     !continuationPending &&
-    !steeringPending &&
     (activeRunId === null
       ? latestRunIsTerminal(activeTask)
       : activeTask !== undefined);
@@ -412,6 +424,40 @@ export function ChatPanel({
     }
   };
 
+  const steerTask = useCallback(
+    async (taskId: string, text: string): Promise<boolean> => {
+      if (injectTaskContext === undefined) return false;
+      if (steeringRuns[taskId] !== undefined) return false;
+      const task = useAgentStore.getState().tasksById[taskId];
+      const activeRunId = task?.summary.active_run_id ?? null;
+      setSteeringRuns((current) => ({ ...current, [taskId]: activeRunId }));
+      try {
+        const response = await injectTaskContext(taskId, text, activeRunId);
+        if (response.message_id && response.content) {
+          // 中途转向：后端把标注后的文本写入会话，这里同步显示用户气泡，
+          // 使用后端的 message_id 保证刷新/拉历史时不会重复。
+          useAgentStore
+            .getState()
+            .appendSteerMessage(taskId, response.content, response.message_id);
+        }
+        toast.success("已调整方向，正在重新生成…");
+        return true;
+      } catch (error) {
+        toast.error("调整方向失败", {
+          description: errorMessage(error, "请稍后重试"),
+        });
+        return false;
+      } finally {
+        setSteeringRuns((current) => {
+          const next = { ...current };
+          delete next[taskId];
+          return next;
+        });
+      }
+    },
+    [injectTaskContext, steeringRuns],
+  );
+
   const sendContinuationWithMode = async (mode: FollowUpMode) => {
     if (
       !continuationSendable ||
@@ -425,15 +471,36 @@ export function ChatPanel({
     const input = continuationInput.trim();
     if (!input) return;
 
-    if (activeRunId !== null) {
-      setPendingFollowUps((current) => ({
-        ...current,
-        [taskId]: { input, steer: mode === "steer" },
-      }));
+    if (activeRunId !== null || activeQueue.length > 0) {
+      if (
+        mode === "steer" &&
+        activeRunId !== null &&
+        injectTaskContext !== undefined
+      ) {
+        const steered = await steerTask(taskId, input);
+        if (steered) {
+          setContinuationDrafts((current) =>
+            current[taskId] === input ? { ...current, [taskId]: "" } : current,
+          );
+        }
+        return;
+      }
+      const entry: QueuedMessage = { id: crypto.randomUUID(), input };
+      setQueuedFollowUps((current) => {
+        const queue = current[taskId] ?? [];
+        return {
+          ...current,
+          [taskId]: mode === "steer" ? [entry, ...queue] : [...queue, entry],
+        };
+      });
       setContinuationDrafts((current) =>
         current[taskId] === input ? { ...current, [taskId]: "" } : current,
       );
-      if (mode === "steer" && cancelRun !== undefined) {
+      if (
+        mode === "steer" &&
+        activeRunId !== null &&
+        cancelRun !== undefined
+      ) {
         try {
           await cancelRun(taskId, activeRunId);
         } catch (error) {
@@ -500,21 +567,84 @@ export function ChatPanel({
     [continueTask],
   );
 
-  // 队列 / 调整方向：当前回答结束后自动发送已暂存的消息。
+  const removeQueued = useCallback((taskId: string, messageId: string) => {
+    setQueuedFollowUps((current) => {
+      const queue = current[taskId] ?? [];
+      return {
+        ...current,
+        [taskId]: queue.filter((entry) => entry.id !== messageId),
+      };
+    });
+  }, []);
+
+  const editQueued = useCallback(
+    (taskId: string, messageId: string) => {
+      const entry = (queuedFollowUps[taskId] ?? []).find(
+        (item) => item.id === messageId,
+      );
+      if (entry === undefined) return;
+      setContinuationDrafts((current) => ({
+        ...current,
+        [taskId]: entry.input,
+      }));
+      removeQueued(taskId, messageId);
+    },
+    [queuedFollowUps, removeQueued],
+  );
+
+  const injectQueued = useCallback(
+    async (taskId: string, messageId: string) => {
+      const entry = (queuedFollowUps[taskId] ?? []).find(
+        (item) => item.id === messageId,
+      );
+      if (entry === undefined) return;
+      const steered = await steerTask(taskId, entry.input);
+      if (steered) {
+        removeQueued(taskId, messageId);
+      }
+    },
+    [queuedFollowUps, removeQueued, steerTask],
+  );
+
+  const reorderQueued = useCallback(
+    (taskId: string, fromIndex: number, toIndex: number) => {
+      setQueuedFollowUps((current) => {
+        const queue = [...(current[taskId] ?? [])];
+        if (
+          fromIndex < 0 ||
+          fromIndex >= queue.length ||
+          toIndex < 0 ||
+          toIndex >= queue.length
+        ) {
+          return current;
+        }
+        const [moved] = queue.splice(fromIndex, 1);
+        if (moved === undefined) return current;
+        queue.splice(toIndex, 0, moved);
+        return { ...current, [taskId]: queue };
+      });
+    },
+    [],
+  );
+
+  // 队列：当前回答结束后自动发送队首消息。
   useEffect(() => {
     if (activeTaskId === null || activeTask === undefined) return;
-    const pending = pendingFollowUps[activeTaskId];
-    if (pending === undefined) return;
+    // 调整方向请求在途时不要自动发送队首，避免与转向后的生成抢跑。
+    if (steeringRuns[activeTaskId] !== undefined) return;
+    const queue = queuedFollowUps[activeTaskId];
+    if (queue === undefined || queue.length === 0) return;
     if (activeTask.summary.active_run_id !== null || !latestRunIsTerminal(activeTask)) {
       return;
     }
-    setPendingFollowUps((current) => {
-      const next = { ...current };
-      delete next[activeTaskId];
-      return next;
-    });
-    void submitQueuedInput(activeTaskId, pending.input);
-  }, [activeTask, activeTaskId, pendingFollowUps, submitQueuedInput]);
+    const [first, ...rest] = queue;
+    if (first === undefined) return;
+    setQueuedFollowUps((current) => ({
+      ...current,
+      [activeTaskId]: rest,
+    }));
+    void submitQueuedInput(activeTaskId, first.input);
+  }, [activeTask, activeTaskId, queuedFollowUps, steeringRuns, submitQueuedInput]);
 
   const loadEarlierMessages = async () => {
     if (!hasOlderMessages || activeTaskId === null || loadOlderMessages === undefined || olderMessagesPending) return;
@@ -734,6 +864,36 @@ export function ChatPanel({
 
           <div className="shrink-0 bg-background px-4 pb-4 pt-2">
             <div className="mx-auto max-w-3xl">
+              {activeQueue.length > 0 && (
+                <div className="mb-2">
+                  <QueuedMessages
+                    entries={activeQueue}
+                    steering={
+                      activeTaskId !== null && steeringRuns[activeTaskId] !== undefined
+                    }
+                    onDelete={(messageId) => {
+                      if (activeTaskId !== null) {
+                        removeQueued(activeTaskId, messageId);
+                      }
+                    }}
+                    onEdit={(messageId) => {
+                      if (activeTaskId !== null) {
+                        editQueued(activeTaskId, messageId);
+                      }
+                    }}
+                    onInject={(messageId) => {
+                      if (activeTaskId !== null) {
+                        void injectQueued(activeTaskId, messageId);
+                      }
+                    }}
+                    onReorder={(from, to) => {
+                      if (activeTaskId !== null) {
+                        reorderQueued(activeTaskId, from, to);
+                      }
+                    }}
+                  />
+                </div>
+              )}
               <AgentComposer
                 value={continuationInput}
                 onChange={(value) => {
@@ -773,13 +933,6 @@ export function ChatPanel({
                 onCompact={handleCompact}
               />
               {continuationError && <p role="alert" className="mt-2 px-2 text-xs text-destructive">{continuationError}</p>}
-              {pendingFollowUp && (
-                <p role="status" className="mt-2 px-2 text-xs text-muted-foreground">
-                  {pendingFollowUp.steer
-                    ? "正在切换方向：已取消当前回答，新指令将自动发送…"
-                    : "已加入队列：当前回答结束后将自动发送。"}
-                </p>
-              )}
             </div>
           </div>
         </div>

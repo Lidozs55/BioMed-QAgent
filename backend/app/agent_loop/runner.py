@@ -1035,6 +1035,12 @@ class AgentRunExecutor:
             else None
         )
         while True:
+            # 中途转向：同一 run 内接续新指令。转向文本已由调用方写入
+            # durable session，这里清空 agent_input，让 SDK 从会话历史
+            # 直接生成下一轮，而不是取消 run / 开新 run。
+            steer_take = getattr(execution.context, "take_pending_steer", None)
+            if callable(steer_take) and steer_take():
+                agent_input = []
             # 用户指令（非空 agent_input：初始用户文本 / Qwen 重放）重置
             # 无进展计数；max_turns 续跑 (agent_input=[]) 不清零。
             if no_progress_detector is not None and agent_input:
@@ -1116,6 +1122,12 @@ class AgentRunExecutor:
                 # Session，进而生成重复 MessageRecord。
                 agent_input = []
                 continue
+            except asyncio.CancelledError:
+                steer_pending = getattr(execution.context, "pending_steer", None)
+                if callable(steer_pending) and steer_pending():
+                    # 被转向请求立即中断的当前生成：回环处理新指令。
+                    continue
+                raise
             except Exception as exc:
                 # Qwen 偶发返回非 JSON 的 function.arguments 导致 400。
                 # 重试时用原始 execution.input 从头跑,Qwen 通常会生成合法 JSON。
@@ -1162,6 +1174,11 @@ class AgentRunExecutor:
                 raise
             finally:
                 await text_buffer.flush()
+            # 转向请求刚刚立即中断了当前生成（SDK 正常结束当前流）：
+            # 跳过空输出重试与 usage 校准，直接回环让下一轮从会话历史继续。
+            steer_pending = getattr(execution.context, "pending_steer", None)
+            if callable(steer_pending) and steer_pending():
+                continue
             # 空输出恢复：Qwen 类模型偶发"仅 reasoning、无文本/工具调用"的
             # 回合（SDK 对无 MessageOutputItem 的响应把 final_output 置为
             # 空串），常见于工具报错后的瞬时抖动。重新提示继续，而不是

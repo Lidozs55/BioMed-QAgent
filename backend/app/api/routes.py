@@ -9,6 +9,7 @@ Endpoints:
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import hashlib
@@ -70,6 +71,7 @@ from app.domain.contracts.dataset_state import (
     BuildResult,
     BuildResultStatus,
 )
+from app.domain.contracts.ids import generate_prefixed_uuid
 from app.runtime.manager import (
     FixtureTaskContinuationError,
     RequestIdConflictError,
@@ -802,6 +804,141 @@ async def request_compaction(
     # Signal compaction via the manager's event system
     await manager.request_compaction(task_id, active_run_id)
     return {"status": "compaction_requested", "task_id": task_id, "run_id": active_run_id}
+
+
+class ContextInjectionRequest(BaseModel):
+    """Body for steering a short text into a task's active run."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(min_length=1, max_length=4000)
+    expected_run_id: str | None = Field(default=None, min_length=1)
+
+
+_STEER_TERMINAL_STATUSES = frozenset(
+    {
+        RunStatus.COMPLETED,
+        RunStatus.FAILED,
+        RunStatus.CANCELLED,
+        RunStatus.INTERRUPTED,
+    }
+)
+_STEER_MAX_ATTEMPTS = 3
+_STEER_FRAMING = (
+    "【方向调整】用户中断了上一次作答并调整了方向或做了补充。"
+    "请不要忘记上一次的任务内容，按照用户的内容继续作答或终止作答，"
+    "具体依照用户语义完成：\n"
+)
+
+
+def _resolve_steer_target(
+    snapshot: TaskSnapshot,
+    expected_run_id: str | None,
+) -> tuple[str | None, str | None]:
+    """Resolve which run a steer should cancel (Codex ``expectedTurnId``).
+
+    Returns ``(active_run_id_or_None, error_detail_or_None)``.  A stale
+    expectation is tolerated: when the pinned run is already terminal, the
+    steer re-targets whatever run is active, or starts a fresh run when the
+    task is idle.  A genuine mismatch (the pinned run is still live but is not
+    the active run) is reported as an error.
+    """
+
+    active_run_id = snapshot.task.active_run_id
+    if expected_run_id is None:
+        return active_run_id, None
+    if expected_run_id == active_run_id:
+        return active_run_id, None
+    expected_run = next(
+        (run for run in snapshot.runs if run.run_id == expected_run_id),
+        None,
+    )
+    if expected_run is None:
+        return None, (
+            f"expected active run {expected_run_id} "
+            f"but task has run {active_run_id}"
+        )
+    if expected_run.status not in _STEER_TERMINAL_STATUSES:
+        return None, (
+            f"expected active run {expected_run_id} "
+            f"but task has run {active_run_id}"
+        )
+    return active_run_id, None
+
+
+@router.post(
+    "/tasks/{task_id}/inject-context",
+    status_code=202,
+)
+async def inject_task_context(
+    task_id: str,
+    body: ContextInjectionRequest,
+    repository: TaskRepositoryDep,
+    manager: TaskManagerDep,
+) -> dict[str, str | int | None]:
+    """Steer the task's active run with an additional user instruction.
+
+    Mirrors Codex's ``turn/steer``: the labeled text is appended to the
+    *current* run's conversation and the in-flight model generation is
+    interrupted immediately, so the model continues on the same run along the
+    new direction -- no run cancellation, no restart, no loss of context.
+    When the task is idle, the labeled text is submitted as a new run.
+    """
+
+    labeled_text = f"{_STEER_FRAMING}{body.text}"
+    for attempt in range(_STEER_MAX_ATTEMPTS):
+        snapshot = await _require_snapshot(repository, task_id)
+        active_run_id, error_detail = _resolve_steer_target(
+            snapshot,
+            body.expected_run_id,
+        )
+        if error_detail is not None:
+            raise HTTPException(status_code=409, detail=error_detail)
+        if active_run_id is not None:
+            break
+        try:
+            accepted = await manager.submit_run(
+                task_id,
+                StartRunRequest(
+                    request_id=generate_prefixed_uuid("steer"),
+                    input=labeled_text,
+                ),
+            )
+            return {
+                "status": "steered",
+                "task_id": task_id,
+                "run_id": accepted.run_id,
+            }
+        except TaskRunConflictError:
+            # 空闲路径的提交被并发抢占：稍后重试，重试时改为中途转向新 run。
+            if attempt + 1 >= _STEER_MAX_ATTEMPTS:
+                break
+            await asyncio.sleep(0.15 * (attempt + 1))
+    if active_run_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Task already has an active run; please retry",
+        )
+    # 中途转向：把标注后的调整文本写入会话，并立即中断当前生成。
+    # run 本身不取消，下一轮模型调用会从会话历史接续。
+    session = repository.task_session(task_id)
+    message_ids = await session.add_items(
+        [{"role": "user", "content": labeled_text}]
+    )
+    steered = await manager.request_steer(
+        task_id,
+        active_run_id,
+        text=labeled_text,
+    )
+    if not steered:
+        raise HTTPException(status_code=409, detail="Run is no longer active")
+    return {
+        "status": "steered",
+        "task_id": task_id,
+        "run_id": active_run_id,
+        "message_id": message_ids[0] if message_ids else None,
+        "content": labeled_text,
+    }
 
 
 @router.get("/tasks/{task_id}/messages", response_model=MessagePage)
