@@ -1,4 +1,5 @@
 import type {
+  BuildResult,
   DatasetBridgeResponse,
   DatasetBuildSpec,
 } from "@biomed/contracts";
@@ -31,6 +32,7 @@ export interface DatasetBuildToolOptions {
   runId: () => string;
   piSessionId: () => string;
   onDiagnostic?: (diagnostic: DatasetBuildToolDiagnostic) => void;
+  onBuildResult?: (result: BuildResult | null) => void;
   now?: () => number;
 }
 
@@ -107,6 +109,40 @@ function caught(error: unknown): BioMedToolResult {
   };
 }
 
+function captureBuildResult(
+  options: DatasetBuildToolOptions,
+  response: DatasetBridgeResponse,
+): void {
+  if (response.ok) {
+    if ("build_result" in response.data) options.onBuildResult?.(response.data.build_result);
+    return;
+  }
+  if (response.error.details.build_result !== undefined) {
+    options.onBuildResult?.(response.error.details.build_result);
+  }
+}
+
+function captureSpecRejected(
+  options: DatasetBuildToolOptions,
+  response: DatasetBridgeResponse,
+  buildId: string,
+): void {
+  if (response.ok || response.error.code !== "spec_rejected") return;
+  const reasonCodes = response.error.details.reason_codes ?? [];
+  options.onBuildResult?.({
+    status: "spec_rejected",
+    valid_row_count: 0,
+    successful_sources: [],
+    rejected_sources: [],
+    available_artifact_roles: [],
+    publication_id: null,
+    reason_codes: reasonCodes,
+    user_summary: response.error.message,
+    recommended_next_action: "Correct the DatasetBuildSpec and validate it again.",
+    build_id: buildId,
+  });
+}
+
 export function createDatasetBuildTools(
   options: DatasetBuildToolOptions,
 ): BioMedAgentTool[] {
@@ -138,6 +174,8 @@ export function createDatasetBuildTools(
             spec: specArgument(object(value)),
             signal,
           });
+          if (response.ok) options.onBuildResult?.(null);
+          captureSpecRejected(options, response, specArgument(object(value)).build_id);
           diagnostic(
             options,
             "validate_dataset_build",
@@ -186,14 +224,17 @@ export function createDatasetBuildTools(
           const validation = await options.client.validate(identity);
           if (!validation.ok) {
             response = validation;
+            captureSpecRejected(options, validation, buildId);
             diagnostic(options, "execute_dataset_build", context, started, response, validation.error.code, buildId);
             return resultFor(validation);
           }
+          options.onBuildResult?.(null);
           response = await options.client.execute({
             ...identity,
             sourceFiles: mappingArgument(args, "source_files"),
             mappingFiles: mappingArgument(args, "mapping_files"),
           });
+          captureBuildResult(options, response);
           diagnostic(
             options,
             "execute_dataset_build",

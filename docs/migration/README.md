@@ -15,6 +15,7 @@ They are subordinate to [ARCHITECTURE.md](../ARCHITECTURE.md) and the
 | Task Workspace permissions, exec modes, Windows/Linux security cases | [Phase 1 Workspace policy](workspace-policy-phase1.md) |
 | Pi-to-BioMed experimental event mapping and sequence meaning | [Pi event adapter](pi-event-adapter.md) |
 | Single Host startup/shutdown, flags, valid combinations, rollback | [Single-Host lifecycle and flags](single-host-lifecycle-and-flags.md) |
+| Phase 3 durable TS Task/Run/Event ownership and legacy fallback | [Phase 3 TypeScript Application Runtime](phase3-ts-application-runtime.md) |
 | Node/pnpm, Python/uv, environment variables, local data, validation, rollback | [Phase 0/1 environment migration](ENVIRONMENT_MIGRATION.md) |
 | Final whole-branch findings, fixes, quality gates, and startup evidence | [Phase 0/1 final verification](PHASE0_1_FINAL_VERIFICATION.md) |
 
@@ -29,3 +30,10 @@ They are subordinate to [ARCHITECTURE.md](../ARCHITECTURE.md) and the
 The boundary documents remain contracts, not proof by themselves. Exact implementation
 and E2E evidence is recorded in `.superpowers/sdd/task-5-report.md` through
 `task-12-report.md`; code and tests remain the source of truth.
+
+## Phase 3 opt-in status
+
+With `APP_HOST=ts`, `AGENT_RUNTIME=pi`, and `DATASET_CORE=python`, new formal Agent
+Tasks use the durable TypeScript application runtime. Legacy Tasks and all APIs not
+yet migrated continue through private FastAPI. The default profile remains Phase 1
+legacy authority until this flag is selected explicitly.

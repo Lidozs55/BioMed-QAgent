@@ -1,0 +1,419 @@
+import { once } from "node:events";
+import { createHash } from "node:crypto";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+import type { EventEnvelope } from "@biomed/contracts";
+import { afterEach, describe, expect, test } from "vitest";
+import { WebSocket } from "ws";
+import { WebSocketServer } from "ws";
+
+import type {
+  BioMedAgentAdapter,
+  BioMedAgentEvent,
+  BioMedAgentSession,
+  BioMedSessionConfig,
+} from "../src/agent/contracts.js";
+import { createDurableAgentRuntime } from "../src/runtime/durable-agent-runtime.js";
+
+const servers: Server[] = [];
+const roots: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
+
+interface Deferred {
+  promise: Promise<void>;
+  resolve(): void;
+}
+
+function deferred(): Deferred {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+class ControlledAdapter implements BioMedAgentAdapter {
+  readonly gates: Deferred[] = [];
+  readonly runs: string[] = [];
+  private cancelled = false;
+
+  async createSession(config: BioMedSessionConfig): Promise<BioMedAgentSession> {
+    return {
+      piSessionId: `pi_${config.taskId}`,
+      taskId: config.taskId,
+      runId: config.runId,
+      run: (input) => this.run(input),
+      cancel: async () => {
+        this.cancelled = true;
+        this.gates.at(-1)?.resolve();
+      },
+      dispose: async () => undefined,
+    };
+  }
+
+  private async *run(input: string): AsyncIterable<BioMedAgentEvent> {
+    this.runs.push(input);
+    const gate = deferred();
+    this.gates.push(gate);
+    yield { type: "turn_started" };
+    yield { type: "assistant_delta", delta: "durable response" };
+    await gate.promise;
+    if (this.cancelled) yield { type: "turn_cancelled", reason: "user requested" };
+    else yield { type: "turn_completed" };
+  }
+}
+
+function inbox(socket: WebSocket): { next(): Promise<unknown> } {
+  const queued: unknown[] = [];
+  const waiting: Array<(value: unknown) => void> = [];
+  socket.on("message", (raw) => {
+    const value: unknown = JSON.parse(raw.toString());
+    const resolve = waiting.shift();
+    if (resolve === undefined) queued.push(value);
+    else resolve(value);
+  });
+  return {
+    next: async () => queued.shift() ?? await new Promise<unknown>((resolve) => waiting.push(resolve)),
+  };
+}
+
+async function nextEvent(
+  frames: { next(): Promise<unknown> },
+  type: string,
+): Promise<EventEnvelope> {
+  for (let index = 0; index < 16; index += 1) {
+    const value = await frames.next();
+    if (value !== null && typeof value === "object" && (value as { type?: string }).type === type) {
+      return value as EventEnvelope;
+    }
+  }
+  throw new Error(`missing ${type}`);
+}
+
+describe("durable formal Agent runtime", () => {
+  test("replays persisted events then continues with live events on the same subscription", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "biomed-durable-http-"));
+    roots.push(root);
+    const adapter = new ControlledAdapter();
+    const runtime = await createDurableAgentRuntime({
+      tasksRoot: root,
+      adapter,
+      workspaceFactory: async () => ({ root, tools: [], dispose: async () => undefined }),
+    });
+    const server = createServer((request, response) => {
+      if (!runtime.handle(request, response)) response.writeHead(404).end();
+    });
+    server.on("upgrade", (request, socket, head) => {
+      if (!runtime.handleUpgrade(request, socket, head)) socket.destroy();
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    servers.push(server);
+    const port = (server.address() as AddressInfo).port;
+
+    const admitted = await fetch(`http://127.0.0.1:${port}/api/v1/tasks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        request_id: "request-formal",
+        input: "formal task",
+        databases: [],
+        mode: "agent",
+      }),
+    });
+    expect(admitted.status).toBe(202);
+    const accepted = await admitted.json() as { task_id: string; run_id: string };
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/api/v1/ws`);
+    await once(socket, "open");
+    const frames = inbox(socket);
+    socket.send(JSON.stringify({
+      type: "subscribe",
+      task_id: accepted.task_id,
+      after_sequence: 0,
+    }));
+
+    const created = await nextEvent(frames, "task_created");
+    const queued = await nextEvent(frames, "run_queued");
+    const started = await nextEvent(frames, "run_started");
+    const delta = await nextEvent(frames, "assistant_delta");
+    expect([created, queued, started, delta].map((event) => event.sequence)).toEqual([1, 2, 3, 4]);
+
+    adapter.gates[0]?.resolve();
+    const completed = await nextEvent(frames, "run_completed");
+    expect(completed.sequence).toBe(5);
+
+    const snapshotResponse = await fetch(
+      `http://127.0.0.1:${port}/api/v1/tasks/${accepted.task_id}`,
+    );
+    expect(snapshotResponse.status).toBe(200);
+    expect(await snapshotResponse.json()).toMatchObject({
+      task: { status: "completed", latest_sequence: 5 },
+      runs: [{ run_id: accepted.run_id, status: "completed" }],
+      messages: [
+        { role: "user", content: "formal task" },
+        { role: "assistant", content: "durable response" },
+      ],
+    });
+    socket.close();
+    await runtime.close();
+  });
+
+  test("lists durable tasks and returns cancellation only after the terminal event is stored", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "biomed-durable-cancel-"));
+    roots.push(root);
+    const adapter = new ControlledAdapter();
+    const runtime = await createDurableAgentRuntime({
+      tasksRoot: root,
+      adapter,
+      workspaceFactory: async () => ({ root, tools: [], dispose: async () => undefined }),
+    });
+    const server = createServer((request, response) => {
+      if (!runtime.handle(request, response)) response.writeHead(404).end();
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    servers.push(server);
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const accepted = await (await fetch(`${base}/api/v1/tasks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        request_id: "request-cancel",
+        input: "cancel me",
+        databases: [],
+        mode: "agent",
+      }),
+    })).json() as { task_id: string; run_id: string };
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const cancelled = await fetch(
+      `${base}/api/v1/tasks/${accepted.task_id}/runs/${accepted.run_id}/cancel`,
+      { method: "POST" },
+    );
+    expect(cancelled.status).toBe(202);
+    expect(await cancelled.json()).toMatchObject({
+      task: { task_id: accepted.task_id, status: "cancelled", active_run_id: null },
+      runs: [{ run_id: accepted.run_id, status: "cancelled" }],
+    });
+
+    const page = await (await fetch(`${base}/api/v1/tasks?limit=10`)).json();
+    expect(page).toMatchObject({
+      active_items: [],
+      items: [{ task_id: accepted.task_id, status: "cancelled" }],
+      next_cursor: null,
+    });
+    await runtime.close();
+  });
+
+  test("does not execute an idempotent run admission retry twice", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "biomed-durable-run-retry-"));
+    roots.push(root);
+    const adapter = new ControlledAdapter();
+    const runtime = await createDurableAgentRuntime({
+      tasksRoot: root,
+      adapter,
+      workspaceFactory: async () => ({ root, tools: [], dispose: async () => undefined }),
+    });
+    const server = createServer((request, response) => {
+      if (!runtime.handle(request, response)) response.writeHead(404).end();
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    servers.push(server);
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const first = await (await fetch(`${base}/api/v1/tasks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        request_id: "request-initial",
+        input: "initial",
+        databases: [],
+        mode: "agent",
+      }),
+    })).json() as { task_id: string };
+    await expect.poll(() => adapter.gates.length).toBe(1);
+    adapter.gates[0]?.resolve();
+    await expect.poll(async () => {
+      const snapshot = await runtime.repository.getSnapshot(first.task_id);
+      return snapshot?.task.status;
+    }).toBe("completed");
+
+    const body = JSON.stringify({ request_id: "request-retry", input: "next" });
+    const admitted = await fetch(`${base}/api/v1/tasks/${first.task_id}/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
+    });
+    expect(admitted.status).toBe(202);
+    await expect.poll(() => adapter.runs.length).toBe(2);
+    const retry = await fetch(`${base}/api/v1/tasks/${first.task_id}/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
+    });
+
+    expect(retry.status).toBe(202);
+    expect(await retry.json()).toEqual(await admitted.json());
+    expect(adapter.runs).toEqual(["initial", "next"]);
+    adapter.gates[1]?.resolve();
+    await runtime.close();
+  });
+
+  test("serves only manifest-registered task artifacts and rejects integrity drift", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "biomed-durable-artifact-"));
+    roots.push(root);
+    const adapter = new ControlledAdapter();
+    const runtime = await createDurableAgentRuntime({
+      tasksRoot: root,
+      adapter,
+      workspaceFactory: async () => ({ root, tools: [], dispose: async () => undefined }),
+    });
+    const server = createServer((request, response) => {
+      if (!runtime.handle(request, response)) response.writeHead(404).end();
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    servers.push(server);
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const accepted = await (await fetch(`${base}/api/v1/tasks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        request_id: "request-artifact",
+        input: "build artifact",
+        databases: [],
+        mode: "agent",
+      }),
+    })).json() as { task_id: string };
+    const buildDir = path.join(root, accepted.task_id, "datasets_build", "build_one");
+    const primary = "gene_id,value\nTP53,1\n";
+    const sha256 = createHash("sha256").update(primary).digest("hex");
+    await mkdir(path.join(buildDir, "merged"), { recursive: true });
+    await mkdir(path.join(buildDir, "publish", "version_1"), { recursive: true });
+    const publicationDir = path.join(buildDir, "publish", "version_1");
+    await mkdir(path.join(publicationDir, "merged"), { recursive: true });
+    await writeFile(path.join(publicationDir, "merged", "primary.csv"), primary, "utf8");
+    await writeFile(path.join(publicationDir, "dataset_manifest.json"), JSON.stringify({
+      manifest_id: "manifest_one",
+      task_id: accepted.task_id,
+      build_id: "build_one",
+      artifacts: [{
+        artifact_id: "artifact_primary",
+        role: "primary_dataset",
+        relative_path: "merged/primary.csv",
+        media_type: "text/csv",
+        size_bytes: Buffer.byteLength(primary),
+        sha256,
+      }],
+    }), "utf8");
+    await writeFile(
+      path.join(publicationDir, "publication.json"),
+      JSON.stringify({
+        publication_id: "publication_one",
+        manifest_ref: "manifest_one",
+      }),
+      "utf8",
+    );
+
+    const listing = await fetch(`${base}/api/v1/tasks/${accepted.task_id}/artifacts`);
+    expect(listing.status).toBe(200);
+    expect(await listing.json()).toMatchObject({
+      artifacts: [
+        { artifact_id: "dataset_manifest", name: "dataset_manifest.json" },
+        { artifact_id: "artifact_primary", name: "primary.csv", sha256 },
+      ],
+      degraded: false,
+    });
+    const download = await fetch(
+      `${base}/api/v1/tasks/${accepted.task_id}/artifacts/artifact_primary`,
+    );
+    expect(download.status).toBe(200);
+    expect(await download.text()).toBe(primary);
+
+    await writeFile(path.join(publicationDir, "merged", "primary.csv"), "corrupt", "utf8");
+    expect((await fetch(
+      `${base}/api/v1/tasks/${accepted.task_id}/artifacts/artifact_primary`,
+    )).status).toBe(409);
+    await runtime.close();
+  });
+
+  test("forwards legacy task subscriptions through the same formal WebSocket", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "biomed-durable-ws-bridge-"));
+    roots.push(root);
+    const legacyServer = createServer();
+    const legacyWebSocket = new WebSocketServer({ noServer: true });
+    const commands: unknown[] = [];
+    legacyServer.on("upgrade", (request, socket, head) => {
+      legacyWebSocket.handleUpgrade(request, socket, head, (websocket) => {
+        legacyWebSocket.emit("connection", websocket, request);
+      });
+    });
+    legacyWebSocket.on("connection", (socket) => socket.on("message", (raw) => {
+      const command: unknown = JSON.parse(raw.toString());
+      commands.push(command);
+      socket.send(JSON.stringify({
+        schema_version: "2.0",
+        event_id: "event_legacy",
+        type: "run_started",
+        task_id: "task_legacy",
+        run_id: "run_legacy",
+        stage_attempt_id: null,
+        sequence: 8,
+        timestamp: "2026-08-12T00:00:00.000Z",
+        payload: { type: "run_started" },
+      }));
+    }));
+    legacyServer.listen(0, "127.0.0.1");
+    await once(legacyServer, "listening");
+    servers.push(legacyServer);
+    const legacyPort = (legacyServer.address() as AddressInfo).port;
+
+    const runtime = await createDurableAgentRuntime({
+      tasksRoot: root,
+      adapter: new ControlledAdapter(),
+      legacyBaseUrl: `http://127.0.0.1:${legacyPort}`,
+      workspaceFactory: async () => ({ root, tools: [], dispose: async () => undefined }),
+    });
+    const server = createServer((request, response) => {
+      if (!runtime.handle(request, response)) response.writeHead(404).end();
+    });
+    server.on("upgrade", (request, socket, head) => {
+      if (!runtime.handleUpgrade(request, socket, head)) socket.destroy();
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    servers.push(server);
+
+    const socket = new WebSocket(
+      `ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/v1/ws`,
+    );
+    await once(socket, "open");
+    const frames = inbox(socket);
+    socket.send(JSON.stringify({
+      type: "subscribe",
+      task_id: "task_legacy",
+      after_sequence: 7,
+    }));
+
+    expect(await nextEvent(frames, "run_started")).toMatchObject({
+      task_id: "task_legacy",
+      sequence: 8,
+    });
+    expect(commands).toEqual([{
+      type: "subscribe",
+      task_id: "task_legacy",
+      after_sequence: 7,
+    }]);
+    socket.close();
+    await runtime.close();
+    legacyWebSocket.close();
+  });
+});

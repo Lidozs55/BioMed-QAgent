@@ -49,6 +49,20 @@ async function fixture(options: { exec?: boolean; limits?: Record<string, number
   return { root, audit, workspace };
 }
 
+async function removeEventually(root: string): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    try {
+      await rm(root, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+  throw lastError;
+}
+
 async function waitForFile(filePath: string, timeoutMs = 2_000): Promise<void> {
   try {
     await access(filePath);
@@ -119,7 +133,7 @@ async function writeProcessTreeFixture(
 }
 
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  await Promise.all(roots.splice(0).map(removeEventually));
 });
 
 describe("governed Task Workspace", () => {

@@ -46,7 +46,7 @@ child survives the Host.
 | Flag | Values | Phase 1 meaning |
 | --- | --- | --- |
 | `APP_HOST` | `fastapi`, `ts` | Select legacy rollback topology or the single TypeScript Host |
-| `AGENT_RUNTIME` | `legacy`, `pi` | Select legacy product Agent or an explicitly experimental Pi composition; Phase 1 never silently reroutes formal `/api/v1` tasks to Pi |
+| `AGENT_RUNTIME` | `legacy`, `pi` | Select legacy product Agent or the Phase 3 formal Pi Task/Run runtime; the default remains legacy |
 | `DATASET_CORE` | `python`, `ts` | Select Core implementation; only `python` is valid in Phase 0/1 |
 | `PI_EXPERIMENTAL` | `0`, `1` | Disable or expose `/experimental/pi/*` and its experimental WebSocket on the TS Host |
 
@@ -61,12 +61,12 @@ the public port opens.
 | TS Host proxy-only | `ts` | `legacy` | `python` | `0` | Verify the Host, Vite middleware, legacy HTTP, and legacy WS without Pi |
 | Normal Phase 1 transition | `ts` | `legacy` | `python` | `1` | Stable `/api/v1` remains legacy while `/experimental/pi/*` uses Pi and the Python Core bridge |
 | Pi-focused experimental smoke | `ts` | `pi` | `python` | `1` | Tests the experimental Pi composition only; it does not promote Pi to the formal product API |
+| Phase 3 formal Pi runtime | `ts` | `pi` | `python` | `0` or `1` | New `task_ts_*` Tasks use TS durable runtime; legacy Task/API traffic falls through to FastAPI |
 
 Invalid in Phase 0/1:
 
 - every combination with `DATASET_CORE=ts`;
 - `APP_HOST=fastapi` with `PI_EXPERIMENTAL=1` or `AGENT_RUNTIME=pi`;
-- `AGENT_RUNTIME=pi` with `PI_EXPERIMENTAL=0`;
 - any topology that exposes the internal migration bridge or legacy FastAPI as a
   second public browser endpoint while `APP_HOST=ts`.
 
@@ -79,6 +79,11 @@ Invalid in Phase 0/1:
 | `/api/v1/ws` | TS Host WebSocket proxy | Legacy durable Task event runtime |
 | frontend/HMR/static paths | Vite middleware or static handler | TS Host |
 | `/internal/migration/*` | Not registered/proxied publicly | Loopback-only Legacy Dataset Core bridge |
+
+When `AGENT_RUNTIME=pi`, the Host instead owns formal Task routes and the public
+`/api/v1/ws`. The socket multiplexes TS Task subscriptions locally and forwards
+legacy Task subscriptions to private FastAPI. Other `/api/v1/*` routes remain
+proxied. See [Phase 3 runtime](phase3-ts-application-runtime.md).
 
 ## Rollback surface
 

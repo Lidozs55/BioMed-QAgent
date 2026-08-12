@@ -31,14 +31,18 @@ Key points:
 - Normal development starts from root `pnpm dev`. The TypeScript Application
   Host owns the single browser-facing port, embeds Vite middleware, exposes the
   explicit non-durable `/experimental/pi/*` surface, and proxies formal
-  `/api/v1/*` HTTP/WS traffic to private loopback FastAPI.
-- FastAPI remains the Phase 1 authority for the formal durable product API,
+  `/api/v1/*` HTTP/WS traffic to private loopback FastAPI by default. With the
+  opt-in `AGENT_RUNTIME=pi` Phase 3 profile, it owns new `task_ts_*` Task/Run/Event
+  traffic and falls back to FastAPI for legacy Tasks and unmigrated APIs.
+- FastAPI remains the default Phase 1 authority for the formal durable product API,
   Task/Run state, settings, Skills, and Python V2 Dataset Core. It is a
   Host-managed private child during normal development, not a second browser
   entrypoint.
 - The FastAPI entry point is `app.main:app`, with routes registered in
   [app/api/routes.py](backend/app/api/routes.py) (HTTP) and
-  [app/api/ws.py](backend/app/api/ws.py) (WebSocket). The application lifespan
+  [app/api/ws.py](backend/app/api/ws.py) (WebSocket). In Phase 3 opt-in mode,
+  `server/src/runtime/` owns formal TS Task routes and multiplexes legacy Task
+  subscriptions to this WebSocket. The application lifespan
   (owned by `app.main:create_app`) initializes the durable runtime:
   `TaskManager`, `TaskRepository`, `EventHub`, and `TaskIndex`.
 - The Main Agent is built on the OpenAI Agents SDK and enters the Dataset

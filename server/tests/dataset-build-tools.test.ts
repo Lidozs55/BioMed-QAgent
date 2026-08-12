@@ -49,8 +49,9 @@ describe("Pi DatasetBuild tools", () => {
     }));
     const execute = vi.fn();
     const diagnostic = vi.fn();
+    const onBuildResult = vi.fn();
     const tools = createDatasetBuildTools({
-      client: { validate, execute }, taskId: "task_tool", runId: () => "run_tool", piSessionId: () => "pi_tool", onDiagnostic: diagnostic,
+      client: { validate, execute }, taskId: "task_tool", runId: () => "run_tool", piSessionId: () => "pi_tool", onDiagnostic: diagnostic, onBuildResult,
     });
     const result = await tools[1]!.execute(
       { spec, source_files: {}, mapping_files: {} },
@@ -60,6 +61,11 @@ describe("Pi DatasetBuild tools", () => {
 
     expect(execute).not.toHaveBeenCalled();
     expect(result).toMatchObject({ isError: true, details: { code: "spec_rejected" } });
+    expect(onBuildResult).toHaveBeenCalledWith(expect.objectContaining({
+      status: "spec_rejected",
+      build_id: spec.build_id,
+      reason_codes: ["unknown_schema"],
+    }));
     expect(diagnostic).toHaveBeenCalledWith(expect.objectContaining({
       taskId: "task_tool",
       runId: "run_tool",

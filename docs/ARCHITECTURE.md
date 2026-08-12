@@ -10,10 +10,11 @@
 >   [ADR-017 及后续记录](adr/README.md)）承担；
 >   实现规格由 [BioMed-QAgent_Pipeline_Refactor_Design.md](BioMed-QAgent_Pipeline_Refactor_Design.md) 承担；
 >   执行任务由 [TODO.md](TODO.md) 承担。三者不互相复制。
-> - **实现状态**：V2 Dataset Construction Runtime 已落地；Agent/runtime 迁移处于
->   Phase 0/1 过渡态。浏览器正常入口已切至单端口 TypeScript Host，formal
->   `/api/v1` 与 durable state 仍由 private FastAPI 权威实现，Pi 仅暴露显式、
->   live-only 的 experimental surface。V1 历史架构归档于
+> - **实现状态**：V2 Dataset Construction Runtime 已落地；Agent/runtime 迁移完成
+>   Phase 0/1，并提供 opt-in Phase 3 TS Application Runtime。默认 profile 仍由
+>   private FastAPI 权威实现 formal `/api/v1`；选择 `AGENT_RUNTIME=pi` 后，新
+>   `task_ts_*` Task/Run/Event 由 TS durable runtime 权威实现，legacy Task 与未迁移
+>   API 继续回退 FastAPI。V1 历史架构归档于
 >   [archive/ARCHITECTURE_V1.md](archive/ARCHITECTURE_V1.md)，迁移策略见 §18。
 > - **验证与失效**：每个里程碑、每次新增/修订 ADR、数据族接入或执行模型变化
 >   时对照本文校验一致性；与代码现状矛盾且未标注待落地、或被新 ADR 推翻而未
@@ -1214,6 +1215,25 @@ proxy-only；若 Host 本身可疑，再使用 full legacy rollback。Phase 0/1 
 > 决策依据：[ADR-017 至 ADR-024](adr/README.md)。Phase 1 的资源所有权、桥协议、
 > Workspace、事件映射和回滚组合见 [迁移边界索引](migration/README.md)；该索引记录
 > 操作约束，不取代本文的架构定义。
+
+### 18.5 Phase 3 TS Application Runtime（opt-in）
+
+`APP_HOST=ts`、`AGENT_RUNTIME=pi`、`DATASET_CORE=python` 激活正式 Pi runtime。
+新 Task 使用 `task_ts_*` 身份，由 TS Runtime 权威维护 Task/Run admission、request-id
+幂等、append-only `events.jsonl`、纯 reducer、restart interruption、cancel terminal
+acknowledgement 和 `/api/v1/ws` replay/live handoff。Pi Session 仍是独立生命周期，
+其 JSONL 保存于 Task `state/pi-session/`，显式映射不替代 Task 或 Run 身份。
+
+迁移期 Host 按 Task 身份分流：TS Task 的正式 HTTP/WS 由 TS Runtime 处理；旧 Task
+HTTP 与未迁移 API 回退 private FastAPI；同一 public WebSocket 将 legacy Task 命令
+转发给 FastAPI。Python V2 Core 仍通过 loopback named-operation bridge 执行
+Validation、Provenance、Publication；BuildResult 回投 TS Run 终态。Task artifact
+API 只读取 immutable publication 目录，并校验 publication-manifest 引用、Task/Build
+身份、相对路径、size 和 SHA-256。
+
+默认 profile 仍为 `AGENT_RUNTIME=legacy`，因此 Phase 3 合并本身不切换正式流量。
+回滚只需恢复该 flag；不删除或改写 `task_ts_*` event/session/build/publication 数据。
+详细实现与验证边界见 [Phase 3 runtime](migration/phase3-ts-application-runtime.md)。
 
 ---
 
