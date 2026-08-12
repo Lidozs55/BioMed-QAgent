@@ -37,11 +37,11 @@ pnpm 11.14.0
 
 Results:
 
-- `pnpm test`: passed; contracts 13, server 101, frontend 746 tests;
+- `pnpm test`: passed; contracts 13, server 101, frontend 751 tests;
 - `pnpm lint`: passed with zero errors/warnings;
 - `pnpm typecheck`: passed;
 - `pnpm build`: passed; contracts, server, and frontend built;
-- `uv run pytest`: 2392 passed, 1 skipped, 26 deselected;
+- `uv run pytest`: 2396 passed, 1 skipped, 26 deselected;
 - `uv run ruff check app/ tests/ launcher.py`: passed;
 - direct Uvicorn smoke: public health returned 200 and the owned process stopped;
 - root `pnpm dev` smoke: public health returned 200, public
@@ -49,6 +49,12 @@ Results:
   and shutdown released the public port;
 - real Windows process-tree tests: live-parent and exited-parent grandchild cleanup both
   passed.
+
+One root parallel run timed out once while cancelling a workspace process tree and then
+reported a busy temporary directory. The same 23-test workspace file passed in isolation,
+the complete 101-test server suite passed, and the final root parallel run passed with the
+counts above. The failure was not reproducible and no timeout or cleanup behavior was
+weakened to hide it.
 
 Frontend Vitest still prints pre-existing React `act(...)` diagnostics in several tests;
 the suite completed with zero failures. Vite reports the pre-existing large-chunk
