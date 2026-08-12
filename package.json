@@ -1,0 +1,20 @@
+{
+  "name": "biomed-qagent",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "pnpm --filter @biomed/server dev",
+    "dev:frontend-standalone": "pnpm --filter @biomed/frontend dev",
+    "dev:legacy-backend": "node scripts/dev-profile.mjs legacy-backend",
+    "dev:host-proxy-only": "node scripts/dev-profile.mjs host-proxy-only",
+    "dev:legacy-rollback": "node scripts/dev-profile.mjs legacy-rollback",
+    "test": "node scripts/check-workspace-foundation.mjs && pnpm -r --if-present test",
+    "lint": "pnpm -r --if-present lint",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "build": "pnpm -r --if-present build"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "packageManager": "pnpm@11.14.0+sha512.66c1ac4c7d4762d6d7dde44c7f3e5a73591ed0a0806e751d4ed32d4f004f25b2285a906b1fd8a9e3e621df3b4e2858bf88e50e0cf626bedbe977fe434a5caf85"
+}

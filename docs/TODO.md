@@ -12,6 +12,23 @@
 
 ---
 
+## Pi / TypeScript Host 迁移 Phase 0/1（2026-08-12）
+
+- [x] 根 pnpm Workspace、单 lockfile、共享 `@biomed/contracts` 与版本固定完成。
+- [x] TS Host 管理 private FastAPI、Vite middleware、legacy HTTP/WS proxy 与单公开端口。
+- [x] Pi adapter、受控 Workspace、experimental live events/UI 与 Python V2 Core bridge 完成。
+- [x] 离线 Workspace / DatasetBuild SUCCESS / SPEC_REJECTED / cancel 垂直切片完成；
+      experimental session/sequence 明确不具备 durable replay 权威。
+- [x] root `pnpm dev` 切为正常单入口；standalone frontend/backend、Host proxy-only
+      与 full legacy rollback 仅保留为 migration/debug scripts。
+- [ ] 在外部 Node/Python runtime 恢复后重跑 Phase 1G root 全门禁与 Windows
+      `pnpm dev` 启动 smoke；当前阻塞是本机 runtime 路径缺失，不是代码失败。
+
+详细状态与证据见 `BioMed-QAgent_Pi_Migration_Phase0_1_Detailed.md` 及
+`.superpowers/sdd/task-10-report.md`、`task-11-report.md`、`task-12-report.md`。
+
+---
+
 ## Phase 1：引入 V2 数据集契约和 Schema Registry
 
 > 目标：新增自包含 `DatasetBuildSpec`（**不新增 DatasetRequest**）与四正交状态契约；

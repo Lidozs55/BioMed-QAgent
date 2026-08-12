@@ -9,8 +9,8 @@
 1. [项目是什么](#1-项目是什么)
 2. [第一步：装好工具链](#2-第一步装好工具链)
 3. [第二步：克隆并配置](#3-第二步克隆并配置)
-4. [第三步：启动后端](#4-第三步启动后端)
-5. [第四步：启动前端](#5-第四步启动前端)
+4. [第三步：安装依赖](#4-第三步安装依赖)
+5. [第四步：启动单端口应用](#5-第四步启动单端口应用)
 6. [第五步：跑起来看看](#6-第五步跑起来看看)
 7. [AI-Native 开发指南](#7-ai-native-开发指南)
 8. [常用命令速查](#8-常用命令速查)
@@ -29,7 +29,9 @@ BioMed-QAgent 是一个**生物医学数据智能检索与整合系统**。你�
 4. 解析、清洗、字段对齐
 5. 输出一份整理好的 CSV，附带数据来源和处理记录
 
-技术上是 **Python 后端 + React 前端**，AI 部分基于阿里的**通义千问（Qwen）**大模型。
+技术上是 **TypeScript 单端口 Host + private Python durable runtime/Core + React 前端**。
+formal Agent 仍使用 OpenAI Agents SDK；Phase 1 的显式 experimental surface 通过 Pi
+adapter 调用同一个受信任 Python V2 Dataset Core。
 
 > 这是"中国高校计算机大赛 — AI Scientist 赛道"的参赛作品（赛题 XH-202619）。
 
@@ -43,7 +45,7 @@ BioMed-QAgent 是一个**生物医学数据智能检索与整合系统**。你�
 |------|------|--------|
 | **Python 3.12+** | 后端语言 | ✅ 必须 |
 | **uv** | Python 包管理器（类似 pip 但更快） | ✅ 必须 |
-| **Node.js 18+** | 前端运行时 | ✅ 必须 |
+| **Node.js 22.19+** | TypeScript Host 与前端运行时 | ✅ 必须 |
 | **pnpm** | Node 包管理器（类似 npm 但更快） | ✅ 必须 |
 | **DashScope API Key** | 调用千问大模型 | ✅ 必须 |
 | Git | 版本控制 | 推荐 |
@@ -86,7 +88,7 @@ uv --version
 
 > 💡 如果提示"找不到 uv"，说明没加到 PATH。重启电脑试试，或者手动把 `%USERPROFILE%\.cargo\bin` 加到系统环境变量 PATH 中。
 
-### 2.4 安装 Node.js 18+
+### 2.4 安装 Node.js 22.19+
 
 去官网下载 LTS 版本：https://nodejs.org/
 
@@ -94,7 +96,7 @@ uv --version
 
 ```powershell
 node --version
-# 应该输出类似：v18.x.x 或 v20.x.x
+# 应输出 v22.19.0 或更高版本
 ```
 
 ### 2.5 安装 pnpm（Node 包管理器）
@@ -109,7 +111,7 @@ npm install -g pnpm
 
 ```powershell
 pnpm --version
-# 应该输出类似：9.x.x
+# 应输出 11.14.x
 ```
 
 ### 2.6 获取 DashScope API Key
@@ -147,38 +149,27 @@ copy .env.example .env
 DASHSCOPE_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-其他配置项保持默认即可，后面需要再改。
+正常 `pnpm dev` 会读取根 `.env`。Host 管理的 FastAPI 同时继承这些变量；只有运行
+standalone legacy diagnostic 时才需要另行准备 `backend/.env`。
 
 ---
 
-## 4. 第三步：启动后端
+## 4. 第三步：安装依赖
 
 ```powershell
-# 进入后端目录
+# 安装 Python 依赖
 cd backend
-
-# 安装 Python 依赖（uv 会自动创建虚拟环境）
 uv sync
+cd ..
 
-# 启动开发服务器
-uv run uvicorn app.main:app --reload
+# 从唯一 pnpm Workspace 根安装 Node 依赖
+pnpm install --frozen-lockfile
 ```
 
-看到类似输出就说明启动成功了：
+仓库根持有唯一 `pnpm-lock.yaml`。不要在 `frontend/` 或 `server/` 创建独立
+lockfile，也不要使用 npm。
 
-```
-INFO:     Uvicorn running on http://127.0.0.1:8000
-INFO:     Application startup complete.
-```
-
-> 💡 `--reload` 表示代码改动后自动重启，开发时很方便。
-
-验证后端是否正常：
-
-- 浏览器打开 http://127.0.0.1:8000/docs — 能看到 Swagger API 文档就对了
-- 或者 http://127.0.0.1:8000/api/v1/health — 返回 `{"status":"ok"}`
-
-### 4.1 Windows 自动启动 smoke test
+### 4.1 Windows private FastAPI 自动 smoke test
 
 自动化脚本需要启动后端、请求 health endpoint，并在结束时可靠关闭进程。请在
 `backend/` 目录使用项目虚拟环境的 Python 直接启动 Uvicorn：
@@ -222,35 +213,45 @@ try {
 不要在 Windows 自动 smoke test 中使用
 `Start-Process uv -ArgumentList "run", "uvicorn", ...`。`uv run` 是包装进程，
 Uvicorn 子进程可能在 health 请求成功后继续存活，使脚本卡住并需要手动关闭。
-交互式开发仍可正常使用 `uv run uvicorn app.main:app --reload`。
+该模板只验证 private legacy backend。正常应用 smoke 应直接启动 root `pnpm dev`，
+记录其直接子 PID，并在 `finally` 中终止；Host 会进一步回收自己持有的 FastAPI、
+Pi session 与 Workspace command。不要用 `Start-Process uv run ...` 包装 Uvicorn。
 
 ---
 
-## 5. 第四步：启动前端
+## 5. 第四步：启动单端口应用
 
-**另开一个终端**（后端那个不要关）：
+在仓库根目录执行唯一正常启动命令：
 
 ```powershell
-# 进入前端目录
-cd frontend
-
-# 安装 Node 依赖
-pnpm install
-
-# 启动开发服务器
 pnpm dev
 ```
 
-看到类似输出就成功了：
+TypeScript Host 会按顺序校验 Phase 1 flags、启动或附加 private loopback FastAPI、
+初始化实验 Pi 资源、挂载 Vite middleware，最后才监听公开端口。看到 Host 监听
+`127.0.0.1:5173` 后，浏览器访问 http://127.0.0.1:5173；健康检查也走同一端口：
 
+```text
+http://127.0.0.1:5173/api/v1/health
 ```
-VITE v5.x.x  ready in xxx ms
-➜  Local:   http://localhost:5173/
-```
 
-浏览器打开 http://localhost:5173 就能看到界面了。
+正式 `/api/v1/*` 与 `/api/v1/ws` 仍由 legacy durable runtime 权威实现；
+`/experimental/pi/*` 是 live-only、非 durable 的迁移验证面。内部
+`/internal/migration/*` 不向浏览器代理。按 `Ctrl+C` 由 Host 统一关闭资源。
 
-> 💡 前端自动把 `/api` 请求代理到后端 `http://127.0.0.1:8000`，所以不用担心跨域问题。
+以下命令仅用于迁移/诊断，不写入正常启动流程：
+
+| 根命令 | 拓扑 / 必要条件 |
+| --- | --- |
+| `pnpm dev:frontend-standalone` | 只启 Vite；需要另有可用 API，双端口 |
+| `pnpm dev:legacy-backend` | 只启 FastAPI；从根调用 uv，浏览器入口不完整 |
+| `pnpm dev:host-proxy-only` | TS Host + Vite + legacy proxy，显式关闭 Pi surface |
+| `pnpm dev:legacy-rollback` | standalone Vite + FastAPI 的完整旧双端口回滚 |
+
+附加外部 backend 时设置 `LEGACY_BACKEND_URL`，并在 Host/后端两侧使用同一
+`PI_DATASET_BRIDGE_SECRET`；managed backend 默认由 Host 生成每进程 secret，并在
+受保护的 internal bridge 上验证本次启动身份。`LEGACY_BACKEND_PORT=0` 是正常默认值，
+由 Host 分配空闲 loopback 端口；attach/debug 模式必须显式配置非空 secret。
 
 ---
 
@@ -268,13 +269,15 @@ uv run python scripts/demo_workflow.py
 ### 6.2 跑测试
 
 ```powershell
+pnpm test                         # 根 Workspace：contracts/server/frontend
+pnpm lint
+pnpm typecheck
+pnpm build
+
 cd backend
 uv run pytest                     # 跑全部测试（跳过联网测试）
 uv run pytest -m live             # 跑联网测试（需要 API Key）
 uv run pytest -k "skill"          # 只跑名字含"skill"的测试
-
-cd frontend
-pnpm test                         # 跑前端单元测试
 ```
 
 ---
@@ -356,8 +359,10 @@ Pipeline Runner（确定性代码）
 输出：CSV + 来源清单 + 处理记录
 ```
 
-- **Agent（大模型）**：负责理解用户意图、做决策
-- **Pipeline（普通代码）**：负责严格执行数据处理。Agent 不能跳过任何步骤，也不能直接造 CSV
+- **Agent（大模型）**：负责理解用户意图、做决策；formal legacy 与 experimental Pi
+  在迁移期并存，但生命周期/持久化权威不同。
+- **Dataset Core（确定性代码）**：负责严格执行数据处理。两条 Agent 路径都不能
+  绕过 validate/publish，也不能直接写 `artifacts/`。
 
 这样设计的原因是：大模型擅长理解，但可能"偷懒"跳过关键步骤。Pipeline 保证了数据处理的可靠性。
 
@@ -387,23 +392,34 @@ uv run playwright install chromium
 
 ## 8. 常用命令速查
 
-### 后端（在 `backend/` 目录下执行）
+### 正常 Node Workspace（在仓库根执行）
+
+| 命令 | 作用 |
+|------|------|
+| `pnpm install --frozen-lockfile` | 安装唯一 Workspace lockfile |
+| `pnpm dev` | 启动单端口 TS Host（正常入口） |
+| `pnpm test` | 运行 contracts/server/frontend 测试 |
+| `pnpm lint` | Workspace lint |
+| `pnpm typecheck` | Workspace TypeScript 检查 |
+| `pnpm build` | Workspace 构建 |
+
+### 后端（在 `backend/` 目录下执行，仅检查/诊断）
 
 | 命令 | 作用 |
 |------|------|
 | `uv sync` | 安装/同步 Python 依赖 |
-| `uv run uvicorn app.main:app --reload` | 启动开发服务器 |
+| `uv run uvicorn app.main:app --reload` | standalone legacy diagnostic |
 | `uv run pytest` | 跑测试（跳过联网） |
 | `uv run pytest -m live` | 跑联网测试 |
 | `uv run pytest -k "关键词"` | 按名称过滤测试 |
 | `uv run ruff check app/ tests/` | 代码检查（lint） |
 
-### 前端（在 `frontend/` 目录下执行）
+### 前端（在 `frontend/` 目录下执行，仅定向检查/诊断）
 
 | 命令 | 作用 |
 |------|------|
 | `pnpm install` | 安装 Node 依赖 |
-| `pnpm dev` | 启动 Vite 开发服务器 |
+| `pnpm dev` | standalone Vite diagnostic |
 | `pnpm build` | 生产构建 |
 | `pnpm lint` | ESLint 代码检查 |
 | `pnpm tsc` | TypeScript 类型检查 |
@@ -420,6 +436,9 @@ BioMed-QAgent/
 ├── PROBLEM.md             # 赛题说明
 ├── README.md              # 项目简介
 ├── .env.example           # 环境变量模板
+├── package.json           # 根 Workspace 脚本（pnpm dev 是正常入口）
+├── pnpm-workspace.yaml    # frontend/server/packages/*
+├── pnpm-lock.yaml         # 唯一 Node lockfile
 ├── skills-lock.json       # Skill 版本锁定
 │
 ├── backend/               # Python 后端
@@ -438,6 +457,10 @@ BioMed-QAgent/
 │       │   └── learned/   #   自进化 Skill
 │       ├── tools/         # Function Tools
 │       └── integrations/  # 外部服务集成（NCBI 等）
+│
+├── server/                # TS Application Host / Pi experimental adapter
+├── packages/contracts/    # 共享 wire DTO
+├── .pi/skills/            # Phase 1 最小迁移 Skills
 │
 ├── frontend/              # React 前端
 │   ├── package.json       # 项目配置 + 依赖
@@ -477,8 +500,8 @@ BioMed-QAgent/
 
 ### Q: 前端页面打开了但是空白/报网络错误
 
-1. 确认后端已启动（http://127.0.0.1:8000/docs 能打开）
-2. 确认前端代理配置正确（`vite.config.ts` 里的 proxy 指向后端地址）
+1. 确认 root `pnpm dev` 仍在运行
+2. 确认 http://127.0.0.1:5173/api/v1/health 可访问
 3. 打开浏览器开发者工具（F12）→ Network 面板看请求状态
 
 ### Q: Windows 上运行 `uv run` 报编码错误

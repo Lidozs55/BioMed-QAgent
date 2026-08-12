@@ -1,190 +1,162 @@
-# Task 7 — DashScope Context-Budget Estimator Live Comparison
+# Task 7 — Phase 1B Pi runtime adapter
 
-## Scope
+## Result
 
-`backend/tests/live/test_context_budget_estimator_live.py` compares one fixed
-synthetic bilingual Chat Completions request against the final authoritative
-streamed `usage.prompt_tokens` result. It uses the existing
-`PromptTokenEstimator`, prompt-shape/tool-schema serializers, context budget,
-and calibration store. It sends a provider request only after the credential
-guard and requests `stream_options={"include_usage": True}`.
+Task 7 is complete in the `migration/pi-runtime-phase0-1` worktree. The server
+now pins Pi `0.82.1`, confines all Pi-owned imports to one adapter module,
+exposes BioMed-owned agent/session/event contracts, and provides an ephemeral
+experimental HTTP session path behind `PI_EXPERIMENTAL=true`. The legacy
+`/api/v1/*` paths remain owned by the Python backend.
 
-The fixture is bound to the supported catalog model `qwen-plus` at the official
-DashScope-compatible endpoint. It resolves the budget with no context-window
-override and asserts the catalog capacity of `131072` tokens. The live request
-reserves `max_tokens=1`.
+Implementation commit: `c4e10a6` (`feat: add isolated Pi runtime adapter`).
+No push was performed.
 
-`backend/tests/conftest.py` now deselects `@pytest.mark.live` only when pytest
-was invoked with no marker expression and no direct `tests/live/...` target.
-It does not parse marker expressions: every non-empty `-m` is passed through to
-pytest unchanged.
+## Genuine RED evidence
 
-## RED Evidence
-
-### Marker expression
-
-Before the marker repair:
+The project-contract, registry, experimental-route, and import-boundary tests
+were written before their implementation. The initial focused command was:
 
 ```text
-uv run pytest -m "live or other" --collect-only -q
+pnpm --filter @biomed/server test -- tests/pi-adapter.test.ts tests/session-registry.test.ts tests/experimental-pi.test.ts tests/pi-import-boundary.test.ts
 ```
 
-Result:
+Three suites failed because the imports
+`src/agent/contracts.js`, `src/agent/session-registry.js`, and
+`src/agent/experimental-pi.js` did not exist. The static boundary suite already
+passed, proving that the focused command was reaching the intended tests.
+
+The Node compatibility assertion was also tightened before the manifest was
+changed:
 
 ```text
-no tests collected (1490 deselected) in 4.07s
+node scripts/check-workspace-foundation.mjs
 ```
 
-The previous hook recognized only the literal expression `live`, then
-incorrectly deselected live tests for composite expressions.
+It failed with root `engines.node` equal to `>=22.0.0`, while the pinned Pi
+package requires `>=22.19.0`.
 
-### Fixed catalog model
+One additional lifecycle case was added during implementation: stopping event
+consumption before terminal completion must abort the upstream turn. It failed
+with `expected abort count 1, received 0`; the async iterable `finally` path now
+awaits upstream abort before releasing the active-turn slot.
 
-Before binding the live request to `qwen-plus`:
+## Actual Pi 0.82.1 API used
+
+The implementation was based on the installed
+`@earendil-works/pi-coding-agent@0.82.1` declarations and source, not an older
+`@mariozechner/*` API. The pinned baseline is upstream tag `v0.82.1`, commit
+`b4f293684bba718d59cc1157679bcf6157b3a7f5`.
+
+- `createAgentSession(options)` creates the real session.
+- `SessionManager.inMemory(cwd)` and `SettingsManager.inMemory()` avoid durable
+  Pi-owned state in this experimental phase.
+- `DefaultResourceLoader` owns the validated cwd and optional resource/skill
+  roots.
+- `ModelRuntime.create`, `registerProvider`, and `getModel` provide lazy model
+  injection only when session creation is requested.
+- `AgentSession.subscribe`, `prompt`, `abort`, and `dispose` back the project
+  session lifecycle.
+- `message_update.assistantMessageEvent`, `tool_execution_start`,
+  `tool_execution_update`, and `tool_execution_end` are mapped to the bounded
+  BioMed event union.
+
+All Pi-owned runtime/type imports occur only in
+`server/src/agent/pi-adapter.ts`; an automated source scan enforces the
+boundary. Root `engines.node` is now `>=22.19.0`, matching Pi's declaration.
+
+## Dependency installation
+
+`server/package.json` pins the exact version `0.82.1`, and the lockfile records
+that exact specifier/version. pnpm 11 identified scripts in two transitives.
+The audited scripts are not needed for runtime artifacts, so
+`pnpm-workspace.yaml` explicitly denies `@google/genai` and `protobufjs` while
+retaining `esbuild: true`. A subsequent frozen install completed successfully:
 
 ```text
-uv run pytest -m "live or other" tests/live/test_context_budget_estimator_live.py -v
+pnpm install --frozen-lockfile
 ```
 
-Result:
+## Files
 
-```text
-FAILED
-assert 'qwen3.6-flash' == 'qwen-plus'
-1 failed in 1.81s
-```
-
-The existing test combined the configured model with an invented 32,768-token
-override, so it did not test catalog metadata for the request model.
-
-## GREEN Evidence
-
-The repaired test independently probes `dashscope.get_tokenizer("qwen-plus")`
-locally before building the counter:
-
-- import missing or exact `UnsupportedModel` -> require conservative counter
-  and the exact UTF-8-byte plus structural formula;
-- tokenizer returned -> require `qwen_local`, a
-  `DashScopeLocalTokenizerAdapter`, and equal local encode/count semantics;
-- other errors propagate and fail the test rather than being reclassified as
-  unsupported.
-
-The probe calls neither `Tokenization.call` nor any provider request, download,
-or remote tokenizer endpoint.
+- `server/src/agent/contracts.ts` — upstream-independent adapter, session,
+  config, tool-slot, event, and bounded error contracts.
+- `server/src/agent/pi-adapter.ts` — the only Pi import boundary, validated
+  configuration, real Pi composition, event mapping, cancellation, and cleanup.
+- `server/src/agent/session-registry.ts` — ephemeral race-aware `run_id` session
+  registry and aggregate lifecycle cleanup.
+- `server/src/agent/experimental-pi.ts` — fake-testable non-durable experimental
+  session/turn HTTP composition.
+- `server/src/app/create-app.ts`, `server/src/index.ts` — flag-gated Host routing
+  and lifecycle closer registration.
+- `server/tests/pi-adapter.test.ts`, `server/tests/session-registry.test.ts`,
+  `server/tests/experimental-pi.test.ts`, and
+  `server/tests/pi-import-boundary.test.ts` — deterministic fake coverage.
+- `server/package.json`, `package.json`, `pnpm-lock.yaml`,
+  `pnpm-workspace.yaml`, and `scripts/check-workspace-foundation.mjs` — pinned
+  dependency, Node floor, install policy, and foundation assertion.
 
 ## Verification
 
-All commands ran from `backend/` in
-`D:\coding\BioMed-QAgent\.worktrees\fix-model-aware-context-budget`.
+All commands used pnpm through the requested Node 24.11.1 Corepack executable
+when `node`/`pnpm` were not available on `PATH`.
 
-1. Default deselection proof:
-
-   ```text
-   uv run pytest -q -k "canonical_json or context_budget_estimator"
-   ```
+1. Focused Task 7 tests:
 
    ```text
-   1 passed, 1489 deselected in 4.60s
+   pnpm --filter @biomed/server exec vitest run tests/pi-adapter.test.ts tests/session-registry.test.ts tests/experimental-pi.test.ts tests/pi-import-boundary.test.ts
    ```
 
-   The selected non-live canonical JSON test ran; the marked estimator test was
-   deselected before its credential guard, SDK probe, or provider client.
+   Result: 4 files passed, 15 tests passed.
 
-2. Exact marker expression:
+2. Server finite checks:
 
    ```text
-   uv run pytest -m live --collect-only -q -k context_budget_estimator
+   pnpm --filter @biomed/server test
+   pnpm --filter @biomed/server lint
+   pnpm --filter @biomed/server typecheck
+   pnpm --filter @biomed/server build
    ```
+
+   Result: test 9 files/33 tests passed; lint, typecheck, and build passed.
+
+3. Root finite checks, once after focused checks:
 
    ```text
-   tests/live/test_context_budget_estimator_live.py::test_context_budget_estimator_matches_authoritative_prompt_usage
-
-   1/1490 tests collected (1489 deselected) in 4.60s
+   pnpm test
+   pnpm lint
+   pnpm typecheck
+   pnpm build
    ```
 
-3. Non-live marker expression:
+   Result: all passed. The root test included workspace foundation, contracts,
+   server 33 tests, and frontend 739 tests. Existing React `act(...)` stderr and
+   the existing Vite chunk-size warning were unchanged and non-failing.
+
+4. Lock/install and diff checks:
 
    ```text
-   uv run pytest -m "not live" --collect-only -q -k canonical_json
+   pnpm install --frozen-lockfile
+   git diff --check
+   git diff --cached --check
    ```
 
-   ```text
-   tests/test_token_estimation.py::test_canonical_json_sorts_dict_keys_and_remains_compact
+   Result: all passed. A static source inspection also found the Pi import only
+   in `server/src/agent/pi-adapter.ts`.
 
-   1/1490 tests collected (1489 deselected) in 4.48s
-   ```
+No live provider/model call was added to CI; the real adapter is compile-checked
+and lifecycle behavior is covered through injected deterministic fakes.
 
-4. Composite marker expression:
+## Deliberate limitations for Tasks 8–11
 
-   ```text
-   uv run pytest -m "(live or other)" --collect-only -q -k context_budget_estimator
-   ```
-
-   ```text
-   tests/live/test_context_budget_estimator_live.py::test_context_budget_estimator_matches_authoritative_prompt_usage
-
-   1/1490 tests collected (1489 deselected) in 4.43s
-   ```
-
-5. Direct-file collection:
-
-   ```text
-   uv run pytest tests/live/test_context_budget_estimator_live.py --collect-only -q
-   ```
-
-   ```text
-   tests/live/test_context_budget_estimator_live.py::test_context_budget_estimator_matches_authoritative_prompt_usage
-
-   1 test collected in 1.30s
-   ```
-
-6. Default live run:
-
-   ```text
-   uv run pytest -m live tests/live/test_context_budget_estimator_live.py -v -s
-   ```
-
-   ```text
-   tokenizer_kind=qwen_local
-   1 passed in 3.60s
-   ```
-
-7. Optional tokenizer extra:
-
-   ```text
-   uv run --extra qwen-tokenizer pytest -m live tests/live/test_context_budget_estimator_live.py -v -s
-   ```
-
-   ```text
-   tokenizer_kind=qwen_local
-   1 passed in 3.73s
-   ```
-
-The optional tokenizer was locally available in both recorded environments, so
-both live runs exercised and proved the `qwen_local` branch. In an environment
-where the optional package is absent or `qwen-plus` raises `UnsupportedModel`,
-the same test requires the conservative branch instead.
-
-8. Ruff:
-
-   ```text
-   uv run ruff check tests/live/test_context_budget_estimator_live.py tests/conftest.py
-   ```
-
-   ```text
-   All checks passed!
-   ```
-
-9. LSP diagnostics:
-
-   ```text
-   backend/tests/live/test_context_budget_estimator_live.py: No diagnostics found
-   backend/tests/conftest.py: No diagnostics found
-   ```
-
-## Credential Behavior
-
-Without `DASHSCOPE_API_KEY`, the test explicitly skips before it probes the
-tokenizer, builds `ModelConfiguration`, selects a counter, creates
-`AsyncOpenAI`, or sends any request. This report records no credential, header,
-or credential-bearing URL.
+- Task 8 will implement the Workspace capability and connect real project tools
+  to the existing registration slot. In Phase 1B the real adapter rejects a
+  non-empty tool list explicitly.
+- Task 9 will normalize these project events into durable `EventEnvelope`
+  records, add experimental WebSocket streaming/replay, and wire the frontend.
+  The current HTTP response only returns the events collected for one turn.
+- Task 10 will bridge Dataset Core build tools and persistence/publication. This
+  adapter owns none of those domains.
+- Task 11 will compose project skills/system prompts and run the full E2E/live
+  sequence.
+- The registry is intentionally single-process and ephemeral. It is not a Task
+  repository, has no restart recovery, and makes no durability/replay claim.

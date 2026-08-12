@@ -1,0 +1,115 @@
+{
+  "artifact_fixtures": [],
+  "build_result": {
+    "available_artifact_roles": [],
+    "binding_failures": [
+      {
+        "binding_id": "binding_gdc",
+        "message": "source contained no primary rows",
+        "reason_code": "no_primary_data",
+        "schema_version": "1.0"
+      }
+    ],
+    "build_id": "golden_no_data",
+    "publication_id": null,
+    "reason_codes": [
+      "no_primary_data"
+    ],
+    "recommended_next_action": "Review the source selection or constraints",
+    "rejected_sources": [
+      "binding_gdc"
+    ],
+    "schema_version": "1.0",
+    "status": "no_data",
+    "successful_sources": [],
+    "user_summary": "No publishable primary data was produced",
+    "valid_row_count": 0
+  },
+  "event_envelope": {
+    "event_id": "event_no_data_golden",
+    "parent_tool_call_id": null,
+    "payload": {
+      "build_result": {
+        "available_artifact_roles": [],
+        "binding_failures": [
+          {
+            "binding_id": "binding_gdc",
+            "message": "source contained no primary rows",
+            "reason_code": "no_primary_data",
+            "schema_version": "1.0"
+          }
+        ],
+        "build_id": "golden_no_data",
+        "publication_id": null,
+        "reason_codes": [
+          "no_primary_data"
+        ],
+        "recommended_next_action": "Review the source selection or constraints",
+        "rejected_sources": [
+          "binding_gdc"
+        ],
+        "schema_version": "1.0",
+        "status": "no_data",
+        "successful_sources": [],
+        "user_summary": "No publishable primary data was produced",
+        "valid_row_count": 0
+      },
+      "schema_version": "1.0",
+      "type": "run_completed"
+    },
+    "run_id": "run_golden_no_data",
+    "schema_version": "2.0",
+    "sequence": 1,
+    "stage_attempt_id": null,
+    "subagent_id": null,
+    "task_id": "task_golden_no_data",
+    "timestamp": "2026-08-11T00:00:00Z",
+    "type": "run_completed"
+  },
+  "fixture_version": 1,
+  "manifest": null,
+  "outcome": "no_data",
+  "publication": null,
+  "source_fixtures": [
+    {
+      "binding_id": "binding_gdc",
+      "repo_relative_path": "tests/migration/sources/header_only.tsv",
+      "sha256": "0e3decb00d7e19c075803171c03d8ce5ab8ef4e9627c4a85375c061f88db0910",
+      "size_bytes": 14
+    }
+  ],
+  "spec": {
+    "build_id": "golden_no_data",
+    "cohort_filters": {},
+    "dataset_family": "gene_expression",
+    "entities": {},
+    "merge_strategy": "append_by_canonical_row",
+    "normalization_profile_ref": "gene_expression.normalization.v1",
+    "objective": "Freeze the deterministic gene expression migration baseline",
+    "output_format": "csv",
+    "required_fields": [],
+    "row_granularity": "gene_sample_measurement",
+    "schema_ref": "gene_expression.long.v1",
+    "schema_version": "1.0",
+    "source_bindings": [
+      {
+        "accession": null,
+        "acquisition": {
+          "mode": "builtin",
+          "provider_id": "gdc.v1",
+          "recipe_id": null,
+          "recipe_version": null,
+          "schema_version": "1.0"
+        },
+        "adapter_id": "gdc.expression.v1",
+        "binding_id": "binding_gdc",
+        "parameters": {},
+        "schema_version": "1.0",
+        "source": "gdc"
+      }
+    ],
+    "target_entity_level": null,
+    "validation_profile_ref": "gene_expression.release.v1"
+  },
+  "validation_result": null
+}

@@ -1,0 +1,286 @@
+{
+  "artifact_fixtures": [
+    {
+      "artifact_id": "artifact_f7ac5848cf46e32884342ba9e5c303af",
+      "relative_path": "merged/primary.csv",
+      "repo_relative_path": "tests/migration/golden/succeeded/artifacts/merged/primary.csv",
+      "role": "primary_dataset",
+      "sha256": "ffcb69da65057ee5b94559999684c902cb47592acf2cb19724330c0b8d43fea2",
+      "size_bytes": 1472
+    },
+    {
+      "artifact_id": "artifact_9ae7d3ef04a0fc8fb38c4bb94963a239",
+      "relative_path": "schema.json",
+      "repo_relative_path": "tests/migration/golden/succeeded/artifacts/schema.json",
+      "role": "schema",
+      "sha256": "a9c62815e6161c13bd2e221e07c9d006372ae67500924e2628f826a04ae8f624",
+      "size_bytes": 8096
+    },
+    {
+      "artifact_id": "artifact_f1ac1725788e670fb799a5b15f4a0005",
+      "relative_path": "provenance.json",
+      "repo_relative_path": "tests/migration/golden/succeeded/artifacts/provenance.json",
+      "role": "provenance",
+      "sha256": "edf6d0dd017a396576d3ec9b90a057d83bfce284383597bd51703bc3775f8d61",
+      "size_bytes": 4697
+    },
+    {
+      "artifact_id": "artifact_07361e3ba5c494b51fa810aecd373c33",
+      "relative_path": "batches/binding_gdc_rejected.csv",
+      "repo_relative_path": "tests/migration/golden/succeeded/artifacts/batches/binding_gdc_rejected.csv",
+      "role": "audit_report",
+      "sha256": "11f4eec0859378db407915f7395282a6f2c0946cc071a4a4aa8992118e17c525",
+      "size_bytes": 119
+    },
+    {
+      "artifact_id": "artifact_61e49fc7b3398396072ba0d542975c76",
+      "relative_path": "canonical/binding_gdc_field_mappings.csv",
+      "repo_relative_path": "tests/migration/golden/succeeded/artifacts/canonical/binding_gdc_field_mappings.csv",
+      "role": "audit_report",
+      "sha256": "90098f2155b9032aa42e887bba31191387b15e6868915999d1d981fadff7fb95",
+      "size_bytes": 1021
+    },
+    {
+      "artifact_id": "artifact_d3939c49f759472c31bedd77d104b23a",
+      "relative_path": "canonical/binding_gdc_normalization_log.csv",
+      "repo_relative_path": "tests/migration/golden/succeeded/artifacts/canonical/binding_gdc_normalization_log.csv",
+      "role": "audit_report",
+      "sha256": "79a20f99c64a7cd14b288f7be52500d2e9fa1f0abe255fffd1695f1ded4a39d6",
+      "size_bytes": 600
+    },
+    {
+      "artifact_id": "artifact_66a60e5c3c429ef84bc411338d059cc1",
+      "relative_path": "canonical/binding_gdc_rejected.csv",
+      "repo_relative_path": "tests/migration/golden/succeeded/artifacts/canonical/binding_gdc_rejected.csv",
+      "role": "audit_report",
+      "sha256": "11f4eec0859378db407915f7395282a6f2c0946cc071a4a4aa8992118e17c525",
+      "size_bytes": 119
+    }
+  ],
+  "build_result": {
+    "available_artifact_roles": [],
+    "binding_failures": [],
+    "build_id": "golden_succeeded",
+    "publication_id": "pub_golden_succeeded_d9951015944fbbe9",
+    "reason_codes": [],
+    "recommended_next_action": "",
+    "rejected_sources": [],
+    "schema_version": "1.0",
+    "status": "succeeded",
+    "successful_sources": [
+      "binding_gdc"
+    ],
+    "user_summary": "build golden_succeeded published 4 valid row(s)",
+    "valid_row_count": 4
+  },
+  "event_envelope": {
+    "event_id": "event_succeeded_golden",
+    "parent_tool_call_id": null,
+    "payload": {
+      "build_result": {
+        "available_artifact_roles": [],
+        "binding_failures": [],
+        "build_id": "golden_succeeded",
+        "publication_id": "pub_golden_succeeded_d9951015944fbbe9",
+        "reason_codes": [],
+        "recommended_next_action": "",
+        "rejected_sources": [],
+        "schema_version": "1.0",
+        "status": "succeeded",
+        "successful_sources": [
+          "binding_gdc"
+        ],
+        "user_summary": "build golden_succeeded published 4 valid row(s)",
+        "valid_row_count": 4
+      },
+      "schema_version": "1.0",
+      "type": "run_completed"
+    },
+    "run_id": "run_golden_succeeded",
+    "schema_version": "2.0",
+    "sequence": 1,
+    "stage_attempt_id": null,
+    "subagent_id": null,
+    "task_id": "task_golden_succeeded",
+    "timestamp": "2026-08-11T00:00:00Z",
+    "type": "run_completed"
+  },
+  "fixture_version": 1,
+  "manifest": {
+    "artifacts": [
+      {
+        "artifact_id": "artifact_f7ac5848cf46e32884342ba9e5c303af",
+        "media_type": "text/csv",
+        "relative_path": "merged/primary.csv",
+        "role": "primary_dataset",
+        "schema_version": "1.0",
+        "sha256": "ffcb69da65057ee5b94559999684c902cb47592acf2cb19724330c0b8d43fea2",
+        "size_bytes": 1472
+      },
+      {
+        "artifact_id": "artifact_9ae7d3ef04a0fc8fb38c4bb94963a239",
+        "media_type": "application/json",
+        "relative_path": "schema.json",
+        "role": "schema",
+        "schema_version": "1.0",
+        "sha256": "a9c62815e6161c13bd2e221e07c9d006372ae67500924e2628f826a04ae8f624",
+        "size_bytes": 8096
+      },
+      {
+        "artifact_id": "artifact_f1ac1725788e670fb799a5b15f4a0005",
+        "media_type": "application/json",
+        "relative_path": "provenance.json",
+        "role": "provenance",
+        "schema_version": "1.0",
+        "sha256": "edf6d0dd017a396576d3ec9b90a057d83bfce284383597bd51703bc3775f8d61",
+        "size_bytes": 4697
+      },
+      {
+        "artifact_id": "artifact_07361e3ba5c494b51fa810aecd373c33",
+        "media_type": "text/csv",
+        "relative_path": "batches/binding_gdc_rejected.csv",
+        "role": "audit_report",
+        "schema_version": "1.0",
+        "sha256": "11f4eec0859378db407915f7395282a6f2c0946cc071a4a4aa8992118e17c525",
+        "size_bytes": 119
+      },
+      {
+        "artifact_id": "artifact_61e49fc7b3398396072ba0d542975c76",
+        "media_type": "text/csv",
+        "relative_path": "canonical/binding_gdc_field_mappings.csv",
+        "role": "audit_report",
+        "schema_version": "1.0",
+        "sha256": "90098f2155b9032aa42e887bba31191387b15e6868915999d1d981fadff7fb95",
+        "size_bytes": 1021
+      },
+      {
+        "artifact_id": "artifact_d3939c49f759472c31bedd77d104b23a",
+        "media_type": "text/csv",
+        "relative_path": "canonical/binding_gdc_normalization_log.csv",
+        "role": "audit_report",
+        "schema_version": "1.0",
+        "sha256": "79a20f99c64a7cd14b288f7be52500d2e9fa1f0abe255fffd1695f1ded4a39d6",
+        "size_bytes": 600
+      },
+      {
+        "artifact_id": "artifact_66a60e5c3c429ef84bc411338d059cc1",
+        "media_type": "text/csv",
+        "relative_path": "canonical/binding_gdc_rejected.csv",
+        "role": "audit_report",
+        "schema_version": "1.0",
+        "sha256": "11f4eec0859378db407915f7395282a6f2c0946cc071a4a4aa8992118e17c525",
+        "size_bytes": 119
+      }
+    ],
+    "build_id": "golden_succeeded",
+    "confidence_summary": {
+      "detected_anomaly_count": 0,
+      "report_file": "confidence_report.csv"
+    },
+    "dataset_family": "gene_expression",
+    "manifest_id": "manifest_d9951015944fbbe9",
+    "primary_key": [
+      "dataset_id",
+      "sample_id",
+      "gene_id",
+      "measurement_type"
+    ],
+    "provenance_summary": {
+      "conflict_count": 0,
+      "coverage": {
+        "coverage_ratio": 1.0,
+        "traced_rows": 4,
+        "untraced_rows": 0
+      },
+      "dedup_count": 0,
+      "field_mapping_count": 5,
+      "normalization_log_entries": 4,
+      "rejected_count": 0,
+      "source_count": 1
+    },
+    "row_count": 4,
+    "row_granularity": "gene_sample_measurement",
+    "schema_ref": "gene_expression.long.v1",
+    "schema_version": "1.0",
+    "sha256": "d9951015944fbbe9c295b07a25b530efeb6984cb0cf3ded484a57a24b94ca2e0",
+    "source_summary": {
+      "binding_gdc": {
+        "adapter_id": "gdc.expression.v1",
+        "asset_id": "asset_e0a607a1ca084789778113f316ef2afd93019984ddb4645f02ebf312275f58c7",
+        "entity_level": "gene",
+        "namespace": "ensembl_gene",
+        "rejected_count": 0,
+        "row_count": 4,
+        "source_id": "src_binding_gdc",
+        "unit": "expression_value"
+      }
+    },
+    "task_id": "golden_succeeded",
+    "validation_summary": {
+      "checked_count": 10,
+      "failed_count": 0,
+      "profile_ref": "gene_expression.release.v1",
+      "report_path": "validation_report.json",
+      "status": "passed"
+    }
+  },
+  "outcome": "succeeded",
+  "publication": {
+    "manifest_ref": "manifest_d9951015944fbbe9",
+    "publication_id": "pub_golden_succeeded_d9951015944fbbe9",
+    "published_at": "2026-08-11T00:00:00Z",
+    "schema_version": "1.0",
+    "supersedes_publication_id": null,
+    "validation_result_ref": "validation_report.json"
+  },
+  "source_fixtures": [
+    {
+      "binding_id": "binding_gdc",
+      "repo_relative_path": "backend/tests/fixtures/gdc/gdc_expression.tsv",
+      "sha256": "e0a607a1ca084789778113f316ef2afd93019984ddb4645f02ebf312275f58c7",
+      "size_bytes": 38
+    }
+  ],
+  "spec": {
+    "build_id": "golden_succeeded",
+    "cohort_filters": {},
+    "dataset_family": "gene_expression",
+    "entities": {},
+    "merge_strategy": "append_by_canonical_row",
+    "normalization_profile_ref": "gene_expression.normalization.v1",
+    "objective": "Freeze the deterministic gene expression migration baseline",
+    "output_format": "csv",
+    "required_fields": [],
+    "row_granularity": "gene_sample_measurement",
+    "schema_ref": "gene_expression.long.v1",
+    "schema_version": "1.0",
+    "source_bindings": [
+      {
+        "accession": null,
+        "acquisition": {
+          "mode": "builtin",
+          "provider_id": "gdc.v1",
+          "recipe_id": null,
+          "recipe_version": null,
+          "schema_version": "1.0"
+        },
+        "adapter_id": "gdc.expression.v1",
+        "binding_id": "binding_gdc",
+        "parameters": {},
+        "schema_version": "1.0",
+        "source": "gdc"
+      }
+    ],
+    "target_entity_level": null,
+    "validation_profile_ref": "gene_expression.release.v1"
+  },
+  "validation_result": {
+    "checked_count": 10,
+    "failed_count": 0,
+    "manifest_digest": "d9951015944fbbe9c295b07a25b530efeb6984cb0cf3ded484a57a24b94ca2e0",
+    "profile_ref": "gene_expression.release.v1",
+    "report_path": "validation_report.json",
+    "schema_version": "1.0",
+    "status": "passed"
+  }
+}

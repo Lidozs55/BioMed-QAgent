@@ -6,16 +6,19 @@
 > - **权威性**：本文件是系统架构的**单一权威来源**（source of truth）。
 >   任何与本文矛盾的实现都视为缺陷；任何架构变更必须先修订本文或新增 ADR。
 > - **职责分工**：本文回答"系统是什么、怎么组织、约束是什么"；具体决策的
->   "为什么"由 ADR 索引（[BioMed-QAgent_Architecture_Decisions_and_Lessons.md](BioMed-QAgent_Architecture_Decisions_and_Lessons.md)）承担；
+>   "为什么"由 ADR 索引（[BioMed-QAgent_Architecture_Decisions_and_Lessons.md](BioMed-QAgent_Architecture_Decisions_and_Lessons.md)；
+>   [ADR-017 及后续记录](adr/README.md)）承担；
 >   实现规格由 [BioMed-QAgent_Pipeline_Refactor_Design.md](BioMed-QAgent_Pipeline_Refactor_Design.md) 承担；
 >   执行任务由 [TODO.md](TODO.md) 承担。三者不互相复制。
-> - **实现状态**：本文描述 V2 目标架构。当前代码仓库仍为 V1，归档于
->   [legacy/ARCHITECTURE_V1.md](legacy/ARCHITECTURE_V1.md)。V2 通过绞杀模式
->   逐步落地，迁移策略见 §18。各章节在涉及"已落地 / 待落地"时以行内标注说明。
+> - **实现状态**：V2 Dataset Construction Runtime 已落地；Agent/runtime 迁移处于
+>   Phase 0/1 过渡态。浏览器正常入口已切至单端口 TypeScript Host，formal
+>   `/api/v1` 与 durable state 仍由 private FastAPI 权威实现，Pi 仅暴露显式、
+>   live-only 的 experimental surface。V1 历史架构归档于
+>   [archive/ARCHITECTURE_V1.md](archive/ARCHITECTURE_V1.md)，迁移策略见 §18。
 > - **验证与失效**：每个里程碑、每次新增/修订 ADR、数据族接入或执行模型变化
 >   时对照本文校验一致性；与代码现状矛盾且未标注待落地、或被新 ADR 推翻而未
 >   同步修订时，本文标记为 `stale`。
-> - **最后验证（Last Verified）**：2026-08-06。
+> - **最后验证（Last Verified）**：2026-08-12。
 > - **交叉引用约定**：本文档内部章节引用写作 `§N`；引用 ADR 索引的章节写作
 >   `ADR §N`（如 `ADR §21` 指 ADR 索引的踩坑复盘，不是本文 §21 Demo 决策）。
 > - **治理规则**：变更触发、不重复规则（no-duplication）等见 §24。
@@ -56,16 +59,23 @@ DatasetBuild（见 §3）。会话可将多个 Build 放在同一任务下，但
 ```text
 React/shadcn Frontend
         |
-        | HTTP + WebSocket (durable events + realtime assistant stream)
+        | one public HTTP/WebSocket port
         v
-FastAPI Control Plane  (task / run / build / publication / settings / skills / cache)
+TypeScript Application Host
+        +-- Vite middleware / HMR
+        +-- /experimental/pi/* -> Pi adapter + governed Workspace (live-only)
+        +-- /api/v1/* + /api/v1/ws -> private loopback FastAPI proxy
         |
-        v
-OpenAI Agents SDK Main Agent + Discovery Skills
-        |
-        | DatasetBuildSpec  (单一权威输入)
-        v
-Spec Validator  (trusted service)
+        +-----------------------------+
+        |                             |
+        v                             v
+Pi experimental Agent          FastAPI durable/formal authority
+        |                       Task/Run/EventStore/legacy Agent
+        +-------------+---------------+
+                      |
+                      | DatasetBuildSpec (single authoritative input)
+                      v
+Python V2 Spec Validator / Dataset Construction Runtime
         | \
         |  `-- reject -> BuildResult(SPEC_REJECTED) + RunSummary
         v
@@ -89,6 +99,9 @@ Dataset Construction Runtime  (服务端固定构建骨架)
                  `-- BuildResult + server-generated RunSummary
 ```
 
+Phase 1 的 internal Dataset Core bridge 仅接受 loopback + per-process secret，且
+未配置 secret 时 fail closed。managed Host 动态分配 private loopback 端口，并用
+本次 per-process secret 验证启动身份；`/internal/migration/*` 不经 Host 公开代理。
 方括号步骤可以按来源并发；fan-out / fan-in 属于 Runtime 内部控制流，不形成 Agent
 可编排 DAG，也不形成数据集级 Recipe。
 
@@ -1168,6 +1181,40 @@ V2 采用**绞杀模式（strangler）**，不做一次性重写。原因：V1 P
 
 > 决策依据：ADR-016、ADR §26（文档治理）。
 
+### 18.4 Pi / TypeScript Host 迁移边界（Phase 0/1）
+
+Pi 采用同一绞杀原则替换**模型面对的 Agent 层**，不替换 Dataset Construction
+Runtime 的确定性业务语义。Phase 1 的目标过渡态是：浏览器只访问 TypeScript
+Application Host 的一个公开端口；Host 内嵌 Vite middleware，并将旧产品 HTTP/WS
+转发到 loopback-only FastAPI；实验 Pi 路径通过受控桥继续调用 Python V2 Dataset
+Core。Validation、Provenance 和 Publication 仍由 Core 权威执行。
+
+当前正常开发入口是仓库根 `pnpm dev`。默认 profile 为 `APP_HOST=ts`、
+`AGENT_RUNTIME=legacy`、`DATASET_CORE=python`、`PI_EXPERIMENTAL=1`：formal API
+仍走 legacy authority，而 Pi 只出现在 `/experimental/pi/*`。Host proxy-only、
+standalone frontend/backend 与 full legacy rollback 均为显式 migration/debug
+脚本；无效 flag 组合在公开端口监听前失败。
+
+Pi Session、BioMed Task、Run 与 DatasetBuild 是四个不同生命周期。Pi 依赖只允许
+出现在 `server/src/agent/pi-adapter.ts` 或等价 adapter 边界；TypeScript wire DTO
+统一来自 `@biomed/contracts`，Phase 0/1 的 Python Pydantic 模型通过 parity fixture
+保持兼容。工作区继续执行 staging-only 写入与不可变 `artifacts/` / `state/` 边界。
+
+Host 持有 managed FastAPI、Pi session、Vite middleware、experimental listeners
+与 Workspace command 的关闭责任；启动失败按逆序回收，正常退出先停止接收新工作，
+再取消/dispose experimental work，最后关闭代理、Vite 和 private child。bridge cancel
+使用独立 side channel，但仍有界等待原 Python response；传输丢失或确认超时只能报告
+`bridge_unavailable`，不能伪装为已确认取消。实验 sequence 仅保证进程内 live ordering，
+不承担 durable replay 或历史 Task 恢复。
+
+回滚不改写 Task/Event/Publication 数据：先以 `PI_EXPERIMENTAL=0` 保留 TS Host
+proxy-only；若 Host 本身可疑，再使用 full legacy rollback。Phase 0/1 全程保持
+`DATASET_CORE=python`，不迁移或修复正式数据状态。
+
+> 决策依据：[ADR-017 至 ADR-024](adr/README.md)。Phase 1 的资源所有权、桥协议、
+> Workspace、事件映射和回滚组合见 [迁移边界索引](migration/README.md)；该索引记录
+> 操作约束，不取代本文的架构定义。
+
 ---
 
 ## 19. 顶层不变量
@@ -1349,8 +1396,10 @@ CSV、JSONL 或 Parquet 的选择需考虑可读性、规模和查询效率。
 | --- | --- | --- |
 | 系统架构（是什么 / 怎么组织 / 约束） | `docs/ARCHITECTURE.md`（本文） | V2 目标，权威 |
 | 架构决策（为什么） | `docs/BioMed-QAgent_Architecture_Decisions_and_Lessons.md` | ADR 索引，权威 |
+| Pi 迁移架构决策（为什么） | `docs/adr/README.md` | ADR-017 起，权威 |
+| Phase 1 迁移操作边界 | `docs/migration/README.md` | 迁移期协议与矩阵，受本文和 ADR 约束 |
 | V2 实现规格 | `docs/BioMed-QAgent_Pipeline_Refactor_Design.md` | 实现基线，权威 |
-| V1 架构（历史现状） | `docs/legacy/ARCHITECTURE_V1.md` | Legacy，仅参考 |
+| V1 架构（历史现状） | `docs/archive/ARCHITECTURE_V1.md` | Legacy，仅参考 |
 | 执行任务 | `docs/TODO.md` | 任务清单，不承担架构解释 |
 | 赛题背景与评分 | `PROBLEM.md` | 外部约束，权威 |
 | Agent 通用规则 | `AGENTS.md` | 工作流约束，权威 |

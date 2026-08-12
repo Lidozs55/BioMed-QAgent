@@ -33,9 +33,17 @@ class Settings:
     host: str = os.getenv("HOST", "127.0.0.1")
     port: int = int(os.getenv("PORT", "8000"))
     # 数据产物目录 — 默认解析为绝对路径，避免 cwd 变化导致输出散落
-    output_dir: str = os.getenv(
-        "OUTPUT_DIR",
-        str(Path.cwd().resolve() / "data" / "output"),
+    output_dir: str = str(
+        Path(
+            os.getenv(
+                "OUTPUT_DIR",
+                str(Path.cwd() / "data" / "output"),
+            )
+        ).expanduser().resolve()
+    )
+    # Temporary private Host -> Python Dataset Core migration bridge secret.
+    pi_dataset_bridge_secret: str | None = (
+        os.getenv("PI_DATASET_BRIDGE_SECRET") or None
     )
     # 爬虫行为（原 §5.3）：真实浏览器 UA 与请求间隔限速
     rate_limit_seconds: float = float(os.getenv("RATE_LIMIT_SECONDS", "2.0"))

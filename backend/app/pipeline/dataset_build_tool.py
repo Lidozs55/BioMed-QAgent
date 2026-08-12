@@ -1,152 +1,28 @@
-"""V2 Dataset Build Agent-facing tool (V1 退役后唯一正式产物入口).
+"""Legacy OpenAI FunctionTool adapters for the V2 DatasetBuild service."""
 
-``execute_dataset_build`` drives the fixed skeleton through the execution
-kernel (ExpressionBuildRunner + DatasetBuildExecutor) with the release
-invariants gate and the Publication supersedes chain.
-
-The Agent supplies a self-contained ``DatasetBuildSpec`` (JSON) plus a
-mapping of already-acquired source files (workdir-relative paths). The tool
-wraps each file into a content-addressed SourceAsset and returns the build
-outcome as structured JSON.
-"""
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
-import re
-from datetime import UTC, datetime
 from pathlib import Path
 
 from agents import RunContextWrapper, function_tool
 from pydantic import ValidationError
 
 from app.agent_loop.context import PendingDatasetBuild, RunContext
-from app.datasets.build.cache import DatasetCacheV2
-from app.datasets.build.expression_runner import (
-    _PUBLICATION_REFUSED_PREFIX,
-    ExpressionBuildRunner,
-)
-from app.datasets.build.invariants import PUBLISH_DIR, find_latest_publication
-from app.datasets.build.profiles import VALIDATION_PROFILES, get_validation_profile
+from app.datasets import service as dataset_build_service
 from app.datasets.build.v1_bridge import mirror_build_to_legacy_artifacts
-from app.datasets.contracts import (
-    CHECK_ID_PROBE_COVERAGE_REQUIRED_GENE_LEVEL,
-    REASON_PROBE_MAPPING_UNAVAILABLE_REQUIRED_GENE_LEVEL,
-    AcquisitionMode,
-    AdapterParams,
-    BindingRejection,
-    BindingRejectionKind,
-    DatasetBuildSpec,
-    DatasetManifest,
-    DatasetPublication,
-    SourceBinding,
-)
-from app.datasets.runtime import DatasetBuildExecutor, build_operation_plan
-from app.datasets.schema_registry import (
-    SchemaRegistry,
-    build_gene_expression_schema,
-    build_probe_expression_schema,
-)
-from app.datasets.spec_validator import SpecValidator
-from app.domain.contracts import (
-    DataLevel,
-    DownloadAttempt,
-    DownloadStatus,
-    ErrorDetail,
-    SourceAsset,
-    asset_id_from_sha256,
-    generate_prefixed_uuid,
-)
-from app.domain.contracts.dataset_state import (
-    BindingFailureDetail,
-    BuildResult,
-    BuildResultStatus,
-)
-from app.tools.workdir import resolve_task_local_file
+from app.datasets.contracts import DatasetManifest, DatasetPublication
+from app.domain.contracts.dataset_state import BuildResult
 
-_NO_DATA_SUMMARY = "任务完成，但未产出可发布的主数据。"
-_NO_DATA_NEXT_ACTION = "检查数据源可用性或调整查询后重试。"
-
-#: K2 (docs/REVIEW_2026-08-10-task-9ce0124f.md §5.3): actionable recovery
-#: hint for the most common NO_DATA root cause — a metadata-only series
-#: matrix.  The generic "检查数据源可用性" message previously told the agent
-#: the data source was at fault when the expression table actually lives in
-#: the series' soft/ or suppl/ files.
-_NO_DATA_NEXT_ACTION_EMPTY_SERIES_MATRIX = (
-    "series matrix 为元数据-only（无表达表）：改用 "
-    "download_geo(file_type='soft'/'suppl') 获取该系列的表达数据，"
-    "或换用 series matrix 含表达表的可用数据集后重试。"
-)
-
-#: H3 (Phase 4 review): structured reason code carried by the parse layer for
-#: an empty source and propagated through the outcome error details.
-_REASON_NO_PRIMARY_DATA = "no_primary_data"
-
-#: H3: operation ids that persist the manifest for the current attempt — only
-#: a failure at/after these may use the persisted manifest as this attempt's
-#: zero-row evidence (validate_profile writes it; publish runs right after).
-_MANIFEST_WRITING_OPERATIONS = frozenset({"validate_profile", "publish"})
-
-#: Phase 5 T7 (D5): stable reason code for a gene-required build that could
-#: not produce any publishable gene rows (probe->gene coverage zero or a
-#: partial mapping that leaves residual probe rows). Shared constant lives in
-#: ``app.datasets.contracts`` (review-loop R3-6).
-_REASON_PROBE_MAPPING_UNAVAILABLE = REASON_PROBE_MAPPING_UNAVAILABLE_REQUIRED_GENE_LEVEL
-
-#: Phase 5 T7 (D5 row 3): NO_DATA copy for a gene-required build that could
-#: not produce any publishable gene rows (probe->gene mapping unavailable).
-_PROBE_MAPPING_NO_DATA_SUMMARY = (
-    "任务完成，但未产出满足 gene 级要求的主数据（probe→gene 映射不可用）。"
-)
-_PROBE_MAPPING_NO_DATA_NEXT_ACTION = (
-    "检查 GPL 注释资产可用性或改用 probe 级构建。"
-)
-
-# D1 (Phase 4 review): while a data-correction pause is pending, the build
-# tool refuses so no publication can be produced from inputs under correction.
-_PENDING_MAIN_INPUT_MESSAGE = (
-    "execute_dataset_build 被拒绝：当前 Run 正在等待人工修正"
-    "（request_human_correction 尚未答复）。请等待修正完成后重试，"
-    "或先处理待决的修正请求。"
-)
 logger = logging.getLogger(__name__)
 
-_MEDIA_TYPES = {
-    ".csv": "text/csv",
-    ".tsv": "text/tab-separated-values",
-    ".txt": "text/plain",
-    ".json": "application/json",
-    ".xml": "application/xml",
-}
-
-#: build_id becomes a directory name under the task root (output_dir,
-#: state_dir, version dirs) so it must be a safe path segment. Agent-supplied
-#: values are validated before any file system access.
-_BUILD_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
-
-
-def _infer_media_type(path: Path) -> str:
-    return _MEDIA_TYPES.get(path.suffix.lower(), "application/octet-stream")
-
-
-def _ensure_build_output_inside(build_root: Path, build_id: str) -> Path:
-    """Resolve the build output dir and prove it stays inside the workspace.
-
-    Defense in depth for B1 (Phase 4 review): ``DatasetBuildSpec`` rejects
-    path-like ``build_id`` values at model construction, but the tool must
-    never trust a value that slips through — ``build_root / build_id`` is
-    only used when the resolved path remains under ``build_root``.
-    """
-
-    output_dir = build_root / build_id
-    try:
-        output_dir.resolve().relative_to(build_root.resolve())
-    except ValueError as exc:
-        raise ValueError(
-            f"build_id must remain inside the build workspace: {build_id!r}"
-        ) from exc
-    return output_dir
+# Preserve the legacy module's private test/debug seams during the adapter
+# extraction. Production orchestration lives in ``app.datasets.service``.
+_ensure_build_output_inside = dataset_build_service._ensure_build_output_inside
+_latest_publication_id = dataset_build_service._latest_publication_id
+_no_data_envelope = dataset_build_service._no_data_envelope
+_workflow_recipe_fetcher = dataset_build_service._workflow_recipe_fetcher
 
 
 @function_tool(
@@ -164,184 +40,14 @@ async def validate_dataset_build_spec(
     ctx: RunContextWrapper[RunContext],
     spec: str,
 ) -> str:
-    """Validate a V2 DatasetBuildSpec JSON without starting a build.
+    """Validate a V2 DatasetBuildSpec JSON without starting a build."""
 
-    Args:
-        spec: DatasetBuildSpec as JSON.
-
-    Returns:
-        JSON string with ``status`` ("valid" | "invalid" | "invalid_input"),
-        ``valid``, ``reason_codes`` and ``reasons`` (empty when valid).
-    """
-    try:
-        build_spec = DatasetBuildSpec.model_validate_json(spec)
-    except (ValueError, json.JSONDecodeError) as exc:
-        return json.dumps(
-            {
-                "status": "invalid_input",
-                "message": f"could not parse spec: {exc}",
-                "retryable": False,
-            },
-            ensure_ascii=False,
-        )
-    result = _build_spec_validator().validate(build_spec)
+    del ctx
+    response = dataset_build_service.validate_dataset_build_spec(spec)
     return json.dumps(
-        {
-            "status": "valid" if result.valid else "invalid",
-            "valid": result.valid,
-            "reason_codes": list(result.reason_codes),
-            "reasons": list(result.reasons),
-        },
+        response.model_dump(mode="json", exclude={"schema_version"}),
         ensure_ascii=False,
     )
-
-
-def _build_spec_validator() -> SpecValidator:
-    """Shared SpecValidator configuration for the V2 tools.
-
-    Single definition of the schema registry (gene/probe expression) and the
-    validation-profile allowlist so ``validate_dataset_build_spec`` and
-    ``execute_dataset_build`` can never drift apart.
-    """
-    return SpecValidator(
-        registry=SchemaRegistry(
-            [build_gene_expression_schema(), build_probe_expression_schema()]
-        ),
-        allowed_validation_profiles=frozenset(VALIDATION_PROFILES),
-    )
-
-
-def _workflow_recipe_fetcher(
-    run_ctx: RunContext,
-) -> object | None:
-    """Lazily build the WORKFLOW_RECIPE acquisition bridge for one Run.
-
-    Returns a :class:`app.recipes.source_fetcher.WorkflowRecipeSourceFetcher`
-    when the trusted Recipe services are bound, else ``None``.
-
-    A2d: the fetcher reuses the lifespan-owned Recipe services already bound
-    on the Run as ``create_skill_runtime`` (executor + store), so no extra
-    wiring is needed and the construction cost is paid only when a spec
-    actually declares a ``workflow_recipe`` binding. Returns ``None`` when
-    the runtime is not available (unit-test contexts / subagents without the
-    trusted Recipe services) — the caller then rejects the binding.
-    """
-
-    from app.recipes.source_fetcher import WorkflowRecipeSourceFetcher
-
-    try:
-        runtime = run_ctx.create_skill_runtime
-    except RuntimeError:
-        return None
-    if runtime.executor is None:
-        return None
-    return WorkflowRecipeSourceFetcher(
-        executor=runtime.executor,
-        store=runtime.store,
-    )
-
-
-async def _acquire_workflow_recipe_bindings(
-    run_ctx: RunContext,
-    build_spec: DatasetBuildSpec,
-    assets: dict[str, SourceAsset],
-    paths: dict[str, Path],
-    per_binding_outcomes: dict[str, BindingRejection],
-) -> None:
-    """Acquire every WORKFLOW_RECIPE binding through the recipe fetcher.
-
-    A2d: a ``workflow_recipe`` binding is acquired by replaying its pinned
-    PROMOTED recipe instead of an agent-pre-downloaded file. The fetched
-    SourceAsset and its real DownloadAttempt join the build exactly like a
-    pre-acquired file (the attempt is recorded on the RunContext so the
-    provenance chain closes). Acquisition failures — no run-time fetcher,
-    missing/non-PROMOTED recipe, workspace validation failure — reject the
-    binding through ``per_binding_outcomes`` so the executor skips its
-    phase-A operations and the BuildResult reports it under
-    ``rejected_sources``.
-    """
-
-    fetcher = _workflow_recipe_fetcher(run_ctx)
-    for binding in build_spec.source_bindings:
-        if binding.acquisition.mode is not AcquisitionMode.WORKFLOW_RECIPE:
-            continue
-        if fetcher is None:
-            per_binding_outcomes[binding.binding_id] = BindingRejection(
-                binding_id=binding.binding_id,
-                kind=BindingRejectionKind.ERROR,
-                reason_code="build_error",
-                message=(
-                    "workflow_recipe acquisition is not available in this run "
-                    "(no trusted Recipe runtime)"
-                ),
-            )
-            continue
-        try:
-            fetched = await fetcher.fetch(
-                binding=binding,
-                workspace=run_ctx.source_asset_workspace(),
-            )
-        except Exception as exc:  # noqa: BLE001 — recipe failures reject the binding
-            per_binding_outcomes[binding.binding_id] = BindingRejection(
-                binding_id=binding.binding_id,
-                kind=BindingRejectionKind.ERROR,
-                reason_code="build_error",
-                message=f"workflow recipe acquisition failed: {exc}",
-            )
-            continue
-        run_ctx.record_download_attempt(fetched.download_attempt)
-        asset = fetched.source_asset
-        assets[binding.binding_id] = asset
-        paths[binding.binding_id] = run_ctx.work_dir.root / asset.relative_path
-
-
-def _resolve_local_assets(
-    run_ctx: RunContext,
-    files_mapping: dict[str, str],
-    bindings_by_id: dict[str, SourceBinding],
-    *,
-    role: str,
-) -> tuple[dict[str, SourceAsset], dict[str, Path]]:
-    """Wrap pre-downloaded local files into content-addressed SourceAssets.
-
-    Shared by the ``source_files`` and ``mapping_files`` resolution paths.
-    Every file is backed by a REAL DownloadAttempt recorded on the
-    RunContext (A2c) so the asset's ``successful_attempt_id`` resolves to a
-    persisted attempt and the publication provenance chain is closed.
-    Raises ``FileNotFoundError``/``OSError`` when a path does not resolve —
-    the caller turns that into a retryable error.
-    """
-
-    assets: dict[str, SourceAsset] = {}
-    paths: dict[str, Path] = {}
-    for binding_id, relative in files_mapping.items():
-        path = resolve_task_local_file(run_ctx.work_dir, str(relative))
-        checksum = hashlib.sha256(path.read_bytes()).hexdigest()
-        binding = bindings_by_id.get(binding_id)
-        now = datetime.now(UTC)
-        attempt = DownloadAttempt(
-            attempt_id=generate_prefixed_uuid("download_attempt"),
-            source_id=binding.source if binding else binding_id,
-            url=f"local://{relative}",
-            status=DownloadStatus.SUCCEEDED,
-            bytes_received=path.stat().st_size,
-            started_at=now,
-            finished_at=now,
-        )
-        run_ctx.record_download_attempt(attempt)
-        assets[binding_id] = SourceAsset(
-            asset_id=asset_id_from_sha256(checksum),
-            kind="source",
-            relative_path=str(relative),
-            sha256=checksum,
-            size_bytes=path.stat().st_size,
-            media_type=_infer_media_type(path),
-            source_id=binding_id,
-            successful_attempt_id=attempt.attempt_id,
-            data_level=DataLevel.REPOSITORY_PROCESSED,
-        )
-        paths[binding_id] = path
-    return assets, paths
 
 
 @function_tool(
@@ -367,434 +73,66 @@ async def execute_dataset_build(
     source_files: str,
     mapping_files: str = "{}",
 ) -> str:
-    """Run one V2 dataset build over already-acquired source files.
+    """Delegate one legacy FunctionTool call to the typed DatasetBuild service."""
 
-    Args:
-        spec: DatasetBuildSpec as JSON (build_id, dataset_family,
-            row_granularity, schema_ref, source_bindings with adapter_id,
-            merge_strategy, validation_profile_ref, ...).
-        source_files: JSON object mapping binding_id to a workdir-relative
-            file path for every source binding.
-        mapping_files: optional JSON object mapping binding_id to a
-            workdir-relative GPL platform annotation file (probe→gene table)
-            for a probe-platform binding — the probe mapper consumes it so
-            probe rows can be re-namespaced to gene symbols.
-
-    Returns:
-        JSON string with status, build outcome, publication_id, row counts
-        and output locations, or a structured error when the input is
-        invalid or the build fails.
-    """
-    run_ctx = ctx.context
-    if run_ctx.main_input_pending:
-        # D1 (Phase 4 review): a correction pause is an exclusivity boundary.
-        # The SDK may run sibling FunctionTools concurrently; refuse to build
-        # while the Run is waiting on request_human_correction so the build
-        # never publishes from inputs under correction.
-        return json.dumps(
-            {
-                "status": "error",
-                "message": _PENDING_MAIN_INPUT_MESSAGE,
-                "retryable": False,
-            },
-            ensure_ascii=False,
-        )
-    try:
-        build_spec = DatasetBuildSpec.model_validate_json(spec)
-        files_mapping = json.loads(source_files)
-    except (ValueError, json.JSONDecodeError) as exc:
-        return json.dumps(
-            {
-                "status": "invalid_input",
-                "message": f"could not parse spec/source_files: {exc}",
-                "retryable": False,
-            },
-            ensure_ascii=False,
-        )
-    try:
-        mapping_mapping = json.loads(mapping_files)
-    except (ValueError, json.JSONDecodeError) as exc:
-        return json.dumps(
-            {
-                "status": "invalid_input",
-                "message": f"could not parse mapping_files: {exc}",
-                "retryable": False,
-            },
-            ensure_ascii=False,
-        )
-    if not _BUILD_ID_RE.fullmatch(build_spec.build_id):
-        return json.dumps(
-            {
-                "status": "invalid_input",
-                "message": (
-                    "build_id must match "
-                    r"[a-zA-Z0-9][a-zA-Z0-9_-]* (no path separators, "
-                    "dots, or whitespace)"
-                ),
-                "retryable": False,
-            },
-            ensure_ascii=False,
-        )
-    # Phase 5 final review (F1): the SpecValidator's registry + entity-level
-    # compatibility checks are wired into the production entry here, before
-    # any source file is touched or any build workspace is created. A gene
-    # build under a probe schema (or a probe build under the gene profile) is
-    # invalid_input with the validator's structured reasons — never a build
-    # that could publish probe rows under the gene release gate.
-    spec_validation = _build_spec_validator().validate(build_spec)
-    if not spec_validation.valid:
-        return json.dumps(
-            {
-                "status": "invalid_input",
-                "message": (
-                    "spec validation failed ["
-                    + ", ".join(spec_validation.reason_codes)
-                    + "]: "
-                    + "; ".join(spec_validation.reasons)
-                ),
-                "retryable": False,
-            },
-            ensure_ascii=False,
-        )
-    if not isinstance(files_mapping, dict):
-        return json.dumps(
-            {
-                "status": "invalid_input",
-                "message": "source_files must be a JSON object {binding_id: path}",
-                "retryable": False,
-            },
-            ensure_ascii=False,
-        )
-
-    binding_ids = {binding.binding_id for binding in build_spec.source_bindings}
-    # A2d: WORKFLOW_RECIPE bindings are acquired by replaying a pinned recipe
-    # (see ``_acquire_workflow_recipe_bindings``); only pre-downloaded
-    # (non-recipe) bindings must appear in ``source_files``.
-    recipe_binding_ids = {
-        binding.binding_id
-        for binding in build_spec.source_bindings
-        if binding.acquisition.mode is AcquisitionMode.WORKFLOW_RECIPE
-    }
-    missing = sorted((binding_ids - recipe_binding_ids) - set(files_mapping))
-    if missing:
-        return json.dumps(
-            {
-                "status": "invalid_input",
-                "message": (
-                    "source_files missing bindings: "
-                    + ", ".join(missing)
-                ),
-                "retryable": False,
-            },
-            ensure_ascii=False,
-        )
-
-    # Phase 5 T7: the per-binding fan-out outcomes map is shared by the
-    # runner (records rejections), the executor (skips phase B when every
-    # binding is rejected) and this tool (classification). Created before
-    # acquisition so A2d recipe failures can pre-populate rejections.
-    per_binding_outcomes: dict[str, BindingRejection] = {}
-    bindings_by_id = {
-        binding.binding_id: binding for binding in build_spec.source_bindings
-    }
-    if not isinstance(mapping_mapping, dict):
-        return json.dumps(
-            {
-                "status": "invalid_input",
-                "message": "mapping_files must be a JSON object {binding_id: path}",
-                "retryable": False,
-            },
-            ensure_ascii=False,
-        )
-    unknown_mapping_bindings = sorted(set(mapping_mapping) - binding_ids)
-    if unknown_mapping_bindings:
-        return json.dumps(
-            {
-                "status": "invalid_input",
-                "message": (
-                    "mapping_files reference unknown bindings: "
-                    + ", ".join(unknown_mapping_bindings)
-                ),
-                "retryable": False,
-            },
-            ensure_ascii=False,
-        )
-    try:
-        assets, paths = _resolve_local_assets(
-            run_ctx,
-            files_mapping,
-            bindings_by_id,
-            role="source",
-        )
-        mapping_assets, mapping_paths = _resolve_local_assets(
-            run_ctx,
-            mapping_mapping,
-            bindings_by_id,
-            role="mapping",
-        )
-    except (FileNotFoundError, OSError) as exc:
-        return json.dumps(
-            {
-                "status": "error",
-                "message": f"could not resolve a file: {exc}",
-                "retryable": True,
-            },
-            ensure_ascii=False,
-        )
-    await _acquire_workflow_recipe_bindings(
-        run_ctx,
-        build_spec,
-        assets,
-        paths,
-        per_binding_outcomes,
+    response = await dataset_build_service.execute_dataset_build(
+        ctx.context,
+        spec,
+        source_files,
+        mapping_files,
+        workflow_recipe_fetcher=_workflow_recipe_fetcher,
     )
-
-    build_root = run_ctx.work_dir.root / "datasets_build"
-    build_root.mkdir(parents=True, exist_ok=True)
-    try:
-        output_dir = _ensure_build_output_inside(build_root, build_spec.build_id)
-    except ValueError as exc:
+    if not isinstance(response, dataset_build_service.DatasetBuildCompleted):
         return json.dumps(
-            {
-                "status": "invalid_input",
-                "message": str(exc),
-                "retryable": False,
-            },
-            ensure_ascii=False,
-        )
-    # Phase 5 T7 D5: the per-binding fan-out outcomes map is shared by the
-    # runner (records rejections), the executor (skips phase B when every
-    # binding is rejected) and this tool (classification).
-    runner = ExpressionBuildRunner(
-        spec=build_spec,
-        registry=SchemaRegistry(
-            [build_gene_expression_schema(), build_probe_expression_schema()]
-        ),
-        source_assets=assets,
-        source_paths=paths,
-        mapping_assets=mapping_assets,
-        mapping_paths=mapping_paths,
-        output_dir=output_dir,
-        cancellation_requested=run_ctx.cancellation_requested,
-        pending_check=lambda: run_ctx.main_input_pending,
-    )
-    # Phase 5 D1: per-binding parameter scope — each binding's normalized
-    # AdapterParams JSON enters the operation digest, so changing a binding's
-    # format/scale/unit/platform_ids invalidates every checkpoint.  Invalid
-    # declared parameters are rejected as invalid input before any operation
-    # runs (the SpecValidator at the tool entry already rejects
-    # missing/invalid AdapterParams for geo bindings — final review F1 —
-    # this block additionally rejects binding-level parameter errors that
-    # only surface at model validation time, e.g. an invalid scale).
-    try:
-        parameter_scope = {
-            binding.binding_id: AdapterParams.model_validate(
-                binding.parameters
-            ).model_dump(mode="json")
-            for binding in build_spec.source_bindings
-            if binding.parameters
-        }
-    except ValidationError as exc:
-        return json.dumps(
-            {
-                "status": "invalid_input",
-                "message": f"binding adapter parameters are invalid: {exc}",
-                "retryable": False,
-            },
-            ensure_ascii=False,
-        )
-    plan = build_operation_plan(build_spec)
-    executor = DatasetBuildExecutor(
-        task_id=run_ctx.task_id,
-        build_id=build_spec.build_id,
-        run_id=generate_prefixed_uuid("run"),
-        state_dir=build_root / "state" / build_spec.build_id,
-        lock_path=build_root / "build.lock",
-        task_root=build_root,
-        plan=plan,
-        run_operation=runner,
-        source_assets=assets,
-        mapping_assets=mapping_assets,
-        parameter_scope=parameter_scope,
-        per_binding_outcomes=per_binding_outcomes,
-        cancellation_requested=run_ctx.cancellation_requested,
-        implementation_versions={op.operation_id: "1.0.0" for op in plan},
-    )
-    outcome = await executor.run()
-    if outcome.status != "completed":
-        if outcome.status == "failed" and outcome.error is not None:
-            # H2 (Phase 4 review): a correction that became pending between
-            # validation and publication refuses the immutable promotion —
-            # same agent-facing text family as the entry gate, never a
-            # retryable error.
-            if outcome.error.message.startswith(_PUBLICATION_REFUSED_PREFIX):
-                return json.dumps(
-                    {
-                        "status": "error",
-                        "message": _PENDING_MAIN_INPUT_MESSAGE,
-                        "retryable": False,
-                    },
-                    ensure_ascii=False,
-                )
-            classified = _classify_failed_outcome(
-                output_dir,
-                outcome.error,
-                sorted(binding_ids),
-                paths,
-                per_binding_outcomes=per_binding_outcomes,
-                profile_required_entity_level=(
-                    get_validation_profile(
-                        build_spec.validation_profile_ref
-                    ).required_entity_level
-                ),
-            )
-            if classified is not None:
-                _install_dataset_build_outcome(
-                    ctx,
-                    build_id=build_spec.build_id,
-                    result=classified,
-                    output_dir=output_dir,
-                    manifest_path=output_dir / "dataset_manifest.json",
-                )
-                return json.dumps(
-                    {
-                        "status": "ok",
-                        "build_id": build_spec.build_id,
-                        "result": classified.model_dump(mode="json"),
-                        "output_dir": output_dir.as_posix(),
-                        "manifest_file": (
-                            (output_dir / "dataset_manifest.json").as_posix()
-                            if (output_dir / "dataset_manifest.json").is_file()
-                            else None
-                        ),
-                    },
-                    ensure_ascii=False,
-                )
-        return json.dumps(
-            {
-                "status": "error",
-                "message": (
-                    f"build {build_spec.build_id} ended with status "
-                    f"{outcome.status}: "
-                    + (
-                        outcome.error.message
-                        if outcome.error is not None
-                        else "unknown error"
-                    )
-                ),
-                "retryable": True,
-            },
+            response.model_dump(mode="json", exclude={"schema_version"}),
             ensure_ascii=False,
         )
 
-    publication_id = find_latest_publication(output_dir / PUBLISH_DIR)
-    manifest_path = output_dir / "dataset_manifest.json"
-    valid_row_count = 0
-    if manifest_path.is_file():
-        manifest = json.loads(manifest_path.read_text("utf-8"))
-        valid_row_count = int(manifest.get("row_count", 0))
-    # Phase 5 T7 D5: per-binding fan-out — only the phase-A-successful
-    # bindings contributed to the published primary; a build with one or more
-    # rejected bindings is PARTIAL_SUCCESS (a genuinely publishable surviving
-    # source), never a silent success that counts rejected sources.
-    rejected_sources = sorted(per_binding_outcomes)
-    successful_sources = [
-        binding_id for binding_id in sorted(binding_ids)
-        if binding_id not in rejected_sources
-    ]
-    status = (
-        BuildResultStatus.PARTIAL_SUCCESS
-        if rejected_sources
-        else BuildResultStatus.SUCCEEDED
-    )
-    result = BuildResult(
-        status=status,
-        valid_row_count=valid_row_count,
-        successful_sources=successful_sources,
-        rejected_sources=rejected_sources,
-        publication_id=publication_id,
-        reason_codes=[],
-        user_summary=(
-            f"build {build_spec.build_id} published "
-            f"{valid_row_count} valid row(s)"
-            if not rejected_sources
-            else (
-                f"build {build_spec.build_id} partially published: "
-                f"{len(successful_sources)} source(s) published, "
-                f"{len(rejected_sources)} rejected"
-            )
-        ),
-    )
-    # Phase 7 T1 (bug-sweep REVIEW §3 V2-dup): bridge the structured V2
-    # BuildResult into the durable Run so the completion carries the real
-    # outcome (success/partial/no_data), never the generic NO_DATA fallback.
     _install_dataset_build_outcome(
         ctx,
-        build_id=build_spec.build_id,
-        result=result,
-        output_dir=output_dir,
-        manifest_path=manifest_path,
+        build_id=response.build_id,
+        result=response.result,
+        output_dir=response.output_dir,
+        manifest_path=response.manifest_path,
     )
-    # Phase 7 P0: commit the immutable version to the content-addressed V2
-    # dataset cache so later tasks can discover/reuse it by keyword.
-    cache_entry = None
-    try:
-        # T2 (Phase 7 review): derive the cache root from the task workdir
-        # (``<base>/tasks/<task_id>`` → ``<base>/cache``) so tool writes and
-        # API reads always share one root — the module-level
-        # ``settings.output_dir`` disagreed with the repository tasks dir
-        # under test deployments and dual-read 409'd on integrity checks.
-        cache = DatasetCacheV2(run_ctx.work_dir.root.parents[2] / "cache")
-        cache_entry = cache.commit(
-            namespace="build",
-            output_dir=output_dir,
-            spec=build_spec,
-            source_assets=assets,
-            keywords=[build_spec.dataset_family, build_spec.objective],
-        )
-    except (OSError, ValueError, FileNotFoundError) as exc:
-        logger.warning("dataset cache commit failed for build %s: %s", build_spec.build_id, exc)
-    # Phase 7 T2 (P1): dual-write the same build onto the legacy V1 artifact
-    # surface (artifacts/ + run_manifest.json) for the transition period, so
-    # filesystem-level consumers and the legacy artifact API keep serving V2
-    # outputs. Best-effort (a failure must never fail the build) and
-    # managed-run-only: direct tool invocations have no task artifact
-    # contract to satisfy.
-    if run_ctx.managed_run_id is not None:
+    if (
+        isinstance(response, dataset_build_service.DatasetBuildPublished)
+        and ctx.context.managed_run_id is not None
+    ):
         try:
             mirror_build_to_legacy_artifacts(
-                task_id=run_ctx.task_id,
-                task_root=run_ctx.work_dir.root,
-                build_dir=output_dir,
-                objective=build_spec.objective,
+                task_id=ctx.context.task_id,
+                task_root=ctx.context.work_dir.root,
+                build_dir=response.output_dir,
+                objective=json.loads(spec)["objective"],
             )
         except (OSError, ValueError, ValidationError) as exc:
             logger.warning(
                 "V1 artifact bridge failed for build %s: %s",
-                build_spec.build_id,
+                response.build_id,
                 exc,
             )
-    return json.dumps(
-        {
-            "status": "ok",
-            "build_id": build_spec.build_id,
-            "result": result.model_dump(mode="json"),
-            "output_dir": output_dir.as_posix(),
-            "manifest_file": manifest_path.as_posix(),
-            "cache_entry": (
-                {
-                    "namespace": cache_entry.namespace,
-                    "dataset_id": cache_entry.dataset_id,
-                    "dataset_family": cache_entry.dataset_family,
-                    "row_count": cache_entry.row_count,
-                }
-                if cache_entry is not None
-                else None
-            ),
-        },
-        ensure_ascii=False,
-    )
 
+    payload: dict[str, object] = {
+        "status": "ok",
+        "build_id": response.build_id,
+        "result": response.result.model_dump(mode="json"),
+        "output_dir": response.output_dir.as_posix(),
+        "manifest_file": (
+            response.manifest_path.as_posix()
+            if response.manifest_path.is_file()
+            else None
+        ),
+    }
+    if isinstance(response, dataset_build_service.DatasetBuildPublished):
+        payload["cache_entry"] = (
+            response.cache_entry.model_dump(
+                mode="json", exclude={"schema_version"}
+            )
+            if response.cache_entry is not None
+            else None
+        )
+    return json.dumps(payload, ensure_ascii=False)
 
 
 def _install_dataset_build_outcome(
@@ -805,17 +143,7 @@ def _install_dataset_build_outcome(
     output_dir: Path,
     manifest_path: Path,
 ) -> None:
-    """Bridge a V2 build outcome to the durable Run (bug-sweep §3 V2-dup).
-
-    Installs a ``PendingDatasetBuild`` on the managed RunContext so the Agent
-    executor can propagate the authoritative BuildResult into the durable
-    ``execution.build_result`` and emit the publication completion event.
-    The build outputs already live under ``datasets_build/<build_id>/`` and
-    are served by the builds API.
-
-    No-op for direct invocations without a managed run (unit tests call the
-    tool standalone — the JSON envelope stays the only result channel).
-    """
+    """Install the managed-run handoff owned by the legacy Agent runtime."""
 
     managed_run_id = ctx.context.managed_run_id
     if managed_run_id is None:
@@ -840,9 +168,6 @@ def _install_dataset_build_outcome(
         PendingDatasetBuild(
             run_id=managed_run_id,
             build_id=build_id,
-            # C1e (F7-03): stamp the stable build identity onto the durable
-            # envelope so the builds API can correlate NO_DATA results (which
-            # have no publication_id) back to their build dir.
             build_result=result.model_copy(update={"build_id": build_id}),
             publication=publication,
             manifest_sha256=manifest_sha256,
@@ -857,9 +182,9 @@ def _load_publication(
     output_dir: Path,
     publication_id: str,
 ) -> DatasetPublication | None:
-    """Read the immutable ``DatasetPublication`` record for a publication id."""
+    """Read one immutable DatasetPublication for the managed-run handoff."""
 
-    publish_dir = output_dir / PUBLISH_DIR
+    publish_dir = output_dir / "publish"
     if not publish_dir.is_dir():
         return None
     for child in publish_dir.iterdir():
@@ -877,204 +202,3 @@ def _load_publication(
         if publication.publication_id == publication_id:
             return publication
     return None
-
-
-
-def _classify_failed_outcome(
-    output_dir: Path,
-    outcome_error: ErrorDetail | None,
-    binding_ids: list[str],
-    source_paths: dict[str, Path],
-    *,
-    per_binding_outcomes: dict[str, BindingRejection] | None = None,
-    profile_required_entity_level: str | None = None,
-) -> BuildResult | None:
-    """Map a failed build outcome to a structured BuildResult envelope (H3).
-
-    Returns ``None`` for genuine execution failures (the caller keeps the
-    generic retryable-error envelope).
-
-    - NO_DATA (all bindings rejected, Phase 5 T7 fan-out): phase A rejected
-      every binding, so phase B never ran and nothing was published.  The
-      reason codes follow the per-binding rejections: all-empty builds keep
-      the generic ``no_primary_data``; a gene-required build whose sources
-      produced zero publishable gene rows keeps the stable
-      ``probe_mapping_unavailable_required_gene_level``; mixed reasons are
-      binding-scoped (``no_primary_data:<id>`` / ``parse_error:<id>``).
-    - NO_DATA (empty source, D5 row 1): the parse layer reported a typed
-      ``no_primary_data``.
-    - NO_DATA (gene-required + probe coverage failed, D5 row 3): the build
-      had rows but the gene release gate failed on residual probe rows — no
-      publishable gene rows, nothing published, supporting/audit survive.
-    - NO_DATA (manifest signal): the integrated primary has zero rows
-      (manifest written by THIS attempt) and no version was published.
-    """
-
-    if outcome_error is None:
-        return None
-    details = outcome_error.details or {}
-    reason_code = details.get("reason_code")
-    failed_operation = details.get("failed_operation")
-
-    per_binding = per_binding_outcomes or {}
-    # Phase 5 T7 D5: phase A rejected every binding -> NO_DATA with per-binding
-    # reason codes (phase B never ran; nothing was published).
-    if binding_ids and set(per_binding) >= set(binding_ids):
-        return _no_data_envelope(
-            binding_ids,
-            _reason_codes_for_all_rejected(per_binding),
-            binding_failures=_binding_failures_from(per_binding),
-        )
-
-    if reason_code == _REASON_NO_PRIMARY_DATA:
-        return _no_data_envelope(binding_ids, [_REASON_NO_PRIMARY_DATA])
-
-    # Phase 5 T7 D5 row 3 (tool layer): a gene-required build whose release
-    # gate failed on the probe-coverage check produced no publishable gene
-    # rows — the classifier unifies the 4b NO_DATA path (zero publishable
-    # gene rows) and the Profile-FAILED path (rows exist, coverage < 1.0)
-    # into NO_DATA with the stable reason code.  Probe-level builds never
-    # take this branch (they publish the honest probe primary, D5 row 2).
-    if (
-        profile_required_entity_level == "gene"
-        and isinstance(failed_operation, str)
-        and failed_operation in _MANIFEST_WRITING_OPERATIONS
-    ):
-        report_path = output_dir / "validation_report.json"
-        if report_path.is_file():
-            try:
-                report = json.loads(report_path.read_text("utf-8"))
-            except (OSError, json.JSONDecodeError):
-                report = None
-            if report is not None and any(
-                check.get("check_id") == CHECK_ID_PROBE_COVERAGE_REQUIRED_GENE_LEVEL
-                and check.get("passed") is False
-                for check in report.get("checks", [])
-            ):
-                return _no_data_envelope(
-                    binding_ids,
-                    [_REASON_PROBE_MAPPING_UNAVAILABLE],
-                    summary=_PROBE_MAPPING_NO_DATA_SUMMARY,
-                    next_action=_PROBE_MAPPING_NO_DATA_NEXT_ACTION,
-                )
-
-    # Manifest signal: only trust a persisted manifest when THIS attempt wrote
-    # it (validate_profile persists it; publish runs immediately after). A
-    # stale zero-row manifest from an earlier attempt must never drive the
-    # NO_DATA classification for a build that failed before validation.
-    if (
-        not isinstance(failed_operation, str)
-        or failed_operation not in _MANIFEST_WRITING_OPERATIONS
-    ):
-        return None
-    manifest_path = output_dir / "dataset_manifest.json"
-    if not manifest_path.is_file():
-        return None
-    try:
-        manifest = json.loads(manifest_path.read_text("utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    if int(manifest.get("row_count", 1)) != 0:
-        return None
-    publish_dir = output_dir / PUBLISH_DIR
-    if publish_dir.is_dir() and any(
-        child.is_dir() and not child.name.startswith(".")
-        for child in publish_dir.iterdir()
-    ):
-        return None
-    return _no_data_envelope(binding_ids, [_REASON_NO_PRIMARY_DATA])
-
-
-def _binding_failures_from(
-    per_binding: dict[str, BindingRejection],
-) -> list[BindingFailureDetail]:
-    """Flatten per-binding rejections into BuildResult failure details (K2)."""
-    return [
-        BindingFailureDetail(
-            binding_id=rejection.binding_id,
-            reason_code=rejection.reason_code,
-            message=rejection.message,
-        )
-        for rejection in sorted(
-            per_binding.values(), key=lambda rejection: rejection.binding_id
-        )
-    ]
-
-
-def _next_action_for_failures(failures: list[BindingFailureDetail]) -> str:
-    """Actionable NO_DATA next action derived from per-binding failures (K2).
-
-    Replaces the generic "检查数据源可用性" with a concrete recovery step:
-    a metadata-only series matrix should route to the series' soft/ or suppl/
-    files instead of being reported as a data-source absence.  Falls back to
-    the generic message when no failure matches a known root cause.
-    """
-    for detail in failures:
-        message = detail.message
-        if "series matrix" in message and "no data rows" in message:
-            return _NO_DATA_NEXT_ACTION_EMPTY_SERIES_MATRIX
-    return _NO_DATA_NEXT_ACTION
-
-
-def _no_data_envelope(
-    binding_ids: list[str],
-    reason_codes: list[str],
-    *,
-    rejected_sources: list[str] | None = None,
-    summary: str = _NO_DATA_SUMMARY,
-    next_action: str | None = None,
-    binding_failures: list[BindingFailureDetail] | None = None,
-) -> BuildResult:
-    """A NO_DATA BuildResult with zero valid rows and no publication.
-
-    When per-binding failure details are available, ``recommended_next_action``
-    is derived from the root cause (K2) instead of always using the generic
-    message; an explicitly passed ``next_action`` still wins.
-    """
-    failures = binding_failures or []
-    if next_action is None:
-        next_action = _next_action_for_failures(failures)
-    return BuildResult(
-        status=BuildResultStatus.NO_DATA,
-        valid_row_count=0,
-        successful_sources=[],
-        rejected_sources=(
-            sorted(rejected_sources) if rejected_sources is not None else sorted(binding_ids)
-        ),
-        reason_codes=reason_codes,
-        user_summary=summary,
-        recommended_next_action=next_action,
-        binding_failures=failures,
-    )
-
-
-def _reason_codes_for_all_rejected(
-    per_binding: dict[str, BindingRejection],
-) -> list[str]:
-    """Reason codes for an all-rejected phase A (D5).
-
-    All-empty keeps the generic ``no_primary_data``; a gene-required build
-    where every binding yielded zero publishable gene rows keeps the stable
-    probe-mapping code; mixed reasons are binding-scoped.
-    """
-    rejections = [per_binding[binding_id] for binding_id in sorted(per_binding)]
-    codes = {rejection.reason_code for rejection in rejections}
-    if codes == {_REASON_NO_PRIMARY_DATA}:
-        return [_REASON_NO_PRIMARY_DATA]
-    if codes == {_REASON_PROBE_MAPPING_UNAVAILABLE}:
-        return [_REASON_PROBE_MAPPING_UNAVAILABLE]
-    return [f"{rejection.reason_code}:{rejection.binding_id}" for rejection in rejections]
-
-
-
-
-
-def _latest_publication_id(publish_dir: Path) -> str | None:
-    """Read the newest version directory's publication_id (if any).
-
-    Delegates to ``ExpressionBuildRunner._find_latest_publication`` so the
-    tool and the supersedes chain agree: newest by ``published_at``, never by
-    lexicographic publication_id order (B8).
-    """
-
-    return find_latest_publication(publish_dir)
