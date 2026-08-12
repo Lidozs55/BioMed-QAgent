@@ -4,9 +4,11 @@ BioMed-QAgent 是一个面向生物医学研究数据的 **Agent + 确定性 Pip
 
 项目的目标是让数据处理过程**可追溯、可验证、可恢复**，而不是让大语言模型直接“猜”出一个 CSV。系统可以展示统计结果和可视化数据，但不会在缺少数据证据时生成科研或临床结论。
 
-> 当前项目处于 Pi/TypeScript Host 的 Phase 1 迁移态。正式 `/api/v1` 与 durable
-> runtime 仍由 private FastAPI 权威实现；`/experimental/pi/*` 仅用于 live、非 durable
-> 迁移验证。实际边界以代码及 [架构文档](docs/ARCHITECTURE.md) 为准。
+> 当前项目已完成 Pi/TypeScript Host Phase 0/1，并提供 opt-in Phase 3 runtime。
+> 默认 profile 的正式 `/api/v1` 与 durable runtime 仍由 private FastAPI 权威实现；
+> `AGENT_RUNTIME=pi` 时新 `task_ts_*` Task/Run/Event 由 TS durable runtime 接管，
+> legacy Task 与未迁移 API 回退 FastAPI。实际边界以代码及
+> [架构文档](docs/ARCHITECTURE.md) 为准。
 
 ## 核心能力
 
@@ -271,7 +273,7 @@ BioMed-QAgent/
 | `NCBI_API_KEY`       | 空                            | 可选的 NCBI API Key                             |
 | `HOST` / `PORT`      | `127.0.0.1` / `5173`        | TS Host 唯一公开监听地址                        |
 | `LEGACY_BACKEND_PORT` | `0`                        | Host 动态分配的 private loopback FastAPI 端口；调试时可固定 |
-| `APP_HOST` / `AGENT_RUNTIME` / `DATASET_CORE` | `ts` / `legacy` / `python` | Phase 1 正常权威组合 |
+| `APP_HOST` / `AGENT_RUNTIME` / `DATASET_CORE` | `ts` / `legacy` / `python` | 默认 Phase 1 组合；Phase 3 使用 `ts` / `pi` / `python` |
 | `PI_EXPERIMENTAL`    | `1`                         | 仅暴露非 durable `/experimental/pi/*`           |
 | `PI_PROVIDER` / `PI_MODEL` | `dashscope` / `MODEL_NAME` | Pi provider 与模型选择                    |
 | `PI_API_KEY` / `PI_BASE_URL` | 回退 DashScope 配置    | Pi credentials；不要提交真实密钥                |

@@ -180,4 +180,61 @@ describe("application host", () => {
       bridgeSecret: "private-secret",
     });
   });
+
+  test("lets the formal TS runtime own selected API and WebSocket routes with legacy fallback", async () => {
+    const legacy = createServer((_request, response) => response.end("legacy fallback"));
+    legacyServers.push(legacy);
+    const legacyPort = await listen(legacy);
+    const formalSocket = vi.fn();
+    const host = await createApplicationHost({
+      publicHost: "127.0.0.1",
+      publicPort: 0,
+      legacy: async () => ({
+        target: `http://127.0.0.1:${legacyPort}`,
+        bridgeSecret: "formal-secret",
+        close: async () => undefined,
+      }),
+      formalRuntime: async ({ target, bridgeSecret }) => {
+        expect(target).toBe(`http://127.0.0.1:${legacyPort}`);
+        expect(bridgeSecret).toBe("formal-secret");
+        const websocketServer = new WebSocketServer({ noServer: true });
+        websocketServer.on("connection", (websocket) => websocket.on("message", (message) => {
+          formalSocket(message.toString());
+          websocket.send("formal websocket");
+        }));
+        return {
+          handle(request, response) {
+            if (request.url !== "/api/v1/tasks") return false;
+            response.end("formal tasks");
+            return true;
+          },
+          handleUpgrade(request, socket, head) {
+            if (request.url !== "/api/v1/ws") return false;
+            websocketServer.handleUpgrade(request, socket, head, (websocket) => {
+              websocketServer.emit("connection", websocket, request);
+            });
+            return true;
+          },
+          close: async () => websocketServer.close(),
+        };
+      },
+      frontend: async () => ({
+        middleware: (_request, response) => response.end("frontend"),
+        close: async () => undefined,
+      }),
+    });
+    hosts.push(host);
+
+    expect(await (await fetch(requestUrl(host, "/api/v1/tasks"))).text()).toBe("formal tasks");
+    expect(await (await fetch(requestUrl(host, "/api/v1/settings"))).text()).toBe("legacy fallback");
+
+    const port = (host.server.address() as AddressInfo).port;
+    const websocket = new WebSocket(`ws://127.0.0.1:${port}/api/v1/ws`);
+    await once(websocket, "open");
+    websocket.send("ping");
+    const [message] = await once(websocket, "message");
+    expect(message.toString()).toBe("formal websocket");
+    expect(formalSocket).toHaveBeenCalledWith("ping");
+    websocket.close();
+  });
 });

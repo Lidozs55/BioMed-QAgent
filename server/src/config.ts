@@ -93,6 +93,7 @@ export function parseFeatureFlags(environment: Environment): FeatureFlags {
     "fastapi/legacy/python/0",
     "ts/legacy/python/0",
     "ts/legacy/python/1",
+    "ts/pi/python/0",
     "ts/pi/python/1",
   ]);
   if (!validProfiles.has(profile)) {

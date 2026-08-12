@@ -8,6 +8,7 @@ describe("feature flags", () => {
       ["fastapi", "legacy", "python", "0"],
       ["ts", "legacy", "python", "0"],
       ["ts", "legacy", "python", "1"],
+      ["ts", "pi", "python", "0"],
       ["ts", "pi", "python", "1"],
     ] as const;
 
@@ -32,7 +33,6 @@ describe("feature flags", () => {
     { DATASET_CORE: "ts" },
     { APP_HOST: "fastapi", PI_EXPERIMENTAL: "1" },
     { APP_HOST: "fastapi", AGENT_RUNTIME: "pi", PI_EXPERIMENTAL: "1" },
-    { AGENT_RUNTIME: "pi", PI_EXPERIMENTAL: "0" },
     { APP_HOST: "unknown" },
   ])("rejects invalid flag combination %#", (override) => {
     expect(() =>

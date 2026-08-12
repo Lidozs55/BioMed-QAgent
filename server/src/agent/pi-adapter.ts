@@ -155,7 +155,10 @@ async function validateSessionConfig(
   const skillRoots = await Promise.all(
     (config.skillRoots ?? []).map((root) => requireDirectory("skill root", root)),
   );
-  return { ...config, cwd, resourceRoots, skillRoots };
+  const sessionDir = config.sessionDir === undefined
+    ? undefined
+    : await requireDirectory("session directory", config.sessionDir);
+  return { ...config, cwd, resourceRoots, skillRoots, sessionDir };
 }
 
 function modelFromEnvironment(environment: Environment): BioMedModelConfig {
@@ -264,7 +267,9 @@ async function createRealUpstreamSession(
     model,
     modelRuntime,
     resourceLoader,
-    sessionManager: SessionManager.inMemory(config.cwd),
+    sessionManager: config.sessionDir === undefined
+      ? SessionManager.inMemory(config.cwd)
+      : SessionManager.continueRecent(config.cwd, config.sessionDir),
     settingsManager,
     noTools: (config.tools?.length ?? 0) > 0 ? "builtin" : "all",
     customTools: toPiCustomTools(config.tools ?? []),

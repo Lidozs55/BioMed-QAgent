@@ -7,6 +7,7 @@ import { createPhase1ExperimentalRuntime } from "./agent/phase1-composition.js";
 import { parseHostConfig } from "./config.js";
 import { createViteMiddleware } from "./dev/vite-middleware.js";
 import { createLegacyBackend } from "./legacy/backend-process.js";
+import { createPhase3Runtime } from "./runtime/phase3-composition.js";
 
 async function main(): Promise<void> {
   const config = parseHostConfig(process.env);
@@ -15,7 +16,7 @@ async function main(): Promise<void> {
     path.resolve(process.env.OUTPUT_DIR ?? path.join(repositoryRoot, "backend", "data", "output")),
     "tasks",
   );
-  const lifecycle = new LifecycleRegistry({ timeoutMs: config.shutdownTimeoutMs });
+  const lifecycle = new LifecycleRegistry({ timeoutMs: config.shutdownTimeoutMs + 5_000 });
   const host = await createApplicationHost({
     publicHost: config.publicHost,
     publicPort: config.publicPort,
@@ -30,6 +31,15 @@ async function main(): Promise<void> {
         shutdownTimeoutMs: config.shutdownTimeoutMs,
       }),
     initializeLifecycle: async () => undefined,
+    formalRuntime: config.flags.agentRuntime === "pi"
+      ? ({ target, bridgeSecret }) =>
+          createPhase3Runtime({
+            tasksRoot,
+            legacyTarget: target,
+            bridgeSecret,
+            workspaceDevExec: config.workspaceDevExec,
+          })
+      : undefined,
     experimentalPi: config.flags.piExperimental
       ? ({ target, bridgeSecret }) =>
           createPhase1ExperimentalRuntime({

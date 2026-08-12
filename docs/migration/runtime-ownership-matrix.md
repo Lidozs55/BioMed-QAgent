@@ -22,6 +22,7 @@ runtime design. “Legacy” below means the loopback-only FastAPI process in Ph
 | `CacheStore` | FastAPI lifespan | Legacy FastAPI lifespan | TS data/cache service | Do not migrate | Legacy lifespan through `init_cache_store()` | Process-owned; no independent close in the current composition root | Initialization failure prevents readiness; persistent cache records are not removed during rollback |
 | Python V2 Dataset Core | Constructed through Python service/tool paths | Python V2 Dataset Core | A parity-proven future Core | Add only the named-operation bridge | Legacy Python service | Per-operation cleanup plus legacy process shutdown | Cancellation and typed failures return through the bridge; incomplete staging is never promoted |
 | Vite development server | Standalone Vite process | TS Application Host middleware | TS Application Host | Migrate lifecycle ownership | TS Host after Pi/legacy readiness | TS Host closes Vite before terminating the managed legacy backend | Host closes resources already created in reverse order and never opens the public port if a required dependency fails |
+| Formal Task/Run/Event runtime | FastAPI `TaskManager` / repository / hubs | Phase 3 opt-in TS runtime for `task_ts_*`; legacy FastAPI for historical tasks | TS application runtime | Activate only with `AGENT_RUNTIME=pi` | TS Host after private FastAPI readiness | TS Host cancels sessions, disposes Workspace, waits execution tails, then closes sockets | Nonterminal TS Runs recover once as `interrupted`; durable files are preserved |
 
 ## Phase 1 composition rule
 

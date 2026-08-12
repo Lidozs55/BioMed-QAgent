@@ -16,6 +16,14 @@ export interface ApplicationHostOptions {
   frontend: (server: Server) => Promise<ViteMiddlewareHandle>;
   lifecycle?: LifecycleRegistry;
   initializeLifecycle?: (lifecycle: LifecycleRegistry) => void | Promise<void>;
+  formalRuntime?: (legacy: {
+    target: string;
+    bridgeSecret?: string;
+  }) => Promise<{
+    handle: (request: IncomingMessage, response: ServerResponse) => boolean;
+    handleUpgrade: (request: IncomingMessage, socket: Duplex, head: Buffer) => boolean;
+    close: () => Promise<void>;
+  }>;
   experimentalPi?: (legacy: {
     target: string;
     bridgeSecret?: string;
@@ -57,6 +65,9 @@ function isInternalMigration(requestPath: string): boolean {
 function routeRequest(
   proxy: LegacyProxy,
   frontend: FrontendMiddleware,
+  formalRuntime?: {
+    handle: (request: IncomingMessage, response: ServerResponse) => boolean;
+  },
   experimentalPi?: {
     handle: (request: IncomingMessage, response: ServerResponse) => boolean;
   },
@@ -79,6 +90,7 @@ function routeRequest(
       return;
     }
     if (isLegacyApi(requestPath)) {
+      if (formalRuntime?.handle(request, response) === true) return;
       proxy.web(request, response);
       return;
     }
@@ -122,7 +134,7 @@ export async function createApplicationHost(
   options: ApplicationHostOptions,
   dependencies: ApplicationHostDependencies = {},
 ): Promise<ApplicationHost> {
-  const lifecycle = options.lifecycle ?? new LifecycleRegistry();
+  const lifecycle = options.lifecycle ?? new LifecycleRegistry({ timeoutMs: 15_000 });
   const upgradedSockets = new Set<Duplex>();
   let requestHandler = (_request: IncomingMessage, response: ServerResponse): void => {
     response.writeHead(503);
@@ -137,6 +149,14 @@ export async function createApplicationHost(
 
     await options.initializeLifecycle?.(lifecycle);
 
+    const formalRuntime = await options.formalRuntime?.({
+      target: legacy.target,
+      bridgeSecret: legacy.bridgeSecret,
+    });
+    if (formalRuntime !== undefined) {
+      lifecycle.add("formal TypeScript runtime", formalRuntime.close);
+    }
+
     const experimentalPi = await options.experimentalPi?.({
       target: legacy.target,
       bridgeSecret: legacy.bridgeSecret,
@@ -150,7 +170,7 @@ export async function createApplicationHost(
 
     const frontend = await options.frontend(server);
     lifecycle.add("Vite middleware", frontend.close);
-    requestHandler = routeRequest(proxy, frontend.middleware, experimentalPi);
+    requestHandler = routeRequest(proxy, frontend.middleware, formalRuntime, experimentalPi);
 
     server.on("upgrade", (request, socket, head) => {
       upgradedSockets.add(socket);
@@ -166,7 +186,11 @@ export async function createApplicationHost(
         }
         return;
       }
-      if (requestPath === "/api/v1/ws") proxy.ws(request, socket, head);
+      if (requestPath === "/api/v1/ws") {
+        if (formalRuntime?.handleUpgrade(request, socket, head) !== true) {
+          proxy.ws(request, socket, head);
+        }
+      }
     });
 
     await (dependencies.listenPublic ?? listenPublic)(

@@ -76,6 +76,7 @@ export interface BioMedSessionConfig {
   taskId: string;
   runId: string;
   cwd: string;
+  sessionDir?: string;
   model?: BioMedModelConfig;
   resourceRoots?: readonly string[];
   skillRoots?: readonly string[];

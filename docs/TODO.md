@@ -27,6 +27,22 @@
 详细状态与证据见 `BioMed-QAgent_Pi_Migration_Phase0_1_Detailed.md` 及
 `.superpowers/sdd/task-10-report.md`、`task-11-report.md`、`task-12-report.md`。
 
+## Pi / TypeScript Host 迁移 Phase 3（opt-in）
+
+- [x] TS Task/Run domain、request-id 幂等、单 Task 单 active Run 与重启 interrupted 恢复。
+- [x] append-only durable `events.jsonl`、纯 reducer、Task 级 sequence 与
+      `after_sequence -> replay -> live` WebSocket。
+- [x] `AGENT_RUNTIME=pi` 时正式 Task HTTP/WS 由 TS Runtime 接管；旧 Task 与未迁移 API
+      回退 private FastAPI，同一 WebSocket 转发 legacy Task subscription。
+- [x] Pi Session 显式映射并持久化于 Task `state/pi-session/`；Task/Run/Session/Build
+      身份保持分离。
+- [x] Run cancel 等待 terminal durable acknowledgement；Host 关闭等待执行尾部收敛。
+- [x] BuildResult 从 Python Core bridge 投影到 Run 终态；artifact API 仅服务通过
+      immutable Publication + manifest + size/hash/path 校验的文件。
+- [ ] 正式默认切换到 `AGENT_RUNTIME=pi`；待 Phase 2 Skills 与跨阶段集成门禁完成后执行。
+
+详细边界与回滚见 `migration/phase3-ts-application-runtime.md`。
+
 ---
 
 ## Phase 1：引入 V2 数据集契约和 Schema Registry
