@@ -25,3 +25,26 @@ export class EmptySourceError extends AdapterError {
     this.reason_code = "no_primary_data";
   }
 }
+
+/**
+ * One source binding is rejected during phase A (Phase 5 T7 D5).  Raised by
+ * the runner when a binding canonicalized to zero usable rows (or, for
+ * gene-required builds, to zero publishable gene rows) after its parse
+ * succeeded.  The executor catches it per-binding — the binding's remaining
+ * phase-A operations are skipped and phase B only receives the bindings that
+ * did not raise (Python ``BindingRejectedError``).
+ */
+export class BindingRejectedError extends BuildError {
+  readonly rejection: { binding_id: string; kind: "no_primary" | "error"; reason_code: string; message: string };
+
+  constructor(rejection: {
+    binding_id: string;
+    kind: "no_primary" | "error";
+    reason_code: string;
+    message: string;
+  }) {
+    super(rejection.message);
+    this.name = "BindingRejectedError";
+    this.rejection = rejection;
+  }
+}
