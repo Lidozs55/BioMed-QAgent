@@ -1,7 +1,9 @@
 # BioMed-QAgent Phase 5 补全与 Phase 0–6 收口实施计划
 
 > 建议仓库路径：`docs/migration/phase5-external-capabilities-completion-plan.md`  
-> 文档状态：Proposed  
+> 文档状态：Implemented（2026-08-14，M1 + M2 全部完成；验收证据见
+> [phase5-external-capabilities.md](phase5-external-capabilities.md) 与
+> `server/tests/phase5/` 全量套件）  
 > 基线：`main @ d6224151e23821ca85ece004969aa469f638f08a`  
 > 目标：补齐 Pi Migration Plan Phase 5，并完成一轮 Phase 0–6 集成收口，使“Phase 0–6 已完成”成为可测试、可回滚、可审计的事实，而不是仅指代码已移植。  
 > 不包含：Phase 7 正式默认切换、Phase 8 Python Runtime 物理删除。
