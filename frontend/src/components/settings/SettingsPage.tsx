@@ -81,7 +81,7 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
   const [databaseDraft, setDatabaseDraft] = useState<DatabaseDraft | null>(null);
   const [editingDatabase, setEditingDatabase] = useState<DatabaseItem | null>(null);
   const [pendingDelete, setPendingDelete] = useState<{
-    name: string;
+    id: string;
     label: string;
   } | null>(null);
 
@@ -194,7 +194,7 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
     const target = pendingDelete;
     setPendingDelete(null);
     await mutateDatabase(
-      () => api.deleteDatabase(target.name),
+      () => api.deleteDatabase(target.id),
       "数据库已删除",
     );
   }, [api, mutateDatabase, pendingDelete]);
@@ -335,7 +335,7 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
                       }
                       onDeleteDatabase={(database) =>
                         setPendingDelete({
-                          name: database.id,
+                          id: database.id,
                           label: database.name,
                         })
                       }

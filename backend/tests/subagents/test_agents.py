@@ -42,6 +42,26 @@ def test_child_agent_has_direct_discovery_and_acquisition_tools_only(
         assert forbidden not in names, forbidden
 
 
+def test_child_agent_respects_disabled_databases_and_user_tools() -> None:
+    from agents import FunctionTool
+
+    user_tool = FunctionTool(
+        name="query_demo",
+        description="Demo declarative tool.",
+        params_json_schema={"type": "object", "properties": {}},
+        on_invoke_tool=lambda _ctx, _args: "done",
+    )
+    child = ChildAgentFactory(
+        disabled_databases=frozenset({"pubmed"}),
+        user_http_tools=[user_tool],
+    ).build_source_research_agent()
+
+    names = [tool.name for tool in child.tools]
+    assert "search_pubmed" not in names
+    assert "query_demo" in names
+    assert "search_geo" in names
+
+
 def test_skill_builder_agent_is_retired() -> None:
     factory = ChildAgentFactory()
 

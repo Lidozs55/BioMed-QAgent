@@ -6,20 +6,20 @@
 
 ## 1. 基因→结构（PDB）
 
-- 用 `find_skill(source="pdb")` + `invoke_skill` 按基因/蛋白名或 UniProt 检索结构；
+- 用 `search_pdb` / `describe_pdb` / `search_uniprot` 按基因/蛋白名检索结构；
 - 关注结构分辨率、配体/活性位点、物种与突变体；
 - 用途：蛋白结构佐证（如突变是否落在关键结构域）、药物结合位点调研。
 
 ## 2. 基因/通路→网络（Reactome）
 
-- 用 `find_skill(source="reactome")` 检索通路成员与文献引用；
+- 用 `search_reactome` / `get_pathway` 检索通路成员与文献引用；
 - 用途：从差异基因列表出发做通路富集调研（Reactome 作为证据路径，不进正式构建）；
 - 通路网络分析：Reactome 通路成员调研 + GEO/GDC 表达构建并行，最后按 accession
   交叉引用。
 
 ## 3. 基因/疾病→化合物（PubChem）
 
-- 用 `find_skill(source="pubchem")` 按化合物名/CID/SMILES 检索；
+- 用 `search_pubchem` / `get_compound` 按化合物名/CID/SMILES 检索；
 - 用途：药物靶点发现（基因→化合物→通路三角）、已知抑制剂/激动剂调研。
 
 ## 4. 三角调研模式（药物靶点/机制）

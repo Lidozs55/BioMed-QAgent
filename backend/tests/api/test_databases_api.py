@@ -120,6 +120,74 @@ def test_store_cannot_delete_builtin_databases(tmp_path: Path) -> None:
         store.delete_database("geo")
 
 
+def test_store_rejects_builtin_name_collision_on_create(tmp_path: Path) -> None:
+    store = DatabaseStore(tmp_path / "skills")
+
+    with pytest.raises(DatabaseValidationError, match="conflicts with a builtin"):
+        store.put_database({**_DECLARATIVE, "name": "pubmed"})
+
+    assert store.get_database("pubmed") is not None
+    assert store.get_database("pubmed").origin == "builtin"
+    assert store.user_manifests().get("pubmed") is None
+
+
+def test_store_rejects_duplicate_user_database(tmp_path: Path) -> None:
+    store = DatabaseStore(tmp_path / "skills")
+    store.put_database(_DECLARATIVE)
+
+    with pytest.raises(DatabaseValidationError, match="already exists"):
+        store.put_database(_DECLARATIVE)
+
+
+def test_store_delete_is_traversal_safe(tmp_path: Path) -> None:
+    root = tmp_path / "skills"
+    root.mkdir(parents=True, exist_ok=True)
+    store = DatabaseStore(root)
+    decoy = root / "victim.json"
+    decoy.write_text('{"decoy": true}', encoding="utf-8")
+    state = root / "state.json"
+    state.write_text('{"version": 1, "disabled": ["geo"]}', encoding="utf-8")
+
+    with pytest.raises(KeyError):
+        store.delete_database("..\victim")
+    with pytest.raises(KeyError):
+        store.delete_database(".." + "\\" + "state")
+
+    assert decoy.read_text(encoding="utf-8") == '{"decoy": true}'
+    assert '"geo"' in state.read_text(encoding="utf-8")
+
+
+def test_store_patch_rejects_builtin_database(tmp_path: Path) -> None:
+    store = DatabaseStore(tmp_path / "skills")
+
+    with pytest.raises(PermissionError):
+        store.patch_database("pubmed", {"display_name": "hijacked"})
+
+
+def test_store_detail_redacts_sensitive_manifest_keys(tmp_path: Path) -> None:
+    store = DatabaseStore(tmp_path / "skills")
+    store.put_database(
+        {
+            **_DECLARATIVE,
+            "operations": [
+                {
+                    "name": "query_demo",
+                    "description": "Query the demo source.",
+                    "method": "GET",
+                    "url": "https://example.com/api/{query}",
+                    "headers": {"X-Api-Key": "literal-secret-value"},
+                }
+            ],
+        }
+    )
+
+    entry = store.get_database("demo_source")
+    assert entry is not None and entry.declarative_manifest is not None
+    dump = store.redacted_manifest_dump(entry.declarative_manifest)
+
+    assert dump["operations"][0]["headers"]["X-Api-Key"] == "[redacted]"
+
+
 def test_store_builds_direct_http_tools_for_user_databases(tmp_path: Path) -> None:
     store = DatabaseStore(tmp_path / "skills")
     store.put_database(_DECLARATIVE)
@@ -217,6 +285,12 @@ async def test_databases_api_rejects_invalid_and_builtin_deletion(tmp_path: Path
 
         unknown = await client.delete("/api/v1/databases/never_existed")
         assert unknown.status_code == 404
+
+        builtin_put = await client.put(
+            "/api/v1/databases/geo",
+            json={"display_name": "Hijacked GEO"},
+        )
+        assert builtin_put.status_code == 409
 
 
 @pytest.mark.asyncio

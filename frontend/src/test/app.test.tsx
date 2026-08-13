@@ -140,8 +140,8 @@ describe("App startup ownership", () => {
         if (url === "/api/v1/vendors") {
           return Promise.resolve(new Response(JSON.stringify({ vendors: [] }), { status: 200 }));
         }
-        if (url === "/api/v1/skills") {
-          return Promise.resolve(new Response(JSON.stringify({ skills: [] }), { status: 200 }));
+        if (url === "/api/v1/databases") {
+          return Promise.resolve(new Response(JSON.stringify({ databases: [] }), { status: 200 }));
         }
         if (url === "/api/v1/tasks?limit=10") {
           if (historyFailure) {

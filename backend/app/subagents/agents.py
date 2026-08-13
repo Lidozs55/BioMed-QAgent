@@ -98,8 +98,12 @@ class ChildAgentFactory:
         self,
         *,
         model_settings: RunModelSettings | None = None,
+        disabled_databases: frozenset[str] = frozenset(),
+        user_http_tools: list | None = None,
     ) -> None:
         self._model_settings = model_settings or get_active_model_settings()
+        self._disabled_databases = disabled_databases
+        self._user_http_tools = user_http_tools
 
     def build_source_research_agent(self) -> Agent:
         """Research children may discover sources directly; no recipe creation."""
@@ -111,11 +115,26 @@ class ChildAgentFactory:
             if record.category in {SkillCategory.DISCOVERY, SkillCategory.ACQUISITION}
             for tool_name in record.tool_names
         }
+        disabled = {
+            tool_name
+            for name in self._disabled_databases
+            if name in records
+            for tool_name in records[name].tool_names
+        }
         tools = [
             tool
             for tool in load_builtin_tools()
             if getattr(tool, "name", "") in allowed
+            and getattr(tool, "name", "") not in disabled
         ]
+        if self._user_http_tools:
+            registered = {getattr(tool, "name", "") for tool in tools}
+            for tool in self._user_http_tools:
+                name = getattr(tool, "name", "")
+                if name in registered:
+                    continue
+                registered.add(name)
+                tools.append(tool)
         return Agent(
             name="SourceResearchAgent",
             instructions=_make_child_instructions(_SOURCE_RESEARCH_INSTRUCTIONS),
@@ -245,9 +264,17 @@ class SourceResearchAgentRunner(_ChildAgentRunner):
 class ManagedChildAgentRunner:
     """Dispatch each supervisor request to its only permitted child Agent."""
 
-    def __init__(self, parent_context: RunContext) -> None:
+    def __init__(
+        self,
+        parent_context: RunContext,
+        *,
+        disabled_databases: frozenset[str] = frozenset(),
+        user_http_tools: list | None = None,
+    ) -> None:
         factory = ChildAgentFactory(
             model_settings=parent_context.model_settings,
+            disabled_databases=disabled_databases,
+            user_http_tools=user_http_tools,
         )
         self._source = SourceResearchAgentRunner(parent_context, factory)
 

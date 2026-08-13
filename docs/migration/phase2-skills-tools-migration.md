@@ -110,9 +110,13 @@ legacy Python 侧的直接工具名与映射中的工具名**必须一致**（Ph
 | dataset-construction | analysis | — | validate_dataset_build, execute_dataset_build | 是（Core 工具） |
 
 > Skill 名以 Python 侧 SkillDef 名为准（`literature_understanding`、`pdf_extraction`、
-> `analysis` 等）；`create_skill` 删除（D3）。`dataset-construction` 是既有 `.pi/skills` 内容，
-> 对应的受信任 Core 工具 `validate_dataset_build`/`execute_dataset_build` 已
-> 经 PiAgentAdapter 注册。
+> `analysis` 等）；`create_skill` 删除（D3）。`dataset-construction` 是既有 `.pi/skills`
+> 内容：映射表登记的是 Pi 侧工具名 `validate_dataset_build` / `execute_dataset_build`，
+> legacy Python Agent 的等价 pipeline 工具名为 `validate_dataset_build_spec` /
+> `execute_dataset_build`（Phase 5/8 收敛到 Pi 名称）。
+> 用户声明式数据库的 operation 工具经 `DatabaseStore.build_user_http_tools()` 注册到
+> legacy Agent（主 Agent 全量；SourceResearchAgent 仅 DISCOVERY+ACQUISITION 类别），
+> 名称冲突跳过并告警。
 
 ## 4. `.pi/skills/` 目录目标
 
@@ -146,7 +150,7 @@ SKILL.md 内容 = Python 技能模块的 SOP 知识（何时用、怎么用、�
 | 验收 | 证据 |
 | --- | --- |
 | Main Agent 不再调用 find_skill/invoke_skill | `build_agent` 无 gateway；backend 测试断言工具列表不含二者；`app/skills/{gateway,catalog,registry,search,llm_search,store,packages}.py` 删除 |
-| Pi 能按任务加载相关 Skill | `pi-adapter` 以 `.pi/skills` 为 skill root；`server/tests/skill-loading.test.ts` 断言 ResourceLoader 发现全部迁移 Skill |
+| Pi 能按任务加载相关 Skill | `pi-adapter` 以 `.pi/skills` 为 skill root；`server/tests/pi-adapter-skill-roots.test.ts` + `skill-manifests.test.ts` 断言全量加载与内容完整 |
 | Skill 缺失不会导致 Runtime 崩溃 | `optionalSkillRoots` 保持可选回退；`server/tests/pi-adapter-skill-roots.test.ts` 断言缺失时会话仍创建 |
 | Skill 与 Tool 名称有稳定映射 | `server/src/agent/skills/skill-tool-map.ts` + `server/tests/skill-tool-map.test.ts` + `backend/tests/test_builtin_tools.py` |
 | learned skill 默认禁用规则 | 明确删除（D3），`.pi/skills` 为 curated 唯一来源 |

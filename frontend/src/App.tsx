@@ -232,7 +232,10 @@ export default function App() {
       <BackgroundTaskNotifications onViewTask={selectTask} />
       <SettingsPanel
         open={settingsOpen}
-        onOpenChange={setSettingsOpen}
+        onOpenChange={(next) => {
+          setSettingsOpen(next);
+          if (!next) void controller.refreshDatabases();
+        }}
         api={api}
         onExportCache={exportCache}
       />

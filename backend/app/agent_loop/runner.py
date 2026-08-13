@@ -646,6 +646,8 @@ class AgentRunExecutor:
         repository,
         *,
         disabled_databases=None,
+        user_http_tools=None,
+        child_user_http_tools=None,
         compactor=None,
         subagent_supervisor: SubagentSupervisor | None = None,
         subagent_event_sink: SubagentEventSink | None = None,
@@ -653,6 +655,8 @@ class AgentRunExecutor:
     ) -> None:
         self._repository = repository
         self._disabled_databases = disabled_databases
+        self._user_http_tools = user_http_tools
+        self._child_user_http_tools = child_user_http_tools
         self._compactor = compactor or ConversationCompactor(repository)
         self._subagent_supervisor = subagent_supervisor
         self._subagent_event_sink = subagent_event_sink
@@ -664,6 +668,9 @@ class AgentRunExecutor:
             execution.databases,
             disabled_databases=(
                 self._disabled_databases() if self._disabled_databases is not None else frozenset()
+            ),
+            user_tools=(
+                self._user_http_tools() if self._user_http_tools is not None else None
             ),
         )
 
@@ -709,7 +716,19 @@ class AgentRunExecutor:
             return
         context.bind_subagent_runtime(
             supervisor=self._subagent_supervisor,
-            runner=ManagedChildAgentRunner(context),
+            runner=ManagedChildAgentRunner(
+                context,
+                disabled_databases=(
+                    self._disabled_databases()
+                    if self._disabled_databases is not None
+                    else frozenset()
+                ),
+                user_http_tools=(
+                    self._child_user_http_tools()
+                    if self._child_user_http_tools is not None
+                    else None
+                ),
+            ),
             event_sink=self._subagent_event_sink,
             input_broker=self._subagent_input_broker,
         )
@@ -1644,15 +1663,20 @@ class ModeDispatchRunExecutor:
         repository,
         *,
         disabled_databases=None,
+        user_http_tools=None,
+        child_user_http_tools=None,
     ) -> None:
         self.agent_executor = AgentRunExecutor(
             repository,
             disabled_databases=disabled_databases,
+            user_http_tools=user_http_tools,
+            child_user_http_tools=child_user_http_tools,
         )
         self.fixture_executor = FixtureRunExecutor(repository)
         self.import_executor = ImportRunExecutor(
             repository,
             disabled_databases=disabled_databases,
+            user_http_tools=user_http_tools,
         )
 
     async def __call__(self, execution) -> None:

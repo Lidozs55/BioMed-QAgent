@@ -196,11 +196,11 @@ def _database_projection(entry: DatabaseEntry) -> dict[str, object]:
     }
 
 
-def _database_detail(entry: DatabaseEntry) -> dict[str, object]:
+def _database_detail(entry: DatabaseEntry, store: DatabaseStore) -> dict[str, object]:
     projection = _database_projection(entry)
     if entry.declarative_manifest is not None:
-        projection["declarative_manifest"] = entry.declarative_manifest.model_dump(
-            mode="json"
+        projection["declarative_manifest"] = store.redacted_manifest_dump(
+            entry.declarative_manifest
         )
     return projection
 
@@ -217,7 +217,7 @@ async def get_database(name: str, store: DatabaseStoreDep) -> dict:
     entry = store.get_database(name)
     if entry is None:
         raise HTTPException(status_code=404, detail="Database not found")
-    return _database_detail(entry)
+    return _database_detail(entry, store)
 
 
 @router.post("/databases", status_code=201)
@@ -228,7 +228,7 @@ async def create_database(body: dict[str, object], store: DatabaseStoreDep) -> d
     except (DatabaseValidationError, ValueError) as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     entry = store.get_database(manifest.name)
-    return _database_detail(entry) if entry is not None else {}
+    return _database_detail(entry, store) if entry is not None else {}
 
 
 class DatabaseOperationPatch(BaseModel):
@@ -289,7 +289,7 @@ async def update_database(
     except (DatabaseValidationError, ValueError) as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     entry = store.get_database(manifest.name)
-    return _database_detail(entry) if entry is not None else {}
+    return _database_detail(entry, store) if entry is not None else {}
 
 
 @router.delete("/databases/{name}", status_code=204)

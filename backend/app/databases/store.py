@@ -4,11 +4,21 @@ Manages the user-selectable database list: builtin databases derived from the
 builtin skill table (with per-database enabled toggles) plus user-declared
 JSON/HTTP databases. No ZIP packages, no Python code execution, no runtime
 skill catalog (docs/migration/phase2-skills-tools-migration.md, decision D4).
+
+Persistence safety:
+- user manifests live under ``<root>/databases/<name>.json`` where ``<name>``
+  is validated against ``^[a-z][a-z0-9_]*$`` before touching the filesystem;
+- writes are atomic (tempfile + os.replace), so a crash never truncates
+  ``state.json`` or a manifest.
 """
 
 from __future__ import annotations
 
 import json
+import os
+import re
+import tempfile
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -19,11 +29,32 @@ from app.databases.declarative import (
     DatabaseValidationError,
     DeclarativeDatabaseManifest,
     DeclarativeHttpToolBuilder,
+    redact_sensitive_manifest,
 )
 from app.skills.builtin import builtin_skill_records
+from app.skills.categories import SkillCategory
 
 _STATE_VERSION = 1
 _DEFAULT_STATE: dict[str, Any] = {"version": _STATE_VERSION, "disabled": []}
+_MANIFEST_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    """Write text atomically so a crash never leaves a truncated file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", dir=path.parent
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_name, path)
+    except BaseException:
+        with suppress(OSError):
+            os.unlink(temp_name)
+        raise
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,13 +101,16 @@ class DatabaseStore:
         return {"version": raw.get("version", _STATE_VERSION), "disabled": disabled}
 
     def _save_state(self) -> None:
-        self._state_path.parent.mkdir(parents=True, exist_ok=True)
-        self._state_path.write_text(
+        _atomic_write_text(
+            self._state_path,
             json.dumps(self._state, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
         )
 
     def _manifest_path(self, name: str) -> Path:
+        if _MANIFEST_NAME.fullmatch(name) is None:
+            raise DatabaseValidationError(
+                f"database name must match {_MANIFEST_NAME.pattern}"
+            )
         return self._databases_dir / f"{name}.json"
 
     def _load_user_manifests(self) -> dict[str, DeclarativeDatabaseManifest]:
@@ -153,17 +187,34 @@ class DatabaseStore:
                 return entry
         return None
 
-    def build_user_http_tools(self) -> list[FunctionTool]:
-        """Direct tools for enabled user-declared HTTP databases."""
+    def build_user_http_tools(
+        self,
+        *,
+        categories: set[SkillCategory] | None = None,
+    ) -> list[FunctionTool]:
+        """Direct tools for enabled user-declared HTTP databases.
+
+        ``categories`` restricts the returned tools to manifests of the given
+        skill categories (the source-research child Agent only receives
+        DISCOVERY + ACQUISITION tools).
+        """
         builder = DeclarativeHttpToolBuilder()
         disabled = self.disabled_names
         tools: list[FunctionTool] = []
         for manifest in self.user_manifests().values():
             if manifest.name in disabled:
                 continue
+            if categories is not None and manifest.category not in categories:
+                continue
             for operation in manifest.operations:
                 tools.append(builder.build_tool(operation))
         return tools
+
+    def redacted_manifest_dump(self, manifest: DeclarativeDatabaseManifest) -> dict[str, Any]:
+        """Serialize a manifest for API responses with sensitive keys redacted."""
+        return redact_sensitive_manifest(
+            manifest.model_dump(mode="json")
+        )
 
     # ── mutations ────────────────────────────────────────────────────────────
 
@@ -181,36 +232,48 @@ class DatabaseStore:
             manifest = DeclarativeDatabaseManifest.model_validate(raw)
         except ValueError as error:
             raise DatabaseValidationError(str(error)) from error
+        if manifest.name in self._records:
+            raise DatabaseValidationError(
+                f"database name conflicts with a builtin database: {manifest.name}"
+            )
+        if manifest.name in self.user_manifests():
+            raise DatabaseValidationError(
+                f"database already exists; use PUT to update: {manifest.name}"
+            )
+        return self._write_manifest(manifest)
+
+    def _write_manifest(
+        self, manifest: DeclarativeDatabaseManifest
+    ) -> DeclarativeDatabaseManifest:
         self._databases_dir.mkdir(parents=True, exist_ok=True)
-        self._manifest_path(manifest.name).write_text(
+        _atomic_write_text(
+            self._manifest_path(manifest.name),
             json.dumps(manifest.model_dump(mode="json"), ensure_ascii=False, indent=2)
             + "\n",
-            encoding="utf-8",
         )
         return manifest
 
     def patch_database(self, name: str, patch: dict[str, Any]) -> DeclarativeDatabaseManifest:
+        if name in self._records:
+            raise PermissionError("builtin databases are immutable")
         current = self._load_user_manifests().get(name)
         if current is None:
             raise KeyError(name)
         if "name" in patch and patch["name"] != name:
             raise ValueError("database name cannot be changed by patch")
         merged = current.model_dump(mode="json") | patch
-        return self.put_database(merged)
+        try:
+            manifest = DeclarativeDatabaseManifest.model_validate(merged)
+        except ValueError as error:
+            raise DatabaseValidationError(str(error)) from error
+        return self._write_manifest(manifest)
 
     def delete_database(self, name: str) -> None:
         if name in self._records:
             raise PermissionError("builtin databases cannot be deleted")
-        path = self._manifest_path(name)
-        if not path.is_file():
+        # Resolve only through the validated user-manifest registry so the raw
+        # URL path parameter can never escape the databases directory.
+        if name not in self._load_user_manifests():
             raise KeyError(name)
-        path.unlink()
+        self._manifest_path(name).unlink()
         self.set_enabled(name, True)
-
-    # ── validation ───────────────────────────────────────────────────────────
-
-    def validate_database(self, raw: dict[str, Any]) -> None:
-        try:
-            DeclarativeDatabaseManifest.model_validate(raw)
-        except ValueError as error:
-            raise DatabaseValidationError(str(error)) from error

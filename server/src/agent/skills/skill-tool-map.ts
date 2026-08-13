@@ -176,6 +176,10 @@ export const SKILL_TOOL_MAP: readonly SkillToolMapping[] = Object.freeze([
     "analysis",
     [],
     "Construct a DatasetBuild through the trusted Dataset Core boundary.",
+    // Pi-side tool names. The legacy Python Agent registers the equivalent
+    // pipeline tools as validate_dataset_build_spec / execute_dataset_build
+    // (backend/app/pipeline/dataset_build_tool.py); Phase 5/8 converges on
+    // these Pi names.
     ["validate_dataset_build", "execute_dataset_build"],
   ),
 ]);

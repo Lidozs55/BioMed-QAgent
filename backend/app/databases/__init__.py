@@ -8,8 +8,7 @@ from app.databases.declarative import (
     DeclarativeHttpToolBuilder,
     HttpAuthReference,
     HttpOperationManifest,
-    parse_manifest_document,
-    validate_declarative_manifest,
+    redact_sensitive_manifest,
 )
 from app.databases.store import DatabaseEntry, DatabaseStore
 
@@ -21,6 +20,5 @@ __all__ = [
     "DeclarativeHttpToolBuilder",
     "HttpAuthReference",
     "HttpOperationManifest",
-    "parse_manifest_document",
-    "validate_declarative_manifest",
+    "redact_sensitive_manifest",
 ]

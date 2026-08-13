@@ -215,6 +215,27 @@ async def test_concurrent_agent_builds_pass_each_owned_model_to_compress_tool() 
         await asyncio.gather(*(build.model.close() for build in builds))
 
 
+def test_user_declarative_database_tools_are_registered_with_collision_guard() -> None:
+    from agents import FunctionTool
+
+    def make_tool(name: str) -> object:
+        return FunctionTool(
+            name=name,
+            description=f"tool {name}",
+            params_json_schema={"type": "object", "properties": {}},
+            on_invoke_tool=lambda _ctx, _args: "done",
+        )
+
+    build = build_agent(
+        databases=[],
+        user_tools=[make_tool("search_pubmed"), make_tool("query_demo")],
+    )
+
+    names = [tool.name for tool in build.agent.tools]
+    assert names.count("search_pubmed") == 1  # collision skipped, builtin kept
+    assert "query_demo" in names
+
+
 @pytest.mark.asyncio
 async def test_main_agent_never_registers_the_old_gateway() -> None:
     @function_tool

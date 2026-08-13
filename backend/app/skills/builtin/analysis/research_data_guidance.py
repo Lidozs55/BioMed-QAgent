@@ -2,7 +2,7 @@
 
 Borrowed and adapted from the ``research-data-analysis-workspace`` skill group
 (REVIEW_2026-08-09-task-3eb85407 §7.2): the main Agent loads topic-specific
-research-data instructions on demand via ``invoke_skill`` instead of carrying
+research-data instructions on demand via the direct tool instead of carrying
 them all in the system prompt, so guidance stays available without diluting
 attention.
 

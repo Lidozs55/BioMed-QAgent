@@ -15,10 +15,9 @@ import os
 import re
 from collections.abc import Mapping
 from typing import Any, Literal
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import httpx
-import yaml
 from agents import FunctionTool, RunContextWrapper
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -27,6 +26,14 @@ from app.tools.network_safety import UnsafeUrlError, validate_public_http_url
 
 _PLACEHOLDER = re.compile(r"\{([a-z][a-z0-9_]*)\}")
 _MAX_RESPONSE_BYTES = 10 * 1024 * 1024
+
+# Manifest keys whose values never leave the server verbatim (mirrors the
+# retired UserSkillStore._SENSITIVE_MANIFEST_KEYS redaction).
+_SENSITIVE_MANIFEST_KEYS = {
+    "authorization", "api-key", "api_key", "x-api-key", "x-auth-token",
+    "token", "secret", "password", "credential", "credentials",
+}
+_REDACTED = "[redacted]"
 
 
 class DatabaseValidationError(ValueError):
@@ -113,26 +120,18 @@ class DeclarativeDatabaseManifest(BaseModel):
         return self
 
 
-def parse_manifest_document(content: bytes, filename: str) -> dict[str, Any]:
-    """Parse a JSON/YAML upload into a mapping without evaluating expressions."""
-    try:
-        if filename.lower().endswith((".yaml", ".yml")):
-            value = yaml.safe_load(content.decode("utf-8"))
-        else:
-            value = json.loads(content.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError, yaml.YAMLError) as error:
-        raise DatabaseValidationError("manifest is not valid JSON/YAML") from error
-    if not isinstance(value, dict):
-        raise DatabaseValidationError("manifest root must be an object")
+def redact_sensitive_manifest(value: object, *, key: str = "") -> object:
+    """Redact sensitive manifest keys before serializing to API responses."""
+    if key.lower() in _SENSITIVE_MANIFEST_KEYS:
+        return _REDACTED
+    if isinstance(value, dict):
+        return {
+            str(item_key): redact_sensitive_manifest(item, key=str(item_key))
+            for item_key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [redact_sensitive_manifest(item) for item in value]
     return value
-
-
-def validate_declarative_manifest(raw: Mapping[str, Any]) -> DeclarativeDatabaseManifest:
-    """Validate a declarative database manifest without building tools."""
-    try:
-        return DeclarativeDatabaseManifest.model_validate(raw)
-    except ValueError as error:
-        raise DatabaseValidationError(str(error)) from error
 
 
 def _collect_placeholders(value: Any, seen: set[str] | None = None) -> set[str]:
@@ -165,14 +164,17 @@ def _render_value(value: Any, arguments: dict[str, str]) -> Any:
 
 
 def _render_url(url: str, arguments: dict[str, str]) -> str:
-    missing = {
-        name
-        for name in _collect_placeholders(url)
-        if name not in arguments
-    }
-    if missing:
-        raise ValueError(f"missing URL arguments: {sorted(missing)}")
-    return _render_value(url, arguments)
+    """Render URL path placeholders with percent-encoding (parity with the
+    retired SkillPackageLoader._render_url)."""
+    parsed = urlsplit(url)
+    try:
+        path = _PLACEHOLDER.sub(
+            lambda match: quote(str(arguments[match.group(1)]), safe=""),
+            parsed.path,
+        )
+    except KeyError as error:
+        raise ValueError(f"missing template argument: {error.args[0]}") from error
+    return parsed._replace(path=path).geturl()
 
 
 def _extract_response(payload: Any, extract: str | None) -> Any:
@@ -312,6 +314,5 @@ __all__ = [
     "DeclarativeHttpToolBuilder",
     "HttpAuthReference",
     "HttpOperationManifest",
-    "parse_manifest_document",
-    "validate_declarative_manifest",
+    "redact_sensitive_manifest",
 ]

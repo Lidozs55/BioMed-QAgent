@@ -81,8 +81,9 @@ export class RuntimeController {
     private readonly transport: EventTransport,
   ) {}
 
-  start(signal?: AbortSignal) {
-    const databasePromise = this.api.fetchDatabases().then((databases) => {
+  /** Refresh the enabled database list (task picker) from the thin store. */
+  refreshDatabases(signal?: AbortSignal): Promise<void> {
+    return this.api.fetchDatabases().then((databases) => {
       if (signal?.aborted) return;
       const state = useAgentStore.getState();
       const enabled = databases.filter((database) => database.enabled !== false);
@@ -93,6 +94,10 @@ export class RuntimeController {
         );
       }
     });
+  }
+
+  start(signal?: AbortSignal) {
+    const databasePromise = this.refreshDatabases(signal);
     const historyPromise = this.loadTaskHistory(signal);
     const socketPromise = this.transport.connect();
     return Promise.allSettled([

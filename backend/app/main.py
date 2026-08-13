@@ -44,6 +44,7 @@ from app.runtime.hub import AssistantStreamHub, EventHub
 from app.runtime.index import SingleThreadExecutor, TaskIndex
 from app.runtime.manager import RunAdmissionRejectedError, TaskManager
 from app.runtime.repository import TaskRepository
+from app.skills.categories import SkillCategory
 from app.subagents.event_sink import DurableSubagentEventSink
 from app.subagents.input_broker import SubagentInputBroker
 from app.subagents.supervisor import SubagentSupervisor
@@ -179,6 +180,13 @@ def create_app(
             run_executor=ModeDispatchRunExecutor(
                 repository,
                 disabled_databases=database_store.disabled_builtin_names,
+                user_http_tools=lambda: database_store.build_user_http_tools(),
+                child_user_http_tools=lambda: database_store.build_user_http_tools(
+                    categories={
+                        SkillCategory.DISCOVERY,
+                        SkillCategory.ACQUISITION,
+                    }
+                ),
             ),
             max_active_runs=configured.runtime_max_active_runs,
             max_queued_runs=configured.runtime_run_queue_size,

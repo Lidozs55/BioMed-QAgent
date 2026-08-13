@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
@@ -37,6 +38,8 @@ from app.subagents.tools import (
 from app.tools.io import list_files, read_file, read_file_head, search_file, write_file
 
 AGENT_MAX_TURNS: int = 240
+
+logger = logging.getLogger(__name__)
 
 
 def resolve_agent_max_turns(
@@ -528,13 +531,16 @@ def build_agent(
     *,
     model_settings: RunModelSettings | None = None,
     disabled_databases: frozenset[str] = frozenset(),
+    user_tools: list | None = None,
 ) -> AgentBuild:
     """Build a main Agent with the builtin direct tools and one model snapshot.
 
     ``databases`` is the user-selected database list (injected as
     ``preferred_sources`` by the Run, not used to filter tools here).
     ``disabled_databases`` excludes the tools of user-disabled builtin
-    databases (database store toggles) from the Agent.
+    databases (database store toggles) from the Agent. ``user_tools`` are the
+    declarative user-database HTTP tools (thin database store); names that
+    collide with registered tools are skipped with a warning.
     """
 
     active_model_settings = model_settings or get_active_model_settings()
@@ -564,6 +570,18 @@ def build_agent(
     ]
     if disabled_tools:
         tools = [tool for tool in tools if getattr(tool, "name", "") not in disabled_tools]
+    if user_tools:
+        registered = {getattr(tool, "name", "") for tool in tools}
+        for tool in user_tools:
+            name = getattr(tool, "name", "")
+            if name in registered:
+                logger.warning(
+                    "user database tool %r collides with a registered tool; skipped",
+                    name,
+                )
+                continue
+            registered.add(name)
+            tools.append(tool)
     prompt_shape = ChatCompletionsPromptShape(
         instructions=INSTRUCTIONS,
         serialized_tool_schemas=serialize_function_tool_schemas(tools),
