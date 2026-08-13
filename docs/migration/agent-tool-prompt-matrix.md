@@ -9,7 +9,7 @@ FunctionTool names when Pi provides a safer native primitive.
 
 | Current tool | Status | Phase 1 disposition | Later boundary |
 | --- | --- | --- | --- |
-| `find_skill` | remove | Do not port the custom catalog-search gateway; use one minimal Pi Skill only to test discovery/load | Business Skill discovery is redesigned during Phase 2 rather than emulating this gateway |
+| `find_skill` / `invoke_skill` | remove | DONE (Phase 2): custom gateway deleted; legacy Agent registers direct tools; Pi loads `.pi/skills` via skill roots | Stable Skill↔Tool map: `server/src/agent/skills/skill-tool-map.ts` |
 | `invoke_skill` | remove | Do not port the custom invocation gateway | Required business tools move with their Phase 2 Skills |
 | `validate_dataset_build_spec` | Phase 1 legacy bridge | Register a Pi tool backed by the named bridge operation of the same name | Replace only when a parity-proven Core owns validation |
 | `execute_dataset_build` | Phase 1 legacy bridge | Register a Pi tool backed by the named bridge operation of the same name | Replace only when a parity-proven Core owns execution/publication |

@@ -1,6 +1,6 @@
 # Phase 2：Skills 与通用 Agent 工具迁移
 
-> 状态：实施中（分支 `feat/phase2-skills-tools-migration`）
+> 状态：✅ 完成（2026-08-13，分支 `feat/phase2-skills-tools-migration`）
 > 依据：[BioMed-QAgent_Pi_Migration_Plan.md](../BioMed-QAgent_Pi_Migration_Plan.md)
 > §20 Phase 2；待办见 [docs/TODO.md](../TODO.md)。
 > 本文记录本阶段的决策与验收映射；实现证据随各 checkpoint 的测试落在仓库内。
@@ -153,15 +153,14 @@ SKILL.md 内容 = Python 技能模块的 SOP 知识（何时用、怎么用、�
 
 ## 6. 实施顺序（TDD checkpoints）
 
-1. **B**（TS）：skill-tool-map + 测试；`.pi/skills/*/SKILL.md` 全部迁移 +
-   `skill-manifests.test.ts`（先写测试，后写内容）。
-2. **C**（TS）：pi-adapter 改全量 skill root + 缺失回退测试。
-3. **D**（Python）：builtin 模块去注册表、改直接工具表 + `test_builtin_tools.py`。
-4. **E**（Python）：`build_agent`/INSTRUCTIONS/子 Agent 改直接工具 +
-   `test_agent_build.py` 重写。
-5. **F**（Python）：声明式数据库存储 `app/databases/` + API + 测试；
-   删除 skills API/基础设施文件 + create_skill 链。
-6. **G**（Frontend）：删除技能 UI 与 find_skill/invoke_skill 渲染；数据库
-   分区切 `/api/v1/databases`；直接工具名标签 + 测试更新。
-7. **H**：文档（ARCHITECTURE.md §16、TODO.md、Plan §0/§20、迁移 README）。
-8. **I**：全量质量门禁 + review 修复 + 合并。
+1. ✅ **B/C**（TS）：skill-tool-map + 测试；17 个 SKILL.md 迁移 +
+   `skill-manifests.test.ts`；pi-adapter 全量 skill root + 缺失回退测试
+   （commit 793633a）。
+2. ✅ **D/E/F**（Python）：builtin 模块直接工具表 + `test_builtin_tools.py`；
+   `build_agent`/INSTRUCTIONS/子 Agent 改直接工具；声明式数据库存储
+   `app/databases/` + API + 测试；skills API/基础设施/create_skill 链删除
+   （commit e353458）。
+3. ✅ **G**（Frontend）：技能 UI 退役；数据库分区切 `/api/v1/databases`
+   （detail + enable/disable）；直接工具名标签（commit 8de5356）。
+4. ✅ **H**：文档同步（本 commit）。
+5. **I**：全量质量门禁 + review 修复 + 合并（进行中）。

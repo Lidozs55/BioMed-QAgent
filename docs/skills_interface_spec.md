@@ -1,8 +1,15 @@
-# Skill 数据接口规范
+# Skill 数据接口规范（已退役，2026-08-13 存档）
 
-> 面向 skill 编写者。定义 Skill 注册、Tool 函数签名、数据传输格式和错误处理的统一约定。
+> ⚠️ Phase 2 已退役自制 Skill 运行时（`SkillCatalog` / `find_skill` /
+> `invoke_skill` / 用户 Python 包上传）。本文件仅作历史存档。
 >
-> 参考实现：[backend/app/skills/builtin/acquisition/geo.py](../backend/app/skills/builtin/acquisition/geo.py)
+> 现行约定见：
+> - Skill 知识：`.pi/skills/<name>/SKILL.md`
+> - Skill ↔ Tool 稳定映射：`server/src/agent/skills/skill-tool-map.ts`
+> - Python 直接工具模块：`backend/app/skills/builtin/`（模块级
+>   `SKILL_NAME/SKILL_CATEGORY/SKILL_DESCRIPTION/SKILL_TOOLS/…` 常量）
+> - 用户扩展：声明式数据库 manifest（`app/databases/`）
+> - 设计决策：[migration/phase2-skills-tools-migration.md](migration/phase2-skills-tools-migration.md)
 
 ---
 

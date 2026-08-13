@@ -323,23 +323,25 @@ pnpm shadcn add card       # 卡片
 
 **你应该做的**：每次开始一个新任务时，告诉你的 AI 工具"先读一下 AGENTS.md 和 docs/ARCHITECTURE.md"，它就能自动遵守项目规范。
 
-### 7.3 Skill 系统 —— 项目的核心设计
+### 7.3 Skill 系统 —— 项目的核心设计（Phase 2 后形态）
 
-这个项目不仅仅是"调 API 的 chatbot"。它有一套 **Skill 系统**，把各种生物医学数据库的检索、下载、处理能力打包成标准化的 Skill：
+这个项目把生物医学数据库的检索、下载、处理能力组织为 **Skill 知识 + 直接工具**：
 
 ```
-backend/app/skills/
-├── builtin/          # 内置 Skill（团队维护）
-│   ├── discovery/    # 文献检索（PubMed 等）
-│   ├── acquisition/  # 数据下载（GEO、GDC、PDB 等）
-│   ├── processing/   # 数据处理（表格提取、图表识别等）
-│   └── analysis/     # 数据分析（统计、可视化）
-└── learned/          # AI 自进化 Skill（默认禁用）
+.pi/skills/<name>/SKILL.md          # SOP 知识（Pi 按任务加载）
+backend/app/skills/builtin/         # Python 直接工具模块（legacy Agent 用）
+|   ├── discovery/    # 文献检索（PubMed 等）
+|   ├── acquisition/  # 数据下载（GEO、GDC、PDB 等）
+|   ├── processing/   # 数据处理（表格提取、图表识别等）
+|   └── analysis/     # 数据分析（统计、可视化）
+server/src/agent/skills/skill-tool-map.ts   # Skill ↔ Tool 稳定名称映射
 ```
 
-每个 Skill = 一段 Instructions（告诉 Agent 怎么用）+ 一组 Function Tools（实际执行的代码）。
-
-**如果你想加一个新的数据库来源**：参考 `backend/app/skills/builtin/` 下已有的 Skill（比如 `skill_pubchem.py`），照猫画虎写一个新的就行。
+**如果你想加一个新的数据库来源**：
+1. 在 `.pi/skills/<name>/SKILL.md` 写 SOP 知识；
+2. 在 `backend/app/skills/builtin/` 加直接工具模块（模块级 `SKILL_*` 常量）；
+3. 在 `skill-tool-map.ts` 登记映射，并补 `tests/test_builtin_tools.py` 与
+   `server/tests/skill-tool-map.test.ts` 的断言（两侧钉住，禁止漂移）。
 
 ### 7.4 Agent + Pipeline 双层架构
 
