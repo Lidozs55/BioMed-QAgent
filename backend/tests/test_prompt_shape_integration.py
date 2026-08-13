@@ -102,6 +102,14 @@ def test_instructions_require_gpl_annotation_via_mapping_files_for_probe_builds(
     assert "probe_release.v1" in INSTRUCTIONS
 
 
+def test_instructions_forbid_merging_distinct_geo_series() -> None:
+    """Phase 5 T6: the Agent prompt must require one build per GSE."""
+    from app.agent_loop.agent import INSTRUCTIONS
+
+    assert "one DatasetBuildSpec per GSE" in INSTRUCTIONS
+    assert "same execute_dataset_build spec" not in INSTRUCTIONS
+
+
 # ---------------------------------------------------------------------------
 # C1/N1: SDK callback → shared resolver → estimator integration
 # ---------------------------------------------------------------------------

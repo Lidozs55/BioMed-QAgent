@@ -28,6 +28,7 @@ export type DatasetBridgeRequest =
         spec: DatasetBuildSpec;
         source_files: Record<string, string>;
         mapping_files: Record<string, string>;
+        metadata_files?: Record<string, string>;
       };
     })
   | (DatasetBridgeRequestBase & {
@@ -262,10 +263,13 @@ export function parseDatasetBridgeRequest(value: unknown): DatasetBridgeRequest 
     exact(args, ["spec"], "validate args");
     parseSpec(args.spec);
   } else if (request.op === "execute_dataset_build") {
-    exact(args, ["spec", "source_files", "mapping_files"], "execute args");
+    exact(args, ["spec", "source_files", "mapping_files", "metadata_files"], "execute args");
     parseSpec(args.spec);
     validateReferenceMap(args.source_files, "source_files");
     validateReferenceMap(args.mapping_files, "mapping_files");
+    if (args.metadata_files !== undefined) {
+      validateReferenceMap(args.metadata_files, "metadata_files");
+    }
   } else if (request.op === "get_build_result") {
     exact(args, ["build_id"], "lookup args");
     safeId(args.build_id, "build_id");

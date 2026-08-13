@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import csv
 import re
+from pathlib import Path
 from typing import TextIO
 
 from app.datasets.build.adapters import (
@@ -32,8 +33,14 @@ from app.datasets.build.adapters import (
     _wide_matrix_mappings,
 )
 from app.datasets.build.errors import AdapterError, EmptySourceError
+from app.datasets.build.geo_sample_metadata import (
+    parse_geo_series_matrix_samples,
+    parse_geo_soft_samples,
+    write_sample_metadata,
+)
 from app.datasets.contracts import AdapterParams, FieldMapping, JsonValue
 from app.domain.contracts import SourceAsset
+from app.tools.io import open_text
 
 #: Ensembl gene IDs (tximport output, or ENSG-shaped series/supplementary
 #: ID_REF values).  Version suffixes are tolerated exactly like the
@@ -78,8 +85,52 @@ class GeoExpressionAdapter(SourceAdapter):
     """Parses GEO expression files selected by typed AdapterParams."""
 
     adapter_id = "geo.expression.v1"
-    version = "1.0.0"
+    version = "1.1.0"
     source_database = "geo"
+
+    def _write_supporting_assets(
+        self,
+        *,
+        source_path: Path,
+        metadata_path: Path | None,
+        output_dir: Path,
+        binding_id: str,
+        parameters: AdapterParams | None,
+        statistics: dict[str, JsonValue],
+    ) -> tuple[list[Path], list[str]]:
+        if parameters is None:
+            return [], []
+        if metadata_path is not None:
+            with open_text(metadata_path, encoding="utf-8", newline="") as source:
+                samples, warnings = parse_geo_soft_samples(source)
+        elif parameters.format == "series_matrix":
+            with open_text(source_path, encoding="utf-8", newline="") as source:
+                samples, warnings = parse_geo_series_matrix_samples(source)
+        else:
+            return [], []
+        if not samples:
+            if metadata_path is not None:
+                raise AdapterError("GEO metadata contains no SAMPLE records")
+            return [], warnings
+        expected_samples = {
+            str(sample_id) for sample_id in statistics.get("sample_ids", [])
+        }
+        observed_samples = {
+            sample.source_sample_alias or sample.sample_id for sample in samples
+        }
+        if observed_samples != expected_samples:
+            raise AdapterError(
+                "GEO metadata sample IDs do not match expression sample IDs: "
+                f"metadata={sorted(observed_samples)}, "
+                f"expression={sorted(expected_samples)}"
+            )
+        path = output_dir / "supporting" / f"{binding_id}_sample_metadata.csv"
+        try:
+            write_sample_metadata(path, samples)
+        except Exception:
+            path.unlink(missing_ok=True)
+            raise
+        return [path], warnings
 
     def _extract(
         self,
@@ -193,12 +244,14 @@ class GeoExpressionAdapter(SourceAdapter):
         source_row_count: int,
         row_count: int,
         declared: set[str],
+        sample_ids: list[str],
     ) -> dict[str, JsonValue]:
         return {
             "source_database": self.source_database,
             "dataset_type": "gene_expression",
             "format": parameters.format,
             "sample_count": sample_count,
+            "sample_ids": sample_ids,
             "source_row_count": source_row_count,
             "row_count": row_count,
             "source_gene_id_namespace": _namespace_summary(declared),
@@ -301,6 +354,7 @@ class GeoExpressionAdapter(SourceAdapter):
             source_row_count=source_row_count,
             row_count=row_count,
             declared=declared,
+            sample_ids=samples,
         )
         return statistics, [], mappings, rejected_count
 
@@ -326,8 +380,11 @@ class GeoExpressionAdapter(SourceAdapter):
         source_row_count = row_count = rejected_count = 0
         batch_id = f"batch_{binding_id}"
         declared: set[str] = set()
+        sample_platforms: list[str] = []
         for line, values in enumerate(reader, start=1):
             if not in_block:
+                if values and values[0].startswith("!Sample_platform_id"):
+                    sample_platforms = [value.strip() for value in values[1:]]
                 if values and values[0].startswith("!series_matrix_table_begin"):
                     in_block = True
                 continue
@@ -409,7 +466,30 @@ class GeoExpressionAdapter(SourceAdapter):
             source_row_count=source_row_count,
             row_count=row_count,
             declared=declared,
+            sample_ids=samples,
         )
+        if sample_platforms and (
+            len(sample_platforms) != len(samples) or not all(sample_platforms)
+        ):
+            raise AdapterError(
+                "series matrix sample platform metadata must cover every sample"
+            )
+        if sample_platforms:
+            evidenced_platforms = sorted(set(sample_platforms))
+            declared_platforms = sorted(set(parameters.platform_ids))
+            if declared_platforms and declared_platforms != evidenced_platforms:
+                raise AdapterError(
+                    "declared platform_ids do not match !Sample_platform_id "
+                    f"evidence: declared={declared_platforms}, "
+                    f"evidenced={evidenced_platforms}"
+                )
+            statistics["platform_ids"] = evidenced_platforms
+            statistics["sample_platform_ids"] = {
+                sample_id: platform_id
+                for sample_id, platform_id in zip(
+                    samples, sample_platforms, strict=True
+                )
+            }
         return statistics, [], mappings, rejected_count
 
     # ------------------------------------------------- supplementary matrix
@@ -508,5 +588,6 @@ class GeoExpressionAdapter(SourceAdapter):
             source_row_count=source_row_count,
             row_count=row_count,
             declared=declared,
+            sample_ids=samples,
         )
         return statistics, [], mappings, rejected_count

@@ -318,6 +318,7 @@ class DataBatch(ContractModel):
     row_granularity: str = Field(min_length=1)
     schema_ref: str = Field(min_length=1)
     file_asset: FileAsset | None = None
+    supporting_assets: list[FileAsset] = Field(default_factory=list)
     row_count: int = Field(ge=0)
     column_count: int = Field(ge=0)
     parser_id: str = Field(min_length=1)

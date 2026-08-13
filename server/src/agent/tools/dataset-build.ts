@@ -49,7 +49,7 @@ function specArgument(value: Record<string, unknown>): DatasetBuildSpec {
 
 function mappingArgument(
   value: Record<string, unknown>,
-  name: "source_files" | "mapping_files",
+  name: "source_files" | "mapping_files" | "metadata_files",
 ): Record<string, string> {
   const mapping = object(value[name]);
   if (Object.values(mapping).some((item) => typeof item !== "string")) {
@@ -201,6 +201,7 @@ export function createDatasetBuildTools(
           spec: specSchema,
           source_files: mappingSchema,
           mapping_files: mappingSchema,
+          metadata_files: mappingSchema,
         },
         required: ["spec", "source_files", "mapping_files"],
         additionalProperties: false,
@@ -233,6 +234,9 @@ export function createDatasetBuildTools(
             ...identity,
             sourceFiles: mappingArgument(args, "source_files"),
             mappingFiles: mappingArgument(args, "mapping_files"),
+            metadataFiles: args.metadata_files === undefined
+              ? {}
+              : mappingArgument(args, "metadata_files"),
           });
           captureBuildResult(options, response);
           diagnostic(

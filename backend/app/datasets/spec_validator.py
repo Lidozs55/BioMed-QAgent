@@ -6,6 +6,7 @@ spec yields structured reason codes consumed later by ``BuildResult.SPEC_REJECTE
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from pydantic import ValidationError
@@ -35,6 +36,7 @@ _ENTITY_LEVEL_BY_GRANULARITY: dict[str, str] = {
     "gene_sample_measurement": "gene",
     "probe_sample_measurement": "probe",
 }
+_GSE_ACCESSION_PATTERN = re.compile(r"\bGSE\d+\b", re.IGNORECASE)
 
 
 def _profile_entity_level(profile_ref: str) -> str | None:
@@ -159,6 +161,7 @@ class SpecValidator:
         normalization_profile = _resolve_normalization_profile(
             spec.normalization_profile_ref
         )
+        geo_accessions: list[str] = []
         for binding in spec.source_bindings:
             # B4 Agent-only guarantee: a binding whose ``source`` resolves to a
             # RESEARCH_ONLY database (e.g. uniprot/chembl — Agent-only research
@@ -178,6 +181,13 @@ class SpecValidator:
                     "research sources are never accepted as build sources"
                 )
             if binding.adapter_id == GeoExpressionAdapter.adapter_id:
+                if binding.accession:
+                    geo_accessions.extend(
+                        accession.upper()
+                        for accession in _GSE_ACCESSION_PATTERN.findall(
+                            binding.accession
+                        )
+                    )
                 if not binding.parameters:
                     codes.append("invalid_adapter_parameters")
                     reasons.append(
@@ -238,6 +248,14 @@ class SpecValidator:
                     f"{binding.adapter_id!r}) declares adapter parameters "
                     "that are not applicable"
                 )
+
+        distinct_geo_accessions = list(dict.fromkeys(geo_accessions))
+        if len(distinct_geo_accessions) > 1:
+            codes.append("multiple_geo_series")
+            reasons.append(
+                "distinct GEO series must use one DatasetBuildSpec per GSE: "
+                + ", ".join(distinct_geo_accessions)
+            )
 
         if codes:
             return SpecValidationResult(

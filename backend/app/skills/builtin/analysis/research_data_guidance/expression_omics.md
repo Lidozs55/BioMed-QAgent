@@ -40,6 +40,12 @@ geo.expression.v1 绑定必须声明 `parameters`，且字段须与服务端 nor
   对未知单位返回 `unknown_unit` reason code 并列出允许值，按提示修正，不要带病构建。
 - `platform_ids`：声明 GPL 平台号（`^GPL\d+$`），供平台审计与 probe 映射使用。
 
+每个不同 GSE 必须使用独立的 `DatasetBuildSpec` 和 `execute_dataset_build` 调用，不跨
+GSE 拼接行。series matrix 的 `!Sample_*` 字段会自动发布为 `sample_metadata.csv`；若
+表达主文件是 tximport/补充矩阵，则把同一 GSE 的 family SOFT 通过
+`metadata_files={"binding_id": "<SOFT 相对路径>"}` 传给构建工具。tumor/normal 分组
+与 pairing 仅依据显式 metadata；不得从 GSM 顺序、标题相似度或同一 GSE 猜测配对。
+
 ## 4. 构建前 vetting
 
 对每个候选 GSE/GDC 数据集：

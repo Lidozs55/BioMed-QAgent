@@ -246,6 +246,25 @@ def _row_granularity_for(schema_ref: str) -> str:
     )
 
 
+def _file_asset(
+    path: Path,
+    *,
+    output_dir: Path,
+    kind: str,
+    generated_by_step_id: str,
+) -> FileAsset:
+    checksum = sha256_file(path)
+    return FileAsset(
+        asset_id=asset_id_from_sha256(checksum),
+        kind=kind,
+        relative_path=path.relative_to(output_dir).as_posix(),
+        sha256=checksum,
+        size_bytes=path.stat().st_size,
+        media_type="text/csv",
+        generated_by_step_id=generated_by_step_id,
+    )
+
+
 def adapter_params_for_binding(binding: SourceBinding) -> AdapterParams | None:
     """Build typed AdapterParams from a binding's declared parameters.
 
@@ -283,6 +302,7 @@ class SourceAdapter(ABC):
         schema_ref: str,
         output_dir: Path,
         parameters: AdapterParams | None = None,
+        metadata_path: Path | None = None,
     ) -> DataBatch:
         """Parse *source_asset* into a source-long DataBatch.
 
@@ -299,6 +319,7 @@ class SourceAdapter(ABC):
         batch_dir.mkdir(parents=True, exist_ok=True)
         output_path = batch_dir / f"{binding_id}.csv"
         rejected_path = batch_dir / f"{binding_id}_rejected.csv"
+        supporting_paths: list[Path] = []
         try:
             with (
                 _open_table(source_path) as source,
@@ -319,9 +340,20 @@ class SourceAdapter(ABC):
                     source_name=source_name,
                     parameters=parameters,
                 )
+                supporting_paths, supporting_warnings = self._write_supporting_assets(
+                    source_path=source_path,
+                    metadata_path=metadata_path,
+                    output_dir=output_dir,
+                    binding_id=binding_id,
+                    parameters=parameters,
+                    statistics=statistics,
+                )
+                warnings.extend(supporting_warnings)
         except Exception:
             output_path.unlink(missing_ok=True)
             rejected_path.unlink(missing_ok=True)
+            for supporting_path in supporting_paths:
+                supporting_path.unlink(missing_ok=True)
             raise
         checksum = sha256_file(output_path)
         file_asset = FileAsset(
@@ -335,6 +367,15 @@ class SourceAdapter(ABC):
         )
         statistics["row_count"] = int(statistics.get("row_count", 0))
         statistics["rejected_count"] = rejected_count
+        supporting_assets = [
+            _file_asset(
+                path,
+                output_dir=output_dir,
+                kind="artifact",
+                generated_by_step_id=f"step_{self.adapter_id}",
+            )
+            for path in supporting_paths
+        ]
         return DataBatch(
             batch_id=f"batch_{binding_id}",
             binding_id=binding_id,
@@ -342,6 +383,7 @@ class SourceAdapter(ABC):
             row_granularity=_row_granularity_for(schema_ref),
             schema_ref=schema_ref,
             file_asset=file_asset,
+            supporting_assets=supporting_assets,
             row_count=int(statistics["row_count"]),
             column_count=len(SOURCE_LONG_COLUMNS),
             parser_id=self.adapter_id,
@@ -350,6 +392,20 @@ class SourceAdapter(ABC):
             warnings=warnings,
             declared_mappings=mappings,
         )
+
+    def _write_supporting_assets(
+        self,
+        *,
+        source_path: Path,
+        metadata_path: Path | None,
+        output_dir: Path,
+        binding_id: str,
+        parameters: AdapterParams | None,
+        statistics: dict[str, JsonValue],
+    ) -> tuple[list[Path], list[str]]:
+        """Optional deterministic side tables emitted after a valid parse."""
+
+        return [], []
 
     @abstractmethod
     def _extract(

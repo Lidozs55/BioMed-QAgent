@@ -15,7 +15,14 @@ import httpx
 from agents import RunContextWrapper, function_tool
 
 from app.agent_loop.context import RunContext
-from app.domain.contracts import Database, DataLevel, QueryStatus, SourceRecord, StageName
+from app.domain.contracts import (
+    Database,
+    DataLevel,
+    GeoSeriesRecord,
+    QueryStatus,
+    SourceRecord,
+    StageName,
+)
 from app.integrations.acquisition import acquire_source
 from app.integrations.ncbi.client import parse_retry_after
 from app.integrations.ncbi.discovery import (
@@ -156,6 +163,7 @@ async def describe_geo_adapter(
 
     try:
         record = await describe_geo_series(services.eutils, accession)
+        run_ctx.add_geo_series_record(record)
         payload = _geo_record_json(record)
         suppl_listing_url = ""
         if record.ftp_root:
@@ -218,7 +226,7 @@ async def _resolve_download(
     file_type: str,
     filename: str | None,
     services: NcbiServices,
-) -> tuple[SourceRecord, str, DataLevel]:
+) -> tuple[SourceRecord, str, DataLevel, GeoSeriesRecord]:
     record = await describe_geo_series(services.eutils, accession)
     root = _https_ftp_root(record.ftp_root, record.accession)
     normalized_type = file_type.lower().strip()
@@ -275,7 +283,7 @@ async def _resolve_download(
         title=record.title,
         retrieved_at=datetime.now(UTC),
     )
-    return source, selected_filename, DataLevel.REPOSITORY_PROCESSED
+    return source, selected_filename, DataLevel.REPOSITORY_PROCESSED, record
 
 
 async def list_geo_supplementary_files_adapter(
@@ -343,9 +351,10 @@ async def download_geo_adapter(
     """Download one official GEO file and return its immutable SourceAsset JSON."""
 
     try:
-        source, selected_filename, data_level = await _resolve_download(
+        source, selected_filename, data_level, geo_record = await _resolve_download(
             accession, file_type, filename, services
         )
+        run_ctx.add_geo_series_record(geo_record)
         result = await acquire_source(
             source=source,
             filename=selected_filename,
@@ -692,6 +701,11 @@ geo_skill = SkillDef(
         "(microarray) datasets, call download_geo_platform_annotation with the "
         "platform GPL (from describe_geo) and pass the annotation file via "
         "execute_dataset_build's mapping_files so probe rows map to genes."
+        " Use one DatasetBuildSpec and one execute_dataset_build call per "
+        "distinct GSE; never merge different GSE accessions into one build. "
+        "For tximport/supplementary expression, download the same GSE family "
+        "SOFT and pass it through execute_dataset_build metadata_files to "
+        "publish structured sample metadata."
     ),
     tools=[
         search_geo,
@@ -701,7 +715,7 @@ geo_skill = SkillDef(
         download_geo_platform_annotation,
     ],
     supported_sources=["geo", "ncbi_geo"],
-    version="0.4.0",
+    version="0.5.0",
 )
 
 skill_registry.register(geo_skill)

@@ -2104,7 +2104,11 @@ def _write_series_matrix(path: Path, rows: list[tuple[str, str, str]]) -> None:
     """Write a gzip series matrix: (probe_id, gsm1_value, gsm2_value) rows."""
     import gzip as gzip_module
 
-    lines = ["!series_matrix_table_begin", '"ID_REF"\t"GSM1"\t"GSM2"']
+    lines = [
+        '!Sample_platform_id\t"GPL570"\t"GPL570"',
+        "!series_matrix_table_begin",
+        '"ID_REF"\t"GSM1"\t"GSM2"',
+    ]
     lines.extend(f'"{probe}"\t{v1}\t{v2}' for probe, v1, v2 in rows)
     lines.append("!series_matrix_table_end")
     with gzip_module.open(path, "wt", encoding="utf-8") as handle:
@@ -2290,6 +2294,43 @@ async def test_t7_probe_build_publishes_probe_primary_with_mapping_asset(
     # The probe primary must not leak the internal source-long column: the
     # canonical output shape mirrors the gene primary (review-loop R1-01).
     assert "gene_id_namespace_declared" not in rows[0]
+
+
+@pytest.mark.asyncio
+async def test_geo_multi_platform_mapping_without_per_sample_split_fails_closed(
+    tmp_path: Path,
+) -> None:
+    """D8: one annotation must never be applied across multiple GEO platforms."""
+    import gzip as gzip_module
+
+    matrix = tmp_path / "multi_platform.txt.gz"
+    text = (
+        '!Sample_geo_accession\t"GSM1"\t"GSM2"\n'
+        '!Sample_platform_id\t"GPL570"\t"GPL96"\n'
+        '!series_matrix_table_begin\n'
+        '"ID_REF"\t"GSM1"\t"GSM2"\n'
+        '"PROBE1"\t1.5\t2.0\n'
+        '!series_matrix_table_end\n'
+    )
+    with gzip_module.open(matrix, "wt", encoding="utf-8") as handle:
+        handle.write(text)
+    annotation = tmp_path / "GPL570_annot.txt.gz"
+    _write_platform_annotation(annotation, {"PROBE1": "TP53"})
+    binding = _geo_binding(platform_ids=["GPL570", "GPL96"])
+    per_binding_outcomes: dict = {}
+
+    outcome, _, _ = await _run_executor_with_paths(
+        tmp_path,
+        [binding],
+        {"binding_geo": matrix},
+        per_binding_outcomes=per_binding_outcomes,
+        mapping_paths={"binding_geo": annotation},
+    )
+
+    assert outcome.status == "failed"
+    assert per_binding_outcomes["binding_geo"].reason_code == (
+        "ambiguous_multi_platform_mapping"
+    )
 
 
 @pytest.mark.asyncio

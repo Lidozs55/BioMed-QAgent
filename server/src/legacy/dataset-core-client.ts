@@ -49,6 +49,7 @@ export interface ExecuteDatasetBuildInput extends Identity {
   spec: DatasetBuildSpec;
   sourceFiles: Record<string, string>;
   mappingFiles: Record<string, string>;
+  metadataFiles?: Record<string, string>;
 }
 
 export interface GetBuildResultInput extends Identity {
@@ -97,6 +98,7 @@ export class DatasetCoreClient implements DatasetCoreClientLike {
         spec: input.spec,
         source_files: input.sourceFiles,
         mapping_files: input.mappingFiles,
+        metadata_files: input.metadataFiles ?? {},
       },
       ...input,
     });

@@ -53,6 +53,7 @@ function request() {
       spec,
       source_files: { binding_gdc: "source_assets/gdc.tsv" },
       mapping_files: {},
+      metadata_files: { binding_gdc: "source_assets/gdc.soft" },
     },
   } as const;
 }
@@ -70,6 +71,7 @@ describe("Dataset Core bridge contracts", () => {
     { ...request(), args: { ...request().args, extra: true } },
     { ...request(), args: { ...request().args, source_files: { binding_gdc: "../escape" } } },
     { ...request(), args: { ...request().args, source_files: { binding_gdc: "C:\\secret.tsv" } } },
+    { ...request(), args: { ...request().args, metadata_files: { binding_gdc: "../escape.soft" } } },
   ])("rejects unknown fields, operations, IDs, and unsafe refs", (value) => {
     expect(() => parseDatasetBridgeRequest(value)).toThrow();
   });

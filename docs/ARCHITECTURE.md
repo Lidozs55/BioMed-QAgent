@@ -514,6 +514,11 @@ V1 在 GEO 没有表达矩阵时，将样本元数据写成
 
 - 主表无合法记录时 BuildResult 为 `NO_DATA`；
 - 样本元数据保存为 `supporting_dataset`；
+- GEO series matrix 内嵌 metadata 与显式 family SOFT 共用
+  `geo.sample-group.v1` 提取器；显式 SOFT 通过 `metadata_files`（TS/Pi bridge 与
+  Python FunctionTool 同合同）按 binding 传入。SOFT 的 GSM/`Sample_description`
+  alias 必须与表达矩阵样本全集一致，否则该 binding 失败关闭；metadata 资产摘要
+  写入 manifest `source_summary`；
 - Validation 不允许 warning 或特殊字段豁免目标数据不存在；
 - 空主表不发布为 `SUCCEEDED`；
 - 可以发布归入 `audit_report` 的来源搜索、拒绝和诊断报告，但不能伪装成主数据集
