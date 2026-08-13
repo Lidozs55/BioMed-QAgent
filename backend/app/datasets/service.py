@@ -19,6 +19,7 @@ from app.datasets.build.expression_runner import (
     _PUBLICATION_REFUSED_PREFIX,
     ExpressionBuildRunner,
 )
+from app.datasets.build.geo_relations import build_geo_source_relations
 from app.datasets.build.invariants import PUBLISH_DIR, find_latest_publication
 from app.datasets.build.profiles import VALIDATION_PROFILES, get_validation_profile
 from app.datasets.contracts import (
@@ -47,6 +48,8 @@ from app.domain.contracts import (
     DownloadStatus,
     ErrorDetail,
     SourceAsset,
+    SourceRecord,
+    SourceRelation,
     asset_id_from_sha256,
     generate_prefixed_uuid,
 )
@@ -88,6 +91,34 @@ _MEDIA_TYPES = {
     ".json": "application/json",
     ".xml": "application/xml",
 }
+
+
+def _geo_source_relations(
+    run_ctx: RunContext,
+    spec: DatasetBuildSpec,
+    assets: Mapping[str, SourceAsset],
+) -> list[SourceRelation]:
+    """Build only relations backed by trusted GEO esummary metadata."""
+
+    sources = [
+        source for source in run_ctx.sources if isinstance(source, SourceRecord)
+    ]
+    relations: list[SourceRelation] = []
+    for binding in spec.source_bindings:
+        if binding.source.lower() != "geo" or binding.accession is None:
+            continue
+        record = run_ctx.geo_series_records.get(binding.accession.upper())
+        asset = assets.get(binding.binding_id)
+        if record is None or asset is None:
+            continue
+        relations.extend(
+            build_geo_source_relations(
+                geo_source_id=asset.source_id,
+                geo=record,
+                sources=sources,
+            )
+        )
+    return relations
 _BUILD_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
 
 
@@ -186,6 +217,7 @@ async def execute_dataset_build(
     spec: str,
     source_files: Mapping[str, str] | str,
     mapping_files: Mapping[str, str] | str = "{}",
+    metadata_files: Mapping[str, str] | str = "{}",
     *,
     workflow_recipe_fetcher: Callable[[RunContext], object | None] | None = None,
 ) -> DatasetBuildExecutionResponse:
@@ -215,6 +247,14 @@ async def execute_dataset_build(
         )
     except (ValueError, json.JSONDecodeError) as exc:
         return DatasetBuildInputError(message=f"could not parse mapping_files: {exc}")
+    try:
+        metadata_mapping = (
+            json.loads(metadata_files)
+            if isinstance(metadata_files, str)
+            else dict(metadata_files)
+        )
+    except (ValueError, json.JSONDecodeError) as exc:
+        return DatasetBuildInputError(message=f"could not parse metadata_files: {exc}")
     if not _BUILD_ID_RE.fullmatch(build_spec.build_id):
         return DatasetBuildInputError(
             message=(
@@ -267,6 +307,30 @@ async def execute_dataset_build(
                 + ", ".join(unknown_mapping_bindings)
             )
         )
+    if not isinstance(metadata_mapping, dict):
+        return DatasetBuildInputError(
+            message="metadata_files must be a JSON object {binding_id: path}"
+        )
+    unknown_metadata_bindings = sorted(set(metadata_mapping) - binding_ids)
+    if unknown_metadata_bindings:
+        return DatasetBuildInputError(
+            message=(
+                "metadata_files reference unknown bindings: "
+                + ", ".join(unknown_metadata_bindings)
+            )
+        )
+    non_geo_metadata_bindings = sorted(
+        binding_id
+        for binding_id in metadata_mapping
+        if bindings_by_id[binding_id].adapter_id != "geo.expression.v1"
+    )
+    if non_geo_metadata_bindings:
+        return DatasetBuildInputError(
+            message=(
+                "metadata_files are supported only for geo.expression.v1 "
+                "bindings: " + ", ".join(non_geo_metadata_bindings)
+            )
+        )
     try:
         assets, paths = _resolve_local_assets(
             run_ctx,
@@ -276,6 +340,11 @@ async def execute_dataset_build(
         mapping_assets, mapping_paths = _resolve_local_assets(
             run_ctx,
             mapping_mapping,
+            bindings_by_id,
+        )
+        metadata_assets, metadata_paths = _resolve_local_assets(
+            run_ctx,
+            metadata_mapping,
             bindings_by_id,
         )
     except (FileNotFoundError, OSError) as exc:
@@ -306,6 +375,9 @@ async def execute_dataset_build(
         source_paths=paths,
         mapping_assets=mapping_assets,
         mapping_paths=mapping_paths,
+        metadata_paths=metadata_paths,
+        metadata_assets=metadata_assets,
+        source_relations=_geo_source_relations(run_ctx, build_spec, assets),
         output_dir=output_dir,
         cancellation_requested=run_ctx.cancellation_requested,
         pending_check=lambda: run_ctx.main_input_pending,
@@ -334,10 +406,18 @@ async def execute_dataset_build(
         run_operation=runner,
         source_assets=assets,
         mapping_assets=mapping_assets,
+        metadata_assets=metadata_assets,
         parameter_scope=parameter_scope,
         per_binding_outcomes=per_binding_outcomes,
         cancellation_requested=run_ctx.cancellation_requested,
-        implementation_versions={op.operation_id: "1.0.0" for op in plan},
+        implementation_versions={
+            op.operation_id: (
+                "1.1.0"
+                if op.kind.value in {"parse", "canonicalize", "validate_profile"}
+                else "1.0.0"
+            )
+            for op in plan
+        },
     )
     outcome = await executor.run()
     manifest_path = output_dir / "dataset_manifest.json"
@@ -379,9 +459,12 @@ async def execute_dataset_build(
 
     publication_id = find_latest_publication(output_dir / PUBLISH_DIR)
     valid_row_count = 0
+    manifest: DatasetManifest | None = None
     if manifest_path.is_file():
-        manifest_data = json.loads(manifest_path.read_text("utf-8"))
-        valid_row_count = int(manifest_data.get("row_count", 0))
+        manifest = DatasetManifest.model_validate_json(
+            manifest_path.read_text("utf-8")
+        )
+        valid_row_count = manifest.row_count
     rejected_sources = sorted(per_binding_outcomes)
     successful_sources = [
         binding_id
@@ -397,6 +480,11 @@ async def execute_dataset_build(
         valid_row_count=valid_row_count,
         successful_sources=successful_sources,
         rejected_sources=rejected_sources,
+        available_artifact_roles=(
+            list(dict.fromkeys(artifact.role for artifact in manifest.artifacts))
+            if manifest is not None
+            else []
+        ),
         publication_id=publication_id,
         reason_codes=[],
         user_summary=(
@@ -795,6 +883,9 @@ def _derive_build_result(
         status=BuildResultStatus.SUCCEEDED,
         valid_row_count=manifest.row_count,
         successful_sources=sorted(manifest.source_summary),
+        available_artifact_roles=list(
+            dict.fromkeys(artifact.role for artifact in manifest.artifacts)
+        ),
         publication_id=publication.publication_id,
         user_summary=(
             f"build {manifest.build_id} published {manifest.row_count} valid row(s)"

@@ -34,6 +34,7 @@ from app.datasets.build.canonicalizer import (
 from app.datasets.build.compat_gate import check_expression_compatibility
 from app.datasets.build.errors import BindingRejectedError, BuildError
 from app.datasets.build.gene_maps import SYMBOL_TO_ENSEMBL
+from app.datasets.build.geo_relations import write_source_relations
 from app.datasets.build.hashing import sha256_file
 from app.datasets.build.integrator import IntegrationResult, integrate
 from app.datasets.build.invariants import (
@@ -67,7 +68,7 @@ from app.datasets.contracts import (
 from app.datasets.runtime import OperationKind, OperationOutput, OperationSpec
 from app.datasets.runtime.executor import BuildCancelledError, CancellationToken
 from app.datasets.schema_registry import SchemaRegistry
-from app.domain.contracts.source import SourceAsset
+from app.domain.contracts.source import SourceAsset, SourceRelation
 from app.pipeline.state import StageOutputFile
 
 #: Type variable for the worker-thread offload helper (the caller's expected
@@ -138,6 +139,9 @@ class ExpressionBuildRunner:
         per_binding_outcomes: dict[str, BindingRejection] | None = None,
         mapping_assets: Mapping[str, SourceAsset] | None = None,
         mapping_paths: Mapping[str, Path] | None = None,
+        metadata_paths: Mapping[str, Path] | None = None,
+        metadata_assets: Mapping[str, SourceAsset] | None = None,
+        source_relations: list[SourceRelation] | None = None,
     ) -> None:
         self._spec = spec
         self._registry = registry
@@ -160,6 +164,9 @@ class ExpressionBuildRunner:
         # map probes to genes; the mapping assets and their on-disk paths.
         self._mapping_assets = dict(mapping_assets or {})
         self._mapping_paths = dict(mapping_paths or {})
+        self._metadata_paths = dict(metadata_paths or {})
+        self._metadata_assets = dict(metadata_assets or {})
+        self._source_relations = list(source_relations or [])
         # Per-binding ProbeMappingSummary objects + mapping-detail audit paths
         # produced during canonicalization (D3), fed to the validation profile
         # and the manifest audit list.
@@ -367,10 +374,15 @@ class ExpressionBuildRunner:
             schema_ref=self._spec.schema_ref,
             output_dir=self._output_dir,
             parameters=parameters,
+            metadata_path=self._metadata_paths.get(binding.binding_id),
         )
         self._batches[binding.binding_id] = batch
         file_outputs = _file_outputs(
-            self._output_dir, [batch.file_asset.relative_path]
+            self._output_dir,
+            [
+                batch.file_asset.relative_path,
+                *(asset.relative_path for asset in batch.supporting_assets),
+            ],
         )
         return OperationOutput(
             output={
@@ -380,6 +392,9 @@ class ExpressionBuildRunner:
                 "row_count": batch.row_count,
                 "column_count": batch.column_count,
                 "file": batch.file_asset.relative_path,
+                "supporting_files": [
+                    asset.relative_path for asset in batch.supporting_assets
+                ],
             },
             files=file_outputs,
         )
@@ -406,6 +421,36 @@ class ExpressionBuildRunner:
                 str(platform_id)
                 for platform_id in batch.statistics.get("platform_ids", [])
             ]
+            sample_platform_ids = batch.statistics.get("sample_platform_ids")
+            if (
+                batch.statistics.get("format") == "series_matrix"
+                and not sample_platform_ids
+            ):
+                raise BindingRejectedError(
+                    BindingRejection(
+                        binding_id=binding_id,
+                        kind=BindingRejectionKind.ERROR,
+                        reason_code="missing_sample_platform_evidence",
+                        message=(
+                            "GEO series matrix has no complete "
+                            "!Sample_platform_id evidence; refusing to apply "
+                            "a series-level annotation"
+                        ),
+                    )
+                )
+            if len(platform_ids) > 1:
+                raise BindingRejectedError(
+                    BindingRejection(
+                        binding_id=binding_id,
+                        kind=BindingRejectionKind.ERROR,
+                        reason_code="ambiguous_multi_platform_mapping",
+                        message=(
+                            "GEO binding declares multiple GPL platforms but "
+                            "only one unsplit mapping asset; split the source "
+                            "into one binding per evidenced sample platform"
+                        ),
+                    )
+                )
             mapping_result = await self._offload(
                 build_probe_mapping,
                 annotation_path=annotation_path,
@@ -591,6 +636,11 @@ class ExpressionBuildRunner:
             successful_results,
             integration,
         )
+        supporting_paths = [
+            self._output_dir / asset.relative_path
+            for result in successful_results
+            for asset in result.batch.supporting_assets
+        ]
         # Phase 5 T7 D3: publish the ProbeMappingSummary + mapping-detail
         # audits with the build (supporting/audit survive even when the
         # release gate fails and no primary is published).
@@ -603,6 +653,10 @@ class ExpressionBuildRunner:
             _write_probe_mapping_summaries(summaries_path, summaries)
             audit_paths.append(summaries_path)
         audit_paths.extend(self._mapping_detail_paths)
+        if self._source_relations:
+            relations_path = self._output_dir / "source_relations.csv"
+            write_source_relations(relations_path, self._source_relations)
+            audit_paths.append(relations_path)
         # F4: the probe-primary publication carries one PlatformRecord per GPL
         # attempt (platform_audit.csv), mirroring the V1 platform audit.
         platform_records = [
@@ -623,6 +677,7 @@ class ExpressionBuildRunner:
             canonical_results=successful_results,
             provenance_path=provenance_path,
             audit_paths=audit_paths,
+            supporting_paths=supporting_paths,
             validation=_placeholder_validation(),
             source_summary=source_summary,
             output_dir=self._output_dir,
@@ -647,6 +702,7 @@ class ExpressionBuildRunner:
             canonical_results=successful_results,
             provenance_path=provenance_path,
             audit_paths=audit_paths,
+            supporting_paths=supporting_paths,
             validation=validation,
             source_summary=source_summary,
             output_dir=self._output_dir,
@@ -816,6 +872,7 @@ class ExpressionBuildRunner:
                 targets = [
                     output_dir / "batches" / f"{binding_id}.csv",
                     output_dir / "batches" / f"{binding_id}_rejected.csv",
+                    output_dir / "supporting" / f"{binding_id}_sample_metadata.csv",
                 ]
             else:
                 targets = list(
@@ -831,6 +888,7 @@ class ExpressionBuildRunner:
                 output_dir / "dataset_manifest.json",
                 output_dir / "validation_report.json",
                 output_dir / "provenance.json",
+                output_dir / "source_relations.csv",
             ]
         elif op.kind is OperationKind.PUBLISH:
             targets = [
@@ -890,7 +948,8 @@ class ExpressionBuildRunner:
         summary: dict[str, object] = {}
         for binding_id, result in self._canonical_results.items():
             asset = self._source_assets.get(binding_id)
-            summary[binding_id] = {
+            metadata_asset = self._metadata_assets.get(binding_id)
+            binding_summary: dict[str, object] = {
                 "source_id": asset.source_id if asset is not None else "",
                 "asset_id": asset.asset_id if asset is not None else "",
                 "adapter_id": next(
@@ -911,6 +970,10 @@ class ExpressionBuildRunner:
                     "probe" if "geo_probe" in result.namespaces else "gene"
                 ),
             }
+            if metadata_asset is not None:
+                binding_summary["metadata_asset_id"] = metadata_asset.asset_id
+                binding_summary["metadata_sha256"] = metadata_asset.sha256
+            summary[binding_id] = binding_summary
         return summary
 
 

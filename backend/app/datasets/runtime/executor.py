@@ -248,6 +248,7 @@ class DatasetBuildExecutor:
         implementation_versions: Mapping[str, str] | None = None,
         source_assets: Mapping[str, SourceAsset] | None = None,
         mapping_assets: Mapping[str, SourceAsset] | None = None,
+        metadata_assets: Mapping[str, SourceAsset] | None = None,
         operation_timeout: float = 120.0,
         lock_timeout: float = 5.0,
         straggler_grace: float = 10.0,
@@ -271,6 +272,7 @@ class DatasetBuildExecutor:
         self._implementation_versions = implementation_versions or {}
         self._source_assets = dict(source_assets or {})
         self._mapping_assets = dict(mapping_assets or {})
+        self._metadata_assets = dict(metadata_assets or {})
         self._operation_timeout = operation_timeout
         self._lock_timeout = lock_timeout
         # K1 residual (Phase 4 review): the operation timeout cancels only
@@ -1053,6 +1055,14 @@ class DatasetBuildExecutor:
                     "size_bytes": asset.size_bytes,
                 }
                 for binding_id, asset in sorted(self._mapping_assets.items())
+            }
+        if self._metadata_assets:
+            payload["metadata_assets"] = {
+                binding_id: {
+                    "sha256": asset.sha256,
+                    "size_bytes": asset.size_bytes,
+                }
+                for binding_id, asset in sorted(self._metadata_assets.items())
             }
         return _sha256_json(payload)
 

@@ -12,7 +12,13 @@ import app.skills.builtin.discovery.pubmed as pubmed_module
 import httpx
 import pytest
 from app.agent_loop.context import ProgressEmitter, RunContext
-from app.domain.contracts import Database, DataLevel, SourceRecord, StageName
+from app.domain.contracts import (
+    Database,
+    DataLevel,
+    GeoSeriesRecord,
+    SourceRecord,
+    StageName,
+)
 from app.integrations.ncbi.factory import NcbiServices
 from app.skills.builtin.acquisition.geo import (
     describe_geo_adapter,
@@ -432,8 +438,16 @@ async def test_child_download_geo_commits_asset_outside_child_staging(
         retrieved_at=datetime.now(UTC),
     )
 
-    async def fake_resolve(*_args: object, **_kwargs: object) -> tuple[SourceRecord, str, DataLevel]:
-        return source, "child.geo", DataLevel.REPOSITORY_PROCESSED
+    geo_record = GeoSeriesRecord(
+        uid="200000001",
+        accession="GSE1",
+        sample_count=0,
+    )
+
+    async def fake_resolve(
+        *_args: object, **_kwargs: object
+    ) -> tuple[SourceRecord, str, DataLevel, GeoSeriesRecord]:
+        return source, "child.geo", DataLevel.REPOSITORY_PROCESSED, geo_record
 
     async def fake_acquire_source(**_kwargs: object) -> object:
         return type(

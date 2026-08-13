@@ -2,8 +2,8 @@
 
 The manifest is the only authoritative entry point for locating the primary
 dataset and its supporting artifacts — programs never hard-code filenames.
-Manifest digest is computed over the data artifacts (primary, schema,
-provenance, audits) so it is stable and independent of the manifest JSON
+Manifest digest is computed over the data artifacts (primary, supporting,
+schema, provenance, audits) so it is stable and independent of the manifest JSON
 itself and of the validation report.
 """
 
@@ -227,6 +227,7 @@ def assemble_manifest(
     canonical_results: list[CanonicalizationResult],
     provenance_path: Path,
     audit_paths: list[Path],
+    supporting_paths: list[Path] | None = None,
     validation: ValidationResult,
     source_summary: dict[str, object],
     output_dir: Path,
@@ -248,6 +249,10 @@ def assemble_manifest(
         _entry(ArtifactRole.SCHEMA, schema_path, output_dir, media_type="application/json"),
         _entry(ArtifactRole.PROVENANCE, provenance_path, output_dir, media_type="application/json"),
     ]
+    entries.extend(
+        _entry(ArtifactRole.SUPPORTING_DATASET, path, output_dir)
+        for path in sorted(supporting_paths or [])
+    )
     entries.extend(
         _entry(ArtifactRole.AUDIT_REPORT, path, output_dir)
         for path in sorted(audit_paths)
@@ -326,6 +331,7 @@ def build_manifest(
     canonical_results: list[CanonicalizationResult],
     provenance_path: Path,
     audit_paths: list[Path],
+    supporting_paths: list[Path] | None = None,
     validation: ValidationResult,
     source_summary: dict[str, object],
     output_dir: Path,
@@ -340,6 +346,7 @@ def build_manifest(
         canonical_results=canonical_results,
         provenance_path=provenance_path,
         audit_paths=audit_paths,
+        supporting_paths=supporting_paths,
         validation=validation,
         source_summary=source_summary,
         output_dir=output_dir,

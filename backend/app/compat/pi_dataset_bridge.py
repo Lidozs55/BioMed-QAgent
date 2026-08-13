@@ -49,8 +49,9 @@ class ExecuteArgs(_StrictModel):
     spec: DatasetBuildSpec
     source_files: dict[str, str]
     mapping_files: dict[str, str]
+    metadata_files: dict[str, str] = Field(default_factory=dict)
 
-    @field_validator("source_files", "mapping_files")
+    @field_validator("source_files", "mapping_files", "metadata_files")
     @classmethod
     def validate_file_references(cls, value: dict[str, str]) -> dict[str, str]:
         for binding_id, reference in value.items():
@@ -296,13 +297,16 @@ class PiDatasetBridge:
                     request.args.spec.model_dump_json(),
                     request.args.source_files,
                     request.args.mapping_files,
+                    request.args.metadata_files,
                 )
             except ValueError:
                 return _failure(
                     request.request_id,
                     "invalid_input",
-                    "A source or mapping reference was rejected",
-                    details=BridgeErrorDetails(fields=["source_files", "mapping_files"]),
+                    "A source, mapping, or metadata reference was rejected",
+                    details=BridgeErrorDetails(
+                        fields=["source_files", "mapping_files", "metadata_files"]
+                    ),
                 )
             except Exception:  # noqa: BLE001 - bounded migration boundary
                 return _failure(

@@ -208,6 +208,11 @@ tumor/normal 分组、platform 类型（microarray vs RNA-seq）都要与课题�
 基因级结果**：优先改用 GDC/Xena 基因级矩阵，或改用 probe 级构建
 （`gene_expression.probe_release.v1` 发布 probe-primary 并如实告知限制）。
 
+**GEO 样本元数据**：series matrix 内含的 `!Sample_*` 字段会自动形成
+`sample_metadata.csv` supporting artifact。若主表达文件是 tximport 或 supplementary
+matrix，另行下载 family SOFT，并通过 `metadata_files={"binding_id": "<SOFT 相对路径>"}`
+传入；不得从样本顺序或标题相似度猜测配对。
+
 当结构化 API（GEO/PubMed/Xena 等）返回 HTTP 403/404 或网络错误时，可通过
 `find_skill(source="browser")` 发现 `browser_fallback` 技能，再用 `invoke_skill`
 调用 `navigate_page`（渲染页面并提取标题/正文）或 `download_from_page`（通过浏览器
@@ -314,10 +319,10 @@ Spec 模板（gene expression 单源）：
    soft/suppl 文件即可，数据源本身可用；(b) **该 accession 无任何可解析表达数据**
    （soft/suppl 也没有矩阵或 counts，如仅剩 RAW 压缩包）：此时才判定数据源不可用，
    换其它数据集。不要把 (a) 泛化成"GEO 无数据"。
-5. **多 binding 兜底**：候选数据集中 ≥2 个可解析数据集时，放进同一个
-   `execute_dataset_build` spec（同 family/granularity，`merge_strategy:
-   append_by_canonical_row`），单个 binding 空表不拖垮整个 build；单 binding 失败后
-   必须换一个已下载/可下载的候选再构建一次才允许收尾
+5. **多 GSE 独立发布（one DatasetBuildSpec per GSE）**：每个不同 GSE 必须拆成
+   独立 spec/build/publication，逐个调用 `execute_dataset_build`；禁止把不同 GSE 的
+   binding 放进同一个 build 做跨数据集行级合并。同一 GSE 的多个互补文件可以留在
+   该 GSE 的 build 中；一个 GSE 失败或 NO_DATA 不得阻止其余 GSE 独立构建
 6. **不要用相同参数重试**：相同参数必然导致相同失败
 7. **适时止损**：若 2-3 次调整后仍无合适数据，停止重试，向用户如实汇报已尝试的
    方案和失败原因

@@ -152,9 +152,12 @@ async def test_bridge_binds_outer_run_and_logs_bounded_correlation(
 
     observed_run_ids: list[str | None] = []
 
-    async def observe(run_ctx, spec, source_files, mapping_files):  # type: ignore[no-untyped-def]
+    observed_metadata_files: list[dict[str, str]] = []
+
+    async def observe(run_ctx, spec, source_files, mapping_files, metadata_files):  # type: ignore[no-untyped-def]
         del spec, source_files, mapping_files
         observed_run_ids.append(run_ctx.managed_run_id)
+        observed_metadata_files.append(metadata_files)
         return DatasetBuildExecutionError(message="failed", retryable=False)
 
     monkeypatch.setattr(pi_dataset_bridge, "execute_dataset_build", observe)
@@ -178,7 +181,12 @@ async def test_bridge_binds_outer_run_and_logs_bounded_correlation(
             json={
                 **_request(
                     "execute_dataset_build",
-                    {"spec": _spec(), "source_files": {}, "mapping_files": {}},
+                    {
+                        "spec": _spec(),
+                        "source_files": {},
+                        "mapping_files": {},
+                        "metadata_files": {"binding_gdc": "source_assets/series.soft"},
+                    },
                     request_id="request_correlated",
                 ),
                 "pi_session_id": "pi_session_correlated",
@@ -188,6 +196,9 @@ async def test_bridge_binds_outer_run_and_logs_bounded_correlation(
 
     assert response.json()["error"]["code"] == "core_execution_error"
     assert observed_run_ids == ["run_bridge"]
+    assert observed_metadata_files == [
+        {"binding_gdc": "source_assets/series.soft"}
+    ]
     record = next(
         record for record in caplog.records if record.getMessage() == "legacy.bridge.response"
     )
@@ -387,8 +398,8 @@ async def test_cancel_side_channel_waits_for_core_observation_and_registry_clean
 
     observed = asyncio.Event()
 
-    async def cooperative(run_ctx, spec, source_files, mapping_files):  # type: ignore[no-untyped-def]
-        del spec, source_files, mapping_files
+    async def cooperative(run_ctx, spec, source_files, mapping_files, metadata_files):  # type: ignore[no-untyped-def]
+        del spec, source_files, mapping_files, metadata_files
         await run_ctx.cancellation_requested.wait()
         observed.set()
         return DatasetBuildExecutionError(message="build ended with status cancelled", retryable=False)
@@ -483,8 +494,8 @@ async def test_bridge_rejects_active_request_id_collision_and_cleans_registry(tm
 
     entered = asyncio.Event()
 
-    async def cooperative(run_ctx, spec, source_files, mapping_files):  # type: ignore[no-untyped-def]
-        del spec, source_files, mapping_files
+    async def cooperative(run_ctx, spec, source_files, mapping_files, metadata_files):  # type: ignore[no-untyped-def]
+        del spec, source_files, mapping_files, metadata_files
         entered.set()
         await run_ctx.cancellation_requested.wait()
         return DatasetBuildExecutionError(message="cancelled", retryable=False)

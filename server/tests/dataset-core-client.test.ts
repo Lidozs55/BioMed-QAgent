@@ -143,4 +143,38 @@ describe("DatasetCoreClient", () => {
       tool_call_id: "tool_1",
     });
   });
+
+  test("forwards optional GEO metadata references in execute requests", async () => {
+    const fetch = vi.fn(async (_url: string, init: RequestInit) => {
+      const request = JSON.parse(String(init.body));
+      return new Response(JSON.stringify({
+        version: 1,
+        request_id: request.request_id,
+        ok: false,
+        data: null,
+        error: { code: "no_data", message: "No data", retryable: false, details: {} },
+      }));
+    });
+    const client = new DatasetCoreClient({
+      baseUrl: "http://127.0.0.1:8000",
+      secret: "secret",
+      fetch,
+      requestId: () => "request_metadata",
+    });
+
+    await client.execute({
+      ...identity,
+      spec,
+      sourceFiles: { binding_gdc: "source_assets/expression.tsv" },
+      mappingFiles: {},
+      metadataFiles: { binding_gdc: "source_assets/series.soft" },
+    });
+
+    expect(JSON.parse(String(fetch.mock.calls[0]?.[1].body)).args).toEqual({
+      spec,
+      source_files: { binding_gdc: "source_assets/expression.tsv" },
+      mapping_files: {},
+      metadata_files: { binding_gdc: "source_assets/series.soft" },
+    });
+  });
 });

@@ -24,7 +24,12 @@ describe("Pi DatasetBuild tools", () => {
 
     await validateTool!.execute({ spec }, controller.signal, { toolCallId: "call_validate" });
     const result = await executeTool!.execute(
-      { spec, source_files: { binding: "source_assets/file.tsv" }, mapping_files: {} },
+      {
+        spec,
+        source_files: { binding: "source_assets/file.tsv" },
+        mapping_files: {},
+        metadata_files: { binding: "source_assets/series.soft" },
+      },
       controller.signal,
       { toolCallId: "call_execute" },
     );
@@ -38,6 +43,7 @@ describe("Pi DatasetBuild tools", () => {
       signal: controller.signal,
       piSessionId: "pi_tool",
       toolCallId: "call_execute",
+      metadataFiles: { binding: "source_assets/series.soft" },
     }));
     expect(result).toMatchObject({ isError: true, details: { code: "no_data" } });
   });

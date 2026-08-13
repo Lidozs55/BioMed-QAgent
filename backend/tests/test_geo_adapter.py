@@ -11,6 +11,7 @@ remain, and declares the per-row namespace
 
 from __future__ import annotations
 
+import csv
 import gzip
 import hashlib
 from pathlib import Path
@@ -65,6 +66,7 @@ def _run(
     params: AdapterParams,
     output_dir: Path,
     source_id: str = "src_geo",
+    metadata_path: Path | None = None,
 ):
     return ADAPTER.parse(
         _asset_for_path(path, source_id=source_id),
@@ -74,6 +76,7 @@ def _run(
         schema_ref="gene_expression.probe_long.v1",
         output_dir=output_dir,
         parameters=params,
+        metadata_path=metadata_path,
     )
 
 
@@ -120,7 +123,7 @@ def test_geo_adapter_registry_resolves() -> None:
     assert "geo.expression.v1" in ADAPTER_REGISTRY
     adapter = get_adapter("geo.expression.v1")
     assert adapter.adapter_id == "geo.expression.v1"
-    assert adapter.version == "1.0.0"
+    assert adapter.version == "1.1.0"
     assert adapter.source_database == "geo"
 
 
@@ -183,6 +186,53 @@ def test_tximport_missing_counts_columns_fails_closed(tmp_path: Path) -> None:
         _run(path, _params(format="tximport_counts"), tmp_path)
 
 
+def test_explicit_soft_metadata_must_contain_samples_matching_expression(
+    tmp_path: Path,
+) -> None:
+    expression = _write(tmp_path / "counts.tsv", _TXIMPORT)
+    empty_soft = _write(tmp_path / "empty.soft", "^SERIES = GSE1\n")
+
+    with pytest.raises(AdapterError, match="contains no SAMPLE records"):
+        _run(
+            expression,
+            _params(format="tximport_counts"),
+            tmp_path,
+            metadata_path=empty_soft,
+        )
+
+    unrelated_soft = _write(
+        tmp_path / "unrelated.soft",
+        "^SAMPLE = GSM999\n!Sample_title = unrelated\n",
+    )
+    with pytest.raises(AdapterError, match="do not match expression sample IDs"):
+        _run(
+            expression,
+            _params(format="tximport_counts"),
+            tmp_path,
+            metadata_path=unrelated_soft,
+        )
+
+    matching_soft = _write(
+        tmp_path / "matching.soft",
+        "^SAMPLE = GSM1\n!Sample_description = Sample S1\n"
+        "^SAMPLE = GSM2\n!Sample_description = Sample S2\n",
+    )
+    batch = _run(
+        expression,
+        _params(format="tximport_counts"),
+        tmp_path,
+        metadata_path=matching_soft,
+    )
+    with (
+        tmp_path / batch.supporting_assets[0].relative_path
+    ).open(encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert [(row["sample_id"], row["source_sample_alias"]) for row in rows] == [
+        ("GSM1", "S1"),
+        ("GSM2", "S2"),
+    ]
+
+
 # -------------------------------------------------------------- series matrix
 
 
@@ -207,6 +257,58 @@ def test_series_matrix_minimal(tmp_path: Path) -> None:
     assert ",geo_probe," in probe_row
     gene_row = next(r for r in rows if "ENSG00000141510" in r)
     assert ",ensembl_gene," in gene_row
+
+
+def test_series_matrix_publishes_structured_sample_metadata_supporting_asset(
+    tmp_path: Path,
+) -> None:
+    text = (
+        '!Sample_geo_accession\t"GSM1"\t"GSM2"\n'
+        '!Sample_title\t"Tumor P1"\t"Normal P1"\n'
+        '!Sample_platform_id\t"GPL570"\t"GPL570"\n'
+        '!Sample_characteristics_ch1\t"tissue type: tumor"\t"tissue type: normal"\n'
+        '!Sample_characteristics_ch1\t"patient id: P1"\t"patient id: P1"\n'
+        '!series_matrix_table_begin\n'
+        '"ID_REF"\t"GSM1"\t"GSM2"\n'
+        '"PROBE1"\t1.5\t2.0\n'
+        '!series_matrix_table_end\n'
+    )
+
+    batch = _run(
+        _write_gzip(tmp_path / "grouped.txt.gz", text),
+        _params(format="series_matrix", platform_ids=["GPL570"]),
+        tmp_path,
+    )
+
+    assert len(batch.supporting_assets) == 1
+    support = batch.supporting_assets[0]
+    assert support.relative_path == "supporting/binding_geo_sample_metadata.csv"
+    with (tmp_path / support.relative_path).open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert [(row["sample_group"], row["pairing_id"]) for row in rows] == [
+        ("tumor", "p1"),
+        ("normal", "p1"),
+    ]
+    assert {row["group_rule_id"] for row in rows} == {"geo.sample-group.v1"}
+
+
+def test_series_matrix_rejects_platform_declaration_that_conflicts_with_samples(
+    tmp_path: Path,
+) -> None:
+    text = (
+        '!Sample_platform_id\t"GPL96"\t"GPL96"\n'
+        '!series_matrix_table_begin\n'
+        '"ID_REF"\t"GSM1"\t"GSM2"\n'
+        '"PROBE1"\t1.5\t2.0\n'
+        '!series_matrix_table_end\n'
+    )
+
+    with pytest.raises(AdapterError, match="do not match"):
+        _run(
+            _write_gzip(tmp_path / "platform_mismatch.txt.gz", text),
+            _params(format="series_matrix", platform_ids=["GPL570"]),
+            tmp_path,
+        )
 
 
 def test_series_matrix_no_table_block_fails_closed(tmp_path: Path) -> None:

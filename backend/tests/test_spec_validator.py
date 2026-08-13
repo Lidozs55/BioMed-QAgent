@@ -285,6 +285,42 @@ def test_geo_binding_valid_parameters_pass() -> None:
     assert result.reason_codes == ()
 
 
+def test_distinct_geo_series_in_one_build_are_rejected() -> None:
+    """Phase 5 T6: every GSE owns an independent build/publication."""
+    first = _geo_binding()
+    second = _geo_binding(
+        binding_id="binding_geo_2",
+        accession="GSE200000",
+    )
+
+    result = SpecValidator(
+        _dual_registry(),
+        allowed_validation_profiles=frozenset({"gene_expression.release.v1"}),
+    ).validate(_spec(source_bindings=[first, second]))
+
+    assert result.valid is False
+    assert "multiple_geo_series" in result.reason_codes
+    assert "GSE178352" in " ".join(result.reasons)
+    assert "GSE200000" in " ".join(result.reasons)
+
+
+def test_same_geo_series_may_use_multiple_bindings() -> None:
+    """Complementary files from one GSE may share its single build."""
+    first = _geo_binding()
+    second = _geo_binding(
+        binding_id="binding_geo_2",
+        accession="gse178352",
+    )
+
+    result = SpecValidator(
+        _dual_registry(),
+        allowed_validation_profiles=frozenset({"gene_expression.release.v1"}),
+    ).validate(_spec(source_bindings=[first, second]))
+
+    assert result.valid is True
+    assert "multiple_geo_series" not in result.reason_codes
+
+
 def test_geo_binding_missing_parameters_rejected() -> None:
     """geo.expression.v1 requires adapter parameters (format is mandatory)."""
     result = SpecValidator(

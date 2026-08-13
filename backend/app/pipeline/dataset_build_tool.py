@@ -64,7 +64,9 @@ async def validate_dataset_build_spec(
         "For probe-platform (microarray) GEO bindings, pass the GPL platform "
         "annotation file downloaded by download_geo_platform_annotation via "
         "the optional mapping_files parameter (JSON {binding_id: annotation "
-        "path}) so probe rows map to genes."
+        "path}) so probe rows map to genes. For GEO tximport/supplementary "
+        "expression, optional metadata_files (JSON {binding_id: family SOFT "
+        "path}) publishes structured sample_metadata alongside the primary."
     ),
 )
 async def execute_dataset_build(
@@ -72,6 +74,7 @@ async def execute_dataset_build(
     spec: str,
     source_files: str,
     mapping_files: str = "{}",
+    metadata_files: str = "{}",
 ) -> str:
     """Delegate one legacy FunctionTool call to the typed DatasetBuild service."""
 
@@ -80,6 +83,7 @@ async def execute_dataset_build(
         spec,
         source_files,
         mapping_files,
+        metadata_files,
         workflow_recipe_fetcher=_workflow_recipe_fetcher,
     )
     if not isinstance(response, dataset_build_service.DatasetBuildCompleted):

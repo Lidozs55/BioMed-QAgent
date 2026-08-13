@@ -228,6 +228,9 @@ class RunContext:
     artifacts: list[str] = field(default_factory=list)
     warnings: list[dict] = field(default_factory=list)
     download_attempts: list[Any] = field(default_factory=list)
+    # Typed GEO esummary records retained as relation evidence for V2 builds.
+    # Keyed by canonical GSE accession; never populated from LLM text.
+    geo_series_records: dict[str, Any] = field(default_factory=dict)
 
     query_log: list[dict] = field(default_factory=list)
     query_log_summary: str = ""
@@ -510,6 +513,10 @@ class RunContext:
             query_log=list(parent_query_log) if parent_query_log else [],
             query_log_summary=parent_query_log_summary,
         )
+        # GEO esummary records are immutable typed discovery evidence. Share
+        # the task-level registry so a child download can contribute relation
+        # provenance to a later parent V2 build without copying agent text.
+        child.geo_series_records = self.geo_series_records
         child._create_skill_reservations = self._create_skill_reservations
         child._staging_task_root = self._work_dir.root
         child._subagent_runtime = self._subagent_runtime
@@ -904,6 +911,12 @@ class RunContext:
     def add_source(self, source: Any) -> None:
         """记录一个数据来源（SourceRecord）。"""
         self.sources.append(source)
+
+    def add_geo_series_record(self, record: Any) -> None:
+        """Retain one trusted GEO series record for relation provenance."""
+
+        accession = str(record.accession).upper()
+        self.geo_series_records[accession] = record
 
     def add_raw_asset(self, path: str) -> None:
         """记录 raw 目录下的本地文件路径。"""

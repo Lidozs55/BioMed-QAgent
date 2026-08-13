@@ -6,13 +6,20 @@ import asyncio
 import csv
 import json
 import shutil
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from agents.tool_context import ToolContext
 from app.agent_loop.context import RunContext
 from app.agent_loop.main_input_broker import MainInputBroker
-from app.domain.contracts import RunManifest, TaskState
+from app.domain.contracts import (
+    Database,
+    GeoSeriesRecord,
+    RunManifest,
+    SourceRecord,
+    TaskState,
+)
 from app.pipeline.dataset_build_tool import execute_dataset_build, validate_dataset_build_spec
 from app.tools.workdir import create_task_workdir
 
@@ -99,9 +106,15 @@ def _call_tool(
     spec: str,
     source_files: str,
     mapping_files: str = "{}",
+    metadata_files: str = "{}",
 ) -> dict[str, object]:
     args = json.dumps(
-        {"spec": spec, "source_files": source_files, "mapping_files": mapping_files}
+        {
+            "spec": spec,
+            "source_files": source_files,
+            "mapping_files": mapping_files,
+            "metadata_files": metadata_files,
+        }
     )
     result = asyncio.run(execute_dataset_build.on_invoke_tool(ctx, args))
     return json.loads(result)
@@ -768,7 +781,11 @@ def _stage_geo_matrix(
     import gzip
 
     dest = run_ctx.work_dir.source_asset_file(name)
-    lines = ["!series_matrix_table_begin", '"ID_REF"\t"GSM1"\t"GSM2"']
+    lines = [
+        '!Sample_platform_id\t"GPL570"\t"GPL570"',
+        "!series_matrix_table_begin",
+        '"ID_REF"\t"GSM1"\t"GSM2"',
+    ]
     lines.extend(f'"{probe}"\t{v1}\t{v2}' for probe, v1, v2 in rows)
     lines.append("!series_matrix_table_end")
     with gzip.open(dest, "wt", encoding="utf-8") as handle:
@@ -980,6 +997,218 @@ def test_execute_dataset_build_probe_level_emits_platform_records(
     assert len(audit_artifacts) == 1
     version_dir = list((build_root / "publish").glob("build_tool_test_*"))[0]
     assert (version_dir / "platform_audit.csv").is_file()
+
+
+def test_geo_publication_includes_sample_metadata_and_bidirectional_relations(
+    tmp_path: Path,
+) -> None:
+    """T6/T8: trusted GEO metadata produces both supporting and audit assets."""
+    import gzip
+
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+    matrix = run_ctx.work_dir.source_asset_file("grouped_geo.txt.gz")
+    text = (
+        '!Sample_geo_accession\t"GSM1"\t"GSM2"\n'
+        '!Sample_title\t"Tumor P1"\t"Normal P1"\n'
+        '!Sample_platform_id\t"GPL570"\t"GPL570"\n'
+        '!Sample_characteristics_ch1\t"tissue type: tumor"\t"tissue type: normal"\n'
+        '!Sample_characteristics_ch1\t"patient id: P1"\t"patient id: P1"\n'
+        '!series_matrix_table_begin\n'
+        '"ID_REF"\t"GSM1"\t"GSM2"\n'
+        '"PROBE1"\t1.5\t2.0\n'
+        '!series_matrix_table_end\n'
+    )
+    with gzip.open(matrix, "wt", encoding="utf-8") as handle:
+        handle.write(text)
+    run_ctx.add_geo_series_record(
+        GeoSeriesRecord(
+            uid="200000001",
+            accession="GSE1",
+            pubmed_ids=["34180400"],
+            sample_count=0,
+        )
+    )
+    run_ctx.add_source(
+        SourceRecord(
+            source_id="src_pubmed_34180400",
+            database=Database.PUBMED,
+            accession="34180400",
+            url="https://pubmed.ncbi.nlm.nih.gov/34180400/",
+            title="Primary article",
+            retrieved_at=datetime.now(UTC),
+        )
+    )
+
+    data = _call_tool(
+        ctx,
+        _geo_spec_json(
+            schema_ref="gene_expression.probe_long.v1",
+            row_granularity="probe_sample_measurement",
+            profile_ref="gene_expression.probe_release.v1",
+        ),
+        json.dumps({"binding_geo": "source_assets/grouped_geo.txt.gz"}),
+    )
+
+    assert data["status"] == "ok", data
+    assert "supporting_dataset" in data["result"]["available_artifact_roles"]
+    build_root = run_ctx.work_dir.root / "datasets_build" / "build_tool_test"
+    manifest = json.loads((build_root / "dataset_manifest.json").read_text("utf-8"))
+    by_path = {entry["relative_path"]: entry["role"] for entry in manifest["artifacts"]}
+    sample_path = "supporting/binding_geo_sample_metadata.csv"
+    assert by_path[sample_path] == "supporting_dataset"
+    assert by_path["source_relations.csv"] == "audit_report"
+    with (build_root / "source_relations.csv").open(encoding="utf-8") as handle:
+        relations = list(csv.DictReader(handle))
+    assert len(relations) == 2
+    assert {row["relation_type"] for row in relations} == {
+        "article_describes_dataset",
+        "dataset_described_by_article",
+    }
+    version_dir = next((build_root / "publish").glob("build_tool_test_*"))
+    assert (version_dir / sample_path).is_file()
+    assert (version_dir / "source_relations.csv").is_file()
+
+
+def test_distinct_gse_specs_publish_independently_without_superseding(
+    tmp_path: Path,
+) -> None:
+    """T6: repeated single-build calls are the current multi-GSE seam."""
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+    first_source = _stage_geo_matrix(
+        run_ctx, [("PROBE_A", "1.0", "2.0")], "gse1.txt.gz"
+    )
+    second_source = _stage_geo_matrix(
+        run_ctx, [("PROBE_B", "3.0", "4.0")], "gse2.txt.gz"
+    )
+    first_spec = json.loads(
+        _geo_spec_json(
+            build_id="build_gse1",
+            schema_ref="gene_expression.probe_long.v1",
+            row_granularity="probe_sample_measurement",
+            profile_ref="gene_expression.probe_release.v1",
+        )
+    )
+    second_spec = json.loads(
+        _geo_spec_json(
+            build_id="build_gse2",
+            schema_ref="gene_expression.probe_long.v1",
+            row_granularity="probe_sample_measurement",
+            profile_ref="gene_expression.probe_release.v1",
+        )
+    )
+    second_spec["source_bindings"][0]["accession"] = "GSE2"
+
+    first = _call_tool(
+        ctx,
+        json.dumps(first_spec),
+        json.dumps({"binding_geo": first_source}),
+    )
+    second = _call_tool(
+        ctx,
+        json.dumps(second_spec),
+        json.dumps({"binding_geo": second_source}),
+    )
+
+    assert first["result"]["status"] == "succeeded"
+    assert second["result"]["status"] == "succeeded"
+    assert first["result"]["publication_id"] != second["result"]["publication_id"]
+    for build_id in ("build_gse1", "build_gse2"):
+        build_root = run_ctx.work_dir.root / "datasets_build" / build_id
+        version_dir = next((build_root / "publish").glob(f"{build_id}_*"))
+        publication = json.loads(
+            (version_dir / "publication.json").read_text("utf-8")
+        )
+        manifest = json.loads(
+            (version_dir / "dataset_manifest.json").read_text("utf-8")
+        )
+        assert publication["supersedes_publication_id"] is None
+        assert manifest["row_count"] == 2
+
+
+def test_geo_soft_metadata_can_support_a_tximport_publication(tmp_path: Path) -> None:
+    """T8: SOFT and series matrix use the same supporting artifact contract."""
+    import gzip
+
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+    counts = run_ctx.work_dir.source_asset_file("counts.tsv")
+    counts.write_text(
+        "counts.GSM10\tcounts.GSM11\n"
+        "ENSG00000141510\t10\t20\n",
+        encoding="utf-8",
+    )
+    soft = run_ctx.work_dir.source_asset_file("family.soft.gz")
+    soft_text = (
+        "^SAMPLE = GSM10\n"
+        "!Sample_title = Tumor P1\n"
+        "!Sample_platform_id = GPL570\n"
+        "!Sample_characteristics_ch1 = tissue type: tumor\n"
+        "!Sample_characteristics_ch1 = patient id: P1\n"
+        "^SAMPLE = GSM11\n"
+        "!Sample_title = Normal P1\n"
+        "!Sample_platform_id = GPL570\n"
+        "!Sample_characteristics_ch1 = tissue type: normal\n"
+        "!Sample_characteristics_ch1 = patient id: P1\n"
+    )
+    with gzip.open(soft, "wt", encoding="utf-8") as handle:
+        handle.write(soft_text)
+    spec = json.loads(_geo_spec_json())
+    spec["source_bindings"][0]["parameters"].update(
+        {
+            "format": "tximport_counts",
+            "value_semantics": "raw_count",
+            "value_scale": "linear",
+            "expression_unit": "estimated_count",
+            "is_normalized": False,
+        }
+    )
+
+    data = _call_tool(
+        ctx,
+        json.dumps(spec),
+        json.dumps({"binding_geo": "source_assets/counts.tsv"}),
+        metadata_files=json.dumps(
+            {"binding_geo": "source_assets/family.soft.gz"}
+        ),
+    )
+
+    assert data["status"] == "ok", data
+    assert "supporting_dataset" in data["result"]["available_artifact_roles"]
+    build_root = run_ctx.work_dir.root / "datasets_build" / "build_tool_test"
+    manifest = json.loads((build_root / "dataset_manifest.json").read_text("utf-8"))
+    assert manifest["source_summary"]["binding_geo"]["metadata_asset_id"]
+    with (
+        build_root / "supporting" / "binding_geo_sample_metadata.csv"
+    ).open(encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert [(row["sample_group"], row["pairing_id"]) for row in rows] == [
+        ("tumor", "p1"),
+        ("normal", "p1"),
+    ]
+
+
+def test_metadata_files_rejects_non_geo_bindings(tmp_path: Path) -> None:
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+    source = _stage_fixture(
+        run_ctx, "gdc/gdc_expression.tsv", "gdc_expression.tsv"
+    )
+    metadata = run_ctx.work_dir.source_asset_file("metadata.soft")
+    metadata.write_text("^SAMPLE = GSM1\n", encoding="utf-8")
+
+    data = _call_tool(
+        ctx,
+        _spec_json(),
+        json.dumps({"binding_gdc": source}),
+        metadata_files=json.dumps(
+            {"binding_gdc": "source_assets/metadata.soft"}
+        ),
+    )
+
+    assert data["status"] == "invalid_input"
+    assert "geo.expression.v1" in data["message"]
 
 
 def test_execute_dataset_build_empty_geo_tximport_is_no_data_no_primary(

@@ -391,6 +391,7 @@ def canonicalize(
         row_granularity=batch.row_granularity,
         schema_ref=schema.schema_id,
         file_asset=file_asset,
+        supporting_assets=batch.supporting_assets,
         row_count=row_count,
         column_count=len(columns),
         parser_id="expression.canonicalizer.v1",

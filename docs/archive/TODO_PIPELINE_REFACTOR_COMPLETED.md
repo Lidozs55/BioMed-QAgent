@@ -159,6 +159,14 @@
 
 > 目标：GEO 按 Acquisition Provider + Adapter 拆分，多 GSE 独立发布。
 > 验收见 Design §16 Phase 5。
+>
+> 主线复核（2026-08-13）：Phase 8 退役 V1 后，T6/T8 的生产语义已重新收敛到
+> V2 Core：一个 `DatasetBuildSpec` 只允许一个 distinct GSE，多 GSE 由 Agent
+> 重复调用单-build 入口并形成互不 supersede 的 publication；可信 GEO esummary
+> 生成双向 `source_relations.csv`。series matrix 或显式 family SOFT 统一生成
+> `supporting_dataset` 角色的 sample metadata（规则 `geo.sample-group.v1`），
+> `metadata_files` 已贯通 Python FunctionTool 与 TS/Pi bridge，且样本别名、GPL
+> 归属和 metadata 资产摘要均进入失败关闭/审计闭环。
 
 - [x] **P0** GEO acquisition/parser 按 Acquisition Provider 与 Adapter 拆分（5 完成 2026-08-08）
 - [x] **P0** 正式建模 platform、probe mapping、value scale 与 normalization（5 完成 2026-08-08）
