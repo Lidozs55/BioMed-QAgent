@@ -23,8 +23,8 @@
 | 1 | 引入 Pi Main Agent（不动 Dataset Core） | ✅ 完成（2026-08-12） |
 | 2 | 迁移 Skills 与通用 Agent 工具 | ✅ 完成（2026-08-13） |
 | 3 | 拆出 TS Application Runtime | ✅ 完成（opt-in，2026-08-12） |
-| 4 | 迁移 Dataset Deterministic Core | ✅ 完成（2026-08-13；运行接线待后续阶段） |
-| 5 | 迁外部能力与 Python 数据处理依赖 | ⬜ 待开始 |
+| 4 | 迁移 Dataset Deterministic Core | ✅ 完成（2026-08-13；运行接线 M2 已闭环） |
+| 5 | 迁外部能力与 Python 数据处理依赖 | ✅ 完成（2026-08-14；legacy Python 仅作回滚保留，物理删除属 Phase 8） |
 | 6 | 迁模型设置与 Settings API | ✅ 完成（2026-08-13） |
 | 7 | 正式切换 Frontend → TS Host | ⬜ 待开始 |
 | 8 | 删除 Python Runtime（仅留 DB bridge） | ⬜ 待开始 |
@@ -126,20 +126,46 @@ Phase 3 需显式 `AGENT_RUNTIME=pi` 才接管正式 Task 流量。实际执行�
 
 远程分支 `codex/phase4-dataset-core-ts` 已合入 main，无需另行跟踪。
 
-## Phase 5：迁外部能力与 Python 数据处理依赖（⬜ 待开始）
+## Phase 5：迁外部能力与 Python 数据处理依赖（✅ 完成，2026-08-14）
 
-> 注意区分：**旧设计主线**的 Phase 5 GEO（Python 侧 Provider/Adapter 拆分、多 GSE
-> 独立发布、sample metadata）已合入 main（dfa668a，清单见归档文件）；本节是
-> **迁移方案** Phase 5——把 GEO 等外部能力迁到 TypeScript，尚未开始。
+> 实施计划与验收清单：
+> [docs/migration/phase5-external-capabilities-completion-plan.md](migration/phase5-external-capabilities-completion-plan.md)；
+> baseline/迁移矩阵：
+> [docs/migration/phase5-external-capabilities.md](migration/phase5-external-capabilities.md)；
+> PDF 选型 spike：[docs/migration/phase5-pdf-spike.md](migration/phase5-pdf-spike.md)。
+> legacy Python runtime 仍保留作 Phase 7 前回滚；物理删除属 Phase 8。
 
-> 每项必须有 live + fixture 双测试；不允许一次删掉全部 Python 科学依赖后再调试。
+- [x] 网络策略与 acquisition 底座（`server/src/external/network|acquisition/`）：
+      全量 DNS 公网校验 + 地址钉扎、逐跳 redirect 重验证、流式下载大小/hash/media
+      校验、content cache、SourceAsset 原子发布、abort（P5-01）
+- [x] 业务 Tool 全量 TS 化：analyze_papers、guidance、PubMed/NCBI、GEO（含 Dataset
+      parser：series matrix/SOFT/sample metadata/probe mapping）、GDC、Xena、
+      ChEMBL/UniProt/PDB/PubChem/Reactome、Node Playwright browser pool +
+      crawler + web visual capture、PDF tables/meta、Qwen-VL chart extraction
+      （P5-02…P5-08，fixture golden parity + SKILL_TOOL_MAP 名称钉住）
+- [x] 统计/绘图 TS 化：Welch t-test（scipy 数值 parity）、BH FDR（全量 p-value 后截断）、
+      Pearson/Spearman/Kendall、heatmap 聚类、PNG 绘图；输出走
+      `staging/analysis/<run_id>/`，不绕 Publication 边界（P5-09，P5-D5）
+- [x] local cache → TS DB Adapter → Python DB bridge 命名操作（`database/bridge.py`，
+      禁任意 SQL）；声明式用户数据库 HTTP 执行 TS 化 + 最小 durable HIL approval
+      primitive（api_key_or_credential，P5-10/P5-11）
+- [x] 正式 Pi Runtime 全量业务 Tool 接线：Workspace + curated business + 动态声明式
+      DB + DatasetBuild，重名 fail closed（P5-12）
+- [x] Pi 路径 Python 依赖隔离双门禁：静态（business tool 禁 spawn Python/legacy
+      调用）+ 运行时（legacy 不可达时 `ts/pi/ts` 完整运行，P5-13）
+- [x] 验收：backend Python 不再承担 Pi 路径 acquisition / parsing / analysis，
+      仅 DB bridge；Reactome 语义修正为 research-only（P5-D10）
 
-- [ ] Playwright → Node Playwright；crawler → TS HTTP/browser acquisition
-- [ ] GEO / GDC / Xena / PubMed acquisition 迁 TS（保留 URL allow/deny、redirect 检查、
-      下载大小、超时、rate limit、来源日志策略）
-- [ ] PDF（pdfplumber）、表格解析、统计/绘图（SciPy/matplotlib/seaborn）：先选型
-      验证 TS/CLI 方案，逐项 fixture parity 后退役
-- [ ] 验收：backend Python 不再承担 acquisition / parsing / analysis，仅 DB bridge
+### M2：Phase 0–6 集成收口（✅ 完成，2026-08-14）
+
+- [x] `DATASET_CORE=ts` 合法 opt-in profile（`ts/pi/ts/0|1`；默认 profile 不变）
+- [x] DatasetCore 服务接口 + Python 回滚 adapter + TS adapter（bridge 外形不漂移）
+- [x] operation 异步化 + wall-clock timeout（typed timeout failure）+ cancel 收敛 +
+      straggler 清理；build lock（task+build 单发布者，Windows 安全，stale 回收）
+- [x] Core event sink → 稳定 operation_* EventEnvelope（经 recordRunEvent）
+- [x] 四类 golden fixture（SUCCESS / PARTIAL_SUCCESS / NO_DATA / SPEC_REJECTED）
+      在 TS Core 路径通过（`server/tests/phase5/ts-core-e2e.test.ts`）
+- [x] `DATASET_CORE=python` 回滚路径保留（DatasetCoreClient → private FastAPI）
 
 ## Phase 6：迁模型设置与 Settings API（✅ 完成）
 
