@@ -16,6 +16,7 @@ export {
   topicStem,
   type ResearchDataGuidanceOptions,
 } from "./guidance.js";
+export { noopHooks, type QueryStatus, type ToolHooks, type ToolServiceDeps } from "./tool-hooks.js";
 export {
   createBusinessToolBundle,
   type BusinessToolBundle,

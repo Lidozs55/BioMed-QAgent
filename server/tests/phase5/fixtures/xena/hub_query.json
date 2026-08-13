@@ -1,0 +1,7 @@
+[
+  {"name": "TCGA.BRCA.sampleMap/HiSeqV2", "type": "genomicMatrix"},
+  {"name": "TCGA.BRCA.sampleMap/clinical", "type": "clinicalMatrix"},
+  {"name": "TCGA.LUAD.sampleMap/HiSeqV2", "type": "genomicMatrix"},
+  {"name": "TCGA.BRCA.sampleMap/mutation_broad", "type": "sparseMatrix"},
+  {"name": "probeMap/hugo_gencode_good_hg19_V24lift37", "type": "probeMap"}
+]

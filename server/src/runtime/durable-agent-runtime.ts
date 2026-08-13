@@ -6,6 +6,7 @@ import { mkdir } from "node:fs/promises";
 import type {
   BuildResult,
   EventEnvelope,
+  JsonValue,
   TaskMode,
   TaskPage,
   WebSocketControlFrame,
@@ -19,6 +20,10 @@ import {
   type BioMedAgentTool,
 } from "../agent/contracts.js";
 import { PiEventAdapter } from "../agent/event-adapter.js";
+import {
+  DurableApprovalGate,
+  type ApprovalGateHandle,
+} from "./approval-gate.js";
 import {
   ArtifactIntegrityError,
   getTaskArtifact,
@@ -50,6 +55,8 @@ export interface DurableAgentRuntimeOptions {
   workspaceFactory: (identity: {
     taskId: string;
     runId: string;
+    /** Durable credential-approval gate (P5-D9); pass to business tools. */
+    approvalGate: ApprovalGateHandle;
   }) => Promise<DurableAgentWorkspace>;
   repository?: DurableTaskRepository;
   legacyBaseUrl?: string;
@@ -69,6 +76,7 @@ interface ActiveTask {
   workspace: DurableAgentWorkspace;
   adapter: PiEventAdapter;
   activeRunId: string | null;
+  approvalGate: ApprovalGateHandle;
 }
 
 interface Subscription {
@@ -186,6 +194,7 @@ export async function createDurableAgentRuntime(
       throw new DurableTaskConflictError("active_run", "Task already has an active run");
     }
     task.workspace.setRunId?.(runId);
+    task.approvalGate.setRunId(runId);
     task.activeRunId = runId;
     const execution = consumeRun(taskId, runId, input);
     activeExecutions.add(execution);
@@ -196,7 +205,8 @@ export async function createDurableAgentRuntime(
   }
 
   async function createSession(taskId: string, runId: string): Promise<ActiveTask> {
-    const workspace = await options.workspaceFactory({ taskId, runId });
+    const approvalGate = new DurableApprovalGate(taskId, repository, runId);
+    const workspace = await options.workspaceFactory({ taskId, runId, approvalGate });
     const sessionDir = path.join(workspace.root, "state", "pi-session");
     await mkdir(sessionDir, { recursive: true });
     let disposed = false;
@@ -221,6 +231,7 @@ export async function createDurableAgentRuntime(
         workspace: { ...workspace, dispose: disposeWorkspace },
         adapter: new PiEventAdapter({ taskId }),
         activeRunId: null,
+        approvalGate,
       };
     } catch (error) {
       await disposeWorkspace();
@@ -312,6 +323,8 @@ export async function createDurableAgentRuntime(
       type: "run_cancel_requested",
       reason: null,
     });
+    // A suspended credential approval must not outlive the cancelled run.
+    task.approvalGate.rejectPending(runId, new Error("run cancelled"));
     await task.session.cancel("user requested");
     let timer: NodeJS.Timeout | undefined;
     try {
@@ -328,6 +341,33 @@ export async function createDurableAgentRuntime(
       if (timer !== undefined) clearTimeout(timer);
       unsubscribeTerminal?.();
     }
+    return await repository.getSnapshot(taskId);
+  }
+
+  async function resumeRun(taskId: string, runId: string, body: Record<string, unknown>): Promise<unknown> {
+    const snapshot = await repository.getSnapshot(taskId);
+    if (snapshot === null || !snapshot.runs.some((run) => run.run_id === runId)) {
+      throw new ReferenceError("Run not found");
+    }
+    const requestId = requiredString(body, "request_id", 256);
+    let decision: "approve" | "reject";
+    if (body.decision === "approve" || body.decision === "reject") {
+      decision = body.decision;
+    } else {
+      throw new TypeError("decision must be approve or reject");
+    }
+    const detail = body.detail;
+    const payload = {
+      type: "user_input_resumed" as const,
+      request_id: requestId,
+      decision,
+      detail: detail === null || detail === undefined || typeof detail !== "object"
+        ? {}
+        : detail as Record<string, JsonValue>,
+    };
+    await repository.appendRunEvent(taskId, runId, payload);
+    const task = activeTasks.get(taskId);
+    task?.approvalGate.resolvePending(runId, decision);
     return await repository.getSnapshot(taskId);
   }
 
@@ -414,6 +454,15 @@ export async function createDurableAgentRuntime(
         sendJson(response, 202, await cancelRun(
           decodeURIComponent(cancel[1] ?? ""),
           decodeURIComponent(cancel[2] ?? ""),
+        ));
+        return;
+      }
+      const resume = /^\/api\/v1\/tasks\/([^/]+)\/runs\/([^/]+)\/resume$/.exec(url.pathname);
+      if (request.method === "POST" && resume !== null) {
+        sendJson(response, 200, await resumeRun(
+          decodeURIComponent(resume[1] ?? ""),
+          decodeURIComponent(resume[2] ?? ""),
+          await readJsonBody(request),
         ));
         return;
       }

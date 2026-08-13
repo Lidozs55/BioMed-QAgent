@@ -1,0 +1,91 @@
+{
+  "batch_id": "batch_binding_1",
+  "binding_id": "binding_1",
+  "dataset_family": "gene_expression",
+  "row_granularity": "gene_sample_measurement",
+  "schema_ref": "gene_expression.long.v1",
+  "row_count": 4,
+  "column_count": 19,
+  "parser_id": "xena.matrix.v1",
+  "parser_version": "1.0.0",
+  "statistics": {
+    "source_database": "ucsc_xena",
+    "dataset_type": "gene_expression",
+    "format": "expression_matrix",
+    "sample_count": 2,
+    "source_row_count": 2,
+    "row_count": 4,
+    "rejected_count": 0
+  },
+  "warnings": [],
+  "declared_mappings": [
+    {
+      "schema_version": "1.0",
+      "mapping_id": "map_binding_1_gene_id_to_raw",
+      "source_schema_ref": "binding_binding_1.source",
+      "target_schema_ref": "gene_expression.long.v1",
+      "source_field": "gene_id",
+      "target_field": "gene_id_raw",
+      "transform": "identity",
+      "mapping_method": "adapter_declared",
+      "confidence_level": "high",
+      "evidence": "Xena matrix gene_id column header",
+      "review_status": "accepted"
+    },
+    {
+      "schema_version": "1.0",
+      "mapping_id": "map_binding_1_sample_id_S1",
+      "source_schema_ref": "binding_binding_1.source",
+      "target_schema_ref": "gene_expression.long.v1",
+      "source_field": "S1",
+      "target_field": "sample_id",
+      "transform": "wide_to_long_sample_id",
+      "mapping_method": "adapter_declared",
+      "confidence_level": "high",
+      "evidence": "matrix sample column header",
+      "review_status": "accepted"
+    },
+    {
+      "schema_version": "1.0",
+      "mapping_id": "map_binding_1_value_S1",
+      "source_schema_ref": "binding_binding_1.source",
+      "target_schema_ref": "gene_expression.long.v1",
+      "source_field": "S1",
+      "target_field": "expression_value",
+      "transform": "wide_to_long_value",
+      "mapping_method": "adapter_declared",
+      "confidence_level": "high",
+      "evidence": "matrix sample column header",
+      "review_status": "accepted"
+    },
+    {
+      "schema_version": "1.0",
+      "mapping_id": "map_binding_1_sample_id_S2",
+      "source_schema_ref": "binding_binding_1.source",
+      "target_schema_ref": "gene_expression.long.v1",
+      "source_field": "S2",
+      "target_field": "sample_id",
+      "transform": "wide_to_long_sample_id",
+      "mapping_method": "adapter_declared",
+      "confidence_level": "high",
+      "evidence": "matrix sample column header",
+      "review_status": "accepted"
+    },
+    {
+      "schema_version": "1.0",
+      "mapping_id": "map_binding_1_value_S2",
+      "source_schema_ref": "binding_binding_1.source",
+      "target_schema_ref": "gene_expression.long.v1",
+      "source_field": "S2",
+      "target_field": "expression_value",
+      "transform": "wide_to_long_value",
+      "mapping_method": "adapter_declared",
+      "confidence_level": "high",
+      "evidence": "matrix sample column header",
+      "review_status": "accepted"
+    }
+  ],
+  "file_asset_kind": "parsed",
+  "file_asset_media_type": "text/csv",
+  "file_asset_generated_by": "step_xena.matrix.v1"
+}

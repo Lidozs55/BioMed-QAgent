@@ -1,0 +1,16 @@
+{
+  "results": [
+    {
+      "entries": [
+        {
+          "stId": "R-HSA-169893",
+          "name": "<span class=\"highlighting\">Apoptosis</span>",
+          "species": ["Homo sapiens"],
+          "summation": "Programmed cell death",
+          "exactType": "Pathway"
+        }
+      ]
+    }
+  ],
+  "numberOfMatches": 1
+}

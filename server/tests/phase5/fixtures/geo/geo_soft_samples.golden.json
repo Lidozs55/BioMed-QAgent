@@ -1,0 +1,149 @@
+{
+  "samples": [
+    {
+      "schema_version": "1.0",
+      "sample_id": "GSM5388270",
+      "source_sample_alias": "A1",
+      "title": "Breast Cancer cells - MD-MBA-231 - DMSO treated rep. 1",
+      "organism": "Homo sapiens",
+      "platform_id": "GPL24676",
+      "sample_group": "unknown",
+      "sample_group_raw": "",
+      "pairing_id": null,
+      "group_rule_id": "geo.sample-group.v1"
+    },
+    {
+      "schema_version": "1.0",
+      "sample_id": "GSM5388271",
+      "source_sample_alias": "A2",
+      "title": "Breast Cancer cells - MD-MBA-231 - DMSO treated rep. 2",
+      "organism": "Homo sapiens",
+      "platform_id": "GPL24676",
+      "sample_group": "unknown",
+      "sample_group_raw": "",
+      "pairing_id": null,
+      "group_rule_id": "geo.sample-group.v1"
+    },
+    {
+      "schema_version": "1.0",
+      "sample_id": "GSM5388272",
+      "source_sample_alias": "A7",
+      "title": "Breast Cancer cells - MD-MBA-231 - DMSO treated rep. 3",
+      "organism": "Homo sapiens",
+      "platform_id": "GPL24676",
+      "sample_group": "unknown",
+      "sample_group_raw": "",
+      "pairing_id": null,
+      "group_rule_id": "geo.sample-group.v1"
+    },
+    {
+      "schema_version": "1.0",
+      "sample_id": "GSM5388273",
+      "source_sample_alias": "A4",
+      "title": "Breast Cancer cells - MD-MBA-231 - MAL3-101 treated rep. 1",
+      "organism": "Homo sapiens",
+      "platform_id": "GPL24676",
+      "sample_group": "unknown",
+      "sample_group_raw": "",
+      "pairing_id": null,
+      "group_rule_id": "geo.sample-group.v1"
+    },
+    {
+      "schema_version": "1.0",
+      "sample_id": "GSM5388274",
+      "source_sample_alias": "A5",
+      "title": "Breast Cancer cells - MD-MBA-231 - MAL3-101 treated rep. 2",
+      "organism": "Homo sapiens",
+      "platform_id": "GPL24676",
+      "sample_group": "unknown",
+      "sample_group_raw": "",
+      "pairing_id": null,
+      "group_rule_id": "geo.sample-group.v1"
+    },
+    {
+      "schema_version": "1.0",
+      "sample_id": "GSM5388275",
+      "source_sample_alias": "A6",
+      "title": "Breast Cancer cells - MD-MBA-231 - MAL3-101 treated rep. 3",
+      "organism": "Homo sapiens",
+      "platform_id": "GPL24676",
+      "sample_group": "unknown",
+      "sample_group_raw": "",
+      "pairing_id": null,
+      "group_rule_id": "geo.sample-group.v1"
+    },
+    {
+      "schema_version": "1.0",
+      "sample_id": "GSM5388276",
+      "source_sample_alias": "B1",
+      "title": "Breast Cancer cells - MD-MBA-453 - DMSO treated rep. 1",
+      "organism": "Homo sapiens",
+      "platform_id": "GPL24676",
+      "sample_group": "unknown",
+      "sample_group_raw": "",
+      "pairing_id": null,
+      "group_rule_id": "geo.sample-group.v1"
+    },
+    {
+      "schema_version": "1.0",
+      "sample_id": "GSM5388277",
+      "source_sample_alias": "B2",
+      "title": "Breast Cancer cells - MD-MBA-453 - DMSO treated rep. 2",
+      "organism": "Homo sapiens",
+      "platform_id": "GPL24676",
+      "sample_group": "unknown",
+      "sample_group_raw": "",
+      "pairing_id": null,
+      "group_rule_id": "geo.sample-group.v1"
+    },
+    {
+      "schema_version": "1.0",
+      "sample_id": "GSM5388278",
+      "source_sample_alias": "B3",
+      "title": "Breast Cancer cells - MD-MBA-453 - DMSO treated rep. 3",
+      "organism": "Homo sapiens",
+      "platform_id": "GPL24676",
+      "sample_group": "unknown",
+      "sample_group_raw": "",
+      "pairing_id": null,
+      "group_rule_id": "geo.sample-group.v1"
+    },
+    {
+      "schema_version": "1.0",
+      "sample_id": "GSM5388279",
+      "source_sample_alias": "B4",
+      "title": "Breast Cancer cells - MD-MBA-453 - MAL3-101 treated rep. 1",
+      "organism": "Homo sapiens",
+      "platform_id": "GPL24676",
+      "sample_group": "unknown",
+      "sample_group_raw": "",
+      "pairing_id": null,
+      "group_rule_id": "geo.sample-group.v1"
+    },
+    {
+      "schema_version": "1.0",
+      "sample_id": "GSM5388280",
+      "source_sample_alias": "B5",
+      "title": "Breast Cancer cells - MD-MBA-453 - MAL3-101 treated rep. 2",
+      "organism": "Homo sapiens",
+      "platform_id": "GPL24676",
+      "sample_group": "unknown",
+      "sample_group_raw": "",
+      "pairing_id": null,
+      "group_rule_id": "geo.sample-group.v1"
+    },
+    {
+      "schema_version": "1.0",
+      "sample_id": "GSM5388281",
+      "source_sample_alias": "B7",
+      "title": "Breast Cancer cells - MD-MBA-453 - MAL3-101 treated rep. 3",
+      "organism": "Homo sapiens",
+      "platform_id": "GPL24676",
+      "sample_group": "unknown",
+      "sample_group_raw": "",
+      "pairing_id": null,
+      "group_rule_id": "geo.sample-group.v1"
+    }
+  ],
+  "warnings": []
+}

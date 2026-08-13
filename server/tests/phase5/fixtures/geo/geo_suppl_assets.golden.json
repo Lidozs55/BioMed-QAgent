@@ -1,0 +1,9 @@
+[
+  {
+    "schema_version": "1.0",
+    "filename": "GSE178352_tximportCounts.txt.gz",
+    "url": "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE178nnn/GSE178352/suppl/GSE178352_tximportCounts.txt.gz",
+    "media_type": "application/gzip",
+    "data_level": "repository_processed"
+  }
+]

@@ -1,0 +1,11 @@
+{
+  "molecules": [
+    {
+      "molecule_chembl_id": "CHEMBL25",
+      "pref_name": "Aspirin",
+      "molecule_type": "Small molecule",
+      "max_phase": 4
+    }
+  ],
+  "page_meta": { "total_count": 1 }
+}

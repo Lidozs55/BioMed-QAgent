@@ -1,0 +1,16 @@
+{
+  "data": {
+    "hits": [
+      {
+        "file_id": "abc-123-uuid",
+        "file_name": "test_file.tsv",
+        "data_type": "Gene Expression Quantification",
+        "data_format": "TSV",
+        "data_category": "Transcriptome Profiling",
+        "file_size": 1024,
+        "md5sum": "d41d8cd98f00b204e9800998ecf8427e"
+      }
+    ],
+    "pagination": {"total": 1}
+  }
+}

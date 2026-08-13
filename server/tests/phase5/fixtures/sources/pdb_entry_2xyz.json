@@ -1,0 +1,7 @@
+{
+  "struct": { "title": "Hypothetical protein XYZ" },
+  "rcsb_entry_info": { "resolution_combined": [2.5] },
+  "exptl": [{ "method": "SOLUTION NMR" }],
+  "rcsb_accession_info": { "deposit_date": "2010-05-05" },
+  "polymer_entities": []
+}

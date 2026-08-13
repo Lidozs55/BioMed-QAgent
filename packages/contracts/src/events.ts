@@ -34,7 +34,8 @@ export type UserInputPromptKind =
   | "plan_confirmation"
   | "data_correction"
   | "max_turns_reached"
-  | "no_progress";
+  | "no_progress"
+  | "api_key_or_credential";
 
 export type UserInputDecision = "approve" | "reject";
 
