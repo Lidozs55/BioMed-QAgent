@@ -158,7 +158,7 @@ export async function ensureImageInFigures(sourcePath: string, taskRoot: string)
   return { figuresPath: destPath, sha, wasCopied };
 }
 
-const CAPTION_RE = /(Fig(?:ure)?|Table)\s*\d+[\.:]\s*([^\n]{1,500})/gi;
+const CAPTION_RE = /(Fig(?:ure)?|Table)\s*\d+[:.]\s*([^\n]{1,500})/gi;
 
 /** L3: extract figure/table captions from a PDF's text layer. */
 async function extractCaptionsPdf(pdfPath: string): Promise<string[]> {
@@ -421,9 +421,9 @@ export function createVlmTools(options: {
       const sourceLabel = path.basename(resolved);
       const prompt = hint.trim() !== "" ? `${VLM_PROMPT}\n\nAdditional hint: ${hint.trim()}` : VLM_PROMPT;
 
-      let chartRows: ChartRow[] = [];
-      let pointRows: ChartPointRow[] = [];
-      let metas: VlmChartMeta[] = [];
+      const chartRows: ChartRow[] = [];
+      const pointRows: ChartPointRow[] = [];
+      const metas: VlmChartMeta[] = [];
 
       try {
         if (IMAGE_EXTENSIONS.has(extension)) {

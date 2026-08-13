@@ -136,7 +136,7 @@ export function createTsCoreOperationRunner(options: {
   const { spec, taskRoot, outputDir, sourceAssets, runnerState, bindings } = options;
   const schema = buildGeneExpressionSchema();
 
-  return (op, _upstream): OperationOutput => {
+  return (op): OperationOutput => {
     switch (op.kind) {
       case "acquire": {
         const asset = sourceAssets[op.category];

@@ -45,7 +45,9 @@ function decompressPdfStreams(raw: Buffer): Buffer {
 
 /** Recover a UTF-8 literal (e.g. CJK) from latin-1-decoded PDF content. */
 function recoverUtf8Literal(text: string): string {
-  if (/^[\x00-\x7f]*$/.test(text)) return text;
+  // eslint-disable-next-line no-control-regex -- ASCII byte-range guard
+  const asciiOnly = /^[\x00-\x7f]*$/.test(text);
+  if (asciiOnly) return text;
   const raw = Buffer.from(text, "latin1");
   const decoded = raw.toString("utf8");
   // Node replaces invalid sequences with U+FFFD instead of throwing;

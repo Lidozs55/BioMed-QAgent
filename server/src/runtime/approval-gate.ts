@@ -82,6 +82,9 @@ export class DurableApprovalGate implements ApprovalGateHandle {
         else signal.addEventListener("abort", abort, { once: true });
       }
     });
+    // The caller-facing promise surfaces rejections; mark the inner promise
+    // handled so a mid-flight rejection never reads as unhandled.
+    void decision.catch(() => undefined);
     await this.repository.appendRunEvent(this.taskId, runId, {
       type: "user_input_required",
       request_id: requestId,

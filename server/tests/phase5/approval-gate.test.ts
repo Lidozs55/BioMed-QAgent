@@ -48,7 +48,11 @@ describe("DurableApprovalGate", () => {
     const pending = gate.request("query_protected").then((decision) => {
       settled = decision;
     });
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // The durable event append completes asynchronously; poll for it.
+    await expect.poll(async () => {
+      const events = await repository.listEvents(accepted.task_id, 0);
+      return events.some((event) => event.type === "user_input_required");
+    }).toBe(true);
 
     const events = await repository.listEvents(accepted.task_id, 0);
     const required = events.find((event) => event.type === "user_input_required");
@@ -79,9 +83,10 @@ describe("DurableApprovalGate", () => {
     });
     const gate = new DurableApprovalGate(accepted.task_id, repository, accepted.run_id);
     const first = gate.request("op_a");
+    const firstRejection = expect(first).rejects.toThrow("cancelled");
     await expect(gate.request("op_b")).rejects.toThrow("another approval request is already pending");
     gate.rejectPending(accepted.run_id, new Error("cancelled"));
-    await expect(first).rejects.toThrow("cancelled");
+    await firstRejection;
   });
 
   it("aborts when the run signal fires", async () => {
@@ -97,8 +102,9 @@ describe("DurableApprovalGate", () => {
     const gate = new DurableApprovalGate(accepted.task_id, repository, accepted.run_id);
     const controller = new AbortController();
     const pending = gate.request("op_c", controller.signal);
+    const rejection = expect(pending).rejects.toThrow("aborted");
     controller.abort();
-    await expect(pending).rejects.toThrow("aborted");
+    await rejection;
   });
 });
 

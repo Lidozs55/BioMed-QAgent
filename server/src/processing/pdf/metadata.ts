@@ -16,7 +16,7 @@ import { openPdf, readPdfBytes } from "./pdfjs.js";
 import { countPagesViaRegex, extractTextViaRegex } from "./raw-regex.js";
 
 const DOI_RE = /(10\.\d{4,}\/[^\s]+)/g;
-const CAPTION_RE = /^(Fig(?:ure)?|Table)\s*\d+[\.:]\s*(.*)/gim;
+const CAPTION_RE = /^(Fig(?:ure)?|Table)\s*\d+[:.]\s*(.*)/gim;
 const HEADING_RE = /^(?:Abstract|ABSTRACT|A B S T R A C T)\s*$/m;
 const ALL_CAPS_HEADING_RE = /^[A-Z][A-Z\s]{4,}$/;
 
@@ -46,14 +46,18 @@ export interface PdfMetadataOk {
 
 export type PdfMetadataResult = PdfMetadataOk | PdfMetadataError;
 
+/** Open a PDF via pdfjs, degrading to null on malformed input. */
+async function tryOpenPdf(filePath: string): Promise<Awaited<ReturnType<typeof openPdf>> | null> {
+  try {
+    return await openPdf(await readPdfBytes(filePath));
+  } catch {
+    return null;
+  }
+}
+
 /** Extract full text and page count (pdfjs tier with regex fallback). */
 export async function extractTextForMetadata(filePath: string): Promise<{ text: string; pageCount: number; degraded: boolean }> {
-  let opened: Awaited<ReturnType<typeof openPdf>> | null = null;
-  try {
-    opened = await openPdf(await readPdfBytes(filePath));
-  } catch {
-    opened = null;
-  }
+  const opened = await tryOpenPdf(filePath);
   if (opened !== null) {
     try {
       const pages: string[] = [];
@@ -183,7 +187,7 @@ export async function extractPdfMetadata(filePath: string, options: { taskRoot: 
 
   let text: string;
   let pageCount: number;
-  let degraded = false;
+  let degraded: boolean;
   try {
     const extracted = await extractTextForMetadata(resolved);
     text = extracted.text;
