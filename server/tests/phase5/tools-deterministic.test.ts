@@ -159,15 +159,37 @@ describe("get_research_data_guidance parity", () => {
   });
 });
 
-describe("business tool bundle (P5-02)", () => {
-  it("registers the deterministic tools with SKILL_TOOL_MAP-aligned names", () => {
-    const bundle = createBusinessToolBundle();
-    const names = bundle.tools.map((tool) => tool.name);
-    expect(names).toEqual([ANALYZE_PAPERS_TOOL_NAME, GET_RESEARCH_DATA_GUIDANCE_TOOL_NAME]);
+describe("business tool bundle (P5-02/P5-12)", () => {
+  it("registers the full curated tool set aligned with SKILL_TOOL_MAP", async () => {
+    const bundle = await createBusinessToolBundle({
+      taskRoot: "unused",
+      browser: null,
+      db: null,
+    });
+    const names = new Set(bundle.tools.map((tool) => tool.name));
     for (const name of names) {
-      expect(SKILL_TOOL_NAMES.has(name)).toBe(true);
+      expect(SKILL_TOOL_NAMES.has(name), `tool ${name} must be in the skill map`).toBe(true);
       expect(toolOwner(name)).toBe(bundle.ownerOf(name));
     }
+    // P5-12 registration rule: curated names == registered + unavailable.
+    const expected = new Set([...SKILL_TOOL_NAMES].filter((name) => !["validate_dataset_build", "execute_dataset_build"].includes(name)));
+    for (const name of expected) {
+      expect(names.has(name) || bundle.unavailableTools.has(name), `tool ${name} missing from the bundle`).toBe(true);
+    }
+    // Browser-less/DB-less bundle marks the unavailable capability groups.
+    expect(bundle.unavailableTools).toEqual(new Set([
+      "navigate_page",
+      "download_from_page",
+      "capture_web_page",
+      "capture_page_section",
+      "search_local_cache",
+      "describe_local_cache",
+      "get_cache_dataset",
+      "run_differential_expression",
+      "generate_heatmap",
+      "basic_statistics",
+      "generate_correlation_matrix",
+    ]));
   });
 
   it("fails closed on duplicate tool names", () => {
