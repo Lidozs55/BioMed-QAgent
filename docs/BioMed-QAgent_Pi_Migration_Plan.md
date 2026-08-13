@@ -8,6 +8,30 @@
 
 ---
 
+## 0. 执行进度
+
+> 状态快照：2026-08-13（main @ ef19a3f）。本表随阶段推进更新；可勾选剩余条目与
+> 优先级见 [docs/TODO.md](TODO.md)。
+
+| Phase | 内容 | 状态 |
+| --- | --- | --- |
+| 0 | 冻结边界与迁移 ADR | ✅ 完成（2026-08-12） |
+| 1 | 引入 Pi Main Agent，不动 Dataset Core | ✅ 完成（2026-08-12） |
+| 2 | 迁移 Skills 与通用 Agent 工具 | ⬜ 下一阶段 |
+| 3 | 拆出 TS Application Runtime | ✅ 完成（opt-in，2026-08-12） |
+| 4 | 迁移 Dataset Deterministic Core | ⬜ 待开始 |
+| 5 | 迁外部能力与 Python 数据处理依赖 | ⬜ 待开始 |
+| 6 | 迁模型设置与 Settings API | ⬜ 待开始 |
+| 7 | 正式切换 Frontend → TS Host | ⬜ 待开始 |
+| 8 | 删除 Python Runtime | ⬜ 待开始 |
+
+Phase 0/1 执行细节与验收证据见
+[BioMed-QAgent_Pi_Migration_Phase0_1_Detailed.md](BioMed-QAgent_Pi_Migration_Phase0_1_Detailed.md)
+与 [migration/README.md](migration/README.md)；Phase 3 边界、激活方式与回滚见
+[migration/phase3-ts-application-runtime.md](migration/phase3-ts-application-runtime.md)。
+
+---
+
 ## 1. 背景与结论
 
 当前 BioMed-QAgent 已经形成两层结构：

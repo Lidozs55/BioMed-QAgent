@@ -4,11 +4,12 @@ BioMed-QAgent 是一个面向生物医学研究数据的 **Agent + 确定性 Pip
 
 项目的目标是让数据处理过程**可追溯、可验证、可恢复**，而不是让大语言模型直接“猜”出一个 CSV。系统可以展示统计结果和可视化数据，但不会在缺少数据证据时生成科研或临床结论。
 
-> 当前项目已完成 Pi/TypeScript Host Phase 0/1，并提供 opt-in Phase 3 runtime。
+> 项目正依据 [Pi 迁移方案](docs/BioMed-QAgent_Pi_Migration_Plan.md) 执行迁移：
+> Phase 0/1/3 已完成（2026-08-12 全门禁通过），下一阶段为 Phase 2（Skills 迁移）。
 > 默认 profile 的正式 `/api/v1` 与 durable runtime 仍由 private FastAPI 权威实现；
 > `AGENT_RUNTIME=pi` 时新 `task_ts_*` Task/Run/Event 由 TS durable runtime 接管，
-> legacy Task 与未迁移 API 回退 FastAPI。实际边界以代码及
-> [架构文档](docs/ARCHITECTURE.md) 为准。
+> legacy Task 与未迁移 API 回退 FastAPI。进度跟踪见 [docs/TODO.md](docs/TODO.md)，
+> 实际边界以代码及 [架构文档](docs/ARCHITECTURE.md) 为准。
 
 ## 核心能力
 
@@ -26,15 +27,15 @@ BioMed-QAgent 是一个面向生物医学研究数据的 **Agent + 确定性 Pip
 ```text
 ┌──────────────────────────────────────────────────────────────┐
 │ TypeScript Application Host（唯一公开端口）                  │
-│ Vite middleware · /api/v1 proxy · /experimental/pi/*       │
-└───────────────────────────────┬──────────────────────────────┘
-                    ┌───────────┴───────────┐
-                    ▼                       ▼
-      experimental Pi Agent       Private loopback FastAPI
-      live-only session/event      formal API + durable runtime
-                    └───────────┬───────────┘
-                                │ trusted DatasetBuild Tool/bridge
-                                ▼
+│ Vite middleware · /api/v1 · /api/v1/ws · /experimental/pi/* │
+│  ├─ experimental Pi Agent（live-only，非 durable）           │
+│  └─ AGENT_RUNTIME=pi：TS durable runtime（task_ts_* Tasks） │
+└───────────────┬──────────────────────────────────────────────┘
+                │ 默认 AGENT_RUNTIME=legacy
+                ▼
+    Private loopback FastAPI（formal API + durable runtime）
+                │ trusted DatasetBuild Tool/bridge
+                ▼
 ┌──────────────────────────────────────────────────────────────┐
 │ Python V2 Dataset Construction Runtime                       │
 │ Spec → Acquire/Parse → Normalize/Integrate → Validate/Publish│
@@ -44,15 +45,39 @@ BioMed-QAgent 是一个面向生物医学研究数据的 **Agent + 确定性 Pip
                     data/output/tasks/<task_id>/artifacts/
 ```
 
+TS durable runtime 与 experimental Pi 同样经 loopback bridge 调用同一个
+Python V2 Dataset Core。
+
 职责边界如下：
 
-- **formal Agent** 暂由 private FastAPI 的 OpenAI Agents SDK runtime 持有；其 Task、Run 和事件可持久恢复。
+- **formal Agent** 默认由 private FastAPI 的 OpenAI Agents SDK runtime 持有；
+  `AGENT_RUNTIME=pi` 时改由 TS durable runtime 持有（`task_ts_*` Task/Run/Event），
+  两种模式下 Task、Run 和事件均可持久恢复。
 - **experimental Pi Agent** 只在 `/experimental/pi/*` 验证新 Agent/Workspace/Tool 边界，不宣称 durable。
 - **Dataset Core** 负责按照契约执行处理、记录审计信息、检查完整性，并拒绝未经验证的产物；两类 Agent 都不能直接制造 publication。
 - **Skill** 是 instructions 与 Function Tools 的能力包，按 `discovery/`、`acquisition/`、`processing/`、`analysis/` 分类。
 - **Runtime** 负责任务生命周期和事件持久化；前端状态是后端事件的投影，不是事实来源。
 
 完整设计、状态模型和安全边界见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+
+## 迁移状态
+
+项目正依据 [Pi 迁移方案](docs/BioMed-QAgent_Pi_Migration_Plan.md) 把 Agent Runtime
+迁到 Pi、把 Dataset Core 迁到 TypeScript。当前进度：
+
+| Phase | 内容 | 状态 |
+| --- | --- | --- |
+| 0 | 冻结边界与迁移 ADR | ✅ 完成 |
+| 1 | Pi Main Agent + TS Host + Workspace + Core bridge | ✅ 完成 |
+| 2 | Skills 与通用 Agent 工具迁移 | ⬜ 下一阶段 |
+| 3 | TS Application Runtime（durable Task/Run/Event） | ✅ 完成（opt-in） |
+| 4-8 | Dataset Core TS / 外部能力 / 模型设置 / 前端切换 / 删除 Python | ⬜ 待开始 |
+
+Phase 0/1 执行细节见
+[docs/BioMed-QAgent_Pi_Migration_Phase0_1_Detailed.md](docs/BioMed-QAgent_Pi_Migration_Phase0_1_Detailed.md)
+与 [docs/migration/](docs/migration/)；Phase 3 边界与回滚见
+[docs/migration/phase3-ts-application-runtime.md](docs/migration/phase3-ts-application-runtime.md)；
+进度与剩余工作跟踪见 [docs/TODO.md](docs/TODO.md)。
 
 ## 快速开始
 
@@ -206,7 +231,7 @@ WebSocket 不负责创建 Run，也不提供 SSE；创建任务和提交新一�
 
 ```text
 BioMed-QAgent/
-├── server/                 # TypeScript Host、Pi adapter、Workspace、legacy proxy
+├── server/                 # TS Host、Pi adapter、Workspace、durable Phase 3 runtime、legacy proxy
 ├── packages/contracts/     # 前端/Host 共享 wire DTO
 ├── .pi/skills/             # Phase 1 最小实验 Skills
 ├── backend/
@@ -239,7 +264,8 @@ BioMed-QAgent/
 ├── docs/
 │   ├── ARCHITECTURE.md        # 权威架构和数据契约
 │   ├── DEVELOPER_QUICKSTART.md # 开发者快速入门
-│   └── TODO.md                # 当前开发任务与优先级
+│   ├── TODO.md                # 迁移主线进度与未完成项
+│   └── migration/             # Pi 迁移 Phase 0/1/3 边界与验收文档
 ├── AGENTS.md                  # AI Agent 与协作约定
 ├── PROBLEM.md                 # 赛题背景与评价标准
 └── .env.example               # 环境变量模板
@@ -250,7 +276,7 @@ BioMed-QAgent/
 | 层级           | 技术                                                   |
 | -------------- | ------------------------------------------------------ |
 | 后端           | Python 3.12+、FastAPI、uvicorn                         |
-| Agent          | formal OpenAI Agents SDK + experimental Pi adapter    |
+| Agent          | FastAPI OpenAI Agents SDK（默认）+ Pi（opt-in `AGENT_RUNTIME=pi`，TS durable runtime） |
 | 数据契约       | Pydantic v2、dataclass                                 |
 | 数据获取与解析 | httpx、BeautifulSoup、pdfplumber、openpyxl、Playwright |
 | 科学计算       | matplotlib、SciPy、seaborn                             |
@@ -273,7 +299,7 @@ BioMed-QAgent/
 | `NCBI_API_KEY`       | 空                            | 可选的 NCBI API Key                             |
 | `HOST` / `PORT`      | `127.0.0.1` / `5173`        | TS Host 唯一公开监听地址                        |
 | `LEGACY_BACKEND_PORT` | `0`                        | Host 动态分配的 private loopback FastAPI 端口；调试时可固定 |
-| `APP_HOST` / `AGENT_RUNTIME` / `DATASET_CORE` | `ts` / `legacy` / `python` | 默认 Phase 1 组合；Phase 3 使用 `ts` / `pi` / `python` |
+| `APP_HOST` / `AGENT_RUNTIME` / `DATASET_CORE` | `ts` / `legacy` / `python` | 默认（Phase 0/1）组合；opt-in Phase 3 组合为 `ts` / `pi` / `python` |
 | `PI_EXPERIMENTAL`    | `1`                         | 仅暴露非 durable `/experimental/pi/*`           |
 | `PI_PROVIDER` / `PI_MODEL` | `dashscope` / `MODEL_NAME` | Pi provider 与模型选择                    |
 | `PI_API_KEY` / `PI_BASE_URL` | 回退 DashScope 配置    | Pi credentials；不要提交真实密钥                |
@@ -336,8 +362,8 @@ pnpm build      # tsc -b && vite build
 2. [docs/migration/ENVIRONMENT_MIGRATION.md](docs/migration/ENVIRONMENT_MIGRATION.md)：从旧双入口环境迁移到 root pnpm Workspace 与单 Host；
 3. [AGENTS.md](AGENTS.md)：代码规范、工作流和质量门禁；
 4. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)：系统边界、事件模型和数据契约；
-5. [docs/TODO.md](docs/TODO.md)：当前未完成工作与已批准决策；
-5. [PROBLEM.md](PROBLEM.md)：项目背景与评测要求。
+5. [docs/TODO.md](docs/TODO.md)：迁移主线进度与未完成工作；
+6. [PROBLEM.md](PROBLEM.md)：项目背景与评测要求。
 
 ## 桌面打包
 
@@ -371,6 +397,9 @@ pyinstaller --onefile --name BioMed-QAgent --add-data "dist;dist" --hidden-impor
 | 文档                                                        | 内容                                    |
 | ----------------------------------------------------------- | --------------------------------------- |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)                 | 权威架构、数据流、契约、事件和安全模型  |
+| [docs/BioMed-QAgent_Pi_Migration_Plan.md](docs/BioMed-QAgent_Pi_Migration_Plan.md) | Pi 迁移总体方案（Phase 0-8） |
+| [docs/BioMed-QAgent_Pi_Migration_Phase0_1_Detailed.md](docs/BioMed-QAgent_Pi_Migration_Phase0_1_Detailed.md) | Phase 0/1 执行细节与验收证据 |
+| [docs/migration/README.md](docs/migration/README.md)         | Phase 0/1/3 迁移边界文档索引 |
 | [docs/DEVELOPER_QUICKSTART.md](docs/DEVELOPER_QUICKSTART.md) | 开发环境、启动、测试和 AI-Native 工作流 |
 | [docs/migration/ENVIRONMENT_MIGRATION.md](docs/migration/ENVIRONMENT_MIGRATION.md) | Phase 0/1 环境、配置和本地数据迁移 |
 | [docs/TODO.md](docs/TODO.md)                                 | P0/P1/P2 开发任务与架构决策             |

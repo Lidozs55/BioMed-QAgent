@@ -1,10 +1,14 @@
-# Phase 0/1 Migration Boundary Index
+# Phase 0/1/3 Migration Boundary Index
 
-These documents define the Phase 1 operating contracts now implemented by the
-TypeScript Host, Pi experimental adapter, governed Workspace, and Python V2 Core bridge.
-They are subordinate to [ARCHITECTURE.md](../ARCHITECTURE.md) and the
+These documents define the Phase 0/1 operating contracts now implemented by the
+TypeScript Host, Pi experimental adapter, governed Workspace, and Python V2 Core
+bridge, plus the Phase 3 durable TS Application Runtime boundary. They are
+subordinate to [ARCHITECTURE.md](../ARCHITECTURE.md) and the
 [ADR index](../adr/README.md); they do not duplicate the full execution sequence in
-[BioMed-QAgent_Pi_Migration_Phase0_1_Detailed.md](../BioMed-QAgent_Pi_Migration_Phase0_1_Detailed.md).
+[BioMed-QAgent_Pi_Migration_Phase0_1_Detailed.md](../BioMed-QAgent_Pi_Migration_Phase0_1_Detailed.md)
+and the overall phase plan in
+[BioMed-QAgent_Pi_Migration_Plan.md](../BioMed-QAgent_Pi_Migration_Plan.md).
+Migration progress and remaining Phase 2/4-8 work are tracked in [TODO.md](../TODO.md).
 
 | Boundary | Authoritative migration document |
 | --- | --- |
@@ -31,9 +35,18 @@ The boundary documents remain contracts, not proof by themselves. Exact implemen
 and E2E evidence is recorded in `.superpowers/sdd/task-5-report.md` through
 `task-12-report.md`; code and tests remain the source of truth.
 
+## Migration progress
+
+Per [BioMed-QAgent_Pi_Migration_Plan.md](../BioMed-QAgent_Pi_Migration_Plan.md) §0:
+Phase 0/1/3 are complete; Phase 2 (Skills migration) is next, followed by
+Phase 4 (Dataset Core TS), 5 (external capabilities), 6 (model settings),
+7 (frontend switch), and 8 (Python removal). Checkboxes and priorities live in
+[TODO.md](../TODO.md).
+
 ## Phase 3 opt-in status
 
 With `APP_HOST=ts`, `AGENT_RUNTIME=pi`, and `DATASET_CORE=python`, new formal Agent
 Tasks use the durable TypeScript application runtime. Legacy Tasks and all APIs not
-yet migrated continue through private FastAPI. The default profile remains Phase 1
-legacy authority until this flag is selected explicitly.
+yet migrated continue through private FastAPI. The default profile remains
+`AGENT_RUNTIME=legacy` until this flag is selected explicitly; the planned default
+switch waits for Phase 2 Skills and cross-phase integration gates (TODO.md Phase 3).

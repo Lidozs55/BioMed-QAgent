@@ -5,6 +5,9 @@
 > 不重复内容，避免漂移）。**修改 TODO / REVIEW / ISSUES 时须同步本清单。**
 >
 > 快照：2026-08-09，main @ bdd23a6 → 分支 `feat/v2-mainline-v1-removal`（8 commits，已推送）。
+> 2026-08-13：TODO.md 主线切换为 Pi 迁移方案（Phase 0/1/3 完成，Phase 2 为下一阶段，
+> 剩余 Phase 4-8 见 [TODO.md](TODO.md)）；旧 Pipeline Refactor 清单归档于
+> [archive/TODO_PIPELINE_REFACTOR_COMPLETED.md](archive/TODO_PIPELINE_REFACTOR_COMPLETED.md)。
 > 状态图例：🔴 阻塞决策 · 🟠 产品/功能未完成 · 🟡 技术债（已评估）· ⚪ 可选补强 · ⚫ 已知问题（ISSUES.md）
 
 ---
@@ -47,9 +50,10 @@
 | --- | --- | --- | --- |
 | B1 | P0 | ~~新 Run 携带版本化 `TaskSpecification`（原 §1.6）~~ ✅ **已修（2026-08-09, feat/leftovers-p1, commits 767d0ba/f69537c）**：`RunQueuedPayload`/`RunRecord`/`StartTaskRequest` 携带可选 `specification`（向后兼容 None），reducer 投影；`POST /tasks` 接受并持久化到 run（TDD 3 用例） | TODO:63 |
 | B2 | ~~P2~~ | ~~删除 `validated_intermediate`/`validated_final` 状态（ADR-010 否决，任务/会话改 `current_publication_id`）~~ **已过时**：2026-08-09 审计确认仓库已无旧状态实现（当前即 `current_publication_id` 模型） | TODO:71 |
-| B3 | P2 | Agent INSTRUCTIONS 增加"达 max_turns 输出 `[MAX_TURNS_REACHED]`" | TODO:365 |
+| B3 | P2 | Agent INSTRUCTIONS 增加"达 max_turns 输出 `[MAX_TURNS_REACHED]`" | TODO: 独立维护项 |
+| B7 | P2 | 设置页供应商/模型列表分页与搜索后端支持（当前全量返回） | TODO: 独立维护项 |
 | B4 | P2 | ~~UniProt / ChEMBL Agent-only 来源能力（不接入 Pipeline）~~ ✅ **已修（2026-08-09, feat/leftovers-p2, commit 7d5893a）**：`Database.UNIPROT/CHEMBL` + alias + RESEARCH_ONLY 能力声明；`spec_validator` 硬门禁拒绝 research_only binding 进 build；两个 discovery skill（`search_uniprot`/`search_chembl`，reactome 模式：httpx→crawl 回退、log_query 审计、usage_hint 宣传 research_only）；`/databases` 投影为 Agent-only 来源（TDD 16 用例） | TODO:367 |
-| B5 | P2 | §3.5 通用 UI：**command/menubar 跳过、对话路由延后**（缓存导出按钮已完成） | TODO:278 `[~]` |
+| B5 | P2 | §3.5 通用 UI：**command/menubar 跳过、对话路由延后**（缓存导出按钮已完成） | archive: TODO_PIPELINE_REFACTOR_COMPLETED（Phase 7 `[~]`） |
 | B6 | P0 | ~~GEO probe→gene 映射接线：GPL 注释下载 → `mapping_paths`/`mapping_assets` 注入 `ExpressionBuildRunner`，使探针平台数据集可产出基因级或 probe-primary（`gene_expression.probe_release.v1`）产物~~ ✅ **已修（2026-08-09, feat/probe-gene-mapping-wiring）**：GEO 技能新增 `download_geo_platform_annotation(gpl)`（`geo_annotation.discover_annotation_file` 发现 + `acquire_source` 下载，带 provenance）；`execute_dataset_build` 新增可选 `mapping_files`（binding_id → 注释路径）注入 runner/executor；executor input digest 纳入 mapping_assets 哈希（换注释重跑不复用陈旧 canonicalize）；agent.py INSTRUCTIONS 指导探针平台先下注释再传 mapping_files、无注释退回 GDC/Xena 或 probe 级。TDD 8 项新测试 | REVIEW_2026-08-09-task-3eb85407 §7.1 |
 
 ---
