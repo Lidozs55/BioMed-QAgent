@@ -520,6 +520,9 @@ const VALIDATION_PROFILES: Readonly<Record<string, ExpressionValidationProfile>>
   "gene_expression.probe_release.v1": new ProbeExpressionValidationProfile(),
 };
 
+/** Registered validation profile refs (server allowlist). */
+export const VALIDATION_PROFILE_REFS: readonly string[] = Object.keys(VALIDATION_PROFILES);
+
 /** Resolve a validation profile by ref (throws on unregistered refs). */
 export function getValidationProfile(profileRef: string): ExpressionValidationProfile {
   const profile = VALIDATION_PROFILES[profileRef];

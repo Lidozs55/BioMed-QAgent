@@ -6,6 +6,7 @@ import { mkdir } from "node:fs/promises";
 import type {
   BuildResult,
   EventEnvelope,
+  EventPayload,
   JsonValue,
   TaskMode,
   TaskPage,
@@ -57,6 +58,8 @@ export interface DurableAgentRuntimeOptions {
     runId: string;
     /** Durable credential-approval gate (P5-D9); pass to business tools. */
     approvalGate: ApprovalGateHandle;
+    /** Append a durable event for the currently active run (M2 core sink). */
+    recordRunEvent: (payload: EventPayload) => Promise<void>;
   }) => Promise<DurableAgentWorkspace>;
   repository?: DurableTaskRepository;
   legacyBaseUrl?: string;
@@ -206,7 +209,17 @@ export async function createDurableAgentRuntime(
 
   async function createSession(taskId: string, runId: string): Promise<ActiveTask> {
     const approvalGate = new DurableApprovalGate(taskId, repository, runId);
-    const workspace = await options.workspaceFactory({ taskId, runId, approvalGate });
+    const workspace = await options.workspaceFactory({
+      taskId,
+      runId,
+      approvalGate,
+      recordRunEvent: async (payload) => {
+        // Track the ACTIVE run: sessions outlive runs, so a second run's
+        // core events must carry its own run_id.
+        const activeRunId = activeTasks.get(taskId)?.activeRunId ?? runId;
+        await repository.appendRunEvent(taskId, activeRunId, payload);
+      },
+    });
     const sessionDir = path.join(workspace.root, "state", "pi-session");
     await mkdir(sessionDir, { recursive: true });
     let disposed = false;

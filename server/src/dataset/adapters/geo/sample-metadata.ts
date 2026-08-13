@@ -8,7 +8,7 @@
  * inferred; only explicit subject/patient/donor identifiers are accepted.
  */
 
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { csvLine, parseDelimitedLine } from "../text.js";
@@ -374,6 +374,7 @@ export function writeSampleMetadata(
   filePath: string,
   samples: readonly GeoSampleMetadata[],
 ): string {
+  mkdirSync(path.dirname(filePath), { recursive: true });
   writeFileSync(filePath, sampleMetadataCsv(samples), "utf8");
   return path.dirname(filePath);
 }

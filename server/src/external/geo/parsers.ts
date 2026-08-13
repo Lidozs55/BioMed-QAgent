@@ -128,6 +128,12 @@ export function parseGeoEsummary(payload: Uint8Array): GeoSeriesRecord[] {
         title: String(sample.title ?? ""),
       }));
     const sampleCount = safeInt(record.n_samples, samples.length);
+    if (sampleCount !== samples.length) {
+      throw new TypeError("sample_count must equal the number of samples");
+    }
+    if (new Set(samples.map((sample) => sample.accession)).size !== samples.length) {
+      throw new TypeError("sample accessions must be unique");
+    }
     records.push({
       uid: String(uid),
       accession: normalizeAccession(record.accession, GSE_PATTERN, "series"),

@@ -17,7 +17,7 @@
  * so tool output needs no second mapping layer.
  */
 
-import { XMLParser } from "fast-xml-parser";
+import { XMLParser, XMLValidator } from "fast-xml-parser";
 
 export interface NcbiSearchPage {
   count: number;
@@ -65,7 +65,10 @@ export function parseNcbiEsearch(payload: Buffer): NcbiSearchPage {
   try {
     data = JSON.parse(text);
   } catch (error) {
-    throw new TypeError(`invalid NCBI esearch JSON: ${error instanceof Error ? error.message : String(error)}`);
+    throw new TypeError(
+      `invalid NCBI esearch JSON: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
   }
   if (typeof data !== "object" || data === null || Array.isArray(data)) {
     throw new TypeError("missing esearchresult in NCBI esearch payload");
@@ -109,15 +112,25 @@ const MONTHS: Readonly<Record<string, number>> = {
 
 const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31] as const;
 
-/** Parse an XML document into fast-xml-parser's object tree. */
+/** Parse an XML document into fast-xml-parser's object tree after a
+ * well-formedness check (Python ``ET.fromstring`` raises ParseError on
+ * malformed input; fast-xml-parser alone is lenient). */
 export function parseXmlDocument(xml: Buffer): unknown {
+  const text = xml.toString("utf8");
+  const validation = XMLValidator.validate(text);
+  if (validation !== true) {
+    const err = (validation as { err?: { msg?: string; line?: number; col?: number } }).err;
+    throw new TypeError(
+      `malformed NCBI XML: ${err?.msg ?? "invalid document"} (line ${err?.line ?? 0}, column ${err?.col ?? 0})`,
+    );
+  }
   const parser = new XMLParser({
     ignoreAttributes: false,
     parseTagValue: false,
     trimValues: false,
     processEntities: true,
   });
-  return parser.parse(xml) as unknown;
+  return parser.parse(text) as unknown;
 }
 
 /** Decode numeric character references (fast-xml-parser only decodes the five
@@ -255,8 +268,12 @@ function authors(articleData: unknown): string[] {
 
 export function parsePubmedXml(xml: Buffer): PubmedRecord[] {
   const root = parseXmlDocument(xml);
+  // fast-xml-parser wraps the document under the root element name; Python's
+  // ET.fromstring returns the PubmedArticleSet element itself, whose direct
+  // children are the articles.
+  const setNode = childNode(root, "PubmedArticleSet") ?? root;
   const records: PubmedRecord[] = [];
-  for (const article of childNodes(root, "PubmedArticle")) {
+  for (const article of childNodes(setNode, "PubmedArticle")) {
     const medline = childNode(article, "MedlineCitation");
     const articleData = childNode(medline, "Article");
     if (articleData === undefined) continue;

@@ -67,11 +67,11 @@ progress 语义）以 Python 实现为参考；TS 实现必须先通过 fixture 
 | `get_research_data_guidance` | `skills/builtin/analysis/research_data_guidance.py` | `topic: str` (required) | markdown text | `server/src/agent/tools/guidance.ts` | ⬜ |
 | `search_pubmed` | `skills/builtin/discovery/pubmed.py` | `query` (required), `max_results=20` | `summary, source, query, query_translation, total_count, records_count, records[], usage_hint` | `server/src/agent/tools/pubmed.ts` | ⬜ |
 | `download_supplementary` | 同上 | `pmid` (required), `max_size_mb=4096` | `source, accession, source_url, local_files[], source_assets[], download_attempts[], format_hint, warnings[]` / `error` | `server/src/agent/tools/pubmed.ts` | ⬜ |
-| `search_geo` | `skills/builtin/acquisition/geo.py` | `query=""`, `max_results=20`, `term=""` | `source, term, query_translation, total_count, accessions[], records[]` | `server/src/agent/tools/geo.ts` | ⬜ |
-| `describe_geo` | 同上 | `accession` (required) | `source` + GeoSeriesRecord 字段 + `supplementary_file_listing_url, note` | `server/src/agent/tools/geo.ts` | ⬜ |
-| `list_geo_supplementary_files` | 同上 | `accession` (required) | `source, accession, supplementary_file_count, supplementary_files[], listing_url` | `server/src/agent/tools/geo.ts` | ⬜ |
-| `download_geo` | 同上 | `accession` (required), `file_type="matrix"`, `filename=None`, `max_size_mb=4096` | `source, accession, source_url, attempt, asset, local_files[], format_hint` / `error`（`empty_series_matrix`） | `server/src/agent/tools/geo.ts` | ⬜ |
-| `download_geo_platform_annotation` | 同上 | `gpl` (`^GPL\d+$`), `max_size_mb=4096` | `source, platform, source_url, attempt, asset, local_files[], format_hint:"platform_annotation"` | `server/src/agent/tools/geo.ts` | ⬜ |
+| `search_geo` | `skills/builtin/acquisition/geo.py` | `query=""`, `max_results=20`, `term=""` | `source, term, query_translation, total_count, accessions[], records[]` | `server/src/agent/tools/geo.ts` | 🚧 |
+| `describe_geo` | 同上 | `accession` (required) | `source` + GeoSeriesRecord 字段 + `supplementary_file_listing_url, note` | `server/src/agent/tools/geo.ts` | 🚧 |
+| `list_geo_supplementary_files` | 同上 | `accession` (required) | `source, accession, supplementary_file_count, supplementary_files[], listing_url` | `server/src/agent/tools/geo.ts` | 🚧 |
+| `download_geo` | 同上 | `accession` (required), `file_type="matrix"`, `filename=None`, `max_size_mb=4096` | `source, accession, source_url, attempt, asset, local_files[], format_hint` / `error`（`empty_series_matrix`） | `server/src/agent/tools/geo.ts` | 🚧 |
+| `download_geo_platform_annotation` | 同上 | `gpl` (`^GPL\d+$`), `max_size_mb=4096` | `source, platform, source_url, attempt, asset, local_files[], format_hint:"platform_annotation"` | `server/src/agent/tools/geo.ts` | 🚧 |
 | `search_gdc` | `skills/builtin/acquisition/gdc.py` | `query=""`, `max_results=20`, `term=""` | `source:"gdc", term, project_ids[], records[]` | `server/src/agent/tools/gdc.ts` | ⬜ |
 | `describe_gdc` | 同上 | `project_id` (required), `data_category=None` | `source, project_id, name, disease_type, primary_site, program, case_count, file_count, data_categories[], experimental_strategies, dbgap_accession, state` | `server/src/agent/tools/gdc.ts` | ⬜ |
 | `download_gdc` | 同上 | `project_id`, `data_type="RNA-Seq"`, `data_category=None`, `workflow_type=None` | `source, accession, data_type, source_url, local_files[], format_hint, file_count, downloaded, retrieved_at` / `error` | `server/src/agent/tools/gdc.ts` | ⬜ |
@@ -107,10 +107,10 @@ progress 语义）以 Python 实现为参考；TS 实现必须先通过 fixture 
 
 | 能力 | Python | TS 目标 | 状态 |
 | --- | --- | --- | --- |
-| Series matrix / SOFT / supplementary parse | `datasets/build/geo_adapter.py` | `server/src/dataset/adapters/geo/` | ⬜ |
-| GEO source relations | `datasets/build/geo_relations.py` | 同上 `relations.ts` | ⬜ |
-| Sample metadata | `datasets/build/geo_sample_metadata.py` | 同上 `sample-metadata.ts` | ⬜ |
-| Probe mapping | `datasets/build/probe_mapping.py` + `pipeline/processing/geo_annotation.py` | 同上 `probe-mapping.ts` | ⬜ |
+| Series matrix / SOFT / supplementary parse | `datasets/build/geo_adapter.py` | `server/src/dataset/adapters/geo/series-matrix.ts` | 🚧 |
+| GEO source relations | `datasets/build/geo_relations.py` | 同上 `relations.ts` | 🚧 |
+| Sample metadata | `datasets/build/geo_sample_metadata.py` | 同上 `sample-metadata.ts` | 🚧 |
+| Probe mapping | `datasets/build/probe_mapping.py` + `pipeline/processing/geo_annotation.py` | 同上 `probe-mapping.ts` | 🚧 |
 
 ## 3. 网络策略基线
 
@@ -140,3 +140,37 @@ server/tests/phase5/
 
 fixture parity 规则：同一输入 → Python reference（`backend/tests/fixtures/` +
 golden JSON）与 TS 实现归一化后比较稳定字段；时间/UUID/临时路径归一化。
+
+## 5. P5-04 GEO 实现笔记
+
+P5-04 落地后（TS 实现 + fixture parity 通过，live 待验证）的非明显决策：
+
+- **ADAPTER_REGISTRY 循环导入**：`geo/series-matrix.ts` 的 adapter 类必须
+  `extends SourceAdapter`（`adapters.ts`），而 `adapters.ts` 又要静态注册
+  geo adapter —— 直接静态互相 import 会在 ESM 模块求值期触发
+  `SourceAdapter` TDZ。仿 Python `adapters.py` 文件尾 E402 延迟导入的做法，
+  `adapters.ts` 在 `ADAPTER_REGISTRY` 定义前用
+  `const { geoExpressionAdapter } = await import("./geo/index.js")`
+  （top-level await）延迟求值；geo 模块反向 import `adapters.ts` 时
+  `SourceAdapter` 等绑定已初始化。后续 adapter 若再遇到同样结构，沿用此
+  模式。
+- **supporting_assets 偏差**：TS `DataBatch` 契约无 `supporting_assets`
+  字段（契约归他处所有），GEO sample-metadata 侧表路径记录在
+  `statistics.supporting_assets`（字符串数组）；CSV 内容与 Python
+  逐字节一致。
+- **probe mapping 接线 TODO**：`probe-mapping.ts` 暴露纯函数
+  （`buildProbeMapping` / `parsePlatformTable`），canonicalizer 已消费
+  `probeMap`/`probeTargetNamespace`；Python expression_runner 的
+  `missing_sample_platform_evidence` / `ambiguous_multi_platform_mapping`
+  守卫与 `not_attempted` summary 发射留给 M2 executor 接线负责人（见
+  `probe-mapping.ts` 头注释）。
+- **golden 生成**：`server/tests/phase5/fixtures/geo/generate_goldens.py`
+  （从 `backend/` 用 `.venv` 运行）产出全部 golden JSON；Python csv 写盘
+  是 `\r\n`，但 golden 字符串经 `read_text()` 通用换行归一化为 `\n`，
+  TS 测试对比前需同样归一化。
+- **eutils 限速**：`GeoEutilsClient` 复刻 Python 3/s（无 key）/10/s 限速与
+  429/5xx + Retry-After 有界重试；`getGeoListing` 复刻 `_get_geo_listing`
+  的 3 次有界重试（429/5xx/传输错误）。
+- 测试：`server/tests/phase5/geo-{parsers,client,tools,adapter,sample-metadata,relations,probe-mapping}.test.ts`
+  （99 用例，golden 覆盖 esearch/esummary/suppl listing/SOFT samples/三类
+  matrix/probe mapping summary）。

@@ -277,9 +277,8 @@ export async function getGeoListing(
   const sleeper = options.sleeper ?? sleepMs;
   const now = options.now ?? (() => new Date());
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    let response: HttpClientResponse | null = null;
     try {
-      response = await client.request(url, { signal: options.signal });
+      const response = await client.request(url, { signal: options.signal });
       if (response.status === 429 || response.status >= 500) {
         throw new ListingStatusError(response.status, response.headers);
       }

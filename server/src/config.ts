@@ -89,12 +89,17 @@ export function parseFeatureFlags(environment: Environment): FeatureFlags {
   const piExperimental = piExperimentalValue === "1";
 
   const profile = `${appHost}/${agentRuntime}/${datasetCore}/${piExperimentalValue}`;
+  // M2 (Phase 5 completion plan I-01): ts/pi/ts is the opt-in full-TS main
+  // path; ts/legacy/ts stays invalid (legacy Agent + TS Core is not a
+  // supported combination). Default profile unchanged.
   const validProfiles = new Set([
     "fastapi/legacy/python/0",
     "ts/legacy/python/0",
     "ts/legacy/python/1",
     "ts/pi/python/0",
     "ts/pi/python/1",
+    "ts/pi/ts/0",
+    "ts/pi/ts/1",
   ]);
   if (!validProfiles.has(profile)) {
     throw new Error(`Invalid Phase 0/1 feature flag combination: ${profile}`);

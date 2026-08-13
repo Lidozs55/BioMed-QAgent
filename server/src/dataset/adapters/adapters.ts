@@ -731,9 +731,15 @@ export class XenaMatrixAdapter extends SourceAdapter {
 const gdcAdapter = new GdcExpressionAdapter();
 const xenaAdapter = new XenaMatrixAdapter();
 
+// Deferred import mirrors Python adapters.py (the geo adapter imports this
+// module for SourceAdapter; a static import would create an ESM cycle where
+// the geo class definition reads SourceAdapter before initialization).
+const { geoExpressionAdapter } = await import("./geo/index.js");
+
 export const ADAPTER_REGISTRY: Readonly<Record<string, SourceAdapter>> = {
   [gdcAdapter.adapter_id]: gdcAdapter,
   [xenaAdapter.adapter_id]: xenaAdapter,
+  [geoExpressionAdapter.adapter_id]: geoExpressionAdapter,
 };
 
 export function getAdapter(adapterId: string): SourceAdapter {
