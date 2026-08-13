@@ -179,17 +179,10 @@ export async function createBusinessToolBundle(
     onWarning: context.onWarning,
   }), "extract_chart_data_vlm");
 
-  // Analysis tools (P5-09) are appended by the caller alongside the
-  // DatasetBuild tools until the analysis module lands; keep the
-  // registration rule honest by marking them unavailable meanwhile.
-  for (const name of [
-    "run_differential_expression",
-    "generate_heatmap",
-    "basic_statistics",
-    "generate_correlation_matrix",
-  ]) {
-    if (!tools.some((tool) => tool.name === name)) unavailable.add(name);
-  }
+  // Analysis tools (P5-09): Welch/BH/correlation/clustering with scipy
+  // numeric parity; outputs confined to staging/analysis/<runId> (P5-D5).
+  const { createAnalysisTools } = await import("./analysis.js");
+  register(createAnalysisTools({ taskRoot, hooks: context.hooks }), "analysis");
   // User declarative database tools (P5-11) are appended by the caller with
   // the same registry guard because their names are dynamic.
 

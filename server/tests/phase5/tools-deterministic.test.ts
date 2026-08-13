@@ -185,11 +185,16 @@ describe("business tool bundle (P5-02/P5-12)", () => {
       "search_local_cache",
       "describe_local_cache",
       "get_cache_dataset",
+    ]));
+    // Analysis tools register with the full bundle.
+    for (const name of [
       "run_differential_expression",
       "generate_heatmap",
       "basic_statistics",
       "generate_correlation_matrix",
-    ]));
+    ]) {
+      expect(names.has(name)).toBe(true);
+    }
   });
 
   it("fails closed on duplicate tool names", () => {

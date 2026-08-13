@@ -25,7 +25,8 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import { copyFile, createWriteStream, link, mkdir, open, rename, stat, unlink } from "node:fs/promises";
+import { createWriteStream } from "node:fs";
+import { copyFile, link, mkdir, open, rename, stat, unlink } from "node:fs/promises";
 import path from "node:path";
 import { load } from "cheerio";
 
@@ -264,7 +265,7 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
           }
           await new Promise<void>((resolveEnd, rejectEnd) => {
             target.end(() => resolveEnd());
-            target.on("error", rejectEnd);
+            target.on("error", (error: Error) => rejectEnd(error));
           });
         } catch (error) {
           await unlink(partPath).catch(() => undefined);

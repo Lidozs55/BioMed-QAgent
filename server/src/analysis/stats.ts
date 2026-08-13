@@ -35,18 +35,58 @@ function quantile(sorted: readonly number[], q: number): number {
 }
 
 /**
- * Python round() parity: round-half-even to `digits` decimal places,
- * operating on the binary double the same way CPython's round does.
+ * Python round() parity: round-half-even to `digits` decimal places.
+ *
+ * CPython rounds the EXACT decimal expansion of the binary double, so this
+ * extracts up to `digits + 1` fractional digits via toFixed (far more
+ * fractional digits than a double's 15-17 significant ones, so the
+ * extraction is exact for the magnitudes used here) and applies half-even
+ * rounding on the digit string. This matters: 2.675 * 100 rounds to exactly
+ * 267.5 in IEEE arithmetic (frac == 0.5 -> half-even would go UP), but
+ * Python gives 2.67 because the true binary value is 2.67499...
  */
 export function pyRound(value: number, digits: number): number {
-  const factor = 10 ** digits;
-  const scaled = value * factor;
-  const floored = Math.floor(scaled);
-  const frac = scaled - floored;
-  if (frac > 0.5) return (floored + 1) / factor;
-  if (frac < 0.5) return floored / factor;
-  // Exact half: round to even.
-  return (floored % 2 === 0 ? floored : floored + 1) / factor;
+  if (!Number.isFinite(value)) return value;
+  const negative = value < 0 || Object.is(value, -0);
+  const magnitude = Math.abs(value);
+  // Enough fractional digits to expose every significant digit of the
+  // double plus the rounding target.
+  const expansion = magnitude.toFixed(digits + 20);
+  const dot = expansion.indexOf(".");
+  const intPart = expansion.slice(0, dot);
+  const frac = dot === -1 ? "" : expansion.slice(dot + 1);
+  let kept = frac.slice(0, digits).padEnd(digits, "0");
+  const next = frac.length > digits ? frac[digits] : "0";
+  const tail = frac.slice(digits + 1);
+  let roundUp = false;
+  if (next > "5") {
+    roundUp = true;
+  } else if (next === "5") {
+    if (/[1-9]/.test(tail)) {
+      roundUp = true; // beyond the half point
+    } else if (digits === 0) {
+      // Exact half: round the integer part to even.
+      roundUp = Number(intPart[intPart.length - 1]) % 2 === 1;
+    } else {
+      // Exact half: round to even (last kept digit).
+      roundUp = kept.length > 0 && Number(kept[kept.length - 1]) % 2 === 1;
+    }
+  }
+  let whole = BigInt(intPart);
+  if (roundUp) {
+    if (digits === 0) {
+      whole += 1n;
+    } else {
+      const scaled = BigInt(intPart) * 10n ** BigInt(digits) + BigInt(kept);
+      // padStart keeps the leading zeros BigInt() would otherwise drop
+      // (scaled + 1 has fewer digits than `digits` for values < 1).
+      const bumped = (scaled + 1n).toString().padStart(digits + 1, "0");
+      kept = bumped.slice(-digits);
+      whole = BigInt(bumped.slice(0, -digits));
+    }
+  }
+  const result = Number(`${whole}.${digits === 0 ? "0" : kept}`);
+  return negative ? -result : result;
 }
 
 /**

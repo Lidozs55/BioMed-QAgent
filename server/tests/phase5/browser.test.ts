@@ -29,7 +29,6 @@ import { fakeResolver, localExecutor, PUBLIC_IP, startFixtureServer, type Fixtur
 import { fixtureEgressPolicy } from "./fixtures/browser/policy.js";
 
 const FIXTURES = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "browser");
-const PUBLIC_RESOLVER = { "public.example": [PUBLIC_IP] };
 
 async function until(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
   const deadline = Date.now() + timeoutMs;

@@ -37,14 +37,13 @@ import {
   renderCorrelation,
   renderHeatmap,
   renderVolcano,
-  safeFloat,
   welchTTest,
   type ColumnStats,
   type CorrelationMethod,
   type VolcanoPoint,
 } from "../../analysis/index.js";
 import { resolveTaskLocalFile, toTaskRelative } from "../../processing/paths.js";
-import { noopHooks, type ToolHooks, type ToolServiceDeps } from "./tool-hooks.js";
+import { noopHooks, type ToolServiceDeps } from "./tool-hooks.js";
 
 export const RUN_DIFFERENTIAL_EXPRESSION_TOOL_NAME = "run_differential_expression";
 export const GENERATE_HEATMAP_TOOL_NAME = "generate_heatmap";
@@ -75,13 +74,6 @@ function toPythonIterable(value: unknown): string[] {
   if (typeof value === "string") return Array.from(value);
   throw new TypeError(`'${typeof value}' object is not iterable`);
 }
-
-/** pandas NA-value test (case-sensitive exact match, pandas defaults). */
-const NA_VALUES: ReadonlySet<string> = new Set([
-  "", "#N/A", "#N/A N/A", "#NA", "-1.#IND", "-1.#QNAN", "-NaN", "-nan",
-  "1.#IND", "1.#QNAN", "<NA>", "N/A", "NA", "NULL", "NaN", "None", "n/a",
-  "nan", "null",
-]);
 
 /** Population standard deviation ddof=0 (the np.std guard in the tool). */
 function populationStd(values: readonly number[], sampleMean: number): number {
@@ -483,6 +475,8 @@ export function createAnalysisTools(deps: AnalysisToolDeps): BioMedAgentTool[] {
         // Build the matrix.
         let matrix = keptRows.map((row) => colIdx.map((c) => table.values[row][c]));
         const displayGenes = keptRows.map((row) => String(table.rows[row][geneIdx]));
+        const rowCluster = clusterRows && matrix.length > 1;
+        const colCluster = clusterCols && numericCols.length > 1;
         if (zscore) {
           matrix = matrix.map((values) => {
             const finite = values.filter((v) => Number.isFinite(v));
@@ -508,8 +502,6 @@ export function createAnalysisTools(deps: AnalysisToolDeps): BioMedAgentTool[] {
           }
         }
 
-        const rowCluster = clusterRows && matrix.length > 1;
-        const colCluster = clusterCols && numericCols.length > 1;
         let rowOrder = matrix.map((_, i) => i);
         let colOrder = numericCols.map((_, i) => i);
         if (rowCluster) {

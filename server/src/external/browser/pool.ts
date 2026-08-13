@@ -15,7 +15,9 @@
  *   operations, and closes the shared browser;
  * - only declarative actions are allowed (``navigate``/``click``/``fill``/
  *   ``select``/``wait_for``/``extract``) — never agent-generated JavaScript.
- *   The only ``evaluate`` calls are the fixed bounded serialization scripts.
+ *   The only ``evaluate`` calls are the fixed bounded serialization functions
+ *   (real functions — Playwright 1.62 evaluates string expressions without
+ *   binding the element/argument).
  *
  * Egress is enforced at the route layer (see ``egress.ts``): a
  * ``context.route`` interception authorizes every request before it leaves
@@ -65,39 +67,50 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
 window.chrome = {runtime: {}};
 `;
 
-/** Fixed bounded serialization scripts (never agent-generated code). */
-const SERIALIZE_DOCUMENT_BOUNDED = `
-(limit) => {
-    const content = document.documentElement.outerHTML;
-    const size_bytes = new TextEncoder().encode(content).byteLength;
-    if (size_bytes > limit) {
-        return {over_limit: true, size_bytes};
-    }
-    return {over_limit: false, size_bytes, content};
+/** Minimal page-world DOM surface the fixed serializers touch (no DOM lib). */
+interface PageDomView {
+  document: {
+    documentElement: { outerHTML: string; scrollWidth: number; scrollHeight: number };
+    body: { scrollWidth: number; scrollHeight: number } | null;
+  };
 }
-`;
-const SERIALIZE_ELEMENT_BOUNDED = `
-(element, limit) => {
-    const content = element.innerText;
-    const size_bytes = new TextEncoder().encode(content).byteLength;
-    if (size_bytes > limit) {
-        return {over_limit: true, size_bytes};
-    }
-    return {over_limit: false, size_bytes, content};
+
+interface SerializableElement {
+  innerText: string;
 }
-`;
-const SERIALIZE_DOCUMENT_DIMENSIONS = `
-() => ({
-    width: Math.max(
-        document.documentElement.scrollWidth,
-        document.body ? document.body.scrollWidth : 0
-    ),
-    height: Math.max(
-        document.documentElement.scrollHeight,
-        document.body ? document.body.scrollHeight : 0
-    )
-})
-`;
+
+/**
+ * Fixed bounded serialization functions (never agent-generated code).
+ * Playwright 1.62 evaluates string expressions without binding the element
+ * or the argument, so these must be real, self-contained functions (the
+ * page world has no access to module helpers).
+ */
+function serializeDocumentBounded(limit: number): unknown {
+  const dom = (globalThis as unknown as PageDomView).document;
+  const content = dom.documentElement.outerHTML;
+  const size_bytes = new TextEncoder().encode(content).byteLength;
+  if (size_bytes > limit) {
+    return { over_limit: true, size_bytes };
+  }
+  return { over_limit: false, size_bytes, content };
+}
+
+function serializeElementBounded(element: unknown, limit: number): unknown {
+  const content = (element as SerializableElement).innerText;
+  const size_bytes = new TextEncoder().encode(content).byteLength;
+  if (size_bytes > limit) {
+    return { over_limit: true, size_bytes };
+  }
+  return { over_limit: false, size_bytes, content };
+}
+
+function serializeDocumentDimensions(): { width: number; height: number } {
+  const dom = (globalThis as unknown as PageDomView).document;
+  return {
+    width: Math.max(dom.documentElement.scrollWidth, dom.body ? dom.body.scrollWidth : 0),
+    height: Math.max(dom.documentElement.scrollHeight, dom.body ? dom.body.scrollHeight : 0),
+  };
+}
 
 export interface BrowserFetchResult {
   url: string;
@@ -342,18 +355,12 @@ export class BrowserSession {
       await this.page.waitForSelector(options.target, { state: "visible", timeout: timeoutMs });
     } else if (options.action === "extract") {
       if (options.target === null) {
-        const serialized = await this.page.evaluate<unknown, number>(
-          `(${SERIALIZE_DOCUMENT_BOUNDED})`,
-          MAX_BROWSER_EXTRACT_BYTES,
-        );
+        const serialized = await this.page.evaluate(serializeDocumentBounded, MAX_BROWSER_EXTRACT_BYTES);
         content = Buffer.from(boundedSerializedText(serialized, MAX_BROWSER_EXTRACT_BYTES, "browser extract"), "utf8");
         mediaType = "text/html";
       } else {
         const locator = this.page.locator(options.target);
-        const serialized = await locator.evaluate<unknown, number>(
-          `(${SERIALIZE_ELEMENT_BOUNDED})`,
-          MAX_BROWSER_EXTRACT_BYTES,
-        );
+        const serialized = await locator.evaluate(serializeElementBounded, MAX_BROWSER_EXTRACT_BYTES);
         content = Buffer.from(boundedSerializedText(serialized, MAX_BROWSER_EXTRACT_BYTES, "browser extract"), "utf8");
         mediaType = "text/plain";
       }
@@ -520,10 +527,7 @@ export class NodeBrowserPool {
     });
     try {
       const response = await this.navigate(session, url, options.waitUntil ?? "networkidle", options.timeoutMs, options.signal);
-      const serialized = await session.page.evaluate<unknown, number>(
-        `(${SERIALIZE_DOCUMENT_BOUNDED})`,
-        MAX_BROWSER_CONTENT_BYTES,
-      );
+      const serialized = await session.page.evaluate(serializeDocumentBounded, MAX_BROWSER_CONTENT_BYTES);
       const content = boundedSerializedText(serialized, MAX_BROWSER_CONTENT_BYTES, "browser content");
       return {
         url,
@@ -777,7 +781,7 @@ async function enforceScreenshotDimensions(
     width = box.width;
     height = box.height;
   } else if (options.fullPage) {
-    const dimensions = await page.evaluate<{ width: number; height: number }>(`(${SERIALIZE_DOCUMENT_DIMENSIONS})()`);
+    const dimensions = await page.evaluate(serializeDocumentDimensions);
     width = dimensions.width;
     height = dimensions.height;
   } else {

@@ -145,22 +145,24 @@ export interface Canvas {
 }
 
 export function createCanvas(width: number, height: number): Canvas {
-  const png = new PNG({ width, height });
-  png.data.fill(255); // white background, opaque
-  return { data: png.data, width, height };
+  const data = Buffer.alloc(width * height * 4);
+  data.fill(255); // white background, opaque
+  return { data, width, height };
 }
 
 export function encodePng(canvas: Canvas): Buffer {
   const png = new PNG({ width: canvas.width, height: canvas.height });
-  canvas.data.copy(png.data);
-  return PNG.sync.write(png);
+  png.data = canvas.data;
+  // The ambient pngjs typings (src/processing/vlm/pngjs.d.ts) type
+  // sync.write as Uint8Array; at runtime it returns the Buffer we need.
+  return Buffer.from(PNG.sync.write(png));
 }
 
 export function setPixel(
   canvas: Canvas,
   x: number,
   y: number,
-  color: readonly [number, number, number],
+  color: readonly number[],
 ): void {
   if (x < 0 || y < 0 || x >= canvas.width || y >= canvas.height) return;
   const offset = (y * canvas.width + x) * 4;
@@ -190,7 +192,7 @@ export function fillRect(
   y: number,
   width: number,
   height: number,
-  color: readonly [number, number, number],
+  color: readonly number[],
 ): void {
   for (let yy = y; yy < y + height; yy += 1) {
     for (let xx = x; xx < x + width; xx += 1) {
@@ -205,7 +207,7 @@ function drawLine(
   y0: number,
   x1: number,
   y1: number,
-  color: readonly [number, number, number],
+  color: readonly number[],
 ): void {
   const dx = Math.abs(x1 - x0);
   const dy = -Math.abs(y1 - y0);
@@ -234,7 +236,7 @@ export function fillCircle(
   cx: number,
   cy: number,
   radius: number,
-  color: readonly [number, number, number],
+  color: readonly number[],
 ): void {
   for (let y = cy - radius; y <= cy + radius; y += 1) {
     for (let x = cx - radius; x <= cx + radius; x += 1) {
@@ -250,7 +252,7 @@ export function drawText(
   x: number,
   y: number,
   text: string,
-  color: readonly [number, number, number],
+  color: readonly number[],
   scale = 1,
 ): void {
   let cursor = x;
@@ -480,7 +482,7 @@ export function renderHeatmap(options: HeatmapRenderOptions): Buffer {
   for (let r = 0; r < matrix.length; r += 1) {
     for (let c = 0; c < matrix[r].length; c += 1) {
       const value = matrix[r][c];
-      let color: readonly [number, number, number] = COLOR_WHITE;
+      let color: readonly number[] = COLOR_WHITE;
       if (Number.isFinite(value)) {
         const t = range > 0 ? (value - vmin) / range : 0.5;
         color = colormapBytes(cmap, t);
@@ -582,7 +584,7 @@ export function renderCorrelation(options: CorrelationRenderOptions): Buffer {
         continue;
       }
       const value = values[i][j];
-      let color: readonly [number, number, number] = COLOR_WHITE;
+      let color: readonly number[] = COLOR_WHITE;
       if (Number.isFinite(value)) {
         // seaborn: vmin=-1, vmax=1, center=0.
         color = colormapBytes(cmap, (value + 1) / 2);

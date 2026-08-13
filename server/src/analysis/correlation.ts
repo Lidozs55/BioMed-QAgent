@@ -7,8 +7,11 @@
  *     No diagonal special case — a constant column yields NaN on the
  *     diagonal too (0/0), and pairs with < 1 common observation are NaN
  *     (min_periods=1).
- *   - spearman: per-column average ranks (NaN preserved), then the same
- *     pairwise-complete Pearson correlation on the ranks.
+ *   - spearman: pandas 3.0 ``nancorr_spearman`` — per pair, the common
+ *     finite observations are ranked (average ranks, ties included) and
+ *     correlated with Pearson, i.e. scipy.spearmanr on the pairwise-masked
+ *     subsets (verified against pandas 3.0.3 with a tie + NaN case where
+ *     this differs from full-column ranking).
  *   - kendall:  scipy.stats.kendalltau (tau-b) on the pairwise-complete
  *     observations; the diagonal is explicitly 1.0 (pandas sets it before
  *     calling kendalltau), and a constant column yields NaN off-diagonal
@@ -56,21 +59,26 @@ function pearsonAt(
   return cov / Math.sqrt(vx * vy);
 }
 
-/** Average ranks of a column (NaN preserved) — scipy.stats.rankdata("average"). */
-function averageRanks(values: readonly number[]): number[] {
-  const n = values.length;
+/** Average ranks of the values at `indices` (scipy.stats.rankdata("average")). */
+function rankAt(
+  values: readonly number[],
+  indices: readonly number[],
+): number[] {
+  const n = indices.length;
   const result = new Array<number>(n).fill(Number.NaN);
-  const order = Array.from({ length: n }, (_, i) => i).filter((i) =>
-    Number.isFinite(values[i]),
-  );
-  order.sort((i, j) => values[i] - values[j]);
+  // Map row index -> position within `indices` so ranks land in the right slot.
+  const positionOfRow = new Map<number, number>();
+  indices.forEach((row, position) => positionOfRow.set(row, position));
+  const order = [...indices].sort((a, b) => values[a] - values[b]);
   let k = 0;
   while (k < order.length) {
     let end = k + 1;
     while (end < order.length && values[order[end]] === values[order[k]]) end += 1;
-    // Average rank of the tie group: (k+1 + end) / 2 (1-based).
-    const rank = (k + 1 + end) / 2;
-    for (let m = k; m < end; m += 1) result[order[m]] = rank;
+    const rank = (k + 1 + end) / 2; // average of the 1-based tie group
+    for (let m = k; m < end; m += 1) {
+      const position = positionOfRow.get(order[m]);
+      if (position !== undefined) result[position] = rank;
+    }
     k = end;
   }
   return result;
@@ -93,18 +101,13 @@ function kendallTauAt(
     for (let q = p + 1; q < n; q += 1) {
       const dx = xp - x[indices[q]];
       const dy = yp - y[indices[q]];
-      if (dx === 0 && dy === 0) {
-        // Tied in both variables: counts toward both tie groups (tau-b).
-        tiesX += 1;
-        tiesY += 1;
-        continue;
-      }
+      if (dx === 0 && dy === 0) continue; // tied in both: neither P/Q nor Tx/Ty
       if (dx === 0) {
-        tiesX += 1;
+        tiesX += 1; // x-only tie
         continue;
       }
       if (dy === 0) {
-        tiesY += 1;
+        tiesY += 1; // y-only tie
         continue;
       }
       if (dx * dy > 0) concordant += 1;
@@ -130,9 +133,6 @@ export function correlationMatrix(
   const matrix: number[][] = Array.from({ length: k }, () =>
     new Array<number>(k).fill(Number.NaN),
   );
-  if (method === "spearman") {
-    columns = columns.map((col) => averageRanks(col));
-  }
   for (let i = 0; i < k; i += 1) {
     for (let j = 0; j < k; j += 1) {
       const indices = commonFiniteIndices(columns[i], columns[j]);
@@ -144,10 +144,41 @@ export function correlationMatrix(
         // pandas corr: diagonal short-circuits to 1.0 before kendalltau.
         matrix[i][j] =
           i === j ? 1.0 : kendallTauAt(columns[i], columns[j], indices);
+      } else if (method === "spearman") {
+        // pandas nancorr_spearman == scipy.spearmanr on the pairwise-masked
+        // subsets: rank each masked subset separately, then Pearson.
+        const rx = rankAt(columns[i], indices);
+        const ry = rankAt(columns[j], indices);
+        matrix[i][j] = pearsonOfRanks(rx, ry);
       } else {
         matrix[i][j] = pearsonAt(columns[i], columns[j], indices);
       }
     }
   }
   return matrix;
+}
+
+/** Pearson r of two NaN-free rank arrays (length n). */
+function pearsonOfRanks(x: readonly number[], y: readonly number[]): number {
+  const n = x.length;
+  if (n < 2) return Number.NaN;
+  let mx = 0;
+  let my = 0;
+  for (let k = 0; k < n; k += 1) {
+    mx += x[k];
+    my += y[k];
+  }
+  mx /= n;
+  my /= n;
+  let cov = 0;
+  let vx = 0;
+  let vy = 0;
+  for (let k = 0; k < n; k += 1) {
+    const dx = x[k] - mx;
+    const dy = y[k] - my;
+    cov += dx * dy;
+    vx += dx * dx;
+    vy += dy * dy;
+  }
+  return cov / Math.sqrt(vx * vy);
 }

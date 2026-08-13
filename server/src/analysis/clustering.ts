@@ -52,7 +52,7 @@ export interface LinkageRow {
 export function linkageAverage(matrix: readonly (readonly number[])[]): LinkageRow[] {
   const n = matrix.length;
   if (n < 2) return [];
-  // Symmetric distance matrix over active clusters.
+  // Symmetric distance matrix over clusters; rows grow as clusters form.
   const distances: number[][] = Array.from({ length: n }, () =>
     new Array<number>(n).fill(Number.POSITIVE_INFINITY),
   );
@@ -66,6 +66,7 @@ export function linkageAverage(matrix: readonly (readonly number[])[]): LinkageR
   const sizes = new Array<number>(n).fill(1);
   const active = new Array<boolean>(n).fill(true);
   const result: LinkageRow[] = [];
+  let count = n;
 
   for (let iteration = 0; iteration < n - 1; iteration += 1) {
     // Global minimum scan, i < j in ascending order (scipy ties are avoided
@@ -73,9 +74,9 @@ export function linkageAverage(matrix: readonly (readonly number[])[]): LinkageR
     let bestI = -1;
     let bestJ = -1;
     let best = Number.POSITIVE_INFINITY;
-    for (let i = 0; i < n; i += 1) {
+    for (let i = 0; i < count; i += 1) {
       if (!active[i]) continue;
-      for (let j = i + 1; j < n; j += 1) {
+      for (let j = i + 1; j < count; j += 1) {
         if (!active[j]) continue;
         if (distances[i][j] < best) {
           best = distances[i][j];
@@ -86,24 +87,24 @@ export function linkageAverage(matrix: readonly (readonly number[])[]): LinkageR
     }
     const i = bestI;
     const j = bestJ;
-    const clusterId = n + iteration;
     const sizeI = sizes[i];
     const sizeJ = sizes[j];
     const total = sizeI + sizeJ;
-    for (let k = 0; k < n; k += 1) {
+    const newRow = new Array<number>(count + 1).fill(Number.POSITIVE_INFINITY);
+    distances.push(newRow);
+    for (let k = 0; k < count; k += 1) {
       if (!active[k] || k === i || k === j) continue;
       // Lance-Williams UPGMA update, same arithmetic order as scipy.
-      const d =
-        (sizeI * distances[i][k] + sizeJ * distances[j][k]) / total;
-      distances[k][clusterId] = d;
-      distances[clusterId][k] = d;
+      const d = (sizeI * distances[i][k] + sizeJ * distances[j][k]) / total;
+      distances[k][count] = d;
+      newRow[k] = d;
     }
-    distances[clusterId][clusterId] = Number.POSITIVE_INFINITY;
-    sizes[clusterId] = total;
+    sizes.push(total);
+    active.push(true);
     active[i] = false;
     active[j] = false;
-    active[clusterId] = true;
     result.push({ childA: i, childB: j, distance: best, size: total });
+    count += 1;
   }
   return result;
 }
