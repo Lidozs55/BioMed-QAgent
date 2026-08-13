@@ -28,24 +28,26 @@ describe("Phase 1F prompt and migration resources", () => {
   test("keeps the system prompt to the five frozen authority constraints", () => {
     expect(PHASE1_SYSTEM_PROMPT).toContain("Dataset Core");
     expect(PHASE1_SYSTEM_PROMPT).toContain("staging/agent/");
-    expect(PHASE1_SYSTEM_PROMPT).toContain("validate_dataset_build_spec");
+    expect(PHASE1_SYSTEM_PROMPT).toContain("validate_dataset_build");
     expect(PHASE1_SYSTEM_PROMPT).toContain("execute_dataset_build");
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/NO_DATA.*rejection.*cancellation.*failure/s);
     expect(PHASE1_SYSTEM_PROMPT).toContain("governed Task Workspace");
     expect(PHASE1_SYSTEM_PROMPT).not.toMatch(/GEO|GDC|Xena|research strategy/i);
   });
 
-  test("ships only the concise smoke and dataset-construction Skills", async () => {
+  test("ships the curated Phase 2 skill set (dataset-construction plus migrated SOP skills)", async () => {
     const roots = phase1ResourceRoots();
-    const smoke = await readFile(`${roots.skillRoot}/migration-smoke/SKILL.md`, "utf8");
     const dataset = await readFile(
       `${roots.skillRoot}/dataset-construction/SKILL.md`,
       "utf8",
     );
+    const geo = await readFile(`${roots.skillRoot}/geo/SKILL.md`, "utf8");
 
-    expect(smoke).toContain("migration smoke");
-    expect(dataset).toMatch(/prepare.*validate.*correct.*execute.*Publication/is);
-    expect(dataset).not.toMatch(/GEO|GDC|Xena|research SOP/i);
+    expect(dataset).toMatch(/validate_dataset_build.*execute_dataset_build/is);
+    expect(dataset).toMatch(/Publication.*formal output/is);
+    expect(geo).toMatch(/describe_geo/);
+    expect(geo).toMatch(/vetting/i);
+    expect(geo).not.toMatch(/find_skill|invoke_skill/i);
   });
 
   test("the Pi boundary alone composes prompt/Skills and bounds missing optional resources", async () => {
