@@ -157,7 +157,7 @@ async def test_qwen_function_args_error_retried_after_discarding_invalid_call(
             return _QwenFunctionArgsErrorResult(context, kwargs["session"])
         return _SuccessResult(context, output_dir)
 
-    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None, **_: build)
     monkeypatch.setattr(runner_module.Runner, "run_streamed", run_streamed)
 
     manager = TaskManager(repository, run_executor=make_executor(repository))
@@ -246,7 +246,7 @@ async def test_qwen_function_args_retry_limit_propagates_error(
         # 所有轮次都抛 Qwen 400
         return _QwenFunctionArgsErrorResult(context, kwargs["session"])
 
-    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None, **_: build)
     monkeypatch.setattr(runner_module.Runner, "run_streamed", run_streamed)
 
     manager = TaskManager(repository, run_executor=make_executor(repository))

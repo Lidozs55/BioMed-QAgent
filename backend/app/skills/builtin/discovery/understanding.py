@@ -14,7 +14,7 @@ from agents import RunContextWrapper, function_tool
 
 from app.agent_loop.context import RunContext
 from app.domain.contracts import QueryStatus
-from app.skills.registry import SkillCategory, SkillDef, skill_registry
+from app.skills.categories import SkillCategory
 
 logger = logging.getLogger(__name__)
 
@@ -258,25 +258,14 @@ def analyze_papers(
 # Skill definition & registration
 # ---------------------------------------------------------------------------
 
-lit_understanding_skill = SkillDef(
-    name="literature_understanding",
-    category=SkillCategory.DISCOVERY,
-    description=(
-        "Analyze paper titles to identify databases, accessions, data types, "
-        "species, and query suggestions for downstream data retrieval."
-    ),
-    instructions=(
-        "The `analyze_papers` tool takes a list of paper title strings and "
-        "returns structured findings: database names with accessions, data "
-        "types, species, keywords, and query suggestions. "
-        "Only pass titles — never pass abstracts or other fields. "
-        "Use it after a literature search step to turn titles into "
-        "actionable data retrieval targets. "
-        "Supported source contexts: PubMed, CrossRef, arXiv."
-    ),
-    tools=[analyze_papers],
-    supported_sources=["pubmed", "crossref", "arxiv"],
-    version="0.2.0",
+SKILL_NAME = 'literature_understanding'
+SKILL_CATEGORY = SkillCategory.DISCOVERY
+SKILL_DESCRIPTION = (
+    'Analyze paper titles to identify databases, accessions, data types, species, and query'
+    'suggestions for downstream data retrieval.'
 )
-
-skill_registry.register(lit_understanding_skill)
+SKILL_VERSION = '0.2.0'
+SUPPORTED_SOURCES = ['pubmed', 'crossref', 'arxiv']
+SKILL_TOOLS = [
+    analyze_papers,
+]

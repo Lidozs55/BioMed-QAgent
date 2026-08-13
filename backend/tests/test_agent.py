@@ -78,46 +78,39 @@ def test_model_is_configured() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Database filtering (TODO §11 line 329)
+# Tool availability (Phase 2: direct tools, databases are preferences)
 # ---------------------------------------------------------------------------
 
-# Acquisition skills that should be filtered by database selection.
-# browser_fallback is excluded — it is always available as a last-resort tool
-# (like local_cache), not tied to a specific database selection.
+# Acquisition skills that used to be filtered by database selection.
 _ACQUISITION_SKILLS = {"geo", "gdc", "pdb", "xena", "reactome", "pubchem"}
 
 
-def test_database_filter_loads_only_selected_acquisition_skills() -> None:
-    """When databases=["pubmed", "geo"], only the geo acquisition skill loads."""
+def test_database_selection_does_not_hide_direct_tools() -> None:
+    """Phase 2: databases are preferences, not tool filters. All builtin direct
+    tools stay registered; the prompt carries preferred_sources for ranking."""
     build = build_agent(databases=["pubmed", "geo"])
     loaded = set(build.skill_names)
-    # geo acquisition skill must be loaded.
+    # All acquisition skills stay available as direct tools.
     assert "geo" in loaded
-    # Other acquisition skills must NOT be loaded.
-    excluded = _ACQUISITION_SKILLS - {"geo"}
-    assert not (loaded & excluded), (
-        f"unselected acquisition skills loaded: {loaded & excluded}"
-    )
+    assert loaded >= _ACQUISITION_SKILLS
 
 
-def test_database_filter_loads_multiple_acquisition_skills() -> None:
-    """When databases includes multiple sources, all matching acquisition skills load."""
-    build = build_agent(databases=["pubmed", "geo", "pdb"])
+def test_disabled_databases_remove_tools() -> None:
+    """Phase 2: only the database-store disable toggle removes tools."""
+    build = build_agent(databases=["pubmed", "geo"], disabled_databases=frozenset({"gdc"}))
     loaded = set(build.skill_names)
+    names = {tool.name for tool in build.agent.tools}
+
+    assert "gdc" not in loaded
+    assert "search_gdc" not in names
     assert "geo" in loaded
-    assert "pdb" in loaded
-    # Unselected acquisition skills must NOT be loaded.
-    excluded = _ACQUISITION_SKILLS - {"geo", "pdb"}
-    assert not (loaded & excluded), (
-        f"unselected acquisition skills loaded: {loaded & excluded}"
-    )
+    assert "search_geo" in names
 
 
-def test_database_filter_none_loads_all_skills() -> None:
-    """When databases=None, all enabled acquisition skills load (no filtering)."""
+def test_no_selection_keeps_all_skills() -> None:
+    """When databases=None, all builtin skills remain registered."""
     build = build_agent(databases=None)
     loaded = set(build.skill_names)
-    # All acquisition skills should be present when no filtering is applied.
     assert "geo" in loaded
     assert "gdc" in loaded
     assert "pdb" in loaded

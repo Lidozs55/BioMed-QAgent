@@ -35,7 +35,7 @@ from app.pipeline.processing.geo_annotation import (
     discover_annotation_file,
     geo_platform_dir,
 )
-from app.skills.registry import SkillCategory, SkillDef, skill_registry
+from app.skills.categories import SkillCategory
 
 logger = logging.getLogger(__name__)
 
@@ -685,37 +685,18 @@ async def download_geo_platform_annotation(
         )
 
 
-geo_skill = SkillDef(
-    name="geo",
-    category=SkillCategory.ACQUISITION,
-    description=(
-        "Search, describe, and download GEO (NCBI Gene Expression Omnibus) "
-        "datasets. Use when user asks about GEO series or gene expression data."
-    ),
-    instructions=(
-        "Use search_geo to find GSE accessions, describe_geo to inspect typed "
-        "metadata, list_geo_supplementary_files to enumerate supplementary "
-        "files before downloading, and download_geo to retrieve verified "
-        "compressed source assets. For supplementary downloads, always specify "
-        "filename (from list_geo_supplementary_files). For probe-platform "
-        "(microarray) datasets, call download_geo_platform_annotation with the "
-        "platform GPL (from describe_geo) and pass the annotation file via "
-        "execute_dataset_build's mapping_files so probe rows map to genes."
-        " Use one DatasetBuildSpec and one execute_dataset_build call per "
-        "distinct GSE; never merge different GSE accessions into one build. "
-        "For tximport/supplementary expression, download the same GSE family "
-        "SOFT and pass it through execute_dataset_build metadata_files to "
-        "publish structured sample metadata."
-    ),
-    tools=[
-        search_geo,
-        describe_geo,
-        list_geo_supplementary_files,
-        download_geo,
-        download_geo_platform_annotation,
-    ],
-    supported_sources=["geo", "ncbi_geo"],
-    version="0.5.0",
+SKILL_NAME = 'geo'
+SKILL_CATEGORY = SkillCategory.ACQUISITION
+SKILL_DESCRIPTION = (
+    'Search, describe, and download GEO (NCBI Gene Expression Omnibus) datasets. Use when user'
+    'asks about GEO series or gene expression data.'
 )
-
-skill_registry.register(geo_skill)
+SKILL_VERSION = '0.5.0'
+SUPPORTED_SOURCES = ['geo', 'ncbi_geo']
+SKILL_TOOLS = [
+    search_geo,
+    describe_geo,
+    list_geo_supplementary_files,
+    download_geo,
+    download_geo_platform_annotation,
+]

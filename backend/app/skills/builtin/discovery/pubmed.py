@@ -37,7 +37,7 @@ from app.domain.contracts import (
 from app.integrations.acquisition import acquire_source
 from app.integrations.ncbi.discovery import search_pubmed as discover_pubmed
 from app.integrations.ncbi.factory import NcbiServices, open_ncbi_services
-from app.skills.registry import SkillCategory, SkillDef, skill_registry
+from app.skills.categories import SkillCategory
 from app.tools.crawler import BROWSER_HEADERS
 
 logger = logging.getLogger(__name__)
@@ -516,30 +516,16 @@ async def download_supplementary(
         )
 
 
-pubmed_skill = SkillDef(
-    name="pubmed",
-    category=SkillCategory.DISCOVERY,
-    description=(
-        "Search PubMed/NCBI for biomedical literature and download "
-        "supplementary materials. Use when the user needs to find research "
-        "papers, abstracts, authors, or supplementary data files in the "
-        "life sciences domain."
-    ),
-    instructions=(
-        "Use the `search_pubmed` tool to query PubMed with a free-text search "
-        "string. The tool returns a JSON payload containing paper records with "
-        "title, abstract, authors (semicolon-separated), journal, publication "
-        "date, DOI, PMID, PMCID, and an `is_open_access` boolean. "
-        "`total_count` reflects PubMed's own hit count (may exceed the number "
-        "of returned records due to `max_results`). "
-        "Use the `download_supplementary` tool to download supplementary "
-        "material files (.xlsx, .csv, .tsv, .txt, .zip, .xls, .docx, .pdf) "
-        "for a given PMID from the PMC open-access article page. "
-        "On failure, responses include an `error` field."
-    ),
-    tools=[search_pubmed, download_supplementary],
-    supported_sources=["pubmed", "ncbi"],
-    version="0.2.0",
+SKILL_NAME = 'pubmed'
+SKILL_CATEGORY = SkillCategory.DISCOVERY
+SKILL_DESCRIPTION = (
+    'Search PubMed/NCBI for biomedical literature and download supplementary materials. Use when'
+    'the user needs to find research papers, abstracts, authors, or supplementary data files in'
+    'the life sciences domain.'
 )
-
-skill_registry.register(pubmed_skill)
+SKILL_VERSION = '0.2.0'
+SUPPORTED_SOURCES = ['pubmed', 'ncbi']
+SKILL_TOOLS = [
+    search_pubmed,
+    download_supplementary,
+]

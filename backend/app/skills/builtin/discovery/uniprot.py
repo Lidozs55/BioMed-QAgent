@@ -22,7 +22,7 @@ from agents import RunContextWrapper, function_tool
 
 from app.agent_loop.context import RunContext
 from app.domain.contracts import QueryStatus
-from app.skills.registry import SkillCategory, SkillDef, skill_registry
+from app.skills.categories import SkillCategory
 from app.tools.crawler import CrawlError, FetchResult, fetch_with_fallback
 
 logger = logging.getLogger(__name__)
@@ -172,25 +172,14 @@ async def search_uniprot(
     )
 
 
-uniprot_skill = SkillDef(
-    name="uniprot",
-    category=SkillCategory.DISCOVERY,
-    description=(
-        "Search the UniProt knowledgebase for protein entries (accession, "
-        "protein name, gene, organism). Agent-only research source — findings "
-        "must not be routed into dataset builds."
-    ),
-    instructions=(
-        "Use the `search_uniprot` tool to query UniProt with a free-text "
-        "search string. The tool returns a JSON payload with protein records "
-        "(accession, protein_name, gene, organism, reviewed flag, URL). "
-        "UniProt is an Agent-only research source: use results for "
-        "investigation and evidence only — never declare uniprot as a "
-        "dataset build source."
-    ),
-    tools=[search_uniprot],
-    supported_sources=["uniprot"],
-    version="0.1.0",
+SKILL_NAME = 'uniprot'
+SKILL_CATEGORY = SkillCategory.DISCOVERY
+SKILL_DESCRIPTION = (
+    'Search the UniProt knowledgebase for protein entries (accession, protein name, gene,'
+    'organism). Agent-only research source — findings must not be routed into dataset builds.'
 )
-
-skill_registry.register(uniprot_skill)
+SKILL_VERSION = '0.1.0'
+SUPPORTED_SOURCES = ['uniprot']
+SKILL_TOOLS = [
+    search_uniprot,
+]

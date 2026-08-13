@@ -32,7 +32,7 @@ from app.domain.contracts import (
     make_source_id,
 )
 from app.skills.builtin.acquisition._download_io import download_file_for_run
-from app.skills.registry import SkillCategory, SkillDef, skill_registry
+from app.skills.categories import SkillCategory
 from app.tools.crawler import CrawlAttempt, CrawlError, FetchResult, fetch_with_fallback
 
 logger = logging.getLogger(__name__)
@@ -380,24 +380,17 @@ async def download_pubchem(
     }, ensure_ascii=False)
 
 
-pubchem_skill = SkillDef(
-    name="pubchem",
-    category=SkillCategory.ACQUISITION,
-    description=(
-        "Search and fetch chemical compound data from PubChem. "
-        "Use when the user asks about compounds, chemical structures, SMILES, "
-        "molecular formulas, or needs compound properties by CID."
-    ),
-    instructions=(
-        "Use search_pubchem to find compounds by name (e.g. 'aspirin', 'curcumin'). "
-        "Use get_compound to fetch details for a specific compound by CID "
-        "(e.g. 2244 for aspirin). Use download_pubchem to fetch the full SDF/MOL "
-        "structure record for a CID. API failures automatically use a rendered "
-        "page fallback and return a bounded visible-text preview."
-    ),
-    tools=[search_pubchem, get_compound, download_pubchem],
-    supported_sources=["pubchem"],
-    version="0.1.0",
+SKILL_NAME = 'pubchem'
+SKILL_CATEGORY = SkillCategory.ACQUISITION
+SKILL_DESCRIPTION = (
+    'Search and fetch chemical compound data from PubChem. Use when the user asks about'
+    'compounds, chemical structures, SMILES, molecular formulas, or needs compound properties by'
+    'CID.'
 )
-
-skill_registry.register(pubchem_skill)
+SKILL_VERSION = '0.1.0'
+SUPPORTED_SOURCES = ['pubchem']
+SKILL_TOOLS = [
+    search_pubchem,
+    get_compound,
+    download_pubchem,
+]

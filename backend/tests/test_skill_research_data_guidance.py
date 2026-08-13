@@ -13,9 +13,12 @@ import json
 from agents.tool_context import ToolContext
 from app.agent_loop.context import RunContext
 from app.skills.builtin.analysis.research_data_guidance import (
+    SKILL_CATEGORY,
+    SKILL_NAME,
+    SKILL_TOOLS,
     get_research_data_guidance,
 )
-from app.skills.registry import SkillCategory, skill_registry
+from app.skills.categories import SkillCategory
 
 _TOPICS = (
     "strategy",
@@ -36,15 +39,13 @@ def _ctx(task_id: str = "test_guidance") -> ToolContext:
     )
 
 
-def test_skill_registered_and_discoverable() -> None:
-    """The skill is registered as an analysis skill with the documented ops."""
-    skill = skill_registry.get("research_data_guidance")
-    assert skill is not None
-    assert skill.category is SkillCategory.ANALYSIS
-    assert skill.enabled
+def test_skill_exports_the_direct_tool_table() -> None:
+    """The skill is exported as an analysis skill with the documented tools."""
+    assert SKILL_NAME == "research_data_guidance"
+    assert SKILL_CATEGORY is SkillCategory.ANALYSIS
     assert any(
         getattr(tool, "name", None) == "get_research_data_guidance"
-        for tool in skill.tools
+        for tool in SKILL_TOOLS
     )
 
 

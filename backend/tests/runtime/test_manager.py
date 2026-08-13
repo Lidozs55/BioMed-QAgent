@@ -4326,13 +4326,14 @@ async def test_fastapi_lifespan_owns_runtime_executors_and_manager(tmp_path) -> 
             manager.run_executor.agent_executor,
             runner_module.AgentRunExecutor,
         )
+        store = application.state.database_store
         assert (
-            manager.run_executor.agent_executor.skill_catalog
-            is application.state.skill_catalog
+            manager.run_executor.agent_executor._disabled_databases()
+            == store.disabled_builtin_names()
         )
         assert (
-            manager.run_executor.import_executor.skill_catalog
-            is application.state.skill_catalog
+            manager.run_executor.import_executor._disabled_databases()
+            == store.disabled_builtin_names()
         )
         assert manager.event_hub is application.state.event_hub
         assert manager.max_active_runs == 2
@@ -4474,7 +4475,7 @@ async def test_executor_cancelled_error_after_cancel_keeps_single_worker_alive(
 
     streaming_result = CancelledStreamingResult()
 
-    def build_agent(databases=None):
+    def build_agent(databases=None, **kwargs):
         model = SimpleNamespace(close=AsyncMock())
         models.append(model)
         return SimpleNamespace(agent=object(), skill_names=(), model=model)

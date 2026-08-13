@@ -1,39 +1,23 @@
-"""Skill 仓库 — 可发现、可选择、按需加载的能力包。
+"""Skill 能力包（Phase 2 后仅剩类别与内置直接工具收集）。
 
-导出 SkillDef、SkillCategory、SkillRegistry 和 build_agent_config。
+Skill 的 SOP 知识已迁移至 `.pi/skills/*/SKILL.md`；Python 侧只保留
+legacy Agent 直接工具所需的模块级常量与收集函数。
 """
-from app.skills.catalog import (
-    CatalogSnapshot,
-    DuplicateSkillError,
-    ResolvedOperation,
-    SkillCatalog,
-    SkillDescriptor,
-    SkillManifest,
-    SkillOperation,
+
+from __future__ import annotations
+
+from app.skills.builtin import (
+    BuiltinSkillRecord,
+    builtin_skill_modules,
+    builtin_skill_records,
+    load_builtin_tools,
 )
-from app.skills.registry import (
-    HARD_MAX_TOOLS,
-    SUGGESTED_MAX_TOOLS,
-    SkillCategory,
-    SkillDef,
-    SkillRegistry,
-    build_agent_config,
-    skill_registry,
-)
+from app.skills.categories import SkillCategory
 
 __all__ = [
-    "HARD_MAX_TOOLS",
-    "SUGGESTED_MAX_TOOLS",
     "SkillCategory",
-    "SkillDef",
-    "SkillRegistry",
-    "build_agent_config",
-    "skill_registry",
-    "CatalogSnapshot",
-    "DuplicateSkillError",
-    "ResolvedOperation",
-    "SkillCatalog",
-    "SkillDescriptor",
-    "SkillManifest",
-    "SkillOperation",
+    "BuiltinSkillRecord",
+    "builtin_skill_modules",
+    "builtin_skill_records",
+    "load_builtin_tools",
 ]

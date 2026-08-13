@@ -9,10 +9,14 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from agents.tool_context import ToolContext
 from app.agent_loop.context import RunContext
-from app.skills.builtin import load_builtin_skill_descriptors
+from app.skills.builtin import builtin_skill_records
 from app.skills.builtin.discovery.uniprot import (
+    SKILL_CATEGORY,
+    SKILL_DESCRIPTION,
+    SKILL_NAME,
+    SKILL_TOOLS,
+    SUPPORTED_SOURCES,
     search_uniprot,
-    uniprot_skill,
 )
 from app.tools.crawler import CrawlAttempt, FetchResult
 
@@ -123,15 +127,17 @@ def test_search_uniprot_page_fallback_when_api_returns_non_json() -> None:
     )
 
 
-def test_uniprot_skill_is_registered_in_builtin_catalog() -> None:
-    descriptors = load_builtin_skill_descriptors()
-    descriptor = next(
-        (item for item in descriptors if item.name == "uniprot"), None
-    )
-    assert descriptor is not None
-    assert descriptor.supported_sources == ("uniprot",)
+def test_uniprot_skill_exports_the_direct_tool_table() -> None:
+    records = builtin_skill_records()
+    record = records["uniprot"]
+    assert record.supported_sources == ("uniprot",)
     # Agent-only research source: selectable for investigation, never
     # pipeline-supported for dataset builds.
-    assert descriptor.user_selectable is True
-    assert descriptor.pipeline_supported is False
-    assert uniprot_skill.category.value == "discovery"
+    assert record.user_selectable is True
+    assert record.pipeline_supported is False
+    assert record.tool_names == ("search_uniprot",)
+    assert SKILL_NAME == "uniprot"
+    assert SKILL_CATEGORY.value == "discovery"
+    assert SKILL_DESCRIPTION
+    assert SUPPORTED_SOURCES == ["uniprot"]
+    assert [tool.name for tool in SKILL_TOOLS] == ["search_uniprot"]

@@ -608,12 +608,15 @@ def _workflow_recipe_fetcher(run_ctx: RunContext) -> object | None:
     from app.recipes.source_fetcher import WorkflowRecipeSourceFetcher
 
     try:
-        runtime = run_ctx.create_skill_runtime
+        services = run_ctx.recipe_services
     except RuntimeError:
         return None
-    if runtime.executor is None:
+    if services.executor is None:
         return None
-    return WorkflowRecipeSourceFetcher(executor=runtime.executor, store=runtime.store)
+    return WorkflowRecipeSourceFetcher(
+        executor=services.executor,
+        store=services.store,
+    )
 
 
 async def _acquire_workflow_recipe_bindings(

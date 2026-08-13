@@ -24,7 +24,7 @@ from typing import Any
 from agents import RunContextWrapper, function_tool
 
 from app.agent_loop.context import RunContext
-from app.skills.registry import SkillCategory, SkillDef, skill_registry
+from app.skills.categories import SkillCategory
 from app.tools.workdir import resolve_task_local_file
 
 logger = logging.getLogger(__name__)
@@ -744,25 +744,15 @@ def extract_pdf_metadata(
 # Skill registration
 # ---------------------------------------------------------------------------
 
-pdf_extraction_skill = SkillDef(
-    name="pdf_extraction",
-    category=SkillCategory.PROCESSING,
-    description=(
-        "Extract tables and metadata from biomedical research PDFs. "
-        "Saves CSVs and JSON metadata to task/parsed/. "
-        "Uses pdfplumber when available, falls back to regex extraction."
-    ),
-    instructions=(
-        "Use extract_pdf_tables to pull structured tables from a PDF and "
-        "save them as CSV files. Use extract_pdf_metadata to extract "
-        "title, authors, DOI, abstract, captions, and page count. "
-        "Both tools save outputs to task/parsed/. "
-        "If pdfplumber is not installed, a warning is returned indicating "
-        "limited accuracy of the regex-based fallback."
-    ),
-    tools=[extract_pdf_tables, extract_pdf_metadata],
-    supported_sources=["pdf", "pubmed", "pmc"],
-    version="0.1.0",
+SKILL_NAME = 'pdf_extraction'
+SKILL_CATEGORY = SkillCategory.PROCESSING
+SKILL_DESCRIPTION = (
+    'Extract tables and metadata from biomedical research PDFs. Saves CSVs and JSON metadata to'
+    'task/parsed/. Uses pdfplumber when available, falls back to regex extraction.'
 )
-
-skill_registry.register(pdf_extraction_skill)
+SKILL_VERSION = '0.1.0'
+SUPPORTED_SOURCES = ['pdf', 'pubmed', 'pmc']
+SKILL_TOOLS = [
+    extract_pdf_tables,
+    extract_pdf_metadata,
+]

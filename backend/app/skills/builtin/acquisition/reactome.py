@@ -33,7 +33,7 @@ from app.domain.contracts import (
     make_source_id,
 )
 from app.skills.builtin.acquisition._download_io import download_file_for_run
-from app.skills.registry import SkillCategory, SkillDef, skill_registry
+from app.skills.categories import SkillCategory
 from app.tools.crawler import CrawlAttempt, CrawlError, FetchResult, fetch_with_fallback
 
 logger = logging.getLogger(__name__)
@@ -457,24 +457,17 @@ async def download_reactome(
     }, ensure_ascii=False)
 
 
-reactome_skill = SkillDef(
-    name="reactome",
-    category=SkillCategory.ACQUISITION,
-    description=(
-        "Search and fetch biological pathway data from Reactome. "
-        "Use when the user asks about pathways, Reactome, biological processes, "
-        "or needs pathway participants and literature references."
-    ),
-    instructions=(
-        "Use search_reactome to find pathways by keyword (e.g. 'apoptosis', 'BRCA'). "
-        "Use get_pathway to fetch details for a specific pathway by its stable ID "
-        "(e.g. 'R-HSA-169893'). Use download_reactome to fetch the participants "
-        "TSV or SBGN diagram for a pathway. API failures automatically use direct "
-        "page fallback and return a bounded visible-text preview."
-    ),
-    tools=[search_reactome, get_pathway, download_reactome],
-    supported_sources=["reactome"],
-    version="0.1.0",
+SKILL_NAME = 'reactome'
+SKILL_CATEGORY = SkillCategory.ACQUISITION
+SKILL_DESCRIPTION = (
+    'Search and fetch biological pathway data from Reactome. Use when the user asks about'
+    'pathways, Reactome, biological processes, or needs pathway participants and literature'
+    'references.'
 )
-
-skill_registry.register(reactome_skill)
+SKILL_VERSION = '0.1.0'
+SUPPORTED_SOURCES = ['reactome']
+SKILL_TOOLS = [
+    search_reactome,
+    get_pathway,
+    download_reactome,
+]

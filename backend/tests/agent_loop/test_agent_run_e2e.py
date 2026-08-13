@@ -108,7 +108,7 @@ async def test_agent_e2e_success_path_emits_artifacts_and_completed(
     def run_streamed(*args, **kwargs):
         return FakeResult(kwargs["context"])
 
-    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None, **_: build)
     monkeypatch.setattr(runner_module.Runner, "run_streamed", run_streamed)
     manager = TaskManager(repository, run_executor=make_executor(repository))
     await manager.start()
@@ -255,7 +255,7 @@ async def test_agent_e2e_v2_dataset_build_wires_durable_build_result(
     def run_streamed(*args, **kwargs):
         return FakeResult(kwargs["context"])
 
-    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None, **_: build)
     monkeypatch.setattr(runner_module.Runner, "run_streamed", run_streamed)
     manager = TaskManager(repository, run_executor=make_executor(repository))
     await manager.start()
@@ -335,7 +335,7 @@ async def test_agent_e2e_no_artifact_path_emits_completed_no_data(
             if False:
                 yield None
 
-    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None, **_: build)
     monkeypatch.setattr(
         runner_module.Runner,
         "run_streamed",
@@ -413,7 +413,7 @@ async def test_agent_e2e_emits_warning_before_completed_when_no_pending(
             if False:
                 yield None
 
-    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None, **_: build)
     monkeypatch.setattr(
         runner_module.Runner,
         "run_streamed",

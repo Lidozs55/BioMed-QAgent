@@ -838,7 +838,7 @@ async def test_runner_installs_main_input_broker_per_run(
             if False:
                 yield None
 
-    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None, **_: build)
     monkeypatch.setattr(
         runner_module.Runner,
         "run_streamed",
@@ -1318,7 +1318,7 @@ async def test_agent_loop_data_correction_timeout_e2e(
         skill_names=("request_human_correction_timeout_probe",),
         model=model,
     )
-    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None, **_: build)
 
     manager = TaskManager(repository, run_executor=make_executor(repository))
     await manager.start()
@@ -1666,7 +1666,7 @@ async def test_agent_loop_data_correction_pause_resume_e2e(
         skill_names=("request_human_correction_probe",),
         model=model,
     )
-    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None, **_: build)
 
     manager = TaskManager(repository, run_executor=make_executor(repository))
     await manager.start()
@@ -1773,7 +1773,7 @@ async def test_agent_loop_data_correction_influences_outcome_e2e(
         model=model,
     )
     monkeypatch.setattr(
-        runner_module, "build_agent", lambda databases=None: build
+        runner_module, "build_agent", lambda databases=None, **_: build
     )
 
     manager = TaskManager(repository, run_executor=make_executor(repository))

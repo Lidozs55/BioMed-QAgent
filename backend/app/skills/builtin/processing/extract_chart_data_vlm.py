@@ -55,7 +55,7 @@ from app.agent_loop.vl_model import (
 )
 from app.domain.contracts import QueryStatus, StageName
 from app.pipeline.state import TaskLock
-from app.skills.registry import SkillCategory, SkillDef, skill_registry
+from app.skills.categories import SkillCategory
 from app.tools.workdir import TaskWorkDir, resolve_task_local_file
 
 logger = logging.getLogger(__name__)
@@ -1116,30 +1116,17 @@ async def extract_chart_data_vlm(
 # ---------------------------------------------------------------------------
 
 
-extract_chart_data_vlm_skill = SkillDef(
-    name="extract_chart_data_vlm",
-    category=SkillCategory.PROCESSING,
-    description=(
-        "Extract structured chart data (chart_type, axes, data_points) from "
-        "paper figure images or PDFs using the Qwen-VL visual model. "
-        "Accepts any acquired paper artifact: PNG screenshots from "
-        "web_visual_capture, PDFs from download_supplementary, or standalone "
-        "JPG/WEBP images. Three-tier degradation: L1 Qwen-VL → L2 pdfplumber "
-        "tables → L3 caption text. Raises on full failure (no silent "
-        "empty-data fallback)."
-    ),
-    instructions=(
-        "Use extract_chart_data_vlm when you need structured data from a "
-        "paper chart, plot, or figure that you've already acquired as a "
-        "PNG/JPG image or PDF. Accepts outputs of capture_web_page, "
-        "capture_page_section, and download_supplementary. The tool writes "
-        "chart_data.csv and chart_data_points.csv under parsed/chart_data/. "
-        "Do NOT use this for pure text extraction — use extract_pdf_tables "
-        "for tables, extract_pdf_metadata for titles/authors/abstracts."
-    ),
-    tools=[extract_chart_data_vlm],
-    supported_sources=["extract_chart_data_vlm", "vlm", "chart_extraction"],
-    version="0.1.0",
+SKILL_NAME = 'extract_chart_data_vlm'
+SKILL_CATEGORY = SkillCategory.PROCESSING
+SKILL_DESCRIPTION = (
+    'Extract structured chart data (chart_type, axes, data_points) from paper figure images or'
+    'PDFs using the Qwen-VL visual model. Accepts any acquired paper artifact: PNG screenshots'
+    'from web_visual_capture, PDFs from download_supplementary, or standalone JPG/WEBP images.'
+    'Three-tier degradation: L1 Qwen-VL → L2 pdfplumber tables → L3 caption text. Raises on full'
+    'failure (no silent empty-data fallback).'
 )
-
-skill_registry.register(extract_chart_data_vlm_skill)
+SKILL_VERSION = '0.1.0'
+SUPPORTED_SOURCES = ['extract_chart_data_vlm', 'vlm', 'chart_extraction']
+SKILL_TOOLS = [
+    extract_chart_data_vlm,
+]

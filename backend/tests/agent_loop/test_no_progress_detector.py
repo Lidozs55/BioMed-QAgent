@@ -149,7 +149,7 @@ async def test_dense_repeat_fires_no_progress_prompt(
             return _RepeatingToolResult(context, repeats=5)
         return _SuccessResult(context, output_dir)
 
-    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None, **_: build)
     monkeypatch.setattr(runner_module.Runner, "run_streamed", run_streamed)
 
     manager = TaskManager(repository, run_executor=make_executor(repository))
@@ -201,7 +201,7 @@ async def test_no_progress_rejection_fails_run(
     def run_streamed(*args, **kwargs):
         return _RepeatingToolResult(kwargs["context"], repeats=5)
 
-    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None, **_: build)
     monkeypatch.setattr(runner_module.Runner, "run_streamed", run_streamed)
 
     manager = TaskManager(repository, run_executor=make_executor(repository))

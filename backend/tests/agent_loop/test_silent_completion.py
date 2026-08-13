@@ -125,7 +125,7 @@ async def test_executor_raises_when_final_output_empty(
             if False:
                 yield None
 
-    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None, **_: build)
     monkeypatch.setattr(
         runner_module.Runner,
         "run_streamed",
@@ -190,7 +190,7 @@ async def test_executor_recovers_from_empty_final_output_with_retry(
             if False:
                 yield None
 
-    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None, **_: build)
     monkeypatch.setattr(
         runner_module.Runner,
         "run_streamed",
@@ -246,7 +246,7 @@ async def test_executor_warns_when_no_pending_publication(
             if False:
                 yield None
 
-    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None, **_: build)
     monkeypatch.setattr(
         runner_module.Runner,
         "run_streamed",
@@ -295,7 +295,7 @@ async def test_executor_does_not_warn_when_cancelled(
             if False:
                 yield None
 
-    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None, **_: build)
     monkeypatch.setattr(
         runner_module.Runner,
         "run_streamed",
@@ -340,7 +340,7 @@ async def test_manager_completes_run_when_agent_produces_no_artifacts(
             if False:
                 yield None
 
-    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None, **_: build)
     monkeypatch.setattr(
         runner_module.Runner,
         "run_streamed",
