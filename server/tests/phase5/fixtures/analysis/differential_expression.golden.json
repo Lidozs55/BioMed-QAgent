@@ -1,0 +1,124 @@
+{
+ "gene_column": "gene",
+ "row_count": 14,
+ "group_a_count": 4,
+ "group_b_count": 3,
+ "significant_up": 2,
+ "significant_down": 1,
+ "pval_threshold": 0.05,
+ "log2fc_threshold": 1.0,
+ "degs": [
+  {
+   "gene": "G03",
+   "log2FC": -1.4885,
+   "pvalue": 0.0,
+   "padj": 1e-06,
+   "neg_log10_pval": 6.9329,
+   "significant": true
+  },
+  {
+   "gene": "TP53",
+   "log2FC": 1.0449,
+   "pvalue": 0.0,
+   "padj": 0.0,
+   "neg_log10_pval": 8.1741,
+   "significant": true
+  },
+  {
+   "gene": "TP53",
+   "log2FC": 1.0432,
+   "pvalue": 4e-06,
+   "padj": 2e-05,
+   "neg_log10_pval": 5.3781,
+   "significant": true
+  },
+  {
+   "gene": "G08",
+   "log2FC": 0.5191,
+   "pvalue": 1.7e-05,
+   "padj": 5.8e-05,
+   "neg_log10_pval": 4.7809,
+   "significant": false
+  },
+  {
+   "gene": "G02",
+   "log2FC": 0.7925,
+   "pvalue": 2.5e-05,
+   "padj": 7e-05,
+   "neg_log10_pval": 4.6038,
+   "significant": false
+  },
+  {
+   "gene": "G04",
+   "log2FC": 0.4459,
+   "pvalue": 0.000107,
+   "padj": 0.00025,
+   "neg_log10_pval": 3.9692,
+   "significant": false
+  },
+  {
+   "gene": "G01",
+   "log2FC": 0.5285,
+   "pvalue": 0.000206,
+   "padj": 0.000413,
+   "neg_log10_pval": 3.6851,
+   "significant": false
+  },
+  {
+   "gene": "G09",
+   "log2FC": 0.5142,
+   "pvalue": 0.000471,
+   "padj": 0.000823,
+   "neg_log10_pval": 3.3274,
+   "significant": false
+  },
+  {
+   "gene": "G07",
+   "log2FC": 0.3322,
+   "pvalue": 0.000597,
+   "padj": 0.000929,
+   "neg_log10_pval": 3.224,
+   "significant": false
+  },
+  {
+   "gene": "G10",
+   "log2FC": 0.1875,
+   "pvalue": 0.000798,
+   "padj": 0.001118,
+   "neg_log10_pval": 3.0978,
+   "significant": false
+  },
+  {
+   "gene": "G06",
+   "log2FC": -0.106,
+   "pvalue": 0.009247,
+   "padj": 0.011768,
+   "neg_log10_pval": 2.034,
+   "significant": false
+  },
+  {
+   "gene": "G05",
+   "log2FC": 0.1962,
+   "pvalue": 0.023733,
+   "padj": 0.027688,
+   "neg_log10_pval": 1.6247,
+   "significant": false
+  },
+  {
+   "gene": "SPARSE",
+   "log2FC": -0.2242,
+   "pvalue": 1.0,
+   "padj": 1.0,
+   "neg_log10_pval": -0.0,
+   "significant": false
+  },
+  {
+   "gene": "FLAT",
+   "log2FC": -1.0,
+   "pvalue": 1.0,
+   "padj": 1.0,
+   "neg_log10_pval": -0.0,
+   "significant": false
+  }
+ ]
+}

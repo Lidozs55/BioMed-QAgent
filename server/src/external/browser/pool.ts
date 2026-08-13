@@ -17,9 +17,12 @@
  *   ``select``/``wait_for``/``extract``) — never agent-generated JavaScript.
  *   The only ``evaluate`` calls are the fixed bounded serialization scripts.
  *
- * Egress is enforced at two layers (see ``egress.ts``): the operation target
- * URL is validated before ``page.goto``, and a ``context.route`` interception
- * re-validates every request the browser makes — each redirect hop included.
+ * Egress is enforced at the route layer (see ``egress.ts``): a
+ * ``context.route`` interception authorizes every request before it leaves
+ * the browser. Playwright 1.62 does not re-route redirect hops after a
+ * ``route.continue()``/``fallback()``, so main-frame navigations are
+ * followed manually through ``route.fetch`` + ``route.fulfill`` — every hop
+ * of the chain is authorized before transport (Python proxy parity).
  * Main-document rejections fail the operation; subresource rejections abort
  * silently so the page body still renders (Python parity).
  *
@@ -28,6 +31,7 @@
  */
 
 import { chromium, type Browser, type BrowserContext, type Page, type Request, type Response, type Route } from "playwright";
+import { URL } from "node:url";
 
 import { strictBrowserEgressPolicy, type BrowserEgressPolicy } from "./egress.js";
 
@@ -40,6 +44,12 @@ export const MAX_BROWSER_EXTRACT_BYTES = 10 * 1024 * 1024;
 export const MAX_BROWSER_SCREENSHOT_BYTES = 25 * 1024 * 1024;
 export const MAX_BROWSER_SCREENSHOT_PIXELS = 25_000_000;
 export const DEFAULT_BROWSER_NAVIGATION_TIMEOUT_MS = 60_000;
+
+/** Manual main-frame redirect hop bound (Chromium's native cap). */
+export const MAX_BROWSER_REDIRECT_HOPS = 20;
+
+/** Bounding-box wait before a missing screenshot selector fails (ms). */
+const SCREENSHOT_SELECTOR_TIMEOUT_MS = 1_500;
 
 export interface BrowserViewport {
   width: number;
@@ -222,6 +232,56 @@ function resourceTypeOf(request: Request, page: Page | null): string {
   return request.resourceType();
 }
 
+/**
+ * Follow one main-frame navigation hop-by-hop through ``route.fetch``,
+ * authorizing every hop (including each redirect target) before transport,
+ * then fulfill the final response to the page. Playwright 1.62 skips routing
+ * for redirect hops after ``route.continue()``/``fallback()``, so the chain
+ * is walked manually (Python egress-proxy parity: the proxy authorizes every
+ * CONNECT, redirect hops included).
+ */
+async function followMainFrameNavigation(
+  route: Route,
+  authorizeRequest: BrowserRequestAuthorizer,
+): Promise<void> {
+  const request = route.request();
+  let currentUrl = request.url();
+  let method = request.method();
+  let postData: Buffer | null = request.postDataBuffer();
+  for (let hop = 0; hop < MAX_BROWSER_REDIRECT_HOPS; hop += 1) {
+    await authorizeRequest(currentUrl, "main_frame");
+    const headers = { ...request.headers() };
+    delete headers["host"];
+    delete headers["connection"];
+    delete headers["accept-encoding"];
+    delete headers["content-length"];
+    const response = await route.fetch({
+      url: currentUrl,
+      method,
+      headers,
+      postData: postData ?? undefined,
+      maxRedirects: 0,
+      timeout: 0,
+    });
+    const status = response.status();
+    if (status >= 300 && status < 400) {
+      const location = response.headers()["location"] ?? "";
+      if (location === "") {
+        throw new Error(`browser redirect hop ${hop + 1} is missing a Location header`);
+      }
+      currentUrl = new URL(location, currentUrl).toString();
+      if (status !== 307 && status !== 308) {
+        method = "GET";
+        postData = null;
+      }
+      continue;
+    }
+    await route.fulfill({ response });
+    return;
+  }
+  throw new Error(`browser navigation exceeded ${MAX_BROWSER_REDIRECT_HOPS} redirect hops`);
+}
+
 /** One isolated BrowserContext retained across a declarative action sequence. */
 export class BrowserSession {
   private closed = false;
@@ -233,13 +293,7 @@ export class BrowserSession {
     private readonly context: BrowserContext,
     readonly page: Page,
     private readonly routeErrors: Error[],
-    private readonly authorizeRequest: BrowserRequestAuthorizer,
   ) {}
-
-  /** Goto-layer egress check: run the authorizer before navigation starts. */
-  async authorize(url: string, resourceType: string): Promise<void> {
-    await this.authorizeRequest(url, resourceType);
-  }
 
   /** Perform one allowlisted declarative browser action. */
   async action(options: BrowserActionOptions): Promise<BrowserActionResult> {
@@ -252,18 +306,14 @@ export class BrowserSession {
       if (!destination) {
         throw new Error("browser navigate requires a URL");
       }
-      await this.authorize(destination, "main_frame");
-      const response = await this.page.goto(destination, { waitUntil: "networkidle", timeout: timeoutMs });
-      this.raiseRouteError();
+      const response = await this.goto(destination, timeoutMs);
       this.statusCode = response?.status() ?? 0;
       this.navigated = true;
       return { content: Buffer.alloc(0), status_code: this.statusCode, media_type: "text/html" };
     }
 
     if (!this.navigated) {
-      await this.authorize(options.current_url, "main_frame");
-      const response = await this.page.goto(options.current_url, { waitUntil: "networkidle", timeout: timeoutMs });
-      this.raiseRouteError();
+      const response = await this.goto(options.current_url, timeoutMs);
       this.statusCode = response?.status() ?? 0;
       this.navigated = true;
     }
@@ -292,12 +342,18 @@ export class BrowserSession {
       await this.page.waitForSelector(options.target, { state: "visible", timeout: timeoutMs });
     } else if (options.action === "extract") {
       if (options.target === null) {
-        const serialized = await this.page.evaluate<unknown>(`(${SERIALIZE_DOCUMENT_BOUNDED})(${MAX_BROWSER_EXTRACT_BYTES})`);
+        const serialized = await this.page.evaluate<unknown, number>(
+          `(${SERIALIZE_DOCUMENT_BOUNDED})`,
+          MAX_BROWSER_EXTRACT_BYTES,
+        );
         content = Buffer.from(boundedSerializedText(serialized, MAX_BROWSER_EXTRACT_BYTES, "browser extract"), "utf8");
         mediaType = "text/html";
       } else {
         const locator = this.page.locator(options.target);
-        const serialized = await locator.evaluate<unknown, number>(`(${SERIALIZE_ELEMENT_BOUNDED})(${MAX_BROWSER_EXTRACT_BYTES})`);
+        const serialized = await locator.evaluate<unknown, number>(
+          `(${SERIALIZE_ELEMENT_BOUNDED})`,
+          MAX_BROWSER_EXTRACT_BYTES,
+        );
         content = Buffer.from(boundedSerializedText(serialized, MAX_BROWSER_EXTRACT_BYTES, "browser extract"), "utf8");
         mediaType = "text/plain";
       }
@@ -332,6 +388,16 @@ export class BrowserSession {
   /** Surface the first route-layer egress rejection, if any. */
   raiseRouteError(): void {
     if (this.routeErrors.length > 0) throw this.routeErrors[0];
+  }
+
+  /** Navigate and deterministically surface a route-layer egress rejection. */
+  private async goto(destination: string, timeoutMs: number): Promise<Response | null> {
+    try {
+      return await this.page.goto(destination, { waitUntil: "networkidle", timeout: timeoutMs });
+    } catch (error) {
+      this.raiseRouteError();
+      throw error;
+    }
   }
 
   private requireLocator(target: string | null, action: string): ReturnType<Page["locator"]> {
@@ -453,9 +519,11 @@ export class NodeBrowserPool {
       signal: options.signal,
     });
     try {
-      await session.authorize(url, "main_frame");
       const response = await this.navigate(session, url, options.waitUntil ?? "networkidle", options.timeoutMs, options.signal);
-      const serialized = await session.page.evaluate<unknown>(`(${SERIALIZE_DOCUMENT_BOUNDED})(${MAX_BROWSER_CONTENT_BYTES})`);
+      const serialized = await session.page.evaluate<unknown, number>(
+        `(${SERIALIZE_DOCUMENT_BOUNDED})`,
+        MAX_BROWSER_CONTENT_BYTES,
+      );
       const content = boundedSerializedText(serialized, MAX_BROWSER_CONTENT_BYTES, "browser content");
       return {
         url,
@@ -487,7 +555,6 @@ export class NodeBrowserPool {
       signal: options.signal,
     });
     try {
-      await session.authorize(url, "main_frame");
       const response = await this.navigate(session, url, options.waitUntil ?? "networkidle", options.timeoutMs, options.signal);
       await enforceScreenshotDimensions(session.page, { fullPage, selector, viewportWidth, viewportHeight });
       const timeout = options.timeoutMs ?? this.navigationTimeoutMs;
@@ -516,21 +583,21 @@ export class NodeBrowserPool {
 
   /** Acquire one isolated context for a declarative action sequence. */
   async openSession(options: BrowserSessionOptions = {}): Promise<BrowserSession> {
+    if (this.closed) {
+      throw new Error("browser pool is closed");
+    }
     this.queued += 1;
     try {
       await this.semaphore.acquire(options.signal);
     } catch (error) {
       this.queued -= 1;
+      this.notifyIdle();
       throw error;
     }
     this.queued -= 1;
     if (!this.started) {
       this.semaphore.release();
       throw new Error("browser pool is not started");
-    }
-    if (this.closed) {
-      this.semaphore.release();
-      throw new Error("browser pool is closed");
     }
     this.active += 1;
     try {
@@ -556,17 +623,23 @@ export class NodeBrowserPool {
           const request = route.request();
           const isMainFrame = isMainFrameRequest(request, page);
           try {
-            await authorizeRequest(request.url(), resourceTypeOf(request, page));
-            await route.continue();
+            if (isMainFrame) {
+              await followMainFrameNavigation(route, authorizeRequest);
+            } else {
+              await authorizeRequest(request.url(), resourceTypeOf(request, page));
+              await route.continue();
+            }
           } catch (error) {
+            // Never rethrow from the handler: aborting makes the pending
+            // navigation reject, and the operation surfaces the first
+            // recorded rejection through ``raiseRouteError``.
             const failure = error instanceof Error ? error : new Error(String(error));
             if (isMainFrame) routeErrors.push(failure);
-            await route.abort();
-            if (isMainFrame) throw failure;
+            await route.abort().catch(() => undefined);
           }
         });
         page = await context.newPage();
-        return new BrowserSession(this, context, page, routeErrors, authorizeRequest);
+        return new BrowserSession(this, context, page, routeErrors);
       } catch (error) {
         try {
           await page?.close();
@@ -617,9 +690,8 @@ export class NodeBrowserPool {
   private async ensureBrowser(): Promise<Browser> {
     return this.withLaunchLock(async () => {
       if (this.browser !== null) return this.browser;
-      if (this.closed) {
-        throw new Error("browser pool is closed");
-      }
+      // ``close`` drains every accepted operation before closing the shared
+      // browser, so an operation that reached this point is pre-close.
       const browser = await this.launcher();
       this.browser = browser;
       return browser;
@@ -641,12 +713,12 @@ export class NodeBrowserPool {
   }
 
   private waitForIdle(): Promise<void> {
-    if (this.active === 0) return Promise.resolve();
+    if (this.active === 0 && this.queued === 0) return Promise.resolve();
     return new Promise<void>((resolve) => this.idleWaiters.push(resolve));
   }
 
   private notifyIdle(): void {
-    if (this.active === 0 && this.idleWaiters.length > 0) {
+    if (this.active === 0 && this.queued === 0 && this.idleWaiters.length > 0) {
       const waiters = this.idleWaiters.splice(0);
       for (const waiter of waiters) waiter();
     }
@@ -692,7 +764,13 @@ async function enforceScreenshotDimensions(
   let width: number;
   let height: number;
   if (options.selector !== null) {
-    const box = await page.locator(options.selector).boundingBox();
+    // ``boundingBox`` auto-waits for the element; a missing selector must
+    // fail fast with the Python-parity message instead of hanging for the
+    // default action timeout.
+    const box = await page
+      .locator(options.selector)
+      .boundingBox({ timeout: SCREENSHOT_SELECTOR_TIMEOUT_MS })
+      .catch(() => null);
     if (box === null) {
       throw new Error(`browser screenshot selector is not visible: ${options.selector}`);
     }

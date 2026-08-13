@@ -61,6 +61,15 @@ export function strictHttpsAuthority(value: string): string {
   } catch {
     throw new UnsafeUrlError("browser URL is malformed");
   }
+  // Shape checks run before any normalization or DNS work (Python
+  // ``resolve_public_http_target`` ordering). The WHATWG parser folds an
+  // empty authority into the first path segment (``https:///x`` parses with
+  // hostname ``x``), so the raw authority is inspected: an empty authority
+  // is a malformed URL, not a hostname to resolve.
+  const authority = /^[a-z][a-z0-9+.-]*:\/\/([^/?#]*)/i.exec(value)?.[1];
+  if (authority === undefined || authority === "") {
+    throw new UnsafeUrlError("browser URL is malformed");
+  }
   if (url.protocol !== "https:") {
     throw new UnsafeUrlError("browser egress only permits HTTPS URLs");
   }
