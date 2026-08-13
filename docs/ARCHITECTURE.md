@@ -1247,6 +1247,26 @@ max tokens 与 temperature 进入 Pi stream options；`top_p` 进入兼容 paylo
 Session 不被后续设置变更改写。
 详细实现与安全边界见 [Phase 6 model settings](migration/phase6-model-settings.md)。
 
+### 18.7 Phase 5 外部能力 TS 化与 M2 集成收口
+
+Phase 5 将全部业务 Tool（NCBI/PubMed、GEO、GDC、Xena、ChEMBL/UniProt/PDB/PubChem/
+Reactome、Node Playwright browser/crawler/web capture、PDF/VLM、统计/绘图、local
+cache、声明式用户数据库）迁至 TypeScript：统一网络策略与 acquisition 底座
+（`server/src/external/`，全量 DNS 公网校验 + 地址钉扎 + 逐跳 redirect 重验证），
+业务 Tool 只经 `createBusinessToolBundle` 注册进正式 Pi Session；local cache 与声明式
+数据库 manifest 经 TS DB Adapter → `database/bridge.py` 命名操作访问。Pi 路径不再调用
+Python acquisition/parsing/analysis（P5-13 静态+运行时双门禁）；Python 仅保留 legacy
+回滚 runtime 与 DB bridge，物理删除属 Phase 8。
+
+M2 收口后 `DATASET_CORE=ts` 成为合法 opt-in profile（`ts/pi/ts/0|1`）：TS
+Deterministic Core 具备 per-operation timeout、build lock（task+build 单发布者）、
+cooperative cancel 与 operation event sink（→ 稳定 `operation_*` EventEnvelope），四类
+golden fixture（SUCCESS/PARTIAL_SUCCESS/NO_DATA/SPEC_REJECTED）在 TS Core 路径通过；
+`DATASET_CORE=python` 保留为回滚。默认 profile 不变，Phase 7 才切换正式默认。
+
+细节见 [Phase 5 完成计划](migration/phase5-external-capabilities-completion-plan.md)
+与 [能力矩阵](migration/phase5-external-capabilities.md)。
+
 ---
 
 ## 19. 顶层不变量

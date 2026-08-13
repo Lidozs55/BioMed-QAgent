@@ -34,6 +34,12 @@ formal Agent 默认仍使用 OpenAI Agents SDK；`AGENT_RUNTIME=pi` 时正式 Ta
 TS durable runtime 接管（Pi 迁移 Phase 3，opt-in），Phase 1 的显式 experimental
 surface 也通过 Pi adapter 调用同一个受信任 Python V2 Dataset Core。
 
+Phase 5/M2 后（2026-08-14）：Pi 路径的业务 Tool 已全部 TS 化（外部数据源、浏览器、
+PDF/VLM、统计绘图、local cache、声明式数据库），Python 仅承担 legacy 回滚与 DB
+bridge（`database/bridge.py`）；`DATASET_CORE=ts` 为合法 opt-in profile
+（`ts/pi/ts/0|1`，TS Deterministic Core 具备 timeout/lock/cancel/event sink）。
+默认 profile 仍是 `APP_HOST=ts / AGENT_RUNTIME=legacy / DATASET_CORE=python`。
+
 > 这是"中国高校计算机大赛 — AI Scientist 赛道"的参赛作品（赛题 XH-202619）。
 
 ---

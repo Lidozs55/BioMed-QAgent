@@ -48,10 +48,15 @@ def _error(code: str, message: str) -> dict[str, Any]:
 class Bridge:
     """Named-operation facade over the cache + database stores."""
 
-    def __init__(self, backend_root: Path, cache_dir: Path | None, databases_dir: Path | None) -> None:
+    def __init__(
+        self,
+        backend_root: Path,
+        cache_dir: Path | None,
+        databases_dir: Path | None,
+    ) -> None:
         sys.path.insert(0, str(backend_root))
-        from app.tools.cache_store import init_cache_store
         from app.databases.store import DatabaseStore
+        from app.tools.cache_store import init_cache_store
 
         self._cache = init_cache_store(cache_dir) if cache_dir else init_cache_store()
         self._databases = DatabaseStore(databases_dir or Path("data/databases"))
@@ -202,7 +207,10 @@ class Bridge:
 
     def dispatch(self, op: str, args: dict[str, Any]) -> dict[str, Any]:
         handlers = {
-            "ping": lambda _a: {"ok": True, "data": {"service": "biomed-db-bridge", "version": PROTOCOL_VERSION}},
+            "ping": lambda _a: {
+                "ok": True,
+                "data": {"service": "biomed-db-bridge", "version": PROTOCOL_VERSION},
+            },
             "cache.commit": self.cache_commit,
             "cache.search": self.cache_search,
             "cache.list": self.cache_list,
@@ -240,8 +248,12 @@ def _serve(bridge: Bridge) -> int:
             request = json.loads(line)
         except json.JSONDecodeError as exc:
             sys.stdout.write(json.dumps(
-                {"version": PROTOCOL_VERSION, "id": None, "ok": False,
-                 "error": {"code": "protocol", "message": f"invalid JSON: {exc}"}}
+                {
+                    "version": PROTOCOL_VERSION,
+                    "id": None,
+                    "ok": False,
+                    "error": {"code": "protocol", "message": f"invalid JSON: {exc}"},
+                },
             ) + "\n")
             sys.stdout.flush()
             continue
@@ -249,8 +261,15 @@ def _serve(bridge: Bridge) -> int:
         version = request.get("version")
         if version != PROTOCOL_VERSION:
             sys.stdout.write(json.dumps(
-                {"version": PROTOCOL_VERSION, "id": request_id, "ok": False,
-                 "error": {"code": "protocol", "message": f"unsupported protocol version: {version}"}}
+                {
+                    "version": PROTOCOL_VERSION,
+                    "id": request_id,
+                    "ok": False,
+                    "error": {
+                        "code": "protocol",
+                        "message": f"unsupported protocol version: {version}",
+                    },
+                },
             ) + "\n")
             sys.stdout.flush()
             continue
@@ -258,8 +277,15 @@ def _serve(bridge: Bridge) -> int:
         args = request.get("args")
         if not isinstance(op, str) or not isinstance(args, dict):
             sys.stdout.write(json.dumps(
-                {"version": PROTOCOL_VERSION, "id": request_id, "ok": False,
-                 "error": {"code": "protocol", "message": "request requires string op and object args"}}
+                {
+                    "version": PROTOCOL_VERSION,
+                    "id": request_id,
+                    "ok": False,
+                    "error": {
+                        "code": "protocol",
+                        "message": "request requires string op and object args",
+                    },
+                },
             ) + "\n")
             sys.stdout.flush()
             continue
@@ -276,8 +302,11 @@ def _serve(bridge: Bridge) -> int:
 
 def _self_test() -> int:
     with tempfile.TemporaryDirectory(prefix="biomed-bridge-") as tmp:
+        backend_root = Path(
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "backend")
+        )
         bridge = Bridge(
-            backend_root=Path(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "backend")),
+            backend_root=backend_root,
             cache_dir=Path(tmp) / "cache",
             databases_dir=Path(tmp) / "databases",
         )
@@ -287,13 +316,24 @@ def _self_test() -> int:
             "source_namespace": "user_import",
             "topic": "self test",
             "description": "bridge self-test dataset",
-            "csv_rows": [{"record_id": "r1", "dataset_id": "ds_self_test", "source_id": "src", "asset_id": "asset", "gene_id": "TP53"}],
+            "csv_rows": [
+                {
+                    "record_id": "r1",
+                    "dataset_id": "ds_self_test",
+                    "source_id": "src",
+                    "asset_id": "asset",
+                    "gene_id": "TP53",
+                }
+            ],
             "created_by_task_id": "self_test",
         })
         assert manifest["ok"] is True and manifest["data"]["row_count"] == 1
         found = bridge.dispatch("cache.search", {"query": "self test", "limit": 5})
         assert found["ok"] is True and found["data"][0]["dataset_id"] == "ds_self_test"
-        loaded = bridge.dispatch("cache.get", {"source_namespace": "user_import", "dataset_id": "ds_self_test"})
+        loaded = bridge.dispatch(
+            "cache.get",
+            {"source_namespace": "user_import", "dataset_id": "ds_self_test"},
+        )
         assert loaded["ok"] is True and len(loaded["data"]["rows"]) == 1
         saved = bridge.dispatch("database.save", {"manifest": {
             "schema_version": "1.0",
@@ -322,7 +362,10 @@ def _self_test() -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Biomed DB bridge (named-op JSONL)")
-    parser.add_argument("--backend-root", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "backend"))
+    default_backend_root = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "backend"
+    )
+    parser.add_argument("--backend-root", default=default_backend_root)
     parser.add_argument("--cache-dir", default=None)
     parser.add_argument("--databases-dir", default=None)
     parser.add_argument("--self-test", action="store_true")
