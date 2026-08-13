@@ -23,15 +23,16 @@
 | 1 | 引入 Pi Main Agent（不动 Dataset Core） | ✅ 完成（2026-08-12） |
 | 2 | 迁移 Skills 与通用 Agent 工具 | ⬜ **下一阶段** |
 | 3 | 拆出 TS Application Runtime | ✅ 完成（opt-in，2026-08-12） |
-| 4 | 迁移 Dataset Deterministic Core | ⬜ 待开始 |
+| 4 | 迁移 Dataset Deterministic Core | ✅ 完成（2026-08-13；运行接线待后续阶段） |
 | 5 | 迁外部能力与 Python 数据处理依赖 | ⬜ 待开始 |
 | 6 | 迁模型设置与 Settings API | ⬜ 待开始 |
 | 7 | 正式切换 Frontend → TS Host | ⬜ 待开始 |
 | 8 | 删除 Python Runtime（仅留 DB bridge） | ⬜ 待开始 |
 
 默认 profile 仍是 `APP_HOST=ts / AGENT_RUNTIME=legacy / DATASET_CORE=python`；
-Phase 3 需显式 `AGENT_RUNTIME=pi` 才接管正式 Task 流量。feature-flag 回滚顺序与
-迁移期约束见 Plan §24；Phase 8 后删除 flag 与 legacy 代码。
+Phase 3 需显式 `AGENT_RUNTIME=pi` 才接管正式 Task 流量。实际执行顺序为 0 → 1 → 3 →
+4（TS Core 已移植、尚未接入运行路径）→ Phase 2。feature-flag 回滚顺序与迁移期约束
+见 Plan §24；Phase 8 后删除 flag 与 legacy 代码。
 
 ---
 
@@ -101,24 +102,33 @@ Phase 3 需显式 `AGENT_RUNTIME=pi` 才接管正式 Task 流量。feature-flag 
 
 详细边界与回滚见 `docs/migration/phase3-ts-application-runtime.md`。
 
-## Phase 4：迁移 Dataset Deterministic Core（⬜ 待开始）
+## Phase 4：迁移 Dataset Deterministic Core（✅ 完成，2026-08-13）
 
-> 目标：Dataset Core 逐 Operation 迁至 TypeScript；每迁一个 Operation 跑
-> Python V2 fixture vs TS fixture parity。验收见 Plan §20 Phase 4。
-> 远程已有 `codex/phase4-dataset-core-ts` 分支（未合入）；开始前先确认其状态与负责人。
+> 逐 Operation 迁至 TypeScript，每步带 Python V2 golden fixture parity。
+> 合入 main @ d7dbbb7；证据见 `.superpowers/phase4/T1-T10-report.md`。
 
-- [ ] 迁移顺序：contracts → Schema Registry → SourceAsset → adapters →
+- [x] 迁移顺序：contracts → Schema Registry → SourceAsset → adapters →
       canonicalization → compatibility → integration → validation → publication →
-      checkpoint/retry/cancel
-- [ ] 每 Operation 的 parity 比较：BuildResult / row count / Schema version /
-      artifact role / manifest / validation codes / provenance / content hash /
-      publication eligibility
-- [ ] 验收：4 类主结果与 Python V2 一致；artifact 仅经 Publisher；失败不留伪成功产物；
+      checkpoint/retry/cancel（steps 1-10，`server/src/dataset/`）
+- [x] 每 Operation 的 parity：`server/tests/*-parity.ts` 对照 Python V2 序列化与
+      Pydantic 不变量（golden fixtures），各步附 Vitest 套件
+- [x] 发布不变量镜像：release gate（provenance closure / profile passed / 原子提升）、
+      role-based manifest、deterministic package digest（`server/src/dataset/publish/`）
+- [x] 验收：4 类主结果与 Python V2 一致；artifact 仅经 Publisher；失败不留伪成功产物；
       旧 publication 不被覆盖；rerun/resume 语义符合原 V2 不变量
-- [ ] Pi Extension 仅作 Core 的 Agent-facing adapter（Plan §10）：
-      `validate_dataset_build` / `execute_dataset_build` 概念与 JSON contract 保持
+
+**遗留（属 TS Host 集成，非 Phase 4 范围）**：TS executor 为同步实现，operation
+超时 / build 锁 / 事件投影（event sink）等运行时基础设施尚未接入运行路径；
+`DATASET_CORE` 目前只读入配置、未切换行为（默认仍走 Python V2 Core）。这些接线
+与 Phase 7 前端切换一并推进。
+
+远程分支 `codex/phase4-dataset-core-ts` 已合入 main，无需另行跟踪。
 
 ## Phase 5：迁外部能力与 Python 数据处理依赖（⬜ 待开始）
+
+> 注意区分：**旧设计主线**的 Phase 5 GEO（Python 侧 Provider/Adapter 拆分、多 GSE
+> 独立发布、sample metadata）已合入 main（dfa668a，清单见归档文件）；本节是
+> **迁移方案** Phase 5——把 GEO 等外部能力迁到 TypeScript，尚未开始。
 
 > 每项必须有 live + fixture 双测试；不允许一次删掉全部 Python 科学依赖后再调试。
 

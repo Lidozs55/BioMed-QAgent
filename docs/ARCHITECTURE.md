@@ -14,8 +14,9 @@
 >   Phase 0/1，并提供 opt-in Phase 3 TS Application Runtime。默认 profile 仍由
 >   private FastAPI 权威实现 formal `/api/v1`；选择 `AGENT_RUNTIME=pi` 后，新
 >   `task_ts_*` Task/Run/Event 由 TS durable runtime 权威实现，legacy Task 与未迁移
->   API 继续回退 FastAPI。迁移主线 Phase 0/1/3 已完成，剩余 Phase 2/4-8 的进度
->   见 [TODO.md](TODO.md)。V1 历史架构归档于
+>   API 继续回退 FastAPI。迁移主线 Phase 0/1/3 已完成、Phase 4 TS Dataset Core 已
+>   移植（`server/src/dataset/`，尚未接入运行路径），剩余 Phase 2/5-8 的进度见
+>   [TODO.md](TODO.md)。V1 历史架构归档于
 >   [archive/ARCHITECTURE_V1.md](archive/ARCHITECTURE_V1.md)，迁移策略见 §18。
 > - **验证与失效**：每个里程碑、每次新增/修订 ADR、数据族接入或执行模型变化
 >   时对照本文校验一致性；与代码现状矛盾且未标注待落地、或被新 ADR 推翻而未

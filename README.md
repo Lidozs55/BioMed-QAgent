@@ -5,7 +5,8 @@ BioMed-QAgent 是一个面向生物医学研究数据的 **Agent + 确定性 Pip
 项目的目标是让数据处理过程**可追溯、可验证、可恢复**，而不是让大语言模型直接“猜”出一个 CSV。系统可以展示统计结果和可视化数据，但不会在缺少数据证据时生成科研或临床结论。
 
 > 项目正依据 [Pi 迁移方案](docs/BioMed-QAgent_Pi_Migration_Plan.md) 执行迁移：
-> Phase 0/1/3 已完成（2026-08-12 全门禁通过），下一阶段为 Phase 2（Skills 迁移）。
+> Phase 0/1/3/4 已完成（2026-08-13 全门禁通过；TS Dataset Core 已移植、运行接线
+> 待后续阶段），下一阶段为 Phase 2（Skills 迁移）。
 > 默认 profile 的正式 `/api/v1` 与 durable runtime 仍由 private FastAPI 权威实现；
 > `AGENT_RUNTIME=pi` 时新 `task_ts_*` Task/Run/Event 由 TS durable runtime 接管，
 > legacy Task 与未迁移 API 回退 FastAPI。进度跟踪见 [docs/TODO.md](docs/TODO.md)，
@@ -71,12 +72,14 @@ Python V2 Dataset Core。
 | 1 | Pi Main Agent + TS Host + Workspace + Core bridge | ✅ 完成 |
 | 2 | Skills 与通用 Agent 工具迁移 | ⬜ 下一阶段 |
 | 3 | TS Application Runtime（durable Task/Run/Event） | ✅ 完成（opt-in） |
-| 4-8 | Dataset Core TS / 外部能力 / 模型设置 / 前端切换 / 删除 Python | ⬜ 待开始 |
+| 4 | Dataset Deterministic Core TS 移植（steps 1-10 + parity） | ✅ 完成（未接入运行路径） |
+| 5-8 | 外部能力 / 模型设置 / 前端切换 / 删除 Python | ⬜ 待开始 |
 
 Phase 0/1 执行细节见
 [docs/BioMed-QAgent_Pi_Migration_Phase0_1_Detailed.md](docs/BioMed-QAgent_Pi_Migration_Phase0_1_Detailed.md)
 与 [docs/migration/](docs/migration/)；Phase 3 边界与回滚见
 [docs/migration/phase3-ts-application-runtime.md](docs/migration/phase3-ts-application-runtime.md)；
+Phase 4 TS 代码在 `server/src/dataset/`，证据见 `.superpowers/phase4/T1-T10-report.md`；
 进度与剩余工作跟踪见 [docs/TODO.md](docs/TODO.md)。
 
 ## 快速开始
