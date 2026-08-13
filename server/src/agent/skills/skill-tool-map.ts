@@ -114,7 +114,7 @@ export const SKILL_TOOL_MAP: readonly SkillToolMapping[] = Object.freeze([
     "reactome",
     "acquisition",
     ["reactome"],
-    "Search and fetch biological pathway data from Reactome.",
+    "Search and fetch biological pathway data from Reactome (research-only; findings never route into dataset builds).",
     ["search_reactome", "get_pathway", "download_reactome"],
   ),
   mapping(

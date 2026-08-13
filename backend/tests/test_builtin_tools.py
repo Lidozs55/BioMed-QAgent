@@ -77,7 +77,10 @@ EXPECTED_USER_SELECTABLE = {
     "reactome",
 }
 
-EXPECTED_PIPELINE_SUPPORTED = {"pubmed", "geo", "gdc", "xena", "reactome"}
+# Reactome is research-only: the deterministic core has no Reactome adapter
+# and .pi/skills/reactome/SKILL.md forbids routing it into dataset builds
+# (P5-D10, docs/migration/phase5-external-capabilities-completion-plan.md).
+EXPECTED_PIPELINE_SUPPORTED = {"pubmed", "geo", "gdc", "xena"}
 
 
 def test_load_builtin_tools_returns_the_direct_tool_union():

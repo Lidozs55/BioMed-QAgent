@@ -1,0 +1,510 @@
+/**
+ * Verified streaming acquisition of immutable source bytes (Python
+ * ``app/integrations/acquisition.py`` parity).
+ *
+ * P5-D3: this is the single sanctioned path that produces SourceAssets. Agent
+ * tools never fetch + write files themselves; they call ``acquireSource``
+ * which owns policy, streaming, size limits, hashing, expected checksums,
+ * media type checks, content cache, atomic source_assets publication,
+ * DownloadAttempt records, progress and cancellation.
+ */
+
+import { createHash, randomUUID } from "node:crypto";
+import { createWriteStream } from "node:fs";
+import { link, mkdir, open, rename, stat, unlink } from "node:fs/promises";
+import path from "node:path";
+
+import type {
+  AcquisitionResult,
+  DownloadAttempt,
+  SourceAsset,
+  SourceRecord,
+} from "../../dataset/contracts/source.js";
+import type { DataLevel } from "../../dataset/contracts/enums.js";
+import { assetIdFromSha256 } from "../../dataset/adapters/identity.js";
+import { AcquisitionError, isAbortError } from "../network/errors.js";
+import { UnsafeUrlError } from "../network/errors.js";
+import { PublicHttpClient } from "../network/http-client.js";
+import { validateHttpsSourceUrl } from "../network/url-policy.js";
+import { ContentCache, canonicalRequestHash } from "./content-cache.js";
+import {
+  assertSafeFilename,
+  ensureAcquisitionDirs,
+  sourceAssetPath,
+  taskWorkDirs,
+  type TaskWorkDirs,
+} from "./workdir.js";
+
+export const CURATED_SOURCE_HOSTS: ReadonlySet<string> = new Set([
+  // NCBI (PubMed, GEO, PMC)
+  "ftp.ncbi.nlm.nih.gov",
+  "eutils.ncbi.nlm.nih.gov",
+  "www.ncbi.nlm.nih.gov",
+  // GDC
+  "api.gdc.cancer.gov",
+  // RCSB PDB
+  "files.rcsb.org",
+  "search.rcsb.org",
+  "data.rcsb.org",
+  // PubChem
+  "pubchem.ncbi.nlm.nih.gov",
+  // Reactome
+  "reactome.org",
+  // UCSC Xena (S3)
+  "toil-xena-hub.s3.us-east-1.amazonaws.com",
+  // Unpaywall (DOI → OA PDF URL lookup)
+  "api.unpaywall.org",
+  // Europe PMC (PMCID → fullTextXML)
+  "www.ebi.ac.uk",
+]);
+
+export interface AcquireSourceOptions {
+  source: SourceRecord;
+  filename: string;
+  workdirRoot: string;
+  cache: ContentCache;
+  client: PublicHttpClient;
+  dataLevel: DataLevel;
+  maxBytes: number;
+  expectedSize?: number;
+  expectedSha256?: string;
+  expectedMd5?: string;
+  expectedMediaTypes?: ReadonlySet<string>;
+  accept?: string;
+  requestHeaders?: Readonly<Record<string, string>>;
+  progress?: (bytesReceived: number, declared: number | null) => void | Promise<void>;
+  signal?: AbortSignal;
+  /** Extra per-hop validator for recipe/declarative hosts. Defaults to curated. */
+  allowedHosts?: ReadonlySet<string>;
+  /** DNS resolver for policy checks; defaults to the client's resolver. */
+  resolve?: import("../network/dns.js").AddressResolver;
+}
+
+async function sha256File(file: string): Promise<string> {
+  const hash = createHash("sha256");
+  const handle = await open(file, "r");
+  try {
+    const buffer = Buffer.allocUnsafe(1024 * 1024);
+    for (;;) {
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      hash.update(buffer.subarray(0, bytesRead));
+    }
+  } finally {
+    await handle.close();
+  }
+  return hash.digest("hex");
+}
+
+/** Copy through a verified sibling temp file before atomic publication. */
+async function copyVerifiedAtomic(
+  source: string,
+  destination: string,
+  checksum: string,
+  mismatchMessage: string,
+): Promise<void> {
+  const parent = path.dirname(destination);
+  await mkdir(parent, { recursive: true });
+  const temporary = path.join(parent, `.${path.basename(destination)}.${randomUUID()}.tmp`);
+  try {
+    const sourceHandle = await open(source, "r");
+    let targetHandle: Awaited<ReturnType<typeof open>>;
+    try {
+      targetHandle = await open(temporary, "wx");
+    } finally {
+      await sourceHandle.close();
+    }
+    try {
+      const buffer = Buffer.allocUnsafe(1024 * 1024);
+      const from = await open(source, "r");
+      try {
+        for (;;) {
+          const { bytesRead } = await from.read(buffer, 0, buffer.length, null);
+          if (bytesRead === 0) break;
+          await targetHandle.write(buffer.subarray(0, bytesRead));
+        }
+      } finally {
+        await from.close();
+      }
+      await targetHandle.sync();
+    } finally {
+      await targetHandle.close();
+    }
+    if ((await sha256File(temporary)) !== checksum) {
+      throw new AcquisitionError("checksum_mismatch", mismatchMessage);
+    }
+    await rename(temporary, destination);
+  } catch (error) {
+    await unlink(temporary).catch(() => undefined);
+    throw error;
+  }
+}
+
+/** Content-addressed cache publication with verified atomic copy. */
+async function publishCache(partPath: string, cache: ContentCache, checksum: string): Promise<string> {
+  const blobPath = cache.blobPath(checksum);
+  try {
+    const existing = await stat(blobPath);
+    if (existing.isFile()) {
+      if ((await sha256File(blobPath)) !== checksum) {
+        throw new AcquisitionError("checksum_mismatch", "cached blob checksum mismatch");
+      }
+      return blobPath;
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  await copyVerifiedAtomic(partPath, blobPath, checksum, "published cache checksum mismatch");
+  return blobPath;
+}
+
+/** Task source_assets publication: hardlink when possible, verified copy otherwise. */
+async function publishTaskAsset(
+  blobPath: string,
+  dirs: TaskWorkDirs,
+  assetId: string,
+  filename: string,
+  checksum: string,
+): Promise<string> {
+  const destination = sourceAssetPath(dirs, assetId, filename);
+  await mkdir(path.dirname(destination), { recursive: true });
+  const existing = await stat(destination).catch(() => null);
+  if (existing !== null && existing.isFile()) {
+    if ((await sha256File(destination)) !== checksum) {
+      throw new AcquisitionError("checksum_mismatch", "existing task asset differs");
+    }
+    return destination;
+  }
+  try {
+    await link(blobPath, destination);
+  } catch {
+    // Hardlink unsupported (or lost a race): verified atomic copy instead.
+    const raced = await stat(destination).catch(() => null);
+    if (raced !== null && raced.isFile()) {
+      if ((await sha256File(destination)) !== checksum) {
+        throw new AcquisitionError("checksum_mismatch", "task asset checksum mismatch");
+      }
+      return destination;
+    }
+    await copyVerifiedAtomic(blobPath, destination, checksum, "task asset checksum mismatch");
+  }
+  if ((await sha256File(destination)) !== checksum) {
+    throw new AcquisitionError("checksum_mismatch", "task asset checksum mismatch");
+  }
+  return destination;
+}
+
+function mediaTypeFromHeader(headers: Record<string, string>): string {
+  const raw = headers["content-type"] ?? headers["Content-Type"] ?? "application/octet-stream";
+  return raw.split(";", 1)[0].trim().toLowerCase();
+}
+
+function errorCodeFrom(error: unknown): AcquisitionError["code"] {
+  if (isAbortError(error)) {
+    return error instanceof Error && error.name === "TimeoutError" ? "timeout" : "cancelled";
+  }
+  if (error instanceof AcquisitionError) return error.code;
+  return "internal_error";
+}
+
+/**
+ * Download one immutable source asset. Returns a failed DownloadAttempt
+ * (with the part file already cleaned) instead of throwing for
+ * network/validation failures — Python parity. Cancellation propagates.
+ */
+export async function acquireSource(options: AcquireSourceOptions): Promise<AcquisitionResult> {
+  const {
+    source,
+    filename,
+    workdirRoot,
+    cache,
+    client,
+    dataLevel,
+    maxBytes,
+    expectedSize,
+    expectedSha256,
+    expectedMd5,
+    expectedMediaTypes,
+    accept = "text/tab-separated-values",
+    requestHeaders,
+    progress,
+    signal,
+    allowedHosts = CURATED_SOURCE_HOSTS,
+    resolve,
+  } = options;
+  const resolver = resolve ?? client.resolve;
+  assertSafeFilename(filename);
+  const dirs = taskWorkDirs(workdirRoot);
+  await ensureAcquisitionDirs(dirs);
+  const attemptId = `download_attempt_${randomUUID()}`;
+  const startedAt = new Date().toISOString();
+  const partPath = path.join(dirs.downloadTmp, `${attemptId}.part`);
+  let bytesReceived = 0;
+
+  const fail = (
+    code: AcquisitionError["code"],
+    message: string,
+  ): AcquisitionResult => ({
+    schema_version: "1.0",
+    attempt: {
+      schema_version: "1.0",
+      attempt_id: attemptId,
+      source_id: source.source_id,
+      url: source.url,
+      status: "failed",
+      bytes_received: bytesReceived,
+      error_code: code,
+      error_message: message,
+      started_at: startedAt,
+      finished_at: new Date().toISOString(),
+    },
+    asset: null,
+  });
+
+  const cleanupPart = async (): Promise<void> => {
+    await unlink(partPath).catch(() => undefined);
+  };
+
+  try {
+    const originHost = await validateHttpsSourceUrl(source.url, allowedHosts, { resolvePublic: true, resolve: resolver });
+    if (maxBytes <= 0) {
+      throw new AcquisitionError("validation_error", "max_bytes must be positive");
+    }
+    const requestHash = canonicalRequestHash(source.database, source.accession, source.url);
+    const cached = await cache.readMetadata(requestHash);
+    if (cached !== null) {
+      const cachedSha = cached.sha256;
+      const cachedBlob = cache.blobPath(cachedSha);
+      const cachedStat = await stat(cachedBlob).catch(() => null);
+      if (cachedStat !== null && cachedStat.isFile() && (await sha256File(cachedBlob)) === cachedSha) {
+        const cachedSize = cachedStat.size;
+        const cachedMediaType = (cached.media_type ?? "application/octet-stream").split(";", 1)[0].trim().toLowerCase();
+        if (cachedSize > maxBytes) {
+          throw new AcquisitionError("download_incomplete", "cached download exceeds maximum size");
+        }
+        if (expectedSize !== undefined && cachedSize !== expectedSize) {
+          throw new AcquisitionError("download_incomplete", "cached download expected size mismatch");
+        }
+        if (expectedSha256 !== undefined && cachedSha !== expectedSha256.toLowerCase()) {
+          throw new AcquisitionError("checksum_mismatch", "cached download expected SHA-256 mismatch");
+        }
+        if (expectedMediaTypes !== undefined && !expectedMediaTypes.has(cachedMediaType)) {
+          throw new AcquisitionError("validation_error", `unexpected cached content type: ${cachedMediaType || "missing"}`);
+        }
+        const assetId = assetIdFromSha256(cachedSha);
+        const destination = await publishTaskAsset(cachedBlob, dirs, assetId, filename, cachedSha);
+        return {
+          schema_version: "1.0",
+          attempt: {
+            schema_version: "1.0",
+            attempt_id: attemptId,
+            source_id: source.source_id,
+            url: source.url,
+            status: "succeeded",
+            bytes_received: cachedSize,
+            started_at: startedAt,
+            finished_at: new Date().toISOString(),
+            error_code: null,
+            error_message: null,
+          },
+          asset: buildSourceAsset(assetId, destination, dirs, cachedSha, cachedSize, cachedMediaType, source, attemptId, dataLevel),
+        };
+      }
+    }
+
+    const sha = createHash("sha256");
+    const md5 = createHash("md5");
+    const headers: Record<string, string> = { ...requestHeaders };
+    headers["Accept"] = accept;
+    let response: Awaited<ReturnType<PublicHttpClient["request"]>>;
+    try {
+      response = await client.request(source.url, {
+        headers,
+        signal,
+        resolve: resolver,
+        validateUrl: async (url) => {
+          try {
+            await validateHttpsSourceUrl(url, allowedHosts, { resolvePublic: true, resolve: resolver });
+          } catch (error) {
+            if (error instanceof UnsafeUrlError) {
+              throw new AcquisitionError("validation_error", error.message);
+            }
+            throw error;
+          }
+        },
+        validateRedirect: async (_from, to) => {
+          let host: string;
+          try {
+            host = await validateHttpsSourceUrl(to, allowedHosts, { resolvePublic: true, resolve: resolver });
+          } catch (error) {
+            if (error instanceof UnsafeUrlError) {
+              throw new AcquisitionError("validation_error", error.message);
+            }
+            throw error;
+          }
+          if (host !== originHost) {
+            throw new AcquisitionError("validation_error", "download redirect changed host");
+          }
+        },
+      });
+    } catch (error) {
+      if (isAbortError(error)) {
+        await cleanupPart();
+        throw error;
+      }
+      if (error instanceof AcquisitionError) return fail(error.code, error.message);
+      if (error instanceof UnsafeUrlError) return fail("validation_error", error.message);
+      const code = errorCodeFrom(error);
+      if (code === "cancelled") {
+        await cleanupPart();
+        throw error;
+      }
+      return fail(code, `download failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (response.status < 200 || response.status >= 300) {
+      return fail("network_error", `download returned HTTP ${response.status}`);
+    }
+    const declaredHeader = response.headers["content-length"] ?? response.headers["Content-Length"];
+    const declaredLength = declaredHeader === undefined ? null : Number.parseInt(declaredHeader, 10);
+    if (declaredLength !== null && declaredLength > maxBytes) {
+      await cleanupPart();
+      return fail("download_incomplete", "declared content length exceeds maximum");
+    }
+
+    const mediaType = mediaTypeFromHeader(response.headers);
+    const target = createWriteStream(partPath, { flags: "wx" });
+    try {
+      try {
+        for await (const chunk of response.body) {
+          if (signal?.aborted === true) {
+            throw signal.reason instanceof Error ? signal.reason : new Error("aborted");
+          }
+          bytesReceived += chunk.length;
+          if (bytesReceived > maxBytes) {
+            throw new AcquisitionError("download_incomplete", "download exceeded maximum size");
+          }
+          sha.update(chunk);
+          md5.update(chunk);
+          await new Promise<void>((resolveWrite, rejectWrite) => {
+            target.write(chunk, (error) => (error ? rejectWrite(error) : resolveWrite()));
+          });
+          await progress?.(bytesReceived, declaredLength);
+        }
+      } catch (error) {
+        await new Promise<void>((resolveClose) => target.close(() => resolveClose()));
+        await cleanupPart();
+        if (isAbortError(error) || (error instanceof Error && error.name === "AbortError") || signal?.aborted === true) {
+          throw error;
+        }
+        if (error instanceof AcquisitionError) return fail(error.code, error.message);
+        const code = errorCodeFrom(error);
+        if (code === "cancelled") throw error;
+        return fail(code, `download failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      await new Promise<void>((resolveClose, rejectClose) => {
+        target.end(() => resolveClose());
+        target.on("error", rejectClose);
+      });
+      // fsync the part file before verification.
+      const handle = await open(partPath, "r+");
+      try {
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      target.destroy();
+    }
+
+    if (bytesReceived === 0) {
+      await cleanupPart();
+      return fail("download_incomplete", "download was empty");
+    }
+    if (declaredLength !== null && bytesReceived !== declaredLength) {
+      await cleanupPart();
+      return fail("download_incomplete", "content length mismatch");
+    }
+    if (expectedMediaTypes !== undefined && !expectedMediaTypes.has(mediaType)) {
+      await cleanupPart();
+      return fail("validation_error", `unexpected content type: ${mediaType || "missing"}`);
+    }
+    if (expectedSize !== undefined && bytesReceived !== expectedSize) {
+      await cleanupPart();
+      return fail("download_incomplete", "expected size mismatch");
+    }
+    const checksum = sha.digest("hex");
+    if (expectedSha256 !== undefined && checksum !== expectedSha256.toLowerCase()) {
+      await cleanupPart();
+      return fail("checksum_mismatch", "expected SHA-256 mismatch");
+    }
+    // GDC files API exposes md5sum but not SHA-256: verify official MD5 when provided.
+    if (expectedMd5 !== undefined && md5.digest("hex") !== expectedMd5.toLowerCase()) {
+      await cleanupPart();
+      return fail("checksum_mismatch", "expected MD5 mismatch");
+    }
+
+    const blobPath = await publishCache(partPath, cache, checksum);
+    const assetId = assetIdFromSha256(checksum);
+    const destination = await publishTaskAsset(blobPath, dirs, assetId, filename, checksum);
+    await cache.writeMetadata(requestHash, {
+      sha256: checksum,
+      size_bytes: String(bytesReceived),
+      media_type: mediaType,
+    });
+    await cleanupPart();
+    return {
+      schema_version: "1.0",
+      attempt: {
+        schema_version: "1.0",
+        attempt_id: attemptId,
+        source_id: source.source_id,
+        url: source.url,
+        status: "succeeded",
+        bytes_received: bytesReceived,
+        started_at: startedAt,
+        finished_at: new Date().toISOString(),
+        error_code: null,
+        error_message: null,
+      },
+      asset: buildSourceAsset(assetId, destination, dirs, checksum, bytesReceived, mediaType, source, attemptId, dataLevel),
+    };
+  } catch (error) {
+    await cleanupPart();
+    if (isAbortError(error) || (error instanceof Error && error.name === "AbortError") || signal?.aborted === true) {
+      throw error;
+    }
+    if (error instanceof AcquisitionError) return fail(error.code, error.message);
+    if (error instanceof UnsafeUrlError) return fail("validation_error", error.message);
+    return fail("internal_error", `download failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function buildSourceAsset(
+  assetId: string,
+  destination: string,
+  dirs: TaskWorkDirs,
+  sha256: string,
+  sizeBytes: number,
+  mediaType: string,
+  source: SourceRecord,
+  attemptId: string,
+  dataLevel: DataLevel,
+): SourceAsset {
+  const relative = path.relative(dirs.root, destination).split(path.sep).join("/");
+  return {
+    schema_version: "1.0",
+    asset_id: assetId,
+    kind: "source",
+    relative_path: relative,
+    sha256,
+    size_bytes: sizeBytes,
+    media_type: mediaType,
+    generated_by_step_id: null,
+    source_id: source.source_id,
+    successful_attempt_id: attemptId,
+    derived_from_asset_id: null,
+    data_level: dataLevel,
+  };
+}
+
+export type { DownloadAttempt, SourceAsset, AcquisitionResult };
