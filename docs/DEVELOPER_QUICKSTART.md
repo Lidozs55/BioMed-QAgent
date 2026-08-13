@@ -30,8 +30,9 @@ BioMed-QAgent 是一个**生物医学数据智能检索与整合系统**。你�
 5. 输出一份整理好的 CSV，附带数据来源和处理记录
 
 技术上是 **TypeScript 单端口 Host + private Python durable runtime/Core + React 前端**。
-formal Agent 仍使用 OpenAI Agents SDK；Phase 1 的显式 experimental surface 通过 Pi
-adapter 调用同一个受信任 Python V2 Dataset Core。
+formal Agent 默认仍使用 OpenAI Agents SDK；`AGENT_RUNTIME=pi` 时正式 Task 改由
+TS durable runtime 接管（Pi 迁移 Phase 3，opt-in），Phase 1 的显式 experimental
+surface 也通过 Pi adapter 调用同一个受信任 Python V2 Dataset Core。
 
 > 这是"中国高校计算机大赛 — AI Scientist 赛道"的参赛作品（赛题 XH-202619）。
 
