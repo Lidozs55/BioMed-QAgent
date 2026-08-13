@@ -37,7 +37,8 @@ from fastapi import (
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from app.api.skills import SkillStoreDep
+from app.databases import DatabaseEntry, DatabaseStore
+from app.databases.declarative import DatabaseValidationError
 from app.datasets.build.cache import CacheEntry, DatasetCacheV2
 from app.datasets.build.legacy_cache import (
     LegacyCacheEntry,
@@ -83,8 +84,6 @@ from app.runtime.manager import (
     TaskRunConflictError,
 )
 from app.runtime.repository import TaskRepository
-from app.skills.catalog import SkillCatalog
-from app.skills.store import StoreMutation
 from app.tools.workdir import create_task_workdir
 
 router = APIRouter(prefix="/api/v1")
@@ -152,109 +151,84 @@ def _raise_pagination_error(error: ValueError, *, cursor_detail: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Display name mapping (skill name → human-readable)
+# Databases — thin declarative store (Phase 2)
 # ---------------------------------------------------------------------------
-_SKILL_DISPLAY_NAMES: dict[str, str] = {
+
+_DISPLAY_NAMES: dict[str, str] = {
     "pubmed": "PubMed",
     "geo": "GEO",
     "gdc": "GDC",
     "pdb": "PDB",
     "xena": "Xena",
-    "literature_understanding": "Literature Understanding",
-    "pdf_extraction": "PDF Extraction",
-    "browser_fallback": "Browser Fallback",
-    "analysis": "Analysis",
     "pubchem": "PubChem",
     "reactome": "Reactome",
+    "chembl": "ChEMBL",
+    "uniprot": "UniProt",
 }
 
 
-def _display_name(skill_name: str) -> str:
-    """Return a human-readable name for a skill."""
-    return _SKILL_DISPLAY_NAMES.get(skill_name, skill_name.replace("_", " ").title())
+def _display_name(name: str) -> str:
+    return _DISPLAY_NAMES.get(name, name.replace("_", " ").title())
 
 
-def _source_capability_for_skill(skill_name: str) -> str:
-    """Map a skill id to its Pipeline input-level capability (TODO §1.4).
-
-    Uses the single source-of-truth capability table so the API projection
-    cannot drift from the Pipeline tool's rejection logic. Unknown skills
-    resolve to ``pending`` (never silently treated as pipeline-supported).
-    """
-    from app.domain.contracts.enums import (
-        DATABASE_IDENTIFIER_ALIASES,
-        SOURCE_CAPABILITIES,
-        SourceCapability,
-    )
-
-    database = DATABASE_IDENTIFIER_ALIASES.get(skill_name)
-    if database is None:
-        return SourceCapability.PENDING.value
-    return SOURCE_CAPABILITIES[database].value
+def get_database_store(request: Request) -> DatabaseStore:
+    store = getattr(request.app.state, "database_store", None)
+    if store is None:
+        raise HTTPException(status_code=503, detail="Database store is unavailable")
+    return store
 
 
-def load_database_skills() -> None:
-    """Compatibility wrapper for callers that still trigger builtin discovery."""
-    from app.skills.builtin import load_builtin_skill_descriptors
-
-    load_builtin_skill_descriptors()
+DatabaseStoreDep = Annotated[DatabaseStore, Depends(get_database_store)]
 
 
+def _database_projection(entry: DatabaseEntry) -> dict[str, object]:
+    return {
+        "id": entry.id,
+        "name": _display_name(entry.name),
+        "category": entry.category,
+        "description": entry.description,
+        "available": entry.available,
+        "enabled": entry.enabled,
+        "origin": entry.origin,
+        "version": entry.version,
+        "pipeline_supported": entry.pipeline_supported,
+        "capability": entry.capability,
+    }
 
-# ---------------------------------------------------------------------------
-# Databases
-# ---------------------------------------------------------------------------
+
+def _database_detail(entry: DatabaseEntry, store: DatabaseStore) -> dict[str, object]:
+    projection = _database_projection(entry)
+    if entry.declarative_manifest is not None:
+        projection["declarative_manifest"] = store.redacted_manifest_dump(
+            entry.declarative_manifest
+        )
+    return projection
 
 
 @router.get("/databases")
-async def get_databases(request: Request = None) -> dict:
-    """List user-selectable databases from the current catalog snapshot."""
-    catalog: SkillCatalog | None = (
-        getattr(request.app.state, "skill_catalog", None) if request is not None else None
-    )
-    if catalog is None:
-        from app.skills.builtin import load_builtin_skill_descriptors
-
-        descriptors = load_builtin_skill_descriptors()
-        skills = [
-            skill
-            for skill in descriptors
-            if skill.enabled and skill.user_selectable and skill.supported_sources
-        ]
-    else:
-        skills = [
-            skill
-            for skill in catalog.snapshot().skills.values()
-            if skill.enabled and skill.user_selectable and skill.supported_sources
-        ]
-    databases = []
-    for skill in skills:
-        databases.append(
-            {
-                "id": skill.name,
-                "name": skill.display_name or _display_name(skill.name),
-                "category": skill.category.value,
-                "description": skill.description,
-                "available": skill.enabled,
-                "origin": skill.origin,
-                "version": skill.version,
-                "pipeline_supported": skill.pipeline_supported,
-                # TODO §1.4: expose the capability classification so the
-                # frontend can distinguish research_only / pending sources
-                # from pipeline_supported ones.
-                "capability": _source_capability_for_skill(skill.name),
-            }
-        )
-    return {"databases": databases}
+async def get_databases(store: DatabaseStoreDep) -> dict:
+    """List user-selectable databases (all, with per-database enabled flags)."""
+    return {"databases": [_database_projection(entry) for entry in store.list_databases()]}
 
 
-@router.post("/databases", response_model=StoreMutation)
-async def create_database(body: dict[str, object], store: SkillStoreDep) -> StoreMutation:
-    """Create a declarative user database through the shared skill store."""
+@router.get("/databases/{name}")
+async def get_database(name: str, store: DatabaseStoreDep) -> dict:
+    """Get one database, including its declarative manifest for editing."""
+    entry = store.get_database(name)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Database not found")
+    return _database_detail(entry, store)
+
+
+@router.post("/databases", status_code=201)
+async def create_database(body: dict[str, object], store: DatabaseStoreDep) -> dict:
+    """Create a declarative user database (JSON manifest only)."""
     try:
-        return store.put_manifest(body)
-    except (ValueError, FileExistsError) as error:
+        manifest = store.put_database(body)
+    except (DatabaseValidationError, ValueError) as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+    entry = store.get_database(manifest.name)
+    return _database_detail(entry, store) if entry is not None else {}
 
 
 class DatabaseOperationPatch(BaseModel):
@@ -279,28 +253,69 @@ class DatabaseUpdatePatch(BaseModel):
     operation: DatabaseOperationPatch | None = None
 
 
-@router.put("/databases/{name}", response_model=StoreMutation)
+@router.put("/databases/{name}")
 async def update_database(
-    name: str, body: DatabaseUpdatePatch, store: SkillStoreDep
-) -> StoreMutation:
+    name: str, body: DatabaseUpdatePatch, store: DatabaseStoreDep
+) -> dict:
     try:
-        return store.patch_manifest(name, body.model_dump(exclude_unset=True))
-    except KeyError as error:
-        raise HTTPException(status_code=404, detail="Database or operation not found") from error
-    except PermissionError as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
-    except (ValueError, FileExistsError) as error:
-        raise HTTPException(status_code=422, detail=str(error)) from error
-
-
-@router.delete("/databases/{name}", response_model=StoreMutation)
-async def delete_database(name: str, store: SkillStoreDep) -> StoreMutation:
-    try:
-        return store.delete(name)
+        patch: dict[str, Any] = {}
+        for key in ("display_name", "description"):
+            value = getattr(body, key)
+            if value is not None:
+                patch[key] = value
+        operation = body.operation
+        if operation is not None:
+            manifest = store.get_database(name)
+            if manifest is None or manifest.declarative_manifest is None:
+                raise HTTPException(
+                    status_code=404, detail="Database or operation not found"
+                )
+            operations = [
+                dict(operation.model_dump(exclude_none=True))
+                if op.name == operation.name
+                else op.model_dump(mode="json")
+                for op in manifest.declarative_manifest.operations
+            ]
+            if all(op.name != operation.name for op in manifest.declarative_manifest.operations):
+                raise HTTPException(
+                    status_code=404, detail="Database or operation not found"
+                )
+            patch["operations"] = operations
+        manifest = store.patch_database(name, patch)
     except KeyError as error:
         raise HTTPException(status_code=404, detail="Database not found") from error
     except PermissionError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
+    except (DatabaseValidationError, ValueError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    entry = store.get_database(manifest.name)
+    return _database_detail(entry, store) if entry is not None else {}
+
+
+@router.delete("/databases/{name}", status_code=204)
+async def delete_database(name: str, store: DatabaseStoreDep) -> None:
+    try:
+        store.delete_database(name)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="Database not found") from error
+    except PermissionError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@router.post("/databases/{name}/enable")
+async def enable_database(name: str, store: DatabaseStoreDep) -> dict:
+    if store.get_database(name) is None:
+        raise HTTPException(status_code=404, detail="Database not found")
+    store.set_enabled(name, True)
+    return {"status": "ok", "name": name, "enabled": True}
+
+
+@router.post("/databases/{name}/disable")
+async def disable_database(name: str, store: DatabaseStoreDep) -> dict:
+    if store.get_database(name) is None:
+        raise HTTPException(status_code=404, detail="Database not found")
+    store.set_enabled(name, False)
+    return {"status": "ok", "name": name, "enabled": False}
 
 
 # ---------------------------------------------------------------------------

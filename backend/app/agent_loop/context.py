@@ -10,8 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
-from collections.abc import Awaitable, Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -38,7 +37,6 @@ if TYPE_CHECKING:
     from app.agent_loop.main_input_broker import MainInputBroker, MainInputDecision
     from app.datasets.contracts import DatasetPublication
     from app.domain.contracts.dataset_state import BuildResult
-    from app.skills.builtin.processing.create_skill import CreateSkillRuntime
     from app.subagents.input_broker import SubagentInputBroker
     from app.subagents.staging import SubagentStagingWorkspace
     from app.subagents.supervisor import SubagentEventSink, SubagentRunner, SubagentSupervisor
@@ -49,6 +47,14 @@ ProgressEmitter = Callable[
     [StageName, str, int, int | None, dict[str, object]],
     Awaitable[None],
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class RecipeServices:
+    """Lifespan-owned WorkflowRecipe services shared with Run contexts."""
+
+    store: object
+    executor: object | None
 
 
 UserInputSubmitter = Callable[[UserInputResumedPayload], bool]
@@ -129,30 +135,6 @@ class SubagentRuntime:
     runner: SubagentRunner
     event_sink: SubagentEventSink
     input_broker: SubagentInputBroker | None = None
-
-
-@dataclass(slots=True)
-class _CreateSkillReservations:
-    """One parent-Run dedupe guard, shared by its isolated child contexts."""
-
-    keys: set[tuple[str, str]] = field(default_factory=set)
-    guard: threading.Lock = field(default_factory=threading.Lock)
-
-    @contextmanager
-    def reserve(self, domain: str, capability: str) -> Iterator[None]:
-        key = (domain.strip().casefold(), capability.strip().casefold())
-        with self.guard:
-            if key in self.keys:
-                raise ValueError(
-                    "create_skill already developed this domain and capability in the current Run"
-                )
-            self.keys.add(key)
-        try:
-            yield
-        except BaseException:
-            with self.guard:
-                self.keys.discard(key)
-            raise
 
 
 def _default_run_model_settings() -> RunModelSettings:
@@ -297,7 +279,7 @@ class RunContext:
         init=False,
         repr=False,
     )
-    _create_skill_runtime: CreateSkillRuntime | None = field(
+    _recipe_services: RecipeServices | None = field(
         default=None,
         init=False,
         repr=False,
@@ -325,11 +307,6 @@ class RunContext:
     _recipe_id: str | None = field(default=None, init=False, repr=False)
     _child_warnings: list[str] = field(
         default_factory=list,
-        init=False,
-        repr=False,
-    )
-    _create_skill_reservations: _CreateSkillReservations = field(
-        default_factory=_CreateSkillReservations,
         init=False,
         repr=False,
     )
@@ -392,12 +369,12 @@ class RunContext:
             self._pending_steer = []
             return pending
 
-    def bind_create_skill_runtime(self, runtime: CreateSkillRuntime) -> None:
-        """Bind the trusted Recipe services available to this Run exactly once."""
+    def bind_recipe_services(self, store: object, executor: object | None) -> None:
+        """Bind the lifespan-owned WorkflowRecipe services exactly once."""
 
-        if self._create_skill_runtime is not None:
-            raise RuntimeError("create_skill runtime is already bound")
-        self._create_skill_runtime = runtime
+        if self._recipe_services is not None:
+            raise RuntimeError("recipe services are already bound")
+        self._recipe_services = RecipeServices(store=store, executor=executor)
 
     def bind_crawler_facade(self, facade: CrawlerFacade) -> None:
         """Bind the lifespan-owned crawler transport exactly once."""
@@ -517,23 +494,11 @@ class RunContext:
         # the task-level registry so a child download can contribute relation
         # provenance to a later parent V2 build without copying agent text.
         child.geo_series_records = self.geo_series_records
-        child._create_skill_reservations = self._create_skill_reservations
+        child._recipe_services = self._recipe_services
         child._staging_task_root = self._work_dir.root
         child._subagent_runtime = self._subagent_runtime
         if self._crawler_facade is not None:
             child.bind_crawler_facade(self._crawler_facade)
-        if self._create_skill_runtime is not None:
-            from app.skills.builtin.processing.create_skill import CreateSkillRuntime
-            from app.subagents.staging import SubagentStagingWorkspace
-
-            runtime = self._create_skill_runtime
-            child.bind_create_skill_runtime(
-                CreateSkillRuntime(
-                    store=runtime.store,
-                    executor=runtime.executor,
-                    workspace=SubagentStagingWorkspace(self._work_dir.root, subagent_id),
-                )
-            )
         return child
 
     def source_asset_workspace(self) -> SubagentStagingWorkspace:
@@ -712,23 +677,12 @@ class RunContext:
         return self._crawler_facade
 
     @property
-    def create_skill_runtime(self) -> CreateSkillRuntime:
-        """Return trusted Recipe services without accepting model-provided paths."""
+    def recipe_services(self) -> RecipeServices:
+        """Return the lifespan-owned Recipe store/executor (Dataset Core acquisition)."""
 
-        if self._create_skill_runtime is None:
-            raise RuntimeError("create_skill runtime is not available")
-        return self._create_skill_runtime
-
-    @contextmanager
-    def reserve_create_skill(
-        self,
-        domain: str,
-        capability: str,
-    ) -> Iterator[None]:
-        """Reserve one capability, releasing it only when development fails."""
-
-        with self._create_skill_reservations.reserve(domain, capability):
-            yield
+        if self._recipe_services is None:
+            raise RuntimeError("recipe services are not available")
+        return self._recipe_services
 
     @property
     def work_dir(self) -> TaskWorkDir:

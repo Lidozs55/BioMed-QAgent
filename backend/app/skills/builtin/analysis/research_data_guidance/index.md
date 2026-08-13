@@ -2,7 +2,7 @@
 
 > 本技能为 BioMedQAgent 提供分专题的科研数据获取/整合指导。职责边界：**数据查找、解析、
 > 清洗、整合与可分析性判定**——统计建模与可视化由用户/下游承担，不在本技能范围。
-> 使用方式：`invoke_skill(skill="research_data_guidance", operation="get_research_data_guidance",
+> 使用方式：直接调用 `get_research_data_guidance(topic=...)`，
 > arguments={"topic": "<主题>"})`，只读取与当前问题相关的主题，不全部加载。
 
 ## 主题路由

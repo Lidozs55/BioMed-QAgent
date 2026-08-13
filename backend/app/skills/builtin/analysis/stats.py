@@ -26,7 +26,7 @@ from matplotlib.figure import Figure
 from scipy import stats
 
 from app.agent_loop.context import RunContext
-from app.skills.registry import SkillCategory, SkillDef, skill_registry
+from app.skills.categories import SkillCategory
 
 
 def _safe_float(value: Any, digits: int = 4) -> float | None:
@@ -766,36 +766,18 @@ def generate_correlation_matrix(
 # Skill registration
 # ---------------------------------------------------------------------------
 
-analysis_skill = SkillDef(
-    name="analysis",
-    category=SkillCategory.ANALYSIS,
-    description=(
-        "Statistical analysis and visualization for tabular biomedical data. "
-        "Use when the user needs differential expression analysis, heatmaps, "
-        "volcano plots, basic descriptive statistics, or correlation matrices "
-        "on CSV datasets."
-    ),
-    instructions=(
-        "Use the analysis tools to perform statistical computations and "
-        "generate publication-quality visualizations. "
-        "run_differential_expression computes log2 fold-changes and "
-        "Benjamini-Hochberg FDR-adjusted p-values (`padj`) between two "
-        "sample groups with a volcano plot. "
-        "generate_heatmap creates clustered heatmaps with optional z-score "
-        "normalization. basic_statistics produces descriptive stats "
-        "(mean/median/std/min/max/missing counts) per column. "
-        "generate_correlation_matrix computes Pearson or Spearman correlation "
-        "between numeric columns and renders a heatmap. "
-        "All outputs (PNGs, CSVs) are saved to the task artifacts directory."
-    ),
-    tools=[
-        run_differential_expression,
-        generate_heatmap,
-        basic_statistics,
-        generate_correlation_matrix,
-    ],
-    supported_sources=["csv", "tabular"],
-    version="0.1.0",
+SKILL_NAME = 'analysis'
+SKILL_CATEGORY = SkillCategory.ANALYSIS
+SKILL_DESCRIPTION = (
+    'Statistical analysis and visualization for tabular biomedical data. Use when the user needs'
+    'differential expression analysis, heatmaps, volcano plots, basic descriptive statistics, or'
+    'correlation matrices on CSV datasets.'
 )
-
-skill_registry.register(analysis_skill)
+SKILL_VERSION = '0.1.0'
+SUPPORTED_SOURCES = ['csv', 'tabular']
+SKILL_TOOLS = [
+    run_differential_expression,
+    generate_heatmap,
+    basic_statistics,
+    generate_correlation_matrix,
+]

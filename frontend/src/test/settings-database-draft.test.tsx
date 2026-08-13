@@ -2,7 +2,7 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { SettingsPanel } from "@/components/SettingsPanel";
-import type { SettingsAPIClient, SkillManifest } from "@/hooks/useAPI";
+import type { DatabaseItem, SettingsAPIClient } from "@/hooks/useAPI";
 
 /* ------------------------------------------------------------------ */
 /*  Fixtures                                                          */
@@ -47,10 +47,8 @@ function mockApi(overrides: Partial<SettingsAPIClient> = {}): SettingsAPIClient 
     updateManagedModel: vi.fn(),
     deleteManagedModel: vi.fn(),
     activateManagedModel: vi.fn(),
-    fetchSkills: vi.fn().mockResolvedValue([]),
-    fetchSkill: vi.fn(), setSkillEnabled: vi.fn().mockResolvedValue(undefined),
-    rollbackSkill: vi.fn(), deleteSkill: vi.fn(),
-    validateSkill: vi.fn(), uploadSkill: vi.fn(),
+    fetchDatabases: vi.fn().mockResolvedValue([]),
+    fetchDatabase: vi.fn(), setDatabaseEnabled: vi.fn().mockResolvedValue(undefined),
     createDatabase: vi.fn(), updateDatabase: vi.fn(), deleteDatabase: vi.fn(),
   };
   return { ...base, ...overrides };
@@ -68,50 +66,43 @@ const mediaMock = vi.fn().mockImplementation((q: string) => ({
 describe("database draft validation", () => {
   beforeAll(() => { window.matchMedia = mediaMock; });
 
-  it("filters skills and refreshes after an enable action", async () => {
+  it("lists databases and refreshes after an enable toggle", async () => {
     const api = mockApi({
-      fetchSkills: vi.fn().mockResolvedValue([
-        { name: "pubmed", display_name: "PubMed", version: "1", category: "discovery", description: "Papers", origin: "package", supported_sources: ["pubmed"], operations: ["search"], enabled: true, user_selectable: true, pipeline_supported: true },
+      fetchDatabases: vi.fn().mockResolvedValue([
+        { id: "pubmed", name: "PubMed", category: "discovery", description: "Papers", origin: "builtin", version: "1", pipeline_supported: true, enabled: true, capability: "pipeline_supported" },
       ]),
     });
     render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
     await screen.findByText("供应商管理");
-    fireEvent.click(within(screen.getByRole("navigation", { name: "设置分类" })).getByRole("button", { name: "技能" }));
-    const filter = await screen.findByPlaceholderText("筛选技能");
-    fireEvent.change(filter, { target: { value: "missing" } });
-    expect(screen.getByText("没有匹配的技能")).toBeInTheDocument();
-    fireEvent.change(filter, { target: { value: "PubMed" } });
-    fireEvent.click(screen.getByRole("switch", { name: "停用 PubMed" }));
-    await waitFor(() => expect(api.setSkillEnabled).toHaveBeenCalledWith("pubmed", false));
-    expect(vi.mocked(api.fetchSkills).mock.calls.length).toBeGreaterThanOrEqual(2);
+    fireEvent.click(within(screen.getByRole("navigation", { name: "设置分类" })).getByRole("button", { name: "数据库" }));
+    const toggle = await screen.findByRole("switch", { name: "停用 PubMed" });
+    fireEvent.click(toggle);
+    await waitFor(() => expect(api.setDatabaseEnabled).toHaveBeenCalledWith("pubmed", false));
+    expect(vi.mocked(api.fetchDatabases).mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
   it("loads the full declarative manifest before editing a database", async () => {
     const detail = {
-      manifest: { name: "pubmed", display_name: "PubMed", version: "1", category: "discovery", description: "Papers", origin: "package", supported_sources: ["pubmed"], operations: ["search"], enabled: true, user_selectable: true, pipeline_supported: false },
-      current_version: "1",
-      versions: ["1"],
-      package_kind: "manifest" as const,
-      warning: null,
-      available: true,
-      load_error: null,
+      id: "pubmed", name: "PubMed", category: "discovery", description: "Papers",
+      available: true, enabled: true, origin: "package" as const, version: "1",
+      pipeline_supported: false, capability: "research_only",
       declarative_manifest: {
         schema_version: "1.0", name: "pubmed", display_name: "PubMed", version: "1", category: "discovery", description: "Papers", supported_sources: ["pubmed"], user_selectable: true, pipeline_supported: false,
         operations: [{ name: "search", description: "Search", method: "POST" as const, url: "https://api.example.com/search/{query}", query: { q: "{query}" }, headers: {}, body: { term: "{query}" } }],
       },
     };
     const api = mockApi({
-      fetchSkills: vi.fn().mockResolvedValue([
-        { name: "pubmed", display_name: "PubMed", version: "1", category: "discovery", description: "Papers", origin: "package", supported_sources: ["pubmed"], operations: ["search"], enabled: true, user_selectable: true, pipeline_supported: false },
+      fetchDatabases: vi.fn().mockResolvedValue([
+        { id: "pubmed", name: "PubMed", category: "discovery", description: "Papers", origin: "package", version: "1", pipeline_supported: false, enabled: true, capability: "research_only" },
       ]),
-      fetchSkill: vi.fn().mockResolvedValue(detail),
+      fetchDatabase: vi.fn().mockResolvedValue(detail),
     });
     render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
     await screen.findByText("供应商管理");
     fireEvent.click(within(screen.getByRole("navigation", { name: "设置分类" })).getByRole("button", { name: "数据库" }));
     fireEvent.click(await screen.findByRole("button", { name: "编辑 PubMed" }));
 
-    expect(api.fetchSkill).toHaveBeenCalledWith("pubmed");
+    expect(api.fetchDatabase).toHaveBeenCalledWith("pubmed");
     expect(await screen.findByLabelText("Base URL")).toHaveValue("https://api.example.com/search/{query}");
     expect(screen.getByLabelText("Method")).toHaveValue("POST");
     expect(screen.getByLabelText("Query template")).toHaveValue('{"q":"{query}"}');
@@ -129,17 +120,17 @@ describe("database draft validation", () => {
     expect(submitted).not.toHaveProperty("supported_sources");
   });
 
-  it("confirms package deletion and disables builtin database mutation", async () => {
-    const skills: SkillManifest[] = [
-      { name: "builtin_db", display_name: "Builtin DB", version: "1", category: "discovery", description: "Builtin", origin: "builtin", supported_sources: ["builtin_db"], operations: ["search"], enabled: true, user_selectable: true, pipeline_supported: true, available: true, load_error: null },
-      { name: "pubmed", display_name: "PubMed", version: "1", category: "discovery", description: "Papers", origin: "package", supported_sources: ["pubmed"], operations: ["search"], enabled: true, user_selectable: true, pipeline_supported: false, available: true, load_error: null },
+  it("confirms package deletion and toggles builtin databases", async () => {
+    const databases: DatabaseItem[] = [
+      { id: "builtin_db", name: "Builtin DB", category: "discovery", description: "Builtin", origin: "builtin", version: "1", pipeline_supported: true, enabled: true, capability: "pipeline_supported" },
+      { id: "pubmed", name: "PubMed", category: "discovery", description: "Papers", origin: "package", version: "1", pipeline_supported: false, enabled: true, capability: "research_only" },
     ];
-    const api = mockApi({ fetchSkills: vi.fn().mockResolvedValue(skills) });
+    const api = mockApi({ fetchDatabases: vi.fn().mockResolvedValue(databases) });
     render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
     await screen.findByText("供应商管理");
     fireEvent.click(within(screen.getByRole("navigation", { name: "设置分类" })).getByRole("button", { name: "数据库" }));
     const builtinSwitch = await screen.findByRole("switch", { name: "停用 Builtin DB" });
-    expect(builtinSwitch).toHaveAttribute("aria-disabled", "true");
+    expect(builtinSwitch).not.toHaveAttribute("aria-disabled", "true");
     fireEvent.click(screen.getByRole("button", { name: "删除 PubMed" }));
     expect(api.deleteDatabase).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "确认删除" }));

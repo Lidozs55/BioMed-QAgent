@@ -2,7 +2,7 @@
 
 Borrowed and adapted from the ``research-data-analysis-workspace`` skill group
 (REVIEW_2026-08-09-task-3eb85407 §7.2): the main Agent loads topic-specific
-research-data instructions on demand via ``invoke_skill`` instead of carrying
+research-data instructions on demand via the direct tool instead of carrying
 them all in the system prompt, so guidance stays available without diluting
 attention.
 
@@ -18,7 +18,7 @@ from pathlib import Path
 from agents import RunContextWrapper, function_tool
 
 from app.agent_loop.context import RunContext
-from app.skills.registry import SkillCategory, SkillDef, skill_registry
+from app.skills.categories import SkillCategory
 
 #: Topic documents served by this skill (path stem -> human label).
 _TOPIC_DOCS: dict[str, str] = {
@@ -93,28 +93,17 @@ def get_research_data_guidance(
     return header + text
 
 
-research_data_guidance_skill = SkillDef(
-    name="research_data_guidance",
-    category=SkillCategory.ANALYSIS,
-    description=(
-        "Load topic-specific research-data strategy and SOP guidance for "
-        "biomedical data tasks: data-source selection and study design "
-        "(strategy), expression/omics acquisition, clinical/trial data, "
-        "structure/pathway/compound research-only sources, cleaning and "
-        "analyzability diagnosis, and provenance/reproducibility. Use when "
-        "the task involves finding, parsing, cleaning, integrating, or "
-        "judging the analyzability of research data."
-    ),
-    instructions=(
-        "When a research-data task requires strategy, data-source selection, "
-        "cleaning, or analyzability decisions, load the relevant topic with "
-        "`get_research_data_guidance`. Read only the topic(s) the current "
-        "task needs; do not load the whole skill. Topics: strategy, "
-        "expression_omics, clinical, structure_pathway_compound, cleaning, "
-        "reproducibility (index for the routing table)."
-    ),
-    tools=[get_research_data_guidance],
-    version="1.0.0",
+SKILL_NAME = 'research_data_guidance'
+SKILL_CATEGORY = SkillCategory.ANALYSIS
+SKILL_DESCRIPTION = (
+    'Load topic-specific research-data strategy and SOP guidance for biomedical data tasks: data-'
+    'source selection and study design (strategy), expression/omics acquisition, clinical/trial'
+    'data, structure/pathway/compound research-only sources, cleaning and analyzability'
+    'diagnosis, and provenance/reproducibility. Use when the task involves finding, parsing,'
+    'cleaning, integrating, or judging the analyzability of research data.'
 )
-
-skill_registry.register(research_data_guidance_skill)
+SKILL_VERSION = '1.0.0'
+SUPPORTED_SOURCES = []
+SKILL_TOOLS = [
+    get_research_data_guidance,
+]

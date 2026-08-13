@@ -61,11 +61,6 @@ describe("warning runtime scope via payload", () => {
 
 /* ---- I2: declarative manifest field-level constraints ---- */
 describe("declarative manifest field constraints", () => {
-  const man = {
-    name: "s1", display_name: "S1", version: "1", category: "cat", description: "",
-    origin: "package", supported_sources: [], operations: ["search"],
-    enabled: true, user_selectable: true, pipeline_supported: false,
-  };
   const baseDM = {
     schema_version: "1.0", name: "s1", display_name: "S1", version: "1",
     category: "cat", description: "desc", supported_sources: ["pubmed"],
@@ -73,48 +68,53 @@ describe("declarative manifest field constraints", () => {
     operations: [{ name: "search", description: "Search", method: "POST", url: "https://api.example.com/search", query: {}, headers: {}, body: null, timeout_seconds: 30, extract: null, auth: null }],
   };
   function dm(overrides: Record<string, unknown>) {
-    return { manifest: man, current_version: "1", versions: ["1"], package_kind: "manifest", warning: null, available: true, load_error: null, declarative_manifest: { ...baseDM, ...overrides } };
+    return {
+      id: "s1", name: "S1", category: "cat", description: "desc",
+      available: true, enabled: true, origin: "package", version: "1",
+      pipeline_supported: false, capability: "research_only",
+      declarative_manifest: { ...baseDM, ...overrides },
+    };
   }
 
   it("rejects timeout_seconds > 120", async () => {
     const ops = [{ ...baseDM.operations[0], timeout_seconds: 121 }];
     const api = createAPIClient({ fetcher: vi.fn<FetchLike>().mockResolvedValue(jsonResponse(dm({ operations: ops }))) });
-    await expect(api.fetchSkill("s1")).rejects.toThrow(APIError);
+    await expect(api.fetchDatabase("s1")).rejects.toThrow(APIError);
   });
 
   it("rejects timeout_seconds <= 0", async () => {
     const ops = [{ ...baseDM.operations[0], timeout_seconds: 0 }];
     const api = createAPIClient({ fetcher: vi.fn<FetchLike>().mockResolvedValue(jsonResponse(dm({ operations: ops }))) });
-    await expect(api.fetchSkill("s1")).rejects.toThrow(APIError);
+    await expect(api.fetchDatabase("s1")).rejects.toThrow(APIError);
   });
 
   it("rejects auth reference with invalid pattern", async () => {
     const ops = [{ ...baseDM.operations[0], auth: { source: "env", reference: "bad-ref!", location: "header", name: "X-Key" } }];
     const api = createAPIClient({ fetcher: vi.fn<FetchLike>().mockResolvedValue(jsonResponse(dm({ operations: ops }))) });
-    await expect(api.fetchSkill("s1")).rejects.toThrow(APIError);
+    await expect(api.fetchDatabase("s1")).rejects.toThrow(APIError);
   });
 
   it("rejects operation name with invalid pattern", async () => {
     const ops = [{ ...baseDM.operations[0], name: "Search-API" }];
     const api = createAPIClient({ fetcher: vi.fn<FetchLike>().mockResolvedValue(jsonResponse(dm({ operations: ops }))) });
-    await expect(api.fetchSkill("s1")).rejects.toThrow(APIError);
+    await expect(api.fetchDatabase("s1")).rejects.toThrow(APIError);
   });
 
   it("rejects extract with invalid pattern", async () => {
     const ops = [{ ...baseDM.operations[0], extract: "$invalid chars!" }];
     const api = createAPIClient({ fetcher: vi.fn<FetchLike>().mockResolvedValue(jsonResponse(dm({ operations: ops }))) });
-    await expect(api.fetchSkill("s1")).rejects.toThrow(APIError);
+    await expect(api.fetchDatabase("s1")).rejects.toThrow(APIError);
   });
 
   it("rejects invalid HTTP method", async () => {
     const ops = [{ ...baseDM.operations[0], method: "TRACE", query: {}, headers: {}, body: null, timeout_seconds: 30, extract: null, auth: null }];
     const api = createAPIClient({ fetcher: vi.fn<FetchLike>().mockResolvedValue(jsonResponse(dm({ operations: ops }))) });
-    await expect(api.fetchSkill("s1")).rejects.toThrow(APIError);
+    await expect(api.fetchDatabase("s1")).rejects.toThrow(APIError);
   });
 
   it("accepts valid full manifest", async () => {
     const api = createAPIClient({ fetcher: vi.fn<FetchLike>().mockResolvedValue(jsonResponse(dm({}))) });
-    const detail = await api.fetchSkill("s1");
+    const detail = await api.fetchDatabase("s1");
     expect(detail.declarative_manifest?.operations[0].method).toBe("POST");
   });
 
@@ -122,36 +122,36 @@ describe("declarative manifest field constraints", () => {
   it("RED: rejects header name with backend-style lowercase placeholder {user}", async () => {
     const ops = [{ ...baseDM.operations[0], headers: { "X-{user}": "x" } }];
     const api = createAPIClient({ fetcher: vi.fn<FetchLike>().mockResolvedValue(jsonResponse(dm({ operations: ops }))) });
-    await expect(api.fetchSkill("s1")).rejects.toThrow(APIError);
+    await expect(api.fetchDatabase("s1")).rejects.toThrow(APIError);
   });
 
   it("RED: rejects header name with backend-style lowercase placeholder {record_id}", async () => {
     const ops = [{ ...baseDM.operations[0], headers: { "X-{record_id}": "x" } }];
     const api = createAPIClient({ fetcher: vi.fn<FetchLike>().mockResolvedValue(jsonResponse(dm({ operations: ops }))) });
-    await expect(api.fetchSkill("s1")).rejects.toThrow(APIError);
+    await expect(api.fetchDatabase("s1")).rejects.toThrow(APIError);
   });
 
   it("RED: accepts header name with uppercase braces {A} (not backend placeholder)", async () => {
     const ops = [{ ...baseDM.operations[0], headers: { "X-{A}": "x" } }];
     const api = createAPIClient({ fetcher: vi.fn<FetchLike>().mockResolvedValue(jsonResponse(dm({ operations: ops }))) });
-    await expect(api.fetchSkill("s1")).resolves.toBeDefined();
+    await expect(api.fetchDatabase("s1")).resolves.toBeDefined();
   });
 
   it("RED: accepts header name with numeric braces {1} (not backend placeholder)", async () => {
     const ops = [{ ...baseDM.operations[0], headers: { "X-{1}": "x" } }];
     const api = createAPIClient({ fetcher: vi.fn<FetchLike>().mockResolvedValue(jsonResponse(dm({ operations: ops }))) });
-    await expect(api.fetchSkill("s1")).resolves.toBeDefined();
+    await expect(api.fetchDatabase("s1")).resolves.toBeDefined();
   });
 
   it("RED: accepts header name with empty braces {} (not backend placeholder)", async () => {
     const ops = [{ ...baseDM.operations[0], headers: { "X-{}": "x" } }];
     const api = createAPIClient({ fetcher: vi.fn<FetchLike>().mockResolvedValue(jsonResponse(dm({ operations: ops }))) });
-    await expect(api.fetchSkill("s1")).resolves.toBeDefined();
+    await expect(api.fetchDatabase("s1")).resolves.toBeDefined();
   });
 
   it("RED: accepts header name with mixed-case braces {MixedCase} (not backend placeholder)", async () => {
     const ops = [{ ...baseDM.operations[0], headers: { "X-{MixedCase}": "x" } }];
     const api = createAPIClient({ fetcher: vi.fn<FetchLike>().mockResolvedValue(jsonResponse(dm({ operations: ops }))) });
-    await expect(api.fetchSkill("s1")).resolves.toBeDefined();
+    await expect(api.fetchDatabase("s1")).resolves.toBeDefined();
   });
 });

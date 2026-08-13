@@ -32,7 +32,7 @@ from app.skills.builtin.acquisition._download_io import (
     download_file,
     rate_limit,
 )
-from app.skills.registry import SkillCategory, SkillDef, skill_registry
+from app.skills.categories import SkillCategory
 from app.tools.crawler import BROWSER_UA
 
 logger = logging.getLogger(__name__)
@@ -564,25 +564,16 @@ async def download_xena(
     }, ensure_ascii=False)
 
 
-xena_skill = SkillDef(
-    name="xena",
-    category=SkillCategory.ACQUISITION,
-    description=(
-        "Search, browse, and download public genomics datasets from the UCSC Xena "
-        "data hub. Use when the user asks about Xena, TCGA cohorts, cancer genomics "
-        "data, or needs gene expression / clinical / mutation datasets from Xena."
-    ),
-    instructions=(
-        "Use the xena tools to search the UCSC Xena public data hub by keyword, "
-        "inspect available datasets by cohort or type, and download specific dataset "
-        "files (.tsv.gz or .json). "
-        "Prefer search_xena to discover datasets by term (e.g. cohort name, data type), "
-        "and download_xena to retrieve individual files. "
-        "All downloads go to the task raw directory and are tracked in provenance."
-    ),
-    tools=[search_xena, download_xena],
-    supported_sources=["xena", "ucsc_xena"],
-    version="0.1.0",
+SKILL_NAME = 'xena'
+SKILL_CATEGORY = SkillCategory.ACQUISITION
+SKILL_DESCRIPTION = (
+    'Search, browse, and download public genomics datasets from the UCSC Xena data hub. Use when'
+    'the user asks about Xena, TCGA cohorts, cancer genomics data, or needs gene expression /'
+    'clinical / mutation datasets from Xena.'
 )
-
-skill_registry.register(xena_skill)
+SKILL_VERSION = '0.1.0'
+SUPPORTED_SOURCES = ['xena', 'ucsc_xena']
+SKILL_TOOLS = [
+    search_xena,
+    download_xena,
+]

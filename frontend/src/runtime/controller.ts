@@ -81,17 +81,23 @@ export class RuntimeController {
     private readonly transport: EventTransport,
   ) {}
 
-  start(signal?: AbortSignal) {
-    const databasePromise = this.api.fetchDatabases().then((databases) => {
+  /** Refresh the enabled database list (task picker) from the thin store. */
+  refreshDatabases(signal?: AbortSignal): Promise<void> {
+    return this.api.fetchDatabases().then((databases) => {
       if (signal?.aborted) return;
       const state = useAgentStore.getState();
-      state.setDatabases(databases);
+      const enabled = databases.filter((database) => database.enabled !== false);
+      state.setDatabases(enabled);
       if (state.draft.selectedDatabaseIds.length === 0) {
         state.setDraftSelectedDatabaseIds(
-          databases.map((database) => database.id),
+          enabled.map((database) => database.id),
         );
       }
     });
+  }
+
+  start(signal?: AbortSignal) {
+    const databasePromise = this.refreshDatabases(signal);
     const historyPromise = this.loadTaskHistory(signal);
     const socketPromise = this.transport.connect();
     return Promise.allSettled([

@@ -25,7 +25,7 @@ from app.domain.contracts import (
 )
 from app.integrations.acquisition import acquire_source
 from app.skills.builtin.acquisition._download_io import fetch_json
-from app.skills.registry import SkillCategory, SkillDef, skill_registry
+from app.skills.categories import SkillCategory
 from app.tools.content_cache import ContentCache
 
 logger = logging.getLogger(__name__)
@@ -402,24 +402,16 @@ async def download_pdb(
         )
 
 
-pdb_skill = SkillDef(
-    name="pdb",
-    category=SkillCategory.ACQUISITION,
-    description=(
-        "Search, describe, and download protein structures from RCSB PDB. "
-        "Use when user asks about protein structures, 3D models, PDB IDs, "
-        "or needs structural biology data."
-    ),
-    instructions=(
-        "Use the pdb tools to search RCSB PDB by keyword, inspect structure metadata, "
-        "and download PDB or mmCIF files. "
-        "Prefer search_pdb to find structures, describe_pdb to inspect metadata, "
-        "and download_pdb to retrieve files. "
-        "All downloads go to the task raw directory and are tracked in provenance."
-    ),
-    tools=[search_pdb, describe_pdb, download_pdb],
-    supported_sources=["pdb", "rcsb_pdb"],
-    version="0.1.0",
+SKILL_NAME = 'pdb'
+SKILL_CATEGORY = SkillCategory.ACQUISITION
+SKILL_DESCRIPTION = (
+    'Search, describe, and download protein structures from RCSB PDB. Use when user asks about'
+    'protein structures, 3D models, PDB IDs, or needs structural biology data.'
 )
-
-skill_registry.register(pdb_skill)
+SKILL_VERSION = '0.1.0'
+SUPPORTED_SOURCES = ['pdb', 'rcsb_pdb']
+SKILL_TOOLS = [
+    search_pdb,
+    describe_pdb,
+    download_pdb,
+]

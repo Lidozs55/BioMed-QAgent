@@ -43,11 +43,14 @@ from app.model_config import RunModelSettings, UserSettings
 from app.skills.builtin.processing.extract_chart_data_vlm import (
     _CHART_DATA_COLUMNS,
     _CHART_DATA_POINTS_COLUMNS,
+    SKILL_CATEGORY,
+    SKILL_DESCRIPTION,
+    SKILL_NAME,
+    SKILL_TOOLS,
     _ensure_image_in_figures,
     _normalize_chart_json,
     _parse_vlm_json,
     extract_chart_data_vlm,
-    extract_chart_data_vlm_skill,
 )
 from app.tools.workdir import create_task_workdir
 
@@ -111,11 +114,10 @@ def _call_tool(
 
 def test_skill_registration_metadata() -> None:
     """Skill is registered as PROCESSING with the right name and tools."""
-    assert extract_chart_data_vlm_skill.name == "extract_chart_data_vlm"
-    assert extract_chart_data_vlm_skill.category.value == "processing"
-    assert extract_chart_data_vlm_skill.version == "0.1.0"
-    assert len(extract_chart_data_vlm_skill.tools) == 1
-    assert extract_chart_data_vlm_skill.tools[0].name == "extract_chart_data_vlm"
+    assert SKILL_NAME == "extract_chart_data_vlm"
+    assert SKILL_CATEGORY.value == "processing"
+    assert SKILL_DESCRIPTION
+    assert [tool.name for tool in SKILL_TOOLS] == ["extract_chart_data_vlm"]
 
 
 # ---------------------------------------------------------------------------

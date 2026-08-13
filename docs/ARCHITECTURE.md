@@ -904,82 +904,71 @@ Ctrl+⌘ 可对单条消息执行相反操作。半透明侧边栏开启时，�
 
 ## 16. Skill 仓库与 Subagent
 
-### 16.1 SkillCatalog
+> Phase 2（2026-08-13）退役了自制 Skill 运行时。SOP 知识迁入
+> `.pi/skills/<name>/SKILL.md`；Python 侧只剩内置直接工具模块；learned skill
+> 概念删除；用户扩展仅保留声明式数据库。详见
+> [migration/phase2-skills-tools-migration.md](migration/phase2-skills-tools-migration.md)。
 
-业务 Skill 统一由 lifespan 创建的进程级 `SkillCatalog` 管理
-（`skills/catalog.py`）。Catalog 合并随应用发布的 builtin Skill 与外部应用数据
-目录中的用户 Skill，并通过不可变快照和单调递增 `generation` 原子热更新。正在
-执行的单次调用固定到解析时的 Skill 版本；后续调用读取最新快照。
+### 16.1 Skill 内容与直接工具（Phase 2 后形态）
 
-该进程级 Catalog 必须由 lifespan 同时传给 `UserSkillStore` 和
-`ModeDispatchRunExecutor`，并继续下传到 Agent 与 Import executor，确保管理面
-热更新和后续 Run 使用同一个快照来源。
+- **Skill 知识**：`.pi/skills/<name>/SKILL.md`（frontmatter name/description +
+  SOP 正文），由 Pi 资源加载器按任务注入；Pi 侧经 `pi-adapter.ts` 的 skill
+  roots 加载，缺失时优雅降级不崩溃。
+- **稳定映射**：`server/src/agent/skills/skill-tool-map.ts` 是 Skill ↔ Tool
+  名称的单一事实源；`backend/tests/test_builtin_tools.py` 与
+  `server/tests/skill-manifests.test.ts` 双侧钉住，禁止漂移。
+- **legacy Agent 直接工具**：`backend/app/skills/builtin/` 各模块导出
+  `SKILL_NAME/SKILL_CATEGORY/SKILL_DESCRIPTION/SKILL_VERSION/SUPPORTED_SOURCES/
+  SKILL_TOOLS`，`build_agent` 全部直接注册（无 find_skill/invoke_skill 网关）。
+- **四个类别**：discovery / acquisition / processing / analysis
+  （`app/skills/categories.py` 的 `SkillCategory`）。
+- 不变式不变：download 记录 `DownloadAttempt`，成功校验后才返回
+  `SourceAsset`；processing 只接受成功的本地 `SourceAsset` 或受控
+  `DataBatch`；任何 Skill 都不能绕过 Dataset Runtime、Compatibility Gate 和
+  Validation Gate。
 
-### 16.2 四类 Skill 组织
+### 16.2 Main Agent 工具集
 
-```text
-backend/app/skills/
-|-- builtin/
-|   |-- discovery/    # 论文检索、论文理解、关键词扩展与来源方向发现
-|   |-- acquisition/  # 检索数据库、获取元数据与下载原始文件
-|   |-- processing/   # 本地原始文件解析、清洗、字段对齐与合并
-|   `-- analysis/     # 描述性统计、差异分析、富集、网络分析与可视化
-`-- learned/          # 默认禁用，不能绕过 Dataset Runtime 与 Validation Gate
-```
+Main Agent 直接持有全部业务工具（`search_pubmed`、`search_geo`、
+`describe_geo`、`download_geo`、…），加上：
 
-`SkillCategory` StrEnum：`DISCOVERY` / `ACQUISITION` / `PROCESSING` /
-`ANALYSIS`。
-
-Skill 是 instructions 与 Tool 的能力包：
-
-- 一个网站可以有多个 Tool，不要求一个网站一个 Skill；
-- 网站 Tool 分为 search、describe/metadata、download；
-- download 记录 `DownloadAttempt`，成功校验后才返回 `SourceAsset`；
-- processing 只接受成功的本地 `SourceAsset` 或受控 `DataBatch`；
-- learned Skill 默认禁用，不能绕过 Dataset Runtime、Compatibility Gate 和 Validation Gate。
-
-### 16.3 Main Agent 工具集
-
-Main Agent 不直接装载全部业务 Tool 或拼接每个 Skill 的 instructions。Agent 只
-持有：
-
-- `find_skill` / `invoke_skill` 网关（由 `build_skill_gateway` 构造，绑定
-  `SkillCatalog`）；
 - `validate_dataset_build_spec` / `execute_dataset_build`：校验并提交自包含
-  `DatasetBuildSpec`（V1 确定性 pipeline 已退役，这是唯一正式产物入口）；
+  `DatasetBuildSpec`（唯一正式产物入口）；
 - 文件读写工具（`read_file` / `read_file_head` / `search_file` / `write_file` /
   `list_files`）；
 - `compress_query_log` / `review_query_strategy`；
 - `delegate_research` / `get_subagent_results` / `cancel_subagent`。
 
-用户选择的数据库是 `preferred_sources`：Main Agent 优先使用这些来源，但也可以
-探索公开、免登录且不需要私密凭据的其他来源。登录、CAPTCHA、付费、凭据和服务
-条款边界仍必须进入 HIL。
+数据库 store 中被禁用的数据库（enable toggle）会从 Agent 工具集中移除
+（`disabled_databases`）。用户选择的数据库是 `preferred_sources`：Main Agent
+优先使用这些来源，但也可以探索公开、免登录且不需要私密凭据的其他来源。登录、
+CAPTCHA、付费、凭据和服务条款边界仍必须进入 HIL。
 
 Agent 只负责形成 `DatasetBuildSpec` 和必要的来源证据；不能写入发布阈值、不能把
-Agent-only Skill 或子 Agent 的自然语言结果作为正式数据，也不能绕过 Spec
+Agent-only 数据源或子 Agent 的自然语言结果作为正式数据，也不能绕过 Spec
 Validator、Compatibility Gate、Validation Profile 或 Publisher。
 
-### 16.4 用户扩展
+### 16.3 用户扩展（声明式数据库）
 
-用户扩展支持声明式 JSON/YAML HTTP 数据库包和 Python ZIP Skill 包。用户包保存
-在单文件程序之外的可写目录，支持校验、上传、启停、版本回滚和删除。坏包保持
-`unavailable/load_error` 管理可见性，不阻断应用启动。设置页的 Model、Databases
-和 Skills 三个区段使用对应 REST API 管理这些状态。
+用户扩展仅支持声明式 JSON/YAML HTTP 数据库（`app/databases/`，薄存储
+`DatabaseStore`）：`GET/POST/PUT/DELETE /api/v1/databases` +
+`enable/disable`。声明式 operation 由 `DeclarativeHttpToolBuilder` 构造成直接
+SDK 工具；带 `auth` 的操作保留子 Agent 上下文的 HIL 审批门。内置数据库
+（pubmed/geo/gdc/xena/pdb/pubchem/reactome/chembl/uniprot）默认启用、可持久
+禁用。**Python ZIP Skill 包、`/api/v1/skills*` 管理面与设置页"技能"分区已退役**；
+设置页 Model / Databases 两个区段使用对应 REST API 管理状态。
 
-### 16.5 托管式 Subagent 与 WorkflowRecipe 闭环
+### 16.4 托管式 Subagent 与 WorkflowRecipe 闭环
 
 `SubagentSupervisor`（`app/subagents/supervisor.py`）是 lifespan-owned 的运行时
-服务。Main Agent 可以在一个父 Run 内并行委派两类子 Agent：
+服务。Main Agent 可以在一个父 Run 内并行委派子 Agent：
 
 - **SourceResearchAgent**：bounded source-research child agent，只能使用
-  DISCOVERY + ACQUISITION Skill，产出来源候选、accession 和经过校验的
+  DISCOVERY + ACQUISITION 直接工具，产出来源候选、accession 和经过校验的
   `source_asset_ids`；不能递归委派、调用 Dataset Runtime 或写入正式
   `artifacts/`。失败时返回 `EXTRACTION_FAILED`。
-- **SkillBuilderAgent**：bounded acquisition-workflow child agent，使用
-  DISCOVERY + ACQUISITION + `create_skill`，只能生成**声明式、非代码**的
-  `WorkflowRecipe`；步骤限定为受控 API / HTML / Browser 操作，并拒绝任意代码
-  字段。失败时返回 `CAPABILITY_GAP`。
+- **SkillBuilderAgent 已删除**（Phase 2，learned skill 概念退役）：skill_builder
+  请求被拒绝（`unsupported subagent type`）。
 
 子 Agent 使用独立 SDK Session，`global_limit=4`、`per_run_limit=3`、
 `batch_limit=8`、`timeout=3600s`。Supervisor 把 queued、running、progress、HIL、
@@ -1007,7 +996,7 @@ REJECTED
 确认后引用。消费链为：
 
 ```text
-SkillBuilderAgent -> WorkflowRecipe draft -> controlled validation
+WorkflowRecipe（PROMOTED）
   -> WorkflowRecipeSourceFetcher -> RecipeExecutor
   -> Workspace validation -> SourceAsset -> SourceAdapter
 ```

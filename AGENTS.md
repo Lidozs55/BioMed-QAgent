@@ -71,10 +71,11 @@ Key points:
   builds) and by the Agent tool path in agent runs.
 - The WebSocket endpoint is `/api/v1/ws`; the durable event session is served
   by `app/api/ws_events.py:_run_event_session`.
-- The skill repository is organized into four categories — discovery,
-  acquisition, processing, analysis — under
-  [backend/app/skills/builtin/](backend/app/skills/builtin/). Learned skills
-  (under `learned/`) are disabled by default.
+- Skill 知识已迁至 [.pi/skills/](.pi/skills/)（`<name>/SKILL.md`，Phase 2）；
+  Python 侧只剩内置直接工具模块（四个类别 discovery / acquisition /
+  processing / analysis 的模块级常量，[backend/app/skills/builtin/](backend/app/skills/builtin/)）。
+  learned skill 概念已删除（Phase 2，见
+  [docs/migration/phase2-skills-tools-migration.md](docs/migration/phase2-skills-tools-migration.md)）。
 
 **HTTP API Routes** (prefix `/api/v1`):
 
@@ -82,25 +83,18 @@ Key points:
 | ------ | ------------------------------------------------- | ---------------------------------- |
 | GET    | `/api/v1/health`                                  | Health check                       |
 | GET    | `/api/v1/databases`                               | List user-selectable databases     |
-| POST   | `/api/v1/databases`                               | Register a skill-backed database   |
+| GET    | `/api/v1/databases/{name}`                        | Get a database incl. declarative manifest |
+| POST   | `/api/v1/databases`                               | Register a declarative database    |
 | PUT    | `/api/v1/databases/{name}`                        | Update a database entry            |
-| DELETE | `/api/v1/databases/{name}`                        | Remove a database entry            |
+| POST   | `/api/v1/databases/{name}/enable`                 | Enable a database                  |
+| POST   | `/api/v1/databases/{name}/disable`                | Disable a database                 |
+| DELETE | `/api/v1/databases/{name}`                        | Remove a user database entry       |
 | GET    | `/api/v1/settings`                                | Get masked user model settings     |
 | PUT    | `/api/v1/settings`                                | Persist user model settings        |
 | GET    | `/api/v1/vendors`                                 | List known model vendors           |
 | POST   | `/api/v1/models`                                  | Discover available provider models |
 | GET    | `/api/v1/model-info`                              | List built-in model info entries   |
 | GET    | `/api/v1/model-info/{model_id}`                   | Get built-in model details         |
-| GET    | `/api/v1/skills`                                  | List skills with catalog metadata  |
-| GET    | `/api/v1/skills/{name}`                           | Get skill detail + versions        |
-| POST   | `/api/v1/skills/{name}/enable`                    | Enable a skill                     |
-| POST   | `/api/v1/skills/{name}/disable`                   | Disable a skill                    |
-| POST   | `/api/v1/skills/{name}/rollback`                  | Roll a skill back to a version     |
-| PUT    | `/api/v1/skills/{name}/manifest`                  | Update a skill manifest            |
-| PUT    | `/api/v1/skills/{name}/package`                   | Replace a skill package            |
-| DELETE | `/api/v1/skills/{name}`                           | Delete a user skill                |
-| POST   | `/api/v1/skills/validate`                         | Validate a skill manifest          |
-| POST   | `/api/v1/skills/upload`                           | Upload a skill package             |
 | GET    | `/api/v1/tasks`                                   | List active tasks + paginated history |
 | POST   | `/api/v1/tasks`                                   | Create a durable task and enqueue its first run |
 | POST   | `/api/v1/import/tasks`                            | Create an import task with uploaded files |

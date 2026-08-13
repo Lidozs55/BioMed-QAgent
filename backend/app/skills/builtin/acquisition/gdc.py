@@ -26,7 +26,7 @@ from app.skills.builtin.acquisition._download_io import (
     download_file,
     fetch_json,
 )
-from app.skills.registry import SkillCategory, SkillDef, skill_registry
+from app.skills.categories import SkillCategory
 
 logger = logging.getLogger(__name__)
 
@@ -626,28 +626,17 @@ async def download_gdc(
 # Skill registration
 # ---------------------------------------------------------------------------
 
-gdc_skill = SkillDef(
-    name="gdc",
-    category=SkillCategory.ACQUISITION,
-    description=(
-        "Search, describe, and download datasets from NCI Genomic Data "
-        "Commons (GDC). Use when the user asks about TCGA, TARGET, CPTAC, "
-        "cancer genomics, or needs raw transcriptomic / genomic / clinical "
-        "data from GDC."
-    ),
-    instructions=(
-        "Use the gdc tools to search the NCI GDC by keyword, inspect project "
-        "metadata, and download data files (RNA-Seq, miRNA-Seq, CNA/CNV, "
-        "methylation, somatic mutations, clinical supplements, slide images, "
-        "or biospecimen data).  "
-        "Prefer search_gdc to discover relevant projects, describe_gdc to "
-        "inspect their metadata, and download_gdc to retrieve files.  "
-        "All downloads are saved to the task raw directory and tracked in "
-        "provenance so every file is traceable to its GDC origin."
-    ),
-    tools=[search_gdc, describe_gdc, download_gdc],
-    supported_sources=["gdc", "tcga", "nci_gdc"],
-    version="0.1.0",
+SKILL_NAME = 'gdc'
+SKILL_CATEGORY = SkillCategory.ACQUISITION
+SKILL_DESCRIPTION = (
+    'Search, describe, and download datasets from NCI Genomic Data Commons (GDC). Use when the'
+    'user asks about TCGA, TARGET, CPTAC, cancer genomics, or needs raw transcriptomic / genomic'
+    '/ clinical data from GDC.'
 )
-
-skill_registry.register(gdc_skill)
+SKILL_VERSION = '0.1.0'
+SUPPORTED_SOURCES = ['gdc', 'tcga', 'nci_gdc']
+SKILL_TOOLS = [
+    search_gdc,
+    describe_gdc,
+    download_gdc,
+]

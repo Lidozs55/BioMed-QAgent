@@ -25,7 +25,7 @@ from agents import RunContextWrapper, function_tool
 
 from app.agent_loop.context import RunContext
 from app.domain.contracts import QueryStatus, StageName
-from app.skills.registry import SkillCategory, SkillDef, skill_registry
+from app.skills.categories import SkillCategory
 from app.tools.cache_store import get_cache_store
 
 logger = logging.getLogger(__name__)
@@ -238,35 +238,17 @@ async def get_cache_dataset(
     )
 
 
-local_cache_skill = SkillDef(
-    name="local_cache",
-    category=SkillCategory.ACQUISITION,
-    description=(
-        "Query the local cache for previously imported or cached datasets. "
-        "Use search_local_cache before searching external databases to reuse "
-        "already-cleaned data. Cache is populated by IMPORT tasks."
-    ),
-    instructions=(
-        "## 本地缓存使用指南\n"
-        "本地缓存存储已清洗的 22 列长格式数据（与 main_data.csv 同 schema），"
-        "来源于用户导入文件或既往研究任务的产物。\n\n"
-        "### 何时使用\n"
-        "1. **优先查询** — 在调用 search_pubmed/search_geo 等外部 API 前，"
-        "先调 search_local_cache 检查是否已有匹配的缓存数据\n"
-        "2. **补充查询** — 外部 API 无结果或结果不全时，可作为补充来源\n"
-        "3. **复用清洗成果** — 既往任务的 main_data.csv 已缓存，避免重复清洗\n\n"
-        "### 工具链\n"
-        "- ``search_local_cache(query, max_results)`` — 关键词搜索数据集 manifest\n"
-        "- ``describe_local_cache(source_namespace, dataset_id)`` — 查看单个数据集详情\n"
-        "- ``get_cache_dataset(source_namespace, dataset_id, max_rows)`` — "
-        "读取数据行（22 列长格式）\n\n"
-        "### 命名空间约定\n"
-        "- ``user_import`` — 用户通过文件上传导入的数据\n"
-        "- ``pipeline_artifact`` — 既往研究任务自动缓存的产物（暂未实现）\n"
-    ),
-    tools=[search_local_cache, describe_local_cache, get_cache_dataset],
-    supported_sources=["local_cache"],
-    version="0.1.0",
+SKILL_NAME = 'local_cache'
+SKILL_CATEGORY = SkillCategory.ACQUISITION
+SKILL_DESCRIPTION = (
+    'Query the local cache for previously imported or cached datasets. Use search_local_cache'
+    'before searching external databases to reuse already-cleaned data. Cache is populated by'
+    'IMPORT tasks.'
 )
-
-skill_registry.register(local_cache_skill)
+SKILL_VERSION = '0.1.0'
+SUPPORTED_SOURCES = ['local_cache']
+SKILL_TOOLS = [
+    search_local_cache,
+    describe_local_cache,
+    get_cache_dataset,
+]

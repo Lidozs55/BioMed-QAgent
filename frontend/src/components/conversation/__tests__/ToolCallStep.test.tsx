@@ -2,7 +2,6 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { ToolCallStep } from "@/components/conversation/ToolCallStep";
-import { toolRenderers } from "@/components/conversation/toolRenderers";
 import type { ToolCallItem } from "@/runtime/types";
 
 const TIMESTAMP = "2026-07-20T00:00:00Z";
@@ -123,7 +122,7 @@ describe("ToolCallStep", () => {
     expect(screen.queryByText("输出")).not.toBeInTheDocument();
     expect(screen.getByText("输入参数")).toBeInTheDocument();
   });
-  it("renders find_skill via SkillMarker instead of '调用 find_skill'", () => {
+  it("renders retired gateway tool names through the default label fallback", () => {
     render(
       <ToolCallStep
         item={makeToolCall({
@@ -133,27 +132,20 @@ describe("ToolCallStep", () => {
         })}
       />,
     );
-    expect(screen.getByText("检索技能")).toBeInTheDocument();
-    expect(screen.queryByText(/调用 find_skill/)).not.toBeInTheDocument();
+    expect(screen.getByText("调用 find_skill")).toBeInTheDocument();
   });
 
-  it("renders invoke_skill via SkillMarker with the skill name", () => {
+  it("renders a direct data-source tool with its mapped label", () => {
     render(
       <ToolCallStep
         item={makeToolCall({
-          toolName: "invoke_skill",
-          arguments: { skill: "web_visual_capture" },
+          toolName: "search_geo",
+          arguments: { query: "METTL5" },
           output: null,
         })}
       />,
     );
-    expect(screen.getByText("调用 web_visual_capture")).toBeInTheDocument();
-  });
-
-  it("registers custom renderers for find_skill and invoke_skill", () => {
-    expect(Object.keys(toolRenderers).sort()).toEqual([
-      "find_skill",
-      "invoke_skill",
-    ]);
+    expect(screen.getByText(/检索\s+GEO/)).toBeInTheDocument();
+    expect(screen.getByText(/METTL5/)).toBeInTheDocument();
   });
 });

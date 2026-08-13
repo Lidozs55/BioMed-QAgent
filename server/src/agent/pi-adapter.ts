@@ -1,4 +1,4 @@
-import { access, stat } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -496,14 +496,23 @@ export class PiAgentAdapter implements BioMedAgentAdapter {
 
   private async optionalSkillRoots(): Promise<string[]> {
     try {
-      await Promise.all([
-        access(path.join(this.phase1SkillRoot, "migration-smoke", "SKILL.md")),
-        access(path.join(this.phase1SkillRoot, "dataset-construction", "SKILL.md")),
-      ]);
-      return [this.phase1SkillRoot];
+      const info = await stat(this.phase1SkillRoot);
+      if (!info.isDirectory()) throw new Error("not a directory");
+      const entries = await readdir(this.phase1SkillRoot, { withFileTypes: true });
+      const hasSkills = await Promise.all(
+        entries
+          .filter((entry) => entry.isDirectory())
+          .map((entry) =>
+            stat(path.join(this.phase1SkillRoot, entry.name, "SKILL.md"))
+              .then(() => true)
+              .catch(() => false),
+          ),
+      );
+      if (!hasSkills.some(Boolean)) throw new Error("no skills found");
+      return [path.resolve(this.phase1SkillRoot)];
     } catch {
       this.onResourceDiagnostic(
-        "Optional Phase 1 Pi Skill resources are unavailable; continuing without them".slice(
+        "Optional Pi Skill resources are unavailable; continuing without them".slice(
           0,
           256,
         ),

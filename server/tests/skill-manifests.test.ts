@@ -1,0 +1,159 @@
+import { readdir, readFile, stat } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { describe, expect, test } from "vitest";
+
+import {
+  SKILL_TOOL_MAP,
+  SKILL_TOOL_NAMES,
+  type SkillToolMapping,
+} from "../src/agent/skills/skill-tool-map.js";
+
+const repositoryRoot = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "..",
+);
+const skillsRoot = path.join(repositoryRoot, ".pi", "skills");
+
+/**
+ * Non-tool identifiers that may legitimately appear in backticks inside a
+ * SKILL.md body (tool parameter names, schema field names). Everything else
+ * backtick-quoted and snake-case must resolve to a mapped tool name.
+ */
+const ALLOWED_BACKTICK_TOKENS = new Set([
+  "source_files",
+  "mapping_files",
+  "metadata_files",
+]);
+
+const SKILL_NAME = /^[a-z][a-z0-9_-]*$/;
+
+interface SkillFrontmatter {
+  name?: string;
+  description?: string;
+}
+
+function parseFrontmatter(content: string): SkillFrontmatter {
+  const lines = content.split(/\r?\n/);
+  if (lines[0]?.trim() !== "---") {
+    throw new Error("SKILL.md must start with YAML frontmatter (---)");
+  }
+  const end = lines.indexOf("---", 1);
+  if (end === -1) throw new Error("SKILL.md frontmatter is not closed");
+  const fields: SkillFrontmatter = {};
+  for (const line of lines.slice(1, end)) {
+    const match = /^([A-Za-z][A-Za-z0-9_-]*):\s*(.*)$/.exec(line);
+    if (match === null) continue;
+    fields[match[1] as keyof SkillFrontmatter] = match[2]!.trim();
+  }
+  return fields;
+}
+
+function referencedToolTokens(body: string): string[] {
+  const tokens = new Set<string>();
+  for (const match of body.matchAll(/`([a-z][a-z0-9_]*)`/g)) {
+    tokens.add(match[1]!);
+  }
+  return [...tokens];
+}
+
+async function listSkillDirectories(): Promise<string[]> {
+  const entries = await readdir(skillsRoot, { withFileTypes: true });
+  return entries
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+}
+
+async function readSkill(directory: string): Promise<{
+  directory: string;
+  content: string;
+  frontmatter: SkillFrontmatter;
+  body: string;
+}> {
+  const file = path.join(skillsRoot, directory, "SKILL.md");
+  const content = await readFile(file, "utf8");
+  const lines = content.split(/\r?\n/);
+  const end = lines.indexOf("---", 1);
+  return {
+    directory,
+    content,
+    frontmatter: parseFrontmatter(content),
+    body: lines.slice(end + 1).join("\n"),
+  };
+}
+
+describe(".pi/skills manifest integrity", () => {
+  test("the skills root exists and contains the migrated skills", async () => {
+    const info = await stat(skillsRoot);
+    expect(info.isDirectory()).toBe(true);
+    const directories = await listSkillDirectories();
+    expect(directories.length).toBeGreaterThanOrEqual(18);
+  });
+
+  test("every skill directory has a valid SKILL.md whose name matches the directory", async () => {
+    for (const directory of await listSkillDirectories()) {
+      const skill = await readSkill(directory);
+      expect(skill.directory, skill.directory).toMatch(SKILL_NAME);
+      expect(skill.frontmatter.name, skill.directory).toBe(skill.directory);
+      expect(
+        (skill.frontmatter.description ?? "").length,
+        skill.directory,
+      ).toBeGreaterThan(0);
+      expect(skill.frontmatter.description ?? "", skill.directory).not.toContain("\n");
+      expect(skill.body.trim().length, skill.directory).toBeGreaterThan(0);
+    }
+  });
+
+  test("every SKILL.md frontmatter name exists in the stable skill ↔ tool map", async () => {
+    const mapped = new Map(SKILL_TOOL_MAP.map((entry) => [entry.name, entry]));
+    for (const directory of await listSkillDirectories()) {
+      const skill = await readSkill(directory);
+      expect(mapped.has(skill.directory), skill.directory).toBe(true);
+    }
+  });
+
+  test("every skill in the map has a SKILL.md on disk", async () => {
+    const directories = new Set(await listSkillDirectories());
+    for (const entry of SKILL_TOOL_MAP) {
+      expect(directories.has(entry.name), entry.name).toBe(true);
+    }
+  });
+
+  test("no SKILL.md references phantom tools (find_skill / invoke_skill / unknown names)", async () => {
+    for (const directory of await listSkillDirectories()) {
+      const skill = await readSkill(directory);
+      for (const token of referencedToolTokens(skill.body)) {
+        expect(
+          SKILL_TOOL_NAMES.has(token) ||
+            ALLOWED_BACKTICK_TOKENS.has(token) ||
+            token === skill.directory,
+          `${skill.directory} references unknown tool \`${token}\``,
+        ).toBe(true);
+      }
+    }
+  });
+
+  test("every SKILL.md body references at least one of its mapped tools", async () => {
+    const mapped = new Map<string, SkillToolMapping>(
+      SKILL_TOOL_MAP.map((entry) => [entry.name, entry]),
+    );
+    for (const directory of await listSkillDirectories()) {
+      const skill = await readSkill(directory);
+      const mapping = mapped.get(skill.directory);
+      expect(mapping, skill.directory).toBeDefined();
+      const tokens = new Set(referencedToolTokens(skill.body));
+      const covered = (mapping?.tools ?? []).filter((tool) => tokens.has(tool));
+      expect(covered.length, `${skill.directory} must reference its own tools`).toBeGreaterThan(0);
+    }
+  });
+
+  test("descriptions are concise and single-purpose", async () => {
+    for (const directory of await listSkillDirectories()) {
+      const skill = await readSkill(directory);
+      expect((skill.frontmatter.description ?? "").length).toBeLessThanOrEqual(300);
+    }
+  });
+});

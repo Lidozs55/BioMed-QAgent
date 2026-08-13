@@ -6,30 +6,6 @@ import { createAPIClient, type FetchLike } from "@/hooks/useAPI";
 /*  No FormData.prototype spies — pure fetch call capture.            */
 /* ------------------------------------------------------------------ */
 
-describe("uploadSkill exact File identity via fetch body", () => {
-  it("captures exact File reference from actual FormData body", async () => {
-    const fetcher = vi.fn<FetchLike>().mockResolvedValue(new Response("{}", { status: 200 }));
-    const api = createAPIClient({ fetcher });
-    const file = new File(['{"name":"test"}'], "test-skill.yaml", { type: "application/x-yaml" });
-
-    await api.uploadSkill(file);
-    expect(fetcher).toHaveBeenCalledTimes(1);
-    const call = fetcher.mock.calls[0];
-    expect(call).toBeDefined();
-    const [url, init] = call;
-    expect(url).toBe("/api/v1/skills/upload");
-    if (init === undefined) throw new Error("Expected init object");
-    expect(init.method).toBe("POST");
-    expect(init.headers).toBeUndefined();
-    expect(init.body).toBeInstanceOf(FormData);
-    if (init.body instanceof FormData) {
-      const f = init.body.get("file");
-      if (!(f instanceof File)) throw new Error("Expected File for form field 'file'");
-      expect(f).toBe(file);
-    }
-  });
-});
-
 describe("startImportTask FormData fields via fetch body", () => {
   it("includes request_id, input, and files fields with exact File objects", async () => {
     const fetcher = vi.fn<FetchLike>().mockResolvedValue(new Response(JSON.stringify({ status: "queued", request_id: "req_abc", task_id: "t1", run_id: "r1" }), { status: 200, headers: { "Content-Type": "application/json" } }));

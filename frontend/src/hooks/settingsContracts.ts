@@ -204,23 +204,6 @@ export interface DiscoveredModelInfo {
   capability_source?: "catalog" | "api";
 }
 
-/* ---- Skills ---- */
-export interface SkillManifest {
-  name: string;
-  display_name: string;
-  version: string;
-  category: string;
-  description: string;
-  origin: "builtin" | "package";
-  supported_sources: string[];
-  operations: string[];
-  enabled: boolean;
-  user_selectable: boolean;
-  pipeline_supported: boolean;
-  available?: boolean;
-  load_error?: string | null;
-}
-
 export interface AuthReference {
   source: "env";
   reference: string;
@@ -257,24 +240,25 @@ export interface DeclarativeSkillManifest {
   requirements: string[];
 }
 
-export interface SkillDetail {
-  manifest: SkillManifest;
-  current_version: string;
-  versions: string[];
-  package_kind: "manifest" | "zip";
-  warning: string | null;
-  available: boolean;
-  load_error: string | null;
+/* ---- Database (Phase 2: thin declarative store) ---- */
+export interface DatabaseItem {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  available?: boolean;
+  enabled: boolean;
+  origin: "builtin" | "package";
+  version?: string;
+  pipeline_supported?: boolean;
+  capability?: string;
+  declarative_manifest?: DeclarativeSkillManifest | null;
+}
+
+export interface DatabaseDetail extends DatabaseItem {
   declarative_manifest: DeclarativeSkillManifest | null;
 }
 
-export interface SkillValidation {
-  valid: boolean;
-  skill: SkillManifest;
-  warning: string | null;
-}
-
-/* ---- Database ---- */
 export interface DatabaseOperationUpdatePatch {
   name: string;
   description?: string;
@@ -315,15 +299,11 @@ export interface SettingsAPIClient {
   ) => Promise<ManagedModelInfo>;
   deleteManagedModel: (id: string) => Promise<void>;
   activateManagedModel: (id: string) => Promise<ModelSettings>;
-  fetchSkills: () => Promise<SkillManifest[]>;
-  fetchSkill: (name: string) => Promise<SkillDetail>;
-  setSkillEnabled: (name: string, enabled: boolean) => Promise<void>;
-  rollbackSkill: (name: string) => Promise<void>;
-  deleteSkill: (name: string) => Promise<void>;
-  validateSkill: (file: File) => Promise<SkillValidation>;
-  uploadSkill: (file: File) => Promise<void>;
-  createDatabase: (manifest: DeclarativeSkillManifest) => Promise<void>;
-  updateDatabase: (name: string, patch: DatabaseUpdatePatch) => Promise<void>;
+  fetchDatabases: () => Promise<DatabaseItem[]>;
+  fetchDatabase: (name: string) => Promise<DatabaseDetail>;
+  setDatabaseEnabled: (name: string, enabled: boolean) => Promise<void>;
+  createDatabase: (manifest: DeclarativeSkillManifest) => Promise<DatabaseDetail>;
+  updateDatabase: (name: string, patch: DatabaseUpdatePatch) => Promise<DatabaseDetail>;
   deleteDatabase: (name: string) => Promise<void>;
 }
 

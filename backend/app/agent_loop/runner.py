@@ -72,7 +72,6 @@ from app.model_config.token_estimation import (
 from app.model_settings import get_current_model_configuration
 from app.pipeline.dataset_build_tool import execute_dataset_build
 from app.runtime.compaction import CompactionCancelledError, ConversationCompactor
-from app.skills.catalog import SkillCatalog
 from app.subagents.agents import ManagedChildAgentRunner
 
 if TYPE_CHECKING:
@@ -646,14 +645,18 @@ class AgentRunExecutor:
         self,
         repository,
         *,
-        skill_catalog: SkillCatalog | None = None,
+        disabled_databases=None,
+        user_http_tools=None,
+        child_user_http_tools=None,
         compactor=None,
         subagent_supervisor: SubagentSupervisor | None = None,
         subagent_event_sink: SubagentEventSink | None = None,
         subagent_input_broker: SubagentInputBroker | None = None,
     ) -> None:
         self._repository = repository
-        self.skill_catalog = skill_catalog
+        self._disabled_databases = disabled_databases
+        self._user_http_tools = user_http_tools
+        self._child_user_http_tools = child_user_http_tools
         self._compactor = compactor or ConversationCompactor(repository)
         self._subagent_supervisor = subagent_supervisor
         self._subagent_event_sink = subagent_event_sink
@@ -661,9 +664,15 @@ class AgentRunExecutor:
 
     def _build(self, execution) -> AgentBuild:
         """Build the Agent for this executor (overridable by subclasses)."""
-        if self.skill_catalog is None:
-            return build_agent(execution.databases)
-        return build_agent(self.skill_catalog, execution.databases)
+        return build_agent(
+            execution.databases,
+            disabled_databases=(
+                self._disabled_databases() if self._disabled_databases is not None else frozenset()
+            ),
+            user_tools=(
+                self._user_http_tools() if self._user_http_tools is not None else None
+            ),
+        )
 
     def _max_turns(self, execution=None) -> int:
         """Return the max_turns for this executor's Agent loop.
@@ -707,7 +716,19 @@ class AgentRunExecutor:
             return
         context.bind_subagent_runtime(
             supervisor=self._subagent_supervisor,
-            runner=ManagedChildAgentRunner(context, self.skill_catalog),
+            runner=ManagedChildAgentRunner(
+                context,
+                disabled_databases=(
+                    self._disabled_databases()
+                    if self._disabled_databases is not None
+                    else frozenset()
+                ),
+                user_http_tools=(
+                    self._child_user_http_tools()
+                    if self._child_user_http_tools is not None
+                    else None
+                ),
+            ),
             event_sink=self._subagent_event_sink,
             input_broker=self._subagent_input_broker,
         )
@@ -1641,11 +1662,22 @@ class ModeDispatchRunExecutor:
         self,
         repository,
         *,
-        skill_catalog: SkillCatalog | None = None,
+        disabled_databases=None,
+        user_http_tools=None,
+        child_user_http_tools=None,
     ) -> None:
-        self.agent_executor = AgentRunExecutor(repository, skill_catalog=skill_catalog)
+        self.agent_executor = AgentRunExecutor(
+            repository,
+            disabled_databases=disabled_databases,
+            user_http_tools=user_http_tools,
+            child_user_http_tools=child_user_http_tools,
+        )
         self.fixture_executor = FixtureRunExecutor(repository)
-        self.import_executor = ImportRunExecutor(repository, skill_catalog=skill_catalog)
+        self.import_executor = ImportRunExecutor(
+            repository,
+            disabled_databases=disabled_databases,
+            user_http_tools=user_http_tools,
+        )
 
     async def __call__(self, execution) -> None:
         if execution.mode is TaskMode.AGENT:
@@ -1700,9 +1732,12 @@ class ImportRunExecutor(AgentRunExecutor):
     def _build(self, execution) -> AgentBuild:
         if self._has_pending_attachments(execution):
             return build_attachment_parsing_agent()
-        if self.skill_catalog is None:
-            return build_agent(execution.databases)
-        return build_agent(self.skill_catalog, execution.databases)
+        return build_agent(
+            execution.databases,
+            disabled_databases=(
+                self._disabled_databases() if self._disabled_databases is not None else frozenset()
+            ),
+        )
 
     def _max_turns(self, execution=None) -> int:
         if execution is not None and self._has_pending_attachments(execution):

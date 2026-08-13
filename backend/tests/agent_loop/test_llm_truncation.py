@@ -105,7 +105,7 @@ async def test_executor_warns_on_finish_reason_length(
             yield RawResponsesStreamEvent(data=_chunk(content="partial"))
             yield RawResponsesStreamEvent(data=_chunk(finish_reason="length"))
 
-    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None, **_: build)
     monkeypatch.setattr(
         runner_module.Runner,
         "run_streamed",
@@ -168,7 +168,7 @@ async def test_executor_emits_truncation_warning_only_once(
             yield RawResponsesStreamEvent(data=_chunk(content="part2"))
             yield RawResponsesStreamEvent(data=_chunk(finish_reason="length"))
 
-    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None, **_: build)
     monkeypatch.setattr(
         runner_module.Runner,
         "run_streamed",
@@ -218,7 +218,7 @@ async def test_executor_does_not_warn_on_normal_finish_reason(
             yield RawResponsesStreamEvent(data=_chunk(content="normal"))
             yield RawResponsesStreamEvent(data=_chunk(finish_reason="stop"))
 
-    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None, **_: build)
     monkeypatch.setattr(
         runner_module.Runner,
         "run_streamed",

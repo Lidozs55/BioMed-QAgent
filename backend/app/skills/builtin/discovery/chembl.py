@@ -22,7 +22,7 @@ from agents import RunContextWrapper, function_tool
 
 from app.agent_loop.context import RunContext
 from app.domain.contracts import QueryStatus
-from app.skills.registry import SkillCategory, SkillDef, skill_registry
+from app.skills.categories import SkillCategory
 from app.tools.crawler import CrawlError, FetchResult, fetch_with_fallback
 
 logger = logging.getLogger(__name__)
@@ -153,24 +153,14 @@ async def search_chembl(
     )
 
 
-chembl_skill = SkillDef(
-    name="chembl",
-    category=SkillCategory.DISCOVERY,
-    description=(
-        "Search the ChEMBL database for molecules (ChEMBL id, preferred name, "
-        "molecule type, max phase). Agent-only research source — findings must "
-        "not be routed into dataset builds."
-    ),
-    instructions=(
-        "Use the `search_chembl` tool to query ChEMBL with a free-text search "
-        "string. The tool returns a JSON payload with molecule records "
-        "(chembl_id, preferred_name, molecule_type, max_phase, URL). ChEMBL is "
-        "an Agent-only research source: use results for investigation and "
-        "evidence only — never declare chembl as a dataset build source."
-    ),
-    tools=[search_chembl],
-    supported_sources=["chembl"],
-    version="0.1.0",
+SKILL_NAME = 'chembl'
+SKILL_CATEGORY = SkillCategory.DISCOVERY
+SKILL_DESCRIPTION = (
+    'Search the ChEMBL database for molecules (ChEMBL id, preferred name, molecule type, max'
+    'phase). Agent-only research source — findings must not be routed into dataset builds.'
 )
-
-skill_registry.register(chembl_skill)
+SKILL_VERSION = '0.1.0'
+SUPPORTED_SOURCES = ['chembl']
+SKILL_TOOLS = [
+    search_chembl,
+]

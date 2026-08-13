@@ -1220,7 +1220,7 @@ async def test_manager_cooperative_cancel_flushes_text_before_end_and_terminal(
             raise asyncio.CancelledError
 
     result = CooperativeResult()
-    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None, **_: build)
     monkeypatch.setattr(
         runner_module.Runner,
         "run_streamed",
@@ -1325,8 +1325,9 @@ async def test_executor_uses_durable_task_session_at_sdk_boundary(
         captured["kwargs"] = kwargs
         return result
 
-    def build_selected_agent(databases=None):
+    def build_selected_agent(databases=None, **kwargs):
         captured["databases"] = databases
+        captured["disabled_databases"] = kwargs.get("disabled_databases")
         return build
 
     monkeypatch.setattr(runner_module, "build_agent", build_selected_agent)
@@ -1336,6 +1337,7 @@ async def test_executor_uses_durable_task_session_at_sdk_boundary(
 
     assert captured == {
         "databases": ["geo"],
+        "disabled_databases": frozenset(),
         "args": (agent, "continue the analysis"),
         "kwargs": {
             "context": context,
@@ -1372,7 +1374,7 @@ async def test_executor_closes_model_on_every_terminal_path(
             if False:
                 yield None
 
-    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None, **_: build)
     monkeypatch.setattr(
         runner_module.Runner,
         "run_streamed",
@@ -1446,7 +1448,7 @@ async def test_executor_transfers_pending_publication_before_model_close(
             if False:
                 yield None
 
-    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None, **_: build)
     monkeypatch.setattr(
         runner_module.Runner,
         "run_streamed",
@@ -1544,7 +1546,7 @@ async def test_commit_artifacts_emits_publication_event(
             if False:
                 yield None
 
-    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None, **_: build)
     monkeypatch.setattr(
         runner_module.Runner,
         "run_streamed",
@@ -1645,7 +1647,7 @@ async def test_commit_artifacts_no_data_keeps_publication_id_none(
             if False:
                 yield None
 
-    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None, **_: build)
     monkeypatch.setattr(
         runner_module.Runner,
         "run_streamed",
@@ -1728,7 +1730,7 @@ async def test_executor_transfers_pending_publication_on_stream_failure(
             raise asyncio.CancelledError
             yield  # pragma: no cover
 
-    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None, **_: build)
     monkeypatch.setattr(
         runner_module.Runner,
         "run_streamed",
@@ -1807,7 +1809,7 @@ async def test_executor_aborts_handle_when_completion_transfer_fails(
             if False:
                 yield None
 
-    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None, **_: build)
     monkeypatch.setattr(
         runner_module.Runner,
         "run_streamed",
@@ -1856,7 +1858,7 @@ async def test_executor_coalesces_text_at_utf8_kib_boundary(
                 )
             )
 
-    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None, **_: build)
     monkeypatch.setattr(
         runner_module.Runner,
         "run_streamed",
@@ -1918,7 +1920,7 @@ async def test_executor_flushes_text_after_100ms_while_stream_is_idle(
                 )
             )
 
-    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None, **_: build)
     monkeypatch.setattr(
         runner_module.Runner,
         "run_streamed",
@@ -1984,7 +1986,7 @@ async def test_executor_flushes_buffered_text_before_abnormal_exit(
                 raise RuntimeError("stream failed")
             raise asyncio.CancelledError
 
-    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None, **_: build)
     monkeypatch.setattr(
         runner_module.Runner,
         "run_streamed",
@@ -2063,7 +2065,7 @@ async def test_executor_emits_ordered_tool_activity(
                 ),
             )
 
-    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None, **_: build)
     monkeypatch.setattr(
         runner_module.Runner,
         "run_streamed",
@@ -2166,7 +2168,7 @@ async def test_executor_prepares_compaction_before_starting_sdk_run(
         assert kwargs["session"] is effective_session
         return FakeResult()
 
-    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None, **_: build)
     monkeypatch.setattr(runner_module.Runner, "run_streamed", run_streamed)
 
     await runner_module.AgentRunExecutor(
@@ -2200,7 +2202,7 @@ async def test_executor_ends_stream_when_compaction_preparation_fails(
         async def prepare(self, task_id, *, request=None, **kwargs):
             raise failure
 
-    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None, **_: build)
     monkeypatch.setattr(
         runner_module.Runner,
         "run_streamed",
@@ -2249,7 +2251,7 @@ async def test_executor_ends_stream_when_compaction_preparation_is_cancelled(
         async def prepare(self, task_id, *, request=None, **kwargs):
             raise cancellation
 
-    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None, **_: build)
     monkeypatch.setattr(
         runner_module.Runner,
         "run_streamed",
@@ -2302,7 +2304,7 @@ async def test_executor_does_not_start_sdk_run_after_compaction_cancellation(
     def run_streamed(*args, **kwargs):
         raise AssertionError("SDK Run must not start after cancellation")
 
-    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None, **_: build)
     monkeypatch.setattr(runner_module.Runner, "run_streamed", run_streamed)
 
     with pytest.raises(CompactionCancelledError):
@@ -2402,7 +2404,7 @@ async def test_no_data_outcome_with_manifest_artifacts_emits_zero_artifact_event
         model=SimpleNamespace(close=AsyncMock()),
     )
     monkeypatch.setattr(
-        runner_module, "build_agent", lambda databases=None: build
+        runner_module, "build_agent", lambda databases=None, **_: build
     )
     monkeypatch.setattr(
         runner_module.Runner,

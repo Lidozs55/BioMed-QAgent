@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
@@ -28,11 +29,7 @@ from app.pipeline.dataset_build_tool import (
     execute_dataset_build,
     validate_dataset_build_spec,
 )
-from app.skills.builtin import load_builtin_skill_descriptors
-from app.skills.catalog import SkillCatalog
-from app.skills.gateway import build_skill_gateway
-from app.skills.llm_search import LLMRerankingSkillSearchStrategy
-from app.skills.registry import SkillCategory
+from app.skills.builtin import builtin_skill_records, load_builtin_tools
 from app.subagents.tools import (
     cancel_subagent,
     delegate_research,
@@ -41,6 +38,8 @@ from app.subagents.tools import (
 from app.tools.io import list_files, read_file, read_file_head, search_file, write_file
 
 AGENT_MAX_TURNS: int = 240
+
+logger = logging.getLogger(__name__)
 
 
 def resolve_agent_max_turns(
@@ -83,9 +82,11 @@ Design Principles
    source ↔ skill ↔ category ↔ pipeline-eligibility mapping.
 
 3. No phantom tools. The prompt never references a generic ``search`` or
-   ``download`` tool. All business operations go through ``find_skill`` +
-   ``invoke_skill``. The ``直接工具`` section enumerates every FunctionTool
-   the Agent can call directly.
+   ``download`` tool. All business operations go through the named direct
+   tools (``search_pubmed``, ``search_geo``, …) registered on the Agent.
+   The ``直接工具`` section enumerates every FunctionTool the Agent can call
+   directly; the ``数据源与工具对照`` table is the single source of truth for
+   the source ↔ skill ↔ tool mapping.
 
 4. Internal vs external verbosity. The Agent's internal reasoning may be
    detailed, but the plan summary reported to the user is capped at 1-2
@@ -104,9 +105,6 @@ Modification Guidelines
 
 • Keep the ``数据源与技能对照`` table synchronized with actual skill
   registrations under app/skills/builtin/.
-
-• Few-shot examples live inside the relevant section (e.g. the skill
-  discovery example in ``动态 Skill 发现协议``), not in a separate block.
 """
 
 INSTRUCTIONS = """\
@@ -124,7 +122,19 @@ INSTRUCTIONS = """\
 
 ## 直接工具
 你拥有以下 FunctionTool，可直接调用：
-- `find_skill` / `invoke_skill` — 发现和调用业务技能（检索、下载、解析等）
+- 数据源业务工具（直接具名，无需发现协议）：`search_pubmed` / `download_supplementary`（PubMed），
+  `search_geo` / `describe_geo` / `list_geo_supplementary_files` / `download_geo` /
+  `download_geo_platform_annotation`（GEO），`search_gdc` / `describe_gdc` / `download_gdc`（GDC），
+  `search_xena` / `download_xena`（Xena），`search_pdb` / `describe_pdb` / `download_pdb`（PDB），
+  `search_pubchem` / `get_compound` / `download_pubchem`（PubChem），
+  `search_reactome` / `get_pathway` / `download_reactome`（Reactome），
+  `search_chembl`（ChEMBL），`search_uniprot`（UniProt），
+  `analyze_papers`（文献标题解析），`navigate_page` / `download_from_page`（浏览器最后手段），
+  `capture_web_page` / `capture_page_section`（网页视觉证据），
+  `search_local_cache` / `describe_local_cache` / `get_cache_dataset`（本地缓存），
+  `extract_pdf_tables` / `extract_pdf_metadata`（PDF 解析），`extract_chart_data_vlm`（图表提取），
+  `run_differential_expression` / `generate_heatmap` / `basic_statistics` /
+  `generate_correlation_matrix`（统计分析），`get_research_data_guidance`（科研数据策略 SOP）
 - `validate_dataset_build_spec` — 先校验 DatasetBuildSpec 是否合法（返回结构化 reason_codes）
 - `execute_dataset_build` — 执行 V2 数据集构建，生成正式产物（不可变 publication）
 - `request_human_correction` — 仅在真正需要人类决策/澄清时暂停 Run 等待人工
@@ -136,8 +146,8 @@ INSTRUCTIONS = """\
 - `compress_query_log` — 压缩查询日志以控制上下文体积
 - `delegate_research` / `get_subagent_results` / `cancel_subagent` — 子 Agent 委托
 
-业务数据源操作（检索文献、下载数据集等）**不作为直接工具注入**。通过 `find_skill`
-发现技能，再用 `invoke_skill` 调用。不存在名为 `search` 或 `download` 的直接工具。
+业务数据源操作（检索文献、下载数据集等）以**直接具名工具**注入，不存在名为
+`find_skill`、`invoke_skill`、`search` 或 `download` 的通用发现/调用工具。
 
 ## 数据源与技能对照
 | 数据源 | 技能名 | 类别 | 能否进入正式构建 |
@@ -165,8 +175,7 @@ Gate 拒绝并给出原因。不要把不同粒度的数据塞进同一个 spec�
 ### 第 1 步：理解问题并加载科研数据策略指导
 从用户研究主题中提取关键实体（疾病、基因、化合物、通路等）和研究目标（表达谱、
 变异、结构、通路网络等）。涉及研究策略/数据选择/清洗可分析性判断时，用
-`find_skill` 发现 `research_data_guidance` 技能（analysis 类，描述含"research-data
-strategy/SOP"），再 `invoke_skill` 读取与当前问题相关的专题指导：
+`get_research_data_guidance` 读取与当前问题相关的专题指导：
 
 - `strategy` — 研究问题→数据源与设计（分组/配对充分性、证据路径）
 - `expression_omics` — 表达谱/多组学数据获取（RNA-seq vs 微阵列、基因级 vs probe 级）
@@ -182,18 +191,18 @@ strategy/SOP"），再 `invoke_skill` 读取与当前问题相关的专题指导
 免登录的来源可自动探索；需登录/API key/付费的受保护来源不访问，直接请求用户授权。
 
 ### 第 2 步：检索发现（多数据源覆盖门禁）
-仅查 1-2 个数据源会严重低估覆盖面。通过 `find_skill` + `invoke_skill` 检索文献和
-数据集，评估结果质量。进入构建前明确回答：**"已查询数据源：[列出]。未查询但
+仅查 1-2 个数据源会严重低估覆盖面。用 `search_pubmed` 等直接工具检索文献和数据集，
+评估结果质量。进入构建前明确回答：**"已查询数据源：[列出]。未查询但
 与课题相关的：[列出或'无']。"**
 
 ### 第 3 步：数据获取与可用性预检
-对相关数据集通过 `invoke_skill` 调用对应数据源的下载能力获取原始文件，保存到
+对相关数据集调用对应数据源的直接下载工具获取原始文件，保存到
 任务工作目录（`source_assets/` 或 `raw/`）。下载失败时换同主题成熟数据集重试，
 不要用相同 accession 反复重试。下载后**用 `read_file_head` 检查文件表头/结构**，
 确认列与行数与预期相符（如表达矩阵含基因列 + 样本列）。
 
-**GEO 数据集提交前强制 vetting**：对每个候选 GSE，先用 `invoke_skill` 调用
-`describe_geo`（operation="describe"）检查样本构成与平台是否匹配主题——样本数、
+**GEO 数据集提交前强制 vetting**：对每个候选 GSE，先用 `describe_geo`
+检查样本构成与平台是否匹配主题——样本数、
 tumor/normal 分组、platform 类型（microarray vs RNA-seq）都要与课题目标相符。
 **未 vetting 的 GSE 不得提交给 `execute_dataset_build`**；vetting 不匹配时换数据集。
 **probe 平台（微阵列）必须在 spec 的 binding `parameters` 里声明 AdapterParams**
@@ -201,7 +210,7 @@ tumor/normal 分组、platform 类型（microarray vs RNA-seq）都要与课题�
 否则 geo.expression.v1 适配器会拒绝。
 
 **probe 平台（微阵列）基因级构建必须提供 GPL 平台注释**：下载 series matrix 后，
-用 `invoke_skill` 调用 `download_geo_platform_annotation`（gpl=platform_ids 中的
+调用 `download_geo_platform_annotation`（gpl=platform_ids 中的
 平台号）获取 probe→gene 注释表，然后在 `execute_dataset_build` 的 `mapping_files`
 参数里按 `{"binding_id": "<注释文件相对路径>"}` 传入——构建内核据此把 probe 行
 映射为基因行。若平台无可用注释（下载失败/注释列全空），**不要用 probe 数据冒充
@@ -213,9 +222,8 @@ tumor/normal 分组、platform 类型（microarray vs RNA-seq）都要与课题�
 matrix，另行下载 family SOFT，并通过 `metadata_files={"binding_id": "<SOFT 相对路径>"}`
 传入；不得从样本顺序或标题相似度猜测配对。
 
-当结构化 API（GEO/PubMed/Xena 等）返回 HTTP 403/404 或网络错误时，可通过
-`find_skill(source="browser")` 发现 `browser_fallback` 技能，再用 `invoke_skill`
-调用 `navigate_page`（渲染页面并提取标题/正文）或 `download_from_page`（通过浏览器
+当结构化 API（GEO/PubMed/Xena 等）返回 HTTP 403/404 或网络错误时，可调用
+`navigate_page`（渲染页面并提取标题/正文）或 `download_from_page`（通过浏览器
 下载文件）。这是最后手段，不得替代可用的结构化 API。
 
 ### 第 4 步：构造 DatasetBuildSpec 并执行构建
@@ -341,38 +349,29 @@ Spec 模板（gene expression 单源）：
 `review_query_strategy` 让 ReviewerAgent 审查策略合理性。
 
 ## 图表与视觉证据
-- **图表数据提取**：通过 `find_skill(source="extract_chart_data_vlm")` 发现
-  `extract_chart_data_vlm` 技能，再用 `invoke_skill` 从论文图表中提取结构化数据
+- **图表数据提取**：调用 `extract_chart_data_vlm` 从论文图表中提取结构化数据
   （chart_type、axes、data_points、legend）。适用于包含需要量化的数值数据的论文
   图表，或表格以图片形式呈现时。不要用于纯文本提取，也不要对同一图片重复调用
-- **网页视觉采集**：通过 `find_skill(source="web_visual_capture")` 发现视觉采集
-  技能，再用 `invoke_skill` 提交截图操作。仅当结构化 API 不可用或返回空且页面确有
-  可视数据时才调用，**不得替代已有结构化 API**
+- **网页视觉采集**：调用 `capture_web_page` / `capture_page_section` 提交截图操作。
+  仅当结构化 API 不可用或返回空且页面确有可视数据时才调用，**不得替代已有结构化 API**
 
-## 动态 Skill 发现协议
-业务数据源操作不作为主 Agent 直接工具注入。先调用 `find_skill`，再用 `invoke_skill`
-提交 `skill`、`operation` 和结构化参数。
+## 直接工具纪律
+业务数据源操作以直接具名工具调用（如 `search_pubmed(query=...)`），不存在动态
+发现协议：直接调用与数据源对应的工具名即可。
 
-- 已知数据库时优先传 `source`（如 `source="pubmed"`、`source="geo"`）；否则用
-  简短 `text` 描述能力，或用 `category` 缩小范围。**传了 `source` 就不要同时传 `category`**——
-  `source` 已精确到具体数据库，叠加 `category` 会误伤其他类别的 skill
-- `find_skill` 返回空时：若已传 `category`，先去掉它仅用 `source` 重试；若未传 `category`，
-  缩短查询词或改用 `source`
-- 技能目录更新后重新调用 `find_skill`，不要依赖记忆中的 operation 列表
+- 已知数据库时直接用对应工具（如 PubMed → `search_pubmed`，GEO → `search_geo`）
+- 工具目录以“## 数据源与技能对照”表和“## 直接工具”清单为准，不要凭记忆编造工具名
 - `search_pubmed` 属于 **discovery** 类（文献检索）；`search_geo`、`search_gdc`、
   `search_xena` 等数据下载工具属于 **acquisition** 类
 
 ### 示例
-用户问"METTL5 在胰腺癌中的研究"。先 `find_skill(source="pubmed")` 发现 pubmed 技能，
-再用 `invoke_skill` 调用 `operation="search"`，`arguments` 传入
+用户问"METTL5 在胰腺癌中的研究"。先调用 `search_pubmed` 传入
 `{"query": "METTL5 pancreatic cancer"}`。若结果为零，换关键词（如 "METTL5 cancer"）
 重试，不要用相同 query 重试。
 
 ## 检索失败处理
 - 零结果（`not_found`）后**不重试同一 query**——换关键词、换字段或换 source
-- `not_found` 不等于能力缺失，不得据此触发 `create_skill`
-- 仅当工具明确缺少所需接口时标记 `capability_gap`，并通过 `find_skill`/`invoke_skill`
-  调用 `create_skill`（同一 domain+capability 最多一次）
+- `not_found` 不等于能力缺失，不得据此声称缺少接口
 - 每个 source 最多 3 轮 follow-up：累计 3 次 `not_found` 后换 source 或进入构建
 - 网络错误可重试，不算入 follow-up 计数
 
@@ -395,7 +394,6 @@ class AgentBuild:
     skill_names: tuple[str, ...]
     model: LazyDashScopeModel
     prompt_shape: ChatCompletionsPromptShape
-    catalog: SkillCatalog | None = None
 
 
 def _format_query_log_section(run_ctx: RunContext) -> str:
@@ -529,38 +527,33 @@ def _make_instructions_fn(
 
 
 def build_agent(
-    catalog: SkillCatalog | list[str] | None = None,
     databases: list[str] | None = None,
     *,
     model_settings: RunModelSettings | None = None,
+    disabled_databases: frozenset[str] = frozenset(),
+    user_tools: list | None = None,
 ) -> AgentBuild:
-    """Build a main Agent with a catalog gateway and one model settings snapshot.
+    """Build a main Agent with the builtin direct tools and one model snapshot.
 
-    ``catalog`` retains the main-branch compatibility shorthand where a list is
-    treated as ``databases``. ``model_settings`` is injected by a managed Run;
-    standalone callers capture the active model-store configuration once.
+    ``databases`` is the user-selected database list (injected as
+    ``preferred_sources`` by the Run, not used to filter tools here).
+    ``disabled_databases`` excludes the tools of user-disabled builtin
+    databases (database store toggles) from the Agent. ``user_tools`` are the
+    declarative user-database HTTP tools (thin database store); names that
+    collide with registered tools are skipped with a warning.
     """
-
-    resolved_catalog: SkillCatalog
-    selected_databases = databases
-    match catalog:
-        case SkillCatalog():
-            resolved_catalog = catalog
-        case list():
-            resolved_catalog = SkillCatalog(load_builtin_skill_descriptors())
-            selected_databases = catalog
-        case None:
-            resolved_catalog = SkillCatalog(load_builtin_skill_descriptors())
 
     active_model_settings = model_settings or get_active_model_settings()
     model = get_model(active_model_settings)
-    find_skill, invoke_skill = build_skill_gateway(
-        resolved_catalog,
-        search_strategy=LLMRerankingSkillSearchStrategy(),
-    )
+    records = builtin_skill_records()
+    disabled_tools: set[str] = {
+        tool_name
+        for skill_name in set(disabled_databases)
+        if skill_name in records
+        for tool_name in records[skill_name].tool_names
+    }
     tools = [
-        find_skill,
-        invoke_skill,
+        *load_builtin_tools(),
         validate_dataset_build_spec,
         request_human_correction,
         execute_dataset_build,
@@ -575,6 +568,20 @@ def build_agent(
         get_subagent_results,
         cancel_subagent,
     ]
+    if disabled_tools:
+        tools = [tool for tool in tools if getattr(tool, "name", "") not in disabled_tools]
+    if user_tools:
+        registered = {getattr(tool, "name", "") for tool in tools}
+        for tool in user_tools:
+            name = getattr(tool, "name", "")
+            if name in registered:
+                logger.warning(
+                    "user database tool %r collides with a registered tool; skipped",
+                    name,
+                )
+                continue
+            registered.add(name)
+            tools.append(tool)
     prompt_shape = ChatCompletionsPromptShape(
         instructions=INSTRUCTIONS,
         serialized_tool_schemas=serialize_function_tool_schemas(tools),
@@ -589,36 +596,27 @@ def build_agent(
         model=model,
         model_settings=build_sdk_model_settings(active_model_settings),
     )
-    snapshot = resolved_catalog.snapshot()
-    selected_sources = set(selected_databases or ())
     skill_names = tuple(
-        descriptor.name
-        for descriptor in snapshot.skills.values()
-        if selected_databases is None
-        or descriptor.category is not SkillCategory.ACQUISITION
-        or descriptor.name == "local_cache"
-        or descriptor.name == "browser_fallback"
-        or bool(selected_sources.intersection(descriptor.supported_sources))
+        name for name in records if name not in set(disabled_databases)
     )
     return AgentBuild(
         agent=agent,
         skill_names=skill_names,
         model=model,
         prompt_shape=prompt_shape,
-        catalog=resolved_catalog,
     )
 
 
 def create_agent(
-    catalog: SkillCatalog | list[str] | None = None,
     databases: list[str] | None = None,
     *,
     model_settings: RunModelSettings | None = None,
+    disabled_databases: frozenset[str] = frozenset(),
 ) -> Agent:
     """Build a standalone Agent for callers that do not need owned metadata."""
 
     return build_agent(
-        catalog,
         databases=databases,
         model_settings=model_settings,
+        disabled_databases=disabled_databases,
     ).agent

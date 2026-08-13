@@ -106,7 +106,7 @@ async def delegate_research(
     ctx: RunContextWrapper[RunContext],
     requests: list[SubagentRequest],
 ) -> dict[str, object]:
-    """Delegate source research or recipe-building requests to child agents."""
+    """Delegate source-research requests to child agents (skill_builder retired in Phase 2)."""
 
     result = await delegate_research_impl(
         ctx.context,

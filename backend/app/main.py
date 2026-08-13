@@ -20,12 +20,12 @@ from app.api.model_info_router import router as model_info_router
 from app.api.provider_models import router as provider_models_router
 from app.api.routes import router as routes_router
 from app.api.settings import router as settings_router
-from app.api.skills import router as skills_router
 from app.api.ws import router as ws_router
 from app.compat.pi_dataset_bridge import PiDatasetBridge
 from app.compat.pi_dataset_bridge import router as pi_dataset_bridge_router
 from app.config import Settings, settings
-from app.domain.contracts import TaskMode, generate_prefixed_uuid
+from app.databases.store import DatabaseStore
+from app.domain.contracts import TaskMode
 from app.logging_setup import configure_logging
 from app.model_config.context_budget import (
     ContextBudgetConfigurationError,
@@ -44,13 +44,9 @@ from app.runtime.hub import AssistantStreamHub, EventHub
 from app.runtime.index import SingleThreadExecutor, TaskIndex
 from app.runtime.manager import RunAdmissionRejectedError, TaskManager
 from app.runtime.repository import TaskRepository
-from app.skills.builtin import load_builtin_skill_descriptors
-from app.skills.builtin.processing.create_skill import CreateSkillRuntime
-from app.skills.catalog import SkillCatalog
-from app.skills.store import UserSkillStore
+from app.skills.categories import SkillCategory
 from app.subagents.event_sink import DurableSubagentEventSink
 from app.subagents.input_broker import SubagentInputBroker
-from app.subagents.staging import SubagentStagingWorkspace
 from app.subagents.supervisor import SubagentSupervisor
 from app.tools.browser_pool import BrowserPool
 from app.tools.cache_store import init_cache_store
@@ -128,7 +124,7 @@ def create_app(
         assistant_stream_hub = AssistantStreamHub(
             subscriber_queue_size=configured.runtime_subscriber_queue_size
         )
-        skill_catalog = SkillCatalog()
+        database_store = DatabaseStore(configured.skill_data_path)
         model_settings_store = ModelSettingsStore(
             Path(configured.output_dir).expanduser().resolve().parent / "settings" / "model.json",
             defaults=configured,
@@ -143,11 +139,6 @@ def create_app(
             timeout=10.0,
             follow_redirects=False,
             trust_env=False,
-        )
-        skill_store = UserSkillStore(
-            configured.skill_data_path,
-            catalog=skill_catalog,
-            builtins=load_builtin_skill_descriptors(),
         )
         workflow_recipe_store = WorkflowRecipeStore(configured.skill_data_path / "recipes")
         browser_pool = BrowserPool(max_contexts=4)
@@ -170,15 +161,9 @@ def create_app(
                 base_dir=repository.tasks_dir,
             )
             context.bind_crawler_facade(crawler_facade)
-            context.bind_create_skill_runtime(
-                CreateSkillRuntime(
-                    store=workflow_recipe_store,
-                    executor=recipe_executor,
-                    workspace=SubagentStagingWorkspace(
-                        context.work_dir.root,
-                        generate_prefixed_uuid("create_skill"),
-                    ),
-                )
+            context.bind_recipe_services(
+                store=workflow_recipe_store,
+                executor=recipe_executor,
             )
             return context
 
@@ -194,7 +179,14 @@ def create_app(
             repository,
             run_executor=ModeDispatchRunExecutor(
                 repository,
-                skill_catalog=skill_catalog,
+                disabled_databases=database_store.disabled_builtin_names,
+                user_http_tools=lambda: database_store.build_user_http_tools(),
+                child_user_http_tools=lambda: database_store.build_user_http_tools(
+                    categories={
+                        SkillCategory.DISCOVERY,
+                        SkillCategory.ACQUISITION,
+                    }
+                ),
             ),
             max_active_runs=configured.runtime_max_active_runs,
             max_queued_runs=configured.runtime_run_queue_size,
@@ -242,8 +234,7 @@ def create_app(
         application.state.cache_store = init_cache_store(
             Path(configured.output_dir).parent / "cache"
         )
-        application.state.skill_catalog = skill_catalog
-        application.state.skill_store = skill_store
+        application.state.database_store = database_store
         application.state.model_settings_store = model_settings_store
         application.state.provider_model_store = provider_model_store
         application.state.model_preview_client = model_preview_client
@@ -307,7 +298,6 @@ def create_app(
         allowed_hosts=["127.0.0.1", "localhost"],
     )
     application.include_router(routes_router)
-    application.include_router(skills_router)
     application.include_router(settings_router)
     application.include_router(model_info_router)
     application.include_router(provider_models_router)

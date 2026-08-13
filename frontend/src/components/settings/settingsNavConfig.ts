@@ -4,7 +4,6 @@ import {
   Database,
   Keyboard,
   Palette,
-  Puzzle,
   SlidersHorizontal,
   Sparkles,
 } from "lucide-react";
@@ -45,11 +44,6 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
       { id: "model", label: "模型", icon: Cpu },
       { id: "databases", label: "数据库", icon: Database },
     ],
-  },
-  {
-    id: "capabilities",
-    label: "能力",
-    items: [{ id: "skills", label: "技能", icon: Puzzle }],
   },
 ];
 

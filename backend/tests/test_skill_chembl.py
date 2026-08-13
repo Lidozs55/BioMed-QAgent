@@ -9,8 +9,15 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from agents.tool_context import ToolContext
 from app.agent_loop.context import RunContext
-from app.skills.builtin import load_builtin_skill_descriptors
-from app.skills.builtin.discovery.chembl import chembl_skill, search_chembl
+from app.skills.builtin import builtin_skill_records
+from app.skills.builtin.discovery.chembl import (
+    SKILL_CATEGORY,
+    SKILL_DESCRIPTION,
+    SKILL_NAME,
+    SKILL_TOOLS,
+    SUPPORTED_SOURCES,
+    search_chembl,
+)
 from app.tools.crawler import CrawlAttempt, FetchResult
 
 
@@ -111,15 +118,17 @@ def test_search_chembl_page_fallback_when_api_returns_non_json() -> None:
     assert "chembl" in fallback.await_args.args[1]
 
 
-def test_chembl_skill_is_registered_in_builtin_catalog() -> None:
-    descriptors = load_builtin_skill_descriptors()
-    descriptor = next(
-        (item for item in descriptors if item.name == "chembl"), None
-    )
-    assert descriptor is not None
-    assert descriptor.supported_sources == ("chembl",)
+def test_chembl_skill_exports_the_direct_tool_table() -> None:
+    records = builtin_skill_records()
+    record = records["chembl"]
+    assert record.supported_sources == ("chembl",)
     # Agent-only research source: selectable for investigation, never
     # pipeline-supported for dataset builds.
-    assert descriptor.user_selectable is True
-    assert descriptor.pipeline_supported is False
-    assert chembl_skill.category.value == "discovery"
+    assert record.user_selectable is True
+    assert record.pipeline_supported is False
+    assert record.tool_names == ("search_chembl",)
+    assert SKILL_NAME == "chembl"
+    assert SKILL_CATEGORY.value == "discovery"
+    assert SKILL_DESCRIPTION
+    assert SUPPORTED_SOURCES == ["chembl"]
+    assert [tool.name for tool in SKILL_TOOLS] == ["search_chembl"]

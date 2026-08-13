@@ -6,7 +6,6 @@ from datetime import UTC, datetime
 
 import pytest
 from agents import RunContextWrapper, function_tool
-from agents.tool_context import ToolContext
 from app.agent_loop.agent import (
     INSTRUCTIONS,
     AgentBuild,
@@ -18,8 +17,6 @@ from app.agent_loop.context import PendingDatasetBuild, RunContext
 from app.domain.contracts.dataset_state import BuildResult, BuildResultStatus
 from app.domain.contracts.enums import Database
 from app.domain.contracts.source import SourceRecord
-from app.skills.catalog import SkillCatalog, SkillDescriptor
-from app.skills.registry import SkillCategory, SkillDef
 
 pytestmark = pytest.mark.usefixtures("runnable_agent_model_settings")
 
@@ -36,23 +33,48 @@ def test_agent_build_owns_immutable_skill_and_model_metadata() -> None:
 
 @pytest.mark.asyncio
 async def test_concurrent_agent_builds_keep_skill_and_model_ownership_isolated() -> None:
-    catalog = SkillCatalog()
     geo_build, pdb_build = await asyncio.gather(
-        asyncio.to_thread(build_agent, catalog, ["geo"]),
-        asyncio.to_thread(build_agent, catalog, ["pdb"]),
+        asyncio.to_thread(build_agent, ["geo"]),
+        asyncio.to_thread(build_agent, ["pdb"]),
     )
 
-    assert geo_build.catalog is catalog
-    assert pdb_build.catalog is catalog
     assert geo_build.model is not pdb_build.model
+    assert geo_build.skill_names == pdb_build.skill_names
 
 
-def test_agent_exposes_only_gateway_and_core_runtime_tools() -> None:
-    build = build_agent(SkillCatalog(), databases=["pubmed", "geo"])
+def test_agent_exposes_direct_builtin_tools_and_core_runtime_tools() -> None:
+    build = build_agent(databases=["pubmed", "geo"])
 
-    assert [tool.name for tool in build.agent.tools] == [
-        "find_skill",
-        "invoke_skill",
+    names = [tool.name for tool in build.agent.tools]
+    assert "find_skill" not in names
+    assert "invoke_skill" not in names
+    # Direct data-source tools (stable Skill ↔ Tool mapping).
+    for expected in (
+        "search_pubmed",
+        "download_supplementary",
+        "search_geo",
+        "describe_geo",
+        "download_geo",
+        "download_geo_platform_annotation",
+        "search_gdc",
+        "search_xena",
+        "search_pdb",
+        "search_pubchem",
+        "search_reactome",
+        "search_chembl",
+        "search_uniprot",
+        "analyze_papers",
+        "navigate_page",
+        "search_local_cache",
+        "capture_web_page",
+        "extract_pdf_tables",
+        "extract_chart_data_vlm",
+        "run_differential_expression",
+        "get_research_data_guidance",
+    ):
+        assert expected in names, expected
+    # Core runtime tools.
+    for expected in (
         "validate_dataset_build_spec",
         "request_human_correction",
         "execute_dataset_build",
@@ -66,21 +88,33 @@ def test_agent_exposes_only_gateway_and_core_runtime_tools() -> None:
         "delegate_research",
         "get_subagent_results",
         "cancel_subagent",
-    ]
+    ):
+        assert expected in names, expected
+    assert len(names) == len(set(names))
 
 
-def test_agent_instructions_require_dynamic_skill_discovery_protocol() -> None:
+def test_disabled_databases_remove_their_direct_tools() -> None:
+    build = build_agent(databases=[], disabled_databases=frozenset({"pubmed"}))
+
+    names = [tool.name for tool in build.agent.tools]
+    assert "search_pubmed" not in names
+    assert "download_supplementary" not in names
+    assert "search_geo" in names
+    assert build.skill_names.count("pubmed") == 0
+
+
+def test_agent_instructions_use_the_direct_tool_catalog() -> None:
     # agent.instructions is a dynamic callable (query_log injection); validate
     # the base content via the module-level INSTRUCTIONS constant.
-    build_agent(SkillCatalog())
+    build_agent()
 
-    assert "find_skill" in INSTRUCTIONS
-    assert "invoke_skill" in INSTRUCTIONS
-    assert "技能目录更新后" in INSTRUCTIONS
-    assert "简短 `text` 描述能力" in INSTRUCTIONS
-    assert "缩短查询" in INSTRUCTIONS
-    assert "优先传 `source`" in INSTRUCTIONS
-    assert "每个被选中的数据库必须至少调用一次" not in INSTRUCTIONS
+    assert "search_pubmed" in INSTRUCTIONS
+    assert "search_geo" in INSTRUCTIONS
+    assert "get_research_data_guidance" in INSTRUCTIONS
+    assert "直接具名工具" in INSTRUCTIONS
+    # The gateway is declared non-existent, not presented as callable tools.
+    assert "不存在名为" in INSTRUCTIONS
+    assert "## 动态 Skill 发现协议" not in INSTRUCTIONS
 
 
 def test_agent_prompt_distinguishes_results_from_capability_gaps() -> None:
@@ -90,8 +124,6 @@ def test_agent_prompt_distinguishes_results_from_capability_gaps() -> None:
     )
 
     assert "不等于能力缺失" in instructions
-    assert "capability_gap" in instructions
-    assert "同一 domain+capability 最多一次" in instructions
     assert "优先检索其中与课题相关的数据库" in instructions
     assert "免登录的来源可自动探索" in instructions
 
@@ -162,46 +194,6 @@ def test_progress_briefing_reports_publication_downloads_and_browser_use() -> No
 
 
 @pytest.mark.asyncio
-async def test_existing_agent_gateway_observes_catalog_hot_add() -> None:
-    @function_tool
-    async def fetch_demo(ctx: RunContextWrapper[RunContext]) -> str:
-        return "demo"
-
-    catalog = SkillCatalog()
-    build = build_agent(catalog, databases=["demo_db"])
-    find_skill = next(tool for tool in build.agent.tools if tool.name == "find_skill")
-    context = ToolContext(
-        context=RunContext(preferred_sources=["demo_db"]),
-        tool_name="find_skill",
-        tool_call_id="call-find",
-        tool_arguments='{"text":"demo_db"}',
-    )
-
-    before = await find_skill.on_invoke_tool(
-        context,
-        '{"text":"demo_db","category":null,"source":null}',
-    )
-    catalog.register(
-        SkillDescriptor.from_skill_def(
-            SkillDef(
-                name="demo_db",
-                category=SkillCategory.ACQUISITION,
-                description="Demo DB.",
-                tools=[fetch_demo],
-                supported_sources=["demo_db"],
-            )
-        )
-    )
-    after = await find_skill.on_invoke_tool(
-        context,
-        '{"text":"demo_db","category":null,"source":null}',
-    )
-
-    assert '"skills": []' in before
-    assert '"name": "demo_db"' in after
-
-
-@pytest.mark.asyncio
 async def test_concurrent_agent_builds_pass_each_owned_model_to_compress_tool() -> None:
     builds = await asyncio.gather(
         asyncio.to_thread(build_agent, ["geo"]),
@@ -218,7 +210,44 @@ async def test_concurrent_agent_builds_pass_each_owned_model_to_compress_tool() 
             assert context_manager_agent.model is build.model
             assert build.agent.model is build.model
 
-        assert builds[0].model is not builds[1].model
         assert context_manager_agents[0] is not context_manager_agents[1]
     finally:
         await asyncio.gather(*(build.model.close() for build in builds))
+
+
+def test_user_declarative_database_tools_are_registered_with_collision_guard() -> None:
+    from agents import FunctionTool
+
+    def make_tool(name: str) -> object:
+        return FunctionTool(
+            name=name,
+            description=f"tool {name}",
+            params_json_schema={"type": "object", "properties": {}},
+            on_invoke_tool=lambda _ctx, _args: "done",
+        )
+
+    build = build_agent(
+        databases=[],
+        user_tools=[make_tool("search_pubmed"), make_tool("query_demo")],
+    )
+
+    names = [tool.name for tool in build.agent.tools]
+    assert names.count("search_pubmed") == 1  # collision skipped, builtin kept
+    assert "query_demo" in names
+
+
+@pytest.mark.asyncio
+async def test_main_agent_never_registers_the_old_gateway() -> None:
+    @function_tool
+    async def fetch_demo(ctx: RunContextWrapper[RunContext]) -> str:
+        return "demo"
+
+    build = build_agent(databases=["pubmed"])
+    names = {tool.name for tool in build.agent.tools}
+
+    assert "find_skill" not in names
+    assert "invoke_skill" not in names
+    assert "create_skill" not in names
+    # Direct tool resolution is by name, not by catalog discovery: a custom
+    # tool cannot be injected at runtime anymore.
+    assert "fetch_demo" not in names

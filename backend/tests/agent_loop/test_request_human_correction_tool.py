@@ -34,7 +34,6 @@ from app.domain.contracts import (
     UserInputResumedPayload,
 )
 from app.model_config.token_estimation import serialize_function_tool_schemas
-from app.skills.catalog import SkillCatalog
 
 pytestmark = pytest.mark.usefixtures("runnable_agent_model_settings")
 
@@ -344,7 +343,7 @@ def test_tool_registered_in_agent_tools_with_expected_params() -> None:
 
     from app.agent_loop.agent import build_agent
 
-    build = build_agent(SkillCatalog(), databases=["pubmed", "geo"])
+    build = build_agent(databases=["pubmed", "geo"])
     names = [tool.name for tool in build.agent.tools]
 
     assert "request_human_correction" in names

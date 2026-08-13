@@ -1,4 +1,4 @@
-import type { ModelSettings, SettingsAPIClient, SkillManifest } from "@/hooks/useAPI";
+import type { DatabaseItem, ModelSettings, SettingsAPIClient } from "@/hooks/useAPI";
 
 export interface ModelSettingsSectionProps {
   api: SettingsAPIClient;
@@ -8,25 +8,11 @@ export interface ModelSettingsSectionProps {
 }
 
 export interface DatabaseSettingsSectionProps {
-  databases: SkillManifest[];
+  databases: DatabaseItem[];
   highlightAnchor: string | null;
   highlightNonce: number;
-  onUploadFile: (file: File | undefined) => void;
   onNewDatabase: () => void;
-  onEditDatabase: (database: SkillManifest) => void;
-  onToggleEnabled: (database: SkillManifest, enabled: boolean) => void;
-  onDeleteDatabase: (database: SkillManifest) => void;
-}
-
-export interface SkillsSettingsSectionProps {
-  skills: SkillManifest[];
-  filter: string;
-  highlightAnchor: string | null;
-  highlightNonce: number;
-  onFilterChange: (value: string) => void;
-  onInstallFile: (file: File | undefined) => void;
-  onToggleEnabled: (skill: SkillManifest, enabled: boolean) => void;
-  onShowDetail: (name: string) => void;
-  onRollback: (skill: SkillManifest) => void;
-  onDeleteSkill: (skill: SkillManifest) => void;
+  onEditDatabase: (database: DatabaseItem) => void;
+  onToggleEnabled: (database: DatabaseItem, enabled: boolean) => void;
+  onDeleteDatabase: (database: DatabaseItem) => void;
 }

@@ -21,7 +21,7 @@
 | --- | --- | --- |
 | 0 | 冻结边界与迁移 ADR | ✅ 完成（2026-08-12） |
 | 1 | 引入 Pi Main Agent（不动 Dataset Core） | ✅ 完成（2026-08-12） |
-| 2 | 迁移 Skills 与通用 Agent 工具 | ⬜ **下一阶段** |
+| 2 | 迁移 Skills 与通用 Agent 工具 | ✅ 完成（2026-08-13） |
 | 3 | 拆出 TS Application Runtime | ✅ 完成（opt-in，2026-08-12） |
 | 4 | 迁移 Dataset Deterministic Core | ✅ 完成（2026-08-13；运行接线待后续阶段） |
 | 5 | 迁外部能力与 Python 数据处理依赖 | ⬜ 待开始 |
@@ -30,8 +30,8 @@
 | 8 | 删除 Python Runtime（仅留 DB bridge） | ⬜ 待开始 |
 
 默认 profile 仍是 `APP_HOST=ts / AGENT_RUNTIME=legacy / DATASET_CORE=python`；
-Phase 3 需显式 `AGENT_RUNTIME=pi` 才接管正式 Task 流量。实际执行顺序为 0 → 1 → 3 →
-4（TS Core 已移植、尚未接入运行路径）→ Phase 2。feature-flag 回滚顺序与迁移期约束
+Phase 3 需显式 `AGENT_RUNTIME=pi` 才接管正式 Task 流量。实际执行顺序为 0 → 1 → 3 → 4 → 2（已完成）；
+默认 profile 不变，Phase 3 仍需显式 `AGENT_RUNTIME=pi` 才接管正式 Task 流量。feature-flag 回滚顺序与迁移期约束
 见 Plan §24；Phase 8 后删除 flag 与 legacy 代码。
 
 ---
@@ -69,20 +69,22 @@ Phase 3 需显式 `AGENT_RUNTIME=pi` 才接管正式 Task 流量。实际执行�
       rollback 仅作 migration/debug 用
       （`docs/migration/single-host-lifecycle-and-flags.md`）。
 
-## Phase 2：迁移 Skills 与通用 Agent 工具（⬜ 下一阶段）
+## Phase 2：迁移 Skills 与通用 Agent 工具（✅ 完成，2026-08-13）
 
-> 目标：`backend/app/skills/builtin/*` 内容迁至 `.pi/skills/*`；停用自制 Skill
-> Catalog/Gateway/Registry；业务 Tool 注册为 Pi Extensions。验收见 Plan §20 Phase 2。
+> 设计决策与验收映射见
+> [docs/migration/phase2-skills-tools-migration.md](migration/phase2-skills-tools-migration.md)。
 
-- [ ] `backend/app/skills/builtin/*` → `.pi/skills/*` 内容迁移（当前 `.pi/skills/`
-      仅 `dataset-construction` 与 `migration-smoke`）
-- [ ] 业务 Tool（PubMed / GEO / GDC / Xena / PDB / cache / …）改注册为 Pi Extensions，
-      建立 Skill ↔ Tool 稳定名称映射
-- [ ] 停用并删除 `SkillCatalog` / `SkillGateway` / `SkillRegistry` /
+- [x] `backend/app/skills/builtin/*` → `.pi/skills/*` 内容迁移（17 个 curated
+      SKILL.md；`migration-smoke` 退役）
+- [x] 业务 Tool 建立 Skill ↔ Tool 稳定名称映射（`server/src/agent/skills/
+      skill-tool-map.ts`，TS/Python 双侧测试钉住）；legacy Agent 以直接具名工具
+      注册；Pi 侧注册遵循 customTools 面（D1，Phase 5 迁 TS 实现时落工具包装）
+- [x] 停用并删除 `SkillCatalog` / `SkillGateway` / `SkillRegistry` /
       `LLMRerankingSkillSearchStrategy` / `UserSkillStore`
-- [ ] learned skill 默认禁用规则：确定 Pi 侧替代方案或明确删除
-- [ ] 决策：Skill 管理 UI / `/api/v1/skills` 的去向（store.py → 极薄 UI adapter 或退役）
-- [ ] 验收：Main Agent 不再调用 `find_skill`/`invoke_skill` 自制网关；
+- [x] learned skill 默认禁用规则：概念明确删除（`.pi/skills` 为 curated 唯一来源）
+- [x] 决策：`/api/v1/skills` 与设置页"技能"分区退役；`/api/v1/databases` 保留为
+      极薄声明式数据库存储（`app/databases/`，含 enable/disable 与 detail）
+- [x] 验收：Main Agent 不再调用 `find_skill`/`invoke_skill` 自制网关；
       Pi 能按任务加载相关 Skill；Skill 缺失不导致 Runtime 崩溃
 
 ## Phase 3：拆出 TS Application Runtime（✅ opt-in 完成）

@@ -172,7 +172,7 @@ async def test_max_turns_exceeded_emits_prompt_and_resumes_on_approve(
             return _MaxTurnsResult(context)
         return _SuccessResult(context, output_dir)
 
-    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None, **_: build)
     monkeypatch.setattr(runner_module.Runner, "run_streamed", run_streamed)
 
     manager = TaskManager(repository, run_executor=make_executor(repository))
@@ -250,7 +250,7 @@ async def test_max_turns_exceeded_rejection_fails_run(
     def run_streamed(*args, **kwargs):
         return _MaxTurnsResult(kwargs["context"])
 
-    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None, **_: build)
     monkeypatch.setattr(runner_module.Runner, "run_streamed", run_streamed)
 
     manager = TaskManager(repository, run_executor=make_executor(repository))
@@ -313,7 +313,7 @@ async def test_max_turns_resume_limit_enforced(
     def run_streamed(*args, **kwargs):
         return _MaxTurnsResult(kwargs["context"])
 
-    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None, **_: build)
     monkeypatch.setattr(runner_module.Runner, "run_streamed", run_streamed)
 
     manager = TaskManager(repository, run_executor=make_executor(repository))

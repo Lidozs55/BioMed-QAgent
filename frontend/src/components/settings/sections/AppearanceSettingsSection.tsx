@@ -410,7 +410,7 @@ export function AppearanceSettingsSection() {
               </div>
               <p className="mt-3 text-2xl font-medium tracking-tight">Aa 生物医学检索</p>
               <p className="mt-1.5 text-sm text-muted-foreground">
-                上下文窗口 · 生成参数 · 技能管理
+                上下文窗口 · 生成参数 · 数据库管理
               </p>
             </div>
           </div>

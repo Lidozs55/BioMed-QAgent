@@ -29,7 +29,7 @@ from app.domain.contracts import (
     generate_prefixed_uuid,
     make_source_id,
 )
-from app.skills.registry import SkillCategory, SkillDef, skill_registry
+from app.skills.categories import SkillCategory
 
 logger = logging.getLogger(__name__)
 
@@ -253,25 +253,16 @@ async def download_from_page(
         )
 
 
-browser_fallback_skill = SkillDef(
-    name="browser_fallback",
-    category=SkillCategory.ACQUISITION,
-    description=(
-        "Last-resort rendered browser fallback for navigating pages and downloading "
-        "files from biomedical databases when API tools fail. Uses real browser "
-        "User-Agent, Referer, Accept headers, and 2s rate limiting. HTML parsing "
-        "uses BeautifulSoup."
-    ),
-    instructions=(
-        "Use browser_fallback tools only when API endpoints (PubMed, GEO, PDB, "
-        "etc.) are unavailable or return errors. navigate_page renders a page and "
-        "extracts title and body text. download_from_page downloads files directly "
-        "through isolated staging, validates a checksum-addressed SourceAsset, "
-        "and records linked download provenance."
-    ),
-    tools=[navigate_page, download_from_page],
-    supported_sources=["browser", "browser_fallback", "http", "web"],
-    version="0.2.0",
+SKILL_NAME = 'browser_fallback'
+SKILL_CATEGORY = SkillCategory.ACQUISITION
+SKILL_DESCRIPTION = (
+    'Last-resort rendered browser fallback for navigating pages and downloading files from'
+    'biomedical databases when API tools fail. Uses real browser User-Agent, Referer, Accept'
+    'headers, and 2s rate limiting. HTML parsing uses BeautifulSoup.'
 )
-
-skill_registry.register(browser_fallback_skill)
+SKILL_VERSION = '0.2.0'
+SUPPORTED_SOURCES = ['browser', 'browser_fallback', 'http', 'web']
+SKILL_TOOLS = [
+    navigate_page,
+    download_from_page,
+]

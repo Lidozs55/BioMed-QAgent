@@ -8,7 +8,7 @@ subordinate to [ARCHITECTURE.md](../ARCHITECTURE.md) and the
 [BioMed-QAgent_Pi_Migration_Phase0_1_Detailed.md](../BioMed-QAgent_Pi_Migration_Phase0_1_Detailed.md)
 and the overall phase plan in
 [BioMed-QAgent_Pi_Migration_Plan.md](../BioMed-QAgent_Pi_Migration_Plan.md).
-Migration progress and remaining Phase 2/4-8 work are tracked in [TODO.md](../TODO.md).
+Migration progress and remaining Phase 5-8 work are tracked in [TODO.md](../TODO.md).
 
 | Boundary | Authoritative migration document |
 | --- | --- |
@@ -17,6 +17,7 @@ Migration progress and remaining Phase 2/4-8 work are tracked in [TODO.md](../TO
 | Current Main Agent tools and minimal Phase 1 prompt | [Agent tool and prompt matrix](agent-tool-prompt-matrix.md) |
 | Named Python V2 Core operations, envelopes, errors, transport, cancellation | [Legacy Dataset Core bridge](legacy-dataset-core-bridge.md) |
 | Task Workspace permissions, exec modes, Windows/Linux security cases | [Phase 1 Workspace policy](workspace-policy-phase1.md) |
+| Phase 2 decisions: skill content migration, stable Skill↔Tool map, retired skill runtime, thin database store | [Phase 2 skills & tools migration](phase2-skills-tools-migration.md) |
 | Pi-to-BioMed experimental event mapping and sequence meaning | [Pi event adapter](pi-event-adapter.md) |
 | Single Host startup/shutdown, flags, valid combinations, rollback | [Single-Host lifecycle and flags](single-host-lifecycle-and-flags.md) |
 | Phase 3 durable TS Task/Run/Event ownership and legacy fallback | [Phase 3 TypeScript Application Runtime](phase3-ts-application-runtime.md) |

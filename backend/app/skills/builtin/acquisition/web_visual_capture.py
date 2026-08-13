@@ -36,7 +36,7 @@ from app.domain.contracts import (
     generate_prefixed_uuid,
     make_source_id,
 )
-from app.skills.registry import SkillCategory, SkillDef, skill_registry
+from app.skills.categories import SkillCategory
 from app.tools.crawler import BROWSER_HEADERS
 
 logger = logging.getLogger(__name__)
@@ -367,28 +367,17 @@ async def capture_page_section(
     )
 
 
-web_visual_capture_skill = SkillDef(
-    name="web_visual_capture",
-    category=SkillCategory.ACQUISITION,
-    description=(
-        "Capture web page screenshots for visual evidence and chart extraction. "
-        "Uses real browser User-Agent, Referer, stealth scripts, and 2s rate "
-        "limiting. Produces content-addressed PNGs under source_assets/figures/. "
-        "Use when API endpoints fail or when visual provenance is needed."
-    ),
-    instructions=(
-        "Use web_visual_capture tools when you need visual evidence from a "
-        "biomedical web page: (1) capture_web_page for full-page screenshots, "
-        "(2) capture_page_section for precise DOM element crops (e.g., a "
-        "<figure> or <table> on a paper HTML page). Do NOT use these for "
-        "sources with working structured APIs (PubMed, GEO) unless visual "
-        "provenance is explicitly required. Screenshots register as "
-        "SourceRecord(database=BROWSER) and can feed a future "
-        "extract_chart_data_vlm tool."
-    ),
-    tools=[capture_web_page, capture_page_section],
-    supported_sources=["web_visual_capture", "visual_capture", "web"],
-    version="0.1.0",
+SKILL_NAME = 'web_visual_capture'
+SKILL_CATEGORY = SkillCategory.ACQUISITION
+SKILL_DESCRIPTION = (
+    'Capture web page screenshots for visual evidence and chart extraction. Uses real browser'
+    'User-Agent, Referer, stealth scripts, and 2s rate limiting. Produces content-addressed PNGs'
+    'under source_assets/figures/. Use when API endpoints fail or when visual provenance is'
+    'needed.'
 )
-
-skill_registry.register(web_visual_capture_skill)
+SKILL_VERSION = '0.1.0'
+SUPPORTED_SOURCES = ['web_visual_capture', 'visual_capture', 'web']
+SKILL_TOOLS = [
+    capture_web_page,
+    capture_page_section,
+]

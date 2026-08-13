@@ -89,20 +89,6 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     anchor: "settings-database-new",
   },
   {
-    id: "skills.filter",
-    title: "筛选技能",
-    keywords: ["filter", "搜索技能", "过滤"],
-    section: "skills",
-    anchor: "settings-skill-filter",
-  },
-  {
-    id: "skills.install",
-    title: "安装技能",
-    keywords: ["install", "上传", "导入技能", "validate", "安装"],
-    section: "skills",
-    anchor: "settings-skill-install",
-  },
-  {
     id: "appearance.theme",
     title: "主题模式",
     keywords: ["theme", "深色", "浅色", "系统", "外观"],
