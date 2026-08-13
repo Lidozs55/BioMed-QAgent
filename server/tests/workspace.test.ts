@@ -433,9 +433,11 @@ describe("governed Task Workspace", () => {
       executable: process.execPath,
       args: [script, "--token=do-not-log"],
     });
-    const pids = JSON.parse(
-      await readFile(path.join(root, "staging", "agent", "pids.json"), "utf8"),
-    ) as number[];
+    // The descendant writes pids.json after the direct child exits; wait for
+    // the write under parallel CI load instead of racing it.
+    const pidsPath = path.join(root, "staging", "agent", "pids.json");
+    await waitForFile(pidsPath, 30_000);
+    const pids = JSON.parse(await readFile(pidsPath, "utf8")) as number[];
 
     expect(result).toMatchObject({ exitCode: 0, policy: "allowed" });
     await expectProcessesDead(pids);
