@@ -8,6 +8,8 @@
 > 2026-08-13：TODO.md 主线切换为 Pi 迁移方案（Phase 0/1/3 完成，Phase 2 为下一阶段，
 > 剩余 Phase 4-8 见 [TODO.md](TODO.md)）；旧 Pipeline Refactor 清单归档于
 > [archive/TODO_PIPELINE_REFACTOR_COMPLETED.md](archive/TODO_PIPELINE_REFACTOR_COMPLETED.md)。
+> 同日晚些时候：迁移方案 Phase 4（TS Dataset Core 移植）合入 main（d7dbbb7），
+> TODO/方案 §0 进度表已同步。
 > 状态图例：🔴 阻塞决策 · 🟠 产品/功能未完成 · 🟡 技术债（已评估）· ⚪ 可选补强 · ⚫ 已知问题（ISSUES.md）
 
 ---

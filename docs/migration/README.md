@@ -38,10 +38,11 @@ and E2E evidence is recorded in `.superpowers/sdd/task-5-report.md` through
 ## Migration progress
 
 Per [BioMed-QAgent_Pi_Migration_Plan.md](../BioMed-QAgent_Pi_Migration_Plan.md) §0:
-Phase 0/1/3 are complete; Phase 2 (Skills migration) is next, followed by
-Phase 4 (Dataset Core TS), 5 (external capabilities), 6 (model settings),
-7 (frontend switch), and 8 (Python removal). Checkboxes and priorities live in
-[TODO.md](../TODO.md).
+Phase 0/1/3/4 are complete (Phase 4 = TS Dataset Deterministic Core port,
+`server/src/dataset/`, merged 2026-08-13; runtime wiring lands with the
+Phase 7 host switch). Phase 2 (Skills migration) is next, followed by
+Phase 5 (external capabilities), 6 (model settings), 7 (frontend switch),
+and 8 (Python removal). Checkboxes and priorities live in [TODO.md](../TODO.md).
 
 ## Phase 3 opt-in status
 

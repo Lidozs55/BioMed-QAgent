@@ -30,8 +30,8 @@ Pipeline**. Full details are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §2
 > **迁移主线**：仓库正按
 > [docs/BioMed-QAgent_Pi_Migration_Plan.md](docs/BioMed-QAgent_Pi_Migration_Plan.md)
 > 把 Agent Runtime 迁移到 Pi、Dataset Core 迁移到 TypeScript。当前进度：
-> Phase 0/1/3 已完成，下一阶段为 Phase 2（Skills 迁移）；进度跟踪与剩余条目见
-> docs/TODO.md。
+> Phase 0/1/3/4 已完成（Phase 4 = TS Dataset Core 移植，运行接线待后续阶段），
+> 下一阶段为 Phase 2（Skills 迁移）；进度跟踪与剩余条目见 docs/TODO.md。
 
 Key points:
 
