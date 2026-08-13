@@ -93,6 +93,7 @@ describe("TypeScript model settings", () => {
       settingsDir,
       environment: {},
       fetcher,
+      resolveHost: async () => [{ address: "93.184.216.34" }],
     });
     const baseUrl = await serve(service);
 

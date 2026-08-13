@@ -78,6 +78,7 @@ export interface ModelSettingsServiceOptions {
   legacyRegistryPath?: string;
   environment?: Record<string, string | undefined>;
   fetcher?: typeof fetch;
+  resolveHost?: (hostname: string) => Promise<readonly { address: string }[]>;
 }
 
 const ADVANCED_DEFAULTS = {
@@ -249,7 +250,11 @@ function isPrivateAddress(address: string): boolean {
     normalized.startsWith("fd") || normalized.startsWith("fe80:");
 }
 
-async function publicProviderUrl(rawUrl: string, apiKey: string): Promise<URL> {
+async function publicProviderUrl(
+  rawUrl: string,
+  apiKey: string,
+  resolveHost: (hostname: string) => Promise<readonly { address: string }[]>,
+): Promise<URL> {
   let target: URL;
   try {
     target = new URL(rawUrl);
@@ -266,7 +271,7 @@ async function publicProviderUrl(rawUrl: string, apiKey: string): Promise<URL> {
   if (target.hostname === "localhost" || target.hostname.endsWith(".localhost")) {
     throw new HttpError(422, "provider base URL must be public");
   }
-  const addresses = await lookup(target.hostname, { all: true }).catch(() => {
+  const addresses = await resolveHost(target.hostname).catch(() => {
     throw new HttpError(422, "provider hostname cannot be resolved");
   });
   if (addresses.length === 0 || addresses.some(({ address }) => isPrivateAddress(address))) {
@@ -281,6 +286,7 @@ export class ModelSettingsService {
   private readonly legacySettingsPath: string;
   private readonly environment: Record<string, string | undefined>;
   private readonly fetcher: typeof fetch;
+  private readonly resolveHost: (hostname: string) => Promise<readonly { address: string }[]>;
   private writes: Promise<void> = Promise.resolve();
 
   private constructor(
@@ -293,6 +299,8 @@ export class ModelSettingsService {
     this.legacySettingsPath = path.join(options.settingsDir, "model.json");
     this.environment = options.environment ?? process.env;
     this.fetcher = options.fetcher ?? fetch;
+    this.resolveHost = options.resolveHost ??
+      ((hostname) => lookup(hostname, { all: true }));
   }
 
   static async create(options: ModelSettingsServiceOptions): Promise<ModelSettingsService> {
@@ -776,7 +784,7 @@ export class ModelSettingsService {
   }
 
   private async discover(baseUrl: string, apiKey: string, query?: string): Promise<JsonObject[]> {
-    const target = await publicProviderUrl(baseUrl, apiKey);
+    const target = await publicProviderUrl(baseUrl, apiKey, this.resolveHost);
     target.pathname = `${target.pathname.replace(/\/$/, "")}/models`;
     const response = await this.fetcher(target, {
       headers: apiKey === "" ? undefined : { authorization: `Bearer ${apiKey}` },
