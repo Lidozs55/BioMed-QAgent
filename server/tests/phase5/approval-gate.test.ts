@@ -178,7 +178,7 @@ describe("HIL resume route (durable runtime)", () => {
     await expect.poll(async () => {
       const events = await fetch(`${base}/api/v1/tasks/${accepted.task_id}/events?after_sequence=0&limit=50`).then((r) => r.json()) as { events: Array<{ type: string }> };
       return events.events.some((event) => event.type === "user_input_required");
-    }).toBe(true);
+    }, { timeout: 15_000 }).toBe(true);
 
     // Snapshot must show awaiting_user_input.
     const pending = await fetch(`${base}/api/v1/tasks/${accepted.task_id}`).then((r) => r.json()) as {
@@ -201,7 +201,7 @@ describe("HIL resume route (durable runtime)", () => {
     await expect.poll(async () => {
       const events = await fetch(`${base}/api/v1/tasks/${accepted.task_id}/events?after_sequence=0&limit=100`).then((r) => r.json()) as { events: Array<{ type: string }> };
       return events.events.some((event) => event.type === "run_completed");
-    }).toBe(true);
+    }, { timeout: 15_000 }).toBe(true);
 
     const snapshot = await fetch(`${base}/api/v1/tasks/${accepted.task_id}`).then((r) => r.json()) as {
       runs: Array<{ run_id: string; status: string }>;

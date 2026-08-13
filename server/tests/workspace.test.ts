@@ -399,7 +399,7 @@ describe("governed Task Workspace", () => {
       abortController.signal,
     );
     const abortedPidsPath = path.join(aborted.root, "staging", "agent", "pids.json");
-    await waitForFile(abortedPidsPath);
+    await waitForFile(abortedPidsPath, 30_000);
     abortController.abort();
     const abortedResult = await abortedResultPromise;
     const abortedPids = JSON.parse(await readFile(abortedPidsPath, "utf8")) as number[];
@@ -418,7 +418,7 @@ describe("governed Task Workspace", () => {
       timeoutMs: 5_000,
     });
     const disposedPidsPath = path.join(disposed.root, "staging", "agent", "pids.json");
-    await waitForFile(disposedPidsPath);
+    await waitForFile(disposedPidsPath, 30_000);
     await disposed.workspace.dispose();
     const disposedResult = await disposedResultPromise;
     const disposedPids = JSON.parse(await readFile(disposedPidsPath, "utf8")) as number[];

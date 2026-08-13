@@ -41,9 +41,8 @@ OUT = Path(__file__).parent
 
 
 def dump(name: str, value: object) -> None:
-    (OUT / name).write_text(
-        json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
+    with (OUT / name).open("w", encoding="utf-8", newline="\n") as handle:
+        handle.write(json.dumps(value, ensure_ascii=False, indent=2) + "\n")
 
 
 def write_gzip(name: str, text: str) -> Path:
@@ -214,9 +213,10 @@ def main() -> None:
     # Expression adapter goldens.
     series_path = write_gzip("geo_series_matrix.txt.gz", SERIES_MATRIX)
     write_gzip("geo_metadata_only_matrix.txt.gz", METADATA_ONLY_MATRIX)
-    (OUT / "geo_supplementary_counts.csv").write_text(
-        SUPPLEMENTARY_CSV, encoding="utf-8"
-    )
+    with (OUT / "geo_supplementary_counts.csv").open(
+        "w", encoding="utf-8", newline="\n"
+    ) as handle:
+        handle.write(SUPPLEMENTARY_CSV)
     dump(
         "geo_series_matrix_batch.golden.json",
         run_adapter(
