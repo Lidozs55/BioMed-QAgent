@@ -8,8 +8,8 @@
  * the route interception layer validates each hop.
  */
 
-import { UnsafeUrlError } from "../../../src/external/network/errors.js";
-import type { BrowserEgressPolicy } from "../../../src/external/browser/egress.js";
+import { UnsafeUrlError } from "../../../../src/external/network/errors.js";
+import type { BrowserEgressPolicy } from "../../../../src/external/browser/egress.js";
 
 export interface FixturePolicyOptions {
   /** Hosts the policy permits (default: 127.0.0.1 only). */

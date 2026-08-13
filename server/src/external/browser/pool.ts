@@ -57,7 +57,7 @@ window.chrome = {runtime: {}};
 
 /** Fixed bounded serialization scripts (never agent-generated code). */
 const SERIALIZE_DOCUMENT_BOUNDED = `
-limit => {
+(limit) => {
     const content = document.documentElement.outerHTML;
     const size_bytes = new TextEncoder().encode(content).byteLength;
     if (size_bytes > limit) {
@@ -292,12 +292,12 @@ export class BrowserSession {
       await this.page.waitForSelector(options.target, { state: "visible", timeout: timeoutMs });
     } else if (options.action === "extract") {
       if (options.target === null) {
-        const serialized = await this.page.evaluate<unknown>(SERIALIZE_DOCUMENT_BOUNDED, MAX_BROWSER_EXTRACT_BYTES);
+        const serialized = await this.page.evaluate<unknown>(`(${SERIALIZE_DOCUMENT_BOUNDED})(${MAX_BROWSER_EXTRACT_BYTES})`);
         content = Buffer.from(boundedSerializedText(serialized, MAX_BROWSER_EXTRACT_BYTES, "browser extract"), "utf8");
         mediaType = "text/html";
       } else {
         const locator = this.page.locator(options.target);
-        const serialized = await locator.evaluate<unknown, number>(SERIALIZE_ELEMENT_BOUNDED, MAX_BROWSER_EXTRACT_BYTES);
+        const serialized = await locator.evaluate<unknown, number>(`(${SERIALIZE_ELEMENT_BOUNDED})(${MAX_BROWSER_EXTRACT_BYTES})`);
         content = Buffer.from(boundedSerializedText(serialized, MAX_BROWSER_EXTRACT_BYTES, "browser extract"), "utf8");
         mediaType = "text/plain";
       }
@@ -455,7 +455,7 @@ export class NodeBrowserPool {
     try {
       await session.authorize(url, "main_frame");
       const response = await this.navigate(session, url, options.waitUntil ?? "networkidle", options.timeoutMs, options.signal);
-      const serialized = await session.page.evaluate<unknown>(SERIALIZE_DOCUMENT_BOUNDED, MAX_BROWSER_CONTENT_BYTES);
+      const serialized = await session.page.evaluate<unknown>(`(${SERIALIZE_DOCUMENT_BOUNDED})(${MAX_BROWSER_CONTENT_BYTES})`);
       const content = boundedSerializedText(serialized, MAX_BROWSER_CONTENT_BYTES, "browser content");
       return {
         url,
@@ -699,7 +699,7 @@ async function enforceScreenshotDimensions(
     width = box.width;
     height = box.height;
   } else if (options.fullPage) {
-    const dimensions = await page.evaluate<{ width: number; height: number }>(SERIALIZE_DOCUMENT_DIMENSIONS);
+    const dimensions = await page.evaluate<{ width: number; height: number }>(`(${SERIALIZE_DOCUMENT_DIMENSIONS})()`);
     width = dimensions.width;
     height = dimensions.height;
   } else {
