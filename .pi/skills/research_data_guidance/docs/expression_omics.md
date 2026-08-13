@@ -1,0 +1,75 @@
+# 表达谱与多组学数据
+
+覆盖转录组（RNA-seq/微阵列）、单细胞、甲基化、突变、蛋白组、代谢组等组学数据的查找与
+获取指导。共同主线：**样本可追溯、分组设计匹配、实体身份明确、批次不被忽视**。
+
+## 1. 表达谱数据类型与源选择
+
+| 数据形态 | 特征 | 适用源 | 备注 |
+|---|---|---|---|
+| 基因级 RNA-seq 矩阵 | 行=基因（symbol/ENSG），列=样本 | GDC（TCGA 系列）、Xena | **单基因/靶基因分析首选**，无需 probe→gene |
+| 微阵列 series_matrix | 行=探针（probe ID），列=样本 | GEO | 需 probe→gene 映射或 probe 级 schema；单位多为 log2 |
+| 微阵列/RNA-seq 补充矩阵 | 已解析的宽表 | GEO 补充文件 | 结构变化大，需逐文件确认表头 |
+| 配对 tumor/normal | 同一患者双样本 | GEO（优先）、TCGA（normal 很少） | 配对能控制混杂，优先于非配对 |
+
+**差异分析数据要求**：至少两组（tumor vs normal / 处理 vs 对照）且设计匹配；单组数据
+只能做该组的表达谱，不能回答差异问题（见 `strategy`）。
+
+## 2. 实体身份：基因 vs 探针
+
+- 基因级（GDC/Xena/部分 GEO 补充矩阵）：`gene_id` 直接是 gene symbol 或 ENSG，构建后
+  namespace 为 `ensembl_gene`/`gene_symbol`，可直接过滤目标基因。
+- 探针级（GEO series_matrix）：`gene_id` 是 probe ID，namespace 为 `geo_probe`。
+  两个出路：
+  1. **probe→gene 映射**：需 GPL 平台注释；注意很多平台注释缺少基因列（如实告警，
+     不要伪装成基因级产物）；
+  2. **probe 级发布**：schema 用 `gene_expression.probe_long.v1`、validation profile 用
+     `gene_expression.probe_release.v1`（probe 级可发布，覆盖率为 warning 不阻断）。
+- 基因 symbol↔ENSG 可用服务端内置映射（canonicalizer 的 `gene_symbol_map`），
+  未命中的 symbol 保留原 namespace，不丢弃。
+
+## 3. AdapterParams 声明（GEO 探针/矩阵构建）
+
+geo.expression.v1 绑定必须声明 `parameters`，且字段须与服务端 normalization profile 一致：
+
+- `format`：`tximport_counts` / `series_matrix` / `supplementary_matrix`
+- `value_semantics`：在 `expression_value` / `normalized_expression` / `raw_count` 中选
+- `value_scale`：`linear` / `log2` / `log10` / `unknown`（诚实声明，不猜测）
+- `expression_unit`：**必须属于 profile 允许集**（如 `log2_expression`、`tpm_unstranded`、
+  `fpkm`、`estimated_count`、`expression_value` 等）——`validate_dataset_build_spec` 会
+  对未知单位返回 `unknown_unit` reason code 并列出允许值，按提示修正，不要带病构建。
+- `platform_ids`：声明 GPL 平台号（`^GPL\d+$`），供平台审计与 probe 映射使用。
+
+每个不同 GSE 必须使用独立的 `DatasetBuildSpec` 和 `execute_dataset_build` 调用，不跨
+GSE 拼接行。series matrix 的 `!Sample_*` 字段会自动发布为 `sample_metadata.csv`；若
+表达主文件是 tximport/补充矩阵，则把同一 GSE 的 family SOFT 通过
+`metadata_files={"binding_id": "<SOFT 相对路径>"}` 传给构建工具。tumor/normal 分组
+与 pairing 仅依据显式 metadata；不得从 GSM 顺序、标题相似度或同一 GSE 猜测配对。
+
+## 4. 构建前 vetting
+
+对每个候选 GSE/GDC 数据集：
+
+1. `describe_geo` / `describe_gdc` 检查样本构成：样本数、tumor/normal 分组、平台类型
+   （microarray vs RNA-seq）与课题目标相符；
+2. 下载后用 `read_file_head` 确认表头结构（基因/探针列 + 样本列），不要盲目构建；
+3. 探针平台必须走 §2 的两个出路之一，否则构建会因 gene-required gate 拒绝。
+
+## 5. 其它组学要点
+
+- **甲基化/突变/临床**（GDC）：按 data_category/data_type/workflow_type 精确过滤，
+  不要把不同 data_type 的文件混进同一构建；
+- **单细胞**：区分患者/样本/细胞层级；差异分析的推断单位通常是患者/样本而非细胞；
+  数据量大、格式复杂，获取后需确认是否在 V2 能力范围内；
+- **蛋白组/代谢组**：确认定量方式（label-free/TMT、非靶/靶向）与 ID 命名空间，
+  构建前明确 schema 是否覆盖；
+- **批次与多重性**：记录批次/文库/芯片信息；多重检验控制在下游分析进行，数据层只需
+  保留必要的设计矩阵信息，不做统计推断。
+
+## 6. 失败处理
+
+- `no_data` 且 rejected.csv 显示 `unknown_unit`/`unknown_semantics`：修正 AdapterParams
+  后重新 `validate_dataset_build_spec`，不要用相同参数重跑；
+- 表达块为空（只有样本元数据）：换 experiment_type 含 "Expression profiling by array"
+  的 microarray 数据集，或改走 GDC/Xena 基因级；
+- 2-3 次调整仍无合适数据：停止重试，如实汇报已尝试方案与失败原因。
