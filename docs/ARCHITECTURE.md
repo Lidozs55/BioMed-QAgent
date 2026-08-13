@@ -1233,14 +1233,18 @@ API 只读取 immutable publication 目录，并校验 publication-manifest 引�
 
 ### 18.6 Phase 6 TypeScript 模型设置
 
-TypeScript Application Host 权威处理模型设置、Provider/Model Registry 与模型发现 API，
-并在路由顺序上先于 formal runtime 和 legacy proxy。公开模型元数据与 Provider credential
-分文件原子持久化；API 只返回掩码和 configured 状态。旧 `model.json` 与
+在 `AGENT_RUNTIME=pi` profile 下，TypeScript Application Host 权威处理模型设置、
+Provider/Model Registry 与模型发现 API，并在路由顺序上先于 formal runtime 和 legacy
+proxy；默认 `AGENT_RUNTIME=legacy` 继续将这些 API 代理给 FastAPI，避免设置页与实际
+Agent runtime 脱节。公开模型元数据与 Provider credential 分文件原子持久化；API 只返回
+掩码和 configured 状态。旧 `model.json` 与
 `model_registry.db` 仅在首次启动时导入，原文件不修改，供 full legacy rollback 使用。
 
 新 Pi Session 从 TS Settings Adapter 捕获 active model 快照；Pi `ModelRuntime` 注册
 OpenAI-compatible provider，并通过 runtime credential API 注入密钥。context window、
-max tokens 与 temperature 进入 Pi/provider 调用；已创建 Session 不被后续设置变更改写。
+max tokens 与 temperature 进入 Pi stream options；`top_p` 进入兼容 payload；DashScope/Qwen
+专属 `repetition_penalty`、`enable_search` 与 `enable_thinking` 仅在对应端点注入。已创建
+Session 不被后续设置变更改写。
 详细实现与安全边界见 [Phase 6 model settings](migration/phase6-model-settings.md)。
 
 ---

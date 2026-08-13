@@ -73,6 +73,10 @@ export interface BioMedModelConfig {
   contextWindow?: number;
   maxTokens?: number;
   temperature?: number;
+  topP?: number;
+  repetitionPenalty?: number;
+  enableSearch?: boolean;
+  thinkingMode?: boolean;
 }
 
 export interface BioMedSessionConfig {

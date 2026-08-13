@@ -25,7 +25,7 @@
 | 3 | 拆出 TS Application Runtime | ✅ 完成（opt-in，2026-08-12） |
 | 4 | 迁移 Dataset Deterministic Core | ✅ 完成（2026-08-13；运行接线待后续阶段） |
 | 5 | 迁外部能力与 Python 数据处理依赖 | ⬜ 待开始 |
-| 6 | 迁模型设置与 Settings API | ⬜ 待开始 |
+| 6 | 迁模型设置与 Settings API | ✅ 完成（2026-08-13） |
 | 7 | 正式切换 Frontend → TS Host | ⬜ 待开始 |
 | 8 | 删除 Python Runtime（仅留 DB bridge） | ⬜ 待开始 |
 

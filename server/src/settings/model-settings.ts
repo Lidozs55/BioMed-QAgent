@@ -175,6 +175,21 @@ function parseStoredJson(value: unknown): JsonObject {
   }
 }
 
+function guessContextWindow(modelId: string): number {
+  const normalized = modelId.toLowerCase();
+  if (normalized.includes("2m")) return 2_000_000;
+  if (normalized.includes("1m") || normalized.includes("million") ||
+      normalized.includes("max")) return 1_000_000;
+  if (normalized.includes("262144") || normalized.includes("256k")) return 262_144;
+  if (normalized.includes("131072") || normalized.includes("128k")) return 131_072;
+  if (normalized.includes("65536") || normalized.includes("64k")) return 65_536;
+  if (normalized.includes("32768") || normalized.includes("32k")) return 32_768;
+  if (normalized.includes("16384") || normalized.includes("16k")) return 16_384;
+  if (normalized.includes("8192") || normalized.includes("8k")) return 8_192;
+  if (normalized.includes("omni") || normalized.includes("vl")) return 131_072;
+  return 524_288;
+}
+
 function defaultRegistry(environment: Record<string, string | undefined>): RegistryState {
   return {
     version: 1,
@@ -314,6 +329,10 @@ export class ModelSettingsService {
       contextWindow: model?.context_window ?? settings.context_window ?? 131_072,
       maxTokens: settings.max_tokens,
       temperature: settings.advanced.temperature,
+      topP: settings.advanced.top_p,
+      repetitionPenalty: settings.advanced.repetition_penalty,
+      enableSearch: settings.advanced.enable_search,
+      thinkingMode: settings.advanced.thinking_mode,
     };
   };
 
@@ -777,8 +796,8 @@ export class ModelSettingsService {
         id: candidate.id,
         name: candidate.id,
         description: "API discovered model",
-        context_window: null,
-        max_output_tokens: null,
+        context_window: guessContextWindow(candidate.id),
+        max_output_tokens: 4096,
         suggested_max_tokens: 4096,
         capabilities: { text: true, image: false, video: false, audio: false },
         recommended: candidate.id === this.registry.settings.model_name,

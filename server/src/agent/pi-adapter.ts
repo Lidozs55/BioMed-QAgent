@@ -182,6 +182,38 @@ function modelFromEnvironment(environment: Environment): BioMedModelConfig {
   return { provider, modelId, apiKey, baseUrl };
 }
 
+function usesDashScopeQwen(selected: BioMedModelConfig): boolean {
+  if (selected.baseUrl === undefined) return false;
+  try {
+    const target = new URL(selected.baseUrl);
+    const modelId = selected.modelId.toLowerCase();
+    return (modelId.startsWith("qwen") || modelId.startsWith("qwq")) &&
+      target.hostname === "dashscope.aliyuncs.com" &&
+      target.pathname.replace(/\/$/, "") === "/compatible-mode/v1";
+  } catch {
+    return false;
+  }
+}
+
+export function applyModelProfileToPayload(
+  payload: unknown,
+  selected: BioMedModelConfig,
+): unknown {
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
+    return payload;
+  }
+  const next: Record<string, unknown> = { ...payload };
+  if (selected.topP !== undefined) next.top_p = selected.topP;
+  if (usesDashScopeQwen(selected)) {
+    if (selected.repetitionPenalty !== undefined) {
+      next.repetition_penalty = selected.repetitionPenalty;
+    }
+    if (selected.enableSearch !== undefined) next.enable_search = selected.enableSearch;
+    if (selected.thinkingMode === true) next.enable_thinking = true;
+  }
+  return next;
+}
+
 function toUpstreamEvent(event: AgentSessionEvent): PiUpstreamEvent {
   switch (event.type) {
     case "message_update":
@@ -247,12 +279,20 @@ async function createRealUpstreamSession(
     allowNetwork: false,
   });
   const streamSimple = modelRuntime.streamSimple.bind(modelRuntime);
-  modelRuntime.streamSimple = (model, context, options) =>
-    streamSimple(model, context, {
+  modelRuntime.streamSimple = (model, context, options) => {
+    const upstreamPayload = options?.onPayload;
+    return streamSimple(model, context, {
       ...options,
       maxTokens: selected.maxTokens ?? options?.maxTokens,
       temperature: selected.temperature ?? options?.temperature,
+      onPayload: async (payload, payloadModel) => {
+        const transformed = upstreamPayload === undefined
+          ? payload
+          : (await upstreamPayload(payload, payloadModel)) ?? payload;
+        return applyModelProfileToPayload(transformed, selected);
+      },
     });
+  };
   const model = modelRuntime.getModel(selected.provider, selected.modelId);
   if (model === undefined) {
     throw new BioMedAgentError(

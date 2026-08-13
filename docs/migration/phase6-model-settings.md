@@ -3,8 +3,10 @@
 Phase 6 moves the browser-facing model settings and provider/model registry to
 the TypeScript Application Host. The frontend wire API remains compatible:
 `/api/v1/settings`, `/api/v1/vendors`, `/api/v1/models`, and
-`/api/v1/model-registry/*` are now Host-owned before formal runtime or legacy
-proxy routing.
+`/api/v1/model-registry/*` are Host-owned before formal runtime or legacy proxy
+routing when `AGENT_RUNTIME=pi`. The default `AGENT_RUNTIME=legacy` profile
+continues proxying these routes to FastAPI so the settings page and the active
+legacy Agent cannot diverge during the migration window.
 
 ## Persistence
 
@@ -24,9 +26,11 @@ dependency after import.
 Every new Pi session resolves one immutable active-model snapshot from the TS
 settings service. The adapter registers the selected OpenAI-compatible provider
 with Pi `ModelRuntime`, installs its API key through the runtime credential API,
-and applies the selected context window, output-token limit, and temperature to
-provider requests. Existing sessions keep their captured model; setting changes
-apply to the next session.
+and applies the selected context window and output-token limit. Temperature and
+`top_p` use Pi stream options/payload mapping. DashScope/Qwen-only
+`repetition_penalty`, `enable_search`, and `enable_thinking` fields are injected
+only for that compatible endpoint. Existing sessions keep their captured model;
+setting changes apply to the next session.
 
 ## Safety And Rollback
 

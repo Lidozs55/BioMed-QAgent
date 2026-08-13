@@ -72,6 +72,10 @@ describe("TypeScript model settings", () => {
       contextWindow: 64000,
       maxTokens: 3072,
       temperature: 0.25,
+      topP: 0.8,
+      repetitionPenalty: 1,
+      enableSearch: false,
+      thinkingMode: false,
     });
     expect(await readFile(path.join(settingsDir, "model-registry.json"), "utf8"))
       .not.toContain("sk-secret-provider-value");
@@ -79,6 +83,35 @@ describe("TypeScript model settings", () => {
       .toContain("sk-secret-provider-value");
   });
 
+  test("returns frontend-compatible model discovery metadata", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const fetcher = async (): Promise<Response> => new Response(
+      JSON.stringify({ data: [{ id: "custom-128k-chat" }] }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+    const service = await ModelSettingsService.create({
+      settingsDir,
+      environment: {},
+      fetcher,
+    });
+    const baseUrl = await serve(service);
+
+    const response = await fetch(`${baseUrl}/api/v1/models`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ preview_base_url: "https://models.example/v1" }),
+    });
+    const body = await response.json() as { models: Array<Record<string, unknown>> };
+
+    expect(body.models).toEqual([expect.objectContaining({
+      id: "custom-128k-chat",
+      context_window: 131072,
+      max_output_tokens: 4096,
+      suggested_max_tokens: 4096,
+      capability_source: "api",
+      api_available: true,
+    })]);
+  });
   test("preserves a masked key and clears it only on an explicit empty value", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
     const service = await ModelSettingsService.create({
@@ -130,6 +163,10 @@ describe("TypeScript model settings", () => {
       modelId: "legacy-model",
       apiKey: "legacy-secret",
       temperature: 0.15,
+      topP: 1,
+      repetitionPenalty: 1,
+      enableSearch: false,
+      thinkingMode: false,
     });
     const second = await ModelSettingsService.create({ settingsDir, legacyRegistryPath: databasePath });
     const baseUrl = await serve(second);

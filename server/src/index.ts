@@ -38,7 +38,7 @@ async function main(): Promise<void> {
         shutdownTimeoutMs: config.shutdownTimeoutMs,
       }),
     initializeLifecycle: async () => undefined,
-    hostApi: modelSettings,
+    hostApi: config.flags.agentRuntime === "pi" ? modelSettings : undefined,
     formalRuntime: config.flags.agentRuntime === "pi"
       ? ({ target, bridgeSecret }) =>
           createPhase3Runtime({
