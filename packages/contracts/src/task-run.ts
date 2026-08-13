@@ -99,6 +99,10 @@ export interface DatabaseRecord {
   origin?: "builtin" | "package";
   version?: string;
   pipeline_supported?: boolean;
+  /** Phase 2: per-database enabled toggle from the thin database store. */
+  enabled?: boolean;
+  /** Phase 2: pipeline_supported | research_only | pending classification. */
+  capability?: string;
 }
 
 export interface TaskSummary {

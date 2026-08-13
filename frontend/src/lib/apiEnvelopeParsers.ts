@@ -3,18 +3,17 @@
 /*  Declarative manifest validators live in apiDeclarativeParsers.ts.  */
 /* ------------------------------------------------------------------ */
 
-import { APIError } from "@/hooks/settingsContracts";
-import type { SkillDetail, SkillManifest, SkillValidation } from "@/hooks/settingsContracts";
-import type { ArtifactRecord, DatabaseRecord } from "@/runtime/contracts";
-import { assertOrigin, assertPackageKind, assertSkillManifest, assertDeclarativeManifest } from "@/lib/apiDeclarativeParsers";
+import type { DatabaseDetail, DatabaseItem, DeclarativeSkillManifest } from "@/hooks/settingsContracts";
+import type { ArtifactRecord } from "@/runtime/contracts";
+import { assertOrigin, assertDeclarativeManifest } from "@/lib/apiDeclarativeParsers";
 import {
-  assertString, assertBoolean, assertStringOrNull, assertNumber, assertObject, assertArray,
+  assertString, assertNumber, assertObject, assertArray,
   optBoolean,
 } from "@/lib/eventValidatorHelpers";
 
 /* ---- Databases ---- */
 
-export function parseDatabasesEnvelope(json: unknown): { databases: DatabaseRecord[] } {
+export function parseDatabasesEnvelope(json: unknown): { databases: DatabaseItem[] } {
   const obj = assertObject(json, "databases response");
   return {
     databases: assertArray(Reflect.get(obj, "databases"), "databases", (item, i) => {
@@ -25,9 +24,11 @@ export function parseDatabasesEnvelope(json: unknown): { databases: DatabaseReco
         category: assertString(Reflect.get(dbo, "category"), `databases[${i}].category`),
         description: assertString(Reflect.get(dbo, "description"), `databases[${i}].description`),
         available: optBoolean(Reflect.get(dbo, "available"), `databases[${i}].available`),
-        origin: (() => { const o = Reflect.get(dbo, "origin"); return o !== undefined ? assertOrigin(o, `databases[${i}].origin`) : undefined; })(),
+        origin: assertOrigin(Reflect.get(dbo, "origin"), `databases[${i}].origin`),
         version: (() => { const v = Reflect.get(dbo, "version"); return v !== undefined ? assertString(v, `databases[${i}].version`) : undefined; })(),
         pipeline_supported: optBoolean(Reflect.get(dbo, "pipeline_supported"), `databases[${i}].pipeline_supported`),
+        enabled: optBoolean(Reflect.get(dbo, "enabled"), `databases[${i}].enabled`) ?? true,
+        capability: (() => { const c = Reflect.get(dbo, "capability"); return c !== undefined ? assertString(c, `databases[${i}].capability`) : undefined; })(),
       };
     }),
   };
@@ -52,60 +53,26 @@ export function parseArtifactsEnvelope(json: unknown): { artifacts: ArtifactReco
   };
 }
 
-/* ---- Skills ---- */
+/* ---- Database detail ---- */
 
-export function parseSkillsEnvelope(json: unknown): { skills: SkillManifest[] } {
-  const obj = assertObject(json, "skills response");
+export function parseDatabaseDetail(json: unknown): DatabaseDetail {
+  const obj = assertObject(json, "database detail");
+  const declarative = Reflect.get(obj, "declarative_manifest");
+  const manifest: DeclarativeSkillManifest | null =
+    declarative === undefined || declarative === null
+      ? null
+      : assertDeclarativeManifest(declarative, "declarative_manifest");
   return {
-    skills: assertArray(Reflect.get(obj, "skills"), "skills", (item, i) => {
-      const so = assertObject(item, `skills[${i}]`);
-      return {
-        name: assertString(Reflect.get(so, "name"), `skills[${i}].name`),
-        display_name: assertString(Reflect.get(so, "display_name"), `skills[${i}].display_name`),
-        version: assertString(Reflect.get(so, "version"), `skills[${i}].version`),
-        category: assertString(Reflect.get(so, "category"), `skills[${i}].category`),
-        description: assertString(Reflect.get(so, "description"), `skills[${i}].description`),
-        origin: assertOrigin(Reflect.get(so, "origin"), `skills[${i}].origin`),
-        supported_sources: assertArray(Reflect.get(so, "supported_sources"), `skills[${i}].supported_sources`, (v) => assertString(v, `skills[${i}].supported_sources[]`)),
-        operations: assertArray(Reflect.get(so, "operations"), `skills[${i}].operations`, (v) => assertString(v, `skills[${i}].operations[]`)),
-        enabled: assertBoolean(Reflect.get(so, "enabled"), `skills[${i}].enabled`),
-        user_selectable: assertBoolean(Reflect.get(so, "user_selectable"), `skills[${i}].user_selectable`),
-        pipeline_supported: assertBoolean(Reflect.get(so, "pipeline_supported"), `skills[${i}].pipeline_supported`),
-        available: optBoolean(Reflect.get(so, "available"), `skills[${i}].available`),
-        load_error: assertLoadError(Reflect.get(so, "load_error"), `skills[${i}].load_error`),
-      };
-    }),
-  };
-}
-
-function assertLoadError(v: unknown, path: string): string | null | undefined {
-  if (typeof v === "string") return v;
-  if (v === null) return null;
-  if (v === undefined) return undefined;
-  throw new APIError(502, `Expected string|null|undefined at ${path}, got ${typeof v}`);
-}
-
-export function parseSkillDetail(json: unknown): SkillDetail {
-  const obj = assertObject(json, "SkillDetail");
-  const manifest = assertObject(Reflect.get(obj, "manifest"), "manifest");
-  return {
-    manifest: assertSkillManifest(manifest, "manifest"),
-    current_version: assertString(Reflect.get(obj, "current_version"), "current_version"),
-    versions: assertArray(Reflect.get(obj, "versions"), "versions", (v) => assertString(v, "versions[]")),
-    package_kind: assertPackageKind(Reflect.get(obj, "package_kind"), "package_kind"),
-    warning: assertStringOrNull(Reflect.get(obj, "warning"), "warning"),
-    available: assertBoolean(Reflect.get(obj, "available"), "available"),
-    load_error: assertStringOrNull(Reflect.get(obj, "load_error"), "load_error"),
-    declarative_manifest: assertDeclarativeManifest(Reflect.get(obj, "declarative_manifest"), "declarative_manifest"),
-  };
-}
-
-export function parseSkillValidation(json: unknown): SkillValidation {
-  const obj = assertObject(json, "SkillValidation");
-  const skill = assertObject(Reflect.get(obj, "skill"), "skill");
-  return {
-    valid: assertBoolean(Reflect.get(obj, "valid"), "valid"),
-    skill: assertSkillManifest(skill, "skill"),
-    warning: assertStringOrNull(Reflect.get(obj, "warning"), "warning"),
+    id: assertString(Reflect.get(obj, "id"), "id"),
+    name: assertString(Reflect.get(obj, "name"), "name"),
+    category: assertString(Reflect.get(obj, "category"), "category"),
+    description: assertString(Reflect.get(obj, "description"), "description"),
+    available: optBoolean(Reflect.get(obj, "available"), "available"),
+    enabled: optBoolean(Reflect.get(obj, "enabled"), "enabled") ?? true,
+    origin: assertOrigin(Reflect.get(obj, "origin"), "origin"),
+    version: (() => { const v = Reflect.get(obj, "version"); return v !== undefined ? assertString(v, "version") : undefined; })(),
+    pipeline_supported: optBoolean(Reflect.get(obj, "pipeline_supported"), "pipeline_supported"),
+    capability: (() => { const c = Reflect.get(obj, "capability"); return c !== undefined ? assertString(c, "capability") : undefined; })(),
+    declarative_manifest: manifest,
   };
 }

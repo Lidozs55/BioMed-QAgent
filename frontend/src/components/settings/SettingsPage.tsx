@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowLeftIcon, UploadSimpleIcon } from "@phosphor-icons/react";
+import { useCallback, useEffect, useState } from "react";
+import { ArrowLeftIcon } from "@phosphor-icons/react";
 import { toast } from "sonner";
 
 import { SettingsSearch } from "@/components/settings/SettingsSearch";
@@ -14,8 +14,6 @@ import { EditorSettingsSection } from "@/components/settings/sections/EditorSett
 import { GeneralSettingsSection } from "@/components/settings/sections/GeneralSettingsSection";
 import { ModelSettingsSection } from "@/components/settings/sections/ModelSettingsSection";
 import { PersonalizationSettingsSection } from "@/components/settings/sections/PersonalizationSettingsSection";
-import { SkillsSettingsSection } from "@/components/settings/sections/SkillsSettingsSection";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -27,7 +25,6 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -39,7 +36,6 @@ import {
 import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import {
   EMPTY_DATABASE,
@@ -53,11 +49,9 @@ import {
 } from "@/lib/databaseDraft";
 import { cn } from "@/lib/utils";
 import type {
+  DatabaseItem,
   ModelSettings,
   SettingsAPIClient,
-  SkillDetail,
-  SkillManifest,
-  SkillValidation,
 } from "@/hooks/useAPI";
 
 export interface SettingsPageProps {
@@ -69,7 +63,6 @@ export interface SettingsPageProps {
 const SECTION_DESCRIPTIONS: Record<string, string> = {
   model: "管理模型供应商与维护模型列表，并查看当前模型信息。",
   databases: "管理可选择的声明式检索数据库。",
-  skills: "筛选、启停、回滚或安装 Agent 技能包。",
   editor: "调整消息发送方式与上下文用量指示。",
   appearance: "调整主题模式、强调色与界面字体。",
   general: "管理本地数据与查看版本信息。",
@@ -84,53 +77,30 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
   const [loading, setLoading] = useState(true);
   const [settings, setSettings] = useState<ModelSettings | null>(null);
 
-  const [skills, setSkills] = useState<SkillManifest[]>([]);
-  const [skillFilter, setSkillFilter] = useState("");
+  const [databases, setDatabases] = useState<DatabaseItem[]>([]);
   const [databaseDraft, setDatabaseDraft] = useState<DatabaseDraft | null>(null);
-  const [editingDatabase, setEditingDatabase] = useState<SkillManifest | null>(null);
-  const [pendingUpload, setPendingUpload] = useState<{
-    file: File;
-    validation: SkillValidation;
-  } | null>(null);
+  const [editingDatabase, setEditingDatabase] = useState<DatabaseItem | null>(null);
   const [pendingDelete, setPendingDelete] = useState<{
-    kind: "database" | "skill";
     name: string;
     label: string;
   } | null>(null);
-  const [skillDetail, setSkillDetail] = useState<SkillDetail | null>(null);
-  const [uploading, setUploading] = useState(false);
 
   const [activeSection, setActiveSection] = useState(DEFAULT_SETTINGS_SECTION);
   const [highlight, setHighlight] = useState<{ anchor: string; nonce: number } | null>(null);
 
-  const databases = useMemo(
-    () => skills.filter((skill) => skill.user_selectable && skill.supported_sources.length > 0),
-    [skills],
-  );
-
-  const filteredSkills = useMemo(() => {
-    const query = skillFilter.trim().toLowerCase();
-    if (!query) return skills;
-    return skills.filter((skill) =>
-      [skill.name, skill.display_name, skill.category, skill.origin].some((value) =>
-        value.toLowerCase().includes(query),
-      ),
-    );
-  }, [skills, skillFilter]);
-
-  const refreshSkills = useCallback(async () => {
-    setSkills(await api.fetchSkills());
+  const refreshDatabases = useCallback(async () => {
+    setDatabases(await api.fetchDatabases());
   }, [api]);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [nextSettings, nextSkills] = await Promise.all([
+      const [nextSettings, nextDatabases] = await Promise.all([
         api.fetchSettings(),
-        api.fetchSkills(),
+        api.fetchDatabases(),
       ]);
       setSettings(nextSettings);
-      setSkills(nextSkills);
+      setDatabases(nextDatabases);
     } catch (error) {
       toast.error("设置加载失败", { description: errorText(error) });
     } finally {
@@ -149,50 +119,23 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
     setSettings(updated);
   }, []);
 
-  const mutateSkill = useCallback(
-    async (action: () => Promise<void>, success: string) => {
+  const mutateDatabase = useCallback(
+    async (action: () => Promise<unknown>, success: string) => {
       try {
         await action();
-        await refreshSkills();
+        await refreshDatabases();
         toast.success(success);
       } catch (error) {
         toast.error("操作失败", { description: errorText(error) });
       }
     },
-    [refreshSkills],
+    [refreshDatabases],
   );
-
-  const chooseUpload = useCallback(
-    async (file: File | undefined) => {
-      if (!file) return;
-      try {
-        setPendingUpload({ file, validation: await api.validateSkill(file) });
-      } catch (error) {
-        toast.error("文件验证失败", { description: errorText(error) });
-      }
-    },
-    [api],
-  );
-
-  const confirmUpload = useCallback(async () => {
-    if (!pendingUpload) return;
-    setUploading(true);
-    try {
-      await api.uploadSkill(pendingUpload.file);
-      setPendingUpload(null);
-      await refreshSkills();
-      toast.success("技能已安装");
-    } catch (error) {
-      toast.error("技能安装失败", { description: errorText(error) });
-    } finally {
-      setUploading(false);
-    }
-  }, [api, pendingUpload, refreshSkills]);
 
   const editDatabase = useCallback(
-    async (database: SkillManifest) => {
+    async (database: DatabaseItem) => {
       try {
-        const detail = await api.fetchSkill(database.name);
+        const detail = await api.fetchDatabase(database.id);
         const operation = detail.declarative_manifest?.operations[0];
         if (!detail.declarative_manifest || !operation) throw new Error("缺少操作");
         setEditingDatabase(database);
@@ -214,17 +157,6 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
     [api],
   );
 
-  const showSkillDetail = useCallback(
-    async (name: string) => {
-      try {
-        setSkillDetail(await api.fetchSkill(name));
-      } catch (error) {
-        toast.error("技能详情加载失败", { description: errorText(error) });
-      }
-    },
-    [api],
-  );
-
   const saveDatabase = useCallback(async () => {
     if (!databaseDraft) return;
     try {
@@ -232,7 +164,7 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
         throw new Error("请先修正字段错误");
       }
       if (editingDatabase) {
-        await api.updateDatabase(editingDatabase.name, {
+        await api.updateDatabase(editingDatabase.id, {
           display_name: databaseDraft.displayName,
           description: databaseDraft.description,
           operation: {
@@ -250,25 +182,22 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
       }
       setDatabaseDraft(null);
       setEditingDatabase(null);
-      await refreshSkills();
+      await refreshDatabases();
       toast.success("数据库目录已更新");
     } catch (error) {
       toast.error("数据库保存失败", { description: errorText(error) });
     }
-  }, [api, databaseDraft, editingDatabase, refreshSkills]);
+  }, [api, databaseDraft, editingDatabase, refreshDatabases]);
 
   const confirmDelete = useCallback(async () => {
     if (!pendingDelete) return;
     const target = pendingDelete;
     setPendingDelete(null);
-    await mutateSkill(
-      () =>
-        target.kind === "database"
-          ? api.deleteDatabase(target.name)
-          : api.deleteSkill(target.name),
-      target.kind === "database" ? "数据库已删除" : "技能已删除",
+    await mutateDatabase(
+      () => api.deleteDatabase(target.name),
+      "数据库已删除",
     );
-  }, [api, mutateSkill, pendingDelete]);
+  }, [api, mutateDatabase, pendingDelete]);
 
   const navigate = useCallback((section: string, anchor?: string) => {
     setActiveSection(section);
@@ -393,53 +322,21 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
                       databases={databases}
                       highlightAnchor={highlight?.anchor ?? null}
                       highlightNonce={highlight?.nonce ?? 0}
-                      onUploadFile={(file) => void chooseUpload(file)}
                       onNewDatabase={() => {
                         setEditingDatabase(null);
                         setDatabaseDraft(EMPTY_DATABASE);
                       }}
                       onEditDatabase={(database) => void editDatabase(database)}
                       onToggleEnabled={(database, enabled) =>
-                        void mutateSkill(
-                          () => api.setSkillEnabled(database.name, enabled),
+                        void mutateDatabase(
+                          () => api.setDatabaseEnabled(database.id, enabled),
                           "数据库状态已更新",
                         )
                       }
                       onDeleteDatabase={(database) =>
                         setPendingDelete({
-                          kind: "database",
-                          name: database.name,
-                          label: database.display_name,
-                        })
-                      }
-                    />
-                  )}
-                  {activeSection === "skills" && (
-                    <SkillsSettingsSection
-                      skills={filteredSkills}
-                      filter={skillFilter}
-                      highlightAnchor={highlight?.anchor ?? null}
-                      highlightNonce={highlight?.nonce ?? 0}
-                      onFilterChange={setSkillFilter}
-                      onInstallFile={(file) => void chooseUpload(file)}
-                      onToggleEnabled={(skill, enabled) =>
-                        void mutateSkill(
-                          () => api.setSkillEnabled(skill.name, enabled),
-                          "技能状态已更新",
-                        )
-                      }
-                      onShowDetail={(name) => void showSkillDetail(name)}
-                      onRollback={(skill) =>
-                        void mutateSkill(
-                          () => api.rollbackSkill(skill.name),
-                          "技能已回滚",
-                        )
-                      }
-                      onDeleteSkill={(skill) =>
-                        setPendingDelete({
-                          kind: "skill",
-                          name: skill.name,
-                          label: skill.display_name,
+                          name: database.id,
+                          label: database.name,
                         })
                       }
                     />
@@ -598,41 +495,6 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
         </DialogContent>
       </Dialog>
 
-      {/* ---- Skill detail dialog ---- */}
-      <Dialog
-        open={skillDetail !== null}
-        onOpenChange={(next) => {
-          if (!next) setSkillDetail(null);
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{skillDetail?.manifest.display_name ?? "技能详情"}</DialogTitle>
-            <DialogDescription>当前版本、操作与加载状态。</DialogDescription>
-          </DialogHeader>
-          {skillDetail && (
-            <Card>
-              <CardHeader>
-                <CardTitle>v{skillDetail.current_version}</CardTitle>
-                <CardDescription>{skillDetail.manifest.description}</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="flex flex-col gap-2">
-                  <div>操作：{skillDetail.manifest.operations.join(", ") || "无"}</div>
-                  <div>可用：{skillDetail.available ? "是" : "否"}</div>
-                  {skillDetail.load_error && (
-                    <Alert variant="destructive">
-                      <AlertTitle>加载失败</AlertTitle>
-                      <AlertDescription>{skillDetail.load_error}</AlertDescription>
-                    </Alert>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-          )}
-        </DialogContent>
-      </Dialog>
-
       {/* ---- Delete confirmation dialog ---- */}
       <AlertDialog
         open={pendingDelete !== null}
@@ -644,7 +506,7 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
           <AlertDialogHeader>
             <AlertDialogTitle>确认删除</AlertDialogTitle>
             <AlertDialogDescription>
-              删除“{pendingDelete?.label}”及其用户版本后无法恢复。内置项目不会提供删除操作。
+              删除“{pendingDelete?.label}”后无法恢复。内置数据库不会提供删除操作。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -662,43 +524,6 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* ---- Upload confirmation dialog ---- */}
-      <AlertDialog
-        open={pendingUpload !== null}
-        onOpenChange={(next) => {
-          if (!next && !uploading) setPendingUpload(null);
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>确认安装技能</AlertDialogTitle>
-            <AlertDialogDescription>
-              已验证 {pendingUpload?.validation.skill.display_name} v
-              {pendingUpload?.validation.skill.version}。
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          {pendingUpload?.validation.warning && (
-            <Alert>
-              <UploadSimpleIcon />
-              <AlertTitle>本地代码执行警告</AlertTitle>
-              <AlertDescription>{pendingUpload.validation.warning}</AlertDescription>
-            </Alert>
-          )}
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={uploading}>取消</AlertDialogCancel>
-            <AlertDialogAction
-              disabled={uploading}
-              onClick={(event) => {
-                event.preventDefault();
-                void confirmUpload();
-              }}
-            >
-              {uploading && <Spinner data-icon="inline-start" />}
-              确认安装
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   );
 }

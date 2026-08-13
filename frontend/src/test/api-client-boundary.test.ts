@@ -18,36 +18,37 @@ describe("resumeRun", () => {
   });
 });
 
-/* ---- setSkillEnabled ---- */
-describe("setSkillEnabled", () => {
+/* ---- setDatabaseEnabled ---- */
+describe("setDatabaseEnabled", () => {
   it("succeeds with 200 on enable", async () => {
     const fetcher = vi.fn<FetchLike>().mockResolvedValue(new Response("{}", { status: 200 }));
     const api = createAPIClient({ fetcher });
-    await expect(api.setSkillEnabled("s1", true)).resolves.toBeUndefined();
+    await expect(api.setDatabaseEnabled("geo", true)).resolves.toBeUndefined();
   });
-});
 
-/* ---- rollbackSkill ---- */
-describe("rollbackSkill", () => {
-  it("succeeds with 200", async () => {
+  it("posts to the disable endpoint", async () => {
     const fetcher = vi.fn<FetchLike>().mockResolvedValue(new Response("{}", { status: 200 }));
     const api = createAPIClient({ fetcher });
-    await expect(api.rollbackSkill("s1")).resolves.toBeUndefined();
+    await api.setDatabaseEnabled("geo", false);
+    expect(fetcher).toHaveBeenCalledWith(
+      "/api/v1/databases/geo/disable",
+      { method: "POST" },
+    );
   });
 });
 
-/* ---- fetchSkills exact preservation ---- */
-describe("fetchSkills exact preservation", () => {
-  it("preserves all fields from valid skill list response", async () => {
-    const skills = [{ name: "pubmed", display_name: "PubMed", version: "1", category: "discovery", description: "Papers", origin: "package", supported_sources: ["pubmed"], operations: ["search"], enabled: true, user_selectable: true, pipeline_supported: true, available: true, load_error: null }];
-    const fetcher = vi.fn<FetchLike>().mockResolvedValue(jsonResponse({ skills }));
+/* ---- fetchDatabases exact preservation ---- */
+describe("fetchDatabases exact preservation", () => {
+  it("preserves all fields from a valid database list response", async () => {
+    const databases = [{ id: "pubmed", name: "PubMed", category: "discovery", description: "Papers", origin: "builtin", version: "1", pipeline_supported: true, available: true, enabled: true, capability: "pipeline_supported" }];
+    const fetcher = vi.fn<FetchLike>().mockResolvedValue(jsonResponse({ databases }));
     const api = createAPIClient({ fetcher });
-    const result = await api.fetchSkills();
+    const result = await api.fetchDatabases();
     expect(result).toHaveLength(1);
-    expect(result[0].name).toBe("pubmed");
-    expect(result[0].origin).toBe("package");
-    expect(result[0].available).toBe(true);
-    expect(result[0].load_error).toBeNull();
+    expect(result[0].id).toBe("pubmed");
+    expect(result[0].origin).toBe("builtin");
+    expect(result[0].enabled).toBe(true);
+    expect(result[0].capability).toBe("pipeline_supported");
   });
 });
 

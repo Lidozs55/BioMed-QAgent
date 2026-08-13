@@ -16,7 +16,7 @@ import type {
 } from "@/runtime/contracts";
 
 // Re-export all settings contracts for backward compatibility
-export type { CapabilitySource, ModelSettings, ModelSettingsUpdate, ModelPreviewRequest, VendorInfo, ModelInfo, SettingsAPIClient, DeclarativeOperation, DeclarativeSkillManifest, DatabaseOperationUpdatePatch, DatabaseUpdatePatch, SkillManifest, SkillDetail, SkillValidation, ParameterSpec, ModelCapabilities, ProviderInfo, ProviderInput, ProviderUpdateInput, ManagedModelInfo, ManagedModelInput, DiscoveredModelInfo, Personality, PersonalizationSettings, PersonalizationUpdate } from "@/hooks/settingsContracts";
+export type { CapabilitySource, ModelSettings, ModelSettingsUpdate, ModelPreviewRequest, VendorInfo, ModelInfo, SettingsAPIClient, DeclarativeOperation, DeclarativeSkillManifest, DatabaseItem, DatabaseDetail, DatabaseOperationUpdatePatch, DatabaseUpdatePatch, ParameterSpec, ModelCapabilities, ProviderInfo, ProviderInput, ProviderUpdateInput, ManagedModelInfo, ManagedModelInput, DiscoveredModelInfo, Personality, PersonalizationSettings, PersonalizationUpdate } from "@/hooks/settingsContracts";
 export type { ContextBudgetSettings } from "@/hooks/settingsContracts";
 
 // Re-export APIError class, normalizer, and runtime parsers
@@ -35,8 +35,7 @@ import {
   parseTaskRunAccepted, parseTaskSnapshot,
 } from "@/lib/apiResponseParsers";
 import {
-  parseArtifactsEnvelope, parseDatabasesEnvelope,
-  parseSkillDetail, parseSkillsEnvelope, parseSkillValidation,
+  parseArtifactsEnvelope, parseDatabaseDetail, parseDatabasesEnvelope,
 } from "@/lib/apiEnvelopeParsers";
 import { parseBuildDetail, parseBuildPage } from "@/lib/apiResponseParsers";
 import type { SettingsAPIClient } from "@/hooks/settingsContracts";
@@ -271,15 +270,10 @@ export function createAPIClient(options: APIClientOptions = {}): APIClient & Set
     updateManagedModel: (id, patch) => request(`${baseUrl}/model-registry/models/${encodeId(id)}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) }).then((b) => b as ManagedModelInfo),
     deleteManagedModel: (id) => requestVoid(`${baseUrl}/model-registry/models/${encodeId(id)}`, { method: "DELETE" }),
     activateManagedModel: (id) => request(`${baseUrl}/model-registry/models/${encodeId(id)}/activate`, { method: "POST" }).then((b) => parseModelSettings(b)),
-    fetchSkills: () => request(`${baseUrl}/skills`).then((b) => parseSkillsEnvelope(b)).then(({ skills }) => skills),
-    fetchSkill: (name) => request(`${baseUrl}/skills/${encodeId(name)}`).then((b) => parseSkillDetail(b)),
-    setSkillEnabled: (name, enabled) => requestVoid(`${baseUrl}/skills/${encodeId(name)}/${enabled ? "enable" : "disable"}`, { method: "POST" }),
-    rollbackSkill: (name) => requestVoid(`${baseUrl}/skills/${encodeId(name)}/rollback`, { method: "POST" }),
-    deleteSkill: (name) => requestVoid(`${baseUrl}/skills/${encodeId(name)}`, { method: "DELETE" }),
-    validateSkill: (file) => { const form = new FormData(); form.set("file", file); return request(`${baseUrl}/skills/validate`, { method: "POST", body: form }).then((b) => parseSkillValidation(b)); },
-    uploadSkill: (file) => { const form = new FormData(); form.set("file", file); return requestVoid(`${baseUrl}/skills/upload`, { method: "POST", body: form }); },
-    createDatabase: (manifest) => requestVoid(`${baseUrl}/databases`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(manifest) }),
-    updateDatabase: (name, manifest) => requestVoid(`${baseUrl}/databases/${encodeId(name)}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(manifest) }),
+    fetchDatabase: (name) => request(`${baseUrl}/databases/${encodeId(name)}`).then((b) => parseDatabaseDetail(b)),
+    setDatabaseEnabled: (name, enabled) => requestVoid(`${baseUrl}/databases/${encodeId(name)}/${enabled ? "enable" : "disable"}`, { method: "POST" }),
+    createDatabase: (manifest) => request(`${baseUrl}/databases`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(manifest) }).then((b) => parseDatabaseDetail(b)),
+    updateDatabase: (name, manifest) => request(`${baseUrl}/databases/${encodeId(name)}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(manifest) }).then((b) => parseDatabaseDetail(b)),
     deleteDatabase: (name) => requestVoid(`${baseUrl}/databases/${encodeId(name)}`, { method: "DELETE" }),
   };
 }

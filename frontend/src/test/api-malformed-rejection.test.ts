@@ -148,7 +148,7 @@ describe("database envelope response parsing", () => {
   });
 
   it("accepts valid database envelope", async () => {
-    const fetcher = vi.fn<FetchLike>().mockResolvedValue(jsonResponse({ databases: [{ id: "d1", name: "D1", category: "cat", description: "desc" }] }));
+    const fetcher = vi.fn<FetchLike>().mockResolvedValue(jsonResponse({ databases: [{ id: "d1", name: "D1", category: "cat", description: "desc", origin: "builtin", version: "1", pipeline_supported: false, available: true, enabled: true, capability: "research_only" }] }));
     const api = createAPIClient({ fetcher });
     const dbs = await api.fetchDatabases();
     expect(dbs).toHaveLength(1);
@@ -172,62 +172,36 @@ describe("artifact envelope response parsing", () => {
   });
 });
 
-describe("skill envelope/detail/validation response parsing", () => {
-  it("rejects skill envelope with invalid origin", async () => {
-    const fetcher = vi.fn<FetchLike>().mockResolvedValue(jsonResponse({ skills: [{ name: "s1", display_name: "S1", version: "1", category: "cat", description: "", origin: "bad", supported_sources: [], operations: [], enabled: true, user_selectable: true, pipeline_supported: false }] }));
+describe("database detail response parsing", () => {
+  it("rejects database detail with invalid origin", async () => {
+    const fetcher = vi.fn<FetchLike>().mockResolvedValue(jsonResponse({ id: "s1", name: "S1", category: "cat", description: "", origin: "bad", version: "1", pipeline_supported: false, available: true, enabled: true, capability: "research_only", declarative_manifest: null }));
     const api = createAPIClient({ fetcher });
-    await expect(api.fetchSkills()).rejects.toThrow(APIError);
+    await expect(api.fetchDatabase("s1")).rejects.toThrow(APIError);
   });
 
-  it("rejects skill detail with invalid package_kind", async () => {
-    const manifest = { name: "s1", display_name: "S1", version: "1", category: "cat", description: "", origin: "package", supported_sources: [], operations: [], enabled: true, user_selectable: true, pipeline_supported: false };
-    const fetcher = vi.fn<FetchLike>().mockResolvedValue(jsonResponse({ manifest, current_version: "1", versions: ["1"], package_kind: "exe", warning: null, available: true, load_error: null, declarative_manifest: null }));
+  it("rejects database detail with malformed declarative manifest (missing operations)", async () => {
+    const fetcher = vi.fn<FetchLike>().mockResolvedValue(jsonResponse({ id: "s1", name: "S1", category: "cat", description: "", origin: "package", version: "1", pipeline_supported: false, available: true, enabled: true, capability: "research_only", declarative_manifest: { name: "s1", display_name: "S1", version: "1", category: "cat", description: "", supported_sources: [], user_selectable: true, pipeline_supported: false } }));
     const api = createAPIClient({ fetcher });
-    await expect(api.fetchSkill("s1")).rejects.toThrow(APIError);
+    await expect(api.fetchDatabase("s1")).rejects.toThrow(APIError);
   });
 
-  it("rejects skill detail with malformed declarative manifest (missing operations)", async () => {
-    const manifest = { name: "s1", display_name: "S1", version: "1", category: "cat", description: "", origin: "package", supported_sources: [], operations: [], enabled: true, user_selectable: true, pipeline_supported: false };
-    const fetcher = vi.fn<FetchLike>().mockResolvedValue(jsonResponse({ manifest, current_version: "1", versions: ["1"], package_kind: "manifest", warning: null, available: true, load_error: null, declarative_manifest: { name: "s1", display_name: "S1", version: "1", category: "cat", description: "", supported_sources: [], user_selectable: true, pipeline_supported: false } }));
+  it("accepts valid database detail with declarative manifest fields preserved", async () => {
+    const detailJson = { id: "s1", name: "S1", category: "cat", description: "desc", origin: "package", version: "1", pipeline_supported: false, available: true, enabled: true, capability: "research_only", declarative_manifest: { schema_version: "1.0", name: "s1", display_name: "S1", version: "1", category: "cat", description: "desc", supported_sources: ["pubmed"], user_selectable: true, pipeline_supported: false, enabled: true, requirements: [], operations: [{ name: "search", description: "PubMed search", method: "POST", url: "https://api.example.com/search", query: {}, headers: {}, body: null, timeout_seconds: 30, extract: null, auth: null }] } };
+    const fetcher = vi.fn<FetchLike>().mockResolvedValue(jsonResponse(detailJson));
     const api = createAPIClient({ fetcher });
-    await expect(api.fetchSkill("s1")).rejects.toThrow(APIError);
-  });
-
-  it("rejects skill validation with wrong field type", async () => {
-    const skill = { name: "s1", display_name: "S1", version: "1", category: "cat", description: "", origin: "package", supported_sources: [], operations: [], enabled: true, user_selectable: true, pipeline_supported: false };
-    const fetcher = vi.fn<FetchLike>().mockResolvedValue(jsonResponse({ valid: "maybe", skill }));
-    const api = createAPIClient({ fetcher });
-    await expect(api.validateSkill(new File([], "x.yaml"))).rejects.toThrow(APIError);
-  });
-
-  it("accepts valid skill detail with declarative manifest fields preserved", async () => {
-    const manifest = { name: "s1", display_name: "S1", version: "1", category: "cat", description: "desc", origin: "package", supported_sources: ["pubmed"], operations: ["search"], enabled: true, user_selectable: true, pipeline_supported: false };
-    const skillJson = { manifest, current_version: "1", versions: ["1"], package_kind: "manifest", warning: null, available: true, load_error: null, declarative_manifest: { schema_version: "1.0", name: "s1", display_name: "S1", version: "1", category: "cat", description: "desc", supported_sources: ["pubmed"], user_selectable: true, pipeline_supported: false, enabled: true, requirements: [], operations: [{ name: "search", description: "PubMed search", method: "POST", url: "https://api.example.com/search", query: {}, headers: {}, body: null, timeout_seconds: 30, extract: null, auth: null }] } };
-    const fetcher = vi.fn<FetchLike>().mockResolvedValue(jsonResponse(skillJson));
-    const api = createAPIClient({ fetcher });
-    const detail = await api.fetchSkill("s1");
-    expect(detail.manifest.name).toBe("s1");
-    expect(detail.manifest.origin).toBe("package");
-    expect(detail.package_kind).toBe("manifest");
+    const detail = await api.fetchDatabase("s1");
+    expect(detail.id).toBe("s1");
+    expect(detail.origin).toBe("package");
     expect(detail.declarative_manifest?.operations).toHaveLength(1);
     expect(detail.declarative_manifest?.operations[0].method).toBe("POST");
     expect(detail.declarative_manifest?.pipeline_supported).toBe(false);
-  });
-
-  it("accepts valid skill validation", async () => {
-    const skill = { name: "s1", display_name: "S1", version: "1", category: "cat", description: "desc", origin: "package", supported_sources: [], operations: [], enabled: true, user_selectable: true, pipeline_supported: false };
-    const fetcher = vi.fn<FetchLike>().mockResolvedValue(jsonResponse({ valid: true, skill, warning: null }));
-    const api = createAPIClient({ fetcher });
-    const result = await api.validateSkill(new File([], "x.yaml"));
-    expect(result.valid).toBe(true);
-    expect(result.skill.name).toBe("s1");
   });
 });
 
 /* ---- database create/delete ---- */
 describe("database create/delete request paths", () => {
   it("calls createDatabase with correct URL and method", async () => {
-    const fetcher = vi.fn<FetchLike>().mockResolvedValue(new Response("{}", { status: 200 }));
+    const fetcher = vi.fn<FetchLike>().mockResolvedValue(jsonResponse({"id": "test-db", "name": "Demo DB", "category": "discovery", "description": "Updated", "available": true, "enabled": true, "origin": "package", "version": "1", "pipeline_supported": false, "capability": "research_only", "declarative_manifest": {"schema_version": "1.0", "name": "demo", "display_name": "Demo DB", "version": "1", "category": "discovery", "description": "Updated", "supported_sources": ["demo"], "user_selectable": true, "pipeline_supported": false, "enabled": true, "requirements": [], "operations": [{"name": "search", "description": "Search", "method": "POST", "url": "https://example.com/search/{query}", "query": {"q": "{query}"}, "headers": {}, "body": null, "timeout_seconds": 30, "extract": null, "auth": null}]}}));
     const api = createAPIClient({ fetcher });
     const manifest = { schema_version: "1.0" as const, name: "test-db", display_name: "Test", version: "1", category: "discovery", description: "", supported_sources: ["test"], operations: [{ name: "search", description: "Search", method: "GET" as const, url: "https://api.example.com/search", query: {}, headers: {}, body: null, timeout_seconds: 30, extract: null, auth: null }], user_selectable: true, pipeline_supported: false as const, enabled: true, requirements: [] };
     await api.createDatabase(manifest);
@@ -277,27 +251,3 @@ describe("startImportTask multipart request", () => {
   });
 });
 
-describe("uploadSkill body", () => {
-  it("sends FormData body with the exact file identity to upload", async () => {
-    const fetcher = vi.fn<FetchLike>().mockResolvedValue(new Response("{}", { status: 200 }));
-    const api = createAPIClient({ fetcher });
-    const file = new File(['{"name":"test"}'], "test-skill.yaml", { type: "application/x-yaml" });
-    await api.uploadSkill(file);
-    const calls = fetcher.mock.calls[0];
-    if (calls === undefined) throw new Error("Expected fetch call");
-    const [, init] = calls;
-    if (init === undefined) throw new Error("Expected init object");
-    expect(init.method).toBe("POST");
-    expect(init.headers).toBeUndefined();
-    expect(init.body).toBeInstanceOf(FormData);
-    if (init.body instanceof FormData) {
-      const f = init.body.get("file");
-      expect(f).toBeInstanceOf(File);
-      if (f instanceof File) {
-        expect(f.name).toBe(file.name);
-        expect(f.size).toBe(file.size);
-        expect(f.type).toBe(file.type);
-      }
-    }
-  });
-});

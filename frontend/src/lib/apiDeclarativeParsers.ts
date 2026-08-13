@@ -3,10 +3,10 @@
 /* ------------------------------------------------------------------ */
 
 import { APIError } from "@/hooks/settingsContracts";
-import type { SkillDetail } from "@/hooks/settingsContracts";
+import type { DeclarativeSkillManifest } from "@/hooks/settingsContracts";
 import {
   assertString, assertBoolean, assertNumber, assertObject, assertArray,
-  assertJsonRecord, assertJsonValue, optBoolean,
+  assertJsonRecord, assertJsonValue,
 } from "@/lib/eventValidatorHelpers";
 
 export function assertHttpMethod(v: unknown, path: string): "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS" {
@@ -24,38 +24,6 @@ export function assertOrigin(v: unknown, path: string): "builtin" | "package" {
   if (v === "builtin") return "builtin";
   if (v === "package") return "package";
   throw new APIError(502, `Expected "builtin"|"package" at ${path}, got ${String(v)}`);
-}
-
-export function assertPackageKind(v: unknown, path: string): "manifest" | "zip" {
-  if (v === "manifest") return "manifest";
-  if (v === "zip") return "zip";
-  throw new APIError(502, `Expected "manifest"|"zip" at ${path}, got ${String(v)}`);
-}
-
-function assertLoadError(v: unknown, path: string): string | null | undefined {
-  if (typeof v === "string") return v;
-  if (v === null) return null;
-  if (v === undefined) return undefined;
-  throw new APIError(502, `Expected string|null|undefined at ${path}, got ${typeof v}`);
-}
-
-export function assertSkillManifest(json: unknown, path: string): SkillDetail["manifest"] {
-  const obj = assertObject(json, path);
-  return {
-    name: assertString(Reflect.get(obj, "name"), `${path}.name`),
-    display_name: assertString(Reflect.get(obj, "display_name"), `${path}.display_name`),
-    version: assertString(Reflect.get(obj, "version"), `${path}.version`),
-    category: assertString(Reflect.get(obj, "category"), `${path}.category`),
-    description: assertString(Reflect.get(obj, "description"), `${path}.description`),
-    origin: assertOrigin(Reflect.get(obj, "origin"), `${path}.origin`),
-    supported_sources: assertArray(Reflect.get(obj, "supported_sources"), `${path}.supported_sources`, (v) => assertString(v, `${path}.supported_sources[]`)),
-    operations: assertArray(Reflect.get(obj, "operations"), `${path}.operations`, (v) => assertString(v, `${path}.operations[]`)),
-    enabled: assertBoolean(Reflect.get(obj, "enabled"), `${path}.enabled`),
-    user_selectable: assertBoolean(Reflect.get(obj, "user_selectable"), `${path}.user_selectable`),
-    pipeline_supported: assertBoolean(Reflect.get(obj, "pipeline_supported"), `${path}.pipeline_supported`),
-    available: optBoolean(Reflect.get(obj, "available"), `${path}.available`),
-    load_error: assertLoadError(Reflect.get(obj, "load_error"), `${path}.load_error`),
-  };
 }
 
 function assertAuthSource(v: unknown, path: string): "env" {
@@ -166,7 +134,7 @@ export function assertDeclarativeOperation(v: unknown, path: string): {
   };
 }
 
-export function assertDeclarativeManifest(v: unknown, path: string): SkillDetail["declarative_manifest"] {
+export function assertDeclarativeManifest(v: unknown, path: string): DeclarativeSkillManifest | null {
   if (v === null || v === undefined) return null;
   if (typeof v !== "object" || Array.isArray(v)) throw new APIError(502, `Expected object|null at ${path}, got ${typeof v}`);
   const obj = assertObject(v, path);

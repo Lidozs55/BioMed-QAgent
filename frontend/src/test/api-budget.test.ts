@@ -30,17 +30,15 @@ describe("API settings/catalog management contracts", () => {
       }))
       .mockResolvedValueOnce(jsonResponse({ vendors: [] }))
       .mockResolvedValueOnce(jsonResponse({ models: [], total_count: 0 }))
-      .mockResolvedValueOnce(jsonResponse({ generation: 2, skills: [] }))
-      .mockResolvedValueOnce(jsonResponse({ generation: 3, skill: null }));
+      .mockResolvedValueOnce(jsonResponse({ databases: [] }));
     const api = createAPIClient({ fetcher });
     await api.fetchSettings();
     await api.fetchVendors();
     await api.fetchModels({ baseUrl: "https://preview.test/v1", apiKey: "secret" });
-    await api.fetchSkills();
-    await api.deleteSkill("demo/skill");
+    await api.fetchDatabases();
     expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
       "/api/v1/settings", "/api/v1/vendors", "/api/v1/models",
-      "/api/v1/skills", "/api/v1/skills/demo%2Fskill",
+      "/api/v1/databases",
     ]);
     expect(fetcher.mock.calls[2]?.[1]).toEqual({
       method: "POST", headers: { "Content-Type": "application/json" },

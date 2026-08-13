@@ -85,10 +85,11 @@ export class RuntimeController {
     const databasePromise = this.api.fetchDatabases().then((databases) => {
       if (signal?.aborted) return;
       const state = useAgentStore.getState();
-      state.setDatabases(databases);
+      const enabled = databases.filter((database) => database.enabled !== false);
+      state.setDatabases(enabled);
       if (state.draft.selectedDatabaseIds.length === 0) {
         state.setDraftSelectedDatabaseIds(
-          databases.map((database) => database.id),
+          enabled.map((database) => database.id),
         );
       }
     });

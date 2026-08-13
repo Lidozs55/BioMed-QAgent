@@ -152,24 +152,18 @@ describe("formatToolCall", () => {
       target: "another_unknown",
     });
   });
-  it("maps find_skill", () => {
+  it("falls back to the raw name for retired gateway tool names", () => {
     const label = formatToolCall("find_skill", { text: "网页截图" });
-    expect(label).toEqual({ verb: "检索", target: "技能" });
+    expect(label).toEqual({ verb: "调用", target: "find_skill" });
   });
 
-  it("maps invoke_skill with skill name", () => {
-    const label = formatToolCall("invoke_skill", {
-      skill: "web_visual_capture",
-      operation: "capture_web_page",
-    });
-    expect(label).toEqual({
-      verb: "调用",
-      target: "web_visual_capture",
-    });
+  it("maps a direct data-source tool with its query detail", () => {
+    const label = formatToolCall("search_geo", { query: "METTL5" });
+    expect(label).toEqual({ verb: "检索", target: "GEO", details: '查询: "METTL5"' });
   });
 
-  it("maps invoke_skill without args", () => {
-    const label = formatToolCall("invoke_skill", null);
-    expect(label).toEqual({ verb: "调用", target: "技能" });
+  it("maps the research guidance tool", () => {
+    const label = formatToolCall("get_research_data_guidance", { topic: "strategy" });
+    expect(label).toEqual({ verb: "加载", target: "科研策略指导 strategy" });
   });
 });
