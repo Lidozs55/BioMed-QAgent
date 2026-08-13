@@ -46,11 +46,36 @@ export interface BuildRunOutcome {
   completedOperationIds: string[];
 }
 
-/** One operation handler (Python ``OperationRunner``, synchronous port). */
+/** One operation handler (Python ``OperationRunner``); may be async (M2). */
 export type OperationRunner = (
   op: OperationSpec,
   upstream: Record<string, Record<string, unknown>>,
-) => OperationOutput;
+  signal?: AbortSignal,
+) => OperationOutput | Promise<OperationOutput>;
+
+/** Typed per-operation wall-clock timeout (M2, I-03). */
+export class OperationTimeoutError extends Error {
+  constructor(
+    readonly operationId: string,
+    readonly timeoutMs: number,
+  ) {
+    super(`operation ${operationId} timed out after ${timeoutMs}ms`);
+    this.name = "OperationTimeoutError";
+  }
+}
+
+/** Core operation lifecycle events (M2, I-05) — the service layer maps these
+ * onto stable EventPayloads before they reach the durable event log. */
+export type CoreOperationEvent =
+  | { type: "build_started" }
+  | { type: "operation_started"; operationId: string; label: string | null; category: string; attempt: number }
+  | { type: "operation_completed"; operationId: string; label: string | null; category: string; status: "succeeded" | "skipped"; outputDigest: string | null; reusedOperationAttemptId: string | null }
+  | { type: "operation_failed"; operationId: string; label: string | null; category: string; status: "failed" | "cancelled"; error: { code: string; message: string } | null }
+  | { type: "build_completed" }
+  | { type: "build_failed"; error: { code: string; message: string } | null }
+  | { type: "build_cancelled" };
+
+export type CoreEventSink = (event: CoreOperationEvent) => void | Promise<void>;
 
 /** Raised when cooperative cancellation stops the skeleton. */
 export class BuildCancelledError extends Error {}
@@ -106,6 +131,10 @@ export interface ExecutorOptions {
   perBindingOutcomes?: Record<string, BindingRejection> | null;
   /** Best-effort workspace hygiene for a cancelled operation (K1). */
   discardOutputs?: ((op: OperationSpec) => void) | null;
+  /** Per-operation wall-clock timeout in ms (M2 I-03; 0 = unlimited). */
+  operationTimeoutMs?: number;
+  /** Core operation lifecycle sink (M2 I-05). */
+  eventSink?: CoreEventSink | null;
 }
 
 /** Executes one fixed skeleton with idempotent recovery and cancel support. */
@@ -124,10 +153,13 @@ export class DatasetBuildExecutor {
   private readonly resumeFrom: string | null;
   private readonly discardOutputs: ((op: OperationSpec) => void) | null;
   private readonly perBindingOutcomes: Record<string, BindingRejection>;
+  private readonly operationTimeoutMs: number;
+  private readonly eventSink: CoreEventSink | null;
 
   private state: ReturnType<typeof loadBuildState> | null = null;
   private outputs: Record<string, Record<string, unknown>> = {};
   private persistedAttemptCount = 0;
+  private lastReusedAttemptId: string | null = null;
 
   constructor(options: ExecutorOptions) {
     this.taskId = options.taskId;
@@ -144,6 +176,8 @@ export class DatasetBuildExecutor {
     this.resumeFrom = options.resumeFrom ?? null;
     this.discardOutputs = options.discardOutputs ?? null;
     this.perBindingOutcomes = options.perBindingOutcomes ?? {};
+    this.operationTimeoutMs = options.operationTimeoutMs ?? 0;
+    this.eventSink = options.eventSink ?? null;
     if (
       this.resumeFrom !== null &&
       !this.plan.some((op) => op.operation_id === this.resumeFrom)
@@ -155,7 +189,8 @@ export class DatasetBuildExecutor {
   }
 
   /** Execute the skeleton, guaranteeing a terminal outcome. */
-  run(): BuildRunOutcome {
+  async run(): Promise<BuildRunOutcome> {
+    await this.emit({ type: "build_started" });
     try {
       this.state = loadBuildState(this.stateDir, this.taskId, this.buildId);
       this.persistedAttemptCount = validateAttemptLogPrefix(
@@ -170,13 +205,27 @@ export class DatasetBuildExecutor {
       );
     }
     try {
-      return this.runPlan();
+      const outcome = await this.runPlan();
+      await this.emit({ type: "build_completed" });
+      return outcome;
     } catch (error) {
       if (error instanceof BuildCancelledError) {
+        await this.emit({ type: "build_cancelled" });
         return this.finalizeCancelled();
       }
-      return this.finalizeFailed(error, "internal_error");
+      await this.emit({
+        type: "build_failed",
+        error: error instanceof Error
+          ? { code: error instanceof OperationTimeoutError ? "timeout" : "internal_error", message: error.message }
+          : { code: "internal_error", message: String(error) },
+      });
+      return this.finalizeFailed(error, error instanceof OperationTimeoutError ? "timeout" : "internal_error");
     }
+  }
+
+  private async emit(event: CoreOperationEvent): Promise<void> {
+    if (this.eventSink === null) return;
+    await this.eventSink(event);
   }
 
   private attemptsPath(): string {
@@ -208,7 +257,7 @@ export class DatasetBuildExecutor {
     this.persistAttempts();
   }
 
-  private runPlan(): BuildRunOutcome {
+  private async runPlan(): Promise<BuildRunOutcome> {
     const state = this.state;
     if (state === null) {
       throw new Error("build state not loaded");
@@ -223,7 +272,7 @@ export class DatasetBuildExecutor {
           continue; // binding already rejected: skip its remaining phase-A ops
         }
         try {
-          this.runOperationOnce(op, op.operation_id === this.resumeFrom);
+          await this.runOperationOnce(op, op.operation_id === this.resumeFrom);
         } catch (error) {
           if (
             error instanceof BindingRejectedError ||
@@ -246,7 +295,7 @@ export class DatasetBuildExecutor {
           throw new AllBindingsRejectedError(this.perBindingOutcomes);
         }
       }
-      this.runOperationOnce(op, op.operation_id === this.resumeFrom);
+      await this.runOperationOnce(op, op.operation_id === this.resumeFrom);
     }
     return {
       status: "completed",
@@ -338,12 +387,21 @@ export class DatasetBuildExecutor {
   }
 
   /** Run (or reuse) one operation with digest matching and checkpointing. */
-  private runOperationOnce(op: OperationSpec, force: boolean): void {
+  private async runOperationOnce(op: OperationSpec, force: boolean): Promise<void> {
     const scope = this.digestScope(op);
     const inputDigest = computeInputDigest(op, scope);
     const parameterDigest = computeParameterDigest(op, scope);
 
     if (!force && this.tryReuseOperation(op, inputDigest, parameterDigest)) {
+      await this.emit({
+        type: "operation_completed",
+        operationId: op.operation_id,
+        label: op.label ?? null,
+        category: op.category,
+        status: "skipped",
+        outputDigest: null,
+        reusedOperationAttemptId: this.lastReusedAttemptId,
+      });
       return;
     }
 
@@ -361,12 +419,29 @@ export class DatasetBuildExecutor {
     );
     state.inflight_attempt = running;
     saveBuildState(this.stateDir, state);
+    await this.emit({
+      type: "operation_started",
+      operationId: op.operation_id,
+      label: op.label ?? null,
+      category: op.category,
+      attempt: running.attempt,
+    });
 
     let result: OperationOutput;
     try {
       const upstream = this.availableUpstream(op);
-      result = this.executeOperation(op, upstream);
+      result = await this.executeOperation(op, upstream);
     } catch (error) {
+      await this.emit({
+        type: "operation_failed",
+        operationId: op.operation_id,
+        label: op.label ?? null,
+        category: op.category,
+        status: error instanceof BuildCancelledError ? "cancelled" : "failed",
+        error: error instanceof Error
+          ? { code: error instanceof OperationTimeoutError ? "timeout" : "failed", message: error.message }
+          : { code: "failed", message: String(error) },
+      });
       if (error instanceof BuildCancelledError) {
         const cancelled = this.buildAttempt(
           op.operation_id,
@@ -417,6 +492,15 @@ export class DatasetBuildExecutor {
     this.persistAttempts();
 
     this.outputs[op.operation_id] = result.output;
+    await this.emit({
+      type: "operation_completed",
+      operationId: op.operation_id,
+      label: op.label ?? null,
+      category: op.category,
+      status: "succeeded",
+      outputDigest,
+      reusedOperationAttemptId: null,
+    });
   }
 
   /** Reuse a digest-matched SUCCEEDED attempt when its checkpoint verifies. */
@@ -441,6 +525,7 @@ export class DatasetBuildExecutor {
     });
     if (loaded === null) return false;
 
+    this.lastReusedAttemptId = reusable.operation_attempt_id;
     this.outputs[op.operation_id] = loaded;
     const skipped = this.buildAttempt(
       op.operation_id,
@@ -461,15 +546,33 @@ export class DatasetBuildExecutor {
     return true;
   }
 
-  /** Run one operation under cooperative cancel checks. */
-  private executeOperation(
+  /** Run one operation under cooperative cancel checks + wall-clock timeout. */
+  private async executeOperation(
     op: OperationSpec,
     upstream: Record<string, Record<string, unknown>>,
-  ): OperationOutput {
+  ): Promise<OperationOutput> {
     if (this.isCancelled()) {
       throw new BuildCancelledError(`operation ${op.operation_id} was cancelled`);
     }
-    const result = this.runOperation(op, upstream);
+    let result: OperationOutput;
+    if (this.operationTimeoutMs > 0) {
+      let timeout: NodeJS.Timeout | undefined;
+      try {
+        result = await Promise.race([
+          Promise.resolve(this.runOperation(op, upstream)),
+          new Promise<never>((_resolve, reject) => {
+            timeout = setTimeout(
+              () => reject(new OperationTimeoutError(op.operation_id, this.operationTimeoutMs)),
+              this.operationTimeoutMs,
+            );
+          }),
+        ]);
+      } finally {
+        if (timeout !== undefined) clearTimeout(timeout);
+      }
+    } else {
+      result = await this.runOperation(op, upstream);
+    }
     if (this.isCancelled()) {
       // K1: the operation's files are finished but must be discarded — the
       // completed-too-late outputs never become part of the build state.

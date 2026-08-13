@@ -1,0 +1,10 @@
+{
+  "mapping": {
+    "PROBE1": "ENSG00000141510"
+  },
+  "target_namespace": "ensembl_gene",
+  "status": "mapped",
+  "ambiguous": [],
+  "probe_column": "ID",
+  "gene_column": "ENSEMBL_ID"
+}

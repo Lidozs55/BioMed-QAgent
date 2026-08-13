@@ -1,0 +1,15 @@
+{
+  "results": [
+    {
+      "entries": [
+        {
+          "stId": "R-HSA-169893",
+          "name": "Apoptosis",
+          "species": ["Homo sapiens"],
+          "exactType": "Pathway"
+        }
+      ]
+    }
+  ],
+  "numberOfMatches": 1
+}

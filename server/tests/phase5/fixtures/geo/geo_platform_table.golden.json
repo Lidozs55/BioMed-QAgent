@@ -1,0 +1,11 @@
+{
+  "mapping": {
+    "PROBE1": "TP53",
+    "PROBE3": "BRCA1"
+  },
+  "target_namespace": "gene_symbol",
+  "status": "mapped",
+  "ambiguous": [],
+  "probe_column": "ID",
+  "gene_column": "GENE_SYMBOL"
+}

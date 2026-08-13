@@ -9,7 +9,7 @@ import type {
   BioMedToolExecutionContext,
   BioMedToolResult,
 } from "../contracts.js";
-import type { DatasetCoreClientLike } from "../../legacy/dataset-core-client.js";
+import type { DatasetCoreService } from "../../dataset/service/dataset-core.js";
 
 const MAX_ID = 128;
 const MAX_CONTENT = 4_096;
@@ -27,7 +27,7 @@ export interface DatasetBuildToolDiagnostic {
 }
 
 export interface DatasetBuildToolOptions {
-  client: DatasetCoreClientLike;
+  client: Pick<DatasetCoreService, "validate" | "execute">;
   taskId: string;
   runId: () => string;
   piSessionId: () => string;

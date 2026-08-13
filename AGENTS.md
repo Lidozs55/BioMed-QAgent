@@ -30,8 +30,10 @@ Pipeline**. Full details are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §2
 > **迁移主线**：仓库正按
 > [docs/BioMed-QAgent_Pi_Migration_Plan.md](docs/BioMed-QAgent_Pi_Migration_Plan.md)
 > 把 Agent Runtime 迁移到 Pi、Dataset Core 迁移到 TypeScript。当前进度：
-> Phase 0/1/3/4 已完成（Phase 4 = TS Dataset Core 移植，运行接线待后续阶段），
-> 下一阶段为 Phase 2（Skills 迁移）；进度跟踪与剩余条目见 docs/TODO.md。
+> Phase 0–6 已完成（含 Phase 5 外部能力全量 TS 化与 M2 `DATASET_CORE=ts`
+> opt-in 收口），下一阶段为 Phase 7（正式默认切换）；进度跟踪与剩余条目见
+> docs/TODO.md。Phase 5 实施计划/能力矩阵/PDF spike 见
+> docs/migration/phase5-external-capabilities*.md。
 
 Key points:
 
@@ -73,9 +75,16 @@ Key points:
   by `app/api/ws_events.py:_run_event_session`.
 - Skill 知识已迁至 [.pi/skills/](.pi/skills/)（`<name>/SKILL.md`，Phase 2）；
   Python 侧只剩内置直接工具模块（四个类别 discovery / acquisition /
-  processing / analysis 的模块级常量，[backend/app/skills/builtin/](backend/app/skills/builtin/)）。
-  learned skill 概念已删除（Phase 2，见
+  processing / analysis 的模块级常量，[backend/app/skills/builtin/](backend/app/skills/builtin/)），
+  且其业务能力已全部 TS 化（Phase 5）：Pi 路径的 acquisition / parsing /
+  analysis 不再调用 Python（`server/src/external/`、`server/src/processing/`、
+  `server/src/analysis/`）；Python 仅承担 legacy 回滚 runtime 与 DB bridge
+  （`database/bridge.py` 命名操作，`server/src/persistence/db-client.ts`）。
+- learned skill 概念已删除（Phase 2，见
   [docs/migration/phase2-skills-tools-migration.md](docs/migration/phase2-skills-tools-migration.md)）。
+- `DATASET_CORE=ts` 为合法 opt-in profile（`ts/pi/ts/0|1`，M2）；TS Core 具备
+  operation timeout / build lock / cancel / event sink，四类 golden fixture 通过；
+  默认 profile 仍是 `ts/legacy/python/1`。
 
 **HTTP API Routes** (prefix `/api/v1`):
 

@@ -47,6 +47,7 @@ async function main(): Promise<void> {
             bridgeSecret,
             workspaceDevExec: config.workspaceDevExec,
             resolveModel: modelSettings.resolveActiveModel,
+            datasetCore: config.flags.datasetCore,
           })
       : undefined,
     experimentalPi: config.flags.piExperimental

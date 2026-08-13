@@ -1,0 +1,10 @@
+{
+  "struct": { "title": "Test Structure" },
+  "rcsb_entry_info": { "resolution_combined": [2.1] },
+  "exptl": [{ "method": "X-RAY DIFFRACTION" }],
+  "audit_author": [{ "name": "Smith, J." }],
+  "citation": [{ "title": "Test Paper" }],
+  "rcsb_accession_info": { "deposit_date": "2020-01-01" },
+  "polymer_entities": [],
+  "nonpolymer_entities": []
+}

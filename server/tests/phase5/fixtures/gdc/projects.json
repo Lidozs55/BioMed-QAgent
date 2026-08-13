@@ -1,0 +1,37 @@
+{
+  "data": {
+    "hits": [
+      {
+        "project_id": "TCGA-LUAD",
+        "name": "Lung Adenocarcinoma",
+        "disease_type": ["Adenomas and Adenocarcinomas"],
+        "primary_site": ["Lung"],
+        "summary": {
+          "case_count": 500,
+          "file_count": 3000,
+          "data_categories": [
+            {"data_category": "Transcriptome Profiling"}
+          ]
+        }
+      },
+      {
+        "project_id": "TCGA-BRCA",
+        "name": "Breast Invasive Carcinoma",
+        "disease_type": ["Ductal Neoplasms"],
+        "primary_site": ["Breast"],
+        "summary": {
+          "case_count": 1000,
+          "file_count": 5000,
+          "data_categories": []
+        }
+      },
+      {
+        "project_id": "TCGA-PAAD",
+        "name": "Pancreatic Adenocarcinoma",
+        "disease_type": ["Ductal Neoplasms"],
+        "primary_site": ["Pancreas"],
+        "summary": {"case_count": 180, "file_count": 900}
+      }
+    ]
+  }
+}

@@ -10,7 +10,7 @@
 
 ## 0. 执行进度
 
-> 状态快照：2026-08-13（main @ dfa668a）。本表随阶段推进更新；可勾选剩余条目与
+> 状态快照：2026-08-14（main @ d622415 之后的 Phase 5 分支）。本表随阶段推进更新；可勾选剩余条目与
 > 优先级见 [docs/TODO.md](TODO.md)。
 
 | Phase | 内容 | 状态 |
@@ -19,11 +19,16 @@
 | 1 | 引入 Pi Main Agent，不动 Dataset Core | ✅ 完成（2026-08-12） |
 | 2 | 迁移 Skills 与通用 Agent 工具 | ✅ 完成（2026-08-13） |
 | 3 | 拆出 TS Application Runtime | ✅ 完成（opt-in，2026-08-12） |
-| 4 | 迁移 Dataset Deterministic Core | ✅ 完成（2026-08-13；运行接线属后续阶段） |
-| 5 | 迁外部能力与 Python 数据处理依赖 | ⬜ 下一阶段 |
-| 6 | 迁模型设置与 Settings API | ⬜ 待开始 |
-| 7 | 正式切换 Frontend → TS Host | ⬜ 待开始 |
+| 4 | 迁移 Dataset Deterministic Core | ✅ 完成（2026-08-13；M2 运行接线闭环） |
+| 5 | 迁外部能力与 Python 数据处理依赖 | ✅ 完成（2026-08-14；Python 仅回滚 + DB bridge） |
+| 6 | 迁模型设置与 Settings API | ✅ 完成（2026-08-13） |
+| 7 | 正式切换 Frontend → TS Host | ⬜ 下一阶段 |
 | 8 | 删除 Python Runtime | ⬜ 待开始 |
+
+Phase 5 实施计划、验收清单与集成收口（M2）见
+[migration/phase5-external-capabilities-completion-plan.md](migration/phase5-external-capabilities-completion-plan.md)
+与 [migration/phase5-external-capabilities.md](migration/phase5-external-capabilities.md)；
+`DATASET_CORE=ts` 现为合法 opt-in profile（`ts/pi/ts/0|1`），默认 profile 不变。
 
 Phase 0/1 执行细节与验收证据见
 [BioMed-QAgent_Pi_Migration_Phase0_1_Detailed.md](BioMed-QAgent_Pi_Migration_Phase0_1_Detailed.md)
@@ -32,7 +37,8 @@ Phase 0/1 执行细节与验收证据见
 Phase 3 边界、激活方式与回滚见
 [migration/phase3-ts-application-runtime.md](migration/phase3-ts-application-runtime.md)；
 Phase 4 逐步实现与 parity 证据见 `.superpowers/phase4/T1-T10-report.md`
-（TS 代码在 `server/src/dataset/`，运行接线属 Phase 7 前端切换前的集成工作）。
+（TS 代码在 `server/src/dataset/`，M2 已将其运行接线到 `DATASET_CORE=ts` profile）；
+Phase 5 能力矩阵与验收见 `docs/migration/phase5-external-capabilities*.md`。
 
 ---
 

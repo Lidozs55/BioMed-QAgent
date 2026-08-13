@@ -1,0 +1,9 @@
+{
+  "struct": { "title": "Cellular retinoic acid binding protein" },
+  "rcsb_entry_info": { "resolution_combined": [1.8] },
+  "exptl": [{ "method": "X-RAY DIFFRACTION" }],
+  "rcsb_accession_info": { "deposit_date": "1992-01-01" },
+  "polymer_entities": [
+    { "rcsb_entity_source_organism": [{ "scientific_name": "Homo sapiens" }] }
+  ]
+}

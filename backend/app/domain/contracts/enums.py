@@ -43,7 +43,7 @@ SOURCE_CAPABILITIES: dict[Database, SourceCapability] = {
     Database.GEO: SourceCapability.PIPELINE_SUPPORTED,
     Database.GDC: SourceCapability.PIPELINE_SUPPORTED,
     Database.UCSC_XENA: SourceCapability.PIPELINE_SUPPORTED,
-    Database.REACTOME: SourceCapability.PIPELINE_SUPPORTED,
+    Database.REACTOME: SourceCapability.RESEARCH_ONLY,
     Database.PDB: SourceCapability.RESEARCH_ONLY,
     Database.PUBCHEM: SourceCapability.RESEARCH_ONLY,
     Database.BROWSER: SourceCapability.RESEARCH_ONLY,

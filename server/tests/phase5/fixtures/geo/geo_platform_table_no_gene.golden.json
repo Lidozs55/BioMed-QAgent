@@ -1,0 +1,8 @@
+{
+  "mapping": {},
+  "target_namespace": "gene_symbol",
+  "status": "no_gene_annotation",
+  "ambiguous": [],
+  "probe_column": "ID",
+  "gene_column": null
+}

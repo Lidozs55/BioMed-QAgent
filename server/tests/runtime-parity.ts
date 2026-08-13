@@ -154,7 +154,7 @@ function makeExecutor(options: {
     resumeFrom: options.resumeFrom ?? null,
   });
 }
-export function checkRuntimeParity(options: { outputRoot: string }): string[] {
+export async function checkRuntimeParity(options: { outputRoot: string }): Promise<string[]> {
   const issues: string[] = [];
   const outputRoot = options.outputRoot;
 
@@ -198,7 +198,7 @@ export function checkRuntimeParity(options: { outputRoot: string }): string[] {
     const out = join(outputRoot, "runs-all");
     mkdirSync(out, { recursive: true });
     const runner = new RecordingRunner();
-    const outcome = makeExecutor({ outputRoot: out, runner }).run();
+    const outcome = await makeExecutor({ outputRoot: out, runner }).run();
     check(issues, outcome.status === "completed", "runs all: completed");
     check(issues, outcome.error === null, "runs all: no error");
     check(issues, outcome.completedOperationIds.length === 10, "runs all: 10 completed ids");
@@ -213,10 +213,10 @@ export function checkRuntimeParity(options: { outputRoot: string }): string[] {
     const out = join(outputRoot, "reuse");
     mkdirSync(out, { recursive: true });
     const runner = new RecordingRunner();
-    const first = makeExecutor({ outputRoot: out, runner }).run();
+    const first = await makeExecutor({ outputRoot: out, runner }).run();
     check(issues, first.status === "completed" && runner.calls.length === 10, "reuse: first run executes all");
     const runner2 = new RecordingRunner();
-    const second = makeExecutor({ outputRoot: out, runner: runner2 }).run();
+    const second = await makeExecutor({ outputRoot: out, runner: runner2 }).run();
     check(issues, second.status === "completed", "reuse: second run completed");
     checkDeepEqual(issues, runner2.calls, [], "reuse: second run reuses every operation");
     const state = loadBuildState(join(out, "state"), "task_1", "build_test");
@@ -229,10 +229,10 @@ export function checkRuntimeParity(options: { outputRoot: string }): string[] {
     const out = join(outputRoot, "params");
     mkdirSync(out, { recursive: true });
     const runner = new RecordingRunner();
-    makeExecutor({ outputRoot: out, runner, scope: { v: 1 } }).run();
+    await makeExecutor({ outputRoot: out, runner, scope: { v: 1 } }).run();
     check(issues, runner.calls.length === 10, "params: first scope runs all");
     const runner2 = new RecordingRunner();
-    makeExecutor({ outputRoot: out, runner: runner2, scope: { v: 2 } }).run();
+    await makeExecutor({ outputRoot: out, runner: runner2, scope: { v: 2 } }).run();
     check(issues, runner2.calls.length === 10, "params: scope change invalidates reuse");
   }
 
@@ -243,13 +243,13 @@ export function checkRuntimeParity(options: { outputRoot: string }): string[] {
     const out = join(outputRoot, "adapter-params");
     mkdirSync(out, { recursive: true });
     const runner = new RecordingRunner();
-    makeExecutor({ outputRoot: out, runner, scope: log2Scope }).run();
+    await makeExecutor({ outputRoot: out, runner, scope: log2Scope }).run();
     check(issues, runner.calls.length === 10, "adapter params: first run executes all");
     const runner2 = new RecordingRunner();
-    makeExecutor({ outputRoot: out, runner: runner2, scope: log2Scope }).run();
+    await makeExecutor({ outputRoot: out, runner: runner2, scope: log2Scope }).run();
     checkDeepEqual(issues, runner2.calls, [], "adapter params: identical normalized params reuse");
     const runner3 = new RecordingRunner();
-    makeExecutor({ outputRoot: out, runner: runner3, scope: linearScope }).run();
+    await makeExecutor({ outputRoot: out, runner: runner3, scope: linearScope }).run();
     check(issues, runner3.calls.length === 10, "adapter params: scale change invalidates every checkpoint");
   }
 
@@ -259,11 +259,11 @@ export function checkRuntimeParity(options: { outputRoot: string }): string[] {
     mkdirSync(out, { recursive: true });
     const versions = { "parse:srcbind_gdc": "1.0.0", "parse:srcbind_xena": "1.0.0" };
     const runner = new RecordingRunner();
-    makeExecutor({ outputRoot: out, runner, implementationVersions: versions }).run();
+    await makeExecutor({ outputRoot: out, runner, implementationVersions: versions }).run();
     check(issues, runner.calls.length === 10, "impl version: first run executes all");
     const upgraded = { ...versions, "parse:srcbind_gdc": "1.1.0" };
     const runner2 = new RecordingRunner();
-    makeExecutor({ outputRoot: out, runner: runner2, implementationVersions: upgraded }).run();
+    await makeExecutor({ outputRoot: out, runner: runner2, implementationVersions: upgraded }).run();
     checkDeepEqual(issues, runner2.calls, ["parse:srcbind_gdc"], "impl version: only upgraded parse re-runs");
     const state = loadBuildState(join(out, "state"), "task_1", "build_test");
     const parseAttempts = state.operation_attempts.filter(
@@ -282,10 +282,10 @@ export function checkRuntimeParity(options: { outputRoot: string }): string[] {
     const out = join(outputRoot, "resume-integrate");
     mkdirSync(out, { recursive: true });
     const runner = new RecordingRunner();
-    makeExecutor({ outputRoot: out, runner }).run();
+    await makeExecutor({ outputRoot: out, runner }).run();
     check(issues, runner.calls.length === 10, "resume: baseline run executes all");
     const runner2 = new RecordingRunner();
-    const second = makeExecutor({ outputRoot: out, runner: runner2, resumeFrom: "integrate" }).run();
+    const second = await makeExecutor({ outputRoot: out, runner: runner2, resumeFrom: "integrate" }).run();
     check(issues, second.status === "completed", "resume: completed");
     check(issues, second.completedOperationIds.length === 10, "resume: 10 completed ids");
     checkDeepEqual(issues, runner2.calls, ["integrate"], "resume: only target re-executes");
@@ -309,10 +309,10 @@ export function checkRuntimeParity(options: { outputRoot: string }): string[] {
     const out = join(outputRoot, "resume-invalidate");
     mkdirSync(out, { recursive: true });
     const runner = new RecordingRunner();
-    makeExecutor({ outputRoot: out, runner }).run();
+    await makeExecutor({ outputRoot: out, runner }).run();
     check(issues, runner.calls.length === 10, "invalidate: baseline run executes all");
     const runner2 = new ChangingRunner("canonicalize:srcbind_gdc");
-    const second = makeExecutor({ outputRoot: out, runner: runner2, resumeFrom: "canonicalize:srcbind_gdc" }).run();
+    const second = await makeExecutor({ outputRoot: out, runner: runner2, resumeFrom: "canonicalize:srcbind_gdc" }).run();
     check(issues, second.status === "completed", "invalidate: completed");
     check(issues, second.completedOperationIds.length === 10, "invalidate: 10 completed ids");
     checkDeepEqual(
@@ -342,7 +342,7 @@ export function checkRuntimeParity(options: { outputRoot: string }): string[] {
     const out = join(outputRoot, "resume-fresh");
     mkdirSync(out, { recursive: true });
     const runner = new RecordingRunner();
-    const outcome = makeExecutor({ outputRoot: out, runner, resumeFrom: "integrate" }).run();
+    const outcome = await makeExecutor({ outputRoot: out, runner, resumeFrom: "integrate" }).run();
     check(issues, outcome.status === "completed", "resume fresh: completed");
     check(issues, runner.calls.length === 10, "resume fresh: no prior attempts to reuse");
   }
@@ -353,7 +353,7 @@ export function checkRuntimeParity(options: { outputRoot: string }): string[] {
     mkdirSync(out, { recursive: true });
     const token = new CancelToken();
     const runner = new RecordingRunner({ cancelAfter: 1, token });
-    const outcome = makeExecutor({ outputRoot: out, runner, token }).run();
+    const outcome = await makeExecutor({ outputRoot: out, runner, token }).run();
     check(issues, outcome.status === "cancelled", "cancel: status cancelled");
     const state = loadBuildState(join(out, "state"), "task_1", "build_test");
     const cancelled = state.operation_attempts.filter((attempt) => attempt.status === "cancelled");
@@ -387,7 +387,7 @@ export function checkRuntimeParity(options: { outputRoot: string }): string[] {
     state.inflight_attempt = parseOperationAttempt(inflight);
     saveBuildState(stateDir, state);
     const runner = new RecordingRunner();
-    const outcome = makeExecutor({ outputRoot: out, runner }).run();
+    const outcome = await makeExecutor({ outputRoot: out, runner }).run();
     check(issues, outcome.status === "completed", "recover: completed");
     check(issues, runner.calls.length === 10, "recover: crashed op re-executed, everything ran");
     const reloaded = loadBuildState(stateDir, "task_1", "build_test");
@@ -401,7 +401,7 @@ export function checkRuntimeParity(options: { outputRoot: string }): string[] {
     const out = join(outputRoot, "failure");
     mkdirSync(out, { recursive: true });
     const runner = new RecordingRunner({ failOn: "integrate" });
-    const outcome = makeExecutor({ outputRoot: out, runner }).run();
+    const outcome = await makeExecutor({ outputRoot: out, runner }).run();
     check(issues, outcome.status === "failed", "failure: status failed");
     check(issues, outcome.error !== null, "failure: structured error");
     const state = loadBuildState(join(out, "state"), "task_1", "build_test");
@@ -490,7 +490,7 @@ export function checkRuntimeParity(options: { outputRoot: string }): string[] {
     const out = join(outputRoot, "corrupt");
     mkdirSync(join(out, "state"), { recursive: true });
     writeFileSync(join(out, "state", "build_state.json"), "{not valid json", "utf8");
-    const outcome = makeExecutor({ outputRoot: out, runner: new RecordingRunner() }).run();
+    const outcome = await makeExecutor({ outputRoot: out, runner: new RecordingRunner() }).run();
     check(issues, outcome.status === "failed", "corrupt: status failed");
     check(issues, outcome.error !== null && outcome.error.code === "internal_error", "corrupt: internal_error code");
     check(

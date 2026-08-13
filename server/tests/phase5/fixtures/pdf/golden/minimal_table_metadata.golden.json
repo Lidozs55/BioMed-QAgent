@@ -1,0 +1,16 @@
+{
+  "status": "ok",
+  "source_file": "minimal_table.pdf",
+  "outputs": [
+    "D:\\coding\\BioMed-QAgent\\server\\tests\\phase5\\fixtures\\pdf\\golden\\work\\golden_pdf\\parsed\\minimal_table_metadata.json"
+  ],
+  "summary": {
+    "source_file": "minimal_table.pdf",
+    "title": "Gene Expression Analysis in Cancer",
+    "authors": "Smith, J., Doe, A.",
+    "doi": "10.1234/test.5678",
+    "abstract": "This study analyzes gene expression patterns in cancer tissues. DOI: 10.1234/test.5678 Gene FC BRCA1 1.5 TP53 2.0",
+    "captions": [],
+    "num_pages": 1
+  }
+}

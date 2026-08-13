@@ -84,3 +84,20 @@ def test_topic_alias_normalization() -> None:
         _ctx(), json.dumps({"topic": "expression-omics"}),
     ))
     assert "expression_omics" in result
+
+
+def test_packaged_docs_match_shared_pi_skill_docs() -> None:
+    """The packaged guidance copy must stay byte-identical to the shared
+    curated .pi/skills/research_data_guidance/docs copy (Phase 5 single
+    curated source; the TS tool reads from .pi)."""
+    from pathlib import Path
+
+    packaged = Path(__file__).parent.parent / "app" / "skills" / "builtin" / "analysis" / "research_data_guidance"
+    shared = Path(__file__).parents[2] / ".pi" / "skills" / "research_data_guidance" / "docs"
+    packaged_files = sorted(p.name for p in packaged.glob("*.md"))
+    shared_files = sorted(p.name for p in shared.glob("*.md"))
+    assert packaged_files == shared_files, "guidance doc sets drifted"
+    for name in packaged_files:
+        assert (packaged / name).read_text(encoding="utf-8") == (
+            shared / name
+        ).read_text(encoding="utf-8"), f"guidance doc {name} drifted"

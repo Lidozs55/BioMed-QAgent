@@ -1,0 +1,23 @@
+{
+  "probe_to_gene": {
+    "PROBE1": "TP53",
+    "PROBE3": "BRCA1"
+  },
+  "target_namespace": "gene_symbol",
+  "summary": {
+    "schema_version": "1.0",
+    "binding_id": "binding_geo",
+    "platform_id": "GPL570",
+    "source_namespace": "geo_probe",
+    "target_namespace": "gene_symbol",
+    "mapping_status": "partial",
+    "total_probe_count": 4,
+    "mapped_probe_count": 2,
+    "unmapped_probe_count": 2,
+    "ambiguous_probe_count": 0,
+    "coverage_ratio": 0.5,
+    "mapping_asset_id": "asset_7220798193f366b2a331d2b94b08ad493b3bbeae3e1275bd33a3b0dfa81856e1",
+    "mapping_rule_id": "geo.probe-map.v1"
+  },
+  "detail_csv": "binding_id,platform_id,probe_id,target_gene_id,target_namespace,status,evidence_asset_id,rule_id\nbinding_geo,GPL570,PROBE1,TP53,gene_symbol,mapped,asset_7220798193f366b2a331d2b94b08ad493b3bbeae3e1275bd33a3b0dfa81856e1,geo.probe-map.v1\nbinding_geo,GPL570,PROBE2,,,unmapped,asset_7220798193f366b2a331d2b94b08ad493b3bbeae3e1275bd33a3b0dfa81856e1,\nbinding_geo,GPL570,PROBE3,BRCA1,gene_symbol,mapped,asset_7220798193f366b2a331d2b94b08ad493b3bbeae3e1275bd33a3b0dfa81856e1,geo.probe-map.v1\nbinding_geo,GPL570,UNKNOWN1,,,unmapped,asset_7220798193f366b2a331d2b94b08ad493b3bbeae3e1275bd33a3b0dfa81856e1,\n"
+}

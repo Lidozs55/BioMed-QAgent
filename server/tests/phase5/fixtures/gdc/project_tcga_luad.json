@@ -1,0 +1,22 @@
+{
+  "data": {
+    "project_id": "TCGA-LUAD",
+    "name": "Lung Adenocarcinoma",
+    "disease_type": ["Adenomas and Adenocarcinomas"],
+    "primary_site": ["Lung"],
+    "program": {"name": "TCGA"},
+    "summary": {
+      "case_count": 500,
+      "file_count": 3000,
+      "data_categories": [
+        {"data_category": "Transcriptome Profiling", "file_count": 1500},
+        {"data_category": "Simple Nucleotide Variation", "file_count": 500}
+      ],
+      "experimental_strategies": [
+        {"experimental_strategy": "RNA-Seq"}
+      ]
+    },
+    "dbgap_accession_number": "phs000218",
+    "state": "open"
+  }
+}

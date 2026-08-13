@@ -1,0 +1,17 @@
+{
+  "asset": {
+    "schema_version": "1.0",
+    "asset_id": "asset_0240c9b90238328e7aed99723927fd2d220b4b9043ce08c9dc3913931b41ab43",
+    "kind": "source",
+    "relative_path": "source_assets/GPL570_annot.txt.gz",
+    "sha256": "0240c9b90238328e7aed99723927fd2d220b4b9043ce08c9dc3913931b41ab43",
+    "size_bytes": 100,
+    "media_type": "text/tab-separated-values",
+    "generated_by_step_id": null,
+    "source_id": "src_annotation",
+    "successful_attempt_id": "attempt_1",
+    "derived_from_asset_id": null,
+    "data_level": "repository_processed"
+  },
+  "actual_sha256": "7220798193f366b2a331d2b94b08ad493b3bbeae3e1275bd33a3b0dfa81856e1"
+}

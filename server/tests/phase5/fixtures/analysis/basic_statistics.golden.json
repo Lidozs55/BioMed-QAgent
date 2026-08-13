@@ -1,0 +1,133 @@
+{
+ "total_rows": 14,
+ "columns_analyzed": [
+  "A_1",
+  "A_2",
+  "A_3",
+  "A_4",
+  "B_1",
+  "B_2",
+  "B_3",
+  "S_1",
+  "Z_1"
+ ],
+ "summary": {
+  "A_1": {
+   "column": "A_1",
+   "count": 13,
+   "mean": 2.5138,
+   "std": 1.069,
+   "min": 0.95,
+   "q25": 1.75,
+   "median": 2.55,
+   "q75": 3.05,
+   "max": 4.1,
+   "missing": 1,
+   "missing_pct": 7.14
+  },
+  "A_2": {
+   "column": "A_2",
+   "count": 13,
+   "mean": 2.7646,
+   "std": 1.0145,
+   "min": 1.05,
+   "q25": 2.15,
+   "median": 2.8,
+   "q75": 3.4,
+   "max": 4.22,
+   "missing": 1,
+   "missing_pct": 7.14
+  },
+  "A_3": {
+   "column": "A_3",
+   "count": 12,
+   "mean": 2.755,
+   "std": 0.9663,
+   "min": 0.98,
+   "q25": 1.9725,
+   "median": 2.825,
+   "q75": 3.6025,
+   "max": 3.95,
+   "missing": 2,
+   "missing_pct": 14.29
+  },
+  "A_4": {
+   "column": "A_4",
+   "count": 12,
+   "mean": 2.6067,
+   "std": 0.9679,
+   "min": 1.1,
+   "q25": 1.985,
+   "median": 2.615,
+   "q75": 3.27,
+   "max": 4.0,
+   "missing": 2,
+   "missing_pct": 14.29
+  },
+  "B_1": {
+   "column": "B_1",
+   "count": 14,
+   "mean": 3.5964,
+   "std": 2.764,
+   "min": 0.45,
+   "q25": 1.6625,
+   "median": 3.075,
+   "q75": 4.3375,
+   "max": 9.15,
+   "missing": 0,
+   "missing_pct": 0.0
+  },
+  "B_2": {
+   "column": "B_2",
+   "count": 13,
+   "mean": 3.7438,
+   "std": 2.927,
+   "min": 0.52,
+   "q25": 1.55,
+   "median": 3.25,
+   "q75": 4.75,
+   "max": 9.35,
+   "missing": 1,
+   "missing_pct": 7.14
+  },
+  "B_3": {
+   "column": "B_3",
+   "count": 13,
+   "mean": 3.7808,
+   "std": 2.8757,
+   "min": 0.4,
+   "q25": 1.62,
+   "median": 3.28,
+   "q75": 4.52,
+   "max": 9.25,
+   "missing": 1,
+   "missing_pct": 7.14
+  },
+  "S_1": {
+   "column": "S_1",
+   "count": 14,
+   "mean": 3.15,
+   "std": 1.597,
+   "min": 1.1,
+   "q25": 2.025,
+   "median": 2.75,
+   "q75": 4.025,
+   "max": 5.9,
+   "missing": 0,
+   "missing_pct": 0.0
+  },
+  "Z_1": {
+   "column": "Z_1",
+   "count": 14,
+   "mean": 2.5,
+   "std": 0.0,
+   "min": 2.5,
+   "q25": 2.5,
+   "median": 2.5,
+   "q75": 2.5,
+   "max": 2.5,
+   "missing": 0,
+   "missing_pct": 0.0
+  }
+ }
+}

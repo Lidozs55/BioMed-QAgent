@@ -1,0 +1,82 @@
+[
+  {
+    "schema_version": "1.0",
+    "uid": "200178352",
+    "accession": "GSE178352",
+    "title": "Unique integrated stress response sensors regulate cancer cell susceptibility when Hsp70 activity is compromised",
+    "summary": "Molecular chaperones prevent the accumulation of toxic proteins in the cell, but when chaperones are overwhelmed, the rapid modulation of proteostasis pathways provide corrective responses. One molecular chaperone in particular, Hsp70, plays a central role in both cellular protection and the response to proteotoxic insults. This is perhaps most evident in cancer cells, some of which overexpress Hsp70 and thrive even when harboring high levels of misfolded, aggregated, and/or unassembled protein complexes. In an effort to define how cells compensate for compromised proteostasis, we examined the adaptive response in breast cancer cells after challenge with a specific Hsp70 inhibitor, MAL3-101 and further define the pathways involved in the differential MAL3-101 response between sensitive and resistant cells.",
+    "organism": "Homo sapiens",
+    "experiment_type": "Expression profiling by high throughput sequencing",
+    "sample_count": 12,
+    "samples": [
+      {
+        "schema_version": "1.0",
+        "accession": "GSM5388281",
+        "title": "Breast Cancer cells - MD-MBA-453 - MAL3-101 treated rep. 3"
+      },
+      {
+        "schema_version": "1.0",
+        "accession": "GSM5388275",
+        "title": "Breast Cancer cells - MD-MBA-231 - MAL3-101 treated rep. 3"
+      },
+      {
+        "schema_version": "1.0",
+        "accession": "GSM5388272",
+        "title": "Breast Cancer cells - MD-MBA-231 - DMSO treated rep. 3"
+      },
+      {
+        "schema_version": "1.0",
+        "accession": "GSM5388278",
+        "title": "Breast Cancer cells - MD-MBA-453 - DMSO treated rep. 3"
+      },
+      {
+        "schema_version": "1.0",
+        "accession": "GSM5388276",
+        "title": "Breast Cancer cells - MD-MBA-453 - DMSO treated rep. 1"
+      },
+      {
+        "schema_version": "1.0",
+        "accession": "GSM5388279",
+        "title": "Breast Cancer cells - MD-MBA-453 - MAL3-101 treated rep. 1"
+      },
+      {
+        "schema_version": "1.0",
+        "accession": "GSM5388273",
+        "title": "Breast Cancer cells - MD-MBA-231 - MAL3-101 treated rep. 1"
+      },
+      {
+        "schema_version": "1.0",
+        "accession": "GSM5388270",
+        "title": "Breast Cancer cells - MD-MBA-231 - DMSO treated rep. 1"
+      },
+      {
+        "schema_version": "1.0",
+        "accession": "GSM5388274",
+        "title": "Breast Cancer cells - MD-MBA-231 - MAL3-101 treated rep. 2"
+      },
+      {
+        "schema_version": "1.0",
+        "accession": "GSM5388271",
+        "title": "Breast Cancer cells - MD-MBA-231 - DMSO treated rep. 2"
+      },
+      {
+        "schema_version": "1.0",
+        "accession": "GSM5388277",
+        "title": "Breast Cancer cells - MD-MBA-453 - DMSO treated rep. 2"
+      },
+      {
+        "schema_version": "1.0",
+        "accession": "GSM5388280",
+        "title": "Breast Cancer cells - MD-MBA-453 - MAL3-101 treated rep. 2"
+      }
+    ],
+    "platform_ids": [
+      "GPL24676"
+    ],
+    "pubmed_ids": [
+      "34180400"
+    ],
+    "bioproject": "PRJNA738534",
+    "ftp_root": "ftp://ftp.ncbi.nlm.nih.gov/geo/series/GSE178nnn/GSE178352/"
+  }
+]

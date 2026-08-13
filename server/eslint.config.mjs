@@ -15,5 +15,5 @@ export default tseslint.config(
       },
     },
   },
-  { ignores: ["dist"] },
+  { ignores: ["dist", "tests/phase5/fixtures/**"] },
 );

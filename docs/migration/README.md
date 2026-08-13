@@ -21,6 +21,7 @@ Migration progress and remaining Phase 5-8 work are tracked in [TODO.md](../TODO
 | Pi-to-BioMed experimental event mapping and sequence meaning | [Pi event adapter](pi-event-adapter.md) |
 | Single Host startup/shutdown, flags, valid combinations, rollback | [Single-Host lifecycle and flags](single-host-lifecycle-and-flags.md) |
 | Phase 3 durable TS Task/Run/Event ownership and legacy fallback | [Phase 3 TypeScript Application Runtime](phase3-ts-application-runtime.md) |
+| Phase 5 completion plan, baseline/migration matrix, PDF spike | [Phase 5 external capabilities](phase5-external-capabilities.md) + [completion plan](phase5-external-capabilities-completion-plan.md) + [PDF spike](phase5-pdf-spike.md) |
 | Node/pnpm, Python/uv, environment variables, local data, validation, rollback | [Phase 0/1 environment migration](ENVIRONMENT_MIGRATION.md) |
 | Final whole-branch findings, fixes, quality gates, and startup evidence | [Phase 0/1 final verification](PHASE0_1_FINAL_VERIFICATION.md) |
 
@@ -39,11 +40,14 @@ and E2E evidence is recorded in `.superpowers/sdd/task-5-report.md` through
 ## Migration progress
 
 Per [BioMed-QAgent_Pi_Migration_Plan.md](../BioMed-QAgent_Pi_Migration_Plan.md) §0:
-Phase 0/1/3/4 are complete (Phase 4 = TS Dataset Deterministic Core port,
-`server/src/dataset/`, merged 2026-08-13; runtime wiring lands with the
-Phase 7 host switch). Phase 2 (Skills migration) is next, followed by
-Phase 5 (external capabilities), 6 (model settings), 7 (frontend switch),
-and 8 (Python removal). Checkboxes and priorities live in [TODO.md](../TODO.md).
+Phases 0–6 are complete. Phase 5 (external capabilities + Python data-processing
+retirement, 2026-08-14) migrated every business tool to TypeScript behind the
+shared network/acquisition foundation and wired them into the formal Pi runtime;
+the M2 integration closure made `DATASET_CORE=ts` a working opt-in profile
+(`ts/pi/ts/0|1`) with the Python core retained as rollback. Python now serves only
+the legacy rollback runtime and the DB bridge (`database/bridge.py`). Phase 7
+(default frontend switch) is next, Phase 8 deletes the Python runtime.
+Checkboxes and priorities live in [TODO.md](../TODO.md).
 
 ## Phase 3 opt-in status
 
