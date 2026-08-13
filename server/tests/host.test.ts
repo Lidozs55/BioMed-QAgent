@@ -237,4 +237,32 @@ describe("application host", () => {
     expect(formalSocket).toHaveBeenCalledWith("ping");
     websocket.close();
   });
+
+  test("lets Host-owned settings routes take precedence over formal runtime and legacy", async () => {
+    const legacy = createServer((_request, response) => response.end("legacy"));
+    legacyServers.push(legacy);
+    const legacyPort = await listen(legacy);
+    const hostApi = {
+      handle(request: import("node:http").IncomingMessage, response: import("node:http").ServerResponse) {
+        if (request.url !== "/api/v1/settings") return false;
+        response.end("host settings");
+        return true;
+      },
+    };
+    const host = await createApplicationHost({
+      publicHost: "127.0.0.1",
+      publicPort: 0,
+      hostApi,
+      legacy: async () => ({ target: `http://127.0.0.1:${legacyPort}`, close: async () => undefined }),
+      formalRuntime: async () => ({
+        handle: (_request, response) => { response.end("formal"); return true; },
+        handleUpgrade: () => false,
+        close: async () => undefined,
+      }),
+      frontend: async () => ({ middleware: (_request, response) => response.end(), close: async () => undefined }),
+    });
+    hosts.push(host);
+
+    expect(await (await fetch(requestUrl(host, "/api/v1/settings"))).text()).toBe("host settings");
+  });
 });

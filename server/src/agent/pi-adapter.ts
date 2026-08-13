@@ -49,6 +49,7 @@ export interface PiAgentAdapterOptions {
   createUpstreamSession?: (
     config: BioMedSessionConfig,
   ) => Promise<PiUpstreamSession>;
+  resolveModel?: () => Promise<BioMedModelConfig>;
   phase1SkillRoot?: string;
   onResourceDiagnostic?: (message: string) => void;
 }
@@ -181,6 +182,38 @@ function modelFromEnvironment(environment: Environment): BioMedModelConfig {
   return { provider, modelId, apiKey, baseUrl };
 }
 
+function usesDashScopeQwen(selected: BioMedModelConfig): boolean {
+  if (selected.baseUrl === undefined) return false;
+  try {
+    const target = new URL(selected.baseUrl);
+    const modelId = selected.modelId.toLowerCase();
+    return (modelId.startsWith("qwen") || modelId.startsWith("qwq")) &&
+      target.hostname === "dashscope.aliyuncs.com" &&
+      target.pathname.replace(/\/$/, "") === "/compatible-mode/v1";
+  } catch {
+    return false;
+  }
+}
+
+export function applyModelProfileToPayload(
+  payload: unknown,
+  selected: BioMedModelConfig,
+): unknown {
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
+    return payload;
+  }
+  const next: Record<string, unknown> = { ...payload };
+  if (selected.topP !== undefined) next.top_p = selected.topP;
+  if (usesDashScopeQwen(selected)) {
+    if (selected.repetitionPenalty !== undefined) {
+      next.repetition_penalty = selected.repetitionPenalty;
+    }
+    if (selected.enableSearch !== undefined) next.enable_search = selected.enableSearch;
+    if (selected.thinkingMode === true) next.enable_thinking = true;
+  }
+  return next;
+}
+
 function toUpstreamEvent(event: AgentSessionEvent): PiUpstreamEvent {
   switch (event.type) {
     case "message_update":
@@ -218,15 +251,17 @@ function toUpstreamEvent(event: AgentSessionEvent): PiUpstreamEvent {
 async function createRealUpstreamSession(
   config: BioMedSessionConfig,
   environment: Environment,
+  resolveModel?: () => Promise<BioMedModelConfig>,
 ): Promise<PiUpstreamSession> {
-  const selected = config.model ?? modelFromEnvironment(environment);
+  const selected = config.model ?? (resolveModel === undefined
+    ? modelFromEnvironment(environment)
+    : await resolveModel());
   const modelRuntime = await ModelRuntime.create({
     allowModelNetwork: false,
     modelsPath: null,
   });
   modelRuntime.registerProvider(selected.provider, {
     api: "openai-completions",
-    apiKey: selected.apiKey,
     baseUrl: selected.baseUrl,
     models: [
       {
@@ -235,11 +270,29 @@ async function createRealUpstreamSession(
         reasoning: false,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 131_072,
-        maxTokens: 8_192,
+        contextWindow: selected.contextWindow ?? 131_072,
+        maxTokens: selected.maxTokens ?? 8_192,
       },
     ],
   });
+  await modelRuntime.setRuntimeApiKey(selected.provider, selected.apiKey, {
+    allowNetwork: false,
+  });
+  const streamSimple = modelRuntime.streamSimple.bind(modelRuntime);
+  modelRuntime.streamSimple = (model, context, options) => {
+    const upstreamPayload = options?.onPayload;
+    return streamSimple(model, context, {
+      ...options,
+      maxTokens: selected.maxTokens ?? options?.maxTokens,
+      temperature: selected.temperature ?? options?.temperature,
+      onPayload: async (payload, payloadModel) => {
+        const transformed = upstreamPayload === undefined
+          ? payload
+          : (await upstreamPayload(payload, payloadModel)) ?? payload;
+        return applyModelProfileToPayload(transformed, selected);
+      },
+    });
+  };
   const model = modelRuntime.getModel(selected.provider, selected.modelId);
   if (model === undefined) {
     throw new BioMedAgentError(
@@ -489,7 +542,8 @@ export class PiAgentAdapter implements BioMedAgentAdapter {
     this.environment = options.environment ?? process.env;
     this.createUpstreamSession =
       options.createUpstreamSession ??
-      ((config) => createRealUpstreamSession(config, this.environment));
+      ((config) =>
+        createRealUpstreamSession(config, this.environment, options.resolveModel));
     this.phase1SkillRoot = options.phase1SkillRoot ?? phase1ResourceRoots().skillRoot;
     this.onResourceDiagnostic = options.onResourceDiagnostic ?? (() => undefined);
   }

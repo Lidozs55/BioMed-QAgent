@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import type { BioMedAgentAdapter } from "../agent/contracts.js";
+import type { BioMedAgentAdapter, BioMedModelConfig } from "../agent/contracts.js";
 import { PiAgentAdapter } from "../agent/pi-adapter.js";
 import { createDatasetBuildTools } from "../agent/tools/dataset-build.js";
 import {
@@ -20,6 +20,7 @@ export interface Phase3RuntimeOptions {
   bridgeSecret?: string;
   workspaceDevExec: boolean;
   adapter?: BioMedAgentAdapter;
+  resolveModel?: () => Promise<BioMedModelConfig>;
 }
 
 export function createPhase3Runtime(
@@ -28,7 +29,10 @@ export function createPhase3Runtime(
   return createDurableAgentRuntime({
     tasksRoot: options.tasksRoot,
     legacyBaseUrl: options.legacyTarget,
-    adapter: options.adapter ?? new PiAgentAdapter({ environment: process.env }),
+    adapter: options.adapter ?? new PiAgentAdapter({
+      environment: process.env,
+      resolveModel: options.resolveModel,
+    }),
     workspaceFactory: async ({ taskId, runId }) => {
       let currentRunId = runId;
       let currentPiSessionId = "pi_session_pending";

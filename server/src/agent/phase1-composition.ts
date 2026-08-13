@@ -1,7 +1,7 @@
 import { copyFile, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { BioMedAgentAdapter } from "./contracts.js";
+import type { BioMedAgentAdapter, BioMedModelConfig } from "./contracts.js";
 import { createExperimentalPiRuntime, type ExperimentalPiRuntime } from "./experimental-pi.js";
 import { createFixtureProfileAdapter } from "./fixture-profile.js";
 import { PiAgentAdapter } from "./pi-adapter.js";
@@ -17,6 +17,7 @@ export interface Phase1ExperimentalRuntimeOptions {
   bridgeSecret?: string;
   workspaceDevExec: boolean;
   normalAdapter?: BioMedAgentAdapter;
+  resolveModel?: () => Promise<BioMedModelConfig>;
 }
 
 async function prepareTaskRoot(
@@ -46,7 +47,10 @@ export function createPhase1ExperimentalRuntime(
   options: Phase1ExperimentalRuntimeOptions,
 ): Promise<ExperimentalPiRuntime> {
   return createExperimentalPiRuntime({
-    adapter: options.normalAdapter ?? new PiAgentAdapter({ environment: process.env }),
+    adapter: options.normalAdapter ?? new PiAgentAdapter({
+      environment: process.env,
+      resolveModel: options.resolveModel,
+    }),
     fixtureProfileAdapter: (profile) => {
       const adapter = createFixtureProfileAdapter(profile, {
         fixturesRoot: path.join(options.repositoryRoot, "tests", "migration", "golden"),

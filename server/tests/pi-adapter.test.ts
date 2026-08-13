@@ -3,6 +3,7 @@ import { describe, expect, test, vi } from "vitest";
 import { BioMedAgentError } from "../src/agent/contracts.js";
 import {
   PiAgentAdapter,
+  applyModelProfileToPayload,
   toPiCustomTools,
   type PiUpstreamEvent,
   type PiUpstreamSession,
@@ -63,6 +64,46 @@ async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
   return values;
 }
 
+describe("Pi model profile mapping", () => {
+  test("maps portable and DashScope-specific parameters", () => {
+    expect(applyModelProfileToPayload(
+      { model: "qwen-plus", messages: [] },
+      {
+        provider: "dashscope",
+        modelId: "qwen-plus",
+        apiKey: "secret",
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        topP: 0.8,
+        repetitionPenalty: 1.1,
+        enableSearch: true,
+        thinkingMode: true,
+      },
+    )).toEqual({
+      model: "qwen-plus",
+      messages: [],
+      top_p: 0.8,
+      repetition_penalty: 1.1,
+      enable_search: true,
+      enable_thinking: true,
+    });
+  });
+
+  test("does not leak DashScope-only parameters to custom providers", () => {
+    expect(applyModelProfileToPayload(
+      { model: "custom-chat" },
+      {
+        provider: "custom",
+        modelId: "custom-chat",
+        apiKey: "secret",
+        baseUrl: "https://models.example/v1",
+        topP: 0.75,
+        repetitionPenalty: 1.2,
+        enableSearch: true,
+        thinkingMode: true,
+      },
+    )).toEqual({ model: "custom-chat", top_p: 0.75 });
+  });
+});
 describe("PiAgentAdapter", () => {
   test("converts project tool descriptors only at the Pi boundary", async () => {
     const execute = vi.fn(async () => ({

@@ -16,6 +16,9 @@ export interface ApplicationHostOptions {
   frontend: (server: Server) => Promise<ViteMiddlewareHandle>;
   lifecycle?: LifecycleRegistry;
   initializeLifecycle?: (lifecycle: LifecycleRegistry) => void | Promise<void>;
+  hostApi?: {
+    handle: (request: IncomingMessage, response: ServerResponse) => boolean;
+  };
   formalRuntime?: (legacy: {
     target: string;
     bridgeSecret?: string;
@@ -65,6 +68,9 @@ function isInternalMigration(requestPath: string): boolean {
 function routeRequest(
   proxy: LegacyProxy,
   frontend: FrontendMiddleware,
+  hostApi?: {
+    handle: (request: IncomingMessage, response: ServerResponse) => boolean;
+  },
   formalRuntime?: {
     handle: (request: IncomingMessage, response: ServerResponse) => boolean;
   },
@@ -89,6 +95,7 @@ function routeRequest(
       }
       return;
     }
+    if (hostApi?.handle(request, response) === true) return;
     if (isLegacyApi(requestPath)) {
       if (formalRuntime?.handle(request, response) === true) return;
       proxy.web(request, response);
@@ -170,7 +177,7 @@ export async function createApplicationHost(
 
     const frontend = await options.frontend(server);
     lifecycle.add("Vite middleware", frontend.close);
-    requestHandler = routeRequest(proxy, frontend.middleware, formalRuntime, experimentalPi);
+    requestHandler = routeRequest(proxy, frontend.middleware, options.hostApi, formalRuntime, experimentalPi);
 
     server.on("upgrade", (request, socket, head) => {
       upgradedSockets.add(socket);
