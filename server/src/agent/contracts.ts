@@ -70,6 +70,9 @@ export interface BioMedModelConfig {
   modelId: string;
   apiKey: string;
   baseUrl?: string;
+  contextWindow?: number;
+  maxTokens?: number;
+  temperature?: number;
 }
 
 export interface BioMedSessionConfig {

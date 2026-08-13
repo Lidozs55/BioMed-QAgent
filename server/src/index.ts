@@ -8,6 +8,7 @@ import { parseHostConfig } from "./config.js";
 import { createViteMiddleware } from "./dev/vite-middleware.js";
 import { createLegacyBackend } from "./legacy/backend-process.js";
 import { createPhase3Runtime } from "./runtime/phase3-composition.js";
+import { ModelSettingsService } from "./settings/model-settings.js";
 
 async function main(): Promise<void> {
   const config = parseHostConfig(process.env);
@@ -16,6 +17,12 @@ async function main(): Promise<void> {
     path.resolve(process.env.OUTPUT_DIR ?? path.join(repositoryRoot, "backend", "data", "output")),
     "tasks",
   );
+  const settingsDir = path.resolve(tasksRoot, "..", "..", "settings");
+  const modelSettings = await ModelSettingsService.create({
+    settingsDir,
+    legacyRegistryPath: path.join(settingsDir, "model_registry.db"),
+    environment: process.env,
+  });
   const lifecycle = new LifecycleRegistry({ timeoutMs: config.shutdownTimeoutMs + 5_000 });
   const host = await createApplicationHost({
     publicHost: config.publicHost,
@@ -31,6 +38,7 @@ async function main(): Promise<void> {
         shutdownTimeoutMs: config.shutdownTimeoutMs,
       }),
     initializeLifecycle: async () => undefined,
+    hostApi: modelSettings,
     formalRuntime: config.flags.agentRuntime === "pi"
       ? ({ target, bridgeSecret }) =>
           createPhase3Runtime({
@@ -38,6 +46,7 @@ async function main(): Promise<void> {
             legacyTarget: target,
             bridgeSecret,
             workspaceDevExec: config.workspaceDevExec,
+            resolveModel: modelSettings.resolveActiveModel,
           })
       : undefined,
     experimentalPi: config.flags.piExperimental
@@ -48,6 +57,7 @@ async function main(): Promise<void> {
             legacyTarget: target,
             bridgeSecret,
             workspaceDevExec: config.workspaceDevExec,
+            resolveModel: modelSettings.resolveActiveModel,
           })
       : undefined,
     frontend: (httpServer) =>

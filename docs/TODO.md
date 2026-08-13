@@ -141,12 +141,12 @@ Phase 3 需显式 `AGENT_RUNTIME=pi` 才接管正式 Task 流量。实际执行�
       验证 TS/CLI 方案，逐项 fixture parity 后退役
 - [ ] 验收：backend Python 不再承担 acquisition / parsing / analysis，仅 DB bridge
 
-## Phase 6：迁模型设置与 Settings API（⬜ 待开始）
+## Phase 6：迁模型设置与 Settings API（✅ 完成）
 
-- [ ] TS model settings + Pi ModelRegistry/AuthStorage adapter：provider credentials、
+- [x] TS model settings + Pi ModelRegistry/AuthStorage adapter：provider credentials、
       custom OpenAI-compatible provider、参数 profile 转 Pi 可消费结构
-- [ ] 旧 `model_registry.db` 一次性迁移；API Key 不以明文返回前端
-- [ ] 验收：设置页可创建 provider / 导入模型 / 设 active model；不同模型参数正确
+- [x] 旧 `model_registry.db` 一次性迁移；API Key 不以明文返回前端
+- [x] 验收：设置页可创建 provider / 导入模型 / 设 active model；不同模型参数正确
       传给 Pi/provider
 
 ## Phase 7：正式切换 Frontend → TS Host（⬜ 待开始）

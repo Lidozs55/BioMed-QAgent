@@ -1231,6 +1231,18 @@ API 只读取 immutable publication 目录，并校验 publication-manifest 引�
 回滚只需恢复该 flag；不删除或改写 `task_ts_*` event/session/build/publication 数据。
 详细实现与验证边界见 [Phase 3 runtime](migration/phase3-ts-application-runtime.md)。
 
+### 18.6 Phase 6 TypeScript 模型设置
+
+TypeScript Application Host 权威处理模型设置、Provider/Model Registry 与模型发现 API，
+并在路由顺序上先于 formal runtime 和 legacy proxy。公开模型元数据与 Provider credential
+分文件原子持久化；API 只返回掩码和 configured 状态。旧 `model.json` 与
+`model_registry.db` 仅在首次启动时导入，原文件不修改，供 full legacy rollback 使用。
+
+新 Pi Session 从 TS Settings Adapter 捕获 active model 快照；Pi `ModelRuntime` 注册
+OpenAI-compatible provider，并通过 runtime credential API 注入密钥。context window、
+max tokens 与 temperature 进入 Pi/provider 调用；已创建 Session 不被后续设置变更改写。
+详细实现与安全边界见 [Phase 6 model settings](migration/phase6-model-settings.md)。
+
 ---
 
 ## 19. 顶层不变量

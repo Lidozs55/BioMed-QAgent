@@ -49,6 +49,7 @@ export interface PiAgentAdapterOptions {
   createUpstreamSession?: (
     config: BioMedSessionConfig,
   ) => Promise<PiUpstreamSession>;
+  resolveModel?: () => Promise<BioMedModelConfig>;
   phase1SkillRoot?: string;
   onResourceDiagnostic?: (message: string) => void;
 }
@@ -218,15 +219,17 @@ function toUpstreamEvent(event: AgentSessionEvent): PiUpstreamEvent {
 async function createRealUpstreamSession(
   config: BioMedSessionConfig,
   environment: Environment,
+  resolveModel?: () => Promise<BioMedModelConfig>,
 ): Promise<PiUpstreamSession> {
-  const selected = config.model ?? modelFromEnvironment(environment);
+  const selected = config.model ?? (resolveModel === undefined
+    ? modelFromEnvironment(environment)
+    : await resolveModel());
   const modelRuntime = await ModelRuntime.create({
     allowModelNetwork: false,
     modelsPath: null,
   });
   modelRuntime.registerProvider(selected.provider, {
     api: "openai-completions",
-    apiKey: selected.apiKey,
     baseUrl: selected.baseUrl,
     models: [
       {
@@ -235,11 +238,21 @@ async function createRealUpstreamSession(
         reasoning: false,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 131_072,
-        maxTokens: 8_192,
+        contextWindow: selected.contextWindow ?? 131_072,
+        maxTokens: selected.maxTokens ?? 8_192,
       },
     ],
   });
+  await modelRuntime.setRuntimeApiKey(selected.provider, selected.apiKey, {
+    allowNetwork: false,
+  });
+  const streamSimple = modelRuntime.streamSimple.bind(modelRuntime);
+  modelRuntime.streamSimple = (model, context, options) =>
+    streamSimple(model, context, {
+      ...options,
+      maxTokens: selected.maxTokens ?? options?.maxTokens,
+      temperature: selected.temperature ?? options?.temperature,
+    });
   const model = modelRuntime.getModel(selected.provider, selected.modelId);
   if (model === undefined) {
     throw new BioMedAgentError(
@@ -489,7 +502,8 @@ export class PiAgentAdapter implements BioMedAgentAdapter {
     this.environment = options.environment ?? process.env;
     this.createUpstreamSession =
       options.createUpstreamSession ??
-      ((config) => createRealUpstreamSession(config, this.environment));
+      ((config) =>
+        createRealUpstreamSession(config, this.environment, options.resolveModel));
     this.phase1SkillRoot = options.phase1SkillRoot ?? phase1ResourceRoots().skillRoot;
     this.onResourceDiagnostic = options.onResourceDiagnostic ?? (() => undefined);
   }
