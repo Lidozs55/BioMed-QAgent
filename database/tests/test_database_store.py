@@ -15,7 +15,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from database.database_store import DatabaseStore
 
 
@@ -173,9 +172,10 @@ def test_no_forbidden_imports_in_database_package() -> None:
     """Architecture guard: database/ modules must not import backend/app,
     agents, fastapi, uvicorn or any scientific stack. Only import lines are
     scanned — historical docstrings may mention the retired runtime."""
-    import database
     import inspect
     import pathlib
+
+    import database
 
     package_dir = pathlib.Path(inspect.getfile(database)).parent
     forbidden = ("backend", "app.", "agents", "fastapi", "uvicorn",

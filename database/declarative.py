@@ -93,7 +93,7 @@ class HttpAuthReference:
     prefix: str = ""
 
     @classmethod
-    def parse(cls, raw: Any, field_path: str) -> "HttpAuthReference":
+    def parse(cls, raw: Any, field_path: str) -> HttpAuthReference:
         if not isinstance(raw, dict):
             raise _type_error(field_path, "an object")
         _reject_unknown(raw, {"source", "reference", "location", "name", "prefix"},
@@ -143,7 +143,7 @@ class HttpOperationManifest:
     extract: str | None = None
 
     @classmethod
-    def parse(cls, raw: Any, index: int) -> "HttpOperationManifest":
+    def parse(cls, raw: Any, index: int) -> HttpOperationManifest:
         field_path = f"operations[{index}]"
         if not isinstance(raw, dict):
             raise _type_error(field_path, "an object")
@@ -284,7 +284,7 @@ class DeclarativeDatabaseManifest:
     requirements: tuple[str, ...]
 
     @classmethod
-    def parse(cls, raw: Any) -> "DeclarativeDatabaseManifest":
+    def parse(cls, raw: Any) -> DeclarativeDatabaseManifest:
         if not isinstance(raw, dict):
             raise DatabaseValidationError("manifest must be an object")
         _reject_unknown(raw, {

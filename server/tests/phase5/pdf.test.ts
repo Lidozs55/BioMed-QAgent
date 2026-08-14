@@ -21,7 +21,7 @@ import { SKILL_TOOL_NAMES, toolOwner } from "../../src/agent/skills/skill-tool-m
 const FIXTURES = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "pdf");
 const PYTHON_PDF_FIXTURES = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
-  "..", "..", "..", "backend", "tests", "fixtures", "pdf",
+  "..", "..", "..", "tests", "fixtures", "pdf",
 );
 const GOLDEN = path.join(FIXTURES, "golden");
 

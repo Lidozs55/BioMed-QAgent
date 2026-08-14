@@ -16,10 +16,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node.js 20
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -40,47 +40,77 @@ jobs:
           path: ./frontend/dist
           retention-days: 1
 
-  package:
-    name: Package Windows Executable
-    needs: build-frontend
-    runs-on: windows-latest
-    defaults:
-      run:
-        working-directory: ./backend
+  build-server:
+    name: Build TS Application Host
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Python 3.12
-        uses: actions/setup-python@v5
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
         with:
-          python-version: '3.12'
+          node-version: '22'
 
-      - name: Setup uv
-        uses: astral-sh/setup-uv@v5
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build server
+        working-directory: ./server
+        run: pnpm build
+
+      - name: Upload server distribution
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-dist
+          path: ./server/dist
+          retention-days: 1
+
+  package:
+    name: Package Cross-Platform Bundle
+    needs: [build-frontend, build-server]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
       - name: Download frontend build
         uses: actions/download-artifact@v4
         with:
           name: frontend-dist
-          path: ./backend/dist
+          path: ./staging/frontend/dist
 
-      - name: Install Python dependencies
-        run: uv pip install --system -r requirements.txt
+      - name: Download server build
+        uses: actions/download-artifact@v4
+        with:
+          name: server-dist
+          path: ./staging/server/dist
 
-      - name: Install PyInstaller
-        run: uv pip install --system pyinstaller
+      - name: Stage bundle contents
+        run: |
+          mkdir -p staging
+          cp -r .pi staging/.pi
+          cp -r database staging/database
+          cp package.json pnpm-workspace.yaml pnpm-lock.yaml pyproject.toml uv.lock staging/
+          cp -r server/src staging/server/src
+          rm -rf staging/server/src/dev
+          cp server/package.json staging/server/
+          cp -r frontend staging/frontend
+          rm -rf staging/frontend/node_modules staging/frontend/dist
+          cp -r frontend/dist staging/frontend/dist
+          cp .env.example staging/
 
-      - name: Package with PyInstaller
-        run: pyinstaller --onefile --name "BioMed-QAgent" --add-data "dist;dist" --hidden-import app --hidden-import app.api --hidden-import app.agent_loop --hidden-import app.domain --hidden-import app.skills --hidden-import app.tools --collect-all app launcher.py
+      - name: Create archive
+        run: |
+          cd staging
+          zip -qr ../BioMed-QAgent-bundle.zip .
 
-      - name: List build output
-        run: Get-ChildItem -Path dist -Name
-
-      - name: Upload executable
+      - name: Upload bundle
         uses: actions/upload-artifact@v4
         with:
-          name: BioMed-QAgent-${{ github.ref_name }}-windows
-          path: ./backend/dist/BioMed-QAgent.exe
+          name: BioMed-QAgent-${{ github.ref_name }}-bundle
+          path: ./BioMed-QAgent-bundle.zip
 
   release:
     name: Create Release
@@ -89,18 +119,15 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Download executable artifact
+      - name: Download bundle artifact
         uses: actions/download-artifact@v4
         with:
-          name: BioMed-QAgent-${{ github.ref_name }}-windows
-
-      - name: List workspace files
-        run: ls -la
+          name: BioMed-QAgent-${{ github.ref_name }}-bundle
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: BioMed-QAgent ${{ github.ref_name }}
           generate_release_notes: true
-          files: BioMed-QAgent.exe
+          files: BioMed-QAgent-bundle.zip
           fail_on_unmatched_files: false

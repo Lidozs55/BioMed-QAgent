@@ -9,7 +9,6 @@ tool builder cannot drift.
 from __future__ import annotations
 
 import pytest
-
 from database.declarative import (
     DatabaseValidationError,
     DeclarativeDatabaseManifest,

@@ -22,7 +22,7 @@ import type { EventPayload } from "@biomed/contracts";
 
 const FIXTURES_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
-  "..", "..", "..", "backend", "tests", "fixtures",
+  "..", "..", "..", "tests", "fixtures",
 );
 
 const roots: string[] = [];

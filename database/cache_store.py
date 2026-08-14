@@ -371,7 +371,7 @@ class CacheStore:
             columns = [str(column) for column in explicit]
         else:
             first = rows[0]
-            columns = [str(key) for key in first.keys()]
+            columns = [str(key) for key in first]
         if not columns:
             raise ValueError("csv_rows must have at least one column")
         for column in columns:

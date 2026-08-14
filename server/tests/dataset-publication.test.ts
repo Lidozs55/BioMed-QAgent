@@ -22,7 +22,7 @@ describe("Phase 4 step 9 publication parity", () => {
   test("manifest assembly mirrors test_dataset_manifest.py", async () => {
     expect(
       await checkManifestParity({
-        fixturesRoot: join(repoRoot, "backend", "tests", "fixtures"),
+        fixturesRoot: join(repoRoot, "tests", "fixtures"),
         outputRoot: scratchOutputRoot("publication-manifest-vitest-"),
       }),
     ).toEqual([]);

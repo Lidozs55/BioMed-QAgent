@@ -60,7 +60,7 @@ import { fakeResolver, localExecutor, PUBLIC_IP, startFixtureServer, type Fixtur
 
 const PY_FIXTURES = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
-  "../../../backend/tests/fixtures/ncbi/gse178352",
+  "../../../tests/fixtures/ncbi/gse178352",
 );
 const TS_FIXTURES = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 

@@ -17,7 +17,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from database.cache_store import CacheStore
 
 

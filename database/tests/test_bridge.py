@@ -19,8 +19,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
-from database.bridge import Bridge, PROTOCOL_VERSION
+from database.bridge import PROTOCOL_VERSION, Bridge
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 

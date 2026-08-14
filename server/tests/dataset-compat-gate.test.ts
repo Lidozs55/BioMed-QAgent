@@ -20,7 +20,7 @@ describe("Phase 4 step 6 compat gate parity", () => {
 
   test("fixture-driven gate matrix mirrors the Python suite", async () => {
     const issues = await checkCompatGateFixtureParity({
-      fixturesRoot: join(repoRoot, "backend", "tests", "fixtures"),
+      fixturesRoot: join(repoRoot, "tests", "fixtures"),
       outputRoot: scratchOutputRoot("compat-vitest-"),
     });
     expect(issues).toEqual([]);

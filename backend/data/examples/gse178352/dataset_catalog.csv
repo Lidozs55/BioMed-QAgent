@@ -1,2 +1,0 @@
-﻿dataset_id,source_id,database,accession,title,organism,experiment_type,sample_count,platform_ids,related_pmids,source_url,retrieved_at
-ds_geo_gse178352,src_ac3f65715090fc35dff94baae79981fb,geo,GSE178352,Unique integrated stress response sensors regulate cancer cell susceptibility when Hsp70 activity is compromised,Homo sapiens,Expression profiling by high throughput sequencing,12,"[""GPL24676""]","[""34180400""]",https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE178352,2026-07-12T08:00:00+00:00
