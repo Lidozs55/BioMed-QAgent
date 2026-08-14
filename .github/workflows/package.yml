@@ -6,9 +6,6 @@ on:
       - 'v*'
   workflow_dispatch:
 
-env:
-  BUNDLE_NAME: BioMed-QAgent-${{ github.ref_name | replace('/', '-') }}-bundle
-
 jobs:
   build-frontend:
     name: Build Frontend
@@ -77,6 +74,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Compute bundle artifact name
+        run: |
+          safe="${GITHUB_REF_NAME//\//-}"
+          echo "BUNDLE_NAME=BioMed-QAgent-${safe}-bundle" >> "$GITHUB_ENV"
 
       - name: Download frontend build
         uses: actions/download-artifact@v4
@@ -123,6 +124,10 @@ jobs:
     needs: package
     runs-on: ubuntu-latest
     steps:
+      - name: Compute bundle artifact name
+        run: |
+          safe="${GITHUB_REF_NAME//\//-}"
+          echo "BUNDLE_NAME=BioMed-QAgent-${safe}-bundle" >> "$GITHUB_ENV"
       - name: Download bundle artifact
         uses: actions/download-artifact@v4
         with:
@@ -186,6 +191,10 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Compute bundle artifact name
+        run: |
+          safe="${GITHUB_REF_NAME//\//-}"
+          echo "BUNDLE_NAME=BioMed-QAgent-${safe}-bundle" >> "$GITHUB_ENV"
       - name: Download bundle artifact
         uses: actions/download-artifact@v4
         with:
