@@ -400,7 +400,7 @@ describe("build lock (I-04)", () => {
     const lockRoot = path.join(taskRoot, "state", "build-locks");
     const lease = await acquireBuildLock({ lockRoot }, "task_1", "build_1", "run_a");
     await expect(
-      acquireBuildLock({ lockRoot }, "task_1", "build_1", "run_b"),
+      acquireBuildLock({ lockRoot, retryMs: 200 }, "task_1", "build_1", "run_b"),
     ).rejects.toThrow(/locked by another publisher/);
     await lease.release();
     // Releasable after release.

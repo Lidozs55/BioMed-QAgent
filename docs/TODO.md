@@ -131,12 +131,20 @@ Phase 3 需显式 `AGENT_RUNTIME=pi` 才接管正式 Task 流量。实际执行�
 > build lock、Core event sink、`DATASET_CORE=ts` 合法 opt-in profile 均已落地（见下节
 > Phase 5/M2 清单）。仅“默认 profile 切换”仍属 Phase 7。
 
-> 更新（M2 第二轮审计，2026-08-16）：正式 `ts/pi/ts` composition 已默认启用 120 s
+> 更新（M2 第二轮审计，2026-08-14）：正式 `ts/pi/ts` composition 已默认启用 120 s
 > operation timeout（与 Python baseline 一致，`Phase3RuntimeOptions.operationTimeoutMs`）；
 > timeout/cancel 后 executor 在持有 build lock 的情况下以有界 grace 等待 straggler 真正
 > settle（`server/tests/phase5/straggler-safety.test.ts`）；publish 在每个 copy 后 /
 > publication.json 写后 / 最终 rename 前均有 abort 检查；canonicalize / integrate 的
 > checkpoint 改为按 processed 行计数（全 rejected / 全 dedup 极端负载也可中断）。
+
+> 更新（M2 第三轮终审修复，2026-08-14）：build lock 按终审结论重做为 fenced lease ——
+> owner.json mtime 心跳（活进程不再因 age 被抢占；acquired_at 仅记录）、stale 回收改为
+> 原子 rename 接管（多竞争者至多一人获胜）、owner.json 独占创建（wx）封死 mkdir→写记录
+> 初始化窗口、release 仅删自己 token 的锁、publish rename 边界前 assertOwned 围栏
+> （被接管的构建无法晚到发布；`LockLostError` → `lock_lost`）。回归见
+> `server/tests/phase5/build-lock.test.ts`（8 项，含真实子进程跨进程互斥，旧算法下 7/8 失败）；
+> Windows CI 新增 `windows-lock` job 验证 I-04 跨平台行为。
 
 远程分支 `codex/phase4-dataset-core-ts` 已合入 main，无需另行跟踪。
 

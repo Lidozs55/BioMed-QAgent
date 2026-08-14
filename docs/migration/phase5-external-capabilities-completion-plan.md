@@ -1854,6 +1854,12 @@ smoke”的一次性实跑证据。
 10 passed / 1 skipped（无凭证）——Phase 5 全部外部能力（含 browser pool、ChEMBL、UniProt）
 已实跑验证；VLM 是唯一依赖外部凭证的项。
 
+**Waiver（2026-08-14 终审记录）**： 因本机无  未能实跑，
+按 Phase 5 DoD 记 waiver —— 实现路径（qwen-vl-max 客户端、凭证注入、图表抽取契约）已由
+fixture tier（ 假服务器 + 真实 HTTP 客户端）与 SKILL_TOOL_MAP 钉住，但外部
+API/凭证/模型调用契约的实证仍待一台配置了 DashScope 凭证的机器补跑；此 waiver 仅影响
+验收证据，不影响实现判定。
+
 ## 11.4 Integrated E2E
 
 至少：
@@ -2092,13 +2098,21 @@ Deletion/retirement
 > operation 的可抢占 wall-clock timeout/cancel（`core-preemption.test.ts`）、live smoke
 > 实跑记录（§11.3）、PARTIAL_SUCCESS 的 Adapter 层断言（ts-core-e2e）。
 >
-> 第二轮审计收口（2026-08-16，`fix/m2-audit-fixes`）：正式 composition 默认启用 120 s
+> 第二轮审计收口（2026-08-14，`fix/m2-audit-fixes`）：正式 composition 默认启用 120 s
 > operation timeout；timeout/cancel 后 straggler 有界 grace 等待（build lock 持有至真正
 > settle）；publish 各 copy 后 / publication.json 写后 / rename 前 abort 检查；canonicalize /
 > integrate 按 processed 行 checkpoint（全 rejected / 全 dedup 极端负载可中断，
 > `straggler-safety.test.ts` 三个回归测试均验证过“无修复必失败”）；workspace 测试
 > `waitForJson` 消除 pids.json 半写竞态；`delimitedRowsWithLinesAsync` 修复 O(n²) 行扫描
 > （200k 行 8.1s → 0.12s）。
+>
+> 第三轮终审（2026-08-14，`fix/m2-lock-fencing`）：Build Lock I-04 硬阻断已修复 ——
+> heartbeat（owner.json mtime，2 s 刷新 / 10 s 过期；活进程不因 age 被抢占）、原子 rename
+> 接管、owner.json 独占创建（wx）、owner-aware release、publish rename 边界 fence
+> （`assertOwned` → `LockLostError`，被接管构建无法晚到发布）。回归测试 8 项
+> （`server/tests/phase5/build-lock.test.ts`，含真实子进程跨进程互斥；旧算法下 7/8
+> 失败），Windows CI 新增 `windows-lock` job。VLM live smoke 证据缺口以 waiver 处理
+> （见 §11.3，需 `DASHSCOPE_API_KEY` 的机器实跑后方可移除）。
 
 ## M1 — Phase 5
 
