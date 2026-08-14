@@ -1,17 +1,24 @@
 # BioMed-QAgent → Pi Agent 迁移方案
 
-> 文档状态：执行中的迁移蓝图（Phase 0–7 已完成，下一阶段 Phase 8）
+> 文档状态：执行中的迁移蓝图（**Phase 0–8 全部完成，2026-08-14**）
 > 目标仓库：`modenicheng/BioMed-QAgent`  
 > 基线分支：`main`  
-> 迁移目标：以 Pi 作为主 Agent Runtime；除数据库桥接外，逐步移除 Python 后端与自制 Agent 基础设施。  
+> 迁移目标：以 Pi 作为主 Agent Runtime；除数据库桥接外，移除 Python 后端与自制 Agent 基础设施。  
 > 核心原则：**删除自制 Agent Runtime，不删除 BioMed 确定性业务语义。**
+
+> ⚠️ 历史文档提示：本文为迁移执行蓝图。Phase 8（legacy Python Runtime 物理退役）
+> 已完成，正文中的“回滚 profile / FastAPI / Python Core”等描述属于迁移期历史状态，
+> **不再是当前启动说明**。当前唯一拓扑见 [README.md](../README.md) 与
+> [ARCHITECTURE.md](ARCHITECTURE.md)；Phase 8 执行细节见
+> [migration/phase8-python-runtime-retirement.md](migration/phase8-python-runtime-retirement.md) 与
+> [migration/PHASE8_FINAL_VERIFICATION.md](migration/PHASE8_FINAL_VERIFICATION.md)。
 
 ---
 
 ## 0. 执行进度
 
-> 状态快照：2026-08-14（Phase 0–7 已完成；M2 终审与 Phase 7 默认切换完成）。本表随阶段推进更新；可勾选剩余条目与
-> 优先级见 [docs/TODO.md](TODO.md)。
+> 状态快照：2026-08-14（**Phase 0–8 全部完成**；M2 终审、Phase 7 默认切换与
+> Phase 8 物理退役完成）。本表随阶段推进更新；剩余条目与优先级见 [docs/TODO.md](TODO.md)。
 
 | Phase | 内容 | 状态 |
 | --- | --- | --- |
@@ -23,7 +30,7 @@
 | 5 | 迁外部能力与 Python 数据处理依赖 | ✅ 完成（2026-08-14；Python 仅回滚 + DB bridge） |
 | 6 | 迁模型设置与 Settings API | ✅ 完成（2026-08-13） |
 | 7 | 正式切换 Frontend → TS Host | ✅ 完成（2026-08-14） |
-| 8 | 删除 Python Runtime | ⬜ 待开始 |
+| 8 | 删除 Python Runtime（物理退役） | ✅ 完成（2026-08-14） |
 
 Phase 5 实施计划、验收清单与集成收口（M2）见
 [migration/phase5-external-capabilities-completion-plan.md](migration/phase5-external-capabilities-completion-plan.md)

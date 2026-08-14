@@ -16,23 +16,26 @@
 | Layer                | Technology                                                 |
 | -------------------- | ---------------------------------------------------------- |
 | Application Host     | Node.js 22.19+, TypeScript, Vite middleware                |
-| Legacy Runtime/Core  | Python 3.12+, FastAPI, OpenAI Agents SDK, Qwen (DashScope) |
-| Experimental Agent   | Pi (adapter-confined, non-durable Phase 1 surface)         |
+| Main Agent           | Pi (adapter-confined via `server/src/agent/pi-adapter.ts`) |
+| Dataset Core         | TypeScript deterministic core (`server/src/dataset/`)      |
+| Python Persistence   | `database/` bridge only（Python 3.12+, stdlib, JSONL named-op） |
 | Frontend             | React 19, Vite, Tailwind CSS v4, shadcn/ui                 |
 | Package Manager (FE) | pnpm (**never npm**)                                       |
-| Package Manager (BE) | uv (`uv.lock`)                                             |
+| Package Manager (BE) | uv（根 `pyproject.toml` / `uv.lock`，仅 database 项目）    |
 
 ### 2. Architecture Overview & Agent Loop
 
 The current architecture is a **dual-layer structure: Agent + Deterministic
 Pipeline**. Full details are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §2.
 
-> **迁移主线**：仓库正按
+> **迁移主线**：仓库已按
 > [docs/BioMed-QAgent_Pi_Migration_Plan.md](docs/BioMed-QAgent_Pi_Migration_Plan.md)
-> 把 Agent Runtime 迁移到 Pi、Dataset Core 迁移到 TypeScript。当前进度：
-> Phase 0–7 已完成（含 Phase 5 外部能力全量 TS 化、M2 TS Core 接线与 Phase 7
-> 正式默认切换），下一阶段为 Phase 8（删除 legacy Python Runtime）；进度跟踪与剩余条目见
-> docs/TODO.md。Phase 5 实施计划/能力矩阵/PDF spike 见
+> 完成 Phase 0–8（2026-08-14）：Agent Runtime 迁到 Pi、Dataset Core 迁到
+> TypeScript，legacy Python Runtime / FastAPI rollback 已物理删除。Python 仅剩
+> `database/` persistence bridge。进度跟踪见 docs/TODO.md。执行计划与验证见
+> docs/migration/phase8-python-runtime-retirement.md、
+> docs/migration/PHASE8_FINAL_VERIFICATION.md、docs/migration/phase8-retirement-inventory.md。
+> Phase 5 实施计划/能力矩阵/PDF spike 见
 > docs/migration/phase5-external-capabilities*.md。
 
 Key points:
@@ -40,44 +43,27 @@ Key points:
 - Normal development starts from root `pnpm dev`. The TypeScript Application
   Host owns the single browser-facing port, embeds Vite middleware, and natively
   owns formal `/api/v1/*` HTTP/WS traffic, Pi `task_ts_*` Task/Run/Event,
-  product APIs, and the TypeScript Dataset Core. The non-durable
-  `/experimental/pi/*` surface is disabled by default.
-- The default profile is `ts/pi/ts/0`; FastAPI starts only for an explicit
-  legacy Agent, Python Core, or experimental Pi rollback/diagnostic profile.
-  The default Python process boundary is the on-demand named-operation DB bridge.
-- The legacy FastAPI entry point is `app.main:app`, with routes registered in
-  [app/api/routes.py](backend/app/api/routes.py) (HTTP) and
-  [app/api/ws.py](backend/app/api/ws.py) (WebSocket). It is retained for rollback.
-  `server/src/runtime/` owns default formal TS Task routes and WebSocket replay.
-  The legacy application lifespan
-  (owned by `app.main:create_app`) initializes the durable runtime:
-  `TaskManager`, `TaskRepository`, `EventHub`, and `TaskIndex`.
+  product APIs, settings, and the TypeScript Dataset Core. There is no FastAPI,
+  no `/experimental/pi/*`, and no legacy rollback profile anymore.
+- The only Python process boundary is the on-demand named-operation DB bridge
+  (`database/bridge.py`, JSONL stdin/stdout), managed by
+  `server/src/persistence/db-client.ts`.
 - The default Main Agent is Pi behind
-  [server/src/agent/pi-adapter.ts](server/src/agent/pi-adapter.ts). The OpenAI
-  Agents SDK path under `backend/app/agent_loop/` is retained only for an
-  explicit `AGENT_RUNTIME=legacy` rollback profile.
-- Deterministic dataset execution defaults to the TypeScript Dataset Core in
-  `server/src/dataset/`; the Python V2 kernel and its V1 compatibility mirror
-  remain available only when `DATASET_CORE=python` is selected explicitly.
+  [server/src/agent/pi-adapter.ts](server/src/agent/pi-adapter.ts).
+- Deterministic dataset execution is the TypeScript Dataset Core in
+  `server/src/dataset/`（validate/execute/cancel，operation timeout / build lock /
+  event sink）；不再有 Python V2 kernel 与 V1 legacy mirror。
 - The default durable runtime is event-sourced in `server/src/runtime/`:
   `TaskRepository` owns the authoritative `<task_id>/events.jsonl` log and
   snapshots are rebuilt by the TypeScript reducer. Pi and TS Dataset Core
   events enter that same task stream.
-- The WebSocket endpoint is `/api/v1/ws`; the TypeScript Host serves replay and
-  live delivery by default. FastAPI's `app/api/ws_events.py` implementation is
-  used only by the legacy rollback topology.
+- The WebSocket endpoint is `/api/v1/ws`；TS Host 原生提供 replay 与 live delivery。
 - Skill 知识已迁至 [.pi/skills/](.pi/skills/)（`<name>/SKILL.md`，Phase 2）；
-  Python 侧只剩内置直接工具模块（四个类别 discovery / acquisition /
-  processing / analysis 的模块级常量，[backend/app/skills/builtin/](backend/app/skills/builtin/)），
-  且其业务能力已全部 TS 化（Phase 5）：Pi 路径的 acquisition / parsing /
-  analysis 不再调用 Python（`server/src/external/`、`server/src/processing/`、
-  `server/src/analysis/`）；Python 仅承担 legacy 回滚 runtime 与 DB bridge
-  （`database/bridge.py` 命名操作，`server/src/persistence/db-client.ts`）。
+  业务能力全部 TS 化（Phase 5）：acquisition / parsing / analysis 在
+  `server/src/external/`、`server/src/processing/`、`server/src/analysis/`；
+  builtin database catalogue 在 `server/src/product/builtin-databases.ts`。
 - learned skill 概念已删除（Phase 2，见
   [docs/migration/phase2-skills-tools-migration.md](docs/migration/phase2-skills-tools-migration.md)）。
-- `DATASET_CORE=ts` 为默认 profile（`ts/pi/ts/0`，Phase 7）；TS Core 具备
-  operation timeout / build lock / cancel / event sink，四类 golden fixture 通过；
-  `DATASET_CORE=python` 保留为显式回滚。
 
 **HTTP API Routes** (prefix `/api/v1`):
 
@@ -133,27 +119,22 @@ Key points:
    - `{"type":"ping"}` — keepalive; server responds with `{"type":"pong"}`
 4. The server pushes `EventEnvelope` objects (same schema as
    `GET /tasks/{task_id}/events`) and control frames:
-   - `EventEnvelope` — a task event. Types (full union of
-     `PipelineEventType` + `RuntimeEventType`, see
-     [backend/app/domain/contracts/events.py](backend/app/domain/contracts/events.py)
-     for the authoritative payload schemas):
-     `task_created`, `plan_ready`, `user_input_required`,
-     `user_input_resumed`, `stage_started`, `stage_completed`,
-     `stage_failed`, `stage_skipped`, `stage_progress`, `tool_called`,
-     `tool_completed`, `warning`, `artifact_produced`,
-     `task_cancel_requested`, `task_cancelled`, `task_recovered`,
-     `task_completed`, `task_failed` (pipeline); `run_queued`,
+   - `EventEnvelope` — a task event. Types（权威 schema 见
+     `packages/contracts/src/events.ts` 与
+     `docs/ARCHITECTURE.md` §事件模型）:
+     `run_queued`,
      `run_started`, `run_finalizing`, `run_completed`, `run_failed`,
      `run_cancel_requested`, `run_cancelled`, `run_interrupted`,
      `publication_created`, `assistant_delta`,
-     `assistant_reasoning_delta`, `tool_started`,
+     `assistant_reasoning_delta`, `tool_started`, `tool_completed`,
      `conversation_compacted`, `operation_started`,
      `operation_progress`, `operation_completed`, `operation_failed`,
      `subagent_queued`, `subagent_started`, `subagent_progress`,
      `subagent_completed`, `subagent_failed`,
      `subagent_cancel_requested`, `subagent_cancelled`,
      `subagent_interrupted`, `subagent_input_required`,
-     `subagent_input_resumed` (runtime).
+     `subagent_input_resumed`（runtime；legacy `stage_*`/pipeline 事件仅用于
+     重放历史 events.jsonl）。
 
      > Phase 7 T3: the fixed `stage_*` union is superseded by generic
      > `operation_*` events carrying `operation_id` / `label` / `category`
@@ -208,39 +189,30 @@ pnpm typecheck                             # Workspace TypeScript checks
 pnpm build                                 # Workspace production builds
 ```
 
-`pnpm dev` is the only normal startup command. `dev:frontend-standalone`,
-`dev:legacy-backend`, `dev:host-proxy-only`, and `dev:legacy-rollback` are
-migration/debug-only scripts; see `docs/DEVELOPER_QUICKSTART.md` for their
-topology and environment requirements.
+`pnpm dev` is the only normal development startup command; `pnpm start` serves
+the production bundle（`frontend/dist` 静态托管）。`dev:frontend-standalone` 是
+迁移/debug-only 脚本（Vite 独立诊断，代理到 TS Host）。legacy rollback 启动方式
+（dev:legacy-backend / dev:host-proxy-only / dev:legacy-rollback）已随 Phase 8 删除。
 
-#### Legacy backend diagnostics and Python checks (cwd: `backend/`)
+#### Python database bridge checks (cwd: repository root)
 
-All backend commands must be run from the `backend/` directory (where
-`pyproject.toml` lives).
+Python 面只剩 `database/` persistence bridge（根 `pyproject.toml` 管理）：
 
 ```bash
-uv sync                                    # Install dependencies
-uv run uvicorn app.main:app --reload       # Standalone legacy diagnostic only
-uv run pytest                              # Run tests (excludes @pytest.mark.live by default)
-uv run pytest -m live                      # Run live network tests only
-uv run pytest tests/test_runner.py         # Run a single test file
-uv run pytest -k "skill"                   # Filter by keyword
-uv run ruff check app/ tests/ launcher.py  # Lint (CI quality gate, zero warnings allowed)
+uv sync                                    # Install database project deps
+uv run python database/bridge.py --self-test  # Bridge self-test
+uv run pytest database/tests               # Bridge protocol/persistence tests
+uv run ruff check database                 # Lint (CI quality gate, zero warnings allowed)
 ```
 
 Notes:
 
-- The dev server binds to `127.0.0.1:8000` by default. Override with `HOST` and
-  `PORT` environment variables.
-- CORS allows the Vite dev server origins `http://localhost:5173` and
-  `http://127.0.0.1:5173`.
-- `pytest` is configured with `asyncio_mode = "strict"` and treats warnings as
-  errors.
-- On Windows, automated startup smoke tests must launch
-  `.\.venv\Scripts\python.exe -m uvicorn ...` directly and terminate that
-  process in `finally`. Do not wrap Uvicorn with `Start-Process uv run ...`:
-  `uv` may exit or remain detached from its child, leaving the smoke test hung.
-  See `docs/DEVELOPER_QUICKSTART.md` §4.1 for the verified PowerShell template.
+- The bridge is stdlib-only（argparse/json/sqlite3/pathlib/dataclasses）；pytest 与
+  ruff 只属于 dev dependency group。
+- The bridge process is managed by the TS DatabaseClient
+  (`server/src/persistence/db-client.ts`)：JSONL stdin/stdout named ops，EOF 退出。
+- 不要新增 Python runtime 依赖，不要引入第二个 Python 入口，不要把 bridge 扩张成
+  HTTP 服务。
 
 #### Frontend package checks (cwd: `frontend/`)
 
@@ -258,22 +230,23 @@ pnpm test:watch                            # Run unit tests in watch mode (vites
 
 ### 5. Technical Conventions
 
-- **Python**: PEP 8, mandatory type annotations on all function signatures,
-  Pydantic v2 for models.
+- **Python**: PEP 8, mandatory type annotations on all function signatures；
+  仅限 `database/`（stdlib，无第三方 runtime 依赖）。
 - **TypeScript / React**: follow shadcn/ui component patterns and Tailwind
   utility classes; use the `@/` path alias.
-- **Imports**: backend uses `from app.<module>...`; frontend uses `@/...`.
+- **Imports**: database 模块使用扁平导入（script 与 package 上下文双路径兼容）；
+  frontend 使用 `@/...`。
 - **Type safety**: never suppress type errors — no `as any`, `@ts-ignore`, or
   `@ts-expect-error`.
-- **Testing**: backend uses pytest; every new feature must ship with tests, and
-  every bug fix starts with a test that reproduces the bug. Frontend uses
-  vitest with jsdom.
+- **Testing**: database 用 pytest；前端/服务端用 vitest。每个新功能必须带测试，
+  每个 bug fix 先写复现测试。
 - **Frontend components**: use the shadcn skill to discover existing components;
   do not reinvent the wheel (see [frontend/AGENTS.md](frontend/AGENTS.md)).
-- **Phase 1 migration boundaries**: new TS code must not add dependencies on
-  `backend/app/agent_loop`; Pi imports stay in `server/src/agent/pi-adapter.ts`;
-  no second TaskManager is introduced; Pi Workspace cannot write publications;
-  and new wire DTOs enter `@biomed/contracts` first.
+- **Phase 8 architecture boundaries**: active runtime 不得重新引入 legacy Python
+  Runtime / FastAPI / rollback feature flags / `/experimental/pi`（见
+  `server/tests/phase8-architecture-guard.test.ts` 与
+  `database/tests/test_database_store.py::test_no_forbidden_imports_in_database_package`）；
+  新 wire DTO 进入 `@biomed/contracts` 优先。
 
 ### 6. Development Principles
 
@@ -344,13 +317,11 @@ pnpm test:watch                            # Run unit tests in watch mode (vites
 
 The following checks **must all pass** before pushing a branch **and** before merging to `main`.
 
-- **Backend**
+- **Node workspace + Python bridge**
   - No import errors, AST intact;
-  - `uv run pytest` passes with no failures;
-  - After clearing `__pycache__`, `uv run uvicorn app.main:app --reload` starts normally.
-- **Frontend**
-  - `pnpm lint && pnpm tsc` with 0 errors;
-  - `pnpm build` succeeds.
+  - `pnpm test` / `pnpm lint` / `pnpm typecheck` / `pnpm build` pass;
+  - `uv run python database/bridge.py --self-test` passes;
+  - `uv run pytest database/tests` and `uv run ruff check database` pass.
 - **Commit message**
   - Format: `[TASK-XXX] summary` or `feat/fix/chore: summary`. Prefer conventional commit message style.
 

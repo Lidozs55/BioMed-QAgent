@@ -10,13 +10,15 @@
 >   [ADR-017 及后续记录](adr/README.md)）承担；
 >   实现规格由 [BioMed-QAgent_Pipeline_Refactor_Design.md](BioMed-QAgent_Pipeline_Refactor_Design.md) 承担；
 >   执行任务由 [TODO.md](TODO.md) 承担。三者不互相复制。
-> - **实现状态**：迁移 Phase 0-7 已完成。默认 profile 是
->   `APP_HOST=ts / AGENT_RUNTIME=pi / DATASET_CORE=ts / PI_EXPERIMENTAL=0`：
+> - **实现状态**：迁移 Phase 0-8 全部完成（2026-08-14）。唯一正式拓扑为
 >   TypeScript Host 权威实现 formal `/api/v1`、durable Task/Run/Event、模型设置、
->   product API 与 TS Dataset Core。FastAPI Web Server 仅在 legacy Agent、Python Core
->   或 experimental Pi 的显式回滚/诊断 profile 中启动；默认产品路径的 Python
->   进程边界只剩按需启动的 `database/bridge.py`。Phase 8 将物理删除 legacy runtime，
->   进度见 [TODO.md](TODO.md)。V1 历史架构归档于
+>   product API 与 TS Dataset Core；Agent = Pi（`server/src/agent/pi-adapter.ts`）。
+>   legacy FastAPI / Python Core / experimental Pi / rollback feature flags 已全部
+>   物理删除（`backend/` 不复存在）；Python 进程边界只剩按需启动的
+>   `database/bridge.py`（JSONL named-op persistence）。执行记录见
+>   [migration/phase8-python-runtime-retirement.md](migration/phase8-python-runtime-retirement.md)
+>   与 [migration/PHASE8_FINAL_VERIFICATION.md](migration/PHASE8_FINAL_VERIFICATION.md)。
+>   V1 历史架构归档于
 >   [archive/ARCHITECTURE_V1.md](archive/ARCHITECTURE_V1.md)，迁移策略见 §18。
 > - **验证与失效**：每个里程碑、每次新增/修订 ADR、数据族接入或执行模型变化
 >   时对照本文校验一致性；与代码现状矛盾且未标注待落地、或被新 ADR 推翻而未
@@ -693,8 +695,8 @@ V2 精神。V2 目标布局为 `cache/datasets/<namespace>/<dataset_id>/`
 
 ## 14. Durable Runtime（保留自 V1）
 
-Durable Runtime 是 V1 已成熟并由 TypeScript 重实现的能力。本节描述跨实现权威契约；
-默认实现位于 `server/src/runtime/`，FastAPI 实现只用于 legacy 回滚。
+Durable Runtime 是 V1 已成熟并由 TypeScript 重实现的能力。本节描述权威契约；
+唯一实现位于 `server/src/runtime/`（Phase 8 后不再有 Python 实现）。
 
 ### 14.1 任务与 Run 生命周期
 
@@ -703,9 +705,9 @@ WebSocket runtime；`<task_id>/events.jsonl` 是事实源，纯 reducer 重建 T
 `state/task.json` 保存 Task 元数据，`state/pi-session/` 保存 Pi session 映射。
 重启时仍 active 的 Run 被确定性投影为 `run_interrupted`。
 
-legacy 回滚 profile 的 FastAPI lifespan 仍初始化 `TaskManager`、Python
-`TaskRepository`、durable `EventHub`、`AssistantStreamHub` 和 `TaskIndex`；
-其 wire event 与 HTTP DTO 在兼容期保持一致：
+> historical（Phase 8 前）：legacy 回滚 profile 的 FastAPI lifespan 曾初始化
+> Python `TaskManager` / `TaskRepository` / `EventHub` / `TaskIndex`；这些实现已随
+> `backend/` 物理删除，其 wire event 与 HTTP DTO 在兼容期保持一致：
 
 - `<task_id>/events.jsonl` 是 append-only 事件日志；`EventStore` 强制 sequence
   从 1 开始连续递增，`TaskRepository` 先持久化再向 `EventHub` 发布；
@@ -1304,6 +1306,31 @@ private FastAPI 仍在以下任一显式条件成立时启动：`AGENT_RUNTIME=l
 接管的请求建立 loopback proxy；internal migration route 永不暴露到公开端口。
 回滚不改写 TS Task、event log、Pi session 或 publication。验收矩阵见
 [Phase 7 切换报告](migration/phase7-frontend-ts-host.md)。
+
+### 18.9 Phase 8 Legacy Python Runtime 物理退役（完成，2026-08-14）
+
+Phase 8 将 §18.4–18.8 描述的回滚拓扑全部物理删除：
+
+- `backend/`（FastAPI、Python Agent loop / Runtime / Dataset Core / Skills / 科学
+  计算栈）整体退役，`git ls-files backend` = 0；
+- feature flags（`APP_HOST` / `AGENT_RUNTIME` / `DATASET_CORE` /
+  `PI_EXPERIMENTAL`）与 legacy env vars 不再被解析；
+- `server/src/legacy/`（FastAPI spawn / Python Core client / proxy）与
+  experimental Phase 1 Pi runtime（`/experimental/pi/*`）删除；
+- Python 只剩 `database/` persistence bridge（stdlib，JSONL named-op），由
+  `server/src/persistence/db-client.ts` 按需管理；builtin database catalogue 与
+  manifest 业务校验移入 TS（`server/src/product/builtin-databases.ts`、
+  `server/src/agent/tools/declarative-db.ts`）；
+- 根 `pyproject.toml` + `uv.lock` 只服务 database 项目；CI/package 改为
+  TS 门禁与跨平台 bundle。
+
+执行计划、盘点与验证：
+[migration/phase8-python-runtime-retirement.md](migration/phase8-python-runtime-retirement.md)、
+[migration/phase8-retirement-inventory.md](migration/phase8-retirement-inventory.md)、
+[migration/PHASE8_FINAL_VERIFICATION.md](migration/PHASE8_FINAL_VERIFICATION.md)。
+
+> historical：§18.4–18.8 描述的是 Phase 0/1/3/5/7 迁移期的中间拓扑，保留作
+> 决策记录，不是当前启动说明。
 
 ---
 
