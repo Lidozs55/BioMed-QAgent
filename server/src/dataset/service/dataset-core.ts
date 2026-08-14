@@ -3,7 +3,7 @@
  *
  * Agent tools depend on this interface only — never on which implementation
  * backs it (PythonDatasetCoreAdapter = legacy rollback bridge,
- * TsDatasetCoreAdapter = opt-in DATASET_CORE=ts). The wire shape is the
+ * TsDatasetCoreAdapter = default DATASET_CORE=ts; Python adapter = rollback). The wire shape is the
  * frozen DatasetBridgeResponse so the tool layer and event projection do not
  * change when the implementation switches.
  */

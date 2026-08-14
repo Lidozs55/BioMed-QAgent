@@ -1,6 +1,6 @@
 # BioMed-QAgent → Pi Agent 迁移方案
 
-> 文档状态：执行中的迁移蓝图（Phase 0–6 已完成，下一阶段 Phase 7）  
+> 文档状态：执行中的迁移蓝图（Phase 0–7 已完成，下一阶段 Phase 8）
 > 目标仓库：`modenicheng/BioMed-QAgent`  
 > 基线分支：`main`  
 > 迁移目标：以 Pi 作为主 Agent Runtime；除数据库桥接外，逐步移除 Python 后端与自制 Agent 基础设施。  
@@ -10,7 +10,7 @@
 
 ## 0. 执行进度
 
-> 状态快照：2026-08-14（main @ e5143ad，Phase 0–6 已完成，M2 收口合入）。本表随阶段推进更新；可勾选剩余条目与
+> 状态快照：2026-08-14（Phase 0–7 已完成；M2 终审与 Phase 7 默认切换完成）。本表随阶段推进更新；可勾选剩余条目与
 > 优先级见 [docs/TODO.md](TODO.md)。
 
 | Phase | 内容 | 状态 |
@@ -18,17 +18,18 @@
 | 0 | 冻结边界与迁移 ADR | ✅ 完成（2026-08-12） |
 | 1 | 引入 Pi Main Agent，不动 Dataset Core | ✅ 完成（2026-08-12） |
 | 2 | 迁移 Skills 与通用 Agent 工具 | ✅ 完成（2026-08-13） |
-| 3 | 拆出 TS Application Runtime | ✅ 完成（opt-in，2026-08-12） |
+| 3 | 拆出 TS Application Runtime | ✅ 完成（2026-08-12；Phase 7 已转默认） |
 | 4 | 迁移 Dataset Deterministic Core | ✅ 完成（2026-08-13；M2 运行接线闭环） |
 | 5 | 迁外部能力与 Python 数据处理依赖 | ✅ 完成（2026-08-14；Python 仅回滚 + DB bridge） |
 | 6 | 迁模型设置与 Settings API | ✅ 完成（2026-08-13） |
-| 7 | 正式切换 Frontend → TS Host | ⬜ 下一阶段 |
+| 7 | 正式切换 Frontend → TS Host | ✅ 完成（2026-08-14） |
 | 8 | 删除 Python Runtime | ⬜ 待开始 |
 
 Phase 5 实施计划、验收清单与集成收口（M2）见
 [migration/phase5-external-capabilities-completion-plan.md](migration/phase5-external-capabilities-completion-plan.md)
 与 [migration/phase5-external-capabilities.md](migration/phase5-external-capabilities.md)；
-`DATASET_CORE=ts` 现为合法 opt-in profile（`ts/pi/ts/0|1`），默认 profile 不变。
+`DATASET_CORE=ts` 在 M2 成为合法 opt-in profile；Phase 7 已将
+`ts/pi/ts/0` 切换为默认。
 
 Phase 0/1 执行细节与验收证据见
 [BioMed-QAgent_Pi_Migration_Phase0_1_Detailed.md](BioMed-QAgent_Pi_Migration_Phase0_1_Detailed.md)
@@ -38,7 +39,9 @@ Phase 3 边界、激活方式与回滚见
 [migration/phase3-ts-application-runtime.md](migration/phase3-ts-application-runtime.md)；
 Phase 4 逐步实现与 parity 证据见 `.superpowers/phase4/T1-T10-report.md`
 （TS 代码在 `server/src/dataset/`，M2 已将其运行接线到 `DATASET_CORE=ts` profile）；
-Phase 5 能力矩阵与验收见 `docs/migration/phase5-external-capabilities*.md`。
+Phase 5 能力矩阵与验收见 `docs/migration/phase5-external-capabilities*.md`；
+Phase 7 默认/回滚拓扑与证据见
+[migration/phase7-frontend-ts-host.md](migration/phase7-frontend-ts-host.md)。
 
 ---
 
@@ -1707,7 +1710,7 @@ backend Python 不再承担 acquisition / parsing / analysis
 
 ---
 
-## Phase 7：正式切换 Frontend → TS Host
+## Phase 7：正式切换 Frontend → TS Host（✅ 2026-08-14）
 
 切换：
 
@@ -1719,7 +1722,9 @@ frontend
 
 保持 API 兼容一轮发布。
 
-此阶段 Python FastAPI 仍可通过 feature flag 启动作为回滚路径，但默认关闭。
+Python FastAPI 仍可通过 feature flag 启动作为回滚路径，但默认关闭。默认
+`pnpm dev` 使用 `ts/pi/ts/0`，formal Task/Run/Event、产品 API 和 Dataset Core
+均由 TS Host 权威实现；默认 Python 进程边界只剩按需 DB bridge。
 
 验收：
 
@@ -1734,6 +1739,9 @@ frontend
 -settings；
 -浏览器能力；
 -异常恢复。
+
+验收映射与实现所有权见
+[Phase 7 切换报告](migration/phase7-frontend-ts-host.md)。
 
 ---
 
@@ -1988,7 +1996,8 @@ DATASET_CORE=python|ts
 APP_HOST=fastapi|ts
 ```
 
-只用于迁移期。
+只用于迁移期。Phase 7 默认值为 `APP_HOST=ts`、`AGENT_RUNTIME=pi`、
+`DATASET_CORE=ts`、`PI_EXPERIMENTAL=0`；legacy/python/experimental 组合必须显式配置。
 
 切换顺序：
 

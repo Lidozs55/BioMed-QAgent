@@ -22,17 +22,18 @@
 | 0 | 冻结边界与迁移 ADR | ✅ 完成（2026-08-12） |
 | 1 | 引入 Pi Main Agent（不动 Dataset Core） | ✅ 完成（2026-08-12） |
 | 2 | 迁移 Skills 与通用 Agent 工具 | ✅ 完成（2026-08-13） |
-| 3 | 拆出 TS Application Runtime | ✅ 完成（opt-in，2026-08-12） |
+| 3 | 拆出 TS Application Runtime | ✅ 完成（2026-08-12；Phase 7 已转默认） |
 | 4 | 迁移 Dataset Deterministic Core | ✅ 完成（2026-08-13；运行接线 M2 已闭环） |
 | 5 | 迁外部能力与 Python 数据处理依赖 | ✅ 完成（2026-08-14；legacy Python 仅作回滚保留，物理删除属 Phase 8） |
 | 6 | 迁模型设置与 Settings API | ✅ 完成（2026-08-13） |
-| 7 | 正式切换 Frontend → TS Host | ⬜ 待开始 |
+| 7 | 正式切换 Frontend → TS Host | ✅ 完成（2026-08-14） |
 | 8 | 删除 Python Runtime（仅留 DB bridge） | ⬜ 待开始 |
 
-默认 profile 仍是 `APP_HOST=ts / AGENT_RUNTIME=legacy / DATASET_CORE=python`；
-Phase 3 需显式 `AGENT_RUNTIME=pi` 才接管正式 Task 流量。实际执行顺序为 0 → 1 → 3 → 4 → 2（已完成）；
-默认 profile 不变，Phase 3 仍需显式 `AGENT_RUNTIME=pi` 才接管正式 Task 流量。feature-flag 回滚顺序与迁移期约束
-见 Plan §24；Phase 8 后删除 flag 与 legacy 代码。
+默认 profile 已切换为
+`APP_HOST=ts / AGENT_RUNTIME=pi / DATASET_CORE=ts / PI_EXPERIMENTAL=0`。
+FastAPI Web Server 默认不启动；仅 legacy Agent、Python Core 或 experimental Pi 的显式
+回滚/诊断 profile 会启动 private FastAPI。feature-flag 回滚顺序与迁移期约束见
+Plan §24；Phase 8 后删除 flag 与 legacy 代码。
 
 ---
 
@@ -87,7 +88,7 @@ Phase 3 需显式 `AGENT_RUNTIME=pi` 才接管正式 Task 流量。实际执行�
 - [x] 验收：Main Agent 不再调用 `find_skill`/`invoke_skill` 自制网关；
       Pi 能按任务加载相关 Skill；Skill 缺失不导致 Runtime 崩溃
 
-## Phase 3：拆出 TS Application Runtime（✅ opt-in 完成）
+## Phase 3：拆出 TS Application Runtime（✅ 完成）
 
 - [x] TS Task/Run domain、request-id 幂等、单 Task 单 active Run、重启 interrupted
       恢复（`server/src/runtime/`）。
@@ -100,7 +101,7 @@ Phase 3 需显式 `AGENT_RUNTIME=pi` 才接管正式 Task 流量。实际执行�
 - [x] Run cancel 等待 terminal durable acknowledgement；Host 关闭等待执行尾部收敛。
 - [x] BuildResult 从 Python Core bridge 投影到 Run 终态；artifact API 仅服务通过
       immutable Publication + manifest + size/hash/path 校验的文件。
-- [ ] 正式默认切换 `AGENT_RUNTIME=pi`——待 Phase 2 Skills 与跨阶段集成门禁完成后执行。
+- [x] 正式默认切换 `AGENT_RUNTIME=pi`（Phase 7，2026-08-14）。
 
 详细边界与回滚见 `docs/migration/phase3-ts-application-runtime.md`。
 
@@ -146,6 +147,10 @@ Phase 3 需显式 `AGENT_RUNTIME=pi` 才接管正式 Task 流量。实际执行�
 > `server/tests/phase5/build-lock.test.ts`（8 项，含真实子进程跨进程互斥，旧算法下 7/8 失败）；
 > Windows CI 新增 `windows-lock` job 验证 I-04 跨平台行为。
 
+**运行接线（M2/Phase 7 已完成）**：TS executor 已异步化并接入 operation timeout、
+build 锁、cancel 收敛与 event sink；`DATASET_CORE=ts` 现为默认运行路径，
+`DATASET_CORE=python` 保留一轮回滚。
+
 远程分支 `codex/phase4-dataset-core-ts` 已合入 main，无需另行跟踪。
 
 ## Phase 5：迁外部能力与 Python 数据处理依赖（✅ 完成，2026-08-14）
@@ -180,7 +185,7 @@ Phase 3 需显式 `AGENT_RUNTIME=pi` 才接管正式 Task 流量。实际执行�
 
 ### M2：Phase 0–6 集成收口（✅ 完成，2026-08-14）
 
-- [x] `DATASET_CORE=ts` 合法 opt-in profile（`ts/pi/ts/0|1`；默认 profile 不变）
+- [x] `DATASET_CORE=ts` 合法 opt-in profile（M2）；Phase 7 已将 `ts/pi/ts/0` 转为默认
 - [x] DatasetCore 服务接口 + Python 回滚 adapter + TS adapter（bridge 外形不漂移）
 - [x] operation 异步化 + wall-clock timeout（typed timeout failure）+ cancel 收敛 +
       straggler 清理；build lock（task+build 单发布者，Windows 安全，stale 回收）。
@@ -202,12 +207,15 @@ Phase 3 需显式 `AGENT_RUNTIME=pi` 才接管正式 Task 流量。实际执行�
 - [x] 验收：设置页可创建 provider / 导入模型 / 设 active model；不同模型参数正确
       传给 Pi/provider
 
-## Phase 7：正式切换 Frontend → TS Host（⬜ 待开始）
+## Phase 7：正式切换 Frontend → TS Host（✅ 完成，2026-08-14）
 
-- [ ] frontend 全量流量切 TS Host，保持 API 兼容一轮发布；FastAPI 保留为 feature-flag
+- [x] frontend 全量流量切 TS Host，保持 API 兼容一轮发布；FastAPI 保留为 feature-flag
       回滚路径，默认关闭
-- [ ] 验收：完整 E2E——多轮对话 / 取消 / 恢复 / 断线重连 / 构建 / artifact 下载 /
+- [x] 验收：完整 E2E——多轮对话 / 取消 / 恢复 / 断线重连 / 构建 / artifact 下载 /
       cache / settings / 浏览器能力 / 异常恢复
+
+验收证据与默认/回滚拓扑见
+[phase7-frontend-ts-host.md](migration/phase7-frontend-ts-host.md)。
 
 ## Phase 8：删除 Python Runtime（⬜ 待开始）
 

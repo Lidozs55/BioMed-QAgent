@@ -46,13 +46,13 @@ describe("feature flags", () => {
     ).toThrow();
   });
 
-  test("uses the normal Phase 1 transition by default and requires TS topology", () => {
+  test("uses the Phase 7 full-TypeScript profile by default and requires TS topology", () => {
     expect(parseHostConfig({})).toMatchObject({
       flags: {
         appHost: "ts",
-        agentRuntime: "legacy",
-        datasetCore: "python",
-        piExperimental: true,
+        agentRuntime: "pi",
+        datasetCore: "ts",
+        piExperimental: false,
       },
       publicHost: "127.0.0.1",
       publicPort: 5173,
@@ -61,8 +61,23 @@ describe("feature flags", () => {
     });
     expect(() => parseHostConfig({
       APP_HOST: "fastapi",
+      AGENT_RUNTIME: "legacy",
+      DATASET_CORE: "python",
       PI_EXPERIMENTAL: "0",
     })).toThrow(/APP_HOST=ts/);
+  });
+
+  test("keeps the explicit legacy rollback profile valid", () => {
+    expect(parseHostConfig({
+      AGENT_RUNTIME: "legacy",
+      DATASET_CORE: "python",
+      PI_EXPERIMENTAL: "0",
+    }).flags).toEqual({
+      appHost: "ts",
+      agentRuntime: "legacy",
+      datasetCore: "python",
+      piExperimental: false,
+    });
   });
 
   test("requires an explicit validated development exec flag", () => {

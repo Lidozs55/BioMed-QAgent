@@ -5,11 +5,10 @@ BioMed-QAgent 是一个面向生物医学研究数据的 **Agent + 确定性 Pip
 项目的目标是让数据处理过程**可追溯、可验证、可恢复**，而不是让大语言模型直接“猜”出一个 CSV。系统可以展示统计结果和可视化数据，但不会在缺少数据证据时生成科研或临床结论。
 
 > 项目正依据 [Pi 迁移方案](docs/BioMed-QAgent_Pi_Migration_Plan.md) 执行迁移：
-> Phase 0–6 已完成（2026-08-14；含 Phase 5 外部能力全量 TS 化与 M2
-> `DATASET_CORE=ts` opt-in 收口），下一阶段为 Phase 7（正式默认切换）。
-> 默认 profile 的正式 `/api/v1` 与 durable runtime 仍由 private FastAPI 权威实现；
-> `AGENT_RUNTIME=pi` 时新 `task_ts_*` Task/Run/Event 由 TS durable runtime 接管，
-> legacy Task 与未迁移 API 回退 FastAPI。进度跟踪见 [docs/TODO.md](docs/TODO.md)，
+> Phase 0–7 已完成（2026-08-14）。默认 profile 是
+> `APP_HOST=ts / AGENT_RUNTIME=pi / DATASET_CORE=ts / PI_EXPERIMENTAL=0`：
+> 正式 `/api/v1`、durable runtime 与 Dataset Core 均由 TypeScript 权威实现，
+> FastAPI 只在显式回滚/诊断 profile 中启动。进度跟踪见 [docs/TODO.md](docs/TODO.md)，
 > 实际边界以代码及 [架构文档](docs/ARCHITECTURE.md) 为准。
 
 ## 核心能力
@@ -20,7 +19,8 @@ BioMed-QAgent 是一个面向生物医学研究数据的 **Agent + 确定性 Pip
 - **可验证交付物**：只有通过 Validation Gate 的文件才会发布到 `artifacts/` 并通过 API 暴露。
 - **Durable Task Runtime**：任务、Run、消息、事件和产物状态持久化，支持取消、恢复、事件重放以及人在回路（HITL）暂停/继续。
 - **实时进度反馈**：前端通过 REST + WebSocket 接收 Agent 文本、工具调用、Pipeline 阶段、进度、警告和产物事件。
-- **模型与 Skill 管理**：支持通过设置 API 配置 OpenAI 兼容模型，动态查看和管理 Skill；`learned/` Skill 默认禁用。
+- **模型与 curated Skills**：支持通过设置 API 配置 OpenAI 兼容模型；Pi 按任务加载
+  `.pi/skills/`，learned skill 概念已退役。
 - **视觉证据采集**：可选使用 Playwright 截取网页或论文页面，并使用 Qwen-VL / PDF 解析 / caption 文本组成降级链路提取图表数据。
 
 ## 架构概览
@@ -28,33 +28,28 @@ BioMed-QAgent 是一个面向生物医学研究数据的 **Agent + 确定性 Pip
 ```text
 ┌──────────────────────────────────────────────────────────────┐
 │ TypeScript Application Host（唯一公开端口）                  │
-│ Vite middleware · /api/v1 · /api/v1/ws · /experimental/pi/* │
-│  ├─ experimental Pi Agent（live-only，非 durable）           │
-│  └─ AGENT_RUNTIME=pi：TS durable runtime（task_ts_* Tasks） │
-└───────────────┬──────────────────────────────────────────────┘
-                │ 默认 AGENT_RUNTIME=legacy
-                ▼
-    Private loopback FastAPI（formal API + durable runtime）
-                │ trusted DatasetBuild Tool/bridge
-                ▼
-┌──────────────────────────────────────────────────────────────┐
-│ Python V2 Dataset Construction Runtime                       │
-│ Spec → Acquire/Parse → Normalize/Integrate → Validate/Publish│
-└───────────────────────────────┬──────────────────────────────┘
+│ Vite · native /api/v1 · durable /api/v1/ws                  │
+│ Pi Main Agent · Task/Run/Event · settings/builds/cache       │
+└───────────────┬───────────────────────────┬──────────────────┘
+                │                           │
+                ▼                           ▼
+┌──────────────────────────────┐   ┌───────────────────────────┐
+│ TypeScript Dataset Core      │   │ database/bridge.py       │
+│ Acquire → Validate → Publish │   │ named DB operations only │
+└───────────────┬──────────────┘   └───────────────────────────┘
                                 │ 仅发布通过验证的 Artifact
                                 ▼
                     data/output/tasks/<task_id>/artifacts/
 ```
 
-TS durable runtime 与 experimental Pi 同样经 loopback bridge 调用同一个
-Python V2 Dataset Core。
+legacy Agent、Python Core 或 experimental Pi 的显式 profile 会额外启动 private
+loopback FastAPI；默认产品路径不启动 Python Web Server。
 
 职责边界如下：
 
-- **formal Agent** 默认由 private FastAPI 的 OpenAI Agents SDK runtime 持有；
-  `AGENT_RUNTIME=pi` 时改由 TS durable runtime 持有（`task_ts_*` Task/Run/Event），
-  两种模式下 Task、Run 和事件均可持久恢复。
-- **experimental Pi Agent** 只在 `/experimental/pi/*` 验证新 Agent/Workspace/Tool 边界，不宣称 durable。
+- **formal Agent** 默认由 Pi + TS durable runtime 持有（`task_ts_*` Task/Run/Event）；
+  legacy OpenAI Agents SDK runtime 仅作回滚。
+- **experimental Pi Agent** 仅在 `PI_EXPERIMENTAL=1` 时暴露 live-only surface，默认关闭。
 - **Dataset Core** 负责按照契约执行处理、记录审计信息、检查完整性，并拒绝未经验证的产物；两类 Agent 都不能直接制造 publication。
 - **Skill** 是 instructions 与 Function Tools 的能力包，按 `discovery/`、`acquisition/`、`processing/`、`analysis/` 分类。
 - **Runtime** 负责任务生命周期和事件持久化；前端状态是后端事件的投影，不是事实来源。
@@ -71,11 +66,12 @@ Python V2 Dataset Core。
 | 0 | 冻结边界与迁移 ADR | ✅ 完成 |
 | 1 | Pi Main Agent + TS Host + Workspace + Core bridge | ✅ 完成 |
 | 2 | Skills 与通用 Agent 工具迁移 | ✅ 完成 |
-| 3 | TS Application Runtime（durable Task/Run/Event） | ✅ 完成（opt-in） |
+| 3 | TS Application Runtime（durable Task/Run/Event） | ✅ 完成（Phase 7 已转默认） |
 | 4 | Dataset Deterministic Core TS 移植（steps 1-10 + parity） | ✅ 完成（M2 已接入运行路径） |
 | 5 | 外部能力与 Python 数据处理依赖迁移 | ✅ 完成（2026-08-14；Python 仅回滚 + DB bridge） |
 | 6 | 模型设置与 Settings API | ✅ 完成 |
-| 7-8 | 前端正式切换 / 删除 Python | ⬜ 待开始 |
+| 7 | 前端正式切换与 FastAPI 默认关闭 | ✅ 完成（2026-08-14） |
+| 8 | 删除 legacy Python Runtime | ⬜ 待开始 |
 
 Phase 0/1 执行细节见
 [docs/BioMed-QAgent_Pi_Migration_Phase0_1_Detailed.md](docs/BioMed-QAgent_Pi_Migration_Phase0_1_Detailed.md)
@@ -100,7 +96,7 @@ Phase 4 TS 代码在 `server/src/dataset/`，证据见 `.superpowers/phase4/T1-T
 ### 1. 配置应用
 
 在项目根目录复制环境变量模板，然后编辑根 `.env`；正常 `pnpm dev` 会读取它，
-并把所需变量传给 Host 管理的 private FastAPI：
+默认由 TS Host 与 Pi 读取；显式 FastAPI 回滚 profile 会继承同一环境：
 
 **Windows PowerShell**：
 
@@ -141,8 +137,8 @@ pnpm install --frozen-lockfile
 pnpm dev
 ```
 
-浏览器只访问 TypeScript Host 的 `http://127.0.0.1:5173`。Host 内嵌 Vite，
-管理 private FastAPI，并代理正式 HTTP/WS；`/internal/migration/*` 不会公开。
+浏览器只访问 TypeScript Host 的 `http://127.0.0.1:5173`。Host 内嵌 Vite 并原生
+处理正式 HTTP/WS；默认不启动 FastAPI，`/internal/migration/*` 不会公开。
 Swagger/ReDoc 在正常拓扑中不作为公开入口，需要时使用 legacy diagnostic script。
 启动后可访问：
 
@@ -280,11 +276,10 @@ BioMed-QAgent/
 
 | 层级           | 技术                                                   |
 | -------------- | ------------------------------------------------------ |
-| 后端           | Python 3.12+、FastAPI、uvicorn                         |
-| Agent          | FastAPI OpenAI Agents SDK（默认）+ Pi（opt-in `AGENT_RUNTIME=pi`，TS durable runtime） |
-| 数据契约       | Pydantic v2、dataclass                                 |
-| 数据获取与解析 | httpx、BeautifulSoup、pdfplumber、openpyxl、Playwright |
-| 科学计算       | matplotlib、SciPy、seaborn                             |
+| Application Host | Node.js 22.19+、TypeScript、Vite                     |
+| Agent          | Pi + TS durable runtime（默认）；OpenAI Agents SDK（回滚） |
+| Dataset Core   | TypeScript deterministic core；Python V2（回滚）       |
+| Python         | DB bridge；FastAPI/uvicorn legacy rollback             |
 | 前端           | React 19、Vite、TypeScript、Tailwind CSS v4、shadcn/ui |
 | 状态与数据展示 | Zustand、React Markdown、PapaParse                     |
 | 测试           | pytest、pytest-asyncio、Vitest、Testing Library        |
@@ -304,8 +299,8 @@ BioMed-QAgent/
 | `NCBI_API_KEY`       | 空                            | 可选的 NCBI API Key                             |
 | `HOST` / `PORT`      | `127.0.0.1` / `5173`        | TS Host 唯一公开监听地址                        |
 | `LEGACY_BACKEND_PORT` | `0`                        | Host 动态分配的 private loopback FastAPI 端口；调试时可固定 |
-| `APP_HOST` / `AGENT_RUNTIME` / `DATASET_CORE` | `ts` / `legacy` / `python` | 默认（Phase 0/1）组合；opt-in Phase 3 组合为 `ts` / `pi` / `python` |
-| `PI_EXPERIMENTAL`    | `1`                         | 仅暴露非 durable `/experimental/pi/*`           |
+| `APP_HOST` / `AGENT_RUNTIME` / `DATASET_CORE` | `ts` / `pi` / `ts` | Phase 7 默认组合；legacy/python 为显式回滚 |
+| `PI_EXPERIMENTAL`    | `0`                         | 设为 1 才暴露非 durable `/experimental/pi/*`    |
 | `PI_PROVIDER` / `PI_MODEL` | `dashscope` / `MODEL_NAME` | Pi provider 与模型选择                    |
 | `PI_API_KEY` / `PI_BASE_URL` | 回退 DashScope 配置    | Pi credentials；不要提交真实密钥                |
 | `WORKSPACE_DEV_EXEC` | `0`                         | 受控开发命令 gate                               |
@@ -394,7 +389,7 @@ pyinstaller --onefile --name BioMed-QAgent --add-data "dist;dist" --hidden-impor
 - 任务文件访问限制在任务工作目录内，拒绝绝对路径、路径穿越和不安全符号链接。
 - 下载工具限制协议、目标域名、文件大小和超时时间；未完成或校验失败的文件不会进入解析阶段。
 - API Key 在设置 API 的读取响应中会被掩码；模型配置通过受控的设置存储管理。
-- `learned/` Skill 默认禁用，且不能绕过 Pipeline 与 Validation Gate。
+- learned Skill 概念已退役；curated Skill 只能通过 Pi adapter 边界调用，且不能绕过 Dataset Core 与 Validation Gate。
 - 任务终态、事件和 Artifact 校验结果必须由后端持久化状态决定，不能以 mock 成功替代真实流程失败。
 
 ## 相关文档

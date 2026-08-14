@@ -45,7 +45,7 @@ import {
   SourceAdapter,
   rowGranularityFor,
   type RowWriter,
-} from "../adapters.js";
+} from "../base.js";
 import { CHECKPOINT_STRIDE, checkpoint, throwIfAborted } from "../../cooperative.js";
 import { AdapterError, EmptySourceError } from "../errors.js";
 import { assetIdFromSha256, makeRecordId } from "../identity.js";

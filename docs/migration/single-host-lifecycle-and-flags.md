@@ -1,5 +1,9 @@
 # Phase 1 Single-Host Lifecycle and Feature Flags
 
+> Historical Phase 1 transition contract. Phase 7 changed the default to
+> `ts/pi/ts/0` and made FastAPI conditional; current ownership and valid rollback
+> triggers are documented in [phase7-frontend-ts-host.md](phase7-frontend-ts-host.md).
+
 This document operationalizes [ADR-018](../adr/018-single-ts-application-host.md).
 The Phase 1 target has one TypeScript Application Host and one browser-facing port;
 legacy FastAPI is private and loopback-only.

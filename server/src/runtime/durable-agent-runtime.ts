@@ -1,7 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
+import { createHash } from "node:crypto";
 import path from "node:path";
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
+import { Readable } from "node:stream";
 
 import type {
   BuildResult,
@@ -37,6 +39,9 @@ import {
 
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_INPUT_LENGTH = 64 * 1024;
+const MAX_IMPORT_FILES = 10;
+const MAX_IMPORT_FILE_BYTES = 500 * 1024 * 1024;
+const MAX_IMPORT_TOTAL_BYTES = 2 * 1024 * 1024 * 1024;
 const MAX_WS_COMMAND_BYTES = 8 * 1024;
 const MAX_WS_BUFFERED_BYTES = 64 * 1024;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
@@ -135,6 +140,70 @@ function databases(value: unknown): string[] {
     throw new TypeError("databases must be a string array");
   }
   return value as string[];
+}
+
+interface ImportUpload {
+  name: string;
+  bytes: Buffer;
+  sha256: string;
+}
+
+function uploadFilename(value: string): string {
+  const base = path.posix.basename(value.replaceAll("\\", "/"));
+  if (base === "" || base === "." || base === "..") {
+    throw new TypeError("Uploaded file has invalid filename");
+  }
+  const sanitized = base.replace(/[^A-Za-z0-9._-]/g, "_");
+  if (sanitized === "") throw new TypeError("Uploaded file has invalid filename");
+  return sanitized;
+}
+
+async function readImportForm(request: IncomingMessage): Promise<{
+  requestId: string;
+  note: string;
+  uploads: ImportUpload[];
+}> {
+  const contentType = request.headers["content-type"];
+  if (contentType === undefined || !contentType.toLowerCase().startsWith("multipart/form-data")) {
+    throw new TypeError("Import tasks require multipart/form-data");
+  }
+  const declaredLength = Number(request.headers["content-length"] ?? 0);
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_IMPORT_TOTAL_BYTES) {
+    throw new RangeError("Total upload size exceeds limit");
+  }
+  const form = await new Response(Readable.toWeb(request), {
+    headers: { "content-type": contentType },
+  }).formData();
+  const requestValue = form.get("request_id");
+  const noteValue = form.get("input");
+  if (typeof requestValue !== "string") throw new TypeError("request_id is required");
+  const requestId = requestValue.trim();
+  if (requestId === "") throw new TypeError("request_id is required");
+  const note = typeof noteValue === "string" ? noteValue.trim() : "";
+  const fileValues = form.getAll("files");
+  if (fileValues.length === 0) throw new TypeError("At least one file is required");
+  if (fileValues.length > MAX_IMPORT_FILES) throw new TypeError(`Too many files (max ${MAX_IMPORT_FILES})`);
+  const uploads: ImportUpload[] = [];
+  const names = new Set<string>();
+  let total = 0;
+  for (const value of fileValues) {
+    if (typeof value === "string") throw new TypeError("Uploaded file is invalid");
+    const name = uploadFilename(value.name);
+    if (names.has(name)) throw new TypeError(`Duplicate uploaded filename: ${name}`);
+    names.add(name);
+    if (value.size > MAX_IMPORT_FILE_BYTES) {
+      throw new RangeError(`File ${name} exceeds max size (${MAX_IMPORT_FILE_BYTES} bytes)`);
+    }
+    total += value.size;
+    if (total > MAX_IMPORT_TOTAL_BYTES) throw new RangeError("Total upload size exceeds limit");
+    const bytes = Buffer.from(await value.arrayBuffer());
+    uploads.push({
+      name,
+      bytes,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+    });
+  }
+  return { requestId, note, uploads };
 }
 
 function rawDataText(raw: RawData): string {
@@ -262,13 +331,23 @@ export async function createDurableAgentRuntime(
       databases: databases(body.databases),
       mode,
     });
+    await launchAcceptedTask(accepted, body.input as string);
+    return accepted;
+  }
+
+  async function launchAcceptedTask(
+    accepted: { task_id: string; run_id: string },
+    input: string,
+    prepare?: (taskRoot: string) => Promise<void>,
+  ): Promise<void> {
     const snapshot = await repository.getSnapshot(accepted.task_id);
     const admittedRun = snapshot?.runs.find((run) => run.run_id === accepted.run_id);
     if (!activeTasks.has(accepted.task_id) && admittedRun?.status === "queued") {
       try {
+        await prepare?.(pathForTask(options.tasksRoot, accepted.task_id));
         const task = await createSession(accepted.task_id, accepted.run_id);
         activeTasks.set(accepted.task_id, task);
-        startRun(accepted.task_id, accepted.run_id, body.input as string);
+        startRun(accepted.task_id, accepted.run_id, input);
       } catch (error) {
         await repository.appendRunEvent(accepted.task_id, accepted.run_id, {
           type: "run_failed",
@@ -278,6 +357,29 @@ export async function createDurableAgentRuntime(
         throw error;
       }
     }
+  }
+
+  async function createImportTask(request: IncomingMessage): Promise<unknown> {
+    const imported = await readImportForm(request);
+    const fileList = imported.uploads.map((upload) => upload.name).join(", ");
+    const hashes = imported.uploads.map((upload) => `${upload.name}=${upload.sha256}`).join(", ");
+    const composedInput = imported.note === ""
+      ? `Import ${imported.uploads.length} file(s) into local cache: ${fileList}`
+      : `${imported.note}\n\n[uploaded_files (${imported.uploads.length}): ${fileList}]`;
+    const durableInput = `${composedInput}\n[uploaded_sha256: ${hashes}]`;
+    const accepted = await repository.createTask({
+      requestId: imported.requestId,
+      input: durableInput,
+      databases: [],
+      mode: "import",
+    });
+    await launchAcceptedTask(accepted, durableInput, async (taskRoot) => {
+      const sourceAssets = path.join(taskRoot, "source_assets");
+      await mkdir(sourceAssets, { recursive: true });
+      await Promise.all(imported.uploads.map((upload) => (
+        writeFile(path.join(sourceAssets, upload.name), upload.bytes, { flag: "wx" })
+      )));
+    });
     return accepted;
   }
 
@@ -384,9 +486,86 @@ export async function createDurableAgentRuntime(
     return await repository.getSnapshot(taskId);
   }
 
+  async function compactTask(taskId: string): Promise<Record<string, string>> {
+    const snapshot = await repository.getSnapshot(taskId);
+    if (snapshot === null) throw new ReferenceError("Task not found");
+    const runId = snapshot.task.active_run_id;
+    if (runId === null) {
+      throw new DurableTaskConflictError("active_run", "Task has no active run to compact");
+    }
+    const task = activeTasks.get(taskId);
+    if (task === undefined || task.activeRunId !== runId || task.session.compact === undefined) {
+      throw new DurableTaskConflictError("active_run", "Task compaction is unavailable");
+    }
+    const result = await task.session.compact();
+    await repository.appendRunEvent(taskId, runId, {
+      type: "conversation_compacted",
+      covered_through_run_id: runId,
+      summary_digest: createHash("sha256").update(result.summary, "utf8").digest("hex"),
+    });
+    return { status: "compaction_requested", task_id: taskId, run_id: runId };
+  }
+
+  async function injectContext(
+    taskId: string,
+    body: Record<string, unknown>,
+  ): Promise<Record<string, string | null>> {
+    const text = requiredString(body, "text", 4_000);
+    const expected = body.expected_run_id;
+    if (expected !== null && expected !== undefined && typeof expected !== "string") {
+      throw new TypeError("expected_run_id must be a string or null");
+    }
+    const snapshot = await repository.getSnapshot(taskId);
+    if (snapshot === null) throw new ReferenceError("Task not found");
+    const runId = snapshot.task.active_run_id;
+    if (runId === null) {
+      throw new DurableTaskConflictError("active_run", "Task has no active run to steer");
+    }
+    if (typeof expected === "string" && expected !== runId) {
+      throw new DurableTaskConflictError(
+        "active_run",
+        `expected active run ${expected} but task has run ${runId}`,
+      );
+    }
+    const task = activeTasks.get(taskId);
+    if (task === undefined || task.activeRunId !== runId || task.session.steer === undefined) {
+      throw new DurableTaskConflictError("active_run", "Run is no longer active");
+    }
+    const content = (
+      "【方向调整】用户中断了上一次作答并调整了方向或做了补充。" +
+      "请不要忘记上一次的任务内容，按照用户的内容继续作答或终止作答，" +
+      `具体依照用户语义完成：\n${text}`
+    );
+    await task.session.steer(content);
+    return {
+      status: "steered",
+      task_id: taskId,
+      run_id: runId,
+      message_id: null,
+      content,
+    };
+  }
+
+  async function deleteTask(taskId: string): Promise<void> {
+    const task = activeTasks.get(taskId);
+    if (task !== undefined) {
+      const snapshot = await repository.getSnapshot(taskId);
+      if (snapshot !== null && snapshot.task.active_run_id !== null) {
+        throw new DurableTaskConflictError("active_run", "Active tasks cannot be deleted");
+      }
+      activeTasks.delete(taskId);
+      await task.session.dispose();
+    }
+    await repository.deleteTask(taskId);
+  }
+
   async function dispatch(request: IncomingMessage, response: ServerResponse): Promise<void> {
     try {
       const url = new URL(request.url ?? "/", "http://application-host");
+      if (request.method === "POST" && url.pathname === "/api/v1/import/tasks") {
+        sendJson(response, 202, await createImportTask(request));
+        return;
+      }
       if (request.method === "POST" && url.pathname === "/api/v1/tasks") {
         sendJson(response, 202, await createTask(request));
         return;
@@ -401,6 +580,24 @@ export async function createDurableAgentRuntime(
       if (request.method === "GET" && task !== null) {
         const snapshot = await repository.getSnapshot(decodeURIComponent(task[1] ?? ""));
         sendJson(response, snapshot === null ? 404 : 200, snapshot ?? { detail: "Task not found" });
+        return;
+      }
+      if (request.method === "DELETE" && task !== null) {
+        await deleteTask(decodeURIComponent(task[1] ?? ""));
+        response.writeHead(204).end();
+        return;
+      }
+      const compact = /^\/api\/v1\/tasks\/([^/]+)\/compact$/.exec(url.pathname);
+      if (request.method === "POST" && compact !== null) {
+        sendJson(response, 202, await compactTask(decodeURIComponent(compact[1] ?? "")));
+        return;
+      }
+      const inject = /^\/api\/v1\/tasks\/([^/]+)\/inject-context$/.exec(url.pathname);
+      if (request.method === "POST" && inject !== null) {
+        sendJson(response, 202, await injectContext(
+          decodeURIComponent(inject[1] ?? ""),
+          await readJsonBody(request),
+        ));
         return;
       }
       const events = /^\/api\/v1\/tasks\/([^/]+)\/events$/.exec(url.pathname);
@@ -479,6 +676,16 @@ export async function createDurableAgentRuntime(
         ));
         return;
       }
+      const subagentCancel = /^\/api\/v1\/tasks\/([^/]+)\/runs\/([^/]+)\/subagents\/([^/]+)\/cancel$/.exec(url.pathname);
+      if (request.method === "POST" && subagentCancel !== null) {
+        const taskId = decodeURIComponent(subagentCancel[1] ?? "");
+        const runId = decodeURIComponent(subagentCancel[2] ?? "");
+        const snapshot = await repository.getSnapshot(taskId);
+        if (snapshot === null || !snapshot.runs.some((run) => run.run_id === runId)) {
+          throw new ReferenceError("Run not found");
+        }
+        throw new ReferenceError("Subagent not found");
+      }
       sendJson(response, 404, { detail: "Not Found" });
     } catch (error) {
       if (error instanceof DurableTaskConflictError) {
@@ -491,6 +698,8 @@ export async function createDurableAgentRuntime(
         sendJson(response, 502, { detail: error.message });
       } else if (error instanceof SyntaxError || error instanceof TypeError) {
         sendJson(response, 422, { detail: error.message });
+      } else if (error instanceof RangeError) {
+        sendJson(response, 413, { detail: error.message });
       } else {
         sendJson(response, 500, { detail: "Task runtime failed" });
       }
@@ -648,6 +857,10 @@ export async function createDurableAgentRuntime(
     repository,
     handle(request, response) {
       const requestPath = pathname(request);
+      if (requestPath === "/api/v1/import/tasks") {
+        void dispatch(request, response);
+        return true;
+      }
       if (requestPath === "/api/v1/tasks") {
         const url = new URL(request.url ?? "/api/v1/tasks", "http://application-host");
         if (request.method === "GET" && url.searchParams.has("cursor")) return false;

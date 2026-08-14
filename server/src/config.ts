@@ -21,9 +21,9 @@ export interface HostConfig {
 
 export const DEFAULT_HOST_CONFIG = {
   APP_HOST: "ts",
-  AGENT_RUNTIME: "legacy",
-  DATASET_CORE: "python",
-  PI_EXPERIMENTAL: "1",
+  AGENT_RUNTIME: "pi",
+  DATASET_CORE: "ts",
+  PI_EXPERIMENTAL: "0",
   HOST: "127.0.0.1",
   PORT: "5173",
   LEGACY_BACKEND_PORT: "0",
@@ -89,9 +89,8 @@ export function parseFeatureFlags(environment: Environment): FeatureFlags {
   const piExperimental = piExperimentalValue === "1";
 
   const profile = `${appHost}/${agentRuntime}/${datasetCore}/${piExperimentalValue}`;
-  // M2 (Phase 5 completion plan I-01): ts/pi/ts is the opt-in full-TS main
-  // path; ts/legacy/ts stays invalid (legacy Agent + TS Core is not a
-  // supported combination). Default profile unchanged.
+  // Phase 7 makes ts/pi/ts the default product path. Explicit legacy and
+  // Python-core profiles remain valid for one rollback release.
   const validProfiles = new Set([
     "fastapi/legacy/python/0",
     "ts/legacy/python/0",

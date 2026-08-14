@@ -153,6 +153,7 @@ describe("Phase 1F offline vertical slice", () => {
         shutdownTimeoutMs: 10_000,
       }),
       experimentalPi: async ({ target, bridgeSecret }) => {
+        if (target === undefined) throw new Error("legacy target missing");
         experimentalRuntime = await createPhase1ExperimentalRuntime({
           repositoryRoot,
           tasksRoot: path.join(outputRoot!, "tasks"),

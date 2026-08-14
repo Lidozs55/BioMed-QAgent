@@ -26,15 +26,15 @@ def test_root_development_scripts_make_the_typescript_host_the_default() -> None
     )
 
 
-def test_default_host_profile_exposes_only_the_explicit_pi_surface() -> None:
+def test_default_host_profile_uses_pi_and_the_typescript_dataset_core() -> None:
     config = (REPOSITORY_ROOT / "server" / "src" / "config.ts").read_text(
         encoding="utf-8"
     )
 
     assert 'APP_HOST: "ts"' in config
-    assert 'AGENT_RUNTIME: "legacy"' in config
-    assert 'DATASET_CORE: "python"' in config
-    assert 'PI_EXPERIMENTAL: "1"' in config
+    assert 'AGENT_RUNTIME: "pi"' in config
+    assert 'DATASET_CORE: "ts"' in config
+    assert 'PI_EXPERIMENTAL: "0"' in config
 
 
 def test_cross_platform_debug_profile_launcher_is_present() -> None:

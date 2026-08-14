@@ -75,23 +75,23 @@ DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 MODEL_NAME=qwen-plus
 ```
 
-The normal Phase 1 topology is:
+The normal Phase 7 topology is:
 
 ```dotenv
 HOST=127.0.0.1
 PORT=5173
 APP_HOST=ts
-AGENT_RUNTIME=legacy
-DATASET_CORE=python
-PI_EXPERIMENTAL=1
+AGENT_RUNTIME=pi
+DATASET_CORE=ts
+PI_EXPERIMENTAL=0
 LEGACY_BACKEND_PORT=0
 WORKSPACE_DEV_EXEC=0
 ```
 
-`LEGACY_BACKEND_PORT=0` lets the Host allocate an unused private loopback port. This
-avoids treating an unrelated service on a fixed port as the managed backend. The Host
-generates a per-process bridge secret and verifies the new child through the protected
-internal bridge before opening the public listener.
+`LEGACY_BACKEND_PORT=0` is dormant in the default profile. If a legacy Agent,
+Python Core, or experimental Pi rollback profile is selected, it lets the Host allocate
+an unused private loopback port. The Host then generates a per-process bridge secret and
+verifies the new child through the protected internal bridge before opening the public listener.
 
 Do not set `PI_DATASET_BRIDGE_SECRET` for normal managed mode. Set it only when attaching
 to a separately started diagnostic backend, and configure the same non-empty value on

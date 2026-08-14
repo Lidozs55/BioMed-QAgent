@@ -41,6 +41,8 @@ function deferred(): Deferred {
 class ControlledAdapter implements BioMedAgentAdapter {
   readonly gates: Deferred[] = [];
   readonly runs: string[] = [];
+  readonly steering: string[] = [];
+  readonly compactions: string[] = [];
   private cancelled = false;
 
   async createSession(config: BioMedSessionConfig): Promise<BioMedAgentSession> {
@@ -52,6 +54,14 @@ class ControlledAdapter implements BioMedAgentAdapter {
       cancel: async () => {
         this.cancelled = true;
         this.gates.at(-1)?.resolve();
+      },
+      steer: async (text) => {
+        this.steering.push(text);
+      },
+      compact: async () => {
+        const summary = "compacted durable conversation";
+        this.compactions.push(summary);
+        return { summary };
       },
       dispose: async () => undefined,
     };
@@ -264,6 +274,118 @@ describe("durable formal Agent runtime", () => {
     expect(await retry.json()).toEqual(await admitted.json());
     expect(adapter.runs).toEqual(["initial", "next"]);
     adapter.gates[1]?.resolve();
+    await runtime.close();
+  });
+
+  test("maps steer and compaction to Pi, rejects unknown subagents, and deletes terminal tasks", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "biomed-durable-controls-"));
+    roots.push(root);
+    const adapter = new ControlledAdapter();
+    const runtime = await createDurableAgentRuntime({
+      tasksRoot: root,
+      adapter,
+      workspaceFactory: async ({ taskId }) => ({
+        root: path.join(root, taskId),
+        tools: [],
+        dispose: async () => undefined,
+      }),
+    });
+    const server = createServer((request, response) => {
+      if (!runtime.handle(request, response)) response.writeHead(404).end();
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    servers.push(server);
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const accepted = await (await fetch(`${base}/api/v1/tasks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        request_id: "request-controls",
+        input: "initial request",
+        databases: [],
+        mode: "agent",
+      }),
+    })).json() as { task_id: string; run_id: string };
+    await expect.poll(() => adapter.gates.length).toBe(1);
+
+    const steered = await fetch(`${base}/api/v1/tasks/${accepted.task_id}/inject-context`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "focus on TP53", expected_run_id: accepted.run_id }),
+    });
+    expect(steered.status).toBe(202);
+    expect(await steered.json()).toMatchObject({
+      status: "steered",
+      task_id: accepted.task_id,
+      run_id: accepted.run_id,
+    });
+    expect(adapter.steering[0]).toContain("focus on TP53");
+
+    const compacted = await fetch(`${base}/api/v1/tasks/${accepted.task_id}/compact`, {
+      method: "POST",
+    });
+    expect(compacted.status).toBe(202);
+    expect(adapter.compactions).toEqual(["compacted durable conversation"]);
+    const events = await runtime.repository.listEvents(accepted.task_id, 0);
+    expect(events.at(-1)?.payload).toMatchObject({
+      type: "conversation_compacted",
+      covered_through_run_id: accepted.run_id,
+      summary_digest: expect.stringMatching(/^[0-9a-f]{64}$/),
+    });
+
+    const subagent = await fetch(
+      `${base}/api/v1/tasks/${accepted.task_id}/runs/${accepted.run_id}/subagents/missing/cancel`,
+      { method: "POST" },
+    );
+    expect(subagent.status).toBe(404);
+
+    adapter.gates[0]?.resolve();
+    await expect.poll(async () => (
+      await runtime.repository.getSnapshot(accepted.task_id)
+    )?.task.status).toBe("completed");
+    const deleted = await fetch(`${base}/api/v1/tasks/${accepted.task_id}`, {
+      method: "DELETE",
+    });
+    expect(deleted.status).toBe(204);
+    expect((await fetch(`${base}/api/v1/tasks/${accepted.task_id}`)).status).toBe(404);
+    await runtime.close();
+  });
+
+  test("admits multipart imports only after placing uploaded files in source_assets", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "biomed-durable-import-"));
+    roots.push(root);
+    const adapter = new ControlledAdapter();
+    const runtime = await createDurableAgentRuntime({
+      tasksRoot: root,
+      adapter,
+      workspaceFactory: async ({ taskId }) => ({
+        root: path.join(root, taskId),
+        tools: [],
+        dispose: async () => undefined,
+      }),
+    });
+    const server = createServer((request, response) => {
+      if (!runtime.handle(request, response)) response.writeHead(404).end();
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    servers.push(server);
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const form = new FormData();
+    form.set("request_id", "request-import");
+    form.set("input", "Import this expression table");
+    form.append("files", new File(["gene,value\nTP53,1\n"], "expression.csv", { type: "text/csv" }));
+
+    const response = await fetch(`${base}/api/v1/import/tasks`, { method: "POST", body: form });
+    expect(response.status).toBe(202);
+    const accepted = await response.json() as { task_id: string };
+    await expect.poll(() => adapter.runs.length).toBe(1);
+    expect(adapter.runs[0]).toContain("[uploaded_files (1): expression.csv]");
+    expect(await import("node:fs/promises").then(({ readFile }) => (
+      readFile(path.join(root, accepted.task_id, "source_assets", "expression.csv"), "utf8")
+    ))).toBe("gene,value\nTP53,1\n");
+    adapter.gates[0]?.resolve();
     await runtime.close();
   });
 

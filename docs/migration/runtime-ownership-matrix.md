@@ -1,5 +1,8 @@
 # Phase 1 Runtime Ownership Matrix
 
+> Historical Phase 1 inventory. For the Phase 7 default ownership, see
+> [phase7-frontend-ts-host.md](phase7-frontend-ts-host.md).
+
 This matrix inventories the process resources composed by `backend/app/main.py`
 and the two transition resources named by the Phase 0/1 plan. It is an operational
 record under [ARCHITECTURE.md §14 and §18](../ARCHITECTURE.md), not a replacement

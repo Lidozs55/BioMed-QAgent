@@ -386,7 +386,7 @@ export function createTsCoreOperationRunner(options: {
   };
 }
 
-/** The opt-in TypeScript Dataset Core (M2 profile DATASET_CORE=ts). */
+/** The TypeScript Dataset Core (default since Phase 7; opt-in when introduced in M2). */
 export class TypeScriptDatasetCore {
   readonly taskRoot: string;
   private readonly options: TypeScriptDatasetCoreOptions;
