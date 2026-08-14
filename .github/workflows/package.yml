@@ -6,6 +6,9 @@ on:
       - 'v*'
   workflow_dispatch:
 
+env:
+  BUNDLE_NAME: BioMed-QAgent-${{ github.ref_name | replace('/', '-') }}-bundle
+
 jobs:
   build-frontend:
     name: Build Frontend
@@ -112,7 +115,7 @@ jobs:
       - name: Upload bundle
         uses: actions/upload-artifact@v4
         with:
-          name: BioMed-QAgent-${{ github.ref_name }}-bundle
+          name: ${{ env.BUNDLE_NAME }}
           path: ./BioMed-QAgent-bundle.zip
 
   release-smoke:
@@ -123,7 +126,7 @@ jobs:
       - name: Download bundle artifact
         uses: actions/download-artifact@v4
         with:
-          name: BioMed-QAgent-${{ github.ref_name }}-bundle
+          name: ${{ env.BUNDLE_NAME }}
 
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
@@ -186,7 +189,7 @@ jobs:
       - name: Download bundle artifact
         uses: actions/download-artifact@v4
         with:
-          name: BioMed-QAgent-${{ github.ref_name }}-bundle
+          name: ${{ env.BUNDLE_NAME }}
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
