@@ -85,7 +85,7 @@ function parseAdapterBatch(options: {
   adapterId: string;
   bindingId: string;
   outputDir: string;
-}): DataBatch {
+}): Promise<DataBatch> {
   const adapter = getAdapter(options.adapterId);
   const asset = sourceAssetFromFixture(options.fixturesRoot, options.fixture);
   return adapter.parse(asset, join(options.fixturesRoot, options.fixture), {
@@ -96,7 +96,7 @@ function parseAdapterBatch(options: {
   });
 }
 
-function canonical(
+async function canonical(
   options: {
     fixturesRoot: string;
     fixture: string;
@@ -104,8 +104,8 @@ function canonical(
     bindingId: string;
     outputDir: string;
   },
-): CanonicalizationResult {
-  const batch = parseAdapterBatch(options);
+): Promise<CanonicalizationResult> {
+  const batch = await parseAdapterBatch(options);
   return canonicalize({
     batch,
     schema: buildGeneExpressionSchema(),
@@ -134,10 +134,10 @@ export function scratchOutputRoot(prefix = "integrator-parity-"): string {
 }
 
 /** Mirror ``backend/tests/test_dataset_integrator.py``. */
-export function checkIntegratorParity(options: {
+export async function checkIntegratorParity(options: {
   fixturesRoot: string;
   outputRoot: string;
-}): string[] {
+}): Promise<string[]> {
   const issues: string[] = [];
   const fixturesRoot = options.fixturesRoot;
   const outputRoot = options.outputRoot;
@@ -146,14 +146,14 @@ export function checkIntegratorParity(options: {
   {
     const out = join(outputRoot, "single");
     mkdirSync(out, { recursive: true });
-    const gdc = canonical({
+    const gdc = await canonical({
       fixturesRoot,
       fixture: "gdc/gdc_expression.tsv",
       adapterId: "gdc.expression.v1",
       bindingId: "binding_gdc",
       outputDir: out,
     });
-    const result = integrate(integrateOptions({ outputDir: out, results: [gdc] }));
+    const result = await integrate(integrateOptions({ outputDir: out, results: [gdc] }));
     check(issues, result.rowCount === 4, "single source: row_count must be 4");
     check(issues, result.dedupCount === 0, "single source: dedup_count must be 0");
     check(issues, result.conflictCount === 0, "single source: conflict_count must be 0");
@@ -165,21 +165,21 @@ export function checkIntegratorParity(options: {
   {
     const out = join(outputRoot, "mirror");
     mkdirSync(out, { recursive: true });
-    const a = canonical({
+    const a = await canonical({
       fixturesRoot,
       fixture: "gdc/gdc_expression.tsv",
       adapterId: "gdc.expression.v1",
       bindingId: "binding_a",
       outputDir: out,
     });
-    const b = canonical({
+    const b = await canonical({
       fixturesRoot,
       fixture: "gdc/gdc_expression.tsv",
       adapterId: "gdc.expression.v1",
       bindingId: "binding_b",
       outputDir: out,
     });
-    const result = integrate(integrateOptions({ outputDir: out, results: [a, b] }));
+    const result = await integrate(integrateOptions({ outputDir: out, results: [a, b] }));
     check(issues, result.rowCount === 4, "mirror dedup: row_count must be 4");
     check(issues, result.dedupCount === 4, "mirror dedup: dedup_count must be 4");
     check(issues, result.conflictCount === 0, "mirror dedup: conflict_count must be 0");
@@ -191,21 +191,21 @@ export function checkIntegratorParity(options: {
   {
     const out = join(outputRoot, "conflict");
     mkdirSync(out, { recursive: true });
-    const gdc = canonical({
+    const gdc = await canonical({
       fixturesRoot,
       fixture: "gdc/gdc_expression.tsv",
       adapterId: "gdc.expression.v1",
       bindingId: "binding_gdc",
       outputDir: out,
     });
-    const xena = canonical({
+    const xena = await canonical({
       fixturesRoot,
       fixture: "ncbi/gse178352/xena_matrix.tsv",
       adapterId: "xena.matrix.v1",
       bindingId: "binding_xena",
       outputDir: out,
     });
-    const result = integrate(integrateOptions({ outputDir: out, results: [gdc, xena] }));
+    const result = await integrate(integrateOptions({ outputDir: out, results: [gdc, xena] }));
     check(issues, result.rowCount === 4, "conflict audit: row_count must be 4");
     check(issues, result.dedupCount === 3, "conflict audit: dedup_count must be 3");
     check(issues, result.conflictCount === 1, "conflict audit: conflict_count must be 1");
@@ -227,14 +227,14 @@ export function checkIntegratorParity(options: {
   {
     const out = join(outputRoot, "numeric-equiv");
     mkdirSync(out, { recursive: true });
-    const a = canonical({
+    const a = await canonical({
       fixturesRoot,
       fixture: "gdc/gdc_expression.tsv",
       adapterId: "gdc.expression.v1",
       bindingId: "binding_a",
       outputDir: out,
     });
-    const b = canonical({
+    const b = await canonical({
       fixturesRoot,
       fixture: "gdc/gdc_expression.tsv",
       adapterId: "gdc.expression.v1",
@@ -248,7 +248,7 @@ export function checkIntegratorParity(options: {
       }
     }
     writeCsvDictRows(b.canonicalPath, rows);
-    const result = integrate(integrateOptions({ outputDir: out, results: [a, b] }));
+    const result = await integrate(integrateOptions({ outputDir: out, results: [a, b] }));
     check(issues, result.dedupCount === 4, "numeric equiv: dedup_count must be 4");
     check(issues, result.conflictCount === 0, "numeric equiv: conflict_count must be 0");
   }
@@ -257,14 +257,14 @@ export function checkIntegratorParity(options: {
   {
     const out = join(outputRoot, "identity");
     mkdirSync(out, { recursive: true });
-    const a = canonical({
+    const a = await canonical({
       fixturesRoot,
       fixture: "gdc/gdc_expression.tsv",
       adapterId: "gdc.expression.v1",
       bindingId: "binding_a",
       outputDir: out,
     });
-    const b = canonical({
+    const b = await canonical({
       fixturesRoot,
       fixture: "gdc/gdc_expression.tsv",
       adapterId: "gdc.expression.v1",
@@ -276,7 +276,7 @@ export function checkIntegratorParity(options: {
       row["measurement_type"] = "alternate_measurement";
     }
     writeCsvDictRows(b.canonicalPath, rows);
-    const result = integrate(integrateOptions({ outputDir: out, results: [a, b] }));
+    const result = await integrate(integrateOptions({ outputDir: out, results: [a, b] }));
     check(issues, result.rowCount === 8, "identity: row_count must be 8");
     check(issues, result.dedupCount === 0, "identity: dedup_count must be 0");
   }
@@ -285,14 +285,14 @@ export function checkIntegratorParity(options: {
   {
     const out = join(outputRoot, "nan");
     mkdirSync(out, { recursive: true });
-    const a = canonical({
+    const a = await canonical({
       fixturesRoot,
       fixture: "gdc/gdc_expression.tsv",
       adapterId: "gdc.expression.v1",
       bindingId: "binding_a",
       outputDir: out,
     });
-    const b = canonical({
+    const b = await canonical({
       fixturesRoot,
       fixture: "gdc/gdc_expression.tsv",
       adapterId: "gdc.expression.v1",
@@ -313,7 +313,7 @@ export function checkIntegratorParity(options: {
     }
     writeCsvDictRows(a.canonicalPath, rowsA);
     writeCsvDictRows(b.canonicalPath, rowsB);
-    const result = integrate(integrateOptions({ outputDir: out, results: [a, b] }));
+    const result = await integrate(integrateOptions({ outputDir: out, results: [a, b] }));
     check(issues, result.dedupCount === 4, "nan mirror: dedup_count must be 4");
     check(issues, result.conflictCount === 0, "nan mirror: conflict_count must be 0");
   }
@@ -322,7 +322,7 @@ export function checkIntegratorParity(options: {
   {
     const out = join(outputRoot, "strategy");
     mkdirSync(out, { recursive: true });
-    const gdc = canonical({
+    const gdc = await canonical({
       fixturesRoot,
       fixture: "gdc/gdc_expression.tsv",
       adapterId: "gdc.expression.v1",
@@ -331,7 +331,7 @@ export function checkIntegratorParity(options: {
     });
     let threw = false;
     try {
-      integrate(integrateOptions({ outputDir: out, results: [gdc], mergeStrategy: "agent_injected_strategy" }));
+      await integrate(integrateOptions({ outputDir: out, results: [gdc], mergeStrategy: "agent_injected_strategy" }));
     } catch (error) {
       threw = error instanceof IntegratorError && /unsupported merge strategy/.test(String(error.message));
     }
@@ -344,7 +344,7 @@ export function checkIntegratorParity(options: {
     mkdirSync(out, { recursive: true });
     let threw = false;
     try {
-      integrate(integrateOptions({ outputDir: out, results: [] }));
+      await integrate(integrateOptions({ outputDir: out, results: [] }));
     } catch (error) {
       threw = error instanceof IntegratorError && /zero sources/.test(String(error.message));
     }

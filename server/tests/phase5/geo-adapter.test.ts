@@ -73,7 +73,7 @@ function assetFor(sourcePath: string, sourceId = "src_geo"): SourceAsset {
   };
 }
 
-function runAdapter(
+async function runAdapter(
   sourcePath: string,
   parameters: AdapterParams,
   outputDir: string,
@@ -120,10 +120,10 @@ describe("adapter registry", () => {
     expect(adapter.source_database).toBe("geo");
   });
 
-  test("parse without AdapterParams is rejected", () => {
+  test("parse without AdapterParams is rejected", async () => {
     const outputDir = scratchDir();
     try {
-      expect(() =>
+      await expect(
         geoExpressionAdapter.parse(
           assetFor(fixturePath("tximport_counts_slice.tsv")),
           fixturePath("tximport_counts_slice.tsv"),
@@ -134,7 +134,7 @@ describe("adapter registry", () => {
             outputDir,
           },
         ),
-      ).toThrow(AdapterError);
+      ).rejects.toThrow(AdapterError);
       expect(() => {
         // none of the batch files may survive a rejected parse
         return readFileSync(path.join(outputDir, "batches", "binding_geo.csv"));
@@ -146,10 +146,10 @@ describe("adapter registry", () => {
 });
 
 describe("series matrix golden parity", () => {
-  test("standard microarray series matrix matches the Python golden", () => {
+  test("standard microarray series matrix matches the Python golden", async () => {
     const outputDir = scratchDir();
     try {
-      const batch = runAdapter(
+      const batch = await runAdapter(
         fixturePath("geo_series_matrix.txt.gz"),
         params(),
         outputDir,
@@ -187,16 +187,16 @@ describe("series matrix golden parity", () => {
     }
   });
 
-  test("metadata-only series matrix fails closed with no table block", () => {
+  test("metadata-only series matrix fails closed with no table block", async () => {
     const outputDir = scratchDir();
     try {
-      expect(() =>
+      await expect(
         runAdapter(
           fixturePath("geo_metadata_only_matrix.txt.gz"),
           params(),
           outputDir,
         ),
-      ).toThrow(/series_matrix_table_begin/);
+      ).rejects.toThrow(/series_matrix_table_begin/);
       expect(() =>
         readFileSync(path.join(outputDir, "batches", "binding_geo.csv")),
       ).toThrow();
@@ -207,10 +207,10 @@ describe("series matrix golden parity", () => {
 });
 
 describe("tximport counts golden parity", () => {
-  test("real tximport slice matches the Python golden", () => {
+  test("real tximport slice matches the Python golden", async () => {
     const outputDir = scratchDir();
     try {
-      const batch = runAdapter(
+      const batch = await runAdapter(
         fixturePath("tximport_counts_slice.tsv"),
         params({
           format: "tximport_counts",
@@ -245,18 +245,18 @@ describe("tximport counts golden parity", () => {
     }
   });
 
-  test("missing counts columns fail closed", () => {
+  test("missing counts columns fail closed", async () => {
     const outputDir = scratchDir();
     try {
       const badCounts = path.join(outputDir, "bad_counts.tsv");
       writeFixtureFile(badCounts, "gene\tS1\tS2\nENSG00000141510\t1\t2\n");
-      expect(() =>
+      await expect(
         runAdapter(
           badCounts,
           params({ format: "tximport_counts" }),
           outputDir,
         ),
-      ).toThrow(/counts\./);
+      ).rejects.toThrow(/counts\./);
     } finally {
       rmSync(outputDir, { recursive: true, force: true });
     }
@@ -264,10 +264,10 @@ describe("tximport counts golden parity", () => {
 });
 
 describe("supplementary matrix golden parity", () => {
-  test("comma supplementary matrix matches the Python golden", () => {
+  test("comma supplementary matrix matches the Python golden", async () => {
     const outputDir = scratchDir();
     try {
-      const batch = runAdapter(
+      const batch = await runAdapter(
         fixturePath("geo_supplementary_counts.csv"),
         params({
           format: "supplementary_matrix",
@@ -297,12 +297,12 @@ describe("supplementary matrix golden parity", () => {
     }
   });
 
-  test("explicit delimiter and scale-only-from-parameters", () => {
+  test("explicit delimiter and scale-only-from-parameters", async () => {
     const outputDir = scratchDir();
     try {
       const semicolon = path.join(outputDir, "semicolon.csv");
       writeFixtureFile(semicolon, "probe_id;S1;S2\nAFFX-BioB-5;1.5;2.0\n");
-      const batch = runAdapter(
+      const batch = await runAdapter(
         semicolon,
         params({
           format: "supplementary_matrix",
@@ -318,7 +318,7 @@ describe("supplementary matrix golden parity", () => {
       const csvPath = fixturePath("geo_supplementary_counts.csv");
       const log2Dir = path.join(outputDir, "log2");
       const linearDir = path.join(outputDir, "linear");
-      const log2Batch = runAdapter(
+      const log2Batch = await runAdapter(
         csvPath,
         params({
           format: "supplementary_matrix",
@@ -327,7 +327,7 @@ describe("supplementary matrix golden parity", () => {
         }),
         log2Dir,
       );
-      const linearBatch = runAdapter(
+      const linearBatch = await runAdapter(
         csvPath,
         params({
           format: "supplementary_matrix",
@@ -354,13 +354,13 @@ describe("supplementary matrix golden parity", () => {
 });
 
 describe("fail-closed structure checks", () => {
-  test("truncated gzip fails closed and removes partial outputs", () => {
+  test("truncated gzip fails closed and removes partial outputs", async () => {
     const outputDir = scratchDir();
     try {
       const full = readFileSync(fixturePath("geo_series_matrix.txt.gz"));
       const truncated = path.join(outputDir, "truncated.txt.gz");
       writeFixtureFile(truncated, full.subarray(0, Math.floor(full.length / 2)));
-      expect(() => runAdapter(truncated, params(), outputDir)).toThrow(
+      await expect(runAdapter(truncated, params(), outputDir)).rejects.toThrow(
         /could not read|truncated or unreadable input/,
       );
       expect(() =>
@@ -376,7 +376,7 @@ describe("fail-closed structure checks", () => {
     }
   });
 
-  test("checksum mismatch fails closed before parsing", () => {
+  test("checksum mismatch fails closed before parsing", async () => {
     const outputDir = scratchDir();
     try {
       const sourcePath = fixturePath("geo_series_matrix.txt.gz");
@@ -385,7 +385,7 @@ describe("fail-closed structure checks", () => {
         asset_id: assetIdFromSha256("0".repeat(64)),
         sha256: "0".repeat(64),
       };
-      expect(() =>
+      await expect(
         geoExpressionAdapter.parse(tampered, sourcePath, {
           buildId: "build_geo",
           bindingId: "binding_geo",
@@ -393,14 +393,14 @@ describe("fail-closed structure checks", () => {
           outputDir,
           parameters: params(),
         }),
-      ).toThrow(/checksum/);
+      ).rejects.toThrow(/checksum/);
       expect(() => readFileSync(path.join(outputDir, "batches"))).toThrow();
     } finally {
       rmSync(outputDir, { recursive: true, force: true });
     }
   });
 
-  test("duplicate sample headers fail closed", () => {
+  test("duplicate sample headers fail closed", async () => {
     const outputDir = scratchDir();
     try {
       const dup = path.join(outputDir, "dup.txt.gz");
@@ -411,13 +411,13 @@ describe("fail-closed structure checks", () => {
             '"AFFX-BioB-5"\t1.5\t2.0\n!series_matrix_table_end\n',
         ),
       );
-      expect(() => runAdapter(dup, params(), outputDir)).toThrow(/unique/);
+      await expect(runAdapter(dup, params(), outputDir)).rejects.toThrow(/unique/);
     } finally {
       rmSync(outputDir, { recursive: true, force: true });
     }
   });
 
-  test("column-width mismatch fails closed", () => {
+  test("column-width mismatch fails closed", async () => {
     const outputDir = scratchDir();
     try {
       const width = path.join(outputDir, "width.txt.gz");
@@ -428,13 +428,13 @@ describe("fail-closed structure checks", () => {
             '"AFFX-BioB-5"\t1.5\n!series_matrix_table_end\n',
         ),
       );
-      expect(() => runAdapter(width, params(), outputDir)).toThrow(/field count/);
+      await expect(runAdapter(width, params(), outputDir)).rejects.toThrow(/field count/);
     } finally {
       rmSync(outputDir, { recursive: true, force: true });
     }
   });
 
-  test("non-finite cells are audited, not fatal", () => {
+  test("non-finite cells are audited, not fatal", async () => {
     const outputDir = scratchDir();
     try {
       const nan = path.join(outputDir, "nan.txt.gz");
@@ -446,7 +446,7 @@ describe("fail-closed structure checks", () => {
             '"ENSG00000141510"\t5.0\t6.0\n!series_matrix_table_end\n',
         ),
       );
-      const batch = runAdapter(nan, params(), outputDir);
+      const batch = await runAdapter(nan, params(), outputDir);
       expect(batch.statistics.row_count).toBe(4);
       expect(batch.statistics.rejected_count).toBe(2);
       const rejected = readFileSync(
@@ -461,7 +461,7 @@ describe("fail-closed structure checks", () => {
     }
   });
 
-  test("zero valid rows raise a typed EmptySourceError", () => {
+  test("zero valid rows raise a typed EmptySourceError", async () => {
     const outputDir = scratchDir();
     try {
       const empty = path.join(outputDir, "empty.txt.gz");
@@ -472,9 +472,9 @@ describe("fail-closed structure checks", () => {
             '"AFFX-BioB-5"\tNA\tNA\n!series_matrix_table_end\n',
         ),
       );
-      expect(() => runAdapter(empty, params(), outputDir)).toThrow(EmptySourceError);
+      await expect(runAdapter(empty, params(), outputDir)).rejects.toThrow(EmptySourceError);
       try {
-        runAdapter(empty, params(), outputDir);
+        await runAdapter(empty, params(), outputDir);
       } catch (error) {
         expect((error as EmptySourceError).reason_code).toBe("no_primary_data");
       }
@@ -483,7 +483,7 @@ describe("fail-closed structure checks", () => {
     }
   });
 
-  test("header-only matrix raises EmptySourceError", () => {
+  test("header-only matrix raises EmptySourceError", async () => {
     const outputDir = scratchDir();
     try {
       // Header + no data rows (Python: "series matrix contains no data rows").
@@ -495,7 +495,7 @@ describe("fail-closed structure checks", () => {
             "!series_matrix_table_end\n",
         ),
       );
-      expect(() => runAdapter(headerOnly, params(), outputDir)).toThrow(
+      await expect(runAdapter(headerOnly, params(), outputDir)).rejects.toThrow(
         /contains no data rows/,
       );
       // Table block without any header line (Python: "header-only").
@@ -506,7 +506,7 @@ describe("fail-closed structure checks", () => {
           "!series_matrix_table_begin\n!series_matrix_table_end\n",
         ),
       );
-      expect(() => runAdapter(emptyBlock, params(), outputDir)).toThrow(
+      await expect(runAdapter(emptyBlock, params(), outputDir)).rejects.toThrow(
         /header-only/,
       );
     } finally {
@@ -516,7 +516,7 @@ describe("fail-closed structure checks", () => {
 });
 
 describe("platform evidence", () => {
-  test("multi-GPL evidence is recorded per sample", () => {
+  test("multi-GPL evidence is recorded per sample", async () => {
     const outputDir = scratchDir();
     try {
       const multi = path.join(outputDir, "multi_gpl.txt.gz");
@@ -528,7 +528,7 @@ describe("platform evidence", () => {
             '"PROBE1"\t1.5\t2.0\n!series_matrix_table_end\n',
         ),
       );
-      const batch = runAdapter(multi, params(), outputDir);
+      const batch = await runAdapter(multi, params(), outputDir);
       expect(batch.statistics.platform_ids).toEqual(["GPL570", "GPL96"]);
       expect(batch.statistics.sample_platform_ids).toEqual({
         GSM1: "GPL570",
@@ -539,7 +539,7 @@ describe("platform evidence", () => {
     }
   });
 
-  test("declared platform_ids conflicting with sample evidence fail closed", () => {
+  test("declared platform_ids conflicting with sample evidence fail closed", async () => {
     const outputDir = scratchDir();
     try {
       const mismatch = path.join(outputDir, "mismatch.txt.gz");
@@ -551,15 +551,15 @@ describe("platform evidence", () => {
             '"PROBE1"\t1.5\t2.0\n!series_matrix_table_end\n',
         ),
       );
-      expect(() =>
+      await expect(
         runAdapter(mismatch, params({ platform_ids: ["GPL570"] }), outputDir),
-      ).toThrow(/do not match/);
+      ).rejects.toThrow(/do not match/);
     } finally {
       rmSync(outputDir, { recursive: true, force: true });
     }
   });
 
-  test("incomplete sample platform evidence fails closed", () => {
+  test("incomplete sample platform evidence fails closed", async () => {
     const outputDir = scratchDir();
     try {
       const incomplete = path.join(outputDir, "incomplete.txt.gz");
@@ -571,7 +571,7 @@ describe("platform evidence", () => {
             '"PROBE1"\t1.5\t2.0\n!series_matrix_table_end\n',
         ),
       );
-      expect(() => runAdapter(incomplete, params(), outputDir)).toThrow(
+      await expect(runAdapter(incomplete, params(), outputDir)).rejects.toThrow(
         /cover every sample/,
       );
     } finally {
@@ -583,7 +583,7 @@ describe("platform evidence", () => {
 describe("explicit SOFT metadata (Python metadata_path parity)", () => {
   const TXIMPORT = "counts.S1\tcounts.S2\nENSG00000141510\t10\t20\nENSG00000000003\t30\t40\n";
 
-  test("matching SOFT metadata publishes the sample side table", () => {
+  test("matching SOFT metadata publishes the sample side table", async () => {
     const outputDir = scratchDir();
     try {
       const counts = path.join(outputDir, "counts.tsv");
@@ -594,7 +594,7 @@ describe("explicit SOFT metadata (Python metadata_path parity)", () => {
         "^SAMPLE = GSM1\n!Sample_description = Sample S1\n" +
           "^SAMPLE = GSM2\n!Sample_description = Sample S2\n",
       );
-      const batch = runAdapter(
+      const batch = await runAdapter(
         counts,
         params({
           format: "tximport_counts",
@@ -626,14 +626,14 @@ describe("explicit SOFT metadata (Python metadata_path parity)", () => {
     }
   });
 
-  test("empty SOFT metadata fails closed", () => {
+  test("empty SOFT metadata fails closed", async () => {
     const outputDir = scratchDir();
     try {
       const counts = path.join(outputDir, "counts.tsv");
       writeFixtureFile(counts, TXIMPORT);
       const soft = path.join(outputDir, "empty.soft");
       writeFixtureFile(soft, "^SERIES = GSE1\n");
-      expect(() =>
+      await expect(
         runAdapter(
           counts,
           params({
@@ -644,20 +644,20 @@ describe("explicit SOFT metadata (Python metadata_path parity)", () => {
           outputDir,
           { metadataPath: soft },
         ),
-      ).toThrow(/contains no SAMPLE records/);
+      ).rejects.toThrow(/contains no SAMPLE records/);
     } finally {
       rmSync(outputDir, { recursive: true, force: true });
     }
   });
 
-  test("unrelated SOFT metadata fails closed with both id sets", () => {
+  test("unrelated SOFT metadata fails closed with both id sets", async () => {
     const outputDir = scratchDir();
     try {
       const counts = path.join(outputDir, "counts.tsv");
       writeFixtureFile(counts, TXIMPORT);
       const soft = path.join(outputDir, "unrelated.soft");
       writeFixtureFile(soft, "^SAMPLE = GSM999\n!Sample_title = unrelated\n");
-      expect(() =>
+      await expect(
         runAdapter(
           counts,
           params({
@@ -668,7 +668,7 @@ describe("explicit SOFT metadata (Python metadata_path parity)", () => {
           outputDir,
           { metadataPath: soft },
         ),
-      ).toThrow(/do not match expression sample IDs/);
+      ).rejects.toThrow(/do not match expression sample IDs/);
     } finally {
       rmSync(outputDir, { recursive: true, force: true });
     }
@@ -676,7 +676,7 @@ describe("explicit SOFT metadata (Python metadata_path parity)", () => {
 });
 
 describe("mixed valid/invalid bindings", () => {
-  test("one binding failing does not disturb another binding's outputs", () => {
+  test("one binding failing does not disturb another binding's outputs", async () => {
     const outputDir = scratchDir();
     try {
       // Binding A: all-nan matrix -> EmptySourceError (no_primary_data).
@@ -688,7 +688,7 @@ describe("mixed valid/invalid bindings", () => {
             '"AFFX-BioB-5"\tNA\tNA\n!series_matrix_table_end\n',
         ),
       );
-      expect(() => runAdapter(nan, params(), outputDir)).toThrow(
+      await expect(runAdapter(nan, params(), outputDir)).rejects.toThrow(
         /contains no valid expression rows/,
       );
       // Binding B: valid matrix in the same output dir still parses.
@@ -700,7 +700,7 @@ describe("mixed valid/invalid bindings", () => {
             '"PROBE1"\t1.5\t2.0\n!series_matrix_table_end\n',
         ),
       );
-      const batch = runAdapter(valid, params(), outputDir);
+      const batch = await runAdapter(valid, params(), outputDir);
       expect(batch.statistics.row_count).toBe(2);
       expect(readFileSync(path.join(outputDir, "batches", "binding_geo.csv"), "utf8")).toContain(
         "PROBE1",

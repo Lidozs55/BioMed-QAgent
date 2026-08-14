@@ -238,7 +238,7 @@ function parseAdapterBatch(options: {
   fixture: string;
   adapterId: string;
   outputDir: string;
-}): DataBatch {
+}): Promise<DataBatch> {
   const adapter = getAdapter(options.adapterId);
   const asset = sourceAssetFromFixture(options.fixturesRoot, options.fixture);
   return adapter.parse(asset, join(options.fixturesRoot, options.fixture), {
@@ -248,7 +248,7 @@ function parseAdapterBatch(options: {
     outputDir: options.outputDir,
   });
 }
-function runCanonicalize(options: {
+async function runCanonicalize(options: {
   batch: DataBatch;
   outputDir: string;
   schema?: DatasetSchema;
@@ -256,7 +256,7 @@ function runCanonicalize(options: {
   geneSymbolMap?: Readonly<Record<string, string>> | ReadonlyMap<string, string>;
   probeMap?: Readonly<Record<string, string>> | ReadonlyMap<string, string>;
   probeTargetNamespace?: string;
-}): CanonicalizationResult {
+}): Promise<CanonicalizationResult> {
   return canonicalize({
     batch: options.batch,
     schema: options.schema ?? buildGeneExpressionSchema(),
@@ -430,10 +430,10 @@ export function checkCanonicalizerContractParity(): string[] {
   return issues;
 }
 /** Fixture-driven GDC/Xena canonicalization (test_dataset_canonicalizer.py). */
-export function checkCanonicalizerFixtureParity(options: {
+export async function checkCanonicalizerFixtureParity(options: {
   fixturesRoot: string;
   outputRoot: string;
-}): string[] {
+}): Promise<string[]> {
   const issues: string[] = [];
   rmSync(options.outputRoot, { recursive: true, force: true });
   mkdirSync(options.outputRoot, { recursive: true });
@@ -441,13 +441,13 @@ export function checkCanonicalizerFixtureParity(options: {
 
   // test_canonical_matrix_rows.
   const matrixOut = join(options.outputRoot, "gdc_matrix");
-  const matrixBatch = parseAdapterBatch({
+  const matrixBatch = await parseAdapterBatch({
     fixturesRoot: fixtures,
     fixture: "gdc/gdc_expression.tsv",
     adapterId: "gdc.expression.v1",
     outputDir: matrixOut,
   });
-  const matrixResult = runCanonicalize({ batch: matrixBatch, outputDir: matrixOut });
+  const matrixResult = await runCanonicalize({ batch: matrixBatch, outputDir: matrixOut });
   check(issues, matrixResult.rowCount === 4, "matrix row_count 4");
   check(issues, matrixResult.rejectedCount === 0, "matrix rejected_count 0");
   checkDeepEqual(issues, matrixResult.namespaces, ["gene_symbol"], "matrix namespaces");
@@ -464,13 +464,13 @@ export function checkCanonicalizerFixtureParity(options: {
 
   // test_canonical_star_ensembl_normalization.
   const starOut = join(options.outputRoot, "gdc_star");
-  const starBatch = parseAdapterBatch({
+  const starBatch = await parseAdapterBatch({
     fixturesRoot: fixtures,
     fixture: "gdc/gdc_star_counts.tsv",
     adapterId: "gdc.expression.v1",
     outputDir: starOut,
   });
-  const starResult = runCanonicalize({ batch: starBatch, outputDir: starOut });
+  const starResult = await runCanonicalize({ batch: starBatch, outputDir: starOut });
   check(issues, starResult.rowCount === 2, "star row_count 2");
   check(issues, starResult.rejectedCount === 0, "star rejected_count 0");
   checkDeepEqual(issues, starResult.namespaces, ["ensembl_gene"], "star namespaces");
@@ -503,13 +503,13 @@ export function checkCanonicalizerFixtureParity(options: {
 
   // test_canonical_batch_metadata (Xena).
   const xenaOut = join(options.outputRoot, "xena");
-  const xenaBatch = parseAdapterBatch({
+  const xenaBatch = await parseAdapterBatch({
     fixturesRoot: fixtures,
     fixture: "ncbi/gse178352/xena_matrix.tsv",
     adapterId: "xena.matrix.v1",
     outputDir: xenaOut,
   });
-  const xenaResult = runCanonicalize({ batch: xenaBatch, outputDir: xenaOut });
+  const xenaResult = await runCanonicalize({ batch: xenaBatch, outputDir: xenaOut });
   check(issues, xenaResult.batch.schema_ref === "gene_expression.long.v1", "xena schema_ref");
   check(issues, xenaResult.batch.row_count === 4, "xena row_count 4");
   check(issues, xenaResult.batch.column_count === schemaColumns.length, "xena column_count = 22");
@@ -522,14 +522,14 @@ export function checkCanonicalizerFixtureParity(options: {
   );
   // test_canonical_is_deterministic.
   const detOut = join(options.outputRoot, "deterministic");
-  const detBatch = parseAdapterBatch({
+  const detBatch = await parseAdapterBatch({
     fixturesRoot: fixtures,
     fixture: "gdc/gdc_expression.tsv",
     adapterId: "gdc.expression.v1",
     outputDir: detOut,
   });
-  const first = runCanonicalize({ batch: detBatch, outputDir: detOut });
-  const second = runCanonicalize({ batch: detBatch, outputDir: detOut });
+  const first = await runCanonicalize({ batch: detBatch, outputDir: detOut });
+  const second = await runCanonicalize({ batch: detBatch, outputDir: detOut });
   check(
     issues,
     deepEqual(readFileSync(first.canonicalPath), readFileSync(second.canonicalPath)),
@@ -550,13 +550,13 @@ export function checkCanonicalizerFixtureParity(options: {
     allowed_value_scales: expressionNormalizationV1().allowed_value_scales,
   });
   const restrictedOut = join(options.outputRoot, "restricted_unit");
-  const restrictedBatch = parseAdapterBatch({
+  const restrictedBatch = await parseAdapterBatch({
     fixturesRoot: fixtures,
     fixture: "gdc/gdc_star_counts.tsv",
     adapterId: "gdc.expression.v1",
     outputDir: restrictedOut,
   });
-  const restrictedResult = runCanonicalize({
+  const restrictedResult = await runCanonicalize({
     batch: restrictedBatch,
     outputDir: restrictedOut,
     profile: restrictedProfile,
@@ -571,13 +571,13 @@ export function checkCanonicalizerFixtureParity(options: {
 
   // test_gene_symbol_map_resolves_symbols_to_ensembl.
   const mapOut = join(options.outputRoot, "symbol_map");
-  const mapBatch = parseAdapterBatch({
+  const mapBatch = await parseAdapterBatch({
     fixturesRoot: fixtures,
     fixture: "gdc/gdc_expression.tsv",
     adapterId: "gdc.expression.v1",
     outputDir: mapOut,
   });
-  const mapResult = runCanonicalize({
+  const mapResult = await runCanonicalize({
     batch: mapBatch,
     outputDir: mapOut,
     geneSymbolMap: SYMBOL_TO_ENSEMBL,
@@ -603,7 +603,7 @@ export function checkCanonicalizerFixtureParity(options: {
   const partialPath = join(partialOut, "symbol_matrix.tsv");
   writeFixtureFile(partialPath, "gene_id\tS1\nTP53\t1.5\nMYH9\t2.5\n", "utf8");
   const partialAsset = sourceAssetFromPath(partialPath);
-  const partialBatch = getAdapter("gdc.expression.v1").parse(
+  const partialBatch = await getAdapter("gdc.expression.v1").parse(
     partialAsset,
     partialPath,
     {
@@ -613,7 +613,7 @@ export function checkCanonicalizerFixtureParity(options: {
       outputDir: partialOut,
     },
   );
-  const partialResult = runCanonicalize({
+  const partialResult = await runCanonicalize({
     batch: partialBatch,
     outputDir: partialOut,
     geneSymbolMap: SYMBOL_TO_ENSEMBL,
@@ -645,7 +645,7 @@ export function checkCanonicalizerFixtureParity(options: {
     "utf8",
   );
   const multiAsset = sourceAssetFromPath(multiPath);
-  const multiBatch = getAdapter("gdc.expression.v1").parse(multiAsset, multiPath, {
+  const multiBatch = await getAdapter("gdc.expression.v1").parse(multiAsset, multiPath, {
     buildId: "build_test",
     bindingId: "binding_1",
     schemaRef: "gene_expression.long.v1",
@@ -667,7 +667,7 @@ export function checkCanonicalizerFixtureParity(options: {
     allowed_semantics: expressionNormalizationV1().allowed_semantics,
     allowed_value_scales: expressionNormalizationV1().allowed_value_scales,
   });
-  const multiResult = runCanonicalize({
+  const multiResult = await runCanonicalize({
     batch: mixedBatch,
     outputDir: multiOut,
     profile: mixedProfile,
@@ -725,7 +725,7 @@ export function checkCanonicalizerFixtureParity(options: {
     allowed_semantics: ["normalized_expression"],
     allowed_value_scales: ["log2", "linear"],
   });
-  const rejectedScale = runCanonicalize({
+  const rejectedScale = await runCanonicalize({
     batch: scaleBatch,
     outputDir: scaleOut,
     profile: restrictedScale,
@@ -746,7 +746,7 @@ export function checkCanonicalizerFixtureParity(options: {
     allowed_semantics: ["normalized_expression"],
     allowed_value_scales: ["log2", "unknown"],
   });
-  const unknownOk = runCanonicalize({
+  const unknownOk = await runCanonicalize({
     batch: scaleBatch,
     outputDir: scaleOut,
     profile: unknownOkProfile,
@@ -767,7 +767,7 @@ export function checkCanonicalizerFixtureParity(options: {
   );
   // test_raw_count_scale_declaration_rejected.
   const rawCountOut = join(options.outputRoot, "raw_count");
-  const rawCountBatch = parseAdapterBatch({
+  const rawCountBatch = await parseAdapterBatch({
     fixturesRoot: fixtures,
     fixture: "gdc/gdc_expression.tsv",
     adapterId: "gdc.expression.v1",
@@ -782,7 +782,7 @@ export function checkCanonicalizerFixtureParity(options: {
       return row;
     },
   });
-  const rawCountResult = runCanonicalize({ batch: remappedRawCount, outputDir: rawCountOut });
+  const rawCountResult = await runCanonicalize({ batch: remappedRawCount, outputDir: rawCountOut });
   check(issues, rawCountResult.rowCount === 0, "raw_count scale row_count 0");
   check(issues, rawCountResult.rejectedCount === 4, "raw_count scale rejected 4");
   check(
@@ -818,7 +818,7 @@ export function checkCanonicalizerFixtureParity(options: {
     ],
     { format: "series_matrix", platform_ids: ["GPL570"] },
   );
-  const declaredResult = runCanonicalize({ batch: declaredBatch, outputDir: declaredOut });
+  const declaredResult = await runCanonicalize({ batch: declaredBatch, outputDir: declaredOut });
   check(issues, declaredResult.rowCount === 2, "declared geo row_count 2");
   check(issues, declaredResult.rejectedCount === 0, "declared geo rejected 0");
   checkDeepEqual(
@@ -860,7 +860,7 @@ export function checkCanonicalizerFixtureParity(options: {
     ],
     { format: "series_matrix", platform_ids: ["GPL570"] },
   );
-  const probeResult = runCanonicalize({
+  const probeResult = await runCanonicalize({
     batch: probeBatch,
     outputDir: probeOut,
     schema: buildProbeExpressionSchema(),

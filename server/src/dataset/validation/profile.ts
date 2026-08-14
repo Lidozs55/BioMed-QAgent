@@ -6,13 +6,15 @@
  * and (gene-required builds) complete probe→gene coverage.
  */
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
 
 import type { DatasetManifest, DatasetSchema, ValidationResult, ValidationProfile } from "../contracts/index.js";
 import type { JsonValue } from "@biomed/contracts";
 import { parseValidationProfile } from "../contracts/index.js";
 
-import { delimitedRowsWithLines, readSourceText } from "../adapters/text.js";
+import { CHECKPOINT_STRIDE, checkpoint, throwIfAborted } from "../cooperative.js";
+import { delimitedRowsWithLinesAsync, readSourceTextAsync } from "../adapters/text.js";
 import {
   aggregateConfidenceMetrics,
   anomaliesOf,
@@ -150,8 +152,9 @@ function utf8Error(reason: string, byte: number, position: number): string {
 }
 
 /** Python csv.reader row list for one file (header preserved as first row). */
-function readCsvRows(path: string): string[][] {
-  return delimitedRowsWithLines(readSourceText(path), ",").map((row) => row.values);
+async function readCsvRows(path: string, signal?: AbortSignal | null): Promise<string[][]> {
+  const rows = await delimitedRowsWithLinesAsync(await readSourceTextAsync(path, signal), ",", signal);
+  return rows.map((row) => row.values);
 }
 
 export class ExpressionValidationProfile {
@@ -184,22 +187,41 @@ export class ExpressionValidationProfile {
     manifestDigest: string;
     outputDir: string;
     probeMappingSummaries?: ProbeMappingSummary[] | null;
-  }): ValidationResult {
-    const checks = this.runChecks(
+    signal?: AbortSignal | null;
+  }): Promise<ValidationResult> {
+    const signal = options.signal ?? null;
+    throwIfAborted(signal);
+    return this.validateCore(options, signal);
+  }
+
+  private async validateCore(
+    options: {
+      manifest: DatasetManifest;
+      primaryPath: string;
+      schema: DatasetSchema;
+      manifestDigest: string;
+      outputDir: string;
+      probeMappingSummaries?: ProbeMappingSummary[] | null;
+    },
+    signal: AbortSignal | null,
+  ): Promise<ValidationResult> {
+    const checks = await this.runChecks(
       options.manifest,
       options.primaryPath,
       options.schema,
       options.probeMappingSummaries ?? null,
+      signal,
     );
     const encodingFailed = checks.some(
       (check) => check.check_id === "csv_encoding_utf8" && !check.passed,
     );
     let confidenceWarnings: Array<Record<string, string>> = [];
     if (existsSync(options.primaryPath) && !encodingFailed) {
-      const confidence = this.runConfidenceCheck(
+      const confidence = await this.runConfidenceCheck(
         options.primaryPath,
         options.outputDir,
         options.schema,
+        signal,
       );
       checks.push(confidence.check);
       confidenceWarnings = confidence.warnings;
@@ -220,7 +242,7 @@ export class ExpressionValidationProfile {
       warnings: warnings.map((warning) => warning),
     };
     const reportPath = joinOutput(options.outputDir, "validation_report.json");
-    writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+    await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
     const failed = checks.filter((check) => !check.passed);
     return {
       schema_version: "1.0",
@@ -233,12 +255,13 @@ export class ExpressionValidationProfile {
     };
   }
 
-  private runChecks(
+  private async runChecks(
     _manifest: DatasetManifest,
     primaryPath: string,
     schema: DatasetSchema,
     probeMappingSummaries: ProbeMappingSummary[] | null,
-  ): ProfileCheck[] {
+    signal?: AbortSignal | null,
+  ): Promise<ProfileCheck[]> {
     if (!existsSync(primaryPath)) {
       return [
         {
@@ -249,27 +272,28 @@ export class ExpressionValidationProfile {
         },
       ];
     }
-    const encodingCheck = this.checkCsvEncoding(primaryPath);
+    const encodingCheck = await this.checkCsvEncoding(primaryPath, signal);
     if (!encodingCheck.passed) {
       return [encodingCheck];
     }
     const checks: ProfileCheck[] = [
-      this.checkMinRows(_manifest, primaryPath),
-      this.checkColumnCount(primaryPath, schema),
+      await this.checkMinRows(_manifest, primaryPath, signal),
+      await this.checkColumnCount(primaryPath, schema, signal),
       encodingCheck,
     ];
-    checks.push(...this.checkRows(primaryPath, schema));
+    checks.push(...(await this.checkRows(primaryPath, schema, signal)));
     if (this.required_entity_level === "gene") {
       checks.push(
-        this.checkProbeCoverageRequiredGeneLevel(primaryPath, probeMappingSummaries),
+        await this.checkProbeCoverageRequiredGeneLevel(primaryPath, probeMappingSummaries, signal),
       );
     }
     return checks;
   }
 
-  private checkCsvEncoding(primaryPath: string): ProfileCheck {
+  private async checkCsvEncoding(primaryPath: string, signal?: AbortSignal | null): Promise<ProfileCheck> {
+    throwIfAborted(signal);
     try {
-      decodeUtf8Strict(readFileSync(primaryPath));
+      decodeUtf8Strict(await readFile(primaryPath));
       return {
         check_id: "csv_encoding_utf8",
         description: "primary dataset is UTF-8 encoded",
@@ -289,9 +313,9 @@ export class ExpressionValidationProfile {
     }
   }
 
-  private checkMinRows(_manifest: DatasetManifest, primaryPath: string): ProfileCheck {
+  private async checkMinRows(_manifest: DatasetManifest, primaryPath: string, signal?: AbortSignal | null): Promise<ProfileCheck> {
     const minimum = this.profile.acceptance.minimum_valid_rows;
-    const rows = readCsvRows(primaryPath);
+    const rows = await readCsvRows(primaryPath, signal);
     const fileRows = rows.length === 0 ? 0 : rows.length - 1;
     return {
       check_id: "minimum_valid_rows",
@@ -301,8 +325,8 @@ export class ExpressionValidationProfile {
     };
   }
 
-  private checkColumnCount(primaryPath: string, schema: DatasetSchema): ProfileCheck {
-    const rows = readCsvRows(primaryPath);
+  private async checkColumnCount(primaryPath: string, schema: DatasetSchema, signal?: AbortSignal | null): Promise<ProfileCheck> {
+    const rows = await readCsvRows(primaryPath, signal);
     const header = rows.length > 0 ? rows[0] : [];
     const expected = schema.fields.length;
     return {
@@ -313,12 +337,12 @@ export class ExpressionValidationProfile {
     };
   }
 
-  private checkRows(primaryPath: string, schema: DatasetSchema): ProfileCheck[] {
+  private async checkRows(primaryPath: string, schema: DatasetSchema, signal?: AbortSignal | null): Promise<ProfileCheck[]> {
     const required = new Set(
       schema.fields.filter((field) => field.required).map((field) => field.name),
     );
     const valueColumn = valueField(schema);
-    const rows = readCsvRows(primaryPath);
+    const rows = await readCsvRows(primaryPath, signal);
     const header = rows.length > 0 ? rows[0] : [];
     const expected = header.length > 0 ? header.length : schema.fields.length;
     let rowCount = 0;
@@ -327,6 +351,7 @@ export class ExpressionValidationProfile {
     let nonNumeric = 0;
     const units = new Set<string>();
     let missingProvenance = 0;
+    let visited = 0;
     for (const row of rows.slice(1)) {
       if (row.length === 0) continue; // blank lines are not data rows
       rowCount += 1;
@@ -354,6 +379,8 @@ export class ExpressionValidationProfile {
       ) {
         missingProvenance += 1;
       }
+      visited += 1;
+      if (visited % CHECKPOINT_STRIDE === 0) await checkpoint(signal);
     }
     return [
       {
@@ -393,11 +420,12 @@ export class ExpressionValidationProfile {
     ];
   }
 
-  private checkProbeCoverageRequiredGeneLevel(
+  private async checkProbeCoverageRequiredGeneLevel(
     primaryPath: string,
     summaries: ProbeMappingSummary[] | null,
-  ): ProfileCheck {
-    const residual = countResidualGeoProbeRows(primaryPath);
+    signal?: AbortSignal | null,
+  ): Promise<ProfileCheck> {
+    const residual = await countResidualGeoProbeRows(primaryPath, signal);
     const belowOne: string[] = [];
     if (summaries !== null) {
       for (const summary of summaries) {
@@ -447,18 +475,20 @@ export class ExpressionValidationProfile {
     return warnings;
   }
 
-  private runConfidenceCheck(
+  private async runConfidenceCheck(
     primaryPath: string,
     outputDir: string,
     schema: DatasetSchema,
-  ): { check: ProfileCheck; warnings: Array<Record<string, string>> } {
+    signal?: AbortSignal | null,
+  ): Promise<{ check: ProfileCheck; warnings: Array<Record<string, string>> }> {
     const valueColumn = valueField(schema);
     const values: string[] = [];
-    const rows = readCsvRows(primaryPath);
+    const rows = await readCsvRows(primaryPath, signal);
     const header = rows.length > 0 ? rows[0] : [];
     const valueIndex = header.indexOf(valueColumn);
     for (const row of rows.slice(1)) {
       values.push(valueIndex >= 0 ? (row[valueIndex] ?? "") : "");
+      if (values.length % CHECKPOINT_STRIDE === 0) await checkpoint(signal);
     }
     const summary = aggregateConfidenceMetrics(
       { [valueColumn]: values },
@@ -545,15 +575,18 @@ function sortedJson(record: Record<string, number>): string {
 }
 
 /** Count primary rows whose ``gene_id_namespace`` is still ``geo_probe``. */
-function countResidualGeoProbeRows(primaryPath: string): number {
-  const rows = readCsvRows(primaryPath);
+async function countResidualGeoProbeRows(primaryPath: string, signal?: AbortSignal | null): Promise<number> {
+  const rows = await readCsvRows(primaryPath, signal);
   if (rows.length === 0) return 0;
   const header = rows[0];
   const namespaceIndex = header.indexOf("gene_id_namespace");
   if (namespaceIndex < 0) return 0;
   let residual = 0;
+  let visited = 0;
   for (const row of rows.slice(1)) {
     if ((row[namespaceIndex] ?? "").trim() === "geo_probe") residual += 1;
+    visited += 1;
+    if (visited % CHECKPOINT_STRIDE === 0) await checkpoint(signal);
   }
   return residual;
 }

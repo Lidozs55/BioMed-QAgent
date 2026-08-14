@@ -119,10 +119,17 @@ Phase 3 需显式 `AGENT_RUNTIME=pi` 才接管正式 Task 流量。实际执行�
 - [x] 验收：4 类主结果与 Python V2 一致；artifact 仅经 Publisher；失败不留伪成功产物；
       旧 publication 不被覆盖；rerun/resume 语义符合原 V2 不变量
 
-**遗留（属 TS Host 集成，非 Phase 4 范围）**：TS executor 为同步实现，operation
+**遗留（属 TS Host 集成，非 Phase 4 范围）**：~~TS executor 为同步实现，operation
 超时 / build 锁 / 事件投影（event sink）等运行时基础设施尚未接入运行路径；
 `DATASET_CORE` 目前只读入配置、未切换行为（默认仍走 Python V2 Core）。这些接线
-与 Phase 7 前端切换一并推进。
+与 Phase 7 前端切换一并推进。~~
+
+> 更新（M2，2026-08-14）：上段遗留已由 M2 收口，不再成立 —— operation 异步化 +
+> wall-clock timeout + cancel 已贯通到真实 TS Dataset Core 全链路（adapter parse /
+> canonicalize / integrate / validation / publish 协作式 checkpoint，signal-aware；
+> `server/tests/phase5/core-preemption.test.ts` 验证真实 parse 可被 timeout/cancel 中断）；
+> build lock、Core event sink、`DATASET_CORE=ts` 合法 opt-in profile 均已落地（见下节
+> Phase 5/M2 清单）。仅“默认 profile 切换”仍属 Phase 7。
 
 远程分支 `codex/phase4-dataset-core-ts` 已合入 main，无需另行跟踪。
 
@@ -161,7 +168,9 @@ Phase 3 需显式 `AGENT_RUNTIME=pi` 才接管正式 Task 流量。实际执行�
 - [x] `DATASET_CORE=ts` 合法 opt-in profile（`ts/pi/ts/0|1`；默认 profile 不变）
 - [x] DatasetCore 服务接口 + Python 回滚 adapter + TS adapter（bridge 外形不漂移）
 - [x] operation 异步化 + wall-clock timeout（typed timeout failure）+ cancel 收敛 +
-      straggler 清理；build lock（task+build 单发布者，Windows 安全，stale 回收）
+      straggler 清理；build lock（task+build 单发布者，Windows 安全，stale 回收）。
+      真实 Core 可抢占性由 `server/tests/phase5/core-preemption.test.ts` 验证
+      （真实 adapter parse 可被 timeout / AbortSignal / cancelDatasetBuild 中断）
 - [x] Core event sink → 稳定 operation_* EventEnvelope（经 recordRunEvent）
 - [x] 四类 golden fixture（SUCCESS / PARTIAL_SUCCESS / NO_DATA / SPEC_REJECTED）
       在 TS Core 路径通过（`server/tests/phase5/ts-core-e2e.test.ts`）

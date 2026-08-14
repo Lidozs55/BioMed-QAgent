@@ -33,13 +33,18 @@
  * operation handler before calling ``buildProbeMapping``.
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { gunzipSync } from "node:zlib";
+import { mkdirSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
+import { promisify } from "node:util";
+import { gunzip as gunzipCb } from "node:zlib";
 import path from "node:path";
 
+const gunzip = promisify(gunzipCb);
+
+import { CHECKPOINT_STRIDE, checkpoint, throwIfAborted } from "../../cooperative.js";
 import { AdapterError } from "../errors.js";
-import { sha256File } from "../hashing.js";
-import { csvLine, delimitedRowsWithLines } from "../text.js";
+import { sha256FileStream } from "../hashing.js";
+import { csvLine, delimitedRowsWithLinesAsync } from "../text.js";
 import type { SourceAsset } from "../../contracts/source.js";
 
 /** Stable server-side mapping rule id (D3 ``mapping_rule_id``). */
@@ -209,11 +214,12 @@ export function parsePlatformTableText(text: string): SoftPlatformTable {
   };
 }
 
-/** Python ``_read_table``: gzip or plain UTF-8, fail-closed. */
-function readTable(annotationPath: string): string {
-  const raw = readFileSync(annotationPath);
+/** Python ``_read_table``: gzip or plain UTF-8, fail-closed (cooperative). */
+async function readTable(annotationPath: string, signal?: AbortSignal | null): Promise<string> {
+  throwIfAborted(signal);
+  const raw = await readFile(annotationPath);
   try {
-    return gunzipSync(raw).toString("utf8");
+    return (await gunzip(raw)).toString("utf8");
   } catch {
     return raw.toString("utf8");
   }
@@ -229,10 +235,11 @@ export interface ParsedPlatformTable {
 }
 
 /** Python ``parse_platform_table``. */
-export function parsePlatformTable(
+export async function parsePlatformTable(
   annotationPath: string,
-): ParsedPlatformTable {
-  const text = readTable(annotationPath);
+  signal?: AbortSignal | null,
+): Promise<ParsedPlatformTable> {
+  const text = await readTable(annotationPath, signal);
   const table = parsePlatformTableText(text);
   if (!table.has_table || table.gene_column === null) {
     return {
@@ -283,19 +290,22 @@ export function parsePlatformTable(
 }
 
 /** Python ``_distinct_probes``: declared ``geo_probe`` rows of the batch. */
-function distinctProbes(batchPath: string): string[] {
-  const text = readFileSync(batchPath, "utf8");
-  const rows = delimitedRowsWithLines(text, ",");
+async function distinctProbes(batchPath: string, signal?: AbortSignal | null): Promise<string[]> {
+  const text = await readFile(batchPath, "utf8");
+  const rows = await delimitedRowsWithLinesAsync(text, ",", signal);
   const header = rows[0]?.values ?? [];
   const namespaceIndex = header.indexOf("gene_id_namespace_declared");
   const probeIndex = header.indexOf("gene_id_raw");
   const probes = new Set<string>();
+  let visited = 0;
   for (const { values } of rows.slice(1)) {
     const namespace = values[namespaceIndex] ?? "";
     if (namespace.trim() === "geo_probe") {
       const probe = (values[probeIndex] ?? "").trim();
       if (probe !== "") probes.add(probe);
     }
+    visited += 1;
+    if (visited % CHECKPOINT_STRIDE === 0) await checkpoint(signal);
   }
   return [...probes].sort();
 }
@@ -311,7 +321,7 @@ function platformAnnotationStatus(
 }
 
 /** Python ``_build_platform_record``. */
-function buildPlatformRecord(options: {
+async function buildPlatformRecord(options: {
   platformId: string;
   sourceId: string;
   annotationPath: string;
@@ -320,8 +330,9 @@ function buildPlatformRecord(options: {
   targetNamespace: TargetNamespace | null;
   annotationStatus: AnnotationStatus;
   annotationAsset: SourceAsset | null;
-}): PlatformRecord {
-  const { annotationStatus, annotationAsset } = options;
+  signal?: AbortSignal | null;
+}): Promise<PlatformRecord> {
+  const { annotationStatus, annotationAsset, signal } = options;
   return {
     schema_version: "1.0",
     platform_id: options.platformId,
@@ -338,7 +349,7 @@ function buildPlatformRecord(options: {
     annotation_sha256:
       annotationStatus === "not_attempted"
         ? null
-        : sha256File(options.annotationPath),
+        : await sha256FileStream(options.annotationPath, signal),
   };
 }
 
@@ -351,12 +362,14 @@ export interface BuildProbeMappingOptions {
   outputDir: string;
   mappingRuleId?: string;
   sourceId?: string | null;
+  /** Cooperative abort signal from the executor (M2 I-03/I-04). */
+  signal?: AbortSignal | null;
 }
 
 /** Python ``build_probe_mapping``. */
-export function buildProbeMapping(
+export async function buildProbeMapping(
   options: BuildProbeMappingOptions,
-): ProbeMappingResult {
+): Promise<ProbeMappingResult> {
   const {
     annotationPath,
     batchPath,
@@ -366,9 +379,10 @@ export function buildProbeMapping(
     outputDir,
     mappingRuleId = PROBE_MAPPING_RULE_ID,
     sourceId = null,
+    signal,
   } = options;
   if (annotationAsset !== null) {
-    const actual = sha256File(annotationPath);
+    const actual = await sha256FileStream(annotationPath, signal);
     if (annotationAsset.sha256 !== actual) {
       throw new ProbeMappingAssetMismatchError(
         `annotation asset ${annotationAsset.asset_id} sha256 does not ` +
@@ -384,8 +398,8 @@ export function buildProbeMapping(
     ambiguous_probes: ambiguousProbes,
     probe_column: probeColumn,
     gene_column: geneColumn,
-  } = parsePlatformTable(annotationPath);
-  const probes = distinctProbes(batchPath);
+  } = await parsePlatformTable(annotationPath, signal);
+  const probes = await distinctProbes(batchPath, signal);
   const total = probes.length;
   const mapped = probes.filter((probe) => probe in mapping).length;
   const ambiguous = probes.filter((probe) => ambiguousProbes.has(probe));
@@ -414,6 +428,7 @@ export function buildProbeMapping(
   mkdirSync(path.dirname(detailPath), { recursive: true });
   const ambiguousSet = new Set(ambiguous);
   const detailLines = [csvLine([...MAPPING_DETAIL_COLUMNS])];
+  let visited = 0;
   for (const probe of probes) {
     const gene = mapping[probe] ?? "";
     const rowStatus = gene
@@ -433,8 +448,10 @@ export function buildProbeMapping(
         gene ? mappingRuleId : "",
       ]),
     );
+    visited += 1;
+    if (visited % CHECKPOINT_STRIDE === 0) await checkpoint(signal);
   }
-  writeFileSync(detailPath, detailLines.join(""), "utf8");
+  await writeFile(detailPath, detailLines.join(""), "utf8");
 
   const summary: ProbeMappingSummary = {
     schema_version: "1.0",
@@ -453,7 +470,7 @@ export function buildProbeMapping(
   };
   let platformRecord: PlatformRecord | null = null;
   if (platformId !== null) {
-    platformRecord = buildPlatformRecord({
+    platformRecord = await buildPlatformRecord({
       platformId,
       sourceId:
         sourceId ?? annotationAsset?.source_id ?? bindingId,
@@ -463,6 +480,7 @@ export function buildProbeMapping(
       targetNamespace: mapped > 0 ? targetNamespace : null,
       annotationStatus: platformAnnotationStatus(status, tableStatus),
       annotationAsset,
+      signal,
     });
   }
   return {

@@ -14,12 +14,12 @@ import { buildProbeExpressionSchema } from "../src/dataset/schema/index.js";
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 describe("Phase 4 step 5 canonicalizer parity", () => {
-  test("namespace/identity/map invariants mirror test_dataset_canonicalizer.py", () => {
-    expect(checkCanonicalizerContractParity()).toEqual([]);
+  test("namespace/identity/map invariants mirror test_dataset_canonicalizer.py", async () => {
+    expect(await checkCanonicalizerContractParity()).toEqual([]);
   });
 
-  test("GDC/Xena canonicalization fixture parity mirrors the Python suite", () => {
-    const issues = checkCanonicalizerFixtureParity({
+  test("GDC/Xena canonicalization fixture parity mirrors the Python suite", async () => {
+    const issues = await checkCanonicalizerFixtureParity({
       fixturesRoot: join(repoRoot, "backend", "tests", "fixtures"),
       outputRoot: scratchOutputRoot("canonicalizer-vitest-"),
     });

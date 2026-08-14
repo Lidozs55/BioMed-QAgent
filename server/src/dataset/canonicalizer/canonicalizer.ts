@@ -16,7 +16,8 @@
  * identical outputs and audits.
  */
 
-import { mkdirSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, statSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 
 import type { JsonValue } from "@biomed/contracts";
@@ -28,10 +29,11 @@ import type {
   ValueScale,
 } from "../contracts/index.js";
 import { assertValueScale, parseDataBatch, parseFileAsset } from "../contracts/index.js";
+import { CHECKPOINT_STRIDE, checkpoint, throwIfAborted } from "../cooperative.js";
 import { BuildError } from "../adapters/errors.js";
 import { assetIdFromSha256, makeRecordId } from "../adapters/identity.js";
-import { sha256File } from "../adapters/hashing.js";
-import { csvLine, delimitedRowsWithLines, readSourceText } from "../adapters/text.js";
+import { sha256FileStream } from "../adapters/hashing.js";
+import { csvLine, delimitedRowsWithLinesAsync, readSourceTextAsync } from "../adapters/text.js";
 import { MeasurementIdentity } from "./identity.js";
 
 const ENSEMBL_PATTERN = /^(ENSG\d{11})(?:\.(\d+))?$/;
@@ -189,10 +191,10 @@ function rejectedRow(
   };
 }
 
-function writeFieldMappings(
+async function writeFieldMappings(
   mappingsPath: string,
   mappings: readonly FieldMapping[],
-): void {
+): Promise<void> {
   const lines = [csvLine(FIELD_MAPPING_COLUMNS)];
   for (const mapping of mappings) {
     lines.push(
@@ -210,7 +212,7 @@ function writeFieldMappings(
       ]),
     );
   }
-  writeFileSync(mappingsPath, lines.join(""), "utf8");
+  await writeFile(mappingsPath, lines.join(""), "utf8");
 }
 
 /**
@@ -229,7 +231,11 @@ function writeFieldMappings(
  * ``probe_id``/``platform_id``/``value`` instead of the gene-schema primary
  * columns.
  */
-export function canonicalize(options: CanonicalizeOptions): CanonicalizationResult {
+export async function canonicalize(
+  options: CanonicalizeOptions,
+  signal?: AbortSignal | null,
+): Promise<CanonicalizationResult> {
+  throwIfAborted(signal);
   const {
     batch,
     schema,
@@ -270,9 +276,10 @@ export function canonicalize(options: CanonicalizeOptions): CanonicalizationResu
   const rejectedRows: string[][] = [];
   const logRows: string[][] = [];
 
-  const text = readSourceText(sourcePath);
-  const rows = delimitedRowsWithLines(text, ",");
+  const text = await readSourceTextAsync(sourcePath, signal);
+  const rows = await delimitedRowsWithLinesAsync(text, ",", signal);
   const header = rows[0]?.values ?? [];
+  let visited = 0;
   for (const { values } of rows.slice(1)) {
     const row: Record<string, string> = {};
     for (let index = 0; index < header.length; index += 1) {
@@ -416,26 +423,28 @@ export function canonicalize(options: CanonicalizeOptions): CanonicalizationResu
     const identity = new MeasurementIdentity(semantics, scale, unit);
     identities.set(identity.key(), identity);
     rowCount += 1;
+    visited += 1;
+    if (visited % CHECKPOINT_STRIDE === 0) await checkpoint(signal);
   }
 
-  writeFileSync(
+  await writeFile(
     canonicalPath,
     csvLine(columns) + canonicalRows.map((row) => csvLine(row)).join(""),
     "utf8",
   );
-  writeFileSync(
+  await writeFile(
     rejectedPath,
     csvLine(REJECTED_COLUMNS) + rejectedRows.map((row) => csvLine(row)).join(""),
     "utf8",
   );
-  writeFileSync(
+  await writeFile(
     logPath,
     csvLine(NORMALIZATION_LOG_COLUMNS) + logRows.map((row) => csvLine(row)).join(""),
     "utf8",
   );
-  writeFieldMappings(mappingsPath, batch.declared_mappings);
+  await writeFieldMappings(mappingsPath, batch.declared_mappings);
 
-  const payloadChecksum = sha256File(canonicalPath);
+  const payloadChecksum = await sha256FileStream(canonicalPath, signal);
   const fileAsset = parseFileAsset({
     schema_version: "1.0",
     asset_id: assetIdFromSha256(payloadChecksum),

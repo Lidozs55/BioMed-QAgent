@@ -325,7 +325,7 @@ function loadReport(outputDir: string): Record<string, unknown> {
   return JSON.parse(text) as Record<string, unknown>;
 }
 
-export function checkValidationProfileParity(options: { outputRoot: string }): string[] {
+export async function checkValidationProfileParity(options: { outputRoot: string }): Promise<string[]> {
   const issues: string[] = [];
   const outRoot = options.outputRoot;
   const profile = getValidationProfile("gene_expression.release.v1");
@@ -340,7 +340,7 @@ export function checkValidationProfileParity(options: { outputRoot: string }): s
     mkdirSync(out, { recursive: true });
     const primary = join(out, "primary.csv");
     writePrimary(primary, [validRow()]);
-    const result = profile.validate({
+    const result = await profile.validate({
       manifest: manifest(1),
       primaryPath: primary,
       schema: buildGeneExpressionSchema(),
@@ -360,7 +360,7 @@ export function checkValidationProfileParity(options: { outputRoot: string }): s
     mkdirSync(out, { recursive: true });
     const primary = join(out, "primary.csv");
     writePrimary(primary, []);
-    profile.validate({
+    await profile.validate({
       manifest: manifest(0),
       primaryPath: primary,
       schema: buildGeneExpressionSchema(),
@@ -376,7 +376,7 @@ export function checkValidationProfileParity(options: { outputRoot: string }): s
     mkdirSync(out, { recursive: true });
     const primary = join(out, "primary.csv");
     writePrimary(primary, []);
-    const result = profile.validate({
+    const result = await profile.validate({
       manifest: manifest(5),
       primaryPath: primary,
       schema: buildGeneExpressionSchema(),
@@ -395,7 +395,7 @@ export function checkValidationProfileParity(options: { outputRoot: string }): s
     mkdirSync(out, { recursive: true });
     const primary = join(out, "primary.csv");
     writePrimary(primary, [validRow("TP53", "expression_value"), validRow("BRCA1", "tpm_unstranded")]);
-    const result = profile.validate({
+    const result = await profile.validate({
       manifest: manifest(2),
       primaryPath: primary,
       schema: buildGeneExpressionSchema(),
@@ -414,7 +414,7 @@ export function checkValidationProfileParity(options: { outputRoot: string }): s
     row["expression_value"] = "NaN-value";
     const primary = join(out, "primary.csv");
     writePrimary(primary, [row]);
-    const result = profile.validate({
+    const result = await profile.validate({
       manifest: manifest(1),
       primaryPath: primary,
       schema: buildGeneExpressionSchema(),
@@ -433,7 +433,7 @@ export function checkValidationProfileParity(options: { outputRoot: string }): s
     row["expression_value"] = bad;
     const primary = join(out, "primary.csv");
     writePrimary(primary, [row]);
-    const result = profile.validate({
+    const result = await profile.validate({
       manifest: manifest(1),
       primaryPath: primary,
       schema: buildGeneExpressionSchema(),
@@ -452,7 +452,7 @@ export function checkValidationProfileParity(options: { outputRoot: string }): s
     row["source_logical_file"] = "";
     const primary = join(out, "primary.csv");
     writePrimary(primary, [row]);
-    const result = profile.validate({
+    const result = await profile.validate({
       manifest: manifest(1),
       primaryPath: primary,
       schema: buildGeneExpressionSchema(),
@@ -469,7 +469,7 @@ export function checkValidationProfileParity(options: { outputRoot: string }): s
     mkdirSync(out, { recursive: true });
     const primary = join(out, "primary.csv");
     writeFileSync(primary, "only_one_column\n1\n", "utf8");
-    const result = profile.validate({
+    const result = await profile.validate({
       manifest: manifest(1),
       primaryPath: primary,
       schema: buildGeneExpressionSchema(),
@@ -489,7 +489,7 @@ export function checkValidationProfileParity(options: { outputRoot: string }): s
     const lines = [csvLine(CANONICAL_HEADER)];
     lines.push(csvLine([...CANONICAL_HEADER.map((column) => row[column] ?? ""), "EXTRA"]));
     writeFileSync(primary, lines.join(""), "utf8");
-    const result = profile.validate({
+    const result = await profile.validate({
       manifest: manifest(1),
       primaryPath: primary,
       schema: buildGeneExpressionSchema(),
@@ -509,7 +509,7 @@ export function checkValidationProfileParity(options: { outputRoot: string }): s
     const lines = [csvLine(CANONICAL_HEADER)];
     lines.push(csvLine(CANONICAL_HEADER.slice(0, -3).map((column) => row[column] ?? "")));
     writeFileSync(primary, lines.join(""), "utf8");
-    const result = profile.validate({
+    const result = await profile.validate({
       manifest: manifest(1),
       primaryPath: primary,
       schema: buildGeneExpressionSchema(),
@@ -524,7 +524,7 @@ export function checkValidationProfileParity(options: { outputRoot: string }): s
   {
     const out = join(outRoot, "missing-file");
     mkdirSync(out, { recursive: true });
-    const result = profile.validate({
+    const result = await profile.validate({
       manifest: manifest(1),
       primaryPath: join(out, "nope.csv"),
       schema: buildGeneExpressionSchema(),
@@ -546,7 +546,7 @@ export function checkValidationProfileParity(options: { outputRoot: string }): s
     });
     const primary = join(out, "primary.csv");
     writePrimary(primary, rows);
-    const result = profile.validate({
+    const result = await profile.validate({
       manifest: manifest(60),
       primaryPath: primary,
       schema: buildGeneExpressionSchema(),
@@ -572,7 +572,7 @@ export function checkValidationProfileParity(options: { outputRoot: string }): s
     });
     const primary = join(out, "primary.csv");
     writePrimary(primary, rows);
-    const result = profile.validate({
+    const result = await profile.validate({
       manifest: manifest(60),
       primaryPath: primary,
       schema: buildGeneExpressionSchema(),
@@ -601,7 +601,7 @@ export function checkValidationProfileParity(options: { outputRoot: string }): s
     mkdirSync(out, { recursive: true });
     const primary = join(out, "primary.csv");
     writeFileSync(primary, Buffer.from([0x72, 0x65, 0x63, 0xff, 0xfe, 0x00, 0x62]));
-    const result = profile.validate({
+    const result = await profile.validate({
       manifest: manifest(1),
       primaryPath: primary,
       schema: buildGeneExpressionSchema(),
@@ -623,7 +623,7 @@ export function checkValidationProfileParity(options: { outputRoot: string }): s
     const content = readFileSync(primary);
     const replaced = Buffer.from(content.toString("utf8").replace("TP53", "TP53基因"), "utf8");
     writeFileSync(primary, replaced);
-    const result = profile.validate({
+    const result = await profile.validate({
       manifest: manifest(1),
       primaryPath: primary,
       schema: buildGeneExpressionSchema(),
@@ -655,7 +655,7 @@ export function checkValidationProfileParity(options: { outputRoot: string }): s
     mkdirSync(out, { recursive: true });
     const primary = join(out, "primary.csv");
     writePrimary(primary, [validRow()]);
-    const result = getValidationProfile("gene_expression.probe_release.v1").validate({
+    const result = await getValidationProfile("gene_expression.probe_release.v1").validate({
       manifest: manifest(1),
       primaryPath: primary,
       schema: buildGeneExpressionSchema(),
@@ -673,7 +673,7 @@ export function checkValidationProfileParity(options: { outputRoot: string }): s
     mkdirSync(out, { recursive: true });
     const primary = join(out, "primary.csv");
     writePrimary(primary, [validRow()]);
-    const result = getValidationProfile("gene_expression.release.v1").validate({
+    const result = await getValidationProfile("gene_expression.release.v1").validate({
       manifest: manifest(1),
       primaryPath: primary,
       schema: buildGeneExpressionSchema(),
@@ -695,7 +695,7 @@ export function checkValidationProfileParity(options: { outputRoot: string }): s
     mkdirSync(out, { recursive: true });
     const primary = join(out, "primary.csv");
     writePrimary(primary, [validRow()]);
-    const result = getValidationProfile("gene_expression.release.v1").validate({
+    const result = await getValidationProfile("gene_expression.release.v1").validate({
       manifest: manifest(1),
       primaryPath: primary,
       schema: buildGeneExpressionSchema(),
@@ -716,7 +716,7 @@ export function checkValidationProfileParity(options: { outputRoot: string }): s
     row["gene_id"] = "AFFX-BioB-5";
     const primary = join(out, "primary.csv");
     writePrimary(primary, [row]);
-    const result = getValidationProfile("gene_expression.release.v1").validate({
+    const result = await getValidationProfile("gene_expression.release.v1").validate({
       manifest: manifest(1),
       primaryPath: primary,
       schema: buildGeneExpressionSchema(),
@@ -737,7 +737,7 @@ export function checkValidationProfileParity(options: { outputRoot: string }): s
     mkdirSync(out, { recursive: true });
     const primary = join(out, "primary.csv");
     writePrimary(primary, [validRow()]);
-    const result = getValidationProfile("gene_expression.release.v1").validate({
+    const result = await getValidationProfile("gene_expression.release.v1").validate({
       manifest: manifest(1),
       primaryPath: primary,
       schema: buildGeneExpressionSchema(),
@@ -755,7 +755,7 @@ export function checkValidationProfileParity(options: { outputRoot: string }): s
     mkdirSync(out, { recursive: true });
     const primary = join(out, "primary.csv");
     writePrimary(primary, [validRow()]);
-    const result = getValidationProfile("gene_expression.probe_release.v1").validate({
+    const result = await getValidationProfile("gene_expression.probe_release.v1").validate({
       manifest: manifest(1),
       primaryPath: primary,
       schema: buildGeneExpressionSchema(),

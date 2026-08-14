@@ -23,16 +23,20 @@ import path from "node:path";
 import type { JsonValue } from "@biomed/contracts";
 
 import type {
+  DataBatch,
   DatasetBuildSpec,
   DatasetManifest,
   SourceAsset,
   ValidationResult,
 } from "../contracts/index.js";
 import { BuildError } from "../adapters/errors.js";
+import { throwIfAborted } from "../cooperative.js";
 import { adapterParamsForBinding, getAdapter } from "../adapters/adapters.js";
 import { buildProbeMapping } from "../adapters/geo/probe-mapping.js";
+import type { CanonicalizationResult } from "../canonicalizer/index.js";
 import { canonicalize, expressionNormalizationV1 } from "../canonicalizer/index.js";
 import { checkExpressionCompatibility } from "../compat/compat_gate.js";
+import type { IntegrationResult } from "../integrator/integrator.js";
 import { integrate } from "../integrator/integrator.js";
 import { assembleManifest, buildProvenanceDocument, writeManifest } from "../publish/manifest.js";
 import { promotePublication } from "../publish/publisher.js";
@@ -87,9 +91,9 @@ export interface BuildRecord {
 }
 
 interface RunnerState {
-  batches: Map<string, ReturnType<ReturnType<typeof getAdapter>["parse"]>>;
-  canonicalResults: Array<ReturnType<typeof canonicalize>>;
-  integration: ReturnType<typeof integrate> | null;
+  batches: Map<string, DataBatch>;
+  canonicalResults: Array<CanonicalizationResult>;
+  integration: IntegrationResult | null;
   manifest: DatasetManifest | null;
   validation: ValidationResult | null;
   publicationId: string | null;
@@ -138,7 +142,8 @@ export function createTsCoreOperationRunner(options: {
   const { spec, taskId, taskRoot, outputDir, sourceAssets, mappingAssets, runnerState, bindings } = options;
   const schema = buildGeneExpressionSchema();
 
-  return (op): OperationOutput => {
+  return async (op, _upstream, signal): Promise<OperationOutput> => {
+    throwIfAborted(signal);
     switch (op.kind) {
       case "acquire": {
         const asset = sourceAssets[op.category];
@@ -167,12 +172,13 @@ export function createTsCoreOperationRunner(options: {
         const adapter = getAdapter(binding.adapter_id);
         const parameters = adapterParamsForBinding(binding);
         const sourcePath = path.join(taskRoot, asset.relative_path);
-        const batch = adapter.parse(asset, sourcePath, {
+        const batch = await adapter.parse(asset, sourcePath, {
           buildId: spec.build_id,
           bindingId: binding.binding_id,
           schemaRef: spec.schema_ref,
           outputDir,
           parameters,
+          signal,
         });
         runnerState.batches.set(binding.binding_id, batch);
         return makeOperationOutput({
@@ -206,26 +212,30 @@ export function createTsCoreOperationRunner(options: {
           const platformIds = Array.isArray(batch.statistics.platform_ids)
             ? batch.statistics.platform_ids.map(String)
             : [];
-          const probe = buildProbeMapping({
+          const probe = await buildProbeMapping({
             annotationPath,
             batchPath: path.join(outputDir, batch.file_asset.relative_path),
             bindingId: op.category,
             platformId: platformIds.length > 0 ? platformIds[0] : null,
             annotationAsset,
             outputDir,
+            signal,
           });
           probeMap = probe.probe_to_gene;
           probeTargetNamespace = probe.target_namespace;
           probeMappingAuditPath = probe.detail_path;
         }
-        let result = canonicalize({
-          batch,
-          schema,
-          profile: expressionNormalizationV1(),
-          outputDir,
-          probeMap,
-          probeTargetNamespace,
-        });
+        let result = await canonicalize(
+          {
+            batch,
+            schema,
+            profile: expressionNormalizationV1(),
+            outputDir,
+            probeMap,
+            probeTargetNamespace,
+          },
+          signal,
+        );
         if (probeMappingAuditPath !== undefined) {
           result = {
             ...result,
@@ -254,12 +264,13 @@ export function createTsCoreOperationRunner(options: {
         if (runnerState.canonicalResults.length === 0) {
           throw new BuildError("cannot integrate zero sources");
         }
-        const integration = integrate({
+        const integration = await integrate({
           results: runnerState.canonicalResults,
           mergeStrategy: spec.merge_strategy,
           schema,
           buildId: spec.build_id,
           outputDir,
+          signal,
         });
         runnerState.integration = integration;
         return makeOperationOutput({
@@ -279,16 +290,17 @@ export function createTsCoreOperationRunner(options: {
             successfulAssets[bindingId] = sourceAssets[bindingId];
           }
         }
-        const provenancePath = buildProvenanceDocument({
+        const provenancePath = await buildProvenanceDocument({
           schema,
           integration,
           canonicalResults: runnerState.canonicalResults,
           sourceAssets: successfulAssets,
           outputDir,
+          signal,
         });
         const auditPaths = runnerState.canonicalResults.flatMap((result) => result.auditPaths);
         const summary = sourceSummary([...bindings.keys()], runnerState);
-        let manifest = assembleManifest({
+        let manifest = await assembleManifest({
           taskId,
           buildId: spec.build_id,
           spec,
@@ -300,17 +312,19 @@ export function createTsCoreOperationRunner(options: {
           validation: placeholderValidation(spec.validation_profile_ref),
           sourceSummary: summary,
           outputDir,
+          signal,
         });
         const profile = getValidationProfile(spec.validation_profile_ref);
-        const validation = profile.validate({
+        const validation = await profile.validate({
           manifest,
           primaryPath: integration.mergedPath, // absolute, integrator-owned
           schema,
           manifestDigest: manifest.sha256,
           outputDir,
+          signal,
         });
         // Re-assemble with the authoritative validation and persist once.
-        manifest = assembleManifest({
+        manifest = await assembleManifest({
           taskId,
           buildId: spec.build_id,
           spec,
@@ -322,6 +336,7 @@ export function createTsCoreOperationRunner(options: {
           validation,
           sourceSummary: summary,
           outputDir,
+          signal,
         });
         writeManifest(manifest, outputDir);
         runnerState.manifest = manifest;
@@ -347,11 +362,12 @@ export function createTsCoreOperationRunner(options: {
           const asset = bindingId in sourceAssets ? sourceAssets[bindingId] : undefined;
           if (asset !== undefined) expectedSourceAssetIds.add(asset.asset_id);
         }
-        const published = promotePublication({
+        const published = await promotePublication({
           outputDir,
           manifest,
           validation,
           expectedSourceAssetIds: expectedSourceAssetIds.size > 0 ? expectedSourceAssetIds : null,
+          signal,
         });
         runnerState.publicationId = published.publicationId;
         return makeOperationOutput({

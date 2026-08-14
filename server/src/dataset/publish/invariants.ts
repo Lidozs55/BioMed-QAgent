@@ -10,8 +10,10 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { sha256File } from "../adapters/hashing.js";
+import { throwIfAborted } from "../cooperative.js";
+import { sha256FileStream } from "../adapters/hashing.js";
 import type { DatasetManifest, ManifestArtifactEntry, ValidationResult } from "../contracts/index.js";
 
 /** Directory under the build workspace where immutable versions are promoted. */
@@ -36,21 +38,25 @@ export interface ReleaseInvariantsResult {
  * (B4): when provided, the provenance document's source asset ids must equal
  * it exactly.
  */
-export function checkReleaseInvariants(options: {
+export async function checkReleaseInvariants(options: {
   manifest: DatasetManifest;
   validation: ValidationResult;
   outputDir: string;
   expectedSourceAssetIds?: ReadonlySet<string> | null;
-}): ReleaseInvariantsResult {
+  signal?: AbortSignal | null;
+}): Promise<ReleaseInvariantsResult> {
+  const signal = options.signal ?? null;
+  throwIfAborted(signal);
   const violations: string[] = [];
-  const provenanceClosed = checkProvenanceClosure(
+  const provenanceClosed = await checkProvenanceClosure(
     options.manifest,
     options.outputDir,
     violations,
     options.expectedSourceAssetIds ?? null,
+    signal,
   );
   const profilePassed = checkProfilePassed(options.validation, violations);
-  const artifactsIntact = checkManifestArtifacts(options.manifest, options.outputDir, violations);
+  const artifactsIntact = await checkManifestArtifacts(options.manifest, options.outputDir, violations, signal);
   const atomicReady = checkAtomicPromotion(options.manifest, options.outputDir, violations);
   return {
     provenance_closed: provenanceClosed,
@@ -62,12 +68,14 @@ export function checkReleaseInvariants(options: {
   };
 }
 
-function checkProvenanceClosure(
+async function checkProvenanceClosure(
   manifest: DatasetManifest,
   outputDir: string,
   violations: string[],
   expectedSourceAssetIds: ReadonlySet<string> | null,
-): boolean {
+  signal?: AbortSignal | null,
+): Promise<boolean> {
+  throwIfAborted(signal);
   const provenanceEntries = manifest.artifacts.filter(
     (entry) => entry.role === "provenance",
   );
@@ -85,7 +93,7 @@ function checkProvenanceClosure(
   }
   let document: Record<string, unknown>;
   try {
-    document = JSON.parse(readFileSync(provenancePath, "utf8")) as Record<string, unknown>;
+    document = JSON.parse(await readFile(provenancePath, "utf8")) as Record<string, unknown>;
   } catch (error) {
     violations.push(
       `provenance closure: provenance document unreadable: ` +
@@ -130,13 +138,15 @@ function checkProvenanceClosure(
 }
 
 /** B4: every manifest artifact must exist with the exact declared size/SHA-256. */
-function checkManifestArtifacts(
+async function checkManifestArtifacts(
   manifest: DatasetManifest,
   outputDir: string,
   violations: string[],
-): boolean {
+  signal?: AbortSignal | null,
+): Promise<boolean> {
   let ok = true;
   for (const entry of manifest.artifacts) {
+    throwIfAborted(signal);
     const path = join(outputDir, entry.relative_path);
     if (!existsSync(path) || !statSync(path).isFile()) {
       violations.push(
@@ -150,7 +160,7 @@ function checkManifestArtifacts(
     let actualSha256: string;
     try {
       actualSize = statSync(path).size;
-      actualSha256 = sha256File(path);
+      actualSha256 = await sha256FileStream(path, signal);
     } catch (error) {
       violations.push(
         `manifest artifacts: ${entry.relative_path} unreadable: ` +

@@ -9,9 +9,11 @@
  * promotion; the pending-input gate is rechecked at the rename boundary.
  */
 
-import { copyFileSync, existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { copyFile, rename, rm, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import type { DatasetManifest, DatasetPublication, ValidationResult } from "../contracts/index.js";
+import { throwIfAborted } from "../cooperative.js";
 import { BuildError } from "../adapters/errors.js";
 import { pythonJsonDumps } from "../runtime/digests.js";
 import { checkReleaseInvariants, findLatestPublication, PUBLISH_DIR } from "./invariants.js";
@@ -35,6 +37,8 @@ export interface PublishOptions {
   pendingCheck?: (() => boolean) | null;
   /** Injectable for deterministic tests; Python ``datetime.now(UTC)`` default. */
   publishedAt?: string | null;
+  /** Cooperative abort signal from the executor (M2 I-03/I-04). */
+  signal?: AbortSignal | null;
 }
 
 export interface PublishResult {
@@ -51,14 +55,17 @@ export interface PublishResult {
 }
 
 /** Promote *manifest* + *validation* to an immutable publication (atomic). */
-export function promotePublication(options: PublishOptions): PublishResult {
+export async function promotePublication(options: PublishOptions): Promise<PublishResult> {
+  const signal = options.signal ?? null;
+  throwIfAborted(signal);
   const manifest = options.manifest;
   const validation = options.validation;
-  const invariants = checkReleaseInvariants({
+  const invariants = await checkReleaseInvariants({
     manifest,
     validation,
     outputDir: options.outputDir,
     expectedSourceAssetIds: options.expectedSourceAssetIds ?? null,
+    signal,
   });
   if (!invariants.passed) {
     throw new BuildError(
@@ -97,23 +104,24 @@ export function promotePublication(options: PublishOptions): PublishResult {
     // so the manifest's references resolve inside the immutable publication.
     // A vanished file raises (never a silent skip) and aborts the promotion.
     for (const artifact of manifest.artifacts) {
+      throwIfAborted(signal);
       const src = join(options.outputDir, artifact.relative_path);
       const dest = join(stagedDir, artifact.relative_path);
       mkdirSync(dirnameOf(dest), { recursive: true });
-      copyFileSync(src, dest);
+      await copyFile(src, dest);
     }
     const manifestSrc = join(options.outputDir, MANIFEST_FILE);
     if (existsSync(manifestSrc)) {
-      copyFileSync(manifestSrc, join(stagedDir, MANIFEST_FILE));
+      await copyFile(manifestSrc, join(stagedDir, MANIFEST_FILE));
     }
     // C1d: the publication's ``validation_result_ref`` must resolve inside
     // the immutable version directory — validation_report.json is not a
     // manifest artifact, so it needs an explicit copy.
     const validationSrc = join(options.outputDir, "validation_report.json");
     if (existsSync(validationSrc)) {
-      copyFileSync(validationSrc, join(stagedDir, "validation_report.json"));
+      await copyFile(validationSrc, join(stagedDir, "validation_report.json"));
     }
-    writeFileSync(
+    await writeFile(
       join(stagedDir, "publication.json"),
       `${pythonJsonDumps(publication)}\n`,
       "utf8",
@@ -123,10 +131,10 @@ export function promotePublication(options: PublishOptions): PublishResult {
     if (options.pendingCheck !== null && options.pendingCheck !== undefined && options.pendingCheck()) {
       throw new PublicationRefusedError(PUBLICATION_REFUSED_PREFIX);
     }
-    renameDir(stagedDir, versionDir);
+    await rename(stagedDir, versionDir);
   } catch (error) {
     if (existsSync(stagedDir)) {
-      rmSync(stagedDir, { recursive: true, force: true });
+      await rm(stagedDir, { recursive: true, force: true });
     }
     if (error instanceof PublicationRefusedError) {
       throw error;
@@ -147,10 +155,6 @@ export function promotePublication(options: PublishOptions): PublishResult {
       artifacts_intact: invariants.artifacts_intact,
     },
   };
-}
-
-function renameDir(from: string, to: string): void {
-  renameSync(from, to);
 }
 
 function dirnameOf(path: string): string {

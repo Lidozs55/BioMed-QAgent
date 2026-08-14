@@ -14,12 +14,12 @@ import { parseDatasetBuildSpec } from "../src/dataset/contracts/index.js";
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 describe("Phase 4 step 6 compat gate parity", () => {
-  test("gate rules mirror test_dataset_compat_gate.py contract cases", () => {
-    expect(checkCompatGateContractParity()).toEqual([]);
+  test("gate rules mirror test_dataset_compat_gate.py contract cases", async () => {
+    expect(await checkCompatGateContractParity()).toEqual([]);
   });
 
-  test("fixture-driven gate matrix mirrors the Python suite", () => {
-    const issues = checkCompatGateFixtureParity({
+  test("fixture-driven gate matrix mirrors the Python suite", async () => {
+    const issues = await checkCompatGateFixtureParity({
       fixturesRoot: join(repoRoot, "backend", "tests", "fixtures"),
       outputRoot: scratchOutputRoot("compat-vitest-"),
     });

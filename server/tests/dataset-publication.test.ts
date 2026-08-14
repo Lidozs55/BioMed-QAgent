@@ -13,24 +13,24 @@ import {
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 describe("Phase 4 step 9 publication parity", () => {
-  test("release invariants mirror test_dataset_invariants.py", () => {
+  test("release invariants mirror test_dataset_invariants.py", async () => {
     expect(
-      checkInvariantsParity({ outputRoot: scratchOutputRoot("publication-invariants-vitest-") }),
+      await checkInvariantsParity({ outputRoot: scratchOutputRoot("publication-invariants-vitest-") }),
     ).toEqual([]);
   });
 
-  test("manifest assembly mirrors test_dataset_manifest.py", () => {
+  test("manifest assembly mirrors test_dataset_manifest.py", async () => {
     expect(
-      checkManifestParity({
+      await checkManifestParity({
         fixturesRoot: join(repoRoot, "backend", "tests", "fixtures"),
         outputRoot: scratchOutputRoot("publication-manifest-vitest-"),
       }),
     ).toEqual([]);
   });
 
-  test("atomic promotion mirrors the publish path of test_dataset_expression_runner.py", () => {
+  test("atomic promotion mirrors the publish path of test_dataset_expression_runner.py", async () => {
     expect(
-      checkPublisherParity({ outputRoot: scratchOutputRoot("publication-publisher-vitest-") }),
+      await checkPublisherParity({ outputRoot: scratchOutputRoot("publication-publisher-vitest-") }),
     ).toEqual([]);
   });
 });

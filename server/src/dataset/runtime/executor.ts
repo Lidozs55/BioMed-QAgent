@@ -18,6 +18,7 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { BindingRejection, SourceAsset } from "../contracts/index.js";
 import { AdapterError, BindingRejectedError, BuildError, EmptySourceError } from "../adapters/errors.js";
+import { OperationAbortedError } from "../cooperative.js";
 import {
   appendAttempt,
   findReusable,
@@ -562,26 +563,38 @@ export class DatasetBuildExecutor {
     this.cancellationSignal?.addEventListener("abort", onCancellation, { once: true });
     let result: OperationOutput;
     try {
-      if (this.operationTimeoutMs > 0) {
-        let timeout: NodeJS.Timeout | undefined;
-        try {
-          result = await Promise.race([
-            Promise.resolve(this.runOperation(op, upstream, operationController.signal)),
-            new Promise<never>((_resolve, reject) => {
-              timeout = setTimeout(
-                () => {
-                  operationController.abort();
-                  reject(new OperationTimeoutError(op.operation_id, this.operationTimeoutMs));
-                },
-                this.operationTimeoutMs,
-              );
-            }),
-          ]);
-        } finally {
-          if (timeout !== undefined) clearTimeout(timeout);
+      try {
+        if (this.operationTimeoutMs > 0) {
+          let timeout: NodeJS.Timeout | undefined;
+          try {
+            result = await Promise.race([
+              Promise.resolve(this.runOperation(op, upstream, operationController.signal)),
+              new Promise<never>((_resolve, reject) => {
+                timeout = setTimeout(
+                  () => {
+                    operationController.abort();
+                    reject(new OperationTimeoutError(op.operation_id, this.operationTimeoutMs));
+                  },
+                  this.operationTimeoutMs,
+                );
+              }),
+            ]);
+          } finally {
+            if (timeout !== undefined) clearTimeout(timeout);
+          }
+        } else {
+          result = await this.runOperation(op, upstream, operationController.signal);
         }
-      } else {
-        result = await this.runOperation(op, upstream, operationController.signal);
+      } catch (error) {
+        // The real Core runner checks the signal cooperatively; map its
+        // abort marker onto the executor's cancel semantics so a cancelled
+        // build finalizes as ``cancelled`` (not ``failed``).
+        if (error instanceof OperationAbortedError) {
+          throw new BuildCancelledError(
+            `operation ${op.operation_id} was cancelled or timed out`,
+          );
+        }
+        throw error;
       }
     } finally {
       this.cancellationSignal?.removeEventListener("abort", onCancellation);

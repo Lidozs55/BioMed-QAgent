@@ -453,7 +453,7 @@ describe("end-to-end: downloaded Xena file parses with the TS XenaMatrixAdapter"
     });
 
     const outputDir = path.join(root, "adapter-out");
-    const batch = getAdapter("xena.matrix.v1").parse(asset, decompressed ?? "", {
+    const batch = await getAdapter("xena.matrix.v1").parse(asset, decompressed ?? "", {
       buildId: "build_test",
       bindingId: "binding_1",
       schemaRef: "gene_expression.long.v1",

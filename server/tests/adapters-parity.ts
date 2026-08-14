@@ -59,15 +59,15 @@ function check(issues: string[], condition: boolean, message: string): void {
   if (!condition) issues.push(message);
 }
 
-function checkThrows(
+async function checkThrows(
   issues: string[],
   name: string,
-  fn: () => unknown,
+  fn: () => unknown | Promise<unknown>,
   messagePattern?: RegExp,
   errorType?: ErrorClass,
-): void {
+): Promise<void> {
   try {
-    fn();
+    await fn();
     issues.push(`${name}: expected an error but none was thrown`);
   } catch (error) {
     const actual = error as Error;
@@ -156,7 +156,7 @@ function writeFixtureFile(
 }
 
 /** DownloadAttempt / AcquisitionResult / SourceRecord / SourceRelation + enums + AdapterParams. */
-export function checkAdapterContractParity(): string[] {
+export async function checkAdapterContractParity(): Promise<string[]> {
   const issues: string[] = [];
 
   // SourceRecord / SourceRelation preserve explicit evidence (Python test).
@@ -204,7 +204,7 @@ export function checkAdapterContractParity(): string[] {
     successful.error_code === null,
     "successful attempt must have null error_code",
   );
-  checkThrows(
+  await checkThrows(
     issues,
     "succeeded with error rejected",
     () =>
@@ -215,7 +215,7 @@ export function checkAdapterContractParity(): string[] {
       }),
     /successful download/,
   );
-  checkThrows(
+  await checkThrows(
     issues,
     "failed without error rejected",
     () =>
@@ -233,7 +233,7 @@ export function checkAdapterContractParity(): string[] {
       }),
     /failed download/,
   );
-  checkThrows(
+  await checkThrows(
     issues,
     "finished_at before started_at rejected",
     () =>
@@ -257,7 +257,7 @@ export function checkAdapterContractParity(): string[] {
     result.asset?.asset_id === asset.asset_id,
     "AcquisitionResult asset must round-trip",
   );
-  checkThrows(
+  await checkThrows(
     issues,
     "succeeded without asset rejected",
     () => parseAcquisitionResult({ schema_version: "1.0", attempt: successful, asset: null }),
@@ -275,7 +275,7 @@ export function checkAdapterContractParity(): string[] {
     started_at: NOW,
     finished_at: NOW,
   });
-  checkThrows(
+  await checkThrows(
     issues,
     "failed with asset rejected",
     () =>
@@ -286,7 +286,7 @@ export function checkAdapterContractParity(): string[] {
       }),
     /forbid one/,
   );
-  checkThrows(
+  await checkThrows(
     issues,
     "asset referencing the wrong attempt rejected",
     () =>
@@ -333,7 +333,7 @@ export function checkAdapterContractParity(): string[] {
   });
   check(issues, params.delimiter === ",", "AdapterParams delimiter survives parsing");
   check(issues, params.platform_ids[0] === "GPL570", "AdapterParams platform_ids survive");
-  checkThrows(
+  await checkThrows(
     issues,
     "bad platform id rejected",
     () =>
@@ -347,7 +347,7 @@ export function checkAdapterContractParity(): string[] {
       }),
     /GPL/,
   );
-  checkThrows(
+  await checkThrows(
     issues,
     "multi-character delimiter rejected",
     () =>
@@ -361,7 +361,7 @@ export function checkAdapterContractParity(): string[] {
       }),
     /single character/,
   );
-  checkThrows(
+  await checkThrows(
     issues,
     "delimiter on non-supplementary format rejected",
     () =>
@@ -375,7 +375,7 @@ export function checkAdapterContractParity(): string[] {
       }),
     /supplementary_matrix/,
   );
-  checkThrows(
+  await checkThrows(
     issues,
     "unknown value scale rejected",
     () =>
@@ -419,7 +419,7 @@ export function checkAdapterContractParity(): string[] {
       expression_unit: "x",
     },
   });
-  checkThrows(
+  await checkThrows(
     issues,
     "invalid binding parameters raise BuildError",
     () => adapterParamsForBinding(invalidBinding),
@@ -435,7 +435,7 @@ export interface AdapterFixtureOptions {
   outputRoot: string;
 }
 
-function runAdapter(
+async function runAdapter(
   adapter: SourceAdapter,
   fixturesRoot: string,
   fixture: string,
@@ -451,7 +451,7 @@ function runAdapter(
 }
 
 /** GDC / Xena adapter runs against the backend fixtures (test_dataset_adapters.py). */
-export function checkAdapterFixtureParity(options: AdapterFixtureOptions): string[] {
+export async function checkAdapterFixtureParity(options: AdapterFixtureOptions): Promise<string[]> {
   const issues: string[] = [];
   rmSync(options.outputRoot, { recursive: true, force: true });
   mkdirSync(options.outputRoot, { recursive: true });
@@ -459,7 +459,7 @@ export function checkAdapterFixtureParity(options: AdapterFixtureOptions): strin
 
   // 1. GDC matrix batch shape (test_gdc_matrix_batch_shape).
   const gdc = getAdapter("gdc.expression.v1");
-  const gdcBatch = runAdapter(gdc, fixtures, "gdc/gdc_expression.tsv", join(options.outputRoot, "gdc_matrix"));
+  const gdcBatch = await runAdapter(gdc, fixtures, "gdc/gdc_expression.tsv", join(options.outputRoot, "gdc_matrix"));
   check(issues, gdcBatch.batch_id === "batch_binding_1", "GDC batch_id");
   check(issues, gdcBatch.dataset_family === "gene_expression", "GDC dataset_family");
   check(issues, gdcBatch.row_granularity === "gene_sample_measurement", "GDC row_granularity");
@@ -552,7 +552,7 @@ export function checkAdapterFixtureParity(options: AdapterFixtureOptions): strin
   );
 
   // 4. GDC STAR counts (test_gdc_star_counts_batch + _rejected_rows_audited).
-  const gdcStar = runAdapter(gdc, fixtures, "gdc/gdc_star_counts.tsv", join(options.outputRoot, "gdc_star"));
+  const gdcStar = await runAdapter(gdc, fixtures, "gdc/gdc_star_counts.tsv", join(options.outputRoot, "gdc_star"));
   check(issues, gdcStar.statistics.format === "star_counts", "STAR statistics.format");
   check(issues, gdcStar.statistics.source_row_count === 2, "STAR statistics.source_row_count");
   check(issues, gdcStar.row_count === 2, "STAR row_count");
@@ -588,7 +588,7 @@ export function checkAdapterFixtureParity(options: AdapterFixtureOptions): strin
 
   // 5. Xena matrix (test_xena_matrix_batch).
   const xena = getAdapter("xena.matrix.v1");
-  const xenaBatch = runAdapter(xena, fixtures, "ncbi/gse178352/xena_matrix.tsv", join(options.outputRoot, "xena"));
+  const xenaBatch = await runAdapter(xena, fixtures, "ncbi/gse178352/xena_matrix.tsv", join(options.outputRoot, "xena"));
   check(issues, xenaBatch.parser_id === "xena.matrix.v1", "Xena parser_id");
   check(issues, xenaBatch.statistics.format === "expression_matrix", "Xena statistics.format");
   check(issues, xenaBatch.row_count === 4, "Xena row_count");
@@ -617,7 +617,7 @@ export function checkAdapterFixtureParity(options: AdapterFixtureOptions): strin
     derived_from_asset_id: null,
     data_level: "repository_processed",
   });
-  checkThrows(
+  await checkThrows(
     issues,
     "checksum mismatch raises AdapterError",
     () =>
@@ -640,7 +640,7 @@ export function checkAdapterFixtureParity(options: AdapterFixtureOptions): strin
   const malformedOut = join(options.outputRoot, "malformed");
   const malformedPath = join(malformedOut, "malformed.tsv");
   writeFixtureFile(malformedPath, "sample_id\tvalue\n", "utf8");
-  checkThrows(
+  await checkThrows(
     issues,
     "malformed header raises AdapterError",
     () =>
@@ -658,7 +658,7 @@ export function checkAdapterFixtureParity(options: AdapterFixtureOptions): strin
   const badValueOut = join(options.outputRoot, "bad_value");
   const badValuePath = join(badValueOut, "bad_value.tsv");
   writeFixtureFile(badValuePath, "gene_id\tS1\nTP53\tnan-value\n", "utf8");
-  const badValueBatch = gdc.parse(sourceAssetFromPath(badValuePath), badValuePath, {
+  const badValueBatch = await gdc.parse(sourceAssetFromPath(badValuePath), badValuePath, {
     buildId: "build_test",
     bindingId: "binding_1",
     schemaRef: "gene_expression.long.v1",
@@ -678,7 +678,7 @@ export function checkAdapterFixtureParity(options: AdapterFixtureOptions): strin
   const specialOut = join(options.outputRoot, "special");
   const specialPath = join(specialOut, "special.tsv");
   writeFixtureFile(specialPath, "gene_id\tS1\tS2\nTP53\tnan\tinf\nBRCA1\t3\t4.25\n", "utf8");
-  const specialBatch = gdc.parse(sourceAssetFromPath(specialPath), specialPath, {
+  const specialBatch = await gdc.parse(sourceAssetFromPath(specialPath), specialPath, {
     buildId: "build_test",
     bindingId: "binding_1",
     schemaRef: "gene_expression.long.v1",
@@ -701,7 +701,7 @@ export function checkAdapterFixtureParity(options: AdapterFixtureOptions): strin
     "gene_id\tgene_name\tgene_type\tS1\tS2\nENSG00000141510\tTP53\tprotein_coding\t1.5\t2\n",
     "utf8",
   );
-  const annotatedBatch = gdc.parse(sourceAssetFromPath(annotatedPath), annotatedPath, {
+  const annotatedBatch = await gdc.parse(sourceAssetFromPath(annotatedPath), annotatedPath, {
     buildId: "build_test",
     bindingId: "binding_1",
     schemaRef: "gene_expression.long.v1",
@@ -723,7 +723,7 @@ export function checkAdapterFixtureParity(options: AdapterFixtureOptions): strin
     gzipPath,
     gzipSync(readFileSync(join(fixtures, "gdc/gdc_expression.tsv"))),
   );
-  const gzipBatch = gdc.parse(sourceAssetFromPath(gzipPath), gzipPath, {
+  const gzipBatch = await gdc.parse(sourceAssetFromPath(gzipPath), gzipPath, {
     buildId: "build_test",
     bindingId: "binding_1",
     schemaRef: "gene_expression.long.v1",
@@ -739,7 +739,7 @@ export function checkAdapterFixtureParity(options: AdapterFixtureOptions): strin
     "gene_id\tgene_name\tgene_type\tunstranded\nENSG00000141510.17\tTP53\tprotein_coding\t120\n",
     "utf8",
   );
-  const starFallback = gdc.parse(sourceAssetFromPath(starFallbackPath), starFallbackPath, {
+  const starFallback = await gdc.parse(sourceAssetFromPath(starFallbackPath), starFallbackPath, {
     buildId: "build_test",
     bindingId: "binding_1",
     schemaRef: "gene_expression.long.v1",
@@ -765,7 +765,7 @@ export function checkAdapterFixtureParity(options: AdapterFixtureOptions): strin
   const blankGdcOut = join(options.outputRoot, "blank_gdc");
   const blankGdcPath = join(blankGdcOut, "gdc_blank.tsv");
   writeFixtureFile(blankGdcPath, "gene_id\tS1\nTP53\t1.5\n\nBRCA1\t3\n", "utf8");
-  checkThrows(
+  await checkThrows(
     issues,
     "GDC blank line raises AdapterError",
     () =>
@@ -781,7 +781,7 @@ export function checkAdapterFixtureParity(options: AdapterFixtureOptions): strin
   const blankXenaOut = join(options.outputRoot, "blank_xena");
   const blankXenaPath = join(blankXenaOut, "xena_blank.tsv");
   writeFixtureFile(blankXenaPath, "gene_id\tS1\nTP53\t1.5\n\nBRCA1\t3\n", "utf8");
-  const blankXenaBatch = xena.parse(sourceAssetFromPath(blankXenaPath), blankXenaPath, {
+  const blankXenaBatch = await xena.parse(sourceAssetFromPath(blankXenaPath), blankXenaPath, {
     buildId: "build_test",
     bindingId: "binding_1",
     schemaRef: "gene_expression.long.v1",
@@ -792,7 +792,7 @@ export function checkAdapterFixtureParity(options: AdapterFixtureOptions): strin
   // 14. Registry + unknown adapter (test_unknown_adapter_rejected, test_adapter_registry_entries).
   check(issues, "gdc.expression.v1" in ADAPTER_REGISTRY, "registry has gdc adapter");
   check(issues, "xena.matrix.v1" in ADAPTER_REGISTRY, "registry has xena adapter");
-  checkThrows(
+  await checkThrows(
     issues,
     "unknown adapter rejected",
     () => getAdapter("geo.probe.v1"),
@@ -812,8 +812,8 @@ export function checkAdapterFixtureParity(options: AdapterFixtureOptions): strin
 }
 
 /** Convenience wrapper: contract + fixture parity. */
-export function checkAdaptersParity(options: AdapterFixtureOptions): string[] {
-  return [...checkAdapterContractParity(), ...checkAdapterFixtureParity(options)];
+export async function checkAdaptersParity(options: AdapterFixtureOptions): Promise<string[]> {
+  return [...(await checkAdapterContractParity()), ...(await checkAdapterFixtureParity(options))];
 }
 
 /** Scratch output root for callers that want to manage their own temp dir. */

@@ -273,6 +273,46 @@ describe("TS Core E2E golden outcomes (I-07)", () => {
       const data = envelope.data as { build_result?: { status: string } };
       expect(data.build_result?.status).toBe("succeeded");
     }
+    // Adapter-level coverage gap closure: the SAME partial build through the
+    // frozen bridge shape must map to ``partial_success`` (one good binding
+    // + one rejected binding), not just the record-level rejected_sources.
+    const partialEnvelope = await adapter.execute({
+      taskId: "task_e2e",
+      runId: "run_e2e",
+      piSessionId: "pi_1",
+      toolCallId: "t2",
+      spec: spec({
+        build_id: "build_e2e_partial_c",
+        source_bindings: [
+          {
+            schema_version: "1.0",
+            binding_id: "binding_gdc",
+            source: "gdc",
+            acquisition: { schema_version: "1.0", mode: "builtin", provider_id: "gdc.files.v1" },
+            adapter_id: "gdc.expression.v1",
+          },
+          {
+            schema_version: "1.0",
+            binding_id: "binding_xena",
+            source: "xena",
+            acquisition: { schema_version: "1.0", mode: "builtin", provider_id: "xena.files.v1" },
+            adapter_id: "xena.matrix.v1",
+          },
+        ],
+      }),
+      sourceFiles: { binding_gdc: good.relative_path, binding_xena: bad.relative_path },
+      mappingFiles: {},
+    });
+    expect(partialEnvelope.ok).toBe(true);
+    if (partialEnvelope.ok) {
+      const data = partialEnvelope.data as {
+        build_result?: { status: string; rejected_sources: string[] };
+        publication_id: string | null;
+      };
+      expect(data.build_result?.status).toBe("partial_success");
+      expect(data.build_result?.rejected_sources).toContain("binding_xena");
+      expect(data.publication_id).not.toBeNull();
+    }
   });
 
   it("NO_DATA: every binding rejected surfaces a no_data build result", async () => {
