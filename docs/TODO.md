@@ -27,13 +27,14 @@
 | 5 | 迁外部能力与 Python 数据处理依赖 | ✅ 完成（2026-08-14；legacy Python 仅作回滚保留，物理删除属 Phase 8） |
 | 6 | 迁模型设置与 Settings API | ✅ 完成（2026-08-13） |
 | 7 | 正式切换 Frontend → TS Host | ✅ 完成（2026-08-14） |
-| 8 | 删除 Python Runtime（仅留 DB bridge） | ⬜ 待开始 |
+| 8 | 删除 Python Runtime（仅留 DB bridge） | ✅ 完成（2026-08-14） |
 
-默认 profile 已切换为
-`APP_HOST=ts / AGENT_RUNTIME=pi / DATASET_CORE=ts / PI_EXPERIMENTAL=0`。
-FastAPI Web Server 默认不启动；仅 legacy Agent、Python Core 或 experimental Pi 的显式
-回滚/诊断 profile 会启动 private FastAPI。feature-flag 回滚顺序与迁移期约束见
-Plan §24；Phase 8 后删除 flag 与 legacy 代码。
+> **当前拓扑（Phase 8 后，2026-08-14）**：唯一正式拓扑是 TypeScript Host
+> （`pnpm dev` / `pnpm start`）+ Pi Agent + TS Dataset Core + 按需 `database/bridge.py`
+> JSONL persistence。`APP_HOST` / `AGENT_RUNTIME` / `DATASET_CORE` /
+> `PI_EXPERIMENTAL` flags 与 FastAPI rollback **已删除**，不再被解析。
+> 下文各 Phase 正文是迁移期历史记录（含已不存在的运行方式），不作为当前
+> 启动说明；当前启动见 [README.md](README.md)，权威架构见 [ARCHITECTURE.md](ARCHITECTURE.md)。
 
 ---
 

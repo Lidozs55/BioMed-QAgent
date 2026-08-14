@@ -17,7 +17,11 @@ manifest 描述 schema（``columns`` 字段），物理格式仍是 CSV + manife
 
 设计要点：
   - 原子写入：先写 ``.tmp`` 再 ``os.replace``，失败不留半成品
-  - manifest 更新与 main_data 写入视为一个事务，任一失败回滚
+  - commit 是两文件事务：发布前先把既有 manifest/main_data 原子重命名为
+    ``.bak`` 快照，任一步失败则回滚快照并清理 ``.tmp``；
+  - 崩溃恢复：下次 commit 时发现遗留 ``.bak`` 会保守恢复（发布未完成则还原，
+    已完成则清理）；单写者模型下崩溃窗口可能短暂留下“新 CSV + 旧 manifest”
+    组合，由下一次 commit 恢复（无 journal，不做跨文件崩溃原子性承诺）
   - index.sqlite3 仅作搜索索引，权威数据在 records/ 文件中
 """
 
@@ -153,11 +157,21 @@ class CacheStore:
 
         main_data_path = dataset_dir / "main_data.csv"
         manifest_path = dataset_dir / "manifest.json"
-
-        kw_list = [k.strip() for k in (keywords or []) if k and k.strip()]
-        # 1. 写 main_data.csv 到 .tmp
         main_data_tmp = main_data_path.with_suffix(".csv.tmp")
+        manifest_tmp = manifest_path.with_suffix(".json.tmp")
+        # 快照名：发布前的既有最终文件会被原子重命名为 .bak，失败时回滚。
+        csv_bak = main_data_path.with_suffix(".csv.bak")
+        json_bak = manifest_path.with_suffix(".json.bak")
+
+        published_csv = False
+        published_manifest = False
+        kw_list = [k.strip() for k in (keywords or []) if k and k.strip()]
         try:
+            # 0. 恢复上次崩溃可能遗留的 .bak（幂等）
+            self._recover_leftover_backups(
+                main_data_path, csv_bak, manifest_path, json_bak
+            )
+            # 1. 写 main_data.csv 到 .tmp
             self._write_main_data(main_data_tmp, csv_rows, resolved_columns)
             # 2. 写 manifest.json 到 .tmp
             manifest = CacheDatasetManifest(
@@ -174,23 +188,45 @@ class CacheStore:
                 keywords=kw_list,
                 columns=resolved_columns,
             )
-            manifest_tmp = manifest_path.with_suffix(".json.tmp")
             manifest_tmp.write_text(
                 json.dumps(manifest.to_dict(), ensure_ascii=False, indent=2) + "\n",
                 encoding="utf-8",
             )
-            # 3. 原子重命名（manifest 先，main_data 后；索引最后更新）
-            os.replace(manifest_tmp, manifest_path)
+            # 3. 快照既有最终文件（原子重命名；新数据集无既有文件则跳过）
+            if main_data_path.exists():
+                os.replace(main_data_path, csv_bak)
+            if manifest_path.exists():
+                os.replace(manifest_path, json_bak)
+            # 4. 发布新文件（manifest 最后发布 = commit point）
             os.replace(main_data_tmp, main_data_path)
-            # 4. 更新索引
+            published_csv = True
+            os.replace(manifest_tmp, manifest_path)
+            published_manifest = True
+            # 5. 更新索引
             self._upsert_index(manifest)
         except BaseException:
-            # 清理 .tmp 残留
-            for tmp in (main_data_tmp, manifest_path.with_suffix(".json.tmp")):
-                if tmp.exists():
+            # 回滚：已快照（.bak）的文件一律还原（无论是否已发布）；新数据集
+            # 已发布的最终文件无快照则删除；清理 .tmp。
+            for tmp in (main_data_tmp, manifest_tmp):
+                with contextlib.suppress(OSError):
+                    tmp.unlink()
+            for final, bak, published in (
+                (main_data_path, csv_bak, published_csv),
+                (manifest_path, json_bak, published_manifest),
+            ):
+                if bak.exists():
                     with contextlib.suppress(OSError):
-                        tmp.unlink()
+                        os.replace(bak, final)
+                elif published:
+                    with contextlib.suppress(OSError):
+                        final.unlink()
             raise
+
+        # 成功：清理快照
+        with contextlib.suppress(OSError):
+            csv_bak.unlink()
+        with contextlib.suppress(OSError):
+            json_bak.unlink()
 
         logger.info(
             "CacheStore.commit_dataset: namespace=%s dataset=%s rows=%d columns=%d",
@@ -401,6 +437,42 @@ class CacheStore:
             for row in rows:
                 # 用 dict.get 填充缺失列为空字符串；多余列由 extrasaction 拒绝
                 writer.writerow({col: row.get(col, "") for col in columns})
+
+    def _recover_leftover_backups(
+        self,
+        main_data_path: Path,
+        csv_bak: Path,
+        manifest_path: Path,
+        json_bak: Path,
+    ) -> None:
+        """恢复上次 commit 崩溃可能遗留的 .bak 快照（幂等）。
+
+        发布顺序约定：快照(CSV→manifest) → 发布 CSV → 发布 manifest（commit
+        point）→ 清理快照（先 CSV 后 manifest）。因此：
+
+        - ``json_bak`` 存在且 manifest 最终文件已存在 → 已越过 commit point，
+          清理全部遗留快照；
+        - ``json_bak`` 存在但 manifest 最终文件不存在 → 发布未完成，还原
+          CSV 与 manifest 快照（或删除已发布的新文件）；
+        - 仅 ``csv_bak`` 存在 → 不可能（清理顺序保证 CSV 快照先被删除），
+          防御性还原即可。
+        """
+        if json_bak.exists() and not manifest_path.exists():
+            # 崩溃发生在 manifest 发布之前：回退到发布前状态。
+            if csv_bak.exists():
+                with contextlib.suppress(OSError):
+                    os.replace(csv_bak, main_data_path)
+            elif main_data_path.exists():
+                with contextlib.suppress(OSError):
+                    main_data_path.unlink()
+            with contextlib.suppress(OSError):
+                os.replace(json_bak, manifest_path)
+            return
+        # 发布已完成（或没有遗留）：清理全部快照。
+        for bak in (csv_bak, json_bak):
+            if bak.exists():
+                with contextlib.suppress(OSError):
+                    bak.unlink()
 
     def _load_manifest(self, path: Path) -> CacheDatasetManifest:
         data = json.loads(path.read_text(encoding="utf-8"))

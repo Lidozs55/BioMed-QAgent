@@ -93,9 +93,12 @@ jobs:
           cp -r .pi staging/.pi
           cp -r database staging/database
           cp package.json pnpm-workspace.yaml pnpm-lock.yaml pyproject.toml uv.lock staging/
+          cp tsconfig.base.json staging/
+          cp -r packages staging/packages
+          rm -rf staging/packages/contracts/node_modules
           cp -r server/src staging/server/src
-          rm -rf staging/server/src/dev
           cp server/package.json staging/server/
+          cp server/tsconfig.json staging/server/
           cp -r frontend staging/frontend
           rm -rf staging/frontend/node_modules staging/frontend/dist
           cp -r frontend/dist staging/frontend/dist
@@ -112,9 +115,70 @@ jobs:
           name: BioMed-QAgent-${{ github.ref_name }}-bundle
           path: ./BioMed-QAgent-bundle.zip
 
+  release-smoke:
+    name: Release bundle smoke (unpack → install → start → health)
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download bundle artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: BioMed-QAgent-${{ github.ref_name }}-bundle
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Python + uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: '3.12'
+
+      - name: Unpack bundle
+        run: |
+          mkdir bundle
+          unzip -q BioMed-QAgent-bundle.zip -d bundle
+          ls bundle
+
+      - name: Install workspace deps
+        working-directory: ./bundle
+        run: pnpm install --frozen-lockfile
+
+      - name: Sync database project
+        working-directory: ./bundle
+        run: uv sync --frozen
+
+      - name: Bridge self-test (bundled database/)
+        working-directory: ./bundle
+        run: uv run python database/bridge.py --self-test
+
+      - name: Start production host and probe health
+        working-directory: ./bundle
+        run: |
+          pnpm start > start.log 2>&1 &
+          pid=$!
+          ok=""
+          for i in $(seq 1 60); do
+            sleep 2
+            if curl -sf http://127.0.0.1:5173/api/v1/health > health.json 2>/dev/null; then ok=1; break; fi
+          done
+          if [ -z "$ok" ]; then
+            echo "host did not become healthy; start.log:"
+            tail -40 start.log
+            exit 1
+          fi
+          cat health.json
+          curl -sf -o /dev/null -w "GET / -> %{http_code}\n" http://127.0.0.1:5173/
+          curl -sf http://127.0.0.1:5173/api/v1/databases | python -c "import json,sys; d=json.load(sys.stdin); print('GET /api/v1/databases ->', len(d['databases']), 'entries')"
+          kill $pid 2>/dev/null || true
+
   release:
     name: Create Release
-    needs: package
+    needs: [package, release-smoke]
     runs-on: ubuntu-latest
     permissions:
       contents: write
