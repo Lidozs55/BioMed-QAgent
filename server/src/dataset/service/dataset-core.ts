@@ -203,6 +203,7 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
       runId: input.runId,
       sourceAssets,
       mappingAssets,
+      signal: input.signal,
     });
     if (record.status !== "completed") {
       const allRejected = record.rejected_sources.length > 0;

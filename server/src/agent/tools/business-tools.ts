@@ -47,6 +47,8 @@ export interface BusinessToolBundleContext {
   /** Absolute task root (TaskWorkDir root). */
   taskRoot: string;
   hooks?: ToolHooks;
+  /** Per-run analysis staging key; may be a live getter for later runs. */
+  runId?: string | (() => string);
   guidanceDocsRoot?: string;
   /** DB bridge client (local cache + declarative database tools). */
   db?: DatabaseClient | null;
@@ -182,7 +184,11 @@ export async function createBusinessToolBundle(
   // Analysis tools (P5-09): Welch/BH/correlation/clustering with scipy
   // numeric parity; outputs confined to staging/analysis/<runId> (P5-D5).
   const { createAnalysisTools } = await import("./analysis.js");
-  register(createAnalysisTools({ taskRoot, hooks: context.hooks }), "analysis");
+  register(createAnalysisTools({
+    taskRoot,
+    hooks: context.hooks,
+    runId: context.runId,
+  }), "analysis");
   // User declarative database tools (P5-11) are appended by the caller with
   // the same registry guard because their names are dynamic.
 

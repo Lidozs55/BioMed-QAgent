@@ -163,6 +163,87 @@ describe("runtime Pi-path isolation gate (P5-13)", () => {
     await runtime.close();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
+
+  it("formal runtime wires browser services into the Pi bundle", async () => {
+    const tasksRoot = await mkdtemp(path.join(os.tmpdir(), "p5-iso-full-"));
+    roots.push(tasksRoot);
+    const captured: Array<Array<string>> = [];
+    const adapter: BioMedAgentAdapter = {
+      async createSession(config: BioMedSessionConfig): Promise<BioMedAgentSession> {
+        captured.push((config.tools ?? []).map((tool) => tool.name));
+        return {
+          piSessionId: `pi_${config.taskId}`,
+          taskId: config.taskId,
+          runId: config.runId,
+          run: async function* run(): AsyncIterable<import("../../src/agent/contracts.js").BioMedAgentEvent> {
+            yield { type: "turn_completed" };
+          },
+          cancel: async () => undefined,
+          dispose: async () => undefined,
+        };
+      },
+    };
+    const browserPool = {
+      fetch: async () => ({
+        url: "https://example.com",
+        content: "<html></html>",
+        status_code: 200,
+        elapsed_ms: 1,
+        headers: {},
+      }),
+      screenshot: async () => ({
+        url: "https://example.com",
+        buffer: Buffer.from("png"),
+        status_code: 200,
+        elapsed_ms: 1,
+      }),
+    } as unknown as import("../../src/external/browser/pool.js").NodeBrowserPool;
+    const runtime = await createPhase3Runtime({
+      tasksRoot,
+      legacyTarget: "http://127.0.0.1:1",
+      workspaceDevExec: false,
+      adapter,
+      datasetCore: "ts",
+      database: null,
+      browserPool,
+    });
+    const server: Server = createServer((req, res) => {
+      void runtime.handle(req, res);
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (address === null || typeof address === "string") throw new Error("no address");
+    const base = `http://127.0.0.1:${address.port}`;
+    const created = await fetch(`${base}/api/v1/tasks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        request_id: "req_full",
+        input: "build with browser and local cache",
+        databases: [],
+        mode: "agent",
+      }),
+    });
+    expect(created.status).toBe(202);
+    const accepted = await created.json() as { task_id: string; run_id: string };
+    await expect.poll(async () => {
+      const snapshot = await runtime.repository.getSnapshot(accepted.task_id);
+      return snapshot?.runs.find((run) => run.run_id === accepted.run_id)?.status;
+    }).toBe("completed");
+    expect(captured).toHaveLength(1);
+    const names = new Set(captured[0]);
+    for (const name of [
+      "navigate_page",
+      "download_from_page",
+      "capture_web_page",
+      "capture_page_section",
+      "execute_dataset_build",
+    ]) {
+      expect(names.has(name), `expected ${name} to be wired into the Pi session`).toBe(true);
+    }
+    await runtime.close();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
 });
 
 describe("no client smuggling in bundle services", () => {

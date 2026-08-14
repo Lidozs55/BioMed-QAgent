@@ -52,7 +52,7 @@ export const GENERATE_CORRELATION_MATRIX_TOOL_NAME = "generate_correlation_matri
 
 export interface AnalysisToolDeps extends ToolServiceDeps {
   /** Staging namespace: outputs go to <taskRoot>/staging/analysis/<runId>. */
-  runId?: string;
+  runId?: string | (() => string);
 }
 
 // ---------------------------------------------------------------------------
@@ -163,7 +163,7 @@ interface FileWrites {
 export function createAnalysisTools(deps: AnalysisToolDeps): BioMedAgentTool[] {
   const hooks = noopHooks(deps.hooks);
   const { taskRoot } = deps;
-  const runKey = deps.runId ?? "default";
+  const runKey = typeof deps.runId === "function" ? deps.runId() : deps.runId ?? "default";
   const stagingDir = () => path.join(taskRoot, "staging", "analysis", runKey);
   const relative = (absolute: string): string => toTaskRelative(absolute, taskRoot);
 
@@ -754,4 +754,3 @@ export function createAnalysisTools(deps: AnalysisToolDeps): BioMedAgentTool[] {
     generateCorrelationMatrixTool,
   ];
 }
-
