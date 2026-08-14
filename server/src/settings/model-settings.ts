@@ -361,19 +361,25 @@ export class ModelSettingsService {
     const model = settings.active_model_id === null
       ? undefined
       : this.registry.models.find(({ id }) => id === settings.active_model_id);
-    const apiKey = provider === undefined
+    const activeApiKey = provider === undefined
       ? this.auth.direct_api_key
       : this.auth.provider_api_keys[provider.id] ?? "";
+    const isDashScope =
+      provider?.preset_id === "dashscope" || provider?.id === "dashscope";
     if (model?.capabilities.image === true) {
       return {
-        apiKey,
+        apiKey: activeApiKey,
         baseUrl: provider?.base_url ?? settings.base_url,
         model: model.model_id,
       };
     }
     return {
-      apiKey: apiKey !== "" ? apiKey : (this.environment.DASHSCOPE_API_KEY ?? ""),
-      baseUrl: this.environment.DASHSCOPE_BASE_URL ?? DEFAULT_DASHSCOPE_BASE_URL,
+      apiKey: isDashScope
+        ? (activeApiKey !== "" ? activeApiKey : (this.environment.DASHSCOPE_API_KEY ?? ""))
+        : (this.environment.DASHSCOPE_API_KEY ?? ""),
+      baseUrl: isDashScope
+        ? (this.environment.DASHSCOPE_BASE_URL ?? provider?.base_url ?? settings.base_url)
+        : (this.environment.DASHSCOPE_BASE_URL ?? DEFAULT_DASHSCOPE_BASE_URL),
       model: VL_MODEL_NAME,
     };
   };

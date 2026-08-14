@@ -14,7 +14,7 @@ import type { ExperimentalPiRuntime } from "../src/agent/experimental-pi.js";
 import { createApplicationHost, type ApplicationHost } from "../src/app/create-app.js";
 import { createLegacyBackend } from "../src/legacy/backend-process.js";
 
-const SCHEMA_DIGEST = "a9c62815e6161c13bd2e221e07c9d006372ae67500924e2628f826a04ae8f624";
+const SCHEMA_DIGEST = "bdc9a7c40d781976037cc91eb9bbd658b4b7fdbc7f8352ba19683a92a7a99c90";
 let host: ApplicationHost | undefined;
 let socket: WebSocket | undefined;
 let outputRoot: string | undefined;

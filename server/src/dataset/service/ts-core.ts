@@ -392,6 +392,12 @@ export class TypeScriptDatasetCore {
     const stateDir = path.join(outputDir, "state");
     mkdirSync(outputDir, { recursive: true });
 
+    const lease: BuildLockLease = await acquireBuildLock(
+      { lockRoot: path.join(taskRoot, "state", "build-locks") },
+      taskId,
+      buildId,
+      context.runId,
+    );
     const controller = new AbortController();
     const combined = new AbortController();
     const onAbort = (): void => combined.abort();
@@ -403,13 +409,6 @@ export class TypeScriptDatasetCore {
     }
     this.activeCancels.set(buildId, controller);
     const signal = combined.signal;
-
-    const lease: BuildLockLease = await acquireBuildLock(
-      { lockRoot: path.join(taskRoot, "state", "build-locks") },
-      taskId,
-      buildId,
-      context.runId,
-    );
     const runnerState: RunnerState = {
       batches: new Map(),
       canonicalResults: [],
@@ -440,6 +439,7 @@ export class TypeScriptDatasetCore {
       plan: buildOperationPlan(spec),
       runOperation: runner,
       cancellationRequested: () => signal.aborted,
+      cancellationSignal: signal,
       operationTimeoutMs: this.options.operationTimeoutMs ?? 0,
       eventSink: this.options.eventSink === undefined || this.options.eventSink === null
         ? null
@@ -457,22 +457,22 @@ export class TypeScriptDatasetCore {
     let outcome: Awaited<ReturnType<DatasetBuildExecutor["run"]>>;
     try {
       outcome = await executor.run();
+      return {
+        build_id: buildId,
+        status: outcome.status,
+        error: outcome.error === null ? null : outcome.error.message,
+        publication_id: runnerState.publicationId,
+        manifest: runnerState.manifest,
+        validation: runnerState.validation,
+        completed_operations: outcome.completedOperationIds,
+        rejected_sources: Object.keys(perBindingOutcomes),
+      };
     } finally {
       this.activeCancels.delete(buildId);
       controller.signal.removeEventListener("abort", onAbort);
       context.signal?.removeEventListener("abort", onAbort);
       await lease.release();
     }
-    return {
-      build_id: buildId,
-      status: outcome.status,
-      error: outcome.error === null ? null : outcome.error.message,
-      publication_id: runnerState.publicationId,
-      manifest: runnerState.manifest,
-      validation: runnerState.validation,
-      completed_operations: outcome.completedOperationIds,
-      rejected_sources: Object.keys(perBindingOutcomes),
-    };
   }
 
   cancelDatasetBuild(buildId: string): void {

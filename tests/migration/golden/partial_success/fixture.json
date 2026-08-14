@@ -9,20 +9,20 @@
       "size_bytes": 1492
     },
     {
-      "artifact_id": "artifact_9ae7d3ef04a0fc8fb38c4bb94963a239",
+      "artifact_id": "artifact_a7fbfc36a2c896683f9ed531cea37449",
       "relative_path": "schema.json",
       "repo_relative_path": "tests/migration/golden/partial_success/artifacts/schema.json",
       "role": "schema",
-      "sha256": "a9c62815e6161c13bd2e221e07c9d006372ae67500924e2628f826a04ae8f624",
-      "size_bytes": 8096
+      "sha256": "bdc9a7c40d781976037cc91eb9bbd658b4b7fdbc7f8352ba19683a92a7a99c90",
+      "size_bytes": 7840
     },
     {
-      "artifact_id": "artifact_9842a864a0d526e8965237f7748461c3",
+      "artifact_id": "artifact_960acdda97d93aaed981a7c22a41744e",
       "relative_path": "provenance.json",
       "repo_relative_path": "tests/migration/golden/partial_success/artifacts/provenance.json",
       "role": "provenance",
-      "sha256": "e98b73eab77cf07a42d5e40fce22646bf6f3442ac9a627852202091e05861fa4",
-      "size_bytes": 4691
+      "sha256": "562590d0abc09b378770c757b534552f2ae39f5fb6e76818ae5c7820d45ab6a7",
+      "size_bytes": 4547
     },
     {
       "artifact_id": "artifact_ae7fa0e459e3cbae7744c3ed2714cacf",
@@ -61,7 +61,7 @@
     "available_artifact_roles": [],
     "binding_failures": [],
     "build_id": "golden_partial_success",
-    "publication_id": "pub_golden_partial_success_f34a6ef4ae4dc39e",
+    "publication_id": "pub_golden_partial_success_00495aaeef64409d",
     "reason_codes": [],
     "recommended_next_action": "",
     "rejected_sources": [
@@ -83,7 +83,7 @@
         "available_artifact_roles": [],
         "binding_failures": [],
         "build_id": "golden_partial_success",
-        "publication_id": "pub_golden_partial_success_f34a6ef4ae4dc39e",
+        "publication_id": "pub_golden_partial_success_00495aaeef64409d",
         "reason_codes": [],
         "recommended_next_action": "",
         "rejected_sources": [
@@ -122,22 +122,22 @@
         "size_bytes": 1492
       },
       {
-        "artifact_id": "artifact_9ae7d3ef04a0fc8fb38c4bb94963a239",
+        "artifact_id": "artifact_a7fbfc36a2c896683f9ed531cea37449",
         "media_type": "application/json",
         "relative_path": "schema.json",
         "role": "schema",
         "schema_version": "1.0",
-        "sha256": "a9c62815e6161c13bd2e221e07c9d006372ae67500924e2628f826a04ae8f624",
-        "size_bytes": 8096
+        "sha256": "bdc9a7c40d781976037cc91eb9bbd658b4b7fdbc7f8352ba19683a92a7a99c90",
+        "size_bytes": 7840
       },
       {
-        "artifact_id": "artifact_9842a864a0d526e8965237f7748461c3",
+        "artifact_id": "artifact_960acdda97d93aaed981a7c22a41744e",
         "media_type": "application/json",
         "relative_path": "provenance.json",
         "role": "provenance",
         "schema_version": "1.0",
-        "sha256": "e98b73eab77cf07a42d5e40fce22646bf6f3442ac9a627852202091e05861fa4",
-        "size_bytes": 4691
+        "sha256": "562590d0abc09b378770c757b534552f2ae39f5fb6e76818ae5c7820d45ab6a7",
+        "size_bytes": 4547
       },
       {
         "artifact_id": "artifact_ae7fa0e459e3cbae7744c3ed2714cacf",
@@ -182,7 +182,7 @@
       "report_file": "confidence_report.csv"
     },
     "dataset_family": "gene_expression",
-    "manifest_id": "manifest_f34a6ef4ae4dc39e",
+    "manifest_id": "manifest_00495aaeef64409d",
     "primary_key": [
       "dataset_id",
       "sample_id",
@@ -206,7 +206,7 @@
     "row_granularity": "gene_sample_measurement",
     "schema_ref": "gene_expression.long.v1",
     "schema_version": "1.0",
-    "sha256": "f34a6ef4ae4dc39ea9ef09c5f4e75f5af8f32b0597c8e0c137d7ff4447ad2cf4",
+    "sha256": "00495aaeef64409d7667601cc16e75a7833fb147decf892f8d788a2e85e2eb44",
     "source_summary": {
       "binding_xena": {
         "adapter_id": "xena.matrix.v1",
@@ -230,8 +230,8 @@
   },
   "outcome": "partial_success",
   "publication": {
-    "manifest_ref": "manifest_f34a6ef4ae4dc39e",
-    "publication_id": "pub_golden_partial_success_f34a6ef4ae4dc39e",
+    "manifest_ref": "manifest_00495aaeef64409d",
+    "publication_id": "pub_golden_partial_success_00495aaeef64409d",
     "published_at": "2026-08-11T00:00:00Z",
     "schema_version": "1.0",
     "supersedes_publication_id": null,
@@ -302,7 +302,7 @@
   "validation_result": {
     "checked_count": 10,
     "failed_count": 0,
-    "manifest_digest": "f34a6ef4ae4dc39ea9ef09c5f4e75f5af8f32b0597c8e0c137d7ff4447ad2cf4",
+    "manifest_digest": "00495aaeef64409d7667601cc16e75a7833fb147decf892f8d788a2e85e2eb44",
     "profile_ref": "gene_expression.release.v1",
     "report_path": "validation_report.json",
     "schema_version": "1.0",

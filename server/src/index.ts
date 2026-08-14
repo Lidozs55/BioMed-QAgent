@@ -20,7 +20,10 @@ async function main(): Promise<void> {
   const tasksRoot = path.join(outputRoot, "tasks");
   const dataDir = path.resolve(outputRoot, "..");
   const cacheDir = path.join(dataDir, "cache");
-  const databasesDir = path.join(dataDir, "skills");
+  const databasesDir = process.env.SKILL_DATA_DIR === undefined ||
+    process.env.SKILL_DATA_DIR.trim() === ""
+    ? path.join(dataDir, "skills")
+    : path.resolve(process.env.SKILL_DATA_DIR);
   const settingsDir = path.resolve(tasksRoot, "..", "..", "settings");
   const modelSettings = await ModelSettingsService.create({
     settingsDir,

@@ -1216,7 +1216,9 @@ async def test_create_task_runs_prepare_callback_before_queueing_or_execution(
 
         assert not executor_started.is_set()
         assert manager._queue.qsize() == 0
-        task_id = next(path.name for path in repository.tasks_dir.iterdir())
+        task_id = next(
+            path.name for path in repository.tasks_dir.iterdir() if path.is_dir()
+        )
         assert await repository.list_events(task_id) == []
         assert await repository.find_request("req_prepare_order") is None
 

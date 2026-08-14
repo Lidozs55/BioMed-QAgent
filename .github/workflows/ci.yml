@@ -5,6 +5,7 @@ on:
     branches:
       - main
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -29,6 +30,8 @@ jobs:
         run: uv sync
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: Install Playwright browser
+        run: pnpm --filter @biomed/server exec playwright install --with-deps chromium
       - name: Test
         run: pnpm test
       - name: Lint
@@ -37,3 +40,22 @@ jobs:
         run: pnpm typecheck
       - name: Build
         run: pnpm build
+
+  python:
+    name: Python backend gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
+      - name: Sync Python runtime
+        working-directory: ./backend
+        run: uv sync
+      - name: Test
+        working-directory: ./backend
+        run: uv run pytest
+      - name: Lint
+        working-directory: ./backend
+        run: uv run ruff check app/ tests/ launcher.py

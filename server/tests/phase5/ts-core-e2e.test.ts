@@ -412,6 +412,38 @@ describe("executor operation timeout (I-03)", () => {
     expect(outcome.error?.code).toBe("timeout");
     expect(outcome.error?.message).toContain("timed out after 20ms");
   });
+
+  it("passes an operation-level AbortSignal on timeout", async () => {
+    const { DatasetBuildExecutor } = await import("../../src/dataset/runtime/executor.js");
+    const { buildOperationPlan } = await import("../../src/dataset/runtime/index.js");
+    const { makeOperationOutput } = await import("../../src/dataset/runtime/index.js");
+    const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-op-signal-"));
+    roots.push(taskRoot);
+    const cancellationSignal = new AbortController().signal;
+    let observedAbort = false;
+    const executor = new DatasetBuildExecutor({
+      taskId: "task_t",
+      buildId: "build_t",
+      stateDir: path.join(taskRoot, "state"),
+      taskRoot,
+      plan: buildOperationPlan(spec({ build_id: "build_t" })),
+      runOperation: async (op, _upstream, signal) => {
+        if (op.kind === "acquire") {
+          return makeOperationOutput({ binding_id: op.category, source_id: "s", asset_id: "a" });
+        }
+        signal?.addEventListener("abort", () => {
+          observedAbort = true;
+        }, { once: true });
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        return makeOperationOutput({});
+      },
+      operationTimeoutMs: 20,
+      cancellationSignal,
+    });
+    const outcome = await executor.run();
+    expect(outcome.status).toBe("failed");
+    expect(observedAbort).toBe(true);
+  });
 });
 
 describe("core event → payload mapping (I-05)", () => {
