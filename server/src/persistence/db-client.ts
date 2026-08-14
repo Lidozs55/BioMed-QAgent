@@ -37,12 +37,10 @@ export class DatabaseBridgeUnavailableError extends Error {
 }
 
 export interface DatabaseClientOptions {
-  /** Python executable. Default: probe BIOMED_PYTHON_BIN / backend venv / python3. */
+  /** Python executable. Default: probe BIOMED_PYTHON_BIN / repo .venv / python3. */
   pythonBin?: string;
   /** bridge.py location (defaults to repo database/bridge.py). */
   bridgePath?: string;
-  /** Backend package root the bridge imports stores from. */
-  backendRoot?: string;
   cacheDir?: string;
   databasesDir?: string;
   /** Default per-request timeout (ms). */
@@ -61,18 +59,16 @@ function repoRoot(): string {
   return path.resolve(MODULE_DIR, "..", "..", "..");
 }
 
-export function defaultBridgePaths(): { bridgePath: string; backendRoot: string } {
-  return {
-    bridgePath: path.join(repoRoot(), "database", "bridge.py"),
-    backendRoot: path.join(repoRoot(), "backend"),
-  };
+export function defaultBridgePath(): string {
+  return path.join(repoRoot(), "database", "bridge.py");
 }
 
-export function probePythonBin(backendRoot: string): string {
+export function probePythonBin(): string {
   if (process.env.BIOMED_PYTHON_BIN) return process.env.BIOMED_PYTHON_BIN;
-  const windows = path.join(backendRoot, ".venv", "Scripts", "python.exe");
+  const root = repoRoot();
+  const windows = path.join(root, ".venv", "Scripts", "python.exe");
   if (existsSync(windows)) return windows;
-  const posix = path.join(backendRoot, ".venv", "bin", "python");
+  const posix = path.join(root, ".venv", "bin", "python");
   if (existsSync(posix)) return posix;
   return process.platform === "win32" ? "python" : "python3";
 }
@@ -80,7 +76,6 @@ export function probePythonBin(backendRoot: string): string {
 export class DatabaseClient {
   readonly pythonBin: string;
   readonly bridgePath: string;
-  readonly backendRoot: string;
   readonly cacheDir: string | undefined;
   readonly databasesDir: string | undefined;
   readonly timeoutMs: number;
@@ -91,10 +86,8 @@ export class DatabaseClient {
   private starting: Promise<void> | null = null;
 
   constructor(options: DatabaseClientOptions = {}) {
-    const { bridgePath, backendRoot } = defaultBridgePaths();
-    this.pythonBin = options.pythonBin ?? probePythonBin(backendRoot);
-    this.bridgePath = options.bridgePath ?? bridgePath;
-    this.backendRoot = options.backendRoot ?? backendRoot;
+    this.pythonBin = options.pythonBin ?? probePythonBin();
+    this.bridgePath = options.bridgePath ?? defaultBridgePath();
     this.cacheDir = options.cacheDir;
     this.databasesDir = options.databasesDir;
     this.timeoutMs = options.timeoutMs ?? 120_000;
@@ -119,7 +112,6 @@ export class DatabaseClient {
   private async spawnProcess(): Promise<void> {
     const args = [
       this.bridgePath,
-      "--backend-root", this.backendRoot,
     ];
     if (this.cacheDir !== undefined) {
       args.push("--cache-dir", this.cacheDir);

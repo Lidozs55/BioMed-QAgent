@@ -53,16 +53,19 @@ async function startApi(
 
 class FakeDatabase implements ProductDatabaseClient {
   readonly calls: Array<{ op: string; args: Record<string, unknown> }> = [];
+  // Phase 8: the bridge persists user-declared databases only; builtin
+  // entries are merged by the product API from the TS catalogue.
   entries = [{
-    id: "pubmed", name: "pubmed", category: "discovery",
-    description: "PubMed", origin: "builtin", version: "1.0.0",
-    pipeline_supported: false, capability: "literature", available: true,
+    id: "demo", name: "demo", category: "discovery",
+    description: "Demo user DB", origin: "package", version: "1.0.0",
+    pipeline_supported: false, capability: "research_only", available: true,
     enabled: true, declarative_manifest: null,
   }];
 
   async call<T>(op: string, args: Record<string, unknown>): Promise<T> {
     this.calls.push({ op, args });
     if (op === "database.list") return this.entries as T;
+    if (op === "database.disabled") return { disabled: [] } as T;
     if (op === "database.get") {
       return (this.entries.find((entry) => entry.name === args.name) ?? null) as T;
     }
@@ -83,10 +86,15 @@ describe("Phase 7 product API", () => {
       status: "ok", app_host: "ts", agent_runtime: "pi", dataset_core: "ts",
     });
     expect(await (await fetch(`${base}/databases`)).json()).toEqual({
-      databases: database.entries,
+      // Phase 8: TS builtin catalogue (9 entries) merged with user manifests.
+      databases: expect.arrayContaining([
+        expect.objectContaining({ id: "pubmed", origin: "builtin", enabled: true }),
+        expect.objectContaining({ id: "demo", origin: "package" }),
+      ]),
     });
-    const databaseDetail = await (await fetch(`${base}/databases/pubmed`)).json() as { id: string };
+    const databaseDetail = await (await fetch(`${base}/databases/pubmed`)).json() as { id: string; origin: string };
     expect(databaseDetail.id).toBe("pubmed");
+    expect(databaseDetail.origin).toBe("builtin");
     const toggled = await fetch(`${base}/databases/pubmed/disable`, { method: "POST" });
     expect(toggled.status).toBe(200);
     expect(database.calls.at(-1)).toEqual({

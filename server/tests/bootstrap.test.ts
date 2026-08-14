@@ -12,7 +12,6 @@ function services() {
   const database = new DatabaseClient({
     pythonBin: "unused",
     bridgePath: "unused",
-    backendRoot: "unused",
   });
   const browserPool = new NodeBrowserPool({
     launcher: async () => {
