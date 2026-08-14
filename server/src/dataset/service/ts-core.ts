@@ -30,6 +30,7 @@ import type {
 } from "../contracts/index.js";
 import { BuildError } from "../adapters/errors.js";
 import { adapterParamsForBinding, getAdapter } from "../adapters/adapters.js";
+import { buildProbeMapping } from "../adapters/geo/probe-mapping.js";
 import { canonicalize, expressionNormalizationV1 } from "../canonicalizer/index.js";
 import { checkExpressionCompatibility } from "../compat/compat_gate.js";
 import { integrate } from "../integrator/integrator.js";
@@ -126,6 +127,7 @@ function sourceSummary(
  */
 export function createTsCoreOperationRunner(options: {
   spec: DatasetBuildSpec;
+  taskId: string;
   taskRoot: string;
   outputDir: string;
   sourceAssets: Readonly<Record<string, SourceAsset>>;
@@ -133,7 +135,7 @@ export function createTsCoreOperationRunner(options: {
   runnerState: RunnerState;
   bindings: ReadonlyMap<string, ReturnType<typeof import("../contracts/spec.js").parseSourceBinding>>;
 }): OperationRunner {
-  const { spec, taskRoot, outputDir, sourceAssets, runnerState, bindings } = options;
+  const { spec, taskId, taskRoot, outputDir, sourceAssets, mappingAssets, runnerState, bindings } = options;
   const schema = buildGeneExpressionSchema();
 
   return (op): OperationOutput => {
@@ -187,15 +189,49 @@ export function createTsCoreOperationRunner(options: {
         if (batch === undefined) {
           throw new BuildError(`no parsed batch cached for binding ${op.category!}`);
         }
-        // Probe mapping (geo.probe-map.v1) integration lands with the GEO
-        // adapter wiring (P5-04); without a mapping asset the canonicalizer
-        // mirrors Python's honest not_attempted path.
-        const result = canonicalize({
+        let probeMap: Readonly<Record<string, string>> | undefined;
+        let probeTargetNamespace: string | undefined;
+        let probeMappingAuditPath: string | undefined;
+        const annotationAsset = mappingAssets[op.category];
+        if (annotationAsset !== undefined) {
+          const annotationPath = path.join(taskRoot, annotationAsset.relative_path);
+          if (!existsSync(annotationPath)) {
+            throw new BuildError(
+              `mapping asset file is missing: ${annotationAsset.relative_path}`,
+            );
+          }
+          if (batch.file_asset === null) {
+            throw new BuildError("batch file asset is missing before probe mapping");
+          }
+          const platformIds = Array.isArray(batch.statistics.platform_ids)
+            ? batch.statistics.platform_ids.map(String)
+            : [];
+          const probe = buildProbeMapping({
+            annotationPath,
+            batchPath: path.join(outputDir, batch.file_asset.relative_path),
+            bindingId: op.category,
+            platformId: platformIds.length > 0 ? platformIds[0] : null,
+            annotationAsset,
+            outputDir,
+          });
+          probeMap = probe.probe_to_gene;
+          probeTargetNamespace = probe.target_namespace;
+          probeMappingAuditPath = probe.detail_path;
+        }
+        let result = canonicalize({
           batch,
           schema,
           profile: expressionNormalizationV1(),
           outputDir,
+          probeMap,
+          probeTargetNamespace,
         });
+        if (probeMappingAuditPath !== undefined) {
+          result = {
+            ...result,
+            auditPaths: [...result.auditPaths, probeMappingAuditPath],
+          };
+        }
         runnerState.canonicalResults.push(result);
         return makeOperationOutput({
           binding_id: op.category,
@@ -253,7 +289,7 @@ export function createTsCoreOperationRunner(options: {
         const auditPaths = runnerState.canonicalResults.flatMap((result) => result.auditPaths);
         const summary = sourceSummary([...bindings.keys()], runnerState);
         let manifest = assembleManifest({
-          taskId: spec.build_id,
+          taskId,
           buildId: spec.build_id,
           spec,
           schema,
@@ -275,7 +311,7 @@ export function createTsCoreOperationRunner(options: {
         });
         // Re-assemble with the authoritative validation and persist once.
         manifest = assembleManifest({
-          taskId: spec.build_id,
+          taskId,
           buildId: spec.build_id,
           spec,
           schema,
@@ -357,8 +393,16 @@ export class TypeScriptDatasetCore {
     mkdirSync(outputDir, { recursive: true });
 
     const controller = new AbortController();
+    const combined = new AbortController();
+    const onAbort = (): void => combined.abort();
+    controller.signal.addEventListener("abort", onAbort, { once: true });
+    if (context.signal?.aborted === true) {
+      combined.abort();
+    } else {
+      context.signal?.addEventListener("abort", onAbort, { once: true });
+    }
     this.activeCancels.set(buildId, controller);
-    const signal = controller.signal;
+    const signal = combined.signal;
 
     const lease: BuildLockLease = await acquireBuildLock(
       { lockRoot: path.join(taskRoot, "state", "build-locks") },
@@ -380,6 +424,7 @@ export class TypeScriptDatasetCore {
     );
     const runner = createTsCoreOperationRunner({
       spec,
+      taskId,
       taskRoot,
       outputDir,
       sourceAssets: context.sourceAssets ?? {},
@@ -414,6 +459,8 @@ export class TypeScriptDatasetCore {
       outcome = await executor.run();
     } finally {
       this.activeCancels.delete(buildId);
+      controller.signal.removeEventListener("abort", onAbort);
+      context.signal?.removeEventListener("abort", onAbort);
       await lease.release();
     }
     return {

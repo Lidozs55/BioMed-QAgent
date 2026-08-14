@@ -7,6 +7,10 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import type { BioMedModelConfig } from "../agent/contracts.js";
+import {
+  DEFAULT_DASHSCOPE_BASE_URL,
+  VL_MODEL_NAME,
+} from "../processing/vlm/vlm-client.js";
 
 type JsonObject = Record<string, unknown>;
 type ModelSource = "api" | "manual" | "catalog";
@@ -341,6 +345,36 @@ export class ModelSettingsService {
       repetitionPenalty: settings.advanced.repetition_penalty,
       enableSearch: settings.advanced.enable_search,
       thinkingMode: settings.advanced.thinking_mode,
+    };
+  };
+
+  /** Resolve VLM chart-extraction config from active settings when possible. */
+  resolveVlmConfig = async (): Promise<{
+    apiKey: string;
+    baseUrl: string;
+    model: string;
+  }> => {
+    const settings = this.registry.settings;
+    const provider = settings.provider_id === null
+      ? undefined
+      : this.registry.providers.find(({ id }) => id === settings.provider_id);
+    const model = settings.active_model_id === null
+      ? undefined
+      : this.registry.models.find(({ id }) => id === settings.active_model_id);
+    const apiKey = provider === undefined
+      ? this.auth.direct_api_key
+      : this.auth.provider_api_keys[provider.id] ?? "";
+    if (model?.capabilities.image === true) {
+      return {
+        apiKey,
+        baseUrl: provider?.base_url ?? settings.base_url,
+        model: model.model_id,
+      };
+    }
+    return {
+      apiKey: apiKey !== "" ? apiKey : (this.environment.DASHSCOPE_API_KEY ?? ""),
+      baseUrl: this.environment.DASHSCOPE_BASE_URL ?? DEFAULT_DASHSCOPE_BASE_URL,
+      model: VL_MODEL_NAME,
     };
   };
 

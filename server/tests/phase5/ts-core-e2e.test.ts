@@ -5,10 +5,11 @@
  */
 
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { gzipSync } from "node:zlib";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -74,6 +75,61 @@ async function assetFor(taskRoot: string, fixture: string, bindingId: string): P
   });
 }
 
+async function assetFromBytes(
+  taskRoot: string,
+  filename: string,
+  bytes: Buffer,
+  bindingId: string,
+): Promise<SourceAsset> {
+  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  const destination = path.join(taskRoot, "source_assets", `asset_${sha256}`, filename);
+  await mkdir(path.dirname(destination), { recursive: true });
+  await writeFile(destination, bytes);
+  return parseSourceAsset({
+    schema_version: "1.0",
+    asset_id: `asset_${sha256}`,
+    kind: "source",
+    relative_path: `source_assets/asset_${sha256}/${filename}`,
+    sha256,
+    size_bytes: bytes.length,
+    media_type: "application/gzip",
+    generated_by_step_id: null,
+    source_id: `src_${bindingId}`,
+    successful_attempt_id: "attempt_1",
+    derived_from_asset_id: null,
+    data_level: "repository_processed",
+  });
+}
+
+function geoProbeSpec(): ReturnType<typeof parseDatasetBuildSpec> {
+  return parseDatasetBuildSpec({
+    schema_version: "1.0",
+    build_id: "build_geo_probe",
+    objective: "map GEO probe rows to gene symbols",
+    dataset_family: "gene_expression",
+    row_granularity: "gene_sample_measurement",
+    schema_ref: "gene_expression.long.v1",
+    source_bindings: [{
+      schema_version: "1.0",
+      binding_id: "binding_geo",
+      source: "geo",
+      acquisition: { schema_version: "1.0", mode: "builtin", provider_id: "geo.files.v1" },
+      adapter_id: "geo.expression.v1",
+      parameters: {
+        schema_version: "1.0",
+        format: "series_matrix",
+        value_semantics: "normalized_expression",
+        value_scale: "log2",
+        expression_unit: "log2_expression",
+        is_normalized: true,
+        platform_ids: ["GPL570"],
+        delimiter: "auto",
+      },
+    }],
+    validation_profile_ref: "gene_expression.release.v1",
+  });
+}
+
 async function newCore(): Promise<{ taskRoot: string; taskId: string; core: TypeScriptDatasetCore; events: Array<{ event: CoreOperationEvent; buildId: string }> }> {
   const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-core-"));
   roots.push(taskRoot);
@@ -96,10 +152,13 @@ describe("TS Core E2E golden outcomes (I-07)", () => {
       runId: "run_e2e",
       sourceAssets: { binding_gdc: asset },
     });
-    expect(record.status).toBe("completed");
+    expect(record.error, `record.error=${record.error ?? "null"}`).toBeNull();
+    expect(record).toMatchObject({ status: "completed" });
     expect(record.rejected_sources).toEqual([]);
     expect(record.publication_id).not.toBeNull();
     expect(record.manifest?.row_count).toBeGreaterThan(0);
+    expect(record.manifest?.task_id).toBe("task_e2e");
+    expect(record.manifest?.build_id).toBe("build_e2e");
     expect(record.validation?.status).toBe("passed");
     // Immutable publication on disk with the frozen layout
     // (version dir = <build_id>_<digest16>; publication id = pub_ + version).
@@ -119,6 +178,56 @@ describe("TS Core E2E golden outcomes (I-07)", () => {
     const loaded = await core.getBuild("build_e2e");
     expect(loaded?.manifest?.manifest_id).toBe(record.manifest?.manifest_id);
     expect(await core.listBuildArtifacts("build_e2e")).toHaveLength(record.manifest?.artifacts.length ?? 0);
+  });
+
+  it("GEO: mappingAssets flow into the canonicalizer as probeMap", async () => {
+    const { taskRoot, core } = await newCore();
+    const matrix = gzipSync(Buffer.from(
+      '!Sample_platform_id\t"GPL570"\n' +
+        '!series_matrix_table_begin\n' +
+        '"ID_REF"\t"GSM1"\n' +
+        '"PROBE1"\t1.5\n' +
+        '!series_matrix_table_end\n',
+      "utf8",
+    ));
+    const annotation = gzipSync(Buffer.from(
+      '!platform_table_begin\n' +
+        '"ID"\t"GENE_SYMBOL"\n' +
+        '"PROBE1"\t"TP53"\n' +
+        '!platform_table_end\n',
+      "utf8",
+    ));
+    const source = await assetFromBytes(
+      taskRoot,
+      "series_matrix.txt.gz",
+      matrix,
+      "binding_geo",
+    );
+    const mapping = await assetFromBytes(
+      taskRoot,
+      "gpl570_annot.txt.gz",
+      annotation,
+      "binding_geo_annotation",
+    );
+    const record = await core.executeDatasetBuild(geoProbeSpec(), {
+      runId: "run_geo_probe",
+      sourceAssets: { binding_geo: source },
+      mappingAssets: { binding_geo: mapping },
+    });
+    expect(record.status).toBe("completed");
+    const canonicalPath = path.join(
+      taskRoot,
+      "datasets_build",
+      "build_geo_probe",
+      "canonical",
+      "binding_geo.csv",
+    );
+    const canonical = await readFile(canonicalPath, "utf8");
+    expect(canonical).toContain("TP53");
+    expect(canonical).toContain("gene_symbol");
+    expect(record.manifest?.artifacts.some((entry) =>
+      entry.role === "audit_report" && entry.relative_path.includes("probe_mapping")
+    )).toBe(true);
   });
 
   it("PARTIAL_SUCCESS: one valid + one rejected binding publishes with partial status", async () => {
@@ -221,6 +330,26 @@ describe("TS Core E2E golden outcomes (I-07)", () => {
     expect(executeEnvelope.ok).toBe(false);
     if (!executeEnvelope.ok) expect(executeEnvelope.error.code).toBe("invalid_input");
     expect(events).toHaveLength(0); // nothing executed
+  });
+
+  it("propagates the tool AbortSignal into TS Core cancellation", async () => {
+    const { taskRoot, core } = await newCore();
+    const uploaded = await assetFor(taskRoot, "gdc/gdc_expression.tsv", "binding_gdc");
+    const controller = new AbortController();
+    controller.abort();
+    const adapter = new TsDatasetCoreAdapter(core);
+    const envelope = await adapter.execute({
+      taskId: "task_e2e",
+      runId: "run_cancel",
+      piSessionId: "pi_1",
+      toolCallId: "t1",
+      spec: spec({ build_id: "build_cancel" }),
+      sourceFiles: { binding_gdc: uploaded.relative_path },
+      mappingFiles: {},
+      signal: controller.signal,
+    });
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) expect(envelope.error.code).toBe("cancelled");
   });
 });
 

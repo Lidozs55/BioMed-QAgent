@@ -3,7 +3,8 @@
  * Golden fixture parity against the Python implementation.
  */
 
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -195,6 +196,42 @@ describe("business tool bundle (P5-02/P5-12)", () => {
     ]) {
       expect(names.has(name)).toBe(true);
     }
+  });
+
+  it("passes a dynamic runId into analysis staging", async () => {
+    const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-tool-run-"));
+    try {
+      const csv = "gene_symbol,S1,S2\nTP53,1.5,2.5\nBRCA1,3.0,4.0\n";
+      await writeFile(path.join(taskRoot, "input.csv"), csv, "utf8");
+      const bundle = await createBusinessToolBundle({
+        taskRoot,
+        browser: null,
+        db: null,
+        runId: () => "run-audit",
+      });
+      const stats = bundle.tools.find((tool) => tool.name === "basic_statistics");
+      expect(stats).toBeDefined();
+      const result = await stats?.execute({ csv_path: "input.csv" });
+      const payload = JSON.parse(result?.content ?? "{}") as { stats_report?: string };
+      expect(payload.stats_report).toBe("staging/analysis/run-audit/stats_report.csv");
+    } finally {
+      await rm(taskRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("registers local cache tools when a DB bridge client is provided", async () => {
+    const bundle = await createBusinessToolBundle({
+      taskRoot: "unused",
+      browser: null,
+      db: {
+        call: async () => [],
+      } as unknown as Parameters<typeof createBusinessToolBundle>[0]["db"],
+    });
+    const names = new Set(bundle.tools.map((tool) => tool.name));
+    expect(names.has("search_local_cache")).toBe(true);
+    expect(names.has("describe_local_cache")).toBe(true);
+    expect(names.has("get_cache_dataset")).toBe(true);
+    expect(bundle.unavailableTools.has("search_local_cache")).toBe(false);
   });
 
   it("fails closed on duplicate tool names", () => {

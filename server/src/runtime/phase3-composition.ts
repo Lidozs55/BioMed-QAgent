@@ -6,6 +6,7 @@ import { createDatasetBuildTools } from "../agent/tools/dataset-build.js";
 import { createBusinessToolBundle } from "../agent/tools/business-tools.js";
 import { createDeclarativeDatabaseTools } from "../agent/tools/declarative-db.js";
 import { assertUniqueToolNames } from "../agent/tools/registry.js";
+import type { ToolHooks } from "../agent/tools/tool-hooks.js";
 import {
   AppendOnlyTaskAuditSink,
   createTaskWorkspace,
@@ -18,6 +19,7 @@ import { TypeScriptDatasetCore } from "../dataset/service/ts-core.js";
 import { PublicHttpClient } from "../external/network/http-client.js";
 import { ContentCache } from "../external/acquisition/content-cache.js";
 import { DatabaseClient } from "../persistence/db-client.js";
+import type { VlmConfig } from "../processing/vlm/vlm-client.js";
 import {
   createDurableAgentRuntime,
   type DurableAgentRuntime,
@@ -35,6 +37,8 @@ export interface Phase3RuntimeOptions {
   /** Business capabilities (P5-12): DB bridge, browser pool, secrets. */
   database?: { cacheDir: string; databasesDir: string } | null;
   browserPool?: import("../external/browser/pool.js").NodeBrowserPool | null;
+  /** VLM chart-extraction config (P5-08B); missing fields keep env defaults. */
+  vlmConfig?: Partial<VlmConfig> | null;
 }
 
 /** Phase 3 + Phase 5 composition: Pi session + full TS business tool bundle. */
@@ -108,11 +112,46 @@ export async function createPhase3Runtime(
           },
         };
       }
+      const toolHooks: ToolHooks = {
+        onQuery: (query, source, status, recordsCount = 0) => {
+          void recordRunEvent({
+            type: "operation_progress",
+            operation_id: `tool:${source}:query`,
+            kind: "query",
+            current: Math.max(0, recordsCount),
+            total: null,
+            detail: {
+              source,
+              status,
+              query: String(query).slice(0, 200),
+            },
+          }).catch((error: unknown) => {
+            console.warn("tool.query_event_failed", error);
+          });
+        },
+        onProgress: (stage, kind, payload) => {
+          void recordRunEvent({
+            type: "operation_progress",
+            operation_id: `tool:${stage}:${kind}`,
+            kind,
+            current: Number(payload.current) || 0,
+            total: payload.total === null || payload.total === undefined
+              ? null
+              : Number(payload.total),
+            detail: payload as Record<string, import("@biomed/contracts").JsonValue>,
+          }).catch((error: unknown) => {
+            console.warn("tool.progress_event_failed", error);
+          });
+        },
+      };
       const bundle = await createBusinessToolBundle({
         taskRoot: root,
         db: dbClient,
         approvalGate,
         browser,
+        hooks: toolHooks,
+        runId: () => currentRunId,
+        vlmConfig: options.vlmConfig ?? undefined,
       });
       const dynamicTools = dbClient === null
         ? []
@@ -120,6 +159,7 @@ export async function createPhase3Runtime(
             db: dbClient,
             approval: approvalGate,
             client,
+            hooks: toolHooks,
           }).catch((error: unknown) => {
             console.warn("tool.declarative_databases_unavailable", error);
             return [] as Awaited<ReturnType<typeof createDeclarativeDatabaseTools>>;

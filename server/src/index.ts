@@ -9,21 +9,33 @@ import { createViteMiddleware } from "./dev/vite-middleware.js";
 import { createLegacyBackend } from "./legacy/backend-process.js";
 import { createPhase3Runtime } from "./runtime/phase3-composition.js";
 import { ModelSettingsService } from "./settings/model-settings.js";
+import { NodeBrowserPool } from "./external/browser/index.js";
 
 async function main(): Promise<void> {
   const config = parseHostConfig(process.env);
   const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-  const tasksRoot = path.join(
-    path.resolve(process.env.OUTPUT_DIR ?? path.join(repositoryRoot, "backend", "data", "output")),
-    "tasks",
+  const outputRoot = path.resolve(
+    process.env.OUTPUT_DIR ?? path.join(repositoryRoot, "backend", "data", "output"),
   );
+  const tasksRoot = path.join(outputRoot, "tasks");
+  const dataDir = path.resolve(outputRoot, "..");
+  const cacheDir = path.join(dataDir, "cache");
+  const databasesDir = path.join(dataDir, "skills");
   const settingsDir = path.resolve(tasksRoot, "..", "..", "settings");
   const modelSettings = await ModelSettingsService.create({
     settingsDir,
     legacyRegistryPath: path.join(settingsDir, "model_registry.db"),
     environment: process.env,
   });
+  const vlmConfig = await modelSettings.resolveVlmConfig().catch(() => undefined);
+  const browserPool = config.flags.agentRuntime === "pi"
+    ? new NodeBrowserPool({ maxContexts: 4 })
+    : null;
   const lifecycle = new LifecycleRegistry({ timeoutMs: config.shutdownTimeoutMs + 5_000 });
+  if (browserPool !== null) {
+    lifecycle.add("Node browser pool", () => browserPool.close());
+    await browserPool.start();
+  }
   const host = await createApplicationHost({
     publicHost: config.publicHost,
     publicPort: config.publicPort,
@@ -48,6 +60,9 @@ async function main(): Promise<void> {
             workspaceDevExec: config.workspaceDevExec,
             resolveModel: modelSettings.resolveActiveModel,
             datasetCore: config.flags.datasetCore,
+            database: { cacheDir, databasesDir },
+            browserPool,
+            vlmConfig,
           })
       : undefined,
     experimentalPi: config.flags.piExperimental
