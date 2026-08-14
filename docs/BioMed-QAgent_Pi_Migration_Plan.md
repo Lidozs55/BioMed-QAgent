@@ -1,6 +1,6 @@
 # BioMed-QAgent → Pi Agent 迁移方案
 
-> 文档状态：Draft for migration  
+> 文档状态：执行中的迁移蓝图（Phase 0–6 已完成，下一阶段 Phase 7）  
 > 目标仓库：`modenicheng/BioMed-QAgent`  
 > 基线分支：`main`  
 > 迁移目标：以 Pi 作为主 Agent Runtime；除数据库桥接外，逐步移除 Python 后端与自制 Agent 基础设施。  
@@ -10,7 +10,7 @@
 
 ## 0. 执行进度
 
-> 状态快照：2026-08-14（main @ d622415 之后的 Phase 5 分支）。本表随阶段推进更新；可勾选剩余条目与
+> 状态快照：2026-08-14（main @ e5143ad，Phase 0–6 已完成，M2 收口合入）。本表随阶段推进更新；可勾选剩余条目与
 > 优先级见 [docs/TODO.md](TODO.md)。
 
 | Phase | 内容 | 状态 |

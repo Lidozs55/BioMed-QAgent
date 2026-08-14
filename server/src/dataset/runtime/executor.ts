@@ -550,6 +550,17 @@ export class DatasetBuildExecutor {
     return true;
   }
 
+  /**
+   * Bounded grace for a straggler operation after a timeout/cancel (M2): the
+   * aborted operation may still be unwinding (e.g. a ``copyFile`` already in
+   * flight cannot be interrupted), so we hold the build lock — we are still
+   * inside ``executeOperation`` — until the straggler settles or this grace
+   * expires.  This prevents a timed-out build from releasing the lock while
+   * the old operation could still promote a publication behind its failed
+   * record ("no fake-success publication" invariant).
+   */
+  static readonly STRAGGLER_SETTLE_GRACE_MS = 10_000;
+
   /** Run one operation under cooperative cancel checks + wall-clock timeout. */
   private async executeOperation(
     op: OperationSpec,
@@ -566,9 +577,13 @@ export class DatasetBuildExecutor {
       try {
         if (this.operationTimeoutMs > 0) {
           let timeout: NodeJS.Timeout | undefined;
+          let pending: Promise<OperationOutput> | null = null;
           try {
+            pending = Promise.resolve(
+              this.runOperation(op, upstream, operationController.signal),
+            );
             result = await Promise.race([
-              Promise.resolve(this.runOperation(op, upstream, operationController.signal)),
+              pending,
               new Promise<never>((_resolve, reject) => {
                 timeout = setTimeout(
                   () => {
@@ -581,6 +596,16 @@ export class DatasetBuildExecutor {
             ]);
           } finally {
             if (timeout !== undefined) clearTimeout(timeout);
+            if (operationController.signal.aborted && pending !== null) {
+              // Straggler safety: wait for the aborted operation to actually
+              // settle (bounded) so the build lock stays held until it stops.
+              await Promise.race([
+                pending.then(() => undefined, () => undefined),
+                new Promise<void>((resolve) => {
+                  setTimeout(resolve, DatasetBuildExecutor.STRAGGLER_SETTLE_GRACE_MS);
+                }),
+              ]);
+            }
           }
         } else {
           result = await this.runOperation(op, upstream, operationController.signal);

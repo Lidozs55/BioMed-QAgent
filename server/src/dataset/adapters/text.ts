@@ -112,10 +112,24 @@ export async function delimitedRowsWithLinesAsync(
   const length = text.length;
   while (offset < length) {
     const nl = text.indexOf("\n", offset);
-    const cr = text.indexOf("\r", offset);
+    // A \r only matters when it precedes the next \n (CRLF or lone CR).
+    // Scanning for it across the *whole* remaining text per line is O(n^2)
+    // on \n-only files (indexOf walks to the end of the string every line);
+    // scan only inside the current line instead.
+    let cr = -1;
+    if (nl === -1) {
+      cr = text.indexOf("\r", offset);
+    } else {
+      for (let k = offset; k < nl; k += 1) {
+        if (text[k] === "\r") {
+          cr = k;
+          break;
+        }
+      }
+    }
     let end: number;
     let nextStart: number;
-    if (cr !== -1 && (nl === -1 || cr < nl)) {
+    if (cr !== -1) {
       // \r line break (consuming a following \n as CRLF)
       end = cr;
       nextStart = text[cr + 1] === "\n" ? cr + 2 : cr + 1;

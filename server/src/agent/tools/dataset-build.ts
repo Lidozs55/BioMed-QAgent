@@ -155,7 +155,7 @@ export function createDatasetBuildTools(
     {
       name: "validate_dataset_build",
       label: "Validate DatasetBuildSpec",
-      description: "Validate the frozen DatasetBuildSpec through the trusted Python Core.",
+      description: "Validate the frozen DatasetBuildSpec through the trusted Dataset Core.",
       parameters: {
         type: "object",
         properties: { spec: specSchema },
@@ -194,7 +194,7 @@ export function createDatasetBuildTools(
     {
       name: "execute_dataset_build",
       label: "Execute DatasetBuildSpec",
-      description: "Validate, execute, and publish a dataset through the trusted Python Core.",
+      description: "Validate, execute, and publish a dataset through the trusted Dataset Core.",
       parameters: {
         type: "object",
         properties: {

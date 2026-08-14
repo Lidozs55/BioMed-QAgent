@@ -109,6 +109,7 @@ export async function promotePublication(options: PublishOptions): Promise<Publi
       const dest = join(stagedDir, artifact.relative_path);
       mkdirSync(dirnameOf(dest), { recursive: true });
       await copyFile(src, dest);
+      throwIfAborted(signal);
     }
     const manifestSrc = join(options.outputDir, MANIFEST_FILE);
     if (existsSync(manifestSrc)) {
@@ -121,16 +122,22 @@ export async function promotePublication(options: PublishOptions): Promise<Publi
     if (existsSync(validationSrc)) {
       await copyFile(validationSrc, join(stagedDir, "validation_report.json"));
     }
+    throwIfAborted(signal);
     await writeFile(
       join(stagedDir, "publication.json"),
       `${pythonJsonDumps(publication)}\n`,
       "utf8",
     );
+    throwIfAborted(signal);
     // H2: recheck the pending-input gate immediately before the immutable
     // rename — refusal raises before any version directory exists.
     if (options.pendingCheck !== null && options.pendingCheck !== undefined && options.pendingCheck()) {
       throw new PublicationRefusedError(PUBLICATION_REFUSED_PREFIX);
     }
+    // M2: the final abort check sits at the rename boundary so a
+    // timed-out/cancelled build can never promote a publication behind its
+    // failed record ("no fake-success publication" invariant).
+    throwIfAborted(signal);
     await rename(stagedDir, versionDir);
   } catch (error) {
     if (existsSync(stagedDir)) {

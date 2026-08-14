@@ -34,6 +34,12 @@ export interface Phase3RuntimeOptions {
   resolveModel?: () => Promise<BioMedModelConfig>;
   /** DATASET_CORE architecture flag (M2): python = legacy bridge, ts = TS core. */
   datasetCore?: "python" | "ts";
+  /**
+   * Operation wall-clock timeout in ms for the TS Dataset Core (M2).
+   * Defaults to 120_000 (120 s), matching the Python baseline executor
+   * (``backend/app/datasets/runtime/executor.py``: ``operation_timeout``).
+   */
+  operationTimeoutMs?: number;
   /** Business capabilities (P5-12): DB bridge, browser pool, secrets. */
   database?: { cacheDir: string; databasesDir: string } | null;
   browserPool?: import("../external/browser/pool.js").NodeBrowserPool | null;
@@ -76,6 +82,7 @@ export async function createPhase3Runtime(
       const tsCore = new TypeScriptDatasetCore({
         taskId,
         taskRoot: root,
+        operationTimeoutMs: options.operationTimeoutMs ?? 120_000,
         eventSink: async (event, buildId) => {
           await recordRunEvent(coreEventToPayload(event, buildId));
         },
