@@ -1,5 +1,4 @@
 import { once } from "node:events";
-import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -9,33 +8,18 @@ import { createApplicationHost, type ApplicationHost } from "../src/app/create-a
 import { LifecycleRegistry } from "../src/app/lifecycle.js";
 
 const hosts: ApplicationHost[] = [];
-const legacyServers: Server[] = [];
 
 afterEach(async () => {
   await Promise.all(hosts.splice(0).map((host) => host.close()));
-  await Promise.all(
-    legacyServers.splice(0).map(
-      (server) =>
-        new Promise<void>((resolve, reject) =>
-          server.close((error) => (error ? reject(error) : resolve())),
-        ),
-    ),
-  );
 });
-
-async function listen(server: Server, host = "127.0.0.1"): Promise<number> {
-  server.listen(0, host);
-  await once(server, "listening");
-  return (server.address() as AddressInfo).port;
-}
 
 function requestUrl(host: ApplicationHost, path: string): string {
   const address = host.server.address() as AddressInfo;
   return `http://127.0.0.1:${address.port}${path}`;
 }
 
-describe("application host", () => {
-  test("starts without a legacy backend and fails closed for unhandled formal routes", async () => {
+describe("application host (Phase 8: no legacy proxy, no experimental Pi)", () => {
+  test("starts without any legacy backend and fails closed for unhandled formal routes", async () => {
     const formalRuntime = vi.fn(async () => ({
       handle(request: import("node:http").IncomingMessage, response: import("node:http").ServerResponse) {
         if (request.url !== "/api/v1/tasks") return false;
@@ -56,186 +40,68 @@ describe("application host", () => {
     });
     hosts.push(host);
 
-    expect(formalRuntime).toHaveBeenCalledWith({});
+    expect(formalRuntime).toHaveBeenCalledWith();
     expect(await (await fetch(requestUrl(host, "/api/v1/tasks"))).text()).toBe("native tasks");
     const missing = await fetch(requestUrl(host, "/api/v1/not-migrated"));
     expect(missing.status).toBe(404);
     expect(await missing.text()).toBe("Not Found");
   });
 
-  test("preserves legacy HTTP method, path, query, body, status, and headers", async () => {
-    const legacy = createServer(async (request, response) => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) chunks.push(Buffer.from(chunk));
-      response.writeHead(207, { "x-legacy-response": "kept", "content-type": "application/json" });
-      response.end(
-        JSON.stringify({
-          method: request.method,
-          url: request.url,
-          body: Buffer.concat(chunks).toString("utf8"),
-          header: request.headers["x-legacy-request"],
-        }),
-      );
-    });
-    legacyServers.push(legacy);
-    const legacyPort = await listen(legacy);
-    const host = await createApplicationHost({
-      publicHost: "0.0.0.0",
-      publicPort: 0,
-      legacy: async () => ({ target: `http://127.0.0.1:${legacyPort}`, close: async () => undefined }),
-      frontend: async () => ({ middleware: (_request, response) => response.end("frontend"), close: async () => undefined }),
-    });
-    hosts.push(host);
-
-    const response = await fetch(requestUrl(host, "/api/v1/echo?x=1"), {
-      method: "POST",
-      headers: { "x-legacy-request": "kept", "content-type": "text/plain" },
-      body: "payload",
-    });
-
-    expect(response.status).toBe(207);
-    expect(response.headers.get("x-legacy-response")).toBe("kept");
-    expect(await response.json()).toEqual({
-      method: "POST",
-      url: "/api/v1/echo?x=1",
-      body: "payload",
-      header: "kept",
-    });
-    expect(host.server.address()).toMatchObject({ address: "0.0.0.0" });
-    expect(legacy.address()).toMatchObject({ address: "127.0.0.1" });
-  });
-
-  test("forwards only the legacy WebSocket upgrade path", async () => {
-    const legacy = createServer();
-    const websocketServer = new WebSocketServer({ noServer: true });
-    legacy.on("upgrade", (request, socket, head) => {
-      websocketServer.handleUpgrade(request, socket, head, (websocket) => {
-        websocketServer.emit("connection", websocket, request);
-      });
-    });
-    websocketServer.on("connection", (websocket) => websocket.on("message", (message) => websocket.send(message)));
-    legacyServers.push(legacy);
-    const legacyPort = await listen(legacy);
-    const host = await createApplicationHost({
-      publicHost: "127.0.0.1",
-      publicPort: 0,
-      legacy: async () => ({ target: `http://127.0.0.1:${legacyPort}`, close: async () => undefined }),
-      frontend: async () => ({ middleware: (_request, response) => response.end("frontend"), close: async () => undefined }),
-    });
-    hosts.push(host);
-    const hostPort = (host.server.address() as AddressInfo).port;
-    const websocket = new WebSocket(`ws://127.0.0.1:${hostPort}/api/v1/ws`);
-    await once(websocket, "open");
-    websocket.send("ping");
-    const [message] = await once(websocket, "message");
-    websocket.close();
-
-    expect(message.toString()).toBe("ping");
-  });
-
-  test("rejects internal migration paths without touching proxy and delegates frontend fallback", async () => {
-    let legacyHits = 0;
-    const legacy = createServer((_request, response) => {
-      legacyHits += 1;
-      response.end("legacy");
-    });
-    legacyServers.push(legacy);
-    const legacyPort = await listen(legacy);
+  test("delegates non-API paths to the frontend middleware", async () => {
     const frontend = vi.fn((_request, response) => response.end("from-vite"));
     const host = await createApplicationHost({
       publicHost: "127.0.0.1",
       publicPort: 0,
-      legacy: async () => ({ target: `http://127.0.0.1:${legacyPort}`, close: async () => undefined }),
       frontend: async () => ({ middleware: frontend, close: async () => undefined }),
     });
     hosts.push(host);
 
-    const internal = await fetch(requestUrl(host, "/internal/migration/build"));
     const fallback = await fetch(requestUrl(host, "/some/frontend/route"));
-
-    expect(internal.status).toBe(404);
-    expect(legacyHits).toBe(0);
     expect(await fallback.text()).toBe("from-vite");
     expect(frontend).toHaveBeenCalledOnce();
+    // legacy migration paths are no longer special — they are frontend routes
+    const internal = await fetch(requestUrl(host, "/internal/migration/build"));
+    expect(internal.status).toBe(200);
+    expect(await internal.text()).toBe("from-vite");
   });
 
-  test("readiness failure prevents public listen and closes earlier resources", async () => {
-    const earlier = vi.fn(async () => undefined);
-    const registry = new LifecycleRegistry();
-    registry.add("later Pi lifecycle hook", earlier);
-    const listenPublic = vi.fn(async () => undefined);
-
-    await expect(
-      createApplicationHost(
-        {
-          publicHost: "127.0.0.1",
-          publicPort: 0,
-          legacy: async () => {
-            throw new Error("legacy readiness failed");
-          },
-          frontend: async () => ({ middleware: (_request, response) => response.end(), close: async () => undefined }),
-          lifecycle: registry,
-        },
-        { listenPublic },
-      ),
-    ).rejects.toThrow("legacy readiness failed");
-
-    expect(listenPublic).not.toHaveBeenCalled();
-    expect(earlier).toHaveBeenCalledOnce();
-  });
-
-  test("passes private legacy bridge metadata only to the experimental composition", async () => {
-    const experimentalPi = vi.fn(async () => ({
-      handle: () => false,
-      handleUpgrade: () => false,
-      close: async () => undefined,
-    }));
+  test("gives Host-owned API surfaces precedence over the formal runtime", async () => {
+    const hostApi = {
+      handle(request: import("node:http").IncomingMessage, response: import("node:http").ServerResponse) {
+        if (request.url !== "/api/v1/settings") return false;
+        response.end("host settings");
+        return true;
+      },
+    };
     const host = await createApplicationHost({
       publicHost: "127.0.0.1",
       publicPort: 0,
-      legacy: async () => ({
-        target: "http://127.0.0.1:8123",
-        bridgeSecret: "private-secret",
+      hostApi,
+      formalRuntime: async () => ({
+        handle: (_request, response) => { response.end("formal"); return true; },
+        handleUpgrade: () => false,
         close: async () => undefined,
       }),
-      experimentalPi,
-      frontend: async () => ({ middleware: (_request, response) => response.end("frontend"), close: async () => undefined }),
+      frontend: async () => ({ middleware: (_request, response) => response.end(), close: async () => undefined }),
     });
     hosts.push(host);
 
-    expect(experimentalPi).toHaveBeenCalledWith({
-      target: "http://127.0.0.1:8123",
-      bridgeSecret: "private-secret",
-    });
+    expect(await (await fetch(requestUrl(host, "/api/v1/settings"))).text()).toBe("host settings");
   });
 
-  test("lets the formal TS runtime own selected API and WebSocket routes with legacy fallback", async () => {
-    const legacy = createServer((_request, response) => response.end("legacy fallback"));
-    legacyServers.push(legacy);
-    const legacyPort = await listen(legacy);
+  test("lets the formal TS runtime own the WebSocket upgrade path", async () => {
     const formalSocket = vi.fn();
     const host = await createApplicationHost({
       publicHost: "127.0.0.1",
       publicPort: 0,
-      legacy: async () => ({
-        target: `http://127.0.0.1:${legacyPort}`,
-        bridgeSecret: "formal-secret",
-        close: async () => undefined,
-      }),
-      formalRuntime: async ({ target, bridgeSecret }) => {
-        expect(target).toBe(`http://127.0.0.1:${legacyPort}`);
-        expect(bridgeSecret).toBe("formal-secret");
+      formalRuntime: async () => {
         const websocketServer = new WebSocketServer({ noServer: true });
         websocketServer.on("connection", (websocket) => websocket.on("message", (message) => {
           formalSocket(message.toString());
           websocket.send("formal websocket");
         }));
         return {
-          handle(request, response) {
-            if (request.url !== "/api/v1/tasks") return false;
-            response.end("formal tasks");
-            return true;
-          },
+          handle: () => false,
           handleUpgrade(request, socket, head) {
             if (request.url !== "/api/v1/ws") return false;
             websocketServer.handleUpgrade(request, socket, head, (websocket) => {
@@ -253,9 +119,6 @@ describe("application host", () => {
     });
     hosts.push(host);
 
-    expect(await (await fetch(requestUrl(host, "/api/v1/tasks"))).text()).toBe("formal tasks");
-    expect(await (await fetch(requestUrl(host, "/api/v1/settings"))).text()).toBe("legacy fallback");
-
     const port = (host.server.address() as AddressInfo).port;
     const websocket = new WebSocket(`ws://127.0.0.1:${port}/api/v1/ws`);
     await once(websocket, "open");
@@ -266,31 +129,48 @@ describe("application host", () => {
     websocket.close();
   });
 
-  test("lets Host-owned settings routes take precedence over formal runtime and legacy", async () => {
-    const legacy = createServer((_request, response) => response.end("legacy"));
-    legacyServers.push(legacy);
-    const legacyPort = await listen(legacy);
-    const hostApi = {
-      handle(request: import("node:http").IncomingMessage, response: import("node:http").ServerResponse) {
-        if (request.url !== "/api/v1/settings") return false;
-        response.end("host settings");
-        return true;
-      },
-    };
+  test("destroys non-API WebSocket upgrades", async () => {
     const host = await createApplicationHost({
       publicHost: "127.0.0.1",
       publicPort: 0,
-      hostApi,
-      legacy: async () => ({ target: `http://127.0.0.1:${legacyPort}`, close: async () => undefined }),
-      formalRuntime: async () => ({
-        handle: (_request, response) => { response.end("formal"); return true; },
-        handleUpgrade: () => false,
+      frontend: async () => ({
+        middleware: (_request, response) => response.end("frontend"),
         close: async () => undefined,
       }),
-      frontend: async () => ({ middleware: (_request, response) => response.end(), close: async () => undefined }),
     });
     hosts.push(host);
 
-    expect(await (await fetch(requestUrl(host, "/api/v1/settings"))).text()).toBe("host settings");
+    const port = (host.server.address() as AddressInfo).port;
+    await expect(new Promise<void>((resolve, reject) => {
+      const socket = new WebSocket(`ws://127.0.0.1:${port}/experimental/pi/ws`);
+      socket.once("open", () => reject(new Error("experimental upgrade must not open")));
+      socket.once("unexpected-response", () => resolve());
+      socket.once("error", () => resolve());
+    })).resolves.toBeUndefined();
+  });
+
+  test("startup failure prevents public listen and closes earlier resources", async () => {
+    const earlier = vi.fn(async () => undefined);
+    const registry = new LifecycleRegistry();
+    registry.add("later Pi lifecycle hook", earlier);
+    const listenPublic = vi.fn(async () => undefined);
+
+    await expect(
+      createApplicationHost(
+        {
+          publicHost: "127.0.0.1",
+          publicPort: 0,
+          formalRuntime: async () => {
+            throw new Error("formal runtime failed");
+          },
+          frontend: async () => ({ middleware: (_request, response) => response.end(), close: async () => undefined }),
+          lifecycle: registry,
+        },
+        { listenPublic },
+      ),
+    ).rejects.toThrow("formal runtime failed");
+
+    expect(listenPublic).not.toHaveBeenCalled();
+    expect(earlier).toHaveBeenCalledOnce();
   });
 });

@@ -202,7 +202,7 @@ export class PiEventAdapter {
     void error;
     return this.terminal(runId, {
       type: "run_failed",
-      error: "Experimental Pi turn failed",
+      error: "Pi turn failed",
       error_code: "internal_error",
     });
   }
@@ -234,7 +234,7 @@ export class PiEventAdapter {
     this.options.onDiagnostic?.({
       code,
       upstreamType: sanitizeText(upstreamType, 100),
-      message: "Experimental Pi event was ignored",
+      message: "Pi event was ignored",
     });
   }
 }

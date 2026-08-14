@@ -19,12 +19,14 @@ export default defineConfig({
       allow: [path.resolve(__dirname, "..")],
     },
     proxy: {
+      // Standalone-frontend diagnostics proxy to the TS Application Host
+      // (Phase 8: the legacy FastAPI 8000 target is retired).
       "/api": {
-        target: process.env.VITE_BACKEND_TARGET ?? "http://127.0.0.1:8000",
+        target: process.env.VITE_BACKEND_TARGET ?? "http://127.0.0.1:5173",
         changeOrigin: true,
       },
       "/api/v1/ws": {
-        target: (process.env.VITE_BACKEND_TARGET ?? "http://127.0.0.1:8000")
+        target: (process.env.VITE_BACKEND_TARGET ?? "http://127.0.0.1:5173")
           .replace(/^http/, "ws"),
         ws: true,
         changeOrigin: true,

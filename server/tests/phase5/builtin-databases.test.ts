@@ -40,7 +40,6 @@ async function startApi(database: ProductDatabaseClient) {
     cacheDir: path.join(root, "cache"),
     settingsDir: path.join(root, "settings"),
     database,
-    profile: { appHost: "ts", agentRuntime: "pi", datasetCore: "ts" },
   });
   const server = createServer((request, response) => {
     if (!api.handle(request, response)) response.writeHead(404).end("Not Found");

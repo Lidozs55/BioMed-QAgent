@@ -2,35 +2,18 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { Duplex } from "node:stream";
 
 import type { FrontendMiddleware, ViteMiddlewareHandle } from "../dev/vite-middleware.js";
-import { createLegacyProxy, type LegacyProxy } from "../legacy/proxy.js";
 import { LifecycleRegistry } from "./lifecycle.js";
 
 export interface ApplicationHostOptions {
   publicHost: string;
   publicPort: number;
-  legacy?: () => Promise<{
-    target: string;
-    bridgeSecret?: string;
-    close: () => Promise<void>;
-  }>;
   frontend: (server: Server) => Promise<ViteMiddlewareHandle>;
   lifecycle?: LifecycleRegistry;
   initializeLifecycle?: (lifecycle: LifecycleRegistry) => void | Promise<void>;
   hostApi?: {
     handle: (request: IncomingMessage, response: ServerResponse) => boolean;
   };
-  formalRuntime?: (legacy: {
-    target?: string;
-    bridgeSecret?: string;
-  }) => Promise<{
-    handle: (request: IncomingMessage, response: ServerResponse) => boolean;
-    handleUpgrade: (request: IncomingMessage, socket: Duplex, head: Buffer) => boolean;
-    close: () => Promise<void>;
-  }>;
-  experimentalPi?: (legacy: {
-    target?: string;
-    bridgeSecret?: string;
-  }) => Promise<{
+  formalRuntime?: () => Promise<{
     handle: (request: IncomingMessage, response: ServerResponse) => boolean;
     handleUpgrade: (request: IncomingMessage, socket: Duplex, head: Buffer) => boolean;
     close: () => Promise<void>;
@@ -41,7 +24,6 @@ export interface ApplicationHostDependencies {
   createHttpServer?: (
     handler: (request: IncomingMessage, response: ServerResponse) => void,
   ) => Server;
-  createProxy?: (target: string) => LegacyProxy;
   listenPublic?: (server: Server, port: number, host: string) => Promise<void>;
 }
 
@@ -54,19 +36,11 @@ function pathname(request: IncomingMessage): string {
   return new URL(request.url ?? "/", "http://application-host").pathname;
 }
 
-function isLegacyApi(requestPath: string): boolean {
+function isFormalApi(requestPath: string): boolean {
   return requestPath === "/api/v1" || requestPath.startsWith("/api/v1/");
 }
 
-function isInternalMigration(requestPath: string): boolean {
-  return (
-    requestPath === "/internal/migration" ||
-    requestPath.startsWith("/internal/migration/")
-  );
-}
-
 function routeRequest(
-  proxy: LegacyProxy | undefined,
   frontend: FrontendMiddleware,
   hostApi?: {
     handle: (request: IncomingMessage, response: ServerResponse) => boolean;
@@ -74,36 +48,14 @@ function routeRequest(
   formalRuntime?: {
     handle: (request: IncomingMessage, response: ServerResponse) => boolean;
   },
-  experimentalPi?: {
-    handle: (request: IncomingMessage, response: ServerResponse) => boolean;
-  },
 ): (request: IncomingMessage, response: ServerResponse) => void {
   return (request, response) => {
     const requestPath = pathname(request);
-    if (isInternalMigration(requestPath)) {
+    if (hostApi?.handle(request, response) === true) return;
+    if (isFormalApi(requestPath)) {
+      if (formalRuntime?.handle(request, response) === true) return;
       response.writeHead(404);
       response.end("Not Found");
-      return;
-    }
-    if (
-      requestPath === "/experimental/pi" ||
-      requestPath.startsWith("/experimental/pi/")
-    ) {
-      if (experimentalPi?.handle(request, response) !== true) {
-        response.writeHead(404);
-        response.end("Not Found");
-      }
-      return;
-    }
-    if (hostApi?.handle(request, response) === true) return;
-    if (isLegacyApi(requestPath)) {
-      if (formalRuntime?.handle(request, response) === true) return;
-      if (proxy !== undefined) {
-        proxy.web(request, response);
-      } else {
-        response.writeHead(404);
-        response.end("Not Found");
-      }
       return;
     }
     frontend(request, response, (error) => {
@@ -156,55 +108,27 @@ export async function createApplicationHost(
   const server = serverFactory((request, response) => requestHandler(request, response));
 
   try {
-    const legacy = await options.legacy?.();
-    if (legacy !== undefined) lifecycle.add("legacy backend", legacy.close);
-
     await options.initializeLifecycle?.(lifecycle);
 
-    const formalRuntime = await options.formalRuntime?.({
-      ...(legacy === undefined ? {} : { target: legacy.target }),
-      ...(legacy?.bridgeSecret === undefined ? {} : { bridgeSecret: legacy.bridgeSecret }),
-    });
+    const formalRuntime = await options.formalRuntime?.();
     if (formalRuntime !== undefined) {
       lifecycle.add("formal TypeScript runtime", formalRuntime.close);
     }
 
-    const experimentalPi = await options.experimentalPi?.({
-      ...(legacy === undefined ? {} : { target: legacy.target }),
-      ...(legacy?.bridgeSecret === undefined ? {} : { bridgeSecret: legacy.bridgeSecret }),
-    });
-    if (experimentalPi !== undefined) {
-      lifecycle.add("experimental Pi sessions", experimentalPi.close);
-    }
-
-    const proxy = legacy === undefined
-      ? undefined
-      : (dependencies.createProxy ?? createLegacyProxy)(legacy.target);
-    if (proxy !== undefined) lifecycle.add("legacy proxy", () => proxy.close());
-
     const frontend = await options.frontend(server);
     lifecycle.add("Vite middleware", frontend.close);
-    requestHandler = routeRequest(proxy, frontend.middleware, options.hostApi, formalRuntime, experimentalPi);
+    requestHandler = routeRequest(frontend.middleware, options.hostApi, formalRuntime);
 
     server.on("upgrade", (request, socket, head) => {
       upgradedSockets.add(socket);
       socket.once("close", () => upgradedSockets.delete(socket));
       const requestPath = pathname(request);
-      if (isInternalMigration(requestPath)) {
-        socket.destroy();
-        return;
-      }
-      if (requestPath === "/experimental/pi/ws") {
-        if (experimentalPi?.handleUpgrade(request, socket, head) !== true) {
-          socket.destroy();
-        }
-        return;
-      }
       if (requestPath === "/api/v1/ws") {
         if (formalRuntime?.handleUpgrade(request, socket, head) !== true) {
-          if (proxy === undefined) socket.destroy();
-          else proxy.ws(request, socket, head);
+          socket.destroy();
         }
+      } else {
+        socket.destroy();
       }
     });
 

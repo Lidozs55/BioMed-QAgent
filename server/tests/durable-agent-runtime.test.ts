@@ -9,7 +9,6 @@ import path from "node:path";
 import type { EventEnvelope } from "@biomed/contracts";
 import { afterEach, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
-import { WebSocketServer } from "ws";
 
 import type {
   BioMedAgentAdapter,
@@ -467,41 +466,13 @@ describe("durable formal Agent runtime", () => {
     await runtime.close();
   });
 
-  test("forwards legacy task subscriptions through the same formal WebSocket", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "biomed-durable-ws-bridge-"));
+  test("rejects non-durable task subscriptions (legacy tasks are gone)", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "biomed-durable-ws-legacy-gone-"));
     roots.push(root);
-    const legacyServer = createServer();
-    const legacyWebSocket = new WebSocketServer({ noServer: true });
-    const commands: unknown[] = [];
-    legacyServer.on("upgrade", (request, socket, head) => {
-      legacyWebSocket.handleUpgrade(request, socket, head, (websocket) => {
-        legacyWebSocket.emit("connection", websocket, request);
-      });
-    });
-    legacyWebSocket.on("connection", (socket) => socket.on("message", (raw) => {
-      const command: unknown = JSON.parse(raw.toString());
-      commands.push(command);
-      socket.send(JSON.stringify({
-        schema_version: "2.0",
-        event_id: "event_legacy",
-        type: "run_started",
-        task_id: "task_legacy",
-        run_id: "run_legacy",
-        stage_attempt_id: null,
-        sequence: 8,
-        timestamp: "2026-08-12T00:00:00.000Z",
-        payload: { type: "run_started" },
-      }));
-    }));
-    legacyServer.listen(0, "127.0.0.1");
-    await once(legacyServer, "listening");
-    servers.push(legacyServer);
-    const legacyPort = (legacyServer.address() as AddressInfo).port;
 
     const runtime = await createDurableAgentRuntime({
       tasksRoot: root,
       adapter: new ControlledAdapter(),
-      legacyBaseUrl: `http://127.0.0.1:${legacyPort}`,
       workspaceFactory: async () => ({ root, tools: [], dispose: async () => undefined }),
     });
     const server = createServer((request, response) => {
@@ -525,17 +496,12 @@ describe("durable formal Agent runtime", () => {
       after_sequence: 7,
     }));
 
-    expect(await nextEvent(frames, "run_started")).toMatchObject({
+    expect(await nextEvent(frames, "error")).toMatchObject({
+      type: "error",
+      code: "task_not_found",
       task_id: "task_legacy",
-      sequence: 8,
     });
-    expect(commands).toEqual([{
-      type: "subscribe",
-      task_id: "task_legacy",
-      after_sequence: 7,
-    }]);
     socket.close();
     await runtime.close();
-    legacyWebSocket.close();
   });
 });

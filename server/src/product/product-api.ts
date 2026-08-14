@@ -21,11 +21,6 @@ export interface ProductApiOptions {
   cacheDir: string;
   settingsDir: string;
   database: ProductDatabaseClient;
-  profile?: {
-    appHost: "ts";
-    agentRuntime: "pi";
-    datasetCore: "python" | "ts";
-  };
 }
 
 interface Personalization {
@@ -148,9 +143,9 @@ export async function createProductApi(options: ProductApiOptions): Promise<{
     if (method === "GET" && pathname === "/api/v1/health") {
       json(response, 200, {
         status: "ok",
-        app_host: options.profile?.appHost ?? "ts",
-        agent_runtime: options.profile?.agentRuntime ?? "pi",
-        dataset_core: options.profile?.datasetCore ?? "ts",
+        app_host: "ts",
+        agent_runtime: "pi",
+        dataset_core: "ts",
       });
       return;
     }

@@ -28,18 +28,12 @@ async function temporaryDirectory(prefix: string): Promise<string> {
 async function startApi(
   root: string,
   database: ProductDatabaseClient,
-  profile?: {
-    appHost: "ts";
-    agentRuntime: "pi";
-    datasetCore: "python" | "ts";
-  },
 ) {
   const api = await createProductApi({
     tasksRoot: path.join(root, "output", "tasks"),
     cacheDir: path.join(root, "cache"),
     settingsDir: path.join(root, "settings"),
     database,
-    profile,
   });
   const server = createServer((request, response) => {
     if (!api.handle(request, response)) response.writeHead(404).end("Not Found");
@@ -115,19 +109,15 @@ describe("Phase 7 product API", () => {
       .toMatchObject({ personality: "rigorous" });
   });
 
-  test("reports the active core profile and rejects unsupported methods", async () => {
+  test("reports the fixed TS/Pi/TS architecture and rejects unsupported methods", async () => {
     const root = await temporaryDirectory("phase7-health-");
-    const { base } = await startApi(root, new FakeDatabase(), {
-      appHost: "ts",
-      agentRuntime: "pi",
-      datasetCore: "python",
-    });
+    const { base } = await startApi(root, new FakeDatabase());
 
-    expect(await (await fetch(`${base}/health`)).json()).toMatchObject({
+    expect(await (await fetch(`${base}/health`)).json()).toEqual({
       status: "ok",
       app_host: "ts",
       agent_runtime: "pi",
-      dataset_core: "python",
+      dataset_core: "ts",
     });
     const unsupported = await fetch(`${base}/health`, { method: "PUT" });
     expect(unsupported.status).toBe(405);

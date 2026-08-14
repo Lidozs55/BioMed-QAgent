@@ -12,7 +12,6 @@ import {
   createTaskWorkspace,
 } from "../agent/workspace/index.js";
 import { createWorkspaceTools } from "../agent/workspace/tools.js";
-import { DatasetCoreClient } from "../legacy/dataset-core-client.js";
 import { coreEventToPayload } from "../dataset/service/events.js";
 import { createDatasetCoreService } from "../dataset/service/dataset-core.js";
 import { TypeScriptDatasetCore } from "../dataset/service/ts-core.js";
@@ -27,23 +26,19 @@ import {
 
 export interface Phase3RuntimeOptions {
   tasksRoot: string;
-  legacyTarget?: string;
-  bridgeSecret?: string;
   workspaceDevExec: boolean;
   adapter?: BioMedAgentAdapter;
   resolveModel?: () => Promise<BioMedModelConfig>;
-  /** DATASET_CORE architecture flag (M2): python = legacy bridge, ts = TS core. */
-  datasetCore?: "python" | "ts";
   /**
-   * Operation wall-clock timeout in ms for the TS Dataset Core (M2).
-   * Defaults to 120_000 (120 s), matching the Python baseline executor
-   * (``backend/app/datasets/runtime/executor.py``: ``operation_timeout``).
+   * Operation wall-clock timeout in ms for the TS Dataset Core.
+   * Defaults to 120_000 (120 s), matching the retired Python baseline
+   * executor (``backend/app/datasets/runtime/executor.py``).
    */
   operationTimeoutMs?: number;
-  /** Business capabilities (P5-12): DB bridge, browser pool, secrets. */
+  /** Business capabilities: DB bridge, browser pool, secrets. */
   database?: DatabaseClient | null;
   browserPool?: import("../external/browser/pool.js").NodeBrowserPool | null;
-  /** VLM chart-extraction config (P5-08B); missing fields keep env defaults. */
+  /** VLM chart-extraction config; missing fields keep env defaults. */
   vlmConfig?: Partial<VlmConfig> | null;
 }
 
@@ -51,14 +46,9 @@ export interface Phase3RuntimeOptions {
 export async function createPhase3Runtime(
   options: Phase3RuntimeOptions,
 ): Promise<DurableAgentRuntime> {
-  const datasetCore = options.datasetCore ?? "python";
-  if (datasetCore === "python" && options.legacyTarget === undefined) {
-    throw new Error("DATASET_CORE=python requires a legacy backend target");
-  }
   const dbClient = options.database ?? null;
   const runtime = await createDurableAgentRuntime({
     tasksRoot: options.tasksRoot,
-    ...(options.legacyTarget === undefined ? {} : { legacyBaseUrl: options.legacyTarget }),
     adapter: options.adapter ?? new PiAgentAdapter({
       environment: process.env,
       resolveModel: options.resolveModel,
@@ -85,18 +75,9 @@ export async function createPhase3Runtime(
           await recordRunEvent(coreEventToPayload(event, buildId));
         },
       });
-      const service = createDatasetCoreService({
-        datasetCore,
-        tsCore: datasetCore === "ts" ? tsCore : null,
-        pythonClient: datasetCore === "python"
-          ? new DatasetCoreClient({
-              baseUrl: options.legacyTarget!,
-              secret: options.bridgeSecret,
-            })
-          : null,
-      });
+      const service = createDatasetCoreService({ tsCore });
 
-      // Business tool bundle (P5-12): curated tools + dynamic user tools.
+      // Business tool bundle: curated tools + dynamic user tools.
       const client = new PublicHttpClient();
       const cache = new ContentCache(path.join(root, "cache"));
       const browserPool = options.browserPool ?? null;

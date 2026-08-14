@@ -56,8 +56,8 @@ Thumbs.db
 credentials.json
 secrets.json
 
-# ===== 运行时数据（由 backend/data/.gitignore 统一管理）=====
-# backend/data/.gitignore 用 * 忽略 data/ 下所有内容，仅放行 examples/
+# ===== 运行时数据（由 data/.gitignore 统一管理）=====
+# data/.gitignore 用 * 忽略 data/ 下所有内容，仅放行 examples/
 # 此处不再重复声明 data/ 子目录规则，避免冗余
 
 # ===== 临时调试目录 =====

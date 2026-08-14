@@ -34,15 +34,15 @@ for (const script of ["test", "lint", "typecheck", "build"]) {
   assert.equal(typeof rootPackage.scripts?.[script], "string", `Missing root ${script} script`);
 }
 assert.equal(rootPackage.scripts?.dev, "pnpm --filter @biomed/server dev");
-for (const script of [
-  "dev:frontend-standalone",
-  "dev:legacy-backend",
-  "dev:host-proxy-only",
-  "dev:legacy-rollback",
-]) {
-  assert.equal(typeof rootPackage.scripts?.[script], "string", `Missing root ${script} script`);
+assert.equal(typeof rootPackage.scripts?.["dev:frontend-standalone"], "string");
+// Phase 8: the legacy rollback development profiles are retired.
+for (const script of ["dev:legacy-backend", "dev:host-proxy-only", "dev:legacy-rollback"]) {
+  assert.ok(
+    !Object.hasOwn(rootPackage.scripts ?? {}, script),
+    `Retired rollback script must be gone: ${script}`,
+  );
 }
-requireFile("scripts/dev-profile.mjs");
+assert.equal(typeof rootPackage.scripts?.start, "string", "Missing root start script");
 
 requireFile("pnpm-workspace.yaml");
 const workspace = readFileSync(pathFromRoot("pnpm-workspace.yaml"), "utf8");
