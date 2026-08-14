@@ -10,7 +10,8 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, statSync, writeFileSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
 import { relative } from "node:path";
 import type { JsonValue } from "@biomed/contracts";
 import type {
@@ -22,8 +23,9 @@ import type {
   ValidationResult,
 } from "../contracts/index.js";
 import { parseManifestArtifactEntry } from "../contracts/index.js";
-import { sha256File } from "../adapters/hashing.js";
-import { delimitedRowsWithLines, readSourceText } from "../adapters/text.js";
+import { CHECKPOINT_STRIDE, checkpoint, throwIfAborted } from "../cooperative.js";
+import { sha256FileStream } from "../adapters/hashing.js";
+import { delimitedRowsWithLinesAsync, readSourceTextAsync } from "../adapters/text.js";
 import { pyFloat, pythonJsonDumps } from "../runtime/digests.js";
 import type { CanonicalizationResult } from "../canonicalizer/index.js";
 import type { IntegrationResult } from "../integrator/index.js";
@@ -33,8 +35,8 @@ export const SCHEMA_FILE = "schema.json";
 export const PROVENANCE_FILE = "provenance.json";
 export const MANIFEST_FILE = "dataset_manifest.json";
 
-export function fileSha256(path: string): string {
-  return sha256File(path);
+export async function fileSha256(path: string, signal?: AbortSignal | null): Promise<string> {
+  return sha256FileStream(path, signal);
 }
 
 /**
@@ -53,13 +55,14 @@ export function packageDigest(entries: readonly ManifestArtifactEntry[]): string
   return hasher.digest("hex");
 }
 
-function entry(
+async function entry(
   role: ArtifactRole,
   path: string,
   outputDir: string,
   mediaType = "text/csv",
-): ManifestArtifactEntry {
-  const checksum = fileSha256(path);
+  signal?: AbortSignal | null,
+): Promise<ManifestArtifactEntry> {
+  const checksum = await fileSha256(path, signal);
   const relativePath = asPosix(relative(outputDir, path));
   // C3a: content-addressed ids must not collide when identical bytes appear
   // at two relative paths — include the path in the digest.
@@ -81,13 +84,16 @@ function entry(
 }
 
 /** Write provenance.json: source inventory, mappings, rules, backtraces. */
-export function buildProvenanceDocument(options: {
+export async function buildProvenanceDocument(options: {
   schema: DatasetSchema;
   integration: IntegrationResult;
   canonicalResults: readonly CanonicalizationResult[];
   sourceAssets: Readonly<Record<string, SourceAsset>>;
   outputDir: string;
-}): string {
+  signal?: AbortSignal | null;
+}): Promise<string> {
+  const signal = options.signal ?? null;
+  throwIfAborted(signal);
   const mappings = options.canonicalResults.flatMap((result) =>
     result.batch.declared_mappings.map((mapping) => ({
       mapping_id: mapping.mapping_id,
@@ -122,10 +128,10 @@ export function buildProvenanceDocument(options: {
     field_mappings: mappings,
     normalization_rules: normalizationRules,
     merge_strategy: options.integration.batch.statistics["merge_strategy"],
-    sample_backtraces: sampleBacktraces(options.integration.mergedPath),
+    sample_backtraces: await sampleBacktraces(options.integration.mergedPath, signal),
   };
   const path = joinOutput(options.outputDir, PROVENANCE_FILE);
-  writeFileSync(path, `${pythonJsonDumps(document)}\n`, "utf8");
+  await writeFile(path, `${pythonJsonDumps(document)}\n`, "utf8");
   return path;
 }
 
@@ -135,9 +141,9 @@ function rel(outputDir: string, path: string): string {
 }
 
 /** First *limit* primary rows as provenance backtraces (Python mirror). */
-function sampleBacktraces(primaryPath: string, limit = 5): Array<Record<string, unknown>> {
+async function sampleBacktraces(primaryPath: string, signal?: AbortSignal | null, limit = 5): Promise<Array<Record<string, unknown>>> {
   const backtraces: Array<Record<string, unknown>> = [];
-  for (const row of readCsvDictRows(primaryPath)) {
+  for (const row of await readCsvDictRows(primaryPath, signal)) {
     backtraces.push({
       record_id: row["record_id"] ?? "",
       gene_id: row["gene_id"] ?? "",
@@ -162,13 +168,14 @@ function sampleBacktraces(primaryPath: string, limit = 5): Array<Record<string, 
 }
 
 /** Provenance coverage of the primary dataset (Design §16 Phase 6 P2). */
-export function computeProvenanceCoverage(
+export async function computeProvenanceCoverage(
   primaryPath: string,
   sourceAssetIds: ReadonlySet<string>,
-): { traced_rows: number; untraced_rows: number; coverage_ratio: ReturnType<typeof pyFloat> } {
+  signal?: AbortSignal | null,
+): Promise<{ traced_rows: number; untraced_rows: number; coverage_ratio: ReturnType<typeof pyFloat> }> {
   let traced = 0;
   let untraced = 0;
-  for (const row of readCsvDictRows(primaryPath)) {
+  for (const row of await readCsvDictRows(primaryPath, signal)) {
     const assetId = (row["asset_id"] ?? "").trim();
     if (assetId.length > 0 && sourceAssetIds.has(assetId)) {
       traced += 1;
@@ -186,11 +193,11 @@ export function computeProvenanceCoverage(
 }
 
 /** Manifest-side confidence contract surface (Python ``build_confidence_summary``). */
-export function buildConfidenceSummary(outputDir: string): Record<string, JsonValue> {
+export async function buildConfidenceSummary(outputDir: string, signal?: AbortSignal | null): Promise<Record<string, JsonValue>> {
   const reportPath = joinOutput(outputDir, "confidence_report.csv");
   if (!existsSync(reportPath)) return {};
   let anomalyCount = 0;
-  for (const row of readCsvDictRows(reportPath)) {
+  for (const row of await readCsvDictRows(reportPath, signal)) {
     if ((row["anomaly"] ?? "").trim().toLowerCase() === "true") {
       anomalyCount += 1;
     }
@@ -207,7 +214,7 @@ export function buildConfidenceSummary(outputDir: string): Record<string, JsonVa
  * inputs), computes the package digest over data artifacts, and returns the
  * manifest object.
  */
-export function assembleManifest(options: {
+export async function assembleManifest(options: {
   taskId: string;
   buildId: string;
   spec: DatasetBuildSpec;
@@ -219,21 +226,24 @@ export function assembleManifest(options: {
   validation: ValidationResult;
   sourceSummary: Record<string, JsonValue>;
   outputDir: string;
-}): DatasetManifest {
+  signal?: AbortSignal | null;
+}): Promise<DatasetManifest> {
+  const signal = options.signal ?? null;
+  throwIfAborted(signal);
   const schemaPath = joinOutput(options.outputDir, SCHEMA_FILE);
-  writeFileSync(schemaPath, `${pythonJsonDumps(options.schema)}\n`, "utf8");
+  await writeFile(schemaPath, `${pythonJsonDumps(options.schema)}\n`, "utf8");
   const entries: ManifestArtifactEntry[] = [
-    entry("primary_dataset", options.integration.mergedPath, options.outputDir),
-    entry("schema", schemaPath, options.outputDir, "application/json"),
-    entry("provenance", options.provenancePath, options.outputDir, "application/json"),
+    await entry("primary_dataset", options.integration.mergedPath, options.outputDir, "text/csv", signal),
+    await entry("schema", schemaPath, options.outputDir, "application/json", signal),
+    await entry("provenance", options.provenancePath, options.outputDir, "application/json", signal),
   ];
   for (const path of [...options.auditPaths].sort()) {
-    entries.push(entry("audit_report", path, options.outputDir));
+    entries.push(await entry("audit_report", path, options.outputDir, undefined, signal));
   }
   const digest = packageDigest(entries);
   let sourceAssetIds: Set<string>;
   try {
-    const document = JSON.parse(readFileSync(options.provenancePath, "utf8")) as {
+    const document = JSON.parse(await readFile(options.provenancePath, "utf8")) as {
       sources?: Array<Record<string, unknown>>;
     };
     sourceAssetIds = new Set(
@@ -244,7 +254,7 @@ export function assembleManifest(options: {
   } catch {
     sourceAssetIds = new Set();
   }
-  const coverage = computeProvenanceCoverage(options.integration.mergedPath, sourceAssetIds);
+  const coverage = await computeProvenanceCoverage(options.integration.mergedPath, sourceAssetIds, signal);
   return {
     schema_version: "1.0",
     manifest_id: `manifest_${digest.slice(0, 16)}`,
@@ -265,7 +275,7 @@ export function assembleManifest(options: {
       failed_count: options.validation.failed_count,
       report_path: options.validation.report_path,
     },
-    confidence_summary: buildConfidenceSummary(options.outputDir),
+    confidence_summary: await buildConfidenceSummary(options.outputDir, signal),
     provenance_summary: {
       source_count: Object.keys(options.sourceSummary).length,
       field_mapping_count: options.canonicalResults.reduce(
@@ -305,18 +315,23 @@ function asPosix(path: string): string {
 }
 
 /** Python csv.DictReader: header row + per-row field dicts. */
-function readCsvDictRows(path: string): Array<Record<string, string>> {
+async function readCsvDictRows(path: string, signal?: AbortSignal | null): Promise<Array<Record<string, string>>> {
   if (!existsSync(path)) return [];
-  const rows = delimitedRowsWithLines(readSourceText(path), ",");
+  const rows = await delimitedRowsWithLinesAsync(await readSourceTextAsync(path, signal), ",", signal);
   if (rows.length === 0) return [];
   const header = rows[0].values;
-  return rows.slice(1).map((row) => {
+  const records: Array<Record<string, string>> = [];
+  let visited = 0;
+  for (const row of rows.slice(1)) {
     const record: Record<string, string> = {};
     for (let index = 0; index < header.length; index += 1) {
       record[header[index]] = row.values[index] ?? "";
     }
-    return record;
-  });
+    records.push(record);
+    visited += 1;
+    if (visited % CHECKPOINT_STRIDE === 0) await checkpoint(signal);
+  }
+  return records;
 }
 
 export type { DatasetManifest, ManifestArtifactEntry };

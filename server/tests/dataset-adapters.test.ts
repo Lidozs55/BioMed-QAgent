@@ -13,12 +13,12 @@ import {
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 describe("Phase 4 step 4 adapters parity", () => {
-  test("adapter contract invariants mirror the Python contract tests", () => {
-    expect(checkAdapterContractParity()).toEqual([]);
+  test("adapter contract invariants mirror the Python contract tests", async () => {
+    expect(await checkAdapterContractParity()).toEqual([]);
   });
 
-  test("GDC/Xena adapter fixture parity mirrors test_dataset_adapters.py", () => {
-    const issues = checkAdapterFixtureParity({
+  test("GDC/Xena adapter fixture parity mirrors test_dataset_adapters.py", async () => {
+    const issues = await checkAdapterFixtureParity({
       fixturesRoot: join(repoRoot, "backend", "tests", "fixtures"),
       outputRoot: scratchOutputRoot("adapter-vitest-"),
     });

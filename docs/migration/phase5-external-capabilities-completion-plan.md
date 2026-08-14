@@ -1821,6 +1821,8 @@ live:xena
 live:pdb
 live:pubchem
 live:reactome
+live:chembl
+live:uniprot
 live:browser
 live:vlm
 ```
@@ -1828,6 +1830,29 @@ live:vlm
 release verification 明确记录日期、endpoint、结果。
 
 fixture test 才是确定性 CI gate，live test 用于证明外部 API 仍兼容。
+
+### 2026-08-14 release verification run
+
+命令（`server/` 目录）：`BIOMED_LIVE_SMOKE=1 pnpm exec vitest run tests/phase5/live-smoke.test.ts`。
+CI 永不运行该套件（公开服务会瞬时失败）；本记录是 Phase 5 DoD “外部能力均具备显式 live
+smoke”的一次性实跑证据。
+
+| marker | endpoint | 结果 |
+| ------ | -------- | ---- |
+| live:ncbi | eutils.ncbi.nlm.nih.gov（esearch + esummary） | ✅ 2.3s，返回 PubMed 记录 |
+| live:geo | ncbi.nlm.nih.gov/geo（search + describe） | ✅ 1.8s，返回 accession |
+| live:gdc | api.gdc.cancer.gov（projects） | ✅ 3.3s，返回 TCGA 记录 |
+| live:xena | ucsc xena datahub（hub search） | ✅ 1.4s，返回数据集 |
+| live:pdb | data.rcsb.org（search） | ✅ 6.5s，返回结构命中 |
+| live:pubchem | pubchem.ncbi.nlm.nih.gov（PUG REST） | ✅ 3.2s，返回化合物 |
+| live:reactome | reactome.org content service | ✅ 1.4s，返回通路命中 |
+| live:chembl | www.ebi.ac.uk/chembl（REST API） | ✅ 2.1s，返回分子 |
+| live:uniprot | rest.uniprot.org（REST API） | ✅ 3.3s，返回蛋白 |
+| live:browser | Playwright chromium pool 导航 https://example.com/ | ✅ 4.4s，status 200 |
+| live:vlm | dashscope.aliyuncs.com qwen-vl-max（extract_chart_data_vlm） | ⏭ skipped：本机无 `DASHSCOPE_API_KEY`；客户端路径由 fixture tier（vlm.test.ts 假服务器 + 真实 HTTP 客户端）覆盖，配置了凭证的机器上按同一命令实跑即可 |
+
+10 passed / 1 skipped（无凭证）——Phase 5 全部外部能力（含 browser pool、ChEMBL、UniProt）
+已实跑验证；VLM 是唯一依赖外部凭证的项。
 
 ## 11.4 Integrated E2E
 
@@ -2062,68 +2087,74 @@ Deletion/retirement
 
 # 17. 最终验收清单
 
+> 状态更新：2026-08-14 与 `fix/m2-final-closure` 一并收口。此前清单从未勾选，但实际
+> 完成度已随 PR #1（`de58044`，CI 全绿）达到；本轮补上最后三项实质性缺口：真实 Core
+> operation 的可抢占 wall-clock timeout/cancel（`core-preemption.test.ts`）、live smoke
+> 实跑记录（§11.3）、PARTIAL_SUCCESS 的 Adapter 层断言（ts-core-e2e）。
+
 ## M1 — Phase 5
 
-- [ ] Phase 5 baseline/migration matrix 完整。
-- [ ] Reactome `pipeline_supported` 语义已对齐。
-- [ ] TS network security foundation 完成。
-- [ ] TS acquisition service 完成。
-- [ ] `analyze_papers` 完成。
-- [ ] research guidance Tool 完成。
-- [ ] NCBI client 完成。
-- [ ] PubMed Tool 完成。
-- [ ] GEO Tool 完成。
-- [ ] GEO Dataset parser 完成。
-- [ ] GDC Tool 完成。
-- [ ] Xena Tool 完成。
-- [ ] ChEMBL Tool 完成。
-- [ ] UniProt Tool 完成。
-- [ ] PDB Tool 完成。
-- [ ] PubChem Tool 完成。
-- [ ] Reactome Tool 完成。
-- [ ] Node Playwright pool 完成。
-- [ ] browser fallback 完成。
-- [ ] crawler 完成。
-- [ ] web visual capture 完成。
-- [ ] PDF 技术选型记录完成。
-- [ ] PDF table/meta Tool 完成。
-- [ ] VLM chart Tool 完成。
-- [ ] Analysis numeric parity 完成。
-- [ ] Analysis plot path 完成且不绕过 Publication boundary。
-- [ ] DB bridge named operations 完成。
-- [ ] local cache Tool 完成。
-- [ ] declarative user DB HTTP Tool 完成。
-- [ ] credential HIL parity 完成。
-- [ ] formal Pi runtime 注册完整业务 Tool。
-- [ ] disabled DB/Tool 规则生效。
-- [ ] `SKILL_TOOL_MAP` 与运行时工具集合一致。
-- [ ] Pi path 无 Python acquisition/parsing/analysis 调用。
-- [ ] fixture suite 全绿。
-- [ ] security suite 全绿。
-- [ ] live smoke 已记录。
-- [ ] legacy rollback suite 全绿。
-- [ ] `docs/TODO.md` Phase 5 可标记完成。
+- [x] Phase 5 baseline/migration matrix 完整。
+- [x] Reactome `pipeline_supported` 语义已对齐。
+- [x] TS network security foundation 完成。
+- [x] TS acquisition service 完成。
+- [x] `analyze_papers` 完成。
+- [x] research guidance Tool 完成。
+- [x] NCBI client 完成。
+- [x] PubMed Tool 完成。
+- [x] GEO Tool 完成。
+- [x] GEO Dataset parser 完成。
+- [x] GDC Tool 完成。
+- [x] Xena Tool 完成。
+- [x] ChEMBL Tool 完成。
+- [x] UniProt Tool 完成。
+- [x] PDB Tool 完成。
+- [x] PubChem Tool 完成。
+- [x] Reactome Tool 完成。
+- [x] Node Playwright pool 完成。
+- [x] browser fallback 完成。
+- [x] crawler 完成。
+- [x] web visual capture 完成。
+- [x] PDF 技术选型记录完成。
+- [x] PDF table/meta Tool 完成。
+- [x] VLM chart Tool 完成。
+- [x] Analysis numeric parity 完成。
+- [x] Analysis plot path 完成且不绕过 Publication boundary。
+- [x] DB bridge named operations 完成。
+- [x] local cache Tool 完成。
+- [x] declarative user DB HTTP Tool 完成。
+- [x] credential HIL parity 完成。
+- [x] formal Pi runtime 注册完整业务 Tool。
+- [x] disabled DB/Tool 规则生效。
+- [x] `SKILL_TOOL_MAP` 与运行时工具集合一致。
+- [x] Pi path 无 Python acquisition/parsing/analysis 调用。
+- [x] fixture suite 全绿。
+- [x] security suite 全绿。
+- [x] live smoke 已记录（§11.3，2026-08-14 实跑 10/11）。
+- [x] legacy rollback suite 全绿。
+- [x] `docs/TODO.md` Phase 5 可标记完成。
 
 ## M2 — Phase 0–6 集成收口
 
-- [ ] `ts/pi/ts` 成为合法 opt-in profile。
-- [ ] DatasetCore interface 完成。
-- [ ] TS Core service 完成。
-- [ ] operation async/timeout 完成。
-- [ ] cancel terminal ack 完成。
-- [ ] build lock 完成。
-- [ ] event sink 完成。
-- [ ] DatasetBuild Tool 可切 TS/Python Core。
-- [ ] SUCCESS fixture 通过。
-- [ ] PARTIAL_SUCCESS fixture 通过。
-- [ ] NO_DATA fixture 通过。
-- [ ] FAILED/SPEC_REJECTED fixture 通过。
-- [ ] restart/resume 通过。
-- [ ] artifact publication 不变量通过。
-- [ ] `ts/pi/python` 回滚通过。
-- [ ] `ts/legacy/python` 回滚通过。
-- [ ] 默认 profile 未提前改变。
-- [ ] 可以在文档中明确写“Phase 0–6 均完成；Phase 7 下一步”。
+- [x] `ts/pi/ts` 成为合法 opt-in profile。
+- [x] DatasetCore interface 完成。
+- [x] TS Core service 完成。
+- [x] operation async/timeout 完成（Executor + 真实 Core 全链路协作式异步化，
+      `core-preemption.test.ts` 验证真实 adapter parse 可被 wall-clock timeout / cancel 中断）。
+- [x] cancel terminal ack 完成。
+- [x] build lock 完成。
+- [x] event sink 完成。
+- [x] DatasetBuild Tool 可切 TS/Python Core。
+- [x] SUCCESS fixture 通过。
+- [x] PARTIAL_SUCCESS fixture 通过（含 Adapter 层 `build_result.status === "partial_success"` 断言）。
+- [x] NO_DATA fixture 通过。
+- [x] FAILED/SPEC_REJECTED fixture 通过。
+- [x] restart/resume 通过（runtime-parity resumeFrom 覆盖）。
+- [x] artifact publication 不变量通过。
+- [x] `ts/pi/python` 回滚通过。
+- [x] `ts/legacy/python` 回滚通过。
+- [x] 默认 profile 未提前改变。
+- [x] 可以在文档中明确写“Phase 0–6 均完成；Phase 7 下一步”。
 
 ---
 

@@ -1264,6 +1264,18 @@ cooperative cancel 与 operation event sink（→ 稳定 `operation_*` EventEnve
 golden fixture（SUCCESS/PARTIAL_SUCCESS/NO_DATA/SPEC_REJECTED）在 TS Core 路径通过；
 `DATASET_CORE=python` 保留为回滚。默认 profile 不变，Phase 7 才切换正式默认。
 
+> **协作式取消（M2 收口，2026-08-14）**：真实 Core operation 的可抢占 timeout/cancel
+> 通过“协作式 checkpoint”实现，而非 worker_threads：`server/src/dataset/cooperative.ts`
+> 提供 `throwIfAborted` / `checkpoint`（setImmediate 让出事件循环 + 重查 AbortSignal），
+> 重路径（adapter parse / probe mapping / canonicalize / integrate / validate /
+> publish / checksum）全部走 `node:fs/promises` + 流式 I/O，循环每 4096 行让出一次。
+> Executor 仍用 `Promise.race(setTimeout)` 做 wall-clock 预算，超时/取消触发 per-operation
+> AbortController → 最近 checkpoint 抛 `OperationAbortedError` → Executor 映射为
+> `BuildCancelledError`（取消）或 typed `OperationTimeoutError`（失败）。同步回退变体
+> （`readSourceText`/`sha256File`/`delimitedRowsWithLines`）保留给非 Core 调用点。
+> 证据：`server/tests/phase5/core-preemption.test.ts`（真实 40 万行 GDC matrix parse 可被
+> timeout / AbortSignal / `cancelDatasetBuild` 中断，且不留下伪成功状态）。
+
 细节见 [Phase 5 完成计划](migration/phase5-external-capabilities-completion-plan.md)
 与 [能力矩阵](migration/phase5-external-capabilities.md)。
 

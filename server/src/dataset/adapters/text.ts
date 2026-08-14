@@ -9,7 +9,13 @@
  */
 
 import { readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { gunzipSync } from "node:zlib";
+import { promisify } from "node:util";
+import { gunzip as gunzipCb } from "node:zlib";
+import { throwIfAborted } from "../cooperative.js";
+
+const gunzip = promisify(gunzipCb);
 
 export interface DelimitedRow {
   line: number;
@@ -21,6 +27,24 @@ export function readSourceText(path: string): string {
   const buffer = readFileSync(path);
   const isGzip = buffer.length >= 2 && buffer[0] === 0x1f && buffer[1] === 0x8b;
   const bytes = isGzip ? gunzipSync(buffer) : buffer;
+  return bytes.toString("utf8");
+}
+
+/**
+ * Cooperative ``open_text`` for the async Core path: reads through the
+ * libuv thread pool (``fs/promises`` + ``zlib/promises``) so the event loop
+ * stays responsive, and re-checks the operation AbortSignal at each await.
+ */
+export async function readSourceTextAsync(
+  path: string,
+  signal?: AbortSignal | null,
+): Promise<string> {
+  throwIfAborted(signal);
+  const buffer = await readFile(path);
+  throwIfAborted(signal);
+  const isGzip = buffer.length >= 2 && buffer[0] === 0x1f && buffer[1] === 0x8b;
+  const bytes = isGzip ? await gunzip(buffer) : buffer;
+  throwIfAborted(signal);
   return bytes.toString("utf8");
 }
 
@@ -69,6 +93,48 @@ export function delimitedRowsWithLines(
     line: index + 1,
     values: parseDelimitedLine(lineText, delimiter),
   }));
+}
+
+/**
+ * Cooperative line splitter for the async Core path: byte-identical to
+ * ``delimitedRowsWithLines`` (same \r\n / \n / \r handling, same trailing
+ * empty-line drop), but yields to the event loop every N lines so pending
+ * operation-timeout timers can fire and the AbortSignal is honored mid-file.
+ */
+export async function delimitedRowsWithLinesAsync(
+  text: string,
+  delimiter: string,
+  signal?: AbortSignal | null,
+): Promise<DelimitedRow[]> {
+  const rows: DelimitedRow[] = [];
+  let offset = 0;
+  let lineNumber = 0;
+  const length = text.length;
+  while (offset < length) {
+    const nl = text.indexOf("\n", offset);
+    const cr = text.indexOf("\r", offset);
+    let end: number;
+    let nextStart: number;
+    if (cr !== -1 && (nl === -1 || cr < nl)) {
+      // \r line break (consuming a following \n as CRLF)
+      end = cr;
+      nextStart = text[cr + 1] === "\n" ? cr + 2 : cr + 1;
+    } else if (nl !== -1) {
+      end = nl;
+      nextStart = nl + 1;
+    } else {
+      end = length;
+      nextStart = length;
+    }
+    lineNumber += 1;
+    rows.push({ line: lineNumber, values: parseDelimitedLine(text.slice(offset, end), delimiter) });
+    offset = nextStart;
+    if (lineNumber % 8192 === 0) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      throwIfAborted(signal);
+    }
+  }
+  return rows;
 }
 
 /** Python csv QUOTE_MINIMAL single-field serialization. */

@@ -81,8 +81,8 @@ function writeBatch(outputDir: string, probes: string[]): string {
 }
 
 describe("parsePlatformTable golden parity", () => {
-  test("gene-symbol mapping (golden)", () => {
-    const result = parsePlatformTable(fixturePath("gpl570_annot.txt.gz"));
+  test("gene-symbol mapping (golden)", async () => {
+    const result = await parsePlatformTable(fixturePath("gpl570_annot.txt.gz"));
     expect(result.mapping).toEqual(golden("geo_platform_table.golden.json").mapping);
     expect(result.target_namespace).toBe(
       golden("geo_platform_table.golden.json").target_namespace,
@@ -99,8 +99,8 @@ describe("parsePlatformTable golden parity", () => {
     );
   });
 
-  test("ENSEMBL_ID target namespace (golden)", () => {
-    const result = parsePlatformTable(
+  test("ENSEMBL_ID target namespace (golden)", async () => {
+    const result = await parsePlatformTable(
       fixturePath("gpl570_annot_ensembl.txt.gz"),
     );
     expect(result.target_namespace).toBe("ensembl_gene");
@@ -108,8 +108,8 @@ describe("parsePlatformTable golden parity", () => {
     expect(result.status).toBe("mapped");
   });
 
-  test("no recognized gene column (golden)", () => {
-    const result = parsePlatformTable(fixturePath("gpl1_no_gene_annot.txt.gz"));
+  test("no recognized gene column (golden)", async () => {
+    const result = await parsePlatformTable(fixturePath("gpl1_no_gene_annot.txt.gz"));
     expect(result.mapping).toEqual({});
     expect(result.status).toBe("no_gene_annotation");
     expect(result.probe_column).toBe("ID");
@@ -130,7 +130,7 @@ describe("parsePlatformTable golden parity", () => {
 });
 
 describe("buildProbeMapping", () => {
-  test("partial summary, audit CSV and map (golden)", () => {
+  test("partial summary, audit CSV and map (golden)", async () => {
     const outputDir = mkdtempSync(path.join(tmpdir(), "p5-probe-map-"));
     try {
       const annotationPath = fixturePath("gpl570_annot.txt.gz");
@@ -140,7 +140,7 @@ describe("buildProbeMapping", () => {
         "PROBE3",
         "UNKNOWN1",
       ]);
-      const result = buildProbeMapping({
+      const result = await buildProbeMapping({
         annotationPath,
         batchPath,
         bindingId: "binding_geo",
@@ -174,10 +174,10 @@ describe("buildProbeMapping", () => {
     }
   });
 
-  test("full coverage is mapped with coverage 1.0", () => {
+  test("full coverage is mapped with coverage 1.0", async () => {
     const outputDir = mkdtempSync(path.join(tmpdir(), "p5-probe-map-"));
     try {
-      const result = buildProbeMapping({
+      const result = await buildProbeMapping({
         annotationPath: fixturePath("gpl570_annot.txt.gz"),
         batchPath: writeBatch(outputDir, ["PROBE1", "PROBE3"]),
         bindingId: "binding_geo",
@@ -194,10 +194,10 @@ describe("buildProbeMapping", () => {
     }
   });
 
-  test("zero coverage is unmapped with 0.0", () => {
+  test("zero coverage is unmapped with 0.0", async () => {
     const outputDir = mkdtempSync(path.join(tmpdir(), "p5-probe-map-"));
     try {
-      const result = buildProbeMapping({
+      const result = await buildProbeMapping({
         annotationPath: fixturePath("gpl570_annot.txt.gz"),
         batchPath: writeBatch(outputDir, ["OTHER1", "OTHER2"]),
         bindingId: "binding_geo",
@@ -214,11 +214,11 @@ describe("buildProbeMapping", () => {
     }
   });
 
-  test("sha mismatch raises ProbeMappingAssetMismatchError (F2)", () => {
+  test("sha mismatch raises ProbeMappingAssetMismatchError (F2)", async () => {
     const outputDir = mkdtempSync(path.join(tmpdir(), "p5-probe-map-"));
     try {
       const annotationPath = fixturePath("gpl570_annot.txt.gz");
-      expect(() =>
+      await expect(
         buildProbeMapping({
           annotationPath,
           batchPath: writeBatch(outputDir, ["PROBE1"]),
@@ -232,13 +232,13 @@ describe("buildProbeMapping", () => {
           ),
           outputDir,
         }),
-      ).toThrow(ProbeMappingAssetMismatchError);
+      ).rejects.toThrow(ProbeMappingAssetMismatchError);
     } finally {
       rmSync(outputDir, { recursive: true, force: true });
     }
   });
 
-  test("multi-target probe is ambiguous and excluded from the map (F3)", () => {
+  test("multi-target probe is ambiguous and excluded from the map (F3)", async () => {
     const outputDir = mkdtempSync(path.join(tmpdir(), "p5-probe-map-"));
     try {
       const annotationPath = path.join(outputDir, "multi.txt.gz");
@@ -252,7 +252,7 @@ describe("buildProbeMapping", () => {
           ),
         ),
       );
-      const result = buildProbeMapping({
+      const result = await buildProbeMapping({
         annotationPath,
         batchPath: writeBatch(outputDir, ["PROBE1", "PROBE2"]),
         bindingId: "binding_geo",
@@ -275,7 +275,7 @@ describe("buildProbeMapping", () => {
     }
   });
 
-  test("duplicate same-target rows are not ambiguous", () => {
+  test("duplicate same-target rows are not ambiguous", async () => {
     const outputDir = mkdtempSync(path.join(tmpdir(), "p5-probe-map-"));
     try {
       const annotationPath = path.join(outputDir, "dup.txt.gz");
@@ -289,7 +289,7 @@ describe("buildProbeMapping", () => {
           ),
         ),
       );
-      const result = buildProbeMapping({
+      const result = await buildProbeMapping({
         annotationPath,
         batchPath: writeBatch(outputDir, ["PROBE1"]),
         bindingId: "binding_geo",
@@ -307,12 +307,12 @@ describe("buildProbeMapping", () => {
     }
   });
 
-  test("platform record carries annotation provenance (F4)", () => {
+  test("platform record carries annotation provenance (F4)", async () => {
     const outputDir = mkdtempSync(path.join(tmpdir(), "p5-probe-map-"));
     try {
       const annotationPath = fixturePath("gpl570_annot.txt.gz");
       const asset = mappingAsset(annotationPath);
-      const result = buildProbeMapping({
+      const result = await buildProbeMapping({
         annotationPath,
         batchPath: writeBatch(outputDir, ["PROBE1"]),
         bindingId: "binding_geo",
@@ -335,12 +335,12 @@ describe("buildProbeMapping", () => {
     }
   });
 
-  test("no-gene-column annotation emits a NO_GENE_ANNOTATION platform record", () => {
+  test("no-gene-column annotation emits a NO_GENE_ANNOTATION platform record", async () => {
     const outputDir = mkdtempSync(path.join(tmpdir(), "p5-probe-map-"));
     try {
       const annotationPath = fixturePath("gpl1_no_gene_annot.txt.gz");
       const asset = mappingAsset(annotationPath);
-      const result = buildProbeMapping({
+      const result = await buildProbeMapping({
         annotationPath,
         batchPath: writeBatch(outputDir, ["PROBE1"]),
         bindingId: "binding_geo",
@@ -359,10 +359,10 @@ describe("buildProbeMapping", () => {
     }
   });
 
-  test("empty probe batch yields zero counts and no detail rows", () => {
+  test("empty probe batch yields zero counts and no detail rows", async () => {
     const outputDir = mkdtempSync(path.join(tmpdir(), "p5-probe-map-"));
     try {
-      const result = buildProbeMapping({
+      const result = await buildProbeMapping({
         annotationPath: fixturePath("gpl570_annot.txt.gz"),
         batchPath: writeBatch(outputDir, []),
         bindingId: "binding_geo",
@@ -381,10 +381,10 @@ describe("buildProbeMapping", () => {
 });
 
 describe("canonicalizer consumes the probe map", () => {
-  test("mapped probes are re-namespaced to the target namespace", () => {
+  test("mapped probes are re-namespaced to the target namespace", async () => {
     const outputDir = mkdtempSync(path.join(tmpdir(), "p5-probe-canon-"));
     try {
-      const result = buildProbeMapping({
+      const result = await buildProbeMapping({
         annotationPath: fixturePath("gpl570_annot.txt.gz"),
         batchPath: writeBatch(outputDir, ["PROBE1", "PROBE2"]),
         bindingId: "binding_geo",

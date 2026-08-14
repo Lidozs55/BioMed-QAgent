@@ -10,14 +10,16 @@
  * deterministically and are recorded in a conflicts audit file.
  */
 
-import { mkdirSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, statSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import type { JsonValue } from "@biomed/contracts";
 import type { CanonicalizationResult } from "../canonicalizer/index.js";
+import { CHECKPOINT_STRIDE, checkpoint, throwIfAborted } from "../cooperative.js";
 import { BuildError } from "../adapters/errors.js";
-import { sha256File } from "../adapters/hashing.js";
+import { sha256FileStream } from "../adapters/hashing.js";
 import { assetIdFromSha256 } from "../adapters/identity.js";
-import { csvLine, delimitedRowsWithLines, readSourceText } from "../adapters/text.js";
+import { csvLine, delimitedRowsWithLinesAsync, readSourceTextAsync } from "../adapters/text.js";
 import type { DataBatch, DatasetSchema, FileAsset } from "../contracts/index.js";
 import { parseDataBatch, parseFileAsset } from "../contracts/index.js";
 
@@ -50,14 +52,16 @@ export interface IntegrationResult {
 }
 
 /** Append canonical sources into one primary dataset, dedup by row identity. */
-export function integrate(options: {
+export async function integrate(options: {
   results: readonly CanonicalizationResult[];
   mergeStrategy: string;
   schema: DatasetSchema;
   buildId: string;
   outputDir: string;
-}): IntegrationResult {
-  const { results, mergeStrategy, schema, buildId, outputDir } = options;
+  signal?: AbortSignal | null;
+}): Promise<IntegrationResult> {
+  const { results, mergeStrategy, schema, buildId, outputDir, signal } = options;
+  throwIfAborted(signal);
   if (mergeStrategy !== MERGE_STRATEGY_APPEND) {
     throw new IntegratorError(
       `unsupported merge strategy ${mergeStrategy}; ` +
@@ -85,8 +89,9 @@ export function integrate(options: {
 
   const mergedLines: string[] = [csvLine(columns)];
   const conflictLines: string[] = [csvLine(CONFLICT_COLUMNS)];
+  let visited = 0;
   for (const result of results) {
-    const rows = readCsvDictRows(result.canonicalPath);
+    const rows = await readCsvDictRows(result.canonicalPath, signal);
     for (const row of rows) {
       const keyParts = rowIdentity(row, idField);
       const key = keyParts.join("\u0000");
@@ -96,6 +101,8 @@ export function integrate(options: {
         seen.set(key, [value, row["asset_id"] ?? ""]);
         mergedLines.push(csvLine(columns.map((column) => row[column] ?? "")));
         rowCount += 1;
+        visited += 1;
+        if (visited % CHECKPOINT_STRIDE === 0) await checkpoint(signal);
         continue;
       }
       const [previousValue, previousAsset] = previous;
@@ -120,10 +127,10 @@ export function integrate(options: {
       conflictCount += 1;
     }
   }
-  writeFileSync(mergedPath, mergedLines.join(""), "utf8");
-  writeFileSync(conflictsPath, conflictLines.join(""), "utf8");
+  await writeFile(mergedPath, mergedLines.join(""), "utf8");
+  await writeFile(conflictsPath, conflictLines.join(""), "utf8");
 
-  const payloadChecksum = sha256File(mergedPath);
+  const payloadChecksum = await sha256FileStream(mergedPath, signal);
   const fileAsset: FileAsset = parseFileAsset({
     schema_version: "1.0",
     asset_id: assetIdFromSha256(payloadChecksum),
@@ -185,17 +192,23 @@ function rowIdentity(
 }
 
 /** Python csv.DictReader: header row + per-row field dicts. */
-function readCsvDictRows(path: string): Array<Record<string, string>> {
-  const rows = delimitedRowsWithLines(readSourceText(path), ",");
+async function readCsvDictRows(path: string, signal?: AbortSignal | null): Promise<Array<Record<string, string>>> {
+  const text = await readSourceTextAsync(path, signal);
+  const rows = await delimitedRowsWithLinesAsync(text, ",", signal);
   if (rows.length === 0) return [];
   const header = rows[0].values;
-  return rows.slice(1).map((row) => {
+  const records: Array<Record<string, string>> = [];
+  let visited = 0;
+  for (const row of rows.slice(1)) {
     const record: Record<string, string> = {};
     for (let index = 0; index < header.length; index += 1) {
       record[header[index]] = row.values[index] ?? "";
     }
-    return record;
-  });
+    records.push(record);
+    visited += 1;
+    if (visited % CHECKPOINT_STRIDE === 0) await checkpoint(signal);
+  }
+  return records;
 }
 
 function numericallyEqual(left: string, right: string): boolean {

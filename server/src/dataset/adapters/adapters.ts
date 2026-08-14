@@ -16,7 +16,8 @@
  * aborting the whole source.
  */
 
-import { mkdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, statSync, unlinkSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { JsonValue } from "@biomed/contracts";
 import type {
@@ -27,13 +28,14 @@ import type {
   SourceBinding,
 } from "../contracts/index.js";
 import { parseAdapterParams, parseDataBatch } from "../contracts/index.js";
+import { CHECKPOINT_STRIDE, checkpoint, throwIfAborted } from "../cooperative.js";
 import { AdapterError, BuildError, EmptySourceError } from "./errors.js";
 import { assetIdFromSha256, makeRecordId } from "./identity.js";
-import { sha256File } from "./hashing.js";
+import { sha256FileStream } from "./hashing.js";
 import {
   csvLine,
-  delimitedRowsWithLines,
-  readSourceText,
+  delimitedRowsWithLinesAsync,
+  readSourceTextAsync,
   type DelimitedRow,
 } from "./text.js";
 
@@ -86,11 +88,12 @@ export interface RowWriter {
   writeRow(values: readonly string[]): void;
 }
 
-function verifySha256(path: string, expected: string): void {
-  const digest = sha256File(path);
-  if (digest !== expected) {
-    throw new AdapterError(`source asset checksum mismatch before parsing: ${path}`);
-  }
+function verifySha256(path: string, expected: string, signal?: AbortSignal | null): Promise<void> {
+  return sha256FileStream(path, signal).then((digest) => {
+    if (digest !== expected) {
+      throw new AdapterError(`source asset checksum mismatch before parsing: ${path}`);
+    }
+  });
 }
 
 /** Python ``math.isfinite(float(value))`` for a raw cell string. */
@@ -351,7 +354,7 @@ export abstract class SourceAdapter {
   abstract readonly version: string;
   abstract readonly source_database: string;
 
-  parse(
+  async parse(
     sourceAsset: SourceAsset,
     sourcePath: string,
     options: {
@@ -360,11 +363,14 @@ export abstract class SourceAdapter {
       schemaRef: string;
       outputDir: string;
       parameters?: AdapterParams | null;
+      signal?: AbortSignal | null;
     },
-  ): DataBatch {
+  ): Promise<DataBatch> {
     const { buildId, bindingId, schemaRef, outputDir } = options;
     const parameters = options.parameters ?? null;
-    verifySha256(sourcePath, sourceAsset.sha256);
+    const signal = options.signal ?? null;
+    await verifySha256(sourcePath, sourceAsset.sha256, signal);
+    throwIfAborted(signal);
     const sourceName = basename(sourcePath);
     const batchDir = join(outputDir, "batches");
     mkdirSync(batchDir, { recursive: true });
@@ -373,22 +379,23 @@ export abstract class SourceAdapter {
     const longRows: string[][] = [];
     const rejectedRows: string[][] = [];
     try {
-      const text = readSourceText(sourcePath);
-      const rows = delimitedRowsWithLines(text, "\t");
-      const { statistics, warnings, mappings, rejectedCount } = this.extract(
+      const text = await readSourceTextAsync(sourcePath, signal);
+      const rows = await delimitedRowsWithLinesAsync(text, "\t", signal);
+      const { statistics, warnings, mappings, rejectedCount } = await this.extract(
         rows,
         { writeRow: (values) => longRows.push([...values]) },
         { writeRow: (values) => rejectedRows.push([...values]) },
         { sourceAsset, buildId, bindingId, sourceName, parameters },
+        signal,
       );
       const longContent =
         csvLine(SOURCE_LONG_COLUMNS) + longRows.map((row) => csvLine(row)).join("");
       const rejectedContent =
         csvLine(REJECTED_COLUMNS) +
         rejectedRows.map((row) => csvLine(row)).join("");
-      writeFileSync(outputPath, longContent, "utf8");
-      writeFileSync(rejectedPath, rejectedContent, "utf8");
-      const checksum = sha256File(outputPath);
+      await writeFile(outputPath, longContent, "utf8");
+      await writeFile(rejectedPath, rejectedContent, "utf8");
+      const checksum = await sha256FileStream(outputPath, signal);
       const rowCount = typeof statistics.row_count === "number" ? statistics.row_count : 0;
       const fileAsset = {
         schema_version: "1.0",
@@ -436,7 +443,8 @@ export abstract class SourceAdapter {
     longWriter: RowWriter,
     rejectedWriter: RowWriter,
     context: ExtractContext,
-  ): ExtractResult;
+    signal?: AbortSignal | null,
+  ): Promise<ExtractResult>;
 }
 
 /** Parses GDC gene-expression TSV files (matrix or STAR-counts layout). */
@@ -445,12 +453,13 @@ export class GdcExpressionAdapter extends SourceAdapter {
   readonly version = "1.0.0";
   readonly source_database = "gdc";
 
-  protected extract(
+  protected async extract(
     rows: DelimitedRow[],
     longWriter: RowWriter,
     rejectedWriter: RowWriter,
     context: ExtractContext,
-  ): ExtractResult {
+    signal?: AbortSignal | null,
+  ): Promise<ExtractResult> {
     const { headerLine, header } = nextHeader(rows);
     if (
       header.includes("gene_name") &&
@@ -460,21 +469,22 @@ export class GdcExpressionAdapter extends SourceAdapter {
         ...context,
         headerLine,
         header,
-      });
+      }, signal);
     }
     return this.extractMatrix(rows, longWriter, rejectedWriter, {
       ...context,
       headerLine,
       header,
-    });
+    }, signal);
   }
 
-  private extractMatrix(
+  private async extractMatrix(
     rows: DelimitedRow[],
     longWriter: RowWriter,
     rejectedWriter: RowWriter,
     context: ExtractContext & { headerLine: number; header: string[] },
-  ): ExtractResult {
+    signal?: AbortSignal | null,
+  ): Promise<ExtractResult> {
     const { headerLine, header, sourceAsset, buildId, bindingId, sourceName } = context;
     const samples = header
       .slice(1)
@@ -497,6 +507,7 @@ export class GdcExpressionAdapter extends SourceAdapter {
     let sourceRowCount = 0;
     let rowCount = 0;
     let rejectedCount = 0;
+    let visited = 0;
     const batchId = `batch_${bindingId}`;
     for (const { line, values } of rows) {
       if (line <= headerLine) continue;
@@ -518,6 +529,8 @@ export class GdcExpressionAdapter extends SourceAdapter {
       });
       rowCount += emitted;
       rejectedCount += rejected;
+      visited += 1;
+      if (visited % CHECKPOINT_STRIDE === 0) await checkpoint(signal);
     }
     if (sourceRowCount === 0) {
       throw new EmptySourceError("GDC expression TSV contains no data rows");
@@ -533,12 +546,13 @@ export class GdcExpressionAdapter extends SourceAdapter {
     return { statistics, warnings: [], mappings, rejectedCount };
   }
 
-  private extractStarCounts(
+  private async extractStarCounts(
     rows: DelimitedRow[],
     longWriter: RowWriter,
     rejectedWriter: RowWriter,
     context: ExtractContext & { headerLine: number; header: string[] },
-  ): ExtractResult {
+    signal?: AbortSignal | null,
+  ): Promise<ExtractResult> {
     const { headerLine, header, sourceAsset, buildId, bindingId, sourceName } = context;
     if (new Set(header).size !== header.length) {
       throw new AdapterError("GDC STAR-counts columns must be unique");
@@ -577,6 +591,7 @@ export class GdcExpressionAdapter extends SourceAdapter {
     let sourceRowCount = 0;
     let rowCount = 0;
     let rejectedCount = 0;
+    let visited = 0;
     const batchId = `batch_${bindingId}`;
     for (const { line, values } of rows) {
       if (line <= headerLine) continue;
@@ -640,6 +655,8 @@ export class GdcExpressionAdapter extends SourceAdapter {
       );
       sourceRowCount += 1;
       rowCount += 1;
+      visited += 1;
+      if (visited % CHECKPOINT_STRIDE === 0) await checkpoint(signal);
     }
     if (sourceRowCount === 0) {
       throw new EmptySourceError("GDC STAR-counts TSV contains no data rows");
@@ -662,12 +679,13 @@ export class XenaMatrixAdapter extends SourceAdapter {
   readonly version = "1.0.0";
   readonly source_database = "ucsc_xena";
 
-  protected extract(
+  protected async extract(
     rows: DelimitedRow[],
     longWriter: RowWriter,
     rejectedWriter: RowWriter,
     context: ExtractContext,
-  ): ExtractResult {
+    signal?: AbortSignal | null,
+  ): Promise<ExtractResult> {
     const { headerLine, header } = nextHeader(rows);
     const { sourceAsset, buildId, bindingId, sourceName } = context;
     const samples = header.slice(1);
@@ -686,6 +704,7 @@ export class XenaMatrixAdapter extends SourceAdapter {
     let sourceRowCount = 0;
     let rowCount = 0;
     let rejectedCount = 0;
+    let visited = 0;
     const batchId = `batch_${bindingId}`;
     for (const { line, values } of rows) {
       if (line <= headerLine) continue;
@@ -712,6 +731,8 @@ export class XenaMatrixAdapter extends SourceAdapter {
       });
       rowCount += emitted;
       rejectedCount += rejected;
+      visited += 1;
+      if (visited % CHECKPOINT_STRIDE === 0) await checkpoint(signal);
     }
     if (sourceRowCount === 0) {
       throw new EmptySourceError("Xena matrix contains no data rows");

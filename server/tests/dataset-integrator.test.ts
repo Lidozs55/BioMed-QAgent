@@ -11,8 +11,8 @@ import {
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 describe("Phase 4 step 7 integrator parity", () => {
-  test("fixture-driven integrator matrix mirrors test_dataset_integrator.py", () => {
-    const issues = checkIntegratorParity({
+  test("fixture-driven integrator matrix mirrors test_dataset_integrator.py", async () => {
+    const issues = await checkIntegratorParity({
       fixturesRoot: join(repoRoot, "backend", "tests", "fixtures"),
       outputRoot: scratchOutputRoot("integrator-vitest-"),
     });

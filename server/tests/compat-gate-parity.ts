@@ -193,7 +193,7 @@ function parseAdapterBatch(options: {
   adapterId: string;
   outputDir: string;
   bindingId?: string;
-}): DataBatch {
+}): Promise<DataBatch> {
   const adapter = getAdapter(options.adapterId);
   const asset = sourceAssetFromFixture(options.fixturesRoot, options.fixture);
   return adapter.parse(asset, join(options.fixturesRoot, options.fixture), {
@@ -204,14 +204,14 @@ function parseAdapterBatch(options: {
   });
 }
 
-function geneCanonical(options: {
+async function geneCanonical(options: {
   fixturesRoot: string;
   fixture: string;
   adapterId: string;
   outputDir: string;
   bindingId: string;
-}): CanonicalizationResult {
-  const batch = parseAdapterBatch({
+}): Promise<CanonicalizationResult> {
+  const batch = await parseAdapterBatch({
     fixturesRoot: options.fixturesRoot,
     fixture: options.fixture,
     adapterId: options.adapterId,
@@ -227,7 +227,7 @@ function geneCanonical(options: {
 }
 
 /** Parse a probe-level series matrix and canonicalize under the probe schema. */
-function probeCanonical(options: {
+async function probeCanonical(options: {
   outputDir: string;
   bindingId: string;
   scale?: string;
@@ -235,7 +235,7 @@ function probeCanonical(options: {
   unit?: string;
   namespaces?: string[];
   rowCount?: number;
-}): CanonicalizationResult {
+}): Promise<CanonicalizationResult> {
   const scale = options.scale ?? "log2";
   const semantics = options.semantics ?? "normalized_expression";
   const unit = options.unit ?? "log2_expression";
@@ -270,7 +270,7 @@ function probeCanonical(options: {
     rowGranularity: "probe_sample_measurement",
     mappings: [formalMapping()],
   });
-  const result = canonicalize({
+  const result = await canonicalize({
     batch,
     schema: buildProbeExpressionSchema(),
     profile: expressionNormalizationV1(),
@@ -476,10 +476,10 @@ export function checkCompatGateContractParity(): string[] {
 }
 
 /** Fixture-driven gate matrix (test_dataset_compat_gate.py). */
-export function checkCompatGateFixtureParity(options: {
+export async function checkCompatGateFixtureParity(options: {
   fixturesRoot: string;
   outputRoot: string;
-}): string[] {
+}): Promise<string[]> {
   const issues: string[] = [];
   rmSync(options.outputRoot, { recursive: true, force: true });
   mkdirSync(options.outputRoot, { recursive: true });
@@ -487,14 +487,14 @@ export function checkCompatGateFixtureParity(options: {
 
   // test_compatible_gdc_xena_merge_passes.
   const mergeOut = join(options.outputRoot, "merge");
-  const gdc = geneCanonical({
+  const gdc = await geneCanonical({
     fixturesRoot: fixtures,
     fixture: "gdc/gdc_expression.tsv",
     adapterId: "gdc.expression.v1",
     outputDir: join(mergeOut, "gdc"),
     bindingId: "binding_gdc",
   });
-  const xena = geneCanonical({
+  const xena = await geneCanonical({
     fixturesRoot: fixtures,
     fixture: "ncbi/gse178352/xena_matrix.tsv",
     adapterId: "xena.matrix.v1",
@@ -513,7 +513,7 @@ export function checkCompatGateFixtureParity(options: {
   check(issues, single.compatible === true, "single source passes");
 
   // test_unit_mismatch_rejected.
-  const star = geneCanonical({
+  const star = await geneCanonical({
     fixturesRoot: fixtures,
     fixture: "gdc/gdc_star_counts.tsv",
     adapterId: "gdc.expression.v1",
@@ -564,8 +564,8 @@ export function checkCompatGateFixtureParity(options: {
   check(issues, schema.reasons.includes("schema_mismatch"), "schema mismatch fixture reason");
   // test_unknown_scale_cross_source_merge_rejected.
   const probeOut = join(options.outputRoot, "probe");
-  const unknownA = probeCanonical({ outputDir: join(probeOut, "a"), bindingId: "binding_geo_a", scale: "unknown" });
-  const unknownB = probeCanonical({ outputDir: join(probeOut, "b"), bindingId: "binding_geo_b", scale: "unknown" });
+  const unknownA = await probeCanonical({ outputDir: join(probeOut, "a"), bindingId: "binding_geo_a", scale: "unknown" });
+  const unknownB = await probeCanonical({ outputDir: join(probeOut, "b"), bindingId: "binding_geo_b", scale: "unknown" });
   const unknownMerge = checkExpressionCompatibility({
     spec: probeSpec(),
     results: [unknownA, unknownB],
@@ -579,8 +579,8 @@ export function checkCompatGateFixtureParity(options: {
   checkDeepEqual(issues, unknownSingle.reasons, [], "unknown single source reasons");
 
   // test_log2_vs_linear_identity_mismatch.
-  const log2Source = probeCanonical({ outputDir: join(probeOut, "l2"), bindingId: "binding_geo_a", scale: "log2" });
-  const linearSource = probeCanonical({ outputDir: join(probeOut, "lin"), bindingId: "binding_geo_b", scale: "linear" });
+  const log2Source = await probeCanonical({ outputDir: join(probeOut, "l2"), bindingId: "binding_geo_a", scale: "log2" });
+  const linearSource = await probeCanonical({ outputDir: join(probeOut, "lin"), bindingId: "binding_geo_b", scale: "linear" });
   const log2Linear = checkExpressionCompatibility({
     spec: probeSpec(),
     results: [log2Source, linearSource],
@@ -606,7 +606,7 @@ export function checkCompatGateFixtureParity(options: {
   check(issues, probeGene.reasons.includes("granularity_mismatch"), "probe + gene granularity reason");
 
   // test_probe_level_build_mixed_namespace_sources_rejected.
-  const geneRows = probeCanonical({
+  const geneRows = await probeCanonical({
     outputDir: join(probeOut, "gene_rows"),
     bindingId: "binding_geo_b",
     namespaces: ["ensembl_gene"],
@@ -619,7 +619,7 @@ export function checkCompatGateFixtureParity(options: {
   check(issues, mixedNs.reasons.includes("namespace_mismatch"), "mixed namespace reason");
 
   // test_probe_level_two_probe_sources_compatible.
-  const log2Second = probeCanonical({
+  const log2Second = await probeCanonical({
     outputDir: join(probeOut, "l2b"),
     bindingId: "binding_geo_b",
     scale: "log2",
@@ -632,13 +632,13 @@ export function checkCompatGateFixtureParity(options: {
   checkDeepEqual(issues, probeProbe.reasons, [], "probe x probe reasons");
 
   // test_empty_source_does_not_forge_identity.
-  const empty = probeCanonical({
+  const empty = await probeCanonical({
     outputDir: join(probeOut, "empty"),
     bindingId: "binding_geo_empty",
     scale: "unknown",
     rowCount: 0,
   });
-  const nonEmpty = probeCanonical({
+  const nonEmpty = await probeCanonical({
     outputDir: join(probeOut, "real"),
     bindingId: "binding_geo_real",
     scale: "log2",
@@ -651,8 +651,8 @@ export function checkCompatGateFixtureParity(options: {
   check(issues, !emptyMerge.reasons.includes("measurement_identity_mismatch"), "empty source no identity reason");
 
   // test_all_empty_sources_never_fabricate_identity.
-  const allEmptyA = probeCanonical({ outputDir: join(probeOut, "e1"), bindingId: "binding_geo_a", rowCount: 0 });
-  const allEmptyB = probeCanonical({ outputDir: join(probeOut, "e2"), bindingId: "binding_geo_b", rowCount: 0 });
+  const allEmptyA = await probeCanonical({ outputDir: join(probeOut, "e1"), bindingId: "binding_geo_a", rowCount: 0 });
+  const allEmptyB = await probeCanonical({ outputDir: join(probeOut, "e2"), bindingId: "binding_geo_b", rowCount: 0 });
   const allEmpty = checkExpressionCompatibility({
     spec: probeSpec(),
     results: [allEmptyA, allEmptyB],

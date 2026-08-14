@@ -240,7 +240,7 @@ function writePublication(
 // Release invariants (test_dataset_invariants.py)
 // ---------------------------------------------------------------------------
 
-export function checkInvariantsParity(options: { outputRoot: string }): string[] {
+export async function checkInvariantsParity(options: { outputRoot: string }): Promise<string[]> {
   const issues: string[] = [];
   const outputRoot = options.outputRoot;
 
@@ -249,7 +249,7 @@ export function checkInvariantsParity(options: { outputRoot: string }): string[]
     const out = join(outputRoot, "pass");
     mkdirSync(out, { recursive: true });
     writeProvenance(out);
-    const result = checkReleaseInvariants({
+    const result = await checkReleaseInvariants({
       manifest: manifestFor(out),
       validation: validationFor(),
       outputDir: out,
@@ -266,7 +266,7 @@ export function checkInvariantsParity(options: { outputRoot: string }): string[]
   {
     const out = join(outputRoot, "no-prov-artifact");
     mkdirSync(out, { recursive: true });
-    const result = checkReleaseInvariants({
+    const result = await checkReleaseInvariants({
       manifest: manifestFor(out, { withProvenanceArtifact: false }),
       validation: validationFor(),
       outputDir: out,
@@ -285,7 +285,7 @@ export function checkInvariantsParity(options: { outputRoot: string }): string[]
     const out = join(outputRoot, "prov-missing-disk");
     mkdirSync(out, { recursive: true });
     // Artifact declared, file absent -> missing-on-disk violation.
-    const result = checkReleaseInvariants({
+    const result = await checkReleaseInvariants({
       manifest: manifestFor(out),
       validation: validationFor(),
       outputDir: out,
@@ -304,7 +304,7 @@ export function checkInvariantsParity(options: { outputRoot: string }): string[]
     const out = join(outputRoot, "prov-coverage");
     mkdirSync(out, { recursive: true });
     writeProvenance(out, 1); // only 1 of 2 sources
-    const result = checkReleaseInvariants({
+    const result = await checkReleaseInvariants({
       manifest: manifestFor(out, { sourceCount: 2 }),
       validation: validationFor(),
       outputDir: out,
@@ -323,7 +323,7 @@ export function checkInvariantsParity(options: { outputRoot: string }): string[]
     const out = join(outputRoot, "failed-profile");
     mkdirSync(out, { recursive: true });
     writeProvenance(out);
-    const result = checkReleaseInvariants({
+    const result = await checkReleaseInvariants({
       manifest: manifestFor(out),
       validation: validationFor("failed"),
       outputDir: out,
@@ -346,7 +346,7 @@ export function checkInvariantsParity(options: { outputRoot: string }): string[]
     const duplicate = join(out, "publish", `build_test_${manifest.sha256.slice(0, 16)}`);
     mkdirSync(duplicate, { recursive: true });
     writeFileSync(join(duplicate, "dataset_manifest.json"), "{}", "utf8");
-    const result = checkReleaseInvariants({
+    const result = await checkReleaseInvariants({
       manifest: manifestFor(out),
       validation: validationFor(),
       outputDir: out,
@@ -368,7 +368,7 @@ export function checkInvariantsParity(options: { outputRoot: string }): string[]
     const prior = join(out, "publish", "build_test_priorversion");
     mkdirSync(prior, { recursive: true });
     writeFileSync(join(prior, "dataset_manifest.json"), "{}", "utf8");
-    const result = checkReleaseInvariants({
+    const result = await checkReleaseInvariants({
       manifest: manifestFor(out),
       validation: validationFor(),
       outputDir: out,
@@ -386,7 +386,7 @@ export function checkInvariantsParity(options: { outputRoot: string }): string[]
     // change) must fail the release gate before promotion.
     const tampered = manifestFor(out);
     writeFileSync(join(out, "merged", "primary.csv"), "tampered-with-data!!", "utf8");
-    const result = checkReleaseInvariants({
+    const result = await checkReleaseInvariants({
       manifest: tampered,
       validation: validationFor(),
       outputDir: out,
@@ -404,7 +404,7 @@ export function checkInvariantsParity(options: { outputRoot: string }): string[]
     // promotion; Python builds the manifest first, then deletes the file.
     const missingManifest = manifestFor(out);
     rmSync(join(out, "merged", "primary.csv"));
-    const missing = checkReleaseInvariants({
+    const missing = await checkReleaseInvariants({
       manifest: missingManifest,
       validation: validationFor(),
       outputDir: out,
@@ -493,7 +493,7 @@ function parseAdapterBatch(options: {
   adapterId: string;
   bindingId: string;
   outputDir: string;
-}): DataBatch {
+}): Promise<DataBatch> {
   const adapter = getAdapter(options.adapterId);
   const asset = sourceAssetFromFixture(
     options.fixturesRoot,
@@ -508,14 +508,14 @@ function parseAdapterBatch(options: {
   });
 }
 
-function canonical(options: {
+async function canonical(options: {
   fixturesRoot: string;
   fixture: string;
   adapterId: string;
   bindingId: string;
   outputDir: string;
-}): CanonicalizationResult {
-  const batch = parseAdapterBatch(options);
+}): Promise<CanonicalizationResult> {
+  const batch = await parseAdapterBatch(options);
   return canonicalize({
     batch,
     schema: buildGeneExpressionSchema(),
@@ -524,15 +524,15 @@ function canonical(options: {
   });
 }
 
-function buildChain(options: {
+async function buildChain(options: {
   fixturesRoot: string;
   outputDir: string;
-}): {
+}): Promise<{
   schema: ReturnType<typeof buildGeneExpressionSchema>;
   results: CanonicalizationResult[];
   integration: IntegrationResult;
   assets: Record<string, SourceAsset>;
-} {
+}> {
   const schema = buildGeneExpressionSchema();
   const assets = {
     binding_gdc: sourceAssetFromFixture(options.fixturesRoot, "gdc/gdc_expression.tsv", "src_gdc"),
@@ -543,14 +543,14 @@ function buildChain(options: {
     ),
   };
   const results = [
-    canonical({
+    await canonical({
       fixturesRoot: options.fixturesRoot,
       fixture: "gdc/gdc_expression.tsv",
       adapterId: "gdc.expression.v1",
       bindingId: "binding_gdc",
       outputDir: options.outputDir,
     }),
-    canonical({
+    await canonical({
       fixturesRoot: options.fixturesRoot,
       fixture: "ncbi/gse178352/xena_matrix.tsv",
       adapterId: "xena.matrix.v1",
@@ -558,7 +558,7 @@ function buildChain(options: {
       outputDir: options.outputDir,
     }),
   ];
-  const integration = integrate({
+  const integration = await integrate({
     results,
     mergeStrategy: "append_by_canonical_row",
     schema,
@@ -593,14 +593,14 @@ function spec(): DatasetBuildSpec {
   });
 }
 
-function assembleIn(options: {
+async function assembleIn(options: {
   fixturesRoot: string;
   outputDir: string;
   auditPaths?: readonly string[];
   sourceSummary?: Record<string, JsonValue>;
-}): { manifest: DatasetManifest; provenancePath: string } {
-  const { schema, results, integration, assets } = buildChain(options);
-  const provenancePath = buildProvenanceDocument({
+}): Promise<{ manifest: DatasetManifest; provenancePath: string }> {
+  const { schema, results, integration, assets } = await buildChain(options);
+  const provenancePath = await buildProvenanceDocument({
     schema,
     integration,
     canonicalResults: results,
@@ -608,7 +608,7 @@ function assembleIn(options: {
     outputDir: options.outputDir,
   });
   const auditPaths = options.auditPaths ?? results.flatMap((result) => result.auditPaths);
-  const manifest = assembleManifest({
+  const manifest = await assembleManifest({
     taskId: "task_test",
     buildId: "build_test",
     spec: spec(),
@@ -623,10 +623,10 @@ function assembleIn(options: {
   });
   return { manifest, provenancePath };
 }
-export function checkManifestParity(options: {
+export async function checkManifestParity(options: {
   fixturesRoot: string;
   outputRoot: string;
-}): string[] {
+}): Promise<string[]> {
   const issues: string[] = [];
   const { fixturesRoot, outputRoot } = options;
 
@@ -634,7 +634,7 @@ export function checkManifestParity(options: {
   {
     const out = join(outputRoot, "role-inventory");
     mkdirSync(out, { recursive: true });
-    const { manifest } = assembleIn({
+    const { manifest } = await assembleIn({
       fixturesRoot,
       outputDir: out,
       sourceSummary: {
@@ -665,8 +665,8 @@ export function checkManifestParity(options: {
   // test_manifest_digest_is_deterministic: identical artifact contents in a
   // fresh directory produce the same digest and manifest id.
   {
-    const first = assembleIn({ fixturesRoot, outputDir: join(outputRoot, "digest-a") }).manifest;
-    const second = assembleIn({ fixturesRoot, outputDir: join(outputRoot, "digest-b") }).manifest;
+    const first = (await assembleIn({ fixturesRoot, outputDir: join(outputRoot, "digest-a") })).manifest;
+    const second = (await assembleIn({ fixturesRoot, outputDir: join(outputRoot, "digest-b") })).manifest;
     check(issues, first.sha256 === second.sha256, "digest deterministic: sha256 equal");
     check(issues, first.manifest_id === second.manifest_id, "digest deterministic: manifest_id equal");
   }
@@ -700,7 +700,7 @@ export function checkManifestParity(options: {
   {
     const out = join(outputRoot, "provenance-backtraces");
     mkdirSync(out, { recursive: true });
-    const { provenancePath } = assembleIn({ fixturesRoot, outputDir: out });
+    const { provenancePath } = await assembleIn({ fixturesRoot, outputDir: out });
     const document = JSON.parse(readFileSync(provenancePath, "utf8")) as Record<string, unknown>;
     check(issues, document["schema_ref"] === "gene_expression.long.v1", "provenance: schema_ref");
     const sources = document["sources"] as Array<Record<string, unknown>>;
@@ -725,7 +725,7 @@ export function checkManifestParity(options: {
         "TP53,S4,asset_unknown,4.5\n",
       "utf8",
     );
-    const coverage = computeProvenanceCoverage(primary, new Set(["asset_traced1", "asset_traced2"]));
+    const coverage = await computeProvenanceCoverage(primary, new Set(["asset_traced1", "asset_traced2"]));
     check(issues, coverage.traced_rows === 2, "coverage: traced_rows 2");
     check(issues, coverage.untraced_rows === 2, "coverage: untraced_rows 2");
     check(issues, pythonJsonDumps(coverage.coverage_ratio) === "0.5", "coverage: ratio 0.5");
@@ -742,14 +742,14 @@ export function checkManifestParity(options: {
         "expression_value,arithmetic_progression,true,,false,no sequence\n",
       "utf8",
     );
-    const summary = buildConfidenceSummary(out);
+    const summary = await buildConfidenceSummary(out);
     checkDeepEqual(issues, summary["detected_anomaly_count"], 1, "confidence summary: anomaly count");
     check(issues, summary["report_file"] === "confidence_report.csv", "confidence summary: report file");
   }
   {
     const out = join(outputRoot, "confidence-missing");
     mkdirSync(out, { recursive: true });
-    checkDeepEqual(issues, buildConfidenceSummary(out), {}, "confidence summary: empty without report");
+    checkDeepEqual(issues, await buildConfidenceSummary(out), {}, "confidence summary: empty without report");
   }
 
   // test_artifact_id_includes_relative_path: identical bytes at two relative
@@ -762,16 +762,16 @@ export function checkManifestParity(options: {
     const second = join(out, "b", "dup.csv");
     writeFileSync(first, "identical bytes\n", "utf8");
     writeFileSync(second, "identical bytes\n", "utf8");
-    const firstManifest = assembleIn({
+    const firstManifest = (await assembleIn({
       fixturesRoot,
       outputDir: out,
       auditPaths: [first, second],
-    }).manifest;
-    const secondManifest = assembleIn({
+    })).manifest;
+    const secondManifest = (await assembleIn({
       fixturesRoot,
       outputDir: out,
       auditPaths: [first, second],
-    }).manifest;
+    })).manifest;
     const auditIds = (manifest: DatasetManifest) =>
       Object.fromEntries(
         manifest.artifacts
@@ -807,7 +807,7 @@ function materializeBuild(
   return { manifest, validation: validationFor() };
 }
 
-export function checkPublisherParity(options: { outputRoot: string }): string[] {
+export async function checkPublisherParity(options: { outputRoot: string }): Promise<string[]> {
   const issues: string[] = [];
   const outputRoot = options.outputRoot;
 
@@ -818,7 +818,7 @@ export function checkPublisherParity(options: { outputRoot: string }): string[] 
     mkdirSync(out, { recursive: true });
     const { manifest, validation } = materializeBuild(out);
     const publishedAt = "2026-08-07T12:00:00+00:00";
-    const result = promotePublication({ outputDir: out, manifest, validation, publishedAt });
+    const result = await promotePublication({ outputDir: out, manifest, validation, publishedAt });
     check(
       issues,
       result.publicationId === `pub_build_test_${manifest.sha256.slice(0, 16)}`,
@@ -857,14 +857,14 @@ export function checkPublisherParity(options: { outputRoot: string }): string[] 
     const out = join(outputRoot, "promote-supersede");
     mkdirSync(out, { recursive: true });
     const first = materializeBuild(out, "gene_id\texpression_value\nTP53\t1.5\n");
-    const firstResult = promotePublication({
+    const firstResult = await promotePublication({
       outputDir: out,
       manifest: first.manifest,
       validation: first.validation,
       publishedAt: "2026-08-07T10:00:00+00:00",
     });
     const second = materializeBuild(out, "gene_id\texpression_value\nTP53\t2.5\n");
-    const secondResult = promotePublication({
+    const secondResult = await promotePublication({
       outputDir: out,
       manifest: second.manifest,
       validation: second.validation,
@@ -884,7 +884,7 @@ export function checkPublisherParity(options: { outputRoot: string }): string[] 
     const out = join(outputRoot, "promote-dup");
     mkdirSync(out, { recursive: true });
     const { manifest, validation } = materializeBuild(out);
-    promotePublication({
+    await promotePublication({
       outputDir: out,
       manifest,
       validation,
@@ -892,7 +892,7 @@ export function checkPublisherParity(options: { outputRoot: string }): string[] 
     });
     let threw = false;
     try {
-      promotePublication({
+      await promotePublication({
         outputDir: out,
         manifest,
         validation,
@@ -911,7 +911,7 @@ export function checkPublisherParity(options: { outputRoot: string }): string[] 
     const { manifest } = materializeBuild(out);
     let threw = false;
     try {
-      promotePublication({
+      await promotePublication({
         outputDir: out,
         manifest,
         validation: validationFor("failed"),
@@ -931,7 +931,7 @@ export function checkPublisherParity(options: { outputRoot: string }): string[] 
     const { manifest, validation } = materializeBuild(out);
     let refused = false;
     try {
-      promotePublication({
+      await promotePublication({
         outputDir: out,
         manifest,
         validation,
@@ -963,7 +963,7 @@ export function checkPublisherParity(options: { outputRoot: string }): string[] 
       "gene_id,sample_id,asset_id,expression_value\nTP53,S1,asset_x,1.5\n",
       "utf8",
     );
-    const coverage = computeProvenanceCoverage(primary, new Set(["asset_x"]));
+    const coverage = await computeProvenanceCoverage(primary, new Set(["asset_x"]));
     check(issues, coverage.traced_rows === 1 && coverage.untraced_rows === 0, "pyfloat: traced primary");
     check(issues, pythonJsonDumps(coverage.coverage_ratio) === "1.0", "pyfloat: 100% coverage serializes as 1.0");
     check(issues, pythonJsonDumps({ ratio: coverage.coverage_ratio }) === '{\n  "ratio": 1.0\n}', "pyfloat: nested ratio serializes as 1.0");
