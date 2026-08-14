@@ -77,6 +77,11 @@ jobs:
         run: uv sync --frozen
       - name: Windows bridge self-test
         run: uv run python database/bridge.py --self-test
+      - name: Build @biomed/contracts (workspace wire DTOs)
+        # The windows job runs vitest directly on a curated test list; the
+        # server package's `pretest` (which builds @biomed/contracts) is not
+        # invoked here, so dist/ must be built explicitly in a fresh checkout.
+        run: pnpm --filter @biomed/contracts build
       - name: Build-lock + dataset core tests
         working-directory: ./server
         run: npx vitest run tests/phase5/build-lock.test.ts tests/phase5/straggler-safety.test.ts tests/phase5/core-preemption.test.ts tests/phase5/ts-core-e2e.test.ts tests/dataset-adapters.test.ts tests/dataset-canonicalizer.test.ts tests/dataset-integrator.test.ts tests/dataset-publication.test.ts tests/dataset-validation.test.ts

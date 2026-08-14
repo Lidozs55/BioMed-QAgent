@@ -520,3 +520,170 @@ def test_fts5_supports_chinese_query(store: CacheStore) -> None:
     results = store.search_datasets("乳腺癌")
     assert len(results) == 1
     assert results[0].dataset_id == "ds_cn"
+
+
+# ---------------------------------------------------------------------------
+# Fault injection: commit_dataset must roll back to a fully readable previous
+# state when any rename in the two-file publish sequence fails, and must
+# recover leftover .bak snapshots left by a crashed commit.
+# ---------------------------------------------------------------------------
+
+
+def _commit(store: CacheStore, *, topic: str, task: str, rows: list[dict[str, str]]) -> None:
+    store.commit_dataset(
+        dataset_id="ds1",
+        source_namespace="user_import",
+        topic=topic,
+        description="desc",
+        csv_rows=rows,
+        created_by_task_id=task,
+    )
+
+
+def _ds_dir(store: CacheStore) -> Path:
+    return store.root / "records" / "user_import" / "ds1"
+
+
+def _fail_on_nth_replace(monkeypatch: pytest.MonkeyPatch, fail_at: int) -> None:
+    """Monkeypatch os.replace to raise OSError on the ``fail_at``-th call.
+
+    commit_dataset's replace sequence for an update is:
+      1 snapshot main_data.csv, 2 snapshot manifest.json,
+      3 publish main_data.csv,  4 publish manifest.json.
+    """
+    import os
+
+    real_replace = os.replace
+    counter = {"n": 0}
+
+    def flaky_replace(src: str, dst: str) -> None:
+        counter["n"] += 1
+        if counter["n"] == fail_at:
+            raise OSError(f"injected failure on replace #{counter['n']}: {src} -> {dst}")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr("database.cache_store.os.replace", flaky_replace)
+
+
+def test_commit_update_failure_after_manifest_publish_rolls_back(
+    store: CacheStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Publish CSV 成功 → 发布 manifest 故意失败 → 旧 dataset 仍完整可读。"""
+    _commit(store, topic="old", task="t1", rows=[_row(record_id="r1", dataset_id="ds1")])
+    _fail_on_nth_replace(monkeypatch, fail_at=4)
+
+    with pytest.raises(OSError, match="injected failure"):
+        _commit(
+            store,
+            topic="new",
+            task="t2",
+            rows=[
+                _row(record_id="r1", dataset_id="ds1"),
+                _row(record_id="r2", dataset_id="ds1"),
+                _row(record_id="r3", dataset_id="ds1"),
+            ],
+        )
+
+    # 旧 dataset 完整可读：manifest 与 CSV 都还是第一版
+    result = store.get_dataset("user_import", "ds1")
+    assert result is not None
+    manifest, rows = result
+    assert manifest.topic == "old"
+    assert manifest.created_by_task_id == "t1"
+    assert len(rows) == 1
+
+    # 无 .tmp / .bak 残留
+    assert sorted(p.name for p in _ds_dir(store).iterdir()) == [
+        "main_data.csv",
+        "manifest.json",
+    ]
+
+
+def test_commit_new_dataset_failure_at_csv_publish_leaves_nothing(
+    store: CacheStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """新 dataset：CSV 发布（第 1 次 replace）失败 → 目录里不留任何半成品。"""
+    _fail_on_nth_replace(monkeypatch, fail_at=1)
+    with pytest.raises(OSError, match="injected failure"):
+        _commit(store, topic="new", task="t1", rows=[_row(record_id="r1", dataset_id="ds1")])
+
+    assert list(_ds_dir(store).iterdir()) == []
+    assert store.get_dataset("user_import", "ds1") is None
+
+
+def test_commit_new_dataset_failure_at_manifest_publish_removes_csv(
+    store: CacheStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """新 dataset：manifest 发布（第 2 次 replace）失败 → 已发布的 CSV 被回滚删除。"""
+    _fail_on_nth_replace(monkeypatch, fail_at=2)
+    with pytest.raises(OSError, match="injected failure"):
+        _commit(store, topic="new", task="t1", rows=[_row(record_id="r1", dataset_id="ds1")])
+
+    assert list(_ds_dir(store).iterdir()) == []
+    assert store.get_dataset("user_import", "ds1") is None
+
+
+def test_commit_update_failure_at_csv_snapshot_keeps_old_state(
+    store: CacheStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """既有 dataset：快照阶段（第 1 次 replace）失败 → 旧状态原封不动。"""
+    _commit(store, topic="old", task="t1", rows=[_row(record_id="r1", dataset_id="ds1")])
+    _fail_on_nth_replace(monkeypatch, fail_at=1)
+    with pytest.raises(OSError, match="injected failure"):
+        _commit(store, topic="new", task="t2", rows=[_row(record_id="r2", dataset_id="ds1")])
+
+    result = store.get_dataset("user_import", "ds1")
+    assert result is not None
+    manifest, rows = result
+    assert manifest.topic == "old"
+    assert len(rows) == 1
+    assert rows[0]["record_id"] == "r1"
+
+
+def test_commit_recovers_leftover_backups_before_publish(
+    store: CacheStore,
+) -> None:
+    """崩溃恢复：遗留 .bak（快照已取、发布未完成）→ 下次 commit 先还原旧状态再发布。"""
+    _commit(store, topic="old", task="t1", rows=[_row(record_id="r1", dataset_id="ds1")])
+
+    # 模拟崩溃点：快照已取走，两个最终文件都还不在（发布未开始）
+    d = _ds_dir(store)
+    import os as _os
+
+    _os.replace(d / "main_data.csv", d / "main_data.csv.bak")
+    _os.replace(d / "manifest.json", d / "manifest.json.bak")
+    assert not (d / "main_data.csv").exists()
+
+    _commit(store, topic="new", task="t2", rows=[_row(record_id="r2", dataset_id="ds1")])
+
+    result = store.get_dataset("user_import", "ds1")
+    assert result is not None
+    manifest, rows = result
+    assert manifest.topic == "new"
+    assert rows[0]["record_id"] == "r2"
+    assert sorted(p.name for p in d.iterdir()) == ["main_data.csv", "manifest.json"]
+
+
+def test_commit_cleans_leftover_backups_after_completed_publish(
+    store: CacheStore,
+) -> None:
+    """崩溃恢复：遗留 .bak 但最终文件已发布（越过 commit point）→ 只清理不还原。"""
+    _commit(store, topic="old", task="t1", rows=[_row(record_id="r1", dataset_id="ds1")])
+
+    # 模拟崩溃点：发布完成但快照清理未执行（快照是副本，最终文件也已就位）
+    d = _ds_dir(store)
+    import shutil as _shutil
+
+    _shutil.copy2(d / "main_data.csv", d / "main_data.csv.bak")
+    _shutil.copy2(d / "manifest.json", d / "manifest.json.bak")
+    # 此刻：最终文件就位（发布完成），快照仍在（清理未执行）
+    assert (d / "main_data.csv.bak").exists()
+
+    _commit(store, topic="new", task="t2", rows=[_row(record_id="r2", dataset_id="ds1")])
+
+    result = store.get_dataset("user_import", "ds1")
+    assert result is not None
+    manifest, rows = result
+    assert manifest.topic == "new"
+    assert rows[0]["record_id"] == "r2"
+    assert sorted(p.name for p in d.iterdir()) == ["main_data.csv", "manifest.json"]

@@ -251,7 +251,8 @@ describe("SettingsPanel model registry", () => {
       expect(screen.getByRole("button", { name: "添加模型" })).toBeDisabled();
     });
     fireEvent.click(await screen.findByRole("button", { name: "添加供应商" }));
-    fireEvent.click(screen.getByRole("button", { name: "DeepSeek" }));
+    // preset 按钮来自异步 vendors fetch，必须等待（并行负载下同步查询会竞态）
+    fireEvent.click(await screen.findByRole("button", { name: "DeepSeek" }));
 
     const baseUrl = screen.getByLabelText("Base URL") as HTMLInputElement;
     expect(baseUrl.value).toBe("https://api.deepseek.com/v1");

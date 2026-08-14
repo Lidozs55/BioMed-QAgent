@@ -1,10 +1,8 @@
 # Phase 8 Final Verification（legacy Python Runtime 物理退役验收报告）
 
-> 状态：completed（2026-08-14）
+> 状态：**closed**（2026-08-14；含第二轮最终审计修复，见 §10）
 > Baseline commit：`cb2600597525d97fb00538b55dcfb001cb6e7c03`（main）
-> Final commit（本分支）：`refactor/phase8-python-runtime-retirement` 上四个提交：
-> `e72c90c`（P8-A database bridge 自包含）→ `8a7a30d`（P8-B TS rollback 删除）→
-> `28224ac`（P8-C backend 物理删除）→ P8-D（本提交，文档封板）
+> 合并提交：`08dc47d`（P8-A→P8-D）；最终审计修复：`6ec22f0`（fix/phase8-final-audit）
 > 执行计划：`docs/migration/phase8-python-runtime-retirement.md`
 > 基线盘点：`docs/migration/phase8-retirement-inventory.md`
 
@@ -240,3 +238,80 @@ rg "AGENT_RUNTIME|DATASET_CORE|APP_HOST|PI_EXPERIMENTAL|LEGACY_BACKEND|PI_DATASE
 - [x] active source legacy-reference scan 为零（§7）
 - [x] `docs/TODO.md` Phase 8 标记完成
 - [x] `PHASE8_FINAL_VERIFICATION.md` 已提交（本文）
+
+---
+
+## 10. 第二轮最终审计（2026-08-14，修复后封板）
+
+第一轮封板后独立审计发现四项封板级问题，已全部修复并在真实 GitHub Actions
+上验证：
+
+### 10.1 P0 — Windows CI 红灯（存量，非 Phase 8 回归）
+
+现象：`Windows build-lock + dataset core + bridge gates` 在 fresh checkout 上失败：
+`Failed to resolve entry for package "@biomed/contracts"`。
+
+根因：Windows job 直接 `npx vitest run`（精选测试清单），绕过了 server 包的
+`pretest`（`pnpm --filter @biomed/contracts build`），fresh checkout 下
+`packages/contracts/dist` 不存在。该问题在 phase7 合并时已存在，但必须修绿。
+
+修复：Windows job 在 vitest 前显式 `pnpm --filter @biomed/contracts build`
+（`.github/workflows/ci.yml`）。
+
+### 10.2 P0/P1 — Release bundle 不完整 + 无冒烟
+
+原 bundle 缺 `packages/`（`@biomed/contracts` 是 `workspace:*` 依赖）、
+`server/tsconfig.json`、根 `tsconfig.base.json`（server `start` 用 `tsc -p
+server/tsconfig.json`，其 extends 根 base），且会删除 `server/src/dev`（生产
+static host）。`package.yml` 另有存量 bug：staging 引用 checkout 中不存在的
+`frontend/dist`（gitignored），release flow 自 v0.1.0 起从未绿过。
+
+修复（`.github/workflows/package.yml` + `server/package.json`）：
+
+- staging 补 `packages/`（排除 node_modules）、`tsconfig.base.json`、
+  `server/tsconfig.json`；`frontend/dist`、`server/dist` 由 build job 的
+  artifact 提供（删除错误的 `cp frontend/dist`）；
+- server 增加 `prestart`（`pnpm --filter @biomed/contracts build`），bundle 内
+  `pnpm start` 自包含（prestart → tsc → node --static）；
+- 新增 `release-smoke` job：unpack → `pnpm install --frozen-lockfile` →
+  `uv sync --frozen` → bridge self-test → `pnpm start` → curl
+  `/api/v1/health`、`/`、`/api/v1/databases`；
+- artifact 名用 run step 计算（`ref_name` 含 `/` 时 sanitize 为 `-`）。
+
+### 10.3 P1 — cache commit 原子性漏洞
+
+原 `commit_dataset` 顺序为 `os.replace(manifest_tmp, manifest_path)` 后
+`os.replace(main_data_tmp, main_data_path)`；若第二步失败，manifest 已是新
+版本而 CSV 是旧版本（或缺失），异常处理只清理 `.tmp`，不回滚已替换文件。
+
+修复（`database/cache_store.py`）：发布前把既有最终文件原子重命名为 `.bak`
+快照；manifest 最后发布 = commit point；任何失败回滚全部快照（或删除新发布
+文件）并清理 `.tmp`；下次 commit 幂等恢复崩溃遗留的 `.bak`（未过 commit
+point 则还原，已过则清理）。新增 6 个故障注入/崩溃恢复测试
+（`database/tests/test_cache_store.py`，cache 套件 29 → 35 用例，全库 71 → 77）。
+
+### 10.4 P2 — docs/TODO.md 顶部自相矛盾
+
+总进度表 Phase 8 标记为“⬜ 待开始”、仍声称默认 profile 为
+`APP_HOST=ts / AGENT_RUNTIME=pi / DATASET_CORE=ts / PI_EXPERIMENTAL=0` 且
+FastAPI rollback 存在。已改为“✅ 完成（2026-08-14）”，profile 描述替换为
+当前唯一拓扑说明，并注明下文各 Phase 正文为迁移期历史记录。
+
+### 10.5 真实 CI 证据（合并前分支头 `6ec22f0`）
+
+| 运行 | 结果 |
+| --- | --- |
+| CI pull_request（`31821864011`） | ✅ workspace / database / **windows** 全绿 |
+| package workflow_dispatch（`31821861231`） | ✅ build×2 / package / **release smoke** 全绿；
+  “Create Release”按预期跳过（无 tag） |
+
+### 10.6 本机重跑门禁（修复后）
+
+`uv run pytest database/tests` 77 passed + ruff clean + bridge self-test OK；
+server 701 passed / 11 skipped；frontend 723 passed；contracts 14 passed；
+lint / typecheck / build 0 问题；本地模拟 bundle（staging →
+`pnpm install --frozen-lockfile` → `uv sync --frozen` → `pnpm start`）health /
+root / SPA fallback / databases=9 全部 200。
+
+> 已知非阻塞遗留项（§8）继续有效；新增一条：release bundle 的“Create
+> Release”步骤仅在 tag 推送（`v*`）时执行，branch dispatch 下按预期失败。
