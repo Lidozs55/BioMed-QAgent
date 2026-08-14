@@ -1,5 +1,8 @@
 # Phase 6 TypeScript Model Settings
 
+> Phase 7 update: `AGENT_RUNTIME=pi` is now the default; the legacy routing below
+> describes only the explicit rollback profile.
+
 Phase 6 moves the browser-facing model settings and provider/model registry to
 the TypeScript Application Host. The frontend wire API remains compatible:
 `/api/v1/settings`, `/api/v1/vendors`, `/api/v1/models`, and

@@ -6,8 +6,9 @@
  * format: it verifies the SourceAsset checksum, understands the source layout
  * (wide matrix or single-sample STAR counts), validates every cell, and
  * streams a *source-long* table plus parse-level rejected rows. The GDC and
- * Xena adapters are ported here; the GEO adapter lands with the Phase 5 GEO
- * acquisition work (its Python sibling is imported after these definitions).
+ * Xena adapters are ported here; the GEO adapter is registered statically and
+ * imports the shared base module rather than this registry, keeping ESM startup
+ * free of a top-level-await cycle.
  *
  * Numeric policy (uniform across adapters): structural malformation (wrong
  * field count, bad header, blank gene id) is fatal and fail-closed; a value
@@ -16,64 +17,33 @@
  * aborting the whole source.
  */
 
-import { mkdirSync, statSync, unlinkSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
 import type { JsonValue } from "@biomed/contracts";
 import type {
   AdapterParams,
-  DataBatch,
   FieldMapping,
   SourceAsset,
   SourceBinding,
 } from "../contracts/index.js";
-import { parseAdapterParams, parseDataBatch } from "../contracts/index.js";
-import { CHECKPOINT_STRIDE, checkpoint, throwIfAborted } from "../cooperative.js";
-import { AdapterError, BuildError, EmptySourceError } from "./errors.js";
-import { assetIdFromSha256, makeRecordId } from "./identity.js";
-import { sha256FileStream } from "./hashing.js";
+import { parseAdapterParams } from "../contracts/index.js";
+import { CHECKPOINT_STRIDE, checkpoint } from "../cooperative.js";
 import {
-  csvLine,
-  delimitedRowsWithLinesAsync,
-  readSourceTextAsync,
-  type DelimitedRow,
-} from "./text.js";
+  SourceAdapter,
+  type ExtractContext,
+  type ExtractResult,
+  type RowWriter,
+} from "./base.js";
+import { AdapterError, BuildError, EmptySourceError } from "./errors.js";
+import { geoExpressionAdapter } from "./geo/index.js";
+import { makeRecordId } from "./identity.js";
+import { type DelimitedRow } from "./text.js";
 
-/** Source-long layout emitted by every expression adapter (Python mirror). */
-export const SOURCE_LONG_COLUMNS: readonly string[] = [
-  "record_id",
-  "dataset_id",
-  "source_id",
-  "asset_id",
-  "gene_id_raw",
-  "gene_id_namespace_declared",
-  "sample_id",
-  "measurement_type",
-  "value_semantics",
-  "value_scale",
-  "is_normalized",
-  "is_integer_expected",
-  "expression_value",
-  "expression_unit",
-  "source_logical_file",
-  "source_line_number",
-  "source_column_index",
-  "source_column_name",
-  "source_raw_value",
-];
-
-/** Parse-level rejection audit row shape (Python mirror). */
-export const REJECTED_COLUMNS: readonly string[] = [
-  "rejected_id",
-  "batch_id",
-  "gene_id_raw",
-  "sample_id",
-  "reason_code",
-  "reason",
-  "source_logical_file",
-  "source_line_number",
-  "source_raw_value",
-];
+export {
+  REJECTED_COLUMNS,
+  SOURCE_LONG_COLUMNS,
+  SourceAdapter,
+  rowGranularityFor,
+  type RowWriter,
+} from "./base.js";
 
 // GDC files-API expression exports may carry annotation columns next to the
 // gene_id column; they are not samples and must not become long-format rows.
@@ -83,18 +53,6 @@ const GDC_ANNOTATION_COLUMNS = new Set([
   "gene_version",
   "gene_id_version",
 ]);
-
-export interface RowWriter {
-  writeRow(values: readonly string[]): void;
-}
-
-function verifySha256(path: string, expected: string, signal?: AbortSignal | null): Promise<void> {
-  return sha256FileStream(path, signal).then((digest) => {
-    if (digest !== expected) {
-      throw new AdapterError(`source asset checksum mismatch before parsing: ${path}`);
-    }
-  });
-}
 
 /** Python ``math.isfinite(float(value))`` for a raw cell string. */
 function isFiniteNumber(value: string): boolean {
@@ -290,13 +248,6 @@ function emitMatrixCells(options: {
   return { emitted, rejected };
 }
 
-/** Map the target schema to the parsed row granularity (Python mirror). */
-export function rowGranularityFor(schemaRef: string): string {
-  return schemaRef === "gene_expression.probe_long.v1"
-    ? "probe_sample_measurement"
-    : "gene_sample_measurement";
-}
-
 /** Build typed AdapterParams from a binding's declared parameters. */
 export function adapterParamsForBinding(binding: SourceBinding): AdapterParams | null {
   const parameters = binding.parameters;
@@ -331,120 +282,6 @@ function nextHeader(rows: DelimitedRow[]): { headerLine: number; header: string[
     return { headerLine: line, header: values };
   }
   throw new AdapterError("expression table contains no header");
-}
-
-interface ExtractContext {
-  sourceAsset: SourceAsset;
-  buildId: string;
-  bindingId: string;
-  sourceName: string;
-  parameters: AdapterParams | null;
-}
-
-interface ExtractResult {
-  statistics: Record<string, JsonValue>;
-  warnings: string[];
-  mappings: FieldMapping[];
-  rejectedCount: number;
-}
-
-/** Base class for expression source adapters (fail closed). */
-export abstract class SourceAdapter {
-  abstract readonly adapter_id: string;
-  abstract readonly version: string;
-  abstract readonly source_database: string;
-
-  async parse(
-    sourceAsset: SourceAsset,
-    sourcePath: string,
-    options: {
-      buildId: string;
-      bindingId: string;
-      schemaRef: string;
-      outputDir: string;
-      parameters?: AdapterParams | null;
-      signal?: AbortSignal | null;
-    },
-  ): Promise<DataBatch> {
-    const { buildId, bindingId, schemaRef, outputDir } = options;
-    const parameters = options.parameters ?? null;
-    const signal = options.signal ?? null;
-    await verifySha256(sourcePath, sourceAsset.sha256, signal);
-    throwIfAborted(signal);
-    const sourceName = basename(sourcePath);
-    const batchDir = join(outputDir, "batches");
-    mkdirSync(batchDir, { recursive: true });
-    const outputPath = join(batchDir, `${bindingId}.csv`);
-    const rejectedPath = join(batchDir, `${bindingId}_rejected.csv`);
-    const longRows: string[][] = [];
-    const rejectedRows: string[][] = [];
-    try {
-      const text = await readSourceTextAsync(sourcePath, signal);
-      const rows = await delimitedRowsWithLinesAsync(text, "\t", signal);
-      const { statistics, warnings, mappings, rejectedCount } = await this.extract(
-        rows,
-        { writeRow: (values) => longRows.push([...values]) },
-        { writeRow: (values) => rejectedRows.push([...values]) },
-        { sourceAsset, buildId, bindingId, sourceName, parameters },
-        signal,
-      );
-      const longContent =
-        csvLine(SOURCE_LONG_COLUMNS) + longRows.map((row) => csvLine(row)).join("");
-      const rejectedContent =
-        csvLine(REJECTED_COLUMNS) +
-        rejectedRows.map((row) => csvLine(row)).join("");
-      await writeFile(outputPath, longContent, "utf8");
-      await writeFile(rejectedPath, rejectedContent, "utf8");
-      const checksum = await sha256FileStream(outputPath, signal);
-      const rowCount = typeof statistics.row_count === "number" ? statistics.row_count : 0;
-      const fileAsset = {
-        schema_version: "1.0",
-        asset_id: assetIdFromSha256(checksum),
-        kind: "parsed",
-        relative_path: `batches/${bindingId}.csv`,
-        sha256: checksum,
-        size_bytes: statSync(outputPath).size,
-        media_type: "text/csv",
-        generated_by_step_id: `step_${this.adapter_id}`,
-      } as const;
-      return parseDataBatch({
-        schema_version: "1.0",
-        batch_id: `batch_${bindingId}`,
-        binding_id: bindingId,
-        dataset_family: "gene_expression",
-        row_granularity: rowGranularityFor(schemaRef),
-        schema_ref: schemaRef,
-        file_asset: fileAsset,
-        row_count: rowCount,
-        column_count: SOURCE_LONG_COLUMNS.length,
-        parser_id: this.adapter_id,
-        parser_version: this.version,
-        statistics: { ...statistics, row_count: rowCount, rejected_count: rejectedCount },
-        warnings,
-        declared_mappings: mappings,
-      });
-    } catch (error) {
-      try {
-        unlinkSync(outputPath);
-      } catch {
-        // ignore missing partial output
-      }
-      try {
-        unlinkSync(rejectedPath);
-      } catch {
-        // ignore missing partial output
-      }
-      throw error;
-    }
-  }
-
-  protected abstract extract(
-    rows: DelimitedRow[],
-    longWriter: RowWriter,
-    rejectedWriter: RowWriter,
-    context: ExtractContext,
-    signal?: AbortSignal | null,
-  ): Promise<ExtractResult>;
 }
 
 /** Parses GDC gene-expression TSV files (matrix or STAR-counts layout). */
@@ -751,11 +588,6 @@ export class XenaMatrixAdapter extends SourceAdapter {
 
 const gdcAdapter = new GdcExpressionAdapter();
 const xenaAdapter = new XenaMatrixAdapter();
-
-// Deferred import mirrors Python adapters.py (the geo adapter imports this
-// module for SourceAdapter; a static import would create an ESM cycle where
-// the geo class definition reads SourceAdapter before initialization).
-const { geoExpressionAdapter } = await import("./geo/index.js");
 
 export const ADAPTER_REGISTRY: Readonly<Record<string, SourceAdapter>> = {
   [gdcAdapter.adapter_id]: gdcAdapter,

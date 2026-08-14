@@ -29,16 +29,13 @@ BioMed-QAgent 是一个**生物医学数据智能检索与整合系统**。你�
 4. 解析、清洗、字段对齐
 5. 输出一份整理好的 CSV，附带数据来源和处理记录
 
-技术上是 **TypeScript 单端口 Host + private Python durable runtime/Core + React 前端**。
-formal Agent 默认仍使用 OpenAI Agents SDK；`AGENT_RUNTIME=pi` 时正式 Task 改由
-TS durable runtime 接管（Pi 迁移 Phase 3，opt-in），Phase 1 的显式 experimental
-surface 也通过 Pi adapter 调用同一个受信任 Python V2 Dataset Core。
+技术上是 **TypeScript 单端口 Host + Pi durable runtime + TS Dataset Core + React 前端**。
+Phase 7 后 formal Agent、Task/Run/Event、产品 API 与 Dataset Core 均由 TypeScript
+权威实现。默认 profile 是
+`APP_HOST=ts / AGENT_RUNTIME=pi / DATASET_CORE=ts / PI_EXPERIMENTAL=0`。
 
-Phase 5/M2 后（2026-08-14）：Pi 路径的业务 Tool 已全部 TS 化（外部数据源、浏览器、
-PDF/VLM、统计绘图、local cache、声明式数据库），Python 仅承担 legacy 回滚与 DB
-bridge（`database/bridge.py`）；`DATASET_CORE=ts` 为合法 opt-in profile
-（`ts/pi/ts/0|1`，TS Deterministic Core 具备 timeout/lock/cancel/event sink）。
-默认 profile 仍是 `APP_HOST=ts / AGENT_RUNTIME=legacy / DATASET_CORE=python`。
+Python 默认只承担 DB bridge（`database/bridge.py`）；legacy Agent、Python Core 与
+FastAPI Web Server 保留至 Phase 8，但只由显式回滚/诊断 profile 启动。
 
 > 这是"中国高校计算机大赛 — AI Scientist 赛道"的参赛作品（赛题 XH-202619）。
 
@@ -156,8 +153,8 @@ copy .env.example .env
 DASHSCOPE_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-正常 `pnpm dev` 会读取根 `.env`。Host 管理的 FastAPI 同时继承这些变量；只有运行
-standalone legacy diagnostic 时才需要另行准备 `backend/.env`。
+正常 `pnpm dev` 会读取根 `.env`。显式 FastAPI 回滚 profile 同时继承这些变量；
+只有运行 standalone legacy diagnostic 时才需要另行准备 `backend/.env`。
 
 ---
 
@@ -176,7 +173,7 @@ pnpm install --frozen-lockfile
 仓库根持有唯一 `pnpm-lock.yaml`。不要在 `frontend/` 或 `server/` 创建独立
 lockfile，也不要使用 npm。
 
-### 4.1 Windows private FastAPI 自动 smoke test
+### 4.1 Windows private FastAPI 回滚 smoke test
 
 自动化脚本需要启动后端、请求 health endpoint，并在结束时可靠关闭进程。请在
 `backend/` 目录使用项目虚拟环境的 Python 直接启动 Uvicorn：
@@ -221,8 +218,9 @@ try {
 `Start-Process uv -ArgumentList "run", "uvicorn", ...`。`uv run` 是包装进程，
 Uvicorn 子进程可能在 health 请求成功后继续存活，使脚本卡住并需要手动关闭。
 该模板只验证 private legacy backend。正常应用 smoke 应直接启动 root `pnpm dev`，
-记录其直接子 PID，并在 `finally` 中终止；Host 会进一步回收自己持有的 FastAPI、
-Pi session 与 Workspace command。不要用 `Start-Process uv run ...` 包装 Uvicorn。
+记录其直接子 PID，并在 `finally` 中终止；默认 Host 不启动 FastAPI，并会回收
+Pi session、DB bridge、browser pool 与 Workspace command。不要用
+`Start-Process uv run ...` 包装 Uvicorn。
 
 ---
 
@@ -234,17 +232,18 @@ Pi session 与 Workspace command。不要用 `Start-Process uv run ...` 包装 U
 pnpm dev
 ```
 
-TypeScript Host 会按顺序校验 Phase 1 flags、启动或附加 private loopback FastAPI、
-初始化实验 Pi 资源、挂载 Vite middleware，最后才监听公开端口。看到 Host 监听
-`127.0.0.1:5173` 后，浏览器访问 http://127.0.0.1:5173；健康检查也走同一端口：
+TypeScript Host 会校验 flags，初始化共享 DB/browser 资源、Pi durable runtime 与
+TS Dataset Core，挂载 Vite middleware，最后才监听公开端口。只有 legacy Agent、
+Python Core 或 experimental Pi profile 会先启动/附加 private FastAPI。看到 Host
+监听 `127.0.0.1:5173` 后，浏览器访问 http://127.0.0.1:5173；健康检查也走同一端口：
 
 ```text
 http://127.0.0.1:5173/api/v1/health
 ```
 
-正式 `/api/v1/*` 与 `/api/v1/ws` 仍由 legacy durable runtime 权威实现；
-`/experimental/pi/*` 是 live-only、非 durable 的迁移验证面。内部
-`/internal/migration/*` 不向浏览器代理。按 `Ctrl+C` 由 Host 统一关闭资源。
+正式 `/api/v1/*` 与 `/api/v1/ws` 默认由 TS Host 权威实现；
+`/experimental/pi/*` 仅在 `PI_EXPERIMENTAL=1` 时提供 live-only 验证面。内部
+`/internal/migration/*` 永不向浏览器代理。按 `Ctrl+C` 由 Host 统一关闭资源。
 
 以下命令仅用于迁移/诊断，不写入正常启动流程：
 

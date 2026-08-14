@@ -101,6 +101,8 @@ export interface BioMedAgentSession {
   readonly taskId: string;
   readonly runId: string;
   run(input: string, options?: RunOptions): AsyncIterable<BioMedAgentEvent>;
+  steer?(text: string): Promise<void>;
+  compact?(): Promise<{ summary: string }>;
   cancel(reason?: string): Promise<void>;
   dispose(): Promise<void>;
 }

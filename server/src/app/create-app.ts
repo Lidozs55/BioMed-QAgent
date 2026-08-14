@@ -8,7 +8,7 @@ import { LifecycleRegistry } from "./lifecycle.js";
 export interface ApplicationHostOptions {
   publicHost: string;
   publicPort: number;
-  legacy: () => Promise<{
+  legacy?: () => Promise<{
     target: string;
     bridgeSecret?: string;
     close: () => Promise<void>;
@@ -20,7 +20,7 @@ export interface ApplicationHostOptions {
     handle: (request: IncomingMessage, response: ServerResponse) => boolean;
   };
   formalRuntime?: (legacy: {
-    target: string;
+    target?: string;
     bridgeSecret?: string;
   }) => Promise<{
     handle: (request: IncomingMessage, response: ServerResponse) => boolean;
@@ -28,7 +28,7 @@ export interface ApplicationHostOptions {
     close: () => Promise<void>;
   }>;
   experimentalPi?: (legacy: {
-    target: string;
+    target?: string;
     bridgeSecret?: string;
   }) => Promise<{
     handle: (request: IncomingMessage, response: ServerResponse) => boolean;
@@ -66,7 +66,7 @@ function isInternalMigration(requestPath: string): boolean {
 }
 
 function routeRequest(
-  proxy: LegacyProxy,
+  proxy: LegacyProxy | undefined,
   frontend: FrontendMiddleware,
   hostApi?: {
     handle: (request: IncomingMessage, response: ServerResponse) => boolean;
@@ -98,7 +98,12 @@ function routeRequest(
     if (hostApi?.handle(request, response) === true) return;
     if (isLegacyApi(requestPath)) {
       if (formalRuntime?.handle(request, response) === true) return;
-      proxy.web(request, response);
+      if (proxy !== undefined) {
+        proxy.web(request, response);
+      } else {
+        response.writeHead(404);
+        response.end("Not Found");
+      }
       return;
     }
     frontend(request, response, (error) => {
@@ -151,29 +156,31 @@ export async function createApplicationHost(
   const server = serverFactory((request, response) => requestHandler(request, response));
 
   try {
-    const legacy = await options.legacy();
-    lifecycle.add("legacy backend", legacy.close);
+    const legacy = await options.legacy?.();
+    if (legacy !== undefined) lifecycle.add("legacy backend", legacy.close);
 
     await options.initializeLifecycle?.(lifecycle);
 
     const formalRuntime = await options.formalRuntime?.({
-      target: legacy.target,
-      bridgeSecret: legacy.bridgeSecret,
+      ...(legacy === undefined ? {} : { target: legacy.target }),
+      ...(legacy?.bridgeSecret === undefined ? {} : { bridgeSecret: legacy.bridgeSecret }),
     });
     if (formalRuntime !== undefined) {
       lifecycle.add("formal TypeScript runtime", formalRuntime.close);
     }
 
     const experimentalPi = await options.experimentalPi?.({
-      target: legacy.target,
-      bridgeSecret: legacy.bridgeSecret,
+      ...(legacy === undefined ? {} : { target: legacy.target }),
+      ...(legacy?.bridgeSecret === undefined ? {} : { bridgeSecret: legacy.bridgeSecret }),
     });
     if (experimentalPi !== undefined) {
       lifecycle.add("experimental Pi sessions", experimentalPi.close);
     }
 
-    const proxy = (dependencies.createProxy ?? createLegacyProxy)(legacy.target);
-    lifecycle.add("legacy proxy", () => proxy.close());
+    const proxy = legacy === undefined
+      ? undefined
+      : (dependencies.createProxy ?? createLegacyProxy)(legacy.target);
+    if (proxy !== undefined) lifecycle.add("legacy proxy", () => proxy.close());
 
     const frontend = await options.frontend(server);
     lifecycle.add("Vite middleware", frontend.close);
@@ -195,7 +202,8 @@ export async function createApplicationHost(
       }
       if (requestPath === "/api/v1/ws") {
         if (formalRuntime?.handleUpgrade(request, socket, head) !== true) {
-          proxy.ws(request, socket, head);
+          if (proxy === undefined) socket.destroy();
+          else proxy.ws(request, socket, head);
         }
       }
     });

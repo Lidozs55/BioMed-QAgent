@@ -10,18 +10,18 @@
 >   [ADR-017 及后续记录](adr/README.md)）承担；
 >   实现规格由 [BioMed-QAgent_Pipeline_Refactor_Design.md](BioMed-QAgent_Pipeline_Refactor_Design.md) 承担；
 >   执行任务由 [TODO.md](TODO.md) 承担。三者不互相复制。
-> - **实现状态**：V2 Dataset Construction Runtime 已落地；Agent/runtime 迁移完成
->   Phase 0/1，并提供 opt-in Phase 3 TS Application Runtime。默认 profile 仍由
->   private FastAPI 权威实现 formal `/api/v1`；选择 `AGENT_RUNTIME=pi` 后，新
->   `task_ts_*` Task/Run/Event 由 TS durable runtime 权威实现，legacy Task 与未迁移
->   API 继续回退 FastAPI。迁移主线 Phase 0/1/3 已完成、Phase 4 TS Dataset Core 已
->   移植（`server/src/dataset/`，尚未接入运行路径），剩余 Phase 2/5-8 的进度见
->   [TODO.md](TODO.md)。V1 历史架构归档于
+> - **实现状态**：迁移 Phase 0-7 已完成。默认 profile 是
+>   `APP_HOST=ts / AGENT_RUNTIME=pi / DATASET_CORE=ts / PI_EXPERIMENTAL=0`：
+>   TypeScript Host 权威实现 formal `/api/v1`、durable Task/Run/Event、模型设置、
+>   product API 与 TS Dataset Core。FastAPI Web Server 仅在 legacy Agent、Python Core
+>   或 experimental Pi 的显式回滚/诊断 profile 中启动；默认产品路径的 Python
+>   进程边界只剩按需启动的 `database/bridge.py`。Phase 8 将物理删除 legacy runtime，
+>   进度见 [TODO.md](TODO.md)。V1 历史架构归档于
 >   [archive/ARCHITECTURE_V1.md](archive/ARCHITECTURE_V1.md)，迁移策略见 §18。
 > - **验证与失效**：每个里程碑、每次新增/修订 ADR、数据族接入或执行模型变化
 >   时对照本文校验一致性；与代码现状矛盾且未标注待落地、或被新 ADR 推翻而未
 >   同步修订时，本文标记为 `stale`。
-> - **最后验证（Last Verified）**：2026-08-13。
+> - **最后验证（Last Verified）**：2026-08-14。
 > - **交叉引用约定**：本文档内部章节引用写作 `§N`；引用 ADR 索引的章节写作
 >   `ADR §N`（如 `ADR §21` 指 ADR 索引的踩坑复盘，不是本文 §21 Demo 决策）。
 > - **治理规则**：变更触发、不重复规则（no-duplication）等见 §24。
@@ -66,19 +66,20 @@ React/shadcn Frontend
         v
 TypeScript Application Host
         +-- Vite middleware / HMR
-        +-- /experimental/pi/* -> Pi adapter + governed Workspace (live-only)
-        +-- /api/v1/* + /api/v1/ws -> private loopback FastAPI proxy
+        +-- /api/v1/tasks* + /api/v1/ws -> TS durable runtime
+        +-- settings / databases / builds / cache -> native TS APIs
+        +-- /experimental/pi/* -> optional live-only surface (default off)
         |
-        +-----------------------------+
-        |                             |
-        v                             v
-Pi experimental Agent          FastAPI durable/formal authority
-        |                       Task/Run/EventStore/legacy Agent
-        +-------------+---------------+
-                      |
-                      | DatasetBuildSpec (single authoritative input)
-                      v
-Python V2 Spec Validator / Dataset Construction Runtime
+        +--------------------------+-----------------------------+
+        |                          |                             |
+        v                          v                             v
+Pi Main Agent              TypeScript Dataset Core      TS DB client
+governed Workspace         deterministic operations          |
+        |                          |                           v
+        +--------------------------+                  database/bridge.py
+        | DatasetBuildSpec                            (named operations)
+        v
+Dataset Construction Runtime
         | \
         |  `-- reject -> BuildResult(SPEC_REJECTED) + RunSummary
         v
@@ -692,12 +693,19 @@ V2 精神。V2 目标布局为 `cache/datasets/<namespace>/<dataset_id>/`
 
 ## 14. Durable Runtime（保留自 V1）
 
-Durable Runtime 是 V1 已成熟的能力，V2 完整保留。本节描述权威契约。
+Durable Runtime 是 V1 已成熟并由 TypeScript 重实现的能力。本节描述跨实现权威契约；
+默认实现位于 `server/src/runtime/`，FastAPI 实现只用于 legacy 回滚。
 
 ### 14.1 任务与 Run 生命周期
 
-FastAPI lifespan 初始化唯一的 `TaskManager`、`TaskRepository`、durable
-`EventHub`、内存 `AssistantStreamHub` 和 `TaskIndex`。
+默认 TS Host 初始化唯一的 `TaskRepository`、Pi Session registry 与 durable
+WebSocket runtime；`<task_id>/events.jsonl` 是事实源，纯 reducer 重建 Task snapshot，
+`state/task.json` 保存 Task 元数据，`state/pi-session/` 保存 Pi session 映射。
+重启时仍 active 的 Run 被确定性投影为 `run_interrupted`。
+
+legacy 回滚 profile 的 FastAPI lifespan 仍初始化 `TaskManager`、Python
+`TaskRepository`、durable `EventHub`、`AssistantStreamHub` 和 `TaskIndex`；
+其 wire event 与 HTTP DTO 在兼容期保持一致：
 
 - `<task_id>/events.jsonl` 是 append-only 事件日志；`EventStore` 强制 sequence
   从 1 开始连续递增，`TaskRepository` 先持久化再向 `EventHub` 发布；
@@ -1186,9 +1194,8 @@ Application Host 的一个公开端口；Host 内嵌 Vite middleware，并将旧
 转发到 loopback-only FastAPI；实验 Pi 路径通过受控桥继续调用 Python V2 Dataset
 Core。Validation、Provenance 和 Publication 仍由 Core 权威执行。
 
-当前正常开发入口是仓库根 `pnpm dev`。默认 profile 为 `APP_HOST=ts`、
-`AGENT_RUNTIME=legacy`、`DATASET_CORE=python`、`PI_EXPERIMENTAL=1`：formal API
-仍走 legacy authority，而 Pi 只出现在 `/experimental/pi/*`。Host proxy-only、
+当前正常开发入口仍是仓库根 `pnpm dev`。Phase 1 当时的默认 profile 是
+`ts/legacy/python/1`；Phase 7 已将默认提升为 `ts/pi/ts/0`。Host proxy-only、
 standalone frontend/backend 与 full legacy rollback 均为显式 migration/debug
 脚本；无效 flag 组合在公开端口监听前失败。
 
@@ -1197,9 +1204,10 @@ Pi Session、BioMed Task、Run 与 DatasetBuild 是四个不同生命周期。Pi
 统一来自 `@biomed/contracts`，Phase 0/1 的 Python Pydantic 模型通过 parity fixture
 保持兼容。工作区继续执行 staging-only 写入与不可变 `artifacts/` / `state/` 边界。
 
-Host 持有 managed FastAPI、Pi session、Vite middleware、experimental listeners
-与 Workspace command 的关闭责任；启动失败按逆序回收，正常退出先停止接收新工作，
-再取消/dispose experimental work，最后关闭代理、Vite 和 private child。bridge cancel
+Host 持有 Pi session、共享 DB client、Node browser pool、Vite middleware，以及按
+profile 创建的 managed FastAPI/experimental listeners 的关闭责任；启动失败按逆序
+回收，正常退出先停止接收新工作，再取消/dispose runtime work，最后关闭代理、Vite
+和可选 private child。bridge cancel
 使用独立 side channel，但仍有界等待原 Python response；传输丢失或确认超时只能报告
 `bridge_unavailable`，不能伪装为已确认取消。实验 sequence 仅保证进程内 live ordering，
 不承担 durable replay 或历史 Task 恢复。
@@ -1212,7 +1220,7 @@ proxy-only；若 Host 本身可疑，再使用 full legacy rollback。Phase 0/1 
 > Workspace、事件映射和回滚组合见 [迁移边界索引](migration/README.md)；该索引记录
 > 操作约束，不取代本文的架构定义。
 
-### 18.5 Phase 3 TS Application Runtime（opt-in）
+### 18.5 Phase 3 TS Application Runtime（初始 opt-in，Phase 7 后为默认）
 
 `APP_HOST=ts`、`AGENT_RUNTIME=pi`、`DATASET_CORE=python` 激活正式 Pi runtime。
 新 Task 使用 `task_ts_*` 身份，由 TS Runtime 权威维护 Task/Run admission、request-id
@@ -1227,16 +1235,17 @@ Validation、Provenance、Publication；BuildResult 回投 TS Run 终态。Task 
 API 只读取 immutable publication 目录，并校验 publication-manifest 引用、Task/Build
 身份、相对路径、size 和 SHA-256。
 
-默认 profile 仍为 `AGENT_RUNTIME=legacy`，因此 Phase 3 合并本身不切换正式流量。
-回滚只需恢复该 flag；不删除或改写 `task_ts_*` event/session/build/publication 数据。
-详细实现与验证边界见 [Phase 3 runtime](migration/phase3-ts-application-runtime.md)。
+Phase 3 合并时没有切换正式流量；Phase 7 验收完成后默认已改为
+`AGENT_RUNTIME=pi`。回滚只需显式恢复该 flag；不删除或改写 `task_ts_*`
+event/session/build/publication 数据。详细实现与验证边界见
+[Phase 3 runtime](migration/phase3-ts-application-runtime.md)。
 
 ### 18.6 Phase 6 TypeScript 模型设置
 
-在 `AGENT_RUNTIME=pi` profile 下，TypeScript Application Host 权威处理模型设置、
+在默认 `AGENT_RUNTIME=pi` profile 下，TypeScript Application Host 权威处理模型设置、
 Provider/Model Registry 与模型发现 API，并在路由顺序上先于 formal runtime 和 legacy
-proxy；默认 `AGENT_RUNTIME=legacy` 继续将这些 API 代理给 FastAPI，避免设置页与实际
-Agent runtime 脱节。公开模型元数据与 Provider credential 分文件原子持久化；API 只返回
+proxy；显式 `AGENT_RUNTIME=legacy` 回滚 profile 继续将这些 API 代理给 FastAPI，
+避免设置页与实际 Agent runtime 脱节。公开模型元数据与 Provider credential 分文件原子持久化；API 只返回
 掩码和 configured 状态。旧 `model.json` 与
 `model_registry.db` 仅在首次启动时导入，原文件不修改，供 full legacy rollback 使用。
 
@@ -1265,7 +1274,7 @@ golden fixture（SUCCESS/PARTIAL_SUCCESS/NO_DATA/SPEC_REJECTED）在 TS Core 路
 build lock 为 fenced lease：owner.json mtime 心跳（活进程不因 age 被抢占）、stale 原子
 rename 接管、release 仅删自有 token、publish rename 边界前 `assertOwned` 围栏（I-04 终审，
 2026-08-14；回归 `server/tests/phase5/build-lock.test.ts`，含跨进程互斥与 Windows CI job）；
-`DATASET_CORE=python` 保留为回滚。默认 profile 不变，Phase 7 才切换正式默认。
+`DATASET_CORE=python` 保留为回滚。Phase 7 已将 `DATASET_CORE=ts` 切换为正式默认。
 
 > **协作式取消（M2 收口，2026-08-14）**：真实 Core operation 的可抢占 timeout/cancel
 > 通过“协作式 checkpoint”实现，而非 worker_threads：`server/src/dataset/cooperative.ts`
@@ -1281,6 +1290,20 @@ rename 接管、release 仅删自有 token、publish rename 边界前 `assertOwn
 
 细节见 [Phase 5 完成计划](migration/phase5-external-capabilities-completion-plan.md)
 与 [能力矩阵](migration/phase5-external-capabilities.md)。
+
+### 18.8 Phase 7 默认切换与产品 API 所有权
+
+Phase 7 将默认 profile 固定为 `ts/pi/ts/0`。正常 `pnpm dev` 不创建 Uvicorn/FastAPI
+子进程：TS Host 原生处理 durable Task/Run/Event/WebSocket、模型设置、声明式数据库、
+personalization、Build、artifact、cache 查询/下载/导出，并在无匹配 native route 时
+返回 404。默认路径共享一个 `DatabaseClient` 和一个 `NodeBrowserPool`，由 Host
+lifecycle 统一关闭；Python DB bridge 只通过命名操作按需启动。
+
+private FastAPI 仍在以下任一显式条件成立时启动：`AGENT_RUNTIME=legacy`、
+`DATASET_CORE=python` 或 `PI_EXPERIMENTAL=1`。此时 Host 只为尚未由当前 profile
+接管的请求建立 loopback proxy；internal migration route 永不暴露到公开端口。
+回滚不改写 TS Task、event log、Pi session 或 publication。验收矩阵见
+[Phase 7 切换报告](migration/phase7-frontend-ts-host.md)。
 
 ---
 

@@ -35,6 +35,34 @@ function requestUrl(host: ApplicationHost, path: string): string {
 }
 
 describe("application host", () => {
+  test("starts without a legacy backend and fails closed for unhandled formal routes", async () => {
+    const formalRuntime = vi.fn(async () => ({
+      handle(request: import("node:http").IncomingMessage, response: import("node:http").ServerResponse) {
+        if (request.url !== "/api/v1/tasks") return false;
+        response.end("native tasks");
+        return true;
+      },
+      handleUpgrade: () => false,
+      close: async () => undefined,
+    }));
+    const host = await createApplicationHost({
+      publicHost: "127.0.0.1",
+      publicPort: 0,
+      formalRuntime,
+      frontend: async () => ({
+        middleware: (_request, response) => response.end("frontend"),
+        close: async () => undefined,
+      }),
+    });
+    hosts.push(host);
+
+    expect(formalRuntime).toHaveBeenCalledWith({});
+    expect(await (await fetch(requestUrl(host, "/api/v1/tasks"))).text()).toBe("native tasks");
+    const missing = await fetch(requestUrl(host, "/api/v1/not-migrated"));
+    expect(missing.status).toBe(404);
+    expect(await missing.text()).toBe("Not Found");
+  });
+
   test("preserves legacy HTTP method, path, query, body, status, and headers", async () => {
     const legacy = createServer(async (request, response) => {
       const chunks: Buffer[] = [];

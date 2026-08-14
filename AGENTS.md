@@ -30,49 +30,42 @@ Pipeline**. Full details are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §2
 > **迁移主线**：仓库正按
 > [docs/BioMed-QAgent_Pi_Migration_Plan.md](docs/BioMed-QAgent_Pi_Migration_Plan.md)
 > 把 Agent Runtime 迁移到 Pi、Dataset Core 迁移到 TypeScript。当前进度：
-> Phase 0–6 已完成（含 Phase 5 外部能力全量 TS 化与 M2 `DATASET_CORE=ts`
-> opt-in 收口），下一阶段为 Phase 7（正式默认切换）；进度跟踪与剩余条目见
+> Phase 0–7 已完成（含 Phase 5 外部能力全量 TS 化、M2 TS Core 接线与 Phase 7
+> 正式默认切换），下一阶段为 Phase 8（删除 legacy Python Runtime）；进度跟踪与剩余条目见
 > docs/TODO.md。Phase 5 实施计划/能力矩阵/PDF spike 见
 > docs/migration/phase5-external-capabilities*.md。
 
 Key points:
 
 - Normal development starts from root `pnpm dev`. The TypeScript Application
-  Host owns the single browser-facing port, embeds Vite middleware, exposes the
-  explicit non-durable `/experimental/pi/*` surface, and proxies formal
-  `/api/v1/*` HTTP/WS traffic to private loopback FastAPI by default. With the
-  opt-in `AGENT_RUNTIME=pi` Phase 3 profile, it owns new `task_ts_*` Task/Run/Event
-  traffic and falls back to FastAPI for legacy Tasks and unmigrated APIs.
-- FastAPI remains the default Phase 1 authority for the formal durable product API,
-  Task/Run state, settings, Skills, and Python V2 Dataset Core. It is a
-  Host-managed private child during normal development, not a second browser
-  entrypoint.
-- The FastAPI entry point is `app.main:app`, with routes registered in
+  Host owns the single browser-facing port, embeds Vite middleware, and natively
+  owns formal `/api/v1/*` HTTP/WS traffic, Pi `task_ts_*` Task/Run/Event,
+  product APIs, and the TypeScript Dataset Core. The non-durable
+  `/experimental/pi/*` surface is disabled by default.
+- The default profile is `ts/pi/ts/0`; FastAPI starts only for an explicit
+  legacy Agent, Python Core, or experimental Pi rollback/diagnostic profile.
+  The default Python process boundary is the on-demand named-operation DB bridge.
+- The legacy FastAPI entry point is `app.main:app`, with routes registered in
   [app/api/routes.py](backend/app/api/routes.py) (HTTP) and
-  [app/api/ws.py](backend/app/api/ws.py) (WebSocket). In Phase 3 opt-in mode,
-  `server/src/runtime/` owns formal TS Task routes and multiplexes legacy Task
-  subscriptions to this WebSocket. The application lifespan
+  [app/api/ws.py](backend/app/api/ws.py) (WebSocket). It is retained for rollback.
+  `server/src/runtime/` owns default formal TS Task routes and WebSocket replay.
+  The legacy application lifespan
   (owned by `app.main:create_app`) initializes the durable runtime:
   `TaskManager`, `TaskRepository`, `EventHub`, and `TaskIndex`.
-- The Main Agent is built on the OpenAI Agents SDK and enters the Dataset
-  Construction Runtime through the `execute_dataset_build` Function Tool
-  ([app/pipeline/dataset_build_tool.py](backend/app/pipeline/dataset_build_tool.py)),
-  with `validate_dataset_build_spec` for spec pre-checks. The Agent never
-  assembles the final dataset files directly.
-- Execution is driven by the V2 kernel (ExpressionBuildRunner +
-  DatasetBuildExecutor) with the release-invariants gate; validated builds are
-  published to `artifacts/` as immutable publications, and a V1 legacy mirror
-  ([app/datasets/build/v1_bridge.py](backend/app/datasets/build/v1_bridge.py))
-  keeps the artifact API compatible.
-- The durable runtime is event-sourced: `TaskManager` owns the Run lifecycle
-  (`QUEUED → RUNNING → FINALIZING → COMPLETED/FAILED/CANCELLED/INTERRUPTED`),
-  `TaskRepository` + `EventStore` provide the authoritative event log
-  (`<task_id>/events.jsonl`), and `TaskSnapshot` is rebuilt via a pure reducer
-  (`app.runtime.state.reduce_task_event`). The dataset kernel's events are
-  bridged to the runtime event log by `FixtureRunExecutor` (fixed-spec V2
-  builds) and by the Agent tool path in agent runs.
-- The WebSocket endpoint is `/api/v1/ws`; the durable event session is served
-  by `app/api/ws_events.py:_run_event_session`.
+- The default Main Agent is Pi behind
+  [server/src/agent/pi-adapter.ts](server/src/agent/pi-adapter.ts). The OpenAI
+  Agents SDK path under `backend/app/agent_loop/` is retained only for an
+  explicit `AGENT_RUNTIME=legacy` rollback profile.
+- Deterministic dataset execution defaults to the TypeScript Dataset Core in
+  `server/src/dataset/`; the Python V2 kernel and its V1 compatibility mirror
+  remain available only when `DATASET_CORE=python` is selected explicitly.
+- The default durable runtime is event-sourced in `server/src/runtime/`:
+  `TaskRepository` owns the authoritative `<task_id>/events.jsonl` log and
+  snapshots are rebuilt by the TypeScript reducer. Pi and TS Dataset Core
+  events enter that same task stream.
+- The WebSocket endpoint is `/api/v1/ws`; the TypeScript Host serves replay and
+  live delivery by default. FastAPI's `app/api/ws_events.py` implementation is
+  used only by the legacy rollback topology.
 - Skill 知识已迁至 [.pi/skills/](.pi/skills/)（`<name>/SKILL.md`，Phase 2）；
   Python 侧只剩内置直接工具模块（四个类别 discovery / acquisition /
   processing / analysis 的模块级常量，[backend/app/skills/builtin/](backend/app/skills/builtin/)），
@@ -82,9 +75,9 @@ Key points:
   （`database/bridge.py` 命名操作，`server/src/persistence/db-client.ts`）。
 - learned skill 概念已删除（Phase 2，见
   [docs/migration/phase2-skills-tools-migration.md](docs/migration/phase2-skills-tools-migration.md)）。
-- `DATASET_CORE=ts` 为合法 opt-in profile（`ts/pi/ts/0|1`，M2）；TS Core 具备
+- `DATASET_CORE=ts` 为默认 profile（`ts/pi/ts/0`，Phase 7）；TS Core 具备
   operation timeout / build lock / cancel / event sink，四类 golden fixture 通过；
-  默认 profile 仍是 `ts/legacy/python/1`。
+  `DATASET_CORE=python` 保留为显式回滚。
 
 **HTTP API Routes** (prefix `/api/v1`):
 
@@ -208,7 +201,7 @@ Before starting any task, consult:
 
 ```bash
 pnpm install --frozen-lockfile             # Install the single workspace lockfile
-pnpm dev                                   # Start TS Host + private FastAPI + Vite
+pnpm dev                                   # Start TS Host + Pi + TS Core + Vite
 pnpm test                                  # Contracts + server + frontend tests
 pnpm lint                                  # Workspace lint
 pnpm typecheck                             # Workspace TypeScript checks

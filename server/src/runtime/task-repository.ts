@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, open, readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type {
@@ -243,6 +243,19 @@ export class DurableTaskRepository {
       items: history.slice(0, limit).map((snapshot) => snapshot.task),
       next_cursor: history.length > limit ? history[limit - 1]?.task.task_id ?? null : null,
     };
+  }
+
+  async deleteTask(taskId: string): Promise<void> {
+    requireSafeId(taskId, "taskId");
+    const pending = this.pending.get(taskId);
+    if (pending !== undefined) await pending;
+    const snapshot = await this.getSnapshot(taskId);
+    if (snapshot === null) throw new ReferenceError("Task not found");
+    if (snapshot.task.active_run_id !== null) {
+      throw new DurableTaskConflictError("active_run", "Active tasks cannot be deleted");
+    }
+    await rm(this.taskRoot(taskId), { recursive: true, force: false });
+    this.latestSequence.delete(taskId);
   }
 
   async listEvents(taskId: string, afterSequence: number, limit = 1_000): Promise<EventEnvelope[]> {

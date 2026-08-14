@@ -39,6 +39,8 @@ export interface PiUpstreamEvent {
 export interface PiUpstreamSession {
   readonly sessionId: string;
   prompt(input: string): Promise<void>;
+  steer?(text: string): Promise<void>;
+  compact?(): Promise<{ summary: string }>;
   subscribe(listener: (event: PiUpstreamEvent) => void): () => void;
   abort(): Promise<void>;
   dispose(): void;
@@ -330,6 +332,11 @@ async function createRealUpstreamSession(
   return {
     sessionId: session.sessionId,
     prompt: (input) => session.prompt(input),
+    steer: (text) => session.steer(text),
+    compact: async () => {
+      const result = await session.compact();
+      return { summary: result.summary };
+    },
     subscribe(listener) {
       return session.subscribe((event) => listener(toUpstreamEvent(event)));
     },
@@ -511,6 +518,23 @@ class PiBioMedAgentSession implements BioMedAgentSession {
         ? { type: "turn_cancelled" }
         : { type: "turn_cancelled", reason: boundedText(reason) },
     });
+  }
+
+  async steer(text: string): Promise<void> {
+    if (this.activeTurn === undefined || this.activeTurn.terminal) {
+      throw new BioMedAgentError("SESSION_BUSY", "Agent session has no active turn to steer");
+    }
+    if (this.upstream.steer === undefined) {
+      throw new BioMedAgentError("UPSTREAM_FAILURE", "Agent runtime does not support steering");
+    }
+    await this.upstream.steer(text);
+  }
+
+  async compact(): Promise<{ summary: string }> {
+    if (this.upstream.compact === undefined) {
+      throw new BioMedAgentError("UPSTREAM_FAILURE", "Agent runtime does not support compaction");
+    }
+    return this.upstream.compact();
   }
 
   dispose(): Promise<void> {

@@ -27,7 +27,7 @@ import {
 
 export interface Phase3RuntimeOptions {
   tasksRoot: string;
-  legacyTarget: string;
+  legacyTarget?: string;
   bridgeSecret?: string;
   workspaceDevExec: boolean;
   adapter?: BioMedAgentAdapter;
@@ -41,7 +41,7 @@ export interface Phase3RuntimeOptions {
    */
   operationTimeoutMs?: number;
   /** Business capabilities (P5-12): DB bridge, browser pool, secrets. */
-  database?: { cacheDir: string; databasesDir: string } | null;
+  database?: DatabaseClient | null;
   browserPool?: import("../external/browser/pool.js").NodeBrowserPool | null;
   /** VLM chart-extraction config (P5-08B); missing fields keep env defaults. */
   vlmConfig?: Partial<VlmConfig> | null;
@@ -51,15 +51,14 @@ export interface Phase3RuntimeOptions {
 export async function createPhase3Runtime(
   options: Phase3RuntimeOptions,
 ): Promise<DurableAgentRuntime> {
-  const dbClient = options.database === undefined || options.database === null
-    ? null
-    : new DatabaseClient({
-        cacheDir: options.database.cacheDir,
-        databasesDir: options.database.databasesDir,
-      });
+  const datasetCore = options.datasetCore ?? "python";
+  if (datasetCore === "python" && options.legacyTarget === undefined) {
+    throw new Error("DATASET_CORE=python requires a legacy backend target");
+  }
+  const dbClient = options.database ?? null;
   const runtime = await createDurableAgentRuntime({
     tasksRoot: options.tasksRoot,
-    legacyBaseUrl: options.legacyTarget,
+    ...(options.legacyTarget === undefined ? {} : { legacyBaseUrl: options.legacyTarget }),
     adapter: options.adapter ?? new PiAgentAdapter({
       environment: process.env,
       resolveModel: options.resolveModel,
@@ -78,7 +77,6 @@ export async function createPhase3Runtime(
           ? { developmentExec: { enabled: true as const } }
           : {}),
       });
-      const datasetCore = options.datasetCore ?? "python";
       const tsCore = new TypeScriptDatasetCore({
         taskId,
         taskRoot: root,
@@ -92,7 +90,7 @@ export async function createPhase3Runtime(
         tsCore: datasetCore === "ts" ? tsCore : null,
         pythonClient: datasetCore === "python"
           ? new DatasetCoreClient({
-              baseUrl: options.legacyTarget,
+              baseUrl: options.legacyTarget!,
               secret: options.bridgeSecret,
             })
           : null,
@@ -204,11 +202,5 @@ export async function createPhase3Runtime(
       };
     },
   });
-  return {
-    ...runtime,
-    close: async () => {
-      await runtime.close();
-      if (dbClient !== null) await dbClient.close().catch(() => undefined);
-    },
-  };
+  return runtime;
 }
