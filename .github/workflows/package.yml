@@ -124,6 +124,9 @@ jobs:
     needs: package
     runs-on: ubuntu-latest
     steps:
+      # checkout 仅为 pnpm/action-setup 提供 packageManager 版本信息；
+      # 冒烟本体在下载的 bundle 目录内进行。
+      - uses: actions/checkout@v4
       - name: Compute bundle artifact name
         run: |
           safe="${GITHUB_REF_NAME//\//-}"
