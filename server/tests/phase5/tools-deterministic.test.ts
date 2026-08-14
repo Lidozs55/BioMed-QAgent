@@ -198,22 +198,30 @@ describe("business tool bundle (P5-02/P5-12)", () => {
     }
   });
 
-  it("passes a dynamic runId into analysis staging", async () => {
+  it("re-reads a dynamic runId for every analysis execution", async () => {
     const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-tool-run-"));
     try {
       const csv = "gene_symbol,S1,S2\nTP53,1.5,2.5\nBRCA1,3.0,4.0\n";
       await writeFile(path.join(taskRoot, "input.csv"), csv, "utf8");
+      let currentRunId = "run-first";
       const bundle = await createBusinessToolBundle({
         taskRoot,
         browser: null,
         db: null,
-        runId: () => "run-audit",
+        runId: () => currentRunId,
       });
       const stats = bundle.tools.find((tool) => tool.name === "basic_statistics");
       expect(stats).toBeDefined();
-      const result = await stats?.execute({ csv_path: "input.csv" });
-      const payload = JSON.parse(result?.content ?? "{}") as { stats_report?: string };
-      expect(payload.stats_report).toBe("staging/analysis/run-audit/stats_report.csv");
+      const first = await stats?.execute({ csv_path: "input.csv" });
+      const firstPayload = JSON.parse(first?.content ?? "{}") as { stats_report?: string };
+      expect(firstPayload.stats_report).toBe("staging/analysis/run-first/stats_report.csv");
+      await readFile(path.join(taskRoot, "staging", "analysis", "run-first", "stats_report.csv"), "utf8");
+
+      currentRunId = "run-second";
+      const second = await stats?.execute({ csv_path: "input.csv" });
+      const secondPayload = JSON.parse(second?.content ?? "{}") as { stats_report?: string };
+      expect(secondPayload.stats_report).toBe("staging/analysis/run-second/stats_report.csv");
+      await readFile(path.join(taskRoot, "staging", "analysis", "run-second", "stats_report.csv"), "utf8");
     } finally {
       await rm(taskRoot, { recursive: true, force: true });
     }

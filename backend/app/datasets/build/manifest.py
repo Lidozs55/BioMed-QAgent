@@ -125,10 +125,9 @@ def build_provenance_document(
         "sample_backtraces": _sample_backtraces(integration.merged_path),
     }
     path = output_dir / PROVENANCE_FILE
-    path.write_text(
-        json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        "utf-8",
-    )
+    path.write_bytes((
+        json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8"))
     return path
 
 
@@ -240,10 +239,9 @@ def assemble_manifest(
     a crash can never leave a manifest with a stale validation summary.
     """
     schema_path = output_dir / SCHEMA_FILE
-    schema_path.write_text(
-        json.dumps(schema.model_dump(), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        "utf-8",
-    )
+    schema_path.write_bytes((
+        json.dumps(schema.model_dump(), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8"))
     entries = [
         _entry(ArtifactRole.PRIMARY_DATASET, integration.merged_path, output_dir),
         _entry(ArtifactRole.SCHEMA, schema_path, output_dir, media_type="application/json"),
@@ -314,10 +312,9 @@ def assemble_manifest(
 def write_manifest(manifest: DatasetManifest, output_dir: Path) -> Path:
     """Write ``dataset_manifest.json`` for an assembled manifest."""
     manifest_path = output_dir / MANIFEST_FILE
-    manifest_path.write_text(
-        json.dumps(manifest.model_dump(), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        "utf-8",
-    )
+    manifest_path.write_bytes((
+        json.dumps(manifest.model_dump(), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8"))
     return manifest_path
 
 

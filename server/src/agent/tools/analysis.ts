@@ -163,8 +163,9 @@ interface FileWrites {
 export function createAnalysisTools(deps: AnalysisToolDeps): BioMedAgentTool[] {
   const hooks = noopHooks(deps.hooks);
   const { taskRoot } = deps;
-  const runKey = typeof deps.runId === "function" ? deps.runId() : deps.runId ?? "default";
-  const stagingDir = () => path.join(taskRoot, "staging", "analysis", runKey);
+  const resolveRunKey = (): string =>
+    typeof deps.runId === "function" ? deps.runId() : deps.runId ?? "default";
+  const stagingDir = () => path.join(taskRoot, "staging", "analysis", resolveRunKey());
   const relative = (absolute: string): string => toTaskRelative(absolute, taskRoot);
 
   async function writeStaging(files: Readonly<Record<string, string | Buffer>>): Promise<FileWrites> {

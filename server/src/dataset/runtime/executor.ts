@@ -123,6 +123,7 @@ export interface ExecutorOptions {
   plan: readonly OperationSpec[];
   runOperation: OperationRunner;
   cancellationRequested?: (() => boolean) | null;
+  cancellationSignal?: AbortSignal | null;
   parameterScope?: Readonly<Record<string, unknown>> | null;
   implementationVersions?: Readonly<Record<string, string>> | null;
   sourceAssets?: Readonly<Record<string, SourceAsset>> | null;
@@ -146,6 +147,7 @@ export class DatasetBuildExecutor {
   private readonly plan: readonly OperationSpec[];
   private readonly runOperation: OperationRunner;
   private readonly cancellationRequested: (() => boolean) | null;
+  private readonly cancellationSignal: AbortSignal | null;
   private readonly parameterScope: Readonly<Record<string, unknown>>;
   private readonly implementationVersions: Readonly<Record<string, string>>;
   private readonly sourceAssets: Readonly<Record<string, SourceAsset>>;
@@ -169,6 +171,7 @@ export class DatasetBuildExecutor {
     this.plan = options.plan;
     this.runOperation = options.runOperation;
     this.cancellationRequested = options.cancellationRequested ?? null;
+    this.cancellationSignal = options.cancellationSignal ?? null;
     this.parameterScope = options.parameterScope ?? {};
     this.implementationVersions = options.implementationVersions ?? {};
     this.sourceAssets = options.sourceAssets ?? {};
@@ -554,24 +557,34 @@ export class DatasetBuildExecutor {
     if (this.isCancelled()) {
       throw new BuildCancelledError(`operation ${op.operation_id} was cancelled`);
     }
+    const operationController = new AbortController();
+    const onCancellation = (): void => operationController.abort();
+    this.cancellationSignal?.addEventListener("abort", onCancellation, { once: true });
     let result: OperationOutput;
-    if (this.operationTimeoutMs > 0) {
-      let timeout: NodeJS.Timeout | undefined;
-      try {
-        result = await Promise.race([
-          Promise.resolve(this.runOperation(op, upstream)),
-          new Promise<never>((_resolve, reject) => {
-            timeout = setTimeout(
-              () => reject(new OperationTimeoutError(op.operation_id, this.operationTimeoutMs)),
-              this.operationTimeoutMs,
-            );
-          }),
-        ]);
-      } finally {
-        if (timeout !== undefined) clearTimeout(timeout);
+    try {
+      if (this.operationTimeoutMs > 0) {
+        let timeout: NodeJS.Timeout | undefined;
+        try {
+          result = await Promise.race([
+            Promise.resolve(this.runOperation(op, upstream, operationController.signal)),
+            new Promise<never>((_resolve, reject) => {
+              timeout = setTimeout(
+                () => {
+                  operationController.abort();
+                  reject(new OperationTimeoutError(op.operation_id, this.operationTimeoutMs));
+                },
+                this.operationTimeoutMs,
+              );
+            }),
+          ]);
+        } finally {
+          if (timeout !== undefined) clearTimeout(timeout);
+        }
+      } else {
+        result = await this.runOperation(op, upstream, operationController.signal);
       }
-    } else {
-      result = await this.runOperation(op, upstream);
+    } finally {
+      this.cancellationSignal?.removeEventListener("abort", onCancellation);
     }
     if (this.isCancelled()) {
       // K1: the operation's files are finished but must be discarded — the

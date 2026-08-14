@@ -113,6 +113,40 @@ describe("TypeScript model settings", () => {
       api_available: true,
     })]);
   });
+
+  test("VLM fallback does not leak a non-DashScope active provider key", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const baseUrl = await serve(service);
+    const providerResponse = await fetch(`${baseUrl}/api/v1/model-registry/providers`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Custom Text Provider",
+        base_url: "https://models.example/v1",
+        api_key: "sk-custom-provider",
+      }),
+    });
+    const provider = await providerResponse.json() as Record<string, unknown>;
+    const modelResponse = await fetch(`${baseUrl}/api/v1/model-registry/models`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        provider_id: provider.id,
+        model_id: "custom-chat",
+      }),
+    });
+    const model = await modelResponse.json() as Record<string, unknown>;
+    await fetch(`${baseUrl}/api/v1/model-registry/models/${String(model.id)}/activate`, {
+      method: "POST",
+    });
+    expect(await service.resolveVlmConfig()).toEqual({
+      apiKey: "",
+      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      model: "qwen-vl-max",
+    });
+  });
+
   test("preserves a masked key and clears it only on an explicit empty value", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
     const service = await ModelSettingsService.create({
