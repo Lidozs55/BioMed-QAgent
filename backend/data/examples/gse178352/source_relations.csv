@@ -1,2 +1,0 @@
-﻿relation_id,from_source_id,to_source_id,relation_type,evidence_type,evidence_value,evidence_url
-rel_pmid34180400_gse178352,src_f6058184aaf6e53ec68732f3d6599c55,src_ac3f65715090fc35dff94baae79981fb,article_describes_dataset,geo_pubmed_id,34180400,https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE178352

@@ -20,7 +20,7 @@ describe("Phase 4 step 5 canonicalizer parity", () => {
 
   test("GDC/Xena canonicalization fixture parity mirrors the Python suite", async () => {
     const issues = await checkCanonicalizerFixtureParity({
-      fixturesRoot: join(repoRoot, "backend", "tests", "fixtures"),
+      fixturesRoot: join(repoRoot, "tests", "fixtures"),
       outputRoot: scratchOutputRoot("canonicalizer-vitest-"),
     });
     expect(issues).toEqual([]);

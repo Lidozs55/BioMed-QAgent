@@ -12,7 +12,6 @@ function services() {
   const database = new DatabaseClient({
     pythonBin: "unused",
     bridgePath: "unused",
-    backendRoot: "unused",
   });
   const browserPool = new NodeBrowserPool({
     launcher: async () => {
@@ -32,10 +31,9 @@ function services() {
   return { database, browserPool, modelSettings, productApi };
 }
 
-describe("Phase 7 bootstrap", () => {
-  test("default TS profile does not provision FastAPI and injects shared native services", async () => {
+describe("Phase 8 bootstrap (fixed TS/Pi/TS topology)", () => {
+  test("provisions the native services and always wires the formal TS runtime", async () => {
     const shared = services();
-    const createLegacy = vi.fn();
     const createFormalRuntime = vi.fn(async (runtimeOptions: Phase3RuntimeOptions) => {
       void runtimeOptions;
       return {
@@ -49,19 +47,17 @@ describe("Phase 7 bootstrap", () => {
       repositoryRoot: path.resolve("test-repository"),
       tasksRoot: path.resolve("test-tasks"),
       ...shared,
-      createLegacy,
       createFormalRuntime,
     });
 
-    expect(options.legacy).toBeUndefined();
+    expect(options.hostApi).toBeDefined();
     expect(options.formalRuntime).toBeDefined();
     await options.initializeLifecycle?.(options.lifecycle!);
-    await options.formalRuntime?.({});
+    await options.formalRuntime?.();
 
-    expect(createLegacy).not.toHaveBeenCalled();
     expect(shared.browserPool.isStarted).toBe(true);
     expect(createFormalRuntime).toHaveBeenCalledWith(expect.objectContaining({
-      datasetCore: "ts",
+      workspaceDevExec: false,
       database: shared.database,
       browserPool: shared.browserPool,
       vlmConfig: {
@@ -70,37 +66,21 @@ describe("Phase 7 bootstrap", () => {
         model: "vlm-model",
       },
     }));
-    expect(createFormalRuntime.mock.calls[0]?.[0]).not.toHaveProperty("legacyTarget");
     await options.lifecycle?.close();
   });
 
-  test("explicit rollback profile provisions FastAPI and leaves formal Pi runtime disabled", async () => {
+  test("never provisions a legacy backend or experimental Pi runtime", async () => {
     const shared = services();
-    const createLegacy = vi.fn(async () => ({
-      target: "http://127.0.0.1:8123",
-      bridgeSecret: "secret",
-      close: async () => undefined,
-    }));
     const options = await createBootstrapOptions({
-      config: parseHostConfig({
-        APP_HOST: "ts",
-        AGENT_RUNTIME: "legacy",
-        DATASET_CORE: "python",
-        PI_EXPERIMENTAL: "0",
-        PORT: "0",
-      }),
+      config: parseHostConfig({ PORT: "0" }),
       repositoryRoot: path.resolve("test-repository"),
       tasksRoot: path.resolve("test-tasks"),
       ...shared,
-      createLegacy,
     });
 
-    expect(options.legacy).toBeDefined();
-    expect(options.formalRuntime).toBeUndefined();
+    expect(options).not.toHaveProperty("legacy");
+    expect(options).not.toHaveProperty("experimentalPi");
     await options.initializeLifecycle?.(options.lifecycle!);
-    expect(shared.browserPool.isStarted).toBe(false);
-    await options.legacy?.();
-    expect(createLegacy).toHaveBeenCalledOnce();
     await options.lifecycle?.close();
   });
 });

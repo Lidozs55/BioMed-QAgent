@@ -13,7 +13,7 @@ const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 describe("Phase 4 step 7 integrator parity", () => {
   test("fixture-driven integrator matrix mirrors test_dataset_integrator.py", async () => {
     const issues = await checkIntegratorParity({
-      fixturesRoot: join(repoRoot, "backend", "tests", "fixtures"),
+      fixturesRoot: join(repoRoot, "tests", "fixtures"),
       outputRoot: scratchOutputRoot("integrator-vitest-"),
     });
     expect(issues).toEqual([]);

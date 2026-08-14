@@ -217,17 +217,28 @@ build 锁、cancel 收敛与 event sink；`DATASET_CORE=ts` 现为默认运行�
 验收证据与默认/回滚拓扑见
 [phase7-frontend-ts-host.md](migration/phase7-frontend-ts-host.md)。
 
-## Phase 8：删除 Python Runtime（⬜ 待开始）
+## Phase 8：删除 Python Runtime（✅ 完成，2026-08-14）
 
-> 前提：对应职责已迁移（Phase 2-7 完成）。删除清单见 Plan §20 Phase 8。
+- [x] 删除 `backend/`（`app/{agent_loop,runtime,subagents,skills,pipeline,datasets,tools,api,main.py}`、
+      `compat/`、`launcher.py`、旧 tests 全部物理退役；`git ls-files backend` = 0）
+- [x] 清理 FastAPI / uvicorn / openai-agents / httpx / Playwright Python / pdfplumber /
+      matplotlib / scipy / seaborn 依赖；根 `pyproject.toml` 只服务 `database/`（stdlib-only）
+- [x] `database/` 自包含：`bridge.py` + `cache_store.py` + `database_store.py` +
+      `declarative.py`（stdlib 重写，无 backend/app 依赖）；builtin database catalogue
+      移入 TS（`server/src/product/builtin-databases.ts`）；cache 改为 schema-neutral
+      （记录自述 columns，删除 22 列全局常量）
+- [x] 删除 TS rollback topology：feature flags（APP_HOST/AGENT_RUNTIME/DATASET_CORE/
+      PI_EXPERIMENTAL）、`server/src/legacy/`、experimental Phase 1 Pi runtime、
+      legacy proxy、Python Dataset Core client、`/experimental/pi` 前端入口
+- [x] 验收：`pnpm test / lint / typecheck / build` 全通过 +
+      `uv run python database/bridge.py --self-test` + `uv run pytest database/tests` +
+      `uv run ruff check database`；`pnpm dev` 与 `pnpm start` 冒烟通过，产品启动不再
+      需要 Python Web Server
 
-- [ ] 删除 `backend/app/{agent_loop,runtime,subagents,skills,pipeline,datasets,tools,api,main.py}`
-- [ ] 清理 FastAPI / uvicorn / openai-agents / httpx / Playwright Python / pdfplumber /
-      matplotlib / scipy / seaborn 与旧 Python tests
-- [ ] 最终 Python 仅留 `database/` bridge（JSONL stdin/stdout 命名操作，由 TS Host
-      管理生命周期，Plan §15）
-- [ ] 验收：`pnpm test / lint / typecheck / build` 全通过 +
-      `uv run python database/bridge.py --self-test`；产品启动不再需要 Python Web Server
+执行计划与最终验证见
+[migration/phase8-python-runtime-retirement.md](migration/phase8-python-runtime-retirement.md)、
+[migration/PHASE8_FINAL_VERIFICATION.md](migration/PHASE8_FINAL_VERIFICATION.md)、
+[migration/phase8-retirement-inventory.md](migration/phase8-retirement-inventory.md)。
 
 ---
 

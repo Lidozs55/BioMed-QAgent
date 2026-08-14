@@ -86,7 +86,7 @@ export class SessionRegistry {
       result.status === "rejected" ? [result.reason] : [],
     );
     if (errors.length > 0) {
-      throw new AggregateError(errors, "Experimental Pi session cleanup failed");
+      throw new AggregateError(errors, "Pi session cleanup failed");
     }
   }
 }

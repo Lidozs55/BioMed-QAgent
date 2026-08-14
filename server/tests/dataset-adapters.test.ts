@@ -19,7 +19,7 @@ describe("Phase 4 step 4 adapters parity", () => {
 
   test("GDC/Xena adapter fixture parity mirrors test_dataset_adapters.py", async () => {
     const issues = await checkAdapterFixtureParity({
-      fixturesRoot: join(repoRoot, "backend", "tests", "fixtures"),
+      fixturesRoot: join(repoRoot, "tests", "fixtures"),
       outputRoot: scratchOutputRoot("adapter-vitest-"),
     });
     expect(issues).toEqual([]);

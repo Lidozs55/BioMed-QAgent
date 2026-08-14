@@ -24,17 +24,9 @@ export interface CacheDatasetManifest {
   source_files: string[];
   extra: Record<string, unknown>;
   keywords: string[];
+  /** Phase 8 schema-neutral cache: each record owns its column schema. */
+  columns?: string[];
 }
-
-export const CACHE_MAIN_DATA_COLUMNS = [
-  "record_id", "dataset_id", "source_id", "asset_id",
-  "gene_id_raw", "gene_id", "gene_id_namespace", "gene_id_version",
-  "sample_id", "source_sample_alias", "measurement_type",
-  "value_semantics", "value_scale", "is_normalized",
-  "is_integer_expected", "expression_value", "expression_unit",
-  "source_logical_file", "source_line_number", "source_column_index",
-  "source_column_name", "source_raw_value",
-] as const;
 
 export interface LocalCacheToolDeps {
   db: DatabaseClient;
@@ -165,9 +157,9 @@ export function createLocalCacheTools(deps: LocalCacheToolDeps): BioMedAgentTool
     label: "Load cached dataset rows",
     description:
       "Load the full main_data.csv rows of one cached dataset. " +
-      "Returns rows in the 22-column long format (same schema as " +
-      "Pipeline-produced main_data.csv). Use after describe_local_cache " +
-      "to confirm the dataset is what you need.",
+      "Returns rows with the dataset's own column schema (recorded in its " +
+      "manifest). Use after describe_local_cache to confirm the dataset is " +
+      "what you need.",
     parameters: {
       type: "object",
       properties: {
@@ -205,6 +197,11 @@ export function createLocalCacheTools(deps: LocalCacheToolDeps): BioMedAgentTool
       const { manifest, rows } = result;
       const truncated = rows.length > maxRows;
       const returnedRows = rows.slice(0, maxRows);
+      // Phase 8: the record's own manifest declares the column schema; fall
+      // back to the CSV header (rows keys) for pre-migration records.
+      const columns = manifest.columns !== undefined && manifest.columns.length > 0
+        ? manifest.columns
+        : (rows[0] !== undefined ? Object.keys(rows[0]) : []);
       hooks.onProgress("acquisition", "cache_dataset_loaded", {
         source_namespace: sourceNamespace,
         dataset_id: datasetId,
@@ -221,7 +218,7 @@ export function createLocalCacheTools(deps: LocalCacheToolDeps): BioMedAgentTool
           row_count: manifest.row_count,
           returned_rows: returnedRows.length,
           truncated,
-          columns: [...CACHE_MAIN_DATA_COLUMNS],
+          columns: [...columns],
           rows: returnedRows,
         }),
       };

@@ -5,12 +5,14 @@ import { createApplicationHost } from "./app/create-app.js";
 import { createBootstrapOptions } from "./bootstrap.js";
 import { parseHostConfig } from "./config.js";
 import { createViteMiddleware } from "./dev/vite-middleware.js";
+import { createStaticMiddleware } from "./dev/static-middleware.js";
 
 async function main(): Promise<void> {
   const config = parseHostConfig(process.env);
+  const serveStatic = process.argv.includes("--static");
   const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
   const tasksRoot = path.join(
-    path.resolve(process.env.OUTPUT_DIR ?? path.join(repositoryRoot, "backend", "data", "output")),
+    path.resolve(process.env.OUTPUT_DIR ?? path.join(repositoryRoot, "data", "output")),
     "tasks",
   );
   const bootstrap = await createBootstrapOptions({
@@ -21,10 +23,12 @@ async function main(): Promise<void> {
   const host = await createApplicationHost({
     ...bootstrap,
     frontend: (httpServer) =>
-      createViteMiddleware({
-        frontendRoot: path.join(repositoryRoot, "frontend"),
-        httpServer,
-      }),
+      serveStatic
+        ? createStaticMiddleware(path.join(repositoryRoot, "frontend"))
+        : createViteMiddleware({
+            frontendRoot: path.join(repositoryRoot, "frontend"),
+            httpServer,
+          }),
   });
 
   let shutdown: Promise<void> | undefined;

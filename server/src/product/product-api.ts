@@ -6,6 +6,11 @@ import path from "node:path";
 import { DatabaseBridgeError } from "../persistence/db-client.js";
 import { BuildStore, BuildStoreError } from "./build-store.js";
 import { CacheApi } from "./cache-api.js";
+import {
+  BUILTIN_DATABASE_NAMES,
+  getBuiltinDatabase,
+  listBuiltinDatabases,
+} from "./builtin-databases.js";
 
 export interface ProductDatabaseClient {
   call<T>(op: string, args: Record<string, unknown>): Promise<T>;
@@ -16,11 +21,6 @@ export interface ProductApiOptions {
   cacheDir: string;
   settingsDir: string;
   database: ProductDatabaseClient;
-  profile?: {
-    appHost: "ts";
-    agentRuntime: "pi";
-    datasetCore: "python" | "ts";
-  };
 }
 
 interface Personalization {
@@ -143,34 +143,66 @@ export async function createProductApi(options: ProductApiOptions): Promise<{
     if (method === "GET" && pathname === "/api/v1/health") {
       json(response, 200, {
         status: "ok",
-        app_host: options.profile?.appHost ?? "ts",
-        agent_runtime: options.profile?.agentRuntime ?? "pi",
-        dataset_core: options.profile?.datasetCore ?? "ts",
+        app_host: "ts",
+        agent_runtime: "pi",
+        dataset_core: "ts",
       });
       return;
     }
     if (method === "GET" && pathname === "/api/v1/databases") {
+      // Phase 8: builtin catalogue is TS-owned; the bridge persists only user
+      // manifests + the enabled/disabled state.
+      const [userEntries, disabledState] = await Promise.all([
+        options.database.call<Array<Record<string, unknown>>>("database.list", {}),
+        options.database.call<{ disabled: string[] }>("database.disabled", {}),
+      ]);
+      const disabled = new Set(disabledState.disabled);
       json(response, 200, {
-        databases: await options.database.call("database.list", {}),
+        databases: [
+          ...listBuiltinDatabases(disabled),
+          ...userEntries,
+        ],
       });
       return;
     }
     if (method === "POST" && pathname === "/api/v1/databases") {
-      json(response, 201, await options.database.call("database.save", {
-        manifest: await body(request),
-      }));
+      const manifest = (await body(request)) as { name?: unknown };
+      if (typeof manifest.name === "string" && BUILTIN_DATABASE_NAMES.has(manifest.name)) {
+        error(
+          response,
+          422,
+          `database name conflicts with a builtin database: ${manifest.name}`,
+        );
+        return;
+      }
+      json(response, 201, await options.database.call("database.save", { manifest }));
       return;
     }
     const databaseMatch = /^\/api\/v1\/databases\/([^/]+)$/.exec(pathname);
     if (databaseMatch !== null) {
       const name = decodeURIComponent(databaseMatch[1]!);
       if (method === "GET") {
+        const builtin = BUILTIN_DATABASE_NAMES.has(name);
+        if (builtin) {
+          const disabledState = await options.database.call<{ disabled: string[] }>(
+            "database.disabled",
+            {},
+          );
+          const entry = getBuiltinDatabase(name, new Set(disabledState.disabled));
+          if (entry === null) error(response, 404, "Database not found");
+          else json(response, 200, entry);
+          return;
+        }
         const value = await options.database.call("database.get", { name });
         if (value === null) error(response, 404, "Database not found");
         else json(response, 200, value);
         return;
       }
       if (method === "PUT") {
+        if (BUILTIN_DATABASE_NAMES.has(name)) {
+          error(response, 403, "builtin databases are immutable");
+          return;
+        }
         json(response, 200, await options.database.call("database.patch", {
           name,
           patch: await body(request),
@@ -178,6 +210,10 @@ export async function createProductApi(options: ProductApiOptions): Promise<{
         return;
       }
       if (method === "DELETE") {
+        if (BUILTIN_DATABASE_NAMES.has(name)) {
+          error(response, 403, "builtin databases cannot be deleted");
+          return;
+        }
         await options.database.call("database.delete", { name });
         response.writeHead(204).end();
         return;

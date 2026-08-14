@@ -65,14 +65,14 @@ describe("static Pi-path isolation gate (P5-13)", () => {
     expect(violations).toEqual([]);
   });
 
-  it("the DatasetCore service seam is the only place allowed to import the legacy client", async () => {
+  it("the DatasetCore service seam no longer references any legacy client", async () => {
     const serviceDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "src", "dataset", "service");
-    const files = ["dataset-core.ts"];
+    const files = ["dataset-core.ts", "ts-core.ts"];
     for (const name of files) {
       const text = await readFile(path.join(serviceDir, name), "utf8");
-      // The adapter is the sanctioned rollback seam; verify it is the ONLY
-      // module referencing the legacy client in the whole service layer.
-      expect(text).toMatch(/legacy\/dataset-core-client/);
+      // Phase 8: the legacy Python rollback client is deleted; the service
+      // layer must never import it (or any legacy module) again.
+      expect(text).not.toMatch(/legacy\/|dataset-core-client|PythonDatasetCoreAdapter/);
     }
   });
 
@@ -127,10 +127,8 @@ describe("runtime Pi-path isolation gate (P5-13)", () => {
     };
     const runtime = await createPhase3Runtime({
       tasksRoot,
-      legacyTarget: "http://127.0.0.1:1", // unreachable legacy backend
       workspaceDevExec: false,
       adapter,
-      datasetCore: "ts",
       database: null,
       browserPool: null,
     });
@@ -200,10 +198,8 @@ describe("runtime Pi-path isolation gate (P5-13)", () => {
     } as unknown as import("../../src/external/browser/pool.js").NodeBrowserPool;
     const runtime = await createPhase3Runtime({
       tasksRoot,
-      legacyTarget: "http://127.0.0.1:1",
       workspaceDevExec: false,
       adapter,
-      datasetCore: "ts",
       database: null,
       browserPool,
     });

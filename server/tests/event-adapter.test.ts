@@ -116,7 +116,7 @@ describe("PiEventAdapter", () => {
     });
     expect(failure[0]?.payload).toEqual({
       type: "run_failed",
-      error: "Experimental Pi turn failed",
+      error: "Pi turn failed",
       error_code: "internal_error",
     });
     expect(JSON.stringify(failure)).not.toContain("secret-value");

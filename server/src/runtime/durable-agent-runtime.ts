@@ -11,7 +11,6 @@ import type {
   EventPayload,
   JsonValue,
   TaskMode,
-  TaskPage,
   WebSocketControlFrame,
 } from "@biomed/contracts";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
@@ -67,7 +66,6 @@ export interface DurableAgentRuntimeOptions {
     recordRunEvent: (payload: EventPayload) => Promise<void>;
   }) => Promise<DurableAgentWorkspace>;
   repository?: DurableTaskRepository;
-  legacyBaseUrl?: string;
   fetch?: typeof fetch;
   cancellationTimeoutMs?: number;
 }
@@ -572,8 +570,7 @@ export async function createDurableAgentRuntime(
       }
       if (request.method === "GET" && url.pathname === "/api/v1/tasks") {
         const limit = Number(url.searchParams.get("limit") ?? "50");
-        const local = await repository.listTasks(limit);
-        sendJson(response, 200, await mergeLegacyTasks(local, request, options, limit));
+        sendJson(response, 200, await repository.listTasks(limit));
         return;
       }
       const task = /^\/api\/v1\/tasks\/([^/]+)$/.exec(url.pathname);
@@ -709,8 +706,6 @@ export async function createDurableAgentRuntime(
   webSocketServer.on("connection", (socket) => {
     sockets.add(socket);
     const subscriptions = new Map<string, Subscription>();
-    let legacySocket: WebSocket | undefined;
-    let legacyConnect: Promise<WebSocket> | undefined;
     const sendRaw = (text: string): void => {
       if (socket.readyState !== WebSocket.OPEN) return;
       if (socket.bufferedAmount > MAX_WS_BUFFERED_BYTES) {
@@ -734,52 +729,6 @@ export async function createDurableAgentRuntime(
     };
     const unsubscribeRepository = repository.subscribe(sendEvent);
 
-    const connectLegacy = (): Promise<WebSocket> => {
-      if (legacySocket?.readyState === WebSocket.OPEN) return Promise.resolve(legacySocket);
-      if (legacyConnect !== undefined) return legacyConnect;
-      if (options.legacyBaseUrl === undefined) {
-        return Promise.reject(new Error("Legacy WebSocket runtime is unavailable"));
-      }
-      const target = new URL("/api/v1/ws", options.legacyBaseUrl);
-      target.protocol = target.protocol === "https:" ? "wss:" : "ws:";
-      legacyConnect = new Promise<WebSocket>((resolve, reject) => {
-        const upstream = new WebSocket(target);
-        const onError = (error: Error): void => {
-          upstream.removeListener("open", onOpen);
-          legacyConnect = undefined;
-          reject(error);
-        };
-        const onOpen = (): void => {
-          upstream.removeListener("error", onError);
-          legacySocket = upstream;
-          upstream.on("message", (raw) => {
-            sendRaw(rawDataText(raw));
-          });
-          upstream.once("close", () => {
-            if (legacySocket === upstream) legacySocket = undefined;
-          });
-          upstream.on("error", () => {
-            send(controlError("legacy_runtime_unavailable", "Legacy WebSocket runtime failed"));
-          });
-          legacyConnect = undefined;
-          resolve(upstream);
-        };
-        upstream.once("error", onError);
-        upstream.once("open", onOpen);
-      });
-      return legacyConnect;
-    };
-
-    const forwardLegacy = (rawCommand: string): void => {
-      void connectLegacy().then(
-        (upstream) => upstream.send(rawCommand),
-        () => send(controlError(
-          "legacy_runtime_unavailable",
-          "Legacy WebSocket runtime is unavailable",
-        )),
-      );
-    };
-
     socket.on("message", (raw: RawData) => {
       const text = rawDataText(raw);
       if (Buffer.byteLength(text) > MAX_WS_COMMAND_BYTES) {
@@ -796,8 +745,7 @@ export async function createDurableAgentRuntime(
         return;
       }
       if (command.type === "ping") {
-        if (legacySocket?.readyState === WebSocket.OPEN) forwardLegacy(text);
-        else send({ type: "pong" });
+        send({ type: "pong" });
         return;
       }
       const taskId = typeof command.task_id === "string" ? command.task_id : "";
@@ -806,7 +754,7 @@ export async function createDurableAgentRuntime(
         return;
       }
       if (!taskId.startsWith("task_ts_")) {
-        forwardLegacy(text);
+        send(controlError("task_not_found", "Task not found", taskId));
         return;
       }
       if (command.type === "unsubscribe") {
@@ -849,7 +797,6 @@ export async function createDurableAgentRuntime(
       sockets.delete(socket);
       subscriptions.clear();
       unsubscribeRepository();
-      legacySocket?.close(1000, "client disconnect");
     });
   });
 
@@ -918,38 +865,6 @@ function sameOriginHost(origin: string, host: string): boolean {
   } catch {
     return false;
   }
-}
-
-async function mergeLegacyTasks(
-  local: TaskPage,
-  request: IncomingMessage,
-  options: DurableAgentRuntimeOptions,
-  limit: number,
-): Promise<TaskPage> {
-  if (options.legacyBaseUrl === undefined) return local;
-  const target = new URL(request.url ?? "/api/v1/tasks", options.legacyBaseUrl);
-  const response = await (options.fetch ?? fetch)(target, {
-    headers: { accept: "application/json" },
-  });
-  if (!response.ok) throw new Error(`Legacy task listing failed (${response.status})`);
-  const value: unknown = await response.json();
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new TypeError("Legacy task listing is invalid");
-  }
-  const page = value as Partial<TaskPage>;
-  if (!Array.isArray(page.active_items) || !Array.isArray(page.items)) {
-    throw new TypeError("Legacy task listing is invalid");
-  }
-  const active = [...local.active_items, ...page.active_items]
-    .sort((left, right) => right.updated_at.localeCompare(left.updated_at));
-  const history = [...local.items, ...page.items]
-    .sort((left, right) => right.updated_at.localeCompare(left.updated_at));
-  return {
-    schema_version: "1.0",
-    active_items: active,
-    items: history.slice(0, limit),
-    next_cursor: page.next_cursor ?? local.next_cursor,
-  };
 }
 
 function pathForTask(tasksRoot: string, taskId: string): string {

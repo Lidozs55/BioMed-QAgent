@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """Biomed DB bridge — JSONL named-operation protocol (migration plan §15).
 
-Phase 5 (P5-10/P5-11) boundary: the only Python the TS product path may call
-is this bridge. It exposes **named operations only** — never arbitrary SQL and
-never business tool modules:
+The only Python the TS product path may call. It exposes **named operations
+only** — never arbitrary SQL and never business tool modules:
 
     cache.*        local dataset cache (search/describe/get/commit/list)
     database.*     user declarative database manifests (list/get/save/patch/
-                   delete/set_enabled)
+                   delete/set_enabled/disabled)
+
+Phase 8: the bridge is fully self-contained under ``database/`` (stdlib-only,
+no ``backend/`` import, no Agent/Skill/FastAPI/Dataset Core). The builtin
+database catalogue moved to TypeScript (``server/src/product/builtin-databases.ts``);
+this process only persists facts (user manifests + enabled state).
 
 Protocol (stdin/stdout JSONL, one object per line):
 
@@ -17,10 +21,6 @@ Protocol (stdin/stdout JSONL, one object per line):
 
 stderr carries human-readable logs only. The process is managed by the TS
 DatabaseClient (server/src/persistence/db-client.ts); it exits cleanly on EOF.
-
-Phase 5 reuses the existing Python stores behind the facade
-(app/tools/cache_store.py, app/databases/store.py — rollback-only modules);
-Phase 8 may move them under database/ without changing the protocol.
 
 Usage:
     python database/bridge.py --cache-dir <dir> --databases-dir <dir>
@@ -38,6 +38,13 @@ import traceback
 from pathlib import Path
 from typing import Any
 
+# Allow running as a script (``python database/bridge.py``) and as a package
+# module (``python -m database.bridge`` / pytest) alike.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from cache_store import CacheStore  # noqa: E402
+from database_store import DatabaseStore  # noqa: E402
+
 PROTOCOL_VERSION = "1"
 
 
@@ -50,15 +57,10 @@ class Bridge:
 
     def __init__(
         self,
-        backend_root: Path,
         cache_dir: Path | None,
         databases_dir: Path | None,
     ) -> None:
-        sys.path.insert(0, str(backend_root))
-        from app.databases.store import DatabaseStore
-        from app.tools.cache_store import init_cache_store
-
-        self._cache = init_cache_store(cache_dir) if cache_dir else init_cache_store()
+        self._cache = CacheStore(cache_dir) if cache_dir else CacheStore()
         self._databases = DatabaseStore(databases_dir or Path("data/databases"))
 
     # ── cache ops ────────────────────────────────────────────────────────────
@@ -76,6 +78,7 @@ class Bridge:
             "source_files": manifest.source_files,
             "extra": manifest.extra,
             "keywords": manifest.keywords or [],
+            "columns": list(manifest.columns or []),
         }
 
     def cache_commit(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -92,6 +95,7 @@ class Bridge:
             source_files=[str(name) for name in args.get("source_files", [])],
             extra=dict(args.get("extra", {})),
             keywords=[str(k) for k in args.get("keywords", [])] or None,
+            columns=[str(c) for c in args["columns"]] if args.get("columns") else None,
         )
         return self._cache_manifest(manifest)
 
@@ -145,7 +149,17 @@ class Bridge:
         }
 
     def database_list(self, args: dict[str, Any]) -> list[dict[str, Any]]:
+        """User-declared databases only.
+
+        Phase 8: builtin database entries are merged by the TS product API
+        from its own catalogue (``server/src/product/builtin-databases.ts``)
+        using the persisted disabled set from ``database.disabled``.
+        """
         return [self._database_entry(entry) for entry in self._databases.list_databases()]
+
+    def database_disabled(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Persisted disabled names (builtin + user) for TS catalogue merging."""
+        return {"disabled": sorted(self._databases.disabled_names)}
 
     def database_get(self, args: dict[str, Any]) -> dict[str, Any] | None:
         entry = self._databases.get_database(str(args["name"]))
@@ -161,13 +175,13 @@ class Bridge:
         """
         disabled = self._databases.disabled_names
         return [
-            manifest.model_dump(mode="json")
+            manifest.to_dict()
             for manifest in self._databases.user_manifests().values()
             if manifest.name not in disabled
         ]
 
     def database_save(self, args: dict[str, Any]) -> dict[str, Any]:
-        from app.databases.declarative import DatabaseValidationError
+        from declarative import DatabaseValidationError
 
         try:
             manifest = self._databases.put_database(dict(args["manifest"]))
@@ -176,7 +190,7 @@ class Bridge:
         return {"ok": True, "data": self._databases.redacted_manifest_dump(manifest)}
 
     def database_patch(self, args: dict[str, Any]) -> dict[str, Any]:
-        from app.databases.declarative import DatabaseValidationError
+        from declarative import DatabaseValidationError
 
         try:
             manifest = self._databases.patch_database(str(args["name"]), dict(args["patch"]))
@@ -217,6 +231,7 @@ class Bridge:
             "cache.describe": self.cache_describe,
             "cache.get": self.cache_get,
             "database.list": self.database_list,
+            "database.disabled": self.database_disabled,
             "database.get": self.database_get,
             "database.tool_manifests": self.database_tool_manifests,
             "database.save": self.database_save,
@@ -302,11 +317,7 @@ def _serve(bridge: Bridge) -> int:
 
 def _self_test() -> int:
     with tempfile.TemporaryDirectory(prefix="biomed-bridge-") as tmp:
-        backend_root = Path(
-            os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "backend")
-        )
         bridge = Bridge(
-            backend_root=backend_root,
             cache_dir=Path(tmp) / "cache",
             databases_dir=Path(tmp) / "databases",
         )
@@ -328,6 +339,7 @@ def _self_test() -> int:
             "created_by_task_id": "self_test",
         })
         assert manifest["ok"] is True and manifest["data"]["row_count"] == 1
+        assert manifest["data"]["column_count"] == 5
         found = bridge.dispatch("cache.search", {"query": "self test", "limit": 5})
         assert found["ok"] is True and found["data"][0]["dataset_id"] == "ds_self_test"
         loaded = bridge.dispatch(
@@ -352,6 +364,10 @@ def _self_test() -> int:
         assert saved["ok"] is True, saved
         listed = bridge.dispatch("database.list", {})
         assert any(e["name"] == "demo" for e in listed["data"])
+        disabled = bridge.dispatch("database.set_enabled", {"name": "demo", "enabled": False})
+        assert disabled["ok"] is True
+        disabled_list = bridge.dispatch("database.disabled", {})
+        assert disabled_list["ok"] is True and "demo" in disabled_list["data"]["disabled"]
         deleted = bridge.dispatch("database.delete", {"name": "demo"})
         assert deleted["ok"] is True
         unknown = bridge.dispatch("sql.exec", {})
@@ -362,10 +378,6 @@ def _self_test() -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Biomed DB bridge (named-op JSONL)")
-    default_backend_root = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "..", "backend"
-    )
-    parser.add_argument("--backend-root", default=default_backend_root)
     parser.add_argument("--cache-dir", default=None)
     parser.add_argument("--databases-dir", default=None)
     parser.add_argument("--self-test", action="store_true")
@@ -373,7 +385,6 @@ def main() -> int:
     if args.self_test:
         return _self_test()
     bridge = Bridge(
-        backend_root=Path(args.backend_root),
         cache_dir=Path(args.cache_dir) if args.cache_dir else None,
         databases_dir=Path(args.databases_dir) if args.databases_dir else None,
     )

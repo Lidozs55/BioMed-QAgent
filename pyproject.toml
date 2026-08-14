@@ -1,0 +1,40 @@
+[project]
+name = "biomed-database"
+version = "1.0.0"
+description = "BioMed-QAgent database persistence bridge (JSONL named-op IPC; stdlib-only)."
+requires-python = ">=3.12"
+# Phase 8: the Python surface is the database persistence bridge only. No
+# FastAPI / uvicorn / openai-agents / playwright / scientific stack — the
+# bridge is implemented on the Python standard library.
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+# The ``database`` package is installed into the dev environment so
+# ``uv run python database/bridge.py`` and ``uv run pytest database/tests``
+# both resolve ``database.*`` imports.
+packages = ["database"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.8.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["database/tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["database"]
+
+[tool.ruff.lint]
+# Same rule families as the retired backend gates (E/F/W/I/UP/B/SIM).
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+"database/tests/**/*.py" = ["E501"]

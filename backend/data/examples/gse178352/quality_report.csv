@@ -1,7 +1,0 @@
-﻿check_id,scope,check_name,status,checked_count,failed_count,details
-foreign_keys,main_data,foreign key closure,passed,48,0,
-sample_foreign_keys,sample_metadata,sample dataset and source closure,passed,12,0,
-source_asset_integrity,source_assets,"source asset file, checksum, and successful attempt",passed,1,0,
-field_descriptions,main_data,every field is described,passed,22,0,[]
-source_value_lineage,main_data,sampled values match source locator,passed,48,0,"{""total_rows"": 48, ""sampled"": 48, ""skipped_metadata_rows"": 0}"
-warnings_metrics_consistency,warnings,warnings.csv count matches processing_log warnings count,passed,24,0,

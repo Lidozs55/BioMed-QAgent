@@ -28,18 +28,12 @@ async function temporaryDirectory(prefix: string): Promise<string> {
 async function startApi(
   root: string,
   database: ProductDatabaseClient,
-  profile?: {
-    appHost: "ts";
-    agentRuntime: "pi";
-    datasetCore: "python" | "ts";
-  },
 ) {
   const api = await createProductApi({
     tasksRoot: path.join(root, "output", "tasks"),
     cacheDir: path.join(root, "cache"),
     settingsDir: path.join(root, "settings"),
     database,
-    profile,
   });
   const server = createServer((request, response) => {
     if (!api.handle(request, response)) response.writeHead(404).end("Not Found");
@@ -53,16 +47,19 @@ async function startApi(
 
 class FakeDatabase implements ProductDatabaseClient {
   readonly calls: Array<{ op: string; args: Record<string, unknown> }> = [];
+  // Phase 8: the bridge persists user-declared databases only; builtin
+  // entries are merged by the product API from the TS catalogue.
   entries = [{
-    id: "pubmed", name: "pubmed", category: "discovery",
-    description: "PubMed", origin: "builtin", version: "1.0.0",
-    pipeline_supported: false, capability: "literature", available: true,
+    id: "demo", name: "demo", category: "discovery",
+    description: "Demo user DB", origin: "package", version: "1.0.0",
+    pipeline_supported: false, capability: "research_only", available: true,
     enabled: true, declarative_manifest: null,
   }];
 
   async call<T>(op: string, args: Record<string, unknown>): Promise<T> {
     this.calls.push({ op, args });
     if (op === "database.list") return this.entries as T;
+    if (op === "database.disabled") return { disabled: [] } as T;
     if (op === "database.get") {
       return (this.entries.find((entry) => entry.name === args.name) ?? null) as T;
     }
@@ -83,10 +80,15 @@ describe("Phase 7 product API", () => {
       status: "ok", app_host: "ts", agent_runtime: "pi", dataset_core: "ts",
     });
     expect(await (await fetch(`${base}/databases`)).json()).toEqual({
-      databases: database.entries,
+      // Phase 8: TS builtin catalogue (9 entries) merged with user manifests.
+      databases: expect.arrayContaining([
+        expect.objectContaining({ id: "pubmed", origin: "builtin", enabled: true }),
+        expect.objectContaining({ id: "demo", origin: "package" }),
+      ]),
     });
-    const databaseDetail = await (await fetch(`${base}/databases/pubmed`)).json() as { id: string };
+    const databaseDetail = await (await fetch(`${base}/databases/pubmed`)).json() as { id: string; origin: string };
     expect(databaseDetail.id).toBe("pubmed");
+    expect(databaseDetail.origin).toBe("builtin");
     const toggled = await fetch(`${base}/databases/pubmed/disable`, { method: "POST" });
     expect(toggled.status).toBe(200);
     expect(database.calls.at(-1)).toEqual({
@@ -107,19 +109,15 @@ describe("Phase 7 product API", () => {
       .toMatchObject({ personality: "rigorous" });
   });
 
-  test("reports the active core profile and rejects unsupported methods", async () => {
+  test("reports the fixed TS/Pi/TS architecture and rejects unsupported methods", async () => {
     const root = await temporaryDirectory("phase7-health-");
-    const { base } = await startApi(root, new FakeDatabase(), {
-      appHost: "ts",
-      agentRuntime: "pi",
-      datasetCore: "python",
-    });
+    const { base } = await startApi(root, new FakeDatabase());
 
-    expect(await (await fetch(`${base}/health`)).json()).toMatchObject({
+    expect(await (await fetch(`${base}/health`)).json()).toEqual({
       status: "ok",
       app_host: "ts",
       agent_runtime: "pi",
-      dataset_core: "python",
+      dataset_core: "ts",
     });
     const unsupported = await fetch(`${base}/health`, { method: "PUT" });
     expect(unsupported.status).toBe(405);

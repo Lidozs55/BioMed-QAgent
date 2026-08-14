@@ -10,12 +10,11 @@ import path from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { DatabaseClient, DatabaseBridgeError, probePythonBin, defaultBridgePaths } from "../../src/persistence/db-client.js";
-import { createLocalCacheTools, CACHE_MAIN_DATA_COLUMNS } from "../../src/agent/tools/local-cache.js";
+import { DatabaseClient, DatabaseBridgeError, probePythonBin } from "../../src/persistence/db-client.js";
+import { createLocalCacheTools } from "../../src/agent/tools/local-cache.js";
 import { SKILL_TOOL_NAMES, toolOwner } from "../../src/agent/skills/skill-tool-map.js";
 
-const backendRoot = defaultBridgePaths().backendRoot;
-const pythonBin = probePythonBin(backendRoot);
+const pythonBin = probePythonBin();
 const bridgeAvailable = ((): boolean => {
   try {
     const result = spawnSync(pythonBin, ["--version"], { stdio: "ignore", timeout: 10_000 });
@@ -59,7 +58,7 @@ describeIf("database bridge + local cache tools", () => {
     await expect(client.call("db.raw_query", {})).rejects.toThrow(/unknown operation/);
   });
 
-  it("commit → search → describe → get round-trip with 22-column rows", async () => {
+  it("commit → search → describe → get round-trip with record-owned schema", async () => {
     const commit = await client.call<Record<string, unknown>>("cache.commit", {
       dataset_id: "ds_tp53",
       source_namespace: "user_import",
@@ -74,7 +73,12 @@ describeIf("database bridge + local cache tools", () => {
       keywords: ["TP53", "expression"],
     });
     expect(commit.row_count).toBe(2);
-    expect(commit.column_count).toBe(CACHE_MAIN_DATA_COLUMNS.length);
+    // Phase 8 schema-neutral cache: the record owns its column schema (no
+    // global 22-column constant anymore).
+    expect(commit.column_count).toBe(7);
+    expect(commit.columns).toEqual([
+      "record_id", "dataset_id", "source_id", "asset_id", "gene_id", "sample_id", "expression_value",
+    ]);
 
     const search = await client.call<Array<Record<string, unknown>>>("cache.search", { query: "TP53", limit: 10 });
     expect(search).toHaveLength(1);
@@ -147,7 +151,7 @@ describeIf("database bridge + local cache tools", () => {
       const [, describe] = createLocalCacheTools({ db: client });
       const result = await describe.execute({ source_namespace: "user_import", dataset_id: "ds_tp53" });
       const parsed = JSON.parse(result.content) as Record<string, unknown>;
-      expect(parsed.column_count).toBe(22);
+      expect(parsed.column_count).toBe(7);
       expect(parsed.row_count).toBe(2);
       expect(parsed.extra).toBeDefined();
     });
@@ -170,7 +174,9 @@ describeIf("database bridge + local cache tools", () => {
       expect(parsed.truncated).toBe(true);
       expect(parsed.returned_rows).toBe(1);
       expect(parsed.rows).toHaveLength(1);
-      expect(parsed.columns).toEqual([...CACHE_MAIN_DATA_COLUMNS]);
+      expect(parsed.columns).toEqual([
+        "record_id", "dataset_id", "source_id", "asset_id", "gene_id", "sample_id", "expression_value",
+      ]);
       expect(hooks).toEqual([["acquisition", "cache_dataset_loaded", expect.objectContaining({ truncated: true, current: 1, total: 2 })]]);
     });
   });

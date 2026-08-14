@@ -2,10 +2,10 @@
  * Application-facing Dataset Core service interface (M2, I-02/I-06).
  *
  * Agent tools depend on this interface only — never on which implementation
- * backs it (PythonDatasetCoreAdapter = legacy rollback bridge,
- * TsDatasetCoreAdapter = default DATASET_CORE=ts; Python adapter = rollback). The wire shape is the
- * frozen DatasetBridgeResponse so the tool layer and event projection do not
- * change when the implementation switches.
+ * backs it. Phase 8: the legacy Python rollback bridge is deleted; the TS
+ * core (``TsDatasetCoreAdapter``) is the only implementation. The wire shape
+ * is the frozen DatasetBridgeResponse so the tool layer and event projection
+ * stay stable.
  */
 
 import { createHash, randomUUID } from "node:crypto";
@@ -21,12 +21,26 @@ import {
 
 import type { SourceAsset } from "../contracts/index.js";
 import type { SpecValidationResult } from "../validation/index.js";
-import type {
-  DatasetCoreClient,
-  ExecuteDatasetBuildInput,
-  ValidateDatasetBuildInput,
-} from "../../legacy/dataset-core-client.js";
 import type { BuildRecord, TypeScriptDatasetCore } from "./ts-core.js";
+
+export interface DatasetCoreIdentity {
+  taskId: string;
+  runId: string;
+  piSessionId: string;
+  toolCallId: string;
+  signal?: AbortSignal;
+}
+
+export interface ValidateDatasetBuildInput extends DatasetCoreIdentity {
+  spec: DatasetBuildSpec;
+}
+
+export interface ExecuteDatasetBuildInput extends DatasetCoreIdentity {
+  spec: DatasetBuildSpec;
+  sourceFiles: Record<string, string>;
+  mappingFiles: Record<string, string>;
+  metadataFiles?: Record<string, string>;
+}
 
 export interface DatasetCoreCancelInput {
   taskId: string;
@@ -43,24 +57,6 @@ export interface DatasetCoreService {
 }
 
 export type { BuildRecord };
-
-/** Legacy rollback path: the Python V2 core over the private loopback bridge. */
-export class PythonDatasetCoreAdapter implements DatasetCoreService {
-  constructor(private readonly client: DatasetCoreClient) {}
-
-  validate(input: ValidateDatasetBuildInput): Promise<DatasetBridgeResponse> {
-    return this.client.validate(input);
-  }
-
-  execute(input: ExecuteDatasetBuildInput): Promise<DatasetBridgeResponse> {
-    return this.client.execute(input);
-  }
-
-  async cancel(): Promise<void> {
-    // The legacy client cancels its in-flight request when the tool's
-    // AbortSignal fires (session cancel path) — nothing else to do here.
-  }
-}
 
 function mediaTypeFor(filename: string): string {
   const ext = path.extname(filename).toLowerCase();
@@ -259,22 +255,11 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
   }
 }
 
-/** Factory honouring the DATASET_CORE architecture flag (I-06). */
+/** Phase 8: the TS Dataset Core is the only implementation. */
 export function createDatasetCoreService(options: {
-  datasetCore: "python" | "ts";
-  tsCore?: TypeScriptDatasetCore | null;
-  pythonClient?: DatasetCoreClient | null;
+  tsCore: TypeScriptDatasetCore;
 }): DatasetCoreService {
-  if (options.datasetCore === "ts") {
-    if (options.tsCore === undefined || options.tsCore === null) {
-      throw new TypeError("DATASET_CORE=ts requires a TypeScriptDatasetCore");
-    }
-    return new TsDatasetCoreAdapter(options.tsCore);
-  }
-  if (options.pythonClient === undefined || options.pythonClient === null) {
-    throw new TypeError("DATASET_CORE=python requires a legacy DatasetCoreClient");
-  }
-  return new PythonDatasetCoreAdapter(options.pythonClient);
+  return new TsDatasetCoreAdapter(options.tsCore);
 }
 
 export type { DatasetBuildSpec };

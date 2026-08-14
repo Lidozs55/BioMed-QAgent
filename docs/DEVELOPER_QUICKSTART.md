@@ -30,12 +30,11 @@ BioMed-QAgent 是一个**生物医学数据智能检索与整合系统**。你�
 5. 输出一份整理好的 CSV，附带数据来源和处理记录
 
 技术上是 **TypeScript 单端口 Host + Pi durable runtime + TS Dataset Core + React 前端**。
-Phase 7 后 formal Agent、Task/Run/Event、产品 API 与 Dataset Core 均由 TypeScript
-权威实现。默认 profile 是
-`APP_HOST=ts / AGENT_RUNTIME=pi / DATASET_CORE=ts / PI_EXPERIMENTAL=0`。
+Phase 0–8 迁移完成后（2026-08-14），formal Agent、Task/Run/Event、产品 API 与
+Dataset Core 全部由 TypeScript 权威实现，不再有 legacy FastAPI / rollback profile。
 
-Python 默认只承担 DB bridge（`database/bridge.py`）；legacy Agent、Python Core 与
-FastAPI Web Server 保留至 Phase 8，但只由显式回滚/诊断 profile 启动。
+Python 只承担 DB bridge（`database/bridge.py`，JSONL named-op 持久化），由 TS Host
+按需管理。
 
 > 这是"中国高校计算机大赛 — AI Scientist 赛道"的参赛作品（赛题 XH-202619）。
 
@@ -153,76 +152,29 @@ copy .env.example .env
 DASHSCOPE_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-正常 `pnpm dev` 会读取根 `.env`。显式 FastAPI 回滚 profile 同时继承这些变量；
-只有运行 standalone legacy diagnostic 时才需要另行准备 `backend/.env`。
+正常 `pnpm dev` 会读取根 `.env`。
 
 ---
 
 ## 4. 第三步：安装依赖
 
 ```powershell
-# 安装 Python 依赖
-cd backend
+# 安装 Python database bridge 项目依赖（根 pyproject.toml）
 uv sync
-cd ..
 
 # 从唯一 pnpm Workspace 根安装 Node 依赖
 pnpm install --frozen-lockfile
 ```
 
-仓库根持有唯一 `pnpm-lock.yaml`。不要在 `frontend/` 或 `server/` 创建独立
-lockfile，也不要使用 npm。
+仓库根持有唯一 `pnpm-lock.yaml` 与 `uv.lock`。不要在 `frontend/` 或 `server/`
+创建独立 lockfile，也不要使用 npm。
 
-### 4.1 Windows private FastAPI 回滚 smoke test
+### 4.1 应用 smoke test（Windows）
 
-自动化脚本需要启动后端、请求 health endpoint，并在结束时可靠关闭进程。请在
-`backend/` 目录使用项目虚拟环境的 Python 直接启动 Uvicorn：
-
-```powershell
-$process = Start-Process `
-  -FilePath ".\.venv\Scripts\python.exe" `
-  -ArgumentList @("-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8017") `
-  -PassThru
-
-try {
-  $deadline = (Get-Date).AddSeconds(30)
-  $response = $null
-
-  do {
-    Start-Sleep -Milliseconds 500
-    try {
-      $response = Invoke-RestMethod `
-        -Uri "http://127.0.0.1:8017/api/v1/health" `
-        -TimeoutSec 2
-    } catch {
-      if ($process.HasExited) {
-        throw "Uvicorn exited early with code $($process.ExitCode)"
-      }
-    }
-  } while (($null -eq $response) -and ((Get-Date) -lt $deadline))
-
-  if ($null -eq $response) {
-    throw "Health check timed out"
-  }
-
-  $response | ConvertTo-Json -Compress
-} finally {
-  if (-not $process.HasExited) {
-    Stop-Process -Id $process.Id -Force
-    $process.WaitForExit()
-  }
-}
-```
-
-不要在 Windows 自动 smoke test 中使用
-`Start-Process uv -ArgumentList "run", "uvicorn", ...`。`uv run` 是包装进程，
-Uvicorn 子进程可能在 health 请求成功后继续存活，使脚本卡住并需要手动关闭。
-该模板只验证 private legacy backend。正常应用 smoke 应直接启动 root `pnpm dev`，
-记录其直接子 PID，并在 `finally` 中终止；默认 Host 不启动 FastAPI，并会回收
-Pi session、DB bridge、browser pool 与 Workspace command。不要用
-`Start-Process uv run ...` 包装 Uvicorn。
-
----
+自动化 smoke 应直接启动 root `pnpm dev`，等待 health endpoint 就绪，并在
+`finally` 中终止 Host 进程（记录其直接子 PID）。Host 会统一回收 Pi session、
+DB bridge、browser pool 与 Workspace command；不启动任何 Python Web Server，
+不需要 Uvicorn 模板。
 
 ## 5. 第四步：启动单端口应用
 
@@ -232,45 +184,29 @@ Pi session、DB bridge、browser pool 与 Workspace command。不要用
 pnpm dev
 ```
 
-TypeScript Host 会校验 flags，初始化共享 DB/browser 资源、Pi durable runtime 与
-TS Dataset Core，挂载 Vite middleware，最后才监听公开端口。只有 legacy Agent、
-Python Core 或 experimental Pi profile 会先启动/附加 private FastAPI。看到 Host
-监听 `127.0.0.1:5173` 后，浏览器访问 http://127.0.0.1:5173；健康检查也走同一端口：
+TypeScript Host 会初始化共享 DB/browser 资源、Pi durable runtime 与 TS Dataset
+Core，挂载 Vite middleware，最后才监听公开端口。看到 Host 监听 `127.0.0.1:5173`
+后，浏览器访问 http://127.0.0.1:5173；健康检查也走同一端口：
 
 ```text
 http://127.0.0.1:5173/api/v1/health
 ```
 
-正式 `/api/v1/*` 与 `/api/v1/ws` 默认由 TS Host 权威实现；
-`/experimental/pi/*` 仅在 `PI_EXPERIMENTAL=1` 时提供 live-only 验证面。内部
-`/internal/migration/*` 永不向浏览器代理。按 `Ctrl+C` 由 Host 统一关闭资源。
+正式 `/api/v1/*` 与 `/api/v1/ws` 由 TS Host 权威实现。按 `Ctrl+C` 由 Host 统一
+关闭资源。
 
-以下命令仅用于迁移/诊断，不写入正常启动流程：
+生产模式（构建后静态托管）：
 
-| 根命令 | 拓扑 / 必要条件 |
-| --- | --- |
-| `pnpm dev:frontend-standalone` | 只启 Vite；需要另有可用 API，双端口 |
-| `pnpm dev:legacy-backend` | 只启 FastAPI；从根调用 uv，浏览器入口不完整 |
-| `pnpm dev:host-proxy-only` | TS Host + Vite + legacy proxy，显式关闭 Pi surface |
-| `pnpm dev:legacy-rollback` | standalone Vite + FastAPI 的完整旧双端口回滚 |
+```powershell
+pnpm build
+pnpm start
+```
 
-附加外部 backend 时设置 `LEGACY_BACKEND_URL`，并在 Host/后端两侧使用同一
-`PI_DATASET_BRIDGE_SECRET`；managed backend 默认由 Host 生成每进程 secret，并在
-受保护的 internal bridge 上验证本次启动身份。`LEGACY_BACKEND_PORT=0` 是正常默认值，
-由 Host 分配空闲 loopback 端口；attach/debug 模式必须显式配置非空 secret。
+`pnpm dev:frontend-standalone` 仍可用于 Vite 独立诊断（代理到 TS Host）。
 
 ---
 
 ## 6. 第五步：跑起来看看
-
-### 6.1 跑个 demo 脚本（纯后端）
-
-```powershell
-cd backend
-uv run python scripts/demo_workflow.py
-```
-
-这个脚本会走一遍完整的 Agent 工作流，生成的数据在 `backend/data/output/` 下。
 
 ### 6.2 跑测试
 
@@ -334,19 +270,15 @@ pnpm shadcn add card       # 卡片
 
 ```
 .pi/skills/<name>/SKILL.md          # SOP 知识（Pi 按任务加载）
-backend/app/skills/builtin/         # Python 直接工具模块（legacy Agent 用）
-|   ├── discovery/    # 文献检索（PubMed 等）
-|   ├── acquisition/  # 数据下载（GEO、GDC、PDB 等）
-|   ├── processing/   # 数据处理（表格提取、图表识别等）
-|   └── analysis/     # 数据分析（统计、可视化）
+server/src/agent/tools/             # TS 业务工具实现（Phase 5 起）
 server/src/agent/skills/skill-tool-map.ts   # Skill ↔ Tool 稳定名称映射
+server/src/product/builtin-databases.ts     # 内置数据库目录（Phase 8 起）
 ```
 
 **如果你想加一个新的数据库来源**：
 1. 在 `.pi/skills/<name>/SKILL.md` 写 SOP 知识；
-2. 在 `backend/app/skills/builtin/` 加直接工具模块（模块级 `SKILL_*` 常量）；
-3. 在 `skill-tool-map.ts` 登记映射，并补 `tests/test_builtin_tools.py` 与
-   `server/tests/skill-tool-map.test.ts` 的断言（两侧钉住，禁止漂移）。
+2. 在 `server/src/agent/tools/` 实现 TS 工具并登记到 skill-tool-map.ts；
+3. 补 `server/tests/skill-tool-map.test.ts` 等断言钉住映射。
 
 ### 7.4 Agent + Pipeline 双层架构
 
@@ -376,13 +308,12 @@ Pipeline Runner（确定性代码）
 
 ### 7.5 用 Playwright 做网页截图（视觉数据提取）
 
-项目中有一个高级功能：用 Playwright 控制无头浏览器对论文页面截图，然后送给 Qwen-VL 视觉模型提取图表数据。代码在 `backend/app/skills/builtin/acquisition/web_visual_capture.py`。
+项目中有一个高级功能：用 Playwright 控制无头浏览器对论文页面截图，然后送给 Qwen-VL 视觉模型提取图表数据。代码在 `server/src/external/` 与 `server/src/processing/`。
 
 如果你要调试这个功能，需要安装 Playwright 浏览器：
 
 ```powershell
-cd backend
-uv run playwright install chromium
+pnpm --filter @biomed/server exec playwright install chromium
 ```
 
 ### 7.6 推荐的 AI 开发工作流
@@ -411,16 +342,14 @@ uv run playwright install chromium
 | `pnpm typecheck` | Workspace TypeScript 检查 |
 | `pnpm build` | Workspace 构建 |
 
-### 后端（在 `backend/` 目录下执行，仅检查/诊断）
+### Python database bridge（在仓库根执行）
 
 | 命令 | 作用 |
 |------|------|
-| `uv sync` | 安装/同步 Python 依赖 |
-| `uv run uvicorn app.main:app --reload` | standalone legacy diagnostic |
-| `uv run pytest` | 跑测试（跳过联网） |
-| `uv run pytest -m live` | 跑联网测试 |
-| `uv run pytest -k "关键词"` | 按名称过滤测试 |
-| `uv run ruff check app/ tests/` | 代码检查（lint） |
+| `uv sync` | 安装/同步 database 项目依赖 |
+| `uv run python database/bridge.py --self-test` | bridge 自检 |
+| `uv run pytest database/tests` | bridge 协议/持久化测试 |
+| `uv run ruff check database` | 代码检查（lint） |
 
 ### 前端（在 `frontend/` 目录下执行，仅定向检查/诊断）
 
@@ -449,20 +378,12 @@ BioMed-QAgent/
 ├── pnpm-lock.yaml         # 唯一 Node lockfile
 ├── skills-lock.json       # Skill 版本锁定
 │
-├── backend/               # Python 后端
-│   ├── pyproject.toml     # 项目配置 + 依赖
-│   ├── uv.lock            # 依赖锁文件
-│   └── app/
-│       ├── main.py        # FastAPI 入口
-│       ├── config.py      # 配置（从 .env 读取）
-│       ├── agent_loop/    # Agent 循环（创建、运行、模型适配）
-│       ├── api/           # HTTP 路由 + WebSocket
-│       ├── core/          # 核心工具
-│       ├── domain/        # 数据模型（事件、契约等）
-│       ├── pipeline/      # 确定性 Pipeline（5 阶段）
-│       ├── skills/        # Skill 仓库
-│       │   ├── builtin/   #   内置 Skill
-│       │   └── learned/   #   自进化 Skill
+├── database/              # Python persistence bridge（stdlib，named-op JSONL）
+│   ├── bridge.py          # JSONL stdin/stdout 命名操作入口
+│   ├── cache_store.py     # 逻辑缓存（schema-neutral，SQLite index + CSV）
+│   ├── database_store.py  # 用户 declarative database 持久化
+│   ├── declarative.py     # manifest 校验模型（stdlib 重写）
+│   └── tests/             # bridge 协议/持久化测试
 │       ├── tools/         # Function Tools
 │       └── integrations/  # 外部服务集成（NCBI 等）
 │

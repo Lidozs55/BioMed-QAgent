@@ -5,11 +5,12 @@ BioMed-QAgent 是一个面向生物医学研究数据的 **Agent + 确定性 Pip
 项目的目标是让数据处理过程**可追溯、可验证、可恢复**，而不是让大语言模型直接“猜”出一个 CSV。系统可以展示统计结果和可视化数据，但不会在缺少数据证据时生成科研或临床结论。
 
 > 项目正依据 [Pi 迁移方案](docs/BioMed-QAgent_Pi_Migration_Plan.md) 执行迁移：
-> Phase 0–7 已完成（2026-08-14）。默认 profile 是
-> `APP_HOST=ts / AGENT_RUNTIME=pi / DATASET_CORE=ts / PI_EXPERIMENTAL=0`：
-> 正式 `/api/v1`、durable runtime 与 Dataset Core 均由 TypeScript 权威实现，
-> FastAPI 只在显式回滚/诊断 profile 中启动。进度跟踪见 [docs/TODO.md](docs/TODO.md)，
-> 实际边界以代码及 [架构文档](docs/ARCHITECTURE.md) 为准。
+> **Phase 0–8 全部完成（2026-08-14）**。唯一正式拓扑为
+> `TS Host + Pi Agent + TS Dataset Core`：正式 `/api/v1`、durable runtime、
+> Dataset Core 均由 TypeScript 权威实现；Python 仅剩 `database/` persistence
+> bridge（JSONL named-op）。legacy FastAPI / rollback profile / feature flags
+> 已全部退役。进度跟踪见 [docs/TODO.md](docs/TODO.md)，实际边界以代码及
+> [架构文档](docs/ARCHITECTURE.md) 为准。
 
 ## 核心能力
 
@@ -42,17 +43,16 @@ BioMed-QAgent 是一个面向生物医学研究数据的 **Agent + 确定性 Pip
                     data/output/tasks/<task_id>/artifacts/
 ```
 
-legacy Agent、Python Core 或 experimental Pi 的显式 profile 会额外启动 private
-loopback FastAPI；默认产品路径不启动 Python Web Server。
+legacy Agent、Python Core 或 experimental Pi 均已退役：不再有 private
+loopback FastAPI，产品路径不启动任何 Python Web Server。
 
 职责边界如下：
 
-- **formal Agent** 默认由 Pi + TS durable runtime 持有（`task_ts_*` Task/Run/Event）；
-  legacy OpenAI Agents SDK runtime 仅作回滚。
-- **experimental Pi Agent** 仅在 `PI_EXPERIMENTAL=1` 时暴露 live-only surface，默认关闭。
-- **Dataset Core** 负责按照契约执行处理、记录审计信息、检查完整性，并拒绝未经验证的产物；两类 Agent 都不能直接制造 publication。
+- **formal Agent** 由 Pi + TS durable runtime 持有（`task_ts_*` Task/Run/Event）。
+- **Dataset Core** 负责按照契约执行处理、记录审计信息、检查完整性，并拒绝未经验证的产物；Agent 不能直接制造 publication。
 - **Skill** 是 instructions 与 Function Tools 的能力包，按 `discovery/`、`acquisition/`、`processing/`、`analysis/` 分类。
 - **Runtime** 负责任务生命周期和事件持久化；前端状态是后端事件的投影，不是事实来源。
+- **Python** 仅 `database/bridge.py`：SQLite/文件持久化 named-op，由 TS DatabaseClient 按需管理。
 
 完整设计、状态模型和安全边界见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
@@ -71,7 +71,7 @@ loopback FastAPI；默认产品路径不启动 Python Web Server。
 | 5 | 外部能力与 Python 数据处理依赖迁移 | ✅ 完成（2026-08-14；Python 仅回滚 + DB bridge） |
 | 6 | 模型设置与 Settings API | ✅ 完成 |
 | 7 | 前端正式切换与 FastAPI 默认关闭 | ✅ 完成（2026-08-14） |
-| 8 | 删除 legacy Python Runtime | ⬜ 待开始 |
+| 8 | 删除 legacy Python Runtime（物理退役） | ✅ 完成（2026-08-14） |
 
 Phase 0/1 执行细节见
 [docs/BioMed-QAgent_Pi_Migration_Phase0_1_Detailed.md](docs/BioMed-QAgent_Pi_Migration_Phase0_1_Detailed.md)
@@ -86,9 +86,9 @@ Phase 4 TS 代码在 `server/src/dataset/`，证据见 `.superpowers/phase4/T1-T
 
 | 组件            | 要求                                          |
 | --------------- | --------------------------------------------- |
-| Python          | 3.12+                                         |
+| Python          | 3.12+（仅 `database/` persistence bridge 需要） |
 | Node.js         | 22.19+                                        |
-| Python 包管理器 | [uv](https://docs.astral.sh/uv/)               |
+| Python 包管理器 | [uv](https://docs.astral.sh/uv/)（`uv sync` 安装 database 项目） |
 | Node 包管理器   | [pnpm](https://pnpm.io/)（不要使用 npm）       |
 | LLM             | DashScope API Key，或其他 OpenAI 兼容模型配置 |
 | 可选            | Playwright Chromium，用于网页视觉证据采集     |
@@ -96,7 +96,7 @@ Phase 4 TS 代码在 `server/src/dataset/`，证据见 `.superpowers/phase4/T1-T
 ### 1. 配置应用
 
 在项目根目录复制环境变量模板，然后编辑根 `.env`；正常 `pnpm dev` 会读取它，
-默认由 TS Host 与 Pi 读取；显式 FastAPI 回滚 profile 会继承同一环境：
+由 TS Host 与 Pi 消费：
 
 **Windows PowerShell**：
 
@@ -122,12 +122,10 @@ MODEL_NAME=qwen-plus
 
 若使用 NCBI E-utilities，建议同时填写真实的 `NCBI_EMAIL` 和 `NCBI_USER_AGENT`。完整变量说明见 [.env.example](.env.example)。
 
-安装 Python 与根 pnpm Workspace 依赖：
+安装 Python（database bridge 项目）与根 pnpm Workspace 依赖：
 
 ```bash
-cd backend
 uv sync
-cd ..
 pnpm install --frozen-lockfile
 ```
 
@@ -138,23 +136,23 @@ pnpm dev
 ```
 
 浏览器只访问 TypeScript Host 的 `http://127.0.0.1:5173`。Host 内嵌 Vite 并原生
-处理正式 HTTP/WS；默认不启动 FastAPI，`/internal/migration/*` 不会公开。
-Swagger/ReDoc 在正常拓扑中不作为公开入口，需要时使用 legacy diagnostic script。
+处理正式 HTTP/WS，不启动任何 Python Web Server。
 启动后可访问：
 
 - Web 界面：[http://127.0.0.1:5173](http://127.0.0.1:5173)
 - 健康检查：[http://127.0.0.1:5173/api/v1/health](http://127.0.0.1:5173/api/v1/health)
 
-### 3. 运行后端演示
+### 3. 生产启动（可选）
 
-演示脚本位于 `backend/scripts/demo_workflow.py`：
+构建产物并静态托管：
 
 ```bash
-cd backend
-uv run python scripts/demo_workflow.py
+pnpm build
+pnpm start
 ```
 
-脚本会把结果写入 `backend/data/demo_output/`。配置了 `DASHSCOPE_API_KEY` 时可执行真实 Agent / NCBI 流程；未配置时会使用开发用 mock 数据。mock 演示用于烟雾测试，不代表真实数据流程已经成功，也不替代正式验收。
+`pnpm start` 由 TS Host 直接服务 `frontend/dist`（SPA fallback）与正式 API/WS，
+不需要 uvicorn 或第二个应用服务器。
 
 ## 任务与数据产物
 
@@ -209,12 +207,12 @@ API 只公开通过 manifest 注册并通过验证的 `artifacts/` 文件。任�
 | `GET`            | `/api/v1/models/{model_id}`                       | 获取单个模型详情                          |
 | `GET`            | `/api/v1/skills`                                  | 列出内置和用户 Skill                      |
 
-Skill 管理 API 还提供启用、禁用、回滚、上传、校验和删除操作，详见 FastAPI 文档和 [backend/README.md](backend/README.md)。
+Skill 管理 API 还提供启用、禁用、上传、校验和删除操作，详见
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 与代码。
 
 ### Durable WebSocket
 
-正常拓扑中前端连接 `ws://127.0.0.1:5173/api/v1/ws`，由 Host 转发到 private
-FastAPI durable WebSocket。端口 8000 只用于 standalone legacy diagnostic。
+前端连接 `ws://127.0.0.1:5173/api/v1/ws`，由 TS Host 原生服务。
 
 客户端只发送以下命令：
 
@@ -234,22 +232,9 @@ WebSocket 不负责创建 Run，也不提供 SSE；创建任务和提交新一�
 BioMed-QAgent/
 ├── server/                 # TS Host、Pi adapter、Workspace、durable Phase 3 runtime、legacy proxy
 ├── packages/contracts/     # 前端/Host 共享 wire DTO
-├── .pi/skills/             # Phase 1 最小实验 Skills
-├── backend/
-│   ├── app/
-│   │   ├── agent_loop/       # Agent 创建、运行、上下文和模型适配
-│   │   ├── api/              # REST、WebSocket、设置和 Skill 管理路由
-│   │   ├── domain/            # Task、Run、Event、Artifact 等领域契约
-│   │   ├── integrations/      # NCBI 等外部服务集成
-│   │   ├── pipeline/          # 确定性 Pipeline Runner 和各阶段
-│   │   ├── runtime/           # TaskManager、Repository、EventHub、Index
-│   │   ├── skills/            # builtin / learned Skill 仓库与 Catalog
-│   │   └── tools/             # I/O、解析、清洗、对齐和导出工具
-│   ├── tests/                 # pytest 测试
-│   ├── scripts/               # demo 和维护脚本
-│   ├── launcher.py            # 桌面打包入口
-│   ├── pyproject.toml         # Python 项目配置
-│   └── uv.lock                # Python 依赖锁文件
+├── .pi/skills/             # curated Skills（SKILL.md）
+├── database/               # Python persistence bridge（stdlib，named-op JSONL）
+├── tests/                  # 共享 golden fixtures（fixtures/、migration/）
 ├── frontend/
 │   ├── src/
 │   │   ├── components/       # 业务组件与 shadcn/ui 组件
@@ -298,35 +283,28 @@ BioMed-QAgent/
 | `NCBI_TOOL`          | `BioMedQAgent`              | NCBI E-utilities tool 名称                      |
 | `NCBI_API_KEY`       | 空                            | 可选的 NCBI API Key                             |
 | `HOST` / `PORT`      | `127.0.0.1` / `5173`        | TS Host 唯一公开监听地址                        |
-| `LEGACY_BACKEND_PORT` | `0`                        | Host 动态分配的 private loopback FastAPI 端口；调试时可固定 |
-| `APP_HOST` / `AGENT_RUNTIME` / `DATASET_CORE` | `ts` / `pi` / `ts` | Phase 7 默认组合；legacy/python 为显式回滚 |
-| `PI_EXPERIMENTAL`    | `0`                         | 设为 1 才暴露非 durable `/experimental/pi/*`    |
+| `BIOMED_PYTHON_BIN`  | 自动探测                     | database bridge 解释器（默认 repo/.venv 或 PATH）|
 | `PI_PROVIDER` / `PI_MODEL` | `dashscope` / `MODEL_NAME` | Pi provider 与模型选择                    |
 | `PI_API_KEY` / `PI_BASE_URL` | 回退 DashScope 配置    | Pi credentials；不要提交真实密钥                |
 | `WORKSPACE_DEV_EXEC` | `0`                         | 受控开发命令 gate                               |
-| `LEGACY_READINESS_TIMEOUT_MS` / `SHUTDOWN_TIMEOUT_MS` | `30000` / `10000` | 子进程就绪与回收超时 |
-| `OUTPUT_DIR`         | `backend/data/output`       | 覆盖时必须使用绝对路径                          |
+| `SHUTDOWN_TIMEOUT_MS` | `10000`                     | 回收超时                                        |
+| `OUTPUT_DIR`         | `data/output`               | 覆盖时必须使用绝对路径                          |
 | `LOG_LEVEL`          | `INFO`                      | 日志级别                                        |
 
 模型设置也可以通过 `/api/v1/settings` 持久化到 `data/user_settings.json`。保存的用户设置会在 Run 创建时形成不可变快照，避免并发运行中的配置变更影响已开始的任务。
 
 ## 开发与质量检查
 
-### 后端
+### Python database bridge
 
-所有后端命令从 `backend/` 目录执行：
+Python 面只剩 `database/`（bridge 持久化），从仓库根执行：
 
 ```bash
-cd backend
 uv sync
-uv run pytest                         # 默认跳过 live 网络测试
-uv run pytest -m live                 # 仅运行显式联网测试
-uv run pytest tests/test_runner.py    # 运行单个测试文件
-uv run pytest -k "skill"             # 按关键词筛选
-uv run ruff check app/ tests/ launcher.py
+uv run python database/bridge.py --self-test   # bridge 自检
+uv run pytest database/tests                     # bridge 协议/持久化测试
+uv run ruff check database                       # lint
 ```
-
-Windows 下启动 smoke test 时，建议直接运行 `backend/.venv/Scripts/python.exe -m uvicorn ...`，并在测试结束后显式终止该进程；不要用可能脱离子进程的 `Start-Process uv run ...` 组合。
 
 ### Node Workspace
 
@@ -365,24 +343,13 @@ pnpm build      # tsc -b && vite build
 5. [docs/TODO.md](docs/TODO.md)：迁移主线进度与未完成工作；
 6. [PROBLEM.md](PROBLEM.md)：项目背景与评测要求。
 
-## 桌面打包
+## 桌面 / 生产打包
 
-项目提供 `backend/launcher.py` 作为 PyInstaller 入口：它启动 FastAPI、挂载前端 `dist/`，并在服务就绪后打开浏览器。
-
-手动打包示例（Windows PowerShell）：
-
-```powershell
-cd frontend
-pnpm install
-pnpm build
-
-cd ..\backend
-Copy-Item ..\frontend\dist .\dist -Recurse -Force
-uv pip install pyinstaller
-pyinstaller --onefile --name BioMed-QAgent --add-data "dist;dist" --hidden-import app --collect-all app launcher.py
-```
-
-产物通常位于 `backend/dist/BioMed-QAgent.exe`。GitHub Actions 工作流 [`.github/workflows/package.yml`](.github/workflows/package.yml) 会在推送 `v*` 标签或手动触发时构建 Windows 可执行文件并创建 Release。
+Phase 8 起不再有 PyInstaller 单文件可执行文件：正式产物是跨平台源码包
+（`frontend/dist` + `server/dist` + `database/` + `.pi/skills`），由 TS Host
+静态托管（`pnpm start`）。GitHub Actions 工作流
+[`.github/workflows/package.yml`](.github/workflows/package.yml) 会在推送 `v*`
+标签或手动触发时构建并上传该 bundle。
 
 ## 安全与边界
 
@@ -397,16 +364,14 @@ pyinstaller --onefile --name BioMed-QAgent --add-data "dist;dist" --hidden-impor
 | 文档                                                        | 内容                                    |
 | ----------------------------------------------------------- | --------------------------------------- |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)                 | 权威架构、数据流、契约、事件和安全模型  |
-| [docs/BioMed-QAgent_Pi_Migration_Plan.md](docs/BioMed-QAgent_Pi_Migration_Plan.md) | Pi 迁移总体方案（Phase 0-8） |
-| [docs/BioMed-QAgent_Pi_Migration_Phase0_1_Detailed.md](docs/BioMed-QAgent_Pi_Migration_Phase0_1_Detailed.md) | Phase 0/1 执行细节与验收证据 |
-| [docs/migration/README.md](docs/migration/README.md)         | Phase 0/1/3 迁移边界文档索引 |
+| [docs/BioMed-QAgent_Pi_Migration_Plan.md](docs/BioMed-QAgent_Pi_Migration_Plan.md) | Pi 迁移总体方案（Phase 0-8，已完成） |
+| [docs/migration/README.md](docs/migration/README.md)         | 迁移边界文档索引（Phase 8 状态见其中说明） |
+| [docs/migration/phase8-python-runtime-retirement.md](docs/migration/phase8-python-runtime-retirement.md) | Phase 8 执行计划（historical） |
+| [docs/migration/PHASE8_FINAL_VERIFICATION.md](docs/migration/PHASE8_FINAL_VERIFICATION.md) | Phase 8 最终验证报告 |
 | [docs/DEVELOPER_QUICKSTART.md](docs/DEVELOPER_QUICKSTART.md) | 开发环境、启动、测试和 AI-Native 工作流 |
-| [docs/migration/ENVIRONMENT_MIGRATION.md](docs/migration/ENVIRONMENT_MIGRATION.md) | Phase 0/1 环境、配置和本地数据迁移 |
 | [docs/TODO.md](docs/TODO.md)                                 | P0/P1/P2 开发任务与架构决策             |
 | [PROBLEM.md](PROBLEM.md)                                     | 赛题背景、目标和评价标准                |
-| [backend/README.md](backend/README.md)                       | 后端 API、Skill、测试、打包与故障排查   |
 | [frontend/README.md](frontend/README.md)                     | 前端组件、状态管理、数据流与测试        |
-| [backend/REPRODUCIBILITY.md](backend/REPRODUCIBILITY.md)     | 可复现性与演示说明                      |
 
 ## 许可证
 
