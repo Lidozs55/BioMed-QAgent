@@ -99,9 +99,9 @@ jobs:
           cp -r server/src staging/server/src
           cp server/package.json staging/server/
           cp server/tsconfig.json staging/server/
+          # frontend/dist 与 server/dist 已由上方 download-artifact 放入 staging/
           cp -r frontend staging/frontend
-          rm -rf staging/frontend/node_modules staging/frontend/dist
-          cp -r frontend/dist staging/frontend/dist
+          rm -rf staging/frontend/node_modules
           cp .env.example staging/
 
       - name: Create archive
