@@ -1262,6 +1262,9 @@ M2 收口后 `DATASET_CORE=ts` 成为合法 opt-in profile（`ts/pi/ts/0|1`）�
 Deterministic Core 具备 per-operation timeout、build lock（task+build 单发布者）、
 cooperative cancel 与 operation event sink（→ 稳定 `operation_*` EventEnvelope），四类
 golden fixture（SUCCESS/PARTIAL_SUCCESS/NO_DATA/SPEC_REJECTED）在 TS Core 路径通过；
+build lock 为 fenced lease：owner.json mtime 心跳（活进程不因 age 被抢占）、stale 原子
+rename 接管、release 仅删自有 token、publish rename 边界前 `assertOwned` 围栏（I-04 终审，
+2026-08-14；回归 `server/tests/phase5/build-lock.test.ts`，含跨进程互斥与 Windows CI job）；
 `DATASET_CORE=python` 保留为回滚。默认 profile 不变，Phase 7 才切换正式默认。
 
 > **协作式取消（M2 收口，2026-08-14）**：真实 Core operation 的可抢占 timeout/cancel

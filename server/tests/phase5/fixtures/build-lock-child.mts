@@ -1,0 +1,49 @@
+/**
+ * Cross-process build-lock child (I-04 final audit).  Runs under vite-node:
+ * repeatedly acquires the task_1/build_1 lock, holds it briefly, verifies the
+ * fence, releases.  Every transition is appended to <lockRoot>/events.log:
+ *
+ *   <ts> <child-<pid>> acquire|fence-ok|fence-lost|release|failed <detail>
+ *
+ * The parent test asserts the log never shows overlapping holders.
+ */
+
+import { appendFileSync } from "node:fs";
+import { join } from "node:path";
+import { acquireBuildLock } from "../../../src/dataset/service/build-lock.js";
+
+const [lockRoot, roundsArg, holdMsArg] = process.argv.slice(2);
+const rounds = Number(roundsArg);
+const holdMs = Number(holdMsArg);
+const logPath = join(lockRoot, "events.log");
+const tag = `child-${process.pid}`;
+
+const log = (line: string): void => {
+  appendFileSync(logPath, `${Date.now()} ${tag} ${line}\n`);
+};
+
+for (let round = 0; round < rounds; round += 1) {
+  try {
+    const lease = await acquireBuildLock(
+      {
+        lockRoot,
+        retryMs: 20_000,
+        retryIntervalMs: 20,
+        heartbeatMs: 150,
+        staleMs: 1_500,
+      },
+      "task_1",
+      "build_1",
+      tag,
+    );
+    log("acquire");
+    await new Promise((resolve) => setTimeout(resolve, holdMs));
+    log((await lease.assertOwned()) ? "fence-ok" : "fence-lost");
+    await lease.release();
+    log("release");
+  } catch (error) {
+    log(`failed ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+    break;
+  }
+}

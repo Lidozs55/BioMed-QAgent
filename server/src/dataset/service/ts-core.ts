@@ -138,8 +138,11 @@ export function createTsCoreOperationRunner(options: {
   mappingAssets: Readonly<Record<string, SourceAsset>>;
   runnerState: RunnerState;
   bindings: ReadonlyMap<string, ReturnType<typeof import("../contracts/spec.js").parseSourceBinding>>;
+  /** I-04 publish fence: true while this build still owns its lock. */
+  fence?: (() => Promise<boolean>) | null;
 }): OperationRunner {
   const { spec, taskId, taskRoot, outputDir, sourceAssets, mappingAssets, runnerState, bindings } = options;
+  const fence = options.fence ?? null;
   const schema = buildGeneExpressionSchema();
 
   return async (op, _upstream, signal): Promise<OperationOutput> => {
@@ -368,6 +371,7 @@ export function createTsCoreOperationRunner(options: {
           validation,
           expectedSourceAssetIds: expectedSourceAssetIds.size > 0 ? expectedSourceAssetIds : null,
           signal,
+          fence,
         });
         runnerState.publicationId = published.publicationId;
         return makeOperationOutput({
@@ -446,6 +450,7 @@ export class TypeScriptDatasetCore {
       mappingAssets: context.mappingAssets ?? {},
       runnerState,
       bindings,
+      fence: async (): Promise<boolean> => lease.assertOwned(),
     });
     const executor = new DatasetBuildExecutor({
       taskId,

@@ -15,6 +15,7 @@ import { join, relative } from "node:path";
 import type { DatasetManifest, DatasetPublication, ValidationResult } from "../contracts/index.js";
 import { throwIfAborted } from "../cooperative.js";
 import { BuildError } from "../adapters/errors.js";
+import { LockLostError } from "../service/build-lock.js";
 import { pythonJsonDumps } from "../runtime/digests.js";
 import { checkReleaseInvariants, findLatestPublication, PUBLISH_DIR } from "./invariants.js";
 import { MANIFEST_FILE } from "./manifest.js";
@@ -39,6 +40,9 @@ export interface PublishOptions {
   publishedAt?: string | null;
   /** Cooperative abort signal from the executor (M2 I-03/I-04). */
   signal?: AbortSignal | null;
+  /** I-04 publish fence: re-verified immediately before the immutable rename;
+   *  the build must still own its build lock, or it is a displaced lease. */
+  fence?: (() => boolean | Promise<boolean>) | null;
 }
 
 export interface PublishResult {
@@ -57,7 +61,13 @@ export interface PublishResult {
 /** Promote *manifest* + *validation* to an immutable publication (atomic). */
 export async function promotePublication(options: PublishOptions): Promise<PublishResult> {
   const signal = options.signal ?? null;
+  const fence = options.fence ?? null;
   throwIfAborted(signal);
+  if (fence !== null && !(await fence())) {
+    throw new LockLostError(
+      "build lock was taken over before publication (displaced lease)",
+    );
+  }
   const manifest = options.manifest;
   const validation = options.validation;
   const invariants = await checkReleaseInvariants({
@@ -136,14 +146,24 @@ export async function promotePublication(options: PublishOptions): Promise<Publi
     }
     // M2: the final abort check sits at the rename boundary so a
     // timed-out/cancelled build can never promote a publication behind its
-    // failed record ("no fake-success publication" invariant).
+    // failed record ("no fake-success publication" invariant).  I-04: the
+    // fence re-checks lease ownership at the same boundary so a build whose
+    // lock was taken over can never publish late.
     throwIfAborted(signal);
+    if (fence !== null && !(await fence())) {
+      throw new LockLostError(
+        "build lock was taken over before the final rename (displaced lease)",
+      );
+    }
     await rename(stagedDir, versionDir);
   } catch (error) {
     if (existsSync(stagedDir)) {
       await rm(stagedDir, { recursive: true, force: true });
     }
     if (error instanceof PublicationRefusedError) {
+      throw error;
+    }
+    if (error instanceof LockLostError) {
       throw error;
     }
     throw new AtomicPromotionError(

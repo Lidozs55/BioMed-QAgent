@@ -19,6 +19,7 @@ import { join } from "node:path";
 import type { BindingRejection, SourceAsset } from "../contracts/index.js";
 import { AdapterError, BindingRejectedError, BuildError, EmptySourceError } from "../adapters/errors.js";
 import { OperationAbortedError } from "../cooperative.js";
+import { LockLostError } from "../service/build-lock.js";
 import {
   appendAttempt,
   findReusable,
@@ -220,10 +221,10 @@ export class DatasetBuildExecutor {
       await this.emit({
         type: "build_failed",
         error: error instanceof Error
-          ? { code: error instanceof OperationTimeoutError ? "timeout" : "internal_error", message: error.message }
+          ? { code: error instanceof OperationTimeoutError ? "timeout" : error instanceof LockLostError ? "lock_lost" : "internal_error", message: error.message }
           : { code: "internal_error", message: String(error) },
       });
-      return this.finalizeFailed(error, error instanceof OperationTimeoutError ? "timeout" : "internal_error");
+      return this.finalizeFailed(error, error instanceof OperationTimeoutError ? "timeout" : error instanceof LockLostError ? "lock_lost" : "internal_error");
     }
   }
 
