@@ -93,6 +93,10 @@ export async function integrate(options: {
   for (const result of results) {
     const rows = await readCsvDictRows(result.canonicalPath, signal);
     for (const row of rows) {
+      visited += 1;
+      // M2: checkpoint per processed row (not only new-unique rows) so an
+      // extreme dedup/conflict workload still yields to the event loop.
+      if (visited % CHECKPOINT_STRIDE === 0) await checkpoint(signal);
       const keyParts = rowIdentity(row, idField);
       const key = keyParts.join("\u0000");
       const value = row["expression_value"] ?? "";
@@ -101,8 +105,6 @@ export async function integrate(options: {
         seen.set(key, [value, row["asset_id"] ?? ""]);
         mergedLines.push(csvLine(columns.map((column) => row[column] ?? "")));
         rowCount += 1;
-        visited += 1;
-        if (visited % CHECKPOINT_STRIDE === 0) await checkpoint(signal);
         continue;
       }
       const [previousValue, previousAsset] = previous;

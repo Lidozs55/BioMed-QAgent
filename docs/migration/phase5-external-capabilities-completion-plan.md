@@ -2091,6 +2091,14 @@ Deletion/retirement
 > 完成度已随 PR #1（`de58044`，CI 全绿）达到；本轮补上最后三项实质性缺口：真实 Core
 > operation 的可抢占 wall-clock timeout/cancel（`core-preemption.test.ts`）、live smoke
 > 实跑记录（§11.3）、PARTIAL_SUCCESS 的 Adapter 层断言（ts-core-e2e）。
+>
+> 第二轮审计收口（2026-08-16，`fix/m2-audit-fixes`）：正式 composition 默认启用 120 s
+> operation timeout；timeout/cancel 后 straggler 有界 grace 等待（build lock 持有至真正
+> settle）；publish 各 copy 后 / publication.json 写后 / rename 前 abort 检查；canonicalize /
+> integrate 按 processed 行 checkpoint（全 rejected / 全 dedup 极端负载可中断，
+> `straggler-safety.test.ts` 三个回归测试均验证过“无修复必失败”）；workspace 测试
+> `waitForJson` 消除 pids.json 半写竞态；`delimitedRowsWithLinesAsync` 修复 O(n²) 行扫描
+> （200k 行 8.1s → 0.12s）。
 
 ## M1 — Phase 5
 

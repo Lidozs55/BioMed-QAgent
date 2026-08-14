@@ -131,6 +131,13 @@ Phase 3 需显式 `AGENT_RUNTIME=pi` 才接管正式 Task 流量。实际执行�
 > build lock、Core event sink、`DATASET_CORE=ts` 合法 opt-in profile 均已落地（见下节
 > Phase 5/M2 清单）。仅“默认 profile 切换”仍属 Phase 7。
 
+> 更新（M2 第二轮审计，2026-08-16）：正式 `ts/pi/ts` composition 已默认启用 120 s
+> operation timeout（与 Python baseline 一致，`Phase3RuntimeOptions.operationTimeoutMs`）；
+> timeout/cancel 后 executor 在持有 build lock 的情况下以有界 grace 等待 straggler 真正
+> settle（`server/tests/phase5/straggler-safety.test.ts`）；publish 在每个 copy 后 /
+> publication.json 写后 / 最终 rename 前均有 abort 检查；canonicalize / integrate 的
+> checkpoint 改为按 processed 行计数（全 rejected / 全 dedup 极端负载也可中断）。
+
 远程分支 `codex/phase4-dataset-core-ts` 已合入 main，无需另行跟踪。
 
 ## Phase 5：迁外部能力与 Python 数据处理依赖（✅ 完成，2026-08-14）
@@ -171,6 +178,9 @@ Phase 3 需显式 `AGENT_RUNTIME=pi` 才接管正式 Task 流量。实际执行�
       straggler 清理；build lock（task+build 单发布者，Windows 安全，stale 回收）。
       真实 Core 可抢占性由 `server/tests/phase5/core-preemption.test.ts` 验证
       （真实 adapter parse 可被 timeout / AbortSignal / cancelDatasetBuild 中断）
+- [x] 正式 runtime 默认启用 operation timeout（120 s，对齐 Python baseline）；
+      straggler 有界 grace 等待 + publish rename 边界 abort 检查
+      （`server/tests/phase5/straggler-safety.test.ts`）
 - [x] Core event sink → 稳定 operation_* EventEnvelope（经 recordRunEvent）
 - [x] 四类 golden fixture（SUCCESS / PARTIAL_SUCCESS / NO_DATA / SPEC_REJECTED）
       在 TS Core 路径通过（`server/tests/phase5/ts-core-e2e.test.ts`）

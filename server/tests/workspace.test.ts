@@ -6,7 +6,6 @@ import {
   readFile,
   rm,
   symlink,
-  watch,
   writeFile,
 } from "node:fs/promises";
 import os from "node:os";
@@ -63,24 +62,26 @@ async function removeEventually(root: string): Promise<void> {
   throw lastError;
 }
 
-async function waitForFile(filePath: string, timeoutMs = 2_000): Promise<void> {
-  try {
-    await access(filePath);
-    return;
-  } catch {
-    // Subscribe below so the wait is event driven.
-  }
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const events = watch(path.dirname(filePath), { signal: controller.signal });
-    for await (const event of events) {
-      if (event.filename === path.basename(filePath)) return;
+/**
+ * Poll until ``filePath`` contains a fully written, parseable JSON array.
+ * Waiting only for the file to *exist* races with the fixture child writing
+ * ``pids.json``: under CI load the file can be observed half-written and
+ * ``JSON.parse`` then fails with "Unexpected end of JSON input".
+ */
+async function waitForJson(filePath: string, timeoutMs = 30_000): Promise<unknown> {
+  const deadline = Date.now() + timeoutMs;
+  let lastError: unknown = null;
+  while (Date.now() < deadline) {
+    try {
+      return JSON.parse(await readFile(filePath, "utf8")) as unknown;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 20));
     }
-  } finally {
-    clearTimeout(timeout);
-    controller.abort();
   }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(`timed out waiting for parseable JSON at ${filePath}`);
 }
 
 function processAlive(pid: number): boolean {
@@ -382,8 +383,9 @@ describe("governed Task Workspace", () => {
       args: [script],
       timeoutMs: 300,
     });
-    const pids = JSON.parse(
-      await readFile(path.join(root, "staging", "agent", "pids.json"), "utf8"),
+    const pids = await waitForJson(
+      path.join(root, "staging", "agent", "pids.json"),
+      30_000,
     ) as number[];
 
     expect(result).toMatchObject({ timedOut: true, cancelled: false });
@@ -399,10 +401,9 @@ describe("governed Task Workspace", () => {
       abortController.signal,
     );
     const abortedPidsPath = path.join(aborted.root, "staging", "agent", "pids.json");
-    await waitForFile(abortedPidsPath, 30_000);
+    const abortedPids = await waitForJson(abortedPidsPath, 30_000) as number[];
     abortController.abort();
     const abortedResult = await abortedResultPromise;
-    const abortedPids = JSON.parse(await readFile(abortedPidsPath, "utf8")) as number[];
     expect(abortedResult.cancelled).toBe(true);
     expect(aborted.audit.records.at(-1)).toMatchObject({
       operation: "exec",
@@ -418,10 +419,9 @@ describe("governed Task Workspace", () => {
       timeoutMs: 5_000,
     });
     const disposedPidsPath = path.join(disposed.root, "staging", "agent", "pids.json");
-    await waitForFile(disposedPidsPath, 30_000);
+    const disposedPids = await waitForJson(disposedPidsPath, 30_000) as number[];
     await disposed.workspace.dispose();
     const disposedResult = await disposedResultPromise;
-    const disposedPids = JSON.parse(await readFile(disposedPidsPath, "utf8")) as number[];
     expect(disposedResult.cancelled).toBe(true);
     await expectProcessesDead(disposedPids);
   });
@@ -434,10 +434,9 @@ describe("governed Task Workspace", () => {
       args: [script, "--token=do-not-log"],
     });
     // The descendant writes pids.json after the direct child exits; wait for
-    // the write under parallel CI load instead of racing it.
+    // a fully written manifest under parallel CI load instead of racing it.
     const pidsPath = path.join(root, "staging", "agent", "pids.json");
-    await waitForFile(pidsPath, 30_000);
-    const pids = JSON.parse(await readFile(pidsPath, "utf8")) as number[];
+    const pids = await waitForJson(pidsPath, 30_000) as number[];
 
     expect(result).toMatchObject({ exitCode: 0, policy: "allowed" });
     await expectProcessesDead(pids);

@@ -281,6 +281,11 @@ export async function canonicalize(
   const header = rows[0]?.values ?? [];
   let visited = 0;
   for (const { values } of rows.slice(1)) {
+    visited += 1;
+    // M2: checkpoint per processed row (not only accepted rows) so an
+    // extreme all-rejected workload still yields to the event loop and
+    // honors the operation timeout / cancel signal.
+    if (visited % CHECKPOINT_STRIDE === 0) await checkpoint(signal);
     const row: Record<string, string> = {};
     for (let index = 0; index < header.length; index += 1) {
       row[header[index]] = values[index] ?? "";
@@ -423,8 +428,6 @@ export async function canonicalize(
     const identity = new MeasurementIdentity(semantics, scale, unit);
     identities.set(identity.key(), identity);
     rowCount += 1;
-    visited += 1;
-    if (visited % CHECKPOINT_STRIDE === 0) await checkpoint(signal);
   }
 
   await writeFile(
