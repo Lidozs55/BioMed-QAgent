@@ -311,11 +311,17 @@ uv run ruff check database                       # lint
 正常质量门从仓库根目录执行：
 
 ```bash
-pnpm test
+pnpm test          # 测试（默认有界并发：workspace ×2、vitest worker 受限）
+pnpm test:full     # 全速测试（CI 或明确需要最快完成时；去掉 workspace 并发限制）
 pnpm lint
 pnpm typecheck
 pnpm build
 ```
+
+测试并发默认有界，避免本机 CPU 撞功耗墙：根 `pnpm test` 限制 workspace 并发为 2，
+各 vitest 配置限制 worker 数（server `forks`/2、frontend `threads`/4、contracts
+`threads`/2）；CI（`CI=true`）自动放开 vitest worker 上限。预算模型与覆盖方式见
+[docs/test-concurrency.md](docs/test-concurrency.md)。
 
 ### 前端 package（定向诊断）
 

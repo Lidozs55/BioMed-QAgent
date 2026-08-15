@@ -183,7 +183,8 @@ Before starting any task, consult:
 ```bash
 pnpm install --frozen-lockfile             # Install the single workspace lockfile
 pnpm dev                                   # Start TS Host + Pi + TS Core + Vite
-pnpm test                                  # Contracts + server + frontend tests
+pnpm test                                  # Contracts + server + frontend tests (有界并发)
+pnpm test:full                             # 全速测试（CI 或明确需要最快完成时）
 pnpm lint                                  # Workspace lint
 pnpm typecheck                             # Workspace TypeScript checks
 pnpm build                                 # Workspace production builds
@@ -193,6 +194,14 @@ pnpm build                                 # Workspace production builds
 the production bundle（`frontend/dist` 静态托管）。`dev:frontend-standalone` 是
 迁移/debug-only 脚本（Vite 独立诊断，代理到 TS Host）。legacy rollback 启动方式
 （dev:legacy-backend / dev:host-proxy-only / dev:legacy-rollback）已随 Phase 8 删除。
+
+**测试并发默认有界**（详细预算见 [docs/test-concurrency.md](docs/test-concurrency.md)）：
+根 `pnpm test` 通过 `--workspace-concurrency=2` 限制 workspace 并发，各 vitest
+配置默认限制 worker 数（server `forks`/2、frontend `threads`/4、contracts
+`threads`/2），避免本机测试 worker 吃满 CPU 撞功耗墙。CI（`CI=true`）自动
+放开 vitest worker 上限；本地需要全速时用 `pnpm test:full`（去掉 workspace
+并发限制，等价于旧的 `pnpm test`）。临时降速可直接透传 vitest CLI 参数，例如
+`pnpm --filter @biomed/server test -- --maxWorkers=1`。
 
 #### Python database bridge checks (cwd: repository root)
 
