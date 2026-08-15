@@ -104,7 +104,11 @@ jobs:
           cp server/package.json staging/server/
           cp server/tsconfig.json staging/server/
           # frontend/dist 与 server/dist 已由上方 download-artifact 放入 staging/
-          cp -r frontend staging/frontend
+          # 注意：staging/frontend 已存在（dist 来自 artifact），必须用
+          # `frontend/.` 合并内容；若写成 `cp -r frontend staging/frontend`
+          # 会把源目录嵌套成 staging/frontend/frontend/，破坏 workspace 布局。
+          # （server 行写法不同：目标 staging/server/src 尚不存在，直接复制即可。）
+          cp -r frontend/. staging/frontend/
           rm -rf staging/frontend/node_modules
           cp .env.example staging/
 

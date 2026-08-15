@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 
-import { parseHostConfig } from "../src/config.js";
+import { parseHostConfig, resolveOutputDir } from "../src/config.js";
+import path from "node:path";
 
 describe("host config (Phase 8: runtime parameters only)", () => {
   test("uses the default full-TypeScript profile", () => {
@@ -62,5 +63,26 @@ describe("host config (Phase 8: runtime parameters only)", () => {
       shutdownTimeoutMs: 10000,
       workspaceDevExec: false,
     });
+  });
+});
+
+describe("resolveOutputDir (Phase 8 final audit)", () => {
+  // path.resolve("/repo")：Windows 下避免字面量根路径的盘符差异
+  const root = path.resolve("/repo");
+
+  test("defaults to <repositoryRoot>/data/output when unset or empty", () => {
+    expect(resolveOutputDir(root, undefined)).toBe(path.join(root, "data", "output"));
+    expect(resolveOutputDir(root, "  ")).toBe(path.join(root, "data", "output"));
+  });
+
+  test("keeps absolute paths unchanged", () => {
+    expect(resolveOutputDir(root, "/abs/data/output")).toBe(path.resolve("/abs/data/output"));
+  });
+
+  test("anchors relative paths to repositoryRoot, not the process cwd", () => {
+    // 回归：根 .env 用相对值 OUTPUT_DIR=data/output，若按 cwd 解析，
+    // 在 server/ 目录下运行 server 包脚本会把数据写到 server/data/。
+    expect(resolveOutputDir(root, "data/output")).toBe(path.join(root, "data", "output"));
+    expect(resolveOutputDir(root, "./data/output")).toBe(path.join(root, "data", "output"));
   });
 });
