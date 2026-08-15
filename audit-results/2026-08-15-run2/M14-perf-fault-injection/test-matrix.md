@@ -9,8 +9,11 @@
 | 50 并发任务 | PASS | `concurrent-tasks.test.ts` |
 | build lock 竞争/心跳租约/原子接管 | PASS | `build-lock.test.ts` |
 | straggler/超时/取消抢占 | PASS | `straggler-safety.test.ts`、`core-preemption.test.ts` |
-| 100/1k 记录、10/100 并发、磁盘满/句柄耗尽、慢消费者背压、大文件/恶意压缩/深层 JSON | NOT_RUN | 未执行 |
-| 时钟跳变 | NOT_RUN | 未执行 |
+| 网络故障（provider 不可达） | PASS | `network-fault.test.ts`（fail-closed） |
+| 恶意大输入（超长/深层 JSON） | PASS | `malicious-input.test.ts`（不崩溃） |
+| 磁盘满/句柄耗尽（写失败注入） | PASS | `fault-injection.test.ts`（open 失败 reject） |
+| 100/1k 记录、10/100 并发、慢消费者背压、恶意压缩 | NOT_RUN | 未执行 |
+| 时钟跳变 | PARTIAL | `build-lock.test.ts` 心跳租约覆盖；显式跳变未测 |
 
 ## 通过标准观察
 

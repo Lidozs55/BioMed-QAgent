@@ -35,7 +35,7 @@
 
 ## 质量门禁证据
 
-- `pnpm test`：contracts 14、server 724 通过 + 11 跳过、frontend 737 通过。
+- `pnpm test`：contracts 14、server 731 通过 + 11 跳过、frontend 737 通过。
 - `pnpm lint` / `typecheck` / `build`：通过。
 - bridge self-test / pytest(79) / ruff：通过。
 
@@ -61,7 +61,7 @@
 | P0/P1 为零 | ✅ |
 | fresh checkout + Windows + 生产 bundle + 启动 smoke | ✅ |
 | 真实外部 fixture + 纯 fixture | ✅（live smoke + 全量测试） |
-| 中途取消/进程重启/WS 断线/DB bridge 重启/磁盘/网络故障注入 | 前四项✅（测试覆盖）；磁盘/网络故障注入❌（NOT_RUN） |
+| 中途取消/进程重启/WS 断线/DB bridge 重启/磁盘/网络故障注入 | ✅（磁盘/网络故障注入已补：fault-injection/network-fault 测试） |
 | 抽查 10 个 publication/manifest/artifact | ✅（见下） |
 | 回归用例进入对应包测试目录 | ✅（7 条） |
 | 发现/风险/陷阱同步 docs/ | ✅（docs/audit-findings-2026-08-15.md） |

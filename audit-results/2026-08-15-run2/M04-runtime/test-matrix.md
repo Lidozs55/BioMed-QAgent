@@ -14,4 +14,4 @@
 | M04-T07 | PASS | `phase5/approval-gate.test.ts`、frontend `hil-data-correction-e2e.test.tsx` |
 | M04-T08 | PASS | `durable-agent-runtime.test.ts`（compact/steer） |
 | M04-T09 | PASS | `durable-agent-runtime.test.ts`（删除 terminal task） |
-| M04-T10 | NOT_RUN | 无显式事件写失败故障注入 |
+| M04-T10 | PASS | `fault-injection.test.ts`（append 失败 reject，不报虚假成功） |

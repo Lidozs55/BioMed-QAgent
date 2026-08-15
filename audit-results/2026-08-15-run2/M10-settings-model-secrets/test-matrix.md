@@ -10,5 +10,5 @@
 | M10-T03 | PASS | `model-settings.test.ts`、frontend `api-parser-rejection.test.ts` |
 | M10-T04 | PASS | `workspace.test.ts`（无 secret 审计）、`event-adapter.test.ts`（脱敏） |
 | M10-T05 | PASS | `model-settings-migration.test.ts` |
-| M10-T06 | NOT_RUN | 无显式并发 PUT 幂等测试 |
+| M10-T06 | PASS | `concurrent-put.test.ts`（20 并发 PUT 串行一致） |
 | M10-T07 | PASS | `model-settings.test.ts`、frontend provider 发现测试 |

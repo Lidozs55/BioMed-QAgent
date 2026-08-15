@@ -12,5 +12,5 @@
 | 5 中途取消/重启 → 不半发布 | PASS | `core-preemption`、`straggler-safety`、`dataset-runtime` |
 | 6 WS 断线刷新一致 | PASS | `runtime-controller.test.ts`、`hydrate-compat.test.ts` |
 | 7 declarative DB + HIL | PASS | `hil-data-correction-e2e.test.tsx`、`approval-gate.test.ts` |
-| 8 恶意输入组合 | NOT_RUN | 单项有测试，组合未执行 |
+| 8 恶意输入组合 | PARTIAL | 路径穿越/SSRF/伪造 manifest/并发单项均覆盖；完整组合未执行 |
 | 真实外部数据源 | PASS | `live-smoke.test.ts`（BIOMED_LIVE_SMOKE=1，10 端点） |
