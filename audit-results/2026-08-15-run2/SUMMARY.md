@@ -51,3 +51,38 @@
 - 磁盘满/句柄耗尽、慢消费者 WS 背压的专用故障注入。
 - 完整恶意输入组合红队。
 - 长列表/超长表格性能 UI 测试。
+
+## §8 总体验收门槛核对
+
+| 门槛 | 状态 |
+| --- | --- |
+| M01–M15 结果文件 + 复核人 | 结果文件✅；独立复核人❌（空缺） |
+| 公共预检全部通过 | ✅（PRE-01/02/03/04） |
+| P0/P1 为零 | ✅ |
+| fresh checkout + Windows + 生产 bundle + 启动 smoke | ✅ |
+| 真实外部 fixture + 纯 fixture | ✅（live smoke + 全量测试） |
+| 中途取消/进程重启/WS 断线/DB bridge 重启/磁盘/网络故障注入 | 前四项✅（测试覆盖）；磁盘/网络故障注入❌（NOT_RUN） |
+| 抽查 10 个 publication/manifest/artifact | ✅（见下） |
+| 回归用例进入对应包测试目录 | ✅（7 条） |
+| 发现/风险/陷阱同步 docs/ | ✅（docs/audit-findings-2026-08-15.md） |
+| 最终报告区分已验证/仅静态/未执行/阻塞 | ✅（各 test-matrix 标注 PASS/NOT_RUN/静态） |
+
+## 抽查 10 个产物（SHA256）
+
+| 产物 | SHA256 |
+| --- | --- |
+| succeeded/provenance.json | 0D98E379826C1B54FD4E7AF3AA86FF91555F238AD3015CA9DCA84C5CD316C1ED |
+| succeeded/schema.json | BDC9A7C40D781976037CC91EB9BBD658B4B7FDBC7F8352BA19683A92A7A99C90 |
+| succeeded/merged/primary.csv | FFCB69DA65057EE5B94559999684C902CB47592ACF2CB19724330C0B8D43FEA2 |
+| succeeded/canonical/binding_gdc_field_mappings.csv | 90098F2155B9032AA42E887BBA31191387B15E6868915999D1D981FADFF7FB95 |
+| succeeded/canonical/binding_gdc_normalization_log.csv | 79A20F99C64A7CD14B288F7BE52500D2E9FA1F0ABE255FFFD1695F1DED4A39D6 |
+| succeeded/canonical/binding_gdc_rejected.csv | 11F4EEC0859378DB407915F7395282A6F2C0946CC071A4A4AA8992118E17C525 |
+| succeeded/batches/binding_gdc_rejected.csv | 11F4EEC0859378DB407915F7395282A6F2C0946CC071A4A4AA8992118E17C525 |
+| partial_success/provenance.json | 562590D0ABC09B378770C757B534552F2AE39F5FB6E76818AE5C7820D45AB6A7 |
+| partial_success/schema.json | BDC9A7C40D781976037CC91EB9BBD658B4B7FDBC7F8352BA19683A92A7A99C90 |
+| partial_success/merged/primary.csv | BA1FAD3E81A40D16322138ACAE0F042A40CEE066BE99ED6A138502AB8006A390 |
+
+## PRE-04（Run #2）
+
+- 生产 `pnpm start`（PORT=5199）：health/root/databases 均 200。
+- 停止后确认无孤儿 `database/bridge.py` Python 进程。

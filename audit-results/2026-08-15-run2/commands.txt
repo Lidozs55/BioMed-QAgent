@@ -1,0 +1,21 @@
+# 执行过的命令（Run #2，2026-08-15）
+
+- git pull（main 快进 ec3bb8b -> be78a1a）
+- git worktree add -b codex/audit-results-run2 "E:/software code/Visual Stdio Code/BioMed-QAgent-audit-run2" be78a1a
+- pnpm install --frozen-lockfile（隔离 worktree）
+- uv sync --frozen（隔离 worktree）
+- pnpm test（contracts 14 / server 724 / frontend 737，全绿）
+- pnpm lint / pnpm typecheck / pnpm build
+- uv run python database/bridge.py --self-test
+- uv run pytest database/tests（79 passed）
+- uv run ruff check database
+- pnpm --filter @biomed/server exec playwright install chromium（国内镜像 PLAYWRIGHT_DOWNLOAD_HOST）
+- BIOMED_LIVE_SMOKE=1 vitest run tests/phase5/live-smoke.test.ts（10 端点通过）
+- PORT=5199 pnpm start + curl health/root/databases（200）+ 停止后确认无孤儿 bridge 进程
+- Get-FileHash 10 个 golden publication/manifest/artifact（SHA256）
+- vitest run 新增回归测试（event-log-corruption/ws-protocol/model-settings-migration/composer-a11y/accessibility-axe/concurrent-tasks/large-integrate）
+
+## 环境说明
+
+- pnpm 用捆绑 fallback（11.19.0）并前置 PATH，避免 packageManager 触发 AppData 自下载。
+- 所有门禁/测试均在沙箱外执行（沙箱对 node_modules/.pnpm、.git、uv 缓存只读受限）。
