@@ -12,8 +12,9 @@
 | 网络故障（provider 不可达） | PASS | `network-fault.test.ts`（fail-closed） |
 | 恶意大输入（超长/深层 JSON） | PASS | `malicious-input.test.ts`（不崩溃） |
 | 磁盘满/句柄耗尽（写失败注入） | PASS | `fault-injection.test.ts`（open 失败 reject） |
-| 100/1k 记录、10/100 并发、慢消费者背压、恶意压缩 | NOT_RUN | 未执行 |
-| 时钟跳变 | PARTIAL | `build-lock.test.ts` 心跳租约覆盖；显式跳变未测 |
+| 100 并发任务 | PASS | `clock-and-scale.test.ts` |
+| 时钟跳变 | PASS | `clock-and-scale.test.ts`（sequence 跨时钟回拨仍单调） |
+| 恶意压缩（zip bomb） | NOT_RUN | 未执行（创建 zip bomb fixture 不安全） |
 
 ## 通过标准观察
 

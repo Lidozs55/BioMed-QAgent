@@ -9,7 +9,7 @@
 
 | 命令 | 结果 |
 | --- | --- |
-| `pnpm test` | PASS：contracts 14/14；server 75 文件 731 通过、11 跳过；frontend 56 文件 737/737 |
+| `pnpm test` | PASS：contracts 14/14；server 77 文件 734 通过、11 跳过；frontend 56 文件 737/737 |
 | `pnpm lint` | PASS |
 | `pnpm typecheck` | PASS（前端为 `tsc -b` 真实门禁） |
 | `pnpm build` | PASS |
