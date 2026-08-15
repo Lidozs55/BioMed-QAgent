@@ -151,19 +151,6 @@ function parseRunRecord(json: unknown, idx: number): TaskSnapshot["runs"][number
   };
 }
 
-function assertBuildResultStatus(v: unknown, path: string): BuildResultStatus {
-  if (typeof v !== "string") throw new APIError(502, `Expected BuildResultStatus string at ${path}, got ${typeof v}`);
-  switch (v) {
-    case "succeeded":
-    case "partial_success":
-    case "no_data":
-    case "spec_rejected":
-      return v;
-    default:
-      throw new APIError(502, `Invalid BuildResultStatus "${v}" at ${path}`);
-  }
-}
-
 function assertErrorCode(v: unknown, path: string): ErrorCode {
   if (typeof v !== "string") throw new APIError(502, `Expected ErrorCode string at ${path}, got ${typeof v}`);
   switch (v) {

@@ -5,7 +5,7 @@
  * across processes); this module re-exports them for frontend consumers and
  * keeps the client-side interfaces (``SettingsAPIClient``) in the frontend.
  */
-export type {
+import type {
   CapabilitySource,
   ContextBudgetSettings,
   DatabaseDetail,
@@ -33,6 +33,35 @@ export type {
   ServerSource,
   VendorInfo,
 } from "@biomed/contracts";
+
+export type {
+  CapabilitySource,
+  ContextBudgetSettings,
+  DatabaseDetail,
+  DatabaseItem,
+  DatabaseOperationUpdatePatch,
+  DatabaseUpdatePatch,
+  DeclarativeOperation,
+  DeclarativeSkillManifest,
+  DiscoveredModelInfo,
+  DraftSource,
+  ManagedModelInfo,
+  ManagedModelInput,
+  ModelCapabilities,
+  ModelInfo,
+  ModelPreviewRequest,
+  ModelSettings,
+  ModelSettingsUpdate,
+  ParameterSpec,
+  Personality,
+  PersonalizationSettings,
+  PersonalizationUpdate,
+  ProviderInfo,
+  ProviderInput,
+  ProviderUpdateInput,
+  ServerSource,
+  VendorInfo,
+};
 
 /* ---- Settings API client (frontend-side interface) ---- */
 export interface SettingsAPIClient {

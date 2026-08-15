@@ -254,6 +254,10 @@ build 锁、cancel 收敛与 event sink；`DATASET_CORE=ts` 现为默认运行�
 
 ## 独立维护项（与迁移主线并行）
 
+- [ ] **P1** model-registry 响应未做 wire-boundary 校验：`frontend/src/api/modelRegistry.ts`
+      仍用窄化 cast（`b as ProviderInfo[]` 等）。下一步为 `packages/contracts`
+      runtime 增加 `parseProvidersEnvelope` / `parseManagedModelsEnvelope` 等解析器，
+      与其余 endpoint 组一致（ADR-025 后续项，2026-08-14 层抽取时发现）
 - [ ] **P2** Agent INSTRUCTIONS 增加"达到 max_turns 后输出 `[MAX_TURNS_REACHED]`"
       指导（原 Pipeline Design §4.5）
 - [ ] **P2** 设置页供应商/模型列表分页与搜索后端支持（当前全量返回）
