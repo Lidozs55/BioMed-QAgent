@@ -1,4 +1,4 @@
-import type { ConversationItem } from "@/runtime/types";
+import type { ConversationItem, DownloadControl } from "@/runtime/types";
 import { BuildReportCard } from "./BuildReportCard";
 import { AssistantSegment } from "./AssistantSegment";
 import { OperationStep } from "./OperationStep";
@@ -11,9 +11,11 @@ import { WarningStep } from "./WarningStep";
 interface ConversationStepProps {
   item: ConversationItem;
   isActive: boolean;
+  /** Pause/resume controls forwarded to download operation steps. */
+  downloadControl?: DownloadControl;
 }
 
-export function ConversationStep({ item }: ConversationStepProps) {
+export function ConversationStep({ item, downloadControl }: ConversationStepProps) {
   switch (item.kind) {
     case "user_message":
       return <UserMessageBubble item={item} />;
@@ -22,7 +24,7 @@ export function ConversationStep({ item }: ConversationStepProps) {
     case "reasoning":
       return <ReasoningBlock item={item} />;
     case "tool_call":
-      return <ToolCallStep item={item} />;
+      return <ToolCallStep item={item} downloadControl={downloadControl} />;
     case "stage":
       return <StageStep item={item} />;
     case "operation":

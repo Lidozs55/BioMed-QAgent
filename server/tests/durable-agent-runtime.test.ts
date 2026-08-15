@@ -14,8 +14,10 @@ import type {
   BioMedAgentAdapter,
   BioMedAgentEvent,
   BioMedAgentSession,
+  BioMedAgentTool,
   BioMedSessionConfig,
 } from "../src/agent/contracts.js";
+import type { EventPayload } from "@biomed/contracts";
 import { createDurableAgentRuntime } from "../src/runtime/durable-agent-runtime.js";
 
 const servers: Server[] = [];
@@ -502,6 +504,203 @@ describe("durable formal Agent runtime", () => {
       task_id: "task_legacy",
     });
     socket.close();
+    await runtime.close();
+  });
+
+  test("resumes an interrupted download directly without an AI run", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "biomed-durable-resume-dl-"));
+    roots.push(root);
+    const adapter = new ControlledAdapter();
+    const callArgs: unknown[] = [];
+    const runtime = await createDurableAgentRuntime({
+      tasksRoot: root,
+      adapter,
+      workspaceFactory: async ({ recordRunEvent }) => {
+        const downloadTool: BioMedAgentTool = {
+          name: "download_xena",
+          label: "Download Xena dataset",
+          description: "download a xena dataset",
+          parameters: { type: "object" },
+          execute: async (argumentsValue, signal) => {
+            callArgs.push(argumentsValue);
+            const progress: EventPayload = {
+              type: "operation_progress",
+              operation_id: "tool:acquisition:downloaded_bytes",
+              kind: "downloaded_bytes",
+              current: 50,
+              total: 100,
+              detail: { source: "xena", accession: "TCGA.PAAD", filename: "x.gz" },
+            };
+            await recordRunEvent(progress);
+            if (signal?.aborted) throw new Error("aborted");
+            return { content: JSON.stringify({ downloaded: true }), isError: false };
+          },
+        };
+        return {
+          root: path.join(root, "task"),
+          tools: [downloadTool],
+          setRunId: () => undefined,
+          dispose: async () => undefined,
+        };
+      },
+    });
+    const server = createServer((request, response) => {
+      if (!runtime.handle(request, response)) response.writeHead(404).end();
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    servers.push(server);
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const accepted = await (await fetch(`${base}/api/v1/tasks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        request_id: "request-resume-boot",
+        input: "boot the task",
+        databases: [],
+        mode: "agent",
+      }),
+    })).json() as { task_id: string; run_id: string };
+    adapter.gates[0]?.resolve();
+    await expect.poll(async () => (
+      await runtime.repository.getSnapshot(accepted.task_id)
+    )?.task.status).toBe("completed");
+
+    const resumed = await fetch(
+      `${base}/api/v1/tasks/${accepted.task_id}/downloads/resume`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          request_id: "request-resume-dl",
+          tool_name: "download_xena",
+          arguments: { dataset_id: "TCGA.PAAD.sampleMap/HiSeqV2", file_type: "tsv" },
+        }),
+      },
+    );
+    expect(resumed.status).toBe(202);
+    const acceptedResume = await resumed.json() as {
+      task_id: string;
+      run_id: string;
+    };
+    expect(acceptedResume.run_id).not.toBe(accepted.run_id);
+
+    await expect.poll(async () => {
+      const snapshot = await runtime.repository.getSnapshot(accepted.task_id);
+      return snapshot?.runs.find((run) => run.run_id === acceptedResume.run_id)?.status;
+    }).toBe("completed");
+    expect(callArgs).toEqual([
+      { dataset_id: "TCGA.PAAD.sampleMap/HiSeqV2", file_type: "tsv" },
+    ]);
+
+    const events = await runtime.repository.listEvents(accepted.task_id, 0);
+    const resumeEvents = events.filter((event) => event.run_id === acceptedResume.run_id);
+    expect(resumeEvents.map((event) => event.type)).toEqual([
+      "run_queued",
+      "run_started",
+      "tool_started",
+      "operation_progress",
+      "tool_completed",
+      "run_completed",
+    ]);
+    expect(resumeEvents.map((event) => event.payload)).toContainEqual({
+      type: "tool_started",
+      tool_call_id: `resume_${acceptedResume.run_id.slice(-8)}`,
+      tool_name: "download_xena",
+      arguments: { dataset_id: "TCGA.PAAD.sampleMap/HiSeqV2", file_type: "tsv" },
+    });
+    expect(resumeEvents.at(-1)?.payload).toMatchObject({
+      type: "run_completed",
+      build_result: null,
+    });
+    const snapshot = await runtime.repository.getSnapshot(accepted.task_id);
+    expect(snapshot?.task.active_run_id).toBeNull();
+    await runtime.close();
+  });
+
+  test("cancels an in-flight download-resume run", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "biomed-durable-cancel-dl-"));
+    roots.push(root);
+    const adapter = new ControlledAdapter();
+    const runtime = await createDurableAgentRuntime({
+      tasksRoot: root,
+      adapter,
+      workspaceFactory: async () => {
+        const downloadTool: BioMedAgentTool = {
+          name: "download_gdc",
+          label: "Download GDC files",
+          description: "download a gdc file",
+          parameters: { type: "object" },
+          execute: async (_argumentsValue, signal) => {
+            await new Promise<void>((resolve) => {
+              signal?.addEventListener("abort", () => resolve());
+            });
+            if (signal?.aborted) throw new Error("aborted by user");
+            return { content: "{}", isError: false };
+          },
+        };
+        return {
+          root: path.join(root, "task"),
+          tools: [downloadTool],
+          setRunId: () => undefined,
+          dispose: async () => undefined,
+        };
+      },
+    });
+    const server = createServer((request, response) => {
+      if (!runtime.handle(request, response)) response.writeHead(404).end();
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    servers.push(server);
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const accepted = await (await fetch(`${base}/api/v1/tasks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        request_id: "request-cancel-dl-boot",
+        input: "boot",
+        databases: [],
+        mode: "agent",
+      }),
+    })).json() as { task_id: string; run_id: string };
+    adapter.gates[0]?.resolve();
+    await expect.poll(async () => (
+      await runtime.repository.getSnapshot(accepted.task_id)
+    )?.task.status).toBe("completed");
+
+    const resumed = await fetch(
+      `${base}/api/v1/tasks/${accepted.task_id}/downloads/resume`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          request_id: "request-cancel-dl",
+          tool_name: "download_gdc",
+          arguments: { project_id: "TCGA-PAAD" },
+        }),
+      },
+    );
+    expect(resumed.status).toBe(202);
+    const acceptedResume = await resumed.json() as { run_id: string };
+
+    const cancelled = await fetch(
+      `${base}/api/v1/tasks/${accepted.task_id}/runs/${acceptedResume.run_id}/cancel`,
+      { method: "POST" },
+    );
+    expect(cancelled.status).toBe(202);
+    const snapshot = await cancelled.json() as { runs: Array<{ run_id: string; status: string }> };
+    expect(snapshot.runs.find((run) => run.run_id === acceptedResume.run_id)?.status)
+      .toBe("cancelled");
+    const events = await runtime.repository.listEvents(accepted.task_id, 0);
+    const resumeEvents = events.filter((event) => event.run_id === acceptedResume.run_id);
+    expect(resumeEvents.map((event) => event.type)).toEqual([
+      "run_queued",
+      "run_started",
+      "tool_started",
+      "run_cancel_requested",
+      "run_cancelled",
+    ]);
     await runtime.close();
   });
 });

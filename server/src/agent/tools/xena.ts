@@ -10,7 +10,7 @@
 
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
-import { unlink } from "node:fs/promises";
+import { stat, unlink } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { createGunzip } from "node:zlib";
 import path from "node:path";
@@ -255,7 +255,16 @@ export async function downloadXena(
     });
   };
 
+  // Cross-run resume: pick up a caller-owned part left behind by an
+  // interrupted earlier run (same deterministic path), so the first attempt
+  // continues from those bytes instead of restarting from zero.
   let resumeBytes = 0;
+  try {
+    const existing = await stat(partPath);
+    if (existing.isFile()) resumeBytes = existing.size;
+  } catch {
+    // No part file yet — a fresh download.
+  }
   let lastResult: Awaited<ReturnType<typeof acquireSource>> | null = null;
   for (let attempt = 1; attempt <= XENA_MAX_DOWNLOAD_ATTEMPTS; attempt += 1) {
     await pace();
