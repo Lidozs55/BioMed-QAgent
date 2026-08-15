@@ -129,7 +129,51 @@ describe("application host (Phase 8: no legacy proxy, no experimental Pi)", () =
     websocket.close();
   });
 
-  test("destroys non-API WebSocket upgrades", async () => {
+  test("leaves non-API WebSocket upgrades to other owners (Vite HMR)", async () => {
+    // 回归：Host 曾对非 /api/v1/ws 的 upgrade 一律 socket.destroy()，
+    // 导致 Vite HMR WebSocket 每次连接都被杀 → 页面无限刷新。
+    const formalUpgrade = vi.fn();
+    const host = await createApplicationHost({
+      publicHost: "127.0.0.1",
+      publicPort: 0,
+      formalRuntime: async () => ({
+        handle: () => false,
+        handleUpgrade: (request, socket) => {
+          formalUpgrade(request.url);
+          if (request.url !== "/api/v1/ws") return false;
+          socket.destroy();
+          return true;
+        },
+        close: async () => undefined,
+      }),
+      frontend: async () => ({
+        middleware: (_request, response) => response.end("frontend"),
+        close: async () => undefined,
+      }),
+    });
+    hosts.push(host);
+
+    // 非应用路径（Vite HMR 的 /__vite_hmr、任意其他 upgrade）：
+    // 不交给 formal runtime，也不销毁——由同一 server 的其他监听器接管。
+    const hmrSocket = { once: vi.fn(), destroy: vi.fn(), on: vi.fn() };
+    host.server.emit("upgrade", { url: "/__vite_hmr", headers: {} }, hmrSocket, Buffer.alloc(0));
+    expect(hmrSocket.destroy).not.toHaveBeenCalled();
+    expect(formalUpgrade).not.toHaveBeenCalled();
+    // 兜底：无人接管时挂 error 监听，防止客户端断开触发 unhandled error 崩溃。
+    expect(hmrSocket.on).toHaveBeenCalledWith("error", expect.any(Function));
+
+    const otherSocket = { once: vi.fn(), destroy: vi.fn(), on: vi.fn() };
+    host.server.emit("upgrade", { url: "/custom/ws", headers: {} }, otherSocket, Buffer.alloc(0));
+    expect(otherSocket.destroy).not.toHaveBeenCalled();
+
+    // 应用路径仍由 formal runtime 接管。
+    const appSocket = { once: vi.fn(), destroy: vi.fn(), on: vi.fn() };
+    host.server.emit("upgrade", { url: "/api/v1/ws", headers: {} }, appSocket, Buffer.alloc(0));
+    expect(formalUpgrade).toHaveBeenCalledWith("/api/v1/ws");
+    expect(appSocket.destroy).toHaveBeenCalledTimes(1); // runtime 返回 true，由其自行关闭
+  });
+
+  test("destroys /api/v1/ws upgrades before the runtime is initialized", async () => {
     const host = await createApplicationHost({
       publicHost: "127.0.0.1",
       publicPort: 0,
@@ -140,20 +184,75 @@ describe("application host (Phase 8: no legacy proxy, no experimental Pi)", () =
     });
     hosts.push(host);
 
-    const port = (host.server.address() as AddressInfo).port;
-    await expect(new Promise<void>((resolve, reject) => {
-      const socket = new WebSocket(`ws://127.0.0.1:${port}/experimental/pi/ws`);
-      socket.once("open", () => reject(new Error("experimental upgrade must not open")));
-      socket.once("unexpected-response", () => resolve());
-      socket.once("error", () => resolve());
-    })).resolves.toBeUndefined();
+    // 初始化阶段（formal runtime 尚未就绪）的应用 WS 升级只能销毁，客户端重试。
+    const socket = { once: vi.fn(), destroy: vi.fn() };
+    host.server.emit("upgrade", { url: "/api/v1/ws", headers: {} }, socket, Buffer.alloc(0));
+    expect(socket.destroy).toHaveBeenCalledOnce();
   });
 
-  test("startup failure prevents public listen and closes earlier resources", async () => {
+  test("listens before initialization; requests get 503 starting until ready", async () => {
+    let resolveRuntime: () => void = () => undefined;
+    const runtimeGate = new Promise<void>((resolve) => { resolveRuntime = resolve; });
+    let actualPort = 0;
+    const listenPublic = async (server: import("node:http").Server): Promise<void> => {
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", () => {
+          actualPort = (server.address() as AddressInfo).port;
+          resolve();
+        });
+      });
+    };
+    let host: ApplicationHost | undefined;
+    const creating = createApplicationHost(
+      {
+        publicHost: "127.0.0.1",
+        publicPort: 0,
+        formalRuntime: async () => {
+          await runtimeGate;
+          return {
+            handle: (request, response) => {
+              if (request.url !== "/api/v1/tasks") return false;
+              response.end("native tasks");
+              return true;
+            },
+            handleUpgrade: () => false,
+            close: async () => undefined,
+          };
+        },
+        frontend: async () => ({
+          middleware: (_request, response) => response.end("frontend"),
+          close: async () => undefined,
+        }),
+      },
+      { listenPublic },
+    ).then((created) => { host = created; });
+
+    // 初始化期间端口已可用：返回 503 {"status":"starting"}。
+    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+    expect(host).toBeUndefined();
+    const starting = await fetch(`http://127.0.0.1:${actualPort}/`);
+    expect(starting.status).toBe(503);
+    expect(await starting.json()).toEqual({ status: "starting" });
+
+    resolveRuntime();
+    await creating;
+    const ready = await fetch(`http://127.0.0.1:${actualPort}/api/v1/tasks`);
+    expect(await ready.text()).toBe("native tasks");
+  });
+
+  test("startup failure after listen closes earlier resources", async () => {
     const earlier = vi.fn(async () => undefined);
     const registry = new LifecycleRegistry();
     registry.add("later Pi lifecycle hook", earlier);
-    const listenPublic = vi.fn(async () => undefined);
+    // 真实 listen（port 0）：新语义下端口先于初始化绑定，失败后 close 需要
+    // server 处于已运行状态才能正常关闭。
+    const listenPublic = vi.fn(async (server: import("node:http").Server) => {
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", () => resolve());
+      });
+    });
 
     await expect(
       createApplicationHost(
@@ -170,7 +269,8 @@ describe("application host (Phase 8: no legacy proxy, no experimental Pi)", () =
       ),
     ).rejects.toThrow("formal runtime failed");
 
-    expect(listenPublic).not.toHaveBeenCalled();
+    // 新语义：端口先于初始化绑定；失败时 lifecycle 仍关闭已注册资源。
+    expect(listenPublic).toHaveBeenCalledOnce();
     expect(earlier).toHaveBeenCalledOnce();
   });
 });

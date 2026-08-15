@@ -274,15 +274,15 @@ export class DurableTaskRepository {
   async recoverActiveRuns(): Promise<void> {
     await mkdir(this.tasksRoot, { recursive: true });
     const entries = await readdir(this.tasksRoot, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isDirectory() || !SAFE_ID.test(entry.name)) continue;
+    await Promise.all(entries.map(async (entry) => {
+      if (!entry.isDirectory() || !SAFE_ID.test(entry.name)) return;
       const snapshot = await this.getSnapshot(entry.name);
-      if (snapshot?.task.active_run_id === null || snapshot === null) continue;
+      if (snapshot?.task.active_run_id === null || snapshot === null) return;
       await this.appendRunEvent(entry.name, snapshot.task.active_run_id, {
         type: "run_interrupted",
         reason: "Application Host restarted before the run reached a terminal state",
       });
-    }
+    }));
   }
 
   async recordPiSessionId(taskId: string, piSessionId: string): Promise<void> {
