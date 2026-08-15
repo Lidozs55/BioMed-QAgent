@@ -133,3 +133,19 @@
 | parse_pdb/parse_geo/parse_excel/tools.cleaning 死代码 | 已不存在（Phase 8 审计确认） |
 | V2 DatasetRequest/BuildRecipe 临时实现 | 已不存在 |
 | R2T-01/02 import 行 + docstring | 父直接修复（Phase 7 §6） |
+
+---
+
+## ⚫ K. 已知问题（测试稳定性）
+
+### K1. `server/tests/phase5/build-lock.test.ts` 全量跑时偶发失败
+
+- [ ] **已复现于 2026-08-14（本层重构前后均出现）**：`build-lock.test.ts`
+      「concurrent stale takeovers yield exactly one owner」/「real child processes
+      serialize on the lock」在全量 `pnpm test` / `vitest run` 并行负载下偶发失败
+      （可能同时伴随 `durable-agent-runtime` / `dataset-canonicalizer` /
+      `ts-core-e2e` / `web-visual-capture` 等耗时测试超时）。单文件隔离运行
+      **8/8 通过**，偶发失败与本次重构（settings/http/contracts/artifacts 分层）
+      无关——`server/src/dataset/service/build-lock.ts` 未被触碰。
+      根因：真实子进程对文件锁的时序竞争 + 并行跑时的 CPU 争抢。后续若要根治，
+      可给该用例增加进程间同步闩或放宽时窗/重试。
