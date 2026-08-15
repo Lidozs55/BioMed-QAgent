@@ -584,9 +584,16 @@ function applyDurableAssistantDelta(
     envelope,
   );
   if (nextTask === reconciledTask) return reconciledTask;
+  // Durable deltas without stream_id (the Pi adapter path) must still split
+  // at tool boundaries. currentReasoningSegmentByRun already counts tool
+  // boundaries (incremented on every tool_started), so reuse it as the
+  // conversation epoch: assistant text before and after tool calls lands in
+  // distinct assistant_segment items instead of merging into one.
+  const fallbackSegmentIndex =
+    nextTask.currentReasoningSegmentByRun[runId] ?? 0;
   const streamId = hasAssistantChunkRange(payload)
     ? payload.stream_id
-    : `live:${runId}:0`;
+    : `live:${runId}:${fallbackSegmentIndex}`;
   const itemId = `assistant:${streamId}`;
   const existing = nextTask.items.find((i) => i.itemId === itemId);
   const prevContent =

@@ -200,6 +200,17 @@ flush；`tool_started` / `run_finalizing` / Run 终态等边界事件强制 flus
 `conversation_compacted` / `plan_ready` / Run 终态事件**不创建 item**，分别由
 ChatPanel 草稿态、`pendingUserInput` + UserInputDialog、状态条分隔符处理。
 
+**`sequence` 是不可变的首次进入时间线位置**：`upsertItem` 更新已有 item 时保留
+原 `sequence` 与 `createdAt`，只有新增才写入序列；后续更新（如
+`tool_completed`、`stage_progress`）不得把 item 拖到时间线更靠后的位置。需要
+"最后更新时间"语义时用专用字段（如 `ToolCallItem.completedSequence`），不复用
+`sequence`。`itemSequences` 记录每项的稳定首入序列，供 `capTaskItems` 对齐裁剪。
+
+durable `assistant_delta` 无 `stream_id`（Pi adapter 路径）时，`stream.ts` 用
+`currentReasoningSegmentByRun[runId]` 作为会话 epoch 生成
+`live:<run>:<epoch>` 分段 ID（`tool_started` 每次递增该计数），因此工具调用
+前后的正文落在不同的 `assistant_segment`，而不是合并进同一个 item。
+
 `toolLabels` 映射 `toolName + arguments` → `{ verb, target, details? }` 三元组，
 状态条与 ToolCallStep 复用同一映射。
 

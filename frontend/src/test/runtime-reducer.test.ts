@@ -2188,12 +2188,13 @@ describe("conversation items projection", () => {
       kind: "assistant_segment",
       itemId: "assistant:live:run_items:0",
       runId: "run_items",
-      sequence: 2,
+      // sequence is the first delta's position; later deltas must not move it.
+      sequence: 1,
       content: "Hello world",
       isStreaming: false,
       finishReason: null,
     });
-    expect(state.tasksById.task_items.itemSequences["assistant:live:run_items:0"]).toBe(2);
+    expect(state.tasksById.task_items.itemSequences["assistant:live:run_items:0"]).toBe(1);
   });
 
   it("creates distinct AssistantSegmentItems per stream_id", () => {
@@ -2813,7 +2814,9 @@ describe("conversation items projection", () => {
       progressKind: "records_discovered",
       current: 8,
       total: 10,
-      sequence: 3,
+      // Progress updates merge into the first-entry item; its timeline
+      // position (sequence 2, first stage_progress) is immutable.
+      sequence: 2,
     });
   });
 
