@@ -1,18 +1,33 @@
 import { randomUUID } from "node:crypto";
-import { lookup } from "node:dns/promises";
-import { chmod, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { isIP } from "node:net";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
+import { HttpError } from "../http/error.js";
+import { readJsonBody } from "../http/body.js";
+import { sendJson } from "../http/response.js";
+import {
+  asRecord,
+  boundedNumber,
+  optionalRecord,
+  requiredString,
+  type JsonObject,
+} from "../http/validation.js";
+import { readJsonFile, writeJsonAtomic } from "../persistence/atomic-json.js";
+import {
+  validateCredentialedPublicUrl,
+  validatePublicHttpUrl,
+} from "../external/network/url-policy.js";
+import { UnsafeUrlError } from "../external/network/errors.js";
+import type { AddressResolver } from "../external/network/dns.js";
+import { resolveAllAddresses } from "../external/network/dns.js";
 import type { BioMedModelConfig } from "../agent/contracts.js";
 import {
   DEFAULT_DASHSCOPE_BASE_URL,
   VL_MODEL_NAME,
 } from "../processing/vlm/vlm-client.js";
 
-type JsonObject = Record<string, unknown>;
 type ModelSource = "api" | "manual" | "catalog";
 
 interface ProviderRecord {
@@ -82,7 +97,7 @@ export interface ModelSettingsServiceOptions {
   legacyRegistryPath?: string;
   environment?: Record<string, string | undefined>;
   fetcher?: typeof fetch;
-  resolveHost?: (hostname: string) => Promise<readonly { address: string }[]>;
+  resolveHost?: AddressResolver;
 }
 
 const ADVANCED_DEFAULTS = {
@@ -127,43 +142,14 @@ const VENDORS = [
   ["mistral", "Mistral AI", "https://api.mistral.ai/v1", false],
 ] as const;
 
-class HttpError extends Error {
-  constructor(readonly status: number, message: string) {
-    super(message);
-  }
-}
 
 function timestamp(): string {
   return new Date().toISOString();
 }
 
-function asRecord(value: unknown): JsonObject {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new HttpError(422, "request body must be an object");
-  }
-  return value as JsonObject;
-}
 
-function optionalRecord(value: unknown): JsonObject {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as JsonObject
-    : {};
-}
 
-function requiredString(value: unknown, name: string): string {
-  if (typeof value !== "string" || value.trim() === "") {
-    throw new HttpError(422, `${name} must be a non-empty string`);
-  }
-  return value.trim();
-}
 
-function boundedNumber(value: unknown, name: string, minimum: number, maximum?: number): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < minimum ||
-      (maximum !== undefined && value > maximum)) {
-    throw new HttpError(422, `${name} is outside the supported range`);
-  }
-  return value;
-}
 
 function maskApiKey(value: string): string {
   if (value === "") return "";
@@ -225,64 +211,8 @@ function defaultAuth(environment: Record<string, string | undefined>): AuthState
   };
 }
 
-async function readJson<T>(filePath: string): Promise<T | undefined> {
-  try {
-    return JSON.parse(await readFile(filePath, "utf8")) as T;
-  } catch {
-    return undefined;
-  }
-}
 
-async function atomicWrite(filePath: string, value: unknown, privateFile = false): Promise<void> {
-  await mkdir(path.dirname(filePath), { recursive: true });
-  const temporary = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-  if (privateFile) await chmod(temporary, 0o600).catch(() => undefined);
-  await rename(temporary, filePath);
-}
 
-function isPrivateAddress(address: string): boolean {
-  if (isIP(address) === 4) {
-    const [first = 0, second = 0] = address.split(".").map(Number);
-    return first === 0 || first === 10 || first === 127 ||
-      (first === 169 && second === 254) ||
-      (first === 172 && second >= 16 && second <= 31) ||
-      (first === 192 && second === 168);
-  }
-  const normalized = address.toLowerCase();
-  return normalized === "::1" || normalized.startsWith("fc") ||
-    normalized.startsWith("fd") || normalized.startsWith("fe80:");
-}
-
-async function publicProviderUrl(
-  rawUrl: string,
-  apiKey: string,
-  resolveHost: (hostname: string) => Promise<readonly { address: string }[]>,
-): Promise<URL> {
-  let target: URL;
-  try {
-    target = new URL(rawUrl);
-  } catch {
-    throw new HttpError(422, "provider base URL is invalid");
-  }
-  if (!(["http:", "https:"] as string[]).includes(target.protocol) ||
-      target.username !== "" || target.password !== "") {
-    throw new HttpError(422, "provider base URL must be HTTP(S) without credentials");
-  }
-  if (apiKey !== "" && target.protocol !== "https:") {
-    throw new HttpError(422, "credentialed provider URLs must use HTTPS");
-  }
-  if (target.hostname === "localhost" || target.hostname.endsWith(".localhost")) {
-    throw new HttpError(422, "provider base URL must be public");
-  }
-  const addresses = await resolveHost(target.hostname).catch(() => {
-    throw new HttpError(422, "provider hostname cannot be resolved");
-  });
-  if (addresses.length === 0 || addresses.some(({ address }) => isPrivateAddress(address))) {
-    throw new HttpError(422, "provider base URL must resolve only to public addresses");
-  }
-  return target;
-}
 
 export class ModelSettingsService {
   private readonly registryPath: string;
@@ -290,7 +220,7 @@ export class ModelSettingsService {
   private readonly legacySettingsPath: string;
   private readonly environment: Record<string, string | undefined>;
   private readonly fetcher: typeof fetch;
-  private readonly resolveHost: (hostname: string) => Promise<readonly { address: string }[]>;
+  private readonly resolveHost: AddressResolver;
   private writes: Promise<void> = Promise.resolve();
 
   private constructor(
@@ -303,16 +233,15 @@ export class ModelSettingsService {
     this.legacySettingsPath = path.join(options.settingsDir, "model.json");
     this.environment = options.environment ?? process.env;
     this.fetcher = options.fetcher ?? fetch;
-    this.resolveHost = options.resolveHost ??
-      ((hostname) => lookup(hostname, { all: true }));
+    this.resolveHost = options.resolveHost ?? resolveAllAddresses;
   }
 
   static async create(options: ModelSettingsServiceOptions): Promise<ModelSettingsService> {
     const environment = options.environment ?? process.env;
-    const registry = await readJson<RegistryState>(
+    const registry = await readJsonFile<RegistryState>(
       path.join(options.settingsDir, "model-registry.json"),
     ) ?? defaultRegistry(environment);
-    const auth = await readJson<AuthState>(path.join(options.settingsDir, "model-auth.json")) ??
+    const auth = await readJsonFile<AuthState>(path.join(options.settingsDir, "model-auth.json")) ??
       defaultAuth(environment);
     const service = new ModelSettingsService(options, registry, auth);
     await service.migrateLegacySettings();
@@ -409,14 +338,14 @@ export class ModelSettingsService {
 
   private persist(): Promise<void> {
     return Promise.all([
-      atomicWrite(this.registryPath, this.registry),
-      atomicWrite(this.authPath, this.auth, true),
+      writeJsonAtomic(this.registryPath, this.registry),
+      writeJsonAtomic(this.authPath, this.auth, { private: true }),
     ]).then(() => undefined);
   }
 
   private async migrateLegacySettings(): Promise<void> {
     if (await stat(this.registryPath).then(() => true, () => false)) return;
-    const legacy = await readJson<JsonObject>(this.legacySettingsPath);
+    const legacy = await readJsonFile<JsonObject>(this.legacySettingsPath);
     if (legacy === undefined) return;
     const settings = this.registry.settings;
     if (typeof legacy.base_url === "string") settings.base_url = legacy.base_url;
@@ -575,28 +504,11 @@ export class ModelSettingsService {
   }
 
   private async body(request: IncomingMessage): Promise<JsonObject> {
-    const chunks: Buffer[] = [];
-    let size = 0;
-    for await (const chunk of request) {
-      const buffer = Buffer.from(chunk);
-      size += buffer.length;
-      if (size > 1_048_576) throw new HttpError(413, "request body is too large");
-      chunks.push(buffer);
-    }
-    try {
-      return asRecord(JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}"));
-    } catch (error) {
-      if (error instanceof HttpError) throw error;
-      throw new HttpError(400, "request body is not valid JSON");
-    }
+    return asRecord(await readJsonBody(request));
   }
 
   private send(response: ServerResponse, status: number, value: unknown): void {
-    response.writeHead(status, {
-      "content-type": "application/json; charset=utf-8",
-      "cache-control": "no-store",
-    });
-    response.end(JSON.stringify(value));
+    sendJson(response, status, value, { "cache-control": "no-store" });
   }
 
   private publicSettings(): JsonObject {
@@ -823,8 +735,29 @@ export class ModelSettingsService {
     return this.mutate(() => this.activateInMemory(this.model(id)));
   }
 
+  /**
+   * Validate *baseUrl* against the shared outbound URL policy (url-policy.ts)
+   * before hitting it: HTTP(S) shape, no URL credentials, localhost blocked,
+   * every resolved address must be global. Credentialed requests force HTTPS.
+   */
+  private async publicProviderUrl(rawUrl: string, apiKey: string): Promise<URL> {
+    try {
+      if (apiKey !== "") {
+        await validateCredentialedPublicUrl(rawUrl, { resolve: this.resolveHost });
+      } else {
+        await validatePublicHttpUrl(rawUrl, { resolve: this.resolveHost });
+      }
+    } catch (error) {
+      if (error instanceof UnsafeUrlError) {
+        throw new HttpError(422, error.message);
+      }
+      throw error;
+    }
+    return new URL(rawUrl);
+  }
+
   private async discover(baseUrl: string, apiKey: string, query?: string): Promise<JsonObject[]> {
-    const target = await publicProviderUrl(baseUrl, apiKey, this.resolveHost);
+    const target = await this.publicProviderUrl(baseUrl, apiKey);
     target.pathname = `${target.pathname.replace(/\/$/, "")}/models`;
     const response = await this.fetcher(target, {
       headers: apiKey === "" ? undefined : { authorization: `Bearer ${apiKey}` },
