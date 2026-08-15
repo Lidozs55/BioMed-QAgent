@@ -120,9 +120,9 @@ describe("WebSocket edge cases", () => {
     await frames.next();
     await frames.next();
     socket.send(JSON.stringify({ type: "unsubscribe", task_id: a.task_id }));
-    await new Promise((r) => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 300));
     await runtime.repository.appendRunEvent(a.task_id, a.run_id, { type: "run_started" });
-    expect(await frames.nextOrTimeout(300)).toBe("timeout");
+    expect(await frames.nextOrTimeout(1500)).toBe("timeout");
   });
 
   test("replays many events in strict sequence order (M05-T08)", async () => {

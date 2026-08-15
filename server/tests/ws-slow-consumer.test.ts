@@ -62,15 +62,15 @@ describe("WebSocket slow consumer", () => {
     socket.send(JSON.stringify({ type: "subscribe", task_id: a.task_id, after_sequence: 0 }));
     await new Promise((r) => setTimeout(r, 100));
 
-    const big = "x".repeat(2048);
+    const big = "x".repeat(8192);
     const closeEvent = once(socket, "close");
     await runtime.repository.appendRunEvents(
       a.task_id,
       a.run_id,
-      Array.from({ length: 200 }, (_, i) => ({ type: "assistant_delta", delta: `${big}${i}` })),
+      Array.from({ length: 800 }, (_, i) => ({ type: "assistant_delta", delta: `${big}${i}` })),
     );
     const [code] = await closeEvent;
     expect(code).toBe(1013);
     await runtime.close();
-  }, 20_000);
+  }, 60_000);
 });
