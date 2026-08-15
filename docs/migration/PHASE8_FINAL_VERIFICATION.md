@@ -1,8 +1,9 @@
 # Phase 8 Final Verification（legacy Python Runtime 物理退役验收报告）
 
-> 状态：**closed**（2026-08-14；含第二轮最终审计修复，见 §10）
+> 状态：**closed**（2026-08-15；含第二轮最终审计修复 §10 与第三轮 P8-G 封板 §11）
 > Baseline commit：`cb2600597525d97fb00538b55dcfb001cb6e7c03`（main）
-> 合并提交：`08dc47d`（P8-A→P8-D）；最终审计修复：`6ec22f0`（fix/phase8-final-audit）
+> 合并提交：`08dc47d`（P8-A→P8-D）；最终审计修复：`6410279`（fix/phase8-final-audit）；
+> P8-G 封板：`<merge>`（fix/phase8-final-audit-p8g）
 > 执行计划：`docs/migration/phase8-python-runtime-retirement.md`
 > 基线盘点：`docs/migration/phase8-retirement-inventory.md`
 
@@ -315,3 +316,85 @@ root / SPA fallback / databases=9 全部 200。
 
 > 已知非阻塞遗留项（§8）继续有效；新增一条：release bundle 的“Create
 > Release”步骤仅在 tag 推送（`v*`）时执行，branch dispatch 下按预期失败。
+
+---
+
+## 11. 第三轮 P8-G 封板（2026-08-15，最终审计后）
+
+独立复审结论：架构迁移本体完成（Pi / TS Dataset Core / bridge / legacy 删除
+全部确认），但封板前还有 2 个 P1 边角问题 + 1 个工程卫生问题。四项处理
+结果如下，全部附真实 GitHub Actions 证据。
+
+### 11.1 cache crash recovery 剩余窗口（P1，已修）
+
+上一轮修复后仍有一个未覆盖崩溃点：**两次快照重命名之间** crash（`csv →
+csv.bak` 成功、manifest 快照未执行）。此时状态为：`csv.bak` 存在、CSV
+缺失、`manifest.json`（旧）存在、`json.bak` 缺失。原 `_recover_leftover_backups`
+将“仅 csv_bak 存在”判为不可能并落入清理分支**删除唯一旧 CSV 副本**——
+数据从暂时不可读变成永久丢失（如随后写盘失败）。
+
+修复（`database/cache_store.py`）：`json_bak` 缺失但 `csv_bak` 存在 → 快照未
+完成，**还原** `csv.bak → main_data.csv` 而非删除；结构上先处理 `json_bak`
+分支（发布未完成回退 / 越过 commit point 清理），再处理仅 `csv_bak` 分支。
+新增 2 个回归测试（`database/tests/test_cache_store.py`）：
+
+- 崩溃窗口 + 下次 commit 写盘失败 → 旧 dataset 完整可读、无残留
+  （该测试在旧逻辑下确实失败：`assert result is not None` 红）；
+- 同一窗口 + 下次 commit 成功 → 正常发布新版本。
+
+全库 `uv run pytest database/tests`：79 passed（77 → 79）；ruff clean；
+bridge self-test OK。
+
+### 11.2 release bundle staging 嵌套（P1/P2，已修）
+
+`package.yml` 的 download 步骤先创建 `staging/frontend/dist`，随后
+`cp -r frontend staging/frontend` 因目标目录已存在而把源目录**嵌套**成
+`staging/frontend/frontend/`，bundle 内 `frontend` workspace 结构被破坏
+（`pnpm-workspace.yaml` 的 `frontend` 不再对应正常 package）。
+
+修复：改为 `cp -r frontend/. staging/frontend/`（合并内容；本地模拟验证
+嵌套消除）。server 行 `cp -r server/src staging/server/src` 目标路径尚不
+存在、语义正确，未改动。
+
+**真实 GitHub Actions 验收**（此前该 workflow 从未实际运行过）：
+
+- `workflow_dispatch`（branch ref，run `31858398801`）：
+  Build Frontend ✅ / Build TS Application Host ✅ / Package ✅ /
+  **Release bundle smoke ✅**（unpack → `pnpm install --frozen-lockfile` →
+  `uv sync --frozen` → bridge self-test → `pnpm start` → GET health/`/`/databases
+  全 200）；Create Release 无 tag 按预期失败；
+- 下载 artifact 直接查验 zip：`frontend/package.json` + `frontend/src/`
+  （202 文件）+ `frontend/dist/` 同级、**无 `frontend/frontend` 嵌套**；
+  `server/{package.json,tsconfig.json,src,dist}`、`packages/contracts/src`
+  （prestart 构建 dist）、`tsconfig.base.json` 全部就位。
+
+### 11.3 `server/data/` 来源与错误 ignore（P2，已修）
+
+真相：根 `.env` 写 `OUTPUT_DIR=data/output`（相对路径），而旧 `index.ts`
+用 `path.resolve(OUTPUT_DIR)` **按进程 cwd 解析**——在 `server/` 目录下运行
+server 包 dev/start 脚本（其设计上读 `../.env`）时，运行时数据落到
+`server/data/`（cache + settings）。`server/data/settings/` 内是**真实用户
+配置（含 API key）**，未删除、未跟踪。
+
+修复：`server/src/config.ts` 新增 `resolveOutputDir(repositoryRoot, raw)`——
+相对 `OUTPUT_DIR` **锚定 repositoryRoot** 而非 cwd（绝对路径行为不变，
+空值默认 `<repo>/data/output`）；`index.ts` 改用之；`config.test.ts` 新增
+3 个测试（默认值 / 绝对路径 / 相对路径锚定回归）。
+
+`.gitignore`：删除错误的 `server/data/` 条目（隐藏了上述问题）与失效的
+`backend/tmp-*/`、`!backend/app/datasets/build/` 残留；保留正式运行时数据根
+`<repo>/data/` 的既有忽略规则。
+
+### 11.4 最终封板结论
+
+| 项目 | 状态 |
+| --- | --- |
+| Phase 8 架构迁移本体（Pi / TS Core / bridge / legacy 删除） | ✅ |
+| Windows CI（`uv sync` + bridge self-test + contracts build + 测试） | ✅ |
+| database CI / workspace CI | ✅ |
+| cache 普通异常 rollback + 完整 crash recovery（含快照间窗口） | ✅ |
+| release bundle workflow（真实 Actions run + smoke + 布局查验） | ✅ |
+| `OUTPUT_DIR` cwd 敏感 / `server/data/` 泄漏 | ✅ |
+| docs（TODO / ARCHITECTURE / 本报告） | ✅ |
+
+Phase 0–8 Pi 迁移主线：**sealed**。后续变更按常规开发流程走。
