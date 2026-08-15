@@ -51,7 +51,7 @@ export function QueuedMessages({
   };
 
   return (
-    <div className="space-y-1.5" data-slot="queued-messages">
+    <div className="flex flex-col gap-1.5" data-slot="queued-messages">
       {entries.map((entry) => (
         <div
           key={entry.id}

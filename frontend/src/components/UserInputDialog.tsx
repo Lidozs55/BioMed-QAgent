@@ -99,7 +99,7 @@ function renderDetailValue(value: unknown): ReactNode {
   }
   if (Array.isArray(value)) {
     return (
-      <ul className="list-disc space-y-1 pl-4">
+      <ul className="list-disc pl-4 flex flex-col gap-1">
         {value.map((item, index) => (
           <li key={index}>{renderDetailValue(item)}</li>
         ))}
@@ -277,7 +277,7 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
 
         {planSpec !== null && (
           <div className="flex max-h-72 min-w-0 flex-col gap-3 overflow-auto rounded-md border border-border/60 bg-muted/30 p-3 text-sm">
-            <section className="space-y-1">
+            <section className="flex flex-col gap-1">
               <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                 研究主题
               </p>
@@ -285,11 +285,11 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
             </section>
 
             {planSpec.queries.length > 0 && (
-              <section className="space-y-2">
+              <section className="flex flex-col gap-2">
                 <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                   检索查询 ({planSpec.queries.length})
                 </p>
-                <ol className="space-y-2">
+                <ol className="flex flex-col gap-2">
                   {planSpec.queries.map((query, index) => {
                     const order = asNumber(query.order) ?? index + 1;
                     const database = asString(query.database) ?? "unknown";
@@ -302,7 +302,7 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
                     return (
                       <li
                         key={queryId ?? `${database}-${index}`}
-                        className="space-y-1 rounded-md border border-border/40 bg-background/60 p-2"
+                        className="flex flex-col gap-1 rounded-md border border-border/40 bg-background/60 p-2"
                       >
                         <div className="flex flex-wrap items-center gap-1.5">
                           <Badge variant="secondary">#{order}</Badge>
@@ -333,11 +333,11 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
             )}
 
             {planSpec.datasets.length > 0 && (
-              <section className="space-y-2">
+              <section className="flex flex-col gap-2">
                 <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                   数据集 ({planSpec.datasets.length})
                 </p>
-                <ul className="space-y-2">
+                <ul className="flex flex-col gap-2">
                   {planSpec.datasets.map((dataset, index) => {
                     const datasetId = asString(dataset.dataset_id);
                     const database = asString(dataset.database) ?? "unknown";
@@ -346,7 +346,7 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
                     return (
                       <li
                         key={datasetId ?? `${database}-${index}`}
-                        className="space-y-1 rounded-md border border-border/40 bg-background/60 p-2"
+                        className="flex flex-col gap-1 rounded-md border border-border/40 bg-background/60 p-2"
                       >
                         <div className="flex flex-wrap items-center gap-1.5">
                           <Badge variant="outline">{database}</Badge>
@@ -365,7 +365,7 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
             )}
 
             {planSpec.requested_outputs.length > 0 && (
-              <section className="space-y-1">
+              <section className="flex flex-col gap-1">
                 <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                   请求输出
                 </p>
@@ -388,9 +388,9 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
             </p>
 
             {Object.keys(pending.detail).length > 0 && (
-              <dl className="space-y-2">
+              <dl className="flex flex-col gap-2">
                 {Object.entries(pending.detail).map(([key, value]) => (
-                  <div key={key} className="space-y-1">
+                  <div key={key} className="flex flex-col gap-1">
                     <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                       {key}
                     </dt>
@@ -400,7 +400,7 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
               </dl>
             )}
 
-            <div className="space-y-1.5">
+            <div className="flex flex-col gap-1.5">
               <Label htmlFor="data-correction-input">修正内容</Label>
               <Textarea
                 id="data-correction-input"

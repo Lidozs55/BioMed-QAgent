@@ -14,11 +14,6 @@ export function AssistantSegment({ item }: AssistantSegmentProps) {
         <Bubble variant="ghost" className="w-full">
           <BubbleContent className="w-full">
             <MarkdownContent content={item.content} streaming={item.isStreaming} />
-            {item.isStreaming && (
-              <span className="ml-0.5 inline-block animate-pulse" aria-hidden="true">
-                ▋
-              </span>
-            )}
           </BubbleContent>
         </Bubble>
       </MessageContent>

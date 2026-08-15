@@ -203,8 +203,8 @@ export function BuildReportCard({ item, download = triggerArtifactDownload }: Bu
             <div
               className={
                 result.status === "no_data"
-                  ? "rounded-md border border-sky-600/30 bg-sky-600/5 px-3 py-2 text-sm"
-                  : "rounded-md border border-amber-600/30 bg-amber-600/5 px-3 py-2 text-sm"
+                  ? "rounded-md border border-info/30 bg-info/5 px-3 py-2 text-sm"
+                  : "rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-sm"
               }
             >
               <p className="font-medium">{result.user_summary || statusLabel(result.status)}</p>

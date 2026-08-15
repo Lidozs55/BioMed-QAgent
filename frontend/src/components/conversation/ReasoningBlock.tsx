@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { BrainIcon, CaretDownIcon, SpinnerGapIcon } from "@phosphor-icons/react";
+import { BrainIcon, CaretDownIcon } from "@phosphor-icons/react";
 
+import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import type { ReasoningItem } from "@/runtime/types";
 
@@ -53,7 +54,7 @@ export function ReasoningBlock({ item }: ReasoningBlockProps) {
         className="flex items-center gap-2 text-sm text-muted-foreground"
       >
         {item.isStreaming ? (
-          <SpinnerGapIcon className="size-4 animate-spin" aria-hidden="true" />
+          <Spinner className="size-4" aria-hidden="true" />
         ) : (
           <BrainIcon className="size-4" aria-hidden="true" />
         )}
@@ -66,11 +67,6 @@ export function ReasoningBlock({ item }: ReasoningBlockProps) {
       {expanded && (
         <div className="mt-1 whitespace-pre-wrap border-l-2 border-muted pl-6 text-sm text-muted-foreground">
           {item.content}
-          {item.isStreaming && (
-            <span className="ml-0.5 inline-block animate-pulse" aria-hidden="true">
-              ▋
-            </span>
-          )}
         </div>
       )}
     </div>

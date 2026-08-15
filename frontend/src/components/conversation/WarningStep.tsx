@@ -13,7 +13,7 @@ export function WarningStep({ item }: WarningStepProps) {
     <Message align="start">
       <MessageContent>
         <Bubble variant="ghost" className="w-full">
-          <BubbleContent className="flex items-start gap-2 w-full text-sm text-yellow-700 dark:text-yellow-400">
+          <BubbleContent className="flex w-full items-start gap-2 text-sm text-warning">
             <WarningCircleIcon className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
             <span>{item.message}</span>
           </BubbleContent>

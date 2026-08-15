@@ -41,18 +41,18 @@ describe("ReasoningBlock", () => {
     expect(screen.getByRole("button")).toHaveAttribute("aria-expanded", "true");
   });
 
-  it("shows streaming cursor while streaming", () => {
+  it("shows spinner while streaming", () => {
     const { container } = render(
       <ReasoningBlock item={makeReasoning({ isStreaming: true })} />,
     );
-    expect(container.textContent).toContain("▋");
+    expect(container.querySelector('[data-slot="spinner"]')).not.toBeNull();
   });
 
-  it("does not show streaming cursor when not streaming", () => {
+  it("does not show spinner when not streaming", () => {
     const { container } = render(
       <ReasoningBlock item={makeReasoning({ isStreaming: false })} />,
     );
-    expect(container.textContent).not.toContain("▋");
+    expect(container.querySelector('[data-slot="spinner"]')).toBeNull();
   });
 
   it("user can manually expand a collapsed block", () => {

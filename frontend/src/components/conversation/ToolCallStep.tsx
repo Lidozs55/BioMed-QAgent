@@ -61,7 +61,7 @@ export function ToolCallStep({ item }: ToolCallStepProps) {
               />
             </button>
             {expanded && (
-              <div className="mt-1 space-y-1 text-sm">
+              <div className="mt-1 flex flex-col gap-1 text-sm">
                 {item.arguments && (
               <details>
                 <summary className="cursor-pointer text-muted-foreground">输入参数</summary>

@@ -92,7 +92,7 @@ export function OperationStep({ item }: OperationStepProps) {
               />
             </button>
             {showDetail && (
-              <div className="mt-1 space-y-1">
+              <div className="mt-1 flex flex-col gap-1">
                 {item.progress !== null && (
                   <p className="text-xs text-muted-foreground">
                     {item.progress.kind}：
