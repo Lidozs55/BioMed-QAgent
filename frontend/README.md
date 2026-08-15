@@ -275,7 +275,7 @@ interface TaskProjection {
 ```
 
 **ConversationItem 联合类型**（8 种 kind，详见
-[ARCHITECTURE.md §9.1](../docs/ARCHITECTURE.md#91-对话流展示coding-agent-风格)）：
+[ARCHITECTURE.md §17.2](../docs/architecture/agent-frontend.md)）：
 `user_message` / `assistant_segment` / `reasoning` / `tool_call` / `stage` /
 `progress` / `warning` / `artifact`。reducer 按 `itemId` 去重 + `sequence` 升序
 维护 `items` 列表，ChatPanel 通过 `selectActiveItems` 订阅，`selectActiveItem`

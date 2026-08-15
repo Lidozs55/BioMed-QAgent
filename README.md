@@ -4,13 +4,12 @@ BioMed-QAgent 是一个面向生物医学研究数据的 **Agent + 确定性 Pip
 
 项目的目标是让数据处理过程**可追溯、可验证、可恢复**，而不是让大语言模型直接“猜”出一个 CSV。系统可以展示统计结果和可视化数据，但不会在缺少数据证据时生成科研或临床结论。
 
-> 项目正依据 [Pi 迁移方案](docs/BioMed-QAgent_Pi_Migration_Plan.md) 执行迁移：
-> **Phase 0–8 全部完成（2026-08-14）**。唯一正式拓扑为
-> `TS Host + Pi Agent + TS Dataset Core`：正式 `/api/v1`、durable runtime、
-> Dataset Core 均由 TypeScript 权威实现；Python 仅剩 `database/` persistence
-> bridge（JSONL named-op）。legacy FastAPI / rollback profile / feature flags
-> 已全部退役。进度跟踪见 [docs/TODO.md](docs/TODO.md)，实际边界以代码及
-> [架构文档](docs/ARCHITECTURE.md) 为准。
+> 当前正式拓扑为 **TS Host + Pi Agent + TS Dataset Core**：formal `/api/v1`
+> HTTP/WS、durable Task/Run/Event、模型设置与 product API 均由 TypeScript 权威
+> 实现；Agent 为 Pi（`server/src/agent/pi-adapter.ts`）；数据集执行为 TS
+> 确定性核心（`server/src/dataset/`）；Python 仅剩 `database/` persistence
+> bridge（JSONL named-op，按需启动）。边界与事件模型详见
+> [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
 ## 核心能力
 
@@ -43,12 +42,13 @@ BioMed-QAgent 是一个面向生物医学研究数据的 **Agent + 确定性 Pip
                     data/output/tasks/<task_id>/artifacts/
 ```
 
-legacy Agent、Python Core 或 experimental Pi 均已退役：不再有 private
-loopback FastAPI，产品路径不启动任何 Python Web Server。
+产品路径只有一个 Node.js 进程（TS Host，Pi 为其进程内依赖）和按需启动的
+Python `database/bridge.py` 子进程，不存在 legacy FastAPI / Python Runtime /
+experimental Pi 路径。
 
 职责边界如下：
 
-- **formal Agent** 由 Pi + TS durable runtime 持有（`task_ts_*` Task/Run/Event）。
+- **Agent** 由 Pi + TS durable runtime 持有（`task_ts_*` Task/Run/Event）。
 - **Dataset Core** 负责按照契约执行处理、记录审计信息、检查完整性，并拒绝未经验证的产物；Agent 不能直接制造 publication。
 - **Skill** 是 instructions 与 Function Tools 的能力包，按 `discovery/`、`acquisition/`、`processing/`、`analysis/` 分类。
 - **Runtime** 负责任务生命周期和事件持久化；前端状态是后端事件的投影，不是事实来源。
@@ -58,27 +58,9 @@ loopback FastAPI，产品路径不启动任何 Python Web Server。
 
 ## 迁移状态
 
-项目正依据 [Pi 迁移方案](docs/BioMed-QAgent_Pi_Migration_Plan.md) 把 Agent Runtime
-迁到 Pi、把 Dataset Core 迁到 TypeScript。当前进度：
-
-| Phase | 内容 | 状态 |
-| --- | --- | --- |
-| 0 | 冻结边界与迁移 ADR | ✅ 完成 |
-| 1 | Pi Main Agent + TS Host + Workspace + Core bridge | ✅ 完成 |
-| 2 | Skills 与通用 Agent 工具迁移 | ✅ 完成 |
-| 3 | TS Application Runtime（durable Task/Run/Event） | ✅ 完成（Phase 7 已转默认） |
-| 4 | Dataset Deterministic Core TS 移植（steps 1-10 + parity） | ✅ 完成（M2 已接入运行路径） |
-| 5 | 外部能力与 Python 数据处理依赖迁移 | ✅ 完成（2026-08-14；Python 仅回滚 + DB bridge） |
-| 6 | 模型设置与 Settings API | ✅ 完成 |
-| 7 | 前端正式切换与 FastAPI 默认关闭 | ✅ 完成（2026-08-14） |
-| 8 | 删除 legacy Python Runtime（物理退役） | ✅ 完成（2026-08-14） |
-
-Phase 0/1 执行细节见
-[docs/BioMed-QAgent_Pi_Migration_Phase0_1_Detailed.md](docs/BioMed-QAgent_Pi_Migration_Phase0_1_Detailed.md)
-与 [docs/migration/](docs/migration/)；Phase 3 边界与回滚见
-[docs/migration/phase3-ts-application-runtime.md](docs/migration/phase3-ts-application-runtime.md)；
-Phase 4 TS 代码在 `server/src/dataset/`，证据见 `.superpowers/phase4/T1-T10-report.md`；
-进度与剩余工作跟踪见 [docs/TODO.md](docs/TODO.md)。
+Pi 迁移（Phase 0–8）已于 2026-08-14 全部完成：legacy Python Runtime、FastAPI、
+rollback profile 与 feature flags 已物理删除。历史执行记录见
+[docs/migration/](docs/migration/)；迁移期间的中间拓扑不再代表当前系统。
 
 ## 快速开始
 
@@ -117,16 +99,24 @@ $EDITOR .env
 ```dotenv
 DASHSCOPE_API_KEY=your-api-key-here
 DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-MODEL_NAME=qwen-plus
+MODEL_NAME=qwen3.7-plus
 ```
 
 若使用 NCBI E-utilities，建议同时填写真实的 `NCBI_EMAIL` 和 `NCBI_USER_AGENT`。完整变量说明见 [.env.example](.env.example)。
 
-安装 Python（database bridge 项目）与根 pnpm Workspace 依赖：
+安装 `database/` bridge 项目（Python 3.12+ 仅 bridge 需要；TS Host 自动探测
+`BIOMED_PYTHON_BIN` → 仓库 `.venv` → PATH，规划中改为内置解释器）与根 pnpm
+Workspace 依赖：
 
 ```bash
 uv sync
 pnpm install --frozen-lockfile
+```
+
+可选：需要网页视觉证据采集时安装 Playwright Chromium：
+
+```bash
+pnpm exec playwright install chromium
 ```
 
 ### 2. 启动单端口应用
@@ -185,30 +175,24 @@ API 只公开通过 manifest 注册并通过验证的 `artifacts/` 文件。任�
 
 ## HTTP API
 
-所有 REST 路由统一使用 `/api/v1` 前缀。
+所有 REST 路由统一使用 `/api/v1` 前缀。常用路由：
 
 | 方法               | 路径                                                | 用途                                      |
 | ------------------ | --------------------------------------------------- | ----------------------------------------- |
-| `GET`            | `/api/v1/health`                                  | 健康检查                                  |
-| `GET`            | `/api/v1/databases`                               | 列出可选数据库                            |
-| `GET` / `POST` | `/api/v1/tasks`                                   | 查询任务 / 创建任务并排队首个 Run         |
-| `GET`            | `/api/v1/tasks/{task_id}`                         | 获取权威任务快照                          |
-| `DELETE`         | `/api/v1/tasks/{task_id}`                         | 删除终态任务及其历史                      |
-| `POST`           | `/api/v1/tasks/{task_id}/runs`                    | 为 idle Agent Task 排队下一轮 Run         |
-| `POST`           | `/api/v1/tasks/{task_id}/runs/{run_id}/cancel`    | 请求取消 Run                              |
-| `POST`           | `/api/v1/tasks/{task_id}/runs/{run_id}/resume`    | 提交人在回路决策                          |
-| `GET`            | `/api/v1/tasks/{task_id}/messages`                | 分页读取任务消息                          |
-| `GET`            | `/api/v1/tasks/{task_id}/events`                  | 按 sequence 重放 durable events           |
-| `GET`            | `/api/v1/tasks/{task_id}/artifacts`               | 列出已验证产物                            |
-| `GET`            | `/api/v1/tasks/{task_id}/artifacts/{artifact_id}` | 下载并校验指定产物                        |
-| `GET` / `POST` | `/api/v1/settings`                                | 读取 / 持久化模型设置，返回时掩码 API Key |
-| `GET`            | `/api/v1/vendors`                                 | 列出已知模型供应商                        |
-| `GET`            | `/api/v1/models`                                  | 发现或筛选可用模型                        |
-| `GET`            | `/api/v1/models/{model_id}`                       | 获取单个模型详情                          |
-| `GET`            | `/api/v1/skills`                                  | 列出内置和用户 Skill                      |
+| `GET`            | `/health`                                         | 健康检查                                  |
+| `GET` / `POST`   | `/tasks`、`/import/tasks`                          | 列出任务 / 创建任务（含导入）             |
+| `GET` / `DELETE` | `/tasks/{task_id}`                                 | 权威任务快照 / 删除终态任务               |
+| `POST`           | `/tasks/{task_id}/runs`                            | 排队下一轮 Run                            |
+| `POST`           | `/tasks/{task_id}/runs/{run_id}/resume`            | 提交人在回路（HITL）决策                  |
+| `GET`            | `/tasks/{task_id}/events`、`/messages`、`/artifacts` | 重放事件 / 读取消息 / 产物下载          |
+| `GET` / `PUT`    | `/settings`、`/personalization`                    | 模型设置（API Key 掩码）/ 个性化设置      |
+| `GET`            | `/databases`、`/model-registry/*`                  | 数据库与模型注册表（供应商/模型/激活）    |
+| `GET`            | `/builds`、`/cache/*`                              | 构建记录与本地缓存                        |
+| WS               | `/ws`                                              | durable events + 实时 assistant 流        |
 
-Skill 管理 API 还提供启用、禁用、上传、校验和删除操作，详见
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 与代码。
+完整路由与 DTO 定义以 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)（API 面见
+[docs/architecture/runtime-events.md](docs/architecture/runtime-events.md) §15）和
+`@biomed/contracts` 为准（README 不重复维护全表）。
 
 ### Durable WebSocket
 
@@ -230,11 +214,11 @@ WebSocket 不负责创建 Run，也不提供 SSE；创建任务和提交新一�
 
 ```text
 BioMed-QAgent/
-├── server/                 # TS Host、Pi adapter、Workspace、durable Phase 3 runtime、legacy proxy
+├── server/                 # TS Host、Pi adapter、TS Dataset Core、durable runtime
 ├── packages/contracts/     # 前端/Host 共享 wire DTO
 ├── .pi/skills/             # curated Skills（SKILL.md）
 ├── database/               # Python persistence bridge（stdlib，named-op JSONL）
-├── tests/                  # 共享 golden fixtures（fixtures/、migration/）
+├── tests/                  # 共享 golden fixtures（fixtures/）
 ├── frontend/
 │   ├── src/
 │   │   ├── components/       # 业务组件与 shadcn/ui 组件
@@ -250,8 +234,8 @@ BioMed-QAgent/
 ├── docs/
 │   ├── ARCHITECTURE.md        # 权威架构和数据契约
 │   ├── DEVELOPER_QUICKSTART.md # 开发者快速入门
-│   ├── TODO.md                # 迁移主线进度与未完成项
-│   └── migration/             # Pi 迁移 Phase 0/1/3 边界与验收文档
+│   ├── TODO.md                # 开发任务与进度索引（迁移 Phase 0-8 已完成）
+│   └── migration/             # 历史迁移执行记录（Phase 0-8，已归档）
 ├── AGENTS.md                  # AI Agent 与协作约定
 ├── PROBLEM.md                 # 赛题背景与评价标准
 └── .env.example               # 环境变量模板
@@ -262,13 +246,13 @@ BioMed-QAgent/
 | 层级           | 技术                                                   |
 | -------------- | ------------------------------------------------------ |
 | Application Host | Node.js 22.19+、TypeScript、Vite                     |
-| Agent          | Pi + TS durable runtime（默认）；OpenAI Agents SDK（回滚） |
-| Dataset Core   | TypeScript deterministic core；Python V2（回滚）       |
-| Python         | DB bridge；FastAPI/uvicorn legacy rollback             |
+| Agent          | Pi（`server/src/agent/pi-adapter.ts`）+ TS durable runtime |
+| Dataset Core   | TypeScript deterministic core（`server/src/dataset/`） |
+| Python         | 3.12+ stdlib persistence bridge（`database/`）         |
 | 前端           | React 19、Vite、TypeScript、Tailwind CSS v4、shadcn/ui |
 | 状态与数据展示 | Zustand、React Markdown、PapaParse                     |
-| 测试           | pytest、pytest-asyncio、Vitest、Testing Library        |
-| 工具链         | uv、pnpm、ruff、ESLint                                 |
+| 测试           | Vitest（TS）、pytest（database bridge）                |
+| 工具链         | pnpm、ESLint（前端）、uv / ruff（仅 database 项目）    |
 
 ## 配置参考
 
@@ -278,7 +262,7 @@ BioMed-QAgent/
 | ---------------------- | ----------------------------- | ----------------------------------------------- |
 | `DASHSCOPE_API_KEY`  | 空                            | DashScope API Key；使用真实 Agent / Qwen 时需要 |
 | `DASHSCOPE_BASE_URL` | DashScope OpenAI 兼容地址     | 模型服务的 OpenAI 兼容 base URL                 |
-| `MODEL_NAME`         | `qwen-plus`                 | 默认模型名                                      |
+| `MODEL_NAME`         | `qwen3.7-plus`              | 默认模型名                                      |
 | `NCBI_EMAIL`         | `biomed-qagent@example.com` | NCBI E-utilities 联系邮箱                       |
 | `NCBI_TOOL`          | `BioMedQAgent`              | NCBI E-utilities tool 名称                      |
 | `NCBI_API_KEY`       | 空                            | 可选的 NCBI API Key                             |
@@ -291,7 +275,7 @@ BioMed-QAgent/
 | `OUTPUT_DIR`         | `data/output`               | 覆盖时必须使用绝对路径                          |
 | `LOG_LEVEL`          | `INFO`                      | 日志级别                                        |
 
-模型设置也可以通过 `/api/v1/settings` 持久化到 `data/user_settings.json`。保存的用户设置会在 Run 创建时形成不可变快照，避免并发运行中的配置变更影响已开始的任务。
+模型设置通过模型注册表持久化：注册表与供应商/模型条目写入 `data/settings/model-registry.json`，API Key 写入 `data/settings/model-auth.json`（0600，仅保存掩码返回）。首次启动时若环境变量提供了 `DASHSCOPE_API_KEY`（或 `PI_API_KEY`）且尚无任何已配置供应商，会自动注册 DashScope 供应商并激活默认模型。保存的模型快照在 Run 创建时形成不可变配置，避免并发运行中的变更影响已开始的任务。
 
 ## 开发与质量检查
 
@@ -343,19 +327,17 @@ pnpm build      # tsc -b && vite build
 建议按以下顺序阅读：
 
 1. [docs/DEVELOPER_QUICKSTART.md](docs/DEVELOPER_QUICKSTART.md)：环境配置、启动和常见问题；
-2. [docs/migration/ENVIRONMENT_MIGRATION.md](docs/migration/ENVIRONMENT_MIGRATION.md)：从旧双入口环境迁移到 root pnpm Workspace 与单 Host；
-3. [AGENTS.md](AGENTS.md)：代码规范、工作流和质量门禁；
-4. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)：系统边界、事件模型和数据契约；
-5. [docs/TODO.md](docs/TODO.md)：迁移主线进度与未完成工作；
-6. [PROBLEM.md](PROBLEM.md)：项目背景与评测要求。
+2. [AGENTS.md](AGENTS.md)：代码规范、工作流和质量门禁；
+3. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)：系统边界、事件模型和数据契约；
+4. [docs/TODO.md](docs/TODO.md)：开发任务与进度索引；
+5. [PROBLEM.md](PROBLEM.md)：项目背景与评测要求。
 
 ## 桌面 / 生产打包
 
-Phase 8 起不再有 PyInstaller 单文件可执行文件：正式产物是跨平台源码包
-（`frontend/dist` + `server/dist` + `database/` + `.pi/skills`），由 TS Host
-静态托管（`pnpm start`）。GitHub Actions 工作流
+正式分发产物是跨平台源码包（`frontend/dist` + `server/dist` + `database/` +
+`.pi/skills`），由 TS Host 静态托管（`pnpm start`）。GitHub Actions 工作流
 [`.github/workflows/package.yml`](.github/workflows/package.yml) 会在推送 `v*`
-标签或手动触发时构建并上传该 bundle。
+标签或手动触发时构建并上传该 bundle；不再使用 PyInstaller 单文件可执行文件。
 
 ## 安全与边界
 
@@ -370,14 +352,11 @@ Phase 8 起不再有 PyInstaller 单文件可执行文件：正式产物是跨�
 | 文档                                                        | 内容                                    |
 | ----------------------------------------------------------- | --------------------------------------- |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)                 | 权威架构、数据流、契约、事件和安全模型  |
-| [docs/BioMed-QAgent_Pi_Migration_Plan.md](docs/BioMed-QAgent_Pi_Migration_Plan.md) | Pi 迁移总体方案（Phase 0-8，已完成） |
-| [docs/migration/README.md](docs/migration/README.md)         | 迁移边界文档索引（Phase 8 状态见其中说明） |
-| [docs/migration/phase8-python-runtime-retirement.md](docs/migration/phase8-python-runtime-retirement.md) | Phase 8 执行计划（historical） |
-| [docs/migration/PHASE8_FINAL_VERIFICATION.md](docs/migration/PHASE8_FINAL_VERIFICATION.md) | Phase 8 最终验证报告 |
 | [docs/DEVELOPER_QUICKSTART.md](docs/DEVELOPER_QUICKSTART.md) | 开发环境、启动、测试和 AI-Native 工作流 |
-| [docs/TODO.md](docs/TODO.md)                                 | P0/P1/P2 开发任务与架构决策             |
+| [docs/TODO.md](docs/TODO.md)                                 | 开发任务与进度索引                      |
 | [PROBLEM.md](PROBLEM.md)                                     | 赛题背景、目标和评价标准                |
 | [frontend/README.md](frontend/README.md)                     | 前端组件、状态管理、数据流与测试        |
+| [docs/migration/](docs/migration/)                           | 历史迁移执行记录（Phase 0-8，已完成）   |
 
 ## 许可证
 

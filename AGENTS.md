@@ -1,11 +1,36 @@
 # BioMed-QAgent — AGENTS.md
 
-> This document has two parts: universal rules that all agents must follow, and
-> Commonly MCP extensions that apply mandatorily when connected.
+> This file defines working rules for all agents. It is a concise guide only —
+> architecture and design decisions live in
+> [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (authoritative entry, with
+> per-topic files under `docs/architecture/`). Do not duplicate architecture
+> content here to avoid drift.
 >
-> The authoritative source for system architecture and design decisions is
-> [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). This file is a concise guide
-> only — it does not duplicate architecture diagrams, to avoid drift.
+> Part I: universal rules. Part II: Commonly MCP extensions that stack on top
+> when a Commonly connection is present.
+
+---
+
+## Current Architecture Snapshot
+
+- Migration Phase 0–8 completed (2026-08-14): the only formal topology is
+  **TS Host + Pi Agent + TS Dataset Core**. Legacy Python Runtime / FastAPI /
+  rollback profiles / feature flags are physically removed.
+- The TypeScript Application Host owns the single browser-facing port, Vite
+  middleware, formal `/api/v1/*` HTTP/WS traffic, Pi `task_ts_*` Task/Run/Event,
+  product APIs, settings, and the TypeScript Dataset Core.
+- Python exists only as the `database/` persistence bridge
+  (`database/bridge.py`, stdlib, JSONL named-op), managed on demand by
+  `server/src/persistence/db-client.ts`. There is no Python web server.
+- Durable event WebSocket endpoint: `/api/v1/ws` (protocol and `EventEnvelope`
+  schema: `docs/architecture/runtime-events.md` and `packages/contracts/src/events.ts`).
+
+## Prerequisites & Secrets
+
+- Tools: Node.js 22.19+, pnpm, Python 3.12+, uv, Git.
+- Load API keys from environment variables or a local untracked `.env` file;
+  never commit real secrets. The settings API masks keys — do not log or expose
+  raw credentials.
 
 ---
 
@@ -13,249 +38,125 @@
 
 ### 1. Tech Stack
 
-| Layer                | Technology                                                 |
-| -------------------- | ---------------------------------------------------------- |
-| Application Host     | Node.js 22.19+, TypeScript, Vite middleware                |
-| Main Agent           | Pi (adapter-confined via `server/src/agent/pi-adapter.ts`) |
-| Dataset Core         | TypeScript deterministic core (`server/src/dataset/`)      |
-| Python Persistence   | `database/` bridge only（Python 3.12+, stdlib, JSONL named-op） |
-| Frontend             | React 19, Vite, Tailwind CSS v4, shadcn/ui                 |
-| Package Manager (FE) | pnpm (**never npm**)                                       |
-| Package Manager (BE) | uv（根 `pyproject.toml` / `uv.lock`，仅 database 项目）    |
+| Layer                  | Technology                                                       |
+| ---------------------- | ---------------------------------------------------------------- |
+| Application Host       | Node.js 22.19+, TypeScript, Vite middleware                      |
+| Main Agent             | Pi (adapter-confined via `server/src/agent/pi-adapter.ts`)       |
+| Dataset Core           | TypeScript deterministic core (`server/src/dataset/`)            |
+| Python Persistence     | `database/` bridge only (Python 3.12+, stdlib, JSONL named-op)   |
+| Frontend               | React 19, Vite, Tailwind CSS v4, shadcn/ui                       |
+| Package Manager (TS)   | pnpm (**never npm**)                                             |
+| Package Manager (Py)   | uv, scoped to the root `pyproject.toml` / `uv.lock` for `database/` only |
 
-### 2. Architecture Overview & Agent Loop
+### 2. Architecture Overview
 
-The current architecture is a **dual-layer structure: Agent + Deterministic
-Pipeline**. Full details are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §2.
+The system is a **two-layer structure: Agent + Deterministic Pipeline**. Key
+points (details in `docs/ARCHITECTURE.md`):
 
-> **迁移主线**：仓库已按
-> [docs/BioMed-QAgent_Pi_Migration_Plan.md](docs/BioMed-QAgent_Pi_Migration_Plan.md)
-> 完成 Phase 0–8（2026-08-14）：Agent Runtime 迁到 Pi、Dataset Core 迁到
-> TypeScript，legacy Python Runtime / FastAPI rollback 已物理删除。Python 仅剩
-> `database/` persistence bridge。进度跟踪见 docs/TODO.md。执行计划与验证见
-> docs/migration/phase8-python-runtime-retirement.md、
-> docs/migration/PHASE8_FINAL_VERIFICATION.md、docs/migration/phase8-retirement-inventory.md。
-> Phase 5 实施计划/能力矩阵/PDF spike 见
-> docs/migration/phase5-external-capabilities*.md。
-
-Key points:
-
-- Normal development starts from root `pnpm dev`. The TypeScript Application
-  Host owns the single browser-facing port, embeds Vite middleware, and natively
-  owns formal `/api/v1/*` HTTP/WS traffic, Pi `task_ts_*` Task/Run/Event,
-  product APIs, settings, and the TypeScript Dataset Core. There is no FastAPI,
-  no `/experimental/pi/*`, and no legacy rollback profile anymore.
-- The only Python process boundary is the on-demand named-operation DB bridge
-  (`database/bridge.py`, JSONL stdin/stdout), managed by
-  `server/src/persistence/db-client.ts`.
-- The default Main Agent is Pi behind
-  [server/src/agent/pi-adapter.ts](server/src/agent/pi-adapter.ts).
+- Normal development starts from root `pnpm dev`; `pnpm start` serves the
+  production bundle. `dev:frontend-standalone` is a migration/debug-only
+  diagnostic, not the normal entry.
+- The default Main Agent is Pi behind `server/src/agent/pi-adapter.ts`.
 - Deterministic dataset execution is the TypeScript Dataset Core in
-  `server/src/dataset/`（validate/execute/cancel，operation timeout / build lock /
-  event sink）；不再有 Python V2 kernel 与 V1 legacy mirror。
-- The default durable runtime is event-sourced in `server/src/runtime/`:
-  `TaskRepository` owns the authoritative `<task_id>/events.jsonl` log and
-  snapshots are rebuilt by the TypeScript reducer. Pi and TS Dataset Core
-  events enter that same task stream.
-- The WebSocket endpoint is `/api/v1/ws`；TS Host 原生提供 replay 与 live delivery。
-- Skill 知识已迁至 [.pi/skills/](.pi/skills/)（`<name>/SKILL.md`，Phase 2）；
-  业务能力全部 TS 化（Phase 5）：acquisition / parsing / analysis 在
-  `server/src/external/`、`server/src/processing/`、`server/src/analysis/`；
-  builtin database catalogue 在 `server/src/product/builtin-databases.ts`。
-- learned skill 概念已删除（Phase 2，见
-  [docs/migration/phase2-skills-tools-migration.md](docs/migration/phase2-skills-tools-migration.md)）。
-
-**HTTP API Routes** (prefix `/api/v1`):
-
-| Method | Path                                              | Purpose                            |
-| ------ | ------------------------------------------------- | ---------------------------------- |
-| GET    | `/api/v1/health`                                  | Health check                       |
-| GET    | `/api/v1/databases`                               | List user-selectable databases     |
-| GET    | `/api/v1/databases/{name}`                        | Get a database incl. declarative manifest |
-| POST   | `/api/v1/databases`                               | Register a declarative database    |
-| PUT    | `/api/v1/databases/{name}`                        | Update a database entry            |
-| POST   | `/api/v1/databases/{name}/enable`                 | Enable a database                  |
-| POST   | `/api/v1/databases/{name}/disable`                | Disable a database                 |
-| DELETE | `/api/v1/databases/{name}`                        | Remove a user database entry       |
-| GET    | `/api/v1/settings`                                | Get masked user model settings     |
-| PUT    | `/api/v1/settings`                                | Persist user model settings        |
-| GET    | `/api/v1/vendors`                                 | List known model vendors           |
-| POST   | `/api/v1/models`                                  | Discover available provider models |
-| GET    | `/api/v1/model-info`                              | List built-in model info entries   |
-| GET    | `/api/v1/model-info/{model_id}`                   | Get built-in model details         |
-| GET    | `/api/v1/tasks`                                   | List active tasks + paginated history |
-| POST   | `/api/v1/tasks`                                   | Create a durable task and enqueue its first run |
-| POST   | `/api/v1/import/tasks`                            | Create an import task with uploaded files |
-| GET    | `/api/v1/tasks/{task_id}`                         | Task snapshot (authoritative state) |
-| DELETE | `/api/v1/tasks/{task_id}`                         | Delete a terminal task and its history |
-| POST   | `/api/v1/tasks/{task_id}/compact`                 | Compact a task's conversation      |
-| POST   | `/api/v1/tasks/{task_id}/runs`                    | Enqueue another user turn for an idle Agent task |
-| POST   | `/api/v1/tasks/{task_id}/runs/{run_id}/cancel`    | Request cancellation of a queued or running run |
-| POST   | `/api/v1/tasks/{task_id}/runs/{run_id}/resume`    | Submit a human-in-the-loop resume decision to a paused run |
-| POST   | `/api/v1/tasks/{task_id}/runs/{run_id}/subagents/{subagent_id}/cancel` | Request cancellation of a nonterminal child agent |
-| GET    | `/api/v1/tasks/{task_id}/messages`                | Paginated task messages            |
-| GET    | `/api/v1/tasks/{task_id}/events`                  | Replay durable events (`?after_sequence=N&limit=N`) |
-| GET    | `/api/v1/tasks/{task_id}/artifacts`               | List validated artifact files      |
-| GET    | `/api/v1/tasks/{task_id}/artifacts/{artifact_id}` | Download a specific artifact       |
-| GET    | `/api/v1/builds`                                  | List builds (global)               |
-| GET    | `/api/v1/builds/{build_id}`                       | Build detail (result/validation/manifest/publication) |
-| GET    | `/api/v1/builds/{build_id}/artifacts/{artifact_id}` | Download a build artifact          |
-| GET    | `/api/v1/cache/datasets`                          | List cached datasets               |
-| GET    | `/api/v1/cache/datasets/{dataset_id}`             | Cached dataset detail              |
-| GET    | `/api/v1/cache/datasets/{dataset_id}/artifacts/{artifact_id}` | Download a cached dataset artifact |
-| GET    | `/api/v1/cache/export`                            | Export the local cache as a zip    |
-
-**Durable Event WebSocket**
-
-1. The client connects to `ws://<host>:5173/api/v1/ws` through the TypeScript
-   Host (or directly to port 8000 only for an explicit legacy diagnostic).
-2. `app/api/ws.py:agent_ws` accepts the connection and delegates to
-   `app/api/ws_events.py:_run_event_session`.
-3. The client sends commands:
-   - `{"type":"subscribe","task_id":"...","after_sequence":N}` — subscribe to
-     a task's event stream, replaying events with `sequence > after_sequence`
-     first (use `0` to start from the beginning)
-   - `{"type":"unsubscribe","task_id":"..."}` — stop receiving events for a task
-   - `{"type":"ping"}` — keepalive; server responds with `{"type":"pong"}`
-4. The server pushes `EventEnvelope` objects (same schema as
-   `GET /tasks/{task_id}/events`) and control frames:
-   - `EventEnvelope` — a task event. Types（权威 schema 见
-     `packages/contracts/src/events.ts` 与
-     `docs/ARCHITECTURE.md` §事件模型）:
-     `run_queued`,
-     `run_started`, `run_finalizing`, `run_completed`, `run_failed`,
-     `run_cancel_requested`, `run_cancelled`, `run_interrupted`,
-     `publication_created`, `assistant_delta`,
-     `assistant_reasoning_delta`, `tool_started`, `tool_completed`,
-     `conversation_compacted`, `operation_started`,
-     `operation_progress`, `operation_completed`, `operation_failed`,
-     `subagent_queued`, `subagent_started`, `subagent_progress`,
-     `subagent_completed`, `subagent_failed`,
-     `subagent_cancel_requested`, `subagent_cancelled`,
-     `subagent_interrupted`, `subagent_input_required`,
-     `subagent_input_resumed`（runtime；legacy `stage_*`/pipeline 事件仅用于
-     重放历史 events.jsonl）。
-
-     > Phase 7 T3: the fixed `stage_*` union is superseded by generic
-     > `operation_*` events carrying `operation_id` / `label` / `category`
-     > (stable strings the UI groups/icons by). During the compatibility
-     > period only `stage_progress` is still emitted **and** mirrored by an
-     > `operation_progress` event; `stage_started`/`completed`/`failed`/
-     > `skipped` have no production emitter anymore (kept for replaying
-     > legacy events.jsonl). The frontend should render by operation
-     > identity (see docs/ARCHITECTURE.md §14.2 / §17.2).
-   - `{"type":"pong"}` — response to ping
-   - `{"type":"error","message":"..."}` — protocol error (e.g. unsupported command)
-
-`tool_started` carries an optional `arguments` dict (depth-truncated to
-3, strings to 200 chars, lists to 20 items) so the frontend can render
-"检索 PubMed · 查询: ..." labels without re-fetching. `tool_completed`
-output is truncated to 4 KB. Both fields are backward compatible
-(older `events.jsonl` without `arguments` still replay correctly).
-5. Events are ordered by `sequence` (monotonically increasing per task).
-   Reconnection is supported by replaying events via
-   `GET /tasks/{task_id}/events?after_sequence=N` then re-subscribing.
-6. The frontend `runtime/transport.ts` handles auto-reconnect and event replay;
-   `runtime/controller.ts` orchestrates task lifecycle; `runtime/reducer.ts`
-   applies events to the store.
-
-Always treat the code as the source of truth for skill and tool implementation
-status — do not assume from documentation alone.
+  `server/src/dataset/` (validate / execute / cancel; operation timeout, build
+  lock, event sink).
+- The durable runtime is event-sourced in `server/src/runtime/`:
+  `TaskRepository` owns the authoritative `<task_id>/events.jsonl` log; snapshots
+  are rebuilt by the TypeScript reducer. Pi and TS Dataset Core events enter the
+  same task stream.
+- Always treat code as the source of truth for skill/tool implementation
+  status — do not assume from documentation alone.
 
 ### 3. Project Documentation Guidance
 
 Before starting any task, consult:
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — system architecture and design
-  decisions (authoritative).
-- [PROBLEM.md](PROBLEM.md) — competition background and evaluation criteria
-  (repository root).
-- [docs/TODO.md](docs/TODO.md) — current development TODOs and approved
-  architecture decisions.
-- `docs/archive/superpowers/specs/` and `docs/archive/superpowers/plans/` —
-  archived phase design specs and plans (implemented history; consult for
-  design rationale, do not edit).
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — architecture entry and index
+  (authoritative).
+- [PROBLEM.md](PROBLEM.md) — competition background and evaluation criteria.
+- [docs/TODO.md](docs/TODO.md) — current development tasks and approved decisions.
 
 ### 4. Common Commands
 
 #### Normal development (cwd: repository root)
 
 ```bash
-pnpm install --frozen-lockfile             # Install the single workspace lockfile
-pnpm dev                                   # Start TS Host + Pi + TS Core + Vite
-pnpm test                                  # Contracts + server + frontend tests (有界并发)
-pnpm test:full                             # 全速测试（CI 或明确需要最快完成时）
-pnpm lint                                  # Workspace lint
-pnpm typecheck                             # Workspace TypeScript checks
-pnpm build                                 # Workspace production builds
+pnpm install --frozen-lockfile    # Install the single workspace lockfile
+pnpm dev                          # Start TS Host + Pi + TS Core + Vite (only normal entry)
+pnpm test                         # Contracts + server + frontend tests (bounded concurrency)
+pnpm test:full                    # Full-speed tests (CI, or when you want it fastest)
+pnpm lint                         # Workspace lint
+pnpm typecheck                    # Workspace TypeScript checks
+pnpm build                        # Workspace production builds
 ```
 
 `pnpm dev` is the only normal development startup command; `pnpm start` serves
-the production bundle（`frontend/dist` 静态托管）。`dev:frontend-standalone` 是
-迁移/debug-only 脚本（Vite 独立诊断，代理到 TS Host）。legacy rollback 启动方式
-（dev:legacy-backend / dev:host-proxy-only / dev:legacy-rollback）已随 Phase 8 删除。
+the production bundle (`frontend/dist` static hosting). `dev:frontend-standalone`
+is a migration/debug-only script (Vite standalone diagnostic proxying to the TS
+Host), not the normal entry.
 
-**测试并发默认有界**（详细预算见 [docs/test-concurrency.md](docs/test-concurrency.md)）：
-根 `pnpm test` 通过 `--workspace-concurrency=2` 限制 workspace 并发，各 vitest
-配置默认限制 worker 数（server `forks`/2、frontend `threads`/4、contracts
-`threads`/2），避免本机测试 worker 吃满 CPU 撞功耗墙。CI（`CI=true`）自动
-放开 vitest worker 上限；本地需要全速时用 `pnpm test:full`（去掉 workspace
-并发限制，等价于旧的 `pnpm test`）。临时降速可直接透传 vitest CLI 参数，例如
-`pnpm --filter @biomed/server test -- --maxWorkers=1`。
-
+**Test concurrency is bounded by default** (budget and coverage:
+[docs/test-concurrency.md](docs/test-concurrency.md)): root `pnpm test` limits
+workspace concurrency via `--workspace-concurrency=2`, and each vitest config
+caps its worker count (server `forks`/2, frontend `threads`/4, contracts
+`threads`/2) so local workers do not saturate the CPU. CI (`CI=true`) lifts the
+vitest caps automatically. Use `pnpm test:full` locally for full speed (drops the
+workspace-concurrency limit, equivalent to the old `pnpm test`). To throttle,
+pass vitest CLI args directly, e.g.
+`pnpm --filter @biomed/server test -- --maxWorkers=1`.
 #### Python database bridge checks (cwd: repository root)
 
-Python 面只剩 `database/` persistence bridge（根 `pyproject.toml` 管理）：
+Python is limited to the `database/` persistence bridge (root `pyproject.toml`):
 
 ```bash
-uv sync                                    # Install database project deps
-uv run python database/bridge.py --self-test  # Bridge self-test
-uv run pytest database/tests               # Bridge protocol/persistence tests
-uv run ruff check database                 # Lint (CI quality gate, zero warnings allowed)
+uv sync                                  # Install database project deps
+uv run python database/bridge.py --self-test   # Bridge self-test
+uv run pytest database/tests             # Bridge protocol/persistence tests
+uv run ruff check database               # Lint (CI quality gate, zero warnings allowed)
 ```
 
 Notes:
 
-- The bridge is stdlib-only（argparse/json/sqlite3/pathlib/dataclasses）；pytest 与
-  ruff 只属于 dev dependency group。
+- The bridge is stdlib-only (argparse/json/sqlite3/pathlib/dataclasses); pytest
+  and ruff are dev-only dependencies.
 - The bridge process is managed by the TS DatabaseClient
-  (`server/src/persistence/db-client.ts`)：JSONL stdin/stdout named ops，EOF 退出。
-- 不要新增 Python runtime 依赖，不要引入第二个 Python 入口，不要把 bridge 扩张成
-  HTTP 服务。
+  (`server/src/persistence/db-client.ts`): JSONL stdin/stdout named ops, exit on EOF.
+- Do not add Python runtime dependencies, a second Python entrypoint, or turn the
+  bridge into an HTTP service.
 
 #### Frontend package checks (cwd: `frontend/`)
 
-All frontend commands must be run from the `frontend/` directory.
+All frontend commands must run from the `frontend/` directory.
 
 ```bash
 pnpm install                               # Install dependencies
 pnpm dev                                   # Standalone frontend diagnostic only
 pnpm build                                 # Production build (tsc -b && vite build)
 pnpm lint                                  # ESLint (--max-warnings 0)
-pnpm tsc                                   # TypeScript type check (runs tsc --noEmit)
+pnpm tsc                                   # TypeScript type check (tsc --noEmit)
 pnpm test                                  # Run unit tests once (vitest run)
 pnpm test:watch                            # Run unit tests in watch mode (vitest)
 ```
 
 ### 5. Technical Conventions
 
-- **Python**: PEP 8, mandatory type annotations on all function signatures；
-  仅限 `database/`（stdlib，无第三方 runtime 依赖）。
+- **Python**: PEP 8, mandatory type annotations on all function signatures;
+  restricted to `database/` (stdlib, no third-party runtime deps).
 - **TypeScript / React**: follow shadcn/ui component patterns and Tailwind
   utility classes; use the `@/` path alias.
-- **Imports**: database 模块使用扁平导入（script 与 package 上下文双路径兼容）；
-  frontend 使用 `@/...`。
+- **Imports**: `database/` uses flat imports (works in both script and package
+  contexts); frontend uses `@/...`.
 - **Type safety**: never suppress type errors — no `as any`, `@ts-ignore`, or
   `@ts-expect-error`.
-- **Testing**: database 用 pytest；前端/服务端用 vitest。每个新功能必须带测试，
-  每个 bug fix 先写复现测试。
+- **Testing**: `database/` uses pytest; server/frontend use vitest. Every new
+  feature ships with tests; every bug fix starts with a reproducing test.
 - **Frontend components**: use the shadcn skill to discover existing components;
   do not reinvent the wheel (see [frontend/AGENTS.md](frontend/AGENTS.md)).
-- **Phase 8 architecture boundaries**: active runtime 不得重新引入 legacy Python
-  Runtime / FastAPI / rollback feature flags / `/experimental/pi`（见
-  `server/tests/phase8-architecture-guard.test.ts` 与
-  `database/tests/test_database_store.py::test_no_forbidden_imports_in_database_package`）；
-  新 wire DTO 进入 `@biomed/contracts` 优先。
+- **Architecture boundaries**: do not reintroduce legacy Python Runtime,
+  FastAPI, rollback feature flags, or `/experimental/pi` (guarded by
+  `server/tests/phase8-architecture-guard.test.ts` and
+  `database/tests/test_database_store.py::test_no_forbidden_imports_in_database_package`);
+  new wire DTOs belong in `@biomed/contracts` first.
 
 ### 6. Development Principles
 
@@ -285,8 +186,8 @@ pnpm test:watch                            # Run unit tests in watch mode (vites
 - **Single-file small changes** (typos, config tweaks) may be committed directly
   to `main`, but you must:
   - `git pull` to sync first;
-  - If connected to Commonly, declare the file to be modified in the Pod and
-    confirm no conflict (see Part II §3).
+  - Confirm no other agent is editing the same file (see Part II §3 when a
+    Commonly connection is present).
 - Multi-file changes, new features, or changes that may affect other agents
   **must** use a dedicated branch.
 - Before creating a new branch, run `git branch -r` to check the remote and
@@ -294,7 +195,8 @@ pnpm test:watch                            # Run unit tests in watch mode (vites
 
 #### 7.2 Self-Serve Merge
 
-**Each agent is responsible for merging its own branch**. Before merging, all of the following must hold:
+**Each agent is responsible for merging its own branch**. Before merging, all of
+the following must hold:
 
 1. The branch is functionally stable and the target changes are achieved.
 2. All checks in **7.3 Quality Gates** pass.
@@ -307,40 +209,42 @@ pnpm test:watch                            # Run unit tests in watch mode (vites
   - **>5 commits**: `git fetch origin main && git merge origin/main`, resolving conflicts once instead of per-commit.
   - **Heed conflict scope**: even a ≤5-commit branch that touches files heavily modified in `main`'s recent history may benefit from merge rather than rebase.
 - After resolving conflicts, **re-run all Quality Gates**.
-- `git merge --no-ff main` to merge the feature branch into local `main` (preserving branch topology), or rebase then push.
+- `git merge --no-ff main` to merge the feature branch into local `main`
+  (preserving branch topology), or rebase then push.
 - Before pushing, confirm local `main` starts cleanly.
-- After merging, post a `[DONE]` message in Commonly summarizing the result (if connected to Commonly).
+- After merging, post a `[DONE]` message summarizing the result (Part II §4 if
+  connected to Commonly).
 
 **Merge constraints**:
 
 - **Never force-push to shared branches** (main, dev). If push is rejected, run
   `git pull --rebase` first, then push.
-- **Merge granularity**: one merge to `main` must represent one
-  complete functional unit. Bundle related `feat` + `fix` + test + doc
-  changes into the same branch and merge them together.
+- **Merge granularity**: one merge to `main` must represent one complete
+  functional unit. Bundle related `feat` + `fix` + test + doc changes into the
+  same branch and merge them together.
 - **One feature, one merge**: do not chain multiple merges for sub-steps of the
   same feature. If the feature is not yet complete, keep committing on the
   branch; only merge when the functional unit is whole and self-verifying.
 
 #### 7.3 Quality Gates
 
-The following checks **must all pass** before pushing a branch **and** before merging to `main`.
+The following checks **must all pass** before pushing a branch **and** before
+merging to `main`.
 
 - **Node workspace + Python bridge**
-  - No import errors, AST intact;
   - `pnpm test` / `pnpm lint` / `pnpm typecheck` / `pnpm build` pass;
   - `uv run python database/bridge.py --self-test` passes;
   - `uv run pytest database/tests` and `uv run ruff check database` pass.
 - **Commit message**
-  - Format: `[TASK-XXX] summary` or `feat/fix/chore: summary`. Prefer conventional commit message style.
+  - Format: `[TASK-XXX] summary` or `feat/fix/chore: summary`. Prefer
+    conventional commit message style.
 
 #### 7.4 Parallel Tasks Must Use Separate Worktrees
 
-Multiple agents may work in this repository at the same time and they all
-share the **same working directory**. Never `git switch` the shared branch to
-start a new task — that changes the files every other agent sees and can
-clobber their uncommitted work. Instead, isolate each task in its own
-worktree:
+Multiple agents may work in this repository at the same time and they all share
+the **same working directory**. Never `git switch` the shared branch to start a
+new task — that changes the files every other agent sees and can clobber their
+uncommitted work. Instead, isolate each task in its own worktree:
 
 ```bash
 # From the repo root: create an isolated workspace for a branch
@@ -352,12 +256,12 @@ git worktree remove ../BioMed-QAgent-<branch-name>
 
 Rules:
 
-- The main working directory keeps the branch the user/other agents are
-  actively using; do not switch it for your own task.
+- The main working directory keeps the branch the user/other agents are actively
+  using; do not switch it for your own task.
 - Scratch files (`_tmp_*`, test artifacts, build output) belong in your task's
   worktree, never in the shared directory.
-- Run `git worktree list` before starting and reuse an existing worktree for
-  the same branch instead of creating duplicates.
+- Run `git worktree list` before starting and reuse an existing worktree for the
+  same branch instead of creating duplicates.
 
 ### 8. Documentation First
 
@@ -385,7 +289,7 @@ rules **stack on top of** Part I.
 | Work type         | Check-in required? | Method                                                                                                           |
 | ----------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------- |
 | Coding & fixes    | **Yes**            | `[TASK]` before starting, `[DONE]` upon completion                                                               |
-| Research & review | No                 | If **high-risk / high-value** info is found (architecture flaws, risks, etc.), share via `[Q]` or a new `[TASK]` |
+| Research & review | No                 | If **high-risk / high-value** info is found (architecture flaws, risks, etc.), share via `[Q]` or a new `[TASK]` |
 
 ### 2. Task Source and Corresponding Workflow
 
@@ -398,8 +302,8 @@ When told to handle a Commonly task, follow the board lifecycle strictly:
 3. Work: execute per Part I; open a branch if needed.
 4. Verify & commit: after self-check passes, run
    `git commit -m "[TASK-XXX] description" && git push`.
-5. Complete: `commonly_complete_task`, post `[DONE]` summarizing the changes and
-   branch name, then merge.
+5. Merge the branch to `main` (Part I §7.2), then post `[DONE]` summarizing the
+   changes and branch name, then `commonly_complete_task`.
 6. Stuck for a full round with no progress → post `[BLOCKED]` and unclaim.
 
 #### 2.2 User Gives a Direct Instruction (Non-Board Task)
@@ -424,33 +328,22 @@ If research or review reveals issues worth tracking, start a discussion with
 `[Q]`, or create a new task via `commonly_create_task` (prefix the title with
 `[P0]` / `[P1]` / `[P2]`, fill in `source` and hard dependencies `dep`).
 
-#### 2.4 Proactively Maintain the Commonly Board
+#### 2.4 Keep the Commonly Board in Sync with `docs/TODO.md`
 
-The Commonly board is the team's shared task workspace. Agents must not wait
-passively for tasks — proactively keep the board in sync with reality.
+`docs/TODO.md` is the authoritative plan (tasks + acceptance criteria); the
+Commonly board is the execution-status view of that plan. To avoid circular
+updates:
 
-**When to update**
+- New planned work originates from `docs/TODO.md` entries → create a board task
+  with `source` set to `docs/TODO.md`.
+- Claim / in-progress / blocked / completed status is maintained on the board
+  (`commonly_claim_task`, `commonly_update_task`).
+- When a task completes or its priority changes, write the outcome back to the
+  matching `docs/TODO.md` checkbox.
+- Never edit the same semantic field in both places at once.
 
-- **Sync from `docs/TODO.md`**: if a `docs/TODO.md` entry has no corresponding
-  board task, create one via `commonly_create_task` with `source` set to
-  `docs/TODO.md`.
-- **New issues found during work**: when encountering a new bug, tech debt, or
-  uncovered requirement, create a board task immediately, prefixing the title
-  with `[P0]` / `[P1]` / `[P2]` and filling `dep` with hard dependencies.
-- **Status changes**: when a task's completion status or priority changes due to
-  code changes or discussion, sync via `commonly_update_task`.
-
-**How to update**
-
-- `commonly_create_task` to create, filling `title` / `source` / `priority` /
-  `dep`.
-- `commonly_update_task` to modify an existing task's status, description, or
-  dependencies.
-- Optionally post a `[TASK]` message summarizing the change to help the team
-  sync quickly.
-
-**Principle**: the board must never lag behind actual work. Every agent is
-responsible for making the board a real-time projection of project progress.
+Also create board tasks immediately for new bugs / tech debt / uncovered
+requirements found during work (prefix `[P0]` / `[P1]` / `[P2]`, fill `dep`).
 
 ### 3. Lightweight Coordination and Branch Reporting
 
@@ -477,11 +370,8 @@ responsible for making the board a real-time projection of project progress.
 ### 5. Pod Information
 
 - **Pod ID**: `6a520e34f4baa9b280bba195`
-- Board tasks sync dynamically with `docs/TODO.md`; task numbers are auto-assigned
-  by Commonly.
-- Keep `docs/TODO.md` and the board in sync: new `docs/TODO.md` entries should be
-  mapped to board tasks, and board status changes should be written back to the
-  corresponding `docs/TODO.md` checkboxes.
+- Task numbers are auto-assigned by Commonly; board and `docs/TODO.md` stay in
+  sync per §2.4.
 
 ### 6. End-of-Round Self-Check (Mandatory)
 
@@ -496,9 +386,9 @@ Checklist to run through:
    `[DONE]` (or `[BLOCKED]`) at the end? If not, post the missing message now.
 2. **Branch policy**: were multi-file changes made on a dedicated branch? Were
    single-file tweaks committed to `main` only after the pre-check in §3?
-3. **Pre-push verification** (Part I §7.3): did `uv run pytest` pass? Did
-   frontend `pnpm lint && pnpm tsc && pnpm build` pass (if FE changed)? Did
-   the backend restart cleanly?
+3. **Pre-push verification** (Part I §7.3): did `pnpm test` / `pnpm lint` /
+   `pnpm typecheck` / `pnpm build` pass? Did `uv run pytest database/tests` and
+   `uv run ruff check database` pass (if `database/` changed)?
 4. **Board sync** (§2.4): are the `docs/TODO.md` checkboxes and the Commonly
    board in sync with what was actually done this round?
 5. **Documentation** (Part I §8): did this round introduce a non-obvious
@@ -508,7 +398,19 @@ Checklist to run through:
    rebase, `[DONE]` summary)? If yes, retroactively fix what is recoverable
    and note what is not.
 
-If any item is missing, complete it before starting the next round. The
-purpose is to prevent workflow drift across long multi-round sessions where
-context is compressed — the `AGENTS.md` is the stable source of truth that
-survives context resets.
+If any item is missing, complete it before starting the next round. The purpose
+is to prevent workflow drift across long multi-round sessions where context is
+compressed — this `AGENTS.md` is the stable source of truth that survives
+context resets.
+
+---
+
+## Definition of Done
+
+A task is done only when:
+
+- All relevant Quality Gates pass (Part I §7.3);
+- Tests cover new behavior / reproduce the fixed bug;
+- Changes are merged to `main` (or the branch is pushed with a `[DONE]` report);
+- `docs/TODO.md` and the Commonly board (if connected) reflect the outcome;
+- Any non-obvious decision is captured under `docs/` (Part I §8).

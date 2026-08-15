@@ -30,11 +30,9 @@ BioMed-QAgent 是一个**生物医学数据智能检索与整合系统**。你�
 5. 输出一份整理好的 CSV，附带数据来源和处理记录
 
 技术上是 **TypeScript 单端口 Host + Pi durable runtime + TS Dataset Core + React 前端**。
-Phase 0–8 迁移完成后（2026-08-14），formal Agent、Task/Run/Event、产品 API 与
-Dataset Core 全部由 TypeScript 权威实现，不再有 legacy FastAPI / rollback profile。
-
-Python 只承担 DB bridge（`database/bridge.py`，JSONL named-op 持久化），由 TS Host
-按需管理。
+formal Agent、Task/Run/Event、产品 API 与 Dataset Core 全部由 TypeScript 权威
+实现；Python 只承担 DB bridge（`database/bridge.py`，JSONL named-op 持久化），
+由 TS Host 按需管理。
 
 > 这是"中国高校计算机大赛 — AI Scientist 赛道"的参赛作品（赛题 XH-202619）。
 
@@ -46,16 +44,24 @@ Python 只承担 DB bridge（`database/bridge.py`，JSONL named-op 持久化）�
 
 | 工具 | 用途 | 必须？ |
 |------|------|--------|
-| **Python 3.12+** | 后端语言 | ✅ 必须 |
-| **uv** | Python 包管理器（类似 pip 但更快） | ✅ 必须 |
 | **Node.js 22.19+** | TypeScript Host 与前端运行时 | ✅ 必须 |
 | **pnpm** | Node 包管理器（类似 npm 但更快） | ✅ 必须 |
+| **Python 3.12+** | 仅 `database/` persistence bridge（stdlib，**不是后端语言**） | 仅开发/测试 bridge 时需要 |
+| **uv** | Python 包管理器（仅管理根 `database/` 项目） | 仅开发/测试 bridge 时需要 |
 | **DashScope API Key** | 调用千问大模型 | ✅ 必须 |
 | Git | 版本控制 | 推荐 |
 
-### 2.2 安装 Python 3.12+
+> **关于 Python**：运行主应用时由 TS Host 自动探测 Python 解释器
+> （`BIOMED_PYTHON_BIN` → 仓库 `.venv` → PATH），不需要你手动指定。规划中后续
+> 将改为**内置 Python 解释器**（随应用打包分发），届时完全无需自行安装 Python。
 
-**如果你还没装 Python**，去官网下载：https://www.python.org/downloads/
+### 2.2 安装 Python 3.12+（仅 database/ 开发/测试需要）
+
+Python 只承担 `database/` persistence bridge（`database/bridge.py`，stdlib、
+JSONL named-op），**不是后端语言，不提供任何 Web 服务**。只运行主应用时通常
+不需要装 Python（除非要跑 `database/` 测试或自托管 bridge）。
+
+如果你还没装 Python，去官网下载：https://www.python.org/downloads/
 
 安装时 **一定要勾选 "Add Python to PATH"**（加到系统环境变量）。
 
@@ -66,9 +72,10 @@ python --version
 # 应该输出类似：Python 3.12.x
 ```
 
-### 2.3 安装 uv（Python 包管理器）
+### 2.3 安装 uv（仅 database/ 项目使用）
 
-uv 是新一代 Python 包管理器，比 pip 快 10-100 倍。本项目**必须用 uv**，不要用 pip。
+uv 是新一代 Python 包管理器，比 pip 快 10-100 倍。本项目**只用于 `database/`
+项目（根 `pyproject.toml`）**，TS/Node 侧统一用 pnpm，不要用 npm 或 pip。
 
 **Windows（PowerShell）：**
 
@@ -124,7 +131,7 @@ pnpm --version
 3. 在控制台找到 "API Key 管理"，创建一个新的 API Key
 4. 复制保存好这个 Key（只显示一次！）
 
-> 💡 千问部分模型有免费额度，qwen-plus 对比赛够用了。
+> 💡 千问部分模型有免费额度，qwen3.7-plus 对比赛够用了。
 
 ---
 
@@ -228,7 +235,7 @@ pnpm start
 
 ## 6. 第五步：跑起来看看
 
-### 6.2 跑测试
+### 6.1 跑测试
 
 ```powershell
 pnpm test                         # 根 Workspace：contracts/server/frontend（有界并发）
@@ -282,22 +289,22 @@ pnpm shadcn add card       # 卡片
 
 项目根目录的 `AGENTS.md` 是给 AI Agent 看的项目守则。里面写了：
 
-- 技术栈约束（Python 3.12+ / React 19 / shadcn / Tailwind v4）
-- 架构规则（Agent → Pipeline 两层结构）
+- 技术栈约束（Node.js 22 / React 19 / shadcn / Tailwind v4）
+- 架构规则（Agent + Dataset Core 两层）
 - 代码规范（必须类型标注、不允许 `as any` 等）
 - 常用命令
 
 **你应该做的**：每次开始一个新任务时，告诉你的 AI 工具"先读一下 AGENTS.md 和 docs/ARCHITECTURE.md"，它就能自动遵守项目规范。
 
-### 7.3 Skill 系统 —— 项目的核心设计（Phase 2 后形态）
+### 7.3 Skill 系统 —— 项目的核心设计
 
 这个项目把生物医学数据库的检索、下载、处理能力组织为 **Skill 知识 + 直接工具**：
 
 ```
 .pi/skills/<name>/SKILL.md          # SOP 知识（Pi 按任务加载）
-server/src/agent/tools/             # TS 业务工具实现（Phase 5 起）
+server/src/agent/tools/             # TS 业务工具实现
 server/src/agent/skills/skill-tool-map.ts   # Skill ↔ Tool 稳定名称映射
-server/src/product/builtin-databases.ts     # 内置数据库目录（Phase 8 起）
+server/src/product/builtin-databases.ts     # 内置数据库目录
 ```
 
 **如果你想加一个新的数据库来源**：
@@ -305,7 +312,7 @@ server/src/product/builtin-databases.ts     # 内置数据库目录（Phase 8 �
 2. 在 `server/src/agent/tools/` 实现 TS 工具并登记到 skill-tool-map.ts；
 3. 补 `server/tests/skill-tool-map.test.ts` 等断言钉住映射。
 
-### 7.4 Agent + Pipeline 双层架构
+### 7.4 Agent + Dataset Core 双层架构
 
 这是项目的关键设计，理解它你就能看懂代码了：
 
@@ -313,23 +320,25 @@ server/src/product/builtin-databases.ts     # 内置数据库目录（Phase 8 �
 用户输入主题
     │
     ▼
-Main Agent（大模型）
-    │ 理解意图 → 选 Skill → 生成 TaskSpecification
+Pi Main Agent（大模型，TS Host 进程内）
+    │ 理解意图 → 检索/获取 → 生成 DatasetBuildSpec
     │
     ▼
-Pipeline Runner（确定性代码）
-    │ Discovery → Acquisition → Processing → Artifact → Validation
+TS Dataset Core（确定性代码，server/src/dataset/）
+    │ Acquire → Parse → Canonicalize → Compat → Integrate
+    │ → Validate → Publish（服务端固定骨架）
     │
     ▼
-输出：CSV + 来源清单 + 处理记录
+输出：Manifest 注册的 Artifact（CSV + 来源清单 + 处理记录）
 ```
 
-- **Agent（大模型）**：负责理解用户意图、做决策；formal legacy 与 experimental Pi
-  在迁移期并存，但生命周期/持久化权威不同。
-- **Dataset Core（确定性代码）**：负责严格执行数据处理。两条 Agent 路径都不能
-  绕过 validate/publish，也不能直接写 `artifacts/`。
+- **Agent（Pi）**：负责理解用户意图、做决策、检索来源，通过
+  `server/src/agent/pi-adapter.ts` 边界接入；Agent 不能直接制造正式产物。
+- **Dataset Core（确定性代码）**：负责严格执行数据处理。任何路径都不能绕过
+  validate/publish，也不能直接写 `artifacts/`。
 
-这样设计的原因是：大模型擅长理解，但可能"偷懒"跳过关键步骤。Pipeline 保证了数据处理的可靠性。
+这样设计的原因是：大模型擅长理解，但可能"偷懒"跳过关键步骤。确定性 Core
+保证了数据处理的可靠性。
 
 ### 7.5 用 Playwright 做网页截图（视觉数据提取）
 
@@ -350,7 +359,7 @@ pnpm --filter @biomed/server exec playwright install chromium
 4. 提交前让 AI 跑一遍 lint + test
 ```
 
-> 💡 这个项目已经配好了 `opencode.json`，如果你用 OpenCode 或 Commonly 等 Agent 框架，它们会自动读取项目配置。
+> 💡 仓库根配有 `AGENTS.md` 与 `.claude/`、`.agents/` 等目录，主流 AI 编码工具（Claude Code、Copilot、Cursor、Cline 等）会自动读取并遵守项目约定。
 
 ---
 
@@ -368,15 +377,6 @@ pnpm --filter @biomed/server exec playwright install chromium
 | `pnpm typecheck` | Workspace TypeScript 检查 |
 | `pnpm build` | Workspace 构建 |
 
-### Python database bridge（在仓库根执行）
-
-| 命令 | 作用 |
-|------|------|
-| `uv sync` | 安装/同步 database 项目依赖 |
-| `uv run python database/bridge.py --self-test` | bridge 自检 |
-| `uv run pytest database/tests` | bridge 协议/持久化测试 |
-| `uv run ruff check database` | 代码检查（lint） |
-
 ### 前端（在 `frontend/` 目录下执行，仅定向检查/诊断）
 
 | 命令 | 作用 |
@@ -393,57 +393,11 @@ pnpm --filter @biomed/server exec playwright install chromium
 
 ## 9. 项目骨架一览
 
-```
-BioMed-QAgent/
-├── AGENTS.md              # 🔑 AI Agent 守则（先读这个！）
-├── PROBLEM.md             # 赛题说明
-├── README.md              # 项目简介
-├── .env.example           # 环境变量模板
-├── package.json           # 根 Workspace 脚本（pnpm dev 是正常入口）
-├── pnpm-workspace.yaml    # frontend/server/packages/*
-├── pnpm-lock.yaml         # 唯一 Node lockfile
-├── skills-lock.json       # Skill 版本锁定
-│
-├── database/              # Python persistence bridge（stdlib，named-op JSONL）
-│   ├── bridge.py          # JSONL stdin/stdout 命名操作入口
-│   ├── cache_store.py     # 逻辑缓存（schema-neutral，SQLite index + CSV）
-│   ├── database_store.py  # 用户 declarative database 持久化
-│   ├── declarative.py     # manifest 校验模型（stdlib 重写）
-│   └── tests/             # bridge 协议/持久化测试
-│       ├── tools/         # Function Tools
-│       └── integrations/  # 外部服务集成（NCBI 等）
-│
-├── server/                # TS Application Host / Pi experimental adapter
-├── packages/contracts/    # 共享 wire DTO
-├── .pi/skills/            # Phase 1 最小迁移 Skills
-│
-├── frontend/              # React 前端
-│   ├── package.json       # 项目配置 + 依赖
-│   ├── vite.config.ts     # Vite 构建配置
-│   ├── components.json    # shadcn/ui 配置
-│   └── src/
-│       ├── components/    # 业务组件 + ui/（shadcn 组件）
-│       ├── hooks/         # 自定义 Hook
-│       ├── stores/        # Zustand 状态管理
-│       ├── styles/        # Tailwind CSS
-│       └── lib/           # 工具函数
-│
-├── docs/                  # 文档
-│   ├── ARCHITECTURE.md    # 🔑 架构设计（权威参考）
-│   ├── TODO.md            # 开发计划
-│   └── superpowers/       # 详细设计文档
-│
-├── tests/                 # Python 测试
-└── scripts/               # 工具脚本
-```
+目录结构与各目录职责以 [README.md](README.md)「项目结构」一节为准，此处不重复维护。
 
 ---
 
 ## 10. 常见问题排查
-
-### Q: `uv sync` 报错 "Python 3.12+ required"
-
-你的 Python 版本太低。装 Python 3.12 或更新版本。用 `python --version` 确认。
 
 ### Q: `pnpm install` 报错 "pnpm not found"
 
@@ -459,60 +413,14 @@ BioMed-QAgent/
 2. 确认 http://127.0.0.1:5173/api/v1/health 可访问
 3. 打开浏览器开发者工具（F12）→ Network 面板看请求状态
 
-### Q: Windows 上运行 `uv run` 报编码错误
-
-在 PowerShell 中先执行：
-
-```powershell
-$env:PYTHONUTF8 = "1"
-```
-
-或者把 `PYTHONUTF8=1` 加到系统环境变量。
-
 ### Q: Playwright 截图功能报 "Executable doesn't exist"
 
 需要安装 Chromium 浏览器：
 
 ```powershell
-cd backend
-uv run playwright install chromium
+pnpm --filter @biomed/server exec playwright install chromium
 ```
-
-### Q: 提示 `uv` 不是系统命令
-
-关掉终端重新打开。如果还不行，手动把 `%USERPROFILE%\.cargo\bin` 加到 PATH。
 
 ---
 
 > **📌 最后提醒：本项目配有完整的 AGENTS.md，你的 AI 工具能自动理解项目规则。遇到问题，先把 AGENTS.md 和 docs/ARCHITECTURE.md 丢给 AI，让它帮你定位。**
-
-## 已知陷阱:LLM 序列化未指定可选参数为空字符串
-
-Agent 调用 `function_tool` 时,未指定的可选参数(如 find_skill 的 `source`)会被
-LLM 序列化为 `""`(空字符串)而非省略。任何按 `param is not None` 判断"是否提供"
-的工具实现都会因此把所有候选过滤掉,表现为工具恒返回空。
-
-处理模式(见 `app/skills/gateway.py:_find_skill`):显式参数用
-`param is not None and param.strip()` 判断,空白字符串视为未提供。
-
-受影响面:所有 LLM 直接调用的 Function Tool 都要按此模式处理可选参数。
-
-## 已知陷阱:浏览器子资源拒绝导致整页失败(已修复)
-
-`BrowserPool._route_handler` 曾把所有被拒的子资源请求(脚本/图片/CDN,如
-IPv6 地址 2001::1 被 SSRF 防护拒绝)当作致命错误:`route.abort()` + `raise`,
-导致页面 close 时抛异常、`navigate_page` 整体失败。修复后仅**主文档导航**
-被拒才致命;子资源被拒只 abort(SSRF 防护保留,页面主体仍渲染)。若未来
-页面出现"导航失败但主文档正常"的回归,先查 `_route_handler` 的
-`is_main_frame` 判断。
-
-## 已知陷阱:SDK strict schema 把带默认值参数标 required
-
-OpenAI Agents SDK 的 `ensure_strict_json_schema` 把所有属性无条件加入
-`required`,即使参数有默认值(`default=None` 的键还会被剥离)。表现:Agent
-调用缺省可选参数时报 `'X' is a required property`。两层防护:
-1. `gateway._invoke_skill` 校验时把 `required` 中带 `default` 的属性视为可选
-   (覆盖非 None 默认值,如 `limit: int = 1`);
-2. 参数默认值为 `None` 时(`Optional[X] = None`)strict 会剥离 default 键,
-   需在 `@function_tool(strict_mode=False)` 显式退出 strict(如
-   `search_pubchem.max_results`)。
