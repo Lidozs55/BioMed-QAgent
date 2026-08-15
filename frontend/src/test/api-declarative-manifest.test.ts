@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { assertDeclarativeManifest } from "@/lib/apiDeclarativeParsers";
-import { APIError } from "@/hooks/settingsContracts";
+import { APIError } from "@/api/errors";
 
 /* ---- declarative manifest field preservation ---- */
 describe("assertDeclarativeManifest field preservation", () => {

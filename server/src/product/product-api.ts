@@ -1,9 +1,13 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 
 import { DatabaseBridgeError } from "../persistence/db-client.js";
+import { readJsonFile, writeJsonAtomic } from "../persistence/atomic-json.js";
+import { HttpError } from "../http/error.js";
+import { readJsonBody } from "../http/body.js";
+import { sendError, sendJson, sendNoContent } from "../http/response.js";
+import { asRecord } from "../http/validation.js";
 import { BuildStore, BuildStoreError } from "./build-store.js";
 import { CacheApi } from "./cache-api.js";
 import {
@@ -34,35 +38,6 @@ const LABELS = {
   warm: "亲和",
   rigorous: "严谨",
 } as const;
-
-function json(response: ServerResponse, status: number, value: unknown): void {
-  const bytes = Buffer.from(JSON.stringify(value), "utf8");
-  response.writeHead(status, {
-    "content-type": "application/json; charset=utf-8",
-    "content-length": bytes.length,
-  });
-  response.end(bytes);
-}
-
-function error(response: ServerResponse, status: number, detail: string): void {
-  json(response, status, { detail });
-}
-
-async function body(request: IncomingMessage): Promise<Record<string, unknown>> {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of request) {
-    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    size += bytes.length;
-    if (size > 1_048_576) throw new Error("Request body is too large");
-    chunks.push(bytes);
-  }
-  const value = JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Request body must be an object");
-  }
-  return value as Record<string, unknown>;
-}
 
 function parameter(url: URL, key: string): string | undefined {
   const value = url.searchParams.get(key);
@@ -95,21 +70,13 @@ async function readPersonalization(file: string): Promise<Personalization> {
     personality: "pragmatic",
     personality_label: LABELS.pragmatic,
   });
-  try {
-    const value = JSON.parse(await readFile(file, "utf8")) as unknown;
-    if (value === null || typeof value !== "object" || Array.isArray(value)) return fallback;
-    return personality(value as Record<string, unknown>, fallback);
-  } catch (readError) {
-    if ((readError as NodeJS.ErrnoException).code === "ENOENT") return fallback;
-    return fallback;
-  }
+  const value = await readJsonFile<unknown>(file);
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return fallback;
+  return personality(value as Record<string, unknown>, fallback);
 }
 
 async function writePersonalization(file: string, value: Personalization): Promise<void> {
-  await mkdir(path.dirname(file), { recursive: true });
-  const temporary = `${file}.${randomUUID()}.tmp`;
-  await writeFile(temporary, JSON.stringify(value, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
-  await rename(temporary, file);
+  await writeJsonAtomic(file, value, { private: true });
 }
 
 function attachment(response: ServerResponse, value: {
@@ -141,7 +108,7 @@ export async function createProductApi(options: ProductApiOptions): Promise<{
     const method = request.method ?? "GET";
     const pathname = url.pathname;
     if (method === "GET" && pathname === "/api/v1/health") {
-      json(response, 200, {
+      sendJson(response, 200, {
         status: "ok",
         app_host: "ts",
         agent_runtime: "pi",
@@ -157,7 +124,7 @@ export async function createProductApi(options: ProductApiOptions): Promise<{
         options.database.call<{ disabled: string[] }>("database.disabled", {}),
       ]);
       const disabled = new Set(disabledState.disabled);
-      json(response, 200, {
+      sendJson(response, 200, {
         databases: [
           ...listBuiltinDatabases(disabled),
           ...userEntries,
@@ -166,16 +133,16 @@ export async function createProductApi(options: ProductApiOptions): Promise<{
       return;
     }
     if (method === "POST" && pathname === "/api/v1/databases") {
-      const manifest = (await body(request)) as { name?: unknown };
+      const manifest = asRecord(await readJsonBody(request));
       if (typeof manifest.name === "string" && BUILTIN_DATABASE_NAMES.has(manifest.name)) {
-        error(
+        sendError(
           response,
           422,
           `database name conflicts with a builtin database: ${manifest.name}`,
         );
         return;
       }
-      json(response, 201, await options.database.call("database.save", { manifest }));
+      sendJson(response, 201, await options.database.call("database.save", { manifest }));
       return;
     }
     const databaseMatch = /^\/api\/v1\/databases\/([^/]+)$/.exec(pathname);
@@ -189,33 +156,33 @@ export async function createProductApi(options: ProductApiOptions): Promise<{
             {},
           );
           const entry = getBuiltinDatabase(name, new Set(disabledState.disabled));
-          if (entry === null) error(response, 404, "Database not found");
-          else json(response, 200, entry);
+          if (entry === null) sendError(response, 404, "Database not found");
+          else sendJson(response, 200, entry);
           return;
         }
         const value = await options.database.call("database.get", { name });
-        if (value === null) error(response, 404, "Database not found");
-        else json(response, 200, value);
+        if (value === null) sendError(response, 404, "Database not found");
+        else sendJson(response, 200, value);
         return;
       }
       if (method === "PUT") {
         if (BUILTIN_DATABASE_NAMES.has(name)) {
-          error(response, 403, "builtin databases are immutable");
+          sendError(response, 403, "builtin databases are immutable");
           return;
         }
-        json(response, 200, await options.database.call("database.patch", {
+        sendJson(response, 200, await options.database.call("database.patch", {
           name,
-          patch: await body(request),
+          patch: asRecord(await readJsonBody(request)),
         }));
         return;
       }
       if (method === "DELETE") {
         if (BUILTIN_DATABASE_NAMES.has(name)) {
-          error(response, 403, "builtin databases cannot be deleted");
+          sendError(response, 403, "builtin databases cannot be deleted");
           return;
         }
         await options.database.call("database.delete", { name });
-        response.writeHead(204).end();
+        sendNoContent(response);
         return;
       }
     }
@@ -223,29 +190,29 @@ export async function createProductApi(options: ProductApiOptions): Promise<{
     if (method === "POST" && toggleMatch !== null) {
       const name = decodeURIComponent(toggleMatch[1]!);
       const enabled = toggleMatch[2] === "enable";
-      json(response, 200, await options.database.call("database.set_enabled", { name, enabled }));
+      sendJson(response, 200, await options.database.call("database.set_enabled", { name, enabled }));
       return;
     }
     if (pathname === "/api/v1/personalization") {
       const current = await readPersonalization(personalizationFile);
       if (method === "GET") {
-        json(response, 200, current);
+        sendJson(response, 200, current);
         return;
       }
       if (method === "PUT") {
-        const updated = personality(await body(request), current);
+        const updated = personality(asRecord(await readJsonBody(request)), current);
         await writePersonalization(personalizationFile, updated);
-        json(response, 200, updated);
+        sendJson(response, 200, updated);
         return;
       }
     }
     if (method === "GET" && pathname === "/api/v1/builds") {
       const requested = Number(url.searchParams.get("limit") ?? 50);
       if (!Number.isInteger(requested) || requested < 1 || requested > 200) {
-        error(response, 422, "limit must be between 1 and 200");
+        sendError(response, 422, "limit must be between 1 and 200");
         return;
       }
-      json(response, 200, await builds.list(requested));
+      sendJson(response, 200, await builds.list(requested));
       return;
     }
     const buildMatch = /^\/api\/v1\/builds\/([^/]+)$/.exec(pathname);
@@ -254,8 +221,8 @@ export async function createProductApi(options: ProductApiOptions): Promise<{
         decodeURIComponent(buildMatch[1]!),
         parameter(url, "task_id"),
       );
-      if (value === null) error(response, 404, "Build not found");
-      else json(response, 200, value);
+      if (value === null) sendError(response, 404, "Build not found");
+      else sendJson(response, 200, value);
       return;
     }
     const buildArtifactMatch = /^\/api\/v1\/builds\/([^/]+)\/artifacts\/([^/]+)$/.exec(pathname);
@@ -265,17 +232,17 @@ export async function createProductApi(options: ProductApiOptions): Promise<{
         decodeURIComponent(buildArtifactMatch[2]!),
         parameter(url, "task_id"),
       );
-      if (value === null) error(response, 404, "Artifact not found");
+      if (value === null) sendError(response, 404, "Artifact not found");
       else attachment(response, value);
       return;
     }
     if (method === "GET" && pathname === "/api/v1/cache/datasets") {
       const requested = Number(url.searchParams.get("limit") ?? 50);
       if (!Number.isInteger(requested) || requested < 1 || requested > 200) {
-        error(response, 422, "limit must be between 1 and 200");
+        sendError(response, 422, "limit must be between 1 and 200");
         return;
       }
-      json(response, 200, await cache.list(
+      sendJson(response, 200, await cache.list(
         parameter(url, "namespace"),
         parameter(url, "keyword"),
         requested,
@@ -286,8 +253,8 @@ export async function createProductApi(options: ProductApiOptions): Promise<{
     if (method === "GET" && cacheMatch !== null) {
       const namespace = parameter(url, "namespace");
       const value = await cache.detail(decodeURIComponent(cacheMatch[1]!), namespace);
-      if (value === null) error(response, 404, "Dataset not found");
-      else json(response, 200, value);
+      if (value === null) sendError(response, 404, "Dataset not found");
+      else sendJson(response, 200, value);
       return;
     }
     const cacheArtifactMatch = /^\/api\/v1\/cache\/datasets\/([^/]+)\/artifacts\/([^/]+)$/.exec(pathname);
@@ -298,7 +265,7 @@ export async function createProductApi(options: ProductApiOptions): Promise<{
         namespace,
         decodeURIComponent(cacheArtifactMatch[2]!),
       );
-      if (value === null) error(response, 404, "Artifact not found");
+      if (value === null) sendError(response, 404, "Artifact not found");
       else attachment(response, value);
       return;
     }
@@ -312,7 +279,7 @@ export async function createProductApi(options: ProductApiOptions): Promise<{
       response.end(bytes);
       return;
     }
-    error(response, 405, "Method not allowed");
+    sendError(response, 405, "Method not allowed");
   }
 
   return {
@@ -335,8 +302,10 @@ export async function createProductApi(options: ProductApiOptions): Promise<{
           response.destroy(dispatchError instanceof Error ? dispatchError : undefined);
           return;
         }
-        if (dispatchError instanceof SyntaxError || dispatchError instanceof URIError) {
-          error(response, 422, "Invalid request");
+        if (dispatchError instanceof HttpError) {
+          sendError(response, dispatchError.status, dispatchError.message);
+        } else if (dispatchError instanceof SyntaxError || dispatchError instanceof URIError) {
+          sendError(response, 422, "Invalid request");
         } else if (dispatchError instanceof DatabaseBridgeError) {
           const status = dispatchError.code === "not_found"
             ? 404
@@ -345,12 +314,12 @@ export async function createProductApi(options: ProductApiOptions): Promise<{
               : dispatchError.code === "validation"
                 ? 422
                 : 503;
-          error(response, status, dispatchError.message);
+          sendError(response, status, dispatchError.message);
         } else if (dispatchError instanceof BuildStoreError) {
-          error(response, 409, dispatchError.message);
+          sendError(response, 409, dispatchError.message);
         } else {
           console.error("product_api.request_failed", dispatchError);
-          error(response, 500, "Internal server error");
+          sendError(response, 500, "Internal server error");
         }
       });
       return true;

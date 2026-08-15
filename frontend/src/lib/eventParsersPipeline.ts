@@ -1,12 +1,10 @@
-import { APIError } from "@/hooks/settingsContracts";
+import { APIError } from "@/api/errors";
+import { parseBuildResult } from "@biomed/contracts";
 import type {
-  BindingFailureDetail,
-  BuildResult,
-  BuildResultStatus,
   EventPayload,
   JsonValue,
 } from "@/runtime/contracts";
-import { assertString, assertNumber, assertBoolean, assertObject, assertFinite, assertOptionalNull, assertHex64, assertPositiveInt, assertNonNegativeInt, assertOptionalNonNegativeInt, assertJsonRecord } from "./eventValidatorHelpers";
+import { assertString, assertNumber, assertBoolean, assertObject, assertFinite, assertOptionalNull, assertHex64, assertPositiveInt, assertNonNegativeInt, assertOptionalNonNegativeInt, assertJsonRecord } from "@biomed/contracts";
 
 const STAGE_NAMES = ["discovery", "acquisition", "processing", "artifact_build", "validation"] as const;
 const PROMPT_KINDS = ["plan_confirmation", "data_correction", "max_turns_reached", "no_progress"] as const;
@@ -17,57 +15,6 @@ function assertNonEmpty(v: unknown, path: string): string {
   const s = assertString(v, path);
   if (s.length === 0) throw new APIError(502, `Expected non-empty string at ${path}`);
   return s;
-}
-
-function assertBuildResultStatus(v: unknown, path: string): BuildResultStatus {
-  switch (v) {
-    case "succeeded":
-    case "partial_success":
-    case "no_data":
-    case "spec_rejected":
-      return v;
-    default:
-      throw new APIError(502, `Invalid build result status at ${path}`);
-  }
-}
-
-function parseBindingFailures(value: unknown, path: string): BindingFailureDetail[] {
-  if (value === undefined || value === null) return [];
-  if (!Array.isArray(value)) {
-    throw new APIError(502, `Expected binding failure array at ${path}`);
-  }
-  return value.map((entry, index) => {
-    const obj = assertJsonRecord(entry, `${path}[${index}]`);
-    return {
-      binding_id: assertNonEmpty(Reflect.get(obj, "binding_id"), `${path}[${index}].binding_id`),
-      reason_code: assertNonEmpty(Reflect.get(obj, "reason_code"), `${path}[${index}].reason_code`),
-      message: assertString(Reflect.get(obj, "message"), `${path}[${index}].message`),
-    };
-  });
-}
-
-function parseBuildResult(value: unknown, path: string): BuildResult {
-  const result = assertJsonRecord(value, path);
-  return {
-    status: assertBuildResultStatus(Reflect.get(result, "status"), `${path}.status`),
-    valid_row_count: assertNonNegativeInt(Reflect.get(result, "valid_row_count"), `${path}.valid_row_count`),
-    successful_sources: assertStringArray(Reflect.get(result, "successful_sources"), `${path}.successful_sources`),
-    rejected_sources: assertStringArray(Reflect.get(result, "rejected_sources"), `${path}.rejected_sources`),
-    available_artifact_roles: assertStringArray(Reflect.get(result, "available_artifact_roles"), `${path}.available_artifact_roles`),
-    publication_id: assertOptionalNull(Reflect.get(result, "publication_id"), `${path}.publication_id`, assertNonEmpty),
-    reason_codes: assertStringArray(Reflect.get(result, "reason_codes"), `${path}.reason_codes`),
-    user_summary: assertString(Reflect.get(result, "user_summary"), `${path}.user_summary`),
-    recommended_next_action: assertString(Reflect.get(result, "recommended_next_action"), `${path}.recommended_next_action`),
-    build_id: assertOptionalNull(Reflect.get(result, "build_id"), `${path}.build_id`, assertNonEmpty),
-    binding_failures: parseBindingFailures(Reflect.get(result, "binding_failures"), `${path}.binding_failures`),
-  };
-}
-
-function assertStringArray(value: unknown, path: string): string[] {
-  if (!Array.isArray(value)) {
-    throw new APIError(502, `Expected string array at ${path}`);
-  }
-  return value.map((entry, index) => assertString(entry, `${path}[${index}]`));
 }
 
 export function parseErrorDetail(errObj: Record<string, unknown>, path: string): {

@@ -1,4 +1,4 @@
-import { APIError } from "@/hooks/settingsContracts";
+import { APIError } from "@/api/errors";
 import type { EventPayload } from "@/runtime/contracts";
 import { parsePipelineEventPayload } from "./eventParsersPipeline";
 import { parseRuntimeEventPayload } from "./eventParsersRuntime";
