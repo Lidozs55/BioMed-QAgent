@@ -267,27 +267,27 @@ build 锁、cancel 收敛与 event sink；`DATASET_CORE=ts` 现为默认运行�
       operation 总卡片）。应改为 call-scoped ID（2026-08-15 对话流时序
       修复时发现，`fix/runtime-timeline-sequence` 未包含此改动）
 
-## 前端 UI 合规修复（shadcn 规则审查，2026-08-15）
+## 前端 UI 合规修复（shadcn 规则审查，2026-08-15）（✅ 完成，2026-08-15）
 
 > 依据：shadcn skill 规则（styling / composition / icons / chat）与
 > `frontend/DESIGN.md`。审查报告与逐条证据见 2026-08-15 会话；本清单只列
 > 可勾选条目。原则：**每项改动走专用分支，一次 merge 一个完整功能单元**
 > （AGENTS.md §7.2）；类名断言类测试随改动同步更新。
 
-- [ ] **P1** 修复 `shimmer` 死类：`components/ChatPanel.tsx:845`（"正在思考…"
+- [x] **P1** 修复 `shimmer` 死类：`components/ChatPanel.tsx:845`（"正在思考…"
       Marker）与 `components/ui/attachment.tsx:104`（uploading/processing 态）
       引用的 `shimmer` 类未定义（Tailwind 4.3.2 无此工具类，`global.css` 无
       定义，已核实）→ 在 `global.css` 定义 shimmer 动画并接入
       prefers-reduced-motion，或改用 Skeleton/现有动画；验收：附件上传态与
       思考态可见动画效果
-- [ ] **P2** 清除产品代码全部 `space-y-*/space-x-*`（35 处 / 14 文件，
+- [x] **P2** 清除产品代码全部 `space-y-*/space-x-*`（35 处 / 14 文件，
       `components/ui/` 除外）→ `flex flex-col gap-*`；含
       `ModelImportSheet.tsx:821` 对 `FieldGroup`（自带 gap-5）的 `space-y-3`
       覆盖删除。文件清单：SettingsPage、settings/primitives、各 settings
       sections、UserInputDialog、ModelImportSheet/ModelListManager/
       ParameterEditor/ProviderManager、QueuedMessages、OperationStep/
       ToolCallStep、BuildResultsViewer
-- [ ] **P2** 移除产品代码原始颜色与 `dark:` 手动覆盖（9 文件 ~17 处）：
+- [x] **P2** 移除产品代码原始颜色与 `dark:` 手动覆盖（9 文件 ~17 处）：
       emerald（AgentComposer/model-info-card/SessionSidebar）、amber
       （ModelImportSheet/ModelListManager/BuildResultsViewer/
       BuildReportCard）、sky（BuildResultsViewer/ResultsViewer）、yellow
@@ -296,33 +296,33 @@ build 锁、cancel 收敛与 event sink；`DATASET_CORE=ts` 现为默认运行�
       `dark:text-sky-400` / `dark:text-emerald-400` 断言**；验收：
       `grep -rn "dark:" src/components --include="*.tsx" | grep -v
       components/ui` 为空
-- [ ] **P2** 手写 chip 改为 `Badge`：AgentComposer（"推荐"/"图"）、
+- [x] **P2** 手写 chip 改为 `Badge`：AgentComposer（"推荐"/"图"）、
       model-info-card（"推荐"/"可用"/"接口验证"）、ContextWindowSelect
       （"推断"）、AppearanceSettingsSection（已导入字体 chip）等 5+ 处
       手写 `rounded-full bg-*/px-* text-[10-11px]` 结构
-- [ ] **P3** AgentComposer 模型选择器改用手写搜索列表 → 已安装的
+- [x] **P3** AgentComposer 模型选择器改用手写搜索列表 → 已安装的
       `Combobox` 组件（`components/ui/combobox.tsx` 已存在但未使用）；
       保留"推荐"标记与"前往设置"入口
-- [ ] **P3** `SettingsSearch` 手写下拉（绝对定位 `z-50`、focus/blur 定时器、
+- [x] **P3** `SettingsSearch` 手写下拉（绝对定位 `z-50`、focus/blur 定时器、
       role=listbox）→ `Popover` + `Command` 组合，消除手动 `z-50` 与
       setTimeout 管理
-- [ ] **P3** `settings/primitives.tsx` 手写 `SegmentedControl`（role=group +
+- [x] **P3** `settings/primitives.tsx` 手写 `SegmentedControl`（role=group +
       aria-pressed 循环按钮）→ `ToggleGroup`（先 `shadcn add toggle-group`，
       base 原语库）；替换使用处（AppearanceSettingsSection 主题模式/
       reduced-motion、EditorSettingsSection 发送模式）
-- [ ] **P3** 小型组件合规修补：ReasoningBlock `SpinnerGapIcon animate-spin`
+- [x] **P3** 小型组件合规修补：ReasoningBlock `SpinnerGapIcon animate-spin`
       → `Spinner`；SettingsPage header 分隔 `span` → `Separator
       orientation="vertical"`；BuildResultsViewer 模板字符串 className →
       `cn()`；AgentComposer 模型搜索框绝对定位图标 → `InputGroup` +
       `InputGroupAddon`
-- [ ] **P4** `text-[10px]/[11px]`（17+ 处）收敛到 DESIGN.md 元数据下限
+- [x] **P4** `text-[10px]/[11px]`（17+ 处）收敛到 DESIGN.md 元数据下限
       （12px）：AgentComposer、ContextWindowSelect、model-info-card、
       SessionSidebar kbd、ModelImportSheet、primitives 滑块刻度等
-- [ ] **P4** 去除双流式光标：AssistantSegment/ReasoningBlock 手写
+- [x] **P4** 去除双流式光标：AssistantSegment/ReasoningBlock 手写
       `▋ animate-pulse` span 与 `global.css` 的
       `.markdown-content[data-streaming]::after` 光标重复 → 保留 CSS
       内置光标，删除手写 span
-- [ ] **P4** 主题预览卡（AppearanceSettingsSection `slate-*` 硬编码）加注释
+- [x] **P4** 主题预览卡（AppearanceSettingsSection `slate-*` 硬编码）加注释
       说明"预览需渲染真实色板"；LoadingScreen logo `animate-pulse` 决策
       （保留品牌呼吸 / 换 Skeleton，二选一并注释）
 
