@@ -211,6 +211,10 @@ durable `assistant_delta` 无 `stream_id`（Pi adapter 路径）时，`stream.ts
 `live:<run>:<epoch>` 分段 ID（`tool_started` 每次递增该计数），因此工具调用
 前后的正文落在不同的 `assistant_segment`，而不是合并进同一个 item。
 
+任务长时间无新事件（`summary.updated_at` 不前进，默认 2 分钟）时，ChatPanel
+显示"可能已挂起"提示并给出取消入口（`STALL_THRESHOLD_MS`）。下载类工具会
+周期性上报 `operation_progress`（downloaded_bytes），因此正常大文件下载不会误报。
+
 `toolLabels` 映射 `toolName + arguments` → `{ verb, target, details? }` 三元组，
 状态条与 ToolCallStep 复用同一映射。
 

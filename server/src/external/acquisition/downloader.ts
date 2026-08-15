@@ -78,6 +78,20 @@ export interface AcquireSourceOptions {
   allowedHosts?: ReadonlySet<string>;
   /** DNS resolver for policy checks; defaults to the client's resolver. */
   resolve?: import("../network/dns.js").AddressResolver;
+  /**
+   * Caller-owned part file. When provided the downloader writes into this
+   * exact path and, on non-abort stream failures, leaves the partial file in
+   * place so the caller can resume (or clean it up). Defaults to a fresh
+   * `download_attempt_<uuid>.part` that is always cleaned up on failure.
+   */
+  partPath?: string;
+  /**
+   * Resume an existing `partPath` of exactly this many bytes: sends
+   * `Range: bytes=<resumeFromBytes>-` and appends on HTTP 206; on HTTP 200
+   * (Range ignored) restarts from scratch into the same file. The final
+   * checksum covers the whole file (prefix re-hashed).
+   */
+  resumeFromBytes?: number;
 }
 
 async function sha256File(file: string): Promise<string> {
@@ -238,8 +252,17 @@ export async function acquireSource(options: AcquireSourceOptions): Promise<Acqu
   await ensureAcquisitionDirs(dirs);
   const attemptId = `download_attempt_${randomUUID()}`;
   const startedAt = new Date().toISOString();
-  const partPath = path.join(dirs.downloadTmp, `${attemptId}.part`);
-  let bytesReceived = 0;
+  const partPath = options.partPath ?? path.join(dirs.downloadTmp, `${attemptId}.part`);
+  const callerOwnedPart = options.partPath !== undefined;
+  let resumeOffset = options.resumeFromBytes ?? 0;
+  if (resumeOffset > 0) {
+    const partStat = await stat(partPath).catch(() => null);
+    if (partStat === null || !partStat.isFile() || partStat.size !== resumeOffset) {
+      // Stale or mismatched resume point — start from scratch.
+      resumeOffset = 0;
+    }
+  }
+  let bytesReceived = resumeOffset;
 
   const fail = (
     code: AcquisitionError["code"],
@@ -312,10 +335,36 @@ export async function acquireSource(options: AcquireSourceOptions): Promise<Acqu
       }
     }
 
-    const sha = createHash("sha256");
-    const md5 = createHash("md5");
+    let sha = createHash("sha256");
+    let md5 = createHash("md5");
+    if (resumeOffset > 0) {
+      // Re-seed the content hashes over the already-downloaded prefix so the
+      // final digest covers the entire file, not just the resumed portion.
+      const handle = await open(partPath, "r");
+      try {
+        const buffer = Buffer.allocUnsafe(1024 * 1024);
+        let remaining = resumeOffset;
+        while (remaining > 0) {
+          const { bytesRead } = await handle.read(
+            buffer,
+            0,
+            Math.min(buffer.length, remaining),
+            null,
+          );
+          if (bytesRead === 0) break;
+          sha.update(buffer.subarray(0, bytesRead));
+          md5.update(buffer.subarray(0, bytesRead));
+          remaining -= bytesRead;
+        }
+      } finally {
+        await handle.close();
+      }
+    }
     const headers: Record<string, string> = { ...requestHeaders };
     headers["Accept"] = accept;
+    if (resumeOffset > 0) {
+      headers["Range"] = `bytes=${resumeOffset}-`;
+    }
     let response: Awaited<ReturnType<PublicHttpClient["request"]>>;
     try {
       response = await client.request(source.url, {
@@ -349,14 +398,15 @@ export async function acquireSource(options: AcquireSourceOptions): Promise<Acqu
       });
     } catch (error) {
       if (isAbortError(error)) {
-        await cleanupPart();
+        // 取消时保留调用方 part 文件：用户取消后可断点续传（默认 part 仍清理）。
+        if (!callerOwnedPart) await cleanupPart();
         throw error;
       }
       if (error instanceof AcquisitionError) return fail(error.code, error.message);
       if (error instanceof UnsafeUrlError) return fail("validation_error", error.message);
       const code = errorCodeFrom(error);
       if (code === "cancelled") {
-        await cleanupPart();
+        if (!callerOwnedPart) await cleanupPart();
         throw error;
       }
       return fail(code, `download failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -364,17 +414,31 @@ export async function acquireSource(options: AcquireSourceOptions): Promise<Acqu
     if (response.status < 200 || response.status >= 300) {
       return fail("network_error", `download returned HTTP ${response.status}`);
     }
+    let append = false;
+    if (resumeOffset > 0 && response.status === 206) {
+      append = true;
+    } else if (resumeOffset > 0) {
+      // Server ignored the Range header (HTTP 200 full body): restart from
+      // scratch into the same caller-owned part file.
+      sha = createHash("sha256");
+      md5 = createHash("md5");
+      bytesReceived = 0;
+      resumeOffset = 0;
+    }
     const declaredHeader = response.headers["content-length"] ?? response.headers["Content-Length"];
     const declaredLength = declaredHeader === undefined ? null : Number.parseInt(declaredHeader, 10);
-    if (declaredLength !== null && declaredLength > maxBytes) {
+    if (declaredLength !== null && declaredLength + resumeOffset > maxBytes) {
       await cleanupPart();
       return fail("download_incomplete", "declared content length exceeds maximum");
     }
 
     const mediaType = mediaTypeFromHeader(response.headers);
-    const target = createWriteStream(partPath, { flags: "wx" });
+    const target = createWriteStream(partPath, { flags: append ? "a" : "w" });
     try {
       try {
+        const declaredTotal = declaredLength === null
+          ? null
+          : declaredLength + resumeOffset;
         for await (const chunk of response.body) {
           if (signal?.aborted === true) {
             throw signal.reason instanceof Error ? signal.reason : new Error("aborted");
@@ -388,14 +452,18 @@ export async function acquireSource(options: AcquireSourceOptions): Promise<Acqu
           await new Promise<void>((resolveWrite, rejectWrite) => {
             target.write(chunk, (error) => (error ? rejectWrite(error) : resolveWrite()));
           });
-          await progress?.(bytesReceived, declaredLength);
+          await progress?.(bytesReceived, declaredTotal);
         }
       } catch (error) {
         await new Promise<void>((resolveClose) => target.close(() => resolveClose()));
-        await cleanupPart();
         if (isAbortError(error) || (error instanceof Error && error.name === "AbortError") || signal?.aborted === true) {
+          // 取消时保留调用方 part 文件：用户取消后可断点续传（默认 part 仍清理）。
+          if (!callerOwnedPart) await cleanupPart();
           throw error;
         }
+        // Caller-owned part files survive retryable stream failures so the
+        // caller can resume from the partial bytes (downloaders retry).
+        if (!callerOwnedPart) await cleanupPart();
         if (error instanceof AcquisitionError) return fail(error.code, error.message);
         const code = errorCodeFrom(error);
         if (code === "cancelled") throw error;
@@ -416,11 +484,12 @@ export async function acquireSource(options: AcquireSourceOptions): Promise<Acqu
       target.destroy();
     }
 
-    if (bytesReceived === 0) {
+    const streamedBytes = bytesReceived - resumeOffset;
+    if (streamedBytes === 0 && resumeOffset === 0) {
       await cleanupPart();
       return fail("download_incomplete", "download was empty");
     }
-    if (declaredLength !== null && bytesReceived !== declaredLength) {
+    if (declaredLength !== null && streamedBytes !== declaredLength) {
       await cleanupPart();
       return fail("download_incomplete", "content length mismatch");
     }
@@ -469,10 +538,14 @@ export async function acquireSource(options: AcquireSourceOptions): Promise<Acqu
       asset: buildSourceAsset(assetId, destination, dirs, checksum, bytesReceived, mediaType, source, attemptId, dataLevel),
     };
   } catch (error) {
-    await cleanupPart();
     if (isAbortError(error) || (error instanceof Error && error.name === "AbortError") || signal?.aborted === true) {
+      // 取消时保留调用方 part 文件：用户取消后可断点续传（默认 part 仍清理）。
+      if (!callerOwnedPart) await cleanupPart();
       throw error;
     }
+    // Caller-owned part files survive non-abort failures for the caller to
+    // resume or clean up; the default part is always removed.
+    if (!callerOwnedPart) await cleanupPart();
     if (error instanceof AcquisitionError) return fail(error.code, error.message);
     if (error instanceof UnsafeUrlError) return fail("validation_error", error.message);
     return fail("internal_error", `download failed: ${error instanceof Error ? error.message : String(error)}`);
