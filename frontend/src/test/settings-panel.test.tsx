@@ -289,6 +289,22 @@ describe("SettingsPanel model registry", () => {
     expect(screen.queryByText("当前模型")).not.toBeInTheDocument();
   });
 
+  it("hides the current model panel when only a default model name exists without credentials", async () => {
+    const api = mockApi({
+      fetchSettings: vi.fn().mockResolvedValue({
+        ...TEST_SETTINGS,
+        model_name: "qwen-plus",
+        api_key: "",
+        api_key_configured: false,
+      }),
+      fetchManagedModels: vi.fn().mockResolvedValue([]),
+    });
+    renderSettings(api);
+
+    await screen.findByText("供应商管理");
+    expect(screen.queryByText("当前模型")).not.toBeInTheDocument();
+  });
+
   it("shows active model information without parameter editing controls", async () => {
     const api = mockApi({
       fetchManagedModels: vi.fn().mockResolvedValue([
@@ -296,6 +312,7 @@ describe("SettingsPanel model registry", () => {
           ...TEST_MODELS[0],
           model_id: "deepseek-chat",
           name: "DeepSeek Chat",
+          active: true,
           params: { temperature: 0.7, max_tokens: 8192 },
           param_specs: SPECS,
         },

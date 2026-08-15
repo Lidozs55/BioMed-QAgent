@@ -152,7 +152,14 @@ export function ModelSettingsSection({
 
   const activeModelId = settings?.model_name ?? "";
   const activeManagedModel =
-    managedModels.find((model) => model.model_id === activeModelId) ?? null;
+    managedModels.find((model) => model.active) ?? null;
+  // A "current model" is only meaningful when one is actually active: either a
+  // maintained model marked active in the registry, or a legacy/direct config
+  // that carries provider credentials. A default model name without any
+  // credentials is not a real selection and should not render this section.
+  const hasActiveModel =
+    activeManagedModel !== null ||
+    (activeModelId !== "" && settings?.api_key_configured === true);
 
   return (
     <div className="space-y-10">
@@ -183,7 +190,7 @@ export function ModelSettingsSection({
               providers={providers}
               managedModels={managedModels}
               loading={registryLoading}
-              activeModelName={activeModelId || null}
+              activeModelName={activeManagedModel?.model_id ?? null}
               onActivated={onActivated}
               onChanged={() => void refreshRegistry()}
             />
@@ -191,7 +198,7 @@ export function ModelSettingsSection({
         </SettingCard>
       </SettingSection>
 
-      {settings && activeModelId && (
+      {settings && hasActiveModel && (
         <SettingSection
           title="当前模型"
           description="当前任务使用的模型信息，参数请在“模型列表”中维护。"
