@@ -33,6 +33,11 @@ import type {
   ServerSource,
   VendorInfo,
 } from "@biomed/contracts";
+import type {
+  AgentPermissionPreset,
+  AgentPermissionRuleInput,
+  AgentPermissionSettings,
+} from "./settings";
 
 export type {
   CapabilitySource,
@@ -63,6 +68,12 @@ export type {
   VendorInfo,
 };
 
+export type {
+  AgentPermissionPreset,
+  AgentPermissionRuleInput,
+  AgentPermissionSettings,
+};
+
 /* ---- Settings API client (frontend-side interface) ---- */
 export interface SettingsAPIClient {
   fetchSettings: () => Promise<ModelSettings>;
@@ -91,4 +102,8 @@ export interface SettingsAPIClient {
   createDatabase: (manifest: DeclarativeSkillManifest) => Promise<DatabaseDetail>;
   updateDatabase: (name: string, patch: DatabaseUpdatePatch) => Promise<DatabaseDetail>;
   deleteDatabase: (name: string) => Promise<void>;
+  fetchAgentPermissions: () => Promise<AgentPermissionSettings>;
+  setAgentPermissionsPreset: (preset: AgentPermissionPreset) => Promise<AgentPermissionSettings>;
+  addAgentPermissionRule: (rule: AgentPermissionRuleInput) => Promise<AgentPermissionSettings>;
+  removeAgentPermissionRule: (ruleId: string) => Promise<AgentPermissionSettings>;
 }

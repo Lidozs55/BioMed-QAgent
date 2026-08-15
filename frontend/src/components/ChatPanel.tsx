@@ -19,6 +19,7 @@ import { STAGE_LABELS } from "@/components/conversation/stageLabels";
 import { openSubagentPanel } from "@/components/subagentPanelControl";
 import { TaskStatusIcon } from "@/components/taskStatus";
 import { UserInputDialog } from "@/components/UserInputDialog";
+import { PermissionDialog } from "@/components/PermissionDialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -69,6 +70,13 @@ interface ChatPanelProps {
     taskId: string,
     runId: string,
     input: ResumeRunInput,
+  ) => Promise<void>;
+  resolvePermission?: (
+    taskId: string,
+    runId: string,
+    requestId: string,
+    decision: "allow" | "deny",
+    grantScope?: "once" | "run" | "task" | "persistent",
   ) => Promise<void>;
   loadOlderMessages?: (taskId: string) => Promise<void>;
   /** Trigger context compaction on a task */
@@ -212,6 +220,7 @@ export function ChatPanel({
   continueTask,
   cancelRun,
   resumeRun,
+  resolvePermission,
   loadOlderMessages,
   compactTask,
   injectTaskContext,
@@ -938,6 +947,9 @@ export function ChatPanel({
         </div>
       </MessageScrollerProvider>
       {resumeRun !== undefined && <UserInputDialog task={activeTask} onResumeRun={resumeRun} />}
+      {resolvePermission !== undefined && (
+        <PermissionDialog task={activeTask} onResolvePermission={resolvePermission} />
+      )}
     </div>
   );
 }

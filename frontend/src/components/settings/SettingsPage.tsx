@@ -14,6 +14,7 @@ import { EditorSettingsSection } from "@/components/settings/sections/EditorSett
 import { GeneralSettingsSection } from "@/components/settings/sections/GeneralSettingsSection";
 import { ModelSettingsSection } from "@/components/settings/sections/ModelSettingsSection";
 import { PersonalizationSettingsSection } from "@/components/settings/sections/PersonalizationSettingsSection";
+import { AgentPermissionSettingsSection } from "@/components/settings/sections/AgentPermissionSettingsSection";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -68,6 +69,7 @@ const SECTION_DESCRIPTIONS: Record<string, string> = {
   appearance: "调整主题模式、强调色与界面字体。",
   general: "管理本地数据与查看版本信息。",
   personalization: "配置适用于所有任务的额外指令与默认回复语气。",
+  permissions: "控制 Agent 对工作区外资源的访问与命令执行权限。",
 };
 
 function errorText(error: unknown): string {
@@ -349,6 +351,9 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
                   )}
                   {activeSection === "general" && (
                     <GeneralSettingsSection onExportCache={onExportCache ?? (() => undefined)} />
+                  )}
+                  {activeSection === "permissions" && (
+                    <AgentPermissionSettingsSection api={api} />
                   )}
                 </>
               )}

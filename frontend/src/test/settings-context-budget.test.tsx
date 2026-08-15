@@ -69,6 +69,10 @@ function mockApi(overrides: Partial<SettingsAPIClient> = {}): SettingsAPIClient 
     createDatabase: vi.fn(),
     updateDatabase: vi.fn(),
     deleteDatabase: vi.fn(),
+    fetchAgentPermissions: vi.fn().mockResolvedValue({ schema_version: 1, preset: "ask_when_needed", rules: [], persistent_exec_allow: false }),
+    setAgentPermissionsPreset: vi.fn(),
+    addAgentPermissionRule: vi.fn(),
+    removeAgentPermissionRule: vi.fn(),
   };
   return { ...base, ...overrides };
 }

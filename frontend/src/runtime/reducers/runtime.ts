@@ -350,6 +350,9 @@ export function applyRunTransitionEvent(
     if (next.pendingUserInput?.runId === runId) {
       next = { ...next, pendingUserInput: null };
     }
+    if (next.pendingPermission?.runId === runId) {
+      next = { ...next, pendingPermission: null };
+    }
     next = deactivateRunAssistantStream(next, runId);
     next = deactivateRunStreamingItems(next, runId);
   }
@@ -405,6 +408,9 @@ export function applyRunTerminalEvent(
   }
   if (next.pendingUserInput?.runId === runId) {
     next = { ...next, pendingUserInput: null };
+  }
+  if (next.pendingPermission?.runId === runId) {
+    next = { ...next, pendingPermission: null };
   }
   if (payload.type !== "run_completed") {
     next = terminalizeRunningFixtureStages(

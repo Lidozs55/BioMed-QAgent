@@ -663,6 +663,23 @@ export class RuntimeController {
     });
   }
 
+  /** Resolve a suspended permission request (plan §32). */
+  async resolvePermission(
+    taskId: string,
+    runId: string,
+    requestId: string,
+    decision: "allow" | "deny",
+    grantScope?: "once" | "run" | "task" | "persistent",
+  ): Promise<void> {
+    await this.enqueueTaskHandoff(taskId, async () => {
+      const generation = this.advanceTaskHandoffGeneration(taskId);
+      await this.api.resolvePermission(taskId, runId, requestId, decision, grantScope);
+      if (this.taskHandoffGenerations.get(taskId) !== generation) return;
+      // The durable permission_resolved event (via WS) clears the pending
+      // card; refetching the snapshot here would race the event ordering.
+    });
+  }
+
   async deleteTask(taskId: string): Promise<void> {
     await this.api.deleteTask(taskId);
     clearTaskProjection(taskId);

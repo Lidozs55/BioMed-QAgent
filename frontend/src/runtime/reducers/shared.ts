@@ -89,6 +89,7 @@ export function createTaskProjection(summary: TaskSummary): TaskProjection {
     stages: {},
     assistantStreamsByRunId: {},
     pendingUserInput: null,
+    pendingPermission: null,
     lastSequence: summary.latest_sequence,
     hydration: "summary",
     items: [],

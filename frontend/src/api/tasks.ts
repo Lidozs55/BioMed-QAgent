@@ -69,6 +69,13 @@ export interface TasksApi {
     expectedRunId?: string | null,
   ) => Promise<SteerResponse>;
   resumeRun: (taskId: string, runId: string, input: ResumeRunInput) => Promise<TaskSnapshot>;
+  resolvePermission: (
+    taskId: string,
+    runId: string,
+    requestId: string,
+    decision: "allow" | "deny",
+    grantScope?: "once" | "run" | "task" | "persistent",
+  ) => Promise<void>;
   deleteTask: (taskId: string) => Promise<void>;
   fetchArtifacts: (taskId: string) => Promise<ArtifactRecord[]>;
   getArtifactUrl: (taskId: string, artifactId: string) => string;
@@ -116,8 +123,19 @@ export function createTasksApi(http: Http): TasksApi {
     resumeRun: (taskId, runId, input) =>
       http.request(`${http.baseUrl}/tasks/${http.encodeId(taskId)}/runs/${http.encodeId(runId)}/resume`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ request_id: input.request_id, decision: input.decision, detail: input.detail }),
-      }).then((b) => parseTaskSnapshot(b)),
+        body: JSON.stringify({ request_id: input.request_id, decision: input.decision, detail: input.detail }),      }).then((b) => parseTaskSnapshot(b)),
+    resolvePermission: (taskId, runId, requestId, decision, grantScope) =>
+      http.requestVoid(
+        `${http.baseUrl}/tasks/${http.encodeId(taskId)}/runs/${http.encodeId(runId)}/permissions/${http.encodeId(requestId)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            decision,
+            ...(grantScope === undefined ? {} : { grant_scope: grantScope }),
+          }),
+        },
+      ),
     deleteTask: (taskId) =>
       http.requestVoid(`${http.baseUrl}/tasks/${http.encodeId(taskId)}`, { method: "DELETE" }),
     fetchArtifacts: (taskId) =>
