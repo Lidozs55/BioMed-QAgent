@@ -235,9 +235,16 @@ merging to `main`.
   - `pnpm test` / `pnpm lint` / `pnpm typecheck` / `pnpm build` pass;
   - `uv run python database/bridge.py --self-test` passes;
   - `uv run pytest database/tests` and `uv run ruff check database` pass.
+- **Local pre-commit hook** (`.husky/pre-commit`, see `docs/git-hooks.md`)
+  runs `pnpm typecheck` / `pnpm lint` / `pnpm test` before every commit, plus
+  `ruff` + `pytest` when `database/` changes. Docs-only commits skip the gates
+  automatically; any other bypass needs a stated reason.
 - **Commit message**
-  - Format: `[TASK-XXX] summary` or `feat/fix/chore: summary`. Prefer
-    conventional commit message style.
+  - Conventional commits are **enforced by the commit-msg hook** (commitlint,
+    see `docs/git-hooks.md`): `type(scope): subject` (types: `feat/fix/docs/`
+    `chore/test/refactor/...`). An optional task-id prefix is allowed:
+    `[TASK-123] feat: summary`. Do not bypass with `--no-verify` without a
+    stated reason.
 
 #### 7.4 Parallel Tasks Must Use Separate Worktrees
 
@@ -301,7 +308,9 @@ When told to handle a Commonly task, follow the board lifecycle strictly:
 2. Claim: `commonly_claim_task` (claim only one task at a time).
 3. Work: execute per Part I; open a branch if needed.
 4. Verify & commit: after self-check passes, run
-   `git commit -m "[TASK-XXX] description" && git push`.
+   `git commit -m "[TASK-XXX] <type>: description" && git push` (conventional
+   commit format enforced by the commit-msg hook, see `docs/git-hooks.md`;
+   e.g. `git commit -m "[TASK-123] feat: add retry to downloader"`).
 5. Merge the branch to `main` (Part I §7.2), then post `[DONE]` summarizing the
    changes and branch name, then `commonly_complete_task`.
 6. Stuck for a full round with no progress → post `[BLOCKED]` and unclaim.
