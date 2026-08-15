@@ -24,7 +24,8 @@ test("configures Vite middleware and HMR on the Host HTTP server", async () => {
       appType: "spa",
       server: expect.objectContaining({
         middlewareMode: true,
-        hmr: { server: httpServer },
+        // HMR 走专属路径 /__vite_hmr，与 Host 的 /api/v1/ws 职责分离
+        hmr: { server: httpServer, path: "/__vite_hmr" },
       }),
     }),
   );

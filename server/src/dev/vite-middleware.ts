@@ -36,7 +36,12 @@ export async function createViteMiddleware(
     appType: "spa",
     server: {
       middlewareMode: true,
-      hmr: { server: options.httpServer },
+      hmr: {
+        server: options.httpServer,
+        // 给 Vite HMR WebSocket 一个专属路径：Host 的 upgrade 监听器只接管
+        // /api/v1/ws，/__vite_hmr 由 Vite 从同一 HTTP server 接管。
+        path: "/__vite_hmr",
+      },
     },
   });
   return {

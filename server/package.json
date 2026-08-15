@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "predev": "pnpm --filter @biomed/contracts build",
-    "dev": "tsc -p tsconfig.json && node --env-file-if-exists=../.env dist/index.js",
+    "dev": "tsx watch --ignore ../data --ignore ../frontend --ignore ../server/data --env-file-if-exists=../.env src/index.ts",
     "build": "tsc -p tsconfig.json",
     "prestart": "pnpm --filter @biomed/contracts build",
     "start": "tsc -p tsconfig.json && node --env-file-if-exists=../.env dist/index.js --static",
@@ -31,6 +31,7 @@
     "@types/ws": "^8.18.1",
     "eslint": "^10.7.0",
     "globals": "^17.7.0",
+    "tsx": "^4.23.12",
     "typescript": "^5.6.3",
     "typescript-eslint": "^8.63.0",
     "vitest": "3.2.7",

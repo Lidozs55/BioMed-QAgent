@@ -171,10 +171,10 @@ pnpm install --frozen-lockfile
 
 ### 4.1 应用 smoke test（Windows）
 
-自动化 smoke 应直接启动 root `pnpm dev`，等待 health endpoint 就绪，并在
-`finally` 中终止 Host 进程（记录其直接子 PID）。Host 会统一回收 Pi session、
-DB bridge、browser pool 与 Workspace command；不启动任何 Python Web Server，
-不需要 Uvicorn 模板。
+自动化 smoke 应直接启动 root `pnpm dev`，等待 health endpoint 就绪（初始化期间
+返回 503，需带重试），并在 `finally` 中终止 Host 进程（记录其直接子 PID）。
+Host 会统一回收 Pi session、DB bridge、browser pool 与 Workspace command；不启动
+任何 Python Web Server，不需要 Uvicorn 模板。
 
 ## 5. 第四步：启动单端口应用
 
@@ -184,16 +184,36 @@ DB bridge、browser pool 与 Workspace command；不启动任何 Python Web Serv
 pnpm dev
 ```
 
-TypeScript Host 会初始化共享 DB/browser 资源、Pi durable runtime 与 TS Dataset
-Core，挂载 Vite middleware，最后才监听公开端口。看到 Host 监听 `127.0.0.1:5173`
-后，浏览器访问 http://127.0.0.1:5173；健康检查也走同一端口：
+dev 模式直接以 `tsx watch` 执行 `server/src/index.ts`（不做全量 tsc 编译，源码
+改动自动重启；`@biomed/contracts` 由 `predev` 轻量预构建）。TypeScript Host
+**先绑定端口、再初始化**共享 DB/browser 资源、Pi durable runtime（含
+`recoverActiveRuns`）与 TS Dataset Core，然后挂载 Vite middleware 并切换正式
+handler。初始化期间（通常几百毫秒）端口已经可访问，所有请求返回
+`503 {"status":"starting"}`；自动化 smoke 等待 health 就绪时需容忍 503 重试。
+
+启动完成以 **READY banner** 为准（不是 listen）：
+
+```text
+BioMed-QAgent starting...
+  ➜ Host:  http://127.0.0.1:5173/
+  ➜ State: initializing runtime...
+
+  BioMed-QAgent ready in 540 ms
+  ➜ Local: http://127.0.0.1:5173/
+  ➜ API:   http://127.0.0.1:5173/api/v1
+  ➜ WS:    ws://127.0.0.1:5173/api/v1/ws
+```
+
+浏览器访问 http://127.0.0.1:5173；健康检查也走同一端口：
 
 ```text
 http://127.0.0.1:5173/api/v1/health
 ```
 
-正式 `/api/v1/*` 与 `/api/v1/ws` 由 TS Host 权威实现。按 `Ctrl+C` 由 Host 统一
-关闭资源。
+正式 `/api/v1/*` 与 `/api/v1/ws` 由 TS Host 权威实现；Vite HMR WebSocket 走
+专属路径 `/__vite_hmr`（Host 的 upgrade 监听器只接管 `/api/v1/ws`，其余放行）。
+开发重启（SIGTERM，tsx watch 触发）直接退出进程，未终结的 run 由 durable
+repository 在下次启动时恢复；`Ctrl+C`（SIGINT）仍由 Host 优雅关闭所有资源。
 
 生产模式（构建后静态托管）：
 
