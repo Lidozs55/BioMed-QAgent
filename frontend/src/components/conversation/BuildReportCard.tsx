@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { ArrowsOutIcon, DownloadIcon } from "@phosphor-icons/react";
 
 import BuildResultsViewer from "@/components/BuildResultsViewer";
-import { CsvPreview } from "@/components/ResultsViewer";
+import { CsvPreview } from "@/components/artifacts/CsvPreview";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {

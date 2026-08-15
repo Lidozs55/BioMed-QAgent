@@ -12,7 +12,6 @@ import {
   Card,
   CardContent,
   CardDescription,
-  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -31,13 +30,11 @@ import {
   TabsTrigger,
 } from "@/components/ui/tabs";
 import { useAPI } from "@/hooks/useAPI";
-import { formatSize } from "@/lib/fileUtils";
 import type {
   BuildDetail,
   BuildResult,
   BuildResultStatus,
   JsonValue,
-  ManifestArtifactEntry,
 } from "@/runtime/contracts";
 
 /* ------------------------------------------------------------------ */
