@@ -61,7 +61,31 @@ function taskTitle(input: string): string {
 }
 
 function parseEvents(text: string): EventEnvelope[] {
-  return text.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line) as EventEnvelope);
+  const events: EventEnvelope[] = [];
+  const lines = text.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (line === "") continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch (error) {
+      throw new Error(`events.jsonl line ${index + 1} is not valid JSON: ${(error as Error).message}`, { cause: error });
+    }
+    if (typeof parsed !== "object" || parsed === null) {
+      throw new Error(`events.jsonl line ${index + 1} is not an event object`);
+    }
+    const sequence = (parsed as { sequence?: unknown }).sequence;
+    if (typeof sequence !== "number" || !Number.isInteger(sequence) || sequence < 1) {
+      throw new Error(`events.jsonl line ${index + 1} has an invalid sequence`);
+    }
+    const previous = events.at(-1)?.sequence;
+    if (previous !== undefined && sequence !== previous + 1) {
+      throw new Error(`events.jsonl sequence gap at line ${index + 1}: expected ${previous + 1}, got ${sequence}`);
+    }
+    events.push(parsed as EventEnvelope);
+  }
+  return events;
 }
 
 export class DurableTaskRepository {
