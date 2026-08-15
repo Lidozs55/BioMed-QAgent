@@ -3,7 +3,7 @@
 > 状态：**closed**（2026-08-15；含第二轮最终审计修复 §10 与第三轮 P8-G 封板 §11）
 > Baseline commit：`cb2600597525d97fb00538b55dcfb001cb6e7c03`（main）
 > 合并提交：`08dc47d`（P8-A→P8-D）；最终审计修复：`6410279`（fix/phase8-final-audit）；
-> P8-G 封板：`<merge>`（fix/phase8-final-audit-p8g）
+> P8-G 封板：`05493c8`（fix/phase8-final-audit-p8g → PR #3）
 > 执行计划：`docs/migration/phase8-python-runtime-retirement.md`
 > 基线盘点：`docs/migration/phase8-retirement-inventory.md`
 
