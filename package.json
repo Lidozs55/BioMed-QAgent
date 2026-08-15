@@ -6,7 +6,8 @@
     "dev": "pnpm --filter @biomed/server dev",
     "dev:frontend-standalone": "pnpm --filter @biomed/frontend dev",
     "start": "pnpm --filter @biomed/server start",
-    "test": "node scripts/check-workspace-foundation.mjs && pnpm -r --if-present test",
+    "test": "node scripts/check-workspace-foundation.mjs && pnpm -r --workspace-concurrency=2 --if-present test",
+    "test:full": "node scripts/check-workspace-foundation.mjs && pnpm -r --if-present test",
     "lint": "pnpm -r --if-present lint",
     "typecheck": "pnpm -r --if-present typecheck",
     "build": "pnpm -r --if-present build"
