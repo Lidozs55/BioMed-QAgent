@@ -14,6 +14,8 @@ import {
   type Phase3RuntimeOptions,
 } from "./runtime/phase3-composition.js";
 import { ModelSettingsService } from "./settings/model-settings.js";
+import { createPermissionSettingsApi } from "./settings/permission-settings.js";
+import { JsonPermissionPolicyStore } from "./agent/permissions/index.js";
 
 interface ApiSurface {
   handle(request: IncomingMessage, response: ServerResponse): boolean;
@@ -60,6 +62,9 @@ export async function createBootstrapOptions(input: BootstrapInput): Promise<Boo
     ? path.join(dataRoot, "skills")
     : path.resolve(process.env.SKILL_DATA_DIR);
   const settingsDir = path.join(dataRoot, "settings");
+  const permissionPolicyStore = new JsonPermissionPolicyStore(
+    path.join(settingsDir, "agent-permissions.json"),
+  );
   const database = input.database ?? new DatabaseClient({ cacheDir, databasesDir });
   const browserPool = input.browserPool ?? new NodeBrowserPool({ maxContexts: 4 });
   const modelSettings = input.modelSettings ?? await ModelSettingsService.create({
@@ -88,12 +93,17 @@ export async function createBootstrapOptions(input: BootstrapInput): Promise<Boo
       registry.add("browser pool", () => browserPool.close());
       await browserPool.start();
     },
-    hostApi: combineApis(productApi, modelSettings),
+    hostApi: combineApis(
+      productApi,
+      modelSettings,
+      createPermissionSettingsApi(permissionPolicyStore),
+    ),
     formalRuntime: () => formalFactory({
       tasksRoot,
       workspacesRoot,
       repositoryRoot,
       agentExecPolicy: config.agentExecPolicy,
+      permissionPolicyStore,
       resolveModel: modelSettings.resolveActiveModel,
       database,
       browserPool,

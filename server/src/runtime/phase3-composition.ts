@@ -23,6 +23,7 @@ import {
   PermissionEvaluator,
   ProtectedPaths,
   TemporaryGrantStore,
+  type PermissionPolicyStore,
 } from "../agent/permissions/index.js";
 import { coreEventToPayload } from "../dataset/service/events.js";
 import { createDatasetCoreService } from "../dataset/service/dataset-core.js";
@@ -179,6 +180,8 @@ export interface Phase3RuntimeOptions {
   repositoryRoot: string;
   /** Migration override for process.exec policy (plan §58). */
   agentExecPolicy: "deny" | "ask" | "allow" | null;
+  /** Shared persistent permission settings (presets + rules). */
+  permissionPolicyStore?: PermissionPolicyStore;
   adapter?: BioMedAgentAdapter;
   resolveModel?: () => Promise<BioMedModelConfig>;
   /**
@@ -230,7 +233,7 @@ export async function createPhase3Runtime(
       // Framework-owned output: data/output/tasks/<taskId> (plan §3.2).
       const taskRoot = path.join(options.tasksRoot, taskId);
       // Permission control plane: persistent user settings + per-task broker.
-      const policyStore = new JsonPermissionPolicyStore(
+      const policyStore = options.permissionPolicyStore ?? new JsonPermissionPolicyStore(
         path.join(pathConfig.dataRoot, "settings", "agent-permissions.json"),
       );
       const grants = new TemporaryGrantStore();
