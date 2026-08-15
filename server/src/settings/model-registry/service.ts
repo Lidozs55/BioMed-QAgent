@@ -33,6 +33,7 @@ import { migrateLegacyRegistry, migrateLegacySettings } from "./migration.js";
 import { resolveActiveConfig, resolveVlmConfig } from "./model-resolution.js";
 import { createSettingsRouter } from "./routes.js";
 import {
+  bootstrapEnvironmentDefaults,
   loadAuthState,
   loadRegistryState,
   persistState,
@@ -96,6 +97,7 @@ export class ModelSettingsService {
       service.options.legacyRegistryPath,
       (model) => service.activateInMemory(model),
     );
+    bootstrapEnvironmentDefaults(service.registry, service.auth, environment);
     await service.persist();
     return service;
   }

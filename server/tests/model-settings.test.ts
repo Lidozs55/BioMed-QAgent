@@ -9,6 +9,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, test } from "vitest";
 
 import { ModelSettingsService } from "../src/settings/model-settings.js";
+import { ENV_BOOTSTRAP_PROVIDER_ID } from "../src/settings/model-registry/store.js";
 
 const servers: Server[] = [];
 
@@ -207,6 +208,75 @@ describe("TypeScript model settings", () => {
     const baseUrl = await serve(second);
     const providers = await (await fetch(`${baseUrl}/api/v1/model-registry/providers`)).json() as unknown[];
     expect(providers).toHaveLength(1);
+  });
+  test("bootstraps a DashScope provider from DASHSCOPE_API_KEY when no providers exist", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({
+      settingsDir,
+      environment: { DASHSCOPE_API_KEY: "sk-dashscope-env" },
+    });
+    const baseUrl = await serve(service);
+
+    const providers = await (await fetch(`${baseUrl}/api/v1/model-registry/providers`))
+      .json() as Array<Record<string, unknown>>;
+    expect(providers).toHaveLength(1);
+    expect(providers[0]).toMatchObject({
+      id: ENV_BOOTSTRAP_PROVIDER_ID,
+      preset_id: "dashscope",
+      api_key_configured: true,
+    });
+
+    const models = await (await fetch(`${baseUrl}/api/v1/model-registry/models`))
+      .json() as Array<Record<string, unknown>>;
+    expect(models).toHaveLength(1);
+    expect(models[0]).toMatchObject({ model_id: "qwen3.7-plus", active: true });
+
+    const settings = await (await fetch(`${baseUrl}/api/v1/settings`)).json() as Record<string, unknown>;
+    expect(settings.model_name).toBe("qwen3.7-plus");
+    expect(settings.api_key_configured).toBe(true);
+    await expect(service.resolveActiveModel()).resolves.toMatchObject({
+      provider: "dashscope",
+      modelId: "qwen3.7-plus",
+      apiKey: "sk-dashscope-env",
+      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    });
+  });
+
+  test("env bootstrap is idempotent and never overrides existing providers", async () => {
+    const env = { DASHSCOPE_API_KEY: "sk-dashscope-env" };
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    await ModelSettingsService.create({ settingsDir, environment: env });
+    const second = await ModelSettingsService.create({ settingsDir, environment: env });
+    const baseUrl = await serve(second);
+    const providers = await (await fetch(`${baseUrl}/api/v1/model-registry/providers`)).json() as unknown[];
+    expect(providers).toHaveLength(1);
+
+    const customDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const first = await ModelSettingsService.create({ settingsDir: customDir, environment: {} });
+    const firstBase = await serve(first);
+    await fetch(`${firstBase}/api/v1/model-registry/providers`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Custom",
+        base_url: "https://models.example/v1",
+        api_key: "sk-custom",
+      }),
+    });
+    const restarted = await ModelSettingsService.create({ settingsDir: customDir, environment: env });
+    const restartedBase = await serve(restarted);
+    const customProviders = await (await fetch(`${restartedBase}/api/v1/model-registry/providers`))
+      .json() as Array<Record<string, unknown>>;
+    expect(customProviders).toHaveLength(1);
+    expect(customProviders[0]).toMatchObject({ name: "Custom" });
+  });
+
+  test("falls back to qwen3.7-plus as the default model name", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const baseUrl = await serve(service);
+    const settings = await (await fetch(`${baseUrl}/api/v1/settings`)).json() as Record<string, unknown>;
+    expect(settings.model_name).toBe("qwen3.7-plus");
   });
 });
 
