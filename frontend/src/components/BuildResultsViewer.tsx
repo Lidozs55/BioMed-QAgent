@@ -30,6 +30,7 @@ import {
   TabsTrigger,
 } from "@/components/ui/tabs";
 import { useAPI } from "@/hooks/useAPI";
+import { cn } from "@/lib/utils";
 import type {
   BuildDetail,
   BuildResult,
@@ -81,18 +82,18 @@ const BANNER_STYLES: Partial<
   Record<BuildResultStatus, { className: string; iconClass: string; Icon: typeof InfoIcon }>
 > = {
   no_data: {
-    className: "border-sky-600/30 bg-sky-600/5",
-    iconClass: "text-sky-600 dark:text-sky-400",
+    className: "border-info/30 bg-info/5",
+    iconClass: "text-info",
     Icon: InfoIcon,
   },
   partial_success: {
-    className: "border-amber-600/30 bg-amber-600/5",
-    iconClass: "text-amber-600 dark:text-amber-400",
+    className: "border-warning/30 bg-warning/5",
+    iconClass: "text-warning",
     Icon: WarningCircleIcon,
   },
   spec_rejected: {
-    className: "border-amber-600/30 bg-amber-600/5",
-    iconClass: "text-amber-600 dark:text-amber-400",
+    className: "border-warning/30 bg-warning/5",
+    iconClass: "text-warning",
     Icon: WarningCircleIcon,
   },
 };
@@ -106,11 +107,11 @@ function BuildBanner({ result }: { result: BuildResult }) {
   return (
     <div
       data-status={result.status}
-      className={`flex min-w-0 items-start gap-2 rounded-lg border p-3 ${className}`}
+      className={cn("flex min-w-0 items-start gap-2 rounded-lg border p-3", className)}
     >
       <Icon
         aria-hidden="true"
-        className={`mt-0.5 size-4 shrink-0 ${iconClass}`}
+        className={cn("mt-0.5 size-4 shrink-0", iconClass)}
       />
       <div className="min-w-0">
         <p className="text-sm font-medium leading-snug">{title}</p>
@@ -127,7 +128,7 @@ function BuildBanner({ result }: { result: BuildResult }) {
           </div>
         )}
         {result.binding_failures !== undefined && result.binding_failures.length > 0 && (
-          <ul className="mt-2 space-y-1 border-t pt-2 text-xs text-muted-foreground">
+          <ul className="mt-2 flex flex-col gap-1 border-t pt-2 text-xs text-muted-foreground">
             {result.binding_failures.map((failure) => (
               <li key={failure.binding_id} className="flex flex-wrap items-baseline gap-x-2">
                 <span className="font-medium text-foreground">{failure.binding_id}</span>

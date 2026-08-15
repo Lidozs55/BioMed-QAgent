@@ -402,9 +402,8 @@ describe("SessionSidebar", () => {
     expect(iconFor("Running 运行中")).toHaveClass("text-primary");
     expect(iconFor("Queued 排队中")).toHaveClass("text-primary");
     expect(iconFor("Completed 已完成")).not.toHaveClass(
-      "text-sky-600",
-      "dark:text-sky-400",
-      "text-emerald-600",
+      "text-info",
+      "text-success",
       "text-destructive",
     );
     expect(iconFor("Failed 失败")).toHaveClass("text-destructive");
@@ -450,18 +449,11 @@ describe("SessionSidebar", () => {
       screen.getByRole("button", { name }).querySelector("svg");
     const iconPath = (name: string) =>
       iconFor(name)?.querySelector("path")?.getAttribute("d") ?? null;
-    expect(iconFor("Succeeded 已完成")).toHaveClass(
-      "text-emerald-600",
-      "dark:text-emerald-400",
-    );
-    expect(iconFor("Partial 已完成")).toHaveClass(
-      "text-emerald-600",
-      "dark:text-emerald-400",
-    );
+    expect(iconFor("Succeeded 已完成")).toHaveClass("text-success");
+    expect(iconFor("Partial 已完成")).toHaveClass("text-success");
     expect(iconFor("No Data 已完成")).not.toHaveClass(
-      "text-sky-600",
-      "dark:text-sky-400",
-      "text-emerald-600",
+      "text-info",
+      "text-success",
       "text-destructive",
     );
     expect(iconFor("Rejected 已完成")).toHaveClass("text-destructive");
@@ -494,14 +486,10 @@ describe("SessionSidebar", () => {
 
     const iconFor = (name: string) =>
       screen.getByRole("button", { name }).querySelector("svg");
-    expect(iconFor("With Data 已完成")).toHaveClass(
-      "text-emerald-600",
-      "dark:text-emerald-400",
-    );
+    expect(iconFor("With Data 已完成")).toHaveClass("text-success");
     expect(iconFor("No Data 已完成")).not.toHaveClass(
-      "text-sky-600",
-      "dark:text-sky-400",
-      "text-emerald-600",
+      "text-info",
+      "text-success",
       "text-destructive",
     );
     expect(iconFor("Cancelled 已取消")).not.toHaveClass("text-destructive");
@@ -530,10 +518,7 @@ describe("SessionSidebar", () => {
       screen.getByRole("button", { name }).querySelector("svg");
     expect(iconFor("Legacy No Data 失败")).not.toHaveClass("text-destructive");
     expect(iconFor("Genuine Error 失败")).toHaveClass("text-destructive");
-    expect(iconFor("With Data 已完成")).toHaveClass(
-      "text-emerald-600",
-      "dark:text-emerald-400",
-    );
+    expect(iconFor("With Data 已完成")).toHaveClass("text-success");
     expect(iconFor("Rejected 已完成")).toHaveClass("text-destructive");
   });
 

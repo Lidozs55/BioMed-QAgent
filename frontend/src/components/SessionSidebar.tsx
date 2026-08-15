@@ -113,7 +113,7 @@ function TaskRow({
   const statusIconClass = active
     ? "text-primary"
     : outcome === "data"
-      ? "text-emerald-600 dark:text-emerald-400"
+      ? "text-success"
       : outcome === "problem"
         ? "text-destructive"
         : undefined;
@@ -330,10 +330,10 @@ export function SessionSidebar({
             <PlusCircleIcon data-icon="inline-start" className="size-4" />
             <span className="truncate">新建研究</span>
             <span className="ml-auto flex shrink-0 items-center gap-1">
-              <kbd className="rounded-md border border-sidebar-border bg-sidebar-accent px-1.5 py-0.5 font-mono text-[10px] font-medium text-sidebar-foreground/70">
+              <kbd className="rounded-md border border-sidebar-border bg-sidebar-accent px-1.5 py-0.5 font-mono text-xs font-medium text-sidebar-foreground/70">
                 Ctrl
               </kbd>
-              <kbd className="rounded-md border border-sidebar-border bg-sidebar-accent px-1.5 py-0.5 font-mono text-[10px] font-medium text-sidebar-foreground/70">
+              <kbd className="rounded-md border border-sidebar-border bg-sidebar-accent px-1.5 py-0.5 font-mono text-xs font-medium text-sidebar-foreground/70">
                 N
               </kbd>
             </span>

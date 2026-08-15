@@ -1,6 +1,6 @@
 import type { ComponentProps } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   AgentComposer,
@@ -93,7 +93,9 @@ function renderComposer(
 }
 
 async function openModelSelector() {
-  const trigger = screen.getByRole("button", { name: "点击选择模型" });
+  const trigger = screen.getByRole("combobox", {
+    name: "点击选择模型",
+  });
   fireEvent.click(trigger);
   // base-ui portals the popup; wait for the search input to mount.
   await waitFor(() => {
@@ -129,11 +131,80 @@ describe("AgentComposer model selector", () => {
     expect(screen.getByText("DeepSeek V3")).toBeInTheDocument();
   });
 
-  it("shows an empty state with a settings link when no models are configured", async () => {
-    renderComposer({ models: [], hasApiKey: true });
+  it("filters by name and id (case-insensitive) and reports the selection", async () => {
+    const onModelChange = vi.fn();
+    renderComposer({
+      models: REAL_MODELS,
+      hasApiKey: true,
+      onModelChange,
+    });
     await openModelSelector();
-    expect(screen.getByText("暂无可用模型")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "设置" })).toBeInTheDocument();
+    const search = screen.getByPlaceholderText("搜索模型...");
+
+    // Filter by name substring.
+    fireEvent.change(search, { target: { value: "deepseek" } });
+    await waitFor(() => {
+      expect(screen.getByText("DeepSeek V3")).toBeInTheDocument();
+      expect(screen.queryByText("Qwen Max")).not.toBeInTheDocument();
+    });
+
+    // Filter by id substring (case-insensitive), then select the item.
+    fireEvent.change(search, { target: { value: "QWEN-MAX" } });
+    await waitFor(() => {
+      expect(screen.getByText("Qwen Max")).toBeInTheDocument();
+      expect(screen.queryByText("DeepSeek V3")).not.toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText("Qwen Max"));
+    await waitFor(() => {
+      expect(onModelChange).toHaveBeenCalledWith("qwen-max");
+    });
+    // The popup closes after selection.
+    await waitFor(() => {
+      expect(
+        screen.queryByPlaceholderText("搜索模型..."),
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  it("shows a no-match empty state while searching", async () => {
+    renderComposer({ models: REAL_MODELS, hasApiKey: true });
+    await openModelSelector();
+    fireEvent.change(screen.getByPlaceholderText("搜索模型..."), {
+      target: { value: "no-such-model" },
+    });
+    await waitFor(() => {
+      expect(
+        screen.getByText((content) =>
+          content.replace(/\u2060/g, "") === "没有匹配的模型",
+        ),
+      ).toBeInTheDocument();
+      expect(screen.queryByText("Qwen Max")).not.toBeInTheDocument();
+    });
+  });
+
+  it("shows an empty state with a settings link when no models are configured", async () => {
+    const onOpenSettings = vi.fn();
+    renderComposer({
+      models: [],
+      hasApiKey: true,
+      onOpenSettings,
+    });
+    await openModelSelector();
+    expect(
+      screen.getByText((content) =>
+        content.replace(/\u2060/g, "") === "暂无可用模型",
+      ),
+    ).toBeInTheDocument();
+    const settings = screen.getByRole("button", { name: "设置" });
+    expect(settings).toBeInTheDocument();
+    // The footer entry navigates to settings and closes the selector.
+    fireEvent.click(settings);
+    await waitFor(() => {
+      expect(onOpenSettings).toHaveBeenCalledTimes(1);
+      expect(
+        screen.queryByPlaceholderText("搜索模型..."),
+      ).not.toBeInTheDocument();
+    });
   });
 
   it("shows the settings affordance without an API key", () => {

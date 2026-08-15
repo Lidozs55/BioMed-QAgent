@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from "react";
 import { SlidersHorizontalIcon } from "@phosphor-icons/react";
 import { toast } from "sonner";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
@@ -115,9 +116,12 @@ export function ContextWindowSelect({
       <div className="flex items-center justify-between gap-3">
         <FieldLabel>上下文窗口</FieldLabel>
         {source === "inferred" && (
-          <span className="rounded border border-dashed border-muted-foreground/40 px-1 py-0.5 text-[10px] text-muted-foreground">
+          <Badge
+            variant="outline"
+            className="border-dashed text-muted-foreground"
+          >
             推断
-          </span>
+          </Badge>
         )}
       </div>
       <div className="flex items-center gap-2">
@@ -242,7 +246,7 @@ function CustomContextPopover({
           </Select>
         </div>
         {error && (
-          <p className={cn("text-xs", error.startsWith("已调整") ? "text-amber-600" : "text-destructive")}>
+          <p className={cn("text-xs", error.startsWith("已调整") ? "text-warning" : "text-destructive")}>
             {error}
           </p>
         )}

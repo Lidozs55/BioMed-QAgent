@@ -35,13 +35,13 @@ export interface ContextUsageInlineProps {
 
 function barColor(pct: number): string {
   if (pct >= 90) return "bg-destructive";
-  if (pct >= 70) return "bg-amber-500";
+  if (pct >= 70) return "bg-warning";
   return "bg-primary";
 }
 
 function textColor(pct: number): string {
   if (pct >= 90) return "text-destructive";
-  if (pct >= 70) return "text-amber-600";
+  if (pct >= 70) return "text-warning";
   return "text-muted-foreground";
 }
 

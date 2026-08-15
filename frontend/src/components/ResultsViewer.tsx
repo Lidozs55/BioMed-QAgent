@@ -239,10 +239,10 @@ export default function ResultsViewer({
         </Accordion>
       )}
       {showNoDataBanner && (
-        <div className="flex min-w-0 items-start gap-2 rounded-lg border border-sky-600/30 bg-sky-600/5 p-3">
+        <div className="flex min-w-0 items-start gap-2 rounded-lg border border-info/30 bg-info/5 p-3">
           <InfoIcon
             aria-hidden="true"
-            className="mt-0.5 size-4 shrink-0 text-sky-600 dark:text-sky-400"
+            className="mt-0.5 size-4 shrink-0 text-info"
           />
           <div className="min-w-0">
             <p className="text-sm font-medium leading-snug">

@@ -1,5 +1,6 @@
 ﻿import { CheckCircleIcon, Image, SpeakerHigh, VideoCamera, XCircleIcon } from "@phosphor-icons/react";
 
+import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { formatTokenCount } from "@/lib/tokenFormat";
 import { cn } from "@/lib/utils";
@@ -41,7 +42,7 @@ function CapabilityBadge({
       className={cn(
         "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium",
         supported
-          ? "text-emerald-600 dark:text-emerald-400"
+          ? "text-success"
           : "bg-muted text-muted-foreground line-through",
       )}
     >
@@ -79,22 +80,18 @@ export function ModelInfoCard({ model }: { model: RichModelInfo }) {
           <div className="flex items-center gap-2">
             <h4 className="text-base font-semibold">{model.name}</h4>
             {model.recommended && (
-              <span className="inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
-                推荐
-              </span>
+              <Badge className="bg-primary/10 text-primary">推荐</Badge>
             )}
             {model.api_available && (
-              <span className="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
-                可用
-              </span>
+              <Badge className="bg-success/10 text-success">可用</Badge>
             )}
-            <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+            <Badge variant="secondary">
               {model.capability_source === "api"
                 ? "接口验证"
                 : model.capability_source === "catalog"
                   ? "内置数据"
                   : model.capability_source}
-            </span>
+            </Badge>
           </div>
           <p className="mt-1 text-sm text-muted-foreground">{model.description}</p>
         </div>
@@ -116,7 +113,7 @@ export function ModelInfoCard({ model }: { model: RichModelInfo }) {
           <p className="mt-0.5 font-medium">
             {formatTokenCount(outputLimit)} tokens
             {model.max_output_tokens != null && model.max_output_tokens !== model.suggested_max_tokens && (
-              <span className="ml-1 text-[10px] text-muted-foreground">
+              <span className="ml-1 text-xs text-muted-foreground">
                 (建议: {formatTokenCount(model.suggested_max_tokens)})
               </span>
             )}
