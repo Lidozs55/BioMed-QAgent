@@ -35,6 +35,7 @@ import {
   DurableTaskConflictError,
   DurableTaskRepository,
 } from "./task-repository.js";
+import { DiskWorkspaceManager, type WorkspaceManager } from "../agent/workspace/workspace-manager.js";
 
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_INPUT_LENGTH = 64 * 1024;
@@ -56,6 +57,8 @@ export interface DurableAgentWorkspace {
 
 export interface DurableAgentRuntimeOptions {
   tasksRoot: string;
+  /** Owns ``data/workspaces/<taskId>`` lifecycle (create/remove/restore). */
+  workspaceManager?: WorkspaceManager;
   adapter: BioMedAgentAdapter;
   workspaceFactory: (identity: {
     taskId: string;
@@ -224,6 +227,10 @@ export async function createDurableAgentRuntime(
   options: DurableAgentRuntimeOptions,
 ): Promise<DurableAgentRuntime> {
   const repository = options.repository ?? new DurableTaskRepository(options.tasksRoot);
+  // Tests may omit the manager; the default simply removes a sibling dir.
+  const workspaceManager = options.workspaceManager ?? new DiskWorkspaceManager({
+    workspacesRoot: path.join(path.dirname(path.dirname(options.tasksRoot)), "workspaces"),
+  });
   await repository.recoverActiveRuns();
   const activeTasks = new Map<string, ActiveTask>();
   const activeExecutions = new Set<Promise<void>>();
@@ -287,7 +294,7 @@ export async function createDurableAgentRuntime(
         await repository.appendRunEvent(taskId, activeRunId, payload);
       },
     });
-    const sessionDir = path.join(workspace.root, "state", "pi-session");
+    const sessionDir = path.join(options.tasksRoot, taskId, "state", "pi-session");
     await mkdir(sessionDir, { recursive: true });
     let disposed = false;
     const disposeWorkspace = async (): Promise<void> => {
@@ -555,6 +562,9 @@ export async function createDurableAgentRuntime(
       await task.session.dispose();
     }
     await repository.deleteTask(taskId);
+    // Formal deletion removes both the framework output (above) and the
+    // agent workspace (plan §12: cancel → dispose → remove).
+    await workspaceManager.remove(taskId);
   }
 
   async function dispatch(request: IncomingMessage, response: ServerResponse): Promise<void> {

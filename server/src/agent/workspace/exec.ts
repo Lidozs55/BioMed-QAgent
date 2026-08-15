@@ -1,9 +1,8 @@
 import { spawn } from "node:child_process";
-import { chmod, lstat, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { WorkspaceContext } from "./context.js";
-import { WorkspacePolicyError, type WorkspaceExecResult } from "./types.js";
+import type { WorkspaceExecResult } from "./types.js";
 
 const SECRET_ARGUMENT = /(?:api[-_]?key|authorization|password|secret|token)(?:=|:)/i;
 const EXECUTABLE_METACHARACTERS = /[&|;<>\r\n\0]/u;
@@ -19,14 +18,6 @@ const SAFE_ENVIRONMENT_KEYS = new Set([
   "TMPDIR",
   "WINDIR",
 ]);
-
-interface SnapshotEntry {
-  type: "directory" | "file";
-  bytes?: Buffer;
-  mode: number;
-}
-
-type ProtectedSnapshot = Map<string, SnapshotEntry>;
 
 interface ActiveCommand {
   cancel(): void;
@@ -103,109 +94,6 @@ function safeEnvironment(context: WorkspaceContext): NodeJS.ProcessEnv {
       ([key, value]) => value !== undefined && SAFE_ENVIRONMENT_KEYS.has(key.toUpperCase()),
     ),
   ) as NodeJS.ProcessEnv;
-}
-
-function isAgentStaging(relativePath: string): boolean {
-  const normalized = process.platform === "win32" ? relativePath.toLowerCase() : relativePath;
-  return normalized === "staging/agent" || normalized.startsWith("staging/agent/");
-}
-
-async function snapshotProtected(context: WorkspaceContext): Promise<ProtectedSnapshot> {
-  const snapshot: ProtectedSnapshot = new Map();
-  let files = 0;
-  let bytes = 0;
-
-  async function visit(directory: string, relativeDirectory: string): Promise<void> {
-    const children = await readdir(directory, { withFileTypes: true });
-    children.sort((left, right) => left.name.localeCompare(right.name, "en"));
-    for (const child of children) {
-      const relative = relativeDirectory === ""
-        ? child.name
-        : `${relativeDirectory}/${child.name}`;
-      if (isAgentStaging(relative)) continue;
-      const absolute = path.join(directory, child.name);
-      const info = await lstat(absolute);
-      if (info.isSymbolicLink()) {
-        throw new WorkspacePolicyError(
-          "EXEC_POLICY_REJECTED",
-          "Development exec refuses an unprotected link in formal Workspace areas",
-        );
-      }
-      if (info.isDirectory()) {
-        snapshot.set(relative, { type: "directory", mode: info.mode });
-        await visit(absolute, relative);
-        continue;
-      }
-      if (!info.isFile()) {
-        throw new WorkspacePolicyError(
-          "EXEC_POLICY_REJECTED",
-          "Development exec refuses an unsupported formal Workspace entry",
-        );
-      }
-      files += 1;
-      bytes += info.size;
-      if (files > context.limits.maxSnapshotFiles || bytes > context.limits.maxSnapshotBytes) {
-        throw new WorkspacePolicyError(
-          "LIMIT_EXCEEDED",
-          "Formal Workspace snapshot exceeds the configured safety limit",
-        );
-      }
-      snapshot.set(relative, { type: "file", bytes: await readFile(absolute), mode: info.mode });
-    }
-  }
-
-  await visit(context.root, "");
-  return snapshot;
-}
-
-function snapshotsEqual(before: ProtectedSnapshot, after: ProtectedSnapshot): boolean {
-  if (before.size !== after.size) return false;
-  for (const [relative, expected] of before) {
-    const actual = after.get(relative);
-    if (actual?.type !== expected.type) return false;
-    if (expected.type === "file" && !expected.bytes?.equals(actual.bytes ?? Buffer.alloc(0))) {
-      return false;
-    }
-  }
-  return true;
-}
-
-async function restoreProtected(
-  context: WorkspaceContext,
-  snapshot: ProtectedSnapshot,
-): Promise<void> {
-  const current = await readdir(context.root, { withFileTypes: true });
-  for (const entry of current) {
-    const absolute = path.join(context.root, entry.name);
-    const staging = process.platform === "win32"
-      ? entry.name.toLowerCase() === "staging"
-      : entry.name === "staging";
-    if (!staging || entry.isSymbolicLink() || !entry.isDirectory()) {
-      await rm(absolute, { recursive: true, force: true });
-      continue;
-    }
-    const stagingChildren = await readdir(absolute, { withFileTypes: true });
-    for (const child of stagingChildren) {
-      const agent = process.platform === "win32"
-        ? child.name.toLowerCase() === "agent"
-        : child.name === "agent";
-      if (!agent) await rm(path.join(absolute, child.name), { recursive: true, force: true });
-    }
-  }
-  await mkdir(path.join(context.root, "staging", "agent"), { recursive: true });
-  const entries = [...snapshot.entries()].sort(
-    ([left], [right]) => left.split("/").length - right.split("/").length,
-  );
-  for (const [relative, entry] of entries) {
-    const absolute = path.join(context.root, ...relative.split("/"));
-    if (entry.type === "directory") {
-      await mkdir(absolute, { recursive: true });
-    } else {
-      await mkdir(path.dirname(absolute), { recursive: true });
-      await writeFile(absolute, entry.bytes ?? Buffer.alloc(0));
-    }
-    if (process.platform !== "win32") await chmod(absolute, entry.mode);
-  }
 }
 
 function validateCommand(input: {
@@ -296,7 +184,7 @@ async function killProcessTree(pid: number): Promise<void> {
 
 function redactOutput(context: WorkspaceContext, value: string): string {
   let redacted = value;
-  for (const root of new Set([context.root, context.canonicalRoot])) {
+  for (const root of new Set([context.workspaceRoot, context.canonicalWorkspaceRoot])) {
     if (process.platform === "win32") {
       const representations = [root, JSON.stringify(root).slice(1, -1)];
       for (const representation of representations) {
@@ -326,18 +214,8 @@ export async function executeWorkspaceCommand(
   const invalid = validateCommand(input, context);
   if (invalid !== undefined) return rejectedResult(command, invalid);
   const started = performance.now();
-  let before: ProtectedSnapshot;
-  try {
-    before = await snapshotProtected(context);
-  } catch (error) {
-    const message = error instanceof WorkspacePolicyError
-      ? error.message
-      : "Formal Workspace safety snapshot failed";
-    return rejectedResult(command, message, Math.round(performance.now() - started));
-  }
-
   const child = spawn(input.executable, input.args, {
-    cwd: context.root,
+    cwd: context.workspaceRoot,
     env: safeEnvironment(context),
     detached: process.platform !== "win32",
     shell: false,
@@ -394,14 +272,6 @@ export async function executeWorkspaceCommand(
     clearTimeout(timeout);
     signal?.removeEventListener("abort", onAbort);
     await terminate();
-
-    let protectedChanged = false;
-    try {
-      protectedChanged = !snapshotsEqual(before, await snapshotProtected(context));
-    } catch {
-      protectedChanged = true;
-    }
-    if (protectedChanged) await restoreProtected(context, before);
     return {
       command,
       exitCode,
@@ -411,7 +281,7 @@ export async function executeWorkspaceCommand(
       truncated,
       timedOut,
       cancelled,
-      policy: protectedChanged ? "rejected" : "allowed",
+      policy: "allowed",
     };
   } finally {
     clearTimeout(timeout);

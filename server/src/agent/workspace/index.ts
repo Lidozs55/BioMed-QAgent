@@ -31,6 +31,26 @@ import { writeWorkspaceText } from "./write.js";
 
 export { AppendOnlyTaskAuditSink, InMemoryWorkspaceAuditSink, WorkspacePolicyError };
 export type { TaskWorkspaceConfig, WorkspaceAuditSink };
+export {
+  DiskWorkspaceManager,
+  type WorkspaceManager,
+  type DiskWorkspaceManagerOptions,
+} from "./workspace-manager.js";
+export {
+  resolveWorkspacePathConfig,
+  taskOutputPath,
+  taskWorkspacePath,
+  requireSafeTaskId,
+  type WorkspacePathConfig,
+  type WorkspacePathInputs,
+} from "./workspace-paths.js";
+export {
+  migrateLegacyWorkspace,
+  readWorkspaceStateMarker,
+  markerPathFor,
+  type LegacyWorkspaceMigrationOptions,
+  type WorkspaceStateMarker,
+} from "./legacy-workspace-migration.js";
 
 function boundedDuration(started: number): number {
   return Math.max(0, Math.round(performance.now() - started));

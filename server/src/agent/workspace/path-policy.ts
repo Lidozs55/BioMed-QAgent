@@ -4,25 +4,11 @@ import path from "node:path";
 import type { WorkspaceContext } from "./context.js";
 import { WorkspacePolicyError } from "./types.js";
 
-const READ_ROOTS = new Set([
-  "source_assets",
-  "parsed",
-  "normalized",
-  "staging",
-  "artifacts",
-  "state",
-  "logs",
-]);
 const RESERVED_WINDOWS_NAME = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$/i;
-const STATE_READ_ALLOWLIST = new Set(["state/task_snapshot.json"]);
 
 export interface ResolvedWorkspacePath {
   relativePath: string;
   absolutePath: string;
-}
-
-function platformName(value: string): string {
-  return process.platform === "win32" ? value.toLowerCase() : value;
 }
 
 function isContained(root: string, candidate: string): boolean {
@@ -30,6 +16,14 @@ function isContained(root: string, candidate: string): boolean {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
+/**
+ * Normalize a workspace-relative agent path.
+ *
+ * The Agent Workspace refactor removed the ``source_assets/parsed/...``
+ * allowlist: the workspace is the agent's own directory, so every relative
+ * path inside it is writable. Absolute paths are accepted from the
+ * permission-system layer (path-normalizer), not here.
+ */
 export function normalizeAgentPath(input: string): string {
   if (typeof input !== "string" || input.length === 0 || input.includes("\0")) {
     throw new WorkspacePolicyError("INVALID_PATH", "Path must be a non-empty string");
@@ -47,9 +41,6 @@ export function normalizeAgentPath(input: string): string {
     throw new WorkspacePolicyError("INVALID_PATH", "Parent traversal is forbidden");
   }
   const parts = rawParts.filter((part) => part !== "" && part !== ".");
-  if (parts.length === 0) {
-    throw new WorkspacePolicyError("INVALID_PATH", "Path must identify a Task resource");
-  }
   for (const part of parts) {
     if (part.endsWith(".") || part.endsWith(" ") || RESERVED_WINDOWS_NAME.test(part)) {
       throw new WorkspacePolicyError("INVALID_PATH", "Reserved path aliases are forbidden");
@@ -85,57 +76,22 @@ async function ensureCanonicalContainment(
       cause: error,
     });
   }
-  if (!isContained(context.canonicalRoot, canonical)) {
+  if (!isContained(context.canonicalWorkspaceRoot, canonical)) {
     throw new WorkspacePolicyError("PATH_ESCAPE", "Resolved path escapes Task Workspace");
   }
 }
 
-function allowsRead(relativePath: string, directoryContainer: boolean): boolean {
-  const parts = relativePath.split("/");
-  const top = platformName(parts[0] ?? "");
-  if (!READ_ROOTS.has(top)) return false;
-  if (top === "staging") {
-    return platformName(parts[1] ?? "") === "agent";
-  }
-  if (top === "state") {
-    if (directoryContainer && parts.length === 1) return true;
-    const key = process.platform === "win32" ? relativePath.toLowerCase() : relativePath;
-    return STATE_READ_ALLOWLIST.has(key);
-  }
-  return true;
-}
-
-export function isWorkspaceReadPathAllowed(
-  relativePath: string,
-  directoryContainer = false,
-): boolean {
-  return allowsRead(relativePath, directoryContainer);
-}
-
-function allowsWrite(relativePath: string): boolean {
-  const parts = relativePath.split("/").map(platformName);
-  return parts[0] === "staging" && parts[1] === "agent" && parts.length >= 3;
-}
-
+/** Resolve a workspace-relative path and verify canonical containment. */
 export async function resolveWorkspacePath(
   context: WorkspaceContext,
   input: string,
-  operation: "read" | "write" | "container",
 ): Promise<ResolvedWorkspacePath> {
   const relativePath = normalizeAgentPath(input);
-  const absolutePath = path.resolve(context.root, ...relativePath.split("/"));
-  if (!isContained(context.root, absolutePath)) {
+  const absolutePath = relativePath === ""
+    ? context.workspaceRoot
+    : path.resolve(context.workspaceRoot, ...relativePath.split("/"));
+  if (!isContained(context.workspaceRoot, absolutePath)) {
     throw new WorkspacePolicyError("PATH_ESCAPE", "Path escapes Task Workspace");
-  }
-  const allowed =
-    operation === "write"
-      ? allowsWrite(relativePath)
-      : allowsRead(relativePath, operation === "container");
-  if (!allowed) {
-    throw new WorkspacePolicyError(
-      "PATH_NOT_ALLOWED",
-      `${operation === "write" ? "Write" : "Read"} is not allowed for this Task path`,
-    );
   }
   await ensureCanonicalContainment(context, absolutePath);
   return { relativePath, absolutePath };

@@ -2,11 +2,7 @@ import { lstat, open, readdir } from "node:fs/promises";
 import path from "node:path";
 
 import type { WorkspaceContext } from "./context.js";
-import {
-  isWorkspaceReadPathAllowed,
-  resolveWorkspacePath,
-  verifyCanonicalPath,
-} from "./path-policy.js";
+import { resolveWorkspacePath, verifyCanonicalPath } from "./path-policy.js";
 import {
   WorkspacePolicyError,
   type WorkspaceListEntry,
@@ -29,7 +25,7 @@ export async function readWorkspaceText(
   context: WorkspaceContext,
   input: { path: string; offset?: number; length?: number },
 ): Promise<WorkspaceReadResult> {
-  const resolved = await resolveWorkspacePath(context, input.path, "read");
+  const resolved = await resolveWorkspacePath(context, input.path);
   const offset = input.offset ?? 0;
   const length = input.length ?? context.limits.maxReadCharacters;
   if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0) {
@@ -61,7 +57,7 @@ export async function listWorkspace(
   context: WorkspaceContext,
   input: { path: string; depth?: number },
 ): Promise<WorkspaceListResult> {
-  const resolved = await resolveWorkspacePath(context, input.path, "container");
+  const resolved = await resolveWorkspacePath(context, input.path);
   const requestedDepth = input.depth ?? 1;
   if (!Number.isSafeInteger(requestedDepth) || requestedDepth <= 0) {
     throw new WorkspacePolicyError("LIMIT_EXCEEDED", "List depth is invalid");
@@ -79,8 +75,9 @@ export async function listWorkspace(
         return;
       }
       const childAbsolute = path.join(directory, child.name);
-      const childRelative = `${relativeDirectory}/${child.name}`.replaceAll("\\", "/");
-      if (!isWorkspaceReadPathAllowed(childRelative, child.isDirectory())) continue;
+      const childRelative = (relativeDirectory === ""
+        ? child.name
+        : `${relativeDirectory}/${child.name}`).replaceAll("\\", "/");
       if (child.isSymbolicLink()) {
         try {
           await verifyCanonicalPath(context, childAbsolute);
@@ -114,7 +111,7 @@ export async function searchWorkspace(
   if (typeof input.query !== "string" || input.query.length === 0 || input.query.length > 1_000) {
     throw new WorkspacePolicyError("LIMIT_EXCEEDED", "Search query is invalid");
   }
-  const resolved = await resolveWorkspacePath(context, input.path, "container");
+  const resolved = await resolveWorkspacePath(context, input.path);
   const files: Array<{ absolute: string; relative: string }> = [];
   let truncated = false;
 
@@ -128,8 +125,9 @@ export async function searchWorkspace(
       }
       if (child.isSymbolicLink()) continue;
       const absolute = path.join(directory, child.name);
-      const relative = `${relativeDirectory}/${child.name}`.replaceAll("\\", "/");
-      if (!isWorkspaceReadPathAllowed(relative, child.isDirectory())) continue;
+      const relative = (relativeDirectory === ""
+        ? child.name
+        : `${relativeDirectory}/${child.name}`).replaceAll("\\", "/");
       if (child.isDirectory() && depth < context.limits.maxListDepth) {
         await collect(absolute, relative, depth + 1);
       } else if (child.isFile()) {

@@ -19,19 +19,30 @@ export const DEFAULT_WORKSPACE_LIMITS: WorkspaceLimits = {
   maxWriteBytes: 256 * 1024,
   maxExecOutputBytes: 64 * 1024,
   maxExecTimeoutMs: 30_000,
-  maxSnapshotFiles: 2_000,
-  maxSnapshotBytes: 16 * 1024 * 1024,
 };
 
 export interface DevelopmentExecConfig {
   enabled: true;
   environment?: Readonly<Record<string, string | undefined>>;
 }
+
+/**
+ * Workspace context (Agent Workspace refactor).
+ *
+ * ``workspaceRoot`` is the agent-owned working directory
+ * (``data/workspaces/<taskId>``); ``taskOutputRoot`` is the framework-owned
+ * output (``data/output/tasks/<taskId>``). All file tools resolve paths
+ * relative to ``workspaceRoot`` and may reach other roots only through the
+ * permission system.
+ */
 export interface TaskWorkspaceConfig {
   taskId: string;
   runId: string;
   piSessionId?: string;
-  root: string;
+  workspaceRoot: string;
+  taskOutputRoot: string;
+  dataRoot: string;
+  repositoryRoot: string;
   audit: WorkspaceAuditSink;
   limits?: Partial<WorkspaceLimits>;
   developmentExec?: DevelopmentExecConfig;
@@ -41,8 +52,11 @@ export interface WorkspaceContext {
   taskId: string;
   runId: string;
   piSessionId?: string;
-  root: string;
-  canonicalRoot: string;
+  workspaceRoot: string;
+  canonicalWorkspaceRoot: string;
+  taskOutputRoot: string;
+  dataRoot: string;
+  repositoryRoot: string;
   audit: WorkspaceAuditSink;
   limits: WorkspaceLimits;
   developmentExec?: DevelopmentExecConfig;
@@ -74,12 +88,19 @@ export async function createWorkspaceContext(
   requireSafeId("taskId", config.taskId);
   requireSafeId("runId", config.runId);
   requireSafeId("piSessionId", config.piSessionId, true);
-  if (!path.isAbsolute(config.root)) {
-    throw new WorkspacePolicyError("INVALID_PATH", "Workspace root must be absolute");
+  for (const [name, value] of [
+    ["workspaceRoot", config.workspaceRoot],
+    ["taskOutputRoot", config.taskOutputRoot],
+    ["dataRoot", config.dataRoot],
+    ["repositoryRoot", config.repositoryRoot],
+  ] as const) {
+    if (!path.isAbsolute(value)) {
+      throw new WorkspacePolicyError("INVALID_PATH", `${name} must be absolute`);
+    }
   }
-  const root = path.resolve(config.root);
+  const workspaceRoot = path.resolve(config.workspaceRoot);
   try {
-    if (!(await stat(root)).isDirectory()) throw new Error("not a directory");
+    if (!(await stat(workspaceRoot)).isDirectory()) throw new Error("not a directory");
   } catch (error) {
     throw new WorkspacePolicyError("NOT_FOUND", "Task Workspace root must exist", {
       cause: error,
@@ -89,8 +110,11 @@ export async function createWorkspaceContext(
     taskId: config.taskId,
     runId: config.runId,
     piSessionId: config.piSessionId,
-    root,
-    canonicalRoot: await realpath(root),
+    workspaceRoot,
+    canonicalWorkspaceRoot: await realpath(workspaceRoot),
+    taskOutputRoot: path.resolve(config.taskOutputRoot),
+    dataRoot: path.resolve(config.dataRoot),
+    repositoryRoot: path.resolve(config.repositoryRoot),
     audit: config.audit,
     limits: validatedLimits(config.limits),
     developmentExec: config.developmentExec,

@@ -8,7 +8,6 @@ export interface HostConfig {
   shutdownTimeoutMs: number;
   workspaceDevExec: boolean;
 }
-
 export const DEFAULT_HOST_CONFIG = {
   HOST: "127.0.0.1",
   PORT: "5173",
@@ -87,4 +86,23 @@ export function resolveOutputDir(repositoryRoot: string, raw: string | undefined
   return path.isAbsolute(trimmed)
     ? path.resolve(trimmed)
     : path.resolve(repositoryRoot, trimmed);
+}
+
+/**
+ * 解析 Workspace 根目录（Agent Workspace refactor，plan §2.1）。
+ *
+ * Workspace 与 Task Output 在物理目录层面分离：
+ *
+ * ```text
+ * data/
+ * ├── workspaces/<taskId>/   ← Agent-owned
+ * └── output/tasks/<taskId>/ ← BioMed-owned
+ * ```
+ *
+ * 默认 OUTPUT_DIR 为 ``<repo>/data/output`` 时，workspaces 根为
+ * ``<repo>/data/workspaces``（output 的兄弟目录）。
+ */
+export function resolveWorkspacesRoot(repositoryRoot: string, raw: string | undefined): string {
+  const outputDir = resolveOutputDir(repositoryRoot, raw);
+  return path.join(path.dirname(outputDir), "workspaces");
 }

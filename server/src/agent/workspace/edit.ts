@@ -33,7 +33,7 @@ export async function editWorkspaceText(
   ) {
     throw new WorkspacePolicyError("PRECONDITION_FAILED", "Edit precondition is invalid");
   }
-  const resolved = await resolveWorkspacePath(context, input.path, "write");
+  const resolved = await resolveWorkspacePath(context, input.path);
   const bytes = await readFile(resolved.absolutePath);
   if (bytes.length > context.limits.maxWriteBytes) {
     throw new WorkspacePolicyError("LIMIT_EXCEEDED", "Edit target exceeds Workspace limit");

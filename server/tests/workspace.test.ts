@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import {
-  access,
   mkdtemp,
   mkdir,
   readFile,
@@ -22,30 +21,34 @@ import {
 const roots: string[] = [];
 
 async function fixture(options: { exec?: boolean; limits?: Record<string, number> } = {}) {
-  const root = await mkdtemp(path.join(os.tmpdir(), "biomed-workspace-"));
-  roots.push(root);
+  const base = await mkdtemp(path.join(os.tmpdir(), "biomed-workspace-"));
+  roots.push(base);
+  const workspaceRoot = path.join(base, "workspace");
+  const taskOutputRoot = path.join(base, "output");
+  await mkdir(workspaceRoot, { recursive: true });
   await Promise.all(
-    [
-      "source_assets",
-      "parsed",
-      "normalized",
-      "staging/agent",
-      "artifacts",
-      "state",
-      "logs",
-    ].map((name) => mkdir(path.join(root, name), { recursive: true })),
+    ["state", "logs", "artifacts"].map((name) =>
+      mkdir(path.join(taskOutputRoot, name), { recursive: true })),
   );
   const audit = new InMemoryWorkspaceAuditSink();
   const workspace = await createTaskWorkspace({
     taskId: "task-1",
     runId: "run-1",
     piSessionId: "pi-1",
-    root,
+    workspaceRoot,
+    taskOutputRoot,
+    dataRoot: base,
+    repositoryRoot: base,
     audit,
     limits: options.limits,
     developmentExec: options.exec ? { enabled: true } : undefined,
   });
-  return { root, audit, workspace };
+  return { base, workspaceRoot, taskOutputRoot, audit, workspace };
+}
+
+async function writeNested(target: string, content: string | Buffer): Promise<void> {
+  await mkdir(path.dirname(target), { recursive: true });
+  await writeFile(target, content);
 }
 
 async function removeEventually(root: string): Promise<void> {
@@ -105,15 +108,16 @@ async function writeProcessTreeFixture(
   root: string,
   parentMode: "wait" | "exit-after-child-ready",
 ): Promise<string> {
-  const childPath = path.join(root, "staging", "agent", "child.cjs");
-  const parentPath = path.join(root, "staging", "agent", "parent.cjs");
+  const childPath = path.join(root, "scripts", "child.cjs");
+  const parentPath = path.join(root, "scripts", "parent.cjs");
+  await mkdir(path.join(root, "scripts"), { recursive: true });
   await writeFile(
     childPath,
     [
       "const { spawn } = require('node:child_process');",
       "const fs = require('node:fs');",
       "const grandchild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });",
-      "fs.writeFileSync('staging/agent/pids.json', JSON.stringify([process.pid, grandchild.pid]));",
+      "fs.writeFileSync('pids.json', JSON.stringify([process.pid, grandchild.pid]));",
       "setInterval(() => {}, 1000);",
     ].join("\n"),
     "utf8",
@@ -123,29 +127,29 @@ async function writeProcessTreeFixture(
     [
       "const { spawn } = require('node:child_process');",
       "const fs = require('node:fs');",
-      "spawn(process.execPath, ['staging/agent/child.cjs'], { stdio: 'ignore' });",
+      "spawn(process.execPath, ['scripts/child.cjs'], { stdio: 'ignore' });",
       parentMode === "wait"
         ? "setInterval(() => {}, 1000);"
-        : "const timer = setInterval(() => { if (fs.existsSync('staging/agent/pids.json')) { clearInterval(timer); process.exit(0); } }, 5);",
+        : "const timer = setInterval(() => { if (fs.existsSync('pids.json')) { clearInterval(timer); process.exit(0); } }, 5);",
     ].join("\n"),
     "utf8",
   );
-  return "staging/agent/parent.cjs";
+  return "scripts/parent.cjs";
 }
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map(removeEventually));
 });
 
-describe("governed Task Workspace", () => {
+describe("governed Task Workspace (data/workspaces/<taskId>)", () => {
   test("reads bounded UTF-8 text and reports a stable relative path", async () => {
-    const { root, workspace } = await fixture({ limits: { maxReadBytes: 8 } });
-    await writeFile(path.join(root, "parsed", "data.txt"), "abcdefghi", "utf8");
+    const { workspaceRoot, workspace } = await fixture({ limits: { maxReadBytes: 8 } });
+    await writeNested(path.join(workspaceRoot, "notes", "data.txt"), "abcdefghi");
 
-    const result = await workspace.read({ path: "parsed/data.txt", offset: 2, length: 3 });
-    const bounded = await workspace.read({ path: "parsed/data.txt" });
+    const result = await workspace.read({ path: "notes/data.txt", offset: 2, length: 3 });
+    const bounded = await workspace.read({ path: "notes/data.txt" });
 
-    expect(result).toMatchObject({ path: "parsed/data.txt", text: "cde", offset: 2 });
+    expect(result).toMatchObject({ path: "notes/data.txt", text: "cde", offset: 2 });
     expect(bounded.truncated).toBe(true);
     expect(bounded.text).toBe("abcdefgh");
   });
@@ -153,7 +157,7 @@ describe("governed Task Workspace", () => {
   test.each([
     "../outside.txt",
     "..\\outside.txt",
-    "parsed/..\\outside.txt",
+    "notes/..\\outside.txt",
     "/etc/passwd",
     "C:\\outside.txt",
     "C:outside.txt",
@@ -161,7 +165,7 @@ describe("governed Task Workspace", () => {
     "\\\\?\\C:\\outside.txt",
     "\\\\.\\pipe\\name",
     "NUL",
-    "staging/agent/CON.txt",
+    "notes/CON.txt",
   ])("rejects unsafe path representation %s before access", async (candidate) => {
     const { workspace } = await fixture();
     await expect(workspace.read({ path: candidate })).rejects.toBeInstanceOf(
@@ -169,56 +173,53 @@ describe("governed Task Workspace", () => {
     );
   });
 
-  test("allows only the explicit state read allowlist and bounds logs", async () => {
-    const { root, workspace } = await fixture({ limits: { maxReadBytes: 5 } });
-    await writeFile(path.join(root, "state", "task_snapshot.json"), "{}", "utf8");
-    await writeFile(path.join(root, "state", "session_items.jsonl"), "secret", "utf8");
-    await writeFile(path.join(root, "logs", "runtime.log"), "123456789", "utf8");
+  test("every workspace-relative path is freely readable (no business dir protocol)", async () => {
+    const { workspaceRoot, workspace } = await fixture({ limits: { maxReadBytes: 5 } });
+    await writeNested(path.join(workspaceRoot, "raw", "input.csv"), "a,b");
+    await writeNested(path.join(workspaceRoot, "downloads", "clinical.tsv"), "x1y");
 
-    await expect(workspace.read({ path: "state/task_snapshot.json" })).resolves.toMatchObject({
-      text: "{}",
+    await expect(workspace.read({ path: "raw/input.csv" })).resolves.toMatchObject({
+      text: "a,b",
     });
-    await expect(workspace.read({ path: "state/session_items.jsonl" })).rejects.toMatchObject({
-      code: "PATH_NOT_ALLOWED",
+    await expect(workspace.read({ path: "downloads/clinical.tsv" })).resolves.toMatchObject({
+      text: "x1y",
     });
-    await expect(workspace.list({ path: "state" })).resolves.toMatchObject({
-      entries: [{ path: "state/task_snapshot.json", type: "file" }],
-    });
-    const stateSearch = await workspace.search({ path: "state", query: "secret" });
-    expect(stateSearch).toMatchObject({ matches: [], filesScanned: 1 });
-    await expect(workspace.read({ path: "logs/runtime.log" })).resolves.toMatchObject({
-      text: "12345",
-      truncated: true,
+    await expect(workspace.list({ path: ".", depth: 2 })).resolves.toMatchObject({
+      entries: expect.arrayContaining([
+        expect.objectContaining({ path: "raw/input.csv", type: "file" }),
+        expect.objectContaining({ path: "downloads/clinical.tsv", type: "file" }),
+      ]),
     });
   });
 
   test("lists and searches in stable bounded order", async () => {
-    const { root, workspace } = await fixture({
+    const { workspaceRoot, workspace } = await fixture({
       limits: { maxListEntries: 2, maxSearchResults: 1, maxSearchLineChars: 8 },
     });
-    await writeFile(path.join(root, "parsed", "b.txt"), "needle-long-line", "utf8");
-    await writeFile(path.join(root, "parsed", "a.txt"), "needle", "utf8");
-    await writeFile(path.join(root, "parsed", "c.txt"), "needle", "utf8");
+    await writeNested(path.join(workspaceRoot, "analysis", "b.txt"), "needle-long-line");
+    await writeNested(path.join(workspaceRoot, "analysis", "a.txt"), "needle");
+    await writeNested(path.join(workspaceRoot, "analysis", "c.txt"), "needle");
 
-    const listed = await workspace.list({ path: "parsed", depth: 1 });
-    const searched = await workspace.search({ path: "parsed", query: "needle" });
+    const listed = await workspace.list({ path: "analysis", depth: 1 });
+    const searched = await workspace.search({ path: "analysis", query: "needle" });
 
     expect(listed.entries.map((entry) => entry.path)).toEqual([
-      "parsed/a.txt",
-      "parsed/b.txt",
+      "analysis/a.txt",
+      "analysis/b.txt",
     ]);
     expect(listed.truncated).toBe(true);
     expect(searched.matches).toHaveLength(1);
-    expect(searched.matches[0]).toMatchObject({ path: "parsed/a.txt", line: 1 });
+    expect(searched.matches[0]).toMatchObject({ path: "analysis/a.txt", line: 1 });
     expect(searched.truncated).toBe(true);
   });
 
-  test("does not traverse a symlink or junction escaping the Task root", async ({ skip }) => {
-    const { root, workspace } = await fixture();
+  test("does not traverse a symlink or junction escaping the Task workspace", async ({ skip }) => {
+    const { workspaceRoot, workspace } = await fixture();
     const outside = await mkdtemp(path.join(os.tmpdir(), "biomed-outside-"));
     roots.push(outside);
     await writeFile(path.join(outside, "secret.txt"), "secret", "utf8");
-    const link = path.join(root, "parsed", "escape");
+    const link = path.join(workspaceRoot, "notes", "escape");
+    await mkdir(path.join(workspaceRoot, "notes"), { recursive: true });
     try {
       await symlink(outside, link, process.platform === "win32" ? "junction" : "dir");
     } catch (error) {
@@ -229,66 +230,56 @@ describe("governed Task Workspace", () => {
       throw error;
     }
 
-    await expect(workspace.read({ path: "parsed/escape/secret.txt" })).rejects.toMatchObject({
+    await expect(workspace.read({ path: "notes/escape/secret.txt" })).rejects.toMatchObject({
       code: "PATH_ESCAPE",
     });
-    await expect(workspace.list({ path: "parsed", depth: 2 })).resolves.not.toEqual(
+    await expect(workspace.list({ path: "notes", depth: 2 })).resolves.not.toEqual(
       expect.objectContaining({
         entries: expect.arrayContaining([
-          expect.objectContaining({ path: "parsed/escape/secret.txt" }),
+          expect.objectContaining({ path: "notes/escape/secret.txt" }),
         ]),
       }),
     );
   });
 
-  test("writes atomically and edits only unambiguous staging content", async () => {
-    const { root, workspace } = await fixture({ limits: { maxWriteBytes: 12 } });
-    await workspace.write({ path: "staging/agent/nested/value.txt", content: "old value" });
+  test("writes atomically and edits anywhere inside the workspace", async () => {
+    const { workspaceRoot, workspace } = await fixture({ limits: { maxWriteBytes: 12 } });
+    await workspace.write({ path: "scripts/nested/value.txt", content: "old value" });
     await workspace.edit({
-      path: "staging/agent/nested/value.txt",
+      path: "scripts/nested/value.txt",
       oldText: "old",
       newText: "new",
       expectedOccurrences: 1,
     });
 
-    await expect(readFile(path.join(root, "staging", "agent", "nested", "value.txt"), "utf8"))
+    await expect(readFile(path.join(workspaceRoot, "scripts", "nested", "value.txt"), "utf8"))
       .resolves.toBe("new value");
     await expect(
-      workspace.write({ path: "staging/agent/large.txt", content: "x".repeat(13) }),
+      workspace.write({ path: "scripts/large.txt", content: "x".repeat(13) }),
     ).rejects.toMatchObject({ code: "LIMIT_EXCEEDED" });
-    await writeFile(path.join(root, "staging", "agent", "ambiguous.txt"), "x x", "utf8");
+    await writeNested(path.join(workspaceRoot, "scripts", "ambiguous.txt"), "x x");
     await expect(
       workspace.edit({
-        path: "staging/agent/ambiguous.txt",
+        path: "scripts/ambiguous.txt",
         oldText: "x",
         newText: "y",
         expectedOccurrences: 1,
       }),
     ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
-    await expect(readFile(path.join(root, "staging", "agent", "ambiguous.txt"), "utf8"))
+    await expect(readFile(path.join(workspaceRoot, "scripts", "ambiguous.txt"), "utf8"))
       .resolves.toBe("x x");
   });
 
-  test("protected write and edit aliases never change protected bytes", async () => {
-    const { root, workspace } = await fixture();
-    const protectedPath = path.join(root, "artifacts", "formal.txt");
-    await writeFile(protectedPath, "formal", "utf8");
-    const before = createHash("sha256").update(await readFile(protectedPath)).digest("hex");
-    const alias = process.platform === "win32" ? "ARTIFACTS\\formal.txt" : "artifacts/formal.txt";
-
-    await expect(workspace.write({ path: alias, content: "changed" })).rejects.toMatchObject({
-      code: "PATH_NOT_ALLOWED",
+  test("framework-protocol names inside the workspace are ordinary files", async () => {
+    // The workspace carries no business directory protocol (plan §44): a
+    // file named artifacts/… inside the agent workspace is just a file.
+    const { workspaceRoot, workspace } = await fixture();
+    await workspace.write({ path: "artifacts/formal.txt", content: "agent file" });
+    await expect(readFile(path.join(workspaceRoot, "artifacts", "formal.txt"), "utf8"))
+      .resolves.toBe("agent file");
+    await expect(workspace.read({ path: "artifacts/formal.txt" })).resolves.toMatchObject({
+      text: "agent file",
     });
-    await expect(
-      workspace.edit({
-        path: alias,
-        oldText: "formal",
-        newText: "changed",
-        expectedOccurrences: 1,
-      }),
-    ).rejects.toMatchObject({ code: "PATH_NOT_ALLOWED" });
-    const after = createHash("sha256").update(await readFile(protectedPath)).digest("hex");
-    expect(after).toBe(before);
   });
 
   test("development exec is disabled by default and audited without secrets", async () => {
@@ -314,7 +305,7 @@ describe("governed Task Workspace", () => {
     const previous = process.env.BIOMED_TEST_SECRET;
     process.env.BIOMED_TEST_SECRET = "parent-secret";
     try {
-      const { root, workspace } = await fixture({
+      const { workspaceRoot, workspace } = await fixture({
         exec: true,
         limits: { maxExecOutputBytes: 128 },
       });
@@ -334,7 +325,7 @@ describe("governed Task Workspace", () => {
         truncated: true,
       });
       expect(result.stdout).toContain('"cwd":"[workspace]"');
-      expect(result.stdout).not.toContain(root);
+      expect(result.stdout).not.toContain(workspaceRoot);
       expect(result.stdout).not.toContain("parent-secret");
       expect(Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr)).toBeLessThanOrEqual(128);
 
@@ -346,45 +337,37 @@ describe("governed Task Workspace", () => {
     }
   });
 
-  test("refuses an unprotected snapshot and restores protected bytes after command mutation", async () => {
-    const { root, audit, workspace } = await fixture({
-      exec: true,
-      limits: { maxSnapshotBytes: 32 },
-    });
-    const protectedPath = path.join(root, "artifacts", "formal.txt");
-    await writeFile(protectedPath, "formal", "utf8");
+  test("exec writes inside the agent-owned workspace persist (no snapshot rollback)", async () => {
+    const { workspaceRoot, audit, workspace } = await fixture({ exec: true });
+    await writeNested(path.join(workspaceRoot, "analysis", "formal.txt"), "formal");
+    await writeNested(path.join(workspaceRoot, "scripts", ".keep"), "");
     const mutation = [
       "const fs=require('node:fs');",
-      "fs.writeFileSync('artifacts/formal.txt','changed');",
-      "fs.writeFileSync('staging/agent/allowed.txt','allowed');",
+      "fs.writeFileSync('analysis/formal.txt','changed');",
+      "fs.writeFileSync('scripts/allowed.txt','allowed');",
     ].join("");
 
-    const denied = await workspace.exec({ executable: process.execPath, args: ["-e", mutation] });
-    expect(denied.policy).toBe("rejected");
-    expect(audit.records.at(-1)).toMatchObject({ operation: "exec", result: "rejected" });
-    await expect(readFile(protectedPath, "utf8")).resolves.toBe("formal");
-    await expect(readFile(path.join(root, "staging", "agent", "allowed.txt"), "utf8"))
+    const result = await workspace.exec({ executable: process.execPath, args: ["-e", mutation] });
+    expect(result).toMatchObject({ exitCode: 0, policy: "allowed" });
+    expect(audit.records.at(-1)).toMatchObject({ operation: "exec", result: "success" });
+    // The workspace is agent-owned (plan §3.1): command writes persist and
+    // are not rolled back by any snapshot machinery.
+    await expect(readFile(path.join(workspaceRoot, "analysis", "formal.txt"), "utf8"))
+      .resolves.toBe("changed");
+    await expect(readFile(path.join(workspaceRoot, "scripts", "allowed.txt"), "utf8"))
       .resolves.toBe("allowed");
-
-    await writeFile(path.join(root, "source_assets", "large.bin"), Buffer.alloc(64));
-    const refused = await workspace.exec({
-      executable: process.execPath,
-      args: ["-e", "require('node:fs').writeFileSync('staging/agent/should-not-run','x')"],
-    });
-    expect(refused.policy).toBe("rejected");
-    await expect(access(path.join(root, "staging", "agent", "should-not-run"))).rejects.toThrow();
   });
 
   test("timeout kills the complete child and grandchild process tree", async () => {
-    const { root, workspace } = await fixture({ exec: true });
-    const script = await writeProcessTreeFixture(root, "wait");
+    const { workspaceRoot, workspace } = await fixture({ exec: true });
+    const script = await writeProcessTreeFixture(workspaceRoot, "wait");
     const result = await workspace.exec({
       executable: process.execPath,
       args: [script],
       timeoutMs: 300,
     });
     const pids = await waitForJson(
-      path.join(root, "staging", "agent", "pids.json"),
+      path.join(workspaceRoot, "pids.json"),
       30_000,
     ) as number[];
 
@@ -394,13 +377,13 @@ describe("governed Task Workspace", () => {
 
   test("AbortSignal and workspace disposal cancel active process trees", async () => {
     const aborted = await fixture({ exec: true });
-    const abortedScript = await writeProcessTreeFixture(aborted.root, "wait");
+    const abortedScript = await writeProcessTreeFixture(aborted.workspaceRoot, "wait");
     const abortController = new AbortController();
     const abortedResultPromise = aborted.workspace.exec(
       { executable: process.execPath, args: [abortedScript], timeoutMs: 5_000 },
       abortController.signal,
     );
-    const abortedPidsPath = path.join(aborted.root, "staging", "agent", "pids.json");
+    const abortedPidsPath = path.join(aborted.workspaceRoot, "pids.json");
     const abortedPids = await waitForJson(abortedPidsPath, 30_000) as number[];
     abortController.abort();
     const abortedResult = await abortedResultPromise;
@@ -412,13 +395,13 @@ describe("governed Task Workspace", () => {
     await expectProcessesDead(abortedPids);
 
     const disposed = await fixture({ exec: true });
-    const disposedScript = await writeProcessTreeFixture(disposed.root, "wait");
+    const disposedScript = await writeProcessTreeFixture(disposed.workspaceRoot, "wait");
     const disposedResultPromise = disposed.workspace.exec({
       executable: process.execPath,
       args: [disposedScript],
       timeoutMs: 5_000,
     });
-    const disposedPidsPath = path.join(disposed.root, "staging", "agent", "pids.json");
+    const disposedPidsPath = path.join(disposed.workspaceRoot, "pids.json");
     const disposedPids = await waitForJson(disposedPidsPath, 30_000) as number[];
     await disposed.workspace.dispose();
     const disposedResult = await disposedResultPromise;
@@ -427,20 +410,33 @@ describe("governed Task Workspace", () => {
   });
 
   test("normal completion cleans background descendants and audits without secrets", async () => {
-    const { root, audit, workspace } = await fixture({ exec: true });
-    const script = await writeProcessTreeFixture(root, "exit-after-child-ready");
+    const { workspaceRoot, audit, workspace } = await fixture({ exec: true });
+    const script = await writeProcessTreeFixture(workspaceRoot, "exit-after-child-ready");
     const result = await workspace.exec({
       executable: process.execPath,
       args: [script, "--token=do-not-log"],
     });
     // The descendant writes pids.json after the direct child exits; wait for
     // a fully written manifest under parallel CI load instead of racing it.
-    const pidsPath = path.join(root, "staging", "agent", "pids.json");
+    const pidsPath = path.join(workspaceRoot, "pids.json");
     const pids = await waitForJson(pidsPath, 30_000) as number[];
 
     expect(result).toMatchObject({ exitCode: 0, policy: "allowed" });
     await expectProcessesDead(pids);
     expect(JSON.stringify(audit.records)).not.toContain("do-not-log");
     expect(audit.records.at(-1)).toMatchObject({ operation: "exec", result: "success" });
+  });
+
+  test("workspace hash integrity: protected file bytes are untouched by policy violations", async () => {
+    const { workspaceRoot, workspace } = await fixture();
+    const target = path.join(workspaceRoot, "notes", "keep.txt");
+    await writeNested(target, "keep me");
+    const before = createHash("sha256").update(await readFile(target)).digest("hex");
+
+    await expect(workspace.write({ path: "../escape", content: "x" })).rejects.toBeInstanceOf(
+      WorkspacePolicyError,
+    );
+    const after = createHash("sha256").update(await readFile(target)).digest("hex");
+    expect(after).toBe(before);
   });
 });

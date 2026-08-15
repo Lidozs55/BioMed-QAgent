@@ -26,7 +26,7 @@ export async function writeWorkspaceText(
   if (bytes > context.limits.maxWriteBytes) {
     throw new WorkspacePolicyError("LIMIT_EXCEEDED", "Write content exceeds Workspace limit");
   }
-  const resolved = await resolveWorkspacePath(context, input.path, "write");
+  const resolved = await resolveWorkspacePath(context, input.path);
   const parent = path.dirname(resolved.absolutePath);
   await mkdir(parent, { recursive: true });
   await verifyCanonicalPath(context, parent);

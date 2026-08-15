@@ -26,7 +26,7 @@ describe("Workspace project tools", () => {
       taskId: "task-audit",
       runId: "run-audit",
       operation: "read" as const,
-      path: "parsed/row.txt",
+      path: "notes/row.txt",
       result: "success" as const,
       durationMs: 1,
       truncated: false,
@@ -44,17 +44,22 @@ describe("Workspace project tools", () => {
   });
 
   test("composes Pi-free structured descriptors over governed operations", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "biomed-workspace-tools-"));
-    roots.push(root);
-    await Promise.all(
-      ["source_assets", "parsed", "normalized", "staging/agent", "artifacts", "state", "logs"]
-        .map((name) => mkdir(path.join(root, name), { recursive: true })),
-    );
-    await writeFile(path.join(root, "parsed", "row.txt"), "TP53", "utf8");
+    const base = await mkdtemp(path.join(os.tmpdir(), "biomed-workspace-tools-"));
+    roots.push(base);
+    const workspaceRoot = path.join(base, "workspace");
+    const taskOutputRoot = path.join(base, "output");
+    await mkdir(workspaceRoot, { recursive: true });
+    await writeFile(path.join(workspaceRoot, "notes", "row.txt"), "TP53", "utf8").catch(async () => {
+      await mkdir(path.join(workspaceRoot, "notes"), { recursive: true });
+      await writeFile(path.join(workspaceRoot, "notes", "row.txt"), "TP53", "utf8");
+    });
     const workspace = await createTaskWorkspace({
       taskId: "task-tools",
       runId: "run-tools",
-      root,
+      workspaceRoot,
+      taskOutputRoot,
+      dataRoot: base,
+      repositoryRoot: base,
       audit: new InMemoryWorkspaceAuditSink(),
     });
 
@@ -70,9 +75,9 @@ describe("Workspace project tools", () => {
       "workspace_edit",
       "workspace_exec",
     ]);
-    await expect(read?.execute({ path: "parsed/row.txt" })).resolves.toMatchObject({
+    await expect(read?.execute({ path: "notes/row.txt" })).resolves.toMatchObject({
       isError: false,
-      details: { path: "parsed/row.txt", text: "TP53" },
+      details: { path: "notes/row.txt", text: "TP53" },
     });
     await expect(exec?.execute({ executable: process.execPath, args: [] })).resolves.toMatchObject({
       isError: true,

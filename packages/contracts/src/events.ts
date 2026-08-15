@@ -39,6 +39,26 @@ export type UserInputPromptKind =
 
 export type UserInputDecision = "approve" | "reject";
 
+export type PermissionCapability =
+  | "fs.read"
+  | "fs.write"
+  | "fs.edit"
+  | "process.exec";
+
+export type PermissionScope =
+  | "workspace"
+  | "task_output"
+  | "project"
+  | "external";
+
+export type PermissionGrantScope =
+  | "once"
+  | "run"
+  | "task"
+  | "persistent";
+
+export type PermissionDecision = "allow" | "deny";
+
 export type AssistantDeltaPayload =
   | {
       type: "assistant_delta";
@@ -261,6 +281,27 @@ export type EventPayload =
       request_id: string;
       decision: UserInputDecision;
       detail: Record<string, JsonValue>;
+    }
+  // Permission control plane (Agent Workspace refactor, plan §30).
+  // Independent from business HIL: a permission request suspends exactly one
+  // tool call and resumes it with the same tool call — it must not restart
+  // the business run.
+  | {
+      type: "permission_requested";
+      request_id: string;
+      capability: PermissionCapability;
+      scope: PermissionScope;
+      resource: string | null;
+      canonical_resource: string | null;
+      command: string | null;
+      cwd: string | null;
+      summary: string;
+    }
+  | {
+      type: "permission_resolved";
+      request_id: string;
+      decision: PermissionDecision;
+      grant_scope: PermissionGrantScope | null;
     };
 
 export interface EventEnvelope {

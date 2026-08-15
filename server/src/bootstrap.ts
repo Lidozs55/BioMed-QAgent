@@ -33,6 +33,7 @@ export interface BootstrapInput {
   config: HostConfig;
   repositoryRoot: string;
   tasksRoot: string;
+  workspacesRoot: string;
   database?: DatabaseClient;
   browserPool?: NodeBrowserPool;
   modelSettings?: ModelSettingsSurface;
@@ -51,7 +52,7 @@ function combineApis(...apis: ApiSurface[]): ApiSurface {
 }
 
 export async function createBootstrapOptions(input: BootstrapInput): Promise<BootstrapOptions> {
-  const { config, tasksRoot } = input;
+  const { config, tasksRoot, workspacesRoot, repositoryRoot } = input;
   const dataRoot = path.resolve(tasksRoot, "..", "..");
   const cacheDir = path.join(dataRoot, "cache");
   const databasesDir = process.env.SKILL_DATA_DIR === undefined ||
@@ -90,6 +91,8 @@ export async function createBootstrapOptions(input: BootstrapInput): Promise<Boo
     hostApi: combineApis(productApi, modelSettings),
     formalRuntime: () => formalFactory({
       tasksRoot,
+      workspacesRoot,
+      repositoryRoot,
       workspaceDevExec: config.workspaceDevExec,
       resolveModel: modelSettings.resolveActiveModel,
       database,
