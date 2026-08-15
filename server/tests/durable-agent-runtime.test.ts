@@ -703,4 +703,115 @@ describe("durable formal Agent runtime", () => {
     ]);
     await runtime.close();
   });
+
+  test("resumes a download after a server restart by reconstructing a lightweight workspace", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "biomed-durable-resume-restart-"));
+    roots.push(root);
+    const factoryCalls: string[] = [];
+    const executed: unknown[] = [];
+    const workspaceFactory: ConstructorParameters<
+      typeof createDurableAgentRuntime
+    >[0]["workspaceFactory"] = async ({ taskId, runId }) => {
+      factoryCalls.push(`${taskId}:${runId}`);
+      return {
+        root: path.join(root, taskId),
+        tools: [{
+          name: "download_xena",
+          label: "Download Xena dataset",
+          description: "download a xena dataset",
+          parameters: { type: "object" },
+          execute: async (argumentsValue) => {
+            executed.push(argumentsValue);
+            return { content: JSON.stringify({ downloaded: true }), isError: false };
+          },
+        }],
+        setRunId: () => undefined,
+        dispose: async () => undefined,
+      };
+    };
+
+    // First runtime creates the task and completes its AI run (session live).
+    const adapterA = new ControlledAdapter();
+    const runtimeA = await createDurableAgentRuntime({
+      tasksRoot: root,
+      adapter: adapterA,
+      workspaceFactory,
+    });
+    const serverA = createServer((request, response) => {
+      if (!runtimeA.handle(request, response)) response.writeHead(404).end();
+    });
+    serverA.listen(0, "127.0.0.1");
+    await once(serverA, "listening");
+    servers.push(serverA);
+    const baseA = `http://127.0.0.1:${(serverA.address() as AddressInfo).port}`;
+    const accepted = await (await fetch(`${baseA}/api/v1/tasks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        request_id: "request-restart-boot",
+        input: "boot",
+        databases: [],
+        mode: "agent",
+      }),
+    })).json() as { task_id: string };
+    adapterA.gates[0]?.resolve();
+    await expect.poll(async () => (
+      await runtimeA.repository.getSnapshot(accepted.task_id)
+    )?.task.status).toBe("completed");
+    await runtimeA.close();
+    expect(factoryCalls.length).toBe(1); // the boot session only
+
+    // Second runtime stands in for the server restart: no task session is
+    // reconstructed (recoverActiveRuns never rebuilds the in-memory workspace),
+    // so resumeDownload must rebuild a lightweight workspace from
+    // workspaceFactory to run the download tool directly.
+    const runtimeB = await createDurableAgentRuntime({
+      tasksRoot: root,
+      adapter: new ControlledAdapter(),
+      workspaceFactory,
+    });
+    const serverB = createServer((request, response) => {
+      if (!runtimeB.handle(request, response)) response.writeHead(404).end();
+    });
+    serverB.listen(0, "127.0.0.1");
+    await once(serverB, "listening");
+    servers.push(serverB);
+    const baseB = `http://127.0.0.1:${(serverB.address() as AddressInfo).port}`;
+
+    const resumed = await fetch(
+      `${baseB}/api/v1/tasks/${accepted.task_id}/downloads/resume`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          request_id: "request-restart-resume",
+          tool_name: "download_xena",
+          arguments: { dataset_id: "TCGA.PAAD.sampleMap/HiSeqV2" },
+        }),
+      },
+    );
+    expect(resumed.status).toBe(202);
+    const acceptedResume = await resumed.json() as { run_id: string };
+
+    await expect.poll(async () => {
+      const snapshot = await runtimeB.repository.getSnapshot(accepted.task_id);
+      return snapshot?.runs.find((run) => run.run_id === acceptedResume.run_id)?.status;
+    }).toBe("completed");
+    // The download tool ran against the reconstructed workspace.
+    expect(executed).toEqual([{ dataset_id: "TCGA.PAAD.sampleMap/HiSeqV2" }]);
+    // The lightweight workspace was added at resume time (boot + one rebuild).
+    expect(factoryCalls.length).toBe(2);
+    expect(factoryCalls[1]).toBe(`${accepted.task_id}:${acceptedResume.run_id}`);
+
+    const events = await runtimeB.repository.listEvents(accepted.task_id, 0);
+    const resumeEvents = events.filter((event) => event.run_id === acceptedResume.run_id);
+    expect(resumeEvents.map((event) => event.type)).toEqual([
+      "run_queued",
+      "run_started",
+      "tool_started",
+      "tool_completed",
+      "run_completed",
+    ]);
+    await runtimeB.close();
+  });
 });

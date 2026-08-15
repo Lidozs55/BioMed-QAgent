@@ -378,7 +378,17 @@ export function ChatPanel({
       // inference); after it completes the room prompts the user to send
       // "继续" to pick the analysis back up.
       onResume: async (taskId, _runId, resume) => {
-        await resumeDownload(taskId, resume);
+        try {
+          await resumeDownload(taskId, resume);
+        } catch (error) {
+          toast.error("恢复下载失败", {
+            description: errorMessage(error, "请稍后重试"),
+          });
+          return;
+        }
+        toast.success("已发起下载续传", {
+          description: "进度将自动跟随新的下载任务，完成后请输入“继续”。",
+        });
       },
     };
   }, [activeTaskId, cancelRun, resumeDownload]);

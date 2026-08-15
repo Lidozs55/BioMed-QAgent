@@ -510,25 +510,39 @@ export async function createDurableAgentRuntime(
         "Task already has an active run",
       );
     }
-    const task = activeTasks.get(taskId);
-    if (task === undefined) {
-      throw new ReferenceError("任务会话不可用，请使用“继续”让 AI 恢复下载");
-    }
-    const tool = task.workspace.tools.find(
-      (candidate) => candidate.name === toolName,
-    );
-    if (tool === undefined) {
-      throw new ReferenceError(`Tool not found: ${toolName}`);
-    }
     // 独立续传 run：只创建 run 容器，不启动 AI 推理，直接执行下载工具续传。
     const accepted = await repository.createRun(taskId, {
       requestId,
       input: "继续下载被中断的数据文件（自动续传）",
     });
     const runId = accepted.run_id;
-    task.workspace.setRunId?.(runId);
-    task.approvalGate.setRunId(runId);
-    task.activeRunId = runId;
+    // 解析下载工具的执行环境。正常路径复用任务会话里的工作区；服务器重启后
+    // 会话丢失（activeTasks 已清空），则重建一个轻量工作区（只拿工具箱，不
+    // 启动 AI 会话），使被中断的任务仍可直接续传，而非依赖模型可用。
+    const existing = activeTasks.get(taskId);
+    const workspace =
+      existing === undefined
+        ? await options.workspaceFactory({
+            taskId,
+            runId,
+            approvalGate: new DurableApprovalGate(taskId, repository, runId),
+            recordRunEvent: async (payload) => {
+              await repository.appendRunEvent(taskId, runId, payload);
+            },
+          })
+        : existing.workspace;
+    if (existing !== undefined) {
+      existing.workspace.setRunId?.(runId);
+      existing.approvalGate.setRunId(runId);
+      existing.activeRunId = runId;
+    }
+    const tool = workspace.tools.find(
+      (candidate) => candidate.name === toolName,
+    );
+    if (tool === undefined) {
+      if (existing === undefined) await workspace.dispose();
+      throw new ReferenceError(`Tool not found: ${toolName}`);
+    }
     await repository.appendRunEvents(taskId, runId, [
       { type: "run_started" },
       {
@@ -546,11 +560,17 @@ export async function createDurableAgentRuntime(
       argumentsValue,
       controller.signal,
     );
-    task.activeDownload = { runId, controller, promise };
-    void promise.finally(() => {
-      if (task.activeDownload?.runId === runId) task.activeDownload = null;
-      if (task.activeRunId === runId) task.activeRunId = null;
-    });
+    if (existing !== undefined) {
+      existing.activeDownload = { runId, controller, promise };
+      void promise.finally(() => {
+        if (existing.activeDownload?.runId === runId) {
+          existing.activeDownload = null;
+        }
+        if (existing.activeRunId === runId) existing.activeRunId = null;
+      });
+    } else {
+      void promise.finally(() => workspace.dispose());
+    }
     return accepted;
   }
 
