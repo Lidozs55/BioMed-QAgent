@@ -28,6 +28,7 @@
 | 6 | 迁模型设置与 Settings API | ✅ 完成（2026-08-13） |
 | 7 | 正式切换 Frontend → TS Host | ✅ 完成（2026-08-14） |
 | 8 | 删除 Python Runtime（仅留 DB bridge） | ✅ 完成（2026-08-14） |
+| 9 | Agent Workspace 与权限系统重构 | ✅ 完成（2026-08-16，ADR-026） |
 
 > **当前拓扑（Phase 8 后，2026-08-14）**：唯一正式拓扑是 TypeScript Host
 > （`pnpm dev` / `pnpm start`）+ Pi Agent + TS Dataset Core + 按需 `database/bridge.py`
@@ -240,6 +241,66 @@ build 锁、cancel 收敛与 event sink；`DATASET_CORE=ts` 现为默认运行�
 [migration/phase8-python-runtime-retirement.md](migration/phase8-python-runtime-retirement.md)、
 [migration/PHASE8_FINAL_VERIFICATION.md](migration/PHASE8_FINAL_VERIFICATION.md)、
 [migration/phase8-retirement-inventory.md](migration/phase8-retirement-inventory.md)。
+
+---
+
+## Phase 9：Agent Workspace 与权限系统重构（✅ 完成，2026-08-16）
+
+> 执行计划：`BioMed-QAgent Agent Workspace 与权限系统重构执行计划.md`（W1/W2/P1–P7）；
+> 决策记录：ADR-026（取代 ADR-023 的 staging-only 写入模型，保留不可变发布保证）。
+
+### W1  Workspace Root 解耦
+
+- [x] Agent cwd 迁移至 `data/workspaces/<taskId>/`；`data/output/tasks/<taskId>/` 不再作为 cwd
+- [x] `WorkspaceManager` + `workspace-paths.ts` 集中路径推导（`getPath/ensure/exists/remove`）
+- [x] Workspace 不保存框架 runtime metadata；`state/workspace.json` 记录 version/path/migration
+- [x] Task 多 Run 共享同一 Workspace；Task 删除同时清理 Workspace（先 cancel/dispose）
+- [x] 重启恢复：`ensure(taskId)` 幂等复用 durable workspace
+- [x] Pi session 目录移至 `<taskOutput>/state/pi-session`；audit/cache 保持在框架 output
+
+### W2  Legacy Workspace Migration
+
+- [x] `staging/agent/**` → `data/workspaces/<taskId>/**`（copy → verify → mark，保留旧目录）
+
+### P1  Permission Core
+
+- [x] `server/src/agent/permissions/`：types / path-normalizer / classifier / evaluator /
+      grants / policy-store / broker / protected-paths / audit + 单元测试
+- [x] allow/ask/deny；once/run/task/persistent grant；most-specific path rule；scope 分类
+
+### P2  read/write/edit 接入 PermissionBroker
+
+- [x] 移除 absolute-path hard deny 与 `staging/agent` write-only；normalize → classify → evaluate
+- [x] workspace 自由；task output 只读；project/external 默认 ask；state/logs/artifacts 硬保护
+
+### P3  Permission Event + API
+
+- [x] `permission_requested` / `permission_resolved` durable events
+- [x] `POST /api/v1/tasks/{taskId}/runs/{runId}/permissions/{requestId}`（once/run/task/persistent）
+- [x] pending 请求生命周期：cancel/重启失效，不静默重放
+
+### P4  Frontend Permission UI
+
+- [x] Run 时间线权限卡片（拒绝 / 允许一次 / 本 Run / 本 Task / 始终允许目录·命令）
+- [x] 设置 → Agent → 权限：preset（受限/按需询问/完全访问）+ 已授权目录管理
+
+### P5  Exec Permission
+
+- [x] `process.exec` 独立 capability，默认 ask；删除 snapshot/restore 伪沙箱
+- [x] 保留 timeout / output limit / cancel / process-tree cleanup / audit；UI 显示 OS 权限警告
+- [x] 迁移 flag `AGENT_EXEC_POLICY=deny|ask|allow` 替换 `WORKSPACE_DEV_EXEC`
+
+### P6  Permission Presets + Persistent Rules
+
+- [x] `data/settings/agent-permissions.json`；Restricted / Ask when needed / Full access
+
+### P7  Publication Integrity Hardening
+
+- [x] 验证：外部改动 artifact → hash 不匹配 → 409 ArtifactIntegrityError；
+      workspace 任意文件不会自动成为 Publication（仅 Core 发布路径）
+
+验收：`pnpm test`（contracts 14 + server 768 + frontend 752）/ `pnpm lint` /
+`pnpm typecheck` / `pnpm build` 全通过；`uv run pytest database/tests` + ruff 通过。
 
 ---
 

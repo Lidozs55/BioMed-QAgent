@@ -2,7 +2,12 @@
 
 ## Status
 
-Accepted — 2026-08-12.
+Accepted — 2026-08-12. **Superseded by [ADR-026](026-agent-workspace-permissions.md) on
+2026-08-16** for the Agent write model: the staging-only confinement is retired in
+favor of a dedicated Agent Workspace (`data/workspaces/<taskId>`) plus an
+`allow/ask/deny` permission system. The immutable-publication guarantee survives —
+it now rests on manifest + content hash verification instead of path
+unreachability.
 
 ## Context
 

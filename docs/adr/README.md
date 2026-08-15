@@ -17,6 +17,7 @@ indexed in [migration/README.md](../migration/README.md).
 | [ADR-023](023-workspace-policy.md) | Agent writes remain staging-only and publications remain immutable | Accepted |
 | [ADR-024](024-contract-source-of-truth.md) | `@biomed/contracts` is canonical for TypeScript wire DTOs | Accepted |
 | [ADR-025](025-layered-validation-http-persistence.md) | One runtime validation layer and one HTTP/persistence layer per process | Accepted |
+| [ADR-026](026-agent-workspace-permissions.md) | Agent Workspace is `data/workspaces/<taskId>`; everything outside goes through allow/ask/deny; Publication trust is hash-verified | Accepted |
 
 New records use the next available three-digit number and the sections `Status`,
 `Context`, `Decision`, and `Consequences`. A superseding ADR must link both ways;

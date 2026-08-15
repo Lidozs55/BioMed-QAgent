@@ -118,7 +118,14 @@ Dataset Construction Runtime（服务端固定构建骨架）
 
 **可靠性内核**（见 §4）：SourceAsset、DownloadAttempt、内容 hash、
 Attempt 输入/参数/输出摘要、任务锁、checkpoint、timeout/cancel、durable event、
-staging、Validation Gate、原子发布、fixture/live 区分。
+Validation Gate、原子发布、fixture/live 区分。
+
+**Agent 边界**（ADR-026）：Agent 的工作目录是 `data/workspaces/<taskId>/`，
+与框架输出 `data/output/tasks/<taskId>/` 物理分离；Workspace 之外的所有文件访问与
+命令执行都经过 `allow / ask / deny` 权限系统（fs.read/write/edit、process.exec），
+`ask` 挂起单个 Tool Call 等待用户批准（`permission_requested` / `permission_resolved`
+durable events + `POST .../permissions/{requestId}`）。正式 Publication 只由
+Dataset Core 产生并以 manifest + hash 验证——权限放开不改变业务可信边界。
 
 当前不存在固定五阶段、固定 22 列 `main_data.csv` 全局协议或 metadata-only
 占位主表：Dataset Build 由自包含 `DatasetBuildSpec`（§3）驱动，产物由
