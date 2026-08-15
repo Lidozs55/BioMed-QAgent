@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseEventPayload } from "@/lib/eventParsers";
 import { assertRunStatus, assertTaskMode, assertMessageRole, assertEventType, parseEventPage } from "@/lib/apiResponseParsers";
-import { APIError } from "@/hooks/settingsContracts";
+import { APIError } from "@/api/errors";
 
 function o(data: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};

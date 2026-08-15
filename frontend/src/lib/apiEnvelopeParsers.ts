@@ -3,13 +3,13 @@
 /*  Declarative manifest validators live in apiDeclarativeParsers.ts.  */
 /* ------------------------------------------------------------------ */
 
-import type { DatabaseDetail, DatabaseItem, DeclarativeSkillManifest } from "@/hooks/settingsContracts";
+import type { DatabaseDetail, DatabaseItem, DeclarativeSkillManifest } from "@biomed/contracts";
 import type { ArtifactRecord } from "@/runtime/contracts";
 import { assertOrigin, assertDeclarativeManifest } from "@/lib/apiDeclarativeParsers";
 import {
   assertString, assertNumber, assertObject, assertArray,
   optBoolean,
-} from "@/lib/eventValidatorHelpers";
+} from "@biomed/contracts";
 
 /* ---- Databases ---- */
 

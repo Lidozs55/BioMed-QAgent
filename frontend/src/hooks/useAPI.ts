@@ -15,21 +15,22 @@ import type {
   TaskSnapshot,
 } from "@/runtime/contracts";
 
-// Re-export all settings contracts for backward compatibility
-export type { CapabilitySource, ModelSettings, ModelSettingsUpdate, ModelPreviewRequest, VendorInfo, ModelInfo, SettingsAPIClient, DeclarativeOperation, DeclarativeSkillManifest, DatabaseItem, DatabaseDetail, DatabaseOperationUpdatePatch, DatabaseUpdatePatch, ParameterSpec, ModelCapabilities, ProviderInfo, ProviderInput, ProviderUpdateInput, ManagedModelInfo, ManagedModelInput, DiscoveredModelInfo, Personality, PersonalizationSettings, PersonalizationUpdate } from "@/hooks/settingsContracts";
-export type { ContextBudgetSettings } from "@/hooks/settingsContracts";
+// Re-export wire DTO types for backward compatibility
+// (canonical definitions now live in @biomed/contracts, surfaced via @/api/types)
+export type { CapabilitySource, ModelSettings, ModelSettingsUpdate, ModelPreviewRequest, VendorInfo, ModelInfo, SettingsAPIClient, DeclarativeOperation, DeclarativeSkillManifest, DatabaseItem, DatabaseDetail, DatabaseOperationUpdatePatch, DatabaseUpdatePatch, ParameterSpec, ModelCapabilities, ProviderInfo, ProviderInput, ProviderUpdateInput, ManagedModelInfo, ManagedModelInput, DiscoveredModelInfo, Personality, PersonalizationSettings, PersonalizationUpdate } from "@/api/types";
+export type { ContextBudgetSettings } from "@/api/types";
 
 // Re-export APIError class, normalizer, and runtime parsers
-export { APIError, normalizeErrorDetail } from "@/hooks/settingsContracts";
-export { parseModelSettings, parseVendorsEnvelope, parseModelsEnvelope, parsePersonalization } from "@/hooks/settingsParsers";
-import { APIError } from "@/hooks/settingsContracts";
-import { parseModelSettings, parseVendorsEnvelope, parseModelsEnvelope, parsePersonalization } from "@/hooks/settingsParsers";
+export { APIError, normalizeErrorDetail } from "@/api/errors";
+export { parseModelSettings, parseVendorsEnvelope, parseModelsEnvelope, parsePersonalization } from "@biomed/contracts";
+import { APIError } from "@/api/errors";
+import { parseModelSettings, parseVendorsEnvelope, parseModelsEnvelope, parsePersonalization } from "@biomed/contracts";
 import type {
   DiscoveredModelInfo,
   ManagedModelInfo,
   ParameterSpec,
   ProviderInfo,
-} from "@/hooks/settingsContracts";
+} from "@/api/types";
 import {
   parseEventPage, parseMessagePage, parseTaskPage,
   parseTaskRunAccepted, parseTaskSnapshot,
@@ -38,7 +39,7 @@ import {
   parseArtifactsEnvelope, parseDatabaseDetail, parseDatabasesEnvelope,
 } from "@/lib/apiEnvelopeParsers";
 import { parseBuildDetail, parseBuildPage } from "@/lib/apiResponseParsers";
-import type { SettingsAPIClient } from "@/hooks/settingsContracts";
+import type { SettingsAPIClient } from "@/api/types";
 
 const DEFAULT_BASE_URL = "/api/v1";
 

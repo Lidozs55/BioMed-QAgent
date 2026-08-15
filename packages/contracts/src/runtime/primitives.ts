@@ -1,5 +1,20 @@
-import { APIError } from "@/hooks/settingsContracts";
-import type { JsonValue } from "@/runtime/contracts";
+/**
+ * Shared runtime validation primitives (path-based, APIError-throwing).
+ *
+ * Single home for the assert/opt helpers that the wire parsers need. These
+ * used to be duplicated three times on the frontend
+ * (``settingsParsers.ts`` / ``eventValidatorHelpers.ts`` / inline copies in
+ * ``apiResponseParsers.ts``); frontend and any other consumer now import them
+ * from here.
+ *
+ * NOTE: the deterministic Dataset Core keeps its own strict primitives in
+ * ``server/src/dataset/contracts/primitives.ts`` on purpose — that layer
+ * validates domain objects with ``extra="forbid"`` semantics and throws
+ * ``TypeError``, which is a different validation contract from wire parsing.
+ */
+
+import type { JsonValue } from "../json.js";
+import { APIError } from "./errors.js";
 
 export function assertJsonValue(v: unknown, path: string): JsonValue {
   if (v === null) return null;
@@ -81,6 +96,18 @@ export function optBoolean(v: unknown, path: string): boolean | undefined {
   return v;
 }
 
+export function optString(v: unknown, path: string): string | undefined {
+  if (v === undefined || v === null) return undefined;
+  if (typeof v !== "string") throw new APIError(502, `Expected optional string at ${path}, got ${typeof v}`);
+  return v;
+}
+
+export function optNumber(v: unknown, path: string): number | undefined {
+  if (v === undefined) return undefined;
+  if (typeof v !== "number" || !Number.isFinite(v)) throw new APIError(502, `Expected optional number at ${path}, got ${typeof v}`);
+  return v;
+}
+
 export function optSchemaVersion(v: unknown, path: string): "1.0" | undefined {
   if (v === undefined) return undefined;
   if (v === "1.0") return "1.0";
@@ -111,6 +138,10 @@ export function assertNonNegativeInt(v: unknown, path: string): number {
 }
 
 export function assertOptionalNonNegativeInt(v: unknown, path: string): number | null {
-  const n = assertOptionalNull(v, path, (x, p) => { const num = assertNumber(x, p); if (num < 0 || !Number.isInteger(num)) throw new APIError(502, `Expected non-negative integer at ${p}, got ${num}`); return num; });
+  const n = assertOptionalNull(v, path, (x, p) => {
+    const num = assertNumber(x, p);
+    if (num < 0 || !Number.isInteger(num)) throw new APIError(502, `Expected non-negative integer at ${p}, got ${num}`);
+    return num;
+  });
   return n;
 }

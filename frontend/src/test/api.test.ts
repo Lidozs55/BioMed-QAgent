@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { APIError } from "@/hooks/settingsContracts";
+import { APIError } from "@/api/errors";
 import {
   createAPIClient,
   type FetchLike,

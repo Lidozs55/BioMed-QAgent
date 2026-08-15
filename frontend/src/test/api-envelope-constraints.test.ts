@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createAPIClient, type FetchLike } from "@/hooks/useAPI";
-import { APIError } from "@/hooks/settingsContracts";
+import { APIError } from "@/api/errors";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });

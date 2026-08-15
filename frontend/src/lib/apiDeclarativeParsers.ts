@@ -2,12 +2,12 @@
 /*  Declarative manifest validators — extracted from apiEnvelopeParsers */
 /* ------------------------------------------------------------------ */
 
-import { APIError } from "@/hooks/settingsContracts";
-import type { DeclarativeSkillManifest } from "@/hooks/settingsContracts";
+import { APIError } from "@/api/errors";
+import type { DeclarativeSkillManifest } from "@biomed/contracts";
 import {
   assertString, assertBoolean, assertNumber, assertObject, assertArray,
   assertJsonRecord, assertJsonValue,
-} from "@/lib/eventValidatorHelpers";
+} from "@biomed/contracts";
 
 export function assertHttpMethod(v: unknown, path: string): "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS" {
   if (v === "GET") return "GET";

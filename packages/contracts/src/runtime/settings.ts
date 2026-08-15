@@ -1,40 +1,29 @@
-/* ------------------------------------------------------------------ */
-/*  Settings/model response parsers — reject malformed JSON at boundary */
-/* ------------------------------------------------------------------ */
+/**
+ * Settings / personalization / vendor / model response parsers.
+ *
+ * Reject malformed JSON at the wire boundary. Moved verbatim from
+ * ``frontend/src/hooks/settingsParsers.ts`` so the frontend client and any
+ * other consumer share one parser per DTO (types in ``../settings.js``).
+ */
 
+import type {
+  CapabilitySource,
+  ModelInfo,
+  ModelSettings,
+  Personality,
+  PersonalizationSettings,
+  VendorInfo,
+} from "../settings.js";
+import { APIError } from "./errors.js";
 import {
-  APIError,
-  type CapabilitySource,
-  type ModelInfo,
-  type ModelSettings,
-  type Personality,
-  type PersonalizationSettings,
-  type VendorInfo,
-} from "@/hooks/settingsContracts";
-
-/* ---- Type assertions ---- */
-
-function assertString(v: unknown, path: string): string {
-  if (typeof v !== "string") throw new APIError(502, `Expected string at ${path}, got ${typeof v}`);
-  return v;
-}
-
-function assertNumber(v: unknown, path: string): number {
-  if (typeof v !== "number" || !Number.isFinite(v)) throw new APIError(502, `Expected finite number at ${path}, got ${typeof v}`);
-  return v;
-}
-
-function assertBoolean(v: unknown, path: string): boolean {
-  if (typeof v !== "boolean") throw new APIError(502, `Expected boolean at ${path}, got ${typeof v}`);
-  return v;
-}
-
-function assertObject(v: unknown, path: string): Record<string, unknown> {
-  if (v === null || typeof v !== "object" || Array.isArray(v)) throw new APIError(502, `Expected object at ${path}, got ${typeof v}`);
-  const result: Record<string, unknown> = {};
-  for (const key of Object.keys(v)) result[key] = Reflect.get(v, key);
-  return result;
-}
+  assertBoolean,
+  assertNumber,
+  assertObject,
+  assertString,
+  optBoolean,
+  optNumber,
+  optString,
+} from "./primitives.js";
 
 /** Settings response source — unavailable capacity is explicitly "unknown". */
 function assertSettingsSource(v: unknown, path: string): "catalog" | "user" | "inferred" | "unknown" {
@@ -51,28 +40,6 @@ function assertCapabilitySource(v: unknown, path: string): CapabilitySource {
   if (v === "api") return "api";
   throw new APIError(502, `Expected catalog|api at ${path}, got ${String(v)}`);
 }
-
-/* ---- Optional assertions (absent = undefined; present + wrong type = reject) ---- */
-
-function optNumber(v: unknown, path: string): number | undefined {
-  if (v === undefined) return undefined;
-  if (typeof v !== "number" || !Number.isFinite(v)) throw new APIError(502, `Expected optional number at ${path}, got ${typeof v}`);
-  return v;
-}
-
-function optBoolean(v: unknown, path: string): boolean | undefined {
-  if (v === undefined) return undefined;
-  if (typeof v !== "boolean") throw new APIError(502, `Expected optional boolean at ${path}, got ${typeof v}`);
-  return v;
-}
-
-function optString(v: unknown, path: string): string | undefined {
-  if (v === undefined || v === null) return undefined;
-  if (typeof v !== "string") throw new APIError(502, `Expected optional string at ${path}, got ${typeof v}`);
-  return v;
-}
-
-/* ---- Concrete parsers ---- */
 
 /** Parse a settings response body into ModelSettings, rejecting malformed shapes. */
 export function parseModelSettings(body: unknown): ModelSettings {

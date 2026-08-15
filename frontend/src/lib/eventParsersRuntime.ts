@@ -1,8 +1,6 @@
-import { APIError } from "@/hooks/settingsContracts";
+import { APIError } from "@/api/errors";
+import { parseBuildResult } from "@biomed/contracts";
 import type {
-  BindingFailureDetail,
-  BuildResult,
-  BuildResultStatus,
   ErrorCode,
   EventPayload,
   JsonValue,
@@ -14,7 +12,7 @@ import type {
   SubagentStatus,
   SubagentType,
 } from "@/runtime/contracts";
-import { assertString, assertNumber, assertOptionalNull, assertJsonRecord } from "./eventValidatorHelpers";
+import { assertString, assertNumber, assertOptionalNull, assertJsonRecord } from "@biomed/contracts";
 import { parseErrorDetail } from "./eventParsersPipeline";
 
 export type SubagentEventPayload = Extract<
@@ -103,18 +101,6 @@ function assertStringArray(value: unknown, path: string): string[] {
   );
 }
 
-function assertBuildResultStatus(value: unknown, path: string): BuildResultStatus {
-  switch (value) {
-    case "succeeded":
-    case "partial_success":
-    case "no_data":
-    case "spec_rejected":
-      return value;
-    default:
-      throw new APIError(502, `Invalid build result status at ${path}`);
-  }
-}
-
 function assertErrorCode(value: unknown, path: string): ErrorCode {
   switch (value) {
     case "configuration_error":
@@ -143,38 +129,6 @@ function assertStageName(value: unknown, path: string): StageName {
     default:
       throw new APIError(502, `Invalid stage name at ${path}`);
   }
-}
-
-function parseBuildResult(value: unknown, path: string): BuildResult {
-  const result = assertJsonRecord(value, path);
-  return {
-    status: assertBuildResultStatus(Reflect.get(result, "status"), `${path}.status`),
-    valid_row_count: assertNonNegativeInteger(Reflect.get(result, "valid_row_count"), `${path}.valid_row_count`),
-    successful_sources: assertStringArray(Reflect.get(result, "successful_sources"), `${path}.successful_sources`),
-    rejected_sources: assertStringArray(Reflect.get(result, "rejected_sources"), `${path}.rejected_sources`),
-    available_artifact_roles: assertStringArray(Reflect.get(result, "available_artifact_roles"), `${path}.available_artifact_roles`),
-    publication_id: assertOptionalNull(Reflect.get(result, "publication_id"), `${path}.publication_id`, assertRequiredString),
-    reason_codes: assertStringArray(Reflect.get(result, "reason_codes"), `${path}.reason_codes`),
-    user_summary: assertString(Reflect.get(result, "user_summary"), `${path}.user_summary`),
-    recommended_next_action: assertString(Reflect.get(result, "recommended_next_action"), `${path}.recommended_next_action`),
-    build_id: assertOptionalNull(Reflect.get(result, "build_id"), `${path}.build_id`, assertRequiredString),
-    binding_failures: parseBindingFailures(Reflect.get(result, "binding_failures"), `${path}.binding_failures`),
-  };
-}
-
-function parseBindingFailures(value: unknown, path: string): BindingFailureDetail[] {
-  if (value === undefined || value === null) return [];
-  if (!Array.isArray(value)) {
-    throw new APIError(502, `Expected binding failure array at ${path}`);
-  }
-  return value.map((entry, index) => {
-    const obj = assertJsonRecord(entry, `${path}[${index}]`);
-    return {
-      binding_id: assertRequiredString(Reflect.get(obj, "binding_id"), `${path}[${index}].binding_id`),
-      reason_code: assertRequiredString(Reflect.get(obj, "reason_code"), `${path}[${index}].reason_code`),
-      message: assertString(Reflect.get(obj, "message"), `${path}[${index}].message`),
-    };
-  });
 }
 
 function assertHex64(value: unknown, path: string): string {

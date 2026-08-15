@@ -3,13 +3,25 @@
 /*  Each parser field-level-checks its declared return type.           */
 /* ------------------------------------------------------------------ */
 
-import { APIError } from "@/hooks/settingsContracts";
+import { APIError } from "@/api/errors";
+import {
+  assertBuildResultStatus,
+  parseBuildResult,
+  assertString,
+  assertNumber,
+  assertObject,
+  assertArray,
+  assertStringOrNull,
+  assertOptionalNull,
+  assertFinite,
+  optSchemaVersion,
+  assertHex64,
+  assertNonNegativeInt,
+  assertJsonRecord,
+} from "@biomed/contracts";
 import type {
-  BindingFailureDetail,
   BuildDetail,
   BuildPage,
-  BuildResult,
-  BuildResultStatus,
   DatasetManifest,
   DatasetPublication,
   ErrorCode,
@@ -24,9 +36,6 @@ import type {
   TaskSnapshot,
 } from "@/runtime/contracts";
 import { parseEventPayload } from "@/lib/eventParsers";
-import {
-  assertString, assertNumber, assertObject, assertArray, assertStringOrNull, assertOptionalNull, assertFinite, optSchemaVersion, assertHex64, assertNonNegativeInt, assertJsonRecord,
-} from "@/lib/eventValidatorHelpers";
 
 function optionalNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
@@ -174,35 +183,6 @@ function assertErrorCode(v: unknown, path: string): ErrorCode {
 }
 
 const STAGE_NAMES = ["discovery", "acquisition", "processing", "artifact_build", "validation"] as const;
-
-function parseBuildResult(json: unknown, path: string): BuildResult {
-  const obj = assertObject(json, path);
-  return {
-    status: assertBuildResultStatus(Reflect.get(obj, "status"), `${path}.status`),
-    valid_row_count: assertNonNegativeInt(Reflect.get(obj, "valid_row_count"), `${path}.valid_row_count`),
-    successful_sources: assertArray(Reflect.get(obj, "successful_sources"), `${path}.successful_sources`, (value, index) => assertString(value, `${path}.successful_sources[${index}]`)),
-    rejected_sources: assertArray(Reflect.get(obj, "rejected_sources"), `${path}.rejected_sources`, (value, index) => assertString(value, `${path}.rejected_sources[${index}]`)),
-    available_artifact_roles: assertArray(Reflect.get(obj, "available_artifact_roles"), `${path}.available_artifact_roles`, (value, index) => assertString(value, `${path}.available_artifact_roles[${index}]`)),
-    publication_id: assertStringOrNull(Reflect.get(obj, "publication_id"), `${path}.publication_id`),
-    reason_codes: assertArray(Reflect.get(obj, "reason_codes"), `${path}.reason_codes`, (value, index) => assertString(value, `${path}.reason_codes[${index}]`)),
-    user_summary: assertString(Reflect.get(obj, "user_summary"), `${path}.user_summary`),
-    recommended_next_action: assertString(Reflect.get(obj, "recommended_next_action"), `${path}.recommended_next_action`),
-    build_id: assertOptionalNull(Reflect.get(obj, "build_id"), `${path}.build_id`, (value, p) => assertString(value, p, true)),
-    binding_failures: parseBindingFailures(Reflect.get(obj, "binding_failures"), `${path}.binding_failures`),
-  };
-}
-
-function parseBindingFailures(value: unknown, path: string): BindingFailureDetail[] {
-  if (value === undefined || value === null) return [];
-  return assertArray(value, path, (entry, index) => {
-    const obj = assertObject(entry, `${path}[${index}]`);
-    return {
-      binding_id: assertString(Reflect.get(obj, "binding_id"), `${path}[${index}].binding_id`, true),
-      reason_code: assertString(Reflect.get(obj, "reason_code"), `${path}[${index}].reason_code`, true),
-      message: assertString(Reflect.get(obj, "message"), `${path}[${index}].message`),
-    };
-  });
-}
 
 function parseRunSummary(json: unknown, path: string): RunSummary {
   const obj = assertObject(json, path);
