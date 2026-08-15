@@ -454,25 +454,36 @@ class CacheStore:
           清理全部遗留快照；
         - ``json_bak`` 存在但 manifest 最终文件不存在 → 发布未完成，还原
           CSV 与 manifest 快照（或删除已发布的新文件）；
-        - 仅 ``csv_bak`` 存在 → 不可能（清理顺序保证 CSV 快照先被删除），
-          防御性还原即可。
+        - 仅 ``csv_bak`` 存在 → 崩溃发生在两次快照重命名之间（CSV 已快照、
+          manifest 尚未快照，其最终文件仍是旧版本）：快照未完成，还原
+          CSV 快照，旧状态完整。
         """
-        if json_bak.exists() and not manifest_path.exists():
-            # 崩溃发生在 manifest 发布之前：回退到发布前状态。
-            if csv_bak.exists():
+        if json_bak.exists():
+            if not manifest_path.exists():
+                # 崩溃发生在 manifest 发布之前：回退到发布前状态。
+                if csv_bak.exists():
+                    with contextlib.suppress(OSError):
+                        os.replace(csv_bak, main_data_path)
+                elif main_data_path.exists():
+                    with contextlib.suppress(OSError):
+                        main_data_path.unlink()
                 with contextlib.suppress(OSError):
-                    os.replace(csv_bak, main_data_path)
-            elif main_data_path.exists():
-                with contextlib.suppress(OSError):
-                    main_data_path.unlink()
-            with contextlib.suppress(OSError):
-                os.replace(json_bak, manifest_path)
+                    os.replace(json_bak, manifest_path)
+            else:
+                # 已越过 commit point：清理全部快照。
+                for bak in (csv_bak, json_bak):
+                    if bak.exists():
+                        with contextlib.suppress(OSError):
+                            bak.unlink()
             return
-        # 发布已完成（或没有遗留）：清理全部快照。
-        for bak in (csv_bak, json_bak):
-            if bak.exists():
-                with contextlib.suppress(OSError):
-                    bak.unlink()
+        if csv_bak.exists():
+            # 仅 CSV 快照存在 → 崩溃于两次快照重命名之间。发布协议保证
+            # 清理顺序也是先 CSV 后 manifest，因此该状态不可能来自清理
+            # 阶段；它是快照未完成、旧 CSV 唯一副本，还原而非删除。
+            with contextlib.suppress(OSError):
+                os.replace(csv_bak, main_data_path)
+            return
+        # 无任何遗留。
 
     def _load_manifest(self, path: Path) -> CacheDatasetManifest:
         data = json.loads(path.read_text(encoding="utf-8"))

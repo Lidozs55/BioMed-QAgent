@@ -640,6 +640,78 @@ def test_commit_update_failure_at_csv_snapshot_keeps_old_state(
     assert rows[0]["record_id"] == "r1"
 
 
+def test_commit_recovers_crash_between_snapshot_renames_keeps_old_state(
+    store: CacheStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """崩溃窗口：CSV 已快照、manifest 尚未快照（两次快照重命名之间）。
+
+    模拟：
+        os.replace(main_data.csv, main_data.csv.bak) 成功 → 进程崩溃。
+    状态：csv.bak 存在、CSV 缺失、manifest.json（旧）存在、json.bak 缺失。
+
+    下次 commit 的 recovery 必须把唯一旧 CSV 副本**还原**而不是删除；
+    若随后写盘失败，旧 dataset 仍须完整可读（否则数据永久丢失）。
+    """
+    import os as _os
+
+    _commit(store, topic="old", task="t1", rows=[_row(record_id="r1", dataset_id="ds1")])
+    d = _ds_dir(store)
+
+    # 崩溃点：第一次快照重命名完成，第二次（manifest）未执行
+    _os.replace(d / "main_data.csv", d / "main_data.csv.bak")
+    assert not (d / "main_data.csv").exists()
+    assert (d / "main_data.csv.bak").exists()
+    assert (d / "manifest.json").exists()
+    assert not (d / "manifest.json.bak").exists()
+
+    # 下次 commit：recovery 先执行；随后写 .tmp 失败 → 回滚后旧数据必须可读。
+    def fail_write(*_args: object, **_kwargs: object) -> None:
+        raise OSError("injected write failure")
+
+    monkeypatch.setattr(
+        "database.cache_store.CacheStore._write_main_data", fail_write
+    )
+    with pytest.raises(OSError, match="injected write failure"):
+        _commit(store, topic="new", task="t2", rows=[_row(record_id="r2", dataset_id="ds1")])
+
+    result = store.get_dataset("user_import", "ds1")
+    assert result is not None
+    manifest, rows = result
+    assert manifest.topic == "old"
+    assert manifest.created_by_task_id == "t1"
+    assert len(rows) == 1
+    assert rows[0]["record_id"] == "r1"
+    assert sorted(p.name for p in d.iterdir()) == [
+        "main_data.csv",
+        "manifest.json",
+    ]
+
+
+def test_commit_recovers_crash_between_snapshot_renames_then_publishes(
+    store: CacheStore,
+) -> None:
+    """同一崩溃窗口，但下次 commit 成功：recovery 还原旧 CSV 后正常发布新版本。"""
+    import os as _os
+
+    _commit(store, topic="old", task="t1", rows=[_row(record_id="r1", dataset_id="ds1")])
+    d = _ds_dir(store)
+
+    _os.replace(d / "main_data.csv", d / "main_data.csv.bak")
+    assert not (d / "main_data.csv").exists()
+
+    _commit(store, topic="new", task="t2", rows=[_row(record_id="r2", dataset_id="ds1")])
+
+    result = store.get_dataset("user_import", "ds1")
+    assert result is not None
+    manifest, rows = result
+    assert manifest.topic == "new"
+    assert rows[0]["record_id"] == "r2"
+    assert sorted(p.name for p in d.iterdir()) == [
+        "main_data.csv",
+        "manifest.json",
+    ]
+
+
 def test_commit_recovers_leftover_backups_before_publish(
     store: CacheStore,
 ) -> None:

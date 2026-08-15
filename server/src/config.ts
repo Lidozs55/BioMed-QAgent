@@ -1,5 +1,7 @@
 type Environment = Record<string, string | undefined>;
 
+import path from "node:path";
+
 export interface HostConfig {
   publicHost: string;
   publicPort: number;
@@ -64,4 +66,25 @@ export function parseHostConfig(environment: Environment): HostConfig {
         ["0", "1"] as const,
       ) === "1",
   };
+}
+
+/**
+ * 解析 OUTPUT_DIR 为绝对路径。
+ *
+ * - 未设置或空 → 默认 <repositoryRoot>/data/output；
+ * - 绝对路径 → 原样解析；
+ * - 相对路径 → 锚定 repositoryRoot 而非进程 cwd。
+ *
+ * 早期实现用 `path.resolve(OUTPUT_DIR)` 按 cwd 解析，导致在 `server/`
+ * 目录下运行 server 包 dev/start 脚本时数据写到 `server/data/`（例如
+ * 根 .env 写 `OUTPUT_DIR=data/output` 时）。锚定后行为与 cwd 无关。
+ */
+export function resolveOutputDir(repositoryRoot: string, raw: string | undefined): string {
+  const trimmed = raw?.trim();
+  if (trimmed === undefined || trimmed === "") {
+    return path.join(repositoryRoot, "data", "output");
+  }
+  return path.isAbsolute(trimmed)
+    ? path.resolve(trimmed)
+    : path.resolve(repositoryRoot, trimmed);
 }
