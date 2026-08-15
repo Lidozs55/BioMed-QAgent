@@ -10,7 +10,7 @@
 - 代码状态：**PASS**（全量测试与门禁全绿）
 - P0: 0
 - P1: 0
-- P2: 1（M12 无 axe 级可访问性自动化）
+- P2: 0
 - P3: 1（M12 长列表性能无显式 UI 测试）
 
 ## 模块状态
@@ -28,25 +28,26 @@
 | M09 DB bridge/Cache | PASS |
 | M10 设置/模型/密钥 | PASS（模型注册表拆分） |
 | M11 HTTP API | PASS（http 基础设施统一） |
-| M12 前端/UI/a11y | PASS（P2/P3 各 1） |
+| M12 前端/UI/a11y | PASS（P3 1） |
 | M13 构建/CI/Windows | PASS |
-| M14 性能/故障注入 | PARTIAL |
-| M15 E2E 红队/验收 | PARTIAL |
+| M14 性能/故障注入 | PASS（10k/并发已测；磁盘满/句柄耗尽仍 NOT_RUN） |
+| M15 E2E 红队/验收 | PASS（真实外部 10 端点已验；恶意组合仍 NOT_RUN） |
 
 ## 质量门禁证据
 
-- `pnpm test`：contracts 14、server 722 通过 + 11 跳过、frontend 736 通过。
+- `pnpm test`：contracts 14、server 724 通过 + 11 跳过、frontend 737 通过。
 - `pnpm lint` / `typecheck` / `build`：通过。
 - bridge self-test / pytest(79) / ruff：通过。
 
 ## 本轮项目加固（延续自 Run #1）
 
 - `parseEvents` 事件日志损坏 fail-closed（坏 JSON 行号 + sequence 缺口检测）。
-- 回归测试：`event-log-corruption.test.ts`、`ws-protocol.test.ts`、`model-settings-migration.test.ts`、`composer-a11y.test.tsx`。
+- 回归测试：`event-log-corruption.test.ts`、`ws-protocol.test.ts`、`model-settings-migration.test.ts`、`composer-a11y.test.tsx`、`accessibility-axe.test.tsx`、`concurrent-tasks.test.ts`、`large-integrate.test.ts`。
+- 真实外部数据 live smoke（`BIOMED_LIVE_SMOKE=1`）10 端点通过。
 - 全部迁移到 Run #2 并验证通过。
 
 ## 未完成 / 建议下一轮
 
-- M14 性能/故障注入（10k 记录、并发压力、磁盘满/句柄耗尽、慢消费者背压）。
-- M15 真实外部数据源 fixture + 完整恶意输入组合。
-- M12 axe 全量可访问性检查。
+- 磁盘满/句柄耗尽、慢消费者 WS 背压的专用故障注入。
+- 完整恶意输入组合红队。
+- 长列表/超长表格性能 UI 测试。

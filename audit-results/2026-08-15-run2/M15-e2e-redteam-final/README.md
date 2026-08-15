@@ -8,7 +8,8 @@
 
 - fixture 级 E2E（SUCCESS / PARTIAL_SUCCESS / NO_DATA / SPEC_REJECTED）全过。
 - HIL 数据纠正 E2E、WS 断线恢复、取消/重启/straggler 语义全过。
-- 未执行：真实外部数据源 fixture、完整恶意输入组合。
+- 真实外部数据源 live smoke 已执行：`BIOMED_LIVE_SMOKE=1` 下 10 端点通过（ncbi/geo/gdc/xena/pdb/pubchem/reactome/chembl/uniprot/browser），VLM 因缺 DashScope 凭据跳过。
+- 未执行：完整恶意输入组合。
 
 ## 最终验收（§8）
 

@@ -9,7 +9,7 @@
 
 | 命令 | 结果 |
 | --- | --- |
-| `pnpm test` | PASS：contracts 14/14；server 68 文件 722 通过、11 跳过；frontend 55 文件 736/736 |
+| `pnpm test` | PASS：contracts 14/14；server 70 文件 724 通过、11 跳过；frontend 56 文件 737/737 |
 | `pnpm lint` | PASS |
 | `pnpm typecheck` | PASS（前端为 `tsc -b` 真实门禁） |
 | `pnpm build` | PASS |
@@ -24,4 +24,4 @@
 
 ## 说明
 
-- 已迁移 Run #1 的项目加固（事件日志损坏 fail-closed + 4 条回归测试）并在本基线验证通过，故 server/frontend 计数高于纯新基线（714/735 -> 722/736）。
+- 已迁移 Run #1 的项目加固（事件日志损坏 fail-closed + 4 条回归测试）并新增并发/10k/a11y 回归测试，故 server/frontend 计数高于纯新基线（714/735 -> 724/737）。
