@@ -1,6 +1,7 @@
 ﻿import { CheckCircleIcon, Image, SpeakerHigh, VideoCamera, XCircleIcon } from "@phosphor-icons/react";
 
 import { Separator } from "@/components/ui/separator";
+import { formatTokenCount } from "@/lib/tokenFormat";
 import { cn } from "@/lib/utils";
 import type { CapabilitySource, ModelInfo } from "@/hooks/useAPI";
 
@@ -57,18 +58,6 @@ function CapabilityBadge({
 }
 
 /* ------------------------------------------------------------------ */
-/*  Number formatter                                                   */
-/* ------------------------------------------------------------------ */
-
-function fn(n: number): string {
-  return n >= 1_000_000
-    ? `${(n / 1_000_000).toFixed(1)}M`
-    : n >= 1_000
-      ? `${(n / 1_000).toFixed(0)}K`
-      : String(n);
-}
-
-/* ------------------------------------------------------------------ */
 /*  ModelInfoCard                                                      */
 /* ------------------------------------------------------------------ */
 
@@ -120,15 +109,15 @@ export function ModelInfoCard({ model }: { model: RichModelInfo }) {
       <div className="grid grid-cols-2 gap-3 text-sm">
         <div>
           <span className="text-xs text-muted-foreground">输入上下文窗口</span>
-          <p className="mt-0.5 font-medium">{fn(model.context_window)} tokens</p>
+          <p className="mt-0.5 font-medium">{formatTokenCount(model.context_window)} tokens</p>
         </div>
         <div>
           <span className="text-xs text-muted-foreground">输出最大上限</span>
           <p className="mt-0.5 font-medium">
-            {fn(outputLimit)} tokens
+            {formatTokenCount(outputLimit)} tokens
             {model.max_output_tokens != null && model.max_output_tokens !== model.suggested_max_tokens && (
               <span className="ml-1 text-[10px] text-muted-foreground">
-                (建议: {fn(model.suggested_max_tokens)})
+                (建议: {formatTokenCount(model.suggested_max_tokens)})
               </span>
             )}
           </p>

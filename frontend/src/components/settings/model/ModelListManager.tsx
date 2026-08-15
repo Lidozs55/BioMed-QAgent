@@ -16,6 +16,7 @@ import type {
   ProviderInfo,
   SettingsAPIClient,
 } from "@/hooks/useAPI";
+import { formatContextWindow } from "@/lib/tokenFormat";
 import { cn } from "@/lib/utils";
 
 interface ModelListManagerProps {
@@ -30,13 +31,6 @@ interface ModelListManagerProps {
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : "请求失败";
-}
-
-function formatWindow(tokens: number | null | undefined): string {
-  if (!tokens || tokens <= 0) return "未知";
-  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
-  if (tokens >= 1_024) return `${(tokens / 1_024).toFixed(0)}K`;
-  return String(tokens);
 }
 
 /** 来源标签：API/目录导入的模型显示供应商名称，手动添加的显示“手动配置”。 */
@@ -236,7 +230,7 @@ export function ModelListManager({
                     </div>
                     <p className="mt-0.5 truncate text-xs text-muted-foreground">
                       {model.provider_name} · {model.model_id} · 上下文{" "}
-                      {formatWindow(model.context_window)}
+                      {formatContextWindow(model.context_window)}
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-1.5">
@@ -281,9 +275,9 @@ export function ModelListManager({
                         <dt className="text-muted-foreground">模型 ID</dt>
                         <dd className="truncate">{model.model_id}</dd>
                         <dt className="text-muted-foreground">上下文窗口</dt>
-                        <dd>{formatWindow(model.context_window)}</dd>
+                        <dd>{formatContextWindow(model.context_window)}</dd>
                         <dt className="text-muted-foreground">最大输出</dt>
-                        <dd>{formatWindow(model.max_output_tokens)}</dd>
+                        <dd>{formatContextWindow(model.max_output_tokens)}</dd>
                         <dt className="text-muted-foreground">能力</dt>
                         <dd>{capabilitiesLabel(model.capabilities)}</dd>
                         <dt className="text-muted-foreground">来源</dt>

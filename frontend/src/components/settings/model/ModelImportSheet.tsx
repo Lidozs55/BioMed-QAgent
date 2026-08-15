@@ -23,6 +23,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { formatContextWindow } from "@/lib/tokenFormat";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -70,13 +71,6 @@ const EMPTY_MANUAL_DRAFT: ManualDraft = {
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : "请求失败";
-}
-
-function formatWindow(tokens: number | null | undefined): string {
-  if (!tokens || tokens <= 0) return "未知";
-  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
-  if (tokens >= 1_024) return `${(tokens / 1_024).toFixed(0)}K`;
-  return String(tokens);
 }
 
 function defaultParams(discovered: DiscoveredModelInfo): Record<string, unknown> {
@@ -621,7 +615,7 @@ export function ModelImportSheet({
                             <span className="text-xs text-muted-foreground">
                               {item.capability_source === "api"
                                 ? "未知"
-                                : formatWindow(item.context_window)}
+                                : formatContextWindow(item.context_window)}
                             </span>
                             {capabilityChips(item.capabilities)}
                           </div>
@@ -722,7 +716,7 @@ export function ModelImportSheet({
                                 <p className="text-sm font-medium">{model.name}</p>
                                 <p className="mt-0.5 text-xs text-muted-foreground">
                                   {model.model_id} · 上下文{" "}
-                                  {formatWindow(model.context_window)}
+                                  {formatContextWindow(model.context_window)}
                                 </p>
                               </div>
                               <ParameterEditor

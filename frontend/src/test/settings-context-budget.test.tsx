@@ -92,7 +92,7 @@ describe("SettingsPanel current-model info", () => {
 
     expect(await screen.findByText("qwen-max")).toBeInTheDocument();
     expect(screen.getByText("https://dashscope.aliyuncs.com/compatible-mode/v1")).toBeInTheDocument();
-    expect(screen.getByText("32K")).toBeInTheDocument();
+    expect(screen.getByText("32.8K")).toBeInTheDocument();
     expect(screen.getByText("4096")).toBeInTheDocument();
     expect(screen.getByText("Temperature")).toBeInTheDocument();
 

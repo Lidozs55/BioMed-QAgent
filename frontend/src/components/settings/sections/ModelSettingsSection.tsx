@@ -6,16 +6,10 @@ import { ProviderManager } from "@/components/settings/model/ProviderManager";
 import { SettingCard, SettingSection } from "@/components/settings/primitives";
 import type { ModelSettingsSectionProps } from "@/components/settings/types";
 import type { ManagedModelInfo, ParameterSpec, ProviderInfo } from "@/hooks/useAPI";
+import { formatContextWindow } from "@/lib/tokenFormat";
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : "请求失败";
-}
-
-function formatWindow(tokens: number | null | undefined): string {
-  if (!tokens || tokens <= 0) return "未知";
-  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
-  if (tokens >= 1_024) return `${(tokens / 1_024).toFixed(0)}K`;
-  return String(tokens);
 }
 
 function paramLabel(specs: ParameterSpec[], key: string): string {
@@ -64,7 +58,7 @@ function ActiveModelInfo({
         <div className="min-w-0">
           <p className="truncate text-sm font-medium">{model.name}</p>
           <p className="mt-0.5 truncate text-xs text-muted-foreground">
-            {model.provider_name} · {model.model_id} · 上下文 {formatWindow(model.context_window)}
+            {model.provider_name} · {model.model_id} · 上下文 {formatContextWindow(model.context_window)}
           </p>
         </div>
         {model.provider_api_key_configured && (
@@ -77,7 +71,7 @@ function ActiveModelInfo({
       </div>
       <div className="mt-4 border-t pt-3">
         <p className="text-xs text-muted-foreground">
-          上下文窗口：{formatWindow(settings.context_window)} · 参数修改请到“模型列表”中编辑该模型。
+          上下文窗口：{formatContextWindow(settings.context_window)} · 参数修改请到“模型列表”中编辑该模型。
         </p>
       </div>
     </div>
@@ -90,7 +84,7 @@ function LegacyActiveModelInfo({
   settings: NonNullable<ModelSettingsSectionProps["settings"]>;
 }) {
   const params: Record<string, unknown> = {
-    上下文窗口: formatWindow(settings.context_window),
+    上下文窗口: formatContextWindow(settings.context_window),
     "最大输出 Tokens": settings.max_tokens,
     Temperature: settings.advanced.temperature ?? 0.7,
     "Top P": settings.advanced.top_p ?? 1,
