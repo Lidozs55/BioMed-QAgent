@@ -20,50 +20,30 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  TOKEN_UNIT_MULTIPLIER,
+  decomposeTokenCount,
+  formatTokenCount,
+  type TokenUnit,
+} from "@/lib/tokenFormat";
 import { cn } from "@/lib/utils";
 
 /* ------------------------------------------------------------------ */
 /*  Constants                                                          */
 /* ------------------------------------------------------------------ */
 
-/** Common context window presets in tokens, smallest first. */
+/** Common context window presets in tokens (base-10 rounds), smallest first. */
 const COMMON_WINDOWS = [
-  8_192,
-  16_384,
-  32_768,
-  65_536,
-  131_072,
-  262_144,
-  524_288,
+  8_000,
+  16_000,
+  32_000,
+  64_000,
+  128_000,
+  256_000,
+  512_000,
   1_000_000,
   2_000_000,
 ] as const;
-
-const PRESET_LABELS: Record<number, string> = {
-  8_192: "8K",
-  16_384: "16K",
-  32_768: "32K",
-  65_536: "64K",
-  131_072: "128K",
-  262_144: "256K",
-  524_288: "512K",
-  1_000_000: "1M",
-  2_000_000: "2M",
-};
-
-type Unit = "B" | "K" | "M";
-
-const UNIT_MULTIPLIER: Record<Unit, number> = { B: 1, K: 1_024, M: 1_048_576 };
-
-function formatTokens(n: number): string {
-  if (n >= 1_048_576) return `${(n / 1_048_576).toFixed(n % 1_048_576 === 0 ? 0 : 1)}M`;
-  if (n >= 1_024) return `${(n / 1_024).toFixed(n % 1_024 === 0 ? 0 : 1)}K`;
-  return String(n);
-}
-
-function windowLabel(tokens: number): string {
-  return PRESET_LABELS[tokens] ?? formatTokens(tokens);
-}
 
 /* ------------------------------------------------------------------ */
 /*  Props                                                              */
@@ -96,7 +76,7 @@ export function ContextWindowSelect({
     const push = (tokens: number) => {
       if (tokens > 0 && !seen.has(tokens)) {
         seen.add(tokens);
-        result.push({ tokens, label: windowLabel(tokens) });
+        result.push({ tokens, label: formatTokenCount(tokens) });
       }
     };
     for (const tokens of COMMON_WINDOWS) {
@@ -120,7 +100,7 @@ export function ContextWindowSelect({
       if (!Number.isFinite(tokens) || tokens <= 0) return;
       if (maxCatalogWindow > 0 && tokens > maxCatalogWindow) {
         toast.warning("超出该模型最大上下文限制", {
-          description: `该模型最大上下文为 ${formatTokens(maxCatalogWindow)} tokens，已自动调整为最大值`,
+          description: `该模型最大上下文为 ${formatTokenCount(maxCatalogWindow)} tokens，已自动调整为最大值`,
         });
         onChange(maxCatalogWindow);
         return;
@@ -163,7 +143,7 @@ export function ContextWindowSelect({
       </div>
       {maxCatalogWindow > 0 && value > maxCatalogWindow && (
         <FieldDescription className="text-destructive">
-          超出模型最大上下文窗口 ({formatTokens(maxCatalogWindow)})
+          超出模型最大上下文窗口 ({formatTokenCount(maxCatalogWindow)})
         </FieldDescription>
       )}
     </Field>
@@ -187,18 +167,12 @@ function CustomContextPopover({
 
   // Decompose current value into number + unit for the input
   const decomposed = useMemo(() => {
-    if (value <= 0) return { num: "", unit: "K" as Unit };
-    if (value >= 1_048_576 && value % 1_048_576 === 0) {
-      return { num: String(value / 1_048_576), unit: "M" as Unit };
-    }
-    if (value >= 1_024 && value % 1_024 === 0) {
-      return { num: String(value / 1_024), unit: "K" as Unit };
-    }
-    return { num: String(value), unit: "B" as Unit };
+    if (value <= 0) return { num: "", unit: "K" as TokenUnit };
+    return decomposeTokenCount(value);
   }, [value]);
 
   const [numStr, setNumStr] = useState(decomposed.num);
-  const [unit, setUnit] = useState<Unit>(decomposed.unit);
+  const [unit, setUnit] = useState<TokenUnit>(decomposed.unit);
   const [error, setError] = useState<string | null>(null);
 
   const handleApply = useCallback(() => {
@@ -207,17 +181,17 @@ function CustomContextPopover({
       setError("请输入正整数");
       return;
     }
-    const tokens = n * UNIT_MULTIPLIER[unit];
+    const tokens = n * TOKEN_UNIT_MULTIPLIER[unit];
     if (maxCatalogWindow > 0 && tokens > maxCatalogWindow) {
       // Clamp to max and notify
       onChange(maxCatalogWindow);
-      setError(`已调整为模型最大值 ${formatTokens(maxCatalogWindow)}`);
+      setError(`已调整为模型最大值 ${formatTokenCount(maxCatalogWindow)}`);
       setNumStr(
-        maxCatalogWindow >= 1_048_576
-          ? String(Math.round(maxCatalogWindow / 1_048_576))
-          : String(Math.round(maxCatalogWindow / 1_024)),
+        maxCatalogWindow >= 1_000_000
+          ? String(Math.round(maxCatalogWindow / 1_000_000))
+          : String(Math.round(maxCatalogWindow / 1_000)),
       );
-      setUnit(maxCatalogWindow >= 1_048_576 ? "M" : "K");
+      setUnit(maxCatalogWindow >= 1_000_000 ? "M" : "K");
       return;
     }
     setError(null);
@@ -254,7 +228,7 @@ function CustomContextPopover({
             className="h-8 flex-1"
             placeholder="数值"
           />
-          <Select value={unit} onValueChange={(v) => setUnit(v as Unit)}>
+          <Select value={unit} onValueChange={(v) => setUnit(v as TokenUnit)}>
             <SelectTrigger size="sm" className="w-16">
               <SelectValue />
             </SelectTrigger>
@@ -274,7 +248,7 @@ function CustomContextPopover({
         )}
         {maxCatalogWindow > 0 && (
           <p className="text-xs text-muted-foreground">
-            模型上限: {formatTokens(maxCatalogWindow)} tokens
+            模型上限: {formatTokenCount(maxCatalogWindow)} tokens
           </p>
         )}
         <Button size="sm" className="mt-1 w-full" onClick={handleApply}>

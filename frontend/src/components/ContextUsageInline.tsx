@@ -11,6 +11,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Spinner } from "@/components/ui/spinner";
+import { formatTokenCount } from "@/lib/tokenFormat";
 import { cn } from "@/lib/utils";
 
 /* ------------------------------------------------------------------ */
@@ -31,12 +32,6 @@ export interface ContextUsageInlineProps {
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
 /* ------------------------------------------------------------------ */
-
-function formatTokens(n: number): string {
-  if (n >= 1_048_576) return `${(n / 1_048_576).toFixed(1)}M`;
-  if (n >= 1_024) return `${(n / 1_024).toFixed(1)}K`;
-  return String(n);
-}
 
 function barColor(pct: number): string {
   if (pct >= 90) return "bg-destructive";
@@ -115,7 +110,7 @@ export function ContextUsageInline({
           </div>
           {/* Token count detail */}
           <p className="text-[11px] text-muted-foreground">
-            {formatTokens(usedTokens)} / {formatTokens(totalTokens)} tokens
+            {formatTokenCount(usedTokens)} / {formatTokenCount(totalTokens)} tokens
           </p>
           {/* Compact button */}
           <Button
