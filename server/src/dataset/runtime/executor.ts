@@ -151,7 +151,7 @@ export class DatasetBuildExecutor {
   private readonly cancellationRequested: (() => boolean) | null;
   private readonly cancellationSignal: AbortSignal | null;
   private readonly parameterScope: Readonly<Record<string, unknown>>;
-  private readonly implementationVersions: Readonly<Record<string, string>>;
+  private readonly implementationVersions: Readonly<Record<string, string>;
   private readonly sourceAssets: Readonly<Record<string, SourceAsset>>;
   private readonly mappingAssets: Readonly<Record<string, SourceAsset>>;
   private readonly resumeFrom: string | null;
@@ -238,7 +238,10 @@ export class DatasetBuildExecutor {
   }
 
   private isCancelled(): boolean {
-    return this.cancellationRequested !== null && this.cancellationRequested();
+    return (
+      (this.cancellationRequested !== null && this.cancellationRequested()) ||
+      this.cancellationSignal?.aborted === true
+    );
   }
 
   private recoverInflightAttempt(): void {
