@@ -9,11 +9,14 @@ import { cn } from "@/lib/utils";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Message, MessageContent } from "@/components/ui/message";
 import { Spinner } from "@/components/ui/spinner";
-import type { ToolCallItem } from "@/runtime/types";
+import type { DownloadControl, ToolCallItem } from "@/runtime/types";
+import { DownloadProgress } from "./DownloadProgress";
 import { formatToolCall } from "./toolLabels";
 
 interface ToolCallStepProps {
   item: ToolCallItem;
+  /** Pause/resume controls forwarded to download tool calls. */
+  downloadControl?: DownloadControl;
 }
 
 /**
@@ -22,11 +25,14 @@ interface ToolCallStepProps {
  * Phase 2 retired the find_skill/invoke_skill gateway, so no tool-specific
  * renderers remain; every tool call renders through the default bubble with
  * its toolLabels.ts entry (docs/migration/phase2-skills-tools-migration.md).
+ * Download tool calls additionally render a live progress strip (bound by the
+ * pipeline reducer from operation_progress events) with pause/resume.
  */
-export function ToolCallStep({ item }: ToolCallStepProps) {
+export function ToolCallStep({ item, downloadControl }: ToolCallStepProps) {
   const label = formatToolCall(item.toolName, item.arguments);
   const [expanded, setExpanded] = useState(false);
   const isRunning = item.status === "running";
+  const isDownload = item.progress?.kind === "downloaded_bytes";
 
   return (
     <Message align="start">
@@ -60,6 +66,18 @@ export function ToolCallStep({ item }: ToolCallStepProps) {
                 aria-hidden="true"
               />
             </button>
+            {isDownload && item.progress != null && (
+              <div className="mt-1.5">
+                <DownloadProgress
+                  runId={item.runId}
+                  status={item.status}
+                  progress={item.progress}
+                  control={downloadControl}
+                  resume={{ toolName: item.toolName, arguments: item.arguments }}
+                  expanded={expanded}
+                />
+              </div>
+            )}
             {expanded && (
               <div className="mt-1 flex flex-col gap-1 text-sm">
                 {item.arguments && (

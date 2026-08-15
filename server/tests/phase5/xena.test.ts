@@ -5,7 +5,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rm } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,7 +13,7 @@ import { gzipSync } from "node:zlib";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { ContentCache, CURATED_SOURCE_HOSTS } from "../../src/external/acquisition/index.js";
+import { ContentCache, CURATED_SOURCE_HOSTS, taskWorkDirs } from "../../src/external/acquisition/index.js";
 import { PublicHttpClient } from "../../src/external/network/index.js";
 import {
   DOWNLOAD_XENA_TOOL_NAME,
@@ -389,6 +389,55 @@ describe("download_xena", () => {
     );
     expect(result.error).toContain("decompression failed");
     expect(result.local_files).toHaveLength(1);
+  });
+
+  it("resumes an interrupted download from an existing part file", async () => {
+    const raw = await matrixBytes();
+    const gz = gzipSync(raw);
+    const url =
+      "https://toil-xena-hub.s3.us-east-1.amazonaws.com/download/TCGA.BRCA.sampleMap/HiSeqV2.gz";
+    const partSize = 13;
+    const partPath = path.join(
+      taskWorkDirs(root).downloadTmp,
+      `resume_${createHash("sha256").update(url).digest("hex").slice(0, 20)}.part`,
+    );
+    await mkdir(path.dirname(partPath), { recursive: true });
+    await writeFile(partPath, gz.subarray(0, partSize));
+
+    const server = await startFixtureServer((req, res) => {
+      if ((req.url ?? "").startsWith("/download/")) {
+        const range = req.headers["range"];
+        if (typeof range === "string" && range.startsWith("bytes=")) {
+          const offset = Number.parseInt(range.slice("bytes=".length, -1), 10);
+          const rest = gz.subarray(offset);
+          res.writeHead(206, {
+            "content-type": "application/gzip",
+            "content-length": rest.length,
+            "content-range": `bytes ${offset}-${gz.length - 1}/${gz.length}`,
+          });
+          res.end(rest);
+          return;
+        }
+        res.writeHead(200, { "content-type": "application/gzip" });
+        res.end(gz);
+        return;
+      }
+      res.writeHead(404, {});
+      res.end("not found");
+    });
+    fixtures.push(server);
+
+    const result = await downloadXena(
+      { dataset_id: "TCGA.BRCA.sampleMap/HiSeqV2", file_type: "tsv" },
+      deps(server.port),
+    );
+    expect(result.error).toBeUndefined();
+    const downloadReq = server.requests.find((request) => (request.url ?? "").startsWith("/download/"));
+    // The resumed part must be picked up on the very first attempt.
+    expect(downloadReq?.headers["range"]).toBe(`bytes=${partSize}-`);
+    // The resumed prefix plus the appended range reconstruct the full archive.
+    expect(await readFile(result.local_files?.[0] ?? "")).toEqual(gz);
+    expect(await readFile(result.local_files?.[1] ?? "")).toEqual(raw);
   });
 
   it("enforces the curated S3 host policy through acquireSource", () => {
