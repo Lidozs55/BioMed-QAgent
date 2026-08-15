@@ -261,3 +261,8 @@ build 锁、cancel 收敛与 event sink；`DATASET_CORE=ts` 现为默认运行�
 - [ ] **P2** Agent INSTRUCTIONS 增加"达到 max_turns 后输出 `[MAX_TURNS_REACHED]`"
       指导（原 Pipeline Design §4.5）
 - [ ] **P2** 设置页供应商/模型列表分页与搜索后端支持（当前全量返回）
+- [ ] **P2** `createPhase3ToolHooks()` 的 operation 并发 identity：同一来源所有
+      查询共用 `operation_id: tool:<source>:query`，并发同源查询的
+      started/progress/completed 会互相覆盖（UI 表现为同源多查询只有一个
+      operation 总卡片）。应改为 call-scoped ID（2026-08-15 对话流时序
+      修复时发现，`fix/runtime-timeline-sequence` 未包含此改动）
