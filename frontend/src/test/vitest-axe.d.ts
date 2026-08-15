@@ -1,16 +1,16 @@
-/* eslint-disable @typescript-eslint/no-empty-object-type, @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars */
-import "vitest";
 import type { AxeMatchers } from "vitest-axe";
 
 /**
- * vitest-axe@0.1.0 augments the legacy `declare global namespace Vi.Assertion`,
- * which vitest 3.x no longer uses (it re-exports vitest's Assertion). Bridge
- * the axe matcher onto `vitest`'s Assertion — same pattern as
- * @testing-library/jest-dom — so `tsc -b` accepts
- * `expect(results).toHaveNoViolations()`. Runtime `expect.extend(matchers)`
- * in accessibility-axe.test.tsx already registers the matcher.
+ * vitest-axe 的类型扩展面向 Vitest 1（`Vi.Assertion` 全局命名空间），
+ * 在 Vitest 3 下不生效，需通过 `declare module "vitest"` 增强
+ * `toHaveNoViolations` matcher 的类型（vitest-axe/dist/extend-expect.d.ts
+ * 的 runtime 部分仍由测试文件 `import "vitest-axe/extend-expect"` 提供）。
+ *
+ * 模块增强的标准写法要求空 interface 与泛型参数，lint 规则按需豁免。
  */
+/* eslint-disable @typescript-eslint/no-empty-object-type, @typescript-eslint/no-unused-vars */
 declare module "vitest" {
-  interface Assertion<T = any> extends AxeMatchers {}
+  interface Assertion<T> extends AxeMatchers {}
   interface AsymmetricMatchersContaining extends AxeMatchers {}
 }
+/* eslint-enable */
