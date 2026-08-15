@@ -271,6 +271,7 @@ BioMed-QAgent/
 | `PI_PROVIDER` / `PI_MODEL` | `dashscope` / `MODEL_NAME` | Pi provider 与模型选择                    |
 | `PI_API_KEY` / `PI_BASE_URL` | 回退 DashScope 配置    | Pi credentials；不要提交真实密钥                |
 | `WORKSPACE_DEV_EXEC` | `0`                         | 受控开发命令 gate                               |
+| `AGENT_EXEC_POLICY` | 空（跟随设置）                | 迁移 flag：`deny`/`ask`/`allow` 覆盖命令执行策略  |
 | `SHUTDOWN_TIMEOUT_MS` | `10000`                     | 回收超时                                        |
 | `OUTPUT_DIR`         | `data/output`               | 覆盖时必须使用绝对路径                          |
 | `LOG_LEVEL`          | `INFO`                      | 日志级别                                        |
