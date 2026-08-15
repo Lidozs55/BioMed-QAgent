@@ -35,7 +35,8 @@ export function createPdbTools(deps: PdbToolDeps): BioMedAgentTool[] {
   const context = {
     client,
     rateLimitMs: deps.rateLimitMs,
-    onQuery: hooks.onQuery,
+    onQueryStarted: hooks.onQueryStarted,
+          onQuery: hooks.onQuery,
   };
 
   return [
@@ -158,6 +159,7 @@ export function createPdbTools(deps: PdbToolDeps): BioMedAgentTool[] {
           client,
           signal,
           rateLimitMs: deps.rateLimitMs,
+          onQueryStarted: hooks.onQueryStarted,
           onQuery: hooks.onQuery,
         });
         return { content: JSON.stringify(result) };

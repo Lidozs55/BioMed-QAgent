@@ -35,6 +35,7 @@ export interface SourceQueryContext {
   signal?: AbortSignal;
   /** Request pacing override for tests; default 2000ms. */
   rateLimitMs?: number;
+  onQueryStarted?: (query: string, source: string) => void;
   onQuery?: (query: string, source: string, status: QueryStatus, recordsCount?: number) => void;
 }
 
@@ -75,6 +76,7 @@ export async function searchChembl(
   maxResults: number,
   context: SourceQueryContext,
 ): Promise<Record<string, unknown>> {
+  context.onQueryStarted?.(query, "chembl");
   const apiUrl =
     `${CHEMBL_API_BASE}/molecule/search?q=${quoteQuery(query)}` +
     `&limit=${maxResults}&format=json`;

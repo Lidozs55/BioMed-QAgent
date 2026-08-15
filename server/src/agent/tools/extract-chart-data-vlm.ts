@@ -44,6 +44,7 @@ function expectString(value: unknown, field: string, fallback: string): string {
 export function createChartDataVlmTool(deps: ChartDataVlmToolDeps): BioMedAgentTool[] {
   const hooks = noopHooks(deps.hooks);
   const vlmHooks: VlmToolHooks = {
+    onQueryStarted: hooks.onQueryStarted,
     onQuery: hooks.onQuery,
     onProgress: hooks.onProgress,
     onWarning: deps.onWarning,

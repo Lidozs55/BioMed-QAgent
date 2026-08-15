@@ -38,6 +38,7 @@ export interface SourceQueryContext {
   client: PublicHttpClient;
   signal?: AbortSignal;
   rateLimitMs?: number;
+  onQueryStarted?: (query: string, source: string) => void;
   onQuery?: (query: string, source: string, status: QueryStatus, recordsCount?: number) => void;
 }
 
@@ -47,6 +48,7 @@ export interface DownloadDeps {
   client: PublicHttpClient;
   signal?: AbortSignal;
   rateLimitMs?: number;
+  onQueryStarted?: (query: string, source: string) => void;
   onQuery?: (query: string, source: string, status: QueryStatus, recordsCount?: number) => void;
 }
 
@@ -135,6 +137,7 @@ export async function searchPdb(
   maxResults: number,
   context: SourceQueryContext,
 ): Promise<Record<string, unknown>> {
+  context.onQueryStarted?.(term, "pdb");
   let data: unknown;
   try {
     const fetched = await apiFetch(context.client, SEARCH_API, {
@@ -198,6 +201,7 @@ export async function describePdb(
   context: SourceQueryContext,
 ): Promise<Record<string, unknown>> {
   const normalized = pdbId.trim().toLowerCase();
+  context.onQueryStarted?.(normalized, "pdb");
   const url = `${DATA_API}${normalized}`;
   let data: unknown;
   try {
@@ -256,6 +260,7 @@ export async function downloadPdb(
 ): Promise<Record<string, unknown>> {
   const normalizedId = pdbId.trim().toLowerCase();
   const normalizedType = fileType.toLowerCase().trim();
+  deps.onQueryStarted?.(normalizedId, "pdb");
 
   let url: string;
   let filename: string;

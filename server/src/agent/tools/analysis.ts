@@ -228,6 +228,7 @@ export function createAnalysisTools(deps: AnalysisToolDeps): BioMedAgentTool[] {
     execute: async (argumentsValue) => {
       const record = argumentsValue as Record<string, unknown>;
       const csvPath = typeof record.csv_path === "string" ? record.csv_path : null;
+      hooks.onQueryStarted?.(csvPath ?? "", "analysis");
       const errorResult = (error: string) =>
         jsonContent({
           status: "error",
@@ -418,6 +419,7 @@ export function createAnalysisTools(deps: AnalysisToolDeps): BioMedAgentTool[] {
     execute: async (argumentsValue) => {
       const record = argumentsValue as Record<string, unknown>;
       const csvPath = typeof record.csv_path === "string" ? record.csv_path : null;
+      hooks.onQueryStarted?.(csvPath ?? "", "analysis");
       const zscore = record.zscore !== false;
       const errorResult = (error: string) =>
         jsonContent({
@@ -573,6 +575,7 @@ export function createAnalysisTools(deps: AnalysisToolDeps): BioMedAgentTool[] {
     execute: async (argumentsValue) => {
       const record = argumentsValue as Record<string, unknown>;
       const csvPath = typeof record.csv_path === "string" ? record.csv_path : null;
+      hooks.onQueryStarted?.(csvPath ?? "", "analysis");
       const errorResult = (error: string) =>
         jsonContent({
           status: "error",
@@ -674,6 +677,7 @@ export function createAnalysisTools(deps: AnalysisToolDeps): BioMedAgentTool[] {
     execute: async (argumentsValue) => {
       const record = argumentsValue as Record<string, unknown>;
       const csvPath = typeof record.csv_path === "string" ? record.csv_path : null;
+      hooks.onQueryStarted?.(csvPath ?? "", "analysis");
       const method = typeof record.method === "string" ? record.method : "pearson";
       const errorResult = (error: string) =>
         jsonContent({

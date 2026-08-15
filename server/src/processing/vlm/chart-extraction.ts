@@ -41,6 +41,7 @@ const PDF_EXTENSION = ".pdf";
 export type VlmQueryStatus = "success" | "not_found" | "failed" | "skipped" | "page_fallback";
 
 export interface VlmToolHooks {
+  onQueryStarted?: (query: string, source: string) => void;
   onQuery?: (query: string, source: string, status: VlmQueryStatus, recordsCount?: number) => void;
   onProgress?: (stage: string, kind: string, payload: Record<string, unknown>) => void;
   onWarning?: (severity: string, message: string, source: string) => void;
@@ -420,6 +421,7 @@ export function createVlmTools(options: {
       const extension = path.extname(resolved).toLowerCase();
       const sourceLabel = path.basename(resolved);
       const prompt = hint.trim() !== "" ? `${VLM_PROMPT}\n\nAdditional hint: ${hint.trim()}` : VLM_PROMPT;
+      hooks.onQueryStarted?.(resolved, "extract_chart_data_vlm");
 
       const chartRows: ChartRow[] = [];
       const pointRows: ChartPointRow[] = [];

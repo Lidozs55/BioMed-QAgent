@@ -40,6 +40,7 @@ export interface SourceQueryContext {
   browserFallback?: BrowserFallback;
   signal?: AbortSignal;
   rateLimitMs?: number;
+  onQueryStarted?: (query: string, source: string) => void;
   onQuery?: (query: string, source: string, status: QueryStatus, recordsCount?: number) => void;
 }
 
@@ -153,6 +154,7 @@ export async function searchPubchem(
   context: SourceQueryContext,
 ): Promise<Record<string, unknown>> {
   const encoded = quoteQuery(term);
+  context.onQueryStarted?.(term, "pubchem");
   const apiUrl =
     `${PUGREST_BASE}/compound/name/${encoded}/property/` +
     `MolecularFormula,MolecularWeight,IUPACName,CanonicalSMILES/` +
@@ -196,6 +198,7 @@ export async function getCompound(
   cid: number,
   context: SourceQueryContext,
 ): Promise<Record<string, unknown>> {
+  context.onQueryStarted?.(String(cid), "pubchem");
   const apiUrl =
     `${PUGREST_BASE}/compound/cid/${cid}/property/` +
     `MolecularFormula,MolecularWeight,IUPACName,CanonicalSMILES,InChIKey,InChI/JSON`;

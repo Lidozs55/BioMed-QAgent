@@ -67,6 +67,7 @@ export function createPdfTools(deps: PdfToolDeps): BioMedAgentTool[] {
     execute: async (argumentsValue) => {
       const record = argumentsValue as Record<string, unknown>;
       const filePath = expectFilePath(record.file_path, EXTRACT_PDF_TABLES_TOOL_NAME);
+      hooks.onQueryStarted?.(filePath, "pdf_extraction");
       let result: PdfTablesResult;
       try {
         result = await extractPdfTablesImpl(filePath, { taskRoot });
@@ -115,6 +116,7 @@ export function createPdfTools(deps: PdfToolDeps): BioMedAgentTool[] {
     execute: async (argumentsValue) => {
       const record = argumentsValue as Record<string, unknown>;
       const filePath = expectFilePath(record.file_path, EXTRACT_PDF_METADATA_TOOL_NAME);
+      hooks.onQueryStarted?.(filePath, "pdf_extraction");
       let result: PdfMetadataResult;
       try {
         result = await extractPdfMetadataImpl(filePath, { taskRoot });

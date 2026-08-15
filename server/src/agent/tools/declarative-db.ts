@@ -346,6 +346,7 @@ export function buildOperationTool(
         if (typeof argumentsRecord !== "object" || argumentsRecord === null || Array.isArray(argumentsRecord)) {
           throw new DatabaseValidationError("arguments must be an object");
         }
+        hooks.onQueryStarted(operation.name, operation.name);
         if (operation.auth !== null) {
           const gate = deps.approval;
           if (gate === undefined) {

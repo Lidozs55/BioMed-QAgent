@@ -197,9 +197,13 @@ describe("search_gdc", () => {
     const payload = JSON.parse(await readFile(fixture("projects.json"), "utf8")) as unknown;
     const server = await jsonServer(payload);
     const queries: Array<[string, string, string, number]> = [];
+    const starts: Array<[string, string]> = [];
     const result = await searchGdc(
       { term: "lung", max_results: 5 },
-      deps(server.port, { onQuery: (q, s, st, n = 0) => queries.push([q, s, st, n]) }),
+      deps(server.port, {
+        onQueryStarted: (q, s) => starts.push([q, s]),
+        onQuery: (q, s, st, n = 0) => queries.push([q, s, st, n]),
+      }),
     );
 
     expect(result.source).toBe("gdc");
@@ -216,6 +220,8 @@ describe("search_gdc", () => {
       data_categories: ["Transcriptome Profiling"],
     });
     expect(queries).toEqual([["lung", "gdc", "success", 1]]);
+    // The query lifecycle opens before the request is issued.
+    expect(starts).toEqual([["lung", "gdc"]]);
   });
 
   it("mirrors the GDC API query exactly (params and browser UA)", async () => {

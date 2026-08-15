@@ -73,6 +73,7 @@ export async function searchPubmedAdapter(
   signal?: AbortSignal,
 ): Promise<unknown> {
   const hooks = noopHooks(deps.hooks);
+  hooks.onQueryStarted(query, "pubmed");
   let result: PubMedSearchResult;
   try {
     result = await searchPubmed(deps.eutils, query, maxResults, signal);

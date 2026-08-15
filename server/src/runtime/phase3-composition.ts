@@ -24,6 +24,141 @@ import {
   type DurableAgentRuntime,
 } from "./durable-agent-runtime.js";
 
+/**
+ * Display names for query sources used in operation_started labels
+ * (mirrors the frontend toolLabels.ts search entries so both bubbles of a
+ * tool call read consistently).
+ */
+const QUERY_SOURCE_LABELS: Readonly<Record<string, string>> = {
+  local_cache: "本地缓存",
+  pubchem: "PubChem",
+  xena: "Xena",
+  pubmed: "PubMed",
+  gdc: "GDC",
+  geo: "GEO",
+  reactome: "Reactome",
+  chembl: "ChEMBL",
+  uniprot: "UniProt",
+  pdb: "PDB",
+  browser: "网页",
+  pdf_extraction: "PDF",
+  analysis: "分析",
+  literature_understanding: "文献",
+};
+
+/**
+ * Tool query/progress hooks projected onto the V2 operation lifecycle
+ * (Design §15.1): ``operation_started`` opens a card, ``operation_progress``
+ * updates it, ``operation_completed``/``operation_failed`` close it.
+ *
+ * - ``onQueryStarted``/``onQuery`` pair per query: started fires when the
+ *   query begins, the terminal event when it ends (success/not_found /
+ *   page_fallback → succeeded, skipped → skipped, failed → failed).
+ * - ``onProgress`` opens progress-only operations (``tool:discovery:*``,
+ *   ``tool:acquisition:*``) once per run — they have no natural end signal,
+ *   so the run-terminal fallback on the frontend closes them.
+ *
+ * ``currentRunId`` must be a getter: the workspace outlives runs and the
+ * dedup key must not leak state across runs.
+ */
+export function createPhase3ToolHooks(
+  recordRunEvent: (payload: import("@biomed/contracts").EventPayload) => Promise<void>,
+  currentRunId: () => string,
+): ToolHooks {
+  const startedProgressOps = new Set<string>();
+  return {
+    onQueryStarted: (_query, source) => {
+      void recordRunEvent({
+        type: "operation_started",
+        operation_id: `tool:${source}:query`,
+        label: `检索 ${QUERY_SOURCE_LABELS[source] ?? source}`,
+        category: "discovery",
+        attempt: 1,
+      }).catch((error: unknown) => {
+        console.warn("tool.query_started_event_failed", error);
+      });
+    },
+    onQuery: (query, source, status, recordsCount = 0) => {
+      void recordRunEvent({
+        type: "operation_progress",
+        operation_id: `tool:${source}:query`,
+        kind: "query",
+        current: Math.max(0, recordsCount),
+        total: null,
+        detail: {
+          source,
+          status,
+          query: String(query).slice(0, 200),
+        },
+      })
+        .then(() =>
+          // Close the query lifecycle opened by onQueryStarted. Queries
+          // without a started event (older call sites) still terminate
+          // instead of lingering "running" forever.
+          status === "failed"
+            ? recordRunEvent({
+                type: "operation_failed",
+                operation_id: `tool:${source}:query`,
+                status: "failed",
+                error: null,
+              })
+            : status === "skipped"
+              ? recordRunEvent({
+                  type: "operation_completed",
+                  operation_id: `tool:${source}:query`,
+                  status: "skipped",
+                })
+              : recordRunEvent({
+                  type: "operation_completed",
+                  operation_id: `tool:${source}:query`,
+                  status: "succeeded",
+                }),
+        )
+        .catch((error: unknown) => {
+          console.warn("tool.query_event_failed", error);
+        });
+    },
+    onProgress: (stage, kind, payload) => {
+      const operationId = `tool:${stage}:${kind}`;
+      const runKey = `${currentRunId()}:${operationId}`;
+      const started =
+        stage === "discovery"
+          ? { label: "发现记录", category: "discovery" }
+          : stage === "acquisition"
+            ? { label: "下载数据", category: "acquisition" }
+            : { label: stage, category: null };
+      const startedEvent = startedProgressOps.has(runKey)
+        ? null
+        : recordRunEvent({
+            type: "operation_started",
+            operation_id: operationId,
+            label: started.label,
+            ...(started.category === null ? {} : { category: started.category }),
+            attempt: 1,
+          }).then(() => {
+            startedProgressOps.add(runKey);
+          });
+      const progressEvent = recordRunEvent({
+        type: "operation_progress",
+        operation_id: operationId,
+        kind,
+        current: Number(payload.current) || 0,
+        total: payload.total === null || payload.total === undefined
+          ? null
+          : Number(payload.total),
+        detail: payload as Record<string, import("@biomed/contracts").JsonValue>,
+      });
+      void Promise.allSettled([startedEvent, progressEvent]).then((results) => {
+        for (const result of results) {
+          if (result.status === "rejected") {
+            console.warn("tool.progress_event_failed", result.reason);
+          }
+        }
+      });
+    },
+  };
+}
+
 export interface Phase3RuntimeOptions {
   tasksRoot: string;
   workspaceDevExec: boolean;
@@ -98,38 +233,13 @@ export async function createPhase3Runtime(
           },
         };
       }
-      const toolHooks: ToolHooks = {
-        onQuery: (query, source, status, recordsCount = 0) => {
-          void recordRunEvent({
-            type: "operation_progress",
-            operation_id: `tool:${source}:query`,
-            kind: "query",
-            current: Math.max(0, recordsCount),
-            total: null,
-            detail: {
-              source,
-              status,
-              query: String(query).slice(0, 200),
-            },
-          }).catch((error: unknown) => {
-            console.warn("tool.query_event_failed", error);
-          });
-        },
-        onProgress: (stage, kind, payload) => {
-          void recordRunEvent({
-            type: "operation_progress",
-            operation_id: `tool:${stage}:${kind}`,
-            kind,
-            current: Number(payload.current) || 0,
-            total: payload.total === null || payload.total === undefined
-              ? null
-              : Number(payload.total),
-            detail: payload as Record<string, import("@biomed/contracts").JsonValue>,
-          }).catch((error: unknown) => {
-            console.warn("tool.progress_event_failed", error);
-          });
-        },
-      };
+      // Progress-only operations (discovery/download aggregation) have no
+      // natural end signal; open each once per run so the frontend card
+      // gets a label, and the run-terminal fallback closes it.
+      const toolHooks = createPhase3ToolHooks(
+        recordRunEvent,
+        () => currentRunId,
+      );
       const bundle = await createBusinessToolBundle({
         taskRoot: root,
         db: dbClient,

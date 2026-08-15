@@ -153,6 +153,7 @@ export async function searchXena(
   const term = expectString(args, "term", "");
   const effectiveTerm = query || term;
   const hooks = noopHooks(deps.hooks);
+  hooks.onQueryStarted(effectiveTerm, "xena");
   const pace = (): Promise<void> => rateLimit(deps.rateLimitMs ?? XENA_RATE_LIMIT_MS);
 
   let allDatasets: XenaHubRecord[];

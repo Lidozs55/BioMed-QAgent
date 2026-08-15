@@ -10,6 +10,13 @@
 export type QueryStatus = "success" | "not_found" | "failed" | "skipped" | "page_fallback";
 
 export interface ToolHooks {
+  /**
+   * Query lifecycle start (parity with the V2 operation lifecycle, Design
+   * §15.1). Emitted once per query at its beginning so the runtime can open
+   * an ``operation_started`` event; the matching ``onQuery`` call at the end
+   * closes it with ``operation_completed``/``operation_failed``.
+   */
+  onQueryStarted?: (query: string, source: string) => void;
   /** Python run_ctx.log_query parity. */
   onQuery?: (query: string, source: string, status: QueryStatus, recordsCount?: number) => void;
   /** Python stage progress parity (stage, kind, payload). */
@@ -35,6 +42,7 @@ export interface ToolApprovalGate {
 
 export function noopHooks(hooks?: ToolHooks): Required<ToolHooks> {
   return {
+    onQueryStarted: hooks?.onQueryStarted ?? (() => undefined),
     onQuery: hooks?.onQuery ?? (() => undefined),
     onProgress: hooks?.onProgress ?? (() => undefined),
   };

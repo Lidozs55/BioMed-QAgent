@@ -73,6 +73,7 @@ export function createWebVisualCaptureTools(options: WebVisualCaptureOptions): {
 
   async function doCapture(request: CaptureRequest, signal?: AbortSignal): Promise<string> {
     const { url } = request;
+    hooks.onQueryStarted(url, SOURCE);
     let validatedLabel: string | null;
     try {
       validatedLabel = validateLabel(request.label);

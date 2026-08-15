@@ -61,6 +61,7 @@ export function createLocalCacheTools(deps: LocalCacheToolDeps): BioMedAgentTool
       const record = argumentsValue as { query?: unknown; max_results?: unknown };
       const query = typeof record.query === "string" ? record.query : "";
       const maxResults = typeof record.max_results === "number" ? record.max_results : 10;
+      hooks.onQueryStarted(query, "local_cache");
       let manifests: CacheDatasetManifest[];
       try {
         manifests = await db.call<CacheDatasetManifest[]>("cache.search", { query, limit: maxResults });
