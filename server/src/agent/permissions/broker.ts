@@ -247,6 +247,12 @@ export class PermissionBroker {
         decision,
         grant_scope: grantScope ?? null,
       });
+      if (decision === "deny") {
+        // Deny surfaces as a structured permission error to the tool call
+        // (plan §8), not as a "successful" decision.
+        entry.reject(new PermissionDeniedError(pending, "Permission denied by user"));
+        return true;
+      }
       entry.resolve({ decision, grantScope });
       return true;
     }
