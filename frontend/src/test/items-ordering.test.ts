@@ -178,7 +178,7 @@ describe("conversation items ordering", () => {
     });
   });
 
-  it("re-sorts items when an upsert changes an item's sequence", () => {
+  it("keeps an item's sequence fixed when an upsert updates it", () => {
     let state = setup();
     state = reduceRuntimeEvent(
       state,
@@ -196,7 +196,9 @@ describe("conversation items ordering", () => {
         message: "be careful",
       }),
     );
-    // Update tool_call to sequence=3 (was 1) — should move after warning
+    // tool_completed updates the tool_call item (sequence would be 3) —
+    // the item must keep its first-entry sequence (1) and not move after
+    // the warning.
     state = reduceRuntimeEvent(
       state,
       envelope("task_order", "run_order", 3, {
@@ -208,11 +210,11 @@ describe("conversation items ordering", () => {
     );
 
     const items = state.tasksById.task_order.items;
-    expect(items.map((i) => i.sequence)).toEqual([2, 3]);
-    expect(items.map((i) => i.kind)).toEqual(["warning", "tool_call"]);
+    expect(items.map((i) => i.sequence)).toEqual([1, 2]);
+    expect(items.map((i) => i.kind)).toEqual(["tool_call", "warning"]);
   });
 
-  it("tracks latest sequence per item in itemSequences", () => {
+  it("tracks first sequence per item in itemSequences", () => {
     let state = setup();
     state = reduceRuntimeEvent(
       state,
@@ -232,7 +234,7 @@ describe("conversation items ordering", () => {
       }),
     );
 
-    expect(state.tasksById.task_order.itemSequences["tool:run_order:call_1"]).toBe(2);
+    expect(state.tasksById.task_order.itemSequences["tool:run_order:call_1"]).toBe(1);
   });
 
   it("deduplicates items by itemId across interleaved runs", () => {
@@ -261,5 +263,73 @@ describe("conversation items ordering", () => {
     expect(items).toHaveLength(2);
     expect(items[0]).toMatchObject({ runId: "run_a", sequence: 1 });
     expect(items[1]).toMatchObject({ runId: "run_b", sequence: 2 });
+  });
+
+  it("preserves assistant/tool interleaving within one run", () => {
+    let state = setup();
+
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_order", "run_order", 1, {
+        type: "assistant_delta",
+        delta: "before ",
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_order", "run_order", 2, {
+        type: "assistant_delta",
+        delta: "tool",
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_order", "run_order", 3, {
+        type: "tool_started",
+        tool_call_id: "call_1",
+        tool_name: "query_local_cache",
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_order", "run_order", 4, {
+        type: "tool_completed",
+        tool_call_id: "call_1",
+        tool_name: "query_local_cache",
+        is_error: false,
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_order", "run_order", 5, {
+        type: "assistant_delta",
+        delta: "after tool",
+      }),
+    );
+
+    const items = state.tasksById.task_order.items;
+    expect(
+      items.map((item) => ({
+        kind: item.kind,
+        sequence: item.sequence,
+        content: item.kind === "assistant_segment" ? item.content : undefined,
+      })),
+    ).toEqual([
+      {
+        kind: "assistant_segment",
+        sequence: 1,
+        content: "before tool",
+      },
+      {
+        kind: "tool_call",
+        sequence: 3,
+        content: undefined,
+      },
+      {
+        kind: "assistant_segment",
+        sequence: 5,
+        content: "after tool",
+      },
+    ]);
   });
 });

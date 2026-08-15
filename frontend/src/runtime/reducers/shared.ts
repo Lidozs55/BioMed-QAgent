@@ -614,23 +614,41 @@ export function upsertItem(
   task: TaskProjection,
   item: ConversationItem,
 ): TaskProjection {
-  const existingIdx = task.items.findIndex((i) => i.itemId === item.itemId);
+  const existingIdx = task.items.findIndex(
+    (candidate) => candidate.itemId === item.itemId,
+  );
   let items: ConversationItem[];
+  let stableSequence: number;
+
   if (existingIdx >= 0) {
     const existing = task.items[existingIdx];
-    const createdAt = existing.createdAt;
+    stableSequence = existing.sequence;
+
     items = [...task.items];
-    items[existingIdx] = { ...existing, ...item, createdAt } as ConversationItem;
+    items[existingIdx] = {
+      ...existing,
+      ...item,
+
+      // Timeline position is immutable: an item keeps the sequence it got on
+      // first entry, so later updates (tool_completed, progress, assistant
+      // deltas) cannot drag it down the timeline. Use completedSequence or a
+      // dedicated updatedSequence for recency instead of reusing sequence.
+      sequence: existing.sequence,
+      createdAt: existing.createdAt,
+    } as ConversationItem;
   } else {
+    stableSequence = item.sequence;
     items = [...task.items, item];
   }
+
   items.sort((a, b) => a.sequence - b.sequence);
+
   return {
     ...task,
     items,
     itemSequences: {
       ...task.itemSequences,
-      [item.itemId]: item.sequence,
+      [item.itemId]: stableSequence,
     },
   };
 }
