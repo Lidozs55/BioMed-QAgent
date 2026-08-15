@@ -1,9 +1,9 @@
-import { lstat, mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 
 import type { WorkspaceContext } from "./context.js";
-import { resolveWorkspacePath, verifyCanonicalPath } from "./path-policy.js";
+import { resolveAgentPath, type ResolvedAgentPath } from "./path-policy.js";
 import { WorkspacePolicyError, type WorkspaceWriteResult } from "./types.js";
 
 async function exists(target: string): Promise<boolean> {
@@ -15,38 +15,46 @@ async function exists(target: string): Promise<boolean> {
     throw error;
   }
 }
-export async function writeWorkspaceText(
+
+/**
+ * Atomic write core. Callers are responsible for having obtained permission
+ * (``writeWorkspaceText`` gates with ``fs.write``; ``editWorkspaceText``
+ * gates with ``fs.edit`` and reuses this core so the edit is not evaluated
+ * twice under a different capability).
+ */
+export async function writeWorkspaceTextAt(
   context: WorkspaceContext,
-  input: { path: string; content: string },
+  resolved: ResolvedAgentPath,
+  content: string,
 ): Promise<WorkspaceWriteResult> {
-  if (typeof input.content !== "string") {
-    throw new WorkspacePolicyError("NOT_TEXT", "Write content must be text");
-  }
-  const bytes = Buffer.byteLength(input.content, "utf8");
+  const bytes = Buffer.byteLength(content, "utf8");
   if (bytes > context.limits.maxWriteBytes) {
     throw new WorkspacePolicyError("LIMIT_EXCEEDED", "Write content exceeds Workspace limit");
   }
-  const resolved = await resolveWorkspacePath(context, input.path);
+  // Create parents under the requested path, then canonicalize the parent so
+  // the final target follows any symlinked directories (the permission check
+  // already classified the canonical ancestor).
   const parent = path.dirname(resolved.absolutePath);
   await mkdir(parent, { recursive: true });
-  await verifyCanonicalPath(context, parent);
-  const created = !(await exists(resolved.absolutePath));
+  const canonicalParent = await realpath(parent);
+  const target = path.join(canonicalParent, path.basename(resolved.absolutePath));
+  const created = !(await exists(target));
   if (!created) {
-    const target = await lstat(resolved.absolutePath);
-    if (!target.isFile() || target.isSymbolicLink()) {
+    const targetInfo = await lstat(target);
+    if (!targetInfo.isFile() || targetInfo.isSymbolicLink()) {
       throw new WorkspacePolicyError("PATH_ESCAPE", "Write target must be a regular file");
     }
   }
-  const temporary = path.join(parent, `.${path.basename(resolved.absolutePath)}.${randomUUID()}.tmp`);
+  const temporary = path.join(canonicalParent, `.${path.basename(target)}.${randomUUID()}.tmp`);
   try {
-    await writeFile(temporary, input.content, { encoding: "utf8", flag: "wx" });
+    await writeFile(temporary, content, { encoding: "utf8", flag: "wx" });
     try {
-      await rename(temporary, resolved.absolutePath);
+      await rename(temporary, target);
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (!created && (code === "EEXIST" || code === "EPERM")) {
-        await rm(resolved.absolutePath);
-        await rename(temporary, resolved.absolutePath);
+        await rm(target);
+        await rename(temporary, target);
       } else {
         throw error;
       }
@@ -54,5 +62,21 @@ export async function writeWorkspaceText(
   } finally {
     await rm(temporary, { force: true });
   }
-  return { path: resolved.relativePath, bytes, created };
+  return { path: resolved.displayPath, bytes, created };
+}
+
+/**
+ * Atomically write text. The permission system decides whether the target is
+ * reachable: the workspace is free, task output is read-only by default, and
+ * project/external paths require (or ask for) user approval.
+ */
+export async function writeWorkspaceText(
+  context: WorkspaceContext,
+  input: { path: string; content: string },
+): Promise<WorkspaceWriteResult> {
+  if (typeof input.content !== "string") {
+    throw new WorkspacePolicyError("NOT_TEXT", "Write content must be text");
+  }
+  const resolved = await resolveAgentPath(context, input.path, "fs.write");
+  return writeWorkspaceTextAt(context, resolved, input.content);
 }

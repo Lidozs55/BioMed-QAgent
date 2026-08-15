@@ -15,7 +15,6 @@ import {
   executeWorkspaceCommand,
   sanitizedCommand,
 } from "./exec.js";
-import { normalizeAgentPath } from "./path-policy.js";
 import { listWorkspace, readWorkspaceText, searchWorkspace } from "./read.js";
 import type {
   WorkspaceEditResult,
@@ -58,7 +57,7 @@ function boundedDuration(started: number): number {
 
 function auditPath(input: string): string {
   try {
-    return normalizeAgentPath(input);
+    return input.length > 512 ? `${input.slice(0, 512)}…` : input;
   } catch {
     return "[rejected]";
   }
@@ -210,15 +209,13 @@ class GovernedTaskWorkspace implements TaskWorkspace {
       { command: sanitizedCommand(input.executable, input.args) },
       () => executeWorkspaceCommand(this.context, input, signal, this.#processes),
       (value) => ({
-        result: value.policy === "disabled"
-          ? "disabled"
-          : value.cancelled
-            ? "cancelled"
-            : value.timedOut
-              ? "timed_out"
-              : value.policy === "rejected"
-                ? "rejected"
-                : "success",
+        result: value.cancelled
+          ? "cancelled"
+          : value.timedOut
+            ? "timed_out"
+            : value.policy === "rejected"
+              ? "rejected"
+              : "success",
         truncated: value.truncated,
       }),
     );

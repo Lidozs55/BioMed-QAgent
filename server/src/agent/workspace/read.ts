@@ -2,7 +2,7 @@ import { lstat, open, readdir } from "node:fs/promises";
 import path from "node:path";
 
 import type { WorkspaceContext } from "./context.js";
-import { resolveWorkspacePath, verifyCanonicalPath } from "./path-policy.js";
+import { resolveAgentPath } from "./path-policy.js";
 import {
   WorkspacePolicyError,
   type WorkspaceListEntry,
@@ -25,12 +25,14 @@ export async function readWorkspaceText(
   context: WorkspaceContext,
   input: { path: string; offset?: number; length?: number },
 ): Promise<WorkspaceReadResult> {
-  const resolved = await resolveWorkspacePath(context, input.path);
+  const resolved = await resolveAgentPath(context, input.path, "fs.read");
   const offset = input.offset ?? 0;
   const length = input.length ?? context.limits.maxReadCharacters;
   if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0) {
     throw new WorkspacePolicyError("LIMIT_EXCEEDED", "Read offset and length are invalid");
   }
+  // IO follows the requested path (symlinks included); the permission check
+  // above already classified the canonical target.
   const handle = await open(resolved.absolutePath, "r");
   try {
     const buffer = Buffer.alloc(context.limits.maxReadBytes + 1);
@@ -39,7 +41,7 @@ export async function readWorkspaceText(
     const text = decodeUtf8(buffer.subarray(0, Math.min(bytesRead, context.limits.maxReadBytes)));
     const selected = text.slice(offset, offset + Math.min(length, context.limits.maxReadCharacters));
     return {
-      path: resolved.relativePath,
+      path: resolved.displayPath,
       text: selected,
       offset,
       characters: selected.length,
@@ -57,7 +59,7 @@ export async function listWorkspace(
   context: WorkspaceContext,
   input: { path: string; depth?: number },
 ): Promise<WorkspaceListResult> {
-  const resolved = await resolveWorkspacePath(context, input.path);
+  const resolved = await resolveAgentPath(context, input.path, "fs.read");
   const requestedDepth = input.depth ?? 1;
   if (!Number.isSafeInteger(requestedDepth) || requestedDepth <= 0) {
     throw new WorkspacePolicyError("LIMIT_EXCEEDED", "List depth is invalid");
@@ -79,12 +81,8 @@ export async function listWorkspace(
         ? child.name
         : `${relativeDirectory}/${child.name}`).replaceAll("\\", "/");
       if (child.isSymbolicLink()) {
-        try {
-          await verifyCanonicalPath(context, childAbsolute);
-        } catch (error) {
-          if (error instanceof WorkspacePolicyError && error.code === "PATH_ESCAPE") continue;
-          throw error;
-        }
+        // Links are listed but never followed into another scope; reads
+        // through them go through the permission system.
         entries.push({ path: childRelative, type: "link" });
         continue;
       }
@@ -100,8 +98,8 @@ export async function listWorkspace(
     }
   }
 
-  await visit(resolved.absolutePath, resolved.relativePath, 1);
-  return { path: resolved.relativePath, entries, truncated };
+  await visit(resolved.absolutePath, resolved.displayPath, 1);
+  return { path: resolved.displayPath, entries, truncated };
 }
 
 export async function searchWorkspace(
@@ -111,7 +109,7 @@ export async function searchWorkspace(
   if (typeof input.query !== "string" || input.query.length === 0 || input.query.length > 1_000) {
     throw new WorkspacePolicyError("LIMIT_EXCEEDED", "Search query is invalid");
   }
-  const resolved = await resolveWorkspacePath(context, input.path);
+  const resolved = await resolveAgentPath(context, input.path, "fs.read");
   const files: Array<{ absolute: string; relative: string }> = [];
   let truncated = false;
 
@@ -136,7 +134,7 @@ export async function searchWorkspace(
     }
   }
 
-  await collect(resolved.absolutePath, resolved.relativePath, 1);
+  await collect(resolved.absolutePath, resolved.displayPath, 1);
   const matches: WorkspaceSearchResult["matches"] = [];
   let outputCharacters = 0;
   for (const file of files) {
@@ -178,7 +176,7 @@ export async function searchWorkspace(
     if (matches.length >= context.limits.maxSearchResults) break;
   }
   return {
-    path: resolved.relativePath,
+    path: resolved.displayPath,
     query: input.query,
     matches,
     filesScanned: files.length,

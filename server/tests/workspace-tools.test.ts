@@ -9,6 +9,7 @@ import {
   InMemoryWorkspaceAuditSink,
   createTaskWorkspace,
 } from "../src/agent/workspace/index.js";
+import { createPermissionFixture } from "./helpers/permission-fixture.js";
 import { createWorkspaceTools } from "../src/agent/workspace/tools.js";
 
 const roots: string[] = [];
@@ -53,6 +54,13 @@ describe("Workspace project tools", () => {
       await mkdir(path.join(workspaceRoot, "notes"), { recursive: true });
       await writeFile(path.join(workspaceRoot, "notes", "row.txt"), "TP53", "utf8");
     });
+    const permissionFixture = createPermissionFixture({
+      taskId: "task-tools",
+      runId: "run-tools",
+      taskOutputRoot,
+    });
+    await permissionFixture.policyStore.setPersistentExecAllow(true);
+    const permissions = permissionFixture.broker;
     const workspace = await createTaskWorkspace({
       taskId: "task-tools",
       runId: "run-tools",
@@ -60,6 +68,7 @@ describe("Workspace project tools", () => {
       taskOutputRoot,
       dataRoot: base,
       repositoryRoot: base,
+      permissions,
       audit: new InMemoryWorkspaceAuditSink(),
     });
 
@@ -79,9 +88,12 @@ describe("Workspace project tools", () => {
       isError: false,
       details: { path: "notes/row.txt", text: "TP53" },
     });
-    await expect(exec?.execute({ executable: process.execPath, args: [] })).resolves.toMatchObject({
-      isError: true,
-      details: { policy: "disabled" },
+    await expect(exec?.execute({
+      executable: process.execPath,
+      args: ["-e", "process.exit(0)"],
+    })).resolves.toMatchObject({
+      isError: false,
+      details: { policy: "allowed", exitCode: 0 },
     });
     expect(JSON.stringify(tools)).not.toContain("@earendil-works");
   });

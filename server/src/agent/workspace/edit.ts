@@ -1,9 +1,9 @@
 import { readFile } from "node:fs/promises";
 
 import type { WorkspaceContext } from "./context.js";
-import { resolveWorkspacePath } from "./path-policy.js";
+import { resolveAgentPath } from "./path-policy.js";
 import { WorkspacePolicyError, type WorkspaceEditResult } from "./types.js";
-import { writeWorkspaceText } from "./write.js";
+import { writeWorkspaceTextAt } from "./write.js";
 
 function countOccurrences(text: string, value: string): number {
   let count = 0;
@@ -15,6 +15,11 @@ function countOccurrences(text: string, value: string): number {
     offset = found + value.length;
   }
 }
+
+/**
+ * Apply an exact replacement. ``edit`` uses its own capability (``fs.edit``)
+ * so a user can allow new-file writes while still guarding existing files.
+ */
 export async function editWorkspaceText(
   context: WorkspaceContext,
   input: {
@@ -33,7 +38,7 @@ export async function editWorkspaceText(
   ) {
     throw new WorkspacePolicyError("PRECONDITION_FAILED", "Edit precondition is invalid");
   }
-  const resolved = await resolveWorkspacePath(context, input.path);
+  const resolved = await resolveAgentPath(context, input.path, "fs.edit");
   const bytes = await readFile(resolved.absolutePath);
   if (bytes.length > context.limits.maxWriteBytes) {
     throw new WorkspacePolicyError("LIMIT_EXCEEDED", "Edit target exceeds Workspace limit");
@@ -54,9 +59,6 @@ export async function editWorkspaceText(
     );
   }
   const updated = text.split(input.oldText).join(input.newText);
-  const result = await writeWorkspaceText(context, {
-    path: resolved.relativePath,
-    content: updated,
-  });
+  const result = await writeWorkspaceTextAt(context, resolved, updated);
   return { path: result.path, replacements: occurrences, bytes: result.bytes };
 }

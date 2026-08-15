@@ -58,7 +58,7 @@ describe("Phase 8 bootstrap (fixed TS/Pi/TS topology)", () => {
 
     expect(shared.browserPool.isStarted).toBe(true);
     expect(createFormalRuntime).toHaveBeenCalledWith(expect.objectContaining({
-      workspaceDevExec: false,
+      agentExecPolicy: null,
       database: shared.database,
       browserPool: shared.browserPool,
       vlmConfig: {

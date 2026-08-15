@@ -1,4 +1,5 @@
 import type { BioMedAgentTool, BioMedToolResult } from "../contracts.js";
+import { PermissionDeniedError } from "../permissions/index.js";
 import type { TaskWorkspace } from "./index.js";
 import { WorkspacePolicyError } from "./types.js";
 
@@ -50,6 +51,16 @@ async function executeBounded(
       const details = { code: error.code, message: error.message };
       return success(details, true);
     }
+    if (error instanceof PermissionDeniedError) {
+      const details = {
+        code: "PERMISSION_DENIED",
+        message: error.message,
+        capability: error.request.capability,
+        resource: error.request.resource ?? null,
+        scope: error.request.scope,
+      };
+      return success(details, true);
+    }
     return success(
       { code: "WORKSPACE_OPERATION_FAILED", message: "Workspace operation failed" },
       true,
@@ -63,8 +74,8 @@ export function createWorkspaceTools(workspace: TaskWorkspace): BioMedAgentTool[
   return [
     {
       name: "workspace_read",
-      label: "Read Workspace text",
-      description: "Read bounded UTF-8 text from an allowed Task-relative path.",
+      label: "Read text",
+      description: "Read bounded UTF-8 text from a workspace-relative or absolute path (permission-gated).",
       parameters: {
         type: "object",
         properties: {
@@ -86,8 +97,8 @@ export function createWorkspaceTools(workspace: TaskWorkspace): BioMedAgentTool[
     },
     {
       name: "workspace_list",
-      label: "List Workspace paths",
-      description: "List bounded Task-relative entries without following escaping links.",
+      label: "List paths",
+      description: "List bounded entries of a workspace-relative or absolute directory without following escaping links.",
       parameters: {
         type: "object",
         properties: { path: pathProperty, depth: { type: "integer", minimum: 1 } },
@@ -104,8 +115,8 @@ export function createWorkspaceTools(workspace: TaskWorkspace): BioMedAgentTool[
     },
     {
       name: "workspace_search",
-      label: "Search Workspace text",
-      description: "Search bounded UTF-8 Task files using a literal query.",
+      label: "Search text",
+      description: "Search bounded UTF-8 files under a workspace-relative or absolute directory using a literal query.",
       parameters: {
         type: "object",
         properties: { path: pathProperty, query: { type: "string", minLength: 1 } },
@@ -122,8 +133,8 @@ export function createWorkspaceTools(workspace: TaskWorkspace): BioMedAgentTool[
     },
     {
       name: "workspace_write",
-      label: "Write Workspace staging text",
-      description: "Atomically write bounded UTF-8 content beneath staging/agent only.",
+      label: "Write text",
+      description: "Atomically write bounded UTF-8 content to a workspace-relative or absolute path (permission-gated).",
       parameters: {
         type: "object",
         properties: { path: pathProperty, content: { type: "string" } },
@@ -140,8 +151,8 @@ export function createWorkspaceTools(workspace: TaskWorkspace): BioMedAgentTool[
     },
     {
       name: "workspace_edit",
-      label: "Edit Workspace staging text",
-      description: "Apply an exact bounded replacement beneath staging/agent only.",
+      label: "Edit text",
+      description: "Apply an exact bounded replacement to a workspace-relative or absolute path (permission-gated).",
       parameters: {
         type: "object",
         properties: {
@@ -165,8 +176,8 @@ export function createWorkspaceTools(workspace: TaskWorkspace): BioMedAgentTool[
     },
     {
       name: "workspace_exec",
-      label: "Execute development command",
-      description: "Run a bounded executable and argument array when development exec is enabled.",
+      label: "Execute command",
+      description: "Run a bounded executable and argument array when command execution is permitted.",
       parameters: {
         type: "object",
         properties: {

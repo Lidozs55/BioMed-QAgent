@@ -30,6 +30,8 @@ export interface EvaluatorOptions {
   protectedPaths: ProtectedPaths;
   grants: TemporaryGrantStore;
   policyStore: PermissionPolicyStore;
+  /** Migration feature flag override for process.exec (plan §58). */
+  execPolicyOverride?: "deny" | "ask" | "allow";
 }
 
 export type EvaluationResult =
@@ -41,11 +43,13 @@ export class PermissionEvaluator {
   private readonly protectedPaths: ProtectedPaths;
   private readonly grants: TemporaryGrantStore;
   private readonly policyStore: PermissionPolicyStore;
+  private readonly execPolicyOverride?: "deny" | "ask" | "allow";
 
   constructor(options: EvaluatorOptions) {
     this.protectedPaths = options.protectedPaths;
     this.grants = options.grants;
     this.policyStore = options.policyStore;
+    this.execPolicyOverride = options.execPolicyOverride;
   }
 
   async evaluate(request: PermissionRequest): Promise<EvaluationResult> {
@@ -82,6 +86,9 @@ export class PermissionEvaluator {
   private async evaluateExec(request: PermissionRequest): Promise<EvaluationResult> {
     if (this.grants.matches(request.taskId, request.runId, "process.exec", request.scope)) {
       return { decision: "allow", reason: "temporary_grant" };
+    }
+    if (this.execPolicyOverride !== undefined) {
+      return policyResult(this.execPolicyOverride);
     }
     const settings = await this.policyStore.getSettings();
     if (settings.persistent_exec_allow) {

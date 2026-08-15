@@ -17,10 +17,15 @@ import {
   WorkspacePolicyError,
   createTaskWorkspace,
 } from "../src/agent/workspace/index.js";
+import { createPermissionFixture } from "./helpers/permission-fixture.js";
 
 const roots: string[] = [];
 
-async function fixture(options: { exec?: boolean; limits?: Record<string, number> } = {}) {
+async function fixture(options: {
+  exec?: boolean;
+  limits?: Record<string, number>;
+  preset?: "restricted" | "ask_when_needed" | "full_access";
+} = {}) {
   const base = await mkdtemp(path.join(os.tmpdir(), "biomed-workspace-"));
   roots.push(base);
   const workspaceRoot = path.join(base, "workspace");
@@ -31,6 +36,18 @@ async function fixture(options: { exec?: boolean; limits?: Record<string, number
       mkdir(path.join(taskOutputRoot, name), { recursive: true })),
   );
   const audit = new InMemoryWorkspaceAuditSink();
+  const permissionFixture = createPermissionFixture({
+    taskId: "task-1",
+    runId: "run-1",
+    taskOutputRoot,
+  });
+  if (options.preset !== undefined) {
+    await permissionFixture.policyStore.setPreset(options.preset);
+  } else if (options.exec === true) {
+    // Exec tests run real commands: grant command execution up front.
+    await permissionFixture.policyStore.setPersistentExecAllow(true);
+  }
+  const permissions = permissionFixture.broker;
   const workspace = await createTaskWorkspace({
     taskId: "task-1",
     runId: "run-1",
@@ -39,11 +56,11 @@ async function fixture(options: { exec?: boolean; limits?: Record<string, number
     taskOutputRoot,
     dataRoot: base,
     repositoryRoot: base,
+    permissions,
     audit,
     limits: options.limits,
-    developmentExec: options.exec ? { enabled: true } : undefined,
   });
-  return { base, workspaceRoot, taskOutputRoot, audit, workspace };
+  return { base, workspaceRoot, taskOutputRoot, audit, workspace, permissionFixture };
 }
 
 async function writeNested(target: string, content: string | Buffer): Promise<void> {
@@ -157,20 +174,47 @@ describe("governed Task Workspace (data/workspaces/<taskId>)", () => {
   test.each([
     "../outside.txt",
     "..\\outside.txt",
-    "notes/..\\outside.txt",
-    "/etc/passwd",
-    "C:\\outside.txt",
-    "C:outside.txt",
-    "\\\\server\\share\\file.txt",
-    "\\\\?\\C:\\outside.txt",
-    "\\\\.\\pipe\\name",
-    "NUL",
-    "notes/CON.txt",
-  ])("rejects unsafe path representation %s before access", async (candidate) => {
+  ])("rejects relative traversal that escapes the workspace: %s", async (candidate) => {
     const { workspace } = await fixture();
     await expect(workspace.read({ path: candidate })).rejects.toBeInstanceOf(
       WorkspacePolicyError,
     );
+  });
+
+  test.each(["NUL", "notes/CON.txt"])(
+    "rejects reserved path aliases: %s",
+    async (candidate) => {
+      const { workspace } = await fixture();
+      await expect(workspace.read({ path: candidate })).rejects.toBeInstanceOf(
+        WorkspacePolicyError,
+      );
+    },
+  );
+
+  test("in-workspace parent traversal collapses safely instead of being rejected", async () => {
+    const { workspaceRoot, workspace } = await fixture();
+    await writeNested(path.join(workspaceRoot, "notes", "a.txt"), "inside");
+    await expect(workspace.read({ path: "notes/../notes/a.txt" })).resolves.toMatchObject({
+      text: "inside",
+    });
+  });
+
+  test("absolute paths enter the permission system instead of being hard-rejected", async () => {
+    const external = path.join(os.tmpdir(), "biomed-perm-gate", "clinical.csv");
+    const { workspace, permissionFixture } = await fixture();
+    // Default ask_when_needed: an external read suspends the tool call.
+    const requested = workspace.read({ path: external });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(permissionFixture.broker.hasPending("run-1")).toBe(true);
+    const requestId = (permissionFixture.events.at(-1) as { request_id: string }).request_id;
+    await permissionFixture.broker.resolve(requestId, "deny");
+    await expect(requested).rejects.toMatchObject({ name: "PermissionDeniedError" });
+
+    // full_access: the same path is allowed and simply does not exist.
+    const open = await fixture({ preset: "full_access" });
+    await expect(open.workspace.read({ path: external })).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   test("every workspace-relative path is freely readable (no business dir protocol)", async () => {
@@ -213,8 +257,8 @@ describe("governed Task Workspace (data/workspaces/<taskId>)", () => {
     expect(searched.truncated).toBe(true);
   });
 
-  test("does not traverse a symlink or junction escaping the Task workspace", async ({ skip }) => {
-    const { workspaceRoot, workspace } = await fixture();
+  test("a symlink escaping the workspace resolves to its canonical scope", async ({ skip }) => {
+    const { workspaceRoot, workspace, permissionFixture } = await fixture();
     const outside = await mkdtemp(path.join(os.tmpdir(), "biomed-outside-"));
     roots.push(outside);
     await writeFile(path.join(outside, "secret.txt"), "secret", "utf8");
@@ -230,9 +274,15 @@ describe("governed Task Workspace (data/workspaces/<taskId>)", () => {
       throw error;
     }
 
-    await expect(workspace.read({ path: "notes/escape/secret.txt" })).rejects.toMatchObject({
-      code: "PATH_ESCAPE",
-    });
+    // The escaped target is classified external → ask → deny.
+    const requested = workspace.read({ path: "notes/escape/secret.txt" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(permissionFixture.broker.hasPending("run-1")).toBe(true);
+    const requestId = (permissionFixture.events.at(-1) as { request_id: string }).request_id;
+    await permissionFixture.broker.resolve(requestId, "deny");
+    await expect(requested).rejects.toMatchObject({ name: "PermissionDeniedError" });
+
+    // Listing never follows the link.
     await expect(workspace.list({ path: "notes", depth: 2 })).resolves.not.toEqual(
       expect.objectContaining({
         entries: expect.arrayContaining([
@@ -282,22 +332,28 @@ describe("governed Task Workspace (data/workspaces/<taskId>)", () => {
     });
   });
 
-  test("development exec is disabled by default and audited without secrets", async () => {
-    const { audit, workspace } = await fixture();
-    const result = await workspace.exec({
+  test("execution requires permission by default and is audited without secrets", async () => {
+    const { audit, workspace, permissionFixture } = await fixture();
+    const resultPromise = workspace.exec({
       executable: process.execPath,
       args: ["--token=secret-value"],
     });
+    // Default ask_when_needed: the exec request suspends until resolved.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(permissionFixture.broker.hasPending("run-1")).toBe(true);
+    const requestId = (permissionFixture.events.at(-1) as { request_id: string }).request_id;
+    await permissionFixture.broker.resolve(requestId, "deny");
+    const result = await resultPromise;
 
-    expect(result.policy).toBe("disabled");
-    expect(JSON.stringify(result)).not.toContain(process.execPath);
+    expect(result.policy).toBe("rejected");
+    expect(result.stderr).toContain("Permission denied");
     expect(JSON.stringify(audit.records)).not.toContain("secret-value");
     expect(audit.records.at(-1)).toMatchObject({
       taskId: "task-1",
       runId: "run-1",
       piSessionId: "pi-1",
       operation: "exec",
-      result: "disabled",
+      result: "rejected",
     });
   });
 

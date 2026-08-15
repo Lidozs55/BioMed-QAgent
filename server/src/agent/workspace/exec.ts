@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 
+import { PermissionDeniedError } from "../permissions/index.js";
 import type { WorkspaceContext } from "./context.js";
 import type { WorkspaceExecResult } from "./types.js";
 
@@ -59,20 +60,6 @@ export function sanitizedCommand(executable: string, args: readonly string[]): s
   ];
 }
 
-function disabledResult(command: string[]): WorkspaceExecResult {
-  return {
-    command,
-    exitCode: null,
-    stdout: "",
-    stderr: "",
-    durationMs: 0,
-    truncated: false,
-    timedOut: false,
-    cancelled: false,
-    policy: "disabled",
-  };
-}
-
 function rejectedResult(command: string[], message: string, durationMs = 0): WorkspaceExecResult {
   return {
     command,
@@ -87,8 +74,8 @@ function rejectedResult(command: string[], message: string, durationMs = 0): Wor
   };
 }
 
-function safeEnvironment(context: WorkspaceContext): NodeJS.ProcessEnv {
-  const combined = { ...process.env, ...(context.developmentExec?.environment ?? {}) };
+function safeEnvironment(): NodeJS.ProcessEnv {
+  const combined = { ...process.env };
   return Object.fromEntries(
     Object.entries(combined).filter(
       ([key, value]) => value !== undefined && SAFE_ENVIRONMENT_KEYS.has(key.toUpperCase()),
@@ -210,13 +197,30 @@ export async function executeWorkspaceCommand(
   registry: WorkspaceProcessRegistry,
 ): Promise<WorkspaceExecResult> {
   const command = sanitizedCommand(input.executable, input.args);
-  if (context.developmentExec?.enabled !== true) return disabledResult(command);
   const invalid = validateCommand(input, context);
   if (invalid !== undefined) return rejectedResult(command, invalid);
+  // process.exec is an independent high-risk capability (plan §25–§27): the
+  // cwd being the workspace is NOT a sandbox. The broker decides, defaulting
+  // to ask; the execution runtime below keeps the operational controls
+  // (timeout, output limits, cancel, process-tree cleanup, audit).
+  try {
+    await context.permissions.evaluate({
+      capability: "process.exec",
+      command: command.join(" "),
+      cwd: context.workspaceRoot,
+      scope: "workspace",
+      signal,
+    });
+  } catch (error) {
+    if (error instanceof PermissionDeniedError) {
+      return rejectedResult(command, `Permission denied: ${error.message}`);
+    }
+    throw error;
+  }
   const started = performance.now();
   const child = spawn(input.executable, input.args, {
     cwd: context.workspaceRoot,
-    env: safeEnvironment(context),
+    env: safeEnvironment(),
     detached: process.platform !== "win32",
     shell: false,
     stdio: ["ignore", "pipe", "pipe"],

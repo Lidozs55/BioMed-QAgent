@@ -22,6 +22,7 @@ import {
   type BioMedAgentTool,
 } from "../agent/contracts.js";
 import { PiEventAdapter } from "../agent/event-adapter.js";
+import type { PermissionBroker } from "../agent/permissions/broker.js";
 import {
   DurableApprovalGate,
   type ApprovalGateHandle,
@@ -49,6 +50,8 @@ const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 export interface DurableAgentWorkspace {
   root: string;
   tools: readonly BioMedAgentTool[];
+  /** Permission control plane for this task (plan §32–§33). */
+  permissionBroker?: PermissionBroker;
   setRunId?: (runId: string) => void;
   setPiSessionId?: (piSessionId: string) => void;
   consumeBuildResult?: () => BuildResult | null;
@@ -86,6 +89,7 @@ interface ActiveTask {
   adapter: PiEventAdapter;
   activeRunId: string | null;
   approvalGate: ApprovalGateHandle;
+  permissionBroker: PermissionBroker | null;
 }
 
 interface Subscription {
@@ -319,6 +323,7 @@ export async function createDurableAgentRuntime(
         adapter: new PiEventAdapter({ taskId }),
         activeRunId: null,
         approvalGate,
+        permissionBroker: workspace.permissionBroker ?? null,
       };
     } catch (error) {
       await disposeWorkspace();
@@ -445,6 +450,8 @@ export async function createDurableAgentRuntime(
     });
     // A suspended credential approval must not outlive the cancelled run.
     task.approvalGate.rejectPending(runId, new Error("run cancelled"));
+    // A suspended permission request must not outlive the cancelled run either.
+    task.permissionBroker?.rejectPending(runId, new Error("run cancelled"));
     await task.session.cancel("user requested");
     let timer: NodeJS.Timeout | undefined;
     try {
@@ -549,6 +556,43 @@ export async function createDurableAgentRuntime(
       message_id: null,
       content,
     };
+  }
+
+  async function resolvePermission(
+    taskId: string,
+    runId: string,
+    requestId: string,
+    body: Record<string, unknown>,
+  ): Promise<unknown> {
+    const snapshot = await repository.getSnapshot(taskId);
+    if (snapshot === null || !snapshot.runs.some((run) => run.run_id === runId)) {
+      throw new ReferenceError("Run not found");
+    }
+    let decision: "allow" | "deny";
+    if (body.decision === "allow" || body.decision === "deny") {
+      decision = body.decision;
+    } else {
+      throw new TypeError("decision must be allow or deny");
+    }
+    let grantScope: "once" | "run" | "task" | "persistent" | undefined;
+    const rawScope = body.grant_scope;
+    if (rawScope !== undefined && rawScope !== null) {
+      if (rawScope === "once" || rawScope === "run" || rawScope === "task" || rawScope === "persistent") {
+        grantScope = rawScope;
+      } else {
+        throw new TypeError("grant_scope must be once, run, task, or persistent");
+      }
+    }
+    const task = activeTasks.get(taskId);
+    const broker = task?.permissionBroker;
+    if (task === undefined || broker === null || broker === undefined) {
+      throw new ReferenceError("Permission broker is unavailable for this task");
+    }
+    const resolved = await broker.resolve(requestId, decision, grantScope);
+    if (!resolved) {
+      throw new ReferenceError("Permission request not found or expired");
+    }
+    return { status: "resolved", task_id: taskId, run_id: runId, request_id: requestId };
   }
 
   async function deleteTask(taskId: string): Promise<void> {
@@ -679,6 +723,16 @@ export async function createDurableAgentRuntime(
         sendJson(response, 200, await resumeRun(
           decodeURIComponent(resume[1] ?? ""),
           decodeURIComponent(resume[2] ?? ""),
+          await readJsonBody(request),
+        ));
+        return;
+      }
+      const permission = /^\/api\/v1\/tasks\/([^/]+)\/runs\/([^/]+)\/permissions\/([^/]+)$/.exec(url.pathname);
+      if (request.method === "POST" && permission !== null) {
+        sendJson(response, 200, await resolvePermission(
+          decodeURIComponent(permission[1] ?? ""),
+          decodeURIComponent(permission[2] ?? ""),
+          decodeURIComponent(permission[3] ?? ""),
           await readJsonBody(request),
         ));
         return;
@@ -852,7 +906,10 @@ export async function createDurableAgentRuntime(
       for (const socket of sockets) socket.close(1001, "Host shutdown");
       const results = await Promise.allSettled([...activeTasks.values()].map(async (task) => {
         try {
-          if (task.activeRunId !== null) await task.session.cancel("Host shutdown");
+          if (task.activeRunId !== null) {
+            task.permissionBroker?.rejectPending(task.activeRunId, new Error("Host shutdown"));
+            await task.session.cancel("Host shutdown");
+          }
           await task.session.dispose();
         } finally {
           await task.workspace.dispose();

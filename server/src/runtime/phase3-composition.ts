@@ -16,6 +16,14 @@ import {
   type WorkspaceManager,
 } from "../agent/workspace/index.js";
 import { createWorkspaceTools } from "../agent/workspace/tools.js";
+import {
+  AppendOnlyPermissionAuditSink,
+  JsonPermissionPolicyStore,
+  PermissionBroker,
+  PermissionEvaluator,
+  ProtectedPaths,
+  TemporaryGrantStore,
+} from "../agent/permissions/index.js";
 import { coreEventToPayload } from "../dataset/service/events.js";
 import { createDatasetCoreService } from "../dataset/service/dataset-core.js";
 import { TypeScriptDatasetCore } from "../dataset/service/ts-core.js";
@@ -169,7 +177,8 @@ export interface Phase3RuntimeOptions {
   workspacesRoot: string;
   /** Repository root used by the permission classifier. */
   repositoryRoot: string;
-  workspaceDevExec: boolean;
+  /** Migration override for process.exec policy (plan §58). */
+  agentExecPolicy: "deny" | "ask" | "allow" | null;
   adapter?: BioMedAgentAdapter;
   resolveModel?: () => Promise<BioMedModelConfig>;
   /**
@@ -220,6 +229,27 @@ export async function createPhase3Runtime(
       const workspaceRoot = await workspaceManager.ensure(taskId);
       // Framework-owned output: data/output/tasks/<taskId> (plan §3.2).
       const taskRoot = path.join(options.tasksRoot, taskId);
+      // Permission control plane: persistent user settings + per-task broker.
+      const policyStore = new JsonPermissionPolicyStore(
+        path.join(pathConfig.dataRoot, "settings", "agent-permissions.json"),
+      );
+      const grants = new TemporaryGrantStore();
+      const protectedPaths = new ProtectedPaths({ taskOutputRoot: taskRoot });
+      const permissionAudit = new AppendOnlyPermissionAuditSink(taskRoot);
+      const permissionBroker = new PermissionBroker({
+        taskId,
+        runId,
+        evaluator: new PermissionEvaluator({
+          protectedPaths,
+          grants,
+          policyStore,
+          execPolicyOverride: options.agentExecPolicy ?? undefined,
+        }),
+        grants,
+        policyStore,
+        audit: permissionAudit,
+        recordRunEvent,
+      });
       const workspace = await createTaskWorkspace({
         taskId,
         runId,
@@ -227,10 +257,8 @@ export async function createPhase3Runtime(
         taskOutputRoot: taskRoot,
         dataRoot: pathConfig.dataRoot,
         repositoryRoot: options.repositoryRoot,
+        permissions: permissionBroker,
         audit: new AppendOnlyTaskAuditSink(taskRoot),
-        ...(options.workspaceDevExec
-          ? { developmentExec: { enabled: true as const } }
-          : {}),
       });
       const tsCore = new TypeScriptDatasetCore({
         taskId,
@@ -307,9 +335,11 @@ export async function createPhase3Runtime(
       return {
         root: workspaceRoot,
         tools: [...workspaceTools, ...bundle.tools, ...dynamicTools, ...datasetTools],
+        permissionBroker,
         setRunId: (nextRunId: string) => {
           currentRunId = nextRunId;
           workspace.setRunId(nextRunId);
+          permissionBroker.bindRun(nextRunId);
         },
         setPiSessionId: (piSessionId: string) => {
           currentPiSessionId = piSessionId;

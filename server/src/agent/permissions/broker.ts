@@ -71,7 +71,7 @@ interface PendingRequest {
 
 export class PermissionBroker {
   private readonly taskId: string;
-  private readonly runId: string;
+  private runId: string;
   private readonly evaluator: PermissionEvaluator;
   private readonly grants: TemporaryGrantStore;
   private readonly policyStore: PermissionPolicyStore;
@@ -93,6 +93,11 @@ export class PermissionBroker {
 
   get currentRunId(): string {
     return this.runId;
+  }
+
+  /** Bind the broker to the currently active run (sessions outlive runs). */
+  bindRun(runId: string): void {
+    this.runId = runId;
   }
 
   /** True when a permission decision is currently pending for the run. */

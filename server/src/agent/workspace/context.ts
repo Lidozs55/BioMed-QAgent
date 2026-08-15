@@ -1,6 +1,7 @@
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
+import type { PermissionBroker } from "../permissions/broker.js";
 import type { WorkspaceAuditSink } from "./audit.js";
 import { WorkspacePolicyError, type WorkspaceLimits } from "./types.js";
 
@@ -21,11 +22,6 @@ export const DEFAULT_WORKSPACE_LIMITS: WorkspaceLimits = {
   maxExecTimeoutMs: 30_000,
 };
 
-export interface DevelopmentExecConfig {
-  enabled: true;
-  environment?: Readonly<Record<string, string | undefined>>;
-}
-
 /**
  * Workspace context (Agent Workspace refactor).
  *
@@ -43,9 +39,10 @@ export interface TaskWorkspaceConfig {
   taskOutputRoot: string;
   dataRoot: string;
   repositoryRoot: string;
+  /** Permission control plane: every file tool request passes through it. */
+  permissions: PermissionBroker;
   audit: WorkspaceAuditSink;
   limits?: Partial<WorkspaceLimits>;
-  developmentExec?: DevelopmentExecConfig;
 }
 
 export interface WorkspaceContext {
@@ -57,9 +54,9 @@ export interface WorkspaceContext {
   taskOutputRoot: string;
   dataRoot: string;
   repositoryRoot: string;
+  permissions: PermissionBroker;
   audit: WorkspaceAuditSink;
   limits: WorkspaceLimits;
-  developmentExec?: DevelopmentExecConfig;
 }
 
 function requireSafeId(name: string, value: string | undefined, optional = false): void {
@@ -115,8 +112,8 @@ export async function createWorkspaceContext(
     taskOutputRoot: path.resolve(config.taskOutputRoot),
     dataRoot: path.resolve(config.dataRoot),
     repositoryRoot: path.resolve(config.repositoryRoot),
+    permissions: config.permissions,
     audit: config.audit,
     limits: validatedLimits(config.limits),
-    developmentExec: config.developmentExec,
   };
 }

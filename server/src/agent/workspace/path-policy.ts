@@ -1,105 +1,71 @@
-import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
 
+import {
+  classifyCanonicalPath,
+  normalizeAgentPathFor,
+  PathNormalizationError,
+  type NormalizedPath,
+  type ResourceScope,
+} from "../permissions/index.js";
 import type { WorkspaceContext } from "./context.js";
 import { WorkspacePolicyError } from "./types.js";
 
-const RESERVED_WINDOWS_NAME = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$/i;
-
-export interface ResolvedWorkspacePath {
-  relativePath: string;
+export interface ResolvedAgentPath {
+  /** Workspace-relative path when inside the workspace, else the absolute input. */
+  displayPath: string;
+  /** Absolute (uncanonicalized) path. */
   absolutePath: string;
-}
-
-function isContained(root: string, candidate: string): boolean {
-  const relative = path.relative(root, candidate);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  /** Canonical absolute path used for classification and IO. */
+  canonical: string;
+  scope: ResourceScope;
 }
 
 /**
- * Normalize a workspace-relative agent path.
+ * Resolve an agent path (relative → workspace-anchored, absolute → as-is),
+ * canonicalize it, classify its scope, and ask the PermissionBroker for the
+ * capability. Throws when the policy denies; suspends while the user decides.
  *
- * The Agent Workspace refactor removed the ``source_assets/parsed/...``
- * allowlist: the workspace is the agent's own directory, so every relative
- * path inside it is writable. Absolute paths are accepted from the
- * permission-system layer (path-normalizer), not here.
+ * The Agent Workspace refactor removed the old "absolute path / ``../``
+ * escape → reject" rule: paths now flow through normalize → classify →
+ * PermissionBroker (plan §13, §20).
  */
-export function normalizeAgentPath(input: string): string {
-  if (typeof input !== "string" || input.length === 0 || input.includes("\0")) {
-    throw new WorkspacePolicyError("INVALID_PATH", "Path must be a non-empty string");
-  }
-  const slashPath = input.replaceAll("\\", "/");
-  if (
-    slashPath.startsWith("/") ||
-    slashPath.startsWith("//") ||
-    /^[A-Za-z]:/.test(slashPath)
-  ) {
-    throw new WorkspacePolicyError("INVALID_PATH", "Absolute and device paths are forbidden");
-  }
-  const rawParts = slashPath.split("/");
-  if (rawParts.some((part) => part === "..")) {
-    throw new WorkspacePolicyError("INVALID_PATH", "Parent traversal is forbidden");
-  }
-  const parts = rawParts.filter((part) => part !== "" && part !== ".");
-  for (const part of parts) {
-    if (part.endsWith(".") || part.endsWith(" ") || RESERVED_WINDOWS_NAME.test(part)) {
-      throw new WorkspacePolicyError("INVALID_PATH", "Reserved path aliases are forbidden");
-    }
-  }
-  return parts.join("/");
-}
-
-async function canonicalExistingAncestor(target: string): Promise<string> {
-  let candidate = target;
-  while (true) {
-    try {
-      await lstat(candidate);
-      return realpath(candidate);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      const parent = path.dirname(candidate);
-      if (parent === candidate) throw error;
-      candidate = parent;
-    }
-  }
-}
-
-async function ensureCanonicalContainment(
-  context: WorkspaceContext,
-  absolutePath: string,
-): Promise<void> {
-  let canonical: string;
-  try {
-    canonical = await canonicalExistingAncestor(absolutePath);
-  } catch (error) {
-    throw new WorkspacePolicyError("NOT_FOUND", "Workspace path does not exist", {
-      cause: error,
-    });
-  }
-  if (!isContained(context.canonicalWorkspaceRoot, canonical)) {
-    throw new WorkspacePolicyError("PATH_ESCAPE", "Resolved path escapes Task Workspace");
-  }
-}
-
-/** Resolve a workspace-relative path and verify canonical containment. */
-export async function resolveWorkspacePath(
+export async function resolveAgentPath(
   context: WorkspaceContext,
   input: string,
-): Promise<ResolvedWorkspacePath> {
-  const relativePath = normalizeAgentPath(input);
-  const absolutePath = relativePath === ""
-    ? context.workspaceRoot
-    : path.resolve(context.workspaceRoot, ...relativePath.split("/"));
-  if (!isContained(context.workspaceRoot, absolutePath)) {
-    throw new WorkspacePolicyError("PATH_ESCAPE", "Path escapes Task Workspace");
+  capability: "fs.read" | "fs.write" | "fs.edit",
+): Promise<ResolvedAgentPath> {
+  if (typeof input !== "string" || input.length === 0) {
+    throw new TypeError("Path must be a non-empty string");
   }
-  await ensureCanonicalContainment(context, absolutePath);
-  return { relativePath, absolutePath };
-}
-
-export async function verifyCanonicalPath(
-  context: WorkspaceContext,
-  absolutePath: string,
-): Promise<void> {
-  await ensureCanonicalContainment(context, absolutePath);
+  let normalized: NormalizedPath;
+  try {
+    normalized = await normalizeAgentPathFor(input, context.canonicalWorkspaceRoot);
+  } catch (error) {
+    if (error instanceof PathNormalizationError) {
+      throw new WorkspacePolicyError("INVALID_PATH", error.message);
+    }
+    throw error;
+  }
+  const scope = classifyCanonicalPath(normalized.canonical, {
+    workspaceRoot: context.canonicalWorkspaceRoot,
+    taskOutputRoot: context.taskOutputRoot,
+    repositoryRoot: context.repositoryRoot,
+  });
+  await context.permissions.evaluate({
+    capability,
+    resource: input,
+    canonicalResource: normalized.canonical,
+    scope,
+  });
+  const within = process.platform === "win32"
+    ? normalized.canonical.toLowerCase().startsWith(context.canonicalWorkspaceRoot.toLowerCase())
+    : normalized.canonical.startsWith(context.canonicalWorkspaceRoot);
+  return {
+    displayPath: within
+      ? path.relative(context.workspaceRoot, normalized.absolute).replaceAll("\\", "/")
+      : input,
+    absolutePath: normalized.absolute,
+    canonical: normalized.canonical,
+    scope,
+  };
 }
