@@ -1,7 +1,5 @@
-import { useEffect, useState } from "react";
-
 import BuildResultsViewer from "@/components/BuildResultsViewer";
-import { useAPI } from "@/hooks/useAPI";
+import { ArtifactCard } from "@/components/artifacts/ArtifactCard";
 import { useTaskBuildId } from "@/hooks/useTaskBuild";
 import {
   Accordion,
@@ -9,16 +7,7 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Empty,
   EmptyDescription,
@@ -27,19 +16,7 @@ import {
 } from "@/components/ui/empty";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import {
-  DatabaseIcon,
-  DownloadIcon,
-  InfoIcon,
-} from "@phosphor-icons/react";
+import { DatabaseIcon, InfoIcon } from "@phosphor-icons/react";
 import type { ActivityProjection, ArtifactProjection } from "@/runtime/types";
 import {
   selectActiveActivities,
@@ -47,13 +24,6 @@ import {
   selectActiveTask,
 } from "@/stores/agentSelectors";
 import { useAgentStore } from "@/stores/agentStore";
-import {
-  fileType,
-  formatSize,
-  getExtension,
-  triggerArtifactDownload,
-} from "@/lib/fileUtils";
-import { fetchPreviewText, parseCSV } from "@/lib/csvUtils";
 import { isActiveStatus } from "@/runtime/reducer";
 
 interface SourceEntry {
@@ -111,148 +81,6 @@ function parseSourceManifest(activities: readonly ActivityProjection[]): SourceE
       }];
     }
   });
-}
-
-export function CsvPreview({
-  artifactUrl,
-  noDataMessage,
-  maxRows = 100,
-}: {
-  artifactUrl: string;
-  noDataMessage?: string;
-  maxRows?: number;
-}) {
-  const [state, setState] = useState<{
-    url: string;
-    data: ReturnType<typeof parseCSV> | null;
-    error: boolean;
-  } | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    fetchPreviewText(artifactUrl)
-      .then((text) => {
-        if (!cancelled) setState({ url: artifactUrl, data: parseCSV(text), error: false });
-      })
-      .catch(() => {
-        if (!cancelled) setState({ url: artifactUrl, data: null, error: true });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [artifactUrl]);
-
-  if (state?.url !== artifactUrl) {
-    return (
-      <div className="flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground">
-        <Spinner />
-        加载中...
-      </div>
-    );
-  }
-  if (state.error) {
-    return <Empty className="border-0 py-4"><EmptyHeader><EmptyTitle>无法加载 CSV 数据</EmptyTitle></EmptyHeader></Empty>;
-  }
-  if (state.data === null || state.data.headers.length === 0 || state.data.rows.length === 0) {
-    const headerNote =
-      state.data !== null && state.data.headers.length > 0
-        ? `仅含表头：${state.data.headers.join("、")}`
-        : undefined;
-    return (
-      <Empty className="border-0 py-4">
-        <EmptyHeader>
-          <EmptyTitle>{noDataMessage ?? "无数据"}</EmptyTitle>
-          {headerNote !== undefined && (
-            <EmptyDescription>{headerNote}</EmptyDescription>
-          )}
-        </EmptyHeader>
-      </Empty>
-    );
-  }
-
-  return (
-    <div className="max-w-full overflow-x-auto rounded-md border">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            {state.data.headers.map((header, index) => (
-              <TableHead key={`${header}-${index}`} className="whitespace-nowrap text-xs">
-                {header}
-              </TableHead>
-            ))}
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-            {state.data.rows.slice(0, maxRows).map((row, rowIndex) => (
-            <TableRow key={`row-${rowIndex}`}>
-              {row.map((cell, cellIndex) => (
-                <TableCell key={`${rowIndex}-${cellIndex}`} className="whitespace-nowrap text-xs">
-                  {cell}
-                </TableCell>
-              ))}
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-      {(state.data.truncated || state.data.rows.length > maxRows) && (
-        <p className="px-2 py-1 text-xs text-muted-foreground">
-          仅显示前 {maxRows} 行
-        </p>
-      )}
-    </div>
-  );
-}
-
-function ArtifactCard({
-  artifact,
-  taskId,
-  noDataMessage,
-}: {
-  artifact: ArtifactProjection;
-  taskId: string;
-  noDataMessage?: string;
-}) {
-  const { getArtifactUrl } = useAPI();
-  const { Icon, label } = fileType(artifact.name, artifact.role);
-  const ext = getExtension(artifact.name);
-  const url = getArtifactUrl(taskId, artifact.artifact_id);
-  const isCsvPreviewable = ext === "csv" || ext === "tsv" || ext === "txt";
-  const isPreviewable = isCsvPreviewable;
-
-  return (
-    <Card size="sm" className="min-w-0">
-      <CardHeader>
-        <div className="flex min-w-0 items-center gap-2">
-          <Icon aria-hidden="true" className="shrink-0 text-muted-foreground" />
-          <CardTitle className="min-w-0 truncate" title={artifact.name}>
-            {artifact.name}
-          </CardTitle>
-          <Badge variant="outline" className="shrink-0">{label}</Badge>
-        </div>
-        <CardDescription>{formatSize(artifact.size)}</CardDescription>
-      </CardHeader>
-      {isPreviewable && (
-        <CardContent>
-          <Accordion>
-            <AccordionItem value={`csv-preview-${artifact.artifact_id}`}>
-              <AccordionTrigger>CSV 预览</AccordionTrigger>
-              <AccordionContent><CsvPreview artifactUrl={url} noDataMessage={noDataMessage} /></AccordionContent>
-            </AccordionItem>
-          </Accordion>
-        </CardContent>
-      )}
-      <CardFooter>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => triggerArtifactDownload(url, artifact.name)}
-        >
-          <DownloadIcon data-icon="inline-start" />
-          下载
-        </Button>
-      </CardFooter>
-    </Card>
-  );
 }
 
 interface ResultsViewerProps {

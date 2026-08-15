@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import {
-  DownloadIcon,
   InfoIcon,
   WarningCircleIcon,
 } from "@phosphor-icons/react";
 
-import { CsvPreview } from "@/components/ResultsViewer";
+import { BuildArtifactCard } from "@/components/artifacts/BuildArtifactCard";
+import { artifactBasename } from "@/components/artifacts/artifactPreview";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -31,7 +31,7 @@ import {
   TabsTrigger,
 } from "@/components/ui/tabs";
 import { useAPI } from "@/hooks/useAPI";
-import { formatSize, triggerArtifactDownload } from "@/lib/fileUtils";
+import { formatSize } from "@/lib/fileUtils";
 import type {
   BuildDetail,
   BuildResult,
@@ -73,10 +73,6 @@ function summaryRecord(
 function formatCoverage(ratio: number | undefined): string {
   if (ratio === undefined || !Number.isFinite(ratio)) return "—";
   return `${(ratio * 100).toFixed(2)}%`;
-}
-
-function artifactBasename(entry: ManifestArtifactEntry): string {
-  return entry.relative_path.split("/").pop() ?? entry.relative_path;
 }
 
 /* ------------------------------------------------------------------ */
@@ -159,47 +155,6 @@ function SummaryStat({ label, value }: { label: string; value: string }) {
       <p className="text-xs text-muted-foreground">{label}</p>
       <p className="truncate text-sm font-medium">{value}</p>
     </div>
-  );
-}
-
-function BuildArtifactCard({
-  entry,
-  buildId,
-  taskId,
-  previewCsv,
-}: {
-  entry: ManifestArtifactEntry;
-  buildId: string;
-  taskId?: string | null;
-  previewCsv?: boolean;
-}) {
-  const { getBuildArtifactUrl } = useAPI();
-  const name = artifactBasename(entry);
-  const url = getBuildArtifactUrl(buildId, entry.artifact_id, taskId);
-  return (
-    <Card size="sm" className="min-w-0">
-      <CardHeader>
-        <CardTitle className="truncate text-sm" title={name}>{name}</CardTitle>
-        <CardDescription>
-          {entry.media_type} · {formatSize(entry.size_bytes)}
-        </CardDescription>
-      </CardHeader>
-      {previewCsv === true && (
-        <CardContent>
-          <CsvPreview artifactUrl={url} noDataMessage="无数据" />
-        </CardContent>
-      )}
-      <CardFooter>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => triggerArtifactDownload(url, name)}
-        >
-          <DownloadIcon data-icon="inline-start" />
-          下载
-        </Button>
-      </CardFooter>
-    </Card>
   );
 }
 
