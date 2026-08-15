@@ -20,7 +20,7 @@ export function DatabaseSettingsSection({
   onDeleteDatabase,
 }: DatabaseSettingsSectionProps) {
   return (
-    <div className="space-y-8">
+    <div className="flex flex-col gap-8">
       <SettingSection
         title="数据库目录"
         description="数据库是可选择、声明式的检索来源。"

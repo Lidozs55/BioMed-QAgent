@@ -35,6 +35,7 @@ import {
 } from "@/components/ui/dialog";
 import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -227,20 +228,20 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
           <ArrowLeftIcon data-icon="inline-start" />
           返回应用
         </Button>
-        <span className="mx-1 h-4 w-px bg-border" aria-hidden="true" />
+        <Separator orientation="vertical" className="mx-1" />
         <h1 className="truncate text-sm font-semibold">{currentItem?.label ?? "设置"}</h1>
       </header>
 
       <div className="flex min-h-0 flex-1">
         <aside className="hidden w-60 shrink-0 flex-col overflow-y-auto border-r bg-muted/25 p-3 md:flex">
           <SettingsSearch onNavigate={navigate} className="mb-5" />
-          <nav aria-label="设置分类" className="space-y-5">
+          <nav aria-label="设置分类" className="flex flex-col gap-5">
             {SETTINGS_NAV_GROUPS.map((group) => (
               <div key={group.id}>
-                <p className="px-2 pb-1.5 text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
+                <p className="px-2 pb-1.5 text-xs font-medium tracking-wider text-muted-foreground uppercase">
                   {group.label}
                 </p>
-                <div className="space-y-0.5">
+                <div className="flex flex-col gap-0.5">
                   {group.items.map((item) => {
                     const Icon = item.icon;
                     const active = activeSection === item.id;
@@ -302,7 +303,7 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
               </header>
 
               {loading ? (
-                <div className="space-y-4">
+                <div className="flex flex-col gap-4">
                   <Skeleton className="h-8 w-64" />
                   <Skeleton className="h-72 w-full" />
                   <Skeleton className="h-48 w-full" />

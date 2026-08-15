@@ -2,6 +2,7 @@ import { type ReactNode } from "react";
 
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
 
 /* ------------------------------------------------------------------ */
@@ -72,8 +73,8 @@ export interface SettingSectionProps {
 
 export function SettingSection({ title, description, children, className }: SettingSectionProps) {
   return (
-    <section aria-label={title} className={cn("space-y-3", className)}>
-      <div className="space-y-1">
+    <section aria-label={title} className={cn("flex flex-col gap-3", className)}>
+      <div className="flex flex-col gap-1">
         <h2 className="text-base font-semibold tracking-tight">{title}</h2>
         {description && <p className="text-sm leading-relaxed text-muted-foreground">{description}</p>}
       </div>
@@ -149,7 +150,7 @@ export function NumberField({
         className="w-full"
       />
       {marks && (
-        <div className="flex justify-between px-0.5 text-[10px] text-muted-foreground">
+        <div className="flex justify-between px-0.5 text-xs text-muted-foreground">
           {marks.map((mark) => (
             <span key={mark.value}>{mark.label}</span>
           ))}
@@ -183,29 +184,26 @@ export function SegmentedControl<T extends string>({
   className?: string;
 }) {
   return (
-    <div
-      role="group"
+    <ToggleGroup
+      value={[value]}
+      onValueChange={(next) => {
+        const selected = next[0];
+        if (selected !== undefined) onChange(selected as T);
+      }}
       aria-label={ariaLabel}
-      className={cn("flex rounded-lg border border-border bg-muted/50 p-0.5", disabled && "opacity-50", className)}
+      disabled={disabled}
+      className={cn("rounded-lg border border-border bg-muted/50 p-0.5", disabled && "opacity-50", className)}
     >
       {options.map((option) => (
-        <button
+        <ToggleGroupItem
           key={option.value}
-          type="button"
-          aria-pressed={value === option.value}
-          disabled={disabled}
-          onClick={() => onChange(option.value)}
-          className={cn(
-            "h-7 rounded-md px-3 text-xs font-medium whitespace-nowrap transition-colors focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
-            value === option.value
-              ? "bg-background text-foreground shadow-sm"
-              : "text-muted-foreground hover:text-foreground",
-          )}
+          value={option.value}
+          className="h-7 rounded-md px-3 text-xs font-medium whitespace-nowrap transition-colors text-muted-foreground hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none aria-pressed:bg-background aria-pressed:text-foreground aria-pressed:shadow-sm aria-pressed:hover:bg-background"
         >
           {option.label}
-        </button>
+        </ToggleGroupItem>
       ))}
-    </div>
+    </ToggleGroup>
   );
 }
 

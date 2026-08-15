@@ -106,7 +106,7 @@ function capabilityChips(
         .map(([, label]) => (
           <span
             key={label}
-            className="rounded bg-muted px-1 py-0.5 text-[10px] font-medium text-muted-foreground"
+            className="rounded bg-muted px-1 py-0.5 text-xs font-medium text-muted-foreground"
           >
             {label}
           </span>
@@ -711,7 +711,7 @@ export function ModelImportSheet({
                             </div>
                           </div>
                           {expanded && selected && (
-                            <div className="space-y-3 border-t bg-muted/30 px-3 py-3">
+                            <div className="flex flex-col gap-3 border-t bg-muted/30 px-3 py-3">
                               <div>
                                 <p className="text-sm font-medium">{model.name}</p>
                                 <p className="mt-0.5 text-xs text-muted-foreground">
@@ -726,7 +726,7 @@ export function ModelImportSheet({
                               />
                               <div className="flex items-center justify-between gap-3 border-t pt-3">
                                 {selectedIsOfficial && (
-                                  <p className="text-xs text-amber-600 dark:text-amber-400">
+                                  <p className="text-xs text-warning">
                                     官方提供的参数，请谨慎修改
                                   </p>
                                 )}
@@ -776,7 +776,7 @@ export function ModelImportSheet({
               </DialogDescription>
             </DialogHeader>
             {selectedIsOfficial && (
-              <div className="shrink-0 border-b bg-amber-50 px-5 py-2 text-xs text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
+              <div className="shrink-0 border-b bg-warning/5 px-5 py-2 text-xs text-warning">
                 官方提供的参数，请谨慎修改
               </div>
             )}
@@ -818,7 +818,7 @@ export function ModelImportSheet({
             <DialogTitle>手动添加模型</DialogTitle>
             <DialogDescription>填写模型信息与支持的参数；带 * 为必填。</DialogDescription>
           </DialogHeader>
-          <FieldGroup className="space-y-3">
+          <FieldGroup>
             <Field>
               <FieldLabel htmlFor="manual-model-id">模型 ID *</FieldLabel>
               <Input

@@ -122,6 +122,7 @@ function ThemePreviewCard({
   darkPreview: boolean;
   onClick: () => void;
 }) {
+  // 预览卡使用真实色板色值渲染主题效果，属有意例外（DESIGN.md 语义色规则不适用于主题预览）
   return (
     <button
       type="button"
@@ -159,7 +160,7 @@ function ThemePreviewCard({
       </div>
       <div className="mt-2.5 flex items-baseline justify-between gap-2">
         <span className="text-sm font-medium">{label}</span>
-        <span className="text-[11px] text-muted-foreground">{active ? "当前" : hint}</span>
+        <span className="text-xs text-muted-foreground">{active ? "当前" : hint}</span>
       </div>
     </button>
   );
@@ -242,7 +243,7 @@ export function AppearanceSettingsSection() {
   };
 
   return (
-    <div className="space-y-8">
+    <div className="flex flex-col gap-8">
       <SettingSection
         title="主题模式"
         description="选择跟随系统，或固定使用浅色 / 深色主题。"
@@ -365,17 +366,18 @@ export function AppearanceSettingsSection() {
           {importedFonts.length > 0 && (
             <div className="px-5 py-4">
               <div className="rounded-lg border bg-muted/40 p-4">
-                <p className="text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
+                <p className="text-xs font-medium tracking-wider text-muted-foreground uppercase">
                   已导入字体
                 </p>
                 <div className="mt-3 flex flex-wrap gap-2">
                   {importedFonts.map((item) => {
                     const selected = font === customFontId(item.id);
                     return (
-                      <span
+                      <Badge
                         key={item.id}
+                        variant="outline"
                         className={cn(
-                          "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs",
+                          "py-1",
                           selected
                             ? "border-primary/40 bg-primary/10 font-medium text-primary"
                             : "bg-background text-foreground",
@@ -390,7 +392,7 @@ export function AppearanceSettingsSection() {
                         >
                           <XIcon className="size-3" />
                         </button>
-                      </span>
+                      </Badge>
                     );
                   })}
                 </div>
@@ -403,7 +405,7 @@ export function AppearanceSettingsSection() {
               data-setting-id="settings-font-preview"
             >
               <div className="flex items-center justify-between gap-3">
-                <p className="text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
+                <p className="text-xs font-medium tracking-wider text-muted-foreground uppercase">
                   所选字体展示
                 </p>
                 <Badge variant="outline">{fontDisplayName(font, importedFonts)}</Badge>

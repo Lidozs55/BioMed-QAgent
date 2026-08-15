@@ -149,7 +149,7 @@ export function ModelSettingsSection({
     managedModels.find((model) => model.model_id === activeModelId) ?? null;
 
   return (
-    <div className="space-y-10">
+    <div className="flex flex-col gap-10">
       <SettingSection
         title="供应商管理"
         description="配置模型供应商的代号、Base URL 与 API Key，可从常用供应商快捷填入。"

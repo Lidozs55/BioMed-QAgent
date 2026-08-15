@@ -152,7 +152,7 @@ export function ProviderManager({ api, providers, loading, onChanged }: Provider
   };
 
   return (
-    <div className="space-y-3">
+    <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between gap-3">
         <p className="text-sm text-muted-foreground">
           管理模型供应商：名称仅作为代号，配合 Base URL 与 API Key 使用。
@@ -172,7 +172,7 @@ export function ProviderManager({ api, providers, loading, onChanged }: Provider
           还没有供应商，点击“添加供应商”开始配置。
         </div>
       ) : (
-        <ul className="space-y-2">
+        <ul className="flex flex-col gap-2">
           {providers.map((provider) => (
             <li
               key={provider.id}

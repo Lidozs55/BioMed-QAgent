@@ -178,7 +178,7 @@ export function ModelListManager({
   };
 
   return (
-    <div className="space-y-3">
+    <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between gap-3">
         <p className="text-sm text-muted-foreground">
           维护各供应商下的模型：可从供应商返回的列表导入，也可手动添加。
@@ -208,7 +208,7 @@ export function ModelListManager({
           还没有维护的模型，点击“添加模型”开始。
         </div>
       ) : (
-        <ul className="space-y-2">
+        <ul className="flex flex-col gap-2">
           {managedModels.map((model) => {
             const isActive = model.model_id === activeModelName;
             const editing = editingId === model.id;
@@ -285,7 +285,7 @@ export function ModelListManager({
                       </dl>
                       <div>
                         {editJsonOpen ? (
-                          <div className="space-y-2">
+                          <div className="flex flex-col gap-2">
                             <Textarea
                               value={editJsonText}
                               onChange={(event) => {
@@ -324,7 +324,7 @@ export function ModelListManager({
                     </div>
                     <div className="mt-4 flex items-center justify-between gap-3 border-t pt-3">
                       {model.source !== "manual" && (
-                        <p className="text-xs text-amber-600 dark:text-amber-400">
+                        <p className="text-xs text-warning">
                           官方提供的参数，请谨慎修改
                         </p>
                       )}

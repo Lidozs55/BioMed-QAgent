@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 
 export function GeneralSettingsSection({ onExportCache }: { onExportCache: () => void }) {
   return (
-    <div className="space-y-8">
+    <div className="flex flex-col gap-8">
       <SettingSection
         title="本地数据"
         description="管理保存在本机浏览器中的任务与工作区数据。"

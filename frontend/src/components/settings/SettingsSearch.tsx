@@ -1,10 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { MagnifyingGlassIcon, XIcon } from "@phosphor-icons/react";
 
+import { getSettingsNavGroup } from "@/components/settings/settingsNavConfig";
 import { Input } from "@/components/ui/input";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { searchSettingsIndex, type SettingsIndexEntry } from "@/lib/settingsIndex";
 import { cn } from "@/lib/utils";
-import { getSettingsNavGroup } from "@/components/settings/settingsNavConfig";
 
 export interface SettingsSearchProps {
   onNavigate: (section: string, anchor: string) => void;
@@ -56,41 +61,47 @@ export function SettingsSearch({ onNavigate, className }: SettingsSearchProps) {
   };
 
   return (
-    <div className={cn("relative", className)}>
-      <MagnifyingGlassIcon className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
-      <Input
-        ref={inputRef}
-        id="settings-search"
-        value={query}
-        placeholder="搜索设置..."
-        aria-label="搜索设置"
-        autoComplete="off"
-        onChange={(event) => {
-          setQuery(event.target.value);
-          setActiveIndex(0);
-          setOpen(true);
-        }}
-        onFocus={() => setOpen(true)}
-        onBlur={() => window.setTimeout(() => setOpen(false), 120)}
-        onKeyDown={handleInputKeyDown}
-        className="h-8 pr-7 pl-8"
-      />
-      {query && (
-        <button
-          type="button"
-          aria-label="清空搜索"
-          className="absolute top-1/2 right-2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-          onClick={() => {
-            setQuery("");
-            inputRef.current?.focus();
-          }}
-        >
-          <XIcon className="size-3.5" />
-        </button>
-      )}
-      {open && query && (
-        <div className="absolute top-full right-0 left-0 z-50 mt-1 overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-md ring-1 ring-foreground/10">
-          {results.length === 0 ? (
+    <Popover open={open} onOpenChange={setOpen}>
+      <div className={cn("relative", className)}>
+        <MagnifyingGlassIcon className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
+        <PopoverTrigger
+          render={
+            <Input
+              ref={inputRef}
+              id="settings-search"
+              type="text"
+              value={query}
+              placeholder="搜索设置..."
+              aria-label="搜索设置"
+              autoComplete="off"
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setActiveIndex(0);
+                setOpen(true);
+              }}
+              onFocus={() => setOpen(true)}
+              onKeyDown={handleInputKeyDown}
+              className="h-8 pr-7 pl-8"
+            />
+          }
+        />
+        {query && (
+          <button
+            type="button"
+            aria-label="清空搜索"
+            className="absolute top-1/2 right-2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+            onClick={() => {
+              setQuery("");
+              inputRef.current?.focus();
+            }}
+          >
+            <XIcon className="size-3.5" />
+          </button>
+        )}
+      </div>
+      <PopoverContent align="start" className="w-(--anchor-width) p-1!">
+        {query &&
+          (results.length === 0 ? (
             <div className="px-3 py-2.5 text-xs text-muted-foreground">无匹配项</div>
           ) : (
             <ul role="listbox" aria-label="设置搜索结果" className="max-h-80 overflow-y-auto p-1">
@@ -118,9 +129,8 @@ export function SettingsSearch({ onNavigate, className }: SettingsSearchProps) {
                 );
               })}
             </ul>
-          )}
-        </div>
-      )}
-    </div>
+          ))}
+      </PopoverContent>
+    </Popover>
   );
 }
