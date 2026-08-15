@@ -191,6 +191,7 @@ export async function searchGdc(
   const term = expectString(args, "term", "");
   const effectiveTerm = query || term;
   const hooks = noopHooks(deps.hooks);
+  hooks.onQueryStarted(effectiveTerm, "gdc");
 
   const url = buildGdcUrl("/projects", {
     format: "json",
@@ -258,6 +259,7 @@ export async function describeGdc(
   const projectId = expectString(args, "project_id", "");
   const dataCategory = expectOptionalString(args, "data_category");
   const hooks = noopHooks(deps.hooks);
+  hooks.onQueryStarted(projectId, "gdc");
 
   const url = buildGdcUrl(`/projects/${projectId}`, {
     format: "json",

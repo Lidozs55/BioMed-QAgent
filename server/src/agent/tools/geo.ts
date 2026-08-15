@@ -272,6 +272,7 @@ export function createSearchGeoTool(options: GeoToolsOptions): BioMedAgentTool {
           }),
         };
       }
+      hooks.onQueryStarted(effectiveTerm, "geo");
       const discovery =
         options.discovery ??
         new GeoEutilsClient({

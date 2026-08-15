@@ -147,6 +147,7 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
     execute: async (argumentsValue, signal) => {
       const record = argumentsValue as { url?: unknown };
       const url = typeof record.url === "string" ? record.url : "";
+      hooks.onQueryStarted(url, SOURCE);
       try {
         const result = await options.crawler.browser(url, signal);
         if (!result.ok) {
@@ -203,6 +204,7 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
       const record = argumentsValue as { url?: unknown; filename?: unknown };
       const url = typeof record.url === "string" ? record.url : "";
       const filename = typeof record.filename === "string" ? record.filename : "";
+      hooks.onQueryStarted(filename, SOURCE);
       try {
         validateDownloadFilename(filename);
         const dirs = taskWorkDirs(options.taskRoot);

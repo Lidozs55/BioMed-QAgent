@@ -112,6 +112,28 @@ function terminalizeRunningFixtureStages(
   return changed ? { ...task, stages } : task;
 }
 
+/**
+ * Run-scoped safety net for operation items (V2 lifecycle, Design §15.1):
+ * when the run reaches a terminal state, any operation still ``running`` is
+ * finalized so the timeline never shows a spinner past the run end. This
+ * covers progress-only operations (tool queries before the lifecycle fix,
+ * ``tool:discovery:*`` aggregation) and error paths where a query started
+ * but never reported completion.
+ */
+function terminalizeRunningOperations(
+  task: TaskProjection,
+  runId: string,
+  status: "completed" | "failed" | "cancelled",
+): TaskProjection {
+  const items = task.items.map((item) =>
+    item.kind === "operation" && item.runId === runId && item.status === "running"
+      ? { ...item, status }
+      : item,
+  );
+  const changed = items.some((item, index) => item !== task.items[index]);
+  return changed ? { ...task, items } : task;
+}
+
 function addQueuedSubagent(
   task: TaskProjection,
   envelope: EventEnvelope,
@@ -392,6 +414,19 @@ export function applyRunTerminalEvent(
       error,
     );
   }
+  // Operations without a terminal event of their own (tool query ops whose
+  // completed/failed event was never emitted, aggregation ops like
+  // ``tool:discovery:discovered_records`` that have no natural end signal)
+  // must not linger "running" after the run ends.
+  next = terminalizeRunningOperations(
+    next,
+    runId,
+    payload.type === "run_completed"
+      ? "completed"
+      : payload.type === "run_failed"
+        ? "failed"
+        : "cancelled",
+  );
   next = deactivateRunAssistantStream(next, runId);
   next = deactivateRunStreamingItems(next, runId);
   if (payload.type === "run_completed") {

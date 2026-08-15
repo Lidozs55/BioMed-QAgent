@@ -528,6 +528,97 @@ describe("runtime event projection", () => {
     expect(after.summary.latest_sequence).toBe(4);
   });
 
+  it("finalizes running operation items when the run completes (lifecycle gap safety net)", () => {
+    let state = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_op_gap", "running", 0)),
+      false,
+    );
+    // Progress-only operations (pre-lifecycle tool queries and the
+    // ``tool:discovery:*`` aggregation) never receive a terminal event.
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_op_gap", "run_op_gap", 1, {
+        type: "operation_progress",
+        operation_id: "tool:geo:query",
+        kind: "query",
+        current: 5,
+        total: null,
+        detail: { source: "geo", status: "success", query: "TP53" },
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_op_gap", "run_op_gap", 2, {
+        type: "operation_progress",
+        operation_id: "tool:discovery:discovered_records",
+        kind: "discovered_records",
+        current: 5,
+        total: 20703,
+        detail: {},
+      }),
+    );
+    const before = state.tasksById.task_op_gap;
+    expect(
+      before.items.every(
+        (item) => item.kind !== "operation" || item.status === "running",
+      ),
+    ).toBe(true);
+
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_op_gap", "run_op_gap", 3, { type: "run_completed" }),
+    );
+
+    const after = state.tasksById.task_op_gap;
+    const operations = after.items.filter((item) => item.kind === "operation");
+    expect(operations).toHaveLength(2);
+    for (const operation of operations) {
+      expect(operation.status).toBe("completed");
+    }
+    // Progress payloads survive the terminalization.
+    expect(
+      after.items.find(
+        (item) => item.kind === "operation" && item.operationId === "tool:geo:query",
+      ),
+    ).toMatchObject({
+      status: "completed",
+      progress: { kind: "query", current: 5, total: null },
+    });
+  });
+
+  it("finalizes running operation items as failed when the run fails", () => {
+    let state = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_op_gap_fail", "running", 0)),
+      false,
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_op_gap_fail", "run_op_gap_fail", 1, {
+        type: "operation_progress",
+        operation_id: "tool:pubmed:query",
+        kind: "query",
+        current: 5,
+        total: null,
+        detail: { source: "pubmed" },
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_op_gap_fail", "run_op_gap_fail", 2, {
+        type: "run_failed",
+        error: "Pi turn failed",
+        error_code: "internal_error",
+      }),
+    );
+    const operations = state.tasksById.task_op_gap_fail.items.filter(
+      (item) => item.kind === "operation",
+    );
+    expect(operations).toHaveLength(1);
+    expect(operations[0]).toMatchObject({ status: "failed" });
+  });
+
   it("caps the rendered timeline and drops the oldest items past ITEMS_CAP", () => {
     let state = mergeTaskPage(
       createInitialRuntimeState(),

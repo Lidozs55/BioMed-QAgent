@@ -74,6 +74,7 @@ export function createChemblTools(deps: ChemblToolDeps): BioMedAgentTool[] {
           browserFallback: deps.browserFallback,
           signal,
           rateLimitMs: deps.rateLimitMs,
+          onQueryStarted: hooks.onQueryStarted,
           onQuery: hooks.onQuery,
         });
         return { content: JSON.stringify(result) };

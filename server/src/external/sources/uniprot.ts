@@ -34,6 +34,7 @@ export interface SourceQueryContext {
   browserFallback?: BrowserFallback;
   signal?: AbortSignal;
   rateLimitMs?: number;
+  onQueryStarted?: (query: string, source: string) => void;
   onQuery?: (query: string, source: string, status: QueryStatus, recordsCount?: number) => void;
 }
 
@@ -97,6 +98,7 @@ export async function searchUniprot(
   maxResults: number,
   context: SourceQueryContext,
 ): Promise<Record<string, unknown>> {
+  context.onQueryStarted?.(query, "uniprot");
   const apiUrl =
     `${UNIPROT_API_BASE}/search?query=${quoteQuery(query)}` +
     `&format=json&size=${maxResults}`;

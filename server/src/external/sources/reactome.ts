@@ -45,6 +45,7 @@ export interface SourceQueryContext {
   browserFallback?: BrowserFallback;
   signal?: AbortSignal;
   rateLimitMs?: number;
+  onQueryStarted?: (query: string, source: string) => void;
   onQuery?: (query: string, source: string, status: QueryStatus, recordsCount?: number) => void;
 }
 
@@ -145,6 +146,7 @@ export async function searchReactome(
   maxResults: number,
   context: SourceQueryContext,
 ): Promise<Record<string, unknown>> {
+  context.onQueryStarted?.(term, "reactome");
   const encoded = quoteQuery(term);
   const apiUrl =
     `${REACTOME_API_BASE}/search/query?query=${encoded}` +
@@ -241,6 +243,7 @@ export async function getPathway(
   pathwayId: string,
   context: SourceQueryContext,
 ): Promise<Record<string, unknown>> {
+  context.onQueryStarted?.(pathwayId, "reactome");
   const apiUrl = `${REACTOME_API_BASE}/data/query/${pathwayId}`;
   const pageUrl = `${REACTOME_PAGE_BASE}/${pathwayId}`;
 

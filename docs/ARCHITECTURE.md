@@ -1097,6 +1097,14 @@ flush；`tool_started` / `run_finalizing` / Run 终态等边界事件强制 flus
 | `tool_call` | `tool_started` + `tool_completed` | `ToolCallStep` | 折叠；running Spinner |
 | `operation` | `operation_started/completed/failed`；迁移期兼容 `stage_*` | `OperationStep` | 展开（紧凑单行） |
 | `progress` | `operation_progress`；迁移期兼容 `stage_progress` | `ProgressStep` | 展开（同 operation 原位更新） |
+
+**工具查询 operation 生命周期**：`ToolHooks.onQueryStarted` → `operation_started`
+（`tool:${source}:query`，label `检索 ${source}`，category `discovery`）；
+`onQuery` → `operation_progress` + `operation_completed`/`operation_failed`。
+`onProgress` 的聚合 operation（`tool:discovery:*` / `tool:acquisition:*`）在每
+run 首次出现时补发 `operation_started`，但无自然结束信号；前端在 run 终态
+（completed/failed/cancelled）时兜底终结所有仍 `running` 的 operation item，
+防止进度卡在“运行中”（回归见 task_ts_818132eb… 的 tool 卡片卡死）。
 | `warning` | `warning` | `WarningStep` | 展开（黄色） |
 | `artifact` | `artifact_produced` | `ArtifactStep` | 展开（含大小 Badge） |
 

@@ -13,6 +13,8 @@
 import type { BioMedAgentTool } from "../contracts.js";
 
 export interface AnalyzePapersHooks {
+  /** Query lifecycle start (operation_started parity). */
+  onQueryStarted?: (query: string, source: string) => void;
   /** QueryStatus projection (Python run_ctx.log_query parity). */
   onQuery?: (query: string, source: string, status: string, recordsCount: number) => void;
 }
@@ -172,6 +174,7 @@ export function analyzePapers(titles: unknown, hooks: AnalyzePapersHooks = {}): 
   if (!Array.isArray(titles)) {
     throw new TypeError("titles must be an array");
   }
+  hooks.onQueryStarted?.("analyze_papers", "literature_understanding");
   if (titles.length === 0) {
     return {
       papers_analyzed: 0,
