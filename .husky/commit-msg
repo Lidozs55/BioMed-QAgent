@@ -1,0 +1,6 @@
+#!/usr/bin/env sh
+
+# Conventional commits enforced (rules in commitlint.config.mjs).
+# Format: type(scope): subject — e.g. `fix(ui): correct tooltip overflow`.
+# An optional task-id prefix is allowed: `[TASK-123] feat: summary`.
+pnpm exec commitlint --edit "$1"

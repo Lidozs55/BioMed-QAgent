@@ -1,3 +1,6 @@
 # Prevent line-ending conversion for test fixtures (SHA256 integrity)
 backend/tests/fixtures/**/* -text
 server/tests/phase5/fixtures/**/* -text
+
+# Shell hooks must remain LF (CRLF breaks sh execution on Windows)
+.husky/* -text

@@ -1,0 +1,33 @@
+#!/usr/bin/env sh
+
+# Pre-commit quality gates: block syntax errors, lint violations and failing
+# unit tests from being committed. Deliberate bypass: `git commit --no-verify`
+# (or HUSKY=0) — never dodge the gates without saying why.
+
+# Skip the heavy gates when only docs/assets are staged (no code/config touched).
+if ! git diff --cached --name-only --diff-filter=ACM | grep -Eq \
+  '^(frontend|server|packages|database|scripts|tests)/|\.(ts|tsx|js|mjs|cjs|jsx|py|css|html)$|^(package\.json|pnpm-workspace\.yaml|pnpm-lock\.yaml|pyproject\.toml|uv\.lock|tsconfig[^/]*)$'
+then
+  echo "pre-commit: no code/config staged — skipping quality gates"
+  exit 0
+fi
+
+echo "pre-commit: typecheck"
+pnpm typecheck
+
+echo "pre-commit: lint"
+pnpm lint
+
+# Python database bridge gates — only when database/ Python sources are staged.
+if git diff --cached --name-only --diff-filter=ACM | grep -Eq '^database/.*\.py$'
+then
+  echo "pre-commit: ruff check database"
+  uv run ruff check database
+  echo "pre-commit: pytest database/tests"
+  uv run pytest database/tests
+fi
+
+echo "pre-commit: unit tests"
+pnpm test
+
+echo "pre-commit: all quality gates passed"
