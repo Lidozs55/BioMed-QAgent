@@ -37,27 +37,27 @@ const OPERATION_CATEGORY_META: Readonly<Record<string, OperationCategoryMeta>> =
   discovery: {
     label: "文献/数据发现",
     icon: MagnifyingGlassIcon,
-    color: "text-sky-600 dark:text-sky-400",
+    color: "text-info",
   },
   acquisition: {
     label: "数据获取",
     icon: DownloadSimpleIcon,
-    color: "text-indigo-500 dark:text-indigo-400",
+    color: "text-primary",
   },
   processing: {
     label: "数据处理",
     icon: GearIcon,
-    color: "text-amber-600 dark:text-amber-400",
+    color: "text-warning",
   },
   artifact_build: {
     label: "产物构建",
     icon: PackageIcon,
-    color: "text-emerald-600 dark:text-emerald-400",
+    color: "text-success",
   },
   validation: {
     label: "结果验证",
     icon: SealCheckIcon,
-    color: "text-violet-600 dark:text-violet-400",
+    color: "text-chart-2",
   },
 };
 
