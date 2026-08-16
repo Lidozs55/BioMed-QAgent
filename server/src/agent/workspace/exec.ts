@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { stat } from "node:fs/promises";
 import path from "node:path";
 
 import { canonicalizeWithAncestor } from "../permissions/path-normalizer.js";
@@ -7,6 +8,8 @@ import type { WorkspaceContext } from "./context.js";
 import type { WorkspaceExecResult } from "./types.js";
 
 const SECRET_ARGUMENT = /(?:api[-_]?key|authorization|password|secret|token)(?:=|:)/i;
+/** ``--token value`` style flag whose NEXT argument is the secret value. */
+const SECRET_FLAG = /^--?(?:api[-_]?key|authorization|password|secret|token)$/i;
 const EXECUTABLE_METACHARACTERS = /[&|;<>\r\n\0]/u;
 const SAFE_ENVIRONMENT_KEYS = new Set([
   "COMSPEC",
@@ -55,11 +58,51 @@ export class WorkspaceProcessRegistry {
 }
 
 /**
- * Build the display/audit form of a command (round-3 audit): the executable
- * keeps its FULL path (canonicalized when absolute) so the approval card
- * shows exactly WHICH binary would run; only argument values that look like
- * secrets are redacted. The permission system and audit see this form; the
- * actual spawn still uses the raw ``executable``/``args`` inputs.
+ * Resolve how a bare executable name would be found at spawn time. The spawn
+ * uses the raw name through PATH (plus PATHEXT on Windows); the approval
+ * card must show the REAL binary, never a fabricated ``<workspace>/name``
+ * that would never execute (round-4 audit).
+ */
+async function resolveOnPath(executable: string): Promise<string | null> {
+  const pathEnv = process.env.PATH ?? "";
+  const extensions = process.platform === "win32"
+    ? (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter((ext) => ext !== "")
+    : [""];
+  const directories = pathEnv.split(path.delimiter).filter((dir) => dir !== "");
+  for (const directory of directories) {
+    const base = path.join(directory, executable);
+    const candidates = process.platform === "win32" && path.extname(base) === ""
+      ? extensions.map((ext) => `${base}${ext}`)
+      : [base];
+    for (const candidate of candidates) {
+      try {
+        const info = await stat(candidate);
+        if (!info.isDirectory()) {
+          return await canonicalizeWithAncestor(candidate).catch(() => candidate);
+        }
+      } catch {
+        // Not found in this directory; keep searching.
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Build the display/audit form of a command (round-3/round-4 audit): the
+ * executable keeps its FULL path so the approval card shows exactly WHICH
+ * binary would run:
+ *
+ * - absolute path → canonicalized;
+ * - relative path with a separator (``./bin/tool``) → resolved against the
+ *   spawn cwd (the workspace root) — never against the server cwd;
+ * - bare name (``python``) → looked up through PATH/PATHEXT; when the lookup
+ *   fails the name is shown with an explicit ``(resolved via PATH)`` note
+ *   instead of a fake workspace-relative path.
+ *
+ * Secret-looking argument values are redacted (both ``--token=value`` and
+ * ``--token value`` forms). The permission system and audit see this form;
+ * the actual spawn still uses the raw ``executable``/``args`` inputs.
  */
 export async function sanitizedCommand(
   executable: string,
@@ -68,17 +111,49 @@ export async function sanitizedCommand(
 ): Promise<string[]> {
   let shownExecutable = executable;
   if (typeof executable === "string" && executable.trim() !== "") {
-    const target = executable.includes("/") || executable.includes("\\")
-      ? executable
-      : `${cwd.replace(/[\\/]+$/u, "")}/${executable}`;
-    if (target.includes("/") || target.includes("\\")) {
-      shownExecutable = await canonicalizeWithAncestor(target).catch(() => executable);
+    if (path.isAbsolute(executable)) {
+      shownExecutable = await canonicalizeWithAncestor(executable).catch(() => executable);
+    } else if (executable.includes("/") || executable.includes("\\")) {
+      // Relative path with a separator: spawn resolves it against its cwd,
+      // which is the workspace root — resolve against the same base.
+      const target = path.resolve(cwd, executable);
+      shownExecutable = await canonicalizeWithAncestor(target).catch(() => target);
+    } else {
+      const resolved = await resolveOnPath(executable);
+      shownExecutable = resolved === null
+        ? `${executable} (resolved via PATH)`
+        : resolved;
     }
   }
-  return [
-    shownExecutable,
-    ...args.map((argument) => (SECRET_ARGUMENT.test(argument) ? "[redacted]" : argument)),
-  ];
+  return [shownExecutable, ...redactArguments(args)];
+}
+
+/**
+ * Stateful argument redaction (round-4 audit): ``--token=value`` is caught
+ * as a single argument, but the very common ``--token value`` two-argument
+ * form would leak the value — the flag consumes the following argument too.
+ */
+function redactArguments(args: readonly string[]): string[] {
+  const out: string[] = [];
+  let hideNext = false;
+  for (const argument of args) {
+    if (hideNext) {
+      out.push("[redacted]");
+      hideNext = false;
+      continue;
+    }
+    if (SECRET_ARGUMENT.test(argument)) {
+      out.push("[redacted]");
+      continue;
+    }
+    if (SECRET_FLAG.test(argument)) {
+      out.push("[redacted]");
+      hideNext = true;
+      continue;
+    }
+    out.push(argument);
+  }
+  return out;
 }
 
 function rejectedResult(command: string[], message: string, durationMs = 0): WorkspaceExecResult {

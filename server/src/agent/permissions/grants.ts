@@ -138,4 +138,9 @@ export class TemporaryGrantStore {
     if (ids === undefined) return;
     for (const id of [...ids]) this.revoke(id);
   }
+
+  /** Drop every temporary grant (Restricted lockdown, round-4 audit). */
+  clearAll(): void {
+    for (const id of [...this.grants.keys()]) this.revoke(id);
+  }
 }

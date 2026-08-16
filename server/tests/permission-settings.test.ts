@@ -137,11 +137,15 @@ describe("agent permission settings API (P6)", () => {
       }),
     });
     expect(created.status).toBe(201);
-    const createdBody = await created.json() as { rule: { id: string; path: string } };
+    const createdBody = await created.json() as { rule: { id: string; path: string; resource_scope: string } };
     expect(createdBody.rule).toMatchObject({
       capability: "fs.read",
       recursive: true,
       policy: "allow",
+      // Round-4 audit: rules default to the project scope; the caller can
+      // bind an explicit scope (e.g. ``sensitive``) so a project rule can
+      // never cross into sensitive targets.
+      resource_scope: "project",
     });
     // The stored path is canonical (realpath), not the raw input string.
     const canonicalExpected = await realpath(target);
@@ -173,6 +177,34 @@ describe("agent permission settings API (P6)", () => {
       }),
     });
     expect(invalid.status).toBe(422);
+
+    // An explicit sensitive scope binds the rule (round-4 audit) and a
+    // framework_internal scope is rejected.
+    const sensitive = await fetch(`${base}/api/v1/settings/agent-permissions/rules`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        capability: "fs.read",
+        resource_scope: "sensitive",
+        path: "D:\\repo\\credentials.json",
+        recursive: false,
+        policy: "allow",
+      }),
+    });
+    expect(sensitive.status).toBe(201);
+    expect((await sensitive.json() as { rule: { resource_scope: string } }).rule.resource_scope).toBe("sensitive");
+    const framework = await fetch(`${base}/api/v1/settings/agent-permissions/rules`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        capability: "fs.read",
+        resource_scope: "framework_internal",
+        path: "D:\\x",
+        recursive: true,
+        policy: "allow",
+      }),
+    });
+    expect(framework.status).toBe(422);
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
@@ -189,6 +221,32 @@ describe("agent permission settings API (P6)", () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
+  test("round-4 audit: pre-resource_scope rules load as project-scoped (fail-safe migration)", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "biomed-perm-legacy-rule-"));
+    roots.push(dir);
+    const filePath = path.join(dir, "agent-permissions.json");
+    // A settings file written by an older version: rules carry no
+    // resource_scope. Loading must bind them to ``project`` — they keep
+    // working for project targets but can never cover sensitive/external
+    // paths (round-4 audit).
+    await writeFile(filePath, JSON.stringify({
+      schema_version: 1,
+      preset: "ask_when_needed",
+      persistent_exec_allow: false,
+      rules: [{
+        id: "rule_legacy",
+        capability: "fs.read",
+        path: "D:\\repo",
+        recursive: true,
+        policy: "allow",
+      }],
+    }), "utf8");
+    const store = new JsonPermissionPolicyStore(filePath);
+    const settings = await store.getSettings();
+    expect(settings.rules).toHaveLength(1);
+    expect(settings.rules[0]).toMatchObject({ id: "rule_legacy", resource_scope: "project" });
+  });
+
   test("concurrent mutations are serialized: no rule is lost (audit fix)", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "biomed-perm-serial-"));
     roots.push(dir);
@@ -197,6 +255,7 @@ describe("agent permission settings API (P6)", () => {
     await Promise.all(paths.map((p) => store.addRule({
       capability: "fs.read",
       path: p,
+      resource_scope: "project",
       recursive: true,
       policy: "allow",
     })));
@@ -220,6 +279,7 @@ describe("agent permission settings API (P6)", () => {
     await expect(store.addRule({
       capability: "fs.read",
       path: "D:\\x",
+      resource_scope: "project",
       recursive: true,
       policy: "allow",
     })).rejects.toThrow();
@@ -227,7 +287,7 @@ describe("agent permission settings API (P6)", () => {
     expect(settings.rules).toHaveLength(0);
     // A later successful mutation still works (the queue is not poisoned).
     const good = new JsonPermissionPolicyStore(path.join(dir, "agent-permissions.json"));
-    await good.addRule({ capability: "fs.read", path: "D:\\y", recursive: true, policy: "allow" });
+    await good.addRule({ capability: "fs.read", path: "D:\\y", resource_scope: "project", recursive: true, policy: "allow" });
     expect((await good.getSettings()).rules).toHaveLength(1);
   });
 
@@ -364,6 +424,68 @@ describe("agent permission settings API (P6)", () => {
     // The pending tool call settled with a denial and the card is gone.
     await expect(suspended).rejects.toThrow("preset switched to restricted");
     expect(broker.hasPending("run_ts_1")).toBe(false);
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  test("round-4 audit: Restricted CLEARS temporary grants host-wide (no resurrection on switch-back)", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "biomed-perm-lockdown-"));
+    roots.push(dir);
+    const policyStore = new JsonPermissionPolicyStore(path.join(dir, "agent-permissions.json"));
+    const { PermissionBroker, PermissionBrokerRegistry, PermissionEvaluator, ProtectedPaths, TemporaryGrantStore, InMemoryPermissionAuditSink } =
+      await import("../src/agent/permissions/index.js");
+    const registry = new PermissionBrokerRegistry();
+    const api = createPermissionSettingsApi(policyStore, registry);
+    const server: Server = createServer((request, response) => {
+      if (!api.handle(request, response)) response.writeHead(404).end();
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const grants = new TemporaryGrantStore();
+    grants.add("run", "task_ts_1", "run_ts_1", {
+      capability: "fs.read",
+      scope: "external",
+      root: path.join(dir, "data"),
+    });
+    grants.add("task", "task_ts_1", "run_ts_1", {
+      capability: "fs.read",
+      scope: "external",
+      root: null,
+    });
+    const broker = new PermissionBroker({
+      taskId: "task_ts_1",
+      runId: "run_ts_1",
+      evaluator: new PermissionEvaluator({
+        protectedPaths: new ProtectedPaths({ taskOutputRoot: path.join(dir, "output") }),
+        grants,
+        policyStore,
+      }),
+      grants,
+      policyStore,
+      audit: new InMemoryPermissionAuditSink(),
+      recordRunEvent: async () => undefined,
+    });
+    registry.register("task_ts_1", broker);
+    expect(registry.listTemporaryGrants()).toHaveLength(2);
+
+    const restricted = await fetch(`${base}/api/v1/settings/agent-permissions`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ preset: "restricted" }),
+    });
+    expect(restricted.status).toBe(200);
+
+    // Lockdown clears, it does not merely suppress: switching back must not
+    // resurrect previously approved grants (ADR-026 "cannot survive").
+    expect(registry.listTemporaryGrants()).toHaveLength(0);
+
+    const back = await fetch(`${base}/api/v1/settings/agent-permissions`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ preset: "ask_when_needed" }),
+    });
+    expect(back.status).toBe(200);
+    expect(registry.listTemporaryGrants()).toHaveLength(0);
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 });

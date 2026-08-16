@@ -356,6 +356,10 @@ export async function createPhase3Runtime(
           buildResult = null;
           return result;
         },
+        onRunEnd: (endedRunId: string) => {
+          // Round-4 audit: run-bound temporary grants die with the run.
+          grants.clearRun(endedRunId);
+        },
         dispose: () => workspace.dispose(),
       };
     },

@@ -114,6 +114,15 @@ export class PermissionBroker {
   }
 
   /**
+   * Drop every temporary grant of this task (round-4 audit: Restricted is
+   * an emergency lockdown — previously approved grants must not silently
+   * resurrect when the preset switches back).
+   */
+  clearAllGrants(): void {
+    this.grants.clearAll();
+  }
+
+  /**
    * Evaluate a tool request. Returns the final decision; when the policy is
    * ``ask`` the caller's promise stays suspended until the user resolves the
    * request (or the run is cancelled / host shuts down).
@@ -441,6 +450,10 @@ export class PermissionBroker {
         id: ruleId,
         capability: pending.capability as "fs.read" | "fs.write" | "fs.edit",
         path: pending.canonicalResource,
+        // Round-4 audit: bind the rule to the approved request's scope, so
+        // a persistent approval of ``/repo/.env`` stays sensitive-scoped and
+        // a project approval never extends to sensitive files later.
+        resource_scope: pending.scope,
         recursive: true,
         policy: "allow",
       });
@@ -468,6 +481,14 @@ export class PermissionBrokerRegistry {
   async invalidateAllPending(error: Error): Promise<void> {
     const brokers = [...this.brokers.values()];
     for (const broker of brokers) await broker.invalidateAllPending(error);
+  }
+
+  /**
+   * Drop every temporary grant across all live tasks (round-4 audit:
+   * Restricted lockdown clears, it does not merely suppress).
+   */
+  clearAllGrants(): void {
+    for (const broker of this.brokers.values()) broker.clearAllGrants();
   }
 
   /** Every active temporary grant across all live tasks. */

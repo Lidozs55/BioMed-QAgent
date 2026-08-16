@@ -128,9 +128,10 @@ durable events + `POST .../permissions/{requestId}`）。正式 Publication 只�
 Dataset Core 产生并以 manifest + hash 验证——权限放开不改变业务可信边界。
 权限 scope 含 `framework_internal`（`data/settings/**`、其他 Task 的 workspace/output）与
 `sensitive`（`.env*`/密钥/凭据文件），对所有能力硬拒绝/独立策略，任何授权/规则/preset
-均不能覆盖（ADR-026 §2）。Run/Task 文件授权以批准路径为根（canonical root + 子树），
-不覆盖整个 scope；pending 请求在批准时按当前策略重验证，Restricted 切换会作废全部
-pending（ADR-026 §2）。
+均不能覆盖（ADR-026 §2）。持久路径规则绑定 `resource_scope`（请求 scope 必须等于规则
+scope 才匹配，API 缺省 project）；Restricted 切换会作废全部 pending 并清空全部临时
+授权；Run 结束时经 `onRunEnd` 清理该 run 的 grants。Run/Task 文件授权以批准路径为根
+（canonical root + 子树），不覆盖整个 scope（ADR-026 §2）。
 
 当前不存在固定五阶段、固定 22 列 `main_data.csv` 全局协议或 metadata-only
 占位主表：Dataset Build 由自包含 `DatasetBuildSpec`（§3）驱动，产物由

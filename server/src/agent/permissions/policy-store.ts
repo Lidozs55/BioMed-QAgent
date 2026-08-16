@@ -11,6 +11,18 @@ import {
 } from "./types.js";
 
 /**
+ * Round-4 audit: rules persisted before the ``resource_scope`` field existed
+ * have no scope binding. Loading them as ``project`` is the fail-safe choice:
+ * an old ``/repo/** allow`` keeps working for project targets but can never
+ * cover ``sensitive``/``external`` requests, and the settings UI shows the
+ * effective scope so the user can recreate a broader rule explicitly.
+ */
+function normalizeStoredRule(rule: FilePermissionRule): FilePermissionRule {
+  if (rule.resource_scope !== undefined) return rule;
+  return { ...rule, resource_scope: "project" };
+}
+
+/**
  * The settings API maps this to HTTP 409: a mutation that contradicts an
  * active policy invariant must be refused at the store level, never just in
  * the UI (round-3 audit: Restricted ⇒ persistent_exec_allow stays false).
@@ -87,7 +99,7 @@ export class JsonPermissionPolicyStore implements PermissionPolicyStore {
     this.cached = {
       schema_version: 1,
       preset,
-      rules: Array.isArray(stored.rules) ? stored.rules : [],
+      rules: Array.isArray(stored.rules) ? stored.rules.map(normalizeStoredRule) : [],
       persistent_exec_allow: stored.persistent_exec_allow === true,
     };
     return this.cached;

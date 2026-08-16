@@ -55,6 +55,14 @@ export interface FilePermissionRule {
   capability: "fs.read" | "fs.write" | "fs.edit";
   /** Canonical absolute path the rule applies to. */
   path: string;
+  /**
+   * Resource scope this rule binds to (round-4 audit). The evaluator
+   * requires ``request.scope === rule.resource_scope`` in addition to path
+   * containment, so a ``project`` rule can never cover a ``sensitive`` or
+   * ``external`` target: an old ``/repo/** read allow`` does not silently
+   * authorize reading ``/repo/.env``.
+   */
+  resource_scope: ResourceScope;
   recursive: boolean;
   policy: "allow" | "ask" | "deny";
 }

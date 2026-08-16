@@ -177,6 +177,40 @@ describe("PermissionDialog", () => {
     });
   });
 
+  it("round-4 audit: the whole-scope opt-in resets when the pending request changes", async () => {
+    const onResolvePermission = vi.fn().mockResolvedValue(undefined);
+    const first = taskWithPermission({ scope: "external", resource: "D:\\a.csv" });
+    const second = taskWithPermission({
+      scope: "external",
+      resource: "D:\\b.csv",
+      requestId: "permission_def",
+    });
+    const view = render(
+      <PermissionDialog task={first} onResolvePermission={onResolvePermission} />,
+    );
+    // Opt in to the whole scope for the FIRST request.
+    fireEvent.click(screen.getByRole("checkbox", { name: /高级：改为授权整个/ }));
+    expect((screen.getByRole("checkbox", { name: /高级：改为授权整个/ }) as HTMLInputElement).checked).toBe(true);
+
+    // The pending request is invalidated externally (run cancel / Restricted
+    // switch); the next request reuses the same component instance. The
+    // high-risk whole-scope choice must be reset.
+    view.rerender(
+      <PermissionDialog task={second} onResolvePermission={onResolvePermission} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /本 Task 允许/ }));
+    await waitFor(() => {
+      // 5 args = path-rooted grant; a 6th ``true`` would mean scope-wide.
+      expect(onResolvePermission).toHaveBeenLastCalledWith(
+        "task_perm",
+        "run_ts_1",
+        "permission_def",
+        "allow",
+        "task",
+      );
+    });
+  });
+
   it("renders the command request with the OS-privilege warning", () => {
     render(
       <PermissionDialog

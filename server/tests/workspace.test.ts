@@ -513,6 +513,56 @@ describe("governed Task Workspace (data/workspaces/<taskId>)", () => {
     await running;
   });
 
+  test("round-4 audit: sanitizedCommand resolves bare names via PATH and relative paths at the workspace root", async () => {
+    const { workspaceRoot } = await fixture();
+    const { sanitizedCommand } = await import("../src/agent/workspace/exec.js");
+
+    // Bare name: the card must show the REAL binary (PATH lookup), never a
+    // fabricated <workspace>/name that spawn would never execute.
+    const [bare] = await sanitizedCommand("node", [], workspaceRoot);
+    expect(bare).not.toBe("node");
+    expect(bare).not.toContain(workspaceRoot);
+    expect(bare.toLowerCase()).toMatch(/node(?:\.exe)?$/u);
+
+    // Relative path with a separator: resolved against the spawn cwd (the
+    // workspace root), not the server cwd.
+    const script = path.join(workspaceRoot, "scripts", "tool.py");
+    await mkdir(path.dirname(script), { recursive: true });
+    await writeFile(script, "print('x')", "utf8");
+    const [relative] = await sanitizedCommand("./scripts/tool.py", [], workspaceRoot);
+    const canonicalScript = await canonicalizeWithAncestor(script);
+    expect(relative.toLowerCase()).toBe(canonicalScript.toLowerCase());
+
+    // Unknown bare name: explicit label instead of a fake path.
+    const [missing] = await sanitizedCommand("definitely-not-a-real-binary-xyz", [], workspaceRoot);
+    expect(missing).toBe("definitely-not-a-real-binary-xyz (resolved via PATH)");
+  });
+
+  test("round-4 audit: stateful argv redaction covers --token value and --api-key value forms", async () => {
+    const { workspaceRoot } = await fixture();
+    const { sanitizedCommand } = await import("../src/agent/workspace/exec.js");
+    const command = await sanitizedCommand(process.execPath, [
+      "--token",
+      "SECRET_ONE",
+      "--api-key=SECRET_TWO",
+      "--password",
+      "SECRET_THREE",
+      "plain.csv",
+      "--token",
+      "SECRET_FOUR",
+    ], workspaceRoot);
+    expect(command.slice(1)).toEqual([
+      "[redacted]",
+      "[redacted]",
+      "[redacted]",
+      "[redacted]",
+      "[redacted]",
+      "plain.csv",
+      "[redacted]",
+      "[redacted]",
+    ]);
+  });
+
   test("workspace hash integrity: protected file bytes are untouched by policy violations", async () => {
     const { workspaceRoot, workspace } = await fixture({ preset: "restricted" });
     const target = path.join(workspaceRoot, "notes", "keep.txt");

@@ -58,6 +58,12 @@ export interface DurableAgentWorkspace {
   setRunId?: (runId: string) => void;
   setPiSessionId?: (piSessionId: string) => void;
   consumeBuildResult?: () => BuildResult | null;
+  /**
+   * Run-termination hook (round-4 audit): the workspace clears per-run
+   * temporary grants when the run ends, so the settings UI never lists
+   * stale run grants after the run is done.
+   */
+  onRunEnd?: (runId: string) => void;
   dispose(): Promise<void>;
 }
 
@@ -280,6 +286,10 @@ export async function createDurableAgentRuntime(
       }
     } finally {
       if (task.activeRunId === runId) task.activeRunId = null;
+      // Round-4 audit: drop the run's temporary grants at run end — the
+      // evaluator already ignores them (runId mismatch), but the settings UI
+      // must not keep listing grants that can never fire again.
+      task.workspace.onRunEnd?.(runId);
     }
   }
 

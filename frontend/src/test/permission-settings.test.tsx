@@ -220,6 +220,7 @@ describe("AgentPermissionSettingsSection temp grants + rule creation (round-3 au
     await waitFor(() => {
       expect(addRule).toHaveBeenCalledWith({
         capability: "fs.read",
+        resource_scope: "project",
         path: "D:\\datasets\\TCGA",
         recursive: true,
         policy: "allow",

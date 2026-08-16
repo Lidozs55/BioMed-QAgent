@@ -108,10 +108,13 @@ async function writePublication(
 ): Promise<void> {
   const manifestBytes = await readFile(path.join(publicationDir, "dataset_manifest.json"));
   await writeFile(path.join(publicationDir, "publication.json"), JSON.stringify({
-    publication_id: "publication_one",
     schema_version: "1.1",
+    publication_id: "publication_one",
     manifest_ref: manifest.manifest_id,
     manifest_sha256: createHash("sha256").update(manifestBytes).digest("hex"),
+    validation_result_ref: "validation_report.json",
+    published_at: "2026-08-17T00:00:00+00:00",
+    supersedes_publication_id: null,
   }), "utf8");
 }
 
@@ -400,6 +403,32 @@ describe("publication integrity hardening (P7)", () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
+  test("round-4 audit: valid JSON missing contract fields is a 409, not a silent no-artifact", async () => {
+    const { baseUrl, runtime, server, workspacesRoot } = await runtimeFixture();
+    const { task_id: taskId } = await createTask(baseUrl, "req_p7_missing_fields");
+    const publicationDir = await publishSimpleBuild(workspacesRoot, taskId);
+
+    // The record is VALID JSON and even has a schema_version + receipt, but
+    // the exact-keys publication parser requires publication_id,
+    // manifest_ref, validation_result_ref, published_at and
+    // supersedes_publication_id. Dropping one used to be silently skipped
+    // into a "no artifact" answer (round-4 audit) — it must fail closed.
+    const raw = JSON.parse(await readFile(
+      path.join(publicationDir, "publication.json"),
+      "utf8",
+    )) as Record<string, unknown>;
+    delete raw["manifest_ref"];
+    await writeFile(path.join(publicationDir, "publication.json"), JSON.stringify(raw), "utf8");
+
+    const listing = await fetch(`${baseUrl}/api/v1/tasks/${taskId}/artifacts`);
+    expect(listing.status).toBe(409);
+    const body = await listing.json() as { detail: string };
+    expect(body.detail).toMatch(/publication|manifest_ref/i);
+
+    await runtime.close();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
   test("legacy 1.0 publications stay readable at their pre-P7 trust level", async () => {
     const { baseUrl, runtime, server, workspacesRoot } = await runtimeFixture();
     const { task_id: taskId } = await createTask(baseUrl, "req_p7_legacy");
@@ -463,10 +492,13 @@ async function publishSimpleBuild(workspacesRoot: string, taskId: string): Promi
   await writeFile(path.join(publicationDir, "dataset_manifest.json"), JSON.stringify(manifest), "utf8");
   const manifestBytes = await readFile(path.join(publicationDir, "dataset_manifest.json"));
   await writeFile(path.join(publicationDir, "publication.json"), JSON.stringify({
-    publication_id: "publication_one",
     schema_version: "1.1",
+    publication_id: "publication_one",
     manifest_ref: manifest.manifest_id,
     manifest_sha256: createHash("sha256").update(manifestBytes).digest("hex"),
+    validation_result_ref: "validation_report.json",
+    published_at: "2026-08-17T00:00:00+00:00",
+    supersedes_publication_id: null,
   }), "utf8");
   return publicationDir;
 }

@@ -92,7 +92,7 @@ export class PermissionEvaluator {
     if (this.grants.matches(request.taskId, request.runId, capability, request.scope, canonical)) {
       return { decision: "allow", reason: "temporary_grant" };
     }
-    const rule = await this.mostSpecificRule(capability, canonical);
+    const rule = await this.mostSpecificRule(capability, canonical, request.scope);
     if (rule !== null) {
       return rule.policy === "allow"
         ? { decision: "allow", reason: "rule" }
@@ -128,12 +128,18 @@ export class PermissionEvaluator {
   private async mostSpecificRule(
     capability: "fs.read" | "fs.write" | "fs.edit",
     canonical: string,
+    scope: ResourceScope,
   ): Promise<FilePermissionRule | null> {
     const settings = await this.policyStore.getSettings();
     let best: FilePermissionRule | null = null;
     let bestLength = -1;
     for (const rule of settings.rules) {
       if (rule.capability !== capability) continue;
+      // Round-4 audit: a persistent rule is bound to the resource scope it
+      // was created for. A project/external rule can never cover a
+      // ``sensitive`` request even when the paths overlap, and vice versa —
+      // only an explicit sensitive-scope rule can authorize sensitive paths.
+      if (rule.resource_scope !== scope) continue;
       const ruleRoot = path.resolve(rule.path);
       const matches = rule.recursive
         ? canonicalIsWithin(ruleRoot, canonical)

@@ -15,13 +15,13 @@ import {
   classifyCanonicalPath,
   normalizeAgentPathFor,
 } from "../src/agent/permissions/index.js";
-import type { BrokerOptions, PermissionAuditSink } from "../src/agent/permissions/index.js";
+import type { BrokerOptions, PermissionAuditSink, ResourceScope } from "../src/agent/permissions/index.js";
 
 const roots: string[] = [];
 
 async function fixture(options: {
   preset?: "restricted" | "ask_when_needed" | "full_access";
-  rules?: Array<{ capability: "fs.read" | "fs.write" | "fs.edit"; path: string; recursive: boolean; policy: "allow" | "ask" | "deny" }>;
+  rules?: Array<{ capability: "fs.read" | "fs.write" | "fs.edit"; path: string; resource_scope: ResourceScope; recursive: boolean; policy: "allow" | "ask" | "deny" }>;
   persistentExecAllow?: boolean;
 } = {}) {
   const base = await mkdtemp(path.join(os.tmpdir(), "biomed-perm-"));
@@ -140,6 +140,7 @@ describe("path normalization + scope classification (P1)", () => {
     await policyStore.addRule({
       capability: "fs.read",
       path: settings,
+      resource_scope: "project",
       recursive: true,
       policy: "allow",
     });
@@ -292,8 +293,8 @@ describe("PermissionEvaluator decision order (P1)", () => {
     const external = path.join(baseExternal());
     const { broker } = await fixture({
       rules: [
-        { capability: "fs.read", path: external, recursive: true, policy: "deny" },
-        { capability: "fs.read", path: path.join(external, "open"), recursive: true, policy: "allow" },
+        { capability: "fs.read", path: external, resource_scope: "external", recursive: true, policy: "deny" },
+        { capability: "fs.read", path: path.join(external, "open"), resource_scope: "external", recursive: true, policy: "allow" },
       ],
     });
     const denied = path.join(external, "private", "a.txt");
@@ -312,10 +313,73 @@ describe("PermissionEvaluator decision order (P1)", () => {
     })).resolves.toMatchObject({ decision: "allow" });
   });
 
+  test("round-4 audit: a project persistent rule can never cover sensitive targets", async () => {
+    const fixtureInstance = await fixture();
+    const { base, evaluator } = fixtureInstance;
+    await fixtureInstance.policyStore.addRule({
+      capability: "fs.read",
+      path: base,
+      resource_scope: "project",
+      recursive: true,
+      policy: "allow",
+    });
+    // The .env lives INSIDE the project tree, but the sensitive scope is a
+    // different capability×scope cell: the project allow rule must not apply
+    // (round-4 audit — previously ``/repo/** allow`` silently read .env).
+    const env = path.join(base, ".env");
+    await expect(evaluator.evaluate({
+      id: "probe-1",
+      taskId: "task_ts_1",
+      runId: "run_ts_1",
+      createdAt: new Date().toISOString(),
+      capability: "fs.read",
+      resource: env,
+      canonicalResource: env,
+      scope: "sensitive",
+    })).resolves.toMatchObject({ decision: "ask" });
+    // fs.write keeps its sensitive default (deny) — no project rule can lift it.
+    await expect(evaluator.evaluate({
+      id: "probe-2",
+      taskId: "task_ts_1",
+      runId: "run_ts_1",
+      createdAt: new Date().toISOString(),
+      capability: "fs.write",
+      resource: env,
+      canonicalResource: env,
+      scope: "sensitive",
+    })).resolves.toMatchObject({ decision: "deny" });
+  });
+
+  test("round-4 audit: an explicit sensitive-scope rule authorizes only the sensitive scope", async () => {
+    const { base, broker, policyStore } = await fixture();
+    const env = path.join(base, ".env");
+    await policyStore.addRule({
+      capability: "fs.read",
+      path: env,
+      resource_scope: "sensitive",
+      recursive: false,
+      policy: "allow",
+    });
+    await expect(broker.evaluate({
+      capability: "fs.read",
+      resource: env,
+      canonicalResource: env,
+      scope: "sensitive",
+    })).resolves.toMatchObject({ decision: "allow" });
+    // The same rule must not leak into the framework control plane: a
+    // settings-dir .env is framework_internal and stays hard-denied.
+    await expect(broker.evaluate({
+      capability: "fs.read",
+      resource: path.join(base, "settings", ".env"),
+      canonicalResource: path.join(base, "settings", ".env"),
+      scope: "framework_internal",
+    })).rejects.toBeInstanceOf(PermissionDeniedError);
+  });
+
   test("explicit rule can downgrade a preset default to ask", async () => {
     const { broker } = await fixture({
       rules: [
-        { capability: "fs.read", path: baseExternal(), recursive: true, policy: "ask" },
+        { capability: "fs.read", path: baseExternal(), resource_scope: "external", recursive: true, policy: "ask" },
       ],
     });
     void broker.evaluate({
@@ -665,6 +729,7 @@ describe("PermissionBroker suspend/resume (P1)", () => {
     await policyStore.addRule({
       capability: "fs.read",
       path: external,
+      resource_scope: "external",
       recursive: true,
       policy: "allow",
     });
@@ -806,6 +871,7 @@ describe("round-3 audit: stale pending re-validation (P0)", () => {
     await policyStore.addRule({
       capability: "fs.read",
       path: external,
+      resource_scope: "external",
       recursive: false,
       policy: "deny",
     });

@@ -19,6 +19,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import type {
   AgentPermissionPreset,
+  AgentPermissionRuleInput,
   AgentPermissionSettings,
   AgentTempGrant,
   SettingsAPIClient,
@@ -78,6 +79,10 @@ export function AgentPermissionSettingsSection({ api }: AgentPermissionSettingsS
   const [rulePath, setRulePath] = useState("");
   const [ruleCapability, setRuleCapability] = useState<"fs.read" | "fs.write" | "fs.edit">("fs.read");
   const [rulePolicy, setRulePolicy] = useState<"allow" | "ask" | "deny">("allow");
+  // Round-4 audit: a persistent rule binds to ONE resource scope. Defaulting
+  // to ``project`` keeps the rule from accidentally covering sensitive files
+  // or external paths the user did not mean to authorize.
+  const [ruleScope, setRuleScope] = useState<AgentPermissionRuleInput["resource_scope"]>("project");
   const [ruleSubmitting, setRuleSubmitting] = useState(false);
 
   useEffect(() => {
@@ -233,6 +238,23 @@ export function AgentPermissionSettingsSection({ api }: AgentPermissionSettingsS
                 </SelectContent>
               </Select>
             </div>
+            <div className="flex flex-col gap-1">
+              <Label>作用域</Label>
+              <Select
+                value={ruleScope}
+                onValueChange={(value) => setRuleScope(value as AgentPermissionRuleInput["resource_scope"])}
+              >                <SelectTrigger className="w-full sm:w-28">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="project">项目目录</SelectItem>
+                  <SelectItem value="external">外部目录</SelectItem>
+                  <SelectItem value="sensitive">敏感文件</SelectItem>
+                  <SelectItem value="workspace">工作区</SelectItem>
+                  <SelectItem value="task_output">任务输出</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
             <Button
               size="sm"
               disabled={rulePath.trim() === "" || ruleSubmitting}
@@ -241,6 +263,7 @@ export function AgentPermissionSettingsSection({ api }: AgentPermissionSettingsS
                 void apply(async () => {
                   const next = await api.addAgentPermissionRule({
                     capability: ruleCapability,
+                    resource_scope: ruleScope,
                     path: rulePath.trim(),
                     recursive: true,
                     policy: rulePolicy,
@@ -269,6 +292,7 @@ export function AgentPermissionSettingsSection({ api }: AgentPermissionSettingsS
                     <code className="truncate font-mono text-xs">{rule.path}</code>
                     <div className="flex flex-wrap gap-1.5">
                       <Badge variant="outline">{CAPABILITY_LABELS[rule.capability] ?? rule.capability}</Badge>
+                      <Badge variant="outline">{SCOPE_LABELS[rule.resource_scope] ?? rule.resource_scope}</Badge>
                       {rule.recursive && <Badge variant="secondary">递归</Badge>}
                       <Badge
                         variant={rule.policy === "deny" ? "destructive" : rule.policy === "ask" ? "outline" : "default"}

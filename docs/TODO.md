@@ -362,7 +362,36 @@ build 锁、cancel 收敛与 event sink；`DATASET_CORE=ts` 现为默认运行�
 - [x] 顺手项：`JsonPermissionPolicyStore.load()` 首读 memoize（与并发 mutation 无竞态）；
       设置页可主动创建 allow/ask/deny 持久规则（表单）
 
-验收（2026-08-17 三轮审计后）：`pnpm test`（contracts 14 + server 811 + frontend 765）/ `pnpm lint` /
+四轮审计修复（2026-08-17，第四轮审查）:
+
+- [x] **P0 persistent rule scope 绑定**：`FilePermissionRule` 新增 `resource_scope`，evaluator
+      要求 `request.scope === rule.resource_scope` 才匹配——`/repo/** read allow` 不再能
+      覆盖 `/repo/.env`（sensitive）或 external 路径；API 缺省 project、拒绝
+      framework_internal；持久授权写入 rule 时绑定批准请求自身的 scope（批准 `.env`
+      形成 sensitive rule）；旧 rule（无字段）加载为 project（fail-safe 迁移）
+- [x] **P1 exec 展示诚实化**：裸命令走 PATH/PATHEXT 真实 lookup（失败显示
+      `(resolved via PATH)` 标注）；`./bin/tool` 相对路径按 spawn cwd（workspace root）
+      解析而非 server cwd；绝不伪造 `<workspace>/python`
+- [x] **P1 stateful argv 脱敏**：`--token value` / `--api-key value` 两参数形式也会
+      redact（flag 消耗下一个参数），不再只覆盖 `--token=value` 单参数形式
+- [x] **P1 Publisher gate=receipt 单一来源**：`manifest_sha256` 从 release gate 校验的
+      `options.manifest` 对象字节计算，同字节写入不可变版本目录——磁盘
+      `dataset_manifest.json` 与内存对象漂移不可能进入 publication（含回归测试：
+      磁盘 manifest 被篡改后 publication 内容仍是 gate 对象）
+- [x] **P1 单一 publication parser**：artifact reader 改用正式 `parseDatasetPublication`
+      （exact-keys），合法 JSON 缺 `publication_id`/`manifest_ref`/`published_at` 等任何
+      契约字段 → `ArtifactIntegrityError` 409，不再静默当“没有 artifact”
+- [x] **P1 Restricted 清空临时授权**：切入 Restricted 时 registry 广播
+      `clearAllGrants()`（run + task 绑定全部删除），切回 ask 不会复活；ADR
+      “cannot survive”语义与实现一致
+- [x] **P2 Run 结束清理 run grants**：run terminal 时经 workspace `onRunEnd` 钩子调
+      `clearRun(runId)`，设置页不再列出已失效的 run 授权
+- [x] **P2 scopeWide 随 requestId 重置**：PermissionDialog 在 `pending.requestId` 变化时
+      无条件复位“高级：整个范围”勾选（外部 invalidate 后复用组件不残留高风险选项）
+- [x] 顺手项：ADR 删除“grants scoped to capability × ResourceScope”残留旧描述；设置页
+      规则表单新增“作用域”选择 + 规则列表显示 scope badge
+
+验收（2026-08-17 四轮审计后）：`pnpm test`（contracts 14 + server + frontend）/ `pnpm lint` /
 `pnpm typecheck` / `pnpm build` 全通过；`uv run pytest database/tests` + ruff 通过。
 
 ---

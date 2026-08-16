@@ -879,6 +879,41 @@ export async function checkPublisherParity(options: { outputRoot: string }): Pro
     );
   }
 
+  // Round-4 audit: the release gate checks ``options.manifest``; the
+  // publication receipt must be computed from those SAME bytes. If the
+  // on-disk dataset_manifest.json drifted from the gated object, the
+  // publication content must still be the gated object (never the disk
+  // file) — gate object, receipt, and stored file are one.
+  {
+    const out = join(outputRoot, "promote-gate-receipt");
+    mkdirSync(out, { recursive: true });
+    const { manifest, validation } = materializeBuild(out);
+    // Simulate drift: the build output manifest on disk no longer matches
+    // the object the gate validated (e.g. validation_summary edited after
+    // the gate, or a stale copy from an older build).
+    writeFileSync(join(out, MANIFEST_FILE), "{\"malicious\":true}", "utf8");
+    const result = await promotePublication({
+      outputDir: out,
+      manifest,
+      validation,
+      publishedAt: "2026-08-07T12:00:00+00:00",
+    });
+    const stored = readFileSync(join(out, "publish",
+      `${manifest.build_id}_${manifest.sha256.slice(0, 16)}`,
+      MANIFEST_FILE));
+    const expectedBytes = Buffer.from(`${pythonJsonDumps(manifest)}
+`, "utf8");
+    const publication = parseDatasetPublication(
+      JSON.parse(readFileSync(join(out, result.versionDir, "publication.json"), "utf8")),
+    );
+    check(issues, stored.equals(expectedBytes),
+      "gate=receipt: stored manifest is the gated object bytes, not the drifted disk file");
+    check(issues, publication.manifest_sha256 === createHash("sha256").update(expectedBytes).digest("hex"),
+      "gate=receipt: receipt hashes the gated object bytes");
+    check(issues, !stored.toString("utf8").includes("malicious"),
+      "gate=receipt: drifted disk bytes never enter the publication");
+  }
+
   // Duplicate immutable version rejected (atomic promotion, C1).
   {
     const out = join(outputRoot, "promote-dup");

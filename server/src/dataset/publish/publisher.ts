@@ -11,7 +11,7 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
-import { copyFile, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { copyFile, rename, rm, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import type { DatasetManifest, DatasetPublication, ValidationResult } from "../contracts/index.js";
 import { throwIfAborted } from "../cooperative.js";
@@ -102,15 +102,14 @@ export async function promotePublication(options: PublishOptions): Promise<Publi
   // validation_summary, …) without rewriting the manifest file bytes is
   // detected, even though ``packageDigest`` only hashes entry hashes (the
   // digest does not cover the manifest's own metadata fields).
-  const manifestSrc = join(options.outputDir, MANIFEST_FILE);
-  if (!existsSync(manifestSrc)) {
-    throw new AtomicPromotionError(
-      `atomic promotion: ${MANIFEST_FILE} is missing from the build output`,
-    );
-  }
-  const manifestSha256 = createHash("sha256")
-    .update(await readFile(manifestSrc))
-    .digest("hex");
+  //
+  // Round-4 audit: the bytes come from ``options.manifest`` (the exact
+  // object the release gate validated) — never from re-reading the build's
+  // ``dataset_manifest.json`` on disk, which could drift from the gated
+  // object. The same bytes are hashed AND written into the immutable
+  // version, so gate object, receipt, and publication content are one.
+  const manifestBytes = Buffer.from(`${pythonJsonDumps(manifest)}\n`, "utf8");
+  const manifestSha256 = createHash("sha256").update(manifestBytes).digest("hex");
   const publication: DatasetPublication = {
     // P7 receipt schema: 1.1 carries the manifest file-byte hash (round-3
     // audit: the schema bump is explicit, so legacy 1.0 records keep their
@@ -127,7 +126,7 @@ export async function promotePublication(options: PublishOptions): Promise<Publi
     supersedes_publication_id: superseded,
   };
 
-  const stagedDir = join(publishDir, `.${versionName}.tmp`);
+    const stagedDir = join(publishDir, `.${versionName}.tmp`);
   if (existsSync(stagedDir)) rmSync(stagedDir, { recursive: true, force: true });
   mkdirSync(stagedDir, { recursive: true });
   try {
@@ -142,8 +141,10 @@ export async function promotePublication(options: PublishOptions): Promise<Publi
       await copyFile(src, dest);
       throwIfAborted(signal);
     }
-    const manifestSrc = join(options.outputDir, MANIFEST_FILE);
-    await copyFile(manifestSrc, join(stagedDir, MANIFEST_FILE));
+    // Round-4 audit: write the manifest from the GATED bytes, not by
+    // copying the build output file — the receipt was computed from these
+    // exact bytes, so hash and content cannot diverge.
+    await writeFile(join(stagedDir, MANIFEST_FILE), manifestBytes);
     // C1d: the publication's ``validation_result_ref`` must resolve inside
     // the immutable version directory — validation_report.json is not a
     // manifest artifact, so it needs an explicit copy.

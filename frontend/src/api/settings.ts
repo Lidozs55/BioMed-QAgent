@@ -41,6 +41,13 @@ export type AgentPermissionPreset = "restricted" | "ask_when_needed" | "full_acc
 
 export interface AgentPermissionRuleInput {
   capability: "fs.read" | "fs.write" | "fs.edit";
+  /**
+   * Resource scope the rule binds to (round-4 audit): the evaluator requires
+   * the request scope to equal the rule's scope, so a ``project`` rule never
+   * covers ``sensitive``/``external`` targets. ``framework_internal`` is not
+   * selectable — the control plane is hard-denied before rules are consulted.
+   */
+  resource_scope: "workspace" | "task_output" | "sensitive" | "project" | "external";
   path: string;
   recursive: boolean;
   policy: "allow" | "ask" | "deny";

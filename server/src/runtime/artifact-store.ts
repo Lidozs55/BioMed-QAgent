@@ -3,7 +3,7 @@ import { readFile, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
 import type { ArtifactRecord } from "@biomed/contracts";
-import { parseManifestArtifactEntry } from "../dataset/contracts/manifest.js";
+import { parseDatasetPublication, parseManifestArtifactEntry } from "../dataset/contracts/manifest.js";
 import {
   packageDigest,
   type ManifestArtifactEntry,
@@ -31,8 +31,8 @@ interface PublicationLocation {
 }
 
 export class ArtifactIntegrityError extends Error {
-  constructor(message: string) {
-    super(message);
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
     this.name = "ArtifactIntegrityError";
   }
 }
@@ -224,53 +224,30 @@ async function latestPublication(buildDir: string): Promise<PublicationLocation 
       }
       throw error;
     }
-    const publication = record(raw, "Dataset publication");
-    const schemaVersion = publication.schema_version === "1.1"
-      ? "1.1" as const
-      : publication.schema_version === "1.0"
-        ? "1.0" as const
-        : null;
-    if (schemaVersion === null) {
+    // Round-4 audit: the reader uses the SINGLE canonical publication parser
+    // (``parseDatasetPublication``, exact-keys) instead of a second hand-rolled
+    // one. A record that is valid JSON but misses ``publication_id``,
+    // ``manifest_ref``, ``published_at`` or any other contract field now
+    // raises an integrity error — it is never silently skipped into a
+    // "no artifact" answer. The parser also covers schema-version and
+    // receipt consistency (1.0/1.1 + manifest_sha256 rules).
+    let publication;
+    try {
+      publication = parseDatasetPublication(raw);
+    } catch (caught) {
       throw new ArtifactIntegrityError(
-        "Dataset publication schema_version must be \"1.0\" or \"1.1\"",
+        `Dataset publication is corrupt: ${path.basename(directory)}/publication.json ${String(caught)}`,
+        { cause: caught },
       );
     }
-    let manifestSha256: string | null = null;
-    if (schemaVersion === "1.1") {
-      // 1.1 without the receipt is corrupt (fail closed, round-3 audit).
-      if (
-        typeof publication.manifest_sha256 !== "string" ||
-        !SHA256.test(publication.manifest_sha256)
-      ) {
-        throw new ArtifactIntegrityError(
-          "Dataset publication 1.1 is missing its manifest file receipt",
-        );
-      }
-      manifestSha256 = publication.manifest_sha256;
-    } else if (publication.manifest_sha256 !== undefined) {
-      // A legacy 1.0 record claiming a P7 receipt is mislabeled.
-      throw new ArtifactIntegrityError(
-        "Dataset publication 1.0 must not carry manifest_sha256",
-      );
-    }
-    if (
-      typeof publication.publication_id === "string" &&
-      SAFE_ID.test(publication.publication_id) &&
-      typeof publication.manifest_ref === "string" &&
-      publication.manifest_ref !== ""
-    ) {
-      const publishedAt = typeof publication.published_at === "string"
-        ? publication.published_at
-        : entry.name;
-      if (newest === null || publishedAt > newest.publishedAt) {
-        newest = {
-          publishedAt,
-          directory,
-          manifestRef: publication.manifest_ref,
-          schemaVersion,
-          manifestSha256,
-        };
-      }
+    if (newest === null || publication.published_at > newest.publishedAt) {
+      newest = {
+        publishedAt: publication.published_at,
+        directory,
+        manifestRef: publication.manifest_ref,
+        schemaVersion: publication.schema_version ?? "1.1",
+        manifestSha256: publication.manifest_sha256 ?? null,
+      };
     }
   }
   return newest === null

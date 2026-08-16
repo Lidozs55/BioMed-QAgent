@@ -64,6 +64,19 @@ export function PermissionDialog({ task, onResolvePermission }: PermissionDialog
   const [submitting, setSubmitting] = useState<"deny" | "once" | "run" | "task" | "persistent" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [scopeWide, setScopeWide] = useState(false);
+  // Round-4 audit: the whole-scope opt-in is a high-risk choice — reset it
+  // whenever the pending request changes, including when the card is
+  // invalidated from outside (run cancel / Restricted switch) and the next
+  // request reuses this component instance. Deriving the reset from the
+  // key instead of an effect keeps the dialog pure.
+  const requestId = pending?.requestId ?? null;
+  const [scopedRequestId, setScopedRequestId] = useState<string | null>(requestId);
+  if (scopedRequestId !== requestId) {
+    // A new pending request (or none) supersedes the previous one: the
+    // high-risk whole-scope opt-in never carries over between requests.
+    setScopedRequestId(requestId);
+    setScopeWide(false);
+  }
   const open = pending !== null && taskId !== null && runId !== null;
   const isExec = pending?.capability === "process.exec";
   // Round-3 audit: the whole-scope opt-in only makes sense for fs requests

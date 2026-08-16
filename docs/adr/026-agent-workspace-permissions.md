@@ -124,6 +124,45 @@ policy:     allow | ask | deny
   a failed resolve never leaves residual authorization. The store enforces
   `restricted ⇒ persistent_exec_allow = false` at the API level (409), not
   just in the UI.
+- Round-4 audit (persistent rules are scope-bound): a persistent path rule
+  carries `resource_scope` and the evaluator requires
+  `request.scope === rule.resource_scope` in addition to path containment.
+  A `/repo/** read allow` created for `project` can never authorize
+  `/repo/.env` (sensitive) or an external path, even when the trees
+  overlap — only an explicit sensitive-scope rule can. The API defaults
+  `resource_scope` to `project` and rejects `framework_internal`;
+  approving “始终允许此路径” writes the rule bound to the approved request's
+  own scope (so approving `.env` itself forms a sensitive rule). Rules
+  persisted before this field existed load as `project` (fail-safe
+  migration: they keep working for project targets, never for
+  sensitive/external).
+- Round-4 audit (Restricted clears grants): switching the preset to
+  Restricted settles every pending request AND drops every temporary grant
+  host-wide (run + task bound). Lockdown clears, it does not merely
+  suppress — switching back to ask_when_needed cannot resurrect grants the
+  user believed revoked. Per-run grants additionally die with the run:
+  run termination calls `clearRun(runId)` via the workspace `onRunEnd`
+  hook, so the settings UI never lists grants that can no longer fire.
+- Round-4 audit (honest exec display): the approval card shows the REAL
+  binary — absolute paths are canonicalized; `./bin/tool`-style relative
+  paths resolve against the workspace root (the spawn cwd, never the server
+  cwd); bare names (`python`) are looked up through PATH/PATHEXT, and an
+  unresolvable name is labeled `(resolved via PATH)` instead of a fabricated
+  `<workspace>/name`. Arguments are redacted statefully: both `--token=value`
+  and the common `--token value` two-argument form are hidden.
+- Round-4 audit (gate = receipt): `promotePublication` computes
+  `manifest_sha256` from the bytes of the exact `options.manifest` object
+  the release gate validated — the same bytes are written into the
+  immutable version. The on-disk `dataset_manifest.json` in the build
+  output is never re-read, so a drift between the gated object and the
+  build output file cannot produce a publication whose receipt certifies
+  content the gate never saw.
+- Round-4 audit (single publication parser): the artifact reader parses
+  `publication.json` with the canonical `parseDatasetPublication` (exact
+  keys) instead of a second hand-rolled parser. Valid JSON missing
+  `publication_id`, `manifest_ref`, `published_at` or any other contract
+  field is now `ArtifactIntegrityError` → 409, never silently skipped into
+  a “no artifact” answer.
 - The agent requests permission simply by attempting the operation — there is
   no `request_permission` tool. An `ask` suspends exactly one tool call
   (`permission_requested` durable event) and resumes it after the user decides
@@ -157,11 +196,12 @@ policy:     allow | ask | deny
   preset both hard-denies exec in the evaluator and clears
   `persistent_exec_allow` on switch — revocation is effective even against a
   previously granted “always allow command execution”.
-- Run/Task grants are scoped to capability × ResourceScope (not a single
-  path); the permission card states this explicitly so “本 Run 允许” is not
-  mistaken for a single-path approval. The persistent button reads “始终允许
-  此路径” (not “此目录”) because a single-file read persists the file path,
-  not its parent directory.
+- Run/Task grants are scoped to capability × canonical resource root (see
+  the path-rooted grants bullet below) and never to the whole ResourceScope
+  without the explicit opt-in; the permission card states this explicitly so
+  “本 Run 允许” is not mistaken for a whole-scope approval. The persistent
+  button reads “始终允许此路径” (not “此目录”) because a single-file read
+  persists the file path, not its parent directory.
 - The system prompt mirrors the real policy: workspace file ops are free,
   `process.exec` asks (workspace included), task output is read-only for the
   agent, and framework-protected paths are always denied — no "run commands
@@ -201,6 +241,10 @@ policy:     allow | ask | deny
   corrupt `publication.json` (bad JSON, bad schema version, stripped
   receipt) now raises `ArtifactIntegrityError` → HTTP 409 — corruption is
   never silently reinterpreted as "no publication".
+- Round-4 audit: the reader uses the single canonical
+  `parseDatasetPublication` parser (exact keys); valid JSON missing any
+  contract field is `ArtifactIntegrityError` → 409 instead of being
+  silently skipped as “no publication”.
 - Honest boundary: an actor with full OS-account write access (Full Access +
   `process.exec`) can recompute the package digest AND the manifest file hash
   and rewrite `manifest_id` + `publication.json` consistently. The reader

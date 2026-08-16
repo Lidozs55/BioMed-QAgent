@@ -7,7 +7,7 @@
  * GET    /api/v1/settings/agent-permissions
  * PUT    /api/v1/settings/agent-permissions        { preset }
  * PUT    /api/v1/settings/agent-permissions/persistent-exec { enabled }
- * POST   /api/v1/settings/agent-permissions/rules  { capability, path, recursive, policy }
+ * POST   /api/v1/settings/agent-permissions/rules  { capability, resource_scope, path, recursive, policy }
  * DELETE /api/v1/settings/agent-permissions/rules/{ruleId}
  * GET    /api/v1/settings/agent-permissions/temp-grants
  * DELETE /api/v1/settings/agent-permissions/temp-grants/{grantId}
@@ -27,6 +27,7 @@ import { sendJson } from "../http/response.js";
 import type {
   FilePermissionRule,
   PermissionPreset,
+  ResourceScope,
 } from "../agent/permissions/types.js";
 import {
   PermissionPolicyConflictError,
@@ -36,6 +37,15 @@ import type { PermissionBrokerRegistry } from "../agent/permissions/broker.js";
 import { canonicalizeWithAncestor } from "../agent/permissions/path-normalizer.js";
 
 const PRESETS: readonly PermissionPreset[] = ["restricted", "ask_when_needed", "full_access"];
+/** Scopes a persistent rule may bind to; the framework control plane is
+ *  hard-denied before rules are consulted, so it is not selectable. */
+const RULE_SCOPES: readonly ResourceScope[] = [
+  "workspace",
+  "task_output",
+  "sensitive",
+  "project",
+  "external",
+];
 
 function asRecord(value: unknown): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -94,6 +104,11 @@ export function createPermissionSettingsApi(
           await brokerRegistry.invalidateAllPending(new Error(
             "preset switched to restricted; pending permissions revoked",
           ));
+          // Round-4 audit: lockdown CLEARS previously approved temporary
+          // grants instead of merely suppressing them — switching back to
+          // ask_when_needed must not resurrect grants the user believes
+          // revoked (ADR-026 "cannot survive").
+          brokerRegistry.clearAllGrants();
         }
         sendJson(response, 200, settings);
         return;
@@ -145,6 +160,20 @@ export function createPermissionSettingsApi(
         if (policy !== "allow" && policy !== "ask" && policy !== "deny") {
           throw new TypeError("policy must be allow, ask, or deny");
         }
+        // Round-4 audit: a persistent rule is bound to the resource scope it
+        // was created for (default ``project``). The evaluator requires
+        // ``request.scope === rule.resource_scope``, so a project rule can
+        // never authorize ``sensitive``/``external`` targets just because the
+        // paths overlap. ``framework_internal`` is excluded: the control
+        // plane is hard-denied before rules are consulted.
+        const resourceScope = body["resource_scope"] === undefined
+          ? "project"
+          : requiredString(body, "resource_scope");
+        if (!RULE_SCOPES.includes(resourceScope as ResourceScope)) {
+          throw new TypeError(
+            "resource_scope must be one of workspace, task_output, sensitive, project, external",
+          );
+        }
         // Persistent rules must be canonical absolute paths (ADR-026 §2):
         // storing the raw string would let the evaluator's ``path.resolve``
         // apply Server-cwd-relative semantics, and a non-canonical form
@@ -153,6 +182,7 @@ export function createPermissionSettingsApi(
         const rule = await policyStore.addRule({
           capability,
           path: canonical,
+          resource_scope: resourceScope as ResourceScope,
           recursive: body["recursive"] === true,
           policy,
         });
