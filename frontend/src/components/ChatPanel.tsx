@@ -369,8 +369,11 @@ export function ChatPanel({
   }, [activeTaskId, activeTask, cancelRun]);
   /**
    * Pause/resume controls for download operations. Pause cancels the current
-   * run (the server keeps the partial file for resumable acquisition); resume
-   * starts a follow-up run whose agent continues from the interrupted step.
+   * run when the download belongs to an active host run (the server keeps the
+   * partial file for resumable acquisition); a standalone resume has no live
+   * run, so pause aborts the in-flight download directly. Resume replays the
+   * download onto the original run's event stream — no new run/bubble, the
+   * existing progress strip keeps updating.
    */
   const downloadControl = useMemo<DownloadControl | undefined>(() => {
     if (activeTaskId === null || cancelDownload === undefined || resumeDownload === undefined) {
@@ -378,37 +381,18 @@ export function ChatPanel({
     }
     return {
       taskId: activeTaskId,
-      // Pause aborts the task's in-flight download directly; the server
-      // keeps the partial file for a later resume.
       onPause: async (taskId) => {
-        try {
+        if (activeRunId !== null && cancelRun !== undefined) {
+          await cancelRun(taskId, activeRunId);
+        } else {
           await cancelDownload(taskId);
-          toast.success("已暂停下载", {
-            description: "已下载部分将保留，可随时恢复续传。",
-          });
-        } catch (error) {
-          toast.error("暂停失败", {
-            description: errorMessage(error, "请稍后重试"),
-          });
         }
       },
-      // Resume replays the download onto the original run's event stream —
-      // no new run/bubble, the existing progress strip keeps updating.
       onResume: async (taskId, resume) => {
-        try {
-          await resumeDownload(taskId, resume);
-        } catch (error) {
-          toast.error("恢复下载失败", {
-            description: errorMessage(error, "请稍后重试"),
-          });
-          return;
-        }
-        toast.success("已发起下载续传", {
-          description: "进度将继续在原下载组件上更新，完成后请输入“继续”。",
-        });
+        await resumeDownload(taskId, resume);
       },
     };
-  }, [activeTaskId, cancelDownload, resumeDownload]);
+  }, [activeTaskId, activeRunId, cancelDownload, cancelRun, resumeDownload]);
   const activeQueue =
     activeTaskId === null ? [] : (queuedFollowUps[activeTaskId] ?? []);
   // 运行中也可以发送：加入队列等待当前回答结束，或调整方向取消并重引导。
