@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import {
+  canonicalizeWithAncestor,
   classifyCanonicalPath,
   normalizeAgentPathFor,
   PathNormalizationError,
@@ -69,4 +70,37 @@ export async function resolveAgentPath(
     canonical: normalized.canonical,
     scope,
   };
+}
+
+/**
+ * Re-verify the approved target right before IO (round-3 audit: path TOCTOU).
+ *
+ * A request can stay pending for a long time; a symlink/junction in the path
+ * may be swapped while the user decides. On resume the target is
+ * canonicalized again and must resolve to the SAME canonical path and scope
+ * the approval was granted for — otherwise the old approval is void and the
+ * operation fails instead of reading/writing a different target. The agent
+ * retries the operation, which enters the broker again with the new
+ * canonical target and asks afresh.
+ */
+export async function verifyAgentPathUnchanged(
+  context: WorkspaceContext,
+  resolved: ResolvedAgentPath,
+): Promise<void> {
+  const canonical = await canonicalizeWithAncestor(resolved.absolutePath);
+  const scope = classifyCanonicalPath(canonical, {
+    workspaceRoot: context.canonicalWorkspaceRoot,
+    taskOutputRoot: context.taskOutputRoot,
+    dataRoot: context.dataRoot,
+    repositoryRoot: context.repositoryRoot,
+  });
+  const samePath = process.platform === "win32"
+    ? canonical.toLowerCase() === resolved.canonical.toLowerCase()
+    : canonical === resolved.canonical;
+  if (!samePath || scope !== resolved.scope) {
+    throw new WorkspacePolicyError(
+      "PATH_ESCAPE",
+      "Resource changed after permission was granted; please retry the operation",
+    );
+  }
 }

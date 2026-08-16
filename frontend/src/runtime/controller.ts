@@ -712,10 +712,11 @@ export class RuntimeController {
     requestId: string,
     decision: "allow" | "deny",
     grantScope?: "once" | "run" | "task" | "persistent",
+    scopeWide?: boolean,
   ): Promise<void> {
     await this.enqueueTaskHandoff(taskId, async () => {
       const generation = this.advanceTaskHandoffGeneration(taskId);
-      await this.api.resolvePermission(taskId, runId, requestId, decision, grantScope);
+      await this.api.resolvePermission(taskId, runId, requestId, decision, grantScope, scopeWide);
       if (this.taskHandoffGenerations.get(taskId) !== generation) return;
       // The durable permission_resolved event (via WS) clears the pending
       // card; refetching the snapshot here would race the event ordering.

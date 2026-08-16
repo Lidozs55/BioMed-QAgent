@@ -75,6 +75,7 @@ export interface TasksApi {
     requestId: string,
     decision: "allow" | "deny",
     grantScope?: "once" | "run" | "task" | "persistent",
+    scopeWide?: boolean,
   ) => Promise<void>;
   /** Resumes an interrupted download directly (no AI pass). */
   resumeDownload: (
@@ -130,7 +131,7 @@ export function createTasksApi(http: Http): TasksApi {
       http.request(`${http.baseUrl}/tasks/${http.encodeId(taskId)}/runs/${http.encodeId(runId)}/resume`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ request_id: input.request_id, decision: input.decision, detail: input.detail }),      }).then((b) => parseTaskSnapshot(b)),
-    resolvePermission: (taskId, runId, requestId, decision, grantScope) =>
+    resolvePermission: (taskId, runId, requestId, decision, grantScope, scopeWide) =>
       http.requestVoid(
         `${http.baseUrl}/tasks/${http.encodeId(taskId)}/runs/${http.encodeId(runId)}/permissions/${http.encodeId(requestId)}`,
         {
@@ -139,6 +140,7 @@ export function createTasksApi(http: Http): TasksApi {
           body: JSON.stringify({
             decision,
             ...(grantScope === undefined ? {} : { grant_scope: grantScope }),
+            ...(scopeWide === true ? { scope_wide: true } : {}),
           }),
         },
       ),

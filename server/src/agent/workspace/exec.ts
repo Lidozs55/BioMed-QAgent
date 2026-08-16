@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 
+import { canonicalizeWithAncestor } from "../permissions/path-normalizer.js";
 import { PermissionDeniedError } from "../permissions/index.js";
 import type { WorkspaceContext } from "./context.js";
 import type { WorkspaceExecResult } from "./types.js";
@@ -53,9 +54,29 @@ export class WorkspaceProcessRegistry {
   }
 }
 
-export function sanitizedCommand(executable: string, args: readonly string[]): string[] {
+/**
+ * Build the display/audit form of a command (round-3 audit): the executable
+ * keeps its FULL path (canonicalized when absolute) so the approval card
+ * shows exactly WHICH binary would run; only argument values that look like
+ * secrets are redacted. The permission system and audit see this form; the
+ * actual spawn still uses the raw ``executable``/``args`` inputs.
+ */
+export async function sanitizedCommand(
+  executable: string,
+  args: readonly string[],
+  cwd: string,
+): Promise<string[]> {
+  let shownExecutable = executable;
+  if (typeof executable === "string" && executable.trim() !== "") {
+    const target = executable.includes("/") || executable.includes("\\")
+      ? executable
+      : `${cwd.replace(/[\\/]+$/u, "")}/${executable}`;
+    if (target.includes("/") || target.includes("\\")) {
+      shownExecutable = await canonicalizeWithAncestor(target).catch(() => executable);
+    }
+  }
   return [
-    path.basename(executable),
+    shownExecutable,
     ...args.map((argument) => (SECRET_ARGUMENT.test(argument) ? "[redacted]" : argument)),
   ];
 }
@@ -196,7 +217,7 @@ export async function executeWorkspaceCommand(
   signal: AbortSignal | undefined,
   registry: WorkspaceProcessRegistry,
 ): Promise<WorkspaceExecResult> {
-  const command = sanitizedCommand(input.executable, input.args);
+  const command = await sanitizedCommand(input.executable, input.args, context.workspaceRoot);
   const invalid = validateCommand(input, context);
   if (invalid !== undefined) return rejectedResult(command, invalid);
   // process.exec is an independent high-risk capability (plan §25–§27): the

@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import type { ResourceScope } from "./types.js";
+import { isSensitiveResource } from "./types.js";
 import { canonicalIsWithin } from "./path-normalizer.js";
 
 /**
@@ -53,6 +54,10 @@ export function classifyCanonicalPath(
   ) {
     return "framework_internal";
   }
+  // Sensitive resource names (.env, key/pem, credentials/secrets) get their
+  // own scope: an approved project/external grant must not auto-cover them
+  // (round-3 audit). The current task's dirs were matched above.
+  if (isSensitiveResource(canonical)) return "sensitive";
   if (canonicalIsWithin(roots.repositoryRoot, canonical)) return "project";
   return "external";
 }

@@ -20,6 +20,7 @@ import {
   AppendOnlyPermissionAuditSink,
   JsonPermissionPolicyStore,
   PermissionBroker,
+  PermissionBrokerRegistry,
   PermissionEvaluator,
   ProtectedPaths,
   TemporaryGrantStore,
@@ -182,6 +183,8 @@ export interface Phase3RuntimeOptions {
   agentExecPolicy: "deny" | "ask" | "allow" | null;
   /** Shared persistent permission settings (presets + rules). */
   permissionPolicyStore?: PermissionPolicyStore;
+  /** Live permission brokers per task (preset switch invalidation, grant view/revoke). */
+  permissionBrokerRegistry?: PermissionBrokerRegistry;
   adapter?: BioMedAgentAdapter;
   resolveModel?: () => Promise<BioMedModelConfig>;
   /**
@@ -220,6 +223,7 @@ export async function createPhase3Runtime(
   const runtime = await createDurableAgentRuntime({
     tasksRoot: options.tasksRoot,
     workspaceManager,
+    permissionBrokerRegistry: options.permissionBrokerRegistry,
     adapter: options.adapter ?? new PiAgentAdapter({
       environment: process.env,
       resolveModel: options.resolveModel,

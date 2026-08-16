@@ -200,13 +200,18 @@ class GovernedTaskWorkspace implements TaskWorkspace {
       editWorkspaceText(this.context, input));
   }
 
-  exec(
+  async exec(
     input: { executable: string; args: string[]; timeoutMs?: number },
     signal?: AbortSignal,
   ): Promise<WorkspaceExecResult> {
+    const command = await sanitizedCommand(
+      input.executable,
+      input.args,
+      this.context.workspaceRoot,
+    );
     return this.#audited(
       "exec",
-      { command: sanitizedCommand(input.executable, input.args) },
+      { command },
       () => executeWorkspaceCommand(this.context, input, signal, this.#processes),
       (value) => ({
         result: value.cancelled

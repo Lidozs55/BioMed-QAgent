@@ -15,7 +15,10 @@ import {
 } from "./runtime/phase3-composition.js";
 import { ModelSettingsService } from "./settings/model-settings.js";
 import { createPermissionSettingsApi } from "./settings/permission-settings.js";
-import { JsonPermissionPolicyStore } from "./agent/permissions/index.js";
+import {
+  JsonPermissionPolicyStore,
+  PermissionBrokerRegistry,
+} from "./agent/permissions/index.js";
 
 interface ApiSurface {
   handle(request: IncomingMessage, response: ServerResponse): boolean;
@@ -78,6 +81,7 @@ export async function createBootstrapOptions(input: BootstrapInput): Promise<Boo
     settingsDir,
     database,
   });
+  const permissionBrokerRegistry = new PermissionBrokerRegistry();
   const vlmConfig = modelSettings.resolveVlmConfig === undefined
     ? undefined
     : await modelSettings.resolveVlmConfig().catch(() => undefined);
@@ -96,7 +100,7 @@ export async function createBootstrapOptions(input: BootstrapInput): Promise<Boo
     hostApi: combineApis(
       productApi,
       modelSettings,
-      createPermissionSettingsApi(permissionPolicyStore),
+      createPermissionSettingsApi(permissionPolicyStore, permissionBrokerRegistry),
     ),
     formalRuntime: () => formalFactory({
       tasksRoot,
@@ -104,6 +108,7 @@ export async function createBootstrapOptions(input: BootstrapInput): Promise<Boo
       repositoryRoot,
       agentExecPolicy: config.agentExecPolicy,
       permissionPolicyStore,
+      permissionBrokerRegistry,
       resolveModel: modelSettings.resolveActiveModel,
       database,
       browserPool,

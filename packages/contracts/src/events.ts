@@ -49,6 +49,7 @@ export type PermissionScope =
   | "workspace"
   | "task_output"
   | "framework_internal"
+  | "sensitive"
   | "project"
   | "external";
 

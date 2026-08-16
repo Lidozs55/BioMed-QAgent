@@ -20,6 +20,7 @@ import {
   assertRecord,
   assertString,
   assertStringArray,
+  parsePublicationSchemaVersion,
   parseSchemaVersion,
 } from "./primitives.js";
 
@@ -155,6 +156,8 @@ const DATASET_PUBLICATION_KEYS = [
   "supersedes_publication_id",
 ] as const;
 
+const PUBLICATION_SHA256 = /^[0-9a-f]{64}$/;
+
 export function parseDatasetPublication(value: unknown): DatasetPublication {
   const record = assertRecord(value, "DatasetPublication");
   assertExactKeys(record, DATASET_PUBLICATION_KEYS, "DatasetPublication");
@@ -169,19 +172,29 @@ export function parseDatasetPublication(value: unknown): DatasetPublication {
   if (supersedes === publicationId) {
     throw new TypeError("publication cannot supersede itself");
   }
-  return {
-    schema_version: parseSchemaVersion(record),
+  const schemaVersion = parsePublicationSchemaVersion(record);
+  let manifestSha256: string | undefined;
+  if (schemaVersion === "1.1") {
+    // P7 trust anchor: SHA-256 of the dataset_manifest.json file bytes.
+    // A 1.1 record without the receipt is malformed and must not parse.
+    manifestSha256 = assertNonEmptyString(
+      record.manifest_sha256,
+      "DatasetPublication.manifest_sha256",
+    );
+    if (!PUBLICATION_SHA256.test(manifestSha256)) {
+      throw new TypeError("DatasetPublication.manifest_sha256 must be a SHA-256 hex digest");
+    }
+  } else if (record.manifest_sha256 !== undefined) {
+    // A legacy 1.0 record claiming a P7 receipt is mislabeled: reject it so
+    // a downgrade cannot smuggle an unverified file through a "legacy" tag.
+    throw new TypeError("DatasetPublication schema_version 1.0 must not carry manifest_sha256");
+  }
+  const parsed: DatasetPublication = {
+    schema_version: schemaVersion,
     publication_id: publicationId,
     manifest_ref: assertNonEmptyString(
       record.manifest_ref,
       "DatasetPublication.manifest_ref",
-    ),
-    // P7 trust anchor: SHA-256 of the dataset_manifest.json file bytes. The
-    // artifact reader refuses publications without it (fail closed), so the
-    // parser requires it too.
-    manifest_sha256: assertNonEmptyString(
-      record.manifest_sha256,
-      "DatasetPublication.manifest_sha256",
     ),
     validation_result_ref: assertNonEmptyString(
       record.validation_result_ref,
@@ -193,4 +206,6 @@ export function parseDatasetPublication(value: unknown): DatasetPublication {
     ),
     supersedes_publication_id: supersedes,
   };
+  if (manifestSha256 !== undefined) parsed.manifest_sha256 = manifestSha256;
+  return parsed;
 }

@@ -235,8 +235,7 @@
     "published_at": "2026-08-11T00:00:00Z",
     "schema_version": "1.0",
     "supersedes_publication_id": null,
-    "validation_result_ref": "validation_report.json",
-    "manifest_sha256": "b6c9f0ff53de4a12089402058201fbf16b285819551e50faeb7450e2ab2d6fd9"
+    "validation_result_ref": "validation_report.json"
   },
   "source_fixtures": [
     {

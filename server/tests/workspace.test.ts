@@ -18,6 +18,7 @@ import {
   createTaskWorkspace,
 } from "../src/agent/workspace/index.js";
 import { createPermissionFixture } from "./helpers/permission-fixture.js";
+import { canonicalizeWithAncestor } from "../src/agent/permissions/path-normalizer.js";
 
 const roots: string[] = [];
 
@@ -489,6 +490,29 @@ describe("governed Task Workspace (data/workspaces/<taskId>)", () => {
     expect(audit.records.at(-1)).toMatchObject({ operation: "exec", result: "success" });
   });
 
+  test("round-3 audit: the approval card shows the FULL executable path, not a basename", async () => {
+    const { workspace, permissionFixture } = await fixture();
+    const running = workspace.exec({
+      executable: process.execPath,
+      args: ["--version"],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const request = permissionFixture.events.at(-1) as { command: string } | undefined;
+    expect(request?.command).toBeDefined();
+    // Two different executables named python.exe must be distinguishable:
+    // the command the user approves carries the canonical absolute path.
+    const canonical = await canonicalizeWithAncestor(process.execPath);
+    expect(request?.command).toContain(canonical);
+    expect(request?.command.split(" ")[0]).not.toBe("node");
+    await permissionFixture.broker.resolve(
+      "run-1",
+      (permissionFixture.events.at(-1) as { request_id: string }).request_id,
+      "allow",
+      "once",
+    );
+    await running;
+  });
+
   test("workspace hash integrity: protected file bytes are untouched by policy violations", async () => {
     const { workspaceRoot, workspace } = await fixture({ preset: "restricted" });
     const target = path.join(workspaceRoot, "notes", "keep.txt");
@@ -502,5 +526,83 @@ describe("governed Task Workspace (data/workspaces/<taskId>)", () => {
     });
     const after = createHash("sha256").update(await readFile(target)).digest("hex");
     expect(after).toBe(before);
+  });
+
+  test("round-3 audit: a read approved for one canonical target fails if the target was swapped (TOCTOU)", async () => {
+    const { base, workspace, permissionFixture } = await fixture();
+    const safeDir = path.join(base, "external", "safe");
+    const secretDir = path.join(base, "external", "secret");
+    await mkdir(safeDir, { recursive: true });
+    await mkdir(secretDir, { recursive: true });
+    await writeNested(path.join(safeDir, "current.csv"), "safe data");
+    await writeNested(path.join(secretDir, "current.csv"), "secret data");
+    const link = path.join(base, "external", "link.csv");
+    try {
+      await symlink(path.join(safeDir, "current.csv"), link);
+    } catch (error) {
+      // No symlink privilege (e.g. Windows without developer mode): the
+      // verification logic itself is covered by the unit test below.
+      if ((error as NodeJS.ErrnoException).code === "EPERM" ||
+          (error as NodeJS.ErrnoException).code === "EACCES") {
+        return;
+      }
+      throw error;
+    }
+
+    const reading = workspace.read({ path: link });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(permissionFixture.broker.hasPending("run-1")).toBe(true);
+    // While the approval waits, the link is swapped to the OTHER target.
+    await rm(link);
+    await symlink(path.join(secretDir, "current.csv"), link);
+    const requestId = permissionFixture.events.at(-1) as { request_id: string };
+    await permissionFixture.broker.resolve("run-1", requestId.request_id, "allow", "once");
+
+    // The approved read must NOT follow the new target: it fails closed.
+    await expect(reading).rejects.toMatchObject({ code: "PATH_ESCAPE" });
+  });
+
+  test("round-3 audit: verifyAgentPathUnchanged rejects a stale approval", async () => {
+    const base = await mkdtemp(path.join(os.tmpdir(), "biomed-workspace-verify-"));
+    roots.push(base);
+    const workspaceRoot = path.join(base, "workspace");
+    await mkdir(workspaceRoot, { recursive: true });
+    const taskOutputRoot = path.join(base, "output");
+    await mkdir(path.join(taskOutputRoot, "state"), { recursive: true });
+    const { createWorkspaceContext } = await import("../src/agent/workspace/context.js");
+    const { verifyAgentPathUnchanged, resolveAgentPath } = await import(
+      "../src/agent/workspace/path-policy.js",
+    );
+    const permissionFixture = createPermissionFixture({
+      taskId: "task-1",
+      runId: "run-1",
+      taskOutputRoot,
+    });
+    const context = await createWorkspaceContext({
+      taskId: "task-1",
+      runId: "run-1",
+      workspaceRoot,
+      taskOutputRoot,
+      dataRoot: base,
+      repositoryRoot: base,
+      permissions: permissionFixture.broker,
+      audit: new InMemoryWorkspaceAuditSink(),
+    });
+    const target = path.join(base, "external", "a.csv");
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeNested(target, "x");
+    // A real resolution passes verification. (external read asks; approve it)
+    const resolution = resolveAgentPath(context, target, "fs.read");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const request = permissionFixture.events.at(-1) as { request_id: string };
+    await permissionFixture.broker.resolve("run-1", request.request_id, "allow", "once");
+    const resolved = await resolution;
+    await expect(verifyAgentPathUnchanged(context, resolved)).resolves.toBeUndefined();
+    // A fabricated stale approval (canonical pointing elsewhere) is rejected.
+    await expect(verifyAgentPathUnchanged(context, {
+      ...resolved,
+      canonical: path.join(base, "external", "b.csv"),
+      scope: "external",
+    })).rejects.toMatchObject({ code: "PATH_ESCAPE" });
   });
 });

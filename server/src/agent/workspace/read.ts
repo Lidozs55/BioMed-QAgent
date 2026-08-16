@@ -2,7 +2,7 @@ import { lstat, open, readdir } from "node:fs/promises";
 import path from "node:path";
 
 import type { WorkspaceContext } from "./context.js";
-import { resolveAgentPath } from "./path-policy.js";
+import { resolveAgentPath, verifyAgentPathUnchanged } from "./path-policy.js";
 import {
   WorkspacePolicyError,
   type WorkspaceListEntry,
@@ -31,6 +31,9 @@ export async function readWorkspaceText(
   if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0) {
     throw new WorkspacePolicyError("LIMIT_EXCEEDED", "Read offset and length are invalid");
   }
+  // Round-3 audit: re-canonicalize right before IO — a symlink swapped while
+  // the approval was pending must not redirect the read to a different target.
+  await verifyAgentPathUnchanged(context, resolved);
   // IO follows the requested path (symlinks included); the permission check
   // above already classified the canonical target.
   const handle = await open(resolved.absolutePath, "r");
@@ -68,6 +71,8 @@ export async function listWorkspace(
   const entries: WorkspaceListEntry[] = [];
   let truncated = requestedDepth > maxDepth;
 
+  // Round-3 audit: re-verify the approved target before enumerating.
+  await verifyAgentPathUnchanged(context, resolved);
   async function visit(directory: string, relativeDirectory: string, depth: number): Promise<void> {
     const children = await readdir(directory, { withFileTypes: true });
     children.sort((left, right) => left.name.localeCompare(right.name, "en"));
@@ -110,6 +115,8 @@ export async function searchWorkspace(
     throw new WorkspacePolicyError("LIMIT_EXCEEDED", "Search query is invalid");
   }
   const resolved = await resolveAgentPath(context, input.path, "fs.read");
+  // Round-3 audit: re-verify the approved target before searching.
+  await verifyAgentPathUnchanged(context, resolved);
   const files: Array<{ absolute: string; relative: string }> = [];
   let truncated = false;
 

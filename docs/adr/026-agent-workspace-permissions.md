@@ -88,6 +88,42 @@ policy:     allow | ask | deny
   existing allow rules never beat it. The same holds for exec: Restricted
   denies `process.exec` even over `AGENT_EXEC_POLICY=allow` — emergency
   lockdown beats the migration flag.
+- Round-3 audit (stale approvals): `broker.resolve(allow)` **re-evaluates the
+  pending request against the CURRENT policy** before recording any grant. A
+  request that was pending when the preset switched to Restricted (or when a
+  deny rule appeared) is invalidated: no grant is recorded, the tool call
+  settles with a structured denial, and the timeline receives a
+  `permission_resolved {decision: "deny"}`. Switching the preset to
+  Restricted additionally invalidates ALL pending requests host-wide
+  (broker registry) so stale approval cards are settled immediately.
+- Round-3 audit (sensitive scope): `sensitive` is its own ResourceScope for
+  `.env*` (except the committed `.env.example` template), `*.key`/`*.pem`/
+  `*.p12`/`*.pfx`, `credentials.json` and `secrets.json` anywhere outside
+  the framework control plane and the current task's own workspace/output.
+  An ordinary project/external grant can never cover them: the default
+  policy is read=ask, write/edit=deny (Restricted denies all; Full Access
+  explicitly allows).
+- Round-3 audit (path-rooted grants): filesystem Run/Task grants are
+  `capability × canonical resource root` — the approval covers the approved
+  canonical path and its subtree, never the whole scope. Approving
+  `D:\dataset\TCGA\a.csv` no longer authorizes every external path. An
+  explicit "高级：整个范围" opt-in in the approval card (or `scope_wide` on
+  the resolve API) grants the full scope; exec grants are scope-wide by
+  nature. Active run/task grants are listable and revocable via
+  `GET/DELETE /api/v1/settings/agent-permissions/temp-grants`.
+- Round-3 audit (TOCTOU): `read`/`list`/`search`/`edit` re-canonicalize the
+  target right before IO and require the canonical path + scope to equal the
+  approved ones — a symlink/junction swapped while the request was pending
+  voids the approval (the write path already re-verified). The permission
+  card and the audit record show the canonical target whenever it differs
+  from the requested path; exec approvals display the full (canonicalized)
+  executable path instead of a basename.
+- Round-3 audit (transactional resolve): grant recording is undoable — a
+  failure while recording the audit/event rolls back the temporary grant or
+  restores the previous persistent settings (exec flag / removed rule), so
+  a failed resolve never leaves residual authorization. The store enforces
+  `restricted ⇒ persistent_exec_allow = false` at the API level (409), not
+  just in the UI.
 - The agent requests permission simply by attempting the operation — there is
   no `request_permission` tool. An `ask` suspends exactly one tool call
   (`permission_requested` durable event) and resumes it after the user decides
@@ -151,12 +187,20 @@ policy:     allow | ask | deny
   NOT cover the manifest's own top-level metadata (`row_count`,
   `dataset_family`, `validation_summary`, `confidence_summary`, …). The
   publisher therefore binds the **manifest file bytes** into the publication
-  receipt: `publication.json` gains a required `manifest_sha256` (SHA-256 of
-  the `dataset_manifest.json` file as published), and the reader verifies the
+  receipt: `publication.json` gains `manifest_sha256` (SHA-256 of the
+  `dataset_manifest.json` file as published), and the reader verifies the
   stored manifest file against it before parsing (P1 audit). Editing
   `validation_summary` or `row_count` without rewriting the receipt is
-  rejected; `parseDatasetPublication` requires the field, and golden
-  migration fixtures now carry it.
+  rejected.
+- Round-3 audit: the receipt is versioned, not retrofitted. Publications now
+  carry `schema_version: "1.1"` and **require** `manifest_sha256`;
+  pre-existing `1.0` records (no receipt) stay servable at their pre-P7
+  trust level (package digest + `manifest_id` only) instead of vanishing
+  from the artifact API. A `1.0` record claiming a receipt or a `1.1`
+  record missing one is rejected (`parseDatasetPublication` + reader). A
+  corrupt `publication.json` (bad JSON, bad schema version, stripped
+  receipt) now raises `ArtifactIntegrityError` → HTTP 409 — corruption is
+  never silently reinterpreted as "no publication".
 - Honest boundary: an actor with full OS-account write access (Full Access +
   `process.exec`) can recompute the package digest AND the manifest file hash
   and rewrite `manifest_id` + `publication.json` consistently. The reader

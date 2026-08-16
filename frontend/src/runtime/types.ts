@@ -163,8 +163,10 @@ export interface PendingPermission {
   runId: string;
   requestId: string;
   capability: "fs.read" | "fs.write" | "fs.edit" | "process.exec";
-  scope: "workspace" | "task_output" | "framework_internal" | "project" | "external";
+  scope: "workspace" | "task_output" | "framework_internal" | "sensitive" | "project" | "external";
   resource: string | null;
+  /** Canonical absolute target (fs capabilities); shown when != resource. */
+  canonicalResource: string | null;
   command: string | null;
   cwd: string | null;
   summary: string;

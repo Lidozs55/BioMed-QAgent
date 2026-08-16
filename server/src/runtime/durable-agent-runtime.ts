@@ -22,7 +22,10 @@ import {
   type BioMedAgentTool,
 } from "../agent/contracts.js";
 import { PiEventAdapter } from "../agent/event-adapter.js";
-import type { PermissionBroker } from "../agent/permissions/broker.js";
+import {
+  type PermissionBroker,
+  type PermissionBrokerRegistry,
+} from "../agent/permissions/broker.js";
 import {
   DurableApprovalGate,
   type ApprovalGateHandle,
@@ -62,6 +65,8 @@ export interface DurableAgentRuntimeOptions {
   tasksRoot: string;
   /** Owns ``data/workspaces/<taskId>`` lifecycle (create/remove/restore). */
   workspaceManager?: WorkspaceManager;
+  /** Live broker registry for preset-switch invalidation + grant management. */
+  permissionBrokerRegistry?: PermissionBrokerRegistry;
   adapter: BioMedAgentAdapter;
   workspaceFactory: (identity: {
     taskId: string;
@@ -327,7 +332,7 @@ export async function createDurableAgentRuntime(
       });
       workspace.setPiSessionId?.(session.piSessionId);
       await repository.recordPiSessionId(taskId, session.piSessionId);
-      return {
+      const active: ActiveTask = {
         session,
         workspace: { ...workspace, dispose: disposeWorkspace },
         adapter: new PiEventAdapter({ taskId }),
@@ -336,6 +341,10 @@ export async function createDurableAgentRuntime(
         permissionBroker: workspace.permissionBroker ?? null,
         activeDownload: null,
       };
+      if (options.permissionBrokerRegistry !== undefined && active.permissionBroker !== null) {
+        options.permissionBrokerRegistry.register(taskId, active.permissionBroker);
+      }
+      return active;
     } catch (error) {
       await disposeWorkspace();
       throw error;
@@ -733,12 +742,15 @@ export async function createDurableAgentRuntime(
         throw new TypeError("grant_scope must be once, run, task, or persistent");
       }
     }
+    // Round-3 audit: run/task grants root at the approved canonical path by
+    // default; an explicit ``scope_wide`` opt-in grants the whole scope.
+    const scopeWide = body.scope_wide === true;
     const task = activeTasks.get(taskId);
     const broker = task?.permissionBroker;
     if (task === undefined || broker === null || broker === undefined) {
       throw new ReferenceError("Permission broker is unavailable for this task");
     }
-    const resolved = await broker.resolve(runId, requestId, decision, grantScope);
+    const resolved = await broker.resolve(runId, requestId, decision, grantScope, scopeWide);
     if (!resolved) {
       throw new ReferenceError("Permission request not found or expired");
     }
@@ -753,6 +765,7 @@ export async function createDurableAgentRuntime(
         throw new DurableTaskConflictError("active_run", "Active tasks cannot be deleted");
       }
       activeTasks.delete(taskId);
+      options.permissionBrokerRegistry?.unregister(taskId);
       await task.session.dispose();
     }
     await repository.deleteTask(taskId);

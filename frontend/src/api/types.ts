@@ -107,4 +107,19 @@ export interface SettingsAPIClient {
   setAgentPermissionsPersistentExec: (enabled: boolean) => Promise<AgentPermissionSettings>;
   addAgentPermissionRule: (rule: AgentPermissionRuleInput) => Promise<AgentPermissionSettings>;
   removeAgentPermissionRule: (ruleId: string) => Promise<AgentPermissionSettings>;
+  fetchAgentTempGrants: () => Promise<AgentTempGrant[]>;
+  revokeAgentTempGrant: (grantId: string) => Promise<void>;
+}
+
+/** Active temporary (run/task) grant, listable + revocable from settings. */
+export interface AgentTempGrant {
+  id: string;
+  capability: "fs.read" | "fs.write" | "fs.edit" | "process.exec";
+  scope: "workspace" | "task_output" | "framework_internal" | "sensitive" | "project" | "external";
+  /** Canonical root the grant covers (subtree); null = whole scope. */
+  root: string | null;
+  boundTo: "run" | "task";
+  taskId: string;
+  runId: string;
+  grantedAt: string;
 }

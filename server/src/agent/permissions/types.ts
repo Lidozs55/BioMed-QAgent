@@ -23,6 +23,7 @@ export type ResourceScope =
   | "workspace"
   | "task_output"
   | "framework_internal"
+  | "sensitive"
   | "project"
   | "external";
 
@@ -75,26 +76,40 @@ export type PolicyMatrix = Record<PermissionCapability, Record<ResourceScope, Pe
 export const PRESET_MATRICES: Record<PermissionPreset, PolicyMatrix> = {
   // Plan §7.1: only the agent's own workspace; everything else denied.
   restricted: {
-    "fs.read": { workspace: "allow", task_output: "allow", framework_internal: "deny", project: "deny", external: "deny" },
-    "fs.write": { workspace: "allow", task_output: "deny", framework_internal: "deny", project: "deny", external: "deny" },
-    "fs.edit": { workspace: "allow", task_output: "deny", framework_internal: "deny", project: "deny", external: "deny" },
-    "process.exec": { workspace: "deny", task_output: "deny", framework_internal: "deny", project: "deny", external: "deny" },
+    "fs.read": { workspace: "allow", task_output: "allow", framework_internal: "deny", sensitive: "deny", project: "deny", external: "deny" },
+    "fs.write": { workspace: "allow", task_output: "deny", framework_internal: "deny", sensitive: "deny", project: "deny", external: "deny" },
+    "fs.edit": { workspace: "allow", task_output: "deny", framework_internal: "deny", sensitive: "deny", project: "deny", external: "deny" },
+    "process.exec": { workspace: "deny", task_output: "deny", framework_internal: "deny", sensitive: "deny", project: "deny", external: "deny" },
   },
   // Plan §6/§7.2: the recommended default — ask when needed.
   ask_when_needed: {
-    "fs.read": { workspace: "allow", task_output: "allow", framework_internal: "deny", project: "ask", external: "ask" },
-    "fs.write": { workspace: "allow", task_output: "deny", framework_internal: "deny", project: "ask", external: "ask" },
-    "fs.edit": { workspace: "allow", task_output: "deny", framework_internal: "deny", project: "ask", external: "ask" },
-    "process.exec": { workspace: "ask", task_output: "ask", framework_internal: "deny", project: "ask", external: "ask" },
+    "fs.read": { workspace: "allow", task_output: "allow", framework_internal: "deny", sensitive: "ask", project: "ask", external: "ask" },
+    "fs.write": { workspace: "allow", task_output: "deny", framework_internal: "deny", sensitive: "deny", project: "ask", external: "ask" },
+    "fs.edit": { workspace: "allow", task_output: "deny", framework_internal: "deny", sensitive: "deny", project: "ask", external: "ask" },
+    "process.exec": { workspace: "ask", task_output: "ask", framework_internal: "deny", sensitive: "deny", project: "ask", external: "ask" },
   },
   // Plan §7.3: explicit user choice; UI must warn about OS account rights.
   full_access: {
-    "fs.read": { workspace: "allow", task_output: "allow", framework_internal: "deny", project: "allow", external: "allow" },
-    "fs.write": { workspace: "allow", task_output: "deny", framework_internal: "deny", project: "allow", external: "allow" },
-    "fs.edit": { workspace: "allow", task_output: "deny", framework_internal: "deny", project: "allow", external: "allow" },
-    "process.exec": { workspace: "allow", task_output: "allow", framework_internal: "deny", project: "allow", external: "allow" },
+    "fs.read": { workspace: "allow", task_output: "allow", framework_internal: "deny", sensitive: "allow", project: "allow", external: "allow" },
+    "fs.write": { workspace: "allow", task_output: "deny", framework_internal: "deny", sensitive: "allow", project: "allow", external: "allow" },
+    "fs.edit": { workspace: "allow", task_output: "deny", framework_internal: "deny", sensitive: "allow", project: "allow", external: "allow" },
+    "process.exec": { workspace: "allow", task_output: "allow", framework_internal: "deny", sensitive: "allow", project: "allow", external: "allow" },
   },
 };
+
+/**
+ * Sensitive resource names: environment files and credential material that
+ * must never be covered by an ordinary project/external grant (round-3
+ * audit). Matched case-insensitively on the canonical path's basename;
+ * ``.env.example`` is a committed template and stays readable.
+ */
+const SENSITIVE_RESOURCE_PATTERN =
+  /^(?:\.env(?!\.example$)(?:\..*)?|.*\.(?:key|pem|p12|pfx)|credentials\.json|secrets\.json)$/iu;
+
+export function isSensitiveResource(canonicalPath: string): boolean {
+  const basename = canonicalPath.split(/[\\/]+/u).at(-1) ?? canonicalPath;
+  return SENSITIVE_RESOURCE_PATTERN.test(basename);
+}
 
 export const DEFAULT_PERMISSION_SETTINGS: PermissionSettings = {
   schema_version: 1,

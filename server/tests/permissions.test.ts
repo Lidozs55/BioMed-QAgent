@@ -135,6 +135,7 @@ describe("path normalization + scope classification (P1)", () => {
     grants.add("run", "task_ts_1", "run_ts_1", {
       capability: "fs.read",
       scope: "framework_internal",
+      root: null,
     });
     await policyStore.addRule({
       capability: "fs.read",
@@ -363,7 +364,7 @@ describe("PermissionBroker suspend/resume (P1)", () => {
     await expect(requested).rejects.toBeInstanceOf(PermissionDeniedError);
   });
 
-  test("run grant auto-allows the same capability × scope for the rest of the run", async () => {
+  test("run grant auto-allows the approved canonical path (and subtree) only", async () => {
     const { broker, events } = await fixture();
     const external = path.join(baseExternal(), "data", "a.csv");
     const first = broker.evaluate({
@@ -377,14 +378,59 @@ describe("PermissionBroker suspend/resume (P1)", () => {
     await broker.resolve("run_ts_1", requestId, "allow", "run");
     await expect(first).resolves.toMatchObject({ decision: "allow" });
 
-    // Second external read within the same run: no new ask.
+    // The SAME path (and paths under it) are auto-allowed for the run.
     await expect(broker.evaluate({
       capability: "fs.read",
-      resource: path.join(baseExternal(), "data", "b.csv"),
-      canonicalResource: path.join(baseExternal(), "data", "b.csv"),
+      resource: external,
+      canonicalResource: external,
       scope: "external",
     })).resolves.toMatchObject({ decision: "allow" });
-    expect(events.filter((event) => event.type === "permission_requested")).toHaveLength(1);
+    // A SIBLING path in the same scope is NOT covered by the run grant
+    // (round-3 audit: grants are rooted at the approved canonical path, so
+    // approving one external file never authorizes the whole machine).
+    const sibling = path.join(baseExternal(), "data", "b.csv");
+    const second = broker.evaluate({
+      capability: "fs.read",
+      resource: sibling,
+      canonicalResource: sibling,
+      scope: "external",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(broker.hasPending("run_ts_1")).toBe(true);
+    await broker.resolve("run_ts_1", (events.at(-1) as { request_id: string }).request_id, "deny");
+    await expect(second).rejects.toBeInstanceOf(PermissionDeniedError);
+    expect(events.filter((event) => event.type === "permission_requested")).toHaveLength(2);
+  });
+
+  test("an explicit whole-scope grant covers the scope (advanced choice)", async () => {
+    const { broker, events, grants } = await fixture();
+    const external = path.join(baseExternal(), "data", "a.csv");
+    const requested = broker.evaluate({
+      capability: "fs.read",
+      resource: external,
+      canonicalResource: external,
+      scope: "external",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const requestId = (events.at(-1) as { request_id: string }).request_id;
+    await broker.resolve("run_ts_1", requestId, "allow", "run");
+    await expect(requested).resolves.toMatchObject({ decision: "allow" });
+    const granted = grants.list();
+    expect(granted).toHaveLength(1);
+    expect(granted[0]?.root).toBe(external);
+    // A scope-wide grant (root null) matches every path in the scope.
+    const whole = path.join(baseExternal(), "elsewhere", "c.csv");
+    grants.add("run", "task_ts_1", "run_ts_1", {
+      capability: "fs.read",
+      scope: "external",
+      root: null,
+    });
+    await expect(broker.evaluate({
+      capability: "fs.read",
+      resource: whole,
+      canonicalResource: whole,
+      scope: "external",
+    })).resolves.toMatchObject({ decision: "allow" });
   });
 
   test("task grant survives across runs (new run id still allowed)", async () => {
@@ -614,6 +660,7 @@ describe("PermissionBroker suspend/resume (P1)", () => {
     grants.add("run", "task_ts_1", "run_ts_1", {
       capability: "fs.read",
       scope: "external",
+      root: external,
     });
     await policyStore.addRule({
       capability: "fs.read",
@@ -715,5 +762,231 @@ describe("permission audit (P1)", () => {
       expect(typeof entry.timestamp).toBe("string");
       expect(entry.timestamp.length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("round-3 audit: stale pending re-validation (P0)", () => {
+  test("an approval given AFTER the preset switched to Restricted is invalidated", async () => {
+    const { broker, events, audit, grants, policyStore } = await fixture();
+    const external = path.join(baseExternal(), "stale.csv");
+    const requested = broker.evaluate({
+      capability: "fs.read",
+      resource: external,
+      canonicalResource: external,
+      scope: "external",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(broker.hasPending("run_ts_1")).toBe(true);
+    const requestId = (events.at(-1) as { request_id: string }).request_id;
+
+    // The user switches to Restricted while the request is pending.
+    await policyStore.setPreset("restricted");
+    // Clicking the OLD approval card must NOT release the tool call.
+    const resolved = await broker.resolve("run_ts_1", requestId, "allow", "run");
+    expect(resolved).toBe(true);
+    await expect(requested).rejects.toBeInstanceOf(PermissionDeniedError);
+    // The stale approval recorded NO grant.
+    expect(grants.list()).toHaveLength(0);
+    // The timeline truthfully shows resolved-deny.
+    expect(events.at(-1)).toMatchObject({ type: "permission_resolved", decision: "deny", grant_scope: null });
+    expect(audit.records.some((entry) => entry.decision === "deny")).toBe(true);
+  });
+
+  test("a deny rule added while pending also invalidates the old approval", async () => {
+    const { broker, events, policyStore } = await fixture();
+    const external = path.join(baseExternal(), "now-denied.csv");
+    const requested = broker.evaluate({
+      capability: "fs.read",
+      resource: external,
+      canonicalResource: external,
+      scope: "external",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const requestId = (events.at(-1) as { request_id: string }).request_id;
+    await policyStore.addRule({
+      capability: "fs.read",
+      path: external,
+      recursive: false,
+      policy: "deny",
+    });
+    expect(await broker.resolve("run_ts_1", requestId, "allow", "once")).toBe(true);
+    await expect(requested).rejects.toBeInstanceOf(PermissionDeniedError);
+  });
+
+  test("invalidating all pending settles every suspended call (preset switch)", async () => {
+    const { broker, events } = await fixture();
+    const first = broker.evaluate({
+      capability: "fs.read",
+      resource: path.join(baseExternal(), "a.csv"),
+      canonicalResource: path.join(baseExternal(), "a.csv"),
+      scope: "external",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await broker.invalidateAllPending(new Error("preset switched to restricted; pending permissions revoked"));
+    await expect(first).rejects.toThrow("preset switched to restricted");
+    expect(broker.hasPending("run_ts_1")).toBe(false);
+    // The invalidation emits resolved-deny so the timeline clears the card.
+    expect(events.at(-1)).toMatchObject({ type: "permission_resolved", decision: "deny" });
+  });
+});
+
+describe("round-3 audit: broker rollback (transactional grants)", () => {
+  async function failingBroker(options: {
+    grantScope: "run" | "task" | "persistent";
+    capability?: "fs.read" | "process.exec";
+  }) {
+    const base = await mkdtemp(path.join(os.tmpdir(), "biomed-perm-rollback-"));
+    roots.push(base);
+    const workspaceRoot = path.join(base, "workspaces", "task_ts_1");
+    await mkdir(workspaceRoot, { recursive: true });
+    const policyStore = new InMemoryPermissionPolicyStore();
+    const grants = new TemporaryGrantStore();
+    const evaluator = new PermissionEvaluator({
+      protectedPaths: new ProtectedPaths({ taskOutputRoot: path.join(base, "output", "tasks", "task_ts_1") }),
+      grants,
+      policyStore,
+    });
+    const events: Array<{ type: string; request_id?: string }> = [];
+    const broker = new PermissionBroker({
+      taskId: "task_ts_1",
+      runId: "run_ts_1",
+      evaluator,
+      grants,
+      policyStore,
+      audit: new InMemoryPermissionAuditSink(),
+      recordRunEvent: async (payload) => {
+        events.push(payload as { type: string; request_id?: string });
+      },
+    });
+    const resource = path.join(baseExternal(), "rollback.csv");
+    const requested = broker.evaluate({
+      capability: options.capability ?? "fs.read",
+      resource,
+      canonicalResource: options.capability === "process.exec" ? undefined : resource,
+      command: options.capability === "process.exec" ? "python x.py" : undefined,
+      cwd: workspaceRoot,
+      scope: "external",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const requestId = (events.at(-1) as { request_id: string }).request_id;
+    (broker as unknown as { recordRunEvent: BrokerOptions["recordRunEvent"] }).recordRunEvent = async () => {
+      throw new Error("event stream unwritable");
+    };
+    return { broker, grants, policyStore, requested, requestId, resource };
+  }
+
+  test("run grant is rolled back when the resolve event write fails", async () => {
+    const { broker, grants, requested, requestId } = await failingBroker({ grantScope: "run" });
+    await expect(broker.resolve("run_ts_1", requestId, "allow", "run")).rejects.toThrow("event stream unwritable");
+    await expect(requested).rejects.toThrow("event stream unwritable");
+    expect(grants.list()).toHaveLength(0);
+  });
+
+  test("task grant is rolled back when the resolve event write fails", async () => {
+    const { broker, grants, requested, requestId } = await failingBroker({ grantScope: "task" });
+    await expect(broker.resolve("run_ts_1", requestId, "allow", "task")).rejects.toThrow("event stream unwritable");
+    await expect(requested).rejects.toThrow("event stream unwritable");
+    expect(grants.list()).toHaveLength(0);
+  });
+
+  test("persistent file rule is rolled back when the resolve event write fails", async () => {
+    const { broker, policyStore, requested, requestId, resource } = await failingBroker({ grantScope: "persistent" });
+    await expect(broker.resolve("run_ts_1", requestId, "allow", "persistent")).rejects.toThrow("event stream unwritable");
+    await expect(requested).rejects.toThrow("event stream unwritable");
+    const settings = await policyStore.getSettings();
+    expect(settings.rules).toHaveLength(0);
+    // The path must not be auto-allowed afterwards.
+    const probe = new PermissionEvaluator({
+      protectedPaths: new ProtectedPaths({ taskOutputRoot: path.join(process.cwd(), "_probe") }),
+      grants: new TemporaryGrantStore(),
+      policyStore,
+    });
+    await expect(probe.evaluate({
+      capability: "fs.read",
+      resource,
+      canonicalResource: resource,
+      scope: "external",
+      id: "probe",
+      taskId: "task_ts_1",
+      runId: "run_ts_1",
+      createdAt: new Date().toISOString(),
+    })).resolves.toMatchObject({ decision: "ask" });
+  });
+
+  test("persistent exec approval is rolled back when the resolve event write fails", async () => {
+    const { broker, policyStore, requested, requestId } = await failingBroker({ grantScope: "persistent", capability: "process.exec" });
+    await expect(broker.resolve("run_ts_1", requestId, "allow", "persistent")).rejects.toThrow("event stream unwritable");
+    await expect(requested).rejects.toThrow("event stream unwritable");
+    expect((await policyStore.getSettings()).persistent_exec_allow).toBe(false);
+  });
+
+  test("a pre-existing exec approval is restored, not clobbered, on rollback", async () => {
+    const { broker, policyStore, requested, requestId } = await failingBroker({ grantScope: "persistent", capability: "process.exec" });
+    await policyStore.setPersistentExecAllow(true);
+    await expect(broker.resolve("run_ts_1", requestId, "allow", "persistent")).rejects.toThrow("event stream unwritable");
+    await expect(requested).rejects.toThrow("event stream unwritable");
+    expect((await policyStore.getSettings()).persistent_exec_allow).toBe(true);
+  });
+});
+
+describe("round-3 audit: sensitive scope", () => {
+  test("env/key/pem/credentials classify as sensitive, never project", async () => {
+    const { workspaceRoot, taskOutputRoot, repositoryRoot } = await fixture();
+    await writeFile(path.join(repositoryRoot, ".env"), "DASHSCOPE_API_KEY=x", "utf8");
+    await writeFile(path.join(repositoryRoot, ".env.local"), "x", "utf8");
+    await writeFile(path.join(repositoryRoot, ".env.example"), "TEMPLATE", "utf8");
+    await writeFile(path.join(repositoryRoot, "id_rsa.pem"), "x", "utf8");
+    await writeFile(path.join(repositoryRoot, "credentials.json"), "{}", "utf8");
+    await writeFile(path.join(repositoryRoot, "package.json"), "{}", "utf8");
+    for (const name of [".env", ".env.local", "id_rsa.pem", "credentials.json"]) {
+      expect((await classify(path.join(repositoryRoot, name), workspaceRoot, repositoryRoot, taskOutputRoot)).scope)
+        .toBe("sensitive");
+    }
+    // .env.example is a committed template; package.json is ordinary project.
+    expect((await classify(path.join(repositoryRoot, ".env.example"), workspaceRoot, repositoryRoot, taskOutputRoot)).scope)
+      .toBe("project");
+    expect((await classify(path.join(repositoryRoot, "package.json"), workspaceRoot, repositoryRoot, taskOutputRoot)).scope)
+      .toBe("project");
+    // The agent's OWN workspace stays workspace even for .env-named files.
+    await writeFile(path.join(workspaceRoot, ".env"), "x", "utf8");
+    expect((await classify(path.join(workspaceRoot, ".env"), workspaceRoot, repositoryRoot, taskOutputRoot)).scope)
+      .toBe("workspace");
+  });
+
+  test("a project grant never covers sensitive files; sensitive read asks by default", async () => {
+    const { broker, events, grants } = await fixture();
+    const envFile = path.join(process.cwd(), "_tmp_sensitive_probe", ".env");
+    grants.add("run", "task_ts_1", "run_ts_1", {
+      capability: "fs.read",
+      scope: "project",
+      root: null,
+    });
+    // A project-scope grant must not auto-allow the sensitive file.
+    const requested = broker.evaluate({
+      capability: "fs.read",
+      resource: envFile,
+      canonicalResource: envFile,
+      scope: "sensitive",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(broker.hasPending("run_ts_1")).toBe(true);
+    const requestId = (events.at(-1) as { request_id: string }).request_id;
+    await broker.resolve("run_ts_1", requestId, "deny");
+    await expect(requested).rejects.toBeInstanceOf(PermissionDeniedError);
+
+    // Default policy: sensitive read asks; write/edit are denied outright.
+    const { broker: writeBroker } = await fixture();
+    await expect(writeBroker.evaluate({
+      capability: "fs.write",
+      resource: envFile,
+      canonicalResource: envFile,
+      scope: "sensitive",
+    })).rejects.toBeInstanceOf(PermissionDeniedError);
+    await expect(writeBroker.evaluate({
+      capability: "fs.edit",
+      resource: envFile,
+      canonicalResource: envFile,
+      scope: "sensitive",
+    })).rejects.toBeInstanceOf(PermissionDeniedError);
   });
 });

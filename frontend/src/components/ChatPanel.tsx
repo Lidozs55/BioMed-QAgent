@@ -81,6 +81,7 @@ interface ChatPanelProps {
     requestId: string,
     decision: "allow" | "deny",
     grantScope?: "once" | "run" | "task" | "persistent",
+    scopeWide?: boolean,
   ) => Promise<void>;
   /** Resumes an interrupted download directly (no AI pass). */
   resumeDownload?: (

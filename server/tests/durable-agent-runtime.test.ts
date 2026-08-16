@@ -452,6 +452,7 @@ describe("durable formal Agent runtime", () => {
       path.join(publicationDir, "publication.json"),
       JSON.stringify({
         publication_id: "publication_one",
+        schema_version: "1.1",
         manifest_ref: `manifest_${digest.slice(0, 16)}`,
         manifest_sha256: createHash("sha256")
           .update(JSON.stringify(JSON.parse(await readFile(

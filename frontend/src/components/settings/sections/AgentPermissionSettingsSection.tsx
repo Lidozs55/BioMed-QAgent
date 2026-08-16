@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 
-import { TrashIcon } from "@phosphor-icons/react";
+import { PlusIcon, TrashIcon } from "@phosphor-icons/react";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -19,6 +20,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import type {
   AgentPermissionPreset,
   AgentPermissionSettings,
+  AgentTempGrant,
   SettingsAPIClient,
 } from "@/api/types";
 
@@ -52,6 +54,16 @@ const CAPABILITY_LABELS: Record<string, string> = {
   "fs.read": "读取",
   "fs.write": "写入",
   "fs.edit": "修改",
+  "process.exec": "执行命令",
+};
+
+const SCOPE_LABELS: Record<string, string> = {
+  workspace: "工作区",
+  task_output: "任务输出",
+  framework_internal: "框架内部",
+  sensitive: "敏感文件",
+  project: "项目目录",
+  external: "外部目录",
 };
 
 /**
@@ -60,22 +72,33 @@ const CAPABILITY_LABELS: Record<string, string> = {
  */
 export function AgentPermissionSettingsSection({ api }: AgentPermissionSettingsSectionProps) {
   const [settings, setSettings] = useState<AgentPermissionSettings | null>(null);
+  const [tempGrants, setTempGrants] = useState<AgentTempGrant[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [rulePath, setRulePath] = useState("");
+  const [ruleCapability, setRuleCapability] = useState<"fs.read" | "fs.write" | "fs.edit">("fs.read");
+  const [rulePolicy, setRulePolicy] = useState<"allow" | "ask" | "deny">("allow");
+  const [ruleSubmitting, setRuleSubmitting] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    api.fetchAgentPermissions()
-      .then((value) => {
+    const load = async (): Promise<void> => {
+      try {
+        const [value, grants] = await Promise.all([
+          api.fetchAgentPermissions(),
+          api.fetchAgentTempGrants(),
+        ]);
         if (cancelled) return;
         setSettings(value);
+        setTempGrants(grants);
         setLoading(false);
-      })
-      .catch((caught: unknown) => {
+      } catch (caught) {
         if (cancelled) return;
         setError(caught instanceof Error ? caught.message : "加载权限设置失败");
         setLoading(false);
-      });
+      }
+    };
+    void load();
     return () => {
       cancelled = true;
     };
@@ -87,6 +110,25 @@ export function AgentPermissionSettingsSection({ api }: AgentPermissionSettingsS
       setSettings(await action());
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "保存权限设置失败");
+    }
+  };
+
+  const refreshGrants = async (): Promise<void> => {
+    setError(null);
+    try {
+      setTempGrants(await api.fetchAgentTempGrants());
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "加载运行中授权失败");
+    }
+  };
+
+  const revokeGrant = async (grantId: string): Promise<void> => {
+    setError(null);
+    try {
+      await api.revokeAgentTempGrant(grantId);
+      await refreshGrants();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "撤销授权失败");
     }
   };
 
@@ -146,10 +188,72 @@ export function AgentPermissionSettingsSection({ api }: AgentPermissionSettingsS
         <CardHeader>
           <CardTitle>已授权目录</CardTitle>
           <CardDescription>
-            持久路径规则（通过“始终允许此路径”批准后自动添加，也可手动删除）。
+            持久路径规则（通过“始终允许此路径”批准后自动添加，也可手动创建或删除）。
+            规则路径必须为绝对路径；递归规则覆盖该路径下的所有子路径。
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="flex flex-col gap-4">
+          <div className="grid gap-2 rounded-md border border-border/60 p-3 sm:grid-cols-[1fr_auto_auto_auto] sm:items-end">
+            <div className="flex min-w-0 flex-col gap-1">
+              <Label htmlFor="rule-path">路径（绝对路径，自动规范化）</Label>
+              <Input
+                id="rule-path"
+                placeholder="D:\\datasets\\TCGA"
+                value={rulePath}
+                onChange={(event) => setRulePath(event.target.value)}
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <Label>能力</Label>
+              <Select
+                value={ruleCapability}
+                onValueChange={(value) => setRuleCapability(value as "fs.read" | "fs.write" | "fs.edit")}
+              >                <SelectTrigger className="w-full sm:w-28">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="fs.read">读取</SelectItem>
+                  <SelectItem value="fs.write">写入</SelectItem>
+                  <SelectItem value="fs.edit">修改</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex flex-col gap-1">
+              <Label>策略</Label>
+              <Select
+                value={rulePolicy}
+                onValueChange={(value) => setRulePolicy(value as "allow" | "ask" | "deny")}
+              >                <SelectTrigger className="w-full sm:w-28">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="allow">允许</SelectItem>
+                  <SelectItem value="ask">询问</SelectItem>
+                  <SelectItem value="deny">拒绝</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <Button
+              size="sm"
+              disabled={rulePath.trim() === "" || ruleSubmitting}
+              onClick={() => {
+                setRuleSubmitting(true);
+                void apply(async () => {
+                  const next = await api.addAgentPermissionRule({
+                    capability: ruleCapability,
+                    path: rulePath.trim(),
+                    recursive: true,
+                    policy: rulePolicy,
+                  });
+                  setRulePath("");
+                  return next;
+                }).finally(() => setRuleSubmitting(false));
+              }}
+            >
+              <PlusIcon data-icon="inline-start" aria-hidden="true" />
+              添加规则
+            </Button>
+          </div>
           {current.rules.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               暂无持久规则。Agent 尝试访问工作区外路径时，你可以在批准卡片中选择“始终允许此路径”。
@@ -178,6 +282,53 @@ export function AgentPermissionSettingsSection({ api }: AgentPermissionSettingsS
                     size="icon"
                     aria-label={`删除规则 ${rule.path}`}
                     onClick={() => void apply(() => api.removeAgentPermissionRule(rule.id))}
+                  >
+                    <TrashIcon aria-hidden="true" />
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>运行中授权</CardTitle>
+          <CardDescription>
+            本进程内尚未过期的 Run / Task 临时授权（批准卡片上的“本 Run 允许 / 本 Task 允许”）。
+            可随时在此撤销；重启进程后这些授权自动失效。
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {tempGrants.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              暂无运行中授权。Agent 请求工作区外访问时，可在批准卡片中选择“本 Run / 本 Task 允许”。
+            </p>
+          ) : (
+            <ul className="flex flex-col gap-2">
+              {tempGrants.map((grant) => (
+                <li
+                  key={grant.id}
+                  className="flex items-center justify-between gap-3 rounded-md border border-border/60 px-3 py-2"
+                >
+                  <div className="flex min-w-0 flex-col gap-1">
+                    <code className="truncate font-mono text-xs">
+                      {grant.root ?? `整个${SCOPE_LABELS[grant.scope] ?? grant.scope}范围`}
+                    </code>
+                    <div className="flex flex-wrap gap-1.5">
+                      <Badge variant="outline">{CAPABILITY_LABELS[grant.capability] ?? grant.capability}</Badge>
+                      <Badge variant="secondary">
+                        {grant.boundTo === "run" ? "本 Run" : "本 Task"}
+                      </Badge>
+                      <Badge variant="outline">{grant.taskId}</Badge>
+                    </div>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label="撤销此授权"
+                    onClick={() => void revokeGrant(grant.id)}
                   >
                     <TrashIcon aria-hidden="true" />
                   </Button>

@@ -9,10 +9,15 @@
  * PUT    /api/v1/settings/agent-permissions/persistent-exec { enabled }
  * POST   /api/v1/settings/agent-permissions/rules  { capability, path, recursive, policy }
  * DELETE /api/v1/settings/agent-permissions/rules/{ruleId}
+ * GET    /api/v1/settings/agent-permissions/temp-grants
+ * DELETE /api/v1/settings/agent-permissions/temp-grants/{grantId}
  * ```
  *
  * The same policy store instance is shared with the runtime brokers so rule
- * edits take effect immediately for every task.
+ * edits take effect immediately for every task. Switching the preset to
+ * ``restricted`` additionally invalidates every pending permission across
+ * all live tasks (round-3 audit P0: stale approval cards must not be
+ * clickable into an effective grant).
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
@@ -23,7 +28,11 @@ import type {
   FilePermissionRule,
   PermissionPreset,
 } from "../agent/permissions/types.js";
-import type { PermissionPolicyStore } from "../agent/permissions/policy-store.js";
+import {
+  PermissionPolicyConflictError,
+  type PermissionPolicyStore,
+} from "../agent/permissions/policy-store.js";
+import type { PermissionBrokerRegistry } from "../agent/permissions/broker.js";
 import { canonicalizeWithAncestor } from "../agent/permissions/path-normalizer.js";
 
 const PRESETS: readonly PermissionPreset[] = ["restricted", "ask_when_needed", "full_access"];
@@ -60,6 +69,7 @@ async function canonicalRulePath(input: string): Promise<string> {
 
 export function createPermissionSettingsApi(
   policyStore: PermissionPolicyStore,
+  brokerRegistry?: PermissionBrokerRegistry,
 ): ApiSurface {
   async function dispatch(
     request: IncomingMessage,
@@ -77,7 +87,15 @@ export function createPermissionSettingsApi(
         if (!PRESETS.includes(preset as PermissionPreset)) {
           throw new TypeError("preset must be restricted, ask_when_needed, or full_access");
         }
-        sendJson(response, 200, await policyStore.setPreset(preset as PermissionPreset));
+        const settings = await policyStore.setPreset(preset as PermissionPreset);
+        if (preset === "restricted" && brokerRegistry !== undefined) {
+          // Round-3 audit P0: Restricted is an emergency lockdown — settle
+          // every pending approval so stale cards cannot be approved later.
+          await brokerRegistry.invalidateAllPending(new Error(
+            "preset switched to restricted; pending permissions revoked",
+          ));
+        }
+        sendJson(response, 200, settings);
         return;
       }
       sendJson(response, 405, { detail: "Method Not Allowed" });
@@ -93,6 +111,26 @@ export function createPermissionSettingsApi(
         return;
       }
       sendJson(response, 405, { detail: "Method Not Allowed" });
+      return;
+    }
+    if (pathname === "/api/v1/settings/agent-permissions/temp-grants") {
+      if (request.method === "GET" && brokerRegistry !== undefined) {
+        sendJson(response, 200, { grants: brokerRegistry.listTemporaryGrants() });
+        return;
+      }
+      sendJson(response, 405, { detail: "Method Not Allowed" });
+      return;
+    }
+    const grantMatch = /^\/api\/v1\/settings\/agent-permissions\/temp-grants\/([^/]+)$/.exec(pathname);
+    if (request.method === "DELETE" && grantMatch !== null) {
+      if (brokerRegistry === undefined) {
+        throw new TypeError("temporary grant management is unavailable");
+      }
+      const grantId = decodeURIComponent(grantMatch[1] ?? "");
+      if (!brokerRegistry.revokeTemporaryGrant(grantId)) {
+        throw new TypeError("temporary grant not found");
+      }
+      sendJson(response, 200, { revoked: grantId });
       return;
     }
     if (pathname === "/api/v1/settings/agent-permissions/rules") {
@@ -144,7 +182,11 @@ export function createPermissionSettingsApi(
         return false;
       }
       void dispatch(request, response, pathname).catch((error: unknown) => {
-        const status = error instanceof TypeError ? 422 : 500;
+        const status = error instanceof PermissionPolicyConflictError
+          ? 409
+          : error instanceof TypeError
+            ? 422
+            : 500;
         sendJson(response, status, { detail: (error as Error).message ?? "Permission settings failed" });
       });
       return true;

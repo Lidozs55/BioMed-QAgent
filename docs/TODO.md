@@ -329,7 +329,40 @@ build 锁、cancel 收敛与 event sink；`DATASET_CORE=ts` 现为默认运行�
       持久按钮改为“始终允许此路径”（单文件持久化的是文件路径）；workspace/taskOutput/data/
       repository 四个根在 `createWorkspaceContext` 统一 canonicalize
 
-验收（2026-08-17 二轮审计后）：`pnpm test`（contracts 14 + server 792 + frontend 761）/ `pnpm lint` /
+三轮审计修复（2026-08-17，第三轮审查）:
+
+- [x] **P0 stale pending 重验证**：`broker.resolve(allow)` 先按当前策略重评估原请求，verdict 已变
+      deny（如切到 Restricted / 新增 deny rule）→ 不记 grant、工具调用以结构化拒绝 settle、
+      事件流写入 resolved-deny；切 Restricted 时经 broker registry 全 host invalidate 所有
+      pending（卡片立即消失，不能再被点击生效）
+- [x] **P1 pending path TOCTOU**：read/list/search/edit 在 IO 前重新 canonicalize，要求 canonical
+      路径与 scope 与原批准一致，不一致 → PATH_ESCAPE（写路径原有复核保留）；批准卡与 audit
+      在请求路径 ≠ canonical 时同时展示“请求路径 / 实际路径”
+- [x] **P1 sensitive scope**：`.env*`（`.env.example` 除外）、`*.key/pem/p12/pfx`、
+      `credentials.json`/`secrets.json` 独立 scope；默认 read=ask、write/edit=deny；
+      project/external 的 Run/Task grant 与持久规则都不能自动覆盖；当前 Task 的
+      workspace/output 内豁免
+- [x] **P1 Run/Task grant 粒度**：fs 临时授权改为 `capability × canonical root`（批准路径+
+      子树），批准单个 external 文件不再授权整个 external；卡片提供“高级：整个范围”勾选
+      （`scope_wide`）显式扩大；新增 `GET/DELETE .../temp-grants` 查看/撤销运行中授权 + 设置页 UI
+- [x] **P1 Broker 事务 rollback**：grant 记录可撤销——audit/event 写失败时回滚临时 grant
+      （revoke）或恢复持久设置（exec flag 还原旧值 / 删除刚写入的 rule）；run/task/持久文件/
+      持久 exec 四种失败注入测试验证无残留授权
+- [x] **P1 Restricted exec 不变量下沉**：store 层拒绝 restricted 下 `setPersistentExecAllow(true)`
+      （API 409），不再只靠前端禁用开关
+- [x] **P1 P7 损坏 receipt → 409**：`latestPublication` 区分“publish/ 不存在 → null”与
+      “publication 存在但损坏 → ArtifactIntegrityError”；坏 JSON/缺 receipt/版本非法不再被
+      静默当成“没有发布”
+- [x] **P1/P2 publication schema 1.1**：新发布写 `schema_version: "1.1"` + 必填
+      `manifest_sha256`；旧 1.0 记录保留其 pre-P7 信任级别（package digest 校验）可继续服务；
+      1.0 带 receipt 或 1.1 缺 receipt 均拒绝；golden fixtures 恢复为 1.0 无 receipt（真实
+      V2 迁移期形态）
+- [x] **P2 exec 完整路径展示**：`sanitizedCommand` 不再 basename executable——批准卡/audit
+      显示 canonical 化后的完整可执行文件路径；参数仍脱敏
+- [x] 顺手项：`JsonPermissionPolicyStore.load()` 首读 memoize（与并发 mutation 无竞态）；
+      设置页可主动创建 allow/ask/deny 持久规则（表单）
+
+验收（2026-08-17 三轮审计后）：`pnpm test`（contracts 14 + server 811 + frontend 765）/ `pnpm lint` /
 `pnpm typecheck` / `pnpm build` 全通过；`uv run pytest database/tests` + ruff 通过。
 
 ---

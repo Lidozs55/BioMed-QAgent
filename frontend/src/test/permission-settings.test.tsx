@@ -39,6 +39,8 @@ function mockApi(overrides: Partial<SettingsAPIClient> = {}): SettingsAPIClient 
     setAgentPermissionsPersistentExec: vi.fn(),
     addAgentPermissionRule: vi.fn(),
     removeAgentPermissionRule: vi.fn(),
+    fetchAgentTempGrants: vi.fn().mockResolvedValue([]),
+    revokeAgentTempGrant: vi.fn(),
     ...overrides,
   };
   return base;
@@ -65,7 +67,7 @@ describe("AgentPermissionSettingsSection (P6)", () => {
     await waitFor(() => {
       expect(screen.getAllByText("权限模式").length).toBeGreaterThan(0);
     });
-    const select = screen.getByRole("combobox");
+    const select = screen.getAllByRole("combobox")[0];
     fireEvent.click(select);
     const option = await screen.findByRole("option", { name: "完全访问" });
     fireEvent.pointerDown(option);
@@ -154,5 +156,74 @@ describe("AgentPermissionSettingsSection (P6)", () => {
       expect(screen.getByRole("switch", { name: "始终允许命令执行" })).toHaveAttribute("aria-disabled", "true");
     });
     expect(screen.getByText(/受限模式下命令执行始终拒绝/)).toBeTruthy();
+  });
+});
+
+describe("AgentPermissionSettingsSection temp grants + rule creation (round-3 audit)", () => {
+  it("lists active temp grants and revokes them through the API", async () => {
+    const revokeGrant = vi.fn().mockResolvedValue(undefined);
+    const fetchGrants = vi.fn().mockResolvedValue([
+      {
+        id: "grant_1",
+        capability: "fs.read",
+        scope: "external",
+        root: "D:\\datasets\\TCGA",
+        boundTo: "run",
+        taskId: "task_ts_1",
+        runId: "run_ts_1",
+        grantedAt: "2026-08-17T00:00:00Z",
+      },
+      {
+        id: "grant_2",
+        capability: "process.exec",
+        scope: "workspace",
+        root: null,
+        boundTo: "task",
+        taskId: "task_ts_1",
+        runId: "run_ts_1",
+        grantedAt: "2026-08-17T00:00:00Z",
+      },
+    ]);
+    render(<AgentPermissionSettingsSection api={mockApi({
+      fetchAgentTempGrants: fetchGrants,
+      revokeAgentTempGrant: revokeGrant,
+    })} />);
+    await waitFor(() => {
+      expect(screen.getByText("D:\\datasets\\TCGA")).toBeTruthy();
+    });
+    // A whole-scope (root null) grant is labeled explicitly.
+    expect(screen.getByText(/整个工作区范围/)).toBeTruthy();
+    expect(screen.getByText("本 Run")).toBeTruthy();
+    expect(screen.getByText("本 Task")).toBeTruthy();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "撤销此授权" })[0] as HTMLElement);
+    await waitFor(() => {
+      expect(revokeGrant).toHaveBeenCalledWith("grant_1");
+    });
+  });
+
+  it("creates a persistent rule from the form", async () => {
+    const addRule = vi.fn().mockResolvedValue({
+      schema_version: 1,
+      preset: "ask_when_needed",
+      rules: [],
+      persistent_exec_allow: false,
+    });
+    render(<AgentPermissionSettingsSection api={mockApi({ addAgentPermissionRule: addRule })} />);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /添加规则/ })).toBeTruthy();
+    });
+    fireEvent.change(screen.getByLabelText(/路径（绝对路径，自动规范化）/), {
+      target: { value: "D:\\datasets\\TCGA" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /添加规则/ }));
+    await waitFor(() => {
+      expect(addRule).toHaveBeenCalledWith({
+        capability: "fs.read",
+        path: "D:\\datasets\\TCGA",
+        recursive: true,
+        policy: "allow",
+      });
+    });
   });
 });

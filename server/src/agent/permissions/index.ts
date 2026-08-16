@@ -1,5 +1,6 @@
 export {
   PermissionBroker,
+  PermissionBrokerRegistry,
   summarize,
   type BrokerDecision,
   type BrokerEvaluateInput,
@@ -13,7 +14,7 @@ export {
   type PermissionAuditRecord,
   type PermissionAuditSink,
 } from "./audit.js";
-export { TemporaryGrantStore } from "./grants.js";
+export { TemporaryGrantStore, type TemporaryGrant } from "./grants.js";
 export {
   InMemoryPermissionPolicyStore,
   JsonPermissionPolicyStore,

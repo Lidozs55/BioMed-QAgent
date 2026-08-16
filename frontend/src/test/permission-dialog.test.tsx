@@ -39,6 +39,7 @@ function taskWithPermission(overrides: Partial<PendingPermission> = {}): TaskPro
       capability: "fs.read",
       scope: "external",
       resource: "D:\\datasets\\TCGA\\clinical.csv",
+      canonicalResource: "D:\\datasets\\TCGA\\clinical.csv",
       command: null,
       cwd: null,
       summary: "读取文件 D:\\datasets\\TCGA\\clinical.csv",
@@ -120,6 +121,60 @@ describe("PermissionDialog", () => {
       );
     });
     expect(onResolvePermission).toHaveBeenCalledTimes(5);
+  });
+
+  it("shows the canonical target when the requested path resolves elsewhere", () => {
+    render(
+      <PermissionDialog
+        task={taskWithPermission({
+          resource: "results/current.csv",
+          canonicalResource: "D:\\shared\\sensitive\\current.csv",
+        })}
+        onResolvePermission={vi.fn()}
+      />,
+    );
+    // Both the requested path AND the canonical target are visible so a
+    // symlink/junction cannot hide the real destination (round-3 audit).
+    expect(screen.getByText("results/current.csv")).toBeTruthy();
+    expect(screen.getByText(/实际路径/)).toBeTruthy();
+    expect(screen.getByText("D:\\shared\\sensitive\\current.csv")).toBeTruthy();
+  });
+
+  it("labels the sensitive scope and offers the whole-scope opt-in for run/task grants", async () => {
+    const onResolvePermission = vi.fn().mockResolvedValue(undefined);
+    render(
+      <PermissionDialog
+        task={taskWithPermission({ scope: "sensitive", resource: ".env" })}
+        onResolvePermission={onResolvePermission}
+      />,
+    );
+    expect(screen.getAllByText(/敏感文件/).length).toBeGreaterThan(0);
+    // Default hint: run/task grants bind to the current path, not the scope.
+    expect(screen.getByText(/针对当前目标路径及其子路径/)).toBeTruthy();
+    // The advanced opt-in switches the run/task grant to the whole scope.
+    fireEvent.click(screen.getByRole("checkbox", { name: /高级：改为授权整个/ }));
+    fireEvent.click(screen.getByRole("button", { name: /本 Task 允许/ }));
+    await waitFor(() => {
+      expect(onResolvePermission).toHaveBeenLastCalledWith(
+        "task_perm",
+        "run_ts_1",
+        "permission_abc",
+        "allow",
+        "task",
+        true,
+      );
+    });
+    // Without the opt-in the call stays 5-arg (path-rooted grant).
+    fireEvent.click(screen.getByRole("button", { name: /本 Run 允许/ }));
+    await waitFor(() => {
+      expect(onResolvePermission).toHaveBeenLastCalledWith(
+        "task_perm",
+        "run_ts_1",
+        "permission_abc",
+        "allow",
+        "run",
+      );
+    });
   });
 
   it("renders the command request with the OS-privilege warning", () => {

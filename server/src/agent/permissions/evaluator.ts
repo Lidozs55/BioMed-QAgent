@@ -89,7 +89,7 @@ export class PermissionEvaluator {
       const matrix = await this.policyStore.matrix();
       return policyResult(matrix[capability][request.scope]);
     }
-    if (this.grants.matches(request.taskId, request.runId, capability, request.scope)) {
+    if (this.grants.matches(request.taskId, request.runId, capability, request.scope, canonical)) {
       return { decision: "allow", reason: "temporary_grant" };
     }
     const rule = await this.mostSpecificRule(capability, canonical);
@@ -162,6 +162,7 @@ export function scopeLabel(scope: ResourceScope): string {
     case "workspace": return "workspace";
     case "task_output": return "task output";
     case "framework_internal": return "framework internal";
+    case "sensitive": return "sensitive";
     case "project": return "project";
     case "external": return "external";
   }

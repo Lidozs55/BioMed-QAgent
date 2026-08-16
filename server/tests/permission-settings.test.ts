@@ -230,4 +230,140 @@ describe("agent permission settings API (P6)", () => {
     await good.addRule({ capability: "fs.read", path: "D:\\y", recursive: true, policy: "allow" });
     expect((await good.getSettings()).rules).toHaveLength(1);
   });
+
+  test("persistent exec cannot be enabled while Restricted (store-level invariant)", async () => {
+    const { base, server } = await fixture();
+    // Restricted first.
+    const restricted = await fetch(`${base}/api/v1/settings/agent-permissions`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ preset: "restricted" }),
+    });
+    expect(restricted.status).toBe(200);
+    // Enabling the flag must be refused at the API level (409), not just in
+    // the UI — otherwise switching back to ask_when_needed later would
+    // silently resurrect a permanent exec approval (round-3 audit).
+    const enable = await fetch(`${base}/api/v1/settings/agent-permissions/persistent-exec`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ enabled: true }),
+    });
+    expect(enable.status).toBe(409);
+    // The flag was NOT persisted.
+    const settings = await fetch(`${base}/api/v1/settings/agent-permissions`);
+    expect(await settings.json()).toMatchObject({
+      preset: "restricted",
+      persistent_exec_allow: false,
+    });
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  test("temp grants can be listed and revoked through the settings API", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "biomed-perm-grants-"));
+    roots.push(dir);
+    const policyStore = new JsonPermissionPolicyStore(path.join(dir, "agent-permissions.json"));
+    const { PermissionBroker, PermissionBrokerRegistry, PermissionEvaluator, ProtectedPaths, TemporaryGrantStore, InMemoryPermissionAuditSink } =
+      await import("../src/agent/permissions/index.js");
+    const registry = new PermissionBrokerRegistry();
+    const api = createPermissionSettingsApi(policyStore, registry);
+    const server: Server = createServer((request, response) => {
+      if (!api.handle(request, response)) response.writeHead(404).end();
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    // A live broker with one run grant.
+    const grants = new TemporaryGrantStore();
+    const broker = new PermissionBroker({
+      taskId: "task_ts_1",
+      runId: "run_ts_1",
+      evaluator: new PermissionEvaluator({
+        protectedPaths: new ProtectedPaths({ taskOutputRoot: path.join(dir, "output") }),
+        grants,
+        policyStore,
+      }),
+      grants,
+      policyStore,
+      audit: new InMemoryPermissionAuditSink(),
+      recordRunEvent: async () => undefined,
+    });
+    registry.register("task_ts_1", broker);
+    const id = grants.add("run", "task_ts_1", "run_ts_1", {
+      capability: "fs.read",
+      scope: "external",
+      root: path.join(dir, "data"),
+    });
+
+    const listing = await fetch(`${base}/api/v1/settings/agent-permissions/temp-grants`);
+    expect(listing.status).toBe(200);
+    const body = await listing.json() as { grants: Array<{ id: string; root: string; boundTo: string }> };
+    expect(body.grants).toHaveLength(1);
+    expect(body.grants[0]).toMatchObject({ id, boundTo: "run", root: path.join(dir, "data") });
+
+    const revoked = await fetch(`${base}/api/v1/settings/agent-permissions/temp-grants/${id}`, {
+      method: "DELETE",
+    });
+    expect(revoked.status).toBe(200);
+    expect(grants.list()).toHaveLength(0);
+
+    const again = await fetch(`${base}/api/v1/settings/agent-permissions/temp-grants/${id}`, {
+      method: "DELETE",
+    });
+    expect(again.status).toBe(422);
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  test("switching the preset to Restricted invalidates pending approvals host-wide", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "biomed-perm-invalidate-"));
+    roots.push(dir);
+    const policyStore = new JsonPermissionPolicyStore(path.join(dir, "agent-permissions.json"));
+    const { PermissionBroker, PermissionBrokerRegistry, PermissionEvaluator, ProtectedPaths, TemporaryGrantStore, InMemoryPermissionAuditSink } =
+      await import("../src/agent/permissions/index.js");
+    const registry = new PermissionBrokerRegistry();
+    const api = createPermissionSettingsApi(policyStore, registry);
+    const server: Server = createServer((request, response) => {
+      if (!api.handle(request, response)) response.writeHead(404).end();
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const grants = new TemporaryGrantStore();
+    const broker = new PermissionBroker({
+      taskId: "task_ts_1",
+      runId: "run_ts_1",
+      evaluator: new PermissionEvaluator({
+        protectedPaths: new ProtectedPaths({ taskOutputRoot: path.join(dir, "output") }),
+        grants,
+        policyStore,
+      }),
+      grants,
+      policyStore,
+      audit: new InMemoryPermissionAuditSink(),
+      recordRunEvent: async () => undefined,
+    });
+    registry.register("task_ts_1", broker);
+    const suspended = broker.evaluate({
+      capability: "fs.read",
+      resource: path.join(dir, "x.csv"),
+      canonicalResource: path.join(dir, "x.csv"),
+      scope: "external",
+    });
+    // The promise will reject while the PUT below is in flight; keep the
+    // placeholder so the eventual ``rejects`` assertion is not flagged as an
+    // unhandled rejection in between.
+    suspended.catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(broker.hasPending("run_ts_1")).toBe(true);
+
+    const restricted = await fetch(`${base}/api/v1/settings/agent-permissions`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ preset: "restricted" }),
+    });
+    expect(restricted.status).toBe(200);
+    // The pending tool call settled with a denial and the card is gone.
+    await expect(suspended).rejects.toThrow("preset switched to restricted");
+    expect(broker.hasPending("run_ts_1")).toBe(false);
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
 });

@@ -11,6 +11,18 @@ import {
 } from "./types.js";
 
 /**
+ * The settings API maps this to HTTP 409: a mutation that contradicts an
+ * active policy invariant must be refused at the store level, never just in
+ * the UI (round-3 audit: Restricted ⇒ persistent_exec_allow stays false).
+ */
+export class PermissionPolicyConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PermissionPolicyConflictError";
+  }
+}
+
+/**
  * Persistent permission settings (plan §36).
  *
  * Permission configuration is user settings, not task workspace data:
@@ -26,7 +38,7 @@ export interface PermissionPolicyStore {
   getSettings(): Promise<PermissionSettings>;
   setPreset(preset: PermissionPreset): Promise<PermissionSettings>;
   setPersistentExecAllow(allowed: boolean): Promise<PermissionSettings>;
-  addRule(rule: Omit<FilePermissionRule, "id">): Promise<PermissionSettings>;
+  addRule(rule: Omit<FilePermissionRule, "id"> & { id?: string }): Promise<PermissionSettings>;
   removeRule(ruleId: string): Promise<PermissionSettings>;
   matrix(): Promise<PolicyMatrix>;
 }
@@ -34,6 +46,7 @@ export interface PermissionPolicyStore {
 export class JsonPermissionPolicyStore implements PermissionPolicyStore {
   private readonly filePath: string;
   private cached?: PermissionSettings;
+  private loadPromise: Promise<PermissionSettings> | null = null;
   /** Serializes read-modify-write mutations so concurrent grants never lose rules. */
   private mutationQueue: Promise<unknown> = Promise.resolve();
 
@@ -50,7 +63,18 @@ export class JsonPermissionPolicyStore implements PermissionPolicyStore {
     return run;
   }
 
-  private async load(): Promise<PermissionSettings> {
+  private load(): Promise<PermissionSettings> {
+    // Memoize the first load so a mutation racing the initial read cannot
+    // interleave: every caller awaits the same settled promise (round-3
+    // audit: first-load vs mutation startup race). After the first read the
+    // live cache wins — a save may have replaced it while the read was in
+    // flight.
+    if (this.cached !== undefined) return Promise.resolve(this.cached);
+    this.loadPromise ??= this.loadUncached();
+    return this.loadPromise.then(() => this.cached as PermissionSettings);
+  }
+
+  private async loadUncached(): Promise<PermissionSettings> {
     if (this.cached !== undefined) return this.cached;
     const stored = await readJsonFile<PermissionSettings>(this.filePath);
     if (stored === undefined || stored.schema_version !== 1) {
@@ -98,16 +122,26 @@ export class JsonPermissionPolicyStore implements PermissionPolicyStore {
   async setPersistentExecAllow(allowed: boolean): Promise<PermissionSettings> {
     return this.enqueue(async () => {
       const settings = await this.load();
+      if (allowed && settings.preset === "restricted") {
+        // Round-3 audit: the Restricted preset is a hard lockdown. The flag
+        // must never be persisted under Restricted — otherwise switching
+        // back to ask_when_needed later would silently resurrect a
+        // permanent exec approval the user believed revoked. Enforced in the
+        // store, not just the UI.
+        throw new PermissionPolicyConflictError(
+          "persistent exec approval cannot be enabled while the preset is restricted",
+        );
+      }
       return this.save({ ...settings, persistent_exec_allow: allowed });
     });
   }
 
-  async addRule(rule: Omit<FilePermissionRule, "id">): Promise<PermissionSettings> {
+  async addRule(rule: Omit<FilePermissionRule, "id"> & { id?: string }): Promise<PermissionSettings> {
     return this.enqueue(async () => {
       const settings = await this.load();
       return this.save({
         ...settings,
-        rules: [...settings.rules, { id: `rule_${randomUUID()}`, ...rule }],
+        rules: [...settings.rules, { id: rule.id ?? `rule_${randomUUID()}`, ...rule }],
       });
     });
   }
@@ -147,14 +181,23 @@ export class InMemoryPermissionPolicyStore implements PermissionPolicyStore {
   }
 
   async setPersistentExecAllow(allowed: boolean): Promise<PermissionSettings> {
+    if (allowed && this.settings.preset === "restricted") {
+      // Same invariant as the JSON store (round-3 audit).
+      throw new PermissionPolicyConflictError(
+        "persistent exec approval cannot be enabled while the preset is restricted",
+      );
+    }
     this.settings = { ...this.settings, persistent_exec_allow: allowed };
     return structuredClone(this.settings);
   }
 
-  async addRule(rule: Omit<FilePermissionRule, "id">): Promise<PermissionSettings> {
+  async addRule(rule: Omit<FilePermissionRule, "id"> & { id?: string }): Promise<PermissionSettings> {
     this.settings = {
       ...this.settings,
-      rules: [...this.settings.rules, { id: `rule_${this.settings.rules.length + 1}`, ...rule }],
+      rules: [...this.settings.rules, {
+        id: rule.id ?? `rule_${this.settings.rules.length + 1}`,
+        ...rule,
+      }],
     };
     return structuredClone(this.settings);
   }

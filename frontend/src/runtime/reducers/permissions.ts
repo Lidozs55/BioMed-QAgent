@@ -31,6 +31,7 @@ export function applyPermissionEvent(
         capability: payload.capability,
         scope: payload.scope,
         resource: payload.resource,
+        canonicalResource: payload.canonical_resource,
         command: payload.command,
         cwd: payload.cwd,
         summary: payload.summary,

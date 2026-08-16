@@ -172,8 +172,9 @@ describe("contract invariants (mirror Pydantic model_validator)", () => {
     ).toThrow(/cannot supersede itself/);
   });
 
-  test("DatasetPublication carries the manifest file hash (P7 receipt)", () => {
+  test("DatasetPublication 1.1 requires the manifest file hash receipt (P7)", () => {
     const parsed = parseDatasetPublication({
+      schema_version: "1.1",
       publication_id: "pub_1",
       manifest_ref: "manifest.json",
       manifest_sha256: "a".repeat(64),
@@ -182,15 +183,40 @@ describe("contract invariants (mirror Pydantic model_validator)", () => {
       supersedes_publication_id: null,
     });
     expect(parsed.manifest_sha256).toBe("a".repeat(64));
-    // The receipt is required: a publication without it must not parse.
+    // A 1.1 record without the receipt must not parse.
     const missing = {
+      schema_version: "1.1",
       publication_id: "pub_1",
       manifest_ref: "manifest.json",
+      manifest_sha256: "",
       validation_result_ref: "validation.json",
       published_at: "2026-08-11T00:00:00Z",
       supersedes_publication_id: null,
     };
     expect(() => parseDatasetPublication(missing)).toThrow(/manifest_sha256/);
+    expect(() => parseDatasetPublication({
+      ...missing,
+      manifest_sha256: "not-a-digest",
+    })).toThrow(/SHA-256/);
+    // A 1.0 record may not smuggle a receipt.
+    expect(() => parseDatasetPublication({
+      ...missing,
+      schema_version: "1.0",
+      manifest_sha256: "a".repeat(64),
+    })).toThrow(/1\.0/);
+  });
+
+  test("DatasetPublication 1.0 (legacy) parses without a receipt", () => {
+    const parsed = parseDatasetPublication({
+      schema_version: "1.0",
+      publication_id: "pub_1",
+      manifest_ref: "manifest.json",
+      validation_result_ref: "validation.json",
+      published_at: "2026-08-11T00:00:00Z",
+      supersedes_publication_id: null,
+    });
+    expect(parsed.schema_version).toBe("1.0");
+    expect(parsed.manifest_sha256).toBeUndefined();
   });
 
   test("FieldMapping keeps string-similarity mappings proposed", () => {

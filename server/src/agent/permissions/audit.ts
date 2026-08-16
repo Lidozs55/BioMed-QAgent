@@ -10,7 +10,7 @@ import type { GrantScope, PermissionCapability, PermissionDecision, ResourceScop
  *
  * ```text
  * permission_request_id, task_id, run_id, capability, scope, resource,
- * decision, grant_scope, timestamp
+ * canonical_resource, decision, grant_scope, timestamp
  * ```
  *
  * Commands additionally record command/cwd. Audit must never become a
@@ -24,6 +24,8 @@ export interface PermissionAuditRecord {
   capability: PermissionCapability;
   scope: ResourceScope;
   resource: string | null;
+  /** Canonical absolute resource path (fs capabilities only). */
+  canonical_resource: string | null;
   command: string | null;
   cwd: string | null;
   decision: PermissionDecision | "pending";

@@ -210,8 +210,8 @@ export default function App() {
                 resumeRun={(taskId, runId, input) =>
                   controller.resumeRun(taskId, runId, input)
                 }
-                resolvePermission={(taskId, runId, requestId, decision, grantScope) =>
-                  controller.resolvePermission(taskId, runId, requestId, decision, grantScope)
+                resolvePermission={(taskId, runId, requestId, decision, grantScope, scopeWide) =>
+                  controller.resolvePermission(taskId, runId, requestId, decision, grantScope, scopeWide)
                 }
                 resumeDownload={(taskId, input) =>
                   controller.resumeDownload(taskId, input)

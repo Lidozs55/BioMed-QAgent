@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 
 import type { WorkspaceContext } from "./context.js";
-import { resolveAgentPath } from "./path-policy.js";
+import { resolveAgentPath, verifyAgentPathUnchanged } from "./path-policy.js";
 import { WorkspacePolicyError, type WorkspaceEditResult } from "./types.js";
 import { writeWorkspaceTextAt } from "./write.js";
 
@@ -39,6 +39,9 @@ export async function editWorkspaceText(
     throw new WorkspacePolicyError("PRECONDITION_FAILED", "Edit precondition is invalid");
   }
   const resolved = await resolveAgentPath(context, input.path, "fs.edit");
+  // Round-3 audit: the read must not follow a target that changed while the
+  // approval was pending; the write below re-verifies once more.
+  await verifyAgentPathUnchanged(context, resolved);
   const bytes = await readFile(resolved.absolutePath);
   if (bytes.length > context.limits.maxWriteBytes) {
     throw new WorkspacePolicyError("LIMIT_EXCEEDED", "Edit target exceeds Workspace limit");

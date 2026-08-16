@@ -112,7 +112,10 @@ export async function promotePublication(options: PublishOptions): Promise<Publi
     .update(await readFile(manifestSrc))
     .digest("hex");
   const publication: DatasetPublication = {
-    schema_version: "1.0",
+    // P7 receipt schema: 1.1 carries the manifest file-byte hash (round-3
+    // audit: the schema bump is explicit, so legacy 1.0 records keep their
+    // pre-P7 trust level instead of silently vanishing from the API).
+    schema_version: "1.1",
     publication_id: publicationId,
     manifest_ref: manifest.manifest_id,
     manifest_sha256: manifestSha256,

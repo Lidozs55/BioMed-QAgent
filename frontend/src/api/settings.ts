@@ -11,6 +11,7 @@ import {
   parseVendorsEnvelope,
 } from "@biomed/contracts";
 import type {
+  AgentTempGrant,
   ModelInfo,
   ModelPreviewRequest,
   ModelSettings,
@@ -32,6 +33,8 @@ export interface SettingsApi {
   setAgentPermissionsPersistentExec: (enabled: boolean) => Promise<AgentPermissionSettings>;
   addAgentPermissionRule: (rule: AgentPermissionRuleInput) => Promise<AgentPermissionSettings>;
   removeAgentPermissionRule: (ruleId: string) => Promise<AgentPermissionSettings>;
+  fetchAgentTempGrants: () => Promise<AgentTempGrant[]>;
+  revokeAgentTempGrant: (grantId: string) => Promise<void>;
 }
 
 export type AgentPermissionPreset = "restricted" | "ask_when_needed" | "full_access";
@@ -104,5 +107,12 @@ export function createSettingsApi(http: Http): SettingsApi {
       http.request(`${http.baseUrl}/settings/agent-permissions/rules/${http.encodeId(ruleId)}`, {
         method: "DELETE",
       }).then((b) => b as unknown as AgentPermissionSettings),
+    fetchAgentTempGrants: () =>
+      http.request(`${http.baseUrl}/settings/agent-permissions/temp-grants`)
+        .then((b) => (b as { grants: AgentTempGrant[] }).grants),
+    revokeAgentTempGrant: (grantId) =>
+      http.requestVoid(`${http.baseUrl}/settings/agent-permissions/temp-grants/${http.encodeId(grantId)}`, {
+        method: "DELETE",
+      }),
   };
 }

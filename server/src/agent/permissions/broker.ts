@@ -4,7 +4,7 @@ import type { EventPayload } from "@biomed/contracts";
 
 import type { PermissionAuditSink } from "./audit.js";
 import { PermissionEvaluator } from "./evaluator.js";
-import { TemporaryGrantStore } from "./grants.js";
+import { TemporaryGrantStore, type TemporaryGrant } from "./grants.js";
 import type { PermissionPolicyStore } from "./policy-store.js";
 import {
   PermissionDeniedError,
@@ -78,9 +78,7 @@ export class PermissionBroker {
   private readonly audit: PermissionAuditSink;
   private readonly recordRunEvent: (payload: EventPayload) => Promise<void>;
   private readonly maxPendingMs: number;
-  private readonly pending = new Map<string, PendingRequest>();
-
-  constructor(options: BrokerOptions) {
+  private readonly pending = new Map<string, PendingRequest>();  constructor(options: BrokerOptions) {
     this.taskId = options.taskId;
     this.runId = options.runId;
     this.evaluator = options.evaluator;
@@ -103,6 +101,16 @@ export class PermissionBroker {
   /** True when a permission decision is currently pending for the run. */
   hasPending(runId: string): boolean {
     return this.pending.has(runId);
+  }
+
+  /** Active temporary grants of this task (settings UI: view/revoke). */
+  listTemporaryGrants(): TemporaryGrant[] {
+    return this.grants.list();
+  }
+
+  /** Revoke one temporary grant by id (settings UI); false when unknown. */
+  revokeTemporaryGrant(id: string): boolean {
+    return this.grants.revoke(id);
   }
 
   /**
@@ -132,6 +140,7 @@ export class PermissionBroker {
         capability: request.capability,
         scope: request.scope,
         resource: request.resource ?? null,
+        canonical_resource: request.canonicalResource ?? null,
         command: request.command ?? null,
         cwd: request.cwd ?? null,
         decision: "allow",
@@ -148,6 +157,7 @@ export class PermissionBroker {
         capability: request.capability,
         scope: request.scope,
         resource: request.resource ?? null,
+        canonical_resource: request.canonicalResource ?? null,
         command: request.command ?? null,
         cwd: request.cwd ?? null,
         decision: "deny",
@@ -178,6 +188,7 @@ export class PermissionBroker {
         capability: request.capability,
         scope: request.scope,
         resource: request.resource ?? null,
+        canonical_resource: request.canonicalResource ?? null,
         command: request.command ?? null,
         cwd: request.cwd ?? null,
         decision: "pending",
@@ -229,12 +240,19 @@ export class PermissionBroker {
    * the runId (from the HTTP URL) and then verified against the requestId,
    * so an old runId cannot be used to approve a live request of a newer run.
    * Returns false when the request is unknown, already resolved, or expired.
+   *
+   * Round-3 audit: an approval is re-validated against the CURRENT policy
+   * before any grant is recorded — a request that was pending when the
+   * preset switched to Restricted (or a deny rule appeared) is invalidated,
+   * never released. The tool call settles with a structured denial and the
+   * resolve returns true (the request WAS handled).
    */
   async resolve(
     runId: string,
     requestId: string,
     decision: "allow" | "deny",
     grantScope?: GrantScope,
+    scopeWide = false,
   ): Promise<boolean> {
     const entry = this.pending.get(runId);
     if (entry === undefined || entry.request.id !== requestId) return false;
@@ -246,9 +264,47 @@ export class PermissionBroker {
       return false;
     }
     this.pending.delete(runId);
+    if (decision === "allow") {
+      // The policy may have changed while the request was pending (e.g. the
+      // user switched to Restricted, or a deny rule was added). Re-evaluate
+      // the ORIGINAL request; a deny verdict invalidates the old approval.
+      const current = await this.evaluator.evaluate(pending);
+      if (current.decision === "deny") {
+        try {
+          await this.audit.record({
+            permission_request_id: pending.id,
+            task_id: pending.taskId,
+            run_id: pending.runId,
+            capability: pending.capability,
+            scope: pending.scope,
+            resource: pending.resource ?? null,
+            canonical_resource: pending.canonicalResource ?? null,
+            command: pending.command ?? null,
+            cwd: pending.cwd ?? null,
+            decision: "deny",
+            grant_scope: null,
+            timestamp: new Date().toISOString(),
+          });
+          await this.recordRunEvent({
+            type: "permission_resolved",
+            request_id: pending.id,
+            decision: "deny",
+            grant_scope: null,
+          });
+        } catch {
+          // Best-effort: the invalidation itself must not fail the settle.
+        }
+        entry.reject(new PermissionDeniedError(
+          pending,
+          "Permission request was superseded by a stricter policy",
+        ));
+        return true;
+      }
+    }
+    let undo: (() => Promise<void>) | undefined;
     try {
       if (decision === "allow" && grantScope !== undefined) {
-        await this.recordGrant(pending, grantScope);
+        undo = await this.recordGrant(pending, grantScope, scopeWide);
       }
       await this.audit.record({
         permission_request_id: pending.id,
@@ -257,6 +313,7 @@ export class PermissionBroker {
         capability: pending.capability,
         scope: pending.scope,
         resource: pending.resource ?? null,
+        canonical_resource: pending.canonicalResource ?? null,
         command: pending.command ?? null,
         cwd: pending.cwd ?? null,
         decision,
@@ -271,9 +328,18 @@ export class PermissionBroker {
       });
     } catch (error) {
       // A failed grant/audit/event write must NOT leave the original tool
-      // call suspended forever (audit fix, fault-injection tested). The HTTP
-      // resolve fails (error propagates to the caller); the suspended tool
-      // call settles with the same failure.
+      // call suspended forever (audit fix, fault-injection tested). If a
+      // grant was already recorded (e.g. the persistent rule hit the disk
+      // before the event write failed), roll it back so no authorization
+      // survives a failed resolution (round-3 audit: transactional).
+      if (undo !== undefined) {
+        try {
+          await undo();
+        } catch {
+          // Best-effort rollback; the security-relevant failure is reported
+          // to both the HTTP caller and the tool call below.
+        }
+      }
       entry.reject(toError(error, "permission decision could not be recorded"));
       throw error;
     }
@@ -295,35 +361,126 @@ export class PermissionBroker {
     entry.reject(error);
   }
 
-  private async recordGrant(pending: PermissionRequest, grantScope: GrantScope): Promise<void> {
-    if (grantScope === "once") return;
-    if (grantScope === "run") {
-      this.grants.add("run", pending.taskId, pending.runId, {
+  /**
+   * Invalidate every pending request across all runs of this broker and
+   * settle the suspended tool calls. Used when the preset switches to
+   * Restricted so stale approval cards cannot be clicked into an effective
+   * grant (round-3 audit P0). The timeline stays truthful: each request is
+   * recorded as resolved-deny (best-effort).
+   */
+  async invalidateAllPending(error: Error): Promise<void> {
+    const entries = [...this.pending.entries()];
+    this.pending.clear();
+    for (const [, entry] of entries) {
+      const pending = entry.request;
+      try {
+        await this.audit.record({
+          permission_request_id: pending.id,
+          task_id: pending.taskId,
+          run_id: pending.runId,
+          capability: pending.capability,
+          scope: pending.scope,
+          resource: pending.resource ?? null,
+          canonical_resource: pending.canonicalResource ?? null,
+          command: pending.command ?? null,
+          cwd: pending.cwd ?? null,
+          decision: "deny",
+          grant_scope: null,
+          timestamp: new Date().toISOString(),
+        });
+        await this.recordRunEvent({
+          type: "permission_resolved",
+          request_id: pending.id,
+          decision: "deny",
+          grant_scope: null,
+        });
+      } catch {
+        // Best-effort event/audit writes; the tool call must still settle.
+      }
+      entry.reject(error);
+    }
+  }
+
+  /**
+   * Record a grant for a resolved request and return an undo function.
+   * Filesystem run/task grants bind to the approved canonical resource
+   * (path + subtree), never the whole scope (round-3 audit); exec grants
+   * are scope-wide (exec has no path).
+   */
+  private async recordGrant(
+    pending: PermissionRequest,
+    grantScope: GrantScope,
+    scopeWide = false,
+  ): Promise<() => Promise<void>> {
+    if (grantScope === "once") return async () => undefined;
+    if (grantScope === "run" || grantScope === "task") {
+      const id = this.grants.add(grantScope, pending.taskId, pending.runId, {
         capability: pending.capability,
         scope: pending.scope,
+        root: pending.capability === "process.exec"
+          ? null
+          : (scopeWide ? null : (pending.canonicalResource ?? null)),
       });
-      return;
+      return async () => {
+        this.grants.revoke(id);
+      };
     }
-    if (grantScope === "task") {
-      this.grants.add("task", pending.taskId, pending.runId, {
-        capability: pending.capability,
-        scope: pending.scope,
-      });
-      return;
-    }
-    // persistent → user settings rule (plan §17/§36).
+    // persistent → user settings rule (plan §17/§36). The undo restores the
+    // previous settings on a downstream failure (round-3 audit rollback).
     if (pending.capability === "process.exec") {
+      const settings = await this.policyStore.getSettings();
+      const previous = settings.persistent_exec_allow;
       await this.policyStore.setPersistentExecAllow(true);
-      return;
+      return async () => {
+        await this.policyStore.setPersistentExecAllow(previous);
+      };
     }
     if (pending.canonicalResource !== undefined) {
+      const ruleId = `rule_${randomUUID()}`;
       await this.policyStore.addRule({
-        capability: pending.capability,
+        id: ruleId,
+        capability: pending.capability as "fs.read" | "fs.write" | "fs.edit",
         path: pending.canonicalResource,
         recursive: true,
         policy: "allow",
       });
+      return async () => {
+        await this.policyStore.removeRule(ruleId);
+      };
     }
+    return async () => undefined;
+  }
+}
+
+/** Host-level registry of live permission brokers (round-3 audit). */
+export class PermissionBrokerRegistry {
+  private readonly brokers = new Map<string, PermissionBroker>();
+
+  register(taskId: string, broker: PermissionBroker): void {
+    this.brokers.set(taskId, broker);
+  }
+
+  unregister(taskId: string): void {
+    this.brokers.delete(taskId);
+  }
+
+  /** Settle every pending permission across all live brokers. */
+  async invalidateAllPending(error: Error): Promise<void> {
+    const brokers = [...this.brokers.values()];
+    for (const broker of brokers) await broker.invalidateAllPending(error);
+  }
+
+  /** Every active temporary grant across all live tasks. */
+  listTemporaryGrants(): TemporaryGrant[] {
+    return [...this.brokers.values()].flatMap((broker) => broker.listTemporaryGrants());
+  }
+
+  /** Revoke one temporary grant by id across all live tasks. */
+  revokeTemporaryGrant(id: string): boolean {
+    for (const broker of this.brokers.values()) {
+      if (broker.revokeTemporaryGrant(id)) return true;
+    }
+    return false;
   }
 }
 

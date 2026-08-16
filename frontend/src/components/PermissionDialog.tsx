@@ -28,6 +28,7 @@ interface PermissionDialogProps {
     requestId: string,
     decision: "allow" | "deny",
     grantScope?: "once" | "run" | "task" | "persistent",
+    scopeWide?: boolean,
   ) => Promise<void>;
 }
 
@@ -42,6 +43,7 @@ const SCOPE_LABELS: Record<PendingPermission["scope"], string> = {
   workspace: "工作区",
   task_output: "任务输出",
   framework_internal: "框架内部路径",
+  sensitive: "敏感文件（.env/密钥）",
   project: "项目目录",
   external: "外部目录",
 };
@@ -50,6 +52,10 @@ const SCOPE_LABELS: Record<PendingPermission["scope"], string> = {
  * Permission approval card (plan §34). Rendered in the run timeline instead
  * of a transient system modal so a page refresh still shows the context;
  * the pending state itself is restored from the durable event stream.
+ *
+ * Round-3 audit: when the requested path differs from its canonical target
+ * (symlink/junction), both are shown; "本 Run / 本 Task" grants bind to the
+ * canonical path + subtree, with an explicit opt-in for the whole scope.
  */
 export function PermissionDialog({ task, onResolvePermission }: PermissionDialogProps) {
   const pending = task?.pendingPermission ?? null;
@@ -57,7 +63,15 @@ export function PermissionDialog({ task, onResolvePermission }: PermissionDialog
   const runId = pending?.runId ?? null;
   const [submitting, setSubmitting] = useState<"deny" | "once" | "run" | "task" | "persistent" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [scopeWide, setScopeWide] = useState(false);
   const open = pending !== null && taskId !== null && runId !== null;
+  const isExec = pending?.capability === "process.exec";
+  // Round-3 audit: the whole-scope opt-in only makes sense for fs requests
+  // where a path-rooted run/task grant would otherwise be the safer default.
+  const canScopeWide =
+    pending !== null &&
+    !isExec &&
+    (pending.scope === "project" || pending.scope === "external" || pending.scope === "sensitive");
 
   const submit = async (
     decision: "allow" | "deny",
@@ -68,17 +82,21 @@ export function PermissionDialog({ task, onResolvePermission }: PermissionDialog
     setSubmitting(key);
     setError(null);
     try {
-      await onResolvePermission(taskId, runId, pending.requestId, decision, grantScope);
+      if (scopeWide && (grantScope === "run" || grantScope === "task")) {
+        await onResolvePermission(taskId, runId, pending.requestId, decision, grantScope, true);
+      } else {
+        await onResolvePermission(taskId, runId, pending.requestId, decision, grantScope);
+      }
       // The durable permission_resolved event clears the card; release the
       // in-flight state so the UI never sticks on a disabled button.
       setSubmitting(null);
+      setScopeWide(false);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "提交权限决策失败，请重试");
       setSubmitting(null);
     }
   };
 
-  const isExec = pending?.capability === "process.exec";
 
   return (
     <Dialog
@@ -130,6 +148,17 @@ export function PermissionDialog({ task, onResolvePermission }: PermissionDialog
                   目标
                 </p>
                 <code className="break-all font-mono text-xs">{pending.resource ?? pending.summary}</code>
+                {pending.canonicalResource !== null &&
+                  pending.canonicalResource !== pending.resource && (
+                    <div className="flex flex-col gap-0.5">
+                      <p className="text-xs text-muted-foreground">
+                        实际路径（符号链接/联接解析后）
+                      </p>
+                      <code className="break-all font-mono text-xs text-amber-600">
+                        {pending.canonicalResource}
+                      </code>
+                    </div>
+                  )}
                 <div className="mt-1 flex flex-wrap gap-1.5">
                   <Badge variant="outline">{CAPABILITY_LABELS[pending.capability]}</Badge>
                   <Badge variant="secondary">{SCOPE_LABELS[pending.scope]}</Badge>
@@ -154,11 +183,27 @@ export function PermissionDialog({ task, onResolvePermission }: PermissionDialog
         )}
 
         {!isExec && pending !== null && (
-          <p className="text-xs text-muted-foreground">
-            提示：“本 Run / 本 Task 允许”作用于整个资源范围（“{SCOPE_LABELS[pending.scope]}”的
-            “{CAPABILITY_LABELS[pending.capability]}”），会同时覆盖该范围内其他路径，而非仅当前路径。
-            持久授权只针对当前这条具体路径。
-          </p>
+          <div className="flex flex-col gap-1.5">
+            <p className="text-xs text-muted-foreground">
+              提示：“本 Run / 本 Task 允许”针对当前目标路径及其子路径（“
+              {CAPABILITY_LABELS[pending.capability]}”× 该路径），不会自动覆盖同一范围的其他路径。
+              持久授权只针对当前这条具体路径。
+            </p>
+            {canScopeWide && (
+              <label className="flex cursor-pointer items-start gap-2 text-xs text-muted-foreground">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={scopeWide}
+                  onChange={(event) => setScopeWide(event.target.checked)}
+                />
+                <span>
+                  高级：改为授权整个“{SCOPE_LABELS[pending.scope]}”范围（该范围内所有路径都不再询问，
+                  风险更高，仅在你确定需要时勾选）。
+                </span>
+              </label>
+            )}
+          </div>
         )}
 
         <DialogFooter className="flex-wrap gap-2">
