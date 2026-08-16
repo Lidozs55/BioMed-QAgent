@@ -64,13 +64,19 @@ export function createWorkspaceTools(workspace: TaskWorkspace): BioMedAgentTool[
     {
       name: "workspace_read",
       label: "Read Workspace text",
-      description: "Read bounded UTF-8 text from an allowed Task-relative path.",
+      description:
+        "Read bounded UTF-8 text from an allowed Task-relative path. " +
+        "``offset``/``length`` are measured in CHARACTERS (not bytes). Each call " +
+        "returns at most 65536 characters; when the file is longer the result " +
+        "sets ``truncated: true`` and you must page with a larger ``offset`` to " +
+        "read the rest. Binary or gzipped files fail with NOT_TEXT - do not " +
+        "attempt to read them directly.",
       parameters: {
         type: "object",
         properties: {
           path: pathProperty,
-          offset: { type: "integer", minimum: 0 },
-          length: { type: "integer", minimum: 1 },
+          offset: { type: "integer", minimum: 0, description: "Character offset to start reading from (0 = file start)." },
+          length: { type: "integer", minimum: 1, description: "Max characters to return (default 65536)." },
         },
         required: ["path"],
         additionalProperties: false,
@@ -105,7 +111,13 @@ export function createWorkspaceTools(workspace: TaskWorkspace): BioMedAgentTool[
     {
       name: "workspace_search",
       label: "Search Workspace text",
-      description: "Search bounded UTF-8 Task files using a literal query.",
+      description:
+        "Search bounded UTF-8 Task files using a literal query. The path may be " +
+        "a directory (recursive, depth-limited) or a single file. Each file is " +
+        "only scanned up to 128 KiB from its start; for larger files the result " +
+        "sets ``truncated: true`` and may miss matches near the end - in that " +
+        "case page through the file with workspace_read instead. Gzipped or " +
+        "binary files are skipped.",
       parameters: {
         type: "object",
         properties: { path: pathProperty, query: { type: "string", minLength: 1 } },
@@ -166,7 +178,12 @@ export function createWorkspaceTools(workspace: TaskWorkspace): BioMedAgentTool[
     {
       name: "workspace_exec",
       label: "Execute development command",
-      description: "Run a bounded executable and argument array when development exec is enabled.",
+      description:
+        "Run a bounded executable and argument array. IMPORTANT: development " +
+        "exec is DISABLED by default in this environment - the result will be " +
+        "``policy: \"disabled\"`` with no output. Prefer workspace_read / " +
+        "workspace_search / workspace_write for file work instead of trying " +
+        "commands.",
       parameters: {
         type: "object",
         properties: {

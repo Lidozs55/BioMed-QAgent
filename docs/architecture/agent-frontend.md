@@ -215,6 +215,31 @@ durable `assistant_delta` 无 `stream_id`（Pi adapter 路径）时，`stream.ts
 显示"可能已挂起"提示并给出取消入口（`STALL_THRESHOLD_MS`）。下载类工具会
 周期性上报 `operation_progress`（downloaded_bytes），因此正常大文件下载不会误报。
 
+**下载进度与直接续传**（P5-D3 part 文件 + 独立端点）：字节级下载进度只渲染在
+`tool_call` 气泡内（`DownloadProgress`），operation 行只保留状态徽章，避免时间线
+出现两条重复进度条。`pipeline.ts` 把 `downloaded_bytes` 进度绑定到所属工具调用：
+优先匹配 `detail.accession` 与工具 `arguments` 相等的 running tool_call，否则回退
+到该 run 最近启动的 running tool_call（防止绑定到错误的工具气泡）。所有采集工具
+（geo/gdc/xena/pubmed）共用 `tool-hooks.ts` 的 `createDownloadProgressReporter` 上报
+节流进度（intervalMs/bytesStep），保证 payload 结构一致（`detail.accession` 扁平
+可匹配）。**终态 100% tick 由 downloader 统一发出**：`acquireSource` 的 progress 回调
+是鸭子类型 `AcquisitionProgress`（普通回调 + 可选 `finalize`），它在两条成功路径
+（缓存命中、流式下载）返回前各调用一次 `finalize(最终字节, 最终字节)`，不受节流
+限制，工具层不再手工补终态事件——UI 必然到达 100% 而不是冻结在最后一个节流 tick。
+
+下载是**任务级实体**，独立于 AI run：一个下载任务（source+accession）从首次发起
+到完成始终是同一个实体，进度绑定到承载它的 tool_call 气泡。前端"恢复下载"调用
+`POST /api/v1/tasks/{taskId}/downloads/resume`，请求携带**原 run 的 `run_id` +
+原始 `tool_call_id`** + `tool_name` + `arguments`。后端**不创建新 run**：重建/复用
+工作区（服务器重启后重建轻量工作区，只拿工具箱不启动 AI 会话）直接执行下载工具，
+并把合成的 `tool_started`（复用原始 tool_call_id，挂原 runId）、
+`operation_progress`、`tool_completed` 事件回放到**原 run 事件流**。前端 reducer
+按原 runId + tool_call_id upsert 原始气泡（status→running、progress 保留），因此
+每个下载任务始终只有一个操控组件——无新 run、无新消息、无重复气泡。取消走独立的
+`POST /api/v1/tasks/{taskId}/downloads/cancel`（abort 在途下载，`cancelRun` 不碰
+下载）；abort 后不发终态事件，前端 stall 检测把气泡翻回"恢复下载"。下载完成后由
+用户输入"继续"再发起 AI run 继续分析。
+
 `toolLabels` 映射 `toolName + arguments` → `{ verb, target, details? }` 三元组，
 状态条与 ToolCallStep 复用同一映射。
 

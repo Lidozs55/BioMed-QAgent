@@ -16,7 +16,7 @@ import { createGunzip } from "node:zlib";
 import path from "node:path";
 
 import type { BioMedAgentTool } from "../contracts.js";
-import { noopHooks, type ToolServiceDeps } from "./tool-hooks.js";
+import { noopHooks, createDownloadProgressReporter, type ToolServiceDeps } from "./tool-hooks.js";
 import {
   ContentCache,
   acquireSource,
@@ -234,26 +234,11 @@ export async function downloadXena(
   );
   // Throttled live progress (interval OR byte step), so long Xena downloads
   // keep the event stream alive and the UI never looks "stuck".
-  let lastProgressAt = 0;
-  let lastReportedBytes = 0;
-  const reportProgress = (bytesReceived: number, declared: number | null): void => {
-    const now = Date.now();
-    if (
-      now - lastProgressAt < XENA_PROGRESS_INTERVAL_MS &&
-      bytesReceived - lastReportedBytes < XENA_PROGRESS_BYTES_STEP
-    ) {
-      return;
-    }
-    lastProgressAt = now;
-    lastReportedBytes = bytesReceived;
-    hooks.onProgress("acquisition", "downloaded_bytes", {
-      current: bytesReceived,
-      total: declared,
-      source: "xena",
-      accession: datasetId,
-      filename: localName,
-    });
-  };
+  const reportProgress = createDownloadProgressReporter(
+    hooks,
+    { source: "xena", accession: datasetId, filename: localName },
+    { intervalMs: XENA_PROGRESS_INTERVAL_MS, bytesStep: XENA_PROGRESS_BYTES_STEP },
+  );
 
   let resumeBytes = 0;
   let lastResult: Awaited<ReturnType<typeof acquireSource>> | null = null;

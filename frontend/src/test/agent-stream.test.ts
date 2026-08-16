@@ -275,6 +275,115 @@ describe("durable event transport", () => {
     );
   });
 
+  it("keeps the subscription for a terminal task hosting a download resume until the tool call completes", async () => {
+    // A task-level download resume (no AI run) leaves the task's summary
+    // terminal, so the task drops out of activeItems — but the resume replays
+    // tool_started/progress/completed onto the original tool call. The
+    // subscription must survive while that bubble is running (otherwise the
+    // first replayed event triggers reconcileSubscription and the resumed
+    // download freezes on the frontend), and be dropped once it completes.
+    useAgentStore.setState((state) => ({
+      ...state,
+      activeItems: state.activeItems.filter((taskId) => taskId !== "task_a"),
+      tasksById: {
+        ...state.tasksById,
+        task_a: {
+          ...state.tasksById.task_a,
+          lastSequence: 3,
+          // The interrupted run terminalized the task summary (resume keeps
+          // it terminal — no new run). activeItems alone can therefore never
+          // keep the subscription alive for the replayed tool call.
+          summary: {
+            ...state.tasksById.task_a.summary,
+            status: "interrupted",
+            active_run_id: null,
+          },
+        },
+      },
+    }));
+    const { transport, sockets } = setupTransport({
+      shouldSubscribe: (taskId) => {
+        const state = useAgentStore.getState();
+        if (state.activeItems.includes(taskId)) return true;
+        const task = state.tasksById[taskId];
+        if (task === undefined) return false;
+        return task.items.some(
+          (item) => item.kind === "tool_call" && item.status === "running",
+        );
+      },
+    });
+    transport.subscribe("task_a", 0);
+    const connected = transport.connect();
+    sockets[0].open();
+    await connected;
+
+    // Resume begins: the backend re-emits tool_started on the original call.
+    sockets[0].message({
+      schema_version: "2.0",
+      event_id: "event_resume_started",
+      type: "tool_started",
+      task_id: "task_a",
+      run_id: "run_task_a",
+      stage_attempt_id: null,
+      sequence: 4,
+      timestamp: "2026-07-14T00:00:04Z",
+      payload: {
+        type: "tool_started",
+        tool_call_id: "call_resume",
+        tool_name: "download_xena",
+        arguments: { dataset_id: "tcga_RSEM_gene_tpm" },
+      },
+    });
+    expect(transport.isSubscribed("task_a")).toBe(true);
+
+    // Progress ticks keep arriving while the download runs.
+    sockets[0].message({
+      schema_version: "2.0",
+      event_id: "event_resume_progress",
+      type: "operation_progress",
+      task_id: "task_a",
+      run_id: "run_task_a",
+      stage_attempt_id: null,
+      sequence: 5,
+      timestamp: "2026-07-14T00:00:05Z",
+      payload: {
+        type: "operation_progress",
+        operation_id: "tool:acquisition:downloaded_bytes",
+        kind: "downloaded_bytes",
+        current: 262144,
+        total: 740772247,
+        detail: {
+          current: 262144,
+          total: 740772247,
+          source: "xena",
+          accession: "tcga_RSEM_gene_tpm",
+          filename: "tcga_RSEM_gene_tpm.gz",
+        },
+      },
+    });
+    expect(transport.isSubscribed("task_a")).toBe(true);
+
+    // Resume completes → the bubble flips to completed → subscription drops.
+    sockets[0].message({
+      schema_version: "2.0",
+      event_id: "event_resume_completed",
+      type: "tool_completed",
+      task_id: "task_a",
+      run_id: "run_task_a",
+      stage_attempt_id: null,
+      sequence: 6,
+      timestamp: "2026-07-14T00:00:06Z",
+      payload: {
+        type: "tool_completed",
+        tool_call_id: "call_resume",
+        tool_name: "download_xena",
+        output: "{}",
+        is_error: false,
+      },
+    });
+    expect(transport.isSubscribed("task_a")).toBe(false);
+  });
+
   it("accepts backend operation lifecycle envelopes and projects a grouped item (F4)", async () => {
     const { transport, sockets } = setupTransport();
     transport.subscribe("task_a", 0);

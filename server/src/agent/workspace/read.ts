@@ -138,7 +138,12 @@ export async function searchWorkspace(
     }
   }
 
-  await collect(resolved.absolutePath, resolved.relativePath, 1);
+  const info = await lstat(resolved.absolutePath);
+  if (info.isFile()) {
+    files.push({ absolute: resolved.absolutePath, relative: resolved.relativePath });
+  } else if (info.isDirectory()) {
+    await collect(resolved.absolutePath, resolved.relativePath, 1);
+  }
   const matches: WorkspaceSearchResult["matches"] = [];
   let outputCharacters = 0;
   for (const file of files) {

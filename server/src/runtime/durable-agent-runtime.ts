@@ -85,6 +85,17 @@ interface ActiveTask {
   approvalGate: ApprovalGateHandle;
 }
 
+/**
+ * A task-level standalone download (P5-D3 resume, no AI run) that is
+ * currently in flight. Tracked independently of ``activeTasks`` so a resume
+ * launched after a server restart (when the session map is empty) can still
+ * be cancelled via ``downloads/cancel``.
+ */
+interface ActiveDownloadHandle {
+  controller: AbortController;
+  promise: Promise<void>;
+}
+
 interface Subscription {
   lastSent: number;
   initializing: boolean;
@@ -226,6 +237,7 @@ export async function createDurableAgentRuntime(
   const repository = options.repository ?? new DurableTaskRepository(options.tasksRoot);
   await repository.recoverActiveRuns();
   const activeTasks = new Map<string, ActiveTask>();
+  const activeDownloads = new Map<string, ActiveDownloadHandle>();
   const activeExecutions = new Set<Promise<void>>();
   const webSocketServer = new WebSocketServer({ noServer: true });
   const sockets = new Set<WebSocket>();
@@ -438,6 +450,9 @@ export async function createDurableAgentRuntime(
     });
     // A suspended credential approval must not outlive the cancelled run.
     task.approvalGate.rejectPending(runId, new Error("run cancelled"));
+    // An in-flight standalone download is a task-level entity independent of
+    // this AI run; cancelling the run does not abort it. Use the dedicated
+    // downloads/cancel endpoint to stop a download.
     await task.session.cancel("user requested");
     let timer: NodeJS.Timeout | undefined;
     try {
@@ -455,6 +470,167 @@ export async function createDurableAgentRuntime(
       unsubscribeTerminal?.();
     }
     return await repository.getSnapshot(taskId);
+  }
+
+  /**
+   * Resume an interrupted acquisition directly (P5-D3 part-file resume)
+   * without an AI inference pass and WITHOUT creating a new run. The download
+   * is a task-level entity: the resume execution replays its progress and
+   * completion onto the original (host) run's event stream using the original
+   * tool-call id, so the frontend keeps updating the original tool-call
+   * bubble (no new run, no new message, no duplicate component). The user
+   * later sends "继续" to start a normal AI run for the remaining analysis.
+   */
+  async function resumeDownload(
+    taskId: string,
+    body: Record<string, unknown>,
+  ): Promise<unknown> {
+    const runId = requiredString(body, "run_id", 128);
+    const toolCallId = requiredString(body, "tool_call_id", 128);
+    const toolName = requiredString(body, "tool_name", 128);
+    const argumentsValue = body.arguments;
+    if (
+      argumentsValue === null ||
+      argumentsValue === undefined ||
+      typeof argumentsValue !== "object" ||
+      Array.isArray(argumentsValue)
+    ) {
+      throw new TypeError("arguments must be an object");
+    }
+    const snapshot = await repository.getSnapshot(taskId);
+    if (snapshot === null) throw new ReferenceError("Task not found");
+    if (snapshot.task.mode !== "agent") {
+      throw new DurableTaskConflictError(
+        "task_not_continuable",
+        "Task cannot be continued",
+      );
+    }
+    if (snapshot.task.active_run_id !== null) {
+      throw new DurableTaskConflictError(
+        "active_run",
+        "Task already has an active run",
+      );
+    }
+    // The original (host) run must exist; progress/completion are replayed
+    // onto its event stream.
+    if (!snapshot.runs.some((run) => run.run_id === runId)) {
+      throw new ReferenceError("Run not found");
+    }
+    const existing = activeTasks.get(taskId);
+    if (activeDownloads.has(taskId)) {
+      throw new DurableTaskConflictError(
+        "active_download",
+        "A download is already in progress",
+      );
+    }
+    // Resolve the tool execution environment. The normal path reuses the
+    // task session's workspace; after a server restart the session is gone
+    // (activeTasks cleared), so rebuild a lightweight workspace (tool bundle
+    // only, no AI session) — the task can still resume without needing the
+    // model to be reachable.
+    const workspace =
+      existing === undefined
+        ? await options.workspaceFactory({
+            taskId,
+            runId,
+            approvalGate: new DurableApprovalGate(taskId, repository, runId),
+            recordRunEvent: async (payload) => {
+              await repository.appendRunEvent(taskId, runId, payload);
+            },
+          })
+        : existing.workspace;
+    if (existing !== undefined) {
+      existing.workspace.setRunId?.(runId);
+      existing.approvalGate.setRunId(runId);
+    }
+    const tool = workspace.tools.find(
+      (candidate) => candidate.name === toolName,
+    );
+    if (tool === undefined) {
+      if (existing === undefined) await workspace.dispose();
+      throw new ReferenceError(`Tool not found: ${toolName}`);
+    }
+    // Reuse the original tool call: a tool_started carrying the original
+    // tool_call_id on the host run makes the frontend reducer upsert the
+    // existing bubble (status → running) instead of creating a new one.
+    await repository.appendRunEvent(taskId, runId, {
+      type: "tool_started",
+      tool_call_id: toolCallId,
+      tool_name: tool.name,
+      arguments: argumentsValue as Record<string, JsonValue>,
+    });
+    const controller = new AbortController();
+    const promise = executeDownloadResume(
+      taskId,
+      runId,
+      toolCallId,
+      tool,
+      argumentsValue,
+      controller.signal,
+    );
+    // Track the in-flight download independently of the session map so a
+    // resume launched after a server restart can still be cancelled.
+    activeDownloads.set(taskId, { controller, promise });
+    void promise.finally(() => {
+      if (activeDownloads.get(taskId)?.promise === promise) {
+        activeDownloads.delete(taskId);
+      }
+      if (existing === undefined) {
+        void workspace.dispose();
+      }
+    });
+    return { task_id: taskId, run_id: runId };
+  }
+
+  async function executeDownloadResume(
+    taskId: string,
+    runId: string,
+    toolCallId: string,
+    tool: BioMedAgentTool,
+    argumentsValue: unknown,
+    signal: AbortSignal,
+  ): Promise<void> {
+    let result: { content: string; isError?: boolean };
+    try {
+      result = await tool.execute(argumentsValue, signal);
+    } catch (error) {
+      // User-cancelled: emit nothing — the host run is already terminal and
+      // the frontend stall detection (no fresh progress) flips the bubble
+      // back to "恢复下载". Failures are reported on the host tool call.
+      if (signal.aborted) return;
+      const message = error instanceof Error ? error.message : String(error);
+      await repository.appendRunEvent(taskId, runId, {
+        type: "tool_completed",
+        tool_call_id: toolCallId,
+        tool_name: tool.name,
+        output: message,
+        is_error: true,
+      });
+      return;
+    }
+    if (signal.aborted) return;
+    await repository.appendRunEvent(taskId, runId, {
+      type: "tool_completed",
+      tool_call_id: toolCallId,
+      tool_name: tool.name,
+      output: result.content,
+      is_error: result.isError === true,
+    });
+  }
+
+  /** Abort the task's in-flight standalone download (if any). */
+  async function cancelDownload(taskId: string): Promise<unknown> {
+    const snapshot = await repository.getSnapshot(taskId);
+    if (snapshot === null) throw new ReferenceError("Task not found");
+    const handle = activeDownloads.get(taskId);
+    if (handle === undefined) {
+      throw new DurableTaskConflictError(
+        "active_download",
+        "No download is in progress",
+      );
+    }
+    handle.controller.abort();
+    return { status: "cancel_requested", task_id: taskId };
   }
 
   async function resumeRun(taskId: string, runId: string, body: Record<string, unknown>): Promise<unknown> {
@@ -661,6 +837,21 @@ export async function createDurableAgentRuntime(
         sendJson(response, 202, await cancelRun(
           decodeURIComponent(cancel[1] ?? ""),
           decodeURIComponent(cancel[2] ?? ""),
+        ));
+        return;
+      }
+      const downloadResume = /^\/api\/v1\/tasks\/([^/]+)\/downloads\/resume$/.exec(url.pathname);
+      if (request.method === "POST" && downloadResume !== null) {
+        sendJson(response, 202, await resumeDownload(
+          decodeURIComponent(downloadResume[1] ?? ""),
+          await readJsonBody(request),
+        ));
+        return;
+      }
+      const downloadCancel = /^\/api\/v1\/tasks\/([^/]+)\/downloads\/cancel$/.exec(url.pathname);
+      if (request.method === "POST" && downloadCancel !== null) {
+        sendJson(response, 202, await cancelDownload(
+          decodeURIComponent(downloadCancel[1] ?? ""),
         ));
         return;
       }

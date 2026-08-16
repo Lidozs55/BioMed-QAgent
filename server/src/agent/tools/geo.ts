@@ -15,7 +15,7 @@ import path from "node:path";
 
 import type { BioMedAgentTool } from "../contracts.js";
 import type { ToolHooks } from "./tool-hooks.js";
-import { noopHooks } from "./tool-hooks.js";
+import { createDownloadProgressReporter, noopHooks } from "./tool-hooks.js";
 import type { PublicHttpClient } from "../../external/network/http-client.js";
 import type { ContentCache } from "../../external/acquisition/content-cache.js";
 import { acquireSource } from "../../external/acquisition/downloader.js";
@@ -442,7 +442,6 @@ export function createListGeoSupplementaryFilesTool(
 }
 
 export function createDownloadGeoTool(options: GeoToolsOptions): BioMedAgentTool {
-  const hooks = noopHooks(options.hooks);
   return {
     name: "download_geo",
     label: "Download GEO file",
@@ -499,6 +498,15 @@ export function createDownloadGeoTool(options: GeoToolsOptions): BioMedAgentTool
           filename,
           signal,
         );
+        const reportProgress = createDownloadProgressReporter(
+          options.hooks,
+          {
+            source: "geo",
+            accession: resolved.source.accession,
+            filename: resolved.selectedFilename,
+            records: 1,
+          },
+        );
         const result = await acquireSource({
           source: resolved.source,
           filename: resolved.selectedFilename,
@@ -508,6 +516,7 @@ export function createDownloadGeoTool(options: GeoToolsOptions): BioMedAgentTool
           dataLevel: "repository_processed",
           maxBytes: maxSizeMb * 1024 * 1024,
           signal,
+          progress: reportProgress,
         });
         const payload: Record<string, unknown> = {
           source: "geo",
@@ -541,14 +550,6 @@ export function createDownloadGeoTool(options: GeoToolsOptions): BioMedAgentTool
               }),
             };
           }
-          hooks.onProgress("acquisition", "downloaded_bytes", {
-            current: result.asset.size_bytes,
-            total: null,
-            source: "geo",
-            accession: resolved.source.accession,
-            filename: resolved.selectedFilename,
-            records: 1,
-          });
           payload.local_files = [localPath];
           payload.format_hint = fileType.toLowerCase().trim();
         } else {
@@ -571,7 +572,6 @@ export function createDownloadGeoTool(options: GeoToolsOptions): BioMedAgentTool
 export function createDownloadGeoPlatformAnnotationTool(
   options: GeoToolsOptions,
 ): BioMedAgentTool {
-  const hooks = noopHooks(options.hooks);
   return {
     name: "download_geo_platform_annotation",
     label: "Download GEO platform annotation",
@@ -641,6 +641,10 @@ export function createDownloadGeoPlatformAnnotationTool(
           title: `GEO platform annotation ${gpl}`,
           retrieved_at: new Date().toISOString(),
         };
+        const reportProgress = createDownloadProgressReporter(
+          options.hooks,
+          { source: "geo", accession: gpl, platform: gpl, filename, records: 1 },
+        );
         const result = await acquireSource({
           source,
           filename,
@@ -652,6 +656,7 @@ export function createDownloadGeoPlatformAnnotationTool(
           accept: "application/gzip, text/plain",
           requestHeaders: { "User-Agent": ANNOTATION_UA },
           signal,
+          progress: reportProgress,
         });
         const payload: Record<string, unknown> = {
           source: "geo",
@@ -665,14 +670,6 @@ export function createDownloadGeoPlatformAnnotationTool(
             options.taskRoot,
             ...result.asset.relative_path.split("/"),
           );
-          hooks.onProgress("acquisition", "downloaded_bytes", {
-            current: result.asset.size_bytes,
-            total: null,
-            source: "geo",
-            platform: gpl,
-            filename,
-            records: 1,
-          });
           payload.local_files = [localPath];
           payload.format_hint = "platform_annotation";
         } else {

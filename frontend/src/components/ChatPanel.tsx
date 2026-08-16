@@ -34,11 +34,17 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import type {
   BuildResultStatus,
+  DownloadResumeAccepted,
   ResumeRunInput,
   StartTaskInput,
   TaskRunAccepted,
 } from "@/runtime/contracts";
-import type { ConversationItem, RunProjection } from "@/runtime/types";
+import type {
+  ConversationItem,
+  DownloadControl,
+  DownloadResumeRequest,
+  RunProjection,
+} from "@/runtime/types";
 import { errorMessage } from "@/lib/utils";
 import { estimateContextTokens } from "@/lib/tokenEstimate";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -70,6 +76,13 @@ interface ChatPanelProps {
     runId: string,
     input: ResumeRunInput,
   ) => Promise<void>;
+  /** Resumes an interrupted download directly (no AI pass, no new run). */
+  resumeDownload?: (
+    taskId: string,
+    input: DownloadResumeRequest,
+  ) => Promise<DownloadResumeAccepted>;
+  /** Aborts the task's in-flight standalone download. */
+  cancelDownload?: (taskId: string) => Promise<void>;
   loadOlderMessages?: (taskId: string) => Promise<void>;
   /** Trigger context compaction on a task */
   compactTask?: (taskId: string) => Promise<void>;
@@ -218,6 +231,8 @@ export function ChatPanel({
   continueTask,
   cancelRun,
   resumeRun,
+  resumeDownload,
+  cancelDownload,
   loadOlderMessages,
   compactTask,
   injectTaskContext,
@@ -352,6 +367,32 @@ export function ChatPanel({
       });
     }
   }, [activeTaskId, activeTask, cancelRun]);
+  /**
+   * Pause/resume controls for download operations. Pause cancels the current
+   * run when the download belongs to an active host run (the server keeps the
+   * partial file for resumable acquisition); a standalone resume has no live
+   * run, so pause aborts the in-flight download directly. Resume replays the
+   * download onto the original run's event stream — no new run/bubble, the
+   * existing progress strip keeps updating.
+   */
+  const downloadControl = useMemo<DownloadControl | undefined>(() => {
+    if (activeTaskId === null || cancelDownload === undefined || resumeDownload === undefined) {
+      return undefined;
+    }
+    return {
+      taskId: activeTaskId,
+      onPause: async (taskId) => {
+        if (activeRunId !== null && cancelRun !== undefined) {
+          await cancelRun(taskId, activeRunId);
+        } else {
+          await cancelDownload(taskId);
+        }
+      },
+      onResume: async (taskId, resume) => {
+        await resumeDownload(taskId, resume);
+      },
+    };
+  }, [activeTaskId, activeRunId, cancelDownload, cancelRun, resumeDownload]);
   const activeQueue =
     activeTaskId === null ? [] : (queuedFollowUps[activeTaskId] ?? []);
   // 运行中也可以发送：加入队列等待当前回答结束，或调整方向取消并重引导。
@@ -899,7 +940,11 @@ export function ChatPanel({
                   </MessageScrollerItem>
                 )}
 
-                <ConversationList items={items} activeRunId={activeRunId} />
+                <ConversationList
+                  items={items}
+                  activeRunId={activeRunId}
+                  downloadControl={downloadControl}
+                />
 
                 {showActiveRunStatus && activeRunId !== null && (
                   <MessageScrollerItem messageId={`live:${activeRunId}:assistant:status`}>

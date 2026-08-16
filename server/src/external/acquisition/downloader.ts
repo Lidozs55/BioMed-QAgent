@@ -35,6 +35,24 @@ import {
   type TaskWorkDirs,
 } from "./workdir.js";
 
+/**
+ * Byte-level download progress sink accepted by ``acquireSource``.
+ *
+ * This is a duck-typed protocol, not an import from the agent layer: the
+ * ``external`` acquisition path never depends on ``agent/tools/tool-hooks``.
+ * The host (e.g. ``createDownloadProgressReporter``) supplies a throttled live
+ * callback plus an optional ``finalize`` sink that is **not** subject to
+ * throttling. ``acquireSource`` calls ``finalize`` once on every success path
+ * (cache hit or streamed download) with the exact final byte count, so the UI
+ * reaches 100% instead of freezing on the last throttled tick — callers never
+ * have to emit the terminal event themselves.
+ */
+export interface AcquisitionProgress {
+  (bytesReceived: number, declared: number | null): void | Promise<void>;
+  /** Called once by ``acquireSource`` on success; bypasses throttling. */
+  finalize?(bytesReceived: number, total: number): void | Promise<void>;
+}
+
 export const CURATED_SOURCE_HOSTS: ReadonlySet<string> = new Set([
   // NCBI (PubMed, GEO, PMC)
   "ftp.ncbi.nlm.nih.gov",
@@ -72,7 +90,7 @@ export interface AcquireSourceOptions {
   expectedMediaTypes?: ReadonlySet<string>;
   accept?: string;
   requestHeaders?: Readonly<Record<string, string>>;
-  progress?: (bytesReceived: number, declared: number | null) => void | Promise<void>;
+  progress?: AcquisitionProgress;
   signal?: AbortSignal;
   /** Extra per-hop validator for recipe/declarative hosts. Defaults to curated. */
   allowedHosts?: ReadonlySet<string>;
@@ -316,6 +334,7 @@ export async function acquireSource(options: AcquireSourceOptions): Promise<Acqu
         }
         const assetId = assetIdFromSha256(cachedSha);
         const destination = await publishTaskAsset(cachedBlob, dirs, assetId, filename, cachedSha);
+        await progress?.finalize?.(cachedSize, cachedSize);
         return {
           schema_version: "1.0",
           attempt: {
@@ -521,6 +540,7 @@ export async function acquireSource(options: AcquireSourceOptions): Promise<Acqu
       media_type: mediaType,
     });
     await cleanupPart();
+    await progress?.finalize?.(bytesReceived, bytesReceived);
     return {
       schema_version: "1.0",
       attempt: {

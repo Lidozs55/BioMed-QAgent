@@ -6,12 +6,14 @@ import {
 } from "@/runtime/hydrationCache";
 import type {
   ContinueTaskInput,
+  DownloadResumeAccepted,
   ResumeRunInput,
   StartTaskInput,
   TaskPage,
   TaskRunAccepted,
   TaskSnapshot,
 } from "./contracts";
+import type { DownloadResumeRequest } from "./types";
 import { errorMessage } from "@/lib/utils";
 import {
   addAcceptedTask,
@@ -610,6 +612,37 @@ export class RuntimeController {
       useAgentStore.getState().tasksById[taskId]?.lastSequence ??
       snapshot.task.latest_sequence;
     await this.transport.recoverSubscription(taskId, lastSequence);
+  }
+
+  /**
+   * Resumes an interrupted download directly without an AI pass (the server
+   * re-invokes the acquisition tool on its part file). The follow-up run's
+   * events flow through the same subscription; the user then sends "继续" to
+   * start a normal AI run for the remaining analysis.
+   */
+  async resumeDownload(
+    taskId: string,
+    input: DownloadResumeRequest,
+  ): Promise<DownloadResumeAccepted> {
+    const accepted = await this.api.resumeDownload(taskId, {
+      run_id: input.runId,
+      tool_call_id: input.toolCallId,
+      tool_name: input.toolName,
+      arguments: input.arguments ?? {},
+    });
+    // The download replays progress/completion onto the original run's event
+    // stream, so no new run projection or user message is created. Make sure
+    // the task keeps its live event subscription (it may have been dropped
+    // when the host run went terminal).
+    const existingTask = useAgentStore.getState().tasksById[accepted.task_id];
+    const lastSequence = existingTask?.lastSequence ?? 0;
+    this.transport.subscribe(accepted.task_id, lastSequence);
+    return accepted;
+  }
+
+  /** Abort the task's in-flight standalone download (if any). */
+  async cancelDownload(taskId: string): Promise<void> {
+    await this.api.cancelDownload(taskId);
   }
 
   async cancelRun(taskId: string, runId: string): Promise<void> {

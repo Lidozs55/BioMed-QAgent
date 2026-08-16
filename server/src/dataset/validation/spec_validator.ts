@@ -91,7 +91,9 @@ function resolveNormalizationProfile(profileRef: string | null | undefined) {
 }
 
 /** Python ``!r`` of a string (single-quoted, escaped). */
-function pyRepr(value: string): string {
+function pyRepr(value: unknown): string {
+  if (value === undefined || value === null) return "None";
+  if (typeof value !== "string") return pyRepr(String(value));
   return `'${value.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
 }
 
@@ -131,7 +133,7 @@ export class SpecValidator {
         reasons.push("spec dataset_family does not match the target schema");
       }
       const known = new Set(schema.fields.map((field) => field.name));
-      const missing = spec.required_fields.filter((name) => !known.has(name));
+      const missing = (spec.required_fields ?? []).filter((name) => !known.has(name));
       if (missing.length > 0) {
         codes.push("unknown_required_field");
         reasons.push(`required fields not in schema: ${pyReprList([...missing].sort())}`);
@@ -191,7 +193,7 @@ export class SpecValidator {
     const normalizationProfile = resolveNormalizationProfile(
       spec.normalization_profile_ref,
     );
-    for (const binding of spec.source_bindings) {
+    for (const binding of spec.source_bindings ?? []) {
       // B4 Agent-only guarantee: a binding whose ``source`` resolves to a
       // RESEARCH_ONLY database must never be admitted as a verified build
       // source.  Unknown identifiers are left to the runtime adapter

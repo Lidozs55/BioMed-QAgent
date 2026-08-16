@@ -16,7 +16,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { BioMedAgentTool } from "../contracts.js";
-import { noopHooks, type ToolServiceDeps } from "./tool-hooks.js";
+import { noopHooks, createDownloadProgressReporter, type ToolServiceDeps } from "./tool-hooks.js";
 import {
   ContentCache,
   acquireSource,
@@ -467,6 +467,10 @@ export async function downloadGdc(
     try {
       assertSafeFilename(fileName);
       await pace();
+      const reportProgress = createDownloadProgressReporter(
+        hooks,
+        { source: "gdc", accession: projectId, filename: fileName },
+      );
       const result = await acquireSource({
         source,
         filename: fileName,
@@ -479,6 +483,7 @@ export async function downloadGdc(
         expectedMd5: md5sum !== "" ? md5sum : undefined,
         accept: "application/octet-stream",
         signal,
+        progress: reportProgress,
       });
       if (result.attempt.status === "failed" || result.asset === null) {
         hooks.onProgress("download_gdc", "warning", {

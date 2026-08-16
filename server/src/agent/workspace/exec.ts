@@ -73,7 +73,10 @@ function disabledResult(command: string[]): WorkspaceExecResult {
     command,
     exitCode: null,
     stdout: "",
-    stderr: "",
+    stderr:
+      "exec is disabled in this environment (development exec is not enabled). " +
+      "Do not rely on running commands; use workspace_read / workspace_search / " +
+      "workspace_write / workspace_edit instead.",
     durationMs: 0,
     truncated: false,
     timedOut: false,

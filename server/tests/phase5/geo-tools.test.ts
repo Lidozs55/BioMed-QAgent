@@ -406,6 +406,9 @@ describe("download_geo", () => {
     expect(localFiles).toHaveLength(1);
     const downloaded = await readFile(localFiles[0]);
     expect(downloaded).toEqual(compressed);
+    // acquireSource now emits the live throttled tick plus the unified
+    // terminal tick (no Content-Length → live total is null; final total is
+    // the verified size) — the old tool-level onProgress emitted only one.
     expect(progress).toEqual([
       {
         stage: "acquisition",
@@ -413,6 +416,18 @@ describe("download_geo", () => {
         payload: {
           current: compressed.length,
           total: null,
+          source: "geo",
+          accession: "GSE178352",
+          filename: "GSE178352_tximportCounts.txt.gz",
+          records: 1,
+        },
+      },
+      {
+        stage: "acquisition",
+        kind: "downloaded_bytes",
+        payload: {
+          current: compressed.length,
+          total: compressed.length,
           source: "geo",
           accession: "GSE178352",
           filename: "GSE178352_tximportCounts.txt.gz",
