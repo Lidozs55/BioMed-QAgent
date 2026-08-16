@@ -33,11 +33,24 @@ export async function writeWorkspaceTextAt(
   }
   // Create parents under the requested path, then canonicalize the parent so
   // the final target follows any symlinked directories (the permission check
-  // already classified the canonical ancestor).
+  // already classified the canonical ancestor). If the resolution changed
+  // (e.g. a symlink was swapped between evaluation and IO), the granted
+  // scope no longer covers the target — fail instead of writing elsewhere.
   const parent = path.dirname(resolved.absolutePath);
   await mkdir(parent, { recursive: true });
   const canonicalParent = await realpath(parent);
   const target = path.join(canonicalParent, path.basename(resolved.absolutePath));
+  const granted = path.resolve(resolved.canonical);
+  const actual = path.resolve(target);
+  const matches = process.platform === "win32"
+    ? granted.toLowerCase() === actual.toLowerCase()
+    : granted === actual;
+  if (!matches) {
+    throw new WorkspacePolicyError(
+      "PATH_ESCAPE",
+      "Write target changed after permission was granted",
+    );
+  }
   const created = !(await exists(target));
   if (!created) {
     const targetInfo = await lstat(target);

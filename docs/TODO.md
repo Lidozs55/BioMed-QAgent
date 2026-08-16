@@ -276,30 +276,41 @@ build 锁、cancel 收敛与 event sink；`DATASET_CORE=ts` 现为默认运行�
 ### P3  Permission Event + API
 
 - [x] `permission_requested` / `permission_resolved` durable events
-- [x] `POST /api/v1/tasks/{taskId}/runs/{runId}/permissions/{requestId}`（once/run/task/persistent）
+- [x] `POST /api/v1/tasks/{taskId}/runs/{runId}/permissions/{requestId}`（once/run/task/persistent），
+      resolve 绑定 URL runId（pending 按 runId 索引再核验 requestId，旧 runId 不能批准新请求）
 - [x] pending 请求生命周期：cancel/重启失效，不静默重放
 
 ### P4  Frontend Permission UI
 
-- [x] Run 时间线权限卡片（拒绝 / 允许一次 / 本 Run / 本 Task / 始终允许目录·命令）
-- [x] 设置 → Agent → 权限：preset（受限/按需询问/完全访问）+ 已授权目录管理
+- [x] Run 时间线权限卡片（拒绝 / 允许一次 / 本 Run / 本 Task / 始终允许目录·命令）；
+      Run/Task 授权为 capability×scope 粒度，卡片明示“覆盖该范围内其他路径”
+- [x] 设置 → Agent → 权限：preset（受限/按需询问/完全访问）+ 已授权目录管理 + 命令执行开关
 
 ### P5  Exec Permission
 
 - [x] `process.exec` 独立 capability，默认 ask；删除 snapshot/restore 伪沙箱
 - [x] 保留 timeout / output limit / cancel / process-tree cleanup / audit；UI 显示 OS 权限警告
 - [x] 迁移 flag `AGENT_EXEC_POLICY=deny|ask|allow` 替换 `WORKSPACE_DEV_EXEC`
+- [x] **撤权闭环**：`PUT .../persistent-exec {enabled:false}` + 设置开关；Restricted 在 evaluator 硬拒绝
+      exec 并在切 preset 时清除 `persistent_exec_allow`
 
 ### P6  Permission Presets + Persistent Rules
 
 - [x] `data/settings/agent-permissions.json`；Restricted / Ask when needed / Full access
+- [x] 持久规则入库前 canonicalize 并校验绝对路径（不依赖 evaluator 的 `path.resolve`）
 
 ### P7  Publication Integrity Hardening
 
 - [x] 验证：外部改动 artifact → hash 不匹配 → 409 ArtifactIntegrityError；
       workspace 任意文件不会自动成为 Publication（仅 Core 发布路径）
+- [x] 审计修正：reader 重算 package digest 并与 `manifest.sha256`/`manifest_id`（绑定 publication.json
+      manifest_ref）交叉验证——改 artifact 并同步改 manifest 条目但不重算 digest 也会被拒
+- [x] 信任边界明确（ADR-026 §3）：同账户 exec 能一致性重写整包时无法防伪，仅防意外/部分篡改
+- [x] `../` 越界改为 resolve→classify→broker（不再是 INVALID 输入错）；不存在路径 canonicalization
+      重新拼回缺失后缀，避免授权范围意外扩大；write 在创建父目录后复核目标与授权 canonical 一致
+- [x] legacy migration marker 的 POSIX 比较修正（比较 `marker.workspace` 而非 `workspaceRoot`）
 
-验收：`pnpm test`（contracts 14 + server 768 + frontend 752）/ `pnpm lint` /
+验收（2026-08-16 审计后）：`pnpm test`（contracts 14 + server 783 + frontend 761）/ `pnpm lint` /
 `pnpm typecheck` / `pnpm build` 全通过；`uv run pytest database/tests` + ruff 通过。
 
 ---

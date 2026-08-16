@@ -41,17 +41,32 @@ function isPathWithin(root: string, candidate: string): boolean {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
-/** Walk up from a target until an existing ancestor is found and canonicalize it. */
+/**
+ * Canonicalize a target path through its nearest existing ancestor, then
+ * re-append the missing suffix.
+ *
+ * ``realpath`` requires the path to exist; for a not-yet-created target
+ * (typical for writes) we walk up to the nearest existing ancestor, resolve
+ * it, and glue the remaining (missing) segments back on. Without the
+ * re-append step, ``D:\datasets\new-project\result.csv`` would collapse to
+ * ``D:\datasets`` and a later "always allow this directory" grant would
+ * silently cover ``D:\datasets\**`` — an unintended privilege expansion
+ * (audit fix).
+ */
 export async function canonicalizeWithAncestor(target: string): Promise<string> {
+  const walk: string[] = [];
   let candidate = target;
   for (;;) {
     try {
-      await lstat(candidate);
-      return await realpath(candidate);
+      const canonicalAncestor = await realpath(candidate);
+      if (walk.length === 0) return canonicalAncestor;
+      const suffix = walk.reverse().map((segment) => path.basename(segment));
+      return path.join(canonicalAncestor, ...suffix);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       const parent = path.dirname(candidate);
       if (parent === candidate) throw error;
+      walk.push(candidate);
       candidate = parent;
     }
   }
@@ -65,10 +80,11 @@ function rejectUnsafe(raw: string, anchor: string): string {
     if (/^[A-Za-z]:[^\\/]/.test(raw)) {
       throw new PathNormalizationError("INVALID", "Drive-relative paths are ambiguous");
     }
+    // Relative paths are anchored at the workspace but may freely escape it:
+    // ``../outside/file.txt`` resolves to an absolute path and then flows
+    // through scope classification + PermissionBroker like any other path
+    // (ADR-026 §2) — an escape is a scope decision, not an input error.
     const anchored = path.resolve(anchor, raw);
-    if (!isPathWithin(path.resolve(anchor), anchored)) {
-      throw new PathNormalizationError("INVALID", "Relative path escapes the workspace");
-    }
     const parts = anchored.split(/[\\/]+/).filter((part) => part !== "");
     for (const part of parts) {
       if (part.endsWith(".") || part.endsWith(" ") || RESERVED_WINDOWS_NAME.test(part)) {

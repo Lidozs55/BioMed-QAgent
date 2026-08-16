@@ -29,6 +29,7 @@ export interface SettingsApi {
   fetchModels: (preview: ModelPreviewRequest) => Promise<ModelInfo[]>;
   fetchAgentPermissions: () => Promise<AgentPermissionSettings>;
   setAgentPermissionsPreset: (preset: AgentPermissionPreset) => Promise<AgentPermissionSettings>;
+  setAgentPermissionsPersistentExec: (enabled: boolean) => Promise<AgentPermissionSettings>;
   addAgentPermissionRule: (rule: AgentPermissionRuleInput) => Promise<AgentPermissionSettings>;
   removeAgentPermissionRule: (ruleId: string) => Promise<AgentPermissionSettings>;
 }
@@ -86,6 +87,12 @@ export function createSettingsApi(http: Http): SettingsApi {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ preset }),
+      }).then((b) => b as unknown as AgentPermissionSettings),
+    setAgentPermissionsPersistentExec: (enabled) =>
+      http.request(`${http.baseUrl}/settings/agent-permissions/persistent-exec`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
       }).then((b) => b as unknown as AgentPermissionSettings),
     addAgentPermissionRule: (rule) =>
       http.request(`${http.baseUrl}/settings/agent-permissions/rules`, {

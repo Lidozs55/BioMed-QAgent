@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type { EventEnvelope } from "@biomed/contracts";
+import { packageDigest } from "../src/dataset/publish/manifest.js";
 import { afterEach, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
 
@@ -424,10 +425,20 @@ describe("durable formal Agent runtime", () => {
     const publicationDir = path.join(buildDir, "publish", "version_1");
     await mkdir(path.join(publicationDir, "merged"), { recursive: true });
     await writeFile(path.join(publicationDir, "merged", "primary.csv"), primary, "utf8");
+    const digest = packageDigest([{
+      schema_version: "1.0",
+      artifact_id: "artifact_primary",
+      role: "primary_dataset",
+      relative_path: "merged/primary.csv",
+      media_type: "text/csv",
+      size_bytes: Buffer.byteLength(primary),
+      sha256,
+    }]);
     await writeFile(path.join(publicationDir, "dataset_manifest.json"), JSON.stringify({
-      manifest_id: "manifest_one",
+      manifest_id: `manifest_${digest.slice(0, 16)}`,
       task_id: accepted.task_id,
       build_id: "build_one",
+      sha256: digest,
       artifacts: [{
         artifact_id: "artifact_primary",
         role: "primary_dataset",
@@ -441,7 +452,7 @@ describe("durable formal Agent runtime", () => {
       path.join(publicationDir, "publication.json"),
       JSON.stringify({
         publication_id: "publication_one",
-        manifest_ref: "manifest_one",
+        manifest_ref: `manifest_${digest.slice(0, 16)}`,
       }),
       "utf8",
     );

@@ -738,7 +738,7 @@ export async function createDurableAgentRuntime(
     if (task === undefined || broker === null || broker === undefined) {
       throw new ReferenceError("Permission broker is unavailable for this task");
     }
-    const resolved = await broker.resolve(requestId, decision, grantScope);
+    const resolved = await broker.resolve(runId, requestId, decision, grantScope);
     if (!resolved) {
       throw new ReferenceError("Permission request not found or expired");
     }

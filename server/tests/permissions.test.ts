@@ -124,17 +124,40 @@ describe("path normalization + scope classification (P1)", () => {
     })).toBe("external");
   });
 
-  test("rejects traversal and reserved representations", async () => {
+  test("traversal resolves out of the workspace; reserved representations still reject", async () => {
     const { workspaceRoot } = await fixture();
-    await expect(normalizeAgentPathFor("../escape", workspaceRoot)).rejects.toMatchObject({
-      code: "INVALID",
-    });
-    await expect(normalizeAgentPathFor("a/../../b", workspaceRoot)).rejects.toMatchObject({
-      code: "INVALID",
-    });
+    // ``../`` escapes are now scope decisions, not input errors: the path
+    // resolves to an absolute path outside the workspace and flows into the
+    // broker (ADR-026 §2). It must never throw INVALID.
+    const escaped = await normalizeAgentPathFor("../escape", workspaceRoot);
+    expect(escaped.absolute).not.toBe(workspaceRoot);
+    expect(escaped.canonical).not.toBeUndefined();
+    const doubled = await normalizeAgentPathFor("a/../../b", workspaceRoot);
+    expect(doubled.absolute).not.toBe(workspaceRoot);
+    expect(doubled.canonical).not.toBeUndefined();
+    // NUL bytes and reserved Windows aliases remain hard input errors.
     await expect(normalizeAgentPathFor("NUL", workspaceRoot)).rejects.toMatchObject({
       code: "INVALID",
     });
+  });
+
+  test("non-existent targets keep their missing suffix after canonicalization", async () => {
+    // The classic over-grant trap: requesting
+    // ``D:\datasets\new-project\result.csv`` when only ``D:\datasets``
+    // exists must canonicalize to the FULL target, not collapse to
+    // ``D:\datasets`` (which would turn an "always allow this directory"
+    // grant into ``D:\datasets\**``).
+    const { workspaceRoot } = await fixture();
+    const deep = path.join(workspaceRoot, "a", "b", "c", "file.csv");
+    const normalized = await normalizeAgentPathFor(deep, workspaceRoot);
+    const canonical = path.resolve(normalized.canonical);
+    const expected = path.resolve(deep);
+    if (process.platform === "win32") {
+      expect(canonical.toLowerCase()).toBe(expected.toLowerCase());
+    } else {
+      expect(canonical).toBe(expected);
+    }
+    expect(normalized.exists).toBe(false);
   });
 });
 
@@ -174,7 +197,7 @@ describe("PermissionEvaluator decision order (P1)", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(ask.broker.hasPending("run_ts_1")).toBe(true);
-    await ask.broker.resolve((ask.events.at(-1) as { request_id: string }).request_id, "allow", "once");
+    await ask.broker.resolve("run_ts_1", (ask.events.at(-1) as { request_id: string }).request_id, "allow", "once");
     await expect(externalAsk).resolves.toMatchObject({ decision: "allow" });
 
     const restricted = await fixture({ preset: "restricted" });
@@ -256,7 +279,7 @@ describe("PermissionBroker suspend/resume (P1)", () => {
     expect(events.at(-1)).toMatchObject({ type: "permission_requested" });
     const requestId = (events.at(-1) as { request_id: string }).request_id;
 
-    const resolved = await broker.resolve(requestId, "allow", "once");
+    const resolved = await broker.resolve("run_ts_1", requestId, "allow", "once");
     expect(resolved).toBe(true);
     await expect(requested).resolves.toMatchObject({ decision: "allow" });
     expect(events.at(-1)).toMatchObject({ type: "permission_resolved", decision: "allow" });
@@ -274,7 +297,7 @@ describe("PermissionBroker suspend/resume (P1)", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 20));
     const requestId = (events.at(-1) as { request_id: string }).request_id;
-    await broker.resolve(requestId, "deny");
+    await broker.resolve("run_ts_1", requestId, "deny");
     await expect(requested).rejects.toBeInstanceOf(PermissionDeniedError);
   });
 
@@ -289,7 +312,7 @@ describe("PermissionBroker suspend/resume (P1)", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 20));
     const requestId = (events.at(-1) as { request_id: string }).request_id;
-    await broker.resolve(requestId, "allow", "run");
+    await broker.resolve("run_ts_1", requestId, "allow", "run");
     await expect(first).resolves.toMatchObject({ decision: "allow" });
 
     // Second external read within the same run: no new ask.
@@ -313,7 +336,7 @@ describe("PermissionBroker suspend/resume (P1)", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 20));
     const requestId = (events.at(-1) as { request_id: string }).request_id;
-    await broker.resolve(requestId, "allow", "task");
+    await broker.resolve("run_ts_1", requestId, "allow", "task");
     await expect(first).resolves.toMatchObject({ decision: "allow" });
     grants.clearRun("run_ts_1");
     await expect(broker.evaluate({
@@ -335,7 +358,7 @@ describe("PermissionBroker suspend/resume (P1)", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 20));
     const requestId = (events.at(-1) as { request_id: string }).request_id;
-    await broker.resolve(requestId, "allow", "persistent");
+    await broker.resolve("run_ts_1", requestId, "allow", "persistent");
     await expect(requested).resolves.toMatchObject({ decision: "allow" });
 
     const settings = await policyStore.getSettings();
@@ -353,7 +376,7 @@ describe("PermissionBroker suspend/resume (P1)", () => {
 
   test("unknown request ids, duplicate resolutions, and expiry are rejected safely", async () => {
     const { broker, events } = await fixture();
-    expect(await broker.resolve("permission_nope", "allow")).toBe(false);
+    expect(await broker.resolve("run_ts_1", "permission_nope", "allow")).toBe(false);
 
     const requested = broker.evaluate({
       capability: "fs.read",
@@ -363,8 +386,8 @@ describe("PermissionBroker suspend/resume (P1)", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 20));
     const requestId = (events.at(-1) as { request_id: string }).request_id;
-    expect(await broker.resolve(requestId, "allow", "once")).toBe(true);
-    expect(await broker.resolve(requestId, "allow", "once")).toBe(false);
+    expect(await broker.resolve("run_ts_1", requestId, "allow", "once")).toBe(true);
+    expect(await broker.resolve("run_ts_1", requestId, "allow", "once")).toBe(false);
     await expect(requested).resolves.toMatchObject({ decision: "allow" });
   });
 
@@ -394,7 +417,7 @@ describe("PermissionBroker suspend/resume (P1)", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(ask.events.at(-1)).toMatchObject({ type: "permission_requested", capability: "process.exec" });
     const requestId = (ask.events.at(-1) as { request_id: string }).request_id;
-    await ask.broker.resolve(requestId, "allow", "persistent");
+    await ask.broker.resolve("run_ts_1", requestId, "allow", "persistent");
     await expect(pending).resolves.toMatchObject({ decision: "allow" });
 
     const allowed = await fixture({ persistentExecAllow: true });
@@ -412,6 +435,44 @@ describe("PermissionBroker suspend/resume (P1)", () => {
       cwd: restricted.workspaceRoot,
       scope: "workspace",
     })).rejects.toBeInstanceOf(PermissionDeniedError);
+  });
+
+  test("Restricted preset hard-denies exec even with a persistent exec approval (revocation is effective)", async () => {
+    // First grant a persistent exec approval while in ask-when-needed.
+    const granted = await fixture();
+    await granted.policyStore.setPersistentExecAllow(true);
+    await expect(granted.broker.evaluate({
+      capability: "process.exec",
+      command: "node --version",
+      cwd: granted.workspaceRoot,
+      scope: "workspace",
+    })).resolves.toMatchObject({ decision: "allow" });
+
+    // Switching to Restricted must deny immediately — the flag alone is not
+    // allowed to bypass the preset.
+    await granted.policyStore.setPreset("restricted");
+    await expect(granted.broker.evaluate({
+      capability: "process.exec",
+      command: "node --version",
+      cwd: granted.workspaceRoot,
+      scope: "workspace",
+    })).rejects.toBeInstanceOf(PermissionDeniedError);
+  });
+
+  test("resolve is bound to the runId: a wrong run cannot approve a pending request", async () => {
+    const { broker, events } = await fixture();
+    void broker.evaluate({
+      capability: "fs.read",
+      resource: path.join(baseExternal(), "a.csv"),
+      canonicalResource: path.join(baseExternal(), "a.csv"),
+      scope: "external",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const requestId = (events.at(-1) as { request_id: string }).request_id;
+
+    // A different runId with the same requestId must not resolve it.
+    expect(await broker.resolve("run_other", requestId, "allow", "once")).toBe(false);
+    expect(await broker.resolve("run_ts_1", requestId, "allow", "once")).toBe(true);
   });
 
   test("one pending request per run; a second concurrent ask is denied", async () => {
@@ -444,7 +505,7 @@ describe("permission audit (P1)", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 20));
     const requestId = (events.at(-1) as { request_id: string }).request_id;
-    await broker.resolve(requestId, "allow", "run");
+    await broker.resolve("run_ts_1", requestId, "allow", "run");
     await expect(requested).resolves.toMatchObject({ decision: "allow" });
 
     expect(audit.records).toHaveLength(2);

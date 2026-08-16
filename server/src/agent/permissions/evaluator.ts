@@ -91,6 +91,12 @@ export class PermissionEvaluator {
       return policyResult(this.execPolicyOverride);
     }
     const settings = await this.policyStore.getSettings();
+    if (settings.preset === "restricted") {
+      // The Restricted preset guarantees command execution is denied even
+      // when a persistent exec approval was granted earlier (audit fix:
+      // revocation must be effective, not just displayed).
+      return { decision: "deny", reason: "default" };
+    }
     if (settings.persistent_exec_allow) {
       return { decision: "allow", reason: "rule" };
     }

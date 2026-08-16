@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -184,10 +185,42 @@ export function AgentPermissionSettingsSection({ api }: AgentPermissionSettingsS
               ))}
             </ul>
           )}
-          {current.persistent_exec_allow && (
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>命令执行</CardTitle>
+          <CardDescription>
+            控制 Agent 执行命令的持久授权。命令继承 BioMed-QAgent 当前系统账户权限。
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex flex-col gap-1">
+              <Label htmlFor="persistent-exec-switch">始终允许命令执行</Label>
+              <p className="text-xs text-muted-foreground">
+                {current.preset === "restricted"
+                  ? "受限模式下命令执行始终拒绝，此开关不可用。"
+                  : current.persistent_exec_allow
+                    ? "已启用：不再逐条询问命令执行。"
+                    : "关闭后需要逐条批准命令执行；可随时在此撤销授权。"}
+              </p>
+            </div>
+            <Switch
+              id="persistent-exec-switch"
+              checked={current.persistent_exec_allow}
+              disabled={current.preset === "restricted"}
+              onCheckedChange={(checked) => {
+                void apply(() => api.setAgentPermissionsPersistentExec(checked));
+              }}
+            />
+          </div>
+          {current.persistent_exec_allow && current.preset !== "restricted" && (
             <Alert className="mt-3">
               <AlertDescription>
-                已启用“始终允许命令执行”：命令继承 BioMed-QAgent 当前系统账户权限。
+                已启用“始终允许命令执行”：命令继承 BioMed-QAgent 当前系统账户权限，
+                可读取或修改账户可访问的任何文件。切换到“受限”模式会立即撤销此授权。
               </AlertDescription>
             </Alert>
           )}

@@ -18,6 +18,7 @@ import {
   DiskWorkspaceManager,
 } from "../src/agent/workspace/index.js";
 import { createDurableAgentRuntime } from "../src/runtime/durable-agent-runtime.js";
+import { packageDigest, type ManifestArtifactEntry } from "../src/dataset/publish/manifest.js";
 
 const roots: string[] = [];
 
@@ -66,6 +67,38 @@ async function runtimeFixture() {
   await once(server, "listening");
   const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   return { base, tasksRoot, workspacesRoot, runtime, server, baseUrl };
+}
+
+function manifestJson(options: {
+  taskId: string;
+  buildId: string;
+  manifestId?: string;
+  artifacts: Array<{
+    artifact_id: string;
+    role: string;
+    relative_path: string;
+    media_type: string;
+    size_bytes: number;
+    sha256: string;
+  }>;
+  sha256?: string;
+}): string {
+  const digest = options.sha256 ?? packageDigest(options.artifacts.map((entry): ManifestArtifactEntry => ({
+    schema_version: "1.0",
+    artifact_id: entry.artifact_id,
+    role: entry.role as ManifestArtifactEntry["role"],
+    relative_path: entry.relative_path,
+    media_type: entry.media_type,
+    size_bytes: entry.size_bytes,
+    sha256: entry.sha256,
+  })));
+  return JSON.stringify({
+    manifest_id: options.manifestId ?? `manifest_${digest.slice(0, 16)}`,
+    task_id: options.taskId,
+    build_id: options.buildId,
+    sha256: digest,
+    artifacts: options.artifacts,
+  });
 }
 
 async function createTask(baseUrl: string, requestId: string): Promise<{ task_id: string }> {
@@ -121,10 +154,9 @@ describe("publication integrity hardening (P7)", () => {
     );
     await mkdir(path.join(publicationDir, "merged"), { recursive: true });
     await writeFile(path.join(publicationDir, "merged", "primary.csv"), primary, "utf8");
-    await writeFile(path.join(publicationDir, "dataset_manifest.json"), JSON.stringify({
-      manifest_id: "manifest_one",
-      task_id: taskId,
-      build_id: "build_one",
+    const manifest = JSON.parse(manifestJson({
+      taskId,
+      buildId: "build_one",
       artifacts: [{
         artifact_id: "artifact_primary",
         role: "primary_dataset",
@@ -133,10 +165,11 @@ describe("publication integrity hardening (P7)", () => {
         size_bytes: Buffer.byteLength(primary),
         sha256,
       }],
-    }), "utf8");
+    })) as { manifest_id: string };
+    await writeFile(path.join(publicationDir, "dataset_manifest.json"), JSON.stringify(manifest), "utf8");
     await writeFile(path.join(publicationDir, "publication.json"), JSON.stringify({
       publication_id: "publication_one",
-      manifest_ref: "manifest_one",
+      manifest_ref: manifest.manifest_id,
     }), "utf8");
 
     const listing = await fetch(`${baseUrl}/api/v1/tasks/${taskId}/artifacts`);
@@ -150,6 +183,112 @@ describe("publication integrity hardening (P7)", () => {
     expect(download.status).toBe(409);
     const body = await download.json() as { detail: string };
     expect(body.detail).toMatch(/integrity/i);
+
+    await runtime.close();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  test("tampering that rewrites the manifest entry without recomputing the package digest is detected", async () => {
+    const { baseUrl, runtime, server, tasksRoot } = await runtimeFixture();
+    const { task_id: taskId } = await createTask(baseUrl, "req_p7_manifest_tamper");
+
+    // Publish a valid publication, then simulate a same-account tamper:
+    // the artifact bytes AND its manifest entry (sha256/size) are both
+    // rewritten, but the manifest's own package digest / manifest_id are
+    // left stale. The reader must recompute the digest from the entries
+    // and reject the publication (ADR-026 §3).
+    const primary = "gene_id,value\nTP53,1\n";
+    const tampered = "gene_id,value\nBRCA1,1\n";
+    const sha256 = createHash("sha256").update(primary).digest("hex");
+    const publicationDir = path.join(
+      tasksRoot,
+      taskId,
+      "datasets_build",
+      "build_one",
+      "publish",
+      "version_1",
+    );
+    await mkdir(path.join(publicationDir, "merged"), { recursive: true });
+    await writeFile(path.join(publicationDir, "merged", "primary.csv"), primary, "utf8");
+    const manifest = JSON.parse(manifestJson({
+      taskId,
+      buildId: "build_one",
+      artifacts: [{
+        artifact_id: "artifact_primary",
+        role: "primary_dataset",
+        relative_path: "merged/primary.csv",
+        media_type: "text/csv",
+        size_bytes: Buffer.byteLength(primary),
+        sha256,
+      }],
+    })) as {
+      manifest_id: string;
+      sha256: string;
+      artifacts: Array<{ sha256: string; size_bytes: number }>;
+    };
+    await writeFile(path.join(publicationDir, "dataset_manifest.json"), JSON.stringify(manifest), "utf8");
+    await writeFile(path.join(publicationDir, "publication.json"), JSON.stringify({
+      publication_id: "publication_one",
+      manifest_ref: manifest.manifest_id,
+    }), "utf8");
+
+    // Tamper: swap the file content and mirror the new hash/size in the
+    // manifest entry — but keep manifest_id and sha256 stale.
+    await writeFile(path.join(publicationDir, "merged", "primary.csv"), tampered, "utf8");
+    manifest.artifacts[0].sha256 = createHash("sha256").update(tampered).digest("hex");
+    manifest.artifacts[0].size_bytes = Buffer.byteLength(tampered);
+    await writeFile(path.join(publicationDir, "dataset_manifest.json"), JSON.stringify(manifest), "utf8");
+
+    const download = await fetch(`${baseUrl}/api/v1/tasks/${taskId}/artifacts/artifact_primary`);
+    expect(download.status).toBe(409);
+    const body = await download.json() as { detail: string };
+    expect(body.detail).toMatch(/digest|integrity/i);
+
+    await runtime.close();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  test("a fully consistent rewrite is outside the same-account trust boundary (ADR-026 §3)", async () => {
+    const { baseUrl, runtime, server, tasksRoot } = await runtimeFixture();
+    const { task_id: taskId } = await createTask(baseUrl, "req_p7_forge");
+
+    // An actor with full OS-account write access (Full Access + process.exec)
+    // can recompute the whole package digest and rewrite manifest_id +
+    // publication.json consistently. ADR-026 §3 documents this boundary:
+    // the reader guarantees detection of accidental/partial tampering, not
+    // defense against deliberate same-account rewriting.
+    const forged = "gene_id,value\nMYC,1\n";
+    const sha256 = createHash("sha256").update(forged).digest("hex");
+    const publicationDir = path.join(
+      tasksRoot,
+      taskId,
+      "datasets_build",
+      "build_one",
+      "publish",
+      "version_1",
+    );
+    await mkdir(path.join(publicationDir, "merged"), { recursive: true });
+    await writeFile(path.join(publicationDir, "merged", "primary.csv"), forged, "utf8");
+    const manifest = JSON.parse(manifestJson({
+      taskId,
+      buildId: "build_one",
+      artifacts: [{
+        artifact_id: "artifact_primary",
+        role: "primary_dataset",
+        relative_path: "merged/primary.csv",
+        media_type: "text/csv",
+        size_bytes: Buffer.byteLength(forged),
+        sha256,
+      }],
+    })) as { manifest_id: string };
+    await writeFile(path.join(publicationDir, "dataset_manifest.json"), JSON.stringify(manifest), "utf8");
+    await writeFile(path.join(publicationDir, "publication.json"), JSON.stringify({
+      publication_id: "publication_one",
+      manifest_ref: manifest.manifest_id,
+    }), "utf8");
+
+    const download = await fetch(`${baseUrl}/api/v1/tasks/${taskId}/artifacts/artifact_primary`);
+    expect(download.status).toBe(200);
 
     await runtime.close();
     await new Promise<void>((resolve) => server.close(() => resolve()));

@@ -162,7 +162,7 @@ export async function migrateLegacyWorkspace(
   if (marker !== null) {
     const canonicalMarker = process.platform === "win32"
       ? marker.workspace.toLowerCase()
-      : workspaceRoot.toLowerCase();
+      : marker.workspace;
     const canonicalWorkspace = process.platform === "win32"
       ? workspaceRoot.toLowerCase()
       : workspaceRoot;

@@ -212,28 +212,31 @@ export class PermissionBroker {
   }
 
   /**
-   * Resolve a pending request with a user decision. Returns false when the
-   * request is unknown, already resolved, or expired.
+   * Resolve a pending request with a user decision. The lookup is bound to
+   * the runId (from the HTTP URL) and then verified against the requestId,
+   * so an old runId cannot be used to approve a live request of a newer run.
+   * Returns false when the request is unknown, already resolved, or expired.
    */
   async resolve(
+    runId: string,
     requestId: string,
     decision: "allow" | "deny",
     grantScope?: GrantScope,
   ): Promise<boolean> {
-    for (const entry of this.pending.values()) {
-      const pending = entry.request;
-      if (pending.id !== requestId) continue;
-      const ageMs = Date.now() - Date.parse(pending.createdAt);
-      if (ageMs > this.maxPendingMs) {
-        this.pending.delete(pending.runId);
-        entry.reject(new Error("permission request expired"));
-        return false;
-      }
-      this.pending.delete(pending.runId);
-      if (decision === "allow" && grantScope !== undefined) {
-        await this.recordGrant(pending, grantScope);
-      }
-      await this.audit.record({
+    const entry = this.pending.get(runId);
+    if (entry === undefined || entry.request.id !== requestId) return false;
+    const pending = entry.request;
+    const ageMs = Date.now() - Date.parse(pending.createdAt);
+    if (ageMs > this.maxPendingMs) {
+      this.pending.delete(runId);
+      entry.reject(new Error("permission request expired"));
+      return false;
+    }
+    this.pending.delete(runId);
+    if (decision === "allow" && grantScope !== undefined) {
+      await this.recordGrant(pending, grantScope);
+    }
+    await this.audit.record({
         permission_request_id: pending.id,
         task_id: pending.taskId,
         run_id: pending.runId,
@@ -260,8 +263,6 @@ export class PermissionBroker {
       }
       entry.resolve({ decision, grantScope });
       return true;
-    }
-    return false;
   }
 
   /** Invalidate all pending requests for a run (cancel / shutdown). */

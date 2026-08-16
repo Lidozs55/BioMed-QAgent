@@ -56,30 +56,66 @@ policy:     allow | ask | deny
 
 - Resources classify into scopes after canonicalization (realpath): workspace,
   task_output, project, external.
+- Relative ``../`` paths are **not** input errors: they resolve against the
+  workspace, canonicalize, classify, and enter the broker like any other path
+  (an escape is a scope decision, not a syntax error). NUL bytes and reserved
+  Windows aliases remain hard input errors.
+- Canonicalization of a not-yet-existing target re-appends the missing suffix
+  (nearest existing ancestor + suffix), so ``D:\datasets\new-project\result.csv``
+  canonicalizes to itself — never collapsing to ``D:\datasets`` and silently
+  expanding a later “always allow this directory” grant to ``D:\datasets\**``.
+  The write path re-verifies the final target against the granted canonical
+  path after creating parents (TOCTOU close); a mismatch fails the write.
 - Defaults (ask-when-needed preset): workspace read/write/edit allow; task
   output read allow, write/edit deny; project/external ask; `process.exec` ask.
+- Persisted path rules are canonical absolute paths: the settings API
+  canonicalizes and validates at insert time (no evaluator-side
+  ``path.resolve`` against a relative string).
 - Decision order: framework invariant (hard deny on
   `task_output/{state,logs,artifacts}/**` writes) → temporary grant (once/run/
   task) → most-specific persistent rule → preset default.
 - The agent requests permission simply by attempting the operation — there is
   no `request_permission` tool. An `ask` suspends exactly one tool call
   (`permission_requested` durable event) and resumes it after the user decides
-  via `POST /api/v1/tasks/{taskId}/runs/{runId}/permissions/{requestId}`.
+  via `POST /api/v1/tasks/{taskId}/runs/{runId}/permissions/{requestId}`. The
+  resolve is bound to the URL runId (pending entries are keyed by runId and
+  then verified against requestId), so an old runId cannot approve a live
+  request.
 - `process.exec` is an independent high-risk capability; command-string
   analysis is forbidden. Runtime controls (timeout, output limits, cancel,
   process-tree cleanup, audit) remain, and the OS-account warning is shown in
   the UI. Migration flag `AGENT_EXEC_POLICY=deny|ask|allow` temporarily
   overrides the preset.
+- Exec authorization is **revocable**: `PUT
+  .../agent-permissions/persistent-exec { enabled: false }` clears the
+  persistent approval, the settings UI exposes a switch, and the Restricted
+  preset both hard-denies exec in the evaluator and clears
+  `persistent_exec_allow` on switch — revocation is effective even against a
+  previously granted “always allow command execution”.
+- Run/Task grants are scoped to capability × ResourceScope (not a single
+  path); the permission card states this explicitly so “本 Run 允许” is not
+  mistaken for a single-path approval.
 - Persistent rules are user settings (`data/settings/agent-permissions.json`),
   never workspace data.
 
 ### 3. Publication trust moves from unreachability to verifiability (P7)
 
 - Agent file tools can never publish; the Dataset Core remains the only
-  publication path, and every read of a published artifact verifies manifest
-  hash + size (ArtifactIntegrityError on drift).
-- Therefore "Full Access" does not break business trust semantics: even if an
-  allowed command mutates an artifact file, the integrity check detects it.
+  publication path.
+- Every read of a published artifact verifies manifest hash + size per
+  artifact (ArtifactIntegrityError on drift), and the reader **recomputes the
+  whole package digest from the manifest's own artifact entries**, requiring it
+  to match both the recorded `manifest.sha256` and the `manifest_id` prefix
+  (bound to `publication.json`'s `manifest_ref`). A tamper that rewrites an
+  artifact entry without correctly recomputing the package digest is detected.
+- Honest boundary: an actor with full OS-account write access (Full Access +
+  `process.exec`) can recompute the package digest and rewrite
+  `manifest_id` + `publication.json` consistently. The reader guarantees
+  detection of accidental/partial tampering, not defense against deliberate
+  same-account rewriting — tightening that requires isolating exec OS
+  privileges (outside this ADR's scope) or explicitly accepting that Full
+  Access relaxes the guarantee; the Full Access preset copy warns about
+  OS-account inheritance.
 
 ## Consequences
 

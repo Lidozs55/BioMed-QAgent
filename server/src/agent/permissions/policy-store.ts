@@ -70,7 +70,13 @@ export class JsonPermissionPolicyStore implements PermissionPolicyStore {
 
   async setPreset(preset: PermissionPreset): Promise<PermissionSettings> {
     const settings = await this.load();
-    return this.save({ ...settings, preset });
+    // Switching to Restricted revokes a previously granted persistent exec
+    // approval (audit fix: the flag must never silently survive a stricter
+    // preset). The evaluator also hard-denies exec under Restricted, so this
+    // is an explicit-state cleanup, not the only line of defense.
+    const persistent_exec_allow =
+      preset === "restricted" ? false : settings.persistent_exec_allow;
+    return this.save({ ...settings, preset, persistent_exec_allow });
   }
 
   async setPersistentExecAllow(allowed: boolean): Promise<PermissionSettings> {
@@ -106,7 +112,12 @@ export class InMemoryPermissionPolicyStore implements PermissionPolicyStore {
   }
 
   async setPreset(preset: PermissionPreset): Promise<PermissionSettings> {
-    this.settings = { ...this.settings, preset };
+    this.settings = {
+      ...this.settings,
+      preset,
+      persistent_exec_allow:
+        preset === "restricted" ? false : this.settings.persistent_exec_allow,
+    };
     return structuredClone(this.settings);
   }
 

@@ -174,11 +174,17 @@ describe("governed Task Workspace (data/workspaces/<taskId>)", () => {
   test.each([
     "../outside.txt",
     "..\\outside.txt",
-  ])("rejects relative traversal that escapes the workspace: %s", async (candidate) => {
-    const { workspace } = await fixture();
-    await expect(workspace.read({ path: candidate })).rejects.toBeInstanceOf(
-      WorkspacePolicyError,
-    );
+  ])("relative traversal outside the workspace goes through the permission system: %s", async (candidate) => {
+    const { workspace, permissionFixture } = await fixture();
+    // ``../`` escape is no longer an input error: it resolves to an absolute
+    // path, classifies as project scope, and is gated by the broker
+    // (ask_when_needed → ask → suspend).
+    const requested = workspace.read({ path: candidate });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(permissionFixture.broker.hasPending("run-1")).toBe(true);
+    const requestId = (permissionFixture.events.at(-1) as { request_id: string }).request_id;
+    await permissionFixture.broker.resolve("run-1", requestId, "deny");
+    await expect(requested).rejects.toMatchObject({ name: "PermissionDeniedError" });
   });
 
   test.each(["NUL", "notes/CON.txt"])(
@@ -207,7 +213,7 @@ describe("governed Task Workspace (data/workspaces/<taskId>)", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(permissionFixture.broker.hasPending("run-1")).toBe(true);
     const requestId = (permissionFixture.events.at(-1) as { request_id: string }).request_id;
-    await permissionFixture.broker.resolve(requestId, "deny");
+    await permissionFixture.broker.resolve("run-1", requestId, "deny");
     await expect(requested).rejects.toMatchObject({ name: "PermissionDeniedError" });
 
     // full_access: the same path is allowed and simply does not exist.
@@ -279,7 +285,7 @@ describe("governed Task Workspace (data/workspaces/<taskId>)", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(permissionFixture.broker.hasPending("run-1")).toBe(true);
     const requestId = (permissionFixture.events.at(-1) as { request_id: string }).request_id;
-    await permissionFixture.broker.resolve(requestId, "deny");
+    await permissionFixture.broker.resolve("run-1", requestId, "deny");
     await expect(requested).rejects.toMatchObject({ name: "PermissionDeniedError" });
 
     // Listing never follows the link.
@@ -342,7 +348,7 @@ describe("governed Task Workspace (data/workspaces/<taskId>)", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(permissionFixture.broker.hasPending("run-1")).toBe(true);
     const requestId = (permissionFixture.events.at(-1) as { request_id: string }).request_id;
-    await permissionFixture.broker.resolve(requestId, "deny");
+    await permissionFixture.broker.resolve("run-1", requestId, "deny");
     const result = await resultPromise;
 
     expect(result.policy).toBe("rejected");
@@ -484,14 +490,16 @@ describe("governed Task Workspace (data/workspaces/<taskId>)", () => {
   });
 
   test("workspace hash integrity: protected file bytes are untouched by policy violations", async () => {
-    const { workspaceRoot, workspace } = await fixture();
+    const { workspaceRoot, workspace } = await fixture({ preset: "restricted" });
     const target = path.join(workspaceRoot, "notes", "keep.txt");
     await writeNested(target, "keep me");
     const before = createHash("sha256").update(await readFile(target)).digest("hex");
 
-    await expect(workspace.write({ path: "../escape", content: "x" })).rejects.toBeInstanceOf(
-      WorkspacePolicyError,
-    );
+    // ``../`` now resolves into the permission system; under the Restricted
+    // preset the project-scoped write is denied without touching bytes.
+    await expect(workspace.write({ path: "../escape", content: "x" })).rejects.toMatchObject({
+      name: "PermissionDeniedError",
+    });
     const after = createHash("sha256").update(await readFile(target)).digest("hex");
     expect(after).toBe(before);
   });

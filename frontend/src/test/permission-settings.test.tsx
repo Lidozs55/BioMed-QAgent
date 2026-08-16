@@ -36,6 +36,7 @@ function mockApi(overrides: Partial<SettingsAPIClient> = {}): SettingsAPIClient 
       persistent_exec_allow: false,
     }),
     setAgentPermissionsPreset: vi.fn(),
+    setAgentPermissionsPersistentExec: vi.fn(),
     addAgentPermissionRule: vi.fn(),
     removeAgentPermissionRule: vi.fn(),
     ...overrides,
@@ -117,7 +118,41 @@ describe("AgentPermissionSettingsSection (P6)", () => {
       }),
     })} />);
     await waitFor(() => {
-      expect(screen.getByText(/始终允许命令执行/)).toBeTruthy();
+      expect(screen.getAllByText(/始终允许命令执行/).length).toBeGreaterThan(0);
     });
+  });
+
+  it("toggles the persistent exec switch through the API", async () => {
+    const setPersistentExec = vi.fn().mockResolvedValue({
+      schema_version: 1,
+      preset: "ask_when_needed",
+      rules: [],
+      persistent_exec_allow: false,
+    });
+    render(<AgentPermissionSettingsSection api={mockApi({
+      setAgentPermissionsPersistentExec: setPersistentExec,
+    })} />);
+    await waitFor(() => {
+      expect(screen.getByRole("switch", { name: "始终允许命令执行" })).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole("switch", { name: "始终允许命令执行" }));
+    await waitFor(() => {
+      expect(setPersistentExec).toHaveBeenCalledWith(true);
+    });
+  });
+
+  it("disables the persistent exec switch under the Restricted preset", async () => {
+    render(<AgentPermissionSettingsSection api={mockApi({
+      fetchAgentPermissions: vi.fn().mockResolvedValue({
+        schema_version: 1,
+        preset: "restricted",
+        rules: [],
+        persistent_exec_allow: true,
+      }),
+    })} />);
+    await waitFor(() => {
+      expect(screen.getByRole("switch", { name: "始终允许命令执行" })).toHaveAttribute("aria-disabled", "true");
+    });
+    expect(screen.getByText(/受限模式下命令执行始终拒绝/)).toBeTruthy();
   });
 });

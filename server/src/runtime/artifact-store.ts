@@ -3,18 +3,16 @@ import { readFile, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
 import type { ArtifactRecord } from "@biomed/contracts";
+import { parseManifestArtifactEntry } from "../dataset/contracts/manifest.js";
+import {
+  packageDigest,
+  type ManifestArtifactEntry,
+} from "../dataset/publish/manifest.js";
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 
-interface ManifestArtifact {
-  artifact_id: string;
-  role: string;
-  relative_path: string;
-  media_type: string;
-  size_bytes: number;
-  sha256: string;
-}
+type ManifestArtifact = ManifestArtifactEntry;
 
 interface LoadedManifest {
   publicationDir: string;
@@ -43,25 +41,16 @@ function record(value: unknown, name: string): Record<string, unknown> {
 }
 
 function parseArtifact(value: unknown): ManifestArtifact {
-  const item = record(value, "Build manifest artifact");
-  if (
-    typeof item.artifact_id !== "string" || !SAFE_ID.test(item.artifact_id) ||
-    typeof item.role !== "string" || item.role === "" ||
-    typeof item.relative_path !== "string" || item.relative_path === "" ||
-    typeof item.media_type !== "string" || item.media_type === "" ||
-    !Number.isInteger(item.size_bytes) || Number(item.size_bytes) < 0 ||
-    typeof item.sha256 !== "string" || !SHA256.test(item.sha256)
-  ) {
+  let entry: ManifestArtifact;
+  try {
+    entry = parseManifestArtifactEntry(value);
+  } catch (caught) {
+    throw new ArtifactIntegrityError(`Build manifest artifact is invalid: ${String(caught)}`);
+  }
+  if (!SAFE_ID.test(entry.artifact_id) || !SHA256.test(entry.sha256)) {
     throw new ArtifactIntegrityError("Build manifest artifact is invalid");
   }
-  return {
-    artifact_id: item.artifact_id,
-    role: item.role,
-    relative_path: item.relative_path,
-    media_type: item.media_type,
-    size_bytes: Number(item.size_bytes),
-    sha256: item.sha256,
-  };
+  return entry;
 }
 
 async function verifiedPath(buildDir: string, relativePath: string): Promise<string> {
@@ -153,11 +142,27 @@ async function loadLatestManifest(taskRoot: string): Promise<LoadedManifest | nu
   ) {
     throw new ArtifactIntegrityError("Build manifest artifacts are invalid");
   }
+  // P7 trust anchor: the reader recomputes the package digest from the
+  // manifest's own artifact entries and requires it to match BOTH the
+  // recorded `sha256` and the `manifest_id` prefix. A tamper that rewrites
+  // an artifact entry without correctly recomputing the whole package
+  // digest is therefore detected — the manifest cannot silently "forget"
+  // that its contents changed (ADR-026 §3).
+  const artifacts = manifest.artifacts.map(parseArtifact);
+  const digest = packageDigest(artifacts);
+  if (
+    typeof manifest.sha256 !== "string" ||
+    !SHA256.test(manifest.sha256) ||
+    manifest.sha256 !== digest ||
+    manifest.manifest_id !== `manifest_${digest.slice(0, 16)}`
+  ) {
+    throw new ArtifactIntegrityError("Build manifest package digest is invalid");
+  }
   return {
     publicationDir: newest.publicationDir,
     manifestPath: newest.manifestPath,
     manifestBytes,
-    artifacts: manifest.artifacts.map(parseArtifact),
+    artifacts,
   };
 }
 

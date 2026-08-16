@@ -104,6 +104,7 @@ export interface SettingsAPIClient {
   deleteDatabase: (name: string) => Promise<void>;
   fetchAgentPermissions: () => Promise<AgentPermissionSettings>;
   setAgentPermissionsPreset: (preset: AgentPermissionPreset) => Promise<AgentPermissionSettings>;
+  setAgentPermissionsPersistentExec: (enabled: boolean) => Promise<AgentPermissionSettings>;
   addAgentPermissionRule: (rule: AgentPermissionRuleInput) => Promise<AgentPermissionSettings>;
   removeAgentPermissionRule: (ruleId: string) => Promise<AgentPermissionSettings>;
 }

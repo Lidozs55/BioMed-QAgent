@@ -152,6 +152,14 @@ export function PermissionDialog({ task, onResolvePermission }: PermissionDialog
           </Alert>
         )}
 
+        {!isExec && pending !== null && (
+          <p className="text-xs text-muted-foreground">
+            提示：“本 Run / 本 Task 允许”作用于整个资源范围（“{SCOPE_LABELS[pending.scope]}”的
+            “{CAPABILITY_LABELS[pending.capability]}”），会同时覆盖该范围内其他路径，而非仅当前路径。
+            持久授权只针对当前这条具体路径。
+          </p>
+        )}
+
         <DialogFooter className="flex-wrap gap-2">
           <Button
             variant="outline"

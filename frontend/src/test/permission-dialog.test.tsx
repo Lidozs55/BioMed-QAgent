@@ -57,6 +57,7 @@ describe("PermissionDialog", () => {
     expect(screen.getAllByText(/读取文件/).length).toBeGreaterThan(0);
     expect(screen.getByText("D:\\datasets\\TCGA\\clinical.csv")).toBeTruthy();
     expect(screen.getByText("外部目录")).toBeTruthy();
+    expect(screen.getByText(/本 Run \/ 本 Task 允许/)).toBeTruthy();
   });
 
   it("submits deny / allow-once / run / task / persistent decisions", async () => {
