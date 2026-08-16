@@ -340,7 +340,7 @@ export function buildOperationTool(
       required: parameters,
       additionalProperties: false,
     },
-    execute: async (argumentsValue, signal) => {
+    execute: async (argumentsValue, signal, context) => {
       try {
         const argumentsRecord = argumentsValue as Record<string, unknown> | null;
         if (typeof argumentsRecord !== "object" || argumentsRecord === null || Array.isArray(argumentsRecord)) {
@@ -354,7 +354,7 @@ export function buildOperationTool(
               `Operation '${operation.name}' requires HIL approval before credentials can be used.`,
             );
           }
-          const decision = await gate.request(operation.name, signal);
+          const decision = await gate.request(operation.name, signal, context?.toolCallId);
           if (decision !== "approve") {
             throw new DatabaseValidationError(
               `Operation '${operation.name}': credential use was rejected by the user.`,

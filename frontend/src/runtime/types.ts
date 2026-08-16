@@ -155,6 +155,7 @@ export interface PendingUserInput {
   expiresAt: string | null;
   fixtureExempt: boolean;
   detail: Record<string, unknown>;
+  hilRequest?: import("@biomed/contracts").HILRequest | null;
   sequence: number;
   timestamp: string;
 }

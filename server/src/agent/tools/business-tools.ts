@@ -42,6 +42,7 @@ import { createPdfTools } from "./pdf.js";
 import { createChartDataVlmTool } from "./extract-chart-data-vlm.js";
 import type { VlmConfig } from "../../processing/vlm/vlm-client.js";
 import type { QueryStatus, ToolApprovalGate, ToolHooks, ToolServiceDeps } from "./tool-hooks.js";
+import type { DatasetHILGate } from "../../dataset/review/hil-policy.js";
 
 export interface BusinessToolBundleContext {
   /** Absolute task root (TaskWorkDir root). */
@@ -54,6 +55,8 @@ export interface BusinessToolBundleContext {
   db?: DatabaseClient | null;
   /** Durable credential approval gate (declarative credentialed ops). */
   approvalGate?: ToolApprovalGate | null;
+  /** Durable semantic/data review primitive used by Dataset and VLM policy. */
+  hilGate?: DatasetHILGate | null;
   /** Server-side secrets (BIOMED_SKILL_SECRET_*), never sent to the model. */
   secrets?: Readonly<Record<string, string>>;
   /** Browser capability services; when absent, browser-dependent tools are
@@ -179,6 +182,8 @@ export async function createBusinessToolBundle(
     ...shared,
     vlmConfig: context.vlmConfig,
     onWarning: context.onWarning,
+    hilGate: context.hilGate,
+    approvalGate: context.approvalGate,
   }), "extract_chart_data_vlm");
 
   // Analysis tools (P5-09): Welch/BH/correlation/clustering with scipy

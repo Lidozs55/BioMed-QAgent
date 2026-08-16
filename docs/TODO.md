@@ -254,6 +254,20 @@ build 锁、cancel 收敛与 event sink；`DATASET_CORE=ts` 现为默认运行�
 
 ## 独立维护项（与迁移主线并行）
 
+### Durable HIL / Confidence 协议（✅ 完成，2026-08-16）
+
+- [x] `HILRequest` / immutable `HumanReviewRecord` / evidence digest 契约与 Task-local
+      durable store；重启修复 request/event commit window，resume 串行幂等并从
+      checkpoint 重建执行。
+- [x] Confidence 五维 enum、weakest-link evaluator、batch default + sparse override；
+      最终 primary source-of-record 行数闭合，人工审核状态与 Validation 状态正交。
+- [x] 字段映射、VLM 低可信点、未知单位换算的批量 HIL policy；已注册单位规则自动执行，
+      mapping/unit correction 保留 original→corrected TransformRecord provenance。
+- [x] Validation Profile confidence gate：未解决 blocking review 与 low-confidence
+      primary 进入发布政策检查，confidence artifact 缺失时 fail-closed。
+- [x] shadcn 批量审核 UI、可信度分布/reasons/review states 与 evidence/provenance 下钻。
+
+
 - [ ] **P1** model-registry 响应未做 wire-boundary 校验：`frontend/src/api/modelRegistry.ts`
       仍用窄化 cast（`b as ProviderInfo[]` 等）。下一步为 `packages/contracts`
       runtime 增加 `parseProvidersEnvelope` / `parseManagedModelsEnvelope` 等解析器，

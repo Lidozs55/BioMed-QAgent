@@ -252,6 +252,16 @@ durable `assistant_delta` 无 `stream_id`（Pi adapter 路径）时，`stream.ts
 来源覆盖、Validation 状态、confidence 分布、provenance 覆盖率，以及
 `PARTIAL_SUCCESS` / `NO_DATA` 的原因。
 
+正式 HIL 由 shadcn `Dialog` 中的批量审核卡片承载：一个 blocking 请求可展示多个
+review item，数据审核提供接受/结构化修正/拒绝/跳过，凭据授权严格只提供授权/拒绝。
+提交必须回传原 `request_id + evidence_digest`。结果页展示 high/medium/low 分布、
+human review states、主要 reasons，并提供 `confidence_records.json` 与 provenance
+artifact 的下钻入口；人工接受不能在 UI 上显示为置信度升级。
+V1 的 action 作用于整个审核批次，逐项修正通过 mapping/point keyed JSON 表达；按钮
+明确标注“整个审核批次”，切换 `request_id` 会重置 action 与 correction 草稿。前端
+wire parser 同时校验 nested request/task/run identity 与外层 event envelope 一致。
+统计 anomaly 在结果页标为“统计异常”，不得称为证据置信度异常。
+
 启动时并发加载数据库、后端历史分页和 WebSocket，但保持 `activeTaskId=null`，
 展示独立的新研究草稿；后续历史通过 cursor 加载并按不可变
 `(created_at DESC, task_id DESC)` 排序去重。

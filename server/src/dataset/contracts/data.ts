@@ -176,25 +176,61 @@ export function parseProvenanceRecord(value: unknown): ProvenanceRecord {
 
 export interface ConfidenceComponents {
   schema_version?: SchemaVersion;
-  source_reliability: ConfidenceLevel | null;
-  extraction_reliability: ConfidenceLevel | null;
-  mapping_reliability: ConfidenceLevel | null;
-  validation_status: string;
-  cross_source_consistency: string;
+  source_reliability: ConfidenceReliability;
+  extraction_reliability: ConfidenceReliability;
+  mapping_reliability: ConfidenceReliability;
+  cross_source_consistency: CrossSourceConsistency;
+  human_review_state: HumanReviewState;
 }
+
+export type ConfidenceReliability = ConfidenceLevel | "not_applicable";
+export type CrossSourceConsistency =
+  | "consistent"
+  | "partially_consistent"
+  | "conflicting"
+  | "not_checked";
+export type HumanReviewState =
+  | "not_required"
+  | "pending"
+  | "accepted"
+  | "corrected"
+  | "rejected";
 
 const CONFIDENCE_COMPONENTS_KEYS = [
   "schema_version",
   "source_reliability",
   "extraction_reliability",
   "mapping_reliability",
-  "validation_status",
   "cross_source_consistency",
+  "human_review_state",
 ] as const;
 
-function optionalConfidenceLevel(value: unknown, name: string): ConfidenceLevel | null {
-  if (value === undefined || value === null) return null;
+function confidenceReliability(value: unknown, name: string): ConfidenceReliability {
+  if (value === undefined || value === "not_applicable") return "not_applicable";
   return assertConfidenceLevel(value, name);
+}
+
+function crossSourceConsistency(value: unknown): CrossSourceConsistency {
+  if (value === undefined) return "not_checked";
+  if (
+    value === "consistent" ||
+    value === "partially_consistent" ||
+    value === "conflicting" ||
+    value === "not_checked"
+  ) return value;
+  throw new TypeError("ConfidenceComponents.cross_source_consistency is invalid");
+}
+
+function humanReviewState(value: unknown): HumanReviewState {
+  if (value === undefined) return "not_required";
+  if (
+    value === "not_required" ||
+    value === "pending" ||
+    value === "accepted" ||
+    value === "corrected" ||
+    value === "rejected"
+  ) return value;
+  throw new TypeError("ConfidenceComponents.human_review_state is invalid");
 }
 
 export function parseConfidenceComponents(value: unknown): ConfidenceComponents {
@@ -202,50 +238,43 @@ export function parseConfidenceComponents(value: unknown): ConfidenceComponents 
   assertExactKeys(record, CONFIDENCE_COMPONENTS_KEYS, "ConfidenceComponents");
   return {
     schema_version: parseSchemaVersion(record),
-    source_reliability: optionalConfidenceLevel(
+    source_reliability: confidenceReliability(
       record.source_reliability,
       "ConfidenceComponents.source_reliability",
     ),
-    extraction_reliability: optionalConfidenceLevel(
+    extraction_reliability: confidenceReliability(
       record.extraction_reliability,
       "ConfidenceComponents.extraction_reliability",
     ),
-    mapping_reliability: optionalConfidenceLevel(
+    mapping_reliability: confidenceReliability(
       record.mapping_reliability,
       "ConfidenceComponents.mapping_reliability",
     ),
-    validation_status: record.validation_status === undefined
-      ? "not_checked"
-      : assertString(record.validation_status, "ConfidenceComponents.validation_status"),
-    cross_source_consistency: record.cross_source_consistency === undefined
-      ? "not_checked"
-      : assertString(
-          record.cross_source_consistency,
-          "ConfidenceComponents.cross_source_consistency",
-        ),
+    cross_source_consistency: crossSourceConsistency(record.cross_source_consistency),
+    human_review_state: humanReviewState(record.human_review_state),
   };
 }
 
 export interface ConfidenceRecord {
   schema_version?: SchemaVersion;
   confidence_id: string;
+  batch_id: string;
   record_id: string;
   level: ConfidenceLevel;
   channel: string;
   components: ConfidenceComponents;
   reasons: string[];
-  requires_human_review: boolean;
 }
 
 const CONFIDENCE_RECORD_KEYS = [
   "schema_version",
   "confidence_id",
+  "batch_id",
   "record_id",
   "level",
   "channel",
   "components",
   "reasons",
-  "requires_human_review",
 ] as const;
 
 export function parseConfidenceRecord(value: unknown): ConfidenceRecord {
@@ -257,6 +286,7 @@ export function parseConfidenceRecord(value: unknown): ConfidenceRecord {
       record.confidence_id,
       "ConfidenceRecord.confidence_id",
     ),
+    batch_id: assertNonEmptyString(record.batch_id, "ConfidenceRecord.batch_id"),
     record_id: assertNonEmptyString(record.record_id, "ConfidenceRecord.record_id"),
     level: assertConfidenceLevel(record.level, "ConfidenceRecord.level"),
     channel: assertNonEmptyString(record.channel, "ConfidenceRecord.channel"),
@@ -266,9 +296,42 @@ export function parseConfidenceRecord(value: unknown): ConfidenceRecord {
     reasons: record.reasons === undefined
       ? []
       : assertStringArray(record.reasons, "ConfidenceRecord.reasons"),
-    requires_human_review: record.requires_human_review === undefined
-      ? false
-      : assertBoolean(record.requires_human_review, "ConfidenceRecord.requires_human_review"),
+  };
+}
+
+export interface BatchConfidence {
+  schema_version?: SchemaVersion;
+  batch_id: string;
+  record_count: number;
+  level: ConfidenceLevel;
+  channel: string;
+  components: ConfidenceComponents;
+  reasons: string[];
+}
+
+const BATCH_CONFIDENCE_KEYS = [
+  "schema_version",
+  "batch_id",
+  "record_count",
+  "level",
+  "channel",
+  "components",
+  "reasons",
+] as const;
+
+export function parseBatchConfidence(value: unknown): BatchConfidence {
+  const record = assertRecord(value, "BatchConfidence");
+  assertExactKeys(record, BATCH_CONFIDENCE_KEYS, "BatchConfidence");
+  return {
+    schema_version: parseSchemaVersion(record),
+    batch_id: assertNonEmptyString(record.batch_id, "BatchConfidence.batch_id"),
+    record_count: assertNonNegativeInt(record.record_count, "BatchConfidence.record_count"),
+    level: assertConfidenceLevel(record.level, "BatchConfidence.level"),
+    channel: assertNonEmptyString(record.channel, "BatchConfidence.channel"),
+    components: parseConfidenceComponents(record.components),
+    reasons: record.reasons === undefined
+      ? []
+      : assertStringArray(record.reasons, "BatchConfidence.reasons"),
   };
 }
 

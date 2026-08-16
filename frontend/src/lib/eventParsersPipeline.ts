@@ -1,5 +1,9 @@
 import { APIError } from "@/api/errors";
-import { parseBuildResult } from "@biomed/contracts";
+import {
+  parseBuildResult,
+  parseHILDecision,
+  parseHILRequest,
+} from "@biomed/contracts";
 import type {
   EventPayload,
   JsonValue,
@@ -7,9 +11,22 @@ import type {
 import { assertString, assertNumber, assertBoolean, assertObject, assertFinite, assertOptionalNull, assertHex64, assertPositiveInt, assertNonNegativeInt, assertOptionalNonNegativeInt, assertJsonRecord } from "@biomed/contracts";
 
 const STAGE_NAMES = ["discovery", "acquisition", "processing", "artifact_build", "validation"] as const;
-const PROMPT_KINDS = ["plan_confirmation", "data_correction", "max_turns_reached", "no_progress"] as const;
-const USER_DECISIONS = ["approve", "reject"] as const;
+const PROMPT_KINDS = ["plan_confirmation", "data_correction", "max_turns_reached", "no_progress", "api_key_or_credential"] as const;
 const SEVERITIES = ["info", "warning", "error"] as const;
+
+export function formalHILLinkageMatches(
+  payload: EventPayload,
+  taskId: string,
+  runId: string | null,
+): boolean {
+  return (
+    payload.type !== "user_input_required" ||
+    payload.hil_request == null ||
+    (payload.hil_request.request_id === payload.request_id &&
+      payload.hil_request.task_id === taskId &&
+      payload.hil_request.run_id === runId)
+  );
+}
 
 function assertNonEmpty(v: unknown, path: string): string {
   const s = assertString(v, path);
@@ -38,7 +55,8 @@ export function parsePipelineEventPayload(payloadObj: Record<string, unknown>, p
       return { type: "task_created", topic: assertNonEmpty(Reflect.get(payloadObj, "topic"), path + ".topic") };
     case "plan_ready":
       return { type: "plan_ready", specification: assertJsonRecord(Reflect.get(payloadObj, "specification"), path + ".specification") };
-    case "user_input_required":
+    case "user_input_required": {
+      const rawRequest = Reflect.get(payloadObj, "hil_request");
       return {
         type: "user_input_required",
         request_id: assertString(Reflect.get(payloadObj, "request_id"), path + ".request_id"),
@@ -47,12 +65,21 @@ export function parsePipelineEventPayload(payloadObj: Record<string, unknown>, p
         expires_at: assertOptionalNull(Reflect.get(payloadObj, "expires_at"), path + ".expires_at", assertString),
         fixture_exempt: assertBoolean(Reflect.get(payloadObj, "fixture_exempt"), path + ".fixture_exempt"),
         detail: assertJsonRecord(Reflect.get(payloadObj, "detail"), path + ".detail"),
+        hil_request:
+          rawRequest === undefined || rawRequest === null
+            ? null
+            : parseHILRequest(rawRequest, path + ".hil_request"),
       };
+    }
     case "user_input_resumed":
       return {
         type: "user_input_resumed",
         request_id: assertString(Reflect.get(payloadObj, "request_id"), path + ".request_id"),
-        decision: assertFinite(Reflect.get(payloadObj, "decision"), path + ".decision", USER_DECISIONS),
+        decision: parseHILDecision(
+          Reflect.get(payloadObj, "decision"),
+          { allowLegacyPermission: true },
+          path + ".decision",
+        ),
         detail: assertJsonRecord(Reflect.get(payloadObj, "detail"), path + ".detail"),
       };
     case "stage_started":

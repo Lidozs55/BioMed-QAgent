@@ -128,6 +128,17 @@ Publication 指针，不是 Artifact 固有状态。
 Agent 不直接拼装最终 CSV，不绕过 Compatibility Gate，不绕过 Validation Gate，
 不绕过原子发布。Agent-only Skill 的产物不能直接作为正式主数据。
 
+### 6.4 HIL policy boundary
+
+Agent 可以提出审核候选，但只有 Runtime/Profile policy 可以暂停 Run。有已注册的
+确定性 parser、curated mapping 或 UnitConversionRule 时自动执行并留审计；没有
+确定性规则时不得让模型继续猜测，而是按字段映射、VLM 低可信 primary value 或
+未知单位换算生成批量 blocking HIL。低可信 supporting data 可由 Profile 降为
+warning。用户 correction 必须进入转换与 provenance 链，不能直接覆盖源证据。
+已注册单位规则只接受可审计的安全线性公式，不执行任意表达式；公式无效属于 Profile
+配置错误并 fail-closed。DashScope VLM 的模型凭据在每次外部调用前仍需 Runtime
+permission HIL，数据点审核不能替代凭据授权。
+
 > 决策依据：ADR-007。
 
 ---

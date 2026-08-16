@@ -1,4 +1,9 @@
-import type { JsonValue, TaskMode, UserInputDecision } from "@biomed/contracts";
+import type {
+  HILDecision,
+  JsonValue,
+  TaskMode,
+  UserInputDecision,
+} from "@biomed/contracts";
 
 export type * from "@biomed/contracts";
 
@@ -14,8 +19,10 @@ export interface ContinueTaskInput {
 
 export interface ResumeRunInput {
   request_id: string;
-  decision: UserInputDecision;
-  detail: Record<string, JsonValue>;
+  evidence_digest?: string;
+  decision: HILDecision | UserInputDecision;
+  reason?: string | null;
+  detail?: Record<string, JsonValue>;
 }
 
 /**

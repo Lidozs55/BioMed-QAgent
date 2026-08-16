@@ -43,6 +43,7 @@ export function applyUserInputEvent(
         expiresAt: payload.expires_at,
         fixtureExempt: payload.fixture_exempt,
         detail: payload.detail,
+        hilRequest: payload.hil_request ?? null,
         sequence: envelope.sequence,
         timestamp: envelope.timestamp,
       },

@@ -2,6 +2,7 @@
   "row_count": 48,
   "statistics": {
     "source_database": "geo",
+    "extraction_channel": "deterministic_parser",
     "dataset_type": "gene_expression",
     "format": "tximport_counts",
     "sample_count": 12,

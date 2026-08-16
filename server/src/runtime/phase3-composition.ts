@@ -206,6 +206,7 @@ export async function createPhase3Runtime(
         taskId,
         taskRoot: root,
         operationTimeoutMs: options.operationTimeoutMs ?? 120_000,
+        hilGate: approvalGate,
         eventSink: async (event, buildId) => {
           await recordRunEvent(coreEventToPayload(event, buildId));
         },
@@ -244,6 +245,7 @@ export async function createPhase3Runtime(
         taskRoot: root,
         db: dbClient,
         approvalGate,
+        hilGate: approvalGate,
         browser,
         hooks: toolHooks,
         runId: () => currentRunId,

@@ -1,6 +1,7 @@
 import type { ArtifactManifestEntry } from "./artifacts.js";
 import type { BuildResult } from "./dataset-build.js";
 import type { JsonValue } from "./json.js";
+import type { HILDecision, HILRequest } from "./hil.js";
 import type {
   StageName,
   SubagentPromptKind,
@@ -78,11 +79,12 @@ export type EventPayload =
       expires_at: string | null;
       fixture_exempt: boolean;
       detail: Record<string, JsonValue>;
+      hil_request?: HILRequest | null;
     }
   | {
       type: "user_input_resumed";
       request_id: string;
-      decision: UserInputDecision;
+      decision: HILDecision | UserInputDecision;
       detail: Record<string, JsonValue>;
     }
   | { type: "stage_started"; stage: StageName; attempt: number }

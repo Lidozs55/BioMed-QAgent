@@ -24,6 +24,7 @@ function taskWithPrompt(
     summary?: string;
     expiresAt?: string | null;
     fixtureExempt?: boolean;
+    hilRequest?: PendingUserInput["hilRequest"];
   } = {},
 ): TaskProjection {
   const summary: TaskSummary = {
@@ -63,13 +64,187 @@ function taskWithPrompt(
       expiresAt: overrides.expiresAt ?? null,
       fixtureExempt: overrides.fixtureExempt ?? false,
       detail: overrides.detail ?? {},
+      hilRequest: overrides.hilRequest ?? null,
       sequence: 1,
       timestamp: CREATED_AT,
     },
   };
 }
 
+function formalMappingTask(requestId: string): TaskProjection {
+  const taskId = `task_${requestId}`;
+  const runId = `run_${requestId}`;
+  return taskWithPrompt(taskId, runId, runId, requestId, {
+    promptKind: "data_correction",
+    summary: `Review ${requestId}`,
+    hilRequest: {
+      schema_version: "1.0",
+      request_id: requestId,
+      task_id: taskId,
+      run_id: runId,
+      build_id: "build_1",
+      kind: "semantic_review",
+      review_type: "field_mapping",
+      status: "pending",
+      blocking: true,
+      subject: { mapping_ids: [`map_${requestId}`] },
+      review_items: [{
+        item_id: `map_${requestId}`,
+        summary: `Mapping ${requestId}`,
+        subject: { mapping_ids: [`map_${requestId}`] },
+        evidence: { source_field: requestId },
+        proposed_value: "gene_id",
+        confidence_level: "low",
+      }],
+      summary: `Review ${requestId}`,
+      evidence_digest: "c".repeat(64),
+      policy_ref: "dataset.field_mapping.v1",
+      created_at: CREATED_AT,
+      resolved_at: null,
+    },
+  });
+}
+
 describe("UserInputDialog", () => {
+  it("renders a durable batch review and submits an evidence-bound decision", async () => {
+    const onResumeRun = vi.fn().mockResolvedValue(undefined);
+    const task = taskWithPrompt(
+      "task_batch_review",
+      "run_batch_review",
+      "run_batch_review",
+      "hil_batch_1",
+      {
+        promptKind: "data_correction",
+        summary: "2 个字段映射需要审核",
+        hilRequest: {
+          schema_version: "1.0",
+          request_id: "hil_batch_1",
+          task_id: "task_batch_review",
+          run_id: "run_batch_review",
+          build_id: "build_1",
+          kind: "semantic_review",
+          review_type: "field_mapping",
+          status: "pending",
+          blocking: true,
+          subject: { mapping_ids: ["map_gene", "map_unit"] },
+          review_items: [
+            {
+              item_id: "map_gene",
+              summary: "Gene Symbol → gene_id",
+              subject: { mapping_ids: ["map_gene"] },
+              evidence: { source_field: "Gene Symbol" },
+              proposed_value: "gene_id",
+              confidence_level: "low",
+            },
+            {
+              item_id: "map_unit",
+              summary: "Unit → expression_unit",
+              subject: { mapping_ids: ["map_unit"] },
+              evidence: { source_field: "Unit" },
+              proposed_value: "expression_unit",
+              confidence_level: "medium",
+            },
+          ],
+          summary: "2 个字段映射需要审核",
+          evidence_digest: "a".repeat(64),
+          policy_ref: "dataset.field_mapping.v1",
+          created_at: CREATED_AT,
+          resolved_at: null,
+        },
+      },
+    );
+    render(<UserInputDialog task={task} onResumeRun={onResumeRun} />);
+
+    expect(screen.getByText("需要人工审核")).toBeVisible();
+    expect(screen.getByText("Gene Symbol → gene_id")).toBeVisible();
+    expect(screen.getByText("Unit → expression_unit")).toBeVisible();
+    expect(screen.getByText(/evidence aaaaaaaaaaaa/)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "接受整个审核批次" }));
+
+    await waitFor(() => expect(onResumeRun).toHaveBeenCalledWith(
+      "task_batch_review",
+      "run_batch_review",
+      {
+        request_id: "hil_batch_1",
+        evidence_digest: "a".repeat(64),
+        decision: { action: "accept" },
+        reason: null,
+      },
+    ));
+  });
+
+  it("limits durable permission requests to approve or reject", async () => {
+    const onResumeRun = vi.fn().mockResolvedValue(undefined);
+    const task = taskWithPrompt(
+      "task_permission",
+      "run_permission",
+      "run_permission",
+      "hil_permission_1",
+      {
+        promptKind: "api_key_or_credential",
+        summary: "允许本次调用使用 GDC API Key",
+        hilRequest: {
+          schema_version: "1.0",
+          request_id: "hil_permission_1",
+          task_id: "task_permission",
+          run_id: "run_permission",
+          build_id: null,
+          kind: "permission",
+          review_type: null,
+          status: "pending",
+          blocking: true,
+          subject: { binding_id: "gdc" },
+          review_items: [],
+          summary: "允许本次调用使用 GDC API Key",
+          evidence_digest: "b".repeat(64),
+          policy_ref: "runtime.credentials.v1",
+          created_at: CREATED_AT,
+          resolved_at: null,
+        },
+      },
+    );
+    render(<UserInputDialog task={task} onResumeRun={onResumeRun} />);
+
+    expect(screen.getByText("需要凭据授权")).toBeVisible();
+    expect(screen.getByRole("button", { name: "授权本次调用" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "修正整个审核批次" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "跳过整个审核批次" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "授权本次调用" }));
+
+    await waitFor(() => expect(onResumeRun).toHaveBeenCalledWith(
+      "task_permission",
+      "run_permission",
+      {
+        request_id: "hil_permission_1",
+        evidence_digest: "b".repeat(64),
+        decision: { action: "approve" },
+        reason: null,
+      },
+    ));
+  });
+
+  it("resets batch action and correction JSON when the formal request changes", async () => {
+    const onResumeRun = vi.fn().mockResolvedValue(undefined);
+    const { rerender } = render(
+      <UserInputDialog task={formalMappingTask("hil_a")} onResumeRun={onResumeRun} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "修正" }));
+    fireEvent.change(screen.getByLabelText("结构化修正（JSON）"), {
+      target: { value: '{"mappings":{"map_hil_a":{"target_field":"gene_symbol"}}}' },
+    });
+    expect(screen.getByDisplayValue(/map_hil_a/)).toBeInTheDocument();
+
+    await act(async () => {
+      rerender(
+        <UserInputDialog task={formalMappingTask("hil_b")} onResumeRun={onResumeRun} />,
+      );
+    });
+
+    expect(screen.getByText("Mapping hil_b")).toBeInTheDocument();
+    expect(screen.queryByLabelText("结构化修正（JSON）")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "接受整个审核批次" })).toBeEnabled();
+  });
+
   it("closes the dialog when the owning run is cancel-requested (F3 reducer path)", () => {
     let state = mergeTaskPage(
       createInitialRuntimeState(),
