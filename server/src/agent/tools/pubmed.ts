@@ -38,7 +38,7 @@ import {
   makeSourceId,
 } from "../../external/publication/publication-fallback.js";
 import type { BioMedAgentTool } from "../contracts.js";
-import { noopHooks, type ToolHooks } from "./tool-hooks.js";
+import { noopHooks, createDownloadProgressReporter, type ToolHooks } from "./tool-hooks.js";
 
 export const SEARCH_PUBMED_TOOL_NAME = "search_pubmed";
 export const DOWNLOAD_SUPPLEMENTARY_TOOL_NAME = "download_supplementary";
@@ -169,15 +169,11 @@ export async function downloadSupplementaryAdapter(
   const filename = `pubmed_${pmid}.pdf`;
 
   // Throttle to whole-megabyte steps (Python _report_progress parity).
-  const progress = (bytesReceived: number, total: number | null): void => {
-    if (bytesReceived % (1024 * 1024) < 64 * 1024 || (total !== null && bytesReceived >= total)) {
-      deps.hooks?.onProgress?.("acquisition", "downloaded_bytes", {
-        current: bytesReceived,
-        total,
-        detail: { source: "pubmed", accession: pmid, filename },
-      });
-    }
-  };
+  const progress = createDownloadProgressReporter(
+    deps.hooks,
+    { source: "pubmed", accession: pmid, filename },
+    { bytesStep: 1024 * 1024 },
+  );
 
   try {
     const outcome = await acquirePublicationWithFallback({

@@ -47,3 +47,52 @@ export function noopHooks(hooks?: ToolHooks): Required<ToolHooks> {
     onProgress: hooks?.onProgress ?? (() => undefined),
   };
 }
+
+/** Shared download-progress payload metadata across acquisition tools. */
+export interface DownloadProgressMeta {
+  /** Data-source key (e.g. ``xena`` / ``gdc`` / ``pubmed``). */
+  source: string;
+  /** Dataset/file accession echoed into the progress payload. */
+  accession: string;
+  filename: string;
+  records?: number;
+}
+
+export interface DownloadProgressOptions {
+  /** Minimum interval between emissions in ms (default 1000). */
+  intervalMs?: number;
+  /** Emit when this many new bytes arrive (default 8 MiB). */
+  bytesStep?: number;
+}
+
+/**
+ * Throttled byte-level download-progress reporter (P5-D3 parity with the
+ * Python ``_report_progress``): bridges ``acquireSource`` byte callbacks into
+ * ``operation_progress`` (``downloaded_bytes``) events. Every acquisition tool
+ * shares this one implementation so the payload shape stays consistent for the
+ * frontend reducer, which binds progress to the owning tool call via
+ * ``detail.accession``.
+ */
+export function createDownloadProgressReporter(
+  hooks: ToolHooks | undefined,
+  meta: DownloadProgressMeta,
+  options: DownloadProgressOptions = {},
+): (bytesReceived: number, declared: number | null) => void {
+  const intervalMs = options.intervalMs ?? 1000;
+  const bytesStep = options.bytesStep ?? 8 * 1024 * 1024;
+  let lastAt = 0;
+  let lastBytes = 0;
+  return (bytesReceived: number, declared: number | null): void => {
+    const now = Date.now();
+    if (now - lastAt < intervalMs && bytesReceived - lastBytes < bytesStep) {
+      return;
+    }
+    lastAt = now;
+    lastBytes = bytesReceived;
+    noopHooks(hooks).onProgress("acquisition", "downloaded_bytes", {
+      current: bytesReceived,
+      total: declared,
+      ...meta,
+    });
+  };
+}

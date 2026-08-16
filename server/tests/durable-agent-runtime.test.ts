@@ -18,7 +18,10 @@ import type {
   BioMedSessionConfig,
 } from "../src/agent/contracts.js";
 import type { EventPayload } from "@biomed/contracts";
-import { createDurableAgentRuntime } from "../src/runtime/durable-agent-runtime.js";
+import {
+  createDurableAgentRuntime,
+  type DurableAgentRuntimeOptions,
+} from "../src/runtime/durable-agent-runtime.js";
 
 const servers: Server[] = [];
 const roots: string[] = [];
@@ -709,9 +712,7 @@ describe("durable formal Agent runtime", () => {
     roots.push(root);
     const factoryCalls: string[] = [];
     const executed: unknown[] = [];
-    const workspaceFactory: ConstructorParameters<
-      typeof createDurableAgentRuntime
-    >[0]["workspaceFactory"] = async ({ taskId, runId }) => {
+    const workspaceFactory: DurableAgentRuntimeOptions["workspaceFactory"] = async ({ taskId, runId }) => {
       factoryCalls.push(`${taskId}:${runId}`);
       return {
         root: path.join(root, taskId),
