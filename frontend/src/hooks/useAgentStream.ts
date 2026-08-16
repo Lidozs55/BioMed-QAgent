@@ -22,8 +22,24 @@ export function useAgentStream(
           useAgentStore.getState().deactivateAssistantStreams(taskId),
         setConnectionStatus: (status) =>
           useAgentStore.getState().setConnectionStatus(status),
-        shouldSubscribe: (taskId) =>
-          useAgentStore.getState().activeItems.includes(taskId),
+        shouldSubscribe: (taskId) => {
+          const state = useAgentStore.getState();
+          if (state.activeItems.includes(taskId)) return true;
+          // A task-level download resume (no AI run) leaves the task's
+          // summary terminal, so the task drops out of activeItems — but the
+          // resume replays tool_started/progress/completed onto the original
+          // tool call and must keep the WS subscription alive until that
+          // tool call finishes. Without this, reconcileSubscription drops
+          // the subscription on the first replayed event and the resumed
+          // download freezes on the frontend. The bubble flips to
+          // completed/failed when the resume ends, which makes this check
+          // return false again and lets the subscription be cleaned up.
+          const task = state.tasksById[taskId];
+          if (task === undefined) return false;
+          return task.items.some(
+            (item) => item.kind === "tool_call" && item.status === "running",
+          );
+        },
         onPermanentGap,
         onControlError: (frame) => {
           // Recovery-path errors (task_not_found during resubscribe) are
