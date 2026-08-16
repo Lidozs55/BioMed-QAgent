@@ -72,6 +72,10 @@ const EVENT_TYPES = new Set([
   "subagent_interrupted",
   "subagent_input_required",
   "subagent_input_resumed",
+  // Permission control plane (plan §30): events are run-scoped and drive
+  // the PermissionDialog; dropping them silently hangs the tool call.
+  "permission_requested",
+  "permission_resolved",
 ]);
 
 export interface WebSocketLike {
@@ -173,8 +177,8 @@ function isEventEnvelope(value: unknown): value is EventEnvelope {
   if (!payloadShapeMatches(value.type, value.payload)) return false;
   const runtimeScoped =
     value.type.startsWith("run_") ||
+    value.type.startsWith("permission_") ||
     value.type === "assistant_delta" ||
-    value.type === "assistant_reasoning_delta" ||
     value.type === "assistant_reasoning_delta" ||
     value.type === "tool_started" ||
     value.type === "conversation_compacted" ||
@@ -246,6 +250,10 @@ function isOptionalStringOrNull(value: unknown): boolean {
     value === null ||
     (typeof value === "string" && value.trim().length > 0)
   );
+}
+
+function isNullableString(value: unknown): boolean {
+  return value === null || typeof value === "string";
 }
 
 function normalizeEventEnvelope(value: unknown): EventEnvelope | null {
@@ -384,6 +392,23 @@ function payloadShapeMatches(
       return (
         typeof payload.covered_through_run_id === "string" &&
         typeof payload.summary_digest === "string"
+      );
+    case "permission_requested":
+      return (
+        typeof payload.request_id === "string" &&
+        typeof payload.capability === "string" &&
+        typeof payload.scope === "string" &&
+        typeof payload.summary === "string" &&
+        isNullableString(payload.resource) &&
+        isNullableString(payload.canonical_resource) &&
+        isNullableString(payload.command) &&
+        isNullableString(payload.cwd)
+      );
+    case "permission_resolved":
+      return (
+        typeof payload.request_id === "string" &&
+        (payload.decision === "allow" || payload.decision === "deny") &&
+        isNullableString(payload.grant_scope)
       );
     default:
       return true;
