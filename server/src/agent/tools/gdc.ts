@@ -492,10 +492,6 @@ export async function downloadGdc(
         continue;
       }
       localFiles.push(path.join(dirs.root, ...result.asset.relative_path.split("/")));
-      // Terminal 100% event: the throttled reporter may freeze below 100% on
-      // the last tick, so emit a final downloaded_bytes event once the file is
-      // written (same convention as the geo tools' success branch).
-      reportProgress.finalize(result.asset.size_bytes, result.asset.size_bytes);
     } catch (error) {
       if (signal?.aborted === true) throw error;
       hooks.onProgress("download_gdc", "warning", {

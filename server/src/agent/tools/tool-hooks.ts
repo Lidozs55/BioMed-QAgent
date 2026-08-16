@@ -55,7 +55,9 @@ export interface DownloadProgressMeta {
   /** Dataset/file accession echoed into the progress payload. */
   accession: string;
   filename: string;
+  /** Optional records/platform refinements (e.g. GEO platform annotation). */
   records?: number;
+  platform?: string;
 }
 
 export interface DownloadProgressOptions {
@@ -73,13 +75,15 @@ export interface DownloadProgressOptions {
  * frontend reducer, which binds progress to the owning tool call via
  * ``detail.accession``.
  *
- * The returned function is throttled (interval OR byte step); call
- * ``finalize(bytes, total)`` once the download has been written so the UI
- * reaches 100% instead of freezing on the last throttled tick.
+ * The returned function is throttled (interval OR byte step). ``finalize`` is
+ * a terminal sink that bypasses throttling and is invoked automatically by
+ * ``acquireSource`` once on success (see ``AcquisitionProgress`` in
+ * ``external/acquisition/downloader.ts``), so the UI reaches 100% instead of
+ * freezing on the last throttled tick. Tools never call ``finalize`` directly.
  */
 export interface DownloadProgressReporter {
   (bytesReceived: number, declared: number | null): void;
-  /** Unconditionally emit a terminal progress event (used on success). */
+  /** Called by ``acquireSource`` on success; bypasses throttling. */
   finalize(bytesReceived: number, total: number): void;
 }
 

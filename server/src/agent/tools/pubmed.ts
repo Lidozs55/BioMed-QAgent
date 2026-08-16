@@ -192,10 +192,6 @@ export async function downloadSupplementaryAdapter(
       progress,
     });
     const asset = outcome.result.asset;
-    if (asset !== null) {
-      // Terminal 100% event so the UI never freezes on the last throttled tick.
-      progress.finalize(asset.size_bytes, asset.size_bytes);
-    }
     const payload: Record<string, unknown> = {
       source: "pubmed",
       accession: pmid,
