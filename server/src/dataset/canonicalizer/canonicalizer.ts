@@ -88,6 +88,17 @@ export interface CanonicalizationResult {
   auditPaths: string[];
 }
 
+export interface UnitCorrection {
+  method: "registered_rule" | "human_correction";
+  rule_id: string | null;
+  from_unit: string;
+  to_unit: string;
+  factor: number;
+  offset: number;
+  evidence: string;
+  review_id: string | null;
+}
+
 export interface CanonicalizeOptions {
   batch: DataBatch;
   schema: DatasetSchema;
@@ -96,6 +107,7 @@ export interface CanonicalizeOptions {
   geneSymbolMap?: Readonly<Record<string, string>> | ReadonlyMap<string, string>;
   probeMap?: Readonly<Record<string, string>> | ReadonlyMap<string, string>;
   probeTargetNamespace?: string;
+  unitCorrection?: UnitCorrection;
 }
 
 export type AuthorizedNamespace = [geneId: string, namespace: string, version: string];
@@ -244,6 +256,7 @@ export async function canonicalize(
     geneSymbolMap,
     probeMap,
     probeTargetNamespace = "gene_symbol",
+    unitCorrection,
   } = options;
   if (batch.file_asset === null) {
     throw new BuildError("batch has no file asset to canonicalize");
@@ -309,7 +322,23 @@ export async function canonicalize(
       rejectedCount += 1;
       continue;
     }
-    const unit = row.expression_unit ?? "";
+    let unit = row.expression_unit ?? "";
+    let expressionValue = row.expression_value ?? "";
+    if (unitCorrection !== undefined && unit === unitCorrection.from_unit) {
+      if (!isFiniteNumber(expressionValue)) {
+        rejectedRows.push(
+          toRejectedValues(
+            rejectedRow(row, batch, "non_finite_value", `value='${expressionValue}'`),
+          ),
+        );
+        rejectedCount += 1;
+        continue;
+      }
+      expressionValue = String(
+        Number(expressionValue) * unitCorrection.factor + unitCorrection.offset,
+      );
+      unit = unitCorrection.to_unit;
+    }
     const semantics = row.value_semantics ?? "";
     if (!profile.allowed_units.includes(unit)) {
       rejectedRows.push(
@@ -339,7 +368,6 @@ export async function canonicalize(
       rejectedCount += 1;
       continue;
     }
-    const expressionValue = row.expression_value ?? "";
     if (!isFiniteNumber(expressionValue)) {
       rejectedRows.push(
         toRejectedValues(
@@ -376,6 +404,12 @@ export async function canonicalize(
       const value = row[column];
       if (value !== undefined) canonicalRow[column] = value;
     }
+    if (columns.includes("expression_value")) {
+      canonicalRow.expression_value = expressionValue;
+    }
+    if (columns.includes("expression_unit")) {
+      canonicalRow.expression_unit = unit;
+    }
     canonicalRow.record_id = makeRecordId(
       row.dataset_id,
       row.gene_id_raw,
@@ -388,7 +422,7 @@ export async function canonicalize(
       canonicalRow.probe_id = row.gene_id_raw ?? "";
       canonicalRow.platform_id = platformIds.length > 0 ? platformIds[0] : "";
       if (columns.includes("value")) {
-        canonicalRow.value = row.expression_value ?? "";
+        canonicalRow.value = expressionValue;
       }
     } else {
       canonicalRow.gene_id = geneId;

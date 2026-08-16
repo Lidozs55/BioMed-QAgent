@@ -3,11 +3,11 @@
  * degradation, CSV outputs, provenance, size caps (Python parity).
  */
 
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { PNG } from "pngjs";
 
 import {
@@ -38,10 +38,10 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-function tinyPng(): Buffer {
+function tinyPng(red = 200): Buffer {
   const png = new PNG({ width: 2, height: 2 });
   for (let index = 0; index < png.data.length; index += 4) {
-    png.data[index] = 200;
+    png.data[index] = red;
     png.data[index + 1] = 30;
     png.data[index + 2] = 30;
     png.data[index + 3] = 255;
@@ -57,8 +57,26 @@ const GOOD_VLM_JSON = JSON.stringify({
     y: { label: "expression", unit: "TPM", scale: "linear" },
   },
   data_points: [
-    { x: "S1", y: 1.2, confidence: 1.0 },
-    { x: "S2", y: 2.4, confidence: 0.9 },
+    { x: "S1", y: 1.2, confidence_level: "high", confidence_reason: "clear bar label" },
+    { x: "S2", y: 2.4, confidence_level: "medium", confidence_reason: "interpolated from axis ticks" },
+  ],
+  legend: [],
+});
+
+const LOW_VLM_JSON = JSON.stringify({
+  chart_type: "bar",
+  title: "Ambiguous expression",
+  axes: {
+    x: { label: "sample", unit: "", scale: "linear" },
+    y: { label: "expression", unit: "TPM", scale: "linear" },
+  },
+  data_points: [
+    {
+      x: "S1",
+      y: "1.2",
+      confidence_level: "low",
+      confidence_reason: "bar overlaps a faint grid line",
+    },
   ],
   legend: [],
 });
@@ -109,6 +127,16 @@ describe("normalizeChartJson", () => {
     expect(chartRow.chart_type).toBe("other");
     expect(chartRow.x_label).toBe("");
     expect(pointRows).toEqual([]);
+  });
+
+  it("rejects numeric pseudo-probabilities and requires categorical reasons", () => {
+    const numeric = JSON.parse(GOOD_VLM_JSON) as Record<string, unknown>;
+    numeric.data_points = [{ x: "S1", y: "1.2", confidence: 0.93 }];
+    expect(() =>
+      normalizeChartJson(numeric, "asset_x", 0, "f.png", "m"),
+    ).toThrow(/numeric confidence/);
+    expect(VLM_PROMPT).not.toContain("0.0-1.0");
+    expect(VLM_PROMPT).toContain("confidence_reason");
   });
 });
 
@@ -205,6 +233,53 @@ describe("createVlmClient L1 tier", () => {
 });
 
 describe("extract_chart_data_vlm tool", () => {
+  it("refuses credentialed VLM access when no permission gate is available", async () => {
+    const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-vlm-permission-"));
+    roots.push(taskRoot);
+    const executor = vi.fn();
+    const [tool] = createChartDataVlmTool({
+      taskRoot,
+      vlmConfig: { apiKey: "k", baseUrl: "https://vlm.example.com/v1", model: "qwen-vl-max" },
+      httpClient: new PublicHttpClient({
+        resolve: fakeResolver({ "vlm.example.com": [PUBLIC_IP] }),
+        executor,
+      }),
+    });
+    const figureDir = path.join(taskRoot, "source_assets", "figures");
+    await mkdir(figureDir, { recursive: true });
+    await writeFile(path.join(figureDir, "chart.png"), tinyPng());
+
+    const result = await tool.execute({ source_path: "source_assets/figures/chart.png" });
+
+    expect(JSON.parse(result.content)).toMatchObject({ status: "error" });
+    expect(result.content).toMatch(/permission gate/i);
+    expect(executor).not.toHaveBeenCalled();
+  });
+
+  it("does not call DashScope when credential permission is rejected", async () => {
+    const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-vlm-permission-"));
+    roots.push(taskRoot);
+    const executor = vi.fn();
+    const [tool] = createChartDataVlmTool({
+      taskRoot,
+      approvalGate: { request: async () => "reject" },
+      vlmConfig: { apiKey: "k", baseUrl: "https://vlm.example.com/v1", model: "qwen-vl-max" },
+      httpClient: new PublicHttpClient({
+        resolve: fakeResolver({ "vlm.example.com": [PUBLIC_IP] }),
+        executor,
+      }),
+    });
+    const figureDir = path.join(taskRoot, "source_assets", "figures");
+    await mkdir(figureDir, { recursive: true });
+    await writeFile(path.join(figureDir, "chart.png"), tinyPng());
+
+    const result = await tool.execute({ source_path: "source_assets/figures/chart.png" });
+
+    expect(JSON.parse(result.content)).toMatchObject({ status: "error" });
+    expect(result.content).toMatch(/rejected/i);
+    expect(executor).not.toHaveBeenCalled();
+  });
+
   it("runs L1 over a fixture VLM server and writes chart CSVs with provenance", async () => {
     const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-vlm-"));
     roots.push(taskRoot);
@@ -219,6 +294,7 @@ describe("extract_chart_data_vlm tool", () => {
     });
     const [tool] = createChartDataVlmTool({
       taskRoot,
+      approvalGate: { request: async () => "approve" },
       vlmConfig: { apiKey: "k", baseUrl: "https://vlm.example.com/v1", model: "qwen-vl-max" },
       httpClient,
     });
@@ -239,10 +315,125 @@ describe("extract_chart_data_vlm tool", () => {
     expect(parsed.total_data_points).toBe(2);
     expect(parsed.outputs.some((output) => output.endsWith(CHART_CSV_NAME))).toBe(true);
     expect(parsed.outputs.some((output) => output.endsWith(CHART_POINTS_CSV_NAME))).toBe(true);
+    expect(parsed.outputs.some((output) => output.endsWith("confidence_records.json"))).toBe(true);
+    const confidenceArtifact = JSON.parse(
+      await readFile(path.join(taskRoot, "parsed", "chart_data", "confidence_records.json"), "utf8"),
+    ) as {
+      batch_defaults: unknown[];
+      record_overrides: Array<{
+        channel: string;
+        level: string;
+        components: { human_review_state: string };
+      }>;
+    };
+    expect(confidenceArtifact.batch_defaults).toEqual([]);
+    expect(confidenceArtifact.record_overrides).toHaveLength(2);
+    expect(confidenceArtifact.record_overrides).toEqual(expect.arrayContaining([
+      expect.objectContaining({ channel: "vlm", level: "medium" }),
+    ]));
+    await writeFile(path.join(figureDir, "chart-second.png"), tinyPng(100));
+    const secondResult = await tool.execute({
+      source_path: "source_assets/figures/chart-second.png",
+    });
+    expect(secondResult.isError).toBeUndefined();
+    const mergedConfidenceArtifact = JSON.parse(
+      await readFile(path.join(taskRoot, "parsed", "chart_data", "confidence_records.json"), "utf8"),
+    ) as { record_overrides: unknown[] };
+    expect(mergedConfidenceArtifact.record_overrides).toHaveLength(4);
     expect(parsed.metas[0]?.tier).toBe("L1_vlm");
     expect(parsed.metas[0]?.sha256).toMatch(/^[0-9a-f]{64}$/);
     expect(SKILL_TOOL_NAMES.has("extract_chart_data_vlm")).toBe(true);
     expect(toolOwner("extract_chart_data_vlm")).toBe("extract_chart_data_vlm");
+  }, 60_000);
+
+  it("batches low-confidence points for review without upgrading their evidence", async () => {
+    const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-vlm-review-"));
+    roots.push(taskRoot);
+    const fixture = await startFixtureServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ choices: [{ message: { content: LOW_VLM_JSON } }] }));
+    });
+    fixtures.push(fixture);
+    const requests: Array<{ review_type: string | null; item_count: number }> = [];
+    const [tool] = createChartDataVlmTool({
+      taskRoot,
+      approvalGate: { request: async () => "approve" },
+      vlmConfig: { apiKey: "k", baseUrl: "https://vlm.example.com/v1", model: "qwen-vl-max" },
+      httpClient: new PublicHttpClient({
+        resolve: fakeResolver({ "vlm.example.com": [PUBLIC_IP] }),
+        executor: localExecutor(fixture.port),
+      }),
+      hilGate: {
+        requestHIL: async (input) => {
+          requests.push({ review_type: input.review_type, item_count: input.review_items.length });
+          return {
+            schema_version: "1.0",
+            review_id: "review_vlm_1",
+            request_id: "request_vlm_1",
+            decision: { action: "accept" },
+            reviewer: "user",
+            reviewed_at: "2026-08-16T01:00:00.000Z",
+            evidence_digest: "a".repeat(64),
+            reason: null,
+          };
+        },
+      },
+    });
+    const figureDir = path.join(taskRoot, "source_assets", "figures");
+    await mkdir(figureDir, { recursive: true });
+    await writeFile(path.join(figureDir, "chart.png"), tinyPng());
+    const result = await tool.execute({ source_path: "source_assets/figures/chart.png" });
+    expect(result.isError).toBeUndefined();
+    expect(requests).toEqual([{ review_type: "vlm_extraction", item_count: 1 }]);
+    const points = await readFile(
+      path.join(taskRoot, "parsed", "chart_data", CHART_POINTS_CSV_NAME),
+      "utf8",
+    );
+    expect(points).toContain("confidence_level");
+    expect(points).toContain("low,bar overlaps a faint grid line,accepted,review_vlm_1");
+  }, 60_000);
+
+  it("keeps CSV rows and confidence records aligned across concurrent invocations", async () => {
+    const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-vlm-concurrent-"));
+    roots.push(taskRoot);
+    const fixture = await startFixtureServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ choices: [{ message: { content: GOOD_VLM_JSON } }] }));
+    });
+    fixtures.push(fixture);
+    const [tool] = createChartDataVlmTool({
+      taskRoot,
+      approvalGate: { request: async () => "approve" },
+      vlmConfig: { apiKey: "k", baseUrl: "https://vlm.example.com/v1", model: "qwen-vl-max" },
+      httpClient: new PublicHttpClient({
+        resolve: fakeResolver({ "vlm.example.com": [PUBLIC_IP] }),
+        executor: localExecutor(fixture.port),
+      }),
+    });
+    const figureDir = path.join(taskRoot, "source_assets", "figures");
+    await mkdir(figureDir, { recursive: true });
+    await Promise.all([
+      writeFile(path.join(figureDir, "first.png"), tinyPng(90)),
+      writeFile(path.join(figureDir, "second.png"), tinyPng(110)),
+    ]);
+
+    const results = await Promise.all([
+      tool.execute({ source_path: "source_assets/figures/first.png" }),
+      tool.execute({ source_path: "source_assets/figures/second.png" }),
+    ]);
+
+    expect(results.every((result) => JSON.parse(result.content).status === "ok")).toBe(true);
+    const pointCsv = await readFile(
+      path.join(taskRoot, "parsed", "chart_data", CHART_POINTS_CSV_NAME),
+      "utf8",
+    );
+    const pointCount = pointCsv.trim().split(/\r?\n/).length - 1;
+    const confidence = JSON.parse(await readFile(
+      path.join(taskRoot, "parsed", "chart_data", "confidence_records.json"),
+      "utf8",
+    )) as { record_overrides: unknown[] };
+    expect(pointCount).toBe(4);
+    expect(confidence.record_overrides).toHaveLength(pointCount);
   }, 60_000);
 
   it("fails (not empty success) when every tier fails", async () => {
@@ -250,6 +441,7 @@ describe("extract_chart_data_vlm tool", () => {
     roots.push(taskRoot);
     const [tool] = createChartDataVlmTool({
       taskRoot,
+      approvalGate: { request: async () => "approve" },
       // Missing API key → L1 fails fast; an image has no tables (L2) and no
       // captions (L3) → every tier fails.
       vlmConfig: { apiKey: "", baseUrl: "https://vlm.example.com/v1", model: "qwen-vl-max" },

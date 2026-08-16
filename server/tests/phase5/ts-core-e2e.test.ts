@@ -315,6 +315,50 @@ describe("TS Core E2E golden outcomes (I-07)", () => {
     }
   });
 
+  it("evaluates confidence only over final source-of-record rows after deduplication", async () => {
+    const { taskRoot, core } = await newCore();
+    const gdc = await assetFor(taskRoot, "gdc/gdc_expression.tsv", "binding_gdc");
+    const xena = await assetFor(
+      taskRoot,
+      "ncbi/gse178352/xena_matrix.tsv",
+      "binding_xena",
+    );
+    const record = await core.executeDatasetBuild(spec({
+      build_id: "build_confidence_lineage",
+      source_bindings: [
+        {
+          schema_version: "1.0",
+          binding_id: "binding_gdc",
+          source: "gdc",
+          acquisition: { schema_version: "1.0", mode: "builtin", provider_id: "gdc.files.v1" },
+          adapter_id: "gdc.expression.v1",
+        },
+        {
+          schema_version: "1.0",
+          binding_id: "binding_xena",
+          source: "xena",
+          acquisition: { schema_version: "1.0", mode: "builtin", provider_id: "xena.files.v1" },
+          adapter_id: "xena.matrix.v1",
+        },
+      ],
+    }), {
+      runId: "run_confidence_lineage",
+      sourceAssets: { binding_gdc: gdc, binding_xena: xena },
+    });
+
+    expect(record.status).toBe("completed");
+    const confidence = JSON.parse(await readFile(
+      path.join(taskRoot, "datasets_build", "build_confidence_lineage", "confidence_records.json"),
+      "utf8",
+    )) as { batch_defaults: Array<{ batch_id: string; record_count: number }> };
+    expect(confidence.batch_defaults.reduce((total, item) => total + item.record_count, 0)).toBe(
+      record.manifest?.row_count,
+    );
+    expect(confidence.batch_defaults).toEqual([
+      expect.objectContaining({ batch_id: "canon_binding_gdc", record_count: 4 }),
+    ]);
+  });
+
   it("NO_DATA: every binding rejected surfaces a no_data build result", async () => {
     const { taskRoot, core } = await newCore();
     const bad = await assetFor(taskRoot, "gdc/gdc_clinical.tsv", "binding_gdc");

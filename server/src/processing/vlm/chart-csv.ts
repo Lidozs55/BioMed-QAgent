@@ -3,7 +3,7 @@
  * utf-8-sig BOM, merge-by-id accumulation across invocations, integrity
  * validation (every chart has source_asset_id, every point references an
  * existing chart) and the L1 admission gate (model-extracted points must
- * carry confidence + model_name). Violations abort the write so a broken
+ * carry categorical confidence evidence + model_name). Violations abort the write so a broken
  * chart dataset is never persisted.
  *
  * Python guards with a cross-process ``TaskLock`` on ``.chart-csv.lock``;
@@ -144,7 +144,7 @@ export function validateChartData(
 
 /**
  * Model-extraction admission gate (Python ``validate_chart_extraction``):
- * L1 rows must carry model_name; L1 points must carry confidence.
+ * L1 rows must carry model_name; L1 points must carry categorical confidence.
  * Deterministic tiers (L2/L3) are exempt.
  */
 export function validateChartExtraction(
@@ -164,9 +164,18 @@ export function validateChartExtraction(
     const chart = chartById.get(row.chart_id);
     const tier = chart?.extraction_tier.trim() ?? "";
     if (tier !== "" && !tier.startsWith("L1")) return;
-    if (row.confidence.trim() === "") {
+    if (
+      row.confidence_level !== "high" &&
+      row.confidence_level !== "medium" &&
+      row.confidence_level !== "low"
+    ) {
       violations.push(
-        `chart_data_points.csv row ${index + 1}: missing confidence on model-extracted point '${row.point_id}'`,
+        `chart_data_points.csv row ${index + 1}: invalid confidence_level on model-extracted point '${row.point_id}'`,
+      );
+    }
+    if (row.confidence_reason.trim() === "") {
+      violations.push(
+        `chart_data_points.csv row ${index + 1}: missing confidence_reason on model-extracted point '${row.point_id}'`,
       );
     }
   });
@@ -233,7 +242,23 @@ function recordToPointRow(record: CsvRecord): ChartPointRow {
     x_value: record.x_value ?? "",
     y_value: record.y_value ?? "",
     series_label: record.series_label ?? "",
-    confidence: record.confidence ?? "",
+    confidence_level:
+      record.confidence_level === "high" ||
+      record.confidence_level === "medium" ||
+      record.confidence_level === "low"
+        ? record.confidence_level
+        : "not_applicable",
+    confidence_reason: record.confidence_reason ?? "",
+    human_review_state:
+      record.human_review_state === "pending" ||
+      record.human_review_state === "accepted" ||
+      record.human_review_state === "corrected" ||
+      record.human_review_state === "rejected"
+        ? record.human_review_state
+        : "not_required",
+    review_id: record.review_id ?? "",
+    original_x_value: record.original_x_value ?? "",
+    original_y_value: record.original_y_value ?? "",
   };
 }
 
@@ -267,6 +292,10 @@ export async function writeChartCsvs(
   chartDataDir: string,
   chartRows: readonly ChartRow[],
   pointRows: readonly ChartPointRow[],
+  afterMerge?: (
+    mergedCharts: readonly ChartRow[],
+    mergedPoints: readonly ChartPointRow[],
+  ) => Promise<void>,
 ): Promise<{ chartCsv: string; pointsCsv: string }> {
   await mkdir(chartDataDir, { recursive: true });
   const chartCsvPath = path.join(chartDataDir, CHART_CSV_NAME);
@@ -280,13 +309,15 @@ export async function writeChartCsvs(
     const preservedPoints = existingPoints.filter((row) => !incomingChartIds.has(row.chart_id ?? ""));
     const mergedPoints = mergeById(preservedPoints, pointRows.map(pointRowToRecord), "point_id");
 
-    const violations = validateChartData(mergedCharts.map(recordToChartRow), mergedPoints.map(recordToPointRow));
+    const normalizedCharts = mergedCharts.map(recordToChartRow);
+    const normalizedPoints = mergedPoints.map(recordToPointRow);
+    const violations = validateChartData(normalizedCharts, normalizedPoints);
     if (violations.length > 0) {
       throw new ValueError("chart_data integrity check failed: " + violations.join("; "));
     }
     const admissionViolations = validateChartExtraction(
-      mergedCharts.map(recordToChartRow),
-      mergedPoints.map(recordToPointRow),
+      normalizedCharts,
+      normalizedPoints,
     );
     if (admissionViolations.length > 0) {
       throw new ValueError("chart_data extraction admission check failed: " + admissionViolations.join("; "));
@@ -294,6 +325,7 @@ export async function writeChartCsvs(
 
     await atomicWrite(chartCsvPath, encodeCsv(CHART_DATA_COLUMNS, mergedCharts));
     await atomicWrite(pointsCsvPath, encodeCsv(CHART_DATA_POINTS_COLUMNS, mergedPoints));
+    await afterMerge?.(normalizedCharts, normalizedPoints);
     return { chartCsv: chartCsvPath, pointsCsv: pointsCsvPath };
   });
 }

@@ -9,7 +9,7 @@
 
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { deepEqual } from "./contract-parity.js";
 import {
@@ -261,6 +261,26 @@ function writePrimary(path: string, rows: Array<Record<string, string>>): void {
     lines.push(csvLine(CANONICAL_HEADER.map((column) => row[column] ?? "")));
   }
   writeFileSync(path, lines.join(""), "utf8");
+  writeFileSync(join(dirname(path), "confidence_records.json"), `${JSON.stringify({
+    schema_version: "1.0",
+    batch_defaults: [{
+      schema_version: "1.0",
+      batch_id: "batch_fixture",
+      record_count: rows.length,
+      level: "high",
+      channel: "deterministic_parser",
+      components: {
+        schema_version: "1.0",
+        source_reliability: "high",
+        extraction_reliability: "high",
+        mapping_reliability: "high",
+        cross_source_consistency: "not_checked",
+        human_review_state: "not_required",
+      },
+      reasons: [],
+    }],
+    record_overrides: [],
+  }, null, 2)}\n`, "utf8");
 }
 
 function manifest(rowCount: number): DatasetManifest {
@@ -349,9 +369,35 @@ export async function checkValidationProfileParity(options: { outputRoot: string
     });
     check(issues, result.status === "passed", "profile: valid primary passes");
     check(issues, result.failed_count === 0, "profile: valid primary failed_count 0");
-    check(issues, result.checked_count === 10, `profile: valid primary checked_count 10 (got ${result.checked_count})`);
+    check(issues, result.checked_count === 11, `profile: valid primary checked_count 11 (got ${result.checked_count})`);
     check(issues, readFileSync(join(out, "validation_report.json"), "utf8").length > 0, "profile: report written");
     check(issues, readFileSync(join(out, "confidence_report.csv"), "utf8").length > 0, "profile: confidence report written");
+  }
+
+  // A formal release profile must never silently skip its evidence gate.
+  {
+    const out = join(outRoot, "missing-confidence-artifact");
+    mkdirSync(out, { recursive: true });
+    const primary = join(out, "primary.csv");
+    const row = validRow();
+    writeFileSync(
+      primary,
+      csvLine(CANONICAL_HEADER) + csvLine(CANONICAL_HEADER.map((column) => row[column] ?? "")),
+      "utf8",
+    );
+    const result = await profile.validate({
+      manifest: manifest(1),
+      primaryPath: primary,
+      schema: buildGeneExpressionSchema(),
+      manifestDigest: "d".repeat(64),
+      outputDir: out,
+    });
+    check(issues, result.status === "failed", "profile: missing confidence artifact fails closed");
+    check(
+      issues,
+      readFileSync(join(out, "validation_report.json"), "utf8").includes("evidence_confidence_policy"),
+      "profile: missing confidence artifact reports evidence gate",
+    );
   }
 
   // test_empty_primary_fails_min_rows

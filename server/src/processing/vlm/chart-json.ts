@@ -28,7 +28,7 @@ no prose) with this exact schema:
     "y": {"label": "<label>", "unit": "<unit or empty>", "scale": "linear" | "log" | "other"}
   },
   "data_points": [
-    {"x": "<x value as string>", "y": "<y value as string>", "series_label": "<series name>", "confidence": <0.0-1.0>}
+    {"x": "<x value as string>", "y": "<y value as string>", "series_label": "<series name>", "confidence_level": "high" | "medium" | "low", "confidence_reason": "<brief evidence-based reason>"}
   ],
   "legend": ["<series 1 name>", "<series 2 name>"]
 }
@@ -37,8 +37,9 @@ Rules:
 - If the image is not a chart (e.g., a photo, a diagram, pure text), return
   {"chart_type": "other", "title": "", "axes": {"x": {"label":"","unit":"","scale":"linear"}, "y": {"label":"","unit":"","scale":"linear"}}, "data_points": [], "legend": []}
 - Numeric x/y values must be stringified (e.g., "1.5", "100", "NA").
-- "confidence" is your 0.0-1.0 self-assessment of how accurately you read
-  that data point off the figure (1.0 = fully certain, 0.0 = guessing).
+- "confidence_level" is categorical evidence quality, never a probability.
+- Every point needs a concrete "confidence_reason" describing legibility,
+  labels, overlap, interpolation, or another visible limitation.
 - For box/violin plots, each data_point.y may be a comma-separated list
   representing the quartiles/whiskers.
 - Extract at most 100 data_points; for dense scatter plots, sample
@@ -134,7 +135,12 @@ export const CHART_DATA_POINTS_COLUMNS = [
   "x_value",
   "y_value",
   "series_label",
-  "confidence",
+  "confidence_level",
+  "confidence_reason",
+  "human_review_state",
+  "review_id",
+  "original_x_value",
+  "original_y_value",
 ] as const;
 
 export interface ChartRow {
@@ -164,7 +170,12 @@ export interface ChartPointRow {
   x_value: string;
   y_value: string;
   series_label: string;
-  confidence: string;
+  confidence_level: "high" | "medium" | "low" | "not_applicable";
+  confidence_reason: string;
+  human_review_state: "not_required" | "pending" | "accepted" | "corrected" | "rejected";
+  review_id: string;
+  original_x_value: string;
+  original_y_value: string;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -229,14 +240,39 @@ export function normalizeChartJson(
   dataPoints.forEach((point, index) => {
     if (typeof point !== "object" || point === null || Array.isArray(point)) return;
     const record = point as Record<string, unknown>;
-    const confidence = record.confidence;
+    if (record.confidence !== undefined) {
+      throw new ChartExtractionError(
+        `numeric confidence is not allowed for ${sourceLabel}; use confidence_level`,
+      );
+    }
+    const confidenceLevel = record.confidence_level;
+    if (
+      confidenceLevel !== "high" &&
+      confidenceLevel !== "medium" &&
+      confidenceLevel !== "low"
+    ) {
+      throw new ChartExtractionError(
+        `invalid confidence_level for ${sourceLabel} point ${index + 1}`,
+      );
+    }
+    const confidenceReason = stringField(record.confidence_reason).trim();
+    if (confidenceReason === "") {
+      throw new ChartExtractionError(
+        `missing confidence_reason for ${sourceLabel} point ${index + 1}`,
+      );
+    }
     pointRows.push({
       point_id: `${chartId}_p${index + 1}`,
       chart_id: chartId,
       x_value: stringField(record.x),
       y_value: stringField(record.y),
       series_label: stringField(record.series_label),
-      confidence: confidence === undefined || confidence === null ? "" : String(confidence),
+      confidence_level: confidenceLevel,
+      confidence_reason: confidenceReason,
+      human_review_state: confidenceLevel === "low" ? "pending" : "not_required",
+      review_id: "",
+      original_x_value: "",
+      original_y_value: "",
     });
   });
 

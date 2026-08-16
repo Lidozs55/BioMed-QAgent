@@ -20,7 +20,7 @@
 > - **验证与失效**：每个里程碑、每次新增/修订 ADR、数据族接入或执行模型变化
 >   时对照本文校验一致性；与代码现状矛盾且未标注待落地、或被新 ADR 推翻而未
 >   同步修订时，本文标记为 `stale`。
-> - **最后验证（Last Verified）**：2026-08-15。
+> - **最后验证（Last Verified）**：2026-08-16。
 > - **交叉引用约定**：本文档章节写作 `§N`；引用 ADR 索引的章节写作 `ADR §N`。
 
 ---
@@ -118,7 +118,7 @@ Dataset Construction Runtime（服务端固定构建骨架）
 
 **可靠性内核**（见 §4）：SourceAsset、DownloadAttempt、内容 hash、
 Attempt 输入/参数/输出摘要、任务锁、checkpoint、timeout/cancel、durable event、
-staging、Validation Gate、原子发布、fixture/live 区分。
+durable evidence-bound HIL、staging、Validation Gate、原子发布、fixture/live 区分。
 
 当前不存在固定五阶段、固定 22 列 `main_data.csv` 全局协议或 metadata-only
 占位主表：Dataset Build 由自包含 `DatasetBuildSpec`（§3）驱动，产物由

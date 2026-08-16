@@ -76,6 +76,14 @@ function manifest(overrides: Partial<DatasetManifest> = {}): DatasetManifest {
         size_bytes: 256,
         sha256: "e".repeat(64),
       },
+      {
+        artifact_id: "artifact_confidence",
+        role: "audit_report",
+        relative_path: "confidence_records.json",
+        media_type: "application/json",
+        size_bytes: 384,
+        sha256: "f".repeat(64),
+      },
     ],
     source_summary: {
       binding_gdc: { row_count: 22 },
@@ -89,6 +97,24 @@ function manifest(overrides: Partial<DatasetManifest> = {}): DatasetManifest {
       report_path: null,
     },
     confidence_summary: {
+      level_distribution: { high: 36, medium: 4, low: 2 },
+      human_review_distribution: {
+        not_required: 38,
+        accepted: 3,
+        corrected: 1,
+      },
+      reason_counts: {
+        "vlm extraction is capped at medium": 4,
+        "image label is ambiguous": 2,
+      },
+      pending_human_review_count: 0,
+      batch_default_count: 2,
+      record_override_count: 6,
+      evidence_report_file: "confidence_records.json",
+      statistical_anomalies: {
+        detected_count: 2,
+        report_file: "confidence_report.csv",
+      },
       detected_anomaly_count: 2,
       report_file: "confidence_report.csv",
     },
@@ -204,8 +230,8 @@ describe("BuildResultsViewer", () => {
     // validation (header + processing tab both render the status)
     expect(screen.getAllByText("passed").length).toBeGreaterThan(0);
     expect(screen.getAllByText("12 / 0").length).toBeGreaterThan(0);
-    // confidence
-    expect(screen.getByText("2 处异常")).toBeInTheDocument();
+    // statistical validation anomaly, separate from evidence confidence
+    expect(screen.getByText("2 处")).toBeInTheDocument();
     // provenance coverage (header stat + sources tab both render the ratio)
     expect(screen.getAllByText("95.24%").length).toBeGreaterThan(0);
   });
@@ -234,6 +260,26 @@ describe("BuildResultsViewer", () => {
     expect(buildUrl).toContain("task_id=task_results");
     expect(artifactUrl).toBeDefined();
     expect(artifactUrl).toContain("task_id=task_results");
+  });
+
+  it("shows confidence distributions, review states, reasons, and evidence drill-down", async () => {
+    stubBuildFetch(buildDetail());
+    render(<BuildResultsViewer buildId="build_abc" taskId="task_results" />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: "处理" }));
+
+    expect(await screen.findByText("可信度分布")).toBeInTheDocument();
+    expect(screen.getByText("36")).toBeInTheDocument();
+    expect(screen.getByText("medium")).toBeInTheDocument();
+    expect(screen.getByText("low")).toBeInTheDocument();
+    expect(screen.getByText("accepted 3")).toBeInTheDocument();
+    expect(screen.getByText("corrected 1")).toBeInTheDocument();
+    expect(screen.getByText("vlm extraction is capped at medium")).toBeInTheDocument();
+    expect(screen.getByText("confidence_records.json")).toBeInTheDocument();
+    expect(screen.getByText("provenance.json")).toBeInTheDocument();
+    expect(screen.getAllByText("统计异常").length).toBeGreaterThan(0);
+    expect(screen.getByText("统计异常报告")).toBeInTheDocument();
+    expect(screen.queryByText("置信度异常")).not.toBeInTheDocument();
   });
 
   it("shows the NO_DATA reason in an informational banner, never as a red error", async () => {
@@ -292,7 +338,7 @@ describe("BuildResultsViewer", () => {
     // 处理 tab: validation + audit artifacts.
     fireEvent.click(screen.getByRole("tab", { name: "处理" }));
     expect(await screen.findByText("quality_report.csv")).toBeInTheDocument();
-    expect(screen.getByText("检测到 2 处异常")).toBeInTheDocument();
+    expect(screen.getByText("检测到 2 处统计异常")).toBeInTheDocument();
 
     // 警告 tab: no warnings artifact in this fixture -> calm empty state.
     fireEvent.click(screen.getByRole("tab", { name: "警告" }));

@@ -8,6 +8,10 @@ import {
   isValidSubagentEventPayload,
   parseSubagentEventPayload,
 } from "@/lib/eventParsersRuntime";
+import {
+  formalHILLinkageMatches,
+  parsePipelineEventPayload,
+} from "@/lib/eventParsersPipeline";
 import type { ConnectionStatus, SequenceGapMarker } from "./types";
 
 const CONNECTING = 0;
@@ -246,10 +250,29 @@ function isOptionalStringOrNull(value: unknown): boolean {
 
 function normalizeEventEnvelope(value: unknown): EventEnvelope | null {
   if (!isEventEnvelope(value)) return null;
-  if (!value.type.startsWith("subagent_")) return value;
-  const payload = parseSubagentEventPayload(value.payload);
-  if (payload === null || payload.type !== value.type) return null;
-  return { ...value, payload };
+  if (value.type.startsWith("subagent_")) {
+    const payload = parseSubagentEventPayload(value.payload);
+    if (payload === null || payload.type !== value.type) return null;
+    return { ...value, payload };
+  }
+  if (value.type === "user_input_required") {
+    try {
+      const payload = parsePipelineEventPayload(
+        value.payload,
+        "websocket.payload",
+      );
+      if (
+        payload.type !== value.type ||
+        !formalHILLinkageMatches(payload, value.task_id, value.run_id)
+      ) {
+        return null;
+      }
+      return { ...value, payload };
+    } catch {
+      return null;
+    }
+  }
+  return value;
 }
 
 function isNonNegativeInteger(value: unknown): value is number {

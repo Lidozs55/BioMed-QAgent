@@ -37,6 +37,7 @@ import type {
   TaskSnapshot,
 } from "@/runtime/contracts";
 import { parseEventPayload } from "@/lib/eventParsers";
+import { formalHILLinkageMatches } from "@/lib/eventParsersPipeline";
 
 function optionalNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
@@ -400,6 +401,12 @@ function parseEventEnvelope(json: unknown, idx: number): EventPage["events"][num
   /* Parse payload first to determine runtime scope from content */
   const payloadObj = assertObject(Reflect.get(obj, "payload"), `events[${idx}].payload`);
   const payload = parseEventPayload(payloadObj, eventType, `events[${idx}].payload`);
+  if (!formalHILLinkageMatches(payload, taskId, runId)) {
+    throw new APIError(
+      502,
+      `Formal HIL payload linkage must match its event envelope at events[${idx}]`,
+    );
+  }
 
   /* Backend EventEnvelope.validate_envelope() invariants:
      runtime_scoped = isinstance(type, RuntimeEventType)

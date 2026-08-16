@@ -16,7 +16,12 @@ import {
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
-import type { ResumeRunInput, UserInputDecision } from "@/runtime/contracts";
+import { HumanReviewBatch } from "@/components/HumanReviewBatch";
+import type {
+  HILDecision,
+  ResumeRunInput,
+  UserInputDecision,
+} from "@/runtime/contracts";
 import type { PendingUserInput, TaskProjection } from "@/runtime/types";
 
 interface UserInputDialogProps {
@@ -31,7 +36,7 @@ interface UserInputDialogProps {
 interface SubmissionState {
   promptKey: string | null;
   attemptId: number;
-  pendingDecision: UserInputDecision | null;
+  pendingDecision: HILDecision["action"] | UserInputDecision | null;
   error: string | null;
 }
 
@@ -186,11 +191,12 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
         : null,
     [pending],
   );
+  const hilRequest = pending?.hilRequest ?? null;
 
   const submit = async (
-    decision: UserInputDecision,
-    detail: ResumeRunInput["detail"] = {},
-  ) => {
+    decision: HILDecision | UserInputDecision,
+    detail: NonNullable<ResumeRunInput["detail"]> = {},
+  ): Promise<void> => {
     if (
       pending === null ||
       taskId === null ||
@@ -202,20 +208,29 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
       return;
     }
     const submittedPromptKey = promptKey;
+    const submittedAction = typeof decision === "string" ? decision : decision.action;
     nextAttemptId.current += 1;
     const submittedAttemptId = nextAttemptId.current;
     setSubmission({
       promptKey: submittedPromptKey,
       attemptId: submittedAttemptId,
-      pendingDecision: decision,
+      pendingDecision: submittedAction,
       error: null,
     });
     try {
-      await onResumeRun(taskId, runId, {
-        request_id: pending.requestId,
-        decision,
-        detail,
-      });
+      const input: ResumeRunInput = hilRequest === null
+        ? {
+            request_id: pending.requestId,
+            decision,
+            detail,
+          }
+        : {
+            request_id: hilRequest.request_id,
+            evidence_digest: hilRequest.evidence_digest,
+            decision,
+            reason: null,
+          };
+      await onResumeRun(taskId, runId, input);
       // FIX 3 (final review): on SUCCESS the in-flight decision is retained
       // while the same prompt stays pending — the manager may have returned
       // its snapshot as-is (still awaiting_user_input) until the durable
@@ -252,7 +267,7 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
     >
       <DialogContent
         showCloseButton={false}
-        className="min-w-0 max-w-[calc(100vw-2rem)] sm:max-w-lg"
+        className={`min-w-0 max-w-[calc(100vw-2rem)] ${hilRequest === null ? "sm:max-w-lg" : "sm:max-w-4xl"}`}
       >
         <DialogHeader>
           <DialogTitle>
@@ -262,14 +277,16 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
                 ? "Agent 已达到最大轮次"
                 : pending?.promptKind === "no_progress"
                   ? "检测到无进展"
+                  : pending?.promptKind === "api_key_or_credential"
+                    ? "需要凭据授权"
                   : pending?.promptKind === "data_correction"
-                    ? "需要人工修正"
+                    ? hilRequest === null ? "需要人工修正" : "需要人工审核"
                     : "请补充信息"}
           </DialogTitle>
           <DialogDescription className="min-w-0 break-words">
             {pending === null
               ? "Pipeline 已暂停，等待你的决策。"
-              : pending.promptKind === "data_correction"
+              : pending.promptKind === "data_correction" && hilRequest === null
                 ? "Agent 在研究中请求人工修正，请在下方输入你的修正并提交。"
                 : (pending.summary ?? "Pipeline 已暂停，等待你的决策。")}
           </DialogDescription>
@@ -381,7 +398,7 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
           </div>
         )}
 
-        {pending?.promptKind === "data_correction" && (
+        {pending?.promptKind === "data_correction" && hilRequest === null && (
           <div className="flex min-w-0 flex-col gap-3 rounded-md border border-border/60 bg-muted/30 p-3 text-sm">
             <p className="whitespace-pre-wrap break-words text-sm font-medium leading-relaxed">
               {pending.summary}
@@ -428,6 +445,16 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
           </div>
         )}
 
+        {hilRequest !== null && (
+          <HumanReviewBatch
+            key={hilRequest.request_id}
+            request={hilRequest}
+            disabled={!awaitingInput || expired || pendingDecision !== null}
+            submittingAction={pendingDecision}
+            onSubmit={(decision) => submit(decision)}
+          />
+        )}
+
         {pending?.fixtureExempt && (
           <Alert>
             <AlertDescription>
@@ -445,7 +472,7 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
         )}
 
         <DialogFooter className="gap-2">
-          {pending?.promptKind === "data_correction" ? (
+          {hilRequest !== null ? null : pending?.promptKind === "data_correction" ? (
             <>
               <Button
                 variant="outline"

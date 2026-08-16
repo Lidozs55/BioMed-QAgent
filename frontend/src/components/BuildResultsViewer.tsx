@@ -264,17 +264,49 @@ function ProcessingTab({
   const checkedCount = summaryNumber(validation, "checked_count");
   const failedCount = summaryNumber(validation, "failed_count");
   const profileRef = summaryString(validation, "profile_ref");
-  const anomalyCount = summaryNumber(confidence, "detected_anomaly_count");
-  const reportFile = summaryString(confidence, "report_file");
+  const statisticalAnomalies = summaryRecord(confidence, "statistical_anomalies");
+  const anomalyCount =
+    summaryNumber(statisticalAnomalies, "detected_count")
+    ?? summaryNumber(confidence, "detected_anomaly_count");
+  const reportFile =
+    summaryString(statisticalAnomalies, "report_file")
+    ?? summaryString(confidence, "report_file");
+  const levelDistribution = summaryRecord(confidence, "level_distribution");
+  const reviewDistribution = summaryRecord(confidence, "human_review_distribution");
+  const reasonCounts = summaryRecord(confidence, "reason_counts");
+  const pendingReviewCount = summaryNumber(confidence, "pending_human_review_count") ?? 0;
+  const batchDefaultCount = summaryNumber(confidence, "batch_default_count") ?? 0;
+  const recordOverrideCount = summaryNumber(confidence, "record_override_count") ?? 0;
+  const evidenceReportFile = summaryString(confidence, "evidence_report_file");
   const auditEntries = detail.manifest.artifacts.filter(
     (entry) => entry.role === "audit_report",
   );
+  const evidenceEntry = detail.manifest.artifacts.find(
+    (entry) => evidenceReportFile !== undefined && entry.relative_path === evidenceReportFile,
+  );
+  const provenanceEntry = detail.manifest.artifacts.find(
+    (entry) => entry.role === "provenance",
+  );
+  const confidenceLevels = (["high", "medium", "low"] as const).map((level) => ({
+    level,
+    count: summaryNumber(levelDistribution, level) ?? 0,
+  }));
+  const reviewStates = reviewDistribution === undefined
+    ? []
+    : Object.entries(reviewDistribution)
+        .filter((entry): entry is [string, number] => typeof entry[1] === "number")
+        .sort(([left], [right]) => left.localeCompare(right));
+  const reasons = reasonCounts === undefined
+    ? []
+    : Object.entries(reasonCounts)
+        .filter((entry): entry is [string, number] => typeof entry[1] === "number")
+        .sort((left, right) => right[1] - left[1]);
 
   return (
     <div className="flex min-w-0 flex-col gap-3">
       <Card size="sm" className="min-w-0">
         <CardHeader>
-          <CardTitle className="text-sm">校验与置信度</CardTitle>
+          <CardTitle className="text-sm">校验与证据可信度</CardTitle>
           <CardDescription>{profileRef ?? "Validation profile"}</CardDescription>
         </CardHeader>
         <CardContent>
@@ -292,16 +324,78 @@ function ProcessingTab({
               value={`${checkedCount ?? "—"} / ${failedCount ?? "—"}`}
             />
             <SummaryStat
-              label="置信度异常"
-              value={`检测到 ${anomalyCount ?? 0} 处异常`}
+              label="统计异常"
+              value={`检测到 ${anomalyCount ?? 0} 处统计异常`}
             />
             {reportFile !== undefined && (
-              <SummaryStat label="置信度报告" value={reportFile} />
+              <SummaryStat label="统计异常报告" value={reportFile} />
             )}
           </div>
         </CardContent>
       </Card>
-      {auditEntries.map((entry) => (
+      <Card size="sm" className="min-w-0">
+        <CardHeader>
+          <CardTitle className="text-sm">可信度分布</CardTitle>
+          <CardDescription>
+            批次默认 {batchDefaultCount} 个 · 记录级覆盖 {recordOverrideCount} 条
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex min-w-0 flex-col gap-4">
+          <div className="grid grid-cols-3 gap-2">
+            {confidenceLevels.map(({ level, count }) => (
+              <div key={level} className="rounded-md border p-3">
+                <Badge
+                  variant={level === "low" ? "destructive" : level === "high" ? "secondary" : "outline"}
+                >
+                  {level}
+                </Badge>
+                <p className="mt-2 text-lg font-semibold tabular-nums">{count}</p>
+              </div>
+            ))}
+          </div>
+          <div className="flex min-w-0 flex-wrap gap-1.5" aria-label="人工审核状态">
+            {reviewStates.map(([state, count]) => (
+              <Badge
+                key={state}
+                variant={state === "pending" || state === "rejected" ? "destructive" : "outline"}
+              >
+                {state} {count}
+              </Badge>
+            ))}
+            {pendingReviewCount > 0 && (
+              <Badge variant="destructive">待处理审核 {pendingReviewCount}</Badge>
+            )}
+          </div>
+          {reasons.length > 0 && (
+            <div className="min-w-0">
+              <p className="mb-2 text-xs font-medium text-muted-foreground">主要原因</p>
+              <ul className="flex min-w-0 flex-col gap-2">
+                {reasons.map(([reason, count]) => (
+                  <li key={reason} className="flex min-w-0 items-start justify-between gap-3 text-sm">
+                    <span className="min-w-0 break-words">{reason}</span>
+                    <Badge variant="outline" className="shrink-0">{count}</Badge>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+      {evidenceEntry !== undefined && (
+        <BuildArtifactCard
+          entry={evidenceEntry}
+          buildId={detail.build_id}
+          taskId={taskId}
+        />
+      )}
+      {provenanceEntry !== undefined && (
+        <BuildArtifactCard
+          entry={provenanceEntry}
+          buildId={detail.build_id}
+          taskId={taskId}
+        />
+      )}
+      {auditEntries.filter((entry) => entry.artifact_id !== evidenceEntry?.artifact_id).map((entry) => (
         <BuildArtifactCard
           key={entry.artifact_id}
           entry={entry}
@@ -474,8 +568,8 @@ function BuildViewerContent({
               value={`${checkedCount ?? "—"} / ${failedCount ?? "—"}`}
             />
             <SummaryStat
-              label="置信度"
-              value={`${anomalyCount ?? 0} 处异常`}
+              label="统计异常"
+              value={`${anomalyCount ?? 0} 处`}
             />
             <SummaryStat label="溯源覆盖率" value={coverageRatio} />
           </div>

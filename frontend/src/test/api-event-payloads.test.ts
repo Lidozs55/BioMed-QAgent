@@ -60,6 +60,42 @@ describe("parseEventPayload — pipeline event family", () => {
     expect("key" in detail && detail.key).toBe("val");
   });
 
+  it("user_input_required — parses a formal durable HIL request", () => {
+    const digest = "a".repeat(64);
+    const r = parseEventPayload(o({
+      type: "user_input_required",
+      request_id: "hil_1",
+      prompt_kind: "data_correction",
+      summary: "review mapping",
+      expires_at: null,
+      fixture_exempt: false,
+      detail: { review_type: "field_mapping" },
+      hil_request: {
+        request_id: "hil_1",
+        task_id: "task_1",
+        run_id: "run_1",
+        build_id: "build_1",
+        kind: "semantic_review",
+        review_type: "field_mapping",
+        status: "pending",
+        blocking: true,
+        subject: { mapping_ids: ["map_1"] },
+        review_items: [],
+        summary: "review mapping",
+        evidence_digest: digest,
+        policy_ref: "dataset.field_mapping.v1",
+        created_at: "2026-08-16T00:00:00Z",
+        resolved_at: null,
+      },
+    }), "user_input_required", "p");
+    if (r.type !== "user_input_required") throw new Error();
+    expect(r.hil_request).toMatchObject({
+      request_id: "hil_1",
+      evidence_digest: digest,
+      review_type: "field_mapping",
+    });
+  });
+
   it("stage_skipped — preserves reused_stage_attempt_id", () => {
     const r = parseEventPayload(o({ type: "stage_skipped", stage: "discovery", status: "skipped", reason: "no data", reused_stage_attempt_id: "sa1" }), "stage_skipped", "p");
     if (r.type !== "stage_skipped") throw new Error();

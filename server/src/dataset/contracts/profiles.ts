@@ -15,8 +15,8 @@ import {
   assertStringArray,
   parseSchemaVersion,
 } from "./primitives.js";
-import type { ValueScale } from "./enums.js";
-import { assertValueScale } from "./enums.js";
+import type { ConfidenceLevel, ValueScale } from "./enums.js";
+import { assertConfidenceLevel, assertValueScale } from "./enums.js";
 
 export interface AcceptancePolicy {
   schema_version?: SchemaVersion;
@@ -61,6 +61,73 @@ export interface ValidationProfile {
   acceptance: AcceptancePolicy;
   description: string;
   required_entity_level: RequiredEntityLevel;
+  confidence_gate: ConfidenceGatePolicy;
+}
+
+export interface ConfidenceGatePolicy {
+  schema_version?: SchemaVersion;
+  block_pending_human_review: boolean;
+  required_fields_min_level: ConfidenceLevel;
+  allow_low_confidence_primary: boolean;
+  max_low_confidence_fraction: number | null;
+  require_review_for_channels: string[];
+}
+
+const CONFIDENCE_GATE_POLICY_KEYS = [
+  "schema_version",
+  "block_pending_human_review",
+  "required_fields_min_level",
+  "allow_low_confidence_primary",
+  "max_low_confidence_fraction",
+  "require_review_for_channels",
+] as const;
+
+export function parseConfidenceGatePolicy(value: unknown): ConfidenceGatePolicy {
+  const record = assertRecord(value, "ConfidenceGatePolicy");
+  assertExactKeys(record, CONFIDENCE_GATE_POLICY_KEYS, "ConfidenceGatePolicy");
+  const rawFraction = record.max_low_confidence_fraction;
+  let maxLowFraction: number | null = null;
+  if (rawFraction !== undefined && rawFraction !== null) {
+    if (
+      typeof rawFraction !== "number" ||
+      !Number.isFinite(rawFraction) ||
+      rawFraction < 0 ||
+      rawFraction > 1
+    ) {
+      throw new TypeError(
+        "ConfidenceGatePolicy.max_low_confidence_fraction must be between 0 and 1",
+      );
+    }
+    maxLowFraction = rawFraction;
+  }
+  return {
+    schema_version: parseSchemaVersion(record),
+    block_pending_human_review: record.block_pending_human_review === undefined
+      ? true
+      : assertBoolean(
+          record.block_pending_human_review,
+          "ConfidenceGatePolicy.block_pending_human_review",
+        ),
+    required_fields_min_level: record.required_fields_min_level === undefined
+      ? "medium"
+      : assertConfidenceLevel(
+          record.required_fields_min_level,
+          "ConfidenceGatePolicy.required_fields_min_level",
+        ),
+    allow_low_confidence_primary: record.allow_low_confidence_primary === undefined
+      ? false
+      : assertBoolean(
+          record.allow_low_confidence_primary,
+          "ConfidenceGatePolicy.allow_low_confidence_primary",
+        ),
+    max_low_confidence_fraction: maxLowFraction,
+    require_review_for_channels: record.require_review_for_channels === undefined
+      ? ["vlm", "llm", "ocr", "web_extraction"]
+      : assertStringArray(
+          record.require_review_for_channels,
+          "ConfidenceGatePolicy.require_review_for_channels",
+        ),
+  };
 }
 
 const VALIDATION_PROFILE_KEYS = [
@@ -70,6 +137,7 @@ const VALIDATION_PROFILE_KEYS = [
   "acceptance",
   "description",
   "required_entity_level",
+  "confidence_gate",
 ] as const;
 
 export function parseValidationProfile(value: unknown): ValidationProfile {
@@ -96,6 +164,9 @@ export function parseValidationProfile(value: unknown): ValidationProfile {
       : parseAcceptancePolicy(record.acceptance),
     description: assertString(record.description, "ValidationProfile.description"),
     required_entity_level: requiredEntityLevel,
+    confidence_gate: record.confidence_gate === undefined
+      ? parseConfidenceGatePolicy({})
+      : parseConfidenceGatePolicy(record.confidence_gate),
   };
 }
 

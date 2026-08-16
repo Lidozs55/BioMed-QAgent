@@ -57,6 +57,12 @@ import {
 } from "../validation/index.js";
 import { createDefaultSchemaRegistry } from "../schema/registry.js";
 import { acquireBuildLock, type BuildLockLease } from "./build-lock.js";
+import type { DatasetHILGate } from "../review/hil-policy.js";
+import { reviewBatchForHIL } from "../review/hil-policy.js";
+import { evaluateConfidence, mappingConfidence } from "../confidence/evaluator.js";
+import { writeConfidenceArtifact } from "../confidence/artifact.js";
+import { delimitedRowsWithLinesAsync, readSourceTextAsync } from "../adapters/text.js";
+import type { HumanReviewState } from "../contracts/data.js";
 
 export interface TypeScriptDatasetCoreOptions {
   taskId: string;
@@ -65,6 +71,8 @@ export interface TypeScriptDatasetCoreOptions {
   operationTimeoutMs?: number;
   /** Core operation lifecycle sink, receiving the owning build id (M2 I-05). */
   eventSink?: ((event: CoreEventSinkEvent, buildId: string) => void | Promise<void>) | null;
+  /** Runtime-owned durable review primitive; Dataset Core only supplies policy. */
+  hilGate?: DatasetHILGate | null;
 }
 
 export type CoreEventSinkEvent = Parameters<NonNullable<CoreEventSink>>[0];
@@ -125,6 +133,70 @@ function sourceSummary(
   return summary;
 }
 
+async function effectiveConfidenceCounts(options: {
+  integration: IntegrationResult;
+  canonicalResults: readonly CanonicalizationResult[];
+  sourceAssets: Readonly<Record<string, SourceAsset>>;
+  signal?: AbortSignal;
+}): Promise<Map<string, number>> {
+  const batchBySourceId = new Map<string, string>();
+  for (const result of options.canonicalResults) {
+    const asset = options.sourceAssets[result.batch.binding_id];
+    if (asset === undefined) {
+      throw new BuildError(`confidence lineage is missing source asset for ${result.batch.binding_id}`);
+    }
+    if (batchBySourceId.has(asset.source_id)) {
+      throw new BuildError(`confidence lineage source_id '${asset.source_id}' is ambiguous`);
+    }
+    batchBySourceId.set(asset.source_id, result.batch.batch_id);
+  }
+  const rows = await delimitedRowsWithLinesAsync(
+    await readSourceTextAsync(options.integration.mergedPath, options.signal),
+    ",",
+    options.signal,
+  );
+  if (rows.length === 0) throw new BuildError("integrated primary is missing its header");
+  const sourceIndex = rows[0].values.indexOf("source_id");
+  if (sourceIndex < 0) throw new BuildError("integrated primary has no source_id lineage column");
+  const counts = new Map<string, number>();
+  for (const row of rows.slice(1)) {
+    const sourceId = row.values[sourceIndex] ?? "";
+    const batchId = batchBySourceId.get(sourceId);
+    if (batchId === undefined) {
+      throw new BuildError(`integrated row references unknown source_id '${sourceId}'`);
+    }
+    counts.set(batchId, (counts.get(batchId) ?? 0) + 1);
+  }
+  const effectiveTotal = [...counts.values()].reduce((total, count) => total + count, 0);
+  if (effectiveTotal !== options.integration.rowCount) {
+    throw new BuildError(
+      `confidence lineage count ${effectiveTotal} does not match integrated primary ${options.integration.rowCount}`,
+    );
+  }
+  return counts;
+}
+
+function reviewedHumanState(
+  result: CanonicalizationResult,
+  mappingState: HumanReviewState,
+): HumanReviewState {
+  if (mappingState === "pending" || mappingState === "rejected") return mappingState;
+  const mappingReview = result.batch.statistics["mapping_human_review_state"];
+  if (mappingReview === "corrected" || mappingReview === "accepted") {
+    mappingState = mappingReview;
+  }
+  const unitCorrection = result.batch.statistics["human_unit_correction"];
+  if (
+    unitCorrection !== null &&
+    typeof unitCorrection === "object" &&
+    !Array.isArray(unitCorrection) &&
+    unitCorrection["method"] === "human_correction"
+  ) {
+    return "corrected";
+  }
+  return mappingState;
+}
+
 /**
  * The fixed-skeleton operation runner (Python ``expression_runner.py`` wiring).
  * Returns sync or async OperationOutput per operation kind.
@@ -140,9 +212,11 @@ export function createTsCoreOperationRunner(options: {
   bindings: ReadonlyMap<string, ReturnType<typeof import("../contracts/spec.js").parseSourceBinding>>;
   /** I-04 publish fence: true while this build still owns its lock. */
   fence?: (() => Promise<boolean>) | null;
+  hilGate?: DatasetHILGate | null;
 }): OperationRunner {
   const { spec, taskId, taskRoot, outputDir, sourceAssets, mappingAssets, runnerState, bindings } = options;
   const fence = options.fence ?? null;
+  const hilGate = options.hilGate ?? null;
   const schema = buildGeneExpressionSchema();
 
   return async (op, _upstream, signal): Promise<OperationOutput> => {
@@ -194,10 +268,20 @@ export function createTsCoreOperationRunner(options: {
         });
       }
       case "canonicalize": {
-        const batch = runnerState.batches.get(op.category);
-        if (batch === undefined) {
+        const parsedBatch = runnerState.batches.get(op.category);
+        if (parsedBatch === undefined) {
           throw new BuildError(`no parsed batch cached for binding ${op.category!}`);
         }
+        const normalizationProfile = expressionNormalizationV1();
+        const reviewed = await reviewBatchForHIL({
+          batch: parsedBatch,
+          profile: normalizationProfile,
+          gate: hilGate,
+          buildId: spec.build_id,
+          signal,
+        });
+        const batch = reviewed.batch;
+        runnerState.batches.set(batch.binding_id, batch);
         let probeMap: Readonly<Record<string, string>> | undefined;
         let probeTargetNamespace: string | undefined;
         let probeMappingAuditPath: string | undefined;
@@ -232,10 +316,11 @@ export function createTsCoreOperationRunner(options: {
           {
             batch,
             schema,
-            profile: expressionNormalizationV1(),
+            profile: normalizationProfile,
             outputDir,
             probeMap,
             probeTargetNamespace,
+            unitCorrection: reviewed.unitCorrection,
           },
           signal,
         );
@@ -301,7 +386,57 @@ export function createTsCoreOperationRunner(options: {
           outputDir,
           signal,
         });
-        const auditPaths = runnerState.canonicalResults.flatMap((result) => result.auditPaths);
+        const effectiveCounts = await effectiveConfidenceCounts({
+          integration,
+          canonicalResults: runnerState.canonicalResults,
+          sourceAssets,
+          signal,
+        });
+        const batchDefaults = runnerState.canonicalResults.flatMap((result) => {
+          const recordCount = effectiveCounts.get(result.batch.batch_id) ?? 0;
+          if (recordCount === 0) return [];
+          const mapping = mappingConfidence(result.batch.declared_mappings);
+          const sourceDatabase = result.batch.statistics["source_database"];
+          const declaredChannel = result.batch.statistics["extraction_channel"];
+          const channel = typeof declaredChannel === "string"
+            ? declaredChannel
+            : typeof sourceDatabase === "string" &&
+                ["gdc", "xena", "reactome", "pubmed"].includes(sourceDatabase)
+              ? "official_api"
+              : "deterministic_parser";
+          const evaluated = evaluateConfidence({
+            confidence_id: `confidence_batch_${result.batch.batch_id}`,
+            batch_id: result.batch.batch_id,
+            record_id: `batch_default_${result.batch.batch_id}`,
+            channel,
+            components: {
+              source_reliability: "high",
+              extraction_reliability: "high",
+              mapping_reliability: mapping.reliability,
+              cross_source_consistency: "not_checked",
+              human_review_state: reviewedHumanState(result, mapping.human_review_state),
+            },
+            reasons: mapping.reasons,
+          });
+          return [{
+            schema_version: "1.0" as const,
+            batch_id: result.batch.batch_id,
+            record_count: recordCount,
+            level: evaluated.level,
+            channel: evaluated.channel,
+            components: evaluated.components,
+            reasons: evaluated.reasons,
+          }];
+        });
+        const confidencePath = await writeConfidenceArtifact(outputDir, {
+          schema_version: "1.0",
+          batch_defaults: batchDefaults,
+          record_overrides: [],
+        });
+        const auditPaths = [
+          ...runnerState.canonicalResults.flatMap((result) => result.auditPaths),
+          confidencePath,
+        ];
         const summary = sourceSummary([...bindings.keys()], runnerState);
         let manifest = await assembleManifest({
           taskId,
@@ -451,6 +586,7 @@ export class TypeScriptDatasetCore {
       runnerState,
       bindings,
       fence: async (): Promise<boolean> => lease.assertOwned(),
+      hilGate: this.options.hilGate ?? null,
     });
     const executor = new DatasetBuildExecutor({
       taskId,

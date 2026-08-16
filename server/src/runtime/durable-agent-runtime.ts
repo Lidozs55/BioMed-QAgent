@@ -9,10 +9,13 @@ import type {
   BuildResult,
   EventEnvelope,
   EventPayload,
+  HumanReviewRecord,
   JsonValue,
+  ResumeHILInput,
   TaskMode,
   WebSocketControlFrame,
 } from "@biomed/contracts";
+import { parseResumeHILInput } from "@biomed/contracts";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 
 import {
@@ -35,6 +38,7 @@ import {
   DurableTaskConflictError,
   DurableTaskRepository,
 } from "./task-repository.js";
+import { DurableHILStore, HILConflictError } from "./hil-store.js";
 
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_INPUT_LENGTH = 64 * 1024;
@@ -235,10 +239,16 @@ export async function createDurableAgentRuntime(
   options: DurableAgentRuntimeOptions,
 ): Promise<DurableAgentRuntime> {
   const repository = options.repository ?? new DurableTaskRepository(options.tasksRoot);
-  await repository.recoverActiveRuns();
+  const hilStore = new DurableHILStore(repository);
+  const hilRecoveries = await hilStore.reconcileTaskTimeline();
+  await repository.recoverActiveRuns(new Set(
+    hilRecoveries.map((recovery) => `${recovery.task_id}:${recovery.run_id}`),
+  ));
   const activeTasks = new Map<string, ActiveTask>();
   const activeDownloads = new Map<string, ActiveDownloadHandle>();
   const activeExecutions = new Set<Promise<void>>();
+  const resumeOperations = new Map<string, Promise<unknown>>();
+  const suspendedRuns = new Set<string>();
   const webSocketServer = new WebSocketServer({ noServer: true });
   const sockets = new Set<WebSocket>();
   let closed = false;
@@ -246,8 +256,10 @@ export async function createDurableAgentRuntime(
   async function consumeRun(taskId: string, runId: string, input: string): Promise<void> {
     const task = activeTasks.get(taskId);
     if (task === undefined) return;
+    const runKey = `${taskId}:${runId}`;
     try {
       for await (const source of task.session.run(input)) {
+        if (suspendedRuns.has(runKey)) break;
         const payloads = task.adapter.adapt(runId, source).map((event) =>
           event.payload.type === "run_completed"
             ? {
@@ -261,6 +273,7 @@ export async function createDurableAgentRuntime(
         }
       }
     } catch (error) {
+      if (suspendedRuns.has(runKey)) return;
       for (const event of task.adapter.failed(runId, error)) {
         await repository.appendRunEvent(taskId, runId, event.payload);
       }
@@ -287,7 +300,7 @@ export async function createDurableAgentRuntime(
   }
 
   async function createSession(taskId: string, runId: string): Promise<ActiveTask> {
-    const approvalGate = new DurableApprovalGate(taskId, repository, runId);
+    const approvalGate = new DurableApprovalGate(taskId, repository, runId, hilStore);
     const workspace = await options.workspaceFactory({
       taskId,
       runId,
@@ -427,6 +440,19 @@ export async function createDurableAgentRuntime(
       throw new ReferenceError("Run not found");
     }
     const task = activeTasks.get(taskId);
+    const pendingHIL = await hilStore.findPendingForRun(taskId, runId);
+    if (task === undefined && pendingHIL !== null) {
+      await repository.appendRunEvent(taskId, runId, {
+        type: "run_cancel_requested",
+        reason: null,
+      });
+      await hilStore.cancelPendingForRun(taskId, runId);
+      await repository.appendRunEvent(taskId, runId, {
+        type: "run_cancelled",
+        reason: "user requested",
+      });
+      return repository.getSnapshot(taskId);
+    }
     if (task === undefined || task.activeRunId !== runId) {
       throw new DurableTaskConflictError("active_run", "Run is not cancellable");
     }
@@ -449,6 +475,7 @@ export async function createDurableAgentRuntime(
       reason: null,
     });
     // A suspended credential approval must not outlive the cancelled run.
+    await hilStore.cancelPendingForRun(taskId, runId);
     task.approvalGate.rejectPending(runId, new Error("run cancelled"));
     // An in-flight standalone download is a task-level entity independent of
     // this AI run; cancelling the run does not abort it. Use the dedicated
@@ -633,31 +660,136 @@ export async function createDurableAgentRuntime(
     return { status: "cancel_requested", task_id: taskId };
   }
 
-  async function resumeRun(taskId: string, runId: string, body: Record<string, unknown>): Promise<unknown> {
+  async function resumeRunOnce(taskId: string, runId: string, body: Record<string, unknown>): Promise<unknown> {
     const snapshot = await repository.getSnapshot(taskId);
-    if (snapshot === null || !snapshot.runs.some((run) => run.run_id === runId)) {
+    const run = snapshot?.runs.find((candidate) => candidate.run_id === runId);
+    if (snapshot === null || run === undefined) {
       throw new ReferenceError("Run not found");
     }
     const requestId = requiredString(body, "request_id", 256);
-    let decision: "approve" | "reject";
-    if (body.decision === "approve" || body.decision === "reject") {
-      decision = body.decision;
-    } else {
-      throw new TypeError("decision must be approve or reject");
+    const storedRequest = await hilStore.getRequest(taskId, requestId);
+    const pendingRequest = await hilStore.findPendingForRun(taskId, runId);
+    if (pendingRequest !== null && pendingRequest.request_id !== requestId) {
+      throw new HILConflictError("request_id does not match the pending HIL request");
     }
-    const detail = body.detail;
-    const payload = {
+
+    if (storedRequest === null && pendingRequest === null) {
+      if (body.evidence_digest !== undefined || typeof body.decision === "object") {
+        throw new ReferenceError("HIL request not found");
+      }
+      if (body.decision !== "approve" && body.decision !== "reject") {
+        throw new TypeError("decision must be approve or reject");
+      }
+      if (run.status !== "awaiting_user_input") {
+        throw new DurableTaskConflictError("active_run", "Run is not awaiting user input");
+      }
+      const afterSequence = Math.max(0, snapshot.task.latest_sequence - 1_000);
+      const events = await repository.listEvents(taskId, afterSequence, 1_000);
+      const resumed = new Set<string>();
+      let unresolvedRequestId: string | null = null;
+      for (const event of [...events].reverse()) {
+        if (event.run_id !== runId) continue;
+        if (event.payload.type === "user_input_resumed") {
+          resumed.add(event.payload.request_id);
+          continue;
+        }
+        if (
+          event.payload.type === "user_input_required"
+          && !resumed.has(event.payload.request_id)
+        ) {
+          unresolvedRequestId = event.payload.request_id;
+          break;
+        }
+      }
+      if (unresolvedRequestId === null || unresolvedRequestId !== requestId) {
+        throw new HILConflictError("request_id does not match the unresolved user input request");
+      }
+      const detail = body.detail;
+      await repository.appendRunEvent(taskId, runId, {
+        type: "user_input_resumed",
+        request_id: requestId,
+        decision: body.decision,
+        detail: detail !== null && typeof detail === "object" && !Array.isArray(detail)
+          ? detail as Record<string, JsonValue>
+          : {},
+      });
+      return repository.getSnapshot(taskId);
+    }
+
+    let input: ResumeHILInput;
+    try {
+      input = parseResumeHILInput({
+        request_id: body.request_id,
+        evidence_digest: body.evidence_digest,
+        decision: body.decision,
+        reason: body.reason ?? null,
+      });
+    } catch (error) {
+      throw new TypeError((error as Error).message, { cause: error });
+    }
+    let review: HumanReviewRecord;
+    if (storedRequest?.status === "resolved") {
+      review = await hilStore.resolveRequest(taskId, runId, input);
+      const afterSequence = Math.max(0, snapshot.task.latest_sequence - 1_000);
+      const alreadyResumed = (await repository.listEvents(taskId, afterSequence, 1_000)).some(
+        (event) => event.run_id === runId
+          && event.payload.type === "user_input_resumed"
+          && event.payload.request_id === input.request_id,
+      );
+      if (alreadyResumed) return repository.getSnapshot(taskId);
+    } else if (storedRequest?.blocking !== false && run.status !== "awaiting_user_input") {
+      throw new DurableTaskConflictError("active_run", "Run is not awaiting user input");
+    } else {
+      review = await hilStore.resolveRequest(taskId, runId, input);
+    }
+    await repository.appendRunEvent(taskId, runId, {
       type: "user_input_resumed" as const,
-      request_id: requestId,
-      decision,
-      detail: detail === null || detail === undefined || typeof detail !== "object"
-        ? {}
-        : detail as Record<string, JsonValue>,
-    };
-    await repository.appendRunEvent(taskId, runId, payload);
+      request_id: input.request_id,
+      decision: review.decision,
+      detail: {
+        evidence_digest: input.evidence_digest,
+        review_id: review.review_id,
+        reason: review.reason,
+      },
+    });
+    if (storedRequest?.blocking === false) {
+      return repository.getSnapshot(taskId);
+    }
     const task = activeTasks.get(taskId);
-    task?.approvalGate.resolvePending(runId, decision);
+    if (task?.approvalGate.resolvePending(runId, review) !== true) {
+      const recoveredTask = await createSession(taskId, runId);
+      activeTasks.set(taskId, recoveredTask);
+      startRun(
+        taskId,
+        runId,
+        [
+          "A durable human-review request from the interrupted run has been resolved.",
+          `Request: ${input.request_id}`,
+          `Decision: ${JSON.stringify(review.decision)}`,
+          "Continue the same task from the durable checkpoint. Do not ask the same review again;",
+          "the reviewed operation will replay idempotently against the persisted decision.",
+        ].join("\n"),
+      );
+    }
     return await repository.getSnapshot(taskId);
+  }
+
+  function resumeRun(
+    taskId: string,
+    runId: string,
+    body: Record<string, unknown>,
+  ): Promise<unknown> {
+    const key = `${taskId}:${runId}`;
+    const previous = resumeOperations.get(key) ?? Promise.resolve();
+    const operation = previous.then(
+      () => resumeRunOnce(taskId, runId, body),
+      () => resumeRunOnce(taskId, runId, body),
+    );
+    resumeOperations.set(key, operation);
+    void operation.finally(() => {
+      if (resumeOperations.get(key) === operation) resumeOperations.delete(key);
+    }).catch(() => undefined);
+    return operation;
   }
 
   async function compactTask(taskId: string): Promise<Record<string, string>> {
@@ -876,7 +1008,7 @@ export async function createDurableAgentRuntime(
       }
       sendJson(response, 404, { detail: "Not Found" });
     } catch (error) {
-      if (error instanceof DurableTaskConflictError) {
+      if (error instanceof DurableTaskConflictError || error instanceof HILConflictError) {
         sendJson(response, 409, { detail: error.message });
       } else if (error instanceof ArtifactIntegrityError) {
         sendJson(response, 409, { detail: error.message });
@@ -991,6 +1123,31 @@ export async function createDurableAgentRuntime(
     });
   });
 
+  for (const recovery of hilRecoveries) {
+    if (recovery.review === null) continue;
+    try {
+      const recoveredTask = await createSession(recovery.task_id, recovery.run_id);
+      activeTasks.set(recovery.task_id, recoveredTask);
+      startRun(
+        recovery.task_id,
+        recovery.run_id,
+        [
+          "A durable human-review request was resolved before the Application Host restarted.",
+          `Request: ${recovery.request.request_id}`,
+          `Decision: ${JSON.stringify(recovery.review.decision)}`,
+          "Continue the same task from the durable checkpoint. Do not ask the same review again;",
+          "the reviewed operation will replay idempotently against the persisted decision.",
+        ].join("\n"),
+      );
+    } catch (error) {
+      await repository.appendRunEvent(recovery.task_id, recovery.run_id, {
+        type: "run_failed",
+        error: error instanceof Error ? error.message : "HIL recovery failed",
+        error_code: "configuration_error",
+      });
+    }
+  }
+
   return {
     repository,
     handle(request, response) {
@@ -1031,9 +1188,20 @@ export async function createDurableAgentRuntime(
       if (closed) return;
       closed = true;
       for (const socket of sockets) socket.close(1001, "Host shutdown");
-      const results = await Promise.allSettled([...activeTasks.values()].map(async (task) => {
+      const results = await Promise.allSettled([...activeTasks.entries()].map(async ([taskId, task]) => {
         try {
-          if (task.activeRunId !== null) await task.session.cancel("Host shutdown");
+          if (task.activeRunId !== null) {
+            const pending = await hilStore.findPendingForRun(taskId, task.activeRunId);
+            if (pending !== null) {
+              suspendedRuns.add(`${taskId}:${task.activeRunId}`);
+              task.approvalGate.rejectPending(
+                task.activeRunId,
+                new Error("Host shutdown while awaiting durable HIL"),
+              );
+            } else {
+              await task.session.cancel("Host shutdown");
+            }
+          }
           await task.session.dispose();
         } finally {
           await task.workspace.dispose();
