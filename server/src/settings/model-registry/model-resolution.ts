@@ -50,6 +50,8 @@ export function resolveActiveConfig(
     baseUrl: provider?.base_url ?? settings.base_url,
     contextWindow: model?.context_window ?? settings.context_window ?? 131_072,
     maxTokens: settings.max_tokens,
+    compactionTriggerRatio: settings.compaction_trigger_ratio,
+    compactionTargetRatio: settings.compaction_target_ratio,
     temperature: settings.advanced.temperature,
     topP: settings.advanced.top_p,
     repetitionPenalty: settings.advanced.repetition_penalty,

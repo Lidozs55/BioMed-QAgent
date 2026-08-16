@@ -111,6 +111,7 @@ export class PiEventAdapter {
         "tool_started",
         "tool_progress",
         "tool_completed",
+        "context_compacted",
         "turn_cancelled",
         "turn_completed",
       ].includes(type)
@@ -168,6 +169,14 @@ export class PiEventAdapter {
             tool_call_id: sanitizeText(event.toolCallId, MAX_ARGUMENT_STRING_LENGTH),
             output: serializedOutput(event.result),
             is_error: event.isError,
+          }),
+        ];
+      case "context_compacted":
+        return [
+          this.envelope(runId, {
+            type: "conversation_compacted",
+            covered_through_run_id: runId,
+            summary_digest: createHash("sha256").update(event.summary, "utf8").digest("hex"),
           }),
         ];
       case "turn_cancelled":
