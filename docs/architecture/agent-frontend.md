@@ -220,9 +220,12 @@ durable `assistant_delta` 无 `stream_id`（Pi adapter 路径）时，`stream.ts
 出现两条重复进度条。`pipeline.ts` 把 `downloaded_bytes` 进度绑定到所属工具调用：
 优先匹配 `detail.accession` 与工具 `arguments` 相等的 running tool_call，否则回退
 到该 run 最近启动的 running tool_call（防止绑定到错误的工具气泡）。所有采集工具
-（xena/gdc/pubmed）共用 `tool-hooks.ts` 的 `createDownloadProgressReporter` 上报
+（geo/gdc/xena/pubmed）共用 `tool-hooks.ts` 的 `createDownloadProgressReporter` 上报
 节流进度（intervalMs/bytesStep），保证 payload 结构一致（`detail.accession` 扁平
-可匹配）；geo 一次性终态上报沿用同一扁平结构。
+可匹配）。**终态 100% tick 由 downloader 统一发出**：`acquireSource` 的 progress 回调
+是鸭子类型 `AcquisitionProgress`（普通回调 + 可选 `finalize`），它在两条成功路径
+（缓存命中、流式下载）返回前各调用一次 `finalize(最终字节, 最终字节)`，不受节流
+限制，工具层不再手工补终态事件——UI 必然到达 100% 而不是冻结在最后一个节流 tick。
 
 下载是**任务级实体**，独立于 AI run：一个下载任务（source+accession）从首次发起
 到完成始终是同一个实体，进度绑定到承载它的 tool_call 气泡。前端"恢复下载"调用
