@@ -216,10 +216,13 @@ describe("ToolCallStep download progress", () => {
     });
   });
 
-  it("collapses the progress strip once the download completes", () => {
-    render(<ToolCallStep item={downloadToolCall(1_642_160_120, 1_642_160_120, TIMESTAMP, "completed")} />);
+  it("collapses the progress strip once the download completes and reveals it on expand", () => {
+    const completed = downloadToolCall(1_642_160_120, 1_642_160_120, TIMESTAMP, "completed");
+    render(<ToolCallStep item={completed} />);
     expect(screen.queryByTestId("download-percent")).not.toBeInTheDocument();
-    expect(screen.queryByText(/GB/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button"));
+    expect(screen.getByTestId("download-percent")).toHaveTextContent("100.0%");
+    expect(screen.getByText(/1\.53 GB/)).toBeInTheDocument();
   });
 
   it("expands to reveal speed, ETA and the filename", () => {

@@ -266,6 +266,19 @@ build 锁、cancel 收敛与 event sink；`DATASET_CORE=ts` 现为默认运行�
       started/progress/completed 会互相覆盖（UI 表现为同源多查询只有一个
       operation 总卡片）。应改为 call-scoped ID（2026-08-15 对话流时序
       修复时发现，`fix/runtime-timeline-sequence` 未包含此改动）
+- [ ] **P1** `search_local_cache` 与下载/构建流程脱节：research 任务下载的
+      数据只写入 `source_assets/` 与 content-addressed `cache/blobs`，从不
+      `CacheStore.commit_dataset` 写入 SQLite `cache.search` 索引，导致
+      LLM 报告 "Local cache: empty"、缓存复用完全失效。应评估：下载/构建
+      完成后自动注册缓存数据集（manifest 级）或调整工具描述避免误引导
+      （2026-08-16 排查 `task_ts_9f9dddbb`，TASK-045）
+- [ ] **P1** 长上下文运行被 `stopReason="length"` 截断后仍发 `run_completed`
+      （假完成）：`task_ts_9f9dddbb` 最后一条 assistant
+      `totalTokens=130898/131072`（99.8%），输出被截断（思维链残片
+      "Now"），Pi 无 compact-and-retry（仅处理 error/overflow），adapter 将
+      turn_completed 翻译为 run_completed。应检测截断（无有效 assistant
+      delta / 无 tool 产出）转 run_failed 或触发提前 compact（2026-08-16，
+      TASK-046）
 
 ## 前端 UI 合规修复（shadcn 规则审查，2026-08-15）（✅ 完成，2026-08-15）
 
