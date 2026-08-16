@@ -228,6 +228,61 @@ describe("durable event transport", () => {
     expect(controlErrors).toHaveLength(1);
   });
 
+  it("delivers permission events through the websocket transport (P4 regression)", async () => {
+    const { transport, sockets } = setupTransport();
+    transport.subscribe("task_a", 0);
+    const connected = transport.connect();
+    sockets[0].open();
+    await connected;
+
+    sockets[0].message({
+      schema_version: "2.0",
+      event_id: "event_permission_1",
+      type: "permission_requested",
+      task_id: "task_a",
+      run_id: "run_task_a",
+      stage_attempt_id: null,
+      sequence: 1,
+      timestamp: "2026-07-14T00:00:01Z",
+      payload: {
+        type: "permission_requested",
+        request_id: "permission_1",
+        capability: "fs.read",
+        scope: "external",
+        resource: "D:\\tmp",
+        canonical_resource: "D:\\tmp",
+        command: null,
+        cwd: null,
+        summary: "读取外部目录 D:\\tmp",
+      },
+    });
+
+    expect(useAgentStore.getState().tasksById.task_a?.pendingPermission).toMatchObject({
+      requestId: "permission_1",
+      capability: "fs.read",
+      scope: "external",
+    });
+
+    sockets[0].message({
+      schema_version: "2.0",
+      event_id: "event_permission_2",
+      type: "permission_resolved",
+      task_id: "task_a",
+      run_id: "run_task_a",
+      stage_attempt_id: null,
+      sequence: 2,
+      timestamp: "2026-07-14T00:00:02Z",
+      payload: {
+        type: "permission_resolved",
+        request_id: "permission_1",
+        decision: "allow",
+        grant_scope: "once",
+      },
+    });
+
+    expect(useAgentStore.getState().tasksById.task_a?.pendingPermission).toBeNull();
+  });
+
   it("unsubscribes a task whose last run becomes terminal and never resubscribes it on reconnect", async () => {
     const { transport, sockets } = setupTransport({
       shouldSubscribe: (taskId) =>
