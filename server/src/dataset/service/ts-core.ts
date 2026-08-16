@@ -219,7 +219,7 @@ export function createTsCoreOperationRunner(options: {
   const hilGate = options.hilGate ?? null;
   const schema = buildGeneExpressionSchema();
 
-  return async (op, _upstream, signal): Promise<OperationOutput> => {
+  return async (op, _upstream, signal, suspension): Promise<OperationOutput> => {
     throwIfAborted(signal);
     switch (op.kind) {
       case "acquire": {
@@ -279,6 +279,7 @@ export function createTsCoreOperationRunner(options: {
           gate: hilGate,
           buildId: spec.build_id,
           signal,
+          suspension: suspension ?? null,
         });
         const batch = reviewed.batch;
         runnerState.batches.set(batch.binding_id, batch);

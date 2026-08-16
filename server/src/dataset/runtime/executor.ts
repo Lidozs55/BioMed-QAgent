@@ -18,7 +18,7 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { BindingRejection, SourceAsset } from "../contracts/index.js";
 import { AdapterError, BindingRejectedError, BuildError, EmptySourceError } from "../adapters/errors.js";
-import { OperationAbortedError } from "../cooperative.js";
+import { OperationAbortedError, type OperationSuspension } from "../cooperative.js";
 import { LockLostError } from "../service/build-lock.js";
 import {
   appendAttempt,
@@ -48,11 +48,14 @@ export interface BuildRunOutcome {
   completedOperationIds: string[];
 }
 
-/** One operation handler (Python ``OperationRunner``); may be async (M2). */
+/** One operation handler (Python ``OperationRunner``); may be async (M2).
+ * The optional ``suspension`` lets a runner pause the operation wall-clock
+ * timeout while it waits on external input (durable HIL human review). */
 export type OperationRunner = (
   op: OperationSpec,
   upstream: Record<string, Record<string, unknown>>,
   signal?: AbortSignal,
+  suspension?: OperationSuspension,
 ) => OperationOutput | Promise<OperationOutput>;
 
 /** Typed per-operation wall-clock timeout (M2, I-03). */
@@ -565,7 +568,9 @@ export class DatasetBuildExecutor {
    */
   static readonly STRAGGLER_SETTLE_GRACE_MS = 10_000;
 
-  /** Run one operation under cooperative cancel checks + wall-clock timeout. */
+  /** Run one operation under cooperative cancel checks + wall-clock timeout.
+   * The timeout is deadline-based and pauses while the runner holds the
+   * operation suspension (HIL human wait is not operation compute). */
   private async executeOperation(
     op: OperationSpec,
     upstream: Record<string, Record<string, unknown>>,
@@ -580,37 +585,7 @@ export class DatasetBuildExecutor {
     try {
       try {
         if (this.operationTimeoutMs > 0) {
-          let timeout: NodeJS.Timeout | undefined;
-          let pending: Promise<OperationOutput> | null = null;
-          try {
-            pending = Promise.resolve(
-              this.runOperation(op, upstream, operationController.signal),
-            );
-            result = await Promise.race([
-              pending,
-              new Promise<never>((_resolve, reject) => {
-                timeout = setTimeout(
-                  () => {
-                    operationController.abort();
-                    reject(new OperationTimeoutError(op.operation_id, this.operationTimeoutMs));
-                  },
-                  this.operationTimeoutMs,
-                );
-              }),
-            ]);
-          } finally {
-            if (timeout !== undefined) clearTimeout(timeout);
-            if (operationController.signal.aborted && pending !== null) {
-              // Straggler safety: wait for the aborted operation to actually
-              // settle (bounded) so the build lock stays held until it stops.
-              await Promise.race([
-                pending.then(() => undefined, () => undefined),
-                new Promise<void>((resolve) => {
-                  setTimeout(resolve, DatasetBuildExecutor.STRAGGLER_SETTLE_GRACE_MS);
-                }),
-              ]);
-            }
-          }
+          result = await this.executeOperationWithTimeout(op, upstream, operationController);
         } else {
           result = await this.runOperation(op, upstream, operationController.signal);
         }
@@ -637,6 +612,83 @@ export class DatasetBuildExecutor {
       );
     }
     return result;
+  }
+
+  /** Deadline-based timeout that stops while the runner is suspended. */
+  private async executeOperationWithTimeout(
+    op: OperationSpec,
+    upstream: Record<string, Record<string, unknown>>,
+    operationController: AbortController,
+  ): Promise<OperationOutput> {
+    let deadline = Date.now() + this.operationTimeoutMs;
+    let timer: NodeJS.Timeout | undefined;
+    let suspended = false;
+    let suspendedAt = 0;
+    let rejectTimeout!: (error: OperationTimeoutError) => void;
+    const timedOut = new Promise<never>((_resolve, reject) => {
+      rejectTimeout = reject;
+    });
+    const fire = (): void => {
+      operationController.abort();
+      rejectTimeout(new OperationTimeoutError(op.operation_id, this.operationTimeoutMs));
+    };
+    const arm = (): void => {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        fire();
+        return;
+      }
+      timer = setTimeout(fire, remaining);
+    };
+    const disarm = (): void => {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+    };
+    const suspension: OperationSuspension = {
+      get suspended() {
+        return suspended;
+      },
+      suspend() {
+        if (suspended) return;
+        suspended = true;
+        suspendedAt = Date.now();
+        disarm();
+      },
+      resume() {
+        if (!suspended) return;
+        suspended = false;
+        // Suspension time is not operation compute: shift the deadline by
+        // the full suspension duration so the timer never fires immediately
+        // after a human wait that outlived the original budget.
+        deadline += Date.now() - suspendedAt;
+        arm();
+      },
+    };
+    // Arm BEFORE invoking the runner: the runner's synchronous prologue may
+    // already enter a suspension, and a suspend() that runs before arm()
+    // would disarm a timer that does not exist yet, leaving the armed timer
+    // to fire mid-wait.
+    arm();
+    const pending = Promise.resolve(
+      this.runOperation(op, upstream, operationController.signal, suspension),
+    );
+    try {
+      return await Promise.race([pending, timedOut]);
+    } finally {
+      disarm();
+      if (operationController.signal.aborted) {
+        // Straggler safety: wait for the aborted operation to actually
+        // settle (bounded) so the build lock stays held until it stops.
+        await Promise.race([
+          pending.then(() => undefined, () => undefined),
+          new Promise<void>((resolve) => {
+            setTimeout(resolve, DatasetBuildExecutor.STRAGGLER_SETTLE_GRACE_MS);
+          }),
+        ]);
+      }
+    }
   }
 
   private digestScope(op: OperationSpec): DigestScope {
