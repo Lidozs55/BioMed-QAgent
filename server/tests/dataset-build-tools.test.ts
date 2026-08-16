@@ -11,6 +11,12 @@ import { datasetBuildSpec as spec } from "./dataset-bridge-fixture.js";
 
 const roots: string[] = [];
 
+async function toolTaskRoot(): Promise<string> {
+  const root = await mkdtemp(path.join(os.tmpdir(), "biomed-tool-cont-"));
+  roots.push(root);
+  return root;
+}
+
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
@@ -28,7 +34,7 @@ describe("Pi DatasetBuild tools", () => {
     const [validateTool, executeTool] = createDatasetBuildTools({
       client: { validate, execute },
       taskId: "task_tool",
-      taskRoot: "__unused__",
+      taskRoot: await toolTaskRoot(),
       runId: () => "run_tool",
       piSessionId: () => "pi_tool",
     });
@@ -127,7 +133,7 @@ describe("Pi DatasetBuild tools", () => {
     const diagnostic = vi.fn();
     const onBuildResult = vi.fn();
     const tools = createDatasetBuildTools({
-      client: { validate, execute }, taskId: "task_tool", taskRoot: "__unused__", runId: () => "run_tool", piSessionId: () => "pi_tool", onDiagnostic: diagnostic, onBuildResult,
+      client: { validate, execute }, taskId: "task_tool", taskRoot: await toolTaskRoot(), runId: () => "run_tool", piSessionId: () => "pi_tool", onDiagnostic: diagnostic, onBuildResult,
     });
     const result = await tools[1]!.execute(
       { spec, source_files: {}, mapping_files: {} },
