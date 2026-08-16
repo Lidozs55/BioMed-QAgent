@@ -4,6 +4,7 @@ import type {
   DatasetBuildSpec,
 } from "@biomed/contracts";
 
+import { saveBuildContinuation } from "../../runtime/build-continuation.js";
 import type {
   BioMedAgentTool,
   BioMedToolExecutionContext,
@@ -29,6 +30,10 @@ export interface DatasetBuildToolDiagnostic {
 export interface DatasetBuildToolOptions {
   client: Pick<DatasetCoreService, "validate" | "execute">;
   taskId: string;
+  /** Task root on disk; the tool persists its invocation here so a
+   * cross-restart resume can replay the exact same build deterministically
+   * (no model reinterpretation of a synthetic prompt). */
+  taskRoot: string;
   runId: () => string;
   piSessionId: () => string;
   onDiagnostic?: (diagnostic: DatasetBuildToolDiagnostic) => void;
@@ -234,13 +239,38 @@ export function createDatasetBuildTools(
             return resultFor(validation);
           }
           options.onBuildResult?.(null);
+          const sourceFiles = mappingArgument(args, "source_files");
+          const mappingFiles = mappingArgument(args, "mapping_files");
+          const metadataFiles = args.metadata_files === undefined
+            ? {}
+            : mappingArgument(args, "metadata_files");
+          // The continuation record is the deterministic resume contract:
+          // a later restart replays the exact same invocation (same spec and
+          // asset references) onto the original run without asking the model.
+          try {
+            await saveBuildContinuation(options.taskRoot, {
+              schema_version: 1,
+              build_id: buildId,
+              task_id: options.taskId,
+              run_id: options.runId(),
+              pi_session_id: options.piSessionId(),
+              tool_call_id: context?.toolCallId ?? "unknown",
+              spec,
+              source_files: sourceFiles,
+              mapping_files: mappingFiles,
+              metadata_files: metadataFiles,
+              created_at: new Date().toISOString(),
+            });
+          } catch (error) {
+            // Persistence must not break the build itself; a missing record
+            // only degrades cross-restart continuation to the legacy path.
+            console.warn("tool.continuation_persist_failed", error);
+          }
           response = await options.client.execute({
             ...identity,
-            sourceFiles: mappingArgument(args, "source_files"),
-            mappingFiles: mappingArgument(args, "mapping_files"),
-            metadataFiles: args.metadata_files === undefined
-              ? {}
-              : mappingArgument(args, "metadata_files"),
+            sourceFiles,
+            mappingFiles,
+            metadataFiles,
           });
           captureBuildResult(options, response);
           diagnostic(

@@ -339,6 +339,7 @@ export async function createPhase3Runtime(
       const datasetTools = createDatasetBuildTools({
         client: service,
         taskId,
+        taskRoot,
         runId: () => currentRunId,
         piSessionId: () => currentPiSessionId,
         onDiagnostic: (diagnostic) => {

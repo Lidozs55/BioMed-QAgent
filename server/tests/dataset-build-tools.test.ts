@@ -1,8 +1,19 @@
-import { describe, expect, test, vi } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import type { DatasetBridgeResponse } from "@biomed/contracts";
 import { createDatasetBuildTools } from "../src/agent/tools/dataset-build.js";
+import { readBuildContinuation } from "../src/runtime/build-continuation.js";
 import { datasetBuildSpec as spec } from "./dataset-bridge-fixture.js";
+
+const roots: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
 
 describe("Pi DatasetBuild tools", () => {
   test("validates before execute and propagates the Pi AbortSignal", async () => {
@@ -17,6 +28,7 @@ describe("Pi DatasetBuild tools", () => {
     const [validateTool, executeTool] = createDatasetBuildTools({
       client: { validate, execute },
       taskId: "task_tool",
+      taskRoot: "__unused__",
       runId: () => "run_tool",
       piSessionId: () => "pi_tool",
     });
@@ -48,6 +60,64 @@ describe("Pi DatasetBuild tools", () => {
     expect(result).toMatchObject({ isError: true, details: { code: "no_data" } });
   });
 
+  test("persists a continuation record before handing the build to the core", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "biomed-tool-cont-"));
+    roots.push(root);
+    const execute = vi.fn(async (): Promise<DatasetBridgeResponse> => ({
+      version: 1, request_id: "request_execute", ok: true, data: {
+        build_id: spec.build_id,
+        build_result: {
+          status: "succeeded" as const,
+          valid_row_count: 0,
+          successful_sources: [],
+          rejected_sources: [],
+          available_artifact_roles: [],
+          publication_id: null,
+          reason_codes: [],
+          user_summary: "",
+          recommended_next_action: "",
+          build_id: spec.build_id,
+        },
+        publication_id: null,
+        manifest: null,
+        artifacts: [],
+        validation_summary: null,
+      }, error: null,
+    }));
+    const tools = createDatasetBuildTools({
+      client: { validate: async () => ({ version: 1, request_id: "r", ok: true, data: { valid: true, reason_codes: [], reasons: [] }, error: null }), execute },
+      taskId: "task_tool",
+      taskRoot: root,
+      runId: () => "run_tool",
+      piSessionId: () => "pi_tool",
+    });
+    await tools[1]!.execute(
+      {
+        spec,
+        source_files: { binding: "source_assets/file.tsv" },
+        mapping_files: { binding: "source_assets/annot.txt" },
+      },
+      undefined,
+      { toolCallId: "call_execute" },
+    );
+    const record = await readBuildContinuation(root, spec.build_id);
+    expect(record).not.toBeNull();
+    expect(record).toMatchObject({
+      schema_version: 1,
+      build_id: spec.build_id,
+      task_id: "task_tool",
+      run_id: "run_tool",
+      pi_session_id: "pi_tool",
+      tool_call_id: "call_execute",
+    });
+    expect(record?.source_files).toEqual({ binding: "source_assets/file.tsv" });
+    expect(record?.mapping_files).toEqual({ binding: "source_assets/annot.txt" });
+    expect(record?.spec.build_id).toBe(spec.build_id);
+    // The record exists before the core was invoked: a crash during the
+    // build can always be resumed deterministically.
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
   test("does not execute a rejected spec and emits bounded diagnostics", async () => {
     const validate = vi.fn(async (): Promise<DatasetBridgeResponse> => ({
       version: 1, request_id: "request_reject", ok: false, data: null,
@@ -57,7 +127,7 @@ describe("Pi DatasetBuild tools", () => {
     const diagnostic = vi.fn();
     const onBuildResult = vi.fn();
     const tools = createDatasetBuildTools({
-      client: { validate, execute }, taskId: "task_tool", runId: () => "run_tool", piSessionId: () => "pi_tool", onDiagnostic: diagnostic, onBuildResult,
+      client: { validate, execute }, taskId: "task_tool", taskRoot: "__unused__", runId: () => "run_tool", piSessionId: () => "pi_tool", onDiagnostic: diagnostic, onBuildResult,
     });
     const result = await tools[1]!.execute(
       { spec, source_files: {}, mapping_files: {} },

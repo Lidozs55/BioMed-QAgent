@@ -22,6 +22,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { HumanReviewRecord } from "@biomed/contracts";
 
 import { parseDataBatch } from "../../src/dataset/contracts/data.js";
+import type { DatasetBuildSpec } from "../../src/dataset/contracts/index.js";
 import { expressionNormalizationV1 } from "../../src/dataset/canonicalizer/profiles.js";
 import { reviewBatchForHIL } from "../../src/dataset/review/hil-policy.js";
 import {
@@ -38,7 +39,7 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-function spec(overrides: Record<string, unknown> = {}) {
+function spec(overrides: Record<string, unknown> = {}): DatasetBuildSpec {
   return {
     schema_version: "1.0",
     build_id: "build_hil",
@@ -55,7 +56,7 @@ function spec(overrides: Record<string, unknown> = {}) {
     }],
     validation_profile_ref: "gene_expression.release.v1",
     ...overrides,
-  };
+  } as DatasetBuildSpec;
 }
 
 async function fixture(): Promise<{
@@ -357,7 +358,7 @@ describe("executor suspension mechanics", () => {
       stateDir: path.join(root, "state"),
       taskRoot: root,
       plan: buildOperationPlan(spec({ build_id: "build_t" })),
-      runOperation: async (op, _upstream, signal, suspension) => {
+      runOperation: async (op, _upstream, _signal, suspension) => {
         if (op.kind === "acquire") {
           return makeOperationOutput({ binding_id: op.category, source_id: "s", asset_id: "a" });
         }
