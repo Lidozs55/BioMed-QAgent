@@ -66,23 +66,33 @@ export interface DownloadProgressOptions {
 }
 
 /**
- * Throttled byte-level download-progress reporter (P5-D3 parity with the
- * Python ``_report_progress``): bridges ``acquireSource`` byte callbacks into
+ * Byte-level download progress reporter (P5-D3 parity with the Python
+ * ``_report_progress``): bridges ``acquireSource`` byte callbacks into
  * ``operation_progress`` (``downloaded_bytes``) events. Every acquisition tool
  * shares this one implementation so the payload shape stays consistent for the
  * frontend reducer, which binds progress to the owning tool call via
  * ``detail.accession``.
+ *
+ * The returned function is throttled (interval OR byte step); call
+ * ``finalize(bytes, total)`` once the download has been written so the UI
+ * reaches 100% instead of freezing on the last throttled tick.
  */
+export interface DownloadProgressReporter {
+  (bytesReceived: number, declared: number | null): void;
+  /** Unconditionally emit a terminal progress event (used on success). */
+  finalize(bytesReceived: number, total: number): void;
+}
+
 export function createDownloadProgressReporter(
   hooks: ToolHooks | undefined,
   meta: DownloadProgressMeta,
   options: DownloadProgressOptions = {},
-): (bytesReceived: number, declared: number | null) => void {
+): DownloadProgressReporter {
   const intervalMs = options.intervalMs ?? 1000;
   const bytesStep = options.bytesStep ?? 8 * 1024 * 1024;
   let lastAt = 0;
   let lastBytes = 0;
-  return (bytesReceived: number, declared: number | null): void => {
+  const report = (bytesReceived: number, declared: number | null): void => {
     const now = Date.now();
     if (now - lastAt < intervalMs && bytesReceived - lastBytes < bytesStep) {
       return;
@@ -95,4 +105,12 @@ export function createDownloadProgressReporter(
       ...meta,
     });
   };
+  report.finalize = (bytesReceived: number, total: number): void => {
+    noopHooks(hooks).onProgress("acquisition", "downloaded_bytes", {
+      current: bytesReceived,
+      total,
+      ...meta,
+    });
+  };
+  return report;
 }

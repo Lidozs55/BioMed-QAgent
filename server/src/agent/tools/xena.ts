@@ -268,6 +268,8 @@ export async function downloadXena(
       progress: reportProgress,
     });
     if (result.attempt.status === "succeeded" && result.asset !== null) {
+      // Terminal 100% event so the UI never freezes on the last throttled tick.
+      reportProgress.finalize(result.asset.size_bytes, result.asset.size_bytes);
       await unlink(partPath).catch(() => undefined);
       const localGz = path.join(dirs.root, ...result.asset.relative_path.split("/"));
       const decompressed = xenaDecompressedPath(localGz);

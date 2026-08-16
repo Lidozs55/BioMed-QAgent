@@ -467,6 +467,10 @@ export async function downloadGdc(
     try {
       assertSafeFilename(fileName);
       await pace();
+      const reportProgress = createDownloadProgressReporter(
+        hooks,
+        { source: "gdc", accession: projectId, filename: fileName },
+      );
       const result = await acquireSource({
         source,
         filename: fileName,
@@ -479,10 +483,7 @@ export async function downloadGdc(
         expectedMd5: md5sum !== "" ? md5sum : undefined,
         accept: "application/octet-stream",
         signal,
-        progress: createDownloadProgressReporter(
-          hooks,
-          { source: "gdc", accession: projectId, filename: fileName },
-        ),
+        progress: reportProgress,
       });
       if (result.attempt.status === "failed" || result.asset === null) {
         hooks.onProgress("download_gdc", "warning", {
@@ -491,6 +492,10 @@ export async function downloadGdc(
         continue;
       }
       localFiles.push(path.join(dirs.root, ...result.asset.relative_path.split("/")));
+      // Terminal 100% event: the throttled reporter may freeze below 100% on
+      // the last tick, so emit a final downloaded_bytes event once the file is
+      // written (same convention as the geo tools' success branch).
+      reportProgress.finalize(result.asset.size_bytes, result.asset.size_bytes);
     } catch (error) {
       if (signal?.aborted === true) throw error;
       hooks.onProgress("download_gdc", "warning", {
