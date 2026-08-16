@@ -88,12 +88,18 @@ interface ActiveTurn {
   cancelled: boolean;
   terminal: boolean;
   reason?: string;
+  pendingDelta?: Extract<
+    BioMedAgentEvent,
+    { type: "assistant_delta" | "reasoning_delta" }
+  >;
+  deltaTimer?: ReturnType<typeof setTimeout>;
 }
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const MAX_TEXT = 4_096;
 const MAX_DEPTH = 3;
 const MAX_ITEMS = 20;
+const DELTA_FLUSH_INTERVAL_MS = 32;
 
 function boundedText(value: string): string {
   return value.slice(0, MAX_TEXT);
@@ -443,16 +449,12 @@ class PiBioMedAgentSession implements BioMedAgentSession {
     if (event.type === "message_update") {
       const message = event.assistantMessageEvent;
       if (message?.type === "text_delta" && message.delta !== undefined) {
-        active.queue.push({
-          event: { type: "assistant_delta", delta: boundedText(message.delta) },
-        });
+        this.queueDelta(active, "assistant_delta", message.delta);
       } else if (message?.type === "thinking_delta" && message.delta !== undefined) {
-        active.queue.push({
-          event: { type: "reasoning_delta", delta: boundedText(message.delta) },
-        });
+        this.queueDelta(active, "reasoning_delta", message.delta);
       }
     } else if (event.type === "tool_execution_start") {
-      active.queue.push({
+      this.pushBoundary(active, {
         event: {
           type: "tool_started",
           ...common,
@@ -460,7 +462,7 @@ class PiBioMedAgentSession implements BioMedAgentSession {
         },
       });
     } else if (event.type === "tool_execution_update") {
-      active.queue.push({
+      this.pushBoundary(active, {
         event: {
           type: "tool_progress",
           ...common,
@@ -468,7 +470,7 @@ class PiBioMedAgentSession implements BioMedAgentSession {
         },
       });
     } else if (event.type === "tool_execution_end") {
-      active.queue.push({
+      this.pushBoundary(active, {
         event: {
           type: "tool_completed",
           ...common,
@@ -479,13 +481,56 @@ class PiBioMedAgentSession implements BioMedAgentSession {
     } else if (event.type === "compaction_end") {
       const summary = event.compactionResult?.summary;
       if (event.aborted !== true && typeof summary === "string" && summary.trim() !== "") {
-        active.queue.push({ event: { type: "context_compacted", summary } });
+        this.pushBoundary(active, { event: { type: "context_compacted", summary } });
       }
     }
   }
 
+  private queueDelta(
+    active: ActiveTurn,
+    type: "assistant_delta" | "reasoning_delta",
+    rawDelta: string,
+  ): void {
+    const delta = boundedText(rawDelta);
+    const pending = active.pendingDelta;
+    if (
+      pending !== undefined &&
+      (pending.type !== type || pending.delta.length + delta.length > MAX_TEXT)
+    ) {
+      this.flushPendingDelta(active);
+    }
+    if (active.pendingDelta === undefined) {
+      active.pendingDelta = { type, delta };
+      active.deltaTimer = setTimeout(
+        () => this.flushPendingDelta(active),
+        DELTA_FLUSH_INTERVAL_MS,
+      );
+      return;
+    }
+    active.pendingDelta = {
+      ...active.pendingDelta,
+      delta: `${active.pendingDelta.delta}${delta}`,
+    };
+  }
+
+  private flushPendingDelta(active: ActiveTurn): void {
+    if (active.deltaTimer !== undefined) {
+      clearTimeout(active.deltaTimer);
+      active.deltaTimer = undefined;
+    }
+    const pending = active.pendingDelta;
+    active.pendingDelta = undefined;
+    if (pending !== undefined) active.queue.push({ event: pending });
+  }
+
+  private pushBoundary(active: ActiveTurn, item: QueueItem): void {
+    this.flushPendingDelta(active);
+    active.queue.push(item);
+  }
+
   private finish(active: ActiveTurn, item: QueueItem): void {
     if (active.terminal) return;
+    this.flushPendingDelta(active);
     active.terminal = true;
     active.queue.push(item);
     active.queue.push({ done: true });
@@ -546,6 +591,9 @@ class PiBioMedAgentSession implements BioMedAgentSession {
         active.cancelled = true;
         await this.upstream.abort();
         active.terminal = true;
+        if (active.deltaTimer !== undefined) clearTimeout(active.deltaTimer);
+        active.deltaTimer = undefined;
+        active.pendingDelta = undefined;
       }
       if (this.activeTurn === active) this.activeTurn = undefined;
     }

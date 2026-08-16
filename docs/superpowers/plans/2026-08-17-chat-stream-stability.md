@@ -28,24 +28,24 @@
 - Consumes: `MessageScrollerItem`, immutable `ConversationItem` objects.
 - Produces: memoized `ConversationListItem` rows with no `scrollAnchor` prop.
 
-- [ ] **Step 1: Write failing scroll and render-isolation tests**
+- [x] **Step 1: Write failing scroll and render-isolation tests**
 
 Render a user item and assert the scroller item does not receive
 `scrollAnchor=true`. Rerender a list after replacing only the active item and
 assert a mocked `ConversationStep` renders the historical item once.
 
-- [ ] **Step 2: Verify the tests fail**
+- [x] **Step 2: Verify the tests fail**
 
 Run: `pnpm test -- src/components/conversation/__tests__/ConversationList.test.tsx`
 
 Expected: the user row is anchored and the historical row renders twice.
 
-- [ ] **Step 3: Implement the minimal row boundary**
+- [x] **Step 3: Implement the minimal row boundary**
 
 Create a local `memo`-wrapped row that renders `MessageScrollerItem` and
 `ConversationStep`. Remove `scrollAnchor` from conversation rows.
 
-- [ ] **Step 4: Verify the tests pass**
+- [x] **Step 4: Verify the tests pass**
 
 Run: `pnpm test -- src/components/conversation/__tests__/ConversationList.test.tsx`
 
@@ -62,24 +62,24 @@ Expected: all conversation-list tests pass.
 - Produces: ordered `BioMedAgentEvent` values with adjacent same-kind deltas
   joined, maximum event text length 4,096, and maximum timer latency 32 ms.
 
-- [ ] **Step 1: Write failing coalescing and boundary tests**
+- [x] **Step 1: Write failing coalescing and boundary tests**
 
 Cover adjacent assistant fragments, adjacent reasoning fragments, timer flush,
 type changes, tool start, completion, and cancellation. Assert concatenated
 text and exact event order.
 
-- [ ] **Step 2: Verify the tests fail**
+- [x] **Step 2: Verify the tests fail**
 
 Run: `pnpm --filter @biomed/server test -- tests/pi-adapter.test.ts`
 
 Expected: adjacent fragments are currently emitted as separate events.
 
-- [ ] **Step 3: Implement the bounded buffer**
+- [x] **Step 3: Implement the bounded buffer**
 
 Add a turn-local pending delta and timer. Flush before non-delta queue items,
 on timer expiry, before exceeding 4,096 characters, and from `finish`.
 
-- [ ] **Step 4: Verify the tests pass**
+- [x] **Step 4: Verify the tests pass**
 
 Run: `pnpm --filter @biomed/server test -- tests/pi-adapter.test.ts`
 
@@ -91,32 +91,32 @@ Expected: all Pi adapter tests pass with fake timers restored after each test.
 - Modify: `frontend/src/stores/agentStore.ts`
 - Modify: `frontend/src/runtime/controller.ts`
 - Test: `frontend/src/test/runtime-controller.test.ts`
-- Test: `frontend/src/test/agent-store.test.ts`
+- Test: `frontend/src/test/store.test.ts`
 
 **Interfaces:**
 - Produces: `AgentStore.applyEvents(events: readonly EventEnvelope[]): SequenceGapMarker | null`.
 - Consumes: ordered REST replay pages from `RuntimeController.replayEventsToSequence`.
 
-- [ ] **Step 1: Write failing transaction and replay tests**
+- [x] **Step 1: Write failing transaction and replay tests**
 
 Subscribe to the store, apply a three-event page, and require one notification
 with the same final projection as three `reduceRuntimeEvent` calls. Require the
 controller to call the batch action once per fetched page.
 
-- [ ] **Step 2: Verify the tests fail**
+- [x] **Step 2: Verify the tests fail**
 
-Run: `pnpm test -- src/test/agent-store.test.ts src/test/runtime-controller.test.ts`
+Run: `pnpm test -- src/test/store.test.ts src/test/runtime-controller.test.ts`
 
 Expected: `applyEvents` is absent and replay calls `applyEvent` per event.
 
-- [ ] **Step 3: Implement batch reduction and page commit**
+- [x] **Step 3: Implement batch reduction and page commit**
 
 Reduce the ordered event array inside one Zustand `set`, return the final task
 gap marker, and replace the controller's per-event loop with `applyEvents`.
 
-- [ ] **Step 4: Verify the tests pass**
+- [x] **Step 4: Verify the tests pass**
 
-Run: `pnpm test -- src/test/agent-store.test.ts src/test/runtime-controller.test.ts`
+Run: `pnpm test -- src/test/store.test.ts src/test/runtime-controller.test.ts`
 
 Expected: all selected frontend tests pass.
 
@@ -130,25 +130,24 @@ Expected: all selected frontend tests pass.
 - Records: live-edge semantics, 32 ms/4,096-character coalescing bounds, and
   page-level replay transactions.
 
-- [ ] **Step 1: Update authoritative documentation**
+- [x] **Step 1: Update authoritative documentation**
 
 Add the completed work and the reason for each boundary without duplicating
 implementation detail outside the frontend architecture section.
 
-- [ ] **Step 2: Run targeted performance regression checks**
+- [x] **Step 2: Run targeted performance regression checks**
 
 Run the Pi adapter, conversation-list, store, and controller tests together.
 Expected: all selected tests pass.
 
-- [ ] **Step 3: Run every quality gate**
+- [x] **Step 3: Run every quality gate**
 
 Run `pnpm test`, `pnpm lint`, `pnpm typecheck`, `pnpm build`,
 `uv run python database/bridge.py --self-test`,
 `uv run pytest database/tests`, and `uv run ruff check database`.
 Expected: every command exits 0.
 
-- [ ] **Step 4: Commit and push the review branch**
+- [x] **Step 4: Commit and push the review branch**
 
 Commit with conventional messages, push `fix/chat-scroll-stability`, and leave
 the branch unmerged for user review.
-

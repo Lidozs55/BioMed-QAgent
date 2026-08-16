@@ -1,4 +1,4 @@
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { BioMedAgentError } from "../src/agent/contracts.js";
 import {
@@ -106,6 +106,10 @@ describe("Pi model profile mapping", () => {
   });
 });
 describe("PiAgentAdapter", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   test("maps product compaction ratios onto Pi compaction settings", () => {
     expect(resolvePiCompactionOverrides(131_072, 0.85, 0.6)).toEqual({
       compaction: { enabled: true, reserveTokens: 19_661, keepRecentTokens: 78_643 },
@@ -246,6 +250,115 @@ describe("PiAgentAdapter", () => {
     ]);
   });
 
+  test("coalesces adjacent deltas while preserving type and tool boundaries", async () => {
+    const upstream = new FakeUpstreamSession();
+    upstream.promptImplementation = async () => {
+      upstream.emit({
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "hel" },
+      });
+      upstream.emit({
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "lo" },
+      });
+      upstream.emit({
+        type: "message_update",
+        assistantMessageEvent: { type: "thinking_delta", delta: "plan" },
+      });
+      upstream.emit({
+        type: "message_update",
+        assistantMessageEvent: { type: "thinking_delta", delta: " first" },
+      });
+      upstream.emit({
+        type: "tool_execution_start",
+        toolCallId: "call-1",
+        toolName: "fixture_tool",
+        args: { query: "TP53" },
+      });
+    };
+    const session = await new PiAgentAdapter({
+      createUpstreamSession: async () => upstream,
+    }).createSession(sessionConfig);
+
+    const events = await collect(session.run("coalesce"));
+
+    expect(events).toEqual([
+      { type: "turn_started" },
+      { type: "assistant_delta", delta: "hello" },
+      { type: "reasoning_delta", delta: "plan first" },
+      {
+        type: "tool_started",
+        toolCallId: "call-1",
+        toolName: "fixture_tool",
+        arguments: { query: "TP53" },
+      },
+      { type: "turn_completed" },
+    ]);
+  });
+
+  test("flushes a pending delta after the bounded streaming interval", async () => {
+    vi.useFakeTimers();
+    const upstream = new FakeUpstreamSession();
+    const pending = deferred<void>();
+    upstream.promptImplementation = () => pending.promise;
+    const session = await new PiAgentAdapter({
+      createUpstreamSession: async () => upstream,
+    }).createSession(sessionConfig);
+    const iterator = session.run("timed flush")[Symbol.asyncIterator]();
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: { type: "turn_started" },
+    });
+
+    const delta = iterator.next();
+    upstream.emit({
+      type: "message_update",
+      assistantMessageEvent: { type: "text_delta", delta: "a" },
+    });
+    upstream.emit({
+      type: "message_update",
+      assistantMessageEvent: { type: "text_delta", delta: "b" },
+    });
+    await vi.advanceTimersByTimeAsync(32);
+
+    await expect(delta).resolves.toEqual({
+      done: false,
+      value: { type: "assistant_delta", delta: "ab" },
+    });
+    pending.resolve();
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: { type: "turn_completed" },
+    });
+    await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
+  });
+
+  test("starts a new delta event before the coalesced payload exceeds 4096 characters", async () => {
+    const upstream = new FakeUpstreamSession();
+    upstream.promptImplementation = async () => {
+      upstream.emit({
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "a".repeat(4_090) },
+      });
+      upstream.emit({
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "b".repeat(10) },
+      });
+    };
+    const session = await new PiAgentAdapter({
+      createUpstreamSession: async () => upstream,
+    }).createSession(sessionConfig);
+
+    const events = await collect(session.run("bounded coalescing"));
+
+    expect(events).toEqual([
+      { type: "turn_started" },
+      { type: "assistant_delta", delta: "a".repeat(4_090) },
+      { type: "assistant_delta", delta: "b".repeat(10) },
+      { type: "turn_completed" },
+    ]);
+  });
+
   test("preserves one upstream session across sequential turns", async () => {
     const upstream = new FakeUpstreamSession();
     const createUpstreamSession = vi.fn(async () => upstream);
@@ -284,13 +397,26 @@ describe("PiAgentAdapter", () => {
   test("translates upstream failures without leaking provider details", async () => {
     const upstream = new FakeUpstreamSession();
     upstream.promptImplementation = async () => {
+      upstream.emit({
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "visible before failure" },
+      });
       throw new Error("Bearer secret-token failed at provider stack");
     };
     const session = await new PiAgentAdapter({
       createUpstreamSession: async () => upstream,
     }).createSession(sessionConfig);
+    const iterator = session.run("fail")[Symbol.asyncIterator]();
 
-    const error = await collect(session.run("fail")).catch((reason: unknown) => reason);
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: { type: "turn_started" },
+    });
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: { type: "assistant_delta", delta: "visible before failure" },
+    });
+    const error = await iterator.next().catch((reason: unknown) => reason);
 
     expect(error).toBeInstanceOf(BioMedAgentError);
     expect(error).toMatchObject({ code: "UPSTREAM_FAILURE" });
@@ -308,12 +434,20 @@ describe("PiAgentAdapter", () => {
     }).createSession(sessionConfig);
     const eventsPromise = collect(session.run("cancel me"));
     await Promise.resolve();
+    upstream.emit({
+      type: "message_update",
+      assistantMessageEvent: { type: "text_delta", delta: "visible before cancel" },
+    });
 
     await session.cancel("user requested");
     const events = await eventsPromise;
 
     expect(upstream.abort).toHaveBeenCalledOnce();
-    expect(events).toContainEqual({ type: "turn_cancelled", reason: "user requested" });
+    expect(events).toEqual([
+      { type: "turn_started" },
+      { type: "assistant_delta", delta: "visible before cancel" },
+      { type: "turn_cancelled", reason: "user requested" },
+    ]);
     expect(events).not.toContainEqual({ type: "turn_completed" });
   });
 

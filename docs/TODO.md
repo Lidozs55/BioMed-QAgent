@@ -420,6 +420,16 @@ build 锁、cancel 收敛与 event sink；`DATASET_CORE=ts` 现为默认运行�
       primary 进入发布政策检查，confidence artifact 缺失时 fail-closed。
 - [x] shadcn 批量审核 UI、可信度分布/reasons/review states 与 evidence/provenance 下钻。
 
+### 聊天流稳定性与性能（✅ 完成，2026-08-17）
+
+- [x] 移除用户消息行的滚动锚点，保持 live-edge 跟随语义；历史消息行按引用稳定性
+      memo，避免流式内容增长时重复渲染 Markdown。
+- [x] Pi 文本/推理增量按同类连续片段合并（32 ms / 4,096 字符上限），工具与
+      生命周期事件保持强制边界；参考任务 `task_ts_ba33c72a-0e28-4617-a18a-3bdd9321a1c2`
+      的离线回放由 10,523 条增量降至 135 条（-98.7%）。
+- [x] durable replay 每页只提交一次 Zustand transaction，消除冷启动时最多 3,000 次
+      store 通知；补齐滚动、渲染、合并边界和批量 replay 回归测试。
+
 
 - [ ] **P1** model-registry 响应未做 wire-boundary 校验：`frontend/src/api/modelRegistry.ts`
       仍用窄化 cast（`b as ProviderInfo[]` 等）。下一步为 `packages/contracts`

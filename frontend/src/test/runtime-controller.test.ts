@@ -1905,6 +1905,7 @@ describe("runtime orchestration", () => {
       }),
       eventTransport,
     );
+    const applyEvent = vi.spyOn(useAgentStore.getState(), "applyEvent");
 
     await controller.startTask({ input: "question", databases: [], mode: "agent" });
 
@@ -1917,6 +1918,7 @@ describe("runtime orchestration", () => {
       limit: 1000,
     });
     expect(fetchEvents).toHaveBeenCalledTimes(2);
+    expect(applyEvent).not.toHaveBeenCalled();
     expect(useAgentStore.getState().tasksById.task_paged.lastSequence).toBe(1001);
     expect(eventTransport.subscribe).toHaveBeenLastCalledWith("task_paged", 1001);
   });

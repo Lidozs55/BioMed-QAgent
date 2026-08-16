@@ -79,4 +79,3 @@ Markdown trees can be reused while only the changed live row renders.
   not render when only the active row changes.
 - Full workspace test, lint, typecheck, build, and database bridge gates run
   before the branch is pushed.
-

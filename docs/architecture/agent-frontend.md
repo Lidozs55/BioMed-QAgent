@@ -179,6 +179,14 @@ React 19 + Vite + Tailwind CSS v4 + shadcn/ui，包管理器 pnpm（**never npm*
 Pending stream 帧上限 `MAX_PENDING_ASSISTANT_STREAM_FRAMES = 2048`，rAF 批量
 flush；`tool_started` / `run_finalizing` / Run 终态等边界事件强制 flush。
 
+Pi 上游常以 1–2 个字符为粒度发送 text/thinking delta。`pi-adapter.ts` 在不改变
+事件顺序的前提下合并连续同类 delta：最长等待 32 ms、单事件最多 4096 字符；
+类型切换、工具/compaction 事件与 Run 终态前强制 flush。这样避免每个字符都触发
+一次 `events.jsonl` fsync、WS 帧与前端投影，同时保持最终 durable 文本完全一致。
+
+REST 冷回放仍以 1000 条为一页，但每页通过 `AgentStore.applyEvents()` 在一次 Zustand
+transaction 中顺序 reduce；sequence gap 语义不变，React 只收到一次页面级通知。
+
 ### 17.2 对话流（Coding Agent 风格）
 
 对话主流使用"按时间顺序交错的步骤流"，所有事件类型统一投影到 `ConversationItem`
@@ -205,6 +213,13 @@ ChatPanel 草稿态、`pendingUserInput` + UserInputDialog、状态条分隔符�
 `tool_completed`、`stage_progress`）不得把 item 拖到时间线更靠后的位置。需要
 "最后更新时间"语义时用专用字段（如 `ToolCallItem.completedSequence`），不复用
 `sequence`。`itemSequences` 记录每项的稳定首入序列，供 `capTaskItems` 对齐裁剪。
+
+对话滚动由 shadcn `MessageScroller` 独占。实时状态默认跟随 live edge；用户主动滚轮、
+触摸或键盘上滚后停止跟随，并由 `MessageScrollerButton` 返回最新内容。普通用户消息
+不设置 `scrollAnchor`，否则新回合会进入 `anchored-to-message` 并在流式内容增高时
+持续把提问钉回视口，表现为列表从底部反弹到中间。加载更早历史仍由 viewport 的
+prepend preservation 保持当前位置。conversation row 在 `MessageScrollerItem` 边界
+memoize，未变化的历史 Markdown 不随 live row 增长重复解析。
 
 durable `assistant_delta` 无 `stream_id`（Pi adapter 路径）时，`stream.ts` 用
 `currentReasoningSegmentByRun[runId]` 作为会话 epoch 生成
