@@ -219,7 +219,10 @@ durable `assistant_delta` 无 `stream_id`（Pi adapter 路径）时，`stream.ts
 `tool_call` 气泡内（`DownloadProgress`），operation 行只保留状态徽章，避免时间线
 出现两条重复进度条。`pipeline.ts` 把 `downloaded_bytes` 进度绑定到所属工具调用：
 优先匹配 `detail.accession` 与工具 `arguments` 相等的 running tool_call，否则回退
-到该 run 最近启动的 running tool_call（防止绑定到错误的工具气泡）。前端"恢复下载"
+到该 run 最近启动的 running tool_call（防止绑定到错误的工具气泡）。所有采集工具
+（xena/gdc/pubmed）共用 `tool-hooks.ts` 的 `createDownloadProgressReporter` 上报
+节流进度（intervalMs/bytesStep），保证 payload 结构一致（`detail.accession` 扁平
+可匹配）；geo 一次性终态上报沿用同一扁平结构。前端"恢复下载"
 调用 `POST /api/v1/tasks/{taskId}/downloads/resume`（携带 `tool_name` +
 `arguments`），后端直接重放下载工具而不经过 AI 推理：创建 follow-up run、合成
 `run_started`/`tool_started`/`operation_progress`/`tool_completed`/`run_completed`
