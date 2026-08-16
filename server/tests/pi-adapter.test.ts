@@ -4,6 +4,7 @@ import { BioMedAgentError } from "../src/agent/contracts.js";
 import {
   PiAgentAdapter,
   applyModelProfileToPayload,
+  resolvePiCompactionOverrides,
   toPiCustomTools,
   type PiUpstreamEvent,
   type PiUpstreamSession,
@@ -105,6 +106,57 @@ describe("Pi model profile mapping", () => {
   });
 });
 describe("PiAgentAdapter", () => {
+  test("maps product compaction ratios onto Pi compaction settings", () => {
+    expect(resolvePiCompactionOverrides(131_072, 0.85, 0.6)).toEqual({
+      compaction: { enabled: true, reserveTokens: 19_661, keepRecentTokens: 78_643 },
+    });
+    expect(resolvePiCompactionOverrides(131_072, 0.95, 0.6).compaction.reserveTokens)
+      .toBe(6_554);
+  });
+
+  test("projects a successful Pi compaction into the BioMed event stream", async () => {
+    const upstream = new FakeUpstreamSession();
+    upstream.promptImplementation = async () => {
+      upstream.emit({ type: "compaction_start", reason: "threshold" });
+      upstream.emit({
+        type: "compaction_end",
+        reason: "threshold",
+        compactionResult: { summary: "compacted checkpoint summary" },
+        aborted: false,
+      });
+    };
+    const session = await new PiAgentAdapter({
+      createUpstreamSession: async () => upstream,
+    }).createSession(sessionConfig);
+
+    const events = await collect(session.run("continue"));
+
+    expect(events).toContainEqual({
+      type: "context_compacted",
+      summary: "compacted checkpoint summary",
+    });
+  });
+
+  test("ignores aborted or summary-less Pi compaction completions", async () => {
+    const upstream = new FakeUpstreamSession();
+    upstream.promptImplementation = async () => {
+      upstream.emit({ type: "compaction_end", reason: "overflow", aborted: true });
+      upstream.emit({
+        type: "compaction_end",
+        reason: "threshold",
+        compactionResult: { summary: "" },
+        aborted: false,
+      });
+    };
+    const session = await new PiAgentAdapter({
+      createUpstreamSession: async () => upstream,
+    }).createSession(sessionConfig);
+
+    const events = await collect(session.run("continue"));
+
+    expect(events).not.toContainEqual(expect.objectContaining({ type: "context_compacted" }));
+  });
+
   test("converts project tool descriptors only at the Pi boundary", async () => {
     const execute = vi.fn(async () => ({
       content: "bounded",
