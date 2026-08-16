@@ -24,6 +24,8 @@ interface LoadedManifest {
 interface PublicationLocation {
   directory: string;
   manifestRef: string;
+  /** P7 trust anchor: SHA-256 of the dataset_manifest.json file bytes. */
+  manifestSha256: string;
 }
 
 export class ArtifactIntegrityError extends Error {
@@ -80,7 +82,7 @@ async function verifiedPath(buildDir: string, relativePath: string): Promise<str
   return realFile;
 }
 
-function digest(bytes: Buffer): string {
+function sha256Hex(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
@@ -98,6 +100,7 @@ async function loadLatestManifest(taskRoot: string): Promise<LoadedManifest | nu
     publicationDir: string;
     manifestPath: string;
     manifestRef: string;
+    manifestSha256: string;
   } | undefined;
   for (const entry of entries) {
     if (!entry.isDirectory() || !SAFE_ID.test(entry.name)) continue;
@@ -113,6 +116,7 @@ async function loadLatestManifest(taskRoot: string): Promise<LoadedManifest | nu
           publicationDir: publication.directory,
           manifestPath,
           manifestRef: publication.manifestRef,
+          manifestSha256: publication.manifestSha256,
         };
       }
     } catch (error) {
@@ -124,6 +128,14 @@ async function loadLatestManifest(taskRoot: string): Promise<LoadedManifest | nu
     newest.publicationDir,
     path.basename(newest.manifestPath),
   ));
+  // P7 trust anchor: the ``publication.json`` receipt records the SHA-256 of
+  // the manifest FILE BYTES as published. Any edit to the manifest file —
+  // including its top-level metadata (row_count, validation_summary, …)
+  // which ``packageDigest`` does not cover — changes the bytes and is
+  // rejected here, before the package-digest check below (ADR-026 §3).
+  if (sha256Hex(manifestBytes) !== newest.manifestSha256) {
+    throw new ArtifactIntegrityError("Build manifest file hash is invalid");
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(manifestBytes.toString("utf8"));
@@ -174,6 +186,7 @@ async function latestPublication(buildDir: string): Promise<PublicationLocation 
       publishedAt: string;
       directory: string;
       manifestRef: string;
+      manifestSha256: string;
     } | null = null;
     for (const entry of entries) {
       if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
@@ -187,7 +200,11 @@ async function latestPublication(buildDir: string): Promise<PublicationLocation 
         typeof publication.publication_id === "string" &&
         SAFE_ID.test(publication.publication_id) &&
         typeof publication.manifest_ref === "string" &&
-        publication.manifest_ref !== ""
+        publication.manifest_ref !== "" &&
+        // P7: fail closed — a publication whose receipt has no manifest file
+        // hash (pre-P7 records included) is not trusted by the reader.
+        typeof publication.manifest_sha256 === "string" &&
+        SHA256.test(publication.manifest_sha256)
       ) {
         const publishedAt = typeof publication.published_at === "string"
           ? publication.published_at
@@ -197,13 +214,14 @@ async function latestPublication(buildDir: string): Promise<PublicationLocation 
             publishedAt,
             directory,
             manifestRef: publication.manifest_ref,
+            manifestSha256: publication.manifest_sha256,
           };
         }
       }
     }
     return newest === null
       ? null
-      : { directory: newest.directory, manifestRef: newest.manifestRef };
+      : { directory: newest.directory, manifestRef: newest.manifestRef, manifestSha256: newest.manifestSha256 };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     if (error instanceof SyntaxError || error instanceof ArtifactIntegrityError) return null;
@@ -219,7 +237,7 @@ async function readVerifiedArtifact(
     loaded.publicationDir,
     artifact.relative_path,
   ));
-  if (bytes.length !== artifact.size_bytes || digest(bytes) !== artifact.sha256) {
+  if (bytes.length !== artifact.size_bytes || sha256Hex(bytes) !== artifact.sha256) {
     throw new ArtifactIntegrityError("Artifact integrity check failed");
   }
   return bytes;
@@ -233,7 +251,7 @@ export async function listTaskArtifacts(taskRoot: string): Promise<ArtifactRecor
     name: "dataset_manifest.json",
     role: "schema",
     size: loaded.manifestBytes.length,
-    sha256: digest(loaded.manifestBytes),
+    sha256: sha256Hex(loaded.manifestBytes),
     media_type: "application/json",
   }];
   for (const artifact of loaded.artifacts) {

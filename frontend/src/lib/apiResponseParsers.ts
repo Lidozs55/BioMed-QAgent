@@ -503,6 +503,7 @@ function parseDatasetPublication(
   return {
     publication_id: assertString(Reflect.get(obj, "publication_id"), `${path}.publication_id`, true),
     manifest_ref: assertString(Reflect.get(obj, "manifest_ref"), `${path}.manifest_ref`, true),
+    manifest_sha256: assertString(Reflect.get(obj, "manifest_sha256"), `${path}.manifest_sha256`, true),
     validation_result_ref: assertString(Reflect.get(obj, "validation_result_ref"), `${path}.validation_result_ref`, true),
     published_at: assertString(Reflect.get(obj, "published_at"), `${path}.published_at`, true),
     supersedes_publication_id: assertStringOrNull(Reflect.get(obj, "supersedes_publication_id"), `${path}.supersedes_publication_id`),

@@ -172,6 +172,27 @@ describe("contract invariants (mirror Pydantic model_validator)", () => {
     ).toThrow(/cannot supersede itself/);
   });
 
+  test("DatasetPublication carries the manifest file hash (P7 receipt)", () => {
+    const parsed = parseDatasetPublication({
+      publication_id: "pub_1",
+      manifest_ref: "manifest.json",
+      manifest_sha256: "a".repeat(64),
+      validation_result_ref: "validation.json",
+      published_at: "2026-08-11T00:00:00Z",
+      supersedes_publication_id: null,
+    });
+    expect(parsed.manifest_sha256).toBe("a".repeat(64));
+    // The receipt is required: a publication without it must not parse.
+    const missing = {
+      publication_id: "pub_1",
+      manifest_ref: "manifest.json",
+      validation_result_ref: "validation.json",
+      published_at: "2026-08-11T00:00:00Z",
+      supersedes_publication_id: null,
+    };
+    expect(() => parseDatasetPublication(missing)).toThrow(/manifest_sha256/);
+  });
+
   test("FieldMapping keeps string-similarity mappings proposed", () => {
     expect(() =>
       parseFieldMapping({

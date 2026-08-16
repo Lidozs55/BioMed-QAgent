@@ -146,13 +146,13 @@ export function AgentPermissionSettingsSection({ api }: AgentPermissionSettingsS
         <CardHeader>
           <CardTitle>已授权目录</CardTitle>
           <CardDescription>
-            持久路径规则（通过“始终允许此目录”批准后自动添加，也可手动删除）。
+            持久路径规则（通过“始终允许此路径”批准后自动添加，也可手动删除）。
           </CardDescription>
         </CardHeader>
         <CardContent>
           {current.rules.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              暂无持久规则。Agent 尝试访问工作区外路径时，你可以在批准卡片中选择“始终允许此目录”。
+              暂无持久规则。Agent 尝试访问工作区外路径时，你可以在批准卡片中选择“始终允许此路径”。
             </p>
           ) : (
             <ul className="flex flex-col gap-2">

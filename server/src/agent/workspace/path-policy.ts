@@ -49,6 +49,7 @@ export async function resolveAgentPath(
   const scope = classifyCanonicalPath(normalized.canonical, {
     workspaceRoot: context.canonicalWorkspaceRoot,
     taskOutputRoot: context.taskOutputRoot,
+    dataRoot: context.dataRoot,
     repositoryRoot: context.repositoryRoot,
   });
   await context.permissions.evaluate({

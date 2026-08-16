@@ -48,6 +48,7 @@ export type PermissionCapability =
 export type PermissionScope =
   | "workspace"
   | "task_output"
+  | "framework_internal"
   | "project"
   | "external";
 

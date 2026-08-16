@@ -22,6 +22,7 @@ export type PermissionPolicy = "allow" | "ask" | "deny";
 export type ResourceScope =
   | "workspace"
   | "task_output"
+  | "framework_internal"
   | "project"
   | "external";
 
@@ -74,24 +75,24 @@ export type PolicyMatrix = Record<PermissionCapability, Record<ResourceScope, Pe
 export const PRESET_MATRICES: Record<PermissionPreset, PolicyMatrix> = {
   // Plan §7.1: only the agent's own workspace; everything else denied.
   restricted: {
-    "fs.read": { workspace: "allow", task_output: "allow", project: "deny", external: "deny" },
-    "fs.write": { workspace: "allow", task_output: "deny", project: "deny", external: "deny" },
-    "fs.edit": { workspace: "allow", task_output: "deny", project: "deny", external: "deny" },
-    "process.exec": { workspace: "deny", task_output: "deny", project: "deny", external: "deny" },
+    "fs.read": { workspace: "allow", task_output: "allow", framework_internal: "deny", project: "deny", external: "deny" },
+    "fs.write": { workspace: "allow", task_output: "deny", framework_internal: "deny", project: "deny", external: "deny" },
+    "fs.edit": { workspace: "allow", task_output: "deny", framework_internal: "deny", project: "deny", external: "deny" },
+    "process.exec": { workspace: "deny", task_output: "deny", framework_internal: "deny", project: "deny", external: "deny" },
   },
   // Plan §6/§7.2: the recommended default — ask when needed.
   ask_when_needed: {
-    "fs.read": { workspace: "allow", task_output: "allow", project: "ask", external: "ask" },
-    "fs.write": { workspace: "allow", task_output: "deny", project: "ask", external: "ask" },
-    "fs.edit": { workspace: "allow", task_output: "deny", project: "ask", external: "ask" },
-    "process.exec": { workspace: "ask", task_output: "ask", project: "ask", external: "ask" },
+    "fs.read": { workspace: "allow", task_output: "allow", framework_internal: "deny", project: "ask", external: "ask" },
+    "fs.write": { workspace: "allow", task_output: "deny", framework_internal: "deny", project: "ask", external: "ask" },
+    "fs.edit": { workspace: "allow", task_output: "deny", framework_internal: "deny", project: "ask", external: "ask" },
+    "process.exec": { workspace: "ask", task_output: "ask", framework_internal: "deny", project: "ask", external: "ask" },
   },
   // Plan §7.3: explicit user choice; UI must warn about OS account rights.
   full_access: {
-    "fs.read": { workspace: "allow", task_output: "allow", project: "allow", external: "allow" },
-    "fs.write": { workspace: "allow", task_output: "deny", project: "allow", external: "allow" },
-    "fs.edit": { workspace: "allow", task_output: "deny", project: "allow", external: "allow" },
-    "process.exec": { workspace: "allow", task_output: "allow", project: "allow", external: "allow" },
+    "fs.read": { workspace: "allow", task_output: "allow", framework_internal: "deny", project: "allow", external: "allow" },
+    "fs.write": { workspace: "allow", task_output: "deny", framework_internal: "deny", project: "allow", external: "allow" },
+    "fs.edit": { workspace: "allow", task_output: "deny", framework_internal: "deny", project: "allow", external: "allow" },
+    "process.exec": { workspace: "allow", task_output: "allow", framework_internal: "deny", project: "allow", external: "allow" },
   },
 };
 

@@ -1,6 +1,6 @@
 import { createServer, type Server } from "node:http";
 import { once } from "node:events";
-import { mkdtemp, mkdir, readFile, realpath, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { AddressInfo } from "node:net";
@@ -187,5 +187,47 @@ describe("agent permission settings API (P6)", () => {
     const reopened = new JsonPermissionPolicyStore(filePath);
     expect((await reopened.getSettings()).preset).toBe("full_access");
     await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  test("concurrent mutations are serialized: no rule is lost (audit fix)", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "biomed-perm-serial-"));
+    roots.push(dir);
+    const store = new JsonPermissionPolicyStore(path.join(dir, "agent-permissions.json"));
+    const paths = ["D:\\a", "D:\\b", "D:\\c", "D:\\d", "D:\\e"];
+    await Promise.all(paths.map((p) => store.addRule({
+      capability: "fs.read",
+      path: p,
+      recursive: true,
+      policy: "allow",
+    })));
+    const settings = await store.getSettings();
+    expect(settings.rules).toHaveLength(paths.length);
+    // And the on-disk state matches the in-memory state (a restart sees the
+    // same rules).
+    const reopened = new JsonPermissionPolicyStore(path.join(dir, "agent-permissions.json"));
+    expect((await reopened.getSettings()).rules).toHaveLength(paths.length);
+  });
+
+  test("a failed disk write leaves the cache unchanged (write-then-swap)", async () => {
+    // filePath points INSIDE a path whose parent is a FILE, so writeJsonAtomic
+    // cannot create the directory: the mutation must fail and the in-memory
+    // cache must NOT pretend the rule was saved.
+    const dir = await mkdtemp(path.join(os.tmpdir(), "biomed-perm-fail-"));
+    roots.push(dir);
+    const blocker = path.join(dir, "blocker");
+    await writeFile(blocker, "x", "utf8");
+    const store = new JsonPermissionPolicyStore(path.join(blocker, "agent-permissions.json"));
+    await expect(store.addRule({
+      capability: "fs.read",
+      path: "D:\\x",
+      recursive: true,
+      policy: "allow",
+    })).rejects.toThrow();
+    const settings = await store.getSettings();
+    expect(settings.rules).toHaveLength(0);
+    // A later successful mutation still works (the queue is not poisoned).
+    const good = new JsonPermissionPolicyStore(path.join(dir, "agent-permissions.json"));
+    await good.addRule({ capability: "fs.read", path: "D:\\y", recursive: true, policy: "allow" });
+    expect((await good.getSettings()).rules).toHaveLength(1);
   });
 });

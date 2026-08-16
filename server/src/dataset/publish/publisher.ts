@@ -9,8 +9,9 @@
  * promotion; the pending-input gate is rechecked at the rename boundary.
  */
 
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
-import { copyFile, rename, rm, writeFile } from "node:fs/promises";
+import { copyFile, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import type { DatasetManifest, DatasetPublication, ValidationResult } from "../contracts/index.js";
 import { throwIfAborted } from "../cooperative.js";
@@ -94,10 +95,27 @@ export async function promotePublication(options: PublishOptions): Promise<Publi
   }
   const superseded = findLatestPublication(publishDir, manifest.build_id);
   const publicationId = `pub_${manifest.build_id}_${manifest.sha256.slice(0, 16)}`;
+  // P7 trust anchor: bind the dataset_manifest.json FILE BYTES into the
+  // publication receipt. The artifact reader recomputes this digest from the
+  // stored manifest file and rejects any record whose file does not match —
+  // a tamper that edits manifest top-level metadata (row_count,
+  // validation_summary, …) without rewriting the manifest file bytes is
+  // detected, even though ``packageDigest`` only hashes entry hashes (the
+  // digest does not cover the manifest's own metadata fields).
+  const manifestSrc = join(options.outputDir, MANIFEST_FILE);
+  if (!existsSync(manifestSrc)) {
+    throw new AtomicPromotionError(
+      `atomic promotion: ${MANIFEST_FILE} is missing from the build output`,
+    );
+  }
+  const manifestSha256 = createHash("sha256")
+    .update(await readFile(manifestSrc))
+    .digest("hex");
   const publication: DatasetPublication = {
     schema_version: "1.0",
     publication_id: publicationId,
     manifest_ref: manifest.manifest_id,
+    manifest_sha256: manifestSha256,
     validation_result_ref:
       validation.report_path === null || validation.report_path === undefined
         ? "validation_report.json"
@@ -122,9 +140,7 @@ export async function promotePublication(options: PublishOptions): Promise<Publi
       throwIfAborted(signal);
     }
     const manifestSrc = join(options.outputDir, MANIFEST_FILE);
-    if (existsSync(manifestSrc)) {
-      await copyFile(manifestSrc, join(stagedDir, MANIFEST_FILE));
-    }
+    await copyFile(manifestSrc, join(stagedDir, MANIFEST_FILE));
     // C1d: the publication's ``validation_result_ref`` must resolve inside
     // the immutable version directory — validation_report.json is not a
     // manifest artifact, so it needs an explicit copy.

@@ -34,9 +34,20 @@ export interface PermissionPolicyStore {
 export class JsonPermissionPolicyStore implements PermissionPolicyStore {
   private readonly filePath: string;
   private cached?: PermissionSettings;
+  /** Serializes read-modify-write mutations so concurrent grants never lose rules. */
+  private mutationQueue: Promise<unknown> = Promise.resolve();
 
   constructor(filePath: string) {
     this.filePath = filePath;
+  }
+
+  private enqueue<T>(operation: () => Promise<T>): Promise<T> {
+    const run = this.mutationQueue.then(operation, operation);
+    this.mutationQueue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
   }
 
   private async load(): Promise<PermissionSettings> {
@@ -58,10 +69,13 @@ export class JsonPermissionPolicyStore implements PermissionPolicyStore {
     return this.cached;
   }
 
-  private async save(settings: PermissionSettings): Promise<PermissionSettings> {
-    this.cached = settings;
-    await writeJsonAtomic(this.filePath, settings);
-    return settings;
+  /** Apply + persist one mutation. The cache is replaced only after the disk
+   * write succeeds, so a failed write never leaves the process with "saved"
+   * permissions that differ from what a restart would reload (audit fix). */
+  private async save(next: PermissionSettings): Promise<PermissionSettings> {
+    await writeJsonAtomic(this.filePath, next);
+    this.cached = next;
+    return structuredClone(next);
   }
 
   async getSettings(): Promise<PermissionSettings> {
@@ -69,32 +83,43 @@ export class JsonPermissionPolicyStore implements PermissionPolicyStore {
   }
 
   async setPreset(preset: PermissionPreset): Promise<PermissionSettings> {
-    const settings = await this.load();
-    // Switching to Restricted revokes a previously granted persistent exec
-    // approval (audit fix: the flag must never silently survive a stricter
-    // preset). The evaluator also hard-denies exec under Restricted, so this
-    // is an explicit-state cleanup, not the only line of defense.
-    const persistent_exec_allow =
-      preset === "restricted" ? false : settings.persistent_exec_allow;
-    return this.save({ ...settings, preset, persistent_exec_allow });
+    return this.enqueue(async () => {
+      const settings = await this.load();
+      // Switching to Restricted revokes a previously granted persistent exec
+      // approval (audit fix: the flag must never silently survive a stricter
+      // preset). The evaluator also hard-denies exec under Restricted, so this
+      // is an explicit-state cleanup, not the only line of defense.
+      const persistent_exec_allow =
+        preset === "restricted" ? false : settings.persistent_exec_allow;
+      return this.save({ ...settings, preset, persistent_exec_allow });
+    });
   }
 
   async setPersistentExecAllow(allowed: boolean): Promise<PermissionSettings> {
-    const settings = await this.load();
-    return this.save({ ...settings, persistent_exec_allow: allowed });
+    return this.enqueue(async () => {
+      const settings = await this.load();
+      return this.save({ ...settings, persistent_exec_allow: allowed });
+    });
   }
 
   async addRule(rule: Omit<FilePermissionRule, "id">): Promise<PermissionSettings> {
-    const settings = await this.load();
-    return this.save({
-      ...settings,
-      rules: [...settings.rules, { id: `rule_${randomUUID()}`, ...rule }],
+    return this.enqueue(async () => {
+      const settings = await this.load();
+      return this.save({
+        ...settings,
+        rules: [...settings.rules, { id: `rule_${randomUUID()}`, ...rule }],
+      });
     });
   }
 
   async removeRule(ruleId: string): Promise<PermissionSettings> {
-    const settings = await this.load();
-    return this.save({ ...settings, rules: settings.rules.filter((rule) => rule.id !== ruleId) });
+    return this.enqueue(async () => {
+      const settings = await this.load();
+      return this.save({
+        ...settings,
+        rules: settings.rules.filter((rule) => rule.id !== ruleId),
+      });
+    });
   }
 
   async matrix(): Promise<PolicyMatrix> {

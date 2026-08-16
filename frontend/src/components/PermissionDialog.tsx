@@ -41,6 +41,7 @@ const CAPABILITY_LABELS: Record<PendingPermission["capability"], string> = {
 const SCOPE_LABELS: Record<PendingPermission["scope"], string> = {
   workspace: "工作区",
   task_output: "任务输出",
+  framework_internal: "框架内部路径",
   project: "项目目录",
   external: "外部目录",
 };
@@ -246,7 +247,7 @@ export function PermissionDialog({ task, onResolvePermission }: PermissionDialog
                 onClick={() => void submit("allow", "persistent")}
               >
                 {submitting === "persistent" ? <Spinner data-icon="inline-start" aria-hidden="true" /> : null}
-                始终允许此目录
+                始终允许此路径
               </Button>
             </>
           )}

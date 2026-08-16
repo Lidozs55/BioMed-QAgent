@@ -109,7 +109,7 @@ describe("PermissionDialog", () => {
       );
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /始终允许此目录/ }));
+    fireEvent.click(screen.getByRole("button", { name: /始终允许此路径/ }));
     await waitFor(() => {
       expect(onResolvePermission).toHaveBeenLastCalledWith(
         "task_perm",

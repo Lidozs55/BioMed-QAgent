@@ -123,6 +123,7 @@ function buildDetail(
     publication: {
       publication_id: "pub_build_1",
       manifest_ref: "datasets_build/build_abc/dataset_manifest.json",
+      manifest_sha256: "a".repeat(64),
       validation_result_ref: "validation/pub_build_1",
       published_at: "2026-07-14T00:00:00Z",
       supersedes_publication_id: null,

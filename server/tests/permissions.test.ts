@@ -15,6 +15,7 @@ import {
   classifyCanonicalPath,
   normalizeAgentPathFor,
 } from "../src/agent/permissions/index.js";
+import type { BrokerOptions, PermissionAuditSink } from "../src/agent/permissions/index.js";
 
 const roots: string[] = [];
 
@@ -54,13 +55,14 @@ async function fixture(options: {
   return { base, workspaceRoot, taskOutputRoot, repositoryRoot, broker, evaluator, grants, policyStore, audit, events };
 }
 
-async function classify(input: string, workspaceAnchor: string, repositoryRoot: string, taskOutputRoot: string) {
+async function classify(input: string, workspaceAnchor: string, repositoryRoot: string, taskOutputRoot: string, dataRoot = repositoryRoot) {
   const normalized = await normalizeAgentPathFor(input, workspaceAnchor);
   return {
     ...normalized,
     scope: classifyCanonicalPath(normalized.canonical, {
       workspaceRoot: workspaceAnchor,
       taskOutputRoot,
+      dataRoot,
       repositoryRoot,
     }),
   };
@@ -96,6 +98,64 @@ describe("path normalization + scope classification (P1)", () => {
     expect(external.scope).toBe("external");
   });
 
+  test("framework control plane is its own scope, never ordinary project", async () => {
+    const { workspaceRoot, taskOutputRoot, repositoryRoot } = await fixture();
+    // dataRoot in this fixture layout IS the base dir: settings live at
+    // <base>/settings (permission rules + model credentials) and must not be
+    // reachable through a project grant (P0 audit).
+    const settings = path.join(repositoryRoot, "settings", "agent-permissions.json");
+    await mkdir(path.dirname(settings), { recursive: true });
+    await writeFile(settings, "{}", "utf8");
+    const settingsScope = await classify(settings, workspaceRoot, repositoryRoot, taskOutputRoot);
+    expect(settingsScope.scope).toBe("framework_internal");
+    // Other tasks' workspaces and outputs are framework-internal too.
+    const otherWorkspace = path.join(repositoryRoot, "workspaces", "task_other", "a.csv");
+    await mkdir(path.dirname(otherWorkspace), { recursive: true });
+    await writeFile(otherWorkspace, "x", "utf8");
+    expect((await classify(otherWorkspace, workspaceRoot, repositoryRoot, taskOutputRoot)).scope)
+      .toBe("framework_internal");
+    const otherOutput = path.join(repositoryRoot, "output", "tasks", "task_other", "state", "task.json");
+    await mkdir(path.dirname(otherOutput), { recursive: true });
+    await writeFile(otherOutput, "{}", "utf8");
+    expect((await classify(otherOutput, workspaceRoot, repositoryRoot, taskOutputRoot)).scope)
+      .toBe("framework_internal");
+    // The CURRENT task's dirs keep their own scopes.
+    expect((await classify(path.join(workspaceRoot, "notes", "a.md"), workspaceRoot, repositoryRoot, taskOutputRoot)).scope)
+      .toBe("workspace");
+    expect((await classify(path.join(taskOutputRoot, "state", "task.json"), workspaceRoot, repositoryRoot, taskOutputRoot)).scope)
+      .toBe("task_output");
+  });
+
+  test("framework-internal scope is hard-denied for every capability even with grants and rules", async () => {
+    const { broker, grants, policyStore, repositoryRoot } = await fixture();
+    const settings = path.join(repositoryRoot, "settings", "model-auth.json");
+    await mkdir(path.dirname(settings), { recursive: true });
+    await writeFile(settings, "{}", "utf8");
+    // A run grant + a persistent allow rule for the exact path must not help.
+    grants.add("run", "task_ts_1", "run_ts_1", {
+      capability: "fs.read",
+      scope: "framework_internal",
+    });
+    await policyStore.addRule({
+      capability: "fs.read",
+      path: settings,
+      recursive: true,
+      policy: "allow",
+    });
+    await expect(broker.evaluate({
+      capability: "fs.read",
+      resource: settings,
+      canonicalResource: settings,
+      scope: "framework_internal",
+    })).rejects.toBeInstanceOf(PermissionDeniedError);
+    await expect(broker.evaluate({
+      capability: "fs.write",
+      resource: settings,
+      canonicalResource: settings,
+      scope: "framework_internal",
+    })).rejects.toBeInstanceOf(PermissionDeniedError);
+  });
+
   test("case-insensitive containment on Windows; prefix confusion is impossible", async () => {
     const { workspaceRoot, taskOutputRoot, repositoryRoot } = await fixture();
     const workspace = process.platform === "win32"
@@ -110,6 +170,7 @@ describe("path normalization + scope classification (P1)", () => {
     expect(classifyCanonicalPath(normalized.canonical, {
       workspaceRoot,
       taskOutputRoot,
+      dataRoot: repositoryRoot,
       repositoryRoot,
     })).toBe("workspace");
     // C:\work must not be contained by C:\workspace-evil
@@ -120,6 +181,7 @@ describe("path normalization + scope classification (P1)", () => {
     expect(classifyCanonicalPath(evil.canonical, {
       workspaceRoot,
       taskOutputRoot,
+      dataRoot: repositoryRoot,
       repositoryRoot,
     })).toBe("external");
   });
@@ -391,6 +453,89 @@ describe("PermissionBroker suspend/resume (P1)", () => {
     await expect(requested).resolves.toMatchObject({ decision: "allow" });
   });
 
+  test("persistence failure while suspending settles the tool call and leaves no pending entry", async () => {
+    const base = await mkdtemp(path.join(os.tmpdir(), "biomed-perm-fail-"));
+    roots.push(base);
+    const workspaceRoot = path.join(base, "workspaces", "task_ts_1");
+    await mkdir(workspaceRoot, { recursive: true });
+    const policyStore = new InMemoryPermissionPolicyStore();
+    const grants = new TemporaryGrantStore();
+    const evaluator = new PermissionEvaluator({
+      protectedPaths: new ProtectedPaths({ taskOutputRoot: path.join(base, "output", "tasks", "task_ts_1") }),
+      grants,
+      policyStore,
+    });
+    const failingAudit: PermissionAuditSink = {
+      record: async () => {
+        throw new Error("disk full");
+      },
+    };
+    const broker = new PermissionBroker({
+      taskId: "task_ts_1",
+      runId: "run_ts_1",
+      evaluator,
+      grants,
+      policyStore,
+      audit: failingAudit,
+      recordRunEvent: async () => undefined,
+    });
+    // The audit failure must surface to the tool call (reject, not hang) and
+    // must not leave an orphaned pending entry that blocks later requests
+    // (audit fix: persistence failure settles the caller).
+    await expect(broker.evaluate({
+      capability: "fs.read",
+      resource: path.join(baseExternal(), "x.csv"),
+      canonicalResource: path.join(baseExternal(), "x.csv"),
+      scope: "external",
+    })).rejects.toThrow("disk full");
+    expect(broker.hasPending("run_ts_1")).toBe(false);
+  });
+
+  test("persistence failure while resolving settles the original tool call", async () => {
+    const base = await mkdtemp(path.join(os.tmpdir(), "biomed-perm-fail2-"));
+    roots.push(base);
+    const workspaceRoot = path.join(base, "workspaces", "task_ts_1");
+    await mkdir(workspaceRoot, { recursive: true });
+    const policyStore = new InMemoryPermissionPolicyStore();
+    const grants = new TemporaryGrantStore();
+    const evaluator = new PermissionEvaluator({
+      protectedPaths: new ProtectedPaths({ taskOutputRoot: path.join(base, "output", "tasks", "task_ts_1") }),
+      grants,
+      policyStore,
+    });
+    const events: Array<{ type: string; request_id?: string }> = [];
+    const failingEvents: BrokerOptions["recordRunEvent"] = async () => {
+      throw new Error("event stream unwritable");
+    };
+    const broker = new PermissionBroker({
+      taskId: "task_ts_1",
+      runId: "run_ts_1",
+      evaluator,
+      grants,
+      policyStore,
+      audit: new InMemoryPermissionAuditSink(),
+      recordRunEvent: async (payload) => {
+        events.push(payload as { type: string; request_id?: string });
+      },
+    });
+    const requested = broker.evaluate({
+      capability: "fs.read",
+      resource: path.join(baseExternal(), "x.csv"),
+      canonicalResource: path.join(baseExternal(), "x.csv"),
+      scope: "external",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const requestId = (events.at(-1) as { request_id: string }).request_id;
+    // Swap in a failing event recorder AFTER the request was suspended.
+    (broker as unknown as { recordRunEvent: BrokerOptions["recordRunEvent"] }).recordRunEvent = failingEvents;
+    await expect(broker.resolve("run_ts_1", requestId, "allow", "once")).rejects.toThrow(
+      "event stream unwritable",
+    );
+    // The original tool call must settle with the failure, never hang.
+    await expect(requested).rejects.toThrow("event stream unwritable");
+    expect(broker.hasPending("run_ts_1")).toBe(false);
+  });
+
   test("cancel rejects the pending request (run cancelled while waiting)", async () => {
     const { broker } = await fixture();
     const requested = broker.evaluate({
@@ -457,6 +602,49 @@ describe("PermissionBroker suspend/resume (P1)", () => {
       cwd: granted.workspaceRoot,
       scope: "workspace",
     })).rejects.toBeInstanceOf(PermissionDeniedError);
+  });
+
+  test("Restricted beats temporary grants and persistent file rules (hard lockdown)", async () => {
+    const { broker, grants, policyStore, base } = await fixture();
+    const external = path.join(baseExternal());
+    await mkdir(external, { recursive: true });
+    await writeFile(path.join(external, "clinical.csv"), "x", "utf8");
+    // While permissive, the user approves a run grant AND a persistent rule
+    // for the external scope/path.
+    grants.add("run", "task_ts_1", "run_ts_1", {
+      capability: "fs.read",
+      scope: "external",
+    });
+    await policyStore.addRule({
+      capability: "fs.read",
+      path: external,
+      recursive: true,
+      policy: "allow",
+    });
+    await expect(broker.evaluate({
+      capability: "fs.read",
+      resource: path.join(external, "clinical.csv"),
+      canonicalResource: path.join(external, "clinical.csv"),
+      scope: "external",
+    })).resolves.toMatchObject({ decision: "allow" });
+
+    // Switching to Restricted must revoke both — grants/rules are evaluated
+    // AFTER the Restricted preset (audit fix: real hard lockdown).
+    await policyStore.setPreset("restricted");
+    await expect(broker.evaluate({
+      capability: "fs.read",
+      resource: path.join(external, "clinical.csv"),
+      canonicalResource: path.join(external, "clinical.csv"),
+      scope: "external",
+    })).rejects.toBeInstanceOf(PermissionDeniedError);
+    // Workspace file ops stay allowed under Restricted.
+    await writeFile(path.join(base, "workspaces", "task_ts_1", "notes.md"), "x", "utf8");
+    await expect(broker.evaluate({
+      capability: "fs.write",
+      resource: path.join(base, "workspaces", "task_ts_1", "notes.md"),
+      canonicalResource: path.join(base, "workspaces", "task_ts_1", "notes.md"),
+      scope: "workspace",
+    })).resolves.toMatchObject({ decision: "allow" });
   });
 
   test("resolve is bound to the runId: a wrong run cannot approve a pending request", async () => {

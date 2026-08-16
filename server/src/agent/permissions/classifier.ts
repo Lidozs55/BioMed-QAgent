@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import type { ResourceScope } from "./types.js";
 import { canonicalIsWithin } from "./path-normalizer.js";
 
@@ -9,6 +11,7 @@ import { canonicalIsWithin } from "./path-normalizer.js";
  * ```text
  * data/workspaces/<currentTaskId>/a.csv          → workspace
  * data/output/tasks/<currentTaskId>/artifacts/…  → task_output
+ * data/settings/…, other task workspaces/outputs → framework_internal
  * <repositoryRoot>/package.json                  → project
  * D:\datasets\TCGA\a.csv                         → external
  * ```
@@ -23,6 +26,8 @@ export interface ClassificationRoots {
   taskOutputRoot: string;
   /** Canonical repository root. */
   repositoryRoot: string;
+  /** Canonical ``data/`` root (framework control plane lives under it). */
+  dataRoot: string;
 }
 
 export function classifyCanonicalPath(
@@ -31,6 +36,23 @@ export function classifyCanonicalPath(
 ): ResourceScope {
   if (canonicalIsWithin(roots.workspaceRoot, canonical)) return "workspace";
   if (canonicalIsWithin(roots.taskOutputRoot, canonical)) return "task_output";
+  // Framework control plane (P0 audit): ``data/settings/**`` (persisted
+  // permission rules + model credentials live there) and EVERY task's
+  // workspace / framework output except the current one are protected from
+  // ordinary project grants. The current task's dirs were already matched
+  // above; anything else under these roots is framework-internal, whether
+  // it belongs to another task or to the settings control plane. The
+  // evaluator hard-denies this scope before any grant/rule/preset.
+  const settingsRoot = path.join(roots.dataRoot, "settings");
+  const workspacesRoot = path.join(roots.dataRoot, "workspaces");
+  const outputTasksRoot = path.join(roots.dataRoot, "output", "tasks");
+  if (
+    canonicalIsWithin(settingsRoot, canonical) ||
+    canonicalIsWithin(workspacesRoot, canonical) ||
+    canonicalIsWithin(outputTasksRoot, canonical)
+  ) {
+    return "framework_internal";
+  }
   if (canonicalIsWithin(roots.repositoryRoot, canonical)) return "project";
   return "external";
 }

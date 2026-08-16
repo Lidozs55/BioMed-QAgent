@@ -1,6 +1,7 @@
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
+import { canonicalizeWithAncestor } from "../permissions/path-normalizer.js";
 import type { PermissionBroker } from "../permissions/broker.js";
 import type { WorkspaceAuditSink } from "./audit.js";
 import { WorkspacePolicyError, type WorkspaceLimits } from "./types.js";
@@ -103,15 +104,29 @@ export async function createWorkspaceContext(
       cause: error,
     });
   }
+  // Canonicalize EVERY security-boundary root, not just the workspace (audit
+  // fix): the classifier assumes its input roots are canonical, so a symlink/
+  // junction-exposed task-output or repository root would otherwise let a
+  // canonical candidate escape containment checks and be mis-classified.
+  // ``canonicalizeWithAncestor`` handles not-yet-created roots (task output
+  // dirs are created lazily) by resolving through the nearest existing
+  // ancestor and re-appending the missing suffix.
+  const [canonicalWorkspaceRoot, taskOutputRoot, dataRoot, repositoryRoot] =
+    await Promise.all([
+      realpath(workspaceRoot),
+      canonicalizeWithAncestor(path.resolve(config.taskOutputRoot)),
+      canonicalizeWithAncestor(path.resolve(config.dataRoot)),
+      canonicalizeWithAncestor(path.resolve(config.repositoryRoot)),
+    ]);
   return {
     taskId: config.taskId,
     runId: config.runId,
     piSessionId: config.piSessionId,
     workspaceRoot,
-    canonicalWorkspaceRoot: await realpath(workspaceRoot),
-    taskOutputRoot: path.resolve(config.taskOutputRoot),
-    dataRoot: path.resolve(config.dataRoot),
-    repositoryRoot: path.resolve(config.repositoryRoot),
+    canonicalWorkspaceRoot,
+    taskOutputRoot,
+    dataRoot,
+    repositoryRoot,
     permissions: config.permissions,
     audit: config.audit,
     limits: validatedLimits(config.limits),

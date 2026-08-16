@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { once } from "node:events";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { AddressInfo } from "node:net";
@@ -101,6 +101,19 @@ function manifestJson(options: {
   });
 }
 
+/** Write publication.json bound to the manifest FILE BYTES (P7 receipt). */
+async function writePublication(
+  publicationDir: string,
+  manifest: { manifest_id: string },
+): Promise<void> {
+  const manifestBytes = await readFile(path.join(publicationDir, "dataset_manifest.json"));
+  await writeFile(path.join(publicationDir, "publication.json"), JSON.stringify({
+    publication_id: "publication_one",
+    manifest_ref: manifest.manifest_id,
+    manifest_sha256: createHash("sha256").update(manifestBytes).digest("hex"),
+  }), "utf8");
+}
+
 async function createTask(baseUrl: string, requestId: string): Promise<{ task_id: string }> {
   const created = await fetch(`${baseUrl}/api/v1/tasks`, {
     method: "POST",
@@ -167,10 +180,7 @@ describe("publication integrity hardening (P7)", () => {
       }],
     })) as { manifest_id: string };
     await writeFile(path.join(publicationDir, "dataset_manifest.json"), JSON.stringify(manifest), "utf8");
-    await writeFile(path.join(publicationDir, "publication.json"), JSON.stringify({
-      publication_id: "publication_one",
-      manifest_ref: manifest.manifest_id,
-    }), "utf8");
+    await writePublication(publicationDir, manifest);
 
     const listing = await fetch(`${baseUrl}/api/v1/tasks/${taskId}/artifacts`);
     const listed = await listing.json() as { artifacts: Array<{ artifact_id: string }> };
@@ -227,10 +237,7 @@ describe("publication integrity hardening (P7)", () => {
       artifacts: Array<{ sha256: string; size_bytes: number }>;
     };
     await writeFile(path.join(publicationDir, "dataset_manifest.json"), JSON.stringify(manifest), "utf8");
-    await writeFile(path.join(publicationDir, "publication.json"), JSON.stringify({
-      publication_id: "publication_one",
-      manifest_ref: manifest.manifest_id,
-    }), "utf8");
+    await writePublication(publicationDir, manifest);
 
     // Tamper: swap the file content and mirror the new hash/size in the
     // manifest entry — but keep manifest_id and sha256 stale.
@@ -242,7 +249,7 @@ describe("publication integrity hardening (P7)", () => {
     const download = await fetch(`${baseUrl}/api/v1/tasks/${taskId}/artifacts/artifact_primary`);
     expect(download.status).toBe(409);
     const body = await download.json() as { detail: string };
-    expect(body.detail).toMatch(/digest|integrity/i);
+    expect(body.detail).toMatch(/manifest|hash|digest|integrity/i);
 
     await runtime.close();
     await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -282,13 +289,61 @@ describe("publication integrity hardening (P7)", () => {
       }],
     })) as { manifest_id: string };
     await writeFile(path.join(publicationDir, "dataset_manifest.json"), JSON.stringify(manifest), "utf8");
-    await writeFile(path.join(publicationDir, "publication.json"), JSON.stringify({
-      publication_id: "publication_one",
-      manifest_ref: manifest.manifest_id,
-    }), "utf8");
+    await writePublication(publicationDir, manifest);
 
     const download = await fetch(`${baseUrl}/api/v1/tasks/${taskId}/artifacts/artifact_primary`);
     expect(download.status).toBe(200);
+
+    await runtime.close();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  test("tampering with manifest top-level metadata is detected by the manifest file hash (P7 receipt)", async () => {
+    const { baseUrl, runtime, server, tasksRoot } = await runtimeFixture();
+    const { task_id: taskId } = await createTask(baseUrl, "req_p7_meta_tamper");
+
+    // Publish a valid publication, then edit ONLY manifest top-level metadata
+    // (validation_summary.status) — packageDigest() hashes only the artifact
+    // entries, so this tamper would pass the digest check; the publication
+    // receipt binds the manifest FILE BYTES instead and must reject it.
+    const primary = "gene_id,value\nTP53,1\n";
+    const sha256 = createHash("sha256").update(primary).digest("hex");
+    const publicationDir = path.join(
+      tasksRoot,
+      taskId,
+      "datasets_build",
+      "build_one",
+      "publish",
+      "version_1",
+    );
+    await mkdir(path.join(publicationDir, "merged"), { recursive: true });
+    await writeFile(path.join(publicationDir, "merged", "primary.csv"), primary, "utf8");
+    const manifest = JSON.parse(manifestJson({
+      taskId,
+      buildId: "build_one",
+      artifacts: [{
+        artifact_id: "artifact_primary",
+        role: "primary_dataset",
+        relative_path: "merged/primary.csv",
+        media_type: "text/csv",
+        size_bytes: Buffer.byteLength(primary),
+        sha256,
+      }],
+    })) as { manifest_id: string; validation_summary?: Record<string, unknown> };
+    manifest.validation_summary = { status: "passed" };
+    await writeFile(path.join(publicationDir, "dataset_manifest.json"), JSON.stringify(manifest), "utf8");
+    await writePublication(publicationDir, manifest);
+
+    // Tamper: flip validation_summary WITHOUT touching artifact entries, the
+    // package digest, manifest_id, or the receipt — the file bytes changed,
+    // so the receipt check must fail.
+    manifest.validation_summary = { status: "passed", note: "edited by attacker" };
+    await writeFile(path.join(publicationDir, "dataset_manifest.json"), JSON.stringify(manifest), "utf8");
+
+    const download = await fetch(`${baseUrl}/api/v1/tasks/${taskId}/artifacts/dataset_manifest`);
+    expect(download.status).toBe(409);
+    const body = await download.json() as { detail: string };
+    expect(body.detail).toMatch(/manifest|integrity/i);
 
     await runtime.close();
     await new Promise<void>((resolve) => server.close(() => resolve()));

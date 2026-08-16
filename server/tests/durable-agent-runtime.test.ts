@@ -2,7 +2,7 @@ import { once } from "node:events";
 import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -453,6 +453,12 @@ describe("durable formal Agent runtime", () => {
       JSON.stringify({
         publication_id: "publication_one",
         manifest_ref: `manifest_${digest.slice(0, 16)}`,
+        manifest_sha256: createHash("sha256")
+          .update(JSON.stringify(JSON.parse(await readFile(
+            path.join(publicationDir, "dataset_manifest.json"),
+            "utf8",
+          ))))
+          .digest("hex"),
       }),
       "utf8",
     );

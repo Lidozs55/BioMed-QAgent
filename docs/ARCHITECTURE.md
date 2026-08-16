@@ -126,6 +126,8 @@ Validation Gate、原子发布、fixture/live 区分。
 `ask` 挂起单个 Tool Call 等待用户批准（`permission_requested` / `permission_resolved`
 durable events + `POST .../permissions/{requestId}`）。正式 Publication 只由
 Dataset Core 产生并以 manifest + hash 验证——权限放开不改变业务可信边界。
+权限 scope 含 `framework_internal`（`data/settings/**`、其他 Task 的 workspace/output），
+对所有能力硬拒绝，任何授权/规则/preset 均不能覆盖（ADR-026 §2）。
 
 当前不存在固定五阶段、固定 22 列 `main_data.csv` 全局协议或 metadata-only
 占位主表：Dataset Build 由自包含 `DatasetBuildSpec`（§3）驱动，产物由

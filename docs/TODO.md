@@ -305,12 +305,31 @@ build 锁、cancel 收敛与 event sink；`DATASET_CORE=ts` 现为默认运行�
       workspace 任意文件不会自动成为 Publication（仅 Core 发布路径）
 - [x] 审计修正：reader 重算 package digest 并与 `manifest.sha256`/`manifest_id`（绑定 publication.json
       manifest_ref）交叉验证——改 artifact 并同步改 manifest 条目但不重算 digest 也会被拒
+- [x] 二轮审计修正：`packageDigest` 只覆盖 artifact 条目，manifest 顶层元数据（row_count/
+      validation_summary 等）改不改 digest——Publisher 新增必需字段 `publication.json.manifest_sha256`
+      （manifest 文件字节哈希），reader 先校验文件字节再解析；golden fixtures 同步携带该字段
 - [x] 信任边界明确（ADR-026 §3）：同账户 exec 能一致性重写整包时无法防伪，仅防意外/部分篡改
 - [x] `../` 越界改为 resolve→classify→broker（不再是 INVALID 输入错）；不存在路径 canonicalization
       重新拼回缺失后缀，避免授权范围意外扩大；write 在创建父目录后复核目标与授权 canonical 一致
 - [x] legacy migration marker 的 POSIX 比较修正（比较 `marker.workspace` 而非 `workspaceRoot`）
 
-验收（2026-08-16 审计后）：`pnpm test`（contracts 14 + server 783 + frontend 761）/ `pnpm lint` /
+二轮审计修复（2026-08-17）：
+
+- [x] **P0 framework control-plane 隔离**：新增 `framework_internal` scope——`data/settings/**`
+      （持久权限规则 + 模型凭据）、其他 Task 的 workspace/output 全部硬拒绝（含 read），
+      任何 project 级授权或持久规则都无法覆盖；当前 Task 的 state/logs/artifacts 仍由
+      ProtectedPaths 保护
+- [x] **P1 Restricted 硬收权**：评估顺序改为 invariant → Restricted → grants → rules → preset；
+      受限模式下临时授权与持久 allow rule 一律失效（file + exec 均覆盖，exec 也压过迁移 flag）
+- [x] **P1 Broker 失败状态机**：suspend/resolve 任一步磁盘/audit/event 写失败都会 settle 原
+      工具调用（reject）且不留孤儿 pending；fault-injection 测试覆盖
+- [x] **P1 policy-store 串行化**：mutation queue + 磁盘写成功后才替换缓存；并发授权不丢规则，
+      失败写不产生“内存已改/重启回退”的分裂
+- [x] 顺手项：system prompt 与真实策略对齐（exec 默认 ask、task output 只读、框架路径恒拒）；
+      持久按钮改为“始终允许此路径”（单文件持久化的是文件路径）；workspace/taskOutput/data/
+      repository 四个根在 `createWorkspaceContext` 统一 canonicalize
+
+验收（2026-08-17 二轮审计后）：`pnpm test`（contracts 14 + server 792 + frontend 761）/ `pnpm lint` /
 `pnpm typecheck` / `pnpm build` 全通过；`uv run pytest database/tests` + ruff 通过。
 
 ---

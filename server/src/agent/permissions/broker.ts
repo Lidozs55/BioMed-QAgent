@@ -170,30 +170,43 @@ export class PermissionBroker {
       this.pending.set(request.runId, { request, resolve, reject });
     });
     void decision.catch(() => undefined);
-    await this.audit.record({
-      permission_request_id: request.id,
-      task_id: request.taskId,
-      run_id: request.runId,
-      capability: request.capability,
-      scope: request.scope,
-      resource: request.resource ?? null,
-      command: request.command ?? null,
-      cwd: request.cwd ?? null,
-      decision: "pending",
-      grant_scope: null,
-      timestamp: request.createdAt,
-    });
-    await this.recordRunEvent({
-      type: "permission_requested",
-      request_id: request.id,
-      capability: request.capability,
-      scope: request.scope,
-      resource: request.resource ?? null,
-      canonical_resource: request.canonicalResource ?? null,
-      command: request.command ?? null,
-      cwd: request.cwd ?? null,
-      summary: summarize(request),
-    });
+    try {
+      await this.audit.record({
+        permission_request_id: request.id,
+        task_id: request.taskId,
+        run_id: request.runId,
+        capability: request.capability,
+        scope: request.scope,
+        resource: request.resource ?? null,
+        command: request.command ?? null,
+        cwd: request.cwd ?? null,
+        decision: "pending",
+        grant_scope: null,
+        timestamp: request.createdAt,
+      });
+      await this.recordRunEvent({
+        type: "permission_requested",
+        request_id: request.id,
+        capability: request.capability,
+        scope: request.scope,
+        resource: request.resource ?? null,
+        canonical_resource: request.canonicalResource ?? null,
+        command: request.command ?? null,
+        cwd: request.cwd ?? null,
+        summary: summarize(request),
+      });
+    } catch (error) {
+      // Audit/event persistence is real file IO and can fail. Never leave an
+      // orphaned pending entry or a tool call suspended forever: drop the
+      // pending entry and fail the original tool call with the error
+      // (audit fix — persistence failure settles the caller).
+      const entry = this.pending.get(request.runId);
+      if (entry !== undefined && entry.request.id === request.id) {
+        this.pending.delete(request.runId);
+        entry.reject(toError(error, "permission request could not be recorded"));
+      }
+      throw error;
+    }
     const abort = (): void => {
       const entry = this.pending.get(request.runId);
       if (entry === undefined || entry.request.id !== request.id) return;
@@ -233,10 +246,11 @@ export class PermissionBroker {
       return false;
     }
     this.pending.delete(runId);
-    if (decision === "allow" && grantScope !== undefined) {
-      await this.recordGrant(pending, grantScope);
-    }
-    await this.audit.record({
+    try {
+      if (decision === "allow" && grantScope !== undefined) {
+        await this.recordGrant(pending, grantScope);
+      }
+      await this.audit.record({
         permission_request_id: pending.id,
         task_id: pending.taskId,
         run_id: pending.runId,
@@ -255,14 +269,22 @@ export class PermissionBroker {
         decision,
         grant_scope: grantScope ?? null,
       });
-      if (decision === "deny") {
-        // Deny surfaces as a structured permission error to the tool call
-        // (plan §8), not as a "successful" decision.
-        entry.reject(new PermissionDeniedError(pending, "Permission denied by user"));
-        return true;
-      }
-      entry.resolve({ decision, grantScope });
+    } catch (error) {
+      // A failed grant/audit/event write must NOT leave the original tool
+      // call suspended forever (audit fix, fault-injection tested). The HTTP
+      // resolve fails (error propagates to the caller); the suspended tool
+      // call settles with the same failure.
+      entry.reject(toError(error, "permission decision could not be recorded"));
+      throw error;
+    }
+    if (decision === "deny") {
+      // Deny surfaces as a structured permission error to the tool call
+      // (plan §8), not as a "successful" decision.
+      entry.reject(new PermissionDeniedError(pending, "Permission denied by user"));
       return true;
+    }
+    entry.resolve({ decision, grantScope });
+    return true;
   }
 
   /** Invalidate all pending requests for a run (cancel / shutdown). */
@@ -303,6 +325,10 @@ export class PermissionBroker {
       });
     }
   }
+}
+
+function toError(error: unknown, fallback: string): Error {
+  return error instanceof Error ? error : new Error(fallback);
 }
 
 export function summarize(request: PermissionRequest): string {

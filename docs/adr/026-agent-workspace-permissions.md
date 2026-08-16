@@ -55,7 +55,15 @@ policy:     allow | ask | deny
 ```
 
 - Resources classify into scopes after canonicalization (realpath): workspace,
-  task_output, project, external.
+  task_output, framework_internal, project, external.
+- `framework_internal` is the framework control plane: `data/settings/**`
+  (persisted permission rules, model credentials), every *other* task's
+  workspace and framework output, plus this task's protected state/logs/
+  artifacts (second line behind `ProtectedPaths`). It is hard-denied for ALL
+  capabilities before any grant, rule, or preset — a project-scope Run/Task
+  grant or a persistent path rule can never reach it (P0 audit). The current
+  task's own output remains `task_output` and its state/logs/artifacts stay
+  protected by the framework invariant.
 - Relative ``../`` paths are **not** input errors: they resolve against the
   workspace, canonicalize, classify, and enter the broker like any other path
   (an escape is a scope decision, not a syntax error). NUL bytes and reserved
@@ -72,10 +80,31 @@ policy:     allow | ask | deny
   canonicalizes and validates at insert time (no evaluator-side
   ``path.resolve`` against a relative string).
 - Decision order: framework invariant (hard deny on
-  `task_output/{state,logs,artifacts}/**` writes) → temporary grant (once/run/
-  task) → most-specific persistent rule → preset default.
+  `task_output/{state,logs,artifacts}/**` writes and the whole
+  `framework_internal` scope) → Restricted preset → temporary grant (once/
+  run/task) → most-specific persistent rule → preset default. Restricted is
+  evaluated **before** grants and rules (P1 audit): a `fs.write` grant
+  approved while permissive cannot survive a later switch to Restricted, and
+  existing allow rules never beat it. The same holds for exec: Restricted
+  denies `process.exec` even over `AGENT_EXEC_POLICY=allow` — emergency
+  lockdown beats the migration flag.
 - The agent requests permission simply by attempting the operation — there is
   no `request_permission` tool. An `ask` suspends exactly one tool call
+  (`permission_requested` durable event) and resumes it after the user decides
+  via `POST /api/v1/tasks/{taskId}/runs/{runId}/permissions/{requestId}`. The
+  resolve is bound to the URL runId (pending entries are keyed by runId and
+  then verified against requestId), so an old runId cannot approve a live
+  request.
+- Permission persistence is serialized: `JsonPermissionPolicyStore` runs
+  every mutation through an internal queue (concurrent grants never lose
+  rules) and swaps its in-memory cache only **after** the atomic disk write
+  succeeds, so a failed write never leaves the process with "saved"
+  permissions that differ from a restart's view (P1 audit).
+- Broker failure handling: a suspended tool call is always settled — if the
+  audit/event write fails while suspending, the pending entry is dropped and
+  the tool call fails with the error; if the grant/audit/event write fails
+  while resolving, the HTTP resolve fails AND the original tool call settles
+  with the same failure (fault-injection tested). An `ask` suspends exactly one tool call
   (`permission_requested` durable event) and resumes it after the user decides
   via `POST /api/v1/tasks/{taskId}/runs/{runId}/permissions/{requestId}`. The
   resolve is bound to the URL runId (pending entries are keyed by runId and
@@ -94,7 +123,17 @@ policy:     allow | ask | deny
   previously granted “always allow command execution”.
 - Run/Task grants are scoped to capability × ResourceScope (not a single
   path); the permission card states this explicitly so “本 Run 允许” is not
-  mistaken for a single-path approval.
+  mistaken for a single-path approval. The persistent button reads “始终允许
+  此路径” (not “此目录”) because a single-file read persists the file path,
+  not its parent directory.
+- The system prompt mirrors the real policy: workspace file ops are free,
+  `process.exec` asks (workspace included), task output is read-only for the
+  agent, and framework-protected paths are always denied — no "run commands
+  freely" language that would contradict the ask-when-needed default.
+- All security-boundary roots (`workspaceRoot`, `taskOutputRoot`, `dataRoot`,
+  `repositoryRoot`) are canonicalized at `createWorkspaceContext`, so
+  symlink/junction-exposed roots cannot desync the classifier's containment
+  checks (audit fix).
 - Persistent rules are user settings (`data/settings/agent-permissions.json`),
   never workspace data.
 
@@ -108,12 +147,22 @@ policy:     allow | ask | deny
   to match both the recorded `manifest.sha256` and the `manifest_id` prefix
   (bound to `publication.json`'s `manifest_ref`). A tamper that rewrites an
   artifact entry without correctly recomputing the package digest is detected.
+- `packageDigest()` hashes only `(relative_path, artifact sha256)` — it does
+  NOT cover the manifest's own top-level metadata (`row_count`,
+  `dataset_family`, `validation_summary`, `confidence_summary`, …). The
+  publisher therefore binds the **manifest file bytes** into the publication
+  receipt: `publication.json` gains a required `manifest_sha256` (SHA-256 of
+  the `dataset_manifest.json` file as published), and the reader verifies the
+  stored manifest file against it before parsing (P1 audit). Editing
+  `validation_summary` or `row_count` without rewriting the receipt is
+  rejected; `parseDatasetPublication` requires the field, and golden
+  migration fixtures now carry it.
 - Honest boundary: an actor with full OS-account write access (Full Access +
-  `process.exec`) can recompute the package digest and rewrite
-  `manifest_id` + `publication.json` consistently. The reader guarantees
-  detection of accidental/partial tampering, not defense against deliberate
-  same-account rewriting — tightening that requires isolating exec OS
-  privileges (outside this ADR's scope) or explicitly accepting that Full
+  `process.exec`) can recompute the package digest AND the manifest file hash
+  and rewrite `manifest_id` + `publication.json` consistently. The reader
+  guarantees detection of accidental/partial tampering, not defense against
+  deliberate same-account rewriting — tightening that requires isolating exec
+  OS privileges (outside this ADR's scope) or explicitly accepting that Full
   Access relaxes the guarantee; the Full Access preset copy warns about
   OS-account inheritance.
 

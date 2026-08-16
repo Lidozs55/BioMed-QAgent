@@ -93,6 +93,8 @@ export interface DatasetPublication {
   schema_version?: "1.0";
   publication_id: string;
   manifest_ref: string;
+  /** SHA-256 of the ``dataset_manifest.json`` file bytes (P7 trust anchor). */
+  manifest_sha256: string;
   validation_result_ref: string;
   published_at: string;
   supersedes_publication_id: string | null;

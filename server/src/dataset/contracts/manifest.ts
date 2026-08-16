@@ -149,6 +149,7 @@ const DATASET_PUBLICATION_KEYS = [
   "schema_version",
   "publication_id",
   "manifest_ref",
+  "manifest_sha256",
   "validation_result_ref",
   "published_at",
   "supersedes_publication_id",
@@ -174,6 +175,13 @@ export function parseDatasetPublication(value: unknown): DatasetPublication {
     manifest_ref: assertNonEmptyString(
       record.manifest_ref,
       "DatasetPublication.manifest_ref",
+    ),
+    // P7 trust anchor: SHA-256 of the dataset_manifest.json file bytes. The
+    // artifact reader refuses publications without it (fail closed), so the
+    // parser requires it too.
+    manifest_sha256: assertNonEmptyString(
+      record.manifest_sha256,
+      "DatasetPublication.manifest_sha256",
     ),
     validation_result_ref: assertNonEmptyString(
       record.validation_result_ref,
