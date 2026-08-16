@@ -31,7 +31,7 @@ describe("OperationStep", () => {
       label: "文献/数据发现",
       category: "discovery",
       status: "running",
-      progress: { kind: "records_found", current: 42, total: 100, detail: null, updatedAt: TIMESTAMP },
+      progress: { kind: "records_found", current: 42, total: 100 },
     });
     render(<OperationStep item={item} />);
     expect(screen.getByText("文献/数据发现")).toBeInTheDocument();
@@ -72,7 +72,7 @@ describe("OperationStep", () => {
       label: "兼容性检查",
       category: "validation",
       status: "completed",
-      progress: { kind: "rows_checked", current: 5000, total: 5000, detail: null, updatedAt: TIMESTAMP },
+      progress: { kind: "rows_checked", current: 5000, total: 5000 },
       error: null,
     });
     render(<OperationStep item={item} />);

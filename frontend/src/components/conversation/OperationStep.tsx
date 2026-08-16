@@ -39,8 +39,7 @@ function operationStatusMeta(item: OperationItem): OperationStatusMeta {
  * One V2 build-execution operation (Design §15.1). While running the row
  * shows an inline progress summary; once terminal it auto-collapses into a
  * compact summary row whose detail (progress/error) is expandable on click.
- * Manual expand/collapse is preserved via local state. Downloads render a
- * dedicated compact progress strip with pause/resume controls.
+ * Manual expand/collapse is preserved via local state.
  */
 export function OperationStep({ item }: OperationStepProps) {
   const [expanded, setExpanded] = useState(false);
@@ -48,13 +47,8 @@ export function OperationStep({ item }: OperationStepProps) {
   const statusMeta = operationStatusMeta(item);
   const label = operationDisplayLabel(item);
   const isRunning = item.status === "running";
-  const isDownload = item.progress?.kind === "downloaded_bytes";
   const CategoryIcon = categoryMeta.icon;
-  // Byte-level download progress lives on the owning tool-call bubble (the
-  // only place it is rendered), so the operation row keeps just its status
-  // badge — otherwise the timeline shows two duplicate progress strips.
-  const showDetail =
-    expanded && item.progress !== null && !isDownload || (expanded && item.error !== null);
+  const showDetail = expanded && (item.progress !== null || item.error !== null);
 
   return (
     <Message align="start">
@@ -82,7 +76,7 @@ export function OperationStep({ item }: OperationStepProps) {
                 )}
               </span>
               <span className="font-medium">{label}</span>
-              {isRunning && !isDownload && item.progress !== null && (
+              {isRunning && item.progress !== null && (
                 <span className="text-sm text-muted-foreground">
                   {item.progress.current}/
                   {item.progress.total ?? "…"}
@@ -97,7 +91,7 @@ export function OperationStep({ item }: OperationStepProps) {
                 aria-hidden="true"
               />
             </button>
-            {showDetail ? (
+            {showDetail && (
               <div className="mt-1 flex flex-col gap-1">
                 {item.progress !== null && (
                   <p className="text-xs text-muted-foreground">
@@ -111,7 +105,7 @@ export function OperationStep({ item }: OperationStepProps) {
                   <p className="text-xs text-destructive">{item.error}</p>
                 )}
               </div>
-            ) : null}
+            )}
           </BubbleContent>
         </Bubble>
       </MessageContent>

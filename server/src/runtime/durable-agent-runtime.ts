@@ -83,16 +83,6 @@ interface ActiveTask {
   adapter: PiEventAdapter;
   activeRunId: string | null;
   approvalGate: ApprovalGateHandle;
-  /**
-   * A standalone download-resume execution (no AI inference). The run is a
-   * durable follow-up run whose tool lifecycle is synthesized directly, so
-   * the frontend renders a tool-call bubble with a live progress strip.
-   */
-  activeDownload: {
-    runId: string;
-    controller: AbortController;
-    promise: Promise<void>;
-  } | null;
 }
 
 interface Subscription {
@@ -322,7 +312,6 @@ export async function createDurableAgentRuntime(
         adapter: new PiEventAdapter({ taskId }),
         activeRunId: null,
         approvalGate,
-        activeDownload: null,
       };
     } catch (error) {
       await disposeWorkspace();
@@ -449,12 +438,6 @@ export async function createDurableAgentRuntime(
     });
     // A suspended credential approval must not outlive the cancelled run.
     task.approvalGate.rejectPending(runId, new Error("run cancelled"));
-    // A standalone download-resume run has no AI inference to cancel; abort
-    // the in-flight downloader and let its promise emit run_cancelled.
-    const download = task.activeDownload;
-    if (download !== null && download.runId === runId) {
-      download.controller.abort();
-    }
     await task.session.cancel("user requested");
     let timer: NodeJS.Timeout | undefined;
     try {
@@ -472,139 +455,6 @@ export async function createDurableAgentRuntime(
       unsubscribeTerminal?.();
     }
     return await repository.getSnapshot(taskId);
-  }
-
-  /**
-   * Resume an interrupted acquisition directly (P5-D3 part-file resume)
-   * without an AI inference pass: create a durable follow-up run, synthesize
-   * the tool lifecycle (started/progress/completed) around the configured
-   * tool's ``execute``, and close the run. The user then sends "继续" to
-   * start a normal AI run for the remaining analysis.
-   */
-  async function resumeDownload(
-    taskId: string,
-    body: Record<string, unknown>,
-  ): Promise<unknown> {
-    const requestId = requiredString(body, "request_id", 256);
-    const toolName = requiredString(body, "tool_name", 128);
-    const argumentsValue = body.arguments;
-    if (
-      argumentsValue === null ||
-      argumentsValue === undefined ||
-      typeof argumentsValue !== "object" ||
-      Array.isArray(argumentsValue)
-    ) {
-      throw new TypeError("arguments must be an object");
-    }
-    const snapshot = await repository.getSnapshot(taskId);
-    if (snapshot === null) throw new ReferenceError("Task not found");
-    if (snapshot.task.mode !== "agent") {
-      throw new DurableTaskConflictError(
-        "task_not_continuable",
-        "Task cannot be continued",
-      );
-    }
-    if (snapshot.task.active_run_id !== null) {
-      throw new DurableTaskConflictError(
-        "active_run",
-        "Task already has an active run",
-      );
-    }
-    const task = activeTasks.get(taskId);
-    if (task === undefined) {
-      throw new ReferenceError("任务会话不可用，请使用“继续”让 AI 恢复下载");
-    }
-    const tool = task.workspace.tools.find(
-      (candidate) => candidate.name === toolName,
-    );
-    if (tool === undefined) {
-      throw new ReferenceError(`Tool not found: ${toolName}`);
-    }
-    // 独立续传 run：只创建 run 容器，不启动 AI 推理，直接执行下载工具续传。
-    const accepted = await repository.createRun(taskId, {
-      requestId,
-      input: "继续下载被中断的数据文件（自动续传）",
-    });
-    const runId = accepted.run_id;
-    task.workspace.setRunId?.(runId);
-    task.approvalGate.setRunId(runId);
-    task.activeRunId = runId;
-    await repository.appendRunEvents(taskId, runId, [
-      { type: "run_started" },
-      {
-        type: "tool_started",
-        tool_call_id: `resume_${runId.slice(-8)}`,
-        tool_name: tool.name,
-        arguments: argumentsValue as Record<string, JsonValue>,
-      },
-    ]);
-    const controller = new AbortController();
-    const promise = executeDownloadResume(
-      taskId,
-      runId,
-      tool,
-      argumentsValue,
-      controller.signal,
-    );
-    task.activeDownload = { runId, controller, promise };
-    void promise.finally(() => {
-      if (task.activeDownload?.runId === runId) task.activeDownload = null;
-      if (task.activeRunId === runId) task.activeRunId = null;
-    });
-    return accepted;
-  }
-
-  async function executeDownloadResume(
-    taskId: string,
-    runId: string,
-    tool: BioMedAgentTool,
-    argumentsValue: unknown,
-    signal: AbortSignal,
-  ): Promise<void> {
-    const cancel = async (reason: string): Promise<void> => {
-      await repository.appendRunEvent(taskId, runId, {
-        type: "run_cancelled",
-        reason,
-      });
-    };
-    let result: { content: string; isError?: boolean };
-    try {
-      result = await tool.execute(argumentsValue, signal);
-    } catch (error) {
-      if (signal.aborted) return cancel("用户取消了下载恢复");
-      const message = error instanceof Error ? error.message : String(error);
-      await repository.appendRunEvents(taskId, runId, [
-        {
-          type: "tool_completed",
-          tool_name: tool.name,
-          output: message,
-          is_error: true,
-        },
-        {
-          type: "run_failed",
-          error: message,
-          error_code: "internal_error",
-        },
-      ]);
-      return;
-    }
-    if (signal.aborted) return cancel("用户取消了下载恢复");
-    const isError = result.isError === true;
-    await repository.appendRunEvents(taskId, runId, [
-      {
-        type: "tool_completed",
-        tool_name: tool.name,
-        output: result.content,
-        is_error: isError,
-      },
-      isError
-        ? {
-            type: "run_failed",
-            error: result.content,
-            error_code: "download_incomplete",
-          }
-        : { type: "run_completed", build_result: null },
-    ]);
   }
 
   async function resumeRun(taskId: string, runId: string, body: Record<string, unknown>): Promise<unknown> {
@@ -811,14 +661,6 @@ export async function createDurableAgentRuntime(
         sendJson(response, 202, await cancelRun(
           decodeURIComponent(cancel[1] ?? ""),
           decodeURIComponent(cancel[2] ?? ""),
-        ));
-        return;
-      }
-      const downloadResume = /^\/api\/v1\/tasks\/([^/]+)\/downloads\/resume$/.exec(url.pathname);
-      if (request.method === "POST" && downloadResume !== null) {
-        sendJson(response, 202, await resumeDownload(
-          decodeURIComponent(downloadResume[1] ?? ""),
-          await readJsonBody(request),
         ));
         return;
       }

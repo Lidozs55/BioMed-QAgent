@@ -210,9 +210,6 @@ export default function App() {
                 resumeRun={(taskId, runId, input) =>
                   controller.resumeRun(taskId, runId, input)
                 }
-                resumeDownload={(taskId, input) =>
-                  controller.resumeDownload(taskId, input)
-                }
                 loadOlderMessages={(taskId) =>
                   controller.loadOlderMessages(taskId)
                 }

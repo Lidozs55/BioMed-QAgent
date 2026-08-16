@@ -172,8 +172,6 @@ export function applyOperationEvent(
         kind: payload.kind,
         current: payload.current,
         total: payload.total ?? null,
-        detail: payload.detail ?? null,
-        updatedAt: envelope.timestamp,
       },
     };
   } else if (payload.type === "operation_completed") {
@@ -188,45 +186,7 @@ export function applyOperationEvent(
       error: payload.error?.message ?? null,
     };
   }
-  let next = upsertItem(task, nextItem);
-  // Bind byte-level download progress to the tool call that owns the
-  // download, so the tool-call bubble renders the live progress strip (all
-  // downloads share one operation id per kind, so the operation item alone
-  // cannot tell which tool call a progress tick belongs to). Prefer the
-  // running tool call whose arguments carry the progress ``accession``;
-  // fall back to the most recently started running tool call in the run.
-  if (payload.type === "operation_progress" && payload.kind === "downloaded_bytes") {
-    const toolItems = next.items.filter(
-      (item) =>
-        item.kind === "tool_call" &&
-        item.runId === runId &&
-        item.status === "running",
-    );
-    const detailAccession = payload.detail?.accession;
-    const matched =
-      typeof detailAccession === "string"
-        ? toolItems.find(
-            (item) =>
-              item.kind === "tool_call" &&
-              item.arguments !== null &&
-              Object.values(item.arguments).includes(detailAccession),
-          )
-        : undefined;
-    const toolItem = matched ?? toolItems[toolItems.length - 1];
-    if (toolItem !== undefined && toolItem.kind === "tool_call") {
-      next = upsertItem(next, {
-        ...toolItem,
-        progress: {
-          kind: payload.kind,
-          current: payload.current,
-          total: payload.total ?? null,
-          detail: payload.detail ?? null,
-          updatedAt: envelope.timestamp,
-        },
-      });
-    }
-  }
-  return next;
+  return upsertItem(task, nextItem);
 }
 
 export function applyStageTransitionEvent(

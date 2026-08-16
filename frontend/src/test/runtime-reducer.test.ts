@@ -528,53 +528,6 @@ describe("runtime event projection", () => {
     expect(after.summary.latest_sequence).toBe(4);
   });
 
-  it("binds byte-level download progress to the running tool call", () => {
-    let state = mergeTaskPage(
-      createInitialRuntimeState(),
-      page(summary("task_dl", "running", 0)),
-      false,
-    );
-    state = reduceRuntimeEvent(
-      state,
-      envelope("task_dl", "run_dl", 1, {
-        type: "tool_started",
-        tool_call_id: "call_xena",
-        tool_name: "download_xena",
-      }),
-    );
-    state = reduceRuntimeEvent(
-      state,
-      envelope("task_dl", "run_dl", 2, {
-        type: "operation_progress",
-        operation_id: "tool:acquisition:downloaded_bytes",
-        kind: "downloaded_bytes",
-        current: 3411477,
-        total: 1642160120,
-        detail: { source: "xena", filename: "TCGA-GTEx-TARGET.log2.gz" },
-      }),
-    );
-    const after = state.tasksById.task_dl;
-    const toolItem = after.items.find(
-      (item) => item.itemId === "tool:run_dl:call_xena",
-    );
-    expect(toolItem?.kind).toBe("tool_call");
-    if (toolItem !== undefined && toolItem.kind === "tool_call") {
-      expect(toolItem.progress).toMatchObject({
-        kind: "downloaded_bytes",
-        current: 3411477,
-        total: 1642160120,
-        detail: { source: "xena", filename: "TCGA-GTEx-TARGET.log2.gz" },
-      });
-    }
-    // The grouped operation item is still projected alongside.
-    expect(
-      after.items.some(
-        (item) =>
-          item.itemId === "operation:run_dl:tool:acquisition:downloaded_bytes",
-      ),
-    ).toBe(true);
-  });
-
   it("finalizes running operation items when the run completes (lifecycle gap safety net)", () => {
     let state = mergeTaskPage(
       createInitialRuntimeState(),
