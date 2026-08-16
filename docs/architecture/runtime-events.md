@@ -17,7 +17,8 @@ Durable Runtime 提供任务生命周期与事件持久化，唯一实现位于 
 默认 TS Host 初始化唯一的 `TaskRepository`、Pi Session registry 与 durable
 WebSocket runtime；`<task_id>/events.jsonl` 是事实源，纯 reducer 重建 Task snapshot，
 `state/task.json` 保存 Task 元数据，`state/pi-session/` 保存 Pi session 映射。
-重启时仍 active 的 Run 被确定性投影为 `run_interrupted`。
+重启时仍 active 的普通 Run 被确定性投影为 `run_interrupted`；存在未解决 durable
+HIL 的 `awaiting_user_input` Run 保持暂停，等待恢复协议继续。
 
 `RunStatus` 生命周期：
 
@@ -89,19 +90,33 @@ from_chunk_index + through_chunk_index`；三字段必须同时出现或同时�
 
 ### 14.4 人在回路与并发
 
-Agent 模式的计划确认会持久化 `user_input_required`，纯 reducer 将 Run 投影为
-`awaiting_user_input`。`POST /resume` 必须匹配当前 Run 的 exact `request_id`，
-且同一请求只消费一次；批准后持久化 `user_input_resumed` 并回到 `running`，拒绝
-或独立 HIL timeout 会使权威 Run 失败。取消 paused Run 会唤醒执行器的协作式
-取消等待，不必等到 HIL timeout。fixture 模式仍记录 required/resumed 审计事件，
-但以 `fixture_exempt=true` 自动批准且不阻塞。
+正式 HIL 将 `HILRequest` 持久化在 Task domain storage，并在同一时间线写入
+`user_input_required`，纯 reducer 将 Run 投影为 `awaiting_user_input`。请求按
+`permission` / `semantic_review` / `data_review` / `conflict_resolution` 分类；数据场景
+由稳定的 `review_type` 细分。`POST /resume` 必须同时匹配 exact `request_id` 与
+`evidence_digest`，先原子写入不可变 `HumanReviewRecord`，再写
+`user_input_resumed`。同值重试幂等，不同值重试冲突。服务重启后不依赖旧 Promise，
+而是从未解决请求恢复暂停态与 checkpoint continuation；reconciler 会补齐
+request→required-event 与 review→resumed-event 两个崩溃窗口。单 Run 的 resume
+commit 与 continuation admission 串行执行，重复请求只产生一个 resumed event。
+
+一个 Run 同时最多一个 blocking HIL，一个请求可批量包含多个 `review_items`。
+permission 只接受 `approve/reject`；数据审核接受 `accept/correct/reject/skip`。取消
+paused Run 会取消持久化请求并唤醒执行器。计划确认、max-turns 和 no-progress 保留
+为非 domain-review 兼容提示，只允许 exact unresolved `request_id` 的两值恢复；
+它们没有 checkpoint continuation，Host 重启时会明确投影为 `interrupted`，不会形成
+running zombie。non-blocking advisory 只写 domain request + warning，不暂停 Run，
+恢复 reconciler 也不会把它升级为 blocking prompt。
+fixture 模式仍记录 required/resumed 审计事件，但以 `fixture_exempt=true` 自动批准。
 
 默认全局 4 个 active Run slot 和 4 个 worker；不同 Task 可以并行执行，同一
 Task 只允许一个 nonterminal Run，后续提交返回冲突。`awaiting_user_input` 期间
 仍占用原 slot，避免暂停任务被队列中的新任务抢占。
 
 `UserInputRequiredPayload.prompt_kind` 联合覆盖 `plan_confirmation` /
-`max_turns_reached` / `data_correction`。前端 `UserInputDialog` 按 Run 与
+`max_turns_reached` / `no_progress` / `data_correction` /
+`api_key_or_credential`。正式场景通过 `hil_request.review_type` 扩展，不继续增加
+顶层 prompt kind。前端 `UserInputDialog` 按 Run 与
 submission attempt ID 隔离 A → B → A 切换中的旧 Promise settlement。
 
 ### 14.5 模型配置与 Run 自有生成设置

@@ -10,6 +10,7 @@
   "parser_version": "1.0.0",
   "statistics": {
     "source_database": "gdc",
+    "extraction_channel": "official_api",
     "dataset_type": "gene_expression",
     "format": "expression_matrix",
     "sample_count": 2,

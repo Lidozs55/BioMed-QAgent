@@ -374,6 +374,7 @@ export class GdcExpressionAdapter extends SourceAdapter {
     }
     const statistics: Record<string, JsonValue> = {
       source_database: this.source_database,
+      extraction_channel: "official_api",
       dataset_type: "gene_expression",
       format: "expression_matrix",
       sample_count: samples.length,
@@ -500,6 +501,7 @@ export class GdcExpressionAdapter extends SourceAdapter {
     }
     const statistics: Record<string, JsonValue> = {
       source_database: this.source_database,
+      extraction_channel: "official_api",
       dataset_type: "gene_expression",
       format: "star_counts",
       sample_count: 1,
@@ -576,6 +578,7 @@ export class XenaMatrixAdapter extends SourceAdapter {
     }
     const statistics: Record<string, JsonValue> = {
       source_database: this.source_database,
+      extraction_channel: "official_api",
       dataset_type: "gene_expression",
       format: "expression_matrix",
       sample_count: samples.length,

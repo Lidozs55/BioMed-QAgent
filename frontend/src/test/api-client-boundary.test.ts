@@ -83,6 +83,52 @@ describe("event payload valid construction", () => {
     await expect(api.fetchEvents("t1")).rejects.toThrow(APIError);
   });
 
+  it.each([
+    ["request_id", "nested_request", "t1", "r1"],
+    ["task_id", "req1", "other_task", "r1"],
+    ["run_id", "req1", "t1", "other_run"],
+  ])("rejects a formal HIL event with mismatched nested %s", async (_field, requestId, taskId, runId) => {
+    const event = {
+      schema_version: "2.0",
+      event_id: "e_hil_mismatch",
+      type: "user_input_required",
+      task_id: "t1",
+      run_id: "r1",
+      stage_attempt_id: null,
+      sequence: 1,
+      timestamp: "2024-01-01T00:00:00Z",
+      payload: {
+        type: "user_input_required",
+        request_id: "req1",
+        prompt_kind: "data_correction",
+        summary: "Review mapping",
+        expires_at: null,
+        fixture_exempt: false,
+        detail: {},
+        hil_request: {
+          schema_version: "1.0",
+          request_id: requestId,
+          task_id: taskId,
+          run_id: runId,
+          build_id: "build_1",
+          kind: "semantic_review",
+          review_type: "field_mapping",
+          status: "pending",
+          blocking: true,
+          subject: { mapping_ids: ["map_1"] },
+          review_items: [],
+          summary: "Review mapping",
+          evidence_digest: "a".repeat(64),
+          policy_ref: "dataset.field_mapping.v1",
+          created_at: "2024-01-01T00:00:00Z",
+          resolved_at: null,
+        },
+      },
+    };
+    const fetcher = vi.fn<FetchLike>().mockResolvedValue(jsonResponse({ events: [event] }));
+    await expect(createAPIClient({ fetcher }).fetchEvents("t1")).rejects.toThrow(APIError);
+  });
+
   it("rejects event with mismatched tool_started type", async () => {
     const event = { schema_version: "2.0", event_id: "e1", type: "tool_started", task_id: "t1", run_id: "r1", stage_attempt_id: null, sequence: 1, timestamp: "", payload: { type: "run_queued", request_id: "r1", input: "" } };
     const fetcher = vi.fn<FetchLike>().mockResolvedValue(jsonResponse({ events: [event] }));

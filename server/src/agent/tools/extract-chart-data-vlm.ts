@@ -11,7 +11,12 @@
 import path from "node:path";
 
 import type { BioMedAgentTool } from "../contracts.js";
-import { noopHooks, type ToolHooks, type ToolServiceDeps } from "./tool-hooks.js";
+import {
+  noopHooks,
+  type ToolApprovalGate,
+  type ToolHooks,
+  type ToolServiceDeps,
+} from "./tool-hooks.js";
 import {
   createVlmTools,
   type VlmConfig,
@@ -19,6 +24,7 @@ import {
   type VlmToolHooks,
 } from "../../processing/vlm/index.js";
 import type { PublicHttpClient } from "../../external/network/http-client.js";
+import type { DatasetHILGate } from "../../dataset/review/hil-policy.js";
 
 export const EXTRACT_CHART_DATA_VLM_TOOL_NAME = "extract_chart_data_vlm";
 
@@ -29,6 +35,8 @@ export interface ChartDataVlmToolDeps extends ToolServiceDeps {
   httpClient?: PublicHttpClient;
   /** Warning surface (Python ``run_ctx.add_warning`` parity). */
   onWarning?: (severity: string, message: string, source: string) => void;
+  hilGate?: DatasetHILGate | null;
+  approvalGate?: ToolApprovalGate | null;
 }
 
 function expectString(value: unknown, field: string, fallback: string): string {
@@ -54,6 +62,7 @@ export function createChartDataVlmTool(deps: ChartDataVlmToolDeps): BioMedAgentT
     hooks: vlmHooks,
     vlmConfig: deps.vlmConfig,
     httpClient: deps.httpClient,
+    hilGate: deps.hilGate,
   });
 
   const tool: BioMedAgentTool = {
@@ -95,6 +104,28 @@ export function createChartDataVlmTool(deps: ChartDataVlmToolDeps): BioMedAgentT
         throw new TypeError("source_path must be a non-empty string");
       }
       const hint = expectString(record.hint, "hint", "");
+      if (deps.approvalGate === undefined || deps.approvalGate === null) {
+        return {
+          content: JSON.stringify({
+            status: "error",
+            error: "credential permission gate is required for DashScope VLM access",
+            source_file: path.basename(sourcePath),
+          }),
+        };
+      }
+      const permission = await deps.approvalGate.request(
+        EXTRACT_CHART_DATA_VLM_TOOL_NAME,
+        signal,
+      );
+      if (permission === "reject") {
+        return {
+          content: JSON.stringify({
+            status: "error",
+            error: "credential permission was rejected for DashScope VLM access",
+            source_file: path.basename(sourcePath),
+          }),
+        };
+      }
       let result: VlmResult;
       try {
         result = await tools.extractChartDataVlm(sourcePath, hint, signal);

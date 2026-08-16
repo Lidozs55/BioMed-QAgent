@@ -290,6 +290,7 @@ function geoStatistics(options: {
 }): Record<string, JsonValue> {
   return {
     source_database: "geo",
+    extraction_channel: "deterministic_parser",
     dataset_type: "gene_expression",
     format: options.parameters.format,
     sample_count: options.sampleCount,

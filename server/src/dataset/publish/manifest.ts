@@ -30,6 +30,10 @@ import { pyFloat, pythonJsonDumps } from "../runtime/digests.js";
 import type { CanonicalizationResult } from "../canonicalizer/index.js";
 import type { IntegrationResult } from "../integrator/index.js";
 import type { SourceAsset } from "../contracts/index.js";
+import {
+  CONFIDENCE_ARTIFACT_FILE,
+  readConfidenceArtifact,
+} from "../confidence/artifact.js";
 
 export const SCHEMA_FILE = "schema.json";
 export const PROVENANCE_FILE = "provenance.json";
@@ -83,6 +87,77 @@ async function entry(
   });
 }
 
+export interface HumanCorrectionProvenance {
+  human_corrections: Array<Record<string, JsonValue>>;
+  transform_records: Array<Record<string, JsonValue>>;
+}
+
+function jsonRecord(value: JsonValue | undefined): Record<string, JsonValue> | null {
+  return value !== null && value !== undefined && typeof value === "object" && !Array.isArray(value)
+    ? value
+    : null;
+}
+
+export function buildHumanCorrectionProvenance(
+  results: readonly CanonicalizationResult[],
+): HumanCorrectionProvenance {
+  const humanCorrections: Array<Record<string, JsonValue>> = [];
+  const transformRecords: Array<Record<string, JsonValue>> = [];
+  for (const result of results) {
+    const bindingId = result.batch.binding_id;
+    const mappingCorrections = result.batch.statistics["human_mapping_corrections"];
+    if (Array.isArray(mappingCorrections)) {
+      for (const value of mappingCorrections) {
+        const correction = jsonRecord(value);
+        if (correction === null) continue;
+        const original = correction["original"] ?? null;
+        const corrected = correction["corrected"] ?? null;
+        const mappingId = correction["mapping_id"] ?? "unknown_mapping";
+        const reviewId = correction["review_id"] ?? null;
+        humanCorrections.push({
+          kind: "field_mapping",
+          binding_id: bindingId,
+          ...correction,
+        });
+        transformRecords.push({
+          transform_id: `human_mapping_${String(mappingId)}_${String(reviewId ?? "review")}`,
+          binding_id: bindingId,
+          subject_id: mappingId,
+          method: "human_correction",
+          input: original,
+          output: corrected,
+          review_id: reviewId,
+        });
+      }
+    }
+    const unitCorrection = jsonRecord(result.batch.statistics["human_unit_correction"]);
+    if (unitCorrection?.["method"] === "human_correction") {
+      const reviewId = unitCorrection["review_id"] ?? null;
+      const input = { unit: unitCorrection["from_unit"] ?? null };
+      const output = {
+        unit: unitCorrection["to_unit"] ?? null,
+        factor: unitCorrection["factor"] ?? null,
+        offset: unitCorrection["offset"] ?? null,
+      };
+      humanCorrections.push({
+        kind: "unit_conversion",
+        binding_id: bindingId,
+        ...unitCorrection,
+      });
+      transformRecords.push({
+        transform_id: `human_unit_${bindingId}_${String(reviewId ?? "review")}`,
+        binding_id: bindingId,
+        subject_id: bindingId,
+        method: "human_correction",
+        input,
+        output,
+        review_id: reviewId,
+      });
+    }
+  }
+  return { human_corrections: humanCorrections, transform_records: transformRecords };
+}
+
 /** Write provenance.json: source inventory, mappings, rules, backtraces. */
 export async function buildProvenanceDocument(options: {
   schema: DatasetSchema;
@@ -113,6 +188,7 @@ export async function buildProvenanceDocument(options: {
       result.auditPaths[1] ?? result.auditPaths[0] ?? "",
     ),
   }));
+  const correctionProvenance = buildHumanCorrectionProvenance(options.canonicalResults);
   const document = {
     schema_ref: options.schema.schema_id,
     sources: Object.entries(options.sourceAssets)
@@ -127,6 +203,8 @@ export async function buildProvenanceDocument(options: {
       })),
     field_mappings: mappings,
     normalization_rules: normalizationRules,
+    human_corrections: correctionProvenance.human_corrections,
+    transform_records: correctionProvenance.transform_records,
     merge_strategy: options.integration.batch.statistics["merge_strategy"],
     sample_backtraces: await sampleBacktraces(options.integration.mergedPath, signal),
   };
@@ -194,18 +272,78 @@ export async function computeProvenanceCoverage(
 
 /** Manifest-side confidence contract surface (Python ``build_confidence_summary``). */
 export async function buildConfidenceSummary(outputDir: string, signal?: AbortSignal | null): Promise<Record<string, JsonValue>> {
+  const artifact = await readConfidenceArtifact(outputDir);
   const reportPath = joinOutput(outputDir, "confidence_report.csv");
-  if (!existsSync(reportPath)) return {};
   let anomalyCount = 0;
-  for (const row of await readCsvDictRows(reportPath, signal)) {
-    if ((row["anomaly"] ?? "").trim().toLowerCase() === "true") {
-      anomalyCount += 1;
+  if (existsSync(reportPath)) {
+    for (const row of await readCsvDictRows(reportPath, signal)) {
+      if ((row["anomaly"] ?? "").trim().toLowerCase() === "true") {
+        anomalyCount += 1;
+      }
     }
   }
-  return {
-    detected_anomaly_count: anomalyCount,
-    report_file: "confidence_report.csv",
-  };
+  if (artifact === null && !existsSync(reportPath)) return {};
+  const summary: Record<string, JsonValue> = {};
+  if (artifact !== null) {
+    const levels: Record<"high" | "medium" | "low", number> = {
+      high: 0,
+      medium: 0,
+      low: 0,
+    };
+    const reviewStates: Record<string, number> = {};
+    const reasons: Record<string, number> = {};
+    const overridesByBatch = new Map<string, number>();
+    for (const override of artifact.record_overrides) {
+      overridesByBatch.set(
+        override.batch_id,
+        (overridesByBatch.get(override.batch_id) ?? 0) + 1,
+      );
+    }
+    const add = (
+      level: "high" | "medium" | "low",
+      humanReviewState: string,
+      recordReasons: readonly string[],
+      count: number,
+    ): void => {
+      levels[level] += count;
+      reviewStates[humanReviewState] = (reviewStates[humanReviewState] ?? 0) + count;
+      for (const reason of recordReasons) reasons[reason] = (reasons[reason] ?? 0) + count;
+    };
+    for (const batch of artifact.batch_defaults) {
+      add(
+        batch.level,
+        batch.components.human_review_state,
+        batch.reasons,
+        Math.max(0, batch.record_count - (overridesByBatch.get(batch.batch_id) ?? 0)),
+      );
+    }
+    for (const override of artifact.record_overrides) {
+      add(
+        override.level,
+        override.components.human_review_state,
+        override.reasons,
+        1,
+      );
+    }
+    summary["level_distribution"] = levels;
+    summary["human_review_distribution"] = reviewStates;
+    summary["reason_counts"] = reasons;
+    summary["pending_human_review_count"] = reviewStates["pending"] ?? 0;
+    summary["batch_default_count"] = artifact.batch_defaults.length;
+    summary["record_override_count"] = artifact.record_overrides.length;
+    summary["evidence_report_file"] = CONFIDENCE_ARTIFACT_FILE;
+  }
+  if (existsSync(reportPath)) {
+    summary["statistical_anomalies"] = {
+      detected_count: anomalyCount,
+      report_file: "confidence_report.csv",
+    };
+    // Compatibility aliases for historical result viewers. New policy and UI
+    // consume statistical_anomalies, never these fields as evidence strength.
+    summary["detected_anomaly_count"] = anomalyCount;
+    summary["report_file"] = "confidence_report.csv";
+  }
+  return summary;
 }
 
 /**

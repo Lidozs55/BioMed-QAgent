@@ -82,6 +82,64 @@ describe("DurableTaskRepository", () => {
     expect((await recovered.listEvents(accepted.task_id, 0)).length).toBe(events.length);
   });
 
+  test("preserves only an explicitly reconciled formal-HIL run during recovery", async () => {
+    const repo = await repository();
+    const accepted = await repo.createTask({
+      requestId: "request-hil-recovery",
+      input: "wait for review",
+      databases: [],
+      mode: "agent",
+    });
+    await repo.appendRunEvent(accepted.task_id, accepted.run_id, {
+      type: "run_started",
+    });
+    await repo.appendRunEvent(accepted.task_id, accepted.run_id, {
+      type: "user_input_required",
+      request_id: "hil_recovery",
+      prompt_kind: "data_correction",
+      summary: "Review one mapping",
+      expires_at: null,
+      fixture_exempt: false,
+      detail: {},
+    });
+
+    const recovered = new DurableTaskRepository(repo.tasksRoot);
+    await recovered.recoverActiveRuns(new Set([
+      `${accepted.task_id}:${accepted.run_id}`,
+    ]));
+    const snapshot = await recovered.getSnapshot(accepted.task_id);
+    const events = await recovered.listEvents(accepted.task_id, 0);
+
+    expect(snapshot?.runs[0]?.status).toBe("awaiting_user_input");
+    expect(events.at(-1)?.type).toBe("user_input_required");
+  });
+
+  test("interrupts an awaiting legacy prompt that has no recoverable continuation", async () => {
+    const repo = await repository();
+    const accepted = await repo.createTask({
+      requestId: "request-legacy-recovery",
+      input: "wait for legacy prompt",
+      databases: [],
+      mode: "agent",
+    });
+    await repo.appendRunEvent(accepted.task_id, accepted.run_id, { type: "run_started" });
+    await repo.appendRunEvent(accepted.task_id, accepted.run_id, {
+      type: "user_input_required",
+      request_id: "legacy_recovery",
+      prompt_kind: "no_progress",
+      summary: "Continue?",
+      expires_at: null,
+      fixture_exempt: false,
+      detail: {},
+    });
+
+    const recovered = new DurableTaskRepository(repo.tasksRoot);
+    await recovered.recoverActiveRuns();
+
+    expect((await recovered.getSnapshot(accepted.task_id))?.runs[0]?.status).toBe("interrupted");
+    expect((await recovered.listEvents(accepted.task_id, 0)).at(-1)?.type).toBe("run_interrupted");
+  });
+
   test("makes request admission idempotent and rejects semantic request-id reuse", async () => {
     const repo = await repository();
     const input = {

@@ -37,7 +37,11 @@ export interface ToolServiceDeps {
  * one tool invocation and the secret value is never exposed to the model.
  */
 export interface ToolApprovalGate {
-  request(operation: string, signal?: AbortSignal): Promise<"approve" | "reject">;
+  request(
+    operation: string,
+    signal?: AbortSignal,
+    invocationId?: string,
+  ): Promise<"approve" | "reject">;
 }
 
 export function noopHooks(hooks?: ToolHooks): Required<ToolHooks> {

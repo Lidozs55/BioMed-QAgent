@@ -9,7 +9,13 @@
 import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 
-import type { DatasetManifest, DatasetSchema, ValidationResult, ValidationProfile } from "../contracts/index.js";
+import type {
+  ConfidenceGatePolicy,
+  DatasetManifest,
+  DatasetSchema,
+  ValidationResult,
+  ValidationProfile,
+} from "../contracts/index.js";
 import type { JsonValue } from "@biomed/contracts";
 import { parseValidationProfile } from "../contracts/index.js";
 
@@ -21,6 +27,10 @@ import {
   defaultConfidenceThresholds,
   writeConfidenceReport,
 } from "./confidence.js";
+import {
+  readConfidenceArtifact,
+  type ConfidenceArtifact,
+} from "../confidence/artifact.js";
 
 export const CHECK_ID_PROBE_COVERAGE_REQUIRED_GENE_LEVEL =
   "probe_coverage_required_gene_level";
@@ -47,6 +57,90 @@ export interface ProfileCheck {
   description: string;
   passed: boolean;
   detail: string;
+}
+
+export interface ConfidenceGateResult {
+  passed: boolean;
+  total_count: number;
+  low_count: number;
+  low_fraction: number;
+  pending_count: number;
+  below_minimum_count: number;
+  unreviewed_required_channel_count: number;
+}
+
+const CONFIDENCE_RANK = { low: 0, medium: 1, high: 2 } as const;
+
+export function evaluateConfidenceGate(
+  policy: ConfidenceGatePolicy,
+  artifact: ConfidenceArtifact,
+): ConfidenceGateResult {
+  const overridesByBatch = new Map<string, number>();
+  for (const override of artifact.record_overrides) {
+    overridesByBatch.set(
+      override.batch_id,
+      (overridesByBatch.get(override.batch_id) ?? 0) + 1,
+    );
+  }
+  let total = 0;
+  let low = 0;
+  let pending = 0;
+  let belowMinimum = 0;
+  let unreviewedChannel = 0;
+  const requiredChannel = new Set(policy.require_review_for_channels);
+  const add = (
+    level: "high" | "medium" | "low",
+    channel: string,
+    review: string,
+    count: number,
+  ): void => {
+    total += count;
+    if (level === "low") low += count;
+    if (review === "pending") pending += count;
+    if (CONFIDENCE_RANK[level] < CONFIDENCE_RANK[policy.required_fields_min_level]) {
+      belowMinimum += count;
+    }
+    if (
+      requiredChannel.has(channel) &&
+      review !== "accepted" &&
+      review !== "corrected"
+    ) {
+      unreviewedChannel += count;
+    }
+  };
+  for (const batch of artifact.batch_defaults) {
+    add(
+      batch.level,
+      batch.channel,
+      batch.components.human_review_state,
+      Math.max(0, batch.record_count - (overridesByBatch.get(batch.batch_id) ?? 0)),
+    );
+  }
+  for (const override of artifact.record_overrides) {
+    add(
+      override.level,
+      override.channel,
+      override.components.human_review_state,
+      1,
+    );
+  }
+  const lowFraction = total === 0 ? 0 : low / total;
+  const passed =
+    (!policy.block_pending_human_review || pending === 0) &&
+    belowMinimum === 0 &&
+    (policy.allow_low_confidence_primary || low === 0) &&
+    (policy.max_low_confidence_fraction === null ||
+      lowFraction <= policy.max_low_confidence_fraction) &&
+    unreviewedChannel === 0;
+  return {
+    passed,
+    total_count: total,
+    low_count: low,
+    low_fraction: lowFraction,
+    pending_count: pending,
+    below_minimum_count: belowMinimum,
+    unreviewed_required_channel_count: unreviewedChannel,
+  };
 }
 
 function valueField(schema: DatasetSchema): string {
@@ -177,6 +271,13 @@ export class ExpressionValidationProfile {
         "schema-conformant columns, complete required fields, numeric values, " +
         "a single unit, and closed provenance.",
       required_entity_level: this.required_entity_level,
+      confidence_gate: {
+        block_pending_human_review: true,
+        required_fields_min_level: "medium",
+        allow_low_confidence_primary: false,
+        max_low_confidence_fraction: 0,
+        require_review_for_channels: ["vlm", "llm", "ocr", "web_extraction"],
+      },
     });
   }
 
@@ -212,6 +313,27 @@ export class ExpressionValidationProfile {
       options.probeMappingSummaries ?? null,
       signal,
     );
+    const confidenceArtifact = await readConfidenceArtifact(options.outputDir);
+    if (confidenceArtifact === null) {
+      checks.push({
+        check_id: "evidence_confidence_policy",
+        description: "evidence confidence and human-review state satisfy the release profile",
+        passed: false,
+        detail: "required confidence_records.json artifact is missing",
+      });
+    } else {
+      const gate = evaluateConfidenceGate(this.profile.confidence_gate, confidenceArtifact);
+      checks.push({
+        check_id: "evidence_confidence_policy",
+        description: "evidence confidence and human-review state satisfy the release profile",
+        passed: gate.passed,
+        detail:
+          `total=${gate.total_count}; low=${gate.low_count}; ` +
+          `low_fraction=${gate.low_fraction.toFixed(4)}; pending=${gate.pending_count}; ` +
+          `below_minimum=${gate.below_minimum_count}; ` +
+          `unreviewed_required_channel=${gate.unreviewed_required_channel_count}`,
+      });
+    }
     const encodingFailed = checks.some(
       (check) => check.check_id === "csv_encoding_utf8" && !check.passed,
     );
@@ -541,6 +663,13 @@ export class ProbeExpressionValidationProfile extends ExpressionValidationProfil
         "schema-conformant columns, complete required fields, numeric values, " +
         "a single unit, and closed provenance.",
       required_entity_level: this.required_entity_level,
+      confidence_gate: {
+        block_pending_human_review: true,
+        required_fields_min_level: "medium",
+        allow_low_confidence_primary: false,
+        max_low_confidence_fraction: 0,
+        require_review_for_channels: ["vlm", "llm", "ocr", "web_extraction"],
+      },
     });
   }
 }
@@ -590,4 +719,3 @@ async function countResidualGeoProbeRows(primaryPath: string, signal?: AbortSign
   }
   return residual;
 }
-

@@ -86,6 +86,7 @@ Profile 可以组合以下类型的具体规则：
 - 数据族语义；
 - 单位、尺度和归一化；
 - provenance 与 confidence；
+- 未解决 blocking HIL 与人工审核状态；
 - `NO_DATA` / `PARTIAL_SUCCESS` 的阈值；
 - 图表 bounding box、模型版本和人工复核状态。
 
@@ -144,7 +145,6 @@ Publisher 继续使用任务锁、独立 staging、文件 flush、Manifest 验�
 - `source_reliability`：来源可靠度；
 - `extraction_reliability`：提取可靠度；
 - `mapping_reliability`：映射可靠度；
-- `validation_result`：验证结果；
 - `cross_source_consistency`：跨源一致性；
 - `human_review_state`：人工审核状态。
 
@@ -154,12 +154,29 @@ Publisher 继续使用任务锁、独立 staging、文件 flush、Manifest 验�
 ### 11.2 通道差异
 
 - 确定性官方 API（GDC、Xena、Reactome、PubMed）可使用批次默认等级；
-- VLM / LLM / 网页抽取必须逐条标注。
+- VLM / LLM / 网页/OCR 抽取必须逐条标注；批次默认只保存一次，异常记录使用稀疏
+  override，字段映射可信度由记录引用的 `mapping_ids` 派生，不复制到每个 cell。
+
+批次默认的 `record_count` 必须按 integrate/dedup/conflict 之后的最终
+source-of-record 行计算，所有 default + override 的有效总数必须等于 primary row
+count；被去重或冲突淘汰的来源记录不能继续影响 low fraction 或发布门禁。
+
+最终 level 使用 weakest-link：关键 component 为 low 则 low，否则存在 medium 则
+medium，全部 high 才 high；VLM-only、未审核 proposed/string-similarity mapping 与
+跨源冲突使用显式 cap。`requires_human_review` 是 evaluator 派生值，不由 Adapter 设置。
 
 ### 11.3 与 Validation 的关系
 
 置信度不是 Validation 的替代。Validation 判断是否满足发布规则；Confidence 描
-述记录在已知证据下有多可靠。
+述记录在已知证据下有多可靠。`human_review_state=accepted` 可以解除 Profile 的
+审核阻塞，但不会自动把 low 提升为 high；人工修正保留原值并写入 TransformRecord
+与 review provenance 后才重新评估。Profile 的 `ConfidenceGatePolicy` 决定必需字段
+最低等级、low primary 容忍度、待决审核和需复核通道，Agent 无权调整这些阈值。
+正式 release Profile 要求 `confidence_records.json` 存在；缺失时
+`evidence_confidence_policy` 明确失败，不能跳过检查。
+
+跨源一致性只有在 source lineage 证明来源独立时才增加证据；共享同一上游的镜像
+一致只记录为同源确认，不增加票数。V1 不以复杂跨源加权作为发布前提。
 
 ### 11.4 禁止装饰字段
 

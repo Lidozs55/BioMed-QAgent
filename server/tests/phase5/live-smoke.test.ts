@@ -191,7 +191,10 @@ describeVlm("live:vlm", () => {
     const figureDir = path.join(taskRoot, "source_assets", "figures");
     await mkdir(figureDir, { recursive: true });
     await copyFile(VLM_FIXTURE_IMAGE, path.join(figureDir, "chart.png"));
-    const [tool] = createChartDataVlmTool({ taskRoot });
+    const [tool] = createChartDataVlmTool({
+      taskRoot,
+      approvalGate: { request: async () => "approve" },
+    });
     const result = await tool.execute({ source_path: "source_assets/figures/chart.png" });
     expect(result.isError).toBeUndefined();
     const parsed = JSON.parse(result.content) as { status?: string; total_charts?: number };

@@ -990,6 +990,61 @@ describe("durable event transport", () => {
     expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(1);
   });
 
+  it.each([
+    ["request_id", "nested_request", "task_a", "run_task_a"],
+    ["task_id", "request_1", "other_task", "run_task_a"],
+    ["run_id", "request_1", "task_a", "other_run"],
+  ])(
+    "rejects realtime formal HIL with mismatched nested %s linkage",
+    async (_field, requestId, taskId, runId) => {
+      const { transport, sockets } = setupTransport();
+      transport.subscribe("task_a", 0);
+      const connected = transport.connect();
+      sockets[0].open();
+      await connected;
+
+      sockets[0].message({
+        schema_version: "2.0",
+        event_id: "event_hil_1",
+        type: "user_input_required",
+        task_id: "task_a",
+        run_id: "run_task_a",
+        stage_attempt_id: null,
+        sequence: 1,
+        timestamp: CREATED_AT,
+        payload: {
+          type: "user_input_required",
+          request_id: "request_1",
+          prompt_kind: "data_correction",
+          summary: "Review mapping",
+          expires_at: null,
+          fixture_exempt: false,
+          detail: {},
+          hil_request: {
+            schema_version: "1.0",
+            request_id: requestId,
+            task_id: taskId,
+            run_id: runId,
+            build_id: "build_1",
+            kind: "semantic_review",
+            review_type: "field_mapping",
+            status: "pending",
+            blocking: true,
+            subject: { mapping_ids: ["map_1"] },
+            review_items: [],
+            summary: "Review mapping",
+            evidence_digest: "a".repeat(64),
+            policy_ref: "dataset.field_mapping.v1",
+            created_at: CREATED_AT,
+            resolved_at: null,
+          },
+        },
+      });
+
+      expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(0);
+    },
+  );
+
   it("normalizes omitted nullable subagent payload fields before reducing", async () => {
     const { transport, sockets } = setupTransport();
     transport.subscribe("task_a", 0);
