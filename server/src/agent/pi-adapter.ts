@@ -34,6 +34,10 @@ export interface PiUpstreamEvent {
   partialResult?: unknown;
   result?: unknown;
   isError?: boolean;
+  reason?: "manual" | "threshold" | "overflow";
+  aborted?: boolean;
+  errorMessage?: string;
+  compactionResult?: { summary: string } | undefined;
 }
 
 export interface PiUpstreamSession {
@@ -197,6 +201,26 @@ function usesDashScopeQwen(selected: BioMedModelConfig): boolean {
   }
 }
 
+/**
+ * Translate product-level compaction ratios onto Pi's absolute compaction
+ * settings. Pi compacts when context tokens exceed
+ * ``contextWindow - reserveTokens`` and keeps approximately
+ * ``keepRecentTokens`` tokens from the end of the conversation.
+ */
+export function resolvePiCompactionOverrides(
+  contextWindow: number,
+  triggerRatio: number,
+  targetRatio: number,
+): { compaction: { enabled: boolean; reserveTokens: number; keepRecentTokens: number } } {
+  return {
+    compaction: {
+      enabled: true,
+      reserveTokens: Math.max(0, Math.round(contextWindow * (1 - triggerRatio))),
+      keepRecentTokens: Math.max(0, Math.round(contextWindow * targetRatio)),
+    },
+  };
+}
+
 export function applyModelProfileToPayload(
   payload: unknown,
   selected: BioMedModelConfig,
@@ -245,6 +269,20 @@ function toUpstreamEvent(event: AgentSessionEvent): PiUpstreamEvent {
         result: event.result,
         isError: event.isError,
       };
+    case "compaction_end":
+      return {
+        type: event.type,
+        reason: event.reason,
+        compactionResult:
+          event.result === undefined
+            ? undefined
+            : { summary: boundedText(event.result.summary) },
+        aborted: event.aborted,
+        errorMessage:
+          event.errorMessage === undefined
+            ? undefined
+            : boundedText(event.errorMessage),
+      };
     default:
       return { type: event.type };
   }
@@ -258,6 +296,7 @@ async function createRealUpstreamSession(
   const selected = config.model ?? (resolveModel === undefined
     ? modelFromEnvironment(environment)
     : await resolveModel());
+  const contextWindow = selected.contextWindow ?? 131_072;
   const modelRuntime = await ModelRuntime.create({
     allowModelNetwork: false,
     modelsPath: null,
@@ -272,7 +311,7 @@ async function createRealUpstreamSession(
         reasoning: false,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: selected.contextWindow ?? 131_072,
+        contextWindow,
         maxTokens: selected.maxTokens ?? 8_192,
       },
     ],
@@ -303,6 +342,16 @@ async function createRealUpstreamSession(
     );
   }
   const settingsManager = SettingsManager.inMemory();
+  if (
+    selected.compactionTriggerRatio !== undefined &&
+    selected.compactionTargetRatio !== undefined
+  ) {
+    settingsManager.applyOverrides(resolvePiCompactionOverrides(
+      contextWindow,
+      selected.compactionTriggerRatio,
+      selected.compactionTargetRatio,
+    ));
+  }
   const resourceLoader = new DefaultResourceLoader({
     cwd: config.cwd,
     agentDir: path.join(config.cwd, ".pi"),
@@ -427,6 +476,11 @@ class PiBioMedAgentSession implements BioMedAgentSession {
           isError: event.isError === true,
         },
       });
+    } else if (event.type === "compaction_end") {
+      const summary = event.compactionResult?.summary;
+      if (event.aborted !== true && typeof summary === "string" && summary.trim() !== "") {
+        active.queue.push({ event: { type: "context_compacted", summary } });
+      }
     }
   }
 

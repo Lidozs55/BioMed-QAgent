@@ -195,11 +195,9 @@ export function createWorkspaceTools(workspace: TaskWorkspace): BioMedAgentTool[
 
       label: "Execute development command",
       description:
-        "Run a bounded executable and argument array. IMPORTANT: development " +
-        "exec is DISABLED by default in this environment - the result will be " +
-        "``policy: \"disabled\"`` with no output. Prefer workspace_read / " +
-        "workspace_search / workspace_write for file work instead of trying " +
-        "commands.",
+        "Run a bounded executable and argument array. Command execution is " +
+        "permission-gated and may suspend until user approval; use workspace " +
+        "file tools for direct file operations.",
 
       parameters: {
         type: "object",

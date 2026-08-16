@@ -72,6 +72,8 @@ describe("TypeScript model settings", () => {
       baseUrl: "https://models.example/v1",
       contextWindow: 64000,
       maxTokens: 3072,
+      compactionTriggerRatio: 0.85,
+      compactionTargetRatio: 0.6,
       temperature: 0.25,
       topP: 0.8,
       repetitionPenalty: 1,
@@ -82,6 +84,29 @@ describe("TypeScript model settings", () => {
       .not.toContain("sk-secret-provider-value");
     expect(await readFile(path.join(settingsDir, "model-auth.json"), "utf8"))
       .toContain("sk-secret-provider-value");
+  });
+
+  test("feeds configured compaction thresholds into the Pi model config", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({
+      settingsDir,
+      environment: { PI_API_KEY: "sk-direct-secret" },
+    });
+    const baseUrl = await serve(service);
+
+    await fetch(`${baseUrl}/api/v1/settings`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        compaction_trigger_ratio: 0.9,
+        compaction_target_ratio: 0.55,
+      }),
+    });
+
+    expect(await service.resolveActiveModel()).toMatchObject({
+      compactionTriggerRatio: 0.9,
+      compactionTargetRatio: 0.55,
+    });
   });
 
   test("returns frontend-compatible model discovery metadata", async () => {

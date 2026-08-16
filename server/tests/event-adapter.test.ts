@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, test, vi } from "vitest";
 
 import type { BioMedAgentEvent } from "../src/agent/contracts.js";
@@ -95,6 +96,20 @@ describe("PiEventAdapter", () => {
       "run_completed",
     ]);
     expect(events[0]?.payload).toMatchObject({ is_error: true });
+  });
+
+  test("maps context_compacted into a durable conversation_compacted event", () => {
+    const { adapter } = createAdapter();
+    const summary = "compacted checkpoint summary";
+
+    const events = adapter.adapt(runId, { type: "context_compacted", summary });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.payload).toEqual({
+      type: "conversation_compacted",
+      covered_through_run_id: runId,
+      summary_digest: createHash("sha256").update(summary, "utf8").digest("hex"),
+    });
   });
 
   test("maps stable failure and cancellation request/ack", () => {

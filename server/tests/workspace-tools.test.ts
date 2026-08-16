@@ -70,7 +70,6 @@ describe("Workspace project tools", () => {
       repositoryRoot: base,
       permissions,
       audit: new InMemoryWorkspaceAuditSink(),
-      developmentExec: { enabled: true },
     });
 
     const tools = createWorkspaceTools(workspace);

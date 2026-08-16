@@ -10,7 +10,6 @@ describe("host config (Phase 8: runtime parameters only)", () => {
       publicPort: 5173,
       shutdownTimeoutMs: 10000,
       agentExecPolicy: null,
-      workspaceDevExec: false,
     });
   });
 
@@ -25,7 +24,6 @@ describe("host config (Phase 8: runtime parameters only)", () => {
       publicPort: 8080,
       shutdownTimeoutMs: 5000,
       agentExecPolicy: "ask",
-      workspaceDevExec: false,
     });
   });
 
@@ -66,7 +64,6 @@ describe("host config (Phase 8: runtime parameters only)", () => {
       publicPort: 5173,
       shutdownTimeoutMs: 10000,
       agentExecPolicy: null,
-      workspaceDevExec: false,
     });
   });
 });

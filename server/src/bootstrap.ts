@@ -107,7 +107,6 @@ export async function createBootstrapOptions(input: BootstrapInput): Promise<Boo
       workspacesRoot,
       repositoryRoot,
       agentExecPolicy: config.agentExecPolicy,
-      workspaceDevExec: config.workspaceDevExec,
       permissionPolicyStore,
       permissionBrokerRegistry,
       resolveModel: modelSettings.resolveActiveModel,

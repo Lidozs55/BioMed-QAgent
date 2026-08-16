@@ -44,16 +44,6 @@ export interface TaskWorkspaceConfig {
   permissions: PermissionBroker;
   audit: WorkspaceAuditSink;
   limits?: Partial<WorkspaceLimits>;
-  /**
-   * Environment-level exec switch (HIL branch): absent/disabled ⇒ exec is
-   * hard-disabled before the permission system is consulted.
-   */
-  developmentExec?: DevelopmentExecConfig;
-}
-
-export interface DevelopmentExecConfig {
-  enabled: true;
-  environment?: Readonly<Record<string, string | undefined>>;
 }
 
 export interface WorkspaceContext {
@@ -68,7 +58,6 @@ export interface WorkspaceContext {
   permissions: PermissionBroker;
   audit: WorkspaceAuditSink;
   limits: WorkspaceLimits;
-  developmentExec?: DevelopmentExecConfig;
 }
 
 function requireSafeId(name: string, value: string | undefined, optional = false): void {
@@ -141,6 +130,5 @@ export async function createWorkspaceContext(
     permissions: config.permissions,
     audit: config.audit,
     limits: validatedLimits(config.limits),
-    developmentExec: config.developmentExec,
   };
 }

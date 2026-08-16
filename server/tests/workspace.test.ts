@@ -24,8 +24,6 @@ const roots: string[] = [];
 
 async function fixture(options: {
   exec?: boolean;
-  /** Enable the environment-level exec switch WITHOUT pre-granting (permission-ask tests). */
-  devExec?: boolean;
   limits?: Record<string, number>;
   preset?: "restricted" | "ask_when_needed" | "full_access";
 } = {}) {
@@ -49,8 +47,7 @@ async function fixture(options: {
   if (options.preset !== undefined) {
     await permissionFixture.policyStore.setPreset(options.preset);
   } else if (options.exec === true) {
-    // Exec tests run real commands: grant command execution up front AND
-    // enable the environment-level exec switch (HIL branch).
+    // Exec tests run real commands: grant command execution up front.
     await permissionFixture.policyStore.setPersistentExecAllow(true);
   }
   const permissions = permissionFixture.broker;
@@ -61,9 +58,6 @@ async function fixture(options: {
     workspaceRoot,
     taskOutputRoot,
     dataRoot: base,
-    ...(options.exec === true || options.devExec === true
-      ? { developmentExec: { enabled: true as const } }
-      : {}),
     repositoryRoot: base,
     permissions,
     audit,
@@ -374,7 +368,7 @@ describe("governed Task Workspace (data/workspaces/<taskId>)", () => {
   });
 
   test("execution requires permission by default and is audited without secrets", async () => {
-    const { audit, workspace, permissionFixture } = await fixture({ devExec: true });
+    const { audit, workspace, permissionFixture } = await fixture();
     const resultPromise = workspace.exec({
       executable: process.execPath,
       args: ["--token=secret-value"],
@@ -525,7 +519,7 @@ describe("governed Task Workspace (data/workspaces/<taskId>)", () => {
   });
 
   test("round-3 audit: the approval card shows the FULL executable path, not a basename", async () => {
-    const { workspace, permissionFixture } = await fixture({ devExec: true });
+    const { workspace, permissionFixture } = await fixture();
     const running = workspace.exec({
       executable: process.execPath,
       args: ["--version"],

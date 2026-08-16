@@ -93,5 +93,5 @@ export interface WorkspaceExecResult {
   truncated: boolean;
   timedOut: boolean;
   cancelled: boolean;
-  policy: "allowed" | "disabled" | "rejected";
+  policy: "allowed" | "rejected";
 }
