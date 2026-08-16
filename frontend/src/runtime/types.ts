@@ -160,6 +160,21 @@ export interface PendingUserInput {
   timestamp: string;
 }
 
+export interface PendingPermission {
+  runId: string;
+  requestId: string;
+  capability: "fs.read" | "fs.write" | "fs.edit" | "process.exec";
+  scope: "workspace" | "task_output" | "framework_internal" | "sensitive" | "project" | "external";
+  resource: string | null;
+  /** Canonical absolute target (fs capabilities); shown when != resource. */
+  canonicalResource: string | null;
+  command: string | null;
+  cwd: string | null;
+  summary: string;
+  sequence: number;
+  timestamp: string;
+}
+
 export interface AssistantStreamSegmentProjection {
   streamId: string;
   pendingChunks: Record<number, string>;
@@ -349,6 +364,8 @@ export interface TaskProjection {
   stages: Partial<Record<StageName, StageProjection>>;
   assistantStreamsByRunId: Record<string, AssistantStreamProjection>;
   pendingUserInput: PendingUserInput | null;
+  /** Suspended permission request awaiting a user decision (plan §30). */
+  pendingPermission: PendingPermission | null;
   lastSequence: number;
   hydration: "summary" | "snapshot" | "accepted";
   items: ConversationItem[];

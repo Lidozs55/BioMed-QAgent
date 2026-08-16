@@ -18,6 +18,10 @@ indexed in [migration/README.md](../migration/README.md).
 | [ADR-024](024-contract-source-of-truth.md) | `@biomed/contracts` is canonical for TypeScript wire DTOs | Accepted |
 | [ADR-025](025-layered-validation-http-persistence.md) | One runtime validation layer and one HTTP/persistence layer per process | Accepted |
 | [ADR-026](026-durable-hil-confidence-protocol.md) | Durable evidence-bound HIL remains distinct from confidence and validation | Accepted |
+| [ADR-026](026-agent-workspace-permissions.md) | Agent Workspace is `data/workspaces/<taskId>`; everything outside goes through allow/ask/deny; Publication trust is hash-verified | Accepted |
+
+> 注：`026-durable-hil-confidence-protocol.md` 与 `026-agent-workspace-permissions.md` 编号
+> 均为 026（两个独立工作流各自分配）；两者互不替代，均处于 Accepted 状态。
 
 New records use the next available three-digit number and the sections `Status`,
 `Context`, `Decision`, and `Consequences`. A superseding ADR must link both ways;

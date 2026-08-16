@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { createApplicationHost } from "./app/create-app.js";
 import { createBootstrapOptions, type BootstrapOptions } from "./bootstrap.js";
-import { parseHostConfig, resolveOutputDir } from "./config.js";
+import { parseHostConfig, resolveOutputDir, resolveWorkspacesRoot } from "./config.js";
 import { createViteMiddleware } from "./dev/vite-middleware.js";
 import { createStaticMiddleware } from "./dev/static-middleware.js";
 
@@ -21,6 +21,7 @@ async function main(): Promise<void> {
     resolveOutputDir(repositoryRoot, process.env.OUTPUT_DIR),
     "tasks",
   );
+  const workspacesRoot = resolveWorkspacesRoot(repositoryRoot, process.env.OUTPUT_DIR);
 
   const startedAt = performance.now();
   console.log("BioMed-QAgent starting...");
@@ -41,6 +42,7 @@ async function main(): Promise<void> {
         config,
         repositoryRoot,
         tasksRoot,
+        workspacesRoot,
       });
       bootstrap = boot;
       await boot.initializeLifecycle?.(lifecycle);

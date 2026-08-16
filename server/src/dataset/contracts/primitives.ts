@@ -174,6 +174,21 @@ export function parseSchemaVersion(value: Record<string, unknown>): SchemaVersio
 }
 
 /**
+ * Publication shipment version: 1.1 records carry the P7 file-byte receipt
+ * (``manifest_sha256``); 1.0 records are pre-P7 migration artifacts that
+ * keep the legacy trust level. Version is mandatory on publications.
+ */
+export type PublicationSchemaVersion = "1.0" | "1.1";
+
+export function parsePublicationSchemaVersion(
+  value: Record<string, unknown>,
+): PublicationSchemaVersion {
+  const raw = value.schema_version;
+  if (raw === "1.0" || raw === "1.1") return raw;
+  throw new TypeError("publication schema_version must be \"1.0\" or \"1.1\"");
+}
+
+/**
  * ISO-8601 datetime string (Python ``datetime`` wire serialization).
  */
 const ISO_DATETIME_PATTERN =

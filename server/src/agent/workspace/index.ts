@@ -15,7 +15,6 @@ import {
   executeWorkspaceCommand,
   sanitizedCommand,
 } from "./exec.js";
-import { normalizeAgentPath } from "./path-policy.js";
 import { listWorkspace, readWorkspaceText, searchWorkspace } from "./read.js";
 import type {
   WorkspaceEditResult,
@@ -31,6 +30,26 @@ import { writeWorkspaceText } from "./write.js";
 
 export { AppendOnlyTaskAuditSink, InMemoryWorkspaceAuditSink, WorkspacePolicyError };
 export type { TaskWorkspaceConfig, WorkspaceAuditSink };
+export {
+  DiskWorkspaceManager,
+  type WorkspaceManager,
+  type DiskWorkspaceManagerOptions,
+} from "./workspace-manager.js";
+export {
+  resolveWorkspacePathConfig,
+  taskOutputPath,
+  taskWorkspacePath,
+  requireSafeTaskId,
+  type WorkspacePathConfig,
+  type WorkspacePathInputs,
+} from "./workspace-paths.js";
+export {
+  migrateLegacyWorkspace,
+  readWorkspaceStateMarker,
+  markerPathFor,
+  type LegacyWorkspaceMigrationOptions,
+  type WorkspaceStateMarker,
+} from "./legacy-workspace-migration.js";
 
 function boundedDuration(started: number): number {
   return Math.max(0, Math.round(performance.now() - started));
@@ -38,7 +57,7 @@ function boundedDuration(started: number): number {
 
 function auditPath(input: string): string {
   try {
-    return normalizeAgentPath(input);
+    return input.length > 512 ? `${input.slice(0, 512)}…` : input;
   } catch {
     return "[rejected]";
   }
@@ -181,24 +200,27 @@ class GovernedTaskWorkspace implements TaskWorkspace {
       editWorkspaceText(this.context, input));
   }
 
-  exec(
+  async exec(
     input: { executable: string; args: string[]; timeoutMs?: number },
     signal?: AbortSignal,
   ): Promise<WorkspaceExecResult> {
+    const command = await sanitizedCommand(
+      input.executable,
+      input.args,
+      this.context.workspaceRoot,
+    );
     return this.#audited(
       "exec",
-      { command: sanitizedCommand(input.executable, input.args) },
+      { command },
       () => executeWorkspaceCommand(this.context, input, signal, this.#processes),
       (value) => ({
-        result: value.policy === "disabled"
-          ? "disabled"
-          : value.cancelled
-            ? "cancelled"
-            : value.timedOut
-              ? "timed_out"
-              : value.policy === "rejected"
-                ? "rejected"
-                : "success",
+        result: value.cancelled
+          ? "cancelled"
+          : value.timedOut
+            ? "timed_out"
+            : value.policy === "rejected"
+              ? "rejected"
+              : "success",
         truncated: value.truncated,
       }),
     );

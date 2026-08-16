@@ -10,8 +10,22 @@ import type { ToolHooks } from "../agent/tools/tool-hooks.js";
 import {
   AppendOnlyTaskAuditSink,
   createTaskWorkspace,
+  DiskWorkspaceManager,
+  migrateLegacyWorkspace,
+  resolveWorkspacePathConfig,
+  type WorkspaceManager,
 } from "../agent/workspace/index.js";
 import { createWorkspaceTools } from "../agent/workspace/tools.js";
+import {
+  AppendOnlyPermissionAuditSink,
+  JsonPermissionPolicyStore,
+  PermissionBroker,
+  PermissionBrokerRegistry,
+  PermissionEvaluator,
+  ProtectedPaths,
+  TemporaryGrantStore,
+  type PermissionPolicyStore,
+} from "../agent/permissions/index.js";
 import { coreEventToPayload } from "../dataset/service/events.js";
 import { createDatasetCoreService } from "../dataset/service/dataset-core.js";
 import { TypeScriptDatasetCore } from "../dataset/service/ts-core.js";
@@ -161,7 +175,21 @@ export function createPhase3ToolHooks(
 
 export interface Phase3RuntimeOptions {
   tasksRoot: string;
-  workspaceDevExec: boolean;
+  /** Agent workspace root (``data/workspaces``) — decoupled from output. */
+  workspacesRoot: string;
+  /** Repository root used by the permission classifier. */
+  repositoryRoot: string;
+  /** Migration override for process.exec policy (plan §58). */
+  agentExecPolicy: "deny" | "ask" | "allow" | null;
+  /**
+   * Environment-level exec switch (HIL branch): false (default) hard-disables
+   * command execution before the permission system is consulted.
+   */
+  workspaceDevExec?: boolean;
+  /** Shared persistent permission settings (presets + rules). */
+  permissionPolicyStore?: PermissionPolicyStore;
+  /** Live permission brokers per task (preset switch invalidation, grant view/revoke). */
+  permissionBrokerRegistry?: PermissionBrokerRegistry;
   adapter?: BioMedAgentAdapter;
   resolveModel?: () => Promise<BioMedModelConfig>;
   /**
@@ -182,8 +210,25 @@ export async function createPhase3Runtime(
   options: Phase3RuntimeOptions,
 ): Promise<DurableAgentRuntime> {
   const dbClient = options.database ?? null;
+  const workspaceManager: WorkspaceManager = new DiskWorkspaceManager({
+    workspacesRoot: options.workspacesRoot,
+    migrateLegacy: async (taskId, workspaceRoot) => {
+      await migrateLegacyWorkspace({
+        taskId,
+        workspaceRoot,
+        taskOutputRoot: path.join(options.tasksRoot, taskId),
+      });
+    },
+  });
+  const pathConfig = resolveWorkspacePathConfig({
+    repositoryRoot: options.repositoryRoot,
+    workspacesRoot: options.workspacesRoot,
+    tasksRoot: options.tasksRoot,
+  });
   const runtime = await createDurableAgentRuntime({
     tasksRoot: options.tasksRoot,
+    workspaceManager,
+    permissionBrokerRegistry: options.permissionBrokerRegistry,
     adapter: options.adapter ?? new PiAgentAdapter({
       environment: process.env,
       resolveModel: options.resolveModel,
@@ -192,19 +237,47 @@ export async function createPhase3Runtime(
       let currentRunId = runId;
       let currentPiSessionId = "pi_session_pending";
       let buildResult: import("@biomed/contracts").BuildResult | null = null;
-      const root = path.join(options.tasksRoot, taskId);
+      // Agent-owned directory: data/workspaces/<taskId> (plan §2.1).
+      const workspaceRoot = await workspaceManager.ensure(taskId);
+      // Framework-owned output: data/output/tasks/<taskId> (plan §3.2).
+      const taskRoot = path.join(options.tasksRoot, taskId);
+      // Permission control plane: persistent user settings + per-task broker.
+      const policyStore = options.permissionPolicyStore ?? new JsonPermissionPolicyStore(
+        path.join(pathConfig.dataRoot, "settings", "agent-permissions.json"),
+      );
+      const grants = new TemporaryGrantStore();
+      const protectedPaths = new ProtectedPaths({ taskOutputRoot: taskRoot });
+      const permissionAudit = new AppendOnlyPermissionAuditSink(taskRoot);
+      const permissionBroker = new PermissionBroker({
+        taskId,
+        runId,
+        evaluator: new PermissionEvaluator({
+          protectedPaths,
+          grants,
+          policyStore,
+          execPolicyOverride: options.agentExecPolicy ?? undefined,
+        }),
+        grants,
+        policyStore,
+        audit: permissionAudit,
+        recordRunEvent,
+      });
       const workspace = await createTaskWorkspace({
         taskId,
         runId,
-        root,
-        audit: new AppendOnlyTaskAuditSink(root),
-        ...(options.workspaceDevExec
+        workspaceRoot,
+        taskOutputRoot: taskRoot,
+        dataRoot: pathConfig.dataRoot,
+        repositoryRoot: options.repositoryRoot,
+        permissions: permissionBroker,
+        audit: new AppendOnlyTaskAuditSink(taskRoot),
+        ...(options.workspaceDevExec === true
           ? { developmentExec: { enabled: true as const } }
           : {}),
       });
       const tsCore = new TypeScriptDatasetCore({
         taskId,
-        taskRoot: root,
+        taskRoot: taskRoot,
         operationTimeoutMs: options.operationTimeoutMs ?? 120_000,
         hilGate: approvalGate,
         eventSink: async (event, buildId) => {
@@ -215,7 +288,7 @@ export async function createPhase3Runtime(
 
       // Business tool bundle: curated tools + dynamic user tools.
       const client = new PublicHttpClient();
-      const cache = new ContentCache(path.join(root, "cache"));
+      const cache = new ContentCache(path.join(taskRoot, "cache"));
       const browserPool = options.browserPool ?? null;
       let browser = null;
       if (browserPool !== null) {
@@ -242,7 +315,7 @@ export async function createPhase3Runtime(
         () => currentRunId,
       );
       const bundle = await createBusinessToolBundle({
-        taskRoot: root,
+        taskRoot: taskRoot,
         db: dbClient,
         approvalGate,
         hilGate: approvalGate,
@@ -277,11 +350,13 @@ export async function createPhase3Runtime(
       });
       assertUniqueToolNames([...workspaceTools, ...bundle.tools, ...dynamicTools, ...datasetTools]);
       return {
-        root,
+        root: workspaceRoot,
         tools: [...workspaceTools, ...bundle.tools, ...dynamicTools, ...datasetTools],
+        permissionBroker,
         setRunId: (nextRunId: string) => {
           currentRunId = nextRunId;
           workspace.setRunId(nextRunId);
+          permissionBroker.bindRun(nextRunId);
         },
         setPiSessionId: (piSessionId: string) => {
           currentPiSessionId = piSessionId;
@@ -290,6 +365,10 @@ export async function createPhase3Runtime(
           const result = buildResult;
           buildResult = null;
           return result;
+        },
+        onRunEnd: (endedRunId: string) => {
+          // Round-4 audit: run-bound temporary grants die with the run.
+          grants.clearRun(endedRunId);
         },
         dispose: () => workspace.dispose(),
       };

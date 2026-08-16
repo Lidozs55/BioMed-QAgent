@@ -2,11 +2,12 @@ import { once } from "node:events";
 import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import type { EventEnvelope } from "@biomed/contracts";
+import { packageDigest } from "../src/dataset/publish/manifest.js";
 import { afterEach, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
 
@@ -393,6 +394,65 @@ describe("durable formal Agent runtime", () => {
     await runtime.close();
   });
 
+  test("round-4 audit: run termination clears the run's temporary grants via onRunEnd", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "biomed-durable-runend-"));
+    roots.push(root);
+    const adapter = new ControlledAdapter();
+    const endedRuns: string[] = [];
+    const runtime = await createDurableAgentRuntime({
+      tasksRoot: root,
+      adapter,
+      workspaceFactory: async () => ({
+        root,
+        tools: [],
+        onRunEnd: (runId) => {
+          endedRuns.push(runId);
+        },
+        dispose: async () => undefined,
+      }),
+    });
+    const server = createServer((request, response) => {
+      if (!runtime.handle(request, response)) response.writeHead(404).end();
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    servers.push(server);
+    const port = (server.address() as AddressInfo).port;
+
+    const admitted = await fetch(`http://127.0.0.1:${port}/api/v1/tasks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        request_id: "request-runend",
+        input: "run end grant cleanup",
+        databases: [],
+        mode: "agent",
+      }),
+    });
+    expect(admitted.status).toBe(202);
+    const accepted = await admitted.json() as { task_id: string; run_id: string };
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Complete the run; the workspace must observe the end of THIS run id.
+    adapter.gates[0]?.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(endedRuns).toContain(accepted.run_id);
+
+    // A second run in the same session triggers the hook again.
+    const second = await fetch(`http://127.0.0.1:${port}/api/v1/tasks/${accepted.task_id}/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ request_id: "request-runend-2", input: "second run" }),
+    });
+    expect(second.status).toBe(202);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    adapter.gates[1]?.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(endedRuns.length).toBeGreaterThanOrEqual(2);
+
+    await runtime.close();
+  });
+
   test("serves only manifest-registered task artifacts and rejects integrity drift", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "biomed-durable-artifact-"));
     roots.push(root);
@@ -427,10 +487,20 @@ describe("durable formal Agent runtime", () => {
     const publicationDir = path.join(buildDir, "publish", "version_1");
     await mkdir(path.join(publicationDir, "merged"), { recursive: true });
     await writeFile(path.join(publicationDir, "merged", "primary.csv"), primary, "utf8");
+    const digest = packageDigest([{
+      schema_version: "1.0",
+      artifact_id: "artifact_primary",
+      role: "primary_dataset",
+      relative_path: "merged/primary.csv",
+      media_type: "text/csv",
+      size_bytes: Buffer.byteLength(primary),
+      sha256,
+    }]);
     await writeFile(path.join(publicationDir, "dataset_manifest.json"), JSON.stringify({
-      manifest_id: "manifest_one",
+      manifest_id: `manifest_${digest.slice(0, 16)}`,
       task_id: accepted.task_id,
       build_id: "build_one",
+      sha256: digest,
       artifacts: [{
         artifact_id: "artifact_primary",
         role: "primary_dataset",
@@ -443,8 +513,18 @@ describe("durable formal Agent runtime", () => {
     await writeFile(
       path.join(publicationDir, "publication.json"),
       JSON.stringify({
+        schema_version: "1.1",
         publication_id: "publication_one",
-        manifest_ref: "manifest_one",
+        manifest_ref: `manifest_${digest.slice(0, 16)}`,
+        manifest_sha256: createHash("sha256")
+          .update(JSON.stringify(JSON.parse(await readFile(
+            path.join(publicationDir, "dataset_manifest.json"),
+            "utf8",
+          ))))
+          .digest("hex"),
+        validation_result_ref: "validation_report.json",
+        published_at: "2026-08-17T00:00:00+00:00",
+        supersedes_publication_id: null,
       }),
       "utf8",
     );

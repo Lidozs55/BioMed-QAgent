@@ -9,6 +9,7 @@ describe("host config (Phase 8: runtime parameters only)", () => {
       publicHost: "127.0.0.1",
       publicPort: 5173,
       shutdownTimeoutMs: 10000,
+      agentExecPolicy: null,
       workspaceDevExec: false,
     });
   });
@@ -18,12 +19,13 @@ describe("host config (Phase 8: runtime parameters only)", () => {
       HOST: "0.0.0.0",
       PORT: "8080",
       SHUTDOWN_TIMEOUT_MS: "5000",
-      WORKSPACE_DEV_EXEC: "1",
+      AGENT_EXEC_POLICY: "ask",
     })).toEqual({
       publicHost: "0.0.0.0",
       publicPort: 8080,
       shutdownTimeoutMs: 5000,
-      workspaceDevExec: true,
+      agentExecPolicy: "ask",
+      workspaceDevExec: false,
     });
   });
 
@@ -37,10 +39,12 @@ describe("host config (Phase 8: runtime parameters only)", () => {
     expect(() => parseHostConfig({ HOST: "  " })).toThrow(/HOST/);
   });
 
-  test("requires an explicit validated development exec flag", () => {
-    expect(parseHostConfig({ WORKSPACE_DEV_EXEC: "1" }).workspaceDevExec).toBe(true);
-    expect(() => parseHostConfig({ WORKSPACE_DEV_EXEC: "true" })).toThrow(
-      /WORKSPACE_DEV_EXEC/,
+  test("parses and validates the AGENT_EXEC_POLICY migration flag", () => {
+    expect(parseHostConfig({ AGENT_EXEC_POLICY: "allow" }).agentExecPolicy).toBe("allow");
+    expect(parseHostConfig({ AGENT_EXEC_POLICY: "deny" }).agentExecPolicy).toBe("deny");
+    expect(parseHostConfig({}).agentExecPolicy).toBeNull();
+    expect(() => parseHostConfig({ AGENT_EXEC_POLICY: "sometimes" })).toThrow(
+      /AGENT_EXEC_POLICY/,
     );
   });
 
@@ -61,6 +65,7 @@ describe("host config (Phase 8: runtime parameters only)", () => {
       publicHost: "127.0.0.1",
       publicPort: 5173,
       shutdownTimeoutMs: 10000,
+      agentExecPolicy: null,
       workspaceDevExec: false,
     });
   });

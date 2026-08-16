@@ -26,6 +26,10 @@ import {
 } from "../agent/contracts.js";
 import { PiEventAdapter } from "../agent/event-adapter.js";
 import {
+  type PermissionBroker,
+  type PermissionBrokerRegistry,
+} from "../agent/permissions/broker.js";
+import {
   DurableApprovalGate,
   type ApprovalGateHandle,
 } from "./approval-gate.js";
@@ -38,7 +42,11 @@ import {
   DurableTaskConflictError,
   DurableTaskRepository,
 } from "./task-repository.js";
+
 import { DurableHILStore, HILConflictError } from "./hil-store.js";
+
+import { DiskWorkspaceManager, type WorkspaceManager } from "../agent/workspace/workspace-manager.js";
+
 
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_INPUT_LENGTH = 64 * 1024;
@@ -52,14 +60,26 @@ const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 export interface DurableAgentWorkspace {
   root: string;
   tools: readonly BioMedAgentTool[];
+  /** Permission control plane for this task (plan §32–§33). */
+  permissionBroker?: PermissionBroker;
   setRunId?: (runId: string) => void;
   setPiSessionId?: (piSessionId: string) => void;
   consumeBuildResult?: () => BuildResult | null;
+  /**
+   * Run-termination hook (round-4 audit): the workspace clears per-run
+   * temporary grants when the run ends, so the settings UI never lists
+   * stale run grants after the run is done.
+   */
+  onRunEnd?: (runId: string) => void;
   dispose(): Promise<void>;
 }
 
 export interface DurableAgentRuntimeOptions {
   tasksRoot: string;
+  /** Owns ``data/workspaces/<taskId>`` lifecycle (create/remove/restore). */
+  workspaceManager?: WorkspaceManager;
+  /** Live broker registry for preset-switch invalidation + grant management. */
+  permissionBrokerRegistry?: PermissionBrokerRegistry;
   adapter: BioMedAgentAdapter;
   workspaceFactory: (identity: {
     taskId: string;
@@ -87,6 +107,8 @@ interface ActiveTask {
   adapter: PiEventAdapter;
   activeRunId: string | null;
   approvalGate: ApprovalGateHandle;
+
+  permissionBroker: PermissionBroker | null;
 }
 
 /**
@@ -239,11 +261,18 @@ export async function createDurableAgentRuntime(
   options: DurableAgentRuntimeOptions,
 ): Promise<DurableAgentRuntime> {
   const repository = options.repository ?? new DurableTaskRepository(options.tasksRoot);
+
   const hilStore = new DurableHILStore(repository);
   const hilRecoveries = await hilStore.reconcileTaskTimeline();
   await repository.recoverActiveRuns(new Set(
     hilRecoveries.map((recovery) => `${recovery.task_id}:${recovery.run_id}`),
   ));
+
+  // Tests may omit the manager; the default simply removes a sibling dir.
+  const workspaceManager = options.workspaceManager ?? new DiskWorkspaceManager({
+    workspacesRoot: path.join(path.dirname(path.dirname(options.tasksRoot)), "workspaces"),
+  });
+
   const activeTasks = new Map<string, ActiveTask>();
   const activeDownloads = new Map<string, ActiveDownloadHandle>();
   const activeExecutions = new Set<Promise<void>>();
@@ -279,6 +308,10 @@ export async function createDurableAgentRuntime(
       }
     } finally {
       if (task.activeRunId === runId) task.activeRunId = null;
+      // Round-4 audit: drop the run's temporary grants at run end — the
+      // evaluator already ignores them (runId mismatch), but the settings UI
+      // must not keep listing grants that can never fire again.
+      task.workspace.onRunEnd?.(runId);
     }
   }
 
@@ -312,7 +345,7 @@ export async function createDurableAgentRuntime(
         await repository.appendRunEvent(taskId, activeRunId, payload);
       },
     });
-    const sessionDir = path.join(workspace.root, "state", "pi-session");
+    const sessionDir = path.join(options.tasksRoot, taskId, "state", "pi-session");
     await mkdir(sessionDir, { recursive: true });
     let disposed = false;
     const disposeWorkspace = async (): Promise<void> => {
@@ -331,13 +364,21 @@ export async function createDurableAgentRuntime(
       });
       workspace.setPiSessionId?.(session.piSessionId);
       await repository.recordPiSessionId(taskId, session.piSessionId);
-      return {
+      const active: ActiveTask = {
         session,
         workspace: { ...workspace, dispose: disposeWorkspace },
         adapter: new PiEventAdapter({ taskId }),
         activeRunId: null,
         approvalGate,
+
+
+        permissionBroker: workspace.permissionBroker ?? null,
+
       };
+      if (options.permissionBrokerRegistry !== undefined && active.permissionBroker !== null) {
+        options.permissionBrokerRegistry.register(taskId, active.permissionBroker);
+      }
+      return active;
     } catch (error) {
       await disposeWorkspace();
       throw error;
@@ -477,9 +518,13 @@ export async function createDurableAgentRuntime(
     // A suspended credential approval must not outlive the cancelled run.
     await hilStore.cancelPendingForRun(taskId, runId);
     task.approvalGate.rejectPending(runId, new Error("run cancelled"));
+
     // An in-flight standalone download is a task-level entity independent of
     // this AI run; cancelling the run does not abort it. Use the dedicated
     // downloads/cancel endpoint to stop a download.
+
+    // A suspended permission request must not outlive the cancelled run either.
+    task.permissionBroker?.rejectPending(runId, new Error("run cancelled"));
     await task.session.cancel("user requested");
     let timer: NodeJS.Timeout | undefined;
     try {
@@ -852,6 +897,46 @@ export async function createDurableAgentRuntime(
     };
   }
 
+  async function resolvePermission(
+    taskId: string,
+    runId: string,
+    requestId: string,
+    body: Record<string, unknown>,
+  ): Promise<unknown> {
+    const snapshot = await repository.getSnapshot(taskId);
+    if (snapshot === null || !snapshot.runs.some((run) => run.run_id === runId)) {
+      throw new ReferenceError("Run not found");
+    }
+    let decision: "allow" | "deny";
+    if (body.decision === "allow" || body.decision === "deny") {
+      decision = body.decision;
+    } else {
+      throw new TypeError("decision must be allow or deny");
+    }
+    let grantScope: "once" | "run" | "task" | "persistent" | undefined;
+    const rawScope = body.grant_scope;
+    if (rawScope !== undefined && rawScope !== null) {
+      if (rawScope === "once" || rawScope === "run" || rawScope === "task" || rawScope === "persistent") {
+        grantScope = rawScope;
+      } else {
+        throw new TypeError("grant_scope must be once, run, task, or persistent");
+      }
+    }
+    // Round-3 audit: run/task grants root at the approved canonical path by
+    // default; an explicit ``scope_wide`` opt-in grants the whole scope.
+    const scopeWide = body.scope_wide === true;
+    const task = activeTasks.get(taskId);
+    const broker = task?.permissionBroker;
+    if (task === undefined || broker === null || broker === undefined) {
+      throw new ReferenceError("Permission broker is unavailable for this task");
+    }
+    const resolved = await broker.resolve(runId, requestId, decision, grantScope, scopeWide);
+    if (!resolved) {
+      throw new ReferenceError("Permission request not found or expired");
+    }
+    return { status: "resolved", task_id: taskId, run_id: runId, request_id: requestId };
+  }
+
   async function deleteTask(taskId: string): Promise<void> {
     const task = activeTasks.get(taskId);
     if (task !== undefined) {
@@ -860,9 +945,13 @@ export async function createDurableAgentRuntime(
         throw new DurableTaskConflictError("active_run", "Active tasks cannot be deleted");
       }
       activeTasks.delete(taskId);
+      options.permissionBrokerRegistry?.unregister(taskId);
       await task.session.dispose();
     }
     await repository.deleteTask(taskId);
+    // Formal deletion removes both the framework output (above) and the
+    // agent workspace (plan §12: cancel → dispose → remove).
+    await workspaceManager.remove(taskId);
   }
 
   async function dispatch(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -992,6 +1081,16 @@ export async function createDurableAgentRuntime(
         sendJson(response, 200, await resumeRun(
           decodeURIComponent(resume[1] ?? ""),
           decodeURIComponent(resume[2] ?? ""),
+          await readJsonBody(request),
+        ));
+        return;
+      }
+      const permission = /^\/api\/v1\/tasks\/([^/]+)\/runs\/([^/]+)\/permissions\/([^/]+)$/.exec(url.pathname);
+      if (request.method === "POST" && permission !== null) {
+        sendJson(response, 200, await resolvePermission(
+          decodeURIComponent(permission[1] ?? ""),
+          decodeURIComponent(permission[2] ?? ""),
+          decodeURIComponent(permission[3] ?? ""),
           await readJsonBody(request),
         ));
         return;
@@ -1191,6 +1290,9 @@ export async function createDurableAgentRuntime(
       const results = await Promise.allSettled([...activeTasks.entries()].map(async ([taskId, task]) => {
         try {
           if (task.activeRunId !== null) {
+
+
+            task.permissionBroker?.rejectPending(task.activeRunId, new Error("Host shutdown"));
             const pending = await hilStore.findPendingForRun(taskId, task.activeRunId);
             if (pending !== null) {
               suspendedRuns.add(`${taskId}:${task.activeRunId}`);
@@ -1201,6 +1303,7 @@ export async function createDurableAgentRuntime(
             } else {
               await task.session.cancel("Host shutdown");
             }
+
           }
           await task.session.dispose();
         } finally {

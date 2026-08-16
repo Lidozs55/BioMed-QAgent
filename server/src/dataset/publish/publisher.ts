@@ -9,6 +9,7 @@
  * promotion; the pending-input gate is rechecked at the rename boundary.
  */
 
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { copyFile, rename, rm, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
@@ -94,10 +95,29 @@ export async function promotePublication(options: PublishOptions): Promise<Publi
   }
   const superseded = findLatestPublication(publishDir, manifest.build_id);
   const publicationId = `pub_${manifest.build_id}_${manifest.sha256.slice(0, 16)}`;
+  // P7 trust anchor: bind the dataset_manifest.json FILE BYTES into the
+  // publication receipt. The artifact reader recomputes this digest from the
+  // stored manifest file and rejects any record whose file does not match —
+  // a tamper that edits manifest top-level metadata (row_count,
+  // validation_summary, …) without rewriting the manifest file bytes is
+  // detected, even though ``packageDigest`` only hashes entry hashes (the
+  // digest does not cover the manifest's own metadata fields).
+  //
+  // Round-4 audit: the bytes come from ``options.manifest`` (the exact
+  // object the release gate validated) — never from re-reading the build's
+  // ``dataset_manifest.json`` on disk, which could drift from the gated
+  // object. The same bytes are hashed AND written into the immutable
+  // version, so gate object, receipt, and publication content are one.
+  const manifestBytes = Buffer.from(`${pythonJsonDumps(manifest)}\n`, "utf8");
+  const manifestSha256 = createHash("sha256").update(manifestBytes).digest("hex");
   const publication: DatasetPublication = {
-    schema_version: "1.0",
+    // P7 receipt schema: 1.1 carries the manifest file-byte hash (round-3
+    // audit: the schema bump is explicit, so legacy 1.0 records keep their
+    // pre-P7 trust level instead of silently vanishing from the API).
+    schema_version: "1.1",
     publication_id: publicationId,
     manifest_ref: manifest.manifest_id,
+    manifest_sha256: manifestSha256,
     validation_result_ref:
       validation.report_path === null || validation.report_path === undefined
         ? "validation_report.json"
@@ -106,7 +126,7 @@ export async function promotePublication(options: PublishOptions): Promise<Publi
     supersedes_publication_id: superseded,
   };
 
-  const stagedDir = join(publishDir, `.${versionName}.tmp`);
+    const stagedDir = join(publishDir, `.${versionName}.tmp`);
   if (existsSync(stagedDir)) rmSync(stagedDir, { recursive: true, force: true });
   mkdirSync(stagedDir, { recursive: true });
   try {
@@ -121,10 +141,10 @@ export async function promotePublication(options: PublishOptions): Promise<Publi
       await copyFile(src, dest);
       throwIfAborted(signal);
     }
-    const manifestSrc = join(options.outputDir, MANIFEST_FILE);
-    if (existsSync(manifestSrc)) {
-      await copyFile(manifestSrc, join(stagedDir, MANIFEST_FILE));
-    }
+    // Round-4 audit: write the manifest from the GATED bytes, not by
+    // copying the build output file — the receipt was computed from these
+    // exact bytes, so hash and content cannot diverge.
+    await writeFile(join(stagedDir, MANIFEST_FILE), manifestBytes);
     // C1d: the publication's ``validation_result_ref`` must resolve inside
     // the immutable version directory — validation_report.json is not a
     // manifest artifact, so it needs an explicit copy.

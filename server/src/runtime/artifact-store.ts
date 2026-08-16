@@ -3,18 +3,16 @@ import { readFile, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
 import type { ArtifactRecord } from "@biomed/contracts";
+import { parseDatasetPublication, parseManifestArtifactEntry } from "../dataset/contracts/manifest.js";
+import {
+  packageDigest,
+  type ManifestArtifactEntry,
+} from "../dataset/publish/manifest.js";
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 
-interface ManifestArtifact {
-  artifact_id: string;
-  role: string;
-  relative_path: string;
-  media_type: string;
-  size_bytes: number;
-  sha256: string;
-}
+type ManifestArtifact = ManifestArtifactEntry;
 
 interface LoadedManifest {
   publicationDir: string;
@@ -26,11 +24,15 @@ interface LoadedManifest {
 interface PublicationLocation {
   directory: string;
   manifestRef: string;
+  /** ``"1.1"`` records carry the file-byte receipt; ``"1.0"`` are legacy. */
+  schemaVersion: "1.0" | "1.1";
+  /** P7 trust anchor: SHA-256 of the dataset_manifest.json file bytes (1.1 only). */
+  manifestSha256: string | null;
 }
 
 export class ArtifactIntegrityError extends Error {
-  constructor(message: string) {
-    super(message);
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
     this.name = "ArtifactIntegrityError";
   }
 }
@@ -43,25 +45,16 @@ function record(value: unknown, name: string): Record<string, unknown> {
 }
 
 function parseArtifact(value: unknown): ManifestArtifact {
-  const item = record(value, "Build manifest artifact");
-  if (
-    typeof item.artifact_id !== "string" || !SAFE_ID.test(item.artifact_id) ||
-    typeof item.role !== "string" || item.role === "" ||
-    typeof item.relative_path !== "string" || item.relative_path === "" ||
-    typeof item.media_type !== "string" || item.media_type === "" ||
-    !Number.isInteger(item.size_bytes) || Number(item.size_bytes) < 0 ||
-    typeof item.sha256 !== "string" || !SHA256.test(item.sha256)
-  ) {
+  let entry: ManifestArtifact;
+  try {
+    entry = parseManifestArtifactEntry(value);
+  } catch (caught) {
+    throw new ArtifactIntegrityError(`Build manifest artifact is invalid: ${String(caught)}`);
+  }
+  if (!SAFE_ID.test(entry.artifact_id) || !SHA256.test(entry.sha256)) {
     throw new ArtifactIntegrityError("Build manifest artifact is invalid");
   }
-  return {
-    artifact_id: item.artifact_id,
-    role: item.role,
-    relative_path: item.relative_path,
-    media_type: item.media_type,
-    size_bytes: Number(item.size_bytes),
-    sha256: item.sha256,
-  };
+  return entry;
 }
 
 async function verifiedPath(buildDir: string, relativePath: string): Promise<string> {
@@ -91,7 +84,7 @@ async function verifiedPath(buildDir: string, relativePath: string): Promise<str
   return realFile;
 }
 
-function digest(bytes: Buffer): string {
+function sha256Hex(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
@@ -109,6 +102,8 @@ async function loadLatestManifest(taskRoot: string): Promise<LoadedManifest | nu
     publicationDir: string;
     manifestPath: string;
     manifestRef: string;
+    schemaVersion: "1.0" | "1.1";
+    manifestSha256: string | null;
   } | undefined;
   for (const entry of entries) {
     if (!entry.isDirectory() || !SAFE_ID.test(entry.name)) continue;
@@ -124,6 +119,8 @@ async function loadLatestManifest(taskRoot: string): Promise<LoadedManifest | nu
           publicationDir: publication.directory,
           manifestPath,
           manifestRef: publication.manifestRef,
+          schemaVersion: publication.schemaVersion,
+          manifestSha256: publication.manifestSha256,
         };
       }
     } catch (error) {
@@ -135,6 +132,17 @@ async function loadLatestManifest(taskRoot: string): Promise<LoadedManifest | nu
     newest.publicationDir,
     path.basename(newest.manifestPath),
   ));
+  if (newest.schemaVersion === "1.1" && newest.manifestSha256 !== null) {
+    // P7 trust anchor (1.1): the ``publication.json`` receipt records the
+    // SHA-256 of the manifest FILE BYTES as published. Any edit to the
+    // manifest file — including its top-level metadata (row_count,
+    // validation_summary, …) which ``packageDigest`` does not cover —
+    // changes the bytes and is rejected here, before the package-digest
+    // check below (ADR-026 §3).
+    if (sha256Hex(manifestBytes) !== newest.manifestSha256) {
+      throw new ArtifactIntegrityError("Build manifest file hash is invalid");
+    }
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(manifestBytes.toString("utf8"));
@@ -153,57 +161,103 @@ async function loadLatestManifest(taskRoot: string): Promise<LoadedManifest | nu
   ) {
     throw new ArtifactIntegrityError("Build manifest artifacts are invalid");
   }
+  // P7 trust anchor: the reader recomputes the package digest from the
+  // manifest's own artifact entries and requires it to match BOTH the
+  // recorded `sha256` and the `manifest_id` prefix. A tamper that rewrites
+  // an artifact entry without correctly recomputing the whole package
+  // digest is therefore detected — the manifest cannot silently "forget"
+  // that its contents changed (ADR-026 §3).
+  const artifacts = manifest.artifacts.map(parseArtifact);
+  const digest = packageDigest(artifacts);
+  if (
+    typeof manifest.sha256 !== "string" ||
+    !SHA256.test(manifest.sha256) ||
+    manifest.sha256 !== digest ||
+    manifest.manifest_id !== `manifest_${digest.slice(0, 16)}`
+  ) {
+    throw new ArtifactIntegrityError("Build manifest package digest is invalid");
+  }
   return {
     publicationDir: newest.publicationDir,
     manifestPath: newest.manifestPath,
     manifestBytes,
-    artifacts: manifest.artifacts.map(parseArtifact),
+    artifacts,
   };
 }
 
 async function latestPublication(buildDir: string): Promise<PublicationLocation | null> {
   const publishRoot = path.join(buildDir, "publish");
+  let entries;
   try {
-    const entries = await readdir(publishRoot, { withFileTypes: true });
-    let newest: {
-      publishedAt: string;
-      directory: string;
-      manifestRef: string;
-    } | null = null;
-    for (const entry of entries) {
-      if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
-      const directory = path.join(publishRoot, entry.name);
-      const raw = JSON.parse(await readFile(
+    entries = await readdir(publishRoot, { withFileTypes: true });
+  } catch (error) {
+    // ``publish/`` itself absent → nothing was ever published → null.
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  let newest: {
+    publishedAt: string;
+    directory: string;
+    manifestRef: string;
+    schemaVersion: "1.0" | "1.1";
+    manifestSha256: string | null;
+  } | null = null;
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
+    const directory = path.join(publishRoot, entry.name);
+    let raw: unknown;
+    try {
+      // A directory without ``publication.json`` is not a publication; a
+      // publication.json that EXISTS but is corrupt is an integrity error
+      // (round-3 audit: corruption must surface as 409, never as a silent
+      // "no publication").
+      raw = JSON.parse(await readFile(
         await verifiedPath(directory, "publication.json"),
         "utf8",
       )) as unknown;
-      const publication = record(raw, "Dataset publication");
-      if (
-        typeof publication.publication_id === "string" &&
-        SAFE_ID.test(publication.publication_id) &&
-        typeof publication.manifest_ref === "string" &&
-        publication.manifest_ref !== ""
-      ) {
-        const publishedAt = typeof publication.published_at === "string"
-          ? publication.published_at
-          : entry.name;
-        if (newest === null || publishedAt > newest.publishedAt) {
-          newest = {
-            publishedAt,
-            directory,
-            manifestRef: publication.manifest_ref,
-          };
-        }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      if (error instanceof SyntaxError) {
+        throw new ArtifactIntegrityError(
+          `Dataset publication is corrupt: ${path.basename(directory)}/publication.json is not valid JSON`,
+        );
       }
+      throw error;
     }
-    return newest === null
-      ? null
-      : { directory: newest.directory, manifestRef: newest.manifestRef };
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    if (error instanceof SyntaxError || error instanceof ArtifactIntegrityError) return null;
-    throw error;
+    // Round-4 audit: the reader uses the SINGLE canonical publication parser
+    // (``parseDatasetPublication``, exact-keys) instead of a second hand-rolled
+    // one. A record that is valid JSON but misses ``publication_id``,
+    // ``manifest_ref``, ``published_at`` or any other contract field now
+    // raises an integrity error — it is never silently skipped into a
+    // "no artifact" answer. The parser also covers schema-version and
+    // receipt consistency (1.0/1.1 + manifest_sha256 rules).
+    let publication;
+    try {
+      publication = parseDatasetPublication(raw);
+    } catch (caught) {
+      throw new ArtifactIntegrityError(
+        `Dataset publication is corrupt: ${path.basename(directory)}/publication.json ${String(caught)}`,
+        { cause: caught },
+      );
+    }
+    if (newest === null || publication.published_at > newest.publishedAt) {
+      newest = {
+        publishedAt: publication.published_at,
+        directory,
+        manifestRef: publication.manifest_ref,
+        schemaVersion: publication.schema_version ?? "1.1",
+        manifestSha256: publication.manifest_sha256 ?? null,
+      };
+    }
   }
+  return newest === null
+    ? null
+    : {
+        directory: newest.directory,
+        manifestRef: newest.manifestRef,
+        schemaVersion: newest.schemaVersion,
+        manifestSha256: newest.manifestSha256,
+      };
 }
 
 async function readVerifiedArtifact(
@@ -214,7 +268,7 @@ async function readVerifiedArtifact(
     loaded.publicationDir,
     artifact.relative_path,
   ));
-  if (bytes.length !== artifact.size_bytes || digest(bytes) !== artifact.sha256) {
+  if (bytes.length !== artifact.size_bytes || sha256Hex(bytes) !== artifact.sha256) {
     throw new ArtifactIntegrityError("Artifact integrity check failed");
   }
   return bytes;
@@ -228,7 +282,7 @@ export async function listTaskArtifacts(taskRoot: string): Promise<ArtifactRecor
     name: "dataset_manifest.json",
     role: "schema",
     size: loaded.manifestBytes.length,
-    sha256: digest(loaded.manifestBytes),
+    sha256: sha256Hex(loaded.manifestBytes),
     media_type: "application/json",
   }];
   for (const artifact of loaded.artifacts) {

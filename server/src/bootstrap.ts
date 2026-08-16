@@ -14,6 +14,11 @@ import {
   type Phase3RuntimeOptions,
 } from "./runtime/phase3-composition.js";
 import { ModelSettingsService } from "./settings/model-settings.js";
+import { createPermissionSettingsApi } from "./settings/permission-settings.js";
+import {
+  JsonPermissionPolicyStore,
+  PermissionBrokerRegistry,
+} from "./agent/permissions/index.js";
 
 interface ApiSurface {
   handle(request: IncomingMessage, response: ServerResponse): boolean;
@@ -33,6 +38,7 @@ export interface BootstrapInput {
   config: HostConfig;
   repositoryRoot: string;
   tasksRoot: string;
+  workspacesRoot: string;
   database?: DatabaseClient;
   browserPool?: NodeBrowserPool;
   modelSettings?: ModelSettingsSurface;
@@ -51,7 +57,7 @@ function combineApis(...apis: ApiSurface[]): ApiSurface {
 }
 
 export async function createBootstrapOptions(input: BootstrapInput): Promise<BootstrapOptions> {
-  const { config, tasksRoot } = input;
+  const { config, tasksRoot, workspacesRoot, repositoryRoot } = input;
   const dataRoot = path.resolve(tasksRoot, "..", "..");
   const cacheDir = path.join(dataRoot, "cache");
   const databasesDir = process.env.SKILL_DATA_DIR === undefined ||
@@ -59,6 +65,9 @@ export async function createBootstrapOptions(input: BootstrapInput): Promise<Boo
     ? path.join(dataRoot, "skills")
     : path.resolve(process.env.SKILL_DATA_DIR);
   const settingsDir = path.join(dataRoot, "settings");
+  const permissionPolicyStore = new JsonPermissionPolicyStore(
+    path.join(settingsDir, "agent-permissions.json"),
+  );
   const database = input.database ?? new DatabaseClient({ cacheDir, databasesDir });
   const browserPool = input.browserPool ?? new NodeBrowserPool({ maxContexts: 4 });
   const modelSettings = input.modelSettings ?? await ModelSettingsService.create({
@@ -72,6 +81,7 @@ export async function createBootstrapOptions(input: BootstrapInput): Promise<Boo
     settingsDir,
     database,
   });
+  const permissionBrokerRegistry = new PermissionBrokerRegistry();
   const vlmConfig = modelSettings.resolveVlmConfig === undefined
     ? undefined
     : await modelSettings.resolveVlmConfig().catch(() => undefined);
@@ -87,10 +97,19 @@ export async function createBootstrapOptions(input: BootstrapInput): Promise<Boo
       registry.add("browser pool", () => browserPool.close());
       await browserPool.start();
     },
-    hostApi: combineApis(productApi, modelSettings),
+    hostApi: combineApis(
+      productApi,
+      modelSettings,
+      createPermissionSettingsApi(permissionPolicyStore, permissionBrokerRegistry),
+    ),
     formalRuntime: () => formalFactory({
       tasksRoot,
+      workspacesRoot,
+      repositoryRoot,
+      agentExecPolicy: config.agentExecPolicy,
       workspaceDevExec: config.workspaceDevExec,
+      permissionPolicyStore,
+      permissionBrokerRegistry,
       resolveModel: modelSettings.resolveActiveModel,
       database,
       browserPool,

@@ -28,6 +28,7 @@
 | 6 | 迁模型设置与 Settings API | ✅ 完成（2026-08-13） |
 | 7 | 正式切换 Frontend → TS Host | ✅ 完成（2026-08-14） |
 | 8 | 删除 Python Runtime（仅留 DB bridge） | ✅ 完成（2026-08-14） |
+| 9 | Agent Workspace 与权限系统重构 | ✅ 完成（2026-08-16，ADR-026） |
 
 > **当前拓扑（Phase 8 后，2026-08-14）**：唯一正式拓扑是 TypeScript Host
 > （`pnpm dev` / `pnpm start`）+ Pi Agent + TS Dataset Core + 按需 `database/bridge.py`
@@ -240,6 +241,158 @@ build 锁、cancel 收敛与 event sink；`DATASET_CORE=ts` 现为默认运行�
 [migration/phase8-python-runtime-retirement.md](migration/phase8-python-runtime-retirement.md)、
 [migration/PHASE8_FINAL_VERIFICATION.md](migration/PHASE8_FINAL_VERIFICATION.md)、
 [migration/phase8-retirement-inventory.md](migration/phase8-retirement-inventory.md)。
+
+---
+
+## Phase 9：Agent Workspace 与权限系统重构（✅ 完成，2026-08-16）
+
+> 执行计划：`BioMed-QAgent Agent Workspace 与权限系统重构执行计划.md`（W1/W2/P1–P7）；
+> 决策记录：ADR-026（取代 ADR-023 的 staging-only 写入模型，保留不可变发布保证）。
+
+### W1  Workspace Root 解耦
+
+- [x] Agent cwd 迁移至 `data/workspaces/<taskId>/`；`data/output/tasks/<taskId>/` 不再作为 cwd
+- [x] `WorkspaceManager` + `workspace-paths.ts` 集中路径推导（`getPath/ensure/exists/remove`）
+- [x] Workspace 不保存框架 runtime metadata；`state/workspace.json` 记录 version/path/migration
+- [x] Task 多 Run 共享同一 Workspace；Task 删除同时清理 Workspace（先 cancel/dispose）
+- [x] 重启恢复：`ensure(taskId)` 幂等复用 durable workspace
+- [x] Pi session 目录移至 `<taskOutput>/state/pi-session`；audit/cache 保持在框架 output
+
+### W2  Legacy Workspace Migration
+
+- [x] `staging/agent/**` → `data/workspaces/<taskId>/**`（copy → verify → mark，保留旧目录）
+
+### P1  Permission Core
+
+- [x] `server/src/agent/permissions/`：types / path-normalizer / classifier / evaluator /
+      grants / policy-store / broker / protected-paths / audit + 单元测试
+- [x] allow/ask/deny；once/run/task/persistent grant；most-specific path rule；scope 分类
+
+### P2  read/write/edit 接入 PermissionBroker
+
+- [x] 移除 absolute-path hard deny 与 `staging/agent` write-only；normalize → classify → evaluate
+- [x] workspace 自由；task output 只读；project/external 默认 ask；state/logs/artifacts 硬保护
+
+### P3  Permission Event + API
+
+- [x] `permission_requested` / `permission_resolved` durable events
+- [x] `POST /api/v1/tasks/{taskId}/runs/{runId}/permissions/{requestId}`（once/run/task/persistent），
+      resolve 绑定 URL runId（pending 按 runId 索引再核验 requestId，旧 runId 不能批准新请求）
+- [x] pending 请求生命周期：cancel/重启失效，不静默重放
+
+### P4  Frontend Permission UI
+
+- [x] Run 时间线权限卡片（拒绝 / 允许一次 / 本 Run / 本 Task / 始终允许目录·命令）；
+      Run/Task 授权为 capability×scope 粒度，卡片明示“覆盖该范围内其他路径”
+- [x] 设置 → Agent → 权限：preset（受限/按需询问/完全访问）+ 已授权目录管理 + 命令执行开关
+
+### P5  Exec Permission
+
+- [x] `process.exec` 独立 capability，默认 ask；删除 snapshot/restore 伪沙箱
+- [x] 保留 timeout / output limit / cancel / process-tree cleanup / audit；UI 显示 OS 权限警告
+- [x] 迁移 flag `AGENT_EXEC_POLICY=deny|ask|allow` 替换 `WORKSPACE_DEV_EXEC`
+- [x] **撤权闭环**：`PUT .../persistent-exec {enabled:false}` + 设置开关；Restricted 在 evaluator 硬拒绝
+      exec 并在切 preset 时清除 `persistent_exec_allow`
+
+### P6  Permission Presets + Persistent Rules
+
+- [x] `data/settings/agent-permissions.json`；Restricted / Ask when needed / Full access
+- [x] 持久规则入库前 canonicalize 并校验绝对路径（不依赖 evaluator 的 `path.resolve`）
+
+### P7  Publication Integrity Hardening
+
+- [x] 验证：外部改动 artifact → hash 不匹配 → 409 ArtifactIntegrityError；
+      workspace 任意文件不会自动成为 Publication（仅 Core 发布路径）
+- [x] 审计修正：reader 重算 package digest 并与 `manifest.sha256`/`manifest_id`（绑定 publication.json
+      manifest_ref）交叉验证——改 artifact 并同步改 manifest 条目但不重算 digest 也会被拒
+- [x] 二轮审计修正：`packageDigest` 只覆盖 artifact 条目，manifest 顶层元数据（row_count/
+      validation_summary 等）改不改 digest——Publisher 新增必需字段 `publication.json.manifest_sha256`
+      （manifest 文件字节哈希），reader 先校验文件字节再解析；golden fixtures 同步携带该字段
+- [x] 信任边界明确（ADR-026 §3）：同账户 exec 能一致性重写整包时无法防伪，仅防意外/部分篡改
+- [x] `../` 越界改为 resolve→classify→broker（不再是 INVALID 输入错）；不存在路径 canonicalization
+      重新拼回缺失后缀，避免授权范围意外扩大；write 在创建父目录后复核目标与授权 canonical 一致
+- [x] legacy migration marker 的 POSIX 比较修正（比较 `marker.workspace` 而非 `workspaceRoot`）
+
+二轮审计修复（2026-08-17）：
+
+- [x] **P0 framework control-plane 隔离**：新增 `framework_internal` scope——`data/settings/**`
+      （持久权限规则 + 模型凭据）、其他 Task 的 workspace/output 全部硬拒绝（含 read），
+      任何 project 级授权或持久规则都无法覆盖；当前 Task 的 state/logs/artifacts 仍由
+      ProtectedPaths 保护
+- [x] **P1 Restricted 硬收权**：评估顺序改为 invariant → Restricted → grants → rules → preset；
+      受限模式下临时授权与持久 allow rule 一律失效（file + exec 均覆盖，exec 也压过迁移 flag）
+- [x] **P1 Broker 失败状态机**：suspend/resolve 任一步磁盘/audit/event 写失败都会 settle 原
+      工具调用（reject）且不留孤儿 pending；fault-injection 测试覆盖
+- [x] **P1 policy-store 串行化**：mutation queue + 磁盘写成功后才替换缓存；并发授权不丢规则，
+      失败写不产生“内存已改/重启回退”的分裂
+- [x] 顺手项：system prompt 与真实策略对齐（exec 默认 ask、task output 只读、框架路径恒拒）；
+      持久按钮改为“始终允许此路径”（单文件持久化的是文件路径）；workspace/taskOutput/data/
+      repository 四个根在 `createWorkspaceContext` 统一 canonicalize
+
+三轮审计修复（2026-08-17，第三轮审查）:
+
+- [x] **P0 stale pending 重验证**：`broker.resolve(allow)` 先按当前策略重评估原请求，verdict 已变
+      deny（如切到 Restricted / 新增 deny rule）→ 不记 grant、工具调用以结构化拒绝 settle、
+      事件流写入 resolved-deny；切 Restricted 时经 broker registry 全 host invalidate 所有
+      pending（卡片立即消失，不能再被点击生效）
+- [x] **P1 pending path TOCTOU**：read/list/search/edit 在 IO 前重新 canonicalize，要求 canonical
+      路径与 scope 与原批准一致，不一致 → PATH_ESCAPE（写路径原有复核保留）；批准卡与 audit
+      在请求路径 ≠ canonical 时同时展示“请求路径 / 实际路径”
+- [x] **P1 sensitive scope**：`.env*`（`.env.example` 除外）、`*.key/pem/p12/pfx`、
+      `credentials.json`/`secrets.json` 独立 scope；默认 read=ask、write/edit=deny；
+      project/external 的 Run/Task grant 与持久规则都不能自动覆盖；当前 Task 的
+      workspace/output 内豁免
+- [x] **P1 Run/Task grant 粒度**：fs 临时授权改为 `capability × canonical root`（批准路径+
+      子树），批准单个 external 文件不再授权整个 external；卡片提供“高级：整个范围”勾选
+      （`scope_wide`）显式扩大；新增 `GET/DELETE .../temp-grants` 查看/撤销运行中授权 + 设置页 UI
+- [x] **P1 Broker 事务 rollback**：grant 记录可撤销——audit/event 写失败时回滚临时 grant
+      （revoke）或恢复持久设置（exec flag 还原旧值 / 删除刚写入的 rule）；run/task/持久文件/
+      持久 exec 四种失败注入测试验证无残留授权
+- [x] **P1 Restricted exec 不变量下沉**：store 层拒绝 restricted 下 `setPersistentExecAllow(true)`
+      （API 409），不再只靠前端禁用开关
+- [x] **P1 P7 损坏 receipt → 409**：`latestPublication` 区分“publish/ 不存在 → null”与
+      “publication 存在但损坏 → ArtifactIntegrityError”；坏 JSON/缺 receipt/版本非法不再被
+      静默当成“没有发布”
+- [x] **P1/P2 publication schema 1.1**：新发布写 `schema_version: "1.1"` + 必填
+      `manifest_sha256`；旧 1.0 记录保留其 pre-P7 信任级别（package digest 校验）可继续服务；
+      1.0 带 receipt 或 1.1 缺 receipt 均拒绝；golden fixtures 恢复为 1.0 无 receipt（真实
+      V2 迁移期形态）
+- [x] **P2 exec 完整路径展示**：`sanitizedCommand` 不再 basename executable——批准卡/audit
+      显示 canonical 化后的完整可执行文件路径；参数仍脱敏
+- [x] 顺手项：`JsonPermissionPolicyStore.load()` 首读 memoize（与并发 mutation 无竞态）；
+      设置页可主动创建 allow/ask/deny 持久规则（表单）
+
+四轮审计修复（2026-08-17，第四轮审查）:
+
+- [x] **P0 persistent rule scope 绑定**：`FilePermissionRule` 新增 `resource_scope`，evaluator
+      要求 `request.scope === rule.resource_scope` 才匹配——`/repo/** read allow` 不再能
+      覆盖 `/repo/.env`（sensitive）或 external 路径；API 缺省 project、拒绝
+      framework_internal；持久授权写入 rule 时绑定批准请求自身的 scope（批准 `.env`
+      形成 sensitive rule）；旧 rule（无字段）加载为 project（fail-safe 迁移）
+- [x] **P1 exec 展示诚实化**：裸命令走 PATH/PATHEXT 真实 lookup（失败显示
+      `(resolved via PATH)` 标注）；`./bin/tool` 相对路径按 spawn cwd（workspace root）
+      解析而非 server cwd；绝不伪造 `<workspace>/python`
+- [x] **P1 stateful argv 脱敏**：`--token value` / `--api-key value` 两参数形式也会
+      redact（flag 消耗下一个参数），不再只覆盖 `--token=value` 单参数形式
+- [x] **P1 Publisher gate=receipt 单一来源**：`manifest_sha256` 从 release gate 校验的
+      `options.manifest` 对象字节计算，同字节写入不可变版本目录——磁盘
+      `dataset_manifest.json` 与内存对象漂移不可能进入 publication（含回归测试：
+      磁盘 manifest 被篡改后 publication 内容仍是 gate 对象）
+- [x] **P1 单一 publication parser**：artifact reader 改用正式 `parseDatasetPublication`
+      （exact-keys），合法 JSON 缺 `publication_id`/`manifest_ref`/`published_at` 等任何
+      契约字段 → `ArtifactIntegrityError` 409，不再静默当“没有 artifact”
+- [x] **P1 Restricted 清空临时授权**：切入 Restricted 时 registry 广播
+      `clearAllGrants()`（run + task 绑定全部删除），切回 ask 不会复活；ADR
+      “cannot survive”语义与实现一致
+- [x] **P2 Run 结束清理 run grants**：run terminal 时经 workspace `onRunEnd` 钩子调
+      `clearRun(runId)`，设置页不再列出已失效的 run 授权
+- [x] **P2 scopeWide 随 requestId 重置**：PermissionDialog 在 `pending.requestId` 变化时
+      无条件复位“高级：整个范围”勾选（外部 invalidate 后复用组件不残留高风险选项）
+- [x] 顺手项：ADR 删除“grants scoped to capability × ResourceScope”残留旧描述；设置页
+      规则表单新增“作用域”选择 + 规则列表显示 scope badge
+
+验收（2026-08-17 四轮审计后）：`pnpm test`（contracts 14 + server + frontend）/ `pnpm lint` /
+`pnpm typecheck` / `pnpm build` 全通过；`uv run pytest database/tests` + ruff 通过。
 
 ---
 

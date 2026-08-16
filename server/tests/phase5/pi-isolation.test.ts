@@ -127,7 +127,9 @@ describe("runtime Pi-path isolation gate (P5-13)", () => {
     };
     const runtime = await createPhase3Runtime({
       tasksRoot,
-      workspaceDevExec: false,
+      workspacesRoot: path.join(path.dirname(tasksRoot), "workspaces"),
+      repositoryRoot: path.resolve("."),
+      agentExecPolicy: null,
       adapter,
       database: null,
       browserPool: null,
@@ -198,7 +200,9 @@ describe("runtime Pi-path isolation gate (P5-13)", () => {
     } as unknown as import("../../src/external/browser/pool.js").NodeBrowserPool;
     const runtime = await createPhase3Runtime({
       tasksRoot,
-      workspaceDevExec: false,
+      workspacesRoot: path.join(path.dirname(tasksRoot), "workspaces"),
+      repositoryRoot: path.resolve("."),
+      agentExecPolicy: null,
       adapter,
       database: null,
       browserPool,

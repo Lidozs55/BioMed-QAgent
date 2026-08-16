@@ -70,6 +70,14 @@ export interface TasksApi {
     expectedRunId?: string | null,
   ) => Promise<SteerResponse>;
   resumeRun: (taskId: string, runId: string, input: ResumeRunInput) => Promise<TaskSnapshot>;
+  resolvePermission: (
+    taskId: string,
+    runId: string,
+    requestId: string,
+    decision: "allow" | "deny",
+    grantScope?: "once" | "run" | "task" | "persistent",
+    scopeWide?: boolean,
+  ) => Promise<void>;
   /** Resumes an interrupted download directly (no AI pass). */
   resumeDownload: (
     taskId: string,
@@ -130,6 +138,19 @@ export function createTasksApi(http: Http): TasksApi {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ request_id: input.request_id, decision: input.decision, detail: input.detail }),
       }).then((b) => parseTaskSnapshot(b)),
+    resolvePermission: (taskId, runId, requestId, decision, grantScope, scopeWide) =>
+      http.requestVoid(
+        `${http.baseUrl}/tasks/${http.encodeId(taskId)}/runs/${http.encodeId(runId)}/permissions/${http.encodeId(requestId)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            decision,
+            ...(grantScope === undefined ? {} : { grant_scope: grantScope }),
+            ...(scopeWide === true ? { scope_wide: true } : {}),
+          }),
+        },
+      ),
     resumeDownload: (taskId, input) =>
       http.request(`${http.baseUrl}/tasks/${http.encodeId(taskId)}/downloads/resume`, {
         method: "POST",
@@ -138,6 +159,7 @@ export function createTasksApi(http: Http): TasksApi {
       }).then((b) => parseDownloadResumeAccepted(b)),
     cancelDownload: (taskId) =>
       http.requestVoid(`${http.baseUrl}/tasks/${http.encodeId(taskId)}/downloads/cancel`, { method: "POST" }),
+
     deleteTask: (taskId) =>
       http.requestVoid(`${http.baseUrl}/tasks/${http.encodeId(taskId)}`, { method: "DELETE" }),
     fetchArtifacts: (taskId) =>

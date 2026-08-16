@@ -90,9 +90,19 @@ export interface DatasetManifest {
 
 /** Immutable publication record of a V2 build (backend DatasetPublication). */
 export interface DatasetPublication {
-  schema_version?: "1.0";
+  /**
+   * ``"1.1"`` (P7): carries the ``manifest_sha256`` file-byte receipt.
+   * ``"1.0"`` (legacy): migration-era records without a receipt keep the
+   * pre-P7 trust level (package digest only).
+   */
+  schema_version?: "1.0" | "1.1";
   publication_id: string;
   manifest_ref: string;
+  /**
+   * SHA-256 of the ``dataset_manifest.json`` file bytes (P7 trust anchor).
+   * Required for schema_version "1.1" records; absent in legacy "1.0".
+   */
+  manifest_sha256?: string;
   validation_result_ref: string;
   published_at: string;
   supersedes_publication_id: string | null;

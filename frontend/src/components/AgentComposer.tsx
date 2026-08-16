@@ -294,7 +294,7 @@ export function AgentComposer({
           ))}
         </AttachmentGroup>
       )}
-      <div className="flex min-w-0 items-center gap-1.5 px-2 pb-2">
+      <div className="flex min-w-0 items-center gap-1.5 px-2 py-2">
         <ArtifactFab />
         <DropdownMenu>
           <DropdownMenuTrigger

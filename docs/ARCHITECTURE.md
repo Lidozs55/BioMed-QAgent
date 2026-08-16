@@ -120,6 +120,20 @@ Dataset Construction Runtime（服务端固定构建骨架）
 Attempt 输入/参数/输出摘要、任务锁、checkpoint、timeout/cancel、durable event、
 durable evidence-bound HIL、staging、Validation Gate、原子发布、fixture/live 区分。
 
+**Agent 边界**（ADR-026）：Agent 的工作目录是 `data/workspaces/<taskId>/`，
+与框架输出 `data/output/tasks/<taskId>/` 物理分离；Workspace 之外的所有文件访问与
+命令执行都经过 `allow / ask / deny` 权限系统（fs.read/write/edit、process.exec），
+`ask` 挂起单个 Tool Call 等待用户批准（`permission_requested` / `permission_resolved`
+durable events + `POST .../permissions/{requestId}`）。正式 Publication 只由
+Dataset Core 产生并以 manifest + hash 验证——权限放开不改变业务可信边界。
+权限 scope 含 `framework_internal`（`data/settings/**`、其他 Task 的 workspace/output）与
+`sensitive`（`.env*`/密钥/凭据文件），对所有能力硬拒绝/独立策略，任何授权/规则/preset
+均不能覆盖（ADR-026 §2）。持久路径规则绑定 `resource_scope`（请求 scope 必须等于规则
+scope 才匹配，API 缺省 project）；Restricted 切换会作废全部 pending 并清空全部临时
+授权；Run 结束时经 `onRunEnd` 清理该 run 的 grants。Run/Task 文件授权以批准路径为根
+（canonical root + 子树），不覆盖整个 scope（ADR-026 §2）。
+>>>>>>> feat/workspace-permission-system
+
 当前不存在固定五阶段、固定 22 列 `main_data.csv` 全局协议或 metadata-only
 占位主表：Dataset Build 由自包含 `DatasetBuildSpec`（§3）驱动，产物由
 `DatasetManifest` 按 Artifact Role 声明。

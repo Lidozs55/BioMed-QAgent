@@ -19,6 +19,7 @@ import { STAGE_LABELS } from "@/components/conversation/stageLabels";
 import { openSubagentPanel } from "@/components/subagentPanelControl";
 import { TaskStatusIcon } from "@/components/taskStatus";
 import { UserInputDialog } from "@/components/UserInputDialog";
+import { PermissionDialog } from "@/components/PermissionDialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -76,7 +77,19 @@ interface ChatPanelProps {
     runId: string,
     input: ResumeRunInput,
   ) => Promise<void>;
+
   /** Resumes an interrupted download directly (no AI pass, no new run). */
+
+  resolvePermission?: (
+    taskId: string,
+    runId: string,
+    requestId: string,
+    decision: "allow" | "deny",
+    grantScope?: "once" | "run" | "task" | "persistent",
+    scopeWide?: boolean,
+  ) => Promise<void>;
+  /** Resumes an interrupted download directly (no AI pass). */
+
   resumeDownload?: (
     taskId: string,
     input: DownloadResumeRequest,
@@ -231,6 +244,7 @@ export function ChatPanel({
   continueTask,
   cancelRun,
   resumeRun,
+  resolvePermission,
   resumeDownload,
   cancelDownload,
   loadOlderMessages,
@@ -1046,6 +1060,9 @@ export function ChatPanel({
         </div>
       </MessageScrollerProvider>
       {resumeRun !== undefined && <UserInputDialog task={activeTask} onResumeRun={resumeRun} />}
+      {resolvePermission !== undefined && (
+        <PermissionDialog task={activeTask} onResolvePermission={resolvePermission} />
+      )}
     </div>
   );
 }

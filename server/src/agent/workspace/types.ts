@@ -36,8 +36,6 @@ export interface WorkspaceLimits {
   maxWriteBytes: number;
   maxExecOutputBytes: number;
   maxExecTimeoutMs: number;
-  maxSnapshotFiles: number;
-  maxSnapshotBytes: number;
 }
 
 export interface WorkspaceReadResult {

@@ -7,6 +7,10 @@ import type { IncomingMessage } from "node:http";
 
 import { HttpError } from "./error.js";
 
+export interface ApiSurface {
+  handle(request: IncomingMessage, response: import("node:http").ServerResponse): boolean;
+}
+
 export const DEFAULT_MAX_BODY_BYTES = 1_048_576;
 
 /**

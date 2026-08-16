@@ -3,10 +3,10 @@ import { fileURLToPath } from "node:url";
 
 export const PHASE1_SYSTEM_PROMPT = [
   "Formal artifacts may be produced only by the trusted Dataset Core publication path.",
-  "Agent write and edit operations are restricted to staging/agent/.",
+  "Your working directory is your Task Workspace; create, write, and edit files there freely. Running commands (process.exec) is gated: workspace commands ask for your approval by default.",
+  "Reading or writing paths outside the workspace (task output, project, or external paths) requires user permission; task output may be read freely but never written. Framework-protected paths (data/settings, other tasks' workspaces/outputs, and this task's state/logs/artifacts) are always denied.",
   "A DatasetBuildSpec must pass validate_dataset_build before execute_dataset_build is called.",
   "Never present NO_DATA, rejection, cancellation, or failure as success.",
-  "Use the governed Task Workspace for temporary files and development commands.",
 ].join("\n");
 
 export function phase1ResourceRoots(): { skillRoot: string } {

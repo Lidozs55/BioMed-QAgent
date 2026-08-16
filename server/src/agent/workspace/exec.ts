@@ -1,11 +1,15 @@
 import { spawn } from "node:child_process";
-import { chmod, lstat, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import path from "node:path";
 
+import { canonicalizeWithAncestor } from "../permissions/path-normalizer.js";
+import { PermissionDeniedError } from "../permissions/index.js";
 import type { WorkspaceContext } from "./context.js";
-import { WorkspacePolicyError, type WorkspaceExecResult } from "./types.js";
+import type { WorkspaceExecResult } from "./types.js";
 
 const SECRET_ARGUMENT = /(?:api[-_]?key|authorization|password|secret|token)(?:=|:)/i;
+/** ``--token value`` style flag whose NEXT argument is the secret value. */
+const SECRET_FLAG = /^--?(?:api[-_]?key|authorization|password|secret|token)$/i;
 const EXECUTABLE_METACHARACTERS = /[&|;<>\r\n\0]/u;
 const SAFE_ENVIRONMENT_KEYS = new Set([
   "COMSPEC",
@@ -19,14 +23,6 @@ const SAFE_ENVIRONMENT_KEYS = new Set([
   "TMPDIR",
   "WINDIR",
 ]);
-
-interface SnapshotEntry {
-  type: "directory" | "file";
-  bytes?: Buffer;
-  mode: number;
-}
-
-type ProtectedSnapshot = Map<string, SnapshotEntry>;
 
 interface ActiveCommand {
   cancel(): void;
@@ -61,11 +57,35 @@ export class WorkspaceProcessRegistry {
   }
 }
 
-export function sanitizedCommand(executable: string, args: readonly string[]): string[] {
-  return [
-    path.basename(executable),
-    ...args.map((argument) => (SECRET_ARGUMENT.test(argument) ? "[redacted]" : argument)),
-  ];
+/**
+ * Resolve how a bare executable name would be found at spawn time. The spawn
+ * uses the raw name through PATH (plus PATHEXT on Windows); the approval
+ * card must show the REAL binary, never a fabricated ``<workspace>/name``
+ * that would never execute (round-4 audit).
+ */
+async function resolveOnPath(executable: string): Promise<string | null> {
+  const pathEnv = process.env.PATH ?? "";
+  const extensions = process.platform === "win32"
+    ? (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter((ext) => ext !== "")
+    : [""];
+  const directories = pathEnv.split(path.delimiter).filter((dir) => dir !== "");
+  for (const directory of directories) {
+    const base = path.join(directory, executable);
+    const candidates = process.platform === "win32" && path.extname(base) === ""
+      ? extensions.map((ext) => `${base}${ext}`)
+      : [base];
+    for (const candidate of candidates) {
+      try {
+        const info = await stat(candidate);
+        if (!info.isDirectory()) {
+          return await canonicalizeWithAncestor(candidate).catch(() => candidate);
+        }
+      } catch {
+        // Not found in this directory; keep searching.
+      }
+    }
+  }
+  return null;
 }
 
 function disabledResult(command: string[]): WorkspaceExecResult {
@@ -85,6 +105,75 @@ function disabledResult(command: string[]): WorkspaceExecResult {
   };
 }
 
+/**
+ * Build the display/audit form of a command (round-3/round-4 audit): the
+ * executable keeps its FULL path so the approval card shows exactly WHICH
+ * binary would run:
+ *
+ * - absolute path → canonicalized;
+ * - relative path with a separator (``./bin/tool``) → resolved against the
+ *   spawn cwd (the workspace root) — never against the server cwd;
+ * - bare name (``python``) → looked up through PATH/PATHEXT; when the lookup
+ *   fails the name is shown with an explicit ``(resolved via PATH)`` note
+ *   instead of a fake workspace-relative path.
+ *
+ * Secret-looking argument values are redacted (both ``--token=value`` and
+ * ``--token value`` forms). The permission system and audit see this form;
+ * the actual spawn still uses the raw ``executable``/``args`` inputs.
+ */
+export async function sanitizedCommand(
+  executable: string,
+  args: readonly string[],
+  cwd: string,
+): Promise<string[]> {
+  let shownExecutable = executable;
+  if (typeof executable === "string" && executable.trim() !== "") {
+    if (path.isAbsolute(executable)) {
+      shownExecutable = await canonicalizeWithAncestor(executable).catch(() => executable);
+    } else if (executable.includes("/") || executable.includes("\\")) {
+      // Relative path with a separator: spawn resolves it against its cwd,
+      // which is the workspace root — resolve against the same base.
+      const target = path.resolve(cwd, executable);
+      shownExecutable = await canonicalizeWithAncestor(target).catch(() => target);
+    } else {
+      const resolved = await resolveOnPath(executable);
+      shownExecutable = resolved === null
+        ? `${executable} (resolved via PATH)`
+        : resolved;
+    }
+  }
+  return [shownExecutable, ...redactArguments(args)];
+}
+
+/**
+ * Stateful argument redaction (round-4 audit): ``--token=value`` is caught
+ * as a single argument, but the very common ``--token value`` two-argument
+ * form would leak the value — the flag consumes the following argument too.
+ */
+function redactArguments(args: readonly string[]): string[] {
+  const out: string[] = [];
+  let hideNext = false;
+  for (const argument of args) {
+    if (hideNext) {
+      out.push("[redacted]");
+      hideNext = false;
+      continue;
+    }
+    if (SECRET_ARGUMENT.test(argument)) {
+      out.push("[redacted]");
+      continue;
+    }
+    if (SECRET_FLAG.test(argument)) {
+      out.push("[redacted]");
+      hideNext = true;
+      continue;
+    }
+    out.push(argument);
+  }
+  return out;
+
+}
+
 function rejectedResult(command: string[], message: string, durationMs = 0): WorkspaceExecResult {
   return {
     command,
@@ -99,116 +188,13 @@ function rejectedResult(command: string[], message: string, durationMs = 0): Wor
   };
 }
 
-function safeEnvironment(context: WorkspaceContext): NodeJS.ProcessEnv {
-  const combined = { ...process.env, ...(context.developmentExec?.environment ?? {}) };
+function safeEnvironment(): NodeJS.ProcessEnv {
+  const combined = { ...process.env };
   return Object.fromEntries(
     Object.entries(combined).filter(
       ([key, value]) => value !== undefined && SAFE_ENVIRONMENT_KEYS.has(key.toUpperCase()),
     ),
   ) as NodeJS.ProcessEnv;
-}
-
-function isAgentStaging(relativePath: string): boolean {
-  const normalized = process.platform === "win32" ? relativePath.toLowerCase() : relativePath;
-  return normalized === "staging/agent" || normalized.startsWith("staging/agent/");
-}
-
-async function snapshotProtected(context: WorkspaceContext): Promise<ProtectedSnapshot> {
-  const snapshot: ProtectedSnapshot = new Map();
-  let files = 0;
-  let bytes = 0;
-
-  async function visit(directory: string, relativeDirectory: string): Promise<void> {
-    const children = await readdir(directory, { withFileTypes: true });
-    children.sort((left, right) => left.name.localeCompare(right.name, "en"));
-    for (const child of children) {
-      const relative = relativeDirectory === ""
-        ? child.name
-        : `${relativeDirectory}/${child.name}`;
-      if (isAgentStaging(relative)) continue;
-      const absolute = path.join(directory, child.name);
-      const info = await lstat(absolute);
-      if (info.isSymbolicLink()) {
-        throw new WorkspacePolicyError(
-          "EXEC_POLICY_REJECTED",
-          "Development exec refuses an unprotected link in formal Workspace areas",
-        );
-      }
-      if (info.isDirectory()) {
-        snapshot.set(relative, { type: "directory", mode: info.mode });
-        await visit(absolute, relative);
-        continue;
-      }
-      if (!info.isFile()) {
-        throw new WorkspacePolicyError(
-          "EXEC_POLICY_REJECTED",
-          "Development exec refuses an unsupported formal Workspace entry",
-        );
-      }
-      files += 1;
-      bytes += info.size;
-      if (files > context.limits.maxSnapshotFiles || bytes > context.limits.maxSnapshotBytes) {
-        throw new WorkspacePolicyError(
-          "LIMIT_EXCEEDED",
-          "Formal Workspace snapshot exceeds the configured safety limit",
-        );
-      }
-      snapshot.set(relative, { type: "file", bytes: await readFile(absolute), mode: info.mode });
-    }
-  }
-
-  await visit(context.root, "");
-  return snapshot;
-}
-
-function snapshotsEqual(before: ProtectedSnapshot, after: ProtectedSnapshot): boolean {
-  if (before.size !== after.size) return false;
-  for (const [relative, expected] of before) {
-    const actual = after.get(relative);
-    if (actual?.type !== expected.type) return false;
-    if (expected.type === "file" && !expected.bytes?.equals(actual.bytes ?? Buffer.alloc(0))) {
-      return false;
-    }
-  }
-  return true;
-}
-
-async function restoreProtected(
-  context: WorkspaceContext,
-  snapshot: ProtectedSnapshot,
-): Promise<void> {
-  const current = await readdir(context.root, { withFileTypes: true });
-  for (const entry of current) {
-    const absolute = path.join(context.root, entry.name);
-    const staging = process.platform === "win32"
-      ? entry.name.toLowerCase() === "staging"
-      : entry.name === "staging";
-    if (!staging || entry.isSymbolicLink() || !entry.isDirectory()) {
-      await rm(absolute, { recursive: true, force: true });
-      continue;
-    }
-    const stagingChildren = await readdir(absolute, { withFileTypes: true });
-    for (const child of stagingChildren) {
-      const agent = process.platform === "win32"
-        ? child.name.toLowerCase() === "agent"
-        : child.name === "agent";
-      if (!agent) await rm(path.join(absolute, child.name), { recursive: true, force: true });
-    }
-  }
-  await mkdir(path.join(context.root, "staging", "agent"), { recursive: true });
-  const entries = [...snapshot.entries()].sort(
-    ([left], [right]) => left.split("/").length - right.split("/").length,
-  );
-  for (const [relative, entry] of entries) {
-    const absolute = path.join(context.root, ...relative.split("/"));
-    if (entry.type === "directory") {
-      await mkdir(absolute, { recursive: true });
-    } else {
-      await mkdir(path.dirname(absolute), { recursive: true });
-      await writeFile(absolute, entry.bytes ?? Buffer.alloc(0));
-    }
-    if (process.platform !== "win32") await chmod(absolute, entry.mode);
-  }
 }
 
 function validateCommand(input: {
@@ -299,7 +285,7 @@ async function killProcessTree(pid: number): Promise<void> {
 
 function redactOutput(context: WorkspaceContext, value: string): string {
   let redacted = value;
-  for (const root of new Set([context.root, context.canonicalRoot])) {
+  for (const root of new Set([context.workspaceRoot, context.canonicalWorkspaceRoot])) {
     if (process.platform === "win32") {
       const representations = [root, JSON.stringify(root).slice(1, -1)];
       for (const representation of representations) {
@@ -324,24 +310,35 @@ export async function executeWorkspaceCommand(
   signal: AbortSignal | undefined,
   registry: WorkspaceProcessRegistry,
 ): Promise<WorkspaceExecResult> {
-  const command = sanitizedCommand(input.executable, input.args);
+  const command = await sanitizedCommand(input.executable, input.args, context.workspaceRoot);
+  // Environment-level exec switch (HIL branch): when development exec is not
+  // enabled, the command is hard-disabled BEFORE the permission system is
+  // consulted — no ask, no grant path.
   if (context.developmentExec?.enabled !== true) return disabledResult(command);
   const invalid = validateCommand(input, context);
   if (invalid !== undefined) return rejectedResult(command, invalid);
-  const started = performance.now();
-  let before: ProtectedSnapshot;
+  // process.exec is an independent high-risk capability (plan §25–§27): the
+  // cwd being the workspace is NOT a sandbox. The broker decides, defaulting
+  // to ask; the execution runtime below keeps the operational controls
+  // (timeout, output limits, cancel, process-tree cleanup, audit).
   try {
-    before = await snapshotProtected(context);
+    await context.permissions.evaluate({
+      capability: "process.exec",
+      command: command.join(" "),
+      cwd: context.workspaceRoot,
+      scope: "workspace",
+      signal,
+    });
   } catch (error) {
-    const message = error instanceof WorkspacePolicyError
-      ? error.message
-      : "Formal Workspace safety snapshot failed";
-    return rejectedResult(command, message, Math.round(performance.now() - started));
+    if (error instanceof PermissionDeniedError) {
+      return rejectedResult(command, `Permission denied: ${error.message}`);
+    }
+    throw error;
   }
-
+  const started = performance.now();
   const child = spawn(input.executable, input.args, {
-    cwd: context.root,
-    env: safeEnvironment(context),
+    cwd: context.workspaceRoot,
+    env: safeEnvironment(),
     detached: process.platform !== "win32",
     shell: false,
     stdio: ["ignore", "pipe", "pipe"],
@@ -397,14 +394,6 @@ export async function executeWorkspaceCommand(
     clearTimeout(timeout);
     signal?.removeEventListener("abort", onAbort);
     await terminate();
-
-    let protectedChanged = false;
-    try {
-      protectedChanged = !snapshotsEqual(before, await snapshotProtected(context));
-    } catch {
-      protectedChanged = true;
-    }
-    if (protectedChanged) await restoreProtected(context, before);
     return {
       command,
       exitCode,
@@ -414,7 +403,7 @@ export async function executeWorkspaceCommand(
       truncated,
       timedOut,
       cancelled,
-      policy: protectedChanged ? "rejected" : "allowed",
+      policy: "allowed",
     };
   } finally {
     clearTimeout(timeout);

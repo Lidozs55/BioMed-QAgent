@@ -350,6 +350,48 @@ export function parseRuntimeEventPayload(payloadObj: Record<string, unknown>, pa
         detail: assertJsonRecord(Reflect.get(payloadObj, "detail"), path + ".detail"),
       };
     }
+    /* ---- Agent permission control plane (plan §30) ---- */
+    case "permission_requested": {
+      const capability = assertRequiredString(Reflect.get(payloadObj, "capability"), path + ".capability");
+      if (capability !== "fs.read" && capability !== "fs.write" && capability !== "fs.edit" && capability !== "process.exec") {
+        throw new APIError(502, `Invalid permission capability at ${path}.capability`);
+      }
+      const scope = assertRequiredString(Reflect.get(payloadObj, "scope"), path + ".scope");
+      if (scope !== "workspace" && scope !== "task_output" && scope !== "project" && scope !== "external") {
+        throw new APIError(502, `Invalid permission scope at ${path}.scope`);
+      }
+      return {
+        type: "permission_requested",
+        request_id: assertRequiredString(Reflect.get(payloadObj, "request_id"), path + ".request_id"),
+        capability,
+        scope,
+        resource: assertOptionalNull(Reflect.get(payloadObj, "resource"), path + ".resource", assertRequiredString),
+        canonical_resource: assertOptionalNull(Reflect.get(payloadObj, "canonical_resource"), path + ".canonical_resource", assertRequiredString),
+        command: assertOptionalNull(Reflect.get(payloadObj, "command"), path + ".command", assertRequiredString),
+        cwd: assertOptionalNull(Reflect.get(payloadObj, "cwd"), path + ".cwd", assertRequiredString),
+        summary: assertRequiredString(Reflect.get(payloadObj, "summary"), path + ".summary"),
+      };
+    }
+    case "permission_resolved": {
+      const decision = assertRequiredString(Reflect.get(payloadObj, "decision"), path + ".decision");
+      if (decision !== "allow" && decision !== "deny") {
+        throw new APIError(502, `Invalid permission decision at ${path}.decision`);
+      }
+      const rawScope = Reflect.get(payloadObj, "grant_scope");
+      let grant_scope: "once" | "run" | "task" | "persistent" | null = null;
+      if (rawScope !== null && rawScope !== undefined) {
+        if (rawScope !== "once" && rawScope !== "run" && rawScope !== "task" && rawScope !== "persistent") {
+          throw new APIError(502, `Invalid permission grant_scope at ${path}.grant_scope`);
+        }
+        grant_scope = rawScope;
+      }
+      return {
+        type: "permission_resolved",
+        request_id: assertRequiredString(Reflect.get(payloadObj, "request_id"), path + ".request_id"),
+        decision,
+        grant_scope,
+      };
+    }
     /* ---- V2 build-execution lifecycle (Design §15.1; T3 stage mirror) ---- */
     case "operation_started": {
       const label = Reflect.get(payloadObj, "label");

@@ -26,6 +26,7 @@ import {
   pruneStageItemsForOperationRuns,
 } from "./pipeline";
 import { applyUserInputEvent } from "./hil";
+import { applyPermissionEvent } from "./permissions";
 
 export {
   isActiveStatus,
@@ -119,6 +120,11 @@ export function reduceRuntimeEvent(
     case "user_input_required":
     case "user_input_resumed": {
       task = applyUserInputEvent(task, envelope, payload);
+      break;
+    }
+    case "permission_requested":
+    case "permission_resolved": {
+      task = applyPermissionEvent(task, envelope, payload);
       break;
     }
     case "plan_ready":

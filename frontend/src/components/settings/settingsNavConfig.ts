@@ -4,6 +4,7 @@ import {
   Database,
   Keyboard,
   Palette,
+  ShieldCheck,
   SlidersHorizontal,
   Sparkles,
 } from "lucide-react";
@@ -43,6 +44,13 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
     items: [
       { id: "model", label: "模型", icon: Cpu },
       { id: "databases", label: "数据库", icon: Database },
+    ],
+  },
+  {
+    id: "agent",
+    label: "Agent",
+    items: [
+      { id: "permissions", label: "权限", icon: ShieldCheck },
     ],
   },
 ];

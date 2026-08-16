@@ -85,13 +85,18 @@ AGENT_RUNTIME=pi
 DATASET_CORE=ts
 PI_EXPERIMENTAL=0
 LEGACY_BACKEND_PORT=0
-WORKSPACE_DEV_EXEC=0
+AGENT_EXEC_POLICY=
 ```
 
 `LEGACY_BACKEND_PORT=0` is dormant in the default profile. If a legacy Agent,
 Python Core, or experimental Pi rollback profile is selected, it lets the Host allocate
 an unused private loopback port. The Host then generates a per-process bridge secret and
 verifies the new child through the protected internal bridge before opening the public listener.
+
+`WORKSPACE_DEV_EXEC` was retired with the Agent Workspace refactor (2026-08-16,
+ADR-026): command execution is now permission-gated by the broker
+(`process.exec`), with `AGENT_EXEC_POLICY=deny|ask|allow` as the temporary
+migration override.
 
 Do not set `PI_DATASET_BRIDGE_SECRET` for normal managed mode. Set it only when attaching
 to a separately started diagnostic backend, and configure the same non-empty value on

@@ -46,6 +46,7 @@ describe("Phase 8 bootstrap (fixed TS/Pi/TS topology)", () => {
       config: parseHostConfig({ PORT: "0" }),
       repositoryRoot: path.resolve("test-repository"),
       tasksRoot: path.resolve("test-tasks"),
+      workspacesRoot: path.resolve("test-workspaces"),
       ...shared,
       createFormalRuntime,
     });
@@ -57,7 +58,7 @@ describe("Phase 8 bootstrap (fixed TS/Pi/TS topology)", () => {
 
     expect(shared.browserPool.isStarted).toBe(true);
     expect(createFormalRuntime).toHaveBeenCalledWith(expect.objectContaining({
-      workspaceDevExec: false,
+      agentExecPolicy: null,
       database: shared.database,
       browserPool: shared.browserPool,
       vlmConfig: {
@@ -75,6 +76,7 @@ describe("Phase 8 bootstrap (fixed TS/Pi/TS topology)", () => {
       config: parseHostConfig({ PORT: "0" }),
       repositoryRoot: path.resolve("test-repository"),
       tasksRoot: path.resolve("test-tasks"),
+      workspacesRoot: path.resolve("test-workspaces"),
       ...shared,
     });
 

@@ -30,8 +30,8 @@ export class InMemoryWorkspaceAuditSink implements WorkspaceAuditSink {
 export class AppendOnlyTaskAuditSink implements WorkspaceAuditSink {
   readonly #auditPath: string;
 
-  constructor(taskWorkspaceRoot: string) {
-    this.#auditPath = path.join(taskWorkspaceRoot, "logs", "workspace-audit.jsonl");
+  constructor(taskOutputRoot: string) {
+    this.#auditPath = path.join(taskOutputRoot, "logs", "workspace-audit.jsonl");
   }
 
   async record(entry: WorkspaceAuditRecord): Promise<void> {
