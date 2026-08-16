@@ -30,6 +30,22 @@ export class OperationAbortedError extends Error {
   }
 }
 
+/**
+ * Cooperative suspension of the per-operation wall-clock timeout (durable
+ * HIL). A long-running operation (e.g. ``canonicalize``) pauses to wait for
+ * human review; the timeout must keep ticking only for active compute, so
+ * the runner declares the suspension and the executor pauses the timer.
+ * The elapsed budget before the suspension still counts — only the human
+ * wait itself is excluded from the operation timeout.
+ */
+export interface OperationSuspension {
+  readonly suspended: boolean;
+  /** Pause the operation timeout (e.g. while awaiting a human review). */
+  suspend(): void;
+  /** Resume the operation timeout with the remaining budget. */
+  resume(): void;
+}
+
 /** Synchronous abort check — call at every await boundary. */
 export function throwIfAborted(signal?: AbortSignal | null): void {
   if (signal !== undefined && signal !== null && signal.aborted) {

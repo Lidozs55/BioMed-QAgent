@@ -3,6 +3,7 @@ import type {
   HumanReviewRecord,
 } from "@biomed/contracts";
 
+import { OperationAbortedError } from "../dataset/cooperative.js";
 import type { ToolApprovalGate } from "../agent/tools/tool-hooks.js";
 import {
   DurableHILStore,
@@ -110,12 +111,21 @@ export class DurableHILGate implements HILGateHandle {
       ...input,
       task_id: this.taskId,
       run_id: runId,
-    });
+    }, { recreateIfTerminal: true });
     const existing = await this.store.getReviewForRequest(this.taskId, request.request_id);
     if (existing !== null) return existing;
+    // Never silently await a terminal request: with recreateIfTerminal the
+    // store produced a fresh generation for cancelled/expired requests, so
+    // anything left here is a store invariant violation.
+    if (request.status !== "pending") {
+      await this.store.cancelPendingForRun(this.taskId, runId);
+      throw new Error(
+        `HIL request ${request.request_id} is ${request.status} and cannot be awaited`,
+      );
+    }
     if (signal?.aborted === true) {
       await this.store.cancelPendingForRun(this.taskId, runId);
-      throw new Error("aborted");
+      throw new OperationAbortedError("operation aborted before human review could be awaited");
     }
 
     const decision = new Promise<HumanReviewRecord>((resolve, reject) => {
@@ -125,7 +135,7 @@ export class DurableHILGate implements HILGateHandle {
         this.pending.delete(runId);
         void this.store.cancelRequest(this.taskId, runId, request.request_id);
         cleanup();
-        reject(new Error("aborted"));
+        reject(new OperationAbortedError("operation aborted while awaiting human review"));
       };
       const pending: PendingReview = {
         requestId: request.request_id,
@@ -143,7 +153,15 @@ export class DurableHILGate implements HILGateHandle {
       };
       this.pending.set(runId, pending);
       if (signal !== undefined) {
-        signal.addEventListener("abort", abort, { once: true });
+        if (signal.aborted) {
+          // The signal aborted between the pre-check above and waiter
+          // registration; an already-aborted signal never fires its abort
+          // listener, so cancel the waiter directly (otherwise the executor
+          // would hang forever — its suspension timer only covers compute).
+          abort();
+        } else {
+          signal.addEventListener("abort", abort, { once: true });
+        }
       }
     });
     void decision.catch(() => undefined);

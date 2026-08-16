@@ -6,6 +6,7 @@ import type {
 
 import type { BoundHILRequestInput } from "../../runtime/hil-gate.js";
 import { BuildError } from "../adapters/errors.js";
+import type { OperationSuspension } from "../cooperative.js";
 import {
   parseDataBatch,
   parseFieldMapping,
@@ -221,7 +222,20 @@ export async function reviewBatchForHIL(options: {
   gate: DatasetHILGate | null;
   buildId: string;
   signal?: AbortSignal;
+  /** Executor-provided handle: pauses the operation timeout during the wait. */
+  suspension?: OperationSuspension | null;
 }): Promise<ReviewedBatch> {
+  const requestHIL = async (input: BoundHILRequestInput): Promise<HumanReviewRecord> => {
+    if (options.gate === null) {
+      throw new BuildError("human review is required but no durable HIL gate is available");
+    }
+    options.suspension?.suspend();
+    try {
+      return await options.gate.requestHIL(input, options.signal);
+    } finally {
+      options.suspension?.resume();
+    }
+  };
   let batch = options.batch;
   const proposed = batch.declared_mappings.filter(
     (mapping) =>
@@ -229,10 +243,7 @@ export async function reviewBatchForHIL(options: {
       mapping.review_status === "proposed",
   );
   if (proposed.length > 0) {
-    if (options.gate === null) {
-      throw new BuildError("proposed field mappings require a durable HIL gate");
-    }
-    const review = await options.gate.requestHIL({
+    const review = await requestHIL({
       build_id: options.buildId,
       kind: "semantic_review",
       review_type: "field_mapping",
@@ -268,7 +279,7 @@ export async function reviewBatchForHIL(options: {
       },
       policy_ref: "dataset.field_mapping.v1",
       idempotency_key: `${options.buildId}:${batch.binding_id}:field_mapping`,
-    }, options.signal);
+    });
     const mappingReview = applyMappingReview(batch.declared_mappings, review);
     batch = parseDataBatch({
       ...batch,
@@ -304,9 +315,9 @@ export async function reviewBatchForHIL(options: {
       return { batch, unitCorrection: registeredCorrection };
     }
     if (options.gate === null) {
-      throw new BuildError(`unknown unit '${declaredUnit}' requires a durable HIL gate`);
+      throw new BuildError("unknown units require a durable HIL gate");
     }
-    const review = await options.gate.requestHIL({
+    const review = await requestHIL({
       build_id: options.buildId,
       kind: "semantic_review",
       review_type: "unit_conversion",
@@ -331,7 +342,7 @@ export async function reviewBatchForHIL(options: {
       },
       policy_ref: "dataset.unit_conversion.v1",
       idempotency_key: `${options.buildId}:${batch.binding_id}:unit_conversion:${declaredUnit}`,
-    }, options.signal);
+    });
     const unitCorrection = parseUnitCorrection(
       review.decision,
       declaredUnit,

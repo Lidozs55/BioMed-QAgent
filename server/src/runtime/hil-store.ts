@@ -37,6 +37,17 @@ export interface CreateHILRequestInput {
   idempotency_key: string;
 }
 
+export interface CreateHILRequestOptions {
+  /**
+   * When the deterministic request id already exists in a terminal state
+   * (cancelled/expired) without a review — e.g. a previous attempt was
+   * aborted and the same operation replays — write a new generation request
+   * (``hil_<digest>_g<N>``) instead of silently returning the terminal one.
+   * A replay must never await a request the store would refuse to resolve.
+   */
+  recreateIfTerminal?: boolean;
+}
+
 export interface DurableHILStoreOptions {
   now?: () => Date;
 }
@@ -70,6 +81,11 @@ function digest(value: JsonValue): string {
   return createHash("sha256").update(canonicalJson(value), "utf8").digest("hex");
 }
 
+function generationOf(requestId: string): number {
+  const match = /_g(\d+)$/.exec(requestId);
+  return match === null ? 1 : Number(match[1]);
+}
+
 function decisionJson(decision: HILDecision, reason: string | null): JsonValue {
   return { decision: decision as JsonValue, reason };
 }
@@ -84,7 +100,10 @@ export class DurableHILStore {
     this.now = options.now ?? (() => new Date());
   }
 
-  async createRequest(input: CreateHILRequestInput): Promise<HILRequest> {
+  async createRequest(
+    input: CreateHILRequestInput,
+    options: CreateHILRequestOptions = {},
+  ): Promise<HILRequest> {
     requireSafeId(input.task_id, "task_id");
     requireSafeId(input.run_id, "run_id");
     if (input.idempotency_key.trim() === "") {
@@ -104,7 +123,7 @@ export class DurableHILStore {
       policy_ref: input.policy_ref,
     };
     const evidenceDigest = digest(evidenceSnapshot);
-    const requestId = `hil_${digest({
+    const baseRequestId = `hil_${digest({
       task_id: input.task_id,
       run_id: input.run_id,
       policy_ref: input.policy_ref,
@@ -112,42 +131,60 @@ export class DurableHILStore {
       evidence_digest: evidenceDigest,
     }).slice(0, 32)}`;
     return this.serialized(`${input.task_id}:${input.run_id}`, async () => {
-      const existing = await this.readRequest(input.task_id, requestId);
-      if (existing !== null) return this.withEffectiveStatus(input.task_id, existing);
-      const snapshot = await this.repository.getSnapshot(input.task_id);
-      if (
-        snapshot === null ||
-        !snapshot.runs.some((run) => run.run_id === input.run_id)
-      ) {
-        throw new ReferenceError("Run not found");
-      }
-      if (input.blocking) {
-        const pending = await this.findPendingForRunUnlocked(input.task_id, input.run_id);
-        if (pending !== null) {
-          throw new HILConflictError("another blocking HIL request is already pending for this run");
+      const existing = await this.readRequest(input.task_id, baseRequestId);
+      if (existing !== null) {
+        const review = await this.readReview(input.task_id, existing.request_id);
+        if (review !== null || existing.status === "pending") {
+          return this.withEffectiveStatus(input.task_id, existing);
         }
+        // Terminal (cancelled/expired) without a review: a replay must not
+        // silently await a request the store would refuse to resolve.
+        if (!options.recreateIfTerminal) return existing;
+        const requestId = `${baseRequestId}_g${generationOf(existing.request_id) + 1}`;
+        return this.writeNewRequest(input, requestId, evidenceDigest);
       }
-      const request = parseHILRequest({
-        schema_version: "1.0",
-        request_id: requestId,
-        task_id: input.task_id,
-        run_id: input.run_id,
-        build_id: input.build_id,
-        kind: input.kind,
-        review_type: input.review_type,
-        status: "pending",
-        blocking: input.blocking,
-        subject: input.subject,
-        review_items: input.review_items,
-        summary: input.summary,
-        evidence_digest: evidenceDigest,
-        policy_ref: input.policy_ref,
-        created_at: this.now().toISOString(),
-        resolved_at: null,
-      });
-      await this.writeJson(this.requestPath(input.task_id, requestId), request);
-      return request;
+      return this.writeNewRequest(input, baseRequestId, evidenceDigest);
     });
+  }
+
+  private async writeNewRequest(
+    input: CreateHILRequestInput,
+    requestId: string,
+    evidenceDigest: string,
+  ): Promise<HILRequest> {
+    const snapshot = await this.repository.getSnapshot(input.task_id);
+    if (
+      snapshot === null ||
+      !snapshot.runs.some((run) => run.run_id === input.run_id)
+    ) {
+      throw new ReferenceError("Run not found");
+    }
+    if (input.blocking) {
+      const pending = await this.findPendingForRunUnlocked(input.task_id, input.run_id);
+      if (pending !== null) {
+        throw new HILConflictError("another blocking HIL request is already pending for this run");
+      }
+    }
+    const request = parseHILRequest({
+      schema_version: "1.0",
+      request_id: requestId,
+      task_id: input.task_id,
+      run_id: input.run_id,
+      build_id: input.build_id,
+      kind: input.kind,
+      review_type: input.review_type,
+      status: "pending",
+      blocking: input.blocking,
+      subject: input.subject,
+      review_items: input.review_items,
+      summary: input.summary,
+      evidence_digest: evidenceDigest,
+      policy_ref: input.policy_ref,
+      created_at: this.now().toISOString(),
+      resolved_at: null,
+    });
+    await this.writeJson(this.requestPath(input.task_id, requestId), request);
+    return request;
   }
 
   async getRequest(taskId: string, requestId: string): Promise<HILRequest | null> {
