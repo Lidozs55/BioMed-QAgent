@@ -190,7 +190,7 @@ export function createWebVisualCaptureTools(options: WebVisualCaptureOptions): {
       "source_assets/figures/ with a provenance meta file (source URL, final " +
       "URL, SHA-256, viewport, label, source id). Uses real browser headers, " +
       "stealth, and 2s rate limiting; viewport clamped to 1920x1080. Use for " +
-      "visual evidence or chart-extraction input when API acquisition failed.",
+      "visual evidence or as chart-extraction input on any public web page.",
     parameters: {
       type: "object",
       properties: {

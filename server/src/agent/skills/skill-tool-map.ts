@@ -118,10 +118,10 @@ export const SKILL_TOOL_MAP: readonly SkillToolMapping[] = Object.freeze([
     ["search_reactome", "get_pathway", "download_reactome"],
   ),
   mapping(
-    "browser_fallback",
+    "browser",
     "acquisition",
-    ["browser", "browser_fallback", "http", "web"],
-    "Last-resort rendered-browser fallback for navigating pages and downloading files when structured API tools fail.",
+    ["browser", "http", "web"],
+    "Render and navigate public web pages and download files through verified content-addressed staging with guarded browser automation.",
     ["navigate_page", "download_from_page"],
   ),
   mapping(
@@ -135,7 +135,7 @@ export const SKILL_TOOL_MAP: readonly SkillToolMapping[] = Object.freeze([
     "web_visual_capture",
     "acquisition",
     ["web_visual_capture", "visual_capture", "web"],
-    "Capture web page screenshots for visual evidence and chart extraction when structured APIs fail.",
+    "Capture web page screenshots for visual evidence and chart extraction on any public biomedical web page.",
     ["capture_web_page", "capture_page_section"],
   ),
   mapping(

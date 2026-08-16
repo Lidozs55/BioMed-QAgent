@@ -109,7 +109,7 @@ describe("builtin database catalogue", () => {
   test("excludes non-selectable skills from the catalogue", () => {
     const names = listBuiltinDatabases(new Set()).map((entry) => entry.name);
     for (const excluded of [
-      "browser_fallback", "local_cache", "web_visual_capture",
+      "browser", "local_cache", "web_visual_capture",
       "literature_understanding", "pdf_extraction", "extract_chart_data_vlm",
       "analysis", "research_data_guidance", "dataset-construction",
     ]) {

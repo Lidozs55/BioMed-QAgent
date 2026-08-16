@@ -1,6 +1,6 @@
 /**
  * P5-07 browser tests: strict egress policy, NodeBrowserPool, and the
- * browser_fallback tools (mirror of ``backend/tests/test_browser_pool.py`` +
+ * browser tools (mirror of ``backend/tests/test_browser_pool.py`` +
  * ``test_egress_proxy.py`` + ``test_skill_browser.py`` behavior).
  */
 
@@ -394,7 +394,7 @@ describe("NodeBrowserPool (real chromium + fixture server)", () => {
   });
 });
 
-describe("browser_fallback tools", () => {
+describe("browser tools", () => {
   let root: string;
   const servers: FixtureServer[] = [];
 
@@ -446,7 +446,7 @@ describe("browser_fallback tools", () => {
     expect(data["method_used"]).toBe("crawl");
     expect(data["status_code"]).toBe(200);
     expect(data["content_type"]).toBe("text/html; charset=utf-8");
-    expect(queries).toEqual([["https://example.com/paper", "browser_fallback", "success", 1]]);
+    expect(queries).toEqual([["https://example.com/paper", "browser", "success", 1]]);
   });
 
   it("navigate_page degrades exactly like Python when the browser pool is unavailable", async () => {
@@ -498,7 +498,7 @@ describe("browser_fallback tools", () => {
     const url = `http://127.0.0.1:${server.port}/data.pdf`;
     const result = await downloadFromPage.execute({ url, filename: "data.pdf" });
     const data = JSON.parse(result.content) as Record<string, unknown>;
-    expect(data["source"]).toBe("browser_fallback");
+    expect(data["source"]).toBe("browser");
     expect(data["source_url"]).toBe(url);
     expect(data["mime_type"]).toBe("application/pdf");
     expect(data["bytes_received"]).toBe(pdfBytes.length);
@@ -518,7 +518,7 @@ describe("browser_fallback tools", () => {
     expect(attempt["source_id"]).toBe(asset["source_id"]);
     expect(asset["successful_attempt_id"]).toBe(attempt["attempt_id"]);
     expect(data["retrieved_at"]).toBe(attempt["finished_at"]);
-    expect(queries).toEqual([["data.pdf", "browser_fallback", "success", 1]]);
+    expect(queries).toEqual([["data.pdf", "browser", "success", 1]]);
   });
 
   it("download_from_page rejects unsafe filenames before any transport", async () => {
@@ -540,7 +540,7 @@ describe("browser_fallback tools", () => {
     });
     const data = JSON.parse(result.content) as Record<string, unknown>;
     expect(data["error"]).toBe("source asset filename is unsafe");
-    expect(data["source"]).toBe("browser_fallback");
+    expect(data["source"]).toBe("browser");
     expect(server.requests).toHaveLength(0);
   });
 

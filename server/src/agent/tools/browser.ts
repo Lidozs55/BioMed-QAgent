@@ -1,5 +1,5 @@
 /**
- * Browser fallback acquisition tools (P5-07; Python
+ * Browser acquisition tools (P5-07; Python
  * ``skills/builtin/acquisition/browser.py`` parity).
  *
  * ``navigate_page`` renders a page through the crawler browser tier and
@@ -45,7 +45,7 @@ import type { ToolHooks } from "./tool-hooks.js";
 import { noopHooks } from "./tool-hooks.js";
 
 const MAX_BODY_CHARS = 5000;
-const SOURCE = "browser_fallback";
+const SOURCE = "browser";
 
 /** Python ``_validate_download_filename`` parity. */
 function validateDownloadFilename(filename: string): void {
@@ -134,8 +134,8 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
     description:
       "Navigate with the guarded Playwright crawler (real browser headers, " +
       "2s rate limiting) and return page metadata and visible text. Extracts " +
-      "the <title> and visible body text (up to 5000 characters). Use this as " +
-      "a last-resort tool when API endpoints are unavailable.",
+      "the <title> and visible body text (up to 5000 characters). Use for " +
+      "direct web navigation and reading page content on any public URL.",
     parameters: {
       type: "object",
       properties: {
@@ -189,8 +189,8 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
     description:
       "Download a file through the pinned public-HTTP transport into immutable " +
       "source assets (bounded 4 GiB, address-pinned transport, browser " +
-      "headers, per-host rate limiting). Use this as a last-resort download " +
-      "tool when API endpoints fail.",
+      "headers, per-host rate limiting). Use directly for any known public " +
+      "file URL that needs verified acquisition.",
     parameters: {
       type: "object",
       properties: {

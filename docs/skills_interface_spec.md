@@ -63,7 +63,7 @@ backend/app/skills/
 │   │   ├── xena.py
 │   │   ├── reactome.py      # search_reactome, get_pathway（三级降级链）
 │   │   ├── pubchem.py       # search_pubchem, get_compound（三级降级链）
-│   │   └── browser.py       # browser_fallback（兜底，委托 crawler 层）
+│   │   └── browser.py       # browser（可直接调用的抓取通道，委托 crawler 层）
 │   ├── processing/
 │   │   ├── extract_tables.py
 │   │   ├── extract_chart_data_vlm.py # 视觉模型图表提取（TODO §5.2）
@@ -743,27 +743,27 @@ skill_registry.register(my_source_skill)
 
 ## 11. 特殊 Skill 说明
 
-### browser_fallback
+### browser
 
 - 位置：[builtin/acquisition/browser.py](../backend/app/skills/builtin/acquisition/browser.py)
 - 加载方式：在 [agent.py](../backend/app/agent_loop/agent.py) 的 `_import_skill_modules()` 模块列表中与其他 skill 走相同导入路径，无单独强制加载逻辑
-- 职责：当所有 API-based acquisition skill 失败时的兜底 HTTP 抓取通道
+- 职责：可直接调用的浏览器/HTTP 抓取通道，用于导航任意公开网页并下载文件
 - 工具：`navigate_page`（浏览页面）、`download_from_page`（流式下载）
 - 实现细节：已重构为委托 [app/tools/crawler.py](../backend/app/tools/crawler.py) 层的 `BROWSER_HEADERS`（真实浏览器 UA + Referer + Accept）、`_rate_limiter`（2s 限速）和 `BeautifulSoup`（HTML 解析）。版本 0.2.0
 
 ### web_visual_capture
 
 - 位置：[builtin/acquisition/web_visual_capture.py](../backend/app/skills/builtin/acquisition/web_visual_capture.py)
-- 加载方式：与 browser_fallback 相同，在 `BUILTIN_SKILL_MODULES` 列表中
+- 加载方式：与 browser 相同，在 `BUILTIN_SKILL_MODULES` 列表中
 - 职责：用 Playwright Chromium 截取网页 / DOM 元素 PNG，作为视觉证据或图表抽取输入
 - 工具：
   - `capture_web_page(url, full_page, viewport_width, viewport_height, wait_until, label)` — 全页截图
   - `capture_page_section(url, selector, viewport_width, viewport_height, wait_until, label)` — DOM 元素裁剪
-- Provenance 模式：复用 browser_fallback 的轻量模式（`SourceRecord(database=BROWSER)` + `add_raw_asset()`），**不** 走 `acquire_source()` HTTPS 白名单
+- Provenance 模式：复用 browser 的轻量模式（`SourceRecord(database=BROWSER)` + `add_raw_asset()`），**不** 走 `acquire_source()` HTTPS 白名单
 - 产物路径：`source_assets/figures/fig_<sha256[:12]>.png`（内容寻址，相同截图自动去重）+ `fig_<sha256[:12]>_meta.json` sidecar
 - HTTP 行为：委托 [app/tools/crawler.py](../backend/app/tools/crawler.py) 的 `playwright_screenshot()`，复用 `BROWSER_UA`/`BROWSER_HEADERS`/`STEALTH_JS`/`_rate_limiter`(2s)/`_guard_playwright_route`
 - 安全：`label` 必须匹配 `^[A-Za-z0-9_-]{1,64}$`；viewport 钳制到 1920×1080；文件路径经 `TaskWorkDir.source_asset_file()` 的 `_safe_child` 校验
-- 列表过滤：与 browser_fallback 一样不出现在 `GET /databases` 返回中（routes.py 过滤）
+- 列表过滤：与 browser 一样不出现在 `GET /databases` 返回中（routes.py 过滤）
 - 集成规划：详见 [separateweb_capture_integration_plan.md](separateweb_capture_integration_plan.md)
 - 版本：0.1.0
 
