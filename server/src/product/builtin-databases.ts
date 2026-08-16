@@ -53,7 +53,7 @@ const BUILTIN_DATABASE_RECORDS: Record<string, BuiltinDatabaseRecord> = {
  * (research aids, cache access, visual evidence, …).
  */
 const NON_SELECTABLE_BUILTINS = new Set([
-  "browser_fallback",
+  "browser",
   "local_cache",
   "web_visual_capture",
   "literature_understanding",

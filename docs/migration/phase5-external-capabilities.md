@@ -89,7 +89,7 @@ progress 语义）以 Python 实现为参考；TS 实现必须先通过 fixture 
 | `get_pathway` | 同上 | `pathway_id` | `source, pathway_id, record, method_used, attempts` | `server/src/agent/tools/reactome.ts` | ✅ |
 | `download_reactome` | 同上 | `pathway_id`, `file_type="tsv"` | `source, pathway_id, source_url, local_files[], format_hint, retrieved_at` | `server/src/agent/tools/reactome.ts` | ✅ |
 | `navigate_page` | `skills/builtin/acquisition/browser.py` | `url` | `url, status_code, method_used, title, body_text_preview(≤5000), content_type` / `{url, error}` | `server/src/agent/tools/browser.ts` | ✅ |
-| `download_from_page` | 同上 | `url`, `filename` | `source:"browser_fallback", source_url, local_files[], mime_type, bytes_received, retrieved_at, source_asset, download_attempt` / error | `server/src/agent/tools/browser.ts` | ✅ |
+| `download_from_page` | 同上 | `url`, `filename` | `source:"browser", source_url, local_files[], mime_type, bytes_received, retrieved_at, source_asset, download_attempt` / error | `server/src/agent/tools/browser.ts` | ✅ |
 | `capture_web_page` | `skills/builtin/acquisition/web_visual_capture.py` | `url`, kw-only `full_page=True, viewport_width=1920, viewport_height=1080, wait_until="networkidle", label=None` | `source, url, status_code, local_files[], meta_file, sha256, size_bytes, viewport, full_page, selector, label, captured_at, source_id` | `server/src/agent/tools/web-visual-capture.ts` | ✅ |
 | `capture_page_section` | 同上 | `url, selector` + 同 kw-only | 同上 | `server/src/agent/tools/web-visual-capture.ts` | ✅ |
 | `search_local_cache` | `skills/builtin/acquisition/local_cache.py` | `query`, `max_results=10` | `source:"local_cache", query, results[]` | `server/src/agent/tools/local-cache.ts` | ✅ |

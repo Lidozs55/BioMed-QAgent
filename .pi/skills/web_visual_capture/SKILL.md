@@ -1,6 +1,6 @@
 ---
 name: web_visual_capture
-description: Capture web page screenshots for visual evidence and chart extraction when structured APIs fail.
+description: Capture web page screenshots for visual evidence and chart extraction on any public biomedical web page.
 ---
 
 # Web visual capture
@@ -11,10 +11,10 @@ full-page screenshots, `capture_page_section` for precise DOM element crops
 
 ## When to use
 
-- Visual provenance is required, or structured APIs are unavailable/empty and
-  the page visibly carries the data.
-- **Do not** use for sources with working structured APIs (PubMed, GEO) unless
-  visual provenance is explicitly required.
+- Visual provenance is required for a public web page, or the page visibly
+  carries data or figures that need to be captured as evidence.
+- The capture tools are first-class acquisition tools: call them directly
+  whenever visual evidence or chart-extraction input is needed.
 
 ## How to use
 

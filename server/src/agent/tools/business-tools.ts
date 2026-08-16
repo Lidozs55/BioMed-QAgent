@@ -150,7 +150,7 @@ export async function createBusinessToolBundle(
       crawler: context.browser.crawler,
       hooks: context.hooks,
     });
-    register([browserTools.navigatePage, browserTools.downloadFromPage], "browser_fallback");
+    register([browserTools.navigatePage, browserTools.downloadFromPage], "browser");
     const captureTools = createWebVisualCaptureTools({
       taskRoot,
       crawler: context.browser.crawler,
