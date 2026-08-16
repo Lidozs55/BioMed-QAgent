@@ -599,6 +599,9 @@ export class TypeScriptDatasetCore {
       cancellationRequested: () => signal.aborted,
       cancellationSignal: signal,
       operationTimeoutMs: this.options.operationTimeoutMs ?? 0,
+      // Cross-restart continuation: rebuild in-memory runner state from the
+      // checkpoint so the plan can continue from the suspension point.
+      rehydrateCompletedRunners: true,
       eventSink: this.options.eventSink === undefined || this.options.eventSink === null
         ? null
         : (event) => this.options.eventSink?.(event, buildId),
@@ -615,11 +618,19 @@ export class TypeScriptDatasetCore {
     let outcome: Awaited<ReturnType<DatasetBuildExecutor["run"]>>;
     try {
       outcome = await executor.run();
+      // When the whole plan was checkpoint-completed (re-execution of a
+      // finished build), the publish runner does not re-run — its output
+      // still carries the deterministic publication id.
+      const publishOutput = executor.getOutput("publish");
+      const publicationId = runnerState.publicationId ??
+        (typeof publishOutput?.publication_id === "string"
+          ? publishOutput.publication_id
+          : null);
       return {
         build_id: buildId,
         status: outcome.status,
         error: outcome.error === null ? null : outcome.error.message,
-        publication_id: runnerState.publicationId,
+        publication_id: publicationId,
         manifest: runnerState.manifest,
         validation: runnerState.validation,
         completed_operations: outcome.completedOperationIds,

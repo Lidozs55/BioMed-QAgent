@@ -120,6 +120,25 @@ export const PHASE_A_KINDS: ReadonlySet<OperationKind> = new Set([
   "canonicalize",
 ]);
 
+/**
+ * Operation kinds whose runner keeps in-memory pipeline state (parsed
+ * batches, canonical results, integration) that later phases consume. When
+ * a build resumes from its checkpoint (e.g. deterministic continuation
+ * after a server restart) the completed ops are silently reused, so the
+ * runner must re-run for these kinds to rebuild that state before the plan
+ * continues from the suspension point.
+ */
+const REHYDRATE_RUNNER_KINDS: ReadonlySet<OperationKind> = new Set([
+  "acquire",
+  "parse",
+  "canonicalize",
+  "integrate",
+  // validate_profile reassembles manifest + validation from the integration
+  // and persisted artifacts (idempotent). publish is deliberately NOT here:
+  // its promotion is one-shot and fails if the version dir already exists.
+  "validate_profile",
+]);
+
 export interface ExecutorOptions {
   taskId: string;
   buildId: string;
@@ -139,6 +158,15 @@ export interface ExecutorOptions {
   discardOutputs?: ((op: OperationSpec) => void) | null;
   /** Per-operation wall-clock timeout in ms (M2 I-03; 0 = unlimited). */
   operationTimeoutMs?: number;
+  /**
+   * Deterministic resume (cross-restart continuation): when true and the
+   * checkpoint has both completed and incomplete operations, the executor
+   * silently re-runs the completed stateful runners (see
+   * ``rehydrateCheckpoint``) so in-memory pipeline state is rebuilt before
+   * the plan continues. Off by default to honor the Python-parity contract
+   * that digest-matched reuse never invokes the runner.
+   */
+  rehydrateCompletedRunners?: boolean;
   /** Core operation lifecycle sink (M2 I-05). */
   eventSink?: CoreEventSink | null;
 }
@@ -161,6 +189,7 @@ export class DatasetBuildExecutor {
   private readonly discardOutputs: ((op: OperationSpec) => void) | null;
   private readonly perBindingOutcomes: Record<string, BindingRejection>;
   private readonly operationTimeoutMs: number;
+  private readonly rehydrateCompletedRunners: boolean;
   private readonly eventSink: CoreEventSink | null;
 
   private state: ReturnType<typeof loadBuildState> | null = null;
@@ -185,6 +214,7 @@ export class DatasetBuildExecutor {
     this.discardOutputs = options.discardOutputs ?? null;
     this.perBindingOutcomes = options.perBindingOutcomes ?? {};
     this.operationTimeoutMs = options.operationTimeoutMs ?? 0;
+    this.rehydrateCompletedRunners = options.rehydrateCompletedRunners ?? false;
     this.eventSink = options.eventSink ?? null;
     if (
       this.resumeFrom !== null &&
@@ -206,6 +236,7 @@ export class DatasetBuildExecutor {
         this.attemptsPath(),
       );
       this.recoverInflightAttempt();
+      await this.rehydrateCheckpoint();
     } catch (error) {
       return this.outcomeFailed(
         "internal_error",
@@ -245,6 +276,66 @@ export class DatasetBuildExecutor {
       (this.cancellationRequested !== null && this.cancellationRequested()) ||
       this.cancellationSignal?.aborted === true
     );
+  }
+
+  /**
+   * Completed-operation outputs (checkpoint-reloaded or re-run), keyed by
+   * operation id. Lets callers recover phase-B results (e.g. the publish
+   * publication id) without re-running one-shot operations.
+   */
+  getOutput(operationId: string): Record<string, unknown> | undefined {
+    return this.outputs[operationId];
+  }
+
+  /**
+   * Rebuild in-memory pipeline state for a checkpointed (already completed)
+   * plan. Reuse alone only populates ``outputs``; the runner also keeps
+   * ``runnerState`` (parsed batches, canonical results, integration) that
+   * downstream operations depend on, so those runners re-execute silently
+   * (no events, no checkpoint writes) in plan order. Idempotent: the same
+   * fixed inputs reproduce the same outputs and the store stays unchanged.
+   * Operations that were still in flight (the suspension point) are not
+   * completed, so they are skipped and re-run for real by ``runPlan``.
+   */
+  private async rehydrateCheckpoint(): Promise<void> {
+    if (!this.rehydrateCompletedRunners) return;
+    const state = this.state;
+    if (state === null) return;
+    // With a fully completed plan nothing will execute downstream of the
+    // reused operations, so in-memory state is irrelevant (and re-running
+    // one-shot work like publish must never happen).
+    const hasIncomplete = this.plan.some(
+      (op) => state.completed_operations[op.operation_id] === undefined,
+    );
+    if (!hasIncomplete) return;
+    for (const op of this.plan) {
+      if (this.isCancelled()) return;
+      const outputDigest = state.completed_operations[op.operation_id];
+      if (outputDigest === undefined) continue;
+      const scope = this.digestScope(op);
+      const reusable = findReusable(
+        state,
+        op.operation_id,
+        computeInputDigest(op, scope),
+        computeParameterDigest(op, scope),
+      );
+      if (reusable !== null && reusable.output_digest === outputDigest) {
+        const loaded = loadOperationOutput(this.stateDir, {
+          taskRoot: this.taskRoot,
+          taskId: this.taskId,
+          buildId: this.buildId,
+          operationId: op.operation_id,
+          operationAttemptId: reusable.operation_attempt_id,
+          outputDigest: reusable.output_digest,
+        });
+        if (loaded !== null) this.outputs[op.operation_id] = loaded;
+      }
+      if (!REHYDRATE_RUNNER_KINDS.has(op.kind)) continue;
+      // The runner rebuilds its in-memory state from the same fixed inputs;
+      // cooperative cancel + operation timeout still apply. A cancellation
+      // here surfaces as BuildCancelledError (mapped in executeOperation).
+      await this.executeOperation(op, this.availableUpstream(op));
+    }
   }
 
   private recoverInflightAttempt(): void {
