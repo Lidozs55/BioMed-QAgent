@@ -88,23 +88,6 @@ async function resolveOnPath(executable: string): Promise<string | null> {
   return null;
 }
 
-function disabledResult(command: string[]): WorkspaceExecResult {
-  return {
-    command,
-    exitCode: null,
-    stdout: "",
-    stderr:
-      "exec is disabled in this environment (development exec is not enabled). " +
-      "Do not rely on running commands; use workspace_read / workspace_search / " +
-      "workspace_write / workspace_edit instead.",
-    durationMs: 0,
-    truncated: false,
-    timedOut: false,
-    cancelled: false,
-    policy: "disabled",
-  };
-}
-
 /**
  * Build the display/audit form of a command (round-3/round-4 audit): the
  * executable keeps its FULL path so the approval card shows exactly WHICH
@@ -311,10 +294,6 @@ export async function executeWorkspaceCommand(
   registry: WorkspaceProcessRegistry,
 ): Promise<WorkspaceExecResult> {
   const command = await sanitizedCommand(input.executable, input.args, context.workspaceRoot);
-  // Environment-level exec switch (HIL branch): when development exec is not
-  // enabled, the command is hard-disabled BEFORE the permission system is
-  // consulted — no ask, no grant path.
-  if (context.developmentExec?.enabled !== true) return disabledResult(command);
   const invalid = validateCommand(input, context);
   if (invalid !== undefined) return rejectedResult(command, invalid);
   // process.exec is an independent high-risk capability (plan §25–§27): the

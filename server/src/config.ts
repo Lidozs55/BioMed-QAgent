@@ -13,20 +13,12 @@ export interface HostConfig {
    * regardless of preset. Removed once the settings layer stabilizes.
    */
   agentExecPolicy: AgentExecPolicy | null;
-  /**
-   * Environment-level exec switch (HIL branch): when false (default) command
-   * execution is hard-disabled before the permission system is consulted —
-   * the agent gets ``policy: "disabled"`` without an ask. When true, exec
-   * flows through the permission broker (preset/grants/rules/asks).
-   */
-  workspaceDevExec: boolean;
 }
 export const DEFAULT_HOST_CONFIG = {
   HOST: "127.0.0.1",
   PORT: "5173",
   SHUTDOWN_TIMEOUT_MS: "10000",
   AGENT_EXEC_POLICY: "",
-  WORKSPACE_DEV_EXEC: "0",
 } as const;
 
 function parsePort(name: string, value: string): number {
@@ -59,26 +51,7 @@ export function parseHostConfig(environment: Environment): HostConfig {
       environment.SHUTDOWN_TIMEOUT_MS ?? DEFAULT_HOST_CONFIG.SHUTDOWN_TIMEOUT_MS,
     ),
     agentExecPolicy: parseAgentExecPolicy(environment.AGENT_EXEC_POLICY),
-    workspaceDevExec: parseChoice(
-      "WORKSPACE_DEV_EXEC",
-      environment.WORKSPACE_DEV_EXEC,
-      DEFAULT_HOST_CONFIG.WORKSPACE_DEV_EXEC,
-      ["0", "1"] as const,
-    ) === "1",
   };
-}
-
-function parseChoice(
-  name: string,
-  value: string | undefined,
-  fallback: string,
-  choices: readonly string[],
-): string {
-  const resolved = value ?? fallback;
-  if (!choices.includes(resolved)) {
-    throw new Error(`${name} must be one of: ${choices.join(", ")}`);
-  }
-  return resolved;
 }
 
 function parseAgentExecPolicy(value: string | undefined): AgentExecPolicy | null {

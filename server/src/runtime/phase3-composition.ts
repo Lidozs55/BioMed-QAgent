@@ -181,11 +181,6 @@ export interface Phase3RuntimeOptions {
   repositoryRoot: string;
   /** Migration override for process.exec policy (plan §58). */
   agentExecPolicy: "deny" | "ask" | "allow" | null;
-  /**
-   * Environment-level exec switch (HIL branch): false (default) hard-disables
-   * command execution before the permission system is consulted.
-   */
-  workspaceDevExec?: boolean;
   /** Shared persistent permission settings (presets + rules). */
   permissionPolicyStore?: PermissionPolicyStore;
   /** Live permission brokers per task (preset switch invalidation, grant view/revoke). */
@@ -271,9 +266,6 @@ export async function createPhase3Runtime(
         repositoryRoot: options.repositoryRoot,
         permissions: permissionBroker,
         audit: new AppendOnlyTaskAuditSink(taskRoot),
-        ...(options.workspaceDevExec === true
-          ? { developmentExec: { enabled: true as const } }
-          : {}),
       });
       const tsCore = new TypeScriptDatasetCore({
         taskId,

@@ -10,7 +10,7 @@ export interface WorkspaceAuditRecord {
   operation: WorkspaceOperation;
   path?: string;
   command?: string[];
-  result: "success" | "rejected" | "disabled" | "cancelled" | "timed_out" | "failed";
+  result: "success" | "rejected" | "cancelled" | "timed_out" | "failed";
   durationMs: number;
   truncated: boolean;
   timestamp: string;
