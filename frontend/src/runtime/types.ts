@@ -236,6 +236,8 @@ export interface ToolCallItem extends ConversationItemBase {
   status: "running" | "completed" | "error";
   output: string | null;
   completedSequence: number | null;
+  /** Download/operation progress bound to this tool call (see pipeline reducer). */
+  progress?: DownloadProgressProjection | null;
 }
 
 export interface StageItem extends ConversationItemBase {
@@ -253,8 +255,41 @@ export interface OperationItem extends ConversationItemBase {
   label: string | null;
   category: string | null;
   status: "running" | "completed" | "failed" | "skipped" | "cancelled";
-  progress: { kind: string; current: number; total: number | null } | null;
+  progress: DownloadProgressProjection | null;
   error: string | null;
+}
+
+/** Live byte-level progress carried by downloads (kind "downloaded_bytes"). */
+export interface DownloadProgressProjection {
+  kind: string;
+  current: number;
+  total: number | null;
+  /** Wire-level operation_progress detail (e.g. source/accession/filename). */
+  detail: Record<string, unknown> | null;
+  /** Envelope timestamp of the latest progress event, for stall detection. */
+  updatedAt: string;
+}
+
+/**
+ * Pause/resume controls for a long-running acquisition (download). The
+ * operation item renders a pause button while the download is advancing and
+ * switches to a resume button once it stops (terminal run or stale progress).
+ */
+/** Tool invocation identity needed to resume an interrupted download directly. */
+export interface DownloadResumeRequest {
+  toolName: string;
+  arguments: Record<string, unknown> | null;
+}
+
+export interface DownloadControl {
+  taskId: string;
+  onPause: (taskId: string, runId: string) => Promise<void> | void;
+  /** Resumes the download directly (no AI pass); the user sends "继续" afterwards. */
+  onResume: (
+    taskId: string,
+    runId: string,
+    resume: DownloadResumeRequest,
+  ) => Promise<void> | void;
 }
 
 export interface ProgressItem extends ConversationItemBase {

@@ -20,6 +20,22 @@
 
 > 决策依据：ADR-003、ADR §20。
 
+### 4.1 大文件下载：断点续传与进度
+
+`acquireSource`（`server/src/external/acquisition/downloader.ts`）支持断点续传：
+
+- 调用方传入**自有 part 文件**（`partPath`）与已接收字节数（`resumeFromBytes`）时，
+  下载器发送 `Range: bytes=<offset>-`；服务器返回 **206** 则追加写入，返回 **200**
+  （忽略 Range）则截断重头；续传后对**整个文件**重新哈希（前缀重读），保证
+  `SourceAsset.sha256` 覆盖全量内容。
+- 非 abort 失败时**保留调用方 part 文件**供重试续传；默认（无 `partPath`）part
+  始终清理。abort/cancel 对调用方 part 同样保留，便于用户取消后重试续传。
+- `download_xena` 工具据此自动重试（网络错误/超时等瞬态码，指数退避），并以
+  节流（1s 或 8MiB）上报 `operation_progress(downloaded_bytes)`，长下载不再表现为
+  "卡死"。
+
+> 决策依据：2026-08-15 任务 `task_ts_888508a7`（Xena 多 GB 数据集下载无进度反馈）。
+
 ---
 
 ## 5. 执行模型：服务端固定构建骨架

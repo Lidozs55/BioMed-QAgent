@@ -39,7 +39,11 @@ import type {
   StartTaskInput,
   TaskRunAccepted,
 } from "@/runtime/contracts";
-import type { ConversationItem, RunProjection } from "@/runtime/types";
+import type {
+  ConversationItem,
+  DownloadControl,
+  RunProjection,
+} from "@/runtime/types";
 import { errorMessage } from "@/lib/utils";
 import { estimateContextTokens } from "@/lib/tokenEstimate";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -78,6 +82,11 @@ interface ChatPanelProps {
     decision: "allow" | "deny",
     grantScope?: "once" | "run" | "task" | "persistent",
   ) => Promise<void>;
+  /** Resumes an interrupted download directly (no AI pass). */
+  resumeDownload?: (
+    taskId: string,
+    input: { toolName: string; arguments: Record<string, unknown> | null },
+  ) => Promise<TaskRunAccepted>;
   loadOlderMessages?: (taskId: string) => Promise<void>;
   /** Trigger context compaction on a task */
   compactTask?: (taskId: string) => Promise<void>;
@@ -121,6 +130,12 @@ const STATUS_LABELS = {
   cancelled: "任务已取消",
   interrupted: "任务已中断",
 } as const;
+
+/**
+ * 任务在没有任何新事件（summary.updated_at 不前进）的情况下持续多久后，
+ * 前端提示任务可能挂起/异常终止，并给出取消重试入口（异常终止的及时提示）。
+ */
+const STALL_THRESHOLD_MS = 2 * 60 * 1000;
 
 const BUILD_LABELS: Record<BuildResultStatus, string> = {
   succeeded: "构建成功",
@@ -221,6 +236,7 @@ export function ChatPanel({
   cancelRun,
   resumeRun,
   resolvePermission,
+  resumeDownload,
   loadOlderMessages,
   compactTask,
   injectTaskContext,
@@ -243,6 +259,13 @@ export function ChatPanel({
     activeTaskId !== null &&
     activeTaskId === hydratingTaskId &&
     activeTask !== undefined;
+  // 周期性心跳：仅当没有任何新事件（updated_at 不前进）时才能发现"卡死"，
+  // 所以用一个定时 tick 驱动重算，而非等待 store 变化。
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowTick(Date.now()), 10_000);
+    return () => window.clearInterval(timer);
+  }, []);
   const sendShortcut = usePreferencesStore((state) => state.sendShortcut);
   const showContextUsage = usePreferencesStore((state) => state.showContextUsage);
   const followUpMode = usePreferencesStore((state) => state.followUpMode);
@@ -324,6 +347,50 @@ export function ChatPanel({
     activeTask.summary.mode === "agent" &&
     continueTask !== undefined;
   const activeRunId = activeTask?.summary.active_run_id ?? null;
+  const stallMs =
+    activeTask !== undefined &&
+    activeTask.summary.mode === "agent" &&
+    (activeTask.summary.status === "running" ||
+      activeTask.summary.status === "finalizing")
+      ? nowTick - Date.parse(activeTask.summary.updated_at)
+      : 0;
+  const stalled =
+    activeRunId !== null && Number.isFinite(stallMs) && stallMs > STALL_THRESHOLD_MS;
+  const cancelStalledRun = useCallback(async () => {
+    if (activeTaskId === null || activeTask === undefined) return;
+    const runId = activeTask.summary.active_run_id;
+    if (runId === null || cancelRun === undefined) return;
+    try {
+      await cancelRun(activeTaskId, runId);
+      toast.success("已发送取消请求", {
+        description: "任务将在当前步骤结束后停止，可重新提问重试",
+      });
+    } catch (error) {
+      toast.error("取消失败", {
+        description: errorMessage(error, "请稍后重试"),
+      });
+    }
+  }, [activeTaskId, activeTask, cancelRun]);
+  /**
+   * Pause/resume controls for download operations. Pause cancels the current
+   * run (the server keeps the partial file for resumable acquisition); resume
+   * starts a follow-up run whose agent continues from the interrupted step.
+   */
+  const downloadControl = useMemo<DownloadControl | undefined>(() => {
+    if (activeTaskId === null || cancelRun === undefined || resumeDownload === undefined) {
+      return undefined;
+    }
+    return {
+      taskId: activeTaskId,
+      onPause: (taskId, runId) => cancelRun(taskId, runId),
+      // Resume the download directly through the standalone endpoint (no AI
+      // inference); after it completes the room prompts the user to send
+      // "继续" to pick the analysis back up.
+      onResume: async (taskId, _runId, resume) => {
+        await resumeDownload(taskId, resume);
+      },
+    };
+  }, [activeTaskId, cancelRun, resumeDownload]);
   const activeQueue =
     activeTaskId === null ? [] : (queuedFollowUps[activeTaskId] ?? []);
   // 运行中也可以发送：加入队列等待当前回答结束，或调整方向取消并重引导。
@@ -810,6 +877,32 @@ export function ChatPanel({
         </div>
       )}
 
+      {stalled && (
+        <Alert
+          variant="destructive"
+          className="mx-4 mb-2 shrink-0"
+          data-slot="stall-hint"
+        >
+          <WarningCircleIcon />
+          <AlertDescription className="flex flex-wrap items-center gap-2">
+            <span>
+              任务已约 {Math.max(2, Math.floor(stallMs / 60000))} 分钟没有任何新事件，可能已挂起或网络中断。
+              可取消后重新提问，等待中的大文件下载将在重试时自动断点续传。
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="ml-auto"
+              onClick={() => void cancelStalledRun()}
+              aria-label="取消当前任务"
+            >
+              取消当前任务
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+
       <MessageScrollerProvider autoScroll>
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <MessageScroller className="min-w-0 flex-1">
@@ -845,7 +938,11 @@ export function ChatPanel({
                   </MessageScrollerItem>
                 )}
 
-                <ConversationList items={items} activeRunId={activeRunId} />
+                <ConversationList
+                  items={items}
+                  activeRunId={activeRunId}
+                  downloadControl={downloadControl}
+                />
 
                 {showActiveRunStatus && activeRunId !== null && (
                   <MessageScrollerItem messageId={`live:${activeRunId}:assistant:status`}>

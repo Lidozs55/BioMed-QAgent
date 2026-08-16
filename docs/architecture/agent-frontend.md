@@ -211,6 +211,21 @@ durable `assistant_delta` 无 `stream_id`（Pi adapter 路径）时，`stream.ts
 `live:<run>:<epoch>` 分段 ID（`tool_started` 每次递增该计数），因此工具调用
 前后的正文落在不同的 `assistant_segment`，而不是合并进同一个 item。
 
+任务长时间无新事件（`summary.updated_at` 不前进，默认 2 分钟）时，ChatPanel
+显示"可能已挂起"提示并给出取消入口（`STALL_THRESHOLD_MS`）。下载类工具会
+周期性上报 `operation_progress`（downloaded_bytes），因此正常大文件下载不会误报。
+
+**下载进度与直接续传**（P5-D3 part 文件 + 独立端点）：字节级下载进度只渲染在
+`tool_call` 气泡内（`DownloadProgress`），operation 行只保留状态徽章，避免时间线
+出现两条重复进度条。`pipeline.ts` 把 `downloaded_bytes` 进度绑定到所属工具调用：
+优先匹配 `detail.accession` 与工具 `arguments` 相等的 running tool_call，否则回退
+到该 run 最近启动的 running tool_call（防止绑定到错误的工具气泡）。前端"恢复下载"
+调用 `POST /api/v1/tasks/{taskId}/downloads/resume`（携带 `tool_name` +
+`arguments`），后端直接重放下载工具而不经过 AI 推理：创建 follow-up run、合成
+`run_started`/`tool_started`/`operation_progress`/`tool_completed`/`run_completed`
+事件流，进度条照常走；下载完成后由用户输入"继续"再发起 AI run 继续分析。
+`cancelRun` 会 abort 在途的恢复下载（`ActiveTask.activeDownload`）。
+
 `toolLabels` 映射 `toolName + arguments` → `{ verb, target, details? }` 三元组，
 状态条与 ToolCallStep 复用同一映射。
 

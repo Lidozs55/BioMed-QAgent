@@ -213,6 +213,9 @@ export default function App() {
                 resolvePermission={(taskId, runId, requestId, decision, grantScope) =>
                   controller.resolvePermission(taskId, runId, requestId, decision, grantScope)
                 }
+                resumeDownload={(taskId, input) =>
+                  controller.resumeDownload(taskId, input)
+                }
                 loadOlderMessages={(taskId) =>
                   controller.loadOlderMessages(taskId)
                 }

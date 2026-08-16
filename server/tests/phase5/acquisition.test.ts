@@ -348,6 +348,125 @@ describe("acquireSource failure paths", () => {
   });
 });
 
+describe("acquireSource resume support (caller-owned part)", () => {
+  async function seedPart(name: string, content: string): Promise<string> {
+    await mkdir(dirs.downloadTmp, { recursive: true });
+    const partPath = path.join(dirs.downloadTmp, name);
+    await writeFile(partPath, content);
+    return partPath;
+  }
+
+  it("resumes an existing caller-owned part via Range and hashes the full file", async () => {
+    const content = "0123456789ABCDEF";
+    const partPath = await seedPart("resume_test.part", content.slice(0, 6));
+    const ranges: string[] = [];
+    const fixture = await startFixtureServer((req, res) => {
+      ranges.push(req.headers["range"] ?? "");
+      res.writeHead(206, {
+        "content-type": "application/octet-stream",
+        "content-length": "10",
+      });
+      res.end(content.slice(6));
+    });
+    fixtures.push(fixture);
+    const result = await acquireSource({
+      source: sourceRecord(),
+      filename: "file.bin",
+      workdirRoot: root,
+      cache: new ContentCache(path.join(root, "cache")),
+      client: client(fixture.port),
+      dataLevel: "repository_processed",
+      maxBytes: 1_000_000,
+      allowedHosts: new Set([HOST]),
+      partPath,
+      resumeFromBytes: 6,
+    });
+    expect(result.attempt.status).toBe("succeeded");
+    expect(result.attempt.bytes_received).toBe(content.length);
+    expect(result.asset?.sha256).toBe(sha256(content));
+    const published = path.join(root, result.asset?.relative_path ?? "");
+    expect(await readFile(published, "utf8")).toBe(content);
+    expect(ranges).toEqual(["bytes=6-"]);
+  });
+
+  it("restarts from scratch when the server ignores Range (HTTP 200)", async () => {
+    const content = "FULL-BODY-CONTENT";
+    const partPath = await seedPart("resume_ignored.part", "stale-prefix");
+    const fixture = await startFixtureServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/octet-stream" });
+      res.end(content);
+    });
+    fixtures.push(fixture);
+    const result = await acquireSource({
+      source: sourceRecord(),
+      filename: "file.bin",
+      workdirRoot: root,
+      cache: new ContentCache(path.join(root, "cache")),
+      client: client(fixture.port),
+      dataLevel: "repository_processed",
+      maxBytes: 1_000_000,
+      allowedHosts: new Set([HOST]),
+      partPath,
+      resumeFromBytes: 12,
+    });
+    expect(result.attempt.status).toBe("succeeded");
+    expect(result.attempt.bytes_received).toBe(content.length);
+    expect(result.asset?.sha256).toBe(sha256(content));
+    const published = path.join(root, result.asset?.relative_path ?? "");
+    expect(await readFile(published, "utf8")).toBe(content);
+  });
+
+  it("keeps a caller-owned part on failure so callers can resume", async () => {
+    const partPath = await seedPart("resume_keep.part", "012345");
+    const fixture = await startFixtureServer((_req, res) => {
+      res.writeHead(503, {});
+      res.end("unavailable");
+    });
+    fixtures.push(fixture);
+    const result = await acquireSource({
+      source: sourceRecord(),
+      filename: "file.bin",
+      workdirRoot: root,
+      cache: new ContentCache(path.join(root, "cache")),
+      client: client(fixture.port),
+      dataLevel: "repository_processed",
+      maxBytes: 1_000_000,
+      allowedHosts: new Set([HOST]),
+      partPath,
+      resumeFromBytes: 6,
+    });
+    expect(result.attempt.status).toBe("failed");
+    expect(await readFile(partPath, "utf8")).toBe("012345");
+  });
+
+  it("falls back to a fresh download when the resume point is stale", async () => {
+    const content = "fresh-content";
+    const partPath = await seedPart("resume_stale.part", "0123456789"); // 10 bytes, but resume says 4
+    const fixture = await startFixtureServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/octet-stream" });
+      res.end(content);
+    });
+    fixtures.push(fixture);
+    const result = await acquireSource({
+      source: sourceRecord(),
+      filename: "file.bin",
+      workdirRoot: root,
+      cache: new ContentCache(path.join(root, "cache")),
+      client: client(fixture.port),
+      dataLevel: "repository_processed",
+      maxBytes: 1_000_000,
+      allowedHosts: new Set([HOST]),
+      partPath,
+      resumeFromBytes: 4,
+    });
+    expect(result.attempt.status).toBe("succeeded");
+    expect(result.attempt.bytes_received).toBe(content.length);
+    expect(result.asset?.sha256).toBe(sha256(content));
+    const published = path.join(root, result.asset?.relative_path ?? "");
+    expect(await readFile(published, "utf8")).toBe(content);
+  });
+});
+
 describe("cache and publication invariants", () => {
   it("fails closed on a corrupt cached blob", async () => {
     const content = "corrupt-me";
@@ -472,6 +591,37 @@ describe("cancellation", () => {
     await expect(noPartFiles()).resolves.toBe(true);
     const assets = await readdir(dirs.sourceAssets).catch(() => []);
     expect(assets).toHaveLength(0);
+  });
+
+  it("keeps a caller-owned part on abort so a later retry can resume", async () => {
+    const controller = new AbortController();
+    // 预置部分内容：abort 不应删除调用方 part（断点续传依赖它）。
+    await mkdir(dirs.downloadTmp, { recursive: true });
+    const partPath = path.join(dirs.downloadTmp, "resume_abort.part");
+    await writeFile(partPath, "first-chunk");
+    const fixture = await startFixtureServer((_req, res) => {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.write("more-bytes");
+      controller.abort();
+    });
+    fixtures.push(fixture);
+    await expect(
+      acquireSource({
+        source: sourceRecord(),
+        filename: "f.bin",
+        workdirRoot: root,
+        cache: new ContentCache(path.join(root, "cache")),
+        client: client(fixture.port),
+        dataLevel: "repository_processed",
+        maxBytes: 1000,
+        allowedHosts: new Set([HOST]),
+        signal: controller.signal,
+        partPath,
+        resumeFromBytes: 11,
+      }),
+    ).rejects.toThrow();
+    // 无论 abort 是否已收到增量字节，调用方 part 必须保留。
+    await expect(readFile(partPath, "utf8")).resolves.toMatch(/first-chunk/);
   });
 });
 

@@ -10,6 +10,7 @@
 
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
+import { stat, unlink } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { createGunzip } from "node:zlib";
 import path from "node:path";
@@ -37,6 +38,18 @@ import { DATA_LEVEL, DATABASE } from "../../dataset/contracts/enums.js";
 export const XENA_MAX_DOWNLOAD_BYTES = 4096 * 1024 * 1024;
 /** Python ``DEFAULT_RATE_LIMIT_SECONDS`` (AGENTS.md: 2s between requests). */
 export const XENA_RATE_LIMIT_MS = 2000;
+/** Minimum interval between emitted download-progress events. */
+export const XENA_PROGRESS_INTERVAL_MS = 1000;
+/** Progress is also emitted whenever this many new bytes arrive. */
+export const XENA_PROGRESS_BYTES_STEP = 8 * 1024 * 1024;
+/** Transient failure codes worth resuming the download for. */
+export const XENA_RETRYABLE_CODES: ReadonlySet<string> = new Set([
+  "network_error",
+  "timeout",
+  "internal_error",
+]);
+export const XENA_MAX_DOWNLOAD_ATTEMPTS = 3;
+export const XENA_RETRY_BASE_DELAY_MS = 2000;
 
 export interface XenaToolDeps extends ToolServiceDeps {
   client: PublicHttpClient;
@@ -196,6 +209,7 @@ export async function downloadXena(
   const fileType = rawFileType.toLowerCase().trim().replace(/^\.+/, "");
   const maxBytes = deps.maxDownloadBytes ?? XENA_MAX_DOWNLOAD_BYTES;
   const pace = (): Promise<void> => rateLimit(deps.rateLimitMs ?? XENA_RATE_LIMIT_MS);
+  const hooks = noopHooks(deps.hooks);
   const dirs = taskWorkDirs(deps.taskRoot);
 
   const url = buildXenaDownloadUrl(datasetId);
@@ -212,53 +226,119 @@ export async function downloadXena(
     retrieved_at: retrievedAt,
   };
 
-  await pace();
-  const result = await acquireSource({
-    source,
-    filename: localName,
-    workdirRoot: deps.taskRoot,
-    cache: deps.cache,
-    client: deps.client,
-    dataLevel: DATA_LEVEL.REPOSITORY_PROCESSED,
-    maxBytes,
-    accept: "application/gzip",
-    signal,
-  });
-  if (result.attempt.status === "failed" || result.asset === null) {
-    return {
+  // Caller-owned, deterministic part file per URL so retries append to the
+  // same bytes (acquireSource resumes via Range instead of restarting).
+  const partPath = path.join(
+    dirs.downloadTmp,
+    `resume_${createHash("sha256").update(url).digest("hex").slice(0, 20)}.part`,
+  );
+  // Throttled live progress (interval OR byte step), so long Xena downloads
+  // keep the event stream alive and the UI never looks "stuck".
+  let lastProgressAt = 0;
+  let lastReportedBytes = 0;
+  const reportProgress = (bytesReceived: number, declared: number | null): void => {
+    const now = Date.now();
+    if (
+      now - lastProgressAt < XENA_PROGRESS_INTERVAL_MS &&
+      bytesReceived - lastReportedBytes < XENA_PROGRESS_BYTES_STEP
+    ) {
+      return;
+    }
+    lastProgressAt = now;
+    lastReportedBytes = bytesReceived;
+    hooks.onProgress("acquisition", "downloaded_bytes", {
+      current: bytesReceived,
+      total: declared,
       source: "xena",
-      dataset_id: datasetId,
-      source_url: url,
-      error: `download failed: ${result.attempt.error_message ?? result.attempt.error_code ?? "unknown error"}`,
-    };
-  }
+      accession: datasetId,
+      filename: localName,
+    });
+  };
 
-  const localGz = path.join(dirs.root, ...result.asset.relative_path.split("/"));
-  const decompressed = xenaDecompressedPath(localGz);
+  // Cross-run resume: pick up a caller-owned part left behind by an
+  // interrupted earlier run (same deterministic path), so the first attempt
+  // continues from those bytes instead of restarting from zero.
+  let resumeBytes = 0;
   try {
-    await pipeline(
-      createReadStream(localGz),
-      createGunzip(),
-      createWriteStream(decompressed, { flags: "w" }),
+    const existing = await stat(partPath);
+    if (existing.isFile()) resumeBytes = existing.size;
+  } catch {
+    // No part file yet — a fresh download.
+  }
+  let lastResult: Awaited<ReturnType<typeof acquireSource>> | null = null;
+  for (let attempt = 1; attempt <= XENA_MAX_DOWNLOAD_ATTEMPTS; attempt += 1) {
+    await pace();
+    const result = await acquireSource({
+      source,
+      filename: localName,
+      workdirRoot: deps.taskRoot,
+      cache: deps.cache,
+      client: deps.client,
+      dataLevel: DATA_LEVEL.REPOSITORY_PROCESSED,
+      maxBytes,
+      accept: "application/gzip",
+      signal,
+      partPath,
+      resumeFromBytes: resumeBytes,
+      progress: reportProgress,
+    });
+    if (result.attempt.status === "succeeded" && result.asset !== null) {
+      await unlink(partPath).catch(() => undefined);
+      const localGz = path.join(dirs.root, ...result.asset.relative_path.split("/"));
+      const decompressed = xenaDecompressedPath(localGz);
+      try {
+        await pipeline(
+          createReadStream(localGz),
+          createGunzip(),
+          createWriteStream(decompressed, { flags: "w" }),
+        );
+      } catch (error) {
+        return {
+          source: "xena",
+          dataset_id: datasetId,
+          source_url: url,
+          local_files: [localGz],
+          error: `decompression failed: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+      return {
+        source: "xena",
+        dataset_id: datasetId,
+        cohort,
+        source_url: url,
+        local_files: [localGz, decompressed],
+        format_hint: `xena_${fileType}`,
+        retrieved_at: retrievedAt,
+      };
+    }
+    lastResult = result;
+    const retryable =
+      attempt < XENA_MAX_DOWNLOAD_ATTEMPTS &&
+      result.attempt.error_code !== null &&
+      XENA_RETRYABLE_CODES.has(result.attempt.error_code) &&
+      result.attempt.bytes_received > 0;
+    if (!retryable) break;
+    resumeBytes = result.attempt.bytes_received;
+    hooks.onProgress("acquisition", "download_retry", {
+      attempt,
+      current: resumeBytes,
+      total: null,
+      message:
+        `下载中断，将从 ${resumeBytes} 字节处续传` +
+        `（第 ${attempt + 1}/${XENA_MAX_DOWNLOAD_ATTEMPTS} 次尝试）`,
+    });
+    await new Promise((resolve) =>
+      setTimeout(resolve, XENA_RETRY_BASE_DELAY_MS * attempt),
     );
-  } catch (error) {
-    return {
-      source: "xena",
-      dataset_id: datasetId,
-      source_url: url,
-      local_files: [localGz],
-      error: `decompression failed: ${error instanceof Error ? error.message : String(error)}`,
-    };
   }
 
+  await unlink(partPath).catch(() => undefined);
   return {
     source: "xena",
     dataset_id: datasetId,
-    cohort,
     source_url: url,
-    local_files: [localGz, decompressed],
-    format_hint: `xena_${fileType}`,
-    retrieved_at: retrievedAt,
+    error:
+      `download failed: ${lastResult?.attempt.error_message ?? lastResult?.attempt.error_code ?? "unknown error"}`,
   };
 }
 

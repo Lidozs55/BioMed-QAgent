@@ -34,7 +34,8 @@ function seedBackgroundTask(): void {
           status: "running",
           active_run_id: "run_background",
           created_at: CREATED_AT,
-          updated_at: CREATED_AT,
+          // 实时时间，避免触发 ChatPanel 的"长时间无事件"挂起提示。
+          updated_at: new Date().toISOString(),
           latest_sequence: 2,
         },
       ],
@@ -601,6 +602,50 @@ describe("ChatPanel", () => {
 
     expect(screen.queryByText("正在思考…")).not.toBeInTheDocument();
     expect(screen.getByText("Streaming answer")).toBeInTheDocument();
+  });
+
+  it("shows a stall hint with a cancel action when a running task has no events", () => {
+    useAgentStore.getState().mergeTaskPage(
+      {
+        active_items: [
+          {
+            task_id: "task_stalled",
+            mode: "agent",
+            databases: ["pubmed"],
+            title: "Stalled task",
+            status: "running",
+            active_run_id: "run_stalled",
+            created_at: CREATED_AT,
+            // 很久没有新事件（updated_at 不前进）
+            updated_at: "2026-07-14T00:00:00Z",
+            latest_sequence: 1,
+          },
+        ],
+        items: [],
+        next_cursor: null,
+      },
+      false,
+    );
+    useAgentStore.getState().setActiveTaskId("task_stalled");
+    const cancelRun = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ChatPanel
+        startTask={vi.fn()}
+        continueTask={vi.fn()}
+        cancelRun={cancelRun}
+      />,
+    );
+
+    expect(screen.getByText(/没有任何新事件/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "取消当前任务" }));
+    expect(cancelRun).toHaveBeenCalledWith("task_stalled", "run_stalled");
+  });
+
+  it("does not show a stall hint while events keep arriving", () => {
+    seedBackgroundTask();
+    useAgentStore.getState().setActiveTaskId("task_background");
+    render(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
+    expect(screen.queryByText(/没有任何新事件/)).not.toBeInTheDocument();
   });
 
   it("shows failed status without duplicating the run failure alert", () => {
@@ -1610,7 +1655,8 @@ describe("ChatPanel", () => {
         status: "running",
         active_run_id: "run_background",
         created_at: CREATED_AT,
-        updated_at: CREATED_AT,
+        // 实时时间，避免触发挂起提示。
+        updated_at: new Date().toISOString(),
         latest_sequence: 2,
       },
       runs: [],

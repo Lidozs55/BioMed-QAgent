@@ -612,6 +612,48 @@ export class RuntimeController {
     await this.transport.recoverSubscription(taskId, lastSequence);
   }
 
+  /**
+   * Resumes an interrupted download directly without an AI pass (the server
+   * re-invokes the acquisition tool on its part file). The follow-up run's
+   * events flow through the same subscription; the user then sends "继续" to
+   * start a normal AI run for the remaining analysis.
+   */
+  async resumeDownload(
+    taskId: string,
+    input: {
+      toolName: string;
+      arguments: Record<string, unknown> | null;
+    },
+  ): Promise<TaskRunAccepted> {
+    const accepted = await this.api.resumeDownload(taskId, {
+      tool_name: input.toolName,
+      arguments: input.arguments ?? {},
+    });
+    await this.enqueueTaskHandoff(taskId, async () => {
+      this.advanceTaskHandoffGeneration(taskId);
+      const task = useAgentStore.getState().tasksById[accepted.task_id];
+      if (task === undefined) return;
+      useAgentStore.setState((state) =>
+        addAcceptedTask(
+          state,
+          {
+            taskId: accepted.task_id,
+            runId: accepted.run_id,
+            requestId: accepted.request_id,
+          },
+          "继续下载被中断的数据文件（自动续传）",
+          task.summary.databases,
+          task.summary.mode,
+          false,
+        ),
+      );
+      const lastSequence =
+        useAgentStore.getState().tasksById[accepted.task_id]?.lastSequence ?? 0;
+      this.transport.subscribe(accepted.task_id, lastSequence);
+    });
+    return accepted;
+  }
+
   async cancelRun(taskId: string, runId: string): Promise<void> {
     await this.enqueueTaskHandoff(taskId, async () => {
       const generation = this.advanceTaskHandoffGeneration(taskId);

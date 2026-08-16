@@ -76,6 +76,12 @@ export interface TasksApi {
     decision: "allow" | "deny",
     grantScope?: "once" | "run" | "task" | "persistent",
   ) => Promise<void>;
+  /** Resumes an interrupted download directly (no AI pass). */
+  resumeDownload: (
+    taskId: string,
+    input: { tool_name: string; arguments: Record<string, unknown> },
+    options?: AdmissionOptions,
+  ) => Promise<TaskRunAccepted>;
   deleteTask: (taskId: string) => Promise<void>;
   fetchArtifacts: (taskId: string) => Promise<ArtifactRecord[]>;
   getArtifactUrl: (taskId: string, artifactId: string) => string;
@@ -136,6 +142,10 @@ export function createTasksApi(http: Http): TasksApi {
           }),
         },
       ),
+    resumeDownload: (taskId, input, admission = {}) =>
+      http.postAdmission(`${http.baseUrl}/tasks/${http.encodeId(taskId)}/downloads/resume`, JSON.stringify({
+        request_id: http.requestId(admission.requestId), tool_name: input.tool_name, arguments: input.arguments,
+      })).then((b) => parseTaskRunAccepted(b)),
     deleteTask: (taskId) =>
       http.requestVoid(`${http.baseUrl}/tasks/${http.encodeId(taskId)}`, { method: "DELETE" }),
     fetchArtifacts: (taskId) =>

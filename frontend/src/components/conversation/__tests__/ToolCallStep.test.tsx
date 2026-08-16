@@ -1,8 +1,8 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { ToolCallStep } from "@/components/conversation/ToolCallStep";
-import type { ToolCallItem } from "@/runtime/types";
+import type { DownloadControl, ToolCallItem } from "@/runtime/types";
 
 const TIMESTAMP = "2026-07-20T00:00:00Z";
 
@@ -147,5 +147,85 @@ describe("ToolCallStep", () => {
     );
     expect(screen.getByText(/检索\s+GEO/)).toBeInTheDocument();
     expect(screen.getByText(/METTL5/)).toBeInTheDocument();
+  });
+});
+
+describe("ToolCallStep download progress", () => {
+  function downloadToolCall(
+    current: number,
+    total: number,
+    updatedAt = TIMESTAMP,
+    status: ToolCallItem["status"] = "running",
+  ): ToolCallItem {
+    return makeToolCall({
+      toolName: "download_xena",
+      arguments: { dataset_id: "TCGA.BRCA.sampleMap/HiSeqV2" },
+      status,
+      progress: {
+        kind: "downloaded_bytes",
+        current,
+        total,
+        detail: { filename: "TCGA.BRCA.sampleMap.HiSeqV2.gz" },
+        updatedAt,
+      },
+    });
+  }
+
+  it("renders a live progress strip inside the tool-call bubble", () => {
+    render(<ToolCallStep item={downloadToolCall(3_411_477, 1_642_160_120)} />);
+    expect(screen.getByTestId("download-percent")).toHaveTextContent("0.2%");
+    expect(screen.getByText("3.3 MB / 1.53 GB")).toBeInTheDocument();
+  });
+
+  it("shows pause while running and calls onPause", () => {
+    const onPause = vi.fn();
+    const control: DownloadControl = {
+      taskId: "task-1",
+      onPause,
+      onResume: vi.fn(),
+    };
+    render(
+      <ToolCallStep
+        item={downloadToolCall(1024, 4096, new Date().toISOString())}
+        downloadControl={control}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "暂停" }));
+    expect(onPause).toHaveBeenCalledWith("task-1", "run-1");
+  });
+
+  it("switches to resume once the tool call stops and calls onResume", () => {
+    const onResume = vi.fn();
+    const control: DownloadControl = {
+      taskId: "task-1",
+      onPause: vi.fn(),
+      onResume,
+    };
+    render(
+      <ToolCallStep
+        item={downloadToolCall(3_411_477, 1_642_160_120, TIMESTAMP, "error")}
+        downloadControl={control}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "恢复下载" }));
+    expect(onResume).toHaveBeenCalledWith("task-1", "run-1", {
+      toolName: "download_xena",
+      arguments: { dataset_id: "TCGA.BRCA.sampleMap/HiSeqV2" },
+    });
+  });
+
+  it("expands to reveal speed, ETA and the filename", () => {
+    const first = downloadToolCall(3_000, 10_000, "2026-07-20T00:00:01Z");
+    const { rerender } = render(<ToolCallStep item={first} />);
+    const second = downloadToolCall(5_000, 10_000, "2026-07-20T00:00:02Z");
+    rerender(<ToolCallStep item={second} />);
+    fireEvent.click(screen.getByRole("button"));
+    expect(screen.getByTestId("download-speed")).toHaveTextContent("2.0 KB/s");
+    expect(screen.getByTestId("download-eta")).toHaveTextContent(
+      "剩余 约 3 秒",
+    );
+    expect(
+      screen.getByText("TCGA.BRCA.sampleMap.HiSeqV2.gz"),
+    ).toBeInTheDocument();
   });
 });
