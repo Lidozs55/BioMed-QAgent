@@ -24,6 +24,7 @@ import type {
   BuildPage,
   DatasetManifest,
   DatasetPublication,
+  DownloadResumeAccepted,
   ErrorCode,
   EventPage,
   ManifestArtifactEntry,
@@ -126,6 +127,14 @@ export function parseTaskRunAccepted(json: unknown): TaskRunAccepted {
     task_id: assertString(Reflect.get(obj, "task_id"), "task_id"),
     run_id: assertString(Reflect.get(obj, "run_id"), "run_id"),
     status: "queued",
+  };
+}
+
+export function parseDownloadResumeAccepted(json: unknown): DownloadResumeAccepted {
+  const obj = assertObject(json, "DownloadResumeAccepted");
+  return {
+    task_id: assertString(Reflect.get(obj, "task_id"), "task_id"),
+    run_id: assertString(Reflect.get(obj, "run_id"), "run_id"),
   };
 }
 

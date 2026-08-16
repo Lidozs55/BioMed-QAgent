@@ -213,6 +213,7 @@ export default function App() {
                 resumeDownload={(taskId, input) =>
                   controller.resumeDownload(taskId, input)
                 }
+                cancelDownload={(taskId) => controller.cancelDownload(taskId)}
                 loadOlderMessages={(taskId) =>
                   controller.loadOlderMessages(taskId)
                 }

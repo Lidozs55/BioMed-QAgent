@@ -191,7 +191,7 @@ describe("ToolCallStep download progress", () => {
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "暂停" }));
-    expect(onPause).toHaveBeenCalledWith("task-1", "run-1");
+    expect(onPause).toHaveBeenCalledWith("task-1");
   });
 
   it("switches to resume once the tool call stops and calls onResume", () => {
@@ -208,7 +208,9 @@ describe("ToolCallStep download progress", () => {
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "恢复下载" }));
-    expect(onResume).toHaveBeenCalledWith("task-1", "run-1", {
+    expect(onResume).toHaveBeenCalledWith("task-1", {
+      runId: "run-1",
+      toolCallId: "call-1",
       toolName: "download_xena",
       arguments: { dataset_id: "TCGA.BRCA.sampleMap/HiSeqV2" },
     });

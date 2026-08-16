@@ -510,7 +510,7 @@ describe("durable formal Agent runtime", () => {
     await runtime.close();
   });
 
-  test("resumes an interrupted download directly without an AI run", async () => {
+  test("resumes an interrupted download directly without an AI run or a new run", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "biomed-durable-resume-dl-"));
     roots.push(root);
     const adapter = new ControlledAdapter();
@@ -568,14 +568,18 @@ describe("durable formal Agent runtime", () => {
     await expect.poll(async () => (
       await runtime.repository.getSnapshot(accepted.task_id)
     )?.task.status).toBe("completed");
+    const beforeCount = (await runtime.repository.listEvents(accepted.task_id, 0)).length;
 
+    // The resume request names the original (host) run and its tool call:
+    // no new run is created, progress/completion replay onto the host run.
     const resumed = await fetch(
       `${base}/api/v1/tasks/${accepted.task_id}/downloads/resume`,
       {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          request_id: "request-resume-dl",
+          run_id: accepted.run_id,
+          tool_call_id: "call_download_xena",
           tool_name: "download_xena",
           arguments: { dataset_id: "TCGA.PAAD.sampleMap/HiSeqV2", file_type: "tsv" },
         }),
@@ -586,42 +590,44 @@ describe("durable formal Agent runtime", () => {
       task_id: string;
       run_id: string;
     };
-    expect(acceptedResume.run_id).not.toBe(accepted.run_id);
+    expect(acceptedResume.run_id).toBe(accepted.run_id);
 
     await expect.poll(async () => {
-      const snapshot = await runtime.repository.getSnapshot(accepted.task_id);
-      return snapshot?.runs.find((run) => run.run_id === acceptedResume.run_id)?.status;
-    }).toBe("completed");
+      const events = await runtime.repository.listEvents(accepted.task_id, 0);
+      return events
+        .filter((event) => event.run_id === accepted.run_id && event.type === "tool_completed")
+        .length;
+    }).toBe(1);
     expect(callArgs).toEqual([
       { dataset_id: "TCGA.PAAD.sampleMap/HiSeqV2", file_type: "tsv" },
     ]);
 
     const events = await runtime.repository.listEvents(accepted.task_id, 0);
-    const resumeEvents = events.filter((event) => event.run_id === acceptedResume.run_id);
+    const resumeEvents = events.slice(beforeCount);
     expect(resumeEvents.map((event) => event.type)).toEqual([
-      "run_queued",
-      "run_started",
       "tool_started",
       "operation_progress",
       "tool_completed",
-      "run_completed",
     ]);
-    expect(resumeEvents.map((event) => event.payload)).toContainEqual({
+    expect(resumeEvents.map((event) => event.run_id)).toEqual([
+      accepted.run_id,
+      accepted.run_id,
+      accepted.run_id,
+    ]);
+    expect(resumeEvents[0]?.payload).toMatchObject({
       type: "tool_started",
-      tool_call_id: `resume_${acceptedResume.run_id.slice(-8)}`,
+      tool_call_id: "call_download_xena",
       tool_name: "download_xena",
       arguments: { dataset_id: "TCGA.PAAD.sampleMap/HiSeqV2", file_type: "tsv" },
     });
-    expect(resumeEvents.at(-1)?.payload).toMatchObject({
-      type: "run_completed",
-      build_result: null,
-    });
     const snapshot = await runtime.repository.getSnapshot(accepted.task_id);
     expect(snapshot?.task.active_run_id).toBeNull();
+    // No follow-up run was created: the run list is unchanged.
+    expect(snapshot?.runs.map((run) => run.run_id)).toEqual([accepted.run_id]);
     await runtime.close();
   });
 
-  test("cancels an in-flight download-resume run", async () => {
+  test("cancels an in-flight download via the dedicated downloads/cancel endpoint", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "biomed-durable-cancel-dl-"));
     roots.push(root);
     const adapter = new ControlledAdapter();
@@ -671,6 +677,7 @@ describe("durable formal Agent runtime", () => {
     await expect.poll(async () => (
       await runtime.repository.getSnapshot(accepted.task_id)
     )?.task.status).toBe("completed");
+    const beforeCount = (await runtime.repository.listEvents(accepted.task_id, 0)).length;
 
     const resumed = await fetch(
       `${base}/api/v1/tasks/${accepted.task_id}/downloads/resume`,
@@ -678,32 +685,29 @@ describe("durable formal Agent runtime", () => {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          request_id: "request-cancel-dl",
+          run_id: accepted.run_id,
+          tool_call_id: "call_download_gdc",
           tool_name: "download_gdc",
           arguments: { project_id: "TCGA-PAAD" },
         }),
       },
     );
     expect(resumed.status).toBe(202);
-    const acceptedResume = await resumed.json() as { run_id: string };
-
+    // The download tool hangs until aborted; cancel via the task-level endpoint.
     const cancelled = await fetch(
-      `${base}/api/v1/tasks/${accepted.task_id}/runs/${acceptedResume.run_id}/cancel`,
+      `${base}/api/v1/tasks/${accepted.task_id}/downloads/cancel`,
       { method: "POST" },
     );
     expect(cancelled.status).toBe(202);
-    const snapshot = await cancelled.json() as { runs: Array<{ run_id: string; status: string }> };
-    expect(snapshot.runs.find((run) => run.run_id === acceptedResume.run_id)?.status)
-      .toBe("cancelled");
+    const cancelBody = await cancelled.json() as { status: string };
+    expect(cancelBody.status).toBe("cancel_requested");
+
     const events = await runtime.repository.listEvents(accepted.task_id, 0);
-    const resumeEvents = events.filter((event) => event.run_id === acceptedResume.run_id);
-    expect(resumeEvents.map((event) => event.type)).toEqual([
-      "run_queued",
-      "run_started",
-      "tool_started",
-      "run_cancel_requested",
-      "run_cancelled",
-    ]);
+    const resumeEvents = events.slice(beforeCount);
+    // Only the synthesized tool_started was recorded; an aborted resume emits
+    // no terminal event (the host run is already terminal, the frontend stall
+    // detection flips the bubble back to "恢复下载").
+    expect(resumeEvents.map((event) => event.type)).toEqual(["tool_started"]);
     await runtime.close();
   });
 
@@ -754,7 +758,7 @@ describe("durable formal Agent runtime", () => {
         databases: [],
         mode: "agent",
       }),
-    })).json() as { task_id: string };
+    })).json() as { task_id: string; run_id: string };
     adapterA.gates[0]?.resolve();
     await expect.poll(async () => (
       await runtimeA.repository.getSnapshot(accepted.task_id)
@@ -778,6 +782,7 @@ describe("durable formal Agent runtime", () => {
     await once(serverB, "listening");
     servers.push(serverB);
     const baseB = `http://127.0.0.1:${(serverB.address() as AddressInfo).port}`;
+    const beforeCount = (await runtimeB.repository.listEvents(accepted.task_id, 0)).length;
 
     const resumed = await fetch(
       `${baseB}/api/v1/tasks/${accepted.task_id}/downloads/resume`,
@@ -785,7 +790,8 @@ describe("durable formal Agent runtime", () => {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          request_id: "request-restart-resume",
+          run_id: accepted.run_id,
+          tool_call_id: "call_download_xena",
           tool_name: "download_xena",
           arguments: { dataset_id: "TCGA.PAAD.sampleMap/HiSeqV2" },
         }),
@@ -793,25 +799,25 @@ describe("durable formal Agent runtime", () => {
     );
     expect(resumed.status).toBe(202);
     const acceptedResume = await resumed.json() as { run_id: string };
+    expect(acceptedResume.run_id).toBe(accepted.run_id);
 
     await expect.poll(async () => {
-      const snapshot = await runtimeB.repository.getSnapshot(accepted.task_id);
-      return snapshot?.runs.find((run) => run.run_id === acceptedResume.run_id)?.status;
-    }).toBe("completed");
+      const events = await runtimeB.repository.listEvents(accepted.task_id, 0);
+      return events
+        .filter((event) => event.run_id === accepted.run_id && event.type === "tool_completed")
+        .length;
+    }).toBe(1);
     // The download tool ran against the reconstructed workspace.
     expect(executed).toEqual([{ dataset_id: "TCGA.PAAD.sampleMap/HiSeqV2" }]);
     // The lightweight workspace was added at resume time (boot + one rebuild).
     expect(factoryCalls.length).toBe(2);
-    expect(factoryCalls[1]).toBe(`${accepted.task_id}:${acceptedResume.run_id}`);
+    expect(factoryCalls[1]).toBe(`${accepted.task_id}:${accepted.run_id}`);
 
     const events = await runtimeB.repository.listEvents(accepted.task_id, 0);
-    const resumeEvents = events.filter((event) => event.run_id === acceptedResume.run_id);
+    const resumeEvents = events.slice(beforeCount);
     expect(resumeEvents.map((event) => event.type)).toEqual([
-      "run_queued",
-      "run_started",
       "tool_started",
       "tool_completed",
-      "run_completed",
     ]);
     await runtimeB.close();
   });

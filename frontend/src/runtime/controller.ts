@@ -6,12 +6,14 @@ import {
 } from "@/runtime/hydrationCache";
 import type {
   ContinueTaskInput,
+  DownloadResumeAccepted,
   ResumeRunInput,
   StartTaskInput,
   TaskPage,
   TaskRunAccepted,
   TaskSnapshot,
 } from "./contracts";
+import type { DownloadResumeRequest } from "./types";
 import { errorMessage } from "@/lib/utils";
 import {
   addAcceptedTask,
@@ -620,38 +622,27 @@ export class RuntimeController {
    */
   async resumeDownload(
     taskId: string,
-    input: {
-      toolName: string;
-      arguments: Record<string, unknown> | null;
-    },
-  ): Promise<TaskRunAccepted> {
+    input: DownloadResumeRequest,
+  ): Promise<DownloadResumeAccepted> {
     const accepted = await this.api.resumeDownload(taskId, {
+      run_id: input.runId,
+      tool_call_id: input.toolCallId,
       tool_name: input.toolName,
       arguments: input.arguments ?? {},
     });
-    await this.enqueueTaskHandoff(taskId, async () => {
-      this.advanceTaskHandoffGeneration(taskId);
-      const task = useAgentStore.getState().tasksById[accepted.task_id];
-      if (task === undefined) return;
-      useAgentStore.setState((state) =>
-        addAcceptedTask(
-          state,
-          {
-            taskId: accepted.task_id,
-            runId: accepted.run_id,
-            requestId: accepted.request_id,
-          },
-          "继续下载被中断的数据文件（自动续传）",
-          task.summary.databases,
-          task.summary.mode,
-          false,
-        ),
-      );
-      const lastSequence =
-        useAgentStore.getState().tasksById[accepted.task_id]?.lastSequence ?? 0;
-      this.transport.subscribe(accepted.task_id, lastSequence);
-    });
+    // The download replays progress/completion onto the original run's event
+    // stream, so no new run projection or user message is created. Make sure
+    // the task keeps its live event subscription (it may have been dropped
+    // when the host run went terminal).
+    const existingTask = useAgentStore.getState().tasksById[accepted.task_id];
+    const lastSequence = existingTask?.lastSequence ?? 0;
+    this.transport.subscribe(accepted.task_id, lastSequence);
     return accepted;
+  }
+
+  /** Abort the task's in-flight standalone download (if any). */
+  async cancelDownload(taskId: string): Promise<void> {
+    await this.api.cancelDownload(taskId);
   }
 
   async cancelRun(taskId: string, runId: string): Promise<void> {

@@ -34,6 +34,7 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import type {
   BuildResultStatus,
+  DownloadResumeAccepted,
   ResumeRunInput,
   StartTaskInput,
   TaskRunAccepted,
@@ -41,6 +42,7 @@ import type {
 import type {
   ConversationItem,
   DownloadControl,
+  DownloadResumeRequest,
   RunProjection,
 } from "@/runtime/types";
 import { errorMessage } from "@/lib/utils";
@@ -74,11 +76,13 @@ interface ChatPanelProps {
     runId: string,
     input: ResumeRunInput,
   ) => Promise<void>;
-  /** Resumes an interrupted download directly (no AI pass). */
+  /** Resumes an interrupted download directly (no AI pass, no new run). */
   resumeDownload?: (
     taskId: string,
-    input: { toolName: string; arguments: Record<string, unknown> | null },
-  ) => Promise<TaskRunAccepted>;
+    input: DownloadResumeRequest,
+  ) => Promise<DownloadResumeAccepted>;
+  /** Aborts the task's in-flight standalone download. */
+  cancelDownload?: (taskId: string) => Promise<void>;
   loadOlderMessages?: (taskId: string) => Promise<void>;
   /** Trigger context compaction on a task */
   compactTask?: (taskId: string) => Promise<void>;
@@ -228,6 +232,7 @@ export function ChatPanel({
   cancelRun,
   resumeRun,
   resumeDownload,
+  cancelDownload,
   loadOlderMessages,
   compactTask,
   injectTaskContext,
@@ -368,16 +373,17 @@ export function ChatPanel({
    * starts a follow-up run whose agent continues from the interrupted step.
    */
   const downloadControl = useMemo<DownloadControl | undefined>(() => {
-    if (activeTaskId === null || cancelRun === undefined || resumeDownload === undefined) {
+    if (activeTaskId === null || cancelDownload === undefined || resumeDownload === undefined) {
       return undefined;
     }
     return {
       taskId: activeTaskId,
-      onPause: (taskId, runId) => cancelRun(taskId, runId),
-      // Resume the download directly through the standalone endpoint (no AI
-      // inference); after it completes the room prompts the user to send
-      // "继续" to pick the analysis back up.
-      onResume: async (taskId, _runId, resume) => {
+      // Pause aborts the task's in-flight download directly; the server
+      // keeps the partial file for a later resume.
+      onPause: (taskId) => cancelDownload(taskId),
+      // Resume replays the download onto the original run's event stream —
+      // no new run/bubble, the existing progress strip keeps updating.
+      onResume: async (taskId, resume) => {
         try {
           await resumeDownload(taskId, resume);
         } catch (error) {
@@ -387,11 +393,11 @@ export function ChatPanel({
           return;
         }
         toast.success("已发起下载续传", {
-          description: "进度将自动跟随新的下载任务，完成后请输入“继续”。",
+          description: "进度将继续在原下载组件上更新，完成后请输入“继续”。",
         });
       },
     };
-  }, [activeTaskId, cancelRun, resumeDownload]);
+  }, [activeTaskId, cancelDownload, resumeDownload]);
   const activeQueue =
     activeTaskId === null ? [] : (queuedFollowUps[activeTaskId] ?? []);
   // 运行中也可以发送：加入队列等待当前回答结束，或调整方向取消并重引导。

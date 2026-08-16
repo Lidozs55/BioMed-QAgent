@@ -262,19 +262,27 @@ export interface DownloadProgressProjection {
  * operation item renders a pause button while the download is advancing and
  * switches to a resume button once it stops (terminal run or stale progress).
  */
-/** Tool invocation identity needed to resume an interrupted download directly. */
+/**
+ * Tool invocation identity needed to resume an interrupted download directly.
+ * ``runId``/``toolCallId`` name the original (host) tool call that the resume
+ * execution replays its progress onto — no new run or bubble is created.
+ */
 export interface DownloadResumeRequest {
+  /** Original (host) run that owns the download tool call. */
+  runId: string;
+  /** Original tool call id inside that run. */
+  toolCallId: string;
   toolName: string;
   arguments: Record<string, unknown> | null;
 }
 
 export interface DownloadControl {
   taskId: string;
-  onPause: (taskId: string, runId: string) => Promise<void> | void;
-  /** Resumes the download directly (no AI pass); the user sends "继续" afterwards. */
+  /** Pauses (aborts) the task's in-flight download directly. */
+  onPause: (taskId: string) => Promise<void> | void;
+  /** Resumes the download directly (no AI pass, no new run). */
   onResume: (
     taskId: string,
-    runId: string,
     resume: DownloadResumeRequest,
   ) => Promise<void> | void;
 }

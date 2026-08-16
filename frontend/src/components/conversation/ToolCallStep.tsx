@@ -69,11 +69,15 @@ export function ToolCallStep({ item, downloadControl }: ToolCallStepProps) {
             {isDownload && item.progress != null && (
               <div className="mt-1.5">
                 <DownloadProgress
-                  runId={item.runId}
                   status={item.status}
                   progress={item.progress}
                   control={downloadControl}
-                  resume={{ toolName: item.toolName, arguments: item.arguments }}
+                  resume={{
+                    runId: item.runId,
+                    toolCallId: item.toolCallId,
+                    toolName: item.toolName,
+                    arguments: item.arguments,
+                  }}
                   expanded={expanded}
                 />
               </div>

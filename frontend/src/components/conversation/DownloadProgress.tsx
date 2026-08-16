@@ -10,7 +10,6 @@ import type {
 } from "@/runtime/types";
 
 export interface DownloadProgressProps {
-  runId: string;
   status: string;
   progress: DownloadProgressProjection;
   control?: DownloadControl;
@@ -55,7 +54,6 @@ const SPEED_SAMPLE_WINDOW = 5;
  * the operation row and the tool-call bubble can share it.
  */
 export function DownloadProgress({
-  runId,
   status,
   progress,
   control,
@@ -147,9 +145,9 @@ export function DownloadProgress({
             className="h-6 gap-1 px-2 text-xs"
             onClick={() => {
               if (canPause) {
-                void control?.onPause(control.taskId, runId);
+                void control?.onPause(control.taskId);
               } else if (resume !== undefined) {
-                void control?.onResume(control.taskId, runId, resume);
+                void control?.onResume(control.taskId, resume);
               }
             }}
           >

@@ -36,6 +36,7 @@ export class DurableTaskConflictError extends Error {
       | "request_id_reused"
       | "request_id_owned_by_another_task"
       | "active_run"
+      | "active_download"
       | "task_not_continuable",
     message: string,
   ) {
