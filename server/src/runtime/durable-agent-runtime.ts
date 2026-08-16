@@ -83,17 +83,17 @@ interface ActiveTask {
   adapter: PiEventAdapter;
   activeRunId: string | null;
   approvalGate: ApprovalGateHandle;
-  /**
-   * A standalone download-resume execution (no AI inference). The download is
-   * a task-level entity independent of any run: the progress/completion events
-   * are replayed onto the original (host) run's event stream so the frontend
-   * keeps updating the original tool-call bubble instead of spawning a new
-   * run/bubble. There is at most one in-flight download per task.
-   */
-  activeDownload: {
-    controller: AbortController;
-    promise: Promise<void>;
-  } | null;
+}
+
+/**
+ * A task-level standalone download (P5-D3 resume, no AI run) that is
+ * currently in flight. Tracked independently of ``activeTasks`` so a resume
+ * launched after a server restart (when the session map is empty) can still
+ * be cancelled via ``downloads/cancel``.
+ */
+interface ActiveDownloadHandle {
+  controller: AbortController;
+  promise: Promise<void>;
 }
 
 interface Subscription {
@@ -237,6 +237,7 @@ export async function createDurableAgentRuntime(
   const repository = options.repository ?? new DurableTaskRepository(options.tasksRoot);
   await repository.recoverActiveRuns();
   const activeTasks = new Map<string, ActiveTask>();
+  const activeDownloads = new Map<string, ActiveDownloadHandle>();
   const activeExecutions = new Set<Promise<void>>();
   const webSocketServer = new WebSocketServer({ noServer: true });
   const sockets = new Set<WebSocket>();
@@ -323,7 +324,6 @@ export async function createDurableAgentRuntime(
         adapter: new PiEventAdapter({ taskId }),
         activeRunId: null,
         approvalGate,
-        activeDownload: null,
       };
     } catch (error) {
       await disposeWorkspace();
@@ -517,7 +517,7 @@ export async function createDurableAgentRuntime(
       throw new ReferenceError("Run not found");
     }
     const existing = activeTasks.get(taskId);
-    if (existing !== undefined && existing.activeDownload !== null) {
+    if (activeDownloads.has(taskId)) {
       throw new DurableTaskConflictError(
         "active_download",
         "A download is already in progress",
@@ -568,16 +568,17 @@ export async function createDurableAgentRuntime(
       argumentsValue,
       controller.signal,
     );
-    if (existing !== undefined) {
-      existing.activeDownload = { controller, promise };
-      void promise.finally(() => {
-        if (existing.activeDownload?.promise === promise) {
-          existing.activeDownload = null;
-        }
-      });
-    } else {
-      void promise.finally(() => workspace.dispose());
-    }
+    // Track the in-flight download independently of the session map so a
+    // resume launched after a server restart can still be cancelled.
+    activeDownloads.set(taskId, { controller, promise });
+    void promise.finally(() => {
+      if (activeDownloads.get(taskId)?.promise === promise) {
+        activeDownloads.delete(taskId);
+      }
+      if (existing === undefined) {
+        void workspace.dispose();
+      }
+    });
     return { task_id: taskId, run_id: runId };
   }
 
@@ -621,14 +622,14 @@ export async function createDurableAgentRuntime(
   async function cancelDownload(taskId: string): Promise<unknown> {
     const snapshot = await repository.getSnapshot(taskId);
     if (snapshot === null) throw new ReferenceError("Task not found");
-    const task = activeTasks.get(taskId);
-    if (task === undefined || task.activeDownload === null) {
+    const handle = activeDownloads.get(taskId);
+    if (handle === undefined) {
       throw new DurableTaskConflictError(
         "active_download",
         "No download is in progress",
       );
     }
-    task.activeDownload.controller.abort();
+    handle.controller.abort();
     return { status: "cancel_requested", task_id: taskId };
   }
 

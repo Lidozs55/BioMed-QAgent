@@ -821,4 +821,104 @@ describe("durable formal Agent runtime", () => {
     ]);
     await runtimeB.close();
   });
+
+  test("cancels a download resumed after a server restart (activeDownloads tracks it without a session)", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "biomed-durable-resume-restart-cancel-"));
+    roots.push(root);
+    const workspaceFactory: DurableAgentRuntimeOptions["workspaceFactory"] = async ({ taskId }) => ({
+      root: path.join(root, taskId),
+      tools: [{
+        name: "download_xena",
+        label: "Download Xena dataset",
+        description: "download a xena dataset",
+        parameters: { type: "object" },
+        execute: async (_argumentsValue, signal) => {
+          await new Promise<void>((resolve) => {
+            signal?.addEventListener("abort", () => resolve());
+          });
+          if (signal?.aborted) throw new Error("aborted by user");
+          return { content: "{}", isError: false };
+        },
+      }],
+      setRunId: () => undefined,
+      dispose: async () => undefined,
+    });
+
+    // First runtime creates the task and completes its AI run.
+    const adapterA = new ControlledAdapter();
+    const runtimeA = await createDurableAgentRuntime({
+      tasksRoot: root,
+      adapter: adapterA,
+      workspaceFactory,
+    });
+    const serverA = createServer((request, response) => {
+      if (!runtimeA.handle(request, response)) response.writeHead(404).end();
+    });
+    serverA.listen(0, "127.0.0.1");
+    await once(serverA, "listening");
+    servers.push(serverA);
+    const baseA = `http://127.0.0.1:${(serverA.address() as AddressInfo).port}`;
+    const accepted = await (await fetch(`${baseA}/api/v1/tasks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        request_id: "request-restart-cancel-boot",
+        input: "boot",
+        databases: [],
+        mode: "agent",
+      }),
+    })).json() as { task_id: string; run_id: string };
+    adapterA.gates[0]?.resolve();
+    await expect.poll(async () => (
+      await runtimeA.repository.getSnapshot(accepted.task_id)
+    )?.task.status).toBe("completed");
+    await runtimeA.close();
+
+    // Second runtime stands in for the server restart: no session is
+    // reconstructed, so the resumed download is tracked solely by the
+    // activeDownloads map and must still be cancellable.
+    const runtimeB = await createDurableAgentRuntime({
+      tasksRoot: root,
+      adapter: new ControlledAdapter(),
+      workspaceFactory,
+    });
+    const serverB = createServer((request, response) => {
+      if (!runtimeB.handle(request, response)) response.writeHead(404).end();
+    });
+    serverB.listen(0, "127.0.0.1");
+    await once(serverB, "listening");
+    servers.push(serverB);
+    const baseB = `http://127.0.0.1:${(serverB.address() as AddressInfo).port}`;
+
+    const resumed = await fetch(
+      `${baseB}/api/v1/tasks/${accepted.task_id}/downloads/resume`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          run_id: accepted.run_id,
+          tool_call_id: "call_download_xena",
+          tool_name: "download_xena",
+          arguments: { dataset_id: "TCGA.PAAD.sampleMap/HiSeqV2" },
+        }),
+      },
+    );
+    expect(resumed.status).toBe(202);
+
+    // Before the fix this returned 409 "No download is in progress": the
+    // download handle was only registered on the (absent) active task entry.
+    const cancelled = await fetch(
+      `${baseB}/api/v1/tasks/${accepted.task_id}/downloads/cancel`,
+      { method: "POST" },
+    );
+    expect(cancelled.status).toBe(202);
+    expect(await cancelled.json()).toMatchObject({ status: "cancel_requested" });
+
+    const events = await runtimeB.repository.listEvents(accepted.task_id, 0);
+    const resumeEvents = events.filter((event) => event.type === "tool_started" || event.type === "tool_completed");
+    // Only the synthesized tool_started was recorded; an aborted resume emits
+    // no terminal event.
+    expect(resumeEvents.map((event) => event.type)).toEqual(["tool_started"]);
+    await runtimeB.close();
+  });
 });

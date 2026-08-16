@@ -380,7 +380,18 @@ export function ChatPanel({
       taskId: activeTaskId,
       // Pause aborts the task's in-flight download directly; the server
       // keeps the partial file for a later resume.
-      onPause: (taskId) => cancelDownload(taskId),
+      onPause: async (taskId) => {
+        try {
+          await cancelDownload(taskId);
+          toast.success("已暂停下载", {
+            description: "已下载部分将保留，可随时恢复续传。",
+          });
+        } catch (error) {
+          toast.error("暂停失败", {
+            description: errorMessage(error, "请稍后重试"),
+          });
+        }
+      },
       // Resume replays the download onto the original run's event stream —
       // no new run/bubble, the existing progress strip keeps updating.
       onResume: async (taskId, resume) => {
