@@ -412,7 +412,7 @@ describe("download_geo", () => {
         kind: "downloaded_bytes",
         payload: {
           current: compressed.length,
-          total: null,
+          total: compressed.length,
           source: "geo",
           accession: "GSE178352",
           filename: "GSE178352_tximportCounts.txt.gz",

@@ -543,7 +543,7 @@ export function createDownloadGeoTool(options: GeoToolsOptions): BioMedAgentTool
           }
           hooks.onProgress("acquisition", "downloaded_bytes", {
             current: result.asset.size_bytes,
-            total: null,
+            total: result.asset.size_bytes,
             source: "geo",
             accession: resolved.source.accession,
             filename: resolved.selectedFilename,
@@ -667,8 +667,9 @@ export function createDownloadGeoPlatformAnnotationTool(
           );
           hooks.onProgress("acquisition", "downloaded_bytes", {
             current: result.asset.size_bytes,
-            total: null,
+            total: result.asset.size_bytes,
             source: "geo",
+            accession: gpl,
             platform: gpl,
             filename,
             records: 1,

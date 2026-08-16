@@ -31,6 +31,7 @@ async function fixture(options: { exec?: boolean; limits?: Record<string, number
       "normalized",
       "staging/agent",
       "artifacts",
+      "agent_results",
       "state",
       "logs",
     ].map((name) => mkdir(path.join(root, name), { recursive: true })),
@@ -190,6 +191,30 @@ describe("governed Task Workspace", () => {
       text: "12345",
       truncated: true,
     });
+  });
+
+  test("reads tool outputs under agent_results", async () => {
+    const { root, workspace } = await fixture();
+    await writeFile(
+      path.join(root, "agent_results", "gdc_manifest.json"),
+      '{"source":"gdc"}',
+      "utf8",
+    );
+
+    await expect(workspace.read({ path: "agent_results/gdc_manifest.json" })).resolves.toMatchObject(
+      { text: '{"source":"gdc"}' },
+    );
+    const searched = await workspace.search({ path: "agent_results", query: "gdc" });
+    expect(searched.matches).toHaveLength(1);
+  });
+
+  test("searches a single file path directly", async () => {
+    const { root, workspace } = await fixture();
+    const filePath = "parsed/single.txt";
+    await writeFile(path.join(root, "parsed", "single.txt"), "needle-on-line-one\nother", "utf8");
+
+    const searched = await workspace.search({ path: filePath, query: "needle" });
+    expect(searched).toMatchObject({ path: filePath, matches: [{ path: filePath, line: 1 }], filesScanned: 1 });
   });
 
   test("lists and searches in stable bounded order", async () => {

@@ -102,9 +102,13 @@ function caught(error: unknown): BioMedToolResult {
     typeof error.code === "string"
       ? error.code.slice(0, MAX_ID)
       : "invalid_input";
+  const message =
+    error instanceof Error && error.message.trim().length > 0
+      ? error.message.slice(0, MAX_CONTENT)
+      : "Dataset build tool failed";
   return {
-    content: JSON.stringify({ code, message: "Dataset build tool failed" }),
-    details: { code, message: "Dataset build tool failed" },
+    content: JSON.stringify({ code, message }),
+    details: { code, message },
     isError: true,
   };
 }

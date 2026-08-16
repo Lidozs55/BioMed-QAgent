@@ -66,7 +66,7 @@ export function ToolCallStep({ item, downloadControl }: ToolCallStepProps) {
                 aria-hidden="true"
               />
             </button>
-            {isDownload && item.progress != null && (
+            {isDownload && item.progress != null && item.status !== "completed" && (
               <div className="mt-1.5">
                 <DownloadProgress
                   status={item.status}

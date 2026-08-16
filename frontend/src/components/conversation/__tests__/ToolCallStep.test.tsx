@@ -216,6 +216,12 @@ describe("ToolCallStep download progress", () => {
     });
   });
 
+  it("collapses the progress strip once the download completes", () => {
+    render(<ToolCallStep item={downloadToolCall(1_642_160_120, 1_642_160_120, TIMESTAMP, "completed")} />);
+    expect(screen.queryByTestId("download-percent")).not.toBeInTheDocument();
+    expect(screen.queryByText(/GB/)).not.toBeInTheDocument();
+  });
+
   it("expands to reveal speed, ETA and the filename", () => {
     const first = downloadToolCall(3_000, 10_000, "2026-07-20T00:00:01Z");
     const { rerender } = render(<ToolCallStep item={first} />);

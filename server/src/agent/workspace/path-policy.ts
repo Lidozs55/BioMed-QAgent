@@ -10,6 +10,7 @@ const READ_ROOTS = new Set([
   "normalized",
   "staging",
   "artifacts",
+  "agent_results",
   "state",
   "logs",
 ]);
