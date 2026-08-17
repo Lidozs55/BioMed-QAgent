@@ -8,9 +8,11 @@ import {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import ResultsViewer from "@/components/ResultsViewer";
+import { ScrollBar } from "@/components/ui/scroll-area";
 import { createInitialRuntimeState } from "@/runtime/reducer";
 import type { ArtifactProjection, RunProjection } from "@/runtime/types";
 import { useAgentStore } from "@/stores/agentStore";
+import { ScrollArea as ScrollAreaPrimitive } from "@base-ui/react/scroll-area";
 
 describe("ResultsViewer", () => {
   beforeEach(() => {
@@ -132,6 +134,24 @@ describe("ResultsViewer", () => {
       expect(scrollArea).toHaveClass("min-h-0", "flex-1");
       expect(scrollViewport).toContainElement(finalArtifact);
     });
+  });
+
+  it("uses the shared scrollbar contract for shadcn ScrollArea", () => {
+    const { container } = render(
+      <ScrollAreaPrimitive.Root>
+        <ScrollAreaPrimitive.Viewport>
+          <div>Scrollable content</div>
+        </ScrollAreaPrimitive.Viewport>
+        <ScrollBar keepMounted />
+      </ScrollAreaPrimitive.Root>,
+    );
+
+    expect(container.querySelector('[data-slot="scroll-area-scrollbar"]')).toHaveClass(
+      "scrollbar-track",
+    );
+    expect(container.querySelector('[data-slot="scroll-area-thumb"]')).toHaveClass(
+      "scrollbar-thumb",
+    );
   });
 
   it("shows the server no-data message when the run summary reports no_data", async () => {

@@ -7,6 +7,8 @@
 
 :root {
   --font-ui: 'Inter Variable', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --scrollbar-thumb: color-mix(in oklch, var(--muted-foreground) 28%, transparent);
+  --scrollbar-thumb-hover: color-mix(in oklch, var(--muted-foreground) 46%, transparent);
   --background: oklch(1 0 0);
   --foreground: oklch(0.148 0.004 228.8);
   --card: oklch(1 0 0);
@@ -48,6 +50,8 @@
 }
 
 .dark {
+  --scrollbar-thumb: color-mix(in oklch, var(--muted-foreground) 30%, transparent);
+  --scrollbar-thumb-hover: color-mix(in oklch, var(--muted-foreground) 48%, transparent);
   --background: oklch(0.148 0.004 228.8);
   --foreground: oklch(0.987 0.002 197.1);
   --card: oklch(0.218 0.008 223.9);
@@ -148,6 +152,67 @@
   html {
     @apply font-sans;
   }
+}
+
+/* Shared scrollbar treatment for every native scroll container. The dark
+   theme uses a muted thumb so scrollbars stay discoverable without
+   competing with the transcript or panel content. */
+*:not(.scrollbar-none):not(.no-scrollbar) {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+*:not(.scrollbar-none):not(.no-scrollbar):hover {
+  scrollbar-color: var(--scrollbar-thumb-hover) transparent;
+}
+
+*:not(.scrollbar-none):not(.no-scrollbar)::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*:not(.scrollbar-none):not(.no-scrollbar)::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*:not(.scrollbar-none):not(.no-scrollbar)::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+  background-color: var(--scrollbar-thumb);
+}
+
+*:not(.scrollbar-none):not(.no-scrollbar):hover::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb-hover);
+}
+
+.scrollbar-none::-webkit-scrollbar,
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.scrollbar-subtle[data-autoscrolling],
+.scrollbar-subtle[data-autoscrolling]:hover {
+  scrollbar-color: transparent transparent;
+}
+
+.scrollbar-subtle[data-autoscrolling]::-webkit-scrollbar-thumb,
+.scrollbar-subtle[data-autoscrolling]:hover::-webkit-scrollbar-thumb {
+  background-color: transparent;
+}
+
+.scrollbar-track {
+  background-color: transparent;
+}
+
+.scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+  transition: background-color 150ms ease;
+}
+
+.scrollbar-track[data-hovering] .scrollbar-thumb,
+.scrollbar-track[data-scrolling] .scrollbar-thumb {
+  background-color: var(--scrollbar-thumb-hover);
 }
 
 @keyframes assistant-stream-cursor-blink {
