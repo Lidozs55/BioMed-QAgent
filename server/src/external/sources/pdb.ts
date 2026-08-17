@@ -19,6 +19,7 @@ import { acquireSource } from "../acquisition/downloader.js";
 import type { ContentCache } from "../acquisition/content-cache.js";
 import { isAbortError } from "../network/errors.js";
 import type { PublicHttpClient } from "../network/http-client.js";
+import type { SourceQueryContext } from "./context.js";
 import {
   DEFAULT_RATE_LIMIT_MS,
   apiFetch,
@@ -33,14 +34,6 @@ const FILES_BASE = "https://files.rcsb.org/download/";
 
 /** search_pdb enriches the first N results to avoid N+1 queries (Python parity). */
 const DESCRIBE_BATCH_LIMIT = 3;
-
-export interface SourceQueryContext {
-  client: PublicHttpClient;
-  signal?: AbortSignal;
-  rateLimitMs?: number;
-  onQueryStarted?: (query: string, source: string) => void;
-  onQuery?: (query: string, source: string, status: QueryStatus, recordsCount?: number) => void;
-}
 
 export interface DownloadDeps {
   taskRoot: string;

@@ -33,7 +33,7 @@ import { load } from "cheerio";
 import type { BioMedAgentTool } from "../contracts.js";
 import type { ContentCache } from "../../external/acquisition/content-cache.js";
 import { canonicalRequestHash } from "../../external/acquisition/content-cache.js";
-import { ensureAcquisitionDirs, sourceAssetPath, taskWorkDirs } from "../../external/acquisition/workdir.js";
+import { ensureAcquisitionDirs, sourceAssetPath, taskWorkDirs, assertSafeFilename } from "../../external/acquisition/workdir.js";
 import type { PublicHttpClient } from "../../external/network/http-client.js";
 import type { CrawlerFacade } from "../../external/crawler/index.js";
 import { BROWSER_HEADERS, MAX_CRAWLER_DOWNLOAD_BYTES } from "../../external/crawler/index.js";
@@ -43,21 +43,14 @@ import type { DownloadAttempt, SourceAsset } from "../../dataset/contracts/sourc
 import { assetIdFromSha256 } from "../../dataset/adapters/identity.js";
 import type { ToolHooks } from "./tool-hooks.js";
 import { noopHooks } from "./tool-hooks.js";
+import { errorMessage } from "./result.js";
 
 const MAX_BODY_CHARS = 5000;
 const SOURCE = "browser";
 
 /** Python ``_validate_download_filename`` parity. */
 function validateDownloadFilename(filename: string): void {
-  if (
-    !filename ||
-    path.basename(filename) !== filename ||
-    filename === "." ||
-    filename === ".." ||
-    filename.includes("\\")
-  ) {
-    throw new Error("source asset filename is unsafe");
-  }
+  assertSafeFilename(filename, "source asset filename is unsafe");
 }
 
 /** Python ``_extract_title`` (BeautifulSoup → cheerio). */
@@ -71,10 +64,6 @@ function extractBodyText(html: string): string {
   const $ = load(html);
   $("script, style, head, noscript").remove();
   return $.root().text().replace(/\s+/g, " ").trim();
-}
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 /** Downloader ``sha256File`` parity: streaming checksum of one local file. */
@@ -179,7 +168,7 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
         if (signal?.aborted === true) throw error;
         hooks.onQuery(url, SOURCE, "failed", 0);
         return {
-          content: JSON.stringify({ url, error: errorText(error) }),
+          content: JSON.stringify({ url, error: errorMessage(error) }),
         };
       }
     },
@@ -366,7 +355,7 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
             source: SOURCE,
             accession: filename,
             source_url: url,
-            error: errorText(error),
+            error: errorMessage(error),
           }),
         };
       }

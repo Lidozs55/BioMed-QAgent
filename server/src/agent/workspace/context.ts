@@ -5,8 +5,7 @@ import { canonicalizeWithAncestor } from "../permissions/path-normalizer.js";
 import type { PermissionBroker } from "../permissions/broker.js";
 import type { WorkspaceAuditSink } from "./audit.js";
 import { WorkspacePolicyError, type WorkspaceLimits } from "./types.js";
-
-const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+import { requireSafeId as validateSafeId } from "../ids.js";
 
 export const DEFAULT_WORKSPACE_LIMITS: WorkspaceLimits = {
   maxReadBytes: 64 * 1024,
@@ -62,13 +61,11 @@ export interface WorkspaceContext {
 }
 
 function requireSafeId(name: string, value: string | undefined, optional = false): void {
-  if (optional && value === undefined) return;
-  if (value === undefined || !SAFE_ID.test(value)) {
-    throw new WorkspacePolicyError(
-      "INVALID_IDENTITY",
-      `${name} must be one safe path component`,
-    );
-  }
+  validateSafeId(name, value, {
+    optional,
+    message: `${name} must be one safe path component`,
+    errorFactory: (message) => new WorkspacePolicyError("INVALID_IDENTITY", message),
+  });
 }
 
 function validatedLimits(overrides: Partial<WorkspaceLimits> = {}): WorkspaceLimits {
