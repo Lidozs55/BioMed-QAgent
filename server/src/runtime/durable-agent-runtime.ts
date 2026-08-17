@@ -5,6 +5,9 @@ import path from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
 import { Readable } from "node:stream";
 
+import { sha256Bytes } from "../dataset/adapters/hashing.js";
+import { SAFE_ID } from "./safe-id.js";
+
 import type {
   BuildResult,
   EventEnvelope,
@@ -57,7 +60,6 @@ const MAX_IMPORT_FILE_BYTES = 500 * 1024 * 1024;
 const MAX_IMPORT_TOTAL_BYTES = 2 * 1024 * 1024 * 1024;
 const MAX_WS_COMMAND_BYTES = 8 * 1024;
 const MAX_WS_BUFFERED_BYTES = 64 * 1024;
-const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 
 // Pi's threshold compaction ends the turn without auto-continue. The runtime
 // resumes the run with a fresh turn so long tasks survive the compaction
@@ -258,7 +260,7 @@ async function readImportForm(request: IncomingMessage): Promise<{
     uploads.push({
       name,
       bytes,
-      sha256: createHash("sha256").update(bytes).digest("hex"),
+      sha256: sha256Bytes(bytes),
     });
   }
   return { requestId, note, uploads };

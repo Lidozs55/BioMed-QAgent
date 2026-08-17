@@ -17,9 +17,16 @@ export function validateSafePathId(value: string, fieldName = "id"): string {
 }
 
 /** Reject filenames that could escape the destination directory. */
-export function assertSafeFilename(filename: string): string {
-  if (!filename || path.basename(filename) !== filename || filename.includes("/") || filename.includes("\\")) {
-    throw new TypeError("unsafe source filename");
+export function assertSafeFilename(filename: string, message = "unsafe source filename"): string {
+  if (
+    !filename ||
+    path.basename(filename) !== filename ||
+    filename === "." ||
+    filename === ".." ||
+    filename.includes("/") ||
+    filename.includes("\\")
+  ) {
+    throw new TypeError(message);
   }
   return filename;
 }

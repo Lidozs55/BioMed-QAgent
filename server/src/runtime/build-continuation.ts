@@ -1,8 +1,9 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import type { DatasetBuildSpec } from "@biomed/contracts";
+
 import path from "node:path";
 
-import type { DatasetBuildSpec } from "@biomed/contracts";
+import { readJsonFileOrNull, writeJsonAtomic } from "../persistence/atomic-json.js";
+import { requireSafeId } from "./safe-id.js";
 
 /**
  * Durable record of a dataset-build invocation, persisted by the
@@ -29,12 +30,6 @@ export interface SuspendedBuildContinuation {
   created_at: string;
 }
 
-const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
-
-function requireSafeId(value: string, name: string): void {
-  if (!SAFE_ID.test(value)) throw new TypeError(`${name} must be a safe identifier`);
-}
-
 /** ``<taskRoot>/state/hil/continuations/<buildId>.json``. */
 export function continuationPath(
   taskRoot: string,
@@ -49,11 +44,7 @@ export async function saveBuildContinuation(
   taskRoot: string,
   continuation: SuspendedBuildContinuation,
 ): Promise<void> {
-  const target = continuationPath(taskRoot, continuation.build_id);
-  await mkdir(path.dirname(target), { recursive: true });
-  const temporary = `${target}.${randomUUID()}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(continuation, null, 2)}\n`, "utf8");
-  await rename(temporary, target);
+  await writeJsonAtomic(continuationPath(taskRoot, continuation.build_id), continuation);
 }
 
 function parseContinuation(value: unknown): SuspendedBuildContinuation | null {
@@ -75,16 +66,9 @@ export async function readBuildContinuation(
   taskRoot: string,
   buildId: string,
 ): Promise<SuspendedBuildContinuation | null> {
-  const target = continuationPath(taskRoot, buildId);
-  let raw: string;
   try {
-    raw = await readFile(target, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw error;
-  }
-  try {
-    return parseContinuation(JSON.parse(raw));
+    const value = await readJsonFileOrNull<unknown>(continuationPath(taskRoot, buildId));
+    return value === null ? null : parseContinuation(value);
   } catch {
     return null;
   }

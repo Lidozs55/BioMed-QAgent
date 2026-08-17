@@ -19,6 +19,26 @@ import { fileURLToPath } from "node:url";
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PROTOCOL_VERSION = "1";
 
+/**
+ * Named bridge operations (mirror of the ``database/bridge.py`` dispatch
+ * table; the Python table is the protocol's canonical definition).
+ */
+export const BRIDGE_OP = {
+  PING: "ping",
+  CACHE_SEARCH: "cache.search",
+  CACHE_LIST: "cache.list",
+  CACHE_DESCRIBE: "cache.describe",
+  CACHE_GET: "cache.get",
+  DATABASE_LIST: "database.list",
+  DATABASE_DISABLED: "database.disabled",
+  DATABASE_GET: "database.get",
+  DATABASE_TOOL_MANIFESTS: "database.tool_manifests",
+  DATABASE_SAVE: "database.save",
+  DATABASE_PATCH: "database.patch",
+  DATABASE_DELETE: "database.delete",
+  DATABASE_SET_ENABLED: "database.set_enabled",
+} as const;
+
 export class DatabaseBridgeError extends Error {
   constructor(
     readonly code: string,
@@ -140,7 +160,7 @@ export class DatabaseClient {
       this.onLog?.(line);
     });
     // Warm-up ping: fail fast when Python/bridge is unusable.
-    await this.call<{ service: string }>("ping", {});
+    await this.call<{ service: string }>(BRIDGE_OP.PING, {});
   }
 
   private handleLine(line: string): void {

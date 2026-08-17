@@ -1,8 +1,7 @@
 import path from "node:path";
 
 import { WorkspacePolicyError } from "./types.js";
-
-const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+import { requireSafeId } from "../ids.js";
 
 /**
  * Single source of truth for workspace / task-output path derivation
@@ -64,7 +63,8 @@ export function taskOutputPath(tasksRoot: string, taskId: string): string {
 }
 
 export function requireSafeTaskId(taskId: string): void {
-  if (!SAFE_ID.test(taskId)) {
-    throw new WorkspacePolicyError("INVALID_IDENTITY", "taskId must be one safe path component");
-  }
+  requireSafeId("taskId", taskId, {
+    message: "taskId must be one safe path component",
+    errorFactory: (message) => new WorkspacePolicyError("INVALID_IDENTITY", message),
+  });
 }

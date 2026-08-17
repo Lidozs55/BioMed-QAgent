@@ -23,6 +23,7 @@ import { makeSourceId } from "../../external/sources/fallback.js";
 import { DATABASE } from "../../dataset/contracts/enums.js";
 import type { ToolHooks } from "./tool-hooks.js";
 import { noopHooks } from "./tool-hooks.js";
+import { errorMessage } from "./result.js";
 
 const SOURCE = "web_visual_capture";
 const MAX_SCREENSHOT_BYTES = 10 * 1024 * 1024;
@@ -39,10 +40,6 @@ function validateLabel(label: string | null): string | null {
     );
   }
   return label;
-}
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 export interface WebVisualCaptureOptions {
@@ -79,7 +76,7 @@ export function createWebVisualCaptureTools(options: WebVisualCaptureOptions): {
       validatedLabel = validateLabel(request.label);
     } catch (error) {
       hooks.onQuery(url, SOURCE, "failed", 0);
-      return JSON.stringify({ source: SOURCE, url, error: errorText(error) });
+      return JSON.stringify({ source: SOURCE, url, error: errorMessage(error) });
     }
 
     try {
@@ -172,9 +169,9 @@ export function createWebVisualCaptureTools(options: WebVisualCaptureOptions): {
       if (signal?.aborted === true) throw error;
       hooks.onQuery(url, SOURCE, "failed", 0);
       hooks.onProgress(SOURCE, "warning", {
-        message: `capture raised for ${url}: ${errorText(error)}`,
+        message: `capture raised for ${url}: ${errorMessage(error)}`,
       });
-      return JSON.stringify({ source: SOURCE, url, error: errorText(error) });
+      return JSON.stringify({ source: SOURCE, url, error: errorMessage(error) });
     }
   }
 

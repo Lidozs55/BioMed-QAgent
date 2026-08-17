@@ -9,7 +9,7 @@
 
 import type { BioMedAgentTool } from "../contracts.js";
 import type { DatabaseClient } from "../../persistence/db-client.js";
-import { DatabaseBridgeUnavailableError } from "../../persistence/db-client.js";
+import { BRIDGE_OP, DatabaseBridgeUnavailableError } from "../../persistence/db-client.js";
 import { noopHooks, type ToolHooks } from "./tool-hooks.js";
 
 export interface CacheDatasetManifest {
@@ -65,7 +65,7 @@ export function createLocalCacheTools(deps: LocalCacheToolDeps): BioMedAgentTool
       hooks.onQueryStarted(query, "local_cache");
       let manifests: CacheDatasetManifest[];
       try {
-        manifests = await db.call<CacheDatasetManifest[]>("cache.search", { query, limit: maxResults }, deps.timeoutMs);
+        manifests = await db.call<CacheDatasetManifest[]>(BRIDGE_OP.CACHE_SEARCH, { query, limit: maxResults }, deps.timeoutMs);
       } catch (error) {
         hooks.onQuery(query, "local_cache", "failed", 0);
         return {
@@ -118,7 +118,7 @@ export function createLocalCacheTools(deps: LocalCacheToolDeps): BioMedAgentTool
       const datasetId = typeof record.dataset_id === "string" ? record.dataset_id : "";
       let manifest: CacheDatasetManifest | null;
       try {
-        manifest = await db.call<CacheDatasetManifest | null>("cache.describe", {
+        manifest = await db.call<CacheDatasetManifest | null>(BRIDGE_OP.CACHE_DESCRIBE, {
           source_namespace: sourceNamespace,
           dataset_id: datasetId,
         }, deps.timeoutMs);
@@ -179,7 +179,7 @@ export function createLocalCacheTools(deps: LocalCacheToolDeps): BioMedAgentTool
       const maxRows = typeof record.max_rows === "number" ? record.max_rows : 1000;
       let result: { manifest: CacheDatasetManifest; rows: Array<Record<string, string>> } | null;
       try {
-        result = await db.call("cache.get", {
+        result = await db.call(BRIDGE_OP.CACHE_GET, {
           source_namespace: sourceNamespace,
           dataset_id: datasetId,
         }, deps.timeoutMs);

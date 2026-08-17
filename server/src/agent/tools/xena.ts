@@ -31,9 +31,17 @@ import {
   type XenaHubRecord,
 } from "../../external/xena/index.js";
 import type { PublicHttpClient } from "../../external/network/http-client.js";
-import { AsyncHostRateLimiter } from "../../external/crawler/rate-limit.js";
+import { makeSourceId } from "../../external/sources/fallback.js";
 import type { SourceRecord } from "../../dataset/contracts/source.js";
 import { DATA_LEVEL, DATABASE } from "../../dataset/contracts/enums.js";
+import {
+  expectInt,
+  expectOptionalString,
+  expectString,
+  objectArgument,
+} from "./args.js";
+import { rateLimit } from "./rate-limit.js";
+import { errorResult } from "./result.js";
 
 /** Python ``MAX_CRAWLER_DOWNLOAD_BYTES``: 4 GiB dataset-scale downloads. */
 export const XENA_MAX_DOWNLOAD_BYTES = 4096 * 1024 * 1024;
@@ -59,71 +67,6 @@ export interface XenaToolDeps extends ToolServiceDeps {
   downloadTimeoutMs?: number;
   /** Minimum interval between external requests; 0 disables (tests). */
   rateLimitMs?: number;
-}
-
-/**
- * Module-global request spacing (Python ``rate_limit`` parity: a single
- * shared timestamp per source, enforced before every external request).
- */
-const limiters = new Map<number, AsyncHostRateLimiter>();
-
-function rateLimit(url: string, minIntervalMs: number): Promise<void> {
-  if (minIntervalMs <= 0) return Promise.resolve();
-  let limiter = limiters.get(minIntervalMs);
-  if (limiter === undefined) {
-    limiter = new AsyncHostRateLimiter({ minInterval: minIntervalMs / 1000 });
-    limiters.set(minIntervalMs, limiter);
-  }
-  return limiter.wait(url);
-}
-
-/** Python ``make_source_id``: ``src_<canonical sha256 digest[:32]>``. */
-function makeSourceId(database: string, accession: string, url: string): string {
-  const canonical = JSON.stringify({
-    accession: accession.trim().toLowerCase(),
-    database,
-    url: url.trim(),
-  });
-  return `src_${createHash("sha256").update(canonical, "utf8").digest("hex").slice(0, 32)}`;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function objectArgument(value: unknown): Record<string, unknown> {
-  if (!isRecord(value)) throw new TypeError("arguments must be an object");
-  return value;
-}
-
-function expectString(record: Record<string, unknown>, field: string, fallback: string): string {
-  const value = record[field];
-  if (value === undefined || value === null) return fallback;
-  if (typeof value !== "string") throw new TypeError(`${field} must be a string`);
-  return value;
-}
-
-function expectOptionalString(record: Record<string, unknown>, field: string): string | undefined {
-  const value = record[field];
-  if (value === undefined || value === null) return undefined;
-  if (typeof value !== "string") throw new TypeError(`${field} must be a string`);
-  return value;
-}
-
-function expectInt(record: Record<string, unknown>, field: string, fallback: number): number {
-  const value = record[field];
-  if (value === undefined || value === null) return fallback;
-  if (typeof value !== "number" || !Number.isInteger(value)) {
-    throw new TypeError(`${field} must be an integer`);
-  }
-  return value;
-}
-
-function errorResult(error: unknown): { content: string; isError: true } {
-  return {
-    content: JSON.stringify({ error: error instanceof Error ? error.message : String(error) }),
-    isError: true,
-  };
 }
 
 // ---------------------------------------------------------------------------

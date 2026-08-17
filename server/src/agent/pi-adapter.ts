@@ -22,6 +22,7 @@ import {
   type RunOptions,
 } from "./contracts.js";
 import { PHASE1_SYSTEM_PROMPT, phase1ResourceRoots } from "./phase1-prompt.js";
+import { requireSafeId as validateSafeId } from "./ids.js";
 
 type Environment = Record<string, string | undefined>;
 
@@ -98,7 +99,6 @@ interface ActiveTurn {
   assistantStopReason?: string;
 }
 
-const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const MAX_TEXT = 4_096;
 const MAX_DEPTH = 3;
 const MAX_ITEMS = 20;
@@ -136,12 +136,10 @@ function boundedValue(value: unknown, depth = 0): unknown {
 }
 
 function requireSafeId(name: string, value: string): void {
-  if (!SAFE_ID.test(value)) {
-    throw new BioMedAgentError(
-      "INVALID_SESSION_CONFIG",
-      `${name} must be a safe non-empty identifier`,
-    );
-  }
+  validateSafeId(name, value, {
+    message: `${name} must be a safe non-empty identifier`,
+    errorFactory: (message) => new BioMedAgentError("INVALID_SESSION_CONFIG", message),
+  });
 }
 
 async function requireDirectory(name: string, value: string): Promise<string> {

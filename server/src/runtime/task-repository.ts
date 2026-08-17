@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, open, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, rm } from "node:fs/promises";
 import path from "node:path";
 
 import type {
@@ -11,12 +11,12 @@ import type {
   TaskSnapshot,
 } from "@biomed/contracts";
 
+import { readJsonFileOrNull, writeJsonAtomic } from "../persistence/atomic-json.js";
+import { requireSafeId, SAFE_ID } from "./safe-id.js";
 import {
   reduceTaskEvents,
   type DurableTaskMetadata,
 } from "./task-reducer.js";
-
-const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 
 export interface CreateDurableTaskInput {
   requestId: string;
@@ -51,10 +51,6 @@ export interface DurableTaskRepositoryOptions {
 }
 
 type EventListener = (event: EventEnvelope) => void;
-
-function requireSafeId(value: string, name: string): void {
-  if (!SAFE_ID.test(value)) throw new TypeError(`${name} must be a safe identifier`);
-}
 
 function requireCleanUtf8(value: string): void {
   if (/\uFFFD/u.test(value)) {
@@ -209,6 +205,14 @@ export class DurableTaskRepository {
     payloads: readonly EventPayload[],
   ): Promise<EventEnvelope[]> {
     requireSafeId(runId, "runId");
+    return this.appendEvents(taskId, runId, payloads);
+  }
+
+  private appendEvents(
+    taskId: string,
+    runId: string | null,
+    payloads: readonly EventPayload[],
+  ): Promise<EventEnvelope[]> {
     if (payloads.length === 0) throw new TypeError("payloads must not be empty");
     requireSafeId(taskId, "taskId");
     const previous = this.pending.get(taskId) ?? Promise.resolve();
@@ -337,42 +341,7 @@ export class DurableTaskRepository {
   }
 
   private append(taskId: string, runId: string | null, payload: EventPayload): Promise<EventEnvelope> {
-    requireSafeId(taskId, "taskId");
-    const previous = this.pending.get(taskId) ?? Promise.resolve();
-    const operation = previous.then(async () => {
-      let sequence = this.latestSequence.get(taskId);
-      if (sequence === undefined) {
-        sequence = (await this.readAllEvents(taskId)).at(-1)?.sequence ?? 0;
-      }
-      const event: EventEnvelope = {
-        schema_version: "2.0",
-        event_id: `event_${this.id()}`,
-        type: payload.type,
-        task_id: taskId,
-        run_id: runId,
-        stage_attempt_id: null,
-        sequence: sequence + 1,
-        timestamp: this.now().toISOString(),
-        payload,
-      };
-      await mkdir(this.taskRoot(taskId), { recursive: true });
-      const handle = await open(this.eventsPath(taskId), "a");
-      try {
-        await handle.writeFile(`${JSON.stringify(event)}\n`, "utf8");
-        await handle.sync();
-      } finally {
-        await handle.close();
-      }
-      this.latestSequence.set(taskId, event.sequence);
-      for (const listener of this.listeners) listener(event);
-      return event;
-    });
-    this.pending.set(taskId, operation);
-    const cleanup = (): void => {
-      if (this.pending.get(taskId) === operation) this.pending.delete(taskId);
-    };
-    void operation.then(cleanup, cleanup);
-    return operation;
+    return this.appendEvents(taskId, runId, [payload]).then((events) => events[0]);
   }
 
   private taskRoot(taskId: string): string {
@@ -415,20 +384,12 @@ export class DurableTaskRepository {
   }
 
   private async writeMetadata(taskId: string, metadata: DurableTaskMetadata): Promise<void> {
-    const target = this.metadataPath(taskId);
-    const temporary = `${target}.${this.id()}.tmp`;
-    await writeFile(temporary, `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
-    await rename(temporary, target);
+    await writeJsonAtomic(this.metadataPath(taskId), metadata);
   }
 
   private async readMetadata(taskId: string): Promise<DurableTaskMetadata | null> {
     requireSafeId(taskId, "taskId");
-    try {
-      return JSON.parse(await readFile(this.metadataPath(taskId), "utf8")) as DurableTaskMetadata;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-      throw error;
-    }
+    return readJsonFileOrNull<DurableTaskMetadata>(this.metadataPath(taskId));
   }
 
   private async readAllEvents(taskId: string): Promise<EventEnvelope[]> {

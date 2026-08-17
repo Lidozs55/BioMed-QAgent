@@ -16,6 +16,7 @@ import { join, relative } from "node:path";
 import type { DatasetManifest, DatasetPublication, ValidationResult } from "../contracts/index.js";
 import { throwIfAborted } from "../cooperative.js";
 import { BuildError } from "../adapters/errors.js";
+import { asPosix } from "../adapters/paths.js";
 import { LockLostError } from "../service/build-lock.js";
 import { pythonJsonDumps } from "../runtime/digests.js";
 import { checkReleaseInvariants, findLatestPublication, PUBLISH_DIR } from "./invariants.js";
@@ -213,10 +214,6 @@ function dirnameOf(path: string): string {
 function pythonNowIso(): string {
   const iso = new Date().toISOString();
   return iso.replace(/\.\d{3}Z$/, (match) => `.${match.slice(1, 4)}000Z`);
-}
-
-function asPosix(path: string): string {
-  return path.replace(/\\/g, "/");
 }
 
 export type { DatasetPublication, DatasetManifest };

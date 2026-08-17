@@ -12,6 +12,7 @@ import type { BioMedAgentTool } from "../contracts.js";
 import { PublicHttpClient } from "../../external/network/http-client.js";
 import { validatePublicHttpUrl } from "../../external/network/url-policy.js";
 import type { DatabaseClient } from "../../persistence/db-client.js";
+import { BRIDGE_OP } from "../../persistence/db-client.js";
 import { noopHooks, type ToolApprovalGate, type ToolHooks } from "./tool-hooks.js";
 
 export const MAX_RESPONSE_BYTES = 10 * 1024 * 1024;
@@ -312,7 +313,7 @@ export function collectEnvSecrets(): Record<string, string> {
 
 /** Load enabled user declarative manifests via the DB bridge (named ops). */
 export async function loadDeclarativeManifests(db: DatabaseClient): Promise<DeclarativeDatabaseManifest[]> {
-  const raw = await db.call<Array<Record<string, unknown>>>("database.tool_manifests", {});
+  const raw = await db.call<Array<Record<string, unknown>>>(BRIDGE_OP.DATABASE_TOOL_MANIFESTS, {});
   return raw.map((entry) => parseDeclarativeManifest(entry));
 }
 

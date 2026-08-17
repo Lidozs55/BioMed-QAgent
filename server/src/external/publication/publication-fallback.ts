@@ -27,7 +27,6 @@
  * failed: ...`` message Python raises.
  */
 
-import { createHash } from "node:crypto";
 import { open, rm } from "node:fs/promises";
 import path from "node:path";
 
@@ -46,19 +45,9 @@ import { AcquisitionError } from "../network/errors.js";
 import type { PublicHttpClient } from "../network/http-client.js";
 import { EuropePmcError, fetchFullTextXmlUrl, pythonBytesRepr } from "./europe-pmc.js";
 import { UnpaywallError, lookupPdfUrl } from "./unpaywall.js";
+import { looksLikeXml } from "./xml.js";
 
-/** Python ``make_source_id`` (``app/domain/contracts/ids.py``) parity. */
-export function makeSourceId(database: string, accession: string, url: string): string {
-  const canonical = {
-    accession: accession.trim().toLowerCase(),
-    database,
-    url: url.trim(),
-  };
-  if (!canonical.accession || !canonical.url) {
-    throw new TypeError("accession and url must not be blank");
-  }
-  return `src_${createHash("sha256").update(JSON.stringify(canonical)).digest("hex").slice(0, 32)}`;
-}
+export { makeSourceId } from "../sources/fallback.js";
 
 export class PublicationFallbackError extends AcquisitionError {
   /** Per-tier failure descriptions (Python failure list). */
@@ -119,15 +108,6 @@ async function readAssetHead(asset: SourceAsset, workdirRoot: string): Promise<B
   } finally {
     await handle.close();
   }
-}
-
-const LSTRIP_WHITESPACE = new Set([0x20, 0x09, 0x0a, 0x0d, 0x0b, 0x0c]);
-
-/** Python ``fetch_full_text_xml`` XML sanity check (bytes.lstrip + "<"). */
-function looksLikeXml(head: Buffer): boolean {
-  let index = 0;
-  while (index < head.length && LSTRIP_WHITESPACE.has(head[index] ?? 0)) index++;
-  return head[index] === 0x3c;
 }
 
 /** Best-effort removal of a published task asset rejected by the XML check. */

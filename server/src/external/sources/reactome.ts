@@ -10,13 +10,13 @@
 
 import path from "node:path";
 
-import type { QueryStatus } from "../../agent/tools/tool-hooks.js";
 import type { DataLevel } from "../../dataset/contracts/enums.js";
 import type { SourceRecord } from "../../dataset/contracts/source.js";
 import { acquireSource } from "../acquisition/downloader.js";
 import type { ContentCache } from "../acquisition/content-cache.js";
 import { isAbortError } from "../network/errors.js";
 import type { PublicHttpClient } from "../network/http-client.js";
+import type { SourceQueryContext } from "./context.js";
 import {
   DEFAULT_RATE_LIMIT_MS,
   FallbackFailure,
@@ -29,7 +29,6 @@ import {
   rateLimit,
   stripHtml,
   visibleText,
-  type BrowserFallback,
   type FallbackAttempt,
   type FallbackFetchResult,
 } from "./fallback.js";
@@ -39,15 +38,6 @@ const REACTOME_PAGE_BASE = "https://reactome.org/content/detail";
 
 /** search_reactome enriches the first N entries without a search-API summary. */
 const SUMMATION_BATCH_LIMIT = 3;
-
-export interface SourceQueryContext {
-  client: PublicHttpClient;
-  browserFallback?: BrowserFallback;
-  signal?: AbortSignal;
-  rateLimitMs?: number;
-  onQueryStarted?: (query: string, source: string) => void;
-  onQuery?: (query: string, source: string, status: QueryStatus, recordsCount?: number) => void;
-}
 
 export interface DownloadDeps {
   taskRoot: string;

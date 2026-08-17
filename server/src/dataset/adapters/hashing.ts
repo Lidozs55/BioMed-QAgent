@@ -12,6 +12,13 @@ import { createReadStream } from "node:fs";
 import { readFileSync } from "node:fs";
 import { throwIfAborted } from "../cooperative.js";
 
+/** SHA-256 hex of in-memory bytes (deduplicated from the copies in
+ * ``dataset/service/dataset-core.ts``, ``runtime/artifact-store.ts``,
+ * ``runtime/durable-agent-runtime.ts`` and ``product/build-store.ts``). */
+export function sha256Bytes(bytes: Buffer): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
 export function sha256File(path: string): string {
   const buffer = readFileSync(path);
   return createHash("sha256").update(buffer).digest("hex");

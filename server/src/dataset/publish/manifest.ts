@@ -25,6 +25,7 @@ import type {
 import { parseManifestArtifactEntry } from "../contracts/index.js";
 import { CHECKPOINT_STRIDE, checkpoint, throwIfAborted } from "../cooperative.js";
 import { sha256FileStream } from "../adapters/hashing.js";
+import { asPosix, joinOutput } from "../adapters/paths.js";
 import { delimitedRowsFromFileAsync } from "../adapters/text.js";
 import { pyFloat, pythonJsonDumps } from "../runtime/digests.js";
 import type { CanonicalizationResult } from "../canonicalizer/index.js";
@@ -477,14 +478,6 @@ export function writeManifest(manifest: DatasetManifest, outputDir: string): str
   const manifestPath = joinOutput(outputDir, MANIFEST_FILE);
   writeFileSync(manifestPath, `${pythonJsonDumps(manifest)}\n`, "utf8");
   return manifestPath;
-}
-
-function joinOutput(outputDir: string, name: string): string {
-  return `${outputDir.replace(/[\\/]+$/, "")}/${name}`;
-}
-
-function asPosix(path: string): string {
-  return path.replace(/\\/g, "/");
 }
 
 export type { DatasetManifest, ManifestArtifactEntry };

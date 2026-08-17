@@ -44,6 +44,7 @@ import {
 } from "../../analysis/index.js";
 import { resolveTaskLocalFile, toTaskRelative } from "../../processing/paths.js";
 import { noopHooks, type ToolServiceDeps } from "./tool-hooks.js";
+import { errorMessage, jsonContent } from "./result.js";
 
 export const RUN_DIFFERENTIAL_EXPRESSION_TOOL_NAME = "run_differential_expression";
 export const GENERATE_HEATMAP_TOOL_NAME = "generate_heatmap";
@@ -144,10 +145,6 @@ function validateCsv(text: string, sourceLabel: string, byteLength: number) {
     throw new Error(`CSV has no columns: ${sourceLabel}`);
   }
   return table;
-}
-
-function jsonContent(value: unknown): { content: string } {
-  return { content: JSON.stringify(value, null, 2) };
 }
 
 interface FileWrites {
@@ -383,7 +380,7 @@ export function createAnalysisTools(deps: AnalysisToolDeps): BioMedAgentTool[] {
         return jsonContent(result);
       } catch (error) {
         hooks.onQuery?.(csvPath ?? String(record.csv_path ?? ""), "analysis", "failed", 0);
-        return errorResult(error instanceof Error ? error.message : String(error));
+        return errorResult(errorMessage(error));
       }
     },
   };
@@ -547,7 +544,7 @@ export function createAnalysisTools(deps: AnalysisToolDeps): BioMedAgentTool[] {
         return jsonContent(result);
       } catch (error) {
         hooks.onQuery?.(csvPath ?? String(record.csv_path ?? ""), "analysis", "failed", 0);
-        return errorResult(error instanceof Error ? error.message : String(error));
+        return errorResult(errorMessage(error));
       }
     },
   };
@@ -647,7 +644,7 @@ export function createAnalysisTools(deps: AnalysisToolDeps): BioMedAgentTool[] {
         return jsonContent(result);
       } catch (error) {
         hooks.onQuery?.(csvPath ?? String(record.csv_path ?? ""), "analysis", "failed", 0);
-        return errorResult(error instanceof Error ? error.message : String(error));
+        return errorResult(errorMessage(error));
       }
     },
   };
@@ -747,7 +744,7 @@ export function createAnalysisTools(deps: AnalysisToolDeps): BioMedAgentTool[] {
         return jsonContent(result);
       } catch (error) {
         hooks.onQuery?.(csvPath ?? String(record.csv_path ?? ""), "analysis", "failed", 0);
-        return errorResult(error instanceof Error ? error.message : String(error));
+        return errorResult(errorMessage(error));
       }
     },
   };

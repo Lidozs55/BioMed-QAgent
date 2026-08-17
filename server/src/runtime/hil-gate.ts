@@ -7,6 +7,7 @@ import { OperationAbortedError } from "../dataset/cooperative.js";
 import type { ToolApprovalGate } from "../agent/tools/tool-hooks.js";
 import {
   DurableHILStore,
+  userInputRequiredPayload,
   type CreateHILRequestInput,
 } from "./hil-store.js";
 import type { DurableTaskRepository } from "./task-repository.js";
@@ -175,27 +176,16 @@ export class DurableHILGate implements HILGateHandle {
     );
     if (!alreadyEmitted) {
       try {
-        await this.repository.appendRunEvent(this.taskId, runId, {
-        type: "user_input_required",
-        request_id: request.request_id,
-        prompt_kind:
-          request.kind === "permission" ? "api_key_or_credential" : "data_correction",
-        summary: request.summary,
-        expires_at: null,
-        fixture_exempt: false,
-        detail: {
-          ...(request.kind === "permission" &&
-          input.evidence !== null &&
-          typeof input.evidence === "object" &&
-          !Array.isArray(input.evidence)
+        await this.repository.appendRunEvent(
+          this.taskId,
+          runId,
+          userInputRequiredPayload(request, request.kind === "permission" &&
+            input.evidence !== null &&
+            typeof input.evidence === "object" &&
+            !Array.isArray(input.evidence)
             ? input.evidence
             : {}),
-          review_type: request.review_type,
-          evidence_digest: request.evidence_digest,
-          policy_ref: request.policy_ref,
-        },
-        hil_request: request,
-        });
+        );
       } catch (error) {
         const failure = error instanceof Error ? error : new Error("failed to persist HIL event");
         this.rejectPending(runId, failure);

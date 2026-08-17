@@ -12,6 +12,7 @@ import path from "node:path";
 
 import type { BioMedAgentTool } from "../contracts.js";
 import { noopHooks, type ToolHooks, type ToolServiceDeps } from "./tool-hooks.js";
+import { jsonContent } from "./result.js";
 import {
   extractPdfMetadata as extractPdfMetadataImpl,
   extractPdfTables as extractPdfTablesImpl,
@@ -31,10 +32,6 @@ function expectFilePath(value: unknown, toolName: string): string {
     throw new TypeError(`${toolName}: file_path must be a non-empty string`);
   }
   return value.trim();
-}
-
-function jsonResult(result: PdfTablesResult | PdfMetadataResult): { content: string } {
-  return { content: JSON.stringify(result, null, 2) };
 }
 
 /**
@@ -73,7 +70,7 @@ export function createPdfTools(deps: PdfToolDeps): BioMedAgentTool[] {
         result = await extractPdfTablesImpl(filePath, { taskRoot });
       } catch (error) {
         hooks.onQuery?.(filePath, "pdf_extraction", "failed", 0);
-        return jsonResult({
+        return jsonContent({
           status: "error",
           error: `unexpected error: ${error instanceof Error ? error.message : String(error)}`,
           source_file: filePath,
@@ -91,7 +88,7 @@ export function createPdfTools(deps: PdfToolDeps): BioMedAgentTool[] {
       } else {
         hooks.onQuery?.(filePath, "pdf_extraction", "failed", 0);
       }
-      return jsonResult(result);
+      return jsonContent(result);
     },
   };
 
@@ -122,7 +119,7 @@ export function createPdfTools(deps: PdfToolDeps): BioMedAgentTool[] {
         result = await extractPdfMetadataImpl(filePath, { taskRoot });
       } catch (error) {
         hooks.onQuery?.(filePath, "pdf_extraction", "failed", 0);
-        return jsonResult({
+        return jsonContent({
           status: "error",
           error: `unexpected error: ${error instanceof Error ? error.message : String(error)}`,
           source_file: filePath,
@@ -133,7 +130,7 @@ export function createPdfTools(deps: PdfToolDeps): BioMedAgentTool[] {
       } else {
         hooks.onQuery?.(filePath, "pdf_extraction", "failed", 0);
       }
-      return jsonResult(result);
+      return jsonContent(result);
     },
   };
 

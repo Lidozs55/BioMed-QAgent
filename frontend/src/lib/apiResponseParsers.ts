@@ -18,6 +18,11 @@ import {
   assertHex64,
   assertNonNegativeInt,
   assertJsonRecord,
+  ERROR_CODES,
+  MESSAGE_ROLES,
+  RUN_STATUSES,
+  STAGE_NAMES,
+  TASK_MODES,
 } from "@biomed/contracts";
 import type {
   BuildDetail,
@@ -25,7 +30,6 @@ import type {
   DatasetManifest,
   DatasetPublication,
   DownloadResumeAccepted,
-  ErrorCode,
   EventPage,
   ManifestArtifactEntry,
   MessagePage,
@@ -64,30 +68,15 @@ const SUBAGENT_EVENT_TYPES = new Set([
 /* ---- finite/discriminated value validators (explicit switch, no as cast) ---- */
 
 export function assertRunStatus(v: unknown, path: string): "queued" | "running" | "finalizing" | "cancel_requested" | "awaiting_user_input" | "completed" | "failed" | "cancelled" | "interrupted" {
-  if (typeof v !== "string") throw new APIError(502, `Expected RunStatus string at ${path}, got ${typeof v}`);
-  switch (v) {
-    case "queued": case "running": case "finalizing": case "cancel_requested": case "awaiting_user_input":
-    case "completed": case "failed": case "cancelled": case "interrupted":
-      return v;
-    default:
-      throw new APIError(502, `Invalid RunStatus "${v}" at ${path}`);
-  }
+  return assertFinite(v, path, RUN_STATUSES);
 }
 
 export function assertTaskMode(v: unknown, path: string): "agent" | "fixture" | "import" {
-  if (typeof v !== "string") throw new APIError(502, `Expected TaskMode string at ${path}, got ${typeof v}`);
-  switch (v) {
-    case "agent": case "fixture": case "import": return v;
-    default: throw new APIError(502, `Invalid TaskMode "${v}" at ${path}`);
-  }
+  return assertFinite(v, path, TASK_MODES);
 }
 
 export function assertMessageRole(v: unknown, path: string): "system" | "user" | "assistant" | "tool" {
-  if (typeof v !== "string") throw new APIError(502, `Expected MessageRole string at ${path}, got ${typeof v}`);
-  switch (v) {
-    case "system": case "user": case "assistant": case "tool": return v;
-    default: throw new APIError(502, `Invalid MessageRole "${v}" at ${path}`);
-  }
+  return assertFinite(v, path, MESSAGE_ROLES);
 }
 
 function assertEventSchemaVersion(v: unknown, path: string): "1.0" | "2.0" {
@@ -162,32 +151,12 @@ function parseRunRecord(json: unknown, idx: number): TaskSnapshot["runs"][number
   };
 }
 
-function assertErrorCode(v: unknown, path: string): ErrorCode {
-  if (typeof v !== "string") throw new APIError(502, `Expected ErrorCode string at ${path}, got ${typeof v}`);
-  switch (v) {
-    case "configuration_error":
-    case "network_error":
-    case "timeout":
-    case "download_incomplete":
-    case "checksum_mismatch":
-    case "parse_error":
-    case "validation_error":
-    case "cancelled":
-    case "internal_error":
-      return v;
-    default:
-      throw new APIError(502, `Invalid ErrorCode "${v}" at ${path}`);
-  }
-}
-
-const STAGE_NAMES = ["discovery", "acquisition", "processing", "artifact_build", "validation"] as const;
-
 function parseRunSummary(json: unknown, path: string): RunSummary {
   const obj = assertObject(json, path);
   return {
     run_status: assertRunStatus(Reflect.get(obj, "run_status"), `${path}.run_status`),
     build_result: assertOptionalNull(Reflect.get(obj, "build_result"), `${path}.build_result`, (value, p) => parseBuildResult(value, p)),
-    error_code: assertOptionalNull(Reflect.get(obj, "error_code"), `${path}.error_code`, assertErrorCode),
+    error_code: assertOptionalNull(Reflect.get(obj, "error_code"), `${path}.error_code`, (value, p) => assertFinite(value, p, ERROR_CODES)),
     cancelled_at_stage: assertOptionalNull(Reflect.get(obj, "cancelled_at_stage"), `${path}.cancelled_at_stage`, (value, p) => assertFinite(value, p, STAGE_NAMES)),
     user_message: assertStringOrNull(Reflect.get(obj, "user_message"), `${path}.user_message`),
   };

@@ -43,7 +43,7 @@ import { createLocalCacheTools } from "./local-cache.js";
 import { createPdfTools } from "./pdf.js";
 import { createChartDataVlmTool } from "./extract-chart-data-vlm.js";
 import type { VlmConfig } from "../../processing/vlm/vlm-client.js";
-import type { QueryStatus, ToolApprovalGate, ToolHooks, ToolServiceDeps } from "./tool-hooks.js";
+import type { ToolApprovalGate, ToolHooks, ToolServiceDeps } from "./tool-hooks.js";
 import type { DatasetHILGate } from "../../dataset/review/hil-policy.js";
 
 export interface BusinessToolBundleContext {
@@ -117,12 +117,7 @@ export async function createBusinessToolBundle(
   };
 
   // Deterministic, network-free tools.
-  const analyzeHooks = context.hooks?.onQuery === undefined ? {} : {
-    onQuery: (query: string, source: string, status: string, recordsCount: number) => {
-      context.hooks?.onQuery?.(query, source, status as QueryStatus, recordsCount);
-    },
-  };
-  register([createAnalyzePapersTool(analyzeHooks)], "literature_understanding");
+  register([createAnalyzePapersTool(context.hooks ?? {})], "literature_understanding");
   register([createResearchDataGuidanceTool({ docsRoot: context.guidanceDocsRoot })], "research_data_guidance");
 
   // Curated external data sources (P5-03..P5-06).

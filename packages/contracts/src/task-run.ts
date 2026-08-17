@@ -90,6 +90,78 @@ export type SubagentPromptKind =
   | "terms_approval"
   | "confirmation";
 
+export const STAGE_NAMES: readonly StageName[] = [
+  "discovery",
+  "acquisition",
+  "processing",
+  "artifact_build",
+  "validation",
+];
+
+export const ERROR_CODES: readonly ErrorCode[] = [
+  "configuration_error",
+  "network_error",
+  "timeout",
+  "download_incomplete",
+  "checksum_mismatch",
+  "parse_error",
+  "validation_error",
+  "cancelled",
+  "internal_error",
+];
+
+export const RUN_STATUSES: readonly RunStatus[] = [
+  "queued",
+  "running",
+  "finalizing",
+  "cancel_requested",
+  "awaiting_user_input",
+  "completed",
+  "failed",
+  "cancelled",
+  "interrupted",
+];
+
+export const TASK_MODES: readonly TaskMode[] = ["agent", "fixture", "import"];
+
+export const MESSAGE_ROLES: readonly MessageRole[] = ["system", "user", "assistant", "tool"];
+
+export const SUBAGENT_TYPES: readonly SubagentType[] = ["source_research", "skill_builder"];
+
+export const SUBAGENT_STATUSES: readonly SubagentStatus[] = [
+  "queued",
+  "running",
+  "completed",
+  "failed",
+  "cancel_requested",
+  "cancelled",
+  "interrupted",
+];
+
+export const SUBAGENT_ERROR_CODES: readonly SubagentErrorCode[] = [
+  "not_found",
+  "capability_gap",
+  "extraction_failed",
+  "auth_required",
+  "captcha_required",
+  "credential_required",
+  "payment_required",
+  "policy_denied",
+  "rate_limited",
+  "timed_out",
+  "cancelled",
+  "internal_error",
+];
+
+export const SUBAGENT_PROMPT_KINDS: readonly SubagentPromptKind[] = [
+  "authentication",
+  "captcha",
+  "api_key_or_credential",
+  "payment",
+  "terms_approval",
+  "confirmation",
+];
+
 export interface DatabaseRecord {
   id: string;
   name: string;

@@ -8,17 +8,15 @@
  * search page through the shared three-tier chain (api → html → crawl).
  */
 
-import type { QueryStatus } from "../../agent/tools/tool-hooks.js";
 import { isAbortError } from "../network/errors.js";
-import type { PublicHttpClient } from "../network/http-client.js";
 import {
   FallbackFailure,
   fallbackFetch,
   isRecord,
   quoteQuery,
-  type BrowserFallback,
   type FallbackAttempt,
 } from "./fallback.js";
+import type { SourceQueryContext } from "./context.js";
 
 const CHEMBL_API_BASE = "https://www.ebi.ac.uk/chembl/api/data";
 const CHEMBL_PAGE_BASE = "https://www.ebi.ac.uk/chembl/g";
@@ -28,16 +26,6 @@ export const CHEMBL_USAGE_HINT =
   "ChEMBL 是 Agent-only 研究来源（research_only）：检索结果可用于" +
   "调研与证据收集，但绝不能作为 DatasetBuildSpec 的 verified " +
   "source 进入数据构建——spec 校验会拒绝（source_not_pipeline_supported）。";
-
-export interface SourceQueryContext {
-  client: PublicHttpClient;
-  browserFallback?: BrowserFallback;
-  signal?: AbortSignal;
-  /** Request pacing override for tests; default 2000ms. */
-  rateLimitMs?: number;
-  onQueryStarted?: (query: string, source: string) => void;
-  onQuery?: (query: string, source: string, status: QueryStatus, recordsCount?: number) => void;
-}
 
 /** Python ``_accept_chembl_search_result``: dict with a ``molecules`` list. */
 export function acceptChemblSearchResult(methodUsed: string, content: string): boolean {

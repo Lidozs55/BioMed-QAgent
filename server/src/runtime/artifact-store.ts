@@ -1,15 +1,15 @@
-import { createHash } from "node:crypto";
 import { readFile, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
 import type { ArtifactRecord } from "@biomed/contracts";
 import { parseDatasetPublication, parseManifestArtifactEntry } from "../dataset/contracts/manifest.js";
+import { sha256Bytes } from "../dataset/adapters/hashing.js";
 import {
   packageDigest,
   type ManifestArtifactEntry,
 } from "../dataset/publish/manifest.js";
+import { SAFE_ID } from "./safe-id.js";
 
-const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 
 type ManifestArtifact = ManifestArtifactEntry;
@@ -84,10 +84,6 @@ async function verifiedPath(buildDir: string, relativePath: string): Promise<str
   return realFile;
 }
 
-function sha256Hex(bytes: Buffer): string {
-  return createHash("sha256").update(bytes).digest("hex");
-}
-
 async function loadLatestManifest(taskRoot: string): Promise<LoadedManifest | null> {
   const buildsRoot = path.join(taskRoot, "datasets_build");
   let entries;
@@ -139,7 +135,7 @@ async function loadLatestManifest(taskRoot: string): Promise<LoadedManifest | nu
     // validation_summary, …) which ``packageDigest`` does not cover —
     // changes the bytes and is rejected here, before the package-digest
     // check below (ADR-026 §3).
-    if (sha256Hex(manifestBytes) !== newest.manifestSha256) {
+    if (sha256Bytes(manifestBytes) !== newest.manifestSha256) {
       throw new ArtifactIntegrityError("Build manifest file hash is invalid");
     }
   }
@@ -268,7 +264,7 @@ async function readVerifiedArtifact(
     loaded.publicationDir,
     artifact.relative_path,
   ));
-  if (bytes.length !== artifact.size_bytes || sha256Hex(bytes) !== artifact.sha256) {
+  if (bytes.length !== artifact.size_bytes || sha256Bytes(bytes) !== artifact.sha256) {
     throw new ArtifactIntegrityError("Artifact integrity check failed");
   }
   return bytes;
@@ -282,7 +278,7 @@ export async function listTaskArtifacts(taskRoot: string): Promise<ArtifactRecor
     name: "dataset_manifest.json",
     role: "schema",
     size: loaded.manifestBytes.length,
-    sha256: sha256Hex(loaded.manifestBytes),
+    sha256: sha256Bytes(loaded.manifestBytes),
     media_type: "application/json",
   }];
   for (const artifact of loaded.artifacts) {

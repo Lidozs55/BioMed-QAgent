@@ -18,6 +18,7 @@ import type { AddressResolver } from "../network/dns.js";
 import { PublicHttpClient, type HttpClientResponse } from "../network/http-client.js";
 import { validateHttpsSourceUrl } from "../network/url-policy.js";
 import { describeError } from "../ncbi/retry.js";
+import { looksLikeXml } from "./xml.js";
 
 const EPMC_BASE = "https://www.ebi.ac.uk/europepmc/webservices/rest";
 //: EPMC is domestically reachable; allow a longer timeout than Unpaywall.
@@ -135,11 +136,7 @@ export async function fetchFullTextXml(pmcid: string, options: FetchFullTextXmlO
   }
 
   // Sanity check: should be XML (Python bytes.lstrip + startswith(b"<") parity)
-  let index = 0;
-  const isLstripWhitespace = (byte: number): boolean =>
-    byte === 0x20 || byte === 0x09 || byte === 0x0a || byte === 0x0d || byte === 0x0b || byte === 0x0c;
-  while (index < content.length && isLstripWhitespace(content[index] ?? 0)) index++;
-  if (content[index] !== 0x3c) {
+  if (!looksLikeXml(content)) {
     throw new EuropePmcError(
       `EPMC returned non-XML body for PMC${digits} (first 80 bytes: ${pythonBytesRepr(content.subarray(0, 80))})`,
     );

@@ -1,6 +1,8 @@
 import { readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
+import { BRIDGE_OP } from "../persistence/db-client.js";
+
 const SAFE_SEGMENT = /^[A-Za-z0-9_-]{1,128}$/;
 
 interface CacheDatabase {
@@ -150,7 +152,7 @@ export class CacheApi {
   ) {}
 
   async list(namespace?: string, keyword?: string, limit = 50): Promise<{ items: Record<string, unknown>[] }> {
-    const values = await this.database.call<unknown[]>("cache.list", {
+    const values = await this.database.call<unknown[]>(BRIDGE_OP.CACHE_LIST, {
       ...(namespace === undefined ? {} : { source_namespace: namespace }),
       limit: Math.min(Math.max(limit, 1), 200),
     });
@@ -166,13 +168,13 @@ export class CacheApi {
     if (!SAFE_SEGMENT.test(datasetId)) return null;
     if (namespace !== undefined) {
       if (!SAFE_SEGMENT.test(namespace)) return null;
-      const value = await this.database.call<unknown>("cache.describe", {
+      const value = await this.database.call<unknown>(BRIDGE_OP.CACHE_DESCRIBE, {
         source_namespace: namespace,
         dataset_id: datasetId,
       });
       return value === null ? null : manifest(value);
     }
-    const values = await this.database.call<unknown[]>("cache.list", { limit: 10_000 });
+    const values = await this.database.call<unknown[]>(BRIDGE_OP.CACHE_LIST, { limit: 10_000 });
     return values.map(manifest).find((item) => item.dataset_id === datasetId) ?? null;
   }
 
@@ -207,7 +209,7 @@ export class CacheApi {
   }
 
   async exportZip(): Promise<Buffer> {
-    const values = await this.database.call<unknown[]>("cache.list", { limit: 10_000 });
+    const values = await this.database.call<unknown[]>(BRIDGE_OP.CACHE_LIST, { limit: 10_000 });
     const files: Array<{ name: string; bytes: Buffer }> = [];
     const index: CacheManifest[] = [];
     for (const value of values) {

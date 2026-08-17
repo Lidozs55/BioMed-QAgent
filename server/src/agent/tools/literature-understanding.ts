@@ -11,13 +11,14 @@
  */
 
 import type { BioMedAgentTool } from "../contracts.js";
+import type { QueryStatus, ToolHooks } from "./tool-hooks.js";
 
-export interface AnalyzePapersHooks {
+export type AnalyzePapersHooks = {
   /** Query lifecycle start (operation_started parity). */
-  onQueryStarted?: (query: string, source: string) => void;
+  onQueryStarted?: ToolHooks["onQueryStarted"];
   /** QueryStatus projection (Python run_ctx.log_query parity). */
-  onQuery?: (query: string, source: string, status: string, recordsCount: number) => void;
-}
+  onQuery?: (query: string, source: string, status: QueryStatus, recordsCount: number) => void;
+};
 
 const DATA_TYPES = [
   "RNA-seq", "microarray", "ChIP-seq", "WGS", "WES",
