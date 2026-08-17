@@ -265,9 +265,15 @@ export function adapterParamsForBinding(binding: SourceBinding): AdapterParams |
   }
 }
 
-function nextHeader(rows: DelimitedRow[]): { headerLine: number; header: string[] } {
-  for (const { line, values } of rows) {
-    if (values.length === 0 || !values.some((value) => value.length > 0)) {
+async function nextHeaderAsync(
+  rows: AsyncIterable<DelimitedRow>,
+): Promise<{ headerLine: number; header: string[] }> {
+  const iterator = rows[Symbol.asyncIterator]();
+  for (;;) {
+    const { done, value } = await iterator.next();
+    if (done) break;
+    const { line, values } = value;
+    if (values.length === 0 || !values.some((item) => item.length > 0)) {
       continue;
     }
     if (values[0].startsWith("#")) continue;
@@ -291,13 +297,13 @@ export class GdcExpressionAdapter extends SourceAdapter {
   readonly source_database = "gdc";
 
   protected async extract(
-    rows: DelimitedRow[],
+    rows: AsyncIterable<DelimitedRow>,
     longWriter: RowWriter,
     rejectedWriter: RowWriter,
     context: ExtractContext,
     signal?: AbortSignal | null,
   ): Promise<ExtractResult> {
-    const { headerLine, header } = nextHeader(rows);
+    const { headerLine, header } = await nextHeaderAsync(rows);
     if (
       header.includes("gene_name") &&
       (header.includes("tpm_unstranded") || header.includes("unstranded"))
@@ -316,7 +322,7 @@ export class GdcExpressionAdapter extends SourceAdapter {
   }
 
   private async extractMatrix(
-    rows: DelimitedRow[],
+    rows: AsyncIterable<DelimitedRow>,
     longWriter: RowWriter,
     rejectedWriter: RowWriter,
     context: ExtractContext & { headerLine: number; header: string[] },
@@ -346,7 +352,7 @@ export class GdcExpressionAdapter extends SourceAdapter {
     let rejectedCount = 0;
     let visited = 0;
     const batchId = `batch_${bindingId}`;
-    for (const { line, values } of rows) {
+    for await (const { line, values } of rows) {
       if (line <= headerLine) continue;
       if (values.length !== header.length || values[0].length === 0) {
         throw new AdapterError(`invalid GDC expression row at line ${line}`);
@@ -385,7 +391,7 @@ export class GdcExpressionAdapter extends SourceAdapter {
   }
 
   private async extractStarCounts(
-    rows: DelimitedRow[],
+    rows: AsyncIterable<DelimitedRow>,
     longWriter: RowWriter,
     rejectedWriter: RowWriter,
     context: ExtractContext & { headerLine: number; header: string[] },
@@ -431,7 +437,7 @@ export class GdcExpressionAdapter extends SourceAdapter {
     let rejectedCount = 0;
     let visited = 0;
     const batchId = `batch_${bindingId}`;
-    for (const { line, values } of rows) {
+    for await (const { line, values } of rows) {
       if (line <= headerLine) continue;
       if (values.length === 0 || !values.some((value) => value.length > 0)) continue;
       if (values.length !== header.length) {
@@ -519,13 +525,13 @@ export class XenaMatrixAdapter extends SourceAdapter {
   readonly source_database = "ucsc_xena";
 
   protected async extract(
-    rows: DelimitedRow[],
+    rows: AsyncIterable<DelimitedRow>,
     longWriter: RowWriter,
     rejectedWriter: RowWriter,
     context: ExtractContext,
     signal?: AbortSignal | null,
   ): Promise<ExtractResult> {
-    const { headerLine, header } = nextHeader(rows);
+    const { headerLine, header } = await nextHeaderAsync(rows);
     const { sourceAsset, buildId, bindingId, sourceName } = context;
     const samples = header.slice(1);
     if (samples.length === 0 || samples.some((sample) => sample.length === 0)) {
@@ -545,7 +551,7 @@ export class XenaMatrixAdapter extends SourceAdapter {
     let rejectedCount = 0;
     let visited = 0;
     const batchId = `batch_${bindingId}`;
-    for (const { line, values } of rows) {
+    for await (const { line, values } of rows) {
       if (line <= headerLine) continue;
       if (values.length === 0 || !values.some((value) => value.length > 0)) continue;
       if (values.length !== header.length) {

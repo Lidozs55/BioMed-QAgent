@@ -18,8 +18,7 @@ import { sha256FileStream } from "./hashing.js";
 import { assetIdFromSha256 } from "./identity.js";
 import {
   csvLine,
-  delimitedRowsWithLinesAsync,
-  readSourceTextAsync,
+  delimitedRowsFromFileAsync,
   type DelimitedRow,
 } from "./text.js";
 
@@ -186,8 +185,7 @@ export abstract class SourceAdapter {
     const longWriter = new BufferedCsvWriter(outputPath, SOURCE_LONG_COLUMNS);
     const rejectedWriter = new BufferedCsvWriter(rejectedPath, REJECTED_COLUMNS);
     try {
-      const text = await readSourceTextAsync(sourcePath, signal);
-      const rows = await delimitedRowsWithLinesAsync(text, "\t", signal);
+      const rows = delimitedRowsFromFileAsync(sourcePath, "\t", signal);
       const { statistics, warnings, mappings, rejectedCount } = await this.extract(
         rows,
         longWriter,
@@ -241,7 +239,7 @@ export abstract class SourceAdapter {
   }
 
   protected abstract extract(
-    rows: DelimitedRow[],
+    rows: AsyncIterable<DelimitedRow>,
     longWriter: RowWriter,
     rejectedWriter: RowWriter,
     context: ExtractContext,

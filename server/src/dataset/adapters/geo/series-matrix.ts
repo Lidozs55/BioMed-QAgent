@@ -52,7 +52,6 @@ import { assetIdFromSha256, makeRecordId } from "../identity.js";
 import { sha256FileStream } from "../hashing.js";
 import {
   delimitedRowsFromFileAsync,
-  delimitedRowsWithLines,
   delimitedRowsWithLinesAsync,
   parseDelimitedLine,
   readSourceTextAsync,
@@ -1021,7 +1020,7 @@ export class GeoExpressionAdapter extends SourceAdapter {
    * single fields and are re-split by the extractor).
    */
   protected async extract(
-    rows: ReturnType<typeof delimitedRowsWithLines>,
+    rows: AsyncIterable<DelimitedRow>,
     longWriter: RowWriter,
     rejectedWriter: RowWriter,
     context: {
@@ -1044,7 +1043,11 @@ export class GeoExpressionAdapter extends SourceAdapter {
           "(format/value_semantics/value_scale/expression_unit)",
       );
     }
-    const text = rows.map((row) => row.values.join("\t")).join("\n");
+    const lines: string[] = [];
+    for await (const { values } of rows) {
+      lines.push(values.join("\t"));
+    }
+    const text = lines.join("\n");
     const { statistics, warnings, mappings, rejectedCount } = await extractGeoText(
       text,
       longWriter,
