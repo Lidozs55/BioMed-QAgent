@@ -1,0 +1,7 @@
+{
+  "case_id":"gold6",
+  "admissible_as_current_evidence":false,
+  "reason":"Historical extraction outputs lack complete per-record locator/confidence closure, trusted publication, and Artifact API evidence.",
+  "runs":[{"task_id":"task_ts_ecd301f8-7fad-4eb1-8543-e923f11b69aa","run_id":"run_ts_17d22d02-5e75-4a28-bb1f-a47c77a091d1","request_id":"e2e-gold6-001","status":"workspace_summary_only","prompt_hash":"missing","publication_id":null,"artifact_count":null}],
+  "known_gaps":["chart points were not reliably digitized","page/figure/table locators were incomplete","no VLM/HIL publication path"]
+}
