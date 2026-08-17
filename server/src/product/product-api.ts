@@ -2,7 +2,7 @@ import { mkdir } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 
-import { DatabaseBridgeError } from "../persistence/db-client.js";
+import { BRIDGE_OP, DatabaseBridgeError } from "../persistence/db-client.js";
 import { readJsonFile, writeJsonAtomic } from "../persistence/atomic-json.js";
 import { HttpError } from "../http/error.js";
 import { readJsonBody } from "../http/body.js";
@@ -120,8 +120,8 @@ export async function createProductApi(options: ProductApiOptions): Promise<{
       // Phase 8: builtin catalogue is TS-owned; the bridge persists only user
       // manifests + the enabled/disabled state.
       const [userEntries, disabledState] = await Promise.all([
-        options.database.call<Array<Record<string, unknown>>>("database.list", {}),
-        options.database.call<{ disabled: string[] }>("database.disabled", {}),
+        options.database.call<Array<Record<string, unknown>>>(BRIDGE_OP.DATABASE_LIST, {}),
+        options.database.call<{ disabled: string[] }>(BRIDGE_OP.DATABASE_DISABLED, {}),
       ]);
       const disabled = new Set(disabledState.disabled);
       sendJson(response, 200, {
@@ -142,7 +142,7 @@ export async function createProductApi(options: ProductApiOptions): Promise<{
         );
         return;
       }
-      sendJson(response, 201, await options.database.call("database.save", { manifest }));
+      sendJson(response, 201, await options.database.call(BRIDGE_OP.DATABASE_SAVE, { manifest }));
       return;
     }
     const databaseMatch = /^\/api\/v1\/databases\/([^/]+)$/.exec(pathname);
@@ -152,7 +152,7 @@ export async function createProductApi(options: ProductApiOptions): Promise<{
         const builtin = BUILTIN_DATABASE_NAMES.has(name);
         if (builtin) {
           const disabledState = await options.database.call<{ disabled: string[] }>(
-            "database.disabled",
+            BRIDGE_OP.DATABASE_DISABLED,
             {},
           );
           const entry = getBuiltinDatabase(name, new Set(disabledState.disabled));
@@ -160,7 +160,7 @@ export async function createProductApi(options: ProductApiOptions): Promise<{
           else sendJson(response, 200, entry);
           return;
         }
-        const value = await options.database.call("database.get", { name });
+        const value = await options.database.call(BRIDGE_OP.DATABASE_GET, { name });
         if (value === null) sendError(response, 404, "Database not found");
         else sendJson(response, 200, value);
         return;
@@ -170,7 +170,7 @@ export async function createProductApi(options: ProductApiOptions): Promise<{
           sendError(response, 403, "builtin databases are immutable");
           return;
         }
-        sendJson(response, 200, await options.database.call("database.patch", {
+        sendJson(response, 200, await options.database.call(BRIDGE_OP.DATABASE_PATCH, {
           name,
           patch: asRecord(await readJsonBody(request)),
         }));
@@ -181,7 +181,7 @@ export async function createProductApi(options: ProductApiOptions): Promise<{
           sendError(response, 403, "builtin databases cannot be deleted");
           return;
         }
-        await options.database.call("database.delete", { name });
+        await options.database.call(BRIDGE_OP.DATABASE_DELETE, { name });
         sendNoContent(response);
         return;
       }
@@ -190,7 +190,7 @@ export async function createProductApi(options: ProductApiOptions): Promise<{
     if (method === "POST" && toggleMatch !== null) {
       const name = decodeURIComponent(toggleMatch[1]!);
       const enabled = toggleMatch[2] === "enable";
-      sendJson(response, 200, await options.database.call("database.set_enabled", { name, enabled }));
+      sendJson(response, 200, await options.database.call(BRIDGE_OP.DATABASE_SET_ENABLED, { name, enabled }));
       return;
     }
     if (pathname === "/api/v1/personalization") {
