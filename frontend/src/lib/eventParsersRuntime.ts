@@ -357,7 +357,14 @@ export function parseRuntimeEventPayload(payloadObj: Record<string, unknown>, pa
         throw new APIError(502, `Invalid permission capability at ${path}.capability`);
       }
       const scope = assertRequiredString(Reflect.get(payloadObj, "scope"), path + ".scope");
-      if (scope !== "workspace" && scope !== "task_output" && scope !== "project" && scope !== "external") {
+      if (
+        scope !== "workspace" &&
+        scope !== "task_output" &&
+        scope !== "framework_internal" &&
+        scope !== "sensitive" &&
+        scope !== "project" &&
+        scope !== "external"
+      ) {
         throw new APIError(502, `Invalid permission scope at ${path}.scope`);
       }
       return {

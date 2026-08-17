@@ -19,7 +19,7 @@ import { STAGE_LABELS } from "@/components/conversation/stageLabels";
 import { openSubagentPanel } from "@/components/subagentPanelControl";
 import { TaskStatusIcon } from "@/components/taskStatus";
 import { UserInputDialog } from "@/components/UserInputDialog";
-import { PermissionDialog } from "@/components/PermissionDialog";
+import { PermissionQuestionnaire } from "@/components/intervention/PermissionQuestionnaire";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -459,6 +459,7 @@ export function ChatPanel({
       activeTask.summary.status === "running" ||
       activeTask.summary.status === "finalizing") &&
     activeRunId !== null &&
+    activeTask.pendingPermission === null &&
     (!activeRunHasAssistantMessage || activeRunPendingToolCall);
   const continuationDisabledReason = useMemo(() => {
     if (activeTask === undefined) return "选择已完成的 Agent 任务后继续提问";
@@ -969,6 +970,20 @@ export function ChatPanel({
                   </MessageScrollerItem>
                 )}
 
+                {resolvePermission !== undefined && activeTask?.pendingPermission !== null && activeTask !== undefined && (
+                  <MessageScrollerItem
+                    messageId={`permission:${activeTask.pendingPermission.requestId}`}
+                    scrollAnchor
+                  >
+                    <PermissionQuestionnaire
+                      key={activeTask.pendingPermission.requestId}
+                      taskId={activeTask.summary.task_id}
+                      permission={activeTask.pendingPermission}
+                      onResolvePermission={resolvePermission}
+                    />
+                  </MessageScrollerItem>
+                )}
+
                 {activeTask?.summary.status === "completed" && (
                   <MessageScrollerItem messageId={`complete:${activeTaskId}`}>
                     <Marker variant="separator">
@@ -1060,9 +1075,6 @@ export function ChatPanel({
         </div>
       </MessageScrollerProvider>
       {resumeRun !== undefined && <UserInputDialog task={activeTask} onResumeRun={resumeRun} />}
-      {resolvePermission !== undefined && (
-        <PermissionDialog task={activeTask} onResolvePermission={resolvePermission} />
-      )}
     </div>
   );
 }

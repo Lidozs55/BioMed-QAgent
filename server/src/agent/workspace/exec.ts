@@ -266,27 +266,6 @@ async function killProcessTree(pid: number): Promise<void> {
   }
 }
 
-function redactOutput(context: WorkspaceContext, value: string): string {
-  let redacted = value;
-  for (const root of new Set([context.workspaceRoot, context.canonicalWorkspaceRoot])) {
-    if (process.platform === "win32") {
-      const representations = [root, JSON.stringify(root).slice(1, -1)];
-      for (const representation of representations) {
-        let index = redacted.toLowerCase().indexOf(representation.toLowerCase());
-        while (index !== -1) {
-          redacted = `${redacted.slice(0, index)}[workspace]${redacted.slice(index + representation.length)}`;
-          index = redacted
-            .toLowerCase()
-            .indexOf(representation.toLowerCase(), index + "[workspace]".length);
-        }
-      }
-    } else {
-      redacted = redacted.replaceAll(root, "[workspace]");
-    }
-  }
-  return redacted;
-}
-
 export async function executeWorkspaceCommand(
   context: WorkspaceContext,
   input: { executable: string; args: string[]; timeoutMs?: number },
@@ -376,8 +355,8 @@ export async function executeWorkspaceCommand(
     return {
       command,
       exitCode,
-      stdout: redactOutput(context, Buffer.concat(stdout).toString("utf8")),
-      stderr: redactOutput(context, Buffer.concat(stderr).toString("utf8")),
+      stdout: Buffer.concat(stdout).toString("utf8"),
+      stderr: Buffer.concat(stderr).toString("utf8"),
       durationMs: Math.max(0, Math.round(performance.now() - started)),
       truncated,
       timedOut,
