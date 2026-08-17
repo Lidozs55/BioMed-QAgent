@@ -8,9 +8,11 @@
  * stay stable.
  */
 
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
+
+import { sha256Bytes } from "../adapters/hashing.js";
 
 import {
   DATASET_BRIDGE_VERSION,
@@ -77,7 +79,7 @@ async function resolveReferencedAsset(
   const info = await stat(full).catch(() => null);
   if (info === null || !info.isFile()) return null;
   const bytes = await readFile(full);
-  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  const sha256 = sha256Bytes(bytes);
   return {
     schema_version: "1.0",
     asset_id: `asset_${sha256}`,

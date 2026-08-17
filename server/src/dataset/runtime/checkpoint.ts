@@ -8,7 +8,6 @@
  * instead of stage.
  */
 
-import { createHash } from "node:crypto";
 import {
   existsSync,
   lstatSync,
@@ -19,6 +18,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join, resolve, sep } from "node:path";
+import { sha256File } from "../adapters/hashing.js";
 import { sha256Json } from "./digests.js";
 import {
   parseOperationAttempt,
@@ -32,10 +32,6 @@ export { sha256Json };
 /** Map an operation id to a safe file stem (ids may contain ':'). */
 export function operationFilename(operationId: string): string {
   return operationId.replace(/:/g, "_");
-}
-
-function sha256File(path: string): string {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
 /**

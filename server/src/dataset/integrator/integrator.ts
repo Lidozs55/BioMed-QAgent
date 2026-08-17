@@ -19,6 +19,7 @@ import { BufferedCsvWriter } from "../adapters/base.js";
 import { BuildError } from "../adapters/errors.js";
 import { sha256FileStream } from "../adapters/hashing.js";
 import { assetIdFromSha256 } from "../adapters/identity.js";
+import { asPosix } from "../adapters/paths.js";
 import { delimitedRowsFromFileAsync } from "../adapters/text.js";
 import type { DataBatch, DatasetSchema, FileAsset } from "../contracts/index.js";
 import { parseDataBatch, parseFileAsset } from "../contracts/index.js";
@@ -196,10 +197,6 @@ export async function integrate(options: {
     conflictCount,
     conflictsPath,
   };
-}
-
-function asPosix(path: string): string {
-  return path.replace(/\\/g, "/");
 }
 
 function rowIdentity(

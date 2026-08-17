@@ -21,6 +21,7 @@ import { parseValidationProfile } from "../contracts/index.js";
 
 import { CHECKPOINT_STRIDE, checkpoint, throwIfAborted } from "../cooperative.js";
 import { delimitedRowsFromFileAsync } from "../adapters/text.js";
+import { joinOutput } from "../adapters/paths.js";
 import {
   ConfidenceColumnAggregator,
   anomaliesOf,
@@ -753,10 +754,6 @@ export function getValidationProfile(profileRef: string): ExpressionValidationPr
     throw new Error(`validation profile '${profileRef}' is not registered`);
   }
   return profile;
-}
-
-function joinOutput(outputDir: string, name: string): string {
-  return `${outputDir.replace(/[\\/]+$/, "")}/${name}`;
 }
 
 /** Python ``json.dumps(record, sort_keys=True)`` for string->int maps. */

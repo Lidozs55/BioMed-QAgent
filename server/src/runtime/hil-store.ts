@@ -1,5 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { readdir, mkdir } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -16,11 +15,13 @@ import {
   type JsonValue,
   type ResumeHILInput,
   type EventEnvelope,
+  type EventPayload,
 } from "@biomed/contracts";
 
+import { readJsonFileOrNull, writeJsonAtomic } from "../persistence/atomic-json.js";
+import { canonicalDigest, canonicalJson } from "../dataset/adapters/identity.js";
+import { requireSafeId, SAFE_ID } from "./safe-id.js";
 import type { DurableTaskRepository } from "./task-repository.js";
-
-const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 
 export interface CreateHILRequestInput {
   task_id: string;
@@ -66,21 +67,6 @@ export class HILConflictError extends Error {
   }
 }
 
-function requireSafeId(value: string, name: string): void {
-  if (!SAFE_ID.test(value)) throw new TypeError(`${name} must be a safe identifier`);
-}
-
-function canonicalJson(value: JsonValue): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  const entries = Object.entries(value).sort(([left], [right]) => left.localeCompare(right));
-  return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`).join(",")}}`;
-}
-
-function digest(value: JsonValue): string {
-  return createHash("sha256").update(canonicalJson(value), "utf8").digest("hex");
-}
-
 function generationOf(requestId: string): number {
   const match = /_g(\d+)$/.exec(requestId);
   return match === null ? 1 : Number(match[1]);
@@ -88,6 +74,32 @@ function generationOf(requestId: string): number {
 
 function decisionJson(decision: HILDecision, reason: string | null): JsonValue {
   return { decision: decision as JsonValue, reason };
+}
+
+/**
+ * Shared ``user_input_required`` event payload builder (previously duplicated
+ * here and in ``hil-gate.ts``). ``extraDetail`` carries request-specific
+ * evidence fields into the payload ``detail``.
+ */
+export function userInputRequiredPayload(
+  request: HILRequest,
+  extraDetail: Record<string, JsonValue> = {},
+): Extract<EventPayload, { type: "user_input_required" }> {
+  return {
+    type: "user_input_required",
+    request_id: request.request_id,
+    prompt_kind: request.kind === "permission" ? "api_key_or_credential" : "data_correction",
+    summary: request.summary,
+    expires_at: null,
+    fixture_exempt: false,
+    detail: {
+      ...extraDetail,
+      review_type: request.review_type,
+      evidence_digest: request.evidence_digest,
+      policy_ref: request.policy_ref,
+    },
+    hil_request: request,
+  };
 }
 
 export class DurableHILStore {
@@ -122,8 +134,8 @@ export class DurableHILStore {
       evidence: input.evidence,
       policy_ref: input.policy_ref,
     };
-    const evidenceDigest = digest(evidenceSnapshot);
-    const baseRequestId = `hil_${digest({
+    const evidenceDigest = canonicalDigest(evidenceSnapshot);
+    const baseRequestId = `hil_${canonicalDigest({
       task_id: input.task_id,
       run_id: input.run_id,
       policy_ref: input.policy_ref,
@@ -245,20 +257,7 @@ export class DurableHILStore {
           && event.payload.request_id === request.request_id,
       );
       if (!hasRequired) {
-        await this.repository.appendRunEvent(entry.name, runId, {
-          type: "user_input_required",
-          request_id: request.request_id,
-          prompt_kind: request.kind === "permission" ? "api_key_or_credential" : "data_correction",
-          summary: request.summary,
-          expires_at: null,
-          fixture_exempt: false,
-          detail: {
-            review_type: request.review_type,
-            evidence_digest: request.evidence_digest,
-            policy_ref: request.policy_ref,
-          },
-          hil_request: request,
-        });
+        await this.repository.appendRunEvent(entry.name, runId, userInputRequiredPayload(request));
       }
       const review = await this.readReview(entry.name, request.request_id);
       if (review !== null) {
@@ -322,7 +321,7 @@ export class DurableHILStore {
       const reviewedAt = this.now().toISOString();
       const review = parseHumanReviewRecord({
         schema_version: "1.0",
-        review_id: `review_${digest({
+        review_id: `review_${canonicalDigest({
           request_id: request.request_id,
           evidence_digest: request.evidence_digest,
           resolution: decisionJson(input.decision, input.reason),
@@ -452,19 +451,11 @@ export class DurableHILStore {
   }
 
   private async readJson(target: string): Promise<unknown | null> {
-    try {
-      return JSON.parse(await readFile(target, "utf8")) as unknown;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-      throw error;
-    }
+    return readJsonFileOrNull(target);
   }
 
   private async writeJson(target: string, value: unknown): Promise<void> {
-    await mkdir(path.dirname(target), { recursive: true });
-    const temporary = `${target}.${randomUUID()}.tmp`;
-    await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-    await rename(temporary, target);
+    await writeJsonAtomic(target, value);
   }
 
   private requestsDirectory(taskId: string): string {
@@ -500,4 +491,4 @@ export class DurableHILStore {
   }
 }
 
-export { canonicalJson as canonicalHILEvidenceJson, digest as digestHILEvidence };
+export { canonicalJson as canonicalHILEvidenceJson, canonicalDigest as digestHILEvidence };

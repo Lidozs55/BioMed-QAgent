@@ -1,8 +1,9 @@
-import { createHash } from "node:crypto";
 import { readFile, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
-const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+import { sha256Bytes } from "../dataset/adapters/hashing.js";
+import { SAFE_ID } from "../runtime/safe-id.js";
+
 const SHA256 = /^[0-9a-f]{64}$/;
 
 export interface BuildArtifact {
@@ -186,7 +187,7 @@ async function verifiedFile(root: string, relativePath: string): Promise<string>
 }
 
 function sha256(bytes: Buffer): string {
-  return createHash("sha256").update(bytes).digest("hex");
+  return sha256Bytes(bytes);
 }
 
 export class BuildStore {

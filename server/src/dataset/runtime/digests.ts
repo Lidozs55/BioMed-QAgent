@@ -9,34 +9,21 @@
  * file (sha256/size) invalidates every checkpoint.
  */
 
-import { createHash } from "node:crypto";
+import { canonicalDigest, canonicalJson } from "../adapters/identity.js";
 import type { SourceAsset } from "../contracts/index.js";
 import type { OperationSpec } from "./operations.js";
 
 /**
  * Canonical JSON serialization matching Python ``json.dumps(
  * ensure_ascii=False, separators=(",", ":"), sort_keys=True)``: object keys
- * are sorted recursively and unicode is emitted as-is.
+ * are sorted recursively and unicode is emitted as-is. Single implementation
+ * lives in ``adapters/identity.ts`` and is re-exported here for the digest
+ * module contract.
  */
-export function stableStringify(value: unknown): string {
-  if (value === null || typeof value !== "object") {
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
-  }
-  const record = value as Record<string, unknown>;
-  const keys = Object.keys(record).sort();
-  const parts = keys.map(
-    (key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`,
-  );
-  return `{${parts.join(",")}}`;
-}
+export const stableStringify = canonicalJson;
 
 /** sha256 over the canonical JSON of *payload* (Python ``_sha256_json``). */
-export function sha256Json(payload: unknown): string {
-  return createHash("sha256").update(stableStringify(payload), "utf8").digest("hex");
-}
+export const sha256Json = canonicalDigest;
 
 export interface DigestScope {
   buildId: string;
