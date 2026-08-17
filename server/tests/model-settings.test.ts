@@ -1,5 +1,5 @@
 import { once } from "node:events";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
@@ -143,6 +143,29 @@ describe("TypeScript model settings", () => {
     });
     expect(reset.status).toBe(200);
     expect(service.resolveRuntimeLimits()).toEqual(DEFAULT_RUNTIME_LIMITS);
+  });
+
+  test("migrates unversioned legacy runtime limits to the widened defaults", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    await ModelSettingsService.create({ settingsDir, environment: {} });
+    const registryPath = path.join(settingsDir, "model-registry.json");
+    const stored = JSON.parse(await readFile(registryPath, "utf8")) as {
+      settings: Record<string, unknown>;
+    };
+    delete stored.settings.runtime_limits_version;
+    stored.settings.runtime_limits = {
+      agent_max_turns: 240,
+      http_timeout_seconds: 30,
+      browser_timeout_seconds: 120,
+    };
+    await writeFile(registryPath, JSON.stringify(stored), "utf8");
+
+    const migrated = await ModelSettingsService.create({ settingsDir, environment: {} });
+    expect(migrated.resolveRuntimeLimits()).toEqual(DEFAULT_RUNTIME_LIMITS);
+    const persisted = JSON.parse(await readFile(registryPath, "utf8")) as {
+      settings: { runtime_limits_version?: number };
+    };
+    expect(persisted.settings.runtime_limits_version).toBe(1);
   });
 
   test("feeds configured compaction thresholds into the Pi model config", async () => {
