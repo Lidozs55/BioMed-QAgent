@@ -58,6 +58,9 @@ export interface AgentStore extends AgentRuntimeData {
     page: MessagePage,
   ) => void;
   applyEvent: (event: EventEnvelope) => SequenceGapMarker | null;
+  applyEvents: (
+    events: readonly EventEnvelope[],
+  ) => SequenceGapMarker | null;
   /**
    * Clear the store-level ``sequenceGap`` marker for a task. The transport
    * invokes this when a fresh connection establishes (the server replays
@@ -329,6 +332,19 @@ export const useAgentStore = create<AgentStore>()(
           const next = reduceRuntimeEvent(state, event);
           gap = next.tasksById[event.task_id]?.sequenceGap ?? null;
           return next;
+        });
+        return gap;
+      },
+
+      applyEvents: (events) => {
+        let gap: SequenceGapMarker | null = null;
+        set((state) => {
+          let next: AgentRuntimeData = state;
+          for (const event of events) {
+            next = reduceRuntimeEvent(next, event);
+            gap = next.tasksById[event.task_id]?.sequenceGap ?? null;
+          }
+          return next === state ? state : { ...state, ...next };
         });
         return gap;
       },

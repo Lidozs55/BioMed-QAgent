@@ -383,11 +383,11 @@ export class RuntimeController {
         }
         return;
       }
-      let nextSequence = afterSequence;
-      for (const event of events) {
-        useAgentStore.getState().applyEvent(event);
-        nextSequence = Math.max(nextSequence, event.sequence);
-      }
+      useAgentStore.getState().applyEvents(events);
+      const nextSequence = events.reduce(
+        (sequence, event) => Math.max(sequence, event.sequence),
+        afterSequence,
+      );
       const currentSequence =
         useAgentStore.getState().tasksById[taskId]?.lastSequence ?? 0;
       if (currentSequence >= targetSequence) {

@@ -7,7 +7,7 @@ import type {
   TaskSnapshot,
   TaskSummary,
 } from "@/runtime/contracts";
-import { createInitialRuntimeState } from "@/runtime/reducer";
+import { createInitialRuntimeState, reduceRuntimeEvent } from "@/runtime/reducer";
 import {
   addAcceptedTask,
   AGENT_STORE_NAME,
@@ -66,6 +66,24 @@ function completedEvent(taskId: string, sequence: number): EventEnvelope {
     sequence,
     timestamp: "2026-07-14T01:00:00Z",
     payload: { type: "run_completed" },
+  };
+}
+
+function assistantDeltaEvent(
+  taskId: string,
+  sequence: number,
+  delta: string,
+): EventEnvelope {
+  return {
+    schema_version: "2.0",
+    event_id: `event_${taskId}_${sequence}`,
+    type: "assistant_delta",
+    task_id: taskId,
+    run_id: `run_${taskId}`,
+    stage_attempt_id: null,
+    sequence,
+    timestamp: "2026-07-14T01:00:00Z",
+    payload: { type: "assistant_delta", delta },
   };
 }
 
@@ -188,6 +206,33 @@ describe("agent task projection store", () => {
     expect(state.activeItems).toEqual(["task_b"]);
     expect(state.taskOrder).toContain("task_a");
     expect(state.tasksById.task_b.summary.status).toBe("running");
+  });
+
+  it("reduces an ordered event page in one store notification", () => {
+    useAgentStore.getState().mergeTaskPage(
+      page([summary("task_batch", "running", 0)], [], null),
+      false,
+    );
+    const events = [
+      assistantDeltaEvent("task_batch", 1, "批"),
+      assistantDeltaEvent("task_batch", 2, "量"),
+      completedEvent("task_batch", 3),
+    ];
+    const before = useAgentStore.getState();
+    const expected = events.reduce(reduceRuntimeEvent, before);
+    let notifications = 0;
+    const unsubscribe = useAgentStore.subscribe(() => {
+      notifications += 1;
+    });
+
+    const gap = useAgentStore.getState().applyEvents(events);
+    unsubscribe();
+
+    expect(gap).toBeNull();
+    expect(notifications).toBe(1);
+    expect(useAgentStore.getState().tasksById.task_batch).toEqual(
+      expected.tasksById.task_batch,
+    );
   });
 
   it("keeps a locally terminal task in history when a stale first page still calls it active", () => {
