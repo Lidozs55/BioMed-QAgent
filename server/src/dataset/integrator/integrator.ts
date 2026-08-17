@@ -10,8 +10,7 @@
  * deterministically and are recorded in a conflicts audit file.
  */
 
-import { mkdirSync, statSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { closeSync, mkdirSync, openSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { join, relative } from "node:path";
 import type { JsonValue } from "@biomed/contracts";
 import type { CanonicalizationResult } from "../canonicalizer/index.js";
@@ -19,7 +18,7 @@ import { CHECKPOINT_STRIDE, checkpoint, throwIfAborted } from "../cooperative.js
 import { BuildError } from "../adapters/errors.js";
 import { sha256FileStream } from "../adapters/hashing.js";
 import { assetIdFromSha256 } from "../adapters/identity.js";
-import { csvLine, delimitedRowsWithLinesAsync, readSourceTextAsync } from "../adapters/text.js";
+import { csvLine, delimitedRowsFromFileAsync } from "../adapters/text.js";
 import type { DataBatch, DatasetSchema, FileAsset } from "../contracts/index.js";
 import { parseDataBatch, parseFileAsset } from "../contracts/index.js";
 
@@ -49,6 +48,36 @@ export interface IntegrationResult {
   dedupCount: number;
   conflictCount: number;
   conflictsPath: string | null;
+}
+
+class BoundedCsvWriter {
+  private readonly fd: number;
+  private pending = "";
+  private closed = false;
+
+  constructor(path: string, header: readonly string[]) {
+    this.fd = openSync(path, "w");
+    this.pending = csvLine(header);
+  }
+
+  writeRow(values: readonly string[]): void {
+    if (this.closed) throw new Error("CSV writer is closed");
+    this.pending += csvLine(values);
+    if (this.pending.length >= 64 * 1024) {
+      writeSync(this.fd, this.pending, undefined, "utf8");
+      this.pending = "";
+    }
+  }
+
+  close(): void {
+    if (this.closed) return;
+    if (this.pending.length > 0) {
+      writeSync(this.fd, this.pending, undefined, "utf8");
+      this.pending = "";
+    }
+    closeSync(this.fd);
+    this.closed = true;
+  }
 }
 
 /** Append canonical sources into one primary dataset, dedup by row identity. */
@@ -87,33 +116,34 @@ export async function integrate(options: {
   let dedupCount = 0;
   let conflictCount = 0;
 
-  const mergedLines: string[] = [csvLine(columns)];
-  const conflictLines: string[] = [csvLine(CONFLICT_COLUMNS)];
-  let visited = 0;
-  for (const result of results) {
-    const rows = await readCsvDictRows(result.canonicalPath, signal);
-    for (const row of rows) {
-      visited += 1;
-      // M2: checkpoint per processed row (not only new-unique rows) so an
-      // extreme dedup/conflict workload still yields to the event loop.
-      if (visited % CHECKPOINT_STRIDE === 0) await checkpoint(signal);
-      const keyParts = rowIdentity(row, idField);
-      const key = keyParts.join("\u0000");
-      const value = row["expression_value"] ?? "";
-      const previous = seen.get(key);
-      if (previous === undefined) {
-        seen.set(key, [value, row["asset_id"] ?? ""]);
-        mergedLines.push(csvLine(columns.map((column) => row[column] ?? "")));
-        rowCount += 1;
-        continue;
-      }
-      const [previousValue, previousAsset] = previous;
-      if (numericallyEqual(previousValue, value)) {
-        dedupCount += 1;
-        continue;
-      }
-      conflictLines.push(
-        csvLine([
+  const mergedWriter = new BoundedCsvWriter(mergedPath, columns);
+  const conflictWriter = new BoundedCsvWriter(conflictsPath, CONFLICT_COLUMNS);
+  try {
+    let visited = 0;
+    for (const result of results) {
+      for await (const row of readCsvDictRows(result.canonicalPath, signal)) {
+        visited += 1;
+        // M2: checkpoint per processed row (not only new-unique rows) so an
+        // extreme dedup/conflict workload still yields to the event loop.
+        if (visited % CHECKPOINT_STRIDE === 0) await checkpoint(signal);
+        const keyParts = rowIdentity(row, idField);
+        const key = keyParts.join("\u0000");
+        const value = row["expression_value"] ?? "";
+        const previous = seen.get(key);
+        if (previous === undefined) {
+          if (results.length > 1) {
+            seen.set(key, [value, row["asset_id"] ?? ""]);
+          }
+          mergedWriter.writeRow(columns.map((column) => row[column] ?? ""));
+          rowCount += 1;
+          continue;
+        }
+        const [previousValue, previousAsset] = previous;
+        if (numericallyEqual(previousValue, value)) {
+          dedupCount += 1;
+          continue;
+        }
+        conflictWriter.writeRow([
           `conflict_${keyParts[0]}_${keyParts[1]}_${rowCount}`,
           keyParts[0],
           keyParts[1],
@@ -124,13 +154,19 @@ export async function integrate(options: {
           row["asset_id"] ?? "",
           value,
           "kept_first_source",
-        ]),
-      );
-      conflictCount += 1;
+        ]);
+        conflictCount += 1;
+      }
     }
+  } catch (error) {
+    mergedWriter.close();
+    conflictWriter.close();
+    try { unlinkSync(mergedPath); } catch { /* best effort */ }
+    try { unlinkSync(conflictsPath); } catch { /* best effort */ }
+    throw error;
   }
-  await writeFile(mergedPath, mergedLines.join(""), "utf8");
-  await writeFile(conflictsPath, conflictLines.join(""), "utf8");
+  mergedWriter.close();
+  conflictWriter.close();
 
   const payloadChecksum = await sha256FileStream(mergedPath, signal);
   const fileAsset: FileAsset = parseFileAsset({
@@ -194,23 +230,25 @@ function rowIdentity(
 }
 
 /** Python csv.DictReader: header row + per-row field dicts. */
-async function readCsvDictRows(path: string, signal?: AbortSignal | null): Promise<Array<Record<string, string>>> {
-  const text = await readSourceTextAsync(path, signal);
-  const rows = await delimitedRowsWithLinesAsync(text, ",", signal);
-  if (rows.length === 0) return [];
-  const header = rows[0].values;
-  const records: Array<Record<string, string>> = [];
+async function* readCsvDictRows(
+  path: string,
+  signal?: AbortSignal | null,
+): AsyncGenerator<Record<string, string>> {
+  let header: string[] | null = null;
   let visited = 0;
-  for (const row of rows.slice(1)) {
+  for await (const row of delimitedRowsFromFileAsync(path, ",", signal)) {
+    if (header === null) {
+      header = row.values;
+      continue;
+    }
     const record: Record<string, string> = {};
     for (let index = 0; index < header.length; index += 1) {
       record[header[index]] = row.values[index] ?? "";
     }
-    records.push(record);
+    yield record;
     visited += 1;
     if (visited % CHECKPOINT_STRIDE === 0) await checkpoint(signal);
   }
-  return records;
 }
 
 function numericallyEqual(left: string, right: string): boolean {

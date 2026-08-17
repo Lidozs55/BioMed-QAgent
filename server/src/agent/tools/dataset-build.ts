@@ -5,12 +5,16 @@ import type {
 } from "@biomed/contracts";
 
 import { saveBuildContinuation } from "../../runtime/build-continuation.js";
+import { ADAPTER_REGISTRY } from "../../dataset/adapters/adapters.js";
+import { expressionNormalizationV1 } from "../../dataset/canonicalizer/profiles.js";
+import { createDefaultSchemaRegistry } from "../../dataset/schema/registry.js";
 import type {
   BioMedAgentTool,
   BioMedToolExecutionContext,
   BioMedToolResult,
 } from "../contracts.js";
 import type { DatasetCoreService } from "../../dataset/service/dataset-core.js";
+import { VALIDATION_PROFILE_REFS } from "../../dataset/validation/profile.js";
 
 const MAX_ID = 128;
 const MAX_CONTENT = 4_096;
@@ -152,12 +156,177 @@ function captureSpecRejected(
   });
 }
 
+function datasetBuildSpecSchema(): object {
+  const normalization = expressionNormalizationV1();
+  const stringArray = {
+    type: "array",
+    items: { type: "string" },
+  } as const;
+  const stringArrayRecord = {
+    type: "object",
+    additionalProperties: stringArray,
+  } as const;
+  const nullableString = {
+    anyOf: [{ type: "string" }, { type: "null" }],
+  } as const;
+  const acquisition = {
+    type: "object",
+    description:
+      "How the immutable SourceAsset was acquired. For built-in downloads use mode=builtin and provider_id=<source>.files.v1; omit recipe fields.",
+    properties: {
+      schema_version: { type: "string", enum: ["1.0"] },
+      mode: { type: "string", enum: ["builtin", "workflow_recipe"] },
+      provider_id: {
+        ...nullableString,
+        description: "Required for builtin mode, for example geo.files.v1.",
+      },
+      recipe_id: {
+        ...nullableString,
+        description: "Required only for workflow_recipe mode.",
+      },
+      recipe_version: {
+        anyOf: [{ type: "integer", minimum: 1 }, { type: "null" }],
+        description: "Required only for workflow_recipe mode.",
+      },
+    },
+    required: ["mode"],
+    additionalProperties: false,
+  } as const;
+  const adapterParameters = {
+    type: "object",
+    description:
+      "Must be empty for GDC/Xena. GEO requires every listed field; declare unknown value_scale honestly instead of guessing.",
+    properties: {
+      schema_version: { type: "string", enum: ["1.0"] },
+      format: {
+        type: "string",
+        enum: ["tximport_counts", "series_matrix", "supplementary_matrix"],
+      },
+      value_semantics: {
+        type: "string",
+        enum: [...normalization.allowed_semantics],
+      },
+      value_scale: {
+        type: "string",
+        enum: [...normalization.allowed_value_scales],
+      },
+      expression_unit: {
+        type: "string",
+        enum: [...normalization.allowed_units],
+      },
+      is_normalized: { type: "boolean" },
+      platform_ids: {
+        type: "array",
+        items: { type: "string", pattern: "^GPL[0-9]+$" },
+      },
+      delimiter: {
+        type: "string",
+        description: "Use auto, or one character for supplementary_matrix only.",
+      },
+    },
+    additionalProperties: false,
+  } as const;
+  const sourceBinding = {
+    type: "object",
+    properties: {
+      schema_version: { type: "string", enum: ["1.0"] },
+      binding_id: {
+        type: "string",
+        pattern: "^[A-Za-z0-9_-]{1,128}$",
+        description: "Stable ID also used as the key in source_files and mapping_files.",
+      },
+      source: {
+        type: "string",
+        enum: ["gdc", "geo", "ucsc_xena"],
+      },
+      acquisition,
+      adapter_id: {
+        type: "string",
+        enum: Object.keys(ADAPTER_REGISTRY).sort(),
+        description:
+          "Use gdc.expression.v1 for gdc, geo.expression.v1 for geo, and xena.matrix.v1 for ucsc_xena.",
+      },
+      accession: nullableString,
+      parameters: adapterParameters,
+    },
+    required: ["binding_id", "source", "acquisition", "adapter_id"],
+    additionalProperties: false,
+  } as const;
+  return {
+    type: "object",
+    description:
+      "Complete frozen DatasetBuildSpec. For each source binding, execute mappings must use the same binding_id key.",
+    properties: {
+      schema_version: { type: "string", enum: ["1.0"] },
+      build_id: {
+        type: "string",
+        pattern: "^[A-Za-z0-9_-]{1,128}$",
+      },
+      objective: { type: "string", minLength: 1 },
+      dataset_family: { type: "string", enum: ["gene_expression"] },
+      row_granularity: {
+        type: "string",
+        enum: ["gene_sample_measurement", "probe_sample_measurement"],
+      },
+      entities: stringArrayRecord,
+      cohort_filters: stringArrayRecord,
+      required_fields: stringArray,
+      schema_ref: {
+        type: "string",
+        enum: createDefaultSchemaRegistry().list(),
+        description:
+          "Use gene_expression.long.v1 for gene rows or gene_expression.probe_long.v1 for probe rows.",
+      },
+      source_bindings: {
+        type: "array",
+        minItems: 1,
+        items: sourceBinding,
+      },
+      normalization_profile_ref: {
+        anyOf: [
+          { type: "string", enum: [normalization.profile_id] },
+          { type: "null" },
+        ],
+      },
+      merge_strategy: {
+        type: "string",
+        enum: ["append_by_canonical_row"],
+      },
+      validation_profile_ref: {
+        type: "string",
+        enum: [...VALIDATION_PROFILE_REFS],
+        description:
+          "Use gene_expression.release.v1 for gene rows or gene_expression.probe_release.v1 for probe rows.",
+      },
+      output_format: { type: "string", enum: ["csv"] },
+      target_entity_level: {
+        anyOf: [
+          { type: "string", enum: ["gene", "probe"] },
+          { type: "null" },
+        ],
+      },
+    },
+    required: [
+      "build_id",
+      "objective",
+      "dataset_family",
+      "row_granularity",
+      "schema_ref",
+      "source_bindings",
+      "validation_profile_ref",
+    ],
+    additionalProperties: false,
+  } as const;
+}
+
 export function createDatasetBuildTools(
   options: DatasetBuildToolOptions,
 ): BioMedAgentTool[] {
-  const specSchema = { type: "object", additionalProperties: true } as const;
+  const specSchema = datasetBuildSpecSchema();
   const mappingSchema = {
     type: "object",
+    description:
+      "Map each spec binding_id to the corresponding downloaded asset.relative_path under this task output.",
     additionalProperties: { type: "string", minLength: 1 },
   } as const;
   return [

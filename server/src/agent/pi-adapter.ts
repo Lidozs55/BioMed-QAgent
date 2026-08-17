@@ -28,6 +28,7 @@ type Environment = Record<string, string | undefined>;
 export interface PiUpstreamEvent {
   type: string;
   assistantMessageEvent?: { type: string; delta?: string };
+  assistantStopReason?: string;
   toolCallId?: string;
   toolName?: string;
   args?: unknown;
@@ -43,6 +44,7 @@ export interface PiUpstreamEvent {
 export interface PiUpstreamSession {
   readonly sessionId: string;
   prompt(input: string): Promise<void>;
+  continueAfterLength?(): Promise<void>;
   steer?(text: string): Promise<void>;
   compact?(): Promise<{ summary: string }>;
   subscribe(listener: (event: PiUpstreamEvent) => void): () => void;
@@ -93,6 +95,7 @@ interface ActiveTurn {
     { type: "assistant_delta" | "reasoning_delta" }
   >;
   deltaTimer?: ReturnType<typeof setTimeout>;
+  assistantStopReason?: string;
 }
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -100,6 +103,10 @@ const MAX_TEXT = 4_096;
 const MAX_DEPTH = 3;
 const MAX_ITEMS = 20;
 const DELTA_FLUSH_INTERVAL_MS = 32;
+const LENGTH_CONTINUATION_MESSAGE =
+  "The previous assistant turn was truncated by the model length limit. " +
+  "Continue the same task from the compacted context without repeating completed work. " +
+  "Finish the remaining tool calls, required data artifacts, validation, and final response.";
 
 function boundedText(value: string): string {
   return value.slice(0, MAX_TEXT);
@@ -248,6 +255,14 @@ export function applyModelProfileToPayload(
 
 function toUpstreamEvent(event: AgentSessionEvent): PiUpstreamEvent {
   switch (event.type) {
+    case "message_end":
+      return {
+        type: event.type,
+        assistantStopReason:
+          event.message.role === "assistant"
+            ? event.message.stopReason
+            : undefined,
+      };
     case "message_update":
       return {
         type: event.type,
@@ -387,6 +402,11 @@ async function createRealUpstreamSession(
   return {
     sessionId: session.sessionId,
     prompt: (input) => session.prompt(input),
+    continueAfterLength: () => session.sendCustomMessage({
+      customType: "biomed_length_continuation",
+      content: LENGTH_CONTINUATION_MESSAGE,
+      display: false,
+    }, { triggerTurn: true }),
     steer: (text) => session.steer(text),
     compact: async () => {
       const result = await session.compact();
@@ -483,6 +503,20 @@ class PiBioMedAgentSession implements BioMedAgentSession {
       if (event.aborted !== true && typeof summary === "string" && summary.trim() !== "") {
         this.pushBoundary(active, { event: { type: "context_compacted", summary } });
       }
+    } else if (event.type === "message_end" && event.assistantStopReason !== undefined) {
+      active.assistantStopReason = event.assistantStopReason;
+    }
+  }
+
+  private async promptUntilComplete(active: ActiveTurn, input: string): Promise<void> {
+    active.assistantStopReason = undefined;
+    await this.upstream.prompt(input);
+    while (!active.cancelled && active.assistantStopReason === "length") {
+      if (this.upstream.continueAfterLength === undefined) {
+        throw new Error("Pi runtime cannot continue a length-truncated turn");
+      }
+      active.assistantStopReason = undefined;
+      await this.upstream.continueAfterLength();
     }
   }
 
@@ -560,7 +594,7 @@ class PiBioMedAgentSession implements BioMedAgentSession {
     };
     options.signal?.addEventListener("abort", onAbort, { once: true });
     active.queue.push({ event: { type: "turn_started" } });
-    void this.upstream.prompt(input).then(
+    void this.promptUntilComplete(active, input).then(
       () => {
         if (!active.cancelled) {
           this.finish(active, { event: { type: "turn_completed" } });

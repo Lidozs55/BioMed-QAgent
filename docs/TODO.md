@@ -462,13 +462,22 @@ build 锁、cancel 收敛与 event sink；`DATASET_CORE=ts` 现为默认运行�
       LLM 报告 "Local cache: empty"、缓存复用完全失效。应评估：下载/构建
       完成后自动注册缓存数据集（manifest 级）或调整工具描述避免误引导
       （2026-08-16 排查 `task_ts_9f9dddbb`，TASK-045）
-- [ ] **P1** 长上下文运行被 `stopReason="length"` 截断后仍发 `run_completed`
-      （假完成）：`task_ts_9f9dddbb` 最后一条 assistant
-      `totalTokens=130898/131072`（99.8%），输出被截断（思维链残片
-      "Now"），Pi 无 compact-and-retry（仅处理 error/overflow），adapter 将
-      turn_completed 翻译为 run_completed。应检测截断（无有效 assistant
-      delta / 无 tool 产出）转 run_failed 或触发提前 compact（2026-08-16，
-      TASK-046）
+- [x] **P1** 长上下文运行被 `stopReason="length"` 截断后仍发 `run_completed`
+      （假完成）：Pi adapter 现于同一 Session 触发隐式 continuation，只有后续
+      非 `length` assistant turn 才完成；回归测试与真实 gold1 压缩后仍 running
+      证据已完成（2026-08-17，TASK-046）
+- [ ] **P0 / TASK-047** 大型 GEO 表达矩阵在 TS Core 解析/规范化阶段触发
+      `Invalid string length` 或 Node heap OOM。评测已确认 GSE31852/GSE109169
+      级别文件需要流式读取、有限输出缓冲、可恢复 checkpoint 与资源上限；当前
+      parser、canonicalizer、probe mapping、integrator 已改为流式并通过全量门。
+      剩余验收：6.1 GB 解压矩阵在默认运行限制下完成 integrate/validate/publish，
+      正式四/五张表可读且 provenance 闭合。
+- [ ] **P0 / TASK-048** 非 gene-expression 研究任务（target/variant/
+      structure/activity/paper/figure）缺少受信任的多表 schema、validation 和
+      Publication family。gold3–gold6 真实 run 只能写 workspace 摘要，不能按
+      artifact 计分；验收：严格表头/行宽/source locator/单位与 relation 保留，
+      图表估读带 estimated/low-confidence 和 axis/legend 不清标记，workspace
+      文件不得绕过 Publisher。
 
 ## 前端 UI 合规修复（shadcn 规则审查，2026-08-15）（✅ 完成，2026-08-15）
 

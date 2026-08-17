@@ -44,7 +44,7 @@ const gunzip = promisify(gunzipCb);
 import { CHECKPOINT_STRIDE, checkpoint, throwIfAborted } from "../../cooperative.js";
 import { AdapterError } from "../errors.js";
 import { sha256FileStream } from "../hashing.js";
-import { csvLine, delimitedRowsWithLinesAsync } from "../text.js";
+import { csvLine, delimitedRowsFromFileAsync } from "../text.js";
 import type { SourceAsset } from "../../contracts/source.js";
 
 /** Stable server-side mapping rule id (D3 ``mapping_rule_id``). */
@@ -291,14 +291,18 @@ export async function parsePlatformTable(
 
 /** Python ``_distinct_probes``: declared ``geo_probe`` rows of the batch. */
 async function distinctProbes(batchPath: string, signal?: AbortSignal | null): Promise<string[]> {
-  const text = await readFile(batchPath, "utf8");
-  const rows = await delimitedRowsWithLinesAsync(text, ",", signal);
-  const header = rows[0]?.values ?? [];
-  const namespaceIndex = header.indexOf("gene_id_namespace_declared");
-  const probeIndex = header.indexOf("gene_id_raw");
+  let header: string[] | null = null;
+  let namespaceIndex = -1;
+  let probeIndex = -1;
   const probes = new Set<string>();
   let visited = 0;
-  for (const { values } of rows.slice(1)) {
+  for await (const { values } of delimitedRowsFromFileAsync(batchPath, ",", signal)) {
+    if (header === null) {
+      header = values;
+      namespaceIndex = header.indexOf("gene_id_namespace_declared");
+      probeIndex = header.indexOf("gene_id_raw");
+      continue;
+    }
     const namespace = values[namespaceIndex] ?? "";
     if (namespace.trim() === "geo_probe") {
       const probe = (values[probeIndex] ?? "").trim();

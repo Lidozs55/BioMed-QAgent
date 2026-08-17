@@ -22,6 +22,69 @@ afterEach(async () => {
 });
 
 describe("Pi DatasetBuild tools", () => {
+  test("exposes the frozen DatasetBuildSpec contract to the model", async () => {
+    const [validateTool, executeTool] = createDatasetBuildTools({
+      client: { validate: vi.fn(), execute: vi.fn() },
+      taskId: "task_tool",
+      taskRoot: await toolTaskRoot(),
+      runId: () => "run_tool",
+      piSessionId: () => "pi_tool",
+    });
+    const validateParameters = validateTool!.parameters as {
+      properties: { spec: Record<string, unknown> };
+    };
+    const specSchema = validateParameters.properties.spec as {
+      additionalProperties: boolean;
+      required: string[];
+      properties: Record<string, Record<string, unknown>>;
+    };
+
+    expect(specSchema.additionalProperties).toBe(false);
+    expect(specSchema.required).toEqual([
+      "build_id",
+      "objective",
+      "dataset_family",
+      "row_granularity",
+      "schema_ref",
+      "source_bindings",
+      "validation_profile_ref",
+    ]);
+    expect(specSchema.properties.schema_ref.enum).toEqual([
+      "gene_expression.long.v1",
+      "gene_expression.probe_long.v1",
+    ]);
+    expect(specSchema.properties.validation_profile_ref.enum).toEqual([
+      "gene_expression.release.v1",
+      "gene_expression.probe_release.v1",
+    ]);
+
+    const sourceBindings = specSchema.properties.source_bindings as {
+      items: { properties: Record<string, Record<string, unknown>> };
+    };
+    expect(sourceBindings.items.properties.adapter_id.enum).toEqual([
+      "gdc.expression.v1",
+      "geo.expression.v1",
+      "xena.matrix.v1",
+    ]);
+    expect(sourceBindings.items.properties.parameters.properties).toMatchObject({
+      format: { enum: ["tximport_counts", "series_matrix", "supplementary_matrix"] },
+      value_semantics: {
+        enum: ["expression_value", "normalized_expression", "raw_count"],
+      },
+      value_scale: { enum: ["linear", "log2", "log10", "unknown"] },
+      expression_unit: { type: "string" },
+      is_normalized: { type: "boolean" },
+      platform_ids: { type: "array" },
+    });
+
+    const executeParameters = executeTool!.parameters as {
+      properties: Record<string, Record<string, unknown>>;
+    };
+    expect(executeParameters.properties.source_files.description).toContain(
+      "asset.relative_path",
+    );
+  });
+
   test("validates before execute and propagates the Pi AbortSignal", async () => {
     const validate = vi.fn(async (): Promise<DatasetBridgeResponse> => ({
       version: 1, request_id: "request_validate", ok: true,

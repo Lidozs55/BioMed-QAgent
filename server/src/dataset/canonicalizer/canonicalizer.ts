@@ -16,7 +16,7 @@
  * identical outputs and audits.
  */
 
-import { mkdirSync, statSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, statSync, writeSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 
@@ -33,7 +33,7 @@ import { CHECKPOINT_STRIDE, checkpoint, throwIfAborted } from "../cooperative.js
 import { BuildError } from "../adapters/errors.js";
 import { assetIdFromSha256, makeRecordId } from "../adapters/identity.js";
 import { sha256FileStream } from "../adapters/hashing.js";
-import { csvLine, delimitedRowsWithLinesAsync, readSourceTextAsync } from "../adapters/text.js";
+import { csvLine, delimitedRowsFromFileAsync } from "../adapters/text.js";
 import { MeasurementIdentity } from "./identity.js";
 
 const ENSEMBL_PATTERN = /^(ENSG\d{11})(?:\.(\d+))?$/;
@@ -180,6 +180,36 @@ interface RejectedRow {
   source_raw_value: string;
 }
 
+class BoundedCsvWriter {
+  private readonly fd: number;
+  private pending = "";
+  private closed = false;
+
+  constructor(path: string, header: readonly string[]) {
+    this.fd = openSync(path, "w");
+    this.pending = csvLine(header);
+  }
+
+  writeRow(values: readonly string[]): void {
+    if (this.closed) throw new Error("CSV writer is closed");
+    this.pending += csvLine(values);
+    if (this.pending.length >= 64 * 1024) {
+      writeSync(this.fd, this.pending, undefined, "utf8");
+      this.pending = "";
+    }
+  }
+
+  close(): void {
+    if (this.closed) return;
+    if (this.pending.length > 0) {
+      writeSync(this.fd, this.pending, undefined, "utf8");
+      this.pending = "";
+    }
+    closeSync(this.fd);
+    this.closed = true;
+  }
+}
+
 function rejectedRow(
   row: Record<string, string>,
   batch: DataBatch,
@@ -285,15 +315,16 @@ export async function canonicalize(
   const namespaces = new Set<string>();
   const units = new Set<string>();
   const identities = new Map<string, MeasurementIdentity>();
-  const canonicalRows: string[][] = [];
-  const rejectedRows: string[][] = [];
-  const logRows: string[][] = [];
-
-  const text = await readSourceTextAsync(sourcePath, signal);
-  const rows = await delimitedRowsWithLinesAsync(text, ",", signal);
-  const header = rows[0]?.values ?? [];
+  const canonicalWriter = new BoundedCsvWriter(canonicalPath, columns);
+  const rejectedWriter = new BoundedCsvWriter(rejectedPath, REJECTED_COLUMNS);
+  const logWriter = new BoundedCsvWriter(logPath, NORMALIZATION_LOG_COLUMNS);
+  let header: string[] | null = null;
   let visited = 0;
-  for (const { values } of rows.slice(1)) {
+  for await (const { values } of delimitedRowsFromFileAsync(sourcePath, ",", signal)) {
+    if (header === null) {
+      header = values;
+      continue;
+    }
     visited += 1;
     // M2: checkpoint per processed row (not only accepted rows) so an
     // extreme all-rejected workload still yields to the event loop and
@@ -308,7 +339,7 @@ export async function canonicalize(
     const normalized =
       geneIdRaw !== "" ? authorizeNamespace(geneIdRaw, declared) : null;
     if (normalized === null) {
-      rejectedRows.push(
+      rejectedWriter.writeRow(
         toRejectedValues(rejectedRow(row, batch, "unauthorized_namespace")),
       );
       rejectedCount += 1;
@@ -316,7 +347,7 @@ export async function canonicalize(
     }
     let [geneId, namespace, version] = normalized;
     if (!profile.allowed_namespaces.includes(namespace)) {
-      rejectedRows.push(
+      rejectedWriter.writeRow(
         toRejectedValues(rejectedRow(row, batch, "unauthorized_namespace")),
       );
       rejectedCount += 1;
@@ -326,7 +357,7 @@ export async function canonicalize(
     let expressionValue = row.expression_value ?? "";
     if (unitCorrection !== undefined && unit === unitCorrection.from_unit) {
       if (!isFiniteNumber(expressionValue)) {
-        rejectedRows.push(
+        rejectedWriter.writeRow(
           toRejectedValues(
             rejectedRow(row, batch, "non_finite_value", `value='${expressionValue}'`),
           ),
@@ -341,14 +372,14 @@ export async function canonicalize(
     }
     const semantics = row.value_semantics ?? "";
     if (!profile.allowed_units.includes(unit)) {
-      rejectedRows.push(
+      rejectedWriter.writeRow(
         toRejectedValues(rejectedRow(row, batch, "unknown_unit", `unit='${unit}'`)),
       );
       rejectedCount += 1;
       continue;
     }
     if (!profile.allowed_semantics.includes(semantics)) {
-      rejectedRows.push(
+      rejectedWriter.writeRow(
         toRejectedValues(
           rejectedRow(row, batch, "unknown_semantics", `semantics='${semantics}'`),
         ),
@@ -362,14 +393,14 @@ export async function canonicalize(
     const scaleRaw = row.value_scale ?? "";
     const scale = parseValueScale(scaleRaw);
     if (scale === null || !profile.allowed_value_scales.includes(scale)) {
-      rejectedRows.push(
+      rejectedWriter.writeRow(
         toRejectedValues(rejectedRow(row, batch, "unknown_scale", `scale='${scaleRaw}'`)),
       );
       rejectedCount += 1;
       continue;
     }
     if (!isFiniteNumber(expressionValue)) {
-      rejectedRows.push(
+      rejectedWriter.writeRow(
         toRejectedValues(
           rejectedRow(row, batch, "non_finite_value", `value='${expressionValue}'`),
         ),
@@ -431,7 +462,7 @@ export async function canonicalize(
     canonicalRow.gene_id_namespace = namespace;
     const isStar = batch.statistics.format === "star_counts";
     canonicalRow.source_sample_alias = isStar ? "" : (row.source_column_name ?? "");
-    canonicalRows.push(columns.map((column) => canonicalRow[column] ?? ""));
+    canonicalWriter.writeRow(columns.map((column) => canonicalRow[column] ?? ""));
     const ruleId = probeMapped
       ? "probe_gene_map"
       : mapped
@@ -446,7 +477,7 @@ export async function canonicalize(
         : namespace === "ensembl_gene"
           ? "Ensembl ID pattern ENSG###########(.N)"
           : "HGNC gene symbol pattern";
-    logRows.push(
+    logWriter.writeRow(
       toLogValues({
         record_id: canonicalRow.record_id,
         gene_id_raw: row.gene_id_raw ?? "",
@@ -464,21 +495,9 @@ export async function canonicalize(
     rowCount += 1;
   }
 
-  await writeFile(
-    canonicalPath,
-    csvLine(columns) + canonicalRows.map((row) => csvLine(row)).join(""),
-    "utf8",
-  );
-  await writeFile(
-    rejectedPath,
-    csvLine(REJECTED_COLUMNS) + rejectedRows.map((row) => csvLine(row)).join(""),
-    "utf8",
-  );
-  await writeFile(
-    logPath,
-    csvLine(NORMALIZATION_LOG_COLUMNS) + logRows.map((row) => csvLine(row)).join(""),
-    "utf8",
-  );
+  canonicalWriter.close();
+  rejectedWriter.close();
+  logWriter.close();
   await writeFieldMappings(mappingsPath, batch.declared_mappings);
 
   const payloadChecksum = await sha256FileStream(canonicalPath, signal);
