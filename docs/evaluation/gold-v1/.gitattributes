@@ -1,0 +1,2 @@
+# Frozen prompts are byte-level evaluation inputs; never normalize line endings.
+prompts/*.txt -text
