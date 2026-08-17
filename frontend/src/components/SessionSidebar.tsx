@@ -1,11 +1,7 @@
 import {
-  ArrowsClockwiseIcon,
-  DownloadSimpleIcon,
   GearIcon,
   PlusCircleIcon,
   TrashIcon,
-  WifiHighIcon,
-  WifiSlashIcon,
   XIcon,
 } from "@phosphor-icons/react";
 import { useCallback, useEffect, useState } from "react";
@@ -34,7 +30,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Empty,
@@ -56,8 +51,7 @@ import {
 } from "@/components/ui/sidebar";
 import { Spinner } from "@/components/ui/spinner";
 import { errorMessage } from "@/lib/utils";
-import type { RunStatus } from "@/runtime/contracts";
-import type { ConnectionStatus, TaskProjection } from "@/runtime/types";
+import type { TaskProjection } from "@/runtime/types";
 import { isActiveStatus } from "@/runtime/reducer";
 import { useAgentStore } from "@/stores/agentStore";
 
@@ -69,26 +63,7 @@ interface SessionSidebarProps {
   onRetryHistory?: () => Promise<void>;
   onCancelRun?: (taskId: string, runId: string) => Promise<void>;
   onDeleteTask?: (taskId: string) => Promise<void>;
-  onExportCache?: () => void | Promise<void>;
 }
-
-const OCCUPYING_STATUSES = new Set<RunStatus>([
-  "running",
-  "finalizing",
-  "cancel_requested",
-  "awaiting_user_input",
-]);
-
-const CONNECTION_META: Record<
-  ConnectionStatus,
-  { label: string; pending: boolean }
-> = {
-  idle: { label: "空闲", pending: false },
-  connecting: { label: "连接中", pending: true },
-  connected: { label: "已连接", pending: false },
-  reconnecting: { label: "重新连接中", pending: true },
-  disconnected: { label: "已断开", pending: false },
-};
 
 function TaskRow({
   task,
@@ -176,7 +151,6 @@ export function SessionSidebar({
   onRetryHistory,
   onCancelRun,
   onDeleteTask,
-  onExportCache,
   onOpenSettings,
 }: SessionSidebarProps) {
   const tasksById = useAgentStore((state) => state.tasksById);
@@ -184,7 +158,6 @@ export function SessionSidebar({
   const taskOrder = useAgentStore((state) => state.taskOrder);
   const activeTaskId = useAgentStore((state) => state.activeTaskId);
   const nextCursor = useAgentStore((state) => state.nextCursor);
-  const connectionStatus = useAgentStore((state) => state.connectionStatus);
   const historyStatus = useAgentStore((state) => state.historyStatus);
   const historyError = useAgentStore((state) => state.historyError);
   const { isMobile, setOpenMobile } = useSidebar();
@@ -195,17 +168,10 @@ export function SessionSidebar({
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
 
-  const activeTasks = activeItems
-    .map((taskId) => tasksById[taskId])
-    .filter((task): task is TaskProjection => task !== undefined);
   const visibleTaskIds = new Set([...activeItems, ...taskOrder]);
   const visibleTasks = [...visibleTaskIds]
     .map((taskId) => tasksById[taskId])
     .filter((task): task is TaskProjection => task !== undefined);
-  const runningCount = activeTasks.filter((task) =>
-    OCCUPYING_STATUSES.has(task.summary.status),
-  ).length;
-  const connection = CONNECTION_META[connectionStatus];
   const deleteTarget =
     deleteTargetId === null ? undefined : tasksById[deleteTargetId];
 
@@ -398,65 +364,19 @@ export function SessionSidebar({
           </SidebarGroup>
         </SidebarContent>
 
-        <SidebarFooter className="gap-2">
-          <div className="flex items-center justify-between gap-2 px-2">
-            <span className="flex min-w-0 items-center gap-2 text-xs">
-              {connection.pending ? (
-                <ArrowsClockwiseIcon className="shrink-0" />
-              ) : connectionStatus === "connected" ? (
-                <WifiHighIcon className="shrink-0" />
-              ) : (
-                <WifiSlashIcon className="shrink-0" />
-              )}
-              <span className="truncate">连接状态</span>
-            </span>
-            <Badge
-              variant="outline"
-              className="shrink-0"
-              data-connection-status={connectionStatus}
-              aria-label={`${connectionStatus}: ${connection.label}`}
-            >
-              {connection.label}
-            </Badge>
-          </div>
-          <div className="flex items-center justify-between gap-2 px-2">
-            <span className="text-xs text-sidebar-foreground/70">并发槽位</span>
-            <Badge variant="secondary">运行中 {runningCount} / 4</Badge>
-          </div>
-          {onExportCache !== undefined && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="w-full justify-start text-sidebar-foreground/70 hover:text-sidebar-accent-foreground"
-              onClick={() => {
-                try {
-                  void onExportCache();
-                } catch (error) {
-                  toast.error("导出缓存失败", {
-                    description: errorMessage(error),
-                  });
-                }
-              }}
-              aria-label="导出本地缓存为 ZIP"
-              title="导出本地缓存为 ZIP"
-            >
-              <DownloadSimpleIcon data-icon="inline-start" aria-hidden="true" />
-              导出缓存
-            </Button>
-          )}
+        <SidebarFooter>
           {onOpenSettings !== undefined && (
-            <div className="px-1">
-              <Button
-                variant="ghost"
-                size="sm"
-                className="w-full justify-start gap-2 text-sidebar-foreground/70 hover:text-sidebar-accent-foreground"
-                onClick={onOpenSettings}
-                aria-label="打开设置"
-              >
-                <GearIcon className="size-4" aria-hidden="true" />
-                <span>设置</span>
-              </Button>
-            </div>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  onClick={onOpenSettings}
+                  aria-label="打开设置"
+                >
+                  <GearIcon aria-hidden="true" />
+                  <span>设置</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
           )}
         </SidebarFooter>
       </Sidebar>

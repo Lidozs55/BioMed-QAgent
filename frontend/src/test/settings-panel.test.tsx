@@ -190,8 +190,18 @@ function mockApi(overrides: Partial<SettingsAPIClient> = {}): SettingsAPIClient 
   return { ...base, ...overrides };
 }
 
-function renderSettings(api: SettingsAPIClient = mockApi()) {
-  render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
+function renderSettings(
+  api: SettingsAPIClient = mockApi(),
+  onExportCache?: () => void,
+) {
+  render(
+    <SettingsPanel
+      open
+      onOpenChange={() => undefined}
+      api={api}
+      onExportCache={onExportCache}
+    />,
+  );
 }
 
 describe("SettingsPanel model registry", () => {
@@ -215,6 +225,21 @@ describe("SettingsPanel model registry", () => {
     expect((await screen.findAllByText("DeepSeek")).length).toBeGreaterThan(0);
     expect(screen.getAllByText("https://api.deepseek.com/v1").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "添加供应商" })).toBeInTheDocument();
+  });
+
+  it("exports local cache from the general settings section", async () => {
+    const onExportCache = vi.fn();
+    renderSettings(mockApi(), onExportCache);
+
+    const navigation = screen.getByRole("navigation", { name: "设置分类" });
+    fireEvent.click(within(navigation).getByRole("button", { name: "常规" }));
+    const exportButton = await screen.findByRole("button", { name: "导出缓存" });
+    expect(exportButton).toBeVisible();
+    expect(screen.getByText("导出已登记的本地缓存数据集及其清单。"))
+      .toBeVisible();
+
+    fireEvent.click(exportButton);
+    expect(onExportCache).toHaveBeenCalledTimes(1);
   });
 
   it("disables add-model until a provider exists", async () => {

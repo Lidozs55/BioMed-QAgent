@@ -170,7 +170,6 @@ export default function App() {
         onLoadMore={() => controller.loadMoreTasks()}
         onCancelRun={(taskId, runId) => controller.cancelRun(taskId, runId)}
         onDeleteTask={(taskId) => controller.deleteTask(taskId)}
-        onExportCache={exportCache}
         onOpenSettings={() => setSettingsOpen(true)}
       />
       <SidebarInset className="min-h-0 min-w-0 overflow-hidden">
