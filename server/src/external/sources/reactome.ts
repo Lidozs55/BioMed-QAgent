@@ -55,6 +55,8 @@ export interface DownloadDeps {
   client: PublicHttpClient;
   signal?: AbortSignal;
   rateLimitMs?: number;
+  maxDownloadBytes?: number;
+  timeoutMs?: number;
 }
 
 /** Python ``_reactome_api_document``: parsed JSON dict or null. */
@@ -358,9 +360,10 @@ export async function downloadReactome(
       cache: deps.cache,
       client: deps.client,
       dataLevel: "repository_processed" satisfies DataLevel,
-      maxBytes: 4096 * 1024 * 1024,
+      maxBytes: deps.maxDownloadBytes ?? 4096 * 1024 * 1024,
       accept: "*/*",
       signal: deps.signal,
+      timeoutMs: deps.timeoutMs,
     });
     if (result.asset === null) {
       return {

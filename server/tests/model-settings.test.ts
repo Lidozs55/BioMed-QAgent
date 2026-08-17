@@ -8,6 +8,8 @@ import { DatabaseSync } from "node:sqlite";
 
 import { afterEach, describe, expect, test } from "vitest";
 
+import { DEFAULT_RUNTIME_LIMITS } from "@biomed/contracts";
+
 import { ModelSettingsService } from "../src/settings/model-settings.js";
 import { ENV_BOOTSTRAP_PROVIDER_ID } from "../src/settings/model-registry/store.js";
 
@@ -84,6 +86,63 @@ describe("TypeScript model settings", () => {
       .not.toContain("sk-secret-provider-value");
     expect(await readFile(path.join(settingsDir, "model-auth.json"), "utf8"))
       .toContain("sk-secret-provider-value");
+  });
+
+  test("persists, validates, and resets runtime limits", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const baseUrl = await serve(service);
+
+    const updated = await fetch(`${baseUrl}/api/v1/settings`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        runtime_limits: {
+          command_timeout_seconds: 7200,
+          gdc_max_files: 200,
+        },
+      }),
+    });
+    expect(updated.status).toBe(200);
+    expect(await updated.json()).toMatchObject({
+      runtime_limits: {
+        ...DEFAULT_RUNTIME_LIMITS,
+        command_timeout_seconds: 7200,
+        gdc_max_files: 200,
+      },
+    });
+    expect(service.resolveRuntimeLimits()).toMatchObject({
+      command_timeout_seconds: 7200,
+      gdc_max_files: 200,
+    });
+
+    const beforeInvalid = service.getSettings();
+    const invalid = await fetch(`${baseUrl}/api/v1/settings`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        base_url: "https://must-not-stick.example/v1",
+        runtime_limits: { command_timeout_seconds: 86_401 },
+      }),
+    });
+    expect(invalid.status).toBe(422);
+    expect(service.resolveRuntimeLimits().command_timeout_seconds).toBe(7200);
+    expect(service.getSettings()).toEqual(beforeInvalid);
+
+    const unknown = await fetch(`${baseUrl}/api/v1/settings`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ runtime_limits: { imaginary_limit: 1 } }),
+    });
+    expect(unknown.status).toBe(422);
+
+    const reset = await fetch(`${baseUrl}/api/v1/settings`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ runtime_limits: null }),
+    });
+    expect(reset.status).toBe(200);
+    expect(service.resolveRuntimeLimits()).toEqual(DEFAULT_RUNTIME_LIMITS);
   });
 
   test("feeds configured compaction thresholds into the Pi model config", async () => {

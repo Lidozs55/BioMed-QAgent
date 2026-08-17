@@ -11,6 +11,7 @@
  *   request.
  */
 
+import { AsyncHostRateLimiter } from "../crawler/rate-limit.js";
 import type { PublicHttpClient } from "../network/http-client.js";
 import type { HttpClientResponse } from "../network/http-client.js";
 
@@ -61,27 +62,6 @@ export function sleepMs(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Per-host request pacing (Python ``AsyncHostRateLimiter`` equivalent). */
-class EutilsRateLimiter {
-  private lastRequestAt = 0;
-
-  constructor(
-    private readonly minIntervalMs: number,
-    private readonly waiter: (ms: number) => Promise<void>,
-  ) {}
-
-  async wait(): Promise<void> {
-    const now = Date.now();
-    if (this.lastRequestAt !== 0) {
-      const elapsed = now - this.lastRequestAt;
-      if (elapsed < this.minIntervalMs) {
-        await this.waiter(this.minIntervalMs - elapsed);
-      }
-    }
-    this.lastRequestAt = Date.now();
-  }
-}
-
 async function collectBody(body: AsyncIterable<Buffer>): Promise<Buffer> {
   const chunks: Buffer[] = [];
   for await (const chunk of body) chunks.push(chunk);
@@ -109,7 +89,7 @@ export class GeoEutilsClient implements GeoDiscoveryClient {
     apiKey: string | null;
   };
   private readonly http: PublicHttpClient;
-  private readonly limiter: EutilsRateLimiter;
+  private readonly limiter: AsyncHostRateLimiter;
   private readonly sleeper: (ms: number) => Promise<void>;
   private readonly jitter: () => number;
   private readonly now: () => Date;
@@ -141,7 +121,10 @@ export class GeoEutilsClient implements GeoDiscoveryClient {
     this.sleeper = options.sleeper ?? sleepMs;
     this.jitter = options.jitter ?? Math.random;
     this.now = options.now ?? (() => new Date());
-    this.limiter = new EutilsRateLimiter((1 / quota) * 1000, this.sleeper);
+    this.limiter = new AsyncHostRateLimiter({
+      minInterval: 1 / quota,
+      sleeper: (seconds) => this.sleeper(seconds * 1000),
+    });
   }
 
   private commonParams(): Record<string, string> {
@@ -173,7 +156,7 @@ export class GeoEutilsClient implements GeoDiscoveryClient {
       : timeoutSignal;
     try {
       for (let attempt = 0; attempt <= this.config.maxRetries; attempt += 1) {
-        await this.limiter.wait();
+        await this.limiter.wait(url);
         let response: HttpClientResponse;
         try {
           response = await this.http.request(url, {
@@ -280,6 +263,7 @@ export async function getGeoListing(
     try {
       const response = await client.request(url, { signal: options.signal });
       if (response.status === 429 || response.status >= 500) {
+        await response.discard();
         throw new ListingStatusError(response.status, response.headers);
       }
       return {

@@ -105,14 +105,16 @@ export function createVlmClient(
           "content-type": "application/json",
         },
         body: payload,
-        // The shared client wires connectTimeoutMs only; the overall VLM
-        // deadline is enforced here with a merged abort signal.
-        signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(VLM_TIMEOUT_MS)]),
+        signal: AbortSignal.any([
+          signal ?? new AbortController().signal,
+          AbortSignal.timeout(httpClient.timeoutMs ?? VLM_TIMEOUT_MS),
+        ]),
         validateRedirect: () => {
           throw new Error("VLM endpoint must not redirect");
         },
       });
       if (response.status < 200 || response.status >= 300) {
+        await response.discard();
         throw new ChartExtractionError(
           `qwen-vl-max call failed for ${imagePath}: HTTP ${response.status}`,
         );

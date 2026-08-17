@@ -11,9 +11,11 @@ import type {
   ModelInfo,
   ModelSettings,
   Personality,
+  RuntimeLimits,
   PersonalizationSettings,
   VendorInfo,
 } from "../settings.js";
+import { DEFAULT_RUNTIME_LIMITS, RUNTIME_LIMIT_RANGES } from "../settings.js";
 import { APIError } from "./errors.js";
 import {
   assertBoolean,
@@ -66,7 +68,23 @@ export function parseModelSettings(body: unknown): ModelSettings {
     available_input_tokens: availableInputTokens,
     advanced: parseAdvanced(Reflect.get(obj, "advanced"), "settings.advanced"),
     run_block_reason: optString(Reflect.get(obj, "run_block_reason"), "settings.run_block_reason") ?? null,
+    runtime_limits: parseRuntimeLimits(Reflect.get(obj, "runtime_limits"), "settings.runtime_limits"),
   };
+}
+
+function parseRuntimeLimits(v: unknown, path: string): RuntimeLimits {
+  if (v === undefined) return { ...DEFAULT_RUNTIME_LIMITS };
+  const obj = assertObject(v, path);
+  const result = {} as RuntimeLimits;
+  for (const key of Object.keys(RUNTIME_LIMIT_RANGES) as Array<keyof RuntimeLimits>) {
+    const value = assertNumber(Reflect.get(obj, key), `${path}.${key}`);
+    const range = RUNTIME_LIMIT_RANGES[key];
+    if (!Number.isSafeInteger(value) || value < range.min || value > range.max) {
+      throw new APIError(502, `Expected integer in [${range.min},${range.max}] at ${path}.${key}, got ${value}`);
+    }
+    result[key] = value;
+  }
+  return result;
 }
 
 function parseAdvanced(v: unknown, path: string): ModelSettings["advanced"] {

@@ -35,6 +35,7 @@ export interface WorkspaceLimits {
   maxSearchOutputChars: number;
   maxWriteBytes: number;
   maxExecOutputBytes: number;
+  defaultExecTimeoutMs: number;
   maxExecTimeoutMs: number;
 }
 

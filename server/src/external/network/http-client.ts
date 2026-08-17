@@ -38,6 +38,8 @@ export interface HttpClientResponse {
   body: AsyncIterable<Buffer>;
   /** Final URL after redirects. */
   url: string;
+  /** Drain and release an intentionally unused response body. Idempotent. */
+  discard(): Promise<void>;
 }
 
 export interface HttpRequestOptions {
@@ -78,7 +80,12 @@ export interface ExecutorRequest {
 
 export type RequestExecutor = (
   request: ExecutorRequest,
-) => Promise<{ status: number; headers: Record<string, string>; body: AsyncIterable<Buffer> }>;
+) => Promise<{
+  status: number;
+  headers: Record<string, string>;
+  body: AsyncIterable<Buffer>;
+  dispose?: () => void;
+}>;
 
 export const DEFAULT_MAX_REDIRECTS = 5;
 
@@ -134,7 +141,12 @@ export const defaultExecutor: RequestExecutor = (request) =>
             yield chunk as Buffer;
           }
         })();
-        resolve({ status: message.statusCode ?? 0, headers: headersFromIncoming(message), body });
+        resolve({
+          status: message.statusCode ?? 0,
+          headers: headersFromIncoming(message),
+          body,
+          dispose: () => message.destroy(),
+        });
       },
     );
     req.on("error", reject);
@@ -160,68 +172,125 @@ export const defaultExecutor: RequestExecutor = (request) =>
 export class PublicHttpClient {
   readonly resolve: AddressResolver;
   readonly maxRedirects: number;
+  readonly timeoutMs: number | undefined;
   private readonly executor: RequestExecutor;
 
   constructor(options: {
     resolve?: AddressResolver;
     maxRedirects?: number;
+    timeoutMs?: number;
     executor?: RequestExecutor;
   } = {}) {
     this.resolve = options.resolve ?? resolveAllAddresses;
     this.maxRedirects = options.maxRedirects ?? DEFAULT_MAX_REDIRECTS;
+    this.timeoutMs = options.timeoutMs;
     this.executor = options.executor ?? defaultExecutor;
   }
 
   async request(value: string, options: HttpRequestOptions = {}): Promise<HttpClientResponse> {
     const resolve = options.resolve ?? this.resolve;
-    const validateUrl =
-      options.validateUrl ??
-      (async (url: string): Promise<void> => {
-        await resolvePublicHttpTarget(url, { resolve });
-      });
-    const validateRedirect =
-      options.validateRedirect ??
-      (async (from: string, to: string): Promise<void> => {
-        const fromHost = new URL(from).hostname;
-        const toHost = new URL(to).hostname;
-        if (fromHost !== toHost) {
-          throw new UnsafeUrlError("download redirect changed host");
-        }
-      });
+    const validateUrl = options.validateUrl ?? (async (url: string): Promise<void> => {
+      await resolvePublicHttpTarget(url, { resolve });
+    });
+    const validateRedirect = options.validateRedirect ?? (async (from: string, to: string): Promise<void> => {
+      if (new URL(from).hostname !== new URL(to).hostname) {
+        throw new UnsafeUrlError("download redirect changed host");
+      }
+    });
     const maxRedirects = options.maxRedirects ?? this.maxRedirects;
+    const timeoutMs = options.timeoutMs ?? this.timeoutMs;
+    const timeoutController = timeoutMs === undefined ? null : new AbortController();
+    const timer = timeoutController === null ? null : setTimeout(() => {
+      timeoutController.abort(Object.assign(
+        new Error(`HTTP request timed out after ${timeoutMs}ms`),
+        { name: "TimeoutError" },
+      ));
+    }, timeoutMs);
+    const clearDeadline = (): void => {
+      if (timer !== null) clearTimeout(timer);
+    };
+    const signal = timeoutController === null
+      ? options.signal
+      : options.signal === undefined
+        ? timeoutController.signal
+        : AbortSignal.any([options.signal, timeoutController.signal]);
 
     let currentUrl = value;
     let redirected = 0;
-    for (;;) {
-      await validateUrl(currentUrl);
-      const pinned = await resolvePublicHttpTarget(currentUrl, { resolve });
-      const response = await this.executor({
-        url: new URL(currentUrl),
-        method: options.method ?? "GET",
-        headers: options.headers ?? {},
-        body: options.body === undefined ? null : Buffer.from(options.body),
-        signal: options.signal,
-        connectTimeoutMs: options.connectTimeoutMs,
-        pinned,
-      });
-      if (!REDIRECT_STATUSES.has(response.status)) {
-        return { status: response.status, headers: response.headers, body: response.body, url: currentUrl };
+    try {
+      for (;;) {
+        await validateUrl(currentUrl);
+        const pinned = await resolvePublicHttpTarget(currentUrl, { resolve });
+        const response = await this.executor({
+          url: new URL(currentUrl),
+          method: options.method ?? "GET",
+          headers: options.headers ?? {},
+          body: options.body === undefined ? null : Buffer.from(options.body),
+          signal,
+          connectTimeoutMs: options.connectTimeoutMs ?? (timeoutMs === undefined ? undefined : Math.min(timeoutMs, 30_000)),
+          pinned,
+        });
+        if (REDIRECT_STATUSES.has(response.status)) {
+          const location = response.headers["location"] ?? response.headers["Location"];
+          for await (const chunk of response.body) void chunk;
+          if (!location) throw new UnsafeUrlError("download redirect omitted Location");
+          if (redirected >= maxRedirects) throw new UnsafeUrlError("download exceeded redirect limit");
+          const nextUrl = new URL(location, currentUrl).toString();
+          await validateRedirect(currentUrl, nextUrl);
+          currentUrl = nextUrl;
+          redirected += 1;
+          continue;
+        }
+        const iterator = response.body[Symbol.asyncIterator]();
+        let bodyStarted = false;
+        let bodyCompleted = false;
+        const consume = async function* (): AsyncIterable<Buffer> {
+          if (bodyStarted) return;
+          bodyStarted = true;
+          try {
+            for (;;) {
+              const next = await iterator.next();
+              if (next.done === true) {
+                bodyCompleted = true;
+                break;
+              }
+              yield next.value;
+            }
+          } catch (error) {
+            if (timeoutController?.signal.aborted === true) {
+              throw timeoutController.signal.reason;
+            }
+            if (options.signal?.aborted === true) {
+              throw options.signal.reason;
+            }
+            throw error;
+          } finally {
+            if (!bodyCompleted) {
+              response.dispose?.();
+              await iterator.return?.().catch(() => undefined);
+            }
+            clearDeadline();
+          }
+        };
+        const discard = async (): Promise<void> => {
+          if (!bodyStarted) {
+            bodyStarted = true;
+            response.dispose?.();
+            await iterator.return?.().catch(() => undefined);
+          }
+          clearDeadline();
+        };
+        return {
+          status: response.status,
+          headers: response.headers,
+          body: consume(),
+          url: currentUrl,
+          discard,
+        };
       }
-      const location = response.headers["location"] ?? response.headers["Location"];
-      if (!location) {
-        throw new UnsafeUrlError("download redirect omitted Location");
-      }
-      if (redirected >= maxRedirects) {
-        throw new UnsafeUrlError("download exceeded redirect limit");
-      }
-      const nextUrl = new URL(location, currentUrl).toString();
-      await validateRedirect(currentUrl, nextUrl);
-      currentUrl = nextUrl;
-      redirected += 1;
-      // Drain the (tiny) redirect body so the socket can be reused.
-      for await (const chunk of response.body) {
-        void chunk;
-      }
+    } catch (error) {
+      clearDeadline();
+      throw error;
     }
   }
 }

@@ -17,7 +17,7 @@ import { CURATED_SOURCE_HOSTS } from "../acquisition/downloader.js";
 import type { AddressResolver } from "../network/dns.js";
 import { PublicHttpClient, type HttpClientResponse } from "../network/http-client.js";
 import { validateHttpsSourceUrl } from "../network/url-policy.js";
-import { describeError, timeoutSignal } from "../ncbi/retry.js";
+import { describeError } from "../ncbi/retry.js";
 
 const EPMC_BASE = "https://www.ebi.ac.uk/europepmc/webservices/rest";
 //: EPMC is domestically reachable; allow a longer timeout than Unpaywall.
@@ -89,11 +89,10 @@ async function readBody(response: HttpClientResponse): Promise<Buffer> {
 export async function fetchFullTextXml(pmcid: string, options: FetchFullTextXmlOptions = {}): Promise<Buffer> {
   const digits = normalizePmcid(pmcid);
   const url = `${EPMC_BASE}/PMC${digits}/fullTextXML`;
-  const timeoutMs = options.timeoutMs ?? EPMC_TIMEOUT_MS;
   const client = options.client ?? new PublicHttpClient({ resolve: options.resolve });
+  const timeoutMs = options.timeoutMs ?? client.timeoutMs ?? EPMC_TIMEOUT_MS;
   const resolver = options.resolve ?? client.resolve;
 
-  const timer = timeoutSignal(timeoutMs);
   let response: HttpClientResponse;
   try {
     response = await client.request(url, {
@@ -101,8 +100,9 @@ export async function fetchFullTextXml(pmcid: string, options: FetchFullTextXmlO
         "User-Agent": BROWSER_UA,
         "Accept": "application/xml, text/xml, */*",
       },
-      signal: options.signal === undefined ? timer.signal : AbortSignal.any([options.signal, timer.signal]),
-      connectTimeoutMs: timeoutMs,
+      signal: options.signal,
+      timeoutMs,
+      connectTimeoutMs: Math.min(timeoutMs, 30_000),
       resolve: resolver,
       validateUrl: async (value) => {
         await validateHttpsSourceUrl(value, CURATED_SOURCE_HOSTS, {
@@ -113,14 +113,14 @@ export async function fetchFullTextXml(pmcid: string, options: FetchFullTextXmlO
     });
   } catch (error) {
     throw new EuropePmcError(`EPMC network error: ${describeError(error)}`);
-  } finally {
-    timer.cancel();
   }
 
   if (response.status === 404) {
+    await response.discard();
     throw new EuropePmcError(`PMCID PMC${digits} not found in Europe PMC (not OA or does not exist)`);
   }
   if (response.status !== 200) {
+    await response.discard();
     throw new EuropePmcError(`EPMC returned HTTP ${response.status} for PMC${digits}`);
   }
 

@@ -1,5 +1,7 @@
 import path from "node:path";
 
+import { DEFAULT_RUNTIME_LIMITS, type RuntimeLimits } from "@biomed/contracts";
+
 import type { BioMedAgentAdapter, BioMedModelConfig } from "../agent/contracts.js";
 import { PiAgentAdapter } from "../agent/pi-adapter.js";
 import { createDatasetBuildTools } from "../agent/tools/dataset-build.js";
@@ -187,6 +189,8 @@ export interface Phase3RuntimeOptions {
   permissionBrokerRegistry?: PermissionBrokerRegistry;
   adapter?: BioMedAgentAdapter;
   resolveModel?: () => Promise<BioMedModelConfig>;
+  /** Limits are snapshotted whenever a new task workspace/run is created. */
+  resolveRuntimeLimits?: () => RuntimeLimits;
   /**
    * Operation wall-clock timeout in ms for the TS Dataset Core.
    * Defaults to 120_000 (120 s), matching the retired Python baseline
@@ -229,6 +233,7 @@ export async function createPhase3Runtime(
       resolveModel: options.resolveModel,
     }),
     workspaceFactory: async ({ taskId, runId, approvalGate, recordRunEvent }) => {
+      const limits = options.resolveRuntimeLimits?.() ?? DEFAULT_RUNTIME_LIMITS;
       let currentRunId = runId;
       let currentPiSessionId = "pi_session_pending";
       let buildResult: import("@biomed/contracts").BuildResult | null = null;
@@ -266,11 +271,21 @@ export async function createPhase3Runtime(
         repositoryRoot: options.repositoryRoot,
         permissions: permissionBroker,
         audit: new AppendOnlyTaskAuditSink(taskRoot),
+        limits: {
+          maxReadBytes: limits.workspace_read_kib * 1024,
+          maxReadCharacters: limits.workspace_read_kib * 1024,
+          maxWriteBytes: limits.workspace_write_kib * 1024,
+          maxSearchFileBytes: limits.workspace_search_file_mib * 1024 * 1024,
+          maxSearchFiles: limits.workspace_search_max_files,
+          maxExecOutputBytes: limits.command_output_kib * 1024,
+          defaultExecTimeoutMs: limits.command_timeout_seconds * 1000,
+          maxExecTimeoutMs: 86_400_000,
+        },
       });
       const tsCore = new TypeScriptDatasetCore({
         taskId,
         taskRoot: taskRoot,
-        operationTimeoutMs: options.operationTimeoutMs ?? 120_000,
+        operationTimeoutMs: options.operationTimeoutMs ?? limits.dataset_operation_timeout_seconds * 1000,
         hilGate: approvalGate,
         eventSink: async (event, buildId) => {
           await recordRunEvent(coreEventToPayload(event, buildId));
@@ -279,19 +294,28 @@ export async function createPhase3Runtime(
       const service = createDatasetCoreService({ tsCore });
 
       // Business tool bundle: curated tools + dynamic user tools.
-      const client = new PublicHttpClient();
+      const client = new PublicHttpClient({
+        timeoutMs: limits.http_timeout_seconds * 1000,
+      });
       const cache = new ContentCache(path.join(taskRoot, "cache"));
       const browserPool = options.browserPool ?? null;
       let browser = null;
       if (browserPool !== null) {
         const { CrawlerFacade } = await import("../external/crawler/crawler.js");
-        const crawler = new CrawlerFacade({ browserPool, client });
+        const crawler = new CrawlerFacade({
+          browserPool,
+          client,
+          minInterval: limits.request_interval_ms / 1000,
+          browserTimeoutMs: limits.browser_timeout_seconds * 1000,
+        });
         browser = {
           crawler,
           cache,
           client,
           fallback: async (url: string) => {
-            const result = await browserPool.fetch(url);
+            const result = await browserPool.fetch(url, {
+              timeoutMs: limits.browser_timeout_seconds * 1000,
+            });
             return {
               status_code: result?.status_code ?? 0,
               body_text_preview: result?.content ?? "",
@@ -315,6 +339,7 @@ export async function createPhase3Runtime(
         hooks: toolHooks,
         runId: () => currentRunId,
         vlmConfig: options.vlmConfig ?? undefined,
+        limits,
       });
       const dynamicTools = dbClient === null
         ? []
@@ -323,6 +348,7 @@ export async function createPhase3Runtime(
             approval: approvalGate,
             client,
             hooks: toolHooks,
+            timeoutMs: limits.database_timeout_seconds * 1000,
           }).catch((error: unknown) => {
             console.warn("tool.declarative_databases_unavailable", error);
             return [] as Awaited<ReturnType<typeof createDeclarativeDatabaseTools>>;

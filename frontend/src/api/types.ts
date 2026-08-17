@@ -5,8 +5,10 @@
  * across processes); this module re-exports them for frontend consumers and
  * keeps the client-side interfaces (``SettingsAPIClient``) in the frontend.
  */
-import type {
-  CapabilitySource,
+import {
+  RUNTIME_LIMIT_RANGES,
+  DEFAULT_RUNTIME_LIMITS,
+  type CapabilitySource,
   ContextBudgetSettings,
   DatabaseDetail,
   DatabaseItem,
@@ -30,6 +32,7 @@ import type {
   ProviderInfo,
   ProviderInput,
   ProviderUpdateInput,
+  RuntimeLimits,
   ServerSource,
   VendorInfo,
 } from "@biomed/contracts";
@@ -64,9 +67,12 @@ export type {
   ProviderInfo,
   ProviderInput,
   ProviderUpdateInput,
+  RuntimeLimits,
   ServerSource,
   VendorInfo,
 };
+
+export { DEFAULT_RUNTIME_LIMITS, RUNTIME_LIMIT_RANGES };
 
 export type {
   AgentPermissionPreset,

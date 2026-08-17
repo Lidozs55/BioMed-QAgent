@@ -31,6 +31,7 @@ import {
   type XenaHubRecord,
 } from "../../external/xena/index.js";
 import type { PublicHttpClient } from "../../external/network/http-client.js";
+import { AsyncHostRateLimiter } from "../../external/crawler/rate-limit.js";
 import type { SourceRecord } from "../../dataset/contracts/source.js";
 import { DATA_LEVEL, DATABASE } from "../../dataset/contracts/enums.js";
 
@@ -55,6 +56,7 @@ export interface XenaToolDeps extends ToolServiceDeps {
   client: PublicHttpClient;
   cache: ContentCache;
   maxDownloadBytes?: number;
+  downloadTimeoutMs?: number;
   /** Minimum interval between external requests; 0 disables (tests). */
   rateLimitMs?: number;
 }
@@ -63,19 +65,16 @@ export interface XenaToolDeps extends ToolServiceDeps {
  * Module-global request spacing (Python ``rate_limit`` parity: a single
  * shared timestamp per source, enforced before every external request).
  */
-let lastRequestAt = 0;
+const limiters = new Map<number, AsyncHostRateLimiter>();
 
-function rateLimit(minIntervalMs: number): Promise<void> {
+function rateLimit(url: string, minIntervalMs: number): Promise<void> {
   if (minIntervalMs <= 0) return Promise.resolve();
-  const wait = minIntervalMs - (Date.now() - lastRequestAt);
-  const resume = (): void => {
-    lastRequestAt = Date.now();
-  };
-  if (wait <= 0) {
-    resume();
-    return Promise.resolve();
+  let limiter = limiters.get(minIntervalMs);
+  if (limiter === undefined) {
+    limiter = new AsyncHostRateLimiter({ minInterval: minIntervalMs / 1000 });
+    limiters.set(minIntervalMs, limiter);
   }
-  return new Promise((resolve) => setTimeout(() => { resume(); resolve(); }, wait));
+  return limiter.wait(url);
 }
 
 /** Python ``make_source_id``: ``src_<canonical sha256 digest[:32]>``. */
@@ -167,7 +166,7 @@ export async function searchXena(
   const effectiveTerm = query || term;
   const hooks = noopHooks(deps.hooks);
   hooks.onQueryStarted(effectiveTerm, "xena");
-  const pace = (): Promise<void> => rateLimit(deps.rateLimitMs ?? XENA_RATE_LIMIT_MS);
+  const pace = (): Promise<void> => rateLimit("https://ucsc-xena.s3.us-east-1.amazonaws.com", deps.rateLimitMs ?? XENA_RATE_LIMIT_MS);
 
   let allDatasets: XenaHubRecord[];
   try {
@@ -208,7 +207,7 @@ export async function downloadXena(
   const cohort = expectOptionalString(args, "cohort");
   const fileType = rawFileType.toLowerCase().trim().replace(/^\.+/, "");
   const maxBytes = deps.maxDownloadBytes ?? XENA_MAX_DOWNLOAD_BYTES;
-  const pace = (): Promise<void> => rateLimit(deps.rateLimitMs ?? XENA_RATE_LIMIT_MS);
+  const pace = (): Promise<void> => rateLimit("https://ucsc-xena.s3.us-east-1.amazonaws.com", deps.rateLimitMs ?? XENA_RATE_LIMIT_MS);
   const hooks = noopHooks(deps.hooks);
   const dirs = taskWorkDirs(deps.taskRoot);
 
@@ -254,6 +253,7 @@ export async function downloadXena(
       maxBytes,
       accept: "application/gzip",
       signal,
+      timeoutMs: deps.downloadTimeoutMs,
       partPath,
       resumeFromBytes: resumeBytes,
       progress: reportProgress,

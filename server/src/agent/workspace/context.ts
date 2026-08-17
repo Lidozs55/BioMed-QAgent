@@ -19,8 +19,9 @@ export const DEFAULT_WORKSPACE_LIMITS: WorkspaceLimits = {
   maxSearchLineChars: 1_000,
   maxSearchOutputChars: 32 * 1024,
   maxWriteBytes: 256 * 1024,
-  maxExecOutputBytes: 64 * 1024,
-  maxExecTimeoutMs: 30_000,
+  maxExecOutputBytes: 256 * 1024,
+  defaultExecTimeoutMs: 600_000,
+  maxExecTimeoutMs: 86_400_000,
 };
 
 /**
