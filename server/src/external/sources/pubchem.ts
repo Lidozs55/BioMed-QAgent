@@ -50,6 +50,8 @@ export interface DownloadDeps {
   client: PublicHttpClient;
   signal?: AbortSignal;
   rateLimitMs?: number;
+  maxDownloadBytes?: number;
+  timeoutMs?: number;
 }
 
 /** Python ``_pubchem_properties``: the PropertyTable.Properties list or null. */
@@ -305,9 +307,10 @@ export async function downloadPubchem(
       cache: deps.cache,
       client: deps.client,
       dataLevel: "repository_processed" satisfies DataLevel,
-      maxBytes: 4096 * 1024 * 1024,
+      maxBytes: deps.maxDownloadBytes ?? 4096 * 1024 * 1024,
       accept: "*/*",
       signal: deps.signal,
+      timeoutMs: deps.timeoutMs,
     });
     if (result.asset === null) {
       return {

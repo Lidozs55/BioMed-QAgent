@@ -38,7 +38,10 @@ async function listDirectory(
   } catch {
     return [];
   }
-  if (response.status !== 200) return [];
+  if (response.status !== 200) {
+    await response.discard();
+    return [];
+  }
   const chunks: Buffer[] = [];
   for await (const chunk of response.body) chunks.push(chunk);
   const text = Buffer.concat(chunks).toString("utf8");

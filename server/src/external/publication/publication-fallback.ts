@@ -98,6 +98,7 @@ export interface PublicationFallbackOptions {
   /** PMCID for tier 3 (EPMC). If undefined, tier 3 is skipped. */
   pmcid?: string;
   signal?: AbortSignal;
+  timeoutMs?: number;
   /** DNS resolver for policy checks; defaults to the client's resolver. */
   resolve?: AddressResolver;
   /** Unpaywall contact email (forwarded to the lookup). */
@@ -176,6 +177,7 @@ export async function acquirePublicationWithFallback(
       dataLevel,
       maxBytes,
       signal,
+      timeoutMs: options.timeoutMs,
       resolve,
       allowedHosts: CURATED_SOURCE_HOSTS,
       progress,

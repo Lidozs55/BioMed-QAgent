@@ -2,7 +2,7 @@
  * Model registry catalog constants (vendors, param specs, budget defaults,
  * context-window heuristics).
  */
-import type { JsonObject } from "../../http/validation.js";
+import { DEFAULT_RUNTIME_LIMITS } from "@biomed/contracts";
 
 export const ADVANCED_DEFAULTS = {
   temperature: 0.7,
@@ -12,18 +12,7 @@ export const ADVANCED_DEFAULTS = {
   thinking_mode: false,
 };
 
-export const RUNTIME_DEFAULTS: JsonObject = {
-  agent_max_turns: 240,
-  max_turns_resume_limit: 3,
-  child_agent_max_turns: 30,
-  subagent_timeout_seconds: 3600,
-  no_progress_window_seconds: 300,
-  no_progress_repeat_threshold: 3,
-  lock_timeout_seconds: 5,
-  http_timeout_seconds: 30,
-  http_download_timeout_seconds: 60,
-  browser_timeout_seconds: 120,
-};
+export const RUNTIME_DEFAULTS = DEFAULT_RUNTIME_LIMITS;
 
 export const PARAM_SPECS = [
   { key: "max_tokens", label: "最大输出 Tokens", type: "integer", min: 1 },

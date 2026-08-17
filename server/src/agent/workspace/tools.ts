@@ -203,8 +203,17 @@ export function createWorkspaceTools(workspace: TaskWorkspace): BioMedAgentTool[
         type: "object",
         properties: {
           executable: { type: "string", minLength: 1 },
-          args: { type: "array", items: { type: "string" }, maxItems: 100 },
-          timeoutMs: { type: "integer", minimum: 1 },
+          args: {
+            type: "array",
+            items: { type: "string", maxLength: 65_536 },
+            maxItems: 1_000,
+          },
+          timeout_seconds: {
+            type: "integer",
+            minimum: 1,
+            maximum: 86_400,
+            description: "Wall-clock timeout in seconds (default from settings; maximum 86400).",
+          },
         },
         required: ["executable", "args"],
         additionalProperties: false,
@@ -214,7 +223,9 @@ export function createWorkspaceTools(workspace: TaskWorkspace): BioMedAgentTool[
         const result = await workspace.exec({
           executable: stringArgument(args, "executable"),
           args: stringArray(args, "args"),
-          timeoutMs: optionalInteger(args, "timeoutMs"),
+          timeoutMs: optionalInteger(args, "timeout_seconds") === undefined
+            ? undefined
+            : optionalInteger(args, "timeout_seconds")! * 1000,
         }, signal);
         return success(result, result.policy !== "allowed" || result.cancelled || result.timedOut);
       }),

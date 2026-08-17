@@ -24,6 +24,8 @@ export interface PubchemToolDeps extends ToolServiceDeps {
   client?: PublicHttpClient;
   /** Request pacing override for tests; default 2000ms. */
   rateLimitMs?: number;
+  maxDownloadBytes?: number;
+  downloadTimeoutMs?: number;
 }
 
 export const SEARCH_PUBCHEM_TOOL_NAME = "search_pubchem";
@@ -189,6 +191,8 @@ export function createPubchemTools(deps: PubchemToolDeps): BioMedAgentTool[] {
           client,
           signal,
           rateLimitMs: deps.rateLimitMs,
+          maxDownloadBytes: deps.maxDownloadBytes,
+          timeoutMs: deps.downloadTimeoutMs,
         });
         return { content: JSON.stringify(result) };
       },

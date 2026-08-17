@@ -17,6 +17,7 @@
 import { createHash } from "node:crypto";
 
 import type { Database } from "../../dataset/contracts/enums.js";
+import { AsyncHostRateLimiter } from "../crawler/rate-limit.js";
 import { isAbortError } from "../network/errors.js";
 import type {
   HttpClientResponse,
@@ -121,20 +122,16 @@ export interface BrowserFallbackResult {
  */
 export type BrowserFallback = (url: string) => Promise<BrowserFallbackResult>;
 
-/**
- * Single global request pacing timestamp shared by every source module —
- * Python ``_download_io._last_request_ts`` parity (stricter than per-skill
- * windows, matching the AGENTS.md "2s per request" global constraint).
- */
-let lastRequestAt = 0;
+const sharedLimiters = new Map<number, AsyncHostRateLimiter>();
 
 export async function rateLimit(minIntervalMs: number): Promise<void> {
-  const now = Date.now();
-  const wait = minIntervalMs - (now - lastRequestAt);
-  if (wait > 0) {
-    await new Promise((resolve) => setTimeout(resolve, wait));
+  if (minIntervalMs <= 0) return;
+  let limiter = sharedLimiters.get(minIntervalMs);
+  if (limiter === undefined) {
+    limiter = new AsyncHostRateLimiter({ minInterval: minIntervalMs / 1000 });
+    sharedLimiters.set(minIntervalMs, limiter);
   }
-  lastRequestAt = Date.now();
+  await limiter.wait("https://shared-source-pacing.invalid");
 }
 
 export interface ApiFetchOptions {

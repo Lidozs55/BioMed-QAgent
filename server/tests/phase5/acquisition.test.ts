@@ -70,6 +70,7 @@ async function acquire(options: {
   expectedMd5?: string;
   expectedMediaTypes?: ReadonlySet<string>;
   signal?: AbortSignal;
+  timeoutMs?: number;
   filename?: string;
   stream?: (res: { write(chunk: string | Buffer): void; end(): void }) => void;
 }) {
@@ -100,6 +101,7 @@ async function acquire(options: {
     expectedMd5: options.expectedMd5,
     expectedMediaTypes: options.expectedMediaTypes,
     signal: options.signal,
+    timeoutMs: options.timeoutMs,
     allowedHosts: new Set([HOST]),
   });
   return { result, fixture, cache };
@@ -116,6 +118,17 @@ describe("canonicalRequestHash", () => {
 });
 
 describe("acquireSource success path", () => {
+  it("classifies a slow response body as timeout instead of cancellation", async () => {
+    const { result } = await acquire({
+      timeoutMs: 20,
+      stream: (response) => {
+        response.write("prefix");
+        setTimeout(() => response.end(), 100);
+      },
+    });
+    expect(result.attempt).toMatchObject({ status: "failed", error_code: "timeout" });
+    expect(result.asset).toBeNull();
+  });
   it("publishes a verified content-addressed SourceAsset", async () => {
     const { result } = await acquire({ content: "hello", filename: "hello.txt" });
     expect(result.attempt.status).toBe("succeeded");

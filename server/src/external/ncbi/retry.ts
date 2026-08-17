@@ -9,6 +9,8 @@
  * limiter is equivalent to the Python process-global limiter it replaces.
  */
 
+import { AsyncHostRateLimiter } from "../crawler/rate-limit.js";
+
 /** Cancellable timeout signal; Node's ``AbortSignal.timeout`` keeps a
  * ref'ed timer alive, which would hold test processes open for minutes. */
 export function timeoutSignal(ms: number): { signal: AbortSignal; cancel: () => void } {
@@ -38,35 +40,24 @@ export interface HostRateLimiterOptions {
 
 export class HostRateLimiter {
   readonly minIntervalMs: number;
-  private readonly _now: () => number;
-  private readonly _sleep: (delayMs: number) => Promise<void>;
-  private readonly _lastRequestAt = new Map<string, number>();
-  private readonly _chains = new Map<string, Promise<void>>();
+  private readonly delegate: AsyncHostRateLimiter;
 
   constructor(options: HostRateLimiterOptions) {
     if (!Number.isFinite(options.minInterval) || options.minInterval < 0) {
       throw new TypeError("min_interval must be non-negative");
     }
     this.minIntervalMs = options.minInterval * 1000;
-    this._now = options.now ?? Date.now;
-    this._sleep =
-      options.sleep ?? ((delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)));
+    const now = options.now ?? Date.now;
+    const sleep = options.sleep ?? ((delayMs) => new Promise<void>((resolve) => setTimeout(resolve, delayMs)));
+    this.delegate = new AsyncHostRateLimiter({
+      minInterval: options.minInterval,
+      clock: () => now() / 1000,
+      sleeper: (seconds) => sleep(seconds * 1000),
+    });
   }
 
-  /** Wait until the host's pacing window allows the next request. */
-  async wait(url: string): Promise<void> {
-    const host = new URL(url).hostname;
-    const previous = this._chains.get(host) ?? Promise.resolve();
-    const next = previous.then(async () => {
-      const last = this._lastRequestAt.get(host);
-      if (last !== undefined) {
-        const remaining = this.minIntervalMs - (this._now() - last);
-        if (remaining > 0) await this._sleep(remaining);
-      }
-      this._lastRequestAt.set(host, this._now());
-    });
-    this._chains.set(host, next.then(() => undefined, () => undefined));
-    await next;
+  wait(url: string): Promise<void> {
+    return this.delegate.wait(url);
   }
 }
 

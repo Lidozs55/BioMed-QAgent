@@ -407,6 +407,19 @@ build 锁、cancel 收敛与 event sink；`DATASET_CORE=ts` 现为默认运行�
 
 ## 独立维护项（与迁移主线并行）
 
+### 统一运行限制配置（✅ 完成）
+
+- [x] `RuntimeLimits` 共享契约、默认值与范围成为单一来源；旧配置自动补齐，设置 API
+      严格校验、支持部分更新与恢复默认。
+- [x] 设置页新增 Agent → 运行限制，按执行、网络/浏览器、数据获取/构建分组管理；
+      设置在新 Task Workspace / Run 生效。
+- [x] 命令超时改为秒制（默认 600 秒，最大 86,400 秒），并放宽输出与参数预算；
+      Dataset operation、HTTP/下载、浏览器、数据库、Workspace 和 GDC 获取接入同一配置。
+- [x] GDC 默认文件预算由 5 提升到 50；通用来源限流复用并发安全的
+      `AsyncHostRateLimiter`，删除 GDC/Xena/fallback 的模块级时间戳实现。
+
+设计与字段表见 [runtime-limits.md](runtime-limits.md)。
+
 ### Durable HIL / Confidence 协议（✅ 完成，2026-08-16）
 
 - [x] `HILRequest` / immutable `HumanReviewRecord` / evidence digest 契约与 Task-local

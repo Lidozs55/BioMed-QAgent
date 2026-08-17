@@ -112,12 +112,14 @@ export interface GeoToolsOptions {
   cache: ContentCache;
   client: PublicHttpClient;
   /** E-utilities request identity (tool/email/optional API key). */
-  eutils: Omit<GeoEutilsConfig, "baseUrl" | "maxRetries" | "totalTimeoutMs">;
+  eutils: Omit<GeoEutilsConfig, "baseUrl" | "maxRetries">;
   hooks?: ToolHooks;
   /** Injectable retry/backoff sleeper (tests). */
   sleep?: (ms: number) => Promise<void>;
   /** E-utilities discovery client override (tests). */
   discovery?: GeoDiscoveryClient;
+  maxDownloadBytes?: number;
+  downloadTimeoutMs?: number;
 }
 
 interface GeoResolvedDownload {
@@ -488,8 +490,9 @@ export function createDownloadGeoTool(options: GeoToolsOptions): BioMedAgentTool
       const fileType = typeof record.file_type === "string" ? record.file_type : "matrix";
       const filename =
         typeof record.filename === "string" ? record.filename : null;
-      const maxSizeMb =
-        typeof record.max_size_mb === "number" ? record.max_size_mb : 4096;
+      const configuredMaxMb = (options.maxDownloadBytes ?? 8192 * 1024 * 1024) / (1024 * 1024);
+      const requestedMaxMb = typeof record.max_size_mb === "number" ? record.max_size_mb : configuredMaxMb;
+      const maxSizeMb = Math.min(requestedMaxMb, configuredMaxMb);
       try {
         const resolved = await resolveGeoDownload(
           options,
@@ -516,6 +519,7 @@ export function createDownloadGeoTool(options: GeoToolsOptions): BioMedAgentTool
           dataLevel: "repository_processed",
           maxBytes: maxSizeMb * 1024 * 1024,
           signal,
+          timeoutMs: options.downloadTimeoutMs,
           progress: reportProgress,
         });
         const payload: Record<string, unknown> = {
@@ -603,8 +607,9 @@ export function createDownloadGeoPlatformAnnotationTool(
     execute: async (argumentsValue, signal) => {
       const record = argumentsValue as { gpl?: unknown; max_size_mb?: unknown };
       const gpl = typeof record.gpl === "string" ? record.gpl : "";
-      const maxSizeMb =
-        typeof record.max_size_mb === "number" ? record.max_size_mb : 4096;
+      const configuredMaxMb = (options.maxDownloadBytes ?? 8192 * 1024 * 1024) / (1024 * 1024);
+      const requestedMaxMb = typeof record.max_size_mb === "number" ? record.max_size_mb : configuredMaxMb;
+      const maxSizeMb = Math.min(requestedMaxMb, configuredMaxMb);
       if (!GPL_PATTERN.test(gpl || "")) {
         return {
           content: JSON.stringify({
@@ -656,6 +661,7 @@ export function createDownloadGeoPlatformAnnotationTool(
           accept: "application/gzip, text/plain",
           requestHeaders: { "User-Agent": ANNOTATION_UA },
           signal,
+          timeoutMs: options.downloadTimeoutMs,
           progress: reportProgress,
         });
         const payload: Record<string, unknown> = {

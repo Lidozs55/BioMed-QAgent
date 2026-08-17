@@ -610,7 +610,7 @@ describe("download_gdc", () => {
     });
   });
 
-  it("downloads at most 5 files", async () => {
+  it("uses the widened default file budget", async () => {
     const content = await readFile(fixture("gdc_expression.tsv"));
     const hits = Array.from({ length: 7 }, (_, index) => ({
       file_id: `file-${index}`,
@@ -640,9 +640,9 @@ describe("download_gdc", () => {
       deps(server.port),
     );
     expect(result.file_count).toBe(7);
-    expect(result.downloaded).toBe(5);
-    expect(result.local_files).toHaveLength(6);
-    expect(server.requests.filter((request) => request.url.startsWith("/data/"))).toHaveLength(5);
+    expect(result.downloaded).toBe(7);
+    expect(result.local_files).toHaveLength(8);
+    expect(server.requests.filter((request) => request.url.startsWith("/data/"))).toHaveLength(7);
   });
 });
 

@@ -207,6 +207,27 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     section: "general",
     anchor: "settings-export-cache",
   },
+  {
+    id: "runtime.command-timeout",
+    title: "命令执行超时",
+    keywords: ["runtime", "运行限制", "timeout", "超时", "命令", "秒"],
+    section: "runtime-limits",
+    anchor: "runtime-limit-command_timeout_seconds",
+  },
+  {
+    id: "runtime.download-size",
+    title: "单文件下载大小",
+    keywords: ["download", "下载", "大小", "文件", "gdc"],
+    section: "runtime-limits",
+    anchor: "runtime-limit-max_download_mib",
+  },
+  {
+    id: "runtime.dataset-timeout",
+    title: "数据集操作超时",
+    keywords: ["dataset", "数据集", "构建", "解析", "超时"],
+    section: "runtime-limits",
+    anchor: "runtime-limit-dataset_operation_timeout_seconds",
+  },
 ];
 
 function scoreEntry(entry: SettingsIndexEntry, query: string): number {

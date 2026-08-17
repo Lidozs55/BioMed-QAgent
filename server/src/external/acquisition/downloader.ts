@@ -92,6 +92,7 @@ export interface AcquireSourceOptions {
   requestHeaders?: Readonly<Record<string, string>>;
   progress?: AcquisitionProgress;
   signal?: AbortSignal;
+  timeoutMs?: number;
   /** Extra per-hop validator for recipe/declarative hosts. Defaults to curated. */
   allowedHosts?: ReadonlySet<string>;
   /** DNS resolver for policy checks; defaults to the client's resolver. */
@@ -389,6 +390,7 @@ export async function acquireSource(options: AcquireSourceOptions): Promise<Acqu
       response = await client.request(source.url, {
         headers,
         signal,
+        timeoutMs: options.timeoutMs,
         resolve: resolver,
         validateUrl: async (url) => {
           try {
@@ -416,7 +418,7 @@ export async function acquireSource(options: AcquireSourceOptions): Promise<Acqu
         },
       });
     } catch (error) {
-      if (isAbortError(error)) {
+      if (error instanceof Error && error.name === "AbortError") {
         // 取消时保留调用方 part 文件：用户取消后可断点续传（默认 part 仍清理）。
         if (!callerOwnedPart) await cleanupPart();
         throw error;
@@ -431,6 +433,7 @@ export async function acquireSource(options: AcquireSourceOptions): Promise<Acqu
       return fail(code, `download failed: ${error instanceof Error ? error.message : String(error)}`);
     }
     if (response.status < 200 || response.status >= 300) {
+      await response.discard();
       return fail("network_error", `download returned HTTP ${response.status}`);
     }
     let append = false;
@@ -447,6 +450,7 @@ export async function acquireSource(options: AcquireSourceOptions): Promise<Acqu
     const declaredHeader = response.headers["content-length"] ?? response.headers["Content-Length"];
     const declaredLength = declaredHeader === undefined ? null : Number.parseInt(declaredHeader, 10);
     if (declaredLength !== null && declaredLength + resumeOffset > maxBytes) {
+      await response.discard();
       await cleanupPart();
       return fail("download_incomplete", "declared content length exceeds maximum");
     }
@@ -475,7 +479,7 @@ export async function acquireSource(options: AcquireSourceOptions): Promise<Acqu
         }
       } catch (error) {
         await new Promise<void>((resolveClose) => target.close(() => resolveClose()));
-        if (isAbortError(error) || (error instanceof Error && error.name === "AbortError") || signal?.aborted === true) {
+        if ((error instanceof Error && error.name === "AbortError") || signal?.aborted === true) {
           // 取消时保留调用方 part 文件：用户取消后可断点续传（默认 part 仍清理）。
           if (!callerOwnedPart) await cleanupPart();
           throw error;
@@ -558,7 +562,7 @@ export async function acquireSource(options: AcquireSourceOptions): Promise<Acqu
       asset: buildSourceAsset(assetId, destination, dirs, checksum, bytesReceived, mediaType, source, attemptId, dataLevel),
     };
   } catch (error) {
-    if (isAbortError(error) || (error instanceof Error && error.name === "AbortError") || signal?.aborted === true) {
+    if ((error instanceof Error && error.name === "AbortError") || signal?.aborted === true) {
       // 取消时保留调用方 part 文件：用户取消后可断点续传（默认 part 仍清理）。
       if (!callerOwnedPart) await cleanupPart();
       throw error;

@@ -12,6 +12,12 @@ import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 
+import {
+  DEFAULT_RUNTIME_LIMITS,
+  RUNTIME_LIMIT_RANGES,
+  type RuntimeLimits,
+} from "@biomed/contracts";
+
 import type { BioMedModelConfig } from "../../agent/contracts.js";
 import type { AddressResolver } from "../../external/network/dns.js";
 import { resolveAllAddresses } from "../../external/network/dns.js";
@@ -56,6 +62,23 @@ function maskApiKey(value: string): string {
   if (value === "") return "";
   if (value.length <= 12) return `${value.slice(0, 4)}****`;
   return `${value.slice(0, 8)}...${value.slice(-4)}`;
+}
+
+function runtimeLimitsPatch(value: unknown): Partial<RuntimeLimits> {
+  const record = asRecord(value);
+  const patch: Partial<RuntimeLimits> = {};
+  for (const [rawKey, candidate] of Object.entries(record)) {
+    if (!Object.hasOwn(RUNTIME_LIMIT_RANGES, rawKey)) {
+      throw new HttpError(422, `Unknown runtime limit: ${rawKey}`);
+    }
+    const key = rawKey as keyof RuntimeLimits;
+    const range = RUNTIME_LIMIT_RANGES[key];
+    if (!Number.isSafeInteger(candidate) || (candidate as number) < range.min || (candidate as number) > range.max) {
+      throw new HttpError(422, `${key} must be an integer between ${range.min} and ${range.max}`);
+    }
+    patch[key] = candidate as number;
+  }
+  return patch;
 }
 
 export class ModelSettingsService {
@@ -108,6 +131,8 @@ export class ModelSettingsService {
   resolveActiveModel = async (): Promise<BioMedModelConfig> =>
     resolveActiveConfig(this.registry, this.auth, this.environment);
 
+  resolveRuntimeLimits = (): RuntimeLimits => ({ ...this.registry.settings.runtime_limits });
+
   /** Resolve VLM chart-extraction config from active settings when possible. */
   resolveVlmConfig = (): Promise<{
     apiKey: string;
@@ -146,7 +171,8 @@ export class ModelSettingsService {
 
   updateSettings(body: JsonObject): Promise<void> {
     return this.mutate(() => {
-      const settings = this.registry.settings;
+      const settings = structuredClone(this.registry.settings);
+      const auth = structuredClone(this.auth);
       if (body.base_url !== undefined) settings.base_url = requiredString(body.base_url, "base_url");
       if (body.model_name !== undefined) settings.model_name = requiredString(body.model_name, "model_name");
       if (body.max_tokens !== undefined) settings.max_tokens = boundedNumber(body.max_tokens, "max_tokens", 1);
@@ -160,19 +186,25 @@ export class ModelSettingsService {
       if (body.repetition_penalty !== undefined) settings.advanced.repetition_penalty = boundedNumber(body.repetition_penalty, "repetition_penalty", 0);
       if (body.enable_search !== undefined) settings.advanced.enable_search = Boolean(body.enable_search);
       if (body.thinking_mode !== undefined) settings.advanced.thinking_mode = Boolean(body.thinking_mode);
-      if (body.runtime_limits !== undefined) settings.runtime_limits = {
-        ...settings.runtime_limits,
-        ...asRecord(body.runtime_limits),
-      };
+      if (body.runtime_limits === null) {
+        settings.runtime_limits = { ...DEFAULT_RUNTIME_LIMITS };
+      } else if (body.runtime_limits !== undefined) {
+        settings.runtime_limits = {
+          ...settings.runtime_limits,
+          ...runtimeLimitsPatch(body.runtime_limits),
+        };
+      }
       if (typeof body.api_key === "string") {
         const current = settings.provider_id === null
-          ? this.auth.direct_api_key
-          : this.auth.provider_api_keys[settings.provider_id] ?? "";
+          ? auth.direct_api_key
+          : auth.provider_api_keys[settings.provider_id] ?? "";
         if (body.api_key !== maskApiKey(current)) {
-          if (settings.provider_id === null) this.auth.direct_api_key = body.api_key;
-          else this.auth.provider_api_keys[settings.provider_id] = body.api_key;
+          if (settings.provider_id === null) auth.direct_api_key = body.api_key;
+          else auth.provider_api_keys[settings.provider_id] = body.api_key;
         }
       }
+      this.registry.settings = settings;
+      this.auth = auth;
     });
   }
 

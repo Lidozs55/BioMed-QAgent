@@ -48,6 +48,8 @@ export interface DownloadDeps {
   client: PublicHttpClient;
   signal?: AbortSignal;
   rateLimitMs?: number;
+  maxDownloadBytes?: number;
+  timeoutMs?: number;
   onQueryStarted?: (query: string, source: string) => void;
   onQuery?: (query: string, source: string, status: QueryStatus, recordsCount?: number) => void;
 }
@@ -302,9 +304,10 @@ export async function downloadPdb(
       cache: deps.cache,
       client: deps.client,
       dataLevel: "repository_processed" satisfies DataLevel,
-      maxBytes: 4096 * 1024 * 1024,
+      maxBytes: deps.maxDownloadBytes ?? 4096 * 1024 * 1024,
       accept: "application/octet-stream,*/*;q=0.9",
       signal: deps.signal,
+      timeoutMs: deps.timeoutMs,
     });
     const payload: Record<string, unknown> = {
       source: "pdb",

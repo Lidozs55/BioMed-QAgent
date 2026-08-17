@@ -7,6 +7,7 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
+  Timer,
 } from "lucide-react";
 
 export interface SettingsNavItem {
@@ -51,6 +52,7 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
     label: "Agent",
     items: [
       { id: "permissions", label: "权限", icon: ShieldCheck },
+      { id: "runtime-limits", label: "运行限制", icon: Timer },
     ],
   },
 ];

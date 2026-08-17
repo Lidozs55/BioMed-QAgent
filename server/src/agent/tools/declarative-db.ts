@@ -297,6 +297,7 @@ export interface DeclarativeDatabaseToolDeps {
   hooks?: ToolHooks;
   /** Injectable HTTP client (tests). */
   client?: PublicHttpClient;
+  timeoutMs?: number;
 }
 
 export function collectEnvSecrets(): Record<string, string> {
@@ -317,7 +318,7 @@ export async function loadDeclarativeManifests(db: DatabaseClient): Promise<Decl
 
 export function buildOperationTool(
   operation: HttpOperationManifest,
-  deps: Required<Pick<DeclarativeDatabaseToolDeps, "db" | "client" | "secrets">> & Pick<DeclarativeDatabaseToolDeps, "approval" | "hooks">,
+  deps: Required<Pick<DeclarativeDatabaseToolDeps, "db" | "client" | "secrets">> & Pick<DeclarativeDatabaseToolDeps, "approval" | "hooks" | "timeoutMs">,
 ): BioMedAgentTool {
   const hooks = noopHooks(deps.hooks);
   const parameters = [...(() => {
@@ -395,7 +396,7 @@ export function buildOperationTool(
           headers: stringHeaders,
           body: body === null ? undefined : JSON.stringify(body),
           signal,
-          timeoutMs: Math.round(operation.timeout_seconds * 1000),
+          timeoutMs: deps.timeoutMs ?? Math.round(operation.timeout_seconds * 1000),
           // Python: follow_redirects=True with per-hop public URL validation
           // (cross-host hops allowed when they stay public).
           validateUrl: async (hop) => {
@@ -406,6 +407,7 @@ export function buildOperationTool(
           },
         });
         if (response.status < 200 || response.status >= 300) {
+          await response.discard();
           throw new DatabaseValidationError(`HTTP ${response.status} for ${requestUrl}`);
         }
         const chunks: Buffer[] = [];
@@ -449,6 +451,7 @@ export async function createDeclarativeDatabaseTools(deps: DeclarativeDatabaseTo
         secrets,
         hooks: deps.hooks,
         client,
+        timeoutMs: deps.timeoutMs,
       }));
     }
   }

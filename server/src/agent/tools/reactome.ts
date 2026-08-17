@@ -24,6 +24,8 @@ export interface ReactomeToolDeps extends ToolServiceDeps {
   client?: PublicHttpClient;
   /** Request pacing override for tests; default 2000ms. */
   rateLimitMs?: number;
+  maxDownloadBytes?: number;
+  downloadTimeoutMs?: number;
 }
 
 export const SEARCH_REACTOME_TOOL_NAME = "search_reactome";
@@ -177,6 +179,8 @@ export function createReactomeTools(deps: ReactomeToolDeps): BioMedAgentTool[] {
           client,
           signal,
           rateLimitMs: deps.rateLimitMs,
+          maxDownloadBytes: deps.maxDownloadBytes,
+          timeoutMs: deps.downloadTimeoutMs,
         });
         return { content: JSON.stringify(result) };
       },

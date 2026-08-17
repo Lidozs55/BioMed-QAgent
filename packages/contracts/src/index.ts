@@ -9,7 +9,7 @@ export type * from "./task-run.js";
 export type * from "./websocket.js";
 
 /* ---- Wire DTO types (settings / model registry / declarative databases) ---- */
-export type * from "./settings.js";
+export * from "./settings.js";
 export type * from "./model-registry.js";
 export type * from "./databases.js";
 

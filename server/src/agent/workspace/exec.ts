@@ -194,9 +194,9 @@ function validateCommand(input: {
   }
   if (
     !Array.isArray(input.args) ||
-    input.args.length > 100 ||
+    input.args.length > 1_000 ||
     input.args.some(
-      (argument) => typeof argument !== "string" || argument.length > 4_096 || argument.includes("\0"),
+      (argument) => typeof argument !== "string" || argument.length > 65_536 || argument.includes("\0"),
     )
   ) {
     return "Executable arguments are invalid";
@@ -357,7 +357,7 @@ export async function executeWorkspaceCommand(
   const timeout = setTimeout(() => {
     timedOut = true;
     void terminate();
-  }, input.timeoutMs ?? context.limits.maxExecTimeoutMs);
+  }, input.timeoutMs ?? context.limits.defaultExecTimeoutMs);
   const onAbort = (): void => {
     cancelled = true;
     void terminate();

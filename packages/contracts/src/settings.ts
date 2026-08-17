@@ -24,6 +24,58 @@ export interface ContextBudgetSettings {
   available_input_tokens: number;
 }
 
+/** User-managed operational budgets. Security invariants are intentionally excluded. */
+export interface RuntimeLimits {
+  command_timeout_seconds: number;
+  command_output_kib: number;
+  workspace_read_kib: number;
+  workspace_write_kib: number;
+  workspace_search_file_mib: number;
+  workspace_search_max_files: number;
+  http_timeout_seconds: number;
+  download_timeout_seconds: number;
+  browser_timeout_seconds: number;
+  dataset_operation_timeout_seconds: number;
+  database_timeout_seconds: number;
+  max_download_mib: number;
+  gdc_max_files: number;
+  request_interval_ms: number;
+}
+
+export const DEFAULT_RUNTIME_LIMITS: RuntimeLimits = {
+  command_timeout_seconds: 600,
+  command_output_kib: 256,
+  workspace_read_kib: 256,
+  workspace_write_kib: 1024,
+  workspace_search_file_mib: 16,
+  workspace_search_max_files: 2000,
+  http_timeout_seconds: 300,
+  download_timeout_seconds: 3600,
+  browser_timeout_seconds: 300,
+  dataset_operation_timeout_seconds: 3600,
+  database_timeout_seconds: 600,
+  max_download_mib: 8192,
+  gdc_max_files: 50,
+  request_interval_ms: 500,
+};
+
+export const RUNTIME_LIMIT_RANGES = {
+  command_timeout_seconds: { min: 1, max: 86_400 },
+  command_output_kib: { min: 64, max: 16_384 },
+  workspace_read_kib: { min: 64, max: 16_384 },
+  workspace_write_kib: { min: 256, max: 65_536 },
+  workspace_search_file_mib: { min: 1, max: 1024 },
+  workspace_search_max_files: { min: 100, max: 100_000 },
+  http_timeout_seconds: { min: 5, max: 3600 },
+  download_timeout_seconds: { min: 60, max: 86_400 },
+  browser_timeout_seconds: { min: 10, max: 3600 },
+  dataset_operation_timeout_seconds: { min: 60, max: 86_400 },
+  database_timeout_seconds: { min: 10, max: 3600 },
+  max_download_mib: { min: 64, max: 65_536 },
+  gdc_max_files: { min: 1, max: 1000 },
+  request_interval_ms: { min: 0, max: 10_000 },
+} as const satisfies Record<keyof RuntimeLimits, { min: number; max: number }>;
+
 /* ---- Model settings ---- */
 export interface ModelSettings extends ContextBudgetSettings {
   base_url: string;
@@ -40,6 +92,7 @@ export interface ModelSettings extends ContextBudgetSettings {
   };
   /** Non-null when the backend cannot resolve a valid context budget; task creation will be rejected. */
   run_block_reason: string | null;
+  runtime_limits: RuntimeLimits;
 }
 
 export interface ModelSettingsUpdate {
@@ -56,6 +109,7 @@ export interface ModelSettingsUpdate {
   safety_reserve_ratio?: number;
   compaction_trigger_ratio?: number;
   compaction_target_ratio?: number;
+  runtime_limits?: Partial<RuntimeLimits> | null;
 }
 
 /* ---- Personalization ---- */
