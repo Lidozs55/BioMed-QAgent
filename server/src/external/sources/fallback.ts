@@ -298,5 +298,8 @@ export function makeSourceId(database: Database, accession: string, url: string)
     database,
     url: url.trim(),
   });
+  if (accession.trim() === "" || url.trim() === "") {
+    throw new TypeError("accession and url must not be blank");
+  }
   return `src_${createHash("sha256").update(canonical).digest("hex").slice(0, 32)}`;
 }

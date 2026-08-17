@@ -15,6 +15,7 @@ import { URL } from "node:url";
 
 import { CURATED_SOURCE_HOSTS } from "../acquisition/downloader.js";
 import type { AddressResolver } from "../network/dns.js";
+import { isAbortError } from "../network/errors.js";
 import { PublicHttpClient, type HttpClientResponse } from "../network/http-client.js";
 import { validateHttpsSourceUrl } from "../network/url-policy.js";
 import { HostRateLimiter, parseRetryAfter, timeoutSignal } from "./retry.js";
@@ -180,7 +181,7 @@ export class NcbiEutilsClient {
             });
           }
           if (signal?.aborted === true) throw error;
-          if (error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError")) {
+          if (isAbortError(error)) {
             throw new NcbiRequestError(`NCBI request failed: ${error.name}: ${error.message}`, {
               statusCode: null,
               retryable: true,

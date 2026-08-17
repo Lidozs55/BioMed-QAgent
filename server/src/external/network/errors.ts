@@ -30,7 +30,7 @@ export class AcquisitionError extends Error {
   }
 }
 
-export function isAbortError(error: unknown): boolean {
+export function isAbortError(error: unknown): error is Error {
   return (
     error instanceof Error &&
     (error.name === "AbortError" || error.name === "TimeoutError")
