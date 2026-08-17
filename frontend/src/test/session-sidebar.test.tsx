@@ -409,9 +409,9 @@ describe("SessionSidebar", () => {
     expect(iconFor("Failed 失败")).toHaveClass("text-destructive");
     expect(iconFor("Cancelled 已取消")).not.toHaveClass("text-destructive");
     expect(iconFor("Interrupted 已中断")).toHaveClass("text-destructive");
-    expect(container.querySelector('[data-slot="badge"]')).not.toHaveTextContent(
-      /运行中|排队中|已完成|失败|已取消|已中断/,
-    );
+    for (const badge of container.querySelectorAll('[data-slot="badge"]')) {
+      expect(badge).not.toHaveTextContent(/运行中|排队中|已完成|失败|已取消|已中断/);
+    }
   });
 
   it("renders four-state outcome from run.summary.build_result", () => {
@@ -644,49 +644,6 @@ describe("SessionSidebar", () => {
     expect(container.querySelector("button button")).toBeNull();
   });
 
-  it("shows connection and worker occupancy as separate footer rows", () => {
-    useAgentStore.setState({ connectionStatus: "reconnecting" });
-    useAgentStore.getState().mergeTaskPage(
-      {
-        active_items: [
-          summary("running", "running"),
-          summary("finalizing", "finalizing"),
-          summary("cancelling", "cancel_requested"),
-          summary("paused", "awaiting_user_input"),
-          summary("queued", "queued"),
-        ],
-        items: [],
-        next_cursor: null,
-      },
-      false,
-    );
-    renderSidebar();
-
-    expect(screen.getByText("重新连接中")).toBeVisible();
-    expect(screen.getByText("运行中 4 / 4")).toBeVisible();
-    expect(screen.getByText("重新连接中").parentElement).not.toBe(
-      screen.getByText("运行中 4 / 4").parentElement,
-    );
-  });
-
-  it("renders the export cache button only when onExportCache is provided", () => {
-    useAgentStore.getState().mergeTaskPage(
-      { active_items: [], items: [], next_cursor: null },
-      false,
-    );
-
-    // Without onExportCache: button is absent.
-    renderSidebar();
-    expect(screen.queryByRole("button", { name: "导出本地缓存为 ZIP" })).toBeNull();
-
-    // With onExportCache: button is present and invokes the callback.
-    const onExportCache = vi.fn();
-    renderSidebar({ onExportCache });
-    const btn = screen.getByRole("button", { name: "导出本地缓存为 ZIP" });
-    fireEvent.click(btn);
-    expect(onExportCache).toHaveBeenCalledTimes(1);
-  });
-
   it("renders settings button only when onOpenSettings is provided", () => {
     useAgentStore.getState().mergeTaskPage(
       { active_items: [], items: [], next_cursor: null },
@@ -705,23 +662,35 @@ describe("SessionSidebar", () => {
     expect(onOpenSettings).toHaveBeenCalledTimes(1);
   });
 
-  it("coexists with both settings and export cache buttons simultaneously", () => {
+  it("keeps only settings in the footer and aligns it with history rows", () => {
     useAgentStore.getState().mergeTaskPage(
-      { active_items: [], items: [], next_cursor: null },
+      {
+        active_items: [],
+        items: [summary("history", "completed", "History")],
+        next_cursor: null,
+      },
       false,
     );
-
-    const onExportCache = vi.fn();
     const onOpenSettings = vi.fn();
-    renderSidebar({ onExportCache, onOpenSettings });
+    renderSidebar({ onOpenSettings });
 
-    expect(screen.getByRole("button", { name: "打开设置" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "导出本地缓存为 ZIP" })).toBeVisible();
+    expect(screen.queryByText("连接状态")).toBeNull();
+    expect(screen.queryByText("并发槽位")).toBeNull();
+    expect(screen.queryByRole("button", { name: "导出本地缓存为 ZIP" })).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "打开设置" }));
+    const historyButton = screen.getByRole("button", { name: "History 已完成" });
+    const settingsButton = screen.getByRole("button", { name: "打开设置" });
+    expect(historyButton).toHaveAttribute("data-slot", "sidebar-menu-button");
+    expect(settingsButton).toHaveAttribute("data-slot", "sidebar-menu-button");
+    expect(historyButton).toHaveClass("gap-2", "p-2");
+    expect(settingsButton).toHaveClass("gap-2", "p-2");
+    expect(historyButton.closest('[data-slot="sidebar-group"]')).toHaveClass("p-2");
+    const footer = settingsButton.closest('[data-slot="sidebar-footer"]');
+    expect(footer).toHaveClass("p-2");
+    expect(settingsButton.closest('[data-slot="sidebar-menu-item"]')).not.toBeNull();
+    expect(settingsButton.closest('[data-slot="sidebar-menu"]')?.parentElement).toBe(footer);
+
+    fireEvent.click(settingsButton);
     expect(onOpenSettings).toHaveBeenCalledTimes(1);
-
-    fireEvent.click(screen.getByRole("button", { name: "导出本地缓存为 ZIP" }));
-    expect(onExportCache).toHaveBeenCalledTimes(1);
   });
 });
