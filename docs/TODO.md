@@ -63,6 +63,40 @@
       和图表/衍生数据可信路径；严格表头/行宽/source locator/单位与 relation 保留，
       workspace 文件不得绕过 Publisher。
 
+#### 开发者 B 任务台账
+
+> B 组详细 ownership、依赖类型、分支、交接窗口和逐任务验收见
+> [开发者 B：可信多表 Publication 落实计划](superpowers/plans/2026-08-18-developer-b-trusted-publication-plan.md)。
+> 当前 B 组唯一 ready 任务是 `TASK-G0`；全项目另一条 ready 任务是 A 组的
+> `TASK-047-A1`。`TASK-047-A2` 必须等待 A1。
+
+- [ ] **TASK-G0 / ready**：冻结 Gold eval manifest；完成后解锁 `TASK-048-B1`。
+- [x] **TASK-048-B0 / completed @ b43c145**：FamilyRegistry admission foundation。
+- [ ] **TASK-048-B1 / blocked by TASK-G0**：Multi-table contracts v2 与 ADR。
+- [ ] **TASK-C1C / blocked by TASK-048-B1 + TASK-047-A1 feedback**：Core SourceAsset registry contracts。
+- [ ] **TASK-047-A5C / blocked by TASK-048-B1 + TASK-047-A2 shape**：Operation Result Manifest contract/ADR。
+- [ ] **TASK-C2C / blocked by TASK-C1C**：Core-owned acquisition contracts。
+- [ ] **TASK-C3C / P1 backlog, blocked by TASK-C1C + TASK-047-A5C**：Durable Build API/state-machine contracts；
+      当前不阻塞 TASK-048/G1。
+- [ ] **TASK-048-B2M / blocked by TASK-048-B1 + TASK-047-A5C**：PublicationCandidate 与 family assembler module。
+- [ ] **TASK-048-B2W / A owner, blocked by TASK-048-B2M + TASK-047-A5I**：assemble runtime/checkpoint/publisher wiring。
+- [ ] **TASK-048-B3 / blocked by TASK-048-B1**：Generic multi-table validation/relation gate。
+- [ ] **TASK-048-B4M / blocked by TASK-048-B1 + TASK-047-A2 + TASK-C1C**：Registered-table adapter module；
+      trusted E2E 还需 `TASK-048-B3` + `TASK-C1I`。
+- [ ] **TASK-048-B5C / blocked by TASK-048-B1 + TASK-048-B3**：共享 biomedical tables/relation vocabulary。
+- [ ] **TASK-048-B5L / blocked**：`literature_evidence` vertical slice。
+- [ ] **TASK-048-B5T / blocked**：`target_evidence` vertical slice。
+- [ ] **TASK-048-B5V / blocked**：`variant_evidence` vertical slice。
+- [ ] **TASK-048-B5S / blocked**：`protein_structure` vertical slice。
+- [ ] **TASK-048-B5A / blocked**：`bioactivity_measurement` vertical slice。
+- [ ] **TASK-048-B6A / blocked**：Chart/VLM evidence Publication。
+- [ ] **TASK-048-B6D / blocked**：Deterministic derive ADR。
+- [ ] **TASK-048-B6W / A owner, blocked by TASK-048-B6D + TASK-047-A5I**：fixed derive slot runtime wiring。
+- [ ] **TASK-048-B6B / blocked by TASK-048-B6W + family dependencies**：Deterministic derived evidence 与 family consumers。
+- [ ] **TASK-048-B7 / blocked by all family/VLM/derive + TASK-C2I**：Gold3-Gold6 原样重跑。
+- [ ] **TASK-G1B / blocked by TASK-048-B7 + TASK-047-A8 + TASK-G1A**：最终 Gold3-Gold6 同基线复跑。
+- [ ] **TASK-G1R / blocked by TASK-G1A + TASK-G1B**：严格 Gold 最终报告。
+
 ### P1
 
 - [ ] **P1 / Phase 9 后续**：`UserInputDialog` / HIL 迁移到同一 Questionnaire
@@ -123,7 +157,8 @@
       UniProt / ClinVar / RCSB PDB / ChEMBL / PubChem / ClinicalTrials.gov /
       Europe PMC 只有 agent 业务 Tool（Phase 5 P5-02…08，产物停在
       workspace/cache），检索结果无法进入 DatasetBuild。gold3/4/5/6 用到的
-      源全部命中此缺口。按计划 C1-C2/B4-B5 逐 family、逐来源接入：结构化 API
+      源全部命中此缺口。按 `TASK-C1C`、`TASK-C1I`、`TASK-C2C`、`TASK-C2I`、
+      `TASK-048-B4M` 和 `TASK-048-B5C/L/T/V/S/A` 逐 family、逐来源接入：结构化 API
       响应 → immutable SourceAsset → trusted adapter；不得让 Agent workspace path
       成为临时发布入口。
 - [ ] **P2** 图表数字化产物无受信任落点：Qwen-VL chart extraction 工具
