@@ -165,6 +165,64 @@ function stripSoftField(value: string): string {
   return value.trim().replace(/^"+|"+$/g, "");
 }
 
+/** SOFT ``^PLATFORM`` mini-format fallback (no ``!platform_table_*`` markers). */
+function parseSoftPlatformTable(lines: string[]): SoftPlatformTable {
+  let platformIndex: number | null = null;
+  for (let index = 0; index < lines.length; index += 1) {
+    if (lines[index].trim().toLowerCase().startsWith("^platform")) {
+      platformIndex = index;
+      break;
+    }
+  }
+  if (platformIndex === null) {
+    return { probe_column: null, gene_column: null, rows: [], has_table: false };
+  }
+  let headerIndex: number | null = null;
+  for (let index = platformIndex + 1; index < lines.length; index += 1) {
+    const line = lines[index].trim();
+    if (line === "") continue;
+    if (line.startsWith("#") || line.startsWith("!")) continue;
+    headerIndex = index;
+    break;
+  }
+  if (headerIndex === null) {
+    return { probe_column: null, gene_column: null, rows: [], has_table: false };
+  }
+  const header = lines[headerIndex].split("\t").map(stripSoftField);
+  if (header.length === 0) {
+    return { probe_column: null, gene_column: null, rows: [], has_table: true };
+  }
+  let geneColumn: string | null = null;
+  for (const candidate of GENE_COLUMN_PRIORITY) {
+    if (header.includes(candidate)) {
+      geneColumn = candidate;
+      break;
+    }
+  }
+  const geneIndex = geneColumn !== null ? header.indexOf(geneColumn) : null;
+  const rows: Array<[string, string]> = [];
+  if (geneIndex !== null) {
+    for (let index = headerIndex + 1; index < lines.length; index += 1) {
+      const line = lines[index].trim();
+      if (line === "") continue;
+      if (line.startsWith("^") || line.startsWith("!")) break;
+      const values = lines[index].split("\t").map(stripSoftField);
+      if (values.length <= geneIndex) continue;
+      const probe = values[0];
+      const gene = values[geneIndex];
+      if (probe !== "" && !MISSING_SENTINELS.has(gene)) {
+        rows.push([probe, gene]);
+      }
+    }
+  }
+  return {
+    probe_column: header[0],
+    gene_column: geneColumn,
+    rows,
+    has_table: true,
+  };
+}
+
 /** Python ``parse_platform_table_text`` (geo_annotation.py shared parser). */
 export function parsePlatformTableText(text: string): SoftPlatformTable {
   const lines = text.split(/\r\n|\n|\r/);
@@ -180,7 +238,7 @@ export function parsePlatformTableText(text: string): SoftPlatformTable {
     }
   }
   if (begin === null || end === null || end <= begin + 1) {
-    return { probe_column: null, gene_column: null, rows: [], has_table: false };
+    return parseSoftPlatformTable(lines);
   }
   const header = lines[begin + 1].split("\t").map(stripSoftField);
   if (header.length === 0) {

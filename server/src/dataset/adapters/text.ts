@@ -10,9 +10,8 @@
 
 import { createReadStream, readFileSync } from "node:fs";
 import { open as openFile, readFile } from "node:fs/promises";
-import { createGunzip, gunzipSync } from "node:zlib";
+import { createGunzip, gunzip as gunzipCb, gunzipSync } from "node:zlib";
 import { promisify } from "node:util";
-import { gunzip as gunzipCb } from "node:zlib";
 import { StringDecoder } from "node:string_decoder";
 import { throwIfAborted } from "../cooperative.js";
 

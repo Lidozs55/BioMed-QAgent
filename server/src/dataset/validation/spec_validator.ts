@@ -108,7 +108,11 @@ function pyReprList(values: readonly string[]): string {
  * rejects every ``validation_profile_ref``.
  */
 export class SpecValidator {
-  private readonly registry: { contains(schemaId: string): boolean; get(schemaId: string): { dataset_family: string; row_granularity: string; fields: Array<{ name: string }> } };
+  private readonly registry: {
+    contains(schemaId: string): boolean;
+    get(schemaId: string): { dataset_family: string; row_granularity: string; fields: Array<{ name: string }> };
+    list(): string[];
+  };
   private readonly allowedProfiles: ReadonlySet<string>;
 
   constructor(
@@ -125,7 +129,10 @@ export class SpecValidator {
 
     if (!this.registry.contains(spec.schema_ref)) {
       codes.push("unknown_schema");
-      reasons.push(`schema ${pyRepr(spec.schema_ref)} is not registered`);
+      reasons.push(
+        `schema ${pyRepr(spec.schema_ref)} is not registered; ` +
+          `registered schemas: ${pyReprList(this.registry.list())}`,
+      );
     } else {
       const schema = this.registry.get(spec.schema_ref);
       if (schema.dataset_family !== spec.dataset_family) {
@@ -183,7 +190,8 @@ export class SpecValidator {
       codes.push("profile_not_allowed");
       reasons.push(
         `validation profile ${pyRepr(spec.validation_profile_ref)} is not on ` +
-          "the server allowlist",
+          "the server allowlist; allowed validation profiles: " +
+          `${pyReprList([...this.allowedProfiles].sort())}`,
       );
     }
 

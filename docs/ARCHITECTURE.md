@@ -132,7 +132,6 @@ Dataset Core 产生并以 manifest + hash 验证——权限放开不改变业�
 scope 才匹配，API 缺省 project）；Restricted 切换会作废全部 pending 并清空全部临时
 授权；Run 结束时经 `onRunEnd` 清理该 run 的 grants。Run/Task 文件授权以批准路径为根
 （canonical root + 子树），不覆盖整个 scope（ADR-026 §2）。
->>>>>>> feat/workspace-permission-system
 
 当前不存在固定五阶段、固定 22 列 `main_data.csv` 全局协议或 metadata-only
 占位主表：Dataset Build 由自包含 `DatasetBuildSpec`（§3）驱动，产物由

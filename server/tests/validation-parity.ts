@@ -27,6 +27,7 @@ import {
 import {
   aggregateConfidenceMetrics,
   benfordDistance,
+  ConfidenceColumnAggregator,
   defaultConfidenceThresholds,
   detectArithmeticProgression,
   detectConstantColumn,
@@ -37,6 +38,7 @@ import {
   getValidationProfile,
   type ProbeMappingSummary,
   SpecValidator,
+  Utf8StreamingValidator,
 } from "../src/dataset/validation/index.js";
 
 function check(issues: string[], condition: boolean, message: string): void {
@@ -163,6 +165,43 @@ export function checkConfidenceParity(): string[] {
     check(issues, emptySummary.anomaly_count === 0, "aggregate: empty column no anomaly");
     check(issues, emptySummary.findings[0].detector === "no_numeric_values", "aggregate: empty column detector");
     check(issues, emptySummary.findings[0].applicable === false, "aggregate: empty column not applicable");
+  }
+
+  // streaming aggregator mirrors aggregate_confidence_metrics (single pass, O(1) memory)
+  {
+    const cases: Array<{ column: string; values: Array<string | number>; thresholds?: ConfidenceThresholds }> = [
+      { column: "benford_like", values: Array.from({ length: 300 }, () => 10 ** (mulberry32(2026)() * 5.0)) },
+      { column: "uniform_first_digit", values: Array.from({ length: 9 }, (_, d) => (d + 1) * 10 ** 5).flatMap((v) => Array(40).fill(v)) },
+      { column: "constant", values: Array(60).fill(3.7) },
+      { column: "progression", values: Array.from({ length: 50 }, (_, i) => i) },
+      { column: "tiny", values: [1.5, 2.5, 3.5] },
+      { column: "empty", values: ["", "n/a", "?"] },
+      { column: "mixed_negative", values: [...Array.from({ length: 40 }, (_, i) => -(10 ** (i % 6 + 1))), ...Array.from({ length: 40 }, (_, i) => 10 ** (i % 6 + 1))] },
+      { column: "wide", values: Array.from({ length: 1000 }, (_, i) => i), thresholds: { ...defaultConfidenceThresholds(), progression_max_distinct: 10 } },
+      { column: "boundary_exact", values: Array.from({ length: 10 }, (_, i) => i + 1), thresholds: { ...defaultConfidenceThresholds(), progression_max_distinct: 10 } },
+      { column: "non_finite", values: ["nan", "inf", "-inf", "1e999", "abc", 0, -0, 5, 5, 5] },
+      { column: "mixed_types", values: ["1.5", 2.5, "3.5e0", 4.5, "5", 6, "n/a", "", null as never] },
+    ];
+    for (const { column, values, thresholds } of cases) {
+      const arraySummary = aggregateConfidenceMetrics({ [column]: values }, thresholds);
+      const aggregator = new ConfidenceColumnAggregator(column, thresholds);
+      for (const value of values) aggregator.push(value as string | number);
+      if (!deepEqual(aggregator.summary(), arraySummary)) {
+        issues.push(
+          `streaming aggregator mismatch for ${column}: expected ${JSON.stringify(arraySummary)}, got ${JSON.stringify(aggregator.summary())}`,
+        );
+      }
+    }
+
+    // large column: single pass must not degrade the histogram accumulation
+    const rng = mulberry32(99);
+    const large = Array.from({ length: 50_000 }, () => 10 ** (rng() * 5.0));
+    const largeArray = aggregateConfidenceMetrics({ value: large });
+    const largeStream = new ConfidenceColumnAggregator("value");
+    for (const value of large) largeStream.push(value);
+    if (!deepEqual(largeStream.summary(), largeArray)) {
+      issues.push(`streaming aggregator mismatch on large column: got ${JSON.stringify(largeStream.summary())}`);
+    }
   }
 
   // last-digit gating on small samples
@@ -680,6 +719,77 @@ export async function checkValidationProfileParity(options: { outputRoot: string
     const report = readFileSync(join(out, "validation_report.json"), "utf8");
     check(issues, report.includes('"check_id": "csv_encoding_utf8"'), "profile: utf8 reports encoding");
     check(issues, report.includes('"passed": true'), "profile: utf8 encoding passed true");
+  }
+
+  // regression: the encoding check used to readFile() the whole primary into
+  // memory (decodeUtf8Strict), OOMing the heap on the 1.9GB merged build; the
+  // streaming validator must keep the same byte rules across chunk boundaries
+  {
+    // a 3-byte sequence split across two pushes must still validate
+    let carried: boolean;
+    try {
+      const validator = new Utf8StreamingValidator();
+      validator.push(Buffer.from([0x61, 0x62, 0xe4]));
+      validator.push(Buffer.from([0xb8, 0xad, 0x63]));
+      validator.finish();
+      carried = true;
+    } catch {
+      carried = false;
+    }
+    check(issues, carried, "profile: utf8 streaming carry-over validates");
+    // an invalid continuation byte arriving in the next chunk fails at its
+    // absolute byte position
+    let continuation = "";
+    try {
+      const validator = new Utf8StreamingValidator();
+      validator.push(Buffer.from([0xe4, 0xb8]));
+      validator.push(Buffer.from([0x41]));
+      validator.finish();
+    } catch (error) {
+      continuation = error instanceof Error ? error.message : "";
+    }
+    check(
+      issues,
+      continuation.includes("invalid continuation byte") && continuation.includes("position 2"),
+      "profile: utf8 streaming invalid continuation at boundary",
+    );
+    // a sequence still open at EOF is unexpected end of data
+    let truncated = "";
+    try {
+      const validator = new Utf8StreamingValidator();
+      validator.push(Buffer.from([0x61, 0xe4]));
+      validator.finish();
+    } catch (error) {
+      truncated = error instanceof Error ? error.message : "";
+    }
+    check(
+      issues,
+      truncated.includes("unexpected end of data") && truncated.includes("position 1-1"),
+      "profile: utf8 streaming truncated at EOF",
+    );
+  }
+
+  // test_utf8_primary_multichunk (streaming encoding check across >1MiB input)
+  {
+    const out = join(outRoot, "utf8-multichunk");
+    mkdirSync(out, { recursive: true });
+    const primary = join(out, "primary.csv");
+    const rows: Array<Record<string, string>> = [];
+    for (let index = 0; index < 20_000; index += 1) {
+      rows.push(validRow(`G${index}`));
+    }
+    writePrimary(primary, rows);
+    const result = await profile.validate({
+      manifest: manifest(rows.length),
+      primaryPath: primary,
+      schema: buildGeneExpressionSchema(),
+      manifestDigest: "d".repeat(64),
+      outputDir: out,
+    });
+    check(issues, result.status === "passed", "profile: utf8 multichunk passes");
+    const report = readFileSync(join(out, "validation_report.json"), "utf8");
+    check(issues, report.includes('"check_id": "csv_encoding_utf8"'), "profile: utf8 multichunk reports encoding");
+    check(issues, report.includes("primary dataset decodes as UTF-8"), "profile: utf8 multichunk encoding passed");
   }
 
   // entity level + probe release profile

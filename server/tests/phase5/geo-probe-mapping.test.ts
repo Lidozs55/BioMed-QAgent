@@ -127,6 +127,40 @@ describe("parsePlatformTable golden parity", () => {
     expect(headerOnly.gene_column).toBeNull();
     expect(headerOnly.rows).toEqual([]);
   });
+
+  test("parsePlatformTableText parses SOFT ^PLATFORM mini-format", () => {
+    const table = parsePlatformTableText(
+      "^PLATFORM = GPL10332\n" +
+        "#ID = Agilent feature number\n" +
+        "#GENE_SYMBOL = Gene Symbol\n" +
+        "ID\tGENE_SYMBOL\n" +
+        "12\tATP6V0D2\n" +
+        "13\tBRAF\n" +
+        "45167\tABHD14B\n",
+    );
+    expect(table.has_table).toBe(true);
+    expect(table.probe_column).toBe("ID");
+    expect(table.gene_column).toBe("GENE_SYMBOL");
+    expect(table.rows).toEqual([
+      ["12", "ATP6V0D2"],
+      ["13", "BRAF"],
+      ["45167", "ABHD14B"],
+    ]);
+  });
+
+  test("SOFT ^PLATFORM annotation parses to gene symbols (golden)", async () => {
+    const result = await parsePlatformTable(fixturePath("gpl10332_soft.txt.gz"));
+    expect(result.mapping).toEqual({
+      "12": "ATP6V0D2",
+      "13": "BRAF",
+      "45167": "ABHD14B",
+    });
+    expect(result.target_namespace).toBe("gene_symbol");
+    expect(result.status).toBe("mapped");
+    expect(result.probe_column).toBe("ID");
+    expect(result.gene_column).toBe("GENE_SYMBOL");
+    expect([...result.ambiguous_probes]).toEqual([]);
+  });
 });
 
 describe("buildProbeMapping", () => {
@@ -169,6 +203,34 @@ describe("buildProbeMapping", () => {
       expect(lines.join("\n")).toContain("PROBE1,TP53,gene_symbol,mapped");
       expect(lines.join("\n")).toContain("PROBE2,,,unmapped");
       expect(lines.join("\n")).toContain("UNKNOWN1,,,unmapped");
+    } finally {
+      rmSync(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  test("SOFT mini-format annotation maps all probes with full coverage", async () => {
+    const outputDir = mkdtempSync(path.join(tmpdir(), "p5-probe-map-"));
+    try {
+      const annotationPath = fixturePath("gpl10332_soft.txt.gz");
+      const result = await buildProbeMapping({
+        annotationPath,
+        batchPath: writeBatch(outputDir, ["12", "13", "45167"]),
+        bindingId: "binding_geo",
+        platformId: "GPL10332",
+        annotationAsset: mappingAsset(annotationPath),
+        outputDir,
+      });
+      expect(result.probe_to_gene).toEqual({
+        "12": "ATP6V0D2",
+        "13": "BRAF",
+        "45167": "ABHD14B",
+      });
+      expect(result.summary.mapping_status).toBe("mapped");
+      expect(result.summary.coverage_ratio).toBe(1.0);
+      const record = result.platform_record;
+      expect(record?.platform_id).toBe("GPL10332");
+      expect(record?.annotation_status).toBe("mapped");
+      expect(record?.gene_id_field).toBe("GENE_SYMBOL");
     } finally {
       rmSync(outputDir, { recursive: true, force: true });
     }
@@ -374,6 +436,57 @@ describe("buildProbeMapping", () => {
       expect(result.summary.mapping_rule_id).toBe(PROBE_MAPPING_RULE_ID);
       const detail = readFileSync(result.detail_path, "utf8");
       expect(detail.split(/\r\n|\n|\r/).filter((line) => line !== "")).toHaveLength(1);
+    } finally {
+      rmSync(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  test("streaming distinctProbes dedupes and includes the final row", async () => {
+    const outputDir = mkdtempSync(path.join(tmpdir(), "p5-probe-map-"));
+    try {
+      const header =
+        "record_id,dataset_id,source_id,asset_id,gene_id_raw," +
+        "gene_id_namespace_declared,sample_id,measurement_type,value_semantics," +
+        "value_scale,expression_unit,is_normalized,is_integer_expected," +
+        "expression_value,source_logical_file,source_line_number," +
+        "source_column_index,source_column_name,source_raw_value";
+      const rows: string[] = [header];
+      for (let index = 0; index < 500; index += 1) {
+        rows.push(
+          "b1,gse,src,asset," +
+            `${index % 2 === 0 ? "PROBE1" : "PROBE3"},geo_probe,` +
+            "GSM1,expression,expression_value,log2,normalized_expression_value," +
+            "1,1.5,log2_expression,f.txt,3,2,S1,1.5",
+        );
+        rows.push(
+          "b1,gse,src,asset," +
+            `GENE${index},gene_symbol,GSM1,expression,expression_value,` +
+            "log2,normalized_expression_value,1,1.5,log2_expression," +
+            "f.txt,3,2,S1,1.5",
+        );
+      }
+      rows.push(
+        "b1,gse,src,asset,UNKNOWN_LAST,geo_probe,GSM1,expression," +
+          "expression_value,log2,normalized_expression_value,1,1.5," +
+          "log2_expression,f.txt,3,2,S1,1.5",
+      );
+      const batchPath = path.join(outputDir, "batch.csv");
+      writeFileSync(batchPath, rows.join("\n") + "\n", "utf8");
+      const result = await buildProbeMapping({
+        annotationPath: fixturePath("gpl570_annot.txt.gz"),
+        batchPath,
+        bindingId: "binding_geo",
+        platformId: "GPL570",
+        annotationAsset: mappingAsset(fixturePath("gpl570_annot.txt.gz")),
+        outputDir,
+      });
+      expect(result.summary.total_probe_count).toBe(3);
+      expect(result.summary.mapped_probe_count).toBe(2);
+      expect(result.summary.unmapped_probe_count).toBe(1);
+      expect(result.summary.coverage_ratio).toBe(2 / 3);
+      expect(result.summary.mapping_status).toBe("partial");
+      const audit = readFileSync(result.detail_path, "utf8");
+      expect(audit).toContain("UNKNOWN_LAST,,,unmapped");
     } finally {
       rmSync(outputDir, { recursive: true, force: true });
     }

@@ -27,7 +27,7 @@
  * JSON-safe).  The written CSV is byte-identical to the Python side table.
  */
 
-import { closeSync, mkdirSync, openSync, statSync, unlinkSync, writeSync } from "node:fs";
+import { mkdirSync, statSync, unlinkSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 
 import type { JsonValue } from "@biomed/contracts";
@@ -39,6 +39,7 @@ import type {
 } from "../../contracts/index.js";
 import { parseDataBatch } from "../../contracts/index.js";
 import {
+  BufferedCsvWriter,
   REJECTED_COLUMNS,
   SOURCE_LONG_COLUMNS,
   SourceAdapter,
@@ -50,7 +51,6 @@ import { AdapterError, EmptySourceError } from "../errors.js";
 import { assetIdFromSha256, makeRecordId } from "../identity.js";
 import { sha256FileStream } from "../hashing.js";
 import {
-  csvLine,
   delimitedRowsFromFileAsync,
   delimitedRowsWithLines,
   delimitedRowsWithLinesAsync,
@@ -791,37 +791,6 @@ async function extractGeoText(
   }
 }
 
-/** Bounded-memory CSV sink for large adapter outputs. */
-class BoundedCsvWriter implements RowWriter {
-  private readonly fd: number;
-  private pending = "";
-  private closed = false;
-
-  constructor(path: string, header: readonly string[]) {
-    this.fd = openSync(path, "w");
-    this.pending = csvLine(header);
-  }
-
-  writeRow(values: readonly string[]): void {
-    if (this.closed) throw new Error("CSV writer is closed");
-    this.pending += csvLine(values);
-    if (this.pending.length >= 64 * 1024) {
-      writeSync(this.fd, this.pending, undefined, "utf8");
-      this.pending = "";
-    }
-  }
-
-  close(): void {
-    if (this.closed) return;
-    if (this.pending.length > 0) {
-      writeSync(this.fd, this.pending, undefined, "utf8");
-      this.pending = "";
-    }
-    closeSync(this.fd);
-    this.closed = true;
-  }
-}
-
 export interface GeoParseOptions {
   buildId: string;
   bindingId: string;
@@ -873,8 +842,8 @@ export class GeoExpressionAdapter extends SourceAdapter {
     const outputPath = join(batchDir, `${bindingId}.csv`);
     const rejectedPath = join(batchDir, `${bindingId}_rejected.csv`);
     const supportingPaths: string[] = [];
-    let longWriter: BoundedCsvWriter | null = null;
-    let rejectedWriter: BoundedCsvWriter | null = null;
+    const longWriter = new BufferedCsvWriter(outputPath, SOURCE_LONG_COLUMNS);
+    const rejectedWriter = new BufferedCsvWriter(rejectedPath, REJECTED_COLUMNS);
     try {
       if (parameters === null) {
         throw new AdapterError(
@@ -882,8 +851,6 @@ export class GeoExpressionAdapter extends SourceAdapter {
             "(format/value_semantics/value_scale/expression_unit)",
         );
       }
-      longWriter = new BoundedCsvWriter(outputPath, SOURCE_LONG_COLUMNS);
-      rejectedWriter = new BoundedCsvWriter(rejectedPath, REJECTED_COLUMNS);
       let sourceText: string | null = null;
       let sampleMetadataText: string | null = null;
       let extraction: GeoExtractOutcome;
@@ -982,8 +949,8 @@ export class GeoExpressionAdapter extends SourceAdapter {
         declared_mappings: mappings,
       });
     } catch (error) {
-      longWriter?.close();
-      rejectedWriter?.close();
+      longWriter.close();
+      rejectedWriter.close();
       for (const pathToUnlink of [outputPath, rejectedPath, ...supportingPaths]) {
         try {
           unlinkSync(pathToUnlink);

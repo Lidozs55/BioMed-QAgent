@@ -61,6 +61,9 @@ secrets.json
 # 锚定 repositoryRoot）；server/data/ 不应存在，见 config.ts 回归说明。
 
 # ===== 临时调试目录 =====
+# 调试/审计用的临时脚本与快照（_tmp_*、.tmp-*），不入库
+_tmp*
+.tmp-*
 
 
 # ===== 生成的报告 =====

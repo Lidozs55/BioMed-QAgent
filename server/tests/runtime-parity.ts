@@ -139,6 +139,7 @@ function makeExecutor(options: {
   scope?: Record<string, unknown>;
   resumeFrom?: string;
   implementationVersions?: Record<string, string>;
+  plan?: OperationSpec[];
 }): DatasetBuildExecutor {
   const buildSpec = spec();
   return new DatasetBuildExecutor({
@@ -146,7 +147,7 @@ function makeExecutor(options: {
     buildId: buildSpec.build_id,
     stateDir: join(options.outputRoot, "state"),
     taskRoot: options.outputRoot,
-    plan: buildOperationPlan(buildSpec),
+    plan: options.plan ?? buildOperationPlan(buildSpec),
     runOperation: options.runner.run,
     cancellationRequested: options.token === undefined ? null : () => options.token!.isSet(),
     parameterScope: options.scope ?? null,
@@ -394,6 +395,79 @@ export async function checkRuntimeParity(options: { outputRoot: string }): Promi
     const statuses = reloaded.operation_attempts.map((attempt) => attempt.status);
     check(issues, statuses.includes("cancelled"), "recover: inflight attempt marked cancelled");
     check(issues, statuses.filter((status) => status === "succeeded").length === 10, "recover: 10 succeeded attempts");
+  }
+
+  // test_executor_reuses_by_digest_across_plan_shapes
+  {
+    const out = join(outputRoot, "rehydrate-stale");
+    mkdirSync(out, { recursive: true });
+    const runner = new RecordingRunner();
+    const first = await makeExecutor({ outputRoot: out, runner }).run();
+    check(issues, first.status === "completed", "stale digest: baseline (plan A) completes");
+
+    // Plan B binds a source never seen by plan A, so its prefix differs:
+    // acquire/parse/canonicalize/compatibility_gate (":srcbind_new") re-run
+    // for real, and integrate re-runs because its upstream digest changed.
+    // validate_profile + publish share the same input digest as plan A's
+    // (the recording runner's integrate output only reflects the upstream
+    // key set, which is identical in both plans), so recovery reuses them by
+    // digest — that is the contract: a succeeded attempt is reused iff input,
+    // parameter and implementation-version digests match. The ghost guard
+    // still holds: integrate can only re-run with a real upstream after
+    // canonicalization ("cannot integrate zero sources"), never empty.
+    const planB = buildOperationPlan(
+      parseDatasetBuildSpec({
+        schema_version: "1.0",
+        build_id: "build_test",
+        objective: "compare expression",
+        dataset_family: "gene_expression",
+        row_granularity: "gene_sample_measurement",
+        schema_ref: "gene_expression.long.v1",
+        source_bindings: [binding("srcbind_new", "gdc")],
+        validation_profile_ref: "gene_expression.release.v1",
+      }),
+    );
+    class IntegrateGuardRunner extends RecordingRunner {
+      override run = (
+        op: OperationSpec,
+        upstream: Record<string, Record<string, unknown>>,
+      ): OperationOutput => {
+        if (op.operation_id === "integrate" && Object.keys(upstream).length === 0) {
+          throw new Error("cannot integrate zero sources");
+        }
+        this.calls.push(op.operation_id);
+        return makeOperationOutput({
+          operation_id: op.operation_id,
+          kind: op.kind,
+          upstream: Object.keys(upstream).sort(),
+        });
+      };
+    }
+    const runner2 = new IntegrateGuardRunner();
+    const second = await makeExecutor({ outputRoot: out, plan: planB, runner: runner2 }).run();
+    check(issues, second.status === "completed", "stale digest: plan B completes without ghost integrate");
+    const state = loadBuildState(join(out, "state"), "task_1", "build_test");
+    const succeeded = state.operation_attempts.filter((attempt) => attempt.status === "succeeded");
+    const skipped = state.operation_attempts.filter((attempt) => attempt.status === "skipped");
+    check(issues, succeeded.length === 15, "stale digest: plan A (10) + plan B re-executes 5 (validate_profile/publish reused by digest)");
+    check(issues, skipped.length === 2, "stale digest: reused attempts recorded as skipped");
+    check(
+      issues,
+      skipped.every((attempt) => attempt.reused_operation_attempt_id !== null),
+      "stale digest: skipped attempts carry reused_operation_attempt_id",
+    );
+    checkDeepEqual(
+      issues,
+      runner2.calls,
+      [
+        "acquire:srcbind_new",
+        "parse:srcbind_new",
+        "canonicalize:srcbind_new",
+        "compatibility_gate",
+        "integrate",
+      ],
+      "stale digest: plan B prefix re-executes in plan order with real upstreams",
+    );
   }
 
   // test_executor_failure_marks_attempt_failed

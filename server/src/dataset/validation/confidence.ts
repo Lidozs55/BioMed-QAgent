@@ -334,6 +334,214 @@ export function aggregateConfidenceMetrics(
   return { findings, anomaly_count: anomalyCount };
 }
 
+/**
+ * Single-pass streaming aggregation for one numeric column: produces the
+ * same per-column findings as ``aggregateConfidenceMetrics`` but keeps O(1)
+ * memory (digit histograms plus a distinct-value set bounded by the
+ * progression threshold), so multi-gigabyte primaries no longer require the
+ * value column to be held in memory.
+ */
+export class ConfidenceColumnAggregator {
+  private readonly thresholds: ConfidenceThresholds;
+  private readonly column: string;
+  private count = 0;
+  private hasNegative = false;
+  private positiveCount = 0;
+  private minPositive: number | null = null;
+  private maxValue: number | null = null;
+  private firstDigitCounts = new Array<number>(10).fill(0);
+  private lastDigitCounts = new Array<number>(10).fill(0);
+  private lastDigitTotal = 0;
+  private firstValue: number | null = null;
+  private constantWithinTolerance = true;
+  private readonly distinctValues = new Set<number>();
+  private distinctOversize = false;
+
+  constructor(column: string, thresholds: ConfidenceThresholds = defaultConfidenceThresholds()) {
+    this.column = column;
+    this.thresholds = thresholds;
+  }
+
+  /** Feed one raw cell value (Python ``float()`` parse; non-finite are skipped). */
+  push(value: string | number): void {
+    let parsed: number | null = null;
+    if (typeof value === "number") {
+      if (Number.isFinite(value)) parsed = value;
+    } else if (typeof value === "string") {
+      const result = pythonFloat(value);
+      if (result.ok && Number.isFinite(result.value)) parsed = result.value;
+    }
+    if (parsed === null) return;
+    this.count += 1;
+    if (parsed < 0) this.hasNegative = true;
+    if (parsed > 0) {
+      this.positiveCount += 1;
+      if (this.minPositive === null || parsed < this.minPositive) this.minPositive = parsed;
+      this.firstDigitCounts[Number(Math.abs(parsed).toExponential()[0])] += 1;
+    }
+    if (this.maxValue === null || parsed > this.maxValue) this.maxValue = parsed;
+    const digit = lastDecimalDigit(parsed);
+    if (digit !== null) {
+      this.lastDigitCounts[digit] += 1;
+      this.lastDigitTotal += 1;
+    }
+    if (this.firstValue === null) {
+      this.firstValue = parsed;
+    } else if (this.constantWithinTolerance) {
+      this.constantWithinTolerance =
+        Math.abs(parsed - this.firstValue) <=
+        REL_TOL * Math.max(1.0, Math.abs(this.firstValue));
+    }
+    if (!this.distinctOversize) {
+      if (this.distinctValues.size <= this.thresholds.progression_max_distinct) {
+        this.distinctValues.add(parsed);
+        if (this.distinctValues.size > this.thresholds.progression_max_distinct) {
+          this.distinctOversize = true;
+          this.distinctValues.clear();
+        }
+      }
+    }
+  }
+
+  /** Deterministic per-column summary, identical to the array-based aggregator. */
+  summary(): ConfidenceSummary {
+    const findings: DetectorFinding[] = [];
+    const { column } = this;
+    if (this.count === 0) {
+      findings.push({
+        column,
+        detector: "no_numeric_values",
+        applicable: false,
+        statistic: null,
+        anomaly: false,
+        detail: "column has no finite numeric values",
+      });
+      return { findings, anomaly_count: 0 };
+    }
+
+    if (this.isBenfordApplicable()) {
+      const distance = this.benfordDistance();
+      findings.push({
+        column,
+        detector: "benford_distance",
+        applicable: true,
+        statistic: distance,
+        anomaly: distance > this.thresholds.benford_chi2_limit,
+        detail: `first-digit chi2=${distance.toFixed(3)}, limit=${this.thresholds.benford_chi2_limit}`,
+      });
+    } else {
+      findings.push({
+        column,
+        detector: "benford_distance",
+        applicable: false,
+        statistic: null,
+        anomaly: false,
+        detail: "is_benford_applicable returned False",
+      });
+    }
+
+    if (this.count < this.thresholds.min_last_digit_samples) {
+      findings.push({
+        column,
+        detector: "last_digit_chi2",
+        applicable: false,
+        statistic: null,
+        anomaly: false,
+        detail:
+          `fewer than ${this.thresholds.min_last_digit_samples} numeric values; ` +
+          "chi-squared last-digit test not applicable",
+      });
+    } else {
+      const chi2 = this.lastDigitChi2();
+      findings.push({
+        column,
+        detector: "last_digit_chi2",
+        applicable: true,
+        statistic: chi2,
+        anomaly: chi2 > this.thresholds.last_digit_chi2_limit,
+        detail: `last-digit chi2=${chi2.toFixed(3)}, limit=${this.thresholds.last_digit_chi2_limit}`,
+      });
+    }
+
+    const constant = this.count >= 2 && this.constantWithinTolerance;
+    findings.push({
+      column,
+      detector: "constant_column",
+      applicable: true,
+      statistic: null,
+      anomaly: constant,
+      detail: constant ? "all values identical within tolerance" : "values vary",
+    });
+
+    const progression = this.isArithmeticProgression();
+    findings.push({
+      column,
+      detector: "arithmetic_progression",
+      applicable: true,
+      statistic: null,
+      anomaly: progression,
+      detail: progression
+        ? "distinct values form an equal-spaced sequence"
+        : "no equal-spaced sequence",
+    });
+
+    return {
+      findings,
+      anomaly_count: findings.filter((finding) => finding.anomaly).length,
+    };
+  }
+
+  private isBenfordApplicable(): boolean {
+    const { thresholds } = this;
+    if (this.count < thresholds.min_benford_samples) return false;
+    if (this.hasNegative) return false;
+    if (this.positiveCount === 0) return false;
+    const low = this.minPositive as number;
+    const high = this.maxValue as number;
+    if (low <= 0 || high / low < 10 ** thresholds.benford_min_order_span) return false;
+    return high > 1.0;
+  }
+
+  private benfordDistance(): number {
+    if (this.positiveCount === 0) return 0;
+    let chi2 = 0;
+    for (const digit of BENFORD_DIGITS) {
+      const expected = this.positiveCount * benfordExpected(digit);
+      const count = this.firstDigitCounts[digit];
+      chi2 += (count - expected) ** 2 / expected;
+    }
+    return chi2;
+  }
+
+  private lastDigitChi2(): number {
+    if (this.lastDigitTotal === 0) return 0;
+    const expected = this.lastDigitTotal / LAST_DIGITS.length;
+    let chi2 = 0;
+    for (const digit of LAST_DIGITS) {
+      const count = this.lastDigitCounts[digit];
+      chi2 += (count - expected) ** 2 / expected;
+    }
+    return chi2;
+  }
+
+  private isArithmeticProgression(): boolean {
+    if (this.distinctOversize) return false;
+    const parsed = [...this.distinctValues].sort((a, b) => a - b);
+    if (parsed.length < 3 || parsed.length > this.thresholds.progression_max_distinct) {
+      return false;
+    }
+    const steps = new Set<number>();
+    for (let index = 0; index < parsed.length - 1; index += 1) {
+      steps.add(parsed[index + 1] - parsed[index]);
+    }
+    if (steps.size === 0 || steps.has(0)) return false;
+    const firstStep = steps.values().next().value as number;
+    return [...steps].every(
+      (step) => Math.abs(step - firstStep) <= REL_TOL * Math.max(1.0, Math.abs(firstStep)),
+    );
+  }
+}
+
 const REPORT_HEADER = ["column", "detector", "applicable", "statistic", "anomaly", "detail"];
 
 /** Deterministically write *summary* findings to a CSV report. */

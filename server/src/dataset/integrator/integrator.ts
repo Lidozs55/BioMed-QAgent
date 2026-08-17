@@ -10,19 +10,30 @@
  * deterministically and are recorded in a conflicts audit file.
  */
 
-import { closeSync, mkdirSync, openSync, statSync, unlinkSync, writeSync } from "node:fs";
+import { mkdirSync, statSync, unlinkSync } from "node:fs";
 import { join, relative } from "node:path";
 import type { JsonValue } from "@biomed/contracts";
 import type { CanonicalizationResult } from "../canonicalizer/index.js";
 import { CHECKPOINT_STRIDE, checkpoint, throwIfAborted } from "../cooperative.js";
+import { BufferedCsvWriter } from "../adapters/base.js";
 import { BuildError } from "../adapters/errors.js";
 import { sha256FileStream } from "../adapters/hashing.js";
 import { assetIdFromSha256 } from "../adapters/identity.js";
-import { csvLine, delimitedRowsFromFileAsync } from "../adapters/text.js";
+import { delimitedRowsFromFileAsync } from "../adapters/text.js";
 import type { DataBatch, DatasetSchema, FileAsset } from "../contracts/index.js";
 import { parseDataBatch, parseFileAsset } from "../contracts/index.js";
 
 export const MERGE_STRATEGY_APPEND = "append_by_canonical_row";
+
+/**
+ * Agent-facing aliases mapped onto the single implemented merge semantics.
+ * ``union`` — combine all canonical rows, deduplicating by canonical row
+ * identity — is exactly what append-by-canonical-row does, so it is accepted
+ * verbatim (single-source builds are a no-op regardless).
+ */
+const MERGE_STRATEGY_ALIASES: Record<string, string> = {
+  union: MERGE_STRATEGY_APPEND,
+};
 
 export const CONFLICT_COLUMNS = [
   "conflict_id",
@@ -50,36 +61,6 @@ export interface IntegrationResult {
   conflictsPath: string | null;
 }
 
-class BoundedCsvWriter {
-  private readonly fd: number;
-  private pending = "";
-  private closed = false;
-
-  constructor(path: string, header: readonly string[]) {
-    this.fd = openSync(path, "w");
-    this.pending = csvLine(header);
-  }
-
-  writeRow(values: readonly string[]): void {
-    if (this.closed) throw new Error("CSV writer is closed");
-    this.pending += csvLine(values);
-    if (this.pending.length >= 64 * 1024) {
-      writeSync(this.fd, this.pending, undefined, "utf8");
-      this.pending = "";
-    }
-  }
-
-  close(): void {
-    if (this.closed) return;
-    if (this.pending.length > 0) {
-      writeSync(this.fd, this.pending, undefined, "utf8");
-      this.pending = "";
-    }
-    closeSync(this.fd);
-    this.closed = true;
-  }
-}
-
 /** Append canonical sources into one primary dataset, dedup by row identity. */
 export async function integrate(options: {
   results: readonly CanonicalizationResult[];
@@ -91,10 +72,11 @@ export async function integrate(options: {
 }): Promise<IntegrationResult> {
   const { results, mergeStrategy, schema, buildId, outputDir, signal } = options;
   throwIfAborted(signal);
-  if (mergeStrategy !== MERGE_STRATEGY_APPEND) {
+  const strategy = MERGE_STRATEGY_ALIASES[mergeStrategy] ?? mergeStrategy;
+  if (strategy !== MERGE_STRATEGY_APPEND) {
     throw new IntegratorError(
       `unsupported merge strategy ${mergeStrategy}; ` +
-        `server allows only ${MERGE_STRATEGY_APPEND}`,
+        `server allows only ${MERGE_STRATEGY_APPEND} (alias: union)`,
     );
   }
   if (results.length === 0) {
@@ -116,8 +98,11 @@ export async function integrate(options: {
   let dedupCount = 0;
   let conflictCount = 0;
 
-  const mergedWriter = new BoundedCsvWriter(mergedPath, columns);
-  const conflictWriter = new BoundedCsvWriter(conflictsPath, CONFLICT_COLUMNS);
+// Streamed outputs: row buffers are flushed in bounded chunks so the
+  // merged/conflicts files never accumulate in memory (M2 large-file fix;
+  // same shared BufferedCsvWriter the source adapters use).
+  const mergedWriter = new BufferedCsvWriter(mergedPath, columns);
+  const conflictWriter = new BufferedCsvWriter(conflictsPath, CONFLICT_COLUMNS);
   try {
     let visited = 0;
     for (const result of results) {

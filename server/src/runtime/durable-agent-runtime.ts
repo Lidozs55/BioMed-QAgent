@@ -59,6 +59,13 @@ const MAX_WS_COMMAND_BYTES = 8 * 1024;
 const MAX_WS_BUFFERED_BYTES = 64 * 1024;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 
+// Pi's threshold compaction ends the turn without auto-continue. The runtime
+// resumes the run with a fresh turn so long tasks survive the compaction
+// boundary; this bounds how many times a single run may be resumed.
+const MAX_COMPACTION_CONTINUATIONS = 3;
+const CONTINUE_AFTER_COMPACTION_PROMPT =
+  "Continue the task. Your previous turn was compacted; resume from where you left off.";
+
 export interface DurableAgentWorkspace {
   root: string;
   tools: readonly BioMedAgentTool[];
@@ -304,19 +311,46 @@ export async function createDurableAgentRuntime(
     if (task === undefined) return;
     const runKey = `${taskId}:${runId}`;
     try {
-      for await (const source of task.session.run(input)) {
-        if (suspendedRuns.has(runKey)) break;
-        const payloads = task.adapter.adapt(runId, source).map((event) =>
-          event.payload.type === "run_completed"
-            ? {
-                type: "run_completed" as const,
-                build_result: task.workspace.consumeBuildResult?.() ?? null,
-              }
-            : event.payload,
-        );
-        if (payloads.length > 0) {
-          await repository.appendRunEvents(taskId, runId, payloads);
+      let turnInput = input;
+      for (let continuation = 0; ; continuation += 1) {
+        let compacted = false;
+        for await (const source of task.session.run(turnInput)) {
+          if (suspendedRuns.has(runKey)) return;
+          const payloads = task.adapter.adapt(runId, source).map((event) =>
+            event.payload.type === "run_completed"
+              ? {
+                  type: "run_completed" as const,
+                  build_result: task.workspace.consumeBuildResult?.() ?? null,
+                }
+              : event.payload,
+          );
+          for (const payload of payloads) {
+            if (payload.type === "conversation_compacted") compacted = true;
+          }
+          if (payloads.length > 0) {
+            await repository.appendRunEvents(taskId, runId, payloads);
+          }
         }
+        // A threshold compaction ends the Pi turn without auto-continue; the
+        // adapter therefore emitted no terminal event. Resume with a fresh
+        // turn so the agent can finish the task, unless the run was suspended
+        // or the resume budget is exhausted (then force the terminal event).
+        if (!compacted || suspendedRuns.has(runKey)) break;
+        if (continuation >= MAX_COMPACTION_CONTINUATIONS) {
+          const payloads = task.adapter.completeRun(runId).map((event) =>
+            event.payload.type === "run_completed"
+              ? {
+                  type: "run_completed" as const,
+                  build_result: task.workspace.consumeBuildResult?.() ?? null,
+                }
+              : event.payload,
+          );
+          if (payloads.length > 0) {
+            await repository.appendRunEvents(taskId, runId, payloads);
+          }
+          break;
+        }
+        turnInput = CONTINUE_AFTER_COMPACTION_PROMPT;
       }
     } catch (error) {
       if (suspendedRuns.has(runKey)) return;

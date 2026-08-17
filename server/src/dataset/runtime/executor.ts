@@ -329,12 +329,16 @@ export class DatasetBuildExecutor {
           outputDigest: reusable.output_digest,
         });
         if (loaded !== null) this.outputs[op.operation_id] = loaded;
+        if (REHYDRATE_RUNNER_KINDS.has(op.kind)) {
+          // The runner rebuilds its in-memory state from the same fixed
+          // inputs; cooperative cancel + operation timeout still apply. A
+          // cancellation here surfaces as BuildCancelledError (mapped in
+          // executeOperation). Only digest-matched deployments may re-run:
+          // a stale "completed" marker for a differently-shaped plan must
+          // not execute with upstream outputs it never produced.
+          await this.executeOperation(op, this.availableUpstream(op));
+        }
       }
-      if (!REHYDRATE_RUNNER_KINDS.has(op.kind)) continue;
-      // The runner rebuilds its in-memory state from the same fixed inputs;
-      // cooperative cancel + operation timeout still apply. A cancellation
-      // here surfaces as BuildCancelledError (mapped in executeOperation).
-      await this.executeOperation(op, this.availableUpstream(op));
     }
   }
 
