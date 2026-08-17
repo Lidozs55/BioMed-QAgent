@@ -306,6 +306,35 @@ describe("parseEventPayload — runtime event family", () => {
     });
   });
 
+  it("permission_requested — accepts every permission resource scope", () => {
+    for (const scope of [
+      "workspace",
+      "task_output",
+      "framework_internal",
+      "sensitive",
+      "project",
+      "external",
+    ] as const) {
+      const r = parseEventPayload(
+        o({
+          type: "permission_requested",
+          request_id: `permission_${scope}`,
+          capability: "fs.read",
+          scope,
+          resource: "D:\\resource",
+          canonical_resource: "D:\\resource",
+          command: null,
+          cwd: null,
+          summary: "读取资源",
+        }),
+        "permission_requested",
+        "p",
+      );
+      if (r.type !== "permission_requested") throw new Error();
+      expect(r.scope).toBe(scope);
+    }
+  });
+
   it("publication_created — parses the full publication payload", () => {
     const r = parseEventPayload(
       o({

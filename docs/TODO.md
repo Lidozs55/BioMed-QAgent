@@ -394,6 +394,24 @@ build 锁、cancel 收敛与 event sink；`DATASET_CORE=ts` 现为默认运行�
 验收（2026-08-17 四轮审计后）：`pnpm test`（contracts 14 + server + frontend）/ `pnpm lint` /
 `pnpm typecheck` / `pnpm build` 全通过；`uv run pytest database/tests` + ruff 通过。
 
+## Agent I/O 可观测性与权限交互修正（P0，✅ 完成）
+
+> 这是 Phase 9 后的交互与可观测性修正，不改变 PermissionBroker、路径分类、canonical
+> grant、TOCTOU 防护或 durable permission event 协议。
+
+- [x] 命令 `stdout` / `stderr` 原样保留 Workspace 真实路径，供 Agent 诊断安装位置、PATH、
+      虚拟环境和编译缓存；命令参数 secret 脱敏、环境白名单、输出上限、timeout/cancel 与
+      process-tree cleanup 保持不变。
+- [x] `PermissionDialog` 阻塞 Modal 替换为 Conversation 尾部的 shadcn Questionnaire；
+      默认只显示“允许这一次 / 拒绝 / 其他授权方式”。
+- [x] Run / Task / persistent / scope-wide 授权进入条件步骤；scope-wide 额外要求选择
+      Run 或 Task 生命周期，后端决策模型与 API 参数不变。
+- [x] requested path 与 canonical target 不同时继续同时展示；pending state 仍由 durable
+      event projection 恢复，请求 ID 变化会重建 Questionnaire 并清除旧答案。
+- [ ] P1：`UserInputDialog` / HIL 迁移到同一 Questionnaire 基础设施。
+- [ ] P1：权限设置页重排默认层与高级 ACL 编辑器。
+- [ ] P2：已解决权限事件进入历史 Conversation timeline。
+
 ---
 
 ## 跨阶段约束（所有 Phase 都必须保持）
