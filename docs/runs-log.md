@@ -81,3 +81,30 @@ publishes is **probe-level (D5 #2)**: every row keeps `geo_probe`
   (gate attempts 5–8 failed with `namespace_mismatch` / `schema_mismatch;`
   before the fixes; publish attempt 1 failed on the gene-level validation
   profile). `completed_operations` is the authoritative terminal set.
+
+## 2026-08-17 — UTF-8 编码损坏红线（gold2 提交侧）
+
+**根因与影响**：早期 `e2e-gold2-*` run 的中文 input 在提交侧损坏为 ASCII `?`
+（`0x3F`）：task.json 标题出现 19 个问号，中文字符全被替换。agent 的英文思考链
+因此只体现 "EGFR GEO 检索 / tumor-vs-normal / probe→gene"，**缺失 "肺腺癌/LUAD"
+与 "EGFR 突变状态"**，实际把 LUAD EGFR 数据构建成了结直肠癌 cetuximab 耐药 PDX
+队列（build_egfr_cetuximab_crc_1）——静默跑偏，无任何告警。
+
+**两类损坏形态，分层拦截**：
+
+1. 字节级损坏（解码产生 `U+FFFD`）：服务器 `readJsonBody` 用
+   `Buffer.toString("utf8")` 把无效字节替换为 U+FFFD，服务器可可靠判定。
+   - 加固：`task-repository.ts` 的 `createTask`/`createRun` 增加
+     `requireCleanUtf8`，input 含 `\uFFFD` 即抛 `TypeError` → HTTP 422 + 可读
+     detail（"read source files with 'utf8' … JSON.stringify"）。两条复现测试
+     固定于 `durable-runtime.test.ts`。
+2. 提交侧提前拦截 `0x3F` 形态（服务器无法可靠判别）：
+   `scripts/run-driver.mjs` 对输入文件做字节级 `TextDecoder("utf-8",{fatal:true})`
+   校验 + U+FFFD/lone-surrogate 检测，并对 Han 文本 + `????` 连用触发已知 gold2
+   签名告警；提交统一走 `fs.readFileSync(path,"utf8")` + JSON POST。
+
+**约定**：业务 input 一律用文件读取（显式 utf8 编码）提交，禁止在脚本里把中文
+直接内联进字符串后再传输，避免再踩编码损坏陷阱。
+
+**技术踩坑**：Node 24 中 `Buffer.isUtf8` 不存在，须用 `TextDecoder("utf-8",
+{fatal:true})` 的 decode 抛出与否做字节校验。

@@ -572,18 +572,29 @@ build 锁、cancel 收敛与 event sink；`DATASET_CORE=ts` 现为默认运行�
 
 ### gold2 提交侧编码损坏 → agent 误读（P1）
 
-- [ ] **P1** gold2（`gold2_luad_egfr_geo`）早期 `e2e-gold2-*` run 的中文 input 在提交侧
+- [x] **P1** gold2（`gold2_luad_egfr_geo`）早期 `e2e-gold2-*` run 的中文 input 在提交侧
       损坏为 `?`（task.json 标题 19 个问号，中文字符全变 `0x3F`；对照组 METTL5 中
       文完好、后续 resume 系列经文件读取完好）→ agent 英文思考链仅体现
       "EGFR GEO 检索 / tumor-vs-normal / probe→gene"，**未含"肺腺癌/LUAD"与
       "EGFR 突变状态"**，实际构建为结直肠癌 cetuximab 耐药 PDX 队列
       （GSE140973/GPL10332，build_egfr_cetuximab_crc_1），与 TOPIC 的 LUAD
       EGFR WT/mutant 要求不符 → 工作错误确认（2026-08-17 思考链逐条对照）。
-- [ ] **P1** 修复方向：提交侧统一 `fs.readFileSync(path, "utf8")` 读取 input 文件后再
+- [x] **P1** 修复方向：提交侧统一 `fs.readFileSync(path, "utf8")` 读取 input 文件后再
       JSON POST（`_tmp_drive_gold2.mjs` / `_tmp_create_run.cjs` 为已验证正确范式）；
       服务器侧可选加固：run 创建时检测 input 含 `\uFFFD` / 异常替换字符则返回可读
       警告。历史损坏 run 不可逆，正确路径是以 TOPIC.txt 为准发起 LUAD-EGFR 构建
       （新 build_id）。
+      - ✅ 已实施（2026-08-17）：服务器硬化——[task-repository.ts](server/src/runtime/task-repository.ts)
+        `createTask`/`createRun` 新增 `requireCleanUtf8`，input 含 `\uFFFD` 即以
+        TypeError → HTTP 422 返回可读 detail（"read source files with 'utf8' …
+        JSON.stringify"）；新增 2 条复现测试（durable-runtime.test.ts）。
+      - ✅ 已实施：提交侧统一——新增可复用脚本
+        [scripts/run-driver.mjs](scripts/run-driver.mjs)，`TextDecoder("utf-8",{fatal:true})`
+        做输入文件字节级 UTF-8 校验 + U+FFFD/lone-surrogate 检测，并针对
+        Han 文本 + `????` 连用触发已知 gold2 签名告警，走 `readFileSync(path,"utf8")`
+        + JSON POST 提交 run。
+      - 验证：server typecheck/lint/测试 904 通过（含 2 条新用例），根级
+        `pnpm typecheck` / `pnpm lint` 全绿。
 
 ### 本地更改与远端 eval/gold-e2e-stabilization（46de68b）合并（P1）
 

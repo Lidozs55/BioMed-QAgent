@@ -56,6 +56,15 @@ function requireSafeId(value: string, name: string): void {
   if (!SAFE_ID.test(value)) throw new TypeError(`${name} must be a safe identifier`);
 }
 
+function requireCleanUtf8(value: string): void {
+  if (/\uFFFD/u.test(value)) {
+    throw new TypeError(
+      "input contains corrupted UTF-8 text (U+FFFD replacement character); " +
+        "read source files with 'utf8' encoding and submit via JSON.stringify",
+    );
+  }
+}
+
 function taskTitle(input: string): string {
   const firstLine = input.trim().split(/\r?\n/, 1)[0] ?? "";
   return firstLine.slice(0, 120) || "New task";
@@ -111,6 +120,7 @@ export class DurableTaskRepository {
   async createTask(input: CreateDurableTaskInput): Promise<TaskRunAccepted> {
     requireSafeId(input.requestId, "requestId");
     if (input.input.trim() === "") throw new TypeError("input must not be empty");
+    requireCleanUtf8(input.input);
     const existing = await this.findRequest(input.requestId);
     if (existing !== null) {
       const same = existing.snapshot.task.mode === input.mode &&
@@ -154,6 +164,7 @@ export class DurableTaskRepository {
     requireSafeId(taskId, "taskId");
     requireSafeId(input.requestId, "requestId");
     if (input.input.trim() === "") throw new TypeError("input must not be empty");
+    requireCleanUtf8(input.input);
     const existing = await this.findRequest(input.requestId);
     if (existing !== null) {
       if (existing.snapshot.task.task_id !== taskId) {
