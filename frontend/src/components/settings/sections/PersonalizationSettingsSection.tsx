@@ -157,8 +157,8 @@ export function PersonalizationSettingsSection({ api }: { api: SettingsAPIClient
                   <SelectGroup>
                     {PERSONALITY_OPTIONS.map((option) => (
                       <SelectItem key={option.value} value={option.value}>
-                        {option.label}
-                        <span className="ml-2 text-xs text-muted-foreground">
+                        <span className="leading-5">{option.label}</span>
+                        <span className="text-xs leading-5 text-muted-foreground">
                           {option.description}
                         </span>
                       </SelectItem>
