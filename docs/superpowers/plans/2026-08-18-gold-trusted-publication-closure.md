@@ -3,7 +3,7 @@
 > 状态：Accepted（经 2026-08-18 依赖与验收复核）
 > 日期：2026-08-18
 > 跟踪：TASK-047、TASK-048
-> 架构依据：`docs/ARCHITECTURE.md`；B0 将先落 FamilyRegistry ADR（拟编号 ADR-027）
+> 架构依据：`docs/ARCHITECTURE.md`、ADR-027
 
 ## 1. 成功定义与基线
 
@@ -26,6 +26,10 @@ PDB）不等于数据语义 family。`integrate` 继续负责同一 canonical ta
 
 ## 2. 交付与协作规则
 
+开发者 B 的稳定任务 ID、contract spine 写锁和共享文件交接以
+[开发者 B：可信多表 Publication 落实计划](2026-08-18-developer-b-trusted-publication-plan.md)
+为执行台账；本文保留跨轨道目标与最终验收。
+
 - 每个 WP 使用独立 worktree 和专用分支；一个 WP 对应一个完整 merge。
 - 不并行修改同一 ownership 文件。跨轨道共享契约先合并，再让下游分支 rebase。
 - 每个 bug fix 必须有 red-green 证据；每个新 feature 带 contract/unit/E2E 测试。
@@ -38,30 +42,38 @@ PDB）不等于数据语义 family。`integrate` 继续负责同一 canonical ta
 ## 3. 轨道与依赖
 
 ```text
-B0 merge
-├─ A1 ──> C1 asset contract/registry ──> C2 Core acquisition
-├─ A2 ──> A3
-│      └─> A4
-├─ A5 ADR/contracts ──> A5 implementation ──> A6
-│                                      └────> B2
-└─ B1 ADR/contracts ────────────────────> B2
-                                       └─> B3
+TASK-048-B0 completed
 
-A1+A2+A3+A4+A5+A6 ──> A7 ──> A8
-B1+C1+A2 ──> B4
-B2+B3+B4 ──> B5 family vertical slices
-B3+B4+C2 ──> B6a chart/VLM evidence
-B2+B3+C2+derive ADR ──> B6b deterministic derive
-B5+B6a+B6b+C2 ──> B7 Gold3-Gold6
-A8+B7 ──> G1 Gold1-Gold6 same-commit rerun
-A5+C1 ──> C3 durable state machine; production acceptance also requires C2
+B group: TASK-G0 -> TASK-048-B1
+A group: TASK-047-A1 -> TASK-047-A2 -> A3/A4
+
+TASK-048-B1 + TASK-047-A1 feedback -> TASK-C1C -> TASK-C1I(A)
+TASK-048-B1 + TASK-047-A2 shape -> TASK-047-A5C -> TASK-047-A5I(A)
+TASK-C1C -> TASK-C2C -> TASK-C2I(A)
+TASK-048-B1 -> TASK-048-B3
+
+TASK-048-B1 + TASK-047-A5C -> TASK-048-B2M
+TASK-048-B2M + TASK-047-A5I -> TASK-048-B2W(A)
+TASK-048-B1 + TASK-047-A2 + TASK-C1C -> TASK-048-B4M
+TASK-048-B4M + TASK-048-B3 + TASK-C1I -> B4 trusted E2E
+
+TASK-048-B1 + TASK-048-B3 -> TASK-048-B5C
+TASK-048-B2M + B3 + B4M + B5C -> family module work
+TASK-048-B2W + TASK-048-B4M completed + TASK-C2I -> family completion/admission
+
+TASK-048-B6D + TASK-047-A5I -> TASK-048-B6W(A) -> TASK-048-B6B
+TASK-048-B5C + TASK-048-B5L + TASK-048-B5T + TASK-048-B5V + TASK-048-B5S
+  + TASK-048-B5A + TASK-048-B6A + TASK-048-B6B + TASK-C2I -> TASK-048-B7
+TASK-047-A8 + TASK-048-B7 -> TASK-G1A(A) -> TASK-G1B -> TASK-G1R
+
+TASK-C3C/TASK-C3I: P1 durable Build follow-up; not a current TASK-048/G1 blocker
 ```
 
-A1-A4 可以和 B1 的 contract 设计并行。B2 修改 operation plan，必须在 A5 checkpoint
-result manifest 设计冻结后协调 operation output 版本。C1 contract 可与 B1 设计并行，
-但二者都修改 DatasetBuildSpec 时必须串行合并 contract spine；C2 acquisition 可和具体
-family adapter 开发并行，但不得先删除 path 兼容入口。B4 硬依赖 C1，不能以 workspace
-path 作为 registered-table ingestion 的临时捷径。
+B 组 contract spine 的 `merge_after` 写锁顺序为 B1 -> C1C -> A5C -> C2C；语义硬依赖
+仍以各任务条目为准。B2 拆为 B 组 module (`B2M`) 与 A 组 runtime wiring (`B2W`)；B4M
+可先实现 module，但 trusted E2E 必须等待 C1I+B3。C2 acquisition 可与 family module
+开发并行，但 family completion、B6/B7 必须等待 C2I。任何 path 兼容入口都不能成为
+registered-table publication 的临时信任来源。
 
 ## 4. Track A - TASK-047 全链 bounded-memory
 
@@ -139,11 +151,14 @@ path 作为 registered-table ingestion 的临时捷径。
 
 ### WP-A5 Operation Result Manifest 与恢复
 
-**分支**：`feat/dataset-operation-results`
+拆分为：
 
-**先决**：新增 ADR，冻结 versioned `OperationResultManifest`。
+- `TASK-047-A5C`（B owner，`feat/dataset-operation-result-contracts`）：ADR 与 versioned
+  `OperationResultManifest` contracts；依赖 B1 + A2 文件形态反馈；
+- `TASK-047-A5I`（A owner，`feat/dataset-operation-results`）：executor/checkpoint 实现；
+  依赖 A5C + A2。
 
-**改动**：
+**实现改动**：
 
 - parse/canonicalize/integrate/validate 成功时写 `result.json` + file receipts；
 - checkpoint 保存 result ref；恢复时流式校验 receipt 后加载 metadata；
@@ -228,9 +243,9 @@ path 作为 registered-table ingestion 的临时捷径。
 
 ### WP-B0 FamilyRegistry admission foundation
 
-**分支**：`feat/dataset-family-registry`
+**状态**：completed（`main@b43c145`）
 
-**交付**：新增 FamilyRegistry ADR；Agent tool schema、默认 Schema Registry、生产 SpecValidator 共用
+**交付**：ADR-027；Agent tool schema、默认 Schema Registry、生产 SpecValidator 共用
 `DatasetFamilyRegistry`；严格 spec parser；真实 Schema/Adapter/Profile registration；
 仅启用 expression family。此 WP 不宣称 Gold3-Gold6 artifact pass。
 
@@ -254,7 +269,8 @@ path 作为 registered-table ingestion 的临时捷径。
 
 ### WP-B2 新增 assemble operation
 
-**分支**：`feat/family-assemble-operation`
+拆分为 `TASK-048-B2M`（B 组 assembly module）和 `TASK-048-B2W`（A 组
+runtime/checkpoint/publisher wiring），避免双方同时修改 runtime spine。
 
 **改动**：
 
@@ -279,7 +295,8 @@ chart points 空表仅在 schema 明确 allow_empty 时通过；blocking VLM rev
 
 ### WP-B4 受信任通用 registered-table ingestion
 
-**硬依赖**：B1 + C1 + A2。
+执行 ID 为 `TASK-048-B4M`。Module 可在 B1+A2+C1C 后开始；trusted E2E 必须等待
+B3+C1I。`adapters/adapters.ts` 仅在 A2 合并后的单一接线窗口临时交给 B 组。
 
 **分支**：`feat/registered-table-adapter`
 
@@ -313,7 +330,8 @@ locator、confidence、validation、允许来源。每个 family 独立 merge，
 
 **分支**：`feat/chart-vlm-evidence-publication`
 
-**硬依赖**：B3 + B4 + C2。
+**硬依赖**：`TASK-048-B3` + `TASK-048-B4M` completed + `TASK-048-B5C` +
+`TASK-048-B5L` + `TASK-048-B5A` + `TASK-C2I`。
 
 - chart series/points 带 estimated/exact、axis/legend status、model/version、bbox、review；
 - confidence gate 与 Durable HIL 复用；人工接受只解除 review block，不自动提高证据等级。
@@ -325,7 +343,9 @@ locator、confidence、validation、允许来源。每个 family 独立 merge，
 
 **分支**：`feat/deterministic-derived-evidence`
 
-**硬依赖**：B2 + B3 + C2 + derive ADR。
+**硬依赖**：`TASK-048-B2W` + `TASK-048-B3` + `TASK-048-B5C` +
+`TASK-048-B5V` + `TASK-048-B5S` + `TASK-048-B6D` + A-owner
+`TASK-048-B6W` + `TASK-C2I`。
 
 - 固定 derive operation slot，不开放动态节点；
 - 记录注册算法、参数、输入 asset/reference version、output digest；
@@ -346,9 +366,14 @@ cache/checkpoint identity 失效。
 
 ### WP-C1 Core-owned asset references
 
-**硬依赖**：A1 + shared spec contract；不依赖 B2。
+拆分为：
 
-**分支**：`feat/core-source-asset-refs`
+- `TASK-C1C`（B owner，`feat/core-source-asset-contracts`）：依赖 `TASK-048-B1` +
+  `TASK-047-A1` 接口反馈；
+- `TASK-C1I`（A owner，`feat/core-source-asset-registry`）：依赖 `TASK-C1C` +
+  `TASK-047-A1`。
+
+不依赖 B2。
 
 - 新增 `register_source_asset` 或 acquisition registration contract；
 - DatasetBuildSpec binding 引用 `asset_id`/acquisition query，不传 filesystem path；
@@ -357,15 +382,23 @@ cache/checkpoint identity 失效。
 
 ### WP-C2 Core-owned acquisition
 
-**分支**：`feat/core-owned-acquisition`
+拆分为：
+
+- `TASK-C2C`（B owner，`feat/core-acquisition-contracts`）：依赖 `TASK-C1C`；
+- `TASK-C2I`（A owner，`feat/core-owned-acquisition`）：依赖 `TASK-C2C` + `TASK-C1I`。
 
 - `builtin`/`workflow_recipe` binding 由 acquire operation 真正执行 provider；
 - browser/PDF/VLM 先 register immutable asset，再由 spec 引用；
 - DownloadAttempt、cache identity、retry/resume 和 provenance 一致。
 
-### WP-C3 Durable BuildScheduler 与异步 API
+### WP-C3 Durable BuildScheduler 与异步 API（P1 后续）
 
-**分支**：`feat/durable-build-scheduler`
+拆分为：
+
+- `TASK-C3C`（B owner，`feat/durable-build-contracts`）：依赖 C1C + A5C；
+- `TASK-C3I`（A owner，`feat/durable-build-scheduler`）：依赖 C3C + A5I + C1I。
+
+当前不阻塞 TASK-048/G1；若产品改变最终门禁，必须先更新 ADR/TODO。
 
 **契约优先**：
 
@@ -410,18 +443,15 @@ ID、artifact inventory/hash、下载复核和最终答案。只有 G1 允许报
 在 G1 完成前，项目报告只能分别陈述 runtime、research、core scalability 和 trusted
 publication coverage，禁止写“Gold 6/6”。
 
-## 8. 下一批可直接领取的 worktree
+## 8. 当前可直接领取的 worktree
 
-| 顺序 | Work package | 分支 | 可并行 | 依赖 |
+| Owner | 任务 ID | 分支 | 状态 | 下一任务 |
 | --- | --- | --- | --- | --- |
-| 1 | A1 流式资产 hash | `fix/dataset-asset-stream-hash` | A2/B1/A5 ADR | B0 merge |
-| 2 | A2 SourceAdapter 流式输入 | `refactor/stream-source-adapters` | A1/B1/A5 ADR | B0 merge |
-| 3 | B1 多表 contracts/ADR | `feat/multitable-dataset-contracts` | A1/A2 | B0 merge；与 C1 contract 串行 |
-| 4 | A5 result manifest ADR/contracts | `feat/dataset-operation-results` | A1/A2/B1 | B0 merge |
-| 5 | C1 asset contract/registry | `feat/core-source-asset-refs` | A3/A4 | A1 + shared spec contract |
-| 6 | A3 GEO supplementary+metadata | `fix/geo-supplementary-streaming` | A4/B3 | A2 |
-| 7 | B2 assemble operation | `feat/family-assemble-operation` | A4/A6 | B1 + A5 contract |
-| 8 | B4 registered-table adapter | `feat/registered-table-adapter` | A7/C2 | B1 + C1 + A2 |
+| A | `TASK-047-A1` | `fix/dataset-asset-stream-hash` | ready | `TASK-047-A2` |
+| B | `TASK-G0` | `docs/freeze-gold-eval-manifest` | ready | `TASK-048-B1` |
+
+其余任务均有 prerequisite，不得提前领取。B 组完整队列与 contract spine 写锁见
+[开发者 B 落实计划](2026-08-18-developer-b-trusted-publication-plan.md)。
 
 开始每个 WP 前必须重新同步 `main`、检查 `git worktree list` 和远端分支，避免共享目录
 切分支或重复 worktree。
