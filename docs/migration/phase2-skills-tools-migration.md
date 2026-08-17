@@ -1,7 +1,7 @@
 # Phase 2：Skills 与通用 Agent 工具迁移
 
 > 状态：✅ 完成（2026-08-13，分支 `feat/phase2-skills-tools-migration`）
-> 依据：[BioMed-QAgent_Pi_Migration_Plan.md](../BioMed-QAgent_Pi_Migration_Plan.md)
+> 依据：[BioMed-QAgent_Pi_Migration_Plan.md](BioMed-QAgent_Pi_Migration_Plan.md)
 > §20 Phase 2；待办见 [docs/TODO.md](../TODO.md)。
 > 本文记录本阶段的决策与验收映射；实现证据随各 checkpoint 的测试落在仓库内。
 

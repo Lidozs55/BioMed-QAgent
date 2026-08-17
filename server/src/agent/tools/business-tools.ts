@@ -19,6 +19,8 @@
  * ```
  */
 
+import { DEFAULT_RUNTIME_LIMITS, type RuntimeLimits } from "@biomed/contracts";
+
 import { PublicHttpClient } from "../../external/network/http-client.js";
 import { ContentCache } from "../../external/acquisition/content-cache.js";
 import type { BrowserFallback } from "../../external/sources/fallback.js";
@@ -69,6 +71,8 @@ export interface BusinessToolBundleContext {
   } | null;
   /** VLM model config for chart extraction (defaults to env config). */
   vlmConfig?: Partial<VlmConfig>;
+  /** Operational budgets snapshotted for this run. */
+  limits?: RuntimeLimits;
   /** Warning surface (Python run_ctx.add_warning parity). */
   onWarning?: (severity: string, message: string, source: string) => void;
   /** Curated capability gates (product-disabled tools); default: all enabled. */
@@ -87,10 +91,16 @@ export async function createBusinessToolBundle(
 ): Promise<BusinessToolBundle> {
   const { taskRoot } = context;
   const shared: ToolServiceDeps = { taskRoot, hooks: context.hooks };
-  const client = context.browser?.client ?? new PublicHttpClient();
+  const limits = context.limits ?? DEFAULT_RUNTIME_LIMITS;
+  const client = context.browser?.client ?? new PublicHttpClient({ timeoutMs: limits.http_timeout_seconds * 1000 });
   const cache = context.browser?.cache ?? new ContentCache(`${taskRoot}/cache`);
   const disabled = context.disabledTools ?? new Set<string>();
-  const geoEutils = { email: "biomed-agent@example.com", tool: "biomed-qagent", userAgent: "BioMed-QAgent/1.0" };
+  const geoEutils = {
+    email: "biomed-agent@example.com",
+    tool: "biomed-qagent",
+    userAgent: "BioMed-QAgent/1.0",
+    totalTimeoutMs: limits.http_timeout_seconds * 1000,
+  };
   const tools: BioMedAgentTool[] = [];
   const unavailable = new Set<string>();
   const ownerOf = new Map<string, string>();
@@ -116,30 +126,73 @@ export async function createBusinessToolBundle(
   register([createResearchDataGuidanceTool({ docsRoot: context.guidanceDocsRoot })], "research_data_guidance");
 
   // Curated external data sources (P5-03..P5-06).
-  register(createPubmedTools(shared), "pubmed");
-  register(createGeoTools({ taskRoot, cache, client, hooks: context.hooks, eutils: geoEutils }), "geo");
-  register(createGdcTools({ ...shared, client, cache }), "gdc");
-  register(createXenaTools({ ...shared, client, cache }), "xena");
+  register(createPubmedTools({
+    ...shared,
+    http: client,
+    maxDownloadBytes: limits.max_download_mib * 1024 * 1024,
+    downloadTimeoutMs: limits.download_timeout_seconds * 1000,
+    config: { totalTimeoutMs: limits.http_timeout_seconds * 1000 },
+  }), "pubmed");
+  register(createGeoTools({
+    taskRoot,
+    cache,
+    client,
+    hooks: context.hooks,
+    eutils: geoEutils,
+    maxDownloadBytes: limits.max_download_mib * 1024 * 1024,
+    downloadTimeoutMs: limits.download_timeout_seconds * 1000,
+  }), "geo");
+  register(createGdcTools({
+    ...shared,
+    client,
+    cache,
+    maxDownloadBytes: limits.max_download_mib * 1024 * 1024,
+    maxFiles: limits.gdc_max_files,
+    downloadTimeoutMs: limits.download_timeout_seconds * 1000,
+    rateLimitMs: limits.request_interval_ms,
+  }), "gdc");
+  register(createXenaTools({
+    ...shared,
+    client,
+    cache,
+    maxDownloadBytes: limits.max_download_mib * 1024 * 1024,
+    downloadTimeoutMs: limits.download_timeout_seconds * 1000,
+    rateLimitMs: limits.request_interval_ms,
+  }), "xena");
   register(createChemblTools({
     ...shared,
     client,
     browserFallback: context.browser?.fallback,
+    rateLimitMs: limits.request_interval_ms,
   }), "chembl");
   register(createUniprotTools({
     ...shared,
     client,
     browserFallback: context.browser?.fallback,
+    rateLimitMs: limits.request_interval_ms,
   }), "uniprot");
-  register(createPdbTools({ ...shared, client }), "pdb");
+  register(createPdbTools({
+    ...shared,
+    client,
+    rateLimitMs: limits.request_interval_ms,
+    maxDownloadBytes: limits.max_download_mib * 1024 * 1024,
+    downloadTimeoutMs: limits.download_timeout_seconds * 1000,
+  }), "pdb");
   register(createPubchemTools({
     ...shared,
     client,
     browserFallback: context.browser?.fallback,
+    rateLimitMs: limits.request_interval_ms,
+    maxDownloadBytes: limits.max_download_mib * 1024 * 1024,
+    downloadTimeoutMs: limits.download_timeout_seconds * 1000,
   }), "pubchem");
   register(createReactomeTools({
     ...shared,
     client,
     browserFallback: context.browser?.fallback,
+    rateLimitMs: limits.request_interval_ms,
+    maxDownloadBytes: limits.max_download_mib * 1024 * 1024,
+    downloadTimeoutMs: limits.download_timeout_seconds * 1000,
   }), "reactome");
 
   // Browser/crawler/visual capture (P5-07): excluded when the pool is absent.
@@ -152,6 +205,8 @@ export async function createBusinessToolBundle(
       client,
       crawler: context.browser.crawler,
       hooks: context.hooks,
+      maxDownloadBytes: limits.max_download_mib * 1024 * 1024,
+      downloadTimeoutMs: limits.download_timeout_seconds * 1000,
     });
     register([browserTools.navigatePage, browserTools.downloadFromPage], "browser");
     const captureTools = createWebVisualCaptureTools({
@@ -169,7 +224,11 @@ export async function createBusinessToolBundle(
 
   // Local cache (P5-10): the DB bridge is the only sanctioned path.
   if (context.db !== null && context.db !== undefined) {
-    register(createLocalCacheTools({ db: context.db, hooks: context.hooks }), "local_cache");
+    register(createLocalCacheTools({
+      db: context.db,
+      hooks: context.hooks,
+      timeoutMs: limits.database_timeout_seconds * 1000,
+    }), "local_cache");
   } else {
     unavailable.add("search_local_cache");
     unavailable.add("describe_local_cache");
@@ -181,6 +240,7 @@ export async function createBusinessToolBundle(
   register(createChartDataVlmTool({
     ...shared,
     vlmConfig: context.vlmConfig,
+    httpClient: client,
     onWarning: context.onWarning,
     hilGate: context.hilGate,
     approvalGate: context.approvalGate,

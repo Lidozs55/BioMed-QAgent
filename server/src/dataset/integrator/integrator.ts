@@ -10,20 +10,30 @@
  * deterministically and are recorded in a conflicts audit file.
  */
 
-import { mkdirSync, statSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { mkdirSync, statSync, unlinkSync } from "node:fs";
 import { join, relative } from "node:path";
 import type { JsonValue } from "@biomed/contracts";
 import type { CanonicalizationResult } from "../canonicalizer/index.js";
 import { CHECKPOINT_STRIDE, checkpoint, throwIfAborted } from "../cooperative.js";
+import { BufferedCsvWriter } from "../adapters/base.js";
 import { BuildError } from "../adapters/errors.js";
 import { sha256FileStream } from "../adapters/hashing.js";
 import { assetIdFromSha256 } from "../adapters/identity.js";
-import { csvLine, delimitedRowsWithLinesAsync, readSourceTextAsync } from "../adapters/text.js";
+import { delimitedRowsFromFileAsync } from "../adapters/text.js";
 import type { DataBatch, DatasetSchema, FileAsset } from "../contracts/index.js";
 import { parseDataBatch, parseFileAsset } from "../contracts/index.js";
 
 export const MERGE_STRATEGY_APPEND = "append_by_canonical_row";
+
+/**
+ * Agent-facing aliases mapped onto the single implemented merge semantics.
+ * ``union`` — combine all canonical rows, deduplicating by canonical row
+ * identity — is exactly what append-by-canonical-row does, so it is accepted
+ * verbatim (single-source builds are a no-op regardless).
+ */
+const MERGE_STRATEGY_ALIASES: Record<string, string> = {
+  union: MERGE_STRATEGY_APPEND,
+};
 
 export const CONFLICT_COLUMNS = [
   "conflict_id",
@@ -62,10 +72,11 @@ export async function integrate(options: {
 }): Promise<IntegrationResult> {
   const { results, mergeStrategy, schema, buildId, outputDir, signal } = options;
   throwIfAborted(signal);
-  if (mergeStrategy !== MERGE_STRATEGY_APPEND) {
+  const strategy = MERGE_STRATEGY_ALIASES[mergeStrategy] ?? mergeStrategy;
+  if (strategy !== MERGE_STRATEGY_APPEND) {
     throw new IntegratorError(
       `unsupported merge strategy ${mergeStrategy}; ` +
-        `server allows only ${MERGE_STRATEGY_APPEND}`,
+        `server allows only ${MERGE_STRATEGY_APPEND} (alias: union)`,
     );
   }
   if (results.length === 0) {
@@ -87,33 +98,37 @@ export async function integrate(options: {
   let dedupCount = 0;
   let conflictCount = 0;
 
-  const mergedLines: string[] = [csvLine(columns)];
-  const conflictLines: string[] = [csvLine(CONFLICT_COLUMNS)];
-  let visited = 0;
-  for (const result of results) {
-    const rows = await readCsvDictRows(result.canonicalPath, signal);
-    for (const row of rows) {
-      visited += 1;
-      // M2: checkpoint per processed row (not only new-unique rows) so an
-      // extreme dedup/conflict workload still yields to the event loop.
-      if (visited % CHECKPOINT_STRIDE === 0) await checkpoint(signal);
-      const keyParts = rowIdentity(row, idField);
-      const key = keyParts.join("\u0000");
-      const value = row["expression_value"] ?? "";
-      const previous = seen.get(key);
-      if (previous === undefined) {
-        seen.set(key, [value, row["asset_id"] ?? ""]);
-        mergedLines.push(csvLine(columns.map((column) => row[column] ?? "")));
-        rowCount += 1;
-        continue;
-      }
-      const [previousValue, previousAsset] = previous;
-      if (numericallyEqual(previousValue, value)) {
-        dedupCount += 1;
-        continue;
-      }
-      conflictLines.push(
-        csvLine([
+// Streamed outputs: row buffers are flushed in bounded chunks so the
+  // merged/conflicts files never accumulate in memory (M2 large-file fix;
+  // same shared BufferedCsvWriter the source adapters use).
+  const mergedWriter = new BufferedCsvWriter(mergedPath, columns);
+  const conflictWriter = new BufferedCsvWriter(conflictsPath, CONFLICT_COLUMNS);
+  try {
+    let visited = 0;
+    for (const result of results) {
+      for await (const row of readCsvDictRows(result.canonicalPath, signal)) {
+        visited += 1;
+        // M2: checkpoint per processed row (not only new-unique rows) so an
+        // extreme dedup/conflict workload still yields to the event loop.
+        if (visited % CHECKPOINT_STRIDE === 0) await checkpoint(signal);
+        const keyParts = rowIdentity(row, idField);
+        const key = keyParts.join("\u0000");
+        const value = row["expression_value"] ?? "";
+        const previous = seen.get(key);
+        if (previous === undefined) {
+          if (results.length > 1) {
+            seen.set(key, [value, row["asset_id"] ?? ""]);
+          }
+          mergedWriter.writeRow(columns.map((column) => row[column] ?? ""));
+          rowCount += 1;
+          continue;
+        }
+        const [previousValue, previousAsset] = previous;
+        if (numericallyEqual(previousValue, value)) {
+          dedupCount += 1;
+          continue;
+        }
+        conflictWriter.writeRow([
           `conflict_${keyParts[0]}_${keyParts[1]}_${rowCount}`,
           keyParts[0],
           keyParts[1],
@@ -124,13 +139,19 @@ export async function integrate(options: {
           row["asset_id"] ?? "",
           value,
           "kept_first_source",
-        ]),
-      );
-      conflictCount += 1;
+        ]);
+        conflictCount += 1;
+      }
     }
+  } catch (error) {
+    mergedWriter.close();
+    conflictWriter.close();
+    try { unlinkSync(mergedPath); } catch { /* best effort */ }
+    try { unlinkSync(conflictsPath); } catch { /* best effort */ }
+    throw error;
   }
-  await writeFile(mergedPath, mergedLines.join(""), "utf8");
-  await writeFile(conflictsPath, conflictLines.join(""), "utf8");
+  mergedWriter.close();
+  conflictWriter.close();
 
   const payloadChecksum = await sha256FileStream(mergedPath, signal);
   const fileAsset: FileAsset = parseFileAsset({
@@ -194,23 +215,25 @@ function rowIdentity(
 }
 
 /** Python csv.DictReader: header row + per-row field dicts. */
-async function readCsvDictRows(path: string, signal?: AbortSignal | null): Promise<Array<Record<string, string>>> {
-  const text = await readSourceTextAsync(path, signal);
-  const rows = await delimitedRowsWithLinesAsync(text, ",", signal);
-  if (rows.length === 0) return [];
-  const header = rows[0].values;
-  const records: Array<Record<string, string>> = [];
+async function* readCsvDictRows(
+  path: string,
+  signal?: AbortSignal | null,
+): AsyncGenerator<Record<string, string>> {
+  let header: string[] | null = null;
   let visited = 0;
-  for (const row of rows.slice(1)) {
+  for await (const row of delimitedRowsFromFileAsync(path, ",", signal)) {
+    if (header === null) {
+      header = row.values;
+      continue;
+    }
     const record: Record<string, string> = {};
     for (let index = 0; index < header.length; index += 1) {
       record[header[index]] = row.values[index] ?? "";
     }
-    records.push(record);
+    yield record;
     visited += 1;
     if (visited % CHECKPOINT_STRIDE === 0) await checkpoint(signal);
   }
-  return records;
 }
 
 function numericallyEqual(left: string, right: string): boolean {

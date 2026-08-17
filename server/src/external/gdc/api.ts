@@ -94,7 +94,7 @@ export async function fetchGdcJson(
       Accept: "application/json",
     },
     signal: options.signal,
-    timeoutMs: options.timeoutMs ?? GDC_JSON_TIMEOUT_MS,
+    timeoutMs: options.timeoutMs,
     connectTimeoutMs: options.connectTimeoutMs,
     validateUrl: async (value) => {
       await validateCuratedSourceUrl(value, CURATED_SOURCE_HOSTS, resolve);
@@ -108,6 +108,7 @@ export async function fetchGdcJson(
     },
   });
   if (response.status < 200 || response.status >= 300) {
+    await response.discard();
     throw new Error(`GDC API returned HTTP ${response.status}`);
   }
   const chunks: Buffer[] = [];

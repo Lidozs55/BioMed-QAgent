@@ -132,7 +132,6 @@ Dataset Core 产生并以 manifest + hash 验证——权限放开不改变业�
 scope 才匹配，API 缺省 project）；Restricted 切换会作废全部 pending 并清空全部临时
 授权；Run 结束时经 `onRunEnd` 清理该 run 的 grants。Run/Task 文件授权以批准路径为根
 （canonical root + 子树），不覆盖整个 scope（ADR-026 §2）。
->>>>>>> feat/workspace-permission-system
 
 当前不存在固定五阶段、固定 22 列 `main_data.csv` 全局协议或 metadata-only
 占位主表：Dataset Build 由自包含 `DatasetBuildSpec`（§3）驱动，产物由
@@ -159,6 +158,15 @@ scope 才匹配，API 缺省 project）；Restricted 切换会作废全部 pendi
 - `merge_strategy`：服务端允许的显式合并策略；
 - `validation_profile_ref`：Validation Profile 引用；
 - `output_format`：发布格式偏好。
+
+生产可选值由 `DatasetFamilyRegistry` 统一登记。每个
+`DatasetFamilyDefinition` 将 Canonical Schema、row granularity、真实来源 Adapter、
+source/schema 与 schema/profile 兼容关系、family-owned 默认 Normalization Profile、
+合并策略、输出格式和 Adapter 参数契约绑定为一个受信任 admission 能力单元。多表 family operation handlers、assembler /
+`PublicationCandidate` 属 TASK-048 下一执行层，不由基础 Registry 伪装为已实现。
+Agent Tool Schema 与 Core Spec Validator 从同一 Registry 派生；production Registry 还要求
+family `runtime_id` 命中 Core 已实现的 runtime allowlist。仅有 Schema、或 Adapter/Profile
+无真实实现的数据族不得进入 production default Registry（ADR-027）。
 
 不建立正式 `DatasetRequest` 契约。自然语言解析过程中可以使用 Agent 内部的
 `ParsedDatasetIntent`，但它不进入持久化、API 或执行协议，避免
@@ -201,8 +209,9 @@ dataset_family + row_granularity + key_semantics + measurement_semantics
 - derivation policy；
 - 与历史 Schema 的兼容性关系。
 
-22 列表达长表不再是全局协议；新数据族通过注册新 Schema 接入，不修改其他数据族
-的 Schema 或共享分支。
+22 列表达长表不再是全局协议；新数据族通过完整
+`DatasetFamilyDefinition`（其中包含注册 Schema）接入，不修改其他数据族的 Schema
+或共享分支，也不能只注册 Schema 就宣称该 family 可执行或可发布。
 
 Schema Registry 是字段元数据的唯一权威来源，不在 Builder / Validation / API /
 前端多处分散定义。

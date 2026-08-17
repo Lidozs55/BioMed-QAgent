@@ -30,6 +30,7 @@ import {
   normalizeGdcDataType,
 } from "../../external/gdc/index.js";
 import type { PublicHttpClient } from "../../external/network/http-client.js";
+import { AsyncHostRateLimiter } from "../../external/crawler/rate-limit.js";
 import { assertSafeFilename } from "../../external/acquisition/workdir.js";
 import type { SourceRecord } from "../../dataset/contracts/source.js";
 import { DATA_LEVEL, DATABASE } from "../../dataset/contracts/enums.js";
@@ -43,27 +44,22 @@ export interface GdcToolDeps extends ToolServiceDeps {
   client: PublicHttpClient;
   cache: ContentCache;
   maxDownloadBytes?: number;
+  maxFiles?: number;
+  downloadTimeoutMs?: number;
   /** Minimum interval between external requests; 0 disables (tests). */
   rateLimitMs?: number;
 }
 
-/**
- * Module-global request spacing (Python ``rate_limit`` parity: a single
- * shared timestamp per source, enforced before every external request).
- */
-let lastRequestAt = 0;
+const limiters = new Map<number, AsyncHostRateLimiter>();
 
-function rateLimit(minIntervalMs: number): Promise<void> {
+function rateLimit(url: string, minIntervalMs: number): Promise<void> {
   if (minIntervalMs <= 0) return Promise.resolve();
-  const wait = minIntervalMs - (Date.now() - lastRequestAt);
-  const resume = (): void => {
-    lastRequestAt = Date.now();
-  };
-  if (wait <= 0) {
-    resume();
-    return Promise.resolve();
+  let limiter = limiters.get(minIntervalMs);
+  if (limiter === undefined) {
+    limiter = new AsyncHostRateLimiter({ minInterval: minIntervalMs / 1000 });
+    limiters.set(minIntervalMs, limiter);
   }
-  return new Promise((resolve) => setTimeout(() => { resume(); resolve(); }, wait));
+  return limiter.wait(url);
 }
 
 /** Python ``make_source_id``: ``src_<canonical sha256 digest[:32]>``. */
@@ -202,7 +198,7 @@ export async function searchGdc(
   try {
     payload = await fetchGdcJson(deps.client, url, {
       signal,
-      rateLimit: () => rateLimit(deps.rateLimitMs ?? GDC_RATE_LIMIT_MS),
+      rateLimit: () => rateLimit(GDC_API_BASE, deps.rateLimitMs ?? GDC_RATE_LIMIT_MS),
     });
   } catch (error) {
     hooks.onQuery(effectiveTerm, "gdc", "failed", 0);
@@ -270,7 +266,7 @@ export async function describeGdc(
   try {
     payload = await fetchGdcJson(deps.client, url, {
       signal,
-      rateLimit: () => rateLimit(deps.rateLimitMs ?? GDC_RATE_LIMIT_MS),
+      rateLimit: () => rateLimit(GDC_API_BASE, deps.rateLimitMs ?? GDC_RATE_LIMIT_MS),
     });
   } catch (error) {
     hooks.onQuery(projectId, "gdc", "failed", 0);
@@ -328,7 +324,7 @@ export async function downloadGdc(
   const workflowType = expectOptionalString(args, "workflow_type");
   const gdcDataType = normalizeGdcDataType(dataType);
   const maxBytes = deps.maxDownloadBytes ?? GDC_MAX_DOWNLOAD_BYTES;
-  const pace = (): Promise<void> => rateLimit(deps.rateLimitMs ?? GDC_RATE_LIMIT_MS);
+  const pace = (): Promise<void> => rateLimit(GDC_API_BASE, deps.rateLimitMs ?? GDC_RATE_LIMIT_MS);
   const dirs = taskWorkDirs(deps.taskRoot);
   const hooks = noopHooks(deps.hooks);
 
@@ -367,7 +363,7 @@ export async function downloadGdc(
   const url = buildGdcUrl("/files", {
     filters: encodedFilters,
     format: "json",
-    size: "200",
+    size: String(Math.max(200, deps.maxFiles ?? 50)),
   });
 
   let payload: unknown;
@@ -431,7 +427,7 @@ export async function downloadGdc(
   // Step 3 — download a representative subset (up to 5 files)
   // ------------------------------------------------------------------
   const localFiles: string[] = [manifestPath];
-  const downloadLimit = Math.min(fileHits.length, 5);
+  const downloadLimit = Math.min(fileHits.length, deps.maxFiles ?? 50);
   const now = new Date().toISOString();
   for (const rawHit of fileHits.slice(0, downloadLimit)) {
     if (!isRecord(rawHit)) continue;
@@ -483,6 +479,7 @@ export async function downloadGdc(
         expectedMd5: md5sum !== "" ? md5sum : undefined,
         accept: "application/octet-stream",
         signal,
+        timeoutMs: deps.downloadTimeoutMs,
         progress: reportProgress,
       });
       if (result.attempt.status === "failed" || result.asset === null) {

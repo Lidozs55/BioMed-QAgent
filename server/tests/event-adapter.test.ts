@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, test, vi } from "vitest";
 
 import type { BioMedAgentEvent } from "../src/agent/contracts.js";
@@ -95,6 +96,52 @@ describe("PiEventAdapter", () => {
       "run_completed",
     ]);
     expect(events[0]?.payload).toMatchObject({ is_error: true });
+  });
+
+  test("maps context_compacted into a durable conversation_compacted event", () => {
+    const { adapter } = createAdapter();
+    const summary = "compacted checkpoint summary";
+
+    const events = adapter.adapt(runId, { type: "context_compacted", summary });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.payload).toEqual({
+      type: "conversation_compacted",
+      covered_through_run_id: runId,
+      summary_digest: createHash("sha256").update(summary, "utf8").digest("hex"),
+    });
+  });
+
+  test("a turn that ended after compaction is not terminal until completeRun", () => {
+    const { adapter } = createAdapter();
+    const events = [
+      ...adapter.adapt(runId, { type: "turn_started" }),
+      ...adapter.adapt(runId, { type: "context_compacted", summary: "checkpoint" }),
+      ...adapter.adapt(runId, { type: "turn_completed" }),
+    ];
+    // The compacted turn end emits no terminal event: the runtime resumes the
+    // run with a fresh turn instead of terminating it.
+    expect(events.map((event) => event.type)).toEqual([
+      "run_started",
+      "conversation_compacted",
+    ]);
+    // A second turn completes normally and is terminal.
+    const second = [
+      ...adapter.adapt(runId, { type: "turn_started" }),
+      ...adapter.adapt(runId, { type: "turn_completed" }),
+    ];
+    expect(second.map((event) => event.type)).toEqual(["run_started", "run_completed"]);
+  });
+
+  test("completeRun forces the terminal run_completed for a compacted run", () => {
+    const { adapter } = createAdapter();
+    adapter.adapt(runId, { type: "turn_started" });
+    adapter.adapt(runId, { type: "context_compacted", summary: "checkpoint" });
+    adapter.adapt(runId, { type: "turn_completed" });
+    const forced = adapter.completeRun(runId);
+    expect(forced.map((event) => event.type)).toEqual(["run_completed"]);
+    // Idempotent: a second force emits nothing.
+    expect(adapter.completeRun(runId)).toEqual([]);
   });
 
   test("maps stable failure and cancellation request/ack", () => {

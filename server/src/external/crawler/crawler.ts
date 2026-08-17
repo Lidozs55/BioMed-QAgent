@@ -102,6 +102,7 @@ export interface CrawlerFacadeOptions {
   downloadCap?: number;
   /** Injectable redirect bound (Python monkeypatches the module constant). */
   redirectCap?: number;
+  browserTimeoutMs?: number;
 }
 
 export interface ApiRequestOptions {
@@ -130,6 +131,7 @@ export class CrawlerFacade {
   private readonly responseCap: number;
   private readonly downloadCap: number;
   private readonly redirectCap: number;
+  private readonly browserTimeoutMs: number | undefined;
   private closed = false;
 
   constructor(options: CrawlerFacadeOptions = {}) {
@@ -141,6 +143,7 @@ export class CrawlerFacade {
     this.responseCap = options.responseCap ?? MAX_CRAWLER_RESPONSE_BYTES;
     this.downloadCap = options.downloadCap ?? MAX_CRAWLER_DOWNLOAD_BYTES;
     this.redirectCap = options.redirectCap ?? MAX_CRAWLER_REDIRECTS;
+    this.browserTimeoutMs = options.browserTimeoutMs;
   }
 
   /** Expose the shared host pacing lane (used by the sanctioned download path). */
@@ -199,7 +202,11 @@ export class CrawlerFacade {
     const startedAt = Date.now();
     try {
       await this.limiter.wait(url);
-      const result = await pool.fetch(url, { extraHeaders: { ...BROWSER_HEADERS }, signal });
+      const result = await pool.fetch(url, {
+        extraHeaders: { ...BROWSER_HEADERS },
+        timeoutMs: this.browserTimeoutMs,
+        signal,
+      });
       return {
         url: result.url,
         content: result.content,
@@ -259,7 +266,7 @@ export class CrawlerFacade {
       viewportWidth: options.viewportWidth,
       viewportHeight: options.viewportHeight,
       waitUntil: options.waitUntil,
-      timeoutMs: options.timeoutMs,
+      timeoutMs: options.timeoutMs ?? this.browserTimeoutMs,
       extraHeaders: options.extraHeaders,
       authorizeRequest: options.authorizeRequest,
       signal: options.signal,
@@ -308,6 +315,7 @@ export class CrawlerFacade {
   ): Promise<FetchResult> {
     const declaredLength = response.headers["content-length"] ?? response.headers["Content-Length"] ?? "";
     if (declaredLength !== "" && Number.parseInt(declaredLength, 10) > this.responseCap) {
+      await response.discard();
       return {
         url: response.url,
         content: "",
@@ -356,6 +364,7 @@ export class CrawlerFacade {
   private async downloadResponse(response: HttpClientResponse, startedAt: number): Promise<DownloadResult> {
     const declaredLength = response.headers["content-length"] ?? response.headers["Content-Length"] ?? "";
     if (declaredLength !== "" && Number.parseInt(declaredLength, 10) > this.downloadCap) {
+      await response.discard();
       return oversizedDownload(response.url, response.status, Date.now() - startedAt, response.headers, this.downloadCap);
     }
     const chunks: Buffer[] = [];

@@ -1,3 +1,5 @@
+import { memo } from "react";
+
 import { MessageScrollerItem } from "@/components/ui/message-scroller";
 import type { ConversationItem, DownloadControl } from "@/runtime/types";
 import { ConversationStep } from "./ConversationStep";
@@ -9,6 +11,28 @@ interface ConversationListProps {
   downloadControl?: DownloadControl;
 }
 
+interface ConversationListItemProps {
+  item: ConversationItem;
+  isActive: boolean;
+  downloadControl?: DownloadControl;
+}
+
+const ConversationListItem = memo(function ConversationListItem({
+  item,
+  isActive,
+  downloadControl,
+}: ConversationListItemProps) {
+  return (
+    <MessageScrollerItem messageId={item.itemId}>
+      <ConversationStep
+        item={item}
+        isActive={isActive}
+        downloadControl={downloadControl}
+      />
+    </MessageScrollerItem>
+  );
+});
+
 export function ConversationList({
   items,
   activeRunId,
@@ -17,17 +41,12 @@ export function ConversationList({
   return (
     <>
       {items.filter((item) => item.kind !== "artifact").map((item) => (
-        <MessageScrollerItem
+        <ConversationListItem
           key={item.itemId}
-          messageId={item.itemId}
-          scrollAnchor={item.kind === "user_message"}
-        >
-          <ConversationStep
-            item={item}
-            isActive={item.runId === activeRunId}
-            downloadControl={downloadControl}
-          />
-        </MessageScrollerItem>
+          item={item}
+          isActive={item.runId === activeRunId}
+          downloadControl={downloadControl}
+        />
       ))}
     </>
   );

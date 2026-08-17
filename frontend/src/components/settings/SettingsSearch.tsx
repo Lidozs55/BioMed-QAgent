@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { MagnifyingGlassIcon, XIcon } from "@phosphor-icons/react";
 
 import { getSettingsNavGroup } from "@/components/settings/settingsNavConfig";
@@ -6,7 +6,6 @@ import { Input } from "@/components/ui/input";
 import {
   Popover,
   PopoverContent,
-  PopoverTrigger,
 } from "@/components/ui/popover";
 import { searchSettingsIndex, type SettingsIndexEntry } from "@/lib/settingsIndex";
 import { cn } from "@/lib/utils";
@@ -23,18 +22,23 @@ export function SettingsSearch({ onNavigate, className }: SettingsSearchProps) {
   const inputRef = useRef<HTMLInputElement>(null);
 
   const results = useMemo(() => searchSettingsIndex(query), [query]);
+  const hasQuery = query.trim().length > 0;
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
         event.preventDefault();
         inputRef.current?.focus();
-        setOpen(true);
+        setOpen(hasQuery);
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [hasQuery]);
+
+  useLayoutEffect(() => {
+    if (open) inputRef.current?.focus();
+  }, [open]);
 
   const selectResult = (entry: SettingsIndexEntry) => {
     onNavigate(entry.section, entry.anchor);
@@ -61,29 +65,29 @@ export function SettingsSearch({ onNavigate, className }: SettingsSearchProps) {
   };
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(nextOpen) => setOpen(nextOpen && hasQuery)}
+      modal={false}
+    >
       <div className={cn("relative", className)}>
         <MagnifyingGlassIcon className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
-        <PopoverTrigger
-          render={
-            <Input
-              ref={inputRef}
-              id="settings-search"
-              type="text"
-              value={query}
-              placeholder="搜索设置..."
-              aria-label="搜索设置"
-              autoComplete="off"
-              onChange={(event) => {
-                setQuery(event.target.value);
-                setActiveIndex(0);
-                setOpen(true);
-              }}
-              onFocus={() => setOpen(true)}
-              onKeyDown={handleInputKeyDown}
-              className="h-8 pr-7 pl-8"
-            />
-          }
+        <Input
+          ref={inputRef}
+          id="settings-search"
+          type="text"
+          value={query}
+          placeholder="搜索设置..."
+          aria-label="搜索设置"
+          autoComplete="off"
+          onChange={(event) => {
+            setQuery(event.target.value);
+            setActiveIndex(0);
+            setOpen(event.target.value.trim().length > 0);
+          }}
+          onFocus={() => setOpen(hasQuery)}
+          onKeyDown={handleInputKeyDown}
+          className="h-8 pr-7 pl-8"
         />
         {query && (
           <button
@@ -99,8 +103,13 @@ export function SettingsSearch({ onNavigate, className }: SettingsSearchProps) {
           </button>
         )}
       </div>
-      <PopoverContent align="start" className="w-(--anchor-width) p-1!">
-        {query &&
+      <PopoverContent
+        align="start"
+        anchor={inputRef}
+        className="w-[min(26rem,var(--available-width))] p-1!"
+        initialFocus={false}
+      >
+        {hasQuery &&
           (results.length === 0 ? (
             <div className="px-3 py-2.5 text-xs text-muted-foreground">无匹配项</div>
           ) : (

@@ -19,8 +19,9 @@ export const DEFAULT_WORKSPACE_LIMITS: WorkspaceLimits = {
   maxSearchLineChars: 1_000,
   maxSearchOutputChars: 32 * 1024,
   maxWriteBytes: 256 * 1024,
-  maxExecOutputBytes: 64 * 1024,
-  maxExecTimeoutMs: 30_000,
+  maxExecOutputBytes: 256 * 1024,
+  defaultExecTimeoutMs: 600_000,
+  maxExecTimeoutMs: 86_400_000,
 };
 
 /**
@@ -44,16 +45,6 @@ export interface TaskWorkspaceConfig {
   permissions: PermissionBroker;
   audit: WorkspaceAuditSink;
   limits?: Partial<WorkspaceLimits>;
-  /**
-   * Environment-level exec switch (HIL branch): absent/disabled ⇒ exec is
-   * hard-disabled before the permission system is consulted.
-   */
-  developmentExec?: DevelopmentExecConfig;
-}
-
-export interface DevelopmentExecConfig {
-  enabled: true;
-  environment?: Readonly<Record<string, string | undefined>>;
 }
 
 export interface WorkspaceContext {
@@ -68,7 +59,6 @@ export interface WorkspaceContext {
   permissions: PermissionBroker;
   audit: WorkspaceAuditSink;
   limits: WorkspaceLimits;
-  developmentExec?: DevelopmentExecConfig;
 }
 
 function requireSafeId(name: string, value: string | undefined, optional = false): void {
@@ -141,6 +131,5 @@ export async function createWorkspaceContext(
     permissions: config.permissions,
     audit: config.audit,
     limits: validatedLimits(config.limits),
-    developmentExec: config.developmentExec,
   };
 }

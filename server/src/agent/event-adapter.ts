@@ -93,6 +93,7 @@ function sourceType(event: never): string {
 export class PiEventAdapter {
   private sequence = 0;
   private readonly terminalRuns = new Set<string>();
+  private compactedThisTurn = false;
   private readonly now: () => Date;
   private readonly id: () => string;
 
@@ -111,6 +112,7 @@ export class PiEventAdapter {
         "tool_started",
         "tool_progress",
         "tool_completed",
+        "context_compacted",
         "turn_cancelled",
         "turn_completed",
       ].includes(type)
@@ -121,6 +123,7 @@ export class PiEventAdapter {
     if (this.terminalRuns.has(runId)) return [];
     switch (event.type) {
       case "turn_started":
+        this.compactedThisTurn = false;
         return [this.envelope(runId, { type: "run_started" })];
       case "assistant_delta":
         return [
@@ -170,6 +173,15 @@ export class PiEventAdapter {
             is_error: event.isError,
           }),
         ];
+      case "context_compacted":
+        this.compactedThisTurn = true;
+        return [
+          this.envelope(runId, {
+            type: "conversation_compacted",
+            covered_through_run_id: runId,
+            summary_digest: createHash("sha256").update(event.summary, "utf8").digest("hex"),
+          }),
+        ];
       case "turn_cancelled":
         return this.terminal(runId, {
           type: "run_cancelled",
@@ -179,6 +191,10 @@ export class PiEventAdapter {
               : sanitizeText(event.reason, MAX_ARGUMENT_STRING_LENGTH),
         });
       case "turn_completed":
+        // Pi's threshold compaction ends the turn without auto-continue; the
+        // runtime resumes with a fresh turn, so a compacted turn end is not
+        // terminal. The runtime forces the terminal event via completeRun.
+        if (this.compactedThisTurn) return [];
         return this.terminal(runId, { type: "run_completed", build_result: null });
       case "tool_progress":
         this.diagnostic("unmapped_upstream_event", event.type);
@@ -195,6 +211,18 @@ export class PiEventAdapter {
         reason === undefined
           ? null
           : sanitizeText(reason, MAX_ARGUMENT_STRING_LENGTH),
+    });
+  }
+
+  /**
+   * Force a terminal ``run_completed`` for a run whose last turn ended after
+   * a compaction (the runtime stops resuming it). Idempotent: a run that is
+   * already terminal emits nothing.
+   */
+  completeRun(runId: string): EventEnvelope[] {
+    return this.terminal(runId, {
+      type: "run_completed",
+      build_result: null,
     });
   }
 

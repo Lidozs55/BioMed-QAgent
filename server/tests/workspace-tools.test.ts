@@ -70,13 +70,14 @@ describe("Workspace project tools", () => {
       repositoryRoot: base,
       permissions,
       audit: new InMemoryWorkspaceAuditSink(),
-      developmentExec: { enabled: true },
     });
 
     const tools = createWorkspaceTools(workspace);
     const read = tools.find((tool) => tool.name === "workspace_read");
     const exec = tools.find((tool) => tool.name === "workspace_exec");
 
+    expect((exec?.parameters as { properties?: Record<string, unknown> }).properties?.timeout_seconds)
+      .toMatchObject({ minimum: 1, maximum: 86_400 });
     expect(tools.map((tool) => tool.name)).toEqual([
       "workspace_read",
       "workspace_list",

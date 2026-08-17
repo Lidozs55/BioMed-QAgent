@@ -48,20 +48,18 @@ import {
   type OperationOutput,
   type OperationRunner,
 } from "../runtime/index.js";
-import { buildGeneExpressionSchema } from "../schema/index.js";
 import {
   getValidationProfile,
   SpecValidator,
-  VALIDATION_PROFILE_REFS,
   type SpecValidationResult,
 } from "../validation/index.js";
-import { createDefaultSchemaRegistry } from "../schema/registry.js";
+import { createDefaultDatasetFamilyRegistry } from "../families/index.js";
 import { acquireBuildLock, type BuildLockLease } from "./build-lock.js";
 import type { DatasetHILGate } from "../review/hil-policy.js";
 import { reviewBatchForHIL } from "../review/hil-policy.js";
 import { evaluateConfidence, mappingConfidence } from "../confidence/evaluator.js";
 import { writeConfidenceArtifact } from "../confidence/artifact.js";
-import { delimitedRowsWithLinesAsync, readSourceTextAsync } from "../adapters/text.js";
+import { delimitedRowsFromFileAsync } from "../adapters/text.js";
 import type { HumanReviewState } from "../contracts/data.js";
 
 export interface TypeScriptDatasetCoreOptions {
@@ -150,23 +148,30 @@ async function effectiveConfidenceCounts(options: {
     }
     batchBySourceId.set(asset.source_id, result.batch.batch_id);
   }
-  const rows = await delimitedRowsWithLinesAsync(
-    await readSourceTextAsync(options.integration.mergedPath, options.signal),
+  const counts = new Map<string, number>();
+  let headerSeen = false;
+  let sourceIndex = -1;
+  for await (const { values } of delimitedRowsFromFileAsync(
+    options.integration.mergedPath,
     ",",
     options.signal,
-  );
-  if (rows.length === 0) throw new BuildError("integrated primary is missing its header");
-  const sourceIndex = rows[0].values.indexOf("source_id");
-  if (sourceIndex < 0) throw new BuildError("integrated primary has no source_id lineage column");
-  const counts = new Map<string, number>();
-  for (const row of rows.slice(1)) {
-    const sourceId = row.values[sourceIndex] ?? "";
+  )) {
+    if (!headerSeen) {
+      headerSeen = true;
+      sourceIndex = values.indexOf("source_id");
+      if (sourceIndex < 0) {
+        throw new BuildError("integrated primary has no source_id lineage column");
+      }
+      continue;
+    }
+    const sourceId = values[sourceIndex] ?? "";
     const batchId = batchBySourceId.get(sourceId);
     if (batchId === undefined) {
       throw new BuildError(`integrated row references unknown source_id '${sourceId}'`);
     }
     counts.set(batchId, (counts.get(batchId) ?? 0) + 1);
   }
+  if (!headerSeen) throw new BuildError("integrated primary is missing its header");
   const effectiveTotal = [...counts.values()].reduce((total, count) => total + count, 0);
   if (effectiveTotal !== options.integration.rowCount) {
     throw new BuildError(
@@ -217,7 +222,9 @@ export function createTsCoreOperationRunner(options: {
   const { spec, taskId, taskRoot, outputDir, sourceAssets, mappingAssets, runnerState, bindings } = options;
   const fence = options.fence ?? null;
   const hilGate = options.hilGate ?? null;
-  const schema = buildGeneExpressionSchema();
+  const familyRegistry = createDefaultDatasetFamilyRegistry();
+  familyRegistry.get(spec.dataset_family);
+  const schema = familyRegistry.schemaRegistry().get(spec.schema_ref);
 
   return async (op, _upstream, signal, suspension): Promise<OperationOutput> => {
     throwIfAborted(signal);
@@ -534,7 +541,12 @@ export class TypeScriptDatasetCore {
   }
 
   async validateDatasetBuildSpec(spec: DatasetBuildSpec): Promise<SpecValidationResult> {
-    const validator = new SpecValidator(createDefaultSchemaRegistry(), VALIDATION_PROFILE_REFS);
+    const familyRegistry = createDefaultDatasetFamilyRegistry();
+    const validator = new SpecValidator(
+      familyRegistry.schemaRegistry(),
+      familyRegistry.validationProfileRefs(),
+      familyRegistry,
+    );
     return validator.validate(spec);
   }
 
@@ -544,6 +556,11 @@ export class TypeScriptDatasetCore {
   ): Promise<BuildRecord> {
     const { taskId, taskRoot } = this.options;
     const buildId = spec.build_id;
+    // Admission lookups are pure and may throw. Resolve them before taking the
+    // fenced build lease so invalid direct Core calls cannot strand the lock.
+    const familyRegistry = createDefaultDatasetFamilyRegistry();
+    familyRegistry.get(spec.dataset_family);
+    familyRegistry.schemaRegistry().get(spec.schema_ref);
     const outputDir = path.join(taskRoot, "datasets_build", buildId);
     const stateDir = path.join(outputDir, "state");
     mkdirSync(outputDir, { recursive: true });
@@ -599,6 +616,9 @@ export class TypeScriptDatasetCore {
       cancellationRequested: () => signal.aborted,
       cancellationSignal: signal,
       operationTimeoutMs: this.options.operationTimeoutMs ?? 0,
+      // Cross-restart continuation: rebuild in-memory runner state from the
+      // checkpoint so the plan can continue from the suspension point.
+      rehydrateCompletedRunners: true,
       eventSink: this.options.eventSink === undefined || this.options.eventSink === null
         ? null
         : (event) => this.options.eventSink?.(event, buildId),
@@ -615,11 +635,19 @@ export class TypeScriptDatasetCore {
     let outcome: Awaited<ReturnType<DatasetBuildExecutor["run"]>>;
     try {
       outcome = await executor.run();
+      // When the whole plan was checkpoint-completed (re-execution of a
+      // finished build), the publish runner does not re-run — its output
+      // still carries the deterministic publication id.
+      const publishOutput = executor.getOutput("publish");
+      const publicationId = runnerState.publicationId ??
+        (typeof publishOutput?.publication_id === "string"
+          ? publishOutput.publication_id
+          : null);
       return {
         build_id: buildId,
         status: outcome.status,
         error: outcome.error === null ? null : outcome.error.message,
-        publication_id: runnerState.publicationId,
+        publication_id: publicationId,
         manifest: runnerState.manifest,
         validation: runnerState.validation,
         completed_operations: outcome.completedOperationIds,

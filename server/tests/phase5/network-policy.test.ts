@@ -329,6 +329,69 @@ describe("PublicHttpClient redirect policy", () => {
     }
   });
 
+  it("enforces one total deadline across redirects and body consumption", async () => {
+    let calls = 0;
+    const client = new PublicHttpClient({
+      resolve: fakeResolver(PUBLIC_HOST),
+      executor: async (request): Promise<{
+        status: number;
+        headers: Record<string, string>;
+        body: AsyncIterable<Buffer>;
+      }> => {
+        calls += 1;
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, 20);
+          request.signal?.addEventListener("abort", () => {
+            clearTimeout(timer);
+            reject(request.signal?.reason);
+          }, { once: true });
+        });
+        return calls === 1
+          ? { status: 302, headers: { location: "https://example.com/final" }, body: (async function* () {})() }
+          : {
+              status: 200,
+              headers: {},
+              body: (async function* () {
+                await new Promise<void>((resolve, reject) => {
+                  const timer = setTimeout(resolve, 20);
+                  request.signal?.addEventListener("abort", () => {
+                    clearTimeout(timer);
+                    reject(request.signal?.reason);
+                  }, { once: true });
+                });
+                yield Buffer.from("late");
+              })(),
+            };
+      },
+    });
+    await expect((async () => {
+      const response = await client.request("https://example.com/start", { timeoutMs: 30 });
+      for await (const chunk of response.body) void chunk;
+    })()).rejects.toMatchObject({ name: "TimeoutError" });
+    expect(calls).toBe(2);
+  });
+
+  it("explicitly discards an unused response body", async () => {
+    let finalized = false;
+    const client = new PublicHttpClient({
+      resolve: fakeResolver(PUBLIC_HOST),
+      executor: async () => ({
+        status: 503,
+        headers: {},
+        body: (async function* () {
+          yield Buffer.from("error");
+        })(),
+        dispose: () => {
+          finalized = true;
+        },
+      }),
+    });
+    const response = await client.request("https://example.com/error", { timeoutMs: 60_000 });
+    await response.discard();
+    await response.discard();
+    expect(finalized).toBe(true);
+  });
+
   it("honours a custom validateRedirect that allows cross-host hops", async () => {
     const fixture = await startFixtureServer((req, res) => {
       if (req.url === "/start") {

@@ -243,13 +243,14 @@ async function fetchXenaText(
     headers,
     body: method === "POST" ? XENA_QUERY_BODY : undefined,
     signal: options.signal,
-    timeoutMs: options.timeoutMs ?? 60_000,
+    timeoutMs: options.timeoutMs,
     connectTimeoutMs: options.connectTimeoutMs,
     validateUrl: async (value) => {
       await validateCuratedSourceUrl(value, XENA_SEARCH_HOSTS, resolve);
     },
   });
   if (response.status < 200 || response.status >= 300) {
+    await response.discard();
     throw new Error(`Xena hub returned HTTP ${response.status}`);
   }
   const chunks: Buffer[] = [];

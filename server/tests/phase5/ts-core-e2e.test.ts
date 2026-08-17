@@ -130,6 +130,18 @@ function geoProbeSpec(): ReturnType<typeof parseDatasetBuildSpec> {
   });
 }
 
+function geoProbeLevelSpec(): ReturnType<typeof parseDatasetBuildSpec> {
+  return parseDatasetBuildSpec({
+    ...geoProbeSpec(),
+    build_id: "build_geo_probe_level",
+    objective: "publish GEO expression without guessing probe-to-gene mappings",
+    row_granularity: "probe_sample_measurement",
+    schema_ref: "gene_expression.probe_long.v1",
+    validation_profile_ref: "gene_expression.probe_release.v1",
+    target_entity_level: "probe",
+  });
+}
+
 async function newCore(): Promise<{ taskRoot: string; taskId: string; core: TypeScriptDatasetCore; events: Array<{ event: CoreOperationEvent; buildId: string }> }> {
   const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-core-"));
   roots.push(taskRoot);
@@ -228,6 +240,44 @@ describe("TS Core E2E golden outcomes (I-07)", () => {
     expect(record.manifest?.artifacts.some((entry) =>
       entry.role === "audit_report" && entry.relative_path.includes("probe_mapping")
     )).toBe(true);
+  });
+
+  it("GEO: a validated probe-level schema reaches publication without a gene mapping", async () => {
+    const { taskRoot, core } = await newCore();
+    const matrix = gzipSync(Buffer.from(
+      '!Sample_platform_id\t"GPL570"\n' +
+        '!series_matrix_table_begin\n' +
+        '"ID_REF"\t"GSM1"\n' +
+        '"PROBE1"\t1.5\n' +
+        '!series_matrix_table_end\n',
+      "utf8",
+    ));
+    const source = await assetFromBytes(
+      taskRoot,
+      "series_matrix.txt.gz",
+      matrix,
+      "binding_geo",
+    );
+
+    const record = await core.executeDatasetBuild(geoProbeLevelSpec(), {
+      runId: "run_geo_probe_level",
+      sourceAssets: { binding_geo: source },
+      mappingAssets: {},
+    });
+
+    expect(record.error, `record.error=${record.error ?? "null"}`).toBeNull();
+    expect(record.status).toBe("completed");
+    expect(record.manifest?.schema_ref).toBe("gene_expression.probe_long.v1");
+    const primaryPath = path.join(
+      taskRoot,
+      "datasets_build",
+      "build_geo_probe_level",
+      "merged",
+      "primary.csv",
+    );
+    expect((await readFile(primaryPath, "utf8")).split(/\r?\n/, 1)[0]).toContain(
+      "probe_id",
+    );
   });
 
   it("PARTIAL_SUCCESS: one valid + one rejected binding publishes with partial status", async () => {
@@ -438,6 +488,28 @@ describe("TS Core E2E golden outcomes (I-07)", () => {
 });
 
 describe("build lock (I-04)", () => {
+  it("does not strand the build lock when family admission throws", async () => {
+    const { taskRoot, core } = await newCore();
+    const asset = await assetFor(taskRoot, "gdc/gdc_expression.tsv", "binding_gdc");
+    const buildId = "build_family_admission_lock";
+    const invalid = {
+      ...spec({ build_id: buildId }),
+      dataset_family: "missing_family",
+    };
+
+    await expect(core.executeDatasetBuild(invalid, {
+      runId: "run_invalid_family",
+      sourceAssets: { binding_gdc: asset },
+    })).rejects.toThrow(/dataset family 'missing_family' is not registered/);
+
+    const record = await core.executeDatasetBuild(spec({ build_id: buildId }), {
+      runId: "run_valid_family",
+      sourceAssets: { binding_gdc: asset },
+    });
+    expect(record).toMatchObject({ status: "completed", error: null });
+    expect(record.publication_id).not.toBeNull();
+  });
+
   it("refuses a second concurrent publisher for the same task+build", async () => {
     const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-lock-"));
     roots.push(taskRoot);

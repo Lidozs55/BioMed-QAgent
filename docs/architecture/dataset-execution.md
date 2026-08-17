@@ -94,6 +94,19 @@ Publication 指针，不是 Artifact 固有状态。
 
 > 决策依据：ADR-004、ADR-010。
 
+### 5.5 大文件解析的内存边界
+
+GEO series-matrix/tximport 解析必须使用 gzip 流式逐行读取；不得同时保留解压后的
+整段字符串、全量行数组和全量输出行数组。TS adapter 的大文件路径通过有界 CSV
+writer 写入 `batches/`，保留原始行号、列名、raw value 和 SourceAsset hash。
+小型 fixture 仍可使用数组 helper 做 parity 测试，但不能让该 helper 成为生产大文件
+路径。解析失败需保留结构化 `EmptySourceError`/`AdapterError`，不可将确定性数据
+错误包装成笼统的网络失败。
+
+> 证据：2026-08-17 gold1/gold2 真实 run；319 MiB GEO matrix 在旧路径触发
+> Node heap OOM / `Invalid string length`。回归覆盖
+> `server/tests/phase5/geo-adapter.test.ts` 的 gzip 流式行迭代。
+
 ---
 
 ## 6. 职责边界：Agent 与服务端
@@ -168,11 +181,26 @@ fixture 豁免、是否仅研究用途。以 `SOURCE_CAPABILITIES` 单一事实�
 
 ### 7.3 来源接入不变量
 
-新来源接入**不应**修改多个数据库组合分支。新来源通过注册 Adapter + Canonical
-Schema + Validation Profile 接入，组合可能性由兼容性判断决定，不靠 allowlist
-枚举。
+新来源接入**不应**修改多个数据库组合分支。新 family 通过完整
+`DatasetFamilyDefinition` 登记 Canonical Schema、粒度、来源 Adapter、Profile、
+source/schema 与 schema/profile 兼容关系和已实现 runtime ID；同一 family 的新来源登记
+source-to-adapter/schema 能力。Agent Tool Schema 与 Core admission 从同一
+`DatasetFamilyRegistry` 派生，组合可能性由兼容性判断决定，
+不靠散落的 allowlist 枚举。仅注册 Schema 不代表该 family 可以执行或发布。
 
-> 决策依据：ADR-008、ADR §21.7（踩坑）。
+> 决策依据：ADR-008、ADR-027、ADR §21.7（踩坑）。
+
+### 7.4 非表达研究数据的发布边界
+
+target/variant/structure/activity/paper/figure 等非 `gene_expression` 数据不能把
+Agent workspace 的 Markdown/CSV 直接当作正式 artifact。每个数据族必须先注册
+Canonical Schema、Adapter、Validation Profile 和 Publication manifest；图表估读
+还必须携带 figure/axis/legend locator、`estimated`/confidence 和人工审核状态。
+在这些组件落地前，运行可以正常结束并产出审计型报告，但不得设置
+`current_publication_id` 或伪造可下载主数据。
+
+> gold3–gold6 的 2026-08-17 真实 run 证明当前仅有 workspace 摘要，不满足该边界；
+> 由 Commonly `TASK-048` 跟踪。
 
 ---
 

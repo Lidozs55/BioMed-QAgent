@@ -25,7 +25,10 @@ import {
   geoExpressionAdapter,
   type GeoParseOptions,
 } from "../../src/dataset/adapters/geo/series-matrix.js";
-import { delimitedRowsWithLines } from "../../src/dataset/adapters/text.js";
+import {
+  delimitedRowsWithLines,
+  delimitedRowsFromFileAsync,
+} from "../../src/dataset/adapters/text.js";
 import { assetIdFromSha256 } from "../../src/dataset/adapters/identity.js";
 
 const FIXTURES = fileURLToPath(new URL("./fixtures/geo", import.meta.url));
@@ -142,6 +145,24 @@ describe("adapter registry", () => {
     } finally {
       rmSync(outputDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("streaming GEO text input", () => {
+  test("iterates gzip rows without materializing the full source text", async () => {
+    const dir = scratchDir();
+    const sourcePath = path.join(dir, "matrix.tsv.gz");
+    writeFixtureFile(sourcePath, gzipText("!meta\tone\nID_REF\tS1\nprobe_1\t1.5\n"));
+    const rows: Array<{ line: number; values: string[] }> = [];
+    for await (const row of delimitedRowsFromFileAsync(sourcePath, "\t")) {
+      rows.push(row);
+    }
+    expect(rows).toEqual([
+      { line: 1, values: ["!meta", "one"] },
+      { line: 2, values: ["ID_REF", "S1"] },
+      { line: 3, values: ["probe_1", "1.5"] },
+    ]);
+    rmSync(dir, { recursive: true, force: true });
   });
 });
 

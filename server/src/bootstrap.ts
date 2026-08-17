@@ -1,6 +1,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 
+import type { RuntimeLimits } from "@biomed/contracts";
+
 import type { ApplicationHostOptions } from "./app/create-app.js";
 import { LifecycleRegistry } from "./app/lifecycle.js";
 import type { BioMedModelConfig } from "./agent/contracts.js";
@@ -26,6 +28,7 @@ interface ApiSurface {
 
 interface ModelSettingsSurface extends ApiSurface {
   resolveActiveModel(): Promise<BioMedModelConfig>;
+  resolveRuntimeLimits?(): RuntimeLimits;
   resolveVlmConfig?(): Promise<Partial<VlmConfig>>;
 }
 
@@ -107,10 +110,11 @@ export async function createBootstrapOptions(input: BootstrapInput): Promise<Boo
       workspacesRoot,
       repositoryRoot,
       agentExecPolicy: config.agentExecPolicy,
-      workspaceDevExec: config.workspaceDevExec,
+      operationTimeoutMs: config.operationTimeoutMs,
       permissionPolicyStore,
       permissionBrokerRegistry,
       resolveModel: modelSettings.resolveActiveModel,
+      resolveRuntimeLimits: modelSettings.resolveRuntimeLimits,
       database,
       browserPool,
       vlmConfig,

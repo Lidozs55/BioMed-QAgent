@@ -58,6 +58,34 @@ describe("DurableTaskRepository", () => {
     ]);
   });
 
+  test("rejects createTask input that contains corrupted UTF-8 replacement characters", async () => {
+    const repo = await repository();
+    await expect(
+      repo.createTask({
+        requestId: "request-utf8-task",
+        input: "\uFFFD\uFFFD\uFFFD 肺腺癌 EGFR 突变状态",
+        databases: [],
+        mode: "agent",
+      }),
+    ).rejects.toThrow(/corrupted UTF-8 text \(U\+FFFD/u);
+  });
+
+  test("rejects createRun input that contains corrupted UTF-8 replacement characters", async () => {
+    const repo = await repository();
+    const accepted = await repo.createTask({
+      requestId: "request-utf8-run",
+      input: "find expression data",
+      databases: [],
+      mode: "agent",
+    });
+    await expect(
+      repo.createRun(accepted.task_id, {
+        requestId: "request-utf8-run-2",
+        input: "\uFFFD\uFFFD\uFFFD 肺腺癌 EGFR 突变状态",
+      }),
+    ).rejects.toThrow(/corrupted UTF-8 text \(U\+FFFD/u);
+  });
+
   test("marks an active run interrupted during recovery without changing completed history", async () => {
     const repo = await repository();
     const accepted = await repo.createTask({

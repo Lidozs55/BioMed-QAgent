@@ -28,17 +28,23 @@ type Environment = Record<string, string | undefined>;
 export interface PiUpstreamEvent {
   type: string;
   assistantMessageEvent?: { type: string; delta?: string };
+  assistantStopReason?: string;
   toolCallId?: string;
   toolName?: string;
   args?: unknown;
   partialResult?: unknown;
   result?: unknown;
   isError?: boolean;
+  reason?: "manual" | "threshold" | "overflow";
+  aborted?: boolean;
+  errorMessage?: string;
+  compactionResult?: { summary: string } | undefined;
 }
 
 export interface PiUpstreamSession {
   readonly sessionId: string;
   prompt(input: string): Promise<void>;
+  continueAfterLength?(): Promise<void>;
   steer?(text: string): Promise<void>;
   compact?(): Promise<{ summary: string }>;
   subscribe(listener: (event: PiUpstreamEvent) => void): () => void;
@@ -84,12 +90,23 @@ interface ActiveTurn {
   cancelled: boolean;
   terminal: boolean;
   reason?: string;
+  pendingDelta?: Extract<
+    BioMedAgentEvent,
+    { type: "assistant_delta" | "reasoning_delta" }
+  >;
+  deltaTimer?: ReturnType<typeof setTimeout>;
+  assistantStopReason?: string;
 }
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const MAX_TEXT = 4_096;
 const MAX_DEPTH = 3;
 const MAX_ITEMS = 20;
+const DELTA_FLUSH_INTERVAL_MS = 32;
+const LENGTH_CONTINUATION_MESSAGE =
+  "The previous assistant turn was truncated by the model length limit. " +
+  "Continue the same task from the compacted context without repeating completed work. " +
+  "Finish the remaining tool calls, required data artifacts, validation, and final response.";
 
 function boundedText(value: string): string {
   return value.slice(0, MAX_TEXT);
@@ -197,6 +214,26 @@ function usesDashScopeQwen(selected: BioMedModelConfig): boolean {
   }
 }
 
+/**
+ * Translate product-level compaction ratios onto Pi's absolute compaction
+ * settings. Pi compacts when context tokens exceed
+ * ``contextWindow - reserveTokens`` and keeps approximately
+ * ``keepRecentTokens`` tokens from the end of the conversation.
+ */
+export function resolvePiCompactionOverrides(
+  contextWindow: number,
+  triggerRatio: number,
+  targetRatio: number,
+): { compaction: { enabled: boolean; reserveTokens: number; keepRecentTokens: number } } {
+  return {
+    compaction: {
+      enabled: true,
+      reserveTokens: Math.max(0, Math.round(contextWindow * (1 - triggerRatio))),
+      keepRecentTokens: Math.max(0, Math.round(contextWindow * targetRatio)),
+    },
+  };
+}
+
 export function applyModelProfileToPayload(
   payload: unknown,
   selected: BioMedModelConfig,
@@ -218,6 +255,14 @@ export function applyModelProfileToPayload(
 
 function toUpstreamEvent(event: AgentSessionEvent): PiUpstreamEvent {
   switch (event.type) {
+    case "message_end":
+      return {
+        type: event.type,
+        assistantStopReason:
+          event.message.role === "assistant"
+            ? event.message.stopReason
+            : undefined,
+      };
     case "message_update":
       return {
         type: event.type,
@@ -245,6 +290,20 @@ function toUpstreamEvent(event: AgentSessionEvent): PiUpstreamEvent {
         result: event.result,
         isError: event.isError,
       };
+    case "compaction_end":
+      return {
+        type: event.type,
+        reason: event.reason,
+        compactionResult:
+          event.result === undefined
+            ? undefined
+            : { summary: boundedText(event.result.summary) },
+        aborted: event.aborted,
+        errorMessage:
+          event.errorMessage === undefined
+            ? undefined
+            : boundedText(event.errorMessage),
+      };
     default:
       return { type: event.type };
   }
@@ -258,6 +317,7 @@ async function createRealUpstreamSession(
   const selected = config.model ?? (resolveModel === undefined
     ? modelFromEnvironment(environment)
     : await resolveModel());
+  const contextWindow = selected.contextWindow ?? 131_072;
   const modelRuntime = await ModelRuntime.create({
     allowModelNetwork: false,
     modelsPath: null,
@@ -272,7 +332,7 @@ async function createRealUpstreamSession(
         reasoning: false,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: selected.contextWindow ?? 131_072,
+        contextWindow,
         maxTokens: selected.maxTokens ?? 8_192,
       },
     ],
@@ -303,6 +363,16 @@ async function createRealUpstreamSession(
     );
   }
   const settingsManager = SettingsManager.inMemory();
+  if (
+    selected.compactionTriggerRatio !== undefined &&
+    selected.compactionTargetRatio !== undefined
+  ) {
+    settingsManager.applyOverrides(resolvePiCompactionOverrides(
+      contextWindow,
+      selected.compactionTriggerRatio,
+      selected.compactionTargetRatio,
+    ));
+  }
   const resourceLoader = new DefaultResourceLoader({
     cwd: config.cwd,
     agentDir: path.join(config.cwd, ".pi"),
@@ -332,6 +402,11 @@ async function createRealUpstreamSession(
   return {
     sessionId: session.sessionId,
     prompt: (input) => session.prompt(input),
+    continueAfterLength: () => session.sendCustomMessage({
+      customType: "biomed_length_continuation",
+      content: LENGTH_CONTINUATION_MESSAGE,
+      display: false,
+    }, { triggerTurn: true }),
     steer: (text) => session.steer(text),
     compact: async () => {
       const result = await session.compact();
@@ -394,16 +469,12 @@ class PiBioMedAgentSession implements BioMedAgentSession {
     if (event.type === "message_update") {
       const message = event.assistantMessageEvent;
       if (message?.type === "text_delta" && message.delta !== undefined) {
-        active.queue.push({
-          event: { type: "assistant_delta", delta: boundedText(message.delta) },
-        });
+        this.queueDelta(active, "assistant_delta", message.delta);
       } else if (message?.type === "thinking_delta" && message.delta !== undefined) {
-        active.queue.push({
-          event: { type: "reasoning_delta", delta: boundedText(message.delta) },
-        });
+        this.queueDelta(active, "reasoning_delta", message.delta);
       }
     } else if (event.type === "tool_execution_start") {
-      active.queue.push({
+      this.pushBoundary(active, {
         event: {
           type: "tool_started",
           ...common,
@@ -411,7 +482,7 @@ class PiBioMedAgentSession implements BioMedAgentSession {
         },
       });
     } else if (event.type === "tool_execution_update") {
-      active.queue.push({
+      this.pushBoundary(active, {
         event: {
           type: "tool_progress",
           ...common,
@@ -419,7 +490,7 @@ class PiBioMedAgentSession implements BioMedAgentSession {
         },
       });
     } else if (event.type === "tool_execution_end") {
-      active.queue.push({
+      this.pushBoundary(active, {
         event: {
           type: "tool_completed",
           ...common,
@@ -427,11 +498,73 @@ class PiBioMedAgentSession implements BioMedAgentSession {
           isError: event.isError === true,
         },
       });
+    } else if (event.type === "compaction_end") {
+      const summary = event.compactionResult?.summary;
+      if (event.aborted !== true && typeof summary === "string" && summary.trim() !== "") {
+        this.pushBoundary(active, { event: { type: "context_compacted", summary } });
+      }
+    } else if (event.type === "message_end" && event.assistantStopReason !== undefined) {
+      active.assistantStopReason = event.assistantStopReason;
     }
+  }
+
+  private async promptUntilComplete(active: ActiveTurn, input: string): Promise<void> {
+    active.assistantStopReason = undefined;
+    await this.upstream.prompt(input);
+    while (!active.cancelled && active.assistantStopReason === "length") {
+      if (this.upstream.continueAfterLength === undefined) {
+        throw new Error("Pi runtime cannot continue a length-truncated turn");
+      }
+      active.assistantStopReason = undefined;
+      await this.upstream.continueAfterLength();
+    }
+  }
+
+  private queueDelta(
+    active: ActiveTurn,
+    type: "assistant_delta" | "reasoning_delta",
+    rawDelta: string,
+  ): void {
+    const delta = boundedText(rawDelta);
+    const pending = active.pendingDelta;
+    if (
+      pending !== undefined &&
+      (pending.type !== type || pending.delta.length + delta.length > MAX_TEXT)
+    ) {
+      this.flushPendingDelta(active);
+    }
+    if (active.pendingDelta === undefined) {
+      active.pendingDelta = { type, delta };
+      active.deltaTimer = setTimeout(
+        () => this.flushPendingDelta(active),
+        DELTA_FLUSH_INTERVAL_MS,
+      );
+      return;
+    }
+    active.pendingDelta = {
+      ...active.pendingDelta,
+      delta: `${active.pendingDelta.delta}${delta}`,
+    };
+  }
+
+  private flushPendingDelta(active: ActiveTurn): void {
+    if (active.deltaTimer !== undefined) {
+      clearTimeout(active.deltaTimer);
+      active.deltaTimer = undefined;
+    }
+    const pending = active.pendingDelta;
+    active.pendingDelta = undefined;
+    if (pending !== undefined) active.queue.push({ event: pending });
+  }
+
+  private pushBoundary(active: ActiveTurn, item: QueueItem): void {
+    this.flushPendingDelta(active);
+    active.queue.push(item);
   }
 
   private finish(active: ActiveTurn, item: QueueItem): void {
     if (active.terminal) return;
+    this.flushPendingDelta(active);
     active.terminal = true;
     active.queue.push(item);
     active.queue.push({ done: true });
@@ -461,7 +594,7 @@ class PiBioMedAgentSession implements BioMedAgentSession {
     };
     options.signal?.addEventListener("abort", onAbort, { once: true });
     active.queue.push({ event: { type: "turn_started" } });
-    void this.upstream.prompt(input).then(
+    void this.promptUntilComplete(active, input).then(
       () => {
         if (!active.cancelled) {
           this.finish(active, { event: { type: "turn_completed" } });
@@ -492,6 +625,9 @@ class PiBioMedAgentSession implements BioMedAgentSession {
         active.cancelled = true;
         await this.upstream.abort();
         active.terminal = true;
+        if (active.deltaTimer !== undefined) clearTimeout(active.deltaTimer);
+        active.deltaTimer = undefined;
+        active.pendingDelta = undefined;
       }
       if (this.activeTurn === active) this.activeTurn = undefined;
     }

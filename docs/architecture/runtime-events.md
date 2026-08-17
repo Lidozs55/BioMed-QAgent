@@ -133,6 +133,29 @@ provider 并注入凭据；DashScope/Qwen 专属字段（`repetition_penalty`、
 VLM 客户端（`server/src/processing/vlm/vlm-client.ts`）使用注入的独立配置，不是
 Agent 模型，不参与对话轮次。
 
+#### 14.5.1 上下文压缩接线（Pi 原生自动压缩）
+
+迁移前 Python 运行时在每次 SDK 调用前做 token preflight 并触发自有压缩引擎；
+Phase 8 移除 Python 运行时后该逻辑不复存在，自动压缩一度缺失。当前接线把压缩
+整体委托给 Pi 原生能力（"能调用 Pi 的全调用 Pi"）：
+
+- `resolveActiveConfig` 把产品的 `compaction_trigger_ratio` /
+  `compaction_target_ratio` 快照进 `BioMedModelConfig`；`pi-adapter.ts` 将其换算为
+  Pi `CompactionSettings`：`reserveTokens = round(window × (1 - trigger))`、
+  `keepRecentTokens = round(window × target)`，并保持 `enabled=true`。Pi
+  `AgentSession` 内建的 threshold / overflow 自动压缩因此沿用产品阈值。
+- 手动 `POST /tasks/{task_id}/compact` 仍直接调用 Pi `session.compact()` 并自行
+  持久化 `conversation_compacted`。
+- Pi 的 `compaction_end`（成功且带摘要）经 adapter 投影为 BioMed 的
+  `context_compacted`，再由 `PiEventAdapter` 持久化为
+  `conversation_compacted`（`summary_digest` 为摘要的 sha256）；前端据此在时间线
+  记录压缩活动并复位 `compacting`。aborted 或缺失摘要的压缩完成事件不产生
+  durable 事件，避免伪记录。
+- 模型以 `stopReason=length` 截断时不能把 `session.prompt()` 的正常返回等同于任务
+  完成。Pi 边界在其自动压缩结束后发送不可见的 runtime continuation，沿用同一
+  Run、Session 与工具状态继续执行；只有后续 assistant 以非 `length` 原因结束，
+  adapter 才发出 `turn_completed` / durable `run_completed`。
+
 ### 14.6 Agent SDK 动态 instructions 契约
 
 Main Agent 使用动态 instructions，在每轮模型调用前把当前 Run 的上下文注入

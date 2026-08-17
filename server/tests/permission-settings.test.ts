@@ -186,7 +186,7 @@ describe("agent permission settings API (P6)", () => {
       body: JSON.stringify({
         capability: "fs.read",
         resource_scope: "sensitive",
-        path: "D:\\repo\\credentials.json",
+        path: path.join(ruleRoot, "credentials.json"),
         recursive: false,
         policy: "allow",
       }),

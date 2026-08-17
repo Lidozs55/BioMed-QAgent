@@ -59,6 +59,8 @@ export interface PubmedServiceDeps {
   email?: string;
   /** Test seam replacing the Unpaywall lookup (Python monkeypatch parity). */
   lookupPdf?: (doi: string) => Promise<string>;
+  maxDownloadBytes?: number;
+  downloadTimeoutMs?: number;
 }
 
 /**
@@ -187,6 +189,7 @@ export async function downloadSupplementaryAdapter(
       doi: doi || undefined,
       pmcid,
       signal,
+      timeoutMs: deps.downloadTimeoutMs,
       email: deps.email,
       lookupPdf: deps.lookupPdf,
       progress,
@@ -229,6 +232,8 @@ export interface PubmedToolDeps {
   config?: Partial<NcbiClientConfig>;
   email?: string;
   lookupPdf?: (doi: string) => Promise<string>;
+  maxDownloadBytes?: number;
+  downloadTimeoutMs?: number;
 }
 
 function searchPubmedTool(deps: PubmedServiceDeps): BioMedAgentTool {
@@ -305,7 +310,9 @@ function downloadSupplementaryTool(deps: PubmedServiceDeps): BioMedAgentTool {
       const record = argumentsValue as { pmid?: unknown; max_size_mb?: unknown };
       try {
         if (typeof record.pmid !== "string") throw new TypeError("pmid must be a string");
-        const maxSizeMb = record.max_size_mb === undefined ? 4096 : Number(record.max_size_mb);
+        const configuredMaxMb = (deps.maxDownloadBytes ?? 8 * 1024 * 1024 * 1024) / (1024 * 1024);
+        const requestedMaxMb = record.max_size_mb === undefined ? configuredMaxMb : Number(record.max_size_mb);
+        const maxSizeMb = Math.min(requestedMaxMb, configuredMaxMb);
         if (!Number.isFinite(maxSizeMb) || maxSizeMb <= 0) {
           throw new TypeError("max_size_mb must be a positive number");
         }
@@ -340,6 +347,8 @@ export function createPubmedTools(deps: PubmedToolDeps): BioMedAgentTool[] {
     hooks: deps.hooks,
     email: deps.email,
     lookupPdf: deps.lookupPdf,
+    maxDownloadBytes: deps.maxDownloadBytes,
+    downloadTimeoutMs: deps.downloadTimeoutMs,
   };
   return [searchPubmedTool(services), downloadSupplementaryTool(services)];
 }

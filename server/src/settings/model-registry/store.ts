@@ -7,6 +7,8 @@
  */
 import path from "node:path";
 
+import { DEFAULT_RUNTIME_LIMITS, RUNTIME_LIMIT_RANGES, type RuntimeLimits } from "@biomed/contracts";
+
 import type { JsonObject } from "../../http/validation.js";
 import { optionalRecord } from "../../http/validation.js";
 import { readJsonFile, writeJsonAtomic } from "../../persistence/atomic-json.js";
@@ -59,7 +61,8 @@ export interface SettingsRecord {
     enable_search: boolean;
     thinking_mode: boolean;
   };
-  runtime_limits: JsonObject;
+  runtime_limits: RuntimeLimits;
+  runtime_limits_version: 1;
 }
 
 export interface RegistryState {
@@ -111,6 +114,7 @@ export function defaultRegistry(environment: Record<string, string | undefined>)
       compaction_target_ratio: 0.6,
       advanced: { ...ADVANCED_DEFAULTS },
       runtime_limits: { ...RUNTIME_DEFAULTS },
+      runtime_limits_version: 1,
     },
     providers: [],
     models: [],
@@ -189,8 +193,34 @@ export async function loadRegistryState(
   settingsDir: string,
   environment: Record<string, string | undefined>,
 ): Promise<RegistryState> {
-  return await readJsonFile<RegistryState>(path.join(settingsDir, REGISTRY_FILE))
-    ?? defaultRegistry(environment);
+  const loaded = await readJsonFile<RegistryState>(path.join(settingsDir, REGISTRY_FILE));
+  if (loaded === null || loaded === undefined) return defaultRegistry(environment);
+  if (loaded.settings.runtime_limits_version !== 1) {
+    loaded.settings.runtime_limits = { ...DEFAULT_RUNTIME_LIMITS };
+    loaded.settings.runtime_limits_version = 1;
+  } else {
+    loaded.settings.runtime_limits = normalizeRuntimeLimits(loaded.settings.runtime_limits);
+  }
+  return loaded;
+}
+
+export function normalizeRuntimeLimits(value: unknown): RuntimeLimits {
+  const source = typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  const normalized = { ...DEFAULT_RUNTIME_LIMITS };
+  for (const key of Object.keys(RUNTIME_LIMIT_RANGES) as Array<keyof RuntimeLimits>) {
+    const candidate = source[key];
+    const range = RUNTIME_LIMIT_RANGES[key];
+    if (
+      Number.isSafeInteger(candidate) &&
+      (candidate as number) >= range.min &&
+      (candidate as number) <= range.max
+    ) {
+      normalized[key] = candidate as number;
+    }
+  }
+  return normalized;
 }
 
 export async function loadAuthState(

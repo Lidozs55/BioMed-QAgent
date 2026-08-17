@@ -16,7 +16,7 @@ import { CURATED_SOURCE_HOSTS } from "../acquisition/downloader.js";
 import type { AddressResolver } from "../network/dns.js";
 import { PublicHttpClient, type HttpClientResponse } from "../network/http-client.js";
 import { validateHttpsSourceUrl } from "../network/url-policy.js";
-import { describeError, timeoutSignal } from "../ncbi/retry.js";
+import { describeError } from "../ncbi/retry.js";
 
 const UNPAYWALL_BASE = "https://api.unpaywall.org/v2";
 //: 5-second quick failure per project_memory L1 hard constraint.
@@ -64,19 +64,19 @@ export async function lookupPdfUrl(doi: string, options: LookupPdfUrlOptions = {
   if (!cleanDoi) throw new UnpaywallError("empty DOI after normalization");
 
   const contactEmail = options.email ?? process.env["NCBI_EMAIL"] ?? "biomed-qagent@example.com";
-  const timeoutMs = options.timeoutMs ?? UNPAYWALL_TIMEOUT_MS;
   const client = options.client ?? new PublicHttpClient({ resolve: options.resolve });
+  const timeoutMs = options.timeoutMs ?? client.timeoutMs ?? UNPAYWALL_TIMEOUT_MS;
   const resolver = options.resolve ?? client.resolve;
   const url = new URL(`${UNPAYWALL_BASE}/${cleanDoi}`);
   url.searchParams.set("email", contactEmail);
 
-  const timer = timeoutSignal(timeoutMs);
   let response: HttpClientResponse;
   let body: Buffer;
   try {
     response = await client.request(url.toString(), {
-      signal: options.signal === undefined ? timer.signal : AbortSignal.any([options.signal, timer.signal]),
-      connectTimeoutMs: timeoutMs,
+      signal: options.signal,
+      timeoutMs,
+      connectTimeoutMs: Math.min(timeoutMs, 30_000),
       resolve: resolver,
       validateUrl: async (value) => {
         await validateHttpsSourceUrl(value, CURATED_SOURCE_HOSTS, {
@@ -88,8 +88,6 @@ export async function lookupPdfUrl(doi: string, options: LookupPdfUrlOptions = {
     body = await readBody(response);
   } catch (error) {
     throw new UnpaywallError(`Unpaywall network error: ${describeError(error)}`);
-  } finally {
-    timer.cancel();
   }
 
   if (response.status === 404) {

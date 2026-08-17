@@ -31,6 +31,7 @@ export interface CacheDatasetManifest {
 export interface LocalCacheToolDeps {
   db: DatabaseClient;
   hooks?: ToolHooks;
+  timeoutMs?: number;
 }
 
 export function createLocalCacheTools(deps: LocalCacheToolDeps): BioMedAgentTool[] {
@@ -64,7 +65,7 @@ export function createLocalCacheTools(deps: LocalCacheToolDeps): BioMedAgentTool
       hooks.onQueryStarted(query, "local_cache");
       let manifests: CacheDatasetManifest[];
       try {
-        manifests = await db.call<CacheDatasetManifest[]>("cache.search", { query, limit: maxResults });
+        manifests = await db.call<CacheDatasetManifest[]>("cache.search", { query, limit: maxResults }, deps.timeoutMs);
       } catch (error) {
         hooks.onQuery(query, "local_cache", "failed", 0);
         return {
@@ -120,7 +121,7 @@ export function createLocalCacheTools(deps: LocalCacheToolDeps): BioMedAgentTool
         manifest = await db.call<CacheDatasetManifest | null>("cache.describe", {
           source_namespace: sourceNamespace,
           dataset_id: datasetId,
-        });
+        }, deps.timeoutMs);
       } catch (error) {
         return { content: `本地缓存未初始化: ${error instanceof Error ? error.message : String(error)}` };
       }
@@ -181,7 +182,7 @@ export function createLocalCacheTools(deps: LocalCacheToolDeps): BioMedAgentTool
         result = await db.call("cache.get", {
           source_namespace: sourceNamespace,
           dataset_id: datasetId,
-        });
+        }, deps.timeoutMs);
       } catch (error) {
         return { content: `本地缓存未初始化: ${error instanceof Error ? error.message : String(error)}` };
       }

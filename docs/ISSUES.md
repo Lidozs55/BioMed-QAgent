@@ -2,18 +2,13 @@
 
 > 仅保留未解决项；已修复项的根因与修复说明见 git 历史（commit message 含根因）。
 > 标注"审查结论：暂缓"的条目为已评估、优先级极低或无需处理的项。
+>
+> **维护记录（2026-08-17）**：legacy Python Runtime（`backend/`）已于 Phase 8
+> 物理删除，指向 `app/runtime/*`、`app/pipeline/*`、`app/subagents/*`、
+> `app/agent_loop/*` 的条目一律失效，已关闭归档于文末「已关闭」小节。
+> 当前开放问题仅剩前端交互两项。
 
-### 设置界面 skill 管理不可用
-
-- [ ] 设置界面 skill 选项卡下无法正常调整 skill（用户 skill 引入、已引入 skill 的启停）。
-
-### 模型上下文窗口显示固定为 0
-
-- [ ] 所有模型的上下文窗口固定显示 0，失去参考价值。
-
-### 对话窗口滚动不稳定（待验证）
-
-- [ ] 模型进行思考工作时，如果窗口未跟随最新进度，可能跳转到最初对话条目。触发条件未查明。
+## 开放问题
 
 ### 按键响应异常（待验证）
 
@@ -22,6 +17,34 @@
 ### 工作区右上角按钮缺少 tooltip
 
 - [ ] 主界面工作区右上角三个 UI 按钮缺少 tooltip 说明。
+      **状态（2026-08-17）**：侧栏底部已简化（`fddf6911`，设置入口复用
+      Sidebar 菜单原语）；右上角按钮现状需复验，若仍缺 tooltip 则补。
+
+## 已关闭（历史留档）
+
+> 2026-08-17 全量文档维护时按代码现状逐一复核并关闭；关闭原因见各条。
+
+### 设置界面 skill 管理不可用
+
+- [x] 设置界面 skill 选项卡下无法正常调整 skill（用户 skill 引入、已引入 skill 的启停）。
+      **已关闭**：Phase 2 决策退役设置页「技能」分区与 Skill 运行时
+      （`SkillCatalog` / `find_skill` / `invoke_skill` / 用户 Python 包上传），
+      `.pi/skills` 为 curated 唯一来源；该 UI 面不再存在
+      （[migration/phase2-skills-tools-migration.md](migration/phase2-skills-tools-migration.md)）。
+
+### 模型上下文窗口显示固定为 0
+
+- [x] 所有模型的上下文窗口固定显示 0，失去参考价值。
+      **已关闭**：Phase 6 模型设置重构后，前端按模型导入的 `context_window`
+      展示（`frontend/src/components/settings/sections/ModelSettingsSection.tsx`），
+      不再固定为 0。
+
+### 对话窗口滚动不稳定（待验证）
+
+- [x] 模型进行思考工作时，如果窗口未跟随最新进度，可能跳转到最初对话条目。触发条件未查明。
+      **已修复（2026-08-17）**：聊天流稳定性工作（移除滚动锚点、增量合并、
+      replay 批量提交，`docs/archive/superpowers/plans/2026-08-17-chat-stream-stability.md`）
+      已消除跳转与重复渲染。
 
 ### Xena S3 hub 返回 HTTP 403
 
@@ -32,43 +55,44 @@
 
 ### DurableTaskSession `_replay_cache` 全量历史驻留 + 深拷贝放大
 
-- [ ] `app/runtime/session.py:182-204` — 每个 task 的 `DurableTaskSession` 持有 `_replay_cache`，缓存该 task 完整对话历史的内存副本。`get_items()` 每次调用 `copy.deepcopy` 全量历史，压缩 preflight 每轮触发一次。
-- **审查结论（2026-08-04）**：**暂缓**。`read_file` 256KB 守卫已从源头阻止 1.74 GB JSONL 写入，`session_items.jsonl` 典型大小回落到 5-50 MB/task。`_replay_cache` 是性能必要缓存（避免每轮重读 JSONL），不宜移除。`get_items` 的 `copy.deepcopy` 是防御性契约（允许调用方修改返回值不影响内部状态），移除需审计全部调用方——当前仅在压缩 preflight 路径调用，风险可控但收益有限（4 并发 × 50 MB × 2 ≈ 400 MB 峰值，非 16 GB 来源）。修复方向（低优先级）：`get_items` 增加只读模式参数跳过 deepcopy。
+- [x] `app/runtime/session.py:182-204` — 每个 task 的 `DurableTaskSession` 持有 `_replay_cache`，缓存该 task 完整对话历史的内存副本。`get_items()` 每次调用 `copy.deepcopy` 全量历史，压缩 preflight 每轮触发一次。
+      **已关闭（2026-08-17）**：`app/runtime/` 已随 Phase 8 物理删除；TS 侧
+      durable runtime 以 append-only `events.jsonl` + 纯 reducer 重建，无该形态的
+      `_replay_cache` 深拷贝问题。
 
 ### 压缩流程多次全量深拷贝
 
-- [ ] `app/runtime/compaction_execution.py:64-88` + `app/runtime/compaction_history.py:47-59,163-175` — 压缩 preflight 链路存在 5-6 处 `copy.deepcopy`。
-- **审查结论（2026-08-04）**：**暂缓**。深拷贝是防御性的（SDK 可能修改 item 引用），移除有破坏 SDK 契约的风险。单次 preflight 峰值 = 历史 × 3-4 倍深拷贝，但是瞬态（preflight 完成后 GC 回收），且 `read_file` 守卫后历史已受限。修复方向（低优先级）：压缩流程改为流式处理，仅在写出压缩后历史时做一次拷贝；需先验证 SDK 不修改 `get_items` 返回值。
+- [x] `app/runtime/compaction_execution.py:64-88` + `app/runtime/compaction_history.py:47-59,163-175` — 压缩 preflight 链路存在 5-6 处 `copy.deepcopy`。
+      **已关闭（2026-08-17）**：legacy Python 压缩链路已随 Phase 8 删除。
 
 ### TaskManager `_task_locks` 字典永不清理
 
-- [ ] `app/runtime/manager.py:718` — `_task_locks: dict[str, asyncio.Lock]` 每个 task ID 永久持有一个 `asyncio.Lock`，`setdefault` 创建后永不 `pop`。
-- **审查结论（2026-08-04）**：**暂缓**。每个 `asyncio.Lock` ≈ 128 字节，10,000 task ≈ 1.2 MB，可忽略。ISSUES.md 原文提到的 "`_running` 泄漏 `RunExecution` 50-500 MB" 是理论性的：`_finalize_run` 在 `_execute` 的 `finally` 中无条件执行（manager.py:1490-1491），`_running` 在 `retain_cancellation=False` 时必然 `pop`（manager.py:1755）。进程崩溃后 `_running` 是内存态、重启即空。修复方向（极低优先级）：task 进入终态后从 `_task_locks` 移除，但需确认无后续操作（如 `delete_task`）仍需该锁。
+- [x] `app/runtime/manager.py:718` — `_task_locks: dict[str, asyncio.Lock]` 每个 task ID 永久持有一个 `asyncio.Lock`，`setdefault` 创建后永不 `pop`。
+      **已关闭（2026-08-17）**：legacy Python TaskManager 已删除；TS 侧
+      TaskRepository 事件溯源，无该内存态锁表。
 
 ### RunContext 字段在 run 期间只追加不清理
 
-- [ ] `app/agent_loop/context.py:148-156,690-734` — `RunContext` 的 `sources`、`raw_assets`、`parsed_datasets`、`records`、`query_log` 列表在整个 run 生命周期内只追加不清理。
-- **审查结论（2026-08-04）**：**暂缓**。`RunContext` 生命周期 = 单次 run（`_prepare_execution` 创建，`_finalize_run` 后随 `RunExecution` 一起 GC）。单 run 内 `query_log` 每条 ≈ 100-200 字节，1,000 条 ≈ 100-200 KB，可忽略。`records` 取决于 `DataRecord` 内容，但同样随 run 结束而释放。修复方向（低优先级）：`query_log` 超过阈值时自动触发 `compress_log`，而非依赖 LLM 主动调用。
+- [x] `app/agent_loop/context.py:148-156,690-734` — `RunContext` 的 `sources`、`raw_assets`、`parsed_datasets`、`records`、`query_log` 列表在整个 run 生命周期内只追加不清理。
+      **已关闭（2026-08-17）**：legacy Python Agent loop 已删除。
 
 ### Pipeline `events` 列表在 run 期间无限增长
 
-- [ ] `app/pipeline/runner.py:232,1226-1234` — `PipelineRunner.events: list[EventEnvelope]` 在整个 run 期间只追加不清理。
-- **审查结论（2026-08-04）**：**暂缓**。`PipelineRunner` 生命周期 = 单次 pipeline run（`FixtureRunExecutor.__call__` 创建，结束后 GC）。`FixtureRunExecutor` 在 `streams_events=True`（正常路径，runner.py:1402）时跳过 `list(runner.events)` 遍历（runner.py:1409-1411），仅在 legacy 非 streaming 路径才二次遍历。单 run 数千事件 ≈ 1-10 MB 瞬态。修复方向（低优先级）：streaming 路径下 `_publish_event` 后不追加 `self.events`，仅在 legacy 路径保留。
+- [x] `app/pipeline/runner.py:232,1226-1234` — `PipelineRunner.events: list[EventEnvelope]` 在整个 run 期间只追加不清理。
+      **已关闭（2026-08-17）**：legacy Python Pipeline 已删除；TS Dataset Core
+      事件经 event sink 直写 durable 流，无进程内累积列表。
 
 ### SubagentSupervisor 异常退出时字典泄漏
 
-- [ ] `app/subagents/supervisor.py:115-127` — `_entries`、`_run_semaphores`、`_admissions`、`_owner_lifecycle_sinks` 字典在 `start_batch` 中 `setdefault` 创建，仅 `release_run` 清理。
-- **审查结论（2026-08-04）**：**暂缓**。清理路径已存在且被调用：`_terminate_owned_subagents`（manager.py:2032-2068）在 `_append_status` 和 `_append_completion_status` 中对 `RunCompleted/Failed/Cancelled/Interrupted` payload 无条件调用 `cancel_run` + `release_run`。`_finalize_run` 的 `finally` 保证 `_append_completion_status` 必然执行。泄漏仅在工作线程被强制取消且 `finally` 未跑完时发生——此时进程通常也在关闭（`shutdown` 会清理全部 entry）。修复方向（极低优先级）：在 `manager.close` 中增加 supervisor 兜底清理断言。
+- [x] `app/subagents/supervisor.py:115-127` — `_entries`、`_run_semaphores`、`_admissions`、`_owner_lifecycle_sinks` 字典在 `start_batch` 中 `setdefault` 创建，仅 `release_run` 清理。
+      **已关闭（2026-08-17）**：legacy Python subagents 已删除（Phase 8）。
 
 ### Processing 阶段 `_CLEANING_MAX_ROWS` 硬截断数据（治标）
 
-- [ ] `app/pipeline/stages/processing.py:41,59-62,165-170` — 数据清洗阶段对 CSV 行数硬截断。
-      **现状（2026-08-08）**：原 500,000 行上限经 REVIEW 2026-08-05 P0-1 提高到 `5_000_000`
-      （GSE183795 4,695,780 行不再被截断），超出部分仍 `logger.warning` 后 `break`，
-      不进入清洗产物——仍是硬截断治标，未改为流式/分批清洗。
-- **根因**：`_clean_csv` 使用 `csv.DictReader` 全量加载行到 `all_rows: list[dict]`，4.7M 行 × 每行 dict 开销 → 内存溢出 + 超时。500k 截断是紧急止血，不是正确解。
-- **影响**：Agent 对大型数据集的产物缺少后 4.2M 行数据，但不会报错——用户可能不知道数据被截断。
-- **修复方向**：改为流式清洗（`csv.reader` 逐行处理 + 流式写出），不累积 `all_rows` 列表；或在截断时向 `RunContext.warnings` 追加用户可见警告，让 Agent 知晓数据不完整。
+- [x] `app/pipeline/stages/processing.py:41,59-62,165-170` — 数据清洗阶段对 CSV 行数硬截断。
+      **已关闭（2026-08-17）**：legacy Python 清洗阶段已删除；TS canonicalizer /
+      integrator 已改为流式（生成器式 `delimitedRowsFromFileAsync` +
+      按 processed 行数协作式 checkpoint，见 TASK-047 状态），无全量载入截断形态。
 
 ### `search_geo` 对个别 GSE 记录 `n_samples=""` 崩溃
 
@@ -84,6 +108,7 @@
 
 ### 后端测试在 Windows 上的 3 个环境性失败（非本次改动引入）
 
-- [ ] `tests/test_config.py::test_output_dir_default_is_absolute` — 期望 `Settings.output_dir` 是绝对路径，但 Windows 下 `Path('data/output')` 相对路径断言为 False。
-- [ ] `tests/api/test_artifact_api.py::test_legacy_loaded_none_downloads_corrections_todo` / `test_legacy_normal_branch_lists_and_downloads_corrections_todo` — 断言失败，疑似 Windows 路径/编码差异。
-- **确认（2026-08-10，fix/geo-download-size-cap）**：在干净 `main`（stash 改动后）上复现同一 3 个失败，非本次改动回归；全量套件其余 2315 个测试通过。
+- [x] `tests/test_config.py::test_output_dir_default_is_absolute` — 期望 `Settings.output_dir` 是绝对路径，但 Windows 下 `Path('data/output')` 相对路径断言为 False。
+- [x] `tests/api/test_artifact_api.py::test_legacy_loaded_none_downloads_corrections_todo` / `test_legacy_normal_branch_lists_and_downloads_corrections_todo` — 断言失败，疑似 Windows 路径/编码差异。
+      **已关闭（2026-08-17）**：`backend/` 测试已随 Phase 8 物理删除，
+      `database/tests/` 在 Windows 全绿。

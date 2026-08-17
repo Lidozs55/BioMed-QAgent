@@ -8,17 +8,17 @@
 
 > ⚠️ 历史文档提示：本文为迁移执行蓝图。Phase 8（legacy Python Runtime 物理退役）
 > 已完成，正文中的“回滚 profile / FastAPI / Python Core”等描述属于迁移期历史状态，
-> **不再是当前启动说明**。当前唯一拓扑见 [README.md](../README.md) 与
-> [ARCHITECTURE.md](ARCHITECTURE.md)；Phase 8 执行细节见
-> [migration/phase8-python-runtime-retirement.md](migration/phase8-python-runtime-retirement.md) 与
-> [migration/PHASE8_FINAL_VERIFICATION.md](migration/PHASE8_FINAL_VERIFICATION.md)。
+> **不再是当前启动说明**。当前唯一拓扑见 [README.md](../../README.md) 与
+> [ARCHITECTURE.md](../ARCHITECTURE.md)；Phase 8 执行细节见
+> [phase8-python-runtime-retirement.md](phase8-python-runtime-retirement.md) 与
+> [PHASE8_FINAL_VERIFICATION.md](PHASE8_FINAL_VERIFICATION.md)。
 
 ---
 
 ## 0. 执行进度
 
 > 状态快照：2026-08-14（**Phase 0–8 全部完成**；M2 终审、Phase 7 默认切换与
-> Phase 8 物理退役完成）。本表随阶段推进更新；剩余条目与优先级见 [docs/TODO.md](TODO.md)。
+> Phase 8 物理退役完成）。本表随阶段推进更新；剩余条目与优先级见 [docs/TODO.md](../TODO.md)。
 
 | Phase | 内容 | 状态 |
 | --- | --- | --- |
@@ -33,22 +33,22 @@
 | 8 | 删除 Python Runtime（物理退役） | ✅ 完成（2026-08-14） |
 
 Phase 5 实施计划、验收清单与集成收口（M2）见
-[migration/phase5-external-capabilities-completion-plan.md](migration/phase5-external-capabilities-completion-plan.md)
-与 [migration/phase5-external-capabilities.md](migration/phase5-external-capabilities.md)；
+[phase5-external-capabilities-completion-plan.md](phase5-external-capabilities-completion-plan.md)
+与 [phase5-external-capabilities.md](phase5-external-capabilities.md)；
 `DATASET_CORE=ts` 在 M2 成为合法 opt-in profile；Phase 7 已将
 `ts/pi/ts/0` 切换为默认。
 
 Phase 0/1 执行细节与验收证据见
 [BioMed-QAgent_Pi_Migration_Phase0_1_Detailed.md](BioMed-QAgent_Pi_Migration_Phase0_1_Detailed.md)
-与 [migration/README.md](migration/README.md)；Phase 2 设计决策与验收映射见
-[migration/phase2-skills-tools-migration.md](migration/phase2-skills-tools-migration.md)；
+与 [README.md](README.md)；Phase 2 设计决策与验收映射见
+[phase2-skills-tools-migration.md](phase2-skills-tools-migration.md)；
 Phase 3 边界、激活方式与回滚见
-[migration/phase3-ts-application-runtime.md](migration/phase3-ts-application-runtime.md)；
+[phase3-ts-application-runtime.md](phase3-ts-application-runtime.md)；
 Phase 4 逐步实现与 parity 证据见 `.superpowers/phase4/T1-T10-report.md`
 （TS 代码在 `server/src/dataset/`，M2 已将其运行接线到 `DATASET_CORE=ts` profile）；
 Phase 5 能力矩阵与验收见 `docs/migration/phase5-external-capabilities*.md`；
 Phase 7 默认/回滚拓扑与证据见
-[migration/phase7-frontend-ts-host.md](migration/phase7-frontend-ts-host.md)。
+[phase7-frontend-ts-host.md](phase7-frontend-ts-host.md)。
 
 ---
 
@@ -1748,7 +1748,7 @@ Python FastAPI 仍可通过 feature flag 启动作为回滚路径，但默认关
 -异常恢复。
 
 验收映射与实现所有权见
-[Phase 7 切换报告](migration/phase7-frontend-ts-host.md)。
+[Phase 7 切换报告](phase7-frontend-ts-host.md)。
 
 ---
 

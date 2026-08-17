@@ -44,7 +44,7 @@ const gunzip = promisify(gunzipCb);
 import { CHECKPOINT_STRIDE, checkpoint, throwIfAborted } from "../../cooperative.js";
 import { AdapterError } from "../errors.js";
 import { sha256FileStream } from "../hashing.js";
-import { csvLine, delimitedRowsWithLinesAsync } from "../text.js";
+import { csvLine, delimitedRowsFromFileAsync } from "../text.js";
 import type { SourceAsset } from "../../contracts/source.js";
 
 /** Stable server-side mapping rule id (D3 ``mapping_rule_id``). */
@@ -165,6 +165,64 @@ function stripSoftField(value: string): string {
   return value.trim().replace(/^"+|"+$/g, "");
 }
 
+/** SOFT ``^PLATFORM`` mini-format fallback (no ``!platform_table_*`` markers). */
+function parseSoftPlatformTable(lines: string[]): SoftPlatformTable {
+  let platformIndex: number | null = null;
+  for (let index = 0; index < lines.length; index += 1) {
+    if (lines[index].trim().toLowerCase().startsWith("^platform")) {
+      platformIndex = index;
+      break;
+    }
+  }
+  if (platformIndex === null) {
+    return { probe_column: null, gene_column: null, rows: [], has_table: false };
+  }
+  let headerIndex: number | null = null;
+  for (let index = platformIndex + 1; index < lines.length; index += 1) {
+    const line = lines[index].trim();
+    if (line === "") continue;
+    if (line.startsWith("#") || line.startsWith("!")) continue;
+    headerIndex = index;
+    break;
+  }
+  if (headerIndex === null) {
+    return { probe_column: null, gene_column: null, rows: [], has_table: false };
+  }
+  const header = lines[headerIndex].split("\t").map(stripSoftField);
+  if (header.length === 0) {
+    return { probe_column: null, gene_column: null, rows: [], has_table: true };
+  }
+  let geneColumn: string | null = null;
+  for (const candidate of GENE_COLUMN_PRIORITY) {
+    if (header.includes(candidate)) {
+      geneColumn = candidate;
+      break;
+    }
+  }
+  const geneIndex = geneColumn !== null ? header.indexOf(geneColumn) : null;
+  const rows: Array<[string, string]> = [];
+  if (geneIndex !== null) {
+    for (let index = headerIndex + 1; index < lines.length; index += 1) {
+      const line = lines[index].trim();
+      if (line === "") continue;
+      if (line.startsWith("^") || line.startsWith("!")) break;
+      const values = lines[index].split("\t").map(stripSoftField);
+      if (values.length <= geneIndex) continue;
+      const probe = values[0];
+      const gene = values[geneIndex];
+      if (probe !== "" && !MISSING_SENTINELS.has(gene)) {
+        rows.push([probe, gene]);
+      }
+    }
+  }
+  return {
+    probe_column: header[0],
+    gene_column: geneColumn,
+    rows,
+    has_table: true,
+  };
+}
+
 /** Python ``parse_platform_table_text`` (geo_annotation.py shared parser). */
 export function parsePlatformTableText(text: string): SoftPlatformTable {
   const lines = text.split(/\r\n|\n|\r/);
@@ -180,7 +238,7 @@ export function parsePlatformTableText(text: string): SoftPlatformTable {
     }
   }
   if (begin === null || end === null || end <= begin + 1) {
-    return { probe_column: null, gene_column: null, rows: [], has_table: false };
+    return parseSoftPlatformTable(lines);
   }
   const header = lines[begin + 1].split("\t").map(stripSoftField);
   if (header.length === 0) {
@@ -291,14 +349,18 @@ export async function parsePlatformTable(
 
 /** Python ``_distinct_probes``: declared ``geo_probe`` rows of the batch. */
 async function distinctProbes(batchPath: string, signal?: AbortSignal | null): Promise<string[]> {
-  const text = await readFile(batchPath, "utf8");
-  const rows = await delimitedRowsWithLinesAsync(text, ",", signal);
-  const header = rows[0]?.values ?? [];
-  const namespaceIndex = header.indexOf("gene_id_namespace_declared");
-  const probeIndex = header.indexOf("gene_id_raw");
+  let header: string[] | null = null;
+  let namespaceIndex = -1;
+  let probeIndex = -1;
   const probes = new Set<string>();
   let visited = 0;
-  for (const { values } of rows.slice(1)) {
+  for await (const { values } of delimitedRowsFromFileAsync(batchPath, ",", signal)) {
+    if (header === null) {
+      header = values;
+      namespaceIndex = header.indexOf("gene_id_namespace_declared");
+      probeIndex = header.indexOf("gene_id_raw");
+      continue;
+    }
     const namespace = values[namespaceIndex] ?? "";
     if (namespace.trim() === "geo_probe") {
       const probe = (values[probeIndex] ?? "").trim();

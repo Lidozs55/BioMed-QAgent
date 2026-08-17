@@ -28,7 +28,6 @@
  */
 
 import { mkdirSync, statSync, unlinkSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
 import { basename, join, relative } from "node:path";
 
 import type { JsonValue } from "@biomed/contracts";
@@ -40,6 +39,7 @@ import type {
 } from "../../contracts/index.js";
 import { parseDataBatch } from "../../contracts/index.js";
 import {
+  BufferedCsvWriter,
   REJECTED_COLUMNS,
   SOURCE_LONG_COLUMNS,
   SourceAdapter,
@@ -50,7 +50,14 @@ import { CHECKPOINT_STRIDE, checkpoint, throwIfAborted } from "../../cooperative
 import { AdapterError, EmptySourceError } from "../errors.js";
 import { assetIdFromSha256, makeRecordId } from "../identity.js";
 import { sha256FileStream } from "../hashing.js";
-import { csvLine, delimitedRowsWithLines, delimitedRowsWithLinesAsync, parseDelimitedLine, readSourceTextAsync } from "../text.js";
+import {
+  delimitedRowsFromFileAsync,
+  delimitedRowsWithLines,
+  delimitedRowsWithLinesAsync,
+  parseDelimitedLine,
+  readSourceTextAsync,
+  type DelimitedRow,
+} from "../text.js";
 import {
   parseGeoSeriesMatrixSamples,
   parseGeoSoftSamples,
@@ -319,6 +326,19 @@ interface GeoExtractOutcome {
   warnings: string[];
   mappings: FieldMapping[];
   rejectedCount: number;
+  sampleMetadataText?: string;
+}
+
+type GeoRowSource = AsyncIterable<DelimitedRow>;
+
+async function* rowsFromText(
+  text: string,
+  delimiter: string,
+  signal?: AbortSignal | null,
+): GeoRowSource {
+  for (const row of await delimitedRowsWithLinesAsync(text, delimiter, signal)) {
+    yield row;
+  }
 }
 
 // ------------------------------------------------------------- tximport
@@ -330,59 +350,66 @@ async function extractTximport(
   context: GeoExtractContext,
   signal?: AbortSignal | null,
 ): Promise<GeoExtractOutcome> {
+  return extractTximportRows(rowsFromText(text, "\t", signal), longWriter, rejectedWriter, context, signal);
+}
+
+async function extractTximportRows(
+  rows: GeoRowSource,
+  longWriter: RowWriter,
+  rejectedWriter: RowWriter,
+  context: GeoExtractContext,
+  signal?: AbortSignal | null,
+): Promise<GeoExtractOutcome> {
   const { sourceAsset, buildId, bindingId, sourceName, parameters } = context;
-  const rows = await delimitedRowsWithLinesAsync(text, "\t", signal);
   let header: string[] | null = null;
-  let dataStart = 0;
-  for (const { values } of rows) {
-    dataStart += 1;
-    if (values.length === 0 || !values.some((value) => value !== "")) continue;
-    header = values;
-    break;
-  }
-  if (header === null) {
-    throw new EmptySourceError("tximport counts file contains no header");
-  }
-  const countFields = header
-    .map((name, index) => ({ index, name }))
-    .filter(({ name }) => name.startsWith("counts."))
-    .map(({ index, name }) => ({
-      index,
-      name,
-      alias: name.split(".", 2)[1],
-    }));
-  if (countFields.length === 0) {
-    throw new AdapterError(
-      "tximport counts file must contain counts.<sample> columns",
-    );
-  }
-  const samples = countFields.map(({ alias }) => alias);
-  if (
-    samples.some((sample) => sample === "") ||
-    new Set(samples).size !== samples.length
-  ) {
-    throw new AdapterError(
-      "tximport counts sample aliases must be non-blank and unique",
-    );
-  }
-  const mappings = wideMatrixMappings({
-    bindingId,
-    samples,
-    geneEvidence: "tximport counts gene column (first data column)",
-    sampleEvidence: "tximport counts.<sample> column header",
-  });
+  let samples: string[] = [];
+  let mappings: FieldMapping[] = [];
   const sampleColumns: Record<string, number> = {};
-  for (const { index, alias } of countFields) {
-    sampleColumns[alias] = index + 1;
-  }
   let sourceRowCount = 0;
   let rowCount = 0;
   let rejectedCount = 0;
   let visited = 0;
+  let dataStarted = false;
   const batchId = `batch_${bindingId}`;
   const declared = new Set<string>();
-  for (let rowIndex = dataStart; rowIndex < rows.length; rowIndex += 1) {
-    const { line, values } = rows[rowIndex];
+  for await (const { line, values } of rows) {
+    if (values.length === 0 || !values.some((value) => value !== "")) continue;
+    if (header === null) {
+      header = values;
+      const countFields = header
+        .map((name, index) => ({ index, name }))
+        .filter(({ name }) => name.startsWith("counts."))
+        .map(({ index, name }) => ({
+          index,
+          name,
+          alias: name.split(".", 2)[1],
+        }));
+      if (countFields.length === 0) {
+        throw new AdapterError(
+          "tximport counts file must contain counts.<sample> columns",
+        );
+      }
+      samples = countFields.map(({ alias }) => alias);
+      if (
+        samples.some((sample) => sample === "") ||
+        new Set(samples).size !== samples.length
+      ) {
+        throw new AdapterError(
+          "tximport counts sample aliases must be non-blank and unique",
+        );
+      }
+      mappings = wideMatrixMappings({
+        bindingId,
+        samples,
+        geneEvidence: "tximport counts gene column (first data column)",
+        sampleEvidence: "tximport counts.<sample> column header",
+      });
+      for (const { index, alias } of countFields) {
+        sampleColumns[alias] = index + 1;
+      }
+      continue;
+    }
+    dataStarted = true;
     if (values.length !== header.length + 1) {
       throw new AdapterError(`source line ${line} has an unexpected field count`);
     }
@@ -412,9 +439,8 @@ async function extractTximport(
     visited += 1;
     if (visited % CHECKPOINT_STRIDE === 0) await checkpoint(signal);
   }
-  if (sourceRowCount === 0) {
-    throw new EmptySourceError("tximport counts file contains no data rows");
-  }
+  if (header === null) throw new EmptySourceError("tximport counts file contains no header");
+  if (!dataStarted) throw new EmptySourceError("tximport counts file contains no data rows");
   return {
     statistics: geoStatistics({
       parameters,
@@ -439,8 +465,23 @@ async function extractSeriesMatrix(
   context: GeoExtractContext,
   signal?: AbortSignal | null,
 ): Promise<GeoExtractOutcome> {
+  return extractSeriesMatrixRows(
+    rowsFromText(text, "\t", signal),
+    longWriter,
+    rejectedWriter,
+    context,
+    signal,
+  );
+}
+
+async function extractSeriesMatrixRows(
+  rows: GeoRowSource,
+  longWriter: RowWriter,
+  rejectedWriter: RowWriter,
+  context: GeoExtractContext,
+  signal?: AbortSignal | null,
+): Promise<GeoExtractOutcome> {
   const { sourceAsset, buildId, bindingId, sourceName, parameters } = context;
-  const rows = await delimitedRowsWithLinesAsync(text, "\t", signal);
   let inBlock = false;
   let header: string[] | null = null;
   let samples: string[] = [];
@@ -451,9 +492,13 @@ async function extractSeriesMatrix(
   const batchId = `batch_${bindingId}`;
   const declared = new Set<string>();
   let samplePlatforms: string[] = [];
+  const metadataLines: string[] = [];
   let visited = 0;
-  for (const { line, values } of rows) {
+  for await (const { line, values } of rows) {
     if (!inBlock) {
+      if (values[0]?.startsWith("!Sample_")) {
+        metadataLines.push(values.join("\t"));
+      }
       if (values[0]?.startsWith("!Sample_platform_id")) {
         samplePlatforms = values.slice(1).map((value) => value.trim());
       }
@@ -578,6 +623,7 @@ async function extractSeriesMatrix(
     warnings: [],
     mappings,
     rejectedCount,
+    sampleMetadataText: metadataLines.join("\n"),
   };
 }
 
@@ -796,8 +842,8 @@ export class GeoExpressionAdapter extends SourceAdapter {
     const outputPath = join(batchDir, `${bindingId}.csv`);
     const rejectedPath = join(batchDir, `${bindingId}_rejected.csv`);
     const supportingPaths: string[] = [];
-    const longRows: string[][] = [];
-    const rejectedRows: string[][] = [];
+    const longWriter = new BufferedCsvWriter(outputPath, SOURCE_LONG_COLUMNS);
+    const rejectedWriter = new BufferedCsvWriter(rejectedPath, REJECTED_COLUMNS);
     try {
       if (parameters === null) {
         throw new AdapterError(
@@ -805,27 +851,58 @@ export class GeoExpressionAdapter extends SourceAdapter {
             "(format/value_semantics/value_scale/expression_unit)",
         );
       }
-      let text: string;
-      try {
-        text = await readSourceTextAsync(sourcePath, signal);
-      } catch (error) {
-        // A truncated gzip stream (or otherwise unreadable input) fails
-        // closed as an AdapterError; the base parse removes any partial
-        // batch files so the chain never consumes a truncated batch.
-        throw new AdapterError(
-          `could not read ${JSON.stringify(sourceName)}: truncated or ` +
-            `unreadable input: ${error instanceof Error ? error.message : String(error)}`,
+      let sourceText: string | null = null;
+      let sampleMetadataText: string | null = null;
+      let extraction: GeoExtractOutcome;
+      if (parameters.format === "supplementary_matrix") {
+        try {
+          sourceText = await readSourceTextAsync(sourcePath, signal);
+        } catch (error) {
+          if (error instanceof EmptySourceError) throw error;
+          throw new AdapterError(
+            `could not read ${JSON.stringify(sourceName)}: truncated or ` +
+              `unreadable input: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+        extraction = await extractGeoText(
+          sourceText,
+          longWriter,
+          rejectedWriter,
+          { sourceAsset, buildId, bindingId, sourceName, parameters },
+          signal,
         );
+      } else {
+        try {
+          const rows = delimitedRowsFromFileAsync(sourcePath, "\t", signal);
+          extraction = parameters.format === "series_matrix"
+            ? await extractSeriesMatrixRows(
+                rows,
+                longWriter,
+                rejectedWriter,
+                { sourceAsset, buildId, bindingId, sourceName, parameters },
+                signal,
+              )
+            : await extractTximportRows(
+                rows,
+                longWriter,
+                rejectedWriter,
+                { sourceAsset, buildId, bindingId, sourceName, parameters },
+                signal,
+              );
+          sampleMetadataText = extraction.sampleMetadataText ?? null;
+        } catch (error) {
+          if (error instanceof EmptySourceError) throw error;
+          throw new AdapterError(
+            `could not read ${JSON.stringify(sourceName)}: truncated or ` +
+              `unreadable input: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
       }
-      const { statistics, warnings, mappings, rejectedCount } = await extractGeoText(
-        text,
-        { writeRow: (values) => longRows.push([...values]) },
-        { writeRow: (values) => rejectedRows.push([...values]) },
-        { sourceAsset, buildId, bindingId, sourceName, parameters },
-        signal,
-      );
+      longWriter.close();
+      rejectedWriter.close();
+      const { statistics, warnings, mappings, rejectedCount } = extraction;
       const supporting = await this.writeSupportingAssets({
-        sourceText: text,
+        sourceText: sourceText ?? sampleMetadataText ?? "",
         metadataPath,
         outputDir,
         bindingId,
@@ -835,14 +912,6 @@ export class GeoExpressionAdapter extends SourceAdapter {
       });
       supportingPaths.push(...supporting.paths);
       warnings.push(...supporting.warnings);
-      const longContent =
-        csvLine([...SOURCE_LONG_COLUMNS]) +
-        longRows.map((row) => csvLine(row)).join("");
-      const rejectedContent =
-        csvLine([...REJECTED_COLUMNS]) +
-        rejectedRows.map((row) => csvLine(row)).join("");
-      await writeFile(outputPath, longContent, "utf8");
-      await writeFile(rejectedPath, rejectedContent, "utf8");
       const checksum = await sha256FileStream(outputPath, signal);
       const rowCount =
         typeof statistics.row_count === "number" ? statistics.row_count : 0;
@@ -880,6 +949,8 @@ export class GeoExpressionAdapter extends SourceAdapter {
         declared_mappings: mappings,
       });
     } catch (error) {
+      longWriter.close();
+      rejectedWriter.close();
       for (const pathToUnlink of [outputPath, rejectedPath, ...supportingPaths]) {
         try {
           unlinkSync(pathToUnlink);

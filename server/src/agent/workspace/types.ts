@@ -35,6 +35,7 @@ export interface WorkspaceLimits {
   maxSearchOutputChars: number;
   maxWriteBytes: number;
   maxExecOutputBytes: number;
+  defaultExecTimeoutMs: number;
   maxExecTimeoutMs: number;
 }
 
@@ -93,5 +94,5 @@ export interface WorkspaceExecResult {
   truncated: boolean;
   timedOut: boolean;
   cancelled: boolean;
-  policy: "allowed" | "disabled" | "rejected";
+  policy: "allowed" | "rejected";
 }

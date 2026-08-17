@@ -25,7 +25,7 @@ import type {
 import { parseManifestArtifactEntry } from "../contracts/index.js";
 import { CHECKPOINT_STRIDE, checkpoint, throwIfAborted } from "../cooperative.js";
 import { sha256FileStream } from "../adapters/hashing.js";
-import { delimitedRowsWithLinesAsync, readSourceTextAsync } from "../adapters/text.js";
+import { delimitedRowsFromFileAsync } from "../adapters/text.js";
 import { pyFloat, pythonJsonDumps } from "../runtime/digests.js";
 import type { CanonicalizationResult } from "../canonicalizer/index.js";
 import type { IntegrationResult } from "../integrator/index.js";
@@ -218,10 +218,26 @@ function rel(outputDir: string, path: string): string {
   return asPosix(relative(outputDir, path));
 }
 
+function dictRecord(header: readonly string[], values: readonly string[]): Record<string, string> {
+  const record: Record<string, string> = {};
+  for (let index = 0; index < header.length; index += 1) {
+    record[header[index]] = values[index] ?? "";
+  }
+  return record;
+}
+
 /** First *limit* primary rows as provenance backtraces (Python mirror). */
 async function sampleBacktraces(primaryPath: string, signal?: AbortSignal | null, limit = 5): Promise<Array<Record<string, unknown>>> {
   const backtraces: Array<Record<string, unknown>> = [];
-  for (const row of await readCsvDictRows(primaryPath, signal)) {
+  let header: string[] = [];
+  let headerSeen = false;
+  for await (const { values } of delimitedRowsFromFileAsync(primaryPath, ",", signal)) {
+    if (!headerSeen) {
+      headerSeen = true;
+      header = values;
+      continue;
+    }
+    const row = dictRecord(header, values);
     backtraces.push({
       record_id: row["record_id"] ?? "",
       gene_id: row["gene_id"] ?? "",
@@ -253,13 +269,24 @@ export async function computeProvenanceCoverage(
 ): Promise<{ traced_rows: number; untraced_rows: number; coverage_ratio: ReturnType<typeof pyFloat> }> {
   let traced = 0;
   let untraced = 0;
-  for (const row of await readCsvDictRows(primaryPath, signal)) {
+  let visited = 0;
+  let header: string[] = [];
+  let headerSeen = false;
+  for await (const { values } of delimitedRowsFromFileAsync(primaryPath, ",", signal)) {
+    if (!headerSeen) {
+      headerSeen = true;
+      header = values;
+      continue;
+    }
+    const row = dictRecord(header, values);
     const assetId = (row["asset_id"] ?? "").trim();
     if (assetId.length > 0 && sourceAssetIds.has(assetId)) {
       traced += 1;
     } else {
       untraced += 1;
     }
+    visited += 1;
+    if (visited % CHECKPOINT_STRIDE === 0) await checkpoint(signal);
   }
   const total = traced + untraced;
   const ratio = total > 0 ? traced / total : 0;
@@ -276,7 +303,15 @@ export async function buildConfidenceSummary(outputDir: string, signal?: AbortSi
   const reportPath = joinOutput(outputDir, "confidence_report.csv");
   let anomalyCount = 0;
   if (existsSync(reportPath)) {
-    for (const row of await readCsvDictRows(reportPath, signal)) {
+    let header: string[] = [];
+    let headerSeen = false;
+    for await (const { values } of delimitedRowsFromFileAsync(reportPath, ",", signal)) {
+      if (!headerSeen) {
+        headerSeen = true;
+        header = values;
+        continue;
+      }
+      const row = dictRecord(header, values);
       if ((row["anomaly"] ?? "").trim().toLowerCase() === "true") {
         anomalyCount += 1;
       }
@@ -450,26 +485,6 @@ function joinOutput(outputDir: string, name: string): string {
 
 function asPosix(path: string): string {
   return path.replace(/\\/g, "/");
-}
-
-/** Python csv.DictReader: header row + per-row field dicts. */
-async function readCsvDictRows(path: string, signal?: AbortSignal | null): Promise<Array<Record<string, string>>> {
-  if (!existsSync(path)) return [];
-  const rows = await delimitedRowsWithLinesAsync(await readSourceTextAsync(path, signal), ",", signal);
-  if (rows.length === 0) return [];
-  const header = rows[0].values;
-  const records: Array<Record<string, string>> = [];
-  let visited = 0;
-  for (const row of rows.slice(1)) {
-    const record: Record<string, string> = {};
-    for (let index = 0; index < header.length; index += 1) {
-      record[header[index]] = row.values[index] ?? "";
-    }
-    records.push(record);
-    visited += 1;
-    if (visited % CHECKPOINT_STRIDE === 0) await checkpoint(signal);
-  }
-  return records;
 }
 
 export type { DatasetManifest, ManifestArtifactEntry };

@@ -15,6 +15,7 @@ import { GeneralSettingsSection } from "@/components/settings/sections/GeneralSe
 import { ModelSettingsSection } from "@/components/settings/sections/ModelSettingsSection";
 import { PersonalizationSettingsSection } from "@/components/settings/sections/PersonalizationSettingsSection";
 import { AgentPermissionSettingsSection } from "@/components/settings/sections/AgentPermissionSettingsSection";
+import { RuntimeLimitsSettingsSection } from "@/components/settings/sections/RuntimeLimitsSettingsSection";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -70,6 +71,7 @@ const SECTION_DESCRIPTIONS: Record<string, string> = {
   general: "管理本地数据与查看版本信息。",
   personalization: "配置适用于所有任务的额外指令与默认回复语气。",
   permissions: "控制 Agent 对工作区外资源的访问与命令执行权限。",
+  "runtime-limits": "调整命令、网络、下载和数据构建的运行预算。",
 };
 
 function errorText(error: unknown): string {
@@ -354,6 +356,13 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
                   )}
                   {activeSection === "permissions" && (
                     <AgentPermissionSettingsSection api={api} />
+                  )}
+                  {activeSection === "runtime-limits" && (
+                    <RuntimeLimitsSettingsSection
+                      api={api}
+                      settings={settings}
+                      onUpdated={setSettings}
+                    />
                   )}
                 </>
               )}

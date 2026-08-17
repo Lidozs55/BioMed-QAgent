@@ -8,11 +8,11 @@
  * (no current source emits them).
  */
 
-import { readFileSync } from "node:fs";
-import { readFile } from "node:fs/promises";
-import { gunzipSync } from "node:zlib";
+import { createReadStream, readFileSync } from "node:fs";
+import { open as openFile, readFile } from "node:fs/promises";
+import { createGunzip, gunzip as gunzipCb, gunzipSync } from "node:zlib";
 import { promisify } from "node:util";
-import { gunzip as gunzipCb } from "node:zlib";
+import { StringDecoder } from "node:string_decoder";
 import { throwIfAborted } from "../cooperative.js";
 
 const gunzip = promisify(gunzipCb);
@@ -20,6 +20,81 @@ const gunzip = promisify(gunzipCb);
 export interface DelimitedRow {
   line: number;
   values: string[];
+}
+
+async function hasGzipMagic(path: string): Promise<boolean> {
+  const handle = await openFile(path, "r");
+  try {
+    const header = Buffer.alloc(2);
+    const { bytesRead } = await handle.read(header, 0, header.length, 0);
+    return bytesRead === 2 && header[0] === 0x1f && header[1] === 0x8b;
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * Stream a delimited source file without materializing its decompressed text
+ * or all parsed rows.  This is the large-file path used by GEO adapters;
+ * small-fixture callers can continue using the array helpers below.
+ */
+export async function* delimitedRowsFromFileAsync(
+  path: string,
+  delimiter: string,
+  signal?: AbortSignal | null,
+): AsyncGenerator<DelimitedRow> {
+  throwIfAborted(signal);
+  const source = createReadStream(path);
+  const gzip = await hasGzipMagic(path);
+  const input = gzip ? source.pipe(createGunzip()) : source;
+  const decoder = new StringDecoder("utf8");
+  let pending = "";
+  let line = 0;
+  let completed = false;
+  try {
+    for await (const chunk of input) {
+      throwIfAborted(signal);
+      pending += decoder.write(chunk as Buffer);
+      while (true) {
+        let breakIndex = -1;
+        let breakLength = 1;
+        for (let index = 0; index < pending.length; index += 1) {
+          const code = pending.charCodeAt(index);
+          if (code === 10) {
+            breakIndex = index;
+            breakLength = 1;
+            break;
+          }
+          if (code === 13) {
+            if (index + 1 >= pending.length) break;
+            breakIndex = index;
+            breakLength = pending.charCodeAt(index + 1) === 10 ? 2 : 1;
+            break;
+          }
+        }
+        if (breakIndex < 0) break;
+        const text = pending.slice(0, breakIndex);
+        pending = pending.slice(breakIndex + breakLength);
+        line += 1;
+        yield { line, values: parseDelimitedLine(text, delimiter) };
+        if (line % 8192 === 0) {
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          throwIfAborted(signal);
+        }
+      }
+    }
+    pending += decoder.end();
+    if (pending.length > 0) {
+      line += 1;
+      yield { line, values: parseDelimitedLine(pending, delimiter) };
+    }
+    completed = true;
+  } finally {
+    if (!completed) {
+      source.destroy();
+      if (input !== source) input.destroy();
+    }
+  }
 }
 
 /** Python ``open_text``: transparent gzip decompression, utf-8 decode. */

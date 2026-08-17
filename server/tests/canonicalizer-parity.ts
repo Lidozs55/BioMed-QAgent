@@ -872,8 +872,8 @@ export async function checkCanonicalizerFixtureParity(options: {
   checkDeepEqual(
     issues,
     probeResult.namespaces,
-    ["gene_symbol", "geo_probe"],
-    "probe schema namespaces",
+    ["geo_probe"],
+    "probe schema namespaces (D5 #2 all rows keep geo_probe)",
   );
   check(
     issues,
@@ -882,7 +882,7 @@ export async function checkCanonicalizerFixtureParity(options: {
   );
   const probeTable = readCsvTable(probeResult.canonicalPath);
   const probeByRaw = new Map(probeTable.rows.map((row) => [row.probe_id, row]));
-  check(issues, probeByRaw.get("AFFX-BioB-5")?.gene_id_namespace === "gene_symbol", "mapped probe namespace");
+  check(issues, probeByRaw.get("AFFX-BioB-5")?.gene_id_namespace === "geo_probe", "mapped probe keeps geo_probe");
   check(issues, probeByRaw.get("1007_s_at")?.gene_id_namespace === "geo_probe", "unmapped probe namespace");
   check(
     issues,

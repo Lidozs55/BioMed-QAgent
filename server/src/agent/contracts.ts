@@ -41,7 +41,8 @@ export type BioMedAgentEvent =
       isError: boolean;
     }
   | { type: "turn_completed" }
-  | { type: "turn_cancelled"; reason?: string };
+  | { type: "turn_cancelled"; reason?: string }
+  | { type: "context_compacted"; summary: string };
 
 export interface BioMedToolResult {
   content: string;
@@ -72,6 +73,10 @@ export interface BioMedModelConfig {
   baseUrl?: string;
   contextWindow?: number;
   maxTokens?: number;
+  /** Auto-compaction trigger ratio of the context window (settings-derived). */
+  compactionTriggerRatio?: number;
+  /** Auto-compaction target ratio of the context window (settings-derived). */
+  compactionTargetRatio?: number;
   temperature?: number;
   topP?: number;
   repetitionPenalty?: number;

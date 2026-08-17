@@ -21,6 +21,8 @@ export interface PdbToolDeps extends ToolServiceDeps {
   client?: PublicHttpClient;
   /** Request pacing override for tests; default 2000ms. */
   rateLimitMs?: number;
+  maxDownloadBytes?: number;
+  downloadTimeoutMs?: number;
 }
 
 export const SEARCH_PDB_TOOL_NAME = "search_pdb";
@@ -159,6 +161,8 @@ export function createPdbTools(deps: PdbToolDeps): BioMedAgentTool[] {
           client,
           signal,
           rateLimitMs: deps.rateLimitMs,
+          maxDownloadBytes: deps.maxDownloadBytes,
+          timeoutMs: deps.downloadTimeoutMs,
           onQueryStarted: hooks.onQueryStarted,
           onQuery: hooks.onQuery,
         });

@@ -88,23 +88,6 @@ async function resolveOnPath(executable: string): Promise<string | null> {
   return null;
 }
 
-function disabledResult(command: string[]): WorkspaceExecResult {
-  return {
-    command,
-    exitCode: null,
-    stdout: "",
-    stderr:
-      "exec is disabled in this environment (development exec is not enabled). " +
-      "Do not rely on running commands; use workspace_read / workspace_search / " +
-      "workspace_write / workspace_edit instead.",
-    durationMs: 0,
-    truncated: false,
-    timedOut: false,
-    cancelled: false,
-    policy: "disabled",
-  };
-}
-
 /**
  * Build the display/audit form of a command (round-3/round-4 audit): the
  * executable keeps its FULL path so the approval card shows exactly WHICH
@@ -211,9 +194,9 @@ function validateCommand(input: {
   }
   if (
     !Array.isArray(input.args) ||
-    input.args.length > 100 ||
+    input.args.length > 1_000 ||
     input.args.some(
-      (argument) => typeof argument !== "string" || argument.length > 4_096 || argument.includes("\0"),
+      (argument) => typeof argument !== "string" || argument.length > 65_536 || argument.includes("\0"),
     )
   ) {
     return "Executable arguments are invalid";
@@ -283,27 +266,6 @@ async function killProcessTree(pid: number): Promise<void> {
   }
 }
 
-function redactOutput(context: WorkspaceContext, value: string): string {
-  let redacted = value;
-  for (const root of new Set([context.workspaceRoot, context.canonicalWorkspaceRoot])) {
-    if (process.platform === "win32") {
-      const representations = [root, JSON.stringify(root).slice(1, -1)];
-      for (const representation of representations) {
-        let index = redacted.toLowerCase().indexOf(representation.toLowerCase());
-        while (index !== -1) {
-          redacted = `${redacted.slice(0, index)}[workspace]${redacted.slice(index + representation.length)}`;
-          index = redacted
-            .toLowerCase()
-            .indexOf(representation.toLowerCase(), index + "[workspace]".length);
-        }
-      }
-    } else {
-      redacted = redacted.replaceAll(root, "[workspace]");
-    }
-  }
-  return redacted;
-}
-
 export async function executeWorkspaceCommand(
   context: WorkspaceContext,
   input: { executable: string; args: string[]; timeoutMs?: number },
@@ -311,10 +273,6 @@ export async function executeWorkspaceCommand(
   registry: WorkspaceProcessRegistry,
 ): Promise<WorkspaceExecResult> {
   const command = await sanitizedCommand(input.executable, input.args, context.workspaceRoot);
-  // Environment-level exec switch (HIL branch): when development exec is not
-  // enabled, the command is hard-disabled BEFORE the permission system is
-  // consulted — no ask, no grant path.
-  if (context.developmentExec?.enabled !== true) return disabledResult(command);
   const invalid = validateCommand(input, context);
   if (invalid !== undefined) return rejectedResult(command, invalid);
   // process.exec is an independent high-risk capability (plan §25–§27): the
@@ -378,7 +336,7 @@ export async function executeWorkspaceCommand(
   const timeout = setTimeout(() => {
     timedOut = true;
     void terminate();
-  }, input.timeoutMs ?? context.limits.maxExecTimeoutMs);
+  }, input.timeoutMs ?? context.limits.defaultExecTimeoutMs);
   const onAbort = (): void => {
     cancelled = true;
     void terminate();
@@ -397,8 +355,8 @@ export async function executeWorkspaceCommand(
     return {
       command,
       exitCode,
-      stdout: redactOutput(context, Buffer.concat(stdout).toString("utf8")),
-      stderr: redactOutput(context, Buffer.concat(stderr).toString("utf8")),
+      stdout: Buffer.concat(stdout).toString("utf8"),
+      stderr: Buffer.concat(stderr).toString("utf8"),
       durationMs: Math.max(0, Math.round(performance.now() - started)),
       truncated,
       timedOut,

@@ -4,11 +4,17 @@ import type {
   DatasetBuildSpec,
 } from "@biomed/contracts";
 
+import { saveBuildContinuation } from "../../runtime/build-continuation.js";
+import {
+  createDefaultDatasetFamilyRegistry,
+  type DatasetFamilyDefinition,
+} from "../../dataset/families/index.js";
 import type {
   BioMedAgentTool,
   BioMedToolExecutionContext,
   BioMedToolResult,
 } from "../contracts.js";
+import { parseDatasetBuildSpec } from "../../dataset/contracts/index.js";
 import type { DatasetCoreService } from "../../dataset/service/dataset-core.js";
 
 const MAX_ID = 128;
@@ -29,6 +35,10 @@ export interface DatasetBuildToolDiagnostic {
 export interface DatasetBuildToolOptions {
   client: Pick<DatasetCoreService, "validate" | "execute">;
   taskId: string;
+  /** Task root on disk; the tool persists its invocation here so a
+   * cross-restart resume can replay the exact same build deterministically
+   * (no model reinterpretation of a synthetic prompt). */
+  taskRoot: string;
   runId: () => string;
   piSessionId: () => string;
   onDiagnostic?: (diagnostic: DatasetBuildToolDiagnostic) => void;
@@ -44,7 +54,7 @@ function object(value: unknown): Record<string, unknown> {
 }
 
 function specArgument(value: Record<string, unknown>): DatasetBuildSpec {
-  return object(value.spec) as unknown as DatasetBuildSpec;
+  return parseDatasetBuildSpec(value.spec);
 }
 
 function mappingArgument(
@@ -147,12 +157,144 @@ function captureSpecRejected(
   });
 }
 
+function datasetFamilySpecSchema(definition: DatasetFamilyDefinition): object {
+  const stringArray = {
+    type: "array",
+    items: { type: "string" },
+  } as const;
+  const stringArrayRecord = {
+    type: "object",
+    additionalProperties: stringArray,
+  } as const;
+  const nullableString = {
+    anyOf: [{ type: "string" }, { type: "null" }],
+  } as const;
+  const acquisition = {
+    type: "object",
+    description:
+      "How the immutable SourceAsset was acquired. For built-in downloads use mode=builtin and provider_id=<source>.files.v1; omit recipe fields.",
+    properties: {
+      schema_version: { type: "string", enum: ["1.0"] },
+      mode: { type: "string", enum: ["builtin", "workflow_recipe"] },
+      provider_id: {
+        ...nullableString,
+        description: "Required for builtin mode, for example geo.files.v1.",
+      },
+      recipe_id: {
+        ...nullableString,
+        description: "Required only for workflow_recipe mode.",
+      },
+      recipe_version: {
+        anyOf: [{ type: "integer", minimum: 1 }, { type: "null" }],
+        description: "Required only for workflow_recipe mode.",
+      },
+    },
+    required: ["mode"],
+    additionalProperties: false,
+  } as const;
+  const schemaVariants = definition.schemas.map((schema) => {
+    const granularity = definition.granularities.find(
+      (candidate) => candidate.id === schema.row_granularity,
+    )!;
+    const sourceBinding = {
+      oneOf: definition.sources
+        .filter((source) => source.schema_refs.includes(schema.schema_id))
+        .map((source) => ({
+          type: "object",
+          properties: {
+            schema_version: { type: "string", enum: ["1.0"] },
+            binding_id: {
+              type: "string",
+              pattern: "^[A-Za-z0-9_-]{1,128}$",
+              description: "Stable ID also used as the key in source_files and mapping_files.",
+            },
+            source: { type: "string", enum: [source.source] },
+            acquisition,
+            adapter_id: { type: "string", enum: [source.adapter_id] },
+            accession: nullableString,
+            parameters: source.parameter_schema,
+          },
+          required: [
+            "binding_id",
+            "source",
+            "acquisition",
+            "adapter_id",
+            ...(source.parameters_required ? ["parameters"] : []),
+          ],
+          additionalProperties: false,
+        })),
+    } as const;
+    return {
+      type: "object",
+      description:
+        "Complete frozen DatasetBuildSpec. Execute mappings use the same binding_id keys.",
+      properties: {
+        schema_version: { type: "string", enum: ["1.0"] },
+        build_id: { type: "string", pattern: "^[A-Za-z0-9_-]{1,128}$" },
+        objective: { type: "string", minLength: 1 },
+        dataset_family: { type: "string", enum: [definition.id] },
+        row_granularity: { type: "string", enum: [schema.row_granularity] },
+        entities: stringArrayRecord,
+        cohort_filters: stringArrayRecord,
+        required_fields: stringArray,
+        schema_ref: { type: "string", enum: [schema.schema_id] },
+        source_bindings: { type: "array", minItems: 1, items: sourceBinding },
+        normalization_profile_ref: {
+          anyOf: [
+            { type: "string", enum: [...definition.normalization_profile_refs] },
+            { type: "null" },
+          ],
+        },
+        merge_strategy: { type: "string", enum: [...definition.merge_strategies] },
+        validation_profile_ref: {
+          type: "string",
+          enum: [...definition.validation_profiles_by_schema[schema.schema_id]!],
+        },
+        output_format: { type: "string", enum: [...definition.output_formats] },
+        target_entity_level: {
+          anyOf: [
+            ...(granularity.target_entity_level === null
+              ? []
+              : [{ type: "string", enum: [granularity.target_entity_level] }]),
+            { type: "null" },
+          ],
+        },
+      },
+      required: [
+        "build_id",
+        "objective",
+        "dataset_family",
+        "row_granularity",
+        "schema_ref",
+        "source_bindings",
+        "validation_profile_ref",
+      ],
+      additionalProperties: false,
+    } as const;
+  });
+  return schemaVariants.length === 1
+    ? schemaVariants[0]!
+    : { oneOf: schemaVariants };
+}
+
+function datasetBuildSpecSchema(): object {
+  const definitions = createDefaultDatasetFamilyRegistry().definitionsList();
+  if (definitions.length === 1) {
+    return datasetFamilySpecSchema(definitions[0]!);
+  }
+  return {
+    oneOf: definitions.map((definition) => datasetFamilySpecSchema(definition)),
+  };
+}
+
 export function createDatasetBuildTools(
   options: DatasetBuildToolOptions,
 ): BioMedAgentTool[] {
-  const specSchema = { type: "object", additionalProperties: true } as const;
+  const specSchema = datasetBuildSpecSchema();
   const mappingSchema = {
     type: "object",
+    description:
+      "Map each spec binding_id to the corresponding downloaded asset.relative_path under this task output.",
     additionalProperties: { type: "string", minLength: 1 },
   } as const;
   return [
@@ -234,13 +376,38 @@ export function createDatasetBuildTools(
             return resultFor(validation);
           }
           options.onBuildResult?.(null);
+          const sourceFiles = mappingArgument(args, "source_files");
+          const mappingFiles = mappingArgument(args, "mapping_files");
+          const metadataFiles = args.metadata_files === undefined
+            ? {}
+            : mappingArgument(args, "metadata_files");
+          // The continuation record is the deterministic resume contract:
+          // a later restart replays the exact same invocation (same spec and
+          // asset references) onto the original run without asking the model.
+          try {
+            await saveBuildContinuation(options.taskRoot, {
+              schema_version: 1,
+              build_id: buildId,
+              task_id: options.taskId,
+              run_id: options.runId(),
+              pi_session_id: options.piSessionId(),
+              tool_call_id: context?.toolCallId ?? "unknown",
+              spec,
+              source_files: sourceFiles,
+              mapping_files: mappingFiles,
+              metadata_files: metadataFiles,
+              created_at: new Date().toISOString(),
+            });
+          } catch (error) {
+            // Persistence must not break the build itself; a missing record
+            // only degrades cross-restart continuation to the legacy path.
+            console.warn("tool.continuation_persist_failed", error);
+          }
           response = await options.client.execute({
             ...identity,
-            sourceFiles: mappingArgument(args, "source_files"),
-            mappingFiles: mappingArgument(args, "mapping_files"),
-            metadataFiles: args.metadata_files === undefined
-              ? {}
-              : mappingArgument(args, "metadata_files"),
+            sourceFiles,
+            mappingFiles,
+            metadataFiles,
           });
           captureBuildResult(options, response);
           diagnostic(

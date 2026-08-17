@@ -117,6 +117,8 @@ export interface BrowserToolsOptions {
   client: PublicHttpClient;
   crawler: CrawlerFacade;
   hooks?: ToolHooks;
+  maxDownloadBytes?: number;
+  downloadTimeoutMs?: number;
 }
 
 export const NAVIGATE_PAGE_TOOL_NAME = "navigate_page";
@@ -228,8 +230,10 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
         const response = await options.client.request(url, {
           headers: { ...BROWSER_HEADERS },
           signal,
+          timeoutMs: options.downloadTimeoutMs,
         });
         if (response.status < 200 || response.status >= 300) {
+          await response.discard();
           hooks.onQuery(filename, SOURCE, "failed", 0);
           return {
             content: JSON.stringify({
@@ -257,8 +261,9 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
               throw signal.reason instanceof Error ? signal.reason : new Error("aborted");
             }
             bytesReceived += chunk.length;
-            if (bytesReceived > MAX_CRAWLER_DOWNLOAD_BYTES) {
-              throw new Error(`browser download exceeded ${MAX_CRAWLER_DOWNLOAD_BYTES} byte limit`);
+            const maxDownloadBytes = options.maxDownloadBytes ?? MAX_CRAWLER_DOWNLOAD_BYTES;
+            if (bytesReceived > maxDownloadBytes) {
+              throw new Error(`browser download exceeded ${maxDownloadBytes} byte limit`);
             }
             hash.update(chunk);
             await new Promise<void>((resolveWrite, rejectWrite) => {

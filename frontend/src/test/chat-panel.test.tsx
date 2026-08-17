@@ -541,6 +541,46 @@ describe("ChatPanel", () => {
     );
   });
 
+  it("renders pending permission inline inside MessageScroller without a modal", () => {
+    seedBackgroundTask();
+    useAgentStore.getState().setActiveTaskId("task_background");
+    useAgentStore.setState((state) => ({
+      ...state,
+      tasksById: {
+        ...state.tasksById,
+        task_background: {
+          ...state.tasksById.task_background,
+          pendingPermission: {
+            runId: "run_background",
+            requestId: "permission_inline",
+            capability: "fs.read",
+            scope: "external",
+            resource: "D:\\datasets\\study.csv",
+            canonicalResource: "D:\\datasets\\study.csv",
+            command: null,
+            cwd: null,
+            summary: "读取外部数据",
+            sequence: 3,
+            timestamp: CREATED_AT,
+          },
+        },
+      },
+    }));
+
+    const { container } = render(
+      <ChatPanel startTask={vi.fn()} resolvePermission={vi.fn()} />,
+    );
+    const questionnaire = screen.getByRole("form", { name: "Agent 权限请求" });
+    const messageScroller = container.querySelector('[data-slot="message-scroller"]');
+
+    expect(messageScroller).toContainElement(questionnaire);
+    expect(questionnaire.closest('[data-slot="message-scroller-item"]')).toHaveAttribute(
+      "data-scroll-anchor",
+    );
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByText("正在思考…")).toBeNull();
+  });
+
   it("keeps MessageScroller as scroll owner and gives the transcript readable gutters", () => {
     seedTerminalTask();
     const { container } = render(
@@ -561,7 +601,7 @@ describe("ChatPanel", () => {
     expect(chatPanel).toHaveClass("min-h-0");
     expect(chatPanel).not.toHaveClass("overflow-y-auto");
     expect(chatPanel).toContainElement(messageScroller);
-    expect(messageViewport).toHaveClass("overflow-y-auto");
+    expect(messageViewport).toHaveClass("overflow-y-auto", "scrollbar-subtle");
     expect(messageContent).toHaveClass("px-5", "py-6", "max-w-3xl");
   });
 

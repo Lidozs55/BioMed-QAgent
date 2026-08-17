@@ -45,6 +45,8 @@ import {
 
 import { DurableHILStore, HILConflictError } from "./hil-store.js";
 
+import { readBuildContinuation } from "./build-continuation.js";
+
 import { DiskWorkspaceManager, type WorkspaceManager } from "../agent/workspace/workspace-manager.js";
 
 
@@ -56,6 +58,13 @@ const MAX_IMPORT_TOTAL_BYTES = 2 * 1024 * 1024 * 1024;
 const MAX_WS_COMMAND_BYTES = 8 * 1024;
 const MAX_WS_BUFFERED_BYTES = 64 * 1024;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+
+// Pi's threshold compaction ends the turn without auto-continue. The runtime
+// resumes the run with a fresh turn so long tasks survive the compaction
+// boundary; this bounds how many times a single run may be resumed.
+const MAX_COMPACTION_CONTINUATIONS = 3;
+const CONTINUE_AFTER_COMPACTION_PROMPT =
+  "Continue the task. Your previous turn was compacted; resume from where you left off.";
 
 export interface DurableAgentWorkspace {
   root: string;
@@ -119,6 +128,20 @@ interface ActiveTask {
  */
 interface ActiveDownloadHandle {
   controller: AbortController;
+  promise: Promise<void>;
+}
+
+/**
+ * A deterministic dataset-build continuation (cross-restart resume) that is
+ * currently in flight for a run. Tracked independently of ``activeTasks``:
+ * the continuation runs the TS Core executor with a lightweight tool
+ * workspace (no AI session) so the resumed build never depends on the model
+ * reinterpreting a synthetic prompt. While it is in flight, later HIL
+ * resolutions for the same run are delivered to its gate.
+ */
+interface ActiveContinuationHandle {
+  controller: AbortController;
+  gate: DurableApprovalGate;
   promise: Promise<void>;
 }
 
@@ -275,6 +298,7 @@ export async function createDurableAgentRuntime(
 
   const activeTasks = new Map<string, ActiveTask>();
   const activeDownloads = new Map<string, ActiveDownloadHandle>();
+  const activeContinuations = new Map<string, ActiveContinuationHandle>();
   const activeExecutions = new Set<Promise<void>>();
   const resumeOperations = new Map<string, Promise<unknown>>();
   const suspendedRuns = new Set<string>();
@@ -287,19 +311,46 @@ export async function createDurableAgentRuntime(
     if (task === undefined) return;
     const runKey = `${taskId}:${runId}`;
     try {
-      for await (const source of task.session.run(input)) {
-        if (suspendedRuns.has(runKey)) break;
-        const payloads = task.adapter.adapt(runId, source).map((event) =>
-          event.payload.type === "run_completed"
-            ? {
-                type: "run_completed" as const,
-                build_result: task.workspace.consumeBuildResult?.() ?? null,
-              }
-            : event.payload,
-        );
-        if (payloads.length > 0) {
-          await repository.appendRunEvents(taskId, runId, payloads);
+      let turnInput = input;
+      for (let continuation = 0; ; continuation += 1) {
+        let compacted = false;
+        for await (const source of task.session.run(turnInput)) {
+          if (suspendedRuns.has(runKey)) return;
+          const payloads = task.adapter.adapt(runId, source).map((event) =>
+            event.payload.type === "run_completed"
+              ? {
+                  type: "run_completed" as const,
+                  build_result: task.workspace.consumeBuildResult?.() ?? null,
+                }
+              : event.payload,
+          );
+          for (const payload of payloads) {
+            if (payload.type === "conversation_compacted") compacted = true;
+          }
+          if (payloads.length > 0) {
+            await repository.appendRunEvents(taskId, runId, payloads);
+          }
         }
+        // A threshold compaction ends the Pi turn without auto-continue; the
+        // adapter therefore emitted no terminal event. Resume with a fresh
+        // turn so the agent can finish the task, unless the run was suspended
+        // or the resume budget is exhausted (then force the terminal event).
+        if (!compacted || suspendedRuns.has(runKey)) break;
+        if (continuation >= MAX_COMPACTION_CONTINUATIONS) {
+          const payloads = task.adapter.completeRun(runId).map((event) =>
+            event.payload.type === "run_completed"
+              ? {
+                  type: "run_completed" as const,
+                  build_result: task.workspace.consumeBuildResult?.() ?? null,
+                }
+              : event.payload,
+          );
+          if (payloads.length > 0) {
+            await repository.appendRunEvents(taskId, runId, payloads);
+          }
+          break;
+        }
+        turnInput = CONTINUE_AFTER_COMPACTION_PROMPT;
       }
     } catch (error) {
       if (suspendedRuns.has(runKey)) return;
@@ -482,12 +533,16 @@ export async function createDurableAgentRuntime(
     }
     const task = activeTasks.get(taskId);
     const pendingHIL = await hilStore.findPendingForRun(taskId, runId);
-    if (task === undefined && pendingHIL !== null) {
+    const continuation = activeContinuations.get(`${taskId}:${runId}`);
+    if (task === undefined && (pendingHIL !== null || continuation !== undefined)) {
       await repository.appendRunEvent(taskId, runId, {
         type: "run_cancel_requested",
         reason: null,
       });
       await hilStore.cancelPendingForRun(taskId, runId);
+      // A deterministic continuation in flight must stop too, otherwise the
+      // executor would keep grinding after the run was cancelled.
+      continuation?.controller.abort();
       await repository.appendRunEvent(taskId, runId, {
         type: "run_cancelled",
         reason: "user requested",
@@ -781,7 +836,26 @@ export async function createDurableAgentRuntime(
           && event.payload.type === "user_input_resumed"
           && event.payload.request_id === input.request_id,
       );
-      if (alreadyResumed) return repository.getSnapshot(taskId);
+      if (alreadyResumed) {
+        // Crash between an earlier resolution and the continuation start,
+        // or an idempotent replay of the same request: nothing is driving
+        // the suspended build. Restart the deterministic continuation unless
+        // the run already reached a terminal state.
+        const current = await repository.getSnapshot(taskId);
+        const endedRun = current?.runs.find((candidate) => candidate.run_id === runId);
+        const terminal =
+          endedRun?.status === "completed" ||
+          endedRun?.status === "failed" ||
+          endedRun?.status === "cancelled";
+        if (!terminal && activeTasks.get(taskId) === undefined) {
+          await startSuspendedBuildContinuation(
+            taskId,
+            runId,
+            storedRequest?.build_id ?? null,
+          );
+        }
+        return repository.getSnapshot(taskId);
+      }
     } else if (storedRequest?.blocking !== false && run.status !== "awaiting_user_input") {
       throw new DurableTaskConflictError("active_run", "Run is not awaiting user input");
     } else {
@@ -801,22 +875,184 @@ export async function createDurableAgentRuntime(
       return repository.getSnapshot(taskId);
     }
     const task = activeTasks.get(taskId);
-    if (task?.approvalGate.resolvePending(runId, review) !== true) {
-      const recoveredTask = await createSession(taskId, runId);
-      activeTasks.set(taskId, recoveredTask);
-      startRun(
+    const key = `${taskId}:${runId}`;
+    const continuation = activeContinuations.get(key);
+    if (continuation !== undefined) {
+      // A deterministic build continuation is already in flight for this
+      // run: deliver the resolution to its gate. If the executor is not
+      // yet waiting on this request, the store lookup resolves it when the
+      // continuation reaches it — never a second driver.
+      continuation.gate.resolvePending(runId, review);
+      return repository.getSnapshot(taskId);
+    }
+    if (task?.approvalGate.resolvePending(runId, review) === true) {
+      return repository.getSnapshot(taskId);
+    }
+    if (task === undefined) {
+      const started = await startSuspendedBuildContinuation(
         taskId,
         runId,
-        [
-          "A durable human-review request from the interrupted run has been resolved.",
-          `Request: ${input.request_id}`,
-          `Decision: ${JSON.stringify(review.decision)}`,
-          "Continue the same task from the durable checkpoint. Do not ask the same review again;",
-          "the reviewed operation will replay idempotently against the persisted decision.",
-        ].join("\n"),
+        storedRequest?.build_id ?? null,
       );
+      if (started) return repository.getSnapshot(taskId);
     }
+    const recoveredTask = await createSession(taskId, runId);
+    activeTasks.set(taskId, recoveredTask);
+    startRun(
+      taskId,
+      runId,
+      [
+        "A durable human-review request from the interrupted run has been resolved.",
+        `Request: ${input.request_id}`,
+        `Decision: ${JSON.stringify(review.decision)}`,
+        "Continue the same task from the durable checkpoint. Do not ask the same review again;",
+        "the reviewed operation will replay idempotently against the persisted decision.",
+      ].join("\n"),
+    );
     return await repository.getSnapshot(taskId);
+  }
+
+  /**
+   * Replay a suspended dataset build deterministically (cross-restart
+   * resume). Reads the persisted invocation (written by the tool before
+   * ``execute``), rebuilds a lightweight tool workspace bound to the
+   * original run, replays the original tool call with the original
+   * ``tool_call_id``, and lets the TS Core executor resume from its
+   * checkpoint. No AI session is created: the model is never asked to
+   * "continue the task" and never re-derives the spec.
+   *
+   * Returns true when a continuation was started (or is already running);
+   * false when this run has no durable continuation record (e.g. permission
+   * requests) and the caller should fall back to the legacy resume prompt.
+   */
+  async function startSuspendedBuildContinuation(
+    taskId: string,
+    runId: string,
+    buildId: string | null,
+  ): Promise<boolean> {
+    if (buildId === null) return false;
+    const snapshot = await repository.getSnapshot(taskId);
+    if (snapshot === null || !snapshot.runs.some((run) => run.run_id === runId)) {
+      return false;
+    }
+    const key = `${taskId}:${runId}`;
+    if (activeContinuations.has(key)) return true;
+    const continuation = await readBuildContinuation(
+      path.join(options.tasksRoot, taskId),
+      buildId,
+    );
+    if (continuation === null || continuation.run_id !== runId) return false;
+    const approvalGate = new DurableApprovalGate(taskId, repository, runId);
+    const workspace = await options.workspaceFactory({
+      taskId,
+      runId,
+      approvalGate,
+      recordRunEvent: async (payload) => {
+        await repository.appendRunEvent(taskId, runId, payload);
+      },
+    });
+    workspace.setRunId?.(runId);
+    const tool = workspace.tools.find(
+      (candidate) => candidate.name === "execute_dataset_build",
+    );
+    if (tool === undefined) {
+      await workspace.dispose();
+      return false;
+    }
+    const controller = new AbortController();
+    const handle: ActiveContinuationHandle = {
+      controller,
+      gate: approvalGate,
+      promise: Promise.resolve(),
+    };
+    let promise: Promise<void> = Promise.resolve();
+    promise = executeBuildContinuation(
+      taskId,
+      runId,
+      tool,
+      continuation.tool_call_id,
+      {
+        spec: continuation.spec,
+        source_files: continuation.source_files,
+        mapping_files: continuation.mapping_files,
+        ...(Object.keys(continuation.metadata_files).length > 0
+          ? { metadata_files: continuation.metadata_files }
+          : {}),
+      },
+      controller.signal,
+      workspace,
+    ).finally(() => {
+      if (activeContinuations.get(key)?.promise === promise) {
+        activeContinuations.delete(key);
+      }
+      void workspace.dispose();
+    });
+    handle.promise = promise;
+    activeContinuations.set(key, handle);
+    return true;
+  }
+
+  /**
+   * Deterministic executor driving one suspended build to a terminal run
+   * event. Matches ``executeDownloadResume``: the original tool-call bubble
+   * is upserted via a replayed ``tool_started`` and closed by
+   * ``tool_completed``; the run then finalizes with ``run_completed`` (with
+   * the build result) or ``run_failed``. No LLM turn is involved.
+   */
+  async function executeBuildContinuation(
+    taskId: string,
+    runId: string,
+    tool: BioMedAgentTool,
+    toolCallId: string,
+    argumentsValue: Record<string, unknown>,
+    signal: AbortSignal,
+    workspace: DurableAgentWorkspace,
+  ): Promise<void> {
+    await repository.appendRunEvent(taskId, runId, {
+      type: "tool_started",
+      tool_call_id: toolCallId,
+      tool_name: tool.name,
+      arguments: argumentsValue as Record<string, JsonValue>,
+    });
+    let result: { content: string; isError?: boolean };
+    try {
+      result = await tool.execute(argumentsValue, signal, { toolCallId });
+    } catch (error) {
+      // User-cancelled: the run terminal was already recorded by cancelRun.
+      if (signal.aborted) return;
+      const message = error instanceof Error ? error.message : String(error);
+      await repository.appendRunEvent(taskId, runId, {
+        type: "tool_completed",
+        tool_call_id: toolCallId,
+        tool_name: tool.name,
+        output: message,
+        is_error: true,
+      });
+      await repository.appendRunEvent(taskId, runId, {
+        type: "run_failed",
+        error: message.slice(0, 4_000),
+      });
+      return;
+    }
+    if (signal.aborted) return;
+    await repository.appendRunEvent(taskId, runId, {
+      type: "tool_completed",
+      tool_call_id: toolCallId,
+      tool_name: tool.name,
+      output: result.content,
+      is_error: result.isError === true,
+    });
+    if (result.isError === true) {
+      await repository.appendRunEvent(taskId, runId, {
+        type: "run_failed",
+        error: "Dataset build continuation failed",
+      });
+      return;
+    }
+    await repository.appendRunEvent(taskId, runId, {
+      type: "run_completed",
+      build_result: workspace.consumeBuildResult?.() ?? null,
+    });
   }
 
   function resumeRun(
