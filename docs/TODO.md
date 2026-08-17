@@ -42,18 +42,26 @@
 
 ### P0
 
+> TASK-047/048 的 work package、硬依赖、分支边界和逐项验收统一见
+> [Gold 可信 Publication 收敛执行计划](superpowers/plans/2026-08-18-gold-trusted-publication-closure.md)。
+> 当前严格 Gold 为 0/6；只有计划中的 G1 同 commit 六例原样重跑闭环后才能报告 6/6。
+
 - [ ] **P0 / TASK-047** 大型 GEO 表达矩阵在 TS Core 解析/规范化阶段触发
       `Invalid string length` 或 Node heap OOM。评测已确认 GSE31852/GSE109169
-      级别文件需要流式读取、有限输出缓冲、可恢复 checkpoint 与资源上限；当前
-      parser、canonicalizer、probe mapping、integrator 已改为流式并通过全量门。
-      剩余验收：6.1 GB 解压矩阵在默认运行限制下完成 integrate/validate/publish，
-      正式四/五张表可读且 provenance 闭合。
+      级别文件需要流式读取、有限输出缓冲、可恢复 checkpoint 与资源上限。局部
+      parser/canonicalizer/writer 已流式化，但审计仍确认 Core 前置 hash、GDC/Xena
+      输入、GEO supplementary/metadata、probe mapping、integrator 去重状态、checkpoint
+      rehydrate 和 release/download tail 存在全量读取或随行数增长的内存边界。
+      剩余验收：计划 A1-A7 全部完成后，A8 在默认运行限制下使约 6.1 GB 解压矩阵
+      完成 integrate/validate/publish；记录 RSS/wall/temp/batches/artifact，并通过
+      immutable Publication Artifact API 下载复核 hash。
 - [ ] **P0 / TASK-048** 非 gene-expression 研究任务（target/variant/
       structure/activity/paper/figure）缺少受信任的多表 schema、validation 和
       Publication family。gold3–gold6 真实 run 只能写 workspace 摘要，不能按
-      artifact 计分；验收：严格表头/行宽/source locator/单位与 relation 保留，
-      图表估读带 estimated/low-confidence 和 axis/legend 不清标记，workspace
-      文件不得绕过 Publisher。
+      artifact 计分；验收：按计划 B0-B7/C1-C2 落地 family admission、multi-table
+      contracts、assemble、registered asset ingestion、Validation/Provenance/Confidence
+      和图表/衍生数据可信路径；严格表头/行宽/source locator/单位与 relation 保留，
+      workspace 文件不得绕过 Publisher。
 
 ### P1
 
@@ -100,24 +108,24 @@
 
 > 背景：gold3–6（EGFR 靶点多源 / Spike–ACE2 / ChEMBL 活性 / 论文图表抽取，
 > 由 AI agent 直连公开 API 生产）作为参考输出揭露：这些主题在当前系统中
-> **无法走受信任 Dataset Core publication 路径**。证据链与 reference schema
-> 见 `data/gold/SCHEMA_GAP.md` 与 `data/gold/gold{3..6}_*/schemas/`。
+> **无法走受信任 Dataset Core publication 路径**。历史评测数据位于被忽略的
+> `data/gold/`，当前仓库没有可追踪的 `SCHEMA_GAP.md`；它不能作为唯一验收依据。
+> 计划要求先提交冻结的 Gold eval manifest（prompt/schema/source hashes），再开发和复跑。
 
 - [ ] **P1** SchemaRegistry 仅有 2 个内建表达 schema（`gene_expression.long.v1`
-      / `probe_long.v1`，`server/src/dataset/schema/registry.ts`），spec
-      validator 对其余 schema_id 一律 `unknown_schema` 拒绝。分级推进：
-      **方案 B**（半天–1 天）——把 gold3–6 已备的 4 个 family / 22 张
-      reference schema 注册进 registry（含 `ENTITY_LEVEL_BY_GRANULARITY`
-      补映射），使非表达 spec 至少通过 validate；**方案 A**（数天，需 ADR）
-      ——为新 family 建 canonicalizer / publisher 全管线支持，含 golden
-      fixture parity。
+      / `probe_long.v1`，`server/src/dataset/schema/registry.ts`），spec validator 对其余
+      schema_id 一律 `unknown_schema` 拒绝。按计划 B0-B5 推进：reference schema 不能
+      单独注册进 production default registry 来制造“可 validate”的假能力；family
+      admission 必须能解析真实 Schema/Adapter/Profile，并在 multi-table contracts +
+      assemble + validation/publication handlers 闭环后才启用。
 - [ ] **P1** 非 GEO 类源无受信任 SourceAdapter：受信任管线 adapter 仅覆盖
       GEO / GDC / Xena / STAR counts（`server/src/dataset/adapters/`），
       UniProt / ClinVar / RCSB PDB / ChEMBL / PubChem / ClinicalTrials.gov /
       Europe PMC 只有 agent 业务 Tool（Phase 5 P5-02…08，产物停在
       workspace/cache），检索结果无法进入 DatasetBuild。gold3/4/5/6 用到的
-      源全部命中此缺口。方案 B 打通 schema 后此缺口成为主要阻塞，需按
-      family 逐源评估：结构化 API 响应 → SourceAsset → adapter 的最小路径。
+      源全部命中此缺口。按计划 C1-C2/B4-B5 逐 family、逐来源接入：结构化 API
+      响应 → immutable SourceAsset → trusted adapter；不得让 Agent workspace path
+      成为临时发布入口。
 - [ ] **P2** 图表数字化产物无受信任落点：Qwen-VL chart extraction 工具
       （P5-08）可估读图表，但 chart_series / chart_points 类产物（含
       `estimated` / `axis_unclear` / `legend_unclear` /
@@ -133,7 +141,7 @@
       compound_crosswalk（gold3/5）这类"行=实体关系"而非"行=测量记录"的
       表，现有 schema 形状（measurement/unit 中心）不适配；且对齐证据
       （InChIKey 精确匹配、冲突保留不合并）需要专用 provenance 字段。
-      可与方案 B 一并设计 `entity_link` 类 row_granularity。
+      在计划 B1/B5 中作为可复用 `entity_link` 粒度与 relation schema 设计。
 
 ---
 
