@@ -53,3 +53,42 @@ export async function sha256FileStream(
   throwIfAborted(signal);
   return hasher.digest("hex");
 }
+
+export interface FileHashResult {
+  sha256: string;
+  bytes: number;
+}
+
+/**
+ * Cooperative streaming sha256 with a byte count for the Core pre-asset
+ * resolution path (TASK-047-A1).  Yields to the event loop every 256 chunks
+ * (~16 MB) so cancels land mid-hash on GB-scale files, and reports how many
+ * bytes were actually consumed so the caller can reject check-then-use
+ * (TOCTOU) races against a pre-hash ``stat``.
+ */
+export async function sha256FileStreamWithSize(
+  path: string,
+  signal?: AbortSignal | null,
+): Promise<FileHashResult> {
+  throwIfAborted(signal);
+  const hasher = createHash("sha256");
+  const stream = createReadStream(path);
+  let bytes = 0;
+  try {
+    let chunkCount = 0;
+    for await (const chunk of stream) {
+      const buffer = chunk as Buffer;
+      hasher.update(buffer);
+      bytes += buffer.length;
+      chunkCount += 1;
+      if (chunkCount % 256 === 0) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        throwIfAborted(signal);
+      }
+    }
+  } finally {
+    stream.destroy();
+  }
+  throwIfAborted(signal);
+  return { sha256: hasher.digest("hex"), bytes };
+}

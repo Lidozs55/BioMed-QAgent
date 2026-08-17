@@ -81,6 +81,15 @@ registered-table publication 的临时信任来源。
 
 **分支**：`fix/dataset-asset-stream-hash`
 
+**状态**：已实现并验证（2026-08-18）。实现要点：`resolveReferencedAsset()`
+改为 `sha256FileStreamWithSize()`（256 块/约 16 MB 粒度 yield，abort 可中断
+GB 级文件）；`execute()` 先做 spec 校验再做任何 stat/hash（无效 spec 零文件
+读取）；多文件串行解析；每绑定经 `onAssetResolved` 回调记录 bytes + hash wall
+time（不记录内容；bridge wire shape 冻结，统计不进入响应）；hash 前 stat 的
+size 与流式实读 bytes 不一致（TOCTOU）时抛 BuildError → fail-closed
+`core_execution_error` envelope，不进入 Core。`resolveReferencedAsset` 导出供
+受限 heap 子进程验收使用（64 MB heap 完成 256 MiB hash）。
+
 **改动**：
 
 - `server/src/dataset/service/dataset-core.ts`

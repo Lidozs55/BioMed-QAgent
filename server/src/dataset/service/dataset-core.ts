@@ -9,10 +9,13 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { readFile, stat } from "node:fs/promises";
+import { stat } from "node:fs/promises";
+import { performance } from "node:perf_hooks";
 import path from "node:path";
 
-import { sha256Bytes } from "../adapters/hashing.js";
+import { BuildError } from "../adapters/errors.js";
+import { sha256FileStreamWithSize } from "../adapters/hashing.js";
+import { OperationAbortedError } from "../cooperative.js";
 
 import {
   DATASET_BRIDGE_VERSION,
@@ -69,30 +72,67 @@ function mediaTypeFor(filename: string): string {
   return "application/octet-stream";
 }
 
-/** Rebuild a SourceAsset from a task-relative reference (bridge semantics). */
-async function resolveReferencedAsset(
+/**
+ * One resolved asset reference (TASK-047-A1): bytes hashed and hash wall
+ * time only — never content.
+ */
+export interface AssetResolutionRecord {
+  bindingId: string;
+  role: "source" | "mapping";
+  relativePath: string;
+  sizeBytes: number;
+  hashMs: number;
+  assetId: string;
+  sha256: string;
+}
+
+interface ResolvedReference {
+  asset: SourceAsset;
+  bytes: number;
+  hashMs: number;
+}
+
+/**
+ * Rebuild a SourceAsset from a task-relative reference (bridge semantics).
+ * The digest is computed by streaming (bounded heap on GB-scale sources),
+ * honoring the operation AbortSignal, and the pre-hash ``stat`` size is
+ * cross-checked against the bytes actually consumed so a file swapped
+ * between check and use is rejected instead of building on a stale identity.
+ */
+export async function resolveReferencedAsset(
   taskRoot: string,
   reference: string,
-): Promise<SourceAsset | null> {
+  signal?: AbortSignal | null,
+): Promise<ResolvedReference | null> {
   const full = path.resolve(taskRoot, reference);
   if (!full.startsWith(path.resolve(taskRoot) + path.sep)) return null;
   const info = await stat(full).catch(() => null);
   if (info === null || !info.isFile()) return null;
-  const bytes = await readFile(full);
-  const sha256 = sha256Bytes(bytes);
+  const started = performance.now();
+  const { sha256, bytes } = await sha256FileStreamWithSize(full, signal);
+  const hashMs = Math.max(0, performance.now() - started);
+  if (bytes !== info.size) {
+    throw new BuildError(
+      `source asset changed while hashing (TOCTOU guard): stat size ${info.size} != read ${bytes} bytes for '${reference}'`,
+    );
+  }
   return {
-    schema_version: "1.0",
-    asset_id: `asset_${sha256}`,
-    kind: "source",
-    relative_path: path.relative(taskRoot, full).split(path.sep).join("/"),
-    sha256,
-    size_bytes: info.size,
-    media_type: mediaTypeFor(full),
-    generated_by_step_id: null,
-    source_id: `resolved_${path.basename(full)}`,
-    successful_attempt_id: null,
-    derived_from_asset_id: null,
-    data_level: "repository_processed",
+    asset: {
+      schema_version: "1.0",
+      asset_id: `asset_${sha256}`,
+      kind: "source",
+      relative_path: path.relative(taskRoot, full).split(path.sep).join("/"),
+      sha256,
+      size_bytes: bytes,
+      media_type: mediaTypeFor(full),
+      generated_by_step_id: null,
+      source_id: `resolved_${path.basename(full)}`,
+      successful_attempt_id: null,
+      derived_from_asset_id: null,
+      data_level: "repository_processed",
+    },
+    bytes,
+    hashMs,
   };
 }
 
@@ -160,9 +200,14 @@ function noDataResultFrom(record: BuildRecord): BuildResult {
 /** The opt-in TypeScript Deterministic Core behind the frozen bridge shape. */
 export class TsDatasetCoreAdapter implements DatasetCoreService {
   private readonly taskRoot: string;
+  private readonly onAssetResolved: ((record: AssetResolutionRecord) => void) | null;
 
-  constructor(private readonly core: TypeScriptDatasetCore) {
+  constructor(
+    private readonly core: TypeScriptDatasetCore,
+    options: { onAssetResolved?: (record: AssetResolutionRecord) => void } = {},
+  ) {
     this.taskRoot = core.taskRoot;
+    this.onAssetResolved = options.onAssetResolved ?? null;
   }
 
   async validate(input: ValidateDatasetBuildInput): Promise<DatasetBridgeResponse> {
@@ -170,18 +215,33 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
     return validationEnvelope(newRequestId(), result);
   }
 
+  /** Resolve references serially with the caller's AbortSignal; missing or
+   * out-of-root references are dropped (rejected binding at Core level). */
+  private async resolveAll(
+    references: Record<string, string>,
+    role: AssetResolutionRecord["role"],
+    target: Record<string, SourceAsset>,
+    signal: AbortSignal | undefined,
+  ): Promise<void> {
+    for (const [bindingId, reference] of Object.entries(references)) {
+      const resolved = await resolveReferencedAsset(this.taskRoot, reference, signal);
+      if (resolved === null) continue;
+      target[bindingId] = resolved.asset;
+      this.onAssetResolved?.({
+        bindingId,
+        role,
+        relativePath: reference,
+        sizeBytes: resolved.bytes,
+        hashMs: resolved.hashMs,
+        assetId: resolved.asset.asset_id,
+        sha256: resolved.asset.sha256,
+      });
+    }
+  }
+
   async execute(input: ExecuteDatasetBuildInput): Promise<DatasetBridgeResponse> {
-    const sourceAssets: Record<string, SourceAsset> = {};
-    for (const [bindingId, reference] of Object.entries(input.sourceFiles)) {
-      const asset = await resolveReferencedAsset(this.taskRoot, reference);
-      if (asset !== null) sourceAssets[bindingId] = asset;
-    }
-    const mappingAssets: Record<string, SourceAsset> = {};
-    for (const [bindingId, reference] of Object.entries(input.mappingFiles)) {
-      const asset = await resolveReferencedAsset(this.taskRoot, reference);
-      if (asset !== null) mappingAssets[bindingId] = asset;
-    }
-    // Spec-level validation first: reject invalid input before any execution.
+    // Spec-level validation first: reject invalid input before any file read
+    // or hash (TASK-047-A1: invalid spec = zero file reads).
     const validation = await this.core.validateDatasetBuildSpec(input.spec);
     if (!validation.valid) {
       return {
@@ -196,6 +256,42 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
           details: { fields: ["spec"] },
         },
       };
+    }
+    const sourceAssets: Record<string, SourceAsset> = {};
+    const mappingAssets: Record<string, SourceAsset> = {};
+    try {
+      await this.resolveAll(input.sourceFiles, "source", sourceAssets, input.signal);
+      await this.resolveAll(input.mappingFiles, "mapping", mappingAssets, input.signal);
+    } catch (error) {
+      if (error instanceof OperationAbortedError) {
+        return {
+          version: DATASET_BRIDGE_VERSION,
+          request_id: newRequestId(),
+          ok: false,
+          data: null,
+          error: {
+            code: "cancelled",
+            message: "asset hashing aborted by cancel",
+            retryable: false,
+            details: {},
+          },
+        };
+      }
+      if (error instanceof BuildError) {
+        return {
+          version: DATASET_BRIDGE_VERSION,
+          request_id: newRequestId(),
+          ok: false,
+          data: null,
+          error: {
+            code: "core_execution_error",
+            message: error.message,
+            retryable: true,
+            details: {},
+          },
+        };
+      }
+      throw error;
     }
     const record = await this.core.executeDatasetBuild(input.spec, {
       runId: input.runId,
@@ -260,8 +356,9 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
 /** Phase 8: the TS Dataset Core is the only implementation. */
 export function createDatasetCoreService(options: {
   tsCore: TypeScriptDatasetCore;
+  onAssetResolved?: (record: AssetResolutionRecord) => void;
 }): DatasetCoreService {
-  return new TsDatasetCoreAdapter(options.tsCore);
+  return new TsDatasetCoreAdapter(options.tsCore, options);
 }
 
 export type { DatasetBuildSpec };
