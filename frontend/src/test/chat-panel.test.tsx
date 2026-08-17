@@ -601,7 +601,7 @@ describe("ChatPanel", () => {
     expect(chatPanel).toHaveClass("min-h-0");
     expect(chatPanel).not.toHaveClass("overflow-y-auto");
     expect(chatPanel).toContainElement(messageScroller);
-    expect(messageViewport).toHaveClass("overflow-y-auto");
+    expect(messageViewport).toHaveClass("overflow-y-auto", "scrollbar-subtle");
     expect(messageContent).toHaveClass("px-5", "py-6", "max-w-3xl");
   });
 
