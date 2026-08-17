@@ -20,7 +20,7 @@ import { openSubagentPanel } from "@/components/subagentPanelControl";
 import { TaskStatusIcon } from "@/components/taskStatus";
 import { UserInputDialog } from "@/components/UserInputDialog";
 import { PermissionDialog } from "@/components/PermissionDialog";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/marker";
@@ -900,22 +900,22 @@ export function ChatPanel({
           data-slot="stall-hint"
         >
           <WarningCircleIcon />
-          <AlertDescription className="flex flex-wrap items-center gap-2">
-            <span>
-              任务已约 {Math.max(2, Math.floor(stallMs / 60000))} 分钟没有任何新事件，可能已挂起或网络中断。
-              可取消后重新提问，等待中的大文件下载将在重试时自动断点续传。
-            </span>
+          <AlertTitle>任务可能已挂起</AlertTitle>
+          <AlertDescription>
+            已约 {Math.max(2, Math.floor(stallMs / 60000))} 分钟没有任何新事件，可能已挂起或网络中断。
+            可取消后重新提问，等待中的大文件下载将在重试时自动断点续传。
+          </AlertDescription>
+          <div className="col-start-2 flex justify-end pt-1">
             <Button
               type="button"
               variant="outline"
               size="sm"
-              className="ml-auto"
               onClick={() => void cancelStalledRun()}
               aria-label="取消当前任务"
             >
               取消当前任务
             </Button>
-          </AlertDescription>
+          </div>
         </Alert>
       )}
 
