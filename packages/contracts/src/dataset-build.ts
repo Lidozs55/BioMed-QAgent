@@ -35,7 +35,7 @@ export interface DatasetBuildSpec {
   merge_strategy: string;
   validation_profile_ref: string;
   output_format: string;
-  target_entity_level: "gene" | "probe" | null;
+  target_entity_level: string | null;
 }
 
 export type BuildResultStatus =

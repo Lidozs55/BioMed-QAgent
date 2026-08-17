@@ -150,16 +150,10 @@ export function parseDatasetBuildSpec(value: unknown): DatasetBuildSpec {
     if (record.target_entity_level === undefined || record.target_entity_level === null) {
       return null;
     }
-    const level = assertString(
+    return assertNonEmptyString(
       record.target_entity_level,
       "DatasetBuildSpec.target_entity_level",
     );
-    if (level !== "gene" && level !== "probe") {
-      throw new TypeError(
-        "DatasetBuildSpec.target_entity_level must be one of gene, probe",
-      );
-    }
-    return level;
   })();
   return {
     schema_version: parseSchemaVersion(record),

@@ -5,16 +5,17 @@ import type {
 } from "@biomed/contracts";
 
 import { saveBuildContinuation } from "../../runtime/build-continuation.js";
-import { ADAPTER_REGISTRY } from "../../dataset/adapters/adapters.js";
-import { expressionNormalizationV1 } from "../../dataset/canonicalizer/profiles.js";
-import { createDefaultSchemaRegistry } from "../../dataset/schema/registry.js";
+import {
+  createDefaultDatasetFamilyRegistry,
+  type DatasetFamilyDefinition,
+} from "../../dataset/families/index.js";
 import type {
   BioMedAgentTool,
   BioMedToolExecutionContext,
   BioMedToolResult,
 } from "../contracts.js";
+import { parseDatasetBuildSpec } from "../../dataset/contracts/index.js";
 import type { DatasetCoreService } from "../../dataset/service/dataset-core.js";
-import { VALIDATION_PROFILE_REFS } from "../../dataset/validation/profile.js";
 
 const MAX_ID = 128;
 const MAX_CONTENT = 4_096;
@@ -53,7 +54,7 @@ function object(value: unknown): Record<string, unknown> {
 }
 
 function specArgument(value: Record<string, unknown>): DatasetBuildSpec {
-  return object(value.spec) as unknown as DatasetBuildSpec;
+  return parseDatasetBuildSpec(value.spec);
 }
 
 function mappingArgument(
@@ -156,8 +157,7 @@ function captureSpecRejected(
   });
 }
 
-function datasetBuildSpecSchema(): object {
-  const normalization = expressionNormalizationV1();
+function datasetFamilySpecSchema(definition: DatasetFamilyDefinition): object {
   const stringArray = {
     type: "array",
     items: { type: "string" },
@@ -192,131 +192,99 @@ function datasetBuildSpecSchema(): object {
     required: ["mode"],
     additionalProperties: false,
   } as const;
-  const adapterParameters = {
-    type: "object",
-    description:
-      "Must be empty for GDC/Xena. GEO requires every listed field; declare unknown value_scale honestly instead of guessing.",
-    properties: {
-      schema_version: { type: "string", enum: ["1.0"] },
-      format: {
-        type: "string",
-        enum: ["tximport_counts", "series_matrix", "supplementary_matrix"],
+  const schemaVariants = definition.schemas.map((schema) => {
+    const granularity = definition.granularities.find(
+      (candidate) => candidate.id === schema.row_granularity,
+    )!;
+    const sourceBinding = {
+      oneOf: definition.sources
+        .filter((source) => source.schema_refs.includes(schema.schema_id))
+        .map((source) => ({
+          type: "object",
+          properties: {
+            schema_version: { type: "string", enum: ["1.0"] },
+            binding_id: {
+              type: "string",
+              pattern: "^[A-Za-z0-9_-]{1,128}$",
+              description: "Stable ID also used as the key in source_files and mapping_files.",
+            },
+            source: { type: "string", enum: [source.source] },
+            acquisition,
+            adapter_id: { type: "string", enum: [source.adapter_id] },
+            accession: nullableString,
+            parameters: source.parameter_schema,
+          },
+          required: [
+            "binding_id",
+            "source",
+            "acquisition",
+            "adapter_id",
+            ...(source.parameters_required ? ["parameters"] : []),
+          ],
+          additionalProperties: false,
+        })),
+    } as const;
+    return {
+      type: "object",
+      description:
+        "Complete frozen DatasetBuildSpec. Execute mappings use the same binding_id keys.",
+      properties: {
+        schema_version: { type: "string", enum: ["1.0"] },
+        build_id: { type: "string", pattern: "^[A-Za-z0-9_-]{1,128}$" },
+        objective: { type: "string", minLength: 1 },
+        dataset_family: { type: "string", enum: [definition.id] },
+        row_granularity: { type: "string", enum: [schema.row_granularity] },
+        entities: stringArrayRecord,
+        cohort_filters: stringArrayRecord,
+        required_fields: stringArray,
+        schema_ref: { type: "string", enum: [schema.schema_id] },
+        source_bindings: { type: "array", minItems: 1, items: sourceBinding },
+        normalization_profile_ref: {
+          anyOf: [
+            { type: "string", enum: [...definition.normalization_profile_refs] },
+            { type: "null" },
+          ],
+        },
+        merge_strategy: { type: "string", enum: [...definition.merge_strategies] },
+        validation_profile_ref: {
+          type: "string",
+          enum: [...definition.validation_profiles_by_schema[schema.schema_id]!],
+        },
+        output_format: { type: "string", enum: [...definition.output_formats] },
+        target_entity_level: {
+          anyOf: [
+            ...(granularity.target_entity_level === null
+              ? []
+              : [{ type: "string", enum: [granularity.target_entity_level] }]),
+            { type: "null" },
+          ],
+        },
       },
-      value_semantics: {
-        type: "string",
-        enum: [...normalization.allowed_semantics],
-      },
-      value_scale: {
-        type: "string",
-        enum: [...normalization.allowed_value_scales],
-      },
-      expression_unit: {
-        type: "string",
-        enum: [...normalization.allowed_units],
-      },
-      is_normalized: { type: "boolean" },
-      platform_ids: {
-        type: "array",
-        items: { type: "string", pattern: "^GPL[0-9]+$" },
-      },
-      delimiter: {
-        type: "string",
-        description: "Use auto, or one character for supplementary_matrix only.",
-      },
-    },
-    additionalProperties: false,
-  } as const;
-  const sourceBinding = {
-    type: "object",
-    properties: {
-      schema_version: { type: "string", enum: ["1.0"] },
-      binding_id: {
-        type: "string",
-        pattern: "^[A-Za-z0-9_-]{1,128}$",
-        description: "Stable ID also used as the key in source_files and mapping_files.",
-      },
-      source: {
-        type: "string",
-        enum: ["gdc", "geo", "ucsc_xena"],
-      },
-      acquisition,
-      adapter_id: {
-        type: "string",
-        enum: Object.keys(ADAPTER_REGISTRY).sort(),
-        description:
-          "Use gdc.expression.v1 for gdc, geo.expression.v1 for geo, and xena.matrix.v1 for ucsc_xena.",
-      },
-      accession: nullableString,
-      parameters: adapterParameters,
-    },
-    required: ["binding_id", "source", "acquisition", "adapter_id"],
-    additionalProperties: false,
-  } as const;
+      required: [
+        "build_id",
+        "objective",
+        "dataset_family",
+        "row_granularity",
+        "schema_ref",
+        "source_bindings",
+        "validation_profile_ref",
+      ],
+      additionalProperties: false,
+    } as const;
+  });
+  return schemaVariants.length === 1
+    ? schemaVariants[0]!
+    : { oneOf: schemaVariants };
+}
+
+function datasetBuildSpecSchema(): object {
+  const definitions = createDefaultDatasetFamilyRegistry().definitionsList();
+  if (definitions.length === 1) {
+    return datasetFamilySpecSchema(definitions[0]!);
+  }
   return {
-    type: "object",
-    description:
-      "Complete frozen DatasetBuildSpec. For each source binding, execute mappings must use the same binding_id key.",
-    properties: {
-      schema_version: { type: "string", enum: ["1.0"] },
-      build_id: {
-        type: "string",
-        pattern: "^[A-Za-z0-9_-]{1,128}$",
-      },
-      objective: { type: "string", minLength: 1 },
-      dataset_family: { type: "string", enum: ["gene_expression"] },
-      row_granularity: {
-        type: "string",
-        enum: ["gene_sample_measurement", "probe_sample_measurement"],
-      },
-      entities: stringArrayRecord,
-      cohort_filters: stringArrayRecord,
-      required_fields: stringArray,
-      schema_ref: {
-        type: "string",
-        enum: createDefaultSchemaRegistry().list(),
-        description:
-          "Use gene_expression.long.v1 for gene rows or gene_expression.probe_long.v1 for probe rows.",
-      },
-      source_bindings: {
-        type: "array",
-        minItems: 1,
-        items: sourceBinding,
-      },
-      normalization_profile_ref: {
-        anyOf: [
-          { type: "string", enum: [normalization.profile_id] },
-          { type: "null" },
-        ],
-      },
-      merge_strategy: {
-        type: "string",
-        enum: ["append_by_canonical_row"],
-      },
-      validation_profile_ref: {
-        type: "string",
-        enum: [...VALIDATION_PROFILE_REFS],
-        description:
-          "Use gene_expression.release.v1 for gene rows or gene_expression.probe_release.v1 for probe rows.",
-      },
-      output_format: { type: "string", enum: ["csv"] },
-      target_entity_level: {
-        anyOf: [
-          { type: "string", enum: ["gene", "probe"] },
-          { type: "null" },
-        ],
-      },
-    },
-    required: [
-      "build_id",
-      "objective",
-      "dataset_family",
-      "row_granularity",
-      "schema_ref",
-      "source_bindings",
-      "validation_profile_ref",
-    ],
-    additionalProperties: false,
-  } as const;
+    oneOf: definitions.map((definition) => datasetFamilySpecSchema(definition)),
+  };
 }
 
 export function createDatasetBuildTools(

@@ -63,6 +63,25 @@ describe("Dataset Core bridge contracts", () => {
     expect(parseDatasetBridgeRequest(request())).toEqual(request());
   });
 
+  test("keeps target_entity_level family-neutral at the wire boundary", () => {
+    const variant = {
+      ...request(),
+      args: {
+        ...request().args,
+        spec: { ...spec, target_entity_level: "variant" },
+      },
+    };
+    expect(parseDatasetBridgeRequest(variant)).toEqual(variant);
+    expect(() => parseDatasetBridgeRequest({
+      ...variant,
+      args: { ...variant.args, spec: { ...variant.args.spec, target_entity_level: "" } },
+    })).toThrow(/must be a non-empty string/);
+    expect(() => parseDatasetBridgeRequest({
+      ...variant,
+      args: { ...variant.args, spec: { ...variant.args.spec, target_entity_level: 1 } },
+    })).toThrow(/non-empty string/);
+  });
+
   test.each([
     { ...request(), extra: true },
     { ...request(), version: 2 },

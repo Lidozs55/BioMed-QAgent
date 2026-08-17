@@ -33,14 +33,27 @@ describe("Pi DatasetBuild tools", () => {
     const validateParameters = validateTool!.parameters as {
       properties: { spec: Record<string, unknown> };
     };
-    const specSchema = validateParameters.properties.spec as {
-      additionalProperties: boolean;
-      required: string[];
-      properties: Record<string, Record<string, unknown>>;
+    const expressionSchema = validateParameters.properties.spec as {
+      oneOf: Array<{
+        additionalProperties: boolean;
+        required: string[];
+        properties: Record<string, Record<string, unknown>>;
+      }>;
     };
+    const schemaRef = (
+      variant: { properties: Record<string, Record<string, unknown>> },
+    ): string => (variant.properties.schema_ref.enum as string[])[0]!;
+    const geneVariant = expressionSchema.oneOf.find(
+      (variant) => schemaRef(variant) === "gene_expression.long.v1",
+    )!;
+    const probeVariant = expressionSchema.oneOf.find(
+      (variant) => schemaRef(variant) === "gene_expression.probe_long.v1",
+    )!;
 
-    expect(specSchema.additionalProperties).toBe(false);
-    expect(specSchema.required).toEqual([
+    expect(expressionSchema.oneOf).toHaveLength(2);
+    expect(geneVariant.properties.dataset_family.enum).toEqual(["gene_expression"]);
+    expect(geneVariant.additionalProperties).toBe(false);
+    expect(geneVariant.required).toEqual([
       "build_id",
       "objective",
       "dataset_family",
@@ -49,24 +62,48 @@ describe("Pi DatasetBuild tools", () => {
       "source_bindings",
       "validation_profile_ref",
     ]);
-    expect(specSchema.properties.schema_ref.enum).toEqual([
-      "gene_expression.long.v1",
-      "gene_expression.probe_long.v1",
-    ]);
-    expect(specSchema.properties.validation_profile_ref.enum).toEqual([
+    expect(geneVariant.properties.validation_profile_ref.enum).toEqual([
       "gene_expression.release.v1",
+    ]);
+    expect(probeVariant.properties.validation_profile_ref.enum).toEqual([
       "gene_expression.probe_release.v1",
     ]);
 
-    const sourceBindings = specSchema.properties.source_bindings as {
-      items: { properties: Record<string, Record<string, unknown>> };
+    const sourceBindings = geneVariant.properties.source_bindings as {
+      items: {
+        oneOf: Array<{
+          properties: Record<string, Record<string, unknown>>;
+          required: string[];
+        }>;
+      };
     };
-    expect(sourceBindings.items.properties.adapter_id.enum).toEqual([
+    const sourceOptions = sourceBindings.items.oneOf;
+    const adapterId = (
+      option: { properties: Record<string, Record<string, unknown>> },
+    ): string => (option.properties.adapter_id.enum as string[])[0]!;
+    expect(sourceOptions.map((option) => adapterId(option))).toEqual([
       "gdc.expression.v1",
       "geo.expression.v1",
       "xena.matrix.v1",
     ]);
-    expect(sourceBindings.items.properties.parameters.properties).toMatchObject({
+    const geoSource = sourceOptions.find(
+      (option) => adapterId(option) === "geo.expression.v1",
+    )!;
+    const gdcSource = sourceOptions.find(
+      (option) => adapterId(option) === "gdc.expression.v1",
+    )!;
+    expect(gdcSource.properties.parameters).toMatchObject({
+      properties: {},
+      additionalProperties: false,
+    });
+    expect(geoSource.required).toContain("parameters");
+    expect(geoSource.properties.parameters.required).toEqual([
+      "format",
+      "value_semantics",
+      "value_scale",
+      "expression_unit",
+    ]);
+    expect(geoSource.properties.parameters.properties).toMatchObject({
       format: { enum: ["tximport_counts", "series_matrix", "supplementary_matrix"] },
       value_semantics: {
         enum: ["expression_value", "normalized_expression", "raw_count"],
@@ -76,6 +113,14 @@ describe("Pi DatasetBuild tools", () => {
       is_normalized: { type: "boolean" },
       platform_ids: { type: "array" },
     });
+    const probeSources = probeVariant.properties.source_bindings as {
+      items: {
+        oneOf: Array<{ properties: Record<string, Record<string, unknown>> }>;
+      };
+    };
+    expect(probeSources.items.oneOf.map((option) => adapterId(option))).toEqual([
+      "geo.expression.v1",
+    ]);
 
     const executeParameters = executeTool!.parameters as {
       properties: Record<string, Record<string, unknown>>;
@@ -187,6 +232,25 @@ describe("Pi DatasetBuild tools", () => {
     expect(execute).toHaveBeenCalledTimes(1);
   });
 
+  test("strictly parses the spec before calling the Dataset Core", async () => {
+    const validate = vi.fn();
+    const tools = createDatasetBuildTools({
+      client: { validate, execute: vi.fn() },
+      taskId: "task_tool",
+      taskRoot: await toolTaskRoot(),
+      runId: () => "run_tool",
+      piSessionId: () => "pi_tool",
+    });
+
+    const result = await tools[0]!.execute({
+      spec: { ...spec, agent_threshold_override: 0 },
+    });
+
+    expect(validate).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ isError: true, details: { code: "invalid_input" } });
+    expect(result.content).toContain("unknown fields");
+  });
+
   test("does not execute a rejected spec and emits bounded diagnostics", async () => {
     const validate = vi.fn(async (): Promise<DatasetBridgeResponse> => ({
       version: 1, request_id: "request_reject", ok: false, data: null,
@@ -233,20 +297,23 @@ describe("Pi DatasetBuild tools", () => {
       runId: () => "run_tool",
       piSessionId: () => "pi_tool",
     });
-    const specParameter = (tools[0]!.parameters as {
+    const expressionSchema = (tools[0]!.parameters as {
       properties?: Record<string, unknown>;
     }).properties?.spec as {
-      properties?: Record<string, unknown>;
-      required?: string[];
-      additionalProperties?: boolean;
+      oneOf: Array<{
+        properties: Record<string, Record<string, unknown>>;
+        required: string[];
+        additionalProperties: boolean;
+      }>;
     };
-    expect(specParameter.additionalProperties).toBe(false);
-    expect(specParameter.required).toContain("schema_ref");
-    expect(specParameter.required).toContain("validation_profile_ref");
-    expect(specParameter.required).toContain("source_bindings");
-    const schemaRef = specParameter.properties?.schema_ref as { enum?: string[] };
-    expect(schemaRef.enum).toEqual(["gene_expression.long.v1", "gene_expression.probe_long.v1"]);
-    const profileRef = specParameter.properties?.validation_profile_ref as { enum?: string[] };
-    expect(profileRef.enum).toEqual(["gene_expression.release.v1", "gene_expression.probe_release.v1"]);
+    expect(expressionSchema.oneOf).toHaveLength(2);
+    for (const variant of expressionSchema.oneOf) {
+      expect(variant.additionalProperties).toBe(false);
+      expect(variant.required).toContain("schema_ref");
+      expect(variant.required).toContain("validation_profile_ref");
+      expect(variant.required).toContain("source_bindings");
+      expect(variant.properties.schema_ref.enum).toHaveLength(1);
+      expect(variant.properties.validation_profile_ref.enum).toHaveLength(1);
+    }
   });
 });

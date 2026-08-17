@@ -51,10 +51,9 @@ import {
 import {
   getValidationProfile,
   SpecValidator,
-  VALIDATION_PROFILE_REFS,
   type SpecValidationResult,
 } from "../validation/index.js";
-import { createDefaultSchemaRegistry } from "../schema/registry.js";
+import { createDefaultDatasetFamilyRegistry } from "../families/index.js";
 import { acquireBuildLock, type BuildLockLease } from "./build-lock.js";
 import type { DatasetHILGate } from "../review/hil-policy.js";
 import { reviewBatchForHIL } from "../review/hil-policy.js";
@@ -223,7 +222,9 @@ export function createTsCoreOperationRunner(options: {
   const { spec, taskId, taskRoot, outputDir, sourceAssets, mappingAssets, runnerState, bindings } = options;
   const fence = options.fence ?? null;
   const hilGate = options.hilGate ?? null;
-const schema = createDefaultSchemaRegistry().get(spec.schema_ref);
+  const familyRegistry = createDefaultDatasetFamilyRegistry();
+  familyRegistry.get(spec.dataset_family);
+  const schema = familyRegistry.schemaRegistry().get(spec.schema_ref);
 
   return async (op, _upstream, signal, suspension): Promise<OperationOutput> => {
     throwIfAborted(signal);
@@ -540,7 +541,12 @@ export class TypeScriptDatasetCore {
   }
 
   async validateDatasetBuildSpec(spec: DatasetBuildSpec): Promise<SpecValidationResult> {
-    const validator = new SpecValidator(createDefaultSchemaRegistry(), VALIDATION_PROFILE_REFS);
+    const familyRegistry = createDefaultDatasetFamilyRegistry();
+    const validator = new SpecValidator(
+      familyRegistry.schemaRegistry(),
+      familyRegistry.validationProfileRefs(),
+      familyRegistry,
+    );
     return validator.validate(spec);
   }
 
@@ -550,6 +556,11 @@ export class TypeScriptDatasetCore {
   ): Promise<BuildRecord> {
     const { taskId, taskRoot } = this.options;
     const buildId = spec.build_id;
+    // Admission lookups are pure and may throw. Resolve them before taking the
+    // fenced build lease so invalid direct Core calls cannot strand the lock.
+    const familyRegistry = createDefaultDatasetFamilyRegistry();
+    familyRegistry.get(spec.dataset_family);
+    familyRegistry.schemaRegistry().get(spec.schema_ref);
     const outputDir = path.join(taskRoot, "datasets_build", buildId);
     const stateDir = path.join(outputDir, "state");
     mkdirSync(outputDir, { recursive: true });

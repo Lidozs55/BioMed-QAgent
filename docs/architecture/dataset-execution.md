@@ -181,11 +181,14 @@ fixture 豁免、是否仅研究用途。以 `SOURCE_CAPABILITIES` 单一事实�
 
 ### 7.3 来源接入不变量
 
-新来源接入**不应**修改多个数据库组合分支。新来源通过注册 Adapter + Canonical
-Schema + Validation Profile 接入，组合可能性由兼容性判断决定，不靠 allowlist
-枚举。
+新来源接入**不应**修改多个数据库组合分支。新 family 通过完整
+`DatasetFamilyDefinition` 登记 Canonical Schema、粒度、来源 Adapter、Profile、
+source/schema 与 schema/profile 兼容关系和已实现 runtime ID；同一 family 的新来源登记
+source-to-adapter/schema 能力。Agent Tool Schema 与 Core admission 从同一
+`DatasetFamilyRegistry` 派生，组合可能性由兼容性判断决定，
+不靠散落的 allowlist 枚举。仅注册 Schema 不代表该 family 可以执行或发布。
 
-> 决策依据：ADR-008、ADR §21.7（踩坑）。
+> 决策依据：ADR-008、ADR-027、ADR §21.7（踩坑）。
 
 ### 7.4 非表达研究数据的发布边界
 

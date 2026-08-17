@@ -353,6 +353,15 @@ describe("contract invariants (mirror Pydantic model_validator)", () => {
     ).toThrow(/safe path identifier/);
   });
 
+  test("DatasetBuildSpec keeps target_entity_level family-neutral", () => {
+    expect(parseDatasetBuildSpec({ ...spec, target_entity_level: "variant" }))
+      .toMatchObject({ target_entity_level: "variant" });
+    expect(() => parseDatasetBuildSpec({ ...spec, target_entity_level: "" }))
+      .toThrow(/non-empty string/);
+    expect(() => parseDatasetBuildSpec({ ...spec, target_entity_level: 1 }))
+      .toThrow(/non-empty string/);
+  });
+
   test("DatasetBuildSpec normalizes missing schema_version", () => {
     const withoutVersion: DatasetBuildSpec = { ...spec };
     delete withoutVersion.schema_version;
