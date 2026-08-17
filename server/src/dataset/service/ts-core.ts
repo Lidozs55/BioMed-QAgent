@@ -48,7 +48,6 @@ import {
   type OperationOutput,
   type OperationRunner,
 } from "../runtime/index.js";
-import { buildGeneExpressionSchema } from "../schema/index.js";
 import {
   getValidationProfile,
   SpecValidator,
@@ -217,7 +216,7 @@ export function createTsCoreOperationRunner(options: {
   const { spec, taskId, taskRoot, outputDir, sourceAssets, mappingAssets, runnerState, bindings } = options;
   const fence = options.fence ?? null;
   const hilGate = options.hilGate ?? null;
-  const schema = buildGeneExpressionSchema();
+  const schema = createDefaultSchemaRegistry().get(spec.schema_ref);
 
   return async (op, _upstream, signal, suspension): Promise<OperationOutput> => {
     throwIfAborted(signal);

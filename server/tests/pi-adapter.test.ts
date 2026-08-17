@@ -33,6 +33,10 @@ class FakeUpstreamSession implements PiUpstreamSession {
   readonly dispose = vi.fn();
   private readonly listeners = new Set<(event: PiUpstreamEvent) => void>();
   promptImplementation: (input: string) => Promise<void> = async () => undefined;
+  continueAfterLengthImplementation: () => Promise<void> = async () => undefined;
+  readonly continueAfterLength = vi.fn(
+    async (): Promise<void> => this.continueAfterLengthImplementation(),
+  );
 
   get listenerCount(): number {
     return this.listeners.size;
@@ -139,6 +143,32 @@ describe("PiAgentAdapter", () => {
       type: "context_compacted",
       summary: "compacted checkpoint summary",
     });
+  });
+
+  test("continues a length-truncated Pi turn before reporting completion", async () => {
+    const upstream = new FakeUpstreamSession();
+    upstream.promptImplementation = async () => {
+      const lengthEnd = {
+        type: "message_end",
+        assistantStopReason: "length",
+      };
+      upstream.emit(lengthEnd);
+    };
+    upstream.continueAfterLengthImplementation = async () => {
+      const completedEnd = {
+        type: "message_end",
+        assistantStopReason: "stop",
+      };
+      upstream.emit(completedEnd);
+    };
+    const session = await new PiAgentAdapter({
+      createUpstreamSession: async () => upstream,
+    }).createSession(sessionConfig);
+
+    const events = await collect(session.run("finish the dataset"));
+
+    expect(upstream.continueAfterLength).toHaveBeenCalledOnce();
+    expect(events.filter((event) => event.type === "turn_completed")).toHaveLength(1);
   });
 
   test("ignores aborted or summary-less Pi compaction completions", async () => {

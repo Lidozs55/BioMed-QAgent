@@ -130,6 +130,18 @@ function geoProbeSpec(): ReturnType<typeof parseDatasetBuildSpec> {
   });
 }
 
+function geoProbeLevelSpec(): ReturnType<typeof parseDatasetBuildSpec> {
+  return parseDatasetBuildSpec({
+    ...geoProbeSpec(),
+    build_id: "build_geo_probe_level",
+    objective: "publish GEO expression without guessing probe-to-gene mappings",
+    row_granularity: "probe_sample_measurement",
+    schema_ref: "gene_expression.probe_long.v1",
+    validation_profile_ref: "gene_expression.probe_release.v1",
+    target_entity_level: "probe",
+  });
+}
+
 async function newCore(): Promise<{ taskRoot: string; taskId: string; core: TypeScriptDatasetCore; events: Array<{ event: CoreOperationEvent; buildId: string }> }> {
   const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-core-"));
   roots.push(taskRoot);
@@ -228,6 +240,44 @@ describe("TS Core E2E golden outcomes (I-07)", () => {
     expect(record.manifest?.artifacts.some((entry) =>
       entry.role === "audit_report" && entry.relative_path.includes("probe_mapping")
     )).toBe(true);
+  });
+
+  it("GEO: a validated probe-level schema reaches publication without a gene mapping", async () => {
+    const { taskRoot, core } = await newCore();
+    const matrix = gzipSync(Buffer.from(
+      '!Sample_platform_id\t"GPL570"\n' +
+        '!series_matrix_table_begin\n' +
+        '"ID_REF"\t"GSM1"\n' +
+        '"PROBE1"\t1.5\n' +
+        '!series_matrix_table_end\n',
+      "utf8",
+    ));
+    const source = await assetFromBytes(
+      taskRoot,
+      "series_matrix.txt.gz",
+      matrix,
+      "binding_geo",
+    );
+
+    const record = await core.executeDatasetBuild(geoProbeLevelSpec(), {
+      runId: "run_geo_probe_level",
+      sourceAssets: { binding_geo: source },
+      mappingAssets: {},
+    });
+
+    expect(record.error, `record.error=${record.error ?? "null"}`).toBeNull();
+    expect(record.status).toBe("completed");
+    expect(record.manifest?.schema_ref).toBe("gene_expression.probe_long.v1");
+    const primaryPath = path.join(
+      taskRoot,
+      "datasets_build",
+      "build_geo_probe_level",
+      "merged",
+      "primary.csv",
+    );
+    expect((await readFile(primaryPath, "utf8")).split(/\r?\n/, 1)[0]).toContain(
+      "probe_id",
+    );
   });
 
   it("PARTIAL_SUCCESS: one valid + one rejected binding publishes with partial status", async () => {
