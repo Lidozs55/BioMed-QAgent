@@ -2,7 +2,7 @@
 
 > 文档状态：Implemented（M1 + M2，2026-08-14；详见实施计划与 CI）
 > 实施计划：[phase5-external-capabilities-completion-plan.md](phase5-external-capabilities-completion-plan.md)
-> 迁移主线：[../BioMed-QAgent_Pi_Migration_Plan.md](../BioMed-QAgent_Pi_Migration_Plan.md) §20 Phase 5
+> 迁移主线：[BioMed-QAgent_Pi_Migration_Plan.md](BioMed-QAgent_Pi_Migration_Plan.md) §20 Phase 5
 
 本文档是 Phase 5 的 baseline 与迁移矩阵：逐 Tool 记录 Python 参考实现、TS 目标、
 parity 契约要点与状态。契约稳定字段（参数名、JSON key、error/reason_code、

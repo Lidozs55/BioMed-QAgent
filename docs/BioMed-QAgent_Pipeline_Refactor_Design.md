@@ -295,7 +295,7 @@ Agent 应先回答：
 
 ### 4.11 置信度已有设计，落地不完整
 
-`docs/SURVEY_2026-08-05-data-confidence.md` 已正确区分确定性数据库通道与模型抽取通道，并提出记录级置信度。当前代码中：
+`docs/archive/SURVEY_2026-08-05-data-confidence.md` 已正确区分确定性数据库通道与模型抽取通道，并提出记录级置信度。当前代码中：
 
 - 字段映射置信度较粗；
 - VLM 图表数据点 `confidence` 列存在但为空，见 `extract_chart_data_vlm.py:353-364`；

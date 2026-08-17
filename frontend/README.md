@@ -468,6 +468,4 @@ pnpm build             # TypeScript + Vite 生产构建
 ## 相关文档
 
 - [项目架构设计（权威）](../docs/ARCHITECTURE.md)
-- [后端 README](../backend/README.md)
 - [开发 TODO](../docs/TODO.md)
-- [2026-07-18 流程审查报告](../docs/REVIEW_2026-07-18.md)

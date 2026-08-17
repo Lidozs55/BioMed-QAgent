@@ -5,9 +5,9 @@ TypeScript Host, Pi adapter, governed Workspace, and TS Dataset Core, plus the
 Phase 3 durable TS Application Runtime boundary. They are subordinate to
 [ARCHITECTURE.md](../ARCHITECTURE.md) and the
 [ADR index](../adr/README.md); they do not duplicate the full execution sequence in
-[BioMed-QAgent_Pi_Migration_Phase0_1_Detailed.md](../BioMed-QAgent_Pi_Migration_Phase0_1_Detailed.md)
+[BioMed-QAgent_Pi_Migration_Phase0_1_Detailed.md](BioMed-QAgent_Pi_Migration_Phase0_1_Detailed.md)
 and the overall phase plan in
-[BioMed-QAgent_Pi_Migration_Plan.md](../BioMed-QAgent_Pi_Migration_Plan.md).
+[BioMed-QAgent_Pi_Migration_Plan.md](BioMed-QAgent_Pi_Migration_Plan.md).
 Migration progress is tracked in [TODO.md](../TODO.md).
 
 > **Phase 8 status（2026-08-14）：迁移完成。** Legacy Python Runtime / FastAPI

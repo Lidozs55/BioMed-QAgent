@@ -1,5 +1,13 @@
 # Cache & File Import — Design
 
+> ⚠️ **Status update (2026-08-17)**: `backend/` 已随 Phase 8 物理删除，下文
+> "Authoritative code" 指向的路径已失效。现行实现：TS DatabaseClient
+> （`server/src/persistence/db-client.ts`）+ Python DB bridge
+> （`database/cache_store.py`，schema-neutral JSONL named-op）+ Agent 侧
+> `server/src/agent/tools/local-cache.ts` + `server/src/agent/tools/pdf.ts`；
+> FTS5 搜索、schema 泛化、cache ZIP export 等设计决策仍有效，代码位置以现状为准。
+> 已知缺口（缓存注册与下载流程脱节）见 [TODO.md](TODO.md) `search_local_cache` 条目。
+
 > **Status**: Implemented (Phase 1–10 + e2e tests)
 > **Scope**: local queryable cache + LLM-driven file import pipeline +
 > PDF extraction + cache ZIP export + FTS5 search + schema generalization

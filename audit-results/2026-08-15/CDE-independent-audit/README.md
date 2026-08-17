@@ -1,6 +1,6 @@
 # C / D / E 独立审计报告
 
-> 依据：`docs/AI_AUDIT_TEST_PLAN.md` v1.0  
+> 依据：`docs/archive/reviews/AI_AUDIT_TEST_PLAN_2026-08-15.md` v1.0  
 > 分组：C Runtime（M04、M05、M11）/ D 外部能力与持久化（M08、M09、M10）/ E 前端与发布（M12、M13）  
 > 审计日期：2026-08-15  
 > 审计分支：`audit/cde-2026-08-15`  

@@ -393,7 +393,7 @@ pnpm --filter @biomed/server exec playwright install chromium
 
 ## 9. 项目骨架一览
 
-目录结构与各目录职责以 [README.md](README.md)「项目结构」一节为准，此处不重复维护。
+目录结构与各目录职责以 [README.md](../README.md)「项目结构」一节为准，此处不重复维护。
 
 ---
 
