@@ -220,4 +220,33 @@ describe("Pi DatasetBuild tools", () => {
       requestId: "request_reject",
     }));
   });
+
+  test("exposes a typed DatasetBuildSpec schema so the agent stops inventing wrapper structures", async () => {
+    // Regression (e2e gold2): the spec parameter schema was an opaque
+    // {type:"object", additionalProperties:true}, so the agent invented
+    // {config:{schema:...}} and the validator saw schema_ref=None. The tool
+    // schema must name the top-level fields and the registered values.
+    const tools = createDatasetBuildTools({
+      client: { validate: async () => ({ version: 1, request_id: "r", ok: true, data: { valid: true, reason_codes: [], reasons: [] }, error: null }), execute: async () => ({ version: 1, request_id: "r", ok: false, data: null, error: { code: "no_data", message: "x", retryable: false, details: {} } }) },
+      taskId: "task_tool",
+      taskRoot: await toolTaskRoot(),
+      runId: () => "run_tool",
+      piSessionId: () => "pi_tool",
+    });
+    const specParameter = (tools[0]!.parameters as {
+      properties?: Record<string, unknown>;
+    }).properties?.spec as {
+      properties?: Record<string, unknown>;
+      required?: string[];
+      additionalProperties?: boolean;
+    };
+    expect(specParameter.additionalProperties).toBe(false);
+    expect(specParameter.required).toContain("schema_ref");
+    expect(specParameter.required).toContain("validation_profile_ref");
+    expect(specParameter.required).toContain("source_bindings");
+    const schemaRef = specParameter.properties?.schema_ref as { enum?: string[] };
+    expect(schemaRef.enum).toEqual(["gene_expression.long.v1", "gene_expression.probe_long.v1"]);
+    const profileRef = specParameter.properties?.validation_profile_ref as { enum?: string[] };
+    expect(profileRef.enum).toEqual(["gene_expression.release.v1", "gene_expression.probe_release.v1"]);
+  });
 });

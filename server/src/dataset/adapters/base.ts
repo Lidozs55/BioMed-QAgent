@@ -1,7 +1,6 @@
 /** Shared adapter primitives kept separate from the GEO registry import graph. */
 
-import { mkdirSync, statSync, unlinkSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { appendFileSync, mkdirSync, statSync, unlinkSync } from "node:fs";
 import { basename, join } from "node:path";
 
 import type { JsonValue } from "@biomed/contracts";
@@ -62,6 +61,65 @@ export const REJECTED_COLUMNS: readonly string[] = [
 
 export interface RowWriter {
   writeRow(values: readonly string[]): void;
+}
+
+/** Rows buffered before a sync append; bounds memory for large matrices. */
+const CSV_WRITER_FLUSH_ROWS = 8192;
+
+/**
+ * Bounded-memory CSV writer implementing the synchronous RowWriter contract.
+ *
+ * Extractors emit rows one at a time; accumulating every row and joining
+ * once (the pre-fix behavior) allocates multi-gigabyte heaps for large
+ * matrices and blocks the event loop for the whole join. This writer appends
+ * the header plus rows in bounded chunks instead, so peak memory stays flat
+ * and the cooperative checkpoints in extraction loops keep firing.
+ *
+ * The output file is always overwritten (any stale partial file from an
+ * interrupted attempt is removed first), matching the plain ``writeFile``
+ * semantics the pipeline had before streaming writes were introduced.
+ */
+export class BufferedCsvWriter implements RowWriter {
+  private readonly buffer: string[] = [];
+  private readonly flushAt: number;
+
+  constructor(
+    private readonly outputPath: string,
+    header: readonly string[],
+    flushAt: number = CSV_WRITER_FLUSH_ROWS,
+  ) {
+    try {
+      unlinkSync(outputPath);
+    } catch {
+      // fresh output: nothing to remove
+    }
+    this.buffer.push(csvLine(header));
+    this.flushAt = flushAt;
+  }
+
+  writeRow(values: readonly string[]): void {
+    this.buffer.push(csvLine(values));
+    if (this.buffer.length >= this.flushAt) {
+      this.appendBuffer();
+    }
+  }
+
+  /** Append any buffered rows so the file reaches its final state. */
+  flush(): void {
+    if (this.buffer.length > 0) {
+      this.appendBuffer();
+    }
+  }
+
+  /** Alias of ``flush`` for callers that finalize with a ``close`` step. */
+  close(): void {
+    this.flush();
+  }
+
+  private appendBuffer(): void {
+    appendFileSync(this.outputPath, this.buffer.join(""), "utf8");
+    this.buffer.length = 0;
+  }
 }
 
 export interface ExtractContext {
@@ -125,25 +183,20 @@ export abstract class SourceAdapter {
     mkdirSync(batchDir, { recursive: true });
     const outputPath = join(batchDir, `${bindingId}.csv`);
     const rejectedPath = join(batchDir, `${bindingId}_rejected.csv`);
-    const longRows: string[][] = [];
-    const rejectedRows: string[][] = [];
+    const longWriter = new BufferedCsvWriter(outputPath, SOURCE_LONG_COLUMNS);
+    const rejectedWriter = new BufferedCsvWriter(rejectedPath, REJECTED_COLUMNS);
     try {
       const text = await readSourceTextAsync(sourcePath, signal);
       const rows = await delimitedRowsWithLinesAsync(text, "\t", signal);
       const { statistics, warnings, mappings, rejectedCount } = await this.extract(
         rows,
-        { writeRow: (values) => longRows.push([...values]) },
-        { writeRow: (values) => rejectedRows.push([...values]) },
+        longWriter,
+        rejectedWriter,
         { sourceAsset, buildId, bindingId, sourceName, parameters },
         signal,
       );
-      const longContent =
-        csvLine(SOURCE_LONG_COLUMNS) + longRows.map((row) => csvLine(row)).join("");
-      const rejectedContent =
-        csvLine(REJECTED_COLUMNS) +
-        rejectedRows.map((row) => csvLine(row)).join("");
-      await writeFile(outputPath, longContent, "utf8");
-      await writeFile(rejectedPath, rejectedContent, "utf8");
+      longWriter.flush();
+      rejectedWriter.flush();
       const checksum = await sha256FileStream(outputPath, signal);
       const rowCount = typeof statistics.row_count === "number" ? statistics.row_count : 0;
       const fileAsset = {

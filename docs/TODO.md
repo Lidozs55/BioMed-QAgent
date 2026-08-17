@@ -443,6 +443,19 @@ build 锁、cancel 收敛与 event sink；`DATASET_CORE=ts` 现为默认运行�
 - [x] durable replay 每页只提交一次 Zustand transaction，消除冷启动时最多 3,000 次
       store 通知；补齐滚动、渲染、合并边界和批量 replay 回归测试。
 
+### 数据管道回归覆盖（✅ 完成，2026-08-17，gold2 后续）
+
+- [x] **ts-core schema 解析修复的回归测试**：probe-level spec
+      （`gene_expression.probe_long.v1` / `gene_expression.probe_release.v1` /
+      `target_entity_level=probe`）经 GEO mini fixture（GPL570 series_matrix）
+      端到端构建，不依赖 probe→gene 映射即可发布：manifest `schema_ref` 为
+      `probe_long.v1`、`merged/primary.csv` 表头含 `probe_id`；修复前该路径会因
+      gene 列 CSV 被 `compatibility_gate` 以 `schema_mismatch` 拒绝。测试位于
+      `server/tests/phase5/ts-core-e2e.test.ts`。
+- [x] 顺手修复：`server/tests/validation-parity.ts` 的 `let carried = false`
+      无用初始赋值（`no-useless-assignment`）改为 `let carried: boolean`，
+      lint 门恢复通过。
+
 
 - [ ] **P1** model-registry 响应未做 wire-boundary 校验：`frontend/src/api/modelRegistry.ts`
       仍用窄化 cast（`b as ProviderInfo[]` 等）。下一步为 `packages/contracts`
@@ -554,3 +567,92 @@ build 锁、cancel 收敛与 event sink；`DATASET_CORE=ts` 现为默认运行�
 - [ ] **P2** 可拆卸工具包：每个工具拥有独立文档，可被其他 agent 单独调用；当前环境受限或不便完整启动
       整个项目时，可作为独立工具包使用。
 - [ ] **P3**（可选）沙箱环境：为数据安全提供沙箱保证。
+
+## 已登记 issue（2026-08-17 收尾审计）
+
+### gold2 提交侧编码损坏 → agent 误读（P1）
+
+- [ ] **P1** gold2（`gold2_luad_egfr_geo`）早期 `e2e-gold2-*` run 的中文 input 在提交侧
+      损坏为 `?`（task.json 标题 19 个问号，中文字符全变 `0x3F`；对照组 METTL5 中
+      文完好、后续 resume 系列经文件读取完好）→ agent 英文思考链仅体现
+      "EGFR GEO 检索 / tumor-vs-normal / probe→gene"，**未含"肺腺癌/LUAD"与
+      "EGFR 突变状态"**，实际构建为结直肠癌 cetuximab 耐药 PDX 队列
+      （GSE140973/GPL10332，build_egfr_cetuximab_crc_1），与 TOPIC 的 LUAD
+      EGFR WT/mutant 要求不符 → 工作错误确认（2026-08-17 思考链逐条对照）。
+- [ ] **P1** 修复方向：提交侧统一 `fs.readFileSync(path, "utf8")` 读取 input 文件后再
+      JSON POST（`_tmp_drive_gold2.mjs` / `_tmp_create_run.cjs` 为已验证正确范式）；
+      服务器侧可选加固：run 创建时检测 input 含 `\uFFFD` / 异常替换字符则返回可读
+      警告。历史损坏 run 不可逆，正确路径是以 TOPIC.txt 为准发起 LUAD-EGFR 构建
+      （新 build_id）。
+
+### 本地更改与远端 eval/gold-e2e-stabilization（46de68b）合并（P1）
+
+- [x] **P1** 本地 31 个文件未提交改动（基于 7c8bea7a）与远端 16 提交在 13 个文件重叠、
+      其中 12 个行级重叠。**功能重复两处**：text.ts 双流式读取实现（本地
+      `forEachCsvRowAsync` 回调式 vs 远端 `delimitedRowsFromFileAsync` 生成器式、
+      语义等价）；ts-core.ts schema 选择重复（本地 registry + 回退
+      `buildGeneExpressionSchema` vs 远端 registry 直取，行为有差异）。
+      ✅ 已合并（2026-08-17）：流式读取统一为远端生成器式
+      `delimitedRowsFromFileAsync`，`validation/profile.ts` 等剩余回调式调用点全部
+      迁移后删除 `forEachCsvRowAsync`；ts-core schema 选择统一为远端 registry 直取
+      语义（`buildGeneExpressionSchema` 仅保留为 registry 内建构造）；私家
+      `BoundedCsvWriter` 删除、统一使用 `BufferedCsvWriter`；`manifest.ts` 的
+      `forEachCsvDictRowAsync` 字典行读取一并迁移为生成器式。合并后
+      `pnpm typecheck / lint / test / build` 全绿（build-lock 跨进程时序用例
+      在全量并行下有偶发抖动，单测重跑 8/8 通过，确认非回归）。
+- [x] **P1** config.ts / bootstrap.ts：本地新增 `operationTimeoutMs`
+      （`DATASET_OPERATION_TIMEOUT_MS`）与远端移除 `workspaceDevExec` + 新增
+      `resolveRuntimeLimits`（`RuntimeLimits` @biomed/contracts）属不同字段，但两套
+      "运行时限制"机制并存。✅ 已合并（2026-08-17）：两机制语义正交——
+      `operationTimeoutMs`（env `DATASET_OPERATION_TIMEOUT_MS` 可选覆盖）保留并接入
+      `Phase3RuntimeOptions`；`workspaceDevExec` 随远端移除；`resolveRuntimeLimits`
+      保留（settings 路径）。
+- [x] **P2** docs/TODO.md 两侧均修改，合并且工处理文档冲突——双侧内容双保留（上游聊天流
+      稳定性/框架迭代段 + 本地数据管道回归/issue 审计段），本文档即合并结果。
+
+### gold3–6 揭露的非表达数据受信任 Publication 缺口（2026-08-17）
+
+> 背景：gold3–6（EGFR 靶点多源 / Spike–ACE2 / ChEMBL 活性 / 论文图表抽取，
+> 由 AI agent 直连公开 API 生产）作为参考输出揭露：这些主题在当前系统中
+> **无法走受信任 Dataset Core publication 路径**。证据链与 reference schema
+> 见 `data/gold/SCHEMA_GAP.md` 与 `data/gold/gold{3..6}_*/schemas/`。
+
+- [ ] **P1** SchemaRegistry 仅有 2 个内建表达 schema（`gene_expression.long.v1`
+      / `probe_long.v1`，`server/src/dataset/schema/registry.ts`），spec
+      validator 对其余 schema_id 一律 `unknown_schema` 拒绝。分级推进：
+      **方案 B**（半天–1 天）——把 gold3–6 已备的 4 个 family / 22 张
+      reference schema 注册进 registry（含 `ENTITY_LEVEL_BY_GRANULARITY`
+      补映射），使非表达 spec 至少通过 validate；**方案 A**（数天，需 ADR）
+      ——为新 family 建 canonicalizer / publisher 全管线支持，含 golden
+      fixture parity。
+- [ ] **P1** 非 GEO 类源无受信任 SourceAdapter：受信任管线 adapter 仅覆盖
+      GEO / GDC / Xena / STAR counts（`server/src/dataset/adapters/`），
+      UniProt / ClinVar / RCSB PDB / ChEMBL / PubChem / ClinicalTrials.gov /
+      Europe PMC 只有 agent 业务 Tool（Phase 5 P5-02…08，产物停在
+      workspace/cache），检索结果无法进入 DatasetBuild。gold3/4/5/6 用到的
+      源全部命中此缺口。方案 B 打通 schema 后此缺口成为主要阻塞，需按
+      family 逐源评估：结构化 API 响应 → SourceAsset → adapter 的最小路径。
+- [ ] **P2** 图表数字化产物无受信任落点：Qwen-VL chart extraction 工具
+      （P5-08）可估读图表，但 chart_series / chart_points 类产物（含
+      `estimated` / `axis_unclear` / `legend_unclear` /
+      `human_review_status` 质量字段，见 gold6 schema）没有 schema 与
+      publication 路径；可与既有 Durable HIL / Confidence 协议复用
+      （低可信估读值天然适合 confidence gate + 人工审核流）。
+- [ ] **P2** 计算衍生数据无 operation 类型：gold4 `interface_records` 是
+      PDB 坐标距离计算的**衍生**数据（非检索所得），同类还有序列比对映射
+      （gold4 参考编号用 NW 全局比对）。受信任管线目前只有"parse →
+      canonicalize → integrate"检索整合型 operation，无 compute/derive 类；
+      若纳入需 ADR 明确确定性与 provenance 语义（参数、参考序列版本）。
+- [ ] **P2** 跨库实体对齐表无 family 承载：entity_crosswalk /
+      compound_crosswalk（gold3/5）这类"行=实体关系"而非"行=测量记录"的
+      表，现有 schema 形状（measurement/unit 中心）不适配；且对齐证据
+      （InChIKey 精确匹配、冲突保留不合并）需要专用 provenance 字段。
+      可与方案 B 一并设计 `entity_link` 类 row_granularity。
+
+### git 卫生（2026-08-17）
+
+- [ ] **P2** .gitignore 已新增 `_tmp*`、`.tmp-*` 规则。未跟踪的 `docs/runs-log.md`
+      （运行记录文档）与 `server/tests/phase5/fixtures/geo/gpl10332_soft.txt.gz`
+      （geo-probe-mapping.test.ts 依赖的 fixture）应保留并跟踪，勿按 tmp 清理。
+- [ ] **P2** `docs/runs-log.md` 补记早期 e2e-gold2-* run 的编码损坏红旗（P1–P4
+      审计结论尚未全文落档）。

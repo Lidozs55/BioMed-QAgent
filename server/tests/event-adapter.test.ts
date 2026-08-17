@@ -112,6 +112,38 @@ describe("PiEventAdapter", () => {
     });
   });
 
+  test("a turn that ended after compaction is not terminal until completeRun", () => {
+    const { adapter } = createAdapter();
+    const events = [
+      ...adapter.adapt(runId, { type: "turn_started" }),
+      ...adapter.adapt(runId, { type: "context_compacted", summary: "checkpoint" }),
+      ...adapter.adapt(runId, { type: "turn_completed" }),
+    ];
+    // The compacted turn end emits no terminal event: the runtime resumes the
+    // run with a fresh turn instead of terminating it.
+    expect(events.map((event) => event.type)).toEqual([
+      "run_started",
+      "conversation_compacted",
+    ]);
+    // A second turn completes normally and is terminal.
+    const second = [
+      ...adapter.adapt(runId, { type: "turn_started" }),
+      ...adapter.adapt(runId, { type: "turn_completed" }),
+    ];
+    expect(second.map((event) => event.type)).toEqual(["run_started", "run_completed"]);
+  });
+
+  test("completeRun forces the terminal run_completed for a compacted run", () => {
+    const { adapter } = createAdapter();
+    adapter.adapt(runId, { type: "turn_started" });
+    adapter.adapt(runId, { type: "context_compacted", summary: "checkpoint" });
+    adapter.adapt(runId, { type: "turn_completed" });
+    const forced = adapter.completeRun(runId);
+    expect(forced.map((event) => event.type)).toEqual(["run_completed"]);
+    // Idempotent: a second force emits nothing.
+    expect(adapter.completeRun(runId)).toEqual([]);
+  });
+
   test("maps stable failure and cancellation request/ack", () => {
     const { adapter } = createAdapter();
     const request = adapter.cancellationRequested(runId, "user requested");

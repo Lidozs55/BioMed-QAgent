@@ -13,10 +13,10 @@
  *   new-unique-row path).
  *
  * The loop-coverage tests are deterministic: a spy counts ``setImmediate``
- * yields.  The parse phase of a 200k-row file yields exactly 24 times
- * (stride 8192); the 25th ``setImmediate`` can only come from the loop's
+ * yields.  The parse phase of a 100k-row file yields exactly 12 times
+ * (stride 8192); the 13th ``setImmediate`` can only come from the loop's
  * first checkpoint (stride 4096) — i.e. the checkpoint-under-test.  When the
- * count reaches 25 the spy aborts the operation controller *before*
+ * count reaches 13 the spy aborts the operation controller *before*
  * delegating to the real ``setImmediate``, so the loop's checkpoint throws
  * ``OperationAbortedError``.  Without the fix the loop never yields again,
  * the abort never fires and the operation completes — the assertion fails.
@@ -247,10 +247,11 @@ describe("M2 checkpoint coverage for rejection/dedup workloads (audit round 2)",
         auditPaths: [],
       };
       const controller = new AbortController();
-      // readCsvDictRows checkpointed 48 times for 200k rows (stride 4096);
-      // the next yield can only come from the dedup loop's checkpoint —
-      // aborting there proves the dedup path itself honors the signal.
-      installYieldSpy(controller, PARSE_YIELDS + Math.floor(ROWS / 4096) + 1);
+      // The streaming read yields 12 times for 100k rows (stride 8192); the
+      // next setImmediate can only come from the dedup loop's first
+      // checkpoint (stride 4096) — aborting there proves the dedup path
+      // itself honors the signal.
+      installYieldSpy(controller, ABORT_AFTER_CALLS);
       await expect(
         integrate({
           results: [result],

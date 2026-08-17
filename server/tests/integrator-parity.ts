@@ -338,6 +338,26 @@ export async function checkIntegratorParity(options: {
     check(issues, threw, "unsupported merge strategy must raise IntegratorError");
   }
 
+  // test_union_alias_accepted ("union" maps onto append_by_canonical_row)
+  {
+    const out = join(outputRoot, "union-alias");
+    mkdirSync(out, { recursive: true });
+    const gdc = await canonical({
+      fixturesRoot,
+      fixture: "gdc/gdc_expression.tsv",
+      adapterId: "gdc.expression.v1",
+      bindingId: "binding_gdc",
+      outputDir: out,
+    });
+    const result = await integrate(
+      integrateOptions({ outputDir: out, results: [gdc], mergeStrategy: "union" }),
+    );
+    check(issues, result.rowCount === 4, "union alias: row_count must be 4");
+    check(issues, result.dedupCount === 0, "union alias: dedup_count must be 0");
+    const stats = result.batch.statistics as Record<string, unknown>;
+    check(issues, stats["merge_strategy"] === "append_by_canonical_row", "union alias: statistics must record normalized strategy");
+  }
+
   // test_zero_sources_rejected
   {
     const out = join(outputRoot, "zero");

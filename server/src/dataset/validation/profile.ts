@@ -6,8 +6,8 @@
  * and (gene-required builds) complete probe→gene coverage.
  */
 
-import { existsSync } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
+import { createReadStream, existsSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
 
 import type {
   ConfidenceGatePolicy,
@@ -20,9 +20,9 @@ import type { JsonValue } from "@biomed/contracts";
 import { parseValidationProfile } from "../contracts/index.js";
 
 import { CHECKPOINT_STRIDE, checkpoint, throwIfAborted } from "../cooperative.js";
-import { delimitedRowsWithLinesAsync, readSourceTextAsync } from "../adapters/text.js";
+import { delimitedRowsFromFileAsync } from "../adapters/text.js";
 import {
-  aggregateConfidenceMetrics,
+  ConfidenceColumnAggregator,
   anomaliesOf,
   defaultConfidenceThresholds,
   writeConfidenceReport,
@@ -184,71 +184,120 @@ function isFiniteNumber(value: string): boolean {
 
 class Utf8DecodeError extends Error {}
 
-/** Strict UTF-8 decode with Python ``UnicodeDecodeError``-style messages. */
-function decodeUtf8Strict(buffer: Buffer): string {
-  let result = "";
-  let index = 0;
-  while (index < buffer.length) {
-    const byte = buffer[index];
-    let length: number;
-    let codePoint: number;
-    if (byte < 0x80) {
-      length = 1;
-      codePoint = byte;
-    } else if ((byte & 0xe0) === 0xc0) {
-      length = 2;
-      codePoint = byte & 0x1f;
-      if (byte < 0xc2) {
-        throw new Utf8DecodeError(utf8Error("invalid start byte", byte, index));
+/**
+ * Bounded-memory strict UTF-8 validator. Feed raw bytes chunk by chunk with
+ * ``push``; the same byte rules as the former in-memory ``decodeUtf8Strict``
+ * apply (Python ``UnicodeDecodeError``-style messages, absolute byte
+ * positions), but no decoded string is ever materialized, and a multi-byte
+ * sequence split across a chunk boundary is carried over until its
+ * continuation bytes arrive. Call ``finish`` at EOF: a sequence still open
+ * then is ``unexpected end of data``.
+ */
+export class Utf8StreamingValidator {
+  private pending: Buffer = Buffer.alloc(0);
+  private offset = 0;
+
+  push(bytes: Buffer): void {
+    const pendingLength = this.pending.length;
+    const combined =
+      pendingLength > 0 ? Buffer.concat([this.pending, bytes]) : bytes;
+    this.pending = Buffer.alloc(0);
+    const start = this.offset - pendingLength;
+    let index = 0;
+    while (index < combined.length) {
+      const absolute = start + index;
+      const byte = combined[index];
+      let length: number;
+      let codePoint: number;
+      if (byte < 0x80) {
+        length = 1;
+        codePoint = byte;
+      } else if ((byte & 0xe0) === 0xc0) {
+        length = 2;
+        codePoint = byte & 0x1f;
+        if (byte < 0xc2) {
+          throw new Utf8DecodeError(utf8Error("invalid start byte", byte, absolute));
+        }
+      } else if ((byte & 0xf0) === 0xe0) {
+        length = 3;
+        codePoint = byte & 0x0f;
+      } else if ((byte & 0xf8) === 0xf0) {
+        length = 4;
+        codePoint = byte & 0x07;
+      } else {
+        throw new Utf8DecodeError(utf8Error("invalid start byte", byte, absolute));
       }
-    } else if ((byte & 0xf0) === 0xe0) {
-      length = 3;
-      codePoint = byte & 0x0f;
-    } else if ((byte & 0xf8) === 0xf0) {
-      length = 4;
-      codePoint = byte & 0x07;
-    } else {
-      throw new Utf8DecodeError(utf8Error("invalid start byte", byte, index));
+      if (index + length > combined.length) {
+        this.pending = Buffer.from(combined.subarray(index));
+        break;
+      }
+      for (let offset = 1; offset < length; offset += 1) {
+        const continuation = combined[index + offset];
+        if ((continuation & 0xc0) !== 0x80) {
+          throw new Utf8DecodeError(
+            utf8Error("invalid continuation byte", continuation, absolute + offset),
+          );
+        }
+        codePoint = (codePoint << 6) | (continuation & 0x3f);
+      }
+      if (
+        (length === 2 && codePoint < 0x80) ||
+        (length === 3 && codePoint < 0x800) ||
+        (length === 4 && codePoint < 0x10000)
+      ) {
+        throw new Utf8DecodeError(utf8Error("invalid start byte", byte, absolute));
+      }
+      if (codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff)) {
+        throw new Utf8DecodeError(utf8Error("invalid start byte", byte, absolute));
+      }
+      index += length;
     }
-    if (index + length > buffer.length) {
+    this.offset += bytes.length;
+  }
+
+  finish(): void {
+    if (this.pending.length > 0) {
+      const start = this.offset - this.pending.length;
       throw new Utf8DecodeError(
-        `'utf-8' codec can't decode bytes in position ${index}-${buffer.length - 1}: unexpected end of data`,
+        `'utf-8' codec can't decode bytes in position ${start}-${this.offset - 1}: unexpected end of data`,
       );
     }
-    for (let offset = 1; offset < length; offset += 1) {
-      const continuation = buffer[index + offset];
-      if ((continuation & 0xc0) !== 0x80) {
-        throw new Utf8DecodeError(
-          utf8Error("invalid continuation byte", continuation, index + offset),
-        );
-      }
-      codePoint = (codePoint << 6) | (continuation & 0x3f);
-    }
-    if (
-      (length === 2 && codePoint < 0x80) ||
-      (length === 3 && codePoint < 0x800) ||
-      (length === 4 && codePoint < 0x10000)
-    ) {
-      throw new Utf8DecodeError(utf8Error("invalid start byte", byte, index));
-    }
-    if (codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff)) {
-      throw new Utf8DecodeError(utf8Error("invalid start byte", byte, index));
-    }
-    result += String.fromCodePoint(codePoint);
-    index += length;
   }
-  return result;
+}
+
+/**
+ * Cooperative ``checkCsvEncoding`` backing: streams ``path`` in bounded
+ * chunks through ``Utf8StreamingValidator``, yielding to the event loop and
+ * re-checking the AbortSignal every 64 MiB so timeouts and cancels stay
+ * honored on multi-gigabyte primaries without loading the file whole.
+ */
+async function validateUtf8Streaming(
+  path: string,
+  signal?: AbortSignal | null,
+): Promise<void> {
+  throwIfAborted(signal);
+  const validator = new Utf8StreamingValidator();
+  const source = createReadStream(path, { highWaterMark: 1 << 20 });
+  let bytesRead = 0;
+  try {
+    for await (const chunk of source) {
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      validator.push(bytes);
+      bytesRead += bytes.length;
+      if (bytesRead % (64 * 1024 * 1024) === 0) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        throwIfAborted(signal);
+      }
+    }
+    validator.finish();
+  } finally {
+    source.destroy();
+  }
 }
 
 function utf8Error(reason: string, byte: number, position: number): string {
   const hex = byte.toString(16).padStart(2, "0");
   return `'utf-8' codec can't decode byte 0x${hex} in position ${position}: ${reason}`;
-}
-
-/** Python csv.reader row list for one file (header preserved as first row). */
-async function readCsvRows(path: string, signal?: AbortSignal | null): Promise<string[][]> {
-  const rows = await delimitedRowsWithLinesAsync(await readSourceTextAsync(path, signal), ",", signal);
-  return rows.map((row) => row.values);
 }
 
 export class ExpressionValidationProfile {
@@ -415,7 +464,7 @@ export class ExpressionValidationProfile {
   private async checkCsvEncoding(primaryPath: string, signal?: AbortSignal | null): Promise<ProfileCheck> {
     throwIfAborted(signal);
     try {
-      decodeUtf8Strict(await readFile(primaryPath));
+      await validateUtf8Streaming(primaryPath, signal);
       return {
         check_id: "csv_encoding_utf8",
         description: "primary dataset is UTF-8 encoded",
@@ -437,8 +486,11 @@ export class ExpressionValidationProfile {
 
   private async checkMinRows(_manifest: DatasetManifest, primaryPath: string, signal?: AbortSignal | null): Promise<ProfileCheck> {
     const minimum = this.profile.acceptance.minimum_valid_rows;
-    const rows = await readCsvRows(primaryPath, signal);
-    const fileRows = rows.length === 0 ? 0 : rows.length - 1;
+    let totalLines = 0;
+    for await (const { line } of delimitedRowsFromFileAsync(primaryPath, ",", signal)) {
+      totalLines = line;
+    }
+    const fileRows = totalLines === 0 ? 0 : totalLines - 1;
     return {
       check_id: "minimum_valid_rows",
       description: `primary dataset has at least ${minimum} row(s)`,
@@ -448,8 +500,11 @@ export class ExpressionValidationProfile {
   }
 
   private async checkColumnCount(primaryPath: string, schema: DatasetSchema, signal?: AbortSignal | null): Promise<ProfileCheck> {
-    const rows = await readCsvRows(primaryPath, signal);
-    const header = rows.length > 0 ? rows[0] : [];
+    let header: string[] = [];
+    for await (const { values } of delimitedRowsFromFileAsync(primaryPath, ",", signal)) {
+      header = values;
+      break; // only the header row is needed
+    }
     const expected = schema.fields.length;
     return {
       check_id: "column_count_matches_schema",
@@ -464,9 +519,8 @@ export class ExpressionValidationProfile {
       schema.fields.filter((field) => field.required).map((field) => field.name),
     );
     const valueColumn = valueField(schema);
-    const rows = await readCsvRows(primaryPath, signal);
-    const header = rows.length > 0 ? rows[0] : [];
-    const expected = header.length > 0 ? header.length : schema.fields.length;
+    let header: string[] = [];
+    let expected = schema.fields.length;
     let rowCount = 0;
     let malformedWidth = 0;
     const blankRequired: Record<string, number> = {};
@@ -474,16 +528,23 @@ export class ExpressionValidationProfile {
     const units = new Set<string>();
     let missingProvenance = 0;
     let visited = 0;
-    for (const row of rows.slice(1)) {
-      if (row.length === 0) continue; // blank lines are not data rows
+    let headerSeen = false;
+    for await (const { values: cells } of delimitedRowsFromFileAsync(primaryPath, ",", signal)) {
+      if (!headerSeen) {
+        headerSeen = true;
+        header = cells;
+        expected = header.length > 0 ? header.length : schema.fields.length;
+        continue;
+      }
+      if (cells.length === 0) continue; // blank lines are not data rows
       rowCount += 1;
-      if (row.length !== expected) {
+      if (cells.length !== expected) {
         malformedWidth += 1;
         continue;
       }
       const values: Record<string, string> = {};
       for (let index = 0; index < header.length; index += 1) {
-        values[header[index]] = row[index];
+        values[header[index]] = cells[index];
       }
       for (const field of required) {
         if (!(values[field] ?? "").trim()) {
@@ -604,18 +665,21 @@ export class ExpressionValidationProfile {
     signal?: AbortSignal | null,
   ): Promise<{ check: ProfileCheck; warnings: Array<Record<string, string>> }> {
     const valueColumn = valueField(schema);
-    const values: string[] = [];
-    const rows = await readCsvRows(primaryPath, signal);
-    const header = rows.length > 0 ? rows[0] : [];
-    const valueIndex = header.indexOf(valueColumn);
-    for (const row of rows.slice(1)) {
-      values.push(valueIndex >= 0 ? (row[valueIndex] ?? "") : "");
-      if (values.length % CHECKPOINT_STRIDE === 0) await checkpoint(signal);
+    const aggregator = new ConfidenceColumnAggregator(valueColumn, this.confidenceThresholds);
+    let valueIndex = -1;
+    let visited = 0;
+    let headerSeen = false;
+    for await (const { values } of delimitedRowsFromFileAsync(primaryPath, ",", signal)) {
+      if (!headerSeen) {
+        headerSeen = true;
+        valueIndex = values.indexOf(valueColumn);
+        continue;
+      }
+      aggregator.push(valueIndex >= 0 ? values[valueIndex] ?? "" : "");
+      visited += 1;
+      if (visited % CHECKPOINT_STRIDE === 0) await checkpoint(signal);
     }
-    const summary = aggregateConfidenceMetrics(
-      { [valueColumn]: values },
-      this.confidenceThresholds,
-    );
+    const summary = aggregator.summary();
     const reportPath = joinOutput(outputDir, "confidence_report.csv");
     writeConfidenceReport(summary, reportPath);
     const warnings = anomaliesOf(summary).map((finding) => ({
@@ -705,15 +769,18 @@ function sortedJson(record: Record<string, number>): string {
 
 /** Count primary rows whose ``gene_id_namespace`` is still ``geo_probe``. */
 async function countResidualGeoProbeRows(primaryPath: string, signal?: AbortSignal | null): Promise<number> {
-  const rows = await readCsvRows(primaryPath, signal);
-  if (rows.length === 0) return 0;
-  const header = rows[0];
-  const namespaceIndex = header.indexOf("gene_id_namespace");
-  if (namespaceIndex < 0) return 0;
+  let namespaceIndex = -1;
   let residual = 0;
   let visited = 0;
-  for (const row of rows.slice(1)) {
-    if ((row[namespaceIndex] ?? "").trim() === "geo_probe") residual += 1;
+  let headerSeen = false;
+  for await (const { values } of delimitedRowsFromFileAsync(primaryPath, ",", signal)) {
+    if (!headerSeen) {
+      headerSeen = true;
+      namespaceIndex = values.indexOf("gene_id_namespace");
+      if (namespaceIndex < 0) return residual;
+      continue;
+    }
+    if ((values[namespaceIndex] ?? "").trim() === "geo_probe") residual += 1;
     visited += 1;
     if (visited % CHECKPOINT_STRIDE === 0) await checkpoint(signal);
   }

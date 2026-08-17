@@ -27,20 +27,25 @@ afterEach(async () => {
 
 /**
  * Stands in for the Pi SDK session at the translated PiUpstreamEvent boundary:
- * during one prompt it reports a successful threshold compaction and an
- * aborted overflow compaction, then completes the turn.
+ * the first prompt reports a successful threshold compaction (which ends the
+ * Pi turn without auto-continue), the second prompt completes normally — the
+ * runtime must resume the run across the compaction boundary.
  */
 class CompactingUpstreamSession implements PiUpstreamSession {
   readonly sessionId = "pi-compaction-e2e";
+  prompts = 0;
   private readonly listeners = new Set<(event: PiUpstreamEvent) => void>();
 
   async prompt(): Promise<void> {
-    this.emit({
-      type: "compaction_end",
-      reason: "threshold",
-      compactionResult: { summary: "e2e checkpoint summary" },
-      aborted: false,
-    });
+    this.prompts += 1;
+    if (this.prompts === 1) {
+      this.emit({
+        type: "compaction_end",
+        reason: "threshold",
+        compactionResult: { summary: "e2e checkpoint summary" },
+        aborted: false,
+      });
+    }
     this.emit({ type: "compaction_end", reason: "overflow", aborted: true });
   }
 
@@ -63,13 +68,14 @@ class CompactingUpstreamSession implements PiUpstreamSession {
 }
 
 describe("Pi auto-compaction durable projection", () => {
-  test("records exactly one conversation_compacted event for a successful Pi compaction", async () => {
+  test("records one conversation_compacted event and resumes the run across the compaction boundary", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "biomed-pi-compaction-"));
     roots.push(root);
+    const upstream = new CompactingUpstreamSession();
     const runtime = await createDurableAgentRuntime({
       tasksRoot: root,
       adapter: new PiAgentAdapter({
-        createUpstreamSession: async () => new CompactingUpstreamSession(),
+        createUpstreamSession: async () => upstream,
       }),
       workspaceFactory: async ({ taskId }) => {
         const workspaceRoot = path.join(root, taskId);
@@ -114,6 +120,9 @@ describe("Pi auto-compaction durable projection", () => {
       summary_digest: createHash("sha256").update("e2e checkpoint summary", "utf8").digest("hex"),
     });
     expect(events.some((event) => event.payload.type === "run_completed")).toBe(true);
+    // The threshold compaction ended the first turn; the runtime resumed the
+    // run with a second turn instead of terminating it.
+    expect(upstream.prompts).toBe(2);
 
     await runtime.close();
   });

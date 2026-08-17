@@ -16,7 +16,7 @@
  * identical outputs and audits.
  */
 
-import { closeSync, mkdirSync, openSync, statSync, writeSync } from "node:fs";
+import { mkdirSync, statSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 
@@ -30,6 +30,7 @@ import type {
 } from "../contracts/index.js";
 import { assertValueScale, parseDataBatch, parseFileAsset } from "../contracts/index.js";
 import { CHECKPOINT_STRIDE, checkpoint, throwIfAborted } from "../cooperative.js";
+import { BufferedCsvWriter } from "../adapters/base.js";
 import { BuildError } from "../adapters/errors.js";
 import { assetIdFromSha256, makeRecordId } from "../adapters/identity.js";
 import { sha256FileStream } from "../adapters/hashing.js";
@@ -180,36 +181,6 @@ interface RejectedRow {
   source_raw_value: string;
 }
 
-class BoundedCsvWriter {
-  private readonly fd: number;
-  private pending = "";
-  private closed = false;
-
-  constructor(path: string, header: readonly string[]) {
-    this.fd = openSync(path, "w");
-    this.pending = csvLine(header);
-  }
-
-  writeRow(values: readonly string[]): void {
-    if (this.closed) throw new Error("CSV writer is closed");
-    this.pending += csvLine(values);
-    if (this.pending.length >= 64 * 1024) {
-      writeSync(this.fd, this.pending, undefined, "utf8");
-      this.pending = "";
-    }
-  }
-
-  close(): void {
-    if (this.closed) return;
-    if (this.pending.length > 0) {
-      writeSync(this.fd, this.pending, undefined, "utf8");
-      this.pending = "";
-    }
-    closeSync(this.fd);
-    this.closed = true;
-  }
-}
-
 function rejectedRow(
   row: Record<string, string>,
   batch: DataBatch,
@@ -266,12 +237,14 @@ async function writeFieldMappings(
  * stay in their original namespace and are never dropped.
  *
  * Phase 5 T7 (D2/D5): ``probeMap`` optionally maps ``geo_probe`` rows to gene
- * identifiers (a GPL platform annotation).  A hit is re-namespaced to
- * ``probeTargetNamespace`` and recorded with rule ``probe_gene_map``; an
- * unmapped probe stays ``geo_probe``.  Under the probe schema
- * (``gene_expression.probe_long.v1``) the canonical row carries
- * ``probe_id``/``platform_id``/``value`` instead of the gene-schema primary
- * columns.
+ * identifiers (a GPL platform annotation).  Under the gene schema a hit is
+ * re-namespaced to ``probeTargetNamespace`` and recorded with rule
+ * ``probe_gene_map``; under the probe schema the row keeps ``geo_probe`` (D5
+ * #2: the primary identity is ``probe_id``) and the mapping is audit-only
+ * (normalization log + probe mapping CSV).  An unmapped probe stays
+ * ``geo_probe``.  Under the probe schema (``gene_expression.probe_long.v1``)
+ * the canonical row carries ``probe_id``/``platform_id``/``value`` instead of
+ * the gene-schema primary columns.
  */
 export async function canonicalize(
   options: CanonicalizeOptions,
@@ -315,9 +288,13 @@ export async function canonicalize(
   const namespaces = new Set<string>();
   const units = new Set<string>();
   const identities = new Map<string, MeasurementIdentity>();
-  const canonicalWriter = new BoundedCsvWriter(canonicalPath, columns);
-  const rejectedWriter = new BoundedCsvWriter(rejectedPath, REJECTED_COLUMNS);
-  const logWriter = new BoundedCsvWriter(logPath, NORMALIZATION_LOG_COLUMNS);
+// Streamed outputs: row buffers are flushed in bounded chunks so large
+  // batches never accumulate the whole canonical/rejected/log files in memory
+  // (M2 large-file fix; the same shared BufferedCsvWriter the adapters use).
+  const canonicalWriter = new BufferedCsvWriter(canonicalPath, columns);
+  const rejectedWriter = new BufferedCsvWriter(rejectedPath, REJECTED_COLUMNS);
+  const logWriter = new BufferedCsvWriter(logPath, NORMALIZATION_LOG_COLUMNS);
+
   let header: string[] | null = null;
   let visited = 0;
   for await (const { values } of delimitedRowsFromFileAsync(sourcePath, ",", signal)) {
@@ -325,15 +302,15 @@ export async function canonicalize(
       header = values;
       continue;
     }
+    const row: Record<string, string> = {};
+    for (let index = 0; index < header.length; index += 1) {
+      row[header[index]] = values[index] ?? "";
+    }
     visited += 1;
     // M2: checkpoint per processed row (not only accepted rows) so an
     // extreme all-rejected workload still yields to the event loop and
     // honors the operation timeout / cancel signal.
     if (visited % CHECKPOINT_STRIDE === 0) await checkpoint(signal);
-    const row: Record<string, string> = {};
-    for (let index = 0; index < header.length; index += 1) {
-      row[header[index]] = values[index] ?? "";
-    }
     const geneIdRaw = row.gene_id_raw ?? "";
     const declared = row.gene_id_namespace_declared ?? "";
     const normalized =
@@ -424,10 +401,15 @@ export async function canonicalize(
       const target = lookupMap(probeMap, geneId);
       if (target !== undefined) {
         geneId = target;
-        namespace = probeTargetNamespace;
         version = "";
         probeMapped = true;
         probeMappedCount += 1;
+        if (!probeSchema) {
+          // D5 #2: under the probe contract the row identity stays geo_probe
+          // (probe_id) and the mapping is audit-only; under the gene contract
+          // a mapped row is re-namespaced so it becomes a gene row.
+          namespace = probeTargetNamespace;
+        }
       }
     }
     const canonicalRow: Record<string, string> = {};
@@ -482,7 +464,9 @@ export async function canonicalize(
         record_id: canonicalRow.record_id,
         gene_id_raw: row.gene_id_raw ?? "",
         gene_id: geneId,
-        gene_id_namespace: namespace,
+        // D5 #2: mapped probes under the probe schema keep geo_probe in the
+        // primary row; the log records the mapping target namespace instead.
+        gene_id_namespace: probeMapped && probeSchema ? probeTargetNamespace : namespace,
         gene_id_version: version,
         rule_id: ruleId,
         evidence,
@@ -495,7 +479,7 @@ export async function canonicalize(
     rowCount += 1;
   }
 
-  canonicalWriter.close();
+canonicalWriter.close();
   rejectedWriter.close();
   logWriter.close();
   await writeFieldMappings(mappingsPath, batch.declared_mappings);
