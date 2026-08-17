@@ -5,7 +5,7 @@ export type * from "./events.js";
 export * from "./hil.js";
 export type * from "./experimental-pi.js";
 export type * from "./json.js";
-export type * from "./task-run.js";
+export * from "./task-run.js";
 export type * from "./websocket.js";
 
 /* ---- Wire DTO types (settings / model registry / declarative databases) ---- */
