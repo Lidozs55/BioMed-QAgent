@@ -392,19 +392,19 @@ describe("governed Task Workspace (data/workspaces/<taskId>)", () => {
     });
   });
 
-  test("development exec uses fixed cwd, filtered environment, no shell, and bounded output", async () => {
+  test("exec preserves diagnostic paths with fixed cwd, filtered environment, no shell, and bounded output", async () => {
     const previous = process.env.BIOMED_TEST_SECRET;
     process.env.BIOMED_TEST_SECRET = "parent-secret";
     try {
       const { workspaceRoot, workspace } = await fixture({
         exec: true,
-        limits: { maxExecOutputBytes: 128 },
+        limits: { maxExecOutputBytes: 512 },
       });
       const result = await workspace.exec({
         executable: process.execPath,
         args: [
           "-e",
-          "process.stdout.write(JSON.stringify({cwd:process.cwd(),secret:process.env.BIOMED_TEST_SECRET})); process.stderr.write('e'.repeat(256))",
+          "process.stdout.write(JSON.stringify({cwd:process.cwd(),secret:process.env.BIOMED_TEST_SECRET})); process.stderr.write(process.cwd()+'\\n'+'e'.repeat(1024))",
         ],
       });
 
@@ -415,10 +415,10 @@ describe("governed Task Workspace (data/workspaces/<taskId>)", () => {
         cancelled: false,
         truncated: true,
       });
-      expect(result.stdout).toContain('"cwd":"[workspace]"');
-      expect(result.stdout).not.toContain(workspaceRoot);
+      expect(result.stdout).toContain(JSON.stringify(workspaceRoot));
+      expect(result.stderr).toContain(workspaceRoot);
       expect(result.stdout).not.toContain("parent-secret");
-      expect(Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr)).toBeLessThanOrEqual(128);
+      expect(Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr)).toBeLessThanOrEqual(512);
 
       const rejected = await workspace.exec({ executable: "node & whoami", args: [] });
       expect(rejected.policy).toBe("rejected");

@@ -73,7 +73,7 @@ const EVENT_TYPES = new Set([
   "subagent_input_required",
   "subagent_input_resumed",
   // Permission control plane (plan §30): events are run-scoped and drive
-  // the PermissionDialog; dropping them silently hangs the tool call.
+  // the inline PermissionQuestionnaire; dropping them silently hangs the tool call.
   "permission_requested",
   "permission_resolved",
 ]);
