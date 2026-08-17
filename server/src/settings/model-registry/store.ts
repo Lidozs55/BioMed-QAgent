@@ -62,6 +62,7 @@ export interface SettingsRecord {
     thinking_mode: boolean;
   };
   runtime_limits: RuntimeLimits;
+  runtime_limits_version: 1;
 }
 
 export interface RegistryState {
@@ -113,6 +114,7 @@ export function defaultRegistry(environment: Record<string, string | undefined>)
       compaction_target_ratio: 0.6,
       advanced: { ...ADVANCED_DEFAULTS },
       runtime_limits: { ...RUNTIME_DEFAULTS },
+      runtime_limits_version: 1,
     },
     providers: [],
     models: [],
@@ -193,7 +195,12 @@ export async function loadRegistryState(
 ): Promise<RegistryState> {
   const loaded = await readJsonFile<RegistryState>(path.join(settingsDir, REGISTRY_FILE));
   if (loaded === null || loaded === undefined) return defaultRegistry(environment);
-  loaded.settings.runtime_limits = normalizeRuntimeLimits(loaded.settings.runtime_limits);
+  if (loaded.settings.runtime_limits_version !== 1) {
+    loaded.settings.runtime_limits = { ...DEFAULT_RUNTIME_LIMITS };
+    loaded.settings.runtime_limits_version = 1;
+  } else {
+    loaded.settings.runtime_limits = normalizeRuntimeLimits(loaded.settings.runtime_limits);
+  }
   return loaded;
 }
 
