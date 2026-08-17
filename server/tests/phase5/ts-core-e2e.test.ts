@@ -488,6 +488,28 @@ describe("TS Core E2E golden outcomes (I-07)", () => {
 });
 
 describe("build lock (I-04)", () => {
+  it("does not strand the build lock when family admission throws", async () => {
+    const { taskRoot, core } = await newCore();
+    const asset = await assetFor(taskRoot, "gdc/gdc_expression.tsv", "binding_gdc");
+    const buildId = "build_family_admission_lock";
+    const invalid = {
+      ...spec({ build_id: buildId }),
+      dataset_family: "missing_family",
+    };
+
+    await expect(core.executeDatasetBuild(invalid, {
+      runId: "run_invalid_family",
+      sourceAssets: { binding_gdc: asset },
+    })).rejects.toThrow(/dataset family 'missing_family' is not registered/);
+
+    const record = await core.executeDatasetBuild(spec({ build_id: buildId }), {
+      runId: "run_valid_family",
+      sourceAssets: { binding_gdc: asset },
+    });
+    expect(record).toMatchObject({ status: "completed", error: null });
+    expect(record.publication_id).not.toBeNull();
+  });
+
   it("refuses a second concurrent publisher for the same task+build", async () => {
     const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-lock-"));
     roots.push(taskRoot);

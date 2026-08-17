@@ -231,12 +231,9 @@ function parseSpec(value: unknown): DatasetBuildSpec {
     }
   }
   if (spec.normalization_profile_ref !== null && spec.normalization_profile_ref !== undefined) requiredString(spec.normalization_profile_ref, "spec.normalization_profile_ref");
-  if (
-    spec.target_entity_level !== null &&
-    spec.target_entity_level !== undefined &&
-    spec.target_entity_level !== "gene" &&
-    spec.target_entity_level !== "probe"
-  ) throw new TypeError("spec.target_entity_level is invalid");
+  if (spec.target_entity_level !== null && spec.target_entity_level !== undefined) {
+    requiredString(spec.target_entity_level, "spec.target_entity_level");
+  }
   return value as DatasetBuildSpec;
 }
 
