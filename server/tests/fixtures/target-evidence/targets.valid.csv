@@ -1,0 +1,2 @@
+entity_id,entity_namespace,entity_type,preferred_name,organism,source_id
+EGFR,uniprot,target,EGFR,Homo sapiens,src_uniprot_egfr

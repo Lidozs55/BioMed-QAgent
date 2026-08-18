@@ -1,0 +1,2 @@
+evidence_id,target_id,target_namespace,evidence_type,assertion,evidence_value,source_id,source_locator
+ev_egfr_1,EGFR,uniprot,disease_association,EGFR is associated with lung cancer,"{""disease"":""lung cancer""}",src_uniprot_egfr,"{""locator_version"":""2.0"",""locator_type"":""json_pointer"",""asset_id"":""asset_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"",""logical_file"":""source_assets/uniprot/P00533.json"",""raw_value"":""Function annotation"",""json_pointer"":""/results/0/comments/0/texts/0/value""}"

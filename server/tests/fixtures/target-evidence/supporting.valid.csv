@@ -1,0 +1,2 @@
+supporting_id,evidence_id,supporting_type,supporting_value,source_id
+sup_egfr_trial,ev_egfr_1,clinical_trial,"{""trial_id"":""NCT00000001"",""status"":""completed""}",src_trial_egfr
