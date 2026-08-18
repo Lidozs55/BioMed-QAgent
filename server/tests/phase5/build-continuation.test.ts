@@ -17,7 +17,10 @@ import type {
 } from "../../src/agent/contracts.js";
 import { createDatasetBuildTools } from "../../src/agent/tools/dataset-build.js";
 import { parseDatasetBuildSpec } from "../../src/dataset/contracts/index.js";
-import { createDatasetCoreService } from "../../src/dataset/service/dataset-core.js";
+import {
+  createDatasetCoreService,
+  TsDatasetCoreAdapter,
+} from "../../src/dataset/service/dataset-core.js";
 import { coreEventToPayload } from "../../src/dataset/service/events.js";
 import { TypeScriptDatasetCore } from "../../src/dataset/service/ts-core.js";
 import { DurableApprovalGate } from "../../src/runtime/approval-gate.js";
@@ -627,5 +630,96 @@ describe("runtime restart simulation", () => {
 
     await runtimeB.close();
     serverB.close();
+  });
+});
+
+describe("metadata_files asset wiring", () => {
+  test("streams GEO SOFT metadata into the supporting sample-metadata table", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "biomed-cont-meta-"));
+    roots.push(root);
+    const repository = new DurableTaskRepository(root);
+    const accepted = await repository.createTask({
+      requestId: "r1",
+      input: "t",
+      databases: [],
+      mode: "agent",
+    });
+    const taskId = accepted.task_id;
+    const runId = accepted.run_id;
+    const taskRoot = path.join(root, taskId);
+    await repository.appendRunEvent(taskId, runId, { type: "run_started" });
+    const store = new DurableHILStore(repository);
+    const assets = await writeAssets(taskRoot);
+
+    const metadataDir = path.join(taskRoot, "source_assets", "asset_metadata");
+    await mkdir(metadataDir, { recursive: true });
+    const softReference = "source_assets/asset_metadata/family.soft";
+    await writeFile(
+      path.join(taskRoot, softReference),
+      '^SAMPLE = GSM1\n!Sample_title = "E2E Metadata Title"\n',
+    );
+
+    const resolved: Array<{ bindingId: string; role: string }> = [];
+    const gate = new DurableApprovalGate(taskId, repository, runId, store);
+    const core = new TypeScriptDatasetCore({ taskId, taskRoot, hilGate: gate });
+    const adapter = new TsDatasetCoreAdapter(core, {
+      onAssetResolved: (record) => resolved.push(record),
+    });
+
+    const spec = parseDatasetBuildSpec({
+      schema_version: "1.0",
+      build_id: BUILD_ID,
+      objective: "stream GEO SOFT metadata",
+      dataset_family: "gene_expression",
+      row_granularity: "gene_sample_measurement",
+      schema_ref: "gene_expression.long.v1",
+      source_bindings: [{
+        schema_version: "1.0",
+        binding_id: "binding_geo",
+        source: "geo",
+        acquisition: { schema_version: "1.0", mode: "builtin", provider_id: "geo.files.v1" },
+        adapter_id: "geo.expression.v1",
+        parameters: {
+          schema_version: "1.0",
+          format: "series_matrix",
+          value_semantics: "normalized_expression",
+          value_scale: "log2",
+          expression_unit: "log2_expression",
+          is_normalized: true,
+          platform_ids: ["GPL570"],
+          delimiter: "auto",
+        },
+      }],
+      validation_profile_ref: "gene_expression.release.v1",
+    });
+
+    const response = await adapter.execute({
+      taskId,
+      runId,
+      piSessionId: "pi_session",
+      toolCallId: "tool_call_1",
+      spec,
+      sourceFiles: assets.source_files,
+      mappingFiles: assets.mapping_files,
+      metadataFiles: { binding_geo: softReference },
+    });
+
+    expect(response.ok).toBe(true);
+    expect(
+      resolved
+        .filter((record) => record.role === "metadata")
+        .map((record) => record.bindingId),
+    ).toEqual(["binding_geo"]);
+
+    const csvPath = path.join(
+      taskRoot,
+      "datasets_build",
+      BUILD_ID,
+      "supporting",
+      "binding_geo_sample_metadata.csv",
+    );
+    const csv = await readFile(csvPath, "utf8");
+    expect(csv).toContain("GSM1");
+    expect(csv).toContain("E2E Metadata Title");
   });
 });

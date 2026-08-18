@@ -44,6 +44,8 @@ import {
   SOURCE_LONG_COLUMNS,
   SourceAdapter,
   rowGranularityFor,
+  type ExtractContext,
+  type ExtractResult,
   type RowWriter,
 } from "../base.js";
 import { CHECKPOINT_STRIDE, checkpoint, throwIfAborted } from "../../cooperative.js";
@@ -52,14 +54,12 @@ import { assetIdFromSha256, makeRecordId } from "../identity.js";
 import { sha256FileStream } from "../hashing.js";
 import {
   delimitedRowsFromFileAsync,
-  delimitedRowsWithLinesAsync,
   parseDelimitedLine,
-  readSourceTextAsync,
   type DelimitedRow,
 } from "../text.js";
 import {
   parseGeoSeriesMatrixSamples,
-  parseGeoSoftSamples,
+  parseGeoSoftSamplesFromFile,
   writeSampleMetadata,
 } from "./sample-metadata.js";
 
@@ -73,6 +73,13 @@ const MEASUREMENT_TYPE_BY_FORMAT: Record<AdapterParams["format"], string> = {
   series_matrix: "series_matrix_expression",
   supplementary_matrix: "supplementary_expression",
 };
+
+/** Defensive caps for supplementary matrices (real GEO series stay far below
+ * these; the bounds reject pathological inputs before they can exhaust memory
+ * on the streaming parse path). */
+const SUPPLEMENTARY_MAX_COLUMNS = 100_000;
+const SUPPLEMENTARY_MAX_SAMPLES = 100_000;
+const SUPPLEMENTARY_MAX_LINE_CHARS = 4_000_000;
 
 /** Python ``_declared_namespace``. */
 export function declaredNamespace(geneIdRaw: string): string {
@@ -330,27 +337,7 @@ interface GeoExtractOutcome {
 
 type GeoRowSource = AsyncIterable<DelimitedRow>;
 
-async function* rowsFromText(
-  text: string,
-  delimiter: string,
-  signal?: AbortSignal | null,
-): GeoRowSource {
-  for (const row of await delimitedRowsWithLinesAsync(text, delimiter, signal)) {
-    yield row;
-  }
-}
-
 // ------------------------------------------------------------- tximport
-
-async function extractTximport(
-  text: string,
-  longWriter: RowWriter,
-  rejectedWriter: RowWriter,
-  context: GeoExtractContext,
-  signal?: AbortSignal | null,
-): Promise<GeoExtractOutcome> {
-  return extractTximportRows(rowsFromText(text, "\t", signal), longWriter, rejectedWriter, context, signal);
-}
 
 async function extractTximportRows(
   rows: GeoRowSource,
@@ -456,22 +443,6 @@ async function extractTximportRows(
 }
 
 // ------------------------------------------------------- series matrix
-
-async function extractSeriesMatrix(
-  text: string,
-  longWriter: RowWriter,
-  rejectedWriter: RowWriter,
-  context: GeoExtractContext,
-  signal?: AbortSignal | null,
-): Promise<GeoExtractOutcome> {
-  return extractSeriesMatrixRows(
-    rowsFromText(text, "\t", signal),
-    longWriter,
-    rejectedWriter,
-    context,
-    signal,
-  );
-}
 
 async function extractSeriesMatrixRows(
   rows: GeoRowSource,
@@ -628,8 +599,8 @@ async function extractSeriesMatrixRows(
 
 // ------------------------------------------------- supplementary matrix
 
-async function extractSupplementary(
-  text: string,
+async function extractSupplementaryRows(
+  rows: AsyncIterable<DelimitedRow>,
   longWriter: RowWriter,
   rejectedWriter: RowWriter,
   context: GeoExtractContext,
@@ -646,41 +617,16 @@ async function extractSupplementary(
   let visited = 0;
   const batchId = `batch_${bindingId}`;
   const declared = new Set<string>();
-  // Cooperative line split: byte-identical to ``text.split(/\r\n|\n|\r/)``
-  // but yields to the event loop every 8192 lines so operation timeouts
-  // and cancels are honored while scanning large matrices.
-  const lines: string[] = [];
-  {
-    let offset = 0;
-    let lineNumber = 0;
-    while (offset < text.length) {
-      const nl = text.indexOf("\n", offset);
-      const cr = text.indexOf("\r", offset);
-      let end: number;
-      let nextStart: number;
-      if (cr !== -1 && (nl === -1 || cr < nl)) {
-        end = cr;
-        nextStart = text[cr + 1] === "\n" ? cr + 2 : cr + 1;
-      } else if (nl !== -1) {
-        end = nl;
-        nextStart = nl + 1;
-      } else {
-        end = text.length;
-        nextStart = text.length;
-      }
-      lineNumber += 1;
-      lines.push(text.slice(offset, end));
-      offset = nextStart;
-      if (lineNumber % 8192 === 0) {
-        await new Promise<void>((resolve) => setImmediate(resolve));
-        throwIfAborted(signal);
-      }
-    }
-  }
-  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
-    const lineText = lines[lineIndex].replace(/\r$/, "");
-    const line = lineIndex + 1;
+  for await (const row of rows) {
+    const line = row.line;
+    const lineText = row.lineText ?? row.values.join("\t");
     if (lineText.trim() === "") continue;
+    if (lineText.length > SUPPLEMENTARY_MAX_LINE_CHARS) {
+      throw new AdapterError(
+        `source line ${line} exceeds the single-line length limit ` +
+          `(${lineText.length} chars > ${SUPPLEMENTARY_MAX_LINE_CHARS})`,
+      );
+    }
     if (header === null && delimiter === "auto") {
       delimiter = sniffDelimiter(lineText);
     }
@@ -701,6 +647,18 @@ async function extractSupplementary(
       if (new Set(samples).size !== samples.length) {
         throw new AdapterError(
           "supplementary sample columns must be unique",
+        );
+      }
+      if (header.length > SUPPLEMENTARY_MAX_COLUMNS) {
+        throw new AdapterError(
+          `supplementary matrix header exceeds the maximum column count ` +
+            `(${header.length} > ${SUPPLEMENTARY_MAX_COLUMNS})`,
+        );
+      }
+      if (samples.length > SUPPLEMENTARY_MAX_SAMPLES) {
+        throw new AdapterError(
+          `supplementary matrix exceeds the maximum sample count ` +
+            `(${samples.length} > ${SUPPLEMENTARY_MAX_SAMPLES})`,
         );
       }
       samples.forEach((sample, index) => {
@@ -772,24 +730,6 @@ async function extractSupplementary(
   };
 }
 
-/** Dispatch on the typed ``AdapterParams.format`` (Python ``_extract``). */
-async function extractGeoText(
-  text: string,
-  longWriter: RowWriter,
-  rejectedWriter: RowWriter,
-  context: GeoExtractContext,
-  signal?: AbortSignal | null,
-): Promise<GeoExtractOutcome> {
-  switch (context.parameters.format) {
-    case "tximport_counts":
-      return extractTximport(text, longWriter, rejectedWriter, context, signal);
-    case "series_matrix":
-      return extractSeriesMatrix(text, longWriter, rejectedWriter, context, signal);
-    case "supplementary_matrix":
-      return extractSupplementary(text, longWriter, rejectedWriter, context, signal);
-  }
-}
-
 export interface GeoParseOptions {
   buildId: string;
   bindingId: string;
@@ -805,9 +745,10 @@ export interface GeoParseOptions {
 /**
  * GEO expression adapter (Python ``GeoExpressionAdapter``).
  *
- * Overrides ``parse`` so the raw source text is read once (gzip-aware) and
- * the supplementary extractor can sniff its delimiter per line; the base
- * class pre-splits every source with the tab delimiter.
+ * Overrides ``parse`` so rows stream directly from the file (tab-split, with
+ * per-line text for the supplementary extractor to sniff its delimiter); no
+ * whole-matrix text is ever materialized, so the base-class ``extract`` path
+ * is never used.
  */
 export class GeoExpressionAdapter extends SourceAdapter {
   readonly adapter_id = "geo.expression.v1";
@@ -850,12 +791,20 @@ export class GeoExpressionAdapter extends SourceAdapter {
             "(format/value_semantics/value_scale/expression_unit)",
         );
       }
-      let sourceText: string | null = null;
       let sampleMetadataText: string | null = null;
       let extraction: GeoExtractOutcome;
       if (parameters.format === "supplementary_matrix") {
         try {
-          sourceText = await readSourceTextAsync(sourcePath, signal);
+          const rows = delimitedRowsFromFileAsync(sourcePath, "\t", signal, {
+            includeLineText: true,
+          });
+          extraction = await extractSupplementaryRows(
+            rows,
+            longWriter,
+            rejectedWriter,
+            { sourceAsset, buildId, bindingId, sourceName, parameters },
+            signal,
+          );
         } catch (error) {
           if (error instanceof EmptySourceError) throw error;
           throw new AdapterError(
@@ -863,13 +812,6 @@ export class GeoExpressionAdapter extends SourceAdapter {
               `unreadable input: ${error instanceof Error ? error.message : String(error)}`,
           );
         }
-        extraction = await extractGeoText(
-          sourceText,
-          longWriter,
-          rejectedWriter,
-          { sourceAsset, buildId, bindingId, sourceName, parameters },
-          signal,
-        );
       } else {
         try {
           const rows = delimitedRowsFromFileAsync(sourcePath, "\t", signal);
@@ -901,7 +843,7 @@ export class GeoExpressionAdapter extends SourceAdapter {
       rejectedWriter.close();
       const { statistics, warnings, mappings, rejectedCount } = extraction;
       const supporting = await this.writeSupportingAssets({
-        sourceText: sourceText ?? sampleMetadataText ?? "",
+        sourceText: sampleMetadataText ?? "",
         metadataPath,
         outputDir,
         bindingId,
@@ -973,10 +915,12 @@ export class GeoExpressionAdapter extends SourceAdapter {
   }): Promise<{ paths: string[]; warnings: string[] }> {
     const { sourceText, metadataPath, outputDir, bindingId, parameters, statistics, signal } =
       options;
-    let samples: ReturnType<typeof parseGeoSoftSamples>["samples"];
+    let samples: Awaited<
+      ReturnType<typeof parseGeoSoftSamplesFromFile>
+    >["samples"];
     let warnings: string[];
     if (metadataPath !== null) {
-      ({ samples, warnings } = parseGeoSoftSamples(await readSourceTextAsync(metadataPath, signal)));
+      ({ samples, warnings } = await parseGeoSoftSamplesFromFile(metadataPath, signal));
     } else if (parameters.format === "series_matrix") {
       ({ samples, warnings } = parseGeoSeriesMatrixSamples(sourceText));
     } else {
@@ -1015,53 +959,42 @@ export class GeoExpressionAdapter extends SourceAdapter {
   }
 
   /**
-   * Base-class parse path: reconstruct the raw text from tab-split rows
-   * (lossless for tab formats; supplementary comma/semicolon lines arrive as
-   * single fields and are re-split by the extractor).
+   * Abstract-contract extractor: every GEO format emits directly from the
+   * tab-split row stream without rebuilding the raw matrix text (the
+   * supplementary extractor re-derives each line from its ``lineText``).
    */
   protected async extract(
     rows: AsyncIterable<DelimitedRow>,
     longWriter: RowWriter,
     rejectedWriter: RowWriter,
-    context: {
-      sourceAsset: SourceAsset;
-      buildId: string;
-      bindingId: string;
-      sourceName: string;
-      parameters: AdapterParams | null;
-    },
+    context: ExtractContext,
     signal?: AbortSignal | null,
-  ): Promise<{
-    statistics: Record<string, JsonValue>;
-    warnings: string[];
-    mappings: FieldMapping[];
-    rejectedCount: number;
-  }> {
+  ): Promise<ExtractResult> {
     if (context.parameters === null) {
       throw new AdapterError(
         "geo.expression.v1 requires AdapterParams " +
           "(format/value_semantics/value_scale/expression_unit)",
       );
     }
-    const lines: string[] = [];
-    for await (const { values } of rows) {
-      lines.push(values.join("\t"));
+    const geoContext: GeoExtractContext = {
+      sourceAsset: context.sourceAsset,
+      buildId: context.buildId,
+      bindingId: context.bindingId,
+      sourceName: context.sourceName,
+      parameters: context.parameters,
+    };
+    if (context.parameters.format === "supplementary_matrix") {
+      return extractSupplementaryRows(
+        rows,
+        longWriter,
+        rejectedWriter,
+        geoContext,
+        signal,
+      );
     }
-    const text = lines.join("\n");
-    const { statistics, warnings, mappings, rejectedCount } = await extractGeoText(
-      text,
-      longWriter,
-      rejectedWriter,
-      {
-        sourceAsset: context.sourceAsset,
-        buildId: context.buildId,
-        bindingId: context.bindingId,
-        sourceName: context.sourceName,
-        parameters: context.parameters,
-      },
-      signal,
-    );
-    return { statistics, warnings, mappings, rejectedCount };
+    return context.parameters.format === "series_matrix"
+      ? extractSeriesMatrixRows(rows, longWriter, rejectedWriter, geoContext, signal)
+      : extractTximportRows(rows, longWriter, rejectedWriter, geoContext, signal);
   }
 }
 

@@ -81,6 +81,8 @@ export interface ExecuteContext {
   sourceAssets?: Readonly<Record<string, SourceAsset>>;
   /** binding_id → platform annotation SourceAsset (probe builds). */
   mappingAssets?: Readonly<Record<string, SourceAsset>>;
+  /** binding_id → explicit metadata SourceAsset (e.g. GEO SOFT metadata). */
+  metadataAssets?: Readonly<Record<string, SourceAsset>>;
   signal?: AbortSignal;
 }
 
@@ -213,13 +215,14 @@ export function createTsCoreOperationRunner(options: {
   outputDir: string;
   sourceAssets: Readonly<Record<string, SourceAsset>>;
   mappingAssets: Readonly<Record<string, SourceAsset>>;
+  metadataAssets: Readonly<Record<string, SourceAsset>>;
   runnerState: RunnerState;
   bindings: ReadonlyMap<string, ReturnType<typeof import("../contracts/spec.js").parseSourceBinding>>;
   /** I-04 publish fence: true while this build still owns its lock. */
   fence?: (() => Promise<boolean>) | null;
   hilGate?: DatasetHILGate | null;
 }): OperationRunner {
-  const { spec, taskId, taskRoot, outputDir, sourceAssets, mappingAssets, runnerState, bindings } = options;
+  const { spec, taskId, taskRoot, outputDir, sourceAssets, mappingAssets, metadataAssets, runnerState, bindings } = options;
   const fence = options.fence ?? null;
   const hilGate = options.hilGate ?? null;
   const familyRegistry = createDefaultDatasetFamilyRegistry();
@@ -256,12 +259,23 @@ export function createTsCoreOperationRunner(options: {
         const adapter = getAdapter(binding.adapter_id);
         const parameters = adapterParamsForBinding(binding);
         const sourcePath = path.join(taskRoot, asset.relative_path);
+        let metadataPath: string | null = null;
+        const metadataAsset = metadataAssets[op.category];
+        if (metadataAsset !== undefined) {
+          metadataPath = path.join(taskRoot, metadataAsset.relative_path);
+          if (!existsSync(metadataPath)) {
+            throw new BuildError(
+              `metadata asset file is missing: ${metadataAsset.relative_path}`,
+            );
+          }
+        }
         const batch = await adapter.parse(asset, sourcePath, {
           buildId: spec.build_id,
           bindingId: binding.binding_id,
           schemaRef: spec.schema_ref,
           outputDir,
           parameters,
+          metadataPath,
           signal,
         });
         runnerState.batches.set(binding.binding_id, batch);
@@ -601,6 +615,7 @@ export class TypeScriptDatasetCore {
       outputDir,
       sourceAssets: context.sourceAssets ?? {},
       mappingAssets: context.mappingAssets ?? {},
+      metadataAssets: context.metadataAssets ?? {},
       runnerState,
       bindings,
       fence: async (): Promise<boolean> => lease.assertOwned(),

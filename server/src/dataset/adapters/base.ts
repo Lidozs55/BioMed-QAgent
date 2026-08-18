@@ -169,6 +169,10 @@ export abstract class SourceAdapter {
       schemaRef: string;
       outputDir: string;
       parameters?: AdapterParams | null;
+      /** Task-relative filesystem path of an explicit metadata asset (e.g.
+       * GEO SOFT ``metadata_files``); adapters that do not consume it ignore
+       * the field. */
+      metadataPath?: string | null;
       signal?: AbortSignal | null;
     },
   ): Promise<DataBatch> {

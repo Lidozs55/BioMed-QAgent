@@ -11,9 +11,15 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-import { csvLine, parseDelimitedLine } from "../text.js";
+import { csvLine, delimitedRowsFromFileAsync, parseDelimitedLine } from "../text.js";
+import { AdapterError } from "../errors.js";
 
 export const GROUP_RULE_ID = "geo.sample-group.v1";
+
+/** Defensive cap on SOFT metadata input (Python golden metadata is a few KB;
+ * the cap rejects pathological uploads while keeping the steady-state memory
+ * bounded on the streaming parse path). */
+export const GEO_METADATA_MAX_BYTES = 64 * 1024 * 1024;
 
 export type GroupLabel = "tumor" | "normal" | "unknown";
 
@@ -310,63 +316,106 @@ interface SoftSampleState {
   platform_id?: string;
 }
 
+interface SoftParseState {
+  samples: GeoSampleMetadata[];
+  warnings: string[];
+  current: SoftSampleState | null;
+}
+
+function finishSoftSample(state: SoftParseState): void {
+  const current = state.current;
+  if (current === null) return;
+  const title = current.title ?? "";
+  const group = extractSampleGroup(current.characteristics, title);
+  const sampleId = current.sample_id;
+  state.warnings.push(...group.warnings.map((warning) => `${sampleId}: ${warning}`));
+  state.samples.push({
+    sample_id: sampleId,
+    source_sample_alias: current.source_sample_alias ?? null,
+    title,
+    organism: current.organism ?? "",
+    platform_id: current.platform_id ?? null,
+    sample_group: group.sample_group,
+    sample_group_raw: group.sample_group_raw,
+    pairing_id: extractPairingId(current.characteristics),
+    group_rule_id: GROUP_RULE_ID,
+  });
+  state.current = null;
+}
+
+/** Handle one SOFT line against the parse state; only the fields the V2
+ * pipeline needs are retained (``^SAMPLE`` id plus the five ``!Sample_*``
+ * fields that feed ``write_sample_metadata``). */
+function handleSoftLine(line: string, state: SoftParseState): void {
+  if (line.startsWith("^SAMPLE = ")) {
+    finishSoftSample(state);
+    state.current = {
+      sample_id: line.split("=", 2)[1].trim(),
+      characteristics: {},
+    };
+  } else if (state.current === null) {
+    return;
+  } else if (line.startsWith("!Sample_description = Sample ")) {
+    state.current.source_sample_alias = line.split(" ").pop()?.trim() ?? "";
+  } else if (line.startsWith("!Sample_title = ")) {
+    state.current.title = line.split("=", 2)[1].trim();
+  } else if (line.startsWith("!Sample_organism_ch1 = ")) {
+    state.current.organism = line.split("=", 2)[1].trim();
+  } else if (line.startsWith("!Sample_platform_id = ")) {
+    state.current.platform_id = line.split("=", 2)[1].trim();
+  } else if (line.startsWith("!Sample_characteristics_ch1 = ")) {
+    const value = line.split("=", 2)[1].trim();
+    if (value.includes(":")) {
+      const [key, item] = value.split(":", 2);
+      state.current.characteristics[key.trim()] = item.trim();
+    }
+  }
+}
+
 /** Python ``parse_geo_soft_samples`` (SOFT family text input). */
 export function parseGeoSoftSamples(text: string): {
   samples: GeoSampleMetadata[];
   warnings: string[];
 } {
-  const samples: GeoSampleMetadata[] = [];
-  const warnings: string[] = [];
-  let current: SoftSampleState | null = null;
-
-  const finish = (): void => {
-    if (current === null) return;
-    const title = current.title ?? "";
-    const group = extractSampleGroup(current.characteristics, title);
-    const sampleId = current.sample_id;
-    warnings.push(...group.warnings.map((warning) => `${sampleId}: ${warning}`));
-    samples.push({
-      sample_id: sampleId,
-      source_sample_alias: current.source_sample_alias ?? null,
-      title,
-      organism: current.organism ?? "",
-      platform_id: current.platform_id ?? null,
-      sample_group: group.sample_group,
-      sample_group_raw: group.sample_group_raw,
-      pairing_id: extractPairingId(current.characteristics),
-      group_rule_id: GROUP_RULE_ID,
-    });
-  };
-
+  const state: SoftParseState = { samples: [], warnings: [], current: null };
   for (const rawLine of text.split(/\r\n|\n|\r/)) {
-    const line = rawLine.replace(/\r$/, "");
-    if (line.startsWith("^SAMPLE = ")) {
-      finish();
-      current = {
-        sample_id: line.split("=", 2)[1].trim(),
-        characteristics: {},
-      };
-    } else if (current === null) {
-      continue;
-    } else if (line.startsWith("!Sample_description = Sample ")) {
-      current.source_sample_alias = line.split(" ").pop()?.trim() ?? "";
-    } else if (line.startsWith("!Sample_title = ")) {
-      current.title = line.split("=", 2)[1].trim();
-    } else if (line.startsWith("!Sample_organism_ch1 = ")) {
-      current.organism = line.split("=", 2)[1].trim();
-    } else if (line.startsWith("!Sample_platform_id = ")) {
-      current.platform_id = line.split("=", 2)[1].trim();
-    } else if (line.startsWith("!Sample_characteristics_ch1 = ")) {
-      const value = line.split("=", 2)[1].trim();
-      if (value.includes(":")) {
-        const [key, item] = value.split(":", 2);
-        current.characteristics[key.trim()] = item.trim();
-      }
-    }
+    handleSoftLine(rawLine.replace(/\r$/, ""), state);
   }
-  finish();
-  warnings.push(...validatePairings(samples));
-  return { samples, warnings };
+  finishSoftSample(state);
+  state.warnings.push(...validatePairings(state.samples));
+  return { samples: state.samples, warnings: state.warnings };
+}
+
+/**
+ * Streaming ``parse_geo_soft_samples`` for the (possibly gzipped) metadata
+ * asset referenced by ``metadata_files``.  Lines are parsed as they stream in
+ * and only the retained sample records stay in memory; the total decoded size
+ * is capped so an oversized metadata upload becomes a typed rejection instead
+ * of unbounded memory growth.
+ */
+export async function parseGeoSoftSamplesFromFile(
+  filePath: string,
+  signal?: AbortSignal | null,
+  maxBytes: number = GEO_METADATA_MAX_BYTES,
+): Promise<{ samples: GeoSampleMetadata[]; warnings: string[] }> {
+  const state: SoftParseState = { samples: [], warnings: [], current: null };
+  let decodedBytes = 0;
+  const rows = delimitedRowsFromFileAsync(filePath, "\t", signal, {
+    includeLineText: true,
+  });
+  for await (const row of rows) {
+    const lineText = row.lineText ?? "";
+    decodedBytes += Buffer.byteLength(lineText, "utf8");
+    if (decodedBytes > maxBytes) {
+      throw new AdapterError(
+        `GEO metadata exceeds the size limit (${decodedBytes} bytes > ${maxBytes} bytes)`,
+      );
+    }
+    handleSoftLine(lineText, state);
+  }
+  finishSoftSample(state);
+  state.warnings.push(...validatePairings(state.samples));
+  return { samples: state.samples, warnings: state.warnings };
 }
 
 /** Python ``write_sample_metadata``. */
