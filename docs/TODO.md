@@ -67,10 +67,9 @@
 
 > B 组详细 ownership、依赖类型、分支、交接窗口和逐任务验收见
 > [开发者 B：可信多表 Publication 落实计划](superpowers/plans/2026-08-18-developer-b-trusted-publication-plan.md)。
-> `TASK-048-B1`、`TASK-C1C` 已完成；A 组 `TASK-047-A1/A2/A3` 已合并。B 组
-> contract spine 下一项为 `TASK-047-A5C`，之后 `TASK-C2C`；`TASK-048-B3`
-> 可在不并行修改 contracts spine 的独立 worktree 开始。A 组可从 C1C 合并提交
-> 启动 `TASK-C1I`。
+> `TASK-048-B1`、`TASK-C1C`、`TASK-047-A5C`、`TASK-C2C`、`TASK-048-B3`
+> 已完成；A 组 `TASK-047-A1/A2/A3` 已合并。B 组下一项为 `TASK-048-B2M`，
+> 并可开始 B4M module；A 组可按 contract prerequisites 启动 C1I/A5I/C2I。
 
 - [x] **TASK-G0 / completed**：Gold v1 eval manifest、六个原始 prompt、reference schema/source
       inventory、默认运行参数、checksum verifier 与 manifest run driver 已冻结于
