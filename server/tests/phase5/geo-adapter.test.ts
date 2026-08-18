@@ -164,6 +164,23 @@ describe("streaming GEO text input", () => {
     ]);
     rmSync(dir, { recursive: true, force: true });
   });
+
+  test("exposes raw line text when includeLineText is enabled", async () => {
+    const dir = scratchDir();
+    const sourcePath = path.join(dir, "matrix.tsv.gz");
+    writeFixtureFile(sourcePath, gzipText("ID_REF\tS1\nprobe_1\t1.5\n"));
+    const rows: Array<{ line: number; values: string[]; lineText?: string }> = [];
+    for await (const row of delimitedRowsFromFileAsync(sourcePath, "\t", null, {
+      includeLineText: true,
+    })) {
+      rows.push(row);
+    }
+    expect(rows[0].values).toEqual(["ID_REF", "S1"]);
+    expect(rows[0].lineText).toBe("ID_REF\tS1");
+    expect(rows[1].lineText).toBe("probe_1\t1.5");
+    expect(rows[0].lineText).not.toContain("\n");
+    rmSync(dir, { recursive: true, force: true });
+  });
 });
 
 describe("series matrix golden parity", () => {
@@ -726,6 +743,53 @@ describe("mixed valid/invalid bindings", () => {
       expect(readFileSync(path.join(outputDir, "batches", "binding_geo.csv"), "utf8")).toContain(
         "PROBE1",
       );
+    } finally {
+      rmSync(outputDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("supplementary matrix bounding", () => {
+  test("rejects a header that exceeds the maximum column count", async () => {
+    const outputDir = scratchDir();
+    try {
+      const tooWide = path.join(outputDir, "too_wide.tsv");
+      const header = `probe\t${Array.from({ length: 100_001 }, (_, i) => `s${i}`).join("\t")}\n`;
+      writeFixtureFile(tooWide, `${header}gene1\t${Array.from({ length: 100_001 }, () => "1").join("\t")}\n`);
+      await expect(
+        runAdapter(
+          tooWide,
+          params({
+            format: "supplementary_matrix",
+            value_scale: "linear",
+            expression_unit: "counts",
+            is_normalized: false,
+          }),
+          outputDir,
+        ),
+      ).rejects.toThrow(/maximum column count/);
+    } finally {
+      rmSync(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a single line longer than the line-length limit", async () => {
+    const outputDir = scratchDir();
+    try {
+      const tooLong = path.join(outputDir, "too_long.tsv");
+      writeFixtureFile(tooLong, `${"A".repeat(4_000_001)}\n`);
+      await expect(
+        runAdapter(
+          tooLong,
+          params({
+            format: "supplementary_matrix",
+            value_scale: "linear",
+            expression_unit: "counts",
+            is_normalized: false,
+          }),
+          outputDir,
+        ),
+      ).rejects.toThrow(/single-line length limit/);
     } finally {
       rmSync(outputDir, { recursive: true, force: true });
     }

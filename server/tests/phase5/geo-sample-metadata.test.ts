@@ -5,7 +5,8 @@
  */
 
 import { gunzipSync } from "node:zlib";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -17,6 +18,7 @@ import {
   extractSampleGroup,
   parseGeoSeriesMatrixSamples,
   parseGeoSoftSamples,
+  parseGeoSoftSamplesFromFile,
   sampleMetadataCsv,
   validatePairings,
   type GeoSampleMetadata,
@@ -161,6 +163,72 @@ describe("real GSE178352 family SOFT golden parity", () => {
     expect(samples[0].source_sample_alias).toBe("A1");
     expect(samples[0].platform_id).toBe("GPL24676");
     expect(samples[0].organism).toBe("Homo sapiens");
+  });
+});
+
+describe("parseGeoSoftSamplesFromFile (streaming)", () => {
+  test("streams the gzipped family SOFT to the same golden records", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "geo-soft-"));
+    try {
+      const soft = path.join(dir, "family.soft");
+      writeFileSync(
+        soft,
+        gunzipSync(readFileSync(path.join(FIXTURES, "gse178352_family.soft.gz"))),
+      );
+      const { samples, warnings } = await parseGeoSoftSamplesFromFile(soft);
+      const golden = JSON.parse(
+        readFileSync(path.join(FIXTURES, "geo_soft_samples.golden.json"), "utf8"),
+      ) as {
+        samples: Array<Record<string, unknown>>;
+        warnings: string[];
+      };
+      expect(warnings).toEqual(golden.warnings);
+      const normalized = samples.map(({ ...rest }) => rest);
+      const expected = golden.samples.map((record) => {
+        const copy = { ...record };
+        delete copy.schema_version;
+        return copy;
+      });
+      expect(normalized).toEqual(expected);
+      expect(samples).toHaveLength(12);
+      expect(samples[0].sample_id).toBe("GSM5388270");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects metadata that exceeds the decoded byte limit", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "geo-soft-"));
+    try {
+      const soft = path.join(dir, "family.soft");
+      writeFileSync(
+        soft,
+        "^SAMPLE = GSM1\n!Sample_title = A\n!Sample_organism_ch1 = Homo sapiens\n",
+      );
+      await expect(parseGeoSoftSamplesFromFile(soft, null, 16)).rejects.toThrow(
+        /exceeds the size limit/,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("aborts cooperatively on a cancelled signal", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "geo-soft-"));
+    try {
+      const soft = path.join(dir, "family.soft");
+      writeFileSync(
+        soft,
+        "^SAMPLE = GSM1\n!Sample_title = A\n!Sample_organism_ch1 = Homo sapiens\n",
+      );
+      const controller = new AbortController();
+      controller.abort();
+      await expect(parseGeoSoftSamplesFromFile(soft, controller.signal)).rejects.toThrow(
+        /aborted/i,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

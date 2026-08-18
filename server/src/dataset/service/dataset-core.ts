@@ -78,7 +78,7 @@ function mediaTypeFor(filename: string): string {
  */
 export interface AssetResolutionRecord {
   bindingId: string;
-  role: "source" | "mapping";
+  role: "source" | "mapping" | "metadata";
   relativePath: string;
   sizeBytes: number;
   hashMs: number;
@@ -259,9 +259,11 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
     }
     const sourceAssets: Record<string, SourceAsset> = {};
     const mappingAssets: Record<string, SourceAsset> = {};
+    const metadataAssets: Record<string, SourceAsset> = {};
     try {
       await this.resolveAll(input.sourceFiles, "source", sourceAssets, input.signal);
       await this.resolveAll(input.mappingFiles, "mapping", mappingAssets, input.signal);
+      await this.resolveAll(input.metadataFiles ?? {}, "metadata", metadataAssets, input.signal);
     } catch (error) {
       if (error instanceof OperationAbortedError) {
         return {
@@ -297,6 +299,7 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
       runId: input.runId,
       sourceAssets,
       mappingAssets,
+      metadataAssets,
       signal: input.signal,
     });
     if (record.status !== "completed") {

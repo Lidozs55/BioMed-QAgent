@@ -20,6 +20,10 @@ const gunzip = promisify(gunzipCb);
 export interface DelimitedRow {
   line: number;
   values: string[];
+  /** Raw line text without the line ending, when the consumer opted in via
+   * ``includeLineText``.  Useful for formats with an auto-detected delimiter
+   * (GEO supplementary matrices) where values splits on a fixed delimiter. */
+  lineText?: string;
 }
 
 async function hasGzipMagic(path: string): Promise<boolean> {
@@ -42,8 +46,10 @@ export async function* delimitedRowsFromFileAsync(
   path: string,
   delimiter: string,
   signal?: AbortSignal | null,
+  options?: { includeLineText?: boolean },
 ): AsyncGenerator<DelimitedRow> {
   throwIfAborted(signal);
+  const includeLineText = options?.includeLineText === true;
   const source = createReadStream(path);
   const gzip = await hasGzipMagic(path);
   const input = gzip ? source.pipe(createGunzip()) : source;
@@ -76,7 +82,9 @@ export async function* delimitedRowsFromFileAsync(
         const text = pending.slice(0, breakIndex);
         pending = pending.slice(breakIndex + breakLength);
         line += 1;
-        yield { line, values: parseDelimitedLine(text, delimiter) };
+        const row: DelimitedRow = { line, values: parseDelimitedLine(text, delimiter) };
+        if (includeLineText) row.lineText = text;
+        yield row;
         if (line % 8192 === 0) {
           await new Promise<void>((resolve) => setImmediate(resolve));
           throwIfAborted(signal);
@@ -86,7 +94,9 @@ export async function* delimitedRowsFromFileAsync(
     pending += decoder.end();
     if (pending.length > 0) {
       line += 1;
-      yield { line, values: parseDelimitedLine(pending, delimiter) };
+      const row: DelimitedRow = { line, values: parseDelimitedLine(pending, delimiter) };
+      if (includeLineText) row.lineText = pending;
+      yield row;
     }
     completed = true;
   } finally {
@@ -168,62 +178,6 @@ export function delimitedRowsWithLines(
     line: index + 1,
     values: parseDelimitedLine(lineText, delimiter),
   }));
-}
-
-/**
- * Cooperative line splitter for the async Core path: byte-identical to
- * ``delimitedRowsWithLines`` (same \r\n / \n / \r handling, same trailing
- * empty-line drop), but yields to the event loop every N lines so pending
- * operation-timeout timers can fire and the AbortSignal is honored mid-file.
- */
-export async function delimitedRowsWithLinesAsync(
-  text: string,
-  delimiter: string,
-  signal?: AbortSignal | null,
-): Promise<DelimitedRow[]> {
-  const rows: DelimitedRow[] = [];
-  let offset = 0;
-  let lineNumber = 0;
-  const length = text.length;
-  while (offset < length) {
-    const nl = text.indexOf("\n", offset);
-    // A \r only matters when it precedes the next \n (CRLF or lone CR).
-    // Scanning for it across the *whole* remaining text per line is O(n^2)
-    // on \n-only files (indexOf walks to the end of the string every line);
-    // scan only inside the current line instead.
-    let cr = -1;
-    if (nl === -1) {
-      cr = text.indexOf("\r", offset);
-    } else {
-      for (let k = offset; k < nl; k += 1) {
-        if (text[k] === "\r") {
-          cr = k;
-          break;
-        }
-      }
-    }
-    let end: number;
-    let nextStart: number;
-    if (cr !== -1) {
-      // \r line break (consuming a following \n as CRLF)
-      end = cr;
-      nextStart = text[cr + 1] === "\n" ? cr + 2 : cr + 1;
-    } else if (nl !== -1) {
-      end = nl;
-      nextStart = nl + 1;
-    } else {
-      end = length;
-      nextStart = length;
-    }
-    lineNumber += 1;
-    rows.push({ line: lineNumber, values: parseDelimitedLine(text.slice(offset, end), delimiter) });
-    offset = nextStart;
-    if (lineNumber % 8192 === 0) {
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      throwIfAborted(signal);
-    }
-  }
-  return rows;
 }
 
 /** Python csv QUOTE_MINIMAL single-field serialization. */
