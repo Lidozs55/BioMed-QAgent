@@ -267,7 +267,7 @@ A 组任务的实现细节由 A 组计划维护；本表只冻结 B 组依赖的
 
 ### TASK-048-B4M：Registered-table adapter module
 
-- **状态**：blocked
+- **状态**：module complete；trusted E2E blocked by `TASK-C1I`（未标记 completed）
 - **owner**：B
 - **分支**：`feat/registered-table-adapter`
 - **可开始条件**：`TASK-048-B1`、`TASK-047-A2`、`TASK-C1C`；`TASK-048-B3`
@@ -508,7 +508,7 @@ Build 作为比赛最终门禁，再通过新 ADR/TODO 变更加入 G1 hard requ
 | 6 | `TASK-C2C` | completed | `TASK-C1C` completed |
 | 7 | `TASK-048-B2M` | completed | `TASK-048-B1` + `TASK-047-A5C` completed |
 | 8 | `TASK-048-B2W`（A owner） | blocked | `TASK-048-B2M` + `TASK-047-A5I` |
-| 9 | `TASK-048-B4M` | blocked | start: B1+A2+C1C；complete: B3+C1I |
+| 9 | `TASK-048-B4M` | module complete / trusted E2E blocked | module tests+ADR-034 complete；overall complete: C1I + owner wiring |
 | 10 | `TASK-048-B5C` | blocked | B1+B3；B4M contract 形态冻结 |
 | 11 | `TASK-048-B5L/T/V/S/A` | blocked | start: B2M+B3+B4M+B5C；complete: B2W+B4M+C2I |
 | 12 | `TASK-048-B6A/B6D/B6W/B6B` | blocked | 对应完整任务条目中的 family/C2I/derive 依赖 |
@@ -517,5 +517,6 @@ Build 作为比赛最终门禁，再通过新 ADR/TODO 变更加入 G1 hard requ
 | 15 | `TASK-G1R` | blocked | `TASK-G1A`+`TASK-G1B` |
 | P1 | `TASK-C3C` | backlog | `TASK-C1C`+`TASK-047-A5C`；不阻塞本轮 closure |
 
-当前 B 组 contract spine、`TASK-048-B2M` 与 `TASK-048-B3` 已完成；下一项推进
-`TASK-048-B4M` module，并在其 contract 形态冻结后推进 `TASK-048-B5C`。
+当前 B 组 contract spine、`TASK-048-B2M` 与 `TASK-048-B3` 已完成；
+`TASK-048-B4M` module 与 contract 形态已冻结，但 trusted E2E 仍等待 `TASK-C1I` 和 owner
+接线，不能标记整体 completed；B 组可据此推进 `TASK-048-B5C`。

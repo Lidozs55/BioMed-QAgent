@@ -26,6 +26,7 @@ indexed in [migration/README.md](../migration/README.md).
 | [ADR-031](031-core-owned-acquisition.md) | Core-owned acquisition identity, recipe promotion and retry lineage | Accepted |
 | [ADR-032](032-generic-multitable-validation.md) | Generic multi-table validation is structural and fail-closed | Accepted |
 | [ADR-033](033-publication-candidate-family-assembly.md) | Core-only PublicationCandidate and registered family assembler handlers | Accepted |
+| [ADR-034](034-registered-table-adapter.md) | Registered-table adapters trust only Core asset receipts and registered parsers | Accepted |
 
 > 注：`026-durable-hil-confidence-protocol.md` 与 `026-agent-workspace-permissions.md` 编号
 > 均为 026（两个独立工作流各自分配）；两者互不替代，均处于 Accepted 状态。
