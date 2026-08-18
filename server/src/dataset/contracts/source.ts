@@ -6,7 +6,15 @@
  */
 
 import type { SchemaVersion } from "./primitives.js";
-import type { SourceLocatorV2 } from "@biomed/contracts";
+import type {
+  RegisteredSourceAssetRef,
+  RegisteredSourceAssetRole,
+  SourceAssetPathCompatibility,
+  SourceAssetReferenceMode,
+  SourceAssetReferenceTelemetry,
+  SourceAssetRegistrationReceipt,
+  SourceLocatorV2,
+} from "@biomed/contracts";
 import {
   assertExactKeys,
   assertNonEmptyString,
@@ -15,6 +23,7 @@ import {
   assertOptionalString,
   assertRecord,
   assertRelativePath,
+  assertSafeId,
   assertSha256,
   assertIsoDateTime,
   assertString,
@@ -143,6 +152,152 @@ export function parseSourceAsset(value: unknown): SourceAsset {
     successful_attempt_id: successfulAttemptId,
     derived_from_asset_id: derivedFromAssetId,
     data_level: assertDataLevel(record.data_level, "SourceAsset.data_level"),
+  };
+}
+
+const REGISTERED_ASSET_ROLES = new Set<RegisteredSourceAssetRole>([
+  "source", "mapping", "metadata", "carrier",
+]);
+const REFERENCE_MODES = new Set<SourceAssetReferenceMode>([
+  "asset_id", "legacy_task_path",
+]);
+const REFERENCE_TELEMETRY = new Set<SourceAssetReferenceTelemetry>([
+  "asset_ref_used", "legacy_path_compatibility_used",
+]);
+const REGISTERED_ASSET_REF_KEYS = [
+  "schema_version", "asset_id", "task_id", "role",
+] as const;
+const PATH_COMPATIBILITY_KEYS = [
+  "schema_version", "mode", "legacy_path", "telemetry_event",
+] as const;
+const REGISTRATION_RECEIPT_KEYS = [
+  "schema_version", "receipt_id", "task_id", "asset_ref", "source_id",
+  "relative_path", "sha256", "size_bytes", "media_type", "registered_at",
+  "path_compatibility",
+] as const;
+
+function sourceAssetRole(value: unknown, name: string): RegisteredSourceAssetRole {
+  const role = assertNonEmptyString(value, name);
+  if (!REGISTERED_ASSET_ROLES.has(role as RegisteredSourceAssetRole)) {
+    throw new TypeError(`${name} is invalid`);
+  }
+  return role as RegisteredSourceAssetRole;
+}
+
+export function parseRegisteredSourceAssetRef(
+  value: unknown,
+  expectedTaskId?: string,
+): RegisteredSourceAssetRef {
+  const record = assertRecord(value, "RegisteredSourceAssetRef");
+  assertExactKeys(record, REGISTERED_ASSET_REF_KEYS, "RegisteredSourceAssetRef");
+  if (record.schema_version !== "1.0") {
+    throw new TypeError("RegisteredSourceAssetRef.schema_version must be 1.0");
+  }
+  const taskId = assertSafeId(record.task_id, "RegisteredSourceAssetRef.task_id");
+  if (expectedTaskId !== undefined && taskId !== expectedTaskId) {
+    throw new TypeError("RegisteredSourceAssetRef belongs to a different task");
+  }
+  const assetId = assertSafeId(record.asset_id, "RegisteredSourceAssetRef.asset_id");
+  if (!/^asset_[0-9a-f]{64}$/.test(assetId)) {
+    throw new TypeError("RegisteredSourceAssetRef.asset_id must be a content-addressed asset ID");
+  }
+  return {
+    schema_version: "1.0",
+    asset_id: assetId,
+    task_id: taskId,
+    role: sourceAssetRole(record.role, "RegisteredSourceAssetRef.role"),
+  };
+}
+
+function parsePathCompatibility(value: unknown): SourceAssetPathCompatibility {
+  const record = assertRecord(value, "SourceAssetPathCompatibility");
+  assertExactKeys(record, PATH_COMPATIBILITY_KEYS, "SourceAssetPathCompatibility");
+  if (record.schema_version !== "1.0") {
+    throw new TypeError("SourceAssetPathCompatibility.schema_version must be 1.0");
+  }
+  const mode = assertNonEmptyString(record.mode, "SourceAssetPathCompatibility.mode");
+  const telemetry = assertNonEmptyString(
+    record.telemetry_event,
+    "SourceAssetPathCompatibility.telemetry_event",
+  );
+  if (!REFERENCE_MODES.has(mode as SourceAssetReferenceMode)) {
+    throw new TypeError("SourceAssetPathCompatibility.mode is invalid");
+  }
+  if (!REFERENCE_TELEMETRY.has(telemetry as SourceAssetReferenceTelemetry)) {
+    throw new TypeError("SourceAssetPathCompatibility.telemetry_event is invalid");
+  }
+  if (mode === "asset_id") {
+    if (record.legacy_path !== null || telemetry !== "asset_ref_used") {
+      throw new TypeError("asset_id mode forbids legacy_path and requires asset_ref_used telemetry");
+    }
+    return {
+      schema_version: "1.0",
+      mode: "asset_id",
+      legacy_path: null,
+      telemetry_event: "asset_ref_used",
+    };
+  }
+  const legacyPath = assertRelativePath(
+    record.legacy_path,
+    "SourceAssetPathCompatibility.legacy_path",
+  );
+  if (!legacyPath.startsWith("source_assets/") || telemetry !== "legacy_path_compatibility_used") {
+    throw new TypeError("legacy path must stay in source_assets and emit compatibility telemetry");
+  }
+  return {
+    schema_version: "1.0",
+    mode: "legacy_task_path",
+    legacy_path: legacyPath,
+    telemetry_event: "legacy_path_compatibility_used",
+  };
+}
+
+export function parseSourceAssetRegistrationReceipt(
+  value: unknown,
+  expectedTaskId?: string,
+): SourceAssetRegistrationReceipt {
+  const record = assertRecord(value, "SourceAssetRegistrationReceipt");
+  assertExactKeys(record, REGISTRATION_RECEIPT_KEYS, "SourceAssetRegistrationReceipt");
+  if (record.schema_version !== "1.0") {
+    throw new TypeError("SourceAssetRegistrationReceipt.schema_version must be 1.0");
+  }
+  const taskId = assertSafeId(record.task_id, "SourceAssetRegistrationReceipt.task_id");
+  if (expectedTaskId !== undefined && taskId !== expectedTaskId) {
+    throw new TypeError("SourceAssetRegistrationReceipt belongs to a different task");
+  }
+  const assetRef = parseRegisteredSourceAssetRef(record.asset_ref, taskId);
+  const sha256 = assertSha256(record.sha256, "SourceAssetRegistrationReceipt.sha256");
+  if (assetRef.asset_id !== `asset_${sha256}`) {
+    throw new TypeError("SourceAssetRegistrationReceipt hash does not match asset_id");
+  }
+  const relativePath = assertRelativePath(
+    record.relative_path,
+    "SourceAssetRegistrationReceipt.relative_path",
+  );
+  if (!relativePath.startsWith("source_assets/")) {
+    throw new TypeError("SourceAssetRegistrationReceipt.relative_path must stay in source_assets");
+  }
+  return {
+    schema_version: "1.0",
+    receipt_id: assertSafeId(record.receipt_id, "SourceAssetRegistrationReceipt.receipt_id"),
+    task_id: taskId,
+    asset_ref: assetRef,
+    source_id: assertSafeId(record.source_id, "SourceAssetRegistrationReceipt.source_id"),
+    relative_path: relativePath,
+    sha256,
+    size_bytes: assertNonNegativeInt(
+      record.size_bytes,
+      "SourceAssetRegistrationReceipt.size_bytes",
+    ),
+    media_type: assertNonEmptyString(
+      record.media_type,
+      "SourceAssetRegistrationReceipt.media_type",
+    ),
+    registered_at: assertIsoDateTime(
+      record.registered_at,
+      "SourceAssetRegistrationReceipt.registered_at",
+    ),
+    path_compatibility: parsePathCompatibility(record.path_compatibility),
   };
 }
 
