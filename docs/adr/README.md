@@ -29,6 +29,7 @@ indexed in [migration/README.md](../migration/README.md).
 | [ADR-034](034-registered-table-adapter.md) | Registered-table adapters trust only Core asset receipts and registered parsers | Accepted |
 | [ADR-035](035-biomedical-common-schemas.md) | Parameterized biomedical common schemas remain non-production capabilities | Accepted |
 | [ADR-036](036-deterministic-derive-slot.md) | Fixed deterministic derive slot and registered algorithm provenance | Accepted |
+| [ADR-037](037-durable-build-api-state-machine.md) | Durable Build API, idempotency, and independent state machine | Accepted |
 
 > 注：`026-durable-hil-confidence-protocol.md` 与 `026-agent-workspace-permissions.md` 编号
 > 均为 026（两个独立工作流各自分配）；两者互不替代，均处于 Accepted 状态。

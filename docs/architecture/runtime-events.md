@@ -37,6 +37,14 @@ Agent Tool 桥接的 Pipeline / DatasetBuild 事件都使用 `schema_version="2.
 sequence 是 **Task 级单调递增**，不是每个 Run 重新计数。旧 fixture envelope 仍
 兼容 v1。
 
+Durable Build lifecycle 另有显式 `build_id`，事件包括 `build_queued` /
+`build_started` / `build_recovered` / `build_cancel_requested` /
+`build_completed` / `build_failed` / `build_cancelled`。Build status 与 Run status
+正交：Run 进入终态不产生 Build 终态；业务终态必须由匹配的 `BuildResult` 和
+Build terminal event 证明。`request_digest`、lease attempt、取消 request/event ref
+以及 typed failure 均属于 Build record，不从错误文本或 artifact 数量重建
+（ADR-037；scheduler/runtime 接线仍属 TASK-C3I）。
+
 事件类型由 `packages/contracts/src/events.ts` 的 `EventPayload` 联合类型统一
 定义，覆盖三类：
 
@@ -232,7 +240,9 @@ Ctrl+⌘ 可对单条消息执行相反操作。半透明侧边栏开启时，�
 | GET | `/tasks/{task_id}/artifacts` | 列出 manifest 注册且已验证的 Artifact |
 | GET | `/tasks/{task_id}/artifacts/{artifact_id}` | 按 Artifact ID 下载并校验文件 |
 | GET | `/builds` | 列出全局 Build 摘要、RunStatus、BuildResult 与当前 Publication |
-| GET | `/builds/{build_id}` | Build 的 BuildResult、ValidationResult、Manifest 与 Publication |
+| POST | `/builds` | 以 idempotency key 异步启动 Durable Build（TASK-C3I 待接线） |
+| GET | `/builds/{build_id}` | Build 的 durable status；终态附 BuildResult/typed failure，兼容现有 Manifest 与 Publication detail |
+| POST | `/builds/{build_id}/cancel` | 幂等请求取消 Build，返回 typed cancel disposition/terminal ack（TASK-C3I 待接线） |
 | GET | `/builds/{build_id}/artifacts/{artifact_id}` | 下载 Build 的 Artifact |
 | GET | `/cache/datasets` | 列出本地缓存数据集 |
 | GET | `/cache/datasets/{dataset_id}` | 缓存数据集详情 |
@@ -245,6 +255,10 @@ Ctrl+⌘ 可对单条消息执行相反操作。半透明侧边栏开启时，�
 - 下载只接受 Manifest 注册的 `artifact_id`；
 - 客户端不能提交发布阈值或 acceptance policy，只能引用服务端允许的 Profile；
 - 主数据通过 `primary_dataset` role 识别，不依赖固定文件名；
+- Durable Build 的 start 重试仅在 task/run/build identity 与 canonical request digest
+  完全一致时幂等；Run 终态不得替代 Build 终态；
+- Build API 与前端只能使用 typed status/result/error code/cancel disposition，不能解析
+  error message 推断状态；
 - WebSocket 不接受创建 Run 的命令，也不提供 SSE；
 - 不安全供应商 URL 返回 422，供应商网络故障返回 502。
 
