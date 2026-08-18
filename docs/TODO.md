@@ -67,9 +67,9 @@
 
 > B 组详细 ownership、依赖类型、分支、交接窗口和逐任务验收见
 > [开发者 B：可信多表 Publication 落实计划](superpowers/plans/2026-08-18-developer-b-trusted-publication-plan.md)。
-> B 组 contracts、B2M、B3、B5C、B6D 已完成，B4M module 已完成；A 组
-> `TASK-047-A1/A2/A3` 已合并。B 组开始 B5L/T/V/S/A family modules；A 组可基于
-> contracts/B2M/B6D 启动 C1I/A5I/C2I/B2W/B6W。
+> B 组 contracts、B2M、B3、B5C、B6D 已完成，B4M 与 B5L/T/V/S/A module 已完成；A 组
+> `TASK-047-A1/A2/A3/A4` 已合并。B 组下一项为 C3C/P1 与 B6A；A 组仍需接线
+> C1I/A5I/C2I/B2W/B6W。
 
 - [x] **TASK-G0 / completed**：Gold v1 eval manifest、六个原始 prompt、reference schema/source
       inventory、默认运行参数、checksum verifier 与 manifest run driver 已冻结于
@@ -96,12 +96,12 @@
       builders 覆盖 entity/paper/compound/assay/structure dimension/trial/source/entity+compound
       crosswalk，受控 ID/relation/cardinality/unit vocabulary，crosswalk 保留匹配证据、冲突和置信度；
       未注册 production family。
-- [ ] **TASK-048-B5L / blocked**：`literature_evidence` vertical slice。
-- [ ] **TASK-048-B5T / blocked**：`target_evidence` vertical slice。
-- [ ] **TASK-048-B5V / blocked**：`variant_evidence` vertical slice。
-- [ ] **TASK-048-B5S / blocked**：`protein_structure` vertical slice。
-- [ ] **TASK-048-B5A / blocked**：`bioactivity_measurement` vertical slice。
-- [ ] **TASK-048-B6A / blocked**：Chart/VLM evidence Publication。
+- [ ] **TASK-048-B5L / module complete；trusted E2E blocked by B2W/B4M/C2I**：`literature_evidence` vertical slice。
+- [ ] **TASK-048-B5T / module complete；trusted E2E blocked by B2W/B4M/C2I**：`target_evidence` vertical slice。
+- [ ] **TASK-048-B5V / module complete；trusted E2E blocked by B2W/B4M/C2I**：`variant_evidence` vertical slice。
+- [ ] **TASK-048-B5S / module complete；trusted E2E blocked by B2W/B4M/C2I**：`protein_structure` vertical slice。
+- [ ] **TASK-048-B5A / module complete；trusted E2E blocked by B2W/B4M/C2I**：`bioactivity_measurement` vertical slice。
+- [ ] **TASK-048-B6A / blocked by B5L+B5A+B4M trusted E2E+C2I**：Chart/VLM evidence Publication。
 - [x] **TASK-048-B6D / completed**：Deterministic derive contract、固定 slot、算法 registry 与 ADR-036；
       PDB distance/sequence alignment 共用 contract，参数/reference/input/output digest provenance
       完整，Agent code/通用 DAG fail-closed。

@@ -294,7 +294,7 @@ A 组任务的实现细节由 A 组计划维护；本表只冻结 B 组依赖的
 
 ### TASK-048-B5L：literature_evidence family
 
-- **状态**：blocked
+- **状态**：module complete；trusted E2E blocked by B2W/B4M/C2I
 - **分支**：`feat/literature-evidence-family`
 - **可开始条件**：`TASK-048-B2M`、`TASK-048-B3`、`TASK-048-B4M`、`TASK-048-B5C`
 - **完成条件**：`TASK-048-B2W`、`TASK-048-B4M` completed、`TASK-C2I`
@@ -305,7 +305,7 @@ A 组任务的实现细节由 A 组计划维护；本表只冻结 B 组依赖的
 
 ### TASK-048-B5T：target_evidence family
 
-- **状态**：blocked
+- **状态**：module complete；trusted E2E blocked by B2W/B4M/C2I
 - **分支**：`feat/target-evidence-family`
 - **可开始条件**：`TASK-048-B2M`、`TASK-048-B3`、`TASK-048-B4M`、`TASK-048-B5C`
 - **完成条件**：`TASK-048-B2W`、`TASK-048-B4M` completed、`TASK-C2I`
@@ -314,7 +314,7 @@ A 组任务的实现细节由 A 组计划维护；本表只冻结 B 组依赖的
 
 ### TASK-048-B5V：variant_evidence family
 
-- **状态**：blocked
+- **状态**：module complete；trusted E2E blocked by B2W/B4M/C2I
 - **分支**：`feat/variant-evidence-family`
 - **可开始条件**：`TASK-048-B2M`、`TASK-048-B3`、`TASK-048-B4M`、`TASK-048-B5C`
 - **完成条件**：`TASK-048-B2W`、`TASK-048-B4M` completed、`TASK-C2I`
@@ -323,7 +323,7 @@ A 组任务的实现细节由 A 组计划维护；本表只冻结 B 组依赖的
 
 ### TASK-048-B5S：protein_structure family
 
-- **状态**：blocked
+- **状态**：module complete；trusted E2E blocked by B2W/B4M/C2I
 - **分支**：`feat/protein-structure-family`
 - **可开始条件**：`TASK-048-B2M`、`TASK-048-B3`、`TASK-048-B4M`、`TASK-048-B5C`
 - **完成条件**：`TASK-048-B2W`、`TASK-048-B4M` completed、`TASK-C2I`
@@ -332,7 +332,7 @@ A 组任务的实现细节由 A 组计划维护；本表只冻结 B 组依赖的
 
 ### TASK-048-B5A：bioactivity_measurement family
 
-- **状态**：blocked
+- **状态**：module complete；trusted E2E blocked by B2W/B4M/C2I
 - **分支**：`feat/bioactivity-family`
 - **可开始条件**：`TASK-048-B2M`、`TASK-048-B3`、`TASK-048-B4M`、`TASK-048-B5C`
 - **完成条件**：`TASK-048-B2W`、`TASK-048-B4M` completed、`TASK-C2I`
