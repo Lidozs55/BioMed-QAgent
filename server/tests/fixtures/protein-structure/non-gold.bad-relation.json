@@ -1,0 +1,80 @@
+{
+  "structures": [
+    {
+      "structure_id": "1ABC",
+      "structure_namespace": "pdb",
+      "structure_version": "1",
+      "title": "Example receptor domain",
+      "experimental_method": "X-ray diffraction",
+      "resolution_angstrom": 2.1,
+      "deposited_at": "2024-01-15",
+      "source_id": "source_pdb_1",
+      "source_locator": {
+        "locator_version": "2.0",
+        "locator_type": "json_pointer",
+        "asset_id": "asset_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "logical_file": "source_assets/pdb/1ABC.json",
+        "raw_value": "1ABC",
+        "json_pointer": "/structures/0/entry_id"
+      }
+    }
+  ],
+  "chains": [
+    {
+      "chain_record_id": "9XYZ_v2_A",
+      "structure_id": "9XYZ",
+      "structure_version": "2",
+      "chain_id": "A",
+      "polymer_type": "polypeptide(L)",
+      "entity_id": "P12345",
+      "entity_namespace": "uniprot",
+      "sequence_length": 128,
+      "source_id": "source_pdb_1",
+      "source_locator": {
+        "locator_version": "2.0",
+        "locator_type": "json_pointer",
+        "asset_id": "asset_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "logical_file": "source_assets/pdb/1ABC.json",
+        "raw_value": "A",
+        "json_pointer": "/chains/0/chain_id"
+      }
+    }
+  ],
+  "ligands": [
+    {
+      "ligand_record_id": "1ABC_v1_HEM_1",
+      "structure_id": "1ABC",
+      "structure_version": "1",
+      "ligand_id": "HEM",
+      "ligand_namespace": "pdb_chemical_component",
+      "chemical_name": "PROTOPORPHYRIN IX CONTAINING FE",
+      "formula": "C34 H32 Fe N4 O4",
+      "source_id": "source_pdb_1",
+      "source_locator": {
+        "locator_version": "2.0",
+        "locator_type": "json_pointer",
+        "asset_id": "asset_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "logical_file": "source_assets/pdb/1ABC.json",
+        "raw_value": "HEM",
+        "json_pointer": "/ligands/0/chemical_component_id"
+      }
+    }
+  ],
+  "sources": [
+    {
+      "source_id": "source_pdb_1",
+      "source_database": "pdb",
+      "source_asset_id": "asset_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_locator": {
+        "locator_version": "2.0",
+        "locator_type": "json_pointer",
+        "asset_id": "asset_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "logical_file": "source_assets/pdb/1ABC.json",
+        "raw_value": "1ABC",
+        "json_pointer": "/structures/0"
+      },
+      "retrieved_at": "2024-02-01T00:00:00Z",
+      "carrier_type": "api_record"
+    }
+  ]
+}
