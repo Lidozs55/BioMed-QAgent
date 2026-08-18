@@ -67,9 +67,9 @@
 
 > B 组详细 ownership、依赖类型、分支、交接窗口和逐任务验收见
 > [开发者 B：可信多表 Publication 落实计划](superpowers/plans/2026-08-18-developer-b-trusted-publication-plan.md)。
-> `TASK-048-B1`、`TASK-C1C`、`TASK-047-A5C`、`TASK-C2C`、`TASK-048-B2M`、
-> `TASK-048-B3` 已完成；A 组 `TASK-047-A1/A2/A3` 已合并，可基于 contracts/
-> B2M 启动 C1I/A5I/C2I/B2W。B 组下一项为 B4M module 与 B5C。
+> B 组 contracts、B2M、B3、B5C、B6D 已完成，B4M module 已完成；A 组
+> `TASK-047-A1/A2/A3` 已合并。B 组开始 B5L/T/V/S/A family modules；A 组可基于
+> contracts/B2M/B6D 启动 C1I/A5I/C2I/B2W/B6W。
 
 - [x] **TASK-G0 / completed**：Gold v1 eval manifest、六个原始 prompt、reference schema/source
       inventory、默认运行参数、checksum verifier 与 manifest run driver 已冻结于
@@ -88,7 +88,7 @@
 - [x] **TASK-048-B2M / completed**：Core-only PublicationCandidate 与 family assembler module；expression integration result 可确定性包装，candidate 仅引用 committed Core result receipts/registered asset IDs，缺 handler 的 family 无 assembly capability；ADR-033。
 - [ ] **TASK-048-B2W / A owner, blocked by TASK-048-B2M + TASK-047-A5I**：assemble runtime/checkpoint/publisher wiring。
 - [x] **TASK-048-B3 / completed**：Generic multi-table validation/relation gate；严格结构/关系、token/evidence closure 与 Agent workspace bypass fail-closed 已完成（ADR-032）。
-- [ ] **TASK-048-B4M / module complete（ADR-035）；trusted E2E blocked by TASK-C1I**：
+- [ ] **TASK-048-B4M / module complete（ADR-034）；trusted E2E blocked by TASK-C1I**：
       schema-driven CSV/TSV/JSON RegisteredSourceAsset adapter、严格行宽/类型、locator/parser
       version/rejected-row audit 与 fail-closed receipt/hash 已完成；`adapters.ts`/runtime 接线、
       Core asset registry E2E 与 Publication admission 未完成，不得标记整体 completed。
