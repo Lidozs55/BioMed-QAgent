@@ -20,6 +20,7 @@ indexed in [migration/README.md](../migration/README.md).
 | [ADR-026](026-durable-hil-confidence-protocol.md) | Durable evidence-bound HIL remains distinct from confidence and validation | Accepted |
 | [ADR-026](026-agent-workspace-permissions.md) | Agent Workspace is `data/workspaces/<taskId>`; everything outside goes through allow/ask/deny; Publication trust is hash-verified | Accepted |
 | [ADR-027](027-dataset-family-registry.md) | Dataset families are registered runtime capabilities | Accepted |
+| [ADR-028](028-multitable-contracts.md) | Versioned multi-table publication contracts and evidence locators | Accepted |
 
 > 注：`026-durable-hil-confidence-protocol.md` 与 `026-agent-workspace-permissions.md` 编号
 > 均为 026（两个独立工作流各自分配）；两者互不替代，均处于 Accepted 状态。

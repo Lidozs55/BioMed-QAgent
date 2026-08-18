@@ -8,7 +8,10 @@ import {
   parseDatasetBuildSpec,
   parseDatasetManifest,
   parseDatasetPublication,
+  parseDatasetManifestV2,
   parseDatasetSchema,
+  parseDatasetSchemaV2,
+  parseSourceLocator,
   parseFieldMapping,
   parseFileAsset,
   parseSourceBindingAcquisition,
@@ -100,6 +103,38 @@ describe("contract invariants (mirror Pydantic model_validator)", () => {
     expect(parseDatasetSchema(validSchema).schema_version).toBe("1.0");
   });
 
+  test("DatasetSchemaV2 requires independent required and nullable fields", () => {
+    const field = {
+      schema_version: "2.0",
+      name: "target_id",
+      data_type: "string",
+      semantic_role: "entity_identifier",
+      required: true,
+      nullable: false,
+      unit_policy: null,
+      ontology: null,
+      description: "",
+      derivation_policy: null,
+    };
+    const parsed = parseDatasetSchemaV2({
+      schema_version: "2.0",
+      schema_id: "target.v2",
+      dataset_family: "target_evidence",
+      row_granularity: "target_record",
+      primary_key: ["target_id"],
+      fields: [field],
+    });
+    expect(parsed.fields[0]?.nullable).toBe(false);
+    expect(() => parseDatasetSchemaV2({
+      schema_version: "2.0",
+      schema_id: "target.v2",
+      dataset_family: "target_evidence",
+      row_granularity: "target_record",
+      primary_key: ["target_id"],
+      fields: [{ ...field, nullable: undefined }],
+    })).toThrow(/nullable/);
+  });
+
   test("ValidationResult rejects passed with failed checks", () => {
     expect(() =>
       parseValidationResult({
@@ -158,6 +193,130 @@ describe("contract invariants (mirror Pydantic model_validator)", () => {
         artifacts: [artifact, { ...artifact, artifact_id: "artifact_2" }],
       }),
     ).toThrow(/at most one primary_dataset/);
+  });
+
+  test("Manifest 2.0 parses tables, relations and candidate refs", () => {
+    const parsed = parseDatasetManifestV2({
+      schema_version: "2.0",
+      manifest_id: "manifest_v2",
+      task_id: "task_1",
+      build_id: "build_1",
+      dataset_family: "target_evidence",
+      row_granularity: "target_record",
+      schema_ref: "target.v1",
+      primary_key: ["target_id"],
+      row_count: 1,
+      sha256: "a".repeat(64),
+      artifacts: [{
+        artifact_id: "artifact_target",
+        role: "primary_dataset",
+        relative_path: "tables/target.csv",
+        media_type: "text/csv",
+        size_bytes: 10,
+        sha256: "a".repeat(64),
+      }],
+      source_summary: {},
+      validation_summary: {},
+      confidence_summary: {},
+      provenance_summary: {},
+      tables: [{
+        table_id: "targets",
+        schema_ref: "target.v1",
+        role: "primary",
+        required: true,
+        allow_empty: false,
+        primary_key: ["target_id"],
+        field_names: ["target_id", "name"],
+      }, {
+        table_id: "evidence",
+        schema_ref: "evidence.v1",
+        role: "supporting",
+        required: true,
+        allow_empty: false,
+        primary_key: ["target_id", "source_id"],
+        field_names: ["target_id", "source_id"],
+      }],
+      relations: [{
+        relation_id: "evidence_target",
+        from_table_id: "evidence",
+        from_fields: ["target_id"],
+        to_table_id: "targets",
+        to_fields: ["target_id"],
+        cardinality: "many_to_one",
+        missing_policy: "reject",
+      }],
+      candidate_refs: [{
+        candidate_id: "candidate_1",
+        table_ids: ["targets", "evidence"],
+        relation_ids: ["evidence_target"],
+        provenance_refs: ["prov_1"],
+        confidence_refs: ["confidence_1"],
+        audit_refs: ["audit_1"],
+      }],
+    }, {
+      knownSchemaRefs: new Set(["target.v1", "evidence.v1"]),
+      schemaFieldsByRef: new Map([
+        ["target.v1", new Set(["target_id", "name"])],
+        ["evidence.v1", new Set(["target_id", "source_id"])],
+      ]),
+    });
+    expect(parsed.schema_version).toBe("2.0");
+    expect(parsed.tables).toHaveLength(2);
+    expect(parsed.relations[0]?.cardinality).toBe("many_to_one");
+  });
+
+  test("Manifest 2.0 rejects duplicate tables, missing primary, bad FK and candidate refs", () => {
+    const base = {
+      schema_version: "2.0",
+      manifest_id: "manifest_v2",
+      task_id: "task_1",
+      build_id: "build_1",
+      dataset_family: "target_evidence",
+      row_granularity: "target_record",
+      schema_ref: "target.v1",
+      primary_key: ["target_id"],
+      row_count: 1,
+      sha256: "a".repeat(64),
+      artifacts: [],
+      source_summary: {},
+      validation_summary: {},
+      confidence_summary: {},
+      provenance_summary: {},
+      tables: [{ table_id: "targets", schema_ref: "target.v1", role: "primary", required: true, allow_empty: false, primary_key: ["target_id"], field_names: ["target_id"] }],
+      relations: [],
+      candidate_refs: [{ candidate_id: "candidate_1", table_ids: ["targets"], relation_ids: [], provenance_refs: [], confidence_refs: [], audit_refs: [] }],
+    };
+    expect(() => parseDatasetManifestV2({ ...base, tables: [...base.tables, { ...base.tables[0] }] })).toThrow(/table IDs/);
+    expect(() => parseDatasetManifestV2({ ...base, tables: [{ ...base.tables[0], role: "supporting" }] })).toThrow(/primary table/);
+    expect(() => parseDatasetManifestV2({ ...base, tables: [{ ...base.tables[0], primary_key: ["missing"] }] })).toThrow(/primary_key/);
+    expect(() => parseDatasetManifestV2({ ...base, relations: [{ relation_id: "bad", from_table_id: "targets", from_fields: ["missing"], to_table_id: "targets", to_fields: ["target_id"], cardinality: "one_to_one", missing_policy: "reject" }] })).toThrow(/unknown field/);
+    expect(() => parseDatasetManifestV2({ ...base, candidate_refs: [{ ...base.candidate_refs[0], table_ids: ["missing"] }] })).toThrow(/unknown table/);
+    expect(() => parseDatasetManifestV2({ ...base, tables: [{ ...base.tables[0], schema_ref: "unknown.v1" }] }, { knownSchemaRefs: new Set(["target.v1"]) })).toThrow(/unknown schema ref/);
+    expect(() => parseDatasetManifestV2({ ...base, tables: [{ ...base.tables[0], field_names: ["target_id", "missing"] }] }, { schemaFieldsByRef: new Map([["target.v1", new Set(["target_id"])]]) })).toThrow(/unknown schema field/);
+  });
+
+  test("Manifest 1.0 rejects v2 fields instead of accepting a mixed version", () => {
+    expect(() => parseDatasetManifest({
+      manifest_id: "manifest_1",
+      task_id: "task_1",
+      build_id: "build_1",
+      dataset_family: "gene_expression",
+      row_granularity: "gene_sample_measurement",
+      schema_ref: "gene_expression.long.v1",
+      row_count: 0,
+      sha256: "digest",
+      artifacts: [],
+      tables: [],
+    })).toThrow(/unknown fields/);
+  });
+
+  test("SourceLocator 2.0 accepts JSON, XML, PDF and image coordinates", () => {
+    expect(parseSourceLocator({ locator_version: "2.0", locator_type: "json_pointer", asset_id: "asset_1", logical_file: "response.json", raw_value: "EGFR", json_pointer: "/data/0/name" })).toMatchObject({ locator_type: "json_pointer" });
+    expect(parseSourceLocator({ locator_version: "2.0", locator_type: "xml_cell", asset_id: "asset_1", logical_file: "article.xml", raw_value: "100", xml_path: "/article/table-wrap[1]", table_id: "T1", row_index: 1, column_index: 2 })).toMatchObject({ locator_type: "xml_cell" });
+    expect(parseSourceLocator({ locator_version: "2.0", locator_type: "pdf_region", asset_id: "asset_1", logical_file: "article.pdf", raw_value: "IC50", page_number: 4, table_id: "Table 1", figure_id: null, row_label: "WT", column_label: "Gefitinib" })).toMatchObject({ locator_type: "pdf_region" });
+    expect(parseSourceLocator({ locator_version: "2.0", locator_type: "image_bbox", asset_id: "asset_1", logical_file: "figure.png", raw_value: "0.5", page_number: null, figure_id: "Fig 2", bbox: [1, 2, 20, 30] })).toMatchObject({ locator_type: "image_bbox" });
+    expect(() => parseSourceLocator({ locator_version: "2.0", locator_type: "json_pointer", asset_id: "asset_1", logical_file: "response.json", raw_value: "x", json_pointer: "data/0" })).toThrow(/json_pointer/);
+    expect(() => parseSourceLocator({ locator_version: "2.0", locator_type: "image_bbox", asset_id: "asset_1", logical_file: "figure.png", raw_value: "x", page_number: null, figure_id: "Fig 2", bbox: [20, 2, 1, 30] })).toThrow(/coordinates/);
   });
 
   test("DatasetPublication rejects self-supersede", () => {

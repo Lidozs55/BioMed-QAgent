@@ -7,9 +7,11 @@
 
 import type {
   ArtifactRole,
-  DatasetManifest,
+  DatasetManifestV1,
+  DatasetManifestV2,
   DatasetPublication,
   ManifestArtifactEntry,
+  VersionedDatasetManifest,
 } from "@biomed/contracts";
 import {
   assertExactKeys,
@@ -23,11 +25,14 @@ import {
   parsePublicationSchemaVersion,
   parseSchemaVersion,
 } from "./primitives.js";
+import { parseDatasetManifestV2 } from "./multitable.js";
+export * from "./multitable.js";
 
 export type {
   DatasetManifest,
   DatasetPublication,
   ManifestArtifactEntry,
+  VersionedDatasetManifest,
 } from "@biomed/contracts";
 
 function isArtifactRole(value: string): value is ArtifactRole {
@@ -98,8 +103,13 @@ const DATASET_MANIFEST_KEYS = [
   "provenance_summary",
 ] as const;
 
-export function parseDatasetManifest(value: unknown): DatasetManifest {
+export function parseDatasetManifest(value: DatasetManifestV2): DatasetManifestV2;
+export function parseDatasetManifest(value: DatasetManifestV1): DatasetManifestV1;
+export function parseDatasetManifest(value: Record<string, unknown>): DatasetManifestV1;
+export function parseDatasetManifest(value: unknown): VersionedDatasetManifest;
+export function parseDatasetManifest(value: unknown): VersionedDatasetManifest {
   const record = assertRecord(value, "DatasetManifest");
+  if (record.schema_version === "2.0") return parseDatasetManifestV2(record);
   assertExactKeys(record, DATASET_MANIFEST_KEYS, "DatasetManifest");
   const artifacts = (() => {
     if (!Array.isArray(record.artifacts)) {

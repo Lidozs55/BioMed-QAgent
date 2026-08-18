@@ -1,5 +1,6 @@
 import type { ManifestArtifactEntry } from "./artifacts.js";
 import type { JsonValue } from "./json.js";
+import type { DatasetManifestV2 } from "./dataset-multitable.js";
 
 export interface DatasetBuildSourceAcquisition {
   schema_version?: "1.0";
@@ -70,7 +71,7 @@ export interface BuildResult {
 }
 
 /** Immutable V2 dataset manifest summary (backend DatasetManifest). */
-export interface DatasetManifest {
+export interface DatasetManifestV1 {
   schema_version?: "1.0";
   manifest_id: string;
   task_id: string;
@@ -87,6 +88,11 @@ export interface DatasetManifest {
   confidence_summary: Record<string, JsonValue>;
   provenance_summary: Record<string, JsonValue>;
 }
+
+/** Existing single-table consumer shape; product consumers migrate in TASK-048-B2W. */
+export type DatasetManifest = DatasetManifestV1;
+/** Strict parser result for version-aware contract and assembly code. */
+export type VersionedDatasetManifest = DatasetManifestV1 | DatasetManifestV2;
 
 /** Immutable publication record of a V2 build (backend DatasetPublication). */
 export interface DatasetPublication {
