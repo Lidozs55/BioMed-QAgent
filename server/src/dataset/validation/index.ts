@@ -5,5 +5,6 @@
  */
 
 export * from "./confidence.js";
+export * from "./multitable.js";
 export * from "./profile.js";
 export * from "./spec_validator.js";

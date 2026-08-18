@@ -3,6 +3,14 @@
  * manifest digest passed a versioned profile.
  */
 
+import type {
+  DatasetSchemaV2,
+  OperationResultManifest,
+  PublicationCandidateRef,
+  RelationDefinition,
+  RelationMissingPolicy,
+  TableDefinition,
+} from "@biomed/contracts";
 import type { SchemaVersion } from "./primitives.js";
 import {
   assertExactKeys,
@@ -23,6 +31,64 @@ export interface ValidationResult {
   checked_count: number;
   failed_count: number;
   report_path: string | null;
+}
+
+export type ResolvedRelationMissingPolicy = Exclude<
+  RelationMissingPolicy,
+  "profile_defined"
+>;
+
+export interface TokenPreservationRule {
+  table_id: string;
+  source_field: string;
+  output_field: string;
+  token_kind: "relation" | "unit";
+}
+
+export interface TrustedTableFileInput {
+  origin: "core_operation_result";
+  relative_path: string;
+  delimiter: "," | "\t";
+  operation_result: OperationResultManifest;
+}
+
+export interface MultiTableValidationTable {
+  definition: TableDefinition;
+  schema: DatasetSchemaV2;
+  file: TrustedTableFileInput | null;
+  provenance_refs: string[];
+  confidence_refs: string[];
+}
+
+export interface MultiTableValidationPolicy {
+  token_preservation_rules: TokenPreservationRule[];
+  profile_relation_missing_policies: Record<
+    string,
+    ResolvedRelationMissingPolicy
+  >;
+}
+
+export interface MultiTableValidationRequest {
+  task_id: string;
+  build_id: string;
+  candidate: PublicationCandidateRef;
+  tables: MultiTableValidationTable[];
+  relations: RelationDefinition[];
+  trusted_root: string;
+  forbidden_roots: string[];
+  policy: MultiTableValidationPolicy;
+}
+
+export interface MultiTableValidationCheck {
+  check_id: string;
+  scope: string;
+  passed: boolean;
+  detail: string;
+}
+
+export interface MultiTableValidationResult {
+  passed: boolean;
+  checks: MultiTableValidationCheck[];
 }
 
 const VALIDATION_RESULT_KEYS = [
