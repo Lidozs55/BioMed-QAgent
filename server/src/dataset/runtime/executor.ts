@@ -16,7 +16,16 @@
 import { randomUUID } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import type { BindingRejection, SourceAsset } from "../contracts/index.js";
+import type {
+  JsonValue,
+  OperationResultManifest,
+  OperationResultOutputKind,
+} from "@biomed/contracts";
+import {
+  parseOperationResultManifest,
+  type BindingRejection,
+  type SourceAsset,
+} from "../contracts/index.js";
 import { AdapterError, BindingRejectedError, BuildError, EmptySourceError } from "../adapters/errors.js";
 import { OperationAbortedError, type OperationSuspension } from "../cooperative.js";
 import { LockLostError } from "../service/build-lock.js";
@@ -28,6 +37,7 @@ import {
   markCompleted,
   saveBuildState,
   saveOperationOutput,
+  saveOperationResultManifest,
   validateAttemptLogPrefix,
 } from "./checkpoint.js";
 import { computeInputDigest, computeParameterDigest, sha256Json, type DigestScope } from "./digests.js";
@@ -57,6 +67,21 @@ export type OperationRunner = (
   signal?: AbortSignal,
   suspension?: OperationSuspension,
 ) => OperationOutput | Promise<OperationOutput>;
+
+/**
+ * ADR-030 output_kind for each executor operation kind. The contracts parser
+ * additionally enforces the acquire/source_asset and publish/publication_manifest
+ * pairings; assemble/derive are produced outside this executor.
+ */
+const RESULT_OUTPUT_KINDS: Record<OperationKind, OperationResultOutputKind> = {
+  acquire: "source_asset",
+  parse: "parsed_table",
+  canonicalize: "canonical_table",
+  compatibility_gate: "compatibility_report",
+  integrate: "integrated_table",
+  validate_profile: "validation_result",
+  publish: "publication_manifest",
+};
 
 /** Typed per-operation wall-clock timeout (M2, I-03). */
 export class OperationTimeoutError extends Error {
@@ -320,14 +345,14 @@ export class DatasetBuildExecutor {
         computeParameterDigest(op, scope),
       );
       if (reusable !== null && reusable.output_digest === outputDigest) {
-        const loaded = loadOperationOutput(this.stateDir, {
+        const loaded = await loadOperationOutput(this.stateDir, {
           taskRoot: this.taskRoot,
           taskId: this.taskId,
           buildId: this.buildId,
           operationId: op.operation_id,
           operationAttemptId: reusable.operation_attempt_id,
           outputDigest: reusable.output_digest,
-        });
+        }, this.cancellationSignal);
         if (loaded !== null) this.outputs[op.operation_id] = loaded;
         if (REHYDRATE_RUNNER_KINDS.has(op.kind)) {
           // The runner rebuilds its in-memory state from the same fixed
@@ -492,13 +517,134 @@ export class DatasetBuildExecutor {
     this.persistAttempts();
   }
 
+  /** Deterministic ADR-030 result manifest id for one completed attempt. */
+  private resultManifestId(operationId: string, operationAttemptId: string): string {
+    return sha256Json({
+      task_id: this.taskId,
+      build_id: this.buildId,
+      operation_id: operationId,
+      operation_attempt_id: operationAttemptId,
+    });
+  }
+
+  private implementationDigest(op: OperationSpec): string {
+    return sha256Json({
+      operation_id: op.operation_id,
+      implementation_version: this.implementationVersions[op.operation_id] ?? null,
+    });
+  }
+
+  /** Sorted, deduplicated asset ids covered by the input digest closure. */
+  private inputAssetIds(): string[] {
+    const ids = new Set<string>();
+    for (const asset of Object.values(this.sourceAssets)) ids.add(asset.asset_id);
+    for (const asset of Object.values(this.mappingAssets)) ids.add(asset.asset_id);
+    return [...ids].sort();
+  }
+
+  /** The succeeded attempt whose output is currently authoritative for op. */
+  private outputAttemptFor(operationId: string): OperationAttempt | null {
+    const state = this.state;
+    if (state === null) return null;
+    const outputDigest = state.completed_operations[operationId];
+    if (outputDigest === undefined) return null;
+    for (let index = state.operation_attempts.length - 1; index >= 0; index -= 1) {
+      const attempt = state.operation_attempts[index];
+      if (
+        attempt.operation_id === operationId &&
+        attempt.output_digest === outputDigest
+      ) {
+        return attempt;
+      }
+    }
+    return null;
+  }
+
+  /** Deterministic result manifest ids of the consumed upstream outputs. */
+  private upstreamResultManifestIds(op: OperationSpec): string[] {
+    const ids: string[] = [];
+    for (const upstreamId of op.upstream) {
+      if (!(upstreamId in this.outputs)) continue;
+      const attempt = this.outputAttemptFor(upstreamId);
+      if (attempt !== null) {
+        ids.push(this.resultManifestId(upstreamId, attempt.operation_attempt_id));
+      }
+    }
+    return ids;
+  }
+
+  /**
+   * Write the typed ADR-030 operation result manifest for a freshly
+   * succeeded attempt. The constructed manifest is re-validated by the
+   * strict contracts parser before the atomic checkpoint write, so an
+   * invalid manifest fails the build closed instead of being persisted.
+   */
+  private writeOperationResult(
+    op: OperationSpec,
+    running: OperationAttempt,
+    result: OperationOutput,
+    inputDigest: string,
+    parameterDigest: string,
+    outputDigest: string,
+    committedAt: string,
+  ): void {
+    const resultManifestId = this.resultManifestId(
+      op.operation_id,
+      running.operation_attempt_id,
+    );
+    const implementationDigest = this.implementationDigest(op);
+    const manifest: OperationResultManifest = {
+      schema_version: "1.0",
+      result_manifest_id: resultManifestId,
+      task_id: this.taskId,
+      build_id: this.buildId,
+      operation_id: op.operation_id,
+      operation_kind: op.kind,
+      operation_attempt_id: running.operation_attempt_id,
+      attempt: running.attempt,
+      status: "succeeded",
+      input_digest: inputDigest,
+      parameter_digest: parameterDigest,
+      implementation_digest: implementationDigest,
+      output_digest: outputDigest,
+      output_kind: RESULT_OUTPUT_KINDS[op.kind],
+      output_summary: JSON.parse(JSON.stringify(result.output)) as Record<string, JsonValue>,
+      output_files: result.files.map((file) => ({
+        relative_path: file.relative_path,
+        size_bytes: file.size_bytes,
+        sha256: file.sha256,
+      })),
+      dependency_closure: {
+        input_asset_ids: this.inputAssetIds(),
+        upstream_result_manifest_ids: this.upstreamResultManifestIds(op),
+        parameter_digest: parameterDigest,
+        implementation_digest: implementationDigest,
+      },
+      commit: {
+        state: "committed",
+        commit_id: sha256Json({
+          result_manifest_id: resultManifestId,
+          committed_at: committedAt,
+        }),
+        committed_at: committedAt,
+      },
+      migration: {
+        mode: "native",
+        legacy_checkpoint_path: null,
+        migrated_at: null,
+      },
+    };
+    parseOperationResultManifest(manifest, this.taskId, this.buildId);
+    saveOperationResultManifest(this.stateDir, manifest);
+  }
+
   /** Run (or reuse) one operation with digest matching and checkpointing. */
   private async runOperationOnce(op: OperationSpec, force: boolean): Promise<void> {
     const scope = this.digestScope(op);
     const inputDigest = computeInputDigest(op, scope);
     const parameterDigest = computeParameterDigest(op, scope);
 
-    if (!force && this.tryReuseOperation(op, inputDigest, parameterDigest)) {
+    if (!force && (await this.tryReuseOperation(op, inputDigest, parameterDigest))) {
       await this.emit({
         type: "operation_completed",
         operationId: op.operation_id,
@@ -579,6 +725,15 @@ export class DatasetBuildExecutor {
       output: result.output,
       files: [...result.files],
     });
+    this.writeOperationResult(
+      op,
+      running,
+      result,
+      inputDigest,
+      parameterDigest,
+      outputDigest,
+      finished,
+    );
     const succeeded = this.buildAttempt(
       op.operation_id,
       inputDigest,
@@ -610,25 +765,25 @@ export class DatasetBuildExecutor {
   }
 
   /** Reuse a digest-matched SUCCEEDED attempt when its checkpoint verifies. */
-  private tryReuseOperation(
+  private async tryReuseOperation(
     op: OperationSpec,
     inputDigest: string,
     parameterDigest: string,
-  ): boolean {
+  ): Promise<boolean> {
     const state = this.state;
     if (state === null) throw new Error("build state not loaded");
     const reusable = findReusable(state, op.operation_id, inputDigest, parameterDigest);
     if (reusable === null || reusable.output_digest === null) return false;
     const completed = state.completed_operations[op.operation_id];
     if (completed !== reusable.output_digest) return false;
-    const loaded = loadOperationOutput(this.stateDir, {
+    const loaded = await loadOperationOutput(this.stateDir, {
       taskRoot: this.taskRoot,
       taskId: this.taskId,
       buildId: this.buildId,
       operationId: op.operation_id,
       operationAttemptId: reusable.operation_attempt_id,
       outputDigest: reusable.output_digest,
-    });
+    }, this.cancellationSignal);
     if (loaded === null) return false;
 
     this.lastReusedAttemptId = reusable.operation_attempt_id;

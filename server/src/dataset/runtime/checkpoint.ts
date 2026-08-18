@@ -18,7 +18,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join, resolve, sep } from "node:path";
-import { sha256File } from "../adapters/hashing.js";
+import { sha256FileStream } from "../adapters/hashing.js";
+import { OperationAbortedError, throwIfAborted } from "../cooperative.js";
+import { parseOperationResultManifest } from "../contracts/operation-result.js";
+import type { OperationResultManifest } from "@biomed/contracts";
 import { sha256Json } from "./digests.js";
 import {
   parseOperationAttempt,
@@ -176,7 +179,7 @@ function isInsideRoot(resolvedPath: string, root: string): boolean {
  * task/build/attempt, fails digest or file hash verification, or references
  * files that no longer match (Python ``load_operation_output``).
  */
-export function loadOperationOutput(
+export async function loadOperationOutput(
   stateDir: string,
   options: {
     taskRoot: string;
@@ -186,10 +189,12 @@ export function loadOperationOutput(
     operationAttemptId: string;
     outputDigest: string;
   },
-): Record<string, unknown> | null {
+  cancellationSignal?: AbortSignal | null,
+): Promise<Record<string, unknown> | null> {
   const outputFile = join(stateDir, `${operationFilename(options.operationId)}_output.json`);
   if (!existsSync(outputFile)) return null;
   try {
+    throwIfAborted(cancellationSignal);
     const envelope = JSON.parse(readFileSync(outputFile, "utf8")) as OperationOutputEnvelope;
     if (
       envelope.task_id !== options.taskId ||
@@ -213,10 +218,11 @@ export function loadOperationOutput(
       const fileStat = statSync(resolved);
       if (!fileStat.isFile()) return null;
       if (fileStat.size !== file.size_bytes) return null;
-      if (sha256File(resolved) !== file.sha256) return null;
+      if ((await sha256FileStream(resolved, cancellationSignal)) !== file.sha256) return null;
     }
     return envelope.output;
-  } catch {
+  } catch (error) {
+    if (error instanceof OperationAbortedError) throw error;
     return null;
   }
 }
@@ -258,6 +264,46 @@ export function stageOutputFile(
   sha256: string,
 ): StageOutputFile {
   return { relative_path: relativePath, size_bytes: sizeBytes, sha256 };
+}
+
+/**
+ * Atomic checkpoint write for one operation's result manifest (ADR-030).
+ * Uses the same tmp-file + rename pattern as ``saveOperationOutput`` so a
+ * crash can never leave a partially-written manifest behind.
+ */
+export function saveOperationResultManifest(
+  stateDir: string,
+  manifest: OperationResultManifest,
+): void {
+  mkdirSync(stateDir, { recursive: true });
+  const manifestFile = join(
+    stateDir,
+    `${operationFilename(manifest.operation_id)}_result.json`,
+  );
+  const tmpFile = `${manifestFile}.part`;
+  writeFileSync(tmpFile, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  renameSync(tmpFile, manifestFile);
+}
+
+/**
+ * Read back one operation's result manifest, verified by the strict ADR-030
+ * contracts parser. Returns null when missing or malformed (fail-closed,
+ * mirrors ``loadOperationOutput``).
+ */
+export function loadOperationResultManifest(
+  stateDir: string,
+  operationId: string,
+): OperationResultManifest | null {
+  const manifestFile = join(
+    stateDir,
+    `${operationFilename(operationId)}_result.json`,
+  );
+  if (!existsSync(manifestFile)) return null;
+  try {
+    return parseOperationResultManifest(JSON.parse(readFileSync(manifestFile, "utf8")));
+  } catch {
+    return null;
+  }
 }
 
 export type { OperationOutput };

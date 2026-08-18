@@ -70,6 +70,12 @@
 > B 组 contracts（含 C3C）、B2M、B3、B5C、B6D 已完成，B4M 与 B5L/T/V/S/A module
 > 已完成；A 组 `TASK-047-A1/A2/A3/A4` 已合并。B 组下一项为 B6A；A 组仍需接线
 > C1I/A5I/C2I/C3I/B2W/B6W。
+> A5I 增量 1+2 已合并进 main：增量 1（9dcceeca）为 `loadOperationOutput`
+> 流式校验（async + `sha256FileStream` + `cancellationSignal`，取消传播而非吞掉）；
+> 增量 2（14aceeed）为 executor 成功路径写入类型化 ADR-030 `OperationResultManifest`
+> （native 模式 + committed 收据、dependency closure 含确定性 upstream manifest
+> ids/input asset ids），round-trip 经 strict parser 校验，digest 复用不重写 manifest；
+> A5I 整体仍 open（待去 REHYDRATE replay 等增量，与 A6 对齐）。
 
 - [x] **TASK-G0 / completed**：Gold v1 eval manifest、六个原始 prompt、reference schema/source
       inventory、默认运行参数、checksum verifier 与 manifest run driver 已冻结于
