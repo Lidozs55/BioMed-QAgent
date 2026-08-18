@@ -82,7 +82,8 @@
       immutable hash/size/media type 和 legacy-path telemetry；ADR-029。
 - [x] **TASK-047-A5C / completed**：OperationResultManifest、typed output/file receipts、
       dependency closure、atomic commit receipt 与 legacy read-only migration；ADR-030。
-- [ ] **TASK-C2C / ready**：Core-owned acquisition contracts；C1C 已合并。
+- [x] **TASK-C2C / completed**：CoreAcquisitionRequest、PROMOTED recipe ref、DownloadAttempt/
+      retry/resume/cache lineage 与 registered extraction asset ref；ADR-031。
 - [ ] **TASK-C3C / P1 backlog, blocked by TASK-C1C + TASK-047-A5C**：Durable Build API/state-machine contracts；
       当前不阻塞 TASK-048/G1。
 - [ ] **TASK-048-B2M / blocked by TASK-048-B1 + TASK-047-A5C**：PublicationCandidate 与 family assembler module。

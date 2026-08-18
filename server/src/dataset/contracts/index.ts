@@ -9,6 +9,7 @@ export * from "./enums.js";
 export * from "./schema.js";
 export * from "./source.js";
 export * from "./operation-result.js";
+export * from "./acquisition.js";
 export * from "./data.js";
 export * from "./validation.js";
 export * from "./profiles.js";

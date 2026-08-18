@@ -205,7 +205,7 @@ A 组任务的实现细节由 A 组计划维护；本表只冻结 B 组依赖的
 
 ### TASK-C2C：Core-owned acquisition contracts
 
-- **状态**：ready（`TASK-C1C` completed）
+- **状态**：completed（ADR-031）
 - **分支**：`feat/core-acquisition-contracts`
 - **hard_requires**：`TASK-C1C`；实现验收前依赖 `TASK-C1I`
 - **修改范围**：contracts、acquisition ADR
@@ -505,7 +505,7 @@ Build 作为比赛最终门禁，再通过新 ADR/TODO 变更加入 G1 hard requ
 | 3 | `TASK-C1C` | completed | `TASK-048-B1` + `TASK-047-A1` completed |
 | 4 | `TASK-047-A5C` | completed | `TASK-048-B1` + `TASK-047-A2` completed |
 | 5 | `TASK-048-B3` | ready | `TASK-048-B1` completed |
-| 6 | `TASK-C2C` | ready | `TASK-C1C` completed |
+| 6 | `TASK-C2C` | completed | `TASK-C1C` completed |
 | 7 | `TASK-048-B2M` | blocked | `TASK-048-B1` + `TASK-047-A5C` |
 | 8 | `TASK-048-B2W`（A owner） | blocked | `TASK-048-B2M` + `TASK-047-A5I` |
 | 9 | `TASK-048-B4M` | blocked | start: B1+A2+C1C；complete: B3+C1I |
@@ -517,4 +517,4 @@ Build 作为比赛最终门禁，再通过新 ADR/TODO 变更加入 G1 hard requ
 | 15 | `TASK-G1R` | blocked | `TASK-G1A`+`TASK-G1B` |
 | P1 | `TASK-C3C` | backlog | `TASK-C1C`+`TASK-047-A5C`；不阻塞本轮 closure |
 
-当前 B 组 contract spine 应领取 `TASK-C2C`。`TASK-048-B3` 可在不修改 contracts spine 的独立 worktree 开始。
+当前 B 组 contract spine 已完成 C2C；可并行领取 `TASK-048-B3` 与 `TASK-048-B2M`（B2M 还需 A5C 已合并）。`TASK-048-B3` 可在不修改 contracts spine 的独立 worktree 开始。
