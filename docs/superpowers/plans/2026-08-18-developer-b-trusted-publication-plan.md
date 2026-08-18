@@ -229,7 +229,7 @@ A 组任务的实现细节由 A 组计划维护；本表只冻结 B 组依赖的
 
 ### TASK-048-B2M：PublicationCandidate 与 family assembler module
 
-- **状态**：blocked
+- **状态**：completed（ADR-033）
 - **owner**：B
 - **分支**：`feat/family-assembler-module`
 - **hard_requires**：`TASK-048-B1`、`TASK-047-A5C`
@@ -506,7 +506,7 @@ Build 作为比赛最终门禁，再通过新 ADR/TODO 变更加入 G1 hard requ
 | 4 | `TASK-047-A5C` | completed | `TASK-048-B1` + `TASK-047-A2` completed |
 | 5 | `TASK-048-B3` | completed | `TASK-048-B1` completed |
 | 6 | `TASK-C2C` | completed | `TASK-C1C` completed |
-| 7 | `TASK-048-B2M` | blocked | `TASK-048-B1` + `TASK-047-A5C` |
+| 7 | `TASK-048-B2M` | completed | `TASK-048-B1` + `TASK-047-A5C` completed |
 | 8 | `TASK-048-B2W`（A owner） | blocked | `TASK-048-B2M` + `TASK-047-A5I` |
 | 9 | `TASK-048-B4M` | blocked | start: B1+A2+C1C；complete: B3+C1I |
 | 10 | `TASK-048-B5C` | blocked | B1+B3；B4M contract 形态冻结 |
