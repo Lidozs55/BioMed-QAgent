@@ -5,6 +5,8 @@ import { describe, expect, test } from "vitest";
 import type { DatasetBuildSpec, DatasetSchema } from "../src/dataset/contracts/index.js";
 import {
   parseBuildResult,
+  parseCoreAcquisitionRequest,
+  parseCoreDownloadAttempt,
   parseDatasetBuildSpec,
   parseDatasetManifest,
   parseDatasetPublication,
@@ -17,6 +19,7 @@ import {
   parseFileAsset,
   parseSourceBindingAcquisition,
   parseValidationResult,
+  parseWorkflowRecipeRef,
 } from "../src/dataset/contracts/index.js";
 import { checkContractParity } from "./contract-parity.js";
 import type { GoldenFixture } from "./contract-parity.js";
@@ -441,6 +444,30 @@ describe("contract invariants (mirror Pydantic model_validator)", () => {
         review_status: "accepted",
       }),
     ).toThrow(/must remain proposed/);
+  });
+
+  test("Core acquisition contracts bind provider/version/cache/retry identity", () => {
+    const digest = "a".repeat(64);
+    const request = parseCoreAcquisitionRequest({ schema_version: "1.0", request_id: "request_1", task_id: "task_1", build_id: "build_1", binding_id: "binding_1", mode: "builtin", provider_id: "gdc_files_v1", recipe_id: null, recipe_version: null, parameters: { accession: "x" } }, "task_1");
+    expect(request.provider_id).toBe("gdc_files_v1");
+    const recipe = parseWorkflowRecipeRef({ schema_version: "1.0", recipe_id: "recipe_1", recipe_version: 2, status: "PROMOTED", implementation_digest: digest });
+    expect(recipe.status).toBe("PROMOTED");
+    expect(parseCoreAcquisitionRequest({ schema_version: "1.0", request_id: "request_recipe", task_id: "task_1", build_id: "build_1", binding_id: "binding_1", mode: "workflow_recipe", provider_id: null, recipe_id: "recipe_1", recipe_version: 2, parameters: {} }, "task_1", recipe).recipe_id).toBe("recipe_1");
+    expect(() => parseCoreAcquisitionRequest({ schema_version: "1.0", request_id: "request_recipe", task_id: "task_1", build_id: "build_1", binding_id: "binding_1", mode: "workflow_recipe", provider_id: null, recipe_id: "recipe_1", recipe_version: 2, parameters: {} }, "task_1", { ...recipe, status: "DRAFT" })).toThrow(/PROMOTED/);
+    const attempt = parseCoreDownloadAttempt({ schema_version: "1.0", attempt_id: "attempt_1", request_id: "request_1", task_id: "task_1", provider_id: "gdc_files_v1", attempt_number: 1, status: "succeeded", url: "https://example.test/file", bytes_received: 10, error_code: null, retryable: false, started_at: "2026-08-18T00:00:00Z", finished_at: "2026-08-18T00:00:01Z", cache_lineage: { schema_version: "1.0", cache_key: "cache_1", request_identity_digest: digest, cache_blob_sha256: digest, resumed_from_attempt_id: null, part_relative_path: null }, asset: { schema_version: "1.0", asset_id: `asset_${digest}`, task_id: "task_1", role: "source" } }, "task_1");
+    expect(attempt.asset?.asset_id).toBe(`asset_${digest}`);
+  });
+
+  test("Core acquisition contracts reject arbitrary modes, unpromoted recipe use and invalid lineage", () => {
+    const digest = "a".repeat(64);
+    const request = { schema_version: "1.0", request_id: "request_1", task_id: "task_1", build_id: "build_1", binding_id: "binding_1", mode: "builtin", provider_id: "gdc_files_v1", recipe_id: null, recipe_version: null, parameters: {} };
+    expect(() => parseCoreAcquisitionRequest({ ...request, mode: "agent_code" })).toThrow(/mode/);
+    expect(() => parseCoreAcquisitionRequest({ ...request, mode: "workflow_recipe", provider_id: null, recipe_id: "recipe_1", recipe_version: null })).toThrow(/recipe identity/);
+    const attempt = { schema_version: "1.0", attempt_id: "attempt_1", request_id: "request_1", task_id: "task_1", provider_id: "gdc_files_v1", attempt_number: 1, status: "failed", url: "https://example.test/file", bytes_received: 10, error_code: "timeout", retryable: true, started_at: "2026-08-18T00:00:00Z", finished_at: "2026-08-18T00:00:01Z", cache_lineage: { schema_version: "1.0", cache_key: "cache_1", request_identity_digest: digest, cache_blob_sha256: null, resumed_from_attempt_id: null, part_relative_path: "source_assets/file.part" }, asset: null };
+    expect(parseCoreDownloadAttempt(attempt).retryable).toBe(true);
+    expect(() => parseCoreDownloadAttempt({ ...attempt, cache_lineage: { ...attempt.cache_lineage, part_relative_path: "../workspace/file.part" } })).toThrow(/escape/);
+    expect(() => parseCoreDownloadAttempt({ ...attempt, status: "succeeded" })).toThrow(/registered asset/);
+    expect(() => parseCoreDownloadAttempt({ ...attempt, task_id: "task_other" }, "task_1")).toThrow(/different task/);
   });
 
   test("SourceBindingAcquisition rejects an empty provider_id", () => {
