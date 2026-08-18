@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,6 +13,14 @@ import {
   type OperationOutputEnvelope,
 } from "../src/dataset/runtime/checkpoint.js";
 import { checkRuntimeParity, scratchOutputRoot } from "./runtime-parity.js";
+
+// T6 regression lock: wrap the streaming hash so the same module instance is
+// shared by the test and checkpoint.ts, letting us assert a large file is
+// verified via the streaming path (never read whole into memory).
+vi.mock("../src/dataset/adapters/hashing.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/dataset/adapters/hashing.js")>();
+  return { ...actual, sha256FileStream: vi.fn(actual.sha256FileStream) };
+});
 
 describe("Phase 4 step 10 runtime parity", () => {
   test("executor plan/reuse/cancel/recovery mirror test_dataset_runtime.py", async () => {
@@ -88,6 +96,38 @@ describe("loadOperationOutput streaming verification", () => {
     bytes[0] = bytes[0] === 0x50 ? 0x51 : 0x50;
     await writeFile(filePath, bytes);
     expect(await loadOperationOutput(stateDir, loadOptions(taskRoot, envelope))).toBeNull();
+  });
+
+  test("large file receipts are verified by streaming, not whole-file read", async () => {
+    const root = await mkdtemp(join(tmpdir(), "biomed-opout-stream-"));
+    roots.push(root);
+    const taskRoot = join(root, "task");
+    const stateDir = join(taskRoot, "state");
+    await mkdir(taskRoot, { recursive: true });
+    const filePath = join(taskRoot, "canonical_expression.csv");
+    await writeFile(filePath, Buffer.alloc(8 * 1024 * 1024, 0x41));
+    const sha256 = await sha256FileStream(filePath);
+    const output: Record<string, unknown> = { rows: 4 * 1024 * 1024, columns: ["a", "b", "c"] };
+    const envelope: OperationOutputEnvelope = {
+      task_id: "task_a5i",
+      build_id: "build_a5i",
+      operation_id: "canonicalize:binding_geo",
+      operation_attempt_id: "attempt_1",
+      output_digest: sha256Json(output),
+      output_sha256: sha256Json(output),
+      output,
+      files: [stageOutputFile("canonical_expression.csv", 8 * 1024 * 1024, sha256)],
+    };
+    saveOperationOutput(stateDir, envelope);
+
+    // Regression lock (T6): a large file must be verified via the streaming
+    // hash (createReadStream), never by reading the whole file into memory.
+    // Only the load path's internal call (not our own digest computation)
+    // may hash the .csv, so clear the wrapper before invoking it.
+    const sha256Spy = vi.mocked(sha256FileStream);
+    sha256Spy.mockClear();
+    expect(await loadOperationOutput(stateDir, loadOptions(taskRoot, envelope))).toEqual(output);
+    expect(sha256Spy.mock.calls.some((call) => String(call[0]).endsWith(".csv"))).toBe(true);
   });
 
   test("a cancelled signal aborts verification instead of failing closed", async () => {

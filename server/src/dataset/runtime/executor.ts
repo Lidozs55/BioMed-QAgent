@@ -34,6 +34,7 @@ import {
   findReusable,
   loadBuildState,
   loadOperationOutput,
+  loadOperationResultManifest,
   markCompleted,
   saveBuildState,
   saveOperationOutput,
@@ -145,25 +146,6 @@ export const PHASE_A_KINDS: ReadonlySet<OperationKind> = new Set([
   "canonicalize",
 ]);
 
-/**
- * Operation kinds whose runner keeps in-memory pipeline state (parsed
- * batches, canonical results, integration) that later phases consume. When
- * a build resumes from its checkpoint (e.g. deterministic continuation
- * after a server restart) the completed ops are silently reused, so the
- * runner must re-run for these kinds to rebuild that state before the plan
- * continues from the suspension point.
- */
-const REHYDRATE_RUNNER_KINDS: ReadonlySet<OperationKind> = new Set([
-  "acquire",
-  "parse",
-  "canonicalize",
-  "integrate",
-  // validate_profile reassembles manifest + validation from the integration
-  // and persisted artifacts (idempotent). publish is deliberately NOT here:
-  // its promotion is one-shot and fails if the version dir already exists.
-  "validate_profile",
-]);
-
 export interface ExecutorOptions {
   taskId: string;
   buildId: string;
@@ -184,14 +166,27 @@ export interface ExecutorOptions {
   /** Per-operation wall-clock timeout in ms (M2 I-03; 0 = unlimited). */
   operationTimeoutMs?: number;
   /**
-   * Deterministic resume (cross-restart continuation): when true and the
-   * checkpoint has both completed and incomplete operations, the executor
-   * silently re-runs the completed stateful runners (see
-   * ``rehydrateCheckpoint``) so in-memory pipeline state is rebuilt before
-   * the plan continues. Off by default to honor the Python-parity contract
-   * that digest-matched reuse never invokes the runner.
+   * Eager checkpoint rehydration (cross-restart continuation): when true,
+   * completed operations with digest-matched, verified result files are
+   * loaded into ``this.outputs`` and surfaced via ``onRehydratedOperation``
+   * so in-memory pipeline state is rebuilt WITHOUT re-running the runner
+   * (WP-A5: parse/canonicalize/integrate runner invocations are 0 after a
+   * restart). Completed markers whose result files are missing or tampered
+   * fail closed: the marker is dropped so the plan re-executes the
+   * operation and its downstream closure. Off by default to honor the
+   * parity contract that digest-matched reuse never invokes the runner.
    */
   rehydrateCompletedRunners?: boolean;
+  /**
+   * Rebuild host-side pipeline state for a rehydrated operation (called
+   * with the verified output and its ADR-030 result manifest). Only fired
+   * when ``rehydrateCompletedRunners`` is true; never re-runs the runner.
+   */
+  onRehydratedOperation?: (
+    op: OperationSpec,
+    output: Record<string, unknown>,
+    manifest: OperationResultManifest,
+  ) => void | Promise<void>;
   /** Core operation lifecycle sink (M2 I-05). */
   eventSink?: CoreEventSink | null;
 }
@@ -215,6 +210,7 @@ export class DatasetBuildExecutor {
   private readonly perBindingOutcomes: Record<string, BindingRejection>;
   private readonly operationTimeoutMs: number;
   private readonly rehydrateCompletedRunners: boolean;
+  private readonly onRehydratedOperation: ((op: OperationSpec, output: Record<string, unknown>, manifest: OperationResultManifest) => void | Promise<void>) | null;
   private readonly eventSink: CoreEventSink | null;
 
   private state: ReturnType<typeof loadBuildState> | null = null;
@@ -240,6 +236,7 @@ export class DatasetBuildExecutor {
     this.perBindingOutcomes = options.perBindingOutcomes ?? {};
     this.operationTimeoutMs = options.operationTimeoutMs ?? 0;
     this.rehydrateCompletedRunners = options.rehydrateCompletedRunners ?? false;
+    this.onRehydratedOperation = options.onRehydratedOperation ?? null;
     this.eventSink = options.eventSink ?? null;
     if (
       this.resumeFrom !== null &&
@@ -344,25 +341,29 @@ export class DatasetBuildExecutor {
         computeInputDigest(op, scope),
         computeParameterDigest(op, scope),
       );
-      if (reusable !== null && reusable.output_digest === outputDigest) {
-        const loaded = await loadOperationOutput(this.stateDir, {
-          taskRoot: this.taskRoot,
-          taskId: this.taskId,
-          buildId: this.buildId,
-          operationId: op.operation_id,
-          operationAttemptId: reusable.operation_attempt_id,
-          outputDigest: reusable.output_digest,
-        }, this.cancellationSignal);
-        if (loaded !== null) this.outputs[op.operation_id] = loaded;
-        if (REHYDRATE_RUNNER_KINDS.has(op.kind)) {
-          // The runner rebuilds its in-memory state from the same fixed
-          // inputs; cooperative cancel + operation timeout still apply. A
-          // cancellation here surfaces as BuildCancelledError (mapped in
-          // executeOperation). Only digest-matched deployments may re-run:
-          // a stale "completed" marker for a differently-shaped plan must
-          // not execute with upstream outputs it never produced.
-          await this.executeOperation(op, this.availableUpstream(op));
-        }
+      if (reusable === null || reusable.output_digest !== outputDigest) continue;
+      const loaded = await loadOperationOutput(this.stateDir, {
+        taskRoot: this.taskRoot,
+        taskId: this.taskId,
+        buildId: this.buildId,
+        operationId: op.operation_id,
+        operationAttemptId: reusable.operation_attempt_id,
+        outputDigest: reusable.output_digest,
+      }, this.cancellationSignal);
+      if (loaded === null) {
+        // Fail closed: a completed marker whose result files are missing or
+        // tampered must not be trusted. Dropping the marker (and persisting)
+        // makes runPlan re-execute the operation and its downstream closure
+        // instead of resuming with stale state (WP-A5).
+        delete state.completed_operations[op.operation_id];
+        saveBuildState(this.stateDir, state);
+        continue;
+      }
+      this.outputs[op.operation_id] = loaded;
+      if (this.onRehydratedOperation === null) continue;
+      const manifest = loadOperationResultManifest(this.stateDir, op.operation_id);
+      if (manifest !== null) {
+        await this.onRehydratedOperation(op, loaded, manifest);
       }
     }
   }
