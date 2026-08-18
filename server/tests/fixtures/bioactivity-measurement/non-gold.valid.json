@@ -1,0 +1,123 @@
+{
+  "activities": [
+    {
+      "activity_id": "ACT_NON_GOLD_1",
+      "compound_id": "CHEMBL25",
+      "compound_id_namespace": "chembl_compound",
+      "assay_id": "CHEMBL_A100",
+      "assay_id_namespace": "chembl_assay",
+      "target_id": "CHEMBL_T100",
+      "target_namespace": "chembl_target",
+      "activity_type": "IC50",
+      "raw_value": "12.5",
+      "raw_relation": "<",
+      "preserved_relation": "<",
+      "raw_unit": "nM",
+      "preserved_raw_unit": "nM",
+      "standardized_value": 12.5,
+      "standardized_unit": "nM",
+      "source_id": "source_chembl_activity_1",
+      "source_asset_id": "asset_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_locator": {
+        "locator_version": "2.0",
+        "locator_type": "json_pointer",
+        "asset_id": "asset_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "logical_file": "source_assets/chembl/non-gold-activities.json",
+        "raw_value": "12.5",
+        "json_pointer": "/activities/0"
+      }
+    },
+    {
+      "activity_id": "ACT_NON_GOLD_2",
+      "compound_id": "CHEMBL25",
+      "compound_id_namespace": "chembl_compound",
+      "assay_id": "CHEMBL_A100",
+      "assay_id_namespace": "chembl_assay",
+      "target_id": "CHEMBL_T100",
+      "target_namespace": "chembl_target",
+      "activity_type": "IC50",
+      "raw_value": "1.0",
+      "raw_relation": ">",
+      "preserved_relation": ">",
+      "raw_unit": "uM",
+      "preserved_raw_unit": "uM",
+      "standardized_value": 1000,
+      "standardized_unit": "nM",
+      "source_id": "source_chembl_activity_1",
+      "source_asset_id": "asset_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_locator": {
+        "locator_version": "2.0",
+        "locator_type": "json_pointer",
+        "asset_id": "asset_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "logical_file": "source_assets/chembl/non-gold-activities.json",
+        "raw_value": "1.0",
+        "json_pointer": "/activities/1"
+      }
+    },
+    {
+      "activity_id": "ACT_NON_GOLD_3",
+      "compound_id": "CHEMBL25",
+      "compound_id_namespace": "chembl_compound",
+      "assay_id": "CHEMBL_A100",
+      "assay_id_namespace": "chembl_assay",
+      "target_id": "CHEMBL_T100",
+      "target_namespace": "chembl_target",
+      "activity_type": "IC50",
+      "raw_value": "75",
+      "raw_relation": "=",
+      "preserved_relation": "=",
+      "raw_unit": "nM",
+      "preserved_raw_unit": "nM",
+      "standardized_value": 75,
+      "standardized_unit": "nM",
+      "source_id": "source_chembl_activity_1",
+      "source_asset_id": "asset_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_locator": {
+        "locator_version": "2.0",
+        "locator_type": "json_pointer",
+        "asset_id": "asset_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "logical_file": "source_assets/chembl/non-gold-activities.json",
+        "raw_value": "75",
+        "json_pointer": "/activities/2"
+      }
+    }
+  ],
+  "compounds": [
+    {
+      "compound_id": "CHEMBL25",
+      "compound_id_namespace": "chembl_compound",
+      "preferred_name": "Aspirin",
+      "canonical_smiles": "CC(=O)OC1=CC=CC=C1C(=O)O",
+      "isomeric_smiles": null,
+      "inchi": null,
+      "inchi_key": "BSYNRYMUTXBXSQ-UHFFFAOYSA-N",
+      "molecular_formula": "C9H8O4",
+      "molecular_weight": 180.16,
+      "source_id": "source_chembl_activity_1"
+    }
+  ],
+  "assays": [
+    {
+      "assay_id": "CHEMBL_A100",
+      "assay_id_namespace": "chembl_assay",
+      "assay_type": "binding",
+      "description": "Non-Gold biochemical inhibition assay",
+      "organism": "Homo sapiens",
+      "cell_line": null,
+      "target_entity_id": "CHEMBL_T100",
+      "target_entity_namespace": "chembl_target",
+      "bao_format_id": "BAO_0000357",
+      "source_id": "source_chembl_activity_1"
+    }
+  ],
+  "targets": [
+    {
+      "entity_id": "CHEMBL_T100",
+      "entity_namespace": "chembl_target",
+      "entity_type": "single_protein",
+      "preferred_name": "Cyclooxygenase-2",
+      "organism": "Homo sapiens",
+      "source_id": "source_chembl_activity_1"
+    }
+  ]
+}
