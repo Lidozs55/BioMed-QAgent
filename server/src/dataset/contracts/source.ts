@@ -6,6 +6,7 @@
  */
 
 import type { SchemaVersion } from "./primitives.js";
+import type { SourceLocatorV2 } from "@biomed/contracts";
 import {
   assertExactKeys,
   assertNonEmptyString,
@@ -145,7 +146,7 @@ export function parseSourceAsset(value: unknown): SourceAsset {
   };
 }
 
-export interface SourceLocator {
+export interface SourceLocatorV1 {
   schema_version?: SchemaVersion;
   asset_id: string;
   logical_file: string;
@@ -154,6 +155,8 @@ export interface SourceLocator {
   source_column_name: string;
   raw_value: string;
 }
+
+export type SourceLocator = SourceLocatorV1 | SourceLocatorV2;
 
 const SOURCE_LOCATOR_KEYS = [
   "schema_version",
@@ -167,6 +170,7 @@ const SOURCE_LOCATOR_KEYS = [
 
 export function parseSourceLocator(value: unknown): SourceLocator {
   const record = assertRecord(value, "SourceLocator");
+  if (record.locator_version === "2.0") return parseSourceLocatorV2(record);
   assertExactKeys(record, SOURCE_LOCATOR_KEYS, "SourceLocator");
   const line = assertNonNegativeInt(
     record.source_line_number,
@@ -193,6 +197,49 @@ export function parseSourceLocator(value: unknown): SourceLocator {
     ),
     raw_value: assertString(record.raw_value, "SourceLocator.raw_value"),
   };
+}
+
+function parseSourceLocatorV2(record: Record<string, unknown>): SourceLocatorV2 {
+  const type = assertNonEmptyString(record.locator_type, "SourceLocator.locator_type");
+  const base = {
+    locator_version: "2.0" as const,
+    locator_type: type,
+    asset_id: assertNonEmptyString(record.asset_id, "SourceLocator.asset_id"),
+    logical_file: assertRelativePath(record.logical_file, "SourceLocator.logical_file"),
+    raw_value: assertString(record.raw_value, "SourceLocator.raw_value"),
+  };
+  if (type === "json_pointer") {
+    assertExactKeys(record, ["locator_version", "locator_type", "asset_id", "logical_file", "raw_value", "json_pointer"], "SourceLocator.json_pointer");
+    const pointer = assertString(record.json_pointer, "SourceLocator.json_pointer");
+    if (!pointer.startsWith("/")) throw new TypeError("SourceLocator.json_pointer must start with '/'");
+    return { ...base, locator_type: "json_pointer", json_pointer: pointer };
+  }
+  if (type === "xml_cell") {
+    assertExactKeys(record, ["locator_version", "locator_type", "asset_id", "logical_file", "raw_value", "xml_path", "table_id", "row_index", "column_index"], "SourceLocator.xml_cell");
+    return { ...base, locator_type: "xml_cell", xml_path: assertNonEmptyString(record.xml_path, "SourceLocator.xml_path"), table_id: assertNonEmptyString(record.table_id, "SourceLocator.table_id"), row_index: assertPositiveCoordinate(record.row_index, "SourceLocator.row_index"), column_index: assertPositiveCoordinate(record.column_index, "SourceLocator.column_index") };
+  }
+  if (type === "pdf_region") {
+    assertExactKeys(record, ["locator_version", "locator_type", "asset_id", "logical_file", "raw_value", "page_number", "table_id", "figure_id", "row_label", "column_label"], "SourceLocator.pdf_region");
+    return { ...base, locator_type: "pdf_region", page_number: assertPositiveCoordinate(record.page_number, "SourceLocator.page_number"), table_id: nullableString(record.table_id, "SourceLocator.table_id"), figure_id: nullableString(record.figure_id, "SourceLocator.figure_id"), row_label: nullableString(record.row_label, "SourceLocator.row_label"), column_label: nullableString(record.column_label, "SourceLocator.column_label") };
+  }
+  if (type === "image_bbox") {
+    assertExactKeys(record, ["locator_version", "locator_type", "asset_id", "logical_file", "raw_value", "page_number", "figure_id", "bbox"], "SourceLocator.image_bbox");
+    const bbox = record.bbox;
+    if (!Array.isArray(bbox) || bbox.length !== 4 || bbox.some((value) => typeof value !== "number" || !Number.isFinite(value) || value < 0)) throw new TypeError("SourceLocator.bbox must contain four non-negative numbers");
+    if (Number(bbox[2]) < Number(bbox[0]) || Number(bbox[3]) < Number(bbox[1])) throw new TypeError("SourceLocator.bbox coordinates must be ordered");
+    return { ...base, locator_type: "image_bbox", page_number: record.page_number === null ? null : assertPositiveCoordinate(record.page_number, "SourceLocator.page_number"), figure_id: nullableString(record.figure_id, "SourceLocator.figure_id"), bbox: bbox as [number, number, number, number] };
+  }
+  throw new TypeError("SourceLocator.locator_type is invalid");
+}
+
+function assertPositiveCoordinate(value: unknown, name: string): number {
+  const coordinate = assertNonNegativeInt(value, name);
+  if (coordinate < 1) throw new TypeError(`${name} must be >= 1`);
+  return coordinate;
+}
+function nullableString(value: unknown, name: string): string | null {
+  if (value === null) return null;
+  return assertNonEmptyString(value, name);
 }
 export interface SourceRecord {
   schema_version?: SchemaVersion;

@@ -13,4 +13,5 @@ export * from "./validation.js";
 export * from "./profiles.js";
 export * from "./result.js";
 export * from "./manifest.js";
+export * from "./multitable.js";
 export * from "./spec.js";
