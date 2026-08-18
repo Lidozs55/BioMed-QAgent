@@ -20,6 +20,8 @@ import {
 import { join, resolve, sep } from "node:path";
 import { sha256FileStream } from "../adapters/hashing.js";
 import { OperationAbortedError, throwIfAborted } from "../cooperative.js";
+import { parseOperationResultManifest } from "../contracts/operation-result.js";
+import type { OperationResultManifest } from "@biomed/contracts";
 import { sha256Json } from "./digests.js";
 import {
   parseOperationAttempt,
@@ -262,6 +264,46 @@ export function stageOutputFile(
   sha256: string,
 ): StageOutputFile {
   return { relative_path: relativePath, size_bytes: sizeBytes, sha256 };
+}
+
+/**
+ * Atomic checkpoint write for one operation's result manifest (ADR-030).
+ * Uses the same tmp-file + rename pattern as ``saveOperationOutput`` so a
+ * crash can never leave a partially-written manifest behind.
+ */
+export function saveOperationResultManifest(
+  stateDir: string,
+  manifest: OperationResultManifest,
+): void {
+  mkdirSync(stateDir, { recursive: true });
+  const manifestFile = join(
+    stateDir,
+    `${operationFilename(manifest.operation_id)}_result.json`,
+  );
+  const tmpFile = `${manifestFile}.part`;
+  writeFileSync(tmpFile, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  renameSync(tmpFile, manifestFile);
+}
+
+/**
+ * Read back one operation's result manifest, verified by the strict ADR-030
+ * contracts parser. Returns null when missing or malformed (fail-closed,
+ * mirrors ``loadOperationOutput``).
+ */
+export function loadOperationResultManifest(
+  stateDir: string,
+  operationId: string,
+): OperationResultManifest | null {
+  const manifestFile = join(
+    stateDir,
+    `${operationFilename(operationId)}_result.json`,
+  );
+  if (!existsSync(manifestFile)) return null;
+  try {
+    return parseOperationResultManifest(JSON.parse(readFileSync(manifestFile, "utf8")));
+  } catch {
+    return null;
+  }
 }
 
 export type { OperationOutput };
