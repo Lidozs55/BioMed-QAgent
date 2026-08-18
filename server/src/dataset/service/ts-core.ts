@@ -17,7 +17,7 @@
  * artifact API keeps serving files without changes.
  */
 
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import type { JsonValue } from "@biomed/contracts";
@@ -107,6 +107,22 @@ interface RunnerState {
   validation: ValidationResult | null;
   publicationId: string | null;
 }
+
+const EMPTY_MERGED_BATCH: DataBatch = {
+  batch_id: "",
+  binding_id: "",
+  dataset_family: "",
+  row_granularity: "",
+  schema_ref: "",
+  file_asset: null,
+  row_count: 0,
+  column_count: 0,
+  parser_id: "",
+  parser_version: "",
+  statistics: {},
+  warnings: [],
+  declared_mappings: [],
+};
 
 function placeholderValidation(profileRef: string): ValidationResult {
   return {
@@ -219,11 +235,13 @@ export function createTsCoreOperationRunner(options: {
   metadataAssets: Readonly<Record<string, SourceAsset>>;
   runnerState: RunnerState;
   bindings: ReadonlyMap<string, ReturnType<typeof import("../contracts/spec.js").parseSourceBinding>>;
+  /** Phase-A bindings recovered from checkpoint rehydration (WP-A5). */
+  rehydratedBindingIds: Set<string>;
   /** I-04 publish fence: true while this build still owns its lock. */
   fence?: (() => Promise<boolean>) | null;
   hilGate?: DatasetHILGate | null;
 }): OperationRunner {
-  const { spec, taskId, taskRoot, outputDir, sourceAssets, mappingAssets, metadataAssets, runnerState, bindings } = options;
+  const { spec, taskId, taskRoot, outputDir, sourceAssets, mappingAssets, metadataAssets, runnerState, bindings, rehydratedBindingIds } = options;
   const fence = options.fence ?? null;
   const hilGate = options.hilGate ?? null;
   const familyRegistry = createDefaultDatasetFamilyRegistry();
@@ -280,6 +298,15 @@ export function createTsCoreOperationRunner(options: {
           signal,
         });
         runnerState.batches.set(binding.binding_id, batch);
+        // I-04 no-replay resume: persist the parsed batch so a downstream op
+        // that re-runs after this op is reused has a durable, honest source
+        // (re-deriving statistics/declared_mappings from the raw rows is not
+        // possible). Same path as the executor's stateDir (outputDir/state).
+        mkdirSync(path.join(outputDir, "state", "parsed"), { recursive: true });
+        writeFileSync(
+          path.join(outputDir, "state", "parsed", `${binding.binding_id}.json`),
+          JSON.stringify(batch),
+        );
         return makeOperationOutput({
           binding_id: binding.binding_id,
           batch_id: batch.batch_id,
@@ -524,6 +551,10 @@ export function createTsCoreOperationRunner(options: {
         // Provenance closure covers only phase-A-successful bindings (Python
         // expression_runner parity: rejected bindings contribute no rows).
         const expectedSourceAssetIds = new Set<string>();
+        for (const bindingId of rehydratedBindingIds) {
+          const asset = bindingId in sourceAssets ? sourceAssets[bindingId] : undefined;
+          if (asset !== undefined) expectedSourceAssetIds.add(asset.asset_id);
+        }
         for (const result of runnerState.canonicalResults) {
           const bindingId = result.batch.binding_id;
           const asset = bindingId in sourceAssets ? sourceAssets[bindingId] : undefined;
@@ -611,6 +642,7 @@ export class TypeScriptDatasetCore {
       validation: null,
       publicationId: null,
     };
+    const rehydratedBindingIds = new Set<string>();
     const perBindingOutcomes: Record<string, import("../contracts/index.js").BindingRejection> = {};
     const bindings = new Map(
       spec.source_bindings.map((binding) => [binding.binding_id, binding]),
@@ -625,6 +657,7 @@ export class TypeScriptDatasetCore {
       metadataAssets: context.metadataAssets ?? {},
       runnerState,
       bindings,
+      rehydratedBindingIds,
       fence: async (): Promise<boolean> => lease.assertOwned(),
       hilGate: this.options.hilGate ?? null,
     });
@@ -641,6 +674,43 @@ export class TypeScriptDatasetCore {
       // Cross-restart continuation: rebuild in-memory runner state from the
       // checkpoint so the plan can continue from the suspension point.
       rehydrateCompletedRunners: true,
+      onRehydratedOperation: (op, output) => {
+        if (op.kind === "parse") {
+          const bindingId = String(output.binding_id ?? "");
+          const parsedPath = path.join(stateDir, "parsed", `${bindingId}.json`);
+          if (bindingId !== "" && existsSync(parsedPath)) {
+            try {
+              runnerState.batches.set(bindingId, JSON.parse(readFileSync(parsedPath, "utf8")) as DataBatch);
+            } catch {
+              // Fail closed: leave the batch unreconstructed; a downstream
+              // re-run (e.g. canonicalize) then fails with a clear error.
+            }
+          }
+        } else if (op.kind === "canonicalize") {
+          const bindingId = String(output.binding_id ?? "");
+          if (bindingId !== "") rehydratedBindingIds.add(bindingId);
+        } else if (op.kind === "integrate") {
+          runnerState.integration = {
+            batch: EMPTY_MERGED_BATCH,
+            mergedPath: String(output.merged_file ?? ""),
+            rowCount: typeof output.row_count === "number" ? output.row_count : 0,
+            dedupCount: typeof output.dedup_count === "number" ? output.dedup_count : 0,
+            conflictCount: typeof output.conflict_count === "number" ? output.conflict_count : 0,
+            conflictsPath: null,
+          };
+        } else if (op.kind === "validate_profile") {
+          const manifestPath = path.join(outputDir, "dataset_manifest.json");
+          const validationPath = path.join(outputDir, "validation_report.json");
+          if (existsSync(manifestPath) && existsSync(validationPath)) {
+            runnerState.manifest = JSON.parse(
+              readFileSync(manifestPath, "utf8"),
+            ) as DatasetManifest;
+            runnerState.validation = JSON.parse(
+              readFileSync(validationPath, "utf8"),
+            ) as ValidationResult;
+          }
+        }
+      },
       eventSink: this.options.eventSink === undefined || this.options.eventSink === null
         ? null
         : (event) => this.options.eventSink?.(event, buildId),
