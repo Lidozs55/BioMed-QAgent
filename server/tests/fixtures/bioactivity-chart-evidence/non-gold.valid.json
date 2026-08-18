@@ -1,0 +1,151 @@
+{
+  "chart_series": [
+    {
+      "chart_series_id": "series_fig2_erlotinib",
+      "paper_id": "31234567",
+      "paper_id_namespace": "pubmed",
+      "figure_id": "Figure_2A",
+      "series_label": "Erlotinib",
+      "x_axis_name": "Erlotinib concentration",
+      "x_axis_unit": "nM",
+      "y_axis_name": "EGFR activity",
+      "y_axis_unit": "percent",
+      "x_scale": "log",
+      "y_scale": "linear",
+      "legend_text": "Erlotinib",
+      "axis_validation_status": "clear",
+      "legend_validation_status": "clear",
+      "human_review_status": "accepted",
+      "source_id": "source_pmc_fig2",
+      "source_asset_id": "asset_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_locator": {
+        "locator_version": "2.0",
+        "locator_type": "image_bbox",
+        "asset_id": "asset_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "logical_file": "PMC8123456/figure2.png",
+        "raw_value": "Dose response curve for erlotinib",
+        "page_number": 5,
+        "figure_id": "Figure_2A",
+        "bbox": [40, 60, 980, 720]
+      },
+      "model_name": "qwen-vl-max",
+      "model_version": "2026-07-15",
+      "extraction_method": "vlm",
+      "extraction_confidence": "low",
+      "source_reliability": "medium",
+      "extraction_reliability": "low",
+      "transform_provenance": {
+        "schema_version": "1.0",
+        "model_name": "qwen-vl-max",
+        "model_version": "2026-07-15",
+        "source_reliability_at_extraction": "medium",
+        "extraction_reliability_at_extraction": "low",
+        "steps": [
+          {
+            "step_id": "step_series_extract",
+            "operation": "vlm_extract",
+            "implementation": "chart-series-extractor",
+            "implementation_version": "1.0.0",
+            "parameters": {"prompt_version": "chart-v2", "max_points": 100},
+            "input_digest": "1111111111111111111111111111111111111111111111111111111111111111",
+            "output_digest": "2222222222222222222222222222222222222222222222222222222222222222"
+          }
+        ],
+        "review": {
+          "review_id": "review_series_1",
+          "status": "accepted",
+          "reviewer": "user",
+          "reviewed_at": "2026-08-18T12:00:00Z",
+          "evidence_digest": "3333333333333333333333333333333333333333333333333333333333333333",
+          "reason": "Axis labels and legend were compared with the figure caption."
+        }
+      }
+    }
+  ],
+  "chart_points": [
+    {
+      "point_id": "point_fig2_erlotinib_10nm",
+      "chart_series_id": "series_fig2_erlotinib",
+      "activity_id": "ACT_NON_GOLD_1",
+      "x_value": "10",
+      "y_value": "64.5",
+      "point_type": "line_vertex",
+      "estimated_or_exact": "estimated",
+      "pixel_or_coordinate_locator": {
+        "locator_version": "2.0",
+        "locator_type": "image_bbox",
+        "asset_id": "asset_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "logical_file": "PMC8123456/figure2.png",
+        "raw_value": "Estimated point x=10 nM, y=64.5 percent",
+        "page_number": 5,
+        "figure_id": "Figure_2A",
+        "bbox": [420, 330, 432, 342]
+      },
+      "extraction_confidence": "low",
+      "confidence_reason": "The marker is visible but the y value is interpolated between ticks.",
+      "review_status": "accepted",
+      "review_id": "review_point_1",
+      "source_reliability": "medium",
+      "extraction_reliability": "low",
+      "original_x_value": null,
+      "original_y_value": null,
+      "transform_provenance": {
+        "schema_version": "1.0",
+        "model_name": "qwen-vl-max",
+        "model_version": "2026-07-15",
+        "source_reliability_at_extraction": "medium",
+        "extraction_reliability_at_extraction": "low",
+        "steps": [
+          {
+            "step_id": "step_point_extract",
+            "operation": "vlm_extract",
+            "implementation": "chart-point-extractor",
+            "implementation_version": "1.0.0",
+            "parameters": {"prompt_version": "chart-v2", "coordinate_space": "image_pixels"},
+            "input_digest": "4444444444444444444444444444444444444444444444444444444444444444",
+            "output_digest": "5555555555555555555555555555555555555555555555555555555555555555"
+          }
+        ],
+        "review": {
+          "review_id": "review_point_1",
+          "status": "accepted",
+          "reviewer": "user",
+          "reviewed_at": "2026-08-18T12:05:00Z",
+          "evidence_digest": "6666666666666666666666666666666666666666666666666666666666666666",
+          "reason": "The estimate and visible marker location were accepted without changing the value."
+        }
+      }
+    }
+  ],
+  "papers": [
+    {
+      "paper_id": "31234567",
+      "paper_id_namespace": "pubmed",
+      "title": "Quantitative inhibition of EGFR signaling in a cellular assay",
+      "journal": "Open Kinase Methods",
+      "publication_date": "2020-04-03",
+      "authors": ["A. Researcher", "B. Scientist"],
+      "source_url": "https://pubmed.ncbi.nlm.nih.gov/31234567/",
+      "source_id": "source_pmc_fig2"
+    }
+  ],
+  "sources": [
+    {
+      "source_id": "source_pmc_fig2",
+      "source_database": "pmc",
+      "source_asset_id": "asset_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_locator": {
+        "locator_version": "2.0",
+        "locator_type": "image_bbox",
+        "asset_id": "asset_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "logical_file": "PMC8123456/figure2.png",
+        "raw_value": "Figure 2A",
+        "page_number": 5,
+        "figure_id": "Figure_2A",
+        "bbox": [40, 60, 980, 720]
+      },
+      "retrieved_at": "2026-08-18T10:00:00Z",
+      "carrier_type": "figure"
+    }
+  ]
+}
