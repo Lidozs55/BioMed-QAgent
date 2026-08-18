@@ -1,0 +1,16 @@
+{
+  "schema_id": "gold5-reference",
+  "version": "1",
+  "family": "bioactivity_measurement",
+  "tables": [
+    {"table_id":"target_records","role":"supporting","granularity":"one target identity","primary_key":["target_id"],"columns":["target_id","target_name","gene_symbol","uniprot_accession","organism","target_type","target_components","source"]},
+    {"table_id":"compound_records","role":"supporting","granularity":"one compound identity","primary_key":["chembl_id","pubchem_cid"],"columns":["chembl_id","pubchem_cid","compound_name","preferred_name","canonical_smiles","isomeric_smiles","inchi","inchikey","molecular_formula","molecular_weight","source"]},
+    {"table_id":"assay_records","role":"supporting","granularity":"one assay","primary_key":["assay_id"],"columns":["assay_id","assay_type","description","assay_organism","cell_line","target_id","variant","bao_format","confidence_score","source"]},
+    {"table_id":"activity_records","role":"primary","granularity":"one activity measurement","primary_key":["activity_id"],"columns":["activity_id","chembl_id","assay_id","target_id","variant","activity_type","activity_value","activity_unit","relation","pchembl_value","standard_type","standard_value","standard_units","document_id","source_url"]},
+    {"table_id":"compound_crosswalk","role":"supporting","granularity":"one compound identity link assertion","primary_key":["chembl_id","pubchem_cid","crosswalk_method"],"columns":["compound_name","chembl_id","pubchem_cid","inchikey","crosswalk_method","crosswalk_status","conflict_reason","confidence_level"]}
+  ],
+  "relations":[{"from":"activity_records.assay_id","to":"assay_records.assay_id","cardinality":"many_to_one","missing":"reject"},{"from":"activity_records.chembl_id","to":"compound_records.chembl_id","cardinality":"many_to_one","missing":"reject"},{"from":"activity_records.target_id","to":"target_records.target_id","cardinality":"many_to_one","missing":"reject"}],
+  "required_provenance":["source_asset_id","source_locator","retrieved_at","confidence_level"],
+  "measurement_contract":{"raw_value_required":true,"raw_unit_required":true,"relation_required":true,"allowed_relations":["=","<",">","<=",">=","~",null],"standardized_fields_must_not_replace_raw":true},
+  "confidence_policy":"compound crosswalk conflicts remain explicit; absent mutant target IDs are not fabricated"
+}

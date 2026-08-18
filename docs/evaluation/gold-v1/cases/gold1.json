@@ -1,0 +1,15 @@
+{
+  "case_id": "gold1",
+  "title": "Breast cancer tumor versus normal GEO transcriptome integration",
+  "prompt_file": "prompts/gold1.txt",
+  "prompt_sha256": "4f594c8a4f5acb93eedf3fbfbbf579f8f93a9f1d610897dad0f3bf95e5e9036e",
+  "expected_family": "gene_expression",
+  "expected_granularity": "expression measurement by dataset/sample/gene or probe, with sample metadata and probe mapping",
+  "schema_ref": "schemas/gold1-reference.json",
+  "source_inventory": "sources/gold1.sources.json",
+  "historical_evidence": "historical/gold1.runs.json",
+  "allowed_sources": ["NCBI GEO", "NCBI E-utilities", "GEO platform annotation files"],
+  "required_tables": ["datasets", "samples", "expression_long", "probe_gene_mapping"],
+  "success_definition": "A registered gene_expression publication contains the required tables, tumor/normal source-backed sample grouping, preserved probe mapping, validation and provenance closure, and Artifact API hash rechecks.",
+  "forbidden_shortcuts": ["workspace CSV as publication", "fabricated sample groups", "prompt modification", "reduced input substituted for the frozen case"]
+}

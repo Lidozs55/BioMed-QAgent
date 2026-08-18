@@ -67,12 +67,14 @@
 
 > B 组详细 ownership、依赖类型、分支、交接窗口和逐任务验收见
 > [开发者 B：可信多表 Publication 落实计划](superpowers/plans/2026-08-18-developer-b-trusted-publication-plan.md)。
-> 当前 B 组唯一 ready 任务是 `TASK-G0`；全项目另一条 ready 任务是 A 组的
+> 当前 B 组唯一 ready 任务是 `TASK-048-B1`；全项目另一条 ready 任务是 A 组的
 > `TASK-047-A1`。`TASK-047-A2` 必须等待 A1。
 
-- [ ] **TASK-G0 / ready**：冻结 Gold eval manifest；完成后解锁 `TASK-048-B1`。
+- [x] **TASK-G0 / completed**：Gold v1 eval manifest、六个原始 prompt、reference schema/source
+      inventory、默认运行参数、checksum verifier 与 manifest run driver 已冻结于
+      `docs/evaluation/gold-v1/`；当前 strict Gold 仍为 0/6。
 - [x] **TASK-048-B0 / completed @ b43c145**：FamilyRegistry admission foundation。
-- [ ] **TASK-048-B1 / blocked by TASK-G0**：Multi-table contracts v2 与 ADR。
+- [ ] **TASK-048-B1 / ready**：Multi-table contracts v2 与 ADR。
 - [ ] **TASK-C1C / blocked by TASK-048-B1 + TASK-047-A1 feedback**：Core SourceAsset registry contracts。
 - [ ] **TASK-047-A5C / blocked by TASK-048-B1 + TASK-047-A2 shape**：Operation Result Manifest contract/ADR。
 - [ ] **TASK-C2C / blocked by TASK-C1C**：Core-owned acquisition contracts。

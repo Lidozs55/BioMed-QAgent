@@ -1,0 +1,17 @@
+{
+  "case_id": "gold3",
+  "policy": "refresh_and_register",
+  "allowed_providers": ["UniProt", "NCBI E-utilities", "RCSB PDB", "PubChem", "ChEMBL", "ClinicalTrials.gov", "COSMIC when accessible"],
+  "selection_constraints": {"gene":"EGFR","uniprot":"P00533","disease":"NSCLC","required_relations":["gene/protein","variant","structure","drug","trial","crosswalk"]},
+  "historical_content_anchors":[
+    {"asset_id":"gold3:uniprot:P00533","accession":"P00533","url":"https://rest.uniprot.org/uniprotkb/P00533.json","media_type":"application/json","bytes":408327,"sha256":"c9600e57d66c09eeec866f8abee1f810a6432be24f72f1c7ff63ae28a903d66f","status":"historical_only"},
+    {"asset_id":"gold3:ncbi_gene:EGFR","accession":"1956","url":"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=gene&retmode=json&id=1956","media_type":"application/json","bytes":4008,"sha256":"9aef614fba4da630121a17a5bb3afb36ea02520256c881917a40d11e3ef53213","status":"historical_only"},
+    {"asset_id":"gold3:clinvar:EGFR","accession":"EGFR","url":"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=clinvar&retmode=json&retmax=0&term=EGFR%5Bgene%5D","media_type":"application/json","bytes":266,"sha256":"eae0cca45effa1c24d07bc61ac7a902c456d4d7cdbac3ae20ee06c4a7c7387d9","status":"historical_only"},
+    {"asset_id":"gold3:pubchem:gefitinib","accession":"Gefitinib","url":"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/Gefitinib/property/CanonicalSMILES,IsomericSMILES,InChI,InChIKey,MolecularFormula,MolecularWeight/JSON","media_type":"application/json","bytes":571,"sha256":"9b7555dde8d12207f7423a4a52219bf41e76203a9d53d0340faf15bdda1b3f77","status":"historical_only"},
+    {"asset_id":"gold3:clinicaltrials:NCT02411448","accession":"NCT02411448","url":"https://clinicaltrials.gov/api/v2/studies/NCT02411448","media_type":"application/json","bytes":null,"sha256":null,"status":"identifier_only"},
+    {"asset_id":"gold3:rcsb:6M0J","accession":"6M0J","url":"https://data.rcsb.org/rest/v1/core/entry/6M0J","media_type":"application/json","bytes":null,"sha256":null,"status":"identifier_only"},
+    {"asset_id":"gold3:chembl:CHEMBL203","accession":"CHEMBL203","url":"https://www.ebi.ac.uk/chembl/api/data/target/CHEMBL203.json","media_type":"application/json","bytes":null,"sha256":null,"status":"identifier_only"}
+  ],
+  "failed_or_inaccessible_sources":[{"provider":"COSMIC","status":"login_or_inaccessible","publication_use":"must fail closed unless a registered public asset is obtained"}],
+  "runtime_requirement":"Every consumed API response becomes a Core-registered immutable SourceAsset; identifier-only anchors are not historical file evidence."
+}
