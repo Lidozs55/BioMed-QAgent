@@ -35,6 +35,7 @@ import { BuildError } from "../adapters/errors.js";
 import { assetIdFromSha256, makeRecordId } from "../adapters/identity.js";
 import { sha256FileStream } from "../adapters/hashing.js";
 import { csvLine, delimitedRowsFromFileAsync } from "../adapters/text.js";
+import type { ProbeIndex } from "../adapters/geo/probe-index.js";
 import { MeasurementIdentity } from "./identity.js";
 
 const ENSEMBL_PATTERN = /^(ENSG\d{11})(?:\.(\d+))?$/;
@@ -107,6 +108,7 @@ export interface CanonicalizeOptions {
   outputDir: string;
   geneSymbolMap?: Readonly<Record<string, string>> | ReadonlyMap<string, string>;
   probeMap?: Readonly<Record<string, string>> | ReadonlyMap<string, string>;
+  probeIndex?: ProbeIndex;
   probeTargetNamespace?: string;
   unitCorrection?: UnitCorrection;
 }
@@ -258,6 +260,7 @@ export async function canonicalize(
     outputDir,
     geneSymbolMap,
     probeMap,
+    probeIndex,
     probeTargetNamespace = "gene_symbol",
     unitCorrection,
   } = options;
@@ -397,8 +400,16 @@ export async function canonicalize(
       }
     }
     let probeMapped = false;
-    if (namespace === "geo_probe" && probeMap !== undefined) {
-      const target = lookupMap(probeMap, geneId);
+    if (
+      namespace === "geo_probe" &&
+      (probeMap !== undefined || probeIndex !== undefined)
+    ) {
+      let target: string | undefined;
+      if (probeIndex !== undefined) {
+        target = await probeIndex.get(geneId);
+      } else if (probeMap !== undefined) {
+        target = lookupMap(probeMap, geneId);
+      }
       if (target !== undefined) {
         geneId = target;
         version = "";

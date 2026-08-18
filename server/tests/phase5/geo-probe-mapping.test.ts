@@ -5,7 +5,13 @@
  */
 
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,6 +29,7 @@ import {
   parsePlatformTableText,
 } from "../../src/dataset/adapters/geo/probe-mapping.js";
 import { canonicalize } from "../../src/dataset/canonicalizer/canonicalizer.js";
+import { ProbeIndex } from "../../src/dataset/adapters/geo/probe-index.js";
 
 const FIXTURES = fileURLToPath(new URL("./fixtures/geo", import.meta.url));
 
@@ -509,9 +516,212 @@ describe("canonicalizer consumes the probe map", () => {
       expect(result.target_namespace).toBe("gene_symbol");
       // The canonicalizer already accepts probeMap/probeTargetNamespace
       // (Phase 5 T7 D2): spot-check the contract via the exported shape.
-      const probeMap: Readonly<Record<string, string>> = result.probe_to_gene;
+      const probeMap: Readonly<Record<string, string>> = result.probe_to_gene ?? {};
       expect(probeMap.PROBE1).toBe("TP53");
       expect(canonicalize).toBeTypeOf("function");
+    } finally {
+      rmSync(outputDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("ProbeIndex disk store (A4)", () => {
+  test("put/get/resolve/materialize lifecycle and destroy cleanup", async () => {
+    const outputDir = mkdtempSync(path.join(tmpdir(), "p5-probe-index-"));
+    try {
+      const dir = path.join(outputDir, "idx");
+      const index = ProbeIndex.create(dir);
+      await index.put("P1", "TP53");
+      await index.put("P2", "BRCA1");
+      await index.put("P3", "TP53");
+      await index.put("P3", "BRCA1");
+      await index.put("P1", "TP53");
+      expect(await index.get("P1")).toBe("TP53");
+      expect(await index.get("P2")).toBe("BRCA1");
+      expect(await index.get("P3")).toBeUndefined();
+      expect(await index.get("MISSING")).toBeUndefined();
+      expect(await index.resolve("P3")).toEqual({ kind: "ambiguous" });
+      expect(await index.resolve("MISSING")).toEqual({ kind: "absent" });
+      expect(await index.materialize()).toEqual({ P1: "TP53", P2: "BRCA1" });
+      index.destroy();
+      expect(existsSync(dir)).toBe(false);
+    } finally {
+      rmSync(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  test("high-cardinality put flushes shards and materializes correctly", async () => {
+    const outputDir = mkdtempSync(path.join(tmpdir(), "p5-probe-index-"));
+    try {
+      const dir = path.join(outputDir, "idx");
+      const index = ProbeIndex.create(dir);
+      const N = 20000;
+      for (let i = 0; i < N; i += 1) {
+        await index.put(`PROBE_${i}`, `GENE_${i}`);
+      }
+      await index.put("PROBE_0", "GENE_OTHER");
+      const mapping = await index.materialize();
+      expect(Object.keys(mapping)).toHaveLength(N - 1);
+      expect(mapping.PROBE_0).toBeUndefined();
+      expect(mapping.PROBE_12345).toBe("GENE_12345");
+      expect(mapping.PROBE_19999).toBe("GENE_19999");
+      expect(await index.get("PROBE_9999")).toBe("GENE_9999");
+      index.destroy();
+    } finally {
+      rmSync(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  test("bulkResolve preserves input order across shards", async () => {
+    const outputDir = mkdtempSync(path.join(tmpdir(), "p5-probe-index-"));
+    try {
+      const index = ProbeIndex.create(path.join(outputDir, "idx"));
+      await index.put("A", "TP53");
+      await index.put("C", "BRCA1");
+      const resolved = await index.bulkResolve(["C", "MISSING", "A", "D"]);
+      expect(resolved).toEqual([
+        { kind: "mapped", gene: "BRCA1" },
+        { kind: "absent" },
+        { kind: "mapped", gene: "TP53" },
+        { kind: "absent" },
+      ]);
+      expect(resolved.map((value) => value.kind)).toEqual([
+        "mapped",
+        "absent",
+        "mapped",
+        "absent",
+      ]);
+      index.destroy();
+    } finally {
+      rmSync(outputDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("buildProbeMapping disk-backed mode (A4)", () => {
+  function writeMarkerAnnotation(outputDir: string): string {
+    const annotationPath = path.join(outputDir, "m.txt.gz");
+    writeFileSync(
+      annotationPath,
+      gzipSync(
+        Buffer.from(
+          '!platform_table_begin\n"ID"\t"GENE_SYMBOL"\n' +
+            '"P1"\t"TP53"\n"P2"\t"BRCA1"\n"P1"\t"BRCA1"\n' +
+            "!platform_table_end\n",
+        ),
+      ),
+    );
+    return annotationPath;
+  }
+
+  test("materializeProbeMap:false returns no map but a live disk index", async () => {
+    const outputDir = mkdtempSync(path.join(tmpdir(), "p5-probe-map-"));
+    try {
+      const result = await buildProbeMapping({
+        annotationPath: fixturePath("gpl570_annot.txt.gz"),
+        batchPath: writeBatch(outputDir, ["PROBE1", "PROBE2", "PROBE3"]),
+        bindingId: "binding_geo",
+        platformId: "GPL570",
+        annotationAsset: mappingAsset(fixturePath("gpl570_annot.txt.gz")),
+        outputDir,
+        materializeProbeMap: false,
+      });
+      expect(result.probe_to_gene).toBeUndefined();
+      const index = result.probe_index;
+      expect(index).toBeInstanceOf(ProbeIndex);
+      expect(await index.get("PROBE1")).toBe("TP53");
+      expect(await index.get("PROBE3")).toBe("BRCA1");
+      expect(await index.get("PROBE2")).toBeUndefined();
+      expect(await index.materialize()).toEqual({
+        PROBE1: "TP53",
+        PROBE3: "BRCA1",
+      });
+      expect(result.summary.mapped_probe_count).toBe(2);
+      const audit = readFileSync(result.detail_path, "utf8");
+      expect(audit).toContain("PROBE1,TP53,gene_symbol,mapped");
+      index.destroy();
+    } finally {
+      rmSync(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  test("streaming marker-format ingest is parity with parsePlatformTable", async () => {
+    const outputDir = mkdtempSync(path.join(tmpdir(), "p5-probe-map-"));
+    try {
+      const annotationPath = writeMarkerAnnotation(outputDir);
+      const parsed = await parsePlatformTable(annotationPath);
+      const result = await buildProbeMapping({
+        annotationPath,
+        batchPath: writeBatch(outputDir, ["P1", "P2"]),
+        bindingId: "binding_geo",
+        platformId: "GPL123",
+        annotationAsset: mappingAsset(annotationPath),
+        outputDir,
+      });
+      expect(parsed.mapping).toEqual({ P2: "BRCA1" });
+      expect(result.probe_to_gene).toEqual(parsed.mapping);
+      expect(result.summary.ambiguous_probe_count).toBe(1);
+      const audit = readFileSync(result.detail_path, "utf8");
+      expect(audit).toContain("P1,,,ambiguous");
+    } finally {
+      rmSync(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  test("SOFT mini-format fallback is parity with parsePlatformTable", async () => {
+    const outputDir = mkdtempSync(path.join(tmpdir(), "p5-probe-map-"));
+    try {
+      const annotationPath = fixturePath("gpl10332_soft.txt.gz");
+      const parsed = await parsePlatformTable(annotationPath);
+      expect(parsed.mapping).toEqual({
+        "12": "ATP6V0D2",
+        "13": "BRAF",
+        "45167": "ABHD14B",
+      });
+      const result = await buildProbeMapping({
+        annotationPath,
+        batchPath: writeBatch(outputDir, ["12", "13", "45167"]),
+        bindingId: "binding_geo",
+        platformId: "GPL10332",
+        annotationAsset: mappingAsset(annotationPath),
+        outputDir,
+      });
+      expect(result.probe_to_gene).toEqual(parsed.mapping);
+      expect(result.summary.coverage_ratio).toBe(1.0);
+    } finally {
+      rmSync(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  test("high-cardinality platform maps 20k probes through flushed shards", async () => {
+    const outputDir = mkdtempSync(path.join(tmpdir(), "p5-probe-map-"));
+    try {
+      const annotationPath = path.join(outputDir, "big.txt.gz");
+      const N = 20000;
+      const table: string[] = ['"ID"\t"GENE_SYMBOL"'];
+      for (let i = 0; i < N; i += 1) {
+        table.push(`"PROBE_${i}"\t"GENE_${i}"`);
+      }
+      writeFileSync(
+        annotationPath,
+        gzipSync(Buffer.from(`!platform_table_begin\n${table.join("\n")}\n!platform_table_end\n`)),
+      );
+      const probes = Array.from({ length: N }, (_, i) => `PROBE_${i}`);
+      const result = await buildProbeMapping({
+        annotationPath,
+        batchPath: writeBatch(outputDir, probes),
+        bindingId: "binding_geo",
+        platformId: "GPLX",
+        annotationAsset: mappingAsset(annotationPath),
+        outputDir,
+      });
+      expect(result.summary.total_probe_count).toBe(N);
+      expect(result.summary.mapped_probe_count).toBe(N);
+      expect(result.summary.coverage_ratio).toBe(1.0);
+      expect(result.summary.mapping_status).toBe("mapped");
+      expect(result.probe_to_gene?.["PROBE_0"]).toBe("GENE_0");
+      expect(result.probe_to_gene?.[`PROBE_${N - 1}`]).toBe(`GENE_${N - 1}`);
+      expect(Object.keys(result.probe_to_gene ?? {})).toHaveLength(N);
     } finally {
       rmSync(outputDir, { recursive: true, force: true });
     }

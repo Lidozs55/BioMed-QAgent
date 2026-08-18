@@ -34,7 +34,7 @@
  */
 
 import { mkdirSync } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { gunzip as gunzipCb } from "node:zlib";
 import path from "node:path";
@@ -44,8 +44,10 @@ const gunzip = promisify(gunzipCb);
 import { CHECKPOINT_STRIDE, checkpoint, throwIfAborted } from "../../cooperative.js";
 import { AdapterError } from "../errors.js";
 import { sha256FileStream } from "../hashing.js";
-import { csvLine, delimitedRowsFromFileAsync } from "../text.js";
+import { BufferedCsvWriter } from "../base.js";
+import { delimitedRowsFromFileAsync } from "../text.js";
 import type { SourceAsset } from "../../contracts/source.js";
+import { ProbeIndex } from "./probe-index.js";
 
 /** Stable server-side mapping rule id (D3 ``mapping_rule_id``). */
 export const PROBE_MAPPING_RULE_ID = "geo.probe-map.v1";
@@ -121,7 +123,10 @@ export interface SoftPlatformTable {
 }
 
 export interface ProbeMappingResult {
-  probe_to_gene: Record<string, string>;
+  /** Materialized full map; present only when ``materializeProbeMap`` is set. */
+  probe_to_gene?: Record<string, string>;
+  /** Disk-backed index retained for canonicalizer lookups (caller destroys). */
+  probe_index: ProbeIndex;
   target_namespace: TargetNamespace;
   summary: ProbeMappingSummary;
   detail_path: string;
@@ -165,6 +170,19 @@ function stripSoftField(value: string): string {
   return value.trim().replace(/^"+|"+$/g, "");
 }
 
+/** Gene column of a SOFT table header, best first (shared by all parsers). */
+function findGeneColumn(header: readonly string[]): string | null {
+  for (const candidate of GENE_COLUMN_PRIORITY) {
+    if (header.includes(candidate)) return candidate;
+  }
+  return null;
+}
+
+/** Split a SOFT table row exactly like the shared text parser. */
+function splitSoftRow(line: string): string[] {
+  return line.split("\t").map(stripSoftField);
+}
+
 /** SOFT ``^PLATFORM`` mini-format fallback (no ``!platform_table_*`` markers). */
 function parseSoftPlatformTable(lines: string[]): SoftPlatformTable {
   let platformIndex: number | null = null;
@@ -192,13 +210,7 @@ function parseSoftPlatformTable(lines: string[]): SoftPlatformTable {
   if (header.length === 0) {
     return { probe_column: null, gene_column: null, rows: [], has_table: true };
   }
-  let geneColumn: string | null = null;
-  for (const candidate of GENE_COLUMN_PRIORITY) {
-    if (header.includes(candidate)) {
-      geneColumn = candidate;
-      break;
-    }
-  }
+  const geneColumn = findGeneColumn(header);
   const geneIndex = geneColumn !== null ? header.indexOf(geneColumn) : null;
   const rows: Array<[string, string]> = [];
   if (geneIndex !== null) {
@@ -244,13 +256,7 @@ export function parsePlatformTableText(text: string): SoftPlatformTable {
   if (header.length === 0) {
     return { probe_column: null, gene_column: null, rows: [], has_table: true };
   }
-  let geneColumn: string | null = null;
-  for (const candidate of GENE_COLUMN_PRIORITY) {
-    if (header.includes(candidate)) {
-      geneColumn = candidate;
-      break;
-    }
-  }
+  const geneColumn = findGeneColumn(header);
   const geneIndex = geneColumn !== null ? header.indexOf(geneColumn) : null;
   const rows: Array<[string, string]> = [];
   if (geneIndex !== null) {
@@ -347,6 +353,137 @@ export async function parsePlatformTable(
   };
 }
 
+/** Result of ingesting the annotation table into a probe index. */
+export interface IngestedPlatformTable {
+  probe_column: string | null;
+  gene_column: string | null;
+  target_namespace: TargetNamespace;
+  table_status: ProbeMappingStatus;
+}
+
+/**
+ * Detect the ``!platform_table_begin`` / ``!platform_table_end`` block bounds
+ * (last begin, first end after it), mirroring ``parsePlatformTableText``.
+ * Returns null when no valid marked block exists (130n-format / SOFT fallback
+ * cases that must go through the full-memory parser).
+ */
+async function scanPlatformTableBounds(
+  annotationPath: string,
+  signal?: AbortSignal | null,
+): Promise<{ beginLine: number; endLine: number } | null> {
+  let beginLine: number | null = null;
+  let endLine: number | null = null;
+  for await (const { line, lineText } of delimitedRowsFromFileAsync(
+    annotationPath,
+    "\t",
+    signal,
+    { includeLineText: true },
+  )) {
+    const marker = lineText !== undefined ? lineText.trim().toLowerCase() : "";
+    if (marker === "!platform_table_begin") {
+      beginLine = line;
+    } else if (marker === "!platform_table_end" && beginLine !== null) {
+      endLine = line;
+      break;
+    }
+  }
+  if (beginLine === null || endLine === null || endLine <= beginLine + 1) {
+    return null;
+  }
+  return { beginLine, endLine };
+}
+
+/**
+ * Stream the annotation into ``index`` using the ``!platform_table_*`` block,
+ * avoiding full-text materialization for large platform files. Returns null
+ * when the file has no valid marked block (caller falls back to the reference
+ * parser). Row splitting exactly mirrors ``parsePlatformTableText``.
+ */
+async function ingestPlatformTable(
+  annotationPath: string,
+  index: ProbeIndex,
+  signal?: AbortSignal | null,
+): Promise<IngestedPlatformTable | null> {
+  const bounds = await scanPlatformTableBounds(annotationPath, signal);
+  if (bounds === null) return null;
+  const header: string[] = [];
+  for await (const { line, lineText } of delimitedRowsFromFileAsync(
+    annotationPath,
+    "\t",
+    signal,
+    { includeLineText: true },
+  )) {
+    if (line !== bounds.beginLine + 1) continue;
+    header.push(...splitSoftRow(lineText ?? ""));
+    break;
+  }
+  const gene_column = findGeneColumn(header);
+  const gene_index = gene_column !== null ? header.indexOf(gene_column) : null;
+  const target_namespace: TargetNamespace =
+    gene_column === "ENSEMBL_ID" ? "ensembl_gene" : "gene_symbol";
+  let rowCount = 0;
+  if (gene_index !== null) {
+    for await (const { line, lineText } of delimitedRowsFromFileAsync(
+      annotationPath,
+      "\t",
+      signal,
+      { includeLineText: true },
+    )) {
+      if (line <= bounds.beginLine + 1) continue;
+      if (line >= bounds.endLine) break;
+      const values = splitSoftRow(lineText ?? "");
+      if (values.length <= gene_index) continue;
+      const probe = values[0];
+      const gene = values[gene_index];
+      if (probe !== "" && !MISSING_SENTINELS.has(gene)) {
+        await index.put(probe, gene);
+        rowCount += 1;
+        if (rowCount % CHECKPOINT_STRIDE === 0) await checkpoint(signal);
+      }
+    }
+  }
+  const table_status: ProbeMappingStatus =
+    gene_column === null ? "no_gene_annotation" : rowCount > 0 ? "mapped" : "unmapped";
+  return {
+    probe_column: header.length > 0 ? header[0] : null,
+    gene_column,
+    target_namespace,
+    table_status,
+  };
+}
+
+/**
+ * Ingest the annotation into ``index``: the streaming path when a valid
+ * marked block exists, otherwise the bounded-memory reference parse
+ * (``readTable`` + ``parsePlatformTableText``). Both paths yield identical
+ * probe → gene rows, so the index collapses to the same classification.
+ */
+async function ingestProbeIndex(
+  annotationPath: string,
+  index: ProbeIndex,
+  signal?: AbortSignal | null,
+): Promise<IngestedPlatformTable> {
+  const streamed = await ingestPlatformTable(annotationPath, index, signal);
+  if (streamed !== null) return streamed;
+  const text = await readTable(annotationPath, signal);
+  const table = parsePlatformTableText(text);
+  const target_namespace: TargetNamespace =
+    table.gene_column === "ENSEMBL_ID" ? "ensembl_gene" : "gene_symbol";
+  let rowCount = 0;
+  for (const [probe, gene] of table.rows) {
+    await index.put(probe, gene);
+    rowCount += 1;
+  }
+  const table_status: ProbeMappingStatus =
+    table.gene_column === null ? "no_gene_annotation" : rowCount > 0 ? "mapped" : "unmapped";
+  return {
+    probe_column: table.probe_column,
+    gene_column: table.gene_column,
+    target_namespace,
+    table_status,
+  };
+}
+
 /** Python ``_distinct_probes``: declared ``geo_probe`` rows of the batch. */
 async function distinctProbes(batchPath: string, signal?: AbortSignal | null): Promise<string[]> {
   let header: string[] | null = null;
@@ -424,6 +561,12 @@ export interface BuildProbeMappingOptions {
   outputDir: string;
   mappingRuleId?: string;
   sourceId?: string | null;
+  /**
+   * When true, the result also carries the materialized full ``probe_to_gene``
+   * Record (default). When false, the disk-backed ``probe_index`` is returned
+   * without materializing the map, keeping peak memory flat.
+   */
+  materializeProbeMap?: boolean;
   /** Cooperative abort signal from the executor (M2 I-03/I-04). */
   signal?: AbortSignal | null;
 }
@@ -441,6 +584,7 @@ export async function buildProbeMapping(
     outputDir,
     mappingRuleId = PROBE_MAPPING_RULE_ID,
     sourceId = null,
+    materializeProbeMap = true,
     signal,
   } = options;
   if (annotationAsset !== null) {
@@ -453,53 +597,62 @@ export async function buildProbeMapping(
       );
     }
   }
-  const {
-    mapping,
-    target_namespace: targetNamespace,
-    status: tableStatus,
-    ambiguous_probes: ambiguousProbes,
-    probe_column: probeColumn,
-    gene_column: geneColumn,
-  } = await parsePlatformTable(annotationPath, signal);
-  const probes = await distinctProbes(batchPath, signal);
-  const total = probes.length;
-  const mapped = probes.filter((probe) => probe in mapping).length;
-  const ambiguous = probes.filter((probe) => ambiguousProbes.has(probe));
-  const ambiguousCount = ambiguous.length;
-  const unmapped = total - mapped;
-  const coverage = total > 0 ? mapped / total : 0.0;
-  let status: ProbeMappingStatus;
-  if (total > 0 && mapped === total) {
-    status = "mapped";
-  } else if (total > 0 && mapped > 0) {
-    status = "partial";
-  } else if (
-    tableStatus === "no_gene_annotation" ||
-    tableStatus === "unmapped"
-  ) {
-    status = tableStatus;
-  } else {
-    status = "unmapped";
-  }
-
-  const detailPath = path.join(
-    outputDir,
-    "canonical",
-    `${bindingId}_probe_mapping.csv`,
+  const probeIndex = ProbeIndex.create(
+    path.join(outputDir, `probe_index_${bindingId}`),
   );
-  mkdirSync(path.dirname(detailPath), { recursive: true });
-  const ambiguousSet = new Set(ambiguous);
-  const detailLines = [csvLine([...MAPPING_DETAIL_COLUMNS])];
-  let visited = 0;
-  for (const probe of probes) {
-    const gene = mapping[probe] ?? "";
-    const rowStatus = gene
-      ? "mapped"
-      : ambiguousSet.has(probe)
-        ? "ambiguous"
-        : "unmapped";
-    detailLines.push(
-      csvLine([
+  try {
+    const {
+      probe_column: probeColumn,
+      gene_column: geneColumn,
+      target_namespace: targetNamespace,
+      table_status: tableStatus,
+    } = await ingestProbeIndex(annotationPath, probeIndex, signal);
+    const probes = await distinctProbes(batchPath, signal);
+    const total = probes.length;
+    const resolutions = await probeIndex.bulkResolve(probes);
+    let mapped = 0;
+    const ambiguousProbes = new Set<string>();
+    for (let offset = 0; offset < resolutions.length; offset += 1) {
+      if (resolutions[offset].kind === "mapped") mapped += 1;
+      else if (resolutions[offset].kind === "ambiguous") {
+        ambiguousProbes.add(probes[offset]);
+      }
+    }
+    const ambiguousCount = ambiguousProbes.size;
+    const unmapped = total - mapped;
+    const coverage = total > 0 ? mapped / total : 0.0;
+    let status: ProbeMappingStatus;
+    if (total > 0 && mapped === total) {
+      status = "mapped";
+    } else if (total > 0 && mapped > 0) {
+      status = "partial";
+    } else if (
+      tableStatus === "no_gene_annotation" ||
+      tableStatus === "unmapped"
+    ) {
+      status = tableStatus;
+    } else {
+      status = "unmapped";
+    }
+
+    const detailPath = path.join(
+      outputDir,
+      "canonical",
+      `${bindingId}_probe_mapping.csv`,
+    );
+    mkdirSync(path.dirname(detailPath), { recursive: true });
+    const writer = new BufferedCsvWriter(detailPath, [...MAPPING_DETAIL_COLUMNS]);
+    let visited = 0;
+    for (let offset = 0; offset < probes.length; offset += 1) {
+      const probe = probes[offset];
+      const resolution = resolutions[offset];
+      const gene = resolution.kind === "mapped" ? resolution.gene : "";
+      const rowStatus = gene
+        ? "mapped"
+        : resolution.kind === "ambiguous"
+          ? "ambiguous"
+          : "unmapped";
+      writer.writeRow([
         bindingId,
         platformId ?? "",
         probe,
@@ -508,48 +661,54 @@ export async function buildProbeMapping(
         rowStatus,
         annotationAsset?.asset_id ?? "",
         gene ? mappingRuleId : "",
-      ]),
-    );
-    visited += 1;
-    if (visited % CHECKPOINT_STRIDE === 0) await checkpoint(signal);
-  }
-  await writeFile(detailPath, detailLines.join(""), "utf8");
+      ]);
+      visited += 1;
+      if (visited % CHECKPOINT_STRIDE === 0) await checkpoint(signal);
+    }
+    writer.flush();
 
-  const summary: ProbeMappingSummary = {
-    schema_version: "1.0",
-    binding_id: bindingId,
-    platform_id: platformId,
-    source_namespace: "geo_probe",
-    target_namespace: mapped > 0 ? targetNamespace : null,
-    mapping_status: status,
-    total_probe_count: total,
-    mapped_probe_count: mapped,
-    unmapped_probe_count: unmapped,
-    ambiguous_probe_count: ambiguousCount,
-    coverage_ratio: coverage,
-    mapping_asset_id: annotationAsset?.asset_id ?? null,
-    mapping_rule_id: mappingRuleId,
-  };
-  let platformRecord: PlatformRecord | null = null;
-  if (platformId !== null) {
-    platformRecord = await buildPlatformRecord({
-      platformId,
-      sourceId:
-        sourceId ?? annotationAsset?.source_id ?? bindingId,
-      annotationPath,
-      probeColumn,
-      geneColumn,
-      targetNamespace: mapped > 0 ? targetNamespace : null,
-      annotationStatus: platformAnnotationStatus(status, tableStatus),
-      annotationAsset,
-      signal,
-    });
+    const summary: ProbeMappingSummary = {
+      schema_version: "1.0",
+      binding_id: bindingId,
+      platform_id: platformId,
+      source_namespace: "geo_probe",
+      target_namespace: mapped > 0 ? targetNamespace : null,
+      mapping_status: status,
+      total_probe_count: total,
+      mapped_probe_count: mapped,
+      unmapped_probe_count: unmapped,
+      ambiguous_probe_count: ambiguousCount,
+      coverage_ratio: coverage,
+      mapping_asset_id: annotationAsset?.asset_id ?? null,
+      mapping_rule_id: mappingRuleId,
+    };
+    let platformRecord: PlatformRecord | null = null;
+    if (platformId !== null) {
+      platformRecord = await buildPlatformRecord({
+        platformId,
+        sourceId:
+          sourceId ?? annotationAsset?.source_id ?? bindingId,
+        annotationPath,
+        probeColumn,
+        geneColumn,
+        targetNamespace: mapped > 0 ? targetNamespace : null,
+        annotationStatus: platformAnnotationStatus(status, tableStatus),
+        annotationAsset,
+        signal,
+      });
+    }
+    return {
+      probe_to_gene: materializeProbeMap
+        ? await probeIndex.materialize()
+        : undefined,
+      probe_index: probeIndex,
+      target_namespace: targetNamespace,
+      summary,
+      detail_path: detailPath,
+      platform_record: platformRecord,
+    };
+  } catch (error) {
+    probeIndex.destroy();
+    throw error;
   }
-  return {
-    probe_to_gene: mapping,
-    target_namespace: targetNamespace,
-    summary,
-    detail_path: detailPath,
-    platform_record: platformRecord,
-  };
 }
