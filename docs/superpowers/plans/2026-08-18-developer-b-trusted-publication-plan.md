@@ -283,7 +283,7 @@ A 组任务的实现细节由 A 组计划维护；本表只冻结 B 组依赖的
 
 ### TASK-048-B5C：共享 biomedical tables 与 relation vocabulary
 
-- **状态**：blocked
+- **状态**：completed（ADR-035，`feat/biomedical-common-schemas`）
 - **分支**：`feat/biomedical-common-schemas`
 - **hard_requires**：`TASK-048-B1`、`TASK-048-B3`
 - **merge_after**：`TASK-048-B4M` contract 形态冻结后优先；不硬依赖 `TASK-C2I`
@@ -508,7 +508,7 @@ Build 作为比赛最终门禁，再通过新 ADR/TODO 变更加入 G1 hard requ
 | 6 | `TASK-C2C` | completed | `TASK-C1C` completed |
 | 7 | `TASK-048-B2M` | completed | `TASK-048-B1` + `TASK-047-A5C` completed |
 | 8 | `TASK-048-B2W`（A owner） | blocked | `TASK-048-B2M` + `TASK-047-A5I` |
-| 9 | `TASK-048-B4M` | module complete / trusted E2E blocked | module tests+ADR-034 complete；overall complete: C1I + owner wiring |
+| 9 | `TASK-048-B4M` | module complete / trusted E2E blocked | module tests+ADR-035 complete；overall complete: C1I + owner wiring |
 | 10 | `TASK-048-B5C` | blocked | B1+B3；B4M contract 形态冻结 |
 | 11 | `TASK-048-B5L/T/V/S/A` | blocked | start: B2M+B3+B4M+B5C；complete: B2W+B4M+C2I |
 | 12 | `TASK-048-B6A/B6D/B6W/B6B` | blocked | 对应完整任务条目中的 family/C2I/derive 依赖 |

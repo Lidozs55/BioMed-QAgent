@@ -216,7 +216,9 @@ dataset_family + row_granularity + key_semantics + measurement_semantics
 或共享分支，也不能只注册 Schema 就宣称该 family 可执行或可发布。
 
 Schema Registry 是字段元数据的唯一权威来源，不在 Builder / Validation / API /
-前端多处分散定义。
+前端多处分散定义。跨 family 的 biomedical common table 由
+`server/src/dataset/schema/common/` 的参数化模板生成 family-scoped Schema 2.0；模板本身
+不进入 production Registry，也不代表对应 family 已具备执行或发布能力（ADR-034）。
 
 ### 3.4 SourceBinding、Acquisition Provider 与 WorkflowRecipe
 

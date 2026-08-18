@@ -88,11 +88,14 @@
 - [x] **TASK-048-B2M / completed**：Core-only PublicationCandidate 与 family assembler module；expression integration result 可确定性包装，candidate 仅引用 committed Core result receipts/registered asset IDs，缺 handler 的 family 无 assembly capability；ADR-033。
 - [ ] **TASK-048-B2W / A owner, blocked by TASK-048-B2M + TASK-047-A5I**：assemble runtime/checkpoint/publisher wiring。
 - [x] **TASK-048-B3 / completed**：Generic multi-table validation/relation gate；严格结构/关系、token/evidence closure 与 Agent workspace bypass fail-closed 已完成（ADR-032）。
-- [ ] **TASK-048-B4M / module complete（ADR-034）；trusted E2E blocked by TASK-C1I**：
+- [ ] **TASK-048-B4M / module complete（ADR-035）；trusted E2E blocked by TASK-C1I**：
       schema-driven CSV/TSV/JSON RegisteredSourceAsset adapter、严格行宽/类型、locator/parser
       version/rejected-row audit 与 fail-closed receipt/hash 已完成；`adapters.ts`/runtime 接线、
       Core asset registry E2E 与 Publication admission 未完成，不得标记整体 completed。
-- [ ] **TASK-048-B5C / blocked by TASK-048-B1 + TASK-048-B3**：共享 biomedical tables/relation vocabulary。
+- [x] **TASK-048-B5C / completed（ADR-035）**：共享 biomedical tables/relation vocabulary；参数化
+      builders 覆盖 entity/paper/compound/assay/structure dimension/trial/source/entity+compound
+      crosswalk，受控 ID/relation/cardinality/unit vocabulary，crosswalk 保留匹配证据、冲突和置信度；
+      未注册 production family。
 - [ ] **TASK-048-B5L / blocked**：`literature_evidence` vertical slice。
 - [ ] **TASK-048-B5T / blocked**：`target_evidence` vertical slice。
 - [ ] **TASK-048-B5V / blocked**：`variant_evidence` vertical slice。
