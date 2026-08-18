@@ -1,0 +1,57 @@
+{
+  "assertions": [
+    {
+      "assertion_id": "assertion_brca1_1",
+      "variant_id": "VCV000077535",
+      "variant_namespace": "clinvar_variant",
+      "reference_sequence_id": "NM_007294",
+      "reference_namespace": "refseq",
+      "reference_version": "NM_007294.4",
+      "reference_position": "c.68_69",
+      "reference_allele": "AG",
+      "alternate_allele": "-",
+      "condition_id": "C2676676",
+      "condition_namespace": "medgen",
+      "assertion_status": "asserted",
+      "conflict_policy": "retain_conflict_and_require_review",
+      "conflict_status": "none",
+      "conflict_evidence": null,
+      "source_id": "source_clinvar_1"
+    }
+  ],
+  "evidence": [
+    {
+      "evidence_id": "evidence_clinvar_1",
+      "assertion_id": "assertion_missing",
+      "evidence_kind": "source_assertion",
+      "evidence_text": "Pathogenic assertion.",
+      "source_locator": {
+        "locator_version": "2.0",
+        "locator_type": "json_pointer",
+        "asset_id": "asset_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "logical_file": "source_assets/clinvar/brca1.json",
+        "raw_value": "Pathogenic",
+        "json_pointer": "/assertions/0/clinical_significance"
+      },
+      "evidence_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "source_id": "source_clinvar_1"
+    }
+  ],
+  "sources": [
+    {
+      "source_id": "source_clinvar_1",
+      "source_database": "clinvar",
+      "source_asset_id": "asset_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_locator": {
+        "locator_version": "2.0",
+        "locator_type": "json_pointer",
+        "asset_id": "asset_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "logical_file": "source_assets/clinvar/brca1.json",
+        "raw_value": "VCV000077535",
+        "json_pointer": "/assertions/0"
+      },
+      "retrieved_at": "2026-08-18T00:00:00Z",
+      "carrier_type": "api_record"
+    }
+  ]
+}
