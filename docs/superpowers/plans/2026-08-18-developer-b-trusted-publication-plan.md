@@ -229,7 +229,7 @@ A 组任务的实现细节由 A 组计划维护；本表只冻结 B 组依赖的
 
 ### TASK-048-B2M：PublicationCandidate 与 family assembler module
 
-- **状态**：blocked
+- **状态**：completed（ADR-033）
 - **owner**：B
 - **分支**：`feat/family-assembler-module`
 - **hard_requires**：`TASK-048-B1`、`TASK-047-A5C`
@@ -267,7 +267,7 @@ A 组任务的实现细节由 A 组计划维护；本表只冻结 B 组依赖的
 
 ### TASK-048-B4M：Registered-table adapter module
 
-- **状态**：blocked
+- **状态**：module complete；trusted E2E blocked by `TASK-C1I`（未标记 completed）
 - **owner**：B
 - **分支**：`feat/registered-table-adapter`
 - **可开始条件**：`TASK-048-B1`、`TASK-047-A2`、`TASK-C1C`；`TASK-048-B3`
@@ -283,7 +283,7 @@ A 组任务的实现细节由 A 组计划维护；本表只冻结 B 组依赖的
 
 ### TASK-048-B5C：共享 biomedical tables 与 relation vocabulary
 
-- **状态**：blocked
+- **状态**：completed（ADR-035，`feat/biomedical-common-schemas`）
 - **分支**：`feat/biomedical-common-schemas`
 - **hard_requires**：`TASK-048-B1`、`TASK-048-B3`
 - **merge_after**：`TASK-048-B4M` contract 形态冻结后优先；不硬依赖 `TASK-C2I`
@@ -354,12 +354,13 @@ A 组任务的实现细节由 A 组计划维护；本表只冻结 B 组依赖的
 
 ### TASK-048-B6D：Deterministic derive ADR
 
-- **状态**：blocked
+- **状态**：completed（ADR-036）
 - **分支**：`docs/deterministic-derive-adr`
 - **hard_requires**：`TASK-048-B1`、`TASK-048-B2M`、`TASK-047-A5C`
-- **交付**：固定 derive slot、允许算法 registry、参数/reference version/input asset/output
-  digest provenance；明确不允许 Agent code、不引入通用 DAG。
-- **验收**：PDB distance/sequence alignment 等用同一 deterministic contract 表达。
+- **交付**：固定 derive slot、允许算法 registry、参数/reference version/input asset or
+  committed result/output digest provenance；明确不允许 Agent code、不引入通用 DAG。
+- **验收**：PDB distance/sequence alignment 用同一 deterministic contract 表达；未知算法、
+  代码/DAG 字段与 identity drift fail-closed。
 
 ### TASK-048-B6W：Fixed derive slot runtime wiring
 
@@ -506,15 +507,17 @@ Build 作为比赛最终门禁，再通过新 ADR/TODO 变更加入 G1 hard requ
 | 4 | `TASK-047-A5C` | completed | `TASK-048-B1` + `TASK-047-A2` completed |
 | 5 | `TASK-048-B3` | completed | `TASK-048-B1` completed |
 | 6 | `TASK-C2C` | completed | `TASK-C1C` completed |
-| 7 | `TASK-048-B2M` | blocked | `TASK-048-B1` + `TASK-047-A5C` |
+| 7 | `TASK-048-B2M` | completed | `TASK-048-B1` + `TASK-047-A5C` completed |
 | 8 | `TASK-048-B2W`（A owner） | blocked | `TASK-048-B2M` + `TASK-047-A5I` |
-| 9 | `TASK-048-B4M` | blocked | start: B1+A2+C1C；complete: B3+C1I |
+| 9 | `TASK-048-B4M` | module complete / trusted E2E blocked | module tests+ADR-035 complete；overall complete: C1I + owner wiring |
 | 10 | `TASK-048-B5C` | blocked | B1+B3；B4M contract 形态冻结 |
 | 11 | `TASK-048-B5L/T/V/S/A` | blocked | start: B2M+B3+B4M+B5C；complete: B2W+B4M+C2I |
-| 12 | `TASK-048-B6A/B6D/B6W/B6B` | blocked | 对应完整任务条目中的 family/C2I/derive 依赖 |
+| 12 | `TASK-048-B6A/B6W/B6B` | blocked；B6D completed | 对应完整任务条目中的 family/C2I/derive 依赖 |
 | 13 | `TASK-048-B7` | blocked | B5C/L/T/V/S/A+B6A+B6B+C2I |
 | 14 | `TASK-G1B` | blocked | `TASK-048-B7`+`TASK-047-A8`+`TASK-G1A` |
 | 15 | `TASK-G1R` | blocked | `TASK-G1A`+`TASK-G1B` |
 | P1 | `TASK-C3C` | backlog | `TASK-C1C`+`TASK-047-A5C`；不阻塞本轮 closure |
 
-当前 B 组 contract spine 已完成 C2C，`TASK-048-B3` 已完成；下一项可领取 `TASK-048-B2M`（A5C 已合并），并可在 B4M contract 形态冻结后推进 `TASK-048-B5C`。
+当前 B 组 contract spine、`TASK-048-B2M` 与 `TASK-048-B3` 已完成；
+`TASK-048-B4M` module 与 contract 形态已冻结，但 trusted E2E 仍等待 `TASK-C1I` 和 owner
+接线，不能标记整体 completed；B 组可据此推进 `TASK-048-B5C`。

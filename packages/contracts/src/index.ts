@@ -1,9 +1,11 @@
 export type * from "./artifacts.js";
 export type * from "./dataset-build.js";
 export type * from "./dataset-multitable.js";
+export type * from "./publication-candidate.js";
 export type * from "./source-locator.js";
 export type * from "./source-asset.js";
 export type * from "./operation-result.js";
+export type * from "./deterministic-derive.js";
 export type * from "./acquisition.js";
 export * from "./dataset-bridge.js";
 export type * from "./events.js";
