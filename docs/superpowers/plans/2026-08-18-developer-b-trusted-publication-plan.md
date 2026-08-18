@@ -341,7 +341,7 @@ A 组任务的实现细节由 A 组计划维护；本表只冻结 B 组依赖的
 
 ### TASK-048-B6A：Chart/VLM evidence Publication
 
-- **状态**：blocked
+- **状态**：module complete；trusted Gold6 blocked by B2W/B4M/C2I
 - **分支**：`feat/chart-vlm-evidence-publication`
 - **hard_requires**：`TASK-048-B3`、`TASK-048-B4M` completed、`TASK-048-B5C`、
   `TASK-048-B5L`、`TASK-048-B5A`、`TASK-C2I`
@@ -375,7 +375,7 @@ A 组任务的实现细节由 A 组计划维护；本表只冻结 B 组依赖的
 
 ### TASK-048-B6B：Deterministic derived evidence
 
-- **状态**：blocked
+- **状态**：B-owned module complete；trusted E2E blocked by B6W/B2W/C2I
 - **分支**：`feat/deterministic-derived-evidence`
 - **hard_requires**：`TASK-048-B2W`、`TASK-048-B3`、`TASK-048-B5C`、
   `TASK-048-B5V`、`TASK-048-B5S`、`TASK-048-B6D`、`TASK-048-B6W`、`TASK-C2I`
