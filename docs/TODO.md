@@ -90,7 +90,7 @@
 - [x] **TASK-048-B3 / completed**：Generic multi-table validation/relation gate；严格结构/关系、token/evidence closure 与 Agent workspace bypass fail-closed 已完成（ADR-032）。
 - [ ] **TASK-048-B4M / blocked by TASK-048-B1 + TASK-047-A2 + TASK-C1C**：Registered-table adapter module；
       trusted E2E 还需 `TASK-048-B3` + `TASK-C1I`。
-- [ ] **TASK-048-B5C / blocked by TASK-048-B1 + TASK-048-B3**：共享 biomedical tables/relation vocabulary。
+- [x] **TASK-048-B5C / completed on `feat/biomedical-common-schemas`**：共享 biomedical tables/relation vocabulary；参数化 builders 覆盖 entity/paper/compound/assay/structure dimension/trial/source/entity+compound crosswalk，受控 ID/relation/cardinality/unit vocabulary，crosswalk 保留匹配证据、冲突和置信度；未注册 production family，见 ADR-034。
 - [ ] **TASK-048-B5L / blocked**：`literature_evidence` vertical slice。
 - [ ] **TASK-048-B5T / blocked**：`target_evidence` vertical slice。
 - [ ] **TASK-048-B5V / blocked**：`variant_evidence` vertical slice。

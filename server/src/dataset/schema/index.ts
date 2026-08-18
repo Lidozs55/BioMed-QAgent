@@ -8,4 +8,5 @@ export * from "./fields.js";
 export * from "./expression.js";
 export * from "./registry.js";
 export * from "./store.js";
+export * from "./common/index.js";
 export type { DatasetSchema, SchemaField } from "../contracts/index.js";
