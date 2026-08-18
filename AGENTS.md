@@ -269,6 +269,8 @@ Rules:
   worktree, never in the shared directory.
 - Run `git worktree list` before starting and reuse an existing worktree for the
   same branch instead of creating duplicates.
+- Commit incrementally, not in one big final batch. A session can lose
+  context mid-task.
 
 ### 8. Documentation First
 
