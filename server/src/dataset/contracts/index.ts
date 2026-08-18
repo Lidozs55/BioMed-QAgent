@@ -16,4 +16,5 @@ export * from "./profiles.js";
 export * from "./result.js";
 export * from "./manifest.js";
 export * from "./multitable.js";
+export * from "./publication-candidate.js";
 export * from "./spec.js";

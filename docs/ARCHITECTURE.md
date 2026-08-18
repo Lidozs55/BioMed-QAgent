@@ -162,9 +162,11 @@ scope 才匹配，API 缺省 project）；Restricted 切换会作废全部 pendi
 生产可选值由 `DatasetFamilyRegistry` 统一登记。每个
 `DatasetFamilyDefinition` 将 Canonical Schema、row granularity、真实来源 Adapter、
 source/schema 与 schema/profile 兼容关系、family-owned 默认 Normalization Profile、
-合并策略、输出格式和 Adapter 参数契约绑定为一个受信任 admission 能力单元。多表 family operation handlers、assembler /
-`PublicationCandidate` 属 TASK-048 下一执行层，不由基础 Registry 伪装为已实现。
-Agent Tool Schema 与 Core Spec Validator 从同一 Registry 派生；production Registry 还要求
+合并策略、输出格式和 Adapter 参数契约绑定为一个受信任 admission 能力单元。多表 family 的 assembler
+通过独立 handler registry 注册；缺 handler 时不能构造 assembly capability。Core-only
+`PublicationCandidate` 只引用 committed Core result receipts 和 registered asset IDs，
+不接受 Agent path。runtime/checkpoint/publisher 接线仍属 TASK-048-B2W，基础 Registry
+不能据此伪装未闭环 family 已实现。Agent Tool Schema 与 Core Spec Validator 从同一 Registry 派生；production Registry 还要求
 family `runtime_id` 命中 Core 已实现的 runtime allowlist。仅有 Schema、或 Adapter/Profile
 无真实实现的数据族不得进入 production default Registry（ADR-027）。
 
