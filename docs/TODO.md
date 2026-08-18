@@ -49,9 +49,11 @@
 - [ ] **P0 / TASK-047** 大型 GEO 表达矩阵在 TS Core 解析/规范化阶段触发
       `Invalid string length` 或 Node heap OOM。评测已确认 GSE31852/GSE109169
       级别文件需要流式读取、有限输出缓冲、可恢复 checkpoint 与资源上限。局部
-      parser/canonicalizer/writer 已流式化，但审计仍确认 Core 前置 hash、GDC/Xena
-      输入、GEO supplementary/metadata、probe mapping、integrator 去重状态、checkpoint
-      rehydrate 和 release/download tail 存在全量读取或随行数增长的内存边界。
+      parser/canonicalizer/writer 已流式化，integrator 去重状态已磁盘化
+      （WP-A6 的 `node:sqlite` temp table + quota，见下），但审计仍确认 Core
+      前置 hash、GDC/Xena 输入、GEO supplementary/metadata、probe mapping、
+      checkpoint rehydrate 和 release/download tail 存在全量读取或随行数增长的
+      内存边界。
       剩余验收：计划 A1-A7 全部完成后，A8 在默认运行限制下使约 6.1 GB 解压矩阵
       完成 integrate/validate/publish；记录 RSS/wall/temp/batches/artifact，并通过
       immutable Publication Artifact API 下载复核 hash。
@@ -74,8 +76,13 @@
 > 流式校验（async + `sha256FileStream` + `cancellationSignal`，取消传播而非吞掉）；
 > 增量 2（14aceeed）为 executor 成功路径写入类型化 ADR-030 `OperationResultManifest`
 > （native 模式 + committed 收据、dependency closure 含确定性 upstream manifest
-> ids/input asset ids），round-trip 经 strict parser 校验，digest 复用不重写 manifest；
-> A5I 整体仍 open（待去 REHYDRATE replay 等增量，与 A6 对齐）。
+> ids/input asset ids），round-trip 经 strict parser 校验，digest 复用不重写 manifest。
+> A5I 增量 3（f1d05292→c198592e，rehydrate 命中 typed checkpoint 时不再
+> `rehydrateCompletedRunners` 走 RAW/逐 operation 重放，直接恢复 typed runner state）
+> 与 WP-A6（disk-backed integrate：`integrator` 的 O(unique)`seen` Map 替换为
+> `node:sqlite` 磁盘 temp table + `tempStore.quotaBytes` 上限，fail-closed
+> `IntegratorResourceLimitError`，批量事务保证增量大小可观测；T7-T12 含 heap/quota/
+> cancel 红绿测试）均已合并进 main，A5I 不再 open。
 
 - [x] **TASK-G0 / completed**：Gold v1 eval manifest、六个原始 prompt、reference schema/source
       inventory、默认运行参数、checksum verifier 与 manifest run driver 已冻结于

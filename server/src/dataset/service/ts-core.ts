@@ -697,6 +697,8 @@ export class TypeScriptDatasetCore {
             dedupCount: typeof output.dedup_count === "number" ? output.dedup_count : 0,
             conflictCount: typeof output.conflict_count === "number" ? output.conflict_count : 0,
             conflictsPath: null,
+            tempStoreBytes: 0,
+            tempStoreRows: 0,
           };
         } else if (op.kind === "validate_profile") {
           const manifestPath = path.join(outputDir, "dataset_manifest.json");

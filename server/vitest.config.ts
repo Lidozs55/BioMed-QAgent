@@ -13,6 +13,11 @@ export default defineConfig({
     // playwright），统一用 forks 进程池隔离，避免 worker_threads 共享进程状态
     // 互相干扰，也方便按需调低 worker 数。
     pool: "forks",
+    poolOptions: {
+      forks: {
+        execArgv: ["--expose-gc"],
+      },
+    },
     maxWorkers: process.env.CI ? "75%" : 2,
     maxConcurrency: process.env.CI ? 8 : 4,
   },
