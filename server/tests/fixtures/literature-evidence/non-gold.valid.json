@@ -1,0 +1,66 @@
+{
+  "evidence": [
+    {
+      "evidence_id": "evidence_1",
+      "paper_id": "31452104",
+      "paper_id_namespace": "pubmed",
+      "experiment_id": "table_2_cohort_a",
+      "evidence_type": "observational_association",
+      "claim_text": "Higher circulating IL-6 was associated with severe dengue in the reported cohort.",
+      "result_summary": "Median IL-6 was higher in severe than non-severe dengue.",
+      "study_context": {
+        "population": "adult dengue cohort",
+        "endpoint": "severe dengue"
+      },
+      "source_id": "source_pmc_table_2"
+    }
+  ],
+  "papers": [
+    {
+      "paper_id": "31452104",
+      "paper_id_namespace": "pubmed",
+      "title": "Cytokine profiles in dengue severity",
+      "journal": "Scientific Reports",
+      "publication_date": "2019-09-12",
+      "authors": ["Example A", "Example B"],
+      "source_url": "https://pubmed.ncbi.nlm.nih.gov/31452104/",
+      "source_id": "source_pubmed_record"
+    }
+  ],
+  "sources": [
+    {
+      "source_id": "source_pmc_table_2",
+      "source_database": "pmc",
+      "source_asset_id": "asset_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_locator": {
+        "locator_version": "2.0",
+        "locator_type": "pdf_region",
+        "asset_id": "asset_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "logical_file": "PMC6753141.pdf",
+        "raw_value": "IL-6 severe 42.1 pg/mL",
+        "page_number": 4,
+        "table_id": "Table 2",
+        "figure_id": null,
+        "row_label": "Severe dengue",
+        "column_label": "IL-6"
+      },
+      "retrieved_at": "2026-08-18T00:00:00Z",
+      "carrier_type": "paper_table"
+    },
+    {
+      "source_id": "source_pubmed_record",
+      "source_database": "pubmed",
+      "source_asset_id": "asset_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "source_locator": {
+        "locator_version": "2.0",
+        "locator_type": "json_pointer",
+        "asset_id": "asset_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "logical_file": "pubmed-31452104.json",
+        "raw_value": "31452104",
+        "json_pointer": "/result/uids/0"
+      },
+      "retrieved_at": "2026-08-18T00:00:00Z",
+      "carrier_type": "api_record"
+    }
+  ]
+}

@@ -1,0 +1,2 @@
+evidence_id,paper_id,paper_id_namespace,experiment_id,evidence_type,claim_text,result_summary,study_context,source_id
+evidence_1,missing-paper,pubmed,table_2_cohort_a,observational_association,Higher circulating IL-6 was associated with severe dengue.,Median IL-6 was higher in severe than non-severe dengue.,"{""population"":""adult dengue cohort"",""endpoint"":""severe dengue""}",source_pmc_table_2
