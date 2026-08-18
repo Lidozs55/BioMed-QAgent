@@ -1,0 +1,69 @@
+{
+  "activities": [
+    {
+      "activity_id": "ACT_BAD_1",
+      "compound_id": "CHEMBL_MISSING",
+      "compound_id_namespace": "chembl_compound",
+      "assay_id": "CHEMBL_A100",
+      "assay_id_namespace": "chembl_assay",
+      "target_id": "CHEMBL_T100",
+      "target_namespace": "chembl_target",
+      "activity_type": "IC50",
+      "raw_value": "12.5",
+      "raw_relation": "<",
+      "preserved_relation": "=",
+      "raw_unit": "nM",
+      "preserved_raw_unit": "uM",
+      "standardized_value": 12.5,
+      "standardized_unit": "nM",
+      "source_id": "source_chembl_activity_1",
+      "source_asset_id": "asset_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_locator": {
+        "locator_version": "2.0",
+        "locator_type": "json_pointer",
+        "asset_id": "asset_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "logical_file": "source_assets/chembl/non-gold-activities.json",
+        "raw_value": "12.5",
+        "json_pointer": "/activities/0"
+      }
+    }
+  ],
+  "compounds": [
+    {
+      "compound_id": "CHEMBL25",
+      "compound_id_namespace": "chembl_compound",
+      "preferred_name": "Aspirin",
+      "canonical_smiles": null,
+      "isomeric_smiles": null,
+      "inchi": null,
+      "inchi_key": null,
+      "molecular_formula": null,
+      "molecular_weight": null,
+      "source_id": "source_chembl_activity_1"
+    }
+  ],
+  "assays": [
+    {
+      "assay_id": "CHEMBL_A100",
+      "assay_id_namespace": "chembl_assay",
+      "assay_type": "binding",
+      "description": null,
+      "organism": "Homo sapiens",
+      "cell_line": null,
+      "target_entity_id": "CHEMBL_T100",
+      "target_entity_namespace": "chembl_target",
+      "bao_format_id": null,
+      "source_id": "source_chembl_activity_1"
+    }
+  ],
+  "targets": [
+    {
+      "entity_id": "CHEMBL_T100",
+      "entity_namespace": "chembl_target",
+      "entity_type": "single_protein",
+      "preferred_name": "Cyclooxygenase-2",
+      "organism": "Homo sapiens",
+      "source_id": "source_chembl_activity_1"
+    }
+  ]
+}
