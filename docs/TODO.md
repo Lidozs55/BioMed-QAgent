@@ -70,6 +70,9 @@
 > B 组 contracts、B2M、B3、B5C、B6D 已完成，B4M module 已完成；A 组
 > `TASK-047-A1/A2/A3` 已合并。B 组开始 B5L/T/V/S/A family modules；A 组可基于
 > contracts/B2M/B6D 启动 C1I/A5I/C2I/B2W/B6W。
+> A5I 增量 1 已提交至 `feat/dataset-operation-results`（9dcceeca）：`loadOperationOutput`
+> 流式校验（async + `sha256FileStream` + `cancellationSignal`，取消传播而非吞掉）；
+> A5I 整体仍 open（待去 REHYDRATE replay 等增量）。
 
 - [x] **TASK-G0 / completed**：Gold v1 eval manifest、六个原始 prompt、reference schema/source
       inventory、默认运行参数、checksum verifier 与 manifest run driver 已冻结于
