@@ -11,6 +11,7 @@ import {
   parseDatasetManifestV2,
   parseDatasetSchema,
   parseDatasetSchemaV2,
+  parseOperationResultManifest,
   parseSourceLocator,
   parseFieldMapping,
   parseFileAsset,
@@ -193,6 +194,54 @@ describe("contract invariants (mirror Pydantic model_validator)", () => {
         artifacts: [artifact, { ...artifact, artifact_id: "artifact_2" }],
       }),
     ).toThrow(/at most one primary_dataset/);
+  });
+
+  test("OperationResultManifest parses native committed output and dependency closure", () => {
+    const digest = "a".repeat(64);
+    const parsed = parseOperationResultManifest({
+      schema_version: "1.0", result_manifest_id: "result_1", task_id: "task_1", build_id: "build_1",
+      operation_id: "parse:binding_1", operation_kind: "parse", operation_attempt_id: "attempt_1", attempt: 1,
+      status: "succeeded", input_digest: digest, parameter_digest: digest, implementation_digest: digest,
+      output_digest: digest, output_kind: "parsed_table", output_summary: { rows: 4 },
+      output_files: [{ relative_path: "batches/binding_1.csv", size_bytes: 10, sha256: digest }],
+      dependency_closure: { input_asset_ids: ["asset_1"], upstream_result_manifest_ids: [], parameter_digest: digest, implementation_digest: digest },
+      commit: { state: "committed", commit_id: "commit_1", committed_at: "2026-08-18T00:00:00Z" },
+      migration: { mode: "native", legacy_checkpoint_path: null, migrated_at: null },
+    }, "task_1", "build_1");
+    expect(parsed.operation_kind).toBe("parse");
+    expect(parsed.output_files[0]?.sha256).toBe(digest);
+  });
+
+  test("OperationResultManifest rejects replay/path/digest/kind/migration errors", () => {
+    const digest = "a".repeat(64);
+    const base = {
+      schema_version: "1.0", result_manifest_id: "result_1", task_id: "task_1", build_id: "build_1",
+      operation_id: "publish", operation_kind: "publish", operation_attempt_id: "attempt_1", attempt: 1,
+      status: "succeeded", input_digest: digest, parameter_digest: digest, implementation_digest: digest,
+      output_digest: digest, output_kind: "publication_manifest", output_summary: {}, output_files: [],
+      dependency_closure: { input_asset_ids: [], upstream_result_manifest_ids: [], parameter_digest: digest, implementation_digest: digest },
+      commit: { state: "committed", commit_id: "commit_1", committed_at: "2026-08-18T00:00:00Z" },
+      migration: { mode: "native", legacy_checkpoint_path: null, migrated_at: null },
+    };
+    expect(() => parseOperationResultManifest({ ...base, operation_id: "../escape" })).toThrow(/operation identifier/);
+    expect(() => parseOperationResultManifest({ ...base, parameter_digest: "b".repeat(64) })).toThrow(/parameter digest/);
+    expect(() => parseOperationResultManifest({ ...base, operation_kind: "assemble" })).toThrow(/assemble result/);
+    expect(() => parseOperationResultManifest({ ...base, output_files: [{ relative_path: "../escape", size_bytes: 1, sha256: digest }] })).toThrow(/escape/);
+    expect(() => parseOperationResultManifest({ ...base, migration: { mode: "legacy_read_only", legacy_checkpoint_path: "state/old.json", migrated_at: null } })).toThrow(/requires read-only/);
+    expect(() => parseOperationResultManifest({ ...base, status: "failed", output_digest: digest })).toThrow(/must not carry/);
+  });
+
+  test("OperationResultManifest requires committed atomic receipt", () => {
+    const digest = "a".repeat(64);
+    expect(() => parseOperationResultManifest({
+      schema_version: "1.0", result_manifest_id: "result_1", task_id: "task_1", build_id: "build_1",
+      operation_id: "publish", operation_kind: "publish", operation_attempt_id: "attempt_1", attempt: 1,
+      status: "succeeded", input_digest: digest, parameter_digest: digest, implementation_digest: digest,
+      output_digest: digest, output_kind: "publication_manifest", output_summary: {}, output_files: [],
+      dependency_closure: { input_asset_ids: [], upstream_result_manifest_ids: [], parameter_digest: digest, implementation_digest: digest },
+      commit: { state: "pending", commit_id: "commit_1", committed_at: "2026-08-18T00:00:00Z" },
+      migration: { mode: "native", legacy_checkpoint_path: null, migrated_at: null },
+    })).toThrow(/committed/);
   });
 
   test("Manifest 2.0 parses tables, relations and candidate refs", () => {

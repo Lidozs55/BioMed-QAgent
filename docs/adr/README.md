@@ -22,6 +22,7 @@ indexed in [migration/README.md](../migration/README.md).
 | [ADR-027](027-dataset-family-registry.md) | Dataset families are registered runtime capabilities | Accepted |
 | [ADR-028](028-multitable-contracts.md) | Versioned multi-table publication contracts and evidence locators | Accepted |
 | [ADR-029](029-source-asset-registration.md) | Core-owned SourceAsset registration receipts and task ownership | Accepted |
+| [ADR-030](030-operation-result-manifest.md) | Versioned operation result manifests and checkpoint migration | Accepted |
 
 > 注：`026-durable-hil-confidence-protocol.md` 与 `026-agent-workspace-permissions.md` 编号
 > 均为 026（两个独立工作流各自分配）；两者互不替代，均处于 Accepted 状态。

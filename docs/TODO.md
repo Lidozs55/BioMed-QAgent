@@ -80,9 +80,9 @@
       SourceLocator 2.0 与 ADR-028；Manifest 1.0 / Publication 1.0/1.1 兼容测试保留。
 - [x] **TASK-C1C / completed**：SourceAsset roles、task-owned asset ref、registration receipt、
       immutable hash/size/media type 和 legacy-path telemetry；ADR-029。
-- [ ] **TASK-047-A5C / ready**：Operation Result Manifest contract/ADR；A2
-      流式 adapter 文件形态已合并。
-- [ ] **TASK-C2C / blocked by TASK-C1C**：Core-owned acquisition contracts。
+- [x] **TASK-047-A5C / completed**：OperationResultManifest、typed output/file receipts、
+      dependency closure、atomic commit receipt 与 legacy read-only migration；ADR-030。
+- [ ] **TASK-C2C / ready**：Core-owned acquisition contracts；C1C 已合并。
 - [ ] **TASK-C3C / P1 backlog, blocked by TASK-C1C + TASK-047-A5C**：Durable Build API/state-machine contracts；
       当前不阻塞 TASK-048/G1。
 - [ ] **TASK-048-B2M / blocked by TASK-048-B1 + TASK-047-A5C**：PublicationCandidate 与 family assembler module。
