@@ -67,9 +67,9 @@
 
 > B 组详细 ownership、依赖类型、分支、交接窗口和逐任务验收见
 > [开发者 B：可信多表 Publication 落实计划](superpowers/plans/2026-08-18-developer-b-trusted-publication-plan.md)。
-> B 组 contracts（含 C3C）、B2M、B3、B5C、B6D 已完成，B4M 与 B5L/T/V/S/A module
-> 已完成；A 组 `TASK-047-A1/A2/A3/A4` 已合并。B 组下一项为 B6A；A 组仍需接线
-> C1I/A5I/C2I/C3I/B2W/B6W。
+> B 组 contracts（含 C3C）、B2M、B3、B5C、B6D 已完成，B4M、B5L/T/V/S/A、B6A、B6B
+> module 已完成；A 组 `TASK-047-A1/A2/A3/A4/A5I` 已部分合并。A 组仍需接线
+> C1I/C2I/C3I/B2W/B6W，随后推进 B7/Gold 验收。
 > A5I 增量 1+2 已合并进 main：增量 1（9dcceeca）为 `loadOperationOutput`
 > 流式校验（async + `sha256FileStream` + `cancellationSignal`，取消传播而非吞掉）；
 > 增量 2（14aceeed）为 executor 成功路径写入类型化 ADR-030 `OperationResultManifest`
