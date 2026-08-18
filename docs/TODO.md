@@ -106,7 +106,7 @@
       PDB distance/sequence alignment 共用 contract，参数/reference/input/output digest provenance
       完整，Agent code/通用 DAG fail-closed。
 - [ ] **TASK-048-B6W / A owner, blocked by TASK-047-A5I**：fixed derive slot runtime wiring。
-- [ ] **TASK-048-B6B / blocked by TASK-048-B6W + family dependencies**：Deterministic derived evidence 与 family consumers。
+- [ ] **TASK-048-B6B / B-owned module portion complete；full task blocked by TASK-048-B6W + TASK-048-B2W + TASK-C2I**：已新增注册 deterministic derive algorithm handlers、`protein_structure` PDB interface derived consumer/schema/profile、`variant_evidence` sequence/reference mapping derived consumer/schema/profile；正负 non-Gold module tests 已覆盖。A-owned runtime/plan/checkpoint/ts-core/publish wiring 未修改；不得加入 production default Registry，等待 B6W/B2W/C2I 后完成 trusted E2E。
 - [ ] **TASK-048-B7 / blocked by all family/VLM/derive + TASK-C2I**：Gold3-Gold6 原样重跑。
 - [ ] **TASK-G1B / blocked by TASK-048-B7 + TASK-047-A8 + TASK-G1A**：最终 Gold3-Gold6 同基线复跑。
 - [ ] **TASK-G1R / blocked by TASK-G1A + TASK-G1B**：严格 Gold 最终报告。
