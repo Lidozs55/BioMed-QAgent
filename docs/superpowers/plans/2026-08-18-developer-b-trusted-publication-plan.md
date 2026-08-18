@@ -217,7 +217,7 @@ A 组任务的实现细节由 A 组计划维护；本表只冻结 B 组依赖的
 
 ### TASK-C3C：Durable Build API 与状态机 contracts
 
-- **状态**：P1 backlog
+- **状态**：completed（ADR-037；scheduler/runtime 由 TASK-C3I 接线）
 - **分支**：`feat/durable-build-contracts`
 - **hard_requires**：`TASK-C1C`、`TASK-047-A5C`；吸收 `TASK-C3I` 的 lease/recovery 约束
 - **修改范围**：`packages/contracts/**`、runtime API DTO、ADR
@@ -516,7 +516,7 @@ Build 作为比赛最终门禁，再通过新 ADR/TODO 变更加入 G1 hard requ
 | 13 | `TASK-048-B7` | blocked | B5C/L/T/V/S/A+B6A+B6B+C2I |
 | 14 | `TASK-G1B` | blocked | `TASK-048-B7`+`TASK-047-A8`+`TASK-G1A` |
 | 15 | `TASK-G1R` | blocked | `TASK-G1A`+`TASK-G1B` |
-| P1 | `TASK-C3C` | backlog | `TASK-C1C`+`TASK-047-A5C`；不阻塞本轮 closure |
+| P1 | `TASK-C3C` | completed（ADR-037） | `TASK-C1C`+`TASK-047-A5C`；C3I 接线不阻塞本轮 closure |
 
 当前 B 组 contract spine、`TASK-048-B2M` 与 `TASK-048-B3` 已完成；
 `TASK-048-B4M` module 与 contract 形态已冻结，但 trusted E2E 仍等待 `TASK-C1I` 和 owner

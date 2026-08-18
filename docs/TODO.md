@@ -67,9 +67,9 @@
 
 > B 组详细 ownership、依赖类型、分支、交接窗口和逐任务验收见
 > [开发者 B：可信多表 Publication 落实计划](superpowers/plans/2026-08-18-developer-b-trusted-publication-plan.md)。
-> B 组 contracts、B2M、B3、B5C、B6D 已完成，B4M 与 B5L/T/V/S/A module 已完成；A 组
-> `TASK-047-A1/A2/A3/A4` 已合并。B 组下一项为 C3C/P1 与 B6A；A 组仍需接线
-> C1I/A5I/C2I/B2W/B6W。
+> B 组 contracts（含 C3C）、B2M、B3、B5C、B6D 已完成，B4M 与 B5L/T/V/S/A module
+> 已完成；A 组 `TASK-047-A1/A2/A3/A4` 已合并。B 组下一项为 B6A；A 组仍需接线
+> C1I/A5I/C2I/C3I/B2W/B6W。
 
 - [x] **TASK-G0 / completed**：Gold v1 eval manifest、六个原始 prompt、reference schema/source
       inventory、默认运行参数、checksum verifier 与 manifest run driver 已冻结于
@@ -83,8 +83,10 @@
       dependency closure、atomic commit receipt 与 legacy read-only migration；ADR-030。
 - [x] **TASK-C2C / completed**：CoreAcquisitionRequest、PROMOTED recipe ref、DownloadAttempt/
       retry/resume/cache lineage 与 registered extraction asset ref；ADR-031。
-- [ ] **TASK-C3C / P1 backlog, blocked by TASK-C1C + TASK-047-A5C**：Durable Build API/state-machine contracts；
-      当前不阻塞 TASK-048/G1。
+- [x] **TASK-C3C / completed（ADR-037）**：Durable Build start/get/cancel DTO、exact idempotency、
+      独立状态机/terminal result/cancel ack、Task/Run/Build identity、durable event refs 与共享
+      runtime parser 已冻结；scheduler/lease/recovery/API 接线仍属 A owner TASK-C3I，且当前不阻塞
+      TASK-048/G1。
 - [x] **TASK-048-B2M / completed**：Core-only PublicationCandidate 与 family assembler module；expression integration result 可确定性包装，candidate 仅引用 committed Core result receipts/registered asset IDs，缺 handler 的 family 无 assembly capability；ADR-033。
 - [ ] **TASK-048-B2W / A owner, blocked by TASK-048-B2M + TASK-047-A5I**：assemble runtime/checkpoint/publisher wiring。
 - [x] **TASK-048-B3 / completed**：Generic multi-table validation/relation gate；严格结构/关系、token/evidence closure 与 Agent workspace bypass fail-closed 已完成（ADR-032）。

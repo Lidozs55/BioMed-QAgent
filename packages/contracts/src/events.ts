@@ -1,5 +1,6 @@
 import type { ArtifactManifestEntry } from "./artifacts.js";
 import type { BuildResult } from "./dataset-build.js";
+import type { DurableBuildEventPayload } from "./durable-build.js";
 import type { JsonValue } from "./json.js";
 import type { HILDecision, HILRequest } from "./hil.js";
 import type {
@@ -91,6 +92,7 @@ export type AssistantReasoningDeltaPayload = {
 };
 
 export type EventPayload =
+  | DurableBuildEventPayload
   | { type: "task_created"; topic: string }
   | { type: "plan_ready"; specification: Record<string, JsonValue> }
   | {
@@ -314,6 +316,8 @@ export interface EventEnvelope {
   type: EventPayload["type"];
   task_id: string;
   run_id: string | null;
+  /** Present for DatasetBuild lifecycle events; never inferred from run_id. */
+  build_id?: string | null;
   stage_attempt_id: string | null;
   subagent_id?: string | null;
   parent_tool_call_id?: string | null;
