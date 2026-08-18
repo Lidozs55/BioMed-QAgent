@@ -51,9 +51,17 @@ acquire[*]
   -> canonicalize / normalize[*]
   -> compatibility gate
   -> integrate
+  -> [fixed derive slot]
   -> validate profile
   -> publish
 ```
+
+`derive` 是服务端固定骨架中的单一可选 slot，不是 Agent 可提交的节点或通用 DAG。
+它只接受 registered SourceAsset 或 committed Core result，使用服务端 registry 中的
+算法，并将参数、reference version、input digest 和 output digest 写入 derived
+provenance。PDB distance 与 sequence alignment 共用该 contract；两者的参数和输出
+schema 由各自算法/family 定义。runtime/checkpoint/publisher 接线由 TASK-048-B6W
+负责。
 
 方括号步骤按来源独立执行并可内部并发。fan-out / fan-in 是 Runtime 实现细节，
 不是通用 DAG。只有当用户自定义任意分析链、多级条件分支、节点复用和分布式执行

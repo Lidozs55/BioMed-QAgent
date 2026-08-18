@@ -102,8 +102,10 @@
 - [ ] **TASK-048-B5S / blocked**：`protein_structure` vertical slice。
 - [ ] **TASK-048-B5A / blocked**：`bioactivity_measurement` vertical slice。
 - [ ] **TASK-048-B6A / blocked**：Chart/VLM evidence Publication。
-- [ ] **TASK-048-B6D / blocked**：Deterministic derive ADR。
-- [ ] **TASK-048-B6W / A owner, blocked by TASK-048-B6D + TASK-047-A5I**：fixed derive slot runtime wiring。
+- [x] **TASK-048-B6D / completed**：Deterministic derive contract、固定 slot、算法 registry 与 ADR-036；
+      PDB distance/sequence alignment 共用 contract，参数/reference/input/output digest provenance
+      完整，Agent code/通用 DAG fail-closed。
+- [ ] **TASK-048-B6W / A owner, blocked by TASK-047-A5I**：fixed derive slot runtime wiring。
 - [ ] **TASK-048-B6B / blocked by TASK-048-B6W + family dependencies**：Deterministic derived evidence 与 family consumers。
 - [ ] **TASK-048-B7 / blocked by all family/VLM/derive + TASK-C2I**：Gold3-Gold6 原样重跑。
 - [ ] **TASK-G1B / blocked by TASK-048-B7 + TASK-047-A8 + TASK-G1A**：最终 Gold3-Gold6 同基线复跑。
