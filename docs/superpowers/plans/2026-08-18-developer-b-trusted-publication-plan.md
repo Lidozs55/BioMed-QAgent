@@ -517,4 +517,5 @@ Build 作为比赛最终门禁，再通过新 ADR/TODO 变更加入 G1 hard requ
 | 15 | `TASK-G1R` | blocked | `TASK-G1A`+`TASK-G1B` |
 | P1 | `TASK-C3C` | backlog | `TASK-C1C`+`TASK-047-A5C`；不阻塞本轮 closure |
 
-当前 B 组 contract spine 已完成 C2C，`TASK-048-B3` 已完成；下一项可领取 `TASK-048-B2M`（A5C 已合并），并可在 B4M contract 形态冻结后推进 `TASK-048-B5C`。
+当前 B 组 contract spine、`TASK-048-B2M` 与 `TASK-048-B3` 已完成；下一项推进
+`TASK-048-B4M` module，并在其 contract 形态冻结后推进 `TASK-048-B5C`。
