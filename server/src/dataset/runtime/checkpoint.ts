@@ -18,7 +18,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join, resolve, sep } from "node:path";
-import { sha256File } from "../adapters/hashing.js";
+import { sha256FileStream } from "../adapters/hashing.js";
+import { OperationAbortedError, throwIfAborted } from "../cooperative.js";
 import { sha256Json } from "./digests.js";
 import {
   parseOperationAttempt,
@@ -176,7 +177,7 @@ function isInsideRoot(resolvedPath: string, root: string): boolean {
  * task/build/attempt, fails digest or file hash verification, or references
  * files that no longer match (Python ``load_operation_output``).
  */
-export function loadOperationOutput(
+export async function loadOperationOutput(
   stateDir: string,
   options: {
     taskRoot: string;
@@ -186,10 +187,12 @@ export function loadOperationOutput(
     operationAttemptId: string;
     outputDigest: string;
   },
-): Record<string, unknown> | null {
+  cancellationSignal?: AbortSignal | null,
+): Promise<Record<string, unknown> | null> {
   const outputFile = join(stateDir, `${operationFilename(options.operationId)}_output.json`);
   if (!existsSync(outputFile)) return null;
   try {
+    throwIfAborted(cancellationSignal);
     const envelope = JSON.parse(readFileSync(outputFile, "utf8")) as OperationOutputEnvelope;
     if (
       envelope.task_id !== options.taskId ||
@@ -213,10 +216,11 @@ export function loadOperationOutput(
       const fileStat = statSync(resolved);
       if (!fileStat.isFile()) return null;
       if (fileStat.size !== file.size_bytes) return null;
-      if (sha256File(resolved) !== file.sha256) return null;
+      if ((await sha256FileStream(resolved, cancellationSignal)) !== file.sha256) return null;
     }
     return envelope.output;
-  } catch {
+  } catch (error) {
+    if (error instanceof OperationAbortedError) throw error;
     return null;
   }
 }

@@ -320,14 +320,14 @@ export class DatasetBuildExecutor {
         computeParameterDigest(op, scope),
       );
       if (reusable !== null && reusable.output_digest === outputDigest) {
-        const loaded = loadOperationOutput(this.stateDir, {
+        const loaded = await loadOperationOutput(this.stateDir, {
           taskRoot: this.taskRoot,
           taskId: this.taskId,
           buildId: this.buildId,
           operationId: op.operation_id,
           operationAttemptId: reusable.operation_attempt_id,
           outputDigest: reusable.output_digest,
-        });
+        }, this.cancellationSignal);
         if (loaded !== null) this.outputs[op.operation_id] = loaded;
         if (REHYDRATE_RUNNER_KINDS.has(op.kind)) {
           // The runner rebuilds its in-memory state from the same fixed
@@ -498,7 +498,7 @@ export class DatasetBuildExecutor {
     const inputDigest = computeInputDigest(op, scope);
     const parameterDigest = computeParameterDigest(op, scope);
 
-    if (!force && this.tryReuseOperation(op, inputDigest, parameterDigest)) {
+    if (!force && (await this.tryReuseOperation(op, inputDigest, parameterDigest))) {
       await this.emit({
         type: "operation_completed",
         operationId: op.operation_id,
@@ -610,25 +610,25 @@ export class DatasetBuildExecutor {
   }
 
   /** Reuse a digest-matched SUCCEEDED attempt when its checkpoint verifies. */
-  private tryReuseOperation(
+  private async tryReuseOperation(
     op: OperationSpec,
     inputDigest: string,
     parameterDigest: string,
-  ): boolean {
+  ): Promise<boolean> {
     const state = this.state;
     if (state === null) throw new Error("build state not loaded");
     const reusable = findReusable(state, op.operation_id, inputDigest, parameterDigest);
     if (reusable === null || reusable.output_digest === null) return false;
     const completed = state.completed_operations[op.operation_id];
     if (completed !== reusable.output_digest) return false;
-    const loaded = loadOperationOutput(this.stateDir, {
+    const loaded = await loadOperationOutput(this.stateDir, {
       taskRoot: this.taskRoot,
       taskId: this.taskId,
       buildId: this.buildId,
       operationId: op.operation_id,
       operationAttemptId: reusable.operation_attempt_id,
       outputDigest: reusable.output_digest,
-    });
+    }, this.cancellationSignal);
     if (loaded === null) return false;
 
     this.lastReusedAttemptId = reusable.operation_attempt_id;
