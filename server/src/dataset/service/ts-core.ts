@@ -33,6 +33,7 @@ import { BuildError } from "../adapters/errors.js";
 import { throwIfAborted } from "../cooperative.js";
 import { adapterParamsForBinding, getAdapter } from "../adapters/adapters.js";
 import { buildProbeMapping } from "../adapters/geo/probe-mapping.js";
+import type { ProbeIndex } from "../adapters/geo/probe-index.js";
 import type { CanonicalizationResult } from "../canonicalizer/index.js";
 import { canonicalize, expressionNormalizationV1 } from "../canonicalizer/index.js";
 import { checkExpressionCompatibility } from "../compat/compat_gate.js";
@@ -304,7 +305,7 @@ export function createTsCoreOperationRunner(options: {
         });
         const batch = reviewed.batch;
         runnerState.batches.set(batch.binding_id, batch);
-        let probeMap: Readonly<Record<string, string>> | undefined;
+        let probeIndex: ProbeIndex | undefined;
         let probeTargetNamespace: string | undefined;
         let probeMappingAuditPath: string | undefined;
         const annotationAsset = mappingAssets[op.category];
@@ -329,23 +330,29 @@ export function createTsCoreOperationRunner(options: {
             annotationAsset,
             outputDir,
             signal,
+            materializeProbeMap: false,
           });
-          probeMap = probe.probe_to_gene;
+          probeIndex = probe.probe_index;
           probeTargetNamespace = probe.target_namespace;
           probeMappingAuditPath = probe.detail_path;
         }
-        let result = await canonicalize(
-          {
-            batch,
-            schema,
-            profile: normalizationProfile,
-            outputDir,
-            probeMap,
-            probeTargetNamespace,
-            unitCorrection: reviewed.unitCorrection,
-          },
-          signal,
-        );
+        let result: CanonicalizationResult;
+        try {
+          result = await canonicalize(
+            {
+              batch,
+              schema,
+              profile: normalizationProfile,
+              outputDir,
+              probeIndex,
+              probeTargetNamespace,
+              unitCorrection: reviewed.unitCorrection,
+            },
+            signal,
+          );
+        } finally {
+          probeIndex?.destroy();
+        }
         if (probeMappingAuditPath !== undefined) {
           result = {
             ...result,
