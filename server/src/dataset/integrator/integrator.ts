@@ -12,6 +12,7 @@
 
 import { mkdirSync, statSync, unlinkSync } from "node:fs";
 import { join, relative } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import type { JsonValue } from "@biomed/contracts";
 import type { CanonicalizationResult } from "../canonicalizer/index.js";
 import { CHECKPOINT_STRIDE, checkpoint, throwIfAborted } from "../cooperative.js";
@@ -52,6 +53,17 @@ export const CONFLICT_COLUMNS = [
 /** Unsupported merge strategy or zero sources (Python ``IntegratorError``). */
 export class IntegratorError extends BuildError {}
 
+/** Temp-store disk quota exceeded (WP-A6): fail closed, never OOM. */
+export class IntegratorResourceLimitError extends IntegratorError {
+  constructor(message: string) {
+    super(message);
+    this.name = "IntegratorResourceLimitError";
+  }
+}
+
+/** Inside the temp key-table row count (observable: ``IntegrationResult``). */
+const TEMP_STORE_DEFAULT_QUOTA_BYTES = 256 * 1024 * 1024;
+
 /** Merged primary dataset batch plus merge audit counts. */
 export interface IntegrationResult {
   batch: DataBatch;
@@ -60,6 +72,10 @@ export interface IntegrationResult {
   dedupCount: number;
   conflictCount: number;
   conflictsPath: string | null;
+  /** Peak temp-store disk usage last observed during integration (bytes). */
+  tempStoreBytes: number;
+  /** Distinct identities pinned inside the temp key table. */
+  tempStoreRows: number;
 }
 
 /** Append canonical sources into one primary dataset, dedup by row identity. */
@@ -70,8 +86,10 @@ export async function integrate(options: {
   buildId: string;
   outputDir: string;
   signal?: AbortSignal | null;
+  /** WP-A6: bound the temp key-table's on-disk size (bytes). */
+  tempStore?: { quotaBytes: number };
 }): Promise<IntegrationResult> {
-  const { results, mergeStrategy, schema, buildId, outputDir, signal } = options;
+  const { results, mergeStrategy, schema, buildId, outputDir, signal, tempStore } = options;
   throwIfAborted(signal);
   const strategy = MERGE_STRATEGY_ALIASES[mergeStrategy] ?? mergeStrategy;
   if (strategy !== MERGE_STRATEGY_APPEND) {
@@ -94,38 +112,80 @@ export async function integrate(options: {
   const idField = schema.fields.some((field) => field.name === "probe_id")
     ? "probe_id"
     : "gene_id";
-  const seen = new Map<string, [value: string, assetId: string]>();
+  // WP-A6: column-name whitelist before the identity tuple is interpolated
+  // into SQL, so an out-of-contract schema cannot inject a column reference.
+  if (idField !== "gene_id" && idField !== "probe_id") {
+    throw new IntegratorError(`unsupported identity field ${idField}`);
+  }
   let rowCount = 0;
   let dedupCount = 0;
   let conflictCount = 0;
+  let tempStoreBytes = 0;
+  let tempStoreRows: number;
+  const quotaBytes = tempStore?.quotaBytes ?? TEMP_STORE_DEFAULT_QUOTA_BYTES;
 
 // Streamed outputs: row buffers are flushed in bounded chunks so the
   // merged/conflicts files never accumulate in memory (M2 large-file fix;
   // same shared BufferedCsvWriter the source adapters use).
   const mergedWriter = new BufferedCsvWriter(mergedPath, columns);
   const conflictWriter = new BufferedCsvWriter(conflictsPath, CONFLICT_COLUMNS);
+  // WP-A6: O(unique) `seen` Map is replaced by a disk-backed temp table
+  // (same canonical identity, first-source-wins), so peak JS heap stays flat
+  // while rows scale. Task-path temp db is discarded in `finally`.
+  const tempDbPath = join(outputDir, "integrate-temp.sqlite");
+  const db = new DatabaseSync(tempDbPath);
   try {
+    db.exec("PRAGMA journal_mode=OFF;");
+    db.exec("PRAGMA synchronous=OFF;");
+    db.exec(`
+      CREATE TABLE seen (
+        ${idField} TEXT NOT NULL,
+        sample_id TEXT NOT NULL,
+        measurement_type TEXT NOT NULL,
+        value_semantics TEXT NOT NULL,
+        value TEXT NOT NULL,
+        asset_id TEXT NOT NULL,
+        PRIMARY KEY (${idField}, sample_id, measurement_type, value_semantics)
+      )
+    `);
+    const insertSeen = db.prepare(
+      `INSERT INTO seen (${idField}, sample_id, measurement_type, value_semantics, value, asset_id) VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    const selectSeen = db.prepare(
+      `SELECT value, asset_id FROM seen WHERE ${idField}=? AND sample_id=? AND measurement_type=? AND value_semantics=?`,
+    );
+    // WP-A6: insert in bounded transactions (one per checkpoint stride). The
+    // dedup SELECT always sees prior rows (cached pages), COMMIT flushes to
+    // disk so the on-disk quota stat reflects real growth, and per-row
+    // autocommit's fsync cost is amortised away.
+    const inTransaction = results.length > 1;
+    if (inTransaction) db.exec("BEGIN");
     let visited = 0;
     for (const result of results) {
       for await (const row of readCsvDictRows(result.canonicalPath, signal)) {
         visited += 1;
         // M2: checkpoint per processed row (not only new-unique rows) so an
         // extreme dedup/conflict workload still yields to the event loop.
-        if (visited % CHECKPOINT_STRIDE === 0) await checkpoint(signal);
+        if (visited % CHECKPOINT_STRIDE === 0) {
+          if (inTransaction) db.exec("COMMIT");
+          await checkpoint(signal);
+          tempStoreBytes = await enforceTempQuota(tempDbPath, quotaBytes);
+          if (inTransaction) db.exec("BEGIN");
+        }
         const keyParts = rowIdentity(row, idField);
-        const key = keyParts.join("\u0000");
         const value = row["expression_value"] ?? "";
-        const previous = seen.get(key);
-        if (previous === undefined) {
+        const existing = selectSeen.get(...keyParts) as
+          | { value: string; asset_id: string }
+          | undefined;
+        if (existing === undefined) {
           if (results.length > 1) {
-            seen.set(key, [value, row["asset_id"] ?? ""]);
+            insertSeen.run(...keyParts, value, row["asset_id"] ?? "");
           }
           mergedWriter.writeRow(columns.map((column) => row[column] ?? ""));
           rowCount += 1;
           continue;
         }
-        const [previousValue, previousAsset] = previous;
-        if (numericallyEqual(previousValue, value)) {
+        if (numericallyEqual(existing.value, value)) {
           dedupCount += 1;
           continue;
         }
@@ -135,8 +195,8 @@ export async function integrate(options: {
           keyParts[1],
           keyParts[2],
           keyParts[3],
-          previousAsset,
-          previousValue,
+          existing.asset_id,
+          existing.value,
           row["asset_id"] ?? "",
           value,
           "kept_first_source",
@@ -144,12 +204,21 @@ export async function integrate(options: {
         conflictCount += 1;
       }
     }
+    if (inTransaction) db.exec("COMMIT");
+    try {
+      tempStoreBytes = statSync(tempDbPath).size;
+    } catch { /* not observable after abort */ }
+    const countRow = db.prepare("SELECT COUNT(*) AS count FROM seen").get();
+    tempStoreRows = countRow ? Number(countRow.count) : 0;
   } catch (error) {
     mergedWriter.close();
     conflictWriter.close();
     try { unlinkSync(mergedPath); } catch { /* best effort */ }
     try { unlinkSync(conflictsPath); } catch { /* best effort */ }
     throw error;
+  } finally {
+    db.close();
+    try { unlinkSync(tempDbPath); } catch { /* best effort */ }
   }
   mergedWriter.close();
   conflictWriter.close();
@@ -196,7 +265,33 @@ export async function integrate(options: {
     dedupCount,
     conflictCount,
     conflictsPath,
+    tempStoreBytes,
+    tempStoreRows,
   };
+}
+
+/**
+ * WP-A6: enforce the temp-store disk quota, failing closed with a typed
+ * resource-limit error instead of letting the task's working set grow without
+ * bound. Returns the observed temp-db size (bytes).
+ */
+async function enforceTempQuota(
+  tempDbPath: string,
+  quotaBytes: number,
+): Promise<number> {
+  if (quotaBytes <= 0) return 0;
+  let size: number;
+  try {
+    size = statSync(tempDbPath).size;
+  } catch {
+    return 0;
+  }
+  if (size > quotaBytes) {
+    throw new IntegratorResourceLimitError(
+      `resource_limit: integrate temp store exceeded ${quotaBytes} bytes (${size})`,
+    );
+  }
+  return size;
 }
 
 function rowIdentity(
