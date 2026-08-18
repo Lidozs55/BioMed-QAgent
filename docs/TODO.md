@@ -72,7 +72,10 @@
 > contracts/B2M/B6D 启动 C1I/A5I/C2I/B2W/B6W。
 > A5I 增量 1 已提交至 `feat/dataset-operation-results`（9dcceeca）：`loadOperationOutput`
 > 流式校验（async + `sha256FileStream` + `cancellationSignal`，取消传播而非吞掉）；
-> A5I 整体仍 open（待去 REHYDRATE replay 等增量）。
+> A5I 增量 2 已提交至 `feat/dataset-operation-results`（14aceeed）：executor 成功路径写入
+> 类型化 ADR-030 `OperationResultManifest`（native 模式 + committed 收据、dependency
+> closure 含确定性 upstream manifest ids/input asset ids），round-trip 经 strict parser
+> 校验，digest 复用不重写 manifest；A5I 整体仍 open（待去 REHYDRATE replay 等增量）。
 
 - [x] **TASK-G0 / completed**：Gold v1 eval manifest、六个原始 prompt、reference schema/source
       inventory、默认运行参数、checksum verifier 与 manifest run driver 已冻结于
