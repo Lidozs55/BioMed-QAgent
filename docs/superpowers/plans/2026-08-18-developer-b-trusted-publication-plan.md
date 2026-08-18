@@ -255,7 +255,7 @@ A 组任务的实现细节由 A 组计划维护；本表只冻结 B 组依赖的
 
 ### TASK-048-B3：Generic multi-table validation 与 relation gate
 
-- **状态**：blocked
+- **状态**：completed（ADR-032，`feat/multitable-validation`）
 - **分支**：`feat/multitable-validation`
 - **hard_requires**：`TASK-048-B1`
 - **修改范围**：新 generic validation 模块、fixtures；不改 A 组 expression 大文件扫描
@@ -504,7 +504,7 @@ Build 作为比赛最终门禁，再通过新 ADR/TODO 变更加入 G1 hard requ
 | 2 | `TASK-048-B1` | completed | `TASK-G0` completed |
 | 3 | `TASK-C1C` | completed | `TASK-048-B1` + `TASK-047-A1` completed |
 | 4 | `TASK-047-A5C` | completed | `TASK-048-B1` + `TASK-047-A2` completed |
-| 5 | `TASK-048-B3` | ready | `TASK-048-B1` completed |
+| 5 | `TASK-048-B3` | completed | `TASK-048-B1` completed |
 | 6 | `TASK-C2C` | completed | `TASK-C1C` completed |
 | 7 | `TASK-048-B2M` | blocked | `TASK-048-B1` + `TASK-047-A5C` |
 | 8 | `TASK-048-B2W`（A owner） | blocked | `TASK-048-B2M` + `TASK-047-A5I` |
@@ -517,4 +517,4 @@ Build 作为比赛最终门禁，再通过新 ADR/TODO 变更加入 G1 hard requ
 | 15 | `TASK-G1R` | blocked | `TASK-G1A`+`TASK-G1B` |
 | P1 | `TASK-C3C` | backlog | `TASK-C1C`+`TASK-047-A5C`；不阻塞本轮 closure |
 
-当前 B 组 contract spine 已完成 C2C；可并行领取 `TASK-048-B3` 与 `TASK-048-B2M`（B2M 还需 A5C 已合并）。`TASK-048-B3` 可在不修改 contracts spine 的独立 worktree 开始。
+当前 B 组 contract spine 已完成 C2C，`TASK-048-B3` 已完成；下一项可领取 `TASK-048-B2M`（A5C 已合并），并可在 B4M contract 形态冻结后推进 `TASK-048-B5C`。

@@ -1,0 +1,4 @@
+activity_id,compound_id,value,raw_relation,preserved_relation,raw_unit,preserved_unit,optional_note
+ACT1,CHEMBL1,12.5,<,<,nM,nM,
+ACT2,CHEMBL1,30,>,>,uM,uM,screen
+ACT3,CHEMBL2,7,=,=,nM,nM,

@@ -88,7 +88,7 @@
       当前不阻塞 TASK-048/G1。
 - [ ] **TASK-048-B2M / blocked by TASK-048-B1 + TASK-047-A5C**：PublicationCandidate 与 family assembler module。
 - [ ] **TASK-048-B2W / A owner, blocked by TASK-048-B2M + TASK-047-A5I**：assemble runtime/checkpoint/publisher wiring。
-- [ ] **TASK-048-B3 / ready**：Generic multi-table validation/relation gate；B1 已完成。
+- [x] **TASK-048-B3 / completed**：Generic multi-table validation/relation gate；严格结构/关系、token/evidence closure 与 Agent workspace bypass fail-closed 已完成（ADR-032）。
 - [ ] **TASK-048-B4M / blocked by TASK-048-B1 + TASK-047-A2 + TASK-C1C**：Registered-table adapter module；
       trusted E2E 还需 `TASK-048-B3` + `TASK-C1I`。
 - [ ] **TASK-048-B5C / blocked by TASK-048-B1 + TASK-048-B3**：共享 biomedical tables/relation vocabulary。

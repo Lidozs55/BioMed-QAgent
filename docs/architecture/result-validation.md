@@ -79,7 +79,9 @@ Parser 崩溃、文件损坏和内部异常对应 `RunStatus=FAILED`；用户取
 验证由数据集 Profile 驱动：不同数据族使用不同的版本化 Profile，不共享单一通用
 Validator。
 
-Profile 可以组合以下类型的具体规则：
+Profile 可以组合以下类型的具体规则。Manifest 2.0 的 family 可先复用
+ADR-032 的通用多表结构/关系 gate，再叠加 family profile；通用 gate 不解释
+measurement vocabulary、单位转换等科学语义。
 
 - 文件、Manifest、Schema 和类型；
 - 主键、外键和唯一性；
