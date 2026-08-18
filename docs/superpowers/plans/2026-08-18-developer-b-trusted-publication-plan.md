@@ -354,12 +354,13 @@ A 组任务的实现细节由 A 组计划维护；本表只冻结 B 组依赖的
 
 ### TASK-048-B6D：Deterministic derive ADR
 
-- **状态**：blocked
+- **状态**：completed（ADR-034）
 - **分支**：`docs/deterministic-derive-adr`
 - **hard_requires**：`TASK-048-B1`、`TASK-048-B2M`、`TASK-047-A5C`
-- **交付**：固定 derive slot、允许算法 registry、参数/reference version/input asset/output
-  digest provenance；明确不允许 Agent code、不引入通用 DAG。
-- **验收**：PDB distance/sequence alignment 等用同一 deterministic contract 表达。
+- **交付**：固定 derive slot、允许算法 registry、参数/reference version/input asset or
+  committed result/output digest provenance；明确不允许 Agent code、不引入通用 DAG。
+- **验收**：PDB distance/sequence alignment 用同一 deterministic contract 表达；未知算法、
+  代码/DAG 字段与 identity drift fail-closed。
 
 ### TASK-048-B6W：Fixed derive slot runtime wiring
 
@@ -511,7 +512,7 @@ Build 作为比赛最终门禁，再通过新 ADR/TODO 变更加入 G1 hard requ
 | 9 | `TASK-048-B4M` | blocked | start: B1+A2+C1C；complete: B3+C1I |
 | 10 | `TASK-048-B5C` | blocked | B1+B3；B4M contract 形态冻结 |
 | 11 | `TASK-048-B5L/T/V/S/A` | blocked | start: B2M+B3+B4M+B5C；complete: B2W+B4M+C2I |
-| 12 | `TASK-048-B6A/B6D/B6W/B6B` | blocked | 对应完整任务条目中的 family/C2I/derive 依赖 |
+| 12 | `TASK-048-B6A/B6W/B6B` | blocked；B6D completed | 对应完整任务条目中的 family/C2I/derive 依赖 |
 | 13 | `TASK-048-B7` | blocked | B5C/L/T/V/S/A+B6A+B6B+C2I |
 | 14 | `TASK-G1B` | blocked | `TASK-048-B7`+`TASK-047-A8`+`TASK-G1A` |
 | 15 | `TASK-G1R` | blocked | `TASK-G1A`+`TASK-G1B` |
