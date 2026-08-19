@@ -26,6 +26,27 @@ export interface DelimitedRow {
   lineText?: string;
 }
 
+/**
+ * Optional per-scan bounds enforced while streaming rows.  Default (all null)
+ * preserves the previous unbounded behavior for source adapters; validation
+ * scans enable these caps so a single pathological row cannot balloon memory
+ * inside a multi-gigabyte primary.  A row exceeding a cap surfaces a
+ * {@link DelimitedBoundsError} instead of being parsed whole.
+ */
+export interface DelimitedRowBounds {
+  maxRowChars?: number | null;
+  maxFieldChars?: number | null;
+  maxRowFields?: number | null;
+}
+
+/** Raised when a row/field exceeds the caller's streaming row bounds. */
+export class DelimitedBoundsError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DelimitedBoundsError";
+  }
+}
+
 async function hasGzipMagic(path: string): Promise<boolean> {
   const handle = await openFile(path, "r");
   try {
@@ -46,10 +67,13 @@ export async function* delimitedRowsFromFileAsync(
   path: string,
   delimiter: string,
   signal?: AbortSignal | null,
-  options?: { includeLineText?: boolean },
+  options?: ({ includeLineText?: boolean } & DelimitedRowBounds) | null,
 ): AsyncGenerator<DelimitedRow> {
   throwIfAborted(signal);
   const includeLineText = options?.includeLineText === true;
+  const maxRowChars = options?.maxRowChars ?? null;
+  const maxFieldChars = options?.maxFieldChars ?? null;
+  const maxRowFields = options?.maxRowFields ?? null;
   const source = createReadStream(path);
   const gzip = await hasGzipMagic(path);
   const input = gzip ? source.pipe(createGunzip()) : source;
@@ -82,7 +106,10 @@ export async function* delimitedRowsFromFileAsync(
         const text = pending.slice(0, breakIndex);
         pending = pending.slice(breakIndex + breakLength);
         line += 1;
-        const row: DelimitedRow = { line, values: parseDelimitedLine(text, delimiter) };
+        const row: DelimitedRow = {
+          line,
+          values: parseDelimitedLineBounded(text, delimiter, maxFieldChars, maxRowFields, line, maxRowChars),
+        };
         if (includeLineText) row.lineText = text;
         yield row;
         if (line % 8192 === 0) {
@@ -94,7 +121,10 @@ export async function* delimitedRowsFromFileAsync(
     pending += decoder.end();
     if (pending.length > 0) {
       line += 1;
-      const row: DelimitedRow = { line, values: parseDelimitedLine(pending, delimiter) };
+      const row: DelimitedRow = {
+        line,
+        values: parseDelimitedLineBounded(pending, delimiter, maxFieldChars, maxRowFields, line, maxRowChars),
+      };
       if (includeLineText) row.lineText = pending;
       yield row;
     }
@@ -162,6 +192,68 @@ export function parseDelimitedLine(line: string, delimiter: string): string[] {
     }
   }
   fields.push(field);
+  return fields;
+}
+
+/**
+ * Quote-aware field split like {@link parseDelimitedLine}, but aborts with a
+ * {@link DelimitedBoundsError} as soon as the row/field exceeds a length cap
+ * so a pathological row is not held in memory.  Passing all-null caps falls
+ * back to the exact unbounded behavior of parseDelimitedLine.
+ */
+function parseDelimitedLineBounded(
+  line: string,
+  delimiter: string,
+  maxFieldChars: number | null,
+  maxRowFields: number | null,
+  lineNumber: number,
+  maxRowChars: number | null,
+): string[] {
+  if (maxRowChars !== null && line.length > maxRowChars) {
+    throw new DelimitedBoundsError(`row ${lineNumber} exceeds ${maxRowChars} chars`);
+  }
+  if (line.length === 0) return [];
+  if (maxFieldChars === null && maxRowFields === null) {
+    return parseDelimitedLine(line, delimiter);
+  }
+  const fields: string[] = [];
+  let field = "";
+  let inQuotes = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const ch = line[index];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (line[index + 1] === '"') {
+          field += '"';
+          index += 1;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        field += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === delimiter) {
+      fields.push(field);
+      field = "";
+      if (maxRowFields !== null && fields.length > maxRowFields) {
+        throw new DelimitedBoundsError(`row ${lineNumber} exceeds ${maxRowFields} fields`);
+      }
+    } else {
+      field += ch;
+    }
+    if (maxFieldChars !== null && field.length > maxFieldChars) {
+      throw new DelimitedBoundsError(`row ${lineNumber} has a field longer than ${maxFieldChars} chars`);
+    }
+  }
+  fields.push(field);
+  if (maxRowFields !== null && fields.length > maxRowFields) {
+    throw new DelimitedBoundsError(`row ${lineNumber} exceeds ${maxRowFields} fields`);
+  }
+  if (maxFieldChars !== null && field.length > maxFieldChars) {
+    throw new DelimitedBoundsError(`row ${lineNumber} has a field longer than ${maxFieldChars} chars`);
+  }
   return fields;
 }
 

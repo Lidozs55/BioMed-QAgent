@@ -401,13 +401,15 @@ export async function assembleManifest(options: {
   sourceSummary: Record<string, JsonValue>;
   outputDir: string;
   signal?: AbortSignal | null;
+  reusePrimaryEntry?: ManifestArtifactEntry | null;
 }): Promise<DatasetManifest> {
   const signal = options.signal ?? null;
   throwIfAborted(signal);
   const schemaPath = joinOutput(options.outputDir, SCHEMA_FILE);
   await writeFile(schemaPath, `${pythonJsonDumps(options.schema)}\n`, "utf8");
   const entries: ManifestArtifactEntry[] = [
-    await entry("primary_dataset", options.integration.mergedPath, options.outputDir, "text/csv", signal),
+    options.reusePrimaryEntry ??
+      (await entry("primary_dataset", options.integration.mergedPath, options.outputDir, "text/csv", signal)),
     await entry("schema", schemaPath, options.outputDir, "application/json", signal),
     await entry("provenance", options.provenancePath, options.outputDir, "application/json", signal),
   ];

@@ -92,6 +92,26 @@ function attachment(response: ServerResponse, value: {
   response.end(value.bytes);
 }
 
+/** Stream a verified artifact from the immutable publication root (A7). */
+function attachmentStream(response: ServerResponse, value: {
+  stream: import("node:stream").Readable;
+  sizeBytes: number;
+  mediaType: string;
+  name: string;
+}): void {
+  response.writeHead(200, {
+    "content-type": value.mediaType,
+    "content-length": String(value.sizeBytes),
+    "content-disposition": `attachment; filename="${value.name.replaceAll('"', "")}"`,
+  });
+  value.stream.on("error", (error) => {
+    if (!response.headersSent && !response.destroyed) {
+      response.destroy(error instanceof Error ? error : new Error(String(error)));
+    }
+  });
+  value.stream.pipe(response);
+}
+
 export async function createProductApi(options: ProductApiOptions): Promise<{
   handle: (request: IncomingMessage, response: ServerResponse) => boolean;
 }> {
@@ -233,7 +253,7 @@ export async function createProductApi(options: ProductApiOptions): Promise<{
         parameter(url, "task_id"),
       );
       if (value === null) sendError(response, 404, "Artifact not found");
-      else attachment(response, value);
+      else attachmentStream(response, value);
       return;
     }
     if (method === "GET" && pathname === "/api/v1/cache/datasets") {

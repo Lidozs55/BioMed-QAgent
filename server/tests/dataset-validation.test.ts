@@ -6,6 +6,7 @@ import { VALIDATION_PROFILE_REFS } from "../src/dataset/validation/profile.js";
 import { SpecValidator } from "../src/dataset/validation/spec_validator.js";
 import {
   checkConfidenceParity,
+  checkRowBounds,
   checkSpecValidatorParity,
   checkValidationProfileParity,
   scratchOutputRoot,
@@ -21,6 +22,10 @@ describe("Phase 4 step 8 validation parity", () => {
       outputRoot: scratchOutputRoot("validation-profile-vitest-"),
     });
     expect(issues).toEqual([]);
+  });
+
+  test("row/field/column length bounds surface as a failing check, not a crash", async () => {
+    expect(await checkRowBounds()).toEqual([]);
   });
 
   test("spec validator mirrors test_spec_validator.py", async () => {

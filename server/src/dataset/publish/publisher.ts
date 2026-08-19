@@ -10,7 +10,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { createReadStream, createWriteStream, existsSync, mkdirSync, rmSync } from "node:fs";
 import { copyFile, rename, rm, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import type { DatasetManifest, DatasetPublication, ValidationResult } from "../contracts/index.js";
@@ -45,6 +45,10 @@ export interface PublishOptions {
   /** I-04 publish fence: re-verified immediately before the immutable rename;
    *  the build must still own its build lock, or it is a displaced lease. */
   fence?: (() => boolean | Promise<boolean>) | null;
+  /** A7 disk budget: the projected immutable version size (sum of the
+   *  manifest artifact receipts + the manifest file). When set, promotion is
+   *  refused before staging if the projected size exceeds this bound. */
+  maxVersionBytes?: Readonly<number> | null;
 }
 
 export interface PublishResult {
@@ -111,6 +115,20 @@ export async function promotePublication(options: PublishOptions): Promise<Publi
   // version, so gate object, receipt, and publication content are one.
   const manifestBytes = Buffer.from(`${pythonJsonDumps(manifest)}\n`, "utf8");
   const manifestSha256 = createHash("sha256").update(manifestBytes).digest("hex");
+  // A7 disk budget: refuse BEFORE staging if the projected immutable version
+  // exceeds the bound (projected from the manifest receipts — never by reading
+  // the multi-GB artifacts). Throwing here leaves no stage dir, so there is no
+  // phantom publication to clean up or accidentally promote.
+  if (options.maxVersionBytes !== null && options.maxVersionBytes !== undefined) {
+    const projected =
+      manifest.artifacts.reduce((sum, artifact) => sum + artifact.size_bytes, 0) +
+      manifestBytes.length;
+    if (projected > options.maxVersionBytes) {
+      throw new BuildError(
+        `publication package exceeds disk budget: ${projected} bytes > ${options.maxVersionBytes} bytes`,
+      );
+    }
+  }
   const publication: DatasetPublication = {
     // P7 receipt schema: 1.1 carries the manifest file-byte hash (round-3
     // audit: the schema bump is explicit, so legacy 1.0 records keep their
@@ -139,7 +157,11 @@ export async function promotePublication(options: PublishOptions): Promise<Publi
       const src = join(options.outputDir, artifact.relative_path);
       const dest = join(stagedDir, artifact.relative_path);
       mkdirSync(dirnameOf(dest), { recursive: true });
-      await copyFile(src, dest);
+      // A7: stream the copy and compute size/SHA-256 WHILE writing, then
+      // re-verify the staged file against the manifest receipt. A copy/target
+      // drift (or a stale manifest hash) aborts here — before any promote — so
+      // a corrupted staging can never become an official version.
+      await copyArtifactVerifying(src, dest, artifact, signal);
       throwIfAborted(signal);
     }
     // Round-4 audit: write the manifest from the GATED bytes, not by
@@ -208,6 +230,48 @@ export async function promotePublication(options: PublishOptions): Promise<Publi
 function dirnameOf(path: string): string {
   const index = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
   return index < 0 ? "." : path.slice(0, index);
+}
+
+/** Stream a source artifact into the stage dir while computing its size +
+ * SHA-256, then re-verify the staged bytes against the manifest receipt.
+ * Exported for the A7.2 test to exercise copy/source-drift rejection
+ * deterministically (a mid-copy race in a live publish is non-deterministic). */
+export async function copyArtifactVerifying(
+  src: string,
+  dest: string,
+  artifact: { size_bytes: number; sha256: string },
+  signal: AbortSignal | null,
+): Promise<void> {
+  const hasher = createHash("sha256");
+  let bytes = 0;
+  await new Promise<void>((resolve, reject) => {
+    const input = createReadStream(src);
+    const output = createWriteStream(dest);
+    const fail = (error: unknown): void => {
+      input.destroy();
+      output.destroy();
+      reject(error);
+    };
+    input.on("error", fail);
+    output.on("error", fail);
+    input.on("data", (chunk: Buffer) => {
+      hasher.update(chunk);
+      bytes += chunk.length;
+    });
+    output.on("finish", () => {
+      try {
+        throwIfAborted(signal);
+        if (bytes !== artifact.size_bytes || hasher.digest("hex") !== artifact.sha256) {
+          reject(new AtomicPromotionError("staged artifact receipt mismatch"));
+        } else {
+          resolve();
+        }
+      } catch (error) {
+        reject(error);
+      }
+    });
+    input.pipe(output);
+  });
 }
 
 /** Python ``datetime.now(UTC).isoformat()``-style timestamp (microseconds). */

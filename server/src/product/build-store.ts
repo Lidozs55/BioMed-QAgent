@@ -1,7 +1,8 @@
+import { createReadStream, type ReadStream } from "node:fs";
 import { readFile, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
-import { sha256Bytes } from "../dataset/adapters/hashing.js";
+import { sha256FileStreamWithSize } from "../dataset/adapters/hashing.js";
 import { SAFE_ID } from "../runtime/safe-id.js";
 
 const SHA256 = /^[0-9a-f]{64}$/;
@@ -33,12 +34,15 @@ interface BuildRecord {
   manifestPath: string;
   manifest: BuildManifest;
   modifiedAt: number;
+  publicationDir: string | null;
   publication: Record<string, unknown> | null;
   buildResult: Record<string, unknown> | null;
 }
 
-export interface DownloadedArtifact {
-  bytes: Buffer;
+export interface StreamedArtifact {
+  /** Streaming body; the caller must pipe it to the HTTP response. */
+  stream: ReadStream;
+  sizeBytes: number;
   mediaType: string;
   name: string;
 }
@@ -113,25 +117,33 @@ async function readJson(file: string): Promise<unknown> {
   }
 }
 
-async function latestPublication(buildDir: string): Promise<Record<string, unknown> | null> {
+async function latestPublication(buildDir: string): Promise<{
+  dir: string;
+  record: Record<string, unknown>;
+} | null> {
   const root = path.join(buildDir, "publish");
   try {
     const entries = await readdir(root, { withFileTypes: true });
-    let newest: { key: string; value: Record<string, unknown> } | null = null;
+    let newest: {
+      key: string;
+      dir: string;
+      value: Record<string, unknown>;
+    } | null = null;
     for (const entry of entries) {
       if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
+      const dir = path.join(root, entry.name);
       try {
         const value = object(
-          await readJson(path.join(root, entry.name, "publication.json")),
+          await readJson(path.join(dir, "publication.json")),
           "Publication",
         );
         const key = typeof value.published_at === "string" ? value.published_at : entry.name;
-        if (newest === null || key > newest.key) newest = { key, value };
+        if (newest === null || key > newest.key) newest = { key, dir, value };
       } catch {
         // A partial publication is not visible on the product API.
       }
     }
-    return newest?.value ?? null;
+    return newest === null ? null : { dir: newest.dir, record: newest.value };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
@@ -186,10 +198,6 @@ async function verifiedFile(root: string, relativePath: string): Promise<string>
   return actualFile;
 }
 
-function sha256(bytes: Buffer): string {
-  return sha256Bytes(bytes);
-}
-
 export class BuildStore {
   constructor(private readonly tasksRoot: string) {}
 
@@ -230,7 +238,8 @@ export class BuildStore {
             manifestPath,
             manifest,
             modifiedAt: details.mtimeMs,
-            publication,
+            publicationDir: publication?.dir ?? null,
+            publication: publication?.record ?? null,
             buildResult,
           });
         } catch (error) {
@@ -291,24 +300,45 @@ export class BuildStore {
     buildId: string,
     artifactId: string,
     taskId?: string,
-  ): Promise<DownloadedArtifact | null> {
+  ): Promise<StreamedArtifact | null> {
     if (!SAFE_ID.test(artifactId)) return null;
     const record = await this.find(buildId, taskId);
-    if (record === null) return null;
+    if (record === null || record.publicationDir === null) return null;
+
+    let file: string;
+    let mediaType: string;
+    let name: string;
+    let expectedSize: number | null;
+    let expectedSha256: string | null;
     if (artifactId === "dataset_manifest") {
-      const bytes = await readFile(record.manifestPath);
-      return { bytes, mediaType: "application/json", name: "dataset_manifest.json" };
+      file = await verifiedFile(record.publicationDir, "dataset_manifest.json");
+      mediaType = "application/json";
+      name = "dataset_manifest.json";
+      expectedSize = null;
+      const receipt = record.publication?.manifest_sha256;
+      expectedSha256 = typeof receipt === "string" && SHA256.test(receipt) ? receipt : null;
+    } else {
+      const artifact = record.manifest.artifacts.find((item) => item.artifact_id === artifactId);
+      if (artifact === undefined) return null;
+      file = await verifiedFile(record.publicationDir, artifact.relative_path);
+      mediaType = artifact.media_type;
+      name = path.posix.basename(artifact.relative_path);
+      expectedSize = artifact.size_bytes;
+      expectedSha256 = artifact.sha256;
     }
-    const artifact = record.manifest.artifacts.find((item) => item.artifact_id === artifactId);
-    if (artifact === undefined) return null;
-    const bytes = await readFile(await verifiedFile(record.buildDir, artifact.relative_path));
-    if (bytes.length !== artifact.size_bytes || sha256(bytes) !== artifact.sha256) {
+    // Pass 1: stream only from the immutable publication root; verify the
+    // size/SHA-256 receipt against the manifest before any bytes are streamed
+    // (never a whole-file ``readFile`` — multi-GB artifacts stay bounded).
+    const { sha256, bytes } = await sha256FileStreamWithSize(file);
+    if (
+      (expectedSize !== null && bytes !== expectedSize) ||
+      (expectedSha256 !== null && sha256 !== expectedSha256)
+    ) {
       throw new BuildStoreError("Artifact integrity check failed");
     }
-    return {
-      bytes,
-      mediaType: artifact.media_type,
-      name: path.posix.basename(artifact.relative_path),
-    };
+    // Pass 2: reopen for the streaming body; safe because the file lives
+    // under an immutable publication — a mutable build-dir same-name file
+    // cannot affect this official download.
+    return { stream: createReadStream(file), sizeBytes: bytes, mediaType, name };
   }
 }
