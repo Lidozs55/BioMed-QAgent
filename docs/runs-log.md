@@ -108,3 +108,52 @@ publishes is **probe-level (D5 #2)**: every row keeps `geo_probe`
 
 **技术踩坑**：Node 24 中 `Buffer.isUtf8` 不存在，须用 `TextDecoder("utf-8",
 {fatal:true})` 的 decode 抛出与否做字节校验。
+
+## 2026-08-19 — A8 最大可行 bulk GEO 全链路基准（GSE325735, gene_expression.long）
+
+**Build**: `build_gse325735` · task `task_047_a8` · driver
+`server/tests/bench-a8.run.ts`（live 模式，runDir `data/bench/a8-run-ByPP9F`）
+**Source**（staged 预清洗 gz，来自 `data/bench/gse325735`）：
+`GSE325735_clean_ensg.tsv.gz`，58,676 genes × 807 bulk RNA-seq samples，
+gz 25.79 MB / 解压 117.87 MB。
+**Profile**: `gene_expression.release.v1`；schema `gene_expression.long.v1`；
+`raw_count / estimated_count / linear / is_normalized=false`；row 粒度
+gene_sample_measurement，primary key `[dataset_id, sample_id, gene_id,
+measurement_type]`。
+
+### Outcome（metric_source=live，权威 result.json）
+
+- **资源边界**：frozen `gold-v1` default RuntimeLimits
+  （`dataset_operation_timeout_seconds=3600`，`max_download_mib=8192`，
+  `node_heap_override=null`）。Node `v24.11.1` 默认堆，**无
+  `--max-old-space-size` 覆盖**。峰值 **peak_rss 305.8 MB / peak_heap_used
+  122 MB / peak_heap_total 199 MB**——远低于默认堆上限，单一最大真实 bulk
+  GEO 矩阵在默认限制 + 默认堆下可正常跑通，无需堆覆盖。
+- **操作 wall time（ms，均 < 3600s 默认超时）**：acquire 8 · parse 224,556 ·
+  canonicalize 714,021 · compatibility_gate 6 · integrate 1,249,652 ·
+  validate_profile 1,593,643 · publish 179,836。
+- **行/追踪**：`manifest_row_count = 47,351,532`；provenance `coverage_ratio=1`
+  （47,351,532 traced，0 untraced / conflict / dedup / rejected）；
+  confidence records 存在，pending human review 0。
+- **验证**：`gene_expression.release.v1` passed，11/11 checked，0 failed。
+- **存储**：workspace 76.72 GB / 41 files（batches 13.84 + canonical 21.39 +
+  merged 14.84 + publish staging 峰值）；published 22.96 GB / 10 artifacts。
+- **哈希一致性**：`artifacts_hash_parity=true`——7 个 artifact 磁盘重哈希
+  与 manifest.sha256 全对齐（含 15.93 GB primary.csv、7.03 GB
+  normalization_log）。source gz sha256 `71142d86…`；
+  manifest_id `manifest_ab73bb0c4addb5fa`（sha256 `ab73bb0c4addb5f…`）。
+- **确定性**：manifest_id/sha256 与早前一版完整构建（`a8-run-aQj2ZF`，
+  `--verify` 复验）完全一致——两次独立跑全程输入→产物哈希可复现。
+
+### 决策要点
+
+- **为何选 GSE325735**：exact-6.1GB 的绝对最大检出不可行（缺对应 bulk
+  矩阵），改用最大的**可行**真实 bulk GEO 矩阵（~75× 最大 gold 的规模），
+  保留"默认限制 + 默认堆"这一核心验收不变。
+- **为何 staging 预清洗**：A8 验收聚焦核心 Pipeline 从 integrate→validate→
+  publish 的端到端 + 资源边界，不把下载/清洗噪声算进
+  parse 起点的输入；源资产 sha256 在报告中如实给出（acquisition asset = gz）。
+- **版本目录命名**：磁盘 publish 子目录名 = `publication_id` 去掉 `pub_`
+  前缀（`pub_build_gse325735_…` → `build_gse325735_…`）。driver 通过列出
+  publish 目录取唯一子目录来解析，而非假设 `outcome.publication_id` 非空
+  （该字段在 report 时题为空串）。
