@@ -38,6 +38,7 @@
 | §16-§17 | Skill 仓库与 Subagent / 前端架构 | [architecture/agent-frontend.md](architecture/agent-frontend.md) |
 | §18, §21-§23, 附录 A | 迁移历史 / Demo 决策 / 待决问题 / 非目标 / 被否决方案 | [architecture/roadmap.md](architecture/roadmap.md) |
 | §19 | 顶层不变量 | 本文 |
+| — Skill 自生成/自迭代 | 流程固化 + 可拆卸工具包 + 自迭代闭环 | [architecture/skill-self-iteration.md](architecture/skill-self-iteration.md) |
 | §24 | 文档治理 | 本文 |
 
 ---
