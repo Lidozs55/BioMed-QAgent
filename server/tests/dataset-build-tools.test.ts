@@ -137,6 +137,21 @@ describe("Pi DatasetBuild tools", () => {
       "geo.expression.v1",
     ]);
 
+    const bioactivityVariant = variants.find(
+      (variant) => schemaRef(variant) === "bioactivity_measurement.activity.v1",
+    )!;
+    const bioactivitySources = bioactivityVariant.properties.source_bindings as {
+      items: {
+        oneOf: Array<{ properties: Record<string, Record<string, unknown>> }>;
+      };
+    };
+    expect(bioactivitySources.items.oneOf.map((option) => adapterId(option))).toEqual([
+      "registered_bioactivity_activities_json",
+      "registered_bioactivity_assays_json",
+      "registered_bioactivity_compounds_json",
+      "registered_bioactivity_targets_json",
+    ]);
+
     const executeParameters = executeTool!.parameters as {
       properties: Record<string, Record<string, unknown>>;
     };

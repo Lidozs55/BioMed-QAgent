@@ -204,7 +204,10 @@ function datasetFamilySpecSchema(definition: DatasetFamilyDefinition): object {
     )!;
     const sourceBinding = {
       oneOf: definition.sources
-        .filter((source) => source.schema_refs.includes(schema.schema_id))
+        .filter((source) =>
+          definition.runtime_id === "registered_multitable.runtime.v1" ||
+          source.schema_refs.includes(schema.schema_id),
+        )
         .map((source) => ({
           type: "object",
           properties: {
