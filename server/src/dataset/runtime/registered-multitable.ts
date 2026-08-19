@@ -317,7 +317,7 @@ async function writeProviderTables(options: {
   familyId: string;
   schemas: ReadonlyMap<string, DatasetSchemaV2>;
   rows: ProviderRows;
-  assetId: string;
+  assetIds: readonly string[];
 }): Promise<Record<string, OperationResultManifest>> {
   const results: Record<string, OperationResultManifest> = {};
   for (const [tableId, schema] of options.schemas) {
@@ -339,7 +339,7 @@ async function writeProviderTables(options: {
       schema,
       relativePath,
       absolutePath,
-      assetIds: [options.assetId],
+      assetIds: options.assetIds,
     });
   }
   return results;
@@ -365,26 +365,31 @@ export async function executeRegisteredMultiTableBuild(
     providerCarrierBinding(family.id, binding.source, binding.adapter_id) !== null,
   );
   if (providerBindings.length > 0) {
-    if (providerBindings.length !== 1 || input.spec.source_bindings.length !== 1) {
-      throw new Error("provider carrier dispatch requires exactly one source binding");
+    if (providerBindings.length !== input.spec.source_bindings.length) {
+      throw new Error("provider carrier dispatch cannot mix provider and registered-table bindings");
     }
-    const binding = providerBindings[0]!;
-    const provider = providerCarrierBinding(family.id, binding.source, binding.adapter_id)!;
-    const assetId = input.registeredAssetIds[binding.binding_id];
-    if (assetId === undefined) throw new Error(`binding '${binding.binding_id}' has no registered carrier asset ID`);
-    const resolved = await carrierBytes(assetRegistry, assetId);
-    if (resolved.receipt.asset_ref.role !== "carrier" && resolved.receipt.asset_ref.role !== "source") {
-      throw new Error("provider dispatch requires a registered source or carrier asset");
+    const aggregateRows: Record<string, object[]> = {};
+    const assetIds: string[] = [];
+    for (const binding of providerBindings) {
+      const provider = providerCarrierBinding(family.id, binding.source, binding.adapter_id)!;
+      const assetId = input.registeredAssetIds[binding.binding_id];
+      if (assetId === undefined) throw new Error(`binding '${binding.binding_id}' has no registered carrier asset ID`);
+      const resolved = await carrierBytes(assetRegistry, assetId);
+      sourceReceipts.set(assetId, resolved.receipt);
+      assetIds.push(assetId);
+      const expanded = providerRows({
+        familyId: family.id,
+        source: provider.source,
+        adapterId: provider.adapterId,
+        assetId,
+        receipt: resolved.receipt,
+        bytes: resolved.bytes,
+      });
+      for (const [tableId, rows] of Object.entries(expanded)) {
+        (aggregateRows[tableId] ??= []).push(...rows);
+      }
     }
-    sourceReceipts.set(assetId, resolved.receipt);
-    const rows = providerRows({
-      familyId: family.id,
-      source: provider.source,
-      adapterId: provider.adapterId,
-      assetId,
-      receipt: resolved.receipt,
-      bytes: resolved.bytes,
-    });
+    const rows: ProviderRows = aggregateRows;
     const tableSchemas = new Map<string, DatasetSchemaV2>();
     for (const tableId of Object.keys(rows)) {
       const schema = family.schemas.find((candidate): candidate is DatasetSchemaV2 => candidate.schema_version === "2.0" &&
@@ -420,7 +425,7 @@ export async function executeRegisteredMultiTableBuild(
       familyId: family.id,
       schemas: tableSchemas,
       rows,
-      assetId,
+      assetIds: [...new Set(assetIds)].sort(),
     }));
   }
 
