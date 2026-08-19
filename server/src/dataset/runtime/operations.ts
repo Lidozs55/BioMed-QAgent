@@ -60,6 +60,7 @@ export const OperationKind = {
   CANONICALIZE: "canonicalize",
   COMPATIBILITY_GATE: "compatibility_gate",
   INTEGRATE: "integrate",
+  ASSEMBLE: "assemble",
   VALIDATE_PROFILE: "validate_profile",
   PUBLISH: "publish",
 } as const;

@@ -13,11 +13,17 @@ import { gzipSync } from "node:zlib";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { parseDatasetBuildSpec, parseSourceAsset, type SourceAsset } from "../../src/dataset/contracts/index.js";
+import {
+  parseDatasetBuildSpec,
+  parsePublicationCandidate,
+  parseSourceAsset,
+  type SourceAsset,
+} from "../../src/dataset/contracts/index.js";
 import { TypeScriptDatasetCore } from "../../src/dataset/service/ts-core.js";
 import { TsDatasetCoreAdapter } from "../../src/dataset/service/dataset-core.js";
 import { acquireBuildLock } from "../../src/dataset/service/build-lock.js";
 import type { CoreOperationEvent } from "../../src/dataset/runtime/executor.js";
+import { loadOperationResultManifest } from "../../src/dataset/runtime/index.js";
 import type { EventPayload } from "@biomed/contracts";
 
 const FIXTURES_ROOT = path.resolve(
@@ -172,6 +178,19 @@ describe("TS Core E2E golden outcomes (I-07)", () => {
     expect(record.manifest?.task_id).toBe("task_e2e");
     expect(record.manifest?.build_id).toBe("build_e2e");
     expect(record.validation?.status).toBe("passed");
+    const stateDir = path.join(taskRoot, "datasets_build", "build_e2e", "state");
+    const integrateResult = loadOperationResultManifest(stateDir, "integrate");
+    const assembleResult = loadOperationResultManifest(stateDir, "assemble");
+    expect(assembleResult).toMatchObject({
+      operation_kind: "assemble",
+      output_kind: "publication_candidate",
+    });
+    const candidate = parsePublicationCandidate(assembleResult?.output_summary);
+    expect(candidate.tables[0]?.data_ref.result_manifest_id).toBe(
+      integrateResult?.result_manifest_id,
+    );
+    expect(JSON.stringify(candidate)).not.toContain("merged/primary.csv");
+    expect(JSON.stringify(candidate)).not.toContain("data/workspaces");
     // Immutable publication on disk with the frozen layout
     // (version dir = <build_id>_<digest16>; publication id = pub_ + version).
     const versionDir = path.join(
@@ -305,7 +324,7 @@ describe("TS Core E2E golden outcomes (I-07)", () => {
       runId: "run_e2e",
       sourceAssets: { binding_gdc: good, binding_xena: bad },
     });
-    expect(record.status).toBe("completed");
+    expect(record.status, record.error ?? "partial build failed without error").toBe("completed");
     expect(record.rejected_sources).toContain("binding_xena");
     expect(record.publication_id).not.toBeNull();
     const adapter = new TsDatasetCoreAdapter(core);

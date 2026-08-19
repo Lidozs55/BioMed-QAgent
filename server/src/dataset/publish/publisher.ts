@@ -13,7 +13,13 @@ import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream, existsSync, mkdirSync, rmSync } from "node:fs";
 import { copyFile, rename, rm, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
-import type { DatasetManifest, DatasetPublication, ValidationResult } from "../contracts/index.js";
+import type { PublicationCandidate } from "@biomed/contracts";
+import type {
+  DatasetManifest,
+  DatasetPublication,
+  ValidationResult,
+} from "../contracts/index.js";
+import { parsePublicationCandidate } from "../contracts/index.js";
 import { throwIfAborted } from "../cooperative.js";
 import { BuildError } from "../adapters/errors.js";
 import { asPosix } from "../adapters/paths.js";
@@ -35,6 +41,7 @@ export interface PublishOptions {
   outputDir: string;
   manifest: DatasetManifest;
   validation: ValidationResult;
+  publicationCandidate?: PublicationCandidate | null;
   expectedSourceAssetIds?: ReadonlySet<string> | null;
   /** H2: rechecked immediately before the immutable rename. */
   pendingCheck?: (() => boolean) | null;
@@ -76,6 +83,23 @@ export async function promotePublication(options: PublishOptions): Promise<Publi
   }
   const manifest = options.manifest;
   const validation = options.validation;
+  if (options.publicationCandidate !== undefined && options.publicationCandidate !== null) {
+    const candidate = parsePublicationCandidate(options.publicationCandidate);
+    const primary = candidate.tables.find((table) => table.definition.role === "primary");
+    const manifestPrimary = manifest.artifacts.find((artifact) => artifact.role === "primary_dataset");
+    if (
+      candidate.task_id !== manifest.task_id ||
+      candidate.build_id !== manifest.build_id ||
+      candidate.dataset_family !== manifest.dataset_family ||
+      candidate.row_granularity !== manifest.row_granularity ||
+      primary === undefined ||
+      manifestPrimary === undefined ||
+      primary.row_count !== manifest.row_count ||
+      primary.data_ref.output_file_sha256 !== manifestPrimary.sha256
+    ) {
+      throw new BuildError("publication candidate does not match the validated manifest");
+    }
+  }
   const invariants = await checkReleaseInvariants({
     manifest,
     validation,

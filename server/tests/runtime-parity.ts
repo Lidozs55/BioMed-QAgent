@@ -163,7 +163,7 @@ export async function checkRuntimeParity(options: { outputRoot: string }): Promi
   {
     const plan = buildOperationPlan(spec());
     const ids = plan.map((op) => op.operation_id);
-    check(issues, plan.length === 10, "plan: 10 operations");
+    check(issues, plan.length === 11, "plan: 11 operations");
     checkDeepEqual(
       issues,
       ids,
@@ -176,6 +176,7 @@ export async function checkRuntimeParity(options: { outputRoot: string }): Promi
         "canonicalize:srcbind_xena",
         "compatibility_gate",
         "integrate",
+        "assemble",
         "validate_profile",
         "publish",
       ],
@@ -190,6 +191,8 @@ export async function checkRuntimeParity(options: { outputRoot: string }): Promi
       ["canonicalize:srcbind_gdc", "canonicalize:srcbind_xena"],
       "plan: compatibility gate upstream",
     );
+    checkDeepEqual(issues, byId.get("assemble")!.upstream, ["integrate"], "plan: assemble upstream");
+    checkDeepEqual(issues, byId.get("validate_profile")!.upstream, ["assemble"], "plan: validate upstream");
     checkDeepEqual(issues, byId.get("publish")!.upstream, ["validate_profile"], "plan: publish upstream");
     check(issues, byId.get("publish")!.kind === "publish", "plan: publish kind");
   }
@@ -202,11 +205,11 @@ export async function checkRuntimeParity(options: { outputRoot: string }): Promi
     const outcome = await makeExecutor({ outputRoot: out, runner }).run();
     check(issues, outcome.status === "completed", "runs all: completed");
     check(issues, outcome.error === null, "runs all: no error");
-    check(issues, outcome.completedOperationIds.length === 10, "runs all: 10 completed ids");
-    check(issues, runner.calls.length === 10, "runs all: 10 runner calls");
+    check(issues, outcome.completedOperationIds.length === 11, "runs all: 11 completed ids");
+    check(issues, runner.calls.length === 11, "runs all: 11 runner calls");
     const state = loadBuildState(join(out, "state"), "task_1", "build_test");
     const succeeded = state.operation_attempts.filter((attempt) => attempt.status === "succeeded");
-    check(issues, succeeded.length === 10, "runs all: 10 succeeded attempts");
+    check(issues, succeeded.length === 11, "runs all: 11 succeeded attempts");
   }
 
   // test_executor_reuses_digest_matched_operations
@@ -215,14 +218,14 @@ export async function checkRuntimeParity(options: { outputRoot: string }): Promi
     mkdirSync(out, { recursive: true });
     const runner = new RecordingRunner();
     const first = await makeExecutor({ outputRoot: out, runner }).run();
-    check(issues, first.status === "completed" && runner.calls.length === 10, "reuse: first run executes all");
+    check(issues, first.status === "completed" && runner.calls.length === 11, "reuse: first run executes all");
     const runner2 = new RecordingRunner();
     const second = await makeExecutor({ outputRoot: out, runner: runner2 }).run();
     check(issues, second.status === "completed", "reuse: second run completed");
     checkDeepEqual(issues, runner2.calls, [], "reuse: second run reuses every operation");
     const state = loadBuildState(join(out, "state"), "task_1", "build_test");
     const skipped = state.operation_attempts.filter((attempt) => attempt.status === "skipped");
-    check(issues, skipped.length === 10, "reuse: 10 skipped attempts");
+    check(issues, skipped.length === 11, "reuse: 11 skipped attempts");
   }
 
   // test_executor_reruns_when_parameters_change
@@ -231,10 +234,10 @@ export async function checkRuntimeParity(options: { outputRoot: string }): Promi
     mkdirSync(out, { recursive: true });
     const runner = new RecordingRunner();
     await makeExecutor({ outputRoot: out, runner, scope: { v: 1 } }).run();
-    check(issues, runner.calls.length === 10, "params: first scope runs all");
+    check(issues, runner.calls.length === 11, "params: first scope runs all");
     const runner2 = new RecordingRunner();
     await makeExecutor({ outputRoot: out, runner: runner2, scope: { v: 2 } }).run();
-    check(issues, runner2.calls.length === 10, "params: scope change invalidates reuse");
+    check(issues, runner2.calls.length === 11, "params: scope change invalidates reuse");
   }
 
   // test_executor_per_binding_adapter_params_gate_reuse
@@ -245,13 +248,13 @@ export async function checkRuntimeParity(options: { outputRoot: string }): Promi
     mkdirSync(out, { recursive: true });
     const runner = new RecordingRunner();
     await makeExecutor({ outputRoot: out, runner, scope: log2Scope }).run();
-    check(issues, runner.calls.length === 10, "adapter params: first run executes all");
+    check(issues, runner.calls.length === 11, "adapter params: first run executes all");
     const runner2 = new RecordingRunner();
     await makeExecutor({ outputRoot: out, runner: runner2, scope: log2Scope }).run();
     checkDeepEqual(issues, runner2.calls, [], "adapter params: identical normalized params reuse");
     const runner3 = new RecordingRunner();
     await makeExecutor({ outputRoot: out, runner: runner3, scope: linearScope }).run();
-    check(issues, runner3.calls.length === 10, "adapter params: scale change invalidates every checkpoint");
+    check(issues, runner3.calls.length === 11, "adapter params: scale change invalidates every checkpoint");
   }
 
   // test_executor_reruns_when_implementation_version_changes
@@ -261,11 +264,11 @@ export async function checkRuntimeParity(options: { outputRoot: string }): Promi
     const versions = { "parse:srcbind_gdc": "1.0.0", "parse:srcbind_xena": "1.0.0" };
     const runner = new RecordingRunner();
     await makeExecutor({ outputRoot: out, runner, implementationVersions: versions }).run();
-    check(issues, runner.calls.length === 10, "impl version: first run executes all");
+    check(issues, runner.calls.length === 11, "impl version: first run executes all");
     const upgraded = { ...versions, "parse:srcbind_gdc": "1.1.0" };
     const runner2 = new RecordingRunner();
     await makeExecutor({ outputRoot: out, runner: runner2, implementationVersions: upgraded }).run();
-    checkDeepEqual(issues, runner2.calls, ["parse:srcbind_gdc"], "impl version: only upgraded parse re-runs");
+    checkDeepEqual(issues, runner2.calls, ["parse:srcbind_gdc", "canonicalize:srcbind_gdc", "compatibility_gate", "integrate", "assemble", "validate_profile", "publish"], "impl version: upgraded parse invalidates downstream");
     const state = loadBuildState(join(out, "state"), "task_1", "build_test");
     const parseAttempts = state.operation_attempts.filter(
       (attempt) => attempt.operation_id === "parse:srcbind_gdc",
@@ -284,12 +287,12 @@ export async function checkRuntimeParity(options: { outputRoot: string }): Promi
     mkdirSync(out, { recursive: true });
     const runner = new RecordingRunner();
     await makeExecutor({ outputRoot: out, runner }).run();
-    check(issues, runner.calls.length === 10, "resume: baseline run executes all");
+    check(issues, runner.calls.length === 11, "resume: baseline run executes all");
     const runner2 = new RecordingRunner();
     const second = await makeExecutor({ outputRoot: out, runner: runner2, resumeFrom: "integrate" }).run();
     check(issues, second.status === "completed", "resume: completed");
-    check(issues, second.completedOperationIds.length === 10, "resume: 10 completed ids");
-    checkDeepEqual(issues, runner2.calls, ["integrate"], "resume: only target re-executes");
+    check(issues, second.completedOperationIds.length === 11, "resume: 11 completed ids");
+    checkDeepEqual(issues, runner2.calls, ["integrate", "assemble", "validate_profile", "publish"], "resume: target and downstream re-execute");
     const state = loadBuildState(join(out, "state"), "task_1", "build_test");
     const integrate = state.operation_attempts.filter((attempt) => attempt.operation_id === "integrate");
     checkDeepEqual(
@@ -311,15 +314,15 @@ export async function checkRuntimeParity(options: { outputRoot: string }): Promi
     mkdirSync(out, { recursive: true });
     const runner = new RecordingRunner();
     await makeExecutor({ outputRoot: out, runner }).run();
-    check(issues, runner.calls.length === 10, "invalidate: baseline run executes all");
+    check(issues, runner.calls.length === 11, "invalidate: baseline run executes all");
     const runner2 = new ChangingRunner("canonicalize:srcbind_gdc");
     const second = await makeExecutor({ outputRoot: out, runner: runner2, resumeFrom: "canonicalize:srcbind_gdc" }).run();
     check(issues, second.status === "completed", "invalidate: completed");
-    check(issues, second.completedOperationIds.length === 10, "invalidate: 10 completed ids");
+    check(issues, second.completedOperationIds.length === 11, "invalidate: 11 completed ids");
     checkDeepEqual(
       issues,
       runner2.calls,
-      ["canonicalize:srcbind_gdc", "compatibility_gate", "integrate", "validate_profile", "publish"],
+      ["canonicalize:srcbind_gdc", "compatibility_gate", "integrate", "assemble", "validate_profile", "publish"],
       "invalidate: downstream of changed digest re-executes",
     );
     const state = loadBuildState(join(out, "state"), "task_1", "build_test");
@@ -345,7 +348,7 @@ export async function checkRuntimeParity(options: { outputRoot: string }): Promi
     const runner = new RecordingRunner();
     const outcome = await makeExecutor({ outputRoot: out, runner, resumeFrom: "integrate" }).run();
     check(issues, outcome.status === "completed", "resume fresh: completed");
-    check(issues, runner.calls.length === 10, "resume fresh: no prior attempts to reuse");
+    check(issues, runner.calls.length === 11, "resume fresh: no prior attempts to reuse");
   }
 
   // test_executor_cancel_stops_build
@@ -390,11 +393,11 @@ export async function checkRuntimeParity(options: { outputRoot: string }): Promi
     const runner = new RecordingRunner();
     const outcome = await makeExecutor({ outputRoot: out, runner }).run();
     check(issues, outcome.status === "completed", "recover: completed");
-    check(issues, runner.calls.length === 10, "recover: crashed op re-executed, everything ran");
+    check(issues, runner.calls.length === 11, "recover: crashed op re-executed, everything ran");
     const reloaded = loadBuildState(stateDir, "task_1", "build_test");
     const statuses = reloaded.operation_attempts.map((attempt) => attempt.status);
     check(issues, statuses.includes("cancelled"), "recover: inflight attempt marked cancelled");
-    check(issues, statuses.filter((status) => status === "succeeded").length === 10, "recover: 10 succeeded attempts");
+    check(issues, statuses.filter((status) => status === "succeeded").length === 11, "recover: 11 succeeded attempts");
   }
 
   // test_executor_reuses_by_digest_across_plan_shapes
@@ -408,11 +411,9 @@ export async function checkRuntimeParity(options: { outputRoot: string }): Promi
     // Plan B binds a source never seen by plan A, so its prefix differs:
     // acquire/parse/canonicalize/compatibility_gate (":srcbind_new") re-run
     // for real, and integrate re-runs because its upstream digest changed.
-    // validate_profile + publish share the same input digest as plan A's
-    // (the recording runner's integrate output only reflects the upstream
-    // key set, which is identical in both plans), so recovery reuses them by
-    // digest — that is the contract: a succeeded attempt is reused iff input,
-    // parameter and implementation-version digests match. The ghost guard
+    // The integration result receipt identity changes, so assemble and its
+    // validate/publish downstream re-run even when a synthetic output summary
+    // happens to match. The ghost guard
     // still holds: integrate can only re-run with a real upstream after
     // canonicalization ("cannot integrate zero sources"), never empty.
     const planB = buildOperationPlan(
@@ -449,8 +450,8 @@ export async function checkRuntimeParity(options: { outputRoot: string }): Promi
     const state = loadBuildState(join(out, "state"), "task_1", "build_test");
     const succeeded = state.operation_attempts.filter((attempt) => attempt.status === "succeeded");
     const skipped = state.operation_attempts.filter((attempt) => attempt.status === "skipped");
-    check(issues, succeeded.length === 15, "stale digest: plan A (10) + plan B re-executes 5 (validate_profile/publish reused by digest)");
-    check(issues, skipped.length === 2, "stale digest: reused attempts recorded as skipped");
+    check(issues, succeeded.length === 19, "stale digest: plan A (11) + plan B re-executes 8");
+    check(issues, skipped.length === 0, "stale digest: changed result receipts prevent downstream reuse");
     check(
       issues,
       skipped.every((attempt) => attempt.reused_operation_attempt_id !== null),
@@ -465,8 +466,11 @@ export async function checkRuntimeParity(options: { outputRoot: string }): Promi
         "canonicalize:srcbind_new",
         "compatibility_gate",
         "integrate",
+        "assemble",
+        "validate_profile",
+        "publish",
       ],
-      "stale digest: plan B prefix re-executes in plan order with real upstreams",
+      "stale digest: plan B executes with committed receipt identity in plan order",
     );
   }
 

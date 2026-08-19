@@ -118,6 +118,7 @@ const EXPECTED_OUTPUT_KINDS: Record<string, string> = {
   "canonicalize:srcbind_xena": "canonical_table",
   compatibility_gate: "compatibility_report",
   integrate: "integrated_table",
+  assemble: "publication_candidate",
   validate_profile: "validation_result",
   publish: "publication_manifest",
 };
@@ -131,7 +132,8 @@ const DEPENDENCY_UPSTREAMS: Record<string, readonly string[]> = {
   "canonicalize:srcbind_xena": ["parse:srcbind_xena"],
   compatibility_gate: ["canonicalize:srcbind_gdc", "canonicalize:srcbind_xena"],
   integrate: ["compatibility_gate"],
-  validate_profile: ["integrate"],
+  assemble: ["integrate"],
+  validate_profile: ["assemble"],
   publish: ["validate_profile"],
 };
 
@@ -147,7 +149,7 @@ describe("A5I Increment 2 operation result manifests", () => {
     const executor = makeExecutor({ outputRoot, runner, sourceAssets });
     const outcome = await executor.run();
     expect(outcome.status).toBe("completed");
-    expect(runner.calls.length).toBe(10);
+    expect(runner.calls.length).toBe(11);
 
     const state = loadBuildState(stateDir, "task_1", "build_test");
     const expectedAssetIds = Object.values(sourceAssets)

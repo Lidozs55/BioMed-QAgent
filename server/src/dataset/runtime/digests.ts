@@ -9,6 +9,7 @@
  * file (sha256/size) invalidates every checkpoint.
  */
 
+import type { OperationResultManifest } from "@biomed/contracts";
 import { canonicalDigest, canonicalJson } from "../adapters/identity.js";
 import type { SourceAsset } from "../contracts/index.js";
 import type { OperationSpec } from "./operations.js";
@@ -29,6 +30,7 @@ export interface DigestScope {
   buildId: string;
   /** Upstream operation outputs keyed by operation_id. */
   upstream: Readonly<Record<string, Record<string, unknown>>>;
+  upstreamResults?: Readonly<Record<string, OperationResultManifest>>;
   parameterScope: Readonly<Record<string, unknown>>;
   sourceAssets?: Readonly<Record<string, SourceAsset>>;
   mappingAssets?: Readonly<Record<string, SourceAsset>>;
@@ -52,6 +54,14 @@ export function computeInputDigest(op: OperationSpec, scope: DigestScope): strin
       ]),
     ),
   };
+  if (scope.upstreamResults && Object.keys(scope.upstreamResults).length > 0) {
+    payload["upstream_result_manifest_ids"] = Object.fromEntries(
+      Object.entries(scope.upstreamResults).map(([operationId, result]) => [
+        operationId,
+        result.result_manifest_id,
+      ]),
+    );
+  }
   payload["parameter_scope"] = scope.parameterScope;
   if (scope.sourceAssets && Object.keys(scope.sourceAssets).length > 0) {
     payload["source_assets"] = Object.fromEntries(

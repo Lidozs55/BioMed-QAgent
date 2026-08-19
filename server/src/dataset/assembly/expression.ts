@@ -63,7 +63,10 @@ function parseIntegrationSummary(
 
 function registeredAssetIds(input: FamilyAssemblyInput): string[] {
   const declared = [...new Set(input.registeredAssetIds)].sort();
-  const closure = [...new Set(input.integrationResult.dependency_closure.input_asset_ids)].sort();
+  const declaredSuccessful = input.integrationResult.output_summary.successful_asset_ids;
+  const closure = (Array.isArray(declaredSuccessful)
+    ? declaredSuccessful.filter((value): value is string => typeof value === "string")
+    : input.integrationResult.dependency_closure.input_asset_ids).sort();
   if (declared.length !== closure.length || declared.some((assetId, index) => assetId !== closure[index])) {
     throw new Error("registered asset IDs must exactly match the integration dependency closure");
   }

@@ -168,7 +168,7 @@ describe("A5I Increment 3 rehydration without runner replay", () => {
       const ex1 = makeExecutor({ outputRoot: root, runner: first, sourceAssets, rehydrateCompletedRunners: true });
       const fullRun = await ex1.run();
       expect(fullRun.status).toBe("completed");
-      expect(first.calls.length).toBe(10);
+      expect(first.calls.length).toBe(11);
 
       const second = new RecordingRunner();
       const ex2 = makeExecutor({ outputRoot: root, runner: second, sourceAssets, rehydrateCompletedRunners: true });
@@ -193,7 +193,7 @@ describe("A5I Increment 3 rehydration without runner replay", () => {
       const ex2 = makeExecutor({ outputRoot: root, runner: second, rehydrateCompletedRunners: true });
       const outcome = await ex2.run();
       expect(outcome.status).toBe("completed");
-      expect(second.calls).toEqual(["integrate", "validate_profile", "publish"]);
+      expect(second.calls).toEqual(["integrate", "assemble", "validate_profile", "publish"]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
