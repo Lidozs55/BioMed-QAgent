@@ -14,6 +14,10 @@ import type {
 import { readJsonFileOrNull, writeJsonAtomic } from "../persistence/atomic-json.js";
 import { requireSafeId, SAFE_ID } from "./safe-id.js";
 import {
+  SourceAssetRegistry,
+  type SourceAssetRegistryOptions,
+} from "./source-assets/registry.js";
+import {
   reduceTaskEvents,
   type DurableTaskMetadata,
 } from "./task-reducer.js";
@@ -111,6 +115,14 @@ export class DurableTaskRepository {
   subscribe(listener: EventListener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  sourceAssetRegistry(
+    taskId: string,
+    options: SourceAssetRegistryOptions = {},
+  ): SourceAssetRegistry {
+    requireSafeId(taskId, "taskId");
+    return new SourceAssetRegistry(taskId, this.taskRoot(taskId), options);
   }
 
   async createTask(input: CreateDurableTaskInput): Promise<TaskRunAccepted> {
