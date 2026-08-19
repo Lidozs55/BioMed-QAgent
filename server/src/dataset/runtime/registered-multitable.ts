@@ -318,11 +318,14 @@ async function writeProviderTables(options: {
   schemas: ReadonlyMap<string, DatasetSchemaV2>;
   rows: ProviderRows;
   assetIds: readonly string[];
+  allowEmptyTables?: readonly string[];
 }): Promise<Record<string, OperationResultManifest>> {
   const results: Record<string, OperationResultManifest> = {};
   for (const [tableId, schema] of options.schemas) {
     const tableRows = options.rows[tableId];
-    if (tableRows === undefined || tableRows.length === 0) throw new Error(`provider carrier did not produce required table '${tableId}'`);
+    if (tableRows === undefined || (tableRows.length === 0 && !(options.allowEmptyTables ?? []).includes(tableId))) {
+      throw new Error(`provider carrier did not produce required table '${tableId}'`);
+    }
     const relativePath = `tables/${tableId}.csv`;
     const absolutePath = path.join(options.outputDir, ...relativePath.split("/"));
     mkdirSync(path.dirname(absolutePath), { recursive: true });
@@ -426,6 +429,7 @@ export async function executeRegisteredMultiTableBuild(
       schemas: tableSchemas,
       rows,
       assetIds: [...new Set(assetIds)].sort(),
+      allowEmptyTables: family.id === "protein_structure" ? ["ligands"] : [],
     }));
   }
 
