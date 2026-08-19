@@ -30,6 +30,7 @@ import {
   bioactivityTableEntries,
   bioactivityValidationPolicy,
   createBioactivityRegisteredTableRegistry,
+  transformChemblRegisteredAssets,
   type BioactivityRows,
   validateBioactivityCandidate,
 } from "../src/dataset/families/bioactivity-measurement/index.js";
@@ -241,6 +242,85 @@ afterEach(async () => {
 });
 
 describe("bioactivity_measurement B5A module", () => {
+  it("deterministically transforms registered ChEMBL API carriers", async () => {
+    const fixture = JSON.parse(
+      await readFile(path.join(FIXTURES, "non-gold.chembl-provider.json"), "utf8"),
+    ) as Record<"activity" | "assay" | "target", unknown>;
+    const rows = transformChemblRegisteredAssets([
+      {
+        kind: "activity",
+        source_id: "source_chembl_provider",
+        source_asset_id: ASSET_ID,
+        logical_file: "source_assets/chembl/activities.json",
+        document: fixture.activity,
+      },
+      {
+        kind: "assay",
+        source_id: "source_chembl_provider",
+        source_asset_id: `asset_${"b".repeat(64)}`,
+        logical_file: "source_assets/chembl/assays.json",
+        document: fixture.assay,
+      },
+      {
+        kind: "target",
+        source_id: "source_chembl_provider",
+        source_asset_id: `asset_${"c".repeat(64)}`,
+        logical_file: "source_assets/chembl/targets.json",
+        document: fixture.target,
+      },
+    ]);
+
+    expect(() => assertBioactivityRows(rows)).not.toThrow();
+    expect(rows.activities[0]).toMatchObject({
+      activity_id: "CHEMBL_ACTIVITY_918273",
+      raw_value: "0.25",
+      raw_relation: ">",
+      raw_unit: "uM",
+      standardized_value: 250,
+      standardized_unit: "nM",
+      compound_id: "CHEMBL120",
+      assay_id: "CHEMBL_A918",
+      target_id: "CHEMBL_T918",
+      source_asset_id: ASSET_ID,
+    });
+    expect(rows.activities[0]!.source_locator).toMatchObject({
+      asset_id: ASSET_ID,
+      json_pointer: "/activities/0",
+    });
+    expect(rows.compounds).toHaveLength(1);
+    expect(rows.assays).toHaveLength(1);
+    expect(rows.targets).toHaveLength(1);
+  });
+
+  it("fails closed on an unknown ChEMBL response structure", async () => {
+    const fixture = JSON.parse(
+      await readFile(path.join(FIXTURES, "non-gold.chembl-provider.json"), "utf8"),
+    ) as Record<"activity" | "assay" | "target", unknown>;
+    expect(() => transformChemblRegisteredAssets([
+      {
+        kind: "activity",
+        source_id: "source_chembl_provider",
+        source_asset_id: ASSET_ID,
+        logical_file: "source_assets/chembl/activities.json",
+        document: { records: [] },
+      },
+      {
+        kind: "assay",
+        source_id: "source_chembl_provider",
+        source_asset_id: `asset_${"b".repeat(64)}`,
+        logical_file: "source_assets/chembl/assays.json",
+        document: fixture.assay,
+      },
+      {
+        kind: "target",
+        source_id: "source_chembl_provider",
+        source_asset_id: `asset_${"c".repeat(64)}`,
+        logical_file: "source_assets/chembl/targets.json",
+        document: fixture.target,
+      },
+    ])).toThrow(/unknown top-level fields/);
+  });
+
   it("parses and publishes a non-Gold activity fact with compound, assay, and target support", async () => {
     const bytes = await readFile(path.join(FIXTURES, "non-gold.valid.json"));
     const rows = JSON.parse(bytes.toString("utf8")) as BioactivityRows;
