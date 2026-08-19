@@ -80,9 +80,10 @@
 
 > B 组详细 ownership、依赖类型、分支、交接窗口和逐任务验收见
 > [开发者 B：可信多表 Publication 落实计划](superpowers/plans/2026-08-18-developer-b-trusted-publication-plan.md)。
-> B 组 contracts（含 C3C）、B2M、B3、B5C、B6D 已完成，B4M、B5L/T/V/S/A、B6A、B6B
-> module 已完成；A 组 `TASK-047-A1-A8` 已完成并合入。当前仍需 A 组接线
-> C1I/C2I/C3I/B2W/B6W，随后推进 B7/Gold 验收。
+> B 组 contracts（含 C3C）、B2M、B3、B5C、B6D、B4M、B5L/T/V/S/A、B6A、B6B
+> module 已完成；C1I/C2I/C3I/B2W/B6W 与 A8 已接入 main。provider parser/runtime dispatch、
+> acquisition-first、固定 biomedical providers、role-aware receipts、multi-carrier aggregation、
+> mmCIF parser 已合入；当前进入 B7 Gold3-Gold6 同 commit 原样验收。
 > A5I 增量 1+2 已合并进 main：增量 1（9dcceeca）为 `loadOperationOutput`
 > 流式校验（async + `sha256FileStream` + `cancellationSignal`，取消传播而非吞掉）；
 > 增量 2（14aceeed）为 executor 成功路径写入类型化 ADR-030 `OperationResultManifest`
@@ -114,10 +115,10 @@
 - [x] **TASK-048-B2M / completed**：Core-only PublicationCandidate 与 family assembler module；expression integration result 可确定性包装，candidate 仅引用 committed Core result receipts/registered asset IDs，缺 handler 的 family 无 assembly capability；ADR-033。
 - [ ] **TASK-048-B2W / A owner, blocked by TASK-048-B2M + TASK-047-A5I**：assemble runtime/checkpoint/publisher wiring。
 - [x] **TASK-048-B3 / completed**：Generic multi-table validation/relation gate；严格结构/关系、token/evidence closure 与 Agent workspace bypass fail-closed 已完成（ADR-032）。
-- [ ] **TASK-048-B4M / module complete（ADR-034）；trusted E2E blocked by TASK-C1I**：
+- [x] **TASK-048-B4M / completed（ADR-034）**：
       schema-driven CSV/TSV/JSON RegisteredSourceAsset adapter、严格行宽/类型、locator/parser
       version/rejected-row audit 与 fail-closed receipt/hash 已完成；`adapters.ts`/runtime 接线、
-      Core asset registry E2E 与 Publication admission 未完成，不得标记整体 completed。
+      Core asset registry、registered adapter trusted E2E、provider carrier dispatch 与 Publication admission 已完成。
 - [x] **TASK-048-B5C / completed（ADR-035）**：共享 biomedical tables/relation vocabulary；参数化
       builders 覆盖 entity/paper/compound/assay/structure dimension/trial/source/entity+compound
       crosswalk，受控 ID/relation/cardinality/unit vocabulary，crosswalk 保留匹配证据、冲突和置信度；
@@ -133,7 +134,7 @@
       完整，Agent code/通用 DAG fail-closed。
 - [ ] **TASK-048-B6W / A owner, blocked by TASK-047-A5I**：fixed derive slot runtime wiring。
 - [ ] **TASK-048-B6B / module complete；trusted E2E blocked by B6W/B2W/C2I**：注册 deterministic derive algorithm handlers、`protein_structure` PDB interface derived consumer/schema/profile、`variant_evidence` sequence/reference mapping derived consumer/schema/profile 已完成；A-owned runtime/plan/checkpoint/ts-core/publish wiring 未完成。
-- [ ] **TASK-048-B7 / blocked by all family/VLM/derive + TASK-C2I**：Gold3-Gold6 原样重跑。
+- [ ] **TASK-048-B7 / in progress；strict result remains 0/6**：Gold3-Gold6 已多轮发现并修复 runtime 接缝；当前主线 `main@1e10dc7a` 需在同一 commit 上完成最终原样重跑、publication/artifact hash evidence 与最终答案。
 - [ ] **TASK-G1B / blocked by TASK-048-B7 + TASK-G1A（TASK-047-A8 已完成）**：最终 Gold3-Gold6 同基线复跑。
 - [ ] **TASK-G1R / blocked by TASK-G1A + TASK-G1B**：严格 Gold 最终报告。
 
