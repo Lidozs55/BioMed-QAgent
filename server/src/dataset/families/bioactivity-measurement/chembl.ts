@@ -18,6 +18,8 @@ export interface ChemblRegisteredJsonAsset {
   document: unknown;
 }
 
+export const CHEMBL_BIOACTIVITY_PROVIDER_ID = "bioactivity.chembl_json.v1";
+
 const ASSET_ID = /^asset_[0-9a-f]{64}$/;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/;
 const RELATIONS = new Set(["=", "<", ">", "<=", ">=", "~"]);
