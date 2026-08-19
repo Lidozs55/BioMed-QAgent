@@ -182,6 +182,31 @@ describe("Phase 7 product API", () => {
     expect(createHash("sha256").update(tamperedBody).digest("hex")).toBe(sha256);
   });
 
+  test("starts, gets, and cancels a durable build with typed responses", async () => {
+    const root = await temporaryDirectory("c3i-product-");
+    const { base } = await startApi(root, new FakeDatabase());
+    const request = {
+      schema_version: "1.0", idempotency_key: "idem_product_c3i",
+      task_id: "task_product_c3i", run_id: "run_product_c3i",
+      spec: {
+        schema_version: "1.0", build_id: "build_product_c3i", objective: "test",
+        dataset_family: "gene_expression", row_granularity: "gene_sample_measurement",
+        entities: {}, cohort_filters: {}, required_fields: [], schema_ref: "gene_expression.long.v1",
+        source_bindings: [{ schema_version: "1.0", binding_id: "binding_1", source: "fixture",
+          acquisition: { schema_version: "1.0", mode: "builtin", provider_id: "fixture.v1", recipe_id: null, recipe_version: null },
+          adapter_id: "fixture.expression.v1", accession: null, parameters: {} }],
+        normalization_profile_ref: null, merge_strategy: "append_by_canonical_row",
+        validation_profile_ref: "gene_expression.release.v1", output_format: "csv", target_entity_level: null,
+      },
+    };
+    const started = await fetch(`${base}/builds`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(request) });
+    expect(started.status).toBe(202);
+    expect(await started.json()).toMatchObject({ idempotent_replay: false, build: { status: "queued", build_id: "build_product_c3i" } });
+    expect(await (await fetch(`${base}/builds/build_product_c3i`)).json()).toMatchObject({ build: { status: "queued" } });
+    const cancelled = await fetch(`${base}/builds/build_product_c3i/cancel`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ schema_version: "1.0", request_id: "cancel_product_c3i", task_id: "task_product_c3i", run_id: "run_product_c3i", reason: null }) });
+    expect(await cancelled.json()).toMatchObject({ disposition: "accepted", status: "cancel_requested", terminal: false });
+  });
+
   test("serves cache metadata and a ZIP export", async () => {
     const root = await temporaryDirectory("phase7-cache-");
     const database = new FakeDatabase();
