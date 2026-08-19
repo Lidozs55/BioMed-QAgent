@@ -134,7 +134,7 @@
       完整，Agent code/通用 DAG fail-closed。
 - [ ] **TASK-048-B6W / A owner, blocked by TASK-047-A5I**：fixed derive slot runtime wiring。
 - [ ] **TASK-048-B6B / module complete；trusted E2E blocked by B6W/B2W/C2I**：注册 deterministic derive algorithm handlers、`protein_structure` PDB interface derived consumer/schema/profile、`variant_evidence` sequence/reference mapping derived consumer/schema/profile 已完成；A-owned runtime/plan/checkpoint/ts-core/publish wiring 未完成。
-- [ ] **TASK-048-B7 / in progress；strict result remains 0/6**：Gold3-Gold6 已多轮发现并修复 runtime 接缝；当前主线 `main@1e10dc7a` 需在同一 commit 上完成最终原样重跑、publication/artifact hash evidence 与最终答案。
+- [ ] **TASK-048-B7 / in progress；strict result remains 0/6**：Gold3-Gold6 已多轮发现并修复 runtime 接缝；最终验证基线 `main@a68fb8ca` 已记录冻结 prompt/spec/runtime hashes。该基线中 Gold4 完成了 structure Publication/artifacts，Gold5 完成了 100-row bioactivity Publication/artifacts；Gold3/Gold6 尚无完整 Publication，且四例尚未形成同一 commit 上的完整 task/run/build/publication/final-answer evidence，故不得计入严格 Gold。
 - [ ] **TASK-G1B / blocked by TASK-048-B7 + TASK-G1A（TASK-047-A8 已完成）**：最终 Gold3-Gold6 同基线复跑。
 - [ ] **TASK-G1R / blocked by TASK-G1A + TASK-G1B**：严格 Gold 最终报告。
 
