@@ -1,0 +1,10 @@
+{
+  "results": [
+    {
+      "primaryAccession": "Q9Y243",
+      "genes": [{ "geneName": { "value": "AKT3" } }],
+      "proteinDescription": { "recommendedName": { "fullName": { "value": "RAC-gamma serine/threonine-protein kinase" } } },
+      "organism": { "scientificName": "Homo sapiens", "taxonId": 9606 }
+    }
+  ]
+}

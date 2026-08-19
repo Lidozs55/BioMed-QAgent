@@ -10,6 +10,7 @@ import {
   assembleTargetEvidenceCandidate,
   assertTargetEvidenceRows,
   createTargetEvidenceRegisteredTableRegistry,
+  expandTargetEvidenceJsonCarriers,
   targetEvidenceRelations,
   targetEvidenceSchemas,
   targetEvidenceTableDefinitions,
@@ -37,6 +38,10 @@ function digest(label: string): string {
 async function fixtureRows(name: string): Promise<string[][]> {
   const text = await readFile(path.join(FIXTURES, name), "utf8");
   return delimitedRowsWithLines(text, ",").map((row) => row.values);
+}
+
+async function jsonFixture(name: string): Promise<unknown> {
+  return JSON.parse(await readFile(path.join(FIXTURES, name), "utf8")) as unknown;
 }
 
 async function loadRows(options: { evidence?: string; sources?: string } = {}): Promise<TargetEvidenceRows> {
@@ -228,6 +233,31 @@ describe("target evidence family", () => {
     missingProvenance.tables[1]!.provenance_refs = [];
     const missingProvenanceResult = await validateMultiTableCandidate(missingProvenance);
     expect(failedChecks(missingProvenanceResult)).toContain("evidence:table_provenance_refs");
+  });
+
+  it("expands fixed non-Gold UniProt, ClinVar, and trial JSON carriers", async () => {
+    const rows = expandTargetEvidenceJsonCarriers([
+      { assetId: ASSET_A, sourceId: "src_uniprot", sourceDatabase: "uniprot", logicalFile: "source_assets/uniprot.json", retrievedAt: "2026-08-18T00:00:00Z", payload: await jsonFixture("uniprot-api.non-gold.json") },
+      { assetId: ASSET_B, sourceId: "src_clinvar", sourceDatabase: "ncbi_clinvar", logicalFile: "source_assets/clinvar.json", retrievedAt: "2026-08-18T00:00:00Z", payload: await jsonFixture("clinvar-api.non-gold.json") },
+      { assetId: `asset_${"c".repeat(64)}`, sourceId: "src_trial", sourceDatabase: "clinicaltrials_gov", logicalFile: "source_assets/trial.json", retrievedAt: "2026-08-18T00:00:00Z", payload: await jsonFixture("clinicaltrials-api.non-gold.json") },
+    ]);
+    expect(rows.targets.map((row) => row.entity_id)).toEqual(["Q9Y243", "VCV000123456", "NCT01234567"]);
+    expect(rows.sources).toHaveLength(3);
+    expect(rows.evidence).toHaveLength(3);
+    expect(rows.supporting).toHaveLength(3);
+    expect(rows.evidence[1]?.evidence_value).toMatchObject({ gene_id: "10000", gene_symbol: "AKT3" });
+  });
+
+  it("fails closed for an unknown provider response shape", async () => {
+    const payload = await jsonFixture("unknown-api.non-gold.json");
+    expect(() => expandTargetEvidenceJsonCarriers([{
+      assetId: ASSET_A,
+      sourceId: "src_unknown",
+      sourceDatabase: "uniprot",
+      logicalFile: "source_assets/unknown.json",
+      retrievedAt: "2026-08-18T00:00:00Z",
+      payload,
+    }])).toThrow(/UniProt \/results must be a non-empty array/);
   });
 
   it("registers one strict CSV parser per target evidence schema", () => {

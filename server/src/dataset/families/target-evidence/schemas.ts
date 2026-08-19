@@ -153,7 +153,7 @@ export const targetEvidenceTableSchemas = Object.freeze({
   supporting: supportingSchema,
 });
 
-export const TARGET_SOURCE_DATABASES = ["uniprot", "clinicaltrials_gov"] as const;
+export const TARGET_SOURCE_DATABASES = ["uniprot", "ncbi_clinvar", "clinicaltrials_gov"] as const;
 export type TargetEvidenceSourceDatabase = typeof TARGET_SOURCE_DATABASES[number];
 
 export function isTargetEvidenceSourceDatabase(value: string): value is TargetEvidenceSourceDatabase {
