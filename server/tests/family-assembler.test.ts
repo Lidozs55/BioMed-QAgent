@@ -183,11 +183,18 @@ describe("family publication assembly", () => {
 
   test("does not create capability for a family without an assembler handler", () => {
     const registry = createDefaultFamilyAssemblerRegistry();
-    expect(registry.list()).toEqual(["gene_expression"]);
+    expect(registry.list()).toEqual([
+      "bioactivity_measurement",
+      "gene_expression",
+      "literature_evidence",
+      "protein_structure",
+      "target_evidence",
+      "variant_evidence",
+    ]);
     expect(registry.createCapability("gene_expression").handlerId).toBe(
       "gene_expression.assembler.v1",
     );
-    expect(() => registry.createCapability("target_evidence")).toThrow(/no assembler handler/);
+    expect(registry.createCapability("target_evidence").handlerId).toBe("target_evidence.assembler.v1");
     const capability = registry.createCapability("gene_expression");
     const schema = createDefaultDatasetFamilyRegistry().get("gene_expression").schemas[0]!;
     expect(() => capability.assemble({

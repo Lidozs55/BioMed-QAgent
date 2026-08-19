@@ -380,8 +380,10 @@ describe("protein_structure B-owned module slice", () => {
   it("rejects broken structure foreign keys and keeps the family out of production registries", async () => {
     const invalid = await loadFixture("non-gold.bad-relation.json");
     expect(() => assertProteinStructureRows(invalid)).toThrow(/missing structure version/);
-    expect(createDefaultDatasetFamilyRegistry().list()).toEqual(["gene_expression"]);
-    expect(() => createDefaultDatasetFamilyRegistry().get(PROTEIN_STRUCTURE_FAMILY_ID)).toThrow(/not registered/);
+    expect(createDefaultDatasetFamilyRegistry().list()).toContain(PROTEIN_STRUCTURE_FAMILY_ID);
+    expect(createDefaultDatasetFamilyRegistry().get(PROTEIN_STRUCTURE_FAMILY_ID)).toMatchObject({
+      runtime_id: "registered_multitable.runtime.v1",
+    });
     expect(PROTEIN_STRUCTURE_ASSEMBLER_ID).toBe("protein_structure.assembler.v1");
   });
 });

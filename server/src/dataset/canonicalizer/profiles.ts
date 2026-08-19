@@ -36,8 +36,27 @@ export function expressionNormalizationV1(): NormalizationProfile {
   });
 }
 
+function registeredTableNormalization(familyId: string): NormalizationProfile {
+  return parseNormalizationProfile({
+    profile_id: `${familyId}.registered.v1`,
+    dataset_family: familyId,
+    allowed_namespaces: ["source_declared"],
+    allowed_units: ["source_declared", "not_applicable"],
+    allowed_semantics: ["schema_preserving_registered_table"],
+    allowed_value_scales: ["unknown"],
+    unit_conversions: [],
+    aggregation_policy: "keep_all",
+    description: "Schema-preserving registered-table ingestion; no expression canonicalization or silent unit conversion.",
+  });
+}
+
 export const NORMALIZATION_PROFILES: Readonly<Record<string, NormalizationProfile>> = {
   [EXPRESSION_NORMALIZATION_V1_ID]: expressionNormalizationV1(),
+  "literature_evidence.registered.v1": registeredTableNormalization("literature_evidence"),
+  "target_evidence.registered.v1": registeredTableNormalization("target_evidence"),
+  "variant_evidence.registered.v1": registeredTableNormalization("variant_evidence"),
+  "protein_structure.registered.v1": registeredTableNormalization("protein_structure"),
+  "bioactivity_measurement.registered.v1": registeredTableNormalization("bioactivity_measurement"),
 };
 
 /** Resolve ``profileRef``; the default expression profile when omitted. */

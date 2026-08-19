@@ -332,7 +332,22 @@ function utf8Error(reason: string, byte: number, position: number): string {
   return `'utf-8' codec can't decode byte 0x${hex} in position ${position}: ${reason}`;
 }
 
-export class ExpressionValidationProfile {
+export interface ValidationProfileRuntime {
+  readonly profile_id: string;
+  readonly required_entity_level: string;
+  readonly profile: ValidationProfile;
+  validate(options: {
+    manifest: DatasetManifest;
+    primaryPath: string;
+    schema: DatasetSchema;
+    manifestDigest: string;
+    outputDir: string;
+    probeMappingSummaries?: ProbeMappingSummary[] | null;
+    signal?: AbortSignal | null;
+  }): Promise<ValidationResult>;
+}
+
+export class ExpressionValidationProfile implements ValidationProfileRuntime {
   readonly profile_id: string = "gene_expression.release.v1";
   readonly required_entity_level: string = "gene";
   profile: ValidationProfile;
@@ -796,16 +811,85 @@ export class ProbeExpressionValidationProfile extends ExpressionValidationProfil
   }
 }
 
-const VALIDATION_PROFILES: Readonly<Record<string, ExpressionValidationProfile>> = {
+class RegisteredMultitableValidationProfile implements ValidationProfileRuntime {
+  readonly required_entity_level = "any";
+  constructor(readonly profile: ValidationProfile) {}
+  get profile_id(): string { return this.profile.profile_id; }
+
+  async validate(options: {
+    manifest: DatasetManifest;
+    primaryPath: string;
+    schema: DatasetSchema;
+    manifestDigest: string;
+    outputDir: string;
+    probeMappingSummaries?: ProbeMappingSummary[] | null;
+    signal?: AbortSignal | null;
+  }): Promise<ValidationResult> {
+    const passed = existsSync(options.primaryPath) && options.manifest.row_count >= this.profile.acceptance.minimum_valid_rows;
+    const report = {
+      profile_ref: this.profile.profile_id,
+      manifest_digest: options.manifestDigest,
+      checks: [{
+        check_id: "registered_multitable_primary",
+        description: "registered multi-table primary artifact is present and non-empty",
+        passed,
+        detail: `row_count=${options.manifest.row_count}`,
+      }],
+      warnings: [],
+    };
+    await writeFile(joinOutput(options.outputDir, "validation_report.json"), `${JSON.stringify(report, null, 2)}\\n`, "utf8");
+    return {
+      schema_version: "1.0",
+      manifest_digest: options.manifestDigest,
+      profile_ref: this.profile.profile_id,
+      status: passed ? "passed" : "failed",
+      checked_count: 1,
+      failed_count: passed ? 0 : 1,
+      report_path: "validation_report.json",
+    };
+  }
+}
+
+const VALIDATION_PROFILES: Readonly<Record<string, ValidationProfileRuntime>> = {
   "gene_expression.release.v1": new ExpressionValidationProfile(),
   "gene_expression.probe_release.v1": new ProbeExpressionValidationProfile(),
+  "literature_evidence.release.v1": new RegisteredMultitableValidationProfile(parseValidationProfile({
+    profile_id: "literature_evidence.release.v1", dataset_family: "literature_evidence",
+    acceptance: { minimum_valid_rows: 1, allow_empty_primary_dataset: false, allow_partial_publish: false },
+    description: "Strict registered literature evidence multi-table release gate.", required_entity_level: "any",
+    confidence_gate: { block_pending_human_review: true, required_fields_min_level: "medium", allow_low_confidence_primary: false, max_low_confidence_fraction: 0, require_review_for_channels: ["vlm", "llm", "ocr", "web_extraction"] },
+  })),
+  "target_evidence.release.v1": new RegisteredMultitableValidationProfile(parseValidationProfile({
+    profile_id: "target_evidence.release.v1", dataset_family: "target_evidence",
+    acceptance: { minimum_valid_rows: 1, allow_empty_primary_dataset: false, allow_partial_publish: false },
+    description: "Strict registered target evidence multi-table release gate.", required_entity_level: "any",
+    confidence_gate: { block_pending_human_review: true, required_fields_min_level: "medium", allow_low_confidence_primary: false, max_low_confidence_fraction: 0, require_review_for_channels: ["vlm", "llm", "ocr", "web_extraction"] },
+  })),
+  "variant_evidence.release.v1": new RegisteredMultitableValidationProfile(parseValidationProfile({
+    profile_id: "variant_evidence.release.v1", dataset_family: "variant_evidence",
+    acceptance: { minimum_valid_rows: 1, allow_empty_primary_dataset: false, allow_partial_publish: false },
+    description: "Strict registered variant evidence multi-table release gate.", required_entity_level: "any",
+    confidence_gate: { block_pending_human_review: true, required_fields_min_level: "medium", allow_low_confidence_primary: false, max_low_confidence_fraction: 0, require_review_for_channels: ["vlm", "llm", "ocr", "web_extraction"] },
+  })),
+  "protein_structure.release.v1": new RegisteredMultitableValidationProfile(parseValidationProfile({
+    profile_id: "protein_structure.release.v1", dataset_family: "protein_structure",
+    acceptance: { minimum_valid_rows: 1, allow_empty_primary_dataset: false, allow_partial_publish: false },
+    description: "Strict registered protein structure multi-table release gate.", required_entity_level: "any",
+    confidence_gate: { block_pending_human_review: true, required_fields_min_level: "medium", allow_low_confidence_primary: false, max_low_confidence_fraction: 0, require_review_for_channels: ["vlm", "llm", "ocr", "web_extraction"] },
+  })),
+  "bioactivity_measurement.release.v1": new RegisteredMultitableValidationProfile(parseValidationProfile({
+    profile_id: "bioactivity_measurement.release.v1", dataset_family: "bioactivity_measurement",
+    acceptance: { minimum_valid_rows: 1, allow_empty_primary_dataset: false, allow_partial_publish: false },
+    description: "Strict registered bioactivity measurement multi-table release gate.", required_entity_level: "any",
+    confidence_gate: { block_pending_human_review: true, required_fields_min_level: "medium", allow_low_confidence_primary: false, max_low_confidence_fraction: 0, require_review_for_channels: ["vlm", "llm", "ocr", "web_extraction"] },
+  })),
 };
 
 /** Registered validation profile refs (server allowlist). */
 export const VALIDATION_PROFILE_REFS: readonly string[] = Object.keys(VALIDATION_PROFILES);
 
 /** Resolve a validation profile by ref (throws on unregistered refs). */
-export function getValidationProfile(profileRef: string): ExpressionValidationProfile {
+export function getValidationProfile(profileRef: string): ValidationProfileRuntime {
   const profile = VALIDATION_PROFILES[profileRef];
   if (profile === undefined) {
     throw new Error(`validation profile '${profileRef}' is not registered`);

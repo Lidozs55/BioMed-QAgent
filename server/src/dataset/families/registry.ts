@@ -1,11 +1,41 @@
 import type { JsonValue } from "@biomed/contracts";
-import type { DatasetSchema, NormalizationProfile } from "../contracts/index.js";
+import type { DatasetSchema, MultiTableValidationPolicy, NormalizationProfile } from "../contracts/index.js";
+import type { DatasetSchemaV2 } from "@biomed/contracts";
 import { parseAdapterParams } from "../contracts/index.js";
 import {
   expressionNormalizationV1,
   getNormalizationProfile,
 } from "../canonicalizer/index.js";
 import { getAdapter } from "../adapters/adapters.js";
+import { isRegisteredTableAdapterId } from "../adapters/registered/index.js";
+import {
+  literatureEvidenceAdapterRegistrations,
+  literatureEvidenceTables,
+  LITERATURE_EVIDENCE_FAMILY_ID,
+} from "./literature-evidence/index.js";
+import {
+  createTargetEvidenceRegisteredTableRegistry,
+  targetEvidenceSchemas,
+  TARGET_EVIDENCE_FAMILY_ID,
+  targetEvidenceTableDefinitions,
+  targetEvidenceValidationPolicy,
+} from "./target-evidence/index.js";
+import {
+  buildVariantEvidenceTables,
+  createVariantEvidenceRegisteredTableRegistry,
+  VARIANT_EVIDENCE_FAMILY_ID,
+} from "./variant-evidence/index.js";
+import {
+  buildProteinStructureTables,
+  createProteinStructureRegisteredTableRegistry,
+  PROTEIN_STRUCTURE_FAMILY_ID,
+} from "./protein-structure/index.js";
+import {
+  bioactivityTableEntries,
+  bioactivityValidationPolicy,
+  createBioactivityRegisteredTableRegistry,
+  BIOACTIVITY_FAMILY_ID,
+} from "./bioactivity-measurement/index.js";
 import {
   buildGeneExpressionSchema,
   buildProbeExpressionSchema,
@@ -27,6 +57,8 @@ export interface DatasetFamilySourceDefinition {
   source: string;
   adapter_id: string;
   schema_refs: readonly string[];
+  /** Registered-table families bind one source asset to one canonical table parser. */
+  table_id?: string;
   parameters_required: boolean;
   parameter_schema: Record<string, unknown>;
   validateParameters: (
@@ -38,7 +70,7 @@ export interface DatasetFamilySourceDefinition {
 export interface DatasetFamilyDefinition {
   id: string;
   runtime_id: string;
-  schemas: readonly DatasetSchema[];
+  schemas: readonly (DatasetSchema | DatasetSchemaV2)[];
   granularities: readonly DatasetFamilyGranularity[];
   validation_profiles_by_schema: Readonly<Record<string, readonly string[]>>;
   normalization_profile_refs: readonly string[];
@@ -47,6 +79,7 @@ export interface DatasetFamilyDefinition {
   merge_strategies: readonly string[];
   output_formats: readonly string[];
   sources: readonly DatasetFamilySourceDefinition[];
+  multitable_validation_policy?: MultiTableValidationPolicy;
 }
 
 function sortedUnique(values: readonly string[], label: string): string[] {
@@ -59,6 +92,11 @@ function sortedUnique(values: readonly string[], label: string): string[] {
 
 const PRODUCTION_RUNTIME_BY_FAMILY: Readonly<Record<string, string>> = {
   gene_expression: "gene_expression.runtime.v1",
+  literature_evidence: "registered_multitable.runtime.v1",
+  target_evidence: "registered_multitable.runtime.v1",
+  variant_evidence: "registered_multitable.runtime.v1",
+  protein_structure: "registered_multitable.runtime.v1",
+  bioactivity_measurement: "registered_multitable.runtime.v1",
 };
 
 function validateDefinition(definition: DatasetFamilyDefinition): void {
@@ -119,6 +157,9 @@ function validateDefinition(definition: DatasetFamilyDefinition): void {
     }
   }
   for (const source of definition.sources) {
+    if (source.table_id !== undefined && source.table_id.trim() === "") {
+      throw new Error(`dataset family '${definition.id}' source table_id must not be blank`);
+    }
     if (typeof source.validateParameters !== "function") {
       throw new Error(
         `dataset family '${definition.id}' source '${source.source}' is missing parameter validator`,
@@ -132,6 +173,7 @@ function validateDefinition(definition: DatasetFamilyDefinition): void {
         throw new Error(`source '${source.source}' references unknown schema '${schemaRef}'`);
       }
     }
+    if (isRegisteredTableAdapterId(source.adapter_id)) continue;
     const adapter = getAdapter(source.adapter_id);
     if (adapter.source_database !== source.source) {
       throw new Error(
@@ -350,6 +392,146 @@ export function geneExpressionFamilyDefinition(): DatasetFamilyDefinition {
   };
 }
 
+function registeredSource(options: {
+  source: string;
+  tableId: string;
+  adapterId: string;
+  schemaRef: string;
+}): DatasetFamilySourceDefinition {
+  return {
+    source: options.source,
+    table_id: options.tableId,
+    adapter_id: options.adapterId,
+    schema_refs: [options.schemaRef],
+    parameters_required: false,
+    parameter_schema: emptyAdapterParameterSchema(),
+    validateParameters: noAdapterParameters,
+  };
+}
+
+function registeredFamily(options: {
+  id: string;
+  schemas: readonly (DatasetSchema | DatasetSchemaV2)[];
+  profileRef: string;
+  sources: readonly DatasetFamilySourceDefinition[];
+  validationPolicy?: MultiTableValidationPolicy;
+}): DatasetFamilyDefinition {
+  return {
+    id: options.id,
+    runtime_id: "registered_multitable.runtime.v1",
+    schemas: options.schemas,
+    granularities: [...new Map(options.schemas.map((schema) => [schema.row_granularity, {
+      id: schema.row_granularity,
+      target_entity_level: null,
+    }])).values()],
+    validation_profiles_by_schema: Object.fromEntries(
+      options.schemas.map((schema) => [schema.schema_id, [options.profileRef]]),
+    ),
+    normalization_profile_refs: [`${options.id}.registered.v1`],
+    default_normalization_profile_ref: `${options.id}.registered.v1`,
+    validation_profile_refs: [options.profileRef],
+    merge_strategies: ["registered_multitable_identity"],
+    output_formats: ["csv"],
+    sources: options.sources,
+    multitable_validation_policy: options.validationPolicy ?? {
+      token_preservation_rules: [],
+      profile_relation_missing_policies: {},
+    },
+  };
+}
+
+export function literatureEvidenceFamilyDefinition(): DatasetFamilyDefinition {
+  const registrations = literatureEvidenceAdapterRegistrations;
+  return registeredFamily({
+    id: LITERATURE_EVIDENCE_FAMILY_ID,
+    schemas: literatureEvidenceTables.map((entry) => entry.schema),
+    profileRef: "literature_evidence.release.v1",
+    sources: registrations.map((registration, index) => registeredSource({
+      source: `registered_literature_${literatureEvidenceTables[index]!.definition.table_id}`,
+      tableId: literatureEvidenceTables[index]!.definition.table_id,
+      adapterId: registration.parser.adapter_id,
+      schemaRef: registration.schema.schema_id,
+    })),
+  });
+}
+
+export function targetEvidenceFamilyDefinition(): DatasetFamilyDefinition {
+  const definitions = targetEvidenceTableDefinitions();
+  const registrations = createTargetEvidenceRegisteredTableRegistry().entries();
+  return registeredFamily({
+    id: TARGET_EVIDENCE_FAMILY_ID,
+    schemas: targetEvidenceSchemas,
+    profileRef: "target_evidence.release.v1",
+    validationPolicy: targetEvidenceValidationPolicy(),
+    sources: registrations.map((registration) => {
+      const index = targetEvidenceSchemas.findIndex((schema) => schema.schema_id === registration.schema.schema_id);
+      return registeredSource({
+        source: `registered_target_${definitions[index]!.table_id}`,
+        tableId: definitions[index]!.table_id,
+        adapterId: registration.parser.adapter_id,
+        schemaRef: registration.schema.schema_id,
+      });
+    }),
+  });
+}
+
+export function variantEvidenceFamilyDefinition(): DatasetFamilyDefinition {
+  const tables = buildVariantEvidenceTables();
+  const definitions = [tables.variantTable, tables.evidenceTable, tables.sourceTable];
+  const registrations = createVariantEvidenceRegisteredTableRegistry().entries();
+  return registeredFamily({
+    id: VARIANT_EVIDENCE_FAMILY_ID,
+    schemas: [tables.variant, tables.evidence, tables.source],
+    profileRef: "variant_evidence.release.v1",
+    sources: registrations.map((registration) => {
+      const index = [tables.variant, tables.evidence, tables.source].findIndex((schema) => schema.schema_id === registration.schema.schema_id);
+      return registeredSource({ source: `registered_variant_${definitions[index]!.table_id}`, tableId: definitions[index]!.table_id, adapterId: registration.parser.adapter_id, schemaRef: registration.schema.schema_id });
+    }),
+  });
+}
+
+export function proteinStructureFamilyDefinition(): DatasetFamilyDefinition {
+  const tables = buildProteinStructureTables();
+  const entries = [
+    { tableId: "structures", schema: tables.structure },
+    { tableId: "chains", schema: tables.chain },
+    { tableId: "ligands", schema: tables.ligand },
+    { tableId: "sources", schema: tables.source },
+  ];
+  const registrations = createProteinStructureRegisteredTableRegistry().entries();
+  return registeredFamily({
+    id: PROTEIN_STRUCTURE_FAMILY_ID,
+    schemas: entries.map((entry) => entry.schema),
+    profileRef: "protein_structure.release.v1",
+    sources: registrations.map((registration) => {
+      const entry = entries.find((item) => item.schema.schema_id === registration.schema.schema_id)!;
+      return registeredSource({ source: `registered_structure_${entry.tableId}`, tableId: entry.tableId, adapterId: registration.parser.adapter_id, schemaRef: registration.schema.schema_id });
+    }),
+  });
+}
+
+export function bioactivityMeasurementFamilyDefinition(): DatasetFamilyDefinition {
+  const entries = bioactivityTableEntries();
+  const registrations = createBioactivityRegisteredTableRegistry().entries();
+  return registeredFamily({
+    id: BIOACTIVITY_FAMILY_ID,
+    schemas: entries.map((entry) => entry.schema),
+    profileRef: "bioactivity_measurement.release.v1",
+    validationPolicy: bioactivityValidationPolicy(),
+    sources: registrations.map((registration) => {
+      const entry = entries.find((item) => item.schema.schema_id === registration.schema.schema_id)!;
+      return registeredSource({ source: `registered_bioactivity_${entry.tableId}`, tableId: entry.tableId, adapterId: registration.parser.adapter_id, schemaRef: registration.schema.schema_id });
+    }),
+  });
+}
+
 export function createDefaultDatasetFamilyRegistry(): DatasetFamilyRegistry {
-  return new DatasetFamilyRegistry([geneExpressionFamilyDefinition()]);
+  return new DatasetFamilyRegistry([
+    geneExpressionFamilyDefinition(),
+    literatureEvidenceFamilyDefinition(),
+    targetEvidenceFamilyDefinition(),
+    variantEvidenceFamilyDefinition(),
+    proteinStructureFamilyDefinition(),
+    bioactivityMeasurementFamilyDefinition(),
+  ]);
 }

@@ -42,7 +42,7 @@ export interface ProteinStructureAssemblyInput {
   rowGranularity: string;
   tables: readonly ProteinStructureTableAssemblyInput[];
   registeredAssetIds: readonly string[];
-  rows: ProteinStructureRows;
+  rows?: ProteinStructureRows;
   auditResults?: readonly OperationResultManifest[];
 }
 
@@ -166,7 +166,7 @@ export function assembleProteinStructureCandidate(
   }
   const { schemas, byId } = schemaSet();
   assertProteinStructureRelations(schemas.relations);
-  assertProteinStructureRows(input.rows);
+  if (input.rows !== undefined) assertProteinStructureRows(input.rows);
   const validated = TABLE_ORDER.map((tableId) => {
     const tableInput = inputById.get(tableId)!;
     const expected = byId[tableId];

@@ -18,6 +18,7 @@ import type {
   DatasetManifest,
   DatasetPublication,
   ValidationResult,
+  VersionedDatasetManifest,
 } from "../contracts/index.js";
 import { parsePublicationCandidate } from "../contracts/index.js";
 import { throwIfAborted } from "../cooperative.js";
@@ -39,7 +40,7 @@ export class AtomicPromotionError extends BuildError {}
 
 export interface PublishOptions {
   outputDir: string;
-  manifest: DatasetManifest;
+  manifest: VersionedDatasetManifest;
   validation: ValidationResult;
   publicationCandidate?: PublicationCandidate | null;
   expectedSourceAssetIds?: ReadonlySet<string> | null;

@@ -61,7 +61,14 @@ describe("parameterized biomedical common schemas", () => {
       expect(schema.primary_key.every((key) => schema.fields.some((field) => field.name === key))).toBe(true);
     }
 
-    expect(createDefaultDatasetFamilyRegistry().list()).toEqual(["gene_expression"]);
+    expect(createDefaultDatasetFamilyRegistry().list()).toEqual([
+      "bioactivity_measurement",
+      "gene_expression",
+      "literature_evidence",
+      "protein_structure",
+      "target_evidence",
+      "variant_evidence",
+    ]);
   });
 
   it.each(builders)("builds a validated %s table definition", (_kind, builder) => {

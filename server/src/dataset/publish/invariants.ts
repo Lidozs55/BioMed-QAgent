@@ -14,7 +14,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { throwIfAborted } from "../cooperative.js";
 import { sha256FileStream } from "../adapters/hashing.js";
-import type { DatasetManifest, ManifestArtifactEntry, ValidationResult } from "../contracts/index.js";
+import type { ManifestArtifactEntry, ValidationResult, VersionedDatasetManifest } from "../contracts/index.js";
 
 /** Directory under the build workspace where immutable versions are promoted. */
 export const PUBLISH_DIR = "publish";
@@ -39,7 +39,7 @@ export interface ReleaseInvariantsResult {
  * it exactly.
  */
 export async function checkReleaseInvariants(options: {
-  manifest: DatasetManifest;
+  manifest: VersionedDatasetManifest;
   validation: ValidationResult;
   outputDir: string;
   expectedSourceAssetIds?: ReadonlySet<string> | null;
@@ -69,7 +69,7 @@ export async function checkReleaseInvariants(options: {
 }
 
 async function checkProvenanceClosure(
-  manifest: DatasetManifest,
+  manifest: VersionedDatasetManifest,
   outputDir: string,
   violations: string[],
   expectedSourceAssetIds: ReadonlySet<string> | null,
@@ -139,7 +139,7 @@ async function checkProvenanceClosure(
 
 /** B4: every manifest artifact must exist with the exact declared size/SHA-256. */
 async function checkManifestArtifacts(
-  manifest: DatasetManifest,
+  manifest: VersionedDatasetManifest,
   outputDir: string,
   violations: string[],
   signal?: AbortSignal | null,
@@ -198,7 +198,7 @@ function checkProfilePassed(validation: ValidationResult, violations: string[]):
 }
 
 function checkAtomicPromotion(
-  manifest: DatasetManifest,
+  manifest: VersionedDatasetManifest,
   outputDir: string,
   violations: string[],
 ): boolean {
