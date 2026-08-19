@@ -169,8 +169,11 @@ function parseDocument(options: {
 }): BioCLiteratureCanonicalTables {
   const metadata = infons(options.document);
   const paper = paperIdentity(options.document);
-  const title = required(metadata.get("title"), "paper title infon");
   const passages = children(options.document, "passage");
+  const title = required(
+    metadata.get("title") ?? text(passages[0]),
+    "paper title infon or first passage text",
+  );
   const output: BioCLiteratureCanonicalTables = { literature_evidence: [], papers: [], sources: [] };
 
   passages.forEach((passage, passageIndex) => {
