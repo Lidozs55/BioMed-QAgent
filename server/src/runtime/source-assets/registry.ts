@@ -59,6 +59,10 @@ function cloneReceipt(receipt: SourceAssetRegistrationReceipt): SourceAssetRegis
   return JSON.parse(JSON.stringify(receipt)) as SourceAssetRegistrationReceipt;
 }
 
+function registrationKey(assetId: string, role: RegisteredSourceAssetRole): string {
+  return `${assetId}:${role}`;
+}
+
 /** Core-owned, task-scoped source asset registration and resolution seam. */
 export class SourceAssetRegistry {
   private readonly root: string;
@@ -87,7 +91,10 @@ export class SourceAssetRegistry {
       if (!Array.isArray(records)) throw new TypeError("source asset registry must be an array");
       for (const value of records) {
         const receipt = parseSourceAssetRegistrationReceipt(value, this.taskId);
-        this.registrations.set(receipt.asset_ref.asset_id, receipt);
+        this.registrations.set(
+          registrationKey(receipt.asset_ref.asset_id, receipt.asset_ref.role),
+          receipt,
+        );
       }
     }
     this.loaded = true;
@@ -117,7 +124,8 @@ export class SourceAssetRegistry {
     const { sha256, bytes } = await sha256FileStreamWithSize(canonicalFile);
     if (bytes !== info.size) throw new Error("source asset changed while registering");
     const assetId = `asset_${sha256}`;
-    const existing = this.registrations.get(assetId);
+    const key = registrationKey(assetId, role);
+    const existing = this.registrations.get(key);
     if (existing !== undefined) return cloneReceipt(existing);
     const receipt = parseSourceAssetRegistrationReceipt({
       schema_version: "1.0",
@@ -137,7 +145,7 @@ export class SourceAssetRegistry {
         telemetry_event: "asset_ref_used",
       },
     }, this.taskId);
-    this.registrations.set(assetId, receipt);
+    this.registrations.set(key, receipt);
     await this.persist();
     return cloneReceipt(receipt);
   }
@@ -159,11 +167,9 @@ export class SourceAssetRegistry {
 
   async resolveAny(assetId: string): Promise<CoreResolvedRegisteredAsset> {
     await this.load();
-    const receipt = this.registrations.get(assetId);
+    const receipt = this.registrations.get(registrationKey(assetId, "carrier")) ??
+      this.registrations.get(registrationKey(assetId, "source"));
     if (receipt === undefined) throw new Error("registered asset was not found");
-    if (receipt.asset_ref.role !== "source" && receipt.asset_ref.role !== "carrier") {
-      throw new Error("registered asset role is not a source or carrier");
-    }
     this.onTelemetry?.("asset_ref_used", receipt.relative_path);
     const file = await this.checkedFile(receipt);
     return { registration_receipt: cloneReceipt(receipt), content: this.verifiedStream(file, receipt) };
@@ -180,7 +186,7 @@ export class SourceAssetRegistry {
       task_id: this.taskId,
       role,
     }, this.taskId);
-    const receipt = this.registrations.get(ref.asset_id);
+    const receipt = this.registrations.get(registrationKey(ref.asset_id, role));
     if (receipt === undefined) throw new Error(`registered ${role} asset was not found`);
     if (receipt.asset_ref.role !== role) throw new Error(`registered asset role is not ${role}`);
     this.onTelemetry?.("asset_ref_used", receipt.relative_path);
