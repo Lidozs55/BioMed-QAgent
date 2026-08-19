@@ -89,6 +89,8 @@ coverage.xml
 
 # ===== 其他 =====
 .cache
+.trae/
+.pi-subagents/
 
 # Local MCP server builds (configure-glm-vision skill)
 outputs/
@@ -106,4 +108,7 @@ fix_ruff.py
 *.tsbuildinfo.worktrees/
 *.tsbuildinfo
 
-.trae/
+# ===== Commonly 本地 agent 脚手架 =====
+# CLI webhook-SDK 脚手架脚本会在首次运行时在此生成 agent，
+# 其中的 .commonly-env 含运行时 token，绝不入库
+/scripts/commonly-agent/
