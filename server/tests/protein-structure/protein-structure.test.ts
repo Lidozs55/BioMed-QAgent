@@ -266,6 +266,54 @@ afterEach(async () => {
 });
 
 describe("protein_structure fixed PDB provider", () => {
+  it("expands one non-Gold mmCIF carrier into all canonical tables", async () => {
+    const bytes = await readFile(path.join(FIXTURES, "non-gold.carrier.mmcif"));
+    const rows = parseProteinStructureCarrier({
+      assetId: ASSET_ID,
+      logicalFile: "source_assets/pdb/3ABC.cif",
+      retrievedAt: "2024-02-02T00:00:00Z",
+      mediaType: "chemical/x-mmcif",
+      bytes,
+    });
+
+    expect(rows.structures).toEqual([expect.objectContaining({
+      structure_id: "3ABC",
+      structure_version: "2",
+      title: "NON-GOLD MM CIF COMPLEX",
+      experimental_method: "X-RAY DIFFRACTION",
+      resolution_angstrom: 2.35,
+      deposited_at: "2023-04-05",
+    })]);
+    expect(rows.chains).toEqual([
+      expect.objectContaining({ chain_id: "A", entity_id: "1", sequence_length: 3 }),
+      expect.objectContaining({ chain_id: "B", entity_id: "2", sequence_length: 3 }),
+    ]);
+    expect(rows.ligands).toEqual([expect.objectContaining({
+      ligand_id: "LIG",
+      chemical_name: "NON-GOLD LIGAND",
+      formula: "C5 H8 N2",
+    })]);
+    expect(rows.sources).toEqual([expect.objectContaining({
+      source_asset_id: ASSET_ID,
+      carrier_type: "mmcif_text",
+    })]);
+    for (const row of [...rows.structures, ...rows.chains, ...rows.ligands, ...rows.sources]) {
+      expect(row.source_locator.asset_id).toBe(ASSET_ID);
+    }
+    expect(() => assertProteinStructureRows(rows)).not.toThrow();
+  });
+
+  it("fails closed when a mmCIF carrier cannot close required relations", async () => {
+    const bytes = await readFile(path.join(FIXTURES, "non-gold.carrier.invalid.mmcif"));
+    expect(() => parseProteinStructureCarrier({
+      assetId: ASSET_ID,
+      logicalFile: "source_assets/pdb/3BAD.cif",
+      retrievedAt: "2024-02-02T00:00:00Z",
+      mediaType: "chemical/x-mmcif",
+      bytes,
+    })).toThrow(/PDB structure provider rejected|chain supporting table must not be empty|mmCIF is missing/);
+  });
+
   it("expands one non-Gold PDB carrier into all canonical tables", async () => {
     const bytes = await readFile(path.join(FIXTURES, "non-gold.carrier.pdb"));
     const rows = parseProteinStructureCarrier({
