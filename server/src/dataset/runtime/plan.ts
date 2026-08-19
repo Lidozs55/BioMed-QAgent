@@ -14,8 +14,13 @@ import {
   type OperationSpec,
 } from "./operations.js";
 
-/** Expand the fixed skeleton for one build spec (fan-out per source). */
-export function buildOperationPlan(spec: DatasetBuildSpec): OperationSpec[] {
+/** Expand the fixed skeleton for one build spec (fan-out per source).
+ * The derive slot is server-owned and appears only when a trusted handler is
+ * supplied; callers cannot add arbitrary operations. */
+export function buildOperationPlan(
+  spec: DatasetBuildSpec,
+  options: { deriveHandler?: boolean } = {},
+): OperationSpec[] {
   const ops: OperationSpec[] = [];
   const bindings = spec.source_bindings;
   for (const binding of bindings) {
@@ -69,12 +74,23 @@ export function buildOperationPlan(spec: DatasetBuildSpec): OperationSpec[] {
       upstream: ["compatibility_gate"],
     }),
   );
+  const validationUpstream = options.deriveHandler ? "derive" : "integrate";
+  if (options.deriveHandler) {
+    ops.push(
+      makeOperationSpec({
+        operation_id: "derive",
+        kind: OperationKind.DERIVE,
+        label: "确定性派生",
+        upstream: ["integrate"],
+      }),
+    );
+  }
   ops.push(
     makeOperationSpec({
       operation_id: "validate_profile",
       kind: OperationKind.VALIDATE_PROFILE,
       label: "Validation Profile",
-      upstream: ["integrate"],
+      upstream: [validationUpstream],
     }),
   );
   ops.push(
