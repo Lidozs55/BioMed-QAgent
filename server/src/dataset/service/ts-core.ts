@@ -31,6 +31,7 @@ import type {
   DatasetBuildSpec,
   DatasetManifest,
   SourceAsset,
+  VersionedDatasetManifest,
   ValidationResult,
 } from "../contracts/index.js";
 import { parsePublicationCandidate } from "../contracts/index.js";
@@ -70,6 +71,7 @@ import { writeConfidenceArtifact } from "../confidence/artifact.js";
 import { delimitedRowsFromFileAsync } from "../adapters/text.js";
 import type { HumanReviewState } from "../contracts/data.js";
 import type { DeterministicDeriveCapability } from "../derive/index.js";
+import { executeRegisteredMultiTableBuild } from "../runtime/registered-multitable.js";
 
 export interface TypeScriptDatasetCoreOptions {
   taskId: string;
@@ -105,7 +107,7 @@ export interface BuildRecord {
   status: string;
   error: string | null;
   publication_id: string | null;
-  manifest: DatasetManifest | null;
+  manifest: VersionedDatasetManifest | null;
   validation: ValidationResult | null;
   completed_operations: string[];
   /** Phase-A rejected binding ids (partial/no-data builds). */
@@ -708,8 +710,30 @@ export class TypeScriptDatasetCore {
     // Admission lookups are pure and may throw. Resolve them before taking the
     // fenced build lease so invalid direct Core calls cannot strand the lock.
     const familyRegistry = createDefaultDatasetFamilyRegistry();
-    familyRegistry.get(spec.dataset_family);
+    const family = familyRegistry.get(spec.dataset_family);
     familyRegistry.schemaRegistry().get(spec.schema_ref);
+    if (family.runtime_id === "registered_multitable.runtime.v1") {
+      if (context.registeredSourceAssetIds === undefined) {
+        throw new BuildError("registered multi-table execution requires task-owned registered asset IDs");
+      }
+      const registeredIds = Object.fromEntries(
+        Object.entries(context.sourceAssets ?? {}).map(([bindingId, asset]) => [bindingId, asset.asset_id]),
+      );
+      for (const assetId of Object.values(registeredIds)) {
+        if (!context.registeredSourceAssetIds.has(assetId)) throw new BuildError(`source asset '${assetId}' is not task-registered`);
+      }
+      const result = await executeRegisteredMultiTableBuild({ taskId, taskRoot, spec, registeredAssetIds: registeredIds, runId: context.runId });
+      return {
+        build_id: buildId,
+        status: "completed",
+        error: null,
+        publication_id: result.publication.publicationId,
+        manifest: result.manifest,
+        validation: result.validation,
+        completed_operations: ["parse", "integrate", "assemble", "validate_profile", "publish"],
+        rejected_sources: [],
+      };
+    }
     const outputDir = path.join(taskRoot, "datasets_build", buildId);
     const stateDir = path.join(outputDir, "state");
     mkdirSync(outputDir, { recursive: true });

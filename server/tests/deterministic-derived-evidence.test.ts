@@ -112,8 +112,10 @@ function registry(): DeterministicDeriveRegistry {
 }
 
 describe("protein_structure deterministic derived evidence module", () => {
-  test("keeps the derived family module out of the production default registry", () => {
-    expect(createDefaultDatasetFamilyRegistry().list()).toEqual(["gene_expression"]);
+  test("keeps derived schemas out while the base trusted families are production-registered", () => {
+    const registry = createDefaultDatasetFamilyRegistry();
+    expect(registry.list()).toContain("protein_structure");
+    expect(registry.schemaRegistry().list()).not.toContain("protein_structure.interface_derived.v1");
   });
 
   test("recomputes a non-Gold PDB interface and keeps it explicitly derived", () => {

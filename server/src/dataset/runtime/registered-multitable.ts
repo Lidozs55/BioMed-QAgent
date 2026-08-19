@@ -1,0 +1,342 @@
+import { createHash } from "node:crypto";
+import { appendFileSync, mkdirSync } from "node:fs";
+import { readFile, rm, stat, writeFile } from "node:fs/promises";
+import path from "node:path";
+
+import type {
+  DatasetManifestV2,
+  DatasetSchemaV2,
+  ManifestArtifactEntry,
+  OperationResultManifest,
+  PublicationCandidate,
+} from "@biomed/contracts";
+
+import {
+  RegisteredTableAdapter,
+  createDefaultRegisteredTableRegistry,
+  type RegisteredTableAdapterResult,
+  type RegisteredTableAudit,
+  type RegisteredTableRejectedRow,
+  type RegisteredTableRow,
+  type RegisteredTableSink,
+} from "../adapters/registered/index.js";
+import { sha256FileStream } from "../adapters/hashing.js";
+import { createDefaultFamilyAssemblerRegistry } from "../assembly/index.js";
+import type { DatasetBuildSpec, ValidationResult } from "../contracts/index.js";
+import type { DatasetFamilyDefinition } from "../families/index.js";
+import { createDefaultDatasetFamilyRegistry } from "../families/index.js";
+import { packageDigest } from "../publish/manifest.js";
+import { promotePublication, type PublishResult } from "../publish/publisher.js";
+import { validateMultiTableCandidate } from "../validation/multitable.js";
+import { SourceAssetRegistry } from "../../runtime/source-assets/registry.js";
+
+const IMPLEMENTATION_DIGEST = createHash("sha256")
+  .update("registered_multitable.runtime.v1")
+  .digest("hex");
+
+function csvCell(value: unknown): string {
+  const text = value === null ? "" : typeof value === "object" ? JSON.stringify(value) : String(value);
+  return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+}
+
+class CanonicalCsvSink implements RegisteredTableSink {
+  readonly referencedSourceAssetIds = new Set<string>();
+  result: RegisteredTableAdapterResult | null = null;
+
+  constructor(readonly filePath: string, readonly fields: readonly string[]) {
+    mkdirSync(path.dirname(filePath), { recursive: true });
+    appendFileSync(filePath, `${fields.join(",")}\n`, "utf8");
+  }
+
+  writeRow(row: RegisteredTableRow): void {
+    const declaredAssetId = row.values.source_asset_id;
+    const locator = row.values.source_locator;
+    if (typeof declaredAssetId === "string") {
+      if (!/^asset_[0-9a-f]{64}$/.test(declaredAssetId)) throw new Error("source_asset_id must be content addressed");
+      if (locator !== null && typeof locator === "object" && !Array.isArray(locator) && Reflect.get(locator, "asset_id") !== declaredAssetId) {
+        throw new Error("source locator asset does not match source_asset_id");
+      }
+      this.referencedSourceAssetIds.add(declaredAssetId);
+    }
+    appendFileSync(this.filePath, `${this.fields.map((field) => csvCell(row.values[field])).join(",")}\n`, "utf8");
+  }
+  writeRejectedRow(_row: RegisteredTableRejectedRow): void {}
+  commit(result: RegisteredTableAdapterResult): void { this.result = result; }
+  async rollback(): Promise<void> { await rm(this.filePath, { force: true }); }
+}
+
+function digest(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+async function tableResult(options: {
+  taskId: string;
+  buildId: string;
+  familyId: string;
+  tableId: string;
+  schema: DatasetSchemaV2;
+  relativePath: string;
+  absolutePath: string;
+  assetIds: readonly string[];
+}): Promise<OperationResultManifest> {
+  const fileStat = await stat(options.absolutePath);
+  const sha256 = await sha256FileStream(options.absolutePath);
+  const rowCount = Math.max(0, (await readFile(options.absolutePath, "utf8")).trimEnd().split("\n").length - 1);
+  return {
+    schema_version: "1.0",
+    result_manifest_id: `result_${options.buildId}_${options.tableId}`,
+    task_id: options.taskId,
+    build_id: options.buildId,
+    operation_id: `integrate_${options.tableId}`,
+    operation_kind: "integrate",
+    operation_attempt_id: `attempt_${options.buildId}_${options.tableId}`,
+    attempt: 1,
+    status: "succeeded",
+    input_digest: digest([[...options.assetIds].sort(), options.schema.schema_id]),
+    parameter_digest: digest({ table_id: options.tableId }),
+    implementation_digest: IMPLEMENTATION_DIGEST,
+    output_digest: sha256,
+    output_kind: "integrated_table",
+    output_summary: {
+      table_id: options.tableId,
+      dataset_family: options.familyId,
+      row_granularity: options.schema.row_granularity,
+      schema_ref: options.schema.schema_id,
+      row_count: rowCount,
+      column_count: options.schema.fields.length,
+      primary_file_sha256: sha256,
+    },
+    output_files: [{ relative_path: options.relativePath, size_bytes: fileStat.size, sha256 }],
+    dependency_closure: {
+      input_asset_ids: [...new Set(options.assetIds)].sort(),
+      upstream_result_manifest_ids: [],
+      parameter_digest: digest({ table_id: options.tableId }),
+      implementation_digest: IMPLEMENTATION_DIGEST,
+    },
+    commit: { state: "committed", commit_id: `commit_${options.buildId}_${options.tableId}`, committed_at: new Date().toISOString() },
+    migration: { mode: "native", legacy_checkpoint_path: null, migrated_at: null },
+  };
+}
+
+async function artifact(
+  outputDir: string,
+  relativePath: string,
+  role: ManifestArtifactEntry["role"],
+  mediaType: string,
+): Promise<ManifestArtifactEntry> {
+  const absolutePath = path.join(outputDir, ...relativePath.split("/"));
+  const fileStat = await stat(absolutePath);
+  const sha256 = await sha256FileStream(absolutePath);
+  return {
+    schema_version: "1.0",
+    artifact_id: `artifact_${digest([relativePath, sha256]).slice(0, 32)}`,
+    role,
+    relative_path: relativePath,
+    media_type: mediaType,
+    size_bytes: fileStat.size,
+    sha256,
+  };
+}
+
+function candidateRef(candidate: PublicationCandidate) {
+  const key = (ref: PublicationCandidate["provenance_refs"][number]) =>
+    [ref.result_manifest_id, ref.output_kind, ref.output_file_index, ref.output_file_sha256].join(":");
+  return {
+    candidate_id: candidate.candidate_id,
+    table_ids: candidate.tables.map((table) => table.definition.table_id),
+    relation_ids: candidate.relations.map((relation) => relation.relation_id),
+    provenance_refs: candidate.provenance_refs.map(key),
+    confidence_refs: candidate.confidence_refs.map(key),
+    audit_refs: candidate.audit_refs.map(key),
+  };
+}
+
+export interface RegisteredMultiTableExecutionInput {
+  taskId: string;
+  taskRoot: string;
+  spec: DatasetBuildSpec;
+  /** binding_id -> content-addressed task-owned asset ID */
+  registeredAssetIds: Readonly<Record<string, string>>;
+  forbiddenRoots?: readonly string[];
+  publishedAt?: string;
+  runId?: string;
+}
+
+export interface RegisteredMultiTableExecutionResult {
+  candidate: PublicationCandidate;
+  manifest: DatasetManifestV2;
+  validation: ValidationResult;
+  publication: PublishResult;
+  tableResults: Readonly<Record<string, OperationResultManifest>>;
+}
+
+/** Server-owned fixed registered asset -> parse -> assemble -> B3 -> Publisher capability. */
+export async function executeRegisteredMultiTableBuild(
+  input: RegisteredMultiTableExecutionInput,
+): Promise<RegisteredMultiTableExecutionResult> {
+  const familyRegistry = createDefaultDatasetFamilyRegistry();
+  const family = familyRegistry.get(input.spec.dataset_family);
+  if (family.runtime_id !== "registered_multitable.runtime.v1") {
+    throw new Error(`family '${family.id}' does not use the registered multi-table runtime`);
+  }
+  const outputDir = path.join(input.taskRoot, "datasets_build", input.spec.build_id);
+  mkdirSync(path.join(outputDir, "tables"), { recursive: true });
+  const assetRegistry = new SourceAssetRegistry(input.taskId, input.taskRoot);
+  const parserRegistry = createDefaultRegisteredTableRegistry();
+  const tableResults: Record<string, OperationResultManifest> = {};
+  const audits: RegisteredTableAudit[] = [];
+  const sourceReceipts = new Map<string, Awaited<ReturnType<SourceAssetRegistry["register"]>>>();
+
+  for (const binding of input.spec.source_bindings) {
+    const source = family.sources.find((item) => item.source === binding.source && item.adapter_id === binding.adapter_id);
+    if (source?.table_id === undefined) throw new Error(`binding '${binding.binding_id}' has no registered table capability`);
+    const assetId = input.registeredAssetIds[binding.binding_id];
+    if (assetId === undefined) throw new Error(`binding '${binding.binding_id}' has no registered asset ID`);
+    const resolved = await assetRegistry.resolve(assetId);
+    sourceReceipts.set(assetId, resolved.registration_receipt);
+    const registration = parserRegistry.entries().find((entry) => entry.parser.adapter_id === binding.adapter_id);
+    if (registration === undefined) throw new Error(`registered parser '${binding.adapter_id}' is unavailable`);
+    const relativePath = `tables/${source.table_id}.csv`;
+    const absolutePath = path.join(outputDir, ...relativePath.split("/"));
+    const sink = new CanonicalCsvSink(absolutePath, registration.schema.fields.map((field) => field.name));
+    const parsed = await new RegisteredTableAdapter(parserRegistry).parse({
+      schema_version: "1.0",
+      task_id: input.taskId,
+      asset_id: assetId,
+      schema_ref: source.schema_refs[0],
+      adapter_id: binding.adapter_id,
+      parser_version: registration.parser.parser_version,
+    }, resolved, sink);
+    audits.push(parsed.audit);
+    const rowAssetIds = new Set<string>([assetId]);
+    for (const declaredAssetId of sink.referencedSourceAssetIds) {
+      const carrier = await assetRegistry.resolve(declaredAssetId);
+      sourceReceipts.set(declaredAssetId, carrier.registration_receipt);
+      rowAssetIds.add(declaredAssetId);
+    }
+    tableResults[source.table_id] = await tableResult({
+      taskId: input.taskId,
+      buildId: input.spec.build_id,
+      familyId: family.id,
+      tableId: source.table_id,
+      schema: registration.schema,
+      relativePath,
+      absolutePath,
+      assetIds: [...rowAssetIds],
+    });
+  }
+
+  const primarySchema = family.schemas.find((schema) => schema.schema_id === input.spec.schema_ref);
+  if (primarySchema?.schema_version !== "2.0") throw new Error("registered multi-table build requires a primary Schema 2.0");
+  const primaryResult = Object.values(tableResults).find((result) => result.output_summary.schema_ref === primarySchema.schema_id);
+  if (primaryResult === undefined) throw new Error("registered multi-table build did not produce its primary schema");
+  const registeredAssets = [...sourceReceipts.keys()].sort();
+  const candidate = createDefaultFamilyAssemblerRegistry().createCapability(family.id).assemble({
+    taskId: input.taskId,
+    buildId: input.spec.build_id,
+    datasetFamily: family.id,
+    rowGranularity: input.spec.row_granularity,
+    schema: primarySchema,
+    integrationResult: primaryResult,
+    integrationResults: tableResults,
+    registeredAssetIds: registeredAssets,
+  });
+
+  const schemasByRef = new Map(family.schemas.filter((schema): schema is DatasetSchemaV2 => schema.schema_version === "2.0").map((schema) => [schema.schema_id, schema]));
+  const validationTables = candidate.tables.map((table) => {
+    const result = tableResults[table.definition.table_id];
+    const schema = schemasByRef.get(table.definition.schema_ref);
+    if (result === undefined || schema === undefined) throw new Error(`candidate table '${table.definition.table_id}' is not backed by a registered result`);
+    const refKey = `${result.result_manifest_id}:${result.output_kind}:0:${result.output_files[0]!.sha256}`;
+    return {
+      definition: table.definition,
+      schema,
+      file: { origin: "core_operation_result" as const, relative_path: result.output_files[0]!.relative_path, delimiter: "," as const, operation_result: result },
+      provenance_refs: [refKey],
+      confidence_refs: [refKey],
+    };
+  });
+  const defaultForbiddenRoot = path.join(input.taskRoot, "workspace");
+  mkdirSync(defaultForbiddenRoot, { recursive: true });
+  const b3 = await validateMultiTableCandidate({
+    task_id: input.taskId,
+    build_id: input.spec.build_id,
+    candidate: candidateRef(candidate),
+    tables: validationTables,
+    relations: candidate.relations,
+    trusted_root: outputDir,
+    forbidden_roots: input.forbiddenRoots === undefined || input.forbiddenRoots.length === 0
+      ? [defaultForbiddenRoot]
+      : [...input.forbiddenRoots],
+    policy: family.multitable_validation_policy ?? { token_preservation_rules: [], profile_relation_missing_policies: {} },
+  });
+  const auditPath = path.join(outputDir, "registered_adapter_audit.json");
+  await writeFile(auditPath, `${JSON.stringify(audits, null, 2)}\n`, "utf8");
+  const provenancePath = path.join(outputDir, "provenance.json");
+  await writeFile(provenancePath, `${JSON.stringify({
+    runtime_id: family.runtime_id,
+    sources: [...sourceReceipts.values()].map((receipt) => ({ source_id: receipt.source_id, asset_id: receipt.asset_ref.asset_id, receipt_id: receipt.receipt_id })),
+    tables: Object.fromEntries(Object.entries(tableResults).map(([tableId, result]) => [tableId, result.result_manifest_id])),
+  }, null, 2)}\n`, "utf8");
+  const schemaPath = path.join(outputDir, "schema.json");
+  await writeFile(schemaPath, `${JSON.stringify([...schemasByRef.values()], null, 2)}\n`, "utf8");
+
+  const entries: ManifestArtifactEntry[] = [];
+  for (const table of candidate.tables) {
+    entries.push(await artifact(outputDir, tableResults[table.definition.table_id]!.output_files[0]!.relative_path,
+      table.definition.role === "primary" ? "primary_dataset" : "supporting_dataset", "text/csv"));
+  }
+  entries.push(await artifact(outputDir, "schema.json", "schema", "application/json"));
+  entries.push(await artifact(outputDir, "provenance.json", "provenance", "application/json"));
+  entries.push(await artifact(outputDir, "registered_adapter_audit.json", "audit_report", "application/json"));
+  const packageSha = packageDigest(entries);
+  const failedChecks = b3.checks.filter((check) => !check.passed);
+  const validation: ValidationResult = {
+    schema_version: "1.0",
+    manifest_digest: packageSha,
+    profile_ref: input.spec.validation_profile_ref,
+    status: failedChecks.length === 0 ? "passed" : "failed",
+    checked_count: b3.checks.length,
+    failed_count: failedChecks.length,
+    report_path: "validation_report.json",
+  };
+  await writeFile(path.join(outputDir, "validation_report.json"), `${JSON.stringify({ profile_ref: validation.profile_ref, checks: b3.checks }, null, 2)}\n`, "utf8");
+  const primary = candidate.tables.find((table) => table.definition.role === "primary")!;
+  const manifest: DatasetManifestV2 = {
+    schema_version: "2.0",
+    manifest_id: `manifest_${packageSha.slice(0, 16)}`,
+    task_id: input.taskId,
+    build_id: input.spec.build_id,
+    dataset_family: family.id,
+    row_granularity: input.spec.row_granularity,
+    schema_ref: primary.definition.schema_ref,
+    primary_key: [...primary.definition.primary_key],
+    row_count: primary.row_count,
+    sha256: packageSha,
+    artifacts: entries,
+    source_summary: Object.fromEntries([...sourceReceipts.values()].map((receipt) => [receipt.source_id, { asset_id: receipt.asset_ref.asset_id }])),
+    validation_summary: { profile_ref: validation.profile_ref, status: validation.status, checked_count: validation.checked_count, failed_count: validation.failed_count, report_path: validation.report_path },
+    confidence_summary: { source: "registered_table_schema_and_b3" },
+    provenance_summary: { source_count: sourceReceipts.size, coverage: { traced_rows: primary.row_count, untraced_rows: 0, coverage_ratio: 1 } },
+    tables: candidate.tables.map((table) => table.definition),
+    relations: candidate.relations,
+    candidate_refs: [candidateRef(candidate)],
+  };
+  await writeFile(path.join(outputDir, "dataset_manifest.json"), `${JSON.stringify(manifest)}\n`, "utf8");
+  if (validation.status !== "passed") throw new Error(`registered multi-table validation failed: ${failedChecks.map((check) => `${check.scope}:${check.check_id}`).join(", ")}`);
+  const publication = await promotePublication({
+    outputDir,
+    manifest,
+    validation,
+    publicationCandidate: candidate,
+    expectedSourceAssetIds: new Set(registeredAssets),
+    publishedAt: input.publishedAt,
+  });
+  return { candidate, manifest, validation, publication, tableResults };
+}
+
+export function registeredFamilyRuntimeDefinition(familyId: string): DatasetFamilyDefinition {
+  const definition = createDefaultDatasetFamilyRegistry().get(familyId);
+  if (definition.runtime_id !== "registered_multitable.runtime.v1") throw new Error("family is not registered for multi-table execution");
+  return definition;
+}

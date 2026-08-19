@@ -53,4 +53,11 @@ export class RegisteredTableRegistry {
   list(): string[] {
     return [...this.registrations.keys()].sort();
   }
+
+  entries(): RegisteredTableAdapterRegistration[] {
+    return this.list().map((key) => {
+      const [adapterId, parserVersion] = key.split("@");
+      return this.resolve(adapterId!, parserVersion!);
+    });
+  }
 }

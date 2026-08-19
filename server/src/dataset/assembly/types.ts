@@ -11,6 +11,7 @@ export interface FamilyAssemblyInput {
   rowGranularity: string;
   schema: DatasetSchema;
   integrationResult: OperationResultManifest;
+  integrationResults?: Readonly<Record<string, OperationResultManifest>>;
   registeredAssetIds: readonly string[];
   provenanceResults?: readonly OperationResultManifest[];
   confidenceResults?: readonly OperationResultManifest[];

@@ -362,8 +362,11 @@ describe("bioactivity_measurement B5A module", () => {
     })).rejects.toThrow(/activities, compounds, assays, and targets/);
 
     const registry = createDefaultDatasetFamilyRegistry();
-    expect(registry.list()).not.toContain(BIOACTIVITY_FAMILY_ID);
-    expect(() => registry.get(BIOACTIVITY_FAMILY_ID)).toThrow(/not registered/);
+    expect(registry.list()).toContain(BIOACTIVITY_FAMILY_ID);
+    expect(registry.get(BIOACTIVITY_FAMILY_ID)).toMatchObject({
+      runtime_id: "registered_multitable.runtime.v1",
+      default_normalization_profile_ref: "bioactivity_measurement.registered.v1",
+    });
     expect(BIOACTIVITY_ASSEMBLER_ID).toBe("bioactivity_measurement.assembler.v1");
   });
 });

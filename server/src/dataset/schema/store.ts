@@ -1,4 +1,5 @@
 import type { DatasetSchema } from "../contracts/index.js";
+import type { DatasetSchemaV2 } from "@biomed/contracts";
 
 export function schemasDeepEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true;
@@ -23,13 +24,13 @@ export function schemasDeepEqual(a: unknown, b: unknown): boolean {
 }
 
 export class SchemaRegistry {
-  private readonly schemas = new Map<string, DatasetSchema>();
+  private readonly schemas = new Map<string, DatasetSchema | DatasetSchemaV2>();
 
-  constructor(initial: readonly DatasetSchema[] = []) {
+  constructor(initial: readonly (DatasetSchema | DatasetSchemaV2)[] = []) {
     for (const schema of initial) this.register(schema);
   }
 
-  register(schema: DatasetSchema): void {
+  register(schema: DatasetSchema | DatasetSchemaV2): void {
     const existing = this.schemas.get(schema.schema_id);
     if (existing !== undefined && !schemasDeepEqual(existing, schema)) {
       throw new Error(`schema '${schema.schema_id}' already registered`);
@@ -41,7 +42,7 @@ export class SchemaRegistry {
     return this.schemas.has(schemaId);
   }
 
-  get(schemaId: string): DatasetSchema {
+  get(schemaId: string): DatasetSchema | DatasetSchemaV2 {
     const schema = this.schemas.get(schemaId);
     if (schema === undefined) {
       throw new Error(`schema '${schemaId}' is not registered`);

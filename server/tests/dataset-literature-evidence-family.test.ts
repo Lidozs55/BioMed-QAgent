@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -26,6 +26,8 @@ import {
   validateLiteratureEvidenceCandidate,
 } from "../src/dataset/families/literature-evidence/index.js";
 import type { CoreResolvedRegisteredAsset } from "../src/dataset/adapters/registered/types.js";
+import { SourceAssetRegistry } from "../src/runtime/source-assets/registry.js";
+import { executeRegisteredMultiTableBuild } from "../src/dataset/runtime/registered-multitable.js";
 
 const FIXTURES = path.join(import.meta.dirname, "fixtures", "literature-evidence");
 const DIGEST = "c".repeat(64);
@@ -200,8 +202,8 @@ describe("literature evidence family module", () => {
     expect(sources.rows).toHaveLength(2);
     expect(literatureEvidenceTables.map(({ definition }) => definition.role)).toEqual(["primary", "supporting", "supporting"]);
     expect(literatureEvidenceTables.map(({ definition }) => definition.table_id)).not.toContain("source");
-    expect(createDefaultDatasetFamilyRegistry().list()).not.toContain(LITERATURE_EVIDENCE_FAMILY_ID);
-    expect(createDefaultFamilyAssemblerRegistry().list()).not.toContain(LITERATURE_EVIDENCE_FAMILY_ID);
+    expect(createDefaultDatasetFamilyRegistry().list()).toContain(LITERATURE_EVIDENCE_FAMILY_ID);
+    expect(createDefaultFamilyAssemblerRegistry().list()).toContain(LITERATURE_EVIDENCE_FAMILY_ID);
   });
 
   it("assembles a deterministic Core-only three-table candidate without paths", async () => {
@@ -260,6 +262,77 @@ describe("literature evidence family module", () => {
     });
     expect(fkResult.passed).toBe(false);
     expect(fkResult.checks).toContainEqual(expect.objectContaining({ scope: "evidence_paper", check_id: "foreign_key", passed: false }));
+  });
+
+  it("publishes a non-Gold registered literature asset through the server-owned multi-table runtime", async () => {
+    const taskRoot = await mkdtemp(path.join(os.tmpdir(), "literature-publication-e2e-"));
+    tempRoots.push(taskRoot);
+    await mkdir(path.join(taskRoot, "source_assets"), { recursive: true });
+    const carrierAPath = "source_assets/paper.pdf";
+    const carrierBPath = "source_assets/pubmed.json";
+    await writeFile(path.join(taskRoot, carrierAPath), "paper carrier bytes\n");
+    await writeFile(path.join(taskRoot, carrierBPath), "pubmed carrier bytes\n");
+    const assetRegistry = new SourceAssetRegistry("task_publication", taskRoot);
+    const carrierA = await assetRegistry.register({ sourceId: "source_paper_carrier", relativePath: carrierAPath });
+    const carrierB = await assetRegistry.register({ sourceId: "source_pubmed_carrier", relativePath: carrierBPath });
+    const document = JSON.parse(await readFile(path.join(FIXTURES, "non-gold.valid.json"), "utf8")) as {
+      sources: Array<{ source_asset_id: string; source_locator: { asset_id: string } }>;
+    };
+    document.sources[0]!.source_asset_id = carrierA.asset_ref.asset_id;
+    document.sources[0]!.source_locator.asset_id = carrierA.asset_ref.asset_id;
+    document.sources[1]!.source_asset_id = carrierB.asset_ref.asset_id;
+    document.sources[1]!.source_locator.asset_id = carrierB.asset_ref.asset_id;
+    const relativePath = "source_assets/non-gold.valid.json";
+    await writeFile(path.join(taskRoot, relativePath), `${JSON.stringify(document)}\n`);
+    const receipt = await assetRegistry.register({
+      sourceId: "source_publication_fixture",
+      relativePath,
+    });
+    const bindings = literatureEvidenceAdapterRegistrations.map((registration, index) => ({
+      schema_version: "1.0" as const,
+      binding_id: `literature_${index}`,
+      source: `registered_literature_${literatureEvidenceTables[index]!.definition.table_id}`,
+      acquisition: { schema_version: "1.0" as const, mode: "builtin" as const, provider_id: "registered_asset", recipe_id: null, recipe_version: null },
+      adapter_id: registration.parser.adapter_id,
+      accession: null,
+      parameters: {},
+    }));
+    const result = await executeRegisteredMultiTableBuild({
+      taskId: "task_publication",
+      taskRoot,
+      spec: {
+        schema_version: "1.0",
+        build_id: "build_publication",
+        objective: "Publish non-Gold structured literature evidence",
+        dataset_family: LITERATURE_EVIDENCE_FAMILY_ID,
+        row_granularity: LITERATURE_EVIDENCE_ROW_GRANULARITY,
+        entities: {},
+        cohort_filters: {},
+        required_fields: literatureEvidenceTables[0]!.schema.fields.map((field) => field.name),
+        schema_ref: literatureEvidenceTables[0]!.schema.schema_id,
+        source_bindings: bindings,
+        normalization_profile_ref: "literature_evidence.registered.v1",
+        merge_strategy: "registered_multitable_identity",
+        validation_profile_ref: "literature_evidence.release.v1",
+        output_format: "csv",
+        target_entity_level: null,
+      },
+      registeredAssetIds: Object.fromEntries(bindings.map((binding) => [binding.binding_id, receipt.asset_ref.asset_id])),
+      publishedAt: "2026-08-18T00:00:00.000Z",
+    });
+    expect(result.validation.status).toBe("passed");
+    expect(result.manifest.schema_version).toBe("2.0");
+    expect(result.manifest.tables.map((table) => table.table_id)).toEqual(["literature_evidence", "papers", "sources"]);
+    expect(result.publication.publicationId).toMatch(/^pub_build_publication_/);
+    expect(await stat(path.join(taskRoot, "datasets_build", "build_publication", result.publication.versionDir, "dataset_manifest.json"))).toMatchObject({});
+
+    await writeFile(path.join(taskRoot, relativePath), Buffer.alloc((await stat(path.join(taskRoot, relativePath))).size, "x"));
+    const drifted = await new SourceAssetRegistry("task_publication", taskRoot).resolve(receipt.asset_ref.asset_id);
+    await expect((async () => {
+      for await (const _chunk of drifted.content) {
+        // Consume the lazy verified stream; the final digest check must fail.
+      }
+    })()).rejects.toThrow(/hash drift/);
   });
 
   it("fails closed when table provenance is incomplete", async () => {

@@ -12,7 +12,7 @@ import {
 } from "./primitives.js";
 
 export interface SchemaField {
-  schema_version?: SchemaVersion;
+  schema_version?: SchemaVersion | "2.0";
   name: string;
   data_type: string;
   semantic_role: string;
@@ -97,7 +97,7 @@ export function parseSchemaFieldV2(value: unknown): SchemaFieldV2 {
 }
 
 export interface DatasetSchema {
-  schema_version?: SchemaVersion;
+  schema_version?: SchemaVersion | "2.0";
   schema_id: string;
   dataset_family: string;
   row_granularity: string;

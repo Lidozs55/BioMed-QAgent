@@ -40,7 +40,7 @@ export interface BioactivityAssemblyInput {
   rowGranularity: string;
   tables: readonly BioactivityTableAssemblyInput[];
   registeredAssetIds: readonly string[];
-  rows: BioactivityRows;
+  rows?: BioactivityRows;
   auditResults?: readonly OperationResultManifest[];
 }
 
@@ -134,7 +134,7 @@ export function assembleBioactivityCandidate(
   if (input.tables.length !== TABLE_ORDER.length) {
     throw new Error("bioactivity assembly requires activities, compounds, assays, and targets tables");
   }
-  assertBioactivityRows(input.rows);
+  if (input.rows !== undefined) assertBioactivityRows(input.rows);
   assertBioactivityRelations(bioactivityRelations);
 
   const byId = new Map<BioactivityTableId, BioactivityTableAssemblyInput>();

@@ -369,8 +369,10 @@ describe("bioactivity chart evidence B6A module", () => {
       "bioactivity_measurement.chart_evidence.assembler.v1",
     );
     const productionRegistry = createDefaultDatasetFamilyRegistry();
-    expect(productionRegistry.list()).not.toContain("bioactivity_measurement");
-    expect(() => productionRegistry.get("bioactivity_measurement")).toThrow(/not registered/);
+    expect(productionRegistry.list()).toContain("bioactivity_measurement");
+    expect(productionRegistry.get("bioactivity_measurement")).toMatchObject({
+      runtime_id: "registered_multitable.runtime.v1",
+    });
   });
 
   it("blocks unreviewed low-confidence primary points and review-based reliability upgrades", async () => {

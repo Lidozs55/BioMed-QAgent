@@ -336,9 +336,11 @@ describe("variant_evidence B-owned module slice", () => {
     }));
   });
 
-  it("does not register the module in either production default registry", () => {
-    expect(createDefaultDatasetFamilyRegistry().list()).toEqual(["gene_expression"]);
-    expect(() => createDefaultDatasetFamilyRegistry().get("variant_evidence")).toThrow(/not registered/);
+  it("registers the trusted module in both production default registries", () => {
+    expect(createDefaultDatasetFamilyRegistry().list()).toContain("variant_evidence");
+    expect(createDefaultDatasetFamilyRegistry().get("variant_evidence")).toMatchObject({
+      runtime_id: "registered_multitable.runtime.v1",
+    });
     expect(createVariantEvidenceAssemblerCapability()).toMatchObject({
       familyId: "variant_evidence",
       handlerId: "variant_evidence.assembler.v1",

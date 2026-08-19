@@ -363,7 +363,10 @@ export class SpecValidator {
             `binding ${pyRepr(binding.binding_id)} source ${pyRepr(binding.source)} ` +
               `is not registered for family ${pyRepr(familyDefinition.id)}`,
           );
-        } else if (!sourceDefinition.schema_refs.includes(spec.schema_ref)) {
+        } else if (
+          familyDefinition.runtime_id !== "registered_multitable.runtime.v1" &&
+          !sourceDefinition.schema_refs.includes(spec.schema_ref)
+        ) {
           codes.push("source_schema_mismatch");
           reasons.push(
             `binding ${pyRepr(binding.binding_id)} source ${pyRepr(binding.source)} ` +
