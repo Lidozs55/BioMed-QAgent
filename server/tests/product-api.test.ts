@@ -124,7 +124,7 @@ describe("Phase 7 product API", () => {
     expect(await unsupported.json()).toEqual({ detail: "Method not allowed" });
   });
 
-  test("serves TS build list, detail, and verified artifacts", async () => {
+  test("serves TS build list, detail, and verified artifacts (A7 immutable-root download)", async () => {
     const root = await temporaryDirectory("phase7-build-");
     const database = new FakeDatabase();
     const taskId = "task_ts_example";
@@ -147,15 +147,39 @@ describe("Phase 7 product API", () => {
       provenance_summary: {},
     };
     await writeFile(path.join(buildDir, "dataset_manifest.json"), JSON.stringify(manifest));
+    // A7: the official download reads ONLY from an immutable publication root,
+    // so a build must be published (not just staged in the mutable build dir).
+    const versionDir = path.join(buildDir, "publish", "version_1");
+    await mkdir(path.join(versionDir, "artifacts"), { recursive: true });
+    await writeFile(path.join(versionDir, "artifacts", "primary.csv"), artifact);
+    await writeFile(path.join(versionDir, "dataset_manifest.json"), JSON.stringify(manifest));
+    await writeFile(path.join(versionDir, "publication.json"), JSON.stringify({
+      publication_id: `pub_${buildId}_${sha256.slice(0, 16)}`,
+      manifest_ref: `datasets_build/${buildId}/dataset_manifest.json`,
+      manifest_sha256: sha256,
+      published_at: "2026-08-19T00:00:00Z",
+    }));
     const { base } = await startApi(root, database);
 
     const page = await (await fetch(`${base}/builds`)).json() as { items: unknown[] };
     expect(page.items).toHaveLength(1);
-    expect(page.items[0]).toMatchObject({ build_id: buildId, task_id: taskId, status: "no_data" });
+    expect(page.items[0]).toMatchObject({ build_id: buildId, task_id: taskId, status: "success" });
     const detail = await (await fetch(`${base}/builds/${buildId}?task_id=${taskId}`)).json();
     expect(detail).toMatchObject({ build_id: buildId, manifest, artifacts: manifest.artifacts });
     const downloaded = await fetch(`${base}/builds/${buildId}/artifacts/artifact_primary?task_id=${taskId}`);
-    expect(Buffer.from(await downloaded.arrayBuffer())).toEqual(artifact);
+    expect(downloaded.status).toBe(200);
+    const body = Buffer.from(await downloaded.arrayBuffer());
+    expect(body).toEqual(artifact);
+    expect(createHash("sha256").update(body).digest("hex")).toBe(sha256);
+    expect(downloaded.headers.get("content-length")).toBe(String(artifact.length));
+
+    // A7: a same-name file placed in the MUTABLE build dir can never affect the
+    // official download — it must still serve the immutable publication bytes.
+    await writeFile(path.join(buildDir, "artifacts", "primary.csv"), Buffer.from("tampered", "utf8"));
+    const afterTamper = await fetch(`${base}/builds/${buildId}/artifacts/artifact_primary?task_id=${taskId}`);
+    const tamperedBody = Buffer.from(await afterTamper.arrayBuffer());
+    expect(tamperedBody).toEqual(artifact);
+    expect(createHash("sha256").update(tamperedBody).digest("hex")).toBe(sha256);
   });
 
   test("serves cache metadata and a ZIP export", async () => {

@@ -1,9 +1,10 @@
+import { createReadStream, type ReadStream } from "node:fs";
 import { readFile, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
 import type { ArtifactRecord } from "@biomed/contracts";
 import { parseDatasetPublication, parseManifestArtifactEntry } from "../dataset/contracts/manifest.js";
-import { sha256Bytes } from "../dataset/adapters/hashing.js";
+import { sha256Bytes, sha256FileStreamWithSize } from "../dataset/adapters/hashing.js";
 import {
   packageDigest,
   type ManifestArtifactEntry,
@@ -256,18 +257,19 @@ async function latestPublication(buildDir: string): Promise<PublicationLocation 
       };
 }
 
-async function readVerifiedArtifact(
+async function verifyArtifactReceipt(
   loaded: LoadedManifest,
   artifact: ManifestArtifact,
-): Promise<Buffer> {
-  const bytes = await readFile(await verifiedPath(
-    loaded.publicationDir,
-    artifact.relative_path,
-  ));
-  if (bytes.length !== artifact.size_bytes || sha256Bytes(bytes) !== artifact.sha256) {
+): Promise<{ stream: ReadStream; sizeBytes: number }> {
+  const file = await verifiedPath(loaded.publicationDir, artifact.relative_path);
+  // Pass 1: stream-verify the size/SHA-256 receipt from the immutable
+  // publication root (never a whole-file ``readFile`` on multi-GB artifacts).
+  const { sha256, bytes } = await sha256FileStreamWithSize(file);
+  if (bytes !== artifact.size_bytes || sha256 !== artifact.sha256) {
     throw new ArtifactIntegrityError("Artifact integrity check failed");
   }
-  return bytes;
+  // Pass 2: reopen for the streaming body; safe under an immutable publication.
+  return { stream: createReadStream(file), sizeBytes: bytes };
 }
 
 export async function listTaskArtifacts(taskRoot: string): Promise<ArtifactRecord[]> {
@@ -282,7 +284,7 @@ export async function listTaskArtifacts(taskRoot: string): Promise<ArtifactRecor
     media_type: "application/json",
   }];
   for (const artifact of loaded.artifacts) {
-    await readVerifiedArtifact(loaded, artifact);
+    await verifyArtifactReceipt(loaded, artifact);
     artifacts.push({
       artifact_id: artifact.artifact_id,
       name: path.posix.basename(artifact.relative_path),
@@ -298,21 +300,28 @@ export async function listTaskArtifacts(taskRoot: string): Promise<ArtifactRecor
 export async function getTaskArtifact(
   taskRoot: string,
   artifactId: string,
-): Promise<{ bytes: Buffer; mediaType: string; name: string } | null> {
+): Promise<{ stream: ReadStream; sizeBytes: number; mediaType: string; name: string } | null> {
   if (!SAFE_ID.test(artifactId)) return null;
   const loaded = await loadLatestManifest(taskRoot);
   if (loaded === null) return null;
   if (artifactId === "dataset_manifest") {
+    const file = await verifiedPath(
+      loaded.publicationDir,
+      path.basename(loaded.manifestPath),
+    );
     return {
-      bytes: loaded.manifestBytes,
+      stream: createReadStream(file),
+      sizeBytes: loaded.manifestBytes.length,
       mediaType: "application/json",
       name: "dataset_manifest.json",
     };
   }
   const artifact = loaded.artifacts.find((candidate) => candidate.artifact_id === artifactId);
   if (artifact === undefined) return null;
+  const { stream, sizeBytes } = await verifyArtifactReceipt(loaded, artifact);
   return {
-    bytes: await readVerifiedArtifact(loaded, artifact),
+    stream,
+    sizeBytes,
     mediaType: artifact.media_type,
     name: path.posix.basename(artifact.relative_path),
   };

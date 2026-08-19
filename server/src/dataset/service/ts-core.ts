@@ -531,6 +531,7 @@ export function createTsCoreOperationRunner(options: {
           sourceSummary: summary,
           outputDir,
           signal,
+          reusePrimaryEntry: manifest.artifacts.find((item) => item.role === "primary_dataset") ?? null,
         });
         writeManifest(manifest, outputDir);
         runnerState.manifest = manifest;

@@ -18,7 +18,11 @@ import {
   type DatasetBuildSpec,
   type DatasetManifest,
 } from "../src/dataset/contracts/index.js";
-import { csvLine } from "../src/dataset/adapters/index.js";
+import {
+  csvLine,
+  delimitedRowsFromFileAsync,
+  DelimitedBoundsError,
+} from "../src/dataset/adapters/index.js";
 import {
   buildGeneExpressionSchema,
   buildProbeExpressionSchema,
@@ -924,6 +928,61 @@ export async function checkValidationProfileParity(options: { outputRoot: string
     const report = loadReport(out);
     const warnings = (report["warnings"] as Array<Record<string, string>>) ?? [];
     check(issues, warnings.some((w) => w["check_id"] === "probe_coverage"), "profile: probe warning present");
+  }
+
+  return issues;
+}
+
+// ---------------------------------------------------------------------------
+// A7 bounded scan row/field/column length limits
+// ---------------------------------------------------------------------------
+
+export async function checkRowBounds(): Promise<string[]> {
+  const issues: string[] = [];
+  const outRoot = scratchOutputRoot("row-bounds-");
+  const profile = getValidationProfile("gene_expression.release.v1");
+
+  // the bounded reader throws DelimitedBoundsError on an oversized row/field
+  {
+    const dir = join(outRoot, "reader");
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, "rows.csv");
+    writeFileSync(path, "a,b\n1,2\n" + "x".repeat(1024) + ",y\n", "utf8");
+    let threw = false;
+    try {
+      const reader = delimitedRowsFromFileAsync(path, ",", null, { maxRowChars: 64, maxFieldChars: 32, maxRowFields: 16 })[Symbol.asyncIterator]();
+      let pending = true;
+      while (pending) {
+        pending = !(await reader.next()).done;
+      }
+    } catch (error) {
+      threw = error instanceof DelimitedBoundsError;
+    }
+    check(issues, threw, "row bounds: oversized row throws DelimitedBoundsError");
+  }
+
+  // an oversized primary row must surface as a failing check, never a crash
+  {
+    const dir = join(outRoot, "profile");
+    mkdirSync(dir, { recursive: true });
+    const primary = join(dir, "primary.csv");
+    writeFileSync(primary, csvLine(CANONICAL_HEADER) + "x".repeat(8 * 1024 * 1024 + 1) + "\n", "utf8");
+    let result: { status: string };
+    try {
+      result = await profile.validate({
+        manifest: manifest(1),
+        primaryPath: primary,
+        schema: buildGeneExpressionSchema(),
+        manifestDigest: "d".repeat(64),
+        outputDir: dir,
+      });
+    } catch (error) {
+      check(issues, false, `row bounds: validate must not throw (${error instanceof Error ? error.message : String(error)})`);
+      return issues;
+    }
+    check(issues, result.status === "failed", "row bounds: oversized primary fails validation");
+    const reportText = readFileSync(join(dir, "validation_report.json"), "utf8");
+    check(issues, reportText.includes("row_or_field_length_bound"), "row bounds: report names row_or_field_length_bound");
   }
 
   return issues;

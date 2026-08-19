@@ -20,7 +20,11 @@ import type { JsonValue } from "@biomed/contracts";
 import { parseValidationProfile } from "../contracts/index.js";
 
 import { CHECKPOINT_STRIDE, checkpoint, throwIfAborted } from "../cooperative.js";
-import { delimitedRowsFromFileAsync } from "../adapters/text.js";
+import {
+  DelimitedBoundsError,
+  delimitedRowsFromFileAsync,
+  type DelimitedRowBounds,
+} from "../adapters/text.js";
 import { joinOutput } from "../adapters/paths.js";
 import {
   ConfidenceColumnAggregator,
@@ -58,6 +62,33 @@ export interface ProfileCheck {
   description: string;
   passed: boolean;
   detail: string;
+}
+
+/**
+ * Per-scan streaming row bounds for the primary dataset scans.  These are
+ * generous caps that only reject pathological rows/fields, so a single
+ * oversized row cannot balloon memory inside a multi-gigabyte primary while
+ * legitimate expression rows (a handful of short columns) pass untouched.
+ */
+const SCAN_MAX_ROW_CHARS = 8 * 1024 * 1024;
+const SCAN_MAX_FIELD_CHARS = 1024 * 1024;
+const SCAN_MAX_ROW_FIELDS = 4096;
+const SCAN_BOUNDS: DelimitedRowBounds = {
+  maxRowChars: SCAN_MAX_ROW_CHARS,
+  maxFieldChars: SCAN_MAX_FIELD_CHARS,
+  maxRowFields: SCAN_MAX_ROW_FIELDS,
+};
+
+/** Convert a {@link DelimitedBoundsError} from a primary scan into a failed check. */
+function rowBoundsCheck(error: unknown): ProfileCheck {
+  const detail = error instanceof Error ? error.message : String(error);
+  return {
+    check_id: "row_or_field_length_bound",
+    description:
+      "primary dataset rows stay within the bounded column/field/row length limits",
+    passed: false,
+    detail,
+  };
 }
 
 export interface ConfidenceGateResult {
@@ -487,32 +518,42 @@ export class ExpressionValidationProfile {
 
   private async checkMinRows(_manifest: DatasetManifest, primaryPath: string, signal?: AbortSignal | null): Promise<ProfileCheck> {
     const minimum = this.profile.acceptance.minimum_valid_rows;
-    let totalLines = 0;
-    for await (const { line } of delimitedRowsFromFileAsync(primaryPath, ",", signal)) {
-      totalLines = line;
+    try {
+      let totalLines = 0;
+      for await (const { line } of delimitedRowsFromFileAsync(primaryPath, ",", signal, SCAN_BOUNDS)) {
+        totalLines = line;
+      }
+      const fileRows = totalLines === 0 ? 0 : totalLines - 1;
+      return {
+        check_id: "minimum_valid_rows",
+        description: `primary dataset has at least ${minimum} row(s)`,
+        passed: fileRows >= minimum,
+        detail: `file_row_count=${fileRows}, minimum=${minimum}`,
+      };
+    } catch (error) {
+      if (error instanceof DelimitedBoundsError) return rowBoundsCheck(error);
+      throw error;
     }
-    const fileRows = totalLines === 0 ? 0 : totalLines - 1;
-    return {
-      check_id: "minimum_valid_rows",
-      description: `primary dataset has at least ${minimum} row(s)`,
-      passed: fileRows >= minimum,
-      detail: `file_row_count=${fileRows}, minimum=${minimum}`,
-    };
   }
 
   private async checkColumnCount(primaryPath: string, schema: DatasetSchema, signal?: AbortSignal | null): Promise<ProfileCheck> {
-    let header: string[] = [];
-    for await (const { values } of delimitedRowsFromFileAsync(primaryPath, ",", signal)) {
-      header = values;
-      break; // only the header row is needed
+    try {
+      let header: string[] = [];
+      for await (const { values } of delimitedRowsFromFileAsync(primaryPath, ",", signal, SCAN_BOUNDS)) {
+        header = values;
+        break; // only the header row is needed
+      }
+      const expected = schema.fields.length;
+      return {
+        check_id: "column_count_matches_schema",
+        description: "primary dataset column count matches the schema",
+        passed: header.length === expected,
+        detail: `actual=${header.length}, schema=${expected}`,
+      };
+    } catch (error) {
+      if (error instanceof DelimitedBoundsError) return rowBoundsCheck(error);
+      throw error;
     }
-    const expected = schema.fields.length;
-    return {
-      check_id: "column_count_matches_schema",
-      description: "primary dataset column count matches the schema",
-      passed: header.length === expected,
-      detail: `actual=${header.length}, schema=${expected}`,
-    };
   }
 
   private async checkRows(primaryPath: string, schema: DatasetSchema, signal?: AbortSignal | null): Promise<ProfileCheck[]> {
@@ -520,88 +561,93 @@ export class ExpressionValidationProfile {
       schema.fields.filter((field) => field.required).map((field) => field.name),
     );
     const valueColumn = valueField(schema);
-    let header: string[] = [];
-    let expected = schema.fields.length;
-    let rowCount = 0;
-    let malformedWidth = 0;
-    const blankRequired: Record<string, number> = {};
-    let nonNumeric = 0;
-    const units = new Set<string>();
-    let missingProvenance = 0;
-    let visited = 0;
-    let headerSeen = false;
-    for await (const { values: cells } of delimitedRowsFromFileAsync(primaryPath, ",", signal)) {
-      if (!headerSeen) {
-        headerSeen = true;
-        header = cells;
-        expected = header.length > 0 ? header.length : schema.fields.length;
-        continue;
-      }
-      if (cells.length === 0) continue; // blank lines are not data rows
-      rowCount += 1;
-      if (cells.length !== expected) {
-        malformedWidth += 1;
-        continue;
-      }
-      const values: Record<string, string> = {};
-      for (let index = 0; index < header.length; index += 1) {
-        values[header[index]] = cells[index];
-      }
-      for (const field of required) {
-        if (!(values[field] ?? "").trim()) {
-          blankRequired[field] = (blankRequired[field] ?? 0) + 1;
+    try {
+      let header: string[] = [];
+      let expected = schema.fields.length;
+      let rowCount = 0;
+      let malformedWidth = 0;
+      const blankRequired: Record<string, number> = {};
+      let nonNumeric = 0;
+      const units = new Set<string>();
+      let missingProvenance = 0;
+      let visited = 0;
+      let headerSeen = false;
+      for await (const { values: cells } of delimitedRowsFromFileAsync(primaryPath, ",", signal, SCAN_BOUNDS)) {
+        if (!headerSeen) {
+          headerSeen = true;
+          header = cells;
+          expected = header.length > 0 ? header.length : schema.fields.length;
+          continue;
         }
+        if (cells.length === 0) continue; // blank lines are not data rows
+        rowCount += 1;
+        if (cells.length !== expected) {
+          malformedWidth += 1;
+          continue;
+        }
+        const values: Record<string, string> = {};
+        for (let index = 0; index < header.length; index += 1) {
+          values[header[index]] = cells[index];
+        }
+        for (const field of required) {
+          if (!(values[field] ?? "").trim()) {
+            blankRequired[field] = (blankRequired[field] ?? 0) + 1;
+          }
+        }
+        if (!isFiniteNumber(values[valueColumn] ?? "")) {
+          nonNumeric += 1;
+        }
+        const unit = values["expression_unit"] ?? "";
+        if (unit) units.add(unit);
+        if (
+          !(values["source_logical_file"] ?? "").trim() ||
+          !(values["asset_id"] ?? "").trim()
+        ) {
+          missingProvenance += 1;
+        }
+        visited += 1;
+        if (visited % CHECKPOINT_STRIDE === 0) await checkpoint(signal);
       }
-      if (!isFiniteNumber(values[valueColumn] ?? "")) {
-        nonNumeric += 1;
-      }
-      const unit = values["expression_unit"] ?? "";
-      if (unit) units.add(unit);
-      if (
-        !(values["source_logical_file"] ?? "").trim() ||
-        !(values["asset_id"] ?? "").trim()
-      ) {
-        missingProvenance += 1;
-      }
-      visited += 1;
-      if (visited % CHECKPOINT_STRIDE === 0) await checkpoint(signal);
+      return [
+        {
+          check_id: "row_width_matches_schema",
+          description: "every row has exactly the schema column count",
+          passed: malformedWidth === 0,
+          detail: `${malformedWidth} row(s) with a field count != ${expected} in ${rowCount} row(s)`,
+        },
+        {
+          check_id: "required_field_completeness",
+          description: "required schema fields are non-blank for every row",
+          passed: Object.keys(blankRequired).length === 0,
+          detail:
+            `${rowCount} row(s); blank required fields: ` +
+            (Object.keys(blankRequired).length > 0
+              ? sortedJson(blankRequired)
+              : "none"),
+        },
+        {
+          check_id: "expression_value_numeric",
+          description: `${valueColumn} parses as a number for every row`,
+          passed: nonNumeric === 0,
+          detail: `${nonNumeric} non-numeric value(s) in ${rowCount} row(s)`,
+        },
+        {
+          check_id: "unit_consistency",
+          description: "a single expression unit in the primary dataset",
+          passed: units.size <= 1,
+          detail: `units=${pyReprList([...units].sort())}`,
+        },
+        {
+          check_id: "provenance_closure",
+          description: "every row carries source file and asset provenance",
+          passed: missingProvenance === 0,
+          detail: `${missingProvenance} row(s) missing provenance in ${rowCount} row(s)`,
+        },
+      ];
+    } catch (error) {
+      if (error instanceof DelimitedBoundsError) return [rowBoundsCheck(error)];
+      throw error;
     }
-    return [
-      {
-        check_id: "row_width_matches_schema",
-        description: "every row has exactly the schema column count",
-        passed: malformedWidth === 0,
-        detail: `${malformedWidth} row(s) with a field count != ${expected} in ${rowCount} row(s)`,
-      },
-      {
-        check_id: "required_field_completeness",
-        description: "required schema fields are non-blank for every row",
-        passed: Object.keys(blankRequired).length === 0,
-        detail:
-          `${rowCount} row(s); blank required fields: ` +
-          (Object.keys(blankRequired).length > 0
-            ? sortedJson(blankRequired)
-            : "none"),
-      },
-      {
-        check_id: "expression_value_numeric",
-        description: `${valueColumn} parses as a number for every row`,
-        passed: nonNumeric === 0,
-        detail: `${nonNumeric} non-numeric value(s) in ${rowCount} row(s)`,
-      },
-      {
-        check_id: "unit_consistency",
-        description: "a single expression unit in the primary dataset",
-        passed: units.size <= 1,
-        detail: `units=${pyReprList([...units].sort())}`,
-      },
-      {
-        check_id: "provenance_closure",
-        description: "every row carries source file and asset provenance",
-        passed: missingProvenance === 0,
-        detail: `${missingProvenance} row(s) missing provenance in ${rowCount} row(s)`,
-      },
-    ];
   }
 
   private async checkProbeCoverageRequiredGeneLevel(
@@ -609,7 +655,13 @@ export class ExpressionValidationProfile {
     summaries: ProbeMappingSummary[] | null,
     signal?: AbortSignal | null,
   ): Promise<ProfileCheck> {
-    const residual = await countResidualGeoProbeRows(primaryPath, signal);
+    let residual: number;
+    try {
+      residual = await countResidualGeoProbeRows(primaryPath, signal);
+    } catch (error) {
+      if (error instanceof DelimitedBoundsError) return rowBoundsCheck(error);
+      throw error;
+    }
     const belowOne: string[] = [];
     if (summaries !== null) {
       for (const summary of summaries) {
@@ -670,15 +722,20 @@ export class ExpressionValidationProfile {
     let valueIndex = -1;
     let visited = 0;
     let headerSeen = false;
-    for await (const { values } of delimitedRowsFromFileAsync(primaryPath, ",", signal)) {
-      if (!headerSeen) {
-        headerSeen = true;
-        valueIndex = values.indexOf(valueColumn);
-        continue;
+    try {
+      for await (const { values } of delimitedRowsFromFileAsync(primaryPath, ",", signal, SCAN_BOUNDS)) {
+        if (!headerSeen) {
+          headerSeen = true;
+          valueIndex = values.indexOf(valueColumn);
+          continue;
+        }
+        aggregator.push(valueIndex >= 0 ? values[valueIndex] ?? "" : "");
+        visited += 1;
+        if (visited % CHECKPOINT_STRIDE === 0) await checkpoint(signal);
       }
-      aggregator.push(valueIndex >= 0 ? values[valueIndex] ?? "" : "");
-      visited += 1;
-      if (visited % CHECKPOINT_STRIDE === 0) await checkpoint(signal);
+    } catch (error) {
+      if (error instanceof DelimitedBoundsError) return { check: rowBoundsCheck(error), warnings: [] };
+      throw error;
     }
     const summary = aggregator.summary();
     const reportPath = joinOutput(outputDir, "confidence_report.csv");
@@ -770,7 +827,7 @@ async function countResidualGeoProbeRows(primaryPath: string, signal?: AbortSign
   let residual = 0;
   let visited = 0;
   let headerSeen = false;
-  for await (const { values } of delimitedRowsFromFileAsync(primaryPath, ",", signal)) {
+  for await (const { values } of delimitedRowsFromFileAsync(primaryPath, ",", signal, SCAN_BOUNDS)) {
     if (!headerSeen) {
       headerSeen = true;
       namespaceIndex = values.indexOf("gene_id_namespace");

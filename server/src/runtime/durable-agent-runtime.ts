@@ -1280,10 +1280,15 @@ export async function createDurableAgentRuntime(
         }
         response.writeHead(200, {
           "content-type": resolved.mediaType,
-          "content-length": String(resolved.bytes.length),
-          "content-disposition": `attachment; filename="${resolved.name}"`,
+          "content-length": String(resolved.sizeBytes),
+          "content-disposition": `attachment; filename="${resolved.name.replaceAll('"', "")}"`,
         });
-        response.end(resolved.bytes);
+        resolved.stream.on("error", (error) => {
+          if (!response.headersSent && !response.destroyed) {
+            response.destroy(error instanceof Error ? error : new Error(String(error)));
+          }
+        });
+        resolved.stream.pipe(response);
         return;
       }
       const runs = /^\/api\/v1\/tasks\/([^/]+)\/runs$/.exec(url.pathname);
