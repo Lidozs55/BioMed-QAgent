@@ -20,7 +20,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
-import type { JsonValue } from "@biomed/contracts";
+import type { DeterministicDeriveRequest, JsonValue } from "@biomed/contracts";
 
 import type {
   DataBatch,
@@ -62,6 +62,7 @@ import { evaluateConfidence, mappingConfidence } from "../confidence/evaluator.j
 import { writeConfidenceArtifact } from "../confidence/artifact.js";
 import { delimitedRowsFromFileAsync } from "../adapters/text.js";
 import type { HumanReviewState } from "../contracts/data.js";
+import type { DeterministicDeriveCapability } from "../derive/index.js";
 
 export interface TypeScriptDatasetCoreOptions {
   taskId: string;
@@ -84,6 +85,9 @@ export interface ExecuteContext {
   mappingAssets?: Readonly<Record<string, SourceAsset>>;
   /** binding_id → explicit metadata SourceAsset (e.g. GEO SOFT metadata). */
   metadataAssets?: Readonly<Record<string, SourceAsset>>;
+  /** Optional server-owned fixed derive slot. */
+  deriveRequest?: DeterministicDeriveRequest | null;
+  deriveCapability?: DeterministicDeriveCapability | null;
   signal?: AbortSignal;
 }
 
@@ -233,6 +237,8 @@ export function createTsCoreOperationRunner(options: {
   sourceAssets: Readonly<Record<string, SourceAsset>>;
   mappingAssets: Readonly<Record<string, SourceAsset>>;
   metadataAssets: Readonly<Record<string, SourceAsset>>;
+  deriveRequest?: DeterministicDeriveRequest | null;
+  deriveCapability?: DeterministicDeriveCapability | null;
   runnerState: RunnerState;
   bindings: ReadonlyMap<string, ReturnType<typeof import("../contracts/spec.js").parseSourceBinding>>;
   /** Phase-A bindings recovered from checkpoint rehydration (WP-A5). */
@@ -244,6 +250,8 @@ export function createTsCoreOperationRunner(options: {
   const { spec, taskId, taskRoot, outputDir, sourceAssets, mappingAssets, metadataAssets, runnerState, bindings, rehydratedBindingIds } = options;
   const fence = options.fence ?? null;
   const hilGate = options.hilGate ?? null;
+  const deriveRequest = options.deriveRequest ?? null;
+  const deriveCapability = options.deriveCapability ?? null;
   const familyRegistry = createDefaultDatasetFamilyRegistry();
   familyRegistry.get(spec.dataset_family);
   const schema = familyRegistry.schemaRegistry().get(spec.schema_ref);
@@ -422,6 +430,24 @@ export function createTsCoreOperationRunner(options: {
           dedup_count: integration.dedupCount,
           conflict_count: integration.conflictCount,
           merged_file: integration.mergedPath,
+        });
+      }
+      case "derive": {
+        if (deriveRequest === null || deriveCapability === null) {
+          throw new BuildError("derive slot handler is missing");
+        }
+        if (deriveRequest.task_id !== taskId || deriveRequest.build_id !== spec.build_id) {
+          throw new BuildError("derive request identity does not belong to this build");
+        }
+        const receipt = deriveCapability.execute(deriveRequest);
+        return makeOperationOutput({
+          result_id: receipt.result_id,
+          request_identity_digest: receipt.request_identity_digest,
+          output_kind: receipt.output_kind,
+          output_schema_ref: receipt.output_schema_ref,
+          output_digest: receipt.output_digest,
+          output_summary: receipt.output_summary,
+          provenance: receipt.provenance,
         });
       }
       case "validate_profile": {
@@ -656,6 +682,8 @@ export class TypeScriptDatasetCore {
       sourceAssets: context.sourceAssets ?? {},
       mappingAssets: context.mappingAssets ?? {},
       metadataAssets: context.metadataAssets ?? {},
+      deriveRequest: context.deriveRequest ?? null,
+      deriveCapability: context.deriveCapability ?? null,
       runnerState,
       bindings,
       rehydratedBindingIds,
@@ -667,11 +695,18 @@ export class TypeScriptDatasetCore {
       buildId,
       stateDir,
       taskRoot,
-      plan: buildOperationPlan(spec),
+      plan: buildOperationPlan(spec, {
+        deriveHandler: context.deriveRequest !== undefined && context.deriveCapability !== undefined &&
+          context.deriveRequest !== null && context.deriveCapability !== null,
+      }),
       runOperation: runner,
       cancellationRequested: () => signal.aborted,
       cancellationSignal: signal,
       operationTimeoutMs: this.options.operationTimeoutMs ?? 0,
+      deriveRequest: context.deriveRequest ?? null,
+      implementationVersions: context.deriveCapability === undefined || context.deriveCapability === null
+        ? null
+        : { derive: context.deriveCapability.implementationDigest },
       // Cross-restart continuation: rebuild in-memory runner state from the
       // checkpoint so the plan can continue from the suspension point.
       rehydrateCompletedRunners: true,

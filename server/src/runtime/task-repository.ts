@@ -14,6 +14,10 @@ import type {
 import { readJsonFileOrNull, writeJsonAtomic } from "../persistence/atomic-json.js";
 import { requireSafeId, SAFE_ID } from "./safe-id.js";
 import {
+  SourceAssetRegistry,
+  type SourceAssetRegistryOptions,
+} from "./source-assets/registry.js";
+import {
   reduceTaskEvents,
   type DurableTaskMetadata,
 } from "./task-reducer.js";
@@ -113,6 +117,14 @@ export class DurableTaskRepository {
     return () => this.listeners.delete(listener);
   }
 
+  sourceAssetRegistry(
+    taskId: string,
+    options: SourceAssetRegistryOptions = {},
+  ): SourceAssetRegistry {
+    requireSafeId(taskId, "taskId");
+    return new SourceAssetRegistry(taskId, this.taskRoot(taskId), options);
+  }
+
   async createTask(input: CreateDurableTaskInput): Promise<TaskRunAccepted> {
     requireSafeId(input.requestId, "requestId");
     if (input.input.trim() === "") throw new TypeError("input must not be empty");
@@ -199,6 +211,16 @@ export class DurableTaskRepository {
     return (await this.appendRunEvents(taskId, runId, [payload]))[0];
   }
 
+  async appendBuildEvent(
+    taskId: string,
+    runId: string,
+    buildId: string,
+    payload: EventPayload,
+  ): Promise<EventEnvelope> {
+    requireSafeId(buildId, "buildId");
+    return (await this.appendEvents(taskId, runId, [payload], buildId))[0];
+  }
+
   async appendRunEvents(
     taskId: string,
     runId: string,
@@ -212,6 +234,7 @@ export class DurableTaskRepository {
     taskId: string,
     runId: string | null,
     payloads: readonly EventPayload[],
+    buildId: string | null = null,
   ): Promise<EventEnvelope[]> {
     if (payloads.length === 0) throw new TypeError("payloads must not be empty");
     requireSafeId(taskId, "taskId");
@@ -228,6 +251,7 @@ export class DurableTaskRepository {
         type: payload.type,
         task_id: taskId,
         run_id: runId,
+        ...(buildId === null ? {} : { build_id: buildId }),
         stage_attempt_id: null,
         sequence: sequence + index + 1,
         timestamp,

@@ -17,6 +17,7 @@ import { randomUUID } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type {
+  DeterministicDeriveRequest,
   JsonValue,
   OperationResultManifest,
   OperationResultOutputKind,
@@ -80,6 +81,7 @@ const RESULT_OUTPUT_KINDS: Record<OperationKind, OperationResultOutputKind> = {
   canonicalize: "canonical_table",
   compatibility_gate: "compatibility_report",
   integrate: "integrated_table",
+  derive: "derived_evidence",
   validate_profile: "validation_result",
   publish: "publication_manifest",
 };
@@ -165,6 +167,8 @@ export interface ExecutorOptions {
   discardOutputs?: ((op: OperationSpec) => void) | null;
   /** Per-operation wall-clock timeout in ms (M2 I-03; 0 = unlimited). */
   operationTimeoutMs?: number;
+  /** Fixed-slot request; included only in derive checkpoint identity. */
+  deriveRequest?: DeterministicDeriveRequest | null;
   /**
    * Eager checkpoint rehydration (cross-restart continuation): when true,
    * completed operations with digest-matched, verified result files are
@@ -209,6 +213,7 @@ export class DatasetBuildExecutor {
   private readonly discardOutputs: ((op: OperationSpec) => void) | null;
   private readonly perBindingOutcomes: Record<string, BindingRejection>;
   private readonly operationTimeoutMs: number;
+  private readonly deriveRequest: DeterministicDeriveRequest | null;
   private readonly rehydrateCompletedRunners: boolean;
   private readonly onRehydratedOperation: ((op: OperationSpec, output: Record<string, unknown>, manifest: OperationResultManifest) => void | Promise<void>) | null;
   private readonly eventSink: CoreEventSink | null;
@@ -235,6 +240,7 @@ export class DatasetBuildExecutor {
     this.discardOutputs = options.discardOutputs ?? null;
     this.perBindingOutcomes = options.perBindingOutcomes ?? {};
     this.operationTimeoutMs = options.operationTimeoutMs ?? 0;
+    this.deriveRequest = options.deriveRequest ?? null;
     this.rehydrateCompletedRunners = options.rehydrateCompletedRunners ?? false;
     this.onRehydratedOperation = options.onRehydratedOperation ?? null;
     this.eventSink = options.eventSink ?? null;
@@ -946,7 +952,9 @@ export class DatasetBuildExecutor {
     return {
       buildId: this.buildId,
       upstream: this.availableUpstream(op),
-      parameterScope: this.parameterScope,
+      parameterScope: op.kind === "derive" && this.deriveRequest !== null
+        ? { ...this.parameterScope, derive_request: this.deriveRequest }
+        : this.parameterScope,
       sourceAssets: this.sourceAssets,
       mappingAssets: this.mappingAssets,
       implementationVersions: this.implementationVersions,

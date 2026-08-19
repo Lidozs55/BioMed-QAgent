@@ -81,7 +81,7 @@
 > B 组详细 ownership、依赖类型、分支、交接窗口和逐任务验收见
 > [开发者 B：可信多表 Publication 落实计划](superpowers/plans/2026-08-18-developer-b-trusted-publication-plan.md)。
 > B 组 contracts（含 C3C）、B2M、B3、B5C、B6D 已完成，B4M、B5L/T/V/S/A、B6A、B6B
-> module 已完成；A 组 `TASK-047-A1/A2/A3/A4/A5I` 已部分合并。A 组仍需接线
+> module 已完成；A 组 `TASK-047-A1-A8` 已完成并合入。当前仍需 A 组接线
 > C1I/C2I/C3I/B2W/B6W，随后推进 B7/Gold 验收。
 > A5I 增量 1+2 已合并进 main：增量 1（9dcceeca）为 `loadOperationOutput`
 > 流式校验（async + `sha256FileStream` + `cancellationSignal`，取消传播而非吞掉）；
@@ -134,7 +134,7 @@
 - [ ] **TASK-048-B6W / A owner, blocked by TASK-047-A5I**：fixed derive slot runtime wiring。
 - [ ] **TASK-048-B6B / module complete；trusted E2E blocked by B6W/B2W/C2I**：注册 deterministic derive algorithm handlers、`protein_structure` PDB interface derived consumer/schema/profile、`variant_evidence` sequence/reference mapping derived consumer/schema/profile 已完成；A-owned runtime/plan/checkpoint/ts-core/publish wiring 未完成。
 - [ ] **TASK-048-B7 / blocked by all family/VLM/derive + TASK-C2I**：Gold3-Gold6 原样重跑。
-- [ ] **TASK-G1B / blocked by TASK-048-B7 + TASK-047-A8 + TASK-G1A**：最终 Gold3-Gold6 同基线复跑。
+- [ ] **TASK-G1B / blocked by TASK-048-B7 + TASK-G1A（TASK-047-A8 已完成）**：最终 Gold3-Gold6 同基线复跑。
 - [ ] **TASK-G1R / blocked by TASK-G1A + TASK-G1B**：严格 Gold 最终报告。
 
 ### P1
