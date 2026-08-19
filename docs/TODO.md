@@ -57,6 +57,17 @@
       剩余验收：计划 A1-A7 全部完成后，A8 在默认运行限制下使约 6.1 GB 解压矩阵
       完成 integrate/validate/publish；记录 RSS/wall/temp/batches/artifact，并通过
       immutable Publication Artifact API 下载复核 hash。
+      **A8 基准已完成并合并进 main（59b8b6af）**：`server/tests/bench-a8.run.ts`
+      + `docs/runs-log.md`。采用最大的**可行**真实 bulk GEO 矩阵 GSE325735
+      （58,676 genes × 807 samples，解压 117.87 MB，~75× 最大 gold 规模，精确
+      6.1GB 绝对最大检出不可行）；在 frozen 默认 RuntimeLimits + Node 默认堆
+      （无 `--max-old-space-size`）下完整跑通 integrate→validate→publish：
+      peak_rss 305.8 MB / peak_heap 122 MB，最长 op validate_profile
+      1,593,643 ms（< 3600s 默认超时），provenance coverage_ratio=1
+      （47,351,532 行，0 untraced/conflict/dedup/rejected），validation
+      11/11 passed，`artifacts_hash_parity=true`（7 个 artifact 磁盘重哈希与
+      manifest 一致）。权威指标见
+      `data/bench/a8-run-ByPP9F/result.json`（metric_source=live）。
 - [ ] **P0 / TASK-048** 非 gene-expression 研究任务（target/variant/
       structure/activity/paper/figure）缺少受信任的多表 schema、validation 和
       Publication family。gold3–gold6 真实 run 只能写 workspace 摘要，不能按
