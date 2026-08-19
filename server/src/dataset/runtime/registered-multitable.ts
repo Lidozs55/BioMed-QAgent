@@ -79,6 +79,58 @@ function digest(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
+function chemblCarrierDocuments(document: Record<string, unknown>): {
+  activity: unknown;
+  assay: unknown;
+  target: unknown;
+} {
+  if (document.activity !== undefined || document.assay !== undefined || document.target !== undefined) {
+    return {
+      activity: document.activity ?? document.activities,
+      assay: document.assay ?? document.assays,
+      target: document.target ?? document.targets,
+    };
+  }
+  if (!Array.isArray(document.activities)) {
+    throw new TypeError("ChEMBL carrier must contain activities");
+  }
+  const records = document.activities.map((value, index) => {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      throw new TypeError(`ChEMBL activity ${index} must be an object`);
+    }
+    return value as Record<string, unknown>;
+  });
+  const assays = new Map<string, Record<string, unknown>>();
+  const targets = new Map<string, Record<string, unknown>>();
+  for (const record of records) {
+    const assayId = String(record.assay_chembl_id ?? "");
+    const targetId = String(record.target_chembl_id ?? "");
+    if (assayId === "" || targetId === "") {
+      throw new TypeError("ChEMBL activities require assay_chembl_id and target_chembl_id");
+    }
+    assays.set(assayId, {
+      assay_chembl_id: assayId,
+      assay_type: record.assay_type,
+      description: record.assay_description,
+      assay_organism: record.target_organism,
+      target_chembl_id: targetId,
+      bao_format: record.bao_format,
+    });
+    targets.set(targetId, {
+      target_chembl_id: targetId,
+      target_type: "SINGLE PROTEIN",
+      pref_name: record.target_pref_name ?? targetId,
+      organism: record.target_organism,
+    });
+  }
+  const pageMeta = document.page_meta ?? { total_count: records.length };
+  return {
+    activity: { activities: records, page_meta: pageMeta },
+    assay: { assays: [...assays.values()], page_meta: { total_count: assays.size } },
+    target: { targets: [...targets.values()], page_meta: { total_count: targets.size } },
+  };
+}
+
 async function tableResult(options: {
   taskId: string;
   buildId: string;
@@ -247,13 +299,11 @@ function providerRows(input: {
   }
   if (input.familyId === "bioactivity_measurement" && input.source === "chembl" && input.adapterId === "bioactivity.chembl_json.v1") {
     const document = JSON.parse(input.bytes.toString("utf8")) as Record<string, unknown>;
-    const activity = document.activity ?? document.activities;
-    const assay = document.assay ?? document.assays;
-    const target = document.target ?? document.targets;
+    const carrier = chemblCarrierDocuments(document);
     const rows = transformChemblRegisteredAssets([
-      { kind: "activity", source_id: input.receipt.source_id, source_asset_id: input.assetId, logical_file: input.receipt.relative_path, document: activity },
-      { kind: "assay", source_id: input.receipt.source_id, source_asset_id: input.assetId, logical_file: input.receipt.relative_path, document: assay },
-      { kind: "target", source_id: input.receipt.source_id, source_asset_id: input.assetId, logical_file: input.receipt.relative_path, document: target },
+      { kind: "activity", source_id: input.receipt.source_id, source_asset_id: input.assetId, logical_file: input.receipt.relative_path, document: carrier.activity },
+      { kind: "assay", source_id: input.receipt.source_id, source_asset_id: input.assetId, logical_file: input.receipt.relative_path, document: carrier.assay },
+      { kind: "target", source_id: input.receipt.source_id, source_asset_id: input.assetId, logical_file: input.receipt.relative_path, document: carrier.target },
     ]);
     return { activities: rows.activities, compounds: rows.compounds, assays: rows.assays, targets: rows.targets };
   }

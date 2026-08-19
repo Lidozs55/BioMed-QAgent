@@ -28,12 +28,18 @@ import {
   TemporaryGrantStore,
   type PermissionPolicyStore,
 } from "../agent/permissions/index.js";
+import { createChemblFilesProvider } from "../dataset/acquisition/chembl-provider.js";
+import {
+  CoreAcquisitionRegistry,
+  CoreAcquisitionRuntime,
+} from "../dataset/acquisition/runtime.js";
 import { coreEventToPayload } from "../dataset/service/events.js";
 import { createDatasetCoreService } from "../dataset/service/dataset-core.js";
 import { TypeScriptDatasetCore } from "../dataset/service/ts-core.js";
 import { PublicHttpClient } from "../external/network/http-client.js";
 import { ContentCache } from "../external/acquisition/content-cache.js";
 import { DatabaseClient } from "../persistence/db-client.js";
+import { SourceAssetRegistry } from "./source-assets/registry.js";
 import type { VlmConfig } from "../processing/vlm/vlm-client.js";
 import {
   createDurableAgentRuntime,
@@ -204,6 +210,21 @@ export interface Phase3RuntimeOptions {
   vlmConfig?: Partial<VlmConfig> | null;
 }
 
+export function createPhase3AcquisitionRuntime(options: {
+  taskId: string;
+  taskRoot: string;
+  cache: ContentCache;
+  client: PublicHttpClient;
+}): CoreAcquisitionRuntime {
+  const registry = new CoreAcquisitionRegistry();
+  registry.registerProvider(createChemblFilesProvider());
+  return new CoreAcquisitionRuntime({
+    ...options,
+    sourceAssetRegistry: new SourceAssetRegistry(options.taskId, options.taskRoot),
+    registry,
+  });
+}
+
 /** Phase 3 + Phase 5 composition: Pi session + full TS business tool bundle. */
 export async function createPhase3Runtime(
   options: Phase3RuntimeOptions,
@@ -291,13 +312,22 @@ export async function createPhase3Runtime(
           await recordRunEvent(coreEventToPayload(event, buildId));
         },
       });
-      const service = createDatasetCoreService({ tsCore });
-
-      // Business tool bundle: curated tools + dynamic user tools.
       const client = new PublicHttpClient({
         timeoutMs: limits.http_timeout_seconds * 1000,
       });
       const cache = new ContentCache(path.join(taskRoot, "cache"));
+      const acquisitionRuntime = createPhase3AcquisitionRuntime({
+        taskId,
+        taskRoot,
+        cache,
+        client,
+      });
+      const service = createDatasetCoreService({
+        tsCore,
+        acquisition: (input) => acquisitionRuntime.acquire(input.request, input.signal),
+      });
+
+      // Business tool bundle: curated tools + dynamic user tools.
       const browserPool = options.browserPool ?? null;
       let browser = null;
       if (browserPool !== null) {
