@@ -1,5 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
+
+import { APIError } from "@biomed/contracts";
 import path from "node:path";
 
 import { BRIDGE_OP, DatabaseBridgeError } from "../persistence/db-client.js";
@@ -9,6 +11,11 @@ import { readJsonBody } from "../http/body.js";
 import { sendError, sendJson, sendNoContent } from "../http/response.js";
 import { asRecord } from "../http/validation.js";
 import { BuildStore, BuildStoreError } from "./build-store.js";
+import { DurableBuildStore, DurableBuildStoreError } from "../runtime/durable-build-store.js";
+import {
+  parseCancelDatasetBuildRequest,
+  parseStartDatasetBuildRequest,
+} from "../runtime/contracts.js";
 import { CacheApi } from "./cache-api.js";
 import {
   BUILTIN_DATABASE_NAMES,
@@ -116,6 +123,8 @@ export async function createProductApi(options: ProductApiOptions): Promise<{
   handle: (request: IncomingMessage, response: ServerResponse) => boolean;
 }> {
   const builds = new BuildStore(options.tasksRoot);
+  const durableBuilds = new DurableBuildStore(options.tasksRoot);
+  await durableBuilds.recoverExpiredLeases();
   const cache = new CacheApi(options.cacheDir, options.database);
   const personalizationFile = path.join(options.settingsDir, "personalization.json");
   await mkdir(options.settingsDir, { recursive: true });
@@ -226,6 +235,11 @@ export async function createProductApi(options: ProductApiOptions): Promise<{
         return;
       }
     }
+    if (method === "POST" && pathname === "/api/v1/builds") {
+      const startRequest = parseStartDatasetBuildRequest(await readJsonBody(request));
+      sendJson(response, 202, await durableBuilds.start(startRequest));
+      return;
+    }
     if (method === "GET" && pathname === "/api/v1/builds") {
       const requested = Number(url.searchParams.get("limit") ?? 50);
       if (!Number.isInteger(requested) || requested < 1 || requested > 200) {
@@ -237,12 +251,27 @@ export async function createProductApi(options: ProductApiOptions): Promise<{
     }
     const buildMatch = /^\/api\/v1\/builds\/([^/]+)$/.exec(pathname);
     if (method === "GET" && buildMatch !== null) {
+      const buildId = decodeURIComponent(buildMatch[1]!);
+      const durable = await durableBuilds.get(buildId);
+      if (durable !== null) {
+        sendJson(response, 200, { schema_version: "1.0", build: durable });
+        return;
+      }
       const value = await builds.detail(
-        decodeURIComponent(buildMatch[1]!),
+        buildId,
         parameter(url, "task_id"),
       );
       if (value === null) sendError(response, 404, "Build not found");
       else sendJson(response, 200, value);
+      return;
+    }
+    const cancelMatch = /^\/api\/v1\/builds\/([^/]+)\/cancel$/.exec(pathname);
+    if (method === "POST" && cancelMatch !== null) {
+      const value = await durableBuilds.cancel(
+        parseCancelDatasetBuildRequest(await readJsonBody(request)),
+        decodeURIComponent(cancelMatch[1]!),
+      );
+      sendJson(response, 202, value);
       return;
     }
     const buildArtifactMatch = /^\/api\/v1\/builds\/([^/]+)\/artifacts\/([^/]+)$/.exec(pathname);
@@ -324,6 +353,18 @@ export async function createProductApi(options: ProductApiOptions): Promise<{
         }
         if (dispatchError instanceof HttpError) {
           sendError(response, dispatchError.status, dispatchError.message);
+        } else if (dispatchError instanceof APIError) {
+          sendJson(response, 422, {
+            schema_version: "1.0",
+            code: "invalid_build_request",
+            message: dispatchError.message,
+            retryable: false,
+            task_id: null,
+            run_id: null,
+            build_id: null,
+            current_status: null,
+            details: {},
+          });
         } else if (dispatchError instanceof SyntaxError || dispatchError instanceof URIError) {
           sendError(response, 422, "Invalid request");
         } else if (dispatchError instanceof DatabaseBridgeError) {
@@ -335,6 +376,8 @@ export async function createProductApi(options: ProductApiOptions): Promise<{
                 ? 422
                 : 503;
           sendError(response, status, dispatchError.message);
+        } else if (dispatchError instanceof DurableBuildStoreError) {
+          sendJson(response, dispatchError.httpStatus, dispatchError.api);
         } else if (dispatchError instanceof BuildStoreError) {
           sendError(response, 409, dispatchError.message);
         } else {
