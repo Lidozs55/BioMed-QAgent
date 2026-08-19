@@ -210,9 +210,12 @@ async function verifyRegisteredAssetStream(
   registry: SourceAssetRegistry,
   assetId: string,
   signal?: AbortSignal,
+  role: "source" | "carrier" = "source",
 ): Promise<SourceAsset> {
   throwIfAborted(signal);
-  const resolved = await registry.resolve(assetId);
+  const resolved = role === "carrier"
+    ? await registry.resolveCarrier(assetId)
+    : await registry.resolve(assetId);
   if (resolved.registration_receipt.asset_ref.asset_id !== assetId) {
     throw new BuildError(`registered asset receipt does not match '${assetId}'`);
   }
@@ -326,25 +329,26 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
   ): Promise<void> {
     for (const [bindingId, reference] of Object.entries(references)) {
       throwIfAborted(signal);
-      if (registeredAssetRole === "carrier" && !isRegisteredAssetId(reference)) {
-        throw new BuildError(`provider carrier binding '${bindingId}' requires a registered carrier asset ID`);
-      }
       if (isRegisteredAssetId(reference)) {
         if (role !== "source" || registry === null) {
           throw new BuildError(`registered asset ID '${reference}' is only valid in source_files`);
         }
         try {
           const relativePath = await uniqueAssetFile(this.taskRoot, reference, signal);
-          const receipt = registeredAssetRole === "carrier"
-            ? (await registry.resolveCarrier(reference)).registration_receipt
-            : (await registry.resolve(reference)).registration_receipt;
-          const asset = sourceAssetFromReceipt(receipt);
-          if (asset.asset_id !== reference || asset.relative_path !== relativePath) {
+          const receipt = await registry.register({
+            sourceId: bindingId,
+            relativePath,
+            role: registeredAssetRole,
+          });
+          if (receipt.asset_ref.asset_id !== reference || receipt.relative_path !== relativePath) {
             throw new BuildError(`registered asset receipt does not match '${reference}'`);
           }
-          const verified = registeredAssetRole === "carrier"
-            ? asset
-            : await verifyRegisteredAssetStream(registry, reference, signal);
+          const verified = await verifyRegisteredAssetStream(
+            registry,
+            reference,
+            signal,
+            registeredAssetRole,
+          );
           target[bindingId] = verified;
           registeredSourceAssetIds.add(verified.asset_id);
           this.onAssetResolved?.({
@@ -372,9 +376,12 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
           relativePath: resolved.asset.relative_path,
           role: registeredAssetRole,
         });
-        const registered = registeredAssetRole === "carrier"
-          ? sourceAssetFromReceipt(receipt)
-          : await verifyRegisteredAssetStream(registry, receipt.asset_ref.asset_id, signal);
+        const registered = await verifyRegisteredAssetStream(
+          registry,
+          receipt.asset_ref.asset_id,
+          signal,
+          registeredAssetRole,
+        );
         target[bindingId] = registered;
         registeredSourceAssetIds.add(registered.asset_id);
       } else {
