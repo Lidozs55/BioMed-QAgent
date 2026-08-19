@@ -78,8 +78,10 @@ export type CoreEventSinkEvent = Parameters<NonNullable<CoreEventSink>>[0];
 
 export interface ExecuteContext {
   runId: string;
-  /** binding_id → SourceAsset (downloaded by the acquisition service/tools). */
+  /** binding_id → SourceAsset acquired or resolved by Core. */
   sourceAssets?: Readonly<Record<string, SourceAsset>>;
+  /** Asset IDs proven by the task-owned source asset registry. */
+  registeredSourceAssetIds?: ReadonlySet<string>;
   /** binding_id → platform annotation SourceAsset (probe builds). */
   mappingAssets?: Readonly<Record<string, SourceAsset>>;
   /** binding_id → explicit metadata SourceAsset (e.g. GEO SOFT metadata). */
@@ -231,6 +233,7 @@ export function createTsCoreOperationRunner(options: {
   taskRoot: string;
   outputDir: string;
   sourceAssets: Readonly<Record<string, SourceAsset>>;
+  registeredSourceAssetIds?: ReadonlySet<string>;
   mappingAssets: Readonly<Record<string, SourceAsset>>;
   metadataAssets: Readonly<Record<string, SourceAsset>>;
   runnerState: RunnerState;
@@ -242,6 +245,7 @@ export function createTsCoreOperationRunner(options: {
   hilGate?: DatasetHILGate | null;
 }): OperationRunner {
   const { spec, taskId, taskRoot, outputDir, sourceAssets, mappingAssets, metadataAssets, runnerState, bindings, rehydratedBindingIds } = options;
+  const registeredSourceAssetIds = options.registeredSourceAssetIds ?? null;
   const fence = options.fence ?? null;
   const hilGate = options.hilGate ?? null;
   const familyRegistry = createDefaultDatasetFamilyRegistry();
@@ -255,6 +259,9 @@ export function createTsCoreOperationRunner(options: {
         const asset = sourceAssets[op.category];
         if (asset === undefined) {
           throw new BuildError(`no source asset supplied for binding ${op.category!}`);
+        }
+        if (registeredSourceAssetIds !== null && !registeredSourceAssetIds.has(asset.asset_id)) {
+          throw new BuildError(`source asset is not registered for binding ${op.category!}`);
         }
         const assetPath = path.join(taskRoot, asset.relative_path);
         if (!existsSync(assetPath)) {
@@ -654,6 +661,7 @@ export class TypeScriptDatasetCore {
       taskRoot,
       outputDir,
       sourceAssets: context.sourceAssets ?? {},
+      registeredSourceAssetIds: context.registeredSourceAssetIds,
       mappingAssets: context.mappingAssets ?? {},
       metadataAssets: context.metadataAssets ?? {},
       runnerState,

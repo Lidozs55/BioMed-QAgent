@@ -20,11 +20,13 @@ import { OperationAbortedError } from "../cooperative.js";
 import {
   DATASET_BRIDGE_VERSION,
   type BuildResult,
+  type CoreAcquisitionRequest,
   type DatasetBridgeResponse,
   type DatasetBuildSpec,
 } from "@biomed/contracts";
 
 import type { SourceAsset } from "../contracts/index.js";
+import type { CoreAcquisitionResult } from "../acquisition/runtime.js";
 import type { SpecValidationResult } from "../validation/index.js";
 import type { BuildRecord, TypeScriptDatasetCore } from "./ts-core.js";
 
@@ -45,6 +47,7 @@ export interface ExecuteDatasetBuildInput extends DatasetCoreIdentity {
   sourceFiles: Record<string, string>;
   mappingFiles: Record<string, string>;
   metadataFiles?: Record<string, string>;
+  registeredSourceAssetIds?: readonly string[];
 }
 
 export interface DatasetCoreCancelInput {
@@ -55,8 +58,13 @@ export interface DatasetCoreCancelInput {
   buildId: string;
 }
 
+export interface DatasetCoreAcquireInput extends DatasetCoreIdentity {
+  request: CoreAcquisitionRequest;
+}
+
 export interface DatasetCoreService {
   validate(input: ValidateDatasetBuildInput): Promise<DatasetBridgeResponse>;
+  acquire(input: DatasetCoreAcquireInput): Promise<CoreAcquisitionResult>;
   execute(input: ExecuteDatasetBuildInput): Promise<DatasetBridgeResponse>;
   cancel(input: DatasetCoreCancelInput): Promise<void>;
 }
@@ -201,18 +209,29 @@ function noDataResultFrom(record: BuildRecord): BuildResult {
 export class TsDatasetCoreAdapter implements DatasetCoreService {
   private readonly taskRoot: string;
   private readonly onAssetResolved: ((record: AssetResolutionRecord) => void) | null;
+  private readonly acquisition: ((input: DatasetCoreAcquireInput) => Promise<CoreAcquisitionResult>) | null;
 
   constructor(
     private readonly core: TypeScriptDatasetCore,
-    options: { onAssetResolved?: (record: AssetResolutionRecord) => void } = {},
+    options: {
+      onAssetResolved?: (record: AssetResolutionRecord) => void;
+      acquisition?: (input: DatasetCoreAcquireInput) => Promise<CoreAcquisitionResult>;
+    } = {},
   ) {
     this.taskRoot = core.taskRoot;
     this.onAssetResolved = options.onAssetResolved ?? null;
+    this.acquisition = options.acquisition ?? null;
   }
 
   async validate(input: ValidateDatasetBuildInput): Promise<DatasetBridgeResponse> {
     const result = await this.core.validateDatasetBuildSpec(input.spec);
     return validationEnvelope(newRequestId(), result);
+  }
+
+  async acquire(input: DatasetCoreAcquireInput): Promise<CoreAcquisitionResult> {
+    if (this.acquisition === null) throw new Error("Core acquisition is not configured");
+    if (input.request.task_id !== input.taskId) throw new Error("acquisition request belongs to a different task");
+    return this.acquisition(input);
   }
 
   /** Resolve references serially with the caller's AbortSignal; missing or
@@ -298,6 +317,9 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
     const record = await this.core.executeDatasetBuild(input.spec, {
       runId: input.runId,
       sourceAssets,
+      registeredSourceAssetIds: input.registeredSourceAssetIds === undefined
+        ? undefined
+        : new Set(input.registeredSourceAssetIds),
       mappingAssets,
       metadataAssets,
       signal: input.signal,
@@ -360,6 +382,7 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
 export function createDatasetCoreService(options: {
   tsCore: TypeScriptDatasetCore;
   onAssetResolved?: (record: AssetResolutionRecord) => void;
+  acquisition?: (input: DatasetCoreAcquireInput) => Promise<CoreAcquisitionResult>;
 }): DatasetCoreService {
   return new TsDatasetCoreAdapter(options.tsCore, options);
 }
