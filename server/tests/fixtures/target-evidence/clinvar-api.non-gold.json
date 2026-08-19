@@ -1,0 +1,12 @@
+{
+  "header": { "type": "esummary", "version": "0.3" },
+  "result": {
+    "uids": ["123456"],
+    "123456": {
+      "accession": "VCV000123456",
+      "title": "NM_005465.5:c.734G>A (p.Arg245His)",
+      "clinical_significance": { "description": "Pathogenic" },
+      "genes": [{ "symbol": "AKT3", "geneid": "10000" }]
+    }
+  }
+}
