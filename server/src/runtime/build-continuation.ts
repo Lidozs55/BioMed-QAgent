@@ -27,6 +27,7 @@ export interface SuspendedBuildContinuation {
   source_files: Record<string, string>;
   mapping_files: Record<string, string>;
   metadata_files: Record<string, string>;
+  registered_source_asset_ids: string[];
   created_at: string;
 }
 
@@ -59,7 +60,17 @@ function parseContinuation(value: unknown): SuspendedBuildContinuation | null {
       return null;
     }
   }
-  return record as unknown as SuspendedBuildContinuation;
+  if (record.registered_source_asset_ids !== undefined &&
+      (!Array.isArray(record.registered_source_asset_ids) ||
+       record.registered_source_asset_ids.some((assetId) => typeof assetId !== "string" || !/^asset_[0-9a-f]{64}$/.test(assetId)))) {
+    return null;
+  }
+  return {
+    ...record,
+    registered_source_asset_ids: Array.isArray(record.registered_source_asset_ids)
+      ? record.registered_source_asset_ids as string[]
+      : [],
+  } as unknown as SuspendedBuildContinuation;
 }
 
 export async function readBuildContinuation(

@@ -68,6 +68,12 @@ function mappingArgument(
   return mapping as Record<string, string>;
 }
 
+const REGISTERED_ASSET_ID = /^asset_[0-9a-f]{64}$/;
+
+function registeredSourceAssetIds(sourceFiles: Record<string, string>): string[] {
+  return [...new Set(Object.values(sourceFiles).filter((reference) => REGISTERED_ASSET_ID.test(reference)))].sort();
+}
+
 function resultFor(response: DatasetBridgeResponse): BioMedToolResult {
   const details = response.ok
     ? { code: "ok", request_id: response.request_id, data: response.data }
@@ -294,7 +300,7 @@ export function createDatasetBuildTools(
   const mappingSchema = {
     type: "object",
     description:
-      "Map each spec binding_id to the corresponding downloaded asset.relative_path under this task output.",
+      "Map each spec binding_id to asset.relative_path (a task-relative source path), or a strict asset_<64hex> ID whose task-owned source_assets directory contains exactly one file.",
     additionalProperties: { type: "string", minLength: 1 },
   } as const;
   return [
@@ -396,6 +402,7 @@ export function createDatasetBuildTools(
               source_files: sourceFiles,
               mapping_files: mappingFiles,
               metadata_files: metadataFiles,
+              registered_source_asset_ids: registeredSourceAssetIds(sourceFiles),
               created_at: new Date().toISOString(),
             });
           } catch (error) {

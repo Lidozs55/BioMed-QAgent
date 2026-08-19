@@ -60,7 +60,7 @@ class CanonicalCsvSink implements RegisteredTableSink {
     }
     appendFileSync(this.filePath, `${this.fields.map((field) => csvCell(row.values[field])).join(",")}\n`, "utf8");
   }
-  writeRejectedRow(_row: RegisteredTableRejectedRow): void {}
+  writeRejectedRow(row: RegisteredTableRejectedRow): void { void row; }
   commit(result: RegisteredTableAdapterResult): void { this.result = result; }
   async rollback(): Promise<void> { await rm(this.filePath, { force: true }); }
 }
