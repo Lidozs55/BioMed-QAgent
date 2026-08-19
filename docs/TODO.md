@@ -168,9 +168,17 @@
       修复时发现，`fix/runtime-timeline-sequence` 未包含此改动）
 - [ ] **P2** 框架整体完成后，使用 Darwin 或类似 skill 对主 skill 进行迭代处理，达成三项指标：
       (1) 高完成度——搜索的数据全且准确；(2) 高速度；(3) 低成本；并完成与通用 agent 框架的对比评估。
-- [ ] **P2** 流程固化：每次执行完成后将流程固化为可复用脚本，可重复使用，降低第 2 项的调用成本。
-- [ ] **P2** 可拆卸工具包：每个工具拥有独立文档，可被其他 agent 单独调用；当前环境受限或不便完整启动
+- [x] **P2** 流程固化：每次执行完成后将流程固化为可复用脚本，可重复使用，降低第 2 项的调用成本。
+      已落地 `scripts/solidify-run.mjs`（`node scripts/solidify-run.mjs <taskId|taskDir>`：
+      还原工具流 → 产出自包含可复用 `.mjs` 脚本候选 + SKILL.md 候选 + 分析报告到该任务
+      `solidification/`）；固化到 `scripts/` / `.pi/skills/` 生产路径需经人工评审（HIL），
+      引擎只在任务目录自动产出候选。详见
+      [docs/architecture/skill-self-iteration.md](architecture/skill-self-iteration.md)。
+- [x] **P2** 可拆卸工具包：每个工具拥有独立文档，可被其他 agent 单独调用；当前环境受限或不便完整启动
       整个项目时，可作为独立工具包使用。
+      已落地 `scripts/solidify-run.mjs --toolkit <outDir>`：从 `.pi/skills/*/SKILL.md` 生成
+      每技能独立 Markdown 文档 + `README.md` 索引（默认输出 `docs/toolkit/`），同为纯 Node
+      可复用脚本，被任何 agent 单独调用。详见同一设计文档。
 
 ### P3
 
