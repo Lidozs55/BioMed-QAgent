@@ -1,0 +1,12 @@
+{
+  "studies": [
+    {
+      "protocolSection": {
+        "identificationModule": { "nctId": "NCT01234567", "briefTitle": "AKT inhibitor study" },
+        "statusModule": { "overallStatus": "COMPLETED" },
+        "designModule": { "phases": ["PHASE2"] },
+        "conditionsModule": { "conditions": ["Breast Cancer"] }
+      }
+    }
+  ]
+}

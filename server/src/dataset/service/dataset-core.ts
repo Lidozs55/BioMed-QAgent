@@ -9,13 +9,13 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { stat } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import { performance } from "node:perf_hooks";
 import path from "node:path";
 
 import { BuildError } from "../adapters/errors.js";
 import { sha256FileStreamWithSize } from "../adapters/hashing.js";
-import { OperationAbortedError } from "../cooperative.js";
+import { OperationAbortedError, throwIfAborted } from "../cooperative.js";
 
 import {
   DATASET_BRIDGE_VERSION,
@@ -27,6 +27,9 @@ import {
 
 import type { SourceAsset } from "../contracts/index.js";
 import type { CoreAcquisitionResult } from "../acquisition/runtime.js";
+import { createDefaultDatasetFamilyRegistry } from "../families/index.js";
+import { providerCarrierBinding } from "../runtime/provider-bindings.js";
+import { SourceAssetRegistry } from "../../runtime/source-assets/registry.js";
 import type { SpecValidationResult } from "../validation/index.js";
 import type { BuildRecord, TypeScriptDatasetCore } from "./ts-core.js";
 
@@ -47,7 +50,6 @@ export interface ExecuteDatasetBuildInput extends DatasetCoreIdentity {
   sourceFiles: Record<string, string>;
   mappingFiles: Record<string, string>;
   metadataFiles?: Record<string, string>;
-  registeredSourceAssetIds?: readonly string[];
 }
 
 export interface DatasetCoreCancelInput {
@@ -142,6 +144,86 @@ export async function resolveReferencedAsset(
     bytes,
     hashMs,
   };
+}
+
+const REGISTERED_ASSET_ID = /^asset_[0-9a-f]{64}$/;
+
+function isRegisteredAssetId(reference: string): boolean {
+  return REGISTERED_ASSET_ID.test(reference);
+}
+
+async function uniqueAssetFile(taskRoot: string, assetId: string, signal?: AbortSignal): Promise<string> {
+  const assetRoot = path.resolve(taskRoot, "source_assets", assetId);
+  const sourceRoot = path.resolve(taskRoot, "source_assets");
+  if (!assetRoot.startsWith(`${sourceRoot}${path.sep}`)) {
+    throw new BuildError(`registered asset '${assetId}' escaped source_assets`);
+  }
+  const rootInfo = await stat(assetRoot).catch(() => null);
+  if (rootInfo === null || !rootInfo.isDirectory()) {
+    throw new BuildError(`registered asset '${assetId}' directory is missing`);
+  }
+  const files: string[] = [];
+  const visit = async (directory: string): Promise<void> => {
+    throwIfAborted(signal);
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      throwIfAborted(signal);
+      const candidate = path.join(directory, entry.name);
+      if (entry.isSymbolicLink()) {
+        throw new BuildError(`registered asset '${assetId}' contains a symbolic link`);
+      }
+      if (entry.isDirectory()) {
+        await visit(candidate);
+      } else if (entry.isFile()) {
+        files.push(candidate);
+      } else {
+        throw new BuildError(`registered asset '${assetId}' contains a non-file entry`);
+      }
+      if (files.length > 1) {
+        throw new BuildError(`registered asset '${assetId}' must contain exactly one file`);
+      }
+    }
+  };
+  await visit(assetRoot);
+  const file = files[0];
+  if (file === undefined) throw new BuildError(`registered asset '${assetId}' contains no file`);
+  return path.relative(taskRoot, file).split(path.sep).join("/");
+}
+
+function sourceAssetFromReceipt(receipt: Awaited<ReturnType<SourceAssetRegistry["register"]>>): SourceAsset {
+  return {
+    schema_version: "1.0",
+    asset_id: receipt.asset_ref.asset_id,
+    kind: "source",
+    relative_path: receipt.relative_path,
+    sha256: receipt.sha256,
+    size_bytes: receipt.size_bytes,
+    media_type: receipt.media_type,
+    generated_by_step_id: null,
+    source_id: receipt.source_id,
+    successful_attempt_id: receipt.receipt_id,
+    derived_from_asset_id: null,
+    data_level: "repository_processed",
+  };
+}
+
+async function verifyRegisteredAssetStream(
+  registry: SourceAssetRegistry,
+  assetId: string,
+  signal?: AbortSignal,
+  role: "source" | "carrier" = "source",
+): Promise<SourceAsset> {
+  throwIfAborted(signal);
+  const resolved = role === "carrier"
+    ? await registry.resolveCarrier(assetId)
+    : await registry.resolve(assetId);
+  if (resolved.registration_receipt.asset_ref.asset_id !== assetId) {
+    throw new BuildError(`registered asset receipt does not match '${assetId}'`);
+  }
+  for await (const chunk of resolved.content) {
+    void chunk;
+    throwIfAborted(signal);
+  }
+  return sourceAssetFromReceipt(resolved.registration_receipt);
 }
 
 function newRequestId(): string {
@@ -241,11 +323,71 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
     role: AssetResolutionRecord["role"],
     target: Record<string, SourceAsset>,
     signal: AbortSignal | undefined,
+    registry: SourceAssetRegistry | null,
+    registeredSourceAssetIds: Set<string>,
+    registeredAssetRole: "source" | "carrier" = "source",
   ): Promise<void> {
     for (const [bindingId, reference] of Object.entries(references)) {
+      throwIfAborted(signal);
+      if (isRegisteredAssetId(reference)) {
+        if (role !== "source" || registry === null) {
+          throw new BuildError(`registered asset ID '${reference}' is only valid in source_files`);
+        }
+        try {
+          const relativePath = await uniqueAssetFile(this.taskRoot, reference, signal);
+          const receipt = await registry.register({
+            sourceId: bindingId,
+            relativePath,
+            role: registeredAssetRole,
+          });
+          if (receipt.asset_ref.asset_id !== reference || receipt.relative_path !== relativePath) {
+            throw new BuildError(`registered asset receipt does not match '${reference}'`);
+          }
+          const verified = await verifyRegisteredAssetStream(
+            registry,
+            reference,
+            signal,
+            registeredAssetRole,
+          );
+          target[bindingId] = verified;
+          registeredSourceAssetIds.add(verified.asset_id);
+          this.onAssetResolved?.({
+            bindingId,
+            role,
+            relativePath,
+            sizeBytes: verified.size_bytes,
+            hashMs: 0,
+            assetId: verified.asset_id,
+            sha256: verified.sha256,
+          });
+        } catch (error) {
+          if (error instanceof OperationAbortedError || error instanceof BuildError) throw error;
+          throw new BuildError(
+            `registered asset '${reference}' was rejected: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+        continue;
+      }
       const resolved = await resolveReferencedAsset(this.taskRoot, reference, signal);
       if (resolved === null) continue;
-      target[bindingId] = resolved.asset;
+      if (role === "source" && registry !== null) {
+        const receipt = await registry.register({
+          sourceId: bindingId,
+          relativePath: resolved.asset.relative_path,
+          role: registeredAssetRole,
+        });
+        const registered = await verifyRegisteredAssetStream(
+          registry,
+          receipt.asset_ref.asset_id,
+          signal,
+          registeredAssetRole,
+        );
+        target[bindingId] = registered;
+        registeredSourceAssetIds.add(registered.asset_id);
+      } else {
+        target[bindingId] = resolved.asset;
+      }
+      if (role === "source") registry?.recordLegacyPathCompatibilityUse(reference);
       this.onAssetResolved?.({
         bindingId,
         role,
@@ -259,6 +401,20 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
   }
 
   async execute(input: ExecuteDatasetBuildInput): Promise<DatasetBridgeResponse> {
+    if (input.taskId !== this.core.taskId) {
+      return {
+        version: DATASET_BRIDGE_VERSION,
+        request_id: newRequestId(),
+        ok: false,
+        data: null,
+        error: {
+          code: "invalid_input",
+          message: "dataset build task identity does not match the Core task",
+          retryable: false,
+          details: { fields: ["taskId"] },
+        },
+      };
+    }
     // Spec-level validation first: reject invalid input before any file read
     // or hash (TASK-047-A1: invalid spec = zero file reads).
     const validation = await this.core.validateDatasetBuildSpec(input.spec);
@@ -279,10 +435,17 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
     const sourceAssets: Record<string, SourceAsset> = {};
     const mappingAssets: Record<string, SourceAsset> = {};
     const metadataAssets: Record<string, SourceAsset> = {};
+    const registeredSourceAssetIds = new Set<string>();
+    const sourceAssetRegistry = new SourceAssetRegistry(input.taskId, this.taskRoot);
+    const providerCarrier = providerCarrierBinding(
+      input.spec.dataset_family,
+      input.spec.source_bindings[0]?.source ?? "",
+      input.spec.source_bindings[0]?.adapter_id ?? "",
+    );
     try {
-      await this.resolveAll(input.sourceFiles, "source", sourceAssets, input.signal);
-      await this.resolveAll(input.mappingFiles, "mapping", mappingAssets, input.signal);
-      await this.resolveAll(input.metadataFiles ?? {}, "metadata", metadataAssets, input.signal);
+      await this.resolveAll(input.sourceFiles, "source", sourceAssets, input.signal, sourceAssetRegistry, registeredSourceAssetIds, providerCarrier === null ? "source" : "carrier");
+      await this.resolveAll(input.mappingFiles, "mapping", mappingAssets, input.signal, null, registeredSourceAssetIds);
+      await this.resolveAll(input.metadataFiles ?? {}, "metadata", metadataAssets, input.signal, null, registeredSourceAssetIds);
     } catch (error) {
       if (error instanceof OperationAbortedError) {
         return {
@@ -314,12 +477,14 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
       }
       throw error;
     }
+    const family = createDefaultDatasetFamilyRegistry().get(input.spec.dataset_family);
+    const registeredIdsForCore = family.runtime_id === "registered_multitable.runtime.v1"
+      ? registeredSourceAssetIds
+      : undefined;
     const record = await this.core.executeDatasetBuild(input.spec, {
       runId: input.runId,
       sourceAssets,
-      registeredSourceAssetIds: input.registeredSourceAssetIds === undefined
-        ? undefined
-        : new Set(input.registeredSourceAssetIds),
+      registeredSourceAssetIds: registeredIdsForCore,
       mappingAssets,
       metadataAssets,
       signal: input.signal,
@@ -368,6 +533,7 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
           checked_count: record.validation.checked_count,
           failed_count: record.validation.failed_count,
         },
+        registeredSourceAssetIds: [...registeredSourceAssetIds].sort(),
       },
       error: null,
     };

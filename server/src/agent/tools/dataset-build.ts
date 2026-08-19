@@ -1,10 +1,14 @@
+import { createHash } from "node:crypto";
+
 import type {
   BuildResult,
+  CoreAcquisitionRequest,
   DatasetBridgeResponse,
   DatasetBuildSpec,
 } from "@biomed/contracts";
 
 import { saveBuildContinuation } from "../../runtime/build-continuation.js";
+import { fixedBiomedicalAcquisitionParameters } from "../../dataset/acquisition/biomedical-providers.js";
 import {
   createDefaultDatasetFamilyRegistry,
   type DatasetFamilyDefinition,
@@ -33,7 +37,8 @@ export interface DatasetBuildToolDiagnostic {
 }
 
 export interface DatasetBuildToolOptions {
-  client: Pick<DatasetCoreService, "validate" | "execute">;
+  client: Pick<DatasetCoreService, "validate" | "execute"> &
+    Partial<Pick<DatasetCoreService, "acquire">>;
   taskId: string;
   /** Task root on disk; the tool persists its invocation here so a
    * cross-restart resume can replay the exact same build deterministically
@@ -60,12 +65,60 @@ function specArgument(value: Record<string, unknown>): DatasetBuildSpec {
 function mappingArgument(
   value: Record<string, unknown>,
   name: "source_files" | "mapping_files" | "metadata_files",
+  optional = false,
 ): Record<string, string> {
+  if (optional && value[name] === undefined) return {};
   const mapping = object(value[name]);
   if (Object.values(mapping).some((item) => typeof item !== "string")) {
     throw new TypeError(`${name} must map binding IDs to task-relative references`);
   }
   return mapping as Record<string, string>;
+}
+
+const REGISTERED_ASSET_ID = /^asset_[0-9a-f]{64}$/;
+
+function registeredSourceAssetIds(sourceFiles: Record<string, string>): string[] {
+  return [...new Set(Object.values(sourceFiles).filter((reference) => REGISTERED_ASSET_ID.test(reference)))].sort();
+}
+
+function assertKnownSourceBindings(
+  spec: DatasetBuildSpec,
+  sourceFiles: Record<string, string>,
+): void {
+  const bindingIds = new Set(spec.source_bindings.map((binding) => binding.binding_id));
+  const unknown = Object.keys(sourceFiles).filter((bindingId) => !bindingIds.has(bindingId));
+  if (unknown.length > 0) {
+    throw new TypeError(`source_files contains unknown binding IDs: ${unknown.sort().join(", ")}`);
+  }
+}
+
+function acquisitionRequest(
+  options: DatasetBuildToolOptions,
+  spec: DatasetBuildSpec,
+  binding: DatasetBuildSpec["source_bindings"][number],
+): CoreAcquisitionRequest {
+  const requestDigest = createHash("sha256")
+    .update(`${options.taskId}\u0000${options.runId()}\u0000${spec.build_id}\u0000${binding.binding_id}`)
+    .digest("hex");
+  const fixedParameters = fixedBiomedicalAcquisitionParameters({
+    providerId: binding.acquisition.provider_id,
+    source: binding.source,
+    accession: binding.accession,
+    entities: spec.entities,
+    bindingParameters: binding.parameters,
+  });
+  return {
+    schema_version: "1.0",
+    request_id: `acq_${requestDigest}`,
+    task_id: options.taskId,
+    build_id: spec.build_id,
+    binding_id: binding.binding_id,
+    mode: binding.acquisition.mode,
+    provider_id: binding.acquisition.provider_id,
+    recipe_id: binding.acquisition.recipe_id,
+    recipe_version: binding.acquisition.recipe_version,
+    parameters: fixedParameters ?? binding.parameters,
+  };
 }
 
 function resultFor(response: DatasetBridgeResponse): BioMedToolResult {
@@ -198,7 +251,10 @@ function datasetFamilySpecSchema(definition: DatasetFamilyDefinition): object {
     )!;
     const sourceBinding = {
       oneOf: definition.sources
-        .filter((source) => source.schema_refs.includes(schema.schema_id))
+        .filter((source) =>
+          definition.runtime_id === "registered_multitable.runtime.v1" ||
+          source.schema_refs.includes(schema.schema_id),
+        )
         .map((source) => ({
           type: "object",
           properties: {
@@ -294,7 +350,7 @@ export function createDatasetBuildTools(
   const mappingSchema = {
     type: "object",
     description:
-      "Map each spec binding_id to the corresponding downloaded asset.relative_path under this task output.",
+      "Map each spec binding_id to asset.relative_path (a task-relative source path), or a strict asset_<64hex> ID whose task-owned source_assets directory contains exactly one file.",
     additionalProperties: { type: "string", minLength: 1 },
   } as const;
   return [
@@ -349,7 +405,7 @@ export function createDatasetBuildTools(
           mapping_files: mappingSchema,
           metadata_files: mappingSchema,
         },
-        required: ["spec", "source_files", "mapping_files"],
+        required: ["spec", "mapping_files"],
         additionalProperties: false,
       },
       async execute(value, signal, context) {
@@ -376,7 +432,19 @@ export function createDatasetBuildTools(
             return resultFor(validation);
           }
           options.onBuildResult?.(null);
-          const sourceFiles = mappingArgument(args, "source_files");
+          const sourceFiles = mappingArgument(args, "source_files", true);
+          assertKnownSourceBindings(spec, sourceFiles);
+          for (const binding of spec.source_bindings) {
+            if (sourceFiles[binding.binding_id] !== undefined) continue;
+            if (options.client.acquire === undefined) {
+              throw new Error(`Core acquisition is unavailable for binding '${binding.binding_id}'`);
+            }
+            const acquired = await options.client.acquire({
+              ...identity,
+              request: acquisitionRequest(options, spec, binding),
+            });
+            sourceFiles[binding.binding_id] = acquired.sourceAsset.asset_id;
+          }
           const mappingFiles = mappingArgument(args, "mapping_files");
           const metadataFiles = args.metadata_files === undefined
             ? {}
@@ -396,6 +464,7 @@ export function createDatasetBuildTools(
               source_files: sourceFiles,
               mapping_files: mappingFiles,
               metadata_files: metadataFiles,
+              registered_source_asset_ids: registeredSourceAssetIds(sourceFiles),
               created_at: new Date().toISOString(),
             });
           } catch (error) {

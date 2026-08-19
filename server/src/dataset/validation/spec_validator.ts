@@ -11,6 +11,7 @@ import type { DatasetBuildSpec } from "../contracts/index.js";
 import { getNormalizationProfile } from "../canonicalizer/index.js";
 import type { DatasetFamilyRegistry } from "../families/index.js";
 import { getValidationProfile } from "./profile.js";
+import { providerCarrierBinding } from "../runtime/provider-bindings.js";
 
 /** Outcome of a spec pre-check (Python frozen dataclass). */
 export interface SpecValidationResult {
@@ -396,7 +397,11 @@ export class SpecValidator {
       // RESEARCH_ONLY database must never be admitted as a verified build
       // source. Unknown identifiers remain fail-open only for legacy validators
       // constructed without a DatasetFamilyRegistry.
-      if (resolved !== undefined && SOURCE_CAPABILITIES[resolved] !== "pipeline_supported") {
+      if (
+        resolved !== undefined &&
+        SOURCE_CAPABILITIES[resolved] !== "pipeline_supported" &&
+        providerCarrierBinding(familyDefinition?.id ?? "", canonicalSource, binding.adapter_id) === null
+      ) {
         codes.push("source_not_pipeline_supported");
         reasons.push(
           `binding ${pyRepr(binding.binding_id)} source ${pyRepr(binding.source)} ` +

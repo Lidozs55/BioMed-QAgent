@@ -25,8 +25,14 @@ const RECIPE_KEYS = ["schema_version", "recipe_id", "recipe_version", "status", 
 const LINEAGE_KEYS = ["schema_version", "cache_key", "request_identity_digest", "cache_blob_sha256", "resumed_from_attempt_id", "part_relative_path"] as const;
 const ATTEMPT_KEYS = ["schema_version", "attempt_id", "request_id", "task_id", "provider_id", "attempt_number", "status", "url", "bytes_received", "error_code", "retryable", "started_at", "finished_at", "cache_lineage", "asset"] as const;
 const STATUSES = new Set<AcquisitionAttemptStatus>(["pending", "running", "succeeded", "failed", "cancelled"]);
+const PROVIDER_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 
 function id(value: unknown, name: string): string { return assertSafeId(value, name); }
+function providerId(value: unknown, name: string): string {
+  const text = assertNonEmptyString(value, name);
+  if (!PROVIDER_ID.test(text) || text.includes("..")) throw new TypeError(`${name} is invalid`);
+  return text;
+}
 function status(value: unknown, name: string): AcquisitionAttemptStatus {
   const text = assertNonEmptyString(value, name);
   if (!STATUSES.has(text as AcquisitionAttemptStatus)) throw new TypeError(`${name} is invalid`);
@@ -45,17 +51,19 @@ export function parseCoreAcquisitionRequest(
   if (expectedTaskId !== undefined && taskId !== expectedTaskId) throw new TypeError("acquisition request belongs to a different task");
   const mode = record.mode;
   if (mode !== "builtin" && mode !== "workflow_recipe") throw new TypeError("CoreAcquisitionRequest.mode is invalid");
-  const providerId = record.provider_id === null ? null : id(record.provider_id, "CoreAcquisitionRequest.provider_id");
+  const parsedProviderId = record.provider_id === null
+    ? null
+    : providerId(record.provider_id, "CoreAcquisitionRequest.provider_id");
   const recipeId = record.recipe_id === null ? null : id(record.recipe_id, "CoreAcquisitionRequest.recipe_id");
   const recipeVersion = record.recipe_version === null ? null : assertPositive(record.recipe_version, "CoreAcquisitionRequest.recipe_version");
-  if (mode === "builtin" && (providerId === null || recipeId !== null || recipeVersion !== null)) throw new TypeError("builtin acquisition requires provider_id and forbids recipe identity");
-  if (mode === "workflow_recipe" && (providerId !== null || recipeId === null || recipeVersion === null)) throw new TypeError("workflow_recipe acquisition requires recipe identity and forbids provider_id");
+  if (mode === "builtin" && (parsedProviderId === null || recipeId !== null || recipeVersion !== null)) throw new TypeError("builtin acquisition requires provider_id and forbids recipe identity");
+  if (mode === "workflow_recipe" && (parsedProviderId !== null || recipeId === null || recipeVersion === null)) throw new TypeError("workflow_recipe acquisition requires recipe identity and forbids provider_id");
   if (mode === "workflow_recipe" && recipeRef !== undefined) {
     if (recipeRef.status !== "PROMOTED" || recipeRef.recipe_id !== recipeId || recipeRef.recipe_version !== recipeVersion) {
       throw new TypeError("workflow recipe must be PROMOTED and match request identity");
     }
   }
-  return { schema_version: "1.0", request_id: id(record.request_id, "CoreAcquisitionRequest.request_id"), task_id: taskId, build_id: id(record.build_id, "CoreAcquisitionRequest.build_id"), binding_id: id(record.binding_id, "CoreAcquisitionRequest.binding_id"), mode, provider_id: providerId, recipe_id: recipeId, recipe_version: recipeVersion, parameters: assertJsonRecord(record.parameters, "CoreAcquisitionRequest.parameters") };
+  return { schema_version: "1.0", request_id: id(record.request_id, "CoreAcquisitionRequest.request_id"), task_id: taskId, build_id: id(record.build_id, "CoreAcquisitionRequest.build_id"), binding_id: id(record.binding_id, "CoreAcquisitionRequest.binding_id"), mode, provider_id: parsedProviderId, recipe_id: recipeId, recipe_version: recipeVersion, parameters: assertJsonRecord(record.parameters, "CoreAcquisitionRequest.parameters") };
 }
 
 export function parseWorkflowRecipeRef(value: unknown): WorkflowRecipeRef {
@@ -89,7 +97,7 @@ export function parseCoreDownloadAttempt(value: unknown, expectedTaskId?: string
   const asset = record.asset === null ? null : parseRegisteredSourceAssetRef(record.asset, taskId);
   if (attemptStatus === "succeeded" && asset === null) throw new TypeError("succeeded download attempt requires registered asset");
   if (attemptStatus !== "succeeded" && asset !== null) throw new TypeError("non-succeeded download attempt must not publish asset");
-  return { schema_version: "1.0", attempt_id: id(record.attempt_id, "CoreDownloadAttempt.attempt_id"), request_id: id(record.request_id, "CoreDownloadAttempt.request_id"), task_id: taskId, provider_id: id(record.provider_id, "CoreDownloadAttempt.provider_id"), attempt_number: assertPositive(record.attempt_number, "CoreDownloadAttempt.attempt_number"), status: attemptStatus, url: assertNonEmptyString(record.url, "CoreDownloadAttempt.url"), bytes_received: assertNonNegativeInt(record.bytes_received, "CoreDownloadAttempt.bytes_received"), error_code: record.error_code === null ? null : id(record.error_code, "CoreDownloadAttempt.error_code"), retryable: assertBoolean(record.retryable, "CoreDownloadAttempt.retryable"), started_at: assertIsoDateTime(record.started_at, "CoreDownloadAttempt.started_at"), finished_at: finishedAt, cache_lineage: parseCacheLineage(record.cache_lineage), asset };
+  return { schema_version: "1.0", attempt_id: id(record.attempt_id, "CoreDownloadAttempt.attempt_id"), request_id: id(record.request_id, "CoreDownloadAttempt.request_id"), task_id: taskId, provider_id: providerId(record.provider_id, "CoreDownloadAttempt.provider_id"), attempt_number: assertPositive(record.attempt_number, "CoreDownloadAttempt.attempt_number"), status: attemptStatus, url: assertNonEmptyString(record.url, "CoreDownloadAttempt.url"), bytes_received: assertNonNegativeInt(record.bytes_received, "CoreDownloadAttempt.bytes_received"), error_code: record.error_code === null ? null : id(record.error_code, "CoreDownloadAttempt.error_code"), retryable: assertBoolean(record.retryable, "CoreDownloadAttempt.retryable"), started_at: assertIsoDateTime(record.started_at, "CoreDownloadAttempt.started_at"), finished_at: finishedAt, cache_lineage: parseCacheLineage(record.cache_lineage), asset };
 }
 
 function assertPositive(value: unknown, name: string): number {

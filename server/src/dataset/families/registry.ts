@@ -42,6 +42,7 @@ import {
 } from "../schema/expression.js";
 import { SchemaRegistry } from "../schema/store.js";
 import { getValidationProfile } from "../validation/profile.js";
+import { providerCarrierBinding } from "../runtime/provider-bindings.js";
 
 export interface DatasetFamilyGranularity {
   id: string;
@@ -173,7 +174,7 @@ function validateDefinition(definition: DatasetFamilyDefinition): void {
         throw new Error(`source '${source.source}' references unknown schema '${schemaRef}'`);
       }
     }
-    if (isRegisteredTableAdapterId(source.adapter_id)) continue;
+    if (isRegisteredTableAdapterId(source.adapter_id) || providerCarrierBinding(definition.id, source.source, source.adapter_id) !== null) continue;
     const adapter = getAdapter(source.adapter_id);
     if (adapter.source_database !== source.source) {
       throw new Error(
@@ -446,12 +447,19 @@ export function literatureEvidenceFamilyDefinition(): DatasetFamilyDefinition {
     id: LITERATURE_EVIDENCE_FAMILY_ID,
     schemas: literatureEvidenceTables.map((entry) => entry.schema),
     profileRef: "literature_evidence.release.v1",
-    sources: registrations.map((registration, index) => registeredSource({
+    sources: [{
+      source: "pubmed",
+      adapter_id: "literature.bioc_xml.v1",
+      schema_refs: [literatureEvidenceTables[0]!.schema.schema_id],
+      parameters_required: false,
+      parameter_schema: emptyAdapterParameterSchema(),
+      validateParameters: noAdapterParameters,
+    }, ...registrations.map((registration, index) => registeredSource({
       source: `registered_literature_${literatureEvidenceTables[index]!.definition.table_id}`,
       tableId: literatureEvidenceTables[index]!.definition.table_id,
       adapterId: registration.parser.adapter_id,
       schemaRef: registration.schema.schema_id,
-    })),
+    }))],
   });
 }
 
@@ -463,7 +471,14 @@ export function targetEvidenceFamilyDefinition(): DatasetFamilyDefinition {
     schemas: targetEvidenceSchemas,
     profileRef: "target_evidence.release.v1",
     validationPolicy: targetEvidenceValidationPolicy(),
-    sources: registrations.map((registration) => {
+    sources: [...(["uniprot", "ncbi_clinvar", "clinicaltrials_gov"] as const).map((source) => ({
+      source,
+      adapter_id: source === "uniprot" ? "target.evidence.uniprot.v1" : source === "ncbi_clinvar" ? "target.evidence.clinvar.v1" : "target.evidence.trials.v1",
+      schema_refs: [targetEvidenceSchemas[0]!.schema_id],
+      parameters_required: false,
+      parameter_schema: emptyAdapterParameterSchema(),
+      validateParameters: noAdapterParameters,
+    })), ...registrations.map((registration) => {
       const index = targetEvidenceSchemas.findIndex((schema) => schema.schema_id === registration.schema.schema_id);
       return registeredSource({
         source: `registered_target_${definitions[index]!.table_id}`,
@@ -471,7 +486,7 @@ export function targetEvidenceFamilyDefinition(): DatasetFamilyDefinition {
         adapterId: registration.parser.adapter_id,
         schemaRef: registration.schema.schema_id,
       });
-    }),
+    })],
   });
 }
 
@@ -503,10 +518,17 @@ export function proteinStructureFamilyDefinition(): DatasetFamilyDefinition {
     id: PROTEIN_STRUCTURE_FAMILY_ID,
     schemas: entries.map((entry) => entry.schema),
     profileRef: "protein_structure.release.v1",
-    sources: registrations.map((registration) => {
+    sources: [{
+      source: "pdb",
+      adapter_id: "protein.structure.carrier.v1",
+      schema_refs: [tables.structure.schema_id],
+      parameters_required: false,
+      parameter_schema: emptyAdapterParameterSchema(),
+      validateParameters: noAdapterParameters,
+    }, ...registrations.map((registration) => {
       const entry = entries.find((item) => item.schema.schema_id === registration.schema.schema_id)!;
       return registeredSource({ source: `registered_structure_${entry.tableId}`, tableId: entry.tableId, adapterId: registration.parser.adapter_id, schemaRef: registration.schema.schema_id });
-    }),
+    })],
   });
 }
 
@@ -518,10 +540,17 @@ export function bioactivityMeasurementFamilyDefinition(): DatasetFamilyDefinitio
     schemas: entries.map((entry) => entry.schema),
     profileRef: "bioactivity_measurement.release.v1",
     validationPolicy: bioactivityValidationPolicy(),
-    sources: registrations.map((registration) => {
+    sources: [{
+      source: "chembl",
+      adapter_id: "bioactivity.chembl_json.v1",
+      schema_refs: [entries.find((entry) => entry.tableId === "activities")!.schema.schema_id],
+      parameters_required: false,
+      parameter_schema: emptyAdapterParameterSchema(),
+      validateParameters: noAdapterParameters,
+    }, ...registrations.map((registration) => {
       const entry = entries.find((item) => item.schema.schema_id === registration.schema.schema_id)!;
       return registeredSource({ source: `registered_bioactivity_${entry.tableId}`, tableId: entry.tableId, adapterId: registration.parser.adapter_id, schemaRef: registration.schema.schema_id });
-    }),
+    })],
   });
 }
 

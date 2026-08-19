@@ -97,6 +97,32 @@ describe("TASK-C1I Core source asset registry", () => {
     }
   });
 
+  it("keeps independent source and carrier receipts for the same content-addressed asset", async () => {
+    const root = await tempTask();
+    try {
+      const content = "accession\nP04637\n";
+      await writeFile(path.join(root, "source_assets", "proteins.tsv"), content);
+      const registry = new SourceAssetRegistry("task_c1i", root);
+      const source = await registry.register({
+        sourceId: "source_uniprot",
+        relativePath: "source_assets/proteins.tsv",
+        role: "source",
+      });
+      const carrier = await registry.register({
+        sourceId: "carrier_uniprot",
+        relativePath: "source_assets/proteins.tsv",
+        role: "carrier",
+      });
+      expect(source.asset_ref.asset_id).toBe(carrier.asset_ref.asset_id);
+      expect(source.receipt_id).not.toBe(carrier.receipt_id);
+      expect((await registry.resolve(source.asset_ref.asset_id)).registration_receipt.asset_ref.role).toBe("source");
+      expect((await registry.resolveCarrier(carrier.asset_ref.asset_id)).registration_receipt.asset_ref.role).toBe("carrier");
+      expect((await new SourceAssetRegistry("task_c1i", root).resolveAny(source.asset_ref.asset_id)).registration_receipt.asset_ref.role).toBe("carrier");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("constructs the registry from the repository-owned task root", async () => {
     const tasksRoot = await mkdtemp(path.join(os.tmpdir(), "c1i-tasks-"));
     const taskRoot = path.join(tasksRoot, "task_c1i");

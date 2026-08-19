@@ -682,12 +682,14 @@ export function createTsCoreOperationRunner(options: {
 
 /** The TypeScript Dataset Core (default since Phase 7; opt-in when introduced in M2). */
 export class TypeScriptDatasetCore {
+  readonly taskId: string;
   readonly taskRoot: string;
   private readonly options: TypeScriptDatasetCoreOptions;
   private readonly activeCancels = new Map<string, AbortController>();
 
   constructor(options: TypeScriptDatasetCoreOptions) {
     this.options = options;
+    this.taskId = options.taskId;
     this.taskRoot = options.taskRoot;
   }
 

@@ -24,6 +24,7 @@ import {
   literatureEvidenceAdapterRegistrations,
   literatureEvidenceTables,
   validateLiteratureEvidenceCandidate,
+  transformBioCLiteratureEvidence,
 } from "../src/dataset/families/literature-evidence/index.js";
 import type { CoreResolvedRegisteredAsset } from "../src/dataset/adapters/registered/types.js";
 import { SourceAssetRegistry } from "../src/runtime/source-assets/registry.js";
@@ -193,6 +194,34 @@ afterEach(async () => {
 });
 
 describe("literature evidence family module", () => {
+  it("transforms non-Gold BioC XML into canonical evidence, paper, and source tables", async () => {
+    const bytes = await readFile(path.join(FIXTURES, "non-gold.bioc.xml"));
+    const assetId = `asset_${createHash("sha256").update(bytes).digest("hex")}`;
+    const tables = transformBioCLiteratureEvidence({
+      bytes,
+      assetId,
+      logicalFile: "source_assets/non-gold.bioc.xml",
+      retrievedAt: "2026-08-18T00:00:00Z",
+    });
+    expect(tables.literature_evidence).toHaveLength(1);
+    expect(tables.literature_evidence[0]).toMatchObject({
+      paper_id: "35123456",
+      paper_id_namespace: "pubmed",
+      experiment_id: "booster_day_28",
+      source_id: expect.stringMatching(/^source_[0-9a-f]{24}$/),
+      study_context: { activity_value: "640", value_precision: "exact", confidence: "high" },
+    });
+    expect(tables.papers[0]).toMatchObject({ title: "Neutralizing antibody activity after booster vaccination", journal: "Vaccine Reports" });
+    expect(tables.sources[0]!.source_locator).toMatchObject({ locator_type: "xml_cell", table_id: "Table_2", row_index: 1, column_index: 1, asset_id: assetId });
+  });
+
+  it("rejects low-confidence unreviewed BioC rows and malformed XML", async () => {
+    const bytes = await readFile(path.join(FIXTURES, "non-gold.low-confidence.bioc.xml"));
+    const assetId = `asset_${createHash("sha256").update(bytes).digest("hex")}`;
+    expect(() => transformBioCLiteratureEvidence({ bytes, assetId, logicalFile: "source_assets/low.xml", retrievedAt: "2026-08-18T00:00:00Z" })).toThrow(/low-confidence and unreviewed/);
+    expect(() => transformBioCLiteratureEvidence({ bytes: Buffer.from("<collection><document>"), assetId, logicalFile: "source_assets/bad.xml", retrievedAt: "2026-08-18T00:00:00Z" })).toThrow(/malformed BioC XML/);
+  });
+
   it("parses structured non-Gold literature records and keeps source as a supporting carrier", async () => {
     const evidence = await parseJsonFixture("non-gold.valid.json", 0, "source_evidence_json");
     const papers = await parseJsonFixture("non-gold.valid.json", 1, "source_papers_json");
@@ -329,7 +358,8 @@ describe("literature evidence family module", () => {
     await writeFile(path.join(taskRoot, relativePath), Buffer.alloc((await stat(path.join(taskRoot, relativePath))).size, "x"));
     const drifted = await new SourceAssetRegistry("task_publication", taskRoot).resolve(receipt.asset_ref.asset_id);
     await expect((async () => {
-      for await (const _chunk of drifted.content) {
+      for await (const chunk of drifted.content) {
+        void chunk;
         // Consume the lazy verified stream; the final digest check must fail.
       }
     })()).rejects.toThrow(/hash drift/);

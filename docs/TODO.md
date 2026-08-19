@@ -80,9 +80,10 @@
 
 > B 组详细 ownership、依赖类型、分支、交接窗口和逐任务验收见
 > [开发者 B：可信多表 Publication 落实计划](superpowers/plans/2026-08-18-developer-b-trusted-publication-plan.md)。
-> B 组 contracts（含 C3C）、B2M、B3、B5C、B6D 已完成，B4M、B5L/T/V/S/A、B6A、B6B
-> module 已完成；A 组 `TASK-047-A1-A8` 已完成并合入。当前仍需 A 组接线
-> C1I/C2I/C3I/B2W/B6W，随后推进 B7/Gold 验收。
+> B 组 contracts（含 C3C）、B2M、B3、B5C、B6D、B4M、B5L/T/V/S/A、B6A、B6B
+> module 已完成；C1I/C2I/C3I/B2W/B6W 与 A8 已接入 main。provider parser/runtime dispatch、
+> acquisition-first、固定 biomedical providers、role-aware receipts、multi-carrier aggregation、
+> mmCIF parser 已合入；当前进入 B7 Gold3-Gold6 同 commit 原样验收。
 > A5I 增量 1+2 已合并进 main：增量 1（9dcceeca）为 `loadOperationOutput`
 > 流式校验（async + `sha256FileStream` + `cancellationSignal`，取消传播而非吞掉）；
 > 增量 2（14aceeed）为 executor 成功路径写入类型化 ADR-030 `OperationResultManifest`
@@ -114,10 +115,10 @@
 - [x] **TASK-048-B2M / completed**：Core-only PublicationCandidate 与 family assembler module；expression integration result 可确定性包装，candidate 仅引用 committed Core result receipts/registered asset IDs，缺 handler 的 family 无 assembly capability；ADR-033。
 - [ ] **TASK-048-B2W / A owner, blocked by TASK-048-B2M + TASK-047-A5I**：assemble runtime/checkpoint/publisher wiring。
 - [x] **TASK-048-B3 / completed**：Generic multi-table validation/relation gate；严格结构/关系、token/evidence closure 与 Agent workspace bypass fail-closed 已完成（ADR-032）。
-- [ ] **TASK-048-B4M / module complete（ADR-034）；trusted E2E blocked by TASK-C1I**：
+- [x] **TASK-048-B4M / completed（ADR-034）**：
       schema-driven CSV/TSV/JSON RegisteredSourceAsset adapter、严格行宽/类型、locator/parser
       version/rejected-row audit 与 fail-closed receipt/hash 已完成；`adapters.ts`/runtime 接线、
-      Core asset registry E2E 与 Publication admission 未完成，不得标记整体 completed。
+      Core asset registry、registered adapter trusted E2E、provider carrier dispatch 与 Publication admission 已完成。
 - [x] **TASK-048-B5C / completed（ADR-035）**：共享 biomedical tables/relation vocabulary；参数化
       builders 覆盖 entity/paper/compound/assay/structure dimension/trial/source/entity+compound
       crosswalk，受控 ID/relation/cardinality/unit vocabulary，crosswalk 保留匹配证据、冲突和置信度；
@@ -133,7 +134,7 @@
       完整，Agent code/通用 DAG fail-closed。
 - [ ] **TASK-048-B6W / A owner, blocked by TASK-047-A5I**：fixed derive slot runtime wiring。
 - [ ] **TASK-048-B6B / module complete；trusted E2E blocked by B6W/B2W/C2I**：注册 deterministic derive algorithm handlers、`protein_structure` PDB interface derived consumer/schema/profile、`variant_evidence` sequence/reference mapping derived consumer/schema/profile 已完成；A-owned runtime/plan/checkpoint/ts-core/publish wiring 未完成。
-- [ ] **TASK-048-B7 / blocked by all family/VLM/derive + TASK-C2I**：Gold3-Gold6 原样重跑。
+- [ ] **TASK-048-B7 / in progress；strict result remains 0/6**：Gold3-Gold6 已多轮发现并修复 runtime 接缝；最终验证基线 `main@a68fb8ca` 已记录冻结 prompt/spec/runtime hashes。该基线中 Gold4 完成了 structure Publication/artifacts，Gold5 完成了 100-row bioactivity Publication/artifacts；Gold3/Gold6 尚无完整 Publication，且四例尚未形成同一 commit 上的完整 task/run/build/publication/final-answer evidence，故不得计入严格 Gold。
 - [ ] **TASK-G1B / blocked by TASK-048-B7 + TASK-G1A（TASK-047-A8 已完成）**：最终 Gold3-Gold6 同基线复跑。
 - [ ] **TASK-G1R / blocked by TASK-G1A + TASK-G1B**：严格 Gold 最终报告。
 
@@ -173,9 +174,17 @@
       修复时发现，`fix/runtime-timeline-sequence` 未包含此改动）
 - [ ] **P2** 框架整体完成后，使用 Darwin 或类似 skill 对主 skill 进行迭代处理，达成三项指标：
       (1) 高完成度——搜索的数据全且准确；(2) 高速度；(3) 低成本；并完成与通用 agent 框架的对比评估。
-- [ ] **P2** 流程固化：每次执行完成后将流程固化为可复用脚本，可重复使用，降低第 2 项的调用成本。
-- [ ] **P2** 可拆卸工具包：每个工具拥有独立文档，可被其他 agent 单独调用；当前环境受限或不便完整启动
+- [x] **P2** 流程固化：每次执行完成后将流程固化为可复用脚本，可重复使用，降低第 2 项的调用成本。
+      已落地 `scripts/solidify-run.mjs`（`node scripts/solidify-run.mjs <taskId|taskDir>`：
+      还原工具流 → 产出自包含可复用 `.mjs` 脚本候选 + SKILL.md 候选 + 分析报告到该任务
+      `solidification/`）；固化到 `scripts/` / `.pi/skills/` 生产路径需经人工评审（HIL），
+      引擎只在任务目录自动产出候选。详见
+      [docs/architecture/skill-self-iteration.md](architecture/skill-self-iteration.md)。
+- [x] **P2** 可拆卸工具包：每个工具拥有独立文档，可被其他 agent 单独调用；当前环境受限或不便完整启动
       整个项目时，可作为独立工具包使用。
+      已落地 `scripts/solidify-run.mjs --toolkit <outDir>`：从 `.pi/skills/*/SKILL.md` 生成
+      每技能独立 Markdown 文档 + `README.md` 索引（默认输出 `docs/toolkit/`），同为纯 Node
+      可复用脚本，被任何 agent 单独调用。详见同一设计文档。
 
 ### P3
 

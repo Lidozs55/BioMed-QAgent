@@ -64,6 +64,7 @@ export interface DatasetBridgeBuildData {
   manifest: DatasetBridgeManifestReference | null;
   artifacts: DatasetBridgeArtifactReference[];
   validation_summary: Record<string, JsonValue> | null;
+  registeredSourceAssetIds: string[];
 }
 
 export type DatasetBridgeErrorCode =
@@ -320,13 +321,15 @@ function parseArtifacts(value: unknown): DatasetBridgeArtifactReference[] {
 
 function parseBuildData(value: unknown): DatasetBridgeBuildData {
   const data = record(value, "build data");
-  exact(data, ["build_id", "build_result", "publication_id", "manifest", "artifacts", "validation_summary"], "build data");
+  exact(data, ["build_id", "build_result", "publication_id", "manifest", "artifacts", "validation_summary", "registeredSourceAssetIds"], "build data");
   safeId(data.build_id, "build_id");
   parseBuildResult(data.build_result);
   if (data.publication_id !== null) safeId(data.publication_id, "publication_id");
   if (data.manifest !== null) parseManifestReference(data.manifest);
   parseArtifacts(data.artifacts);
   if (data.validation_summary !== null && !jsonValue(data.validation_summary)) throw new TypeError("validation_summary must be JSON");
+  const registeredSourceAssetIds = strings(data.registeredSourceAssetIds, "registeredSourceAssetIds");
+  if (registeredSourceAssetIds.some((assetId) => !/^asset_[0-9a-f]{64}$/.test(assetId))) throw new TypeError("registeredSourceAssetIds must contain content-addressed asset IDs");
   return value as DatasetBridgeBuildData;
 }
 

@@ -28,6 +28,7 @@ import { SourceAssetRegistry } from "../../runtime/source-assets/registry.js";
 
 const ATTEMPTS_FILE = "state/core-acquisition-attempts.json";
 const FORBIDDEN_PARAMETER_KEY = /(?:^|_)(?:code|command|path|filename|script)(?:$|_)/i;
+const PROVIDER_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 
 export interface AcquisitionExtractionAsset {
   sourceId: string;
@@ -48,6 +49,8 @@ export interface AcquisitionDownloadPlan {
   accept?: string;
   requestHeaders?: Readonly<Record<string, string>>;
   allowedHosts?: ReadonlySet<string>;
+  /** Trusted provider-selected registry role; never populated by request parameters. */
+  assetRole?: "source" | "carrier";
   /** Trusted provider-produced extraction outputs; never populated by request parameters. */
   extractionAssets?: readonly AcquisitionExtractionAsset[];
 }
@@ -68,7 +71,7 @@ export class CoreAcquisitionRegistry {
   readonly #recipes = new Map<string, AcquisitionRecipeRegistration>();
 
   registerProvider(handler: AcquisitionProviderHandler): void {
-    if (!/^[A-Za-z0-9_-]{1,128}$/.test(handler.providerId)) throw new TypeError("provider_id is invalid");
+    if (!PROVIDER_ID.test(handler.providerId) || handler.providerId.includes("..")) throw new TypeError("provider_id is invalid");
     if (!/^[0-9a-f]{64}$/.test(handler.implementationDigest)) throw new TypeError("provider implementation_digest is invalid");
     if (this.#providers.has(handler.providerId)) throw new Error(`acquisition provider '${handler.providerId}' is already registered`);
     this.#providers.set(handler.providerId, Object.freeze(handler));
@@ -179,7 +182,7 @@ export class CoreAcquisitionRuntime {
         const receipt = await this.#assets.register({
           sourceId: result.asset.source_id,
           relativePath: result.asset.relative_path,
-          role: "source",
+          role: plan.assetRole ?? "source",
           mediaType: result.asset.media_type,
         });
         if (receipt.sha256 !== result.asset.sha256 || receipt.size_bytes !== result.asset.size_bytes) {

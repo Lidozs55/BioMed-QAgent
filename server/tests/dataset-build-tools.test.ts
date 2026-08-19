@@ -35,22 +35,37 @@ describe("Pi DatasetBuild tools", () => {
     };
     const expressionSchema = validateParameters.properties.spec as {
       oneOf: Array<{
-        additionalProperties: boolean;
-        required: string[];
-        properties: Record<string, Record<string, unknown>>;
+        additionalProperties?: boolean;
+        required?: string[];
+        properties?: Record<string, Record<string, unknown>>;
+        oneOf?: Array<{
+          additionalProperties: boolean;
+          required: string[];
+          properties: Record<string, Record<string, unknown>>;
+        }>;
       }>;
     };
+    type SchemaVariant = {
+      additionalProperties: boolean;
+      required: string[];
+      properties: Record<string, Record<string, unknown>>;
+    };
+    const variants = expressionSchema.oneOf.flatMap((variant): SchemaVariant[] => {
+      if (variant.oneOf !== undefined) return variant.oneOf;
+      if (variant.properties === undefined || variant.required === undefined || variant.additionalProperties === undefined) return [];
+      return [{ additionalProperties: variant.additionalProperties, required: variant.required, properties: variant.properties }];
+    });
     const schemaRef = (
       variant: { properties: Record<string, Record<string, unknown>> },
     ): string => (variant.properties.schema_ref.enum as string[])[0]!;
-    const geneVariant = expressionSchema.oneOf.find(
+    const geneVariant = variants.find(
       (variant) => schemaRef(variant) === "gene_expression.long.v1",
     )!;
-    const probeVariant = expressionSchema.oneOf.find(
+    const probeVariant = variants.find(
       (variant) => schemaRef(variant) === "gene_expression.probe_long.v1",
     )!;
 
-    expect(expressionSchema.oneOf).toHaveLength(2);
+    expect(variants.length).toBeGreaterThanOrEqual(2);
     expect(geneVariant.properties.dataset_family.enum).toEqual(["gene_expression"]);
     expect(geneVariant.additionalProperties).toBe(false);
     expect(geneVariant.required).toEqual([
@@ -122,6 +137,22 @@ describe("Pi DatasetBuild tools", () => {
       "geo.expression.v1",
     ]);
 
+    const bioactivityVariant = variants.find(
+      (variant) => schemaRef(variant) === "bioactivity_measurement.activity.v1",
+    )!;
+    const bioactivitySources = bioactivityVariant.properties.source_bindings as {
+      items: {
+        oneOf: Array<{ properties: Record<string, Record<string, unknown>> }>;
+      };
+    };
+    expect(bioactivitySources.items.oneOf.map((option) => adapterId(option))).toEqual([
+      "bioactivity.chembl_json.v1",
+      "registered_bioactivity_activities_json",
+      "registered_bioactivity_assays_json",
+      "registered_bioactivity_compounds_json",
+      "registered_bioactivity_targets_json",
+    ]);
+
     const executeParameters = executeTool!.parameters as {
       properties: Record<string, Record<string, unknown>>;
     };
@@ -152,9 +183,9 @@ describe("Pi DatasetBuild tools", () => {
     const result = await executeTool!.execute(
       {
         spec,
-        source_files: { binding: "source_assets/file.tsv" },
+        source_files: { binding_gdc: "source_assets/file.tsv" },
         mapping_files: {},
-        metadata_files: { binding: "source_assets/series.soft" },
+        metadata_files: { binding_gdc: "source_assets/series.soft" },
       },
       controller.signal,
       { toolCallId: "call_execute" },
@@ -169,9 +200,158 @@ describe("Pi DatasetBuild tools", () => {
       signal: controller.signal,
       piSessionId: "pi_tool",
       toolCallId: "call_execute",
-      metadataFiles: { binding: "source_assets/series.soft" },
+      metadataFiles: { binding_gdc: "source_assets/series.soft" },
     }));
     expect(result).toMatchObject({ isError: true, details: { code: "no_data" } });
+  });
+
+  test("acquires missing source bindings after validation and preserves explicit files", async () => {
+    const assetId = `asset_${"a".repeat(64)}`;
+    const validate = vi.fn(async (): Promise<DatasetBridgeResponse> => ({
+      version: 1, request_id: "request_validate", ok: true,
+      data: { valid: true, reason_codes: [], reasons: [] }, error: null,
+    }));
+    const acquire = vi.fn(async () => ({
+      requestIdentityDigest: "b".repeat(64),
+      attempts: [],
+      sourceAsset: {
+        schema_version: "1.0" as const,
+        asset_id: assetId,
+        task_id: "task_tool",
+        role: "source" as const,
+      },
+      extractionAssets: [],
+    }));
+    const execute = vi.fn(async (): Promise<DatasetBridgeResponse> => ({
+      version: 1, request_id: "request_execute", ok: false, data: null,
+      error: { code: "no_data", message: "No data", retryable: false, details: {} },
+    }));
+    const tools = createDatasetBuildTools({
+      client: { validate, acquire, execute },
+      taskId: "task_tool",
+      taskRoot: await toolTaskRoot(),
+      runId: () => "run_tool",
+      piSessionId: () => "pi_tool",
+    });
+
+    await tools[1]!.execute({ spec, mapping_files: {} });
+
+    expect(acquire).toHaveBeenCalledWith(expect.objectContaining({
+      taskId: "task_tool",
+      runId: "run_tool",
+      request: expect.objectContaining({
+        schema_version: "1.0",
+        task_id: "task_tool",
+        build_id: spec.build_id,
+        binding_id: "binding_gdc",
+        mode: "builtin",
+        provider_id: "gdc.v1",
+        parameters: {},
+      }),
+    }));
+    expect(execute).toHaveBeenCalledWith(expect.objectContaining({
+      sourceFiles: { binding_gdc: assetId },
+    }));
+
+    acquire.mockClear();
+    await tools[1]!.execute({
+      spec,
+      source_files: { binding_gdc: "source_assets/explicit.tsv" },
+      mapping_files: {},
+    });
+    expect(acquire).not.toHaveBeenCalled();
+    expect(execute).toHaveBeenLastCalledWith(expect.objectContaining({
+      sourceFiles: { binding_gdc: "source_assets/explicit.tsv" },
+    }));
+  });
+
+  test("projects fixed provider accession and entities into the Core acquisition request", async () => {
+    const validate = vi.fn(async (): Promise<DatasetBridgeResponse> => ({
+      version: 1, request_id: "request_validate", ok: true,
+      data: { valid: true, reason_codes: [], reasons: [] }, error: null,
+    }));
+    const acquire = vi.fn(async () => ({
+      requestIdentityDigest: "b".repeat(64),
+      attempts: [],
+      sourceAsset: {
+        schema_version: "1.0" as const,
+        asset_id: `asset_${"a".repeat(64)}`,
+        task_id: "task_tool",
+        role: "carrier" as const,
+      },
+      extractionAssets: [],
+    }));
+    const execute = vi.fn(async (): Promise<DatasetBridgeResponse> => ({
+      version: 1, request_id: "request_execute", ok: false, data: null,
+      error: { code: "no_data", message: "No data", retryable: false, details: {} },
+    }));
+    const tools = createDatasetBuildTools({
+      client: { validate, acquire, execute },
+      taskId: "task_tool",
+      taskRoot: await toolTaskRoot(),
+      runId: () => "run_tool",
+      piSessionId: () => "pi_tool",
+    });
+    const pdbSpec = {
+      ...spec,
+      build_id: "build_pdb_provider",
+      entities: { pdb_ids: ["6M0J"] },
+      source_bindings: [{
+        ...spec.source_bindings[0]!,
+        binding_id: "binding_pdb",
+        source: "pdb",
+        acquisition: {
+          schema_version: "1.0" as const,
+          mode: "builtin" as const,
+          provider_id: "pdb.files.v1",
+          recipe_id: null,
+          recipe_version: null,
+        },
+        adapter_id: "protein.structure.carrier.v1",
+        accession: null,
+        parameters: {},
+      }],
+    };
+
+    await tools[1]!.execute({ spec: pdbSpec, mapping_files: {} });
+
+    expect(acquire).toHaveBeenCalledWith(expect.objectContaining({
+      request: expect.objectContaining({
+        provider_id: "pdb.files.v1",
+        parameters: {
+          source: "pdb",
+          accession: null,
+          entities: { pdb_ids: ["6M0J"] },
+        },
+      }),
+    }));
+  });
+
+  test("rejects unknown source_files bindings before acquisition or execution", async () => {
+    const validate = vi.fn(async (): Promise<DatasetBridgeResponse> => ({
+      version: 1, request_id: "request_validate", ok: true,
+      data: { valid: true, reason_codes: [], reasons: [] }, error: null,
+    }));
+    const acquire = vi.fn();
+    const execute = vi.fn();
+    const tools = createDatasetBuildTools({
+      client: { validate, acquire, execute },
+      taskId: "task_tool",
+      taskRoot: await toolTaskRoot(),
+      runId: () => "run_tool",
+      piSessionId: () => "pi_tool",
+    });
+
+    const result = await tools[1]!.execute({
+      spec,
+      source_files: { unknown_binding: "source_assets/unknown.tsv" },
+      mapping_files: {},
+    });
+
+    expect(result).toMatchObject({ isError: true, details: { code: "invalid_input" } });
+    expect(result.content).toContain("unknown binding IDs");
+    expect(acquire).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
   });
 
   test("persists a continuation record before handing the build to the core", async () => {
@@ -196,6 +376,7 @@ describe("Pi DatasetBuild tools", () => {
         manifest: null,
         artifacts: [],
         validation_summary: null,
+        registeredSourceAssetIds: [],
       }, error: null,
     }));
     const tools = createDatasetBuildTools({
@@ -208,8 +389,8 @@ describe("Pi DatasetBuild tools", () => {
     await tools[1]!.execute(
       {
         spec,
-        source_files: { binding: "source_assets/file.tsv" },
-        mapping_files: { binding: "source_assets/annot.txt" },
+        source_files: { binding_gdc: "source_assets/file.tsv" },
+        mapping_files: { binding_gdc: "source_assets/annot.txt" },
       },
       undefined,
       { toolCallId: "call_execute" },
@@ -224,8 +405,9 @@ describe("Pi DatasetBuild tools", () => {
       pi_session_id: "pi_tool",
       tool_call_id: "call_execute",
     });
-    expect(record?.source_files).toEqual({ binding: "source_assets/file.tsv" });
-    expect(record?.mapping_files).toEqual({ binding: "source_assets/annot.txt" });
+    expect(record?.source_files).toEqual({ binding_gdc: "source_assets/file.tsv" });
+    expect(record?.registered_source_asset_ids).toEqual([]);
+    expect(record?.mapping_files).toEqual({ binding_gdc: "source_assets/annot.txt" });
     expect(record?.spec.build_id).toBe(spec.build_id);
     // The record exists before the core was invoked: a crash during the
     // build can always be resumed deterministically.
@@ -301,13 +483,28 @@ describe("Pi DatasetBuild tools", () => {
       properties?: Record<string, unknown>;
     }).properties?.spec as {
       oneOf: Array<{
-        properties: Record<string, Record<string, unknown>>;
-        required: string[];
-        additionalProperties: boolean;
+        properties?: Record<string, Record<string, unknown>>;
+        required?: string[];
+        additionalProperties?: boolean;
+        oneOf?: Array<{
+          properties: Record<string, Record<string, unknown>>;
+          required: string[];
+          additionalProperties: boolean;
+        }>;
       }>;
     };
-    expect(expressionSchema.oneOf).toHaveLength(2);
-    for (const variant of expressionSchema.oneOf) {
+    type SchemaVariant = {
+      properties: Record<string, Record<string, unknown>>;
+      required: string[];
+      additionalProperties: boolean;
+    };
+    const variants = expressionSchema.oneOf.flatMap((variant): SchemaVariant[] => {
+      if (variant.oneOf !== undefined) return variant.oneOf;
+      if (variant.properties === undefined || variant.required === undefined || variant.additionalProperties === undefined) return [];
+      return [{ properties: variant.properties, required: variant.required, additionalProperties: variant.additionalProperties }];
+    });
+    expect(variants.length).toBeGreaterThanOrEqual(2);
+    for (const variant of variants) {
       expect(variant.additionalProperties).toBe(false);
       expect(variant.required).toContain("schema_ref");
       expect(variant.required).toContain("validation_profile_ref");

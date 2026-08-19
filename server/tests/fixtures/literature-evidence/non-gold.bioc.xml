@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<collection>
+  <source>PMC</source>
+  <document>
+    <id>PMC9000001</id>
+    <infon key="pmid">35123456</infon>
+    <infon key="title">Neutralizing antibody activity after booster vaccination</infon>
+    <infon key="journal">Vaccine Reports</infon>
+    <infon key="publication_date">2022-02-10</infon>
+    <infon key="authors">Ada Example;Ben Example</infon>
+    <infon key="source_url">https://pubmed.ncbi.nlm.nih.gov/35123456/</infon>
+    <passage>
+      <infon key="type">table</infon>
+      <table id="Table_2">
+        <row>
+          <cell>Experiment</cell><cell>Evidence</cell><cell>Claim</cell><cell>Result</cell>
+          <cell>Activity</cell><cell>Unit</cell><cell>Precision</cell><cell>Confidence</cell><cell>Human review status</cell>
+        </row>
+        <row>
+          <cell>booster_day_28</cell><cell>intervention_result</cell>
+          <cell>Booster vaccination increased neutralizing activity at day 28.</cell>
+          <cell>Median neutralizing titre was 640.</cell><cell>640</cell><cell>titre</cell>
+          <cell>exact</cell><cell>high</cell><cell>not_required</cell>
+        </row>
+      </table>
+    </passage>
+  </document>
+</collection>
