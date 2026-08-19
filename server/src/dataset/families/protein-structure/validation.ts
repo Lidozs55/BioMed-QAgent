@@ -170,7 +170,8 @@ export async function validateProteinStructureCandidate(
 export function assertProteinStructureRows(rows: ProteinStructureRows): void {
   if (rows.structures.length === 0) fail("primary structure table must not be empty");
   if (rows.chains.length === 0) fail("chain supporting table must not be empty");
-  if (rows.ligands.length === 0) fail("ligand supporting table must not be empty");
+  // A structure may legitimately contain no non-polymer ligand; the table is
+  // still emitted so the relation inventory remains fixed and explicit.
   if (rows.sources.length === 0) fail("source supporting table must not be empty");
 
   const sources = new Map<string, ProteinStructureSourceInput>();
