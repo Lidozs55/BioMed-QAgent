@@ -107,3 +107,5 @@ fix_ruff.py
 *.tsbuildinfo
 
 .trae/
+# ===== Pi subagent runtime artifacts (reviewer transcripts / missions / artifacts) =====
+.pi-subagents/
