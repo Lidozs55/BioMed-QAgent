@@ -1,0 +1,51 @@
+{
+  "activity": {
+    "activities": [
+      {
+        "activity_id": 918273,
+        "molecule_chembl_id": "CHEMBL120",
+        "molecule_pref_name": "DIPYRIDAMOLE",
+        "assay_chembl_id": "CHEMBL_A918",
+        "target_chembl_id": "CHEMBL_T918",
+        "standard_type": "IC50",
+        "value": "0.25",
+        "relation": ">",
+        "units": "uM",
+        "standard_value": "250",
+        "standard_relation": ">",
+        "standard_units": "nM",
+        "canonical_smiles": "O=C1N(C)C(=O)N(C)c2ncn(C3CCCCC3)c12",
+        "standard_inchi_key": "NONCOLLIDINGFIXTUREKEY-N",
+        "molecule_properties": {
+          "full_molecular_formula": "C24H40N8O4",
+          "full_mwt": "504.64"
+        }
+      }
+    ],
+    "page_meta": { "total_count": 1 }
+  },
+  "assay": {
+    "assays": [
+      {
+        "assay_chembl_id": "CHEMBL_A918",
+        "assay_type": "B",
+        "description": "Non-Gold platelet binding assay",
+        "assay_organism": "Homo sapiens",
+        "target_chembl_id": "CHEMBL_T918",
+        "bao_format": "BAO_0000357"
+      }
+    ],
+    "page_meta": { "total_count": 1 }
+  },
+  "target": {
+    "targets": [
+      {
+        "target_chembl_id": "CHEMBL_T918",
+        "target_type": "SINGLE PROTEIN",
+        "pref_name": "Adenosine receptor A2a",
+        "organism": "Homo sapiens"
+      }
+    ],
+    "page_meta": { "total_count": 1 }
+  }
+}
