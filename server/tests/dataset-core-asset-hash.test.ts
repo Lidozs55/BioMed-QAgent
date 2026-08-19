@@ -170,6 +170,108 @@ describe("TASK-047-A1 streaming asset hash", () => {
     expect(records).toHaveLength(0);
   });
 
+  it("resolves a registered asset ID only from its task-owned unique file", async () => {
+    const { taskRoot, core } = await newCore();
+    const content = "gene_id\tS1\tS2\nTP53\t1.5\t2\nBRCA1\t3\t4.25\n";
+    const sha256 = createHash("sha256").update(content).digest("hex");
+    const assetId = `asset_${sha256}`;
+    await mkdir(path.join(taskRoot, "source_assets", assetId), { recursive: true });
+    await writeFile(path.join(taskRoot, "source_assets", assetId, "file.tsv"), content);
+    const adapter = new TsDatasetCoreAdapter(core);
+    const envelope = await adapter.execute({
+      taskId: "task_a1",
+      runId: "run_registered",
+      piSessionId: "pi_1",
+      toolCallId: "t1",
+      spec: spec("build_registered"),
+      sourceFiles: { binding_gdc: assetId },
+      mappingFiles: {},
+    });
+    expect(envelope.ok).toBe(true);
+    if (envelope.ok && "registeredSourceAssetIds" in envelope.data) {
+      expect(envelope.data.registeredSourceAssetIds).toEqual([assetId]);
+    }
+  });
+
+  it.each([
+    ["missing directory", async (taskRoot: string, assetId: string): Promise<void> => {
+      void taskRoot;
+      void assetId;
+    }, /directory is missing/],
+    ["multiple files", async (taskRoot: string, assetId: string) => {
+      await mkdir(path.join(taskRoot, "source_assets", assetId), { recursive: true });
+      await writeFile(path.join(taskRoot, "source_assets", assetId, "a.tsv"), "x");
+      await writeFile(path.join(taskRoot, "source_assets", assetId, "b.tsv"), "x");
+    }, /exactly one file/],
+  ] as const)("rejects %s for a registered asset ID", async (_label, prepare, expected) => {
+    const { taskRoot, core } = await newCore();
+    const assetId = `asset_${"a".repeat(64)}`;
+    await prepare(taskRoot, assetId);
+    const envelope = await new TsDatasetCoreAdapter(core).execute({
+      taskId: "task_a1",
+      runId: "run_registered_reject",
+      piSessionId: "pi_1",
+      toolCallId: "t1",
+      spec: spec("build_registered_reject"),
+      sourceFiles: { binding_gdc: assetId },
+      mappingFiles: {},
+    });
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) expect(envelope.error.message).toMatch(expected);
+  });
+
+  it("rejects a registered asset ID when its directory content hash differs", async () => {
+    const { taskRoot, core } = await newCore();
+    const assetId = `asset_${"a".repeat(64)}`;
+    await mkdir(path.join(taskRoot, "source_assets", assetId), { recursive: true });
+    await writeFile(path.join(taskRoot, "source_assets", assetId, "file.tsv"), "different");
+    const envelope = await new TsDatasetCoreAdapter(core).execute({
+      taskId: "task_a1",
+      runId: "run_registered_drift",
+      piSessionId: "pi_1",
+      toolCallId: "t1",
+      spec: spec("build_registered_drift"),
+      sourceFiles: { binding_gdc: assetId },
+      mappingFiles: {},
+    });
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) expect(envelope.error.message).toMatch(/does not match|hash drift/);
+  });
+
+  it("rejects a registered asset request that names another task", async () => {
+    const { taskRoot, core } = await newCore();
+    const assetId = `asset_${"a".repeat(64)}`;
+    await mkdir(path.join(taskRoot, "source_assets", assetId), { recursive: true });
+    await writeFile(path.join(taskRoot, "source_assets", assetId, "file.tsv"), "gene_id\tS1\tS2\nTP53\t1.5\t2\nBRCA1\t3\t4.25\n");
+    const envelope = await new TsDatasetCoreAdapter(core).execute({
+      taskId: "task_other",
+      runId: "run_registered_cross_task",
+      piSessionId: "pi_1",
+      toolCallId: "t1",
+      spec: spec("build_registered_cross_task"),
+      sourceFiles: { binding_gdc: assetId },
+      mappingFiles: {},
+    });
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) expect(envelope.error.message).toContain("task identity");
+  });
+
+  it("rejects an asset ID passed as a mapping path instead of source input", async () => {
+    const { core } = await newCore();
+    const assetId = `asset_${"a".repeat(64)}`;
+    const envelope = await new TsDatasetCoreAdapter(core).execute({
+      taskId: "task_a1",
+      runId: "run_registered_mapping",
+      piSessionId: "pi_1",
+      toolCallId: "t1",
+      spec: spec("build_registered_mapping"),
+      sourceFiles: { binding_gdc: "source_assets/missing.tsv" },
+      mappingFiles: { binding_gdc: assetId },
+    });
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) expect(envelope.error.message).toContain("only valid in source_files");
+  });
+
   it("resolves through the adapter and records bytes/hash time without content", async () => {
     const { taskRoot, core } = await newCore();
     const fixtureBytes = await readFile(path.join(FIXTURES_ROOT, "gdc", "gdc_expression.tsv"));

@@ -329,7 +329,8 @@ describe("literature evidence family module", () => {
     await writeFile(path.join(taskRoot, relativePath), Buffer.alloc((await stat(path.join(taskRoot, relativePath))).size, "x"));
     const drifted = await new SourceAssetRegistry("task_publication", taskRoot).resolve(receipt.asset_ref.asset_id);
     await expect((async () => {
-      for await (const _chunk of drifted.content) {
+      for await (const chunk of drifted.content) {
+        void chunk;
         // Consume the lazy verified stream; the final digest check must fail.
       }
     })()).rejects.toThrow(/hash drift/);

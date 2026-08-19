@@ -35,22 +35,37 @@ describe("Pi DatasetBuild tools", () => {
     };
     const expressionSchema = validateParameters.properties.spec as {
       oneOf: Array<{
-        additionalProperties: boolean;
-        required: string[];
-        properties: Record<string, Record<string, unknown>>;
+        additionalProperties?: boolean;
+        required?: string[];
+        properties?: Record<string, Record<string, unknown>>;
+        oneOf?: Array<{
+          additionalProperties: boolean;
+          required: string[];
+          properties: Record<string, Record<string, unknown>>;
+        }>;
       }>;
     };
+    type SchemaVariant = {
+      additionalProperties: boolean;
+      required: string[];
+      properties: Record<string, Record<string, unknown>>;
+    };
+    const variants = expressionSchema.oneOf.flatMap((variant): SchemaVariant[] => {
+      if (variant.oneOf !== undefined) return variant.oneOf;
+      if (variant.properties === undefined || variant.required === undefined || variant.additionalProperties === undefined) return [];
+      return [{ additionalProperties: variant.additionalProperties, required: variant.required, properties: variant.properties }];
+    });
     const schemaRef = (
       variant: { properties: Record<string, Record<string, unknown>> },
     ): string => (variant.properties.schema_ref.enum as string[])[0]!;
-    const geneVariant = expressionSchema.oneOf.find(
+    const geneVariant = variants.find(
       (variant) => schemaRef(variant) === "gene_expression.long.v1",
     )!;
-    const probeVariant = expressionSchema.oneOf.find(
+    const probeVariant = variants.find(
       (variant) => schemaRef(variant) === "gene_expression.probe_long.v1",
     )!;
 
-    expect(expressionSchema.oneOf).toHaveLength(2);
+    expect(variants.length).toBeGreaterThanOrEqual(2);
     expect(geneVariant.properties.dataset_family.enum).toEqual(["gene_expression"]);
     expect(geneVariant.additionalProperties).toBe(false);
     expect(geneVariant.required).toEqual([
@@ -196,6 +211,7 @@ describe("Pi DatasetBuild tools", () => {
         manifest: null,
         artifacts: [],
         validation_summary: null,
+        registeredSourceAssetIds: [],
       }, error: null,
     }));
     const tools = createDatasetBuildTools({
@@ -225,6 +241,7 @@ describe("Pi DatasetBuild tools", () => {
       tool_call_id: "call_execute",
     });
     expect(record?.source_files).toEqual({ binding: "source_assets/file.tsv" });
+    expect(record?.registered_source_asset_ids).toEqual([]);
     expect(record?.mapping_files).toEqual({ binding: "source_assets/annot.txt" });
     expect(record?.spec.build_id).toBe(spec.build_id);
     // The record exists before the core was invoked: a crash during the
@@ -301,13 +318,28 @@ describe("Pi DatasetBuild tools", () => {
       properties?: Record<string, unknown>;
     }).properties?.spec as {
       oneOf: Array<{
-        properties: Record<string, Record<string, unknown>>;
-        required: string[];
-        additionalProperties: boolean;
+        properties?: Record<string, Record<string, unknown>>;
+        required?: string[];
+        additionalProperties?: boolean;
+        oneOf?: Array<{
+          properties: Record<string, Record<string, unknown>>;
+          required: string[];
+          additionalProperties: boolean;
+        }>;
       }>;
     };
-    expect(expressionSchema.oneOf).toHaveLength(2);
-    for (const variant of expressionSchema.oneOf) {
+    type SchemaVariant = {
+      properties: Record<string, Record<string, unknown>>;
+      required: string[];
+      additionalProperties: boolean;
+    };
+    const variants = expressionSchema.oneOf.flatMap((variant): SchemaVariant[] => {
+      if (variant.oneOf !== undefined) return variant.oneOf;
+      if (variant.properties === undefined || variant.required === undefined || variant.additionalProperties === undefined) return [];
+      return [{ properties: variant.properties, required: variant.required, additionalProperties: variant.additionalProperties }];
+    });
+    expect(variants.length).toBeGreaterThanOrEqual(2);
+    for (const variant of variants) {
       expect(variant.additionalProperties).toBe(false);
       expect(variant.required).toContain("schema_ref");
       expect(variant.required).toContain("validation_profile_ref");

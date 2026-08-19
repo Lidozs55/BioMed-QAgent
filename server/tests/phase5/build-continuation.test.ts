@@ -485,6 +485,7 @@ describe("runtime restart simulation", () => {
                 },
                 artifacts: [],
                 validation_summary: null,
+                registeredSourceAssetIds: [],
               },
               error: null,
             };
