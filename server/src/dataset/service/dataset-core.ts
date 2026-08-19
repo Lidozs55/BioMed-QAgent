@@ -28,6 +28,7 @@ import {
 import type { SourceAsset } from "../contracts/index.js";
 import type { CoreAcquisitionResult } from "../acquisition/runtime.js";
 import { createDefaultDatasetFamilyRegistry } from "../families/index.js";
+import { providerCarrierBinding } from "../runtime/provider-bindings.js";
 import { SourceAssetRegistry } from "../../runtime/source-assets/registry.js";
 import type { SpecValidationResult } from "../validation/index.js";
 import type { BuildRecord, TypeScriptDatasetCore } from "./ts-core.js";
@@ -321,37 +322,39 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
     signal: AbortSignal | undefined,
     registry: SourceAssetRegistry | null,
     registeredSourceAssetIds: Set<string>,
+    registeredAssetRole: "source" | "carrier" = "source",
   ): Promise<void> {
     for (const [bindingId, reference] of Object.entries(references)) {
       throwIfAborted(signal);
+      if (registeredAssetRole === "carrier" && !isRegisteredAssetId(reference)) {
+        throw new BuildError(`provider carrier binding '${bindingId}' requires a registered carrier asset ID`);
+      }
       if (isRegisteredAssetId(reference)) {
         if (role !== "source" || registry === null) {
           throw new BuildError(`registered asset ID '${reference}' is only valid in source_files`);
         }
         try {
           const relativePath = await uniqueAssetFile(this.taskRoot, reference, signal);
-          const receipt = await registry.register({
-            sourceId: bindingId,
-            relativePath,
-            role: "source",
-          });
-          if (
-            receipt.asset_ref.asset_id !== reference ||
-            receipt.relative_path !== relativePath
-          ) {
+          const receipt = registeredAssetRole === "carrier"
+            ? (await registry.resolveCarrier(reference)).registration_receipt
+            : (await registry.resolve(reference)).registration_receipt;
+          const asset = sourceAssetFromReceipt(receipt);
+          if (asset.asset_id !== reference || asset.relative_path !== relativePath) {
             throw new BuildError(`registered asset receipt does not match '${reference}'`);
           }
-          const asset = await verifyRegisteredAssetStream(registry, reference, signal);
-          target[bindingId] = asset;
-          registeredSourceAssetIds.add(asset.asset_id);
+          const verified = registeredAssetRole === "carrier"
+            ? asset
+            : await verifyRegisteredAssetStream(registry, reference, signal);
+          target[bindingId] = verified;
+          registeredSourceAssetIds.add(verified.asset_id);
           this.onAssetResolved?.({
             bindingId,
             role,
             relativePath,
-            sizeBytes: asset.size_bytes,
+            sizeBytes: verified.size_bytes,
             hashMs: 0,
-            assetId: asset.asset_id,
-            sha256: asset.sha256,
+            assetId: verified.asset_id,
+            sha256: verified.sha256,
           });
         } catch (error) {
           if (error instanceof OperationAbortedError || error instanceof BuildError) throw error;
@@ -367,9 +370,11 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
         const receipt = await registry.register({
           sourceId: bindingId,
           relativePath: resolved.asset.relative_path,
-          role: "source",
+          role: registeredAssetRole,
         });
-        const registered = await verifyRegisteredAssetStream(registry, receipt.asset_ref.asset_id, signal);
+        const registered = registeredAssetRole === "carrier"
+          ? sourceAssetFromReceipt(receipt)
+          : await verifyRegisteredAssetStream(registry, receipt.asset_ref.asset_id, signal);
         target[bindingId] = registered;
         registeredSourceAssetIds.add(registered.asset_id);
       } else {
@@ -425,8 +430,13 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
     const metadataAssets: Record<string, SourceAsset> = {};
     const registeredSourceAssetIds = new Set<string>();
     const sourceAssetRegistry = new SourceAssetRegistry(input.taskId, this.taskRoot);
+    const providerCarrier = providerCarrierBinding(
+      input.spec.dataset_family,
+      input.spec.source_bindings[0]?.source ?? "",
+      input.spec.source_bindings[0]?.adapter_id ?? "",
+    );
     try {
-      await this.resolveAll(input.sourceFiles, "source", sourceAssets, input.signal, sourceAssetRegistry, registeredSourceAssetIds);
+      await this.resolveAll(input.sourceFiles, "source", sourceAssets, input.signal, sourceAssetRegistry, registeredSourceAssetIds, providerCarrier === null ? "source" : "carrier");
       await this.resolveAll(input.mappingFiles, "mapping", mappingAssets, input.signal, null, registeredSourceAssetIds);
       await this.resolveAll(input.metadataFiles ?? {}, "metadata", metadataAssets, input.signal, null, registeredSourceAssetIds);
     } catch (error) {

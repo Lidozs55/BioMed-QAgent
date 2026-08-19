@@ -12,6 +12,12 @@ export interface TargetEvidenceJsonCarrier {
   payload: unknown;
 }
 
+export const TARGET_EVIDENCE_PROVIDER_IDS = Object.freeze({
+  uniprot: "target.evidence.uniprot.v1",
+  ncbi_clinvar: "target.evidence.clinvar.v1",
+  clinicaltrials_gov: "target.evidence.trials.v1",
+});
+
 type MutableRows = {
   targets: Record<string, unknown>[];
   evidence: TargetEvidenceRows["evidence"][number][];

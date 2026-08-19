@@ -150,16 +150,39 @@ export class SourceAssetRegistry {
   }
 
   async resolve(assetId: string): Promise<CoreResolvedRegisteredAsset> {
+    return this.resolveWithRole(assetId, "source");
+  }
+
+  async resolveCarrier(assetId: string): Promise<CoreResolvedRegisteredAsset> {
+    return this.resolveWithRole(assetId, "carrier");
+  }
+
+  async resolveAny(assetId: string): Promise<CoreResolvedRegisteredAsset> {
+    await this.load();
+    const receipt = this.registrations.get(assetId);
+    if (receipt === undefined) throw new Error("registered asset was not found");
+    if (receipt.asset_ref.role !== "source" && receipt.asset_ref.role !== "carrier") {
+      throw new Error("registered asset role is not a source or carrier");
+    }
+    this.onTelemetry?.("asset_ref_used", receipt.relative_path);
+    const file = await this.checkedFile(receipt);
+    return { registration_receipt: cloneReceipt(receipt), content: this.verifiedStream(file, receipt) };
+  }
+
+  private async resolveWithRole(
+    assetId: string,
+    role: "source" | "carrier",
+  ): Promise<CoreResolvedRegisteredAsset> {
     await this.load();
     const ref = parseRegisteredSourceAssetRef({
       schema_version: "1.0",
       asset_id: assetId,
       task_id: this.taskId,
-      role: "source",
+      role,
     }, this.taskId);
     const receipt = this.registrations.get(ref.asset_id);
-    if (receipt === undefined) throw new Error("registered source asset was not found");
-    if (receipt.asset_ref.role !== "source") throw new Error("registered asset role is not trusted by this adapter");
+    if (receipt === undefined) throw new Error(`registered ${role} asset was not found`);
+    if (receipt.asset_ref.role !== role) throw new Error(`registered asset role is not ${role}`);
     this.onTelemetry?.("asset_ref_used", receipt.relative_path);
     const file = await this.checkedFile(receipt);
     return { registration_receipt: cloneReceipt(receipt), content: this.verifiedStream(file, receipt) };

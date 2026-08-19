@@ -6,6 +6,7 @@ import path from "node:path";
 import type {
   DatasetManifestV2,
   DatasetSchemaV2,
+  JsonValue,
   ManifestArtifactEntry,
   OperationResultManifest,
   PublicationCandidate,
@@ -29,6 +30,15 @@ import { packageDigest } from "../publish/manifest.js";
 import { promotePublication, type PublishResult } from "../publish/publisher.js";
 import { validateMultiTableCandidate } from "../validation/multitable.js";
 import { SourceAssetRegistry } from "../../runtime/source-assets/registry.js";
+import { providerCarrierBinding } from "./provider-bindings.js";
+import { parseProteinStructureCarrier } from "../families/protein-structure/provider.js";
+import { transformChemblRegisteredAssets } from "../families/bioactivity-measurement/chembl.js";
+import { transformBioCLiteratureEvidence } from "../families/literature-evidence/provider.js";
+import { expandTargetEvidenceJsonCarriers } from "../families/target-evidence/provider-json.js";
+import { literatureEvidenceTables } from "../families/literature-evidence/schema.js";
+import { targetEvidenceTableSchemas } from "../families/target-evidence/schemas.js";
+import { buildProteinStructureTables } from "../families/protein-structure/schemas.js";
+import { bioactivityTableEntries } from "../families/bioactivity-measurement/schemas.js";
 
 const IMPLEMENTATION_DIGEST = createHash("sha256")
   .update("registered_multitable.runtime.v1")
@@ -170,6 +180,121 @@ export interface RegisteredMultiTableExecutionResult {
   tableResults: Readonly<Record<string, OperationResultManifest>>;
 }
 
+type ProviderRows = Readonly<Record<string, readonly object[]>>;
+
+function jsonCompatible(value: unknown, label: string): JsonValue {
+  try {
+    const parsed = JSON.parse(JSON.stringify(value)) as unknown;
+    if (parsed === undefined) throw new Error("undefined");
+    return parsed as JsonValue;
+  } catch {
+    throw new Error(`provider row field '${label}' is not JSON-compatible`);
+  }
+}
+
+async function carrierBytes(
+  registry: SourceAssetRegistry,
+  assetId: string,
+): Promise<{ receipt: Awaited<ReturnType<SourceAssetRegistry["register"]>>; bytes: Buffer }> {
+  const resolved = await registry.resolveAny(assetId);
+  if (resolved.registration_receipt.asset_ref.role !== "carrier") {
+    throw new Error("provider dispatch requires a registered carrier asset");
+  }
+  const chunks: Buffer[] = [];
+  for await (const chunk of resolved.content) chunks.push(Buffer.from(chunk));
+  return { receipt: resolved.registration_receipt, bytes: Buffer.concat(chunks) };
+}
+
+function providerRows(input: {
+  familyId: string;
+  source: string;
+  adapterId: string;
+  assetId: string;
+  receipt: Awaited<ReturnType<SourceAssetRegistry["register"]>>;
+  bytes: Buffer;
+}): ProviderRows {
+  const carrier = {
+    assetId: input.assetId,
+    logicalFile: input.receipt.relative_path,
+    retrievedAt: input.receipt.registered_at,
+    mediaType: input.receipt.media_type,
+  };
+  if (input.familyId === "protein_structure" && input.source === "pdb" && input.adapterId === "protein.structure.carrier.v1") {
+    const rows = parseProteinStructureCarrier({ ...carrier, bytes: input.bytes });
+    return { structures: rows.structures, chains: rows.chains, ligands: rows.ligands, sources: rows.sources };
+  }
+  if (input.familyId === "literature_evidence" && input.source === "pubmed" && input.adapterId === "literature.bioc_xml.v1") {
+    const rows = transformBioCLiteratureEvidence({ ...carrier, bytes: input.bytes, sourceDatabase: input.source });
+    return { literature_evidence: rows.literature_evidence, papers: rows.papers, sources: rows.sources };
+  }
+  if (
+    input.familyId === "target_evidence" &&
+    ((input.source === "uniprot" && input.adapterId === "target.evidence.uniprot.v1") ||
+      (input.source === "ncbi_clinvar" && input.adapterId === "target.evidence.clinvar.v1") ||
+      (input.source === "clinicaltrials_gov" && input.adapterId === "target.evidence.trials.v1"))
+  ) {
+    if (input.source !== "uniprot" && input.source !== "ncbi_clinvar" && input.source !== "clinicaltrials_gov") {
+      throw new Error(`target provider source '${input.source}' is not supported`);
+    }
+    const payload = JSON.parse(input.bytes.toString("utf8")) as unknown;
+    const rows = expandTargetEvidenceJsonCarriers([{
+      ...carrier,
+      sourceId: input.receipt.source_id,
+      sourceDatabase: input.source,
+      payload,
+    }]);
+    return { targets: rows.targets, evidence: rows.evidence, sources: rows.sources, supporting: rows.supporting };
+  }
+  if (input.familyId === "bioactivity_measurement" && input.source === "chembl" && input.adapterId === "bioactivity.chembl_json.v1") {
+    const document = JSON.parse(input.bytes.toString("utf8")) as Record<string, unknown>;
+    const activity = document.activity ?? document.activities;
+    const assay = document.assay ?? document.assays;
+    const target = document.target ?? document.targets;
+    const rows = transformChemblRegisteredAssets([
+      { kind: "activity", source_id: input.receipt.source_id, source_asset_id: input.assetId, logical_file: input.receipt.relative_path, document: activity },
+      { kind: "assay", source_id: input.receipt.source_id, source_asset_id: input.assetId, logical_file: input.receipt.relative_path, document: assay },
+      { kind: "target", source_id: input.receipt.source_id, source_asset_id: input.assetId, logical_file: input.receipt.relative_path, document: target },
+    ]);
+    return { activities: rows.activities, compounds: rows.compounds, assays: rows.assays, targets: rows.targets };
+  }
+  throw new Error(`unsupported provider carrier binding '${input.familyId}/${input.source}/${input.adapterId}'`);
+}
+
+async function writeProviderTables(options: {
+  outputDir: string;
+  taskId: string;
+  buildId: string;
+  familyId: string;
+  schemas: ReadonlyMap<string, DatasetSchemaV2>;
+  rows: ProviderRows;
+  assetId: string;
+}): Promise<Record<string, OperationResultManifest>> {
+  const results: Record<string, OperationResultManifest> = {};
+  for (const [tableId, schema] of options.schemas) {
+    const tableRows = options.rows[tableId];
+    if (tableRows === undefined || tableRows.length === 0) throw new Error(`provider carrier did not produce required table '${tableId}'`);
+    const relativePath = `tables/${tableId}.csv`;
+    const absolutePath = path.join(options.outputDir, ...relativePath.split("/"));
+    mkdirSync(path.dirname(absolutePath), { recursive: true });
+    appendFileSync(absolutePath, `${schema.fields.map((field) => field.name).join(",")}\n`, "utf8");
+    for (const row of tableRows) {
+      const values = row as Record<string, unknown>;
+      appendFileSync(absolutePath, `${schema.fields.map((field) => csvCell(jsonCompatible(values[field.name], `${tableId}.${field.name}`))).join(",")}\n`, "utf8");
+    }
+    results[tableId] = await tableResult({
+      taskId: options.taskId,
+      buildId: options.buildId,
+      familyId: options.familyId,
+      tableId,
+      schema,
+      relativePath,
+      absolutePath,
+      assetIds: [options.assetId],
+    });
+  }
+  return results;
+}
+
 /** Server-owned fixed registered asset -> parse -> assemble -> B3 -> Publisher capability. */
 export async function executeRegisteredMultiTableBuild(
   input: RegisteredMultiTableExecutionInput,
@@ -186,8 +311,68 @@ export async function executeRegisteredMultiTableBuild(
   const tableResults: Record<string, OperationResultManifest> = {};
   const audits: RegisteredTableAudit[] = [];
   const sourceReceipts = new Map<string, Awaited<ReturnType<SourceAssetRegistry["register"]>>>();
+  const providerBindings = input.spec.source_bindings.filter((binding) =>
+    providerCarrierBinding(family.id, binding.source, binding.adapter_id) !== null,
+  );
+  if (providerBindings.length > 0) {
+    if (providerBindings.length !== 1 || input.spec.source_bindings.length !== 1) {
+      throw new Error("provider carrier dispatch requires exactly one source binding");
+    }
+    const binding = providerBindings[0]!;
+    const provider = providerCarrierBinding(family.id, binding.source, binding.adapter_id)!;
+    const assetId = input.registeredAssetIds[binding.binding_id];
+    if (assetId === undefined) throw new Error(`binding '${binding.binding_id}' has no registered carrier asset ID`);
+    const resolved = await carrierBytes(assetRegistry, assetId);
+    if (resolved.receipt.asset_ref.role !== "carrier") throw new Error("provider dispatch requires a registered carrier asset");
+    sourceReceipts.set(assetId, resolved.receipt);
+    const rows = providerRows({
+      familyId: family.id,
+      source: provider.source,
+      adapterId: provider.adapterId,
+      assetId,
+      receipt: resolved.receipt,
+      bytes: resolved.bytes,
+    });
+    const tableSchemas = new Map<string, DatasetSchemaV2>();
+    for (const tableId of Object.keys(rows)) {
+      const schema = family.schemas.find((candidate): candidate is DatasetSchemaV2 => candidate.schema_version === "2.0" &&
+        candidate.schema_id.split(".")[1] === tableId);
+      if (schema !== undefined && schema.schema_version === "2.0") tableSchemas.set(tableId, schema);
+    }
+    // Schema IDs are family-owned and the table ID is the final component for
+    // these registered families. Prefer the authoritative assembler tables when
+    // a family uses a different schema suffix.
+    if (family.id === "literature_evidence") {
+      for (const entry of literatureEvidenceTables) {
+        if (entry.schema.schema_version === "2.0") tableSchemas.set(entry.definition.table_id, entry.schema);
+      }
+    } else if (family.id === "target_evidence") {
+      for (const [tableId, schema] of Object.entries(targetEvidenceTableSchemas)) {
+        if (schema.schema_version === "2.0") tableSchemas.set(tableId, schema);
+      }
+    } else if (family.id === "protein_structure") {
+      const tables = buildProteinStructureTables();
+      tableSchemas.set("structures", tables.structure);
+      tableSchemas.set("chains", tables.chain);
+      tableSchemas.set("ligands", tables.ligand);
+      tableSchemas.set("sources", tables.source);
+    } else if (family.id === "bioactivity_measurement") {
+      for (const entry of bioactivityTableEntries()) {
+        if (entry.schema.schema_version === "2.0") tableSchemas.set(entry.tableId, entry.schema);
+      }
+    }
+    Object.assign(tableResults, await writeProviderTables({
+      outputDir,
+      taskId: input.taskId,
+      buildId: input.spec.build_id,
+      familyId: family.id,
+      schemas: tableSchemas,
+      rows,
+      assetId,
+    }));
+  }
 
-  for (const binding of input.spec.source_bindings) {
+  for (const binding of providerBindings.length > 0 ? [] : input.spec.source_bindings) {
     const source = family.sources.find((item) => item.source === binding.source && item.adapter_id === binding.adapter_id);
     if (source?.table_id === undefined) throw new Error(`binding '${binding.binding_id}' has no registered table capability`);
     const assetId = input.registeredAssetIds[binding.binding_id];

@@ -7,6 +7,8 @@ import type {
 } from "./types.js";
 import { assertProteinStructureRows } from "./validation.js";
 
+export const PROTEIN_STRUCTURE_PROVIDER_ID = "protein.structure.carrier.v1";
+
 const ASSET_ID = /^asset_[0-9a-f]{64}$/;
 const PDB_DATE = /^(\d{2})-([A-Z]{3})-(\d{2})$/;
 const MONTHS: Readonly<Record<string, string>> = {
