@@ -8,6 +8,7 @@ import type {
 } from "@biomed/contracts";
 
 import { saveBuildContinuation } from "../../runtime/build-continuation.js";
+import { fixedBiomedicalAcquisitionParameters } from "../../dataset/acquisition/biomedical-providers.js";
 import {
   createDefaultDatasetFamilyRegistry,
   type DatasetFamilyDefinition,
@@ -99,6 +100,13 @@ function acquisitionRequest(
   const requestDigest = createHash("sha256")
     .update(`${options.taskId}\u0000${options.runId()}\u0000${spec.build_id}\u0000${binding.binding_id}`)
     .digest("hex");
+  const fixedParameters = fixedBiomedicalAcquisitionParameters({
+    providerId: binding.acquisition.provider_id,
+    source: binding.source,
+    accession: binding.accession,
+    entities: spec.entities,
+    bindingParameters: binding.parameters,
+  });
   return {
     schema_version: "1.0",
     request_id: `acq_${requestDigest}`,
@@ -109,7 +117,7 @@ function acquisitionRequest(
     provider_id: binding.acquisition.provider_id,
     recipe_id: binding.acquisition.recipe_id,
     recipe_version: binding.acquisition.recipe_version,
-    parameters: binding.parameters,
+    parameters: fixedParameters ?? binding.parameters,
   };
 }
 
