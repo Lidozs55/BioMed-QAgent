@@ -1,5 +1,8 @@
+import { createHash } from "node:crypto";
+
 import type {
   BuildResult,
+  CoreAcquisitionRequest,
   DatasetBridgeResponse,
   DatasetBuildSpec,
 } from "@biomed/contracts";
@@ -33,7 +36,8 @@ export interface DatasetBuildToolDiagnostic {
 }
 
 export interface DatasetBuildToolOptions {
-  client: Pick<DatasetCoreService, "validate" | "execute">;
+  client: Pick<DatasetCoreService, "validate" | "execute"> &
+    Partial<Pick<DatasetCoreService, "acquire">>;
   taskId: string;
   /** Task root on disk; the tool persists its invocation here so a
    * cross-restart resume can replay the exact same build deterministically
@@ -60,7 +64,9 @@ function specArgument(value: Record<string, unknown>): DatasetBuildSpec {
 function mappingArgument(
   value: Record<string, unknown>,
   name: "source_files" | "mapping_files" | "metadata_files",
+  optional = false,
 ): Record<string, string> {
+  if (optional && value[name] === undefined) return {};
   const mapping = object(value[name]);
   if (Object.values(mapping).some((item) => typeof item !== "string")) {
     throw new TypeError(`${name} must map binding IDs to task-relative references`);
@@ -72,6 +78,39 @@ const REGISTERED_ASSET_ID = /^asset_[0-9a-f]{64}$/;
 
 function registeredSourceAssetIds(sourceFiles: Record<string, string>): string[] {
   return [...new Set(Object.values(sourceFiles).filter((reference) => REGISTERED_ASSET_ID.test(reference)))].sort();
+}
+
+function assertKnownSourceBindings(
+  spec: DatasetBuildSpec,
+  sourceFiles: Record<string, string>,
+): void {
+  const bindingIds = new Set(spec.source_bindings.map((binding) => binding.binding_id));
+  const unknown = Object.keys(sourceFiles).filter((bindingId) => !bindingIds.has(bindingId));
+  if (unknown.length > 0) {
+    throw new TypeError(`source_files contains unknown binding IDs: ${unknown.sort().join(", ")}`);
+  }
+}
+
+function acquisitionRequest(
+  options: DatasetBuildToolOptions,
+  spec: DatasetBuildSpec,
+  binding: DatasetBuildSpec["source_bindings"][number],
+): CoreAcquisitionRequest {
+  const requestDigest = createHash("sha256")
+    .update(`${options.taskId}\u0000${options.runId()}\u0000${spec.build_id}\u0000${binding.binding_id}`)
+    .digest("hex");
+  return {
+    schema_version: "1.0",
+    request_id: `acq_${requestDigest}`,
+    task_id: options.taskId,
+    build_id: spec.build_id,
+    binding_id: binding.binding_id,
+    mode: binding.acquisition.mode,
+    provider_id: binding.acquisition.provider_id,
+    recipe_id: binding.acquisition.recipe_id,
+    recipe_version: binding.acquisition.recipe_version,
+    parameters: binding.parameters,
+  };
 }
 
 function resultFor(response: DatasetBridgeResponse): BioMedToolResult {
@@ -358,7 +397,7 @@ export function createDatasetBuildTools(
           mapping_files: mappingSchema,
           metadata_files: mappingSchema,
         },
-        required: ["spec", "source_files", "mapping_files"],
+        required: ["spec", "mapping_files"],
         additionalProperties: false,
       },
       async execute(value, signal, context) {
@@ -385,7 +424,19 @@ export function createDatasetBuildTools(
             return resultFor(validation);
           }
           options.onBuildResult?.(null);
-          const sourceFiles = mappingArgument(args, "source_files");
+          const sourceFiles = mappingArgument(args, "source_files", true);
+          assertKnownSourceBindings(spec, sourceFiles);
+          for (const binding of spec.source_bindings) {
+            if (sourceFiles[binding.binding_id] !== undefined) continue;
+            if (options.client.acquire === undefined) {
+              throw new Error(`Core acquisition is unavailable for binding '${binding.binding_id}'`);
+            }
+            const acquired = await options.client.acquire({
+              ...identity,
+              request: acquisitionRequest(options, spec, binding),
+            });
+            sourceFiles[binding.binding_id] = acquired.sourceAsset.asset_id;
+          }
           const mappingFiles = mappingArgument(args, "mapping_files");
           const metadataFiles = args.metadata_files === undefined
             ? {}

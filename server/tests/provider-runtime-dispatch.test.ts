@@ -5,6 +5,11 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { SourceAsset } from "../src/dataset/contracts/index.js";
+import {
+  bioactivityActivitySchema,
+  BIOACTIVITY_FAMILY_ID,
+  BIOACTIVITY_ROW_GRANULARITY,
+} from "../src/dataset/families/bioactivity-measurement/index.js";
 import { targetEvidenceSchemas, TARGET_EVIDENCE_FAMILY_ID, TARGET_EVIDENCE_ROW_GRANULARITY } from "../src/dataset/families/target-evidence/index.js";
 import { TypeScriptDatasetCore } from "../src/dataset/service/ts-core.js";
 import { SourceAssetRegistry } from "../src/runtime/source-assets/registry.js";
@@ -32,6 +37,84 @@ function sourceAssetFromReceipt(receipt: Awaited<ReturnType<SourceAssetRegistry[
 describe("provider runtime dispatch", () => {
   afterEach(async () => {
     await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  });
+
+  it("publishes a native ChEMBL activity response through the bioactivity provider", async () => {
+    const taskRoot = await mkdtemp(path.join(os.tmpdir(), "provider-dispatch-chembl-"));
+    roots.push(taskRoot);
+    await mkdir(path.join(taskRoot, "source_assets"), { recursive: true });
+    const relativePath = "source_assets/chembl-activity.json";
+    await writeFile(path.join(taskRoot, relativePath), JSON.stringify({
+      activities: [{
+        activity_id: 32260,
+        assay_chembl_id: "CHEMBL674637",
+        assay_description: "EGFR kinase inhibition",
+        assay_type: "B",
+        bao_format: "BAO_0000357",
+        canonical_smiles: "C1=CC=CC=C1",
+        molecule_chembl_id: "CHEMBL68920",
+        molecule_pref_name: "FIXTURE INHIBITOR",
+        relation: "=",
+        standard_relation: "=",
+        standard_type: "IC50",
+        standard_units: "nM",
+        standard_value: "41.0",
+        target_chembl_id: "CHEMBL203",
+        target_organism: "Homo sapiens",
+        target_pref_name: "Epidermal growth factor receptor",
+        units: "nM",
+        value: "41.0",
+      }],
+      page_meta: { total_count: 1 },
+    }));
+    const registry = new SourceAssetRegistry("task_provider_chembl", taskRoot);
+    const receipt = await registry.register({
+      sourceId: "chembl_gold5_bioactivity",
+      relativePath,
+      role: "carrier",
+    });
+    const spec = {
+      schema_version: "1.0" as const,
+      build_id: "build_provider_chembl",
+      objective: "Publish fixed ChEMBL activity data",
+      dataset_family: BIOACTIVITY_FAMILY_ID,
+      row_granularity: BIOACTIVITY_ROW_GRANULARITY,
+      entities: {},
+      cohort_filters: {},
+      required_fields: bioactivityActivitySchema.fields.map((field) => field.name),
+      schema_ref: bioactivityActivitySchema.schema_id,
+      source_bindings: [{
+        schema_version: "1.0" as const,
+        binding_id: "binding_chembl",
+        source: "chembl",
+        acquisition: {
+          schema_version: "1.0" as const,
+          mode: "builtin" as const,
+          provider_id: "chembl.files.v1",
+          recipe_id: null,
+          recipe_version: null,
+        },
+        adapter_id: "bioactivity.chembl_json.v1",
+        accession: null,
+        parameters: {},
+      }],
+      normalization_profile_ref: "bioactivity_measurement.registered.v1",
+      merge_strategy: "registered_multitable_identity",
+      validation_profile_ref: "bioactivity_measurement.release.v1",
+      output_format: "csv",
+      target_entity_level: null,
+    };
+    const core = new TypeScriptDatasetCore({ taskId: "task_provider_chembl", taskRoot });
+
+    const result = await core.executeDatasetBuild(spec, {
+      runId: "run_provider_chembl",
+      sourceAssets: { binding_chembl: sourceAssetFromReceipt(receipt) },
+      registeredSourceAssetIds: new Set([receipt.asset_ref.asset_id]),
+    });
+
+    expect(result.status).toBe("completed");
+    expect(result.publication_id).toMatch(/^pub_build_provider_chembl_/);
+    expect(result.manifest?.schema_version).toBe("2.0");
   });
 
   it("publishes a registered target carrier through executeDatasetBuild", async () => {
