@@ -298,10 +298,21 @@ export async function createProductApi(options: ProductApiOptions): Promise<{
       ));
       return;
     }
+    if (method === "DELETE" && pathname === "/api/v1/cache/datasets") {
+      sendJson(response, 200, { deleted: await cache.clear() });
+      return;
+    }
     const cacheMatch = /^\/api\/v1\/cache\/datasets\/([^/]+)$/.exec(pathname);
-    if (method === "GET" && cacheMatch !== null) {
+    if (cacheMatch !== null && (method === "GET" || method === "DELETE")) {
       const namespace = parameter(url, "namespace");
-      const value = await cache.detail(decodeURIComponent(cacheMatch[1]!), namespace);
+      const datasetId = decodeURIComponent(cacheMatch[1]!);
+      if (method === "DELETE") {
+        const deleted = await cache.delete(datasetId, namespace);
+        if (!deleted) sendError(response, 404, "Dataset not found");
+        else sendJson(response, 200, { deleted: true });
+        return;
+      }
+      const value = await cache.detail(datasetId, namespace);
       if (value === null) sendError(response, 404, "Dataset not found");
       else sendJson(response, 200, value);
       return;
@@ -309,11 +320,10 @@ export async function createProductApi(options: ProductApiOptions): Promise<{
     const cacheArtifactMatch = /^\/api\/v1\/cache\/datasets\/([^/]+)\/artifacts\/([^/]+)$/.exec(pathname);
     if (method === "GET" && cacheArtifactMatch !== null) {
       const namespace = parameter(url, "namespace");
-      const value = await cache.artifact(
-        decodeURIComponent(cacheArtifactMatch[1]!),
-        namespace,
-        decodeURIComponent(cacheArtifactMatch[2]!),
-      );
+      const datasetId = decodeURIComponent(cacheArtifactMatch[1]!);
+      const artifactId = decodeURIComponent(cacheArtifactMatch[2]!);
+      const value = await cache.artifact(datasetId, namespace, artifactId)
+        ?? await cache.asset(datasetId, namespace, artifactId);
       if (value === null) sendError(response, 404, "Artifact not found");
       else attachment(response, value);
       return;

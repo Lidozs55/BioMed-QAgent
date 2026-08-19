@@ -47,6 +47,10 @@ export interface DownloadDeps {
   rateLimitMs?: number;
   maxDownloadBytes?: number;
   timeoutMs?: number;
+  /** Global cache registrar (raw downloads → data/cache). */
+  registrar?: import("../../persistence/cache-registrar.js").CacheRegistrar | null;
+  /** Task id used as cache provenance. */
+  taskId?: string | (() => string);
 }
 
 /** Python ``_reactome_api_document``: parsed JSON dict or null. */
@@ -354,6 +358,7 @@ export async function downloadReactome(
       accept: "*/*",
       signal: deps.signal,
       timeoutMs: deps.timeoutMs,
+      onPublished: (published) => deps.registrar?.register("reactome", published, deps.taskId),
     });
     if (result.asset === null) {
       return {

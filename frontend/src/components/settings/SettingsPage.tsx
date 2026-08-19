@@ -352,7 +352,10 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
                     <PersonalizationSettingsSection api={api} />
                   )}
                   {activeSection === "general" && (
-                    <GeneralSettingsSection onExportCache={onExportCache ?? (() => undefined)} />
+                    <GeneralSettingsSection
+                      api={api}
+                      onExportCache={onExportCache ?? (() => undefined)}
+                    />
                   )}
                   {activeSection === "permissions" && (
                     <AgentPermissionSettingsSection api={api} />

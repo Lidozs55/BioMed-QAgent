@@ -186,6 +186,9 @@ function mockApi(overrides: Partial<SettingsAPIClient> = {}): SettingsAPIClient 
     setAgentPermissionsPersistentExec: vi.fn(),
     addAgentPermissionRule: vi.fn(),
     removeAgentPermissionRule: vi.fn(),
+    fetchCacheDatasets: vi.fn().mockResolvedValue({ items: [] }),
+    deleteCacheDataset: vi.fn().mockResolvedValue(undefined),
+    clearCacheDatasets: vi.fn().mockResolvedValue(0),
   };
   return { ...base, ...overrides };
 }
@@ -240,6 +243,106 @@ describe("SettingsPanel model registry", () => {
 
     fireEvent.click(exportButton);
     expect(onExportCache).toHaveBeenCalledTimes(1);
+  });
+
+  it("lists registered cache datasets", async () => {
+    const api = mockApi({
+      fetchCacheDatasets: vi.fn().mockResolvedValue({
+        items: [
+          {
+            dataset_id: "blob_2d711642b726b044",
+            namespace: "geo",
+            row_count: 1,
+            published_at: "2026-08-20T01:00:00.000Z",
+            keywords: ["geo", "GSE1"],
+          },
+          {
+            dataset_id: "blob_abc123def4567890",
+            namespace: "user_import",
+            row_count: 3,
+            published_at: "2026-08-20T02:00:00.000Z",
+            keywords: [],
+          },
+        ],
+      }),
+    });
+    renderSettings(api);
+
+    const navigation = screen.getByRole("navigation", { name: "设置分类" });
+    fireEvent.click(within(navigation).getByRole("button", { name: "常规" }));
+
+    expect(await screen.findByText("blob_2d711642b726b044")).toBeVisible();
+    expect(screen.getByText("blob_abc123def4567890")).toBeVisible();
+    expect(screen.getByText(/geo · 1 行/)).toBeVisible();
+    expect(screen.getByText(/user_import · 3 行/)).toBeVisible();
+  });
+
+  it("deletes a single cache dataset after confirmation", async () => {
+    const deleteCacheDataset = vi.fn().mockResolvedValue(undefined);
+    const api = mockApi({
+      fetchCacheDatasets: vi.fn().mockResolvedValue({
+        items: [
+          {
+            dataset_id: "blob_2d711642b726b044",
+            namespace: "geo",
+            row_count: 1,
+            published_at: "2026-08-20T01:00:00.000Z",
+            keywords: [],
+          },
+        ],
+      }),
+      deleteCacheDataset,
+    });
+    renderSettings(api);
+
+    const navigation = screen.getByRole("navigation", { name: "设置分类" });
+    fireEvent.click(within(navigation).getByRole("button", { name: "常规" }));
+
+    const row = (await screen.findByText("blob_2d711642b726b044"))
+      .closest('[data-setting-id="cache-dataset-blob_2d711642b726b044"]');
+    expect(row).not.toBeNull();
+    fireEvent.click(within(row as HTMLElement).getByRole("button", { name: "删除" }));
+
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText(/删除缓存数据集/)).toBeVisible();
+    fireEvent.click(within(dialog).getByRole("button", { name: "删除" }));
+
+    await waitFor(() => {
+      expect(deleteCacheDataset).toHaveBeenCalledWith("blob_2d711642b726b044", "geo");
+    });
+  });
+
+  it("clears the whole cache after confirmation", async () => {
+    const clearCacheDatasets = vi.fn().mockResolvedValue(2);
+    const api = mockApi({
+      fetchCacheDatasets: vi.fn().mockResolvedValue({
+        items: [
+          {
+            dataset_id: "blob_2d711642b726b044",
+            namespace: "geo",
+            row_count: 1,
+            published_at: "2026-08-20T01:00:00.000Z",
+            keywords: [],
+          },
+        ],
+      }),
+      clearCacheDatasets,
+    });
+    renderSettings(api);
+
+    const navigation = screen.getByRole("navigation", { name: "设置分类" });
+    fireEvent.click(within(navigation).getByRole("button", { name: "常规" }));
+
+    const clearButton = await screen.findByRole("button", { name: "清空缓存" });
+    fireEvent.click(clearButton);
+
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText(/删除本地缓存中的全部已登记数据集/)).toBeVisible();
+    fireEvent.click(within(dialog).getByRole("button", { name: "清空" }));
+
+    await waitFor(() => {
+      expect(clearCacheDatasets).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("disables add-model until a provider exists", async () => {

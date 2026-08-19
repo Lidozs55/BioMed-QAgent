@@ -77,6 +77,10 @@ export interface BusinessToolBundleContext {
   onWarning?: (severity: string, message: string, source: string) => void;
   /** Curated capability gates (product-disabled tools); default: all enabled. */
   disabledTools?: ReadonlySet<string>;
+  /** Global cache registrar: registers raw downloads into the dataset cache. */
+  registrar?: import("../../persistence/cache-registrar.js").CacheRegistrar | null;
+  /** Task id used as cache provenance (``created_by_task_id``). */
+  taskId?: string | (() => string);
 }
 
 export interface BusinessToolBundle {
@@ -90,7 +94,12 @@ export async function createBusinessToolBundle(
   context: BusinessToolBundleContext,
 ): Promise<BusinessToolBundle> {
   const { taskRoot } = context;
-  const shared: ToolServiceDeps = { taskRoot, hooks: context.hooks };
+  const shared: ToolServiceDeps = {
+    taskRoot,
+    hooks: context.hooks,
+    registrar: context.registrar,
+    taskId: context.taskId,
+  };
   const limits = context.limits ?? DEFAULT_RUNTIME_LIMITS;
   const client = context.browser?.client ?? new PublicHttpClient({ timeoutMs: limits.http_timeout_seconds * 1000 });
   const cache = context.browser?.cache ?? new ContentCache(`${taskRoot}/cache`);
@@ -133,6 +142,8 @@ export async function createBusinessToolBundle(
     cache,
     client,
     hooks: context.hooks,
+    registrar: context.registrar,
+    taskId: context.taskId,
     eutils: geoEutils,
     maxDownloadBytes: limits.max_download_mib * 1024 * 1024,
     downloadTimeoutMs: limits.download_timeout_seconds * 1000,
@@ -200,6 +211,8 @@ export async function createBusinessToolBundle(
       client,
       crawler: context.browser.crawler,
       hooks: context.hooks,
+      registrar: context.registrar,
+      taskId: context.taskId,
       maxDownloadBytes: limits.max_download_mib * 1024 * 1024,
       downloadTimeoutMs: limits.download_timeout_seconds * 1000,
     });

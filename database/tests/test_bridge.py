@@ -101,6 +101,59 @@ def test_cache_round_trip(bridge: Bridge) -> None:
     assert loaded["data"]["rows"][0]["gene"] == "TP53"
 
 
+def test_cache_commit_with_asset_files(bridge: Bridge, tmp_path: Path) -> None:
+    blob = tmp_path / "raw.bin"
+    blob.write_bytes(b"raw payload")
+    commit = bridge.dispatch("cache.commit", {
+        "dataset_id": "geo_raw1",
+        "source_namespace": "geo",
+        "topic": "raw download",
+        "description": "fixture",
+        "csv_rows": [{"sha256": "abc"}],
+        "created_by_task_id": "task1",
+        "asset_files": {"raw.bin": {"path": str(blob), "media_type": "application/octet-stream"}},
+    })
+    assert commit["ok"] is True
+    assert commit["data"]["extra"]["asset_files"][0]["name"] == "raw.bin"
+    assert commit["data"]["extra"]["asset_files"][0]["relative_path"] == "assets/raw.bin"
+
+    stored = bridge._cache.root / "records" / "geo" / "geo_raw1" / "assets" / "raw.bin"
+    assert stored.is_file()
+    assert stored.read_bytes() == b"raw payload"
+
+
+def test_cache_delete_and_clear(bridge: Bridge) -> None:
+    for dataset_id in ("ds1", "ds2"):
+        commit = bridge.dispatch("cache.commit", {
+            "dataset_id": dataset_id,
+            "source_namespace": "user_import",
+            "topic": f"topic {dataset_id}",
+            "description": "fixture",
+            "csv_rows": [{"gene": "TP53", "sample": "S1", "value": "1.5"}],
+            "created_by_task_id": "task1",
+            "keywords": [dataset_id],
+        })
+        assert commit["ok"] is True
+
+    deleted = bridge.dispatch("cache.delete", {
+        "source_namespace": "user_import", "dataset_id": "ds1",
+    })
+    assert deleted["ok"] is True
+    assert deleted["data"]["deleted"] is True
+    assert bridge.dispatch("cache.search", {"query": "ds1", "limit": 5})["data"] == []
+    assert len(bridge.dispatch("cache.list", {})["data"]) == 1
+
+    missing = bridge.dispatch("cache.delete", {
+        "source_namespace": "user_import", "dataset_id": "nope",
+    })
+    assert missing["data"]["deleted"] is False
+
+    cleared = bridge.dispatch("cache.clear", {})
+    assert cleared["ok"] is True
+    assert cleared["data"]["deleted"] == 1
+    assert bridge.dispatch("cache.list", {})["data"] == []
+
+
 def test_database_save_list_disabled_delete(bridge: Bridge) -> None:
     saved = bridge.dispatch("database.save", {"manifest": _manifest()})
     assert saved["ok"] is True

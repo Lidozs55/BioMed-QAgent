@@ -60,8 +60,40 @@ function summary(item: CacheManifest): Record<string, unknown> {
   };
 }
 
-function artifacts(): Record<string, unknown>[] {
-  return [
+interface CacheAsset {
+  name: string;
+  relative_path: string;
+  media_type: string;
+}
+
+const ASSET_NAME = /^[A-Za-z0-9._-]{1,128}$/;
+const ASSET_RELATIVE_PATH = /^assets\/[A-Za-z0-9._-]{1,128}$/;
+
+function assets(extra: unknown): CacheAsset[] {
+  if (extra === null || typeof extra !== "object") return [];
+  const list = (extra as Record<string, unknown>).asset_files;
+  if (!Array.isArray(list)) return [];
+  const result: CacheAsset[] = [];
+  for (const asset of list) {
+    if (asset === null || typeof asset !== "object") continue;
+    const entry = asset as Record<string, unknown>;
+    if (
+      typeof entry.name !== "string" || typeof entry.relative_path !== "string" ||
+      typeof entry.media_type !== "string" || !ASSET_RELATIVE_PATH.test(entry.relative_path)
+    ) {
+      continue;
+    }
+    result.push({
+      name: entry.name,
+      relative_path: entry.relative_path,
+      media_type: entry.media_type,
+    });
+  }
+  return result;
+}
+
+function artifacts(extra: unknown): Record<string, unknown>[] {
+  const items: Record<string, unknown>[] = [
     {
       artifact_id: "main_data",
       role: "primary_dataset",
@@ -75,6 +107,15 @@ function artifacts(): Record<string, unknown>[] {
       media_type: "application/json",
     },
   ];
+  for (const asset of assets(extra)) {
+    items.push({
+      artifact_id: asset.name,
+      role: "raw_source",
+      relative_path: asset.relative_path,
+      media_type: asset.media_type,
+    });
+  }
+  return items;
 }
 
 async function guardedRecordDir(cacheDir: string, namespace: string, datasetId: string): Promise<string> {
@@ -182,7 +223,46 @@ export class CacheApi {
     const item = await this.resolve(datasetId, namespace);
     if (item === null) return null;
     await guardedRecordDir(this.cacheDir, item.source_namespace, item.dataset_id);
-    return { ...summary(item), artifacts: artifacts() };
+    return { ...summary(item), artifacts: artifacts(item.extra) };
+  }
+
+  async delete(datasetId: string, namespace?: string): Promise<boolean> {
+    const item = await this.resolve(datasetId, namespace);
+    if (item === null) return false;
+    const result = await this.database.call<{ deleted: boolean }>(BRIDGE_OP.CACHE_DELETE, {
+      source_namespace: item.source_namespace,
+      dataset_id: item.dataset_id,
+    });
+    return result.deleted === true;
+  }
+
+  async clear(): Promise<number> {
+    const result = await this.database.call<{ deleted: number }>(BRIDGE_OP.CACHE_CLEAR, {});
+    return Number.isInteger(result.deleted) ? result.deleted : 0;
+  }
+
+  async asset(
+    datasetId: string,
+    namespace: string | undefined,
+    assetName: string,
+  ): Promise<CacheArtifactDownload | null> {
+    if (!ASSET_NAME.test(assetName)) return null;
+    const item = await this.resolve(datasetId, namespace);
+    if (item === null) return null;
+    const entry = assets(item.extra).find((candidate) => candidate.name === assetName);
+    if (entry === undefined) return null;
+    const directory = await guardedRecordDir(
+      this.cacheDir,
+      item.source_namespace,
+      item.dataset_id,
+    );
+    const file = path.join(directory, entry.relative_path);
+    await stat(file);
+    return {
+      bytes: await readFile(file),
+      mediaType: entry.media_type,
+      name: entry.name,
+    };
   }
 
   async artifact(
@@ -219,6 +299,16 @@ export class CacheApi {
       for (const name of ["main_data.csv", "manifest.json"]) {
         try {
           files.push({ name: `${prefix}/${name}`, bytes: await readFile(path.join(directory, name)) });
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+      }
+      for (const asset of assets(item.extra)) {
+        try {
+          files.push({
+            name: `${prefix}/${asset.relative_path}`,
+            bytes: await readFile(path.join(directory, asset.relative_path)),
+          });
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
         }

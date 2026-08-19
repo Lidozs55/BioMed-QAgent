@@ -42,6 +42,10 @@ export interface DownloadDeps {
   rateLimitMs?: number;
   maxDownloadBytes?: number;
   timeoutMs?: number;
+  /** Global cache registrar (raw downloads → data/cache). */
+  registrar?: import("../../persistence/cache-registrar.js").CacheRegistrar | null;
+  /** Task id used as cache provenance. */
+  taskId?: string | (() => string);
 }
 
 /** Python ``_pubchem_properties``: the PropertyTable.Properties list or null. */
@@ -301,6 +305,7 @@ export async function downloadPubchem(
       accept: "*/*",
       signal: deps.signal,
       timeoutMs: deps.timeoutMs,
+      onPublished: (published) => deps.registrar?.register("pubchem", published, deps.taskId),
     });
     if (result.asset === null) {
       return {

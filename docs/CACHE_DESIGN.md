@@ -6,7 +6,11 @@
 > （`database/cache_store.py`，schema-neutral JSONL named-op）+ Agent 侧
 > `server/src/agent/tools/local-cache.ts` + `server/src/agent/tools/pdf.ts`；
 > FTS5 搜索、schema 泛化、cache ZIP export 等设计决策仍有效，代码位置以现状为准。
-> 已知缺口（缓存注册与下载流程脱节）见 [TODO.md](TODO.md) `search_local_cache` 条目。
+>
+> **Update (2026-08-20)**: 缓存注册与下载/导入流程脱节的已知缺口已闭合
+> （见 [TODO.md](TODO.md)，TASK-045）——下载经 `CacheRegistrar`
+> 自动注册、本地导入经 `commit_to_cache` 注册，`search_local_cache` 等
+> 读取工具可直接命中；并新增缓存管理 HTTP API 与前端设置页。详见 §13。
 
 > **Status**: Implemented (Phase 1–10 + e2e tests)
 > **Scope**: local queryable cache + LLM-driven file import pipeline +
@@ -730,7 +734,9 @@ hot-copying the directory yields a consistent snapshot.
 ### 11.3 Resetting the cache
 
 Stop the backend, delete `data/cache/`. The next startup recreates an
-empty index. There is no admin API for selective deletion yet.
+empty index. Since §13, an admin **cache management API** is available for
+selective deletion / full clear without stopping the server (also exposed
+as a dashboard in the frontend settings page).
 
 ### 11.4 Inspection
 
@@ -754,8 +760,8 @@ python -c "import csv; print(list(csv.DictReader(open('data/cache/records/user_i
    copy the validated `main_data.csv` to
    `records/pipeline_artifact/<task_id>/`. Add a `search_pipeline_artifacts`
    tool or extend `search_local_cache` to filter by namespace.
-2. **Dataset deletion API** — `DELETE /api/v1/cache/{namespace}/{dataset_id}`
-   for GDPR / data-retention compliance.
+2. **Dataset deletion API** — ✅ **done (2026-08-20, §13)**: `GET/DELETE
+   /api/v1/cache/datasets[/:id]` provide list / delete / clear.
 3. **Larger file support** — `_IMPORT_MAX_FILE_BYTES` is currently 500 MB
    and `_IMPORT_MAX_TOTAL_BYTES` is 2 GB. If larger datasets are needed,
    add chunked upload (`Content-Range`) or resumable upload.
@@ -770,3 +776,93 @@ python -c "import csv; print(list(csv.DictReader(open('data/cache/records/user_i
 6. **Cross-task cache isolation** — If multi-tenancy is added, scope
    `source_namespace` by tenant ID and enforce isolation in
    `CacheStore.search_datasets`.
+
+---
+
+## 13. Cache registration on download/import + management API (2026-08-20)
+
+This section documents the current (Phase 8+, TS host) wiring that closes
+the historical "download never registers into the cache" gap and adds
+user-facing cache management. It is authoritative over §4–§7, whose paths
+refer to the deleted `backend/`.
+
+### 13.1 The concrete cache flow
+
+```
+downloaded raw file (acquisition)            uploaded file (local data source)
+        │                                            │
+        ▼                                            ▼
+CacheRegistrar                          createImportTools (import-tools.ts):
+(cache-registrar.ts)                     list_source_assets / read_source_asset
+  enqueue (fire-and-forget)                       │ commit_to_cache
+  → cache.commit(ns=<source db>,                 │  (ns = user_import)
+      asset = content-addressed blob)            ▼
+        │                                     cache.commit(...)
+        ▼                                            │
+        ▼                                            ▼
+database/cache_store.py  ←───／  read by local-cache.ts tools
+  records/<ns>/<id>/ + index.sqlite3        (search/describe/get_local_cache)
+```
+
+- **Auto-registration on download**: `CacheRegistrar`
+  (`server/src/persistence/cache-registrar.ts`) is a small best-effort queue.
+  Each acquisition source (browser, publications, public DBs) notifies it
+  with a resolved path + a `sanitizeCacheNamespace(source)` key after a
+  successful download; it resolves the owning task from the durable task
+  store and enqueues a `cache.commit` that writes the file as a
+  content-addressed blob asset under that namespace. Failures are logged as
+  warnings and never break the download.
+- **Local data source import ("本地数据源导入修复")**: the import tool suite
+  `server/src/agent/tools/import-tools.ts`
+  (`list_source_assets` / `read_source_asset` / `commit_to_cache`) commits
+  fetched `source_assets/` files under the reserved `user_import` namespace,
+  plus the pre-existing `spec` / `answer` write helpers. `commit_to_cache`
+  validates the cache-config (`max bytes`, encryption `key`, `namespace`
+  regex) and returns a human-readable result so the agent can report success.
+- **Shared reader**: `search_local_cache` / `describe_local_cache` /
+  `get_cache_dataset` (`server/src/agent/tools/local-cache.ts`) read the same
+  `database/cache_store.py` store, so freshly downloaded/imported datasets
+  are immediately searchable on rerun.
+
+### 13.2 Cache store operators (bridge named-ops)
+
+`database/cache_store.py` (wrapped by `db-client.ts`, surfaced over stdin/
+stdout JSONL):
+- `cache.commit` (with `asset_files` staging + hardlink into content store)
+- `cache.list` (namespace / keyword / limit; returns summaries)
+- `cache.detail` / `cache.get` / `cache.describe`
+- `cache.asset` / `cache.artifact` (content-addressed byte read)
+- `cache.delete` (single dataset) / `cache.clear` (all)
+
+### 13.3 Cache management HTTP API (Settings API)
+
+Backed by `server/src/product/cache-api.ts`, exposed in
+`server/src/product/product-api.ts`:
+
+| Endpoint                                            | Method      | Purpose                          |
+| --------------------------------------------------- | ----------- | -------------------------------- |
+| `/api/v1/cache/datasets?namespace=&keyword=&limit=` | `GET`       | List dataset summaries (limit 1–200) |
+| `/api/v1/cache/datasets/:id?namespace=`             | `GET`       | Detail a dataset                 |
+| `/api/v1/cache/datasets/:id?namespace=`             | `DELETE`    | Delete one dataset (`404` if absent) |
+| `/api/v1/cache/datasets`                            | `DELETE`    | Clear cache → `{deleted: N}`     |
+| `/api/v1/cache/datasets/:id/artifacts/:artifact?namespace=` | `GET` | Download artifact/asset bytes    |
+| `/api/v1/cache/export`                              | `GET`       | Download cache ZIP snapshot      |
+
+Namespaces/dataset ids are URL-encoded. The `allow-list` security gate
+already covers `/api/v1/cache/...`.
+
+### 13.4 Frontend settings panel
+
+`GeneralSettingsSection.tsx` (rendered in `SettingsPage.tsx`) gained a
+**Cache** management block that reads the dataset list via the
+`SettingsAPIClient` (`cacheDatasets()` / `fetchCacheDatasets()`) and offers:
+refresh, per-dataset delete, and clear-all (with confirmation). Cache export
+reuses the existing export button. Covered by the frontend test
+`frontend/src/test/settings-panel.test.tsx`.
+
+### 13.5 Backend test coverage
+
+- `server/tests/phase5/cache-registration.test.ts` — the `CacheRegistrar`
+  unit contract (commit of registered paths, failure isolation).
+- `server/tests/product-api.test.ts` — the management HTTP surface
+  (list/detail/delete/clear/artifact/export).

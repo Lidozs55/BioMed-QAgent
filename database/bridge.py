@@ -82,6 +82,17 @@ class Bridge:
         }
 
     def cache_commit(self, args: dict[str, Any]) -> dict[str, Any]:
+        asset_files: dict[str, dict[str, str]] | None = None
+        raw_assets = args.get("asset_files")
+        if raw_assets:
+            asset_files = {
+                str(name): {
+                    "path": str(spec.get("path", "")),
+                    "media_type": str(spec.get("media_type", "application/octet-stream")),
+                }
+                for name, spec in raw_assets.items()
+                if isinstance(spec, dict)
+            }
         manifest = self._cache.commit_dataset(
             dataset_id=str(args["dataset_id"]),
             source_namespace=str(args["source_namespace"]),
@@ -96,8 +107,18 @@ class Bridge:
             extra=dict(args.get("extra", {})),
             keywords=[str(k) for k in args.get("keywords", [])] or None,
             columns=[str(c) for c in args["columns"]] if args.get("columns") else None,
+            asset_files=asset_files,
         )
         return self._cache_manifest(manifest)
+
+    def cache_delete(self, args: dict[str, Any]) -> dict[str, bool]:
+        deleted = self._cache.delete_dataset(
+            str(args["source_namespace"]), str(args["dataset_id"])
+        )
+        return {"deleted": deleted}
+
+    def cache_clear(self, args: dict[str, Any]) -> dict[str, int]:
+        return {"deleted": self._cache.clear_all()}
 
     def cache_search(self, args: dict[str, Any]) -> list[dict[str, Any]]:
         manifests = self._cache.search_datasets(
@@ -230,6 +251,8 @@ class Bridge:
             "cache.list": self.cache_list,
             "cache.describe": self.cache_describe,
             "cache.get": self.cache_get,
+            "cache.delete": self.cache_delete,
+            "cache.clear": self.cache_clear,
             "database.list": self.database_list,
             "database.disabled": self.database_disabled,
             "database.get": self.database_get,

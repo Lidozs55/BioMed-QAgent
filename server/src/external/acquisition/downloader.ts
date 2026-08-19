@@ -111,6 +111,21 @@ export interface AcquireSourceOptions {
    * checksum covers the whole file (prefix re-hashed).
    */
   resumeFromBytes?: number;
+  /**
+   * Called once after a verified file is published (cache hit or fresh
+   * download) with the immutable destination path and its hashes. The host
+   * uses this to register the raw file into the global dataset cache; the
+   * external layer never imports the persistence layer.
+   */
+  onPublished?: (published: {
+    filename: string;
+    filePath: string;
+    sha256: string;
+    sizeBytes: number;
+    mediaType: string;
+    sourceUrl: string;
+    sourceDatabase: string;
+  }) => void | Promise<void>;
 }
 
 async function sha256File(file: string): Promise<string> {
@@ -273,6 +288,23 @@ export async function acquireSource(options: AcquireSourceOptions): Promise<Acqu
   const startedAt = new Date().toISOString();
   const partPath = options.partPath ?? path.join(dirs.downloadTmp, `${attemptId}.part`);
   const callerOwnedPart = options.partPath !== undefined;
+  const onPublished = options.onPublished;
+  const notifyPublished = async (
+    filePath: string,
+    checksum: string,
+    sizeBytes: number,
+    mediaType: string,
+  ): Promise<void> => {
+    await onPublished?.({
+      filename,
+      filePath,
+      sha256: checksum,
+      sizeBytes,
+      mediaType,
+      sourceUrl: source.url,
+      sourceDatabase: source.database,
+    });
+  };
   let resumeOffset = options.resumeFromBytes ?? 0;
   if (resumeOffset > 0) {
     const partStat = await stat(partPath).catch(() => null);
@@ -335,6 +367,7 @@ export async function acquireSource(options: AcquireSourceOptions): Promise<Acqu
         }
         const assetId = assetIdFromSha256(cachedSha);
         const destination = await publishTaskAsset(cachedBlob, dirs, assetId, filename, cachedSha);
+        await notifyPublished(destination, cachedSha, cachedSize, cachedMediaType);
         await progress?.finalize?.(cachedSize, cachedSize);
         return {
           schema_version: "1.0",
@@ -544,6 +577,7 @@ export async function acquireSource(options: AcquireSourceOptions): Promise<Acqu
       media_type: mediaType,
     });
     await cleanupPart();
+    await notifyPublished(destination, checksum, bytesReceived, mediaType);
     await progress?.finalize?.(bytesReceived, bytesReceived);
     return {
       schema_version: "1.0",

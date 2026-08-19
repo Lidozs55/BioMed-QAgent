@@ -114,6 +114,10 @@ export interface GeoToolsOptions {
   /** E-utilities request identity (tool/email/optional API key). */
   eutils: Omit<GeoEutilsConfig, "baseUrl" | "maxRetries">;
   hooks?: ToolHooks;
+  /** Global cache registrar (raw downloads → data/cache). */
+  registrar?: import("../../persistence/cache-registrar.js").CacheRegistrar | null;
+  /** Task id used as cache provenance. */
+  taskId?: string | (() => string);
   /** Injectable retry/backoff sleeper (tests). */
   sleep?: (ms: number) => Promise<void>;
   /** E-utilities discovery client override (tests). */
@@ -521,6 +525,7 @@ export function createDownloadGeoTool(options: GeoToolsOptions): BioMedAgentTool
           signal,
           timeoutMs: options.downloadTimeoutMs,
           progress: reportProgress,
+          onPublished: (published) => options.registrar?.register("geo", published, options.taskId),
         });
         const payload: Record<string, unknown> = {
           source: "geo",
@@ -663,6 +668,7 @@ export function createDownloadGeoPlatformAnnotationTool(
           signal,
           timeoutMs: options.downloadTimeoutMs,
           progress: reportProgress,
+          onPublished: (published) => options.registrar?.register("geo", published, options.taskId),
         });
         const payload: Record<string, unknown> = {
           source: "geo",

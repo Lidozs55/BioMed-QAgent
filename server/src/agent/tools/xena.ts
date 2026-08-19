@@ -200,6 +200,7 @@ export async function downloadXena(
       partPath,
       resumeFromBytes: resumeBytes,
       progress: reportProgress,
+      onPublished: (published) => deps.registrar?.register("xena", published, deps.taskId),
     });
     if (result.attempt.status === "succeeded" && result.asset !== null) {
       await unlink(partPath).catch(() => undefined);

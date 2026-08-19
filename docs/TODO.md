@@ -146,12 +146,17 @@
       仍用窄化 cast（`b as ProviderInfo[]` 等）。下一步为 `packages/contracts`
       runtime 增加 `parseProvidersEnvelope` / `parseManagedModelsEnvelope` 等解析器，
       与其余 endpoint 组一致（ADR-025 后续项，2026-08-14 层抽取时发现）
-- [ ] **P1** `search_local_cache` 与下载/构建流程脱节：research 任务下载的
-      数据只写入 `source_assets/` 与 content-addressed `cache/blobs`，从不
-      `CacheStore.commit_dataset` 写入 SQLite `cache.search` 索引，导致
-      LLM 报告 "Local cache: empty"、缓存复用完全失效。应评估：下载/构建
-      完成后自动注册缓存数据集（manifest 级）或调整工具描述避免误引导
-      （2026-08-16 排查 `task_ts_9f9dddbb`，TASK-045）
+- [x] **P1 / completed** `search_local_cache` 与下载/构建流程脱节问题（TASK-045）：
+      现已由缓存注册闭合——acquisition 下载完成后经 `CacheRegistrar`
+      （`server/src/persistence/cache-registrar.ts`）以来源数据库为
+      `source_namespace`、内容寻址资产自动 `cache.commit` 注册进
+      `database/cache_store.py`（即 `search_local_cache` 读取的同一存储），
+      `search_local_cache` / `describe_local_cache` / `get_cache_dataset`
+      （`server/src/agent/tools/local-cache.ts`）可直接命中重跑的数据；
+      本地数据源导入经 `server/src/agent/tools/import-tools.ts`
+      （`list_source_assets` / `read_source_asset` / `commit_to_cache`，
+      `user_import` 命名空间）注册。相应缓存管理 API 与前端设置页见
+      `CACHE_DESIGN.md` §13。
 - [ ] **P1** AI 用户支持：编写一份面向 AI 用户的调用文档及配套脚本（服务启动 +
       HTTP/WS 驱动封装），方便其他 agent 调用本项目。
 

@@ -165,6 +165,8 @@ export function createPdbTools(deps: PdbToolDeps): BioMedAgentTool[] {
           timeoutMs: deps.downloadTimeoutMs,
           onQueryStarted: hooks.onQueryStarted,
           onQuery: hooks.onQuery,
+          registrar: deps.registrar,
+          taskId: deps.taskId,
         });
         return { content: JSON.stringify(result) };
       },

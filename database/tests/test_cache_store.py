@@ -759,3 +759,188 @@ def test_commit_cleans_leftover_backups_after_completed_publish(
     assert manifest.topic == "new"
     assert rows[0]["record_id"] == "r2"
     assert sorted(p.name for p in d.iterdir()) == ["main_data.csv", "manifest.json"]
+
+
+def test_commit_with_asset_files_copies_and_records_them(
+    store: CacheStore, tmp_path: Path
+) -> None:
+    """asset_files 复制/硬链接进 assets/ 并记入 manifest.extra。"""
+    import hashlib as _hashlib
+
+    blob = tmp_path / "GSE178352_series_matrix.txt.gz"
+    blob.write_bytes(b"\x1f\x8b fake gzip payload" * 8)
+    expected_sha = _hashlib.sha256(blob.read_bytes()).hexdigest()
+    manifest = store.commit_dataset(
+        dataset_id="geo_gse178352_matrix",
+        source_namespace="geo",
+        topic="GSE178352 series matrix",
+        description="raw downloaded file",
+        csv_rows=[{
+            "asset_sha256": expected_sha,
+            "size_bytes": str(blob.stat().st_size),
+            "media_type": "application/gzip",
+        }],
+        created_by_task_id="task-1",
+        source_files=["GSE178352_series_matrix.txt.gz"],
+        asset_files={
+            "GSE178352_series_matrix.txt.gz": {
+                "path": str(blob),
+                "media_type": "application/gzip",
+            },
+        },
+    )
+    assert manifest.extra["asset_files"] == [{
+        "name": "GSE178352_series_matrix.txt.gz",
+        "relative_path": "assets/GSE178352_series_matrix.txt.gz",
+        "sha256": expected_sha,
+        "size_bytes": blob.stat().st_size,
+        "media_type": "application/gzip",
+    }]
+
+    dataset_dir = store.root / "records" / "geo" / "geo_gse178352_matrix"
+    stored = dataset_dir / "assets" / "GSE178352_series_matrix.txt.gz"
+    assert stored.is_file()
+    assert stored.read_bytes() == blob.read_bytes()
+
+
+def test_commit_asset_files_recommit_supersedes_old_assets(
+    store: CacheStore, tmp_path: Path
+) -> None:
+    """重复 commit 时旧 assets/ 被快照后替换，失败时还原。"""
+    old = tmp_path / "old.txt"
+    old.write_text("old content")
+    store.commit_dataset(
+        dataset_id="ds_assets",
+        source_namespace="user_import",
+        topic="old",
+        description="d",
+        csv_rows=[{"v": "1"}],
+        created_by_task_id="t1",
+        asset_files={"old.txt": {"path": str(old), "media_type": "text/plain"}},
+    )
+    d = store.root / "records" / "user_import" / "ds_assets"
+    assert (d / "assets" / "old.txt").is_file()
+
+    new = tmp_path / "new.txt"
+    new.write_text("new content")
+    store.commit_dataset(
+        dataset_id="ds_assets",
+        source_namespace="user_import",
+        topic="new",
+        description="d",
+        csv_rows=[{"v": "2"}],
+        created_by_task_id="t1",
+        asset_files={"new.txt": {"path": str(new), "media_type": "text/plain"}},
+    )
+    assert not (d / "assets" / "old.txt").exists()
+    assert (d / "assets" / "new.txt").is_file()
+    assert not (d / "assets.bak").exists()
+
+
+def test_commit_asset_files_rejected_when_source_missing(
+    store: CacheStore, tmp_path: Path
+) -> None:
+    """asset 源文件不存在 → ValueError，且不残留 assets/ 或半成品。"""
+    missing = tmp_path / "nope.bin"
+    with pytest.raises(ValueError, match="does not exist"):
+        store.commit_dataset(
+            dataset_id="ds_bad",
+            source_namespace="user_import",
+            topic="t",
+            description="d",
+            csv_rows=[{"v": "1"}],
+            created_by_task_id="t1",
+            asset_files={"nope.bin": {"path": str(missing), "media_type": "application/octet-stream"}},
+        )
+    d = store.root / "records" / "user_import" / "ds_bad"
+    assert not (d / "assets").exists()
+    assert not (d / "main_data.csv").exists()
+    assert not (d / "manifest.json").exists()
+
+
+def test_commit_asset_files_rejected_on_unsafe_name(
+    store: CacheStore, tmp_path: Path
+) -> None:
+    """asset 文件名含路径分隔符 → ValueError（路径穿越防护）。"""
+    blob = tmp_path / "ok.txt"
+    blob.write_text("x")
+    with pytest.raises(ValueError, match="invalid asset file name"):
+        store.commit_dataset(
+            dataset_id="ds_unsafe",
+            source_namespace="user_import",
+            topic="t",
+            description="d",
+            csv_rows=[{"v": "1"}],
+            created_by_task_id="t1",
+            asset_files={"../evil.txt": {"path": str(blob), "media_type": "text/plain"}},
+        )
+
+
+def test_delete_dataset_removes_files_and_index(store: CacheStore) -> None:
+    store.commit_dataset(
+        dataset_id="ds1",
+        source_namespace="user_import",
+        topic="A",
+        description="d",
+        csv_rows=[_row(record_id="r1", dataset_id="ds1")],
+        created_by_task_id="t1",
+    )
+    store.commit_dataset(
+        dataset_id="ds2",
+        source_namespace="user_import",
+        topic="B",
+        description="d",
+        csv_rows=[_row(record_id="r2", dataset_id="ds2")],
+        created_by_task_id="t1",
+    )
+    assert store.delete_dataset("user_import", "ds1") is True
+    assert not (store.root / "records" / "user_import" / "ds1").exists()
+    assert store.describe_dataset("user_import", "ds1") is None
+    # FTS 索引同步移除
+    assert store.search_datasets("A") == []
+    # 另一数据集不受影响
+    assert store.describe_dataset("user_import", "ds2") is not None
+
+    # 不存在 → False
+    assert store.delete_dataset("user_import", "nope") is False
+
+
+def test_delete_dataset_removes_fts_entries(store: CacheStore) -> None:
+    store.commit_dataset(
+        dataset_id="ds_kw",
+        source_namespace="user_import",
+        topic="keyworded dataset",
+        description="d",
+        csv_rows=[_row(record_id="r1", dataset_id="ds_kw")],
+        created_by_task_id="t1",
+        keywords=["BRCA", "TP53"],
+    )
+    assert len(store.search_datasets("BRCA")) == 1
+    store.delete_dataset("user_import", "ds_kw")
+    assert store.search_datasets("BRCA") == []
+    assert store.search_datasets("TP53") == []
+
+
+def test_clear_all_removes_everything(store: CacheStore) -> None:
+    for namespace, dataset_id in (
+        ("user_import", "a"),
+        ("user_import", "b"),
+        ("geo", "geo_x"),
+    ):
+        store.commit_dataset(
+            dataset_id=dataset_id,
+            source_namespace=namespace,
+            topic=dataset_id,
+            description="d",
+            csv_rows=[_row(record_id="r1", dataset_id=dataset_id)],
+            created_by_task_id="t1",
+        )
+    assert store.clear_all() == 3
+    assert store.list_datasets() == []
+    assert store.search_datasets("geo_x") == []
+    # 记录目录被清空
+    records = store.root / "records"
+    assert records.is_dir()
+    assert list(records.iterdir()) == []
+    # 幂等：再次清空为 0
+    assert store.clear_all() == 0

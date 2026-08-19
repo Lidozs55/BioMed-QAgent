@@ -45,6 +45,10 @@ export interface DownloadDeps {
   timeoutMs?: number;
   onQueryStarted?: (query: string, source: string) => void;
   onQuery?: (query: string, source: string, status: QueryStatus, recordsCount?: number) => void;
+  /** Global cache registrar (raw downloads → data/cache). */
+  registrar?: import("../../persistence/cache-registrar.js").CacheRegistrar | null;
+  /** Task id used as cache provenance. */
+  taskId?: string | (() => string);
 }
 
 function errorMessage(error: unknown): string {
@@ -301,6 +305,7 @@ export async function downloadPdb(
       accept: "application/octet-stream,*/*;q=0.9",
       signal: deps.signal,
       timeoutMs: deps.timeoutMs,
+      onPublished: (published) => deps.registrar?.register("pdb", published, deps.taskId),
     });
     const payload: Record<string, unknown> = {
       source: "pdb",

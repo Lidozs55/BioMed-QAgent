@@ -41,6 +41,7 @@ import type {
   AgentPermissionRuleInput,
   AgentPermissionSettings,
 } from "./settings";
+import type { CacheDatasetPage } from "./tasks";
 
 export type {
   CapabilitySource,
@@ -115,6 +116,13 @@ export interface SettingsAPIClient {
   removeAgentPermissionRule: (ruleId: string) => Promise<AgentPermissionSettings>;
   fetchAgentTempGrants: () => Promise<AgentTempGrant[]>;
   revokeAgentTempGrant: (grantId: string) => Promise<void>;
+  fetchCacheDatasets: (params?: {
+    namespace?: string;
+    keyword?: string;
+    limit?: number;
+  }) => Promise<CacheDatasetPage>;
+  deleteCacheDataset: (datasetId: string, namespace?: string) => Promise<void>;
+  clearCacheDatasets: () => Promise<number>;
 }
 
 /** Active temporary (run/task) grant, listable + revocable from settings. */

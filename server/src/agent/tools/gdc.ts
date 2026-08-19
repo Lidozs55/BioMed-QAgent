@@ -428,6 +428,7 @@ export async function downloadGdc(
         signal,
         timeoutMs: deps.downloadTimeoutMs,
         progress: reportProgress,
+        onPublished: (published) => deps.registrar?.register("gdc", published, deps.taskId),
       });
       if (result.attempt.status === "failed" || result.asset === null) {
         hooks.onProgress("download_gdc", "warning", {

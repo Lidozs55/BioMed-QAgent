@@ -61,6 +61,10 @@ export interface PubmedServiceDeps {
   lookupPdf?: (doi: string) => Promise<string>;
   maxDownloadBytes?: number;
   downloadTimeoutMs?: number;
+  /** Global cache registrar (raw downloads → data/cache). */
+  registrar?: import("../../persistence/cache-registrar.js").CacheRegistrar | null;
+  /** Task id used as cache provenance. */
+  taskId?: string | (() => string);
 }
 
 /**
@@ -193,6 +197,8 @@ export async function downloadSupplementaryAdapter(
       email: deps.email,
       lookupPdf: deps.lookupPdf,
       progress,
+      registrar: deps.registrar,
+      taskId: deps.taskId,
     });
     const asset = outcome.result.asset;
     const payload: Record<string, unknown> = {
@@ -234,6 +240,10 @@ export interface PubmedToolDeps {
   lookupPdf?: (doi: string) => Promise<string>;
   maxDownloadBytes?: number;
   downloadTimeoutMs?: number;
+  /** Global cache registrar (raw downloads → data/cache). */
+  registrar?: import("../../persistence/cache-registrar.js").CacheRegistrar | null;
+  /** Task id used as cache provenance. */
+  taskId?: string | (() => string);
 }
 
 function searchPubmedTool(deps: PubmedServiceDeps): BioMedAgentTool {
@@ -349,6 +359,8 @@ export function createPubmedTools(deps: PubmedToolDeps): BioMedAgentTool[] {
     lookupPdf: deps.lookupPdf,
     maxDownloadBytes: deps.maxDownloadBytes,
     downloadTimeoutMs: deps.downloadTimeoutMs,
+    registrar: deps.registrar,
+    taskId: deps.taskId,
   };
   return [searchPubmedTool(services), downloadSupplementaryTool(services)];
 }

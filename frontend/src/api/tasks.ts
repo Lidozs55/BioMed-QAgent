@@ -29,6 +29,49 @@ export interface SteerResponse {
   content?: string | null;
 }
 
+/** Summary row of a registered local cache dataset (``/api/v1/cache/datasets``). */
+export interface CacheDatasetSummary {
+  dataset_id: string;
+  namespace: string;
+  row_count: number;
+  published_at: string;
+  keywords: string[];
+}
+
+export interface CacheDatasetPage {
+  items: CacheDatasetSummary[];
+}
+
+function parseCacheDatasetPage(json: unknown): CacheDatasetPage {
+  const obj = json as Record<string, unknown> | null;
+  if (obj === null || typeof obj !== "object" || !Array.isArray(obj["items"])) {
+    throw new APIError(502, "Invalid cache dataset list response");
+  }
+  const items: CacheDatasetSummary[] = [];
+  for (const value of obj["items"]) {
+    const item = value as Record<string, unknown> | null;
+    if (
+      item === null || typeof item !== "object" ||
+      typeof item["dataset_id"] !== "string" ||
+      typeof item["namespace"] !== "string" ||
+      typeof item["row_count"] !== "number" ||
+      typeof item["published_at"] !== "string"
+    ) {
+      throw new APIError(502, "Invalid cache dataset summary");
+    }
+    items.push({
+      dataset_id: item["dataset_id"],
+      namespace: item["namespace"],
+      row_count: item["row_count"],
+      published_at: item["published_at"],
+      keywords: Array.isArray(item["keywords"])
+        ? item["keywords"].filter((value): value is string => typeof value === "string")
+        : [],
+    });
+  }
+  return { items };
+}
+
 function parseSteerResponse(json: unknown): SteerResponse {
   const obj = json as Record<string, unknown> | null;
   if (
@@ -93,6 +136,13 @@ export interface TasksApi {
   fetchArtifacts: (taskId: string) => Promise<ArtifactRecord[]>;
   getArtifactUrl: (taskId: string, artifactId: string) => string;
   getCacheExportUrl: () => string;
+  fetchCacheDatasets: (params?: {
+    namespace?: string;
+    keyword?: string;
+    limit?: number;
+  }) => Promise<CacheDatasetPage>;
+  deleteCacheDataset: (datasetId: string, namespace?: string) => Promise<void>;
+  clearCacheDatasets: () => Promise<number>;
 }
 
 export function createTasksApi(http: Http): TasksApi {
@@ -167,5 +217,24 @@ export function createTasksApi(http: Http): TasksApi {
     getArtifactUrl: (taskId, artifactId) =>
       `${http.baseUrl}/tasks/${http.encodeId(taskId)}/artifacts/${http.encodeId(artifactId)}`,
     getCacheExportUrl: () => `${http.baseUrl}/cache/export`,
+    fetchCacheDatasets: (params = {}) =>
+      http.request(http.withQuery(`${http.baseUrl}/cache/datasets`, [
+        ["namespace", params.namespace],
+        ["keyword", params.keyword],
+        ["limit", params.limit],
+      ])).then((b) => parseCacheDatasetPage(b)),
+    deleteCacheDataset: (datasetId, namespace) =>
+      http.requestVoid(http.withQuery(
+        `${http.baseUrl}/cache/datasets/${http.encodeId(datasetId)}`,
+        [["namespace", namespace]],
+      ), { method: "DELETE" }),
+    clearCacheDatasets: () =>
+      http.request(`${http.baseUrl}/cache/datasets`, { method: "DELETE" })
+        .then((b) => {
+          const json = b as Record<string, unknown> | null;
+          const deleted = json === null || typeof json !== "object" ? undefined : json["deleted"];
+          if (typeof deleted !== "number") throw new APIError(502, "Invalid cache clear response");
+          return deleted;
+        }),
   };
 }

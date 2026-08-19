@@ -193,6 +193,8 @@ export function createPubchemTools(deps: PubchemToolDeps): BioMedAgentTool[] {
           rateLimitMs: deps.rateLimitMs,
           maxDownloadBytes: deps.maxDownloadBytes,
           timeoutMs: deps.downloadTimeoutMs,
+          registrar: deps.registrar,
+          taskId: deps.taskId,
         });
         return { content: JSON.stringify(result) };
       },

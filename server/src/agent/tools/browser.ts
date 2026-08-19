@@ -108,6 +108,10 @@ export interface BrowserToolsOptions {
   hooks?: ToolHooks;
   maxDownloadBytes?: number;
   downloadTimeoutMs?: number;
+  /** Global cache registrar (raw downloads → data/cache). */
+  registrar?: import("../../persistence/cache-registrar.js").CacheRegistrar | null;
+  /** Task id used as cache provenance. */
+  taskId?: string | (() => string);
 }
 
 export const NAVIGATE_PAGE_TOOL_NAME = "navigate_page";
@@ -307,6 +311,15 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
           canonicalRequestHash(DATABASE.BROWSER, filename, url),
           { sha256: checksum, size_bytes: String(bytesReceived), media_type: mediaType },
         );
+        options.registrar?.register("browser", {
+          filename,
+          filePath: destination,
+          sha256: checksum,
+          sizeBytes: bytesReceived,
+          mediaType,
+          sourceUrl: url,
+          sourceDatabase: DATABASE.BROWSER,
+        }, options.taskId);
 
         const attempt: DownloadAttempt = {
           schema_version: "1.0",

@@ -29,10 +29,12 @@ from __future__ import annotations
 
 import contextlib
 import csv
+import hashlib
 import json
 import logging
 import os
 import re
+import shutil
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -46,8 +48,19 @@ _NAMESPACE_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 _DATASET_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 #: 列名安全约束：非空、无 CR/LF（防止 CSV 注入与畸形表头）。
 _COLUMN_RE = re.compile(r"^[^\r\n,]+$")
+#: 原始资产文件名约束：单路径段、无分隔符，防止路径穿越。
+_ASSET_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 DEFAULT_CACHE_DIR = Path("data/cache")
+
+
+def sha256_file(path: Path) -> str:
+    """逐块计算文件 SHA-256（兼容大文件）。"""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 @dataclass(frozen=True)
@@ -122,6 +135,7 @@ class CacheStore:
         extra: dict[str, Any] | None = None,
         keywords: list[str] | None = None,
         columns: list[str] | None = None,
+        asset_files: dict[str, dict[str, str]] | None = None,
     ) -> CacheDatasetManifest:
         """原子地写入一个数据集到缓存并更新索引。
 
@@ -136,9 +150,16 @@ class CacheStore:
             csv_rows: 数据行，每行是 dict（列键必须是字符串，行间列键一致）。
             created_by_task_id: 创建此数据集的任务 ID（provenance）。
             source_files: 原始上传文件名列表。
-            extra: 任意附加元数据。
+            extra: 任意附加元数据（``asset_files`` 键由本方法写入，调用方
+                提供同名字段会被覆盖）。
             keywords: LLM 自由提取的关键实体标签，由 FTS5 索引供检索。
             columns: 显式列 schema；缺省时从 ``csv_rows`` 首行键推断。
+            asset_files: 原始下载/上传文件（name → {path, media_type}）。
+                每个文件被复制（硬链接不可用时回退复制）到
+                ``records/<ns>/<id>/assets/<name>``，条目记入
+                ``extra["asset_files"]``（含 sha256/size_bytes）。这些文件是
+                内容寻址的不可变资产：写入前既有 ``assets/`` 会被原子快照为
+                ``assets.bak``，失败时还原，成功后随其它快照清理。
 
         Returns:
             写入的 ``CacheDatasetManifest``。
@@ -166,6 +187,8 @@ class CacheStore:
         published_csv = False
         published_manifest = False
         kw_list = [k.strip() for k in (keywords or []) if k and k.strip()]
+        assets_dir = dataset_dir / "assets"
+        assets_bak = dataset_dir / "assets.bak"
         try:
             # 0. 恢复上次崩溃可能遗留的 .bak（幂等）
             self._recover_leftover_backups(
@@ -173,7 +196,17 @@ class CacheStore:
             )
             # 1. 写 main_data.csv 到 .tmp
             self._write_main_data(main_data_tmp, csv_rows, resolved_columns)
+            # 1b. 快照既有 assets/（内容寻址不可变文件；失败时还原）
+            if assets_dir.is_dir():
+                os.replace(assets_dir, assets_bak)
+            # 1c. 写 asset_files 到 assets/（内容寻址不可变文件；失败随记录清理）
+            staged_assets: list[dict[str, Any]] = []
+            if asset_files:
+                staged_assets = self._stage_asset_files(assets_dir, asset_files)
             # 2. 写 manifest.json 到 .tmp
+            merged_extra = dict(extra or {})
+            if staged_assets:
+                merged_extra["asset_files"] = staged_assets
             manifest = CacheDatasetManifest(
                 dataset_id=dataset_id,
                 source_namespace=source_namespace,
@@ -184,7 +217,7 @@ class CacheStore:
                 created_at=datetime.now(UTC).isoformat(),
                 created_by_task_id=created_by_task_id,
                 source_files=list(source_files or []),
-                extra=dict(extra or {}),
+                extra=merged_extra,
                 keywords=kw_list,
                 columns=resolved_columns,
             )
@@ -206,10 +239,19 @@ class CacheStore:
             self._upsert_index(manifest)
         except BaseException:
             # 回滚：已快照（.bak）的文件一律还原（无论是否已发布）；新数据集
-            # 已发布的最终文件无快照则删除；清理 .tmp。
+            # 已发布的最终文件无快照则删除；清理 .tmp 与本次写入的 assets/，
+            # 并还原 assets.bak 快照。
             for tmp in (main_data_tmp, manifest_tmp):
                 with contextlib.suppress(OSError):
                     tmp.unlink()
+            if assets_bak.exists():
+                with contextlib.suppress(OSError):
+                    shutil.rmtree(assets_dir)
+                with contextlib.suppress(OSError):
+                    os.replace(assets_bak, assets_dir)
+            else:
+                with contextlib.suppress(OSError):
+                    shutil.rmtree(assets_dir)
             for final, bak, published in (
                 (main_data_path, csv_bak, published_csv),
                 (manifest_path, json_bak, published_manifest),
@@ -227,13 +269,16 @@ class CacheStore:
             csv_bak.unlink()
         with contextlib.suppress(OSError):
             json_bak.unlink()
+        with contextlib.suppress(OSError):
+            shutil.rmtree(assets_bak)
 
         logger.info(
-            "CacheStore.commit_dataset: namespace=%s dataset=%s rows=%d columns=%d",
+            "CacheStore.commit_dataset: namespace=%s dataset=%s rows=%d columns=%d assets=%d",
             source_namespace,
             dataset_id,
             len(csv_rows),
             len(resolved_columns),
+            len(staged_assets),
         )
         return manifest
 
@@ -375,9 +420,121 @@ class CacheStore:
                     )
         return manifest
 
+    def delete_dataset(
+        self,
+        source_namespace: str,
+        dataset_id: str,
+    ) -> bool:
+        """删除一个缓存数据集（记录目录 + 索引条目）。
+
+        Returns:
+            True 表示数据集存在且已删除；False 表示数据集不存在。
+        """
+        self._validate_namespace(source_namespace)
+        self._validate_dataset_id(dataset_id)
+        dataset_dir = self._records / source_namespace / dataset_id
+        if not dataset_dir.is_dir():
+            return False
+        with contextlib.suppress(OSError):
+            shutil.rmtree(dataset_dir)
+        conn = self._open_index()
+        try:
+            conn.execute(
+                "DELETE FROM datasets WHERE source_namespace = ? AND dataset_id = ?",
+                (source_namespace, dataset_id),
+            )
+            conn.execute(
+                "DELETE FROM datasets_fts "
+                "WHERE source_namespace = ? AND dataset_id = ?",
+                (source_namespace, dataset_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        logger.info(
+            "CacheStore.delete_dataset: namespace=%s dataset=%s",
+            source_namespace,
+            dataset_id,
+        )
+        return True
+
+    def clear_all(self) -> int:
+        """清空全部缓存数据集（记录目录 + 索引），返回删除的数据集数。
+
+        不删除 ``records`` 根目录本身；未引用的遗留 ``.bak``/``.tmp``
+        一并清理。
+        """
+        count = 0
+        if self._records.is_dir():
+            for namespace_dir in self._records.iterdir():
+                if not namespace_dir.is_dir():
+                    continue
+                for dataset_dir in namespace_dir.iterdir():
+                    if dataset_dir.is_dir():
+                        with contextlib.suppress(OSError):
+                            shutil.rmtree(dataset_dir)
+                            count += 1
+                with contextlib.suppress(OSError):
+                    namespace_dir.rmdir()
+        conn = self._open_index()
+        try:
+            conn.execute("DELETE FROM datasets")
+            conn.execute("DELETE FROM datasets_fts")
+            conn.commit()
+        finally:
+            conn.close()
+        logger.info("CacheStore.clear_all: deleted=%d", count)
+        return count
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _stage_asset_files(
+        self,
+        assets_dir: Path,
+        asset_files: dict[str, dict[str, str]],
+    ) -> list[dict[str, Any]]:
+        """复制/硬链接原始文件到 ``assets/`` 并返回 manifest 条目。
+
+        每个条目：``{name, relative_path, sha256, size_bytes, media_type}``。
+        优先硬链接（内容寻址 blob 通常已存在于共享内容缓存），失败回退复制。
+        目标名沿用源文件名，但需与数据集 ID 同级的路径安全约束：仅允许
+        ``[A-Za-z0-9._-]`` 字符，防止路径穿越。
+        """
+        if not asset_files:
+            return []
+        assets_dir.mkdir(parents=True, exist_ok=True)
+        staged: list[dict[str, Any]] = []
+        for name, spec in asset_files.items():
+            if _ASSET_NAME_RE.fullmatch(name) is None:
+                raise ValueError(
+                    f"invalid asset file name {name!r}: must match "
+                    f"^[A-Za-z0-9._-]+$"
+                )
+            if not isinstance(spec, dict):
+                raise ValueError(f"asset file {name!r} spec must be an object")
+            source = Path(str(spec.get("path", "")))
+            if not source.is_file():
+                raise ValueError(f"asset file {name!r} source does not exist: {source}")
+            destination = assets_dir / name
+            if destination.exists():
+                with contextlib.suppress(OSError):
+                    destination.unlink()
+            try:
+                os.link(source, destination)
+            except OSError:
+                shutil.copyfile(source, destination)
+            info = destination.stat()
+            sha256 = sha256_file(destination)
+            staged.append({
+                "name": name,
+                "relative_path": f"assets/{name}",
+                "sha256": sha256,
+                "size_bytes": info.st_size,
+                "media_type": str(spec.get("media_type", "application/octet-stream")),
+            })
+        return staged
 
     @staticmethod
     def _validate_namespace(namespace: str) -> None:

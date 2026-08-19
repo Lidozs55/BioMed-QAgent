@@ -25,10 +25,13 @@ const PROTOCOL_VERSION = "1";
  */
 export const BRIDGE_OP = {
   PING: "ping",
+  CACHE_COMMIT: "cache.commit",
   CACHE_SEARCH: "cache.search",
   CACHE_LIST: "cache.list",
   CACHE_DESCRIBE: "cache.describe",
   CACHE_GET: "cache.get",
+  CACHE_DELETE: "cache.delete",
+  CACHE_CLEAR: "cache.clear",
   DATABASE_LIST: "database.list",
   DATABASE_DISABLED: "database.disabled",
   DATABASE_GET: "database.get",

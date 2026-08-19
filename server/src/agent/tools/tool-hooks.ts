@@ -28,6 +28,13 @@ export interface ToolServiceDeps {
   /** Absolute task root (TaskWorkDir root). */
   taskRoot: string;
   hooks?: ToolHooks;
+  /**
+   * Global cache registrar (raw downloads → data/cache). When present,
+   * verified downloads are registered at download time for later reuse.
+   */
+  registrar?: import("../../persistence/cache-registrar.js").CacheRegistrar | null;
+  /** Task id used as cache provenance (``created_by_task_id``). */
+  taskId?: string | (() => string);
 }
 
 /**

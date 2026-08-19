@@ -99,6 +99,8 @@ export interface DurableAgentRuntimeOptions {
     approvalGate: ApprovalGateHandle;
     /** Append a durable event for the currently active run (M2 core sink). */
     recordRunEvent: (payload: EventPayload) => Promise<void>;
+    /** Task mode (agent / fixture / import); import tasks get extra tools. */
+    mode: TaskMode;
   }) => Promise<DurableAgentWorkspace>;
   repository?: DurableTaskRepository;
   fetch?: typeof fetch;
@@ -385,11 +387,12 @@ export async function createDurableAgentRuntime(
     void execution.then(cleanup, cleanup);
   }
 
-  async function createSession(taskId: string, runId: string): Promise<ActiveTask> {
+  async function createSession(taskId: string, runId: string, mode: TaskMode): Promise<ActiveTask> {
     const approvalGate = new DurableApprovalGate(taskId, repository, runId, hilStore);
     const workspace = await options.workspaceFactory({
       taskId,
       runId,
+      mode,
       approvalGate,
       recordRunEvent: async (payload) => {
         // Track the ACTIVE run: sessions outlive runs, so a second run's
@@ -462,7 +465,11 @@ export async function createDurableAgentRuntime(
     if (!activeTasks.has(accepted.task_id) && admittedRun?.status === "queued") {
       try {
         await prepare?.(pathForTask(options.tasksRoot, accepted.task_id));
-        const task = await createSession(accepted.task_id, accepted.run_id);
+        const task = await createSession(
+          accepted.task_id,
+          accepted.run_id,
+          snapshot?.task.mode ?? "agent",
+        );
         activeTasks.set(accepted.task_id, task);
         startRun(accepted.task_id, accepted.run_id, input);
       } catch (error) {
@@ -513,7 +520,7 @@ export async function createDurableAgentRuntime(
     let task = activeTasks.get(taskId);
     if (task === undefined) {
       try {
-        task = await createSession(taskId, accepted.run_id);
+        task = await createSession(taskId, accepted.run_id, before?.task.mode ?? "agent");
         activeTasks.set(taskId, task);
       } catch (error) {
         await repository.appendRunEvent(taskId, accepted.run_id, {
@@ -662,6 +669,7 @@ export async function createDurableAgentRuntime(
         ? await options.workspaceFactory({
             taskId,
             runId,
+            mode: snapshot.task.mode,
             approvalGate: new DurableApprovalGate(taskId, repository, runId),
             recordRunEvent: async (payload) => {
               await repository.appendRunEvent(taskId, runId, payload);
@@ -898,7 +906,11 @@ export async function createDurableAgentRuntime(
       );
       if (started) return repository.getSnapshot(taskId);
     }
-    const recoveredTask = await createSession(taskId, runId);
+    const recoveredTask = await createSession(
+      taskId,
+      runId,
+      (await repository.getSnapshot(taskId))?.task.mode ?? "agent",
+    );
     activeTasks.set(taskId, recoveredTask);
     startRun(
       taskId,
@@ -948,6 +960,7 @@ export async function createDurableAgentRuntime(
     const workspace = await options.workspaceFactory({
       taskId,
       runId,
+      mode: snapshot.task.mode,
       approvalGate,
       recordRunEvent: async (payload) => {
         await repository.appendRunEvent(taskId, runId, payload);
@@ -1468,7 +1481,11 @@ export async function createDurableAgentRuntime(
   for (const recovery of hilRecoveries) {
     if (recovery.review === null) continue;
     try {
-      const recoveredTask = await createSession(recovery.task_id, recovery.run_id);
+      const recoveredTask = await createSession(
+        recovery.task_id,
+        recovery.run_id,
+        (await repository.getSnapshot(recovery.task_id))?.task.mode ?? "agent",
+      );
       activeTasks.set(recovery.task_id, recoveredTask);
       startRun(
         recovery.task_id,

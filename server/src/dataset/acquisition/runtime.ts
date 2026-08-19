@@ -121,6 +121,8 @@ export interface CoreAcquisitionRuntimeOptions {
   sourceAssetRegistry: SourceAssetRegistry;
   registry: CoreAcquisitionRegistry;
   maxAttempts?: number;
+  /** Global cache registrar (raw downloads → data/cache). */
+  registrar?: import("../../persistence/cache-registrar.js").CacheRegistrar | null;
 }
 
 export class CoreAcquisitionRuntime {
@@ -131,6 +133,7 @@ export class CoreAcquisitionRuntime {
   readonly #assets: SourceAssetRegistry;
   readonly #registry: CoreAcquisitionRegistry;
   readonly #maxAttempts: number;
+  readonly #registrar: import("../../persistence/cache-registrar.js").CacheRegistrar | null;
 
   constructor(options: CoreAcquisitionRuntimeOptions) {
     this.#taskId = options.taskId;
@@ -140,6 +143,7 @@ export class CoreAcquisitionRuntime {
     this.#assets = options.sourceAssetRegistry;
     this.#registry = options.registry;
     this.#maxAttempts = options.maxAttempts ?? 3;
+    this.#registrar = options.registrar ?? null;
   }
 
   async acquire(rawRequest: CoreAcquisitionRequest, signal?: AbortSignal): Promise<CoreAcquisitionResult> {
@@ -165,6 +169,8 @@ export class CoreAcquisitionRuntime {
         partPath,
         resumeFromBytes: partial?.isFile() === true ? partial.size : 0,
         signal,
+        onPublished: (published) =>
+          this.#registrar?.register("core", published, this.#taskId),
       } satisfies AcquireSourceOptions);
       const retryable = result.attempt.status === "failed" &&
         ["network_error", "timeout", "download_incomplete", "internal_error"].includes(result.attempt.error_code ?? "");

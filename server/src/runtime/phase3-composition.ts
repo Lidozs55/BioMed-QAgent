@@ -18,6 +18,7 @@ import {
   type WorkspaceManager,
 } from "../agent/workspace/index.js";
 import { createWorkspaceTools } from "../agent/workspace/tools.js";
+import { createImportTools } from "../agent/tools/import-tools.js";
 import {
   AppendOnlyPermissionAuditSink,
   JsonPermissionPolicyStore,
@@ -34,6 +35,7 @@ import { TypeScriptDatasetCore } from "../dataset/service/ts-core.js";
 import { PublicHttpClient } from "../external/network/http-client.js";
 import { ContentCache } from "../external/acquisition/content-cache.js";
 import { DatabaseClient } from "../persistence/db-client.js";
+import { CacheRegistrar } from "../persistence/cache-registrar.js";
 import type { VlmConfig } from "../processing/vlm/vlm-client.js";
 import {
   createDurableAgentRuntime,
@@ -209,6 +211,9 @@ export async function createPhase3Runtime(
   options: Phase3RuntimeOptions,
 ): Promise<DurableAgentRuntime> {
   const dbClient = options.database ?? null;
+  const registrar = dbClient === null
+    ? null
+    : new CacheRegistrar(dbClient);
   const workspaceManager: WorkspaceManager = new DiskWorkspaceManager({
     workspacesRoot: options.workspacesRoot,
     migrateLegacy: async (taskId, workspaceRoot) => {
@@ -232,7 +237,7 @@ export async function createPhase3Runtime(
       environment: process.env,
       resolveModel: options.resolveModel,
     }),
-    workspaceFactory: async ({ taskId, runId, approvalGate, recordRunEvent }) => {
+    workspaceFactory: async ({ taskId, runId, approvalGate, recordRunEvent, mode }) => {
       const limits = options.resolveRuntimeLimits?.() ?? DEFAULT_RUNTIME_LIMITS;
       let currentRunId = runId;
       let currentPiSessionId = "pi_session_pending";
@@ -340,6 +345,8 @@ export async function createPhase3Runtime(
         runId: () => currentRunId,
         vlmConfig: options.vlmConfig ?? undefined,
         limits,
+        registrar,
+        taskId,
       });
       const dynamicTools = dbClient === null
         ? []
@@ -367,10 +374,28 @@ export async function createPhase3Runtime(
           buildResult = result;
         },
       });
-      assertUniqueToolNames([...workspaceTools, ...bundle.tools, ...dynamicTools, ...datasetTools]);
+      // Import tasks (user-uploaded files): restore the LLM cleaning flow —
+      // inspect the uploaded files and commit the cleaned raw files into the
+      // global cache under the user_import namespace.
+      const importTools = mode === "import" && dbClient !== null
+        ? createImportTools({ taskRoot, db: dbClient })
+        : [];
+      assertUniqueToolNames([
+        ...workspaceTools,
+        ...bundle.tools,
+        ...dynamicTools,
+        ...datasetTools,
+        ...importTools,
+      ]);
       return {
         root: workspaceRoot,
-        tools: [...workspaceTools, ...bundle.tools, ...dynamicTools, ...datasetTools],
+        tools: [
+          ...workspaceTools,
+          ...bundle.tools,
+          ...dynamicTools,
+          ...datasetTools,
+          ...importTools,
+        ],
         permissionBroker,
         setRunId: (nextRunId: string) => {
           currentRunId = nextRunId;

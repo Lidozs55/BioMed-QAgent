@@ -216,15 +216,27 @@ describe("Phase 7 product API", () => {
         dataset_id: "dataset_1", source_namespace: "user_import", topic: "TP53",
         description: "demo", row_count: 1, column_count: 2,
         created_at: "2026-08-14T00:00:00Z", created_by_task_id: "task_ts_example",
-        source_files: ["input.csv"], extra: {}, keywords: ["TP53"],
+        source_files: ["input.csv"],
+        extra: {
+          asset_files: [{
+            name: "blob_ab12_input.csv",
+            relative_path: "assets/blob_ab12_input.csv",
+            media_type: "text/csv",
+          }],
+        },
+        keywords: ["TP53"],
       }] as T;
       if (op === "cache.describe") return (await database.call<unknown[]>("cache.list", {}))[0] as T;
+      if (op === "cache.delete") return { deleted: true } as T;
+      if (op === "cache.clear") return { deleted: 3 } as T;
       return FakeDatabase.prototype.call.call(database, op, args) as Promise<T>;
     };
     const recordDir = path.join(root, "cache", "records", "user_import", "dataset_1");
     await mkdir(recordDir, { recursive: true });
+    await mkdir(path.join(recordDir, "assets"), { recursive: true });
     await writeFile(path.join(recordDir, "main_data.csv"), "gene,value\nTP53,1\n");
     await writeFile(path.join(recordDir, "manifest.json"), "{}\n");
+    await writeFile(path.join(recordDir, "assets", "blob_ab12_input.csv"), "raw,bytes\n");
     const { base } = await startApi(root, database);
 
     const page = await (await fetch(`${base}/cache/datasets`)).json() as { items: unknown[] };
@@ -234,7 +246,10 @@ describe("Phase 7 product API", () => {
     const detail = await (
       await fetch(`${base}/cache/datasets/dataset_1?namespace=user_import`)
     ).json() as { artifacts: unknown[] };
-    expect(detail.artifacts).toHaveLength(2);
+    expect(detail.artifacts).toHaveLength(3);
+    expect(detail.artifacts[2]).toMatchObject({
+      artifact_id: "blob_ab12_input.csv", role: "raw_source", media_type: "text/csv",
+    });
     const inferredDetail = await (
       await fetch(`${base}/cache/datasets/dataset_1`)
     ).json() as { namespace: string; artifacts: unknown[] };
@@ -245,5 +260,58 @@ describe("Phase 7 product API", () => {
     const exported = await fetch(`${base}/cache/export`);
     expect(exported.headers.get("content-type")).toBe("application/zip");
     expect(Buffer.from(await exported.arrayBuffer()).subarray(0, 4).toString("hex")).toBe("504b0304");
+
+    const rawAsset = await fetch(
+      `${base}/cache/datasets/dataset_1/artifacts/blob_ab12_input.csv?namespace=user_import`,
+    );
+    expect(rawAsset.status).toBe(200);
+    expect(await rawAsset.text()).toBe("raw,bytes\n");
+  });
+
+  test("deletes a cache dataset and clears the cache", async () => {
+    const root = await temporaryDirectory("phase7-cache-delete-");
+    const database = new FakeDatabase();
+    database.call = async <T>(op: string, args: Record<string, unknown>): Promise<T> => {
+      database.calls.push({ op, args });
+      if (op === "cache.list") return [{
+        dataset_id: "dataset_1", source_namespace: "user_import", topic: "TP53",
+        description: "demo", row_count: 1, column_count: 2,
+        created_at: "2026-08-14T00:00:00Z", created_by_task_id: "task_ts_example",
+        source_files: ["input.csv"], extra: {}, keywords: ["TP53"],
+      }] as T;
+      if (op === "cache.describe") {
+        if (args["dataset_id"] === "missing") return null as T;
+        return (await database.call<unknown[]>("cache.list", {}))[0] as T;
+      }
+      if (op === "cache.delete") return { deleted: true } as T;
+      if (op === "cache.clear") return { deleted: 1 } as T;
+      return FakeDatabase.prototype.call.call(database, op, args) as Promise<T>;
+    };
+    const recordDir = path.join(root, "cache", "records", "user_import", "dataset_1");
+    await mkdir(recordDir, { recursive: true });
+    await writeFile(path.join(recordDir, "main_data.csv"), "gene,value\nTP53,1\n");
+    await writeFile(path.join(recordDir, "manifest.json"), "{}\n");
+    const { base } = await startApi(root, database);
+
+    const removed = await fetch(
+      `${base}/cache/datasets/dataset_1?namespace=user_import`,
+      { method: "DELETE" },
+    );
+    expect(removed.status).toBe(200);
+    expect(await removed.json()).toEqual({ deleted: true });
+    expect(database.calls.at(-1)).toEqual({
+      op: "cache.delete", args: { source_namespace: "user_import", dataset_id: "dataset_1" },
+    });
+
+    const notFound = await fetch(
+      `${base}/cache/datasets/missing?namespace=user_import`,
+      { method: "DELETE" },
+    );
+    expect(notFound.status).toBe(404);
+
+    const cleared = await fetch(`${base}/cache/datasets`, { method: "DELETE" });
+    expect(cleared.status).toBe(200);
+    expect(await cleared.json()).toEqual({ deleted: 1 });
+    expect(database.calls.at(-1)).toEqual({ op: "cache.clear", args: {} });
   });
 });

@@ -96,6 +96,10 @@ export interface PublicationFallbackOptions {
   lookupPdf?: (doi: string) => Promise<string>;
   /** Forwarded to ``acquireSource`` (Python adapter progress parity). */
   progress?: (bytesReceived: number, total: number | null) => void | Promise<void>;
+  /** Global cache registrar (raw downloads → data/cache). */
+  registrar?: import("../../persistence/cache-registrar.js").CacheRegistrar | null;
+  /** Task id used as cache provenance. */
+  taskId?: string | (() => string);
 }
 
 async function readAssetHead(asset: SourceAsset, workdirRoot: string): Promise<Buffer> {
@@ -161,6 +165,7 @@ export async function acquirePublicationWithFallback(
       resolve,
       allowedHosts: CURATED_SOURCE_HOSTS,
       progress,
+      onPublished: (published) => options.registrar?.register("publication", published, options.taskId),
     });
     attempts.push(result.attempt);
     return result;

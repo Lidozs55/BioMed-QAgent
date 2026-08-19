@@ -76,6 +76,9 @@ function mockApi(overrides: Partial<SettingsAPIClient> = {}): SettingsAPIClient 
     setAgentPermissionsPersistentExec: vi.fn(),
     addAgentPermissionRule: vi.fn(),
     removeAgentPermissionRule: vi.fn(),
+    fetchCacheDatasets: vi.fn().mockResolvedValue({ items: [] }),
+    deleteCacheDataset: vi.fn().mockResolvedValue(undefined),
+    clearCacheDatasets: vi.fn().mockResolvedValue(0),
   };
   return { ...base, ...overrides };
 }
