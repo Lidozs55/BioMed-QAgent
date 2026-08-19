@@ -68,12 +68,13 @@ export type OperationRunner = (
   upstream: Record<string, Record<string, unknown>>,
   signal?: AbortSignal,
   suspension?: OperationSuspension,
+  upstreamResults?: Readonly<Record<string, OperationResultManifest>>,
 ) => OperationOutput | Promise<OperationOutput>;
 
 /**
  * ADR-030 output_kind for each executor operation kind. The contracts parser
- * additionally enforces the acquire/source_asset and publish/publication_manifest
- * pairings; assemble/derive are produced outside this executor.
+ * additionally enforces the acquire/source_asset, assemble/publication_candidate,
+ * and publish/publication_manifest pairings; derive wiring is separate.
  */
 const RESULT_OUTPUT_KINDS: Record<OperationKind, OperationResultOutputKind> = {
   acquire: "source_asset",
@@ -82,6 +83,7 @@ const RESULT_OUTPUT_KINDS: Record<OperationKind, OperationResultOutputKind> = {
   compatibility_gate: "compatibility_report",
   integrate: "integrated_table",
   derive: "derived_evidence",
+  assemble: "publication_candidate",
   validate_profile: "validation_result",
   publish: "publication_manifest",
 };
@@ -542,42 +544,27 @@ export class DatasetBuildExecutor {
   }
 
   /** Sorted, deduplicated asset ids covered by the input digest closure. */
-  private inputAssetIds(): string[] {
+  private inputAssetIds(result?: OperationOutput): string[] {
+    const declared = result?.output["successful_asset_ids"];
+    if (Array.isArray(declared) && declared.every((value) => typeof value === "string")) {
+      return [...new Set(declared)].sort();
+    }
     const ids = new Set<string>();
     for (const asset of Object.values(this.sourceAssets)) ids.add(asset.asset_id);
     for (const asset of Object.values(this.mappingAssets)) ids.add(asset.asset_id);
     return [...ids].sort();
   }
 
-  /** The succeeded attempt whose output is currently authoritative for op. */
-  private outputAttemptFor(operationId: string): OperationAttempt | null {
-    const state = this.state;
-    if (state === null) return null;
-    const outputDigest = state.completed_operations[operationId];
-    if (outputDigest === undefined) return null;
-    for (let index = state.operation_attempts.length - 1; index >= 0; index -= 1) {
-      const attempt = state.operation_attempts[index];
-      if (
-        attempt.operation_id === operationId &&
-        attempt.output_digest === outputDigest
-      ) {
-        return attempt;
-      }
-    }
-    return null;
-  }
-
-  /** Deterministic result manifest ids of the consumed upstream outputs. */
+  /** Committed result manifest ids of the consumed upstream outputs. */
   private upstreamResultManifestIds(op: OperationSpec): string[] {
-    const ids: string[] = [];
-    for (const upstreamId of op.upstream) {
-      if (!(upstreamId in this.outputs)) continue;
-      const attempt = this.outputAttemptFor(upstreamId);
-      if (attempt !== null) {
-        ids.push(this.resultManifestId(upstreamId, attempt.operation_attempt_id));
+    return op.upstream.flatMap((upstreamId) => {
+      if (!(upstreamId in this.outputs)) return [];
+      const manifest = loadOperationResultManifest(this.stateDir, upstreamId);
+      if (manifest === null) {
+        throw new Error(`committed result manifest is missing for ${upstreamId}`);
       }
-    }
-    return ids;
+      return [manifest.result_manifest_id];
+    });
   }
 
   /**
@@ -622,7 +609,7 @@ export class DatasetBuildExecutor {
         sha256: file.sha256,
       })),
       dependency_closure: {
-        input_asset_ids: this.inputAssetIds(),
+        input_asset_ids: this.inputAssetIds(result),
         upstream_result_manifest_ids: this.upstreamResultManifestIds(op),
         parameter_digest: parameterDigest,
         implementation_digest: implementationDigest,
@@ -689,7 +676,7 @@ export class DatasetBuildExecutor {
     let result: OperationOutput;
     try {
       const upstream = this.availableUpstream(op);
-      result = await this.executeOperation(op, upstream);
+      result = await this.executeOperation(op, upstream, this.committedUpstreamResults(op));
     } catch (error) {
       await this.emit({
         type: "operation_failed",
@@ -781,6 +768,12 @@ export class DatasetBuildExecutor {
     if (state === null) throw new Error("build state not loaded");
     const reusable = findReusable(state, op.operation_id, inputDigest, parameterDigest);
     if (reusable === null || reusable.output_digest === null) return false;
+    const resultManifest = loadOperationResultManifest(this.stateDir, op.operation_id);
+    if (
+      resultManifest === null ||
+      resultManifest.operation_attempt_id !== reusable.operation_attempt_id ||
+      resultManifest.output_digest !== reusable.output_digest
+    ) return false;
     const completed = state.completed_operations[op.operation_id];
     if (completed !== reusable.output_digest) return false;
     const loaded = await loadOperationOutput(this.stateDir, {
@@ -828,9 +821,23 @@ export class DatasetBuildExecutor {
   /** Run one operation under cooperative cancel checks + wall-clock timeout.
    * The timeout is deadline-based and pauses while the runner holds the
    * operation suspension (HIL human wait is not operation compute). */
+  private committedUpstreamResults(
+    op: OperationSpec,
+  ): Record<string, OperationResultManifest> {
+    return Object.fromEntries(op.upstream.flatMap((operationId) => {
+      if (!(operationId in this.outputs)) return [];
+      const manifest = loadOperationResultManifest(this.stateDir, operationId);
+      if (manifest === null) {
+        throw new Error(`committed result manifest is missing for ${operationId}`);
+      }
+      return [[operationId, parseOperationResultManifest(manifest, this.taskId, this.buildId)]];
+    }));
+  }
+
   private async executeOperation(
     op: OperationSpec,
     upstream: Record<string, Record<string, unknown>>,
+    upstreamResults: Readonly<Record<string, OperationResultManifest>>,
   ): Promise<OperationOutput> {
     if (this.isCancelled()) {
       throw new BuildCancelledError(`operation ${op.operation_id} was cancelled`);
@@ -842,9 +849,9 @@ export class DatasetBuildExecutor {
     try {
       try {
         if (this.operationTimeoutMs > 0) {
-          result = await this.executeOperationWithTimeout(op, upstream, operationController);
+          result = await this.executeOperationWithTimeout(op, upstream, upstreamResults, operationController);
         } else {
-          result = await this.runOperation(op, upstream, operationController.signal);
+          result = await this.runOperation(op, upstream, operationController.signal, undefined, upstreamResults);
         }
       } catch (error) {
         // The real Core runner checks the signal cooperatively; map its
@@ -875,6 +882,7 @@ export class DatasetBuildExecutor {
   private async executeOperationWithTimeout(
     op: OperationSpec,
     upstream: Record<string, Record<string, unknown>>,
+    upstreamResults: Readonly<Record<string, OperationResultManifest>>,
     operationController: AbortController,
   ): Promise<OperationOutput> {
     let deadline = Date.now() + this.operationTimeoutMs;
@@ -929,7 +937,7 @@ export class DatasetBuildExecutor {
     // to fire mid-wait.
     arm();
     const pending = Promise.resolve(
-      this.runOperation(op, upstream, operationController.signal, suspension),
+      this.runOperation(op, upstream, operationController.signal, suspension, upstreamResults),
     );
     try {
       return await Promise.race([pending, timedOut]);
@@ -952,6 +960,10 @@ export class DatasetBuildExecutor {
     return {
       buildId: this.buildId,
       upstream: this.availableUpstream(op),
+      upstreamResults: Object.fromEntries(op.upstream.flatMap((operationId) => {
+        const result = loadOperationResultManifest(this.stateDir, operationId);
+        return result === null ? [] : [[operationId, result]];
+      })),
       parameterScope: op.kind === "derive" && this.deriveRequest !== null
         ? { ...this.parameterScope, derive_request: this.deriveRequest }
         : this.parameterScope,

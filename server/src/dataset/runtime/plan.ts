@@ -4,7 +4,7 @@
  *
  * The skeleton is fixed in code; the Agent cannot declare steps. Plan order is
  * topological: acquire/parse/canonicalize fan out per source binding, then
- * compatibility gate -> integrate -> validate profile -> publish fan back in.
+ * compatibility gate -> integrate -> assemble -> validate profile -> publish fan back in.
  */
 
 import type { DatasetBuildSpec } from "../contracts/index.js";
@@ -74,7 +74,6 @@ export function buildOperationPlan(
       upstream: ["compatibility_gate"],
     }),
   );
-  const validationUpstream = options.deriveHandler ? "derive" : "integrate";
   if (options.deriveHandler) {
     ops.push(
       makeOperationSpec({
@@ -87,10 +86,18 @@ export function buildOperationPlan(
   }
   ops.push(
     makeOperationSpec({
+      operation_id: "assemble",
+      kind: OperationKind.ASSEMBLE,
+      label: "Family Assembly",
+      upstream: options.deriveHandler ? ["integrate", "derive"] : ["integrate"],
+    }),
+  );
+  ops.push(
+    makeOperationSpec({
       operation_id: "validate_profile",
       kind: OperationKind.VALIDATE_PROFILE,
       label: "Validation Profile",
-      upstream: [validationUpstream],
+      upstream: ["assemble"],
     }),
   );
   ops.push(

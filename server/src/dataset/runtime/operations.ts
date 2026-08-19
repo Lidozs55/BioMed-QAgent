@@ -61,6 +61,7 @@ export const OperationKind = {
   COMPATIBILITY_GATE: "compatibility_gate",
   INTEGRATE: "integrate",
   DERIVE: "derive",
+  ASSEMBLE: "assemble",
   VALIDATE_PROFILE: "validate_profile",
   PUBLISH: "publish",
 } as const;

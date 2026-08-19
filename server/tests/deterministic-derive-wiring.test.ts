@@ -92,7 +92,7 @@ describe("fixed deterministic derive runtime slot", () => {
           deriveRequest,
           deriveCapability: capability,
           runnerState: {
-            batches: new Map(), canonicalResults: [], integration: null,
+            batches: new Map(), canonicalResults: [], integration: null, candidate: null,
             manifest: null, validation: null, publicationId: null,
           },
           bindings: new Map(),

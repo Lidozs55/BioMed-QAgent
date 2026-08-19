@@ -18,9 +18,13 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { readFile, rm } from "node:fs/promises";
+import { readFile, rm, stat } from "node:fs/promises";
 import path from "node:path";
-import type { DeterministicDeriveRequest, JsonValue } from "@biomed/contracts";
+import type {
+  DeterministicDeriveRequest,
+  JsonValue,
+  PublicationCandidate,
+} from "@biomed/contracts";
 
 import type {
   DataBatch,
@@ -29,9 +33,12 @@ import type {
   SourceAsset,
   ValidationResult,
 } from "../contracts/index.js";
+import { parsePublicationCandidate } from "../contracts/index.js";
 import { BuildError } from "../adapters/errors.js";
 import { throwIfAborted } from "../cooperative.js";
 import { adapterParamsForBinding, getAdapter } from "../adapters/adapters.js";
+import { sha256FileStream } from "../adapters/hashing.js";
+import { createDefaultFamilyAssemblerRegistry } from "../assembly/index.js";
 import { buildProbeMapping } from "../adapters/geo/probe-mapping.js";
 import type { ProbeIndex } from "../adapters/geo/probe-index.js";
 import type { CanonicalizationResult } from "../canonicalizer/index.js";
@@ -107,6 +114,7 @@ interface RunnerState {
   batches: Map<string, DataBatch>;
   canonicalResults: Array<CanonicalizationResult>;
   integration: IntegrationResult | null;
+  candidate: PublicationCandidate | null;
   manifest: DatasetManifest | null;
   validation: ValidationResult | null;
   publicationId: string | null;
@@ -256,7 +264,10 @@ export function createTsCoreOperationRunner(options: {
   familyRegistry.get(spec.dataset_family);
   const schema = familyRegistry.schemaRegistry().get(spec.schema_ref);
 
-  return async (op, _upstream, signal, suspension): Promise<OperationOutput> => {
+  const assembler = createDefaultFamilyAssemblerRegistry()
+    .createCapability(spec.dataset_family);
+
+  return async (op, upstream, signal, suspension, upstreamResults = {}): Promise<OperationOutput> => {
     throwIfAborted(signal);
     switch (op.kind) {
       case "acquire": {
@@ -425,12 +436,47 @@ export function createTsCoreOperationRunner(options: {
           signal,
         });
         runnerState.integration = integration;
+        const successfulAssetIds = runnerState.canonicalResults
+          .map((result) => sourceAssets[result.batch.binding_id ?? ""]?.asset_id)
+          .filter((assetId): assetId is string => assetId !== undefined)
+          .sort();
+        const primaryFileSha256 = await sha256FileStream(integration.mergedPath, signal);
+        const primaryFileSize = (await stat(integration.mergedPath)).size;
         return makeOperationOutput({
+          dataset_family: spec.dataset_family,
+          row_granularity: spec.row_granularity,
+          schema_ref: spec.schema_ref,
           row_count: integration.rowCount,
+          column_count: schema.fields.length,
+          primary_file_sha256: primaryFileSha256,
+          successful_asset_ids: successfulAssetIds,
           dedup_count: integration.dedupCount,
           conflict_count: integration.conflictCount,
           merged_file: integration.mergedPath,
+        }, [{
+          relative_path: path.relative(taskRoot, integration.mergedPath).replaceAll(path.sep, "/"),
+          size_bytes: primaryFileSize,
+          sha256: primaryFileSha256,
+        }]);
+      }
+      case "assemble": {
+        const integrationResult = upstreamResults.integrate;
+        if (integrationResult === undefined) {
+          throw new BuildError("committed integration result is missing before assemble");
+        }
+        const candidate = assembler.assemble({
+          taskId,
+          buildId: spec.build_id,
+          datasetFamily: spec.dataset_family,
+          rowGranularity: spec.row_granularity,
+          schema,
+          integrationResult,
+          registeredAssetIds: Array.isArray(integrationResult.output_summary.successful_asset_ids)
+            ? integrationResult.output_summary.successful_asset_ids.filter((value): value is string => typeof value === "string")
+            : integrationResult.dependency_closure.input_asset_ids,
         });
+        runnerState.candidate = candidate;
+        return makeOperationOutput(candidate as unknown as Record<string, unknown>);
       }
       case "derive": {
         if (deriveRequest === null || deriveCapability === null) {
@@ -453,6 +499,15 @@ export function createTsCoreOperationRunner(options: {
       case "validate_profile": {
         const integration = runnerState.integration;
         if (integration === null) throw new BuildError("integration result is missing");
+        const candidate = runnerState.candidate ?? parsePublicationCandidate(upstream.assemble);
+        runnerState.candidate = candidate;
+        if (candidate.task_id !== taskId || candidate.build_id !== spec.build_id) {
+          throw new BuildError("publication candidate identity does not match the build");
+        }
+        const primaryTable = candidate.tables.find((table) => table.definition.role === "primary");
+        if (primaryTable === undefined || primaryTable.row_count !== integration.rowCount) {
+          throw new BuildError("publication candidate primary does not match integration");
+        }
         const successfulAssets: Record<string, SourceAsset> = {};
         for (const result of runnerState.canonicalResults) {
           const bindingId = result.batch.binding_id ?? "";
@@ -570,6 +625,13 @@ export function createTsCoreOperationRunner(options: {
         });
       }
       case "publish": {
+        const candidate = runnerState.candidate;
+        if (candidate === null) {
+          throw new BuildError("publication candidate is missing before publish");
+        }
+        if (candidate.task_id !== taskId || candidate.build_id !== spec.build_id) {
+          throw new BuildError("publication candidate identity does not match publish build");
+        }
         const manifest = runnerState.manifest;
         const validation = runnerState.validation;
         if (manifest === null || validation === null) {
@@ -591,6 +653,7 @@ export function createTsCoreOperationRunner(options: {
           outputDir,
           manifest,
           validation,
+          publicationCandidate: candidate,
           expectedSourceAssetIds: expectedSourceAssetIds.size > 0 ? expectedSourceAssetIds : null,
           signal,
           fence,
@@ -665,6 +728,7 @@ export class TypeScriptDatasetCore {
       batches: new Map(),
       canonicalResults: [],
       integration: null,
+      candidate: null,
       manifest: null,
       validation: null,
       publicationId: null,
@@ -736,6 +800,8 @@ export class TypeScriptDatasetCore {
             tempStoreBytes: 0,
             tempStoreRows: 0,
           };
+        } else if (op.kind === "assemble") {
+          runnerState.candidate = parsePublicationCandidate(output);
         } else if (op.kind === "validate_profile") {
           const manifestPath = path.join(outputDir, "dataset_manifest.json");
           const validationPath = path.join(outputDir, "validation_report.json");
