@@ -363,7 +363,18 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
       }
       const resolved = await resolveReferencedAsset(this.taskRoot, reference, signal);
       if (resolved === null) continue;
-      target[bindingId] = resolved.asset;
+      if (role === "source" && registry !== null) {
+        const receipt = await registry.register({
+          sourceId: bindingId,
+          relativePath: resolved.asset.relative_path,
+          role: "source",
+        });
+        const registered = await verifyRegisteredAssetStream(registry, receipt.asset_ref.asset_id, signal);
+        target[bindingId] = registered;
+        registeredSourceAssetIds.add(registered.asset_id);
+      } else {
+        target[bindingId] = resolved.asset;
+      }
       if (role === "source") registry?.recordLegacyPathCompatibilityUse(reference);
       this.onAssetResolved?.({
         bindingId,
