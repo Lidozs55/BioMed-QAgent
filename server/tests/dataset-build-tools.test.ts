@@ -265,6 +265,68 @@ describe("Pi DatasetBuild tools", () => {
     }));
   });
 
+  test("projects fixed provider accession and entities into the Core acquisition request", async () => {
+    const validate = vi.fn(async (): Promise<DatasetBridgeResponse> => ({
+      version: 1, request_id: "request_validate", ok: true,
+      data: { valid: true, reason_codes: [], reasons: [] }, error: null,
+    }));
+    const acquire = vi.fn(async () => ({
+      requestIdentityDigest: "b".repeat(64),
+      attempts: [],
+      sourceAsset: {
+        schema_version: "1.0" as const,
+        asset_id: `asset_${"a".repeat(64)}`,
+        task_id: "task_tool",
+        role: "carrier" as const,
+      },
+      extractionAssets: [],
+    }));
+    const execute = vi.fn(async (): Promise<DatasetBridgeResponse> => ({
+      version: 1, request_id: "request_execute", ok: false, data: null,
+      error: { code: "no_data", message: "No data", retryable: false, details: {} },
+    }));
+    const tools = createDatasetBuildTools({
+      client: { validate, acquire, execute },
+      taskId: "task_tool",
+      taskRoot: await toolTaskRoot(),
+      runId: () => "run_tool",
+      piSessionId: () => "pi_tool",
+    });
+    const pdbSpec = {
+      ...spec,
+      build_id: "build_pdb_provider",
+      entities: { pdb_ids: ["6M0J"] },
+      source_bindings: [{
+        ...spec.source_bindings[0]!,
+        binding_id: "binding_pdb",
+        source: "pdb",
+        acquisition: {
+          schema_version: "1.0" as const,
+          mode: "builtin" as const,
+          provider_id: "pdb.files.v1",
+          recipe_id: null,
+          recipe_version: null,
+        },
+        adapter_id: "protein.structure.carrier.v1",
+        accession: null,
+        parameters: {},
+      }],
+    };
+
+    await tools[1]!.execute({ spec: pdbSpec, mapping_files: {} });
+
+    expect(acquire).toHaveBeenCalledWith(expect.objectContaining({
+      request: expect.objectContaining({
+        provider_id: "pdb.files.v1",
+        parameters: {
+          source: "pdb",
+          accession: null,
+          entities: { pdb_ids: ["6M0J"] },
+        },
+      }),
+    }));
+  });
+
   test("rejects unknown source_files bindings before acquisition or execution", async () => {
     const validate = vi.fn(async (): Promise<DatasetBridgeResponse> => ({
       version: 1, request_id: "request_validate", ok: true,

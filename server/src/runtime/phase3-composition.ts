@@ -29,6 +29,7 @@ import {
   type PermissionPolicyStore,
 } from "../agent/permissions/index.js";
 import { createChemblFilesProvider } from "../dataset/acquisition/chembl-provider.js";
+import { createFixedBiomedicalProviders } from "../dataset/acquisition/biomedical-providers.js";
 import {
   CoreAcquisitionRegistry,
   CoreAcquisitionRuntime,
@@ -218,6 +219,7 @@ export function createPhase3AcquisitionRuntime(options: {
 }): CoreAcquisitionRuntime {
   const registry = new CoreAcquisitionRegistry();
   registry.registerProvider(createChemblFilesProvider());
+  for (const provider of createFixedBiomedicalProviders()) registry.registerProvider(provider);
   return new CoreAcquisitionRuntime({
     ...options,
     sourceAssetRegistry: new SourceAssetRegistry(options.taskId, options.taskRoot),
