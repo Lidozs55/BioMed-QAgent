@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<collection>
+  <source>PMC</source>
+  <document>
+    <id>PMC9000002</id>
+    <infon key="pmid">35123457</infon>
+    <infon key="title">Estimated response from a published figure</infon>
+    <passage>
+      <table id="Figure_3">
+        <row>
+          <cell>Experiment</cell><cell>Evidence</cell><cell>Claim</cell><cell>Result</cell>
+          <cell>Activity</cell><cell>Unit</cell><cell>Precision</cell><cell>Confidence</cell><cell>Human review status</cell>
+        </row>
+        <row>
+          <cell>figure_estimate</cell><cell>intervention_result</cell><cell>Response increased.</cell>
+          <cell>Approximately 42 units.</cell><cell>~42</cell><cell>AU</cell>
+          <cell>estimated</cell><cell>low</cell><cell>pending</cell>
+        </row>
+      </table>
+    </passage>
+  </document>
+</collection>
