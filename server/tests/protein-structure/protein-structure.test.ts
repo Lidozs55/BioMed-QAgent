@@ -29,6 +29,7 @@ import {
   assembleProteinStructureCandidate,
   buildProteinStructureTables,
   createProteinStructureRegisteredTableRegistry,
+  parseProteinStructureCarrier,
   type ProteinStructureRows,
   validateProteinStructureCandidate,
 } from "../../src/dataset/families/protein-structure/index.js";
@@ -262,6 +263,53 @@ async function assemble(rows: ProteinStructureRows) {
 
 afterEach(async () => {
   await Promise.all(tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
+
+describe("protein_structure fixed PDB provider", () => {
+  it("expands one non-Gold PDB carrier into all canonical tables", async () => {
+    const bytes = await readFile(path.join(FIXTURES, "non-gold.carrier.pdb"));
+    const rows = parseProteinStructureCarrier({
+      assetId: ASSET_ID,
+      logicalFile: "source_assets/pdb/1XYZ.pdb",
+      retrievedAt: "2024-02-02T00:00:00Z",
+      mediaType: "chemical/x-pdb",
+      bytes,
+    });
+
+    expect(rows.structures).toEqual([expect.objectContaining({
+      structure_id: "1XYZ",
+      structure_version: "2",
+      experimental_method: "X-RAY DIFFRACTION",
+      resolution_angstrom: 1.8,
+    })]);
+    expect(rows.chains).toEqual([expect.objectContaining({
+      chain_id: "A",
+      sequence_length: 3,
+      source_id: "source_pdb_1xyz",
+    })]);
+    expect(rows.ligands).toEqual([expect.objectContaining({
+      ligand_id: "HEM",
+      chemical_name: "PROTOPORPHYRIN IX CONTAINING FE",
+    })]);
+    expect(rows.sources).toEqual([expect.objectContaining({
+      source_asset_id: ASSET_ID,
+      carrier_type: "pdb_text",
+    })]);
+    for (const row of [...rows.structures, ...rows.chains, ...rows.ligands, ...rows.sources]) {
+      expect(row.source_locator.asset_id).toBe(ASSET_ID);
+    }
+  });
+
+  it("fails closed when a PDB carrier cannot close required relations", async () => {
+    const bytes = await readFile(path.join(FIXTURES, "non-gold.carrier.invalid.pdb"));
+    expect(() => parseProteinStructureCarrier({
+      assetId: ASSET_ID,
+      logicalFile: "source_assets/pdb/2BAD.pdb",
+      retrievedAt: "2024-02-02T00:00:00Z",
+      mediaType: "chemical/x-pdb",
+      bytes,
+    })).toThrow(/PDB structure provider rejected|chain supporting table must not be empty/);
+  });
 });
 
 describe("protein_structure B-owned module slice", () => {
