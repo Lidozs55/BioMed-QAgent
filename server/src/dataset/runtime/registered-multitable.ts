@@ -249,8 +249,8 @@ async function carrierBytes(
   assetId: string,
 ): Promise<{ receipt: Awaited<ReturnType<SourceAssetRegistry["register"]>>; bytes: Buffer }> {
   const resolved = await registry.resolveAny(assetId);
-  if (resolved.registration_receipt.asset_ref.role !== "carrier") {
-    throw new Error("provider dispatch requires a registered carrier asset");
+  if (resolved.registration_receipt.asset_ref.role !== "carrier" && resolved.registration_receipt.asset_ref.role !== "source") {
+    throw new Error("provider dispatch requires a registered source or carrier asset");
   }
   const chunks: Buffer[] = [];
   for await (const chunk of resolved.content) chunks.push(Buffer.from(chunk));
@@ -373,7 +373,9 @@ export async function executeRegisteredMultiTableBuild(
     const assetId = input.registeredAssetIds[binding.binding_id];
     if (assetId === undefined) throw new Error(`binding '${binding.binding_id}' has no registered carrier asset ID`);
     const resolved = await carrierBytes(assetRegistry, assetId);
-    if (resolved.receipt.asset_ref.role !== "carrier") throw new Error("provider dispatch requires a registered carrier asset");
+    if (resolved.receipt.asset_ref.role !== "carrier" && resolved.receipt.asset_ref.role !== "source") {
+      throw new Error("provider dispatch requires a registered source or carrier asset");
+    }
     sourceReceipts.set(assetId, resolved.receipt);
     const rows = providerRows({
       familyId: family.id,
