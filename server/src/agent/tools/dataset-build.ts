@@ -124,6 +124,55 @@ function acquisitionRequest(
   };
 }
 
+function boundedStrings(values: readonly string[], limit = 32): string[] {
+  return values.slice(0, limit).map((value) => value.slice(0, 200));
+}
+
+function resultSummary(response: DatasetBridgeResponse): Record<string, unknown> {
+  if (!response.ok) {
+    return {
+      code: response.error.code,
+      request_id: response.request_id,
+      message: response.error.message.slice(0, 500),
+      retryable: response.error.retryable,
+      ...(response.error.details.build_id === undefined ? {} : { build_id: response.error.details.build_id }),
+      ...(response.error.details.publication_id === undefined ? {} : { publication_id: response.error.details.publication_id }),
+      ...(response.error.details.reason_codes === undefined ? {} : {
+        reason_codes: boundedStrings(response.error.details.reason_codes),
+      }),
+      ...(response.error.details.build_result === undefined ? {} : {
+        build_status: response.error.details.build_result.status,
+        valid_row_count: response.error.details.build_result.valid_row_count,
+        build_publication_id: response.error.details.build_result.publication_id,
+        recommended_next_action: response.error.details.build_result.recommended_next_action.slice(0, 500),
+      }),
+    };
+  }
+  if ("build_result" in response.data) {
+    const result = response.data.build_result;
+    return {
+      code: "ok",
+      request_id: response.request_id,
+      build_id: response.data.build_id,
+      build_status: result.status,
+      valid_row_count: result.valid_row_count,
+      publication_id: response.data.publication_id,
+      manifest_id: response.data.manifest?.manifest_id ?? null,
+      artifact_count: response.data.artifacts.length,
+      artifact_roles: boundedStrings(response.data.artifacts.map((artifact) => artifact.role)),
+      registered_source_asset_count: response.data.registeredSourceAssetIds.length,
+      recommended_next_action: result.recommended_next_action.slice(0, 500),
+    };
+  }
+  return {
+    code: "ok",
+    request_id: response.request_id,
+    valid: response.data.valid,
+    reason_codes: boundedStrings(response.data.reason_codes),
+    reasons: boundedStrings(response.data.reasons),
+  };
+}
+
 function resultFor(response: DatasetBridgeResponse): BioMedToolResult {
   const details = response.ok
     ? { code: "ok", request_id: response.request_id, data: response.data }
@@ -135,7 +184,7 @@ function resultFor(response: DatasetBridgeResponse): BioMedToolResult {
         ...response.error.details,
       };
   return {
-    content: JSON.stringify(details).slice(0, MAX_CONTENT),
+    content: JSON.stringify(resultSummary(response)),
     details,
     isError: !response.ok,
   };

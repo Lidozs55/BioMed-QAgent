@@ -522,12 +522,20 @@ describe("Pi DatasetBuild tools", () => {
       onPublication,
     });
 
-    await tools[1]!.execute({
+    const result = await tools[1]!.execute({
       spec,
       source_files: { binding_gdc: "source_assets/file.tsv" },
       mapping_files: {},
     });
 
+    const summary = JSON.parse(result.content) as Record<string, unknown>;
+    expect(summary).toMatchObject({
+      code: "ok",
+      build_id: spec.build_id,
+      build_status: "succeeded",
+      publication_id: publication.publication_id,
+      artifact_count: 0,
+    });
     expect(onPublication).toHaveBeenCalledOnce();
     expect(onPublication).toHaveBeenCalledWith(response.data);
   });
