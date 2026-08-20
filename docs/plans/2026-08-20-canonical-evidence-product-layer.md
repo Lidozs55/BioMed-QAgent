@@ -2,9 +2,15 @@
 
 ## Status
 
-Proposed implementation plan. This plan is for the BioMed-QAgent product, not a
-Gold-case patch. The current TS Host + Pi Agent + TS Dataset Core topology remains
-unchanged.
+Long-term additive design reference. Phase 0 (`ProductRequirementManifest` +
+`ProductAssessment` + pure evaluator) is implemented. Remaining phases are
+**deferred behind the Phase 4 Gold diagnostic and Phase 5 release-hardening
+roadmap**; they are not the current default execution sequence.
+
+This plan is for the BioMed-QAgent product, not a Gold-case patch. The current TS
+Host + Pi Agent + TS Dataset Core topology remains unchanged. New canonical
+primitives should be implemented only when evaluator evidence shows a reusable
+contract gap with more than one real product consumer.
 
 ## Why
 
@@ -202,18 +208,24 @@ capabilities are complete on one product commit.
 ## Dependency Order
 
 ```text
-ProductEvaluator contract
-  -> ProductAssessment boundary
-  -> Canonical Evidence IR
-  -> semantic package registry
-  -> package projections
-  -> providers/crosswalks/derivations
-  -> RegisteredTransform
-  -> Agent guidance and Gold evaluation
+Gold diagnostic evaluator (current P0)
+  -> evidence-based contract/family review
+  -> smallest Agent-to-Publication repair
+  -> Gold closure and release hardening
+  -> only then, if justified:
+       ProductAssessment boundary
+       -> Canonical Evidence IR
+       -> semantic package registry
+       -> package projections
+       -> providers/crosswalks/derivations
+       -> RegisteredTransform
+       -> Agent guidance
 ```
 
 Do not implement RegisteredTransform before the canonical object vocabulary is
 frozen. Do not add provider-specific tables without a package semantic owner.
+Do not continue the canonical layer merely because the design exists; require
+observed multi-family need and a release-safe rollback path.
 
 ## First Implementation Slice
 

@@ -38,9 +38,26 @@
 
 ---
 
-## 开放条目（2026-08-17 收尾审计后）
+## 开放条目（2026-08-20 Phase 4 Gold 审计 → Phase 5 收敛）
+
+> 当前不是迁移阶段，而是迁移完成后的系统收敛阶段。Phase 0-9 已完成；近期
+> 工作先证明现有系统的 Gold 失败边界，再按证据修复 Agent → Dataset →
+> Publication 断链。长期路线见
+> [Phase 4 → Phase 5 hardening roadmap](plans/2026-08-20-phase4-to-phase5-hardening-roadmap.md)，
+> 近期 E1-E5 见 [Gold evaluator near-term plan](plans/2026-08-20-gold-evaluator-near-term-plan.md)。
+>
+> Canonical Evidence Product Layer 的 Phase 0 已完成；其余 IR/package/
+> RegisteredTransform 阶段暂缓，不作为当前默认开发顺序。
 
 ### P0
+
+- [ ] **P0 / E1-E5** Gold evaluator 诊断闭环：先冻结 versioned diagnostic
+      report/finding contracts 和 generic fixtures，再加载现有 run evidence、构造
+      evaluator-only semantic requirements、按 discovery/trusted_input/contract/
+      assembly/validation/publication/reproducibility/evaluator 边界输出确定性报告。
+      不修改 Gold prompt、source inventory、runtime defaults、acceptance threshold；
+      Gold6 的真实 HIL 仍为 blocked。执行计划见
+      [2026-08-20-gold-evaluator-near-term-plan.md](plans/2026-08-20-gold-evaluator-near-term-plan.md)。
 
 > TASK-047/048 的 work package、硬依赖、分支边界和逐项验收统一见
 > [Gold 可信 Publication 收敛执行计划](superpowers/plans/2026-08-18-gold-trusted-publication-closure.md)。
