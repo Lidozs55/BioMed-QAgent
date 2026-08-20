@@ -281,9 +281,11 @@ export async function loadGoldEvidenceInventory(
   const root = await realpath(input.evidence_root);
   const acceptRef = `accept-${input.case_id}.json`;
   const evidenceRef = `evidence-${input.case_id}.json`;
+  const hilRef = `${input.case_id}.hil-needed.json`;
   const findings: EvaluationDiagnosticFinding[] = [];
   const accept = await readJsonFile(root, acceptRef);
   const evidence = await readJsonFile(root, evidenceRef);
+  const hil = await readJsonFile(root, hilRef);
   if (!accept.exists || accept.value === null) {
     findings.push(finding(
       accept.malformed ? "evidence.accept_malformed" : "evidence.accept_missing",
@@ -364,7 +366,30 @@ export async function loadGoldEvidenceInventory(
     }
   }
   const historicalStatus: InventoryStatus = historicalAdmissible === false ? "blocked" : historicalAdmissible === true ? "pass" : "unknown";
-  const observed = extractObserved(evidence.value);
+  const hilRequest = isObject(hil.value?.hil_request) ? hil.value.hil_request : null;
+  const pendingBlockingHil = hilRequest?.status === "pending" && hilRequest.blocking === true;
+  if (hil.malformed || (hil.exists && hilRequest === null)) {
+    findings.push(finding(
+      "evidence.hil_malformed",
+      "evaluator",
+      "hil_request",
+      "HIL evidence sidecar is malformed",
+      [hilRef],
+    ));
+  } else if (pendingBlockingHil) {
+    findings.push(finding(
+      "trusted_input.hil_pending",
+      "trusted_input",
+      "hil_resolution",
+      "A blocking human-in-the-loop request is pending",
+      [hilRef],
+    ));
+  }
+  const extractedObserved = extractObserved(evidence.value);
+  const observed: GoldEvidenceObservedFacts = {
+    ...extractedObserved,
+    hil_count: hilRequest === null ? extractedObserved.hil_count : Math.max(extractedObserved.hil_count ?? 0, 1),
+  };
   if (observed.build_status === "succeeded" && observed.publication_ids.length === 0 && observed.build_publication_id === null) {
     findings.push(finding("publication.publication_receipt_missing", "publication", "publication_receipt", "Build success is present but no publication receipt was observed", [evidenceRef]));
   }
@@ -399,9 +424,11 @@ export async function loadGoldEvidenceInventory(
       : Object.values(hashChecks).every((status) => status === "pass")
         ? "pass"
         : "fail";
+  const baseChecks = checksFor(identity, observed, findings);
   const checks = {
-    ...checksFor(identity, observed, findings),
+    ...baseChecks,
     frozen_inputs: frozenInputsStatus,
+    trusted_inputs: pendingBlockingHil ? "blocked" as const : baseChecks.trusted_inputs,
   };
   return {
     schema_version: "1.0",
@@ -411,7 +438,7 @@ export async function loadGoldEvidenceInventory(
     historical: { status: historicalStatus, admissible_as_current_evidence: historicalAdmissible },
     checks,
     observed,
-    evidence_refs: [accept.exists ? acceptRef : null, evidence.exists ? evidenceRef : null].filter((ref): ref is string => ref !== null),
+    evidence_refs: [accept.exists ? acceptRef : null, evidence.exists ? evidenceRef : null, hil.exists ? hilRef : null].filter((ref): ref is string => ref !== null),
     findings: findings.sort(compareFindings),
   };
 }

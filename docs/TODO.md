@@ -51,17 +51,23 @@
 
 ### P0
 
-- [x] **P0 / E1-E4 completed** Gold evaluator diagnostic foundation：已冻结
+- [x] **P0 / E1-E5 completed** Gold evaluator diagnostic foundation：已冻结
       versioned diagnostic report/finding contracts，完成只读 run evidence inventory、
-      evaluator-only reference requirements parser，以及按
+      evaluator-only reference requirements parser、按
       discovery/trusted_input/contract/assembly/validation/publication/
-      reproducibility/evaluator 边界选择 primary blocker 的纯诊断引擎。当前不修改
-      Gold prompt、source inventory、runtime defaults、acceptance threshold；历史
-      evidence 不替代同 commit 证据，Gold6 的真实 HIL 仍为 blocked。
-- [ ] **P0 / E5** 在不重跑外部获取的前提下，对现有 evidence inventory 生成六例
-      baseline diagnostic matrix，汇总 failure boundary/finding code 和证据缺口，
-      再选择最小 Agent → Dataset → Publication repair slice。执行计划见
-      [2026-08-20-gold-evaluator-near-term-plan.md](plans/2026-08-20-gold-evaluator-near-term-plan.md)。
+      reproducibility/evaluator 边界选择 primary blocker 的诊断引擎，以及 explicit-root
+      六例 batch matrix/CLI。旧 `dd498ec8-rerun` 证据对目标
+      `54cf7ec2829612e13da652b9fdb4ecc80b2bab69` 的离线结果为
+      `0 pass / 5 fail / 1 blocked`；Gold6 由通用 pending+blocking HIL sidecar 规则
+      保持 blocked。详见
+      [Gold v1 diagnostic baseline](audit/2026-08-20-gold-diagnostic-baseline.md)。
+      当前未修改 Gold prompt、source inventory、runtime defaults 或 acceptance threshold；
+      历史 evidence 不替代同 commit 证据。
+- [ ] **P0 / next repair** Trusted evidence-chain projection：先从现有 durable events、
+      SourceAsset/Core receipts、BuildResult、publication/artifact events、下载 hash sidecars
+      和 final messages 投影 evaluator-owned 同一链，填补 trusted_inputs / semantic_product /
+      publication / reproducibility 的 `unknown`。仅当权威事件模型确实缺少所需阶段时才
+      修改 runtime；本切片不启动完整 Canonical IR、RegisteredTransform 或 family 重构。
 
 > TASK-047/048 的 work package、硬依赖、分支边界和逐项验收统一见
 > [Gold 可信 Publication 收敛执行计划](superpowers/plans/2026-08-18-gold-trusted-publication-closure.md)。

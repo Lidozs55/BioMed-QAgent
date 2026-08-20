@@ -189,6 +189,60 @@ describe("loadGoldEvidenceInventory", () => {
     expect(result.findings.map((item) => item.code)).toContain("evidence.historical_inadmissible");
   });
 
+  test("blocks trusted input only for an explicit pending blocking HIL sidecar", async () => {
+    const root = await makeRoot();
+    await writePair(root);
+    await writeJson(root, "case-a.hil-needed.json", {
+      hil_request: {
+        status: "pending",
+        blocking: true,
+      },
+    });
+    const result = await loadGoldEvidenceInventory({
+      evidence_root: root,
+      case_id: "case-a",
+      target_product_commit: commit,
+    });
+
+    expect(result.checks.trusted_inputs).toBe("blocked");
+    expect(result.observed.hil_count).toBe(1);
+    expect(result.evidence_refs).toContain("case-a.hil-needed.json");
+    expect(result.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "trusted_input.hil_pending", boundary: "trusted_input" }),
+    ]));
+  });
+
+  test.each([
+    { status: "accepted", blocking: true },
+    { status: "pending", blocking: false },
+  ])("does not block resolved or non-blocking HIL evidence", async (hilRequest) => {
+    const root = await makeRoot();
+    await writePair(root);
+    await writeJson(root, "case-a.hil-needed.json", { hil_request: hilRequest });
+    const result = await loadGoldEvidenceInventory({
+      evidence_root: root,
+      case_id: "case-a",
+      target_product_commit: commit,
+    });
+
+    expect(result.checks.trusted_inputs).toBe("unknown");
+    expect(result.findings.map((item) => item.code)).not.toContain("trusted_input.hil_pending");
+  });
+
+  test("reports malformed HIL evidence without treating it as resolved", async () => {
+    const root = await makeRoot();
+    await writePair(root);
+    await writeFile(join(root, "case-a.hil-needed.json"), "not-json", "utf8");
+    const result = await loadGoldEvidenceInventory({
+      evidence_root: root,
+      case_id: "case-a",
+      target_product_commit: commit,
+    });
+
+    expect(result.checks.trusted_inputs).toBe("unknown");
+    expect(result.findings.map((item) => item.code)).toContain("evidence.hil_malformed");
+  });
+
   test("keeps output ordering deterministic", async () => {
     const firstRoot = await makeRoot();
     const secondRoot = await makeRoot();
