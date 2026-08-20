@@ -25,6 +25,7 @@ import {
 } from "../../processing/vlm/index.js";
 import type { PublicHttpClient } from "../../external/network/http-client.js";
 import type { DatasetHILGate } from "../../dataset/review/hil-policy.js";
+import { errorResult } from "./result.js";
 
 export const EXTRACT_CHART_DATA_VLM_TOOL_NAME = "extract_chart_data_vlm";
 
@@ -108,9 +109,12 @@ export function createChartDataVlmTool(deps: ChartDataVlmToolDeps): BioMedAgentT
         return {
           content: JSON.stringify({
             status: "error",
+            code: "permission_gate_unavailable",
+            retryable: false,
             error: "credential permission gate is required for DashScope VLM access",
             source_file: path.basename(sourcePath),
           }),
+          isError: true,
         };
       }
       const permission = await deps.approvalGate.request(
@@ -121,21 +125,27 @@ export function createChartDataVlmTool(deps: ChartDataVlmToolDeps): BioMedAgentT
         return {
           content: JSON.stringify({
             status: "error",
+            code: "permission_denied",
+            retryable: false,
             error: "credential permission was rejected for DashScope VLM access",
             source_file: path.basename(sourcePath),
           }),
+          isError: true,
         };
       }
       let result: VlmResult;
       try {
         result = await tools.extractChartDataVlm(sourcePath, hint, signal);
       } catch (error) {
+        const failure = errorResult(error);
         return {
           content: JSON.stringify({
             status: "error",
-            error: `unexpected error: ${error instanceof Error ? error.message : String(error)}`,
             source_file: path.basename(sourcePath),
+            ...(failure.details as object),
           }),
+          details: failure.details,
+          isError: true,
         };
       }
       return { content: JSON.stringify(result, null, 2) };
