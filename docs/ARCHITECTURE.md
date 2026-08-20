@@ -11,7 +11,8 @@
 >   [ADR-017 及后续记录](adr/README.md)）承担；实现规格由
 >   [BioMed-QAgent_Pipeline_Refactor_Design.md](BioMed-QAgent_Pipeline_Refactor_Design.md)
 >   承担；执行任务由 [TODO.md](TODO.md) 承担。三者不互相复制。
-> - **实现状态**：迁移 Phase 0-8 全部完成（2026-08-14）。唯一正式拓扑为
+> - **实现状态**：迁移 Phase 0-9 全部完成（2026-08-16）；当前处于 Phase 4 Gold
+>   审计向 Phase 5 hardening/release 过渡的系统收敛阶段。唯一正式拓扑为
 >   TypeScript Host 权威实现 formal `/api/v1`、durable Task/Run/Event、模型设置、
 >   product API 与 TS Dataset Core；Agent = Pi（`server/src/agent/pi-adapter.ts`）。
 >   legacy FastAPI / Python Core / experimental Pi / rollback feature flags 已全部
@@ -41,6 +42,8 @@
 | §19 | 顶层不变量 | 本文 |
 | — Skill 自生成/自迭代 | 流程固化 + 可拆卸工具包 + 自迭代闭环 | [architecture/skill-self-iteration.md](architecture/skill-self-iteration.md) |
 | §24 | 文档治理 | 本文 |
+| — 当前收敛路线 | Phase 4 Gold audit → Phase 5 hardening/release | [plans/2026-08-20-phase4-to-phase5-hardening-roadmap.md](plans/2026-08-20-phase4-to-phase5-hardening-roadmap.md) |
+| — 近期执行 | Gold evaluator E1-E5 | [plans/2026-08-20-gold-evaluator-near-term-plan.md](plans/2026-08-20-gold-evaluator-near-term-plan.md) |
 
 ---
 ## 1. 产品定义与边界

@@ -1,9 +1,16 @@
 # Gold 可信 Publication 收敛执行计划
 
-> 状态：Accepted（经 2026-08-18 依赖与验收复核）
+> 状态：Historical execution record（2026-08-20 起不再作为当前任务队列）
 > 日期：2026-08-18
 > 跟踪：TASK-047、TASK-048
 > 架构依据：`docs/ARCHITECTURE.md`、ADR-027
+>
+> 当前阶段、优先级与退出条件见
+> [`Phase 4 → Phase 5 Hardening Roadmap`](../../plans/2026-08-20-phase4-to-phase5-hardening-roadmap.md)；
+> 当前近期任务见
+> [`Gold Evaluator Near-term Plan`](../../plans/2026-08-20-gold-evaluator-near-term-plan.md)。
+> 本文保留迁移后可信 Publication 建设的历史依赖、验收和证据，不应继续以旧
+> A/B/C worktree 状态驱动新开发。
 
 ## 1. 成功定义与基线
 
