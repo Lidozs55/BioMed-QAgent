@@ -334,6 +334,9 @@ describe("SettingsPanel model registry", () => {
     fireEvent.click(within(navigation).getByRole("button", { name: "常规" }));
 
     const clearButton = await screen.findByRole("button", { name: "清空缓存" });
+    await waitFor(() => {
+      expect(clearButton).toBeEnabled();
+    });
     fireEvent.click(clearButton);
 
     const dialog = await screen.findByRole("alertdialog");
