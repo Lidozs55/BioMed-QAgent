@@ -74,7 +74,11 @@
       artifact 计分；验收：按计划 B0-B7/C1-C2 落地 family admission、multi-table
       contracts、assemble、registered asset ingestion、Validation/Provenance/Confidence
       和图表/衍生数据可信路径；严格表头/行宽/source locator/单位与 relation 保留，
-      workspace 文件不得绕过 Publisher。
+      workspace 文件不得绕过 Publisher。后续实现以
+      [Canonical Evidence Product Layer 计划](plans/2026-08-20-canonical-evidence-product-layer.md)
+      为上位设计：先建立 ProductAssessment 与 canonical entity/relation/evidence
+      语义层，再扩展 package/provider/crosswalk/derive；不得按 Gold case 增加独立
+      production profile。
 
 #### 开发者 B 任务台账
 
