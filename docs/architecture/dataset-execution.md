@@ -30,6 +30,9 @@
   `SourceAsset.sha256` 覆盖全量内容。
 - 非 abort 失败时**保留调用方 part 文件**供重试续传；默认（无 `partPath`）part
   始终清理。abort/cancel 对调用方 part 同样保留，便于用户取消后重试续传。
+- Core acquisition 在不可重试或重试预算耗尽时保留 provider、底层错误码、attempt
+  数和最终 retryability；Agent 工具必须原样投影该结构化失败，不能降级为
+  `bridge_unavailable` 或据此盲目重复相同请求。
 - `download_xena` 工具据此自动重试（网络错误/超时等瞬态码，指数退避），并以
   节流（1s 或 8MiB）上报 `operation_progress(downloaded_bytes)`，长下载不再表现为
   "卡死"。

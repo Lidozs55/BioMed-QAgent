@@ -6,6 +6,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import type { DatasetBridgeResponse } from "@biomed/contracts";
 import { createDatasetBuildTools } from "../src/agent/tools/dataset-build.js";
+import { CoreAcquisitionError } from "../src/dataset/acquisition/runtime.js";
 import { readBuildContinuation } from "../src/runtime/build-continuation.js";
 import { datasetBuildSpec as spec } from "./dataset-bridge-fixture.js";
 
@@ -267,6 +268,40 @@ describe("Pi DatasetBuild tools", () => {
     await expect(invalidTool.execute({ spec })).resolves.toMatchObject({
       isError: true,
       details: { code: "invalid_input", retryable: false },
+    });
+
+    const acquisitionTool = createDatasetBuildTools({
+      client: {
+        validate: async () => ({
+          version: 1,
+          request_id: "request_validate",
+          ok: true,
+          data: { valid: true, reason_codes: [], reasons: [] },
+          error: null,
+        }),
+        acquire: async () => {
+          throw new CoreAcquisitionError(
+            "acquisition failed: network_error",
+            { provider_id: "gdc.v1", error_code: "network_error", attempts: 3 },
+            false,
+          );
+        },
+        execute: retryableExecute,
+      },
+      taskId: "task_tool",
+      taskRoot: await toolTaskRoot(),
+      runId: () => "run_tool",
+      piSessionId: () => "pi_tool",
+    })[1]!;
+    await expect(acquisitionTool.execute({ spec, mapping_files: {} })).resolves.toMatchObject({
+      isError: true,
+      details: {
+        code: "acquisition_failed",
+        retryable: false,
+        provider_id: "gdc.v1",
+        error_code: "network_error",
+        attempts: 3,
+      },
     });
   });
 
