@@ -169,6 +169,7 @@ function codeForCaught(error: unknown): string {
   }
   if (error instanceof TypeError) return "invalid_input";
   if (error instanceof Error && error.name === "AbortError") return "cancelled";
+  if (error instanceof Error && error.name === "CoreAcquisitionError") return "acquisition_failed";
   return "bridge_unavailable";
 }
 
@@ -178,8 +179,17 @@ function caught(error: unknown): BioMedToolResult {
     error instanceof Error && error.message.trim().length > 0
       ? error.message.slice(0, MAX_CONTENT)
       : "Dataset build tool failed";
-  const retryable = code === "bridge_unavailable";
-  const details = { code, message, retryable };
+  const retryable =
+    error !== null && typeof error === "object" && "retryable" in error &&
+    typeof error.retryable === "boolean"
+      ? error.retryable
+      : code === "bridge_unavailable";
+  const errorDetails =
+    error !== null && typeof error === "object" && "details" in error &&
+    error.details !== null && typeof error.details === "object" && !Array.isArray(error.details)
+      ? error.details
+      : {};
+  const details = { code, message, retryable, ...errorDetails };
   return {
     content: JSON.stringify(details),
     details,

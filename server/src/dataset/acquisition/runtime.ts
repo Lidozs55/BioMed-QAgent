@@ -116,6 +116,22 @@ export interface CoreAcquisitionResult {
   extractionAssets: RegisteredSourceAssetRef[];
 }
 
+export class CoreAcquisitionError extends Error {
+  readonly retryable: boolean;
+  readonly details: { provider_id: string; error_code: string | null; attempts: number };
+
+  constructor(
+    message: string,
+    details: { provider_id: string; error_code: string | null; attempts: number },
+    retryable: boolean,
+  ) {
+    super(message);
+    this.name = "CoreAcquisitionError";
+    this.retryable = retryable;
+    this.details = details;
+  }
+}
+
 export interface CoreAcquisitionRuntimeOptions {
   taskId: string;
   taskRoot: string;
@@ -225,11 +241,24 @@ export class CoreAcquisitionRuntime {
         return { requestIdentityDigest, attempts, sourceAsset: asset, extractionAssets };
       }
       if (!retryable || attemptNumber === this.#maxAttempts) {
-        throw new Error(`acquisition failed: ${result.attempt.error_code ?? "unknown_error"}`);
+        const errorCode = result.attempt.error_code ?? "unknown_error";
+        throw new CoreAcquisitionError(
+          `acquisition failed: ${errorCode}`,
+          {
+            provider_id: handler.providerId,
+            error_code: result.attempt.error_code,
+            attempts: attemptNumber,
+          },
+          false,
+        );
       }
       resumedFromAttemptId = attempt.attempt_id;
     }
-    throw new Error("acquisition exhausted attempts");
+    throw new CoreAcquisitionError(
+      "acquisition exhausted attempts",
+      { provider_id: handler.providerId, error_code: "attempts_exhausted", attempts: this.#maxAttempts },
+      false,
+    );
   }
 
   async #appendAttempt(attempt: CoreDownloadAttempt): Promise<void> {

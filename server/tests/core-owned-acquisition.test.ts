@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   acquisitionRequestIdentity,
+  CoreAcquisitionError,
   CoreAcquisitionRegistry,
   CoreAcquisitionRuntime,
   type AcquisitionProviderHandler,
@@ -186,6 +187,27 @@ describe("TASK-C2I Core-owned acquisition", () => {
     expect(calls).toBe(2);
     const durable = JSON.parse(await readFile(path.join(fixture.root, "state", "core-acquisition-attempts.json"), "utf8")) as unknown[];
     expect(durable).toHaveLength(3);
+  });
+
+  it("preserves the terminal provider error after bounded retries", async () => {
+    const fixture = await runtime({
+      executor: async () => {
+        throw new Error("socket unavailable");
+      },
+    });
+
+    const failure = await fixture.runtime.acquire(request()).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(CoreAcquisitionError);
+    expect(failure).toMatchObject({
+      name: "CoreAcquisitionError",
+      message: "acquisition failed: internal_error",
+      retryable: false,
+      details: {
+        provider_id: "fixture_provider",
+        error_code: "internal_error",
+        attempts: 3,
+      },
+    });
   });
 
   it("accepts only a registered PROMOTED recipe and rejects unknown providers", async () => {
