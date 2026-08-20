@@ -110,6 +110,76 @@ describe("DurableTaskRepository", () => {
     expect((await recovered.listEvents(accepted.task_id, 0)).length).toBe(events.length);
   });
 
+  test("fails orphaned permission requests closed before interrupting a restarted run", async () => {
+    const repo = await repository();
+    const pending = await repo.createTask({
+      requestId: "request-permission-recovery",
+      input: "wait for workspace permission",
+      databases: [],
+      mode: "agent",
+    });
+    await repo.appendRunEvent(pending.task_id, pending.run_id, { type: "run_started" });
+    await repo.appendRunEvent(pending.task_id, pending.run_id, {
+      type: "permission_requested",
+      request_id: "permission_orphaned",
+      capability: "process.exec",
+      scope: "workspace",
+      resource: null,
+      canonical_resource: null,
+      command: "node inspect.js",
+      cwd: "/workspace",
+      summary: "Execute node inspect.js",
+    });
+
+    const resolved = await repo.createTask({
+      requestId: "request-permission-resolved",
+      input: "resolved workspace permission",
+      databases: [],
+      mode: "agent",
+    });
+    await repo.appendRunEvent(resolved.task_id, resolved.run_id, { type: "run_started" });
+    await repo.appendRunEvent(resolved.task_id, resolved.run_id, {
+      type: "permission_requested",
+      request_id: "permission_resolved_before_restart",
+      capability: "process.exec",
+      scope: "workspace",
+      resource: null,
+      canonical_resource: null,
+      command: "node inspect.js",
+      cwd: "/workspace",
+      summary: "Execute node inspect.js",
+    });
+    await repo.appendRunEvent(resolved.task_id, resolved.run_id, {
+      type: "permission_resolved",
+      request_id: "permission_resolved_before_restart",
+      decision: "allow",
+      grant_scope: "once",
+    });
+
+    const reopened = new DurableTaskRepository(repo.tasksRoot);
+    await expect(reopened.rejectOrphanedPermissionRequests()).resolves.toBe(1);
+    await reopened.recoverActiveRuns();
+
+    const pendingEvents = await reopened.listEvents(pending.task_id, 0);
+    expect(pendingEvents.slice(-2).map((event) => event.payload)).toEqual([
+      {
+        type: "permission_resolved",
+        request_id: "permission_orphaned",
+        decision: "deny",
+        grant_scope: null,
+      },
+      {
+        type: "run_interrupted",
+        reason: "Application Host restarted before the run reached a terminal state",
+      },
+    ]);
+    expect((await reopened.getSnapshot(pending.task_id))?.runs[0]?.status).toBe("interrupted");
+    expect((await reopened.listEvents(resolved.task_id, 0)).filter(
+      (event) => event.payload.type === "permission_resolved",
+    )).toHaveLength(1);
+    await expect(reopened.rejectOrphanedPermissionRequests()).resolves.toBe(0);
+  });
+
   test("preserves only an explicitly reconciled formal-HIL run during recovery", async () => {
     const repo = await repository();
     const accepted = await repo.createTask({
