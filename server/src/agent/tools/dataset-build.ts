@@ -434,7 +434,7 @@ export function createDatasetBuildTools(
   const mappingFilesSchema = {
     type: "object",
     description:
-      "Optional map from spec binding_id to a separately registered annotation/mapping asset. Omit unless the selected adapter requires one; do not repeat source_files here.",
+      "Optional map from spec binding_id to a separately registered annotation/mapping asset. A gene-level schema fed by a probe-level source (e.g. GEO geo_probe) MUST declare a probe-to-gene annotation here, or the binding fails the gene-required coverage/residual gate and the run returns status no_data / reason no_primary_data. Omit unless the selected adapter requires one; do not repeat source_files here (see research_data_guidance expression_omics.md).",
     additionalProperties: { type: "string", minLength: 1 },
   } as const;
   const metadataFilesSchema = {

@@ -26,6 +26,12 @@ const ALLOWED_BACKTICK_TOKENS = new Set([
   "source_files",
   "mapping_files",
   "metadata_files",
+  // schema namespaces / build result identifiers / real tools referenced by guidance
+  "geo_probe",
+  "no_data",
+  "no_primary_data",
+  "retryable",
+  "workspace_exec",
 ]);
 
 const SKILL_NAME = /^[a-z][a-z0-9_-]*$/;

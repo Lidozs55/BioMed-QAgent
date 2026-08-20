@@ -22,6 +22,15 @@ output.
    task-relative source_files / mapping_files / metadata_files references.
    Omit missing source_files when the binding has a registered Core acquisition
    provider; do not download or parse that provider again with workspace commands.
+   - **gene-level builds fed by probe-level sources (e.g. GEO `geo_probe`) MUST
+     declare a probe→gene annotation** via `mapping_files={"<binding_id>":
+     "<GPL annotation relative path>"}` — one entry per binding, keyed by the same
+     binding_id as the source. Omitting it lets `validate_dataset_build` pass but the
+     binding fails the gene-required coverage/residual gate and the run lands on
+       `status: "no_data"` / `reason_codes: ["no_primary_data"]` (see the
+       research_data_guidance skill, expression_omics.md section 3, for the
+       mechanism). Prefer a gene-level source (GDC/Xena) or a probe-level schema
+       when no probe→gene annotation is available.
 4. Treat a failed result as actionable state. Retry unchanged inputs only when
    `retryable` is true and the external condition may have changed. For
    non-retryable errors, change the spec or registered source selection; for a

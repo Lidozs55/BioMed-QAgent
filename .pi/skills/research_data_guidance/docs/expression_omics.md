@@ -21,8 +21,9 @@
   namespace 为 `ensembl_gene`/`gene_symbol`，可直接过滤目标基因。
 - 探针级（GEO series_matrix）：`gene_id` 是 probe ID，namespace 为 `geo_probe`。
   两个出路：
-  1. **probe→gene 映射**：需 GPL 平台注释；注意很多平台注释缺少基因列（如实告警，
-     不要伪装成基因级产物）；
+  1. **probe→gene 映射**：需 GPL 平台注释，通过
+     `mapping_files={"<binding_id>": "<GPL 注释相对路径>"}` 显式声明（机制与后果见 §3）。
+     很多平台注释缺少基因列，如实告警，不要伪装成基因级产物；
   2. **probe 级发布**：schema 用 `gene_expression.probe_long.v1`、validation profile 用
      `gene_expression.probe_release.v1`（probe 级可发布，覆盖率为 warning 不阻断）。
 - 基因 symbol↔ENSG 可用服务端内置映射（canonicalizer 的 `gene_symbol_map`），
@@ -45,6 +46,34 @@ GSE 拼接行。series matrix 的 `!Sample_*` 字段会自动发布为 `sample_m
 表达主文件是 tximport/补充矩阵，则把同一 GSE 的 family SOFT 通过
 `metadata_files={"binding_id": "<SOFT 相对路径>"}` 传给构建工具。tumor/normal 分组
 与 pairing 仅依据显式 metadata；不得从 GSM 顺序、标题相似度或同一 GSE 猜测配对。
+
+### gene 级绑定：probe→gene 映射必须经 `mapping_files` 声明
+
+当 schema 是 gene 级（`gene_expression.long.v1` / `gene_sample_measurement`）而源是
+GEO 探针（`geo_probe`）时，**必须在 `execute_dataset_build` 里为同一个 binding 提供
+probe→gene 平台注释**：
+
+```text
+mapping_files = { "<binding_id>": "<GPL 注释相对路径>" }
+```
+
+- 键 `binding_id` 必须与 spec 里该源绑定的名称一致（与 `source_files` /
+  `metadata_files` 用同一把键；`assertKnownBindings` 会拒绝未知键）。
+- 值是**单独注册**的注释/映射资产（GPL 平台注释、内置 probe-map、或提供 probe→gene
+  的补充注解），不能重复塞进 `source_files`。
+- 该映射按 `binding_id` 关联到绑定，在 canonicalize 阶段做 probe→gene 折叠并计算
+  覆盖率；**gene-required 构建**要求覆盖率 1.0 且主表无 residual `geo_probe` 行
+  （validation profile 的 `probe_coverage_required_gene_level`，见 `probe-mapping`）——
+  未命中映射的 probe 保持 `geo_probe` 命名空间，不会在 canonicalize 阶段被本行级删除，
+  而是作为 gene 级 validation 的失败项被拒。
+- **漏掉这份 `mapping_files` 的典型后果**：`validate` 可能通过（因为 gene schema 与
+  `geo.expression.v1` 适配器在字面上兼容），但执行时该绑定因 gene-required 覆盖率/
+  residual gate 未达标而被拒；若所有绑定都被拒，结果 `status: "no_data"`、
+  `reason_codes: ["no_primary_data"]`，`user_summary` 提示 “Every source binding was
+  rejected”。此时不是重跑同一参数，而是要补上 probe→gene 映射（或改走 gene 级源，
+  或改用 probe 级 schema 发布）。注意：单绑定的精确拒绝码与 `not_attempted` 标注当前
+  以 Python 侧为完整实现，TS executor 的按绑定守卫仍在接线中——因此以 validation
+  profile 的 coverage/residual 检查为准，不要臆断具体 reason code。
 
 ## 4. 构建前 vetting
 
@@ -70,6 +99,9 @@ GSE 拼接行。series matrix 的 `!Sample_*` 字段会自动发布为 `sample_m
 
 - `no_data` 且 rejected.csv 显示 `unknown_unit`/`unknown_semantics`：修正 AdapterParams
   后重新 `validate_dataset_build_spec`，不要用相同参数重跑；
+- `no_data` / `no_primary_data`（probe 未折叠 / gene-required coverage 未达标，机制见
+  §3）：补上 `mapping_files[binding_id]` 的 probe→gene 注释后重试，或改走 gene 级源
+  （GDC/Xena），或改用 probe 级 schema 发布；不要沿用缺失映射的参数重跑；
 - 表达块为空（只有样本元数据）：换 experiment_type 含 "Expression profiling by array"
   的 microarray 数据集，或改走 GDC/Xena 基因级；
 - 2-3 次调整仍无合适数据：停止重试，如实汇报已尝试方案与失败原因。
