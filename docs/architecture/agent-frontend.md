@@ -35,7 +35,10 @@ Main Agent 直接持有全部业务工具（`search_pubmed`、`search_geo`、
 `describe_geo`、`download_geo`、…），加上：
 
 - `validate_dataset_build_spec` / `execute_dataset_build`：校验并提交自包含
-  `DatasetBuildSpec`（唯一正式产物入口）；
+  `DatasetBuildSpec`（唯一正式产物入口）。`execute_dataset_build` 的
+  `source_files`、`mapping_files`、`metadata_files` 都按 binding_id 映射；source
+  缺失时由 registered Core acquisition 补齐，mapping/metadata 缺失表示该
+  adapter 不需要额外载体。Host 在 acquisition 前拒绝未知 binding key；
 - 文件读写工具（`read_file` / `read_file_head` / `search_file` / `write_file` /
   `list_files`）；
 - `compress_query_log` / `review_query_strategy`；
