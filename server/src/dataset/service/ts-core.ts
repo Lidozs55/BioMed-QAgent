@@ -107,6 +107,7 @@ export interface BuildRecord {
   status: string;
   error: string | null;
   publication_id: string | null;
+  publication?: import("../contracts/index.js").DatasetPublication | null;
   manifest: VersionedDatasetManifest | null;
   validation: ValidationResult | null;
   completed_operations: string[];
@@ -122,6 +123,7 @@ interface RunnerState {
   manifest: DatasetManifest | null;
   validation: ValidationResult | null;
   publicationId: string | null;
+  publication?: import("../contracts/index.js").DatasetPublication | null;
 }
 
 const EMPTY_MERGED_BATCH: DataBatch = {
@@ -668,6 +670,7 @@ export function createTsCoreOperationRunner(options: {
           fence,
         });
         runnerState.publicationId = published.publicationId;
+        runnerState.publication = published.publication;
         return makeOperationOutput({
           publication_id: published.publicationId,
           version_dir: published.versionDir,
@@ -730,6 +733,7 @@ export class TypeScriptDatasetCore {
         status: "completed",
         error: null,
         publication_id: result.publication.publicationId,
+        publication: result.publication.publication,
         manifest: result.manifest,
         validation: result.validation,
         completed_operations: ["parse", "integrate", "assemble", "validate_profile", "publish"],
@@ -878,6 +882,7 @@ export class TypeScriptDatasetCore {
         status: outcome.status,
         error: outcome.error === null ? null : outcome.error.message,
         publication_id: publicationId,
+        publication: runnerState.publication ?? null,
         manifest: runnerState.manifest,
         validation: runnerState.validation,
         completed_operations: outcome.completedOperationIds,
@@ -910,6 +915,7 @@ export class TypeScriptDatasetCore {
       status: "completed",
       error: null,
       publication_id: null,
+      publication: null,
       manifest,
       validation: validation === null ? null : (validation as ValidationResult),
       completed_operations: [],

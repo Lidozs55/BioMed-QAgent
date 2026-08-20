@@ -111,6 +111,7 @@ export function reduceTaskEvents(
   const runs: RunRecord[] = [];
   const messages: MessageRecord[] = [];
   const publications: PublicationSummary[] = [];
+  const artifactIds = new Set<string>();
   const assistantByRun = new Map<string, MessageRecord>();
   let currentPublicationId: string | null = null;
   let artifactCount = 0;
@@ -164,10 +165,16 @@ export function reduceTaskEvents(
         supersedes_publication_id: event.payload.supersedes_publication_id,
         published_at: event.payload.published_at,
       };
-      publications.push(publication);
+      if (!publications.some((item) => item.publication_id === publication.publication_id)) {
+        publications.push(publication);
+      }
       currentPublicationId = publication.publication_id;
     } else if (event.payload.type === "artifact_produced") {
-      artifactCount += 1;
+      const artifactId = event.payload.artifact.artifact_id;
+      if (!artifactIds.has(artifactId)) {
+        artifactIds.add(artifactId);
+        artifactCount += 1;
+      }
     }
   }
 

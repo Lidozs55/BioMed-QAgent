@@ -454,6 +454,76 @@ describe("Pi DatasetBuild tools", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
+  test("forwards a Core-owned publication receipt after a successful build", async () => {
+    const publication = {
+      schema_version: "1.1" as const,
+      publication_id: "pub_build_receipt",
+      manifest_ref: "manifest_build_receipt",
+      manifest_sha256: "a".repeat(64),
+      validation_result_ref: "validation_report.json",
+      published_at: "2026-08-20T00:00:00.000Z",
+      supersedes_publication_id: null,
+    };
+    const response: DatasetBridgeResponse = {
+      version: 1,
+      request_id: "request_execute",
+      ok: true,
+      data: {
+        build_id: spec.build_id,
+        build_result: {
+          status: "succeeded",
+          valid_row_count: 1,
+          successful_sources: ["binding_gdc"],
+          rejected_sources: [],
+          available_artifact_roles: ["primary_dataset"],
+          publication_id: publication.publication_id,
+          reason_codes: [],
+          user_summary: "published",
+          recommended_next_action: "download artifacts",
+          build_id: spec.build_id,
+        },
+        publication_id: publication.publication_id,
+        publication,
+        manifest: {
+          build_id: spec.build_id,
+          manifest_id: publication.manifest_ref,
+          sha256: "b".repeat(64),
+        },
+        artifacts: [],
+        validation_summary: null,
+        registeredSourceAssetIds: [],
+      },
+      error: null,
+    };
+    const onPublication = vi.fn();
+    const tools = createDatasetBuildTools({
+      client: {
+        validate: async () => ({
+          version: 1,
+          request_id: "request_validate",
+          ok: true,
+          data: { valid: true, reason_codes: [], reasons: [] },
+          error: null,
+        }),
+        execute: async () => response,
+      },
+      taskId: "task_tool",
+      taskRoot: await toolTaskRoot(),
+      runId: () => "run_tool",
+      piSessionId: () => "pi_tool",
+      onPublication,
+    });
+
+    await tools[1]!.execute({
+      spec,
+      source_files: { binding_gdc: "source_assets/file.tsv" },
+      mapping_files: {},
+    });
+
+    expect(onPublication).toHaveBeenCalledOnce();
+    expect(onPublication).toHaveBeenCalledWith(response.data);
+  });
+
   test("persists a continuation record before handing the build to the core", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "biomed-tool-cont-"));
     roots.push(root);
