@@ -227,7 +227,11 @@ export function createWorkspaceTools(workspace: TaskWorkspace): BioMedAgentTool[
             ? undefined
             : optionalInteger(args, "timeout_seconds")! * 1000,
         }, signal);
-        return success(result, result.policy !== "allowed" || result.cancelled || result.timedOut);
+        return success(
+          result,
+          result.policy !== "allowed" || result.cancelled || result.timedOut ||
+            (result.exitCode !== null && result.exitCode !== 0),
+        );
       }),
     },
   ];

@@ -128,6 +128,7 @@ function resultFor(response: DatasetBridgeResponse): BioMedToolResult {
         code: response.error.code,
         request_id: response.request_id,
         message: response.error.message,
+        retryable: response.error.retryable,
         ...response.error.details,
       };
   return {
@@ -159,19 +160,39 @@ function diagnostic(
   });
 }
 
-function caught(error: unknown): BioMedToolResult {
-  const code =
+function codeForCaught(error: unknown): string {
+  if (
     error !== null && typeof error === "object" && "code" in error &&
     typeof error.code === "string"
-      ? error.code.slice(0, MAX_ID)
-      : "invalid_input";
+  ) {
+    return error.code.slice(0, MAX_ID);
+  }
+  if (error instanceof TypeError) return "invalid_input";
+  if (error instanceof Error && error.name === "AbortError") return "cancelled";
+  if (error instanceof Error && error.name === "CoreAcquisitionError") return "acquisition_failed";
+  return "bridge_unavailable";
+}
+
+function caught(error: unknown): BioMedToolResult {
+  const code = codeForCaught(error);
   const message =
     error instanceof Error && error.message.trim().length > 0
       ? error.message.slice(0, MAX_CONTENT)
       : "Dataset build tool failed";
+  const retryable =
+    error !== null && typeof error === "object" && "retryable" in error &&
+    typeof error.retryable === "boolean"
+      ? error.retryable
+      : code === "bridge_unavailable";
+  const errorDetails =
+    error !== null && typeof error === "object" && "details" in error &&
+    error.details !== null && typeof error.details === "object" && !Array.isArray(error.details)
+      ? error.details
+      : {};
+  const details = { code, message, retryable, ...errorDetails };
   return {
-    content: JSON.stringify({ code, message }),
-    details: { code, message },
+    content: JSON.stringify(details),
+    details,
     isError: true,
   };
 }
@@ -388,7 +409,7 @@ export function createDatasetBuildTools(
           );
           return resultFor(response);
         } catch (error) {
-          diagnostic(options, "validate_dataset_build", context, started, response, "bridge_unavailable");
+          diagnostic(options, "validate_dataset_build", context, started, response, codeForCaught(error));
           return caught(error);
         }
       },
@@ -490,7 +511,7 @@ export function createDatasetBuildTools(
           );
           return resultFor(response);
         } catch (error) {
-          diagnostic(options, "execute_dataset_build", context, started, response, "bridge_unavailable", buildId);
+          diagnostic(options, "execute_dataset_build", context, started, response, codeForCaught(error), buildId);
           return caught(error);
         }
       },

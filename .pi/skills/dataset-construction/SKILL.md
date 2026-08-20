@@ -18,14 +18,25 @@ output.
 2. Call `validate_dataset_build` and fix every structured error
    (unknown_schema, family_mismatch, profile_not_allowed, …) before
    executing — never submit a spec that failed validation.
-3. Call `execute_dataset_build` with the spec plus the task-relative
-   source_files / mapping_files / metadata_files references.
-4. Only a successful Publication is formal output. Never describe rejection,
-   NO_DATA, cancellation, or failure as success; never fabricate file names
-   when reporting artifacts.
+3. Call `execute_dataset_build` with the spec plus any already-registered
+   task-relative source_files / mapping_files / metadata_files references.
+   Omit missing source_files when the binding has a registered Core acquisition
+   provider; do not download or parse that provider again with workspace commands.
+4. Treat a failed result as actionable state. Retry unchanged inputs only when
+   `retryable` is true and the external condition may have changed. For
+   non-retryable errors, change the spec or registered source selection; for a
+   permission or human-review request, wait for the decision instead of replacing
+   the trusted operation with workspace output.
+5. Only a successful Publication is formal output. Never describe rejection,
+   NO_DATA, cancellation, incomplete review, or failure as success; never
+   fabricate file names when reporting artifacts.
 
 ## Boundaries
 
-- The trusted Dataset Core owns validation, compatibility gating, integration,
-  and immutable publication. Agent filesystem writes are restricted to
-  staging — never write into artifacts/ or publications directly.
+- The trusted Dataset Core owns acquisition for registered providers,
+  validation, compatibility gating, integration, and immutable publication.
+  Agent filesystem writes are restricted to staging — never write into
+  artifacts/ or publications directly.
+- `workspace_exec` is for bounded staging or diagnosis when no registered tool
+  provides the operation. A non-zero exit code is a failed tool call. Do not
+  repeat the same command or build with unchanged inputs.

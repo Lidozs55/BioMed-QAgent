@@ -48,7 +48,11 @@ CAPTCHA、付费、凭据和服务条款边界仍必须进入 HIL。
 
 Agent 只负责形成 `DatasetBuildSpec` 和必要的来源证据；不能写入发布阈值、不能把
 Agent-only 数据源或子 Agent 的自然语言结果作为正式数据，也不能绕过 Spec
-Validator、Compatibility Gate、Validation Profile 或 Publisher。
+Validator、Compatibility Gate、Validation Profile 或 Publisher。Agent-facing 工具必须
+保留确定性内核返回的失败语义：进程非零退出是失败，Dataset Core 的 `retryable`
+不得在工具适配层丢失；相同输入只能在明确可重试且外部条件可能已变化时重试。
+权限或 evidence-bound HIL 挂起的可信调用必须等待原调用恢复，不能以 workspace
+脚本产物替代。
 
 ### 16.3 用户扩展（声明式数据库）
 
