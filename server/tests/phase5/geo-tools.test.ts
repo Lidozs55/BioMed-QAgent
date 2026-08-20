@@ -236,9 +236,21 @@ describe("search_geo", () => {
   test("empty query and term return the stable error", async () => {
     const [search] = tools({ port: 1, taskRoot: root });
     const result = await search.execute({});
-    expect(JSON.parse(result.content)).toEqual({
+    expect(JSON.parse(result.content)).toMatchObject({
       source: "geo",
       error: "either 'query' or 'term' must be provided",
+    });
+    expect(result.isError).toBe(true);
+  });
+
+  test("upstream discovery failures are explicit tool errors", async () => {
+    const [search] = tools({ port: 1, taskRoot: root });
+    const result = await search.execute({ query: "GSE178352" });
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.content)).toMatchObject({
+      source: "geo",
+      code: "tool_error",
+      retryable: true,
     });
   });
 });

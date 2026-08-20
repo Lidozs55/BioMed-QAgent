@@ -16,6 +16,7 @@ import path from "node:path";
 import type { BioMedAgentTool } from "../contracts.js";
 import type { ToolHooks } from "./tool-hooks.js";
 import { createDownloadProgressReporter, noopHooks } from "./tool-hooks.js";
+import { errorResult } from "./result.js";
 import type { PublicHttpClient } from "../../external/network/http-client.js";
 import type { ContentCache } from "../../external/acquisition/content-cache.js";
 import { acquireSource } from "../../external/acquisition/downloader.js";
@@ -275,7 +276,10 @@ export function createSearchGeoTool(options: GeoToolsOptions): BioMedAgentTool {
           content: JSON.stringify({
             source: "geo",
             error: "either 'query' or 'term' must be provided",
+            code: "invalid_input",
+            retryable: false,
           }),
+          isError: true,
         };
       }
       hooks.onQueryStarted(effectiveTerm, "geo");
@@ -307,14 +311,18 @@ export function createSearchGeoTool(options: GeoToolsOptions): BioMedAgentTool {
         return { content: JSON.stringify(payload) };
       } catch (error) {
         hooks.onQuery(effectiveTerm, "geo", "failed", 0);
-        const payload: GeoSearchPayload = {
+        const failure = errorResult(error);
+        const details = failure.details as { code: string; retryable: boolean };
+        const payload: GeoSearchPayload & { code: string; retryable: boolean } = {
           source: "geo",
           term: effectiveTerm,
           accessions: [],
           records: [],
           error: error instanceof Error ? error.message : String(error),
+          code: details.code,
+          retryable: details.retryable,
         };
-        return { content: JSON.stringify(payload) };
+        return { content: JSON.stringify(payload), details: failure.details, isError: true };
       }
     },
   };
@@ -368,12 +376,16 @@ export function createDescribeGeoTool(options: GeoToolsOptions): BioMedAgentTool
           }),
         };
       } catch (error) {
+        const failure = errorResult(error);
         return {
           content: JSON.stringify({
             source: "geo",
             accession,
             error: error instanceof Error ? error.message : String(error),
+            ...(failure.details as object),
           }),
+          details: failure.details,
+          isError: true,
         };
       }
     },

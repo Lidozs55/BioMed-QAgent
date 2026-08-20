@@ -251,7 +251,12 @@ describe("extract_chart_data_vlm tool", () => {
 
     const result = await tool.execute({ source_path: "source_assets/figures/chart.png" });
 
-    expect(JSON.parse(result.content)).toMatchObject({ status: "error" });
+    expect(JSON.parse(result.content)).toMatchObject({
+      status: "error",
+      code: "permission_gate_unavailable",
+      retryable: false,
+    });
+    expect(result.isError).toBe(true);
     expect(result.content).toMatch(/permission gate/i);
     expect(executor).not.toHaveBeenCalled();
   });
@@ -275,7 +280,12 @@ describe("extract_chart_data_vlm tool", () => {
 
     const result = await tool.execute({ source_path: "source_assets/figures/chart.png" });
 
-    expect(JSON.parse(result.content)).toMatchObject({ status: "error" });
+    expect(JSON.parse(result.content)).toMatchObject({
+      status: "error",
+      code: "permission_denied",
+      retryable: false,
+    });
+    expect(result.isError).toBe(true);
     expect(result.content).toMatch(/rejected/i);
     expect(executor).not.toHaveBeenCalled();
   });
