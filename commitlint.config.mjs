@@ -15,7 +15,7 @@ export default {
         "header-pattern": (parsed) => {
           const { header } = parsed;
           if (!header) return [true];
-          const ok = /^(?:\[[A-Z][A-Z0-9-]*\]\s+)?(?:build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(?:\([\w-]+\))?!?:\s+.+$/.test(header);
+          const ok = /^(?:\[[A-Z][A-Z0-9-]*\]\s+)?(?:build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test|merge)(?:\([\w-]+\))?!?:\s+.+$/.test(header);
           return [
             ok,
             "header must be conventional: [TASK-XXX] type(scope): subject",
