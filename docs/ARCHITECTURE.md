@@ -34,6 +34,7 @@
 | §1-§3 | 产品定义 / 架构总览 / 核心抽象 | 本文 |
 | §4-§8, §20 | 可信执行内核 / 执行模型 / 职责边界 / 来源能力 / 字段映射 / 代码评审检查表 | [architecture/dataset-execution.md](architecture/dataset-execution.md) |
 | §9-§13 | 运行状态 / Validation / 置信度 / 溯源 / 缓存 | [architecture/result-validation.md](architecture/result-validation.md) |
+| §13A | Canonical Evidence Product Layer（语义产品层） | [architecture/canonical-evidence.md](architecture/canonical-evidence.md) |
 | §14-§15 | Durable Runtime / API 面 | [architecture/runtime-events.md](architecture/runtime-events.md) |
 | §16-§17 | Skill 仓库与 Subagent / 前端架构 | [architecture/agent-frontend.md](architecture/agent-frontend.md) |
 | §18, §21-§23, 附录 A | 迁移历史 / Demo 决策 / 待决问题 / 非目标 / 被否决方案 | [architecture/roadmap.md](architecture/roadmap.md) |
