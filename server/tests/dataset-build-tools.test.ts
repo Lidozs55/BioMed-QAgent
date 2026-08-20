@@ -202,7 +202,72 @@ describe("Pi DatasetBuild tools", () => {
       toolCallId: "call_execute",
       metadataFiles: { binding_gdc: "source_assets/series.soft" },
     }));
-    expect(result).toMatchObject({ isError: true, details: { code: "no_data" } });
+    expect(result).toMatchObject({
+      isError: true,
+      details: { code: "no_data", retryable: false },
+    });
+  });
+
+  test("preserves Core retryability and classifies thrown tool errors", async () => {
+    const retryableExecute = vi.fn(async (): Promise<DatasetBridgeResponse> => ({
+      version: 1,
+      request_id: "request_execute",
+      ok: false,
+      data: null,
+      error: {
+        code: "core_execution_error",
+        message: "temporary provider failure",
+        retryable: true,
+        details: { category: "network" },
+      },
+    }));
+    const [, tool] = createDatasetBuildTools({
+      client: {
+        validate: async () => ({
+          version: 1,
+          request_id: "request_validate",
+          ok: true,
+          data: { valid: true, reason_codes: [], reasons: [] },
+          error: null,
+        }),
+        execute: retryableExecute,
+      },
+      taskId: "task_tool",
+      taskRoot: await toolTaskRoot(),
+      runId: () => "run_tool",
+      piSessionId: () => "pi_tool",
+    });
+
+    const result = await tool!.execute({
+      spec,
+      source_files: { binding_gdc: "source_assets/input.tsv" },
+      mapping_files: {},
+    });
+    expect(result).toMatchObject({
+      isError: true,
+      details: {
+        code: "core_execution_error",
+        retryable: true,
+        category: "network",
+      },
+    });
+
+    const invalidTool = createDatasetBuildTools({
+      client: {
+        validate: async () => {
+          throw new TypeError("malformed spec");
+        },
+        execute: retryableExecute,
+      },
+      taskId: "task_tool",
+      taskRoot: await toolTaskRoot(),
+      runId: () => "run_tool",
+      piSessionId: () => "pi_tool",
+    })[0]!;
+    await expect(invalidTool.execute({ spec })).resolves.toMatchObject({
+      isError: true,
+      details: { code: "invalid_input", retryable: false },
+    });
   });
 
   test("acquires missing source bindings after validation and preserves explicit files", async () => {

@@ -97,6 +97,13 @@ describe("Workspace project tools", () => {
       isError: false,
       details: { policy: "allowed", exitCode: 0 },
     });
+    await expect(exec?.execute({
+      executable: process.execPath,
+      args: ["-e", "process.stderr.write('failed'); process.exit(3)"],
+    })).resolves.toMatchObject({
+      isError: true,
+      details: { policy: "allowed", exitCode: 3, stderr: "failed" },
+    });
     expect(JSON.stringify(tools)).not.toContain("@earendil-works");
   });
 });
