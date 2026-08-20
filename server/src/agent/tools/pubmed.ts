@@ -39,6 +39,7 @@ import {
 } from "../../external/publication/publication-fallback.js";
 import type { BioMedAgentTool } from "../contracts.js";
 import { noopHooks, createDownloadProgressReporter, type ToolHooks } from "./tool-hooks.js";
+import { errorResult } from "./result.js";
 
 export const SEARCH_PUBMED_TOOL_NAME = "search_pubmed";
 export const DOWNLOAD_SUPPLEMENTARY_TOOL_NAME = "download_supplementary";
@@ -283,10 +284,7 @@ function searchPubmedTool(deps: PubmedServiceDeps): BioMedAgentTool {
         const payload = await searchPubmedAdapter(record.query, maxResults, deps, signal);
         return { content: JSON.stringify(payload) };
       } catch (error) {
-        return {
-          content: JSON.stringify({ error: error instanceof Error ? error.message : String(error) }),
-          isError: true,
-        };
+        return errorResult(error);
       }
     },
   };
@@ -329,10 +327,7 @@ function downloadSupplementaryTool(deps: PubmedServiceDeps): BioMedAgentTool {
         const payload = await downloadSupplementaryAdapter(record.pmid, maxSizeMb, deps, signal);
         return { content: JSON.stringify(payload) };
       } catch (error) {
-        return {
-          content: JSON.stringify({ error: error instanceof Error ? error.message : String(error) }),
-          isError: true,
-        };
+        return errorResult(error);
       }
     },
   };

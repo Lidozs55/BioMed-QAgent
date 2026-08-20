@@ -447,12 +447,16 @@ export function createListGeoSupplementaryFilesTool(
           }),
         };
       } catch (error) {
+        const failure = errorResult(error);
         return {
           content: JSON.stringify({
             source: "geo",
             accession,
             error: error instanceof Error ? error.message : String(error),
+            ...(failure.details as object),
           }),
+          details: failure.details,
+          isError: true,
         };
       }
     },
@@ -578,12 +582,16 @@ export function createDownloadGeoTool(options: GeoToolsOptions): BioMedAgentTool
         }
         return { content: JSON.stringify(payload) };
       } catch (error) {
+        const failure = errorResult(error);
         return {
           content: JSON.stringify({
             source: "geo",
             accession,
             error: error instanceof Error ? error.message : String(error),
+            ...(failure.details as object),
           }),
+          details: failure.details,
+          isError: true,
         };
       }
     },
@@ -701,12 +709,16 @@ export function createDownloadGeoPlatformAnnotationTool(
         }
         return { content: JSON.stringify(payload) };
       } catch (error) {
+        const failure = errorResult(error);
         return {
           content: JSON.stringify({
             source: "geo",
             platform: gpl,
             error: error instanceof Error ? error.message : String(error),
+            ...(failure.details as object),
           }),
+          details: failure.details,
+          isError: true,
         };
       }
     },
