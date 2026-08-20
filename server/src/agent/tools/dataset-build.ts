@@ -83,14 +83,15 @@ function registeredSourceAssetIds(sourceFiles: Record<string, string>): string[]
   return [...new Set(Object.values(sourceFiles).filter((reference) => REGISTERED_ASSET_ID.test(reference)))].sort();
 }
 
-function assertKnownSourceBindings(
+function assertKnownBindings(
   spec: DatasetBuildSpec,
-  sourceFiles: Record<string, string>,
+  references: Record<string, string>,
+  field: "source_files" | "mapping_files" | "metadata_files",
 ): void {
   const bindingIds = new Set(spec.source_bindings.map((binding) => binding.binding_id));
-  const unknown = Object.keys(sourceFiles).filter((bindingId) => !bindingIds.has(bindingId));
+  const unknown = Object.keys(references).filter((bindingId) => !bindingIds.has(bindingId));
   if (unknown.length > 0) {
-    throw new TypeError(`source_files contains unknown binding IDs: ${unknown.sort().join(", ")}`);
+    throw new TypeError(`${field} contains unknown binding IDs: ${unknown.sort().join(", ")}`);
   }
 }
 
@@ -375,10 +376,22 @@ export function createDatasetBuildTools(
   options: DatasetBuildToolOptions,
 ): BioMedAgentTool[] {
   const specSchema = datasetBuildSpecSchema();
-  const mappingSchema = {
+  const sourceFilesSchema = {
     type: "object",
     description:
-      "Map each spec binding_id to asset.relative_path (a task-relative source path), or a strict asset_<64hex> ID whose task-owned source_assets directory contains exactly one file.",
+      "Optional map from spec binding_id to a task-owned asset reference. Omit a binding to use its registered Core acquisition provider. Values are asset.relative_path or strict asset_<64hex> IDs.",
+    additionalProperties: { type: "string", minLength: 1 },
+  } as const;
+  const mappingFilesSchema = {
+    type: "object",
+    description:
+      "Optional map from spec binding_id to a separately registered annotation/mapping asset. Omit unless the selected adapter requires one; do not repeat source_files here.",
+    additionalProperties: { type: "string", minLength: 1 },
+  } as const;
+  const metadataFilesSchema = {
+    type: "object",
+    description:
+      "Optional map from spec binding_id to an explicit metadata asset consumed by the selected adapter (for example repository sample metadata). Omit when not required.",
     additionalProperties: { type: "string", minLength: 1 },
   } as const;
   return [
@@ -429,11 +442,11 @@ export function createDatasetBuildTools(
         type: "object",
         properties: {
           spec: specSchema,
-          source_files: mappingSchema,
-          mapping_files: mappingSchema,
-          metadata_files: mappingSchema,
+          source_files: sourceFilesSchema,
+          mapping_files: mappingFilesSchema,
+          metadata_files: metadataFilesSchema,
         },
-        required: ["spec", "mapping_files"],
+        required: ["spec"],
         additionalProperties: false,
       },
       async execute(value, signal, context) {
@@ -461,7 +474,11 @@ export function createDatasetBuildTools(
           }
           options.onBuildResult?.(null);
           const sourceFiles = mappingArgument(args, "source_files", true);
-          assertKnownSourceBindings(spec, sourceFiles);
+          assertKnownBindings(spec, sourceFiles, "source_files");
+          const mappingFiles = mappingArgument(args, "mapping_files", true);
+          assertKnownBindings(spec, mappingFiles, "mapping_files");
+          const metadataFiles = mappingArgument(args, "metadata_files", true);
+          assertKnownBindings(spec, metadataFiles, "metadata_files");
           for (const binding of spec.source_bindings) {
             if (sourceFiles[binding.binding_id] !== undefined) continue;
             if (options.client.acquire === undefined) {
@@ -473,10 +490,6 @@ export function createDatasetBuildTools(
             });
             sourceFiles[binding.binding_id] = acquired.sourceAsset.asset_id;
           }
-          const mappingFiles = mappingArgument(args, "mapping_files");
-          const metadataFiles = args.metadata_files === undefined
-            ? {}
-            : mappingArgument(args, "metadata_files");
           // The continuation record is the deterministic resume contract:
           // a later restart replays the exact same invocation (same spec and
           // asset references) onto the original run without asking the model.

@@ -156,10 +156,18 @@ describe("Pi DatasetBuild tools", () => {
 
     const executeParameters = executeTool!.parameters as {
       properties: Record<string, Record<string, unknown>>;
+      required: string[];
     };
     expect(executeParameters.properties.source_files.description).toContain(
       "asset.relative_path",
     );
+    expect(executeParameters.properties.source_files.description).toContain(
+      "Core acquisition provider",
+    );
+    expect(executeParameters.properties.mapping_files.description).toContain(
+      "Optional",
+    );
+    expect(executeParameters.required).toEqual(["spec"]);
   });
 
   test("validates before execute and propagates the Pi AbortSignal", async () => {
@@ -522,6 +530,33 @@ describe("Pi DatasetBuild tools", () => {
 
     expect(onPublication).toHaveBeenCalledOnce();
     expect(onPublication).toHaveBeenCalledWith(response.data);
+  });
+
+  test("rejects unknown mapping and metadata bindings before acquisition or execution", async () => {
+    const validate = vi.fn(async (): Promise<DatasetBridgeResponse> => ({
+      version: 1, request_id: "request_validate", ok: true,
+      data: { valid: true, reason_codes: [], reasons: [] }, error: null,
+    }));
+    const acquire = vi.fn();
+    const execute = vi.fn();
+    const tools = createDatasetBuildTools({
+      client: { validate, acquire, execute },
+      taskId: "task_tool",
+      taskRoot: await toolTaskRoot(),
+      runId: () => "run_tool",
+      piSessionId: () => "pi_tool",
+    });
+
+    for (const [field, value] of [
+      ["mapping_files", { unknown_binding: "source_assets/unknown.tsv" }],
+      ["metadata_files", { unknown_binding: "source_assets/unknown.tsv" }],
+    ] as const) {
+      const result = await tools[1]!.execute({ spec, [field]: value });
+      expect(result).toMatchObject({ isError: true, details: { code: "invalid_input" } });
+      expect(result.content).toContain(`${field} contains unknown binding IDs`);
+    }
+    expect(acquire).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
   });
 
   test("persists a continuation record before handing the build to the core", async () => {
