@@ -56,6 +56,8 @@ Validator、Compatibility Gate、Validation Profile 或 Publisher。Agent-facing
 不得在工具适配层丢失；相同输入只能在明确可重试且外部条件可能已变化时重试。
 工具返回给模型的 `content` 必须是有界且合法的结构化摘要；完整内核响应保留在
 `details`/durable evidence 中，不能通过字符切片破坏 JSON 或丢失 publication 状态。
+业务工具的共享失败形状为 `{ error, code, retryable, status_code? }`；只有底层错误
+明确携带 `retryable` 时才允许透传 true，普通参数/解析异常默认不可重试。
 权限或 evidence-bound HIL 挂起的可信调用必须等待原调用恢复，不能以 workspace
 脚本产物替代。
 
