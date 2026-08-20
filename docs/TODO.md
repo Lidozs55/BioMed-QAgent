@@ -51,12 +51,16 @@
 
 ### P0
 
-- [ ] **P0 / E1-E5** Gold evaluator 诊断闭环：先冻结 versioned diagnostic
-      report/finding contracts 和 generic fixtures，再加载现有 run evidence、构造
-      evaluator-only semantic requirements、按 discovery/trusted_input/contract/
-      assembly/validation/publication/reproducibility/evaluator 边界输出确定性报告。
-      不修改 Gold prompt、source inventory、runtime defaults、acceptance threshold；
-      Gold6 的真实 HIL 仍为 blocked。执行计划见
+- [x] **P0 / E1-E4 completed** Gold evaluator diagnostic foundation：已冻结
+      versioned diagnostic report/finding contracts，完成只读 run evidence inventory、
+      evaluator-only reference requirements parser，以及按
+      discovery/trusted_input/contract/assembly/validation/publication/
+      reproducibility/evaluator 边界选择 primary blocker 的纯诊断引擎。当前不修改
+      Gold prompt、source inventory、runtime defaults、acceptance threshold；历史
+      evidence 不替代同 commit 证据，Gold6 的真实 HIL 仍为 blocked。
+- [ ] **P0 / E5** 在不重跑外部获取的前提下，对现有 evidence inventory 生成六例
+      baseline diagnostic matrix，汇总 failure boundary/finding code 和证据缺口，
+      再选择最小 Agent → Dataset → Publication repair slice。执行计划见
       [2026-08-20-gold-evaluator-near-term-plan.md](plans/2026-08-20-gold-evaluator-near-term-plan.md)。
 
 > TASK-047/048 的 work package、硬依赖、分支边界和逐项验收统一见
