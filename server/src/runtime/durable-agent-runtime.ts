@@ -291,6 +291,7 @@ export async function createDurableAgentRuntime(
 
   const hilStore = new DurableHILStore(repository);
   const hilRecoveries = await hilStore.reconcileTaskTimeline();
+  await repository.rejectOrphanedPermissionRequests();
   await repository.recoverActiveRuns(new Set(
     hilRecoveries.map((recovery) => `${recovery.task_id}:${recovery.run_id}`),
   ));

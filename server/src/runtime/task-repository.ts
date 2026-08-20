@@ -335,6 +335,42 @@ export class DurableTaskRepository {
       .slice(0, limit);
   }
 
+  /**
+   * A workspace permission promise is intentionally in-memory and cannot be
+   * resumed after a host restart. Reconcile its durable request before active
+   * runs are recovered so the timeline is truthful and the old request cannot
+   * be approved against a missing broker.
+   */
+  async rejectOrphanedPermissionRequests(): Promise<number> {
+    await mkdir(this.tasksRoot, { recursive: true });
+    const rejected: Array<{ taskId: string; runId: string; requestId: string }> = [];
+    const entries = await readdir(this.tasksRoot, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !SAFE_ID.test(entry.name)) continue;
+      const events = await this.readAllEvents(entry.name);
+      const pending = new Map<string, string>();
+      for (const event of events) {
+        if (event.payload.type === "permission_requested" && event.run_id !== null) {
+          pending.set(event.payload.request_id, event.run_id);
+        } else if (event.payload.type === "permission_resolved") {
+          pending.delete(event.payload.request_id);
+        }
+      }
+      for (const [requestId, runId] of pending) {
+        rejected.push({ taskId: entry.name, runId, requestId });
+      }
+    }
+    for (const request of rejected) {
+      await this.appendRunEvent(request.taskId, request.runId, {
+        type: "permission_resolved",
+        request_id: request.requestId,
+        decision: "deny",
+        grant_scope: null,
+      });
+    }
+    return rejected.length;
+  }
+
   async recoverActiveRuns(preservedRunKeys: ReadonlySet<string> = new Set()): Promise<void> {
     await mkdir(this.tasksRoot, { recursive: true });
     const entries = await readdir(this.tasksRoot, { withFileTypes: true });

@@ -184,7 +184,11 @@ policy:     allow | ask | deny
   via `POST /api/v1/tasks/{taskId}/runs/{runId}/permissions/{requestId}`. The
   resolve is bound to the URL runId (pending entries are keyed by runId and
   then verified against requestId), so an old runId cannot approve a live
-  request.
+  request. Permission promises are intentionally not restartable: on Application
+  Host startup, any durable `permission_requested` without a matching
+  `permission_resolved` is reconciled as a durable `deny` before active runs
+  are interrupted. This fail-closed reconciliation prevents an approval card
+  from targeting a broker that no longer exists.
 - `process.exec` is an independent high-risk capability; command-string
   analysis is forbidden. Runtime controls (timeout, output limits, cancel,
   process-tree cleanup, audit) remain, and the OS-account warning is shown in
