@@ -1,4 +1,4 @@
-import type { BuildResult, DatasetBuildSpec } from "./dataset-build.js";
+import type { BuildResult, DatasetBuildSpec, DatasetPublication } from "./dataset-build.js";
 import type { JsonValue } from "./json.js";
 
 export const DATASET_BRIDGE_VERSION = 1 as const;
@@ -51,16 +51,21 @@ export interface DatasetBridgeManifestReference {
 export interface DatasetBridgeArtifactReference {
   build_id: string;
   artifact_id: string;
+  name: string;
   role: string;
+  relative_path: string;
   media_type: string;
   size_bytes: number;
   sha256: string;
+  generated_by_step_id: string;
 }
 
 export interface DatasetBridgeBuildData {
   build_id: string;
   build_result: BuildResult;
   publication_id: string | null;
+  /** Core-owned publication receipt when the publish operation completed. */
+  publication?: DatasetPublication | null;
   manifest: DatasetBridgeManifestReference | null;
   artifacts: DatasetBridgeArtifactReference[];
   validation_summary: Record<string, JsonValue> | null;
@@ -308,11 +313,14 @@ function parseArtifacts(value: unknown): DatasetBridgeArtifactReference[] {
   if (!Array.isArray(value)) throw new TypeError("artifacts must be an array");
   for (const raw of value) {
     const artifact = record(raw, "artifact reference");
-    exact(artifact, ["build_id", "artifact_id", "role", "media_type", "size_bytes", "sha256"], "artifact reference");
+    exact(artifact, ["build_id", "artifact_id", "name", "role", "relative_path", "media_type", "size_bytes", "sha256", "generated_by_step_id"], "artifact reference");
     safeId(artifact.build_id, "artifact.build_id");
     safeId(artifact.artifact_id, "artifact.artifact_id");
+    requiredString(artifact.name, "artifact.name");
     requiredString(artifact.role, "artifact.role");
+    requiredString(artifact.relative_path, "artifact.relative_path");
     requiredString(artifact.media_type, "artifact.media_type");
+    requiredString(artifact.generated_by_step_id, "artifact.generated_by_step_id");
     if (!Number.isInteger(artifact.size_bytes) || Number(artifact.size_bytes) < 0) throw new TypeError("artifact.size_bytes is invalid");
     if (typeof artifact.sha256 !== "string" || !SHA256.test(artifact.sha256)) throw new TypeError("artifact.sha256 is invalid");
   }
@@ -321,10 +329,25 @@ function parseArtifacts(value: unknown): DatasetBridgeArtifactReference[] {
 
 function parseBuildData(value: unknown): DatasetBridgeBuildData {
   const data = record(value, "build data");
-  exact(data, ["build_id", "build_result", "publication_id", "manifest", "artifacts", "validation_summary", "registeredSourceAssetIds"], "build data");
+  exact(data, ["build_id", "build_result", "publication_id", "publication", "manifest", "artifacts", "validation_summary", "registeredSourceAssetIds"], "build data");
   safeId(data.build_id, "build_id");
   parseBuildResult(data.build_result);
   if (data.publication_id !== null) safeId(data.publication_id, "publication_id");
+  if (data.publication !== undefined && data.publication !== null) {
+    const publication = record(data.publication, "publication");
+    requiredString(publication.publication_id, "publication.publication_id");
+    requiredString(publication.manifest_ref, "publication.manifest_ref");
+    requiredString(publication.validation_result_ref, "publication.validation_result_ref");
+    requiredString(publication.published_at, "publication.published_at");
+    if (publication.supersedes_publication_id !== null && publication.supersedes_publication_id !== undefined) {
+      requiredString(publication.supersedes_publication_id, "publication.supersedes_publication_id");
+    }
+    if (publication.manifest_sha256 !== undefined) {
+      if (typeof publication.manifest_sha256 !== "string" || !SHA256.test(publication.manifest_sha256)) {
+        throw new TypeError("publication.manifest_sha256 is invalid");
+      }
+    }
+  }
   if (data.manifest !== null) parseManifestReference(data.manifest);
   parseArtifacts(data.artifacts);
   if (data.validation_summary !== null && !jsonValue(data.validation_summary)) throw new TypeError("validation_summary must be JSON");

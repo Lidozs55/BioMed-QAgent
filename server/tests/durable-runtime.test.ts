@@ -238,6 +238,56 @@ describe("DurableTaskRepository", () => {
     expect((await recovered.listEvents(accepted.task_id, 0)).at(-1)?.type).toBe("run_interrupted");
   });
 
+  test("projects Core publication events once into the task snapshot", async () => {
+    const repo = await repository();
+    const accepted = await repo.createTask({
+      requestId: "request-publication-projection",
+      input: "publish a dataset",
+      databases: [],
+      mode: "agent",
+    });
+    await repo.appendRunEvent(accepted.task_id, accepted.run_id, { type: "run_started" });
+    const publication = {
+      type: "publication_created" as const,
+      publication_id: "pub_build_receipt",
+      run_id: accepted.run_id,
+      manifest_sha256: "a".repeat(64),
+      supersedes_publication_id: null,
+      published_at: "2026-08-20T00:00:00.000Z",
+    };
+    await repo.appendRunEvent(accepted.task_id, accepted.run_id, publication);
+    await repo.appendRunEvent(accepted.task_id, accepted.run_id, publication);
+    const artifact = {
+      type: "artifact_produced" as const,
+      artifact: {
+        artifact_id: "artifact_projection",
+        name: "dataset.csv",
+        role: "primary_dataset",
+        relative_path: "tables/dataset.csv",
+        media_type: "text/csv",
+        size_bytes: 12,
+        sha256: "b".repeat(64),
+        generated_by_step_id: "step_dataset_core_publish",
+      },
+    };
+    await repo.appendRunEvent(accepted.task_id, accepted.run_id, artifact);
+    await repo.appendRunEvent(accepted.task_id, accepted.run_id, artifact);
+    await repo.appendRunEvent(accepted.task_id, accepted.run_id, {
+      type: "run_completed",
+      build_result: null,
+    });
+
+    const snapshot = await repo.getSnapshot(accepted.task_id);
+    expect(snapshot?.current_publication_id).toBe("pub_build_receipt");
+    expect(snapshot?.task.artifact_count).toBe(1);
+    expect(snapshot?.publications).toEqual([{
+      publication_id: "pub_build_receipt",
+      manifest_sha256: "a".repeat(64),
+      supersedes_publication_id: null,
+      published_at: "2026-08-20T00:00:00.000Z",
+    }]);
+  });
+
   test("makes request admission idempotent and rejects semantic request-id reuse", async () => {
     const repo = await repository();
     const input = {

@@ -405,6 +405,37 @@ export async function createPhase3Runtime(
         onBuildResult: (result) => {
           buildResult = result;
         },
+        onPublication: async (data) => {
+          const publication = data.publication;
+          if (publication === undefined || publication === null) return;
+          const manifestSha256 = publication.manifest_sha256 ?? data.manifest?.sha256;
+          if (manifestSha256 === undefined) {
+            throw new Error("published dataset response is missing a manifest receipt");
+          }
+          await recordRunEvent({
+            type: "publication_created",
+            publication_id: publication.publication_id,
+            run_id: currentRunId,
+            manifest_sha256: manifestSha256,
+            supersedes_publication_id: publication.supersedes_publication_id,
+            published_at: publication.published_at,
+          });
+          for (const artifact of data.artifacts) {
+            await recordRunEvent({
+              type: "artifact_produced",
+              artifact: {
+                artifact_id: artifact.artifact_id,
+                name: artifact.name,
+                role: artifact.role,
+                relative_path: artifact.relative_path,
+                media_type: artifact.media_type,
+                size_bytes: artifact.size_bytes,
+                sha256: artifact.sha256,
+                generated_by_step_id: artifact.generated_by_step_id,
+              },
+            });
+          }
+        },
       });
       // Import tasks (user-uploaded files): restore the LLM cleaning flow —
       // inspect the uploaded files and commit the cleaned raw files into the

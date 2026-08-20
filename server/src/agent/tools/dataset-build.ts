@@ -4,6 +4,7 @@ import type {
   BuildResult,
   CoreAcquisitionRequest,
   DatasetBridgeResponse,
+  DatasetBridgeBuildData,
   DatasetBuildSpec,
 } from "@biomed/contracts";
 
@@ -48,6 +49,7 @@ export interface DatasetBuildToolOptions {
   piSessionId: () => string;
   onDiagnostic?: (diagnostic: DatasetBuildToolDiagnostic) => void;
   onBuildResult?: (result: BuildResult | null) => void;
+  onPublication?: (data: DatasetBridgeBuildData) => void | Promise<void>;
   now?: () => number;
 }
 
@@ -197,12 +199,17 @@ function caught(error: unknown): BioMedToolResult {
   };
 }
 
-function captureBuildResult(
+async function captureBuildResult(
   options: DatasetBuildToolOptions,
   response: DatasetBridgeResponse,
-): void {
+): Promise<void> {
   if (response.ok) {
-    if ("build_result" in response.data) options.onBuildResult?.(response.data.build_result);
+    if ("build_result" in response.data) {
+      options.onBuildResult?.(response.data.build_result);
+      if (response.data.publication !== undefined && response.data.publication !== null) {
+        await options.onPublication?.(response.data);
+      }
+    }
     return;
   }
   if (response.error.details.build_result !== undefined) {
@@ -499,7 +506,7 @@ export function createDatasetBuildTools(
             mappingFiles,
             metadataFiles,
           });
-          captureBuildResult(options, response);
+          await captureBuildResult(options, response);
           diagnostic(
             options,
             "execute_dataset_build",

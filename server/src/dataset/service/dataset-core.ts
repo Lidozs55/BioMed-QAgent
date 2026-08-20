@@ -515,6 +515,7 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
         build_id: record.build_id,
         build_result: buildResultFrom(record),
         publication_id: record.publication_id,
+        publication: record.publication ?? null,
         manifest: manifest === null ? null : {
           build_id: manifest.build_id,
           manifest_id: manifest.manifest_id,
@@ -523,10 +524,13 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
         artifacts: manifest === null ? [] : manifest.artifacts.map((entry) => ({
           build_id: manifest.build_id,
           artifact_id: entry.artifact_id,
+          name: path.posix.basename(entry.relative_path),
           role: entry.role,
+          relative_path: entry.relative_path,
           media_type: entry.media_type,
           size_bytes: entry.size_bytes,
           sha256: entry.sha256,
+          generated_by_step_id: "step_dataset_core_publish",
         })),
         validation_summary: record.validation === null ? null : {
           status: record.validation.status,

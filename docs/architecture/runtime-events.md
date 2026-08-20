@@ -51,7 +51,10 @@ Build terminal event 证明。`request_digest`、lease attempt、取消 request/
 - Task / Pipeline 类：`task_created`、`plan_ready`、`user_input_required /
   resumed`、`stage_*`（仅回放保留）、`tool_called` / `tool_completed`、
   `warning`、`artifact_produced`、`task_cancel_requested` / `task_cancelled`、
-  `task_recovered`、`task_completed` / `task_failed`；
+  `task_recovered`、`task_completed` / `task_failed`；Dataset Core 成功响应中的
+  Core-owned publication receipt 和 manifest artifact receipts 由 Host 原样投影为
+  `publication_created` / `artifact_produced`，不通过扫描 workspace 或猜测文件名；
+  reducer 按 publication/artifact ID 幂等去重。
 - Run 类：`run_queued` / `run_started` / `run_finalizing` / `run_completed` /
   `run_failed` / `run_cancel_requested` / `run_cancelled` / `run_interrupted`、
   `publication_created`、`assistant_delta` / `assistant_reasoning_delta`、
