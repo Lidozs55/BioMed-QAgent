@@ -418,7 +418,7 @@ CSV、JSONL 或 Parquet 的选择需考虑可读性、规模和查询效率。
 
 ## 26. 文档治理建议
 
-当前 `ARCHITECTURE.md`、`architecture/cache-design.md`、`RESEARCH_SYSTEM_REVIEW` 和 Confidence Survey 中部分结论基于旧方向。建议：
+当前 `ARCHITECTURE.md`、`../archive/cache-design-2026-08.md`、`RESEARCH_SYSTEM_REVIEW` 和 Confidence Survey 中部分结论基于旧方向。建议：
 
 1. 将本文件作为顶层 ADR 索引；
 2. 将重构设计文档作为 V2 实现规格；

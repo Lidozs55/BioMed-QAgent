@@ -213,7 +213,7 @@
       本地数据源导入经 `server/src/agent/tools/import-tools.ts`
       （`list_source_assets` / `read_source_asset` / `commit_to_cache`，
       `user_import` 命名空间）注册。相应缓存管理 API 与前端设置页见
-      `architecture/cache-design.md` §13。
+      `archive/cache-design-2026-08.md` §13。
 - [ ] **P1** AI 用户支持：编写一份面向 AI 用户的调用文档及配套脚本（服务启动 +
       HTTP/WS 驱动封装），方便其他 agent 调用本项目。
 

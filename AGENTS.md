@@ -66,6 +66,22 @@ Before starting any task, consult:
 - [PROBLEM.md](PROBLEM.md) — competition background and evaluation criteria.
 - [docs/TODO.md](docs/TODO.md) — current development tasks and approved decisions.
 
+### Context budget: what to load, what to skip
+
+- **Current sources only**: `docs/ARCHITECTURE.md` + `docs/architecture/*` +`r
+  `docs/adr/README.md` (then the matching `docs/adr/NNN-*.md` as needed),`r
+  `docs/FEATURES.md`, `docs/DEVELOPER_QUICKSTART.md`, `docs/TODO.md`,`r
+  `docs/ISSUES.md`, `README.md`, `AGENTS.md`, `.pi/skills/*/SKILL.md`.
+- **Do not load as current evidence**: `docs/archive/**` and `docs/migration/**` are
+  historical records (retired Python runtime, Phase 0-8 migration, past reviews and
+  plans). Read them only when a task explicitly needs history; never treat them as
+  current behavior.
+- **Prefer topic files over whole indexes**: for a specific boundary read the matching
+  `docs/adr/NNN-*.md` and `docs/architecture/*.md` chapter instead of loading the
+  whole `ARCHITECTURE.md`.
+- When searching, `rg` the narrowest directory (e.g. `server/src/dataset/`) before
+  opening large docs.
+
 ## Common Commands
 
 ### Normal development (cwd: repository root)
