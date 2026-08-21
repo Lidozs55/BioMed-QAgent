@@ -72,7 +72,7 @@
 | `docs/code-audit-jscpd.md` | `docs/audit/code-audit-jscpd.md` |
 | `docs/BioMed-QAgent_Architecture_Decisions_and_Lessons.md` | 拆分：`docs/adr/001-*` ~ `016-*` + `docs/adr/legacy-decisions-and-lessons.md` |
 | `docs/BioMed-QAgent_Pipeline_Refactor_Design.md` | `docs/archive/BioMed-QAgent_Pipeline_Refactor_Design.md`（历史设计） |
-| `.claude/skills/shadcn/` | 已删除；同等内容在 `.agents/skills/shadcn/`（git 历史可恢复） |
+| `.claude/skills/shadcn/` 与 `.agents/skills/shadcn/` | **保留（框架适配副本，非冗余）**：`.agents/` 供 Codex/OpenAI agent，`.claude/` 供 Claude Code；内容一致，各框架各读各的，勿当作重复清理 |
 | `.superpowers/` | 已删除（历史生成报告，git 历史可恢复） |
 | `audit-results/` | 已删除（一次性审计快照，git 历史可恢复） |
 | `assets/logo/*-v2..v5` | 已删除（被替代版本，git 历史可恢复） |
