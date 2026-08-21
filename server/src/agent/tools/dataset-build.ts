@@ -61,7 +61,20 @@ function object(value: unknown): Record<string, unknown> {
 }
 
 function specArgument(value: Record<string, unknown>): DatasetBuildSpec {
-  return parseDatasetBuildSpec(value.spec);
+  const spec = value.spec;
+  if (typeof spec === "string") {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(spec);
+    } catch (error) {
+      throw new TypeError(
+        `spec must be a DatasetBuildSpec object or a JSON-encoded string: ${(error as Error).message}`,
+        { cause: error },
+      );
+    }
+    return parseDatasetBuildSpec(parsed);
+  }
+  return parseDatasetBuildSpec(spec);
 }
 
 function mappingArgument(
@@ -424,7 +437,14 @@ function datasetBuildSpecSchema(): object {
 export function createDatasetBuildTools(
   options: DatasetBuildToolOptions,
 ): BioMedAgentTool[] {
-  const specSchema = datasetBuildSpecSchema();
+  const specSchema = {
+    anyOf: [
+      datasetBuildSpecSchema(),
+      { type: "string", minLength: 1 },
+    ],
+    description:
+      "Frozen DatasetBuildSpec. Pass it as a JSON object, or as a JSON-encoded string for compatibility with clients that serialize nested arguments.",
+  } as const;
   const sourceFilesSchema = {
     type: "object",
     description:

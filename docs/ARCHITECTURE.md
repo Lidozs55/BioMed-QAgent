@@ -10,7 +10,8 @@
 >   "为什么"由 ADR 索引（[BioMed-QAgent_Architecture_Decisions_and_Lessons.md](BioMed-QAgent_Architecture_Decisions_and_Lessons.md)；
 >   [ADR-017 及后续记录](adr/README.md)）承担；实现规格由
 >   [BioMed-QAgent_Pipeline_Refactor_Design.md](BioMed-QAgent_Pipeline_Refactor_Design.md)
->   承担；执行任务由 [TODO.md](TODO.md) 承担。三者不互相复制。
+>   承担；执行任务由 [TODO.md](TODO.md) 承担；**功能/能力现状（能做什么，面向
+>   汇报）由 [FEATURES.md](FEATURES.md) 承担**。各文档不互相复制。
 > - **实现状态**：迁移 Phase 0-9 全部完成（2026-08-16）；当前处于 Phase 4 Gold
 >   审计向 Phase 5 hardening/release 过渡的系统收敛阶段。唯一正式拓扑为
 >   TypeScript Host 权威实现 formal `/api/v1`、durable Task/Run/Event、模型设置、
@@ -21,12 +22,18 @@
 > - **验证与失效**：每个里程碑、每次新增/修订 ADR、数据族接入或执行模型变化
 >   时对照本文校验一致性；与代码现状矛盾且未标注待落地、或被新 ADR 推翻而未
 >   同步修订时，本文标记为 `stale`。
-> - **最后验证（Last Verified）**：2026-08-18。
+> - **最后验证（Last Verified）**：2026-08-21。
 > - **交叉引用约定**：本文档章节写作 `§N`；引用 ADR 索引的章节写作 `ADR §N`。
 
 ---
 
 ## 文档地图
+
+除下表按章节拆分外，另设**功能/能力全景**文档：面向汇报与不了解系统的协作者，
+描述"系统能做什么"并映射赛题评价维度——见
+[FEATURES.md](FEATURES.md)（本节涉及的功能名词与其权威定义均立足本文，功能文档
+不重复解释契约与边界）。未来演进方向统一见
+[architecture/roadmap.md](architecture/roadmap.md)。
 
 章节编号在拆分后保持原样（如 §14.2 位于 runtime-events.md）。
 
@@ -353,6 +360,8 @@ supersedes_publication_id
 | 主题 | 权威文档 | 状态 |
 | --- | --- | --- |
 | 系统架构（是什么 / 怎么组织 / 约束） | `docs/ARCHITECTURE.md`（本文） | V2 目标，权威 |
+| 功能 / 能力全景（能做什么，面向汇报） | `docs/FEATURES.md` | 功能现状，权威（架构语义以本文为准） |
+| 未来演进方向（待决问题 / 非目标等） | `docs/architecture/roadmap.md` | 规划与已否决方案，权威 |
 | 架构决策（为什么） | `docs/BioMed-QAgent_Architecture_Decisions_and_Lessons.md` | ADR 索引，权威 |
 | 迁移架构决策（为什么） | `docs/adr/README.md` | ADR-017 起，权威 |
 | 迁移执行记录（historical） | `docs/migration/` | 已完成迁移（Phase 0-8）的执行记录，不反映当前系统 |

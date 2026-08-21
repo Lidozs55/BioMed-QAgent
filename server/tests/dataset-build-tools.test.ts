@@ -34,7 +34,10 @@ describe("Pi DatasetBuild tools", () => {
     const validateParameters = validateTool!.parameters as {
       properties: { spec: Record<string, unknown> };
     };
-    const expressionSchema = validateParameters.properties.spec as {
+    const specWrapper = validateParameters.properties.spec as {
+      anyOf: Array<Record<string, unknown>>;
+    };
+    const expressionSchema = specWrapper.anyOf[0] as {
       oneOf: Array<{
         additionalProperties?: boolean;
         required?: string[];
@@ -169,6 +172,7 @@ describe("Pi DatasetBuild tools", () => {
       "Optional",
     );
     expect(executeParameters.required).toEqual(["spec"]);
+    expect((specWrapper.anyOf[1] as Record<string, unknown>).type).toBe("string");
   });
 
   test("validates before execute and propagates the Pi AbortSignal", async () => {
@@ -216,6 +220,61 @@ describe("Pi DatasetBuild tools", () => {
       isError: true,
       details: { code: "no_data", retryable: false },
     });
+  });
+
+  test("accepts a JSON-encoded string spec (agent serialization slip)", async () => {
+    const validate = vi.fn(async (): Promise<DatasetBridgeResponse> => ({
+      version: 1, request_id: "request_validate", ok: true,
+      data: { valid: true, reason_codes: [], reasons: [] }, error: null,
+    }));
+    const [validateTool, executeTool] = createDatasetBuildTools({
+      client: { validate, execute: vi.fn() },
+      taskId: "task_tool",
+      taskRoot: await toolTaskRoot(),
+      runId: () => "run_tool",
+      piSessionId: () => "pi_tool",
+    });
+
+    const encodedSpec: string = JSON.stringify(spec);
+    const result = await validateTool!.execute(
+      { spec: encodedSpec },
+      new AbortController().signal,
+      { toolCallId: "call_validate_string" },
+    );
+
+    expect(result).toMatchObject({ isError: false });
+    expect(validate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: expect.objectContaining({
+          build_id: spec.build_id,
+          dataset_family: spec.dataset_family,
+        }),
+      }),
+    );
+    const executeParameters = executeTool!.parameters as {
+      properties: Record<string, Record<string, unknown>>;
+    };
+    expect(executeParameters.properties.spec).toMatchObject({
+      anyOf: [{ oneOf: expect.any(Array) }, { type: "string" }],
+    });
+  });
+
+  test("reports a clear error when the spec string is not valid JSON", async () => {
+    const [validateTool] = createDatasetBuildTools({
+      client: { validate: vi.fn(), execute: vi.fn() },
+      taskId: "task_tool",
+      taskRoot: await toolTaskRoot(),
+      runId: () => "run_tool",
+      piSessionId: () => "pi_tool",
+    });
+    const result = await validateTool!.execute(
+      { spec: "{not json" },
+      new AbortController().signal,
+      { toolCallId: "call_bad_string" },
+    );
+    expect(result).toMatchObject({ isError: true });
+    const text = JSON.stringify(result);
+    expect(text).toContain("JSON-encoded string");
   });
 
   test("preserves Core retryability and classifies thrown tool errors", async () => {
@@ -733,9 +792,12 @@ describe("Pi DatasetBuild tools", () => {
       runId: () => "run_tool",
       piSessionId: () => "pi_tool",
     });
-    const expressionSchema = (tools[0]!.parameters as {
+    const specWrapper = (tools[0]!.parameters as {
       properties?: Record<string, unknown>;
     }).properties?.spec as {
+      anyOf: Array<Record<string, unknown>>;
+    };
+    const expressionSchema = specWrapper.anyOf[0] as {
       oneOf: Array<{
         properties?: Record<string, Record<string, unknown>>;
         required?: string[];
@@ -752,6 +814,7 @@ describe("Pi DatasetBuild tools", () => {
       required: string[];
       additionalProperties: boolean;
     };
+    expect((specWrapper.anyOf[1] as Record<string, unknown>).type).toBe("string");
     const variants = expressionSchema.oneOf.flatMap((variant): SchemaVariant[] => {
       if (variant.oneOf !== undefined) return variant.oneOf;
       if (variant.properties === undefined || variant.required === undefined || variant.additionalProperties === undefined) return [];
