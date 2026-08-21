@@ -8,29 +8,35 @@
 ## Model catalog maintenance (verified 2026-08-11)
 
 - The **single source of truth** for model metadata (context window, max
-  output, capabilities, pricing, family) is
-  `backend/app/model_info/providers/*.py`. `qwen.py` contains only
-  DashScope-native Qwen models plus third-party model IDs actually served by
-  Alibaba Model Studio (`deepseek-v4-flash-0731`, `kimi/kimi-k3`, ...);
-  other vendors live in their own provider files.
-- `backend/app/model_config/catalog_qwen.py` and
-  `catalog_compatible.py` are **generated mirrors** of the warehouse — do not
-  edit them by hand. After changing any provider file, regenerate them with:
-  `backend/.venv/Scripts/python.exe backend/scripts/regenerate_model_info.py`.
+  output, capabilities, pricing, family) is now TypeScript:
+  `packages/contracts/src/model-registry.ts` (transport shapes) plus
+  `server/src/settings/model-registry/catalog.ts` (vendor presets and model
+  catalog). The legacy `backend/app/model_info/providers/*.py` was removed in
+  Phase 8; vendor presets (DashScope-native Qwen plus third-party IDs served
+  by Alibaba Model Studio, e.g. `deepseek-v4-flash-0731`, `kimi/kimi-k3`)
+  now live in the TS catalog.
+- The Python generated mirrors (`catalog_qwen.py`, `catalog_compatible.py`)
+  and `backend/scripts/regenerate_model_info.py` were removed with
+  `backend/` in Phase 8. The TS catalog is source-controlled directly:
+  update `server/src/settings/model-registry/catalog.ts` (or
+  `packages/contracts/src/model-registry.ts`) instead of regenerating.
 - Data was re-verified against official pages (OpenAI, DeepSeek, Alibaba
   Model Studio, Kimi, Zhipu, MiniMax, Groq, xAI, Mistral, Baichuan) and the
   relay-standard database models.dev on 2026-08-11.
 
 ## How the pieces fit
 
-- `GET /api/v1/vendors` serves quick-fill presets from
-  `app/model_info/vendors.py` — frontend has no hardcoded vendor list.
-- Parameter specs served per provider come from `profiles.py`
-  (`PROFILE_PROVIDER_SPECS`), with `FALLBACK_PARAM_SPECS` as the catch-all
-  ("所有参数均可选择、多余参数不报错").
-- Provider `/v1/models` discovery returns only `id` (+`owned_by`). Context
-  window / max output / capabilities are enriched from the local model
-  catalog (`app/model_info/providers/*`), not from the upstream response.
+- Vendor presets and quick-fill defaults come from
+  `server/src/settings/model-registry/catalog.ts`; the API surface is
+  `server/src/settings/model-registry/routes.ts` (`/api/v1/model-registry/*`).
+- Parameter specs are part of the provider/model shapes in
+  `packages/contracts/src/model-registry.ts`; runtime resolution (active
+  provider/model, context window, base URL, API key) is in
+  `server/src/settings/model-registry/model-resolution.ts`.
+- Provider `/v1/models` discovery returns only `id` (+`owned_by`); context
+  window / max output / capabilities are enriched from the local TS model
+  registry (`server/src/settings/model-registry/store.ts`), not from the
+  upstream response.
 
 ## Model-level parameter profiles (2026-08-10)
 

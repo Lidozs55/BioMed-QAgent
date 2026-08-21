@@ -368,7 +368,7 @@ supersedes_publication_id
 | 未来演进方向（待决问题 / 非目标等） | `docs/architecture/roadmap.md` | 规划与已否决方案，权威 |
 | 架构决策（为什么） | `docs/adr/README.md` | ADR 索引（001-038），权威 |
 | 迁移执行记录（historical） | `docs/migration/` | 已完成迁移（Phase 0-8）的执行记录，不反映当前系统 |
-| V2 实现规格 | `docs/BioMed-QAgent_Pipeline_Refactor_Design.md` | 实现基线，权威 |
+| V2 重构设计（历史） | `docs/BioMed-QAgent_Pipeline_Refactor_Design.md` | Python backend 时代提案，已被 Phase 8 TS 迁移取代，仅参考 |
 | V1 架构（历史现状） | `docs/archive/ARCHITECTURE_V1.md` | Legacy，仅参考 |
 | 执行任务 | `docs/TODO.md` | 任务清单，不承担架构解释 |
 | 赛题背景与评分 | `PROBLEM.md` | 外部约束，权威 |

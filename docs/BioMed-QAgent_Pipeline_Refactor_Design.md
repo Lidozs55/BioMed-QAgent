@@ -5,6 +5,12 @@
 > 适用范围：后端 Agent、Pipeline、WorkflowRecipe、数据契约、缓存、事件、前端结果展示与测试迁移  
 > 目标：将当前固定五阶段、固定数据库组合、固定 `main_data.csv` 结构，重构为面向同类科学数据检索、标准化与整合的可信数据集构建系统  
 > V2 重点：删除冗余 `DatasetRequest` 与 `BuildRecipe`，明确 Run、BuildResult、Validation 和 Publication 的正交边界
+>
+> ⚠️ **历史状态（2026-08-21）**：本文是 Python `backend/` 时代的 V2 重构提案
+> （代码基线 2026-08-06）。Phase 8 迁移后现行实现为 TS Host + Pi + TS Dataset
+> Core（`server/src/`、`database/`）；文中所有 `backend/...`、`app/...` 路径
+> 均为历史设计，不再代表当前系统。当前权威入口：`docs/ARCHITECTURE.md` 与
+> `docs/adr/README.md`。
 
 ---
 
