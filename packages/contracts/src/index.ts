@@ -10,6 +10,7 @@ export type * from "./source-locator.js";
 export type * from "./source-asset.js";
 export type * from "./operation-result.js";
 export type * from "./deterministic-derive.js";
+export * from "./family-transform.js";
 export type * from "./acquisition.js";
 export * from "./dataset-bridge.js";
 export type * from "./events.js";
