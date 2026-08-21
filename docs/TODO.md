@@ -11,7 +11,7 @@
 >   [migration/README.md](migration/README.md) 与
 >   [migration/BioMed-QAgent_Pi_Migration_Plan.md](migration/BioMed-QAgent_Pi_Migration_Plan.md)；
 > - 决策依据见 [adr/README.md](adr/README.md) 与
->   [BioMed-QAgent_Architecture_Decisions_and_Lessons.md](BioMed-QAgent_Architecture_Decisions_and_Lessons.md)；
+>   [adr/README.md](adr/README.md)；
 > - 旧主线「V2 Pipeline Refactor」清单归档于
 >   [archive/TODO_PIPELINE_REFACTOR_COMPLETED.md](archive/TODO_PIPELINE_REFACTOR_COMPLETED.md)；
 > - 赛题背景与评分见 [PROBLEM.md](../PROBLEM.md)。
@@ -212,7 +212,7 @@
       本地数据源导入经 `server/src/agent/tools/import-tools.ts`
       （`list_source_assets` / `read_source_asset` / `commit_to_cache`，
       `user_import` 命名空间）注册。相应缓存管理 API 与前端设置页见
-      `CACHE_DESIGN.md` §13。
+      `architecture/cache-design.md` §13。
 - [ ] **P1** AI 用户支持：编写一份面向 AI 用户的调用文档及配套脚本（服务启动 +
       HTTP/WS 驱动封装），方便其他 agent 调用本项目。
 

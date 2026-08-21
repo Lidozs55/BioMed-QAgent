@@ -319,7 +319,7 @@ pnpm build
 测试并发默认有界，避免本机 CPU 撞功耗墙：根 `pnpm test` 限制 workspace 并发为 2，
 各 vitest 配置限制 worker 数（server `forks`/2、frontend `threads`/4、contracts
 `threads`/2）；CI（`CI=true`）自动放开 vitest worker 上限。预算模型与覆盖方式见
-[docs/test-concurrency.md](docs/test-concurrency.md)。
+[docs/architecture/test-concurrency.md](docs/architecture/test-concurrency.md)。
 
 ### 前端 package（定向诊断）
 

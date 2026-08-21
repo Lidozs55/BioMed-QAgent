@@ -81,7 +81,7 @@ pnpm build                        # workspace production builds
 ```
 
 Tests run with bounded concurrency by default; for concurrency, CI behavior, and
-throttling options see [docs/test-concurrency.md](docs/test-concurrency.md).
+throttling options see [docs/architecture/test-concurrency.md](docs/architecture/test-concurrency.md).
 
 ### Python database bridge (cwd: repository root)
 

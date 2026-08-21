@@ -3,19 +3,7 @@
 > ⚠️ **状态（2026-08-17）**：本文是 2026-08-09 的历史快照，绝大多数条目已随
 > 迁移主线（Phase 0-9）与后续迭代完成；指向 legacy Python `backend/` 的条目已
 > 随 Phase 8 物理删除而失效。当前**唯一权威任务清单**是
-> [TODO.md](TODO.md)（只保留开放条目），本文不再维护，仅供查阅历史。
-
-> **唯一权威索引**：汇聚 TODO.md 未完成项、各阶段 REVIEW 遗留节、ISSUES.md 开放项
-> 与 review-loop 记录的可选补强。细节与根因见各来源文档（本清单只做摘要+指针，
-> 不重复内容，避免漂移）。**修改 TODO / REVIEW / ISSUES 时须同步本清单。**
->
-> 快照：2026-08-09，main @ bdd23a6 → 分支 `feat/v2-mainline-v1-removal`（8 commits，已推送）。
-> 2026-08-13：TODO.md 主线切换为 Pi 迁移方案（Phase 0/1/3 完成，Phase 2 为下一阶段，
-> 剩余 Phase 4-8 见 [TODO.md](TODO.md)）；旧 Pipeline Refactor 清单归档于
-> [archive/TODO_PIPELINE_REFACTOR_COMPLETED.md](archive/TODO_PIPELINE_REFACTOR_COMPLETED.md)。
-> 同日晚些时候：迁移方案 Phase 4（TS Dataset Core 移植）合入 main（d7dbbb7），
-> TODO/方案 §0 进度表已同步。
-> 状态图例：🔴 阻塞决策 · 🟠 产品/功能未完成 · 🟡 技术债（已评估）· ⚪ 可选补强 · ⚫ 已知问题（ISSUES.md）
+> [TODO.md](../TODO.md)（只保留开放条目），本文不再维护，仅供查阅历史。
 
 ---
 

@@ -1,9 +1,9 @@
 # Model Provider Parameters & Verified Facts
 
 > Reference for the per-provider parameter profiles and model catalog data.
-> Code lives in `backend/app/model_registry/profiles.py` (parameter profiles)
-> and `backend/app/model_info/` (vendor presets + model catalog). Facts below
-> were verified against official docs on 2026-08-10.
+> Current implementation (TypeScript): `server/src/settings/model-registry/` and
+> `packages/contracts/src/model-registry.ts`; the legacy `backend/` paths were
+> removed in Phase 8. Facts below were verified against official docs on 2026-08-10.
 
 ## Model catalog maintenance (verified 2026-08-11)
 

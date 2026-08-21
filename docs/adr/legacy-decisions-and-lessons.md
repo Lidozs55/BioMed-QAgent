@@ -1,3 +1,10 @@
+# 顶层设计决策、讨论记录与踩坑复盘（ADR-001–016 来源）
+
+> 本文由历史顶层索引按主题拆出：ADR-001–016 已各自归档到 [docs/adr/](.)，
+> 本节保留原讨论演进、被否决方案、踩坑复盘、顶层不变量、评审检查表、
+> Demo 决策、未决问题与治理建议。内容逐字保留，仅调整所在文件。
+
+
 # BioMed-QAgent 顶层设计决策、讨论记录与踩坑复盘 V2
 
 > 文档性质：架构决策记录（ADR 汇总）与项目复盘 V2  
@@ -8,6 +15,7 @@
 > ADR 序列续篇：Pi 迁移的 ADR-017 至 ADR-024 使用独立记录，见 [ADR 索引](adr/README.md)。
 
 ---
+
 
 ## 1. 最终结论
 
@@ -32,6 +40,7 @@
 当前固定五阶段 Pipeline 不应整体删除。应保留其可靠执行能力，替换其错误的业务中心：从固定数据库组合和固定 `main_data.csv`，转向数据集契约驱动的 Dataset Construction Runtime。
 
 ---
+
 
 ## 2. 讨论演进记录
 
@@ -101,510 +110,6 @@ V1 重构提案随后暴露五个问题：
 - 不引入完整 DAG 或 BuildRecipe；
 - 保留并补齐 WorkflowRecipe 的受控来源获取闭环。
 
-## 3. ADR-001：产品边界是数据集构建，不是完整科研代理
-
-### 状态
-
-已接受。
-
-### 决策
-
-系统的首要任务是根据用户研究目标或数据需求，构建标准化可用数据集。研究解释、机制分析、假设生成和多角度证据汇总可以作为上层能力，但不能决定底层主数据结构。
-
-### 原因
-
-1. 与赛题评分项直接对应；
-2. 产物价值更容易展示和验收；
-3. 数据清洗、字段统一、来源追踪和置信度都有明确落点；
-4. 可控制 Demo 范围；
-5. 避免 Agent 因“研究全面性”搜索大量无法整合的来源。
-
-### 后果
-
-Agent Prompt、工具接口、契约、前端结果页和 Demo 叙事都需要从“研究项目经理”改为“数据集需求解析与来源规划”。
-
----
-
-## 4. ADR-002：一个 DatasetBuild 只能有一个主数据集族和一种行粒度
-
-### 状态
-
-已接受。
-
-### 决策
-
-一个 Build 的主数据必须满足：
-
-```text
-dataset_family + row_granularity + key_semantics + measurement_semantics
-```
-
-均明确且兼容。
-
-### 示例
-
-可以合并：
-
-- 多来源 gene-sample expression；
-- 多论文中采用同一指标和同一对象粒度的实验测量；
-- 多数据库的 pathway-member 记录。
-
-不能直接合并：
-
-- 表达行与突变事件行；
-- 基因-样本测量与队列聚合统计；
-- 文献元数据与表达测量；
-- 通路节点与临床样本；
-- 原始 count 与 TPM，除非明确转换或保持可区分语义。
-
-### 复合需求
-
-复合需求拆成多个 Build。会话可将多个 Build 放在同一任务下，但每个 Build 独立验证和发布。
-
-### 后果
-
-`main_data.csv` 的“单一行粒度”原则保留，但文件名、列结构和数据族不再固定。
-
----
-
-## 5. ADR-003：保留可信执行内核，不保留固定五阶段业务状态机
-
-### 状态
-
-已接受。
-
-### 保留
-
-- SourceAsset；
-- DownloadAttempt；
-- 文件 hash；
-- Attempt 输入/参数/输出摘要；
-- 任务锁；
-- checkpoint；
-- timeout/cancel；
-- durable event；
-- staging；
-- Validation Gate；
-- atomic publication；
-- fixture/live 区分。
-
-### 替换
-
-- `_STAGES` 全局固定列表；
-- `StageName` 作为业务主协议；
-- 固定数据库组合；
-- `StageAttempt` 的阶段专属语义；
-- 固定 Artifact 文件集合；
-- 固定验证顺序。
-
-### 理由
-
-可靠性能力本身正是赛题的来源追踪、可复现和错误修正基础。直接删除 Pipeline 会丢失最有价值的实现资产。
-
----
-
-## 6. ADR-004：不采用完整 DAG，也不新增 BuildRecipe
-
-### 状态
-
-已接受，除非未来需求发生显著变化。
-
-### 决策
-
-Dataset Runtime 使用服务端固定、可测试的构建骨架：
-
-```text
-acquire[*]
-  -> parse[*]
-  -> canonicalize[*]
-  -> compatibility gate
-  -> integrate
-  -> validate profile
-  -> publish
-```
-
-来源步骤可以内部并发。Runtime 记录 OperationAttempt、输入输出 digest 和恢复点，但 Agent 不自由生成 nodes/edges，也不声明数据集级 Recipe。
-
-### 与现有 WorkflowRecipe 的关系
-
-仓库已有 `WorkflowRecipe`，其步骤限定为受控 API、HTML 和 Browser 操作，并拒绝 Python、JavaScript、Shell 等任意代码字段。它保留，但边界限定为 Acquisition：
-
-```text
-SkillBuilderAgent
-  -> WorkflowRecipe draft
-  -> controlled validation
-  -> VERIFIED/PROMOTED
-  -> RecipeExecutor
-  -> SourceAsset
-  -> SourceAdapter
-```
-
-WorkflowRecipe 不能：
-
-- 产生 Canonical DataBatch；
-- 声明跨来源依赖；
-- 决定合并；
-- 选择 Validation Profile 或阈值；
-- 直接发布 Dataset。
-
-“non-executable”只表示 Recipe 不包含任意可执行代码，不表示 Recipe 不会由可信解释器执行。
-
-### 当前代码缺口
-
-当前 `RecipeExecutor.execute()` 和 `find_verified()` 主要面向 `VERIFIED`，而 `PROMOTED` Recipe 的正式发现和执行闭环不明确。V2 要求：
-
-- `PROMOTED`：生产 Build 可自动发现和执行；
-- `VERIFIED`：仅受限试用或 HIL 确认；
-- `DRAFT/REJECTED`：不得进入生产执行。
-
-### 为什么不使用 DAG 或 BuildRecipe
-
-- 当前流程主体近似线性；
-- 并行来源不等于需要通用图调度器；
-- 完整 DAG 增加大量基础设施，不直接提高评分；
-- 新增 BuildRecipe 会与 WorkflowRecipe 命名和生命周期冲突；
-- 代码当前真正缺少的是数据契约、兼容性判断和 Recipe 消费闭环，不是图执行。
-
-### 重新评估触发条件
-
-只有当用户自定义任意分析链、多级条件分支、节点复用和分布式执行成为核心需求时，才重新评估 DAG。
-
-## 7. ADR-005：主数据通过 Manifest 识别，不依赖固定文件名
-
-### 状态
-
-已接受。
-
-### 决策
-
-输出包含一个 `dataset_manifest.json`，其中显式标识：
-
-- 主数据路径；
-- dataset family；
-- row grain；
-- Schema；
-- 主键；
-- 行数和 hash；
-- 来源、验证、置信度和 provenance 摘要。
-
-可为 Demo 提供 `dataset.csv`，但程序不得硬编码该文件名。
-
-### 影响
-
-需要迁移：
-
-- Artifact Builder；
-- Validation；
-- Cache；
-- API；
-- 前端 ResultsViewer；
-- 测试 fixture；
-- 文档。
-
----
-
-## 8. ADR-006：Manifest 按 Artifact Role 分类，主数据不能混粒度
-
-### 状态
-
-已接受。
-
-### 决策
-
-Manifest 只定义五类稳定角色：
-
-- `primary_dataset`
-- `supporting_dataset`
-- `schema`
-- `provenance`
-- `audit_report`
-
-样本元数据、实体映射、来源选择、被拒记录、质量报告、搜索报告、warning 和下载审计均映射到这些角色，不在顶层架构固定各自文件名。
-
-`SourceAsset` 保持独立身份，Manifest 引用其 ID。Publisher 可根据规模和展示需要，将同一角色拆成一个或多个物理文件。
-
-多表并不代表回到“多角度研究包”。Supporting dataset 和审计产物服务主数据解释、映射、复算或质量审查，不与主表争夺业务中心。
-
-### 特殊情况
-
-如果数据天然是关系型结构，可有主事实表和维表，但必须显式建模关系、主表角色、family 和 row grain。
-
-## 9. ADR-007：Agent 决定计划，不决定科研数据值
-
-### 状态
-
-已接受。
-
-### Agent 权限
-
-- 解析需求；
-- 选择或建议 Schema；
-- 查找候选来源；
-- 选择 Acquisition Provider、Adapter 或已允许的 WorkflowRecipe；
-- 提议字段映射；
-- 直接生成自包含 DatasetBuildSpec；
-- 根据诊断重新规划。
-
-### 服务端权限
-
-- 下载和校验文件；
-- 运行 Parser；
-- 读取源值；
-- 执行确定性转换；
-- 批准字段映射；
-- 判断兼容性；
-- 管理验收阈值与 Validation Profile；
-- 计算质量和置信度；
-- 发布。
-
-### 禁止
-
-Agent 不能直接提交一个数字并声明它来自论文、图表或数据库。模型提取必须绑定 SourceAsset、定位信息、模型版本、置信度和审核状态。
-
----
-
-## 10. ADR-008：来源是否可用与数据是否可合并是两个维度
-
-### 状态
-
-已接受。
-
-### 决策
-
-保留来源安全和能力 allowlist，但移除“来源集合等于合并兼容性”的设计。
-
-当前 `SUPPORTED_PIPELINE_SOURCE_COMBINATIONS` 将来源组合当成正式能力边界。重构后需要两层判断：
-
-1. Adapter capability：系统能否安全获取和解析该来源；
-2. Dataset compatibility：本次数据能否映射至目标 Schema 并合并。
-
-例如，GDC 和 Xena 都可用，不代表任意 GDC 数据与任意 Xena 数据可合并。
-
----
-
-## 11. ADR-009：字段字符串相似度只能提议映射，不能批准映射
-
-### 状态
-
-已接受。
-
-### 决策
-
-正式字段映射必须来自：
-
-- Adapter 声明；
-- Schema Registry；
-- 可信元数据；
-- 明确规则；
-- 人工批准。
-
-字符串相似度可生成候选和置信度，但默认状态为 `proposed`。
-
-### 原因
-
-列名相似无法证明：
-
-- 同一语义；
-- 同一单位；
-- 同一粒度；
-- 同一值域；
-- 同一实体 ID；
-- 一对一关系。
-
-### 当前踩坑
-
-`alignment.py` 的包含关系和公共前缀规则足以将看似相似、实际不同的字段对齐。之后垂向合并会让错误进入正式数据。
-
----
-
-## 12. ADR-010：RunStatus、BuildResult、ValidationResult 与 Publication 正交
-
-### 状态
-
-已接受。
-
-### 决策
-
-四个状态体系分别回答不同问题：
-
-| 概念 | 回答问题 | 典型值 |
-| --- | --- | --- |
-| `RunStatus` | 执行是否排队、运行、完成、失败或取消 | QUEUED/RUNNING/COMPLETED/FAILED/CANCELLED |
-| `BuildResult` | 正常完成后得到什么数据结果 | SUCCEEDED/PARTIAL_SUCCESS/NO_DATA/SPEC_REJECTED |
-| `ValidationResult` | 某个 Manifest digest 是否通过 Profile | PASSED/FAILED |
-| `DatasetPublication` | 哪个不可变版本已正式提升 | publication ID + supersedes |
-
-只有 `RunStatus=COMPLETED` 才产生 `BuildResult`。执行异常和用户取消不再重复表示为 `EXECUTION_FAILED` 或 `CANCELLED` BuildResult。
-
-不使用 `validated_intermediate` / `validated_final`。每次成功发布都生成不可变 Publication，后续版本使用 `supersedes_publication_id` 关联。任务或会话只维护 `current_publication_id`。
-
-### 结果
-
-- 无主数据不再必然触发内部失败；
-- 前端不通过错误字符串猜 no_data；
-- 无数据时可以交付审计型 Publication；
-- 内部异常仍然是 failed；
-- 用户始终收到服务端生成的 RunSummary；
-- 新版本不会改变旧 Artifact 的状态。
-
-## 13. ADR-011：禁止 metadata-only 占位主表
-
-### 状态
-
-已接受，列为 P0。
-
-### 当前问题
-
-GEO 没有表达矩阵时，当前代码将样本元数据写成 `measurement_type=sample_metadata` 的表达 Schema 行，并在 Validation 中跳过表达值和 lineage 检查。
-
-这解决了“空表”表象，却破坏了主数据语义。
-
-### 决策
-
-- 主表无合法记录时 outcome 为 NO_DATA；
-- 样本元数据保存在辅助表；
-- Validation 不允许 warning 或特殊字段豁免目标数据不存在；
-- 空主表不发布为 succeeded；
-- 可发布来源搜索和拒绝报告。
-
----
-
-## 14. ADR-012：Validation 由 Profile 驱动，架构层只保留三项发布不变量
-
-### 状态
-
-已接受。
-
-### 决策
-
-架构层只规定：
-
-1. **Provenance closure**：正式记录可追溯到 SourceAsset、源定位、Parser/Adapter 版本、映射和转换；
-2. **Validation Profile passed**：与目标 Manifest digest 对应的 Profile 判定通过；
-3. **Atomic promotion**：只有引用闭合且 staging 完整的已验证 Manifest 才能原子提升。
-
-具体规则属于版本化 Validation Profile，例如：
-
-- 文件编码和列数稳定；
-- Schema、类型和主键；
-- measurement 完整率；
-- 单位、尺度和归一化；
-- warnings 与 metrics 一致；
-- probe mapping 覆盖率；
-- bbox、模型版本和 confidence；
-- NO_DATA 或 PARTIAL_SUCCESS 的阈值。
-
-Agent 只能选择服务端允许的 Profile 引用，不能在 BuildSpec 中传入 `minimum_valid_rows`、`allow_empty_primary_dataset` 等 acceptance policy。
-
-### 测试策略
-
-测试应锁定三项架构不变量和 Profile 结果，不应依赖全局 `check_id` 固定顺序，也不应把某个数据族的具体列规则提升为全局架构。
-
-## 15. ADR-013：置信度先做可解释等级，不做虚假概率
-
-### 状态
-
-已接受。
-
-### 决策
-
-置信度包含：
-
-- level：high/medium/low；
-- channel；
-- reasons；
-- source reliability；
-- extraction reliability；
-- mapping reliability；
-- validation result；
-- cross-source consistency；
-- human review state。
-
-确定性官方 API 可以使用批次默认等级；VLM/LLM/网页抽取必须逐条标注。
-
-### 原因
-
-未经标定的 0.92 看似精确，实际没有概率解释。赛题更需要可解释、可追溯和可复核。
-
-### 与 Validation 的关系
-
-置信度不是 Validation 的替代。Validation 判断是否满足发布规则；Confidence 描述记录在已知证据下有多可靠。
-
----
-
-## 16. ADR-014：Provenance 以记录/批次 sidecar 为主，主表只保留引用
-
-### 状态
-
-已接受。
-
-### 决策
-
-主表保留最小字段：
-
-- `record_id`
-- `source_id`
-- `asset_id`
-- `provenance_id`
-
-详细定位、原值和转换链放在 lineage sidecar。这样既保持主表可分析性，又能完整追踪。
-
-### 例外
-
-Demo 或小表可以内联关键来源字段，但 Manifest 和 sidecar 仍为权威来源。
-
----
-
-## 17. ADR-015：Cache 由 Schema 和构建参数标识，不由关键词或固定列标识
-
-### 状态
-
-已接受。
-
-### 决策
-
-缓存身份包含：
-
-- dataset family；
-- Schema version；
-- SourceAsset digest；
-- Adapter/parser version；
-- normalization profile；
-- cohort/query parameters。
-
-关键词用于检索缓存，不用于决定资产身份。
-
-### 当前踩坑
-
-现有 Cache Design 为复用 Pipeline，固定采用 22 列 `main_data.csv`。这减少了一套 Schema，却把表达任务的实现细节扩散成全局协议。
-
----
-
-## 18. ADR-016：迁移采用绞杀模式，不做一次性重写
-
-### 状态
-
-已接受。
-
-### 决策
-
-- V2 自包含 DatasetBuildSpec 和表达闭环并行加入；
-- 不新增 DatasetRequest 或 BuildRecipe；
-- 旧 `run_research_pipeline` 作为兼容 facade；
-- 先抽取可靠性内核，再迁来源；
-- 单独补齐 WorkflowRecipe 从 PROMOTED 到 SourceAsset 的生产消费闭环；
-- 先迁 GDC/Xena，后迁 GEO；
-- RunStatus、BuildResult、ValidationResult 和 Publication 双轨迁移；
-- V2 前端和缓存双轨；
-- 达到验收门槛后删除 Legacy。
-
-### 原因
-
-现有 Pipeline 有大量可靠性测试和复杂恢复语义。大爆炸重写风险高，且很容易丢掉比业务流程更成熟的基础设施。WorkflowRecipe 和状态体系也有现存消费者，必须以兼容层和特征测试保护迁移。
-
-> **ADR 序列续篇：** Pi Agent / Host 迁移决策为 ADR-017 至 ADR-024，见
-> [docs/adr/README.md](adr/README.md)。此处保留既有章节编号，避免打断
-> `ADR §N` 历史交叉引用。
 
 ## 19. 被否决或修正的方案
 
@@ -646,6 +151,7 @@ Demo 或小表可以内联关键来源字段，但 Manifest 和 sidecar 仍为�
 
 ---
 
+
 ## 20. 当前代码中已经做对的事情
 
 重构不能忽略现有成果：
@@ -667,6 +173,7 @@ Demo 或小表可以内联关键来源字段，但 Manifest 和 sidecar 仍为�
 重构目标是重新组织这些能力，不是证明旧实现一无是处。
 
 ---
+
 
 ## 21. 踩坑复盘
 
@@ -779,6 +286,7 @@ Demo 或小表可以内联关键来源字段，但 Manifest 和 sidecar 仍为�
 教训：架构只保留 provenance closure、Profile passed 和 atomic promotion；具体规则进入版本化 Profile 和测试
 ---
 
+
 ## 22. 顶层不变量
 
 后续设计和代码评审必须检查以下不变量：
@@ -810,6 +318,7 @@ Demo 或小表可以内联关键来源字段，但 Manifest 和 sidecar 仍为�
 25. 新来源接入不应修改多个数据库组合分支；
 26. 前端不得通过错误字符串推断业务状态。
 
+
 ## 23. 代码评审检查表
 
 新增数据源或数据类型时必须回答：
@@ -834,6 +343,7 @@ Demo 或小表可以内联关键来源字段，但 Manifest 和 sidecar 仍为�
 - 执行失败时是否由 RunStatus 表达？
 - 新版本是否使用 Publication supersedes 和 current pointer？
 - 是否会在其他模块新增来源特例？若是，抽象可能仍不正确。
+
 
 ## 24. 当前推荐 Demo 决策
 
@@ -870,6 +380,7 @@ Demo 或小表可以内联关键来源字段，但 Manifest 和 sidecar 仍为�
 7. 版本更新：新 Publication supersedes 旧版本，current pointer 更新；
 8. Recipe 获取：PROMOTED WorkflowRecipe 产出 SourceAsset 后由 Adapter 解析。
 
+
 ## 25. 尚未完全决定的问题
 
 以下问题不阻塞第一阶段，但需在实现中形成新 ADR：
@@ -904,9 +415,10 @@ CSV、JSONL 或 Parquet 的选择需考虑可读性、规模和查询效率。
 
 ---
 
+
 ## 26. 文档治理建议
 
-当前 `ARCHITECTURE.md`、`CACHE_DESIGN.md`、`RESEARCH_SYSTEM_REVIEW` 和 Confidence Survey 中部分结论基于旧方向。建议：
+当前 `ARCHITECTURE.md`、`architecture/cache-design.md`、`RESEARCH_SYSTEM_REVIEW` 和 Confidence Survey 中部分结论基于旧方向。建议：
 
 1. 将本文件作为顶层 ADR 索引；
 2. 将重构设计文档作为 V2 实现规格；
@@ -918,6 +430,7 @@ CSV、JSONL 或 Parquet 的选择需考虑可读性、规模和查询效率。
 
 ---
 
+
 ## 27. 防止再次走偏的简短规则
 
 开始设计任何新功能前，先回答三句话：
@@ -927,3 +440,4 @@ CSV、JSONL 或 Parquet 的选择需考虑可读性、规模和查询效率。
 3. 新来源提供的记录能否在科学语义上进入这张表？
 
 如果第三问答案不明确，就先保持独立、补充映射证据或拆成另一个 Build，而不是先写合并代码。
+

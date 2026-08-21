@@ -142,7 +142,7 @@ Clear backend `__pycache__` directories, start `uv run uvicorn app.main:app --re
 
 - [ ] **Step 5: Update documentation if implementation details changed**
 
-Keep `docs/CACHE_DESIGN.md`, the feature design, and the code consistent. Do not add a new TODO unless work is intentionally deferred.
+Keep `docs/architecture/cache-design.md`, the feature design, and the code consistent. Do not add a new TODO unless work is intentionally deferred.
 
 - [ ] **Step 6: Commit integration corrections**
 

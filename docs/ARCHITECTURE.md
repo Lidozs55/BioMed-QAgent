@@ -7,8 +7,7 @@
 > - **权威性**：本文是系统架构的**单一权威入口**（source of truth）。
 >   任何与本文矛盾的实现都视为缺陷；任何架构变更必须先修订对应章节或新增 ADR。
 > - **职责分工**：本文回答"系统是什么、怎么组织、约束是什么"；具体决策的
->   "为什么"由 ADR 索引（[BioMed-QAgent_Architecture_Decisions_and_Lessons.md](BioMed-QAgent_Architecture_Decisions_and_Lessons.md)；
->   [ADR-017 及后续记录](adr/README.md)）承担；实现规格由
+>   "为什么"由 ADR 索引（[adr/README.md](adr/README.md)）承担；实现规格由
 >   [BioMed-QAgent_Pipeline_Refactor_Design.md](BioMed-QAgent_Pipeline_Refactor_Design.md)
 >   承担；执行任务由 [TODO.md](TODO.md) 承担；**功能/能力现状（能做什么，面向
 >   汇报）由 [FEATURES.md](FEATURES.md) 承担**。各文档不互相复制。
@@ -51,6 +50,11 @@
 | §24 | 文档治理 | 本文 |
 | — 当前收敛路线 | Phase 4 Gold audit → Phase 5 hardening/release | [plans/2026-08-20-phase4-to-phase5-hardening-roadmap.md](plans/2026-08-20-phase4-to-phase5-hardening-roadmap.md) |
 | — 近期执行 | Gold evaluator E1-E5 | [plans/2026-08-20-gold-evaluator-near-term-plan.md](plans/2026-08-20-gold-evaluator-near-term-plan.md) |
+| — 缓存设计 | Cache 契约、Schema 标识与构建参数 | [architecture/cache-design.md](architecture/cache-design.md) |
+| — 模型供应商参数 | 供应商/模型参数与目录事实（现行 TS `server/src/settings/model-registry/`） | [architecture/model-provider-params.md](architecture/model-provider-params.md) |
+| — 运行限制 | 运行时资源上限与设置契约 | [architecture/runtime-limits.md](architecture/runtime-limits.md) |
+| — 测试并发预算 | 本地有界并发、CI 放宽与 worker 预算 | [architecture/test-concurrency.md](architecture/test-concurrency.md) |
+| — 代码重复审计 | jscpd 重复代码审计报告 | [audit/code-audit-jscpd.md](audit/code-audit-jscpd.md) |
 
 ---
 ## 1. 产品定义与边界
@@ -362,8 +366,7 @@ supersedes_publication_id
 | 系统架构（是什么 / 怎么组织 / 约束） | `docs/ARCHITECTURE.md`（本文） | V2 目标，权威 |
 | 功能 / 能力全景（能做什么，面向汇报） | `docs/FEATURES.md` | 功能现状，权威（架构语义以本文为准） |
 | 未来演进方向（待决问题 / 非目标等） | `docs/architecture/roadmap.md` | 规划与已否决方案，权威 |
-| 架构决策（为什么） | `docs/BioMed-QAgent_Architecture_Decisions_and_Lessons.md` | ADR 索引，权威 |
-| 迁移架构决策（为什么） | `docs/adr/README.md` | ADR-017 起，权威 |
+| 架构决策（为什么） | `docs/adr/README.md` | ADR 索引（001-038），权威 |
 | 迁移执行记录（historical） | `docs/migration/` | 已完成迁移（Phase 0-8）的执行记录，不反映当前系统 |
 | V2 实现规格 | `docs/BioMed-QAgent_Pipeline_Refactor_Design.md` | 实现基线，权威 |
 | V1 架构（历史现状） | `docs/archive/ARCHITECTURE_V1.md` | Legacy，仅参考 |

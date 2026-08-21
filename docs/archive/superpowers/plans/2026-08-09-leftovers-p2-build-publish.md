@@ -12,7 +12,7 @@
 
 - 每个 Task 先写失败测试再实现；后端质量门 `ruff check app/ tests/ launcher.py`（0 warning）+ 全量 `pytest -q`（基线 2257）。
 - 契约/响应格式改动必须向后兼容（旧前端不破坏）；`artifact_id` 变更需同步 `tests/api/test_artifact_api.py` 的断言。
-- 每项完成后更新 `docs/LEFTOVERS.md` 条目。
+- 每项完成后更新 `docs/archive/LEFTOVERS-2026-08-09.md` 条目。
 
 ---
 
@@ -150,7 +150,7 @@
 **Files:**
 - Modify: 决策后确定（候选：`backend/app/datasets/build/integrator.py` per-binding 结果聚合；`backend/app/datasets/build/profiles.py` 阈值）
 - Test: 决策后确定（候选 `backend/tests/test_dataset_expression_runner.py`）
-- Docs: `docs/LEFTOVERS.md` 更新决策记录
+- Docs: `docs/archive/LEFTOVERS-2026-08-09.md` 更新决策记录
 
 **Interfaces:**
 - Consumes: LEFTOVERS C4b（coverage<1.0 per-binding 排除未实现）与 C4c（probe 覆盖阈值校准门槛）
@@ -206,5 +206,5 @@
 ## P2 收尾
 
 - [ ] 全量回归 + ruff（0 warning）
-- [ ] 更新 `docs/LEFTOVERS.md`：C2c/C3a/C3d/C1e/C1b/C3b/A2d/C4b/C4c 全部置 ✅ 或 🔒 关闭
+- [ ] 更新 `docs/archive/LEFTOVERS-2026-08-09.md`：C2c/C3a/C3d/C1e/C1b/C3b/A2d/C4b/C4c 全部置 ✅ 或 🔒 关闭
 - [ ] 合并 `feat/leftovers-p2` 到 main

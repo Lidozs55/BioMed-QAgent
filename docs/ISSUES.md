@@ -20,6 +20,18 @@
       **状态（2026-08-17）**：侧栏底部已简化（`fddf6911`，设置入口复用
       Sidebar 菜单原语）；右上角按钮现状需复验，若仍缺 tooltip 则补。
 
+### 测试稳定性：`build-lock.test.ts` 全量跑偶发失败（自 LEFTOVERS 历史快照迁移）
+
+- [ ] 2026-08-14 复现：`server/tests/phase5/build-lock.test.ts` 在 `pnpm test` / `vitest run` 并行负载下偶发失败（真实子进程对文件锁的时序竞争 + CPU 争抢），单文件隔离 8/8 通过；与 settings/http/contracts/artifacts 分层重构无关。根治方向：进程间同步闩或放宽时窗/重试（详见 `docs/archive/LEFTOVERS-2026-08-09.md` §K1）。
+
+### 可选测试补强（自 LEFTOVERS 历史快照迁移，非阻塞）
+
+- [ ] D1：`GET /builds/{id}` 损坏 manifest 仍返回 409 的测试 + 中间页损坏分页测试。
+- [ ] D2：operation 事件顺序无关性测试 + 部分镜像 run 语义测试。
+- [ ] D3：双读 API 对真实 `execute_dataset_build` 产物 e2e 断言；build_result 全量重启回放测试。
+- [ ] D4：NO_DATA `非红` 改 `data-variant` 断言；`runId===null` reducer 测试。
+- [ ] D5：`/cache/datasets?limit=` 页帽测试；hook 负向用例。
+
 ## 已关闭（历史留档）
 
 > 2026-08-17 全量文档维护时按代码现状逐一复核并关闭；关闭原因见各条。
