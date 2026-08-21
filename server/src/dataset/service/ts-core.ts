@@ -847,9 +847,29 @@ export class TypeScriptDatasetCore {
             runnerState.manifest = JSON.parse(
               readFileSync(manifestPath, "utf8"),
             ) as DatasetManifest;
-            runnerState.validation = JSON.parse(
+            const report = JSON.parse(
               readFileSync(validationPath, "utf8"),
-            ) as ValidationResult;
+            ) as {
+              checks?: Array<{ passed: boolean }>;
+              manifest_digest?: unknown;
+              profile_ref?: unknown;
+            };
+            const checks = Array.isArray(report.checks) ? report.checks : [];
+            runnerState.validation = {
+              schema_version: "1.0",
+              manifest_digest:
+                typeof report.manifest_digest === "string"
+                  ? report.manifest_digest
+                  : "",
+              profile_ref:
+                typeof report.profile_ref === "string" ? report.profile_ref : "",
+              status: checks.every((check) => check.passed === true)
+                ? "passed"
+                : "failed",
+              checked_count: checks.length,
+              failed_count: checks.filter((check) => check.passed !== true).length,
+              report_path: "validation_report.json",
+            } as ValidationResult;
           }
         }
       },

@@ -168,6 +168,24 @@ describe("parsePlatformTable golden parity", () => {
     expect(result.gene_column).toBe("GENE_SYMBOL");
     expect([...result.ambiguous_probes]).toEqual([]);
   });
+
+  test("mixed-case gene column matches case-insensitively (GPL570)", () => {
+    // Real GPL570 header uses mixed-case "Gene symbol" instead of "GENE_SYMBOL".
+    const table = parsePlatformTableText(
+      "^PLATFORM = GPL570\n" +
+        "#ID = Affymetrix Probe Set ID\n" +
+        "#Gene symbol = Gene Symbol\n" +
+        "ID\tGene symbol\tGene title\n" +
+        "1007_s_at\tDDR1\tneuroblastoma\n" +
+        "1053_at\tRFC2\tseed\n",
+    );
+    expect(table.has_table).toBe(true);
+    expect(table.gene_column).toBe("Gene symbol");
+    expect(table.rows).toEqual([
+      ["1007_s_at", "DDR1"],
+      ["1053_at", "RFC2"],
+    ]);
+  });
 });
 
 describe("buildProbeMapping", () => {

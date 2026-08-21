@@ -827,7 +827,7 @@ export async function checkValidationProfileParity(options: { outputRoot: string
     check(issues, result.failed_count === 0, "profile: probe gate failed_count 0");
   }
 
-  // test_gene_profile_coverage_below_one_fails
+  // test_gene_profile_coverage_at_or_above_floor_passes_with_warning
   {
     const out = join(outRoot, "coverage-below-one");
     mkdirSync(out, { recursive: true });
@@ -841,12 +841,34 @@ export async function checkValidationProfileParity(options: { outputRoot: string
       outputDir: out,
       probeMappingSummaries: [probeSummary({ total: 10, mapped: 8, unmapped: 2, status: "partial" })],
     });
-    check(issues, result.status === "failed", "profile: coverage below one fails");
-    check(issues, result.failed_count >= 1, "profile: coverage below one failed_count >= 1");
+    check(issues, result.status === "passed", "profile: coverage at floor passes");
+    check(issues, result.failed_count === 0, "profile: coverage at floor failed_count 0");
     const report = loadReport(out);
     const checks = (report["checks"] as Array<Record<string, unknown>>) ?? [];
     const coverage = checks.find((c) => c["check_id"] === "probe_coverage_required_gene_level");
-    check(issues, coverage !== undefined && coverage["passed"] === false, "profile: coverage below one check failed");
+    check(issues, coverage !== undefined && coverage["passed"] === true, "profile: coverage at floor check passed");
+  }
+
+  // test_gene_profile_coverage_below_floor_fails
+  {
+    const out = join(outRoot, "coverage-below-floor");
+    mkdirSync(out, { recursive: true });
+    const primary = join(out, "primary.csv");
+    writePrimary(primary, [validRow()]);
+    const result = await getValidationProfile("gene_expression.release.v1").validate({
+      manifest: manifest(1),
+      primaryPath: primary,
+      schema: buildGeneExpressionSchema(),
+      manifestDigest: "d".repeat(64),
+      outputDir: out,
+      probeMappingSummaries: [probeSummary({ total: 10, mapped: 5, unmapped: 5, status: "partial" })],
+    });
+    check(issues, result.status === "failed", "profile: coverage below floor fails");
+    check(issues, result.failed_count >= 1, "profile: coverage below floor failed_count >= 1");
+    const report = loadReport(out);
+    const checks = (report["checks"] as Array<Record<string, unknown>>) ?? [];
+    const coverage = checks.find((c) => c["check_id"] === "probe_coverage_required_gene_level");
+    check(issues, coverage !== undefined && coverage["passed"] === false, "profile: coverage below floor check failed");
   }
 
   // test_gene_profile_zero_coverage_fails

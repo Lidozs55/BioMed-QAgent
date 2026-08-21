@@ -106,4 +106,57 @@ describe("Workspace project tools", () => {
     });
     expect(JSON.stringify(tools)).not.toContain("@earendil-works");
   });
+
+  test("lists and reads downloaded source_assets rooted at task output, write/edit denied", async () => {
+    const base = await mkdtemp(path.join(os.tmpdir(), "biomed-workspace-sourceassets-"));
+    roots.push(base);
+    const workspaceRoot = path.join(base, "workspace");
+    const taskOutputRoot = path.join(base, "output");
+    await mkdir(workspaceRoot, { recursive: true });
+    const assetDir = path.join(taskOutputRoot, "source_assets", "asset_abc");
+    await mkdir(assetDir, { recursive: true });
+    await writeFile(path.join(assetDir, "GSE1_series_matrix.txt"), "!series_matrix", "utf8");
+
+    const permissionFixture = createPermissionFixture({
+      taskId: "task-src",
+      runId: "run-src",
+      taskOutputRoot,
+    });
+    const workspace = await createTaskWorkspace({
+      taskId: "task-src",
+      runId: "run-src",
+      workspaceRoot,
+      taskOutputRoot,
+      dataRoot: base,
+      repositoryRoot: base,
+      permissions: permissionFixture.broker,
+      audit: new InMemoryWorkspaceAuditSink(),
+    });
+
+    const tools = createWorkspaceTools(workspace);
+    const list = tools.find((tool) => tool.name === "workspace_list");
+    const read = tools.find((tool) => tool.name === "workspace_read");
+    const write = tools.find((tool) => tool.name === "workspace_write");
+
+    const listResult = await list?.execute({ path: "source_assets" });
+    expect(listResult?.isError).toBe(false);
+    expect(listResult?.details).toMatchObject({
+      path: "source_assets",
+      entries: [{ path: "source_assets/asset_abc", type: "directory" }],
+    });
+
+    const readResult = await read?.execute({ path: "source_assets/asset_abc/GSE1_series_matrix.txt" });
+    expect(readResult?.isError).toBe(false);
+    expect(readResult?.details).toMatchObject({
+      path: "source_assets/asset_abc/GSE1_series_matrix.txt",
+      text: "!series_matrix",
+    });
+
+    const writeResult = await write?.execute({
+      path: "source_assets/asset_abc/out.csv",
+      content: "probe\tgene\n",
+    });
+    expect(writeResult?.isError).toBe(true);
+    expect(JSON.stringify(writeResult)).toMatch(/denied|deny|not allowed|write/i);
+  });
 });
