@@ -50,6 +50,7 @@
 | §24 | 文档治理 | 本文 |
 | — 当前收敛路线 | Phase 4 Gold audit → Phase 5 hardening/release | [plans/2026-08-20-phase4-to-phase5-hardening-roadmap.md](plans/2026-08-20-phase4-to-phase5-hardening-roadmap.md) |
 | — 近期执行 | Gold evaluator E1-E5 | [plans/2026-08-20-gold-evaluator-near-term-plan.md](plans/2026-08-20-gold-evaluator-near-term-plan.md) |
+| — family host（在途规划） | 长期路线/当前迭代/执行约束/下一轮笔记 + 实现计划 | [architecture/FAMILY-HOST-01-long-term-roadmap.md](architecture/FAMILY-HOST-01-long-term-roadmap.md) + [plans/family-host/README.md](plans/family-host/README.md) |
 | — 缓存设计（现行） | Cache 契约、Schema 标识与构建参数（详见 ADR-015 与 §9-13） | [architecture/result-validation.md](architecture/result-validation.md) §9-13 + [ADR-015](adr/015-cache-schema-build-parameters.md)；历史详细设计见 [archive/cache-design-2026-08.md](archive/cache-design-2026-08.md) |
 | — 模型供应商参数 | 供应商/模型参数与目录事实（现行 TS `server/src/settings/model-registry/`） | [architecture/model-provider-params.md](architecture/model-provider-params.md) |
 | — 运行限制 | 运行时资源上限与设置契约 | [architecture/runtime-limits.md](architecture/runtime-limits.md) |
