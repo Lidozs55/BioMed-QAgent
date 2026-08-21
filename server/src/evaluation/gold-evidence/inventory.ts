@@ -9,6 +9,11 @@ import type {
   EvaluationDiagnosticChecks,
 } from "@biomed/contracts";
 
+import {
+  projectTrustedEvidenceChain,
+  type TrustedEvidenceChainProjection,
+} from "../trusted-evidence-chain.js";
+
 const SAFE_CASE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const COMMIT = /^[0-9a-f]{40,64}$/;
 const MAX_JSON_BYTES = 16 * 1024 * 1024;
@@ -59,6 +64,7 @@ export interface GoldEvidenceInventory {
   };
   checks: EvaluationDiagnosticChecks;
   observed: GoldEvidenceObservedFacts;
+  trusted_evidence_chain?: TrustedEvidenceChainProjection | null;
   evidence_refs: readonly string[];
   findings: readonly EvaluationDiagnosticFinding[];
 }
@@ -110,6 +116,31 @@ function finding(
     severity,
     evidence_refs: [...new Set(evidenceRefs)].sort(),
   };
+}
+
+function chainBoundary(stage: TrustedEvidenceChainProjection["gaps"][number]["stage"]): EvaluationDiagnosticFinding["boundary"] {
+  switch (stage) {
+    case "identity": return "evaluator";
+    case "terminal": return "evaluator";
+    case "trusted_input": return "trusted_input";
+    case "semantic_product": return "validation";
+    case "build": return "assembly";
+    case "publication": return "publication";
+    case "artifact": return "reproducibility";
+    case "final_answer": return "reproducibility";
+    case "hil": return "trusted_input";
+    case "reproducibility": return "reproducibility";
+  }
+}
+
+function chainFindings(chain: TrustedEvidenceChainProjection): EvaluationDiagnosticFinding[] {
+  return chain.gaps.map((item) => finding(
+    `chain.${item.code}`,
+    chainBoundary(item.stage),
+    item.code,
+    item.message,
+    item.source_refs,
+  ));
 }
 
 function compareFindings(
@@ -256,20 +287,29 @@ function checksFor(
   identity: GoldEvidenceIdentity,
   observed: GoldEvidenceObservedFacts,
   findings: readonly EvaluationDiagnosticFinding[],
+  chain: TrustedEvidenceChainProjection | null,
 ): EvaluationDiagnosticChecks {
   const hasFinding = (prefix: string): boolean => findings.some((item) => item.code.startsWith(prefix));
-  const execution: InventoryStatus = observed.task_status === "completed" && observed.run_status === "completed"
+  const execution: InventoryStatus = chain?.terminal.task_status === "completed" && chain.terminal.run_status === "completed"
     ? "pass"
-    : observed.task_status === null && observed.run_status === null ? "unknown" : "fail";
+    : observed.task_status === "completed" && observed.run_status === "completed"
+      ? "pass"
+      : observed.task_status === null && observed.run_status === null ? "unknown" : "fail";
+  const publication: InventoryStatus = chain?.publication.state === "present" && chain.publication.consistent_with_build
+    ? "pass"
+    : chain?.publication.state === "conflicting" ? "fail" : "unknown";
+  const reproducibility: InventoryStatus = chain?.reproducibility.state === "present"
+    ? "pass"
+    : hasFinding("identity.product_commit_mismatch") || hasFinding("identity.product_commit_missing") || chain?.reproducibility.state === "conflicting"
+      ? "fail"
+      : "unknown";
   return {
     frozen_inputs: identity.status === "pass" ? "pass" : identity.status,
     execution: hasFinding("execution.") ? "fail" : execution,
     trusted_inputs: "unknown",
     semantic_product: "unknown",
-    publication: "unknown",
-    reproducibility: hasFinding("identity.product_commit_mismatch") || hasFinding("identity.product_commit_missing")
-      ? "fail"
-      : "unknown",
+    publication,
+    reproducibility,
   };
 }
 
@@ -390,6 +430,18 @@ export async function loadGoldEvidenceInventory(
     ...extractedObserved,
     hil_count: hilRequest === null ? extractedObserved.hil_count : Math.max(extractedObserved.hil_count ?? 0, 1),
   };
+  const trustedEvidenceChain = accept.value !== null && evidence.value !== null
+    ? projectTrustedEvidenceChain({
+      accepted: accept.value,
+      evidence: evidence.value,
+      hil: hil.value ?? undefined,
+      accepted_ref: acceptRef,
+      evidence_ref: evidenceRef,
+      hil_ref: hilRef,
+      target_product_commit: input.target_product_commit,
+    })
+    : null;
+  if (trustedEvidenceChain !== null) findings.push(...chainFindings(trustedEvidenceChain));
   if (observed.build_status === "succeeded" && observed.publication_ids.length === 0 && observed.build_publication_id === null) {
     findings.push(finding("publication.publication_receipt_missing", "publication", "publication_receipt", "Build success is present but no publication receipt was observed", [evidenceRef]));
   }
@@ -424,7 +476,7 @@ export async function loadGoldEvidenceInventory(
       : Object.values(hashChecks).every((status) => status === "pass")
         ? "pass"
         : "fail";
-  const baseChecks = checksFor(identity, observed, findings);
+  const baseChecks = checksFor(identity, observed, findings, trustedEvidenceChain);
   const checks = {
     ...baseChecks,
     frozen_inputs: frozenInputsStatus,
@@ -438,7 +490,8 @@ export async function loadGoldEvidenceInventory(
     historical: { status: historicalStatus, admissible_as_current_evidence: historicalAdmissible },
     checks,
     observed,
-    evidence_refs: [accept.exists ? acceptRef : null, evidence.exists ? evidenceRef : null, hil.exists ? hilRef : null].filter((ref): ref is string => ref !== null),
+    trusted_evidence_chain: trustedEvidenceChain,
+    evidence_refs: [accept.exists ? acceptRef : null, evidence.exists ? evidenceRef : null, hil.exists ? hilRef : null, ...(trustedEvidenceChain?.evidence_refs ?? [])].filter((ref): ref is string => ref !== null),
     findings: findings.sort(compareFindings),
   };
 }

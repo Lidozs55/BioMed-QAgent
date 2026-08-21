@@ -47,6 +47,35 @@ same-commit result for the target commit. Gold6 has an explicit generic HIL
 sidecar with `hil_request.status=pending` and `blocking=true`; the evaluator
 therefore reports blocked rather than failed or passed.
 
+## E6 Trusted Evidence Projection
+
+The evaluator now projects existing event/snapshot/artifact evidence without
+changing the runtime. On the same old evidence root and target commit, the
+matrix remains:
+
+```text
+pass: 0
+fail: 5
+blocked: 1
+```
+
+The projection recovered the following facts where the old collector had left
+`unknown`:
+
+- task/run completion from matching snapshot and terminal events;
+- authoritative publication receipts from `publication_created` and matching
+  snapshot publication records;
+- artifact receipt-only versus downloaded hash/size verified states;
+- final assistant text and exact publication-ID reference;
+- pending blocking HIL from event or sidecar evidence.
+
+For the old bundles, Gold1, Gold3, and Gold5 now have a machine-checkable
+publication check of `pass`; this is not a strict Gold pass because the target
+product commit differs, semantic product remains unknown, and trusted SourceAsset
+receipts are absent from the bundle. Gold6 remains `blocked` because its pending
+blocking HIL is explicit. No workspace file or publication count is promoted to
+semantic product success.
+
 ## Evidence Gaps
 
 The current evidence bundles do not yet provide a machine-checkable projection
@@ -58,6 +87,10 @@ for all of these stages:
 - authoritative publication receipt;
 - Artifact API download and SHA-256 re-verification;
 - final-answer publication reference.
+
+The evaluator-owned projection labels each fact as `present`, `missing`,
+`conflicting`, or `receipt_only`, with source refs. This makes old collector
+omissions distinguishable from evidence genuinely absent from the bundle.
 
 Gold3-Gold5 prove completed task/run execution in the selected evidence files,
 but that is not product or publication success. Gold1, Gold2, and Gold6 do not

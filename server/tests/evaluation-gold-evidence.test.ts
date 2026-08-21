@@ -106,7 +106,14 @@ describe("loadGoldEvidenceInventory", () => {
     });
     expect(result.checks.publication).toBe("unknown");
     expect(result.checks.reproducibility).toBe("unknown");
-    expect(result.findings.map((item) => item.code)).toContain("reproducibility.artifact_verification_missing");
+    expect(result.trusted_evidence_chain?.terminal.state).toBe("present");
+    expect(result.trusted_evidence_chain?.publication.state).toBe("missing");
+    expect(result.trusted_evidence_chain?.gaps.map((gap) => gap.code)).toEqual(expect.arrayContaining([
+      "build.malformed",
+      "publication.missing",
+    ]));
+    expect(result.trusted_evidence_chain?.semantic_product.state).toBe("missing");
+    expect(result.findings.map((item) => item.code)).toContain("chain.semantic_product.not_projected");
   });
 
   test("treats accepted-only evidence as unknown and reports missing terminal evidence", async () => {

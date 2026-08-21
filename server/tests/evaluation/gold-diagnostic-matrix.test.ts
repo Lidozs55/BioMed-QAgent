@@ -146,8 +146,11 @@ describe("Gold diagnostic matrix", () => {
     expect(matrix.cases[0]?.checks.reproducibility).toBe("fail");
     expect(matrix.cases[0]?.strict_status).toBe("fail");
     expect(matrix.cases[0]?.findings).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: "identity.product_commit_mismatch", severity: "blocker" }),
+      expect.objectContaining({ code: "identity.product_commit_mismatch" }),
     ]));
+    expect(matrix.cases[0]?.findings.find((finding) => finding.severity === "blocker")).toEqual(
+      expect.objectContaining({ code: "chain.trusted_input.source_asset_receipt_missing" }),
+    );
   });
 
   test("serializes deterministically and writes an explicit output atomically", async () => {
