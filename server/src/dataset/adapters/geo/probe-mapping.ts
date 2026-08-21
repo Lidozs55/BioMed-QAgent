@@ -166,16 +166,22 @@ const MISSING_SENTINELS: ReadonlySet<string> = new Set([
   "NaN",
 ]);
 
-function stripSoftField(value: string): string {
-  return value.trim().replace(/^"+|"+$/g, "");
+function normalizeGeneColumnName(value: string): string {
+  return value.trim().toLowerCase().replace(/[\s_]+/g, "");
 }
 
 /** Gene column of a SOFT table header, best first (shared by all parsers). */
 function findGeneColumn(header: readonly string[]): string | null {
+  const normalizedHeader = header.map(normalizeGeneColumnName);
   for (const candidate of GENE_COLUMN_PRIORITY) {
-    if (header.includes(candidate)) return candidate;
+    const idx = normalizedHeader.indexOf(normalizeGeneColumnName(candidate));
+    if (idx >= 0) return header[idx];
   }
   return null;
+}
+
+function stripSoftField(value: string): string {
+  return value.trim().replace(/^"+|"+$/g, "");
 }
 
 /** Split a SOFT table row exactly like the shared text parser. */
@@ -420,7 +426,9 @@ async function ingestPlatformTable(
   const gene_column = findGeneColumn(header);
   const gene_index = gene_column !== null ? header.indexOf(gene_column) : null;
   const target_namespace: TargetNamespace =
-    gene_column === "ENSEMBL_ID" ? "ensembl_gene" : "gene_symbol";
+    gene_column !== null && gene_column.toLowerCase() === "ensembl_id"
+      ? "ensembl_gene"
+      : "gene_symbol";
   let rowCount = 0;
   if (gene_index !== null) {
     for await (const { line, lineText } of delimitedRowsFromFileAsync(

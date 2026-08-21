@@ -24,6 +24,24 @@ export interface ResolvedAgentPath {
 }
 
 /**
+ * The agent's file tools anchor relative paths at its workspace. The Dataset
+ * Core, however, references downloaded sources with task-relative paths like
+ * ``source_assets/asset_<sha256>/<file>`` that are rooted at the task output
+ * directory (``data/output/tasks/<task>``) — not the workspace. Anchoring that
+ * relative prefix at the task output root lets the agent list/inspect the very
+ * files it later feeds to a dataset build, closing the workspace↔task-output
+ * visibility gap (e2e gold01: ``workspace_list source_assets`` failed).
+ * Absolute paths and every other relative path keep today's workspace anchor.
+ */
+function agentPathAnchor(context: WorkspaceContext, input: string): string {
+  const firstSegment = input.replaceAll("\\", "/").split("/")[0] ?? "";
+  if (firstSegment === "source_assets" && !path.isAbsolute(input)) {
+    return context.taskOutputRoot;
+  }
+  return context.canonicalWorkspaceRoot;
+}
+
+/**
  * Resolve an agent path (relative → workspace-anchored, absolute → as-is),
  * canonicalize it, classify its scope, and ask the PermissionBroker for the
  * capability. Throws when the policy denies; suspends while the user decides.
@@ -42,7 +60,7 @@ export async function resolveAgentPath(
   }
   let normalized: NormalizedPath;
   try {
-    normalized = await normalizeAgentPathFor(input, context.canonicalWorkspaceRoot);
+    normalized = await normalizeAgentPathFor(input, agentPathAnchor(context, input));
   } catch (error) {
     if (error instanceof PathNormalizationError) {
       throw new WorkspacePolicyError("INVALID_PATH", error.message);
