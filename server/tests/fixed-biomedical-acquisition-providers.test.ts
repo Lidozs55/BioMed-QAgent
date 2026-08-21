@@ -50,6 +50,7 @@ describe("fixed biomedical acquisition provider registry", () => {
       [FIXED_BIOMEDICAL_PROVIDER_IDS.uniprot, "uniprot", "P00533"],
       [FIXED_BIOMEDICAL_PROVIDER_IDS.clinvar, "ncbi_clinvar", "VCV000123456"],
       [FIXED_BIOMEDICAL_PROVIDER_IDS.clinicalTrials, "clinicaltrials_gov", "NCT02411448"],
+      [FIXED_BIOMEDICAL_PROVIDER_IDS.pubchem, "pubchem", "2244"],
     ] as const;
 
     for (const [providerId, source, accession] of cases) {
@@ -95,6 +96,14 @@ describe("fixed biomedical acquisition provider registry", () => {
       filename: "NCT02411448.json",
       host: "clinicaltrials.gov",
     },
+    {
+      providerId: FIXED_BIOMEDICAL_PROVIDER_IDS.pubchem,
+      source: "pubchem",
+      accession: "2244",
+      url: "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/2244/property/MolecularFormula,MolecularWeight,IUPACName,CanonicalSMILES,IsomericSMILES,InChIKey,InChI/JSON",
+      filename: "2244.json",
+      host: "pubchem.ncbi.nlm.nih.gov",
+    },
   ])("derives the $providerId plan from a fixed official endpoint", async (entry) => {
     const resolved = registry().resolve(request(entry), "task_provider");
     const plan = await resolved.handler.plan(resolved.request);
@@ -126,6 +135,33 @@ describe("fixed biomedical acquisition provider registry", () => {
     }), "task_provider");
     const entityPlan = await fromEntities.handler.plan(fromEntities.request);
     expect(entityPlan.source.url).toBe("https://files.rcsb.org/download/7DF4.pdb");
+  });
+
+  it("maps only a positive PubChem CID to the fixed PUG-REST property endpoint", async () => {
+    const value = registry();
+    const fromEntity = value.resolve(request({
+      providerId: FIXED_BIOMEDICAL_PROVIDER_IDS.pubchem,
+      source: "pubchem",
+      entities: { compound: ["not-a-cid"], pubchem_cids: ["3672"] },
+    }), "task_provider");
+    const plan = await fromEntity.handler.plan(fromEntity.request);
+    expect(plan.source).toMatchObject({
+      database: "pubchem",
+      accession: "3672",
+      url: expect.stringContaining("/compound/cid/3672/property/"),
+    });
+    expect(plan.expectedMediaTypes).toEqual(new Set(["application/json"]));
+    expect(plan.allowedHosts).toEqual(new Set(["pubchem.ncbi.nlm.nih.gov"]));
+    expect(plan.assetRole).toBe("carrier");
+
+    for (const accession of ["0", "-1", "1.5", "CID2244", "https://pubchem.ncbi.nlm.nih.gov/compound/2244"]) {
+      const invalid = value.resolve(request({
+        providerId: FIXED_BIOMEDICAL_PROVIDER_IDS.pubchem,
+        source: "pubchem",
+        accession,
+      }), "task_provider");
+      expect(() => invalid.handler.plan(invalid.request)).toThrow(/valid PubChem CID/);
+    }
   });
 
   it.each<{ extra: Record<string, import("@biomed/contracts").JsonValue>; message: RegExp }>([

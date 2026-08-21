@@ -13,6 +13,7 @@ export const FIXED_BIOMEDICAL_PROVIDER_IDS = Object.freeze({
   uniprot: "uniprot.files.v1",
   clinvar: "clinvar.files.v1",
   clinicalTrials: "clinicaltrials.files.v1",
+  pubchem: "pubchem.files.v1",
 });
 
 export const FIXED_BIOMEDICAL_IMPLEMENTATION_DIGESTS = Object.freeze({
@@ -21,6 +22,7 @@ export const FIXED_BIOMEDICAL_IMPLEMENTATION_DIGESTS = Object.freeze({
   uniprot: "5b646512b83f11b9cb936fb815f5b2cb039e08bddcf78f1beaa3efef2795cbc4",
   clinvar: "49f07112144a794dde52370e018b8ca7ab46efbb7dcc9e3676908e788b94f0fe",
   clinicalTrials: "79af22071345a2f31094f86a4a6c2965d113b8817e4ab99586dc959a94474d6d",
+  pubchem: "85dda22b9f274c0fc3277e1bf9b5f1e8e8ac8c63b1504cf40417c3ebd83e2bd7",
 });
 
 const FIXED_PARAMETER_KEYS = new Set(["source", "accession", "entities"]);
@@ -96,7 +98,7 @@ function sourceId(providerId: string, accession: string): string {
 
 function sourcePlan(options: {
   providerId: string;
-  database: "pdb" | "pubmed" | "uniprot" | "browser";
+  database: "pdb" | "pubmed" | "uniprot" | "pubchem" | "browser";
   accession: string;
   url: string;
   title: string;
@@ -224,6 +226,26 @@ const DEFINITIONS: readonly ProviderDefinition[] = Object.freeze([
       title: `ClinicalTrials.gov study ${identifier}`,
       filename: `${identifier}.json`,
       host: "clinicaltrials.gov",
+      expectedMediaTypes: new Set(["application/json"]),
+      accept: "application/json",
+    }),
+  },
+  {
+    providerId: FIXED_BIOMEDICAL_PROVIDER_IDS.pubchem,
+    implementationDigest: FIXED_BIOMEDICAL_IMPLEMENTATION_DIGESTS.pubchem,
+    source: "pubchem",
+    identifierName: "PubChem CID",
+    entityKeys: ["pubchem", "pubchem_cid", "pubchem_cids", "compound", "compound_id", "compound_ids"],
+    identifierPattern: /^[1-9][0-9]*$/,
+    normalizeIdentifier: (value) => value,
+    plan: (identifier) => sourcePlan({
+      providerId: FIXED_BIOMEDICAL_PROVIDER_IDS.pubchem,
+      database: "pubchem",
+      accession: identifier,
+      url: `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/${identifier}/property/MolecularFormula,MolecularWeight,IUPACName,CanonicalSMILES,IsomericSMILES,InChIKey,InChI/JSON`,
+      title: `PubChem compound identity ${identifier}`,
+      filename: `${identifier}.json`,
+      host: "pubchem.ncbi.nlm.nih.gov",
       expectedMediaTypes: new Set(["application/json"]),
       accept: "application/json",
     }),
