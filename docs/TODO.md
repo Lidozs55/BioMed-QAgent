@@ -71,11 +71,18 @@
       execution 从旧 collector 遗漏中恢复，但 semantic_product/trusted_inputs/同 commit
       reproducibility 仍未通过。未修改 runtime、Publisher、Gold 输入或 acceptance 标准。
       详见 [Gold v1 diagnostic baseline](audit/2026-08-20-gold-diagnostic-baseline.md)。
-- [ ] **P0 / next repair** Same-commit trusted-input closure：基于 E6 的边界证据，优先修复
-      Core-owned SourceAsset role-aware receipt、family admission/semantic validation 和同一
-      task/run/build/publication/artifact evidence 的可信闭环；仅当权威事件模型确实缺少所需
-      阶段时才修改 runtime。本阶段不启动完整 Canonical IR、RegisteredTransform 或 family
-      benchmark 特例重构。
+- [x] **P0 / TASK-056 module + trusted E2E complete on task branch** 首个 canonical vertical
+      slice 选择通用 `bioactivity_identity`：保留 ChEMBL 四表兼容输出，增加 fixed PubChem
+      carrier、独立 compound identity、optional conflict-preserving crosswalk、双 FK relation、
+      receipt/locator/transform closure 和 Core-owned ProductAssessment publication gate。exact
+      InChIKey 的 non-Gold fixture 走通五表 publication + artifact hash parity；冲突、malformed、
+      CID mismatch、缺 receipt 均在 Publisher 前 fail-closed。未增加 Gold-specific profile，
+      严格 Gold 仍为 0/6，等待同 commit frozen rerun。设计与证据见
+      [Bioactivity Identity Vertical Slice](audit/2026-08-20-bioactivity-identity-vertical-slice.md)。
+- [ ] **P0 / next repair** Same-commit trusted-input closure：基于 E6 与 TASK-056 的边界证据，
+      继续补齐同一 task/run/build/publication/artifact/final-answer 证据，并在 frozen input 上
+      原样复跑；仅当权威事件模型确实缺少所需阶段时才修改 runtime。本阶段不启动完整
+      Canonical IR、RegisteredTransform 或 family benchmark 特例重构。
 
 > TASK-047/048 的 work package、硬依赖、分支边界和逐项验收统一见
 > [Gold 可信 Publication 收敛执行计划](superpowers/plans/2026-08-18-gold-trusted-publication-closure.md)。

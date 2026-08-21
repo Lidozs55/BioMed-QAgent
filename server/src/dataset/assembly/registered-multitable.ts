@@ -129,12 +129,18 @@ export const proteinStructureRegisteredAssembler: FamilyAssemblerHandler = {
 export const bioactivityRegisteredAssembler: FamilyAssemblerHandler = {
   familyId: "bioactivity_measurement",
   handlerId: "bioactivity_measurement.assembler.v1",
-  assemble: (input) => assembleBioactivityCandidate({
-    taskId: input.taskId,
-    buildId: input.buildId,
-    datasetFamily: input.datasetFamily,
-    rowGranularity: input.rowGranularity,
-    tables: tableInputs(input, ["activities", "compounds", "assays", "targets"] as const),
-    registeredAssetIds: input.registeredAssetIds,
-  }),
+  assemble: (input) => {
+    const baseTables = tableInputs(input, ["activities", "compounds", "assays", "targets"] as const);
+    const identityTables = results(input).compound_crosswalks === undefined
+      ? []
+      : tableInputs(input, ["compound_crosswalks"] as const);
+    return assembleBioactivityCandidate({
+      taskId: input.taskId,
+      buildId: input.buildId,
+      datasetFamily: input.datasetFamily,
+      rowGranularity: input.rowGranularity,
+      tables: [...baseTables, ...identityTables],
+      registeredAssetIds: input.registeredAssetIds,
+    });
+  },
 };

@@ -4,9 +4,13 @@ import { readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type {
+  DatasetBuildSourceBinding,
   DatasetManifestV2,
   DatasetSchemaV2,
   JsonValue,
+  ProductArtifactFact,
+  ProductAssessment,
+  SourceAssetRegistrationReceipt,
   ManifestArtifactEntry,
   OperationResultManifest,
   PublicationCandidate,
@@ -33,6 +37,13 @@ import { SourceAssetRegistry } from "../../runtime/source-assets/registry.js";
 import { providerCarrierBinding } from "./provider-bindings.js";
 import { parseProteinStructureCarrier } from "../families/protein-structure/provider.js";
 import { transformChemblRegisteredAssets } from "../families/bioactivity-measurement/chembl.js";
+import {
+  bioactivityCompoundCrosswalkSchema,
+  buildBioactivityIdentity,
+  normalizeBioactivityInchiKey,
+  parsePubChemIdentityCarrier,
+  type BioactivityCompoundInput,
+} from "../families/bioactivity-measurement/index.js";
 import { transformBioCLiteratureEvidence } from "../families/literature-evidence/provider.js";
 import { expandTargetEvidenceJsonCarriers } from "../families/target-evidence/provider-json.js";
 import { literatureEvidenceTables } from "../families/literature-evidence/schema.js";
@@ -234,6 +245,52 @@ export interface RegisteredMultiTableExecutionResult {
 
 type ProviderRows = Readonly<Record<string, readonly object[]>>;
 
+interface BioactivityPubChemCarrier {
+  binding: DatasetBuildSourceBinding;
+  receipt: SourceAssetRegistrationReceipt;
+  bytes: Buffer;
+  expectedCid: number;
+}
+
+function positivePubChemCid(binding: DatasetBuildSourceBinding, spec: DatasetBuildSpec): number {
+  const controlledKeys = ["pubchem", "pubchem_cid", "pubchem_cids", "compound", "compound_id", "compound_ids"];
+  const candidates = [
+    ...(binding.accession === null ? [] : [binding.accession]),
+    ...controlledKeys.flatMap((key) => spec.entities[key] ?? []),
+  ].filter((value, index, values) => values.indexOf(value) === index);
+  const valid = candidates.filter((value) => /^[1-9][0-9]*$/.test(value));
+  if (valid.length !== 1) {
+    throw new TypeError("PubChem identity binding requires exactly one positive CID");
+  }
+  const cid = Number(valid[0]);
+  if (!Number.isSafeInteger(cid) || cid <= 0) {
+    throw new TypeError("PubChem identity binding CID must be a positive safe integer");
+  }
+  return cid;
+}
+
+function exactChemblIdentityMatch(
+  compounds: readonly object[],
+  pubchem: BioactivityPubChemCarrier,
+): BioactivityCompoundInput {
+  const payload = JSON.parse(pubchem.bytes.toString("utf8")) as unknown;
+  const property = parsePubChemIdentityCarrier(payload, pubchem.expectedCid);
+  const matches = compounds.filter((value): value is BioactivityCompoundInput => {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+    const compound = value as Partial<BioactivityCompoundInput>;
+    if (compound.compound_id_namespace !== "chembl_compound" || compound.inchi_key === null || compound.inchi_key === undefined) return false;
+    try {
+      return normalizeBioactivityInchiKey(compound.inchi_key, "ChEMBL InChIKey") === property.inchiKey;
+    } catch {
+      return false;
+    }
+  });
+  if (matches.length !== 1) {
+    throw new Error("bioactivity identity requires exactly one ChEMBL compound with an exact InChIKey match");
+  }
+  return matches[0];
+}
+
 function jsonCompatible(value: unknown, label: string): JsonValue {
   try {
     const parsed = JSON.parse(JSON.stringify(value)) as unknown;
@@ -364,6 +421,8 @@ export async function executeRegisteredMultiTableBuild(
   const tableResults: Record<string, OperationResultManifest> = {};
   const audits: RegisteredTableAudit[] = [];
   const sourceReceipts = new Map<string, Awaited<ReturnType<SourceAssetRegistry["register"]>>>();
+  let assessIdentityArtifacts: ((artifacts: readonly ProductArtifactFact[]) => ProductAssessment) | null = null;
+  let productAssessment: ProductAssessment | null = null;
   const providerBindings = input.spec.source_bindings.filter((binding) =>
     providerCarrierBinding(family.id, binding.source, binding.adapter_id) !== null,
   );
@@ -373,6 +432,8 @@ export async function executeRegisteredMultiTableBuild(
     }
     const aggregateRows: Record<string, object[]> = {};
     const assetIds: string[] = [];
+    const pubchemCarriers: BioactivityPubChemCarrier[] = [];
+    let chemblCarrierCount = 0;
     for (const binding of providerBindings) {
       const provider = providerCarrierBinding(family.id, binding.source, binding.adapter_id)!;
       const assetId = input.registeredAssetIds[binding.binding_id];
@@ -380,6 +441,22 @@ export async function executeRegisteredMultiTableBuild(
       const resolved = await carrierBytes(assetRegistry, assetId);
       sourceReceipts.set(assetId, resolved.receipt);
       assetIds.push(assetId);
+      if (family.id === "bioactivity_measurement" &&
+          provider.source === "pubchem" &&
+          provider.adapterId === "bioactivity.pubchem_identity.v1") {
+        pubchemCarriers.push({
+          binding,
+          receipt: resolved.receipt,
+          bytes: resolved.bytes,
+          expectedCid: positivePubChemCid(binding, input.spec),
+        });
+        continue;
+      }
+      if (family.id === "bioactivity_measurement" &&
+          provider.source === "chembl" &&
+          provider.adapterId === "bioactivity.chembl_json.v1") {
+        chemblCarrierCount += 1;
+      }
       const expanded = providerRows({
         familyId: family.id,
         source: provider.source,
@@ -391,6 +468,50 @@ export async function executeRegisteredMultiTableBuild(
       for (const [tableId, rows] of Object.entries(expanded)) {
         (aggregateRows[tableId] ??= []).push(...rows);
       }
+    }
+    if (pubchemCarriers.length > 0) {
+      if (family.id !== "bioactivity_measurement" || pubchemCarriers.length !== 1 || chemblCarrierCount !== 1) {
+        throw new Error("bioactivity identity requires exactly one ChEMBL and one PubChem provider carrier");
+      }
+      const pubchem = pubchemCarriers[0]!;
+      const chemblCompound = exactChemblIdentityMatch(aggregateRows.compounds ?? [], pubchem);
+      const chemblReceipt = [...sourceReceipts.values()].find((receipt) => receipt.source_id === chemblCompound.source_id);
+      if (chemblReceipt === undefined) {
+        throw new Error("bioactivity identity ChEMBL compound has no registered source receipt");
+      }
+      const emptyArtifactFacts: ProductArtifactFact[] = [
+        { artifact_id: "artifact_compound_identity_pending", role: "compound_identity", sha256: null },
+        { artifact_id: "artifact_compound_crosswalk_pending", role: "compound_crosswalk", sha256: null },
+      ];
+      const document = JSON.parse(pubchem.bytes.toString("utf8")) as unknown;
+      const identityInput = {
+        task_id: input.taskId,
+        chembl_compound: chemblCompound,
+        chembl_source: { receipt: chemblReceipt, json_pointer: "/activities/0" },
+        pubchem_carrier: {
+          receipt: pubchem.receipt,
+          json_pointer: "/PropertyTable/Properties/0",
+          expected_cid: pubchem.expectedCid,
+          document,
+        },
+      };
+      const identityResult = buildBioactivityIdentity(identityInput, emptyArtifactFacts);
+      assessIdentityArtifacts = (artifacts) => buildBioactivityIdentity(identityInput, artifacts).assessment;
+      if (identityResult.assessment.product_status === "incomplete") {
+        throw new Error("bioactivity identity assessment is not semantically publishable");
+      }
+      const existingCompounds = aggregateRows.compounds ?? [];
+      const pubchemCompound = identityResult.compounds[1];
+      const pubchemDuplicate = existingCompounds.some((value) => {
+        if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+        return Reflect.get(value, "compound_id") === pubchemCompound.compound_id &&
+          Reflect.get(value, "compound_id_namespace") === pubchemCompound.compound_id_namespace;
+      });
+      if (pubchemDuplicate) {
+        throw new Error("bioactivity identity PubChem compound duplicates an existing identity");
+      }
+      aggregateRows.compounds = [...existingCompounds, pubchemCompound];
+      aggregateRows.compound_crosswalks = [...identityResult.compound_crosswalks];
     }
     const rows: ProviderRows = aggregateRows;
     const tableSchemas = new Map<string, DatasetSchemaV2>();
@@ -420,6 +541,14 @@ export async function executeRegisteredMultiTableBuild(
       for (const entry of bioactivityTableEntries()) {
         if (entry.schema.schema_version === "2.0") tableSchemas.set(entry.tableId, entry.schema);
       }
+      if (rows.compound_crosswalks !== undefined) {
+        tableSchemas.set("compound_crosswalks", bioactivityCompoundCrosswalkSchema);
+      }
+    }
+    for (const tableId of Object.keys(rows)) {
+      if (!tableSchemas.has(tableId)) {
+        throw new Error(`provider carrier emitted unknown table '${tableId}'`);
+      }
     }
     Object.assign(tableResults, await writeProviderTables({
       outputDir,
@@ -431,6 +560,28 @@ export async function executeRegisteredMultiTableBuild(
       assetIds: [...new Set(assetIds)].sort(),
       allowEmptyTables: family.id === "protein_structure" ? ["ligands"] : [],
     }));
+    if (assessIdentityArtifacts !== null) {
+      const compoundResult = tableResults.compounds;
+      const crosswalkResult = tableResults.compound_crosswalks;
+      if (compoundResult === undefined || crosswalkResult === undefined) {
+        throw new Error("bioactivity identity tables are missing committed operation results");
+      }
+      productAssessment = assessIdentityArtifacts([
+        {
+          artifact_id: `artifact_${compoundResult.result_manifest_id}`,
+          role: "compound_identity",
+          sha256: compoundResult.output_files[0]?.sha256 ?? null,
+        },
+        {
+          artifact_id: `artifact_${crosswalkResult.result_manifest_id}`,
+          role: "compound_crosswalk",
+          sha256: crosswalkResult.output_files[0]?.sha256 ?? null,
+        },
+      ]);
+      if (productAssessment.product_status !== "publishable") {
+        throw new Error(`bioactivity identity product is not publishable: ${productAssessment.blockers.map((blocker) => blocker.code).join(", ")}`);
+      }
+    }
   }
 
   for (const binding of providerBindings.length > 0 ? [] : input.spec.source_bindings) {
@@ -488,7 +639,10 @@ export async function executeRegisteredMultiTableBuild(
     registeredAssetIds: registeredAssets,
   });
 
-  const schemasByRef = new Map(family.schemas.filter((schema): schema is DatasetSchemaV2 => schema.schema_version === "2.0").map((schema) => [schema.schema_id, schema]));
+  const candidateSchemaRefs = new Set(candidate.tables.map((table) => table.definition.schema_ref));
+  const schemasByRef = new Map(family.schemas.filter((schema): schema is DatasetSchemaV2 =>
+    schema.schema_version === "2.0" && candidateSchemaRefs.has(schema.schema_id),
+  ).map((schema) => [schema.schema_id, schema]));
   const validationTables = candidate.tables.map((table) => {
     const result = tableResults[table.definition.table_id];
     const schema = schemasByRef.get(table.definition.schema_ref);
@@ -526,6 +680,13 @@ export async function executeRegisteredMultiTableBuild(
   }, null, 2)}\n`, "utf8");
   const schemaPath = path.join(outputDir, "schema.json");
   await writeFile(schemaPath, `${JSON.stringify([...schemasByRef.values()], null, 2)}\n`, "utf8");
+  if (productAssessment !== null) {
+    await writeFile(
+      path.join(outputDir, "product_assessment.json"),
+      `${JSON.stringify(productAssessment, null, 2)}\n`,
+      "utf8",
+    );
+  }
 
   const entries: ManifestArtifactEntry[] = [];
   for (const table of candidate.tables) {
@@ -535,6 +696,9 @@ export async function executeRegisteredMultiTableBuild(
   entries.push(await artifact(outputDir, "schema.json", "schema", "application/json"));
   entries.push(await artifact(outputDir, "provenance.json", "provenance", "application/json"));
   entries.push(await artifact(outputDir, "registered_adapter_audit.json", "audit_report", "application/json"));
+  if (productAssessment !== null) {
+    entries.push(await artifact(outputDir, "product_assessment.json", "audit_report", "application/json"));
+  }
   const packageSha = packageDigest(entries);
   const failedChecks = b3.checks.filter((check) => !check.passed);
   const validation: ValidationResult = {
@@ -546,7 +710,11 @@ export async function executeRegisteredMultiTableBuild(
     failed_count: failedChecks.length,
     report_path: "validation_report.json",
   };
-  await writeFile(path.join(outputDir, "validation_report.json"), `${JSON.stringify({ profile_ref: validation.profile_ref, checks: b3.checks }, null, 2)}\n`, "utf8");
+  await writeFile(path.join(outputDir, "validation_report.json"), `${JSON.stringify({
+    profile_ref: validation.profile_ref,
+    checks: b3.checks,
+    ...(productAssessment === null ? {} : { product_assessment: productAssessment }),
+  }, null, 2)}\n`, "utf8");
   const primary = candidate.tables.find((table) => table.definition.role === "primary")!;
   const manifest: DatasetManifestV2 = {
     schema_version: "2.0",
@@ -562,7 +730,14 @@ export async function executeRegisteredMultiTableBuild(
     artifacts: entries,
     source_summary: Object.fromEntries([...sourceReceipts.values()].map((receipt) => [receipt.source_id, { asset_id: receipt.asset_ref.asset_id }])),
     validation_summary: { profile_ref: validation.profile_ref, status: validation.status, checked_count: validation.checked_count, failed_count: validation.failed_count, report_path: validation.report_path },
-    confidence_summary: { source: "registered_table_schema_and_b3" },
+    confidence_summary: {
+      source: "registered_table_schema_and_b3",
+      ...(productAssessment === null ? {} : {
+        product_status: productAssessment.product_status,
+        product_scores: jsonCompatible(productAssessment.scores, "product_assessment.scores"),
+        product_blockers: jsonCompatible(productAssessment.blockers, "product_assessment.blockers"),
+      }),
+    },
     provenance_summary: { source_count: sourceReceipts.size, coverage: { traced_rows: primary.row_count, untraced_rows: 0, coverage_ratio: 1 } },
     tables: candidate.tables.map((table) => table.definition),
     relations: candidate.relations,

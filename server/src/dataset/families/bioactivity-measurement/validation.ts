@@ -14,6 +14,9 @@ import {
 } from "../../schema/common/index.js";
 import { validateMultiTableCandidate } from "../../validation/multitable.js";
 import {
+  bioactivityCompoundCrosswalkSchema,
+  bioactivityCompoundCrosswalkTable,
+  bioactivityIdentityRelations,
   bioactivityRelations,
   bioactivityTableEntries,
   bioactivityValidationPolicy,
@@ -126,11 +129,17 @@ function assertAssay(value: BioactivityAssayInput): void {
 
 export function assertBioactivityRelations(
   relations: readonly RelationDefinition[],
+  identityEnabled = false,
 ): void {
-  if (relations.length !== bioactivityRelations.length) {
-    fail("activity compound, assay, target, and assay-target relations are all required");
+  const expectedRelations = identityEnabled
+    ? [...bioactivityRelations, ...bioactivityIdentityRelations]
+    : [...bioactivityRelations];
+  if (relations.length !== expectedRelations.length) {
+    fail(identityEnabled
+      ? "base bioactivity and both compound identity relations are required"
+      : "activity compound, assay, target, and assay-target relations are all required");
   }
-  for (const expected of bioactivityRelations) {
+  for (const expected of expectedRelations) {
     const actual = relations.find((item) => item.relation_id === expected.relation_id);
     if (actual === undefined || !sameContract(actual, expected)) {
       fail(`relation ${expected.relation_id} is missing or changed`);
@@ -216,9 +225,13 @@ export async function validateBioactivityCandidate(
 ): Promise<MultiTableValidationResult> {
   const expectedTables = bioactivityTableEntries();
   const actualIds = request.tables.map((table) => table.definition.table_id).sort();
-  const expectedIds = expectedTables.map((table) => table.tableId).sort();
+  const requiredIds = expectedTables.map((table) => table.tableId).sort();
+  const identityEnabled = actualIds.includes("compound_crosswalks");
+  const expectedIds = identityEnabled
+    ? [...requiredIds, "compound_crosswalks"].sort()
+    : requiredIds;
   if (!sameContract(actualIds, expectedIds)) {
-    fail("activities, compounds, assays, and targets tables are all required");
+    fail("activities, compounds, assays, and targets are required; only compound_crosswalks is optional");
   }
   for (const expected of expectedTables) {
     const actual = request.tables.find((table) => table.definition.table_id === expected.tableId);
@@ -228,9 +241,19 @@ export async function validateBioactivityCandidate(
       fail(`table ${expected.tableId} does not match the bioactivity schema contract`);
     }
   }
-  assertBioactivityRelations(request.relations);
+  if (identityEnabled) {
+    const crosswalk = request.tables.find((table) => table.definition.table_id === "compound_crosswalks");
+    if (crosswalk === undefined ||
+        !sameContract(crosswalk.definition, bioactivityCompoundCrosswalkTable) ||
+        !sameContract(crosswalk.schema, bioactivityCompoundCrosswalkSchema)) {
+      fail("table compound_crosswalks does not match the bioactivity identity schema contract");
+    }
+  }
+  assertBioactivityRelations(request.relations, identityEnabled);
   const relationIds = [...request.candidate.relation_ids].sort();
-  const expectedRelationIds = bioactivityRelations.map((item) => item.relation_id).sort();
+  const expectedRelationIds = (identityEnabled
+    ? [...bioactivityRelations, ...bioactivityIdentityRelations]
+    : [...bioactivityRelations]).map((item) => item.relation_id).sort();
   if (!sameContract(relationIds, expectedRelationIds)) {
     fail("candidate must reference every bioactivity relation");
   }

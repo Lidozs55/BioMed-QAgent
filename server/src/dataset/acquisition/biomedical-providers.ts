@@ -6,6 +6,7 @@ import type {
   AcquisitionDownloadPlan,
   AcquisitionProviderHandler,
 } from "./runtime.js";
+import { CHEMBL_FILES_PROVIDER_ID } from "./chembl-provider.js";
 
 export const FIXED_BIOMEDICAL_PROVIDER_IDS = Object.freeze({
   pdb: "pdb.files.v1",
@@ -269,7 +270,10 @@ export function fixedBiomedicalAcquisitionParameters(options: {
   entities: Record<string, string[]>;
   bindingParameters: Record<string, JsonValue>;
 }): Record<string, JsonValue> | null {
-  const providerIds: ReadonlySet<string> = new Set(Object.values(FIXED_BIOMEDICAL_PROVIDER_IDS));
+  const providerIds: ReadonlySet<string> = new Set([
+    ...Object.values(FIXED_BIOMEDICAL_PROVIDER_IDS),
+    CHEMBL_FILES_PROVIDER_ID,
+  ]);
   if (!providerIds.has(options.providerId ?? "")) return null;
   if (Object.keys(options.bindingParameters).length !== 0) {
     throw new TypeError(`${options.providerId} does not accept binding parameters`);

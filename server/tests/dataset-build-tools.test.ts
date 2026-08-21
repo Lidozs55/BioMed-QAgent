@@ -148,6 +148,7 @@ describe("Pi DatasetBuild tools", () => {
     };
     expect(bioactivitySources.items.oneOf.map((option) => adapterId(option))).toEqual([
       "bioactivity.chembl_json.v1",
+      "bioactivity.pubchem_identity.v1",
       "registered_bioactivity_activities_json",
       "registered_bioactivity_assays_json",
       "registered_bioactivity_compounds_json",
@@ -430,6 +431,46 @@ describe("Pi DatasetBuild tools", () => {
           source: "pdb",
           accession: null,
           entities: { pdb_ids: ["6M0J"] },
+        },
+      }),
+    }));
+
+    acquire.mockClear();
+    const chemblSpec = {
+      ...spec,
+      build_id: "build_chembl_provider",
+      dataset_family: "bioactivity_measurement",
+      entities: {
+        chembl_compounds: ["CHEMBL100", "CHEMBL200"],
+        activity_types: ["IC50", "Ki"],
+      },
+      source_bindings: [{
+        ...spec.source_bindings[0]!,
+        binding_id: "binding_chembl",
+        source: "chembl",
+        acquisition: {
+          schema_version: "1.0" as const,
+          mode: "builtin" as const,
+          provider_id: "chembl.files.v1",
+          recipe_id: null,
+          recipe_version: null,
+        },
+        adapter_id: "bioactivity.chembl_json.v1",
+        accession: "CHEMBL9999",
+        parameters: {},
+      }],
+    };
+    await tools[1]!.execute({ spec: chemblSpec, mapping_files: {} });
+    expect(acquire).toHaveBeenCalledWith(expect.objectContaining({
+      request: expect.objectContaining({
+        provider_id: "chembl.files.v1",
+        parameters: {
+          source: "chembl",
+          accession: "CHEMBL9999",
+          entities: {
+            chembl_compounds: ["CHEMBL100", "CHEMBL200"],
+            activity_types: ["IC50", "Ki"],
+          },
         },
       }),
     }));

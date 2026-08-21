@@ -13,6 +13,9 @@ import {
 } from "../../assembly/helpers.js";
 import { parsePublicationCandidate } from "../../contracts/index.js";
 import {
+  bioactivityCompoundCrosswalkSchema,
+  bioactivityCompoundCrosswalkTable,
+  bioactivityIdentityRelations,
   bioactivityRelations,
   bioactivityTableEntries,
 } from "./schemas.js";
@@ -52,12 +55,13 @@ interface TableSummary {
   primary_file_sha256: string;
 }
 
-const TABLE_ORDER: readonly BioactivityTableId[] = [
+const REQUIRED_TABLE_ORDER: readonly BioactivityTableId[] = [
   "activities",
   "compounds",
   "assays",
   "targets",
 ];
+const OPTIONAL_IDENTITY_TABLE: BioactivityTableId = "compound_crosswalks";
 
 function summaryString(
   summary: Readonly<Record<string, JsonValue>>,
@@ -107,6 +111,13 @@ function exactAssetClosure(
 }
 
 function tableById(tableId: BioactivityTableId) {
+  if (tableId === OPTIONAL_IDENTITY_TABLE) {
+    return {
+      tableId,
+      schema: bioactivityCompoundCrosswalkSchema,
+      definition: bioactivityCompoundCrosswalkTable,
+    };
+  }
   const entry = bioactivityTableEntries().find((item) => item.tableId === tableId);
   if (entry === undefined) throw new Error(`unknown bioactivity table '${tableId}'`);
   return entry;
@@ -131,8 +142,9 @@ export function assembleBioactivityCandidate(
   if (input.rowGranularity !== BIOACTIVITY_ROW_GRANULARITY) {
     throw new Error("bioactivity row granularity does not match assembly input");
   }
-  if (input.tables.length !== TABLE_ORDER.length) {
-    throw new Error("bioactivity assembly requires activities, compounds, assays, and targets tables");
+  if (input.tables.length !== REQUIRED_TABLE_ORDER.length &&
+      input.tables.length !== REQUIRED_TABLE_ORDER.length + 1) {
+    throw new Error("bioactivity assembly requires four base tables and at most one compound crosswalk table");
   }
   if (input.rows !== undefined) assertBioactivityRows(input.rows);
   assertBioactivityRelations(bioactivityRelations);
@@ -142,11 +154,18 @@ export function assembleBioactivityCandidate(
     if (byId.has(table.tableId)) throw new Error(`duplicate bioactivity table '${table.tableId}'`);
     byId.set(table.tableId, table);
   }
-  if (TABLE_ORDER.some((tableId) => !byId.has(tableId))) {
-    throw new Error("bioactivity assembly requires every declared table");
+  if (REQUIRED_TABLE_ORDER.some((tableId) => !byId.has(tableId))) {
+    throw new Error("bioactivity assembly requires activities, compounds, assays, and targets tables");
   }
+  const hasIdentity = byId.has(OPTIONAL_IDENTITY_TABLE);
+  if (byId.size !== REQUIRED_TABLE_ORDER.length + (hasIdentity ? 1 : 0)) {
+    throw new Error("bioactivity assembly contains an unknown table");
+  }
+  const tableOrder = hasIdentity
+    ? [...REQUIRED_TABLE_ORDER, OPTIONAL_IDENTITY_TABLE]
+    : [...REQUIRED_TABLE_ORDER];
 
-  const validated = TABLE_ORDER.map((tableId) => {
+  const validated = tableOrder.map((tableId) => {
     const entry = tableById(tableId);
     const tableInput = byId.get(tableId)!;
     const result = requireCoreResult({
@@ -186,7 +205,9 @@ export function assembleBioactivityCandidate(
       data_ref: resultRefForHash(item.result, item.summary.primary_file_sha256),
       row_count: item.summary.row_count,
     })),
-    relations: [...bioactivityRelations],
+    relations: hasIdentity
+      ? [...bioactivityRelations, ...bioactivityIdentityRelations]
+      : [...bioactivityRelations],
     provenance_refs: validated.flatMap((item) => item.provenance),
     confidence_refs: validated.flatMap((item) => item.confidence),
     audit_refs: resultRefs({

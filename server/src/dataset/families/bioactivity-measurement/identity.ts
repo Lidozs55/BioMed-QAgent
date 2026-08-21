@@ -64,7 +64,7 @@ export interface BioactivityIdentityResult {
   assessment: ProductAssessment;
 }
 
-interface PubChemProperty {
+export interface PubChemProperty {
   cid: number;
   preferredName: string;
   canonicalSmiles: string | null;
@@ -194,7 +194,7 @@ function positiveCid(value: unknown, name: string): number {
   return value;
 }
 
-function normalizedInchiKey(value: unknown, name: string): string {
+export function normalizeBioactivityInchiKey(value: unknown, name = "InChIKey"): string {
   const parsed = requiredText(value, name).toUpperCase();
   if (!INCHI_KEY.test(parsed)) {
     throw new TypeError(`bioactivity identity rejected: ${name} must be a valid InChIKey`);
@@ -249,7 +249,7 @@ export function parsePubChemIdentityCarrier(
   if (cid !== requestedCid) {
     throw new TypeError("bioactivity identity rejected: PubChem CID does not match the requested CID");
   }
-  const inchiKey = normalizedInchiKey(property.InChIKey, "PubChem InChIKey");
+  const inchiKey = normalizeBioactivityInchiKey(property.InChIKey, "PubChem InChIKey");
   return {
     cid,
     preferredName: optionalText(property.IUPACName, "PubChem IUPACName") ?? `PubChem CID ${cid}`,
@@ -354,7 +354,7 @@ export function buildBioactivityIdentity(
   }
   const chemblPointer = jsonPointer(input.chembl_source.json_pointer, "ChEMBL json_pointer");
   const pubchemPointer = jsonPointer(input.pubchem_carrier.json_pointer, "PubChem json_pointer");
-  const leftKey = normalizedInchiKey(input.chembl_compound.inchi_key, "ChEMBL InChIKey");
+  const leftKey = normalizeBioactivityInchiKey(input.chembl_compound.inchi_key, "ChEMBL InChIKey");
   if (input.chembl_compound.compound_id_namespace !== "chembl_compound") {
     throw new TypeError("bioactivity identity rejected: left compound must use chembl_compound namespace");
   }
@@ -402,7 +402,7 @@ export function buildBioactivityIdentity(
     },
     confidence_score: matched ? 1 : 0,
     confidence_level: matched ? "high" as const : "low" as const,
-    source_id: `source_identity_${canonicalDigest(identityEvidence).slice(0, 20)}`,
+    source_id: pubchemReceipt.source_id,
   };
   const crosswalk: BioactivityCompoundCrosswalkInput = {
     crosswalk_id: `crosswalk_${canonicalDigest(crosswalkBody).slice(0, 32)}`,
