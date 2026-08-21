@@ -3,7 +3,7 @@
 > **Status**: Planning（未实施）
 > **Trigger**: 当 `pipeline_artifact` namespace 开始被写入，或第三方导出/导入工具开始依赖缓存 schema 时，必须先完成本迁移
 > **Scope**: 将 22 列 schema 中带基因假设的列名重命名为实体中立名称，并完成代码、缓存数据、Pipeline `main_data.csv` 的同步迁移
-> **关联文档**: [CACHE_DESIGN.md](CACHE_DESIGN.md) §3.2.1（D10 语义泛化）、§10 D10 ADR
+> **关联文档**: [CACHE_DESIGN.md](../architecture/cache-design.md) §3.2.1（D10 语义泛化）、§10 D10 ADR
 
 ---
 
@@ -84,7 +84,7 @@ D10 决策（2026-07-19）出于兼容性考虑，**只做了语义泛化而未�
 
 | 文件                                     | 改动类型                  |
 | ---------------------------------------- | ------------------------- |
-| `docs/CACHE_DESIGN.md`                   | §3.2 列表 + §3.2.1 泛化表 |
+| `docs/architecture/cache-design.md`                   | §3.2 列表 + §3.2.1 泛化表 |
 | `docs/ARCHITECTURE.md`                   | 如有 schema 章节          |
 | `docs/skills_interface_spec.md`          | 如有列名引用              |
 | `backend/AGENTS.md` / `frontend/AGENTS.md` | 如有列名引用            |
@@ -112,7 +112,7 @@ git checkout -b feat/schema-entity-neutral
    不要误伤 `gene_id` 作为变量名 / 函数参数的局部用法 — 需人工 review）。
 3. 移除 IMPORT_INSTRUCTIONS 中的「Schema 语义泛化（D10）」段落
    （新列名已天然实体中立，不需要泛化解释）。
-4. 移除 [CACHE_DESIGN.md](CACHE_DESIGN.md) §3.2.1 的泛化解释表，
+4. 移除 [CACHE_DESIGN.md](../architecture/cache-design.md) §3.2.1 的泛化解释表，
    改为「列名已实体中立」的简单陈述。
 
 ### 第 3 步：数据层迁移
@@ -156,7 +156,7 @@ Pipeline 是即跑即产的，**不需要迁移历史 artifact**：
 
 ### 第 6 步：文档与 ADR
 
-- 在 [CACHE_DESIGN.md](CACHE_DESIGN.md) §10 新增 **D11 — Schema 实体中立化（列名重命名）** ADR
+- 在 [CACHE_DESIGN.md](../architecture/cache-design.md) §10 新增 **D11 — Schema 实体中立化（列名重命名）** ADR
 - 在 §3.2 列表中替换为新列名
 - 在本计划文档顶部将 Status 改为 `Completed`，记录完成日期与 merge commit
 

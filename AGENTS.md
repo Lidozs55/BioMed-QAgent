@@ -66,6 +66,24 @@ Before starting any task, consult:
 - [PROBLEM.md](PROBLEM.md) — competition background and evaluation criteria.
 - [docs/TODO.md](docs/TODO.md) — current development tasks and approved decisions.
 
+### Context budget: what to load, what to skip
+
+- **Current sources only**: `docs/ARCHITECTURE.md` + `docs/architecture/*` +
+  `docs/adr/README.md` (then the matching `docs/adr/NNN-*.md` as needed),
+  `docs/FEATURES.md`, `docs/DEVELOPER_QUICKSTART.md`, `docs/TODO.md`,
+  `docs/ISSUES.md`, `README.md`, `AGENTS.md`, `.pi/skills/*/SKILL.md`.
+- **Do not load as current evidence**: `docs/archive/**` and `docs/migration/**` are
+  historical records (retired Python runtime, Phase 0-8 migration, past reviews and
+  plans). **Nothing was deleted** - files were moved or archived, and can be restored
+  from git history. For why/history questions, consult them explicitly; never treat
+  them as current behavior. Moved paths are indexed in `docs/ARCHITECTURE.md` 文档地图
+  (§ 文档位置变更对照).
+- **Prefer topic files over whole indexes**: for a specific boundary read the matching
+  `docs/adr/NNN-*.md` and `docs/architecture/*.md` chapter instead of loading the
+  whole `ARCHITECTURE.md`.
+- When searching, `rg` the narrowest directory (e.g. `server/src/dataset/`) before
+  opening large docs.
+
 ## Common Commands
 
 ### Normal development (cwd: repository root)
@@ -81,7 +99,7 @@ pnpm build                        # workspace production builds
 ```
 
 Tests run with bounded concurrency by default; for concurrency, CI behavior, and
-throttling options see [docs/test-concurrency.md](docs/test-concurrency.md).
+throttling options see [docs/architecture/test-concurrency.md](docs/architecture/test-concurrency.md).
 
 ### Python database bridge (cwd: repository root)
 

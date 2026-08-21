@@ -5,7 +5,7 @@
 > 数据库组合 allowlist + 单一通用 Validator。V1 仍反映当前代码仓库的实现现状，
 > 但已不再是目标架构。权威目标架构以
 > [../ARCHITECTURE.md](../ARCHITECTURE.md)（V2）为准，架构决策依据以
-> [../BioMed-QAgent_Architecture_Decisions_and_Lessons.md](../BioMed-QAgent_Architecture_Decisions_and_Lessons.md)
+> [../adr/README.md](../adr/README.md)
 > 为准。V2 通过绞杀模式逐步替换 V1，迁移策略见 V2 文档 §18。
 >
 > 原始首段：本文描述当前批准的目标架构。详细数据契约与验收条件见

@@ -7,10 +7,9 @@
 > - **权威性**：本文是系统架构的**单一权威入口**（source of truth）。
 >   任何与本文矛盾的实现都视为缺陷；任何架构变更必须先修订对应章节或新增 ADR。
 > - **职责分工**：本文回答"系统是什么、怎么组织、约束是什么"；具体决策的
->   "为什么"由 ADR 索引（[BioMed-QAgent_Architecture_Decisions_and_Lessons.md](BioMed-QAgent_Architecture_Decisions_and_Lessons.md)；
->   [ADR-017 及后续记录](adr/README.md)）承担；实现规格由
->   [BioMed-QAgent_Pipeline_Refactor_Design.md](BioMed-QAgent_Pipeline_Refactor_Design.md)
->   承担；执行任务由 [TODO.md](TODO.md) 承担；**功能/能力现状（能做什么，面向
+>   "为什么"由 ADR 索引（[adr/README.md](adr/README.md)）承担；历史实现规格
+>   （已归档）见 [archive/BioMed-QAgent_Pipeline_Refactor_Design.md](archive/BioMed-QAgent_Pipeline_Refactor_Design.md)；
+>   执行任务由 [TODO.md](TODO.md) 承担；**功能/能力现状（能做什么，面向
 >   汇报）由 [FEATURES.md](FEATURES.md) 承担**。各文档不互相复制。
 > - **实现状态**：迁移 Phase 0-9 全部完成（2026-08-16）；当前处于 Phase 4 Gold
 >   审计向 Phase 5 hardening/release 过渡的系统收敛阶段。唯一正式拓扑为
@@ -51,6 +50,32 @@
 | §24 | 文档治理 | 本文 |
 | — 当前收敛路线 | Phase 4 Gold audit → Phase 5 hardening/release | [plans/2026-08-20-phase4-to-phase5-hardening-roadmap.md](plans/2026-08-20-phase4-to-phase5-hardening-roadmap.md) |
 | — 近期执行 | Gold evaluator E1-E5 | [plans/2026-08-20-gold-evaluator-near-term-plan.md](plans/2026-08-20-gold-evaluator-near-term-plan.md) |
+| — Family Host + Transform Host（目标规划） | FamilySpec、受控 DatasetTransform Host、examples 迁移与 Batch 0–2 执行计划 | [plans/family-host/README.md](plans/family-host/README.md) + [ADR-039](adr/039-family-transform-host.md) |
+| — 缓存设计（现行） | Cache 契约、Schema 标识与构建参数（详见 ADR-015 与 §9-13） | [architecture/result-validation.md](architecture/result-validation.md) §9-13 + [ADR-015](adr/015-cache-schema-build-parameters.md)；历史详细设计见 [archive/cache-design-2026-08.md](archive/cache-design-2026-08.md) |
+| — 模型供应商参数 | 供应商/模型参数与目录事实（现行 TS `server/src/settings/model-registry/`） | [architecture/model-provider-params.md](architecture/model-provider-params.md) |
+| — 运行限制 | 运行时资源上限与设置契约 | [architecture/runtime-limits.md](architecture/runtime-limits.md) |
+| — 测试并发预算 | 本地有界并发、CI 放宽与 worker 预算 | [architecture/test-concurrency.md](architecture/test-concurrency.md) |
+| — 代码重复审计 | jscpd 重复代码审计报告 | [audit/code-audit-jscpd.md](audit/code-audit-jscpd.md) |
+
+### 文档位置变更对照（2026-08-21 整理）
+
+> 本仓库 2026-08-21 做过一轮文档解耦/清理。**没有内容被删除**：文档只移动/归档，
+> 或可从 git 历史恢复。找不到旧路径时按此表定位：
+
+| 原路径 | 现在位置 |
+| --- | --- |
+| `docs/LEFTOVERS.md` | `docs/archive/LEFTOVERS-2026-08-09.md`（开放项已并入 `docs/ISSUES.md`） |
+| `docs/CACHE_DESIGN.md` | `docs/archive/cache-design-2026-08.md`（现行缓存见 ADR-015 + `architecture/result-validation.md` §9-13） |
+| `docs/MODEL_PROVIDER_PARAMS.md` | `docs/architecture/model-provider-params.md` |
+| `docs/runtime-limits.md` | `docs/architecture/runtime-limits.md` |
+| `docs/test-concurrency.md` | `docs/architecture/test-concurrency.md` |
+| `docs/code-audit-jscpd.md` | `docs/audit/code-audit-jscpd.md` |
+| `docs/BioMed-QAgent_Architecture_Decisions_and_Lessons.md` | 拆分：`docs/adr/001-*` ~ `016-*` + `docs/adr/legacy-decisions-and-lessons.md` |
+| `docs/BioMed-QAgent_Pipeline_Refactor_Design.md` | `docs/archive/BioMed-QAgent_Pipeline_Refactor_Design.md`（历史设计） |
+| `.claude/skills/shadcn/` 与 `.agents/skills/shadcn/` | **保留（框架适配副本，非冗余）**：`.agents/` 供 Codex/OpenAI agent，`.claude/` 供 Claude Code；内容一致，各框架各读各的，勿当作重复清理 |
+| `.superpowers/` | 已删除（历史生成报告，git 历史可恢复） |
+| `audit-results/` | 已删除（一次性审计快照，git 历史可恢复） |
+| `assets/logo/*-v2..v5` | 已删除（被替代版本，git 历史可恢复） |
 
 ---
 ## 1. 产品定义与边界
@@ -362,10 +387,9 @@ supersedes_publication_id
 | 系统架构（是什么 / 怎么组织 / 约束） | `docs/ARCHITECTURE.md`（本文） | V2 目标，权威 |
 | 功能 / 能力全景（能做什么，面向汇报） | `docs/FEATURES.md` | 功能现状，权威（架构语义以本文为准） |
 | 未来演进方向（待决问题 / 非目标等） | `docs/architecture/roadmap.md` | 规划与已否决方案，权威 |
-| 架构决策（为什么） | `docs/BioMed-QAgent_Architecture_Decisions_and_Lessons.md` | ADR 索引，权威 |
-| 迁移架构决策（为什么） | `docs/adr/README.md` | ADR-017 起，权威 |
+| 架构决策（为什么） | `docs/adr/README.md` | ADR 索引（001-038），权威 |
 | 迁移执行记录（historical） | `docs/migration/` | 已完成迁移（Phase 0-8）的执行记录，不反映当前系统 |
-| V2 实现规格 | `docs/BioMed-QAgent_Pipeline_Refactor_Design.md` | 实现基线，权威 |
+| V2 重构设计（历史） | `docs/archive/BioMed-QAgent_Pipeline_Refactor_Design.md` | Python backend 时代提案，已被 Phase 8 TS 迁移取代，仅参考 |
 | V1 架构（历史现状） | `docs/archive/ARCHITECTURE_V1.md` | Legacy，仅参考 |
 | 执行任务 | `docs/TODO.md` | 任务清单，不承担架构解释 |
 | 赛题背景与评分 | `PROBLEM.md` | 外部约束，权威 |

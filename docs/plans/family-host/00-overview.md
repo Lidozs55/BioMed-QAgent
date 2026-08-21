@@ -1,112 +1,156 @@
-# Family Host 改造总计划
+# 目标架构、迁移边界与旧设计清理
 
-## 1. 目标与边界
+## 1. 当前代码事实
 
-本计划将 `docs/architecture/FAMILY-HOST-*` 的长期方向整理为可并行执行的工程路线：
-
-```text
-Pi Agent
-  -> Family discovery / proposal
-  -> Core admission
-  -> fixed or resolved execution
-  -> deterministic validation
-  -> ProductAssessment
-  -> Core Publisher
-```
-
-改造目标不是取消 Dataset Core，也不是让 Agent 自由编排任意 DAG，而是把当前分散在 `DatasetFamilyRegistry`、Schema、assembler、provider dispatch、validation 和 runtime 中的 Family 语义，逐步收敛为可验证的 Family package/capability 边界。
-
-## 2. 当前仓库基线
-
-已存在并可复用：
-
-- `DatasetFamilyRegistry`、Schema Registry、Normalization/Validation Profile 绑定；
-- `DatasetSchemaV2`、`TableDefinition`、`RelationDefinition`、`DatasetManifestV2`；
-- B3 multi-table structural/relation/provenance gate；
-- FamilyAssemblerRegistry 及多个 family-specific assembler；
-- expression 专用 streaming canonicalizer、SQLite disk-backed integrator、quota/cancel 测试；
-- Core-owned SourceAsset、OperationResultManifest、Publisher、Artifact API；
-- `ProductRequirementManifest` / `ProductAssessment` 及 Gold evaluator trusted evidence projection；
-- Agent -> `DatasetBuildSpec` -> Core -> Publication 的正式链路。
-
-已确认的缺口：
-
-- 默认 Family 与 `PRODUCTION_RUNTIME_BY_FAMILY` 仍是源码静态绑定；
-- Schema、table topology、provider dispatch、assembler 仍有多处 family/source 特判；
-- `registered_multitable.runtime.v1` 仍以完整 carrier bytes 和内存 row arrays 为主；
-- 通用 Same-Schema Integration 尚未抽出；
-- expression supporting tables、稳定 dataset/sample/mapping identity、实际 provenance coverage、expression ProductAssessment 尚未形成完整可信闭环；
-- Family Host、动态 package load、capability resolver、task-scoped declarative Family、Agent family tools 尚未实现；
-- `DatasetBuildSpec 1.0` 仍只支持单 `schema_ref`。
-
-## 3. 优先级原则
-
-### P0：先完成现有产品的可信闭环
-
-首先按现有 Gold evaluator 诊断结果修复 task/run/build/trusted input/validation/publication/final-answer 证据链。除非诊断证明缺少可复用 contract，否则不启动完整 Canonical IR、RegisteredTransform 或动态 Family Host。
-
-### P1：先形成可信 expression 多表 projection
-
-用 gene/probe 两个明确 primary projection、正式 supporting tables、稳定身份、流式执行、关系验证和 ProductAssessment 完成一个可验证 vertical slice。它是 Family Host 的前置去风险工作，不是完整 Family Host。
-
-### P2：抽出通用执行原语
-
-将 file-backed writer、disk-backed merge、table-level operation result、receipt closure、relation index、typed conflict decision 等能力抽出为 family-agnostic primitive。
-
-### P3：再做声明式 Family Host
-
-只有当至少两个真实 Family 消费同一抽象，且已有版本化 contract、资源边界和回滚方案时，才将静态定义迁移为 JSON/YAML package loader 和 capability resolver。
-
-## 4. 并行轨道
+当前 production 仍是：
 
 ```text
-A Contract / Projection / Identity
-        |\
-        | +--> C Same-Schema Integration
-        |       |
-        +--> B Streaming Primitives ----+--> D Provider Projections
-                                        |
-                                        +--> E Validation / Provenance / Assessment
-                                                          |
-                                                          +--> H Publication / Evaluator / Release
-
-F Registry / Family Host <---- A + B + E 的稳定契约
-G Agent Capability Interface <---- F + versioned wire contract
+TS Host + Pi Agent + static DatasetFamilyRegistry
+  + fixed/registered family runtimes
+  + TS Dataset Core validation/Publisher
 ```
 
-允许并行：A 与 B 可同时开展；C 在 A 的 identity 草案可用后启动；G 的只读 discovery contract 可提前做，但不得提前开放动态执行字段；D 的 GEO 可先于 GDC/Xena 做内部 vertical slice；F/L2 之前必须完成至少一个通用 runtime primitive 和两个消费者验证。
+已实现且必须保留：SourceAsset 内容寻址与 task ownership、固定 operation skeleton、OperationResultManifest、checkpoint/cancel/timeout、build lock/fence、B3、ProductAssessment、Core-only Publisher、Artifact API hash verification。
 
-禁止并行造成的竞态：Provider 不得各自定义 table identity；Validation 不得在未冻结 schema/relation contract 时写 production profile；Agent 不得在 Core admission 尚未支持时暴露 `schema_refs` 或 `create_family`。
+尚未实现：
 
-## 5. 全局不变量
+- Agent-authored TS 的安全 compiler/bundler；
+- 独立低权限 Transform Host；
+- DatasetTransform ABI、execution receipt 和 quarantine output admission；
+- FamilySpec 动态 build wire contract；
+- examples/families retrieval catalog；
+- static family 到 example 的 shadow/activation/retirement 流程。
 
-所有工作包必须遵守 `FAMILY-HOST-03`：
+当前 `registered_multitable.runtime.v1` 仍完整缓冲 carrier、使用 `object[]` 聚合并存在 family/provider 特判；它还绕开通用 executor 的完整 lock/checkpoint/timeout/cancel 生命周期。不能在该旁路上叠加 Agent transform。
 
-- deterministic artifact 只读；LLM 只能产生 typed proposal/decision，Core 负责 replay；
-- workspace 不是可信输入，必须先注册 SourceAsset/derived input 并产生 receipt；
-- 只有 Core Publisher 创建正式 Publication；
-- capability 必须诚实，不能静默补字段或冒充 derived/source value；
-- 同 Schema 多源必须确定性 dedup/conflict/provenance merge；
-- schema、family、extension、transform 语义必须版本化并保留 digest；
-- 大数据路径保持 streaming、bounded buffer、disk-backed index、cancel/timeout；
-- `BuildResult.succeeded`、文件存在、tool call 成功都不能代替产品级 `publishable`。
+## 2. 目标职责
 
-## 6. 全局完成标准
+```text
+Agent
+  discover sources / retrieve examples
+  author FamilySpec and DatasetTransform
+  propose semantic decisions
+        |
+        v
+Family Host (control plane)
+  strict parse / digest / scope resolution
+  resolve projection, schemas, transform refs, policies
+  admit or reject
+        |
+        v
+Transform Host (isolated execution plane)
+  compile/admit content-addressed bundle
+  registered inputs only
+  bounded reader/writer, no network
+  quota/cancel/timeout/process fence
+  quarantine outputs + execution receipt
+        |
+        v
+Dataset Core (product trust plane)
+  rehash and admit Host outputs
+  compatibility partition / deterministic integration
+  B3 + scientific validation + provenance closure
+  ProductAssessment
+  generic PublicationCandidate
+  Publisher
+```
 
-本路线达到“可进入 Family Host rollout”前，必须同时满足：
+核心原则：Agent 控制“目标产品和候选转换逻辑”；Host 控制“不可信代码如何被隔离执行”；Core 控制“输出是否成为可信产品”。真正可信的是完整 admission + isolation + Core gate，而不是 transform 源码的作者标签。
 
-1. 当前 Gold 失败边界有机器可读诊断，且同 commit trusted evidence closure 可复现。
-2. expression vertical slice 不损失现有 streaming、checkpoint、cancel、lock/fence 和发布安全性。
-3. 至少两种 Family 使用相同的通用 integration/validation/assembly primitive。
-4. 新增声明式 FamilySpec 能在不修改 Dataset Core 业务源码的情况下通过 parser/validator admission；这一条在动态加载阶段才验收，不提前承诺。
-5. 任何 dynamic/task Family 都不能获得未审核 executable extension 或绕过 Publisher 的权限。
-6. 旧 Family/Schema/Publication 的解析和 artifact 下载保持兼容，迁移失败可回滚到旧路径。
+## 3. Family、Projection 与 Transform
 
-## 7. 不属于本计划的工作
+- `FamilySpec` 是 declarative data-product contract，不携带代码。
+- `Projection` 定义 primary/supporting/derived tables、relations、granularity、compatibility dimensions、integration/validation/assessment policy refs。
+- `DatasetTransform` 将登记输入转换为声明输出；所有来源的 transform 共用一种 ABI。
+- FamilySpec 可以引用 TransformDescriptor，但不能携带任意函数、validator、merge implementation、网络权限或 Core DAG。
+- transform 输出默认是 quarantined candidate；Core 重新校验后才形成 native OperationResult。
 
-- 修改 Gold prompt、source inventory、acceptance threshold；
-- 为单个 Gold case 建立生产专用 family/profile/runtime；
-- 重新迁移 TS Host、Pi、权限系统或 Python persistence bridge；
-- 引入 Agent-controlled general DAG；
-- 让 Agent 生成 TS/JS/Shell 并自动进入 trusted runtime；
-- 在没有第二个真实消费者时泛化一个仅服务单 case 的抽象。
+## 4. Core 最终保留什么
+
+目标目录职责（不是本轮文件移动任务）：
+
+```text
+server/src/dataset/
+  contracts/
+  family-host/
+  transform-host/
+  execution/
+  integration/
+  validation/
+  assessment/
+  publish/
+```
+
+Core 持续拥有：
+
+- fixed operation topology 和 transform slot；
+- SourceAsset / committed-result admission；
+- bounded IO、disk-backed state、checkpoint、cancel、lease/fence；
+- compatibility partition、dedup/conflict/provenance merge；
+- structural/scientific validation；
+- ProductAssessment、PublicationCandidate、Publisher。
+
+Agent 不获得 DAG、Publisher、task output/state/settings、网络或任意 npm 权限。
+
+## 5. 六个现有 Family 的终态
+
+`gene_expression`、`literature_evidence`、`target_evidence`、`variant_evidence`、`protein_structure`、`bioactivity_measurement` 最终成为 `examples/families/` 下的 retrieval-based reference corpus，承担：few-shot、SDK example、fixture/regression、shadow parity、Gold capability evidence。
+
+这不是一次性搬迁：每个 capability 必须经过 `example -> host fixture -> Core shadow -> trusted E2E -> activated -> legacy retired`。在最后一个旧调用者和回滚条件消失前，静态 Registry 保持 compatibility facade。
+
+`gene_expression` 暂时保留 fixed executor，并作为 BoundedReader/TableWriter/DiskBackedIndex/Checkpoint/ConflictWriter 的 donor；它最终也不享有架构特权。
+
+## 6. 从 v1 计划中删除的设计
+
+本计划不再使用：
+
+1. `runtime.ts` / Runtime Extension 作为 Family package 的第二套 executable ABI；
+2. “Agent 永远只能声明、不能编写 transform”的绝对限制；
+3. `builtin > curated > user > task` 同时充当 trust、lookup 和 shadow precedence；
+4. 将六个现有 Family 转成永久 builtin packages 的终态；
+5. package root 扫描即获得 production capability；
+6. family-specific GenericAssembler handler 作为长期迁移终点；
+7. 把 GEO/GDC/Xena 都完成、全六族迁移和 Agent create_family 塞入同一迭代；
+8. 把 `audit` 加入现有 `TableRole`；处理失败仍是 audit artifact，不进入产品 table topology。
+
+## 7. ADR 治理
+
+新增 [ADR-039](../../adr/039-family-transform-host.md) 作为 **Proposed** 目标决策。它被接受前：
+
+- 当前 ADR-027/033/034/036/038 与 production 行为继续有效；
+- 可以完成 contract、threat model、isolated fixture Host 和 shadow tooling；
+- 不得接默认 build route、不得激活 Agent-authored transform、不得删除 static runtime。
+
+ADR-039 接受时再逐项标注 supersede/narrow：
+
+- ADR-027 static Registry -> legacy compatibility facade；
+- ADR-033 family-specific assembler -> contract-driven generic assembly；
+- ADR-034 registered adapter path 保留，Agent transform 走独立 Host；
+- ADR-036 fixed derive 保留为 Core primitive，DatasetTransform 使用固定 transform slot而非 DAG；
+- ADR-038 的 promoted-only transform 模型 -> sandbox-executable 与 publication activation 分离。
+
+## 8. 依赖图
+
+```text
+D0 ADR + threat model
+ |-- C1 FamilySpec / Projection contract
+ |    `-- C2 DatasetTransform / receipt / BuildSpec 2.0
+ |         `-- H1 compiler admission -> H2 OS sandbox -> H3 Host protocol
+ |-- I1 identity/relation/audit contract
+ |    `-- E1 expression transform examples
+ `-- S1 bounded IO/result protocol
+      `-- S2 integration + B3 disk mode
+
+H3 + C2 + S1 -> Core quarantine admission
+Core admission + I1 + S2 -> Product gate
+Product gate + expression examples -> shadow E2E
+Two real consumers -> generic claim / migration decision
+```
+
+## 9. 范围截止线
+
+- Batch 0 不运行动态 Family。
+- Batch 1 不激活任何 Agent-authored transform，也不接默认 Agent tool。
+- Batch 2A 只做 expression shadow slice；2B 第二消费者需评审后启动。
+- Batch 3+ 才讨论全六族迁移、promotion/user catalog、默认动态 build。
+- Gold closure 与 Batch 0 contract/security 可并行；Gold requirements 不得塑造 production FamilySpec，但同 commit Gold evidence 仍是 release gate。

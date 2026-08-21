@@ -13,7 +13,7 @@
 - 契约字段一律向后兼容：新字段必须 `| None = None` 或带默认值；旧 `events.jsonl` 重放不破坏。
 - 每个 Task：先写失败测试 → 确认红 → 实现 → 绿 → 提交（`fix: ...` / `feat: ...`）。
 - 质量门（每个 Task 后跑）：`cd backend && source .venv/bin/activate && ruff check app/ tests/ launcher.py && pytest -q`。
-- 更新 `docs/LEFTOVERS.md` 对应条目：✅ 已修 + commit hash。
+- 更新 `docs/archive/LEFTOVERS-2026-08-09.md` 对应条目：✅ 已修 + commit hash。
 
 ---
 
@@ -321,5 +321,5 @@ git commit -am "fix(C5d/e): 强键字典随任务终态清理 + list_tasks activ
 ## P1 收尾
 
 - [ ] 全量回归：`pytest -q`（基线 2257 → 2257+）与 `ruff check app/ tests/ launcher.py`（0 warning）
-- [ ] 更新 `docs/LEFTOVERS.md`：B1 → ✅（P0 完成 + commit）、C1a → ✅、C5c → ✅、C5d/C5e → ✅；`docs/TODO.md:63` 勾选
+- [ ] 更新 `docs/archive/LEFTOVERS-2026-08-09.md`：B1 → ✅（P0 完成 + commit）、C1a → ✅、C5c → ✅、C5d/C5e → ✅；`docs/TODO.md:63` 勾选
 - [ ] 合并 `feat/leftovers-p1` 到 main（质量门全过后），推送

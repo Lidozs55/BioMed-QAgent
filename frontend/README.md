@@ -33,16 +33,17 @@ pnpm dev              # 启动开发服务器 → http://localhost:5173
 
 ## 为打包构建
 
-BioMed-QAgent 以桌面应用形式分发（.exe），前端构建产物内嵌于 PyInstaller 打包的二进制文件中。本节说明前端构建如何与打包流水线集成。
+正式分发为跨平台源码包（`frontend/dist` + `server/dist` + `database/` + `.pi/skills`），
+由 TypeScript Host 静态托管（`pnpm start`）；不再使用 PyInstaller 单文件可执行文件。
+本节说明前端构建如何与整仓打包流水线集成。
 
 ### CI/CD 自动构建
 
-推送 tag（如 `v1.0.0`）触发 GitHub Actions 工作流：
+`.github/workflows/package.yml` 在推送 `v*` 标签或手动触发时构建并上传该 bundle：
 
-1. `pnpm build` — TypeScript 检查 + Vite 生产构建，输出到 `frontend/dist/`
-2. `dist/` 目录作为构建产物上传到 Actions artifact
-3. PyInstaller 将 `dist/` 内嵌到单文件 exe 中（通过 `--add-data` 参数）
-4. 最终产出发布到 GitHub Releases 页面
+1. `pnpm build` — TypeScript 检查 + 整仓生产构建
+2. 打包 `frontend/dist` + `server/dist` + `database/` + `.pi/skills` 为源码包
+3. 上传 Actions artifact（供下载/发布）
 
 ### 构建产物
 
@@ -51,28 +52,30 @@ BioMed-QAgent 以桌面应用形式分发（.exe），前端构建产物内嵌�
 - `index.html` — SPA 入口文件
 - `assets/` — 打包后的 JavaScript、CSS、字体文件（哈希文件名，支持长效缓存）
 
-生产模式下，后端 `launcher.py` 通过 FastAPI `StaticFiles` 挂载 `dist/` 目录，
-所有静态资源由后端提供服务。Vite 代理（`/api` → `:8000`）**仅用于开发模式**。
+生产模式下静态资源由 TypeScript Host 统一服务（仓库根 `pnpm build` + `pnpm start`，
+单一端口 `http://127.0.0.1:5173`）。旧的双进程拓扑（Vite :5173 + Python :8000）与
+PyInstaller 打包流程已随 Phase 8 移除。
 
-### 手动构建步骤
+### 构建（当前）
 
 ```bash
 # 1. 前端构建
 cd frontend
 pnpm build
 
-# 2. 将构建产物复制到后端打包目录
-cp -r dist/ ../backend/dist/   # Windows: Copy-Item -Recurse dist\ ..\backend\dist\
-
-# 3. 执行 PyInstaller 打包（在项目根目录）
+# 2. 整仓生产运行（仓库根）
 cd ..
-pyinstaller --onefile --add-data "frontend/dist;dist" --add-data "backend/app;app" backend/launcher.py
+pnpm start   # TS Host 服务 frontend/dist 与 /api/v1
 ```
+
+> 正式分发为跨平台源码包（`frontend/dist` + `server/dist` + `database/` +
+> `.pi/skills`），由 `.github/workflows/package.yml` 构建；不再使用
+> PyInstaller 单文件可执行文件。
 
 ### 开发说明
 
-`pnpm dev` 仍然像之前一样工作——开发服务器自动代理 `/api` 到后端 `:8000`，
-无需关心打包细节。本节仅文档化打包集成流程，不影响日常开发体验。
+正常开发入口是仓库根 `pnpm dev`（Vite 中间件与 TS Host 同进程，单端口）。
+`frontend/` 下独立 `pnpm dev` 仅作为迁移/调试诊断，不是正常入口。
 
 ## 项目结构
 
