@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement these plans task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 把 docs/LEFTOVERS.md 中所有未实施项（A2d / B 类 4 项 / C 类 20 项 / D 类 5 项 / E 类 5 项）转化为可独立交付、可验证的子系统计划。
+**Goal:** 把 docs/archive/LEFTOVERS-2026-08-09.md 中所有未实施项（A2d / B 类 4 项 / C 类 20 项 / D 类 5 项 / E 类 5 项）转化为可独立交付、可验证的子系统计划。
 
 **Architecture:** 按子系统边界拆分，每份计划可独立执行与合并，互不阻塞。执行顺序按依赖与价值：P1（后端运行时，含唯一 P0 与唯一 Important 项）→ P2（构建/发布层）→ P3（前端）→ P4（测试补强与性能）。P2-P4 中的"接受级"技术债每项都带明确验收断言，执行者按验收即可，无需产品决策。
 
@@ -16,8 +16,8 @@
 - TypeScript 严格模式：禁止 `as any` / `@ts-ignore` / `@ts-expect-error`。
 - 手术式改动：只动计划列出的文件；不顺手重构；不删除计划外的死代码。
 - 提交信息：`feat/fix: <一句话>`，一次功能一个提交；分支名 `feat/leftovers-<batch>`。
-- 每个 Task 完成后更新 `docs/LEFTOVERS.md` 对应条目状态（✅ 已修 + commit hash）。
-- 权威来源：`docs/LEFTOVERS.md`（A2d ⏳、B1-B5、C1a-C6a、D1-D5、E）与 `docs/TODO.md`（63/278/365/367）。
+- 每个 Task 完成后更新 `docs/archive/LEFTOVERS-2026-08-09.md` 对应条目状态（✅ 已修 + commit hash）。
+- 权威来源：`docs/archive/LEFTOVERS-2026-08-09.md`（A2d ⏳、B1-B5、C1a-C6a、D1-D5、E）与 `docs/TODO.md`（63/278/365/367）。
 
 ---
 

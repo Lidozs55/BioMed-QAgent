@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - D 类只加测试：不改生产代码（除非测试暴露真实 bug——暴露时按 TDD 修复并记录）。
-- 每项完成更新 `docs/LEFTOVERS.md`。
+- 每项完成更新 `docs/archive/LEFTOVERS-2026-08-09.md`。
 - 质量门同前：后端 `pytest -q`（2257 基线只增）+ ruff 0 warning；前端 `pnpm test`（726 基线只增）。
 
 ---
@@ -131,7 +131,7 @@
 **Files:**
 - Modify: `backend/app/processing/`（清理行处理处，`_CLEANING_MAX_ROWS` 引用点）
 - Test: `backend/tests/`（现有 _CLEANING_MAX_ROWS 测试 + 流式断言）
-- Docs: `docs/LEFTOVERS.md` C6a 决策记录
+- Docs: `docs/archive/LEFTOVERS-2026-08-09.md` C6a 决策记录
 
 **Interfaces:**
 - Consumes: 现有清理管线入口（读代码定位 `_CLEANING_MAX_ROWS` 引用）
@@ -148,5 +148,5 @@
 ## P4 收尾
 
 - [ ] 后端全量回归 + ruff；前端 `pnpm test`
-- [ ] 更新 `docs/LEFTOVERS.md`：D1-D5 ✅、C5a ✅、C5b ✅、C6a ✅/🔒
+- [ ] 更新 `docs/archive/LEFTOVERS-2026-08-09.md`：D1-D5 ✅、C5a ✅、C5b ✅、C6a ✅/🔒
 - [ ] 合并 `feat/leftovers-p4` 到 main

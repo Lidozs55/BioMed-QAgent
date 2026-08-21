@@ -1,13 +1,31 @@
 # Architecture Decision Records
 
-This directory continues the repository ADR sequence after ADR-016 in
-[BioMed-QAgent_Architecture_Decisions_and_Lessons.md](../BioMed-QAgent_Architecture_Decisions_and_Lessons.md).
-ADRs explain why a boundary exists. The current architecture remains authoritative
-in [ARCHITECTURE.md](../ARCHITECTURE.md), while Phase 1 operating contracts are
-indexed in [migration/README.md](../migration/README.md).
+This directory is the single index for all architecture decisions (ADR-001-038).
+ADR-001-016 were extracted verbatim from the legacy top-level index; the original
+discussion history, rejected designs and pitfalls remain in
+[legacy-decisions-and-lessons.md](legacy-decisions-and-lessons.md). ADRs explain why a
+boundary exists. The current architecture remains authoritative in
+[ARCHITECTURE.md](../ARCHITECTURE.md), while Phase 1 operating contracts are indexed
+in [migration/README.md](../migration/README.md).
 
 | ADR | Decision | Status |
 | --- | --- | --- |
+| [ADR-001](001-product-boundary-dataset-construction.md) | Product boundary is dataset construction, not a full research agent | Accepted |
+| [ADR-002](002-single-family-single-granularity.md) | One DatasetBuild has one primary family and one row granularity | Accepted |
+| [ADR-003](003-trusted-execution-core.md) | Keep the trusted execution core, not a fixed five-stage state machine | Accepted |
+| [ADR-004](004-no-dag-no-build-recipe.md) | No full DAG and no new BuildRecipe | Accepted |
+| [ADR-005](005-manifest-identifies-primary-data.md) | Primary data identified by Manifest, not fixed filenames | Accepted |
+| [ADR-006](006-artifact-role-classification.md) | Manifest classified by Artifact Role; no mixed-granularity primary data | Accepted |
+| [ADR-007](007-agent-plans-not-data-values.md) | Agent decides the plan, not scientific data values | Accepted |
+| [ADR-008](008-availability-vs-mergeability.md) | Source availability and data mergeability are two dimensions | Accepted |
+| [ADR-009](009-string-similarity-proposes-not-approves.md) | String similarity only proposes mappings, cannot approve them | Accepted |
+| [ADR-010](010-run-build-validation-publication-orthogonal.md) | RunStatus / BuildResult / ValidationResult / Publication are orthogonal | Accepted |
+| [ADR-011](011-no-metadata-only-placeholder.md) | No metadata-only placeholder primary table | Accepted |
+| [ADR-012](012-profile-driven-validation.md) | Validation driven by Profile; architecture keeps three publication invariants | Accepted |
+| [ADR-013](013-explainable-confidence-levels.md) | Confidence uses explainable levels, not fake probabilities | Accepted |
+| [ADR-014](014-provenance-sidecar.md) | Provenance via record/batch sidecars; primary table keeps references only | Accepted |
+| [ADR-015](015-cache-schema-build-parameters.md) | Cache identified by Schema and build parameters | Accepted |
+| [ADR-016](016-strangler-migration.md) | Migration uses strangler pattern, not one-shot rewrite | Accepted |
 | [ADR-017](017-pi-agent-runtime.md) | Pi replaces the custom Agent layer, not deterministic dataset semantics | Accepted |
 | [ADR-018](018-single-ts-application-host.md) | One TypeScript Application Host and one browser-facing port | Accepted |
 | [ADR-019](019-session-task-run-build-boundary.md) | Pi Session, BioMed Task, Run, and DatasetBuild remain distinct | Accepted |

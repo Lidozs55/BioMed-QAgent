@@ -12,7 +12,7 @@
 
 - 前端命令一律在 `frontend/` 下：`pnpm lint`（--max-warnings 0）、`pnpm tsc`（--noEmit）、`pnpm test`（基线 726）、`pnpm build`。
 - 禁止 `as any` / `@ts-ignore` / `@ts-expect-error`；组件遵循 shadcn 模式（先查现有组件再实现）。
-- 每项完成后更新 `docs/LEFTOVERS.md`。
+- 每项完成后更新 `docs/archive/LEFTOVERS-2026-08-09.md`。
 
 ---
 
@@ -115,5 +115,5 @@
 ## P3 收尾
 
 - [ ] 前端四门全过（lint/tsc/test/build）；后端因 B3 改动全量回归
-- [ ] 更新 `docs/LEFTOVERS.md`：C3e/C2a/B3/B5/E 类置 ✅；`docs/TODO.md:278/365/367` 同步勾选
+- [ ] 更新 `docs/archive/LEFTOVERS-2026-08-09.md`：C3e/C2a/B3/B5/E 类置 ✅；`docs/TODO.md:278/365/367` 同步勾选
 - [ ] 合并 `feat/leftovers-p3` 到 main

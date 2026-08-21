@@ -11,7 +11,7 @@
 >   [migration/README.md](migration/README.md) 与
 >   [migration/BioMed-QAgent_Pi_Migration_Plan.md](migration/BioMed-QAgent_Pi_Migration_Plan.md)；
 > - 决策依据见 [adr/README.md](adr/README.md) 与
->   [BioMed-QAgent_Architecture_Decisions_and_Lessons.md](BioMed-QAgent_Architecture_Decisions_and_Lessons.md)；
+>   [adr/README.md](adr/README.md)；
 > - 旧主线「V2 Pipeline Refactor」清单归档于
 >   [archive/TODO_PIPELINE_REFACTOR_COMPLETED.md](archive/TODO_PIPELINE_REFACTOR_COMPLETED.md)；
 > - 赛题背景与评分见 [PROBLEM.md](../PROBLEM.md)。
@@ -135,6 +135,7 @@
 
 > B 组详细 ownership、依赖类型、分支、交接窗口和逐任务验收见
 > [开发者 B：可信多表 Publication 落实计划](superpowers/plans/2026-08-18-developer-b-trusted-publication-plan.md)。
+> 最新架构设计（2026-08-21，D1-D14 已对齐，待实现）：[Gene Expression 多表化与 Schema 能力网络设计](superpowers/specs/2026-08-21-gold1-multitable-tables-design.md)。
 > B 组 contracts（含 C3C）、B2M、B3、B5C、B6D、B4M、B5L/T/V/S/A、B6A、B6B
 > module 已完成；C1I/C2I/C3I/B2W/B6W 与 A8 已接入 main。provider parser/runtime dispatch、
 > acquisition-first、固定 biomedical providers、role-aware receipts、multi-carrier aggregation、
@@ -212,7 +213,7 @@
       本地数据源导入经 `server/src/agent/tools/import-tools.ts`
       （`list_source_assets` / `read_source_asset` / `commit_to_cache`，
       `user_import` 命名空间）注册。相应缓存管理 API 与前端设置页见
-      `CACHE_DESIGN.md` §13。
+      `archive/cache-design-2026-08.md` §13。
 - [ ] **P1** AI 用户支持：编写一份面向 AI 用户的调用文档及配套脚本（服务启动 +
       HTTP/WS 驱动封装），方便其他 agent 调用本项目。
 

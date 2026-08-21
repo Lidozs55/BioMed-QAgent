@@ -184,4 +184,4 @@ CSV、JSONL 或 Parquet 的选择需考虑可读性、规模和查询效率。
 | 只靠 Prompt 修正架构 | 否决 | Prompt 不能替代服务端契约、兼容性门禁和发布规则 |
 | 通过 Artifact 数量判断运行成功 | 否决 | 应使用 RunStatus、BuildResult、ValidationResult 和 Publication |
 
-> 完整决策记录见 [BioMed-QAgent_Architecture_Decisions_and_Lessons.md](../BioMed-QAgent_Architecture_Decisions_and_Lessons.md) 的 §19（被否决或修正的方案）。
+> 完整决策记录见 [adr/legacy-decisions-and-lessons.md](../adr/legacy-decisions-and-lessons.md) 的 §19（被否决或修正的方案）。
