@@ -256,7 +256,7 @@ uv run ruff check database                     # bridge lint
 测试并发默认**有界**，避免本机 CPU 撞功耗墙：根 `pnpm test` 限制 workspace 并发为
 2，各 vitest 配置限制 worker 数（server `forks`/2、frontend `threads`/4、contracts
 `threads`/2）；CI（`CI=true`）自动放开 vitest worker 上限。预算模型与覆盖方式见
-[docs/test-concurrency.md](test-concurrency.md)。
+[docs/architecture/test-concurrency.md](architecture/test-concurrency.md)。
 
 ---
 
@@ -375,7 +375,7 @@ pnpm --filter @biomed/server exec playwright install chromium
 |------|------|
 | `pnpm install --frozen-lockfile` | 安装唯一 Workspace lockfile |
 | `pnpm dev` | 启动单端口 TS Host（正常入口） |
-| `pnpm test` | 运行 contracts/server/frontend 测试（默认有界并发，见 [test-concurrency.md](test-concurrency.md)） |
+| `pnpm test` | 运行 contracts/server/frontend 测试（默认有界并发，见 [test-concurrency.md](architecture/test-concurrency.md)） |
 | `pnpm test:full` | 全速测试（去掉 workspace 并发限制；CI 或明确需要最快完成时） |
 | `pnpm lint` | Workspace lint |
 | `pnpm typecheck` | Workspace TypeScript 检查 |

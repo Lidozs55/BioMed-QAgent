@@ -30,8 +30,8 @@ import { useAgentStore } from "@/stores/agentStore";
 //   approve/correction payload → user_input_resumed + run_completed arrive
 //   over the socket → dialog closes and the Run is COMPLETED.
 //
-// This is the frontend twin of the backend agent-loop E2E in
-// backend/tests/agent_loop/test_main_input_broker.py. The transport layer
+// This is the frontend twin of the server-side approval-gate E2E in
+// server/tests/phase5/approval-gate.test.ts. The transport layer
 // (envelope validation, subscribe command, applyEvent dispatch) is the real
 // implementation — only the socket itself is faked.
 

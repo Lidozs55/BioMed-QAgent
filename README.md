@@ -249,6 +249,7 @@ BioMed-QAgent/
 │   ├── DEVELOPER_QUICKSTART.md # 开发者快速入门
 │   ├── TODO.md                # 开发任务与进度索引（迁移 Phase 0-8 已完成）
 │   ├── architecture/          # 架构分层章节（执行、验证、runtime、前端、roadmap 等）
+│   ├── adr/                  # 架构决策记录 ADR-001-038 与历史决策/复盘
 │   └── migration/             # 历史迁移执行记录（Phase 0-8，已归档）
 ├── AGENTS.md                  # AI Agent 与协作约定
 ├── PROBLEM.md                 # 赛题背景与评价标准
@@ -319,7 +320,7 @@ pnpm build
 测试并发默认有界，避免本机 CPU 撞功耗墙：根 `pnpm test` 限制 workspace 并发为 2，
 各 vitest 配置限制 worker 数（server `forks`/2、frontend `threads`/4、contracts
 `threads`/2）；CI（`CI=true`）自动放开 vitest worker 上限。预算模型与覆盖方式见
-[docs/test-concurrency.md](docs/test-concurrency.md)。
+[docs/architecture/test-concurrency.md](docs/architecture/test-concurrency.md)。
 
 ### 前端 package（定向诊断）
 

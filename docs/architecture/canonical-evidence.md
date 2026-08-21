@@ -86,13 +86,25 @@ never by Agent prose or workspace files.
 
 ## Supplementary Transforms
 
-Agent-authored scripts are candidate research transforms only. A promoted
-`RegisteredTransform` must be fixed and replayable. Its output capability is
-declared in terms of canonical entity/relation/evidence/cross-reference types,
-not table filenames. Core binds it to registered SourceAsset inputs, a locked
-implementation digest/runtime, bounded resources, no network, no path escape,
-and deterministic replay. The transform cannot select a family, merge strategy,
-validation profile or publication policy.
+> **Target update:** ADR-039 proposes replacing the old `RegisteredTransform`
+> promotion model with one versioned `DatasetTransform` ABI executed by an
+> isolated Transform Host. The current repository does not implement that Host;
+> until ADR-039 is accepted and its security gates pass, Agent-authored scripts
+> remain candidate research transforms only.
+
+A future `DatasetTransform` may be submitted from the Agent workspace, but it
+must be normalized, compiled, content-addressed, and executed outside the TS
+Application Host in an OS/container isolation backend. The Host produces only a
+`TransformExecutionReceipt` and invocation-scoped quarantine outputs. Core must
+rehash and admit those outputs, bind them to registered SourceAsset or committed
+OperationResult inputs, validate canonical entity/relation/evidence semantics,
+and publish only through the existing Publisher.
+
+The transform may declare canonical output capabilities, but it cannot select a
+family, merge winner, validation threshold, ProductAssessment result, DAG,
+or publication policy. `example`, `task`, `user`, and `curated` scope, execution
+status, verification, and activation are separate dimensions; a sandbox
+execution or Host receipt is not publication trust.
 
 ## Compatibility
 

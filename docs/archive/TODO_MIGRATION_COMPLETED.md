@@ -427,7 +427,7 @@ build 锁、cancel 收敛与 event sink；`DATASET_CORE=ts` 现为默认运行�
 - [x] GDC 默认文件预算由 5 提升到 50；通用来源限流复用并发安全的
       `AsyncHostRateLimiter`，删除 GDC/Xena/fallback 的模块级时间戳实现。
 
-设计与字段表见 [runtime-limits.md](runtime-limits.md)。
+设计与字段表见 [runtime-limits.md](../architecture/runtime-limits.md)。
 
 ### Durable HIL / Confidence 协议（✅ 完成，2026-08-16）
 
