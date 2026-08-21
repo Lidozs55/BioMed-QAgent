@@ -4,6 +4,8 @@
 
 Proposed — 2026-08-20.
 
+> The supplementary-transform execution model in this proposal is superseded as a target by the Proposed [ADR-039](039-family-transform-host.md): the future boundary is one isolated `DatasetTransform` Host, while this ADR's ProductAssessment and canonical evidence decisions remain the semantic foundation. Until ADR-039 is accepted, the existing candidate-only restriction remains in force.
+
 ## Context
 
 The Dataset Core currently has a fixed, trusted execution skeleton and registered

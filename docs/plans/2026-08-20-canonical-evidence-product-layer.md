@@ -2,10 +2,17 @@
 
 ## Status
 
-Long-term additive design reference. Phase 0 (`ProductRequirementManifest` +
+Long-term additive semantic design reference. Phase 0 (`ProductRequirementManifest` +
 `ProductAssessment` + pure evaluator) is implemented. Remaining phases are
 **deferred behind the Phase 4 Gold diagnostic and Phase 5 release-hardening
 roadmap**; they are not the current default execution sequence.
+
+The supplementary-transform portion of this document is superseded as a target
+execution model by the Proposed [ADR-039](../adr/039-family-transform-host.md)
+and the [Family Host + Transform Host plan set](family-host/README.md): the
+future executable boundary is one isolated `DatasetTransform` Host, not a
+second `RegisteredTransform` ABI. Until ADR-039 is accepted, the current
+candidate-only restriction remains in force.
 
 This plan is for the BioMed-QAgent product, not a Gold-case patch. The current TS
 Host + Pi Agent + TS Dataset Core topology remains unchanged. New canonical
@@ -167,23 +174,28 @@ algorithm ID, implementation digest, parameters, input digest, output digest,
 and provenance. Interface distance is one structure-interaction derivation, not
 a Gold4-specific escape hatch.
 
-### Phase 7: RegisteredTransform
+### Phase 7: DatasetTransform Host (deferred and superseded as sequencing)
 
-Only after the IR and package capabilities are stable, add a promotion path for
-supplementary scripts. An Agent may write a candidate transform in workspace,
-but it is not trusted. A promoted transform must declare:
+Only after the IR/package need is justified and the Transform Host security gates
+are accepted should the project add one versioned `DatasetTransform` ABI. An Agent
+may submit candidate source, but production execution must use the isolated Host
+planned in `docs/plans/family-host/03-transform-host-security.md`.
 
-- fixed transform ID/version and implementation digest;
-- locked runtime/dependencies;
-- registered input SourceAsset roles and schemas;
-- output capabilities in terms of entity/relation/evidence/cross-reference
-  types, never final CSV filenames;
-- no network, no path escape, bounded resources, deterministic replay.
+The Host/Core boundary must bind:
 
-Core replays the transform against registered inputs and verifies output digest,
-IR schema, identity/relation closure, provenance, and deterministic repeatability.
-The transform cannot choose family, validation profile, merge strategy, or
-publication policy.
+- fixed transform ID/version and Host-computed implementation digest;
+- normalized source, emitted bundle, compiler/options, dependency, runtime and
+  policy digests;
+- registered SourceAsset/OperationResult input handles;
+- declared FamilySpec/projection/output schemas;
+- no network/path escape/native addon/child process;
+- bounded OS resources, hard cancellation and deterministic replay;
+- quarantine output and a TransformExecutionReceipt before Core admission.
+
+Core rehashes and validates outputs, then performs integration, provenance,
+ProductAssessment and Publisher admission. The transform cannot choose family,
+validation profile, merge strategy, acceptance threshold, DAG, or publication
+policy. Sandbox execution is not activation, and Host receipt is not Core trust.
 
 ### Phase 8: Agent guidance
 
@@ -218,14 +230,15 @@ Gold diagnostic evaluator (current P0)
        -> semantic package registry
        -> package projections
        -> providers/crosswalks/derivations
-       -> RegisteredTransform
+       -> isolated DatasetTransform Host
        -> Agent guidance
 ```
 
-Do not implement RegisteredTransform before the canonical object vocabulary is
-frozen. Do not add provider-specific tables without a package semantic owner.
-Do not continue the canonical layer merely because the design exists; require
-observed multi-family need and a release-safe rollback path.
+Do not implement the DatasetTransform Host before the canonical object vocabulary,
+OS isolation backend, bundle/dependency identity, and rollback path are frozen.
+Do not add provider-specific tables without a package semantic owner. Do not
+continue the canonical layer merely because the design exists; require observed
+multi-family need and a release-safe rollback path.
 
 ## First Implementation Slice
 

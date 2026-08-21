@@ -1,111 +1,165 @@
-# Family Host 改造执行矩阵
+# Batch 0–2 执行矩阵
 
-## 1. 工作包总览
+## 1. 现阶段承诺
 
-| ID | 工作包 | 主要产物 | 可并行起点 | 硬依赖 | 不可宣称 |
-|---|---|---|---|---|---|
-| P0 | Gold evidence closure | same-commit 诊断/修复证据 | 立即 | 当前 evaluator | 不能以历史 evidence 代替 |
-| A | Contract/Projection/Identity | versioned schema/table/relation/identity | 立即 | 无 | 不能宣称 Agent 已支持任意 schema set |
-| B | Streaming primitives | bounded reader/writer/store/result | 立即 | 可先用现有 expression contract | 不能宣称 generic runtime production-ready |
-| C | Same-Schema Integration | table-owned identity/dedup/conflict/provenance | A1+B3 后 | A/B | 不能用 append 或顺序 winner |
-| D-GEO | GEO projection | expression vertical slice | A2+B2 后 | A/B | 不能宣称整族 activation |
-| D-GDC | GDC projection | shared gene/sample/dataset path | A2+B2 后 | A/B | 不能独立定义 identity |
-| D-Xena | Xena projection | shared gene/sample/dataset path | A2+B2 后 | A/B | 不能独立定义 identity |
-| E | Validation/provenance/assessment | semantic gate + actual closure | A/C/B4 后 | A/B/C/D | 不能只靠 B3 |
-| F | Family Registry/Host | package loader/resolver/scope/version | A/B/E 初步稳定后 | A/B/E + compatibility | 不能绕过 Core admission |
-| G | Agent interface | discovery/proposal/task Family | F2/F4 后 | F + versioned contracts | 不能暴露未支持 wire shape |
-| H | Publication/evaluator/release | activation gates/Gold rerun | P0/E/D 后 | 全部相关链路 | 不能以 tool/build success 代替 product success |
+这套计划不是一个迭代内完成全平台的任务单。当前开发截止线是：
 
-## 2. 推荐批次
+```text
+Batch 0
+  + Batch 1
+  + Batch 2A expression shadow slice
+  + Batch 2B 第二真实消费者的 go/no-go 评审
+```
 
-### Batch 0：当前收敛与契约冻结
+Batch 3+ 只保留路线，不在本轮承诺全六 Family、默认动态 Agent build 或旧 Registry 一次性删除。
 
-并行：P0、A1、B1、E1 fixture。
+## 2. Work packages
 
-出口：Gold dominant blockers 已知；projection identity 草案可 parse；bounded reader/writer API 草案；ProductAssessment generic fixture green。
+| ID | 工作包 | 产物 | 硬依赖 | 批次 |
+|---|---|---|---|---|
+| T0 | ADR、威胁模型、平台支持矩阵 | ADR-039 proposal、threat model、sandbox backend decision | 无 | 0 |
+| T1 | FamilySpec / Transform / Receipt contracts | `@biomed/contracts` strict DTO/parser、digest fixtures | T0 | 0 |
+| T2 | identity / projection / relation | dataset/revision/asset、audit artifact、probe relation contract | T0 | 0 |
+| T3 | implementation identity | bundle/compiler/dependency/runtime/policy digest、checkpoint invalidation | T1 | 0-1 |
+| T4 | B3/resource baseline | memory telemetry、threshold、large-input benchmark | T2 | 0 |
+| T5 | compiler/admission spike | source normalization、AST/import policy、bundle receipt | T1/T3 | 1 |
+| T6 | isolated Transform Host MVP | independent worker/backend、asset handles、quarantine、hard kill | T0/T5 | 1 |
+| T7 | Host protocol/receipt | invocation、generation、quota、cancel、terminal result | T1/T3/T6 | 1 |
+| T8 | Core quarantine admission | rehash、schema/locator/output closure、native OperationResult | T2/T7 | 1 |
+| T9 | fixed transform slot | server-owned plan slot、transform capability admission、不引入 DAG | T1/T7/T8 | 1 |
+| T10 | checkpoint/lease/recovery | Host/Core owner fencing、orphan cleanup、publish reuse 修复 | T3/T7/T9 | 1 |
+| T11 | B3 disk mode | PK/FK first hotspot、quota/cancel、memory parity | T2/T4 | 1-2 |
+| E1 | expression examples | GEO/GDC projection examples、dataset revision、mapping assertion | T2/T5 | 2A |
+| E2 | expression shadow | Host -> Core -> assessment -> artifact parity | T6-T11/E1 | 2A |
+| E3 | second consumer | bioactivity example 与相同 Host/Core path | T6-T11 | 2B |
+| R1 | release/go-no-go | trusted E2E、rollback、activation recommendation | E2/E3 | 2 |
 
-### Batch 1：可信 expression 前置能力
+## 3. Batch 0：合同与安全冻结
 
-并行：A2/A3、B2/B3、C1/C2、D-GEO adapter design、E2。
+### 并行工作
 
-出口：gene/probe projection、table identity、disk-backed state、committed result、merge contract fixture 均稳定。
+- T0：新增 Proposed ADR-039，记录 Agent-authored transform 的目标边界、Transform Host 非同进程/非同账户要求、与 ADR-020/027/033/034/036/038 的关系；
+- T1：FamilySpec、DatasetTransform、TransformExecutionReceipt、BuildSpec 2.0 草案；
+- T2：Projection、Table/Audit、dataset/revision/asset、sample、mapping relation；
+- T3：implementation digest 与 deterministic replay identity；
+- T4：B3 当前 Map 的规模基线、阈值和 benchmark harness；
+- 现有六 Family inventory 与 caller/assembler/provider branch map。
 
-### Batch 2：GEO trusted vertical slice 与 provider 并行
+### 出口条件
 
-主线：D-GEO + C3 + E3/E4 + H1。
+- 所有 ID、digest、ownership、scope、status 可 strict parse；
+- audit 不进入 TableRole；
+- probe mapping relation 方向、字段、many-to-many、missing policy 已冻结；
+- dataset_id/revision/asset/build 分层已冻结；
+- `DatasetBuildSpec 1.0` snapshot 不变；
+- 明确 examples 不可直接执行、Host receipt 不等于 Core trust；
+- 明确生产支持的 OS isolation backend；
+- 没有默认 build route、没有 dynamic Family activation、没有 Family 迁移代码。
 
-并行支线：D-GDC、D-Xena 各自 adapter/projection/fixture；F1/F2 loader 只做 fixture/离线，不接 production Registry。
+### Batch 0 禁止
 
-出口：GEO 能完成 task/run/build/trusted inputs/operation results/validation/assessment/publication/artifact hash parity；GDC/Xena 至少具备 shared contract 级验证。
+- 在 `server/src` 中 `eval/import` Agent code；
+- 使用 workspace `process.exec` 作为 Transform Host；
+- 把 `worker_threads`/`node:vm` 当 sandbox；
+- 将 Gold-specific requirement 写进 FamilySpec；
+- 修改现有 accepted ADR 的历史 Decision 文字以隐藏冲突。
 
-### Batch 3：跨 source 与 family activation
+## 4. Batch 1：非生产 Host MVP
 
-并行：D-GDC、D-Xena、C5、B5/B6、E5、H2/H3。
+### 并行工作
 
-出口：GEO+GDC 或 GEO+Xena 跨 source integration 具备 deterministic conflict/provenance；所有相关 capability 的状态可审计；Gold1 同 commit rerun 条件明确。
+- T5 compiler/admission：只允许 SDK allowlist，生成内容寻址 bundle；
+- T6 isolated worker：无网络、低权限身份、只读 input、quarantine output、quota/hard kill；
+- T7 framed Host protocol：invocation/generation/receipt/terminal reason；
+- T8 Core output admission：Host output 重哈希、strict schema/locator、native result；
+- T9 fixed slot：只在专用 fixture route 使用；
+- T10 recovery：cancel/timeout/restart/stale worker/late commit；
+- T11 B3 PK/FK first hotspot：小 fixture parity + large fixture resource evidence。
 
-### Batch 4：Generic primitive 与 Family Host 前置
+### 出口条件
 
-并行：C generic extraction、E generic table policy、F3/F4、G0/G1。
+- path escape、network、secret/env、process spawn、symlink/junction、quota、timeout、cancel、late commit 全部 fail closed；
+- 同 input + exact transform/runtime/policy digest 可 replay；双跑输出不一致则阻止 deterministic status；
+- Host output 未 Core admission 前不可成为 OperationResult/Publication；
+- memory/disk B3 fixtures checks/order/digest parity；
+- 不接默认 Agent build tool，现有六 Family 仍走 legacy；
+- `registered_multitable.runtime.v1` 旁路问题已登记并有统一 executor 修复门，不在旁路继续叠加 transform。
 
-出口：至少两个真实消费者使用同一 integration/validation primitive；resolver 输出可执行且 fail-closed；旧 Registry/manifest/publication compatibility 通过。
+### Batch 1 禁止
 
-### Batch 5：动态 Family Host 与 Agent task proposal
+- 把任何 Agent-authored transform 标记为 activated；
+- 允许第三方 npm、native addon、动态 import 或网络；
+- 让 worker 写 task output/state/logs/artifacts/publication；
+- 以 Host exit code 代替 ProductAssessment。
 
-顺序：F5 -> G2 -> G3 -> H capability-level activation。
+## 5. Batch 2A：Expression shadow vertical slice
 
-出口：task-scoped declarative Family 能在 Core admission 后执行；任意代码、workspace bypass、未注册 receipt、直接 publish 均失败；promotion 需显式审批。
+### 范围
 
-## 3. 分支与交接建议
+- GEO gene/probe examples；
+- GDC gene example；
+- dataset/revision/asset identity；
+- samples composite key；
+- mapping assertion relation/coverage；
+- compatibility partition；
+- disk-backed B3 relation path；
+- expression ProductAssessment；
+- legacy vs Host shadow comparison；
+- Artifact API/download/hash closure。
 
-- A：`feat/family-host-contracts`；对 `packages/contracts`、Schema、manifest/parser 负责。
-- B/C：`feat/family-host-streaming-integration`；对 integrator/store/writer/result 负责，可在 A API 稳定后 rebase。
-- D-GEO/GDC/Xena：分别独立分支，避免 provider 文件并发冲突；只消费 A/B/C 公共接口。
-- E：`feat/family-host-product-gate`；先 contracts/fixtures，后 runtime wiring。
-- F/G：必须等 parser/resolver API review 后开分支；禁止在 Agent tool schema 中先行伪造能力。
-- H/P0：保持 evaluator 与生产 runtime 分支隔离；Gold 资料不得进入 production family registry。
+### 出口条件
 
-每个分支合并前提供：变更文件清单、契约版本、依赖/implementation digest、测试命令和明确的“声明 capability / trusted E2E / production activated”状态。
+- GEO/GDC 进入同一个 integration framework，但只在兼容 partition 内 merge；
+- GDC 无 probe mapping 时诚实声明 unsupported/allow-empty，不伪造 capability；
+- 大输入不走全量 Buffer/object[] 或无界 B3 Map；
+- task/run/build/Host receipt/Core result/validation/publication evidence 完整；
+- shadow 结果的 schema、rows、relations、provenance、assessment 差异可解释；
+- rollback 到 legacy executor 可演练；
+- 通过只代表 shadow verified，不自动激活 family。
 
-## 4. 合并顺序
+## 6. Batch 2B：第二真实消费者 go/no-go
 
-1. P0 当前 Gold diagnostic/evidence closure；
-2. A contract/projection/identity；
-3. B streaming primitives；
-4. C integration；
-5. D-GEO internal trusted vertical slice；
-6. E semantic/provenance/assessment；
-7. D-GDC/D-Xena cross-source；
-8. H publication/evaluator same-commit rerun；
-9. F Registry Host；
-10. G Agent dynamic proposal；
-11. capability-level activation 和 release hardening。
+优先选择 `bioactivity_measurement`，因为已有跨库 identity/crosswalk/ProductAssessment 语义。必须先证明它能使用与 expression 相同的 Host contract、Core quarantine admission、integration/validation/assessment path，而不是仅复用一个接口名称。
 
-F/G 可以在 Batch 2 做离线 prototype，但不得提前改变默认 production topology。
+只有以下条件全部满足才启动：
 
-## 5. DoD 模板
+- Batch 2A 无未解释的 trust/resource blocker；
+- 第二消费者的输入/output topology 能由 FamilySpec 描述；
+- 需要的 transform slot、relation、provenance 和 assessment semantics 不依赖新 family-specific Core branch；
+- 至少一个 capability 可做独立 shadow/rollback。
 
-每个工作包必须填写：
+若不满足，Batch 2B 退回 contract/primitive 修复，不扩展到其余四族。
 
-- Scope：实现了哪些 capability，明确未实现哪些；
-- Contract：版本、parser、digest、compatibility；
-- Trust：输入/输出是否 Core-owned，receipt/provenance 是否闭合；
-- Resource：RSS/heap/temp/quota/cancel/timeout/restart；
-- Tests：unit、fixture、regression、E2E；
-- Evidence：task/run/build/publication/artifact refs；
-- Activation：`declared` / `fixture_verified` / `trusted_e2e_verified` / `production_activated`；
-- Rollback：旧路径如何保留、如何关闭新路径；
-- Documentation：架构/ADR/TODO 是否同步。
+## 7. 后续路线，不是本轮承诺
 
-## 6. 关键阻塞判断
+Batch 3+ 才讨论：
 
-以下任一条件成立时，暂停 Family Host 动态化，继续做收敛或补证：
+- examples catalog user/curated lifecycle；
+- promotion/revoke/activation UI/API；
+- literature/target/structure/variant 逐 capability migration；
+- capability-level legacy retirement；
+- default Agent dynamic BuildSpec 2.0 route；
+- Generic IR/package projection；
+- full old Registry/assembler/provider branch deletion。
 
-- Gold evaluator 仍不能定位主要 failure boundary；
-- expression production 需要完整读入内存；
-- provenance coverage 仍是硬编码；
-- publication 只依赖 workspace/sidecar；
-- ProductAssessment 与 Publication identity 不一致；
-- task Family 可携带任意 executable extension；
-- 新抽象只有一个 benchmark consumer；
-- `DatasetBuildSpec` wire 变化没有进入 `@biomed/contracts` 版本化解析。
+每新增一个通用 primitive，必须有至少两个真实消费者、compatibility fixtures、resource evidence 和 rollback path。
+
+## 8. 分支、交接与提交门
+
+建议分支：
+
+- `docs/family-host-transform-plan-v2`：本次计划/ADR/架构文档；
+- `feat/transform-contracts`：T1-T3；
+- `feat/transform-host-sandbox`：T5-T7；
+- `feat/core-transform-admission`：T8-T10；
+- `feat/dataset-validation-disk-index`：T4/T11；
+- `feat/expression-host-shadow`：E1/E2；
+- `feat/bioactivity-host-shadow`：E3。
+
+每个实现分支合并前必须提供：契约版本/digest、trust/status、resource evidence、tests、same-commit artifact refs、rollback plan，并明确 `example_only` / `sandbox_executable` / `shadow_verified` / `trusted_e2e_verified` / `activated` 状态。
+
+## 9. 全局质量门
+
+适用代码提交：`pnpm test`、`pnpm lint`、`pnpm typecheck`、`pnpm build`；涉及 database 时运行 Python bridge gates。新增 Host 还必须运行 sandbox/red-team、resource、cancel/restart、digest/replay、Artifact API hash tests。
+
+文档阶段不运行生产动态 transform，不声称新能力已经存在。

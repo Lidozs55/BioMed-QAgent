@@ -47,7 +47,9 @@
 > 近期 E1-E5 见 [Gold evaluator near-term plan](plans/2026-08-20-gold-evaluator-near-term-plan.md)。
 >
 > Canonical Evidence Product Layer 的 Phase 0 已完成；其余 IR/package/
-> RegisteredTransform 阶段暂缓，不作为当前默认开发顺序。
+> 与 DatasetTransform Host 阶段暂缓，不作为当前默认开发顺序。FamilySpec +
+> Transform Host 的目标路线见 [Family Host + Transform Host 计划集](plans/family-host/README.md)
+> 与 Proposed [ADR-039](adr/039-family-transform-host.md)。
 
 ### P0
 
@@ -91,7 +93,7 @@
 - [ ] **P0 / next repair** Same-commit trusted-input closure：基于 E6、TASK-056 与 TASK-057
       的边界证据，继续补齐同一 task/run/build/publication/artifact/final-answer 证据，并在
       frozen input 上原样复跑；仅当权威事件模型确实缺少所需阶段时才修改 runtime。本阶段
-      不启动完整 Canonical IR、RegisteredTransform 或 family benchmark 特例重构。
+      不启动完整 Canonical IR、DatasetTransform Host 或 family benchmark 特例重构。
 
 > TASK-047/048 的 work package、硬依赖、分支边界和逐项验收统一见
 > [Gold 可信 Publication 收敛执行计划](superpowers/plans/2026-08-18-gold-trusted-publication-closure.md)。

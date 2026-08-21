@@ -1,27 +1,49 @@
-# Family Host 改造计划集
+# Family Host + Transform Host 计划集
 
-> 状态：计划文档集
-> 基线：仓库当前 `main`，以及 `docs/architecture/FAMILY-HOST-01` 至 `04`
-> 目标：在保留 TS Host、Pi Agent、TS Dataset Core、Publisher 可信边界的前提下，规划 Family 从静态源码注册演进为可发现、可声明、可受控加载的 Family Host。
+> 状态：正式开发路线（目标架构仍需 ADR-039 接受后才能接入生产）
+> 代码基线：`main@94be4a9e`（2026-08-21，执行前已 `git pull --ff-only origin main`）
+> 当前实现事实：仓库尚无 `DatasetTransform` / `TransformHost`；Agent `process.exec` 明确不是 sandbox。
+
+## 目标
+
+将 BioMed-QAgent 从“Core 内置若干固定 Family 的领域实现”渐进演进为：
+
+```text
+Agent authors FamilySpec + DatasetTransform
+  -> Family Host admission
+  -> isolated Transform Host execution
+  -> Core output admission / integration / validation / assessment
+  -> Core-only Publication
+```
+
+统一的是 **DatasetTransform ABI 与受控执行路径**，不是取消信任门。Agent-authored、example、user、curated transform 都走同一 Host；来源、验证状态、作用域、激活状态分别记录。Host 执行成功只产生 quarantine output 和 execution receipt，不代表结果可信或可发布。
 
 ## 阅读顺序
 
-1. [00-overview.md](00-overview.md)：现状、范围、依赖图和总验收门。
-2. [01-contract-projection-identity.md](01-contract-projection-identity.md)：Schema、Projection、关系和身份契约。
-3. [02-streaming-execution-primitives.md](02-streaming-execution-primitives.md)：流式执行、磁盘中间态、checkpoint 与资源边界。
-4. [03-same-schema-integration.md](03-same-schema-integration.md)：同 Schema 多来源确定性整合。
-5. [04-provider-projections.md](04-provider-projections.md)：GEO、GDC、Xena 的 projection 和能力验证。
-6. [05-validation-provenance-assessment.md](05-validation-provenance-assessment.md)：结构/科学语义验证、溯源和 ProductAssessment。
-7. [06-family-registry-host.md](06-family-registry-host.md)：声明式 FamilySpec、Package Loader 和 Family Host。
-8. [07-agent-capability-interface.md](07-agent-capability-interface.md)：Agent 的发现、解析、创建 task Family 边界。
-9. [08-publication-evaluator-release.md](08-publication-evaluator-release.md)：Publication、Gold 证据链和 release activation。
-10. [09-execution-matrix.md](09-execution-matrix.md)：可并行工作包、依赖、分支边界和执行顺序。
+1. [00-overview.md](00-overview.md)：目标架构、现状差距、删除的旧设计与范围线。
+2. [01-family-transform-contracts.md](01-family-transform-contracts.md)：FamilySpec、DatasetTransform、TransformExecutionReceipt 与 BuildSpec 版本策略。
+3. [02-product-identity-relations.md](02-product-identity-relations.md)：Projection、Table/Audit、dataset revision、probe mapping relation。
+4. [03-transform-host-security.md](03-transform-host-security.md)：编译、隔离、资源、quarantine、红队门。
+5. [04-catalog-scope-resolution.md](04-catalog-scope-resolution.md)：examples catalog、scope/trust/resolution/shadow。
+6. [05-core-execution-product-gate.md](05-core-execution-product-gate.md)：流式原语、integration、渐进 B3、provenance、ProductAssessment、Publisher。
+7. [06-expression-vertical-slice.md](06-expression-vertical-slice.md)：GEO/GDC expression vertical slice 与 compatibility partition。
+8. [07-family-examples-migration.md](07-family-examples-migration.md)：六个静态 Family 逐 capability 迁为 retrieval examples。
+9. [08-activation-release.md](08-activation-release.md)：shadow、activation、回滚、Gold/release 证据。
+10. [09-execution-matrix.md](09-execution-matrix.md)：Batch 0–2、依赖、并行边界、DoD。
+11. [10-consistency-review.md](10-consistency-review.md)：全计划矛盾检查、开放决策与停止条件。
 
-## 关键结论
+## 当前承诺范围
 
-- 当前默认顺序仍是 Gold 诊断、同 commit trusted-input closure、发布链修复，再做 Family Host 泛化；本计划不是要求立即启动完整动态平台。
-- `gene_expression` 的生产路径不能直接切换到当前 `registered_multitable.runtime.v1`：该 runtime 仍有完整 `Buffer`、`object[]` 聚合和完整读回统计等风险。
-- DatasetBuildSpec 1.0 目前只有单数 `schema_ref`。在没有版本化 wire contract 之前，不临时加入 `schema_refs`。
-- 短期由 Core-owned projection 根据 primary schema 解析 supporting tables；长期再由经过 Core admission 的 capability resolver 解析声明式 schema set。
-- Agent 可以发现、选择、生成声明式提案，但不能注入任意代码、直接修改 deterministic artifact 或创建正式 Publication。
-- 所有“已声明 capability”必须与“已通过 trusted E2E 验证 capability”分开记录。
+- **当前可开工**：Batch 0（ADR、contract、threat model、identity、benchmark baseline）。
+- **下一里程碑**：Batch 1（非生产 Transform Host MVP + Core quarantine admission）。
+- **需单独 go/no-go**：Batch 2A expression shadow vertical slice；Batch 2B 第二真实消费者。
+- **不在当前迭代承诺**：全六 Family 迁移、默认动态 Agent build、旧 Registry 一次性删除、Transform promotion 市场或通用 DAG。
+
+## 永久边界
+
+- `DatasetBuildSpec 1.0` 保持不变；动态路径使用新的版本化 DTO，不塞可选字段伪兼容。
+- WorkflowRecipe 仍只负责 acquisition，不执行 DatasetTransform。
+- examples 只供检索、clone 和测试；Core 不 import、不扫描为 production capability。
+- `worker_threads`、`node:vm`、普通同账户 `child_process`、workspace `process.exec` 均不能单独充当不可信代码安全边界。
+- Transform 不能决定 merge winner、validation threshold、ProductAssessment 或 Publication。
+- 只有 Core 可以提交 OperationResult、构造 PublicationCandidate 并调用 Publisher。
