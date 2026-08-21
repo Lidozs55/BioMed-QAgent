@@ -63,11 +63,19 @@
       [Gold v1 diagnostic baseline](audit/2026-08-20-gold-diagnostic-baseline.md)。
       当前未修改 Gold prompt、source inventory、runtime defaults 或 acceptance threshold；
       历史 evidence 不替代同 commit 证据。
-- [ ] **P0 / next repair** Trusted evidence-chain projection：先从现有 durable events、
-      SourceAsset/Core receipts、BuildResult、publication/artifact events、下载 hash sidecars
-      和 final messages 投影 evaluator-owned 同一链，填补 trusted_inputs / semantic_product /
-      publication / reproducibility 的 `unknown`。仅当权威事件模型确实缺少所需阶段时才
-      修改 runtime；本切片不启动完整 Canonical IR、RegisteredTransform 或 family 重构。
+- [x] **P0 / E6 completed** Trusted evidence-chain projection：已从单个显式 evidence bundle
+      投影 accepted identity、terminal task/run、严格 BuildResult、authoritative publication、
+      artifact receipt/download hash、final-answer publication reference 和 pending HIL，并为
+      每个事实标注 `present/missing/conflicting/receipt_only` 与 source refs。真实旧证据
+      smoke 仍为 `0 pass / 5 fail / 1 blocked`；Gold1/3/5 的 authoritative publication 和
+      execution 从旧 collector 遗漏中恢复，但 semantic_product/trusted_inputs/同 commit
+      reproducibility 仍未通过。未修改 runtime、Publisher、Gold 输入或 acceptance 标准。
+      详见 [Gold v1 diagnostic baseline](audit/2026-08-20-gold-diagnostic-baseline.md)。
+- [ ] **P0 / next repair** Same-commit trusted-input closure：基于 E6 的边界证据，优先修复
+      Core-owned SourceAsset role-aware receipt、family admission/semantic validation 和同一
+      task/run/build/publication/artifact evidence 的可信闭环；仅当权威事件模型确实缺少所需
+      阶段时才修改 runtime。本阶段不启动完整 Canonical IR、RegisteredTransform 或 family
+      benchmark 特例重构。
 
 > TASK-047/048 的 work package、硬依赖、分支边界和逐项验收统一见
 > [Gold 可信 Publication 收敛执行计划](superpowers/plans/2026-08-18-gold-trusted-publication-closure.md)。
