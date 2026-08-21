@@ -135,14 +135,15 @@ async function resolveReview(
 
 async function waitForRequest(
   store: DurableHILStore,
+  gate: DurableHILGate,
   taskId: string,
   runId: string,
 ): Promise<import("@biomed/contracts").HILRequest> {
   const deadline = Date.now() + 5_000;
   for (;;) {
     const pending = await store.findPendingForRun(taskId, runId);
-    if (pending !== null) return pending;
-    if (Date.now() > deadline) throw new Error("no pending HIL request appeared");
+    if (pending !== null && gate.hasPending(runId)) return pending;
+    if (Date.now() > deadline) throw new Error("no ready pending HIL request appeared");
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }
@@ -183,7 +184,7 @@ describe("HIL wait vs operation timeout (review P0/P1)", () => {
     });
 
     const pending = executor.run();
-    const request = await waitForRequest(store, taskId, runId);
+    const request = await waitForRequest(store, gate, taskId, runId);
     // Wait well past the operation budget while the human is away.
     await new Promise((resolve) => setTimeout(resolve, 250));
     const stillPending = await store.getRequest(taskId, request.request_id);
@@ -241,7 +242,7 @@ describe("HIL wait vs operation timeout (review P0/P1)", () => {
     });
 
     const pending = executor.run();
-    const request = await waitForRequest(store, taskId, runId);
+    const request = await waitForRequest(store, gate, taskId, runId);
     await new Promise((resolve) => setTimeout(resolve, 120));
     const review = await resolveReview(store, taskId, runId, request.request_id, {
       action: "accept",
@@ -289,7 +290,7 @@ describe("HIL wait vs operation timeout (review P0/P1)", () => {
     });
 
     const pending = executor.run();
-    const request = await waitForRequest(store, taskId, runId);
+    const request = await waitForRequest(store, gate, taskId, runId);
     cancellationSignal.abort();
     const outcome = await pending;
     expect(outcome.status).toBe("cancelled");
@@ -313,7 +314,7 @@ describe("HIL wait vs operation timeout (review P0/P1)", () => {
       policy_ref: "dataset.field_mapping.v1",
       idempotency_key: "build_replay:binding_gdc:field_mapping",
     }, controller.signal);
-    const firstRequest = await waitForRequest(store, taskId, runId);
+    const firstRequest = await waitForRequest(store, gate, taskId, runId);
     controller.abort();
     await expect(first).rejects.toThrow("aborted");
     await expect.poll(async () =>
@@ -334,7 +335,7 @@ describe("HIL wait vs operation timeout (review P0/P1)", () => {
       policy_ref: "dataset.field_mapping.v1",
       idempotency_key: "build_replay:binding_gdc:field_mapping",
     });
-    const secondRequest = await waitForRequest(store, taskId, runId);
+    const secondRequest = await waitForRequest(store, gate, taskId, runId);
     expect(secondRequest.request_id).not.toBe(firstRequest.request_id);
     expect(secondRequest.request_id).toMatch(/_g2$/);
     expect(secondRequest.status).toBe("pending");
