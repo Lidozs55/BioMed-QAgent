@@ -7,7 +7,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   CHEMBL_FILES_PROVIDER_ID,
-  CHEMBL_FILES_URL,
+  CHEMBL_FILES_SOURCE_ID_PREFIX,
+  chemblFilesUrl,
+  createChemblFilesProvider,
 } from "../src/dataset/acquisition/chembl-provider.js";
 import { FIXED_BIOMEDICAL_PROVIDER_IDS } from "../src/dataset/acquisition/biomedical-providers.js";
 import { ContentCache } from "../src/external/acquisition/content-cache.js";
@@ -17,7 +19,16 @@ import { createPhase3AcquisitionRuntime } from "../src/runtime/phase3-compositio
 const roots: string[] = [];
 const CONTENT = JSON.stringify({ activities: [], page_meta: { total_count: 0 } });
 
-function request(parameters: CoreAcquisitionRequest["parameters"] = {}): CoreAcquisitionRequest {
+const CHEMBL_PARAMETERS: CoreAcquisitionRequest["parameters"] = {
+  source: "chembl",
+  accession: "CHEMBL9999",
+  entities: {
+    chembl_compounds: ["CHEMBL200", "CHEMBL100"],
+    activity_types: ["Ki", "IC50"],
+  },
+};
+
+function request(parameters: CoreAcquisitionRequest["parameters"] = CHEMBL_PARAMETERS): CoreAcquisitionRequest {
   return {
     schema_version: "1.0",
     request_id: "request_chembl",
@@ -41,7 +52,11 @@ describe("acquisition-first phase3 composition", () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "acquisition-first-"));
     roots.push(root);
     const executor = vi.fn(async ({ url }: { url: URL }) => {
-      expect(url.toString()).toBe(CHEMBL_FILES_URL);
+      expect(url.toString()).toBe(chemblFilesUrl({
+        targetId: "CHEMBL9999",
+        compoundIds: ["CHEMBL100", "CHEMBL200"],
+        activityTypes: ["IC50", "Ki"],
+      }));
       return {
         status: 200,
         headers: {
@@ -70,8 +85,24 @@ describe("acquisition-first phase3 composition", () => {
       task_id: "task_chembl",
       role: "carrier",
     });
+    const plan = await createChemblFilesProvider().plan(request());
+    expect(plan.source.source_id).toMatch(new RegExp(`^${CHEMBL_FILES_SOURCE_ID_PREFIX}_[0-9a-f]{20}$`));
     expect(result.attempts).toHaveLength(1);
     expect(executor).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects unregistered ChEMBL query controls and incomplete identities", async () => {
+    const provider = createChemblFilesProvider();
+    const invalidParameters: CoreAcquisitionRequest["parameters"][] = [
+      { ...CHEMBL_PARAMETERS, url: "https://evil.example" },
+      { ...CHEMBL_PARAMETERS, source: "browser" },
+      { ...CHEMBL_PARAMETERS, accession: null },
+      { ...CHEMBL_PARAMETERS, entities: { chembl_compounds: [] } },
+      { ...CHEMBL_PARAMETERS, entities: { chembl_compounds: ["CHEMBL100"], activity_types: ["arbitrary"] } },
+    ];
+    for (const parameters of invalidParameters) {
+      expect(() => provider.plan(request(parameters))).toThrow();
+    }
   });
 
   it("registers PDB and acquires a server-derived RCSB carrier plan", async () => {
@@ -125,7 +156,7 @@ describe("acquisition-first phase3 composition", () => {
     });
 
     await expect(runtime.acquire(request({ limit: 500 }))).rejects.toThrow(
-      /parameters must be empty/,
+      /only server-owned source, accession, and entities/,
     );
     expect(executor).not.toHaveBeenCalled();
   });

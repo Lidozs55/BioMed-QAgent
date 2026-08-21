@@ -1,6 +1,7 @@
 export type * from "./artifacts.js";
 export type * from "./dataset-build.js";
 export type * from "./product-assessment.js";
+export * from "./runtime/product-assessment.js";
 export * from "./evaluation-diagnostic.js";
 export * from "./durable-build.js";
 export type * from "./dataset-multitable.js";

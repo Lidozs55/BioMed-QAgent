@@ -7,6 +7,7 @@ import type {
 import {
   buildAssayTable,
   buildBiomedicalRelation,
+  buildCompoundCrosswalkTable,
   buildCompoundTable,
   buildEntityTable,
 } from "../../schema/common/index.js";
@@ -163,9 +164,45 @@ const target = buildEntityTable({
   role: "supporting",
 });
 
+const compoundCrosswalk = buildCompoundCrosswalkTable({
+  datasetFamily: BIOACTIVITY_FAMILY_ID,
+  schemaId: "bioactivity_measurement.compound_crosswalk.v1",
+  rowGranularity: "one receipt-backed cross-database compound identity assertion",
+  tableId: "compound_crosswalks",
+  role: "supporting",
+  required: false,
+  allowEmpty: false,
+});
+
 export const bioactivityCompoundSchema = compound.schema;
+export const bioactivityCompoundTable = compound.definition;
 export const bioactivityAssaySchema = assay.schema;
 export const bioactivityTargetSchema = target.schema;
+export const bioactivityCompoundCrosswalkSchema = compoundCrosswalk.schema;
+export const bioactivityCompoundCrosswalkTable = compoundCrosswalk.definition;
+
+export const bioactivityIdentityRelations: readonly RelationDefinition[] = Object.freeze([
+  buildBiomedicalRelation({
+    relationType: "compound_identity_link",
+    relationId: "crosswalk_left_compound",
+    fromTableId: "compound_crosswalks",
+    fromFields: ["left_id", "left_namespace"],
+    toTableId: "compounds",
+    toFields: ["compound_id", "compound_id_namespace"],
+    cardinality: "many_to_one",
+    missingPolicy: "reject",
+  }),
+  buildBiomedicalRelation({
+    relationType: "compound_identity_link",
+    relationId: "crosswalk_right_compound",
+    fromTableId: "compound_crosswalks",
+    fromFields: ["right_id", "right_namespace"],
+    toTableId: "compounds",
+    toFields: ["compound_id", "compound_id_namespace"],
+    cardinality: "many_to_one",
+    missingPolicy: "reject",
+  }),
+]);
 
 export const bioactivityActivityTable: TableDefinition = parseTableDefinition({
   table_id: "activities",

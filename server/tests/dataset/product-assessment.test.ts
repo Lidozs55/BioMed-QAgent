@@ -108,6 +108,29 @@ describe("assessProduct", () => {
     expect(assessment.scores.find((score) => score.dimension === "relations")?.score).toBe(0);
   });
 
+  test("requires every declared artifact role instead of allowing duplicate roles to satisfy the count", () => {
+    const roleRequirements: ProductRequirementManifest = {
+      ...requirements,
+      artifacts: [{
+        requirement_id: "identity_artifacts",
+        min_count: 2,
+        required_roles: ["compound_identity", "compound_crosswalk"],
+        require_hashes: true,
+      }],
+    };
+    const assessment = assessProduct(roleRequirements, {
+      ...completeSnapshot,
+      artifacts: [
+        { artifact_id: "artifact_1", role: "compound_identity", sha256: "b".repeat(64) },
+        { artifact_id: "artifact_2", role: "compound_identity", sha256: "c".repeat(64) },
+      ],
+    });
+    expect(assessment.product_status).toBe("validated");
+    expect(assessment.blockers).toEqual([
+      expect.objectContaining({ code: "artifact_incomplete", requirement_id: "identity_artifacts" }),
+    ]);
+  });
+
   test("can distinguish validated semantics from missing reproducible artifacts", () => {
     const assessment = assessProduct(requirements, {
       ...completeSnapshot,

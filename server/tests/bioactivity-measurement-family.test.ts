@@ -26,6 +26,9 @@ import {
   BIOACTIVITY_ROW_GRANULARITY,
   assertBioactivityRows,
   assembleBioactivityCandidate,
+  bioactivityCompoundCrosswalkSchema,
+  bioactivityCompoundCrosswalkTable,
+  bioactivityIdentityRelations,
   bioactivityRelations,
   bioactivityTableEntries,
   bioactivityValidationPolicy,
@@ -39,6 +42,7 @@ import { createDefaultDatasetFamilyRegistry } from "../src/dataset/families/inde
 const FIXTURES = path.join(import.meta.dirname, "fixtures", "bioactivity-measurement");
 const DIGEST = "c".repeat(64);
 const ASSET_ID = `asset_${"a".repeat(64)}`;
+const PUBCHEM_ASSET_ID = `asset_${"b".repeat(64)}`;
 const tempRoots: string[] = [];
 
 class MemorySink implements RegisteredTableSink {
@@ -200,7 +204,10 @@ async function validationTable(
   };
 }
 
-async function prepare(rows: BioactivityRows) {
+async function prepare(
+  rows: BioactivityRows,
+  compoundCrosswalks: readonly object[] = [],
+) {
   const trustedRoot = await mkdtemp(path.join(os.tmpdir(), "bioactivity-trusted-"));
   const forbiddenRoot = await mkdtemp(path.join(os.tmpdir(), "bioactivity-workspace-"));
   tempRoots.push(trustedRoot, forbiddenRoot);
@@ -219,14 +226,30 @@ async function prepare(rows: BioactivityRows) {
     results.push(result);
     tables.push(await validationTable(entry.definition, entry.schema, fileName, result));
   }
+  if (compoundCrosswalks.length > 0) {
+    const tableId = "compound_crosswalks";
+    const fileName = `${tableId}.csv`;
+    await writeCsv(trustedRoot, fileName, bioactivityCompoundCrosswalkSchema, compoundCrosswalks);
+    const result = await resultFor(trustedRoot, tableId, fileName, bioactivityCompoundCrosswalkSchema);
+    results.push(result);
+    tables.push(await validationTable(
+      bioactivityCompoundCrosswalkTable,
+      bioactivityCompoundCrosswalkSchema,
+      fileName,
+      result,
+    ));
+  }
   return { trustedRoot, forbiddenRoot, results, tables };
 }
 
-function candidateRefs(tables: readonly MultiTableValidationTable[]) {
+function candidateRefs(
+  tables: readonly MultiTableValidationTable[],
+  relations = bioactivityRelations,
+) {
   return {
     candidate_id: "candidate_bioactivity_validation",
     table_ids: tables.map((table) => table.definition.table_id),
-    relation_ids: bioactivityRelations.map((relation) => relation.relation_id),
+    relation_ids: relations.map((relation) => relation.relation_id),
     provenance_refs: tables.flatMap((table) => table.provenance_refs),
     confidence_refs: tables.flatMap((table) => table.confidence_refs),
     audit_refs: [],
@@ -377,6 +400,99 @@ describe("bioactivity_measurement B5A module", () => {
     });
     expect(validation.passed).toBe(true);
     expect(failedChecks(validation)).toEqual([]);
+  });
+
+  it("assembles and validates the optional compound crosswalk with both identity foreign keys", async () => {
+    const legacyRows = await loadFixture("non-gold.valid.json");
+    const rows: BioactivityRows = {
+      ...legacyRows,
+      compounds: [
+        ...legacyRows.compounds,
+        {
+          compound_id: "2244",
+          compound_id_namespace: "pubchem_cid",
+          preferred_name: "2-acetyloxybenzoic acid",
+          canonical_smiles: "CC(=O)OC1=CC=CC=C1C(=O)O",
+          isomeric_smiles: "CC(=O)OC1=CC=CC=C1C(=O)O",
+          inchi: "InChI=1S/C9H8O4",
+          inchi_key: "BSYNRYMUTXBXSQ-UHFFFAOYSA-N",
+          molecular_formula: "C9H8O4",
+          molecular_weight: 180.16,
+          source_id: "source_pubchem_fixture",
+        },
+      ],
+    };
+    const crosswalk = {
+      crosswalk_id: "crosswalk_non_gold_fixture",
+      left_id: "CHEMBL25",
+      left_namespace: "chembl_compound",
+      right_id: "2244",
+      right_namespace: "pubchem_cid",
+      relation_type: "compound_identity_link",
+      match_method: "exact_inchi_key",
+      match_evidence: { compared_field: "inchi_key", exact: true },
+      conflict_status: "matched",
+      conflict_details: null,
+      confidence_score: 1,
+      confidence_level: "high",
+      source_id: "source_identity_fixture",
+    };
+    const prepared = await prepare(rows, [crosswalk]);
+    for (const result of prepared.results) {
+      result.dependency_closure.input_asset_ids = [ASSET_ID, PUBCHEM_ASSET_ID];
+    }
+    const legacyInputs = bioactivityTableEntries().map((entry, index) => ({
+      tableId: entry.tableId,
+      result: prepared.results[index]!,
+      provenanceResults: [prepared.results[index]!],
+      confidenceResults: [prepared.results[index]!],
+    }));
+    const crosswalkResult = prepared.results.at(-1)!;
+    const candidate = assembleBioactivityCandidate({
+      taskId: "task_bioactivity",
+      buildId: "build_bioactivity",
+      datasetFamily: BIOACTIVITY_FAMILY_ID,
+      rowGranularity: BIOACTIVITY_ROW_GRANULARITY,
+      tables: [...legacyInputs, {
+        tableId: "compound_crosswalks",
+        result: crosswalkResult,
+        provenanceResults: [crosswalkResult],
+        confidenceResults: [crosswalkResult],
+      }],
+      registeredAssetIds: [ASSET_ID, PUBCHEM_ASSET_ID],
+    });
+    const relations = [...bioactivityRelations, ...bioactivityIdentityRelations];
+
+    expect(candidate.tables.map((table) => table.definition.table_id)).toEqual([
+      "activities", "compounds", "assays", "targets", "compound_crosswalks",
+    ]);
+    expect(candidate.relations).toEqual(relations);
+    expect(candidate.registered_asset_ids).toEqual([ASSET_ID, PUBCHEM_ASSET_ID]);
+
+    const validation = await validateBioactivityCandidate({
+      task_id: "task_bioactivity",
+      build_id: "build_bioactivity",
+      candidate: candidateRefs(prepared.tables, relations),
+      tables: prepared.tables,
+      relations,
+      trusted_root: prepared.trustedRoot,
+      forbidden_roots: [prepared.forbiddenRoot],
+      policy: bioactivityValidationPolicy(),
+    });
+    expect(validation.passed).toBe(true);
+
+    const broken = await prepare(rows, [{ ...crosswalk, right_id: "9999" }]);
+    const rejected = await validateBioactivityCandidate({
+      task_id: "task_bioactivity",
+      build_id: "build_bioactivity",
+      candidate: candidateRefs(broken.tables, relations),
+      tables: broken.tables,
+      relations,
+      trusted_root: broken.trustedRoot,
+      forbidden_roots: [broken.forbiddenRoot],
+      policy: bioactivityValidationPolicy(),
+    });
+    expect(failedChecks(rejected)).toContain("crosswalk_right_compound:foreign_key");
   });
 
   it("fails closed on changed tokens, foreign keys, locator provenance, and missing table provenance", async () => {

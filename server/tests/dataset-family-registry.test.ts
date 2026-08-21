@@ -1,9 +1,11 @@
 import { describe, expect, test } from "vitest";
 
+import { createDefaultRegisteredTableRegistry } from "../src/dataset/adapters/registered/index.js";
 import {
   DatasetFamilyRegistry,
   createDefaultDatasetFamilyRegistry,
 } from "../src/dataset/families/index.js";
+import { providerCarrierBinding } from "../src/dataset/runtime/provider-bindings.js";
 
 describe("DatasetFamilyRegistry", () => {
   test("registers the expression family as one complete runtime definition", () => {
@@ -49,6 +51,29 @@ describe("DatasetFamilyRegistry", () => {
       ],
       merge_strategies: ["append_by_canonical_row"],
     });
+  });
+
+  test("registers the PubChem identity carrier without an Agent table parser", () => {
+    const family = createDefaultDatasetFamilyRegistry().get("bioactivity_measurement");
+
+    expect(family.schemas.map((schema) => schema.schema_id)).toContain(
+      "bioactivity_measurement.compound_crosswalk.v1",
+    );
+    expect(family.sources.find((source) => source.source === "pubchem")).toMatchObject({
+      source: "pubchem",
+      adapter_id: "bioactivity.pubchem_identity.v1",
+      schema_refs: ["bioactivity_measurement.compound_crosswalk.v1"],
+      parameters_required: false,
+    });
+    expect(providerCarrierBinding(
+      "bioactivity_measurement",
+      "pubchem",
+      "bioactivity.pubchem_identity.v1",
+    )).not.toBeNull();
+    expect(createDefaultRegisteredTableRegistry().list()).not.toEqual(expect.arrayContaining([
+      expect.stringContaining("bioactivity.pubchem_identity.v1"),
+      expect.stringContaining("registered_bioactivity_compound_crosswalks"),
+    ]));
   });
 
   test("rejects a family without a registered Core runtime", () => {

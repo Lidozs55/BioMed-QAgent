@@ -1,5 +1,8 @@
+import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { integrate } from "../src/dataset/integrator/integrator.js";
@@ -86,25 +89,47 @@ function makeCanonicalResults(
   return [make("binding_g", "gene_g"), make("binding_h", "gene_h")];
 }
 
-function forceGc(): void {
-  const gc = (globalThis as { gc?: () => void }).gc;
-  if (gc) gc();
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+const VITE_NODE_ROOT = path.join(REPO_ROOT, "node_modules", ".pnpm");
+const HEAP_CHILD = path.join(REPO_ROOT, "server", "tests", "phase5", "fixtures", "integrator-heap-child.mts");
+
+function viteNodeEntry(): string {
+  const version = readdirSync(VITE_NODE_ROOT)
+    .filter((name) => name.startsWith("vite-node@"))
+    .sort()
+    .at(-1);
+  if (version === undefined) throw new Error("vite-node not found in node_modules/.pnpm");
+  return path.join(VITE_NODE_ROOT, version, "node_modules", "vite-node", "vite-node.mjs");
 }
 
-async function peakHeapDeltaMs(fn: () => Promise<void>): Promise<number> {
-  forceGc();
-  const before = process.memoryUsage().heapUsed;
-  let peak = before;
-  const timer = setInterval(() => {
-    peak = Math.max(peak, process.memoryUsage().heapUsed);
-  }, 25);
-  try {
-    await fn();
-  } finally {
-    clearInterval(timer);
-    forceGc();
-  }
-  return peak - before;
+function runHeapChild(workRoot: string, rowCount: number): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      process.execPath,
+      ["--expose-gc", viteNodeEntry(), HEAP_CHILD, workRoot, String(rowCount)],
+      { stdio: "pipe" },
+    );
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += String(chunk); });
+    child.stderr.on("data", (chunk) => { stderr += String(chunk); });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code !== 0) {
+        reject(new Error(`integrator heap child failed (${code}): ${stderr.slice(0, 500)}`));
+        return;
+      }
+      try {
+        const result: unknown = JSON.parse(stdout);
+        if (result === null || typeof result !== "object" || typeof (result as { peak_delta?: unknown }).peak_delta !== "number") {
+          throw new Error("missing numeric peak_delta");
+        }
+        resolve((result as { peak_delta: number }).peak_delta);
+      } catch (error) {
+        reject(new Error(`invalid integrator heap child output: ${error instanceof Error ? error.message : String(error)}`));
+      }
+    });
+  });
 }
 
 async function integrateResults(
@@ -145,15 +170,9 @@ describe("integrator heap (WP-A6)", () => {
   test("high-cardinality multi-source: peak heap delta grows sub-linearly with 4x rows", async () => {
     const base = 6_000;
     const smallRoot = tempRoot("integrator-heap-small-");
-    const smallResults = makeCanonicalResults(smallRoot, base);
-    const small = await peakHeapDeltaMs(() =>
-      integrateResults(smallResults, smallRoot),
-    );
+    const small = await runHeapChild(smallRoot, base);
     const largeRoot = tempRoot("integrator-heap-large-");
-    const largeResults = makeCanonicalResults(largeRoot, base * 4);
-    const large = await peakHeapDeltaMs(() =>
-      integrateResults(largeResults, largeRoot),
-    );
+    const large = await runHeapChild(largeRoot, base * 4);
     // Linear growth would scale ~4x; a disk-backed seen-set must stay far
     // below 2.5x. Loose threshold calibrated to the in-memory Map.
     expect(large).toBeLessThan(small * 2.5);

@@ -1,0 +1,52 @@
+{
+  "activity": {
+    "activities": [
+      {
+        "activity_id": 56001,
+        "molecule_chembl_id": "CHEMBL_FIXTURE_25",
+        "molecule_pref_name": "Fixture acetylsalicylic acid",
+        "assay_chembl_id": "CHEMBL_ASSAY_56001",
+        "target_chembl_id": "CHEMBL_TARGET_56001",
+        "standard_type": "IC50",
+        "value": "12.5",
+        "relation": "=",
+        "units": "nM",
+        "standard_value": "12.5",
+        "standard_relation": "=",
+        "standard_units": "nM",
+        "canonical_smiles": "CC(=O)OC1=CC=CC=C1C(=O)O",
+        "standard_inchi": "InChI=1S/C9H8O4",
+        "standard_inchi_key": "BSYNRYMUTXBXSQ-UHFFFAOYSA-N",
+        "molecule_properties": {
+          "full_molecular_formula": "C9H8O4",
+          "full_mwt": "180.16"
+        }
+      }
+    ],
+    "page_meta": { "total_count": 1 }
+  },
+  "assay": {
+    "assays": [
+      {
+        "assay_chembl_id": "CHEMBL_ASSAY_56001",
+        "assay_type": "B",
+        "description": "Non-Gold biochemical fixture assay",
+        "assay_organism": "Homo sapiens",
+        "target_chembl_id": "CHEMBL_TARGET_56001",
+        "bao_format": "BAO_0000357"
+      }
+    ],
+    "page_meta": { "total_count": 1 }
+  },
+  "target": {
+    "targets": [
+      {
+        "target_chembl_id": "CHEMBL_TARGET_56001",
+        "target_type": "SINGLE PROTEIN",
+        "pref_name": "Fixture cyclooxygenase target",
+        "organism": "Homo sapiens"
+      }
+    ],
+    "page_meta": { "total_count": 1 }
+  }
+}

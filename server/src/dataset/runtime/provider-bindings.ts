@@ -12,6 +12,7 @@ export const PROVIDER_CARRIER_BINDINGS: readonly ProviderCarrierBinding[] = Obje
   { familyId: "target_evidence", source: "clinicaltrials_gov", adapterId: "target.evidence.trials.v1" },
   { familyId: "protein_structure", source: "pdb", adapterId: "protein.structure.carrier.v1" },
   { familyId: "bioactivity_measurement", source: "chembl", adapterId: "bioactivity.chembl_json.v1" },
+  { familyId: "bioactivity_measurement", source: "pubchem", adapterId: "bioactivity.pubchem_identity.v1" },
 ]);
 
 export function providerCarrierBinding(

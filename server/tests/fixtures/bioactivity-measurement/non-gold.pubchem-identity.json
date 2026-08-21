@@ -1,0 +1,16 @@
+{
+  "PropertyTable": {
+    "Properties": [
+      {
+        "CID": 2244,
+        "MolecularFormula": "C9H8O4",
+        "MolecularWeight": 180.16,
+        "IUPACName": "2-acetyloxybenzoic acid",
+        "CanonicalSMILES": "CC(=O)OC1=CC=CC=C1C(=O)O",
+        "IsomericSMILES": "CC(=O)OC1=CC=CC=C1C(=O)O",
+        "InChIKey": "BSYNRYMUTXBXSQ-UHFFFAOYSA-N",
+        "InChI": "InChI=1S/C9H8O4"
+      }
+    ]
+  }
+}

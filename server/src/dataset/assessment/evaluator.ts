@@ -138,11 +138,16 @@ function artifactFacts(
   requirement: ProductRequirementManifest["artifacts"][number],
 ): { satisfied: number; required: number } {
   const roles = new Set(requirement.required_roles);
-  const matching = facts.filter((fact) =>
-    (!requirement.require_hashes || fact.sha256 !== null) &&
-    (roles.size === 0 || roles.has(fact.role)),
-  );
-  return { satisfied: matching.length, required: Math.max(requirement.min_count, roles.size) };
+  const valid = facts.filter((fact) => !requirement.require_hashes || fact.sha256 !== null);
+  const matching = roles.size === 0
+    ? valid
+    : valid.filter((fact) => roles.has(fact.role));
+  const required = Math.max(requirement.min_count, roles.size);
+  const hasEveryRole = [...roles].every((role) => valid.some((fact) => fact.role === role));
+  return {
+    satisfied: hasEveryRole ? matching.length : Math.min(matching.length, Math.max(0, required - 1)),
+    required,
+  };
 }
 
 export function assessProduct(

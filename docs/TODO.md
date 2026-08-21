@@ -51,17 +51,47 @@
 
 ### P0
 
-- [x] **P0 / E1-E4 completed** Gold evaluator diagnostic foundation：已冻结
+- [x] **P0 / E1-E5 completed** Gold evaluator diagnostic foundation：已冻结
       versioned diagnostic report/finding contracts，完成只读 run evidence inventory、
-      evaluator-only reference requirements parser，以及按
+      evaluator-only reference requirements parser、按
       discovery/trusted_input/contract/assembly/validation/publication/
-      reproducibility/evaluator 边界选择 primary blocker 的纯诊断引擎。当前不修改
-      Gold prompt、source inventory、runtime defaults、acceptance threshold；历史
-      evidence 不替代同 commit 证据，Gold6 的真实 HIL 仍为 blocked。
-- [ ] **P0 / E5** 在不重跑外部获取的前提下，对现有 evidence inventory 生成六例
-      baseline diagnostic matrix，汇总 failure boundary/finding code 和证据缺口，
-      再选择最小 Agent → Dataset → Publication repair slice。执行计划见
-      [2026-08-20-gold-evaluator-near-term-plan.md](plans/2026-08-20-gold-evaluator-near-term-plan.md)。
+      reproducibility/evaluator 边界选择 primary blocker 的诊断引擎，以及 explicit-root
+      六例 batch matrix/CLI。旧 `dd498ec8-rerun` 证据对目标
+      `54cf7ec2829612e13da652b9fdb4ecc80b2bab69` 的离线结果为
+      `0 pass / 5 fail / 1 blocked`；Gold6 由通用 pending+blocking HIL sidecar 规则
+      保持 blocked。详见
+      [Gold v1 diagnostic baseline](audit/2026-08-20-gold-diagnostic-baseline.md)。
+      当前未修改 Gold prompt、source inventory、runtime defaults 或 acceptance threshold；
+      历史 evidence 不替代同 commit 证据。
+- [x] **P0 / E6 completed** Trusted evidence-chain projection：已从单个显式 evidence bundle
+      投影 accepted identity、terminal task/run、严格 BuildResult、authoritative publication、
+      artifact receipt/download hash、final-answer publication reference 和 pending HIL，并为
+      每个事实标注 `present/missing/conflicting/receipt_only` 与 source refs。真实旧证据
+      smoke 仍为 `0 pass / 5 fail / 1 blocked`；Gold1/3/5 的 authoritative publication 和
+      execution 从旧 collector 遗漏中恢复，但 semantic_product/trusted_inputs/同 commit
+      reproducibility 仍未通过。未修改 runtime、Publisher、Gold 输入或 acceptance 标准。
+      详见 [Gold v1 diagnostic baseline](audit/2026-08-20-gold-diagnostic-baseline.md)。
+- [x] **P0 / TASK-056 module + trusted E2E complete on task branch** 首个 canonical vertical
+      slice 选择通用 `bioactivity_identity`：保留 ChEMBL 四表兼容输出，增加 fixed PubChem
+      carrier、独立 compound identity、optional conflict-preserving crosswalk、双 FK relation、
+      receipt/locator/transform closure 和 Core-owned ProductAssessment publication gate。exact
+      InChIKey 的 non-Gold fixture 走通五表 publication + artifact hash parity；冲突、malformed、
+      CID mismatch、缺 receipt 均在 Publisher 前 fail-closed。未增加 Gold-specific profile，
+      严格 Gold 仍为 0/6，等待同 commit frozen rerun。设计与证据见
+      [Bioactivity Identity Vertical Slice](audit/2026-08-20-bioactivity-identity-vertical-slice.md)。
+- [x] **P0 / TASK-057 completed on task branch** ProductAssessment evidence projection：
+      evaluator 仅从 selected run 的严格 BuildResult、同 ID authoritative publication receipt、
+      publication-scoped Artifact API list/download receipt、evaluator expected package identity
+      与 projector 内重算 hash/size 的原始 UTF-8 `product_assessment.json` bytes 投影
+      `semantic_product`。`publishable -> pass`、
+      `incomplete -> fail`、`validated -> unknown`；缺 bytes、receipt-only、wrong run/publication、
+      malformed/unknown fields 和任意 workspace/top-level sidecar 均 fail-closed。旧
+      `dd498ec8-rerun` smoke 保持 `0 pass / 5 fail / 1 blocked` 且六例 semantic_product
+      仍为 unknown；未修改 runtime、Publisher 或 frozen Gold inputs。
+- [ ] **P0 / next repair** Same-commit trusted-input closure：基于 E6、TASK-056 与 TASK-057
+      的边界证据，继续补齐同一 task/run/build/publication/artifact/final-answer 证据，并在
+      frozen input 上原样复跑；仅当权威事件模型确实缺少所需阶段时才修改 runtime。本阶段
+      不启动完整 Canonical IR、RegisteredTransform 或 family benchmark 特例重构。
 
 > TASK-047/048 的 work package、硬依赖、分支边界和逐项验收统一见
 > [Gold 可信 Publication 收敛执行计划](superpowers/plans/2026-08-18-gold-trusted-publication-closure.md)。

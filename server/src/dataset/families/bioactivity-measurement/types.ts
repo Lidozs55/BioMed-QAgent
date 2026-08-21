@@ -8,7 +8,8 @@ export type BioactivityTableId =
   | "activities"
   | "compounds"
   | "assays"
-  | "targets";
+  | "targets"
+  | "compound_crosswalks";
 
 export interface BioactivityActivityInput {
   activity_id: string;

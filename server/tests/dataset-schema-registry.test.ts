@@ -2,7 +2,10 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, test } from "vitest";
 
-import { parseDatasetSchema } from "../src/dataset/contracts/index.js";
+import {
+  parseDatasetSchema,
+  parseDatasetSchemaV2,
+} from "../src/dataset/contracts/index.js";
 import {
   buildGeneExpressionSchema,
   buildProbeExpressionSchema,
@@ -51,7 +54,10 @@ describe("Phase 4 step 2 schema registry parity", () => {
     const registry = createDefaultSchemaRegistry();
     for (const schemaId of registry.list()) {
       const schema = registry.get(schemaId);
-      expect(parseDatasetSchema(schema)).toEqual(schema);
+      const parsed = schema.schema_version === "2.0"
+        ? parseDatasetSchemaV2(schema)
+        : parseDatasetSchema(schema);
+      expect(parsed).toEqual(schema);
     }
   });
 

@@ -31,6 +31,7 @@ import {
   PROTEIN_STRUCTURE_FAMILY_ID,
 } from "./protein-structure/index.js";
 import {
+  bioactivityCompoundCrosswalkSchema,
   bioactivityTableEntries,
   bioactivityValidationPolicy,
   createBioactivityRegisteredTableRegistry,
@@ -537,13 +538,20 @@ export function bioactivityMeasurementFamilyDefinition(): DatasetFamilyDefinitio
   const registrations = createBioactivityRegisteredTableRegistry().entries();
   return registeredFamily({
     id: BIOACTIVITY_FAMILY_ID,
-    schemas: entries.map((entry) => entry.schema),
+    schemas: [...entries.map((entry) => entry.schema), bioactivityCompoundCrosswalkSchema],
     profileRef: "bioactivity_measurement.release.v1",
     validationPolicy: bioactivityValidationPolicy(),
     sources: [{
       source: "chembl",
       adapter_id: "bioactivity.chembl_json.v1",
       schema_refs: [entries.find((entry) => entry.tableId === "activities")!.schema.schema_id],
+      parameters_required: false,
+      parameter_schema: emptyAdapterParameterSchema(),
+      validateParameters: noAdapterParameters,
+    }, {
+      source: "pubchem",
+      adapter_id: "bioactivity.pubchem_identity.v1",
+      schema_refs: [bioactivityCompoundCrosswalkSchema.schema_id],
       parameters_required: false,
       parameter_schema: emptyAdapterParameterSchema(),
       validateParameters: noAdapterParameters,
