@@ -1,7 +1,13 @@
+import { createHash } from "node:crypto";
 import { realpath, readFile, stat } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
-import type { BuildResult } from "@biomed/contracts";
+import {
+  parseProductAssessment,
+  type BuildResult,
+  type ProductAssessment,
+  type ProductStatus,
+} from "@biomed/contracts";
 
 export type TrustedEvidenceFactState = "present" | "missing" | "conflicting" | "receipt_only";
 export type FactState = TrustedEvidenceFactState;
@@ -54,6 +60,10 @@ export interface TrustedEvidenceArtifactItem {
   expected_size_bytes: number | null;
   downloaded_sha256: string | null;
   downloaded_size_bytes: number | null;
+  produced_receipt: boolean;
+  listed_receipt: boolean;
+  publication_listed_receipt: boolean;
+  publication_downloaded_receipt: boolean;
   state: TrustedEvidenceFactState;
   source_refs: readonly string[];
 }
@@ -63,7 +73,9 @@ export interface TrustedEvidenceArtifacts extends TrustedEvidenceFact {
   expected_count: number;
   downloaded_count: number;
   verified_count: number;
+  publication_verified_count: number;
   all_verified: boolean;
+  all_publication_artifacts_verified: boolean;
 }
 
 export interface TrustedEvidenceFinalAnswer extends TrustedEvidenceFact {
@@ -80,7 +92,13 @@ export interface TrustedEvidenceHil extends TrustedEvidenceFact {
 }
 
 export interface TrustedEvidenceSemanticProduct extends TrustedEvidenceFact {
-  projected: false;
+  projected: boolean;
+  assessment: ProductAssessment | null;
+  product_status: ProductStatus | null;
+  requirement_id: string | null;
+  package_id: string | null;
+  package_version: string | null;
+  identity_matches_expected: boolean | null;
 }
 
 export interface TrustedEvidenceReproducibility extends TrustedEvidenceFact {
@@ -98,6 +116,10 @@ export type TrustedEvidenceGapCode =
   | "trusted_input.source_asset_receipt_missing"
   | "trusted_input.source_asset_receipt_conflicting"
   | "semantic_product.not_projected"
+  | "semantic_product.incomplete"
+  | "semantic_product.not_publishable"
+  | "semantic_product.identity_unverified"
+  | "semantic_product.conflicting"
   | "build.missing"
   | "build.receipt_only"
   | "build.conflicting"
@@ -135,10 +157,17 @@ export interface TrustedEvidenceGap {
   source_refs: readonly string[];
 }
 
+export interface ExpectedProductAssessmentIdentity {
+  requirement_id: string;
+  package_id: string;
+  package_version: string;
+}
+
 export interface ProjectTrustedEvidenceChainInput {
   accepted: unknown;
   evidence: unknown;
   hil?: unknown;
+  expected_product_assessment?: ExpectedProductAssessmentIdentity;
   accepted_ref?: string;
   evidence_ref?: string;
   hil_ref?: string;
@@ -167,6 +196,7 @@ export interface LoadTrustedEvidenceChainFilesInput {
   evidence_ref: string;
   hil_ref?: string;
   target_product_commit?: string;
+  expected_product_assessment?: ExpectedProductAssessmentIdentity;
 }
 
 interface JsonObject {
@@ -223,8 +253,20 @@ interface ArtifactCandidate {
   sha256: string | null;
   size_bytes: number | null;
   produced: boolean;
+  listed: boolean;
+  publication_listed: boolean;
   downloaded: boolean;
+  publication_downloaded: boolean;
   ref: string;
+}
+
+interface PublicationArtifactEvidence {
+  state: "missing" | "present" | "conflicting";
+  publication_id: string | null;
+  artifact_list: readonly unknown[];
+  artifact_hashes: readonly unknown[];
+  artifact_contents: JsonObject;
+  source_ref: string;
 }
 
 const MAX_JSON_BYTES = 16 * 1024 * 1024;
@@ -284,6 +326,19 @@ function object(value: unknown): JsonObject {
 
 function sortedUnique(values: readonly string[]): string[] {
   return [...new Set(values)].sort((left, right) => left.localeCompare(right));
+}
+
+function expectedProductAssessmentIdentity(
+  value: ExpectedProductAssessmentIdentity | undefined,
+): ExpectedProductAssessmentIdentity | undefined {
+  if (value === undefined) return undefined;
+  const requirementId = id(value.requirement_id);
+  const packageId = id(value.package_id);
+  const packageVersion = text(value.package_version);
+  if (requirementId === null || packageId === null || packageVersion === null) {
+    throw new TypeError("expected_product_assessment must contain safe bounded identity fields");
+  }
+  return { requirement_id: requirementId, package_id: packageId, package_version: packageVersion };
 }
 
 function stableStringify(value: unknown): string {
@@ -590,13 +645,14 @@ function buildResultAt(value: unknown): BuildResult | null {
 function candidateIdentityMatches(
   candidate: ParsedBuildCandidate,
   selected: SelectedIdentity,
-  knownBuildIds: ReadonlySet<string>,
-  taskBuildContext: boolean,
 ): boolean {
   if (candidate.task_id !== null && selected.values.task_id !== null && candidate.task_id !== selected.values.task_id) return false;
   if (candidate.run_id !== null && selected.values.run_id !== null && candidate.run_id !== selected.values.run_id) return false;
-  if (candidate.task_id !== null || candidate.run_id !== null || taskBuildContext) return true;
-  return candidate.build_id !== null && knownBuildIds.has(candidate.build_id);
+  if (candidate.result !== null) {
+    return selected.values.run_id !== null && candidate.run_id === selected.values.run_id;
+  }
+  return candidate.run_id === selected.values.run_id ||
+    (candidate.run_id === null && candidate.task_id !== null && candidate.task_id === selected.values.task_id);
 }
 
 function collectBuildCandidates(
@@ -607,11 +663,8 @@ function collectBuildCandidates(
 ): { candidates: ParsedBuildCandidate[]; malformedRefs: string[] } {
   const candidates: ParsedBuildCandidate[] = [];
   const malformedRefs: string[] = [];
-  const knownBuildIds = new Set<string>();
-  const add = (candidate: ParsedBuildCandidate, taskBuildContext = false): void => {
-    if (candidate.build_id !== null) knownBuildIds.add(candidate.build_id);
-    if (candidate.result?.build_id !== null && candidate.result?.build_id !== undefined) knownBuildIds.add(candidate.result.build_id);
-    if (candidateIdentityMatches(candidate, selected, knownBuildIds, taskBuildContext)) candidates.push(candidate);
+  const add = (candidate: ParsedBuildCandidate): void => {
+    if (candidateIdentityMatches(candidate, selected)) candidates.push(candidate);
   };
   for (const event of matchingEvents) {
     const type = eventType(event);
@@ -644,7 +697,6 @@ function collectBuildCandidates(
     malformedRefs.push(`${evidenceRef}.terminal.run.summary.build_result`);
   }
   for (const key of ["task_builds", "builds"] as const) {
-    const taskContext = key === "task_builds";
     const value = evidence[key];
     const entries = Array.isArray(value)
       ? value
@@ -657,7 +709,7 @@ function collectBuildCandidates(
       if (result === null && Object.keys(entry).some((keyName) => ["build_result", "result", "terminal_result"].includes(keyName))) {
         malformedRefs.push(`${evidenceRef}.${key}[${index}]`);
       }
-      add({ build_id: buildId, task_id: id(entry.task_id) ?? id(object(entry.detail).task_id), run_id: id(entry.run_id) ?? id(object(entry.detail).run_id), result, ref: `${evidenceRef}.${key}[${index}]` }, taskContext);
+      add({ build_id: buildId, task_id: id(entry.task_id) ?? id(object(entry.detail).task_id), run_id: id(entry.run_id) ?? id(object(entry.detail).run_id), result, ref: `${evidenceRef}.${key}[${index}]` });
     }
   }
   return { candidates, malformedRefs: sortedUnique(malformedRefs) };
@@ -780,13 +832,18 @@ function projectPublication(
   };
 }
 
+function artifactName(value: unknown): string | null {
+  const valueText = text(value);
+  return valueText?.replaceAll("\\", "/").split("/").at(-1) ?? null;
+}
+
 function normalizeArtifact(value: unknown): { artifact_id: string; name: string | null; sha256: string | null; size_bytes: number | null } | null {
   const source = object(value);
   const artifactId = id(source.artifact_id) ?? id(source.id);
   if (artifactId === null) return null;
   return {
     artifact_id: artifactId,
-    name: text(source.name),
+    name: artifactName(source.name) ?? artifactName(source.relative_path),
     sha256: sha(source.sha256),
     size_bytes: nonNegativeInteger(source.size_bytes) ?? nonNegativeInteger(source.size),
   };
@@ -799,29 +856,89 @@ function artifactMatches(left: { name: string | null; sha256: string | null; siz
   return (left.sha256 !== null && right.sha256 !== null) || (left.size_bytes !== null && right.size_bytes !== null) || (left.name !== null && right.name !== null);
 }
 
+function parsePublicationArtifactEvidence(
+  evidence: JsonObject,
+  evidenceRef: string,
+  selectedPublicationId: string | null,
+): PublicationArtifactEvidence {
+  const sourceRef = `${evidenceRef}.publication_artifacts`;
+  if (evidence.publication_artifacts === undefined) {
+    return { state: "missing", publication_id: null, artifact_list: [], artifact_hashes: [], artifact_contents: {}, source_ref: sourceRef };
+  }
+  const scoped = object(evidence.publication_artifacts);
+  const allowed = new Set(["schema_version", "publication_id", "artifact_list", "artifact_hashes", "artifact_contents"]);
+  const publicationId = id(scoped.publication_id);
+  const artifactList = array(scoped.artifact_list);
+  const artifactHashes = array(scoped.artifact_hashes);
+  const artifactContents = object(scoped.artifact_contents);
+  const listIds = artifactList.map(normalizeArtifact).map((entry) => entry?.artifact_id ?? null);
+  const hashIds = artifactHashes.map(normalizeArtifact).map((entry) => entry?.artifact_id ?? null);
+  const sortedListIds = sortedUnique(listIds.filter((entry): entry is string => entry !== null));
+  const sortedHashIds = sortedUnique(hashIds.filter((entry): entry is string => entry !== null));
+  const contentKeys = Object.keys(artifactContents);
+  const malformed = Object.keys(scoped).some((key) => !allowed.has(key)) ||
+    scoped.schema_version !== "1.0" || publicationId === null || publicationId !== selectedPublicationId ||
+    !Array.isArray(scoped.artifact_list) || !Array.isArray(scoped.artifact_hashes) || !isObject(scoped.artifact_contents) ||
+    artifactList.length === 0 || listIds.includes(null) || hashIds.includes(null) ||
+    sortedListIds.length !== artifactList.length || sortedHashIds.length !== artifactHashes.length ||
+    sortedHashIds.some((value) => !sortedListIds.includes(value)) ||
+    contentKeys.some((key) => !SAFE_ID.test(key) || !sortedHashIds.includes(key));
+  return {
+    state: malformed ? "conflicting" : "present",
+    publication_id: publicationId,
+    artifact_list: artifactList,
+    artifact_hashes: artifactHashes,
+    artifact_contents: artifactContents,
+    source_ref: sourceRef,
+  };
+}
+
 function projectArtifacts(
   evidence: JsonObject,
   evidenceRef: string,
   matchingEvents: readonly EventRecord[],
-): TrustedEvidenceArtifacts {
+  selectedPublicationId: string | null,
+): { artifacts: TrustedEvidenceArtifacts; publicationEvidence: PublicationArtifactEvidence } {
+  const publicationEvidence = parsePublicationArtifactEvidence(evidence, evidenceRef, selectedPublicationId);
   const candidates: ArtifactCandidate[] = [];
-  const add = (value: unknown, ref: string, kind: "produced" | "listed" | "downloaded"): void => {
+  const add = (
+    value: unknown,
+    ref: string,
+    kind: "produced" | "listed" | "downloaded",
+    publicationScoped = false,
+  ): void => {
     const artifact = normalizeArtifact(value);
     if (artifact === null) return;
-    candidates.push({ ...artifact, produced: kind === "produced", downloaded: kind === "downloaded", ref });
+    candidates.push({
+      ...artifact,
+      produced: kind === "produced",
+      listed: kind === "listed",
+      publication_listed: kind === "listed" && publicationScoped,
+      downloaded: kind === "downloaded",
+      publication_downloaded: kind === "downloaded" && publicationScoped,
+      ref,
+    });
   };
   for (const event of matchingEvents) {
     if (eventType(event) === "artifact_produced") add(object(event.payload).artifact, event.ref, "produced");
   }
-  const addStableCollection = (value: unknown, collection: "artifact_list" | "artifact_hashes", kind: "listed" | "downloaded"): void => {
+  const addCollection = (
+    value: unknown,
+    ref: string,
+    kind: "listed" | "downloaded",
+    publicationScoped: boolean,
+  ): void => {
     for (const entry of array(value)) {
       const normalized = normalizeArtifact(entry);
-      if (normalized === null) continue;
-      add(entry, `${evidenceRef}.${collection}.${normalized.artifact_id}`, kind);
+      if (normalized !== null) add(entry, `${ref}.${normalized.artifact_id}`, kind, publicationScoped);
     }
   };
-  addStableCollection(evidence.artifact_list, "artifact_list", "listed");
-  addStableCollection(evidence.artifact_hashes, "artifact_hashes", "downloaded");
+  addCollection(evidence.artifact_list, `${evidenceRef}.artifact_list`, "listed", false);
+  addCollection(evidence.artifact_hashes, `${evidenceRef}.artifact_hashes`, "downloaded", false);
+  if (publicationEvidence.state !== "missing") {
+    addCollection(publicationEvidence.artifact_list, `${publicationEvidence.source_ref}.artifact_list`, "listed", true);
+    addCollection(publicationEvidence.artifact_hashes, `${publicationEvidence.source_ref}.artifact_hashes`, "downloaded", true);
+  }
   const groups: ArtifactCandidate[][] = [];
   for (const candidate of candidates) {
     let group = groups.find((entries) => entries.some((entry) => entry.artifact_id === candidate.artifact_id || artifactMatches(entry, candidate)));
@@ -832,17 +949,18 @@ function projectArtifacts(
     group.push(candidate);
   }
   const items: TrustedEvidenceArtifactItem[] = [];
-  let conflictCount = 0;
+  let conflictCount = publicationEvidence.state === "conflicting" ? 1 : 0;
   for (const group of groups) {
     const ids = sortedUnique(group.map((entry) => entry.artifact_id));
-    const primary = group.slice().sort((left, right) => left.artifact_id.localeCompare(right.artifact_id) || left.ref.localeCompare(right.ref))[0];
+    const primary = group.slice().sort((left, right) => left.artifact_id.localeCompare(right.artifact_id) || left.ref.localeCompare(right.ref))[0]!;
     const expectedEntries = group.filter((entry) => !entry.downloaded);
     const downloadedEntries = group.filter((entry) => entry.downloaded);
+    const nameValues = sortedUnique(group.flatMap((entry) => entry.name === null ? [] : [entry.name]));
     const expectedShaValues = sortedUnique(expectedEntries.flatMap((entry) => entry.sha256 === null ? [] : [entry.sha256]));
     const expectedSizeValues = sortedUnique(expectedEntries.flatMap((entry) => entry.size_bytes === null ? [] : [String(entry.size_bytes)]));
     const downloadedShaValues = sortedUnique(downloadedEntries.flatMap((entry) => entry.sha256 === null ? [] : [entry.sha256]));
     const downloadedSizeValues = sortedUnique(downloadedEntries.flatMap((entry) => entry.size_bytes === null ? [] : [String(entry.size_bytes)]));
-    const metadataConflict = expectedShaValues.length > 1 || expectedSizeValues.length > 1;
+    const metadataConflict = ids.length > 1 || nameValues.length > 1 || expectedShaValues.length > 1 || expectedSizeValues.length > 1;
     const hashMismatch = expectedShaValues.length > 0 && downloadedShaValues.length > 0 && !downloadedShaValues.some((value) => expectedShaValues.includes(value));
     const sizeMismatch = expectedSizeValues.length > 0 && downloadedSizeValues.length > 0 && !downloadedSizeValues.some((value) => expectedSizeValues.includes(value));
     const downloaded = group.some((entry) => entry.downloaded && entry.sha256 !== null && entry.size_bytes !== null);
@@ -858,18 +976,128 @@ function projectArtifacts(
       expected_size_bytes: expectedSizeValues.length > 0 ? Number(expectedSizeValues[0]) : null,
       downloaded_sha256: downloadedShaValues[0] ?? null,
       downloaded_size_bytes: downloadedSizeValues.length > 0 ? Number(downloadedSizeValues[0]) : null,
+      produced_receipt: group.some((entry) => entry.produced),
+      listed_receipt: group.some((entry) => entry.listed),
+      publication_listed_receipt: group.some((entry) => entry.publication_listed),
+      publication_downloaded_receipt: group.some((entry) => entry.publication_downloaded),
       state,
       source_refs: sortedUnique(group.map((entry) => entry.ref)),
     });
   }
   items.sort((left, right) => left.artifact_id.localeCompare(right.artifact_id));
   const verifiedCount = items.filter((item) => item.state === "present").length;
+  const publicationVerifiedCount = items.filter((item) =>
+    item.state === "present" && item.publication_listed_receipt && item.publication_downloaded_receipt,
+  ).length;
   const downloadedCount = items.filter((item) => item.downloaded_sha256 !== null && item.downloaded_size_bytes !== null).length;
   const allVerified = items.length > 0 && verifiedCount === items.length;
+  const scopedCount = publicationEvidence.artifact_list.length;
+  const allPublicationArtifactsVerified = publicationEvidence.state === "present" && scopedCount > 0 && publicationVerifiedCount === scopedCount;
   const state: TrustedEvidenceFactState = items.length === 0
     ? "missing"
     : conflictCount > 0 ? "conflicting" : allVerified ? "present" : "receipt_only";
-  return { state, source_refs: sortedUnique(candidates.map((candidate) => candidate.ref)), items, expected_count: items.length, downloaded_count: downloadedCount, verified_count: verifiedCount, all_verified: allVerified };
+  return {
+    artifacts: {
+      state,
+      source_refs: sortedUnique([
+        ...candidates.map((candidate) => candidate.ref),
+        ...(publicationEvidence.state === "missing" ? [] : [publicationEvidence.source_ref]),
+      ]),
+      items,
+      expected_count: items.length,
+      downloaded_count: downloadedCount,
+      verified_count: verifiedCount,
+      publication_verified_count: publicationVerifiedCount,
+      all_verified: allVerified,
+      all_publication_artifacts_verified: allPublicationArtifactsVerified,
+    },
+    publicationEvidence,
+  };
+}
+
+function emptySemanticProduct(
+  state: TrustedEvidenceFactState,
+  sourceRefs: readonly string[],
+): TrustedEvidenceSemanticProduct {
+  return {
+    state,
+    source_refs: sortedUnique(sourceRefs),
+    projected: false,
+    assessment: null,
+    product_status: null,
+    requirement_id: null,
+    package_id: null,
+    package_version: null,
+    identity_matches_expected: null,
+  };
+}
+
+function projectSemanticProduct(
+  artifacts: TrustedEvidenceArtifacts,
+  publicationEvidence: PublicationArtifactEvidence,
+  build: TrustedEvidenceBuild,
+  publication: TrustedEvidencePublication,
+  expectedIdentity: ExpectedProductAssessmentIdentity | undefined,
+): TrustedEvidenceSemanticProduct {
+  const assessmentArtifacts = artifacts.items.filter((item) =>
+    item.name?.replaceAll("\\", "/").split("/").at(-1) === "product_assessment.json",
+  );
+  if (assessmentArtifacts.length === 0) return emptySemanticProduct("missing", []);
+  const sourceRefs = sortedUnique(assessmentArtifacts.flatMap((item) => item.source_refs));
+  if (assessmentArtifacts.length !== 1) return emptySemanticProduct("conflicting", sourceRefs);
+  const artifactItem = assessmentArtifacts[0]!;
+  if (publicationEvidence.state === "missing") {
+    return emptySemanticProduct("receipt_only", [...sourceRefs, ...publication.source_refs]);
+  }
+  if (publication.state === "conflicting" || publicationEvidence.state === "conflicting" ||
+      publicationEvidence.publication_id !== publication.publication_id ||
+      build.publication_id !== null && publicationEvidence.publication_id !== build.publication_id) {
+    return emptySemanticProduct("conflicting", [...sourceRefs, ...publication.source_refs, publicationEvidence.source_ref]);
+  }
+  if (publication.state !== "present" || !publication.authoritative || !publication.consistent_with_build ||
+      build.state !== "present" || build.publication_id === null || publicationEvidence.state !== "present") {
+    return emptySemanticProduct("receipt_only", [...sourceRefs, ...publication.source_refs]);
+  }
+  if (artifactItem.state !== "present" || !artifactItem.produced_receipt ||
+      !artifactItem.publication_listed_receipt || !artifactItem.publication_downloaded_receipt) {
+    return emptySemanticProduct(artifactItem.state === "conflicting" ? "conflicting" : "receipt_only", sourceRefs);
+  }
+  const contentRef = `${publicationEvidence.source_ref}.artifact_contents.${artifactItem.artifact_id}`;
+  const content = object(publicationEvidence.artifact_contents[artifactItem.artifact_id]);
+  if (Object.keys(content).length === 0) return emptySemanticProduct("receipt_only", sourceRefs);
+  const allowed = new Set(["artifact_id", "utf8"]);
+  const utf8 = text(content.utf8);
+  if (Object.keys(content).some((key) => !allowed.has(key)) ||
+      id(content.artifact_id) !== artifactItem.artifact_id || utf8 === null) {
+    return emptySemanticProduct("conflicting", [...sourceRefs, contentRef]);
+  }
+  const bytes = Buffer.from(utf8, "utf8");
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  if (digest !== artifactItem.expected_sha256 || digest !== artifactItem.downloaded_sha256 ||
+      bytes.length !== artifactItem.expected_size_bytes || bytes.length !== artifactItem.downloaded_size_bytes) {
+    return emptySemanticProduct("conflicting", [...sourceRefs, contentRef]);
+  }
+  try {
+    const assessment = parseProductAssessment(JSON.parse(utf8));
+    const identityMatchesExpected = expectedIdentity === undefined
+      ? null
+      : assessment.requirement_id === expectedIdentity.requirement_id &&
+        assessment.package_id === expectedIdentity.package_id &&
+        assessment.package_version === expectedIdentity.package_version;
+    return {
+      state: "present",
+      source_refs: sortedUnique([...sourceRefs, publicationEvidence.source_ref, contentRef]),
+      projected: true,
+      assessment,
+      product_status: assessment.product_status,
+      requirement_id: assessment.requirement_id,
+      package_id: assessment.package_id,
+      package_version: assessment.package_version,
+      identity_matches_expected: identityMatchesExpected,
+    };
+  } catch {
+    return emptySemanticProduct("conflicting", [...sourceRefs, contentRef]);
+  }
 }
 
 function exactPublicationOccurrences(content: string, publicationIds: readonly string[]): string[] {
@@ -1120,14 +1348,15 @@ function projectReproducibility(
     ? null
     : identity.product_commit === null ? null : identity.product_commit === targetProductCommit;
   const conflict = identity.state === "conflicting" || publication.state === "conflicting" || artifacts.state === "conflicting" || matches === false;
-  const complete = matches === true && publication.state === "present" && publication.authoritative && artifacts.all_verified;
+  const complete = matches === true && publication.state === "present" && publication.authoritative &&
+    artifacts.all_publication_artifacts_verified;
   const state: TrustedEvidenceFactState = conflict ? "conflicting" : complete ? "present" : publication.state === "missing" || artifacts.state === "missing" ? "missing" : "receipt_only";
   return {
     state,
     source_refs: sortedUnique([...identity.source_refs, ...publication.source_refs, ...artifacts.source_refs, evidenceRef]),
     product_commit_matches_target: matches,
     publication_authoritative: publication.authoritative,
-    all_publication_artifacts_verified: artifacts.all_verified,
+    all_publication_artifacts_verified: artifacts.all_publication_artifacts_verified,
   };
 }
 
@@ -1140,17 +1369,30 @@ export function projectTrustedEvidenceChain(input: ProjectTrustedEvidenceChainIn
   const hilRef = safeReference(input.hil_ref ?? "hil.json", "hil_ref");
   const accepted = object(input.accepted);
   const evidence = object(input.evidence);
+  const expectedAssessment = expectedProductAssessmentIdentity(input.expected_product_assessment);
   const identityProjection = projectIdentity(input, accepted, evidence, acceptedRef, evidenceRef);
   const events = parseEvents(evidence, evidenceRef);
   const selectedEventProjection = selectedEvents(events, identityProjection.selected);
   const terminal = projectTerminal(evidence, evidenceRef, identityProjection.selected, selectedEventProjection.events, selectedEventProjection.identityConflictRefs);
   const buildProjection = projectBuild(evidence, evidenceRef, identityProjection.selected, selectedEventProjection.events);
   const publication = projectPublication(evidence, evidenceRef, identityProjection.selected, selectedEventProjection.events, buildProjection.fact);
-  const artifacts = projectArtifacts(evidence, evidenceRef, selectedEventProjection.events);
+  const artifactProjection = projectArtifacts(
+    evidence,
+    evidenceRef,
+    selectedEventProjection.events,
+    publication.publication_id,
+  );
+  const artifacts = artifactProjection.artifacts;
   const finalAnswer = projectFinalAnswer(evidence, evidenceRef, identityProjection.selected, publication.publication_ids, selectedEventProjection.events);
   const hil = projectHil(evidence, evidenceRef, input.hil, hilRef, selectedEventProjection.events);
   const sourceAssets = collectSourceAssetReceipts(evidence, evidenceRef, identityProjection.selected, selectedEventProjection.events);
-  const semanticProduct: TrustedEvidenceSemanticProduct = { state: "missing", source_refs: [], projected: false };
+  const semanticProduct = projectSemanticProduct(
+    artifacts,
+    artifactProjection.publicationEvidence,
+    buildProjection.fact,
+    publication,
+    expectedAssessment,
+  );
   const targetProductCommit = input.target_product_commit;
   const reproducibility = projectReproducibility(identityProjection.identity, targetProductCommit, publication, artifacts, evidenceRef);
   const gaps: TrustedEvidenceGap[] = [];
@@ -1161,7 +1403,17 @@ export function projectTrustedEvidenceChain(input: ProjectTrustedEvidenceChainIn
   if (terminal.task_status !== "completed" || terminal.run_status !== "completed") gaps.push(gap("terminal.not_completed", "terminal", "Matching task and run are not both completed", terminal.source_refs));
   if (sourceAssets.state === "missing") gaps.push(gap("trusted_input.source_asset_receipt_missing", "trusted_input", "No matching role-aware SourceAsset registration receipt was observed", [evidenceRef]));
   if (sourceAssets.state === "conflicting") gaps.push(gap("trusted_input.source_asset_receipt_conflicting", "trusted_input", "SourceAsset registration receipts conflict or fail identity closure", sourceAssets.source_refs));
-  gaps.push(gap("semantic_product.not_projected", "semantic_product", "Legacy evidence does not durably project semantic tables, relations, or product assessment", semanticProduct.source_refs));
+  if (semanticProduct.state === "missing" || semanticProduct.state === "receipt_only") {
+    gaps.push(gap("semantic_product.not_projected", "semantic_product", "No verified product assessment artifact was projected", semanticProduct.source_refs));
+  } else if (semanticProduct.state === "conflicting") {
+    gaps.push(gap("semantic_product.conflicting", "semantic_product", "Product assessment artifact receipt or content conflicts", semanticProduct.source_refs));
+  } else if (semanticProduct.identity_matches_expected !== true) {
+    gaps.push(gap("semantic_product.identity_unverified", "semantic_product", "ProductAssessment identity is missing or does not match the evaluator requirement", semanticProduct.source_refs));
+  } else if (semanticProduct.product_status === "incomplete") {
+    gaps.push(gap("semantic_product.incomplete", "semantic_product", "Projected ProductAssessment reports an incomplete semantic product", semanticProduct.source_refs));
+  } else if (semanticProduct.product_status === "validated") {
+    gaps.push(gap("semantic_product.not_publishable", "semantic_product", "Projected ProductAssessment is validated but not publishable", semanticProduct.source_refs));
+  }
   if (buildProjection.fact.state === "missing") gaps.push(gap("build.missing", "build", "No matching BuildResult or build receipt was found", buildProjection.fact.source_refs));
   if (buildProjection.fact.state === "receipt_only") gaps.push(gap("build.receipt_only", "build", "Only a build or operation identifier was observed; BuildResult is absent", buildProjection.fact.source_refs));
   if (buildProjection.fact.state === "conflicting") gaps.push(gap("build.conflicting", "build", "Matching BuildResult receipts conflict", buildProjection.fact.source_refs));
@@ -1176,13 +1428,13 @@ export function projectTrustedEvidenceChain(input: ProjectTrustedEvidenceChainIn
     if (artifacts.items.some((item) => item.expected_sha256 !== null && item.downloaded_sha256 !== null && item.expected_sha256 !== item.downloaded_sha256)) gaps.push(gap("artifact.hash_mismatch", "artifact", "Downloaded artifact SHA-256 does not match the expected receipt", artifacts.source_refs));
     if (artifacts.items.some((item) => item.expected_size_bytes !== null && item.downloaded_size_bytes !== null && item.expected_size_bytes !== item.downloaded_size_bytes)) gaps.push(gap("artifact.size_mismatch", "artifact", "Downloaded artifact size does not match the expected receipt", artifacts.source_refs));
   }
-  if (artifacts.items.length > 0 && !artifacts.all_verified && artifacts.state !== "conflicting") gaps.push(gap("artifact.download_verification_missing", "artifact", "Not every publication artifact has a verified downloaded hash and size", artifacts.source_refs));
+  if (artifacts.items.length > 0 && !artifacts.all_publication_artifacts_verified && artifacts.state !== "conflicting") gaps.push(gap("artifact.download_verification_missing", "artifact", "Not every selected-publication artifact has a scoped verified download hash and size", artifacts.source_refs));
   if (finalAnswer.content === null) gaps.push(gap("final_answer.missing", "final_answer", "No assistant final answer was durably captured for the selected run", finalAnswer.source_refs));
   else if (!finalAnswer.publication_referenced) gaps.push(gap("final_answer.publication_reference_missing", "final_answer", "Final answer does not contain an exact selected publication ID occurrence", finalAnswer.source_refs));
   if (hil.pending && hil.blocking) gaps.push(gap("hil.pending", "hil", "A blocking human-in-the-loop request remains pending", hil.source_refs));
   if (targetProductCommit !== undefined && identityProjection.identity.product_commit === null) gaps.push(gap("reproducibility.product_commit_missing", "reproducibility", "Evidence does not identify a product commit", identityProjection.identity.source_refs));
   else if (targetProductCommit !== undefined && reproducibility.product_commit_matches_target === false) gaps.push(gap("reproducibility.product_commit_mismatch", "reproducibility", "Evidence product commit does not match the evaluator target commit", identityProjection.identity.source_refs));
-  if (publication.state === "present" && !artifacts.all_verified) gaps.push(gap("reproducibility.artifact_verification_missing", "reproducibility", "Publication exists but all artifact downloads are not hash/size verified", artifacts.source_refs));
+  if (publication.state === "present" && !artifacts.all_publication_artifacts_verified) gaps.push(gap("reproducibility.artifact_verification_missing", "reproducibility", "Publication exists but all selected-publication artifact downloads are not hash/size verified", artifacts.source_refs));
   const evidenceRefs = sortedUnique([
     acceptedRef,
     evidenceRef,
@@ -1195,6 +1447,7 @@ export function projectTrustedEvidenceChain(input: ProjectTrustedEvidenceChainIn
     ...finalAnswer.source_refs,
     ...hil.source_refs,
     ...sourceAssets.source_refs,
+    ...semanticProduct.source_refs,
   ]);
   return {
     schema_version: "1.0",
@@ -1257,6 +1510,7 @@ export async function loadTrustedEvidenceChainFiles(
     evidence_ref: input.evidence_ref,
     hil_ref: input.hil_ref,
     target_product_commit: input.target_product_commit,
+    expected_product_assessment: input.expected_product_assessment,
   });
 }
 

@@ -11,6 +11,7 @@ import type {
 
 import {
   projectTrustedEvidenceChain,
+  type ExpectedProductAssessmentIdentity,
   type TrustedEvidenceChainProjection,
 } from "../trusted-evidence-chain.js";
 
@@ -27,6 +28,7 @@ export interface GoldEvidenceInventoryInput {
   case_id: string;
   target_product_commit: string;
   gold_root?: string;
+  expected_product_assessment?: ExpectedProductAssessmentIdentity;
 }
 
 export interface GoldEvidenceIdentity {
@@ -298,6 +300,14 @@ function checksFor(
   const publication: InventoryStatus = chain?.publication.state === "present" && chain.publication.consistent_with_build
     ? "pass"
     : chain?.publication.state === "conflicting" ? "fail" : "unknown";
+  const semanticProduct: InventoryStatus = chain?.semantic_product.state === "present" &&
+    chain.semantic_product.identity_matches_expected === true
+    ? chain.semantic_product.product_status === "publishable"
+      ? "pass"
+      : chain.semantic_product.product_status === "incomplete" ? "fail" : "unknown"
+    : chain?.semantic_product.state === "conflicting" || chain?.semantic_product.identity_matches_expected === false
+      ? "fail"
+      : "unknown";
   const reproducibility: InventoryStatus = chain?.reproducibility.state === "present"
     ? "pass"
     : hasFinding("identity.product_commit_mismatch") || hasFinding("identity.product_commit_missing") || chain?.reproducibility.state === "conflicting"
@@ -307,7 +317,7 @@ function checksFor(
     frozen_inputs: identity.status === "pass" ? "pass" : identity.status,
     execution: hasFinding("execution.") ? "fail" : execution,
     trusted_inputs: "unknown",
-    semantic_product: "unknown",
+    semantic_product: semanticProduct,
     publication,
     reproducibility,
   };
@@ -439,13 +449,15 @@ export async function loadGoldEvidenceInventory(
       evidence_ref: evidenceRef,
       hil_ref: hilRef,
       target_product_commit: input.target_product_commit,
+      expected_product_assessment: input.expected_product_assessment,
     })
     : null;
   if (trustedEvidenceChain !== null) findings.push(...chainFindings(trustedEvidenceChain));
   if (observed.build_status === "succeeded" && observed.publication_ids.length === 0 && observed.build_publication_id === null) {
     findings.push(finding("publication.publication_receipt_missing", "publication", "publication_receipt", "Build success is present but no publication receipt was observed", [evidenceRef]));
   }
-  if (observed.publication_ids.length > 0 || observed.build_publication_id !== null) {
+  if ((observed.publication_ids.length > 0 || observed.build_publication_id !== null) &&
+      trustedEvidenceChain?.artifacts.all_publication_artifacts_verified !== true) {
     findings.push(finding("reproducibility.artifact_verification_missing", "reproducibility", "artifact_download_hash", "Publication identifiers are observed, but artifact download/hash evidence is absent", [evidenceRef]));
   }
   if (observed.task_status !== null && observed.run_status !== null && (observed.task_status !== "completed" || observed.run_status !== "completed")) {

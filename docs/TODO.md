@@ -79,10 +79,19 @@
       CID mismatch、缺 receipt 均在 Publisher 前 fail-closed。未增加 Gold-specific profile，
       严格 Gold 仍为 0/6，等待同 commit frozen rerun。设计与证据见
       [Bioactivity Identity Vertical Slice](audit/2026-08-20-bioactivity-identity-vertical-slice.md)。
-- [ ] **P0 / next repair** Same-commit trusted-input closure：基于 E6 与 TASK-056 的边界证据，
-      继续补齐同一 task/run/build/publication/artifact/final-answer 证据，并在 frozen input 上
-      原样复跑；仅当权威事件模型确实缺少所需阶段时才修改 runtime。本阶段不启动完整
-      Canonical IR、RegisteredTransform 或 family benchmark 特例重构。
+- [x] **P0 / TASK-057 completed on task branch** ProductAssessment evidence projection：
+      evaluator 仅从 selected run 的严格 BuildResult、同 ID authoritative publication receipt、
+      publication-scoped Artifact API list/download receipt、evaluator expected package identity
+      与 projector 内重算 hash/size 的原始 UTF-8 `product_assessment.json` bytes 投影
+      `semantic_product`。`publishable -> pass`、
+      `incomplete -> fail`、`validated -> unknown`；缺 bytes、receipt-only、wrong run/publication、
+      malformed/unknown fields 和任意 workspace/top-level sidecar 均 fail-closed。旧
+      `dd498ec8-rerun` smoke 保持 `0 pass / 5 fail / 1 blocked` 且六例 semantic_product
+      仍为 unknown；未修改 runtime、Publisher 或 frozen Gold inputs。
+- [ ] **P0 / next repair** Same-commit trusted-input closure：基于 E6、TASK-056 与 TASK-057
+      的边界证据，继续补齐同一 task/run/build/publication/artifact/final-answer 证据，并在
+      frozen input 上原样复跑；仅当权威事件模型确实缺少所需阶段时才修改 runtime。本阶段
+      不启动完整 Canonical IR、RegisteredTransform 或 family benchmark 特例重构。
 
 > TASK-047/048 的 work package、硬依赖、分支边界和逐项验收统一见
 > [Gold 可信 Publication 收敛执行计划](superpowers/plans/2026-08-18-gold-trusted-publication-closure.md)。

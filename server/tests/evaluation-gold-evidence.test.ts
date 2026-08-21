@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -72,6 +73,137 @@ function evidence(caseId = "case-a", productCommit = commit) {
   };
 }
 
+function assessment(status: "publishable" | "validated" | "incomplete") {
+  const dimensions = ["schema", "relations", "identifiers", "provenance", "confidence", "reproducibility"];
+  const incomplete = status === "incomplete";
+  const validated = status === "validated";
+  return {
+    schema_version: "1.0",
+    requirement_id: "fixture.release.v1",
+    package_id: "fixture_package",
+    package_version: "1.0",
+    product_status: status,
+    scores: dimensions.map((dimension) => ({
+      dimension,
+      score: incomplete && dimension === "identifiers" || validated && dimension === "reproducibility" ? 0 : 1,
+      satisfied: incomplete && dimension === "identifiers" || validated && dimension === "reproducibility" ? 0 : 1,
+      required: 1,
+    })),
+    missing_requirements: incomplete ? ["fixture_identity"] : validated ? ["fixture_artifacts"] : [],
+    blockers: incomplete ? [{
+      requirement_id: "fixture_identity",
+      dimension: "identifiers",
+      code: "identity_not_closed",
+      message: "Identity closure is incomplete",
+    }] : validated ? [{
+      requirement_id: "fixture_artifacts",
+      dimension: "reproducibility",
+      code: "artifact_incomplete",
+      message: "Publication artifacts are incomplete",
+    }] : [],
+  };
+}
+
+function evidenceWithAssessment(status: "publishable" | "validated" | "incomplete") {
+  const base = evidence();
+  const artifactId = "artifact-assessment";
+  const utf8 = `${JSON.stringify(assessment(status))}\n`;
+  const digest = createHash("sha256").update(utf8).digest("hex");
+  const size = Buffer.byteLength(utf8);
+  return {
+    ...base,
+    terminal: {
+      ...base.terminal,
+      run: {
+        ...base.terminal.run,
+        summary: {
+          build_result: {
+            status: "succeeded",
+            valid_row_count: 2,
+            successful_sources: ["source-a"],
+            rejected_sources: [],
+            available_artifact_roles: ["audit_report"],
+            publication_id: "publication-a",
+            reason_codes: [],
+            user_summary: "Published fixture assessment.",
+            recommended_next_action: "none",
+            build_id: "build-a",
+          },
+        },
+      },
+    },
+    events: [{
+      schema_version: "2.0",
+      event_id: "event-publication",
+      type: "publication_created",
+      task_id: "task-a",
+      run_id: "run-a",
+      sequence: 1,
+      timestamp: "2026-08-20T00:00:01.000Z",
+      payload: {
+        type: "publication_created",
+        publication_id: "publication-a",
+        run_id: "run-a",
+        manifest_sha256: "8".repeat(64),
+        supersedes_publication_id: null,
+        published_at: "2026-08-20T00:00:01.000Z",
+      },
+    }, {
+      schema_version: "2.0",
+      event_id: "event-assessment",
+      type: "artifact_produced",
+      task_id: "task-a",
+      run_id: "run-a",
+      sequence: 2,
+      timestamp: "2026-08-20T00:00:02.000Z",
+      payload: {
+        type: "artifact_produced",
+        artifact: {
+          artifact_id: artifactId,
+          name: "product_assessment.json",
+          relative_path: "product_assessment.json",
+          size_bytes: size,
+          sha256: digest,
+        },
+      },
+    }],
+    artifact_list: [{
+      artifact_id: artifactId,
+      name: "product_assessment.json",
+      size,
+      sha256: digest,
+    }],
+    artifact_hashes: [{
+      artifact_id: artifactId,
+      name: "product_assessment.json",
+      size_bytes: size,
+      sha256: digest,
+    }],
+    publication_artifacts: {
+      schema_version: "1.0",
+      publication_id: "publication-a",
+      artifact_list: [{
+        artifact_id: artifactId,
+        name: "product_assessment.json",
+        size,
+        sha256: digest,
+      }],
+      artifact_hashes: [{
+        artifact_id: artifactId,
+        name: "product_assessment.json",
+        size_bytes: size,
+        sha256: digest,
+      }],
+      artifact_contents: {
+        [artifactId]: {
+          artifact_id: artifactId,
+          utf8,
+        },
+      },
+    },
+  };
+}
+
 async function writePair(
   root: string,
   caseId = "case-a",
@@ -114,6 +246,60 @@ describe("loadGoldEvidenceInventory", () => {
     ]));
     expect(result.trusted_evidence_chain?.semantic_product.state).toBe("missing");
     expect(result.findings.map((item) => item.code)).toContain("chain.semantic_product.not_projected");
+  });
+
+  test.each([
+    ["publishable", "pass"],
+    ["validated", "unknown"],
+    ["incomplete", "fail"],
+  ] as const)("maps a verified %s ProductAssessment to semantic_product=%s", async (status, expected) => {
+    const root = await makeRoot();
+    await writeJson(root, "accept-case-a.json", accepted());
+    await writeJson(root, "evidence-case-a.json", evidenceWithAssessment(status));
+    const result = await loadGoldEvidenceInventory({
+      evidence_root: root,
+      case_id: "case-a",
+      target_product_commit: commit,
+      expected_product_assessment: {
+        requirement_id: "fixture.release.v1",
+        package_id: "fixture_package",
+        package_version: "1.0",
+      },
+    });
+
+    expect(result.checks.semantic_product).toBe(expected);
+    expect(result.trusted_evidence_chain?.semantic_product).toMatchObject({
+      state: "present",
+      projected: true,
+      product_status: status,
+    });
+    expect(result.findings.map((item) => item.code)).not.toContain(
+      "reproducibility.artifact_verification_missing",
+    );
+  });
+
+  test("does not pass a publishable assessment for another expected package", async () => {
+    const root = await makeRoot();
+    await writeJson(root, "accept-case-a.json", accepted());
+    await writeJson(root, "evidence-case-a.json", evidenceWithAssessment("publishable"));
+    const wrong = await loadGoldEvidenceInventory({
+      evidence_root: root,
+      case_id: "case-a",
+      target_product_commit: commit,
+      expected_product_assessment: {
+        requirement_id: "fixture.release.v1",
+        package_id: "other_package",
+        package_version: "1.0",
+      },
+    });
+    expect(wrong.checks.semantic_product).toBe("fail");
+
+    const unknown = await loadGoldEvidenceInventory({
+      evidence_root: root,
+      case_id: "case-a",
+      target_product_commit: commit,
+    });
+    expect(unknown.checks.semantic_product).toBe("unknown");
   });
 
   test("treats accepted-only evidence as unknown and reports missing terminal evidence", async () => {

@@ -76,6 +76,61 @@ receipts are absent from the bundle. Gold6 remains `blocked` because its pending
 blocking HIL is explicit. No workspace file or publication count is promoted to
 semantic product success.
 
+## TASK-057 ProductAssessment Evidence Projection
+
+The evaluator can now project `semantic_product` from a Core-owned
+`product_assessment.json`, but only when one evidence bundle closes all of these
+identities:
+
+```text
+selected run
+-> strict BuildResult.publication_id
+-> authoritative publication receipt with the same publication ID
+-> publication_artifacts.publication_id with the same publication ID
+-> product_assessment.json production receipt
+-> Artifact API list receipt
+-> Artifact API download hash/size receipt
+-> downloaded raw UTF-8 bytes rehashed inside the projector
+-> strict ProductAssessment parser
+```
+
+The evaluator-owned downloaded-content envelope is intentionally bounded and
+path-free:
+
+```json
+{
+  "publication_artifacts": {
+    "schema_version": "1.0",
+    "publication_id": "pub_...",
+    "artifact_list": ["...Artifact API list receipts..."],
+    "artifact_hashes": ["...download receipts rehashed by the collector..."],
+    "artifact_contents": {
+      "artifact_...": {
+        "artifact_id": "artifact_...",
+        "utf8": "{...downloaded JSON bytes...}\n"
+      }
+    }
+  }
+}
+```
+
+The projector computes the UTF-8 byte length and SHA-256 itself. Flat legacy
+`artifact_list`/`artifact_hashes`, claimed hashes, workspace paths, top-level
+`product_assessment` sidecars, receipt-only artifacts, wrong run/publication
+identities, duplicate/conflicting artifact identities, unknown envelope fields,
+and malformed assessment fields cannot upgrade semantic status. The evaluator
+must also supply the expected requirement/package/version identity; an otherwise
+valid assessment for another package cannot represent the evaluated product. An
+identity-matched verified `publishable` assessment maps to `pass`, `incomplete`
+maps to `fail`, and `validated` remains `unknown` because it is not yet a
+reproducibly publishable product.
+
+A read-only smoke against `data/gold-runs/dd498ec8-rerun/` at the TASK-057 base
+commit retained `0 pass / 5 fail / 1 blocked`; all six semantic-product checks
+remain `unknown` because the old bundles contain no publication-bound downloaded
+assessment bytes. Gold6 remains blocked by its real pending HIL. No frozen Gold
+input or legacy evidence file was changed.
+
 ## Evidence Gaps
 
 The current evidence bundles do not yet provide a machine-checkable projection
