@@ -135,6 +135,7 @@
 
 > B 组详细 ownership、依赖类型、分支、交接窗口和逐任务验收见
 > [开发者 B：可信多表 Publication 落实计划](superpowers/plans/2026-08-18-developer-b-trusted-publication-plan.md)。
+> 最新架构设计（2026-08-21，D1-D14 已对齐，待实现）：[Gene Expression 多表化与 Schema 能力网络设计](superpowers/specs/2026-08-21-gold1-multitable-tables-design.md)。
 > B 组 contracts（含 C3C）、B2M、B3、B5C、B6D、B4M、B5L/T/V/S/A、B6A、B6B
 > module 已完成；C1I/C2I/C3I/B2W/B6W 与 A8 已接入 main。provider parser/runtime dispatch、
 > acquisition-first、固定 biomedical providers、role-aware receipts、multi-carrier aggregation、

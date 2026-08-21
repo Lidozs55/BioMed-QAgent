@@ -249,6 +249,7 @@ BioMed-QAgent/
 │   ├── DEVELOPER_QUICKSTART.md # 开发者快速入门
 │   ├── TODO.md                # 开发任务与进度索引（迁移 Phase 0-8 已完成）
 │   ├── architecture/          # 架构分层章节（执行、验证、runtime、前端、roadmap 等）
+│   ├── adr/                  # 架构决策记录 ADR-001-038 与历史决策/复盘
 │   └── migration/             # 历史迁移执行记录（Phase 0-8，已归档）
 ├── AGENTS.md                  # AI Agent 与协作约定
 ├── PROBLEM.md                 # 赛题背景与评价标准
