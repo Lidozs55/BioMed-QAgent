@@ -11,15 +11,27 @@ BioMed-QAgent 是一个面向生物医学研究数据的 **Agent + 确定性 Pip
 > bridge（JSONL named-op，按需启动）。边界与事件模型详见
 > [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
+## 功能与架构双入口
+
+本仓库按「**功能 / 架构**」分设两套面向协作者的入口，写汇报材料时可分别取材：
+
+| 文档 | 读者与用途 |
+| --- | --- |
+| [docs/FEATURES.md](docs/FEATURES.md) | **功能 / 能力全景**：系统能做什么，逐项对齐赛题评价维度，含演示视频建议脚本。适合产品、数据、写 PPT 的协作者。 |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | **技术架构权威**：系统如何组织、边界、事件模型、数据契约、安全。适合工程师与架构评审。 |
+| [docs/architecture/roadmap.md](docs/architecture/roadmap.md) + [docs/TODO.md](docs/TODO.md) | **未来规划**：演进方向、待决问题、开放任务与进度。 |
+
 ## 核心能力
 
+> 能力全景、逐项说明与赛题映射见 [docs/FEATURES.md](docs/FEATURES.md)，此处为摘要。
+
 - **自然语言研究任务**：从主题、关键词、数据库、目标字段和时间范围生成结构化任务规格。
-- **多源检索与获取**：通过可插拔 Skill 访问 PubMed、GEO 等生物医学数据源，记录 accession、来源关系、下载尝试和文件校验信息。
-- **确定性数据处理**：按固定阶段执行 Discovery → Acquisition → Processing → Artifact Build → Validation Gate。
-- **可验证交付物**：只有通过 Validation Gate 的文件才会发布到 `artifacts/` 并通过 API 暴露。
-- **Durable Task Runtime**：任务、Run、消息、事件和产物状态持久化，支持取消、恢复、事件重放以及人在回路（HITL）暂停/继续。
+- **多源检索与获取**：通过可插拔 Skill 访问 PubMed、GEO、GDC、Xena 等生物医学数据源，记录 accession、来源关系、下载尝试和文件校验信息。
+- **确定性数据处理**：按受信任 Dataset Core 执行 Acquire → Parse → Canonicalize → Compatibility → Integrate → Validate → Publish。
+- **可验证交付物**：只有通过 Validation Gate 的产物才会原子发布并经 API 暴露（`DatasetPublication` + manifest 唯一权威声明）。
+- **Durable Task Runtime**：任务、Run、事件和产物状态持久化，支持取消、恢复、事件重放以及人在回路（HITL）暂停/继续与权限批准。
 - **实时进度反馈**：前端通过 REST + WebSocket 接收 Agent 文本、工具调用、Pipeline 阶段、进度、警告和产物事件。
-- **模型与 curated Skills**：支持通过设置 API 配置 OpenAI 兼容模型；Pi 按任务加载
+- **模型与 curated Skills**：支持通过设置 API / 模型注册表配置 OpenAI 兼容模型；Pi 按任务加载
   `.pi/skills/`，learned skill 概念已退役。
 - **视觉证据采集**：可选使用 Playwright 截取网页或论文页面，并使用 Qwen-VL / PDF 解析 / caption 文本组成降级链路提取图表数据。
 
@@ -233,8 +245,10 @@ BioMed-QAgent/
 ├── pnpm-lock.yaml          # 唯一 Node lockfile
 ├── docs/
 │   ├── ARCHITECTURE.md        # 权威架构和数据契约
+│   ├── FEATURES.md            # 功能/能力全景（对齐赛题评价维度，写汇报用）
 │   ├── DEVELOPER_QUICKSTART.md # 开发者快速入门
 │   ├── TODO.md                # 开发任务与进度索引（迁移 Phase 0-8 已完成）
+│   ├── architecture/          # 架构分层章节（执行、验证、runtime、前端、roadmap 等）
 │   └── migration/             # 历史迁移执行记录（Phase 0-8，已归档）
 ├── AGENTS.md                  # AI Agent 与协作约定
 ├── PROBLEM.md                 # 赛题背景与评价标准
@@ -326,11 +340,21 @@ pnpm build      # tsc -b && vite build
 
 建议按以下顺序阅读：
 
-1. [docs/DEVELOPER_QUICKSTART.md](docs/DEVELOPER_QUICKSTART.md)：环境配置、启动和常见问题；
-2. [AGENTS.md](AGENTS.md)：代码规范、工作流和质量门禁；
-3. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)：系统边界、事件模型和数据契约；
-4. [docs/TODO.md](docs/TODO.md)：开发任务与进度索引；
-5. [PROBLEM.md](PROBLEM.md)：项目背景与评测要求。
+1. [docs/FEATURES.md](docs/FEATURES.md)：功能 / 能力全景（写汇报 / 了解能做什么先读）；
+2. [docs/DEVELOPER_QUICKSTART.md](docs/DEVELOPER_QUICKSTART.md)：环境配置、启动和常见问题；
+3. [AGENTS.md](AGENTS.md)：代码规范、工作流和质量门禁；
+4. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)：系统边界、事件模型和数据契约；
+5. [docs/TODO.md](docs/TODO.md)：开发任务与进度索引；
+6. [PROBLEM.md](PROBLEM.md)：项目背景与评测要求。
+
+## 未来规划
+
+演进方向、待决问题、非目标与被否决方案见
+[docs/architecture/roadmap.md](docs/architecture/roadmap.md)；当前开放任务（P0–P3、
+Gold 受可信 Publication 验收）见 [docs/TODO.md](docs/TODO.md)。核心方向包括：把
+非表达类研究主题（靶点 / 变异 / 结构 / 活性 / 文献 / 图表）接入受信任的多表
+Publication（Canonical Evidence Product Layer），以及大型 GEO 矩阵的流式 / 资源上限
+处理（均已在 roadmap / TODO 中记录，README 不重复维护）。
 
 ## 桌面 / 生产打包
 
@@ -351,8 +375,10 @@ pnpm build      # tsc -b && vite build
 
 | 文档                                                        | 内容                                    |
 | ----------------------------------------------------------- | --------------------------------------- |
+| [docs/FEATURES.md](docs/FEATURES.md)                         | 功能 / 能力全景（对齐赛题评价维度，写汇报用） |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)                 | 权威架构、数据流、契约、事件和安全模型  |
 | [docs/DEVELOPER_QUICKSTART.md](docs/DEVELOPER_QUICKSTART.md) | 开发环境、启动、测试和 AI-Native 工作流 |
+| [docs/architecture/roadmap.md](docs/architecture/roadmap.md) | 演进方向、待决问题、非目标、被否决方案  |
 | [docs/TODO.md](docs/TODO.md)                                 | 开发任务与进度索引                      |
 | [PROBLEM.md](PROBLEM.md)                                     | 赛题背景、目标和评价标准                |
 | [frontend/README.md](frontend/README.md)                     | 前端组件、状态管理、数据流与测试        |
