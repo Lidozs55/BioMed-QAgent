@@ -56,6 +56,26 @@
 | — 测试并发预算 | 本地有界并发、CI 放宽与 worker 预算 | [architecture/test-concurrency.md](architecture/test-concurrency.md) |
 | — 代码重复审计 | jscpd 重复代码审计报告 | [audit/code-audit-jscpd.md](audit/code-audit-jscpd.md) |
 
+### 文档位置变更对照（2026-08-21 整理）
+
+> 本仓库 2026-08-21 做过一轮文档解耦/清理。**没有内容被删除**：文档只移动/归档，
+> 或可从 git 历史恢复。找不到旧路径时按此表定位：
+
+| 原路径 | 现在位置 |
+| --- | --- |
+| `docs/LEFTOVERS.md` | `docs/archive/LEFTOVERS-2026-08-09.md`（开放项已并入 `docs/ISSUES.md`） |
+| `docs/CACHE_DESIGN.md` | `docs/archive/cache-design-2026-08.md`（现行缓存见 ADR-015 + `architecture/result-validation.md` §9-13） |
+| `docs/MODEL_PROVIDER_PARAMS.md` | `docs/architecture/model-provider-params.md` |
+| `docs/runtime-limits.md` | `docs/architecture/runtime-limits.md` |
+| `docs/test-concurrency.md` | `docs/architecture/test-concurrency.md` |
+| `docs/code-audit-jscpd.md` | `docs/audit/code-audit-jscpd.md` |
+| `docs/BioMed-QAgent_Architecture_Decisions_and_Lessons.md` | 拆分：`docs/adr/001-*` ~ `016-*` + `docs/adr/legacy-decisions-and-lessons.md` |
+| `docs/BioMed-QAgent_Pipeline_Refactor_Design.md` | `docs/archive/BioMed-QAgent_Pipeline_Refactor_Design.md`（历史设计） |
+| `.claude/skills/shadcn/` | 已删除；同等内容在 `.agents/skills/shadcn/`（git 历史可恢复） |
+| `.superpowers/` | 已删除（历史生成报告，git 历史可恢复） |
+| `audit-results/` | 已删除（一次性审计快照，git 历史可恢复） |
+| `assets/logo/*-v2..v5` | 已删除（被替代版本，git 历史可恢复） |
+
 ---
 ## 1. 产品定义与边界
 
