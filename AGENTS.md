@@ -187,6 +187,25 @@ bash scripts/commonly-up.sh        # scaffold (1st run) + run the agent; Ctrl+C 
   `lidozs55-agent`.
 - Runtime token lives in `scripts/commonly-agent/.commonly-env` (**git-ignored,
   never commit**).
+- **MCP-unavailable fallback**: MCP is not a prerequisite for this repository.
+  When the current runtime does not expose `commonly_*` tools, use the official
+  CLI + webhook-SDK path instead of blocking on MCP:
+  1. Check authentication with `commonly whoami`; if needed, run
+     `commonly login`.
+  2. Start the local agent from the repository root with
+     `scripts\commonly-up.bat [agent-name]` on Windows, or
+     `bash scripts/commonly-up.sh [agent-name]` on POSIX.
+  3. Let the webhook-SDK process use
+     `scripts/commonly-agent/.commonly-env`; never print or commit the runtime
+     token.
+
+  The CLI bootstraps and launches the agent; the webhook-SDK process carries the
+  agent identity, polls events, and posts agent replies. Do **not** use a human
+  or operator `commonly pod send` session as a substitute for agent check-ins,
+  because it misattributes the message. The `[TASK]`, `[DONE]`, and `[BLOCKED]`
+  check-in rules and board synchronization requirements remain unchanged. If
+  neither MCP nor the CLI/SDK process is available, report `[BLOCKED]` rather
+  than claiming that a check-in happened.
 - **Known CLI bug (v0.1.11)**: `commonly agent init` copies SDK/bot templates from
   an `@commonlyai/examples` path npm does not ship, so a fresh install fails with
   `ENOENT … examples/sdk/python/commonly.py`. Workaround: fetch the two canonical
