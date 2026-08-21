@@ -1,302 +1,195 @@
 # BioMed-QAgent 开发 TODO
 
-> 当前状态：迁移主线 **Phase 0-9 全部完成**（2026-08-12 ~ 2026-08-16）；
-> Agent I/O 可观测性与权限交互修正主体完成（2026-08-17）。本清单只保留
-> **开放条目**与当前约束；已完成阶段的详细清单与验收证据归档于
-> [archive/TODO_MIGRATION_COMPLETED.md](archive/TODO_MIGRATION_COMPLETED.md)
-> （Phase 0-9 / M2 / 独立维护项完成部分 / 前端 UI 合规 / 已登记 issue
-> 已解决部分），本文件不重复。
+> 当前主线：**Family Host + Transform Host** 计划集（目标 ADR-039，Proposed）。
+> 详细设计见 `docs/plans/family-host/`（`00-overview` … `09-execution-matrix`）。
+> 本文件将计划拆为 4 个开发者组 A/B/C/D，按「**冻结契约类型**」一层解耦，使各组尽量并行推进。
+> 文档 `10-consistency-review` 为一致性审查，不单独列任务。
 >
-> - 架构权威见 [ARCHITECTURE.md](ARCHITECTURE.md)；迁移执行记录见
->   [migration/README.md](migration/README.md) 与
->   [migration/BioMed-QAgent_Pi_Migration_Plan.md](migration/BioMed-QAgent_Pi_Migration_Plan.md)；
-> - 决策依据见 [adr/README.md](adr/README.md) 与
->   [adr/README.md](adr/README.md)；
-> - 旧主线「V2 Pipeline Refactor」清单归档于
->   [archive/TODO_PIPELINE_REFACTOR_COMPLETED.md](archive/TODO_PIPELINE_REFACTOR_COMPLETED.md)；
-> - 赛题背景与评分见 [PROBLEM.md](../PROBLEM.md)。
+> ADR-039 接受前：可完成 contract / threat model / isolated fixture Host / shadow tooling，
+> 但**不得**接默认 build route、不得激活 Agent-authored transform、不得删除 static runtime。
+> 当前承诺截止：**Batch 0 + Batch 1 + Batch 2A（expression shadow）+ Batch 2B go/no-go**。
 
-## 总进度（迁移主线，全部完成）
+## 全局质量门（每次提交必过）
 
-| Phase | 内容 | 状态 |
-| --- | --- | --- |
-| 0 | 冻结边界与迁移 ADR | ✅ 完成（2026-08-12） |
-| 1 | 引入 Pi Main Agent（不动 Dataset Core） | ✅ 完成（2026-08-12） |
-| 2 | 迁移 Skills 与通用 Agent 工具 | ✅ 完成（2026-08-13） |
-| 3 | 拆出 TS Application Runtime | ✅ 完成（2026-08-12；Phase 7 已转默认） |
-| 4 | 迁移 Dataset Deterministic Core | ✅ 完成（2026-08-13；运行接线 M2 已闭环） |
-| 5 | 迁外部能力与 Python 数据处理依赖 | ✅ 完成（2026-08-14） |
-| 6 | 迁模型设置与 Settings API | ✅ 完成（2026-08-13） |
-| 7 | 正式切换 Frontend → TS Host | ✅ 完成（2026-08-14） |
-| 8 | 删除 Python Runtime（仅留 DB bridge） | ✅ 完成（2026-08-14） |
-| 9 | Agent Workspace 与权限系统重构 | ✅ 完成（2026-08-16，ADR-026） |
+- 代码：`pnpm test` / `pnpm lint` / `pnpm typecheck` / `pnpm build`；涉及 `database/` 时另跑 Python bridge gates。
+- 新增 Transform Host 必须额外跑：sandbox/red-team、resource、cancel/restart、digest/replay、Artifact API hash 测试（来源 `09-execution-matrix.md §9`）。
+- 每个实现分支合并前须提供：契约版本/digest、trust/status、resource evidence、tests、same-commit artifact refs、rollback plan，并明确 `example_only / sandbox_executable / shadow_verified / trusted_e2e_verified / activated` 状态（来源 `09 §8`）。
 
-> **当前拓扑**：唯一正式拓扑是 TypeScript Host（`pnpm dev` / `pnpm start`）
-> + Pi Agent + TS Dataset Core + 按需 `database/bridge.py` JSONL persistence。
-> 启动说明见 [README.md](../README.md)，权威架构见
-> [ARCHITECTURE.md](ARCHITECTURE.md)。
+## 分支命名（来源 `09-execution-matrix.md §8`）
+
+| 组 | 建议分支 | 覆盖任务 |
+|---|---|---|
+| A | `feat/transform-contracts` | T0-T3 |
+| B | `feat/transform-host-sandbox` | T5-T7 |
+| C | `feat/core-transform-admission` + `feat/dataset-validation-disk-index` | T4/T8-T11 |
+| D | `feat/expression-host-shadow` + `feat/bioactivity-host-shadow` | E1/E2/E3/R1 |
+
+## 并行模型（最大化并行，最小化组间阻塞）
+
+- **解耦原则**：组间依赖只发生在「冻结契约类型」一层，**不发生在实现层**。计划文档 `01/02/03` 已冻结
+  FamilySpec / DatasetTransform / TransformExecutionReceipt / identity / digest / B3 disk 接口形状，B/C/D 可直接对照文档开工。
+- **A 是唯一被依赖的组**，但只交付冻结的 DTO/parser/digest 算法/identity/B3 接口（一个小而明确的首批 PR），随后 B/C/D 并行。
+- **B（Host 生产者）与 C（Core 消费者）互相并行**：两者都针对 A 冻结的 `TransformExecutionReceipt` / `FamilySpec` /
+  identity 类型编码；C 的 admission/checkpoint 用冻结 Receipt 类型 + 测试夹具驱动，**不依赖 B 的 worker 实现**。
+  B 与 C 仅在 D-E2 集成执行时汇合。
+- **D 的示例/目录编写与 B/C 并行**（对照冻结契约）；只有 E2 的 shadow 执行、E3 的 go/no-go、R1 的 release 核对
+  在 B+C 合入后作为**集成闸门**进行。
+
+### 并行里程碑
+
+- **M1（A 落地契约 PR）**：`@biomed/contracts` 冻结 DTO / parser / digest / identity / B3 接口 → 解除 B/C/D 阻塞。
+- **M2（B ∥ C ∥ D-编写 并行）**：B 实现 Host；C 实现 admission/validation/disk；D 编写 examples/fixtures/catalog。
+- **M3（集成闸门）**：B+C 合入后，D-E2 shadow 执行 + E3 go/no-go + R1 release 核对。
+
+## 目录归属（各组独立目录，减少 merge 冲突）
+
+| 组 | 主要目录 |
+|---|---|
+| A | `packages/contracts/**`、`server/src/dataset/contracts/**`、`docs/adr/039-*` |
+| B | `server/src/dataset/transform-host/**`（新建） |
+| C | `server/src/dataset/execution/**`、`server/src/runtime/**`、`server/src/dataset/validation/**`、`server/src/dataset/integration/**` |
+| D | `examples/families/**`（新建）、`server/src/dataset/adapters/**`、expression/bioactivity runtime、Publisher、集成测试 |
+
+## 全局 guardrail（违反即回退，来源 `10-consistency-review.md §5` / `08-activation-release.md §7`）
+
+**停止条件（任一触发立即停 activation，回到 contract/security/closure 修复）：**
+Host 不是实际 OS sandbox；implementation digest 不覆盖 bundle/dependency/runtime；quarantine output 能绕过 Core；B3 大表仍无界 `Map`；只有一个真实消费者；或 ProductAssessment 与 Publication identity 不一致。
+
+**禁止提案：** ① `workspace_exec node/tsx transform.ts`；② 同进程 `eval/import` Agent code；③ transform 自报 digest 或只用 ID/version；④ output receipt 直接转 Publication artifact；⑤ memory B3 扫大表到 OOM；⑥ 所有 ambiguity 交 LLM（须 typed decision + policy + Core replay）；⑦ 以六 example 目录存在证明 capability 已迁移；⑧ Batch 2 前设计 promotion 市场/全六族删除/通用 DAG。
+
+**每 PR 必答（来源 `10 §6`）：** 变更属于 contract/Host/Core/example/release 哪层？输入是否 exact asset/result handle + ownership/hash closure？代码是否在批准隔离 backend？output 是否 quarantine→重哈希→strict parse→Core committed？digest 是否进入 checkpoint identity？大数据是否 bounded/disk-backed？cancel/timeout/restart/late worker 有测试？ProductAssessment 与 Publication 是否同 selected run/build/candidate？是否至少第二真实消费者才称 generic？legacy 删除条件/shadow evidence/rollback 是否具备？
 
 ---
 
-## 开放条目（2026-08-20 Phase 4 Gold 审计 → Phase 5 收敛）
+## 开发者 A — Contracts & Foundations（首批 PR，解除 B/C/D 阻塞）
 
-> 当前不是迁移阶段，而是迁移完成后的系统收敛阶段。Phase 0-9 已完成；近期
-> 工作先证明现有系统的 Gold 失败边界，再按证据修复 Agent → Dataset →
-> Publication 断链。长期路线见
-> [Phase 4 → Phase 5 hardening roadmap](plans/2026-08-20-phase4-to-phase5-hardening-roadmap.md)，
-> 近期 E1-E5 见 [Gold evaluator near-term plan](plans/2026-08-20-gold-evaluator-near-term-plan.md)。
->
-> Canonical Evidence Product Layer 的 Phase 0 已完成；其余 IR/package/
-> 与 DatasetTransform Host 阶段暂缓，不作为当前默认开发顺序。FamilySpec +
-> Transform Host 的目标路线见 [Family Host + Transform Host 计划集](plans/family-host/README.md)
-> 与 Proposed [ADR-039](adr/039-family-transform-host.md)。
+> 本组交付**冻结契约类型**，是 M1 的唯一产出；不依赖其他组。B/C/D 对照本文档与计划直接开工。
 
-### P0
+- [ ] **A-T0** ADR-039 proposal + 威胁模型 + 平台/沙箱 backend 支持矩阵
+      - 设计：`00-overview.md §7`、`03-transform-host-security.md §1/§3`
+      - 产物：Proposed ADR-039、threat-model 文档、sandbox backend decision（含 Windows 达标/不达标结论）
+      - 验收：明确 production 仅允许独立低权限 OS/容器 backend；Windows 不达标则该平台禁激活
+      - ⚠ 不得修改已 accepted ADR 的历史 Decision 文字以隐藏冲突（`09 §3` 禁止）
+- [ ] **A-T1** FamilySpec / DatasetTransform / TransformExecutionReceipt / BuildSpec 2.0 契约（依赖 A-T0）
+      - 设计：`01-family-transform-contracts.md`（全）、`09 §2 T1`
+      - 产物：`@biomed/contracts` strict DTO + parser、canonical digest fixtures（**冻结形状，供 B/C 消费**）
+      - 验收：`DatasetBuildSpec 1.0` snapshot 不变；2.0 proposal 与 resolved spec 分离、Core re-admission 可独立测试；unknown field fail closed
+      - ⚠ FamilySpec **禁止**含源码/函数/任意 validator/merge expression/文件路径/网络权限/Publisher threshold/Core nodes（`01 §1.1`）；**禁止**把 `schema_refs` 塞入 BuildSpec 1.0
+- [ ] **A-T2** identity / projection / relation / audit 契约（依赖 A-T0）
+      - 设计：`02-product-identity-relations.md`（全）、`09 §2 T2`
+      - 产物：`dataset_id` / `dataset_revision_id` / `asset_id` 三层身份、sample 复合键、`probe_gene_mapping` coverage relation（`many_to_many` + `profile_defined`）、`AuditArtifactDefinition`（**不新增** `audit` TableRole）
+      - 验收：同 sample 不同 revision 不碰撞；audit row 不计入产品 table/row count 或 assessment requirement；`integrator.ts` 中 `dataset_id = buildId` 路径有红灯测试与迁移计划
+      - ⚠ 一个 Schema 不能同时表达 gene_sample 与 probe_sample（`02 §1`）
+- [ ] **A-T3** implementation identity digest（依赖 A-T1）
+      - 设计：`01-family-transform-contracts.md §3`、`09 §2 T3`
+      - 产物：bundle/compiler/dependency/runtime/policy digest 算法 + checkpoint invalidation 规则（**B 计算、C 校验共用**）
+      - 验收：同 version 不同 source/dependency/compiler → 不同 implementation digest；checkpoint reuse 同时匹配 input/params/FamilySpec/implementation/runtime/policy digest
+      - ⚠ digest **必须由 Host 计算**，而非信任 Agent 声明（`01 §3`）
 
-- [x] **P0 / E1-E5 completed** Gold evaluator diagnostic foundation：已冻结
-      versioned diagnostic report/finding contracts，完成只读 run evidence inventory、
-      evaluator-only reference requirements parser、按
-      discovery/trusted_input/contract/assembly/validation/publication/
-      reproducibility/evaluator 边界选择 primary blocker 的诊断引擎，以及 explicit-root
-      六例 batch matrix/CLI。旧 `dd498ec8-rerun` 证据对目标
-      `54cf7ec2829612e13da652b9fdb4ecc80b2bab69` 的离线结果为
-      `0 pass / 5 fail / 1 blocked`；Gold6 由通用 pending+blocking HIL sidecar 规则
-      保持 blocked。详见
-      [Gold v1 diagnostic baseline](audit/2026-08-20-gold-diagnostic-baseline.md)。
-      当前未修改 Gold prompt、source inventory、runtime defaults 或 acceptance threshold；
-      历史 evidence 不替代同 commit 证据。
-- [x] **P0 / E6 completed** Trusted evidence-chain projection：已从单个显式 evidence bundle
-      投影 accepted identity、terminal task/run、严格 BuildResult、authoritative publication、
-      artifact receipt/download hash、final-answer publication reference 和 pending HIL，并为
-      每个事实标注 `present/missing/conflicting/receipt_only` 与 source refs。真实旧证据
-      smoke 仍为 `0 pass / 5 fail / 1 blocked`；Gold1/3/5 的 authoritative publication 和
-      execution 从旧 collector 遗漏中恢复，但 semantic_product/trusted_inputs/同 commit
-      reproducibility 仍未通过。未修改 runtime、Publisher、Gold 输入或 acceptance 标准。
-      详见 [Gold v1 diagnostic baseline](audit/2026-08-20-gold-diagnostic-baseline.md)。
-- [x] **P0 / TASK-056 module + trusted E2E complete on task branch** 首个 canonical vertical
-      slice 选择通用 `bioactivity_identity`：保留 ChEMBL 四表兼容输出，增加 fixed PubChem
-      carrier、独立 compound identity、optional conflict-preserving crosswalk、双 FK relation、
-      receipt/locator/transform closure 和 Core-owned ProductAssessment publication gate。exact
-      InChIKey 的 non-Gold fixture 走通五表 publication + artifact hash parity；冲突、malformed、
-      CID mismatch、缺 receipt 均在 Publisher 前 fail-closed。未增加 Gold-specific profile，
-      严格 Gold 仍为 0/6，等待同 commit frozen rerun。设计与证据见
-      [Bioactivity Identity Vertical Slice](audit/2026-08-20-bioactivity-identity-vertical-slice.md)。
-- [x] **P0 / TASK-057 completed on task branch** ProductAssessment evidence projection：
-      evaluator 仅从 selected run 的严格 BuildResult、同 ID authoritative publication receipt、
-      publication-scoped Artifact API list/download receipt、evaluator expected package identity
-      与 projector 内重算 hash/size 的原始 UTF-8 `product_assessment.json` bytes 投影
-      `semantic_product`。`publishable -> pass`、
-      `incomplete -> fail`、`validated -> unknown`；缺 bytes、receipt-only、wrong run/publication、
-      malformed/unknown fields 和任意 workspace/top-level sidecar 均 fail-closed。旧
-      `dd498ec8-rerun` smoke 保持 `0 pass / 5 fail / 1 blocked` 且六例 semantic_product
-      仍为 unknown；未修改 runtime、Publisher 或 frozen Gold inputs。
-- [ ] **P0 / next repair** Same-commit trusted-input closure：基于 E6、TASK-056 与 TASK-057
-      的边界证据，继续补齐同一 task/run/build/publication/artifact/final-answer 证据，并在
-      frozen input 上原样复跑；仅当权威事件模型确实缺少所需阶段时才修改 runtime。本阶段
-      不启动完整 Canonical IR、DatasetTransform Host 或 family benchmark 特例重构。
+---
 
-> TASK-047/048 的 work package、硬依赖、分支边界和逐项验收统一见
-> [Gold 可信 Publication 收敛执行计划](superpowers/plans/2026-08-18-gold-trusted-publication-closure.md)。
-> 当前严格 Gold 为 0/6；只有计划中的 G1 同 commit 六例原样重跑闭环后才能报告 6/6。
+## 开发者 B — Transform Host（隔离执行平面，与 C 并行）
 
-- [ ] **P0 / TASK-047** 大型 GEO 表达矩阵在 TS Core 解析/规范化阶段触发
-      `Invalid string length` 或 Node heap OOM。评测已确认 GSE31852/GSE109169
-      级别文件需要流式读取、有限输出缓冲、可恢复 checkpoint 与资源上限。局部
-      parser/canonicalizer/writer 已流式化，integrator 去重状态已磁盘化
-      （WP-A6 的 `node:sqlite` temp table + quota，见下），但审计仍确认 Core
-      前置 hash、GDC/Xena 输入、GEO supplementary/metadata、probe mapping、
-      checkpoint rehydrate 和 release/download tail 存在全量读取或随行数增长的
-      内存边界。
-      剩余验收：计划 A1-A7 全部完成后，A8 在默认运行限制下使约 6.1 GB 解压矩阵
-      完成 integrate/validate/publish；记录 RSS/wall/temp/batches/artifact，并通过
-      immutable Publication Artifact API 下载复核 hash。
-      **A8 基准已完成并合并进 main（59b8b6af）**：`server/tests/bench-a8.run.ts`
-      + `docs/runs-log.md`。采用最大的**可行**真实 bulk GEO 矩阵 GSE325735
-      （58,676 genes × 807 samples，解压 117.87 MB，~75× 最大 gold 规模，精确
-      6.1GB 绝对最大检出不可行）；在 frozen 默认 RuntimeLimits + Node 默认堆
-      （无 `--max-old-space-size`）下完整跑通 integrate→validate→publish：
-      peak_rss 305.8 MB / peak_heap 122 MB，最长 op validate_profile
-      1,593,643 ms（< 3600s 默认超时），provenance coverage_ratio=1
-      （47,351,532 行，0 untraced/conflict/dedup/rejected），validation
-      11/11 passed，`artifacts_hash_parity=true`（7 个 artifact 磁盘重哈希与
-      manifest 一致）。权威指标见
-      `data/bench/a8-run-ByPP9F/result.json`（metric_source=live）。
-- [ ] **P0 / TASK-048** 非 gene-expression 研究任务（target/variant/
-      structure/activity/paper/figure）缺少受信任的多表 schema、validation 和
-      Publication family。gold3–gold6 真实 run 只能写 workspace 摘要，不能按
-      artifact 计分；验收：按计划 B0-B7/C1-C2 落地 family admission、multi-table
-      contracts、assemble、registered asset ingestion、Validation/Provenance/Confidence
-      和图表/衍生数据可信路径；严格表头/行宽/source locator/单位与 relation 保留，
-      workspace 文件不得绕过 Publisher。后续实现以
-      [Canonical Evidence Product Layer 计划](plans/2026-08-20-canonical-evidence-product-layer.md)
-      为上位设计：先建立 ProductAssessment 与 canonical entity/relation/evidence
-      语义层，再扩展 package/provider/crosswalk/derive；不得按 Gold case 增加独立
-      production profile。
+> 依赖 **A 冻结类型**（T1/T3）。**不阻塞 C**：C 针对同一冻结 `TransformExecutionReceipt` 类型编码。
 
-#### 开发者 B 任务台账
+- [ ] **B-T5** compiler / admission spike（依赖 A-T1、A-T3 冻结类型）
+      - 设计：`03-transform-host-security.md §2`、`01 §2 SDK`、`09 §2 T5`
+      - 产物：source normalization、AST/import policy、content-addressed bundle receipt（产出符合 A-T1 冻结形状）
+      - 验收：v1 仅允许 Transform SDK/Host allowlist；无任意 npm/native addon/dynamic import/eval
+      - ⚠ 静态检查只缩小攻击面、**不能替代隔离**（`03 §2`）
+- [ ] **B-T6** isolated Transform Host MVP（依赖 A-T0、B-T5）
+      - 设计：`03-transform-host-security.md §3`、`09 §2 T6`
+      - 产物：独立低权限 worker/backend、opaque asset handles、quarantine output、hard kill
+      - 验收：无网络/DNS/代理、不继承凭据、不挂载 repo/workspace/settings/Publication；symlink/junction/device escape fail closed
+      - ⚠ `worker_threads` / `node:vm` / 同账户 `child_process` / workspace `process.exec` **均不能**当安全边界（`03 §1`、README 永久边界）；Windows 不达标则禁激活
+- [ ] **B-T7** Host protocol / receipt（依赖 A-T1、A-T3、B-T6）
+      - 设计：`03-transform-host-security.md §4`、`01 §1.3`、`09 §2 T7`
+      - 产物：framed versioned IPC、invocation/generation/quota/cancel、terminal reason、TransformExecutionReceipt 签发（符合 A-T1 冻结形状，含全 digest + input/output receipts + resource usage）
+      - 验收：Host success 不自动创建 OperationResult/Publication；receipt 缺任一 input/output/runtime digest → Core 拒绝
+      - ⚠ 执行前后重新核验 code/input digest 关闭 TOCTOU；receipt 只证明“bytes 在该隔离策略下产生”，不证明科学语义（`03 §4/§6`）
 
-> B 组详细 ownership、依赖类型、分支、交接窗口和逐任务验收见
-> [开发者 B：可信多表 Publication 落实计划](superpowers/plans/2026-08-18-developer-b-trusted-publication-plan.md)。
-> 最新架构设计（2026-08-21，D1-D14 已对齐，待实现）：[Gene Expression 多表化与 Schema 能力网络设计](superpowers/specs/2026-08-21-gold1-multitable-tables-design.md)。
-> B 组 contracts（含 C3C）、B2M、B3、B5C、B6D、B4M、B5L/T/V/S/A、B6A、B6B
-> module 已完成；C1I/C2I/C3I/B2W/B6W 与 A8 已接入 main。provider parser/runtime dispatch、
-> acquisition-first、固定 biomedical providers、role-aware receipts、multi-carrier aggregation、
-> mmCIF parser 已合入；当前进入 B7 Gold3-Gold6 同 commit 原样验收。
-> A5I 增量 1+2 已合并进 main：增量 1（9dcceeca）为 `loadOperationOutput`
-> 流式校验（async + `sha256FileStream` + `cancellationSignal`，取消传播而非吞掉）；
-> 增量 2（14aceeed）为 executor 成功路径写入类型化 ADR-030 `OperationResultManifest`
-> （native 模式 + committed 收据、dependency closure 含确定性 upstream manifest
-> ids/input asset ids），round-trip 经 strict parser 校验，digest 复用不重写 manifest。
-> A5I 增量 3（f1d05292→c198592e，rehydrate 命中 typed checkpoint 时不再
-> `rehydrateCompletedRunners` 走 RAW/逐 operation 重放，直接恢复 typed runner state）
-> 与 WP-A6（disk-backed integrate：`integrator` 的 O(unique)`seen` Map 替换为
-> `node:sqlite` 磁盘 temp table + `tempStore.quotaBytes` 上限，fail-closed
-> `IntegratorResourceLimitError`，批量事务保证增量大小可观测；T7-T12 含 heap/quota/
-> cancel 红绿测试）均已合并进 main，A5I 不再 open。
+---
 
-- [x] **TASK-G0 / completed**：Gold v1 eval manifest、六个原始 prompt、reference schema/source
-      inventory、默认运行参数、checksum verifier 与 manifest run driver 已冻结于
-      `docs/evaluation/gold-v1/`；当前 strict Gold 仍为 0/6。
-- [x] **TASK-048-B0 / completed @ b43c145**：FamilyRegistry admission foundation。
-- [x] **TASK-048-B1 / completed**：Manifest/DatasetSchema 2.0、Table/Relation/Candidate refs、
-      SourceLocator 2.0 与 ADR-028；Manifest 1.0 / Publication 1.0/1.1 兼容测试保留。
-- [x] **TASK-C1C / completed**：SourceAsset roles、task-owned asset ref、registration receipt、
-      immutable hash/size/media type 和 legacy-path telemetry；ADR-029。
-- [x] **TASK-047-A5C / completed**：OperationResultManifest、typed output/file receipts、
-      dependency closure、atomic commit receipt 与 legacy read-only migration；ADR-030。
-- [x] **TASK-C2C / completed**：CoreAcquisitionRequest、PROMOTED recipe ref、DownloadAttempt/
-      retry/resume/cache lineage 与 registered extraction asset ref；ADR-031。
-- [x] **TASK-C3C / completed（ADR-037）**：Durable Build start/get/cancel DTO、exact idempotency、
-      独立状态机/terminal result/cancel ack、Task/Run/Build identity、durable event refs 与共享
-      runtime parser 已冻结；scheduler/lease/recovery/API 接线仍属 A owner TASK-C3I，且当前不阻塞
-      TASK-048/G1。
-- [x] **TASK-048-B2M / completed**：Core-only PublicationCandidate 与 family assembler module；expression integration result 可确定性包装，candidate 仅引用 committed Core result receipts/registered asset IDs，缺 handler 的 family 无 assembly capability；ADR-033。
-- [ ] **TASK-048-B2W / A owner, blocked by TASK-048-B2M + TASK-047-A5I**：assemble runtime/checkpoint/publisher wiring。
-- [x] **TASK-048-B3 / completed**：Generic multi-table validation/relation gate；严格结构/关系、token/evidence closure 与 Agent workspace bypass fail-closed 已完成（ADR-032）。
-- [x] **TASK-048-B4M / completed（ADR-034）**：
-      schema-driven CSV/TSV/JSON RegisteredSourceAsset adapter、严格行宽/类型、locator/parser
-      version/rejected-row audit 与 fail-closed receipt/hash 已完成；`adapters.ts`/runtime 接线、
-      Core asset registry、registered adapter trusted E2E、provider carrier dispatch 与 Publication admission 已完成。
-- [x] **TASK-048-B5C / completed（ADR-035）**：共享 biomedical tables/relation vocabulary；参数化
-      builders 覆盖 entity/paper/compound/assay/structure dimension/trial/source/entity+compound
-      crosswalk，受控 ID/relation/cardinality/unit vocabulary，crosswalk 保留匹配证据、冲突和置信度；
-      未注册 production family。
-- [ ] **TASK-048-B5L / module complete；trusted E2E blocked by B2W/B4M/C2I**：`literature_evidence` vertical slice。
-- [ ] **TASK-048-B5T / module complete；trusted E2E blocked by B2W/B4M/C2I**：`target_evidence` vertical slice。
-- [ ] **TASK-048-B5V / module complete；trusted E2E blocked by B2W/B4M/C2I**：`variant_evidence` vertical slice。
-- [ ] **TASK-048-B5S / module complete；trusted E2E blocked by B2W/B4M/C2I**：`protein_structure` vertical slice。
-- [ ] **TASK-048-B5A / module complete；trusted E2E blocked by B2W/B4M/C2I**：`bioactivity_measurement` vertical slice。
-- [ ] **TASK-048-B6A / module complete；trusted Gold6 blocked by B2W/B4M/C2I**：Chart/VLM evidence module 已完成；低可信/axis/legend/review gate 已覆盖，runtime/publication 接线未完成。
-- [x] **TASK-048-B6D / completed**：Deterministic derive contract、固定 slot、算法 registry 与 ADR-036；
-      PDB distance/sequence alignment 共用 contract，参数/reference/input/output digest provenance
-      完整，Agent code/通用 DAG fail-closed。
-- [ ] **TASK-048-B6W / A owner, blocked by TASK-047-A5I**：fixed derive slot runtime wiring。
-- [ ] **TASK-048-B6B / module complete；trusted E2E blocked by B6W/B2W/C2I**：注册 deterministic derive algorithm handlers、`protein_structure` PDB interface derived consumer/schema/profile、`variant_evidence` sequence/reference mapping derived consumer/schema/profile 已完成；A-owned runtime/plan/checkpoint/ts-core/publish wiring 未完成。
-- [ ] **TASK-048-B7 / in progress；strict result remains 0/6**：Gold3-Gold6 已多轮发现并修复 runtime 接缝；最终验证基线 `main@a68fb8ca` 已记录冻结 prompt/spec/runtime hashes。该基线中 Gold4 完成了 structure Publication/artifacts，Gold5 完成了 100-row bioactivity Publication/artifacts；Gold3/Gold6 尚无完整 Publication，且四例尚未形成同一 commit 上的完整 task/run/build/publication/final-answer evidence，故不得计入严格 Gold。
-- [ ] **TASK-G1B / blocked by TASK-048-B7 + TASK-G1A（TASK-047-A8 已完成）**：最终 Gold3-Gold6 同基线复跑。
-- [ ] **TASK-G1R / blocked by TASK-G1A + TASK-G1B**：严格 Gold 最终报告。
+## 开发者 C — Core Admission, Execution Slot & B3 Disk（信任平面，与 B 并行）
+
+> 依赖 **A 冻结类型**（T1/T2/T3）。**不依赖 B 实现**：针对冻结 `TransformExecutionReceipt` 类型 + 测试夹具实现
+> admission/checkpoint；与 B 仅类型耦合，M3 前不汇合。
+
+- [ ] **C-T4** B3 / resource baseline（依赖 A-T2 冻结 identity 类型）
+      - 设计：`05-core-execution-product-gate.md §4 B3-D0`、`09 §2 T4`
+      - 产物：现有 `validation/multitable.ts` benchmark/telemetry（row/key estimate、validator mode、heap/temp/duration/failure reason）、阈值、large-input benchmark harness（memory parity oracle）
+      - 验收：超阈值强制 disk mode 或 fail closed，不再无界 `Map` 到 OOM
+- [ ] **C-T8** Core quarantine admission（依赖 A 冻结类型 T1/T2/T3）
+      - 设计：`05-core-execution-product-gate.md §1/§6`、`03 §6 quarantine handoff`、`09 §2 T8`
+      - 产物：Host 输出重哈希、schema/locator/output closure 校验、native OperationResultManifest 构造
+      - 验收：未声明文件/table/schema 拒绝；locator 不得指向未知输入；failed/cancelled Host 不产生 committed Core output
+      - ⚠ 针对**冻结 Receipt 类型**解码，用测试夹具驱动单测；Host output receipt **不得**直接转 Publication artifact（`10 §5#4`）
+- [ ] **C-T9** fixed transform slot（依赖 A-T1 冻结类型、C-T8）
+      - 设计：`05-core-execution-product-gate.md §6`、`09 §2 T9`
+      - 产物：server-owned plan slot、transform capability admission、不引入 DAG
+      - 验收：`registered_multitable.runtime.v1` 旁路问题登记并有统一 executor 修复门，不在旁路继续叠加 transform
+      - ⚠ Batch 1 不得接默认 Agent build tool；Transform 不能决定 merge winner/validation threshold/ProductAssessment/Publication（`01 §1.2`、`03 §6`）
+- [ ] **C-T10** checkpoint / lease / recovery（依赖 A-T3 冻结 digest、C-T9）
+      - 设计：`05-core-execution-product-gate.md §6`、`08-activation-release.md §4 R4`、`09 §2 T10`
+      - 产物：Host/Core owner fencing、orphan cleanup、publish reuse 修复
+      - 验收：cancel/timeout/restart/stale worker/late commit 不误提交；publish 必须重验证 authoritative receipt，或禁止 publish shortcut；固定 operation 的 implementation identity 绑定真实部署版本
+- [ ] **C-T11** B3 disk mode（PK/FK first hotspot）（依赖 A-T2 冻结 identity 类型、C-T4）
+      - 设计：`05-core-execution-product-gate.md §4 B3-D1/D2`、`09 §2 T11`
+      - 产物：disk-backed tuple index（quota/cancel/batch tx/cleanup、确定性 key encoding）、memory parity
+      - 验收：memory/disk B3 fixture 的 checks/ordering/digest parity；复用同一 index 支持 cardinality/relation；不新增 `family.id ===` 语义分支
+      - ⚠ 不一次性重写 B3，也不将 scientific validation 混入 B3（`05 §4`）
+
+---
+
+## 开发者 D — Examples Catalog & Vertical Slices（编写与 B/C 并行，执行为集成闸门）
+
+> **编写阶段**（examples/fixtures/catalog/retrieval-metadata）依赖 **A 冻结类型**，与 B/C 并行。
+> **执行/核对阶段**（E2 shadow、E3 go/no-go、R1 release）为 M3 集成闸门，需 B+C 合入。
+
+- [ ] **D-E1** expression examples（编写依赖 A-T2 冻结 identity 类型；fixture 执行依赖 B-T5）
+      - 设计：`06-expression-vertical-slice.md`、`07-family-examples-migration.md §4`、`04-catalog-scope-resolution.md`、`09 §2 E1`
+      - 产物：`examples/families/gene-expression/`（GEO gene/probe、GDC gene）、projection examples、dataset revision、mapping assertion fixtures、`retrieval-metadata.json`
+      - 验收：example 目录不产生 Registry side effect、不自动注册为 production capability；`examples/` 不被 `server/src` import 或扫描
+      - ⚠ 不得以目录名/文件名代替 exact digest；example 不直接执行（`07 §2`、`04 §6`）
+- [ ] **D-E2** expression shadow vertical slice（**M3 集成闸门**：依赖 B-T6..T7、C-T8..T11、D-E1 均已合入）
+      - 设计：`06-expression-vertical-slice.md`、`08-activation-release.md §3`、`09 §5`
+      - 产物：Host→Core→assessment→artifact 奇偶比对、shadow publication/artifact hash parity、rollback 演练
+      - 验收：GEO/GDC 共享 integration framework 但仅兼容 partition 内 merge；GDC 无 probe mapping 时诚实声明 unsupported/allow-empty；大输入不走全量 Buffer/object[] 或无界 B3 Map；task/run/build/Host receipt/Core result/validation/publication 证据完整
+      - ⚠ shadow 失败不自动 fallback 成功；通过只代表 shadow verified，不自动激活 family（`08 §3`、`06 §5`）
+- [ ] **D-E3** second real consumer — bioactivity_measurement（**M3 go/no-go 闸门**：依赖 B-T6..T7、C-T8..T11）
+      - 设计：`07-family-examples-migration.md §4.2`、`09 §6`
+      - 产物：bioactivity example 复用相同 Host/Core path 的证据
+      - 验收：输入/output topology 可由 FamilySpec 描述，不依赖新 family-specific Core branch；至少一个 capability 可做独立 shadow/rollback
+      - ⚠ 不满足则退回 contract/primitive 修复，不扩展到其余四族（`09 §6`）
+- [ ] **D-R1** release / go-no-go（**M3 闸门**：依赖 D-E2、D-E3）
+      - 设计：`08-activation-release.md`（全）、`09 §5-6`
+      - 产物：trusted E2E、rollback、activation 建议、release gates **R1-R5** 核对（contract/security/Core gate/operational recovery/representative E2E）
+      - 验收：仅当 R1-R5 全过且至少两个真实消费者才建议 activation；legacy 删除须满足 `08 §6` 七条件
+      - ⚠ 触发 `08 §7` 停止条件时立即停
+
+---
+
+## 保留项（非 family-host 高价值未完成，从旧 TODO 迁入）
+
+> 以下与 family-host 正交，不受 ADR-039 冻结影响，按原优先级推进。
 
 ### P1
-
-- [ ] **P1 / Phase 9 后续**：`UserInputDialog` / HIL 迁移到同一 Questionnaire
-      基础设施。
-- [ ] **P1 / Phase 9 后续**：权限设置页重排默认层与高级 ACL 编辑器。
-- [ ] **P1** model-registry 响应未做 wire-boundary 校验：`frontend/src/api/modelRegistry.ts`
-      仍用窄化 cast（`b as ProviderInfo[]` 等）。下一步为 `packages/contracts`
-      runtime 增加 `parseProvidersEnvelope` / `parseManagedModelsEnvelope` 等解析器，
-      与其余 endpoint 组一致（ADR-025 后续项，2026-08-14 层抽取时发现）
-- [x] **P1 / completed** `search_local_cache` 与下载/构建流程脱节问题（TASK-045）：
-      现已由缓存注册闭合——acquisition 下载完成后经 `CacheRegistrar`
-      （`server/src/persistence/cache-registrar.ts`）以来源数据库为
-      `source_namespace`、内容寻址资产自动 `cache.commit` 注册进
-      `database/cache_store.py`（即 `search_local_cache` 读取的同一存储），
-      `search_local_cache` / `describe_local_cache` / `get_cache_dataset`
-      （`server/src/agent/tools/local-cache.ts`）可直接命中重跑的数据；
-      本地数据源导入经 `server/src/agent/tools/import-tools.ts`
-      （`list_source_assets` / `read_source_asset` / `commit_to_cache`，
-      `user_import` 命名空间）注册。相应缓存管理 API 与前端设置页见
-      `archive/cache-design-2026-08.md` §13。
-- [ ] **P1** AI 用户支持：编写一份面向 AI 用户的调用文档及配套脚本（服务启动 +
-      HTTP/WS 驱动封装），方便其他 agent 调用本项目。
+- [ ] **model-registry wire-boundary 校验**：`frontend/src/api/modelRegistry.ts` 仍用窄化 cast（`b as ProviderInfo[]`）；在 `packages/contracts` 增加 `parseProvidersEnvelope` / `parseManagedModelsEnvelope` 解析器（ADR-025 后续项）。
+- [ ] **Phase 9 后续 — HIL/Questionnaire**：`UserInputDialog` 迁移到同一 Questionnaire 基础设施。
+- [ ] **Phase 9 后续 — 权限设置页重排**：默认层与高级 ACL 编辑器。
+- [ ] **AI 用户支持文档**：面向其他 agent 的调用文档 + 启动/HTTP-WS 封装脚本。
 
 ### P2
-
-- [ ] **P2 / Phase 9 后续**：已解决权限事件进入历史 Conversation timeline。
-- [ ] **P2** Agent INSTRUCTIONS 增加"达到 max_turns 后输出 `[MAX_TURNS_REACHED]`"
-      指导（原 Pipeline Design §4.5）
-- [ ] **P2** 设置页供应商/模型列表分页与搜索后端支持（当前全量返回）
-- [ ] **P2** `createPhase3ToolHooks()` 的 operation 并发 identity：同一来源所有
-      查询共用 `operation_id: tool:<source>:query`，并发同源查询的
-      started/progress/completed 会互相覆盖（UI 表现为同源多查询只有一个
-      operation 总卡片）。应改为 call-scoped ID（2026-08-15 对话流时序
-      修复时发现，`fix/runtime-timeline-sequence` 未包含此改动）
-- [ ] **P2** 框架整体完成后，使用 Darwin 或类似 skill 对主 skill 进行迭代处理，达成三项指标：
-      (1) 高完成度——搜索的数据全且准确；(2) 高速度；(3) 低成本；并完成与通用 agent 框架的对比评估。
-- [x] **P2** 流程固化：每次执行完成后将流程固化为可复用脚本，可重复使用，降低第 2 项的调用成本。
-      已落地 `scripts/solidify-run.mjs`（`node scripts/solidify-run.mjs <taskId|taskDir>`：
-      还原工具流 → 产出自包含可复用 `.mjs` 脚本候选 + SKILL.md 候选 + 分析报告到该任务
-      `solidification/`）；固化到 `scripts/` / `.pi/skills/` 生产路径需经人工评审（HIL），
-      引擎只在任务目录自动产出候选。详见
-      [docs/architecture/skill-self-iteration.md](architecture/skill-self-iteration.md)。
-- [x] **P2** 可拆卸工具包：每个工具拥有独立文档，可被其他 agent 单独调用；当前环境受限或不便完整启动
-      整个项目时，可作为独立工具包使用。
-      已落地 `scripts/solidify-run.mjs --toolkit <outDir>`：从 `.pi/skills/*/SKILL.md` 生成
-      每技能独立 Markdown 文档 + `README.md` 索引（默认输出 `docs/toolkit/`），同为纯 Node
-      可复用脚本，被任何 agent 单独调用。详见同一设计文档。
+- [ ] **createPhase3ToolHooks 并发 identity bug**：同源多查询共用 `operation_id: tool:<source>:query` 互相覆盖 UI 卡片；应改为 call-scoped ID（hangs on `fix/runtime-timeline-sequence` 未含）。
+- [ ] **Phase 9 后续 — 权限事件进入历史 Conversation timeline**。
+- [ ] **Agent INSTRUCTIONS**：增加“达到 max_turns 后输出 `[MAX_TURNS_REACHED]`”指导。
+- [ ] **设置页供应商/模型列表分页与搜索后端**（当前全量返回）。
 
 ### P3
-
-- [ ] **P3**（可选）沙箱环境：为数据安全提供沙箱保证。
-
----
-
-## gold3–6 揭露的非表达数据受信任 Publication 缺口（2026-08-17）
-
-> 背景：gold3–6（EGFR 靶点多源 / Spike–ACE2 / ChEMBL 活性 / 论文图表抽取，
-> 由 AI agent 直连公开 API 生产）作为参考输出揭露：这些主题在当前系统中
-> **无法走受信任 Dataset Core publication 路径**。历史评测数据位于被忽略的
-> `data/gold/`，当前仓库没有可追踪的 `SCHEMA_GAP.md`；它不能作为唯一验收依据。
-> 计划要求先提交冻结的 Gold eval manifest（prompt/schema/source hashes），再开发和复跑。
-
-- [ ] **P1** SchemaRegistry 仅有 2 个内建表达 schema（`gene_expression.long.v1`
-      / `probe_long.v1`，`server/src/dataset/schema/registry.ts`），spec validator 对其余
-      schema_id 一律 `unknown_schema` 拒绝。按计划 B0-B5 推进：reference schema 不能
-      单独注册进 production default registry 来制造“可 validate”的假能力；family
-      admission 必须能解析真实 Schema/Adapter/Profile，并在 multi-table contracts +
-      assemble + validation/publication handlers 闭环后才启用。
-- [ ] **P1** 非 GEO 类源无受信任 SourceAdapter：受信任管线 adapter 仅覆盖
-      GEO / GDC / Xena / STAR counts（`server/src/dataset/adapters/`），
-      UniProt / ClinVar / RCSB PDB / ChEMBL / PubChem / ClinicalTrials.gov /
-      Europe PMC 只有 agent 业务 Tool（Phase 5 P5-02…08，产物停在
-      workspace/cache），检索结果无法进入 DatasetBuild。gold3/4/5/6 用到的
-      源全部命中此缺口。按 `TASK-C1C`、`TASK-C1I`、`TASK-C2C`、`TASK-C2I`、
-      `TASK-048-B4M` 和 `TASK-048-B5C/L/T/V/S/A` 逐 family、逐来源接入：结构化 API
-      响应 → immutable SourceAsset → trusted adapter；不得让 Agent workspace path
-      成为临时发布入口。
-- [ ] **P2** 图表数字化产物无受信任落点：Qwen-VL chart extraction 工具
-      （P5-08）可估读图表，但 chart_series / chart_points 类产物（含
-      `estimated` / `axis_unclear` / `legend_unclear` /
-      `human_review_status` 质量字段，见 gold6 schema）没有 schema 与
-      publication 路径；可与既有 Durable HIL / Confidence 协议复用
-      （低可信估读值天然适合 confidence gate + 人工审核流）。
-- [ ] **P2** 计算衍生数据无 operation 类型：gold4 `interface_records` 是
-      PDB 坐标距离计算的**衍生**数据（非检索所得），同类还有序列比对映射
-      （gold4 参考编号用 NW 全局比对）。受信任管线目前只有"parse →
-      canonicalize → integrate"检索整合型 operation，无 compute/derive 类；
-      若纳入需 ADR 明确确定性与 provenance 语义（参数、参考序列版本）。
-- [ ] **P2** 跨库实体对齐表无 family 承载：entity_crosswalk /
-      compound_crosswalk（gold3/5）这类"行=实体关系"而非"行=测量记录"的
-      表，现有 schema 形状（measurement/unit 中心）不适配；且对齐证据
-      （InChIKey 精确匹配、冲突保留不合并）需要专用 provenance 字段。
-      在计划 B1/B5 中作为可复用 `entity_link` 粒度与 relation schema 设计。
+- [ ] **沙箱环境**：为数据安全提供沙箱保证（与 Transform Host 隔离正交，属通用数据保障）。
 
 ---
 
-## 跨阶段约束（延续到后续所有工作）
+## 并行工作流（不在本拆分内，但为 D-R1 的 release gate）
 
-- Pi Session ≠ BioMed Task ≠ Run ≠ DatasetBuild（ADR-019）。
-- Pipeline/Core 保持受信任 Tool，不降级为纯 Skill；Validation Gate 是程序约束
-  而非提示词约束（ADR-020）。
-- Agent 不得直写 `artifacts/` / publications；只有 Core Publisher 可以发布。
-- Pi 依赖只经 `server/agent/pi-adapter.ts`；业务代码不直接依赖 Pi 内部类型。
-- 每阶段可独立回滚（Plan §24）；不同时重写前端 + Pipeline + DB + Agent Runtime。
+- **Gold 可信 Publication 收敛（TASK-047 / TASK-048）**：TASK-047 大型 GEO 矩阵流式化 A8 基线已合并（`59b8b6af`），剩余 A1-A7 收尾；TASK-048 多表 family publication（B2W/B5*/B6*/B7）在飞；G1B/G1R 为最终同 commit 复跑与报告。严格 Gold 仍为 0/6，same-commit evidence 是 D-R1 的 release gate 之一。继续按原 board 推进，不在 family-host 分支修改 Gold prompt/source inventory/acceptance threshold。
