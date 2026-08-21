@@ -23,5 +23,5 @@
 现有 Pipeline 有大量可靠性测试和复杂恢复语义。大爆炸重写风险高，且很容易丢掉比业务流程更成熟的基础设施。WorkflowRecipe 和状态体系也有现存消费者，必须以兼容层和特征测试保护迁移。
 
 > **ADR 序列续篇：** Pi Agent / Host 迁移决策为 ADR-017 至 ADR-024，见
-> [docs/adr/README.md](adr/README.md)。此处保留既有章节编号，避免打断
+> [docs/adr/README.md](README.md)。此处保留既有章节编号，避免打断
 > `ADR §N` 历史交叉引用。

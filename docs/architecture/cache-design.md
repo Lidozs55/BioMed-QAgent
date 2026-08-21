@@ -8,7 +8,7 @@
 > FTS5 搜索、schema 泛化、cache ZIP export 等设计决策仍有效，代码位置以现状为准。
 >
 > **Update (2026-08-20)**: 缓存注册与下载/导入流程脱节的已知缺口已闭合
-> （见 [TODO.md](TODO.md)，TASK-045）——下载经 `CacheRegistrar`
+> （见 [TODO.md](../TODO.md)，TASK-045）——下载经 `CacheRegistrar`
 > 自动注册、本地导入经 `commit_to_cache` 注册，`search_local_cache` 等
 > 读取工具可直接命中；并新增缓存管理 HTTP API 与前端设置页。详见 §13。
 
@@ -296,7 +296,7 @@ from disk so a stale index row cannot fabricate a dataset.
 
 ## 4. CacheStore API
 
-Defined in [backend/app/tools/cache_store.py](../backend/app/tools/cache_store.py).
+Defined in ``backend/app/tools/cache_store.py``.
 
 | Method                                                       | Purpose                                            |
 | ------------------------------------------------------------ | -------------------------------------------------- |
@@ -311,7 +311,7 @@ Defined in [backend/app/tools/cache_store.py](../backend/app/tools/cache_store.p
 partial state is visible to readers.
 
 **Module singleton**: `init_cache_store(cache_dir)` is called once by the
-FastAPI lifespan (see [main.py](../backend/app/main.py)). Tools retrieve
+FastAPI lifespan (see ``main.py``). Tools retrieve
 the singleton via `get_cache_store()`, which raises `RuntimeError` if
 lifespan has not initialized it.
 
@@ -319,7 +319,7 @@ lifespan has not initialized it.
 
 ## 5. LLM script sandbox
 
-Defined in [backend/app/tools/sandbox.py](../backend/app/tools/sandbox.py).
+Defined in ``backend/app/tools/sandbox.py``.
 
 ### 5.1 Security model
 
@@ -389,7 +389,7 @@ one-off cleaning script via `run_python_script` (D7 decision).
 ### 6.2 Instructions
 
 The `IMPORT_INSTRUCTIONS` constant in
-[import_agent.py](../backend/app/agent_loop/import_agent.py) documents:
+``import_agent.py`` documents:
 
 - The 5-step workflow (discover → inspect → clean → commit → report)
 - The 22-column schema with per-column fill rules
@@ -510,7 +510,7 @@ iteration.
 
 ## 9. End-to-end test coverage
 
-Tests live in [backend/tests/](../backend/tests/):
+Tests live in ``backend/tests/``:
 
 | File                                       | Coverage                                             |
 | ------------------------------------------ | ---------------------------------------------------- |
@@ -521,7 +521,7 @@ Tests live in [backend/tests/](../backend/tests/):
 | `test_pdf_tools.py` (7 tests)              | `extract_pdf` missing-file error, path traversal rejection, default full-document extraction, chunked first/middle pages, `end_page` clamp to total, `start_page<1` normalization |
 | `agent_loop/test_import_agent.py` (12 tests)| build_import_agent tool set (7 tools), instructions document 22-col schema, instructions list workflow steps, instructions document PDF chunked extraction (D3), instructions document schema semantic generalization (D10), max_turns bounds, ModeDispatch routes IMPORT, ImportRunExecutor subclasses AgentRunExecutor, e2e CSV→clean→commit→verify, e2e JSON→clean→commit→verify, e2e MD table→clean→commit→verify, e2e TSV→clean→commit→verify |
 
-**E2E test fixtures** in [backend/tests/fixtures/import/](../backend/tests/fixtures/import/):
+**E2E test fixtures** in ``backend/tests/fixtures/import/``:
 `patients.csv` (clinical custom columns), `expression_subset.csv` (22-col
 subset), `samples.json` (nested object), `clinical.md` (markdown table),
 `counts.tsv` (wide gene×sample matrix).
@@ -716,7 +716,7 @@ would just require tightening the IMPORT instructions.
 ### 11.1 Cache location
 
 The cache lives at `data/cache/` (sibling of `data/output/`). This is
-configured in [main.py](../backend/app/main.py):
+configured in ``main.py``:
 ```python
 application.state.cache_store = init_cache_store(
     Path(configured.output_dir).parent / "cache"

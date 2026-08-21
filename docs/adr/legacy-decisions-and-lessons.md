@@ -12,7 +12,7 @@
 > 输入依据：当前代码仓库、赛题说明、历史 Review/Survey，以及本轮关于 Pipeline、DAG、Recipe、状态和产物边界的讨论  
 > 用途：约束后续设计，解释为什么改变方向，防止团队再次沿错误抽象继续扩张  
 > V2 变更：删除正式 DatasetRequest 和 BuildRecipe，明确 WorkflowRecipe 仅服务 Acquisition，并拆分 RunStatus、BuildResult、ValidationResult 与 DatasetPublication
-> ADR 序列续篇：Pi 迁移的 ADR-017 至 ADR-024 使用独立记录，见 [ADR 索引](adr/README.md)。
+> ADR 序列续篇：Pi 迁移的 ADR-017 至 ADR-024 使用独立记录，见 [ADR 索引](README.md)。
 
 ---
 
