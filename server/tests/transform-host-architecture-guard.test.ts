@@ -21,6 +21,14 @@ const SERVER_SRC = path.resolve(
   "src",
 );
 const TRANSFORM_HOST = path.join(SERVER_SRC, "dataset", "transform-host");
+const STAGED_FAMILY_HOST_ROOTS = [
+  TRANSFORM_HOST,
+  path.join(SERVER_SRC, "dataset", "transform-admission"),
+  path.join(SERVER_SRC, "dataset", "family-catalog"),
+  path.join(SERVER_SRC, "dataset", "family-spec-admission"),
+  path.join(SERVER_SRC, "dataset", "shadow-parity"),
+] as const;
+const STAGED_FAMILY_HOST_MODULE = /(?:^|[\\/])(?:transform-host|transform-admission|family-catalog|family-spec-admission|shadow-parity)(?:[\\/]|$)/;
 
 /** Remove comments while retaining strings, so policy terms in comments cannot trigger the guard. */
 function withoutComments(source: string): string {
@@ -66,9 +74,9 @@ function parseRuntimeModuleSpecifiers(source: string): string[] {
   return specifiers;
 }
 
-function importsTransformHost(source: string): boolean {
+function importsStagedFamilyHostModule(source: string): boolean {
   return parseRuntimeModuleSpecifiers(source).some((specifier) =>
-    /(?:^|[\\/])transform-host(?:[\\/]|$)/.test(specifier),
+    STAGED_FAMILY_HOST_MODULE.test(specifier),
   );
 }
 
@@ -143,14 +151,20 @@ async function scanTransformHost(): Promise<Violation[]> {
   return violations;
 }
 
-async function scanInboundTransformHostImports(): Promise<Violation[]> {
+function isInsideStagedFamilyHostRoot(file: string): boolean {
+  return STAGED_FAMILY_HOST_ROOTS.some((root) =>
+    file === root || file.startsWith(`${root}${path.sep}`),
+  );
+}
+
+async function scanInboundFamilyHostImports(): Promise<Violation[]> {
   const violations: Violation[] = [];
   for (const file of await collectSources(SERVER_SRC)) {
-    if (file === TRANSFORM_HOST || file.startsWith(`${TRANSFORM_HOST}${path.sep}`)) continue;
-    if (importsTransformHost(await readFile(file, "utf8"))) {
+    if (isInsideStagedFamilyHostRoot(file)) continue;
+    if (importsStagedFamilyHostModule(await readFile(file, "utf8"))) {
       violations.push({
         file: path.relative(SERVER_SRC, file),
-        reason: "Transform Host is imported outside its disabled fixture boundary",
+        reason: "staged Family Host module is imported by production server source",
       });
     }
   }
@@ -173,12 +187,30 @@ describe("Transform Host architecture guard", () => {
     );
   });
 
-  test("fixture helper catches inbound static, export, and dynamic Host wiring", () => {
-    expect(importsTransformHost('import { createHost } from "../dataset/transform-host/index.js";')).toBe(true);
-    expect(importsTransformHost('export { createHost } from "./transform-host/host.js";')).toBe(true);
-    expect(importsTransformHost('await import("@/dataset/transform-host/index.js");')).toBe(true);
-    expect(importsTransformHost('import type { HostReceipt } from "../dataset/transform-host/protocol.js";')).toBe(false);
-    expect(importsTransformHost('// import "../dataset/transform-host/index.js";')).toBe(false);
+  test("fixture helper catches inbound static, export, and dynamic staging wiring", () => {
+    for (const moduleName of [
+      "transform-host",
+      "transform-admission",
+      "family-catalog",
+      "family-spec-admission",
+      "shadow-parity",
+    ]) {
+      expect(importsStagedFamilyHostModule(
+        `import { staged } from "../dataset/${moduleName}/index.js";`,
+      )).toBe(true);
+      expect(importsStagedFamilyHostModule(
+        `export { staged } from "./${moduleName}/index.js";`,
+      )).toBe(true);
+      expect(importsStagedFamilyHostModule(
+        `await import("@/dataset/${moduleName}/index.js");`,
+      )).toBe(true);
+    }
+    expect(importsStagedFamilyHostModule(
+      'import type { HostReceipt } from "../dataset/transform-host/protocol.js";',
+    )).toBe(false);
+    expect(importsStagedFamilyHostModule(
+      '// import "../dataset/transform-host/index.js";',
+    )).toBe(false);
   });
 
   test("fixture helper catches a pseudo-enabled unsafe Windows backend", () => {
@@ -196,7 +228,7 @@ describe("Transform Host architecture guard", () => {
     expect(await scanTransformHost()).toEqual([]);
   });
 
-  test("production server sources do not wire the disabled Transform Host", async () => {
-    expect(await scanInboundTransformHostImports()).toEqual([]);
+  test("production server sources do not wire staged Family Host modules", async () => {
+    expect(await scanInboundFamilyHostImports()).toEqual([]);
   });
 });
