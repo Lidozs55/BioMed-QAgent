@@ -128,7 +128,7 @@ Host 不是实际 OS sandbox；implementation digest 不覆盖 bundle/dependency
 > admission/checkpoint；与 B 仅类型耦合，M3 前不汇合。
 
 - [ ] **C-T4** B3 / resource baseline（依赖 A-T2 冻结 identity 类型）
-      - 状态：`d2153aa1` 已由 Core-receipted bytes 做 bounded measurement、cancel-aware preflight、Map 前阈值拒绝和 v2 telemetry；disk wiring、production measured threshold 与 immutable descriptor snapshot仍缺
+      - 状态：Core-receipted bytes bounded measurement、cancel-aware preflight、Map前阈值拒绝、v2 telemetry与explicit staging PK disk selection已落地；production measured threshold与immutable descriptor snapshot仍缺
       - 设计：`05-core-execution-product-gate.md §4 B3-D0`、`09 §2 T4`
       - 产物：现有 `validation/multitable.ts` benchmark/telemetry（row/key estimate、validator mode、heap/temp/duration/failure reason）、阈值、large-input benchmark harness（memory parity oracle）
       - 验收：超阈值强制 disk mode 或 fail closed，不再无界 `Map` 到 OOM
@@ -149,6 +149,7 @@ Host 不是实际 OS sandbox；implementation digest 不覆盖 bundle/dependency
       - 产物：Host/Core owner fencing、orphan cleanup、publish reuse 修复
       - 验收：cancel/timeout/restart/stale worker/late commit 不误提交；publish 必须重验证 authoritative receipt，或禁止 publish shortcut；固定 operation 的 implementation identity 绑定真实部署版本
 - [ ] **C-T11** B3 disk mode（PK/FK first hotspot）（依赖 A-T2 冻结 identity 类型、C-T4）
+      - 状态：explicit staging PK path已真实调用disk TupleIndex，覆盖owner/quota/cancel/cleanup/no-fallback与memory check parity；FK/cardinality index reuse仍缺，default/production path保持不变
       - 设计：`05-core-execution-product-gate.md §4 B3-D1/D2`、`09 §2 T11`
       - 产物：disk-backed tuple index（quota/cancel/batch tx/cleanup、确定性 key encoding）、memory parity
       - 验收：memory/disk B3 fixture 的 checks/ordering/digest parity；复用同一 index 支持 cardinality/relation；不新增 `family.id ===` 语义分支

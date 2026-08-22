@@ -62,7 +62,7 @@
 ### Family Host staging-only execution slots
 
 - [x] server-owned `fixed_transform_slot.v1` fail-closed staging admission：exact-key、generation/capability/digest/asset checks，并固定返回 `executable=false`、`runtimeWired=false`；ADR-039 Host execution已Deferred，因此不接默认Agent build route、统一executor或`registered_multitable.runtime.v1`。
-- [ ] B3 candidates `f53348b8`/`e7ba9647`未合入：前者只增加unused disk类型/import，后者只增加PK index接口声明；均无validator执行路径。`diskIndexAvailable`仍为false，disk opt-in继续fail closed。
+- [ ] B3 candidates`f53348b8`/`e7ba9647`未合入；已由`16c6d22d`替代为真实explicit staging PK disk path（owner/quota/cancel/cleanup/no-fallback/memory parity）。default production capability仍不启用disk；FK/cardinality index reuse与measured production threshold仍缺。
 
 ### 可选测试补强（自 LEFTOVERS 历史快照迁移，非阻塞）
 
