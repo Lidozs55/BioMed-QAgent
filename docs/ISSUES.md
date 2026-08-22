@@ -36,13 +36,11 @@
 
 ### FamilySpec/Core执行面剩余收敛项
 
-- [ ] checkpoint/reuse：旧候选 `3f1cfdd3`/`3f308046` 仍允许 publish generic shortcut或不诚实
-      rehydrate fallback，均保持未合入。需要 publish shortcut禁用 + honest startup release identity +
-      typed receipted rehydrate + restart/TOCTOU闭包。
+- [ ] checkpoint/reuse：旧候选`3f1cfdd3`/`3f308046`保持未合入；generic publish shortcut已禁用，startup release identity、strict fixed-operation reuse verifier与publication verifier已落地。剩余项是把identity持久化并在真实reuse前调用verifier，以及restart/TOCTOU回归测试。
 - [x] Core transform admission：旧 `64f43602` 已弃用；当前 staging实现以Core-owned expected invocation
       全量比对 task/build/generation/digest/input/output/resource/cancel，FD重哈希、closed-world检查、
       独立commit root原子复制/fsync/重开复验，并只返回opaque quarantine evidence，不创建Publication。
-      当前唯一成功fixture明确标记synthetic；production Host仍sandbox_unavailable，所以C-T8 runtime wiring未完成。
+      当前唯一成功fixture明确标记synthetic；ADR-039 Host已Deferred，因此该fail-closed Core gate不接production Host route。
 - [x] disk tuple primitive：旧 `f261f6f6` 已弃用；当前isolated index使用SQLite BLOB canonical tuple encoding，
       preserving field order，拒绝lone surrogate，streaming iterator（无`.all()`）、quota/cancel/error poison、
       owner generation与Windows cleanup；1M unique测试通过。`diskIndexAvailable`仍false，C-T11 runtime wiring未完成。
@@ -64,7 +62,7 @@
 ### Family Host staging-only execution slots
 
 - [x] server-owned `fixed_transform_slot.v1` fail-closed staging admission：exact-key、generation/capability/digest/asset checks，并固定返回 `executable=false`、`runtimeWired=false`；ADR-039 Host execution已Deferred，因此不接默认Agent build route、统一executor或`registered_multitable.runtime.v1`。
-- [ ] B3 candidate `f53348b8` 未合入：其新增 disk 类型/import 未进入执行路径，`diskIndexAvailable` 仍硬编码为 `false`，validator 仍在 memory 之外 fail closed；继续保持 `sandbox_unavailable`/disk opt-in 未接通状态。
+- [ ] B3 candidates `f53348b8`/`e7ba9647`未合入：前者只增加unused disk类型/import，后者只增加PK index接口声明；均无validator执行路径。`diskIndexAvailable`仍为false，disk opt-in继续fail closed。
 
 ### 可选测试补强（自 LEFTOVERS 历史快照迁移，非阻塞）
 
