@@ -24,6 +24,46 @@
 
 - [ ] 2026-08-14 复现：`server/tests/phase5/build-lock.test.ts` 在 `pnpm test` / `vitest run` 并行负载下偶发失败（真实子进程对文件锁的时序竞争 + CPU 争抢），单文件隔离 8/8 通过；与 settings/http/contracts/artifacts 分层重构无关。根治方向：进程间同步闩或放宽时窗/重试（详见 `docs/archive/LEFTOVERS-2026-08-09.md` §K1）。
 
+### Family Host M1 wire contract 安全阻塞（ADR-039 activation blocker）
+
+- [ ] `packages/contracts/src/family-transform.ts` 与 `runtime/primitives.ts` 的
+      `808279ac` 草案仍需关闭：prototype/accessor smuggling（parser 不得执行 getter）、
+      sparse array、`NaN`/Infinity、unsafe integer、identity scheme 静默纠正、无界/不安全
+      ID 与 receipt/digest closure。BuildSpec 2.0 还没有 proposal/resolved DTO 分离。
+- **当前风险状态**：ADR-039 仍 Proposed，动态 transform 未接生产，所以不是已上线 P0；
+  但在 adversarial contracts tests 与独立 Core re-admission 通过前，M1 不得标记 frozen，
+  B/C 只能落 disabled fixture 或纯模块。
+- **验收锚点**：`docs/TODO.md` A-T1/A-T3、`docs/plans/family-host/01-family-transform-contracts.md`、
+  `10-consistency-review.md`；至少覆盖 `__proto__`、getter reads=0、dense array、finite/safe number、
+  strict scheme/hash/time/cancel、known digest vector、1.0/2.0 hybrid rejection。
+
+### Family Host 候选执行面需重做（不得原样合入）
+
+- [ ] `3f1cfdd3`：publish 仍可走 generic checkpoint shortcut；production release identity 未在
+      startup 闭合，dev fallback 跨重启不诚实，reuse/rehydrate 仍缺 output/sidecar/dependency/TOCTOU
+      全闭包。最小门：publish shortcut 禁用 + honest release identity + typed receipted rehydrate。
+- [ ] `64f43602`：Core transform admission 信任 caller/Host 自报上下文，且重哈希后没有原子复制到
+      Core-owned immutable root；不得生成 `core_admitted` trust-bearing receipt。必须由 Core-owned
+      expected invocation 对 task/build/generation/digest/input/output/resource/cancel 全量比对，再复制、
+      fsync、重开重哈希；仍不得直接创建 Publication。
+- [ ] `f261f6f6`：SQLite tuple index 未接 B3，TEXT key 会在 lone surrogate 上碰撞，quota/取消/cleanup
+      不是 hard fail-closed，`entries().all()` 会回载全部 key。需 BLOB canonical encoding、poison-on-error、
+      transaction quota、bounded query 与 memory/disk parity 后才能接 `multitable.ts`。
+- [ ] `9778de1d`：caller 声明的 canonical digest/scope/resource/exact refs 被包装成 `admitted`，
+      不能作为 semantic admission。只可缩减为不含 digest/trust/authorization 的 pure topology linter；
+      完整 admission 等待 canonical digest 与 authoritative resolver receipts。
+- [ ] `2566efd1`：仅可作为 all-platform `sandbox_unavailable` fixture；caller-provided emitted bundle /
+      allowlist、source→bundle provenance、hardlink/symlink/junction/TOCTOU 和 opaque-handle ownership 未闭合。
+      未有独立低权限 OS/container backend 前不得提升为 production sandbox。
+
+### Expression dataset/revision identity 尚未接 authoritative Core path
+
+- [ ] expression adapters 当前 V1 rows 仍使用 `buildId` 作为 `dataset_id`。候选 `1b3dca3b` 不能原样合入：
+      它允许 caller 传可选 identity context，并在仍声明 `gene_expression.*.v1` schema 时增加
+      `dataset_revision_id` 列。正确迁移需先定义显式 V2 schema/PK，再把 task-owned
+      `SourceAssetRegistrationReceipt` 从 `DatasetCore` service 传给 TS Core，由 Core 从 frozen binding +
+      registered source/mapping/metadata carrier closure 构造 context；缺事实 fail closed，V1 不静默扩列。
+
 ### 可选测试补强（自 LEFTOVERS 历史快照迁移，非阻塞）
 
 - [ ] D1：`GET /builds/{id}` 损坏 manifest 仍返回 409 的测试 + 中间页损坏分页测试。
