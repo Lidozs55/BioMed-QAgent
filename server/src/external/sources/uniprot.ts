@@ -87,7 +87,7 @@ export async function searchUniprot(
   maxResults: number,
   context: SourceQueryContext,
 ): Promise<Record<string, unknown>> {
-  context.onQueryStarted?.(query, "uniprot");
+  const queryCallToken = context.onQueryStarted?.(query, "uniprot");
   const apiUrl =
     `${UNIPROT_API_BASE}/search?query=${quoteQuery(query)}` +
     `&format=json&size=${maxResults}`;
@@ -108,7 +108,7 @@ export async function searchUniprot(
   } catch (error) {
     if (isAbortError(error) || context.signal?.aborted === true) throw error;
     if (!(error instanceof FallbackFailure)) throw error;
-    context.onQuery?.(query, "uniprot", "failed", 0);
+    context.onQuery?.(query, "uniprot", "failed", 0, queryCallToken);
     return {
       source: "uniprot",
       query,
@@ -138,7 +138,7 @@ export async function searchUniprot(
     });
     const totalCount =
       typeof document["totalResults"] === "number" ? document["totalResults"] : records.length;
-    context.onQuery?.(query, "uniprot", "success", records.length);
+    context.onQuery?.(query, "uniprot", "success", records.length, queryCallToken);
     return {
       source: "uniprot",
       query,
@@ -151,7 +151,7 @@ export async function searchUniprot(
     };
   }
 
-  context.onQuery?.(query, "uniprot", "success", 0);
+  context.onQuery?.(query, "uniprot", "success", 0, queryCallToken);
   return {
     source: "uniprot",
     query,

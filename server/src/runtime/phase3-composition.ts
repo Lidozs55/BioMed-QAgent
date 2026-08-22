@@ -83,15 +83,12 @@ const QUERY_SOURCE_LABELS: Readonly<Record<string, string>> = {
  *   pair gets its own ``tool:<source>:query:<seq>`` id (per-source sequence),
  *   so concurrent or repeated queries from the same source no longer collide
  *   onto a single UI card. ``onQuery`` reuses the id its matching started call
- *   allocated (matched by source + query string, FIFO); terminal-only calls
- *   (older call sites without ``onQueryStarted``) still terminate with a fresh
- *   id instead of reopening a previous card. Ids are deterministic — replaying
- *   the same hook call order yields identical ids, keeping the event log
- *   reproducible.
- *   **Limitation**: the hook API carries no call token, so two *identical*
- *   query strings from the same source cannot be causality-traced; they are
- *   paired FIFO (first end closes the first start), which is deterministic but
- *   may not reflect the true start/end pairing.
+ *   allocated. ``onQueryStarted`` returns an opaque call token that ``onQuery``
+ *   can pass back to preserve causality even when identical same-source calls
+ *   finish out of order. Callers that omit the token retain deterministic
+ *   source + query FIFO pairing; terminal-only calls still receive a fresh id.
+ *   Ids are deterministic — replaying the same hook call order yields identical
+ *   ids, keeping the event log reproducible.
  * - ``onProgress`` opens progress-only operations (``tool:discovery:*``,
  *   ``tool:acquisition:*``) once per run — they have no natural end signal,
  *   so the run-terminal fallback on the frontend closes them.
@@ -107,39 +104,66 @@ export function createPhase3ToolHooks(
   // Per-source sequence for call-scoped query ids (``tool:<source>:query:<seq>``)
   // and the started-but-not-yet-finished queries awaiting their terminal call.
   const querySequences = new Map<string, number>();
-  const pendingQueries = new Map<
-    string,
-    Array<{ query: string; operationId: string }>
-  >();
+  interface PendingQuery {
+    query: string;
+    source: string;
+    operationId: string;
+  }
+  const pendingQueries = new Map<string, PendingQuery[]>();
+  const pendingQueryTokens = new Map<object, PendingQuery>();
 
   const nextQueryId = (source: string): string => {
     const seq = (querySequences.get(source) ?? 0) + 1;
     querySequences.set(source, seq);
     return `tool:${source}:query:${seq}`;
   };
-  // Correlate an ``onQuery`` terminal call with its ``onQueryStarted``: the
-  // first pending entry for this source whose query string matches (FIFO), so
-  // out-of-order completions of *different* queries still close the card their
-  // own start opened. Identical query strings are indistinguishable without a
-  // call token, so they pair FIFO (deterministic approximation).
-  const consumeQueryId = (query: string, source: string): string => {
-    const pending = pendingQueries.get(source);
-    if (pending !== undefined) {
-      const index = pending.findIndex((entry) => entry.query === query);
-      if (index !== -1) {
-        const [entry] = pending.splice(index, 1);
-        if (pending.length === 0) pendingQueries.delete(source);
-        return entry.operationId;
+  const removePendingQuery = (entry: PendingQuery): void => {
+    const pending = pendingQueries.get(entry.source);
+    const index = pending?.indexOf(entry) ?? -1;
+    if (pending !== undefined && index !== -1) {
+      pending.splice(index, 1);
+      if (pending.length === 0) pendingQueries.delete(entry.source);
+    }
+  };
+  // Prefer exact token correlation. Legacy callers that omit a token consume
+  // the first matching source + query entry (FIFO), preserving prior behavior.
+  const consumeQueryId = (query: string, source: string, callToken?: unknown): string => {
+    if (callToken !== undefined) {
+      const tokenEntry = typeof callToken === "object" && callToken !== null
+        ? pendingQueryTokens.get(callToken)
+        : undefined;
+      if (tokenEntry !== undefined && tokenEntry.source === source) {
+        pendingQueryTokens.delete(callToken as object);
+        removePendingQuery(tokenEntry);
+        return tokenEntry.operationId;
       }
+      return nextQueryId(source);
+    }
+
+    const pending = pendingQueries.get(source);
+    const index = pending?.findIndex((entry) => entry.query === query) ?? -1;
+    if (pending !== undefined && index !== -1) {
+      const [entry] = pending.splice(index, 1);
+      if (pending.length === 0) pendingQueries.delete(source);
+      for (const [token, tokenEntry] of pendingQueryTokens) {
+        if (tokenEntry === entry) {
+          pendingQueryTokens.delete(token);
+          break;
+        }
+      }
+      return entry.operationId;
     }
     return nextQueryId(source);
   };
   return {
     onQueryStarted: (query, source) => {
       const operationId = nextQueryId(source);
+      const entry = { query, source, operationId };
+      const callToken = Object.freeze({ operationId });
       const pending = pendingQueries.get(source) ?? [];
-      pending.push({ query, operationId });
+      pending.push(entry);
       pendingQueries.set(source, pending);
+      pendingQueryTokens.set(callToken, entry);
       void recordRunEvent({
         type: "operation_started",
         operation_id: operationId,
@@ -149,9 +173,10 @@ export function createPhase3ToolHooks(
       }).catch((error: unknown) => {
         console.warn("tool.query_started_event_failed", error);
       });
+      return callToken;
     },
-    onQuery: (query, source, status, recordsCount = 0) => {
-      const operationId = consumeQueryId(query, source);
+    onQuery: (query, source, status, recordsCount = 0, callToken) => {
+      const operationId = consumeQueryId(query, source, callToken);
       void recordRunEvent({
         type: "operation_progress",
         operation_id: operationId,

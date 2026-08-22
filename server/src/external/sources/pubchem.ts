@@ -127,7 +127,7 @@ function searchPubchemProperties(
         url: `${PUBCHEM_PAGE_BASE}/${cidValue ?? ""}`,
       };
     });
-    context.onQuery?.(term, "pubchem", "success", records.length);
+    context.onQuery?.(term, "pubchem", "success", records.length, queryCallToken);
     return {
       source: "pubchem",
       term,
@@ -150,7 +150,7 @@ export async function searchPubchem(
   context: SourceQueryContext,
 ): Promise<Record<string, unknown>> {
   const encoded = quoteQuery(term);
-  context.onQueryStarted?.(term, "pubchem");
+  const queryCallToken = context.onQueryStarted?.(term, "pubchem");
   const apiUrl =
     `${PUGREST_BASE}/compound/name/${encoded}/property/` +
     `MolecularFormula,MolecularWeight,IUPACName,CanonicalSMILES/` +
@@ -177,7 +177,7 @@ export async function searchPubchem(
   } catch (error) {
     if (isAbortError(error) || context.signal?.aborted === true) throw error;
     if (!(error instanceof FallbackFailure)) throw error;
-    context.onQuery?.(term, "pubchem", "failed", 0);
+    context.onQuery?.(term, "pubchem", "failed", 0, queryCallToken);
     return fallbackError("pubchem", pageUrl, error);
   }
 
@@ -185,7 +185,7 @@ export async function searchPubchem(
     const parsed = searchPubchemProperties(term, fetched, context);
     if (parsed !== null) return parsed;
   }
-  context.onQuery?.(term, "pubchem", "page_fallback", 0);
+  context.onQuery?.(term, "pubchem", "page_fallback", 0, queryCallToken);
   return pageFallback("pubchem", pageUrl, fetched);
 }
 
@@ -194,7 +194,7 @@ export async function getCompound(
   cid: number,
   context: SourceQueryContext,
 ): Promise<Record<string, unknown>> {
-  context.onQueryStarted?.(String(cid), "pubchem");
+  const queryCallToken = context.onQueryStarted?.(String(cid), "pubchem");
   const apiUrl =
     `${PUGREST_BASE}/compound/cid/${cid}/property/` +
     `MolecularFormula,MolecularWeight,IUPACName,CanonicalSMILES,InChIKey,InChI/JSON`;
@@ -223,7 +223,7 @@ export async function getCompound(
   } catch (error) {
     if (isAbortError(error) || context.signal?.aborted === true) throw error;
     if (!(error instanceof FallbackFailure)) throw error;
-    context.onQuery?.(String(cid), "pubchem", "failed", 0);
+    context.onQuery?.(String(cid), "pubchem", "failed", 0, queryCallToken);
     return fallbackError("pubchem", pageUrl, error);
   }
 
@@ -244,7 +244,7 @@ export async function getCompound(
           inchi: typeof first["InChI"] === "string" ? first["InChI"] : "",
           url: `${PUBCHEM_PAGE_BASE}/${cid}`,
         };
-        context.onQuery?.(String(cid), "pubchem", "success", 1);
+        context.onQuery?.(String(cid), "pubchem", "success", 1, queryCallToken);
         return {
           source: "pubchem",
           cid,
@@ -258,7 +258,7 @@ export async function getCompound(
       // Python logs a warning and falls through to the page fallback.
     }
   }
-  context.onQuery?.(String(cid), "pubchem", "page_fallback", 0);
+  context.onQuery?.(String(cid), "pubchem", "page_fallback", 0, queryCallToken);
   return pageFallback("pubchem", pageUrl, fetched);
 }
 

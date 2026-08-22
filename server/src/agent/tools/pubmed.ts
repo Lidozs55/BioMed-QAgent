@@ -80,12 +80,12 @@ export async function searchPubmedAdapter(
   signal?: AbortSignal,
 ): Promise<unknown> {
   const hooks = noopHooks(deps.hooks);
-  hooks.onQueryStarted(query, "pubmed");
+  const queryCallToken = hooks.onQueryStarted(query, "pubmed");
   let result: PubMedSearchResult;
   try {
     result = await searchPubmed(deps.eutils, query, maxResults, signal);
   } catch (error) {
-    hooks.onQuery(query, "pubmed", "failed", 0);
+    hooks.onQuery(query, "pubmed", "failed", 0, queryCallToken);
     throw error;
   }
 
@@ -99,7 +99,7 @@ export async function searchPubmedAdapter(
     }
   }
 
-  hooks.onQuery(query, "pubmed", "success", result.records.length);
+  hooks.onQuery(query, "pubmed", "success", result.records.length, queryCallToken);
   hooks.onProgress("discovery", "discovered_records", {
     current: result.records.length,
     total: result.total_count,
