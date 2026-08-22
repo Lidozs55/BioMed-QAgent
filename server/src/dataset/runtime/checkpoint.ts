@@ -196,13 +196,15 @@ export async function loadOperationOutput(
   try {
     throwIfAborted(cancellationSignal);
     const envelope = JSON.parse(readFileSync(outputFile, "utf8")) as OperationOutputEnvelope;
+    const outputDigest = sha256Json(envelope.output);
     if (
       envelope.task_id !== options.taskId ||
       envelope.build_id !== options.buildId ||
       envelope.operation_id !== options.operationId ||
       envelope.operation_attempt_id !== options.operationAttemptId ||
       envelope.output_digest !== options.outputDigest ||
-      envelope.output_sha256 !== sha256Json(envelope.output)
+      envelope.output_digest !== outputDigest ||
+      envelope.output_sha256 !== outputDigest
     ) {
       return null;
     }
