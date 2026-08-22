@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/sidebar";
 import { Toaster } from "@/components/ui/sonner";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAgentStream } from "@/hooks/useAgentStream";
 import {
   useAPI,
@@ -177,9 +178,21 @@ export default function App() {
           <SidebarTrigger aria-label="Toggle sidebar" />
           <h1 className="min-w-0 truncate text-lg font-semibold">BioMed QAgent</h1>
           <div className="flex shrink-0 items-center gap-2">
-            <Button variant="ghost" size="icon-sm" aria-label="打开设置" onClick={() => setSettingsOpen(true)}>
-              <GearIcon />
-            </Button>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="打开设置"
+                    onClick={() => setSettingsOpen(true)}
+                  />
+                }
+              >
+                <GearIcon />
+              </TooltipTrigger>
+              <TooltipContent>打开设置</TooltipContent>
+            </Tooltip>
             <SubagentPanelToggle />
             <ThemeToggle />
           </div>

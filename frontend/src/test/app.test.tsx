@@ -201,6 +201,21 @@ describe("App startup ownership", () => {
     expect(useAgentStore.getState().connectionStatus).toBe("disconnected");
   });
 
+  it("describes all three workspace toolbar buttons with tooltips", async () => {
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect(useAgentStore.getState().activeItems).toEqual(["task_active"]),
+    );
+    const header = container.querySelector("header");
+    expect(header).not.toBeNull();
+
+    for (const label of ["打开设置", "切换子任务面板", "切换主题"]) {
+      const button = header?.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+      expect(button).not.toBeNull();
+      expect(button).toHaveAttribute("data-slot", "tooltip-trigger");
+    }
+  });
+
   it("bounds the App viewport chain for non-chat tab scrolling", async () => {
     const { container } = render(<App />);
     await waitFor(() =>
