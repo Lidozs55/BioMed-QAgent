@@ -417,6 +417,15 @@ describe("family-transform strict lexical policies", () => {
       finished_at: "2026-08-21T00:02:00Z",
       host_issued_at: "2026-08-21T00:02:01Z",
     }, "$")) .toThrow(/deadline/);
+    expect(() => parseTransformExecutionReceipt({
+      ...receipt,
+      cancellation_state: "requested",
+      cancel_requested_at: "2026-08-20T23:59:59Z",
+    }, "$")) .toThrow(/cancel_requested_at/);
+    expect(() => parseTransformExecutionReceipt({
+      ...receipt,
+      output_bytes: 29,
+    }, "$")) .toThrow(/receipt sizes|output_bytes/);
   });
 
   it("rejects unsafe integers, invalid cancellation state, and non-canonical timestamps", () => {

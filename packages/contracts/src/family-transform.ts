@@ -1105,6 +1105,18 @@ export function parseTransformExecutionReceipt(value: unknown, path: string): Tr
       `Receipt timestamps must satisfy started_at <= finished_at <= host_issued_at and started_at <= deadline_at at ${path}`,
     );
   }
+  if (
+    cancelRequestedAt !== null
+    && (
+      Date.parse(cancelRequestedAt) < Date.parse(startedAt)
+      || Date.parse(cancelRequestedAt) > Date.parse(finishedAt)
+    )
+  ) {
+    throw new APIError(
+      502,
+      `cancel_requested_at must fall between started_at and finished_at at ${path}`,
+    );
+  }
   const sandboxBackend = assertEnum(
     ownValue(object, "sandbox_backend", path),
     `${path}.sandbox_backend`,
@@ -1169,6 +1181,16 @@ export function parseTransformExecutionReceipt(value: unknown, path: string): Tr
     if (value > limit) {
       throw new APIError(502, `Receipt resource usage ${key} exceeds its granted limit at ${path}`);
     }
+  }
+  const receiptedOutputBytes = outputReceipts.reduce(
+    (total, output) => total + BigInt(output.size_bytes),
+    0n,
+  );
+  if (receiptedOutputBytes > BigInt(usage.output_bytes)) {
+    throw new APIError(
+      502,
+      `quarantined output receipt sizes exceed output_bytes at ${path}`,
+    );
   }
 
   return {
