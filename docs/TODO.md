@@ -177,15 +177,23 @@ Host 不是实际 OS sandbox；implementation digest 不覆盖 bundle/dependency
 - [ ] **model-registry wire-boundary 校验**：`frontend/src/api/modelRegistry.ts` 仍用窄化 cast（`b as ProviderInfo[]`）；在 `packages/contracts` 增加 `parseProvidersEnvelope` / `parseManagedModelsEnvelope` 解析器（ADR-025 后续项）。
 - [ ] **Phase 9 后续 — HIL/Questionnaire**：`UserInputDialog` 迁移到同一 Questionnaire 基础设施。
 - [ ] **Phase 9 后续 — 权限设置页重排**：默认层与高级 ACL 编辑器。
-- [ ] **AI 用户支持文档**：面向其他 agent 的调用文档 + 启动/HTTP-WS 封装脚本。
+- [ ] **AI 用户支持文档与配套脚本**：本项目用户不只是人类，还包括其他 AI agent。目前其他 agent 调用本项目较麻烦、文档不清晰。内涵：
+      - 面向 AI 用户的调用文档：说明如何安装/配置（含 `.env` 模型 key）、一条命令启动服务、如何通过 HTTP API（`POST /api/v1/tasks`、`GET /api/v1/tasks/:id`、`.../events`、`.../messages`、`.../artifacts/:id`）与 WS（`/api/v1/ws`）创建任务、订阅事件、获取结果，附请求/响应示例与最小可跑通样例；
+      - 配套封装脚本：把「启动服务 → 提交任务 → 轮询/订阅 → 取结果」固化为一条命令即可调用的驱动脚本，其他 agent 不必理解内部细节。
 
 ### P2
 - [ ] **createPhase3ToolHooks 并发 identity bug**：同源多查询共用 `operation_id: tool:<source>:query` 互相覆盖 UI 卡片；应改为 call-scoped ID（hangs on `fix/runtime-timeline-sequence` 未含）。
 - [ ] **Phase 9 后续 — 权限事件进入历史 Conversation timeline**。
 - [ ] **Agent INSTRUCTIONS**：增加“达到 max_turns 后输出 `[MAX_TURNS_REACHED]`”指导。
+- [ ] **主 prompt 迭代优化（类 Darwin 进化式迭代）**：框架功能搭建完成后，对主 prompt
+      （`server/src/agent/phase1-prompt.ts` 的 `PHASE1_SYSTEM_PROMPT`）做类似 Darwin 进化式的迭代优化，
+      以达成高完成度（检索数据全且准）/ 高速度 / 低成本，并与其他通用 agent 框架做对比。
+      注意与"自进化（skill-self-iteration）"区分：自进化是执行后把工具流沉淀为可复用资产；
+      本项是针对主 prompt 本身做变异-选择式的持续迭代优化。
 - [ ] **设置页供应商/模型列表分页与搜索后端**（当前全量返回）。
 
 ### P3
+- [ ] **可拆卸工具包实现纠错**：`scripts/solidify-run.mjs --toolkit` 的实现方向有误——它对 `.pi/skills/*/SKILL.md` 生成"独立文档 + 摘要"，这是多余的：**SKILL.md 本身就是文本内容、无需再总结**。真正需要说明"怎么用、是做什么的"的是**代码**，即 `server/src/agent/tools/` 下的 TS 工具（chembl.ts、gdc.ts、xena.ts、pdf.ts、dataset-build.ts 等）。正确方向：为每个 TS 工具生成独立使用文档（用途、参数、返回、依赖、如何独立调用），使其他 agent 在环境受限时可直接调用单个工具。
 - [ ] **沙箱环境**：为数据安全提供沙箱保证（与 Transform Host 隔离正交，属通用数据保障）。
 
 ---
