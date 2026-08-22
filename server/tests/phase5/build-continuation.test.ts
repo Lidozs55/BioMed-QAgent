@@ -213,7 +213,7 @@ describe("deterministic build continuation (cross-restart resume)", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
 
-  test("re-executing a completed build reuses every operation", async () => {
+  test("re-executing a completed build refuses stale publish reuse", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "biomed-cont-reuse-"));
     roots.push(root);
     const repository = new DurableTaskRepository(root);
@@ -260,10 +260,12 @@ describe("deterministic build continuation (cross-restart resume)", () => {
       sourceAssets: await resolveAssetMap(taskRoot, assets.source_files),
       mappingAssets: await resolveAssetMap(taskRoot, assets.mapping_files),
     });
-    expect(recordB.status).toBe("completed");
-    expect(recordB.publication_id).toBe(recordA.publication_id);
+    expect(recordB.status).toBe("failed");
+    expect(recordB.publication_id).toBeNull();
+    expect(recordB.error).toMatch(/version directory already exists|publication|atomic promotion/i);
     expect(skipped.length).toBeGreaterThan(0);
     expect(skipped).toContain("parse:binding_geo");
+    expect(recordB.error).not.toContain(recordA.publication_id ?? "__missing_publication__");
   });
 });
 

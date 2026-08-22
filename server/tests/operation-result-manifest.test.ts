@@ -218,11 +218,15 @@ describe("A5I Increment 2 operation result manifests", () => {
     const runner2 = new RecordingRunner();
     const second = await makeExecutor({ outputRoot, runner: runner2 }).run();
     expect(second.status).toBe("completed");
-    expect(runner2.calls).toEqual([]);
+    expect(runner2.calls).toEqual(["publish"]);
 
     for (const opId of Object.keys(EXPECTED_OUTPUT_KINDS)) {
       const after = readFileSync(join(stateDir, `${opId.replace(/:/g, "_")}_result.json`), "utf8");
-      expect(after).toBe(before.get(opId));
+      if (opId === "publish") {
+        expect(after).not.toBe(before.get(opId));
+      } else {
+        expect(after).toBe(before.get(opId));
+      }
     }
 
     rmSync(outputRoot, { recursive: true, force: true });
