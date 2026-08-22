@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 const SHA256 = /^[0-9a-f]{64}$/u;
-const SAFE_REF = /^[A-Za-z0-9][A-Za-z0-9._:@/+-]{0,127}$/u;
+const SAFE_REF = /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,127}$/u;
 
 export type CoreRuntimeEnvironment = "production" | "staging" | "dev" | "test";
 
@@ -70,7 +70,7 @@ export function resolveCoreReleaseIdentity(
   }
 
   if (buildArtifactDigest !== undefined && buildArtifactDigest !== null && buildArtifactDigest.trim() !== "") {
-    const digest = buildArtifactDigest.trim().toLowerCase();
+    const digest = buildArtifactDigest.trim();
     if (SHA256.test(digest)) return `sha256:${digest}`;
     throw new CoreReleaseIdentityStartupError(
       "CORE_RELEASE_IDENTITY_INVALID",

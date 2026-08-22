@@ -56,10 +56,21 @@ describe("core release identity", () => {
     expect(resolveCoreReleaseIdentity({ environment: "test", configuredIdentity: identity })).toBe(identity);
   });
 
-  test("artifact digest is normalized to a canonical sha256 identity", () => {
-    expect(resolveCoreReleaseIdentity({ environment: "production", buildArtifactDigest: SHA256.toUpperCase() })).toBe(
+  test("artifact digest must already be canonical lowercase sha256", () => {
+    expect(resolveCoreReleaseIdentity({ environment: "production", buildArtifactDigest: SHA256 })).toBe(
       `sha256:${SHA256}`,
     );
+    expect(() => resolveCoreReleaseIdentity({
+      environment: "production",
+      buildArtifactDigest: SHA256.toUpperCase(),
+    })).toThrow(CoreReleaseIdentityStartupError);
+  });
+
+  test("configured refs are opaque identities, never paths", () => {
+    expect(() => resolveCoreReleaseIdentity({
+      environment: "production",
+      configuredIdentity: "ref:releases/current",
+    })).toThrow(CoreReleaseIdentityStartupError);
   });
 
   test("fixed and derive operation digests compose core release and operation identity", () => {
