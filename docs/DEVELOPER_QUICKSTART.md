@@ -36,7 +36,8 @@ formal Agent、Task/Run/Event、产品 API 与 Dataset Core 全部由 TypeScript
 
 > 想系统了解"能做什么"（功能全景、赛题评价维度映射、演示脚本），见
 > [FEATURES.md](FEATURES.md)；想了解技术架构与约束，见
-> [ARCHITECTURE.md](ARCHITECTURE.md)。
+> [ARCHITECTURE.md](ARCHITECTURE.md)。其他Agent或自动化脚本调用HTTP/WS时，见
+> [AGENT_API_QUICKSTART.md](AGENT_API_QUICKSTART.md)。
 
 > 这是"中国高校计算机大赛 — AI Scientist 赛道"的参赛作品（赛题 XH-202619）。
 

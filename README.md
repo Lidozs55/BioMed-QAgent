@@ -19,6 +19,7 @@ BioMed-QAgent 是一个面向生物医学研究数据的 **Agent + 确定性 Pip
 | --- | --- |
 | [docs/FEATURES.md](docs/FEATURES.md) | **功能 / 能力全景**：系统能做什么，逐项对齐赛题评价维度，含演示视频建议脚本。适合产品、数据、写 PPT 的协作者。 |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | **技术架构权威**：系统如何组织、边界、事件模型、数据契约、安全。适合工程师与架构评审。 |
+| [docs/AGENT_API_QUICKSTART.md](docs/AGENT_API_QUICKSTART.md) | **Agent/API调用入口**：启动就绪、创建/续跑、durable event replay和WS最小闭环。 |
 | [docs/architecture/roadmap.md](docs/architecture/roadmap.md) + [docs/TODO.md](docs/TODO.md) | **未来规划**：演进方向、待决问题、开放任务与进度。 |
 
 ## 核心能力

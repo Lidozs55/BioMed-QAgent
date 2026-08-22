@@ -191,7 +191,7 @@ Host 不是实际 OS sandbox；implementation digest 不覆盖 bundle/dependency
 - [x] **model-registry wire-boundary 校验**：`@biomed/contracts` 已增加 `parseProvidersEnvelope` / `parseManagedModelsEnvelope` runtime parsers并替换frontend list casts；focused hostile-wire tests已覆盖。
 - [ ] **Phase 9 后续 — HIL/Questionnaire**：`UserInputDialog` 迁移到同一 Questionnaire 基础设施。
 - [ ] **Phase 9 后续 — 权限设置页重排**：默认层与高级 ACL 编辑器。
-- [ ] **AI 用户支持文档**：面向其他 agent 的调用文档 + 启动/HTTP-WS 封装脚本。
+- [x] **AI用户支持文档**：新增`docs/AGENT_API_QUICKSTART.md`；stdlib-only `scripts/run-driver.mjs`现支持health就绪重试、create/submit/snapshot/events durable replay，且有进程级HTTP测试。
 
 ### P2
 - [ ] **createPhase3ToolHooks 并发 identity bug**：同源多查询共用 `operation_id: tool:<source>:query` 互相覆盖 UI 卡片；应改为 call-scoped ID（hangs on `fix/runtime-timeline-sequence` 未含）。
