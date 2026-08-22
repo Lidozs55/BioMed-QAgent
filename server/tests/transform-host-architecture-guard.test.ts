@@ -22,6 +22,7 @@ const SERVER_SRC = path.resolve(
   "src",
 );
 const TRANSFORM_HOST = path.join(SERVER_SRC, "dataset", "transform-host");
+const ACTIVE_DYNAMIC_FAMILY_ROOT = path.join(SERVER_SRC, "dataset", "dynamic-family");
 const STAGED_FAMILY_HOST_ROOTS = [
   TRANSFORM_HOST,
   path.join(SERVER_SRC, "dataset", "transform-admission"),
@@ -234,7 +235,11 @@ function isInsideStagedFamilyHostRoot(file: string): boolean {
 async function scanInboundFamilyHostImports(): Promise<Violation[]> {
   const violations: Violation[] = [];
   for (const file of await collectSources(SERVER_SRC)) {
-    if (isInsideStagedFamilyHostRoot(file)) continue;
+    if (
+      isInsideStagedFamilyHostRoot(file)
+      || file === ACTIVE_DYNAMIC_FAMILY_ROOT
+      || file.startsWith(`${ACTIVE_DYNAMIC_FAMILY_ROOT}${path.sep}`)
+    ) continue;
     if (importsStagedFamilyHostModule(await readFile(file, "utf8"), file)) {
       violations.push({
         file: path.relative(SERVER_SRC, file),
@@ -334,7 +339,12 @@ describe("Transform Host architecture guard", () => {
     expect(await scanTransformHost()).toEqual([]);
   });
 
-  test("production server sources do not wire staged Family Host modules", async () => {
+  test("only the approved dynamic-family composition consumes Host admission modules", async () => {
     expect(await scanInboundFamilyHostImports()).toEqual([]);
+    const unrelatedProductionFile = path.join(SERVER_SRC, "service", "unsafe-transform-wiring.ts");
+    expect(importsStagedFamilyHostModule(
+      'import { execute } from "../dataset/transform-host/index.js";',
+      unrelatedProductionFile,
+    )).toBe(true);
   });
 });

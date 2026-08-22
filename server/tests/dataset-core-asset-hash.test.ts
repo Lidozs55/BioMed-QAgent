@@ -107,7 +107,7 @@ function runHashChild(
   return new Promise((resolve, reject) => {
     const child = spawn(
       process.execPath,
-      [`--max-old-space-size=${heapMb}`, viteNodeEntry, script, workRoot, String(sizeMiB)],
+      ["--no-warnings", `--max-old-space-size=${heapMb}`, viteNodeEntry, script, workRoot, String(sizeMiB)],
       { stdio: "pipe" },
     );
     let stdout = "";

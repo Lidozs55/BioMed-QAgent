@@ -22,8 +22,8 @@ output.
    task-relative source_files / mapping_files / metadata_files references.
    Omit missing source_files when the binding has a registered Core acquisition
    provider; do not download or parse that provider again with workspace commands.
-   - For `bioactivity_measurement`, ChEMBL/PubChem search tools only discover controlled IDs. Formal bytes must be reacquired by Core with `chembl.files.v1` / `pubchem.files.v1`; omit those bindings from `source_files`. A PubChem binding is optional and supports one exact CID crosswalk per build.
-   - **gene-level builds fed by probe-level sources (e.g. GEO `geo_probe`) MUST
+   - For bioactivity measurement, ChEMBL/PubChem search tools only discover controlled IDs. Formal bytes must be reacquired by Core with `chembl.files.v1` / `pubchem.files.v1`; omit those bindings from source files. A PubChem binding is optional and supports one exact CID crosswalk per build.
+   - **gene-level builds fed by probe-level sources (e.g. GEO geo-probe) MUST
      declare a probe→gene annotation** via `mapping_files={"<binding_id>":
      "<GPL annotation relative path>"}` — one entry per binding, keyed by the same
      binding_id as the source. Omitting it lets `validate_dataset_build` pass but the
@@ -40,16 +40,16 @@ output.
      Projection, strict transform metadata/source, and BuildSpec 2.0 proposal;
    - `registered_sources={"<binding_id>": "asset_<sha256>"}` closing every source
      binding. Never pass paths or discovery response bytes.
-   - deterministic output handles `out_0`, `out_1`, … in projection order; each
-     output must use a registered input `receipt_id` as its `locator_ref`.
+   - deterministic output handles out-0, out-1, … in projection order; each
+     output must use a registered input receipt ID as its locator reference.
    The Host owns compilation. If the first submission reports the exact
    Host-compiled descriptor digest, replace the proposal transform-ref digest with
    that value and resubmit; do not bypass or invent the digest. Treat only the
    returned immutable Publication as formal output. A schema containing
-   `review_status` or `human_review_status` remains `human_review_pending` until
+   review-status or human-review-status remains human-review-pending until
    genuine HIL acceptance exists.
 5. Treat a failed result as actionable state. Retry unchanged inputs only when
-   `retryable` is true and the external condition may have changed. For
+   retryable is true and the external condition may have changed. For
    non-retryable errors, change the spec or registered source selection; for a
    permission or human-review request, wait for the decision instead of replacing
    the trusted operation with workspace output.

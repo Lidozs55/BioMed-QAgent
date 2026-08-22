@@ -59,7 +59,11 @@ describe("stable Skill ↔ Tool mapping", () => {
   test("the trusted Dataset Core tools stay mapped to dataset-construction", () => {
     const core = SKILL_TOOL_MAP.find((mapping) => mapping.name === "dataset-construction");
     expect(core).toBeDefined();
-    expect(core?.tools).toEqual(["validate_dataset_build", "execute_dataset_build"]);
+    expect(core?.tools).toEqual([
+      "validate_dataset_build",
+      "execute_dataset_build",
+      "submit_dynamic_family_build",
+    ]);
   });
 
   test("mapping entries are frozen at runtime", () => {
