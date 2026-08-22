@@ -501,6 +501,22 @@ describe("Family Host probe-mapping pure validator", () => {
     expect(result.passed).toBe(false);
   });
 
+  it("requires opaque registry receipt refs instead of paths or URIs", () => {
+    for (const receiptRef of [
+      "../receipts/annotation.json",
+      "C:/receipts/annotation.json",
+      "file:/receipts/annotation.json",
+      "https://example.test/receipt",
+    ]) {
+      const result = validate(request({
+        expected_annotation_asset_receipt_refs: [
+          { annotation_asset_id: ASSET_A, receipt_ref: receiptRef },
+        ],
+      }));
+      expect(issueCodes(result)).toEqual(["input_contract_invalid"]);
+    }
+  });
+
   it("fails closed on missing or duplicate annotation receipt closure", () => {
     const empty = validate(request({
       expected_annotation_asset_receipt_refs: [],

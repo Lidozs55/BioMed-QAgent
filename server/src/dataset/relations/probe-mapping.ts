@@ -28,7 +28,7 @@ const CORE_POLICY_KEYS = new Set([
   "distinct_mapped_target_policy",
 ]);
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:@+-]*$/u;
-const SAFE_REF = /^[A-Za-z0-9][-A-Za-z0-9._:@/+]*$/u;
+const RECEIPT_REF = /^receipt:[A-Za-z0-9][A-Za-z0-9._:-]{0,247}$/u;
 const MAX_ID_LENGTH = 256;
 const MAX_REF_LENGTH = 1_024;
 
@@ -248,10 +248,10 @@ function safeId(value: unknown, path: string): string {
   return string;
 }
 
-function safeRef(value: unknown, path: string): string {
+function receiptRef(value: unknown, path: string): string {
   const string = canonicalWireString(value, path, MAX_REF_LENGTH);
-  if (!SAFE_REF.test(string) || string.split(/[\\/]/u).some((part) => part === "." || part === "..")) {
-    throw new TypeError(`${path} must be a safe reference`);
+  if (!RECEIPT_REF.test(string)) {
+    throw new TypeError(`${path} must be an opaque receipt: registry reference`);
   }
   return string;
 }
@@ -276,7 +276,7 @@ function parseAnnotationReceiptRef(
   validateAssetId(annotationAssetId);
   return {
     annotation_asset_id: annotationAssetId,
-    receipt_ref: safeRef(ownValue(object, "receipt_ref", path), `${path}.receipt_ref`),
+    receipt_ref: receiptRef(ownValue(object, "receipt_ref", path), `${path}.receipt_ref`),
   };
 }
 
