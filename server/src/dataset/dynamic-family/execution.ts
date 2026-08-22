@@ -272,12 +272,15 @@ function operationExpectation(
     input_asset_ids: expected.input_asset_receipts.map((receipt) => receipt.asset_id),
     upstream_result_manifest_ids: expected.input_result_receipts.map((receipt) => receipt.result_manifest_id),
     declared_schemas: expected.expected_outputs.map((output) => output.schema_ref),
-    declared_locators: [...new Set([
-      ...expected.input_asset_receipts.map((receipt) => receipt.locator_ref),
-      ...expected.input_result_receipts.map((receipt) => receipt.locator_ref),
-    ])],
+    declared_locators: expectedOutputLocatorClosure(expected.expected_outputs),
     committed_at: input.now?.().toISOString(),
   };
+}
+
+export function expectedOutputLocatorClosure(
+  outputs: ExpectedTransformInvocation["expected_outputs"],
+): string[] {
+  return [...new Set(outputs.map((output) => output.locator_ref))];
 }
 
 function sha256(value: string): string {

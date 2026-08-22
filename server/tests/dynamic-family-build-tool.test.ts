@@ -11,6 +11,7 @@ import {
   parseDynamicFamilyBuildSubmission,
 } from "../src/agent/tools/dynamic-family-build.js";
 import { submitDynamicFamilyBuild } from "../src/dataset/dynamic-family/submission.js";
+import { expectedOutputLocatorClosure } from "../src/dataset/dynamic-family/execution.js";
 import { publishDynamicFamily } from "../src/dataset/dynamic-family/publication.js";
 import { SourceAssetRegistry } from "../src/runtime/source-assets/registry.js";
 
@@ -93,6 +94,24 @@ async function submission(): Promise<Record<string, unknown>> {
 }
 
 describe("dynamic family build tool boundary", () => {
+  test("requires committed outputs only for locators used by declared outputs", () => {
+    const output = (tableId: string, locatorRef: string) => ({
+      table_id: tableId,
+      schema_ref: `schema_${tableId}`,
+      artifact_ref: `artifact_${tableId}`,
+      locator_ref: locatorRef,
+      relative_path: `tables/${tableId}.csv`,
+      delimiter: "," as const,
+      header: ["id"],
+      source_locators: [],
+    });
+    expect(expectedOutputLocatorClosure([
+      output("primary", "asset_source_a"),
+      output("supporting", "asset_source_a"),
+      output("derived", "asset_source_b"),
+    ])).toEqual(["asset_source_a", "asset_source_b"]);
+  });
+
   test("parses only an explicitly unisolated, digest-bound submission", async () => {
     const parsed = await parseDynamicFamilyBuildSubmission(await submission());
     expect(parsed.execution_backend).toBe("in_process_unisolated");
