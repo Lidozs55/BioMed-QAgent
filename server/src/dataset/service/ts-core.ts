@@ -92,7 +92,7 @@ export interface ProviderRevisionEvidenceContext {
   providerRevisionEvidence: readonly ProviderRevisionEvidenceV1[] | null;
 }
 
-export interface ValidateContext extends ProviderRevisionEvidenceContext {}
+export type ValidateContext = ProviderRevisionEvidenceContext;
 
 export interface ExecuteContext {
   runId: string;

@@ -240,9 +240,9 @@ describe("ProviderRevisionEvidence Dataset Core plumbing", () => {
       "!Sample_geo_accession = GSM1\n",
       "metadata",
     );
-    let context: ExecuteContext | null = null;
+    const contexts: ExecuteContext[] = [];
     vi.spyOn(core, "executeDatasetBuild").mockImplementation(async (buildSpec, received) => {
-      context = received;
+      contexts.push(received);
       return completedRecord(buildSpec.build_id);
     });
     const providerRevisionEvidence = [
@@ -262,11 +262,12 @@ describe("ProviderRevisionEvidence Dataset Core plumbing", () => {
     ));
 
     expect(envelope.ok).toBe(true);
-    expect(context).not.toBeNull();
-    expect(context?.providerRevisionEvidence).toEqual(providerRevisionEvidence);
-    expect(context?.sourceAssets?.binding_gdc?.successful_attempt_id).toBe(sourceReceipt.receipt_id);
-    expect(context?.mappingAssets?.binding_gdc?.successful_attempt_id).toBe(mappingReceipt.receipt_id);
-    expect(context?.metadataAssets?.binding_gdc?.successful_attempt_id).toBe(metadataReceipt.receipt_id);
+    const context = contexts[0];
+    if (context === undefined) throw new Error("execute context was not captured");
+    expect(context.providerRevisionEvidence).toEqual(providerRevisionEvidence);
+    expect(context.sourceAssets?.binding_gdc?.successful_attempt_id).toBe(sourceReceipt.receipt_id);
+    expect(context.mappingAssets?.binding_gdc?.successful_attempt_id).toBe(mappingReceipt.receipt_id);
+    expect(context.metadataAssets?.binding_gdc?.successful_attempt_id).toBe(metadataReceipt.receipt_id);
     await expect(registry.resolveRole(sourceReceipt.asset_ref.asset_id, "source")).resolves.toMatchObject({
       registration_receipt: { asset_ref: { role: "source" } },
     });
@@ -284,16 +285,16 @@ describe("ProviderRevisionEvidence Dataset Core plumbing", () => {
       path.join(taskRoot, "source_assets", "source.tsv"),
       "gene_id\tS1\nTP53\t1\n",
     );
-    let validateContext: ValidateContext | null = null;
-    let executeContext: ExecuteContext | null = null;
+    const validateContexts: ValidateContext[] = [];
+    const executeContexts: ExecuteContext[] = [];
     vi.spyOn(core, "validateDatasetBuildSpec").mockImplementation(async (_spec, context = {
       providerRevisionEvidence: null,
     }) => {
-      validateContext = context;
+      validateContexts.push(context);
       return { valid: true, reason_codes: [], reasons: [] };
     });
     vi.spyOn(core, "executeDatasetBuild").mockImplementation(async (buildSpec, context) => {
-      executeContext = context;
+      executeContexts.push(context);
       return completedRecord(buildSpec.build_id);
     });
 
@@ -311,8 +312,8 @@ describe("ProviderRevisionEvidence Dataset Core plumbing", () => {
 
     expect(validation.ok).toBe(true);
     expect(execution.ok).toBe(true);
-    expect(validateContext?.providerRevisionEvidence).toBeNull();
-    expect(executeContext?.providerRevisionEvidence).toBeNull();
+    expect(validateContexts[0]?.providerRevisionEvidence).toBeNull();
+    expect(executeContexts[0]?.providerRevisionEvidence).toBeNull();
     expect(() => requireAuthoritativeProviderRevisionEvidence({
       providerRevisionEvidence: null,
     })).toThrow(/requires provider revision evidence/);
