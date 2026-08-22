@@ -12,7 +12,7 @@ const MAX_PROVIDER_IDENTITY_LENGTH = 1_024;
 const MAX_REVISION_TOKEN_LENGTH = 1_024;
 const MAX_RELATIVE_PATH_LENGTH = 1_024;
 const MAX_MEDIA_TYPE_LENGTH = 256;
-const CONTROL_OR_BIDI = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u;
+const BIDI_CONTROL = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u;
 
 const EVIDENCE_KEYS = new Set([
   "schema_version",
@@ -104,7 +104,10 @@ function boundedEvidenceText(value: unknown, maximum: number, label: string): st
   if (value.normalize("NFC") !== value) {
     throw new TypeError(`${label} must be NFC-normalized`);
   }
-  if (CONTROL_OR_BIDI.test(value)) {
+  if ([...value].some((character) => {
+    const point = character.codePointAt(0);
+    return point !== undefined && (point <= 31 || (point >= 127 && point <= 159));
+  }) || BIDI_CONTROL.test(value)) {
     throw new TypeError(`${label} must not contain control characters`);
   }
   return value;
