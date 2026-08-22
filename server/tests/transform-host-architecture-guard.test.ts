@@ -25,6 +25,7 @@ const TRANSFORM_HOST = path.join(SERVER_SRC, "dataset", "transform-host");
 const STAGED_FAMILY_HOST_ROOTS = [
   TRANSFORM_HOST,
   path.join(SERVER_SRC, "dataset", "transform-admission"),
+  path.join(SERVER_SRC, "dataset", "build-spec-readmission"),
   path.join(SERVER_SRC, "dataset", "family-catalog"),
   path.join(SERVER_SRC, "dataset", "family-spec-admission"),
   path.join(SERVER_SRC, "dataset", "family-spec-topology"),
@@ -32,7 +33,7 @@ const STAGED_FAMILY_HOST_ROOTS = [
   path.join(SERVER_SRC, "dataset", "relations"),
   path.join(SERVER_SRC, "dataset", "validation", "disk-index.ts"),
 ] as const;
-const UNIQUELY_NAMED_STAGED_MODULE = /(?:^|[\\/])(?:transform-host|transform-admission|family-catalog|family-spec-admission|family-spec-topology|shadow-parity)(?:[\\/]|$)/;
+const UNIQUELY_NAMED_STAGED_MODULE = /(?:^|[\\/])(?:transform-host|transform-admission|build-spec-readmission|family-catalog|family-spec-admission|family-spec-topology|shadow-parity)(?:[\\/]|$)/;
 
 /** Remove comments while retaining strings, so policy terms in comments cannot trigger the guard. */
 function withoutComments(source: string): string {
@@ -255,6 +256,7 @@ describe("Transform Host architecture guard", () => {
     for (const moduleName of [
       "transform-host",
       "transform-admission",
+      "build-spec-readmission",
       "family-catalog",
       "family-spec-admission",
       "family-spec-topology",
