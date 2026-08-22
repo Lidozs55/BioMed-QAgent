@@ -24,18 +24,16 @@
 
 - [ ] 2026-08-14 复现：`server/tests/phase5/build-lock.test.ts` 在 `pnpm test` / `vitest run` 并行负载下偶发失败（真实子进程对文件锁的时序竞争 + CPU 争抢），单文件隔离 8/8 通过；与 settings/http/contracts/artifacts 分层重构无关。根治方向：进程间同步闩或放宽时窗/重试（详见 `docs/archive/LEFTOVERS-2026-08-09.md` §K1）。
 
-### Family Host M1 wire contract 安全阻塞（ADR-039 activation blocker）
+### Family Host M1 剩余收敛门（ADR-039 activation blocker）
 
-- [ ] `packages/contracts/src/family-transform.ts` 与 `runtime/primitives.ts` 的
-      `808279ac` 草案仍需关闭：prototype/accessor smuggling（parser 不得执行 getter）、
-      sparse array、`NaN`/Infinity、unsafe integer、identity scheme 静默纠正、无界/不安全
-      ID 与 receipt/digest closure。BuildSpec 2.0 还没有 proposal/resolved DTO 分离。
+- [x] 初始 `808279ac` 的 prototype/accessor smuggling、sparse array、`NaN`/Infinity、unsafe integer、
+      identity scheme coercion、无界/不安全 ID、receipt terminal/resource/output/cancel closure与
+      BuildSpec 2.0 proposal/resolved split，已由 `76df8008`、`3ed0ade5`、`f32f563f` 及 adversarial
+      contracts tests关闭；FamilySpec digest有唯一 helper/known vector，parser本身不自动授信digest。
+- [ ] 剩余 M1 门：独立 post-hardening red-team；纯 Core BuildSpec proposal→resolved re-admission；
+      HTTP/JSON ingress层 raw duplicate-key decoder（已构造JavaScript object parser无法追溯重复key）。
 - **当前风险状态**：ADR-039 仍 Proposed，动态 transform 未接生产，所以不是已上线 P0；
-  但在 adversarial contracts tests 与独立 Core re-admission 通过前，M1 不得标记 frozen，
-  B/C 只能落 disabled fixture 或纯模块。
-- **验收锚点**：`docs/TODO.md` A-T1/A-T3、`docs/plans/family-host/01-family-transform-contracts.md`、
-  `10-consistency-review.md`；至少覆盖 `__proto__`、getter reads=0、dense array、finite/safe number、
-  strict scheme/hash/time/cancel、known digest vector、1.0/2.0 hybrid rejection。
+  在上述门关闭前，B/C 只能落 disabled fixture 或 staging pure module，M1/M3不得宣称完成。
 
 ### Family Host 候选执行面需重做（不得原样合入）
 

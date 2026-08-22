@@ -9,10 +9,13 @@
 > 但**不得**接默认 build route、不得激活 Agent-authored transform、不得删除 static runtime。
 > 当前承诺截止：**Batch 0 + Batch 1 + Batch 2A（expression shadow）+ Batch 2B go/no-go**。
 >
-> **2026-08-22 red-team 状态**：`808279ac` 只作为 DTO/计划草案基线，不得再称为安全冻结的 M1。
-> Wire parser 仍需关闭 prototype/accessor、sparse array、non-finite/unsafe integer、identity-scheme
-> coercion、bounded safe ID 与 receipt/digest closure；BuildSpec 2.0 仍须拆 proposal/resolved。修复并通过
-> adversarial contracts tests 前，B/C 只能做 disabled/isolated fixture 或纯模块，M3 activation 继续阻塞。
+> **2026-08-22 red-team 状态**：`808279ac` 仅是初始 DTO/计划草案；其 wire-parser 缺口已由
+> `76df8008`、`3ed0ade5`、`f32f563f` 关闭：descriptor-safe own-data parsing、dense/finite/safe-number
+> 检查、strict identity scheme、bounded safe ID/ref、receipt terminal/resource/output/cancel closure、
+> BuildSpec 2.0 proposal/resolved 分离、FamilySpec canonical digest known vector 均有 adversarial tests。
+> M1 仍等待独立 post-hardening review、纯 Core BuildSpec re-admission，以及未来 HTTP/JSON ingress 的
+> raw duplicate-key decoder边界；因此 B/C 仍只可做 disabled/isolated fixture 或 staging pure module，
+> ADR-039 与 M3 activation 继续阻塞。
 
 ## 全局质量门（每次提交必过）
 
@@ -32,7 +35,7 @@
 ## 并行模型（最大化并行，最小化组间阻塞）
 
 - **解耦原则**：组间依赖只发生在「冻结契约类型」一层，**不发生在实现层**。计划文档 `01/02/03` 定义目标形状；
-  当前 contracts red-team blocker 关闭前，它们只可驱动 isolated fixture / pure-module 开发，不可视为 production-frozen admission ABI。
+  hardened contracts 可驱动 isolated fixture / staging pure-module 开发，但在 Core re-admission 与独立复核关闭前仍不可视为 production activation ABI。
 - **A 是唯一被依赖的组**，但只交付冻结的 DTO/parser/digest 算法/identity/B3 接口（一个小而明确的首批 PR），随后 B/C/D 并行。
 - **B（Host 生产者）与 C（Core 消费者）互相并行**：两者都针对 A 冻结的 `TransformExecutionReceipt` / `FamilySpec` /
   identity 类型编码；C 的 admission/checkpoint 用冻结 Receipt 类型 + 测试夹具驱动，**不依赖 B 的 worker 实现**。
@@ -76,6 +79,7 @@ Host 不是实际 OS sandbox；implementation digest 不覆盖 bundle/dependency
       - 验收：明确 production 仅允许独立低权限 OS/容器 backend；Windows 不达标则该平台禁激活
       - ⚠ 不得修改已 accepted ADR 的历史 Decision 文字以隐藏冲突（`09 §3` 禁止）
 - [ ] **A-T1** FamilySpec / DatasetTransform / TransformExecutionReceipt / BuildSpec 2.0 契约（依赖 A-T0）
+      - 状态：strict DTO/parser/canonical digest 与 proposal/resolved wire shape 已落地；Core re-admission 与独立 post-hardening review 在飞，故未勾选
       - 设计：`01-family-transform-contracts.md`（全）、`09 §2 T1`
       - 产物：`@biomed/contracts` strict DTO + parser、canonical digest fixtures（**冻结形状，供 B/C 消费**）
       - 验收：`DatasetBuildSpec 1.0` snapshot 不变；2.0 proposal 与 resolved spec 分离、Core re-admission 可独立测试；unknown field fail closed
@@ -121,6 +125,7 @@ Host 不是实际 OS sandbox；implementation digest 不覆盖 bundle/dependency
 > admission/checkpoint；与 B 仅类型耦合，M3 前不汇合。
 
 - [ ] **C-T4** B3 / resource baseline（依赖 A-T2 冻结 identity 类型）
+      - 状态：`d2153aa1` 已由 Core-receipted bytes 做 bounded measurement、cancel-aware preflight、Map 前阈值拒绝和 v2 telemetry；disk wiring、production measured threshold 与 immutable descriptor snapshot仍缺
       - 设计：`05-core-execution-product-gate.md §4 B3-D0`、`09 §2 T4`
       - 产物：现有 `validation/multitable.ts` benchmark/telemetry（row/key estimate、validator mode、heap/temp/duration/failure reason）、阈值、large-input benchmark harness（memory parity oracle）
       - 验收：超阈值强制 disk mode 或 fail closed，不再无界 `Map` 到 OOM
