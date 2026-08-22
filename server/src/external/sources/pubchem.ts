@@ -106,6 +106,7 @@ function searchPubchemProperties(
   term: string,
   fetched: FallbackFetchResult,
   context: SourceQueryContext,
+  queryCallToken: unknown,
 ): Record<string, unknown> | null {
   try {
     const data = JSON.parse(fetched.content) as unknown;
@@ -182,7 +183,7 @@ export async function searchPubchem(
   }
 
   if (fetched.method_used === "api") {
-    const parsed = searchPubchemProperties(term, fetched, context);
+    const parsed = searchPubchemProperties(term, fetched, context, queryCallToken);
     if (parsed !== null) return parsed;
   }
   context.onQuery?.(term, "pubchem", "page_fallback", 0, queryCallToken);

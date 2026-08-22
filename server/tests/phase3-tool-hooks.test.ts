@@ -187,13 +187,13 @@ describe("createPhase3ToolHooks query identity", () => {
     }
   });
 
-  it("pairs identical same-source queries FIFO because the hook API carries no call token", async () => {
+  it("pairs identical same-source queries FIFO when a legacy caller omits call tokens", async () => {
     const { payloads, recordRunEvent } = collect();
     const hooks = createPhase3ToolHooks(recordRunEvent, () => "run_1");
 
     // Two concurrent queries with the same query string from one source: the
-    // hook API has no call token to link an end to its start, so correlation
-    // is a deterministic FIFO approximation (first end closes the first start)
+    // A legacy caller omitted call tokens, so correlation is a deterministic
+    // FIFO approximation (first end closes the first start)
     // rather than traceable causality.
     hooks.onQueryStarted?.("TP53", "pubmed");
     hooks.onQueryStarted?.("TP53", "pubmed");
@@ -224,6 +224,48 @@ describe("createPhase3ToolHooks query identity", () => {
         ofType(payloads, "operation_completed").filter((p) => p.operation_id === id),
       ).toHaveLength(1);
     }
+  });
+
+  it("uses opaque tokens to correlate identical queries that finish out of order", async () => {
+    const { payloads, recordRunEvent } = collect();
+    const hooks = createPhase3ToolHooks(recordRunEvent, () => "run_1");
+
+    const first = hooks.onQueryStarted?.("TP53", "pubmed");
+    const second = hooks.onQueryStarted?.("TP53", "pubmed");
+    await flush();
+    hooks.onQuery?.("TP53", "pubmed", "success", 7, second);
+    await flush();
+    hooks.onQuery?.("TP53", "pubmed", "success", 5, first);
+    await flush();
+
+    expect(queryOperationIds(payloads)).toEqual([
+      "tool:pubmed:query:1",
+      "tool:pubmed:query:2",
+      "tool:pubmed:query:2",
+      "tool:pubmed:query:2",
+      "tool:pubmed:query:1",
+      "tool:pubmed:query:1",
+    ]);
+  });
+
+  it("does not let an unknown token consume a pending query identity", async () => {
+    const { payloads, recordRunEvent } = collect();
+    const hooks = createPhase3ToolHooks(recordRunEvent, () => "run_1");
+
+    const token = hooks.onQueryStarted?.("TP53", "geo");
+    await flush();
+    hooks.onQuery?.("TP53", "geo", "failed", 0, Object.freeze({ forged: true }));
+    await flush();
+    hooks.onQuery?.("TP53", "geo", "success", 1, token);
+    await flush();
+
+    expect(queryOperationIds(payloads)).toEqual([
+      "tool:geo:query:1",
+      "tool:geo:query:2",
+      "tool:geo:query:2",
+      "tool:geo:query:1",
+      "tool:geo:query:1",
+    ]);
   });
 
   it("gives sequential same-source queries distinct cards instead of reusing one operation_id", async () => {
