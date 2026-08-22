@@ -221,6 +221,8 @@ interface VerifiedRegisteredAsset {
   receipt: SourceAssetRegistrationReceipt;
 }
 
+class ProviderRevisionEvidenceError extends BuildError {}
+
 async function verifyRegisteredAssetStream(
   registry: SourceAssetRegistry,
   assetId: string,
@@ -256,32 +258,39 @@ async function bindProviderRevisionEvidence(
   const bound: ProviderRevisionEvidenceV1[] = [];
   const seen = new Set<string>();
   for (const value of values) {
-    const evidence = parseProviderRevisionEvidenceV1(value);
+    let evidence: ProviderRevisionEvidenceV1;
+    try {
+      evidence = parseProviderRevisionEvidenceV1(value);
+    } catch (error) {
+      throw new ProviderRevisionEvidenceError(
+        `provider revision evidence was rejected: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
     const receipt = evidence.source_asset_registration_receipt;
     if (receipt.task_id !== taskId || receipt.asset_ref.task_id !== taskId) {
-      throw new BuildError("provider revision evidence belongs to a different task");
+      throw new ProviderRevisionEvidenceError("provider revision evidence belongs to a different task");
     }
     const key = receiptKey(receipt);
     if (seen.has(key)) {
-      throw new BuildError(`provider revision evidence duplicates receipt '${receipt.receipt_id}'`);
+      throw new ProviderRevisionEvidenceError(`provider revision evidence duplicates receipt '${receipt.receipt_id}'`);
     }
     seen.add(key);
     let registered: SourceAssetRegistrationReceipt;
     try {
       registered = await registry.verifyRegistrationReceipt(receipt);
     } catch (error) {
-      throw new BuildError(
+      throw new ProviderRevisionEvidenceError(
         `provider revision evidence receipt was rejected: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
     const buildReceipt = buildReceipts?.get(key);
-    if (buildReceipts !== undefined && (
-      buildReceipt === undefined
-      || buildReceipt.receipt_id !== registered.receipt_id
-      || buildReceipt.sha256 !== registered.sha256
-      || buildReceipt.asset_ref.asset_id !== registered.asset_ref.asset_id
-    )) {
-      throw new BuildError("provider revision evidence is not bound to this build input receipt");
+    if (
+      buildReceipts !== undefined
+      && (buildReceipt === undefined || JSON.stringify(buildReceipt) !== JSON.stringify(registered))
+    ) {
+      throw new ProviderRevisionEvidenceError(
+        "provider revision evidence is not bound to this build input receipt",
+      );
     }
     bound.push(evidence);
   }
@@ -591,7 +600,7 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
           },
         };
       }
-      if (error instanceof BuildError || error instanceof TypeError) {
+      if (error instanceof ProviderRevisionEvidenceError) {
         return {
           version: DATASET_BRIDGE_VERSION,
           request_id: newRequestId(),
@@ -599,8 +608,22 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
           data: null,
           error: {
             code: "core_execution_error",
-            message: error instanceof Error ? error.message : String(error),
+            message: error.message,
             retryable: false,
+            details: {},
+          },
+        };
+      }
+      if (error instanceof BuildError) {
+        return {
+          version: DATASET_BRIDGE_VERSION,
+          request_id: newRequestId(),
+          ok: false,
+          data: null,
+          error: {
+            code: "core_execution_error",
+            message: error.message,
+            retryable: true,
             details: {},
           },
         };
