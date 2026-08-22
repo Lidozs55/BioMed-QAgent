@@ -124,6 +124,18 @@ describe("TASK-C1I Core source asset registry", () => {
           request_identity_digest: "b".repeat(64),
         },
       });
+      await restarted.registerCoreAcquisitionProvenance(receipt, {
+        provider_id: "chembl.files.v1",
+        implementation_digest: "a".repeat(64),
+        request_identity_digest: "c".repeat(64),
+      });
+      const deduplicated = new SourceAssetRegistry("task_c1i", root);
+      await expect(deduplicated.resolveCoreAcquired(receipt.asset_ref.asset_id))
+        .rejects.toThrow(/ambiguous Core acquisition provenance/);
+      await expect(deduplicated.resolveCoreAcquired(receipt.asset_ref.asset_id, "c".repeat(64)))
+        .resolves.toMatchObject({
+          acquisition_provenance: { request_identity_digest: "c".repeat(64) },
+        });
     } finally {
       await rm(root, { recursive: true, force: true });
     }

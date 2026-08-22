@@ -476,6 +476,7 @@ export async function createPhase3Runtime(
       const dynamicFamilyTool = createDynamicFamilyBuildTool({
         submit: async (submission, signal) => {
           const registeredSources: Record<string, string> = { ...submission.registered_sources };
+          const acquisitionRequestDigests: Record<string, string> = {};
           for (const [bindingId, request] of Object.entries(submission.acquisition_requests)) {
             const acquired = await acquisitionRuntime.acquire({
               schema_version: "1.0",
@@ -493,6 +494,7 @@ export async function createPhase3Runtime(
               throw new Error(`Core acquisition did not register source binding '${bindingId}'`);
             }
             registeredSources[bindingId] = acquired.sourceAsset.asset_id;
+            acquisitionRequestDigests[bindingId] = acquired.requestIdentityDigest;
           }
           const resolvedSubmission = Object.freeze({
             ...submission,
@@ -507,6 +509,7 @@ export async function createPhase3Runtime(
             sourceAssetRegistry,
             taskRoot,
             runtimeLimits: limits,
+            sourceAcquisitionRequestDigests: Object.freeze(acquisitionRequestDigests),
             signal,
           });
           const product = await publishDynamicFamily({

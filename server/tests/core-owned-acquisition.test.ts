@@ -146,6 +146,22 @@ describe("TASK-C2I Core-owned acquisition", () => {
         request_identity_digest: result.requestIdentityDigest,
       },
     });
+
+    const second = await fixture.runtime.acquire({
+      ...request(),
+      request_id: "request_second",
+      build_id: "build_second",
+    });
+    expect(second.sourceAsset?.asset_id).toBe(result.sourceAsset.asset_id);
+    expect(second.requestIdentityDigest).not.toBe(result.requestIdentityDigest);
+    await expect(fixture.assets.resolveCoreAcquired(
+      result.sourceAsset.asset_id,
+      second.requestIdentityDigest,
+    )).resolves.toMatchObject({
+      acquisition_provenance: { request_identity_digest: second.requestIdentityDigest },
+    });
+    await expect(fixture.assets.resolveCoreAcquired(result.sourceAsset.asset_id))
+      .rejects.toThrow(/ambiguous Core acquisition provenance/);
     const chunks: Buffer[] = [];
     for await (const chunk of resolved.content) chunks.push(Buffer.from(chunk));
     expect(Buffer.concat(chunks)).toEqual(Buffer.from(CONTENT));

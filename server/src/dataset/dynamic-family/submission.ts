@@ -38,6 +38,8 @@ export interface SubmitDynamicFamilyBuildInput {
   readonly sourceAssetRegistry: SourceAssetRegistry;
   readonly taskRoot: string;
   readonly runtimeLimits: RuntimeLimits;
+  /** Core-internal exact acquisition identity selection; never accepted from the Agent. */
+  readonly sourceAcquisitionRequestDigests?: Readonly<Record<string, string>>;
   readonly signal?: AbortSignal;
   readonly now?: () => Date;
 }
@@ -75,7 +77,10 @@ export async function submitDynamicFamilyBuild(
       throw new TypeError(`transform input role does not match binding '${binding.binding_id}'`);
     }
     const assetId = input.submission.registered_sources[binding.binding_id]!;
-    const resolved = await input.sourceAssetRegistry.resolveCoreAcquired(assetId);
+    const resolved = await input.sourceAssetRegistry.resolveCoreAcquired(
+      assetId,
+      input.sourceAcquisitionRequestDigests?.[binding.binding_id],
+    );
     const bytes = await collectBytes(resolved.content, 512 * 1024 * 1024);
     const registration = resolved.registration_receipt;
     sourceAcquisitionProvenance.push(resolved.acquisition_provenance);

@@ -84,6 +84,14 @@ function registrationKey(assetId: string, role: RegisteredSourceAssetRole): stri
   return `${assetId}:${role}`;
 }
 
+function provenanceKey(
+  assetId: string,
+  role: RegisteredSourceAssetRole,
+  requestIdentityDigest: string,
+): string {
+  return `${registrationKey(assetId, role)}:${requestIdentityDigest}`;
+}
+
 /** Core-owned, task-scoped source asset registration and resolution seam. */
 export class SourceAssetRegistry {
   private readonly root: string;
@@ -124,7 +132,16 @@ export class SourceAssetRegistry {
       if (!Array.isArray(provenanceRecords)) throw new TypeError("Core acquisition provenance must be an array");
       for (const value of provenanceRecords) {
         const provenance = parseCoreAcquisitionProvenance(value, this.taskId);
-        this.coreAcquisitions.set(registrationKey(provenance.asset_id, provenance.role), provenance);
+        const key = provenanceKey(
+          provenance.asset_id,
+          provenance.role,
+          provenance.request_identity_digest,
+        );
+        const existing = this.coreAcquisitions.get(key);
+        if (existing !== undefined && JSON.stringify(existing) !== JSON.stringify(provenance)) {
+          throw new Error("Core acquisition provenance contains a conflicting duplicate request identity");
+        }
+        this.coreAcquisitions.set(key, provenance);
       }
     }
     this.loaded = true;
@@ -245,21 +262,40 @@ export class SourceAssetRegistry {
       role: receipt.asset_ref.role,
       ...input,
     }, this.taskId);
-    const existing = this.coreAcquisitions.get(key);
+    const acquisitionKey = provenanceKey(
+      receipt.asset_ref.asset_id,
+      receipt.asset_ref.role,
+      provenance.request_identity_digest,
+    );
+    const existing = this.coreAcquisitions.get(acquisitionKey);
     if (existing !== undefined && JSON.stringify(existing) !== JSON.stringify(provenance)) {
-      throw new Error("registered asset already has conflicting Core acquisition provenance");
+      throw new Error("registered asset has conflicting provenance for the same request identity");
     }
-    this.coreAcquisitions.set(key, provenance);
+    this.coreAcquisitions.set(acquisitionKey, provenance);
     await this.persistCoreAcquisitions();
     return structuredClone(provenance);
   }
 
-  async resolveCoreAcquired(assetId: string): Promise<CoreResolvedAcquiredAsset> {
+  async resolveCoreAcquired(
+    assetId: string,
+    requestIdentityDigest?: string,
+  ): Promise<CoreResolvedAcquiredAsset> {
     await this.load();
     const receipt = this.registrations.get(registrationKey(assetId, "carrier")) ??
       this.registrations.get(registrationKey(assetId, "source"));
     if (receipt === undefined) throw new Error("registered asset was not found");
-    const provenance = this.coreAcquisitions.get(registrationKey(assetId, receipt.asset_ref.role));
+    if (requestIdentityDigest !== undefined && !DIGEST.test(requestIdentityDigest)) {
+      throw new TypeError("Core acquisition request identity digest is invalid");
+    }
+    const matches = [...this.coreAcquisitions.values()].filter((value) =>
+      value.asset_id === assetId
+      && value.role === receipt.asset_ref.role
+      && (requestIdentityDigest === undefined || value.request_identity_digest === requestIdentityDigest),
+    );
+    if (matches.length > 1) {
+      throw new Error("formal dynamic carrier has ambiguous Core acquisition provenance");
+    }
+    const provenance = matches[0];
     if (
       provenance === undefined
       || provenance.task_id !== receipt.task_id
