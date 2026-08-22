@@ -20,9 +20,18 @@ import { sha256Bytes } from "./hashing.js";
 const SDK_MODULE = "@biomed/transform-sdk/v1";
 const RUNTIME_POLICY = "in-process-unisolated.1";
 
+export interface InProcessUnisolatedInputBytes {
+  readonly handle: string;
+  readonly receiptKind: "asset" | "result";
+  readonly receiptId: string;
+  readonly bytes: Uint8Array;
+}
+
 export interface InProcessUnisolatedRequest {
   readonly authorityClaim: CoreAuthorityClaim;
   readonly bundle: StoredTransformBundle;
+  /** Exact Core-owned registered bytes in authority inputHandles order. */
+  readonly inputs?: readonly Readonly<InProcessUnisolatedInputBytes>[];
   readonly signal?: AbortSignal;
   readonly isGenerationCurrent: (generation: number, cancelFence: string) => boolean;
 }
@@ -59,6 +68,13 @@ interface WireOutput {
 
 interface WireResult {
   outputs: WireOutput[];
+}
+
+interface RuntimeInput {
+  readonly handle: string;
+  readonly receipt_kind: "asset" | "result";
+  readonly receipt_id: string;
+  readonly text: string;
 }
 
 /**
@@ -102,6 +118,11 @@ export class InProcessUnisolatedTransformHost {
       throw conflict("Bundle is not the exact admitted in-process generation");
     }
 
+    // Validate all input identities and bytes before any admitted module code runs.
+    const preparedInputs = prepareRuntimeInputs(request.inputs, this.#context);
+    const runtimeInputs = preparedInputs.inputs;
+    const inputBytes = preparedInputs.sizeBytes;
+
     // readVerifiedBytes re-hashes the retained FD immediately before execution.
     const bundleBytes = await this.#store.readVerifiedBytes(request.authorityClaim, request.bundle);
     if (sha256Bytes(bundleBytes) !== this.#context.bundleDigest) {
@@ -117,7 +138,17 @@ export class InProcessUnisolatedTransformHost {
       Math.max(0, deadlineMs - startedMs),
     );
     if (wallBudgetMs < 1) {
-      return this.#terminalResult("timeout", started, started, [], "", "deadline elapsed", request);
+      return this.#terminalResult(
+        "timeout",
+        started,
+        started,
+        [],
+        "",
+        "deadline elapsed",
+        request,
+        0,
+        inputBytes,
+      );
     }
 
     const logs = new BoundedLog(this.#context.resourceLimits.log_bytes);
@@ -130,6 +161,7 @@ export class InProcessUnisolatedTransformHost {
         new TextDecoder().decode(bundleBytes),
         Math.max(1, Math.floor(wallBudgetMs)),
         logs,
+        runtimeInputs,
       );
       wireResult = parseWireResult(rawResult, this.#context.outputHandles);
     } catch (error) {
@@ -155,6 +187,7 @@ export class InProcessUnisolatedTransformHost {
         `${logs.stderr}${errorDetail}`,
         request,
         elapsedMs,
+        inputBytes,
       );
     }
 
@@ -175,6 +208,7 @@ export class InProcessUnisolatedTransformHost {
           `${logs.stderr}Transform output exceeds output_bytes`,
           request,
           elapsedMs,
+          inputBytes,
         );
       }
       const digest = sha256Bytes(bytes);
@@ -200,6 +234,7 @@ export class InProcessUnisolatedTransformHost {
       logs.stderr,
       request,
       elapsedMs,
+      inputBytes,
       outputBytes,
     );
   }
@@ -220,6 +255,7 @@ export class InProcessUnisolatedTransformHost {
     stderr: string,
     request: InProcessUnisolatedRequest,
     wallMs = 0,
+    inputBytes = 0,
   ): InProcessUnisolatedResult {
     return this.#result(
       terminal,
@@ -231,6 +267,7 @@ export class InProcessUnisolatedTransformHost {
       stderr,
       request,
       wallMs,
+      inputBytes,
       0,
     );
   }
@@ -245,6 +282,7 @@ export class InProcessUnisolatedTransformHost {
     stderr: string,
     request: InProcessUnisolatedRequest,
     wallMs: number,
+    inputBytes: number,
     outputBytes: number,
   ): InProcessUnisolatedResult {
     this.#assertFence(request);
@@ -284,7 +322,7 @@ export class InProcessUnisolatedTransformHost {
       wall_ms: Math.min(wallMs, this.#context.resourceLimits.wall_ms),
       cpu_ms: 0,
       rss_bytes: 0,
-      temp_bytes: 0,
+      temp_bytes: inputBytes,
       output_bytes: outputBytes,
       log_bytes: stdoutBytes + stderrBytes,
       quarantined_output_receipts: outputReceipts.map((entry) => ({ ...entry })),
@@ -346,10 +384,105 @@ class BoundedLog {
   get stderr(): string { return this.#stderr; }
 }
 
-function executeBundle(bundle: string, timeoutMs: number, logs: BoundedLog): unknown {
+function prepareRuntimeInputs(
+  provided: readonly Readonly<InProcessUnisolatedInputBytes>[] | undefined,
+  context: CoreAuthoritativeTransformContext,
+): { readonly inputs: readonly RuntimeInput[]; readonly sizeBytes: number } {
+  const inputs = provided ?? Object.freeze([]);
+  if (inputs.length !== context.inputHandles.length) {
+    throw invalid("Request inputs must exactly match the Core-owned input handle closure");
+  }
+
+  const assetReceipts = new Map(
+    context.inputAssetReceipts.map((receipt) => [receipt.asset_id, receipt] as const),
+  );
+  const resultReceipts = new Map(
+    context.inputResultReceipts.map((receipt) => [receipt.result_manifest_id, receipt] as const),
+  );
+  const runtimeInputs: RuntimeInput[] = [];
+  let sizeBytes = 0;
+
+  for (const [index, expectedHandle] of context.inputHandles.entries()) {
+    const input = inputs[index];
+    if (input === undefined || !isInputBytes(input)) {
+      throw invalid(`Request input ${index} must be a plain registered-byte input`);
+    }
+    if (
+      input.handle !== expectedHandle.handle
+      || input.receiptKind !== expectedHandle.receiptKind
+      || input.receiptId !== expectedHandle.receiptId
+    ) {
+      throw invalid("Request input order or Core-owned handle binding does not match authority");
+    }
+
+    const receipt = input.receiptKind === "asset"
+      ? assetReceipts.get(input.receiptId)
+      : resultReceipts.get(input.receiptId);
+    if (receipt === undefined) {
+      throw invalid("Request input is not owned by the Core-authoritative receipt closure");
+    }
+
+    // Snapshot mutable caller memory before size/digest checks so the transform
+    // receives text derived from the exact bytes that were re-hashed here.
+    const bytes = Uint8Array.from(input.bytes);
+    if (bytes.byteLength !== receipt.size_bytes || sha256Bytes(bytes) !== receipt.sha256) {
+      throw invalid("Request input bytes do not match the Core-authoritative receipt");
+    }
+    sizeBytes += bytes.byteLength;
+    if (sizeBytes > context.resourceLimits.temp_bytes) {
+      throw new TransformHostError(
+        "resource_limit_exceeded",
+        "Aggregate transform input bytes exceed temp_bytes",
+      );
+    }
+    runtimeInputs.push(Object.freeze({
+      handle: input.handle,
+      receipt_kind: input.receiptKind,
+      receipt_id: input.receiptId,
+      text: new TextDecoder().decode(bytes),
+    }));
+  }
+
+  return Object.freeze({
+    inputs: Object.freeze(runtimeInputs),
+    sizeBytes,
+  });
+}
+
+function isInputBytes(value: unknown): value is Readonly<InProcessUnisolatedInputBytes> {
+  if (
+    typeof value !== "object"
+    || value === null
+    || Array.isArray(value)
+    || types.isProxy(value)
+  ) {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return false;
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const keys = Object.keys(descriptors).sort();
+  if (keys.join(",") !== "bytes,handle,receiptId,receiptKind") return false;
+  const record = value as Record<string, unknown>;
+  return keys.every((key) => {
+    const descriptor = descriptors[key];
+    return descriptor !== undefined && "value" in descriptor && descriptor.enumerable;
+  }) && typeof record.handle === "string"
+    && (record.receiptKind === "asset" || record.receiptKind === "result")
+    && typeof record.receiptId === "string"
+    && record.bytes instanceof Uint8Array;
+}
+
+function executeBundle(
+  bundle: string,
+  timeoutMs: number,
+  logs: BoundedLog,
+  inputs: readonly RuntimeInput[],
+): unknown {
   const sdk = Object.freeze({
     defineTransform: (definition: unknown) => definition,
   });
+  const runtimeRequest = Object.freeze({ inputs });
   const context = vm.createContext({
     console: Object.freeze({
       log: (...values: unknown[]) => logs.write("stdout", values),
@@ -364,8 +497,9 @@ function executeBundle(bundle: string, timeoutMs: number, logs: BoundedLog): unk
     },
   });
   context.exports = (context.module as { exports: unknown }).exports;
+  context.__transformRequest = runtimeRequest;
   const script = new vm.Script(
-    `${bundle}\n;globalThis.__transformResult = module.exports.transform.run();`,
+    `${bundle}\n;globalThis.__transformResult = module.exports.transform.run(globalThis.__transformRequest);`,
     { filename: "admitted-transform.cjs" },
   );
   script.runInContext(context, { timeout: timeoutMs });

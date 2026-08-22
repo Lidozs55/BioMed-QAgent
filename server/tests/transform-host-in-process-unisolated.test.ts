@@ -2,7 +2,7 @@ import { chmod, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import type { ResourceLimits } from "@biomed/contracts";
+import type { InputAssetReceipt, ResourceLimits } from "@biomed/contracts";
 import { afterEach, describe, expect, test } from "vitest";
 
 import {
@@ -14,6 +14,7 @@ import {
   type CoreAuthoritativeTransformContext,
   type CoreAuthorityClaim,
   type InProcessUnisolatedCompilationResult,
+  type InProcessUnisolatedInputBytes,
 } from "../src/dataset/transform-host/index.js";
 
 const HEX_B = "b".repeat(64);
@@ -47,6 +48,26 @@ export const transform = defineTransform({
 });
 `;
 
+const INPUT_SOURCE = `
+import { defineTransform } from "@biomed/transform-sdk/v1";
+export const transform = defineTransform({
+  run({ inputs }) {
+    const [input] = inputs;
+    if (!Object.isFrozen(inputs) || !Object.isFrozen(input)) {
+      throw new Error("inputs are mutable");
+    }
+    return { outputs: [{
+      handle: "out_table",
+      table_id: "table_one",
+      schema_ref: "schema:one",
+      locator_ref: input.receipt_kind + ":" + input.receipt_id,
+      content: input.text,
+      row_count: input.text.trim().split("\\n").length - 1,
+    }] };
+  },
+});
+`;
+
 const TIMEOUT_SOURCE = `
 import { defineTransform } from "@biomed/transform-sdk/v1";
 export const transform = defineTransform({ run() { while (true) {} } });
@@ -56,7 +77,16 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-function context(compiled: InProcessUnisolatedCompilationResult): CoreAuthoritativeTransformContext {
+interface ContextOptions {
+  readonly inputHandles?: CoreAuthoritativeTransformContext["inputHandles"];
+  readonly inputAssetReceipts?: readonly Readonly<InputAssetReceipt>[];
+  readonly resourceLimits?: Readonly<ResourceLimits>;
+}
+
+function context(
+  compiled: InProcessUnisolatedCompilationResult,
+  options: ContextOptions = {},
+): CoreAuthoritativeTransformContext {
   return Object.freeze({
     authorizationToken: Object.freeze({ capability: "in-process-unisolated" }),
     taskId: "task_1",
@@ -77,12 +107,12 @@ function context(compiled: InProcessUnisolatedCompilationResult): CoreAuthoritat
     runtimeDigest: sha256Bytes(compiled.runtimeAbiVersion),
     policyDigest: compiled.policyDigest,
     resourceClassId: "fixture",
-    resourceLimits: LIMITS,
+    resourceLimits: options.resourceLimits ?? LIMITS,
     deadline: "2030-01-01T00:00:00.000Z",
     cancelFence: "cancel_1",
-    inputHandles: Object.freeze([]),
+    inputHandles: options.inputHandles ?? Object.freeze([]),
     outputHandles: Object.freeze(["out_table"]),
-    inputAssetReceipts: Object.freeze([]),
+    inputAssetReceipts: options.inputAssetReceipts ?? Object.freeze([]),
     inputResultReceipts: Object.freeze([]),
   });
 }
@@ -95,7 +125,7 @@ function claim(authority: CoreAuthoritativeTransformContext): CoreAuthorityClaim
   });
 }
 
-async function setup(source: string): Promise<{
+async function setup(source: string, options: ContextOptions = {}): Promise<{
   authority: CoreAuthoritativeTransformContext;
   authorityClaim: CoreAuthorityClaim;
   bundle: Awaited<ReturnType<TransformBundleStore["put"]>>;
@@ -104,7 +134,7 @@ async function setup(source: string): Promise<{
   store: TransformBundleStore;
 }> {
   const compiled = await compileTransformInProcessUnisolated({ source });
-  const authority = context(compiled);
+  const authority = context(compiled, options);
   const authorityClaim = claim(authority);
   const root = await mkdtemp(path.join(tmpdir(), "transform-unisolated-"));
   roots.push(root);
@@ -123,6 +153,39 @@ async function setup(source: string): Promise<{
 
 function current(): boolean {
   return true;
+}
+
+function assetInput(
+  handle: string,
+  text: string,
+): {
+  readonly handle: Readonly<CoreAuthoritativeTransformContext["inputHandles"][number]>;
+  readonly receipt: Readonly<InputAssetReceipt>;
+  readonly request: Readonly<InProcessUnisolatedInputBytes>;
+} {
+  const bytes = new TextEncoder().encode(text);
+  const digest = sha256Bytes(bytes);
+  const receipt = Object.freeze({
+    asset_id: `asset_${digest}`,
+    role: "source_table",
+    sha256: digest,
+    size_bytes: bytes.byteLength,
+    locator_ref: `registered:${digest}`,
+  });
+  return {
+    handle: Object.freeze({
+      handle,
+      receiptKind: "asset",
+      receiptId: receipt.asset_id,
+    }),
+    receipt,
+    request: Object.freeze({
+      handle,
+      receiptKind: "asset",
+      receiptId: receipt.asset_id,
+      bytes,
+    }),
+  };
 }
 
 describe("explicit in-process unisolated Transform Host", () => {
@@ -185,6 +248,103 @@ describe("explicit in-process unisolated Transform Host", () => {
       );
       expect(result.stdout).toBe("transform-ok\n");
       expect(new TextDecoder().decode(result.outputs[0]?.bytes)).toBe("gene,value\nTP53,1\n");
+    } finally {
+      await fixture.store.dispose();
+    }
+  });
+
+  test("passes exact registered asset text as an immutable SDK input", async () => {
+    const input = assetInput("in_source", "gene,value\nTP53,1\n");
+    const fixture = await setup(INPUT_SOURCE, {
+      inputHandles: Object.freeze([input.handle]),
+      inputAssetReceipts: Object.freeze([input.receipt]),
+    });
+    try {
+      const result = await fixture.host.execute({
+        authorityClaim: fixture.authorityClaim,
+        bundle: fixture.bundle,
+        inputs: Object.freeze([input.request]),
+        isGenerationCurrent: current,
+      });
+
+      expect(result.receipt).toMatchObject({
+        exit_state: "succeeded",
+        temp_bytes: input.receipt.size_bytes,
+      });
+      expect(result.receipt.quarantined_output_receipts[0]?.locator_ref).toBe(
+        `asset:${input.receipt.asset_id}`,
+      );
+      expect(new TextDecoder().decode(result.outputs[0]?.bytes)).toBe("gene,value\nTP53,1\n");
+    } finally {
+      await fixture.store.dispose();
+    }
+  });
+
+  test("rejects input hash tampering before running admitted code", async () => {
+    const input = assetInput("in_source", "gene,value\nTP53,1\n");
+    const fixture = await setup(INPUT_SOURCE, {
+      inputHandles: Object.freeze([input.handle]),
+      inputAssetReceipts: Object.freeze([input.receipt]),
+    });
+    try {
+      const tampered = Object.freeze({
+        ...input.request,
+        bytes: new TextEncoder().encode("gene,value\nTP53,2\n"),
+      });
+      await expect(fixture.host.execute({
+        authorityClaim: fixture.authorityClaim,
+        bundle: fixture.bundle,
+        inputs: Object.freeze([tampered]),
+        isGenerationCurrent: current,
+      })).rejects.toMatchObject({ code: "runtime_invalid" });
+    } finally {
+      await fixture.store.dispose();
+    }
+  });
+
+  test("rejects missing, extra, and out-of-order registered inputs", async () => {
+    const first = assetInput("in_first", "gene,value\nTP53,1\n");
+    const second = assetInput("in_second", "gene,value\nBRCA1,2\n");
+    const fixture = await setup(INPUT_SOURCE, {
+      inputHandles: Object.freeze([first.handle, second.handle]),
+      inputAssetReceipts: Object.freeze([first.receipt, second.receipt]),
+    });
+    try {
+      const execute = (inputs: readonly Readonly<InProcessUnisolatedInputBytes>[]) =>
+        fixture.host.execute({
+          authorityClaim: fixture.authorityClaim,
+          bundle: fixture.bundle,
+          inputs,
+          isGenerationCurrent: current,
+        });
+
+      await expect(execute(Object.freeze([first.request]))).rejects.toMatchObject({
+        code: "runtime_invalid",
+      });
+      await expect(execute(Object.freeze([first.request, second.request, first.request])))
+        .rejects.toMatchObject({ code: "runtime_invalid" });
+      await expect(execute(Object.freeze([second.request, first.request]))).rejects.toMatchObject({
+        code: "runtime_invalid",
+      });
+    } finally {
+      await fixture.store.dispose();
+    }
+  });
+
+  test("rejects aggregate registered input bytes above temp_bytes", async () => {
+    const input = assetInput("in_source", "gene,value\nTP53,1\n");
+    const fixture = await setup(INPUT_SOURCE, {
+      inputHandles: Object.freeze([input.handle]),
+      inputAssetReceipts: Object.freeze([input.receipt]),
+      resourceLimits: Object.freeze({ ...LIMITS, temp_bytes: input.receipt.size_bytes - 1 }),
+    });
+    try {
+      await expect(fixture.host.execute({
+        authorityClaim: fixture.authorityClaim,
+        bundle: fixture.bundle,
+        inputs: Object.freeze([input.request]),
+        isGenerationCurrent: current,
+      })).rejects.toMatchObject({ code: "resource_limit_exceeded" });
     } finally {
       await fixture.store.dispose();
     }
