@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { PlusIcon, TrashIcon } from "@phosphor-icons/react";
 
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -189,6 +190,11 @@ export function AgentPermissionSettingsSection({ api }: AgentPermissionSettingsS
         </CardContent>
       </Card>
 
+      <Accordion className="rounded-lg border px-4" defaultValue={[]}>
+        <AccordionItem value="advanced-acl" className="border-0">
+          <AccordionTrigger>高级 ACL 设置</AccordionTrigger>
+          <AccordionContent>
+            <div className="flex flex-col gap-6">
       <Card>
         <CardHeader>
           <CardTitle>已授权目录</CardTitle>
@@ -401,6 +407,11 @@ export function AgentPermissionSettingsSection({ api }: AgentPermissionSettingsS
           )}
         </CardContent>
       </Card>
+
+            </div>
+          </AccordionContent>
+        </AccordionItem>
+      </Accordion>
 
       {error !== null && (
         <Alert variant="destructive">

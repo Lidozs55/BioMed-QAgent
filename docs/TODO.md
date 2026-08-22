@@ -192,7 +192,7 @@ Host 不是实际 OS sandbox；implementation digest 不覆盖 bundle/dependency
 ### P1
 - [x] **model-registry wire-boundary 校验**：`@biomed/contracts` 已增加 `parseProvidersEnvelope` / `parseManagedModelsEnvelope` runtime parsers并替换frontend list casts；focused hostile-wire tests已覆盖。
 - [ ] **Phase 9 后续 — HIL/Questionnaire**：`UserInputDialog` 迁移到同一 Questionnaire 基础设施。
-- [ ] **Phase 9 后续 — 权限设置页重排**：默认层与高级 ACL 编辑器。
+- [x] **Phase 9 后续 — 权限设置页重排**：默认层与高级 ACL 编辑器。
 - [x] **AI用户支持文档**：新增`docs/AGENT_API_QUICKSTART.md`；stdlib-only `scripts/run-driver.mjs`现支持health就绪重试、create/submit/snapshot/events durable replay，且有进程级HTTP测试。
 
 ### P2
