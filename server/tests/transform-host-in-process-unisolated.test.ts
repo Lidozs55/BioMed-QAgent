@@ -280,6 +280,64 @@ describe("explicit in-process unisolated Transform Host", () => {
     }
   });
 
+  test("rejects mutable input containers before running admitted code", async () => {
+    const input = assetInput("in_source", "gene,value\nTP53,1\n");
+    const fixture = await setup(INPUT_SOURCE, {
+      inputHandles: Object.freeze([input.handle]),
+      inputAssetReceipts: Object.freeze([input.receipt]),
+    });
+    try {
+      await expect(fixture.host.execute({
+        authorityClaim: fixture.authorityClaim,
+        bundle: fixture.bundle,
+        inputs: [input.request],
+        isGenerationCurrent: current,
+      })).rejects.toMatchObject({ code: "runtime_invalid" });
+      await expect(fixture.host.execute({
+        authorityClaim: fixture.authorityClaim,
+        bundle: fixture.bundle,
+        inputs: Object.freeze([{ ...input.request }]),
+        isGenerationCurrent: current,
+      })).rejects.toMatchObject({ code: "runtime_invalid" });
+    } finally {
+      await fixture.store.dispose();
+    }
+  });
+
+  test("rejects registered bytes that are not valid UTF-8", async () => {
+    const bytes = Uint8Array.from([0xc3, 0x28]);
+    const digest = sha256Bytes(bytes);
+    const receipt = Object.freeze({
+      asset_id: `asset_${digest}`,
+      role: "source_table",
+      sha256: digest,
+      size_bytes: bytes.byteLength,
+      locator_ref: `registered:${digest}`,
+    });
+    const handle = Object.freeze({
+      handle: "in_source",
+      receiptKind: "asset" as const,
+      receiptId: receipt.asset_id,
+    });
+    const fixture = await setup(INPUT_SOURCE, {
+      inputHandles: Object.freeze([handle]),
+      inputAssetReceipts: Object.freeze([receipt]),
+    });
+    try {
+      await expect(fixture.host.execute({
+        authorityClaim: fixture.authorityClaim,
+        bundle: fixture.bundle,
+        inputs: Object.freeze([Object.freeze({
+          ...handle,
+          bytes,
+        })]),
+        isGenerationCurrent: current,
+      })).rejects.toMatchObject({ code: "runtime_invalid" });
+    } finally {
+      await fixture.store.dispose();
+    }
+  });
+
   test("rejects input hash tampering before running admitted code", async () => {
     const input = assetInput("in_source", "gene,value\nTP53,1\n");
     const fixture = await setup(INPUT_SOURCE, {

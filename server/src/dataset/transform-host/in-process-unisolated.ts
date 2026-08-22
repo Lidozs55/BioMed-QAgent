@@ -389,6 +389,9 @@ function prepareRuntimeInputs(
   context: CoreAuthoritativeTransformContext,
 ): { readonly inputs: readonly RuntimeInput[]; readonly sizeBytes: number } {
   const inputs = provided ?? Object.freeze([]);
+  if (!Object.isFrozen(inputs) || types.isProxy(inputs) || Object.getPrototypeOf(inputs) !== Array.prototype) {
+    throw invalid("Request inputs must be a frozen plain non-Proxy array");
+  }
   if (inputs.length !== context.inputHandles.length) {
     throw invalid("Request inputs must exactly match the Core-owned input handle closure");
   }
@@ -435,11 +438,21 @@ function prepareRuntimeInputs(
         "Aggregate transform input bytes exceed temp_bytes",
       );
     }
+    let text: string;
+    try {
+      text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch (error) {
+      throw new TransformHostError(
+        "runtime_invalid",
+        "Registered transform input must contain valid UTF-8 text",
+        { cause: error },
+      );
+    }
     runtimeInputs.push(Object.freeze({
       handle: input.handle,
       receipt_kind: input.receiptKind,
       receipt_id: input.receiptId,
-      text: new TextDecoder().decode(bytes),
+      text,
     }));
   }
 
@@ -455,6 +468,7 @@ function isInputBytes(value: unknown): value is Readonly<InProcessUnisolatedInpu
     || value === null
     || Array.isArray(value)
     || types.isProxy(value)
+    || !Object.isFrozen(value)
   ) {
     return false;
   }
@@ -470,7 +484,9 @@ function isInputBytes(value: unknown): value is Readonly<InProcessUnisolatedInpu
   }) && typeof record.handle === "string"
     && (record.receiptKind === "asset" || record.receiptKind === "result")
     && typeof record.receiptId === "string"
-    && record.bytes instanceof Uint8Array;
+    && record.bytes instanceof Uint8Array
+    && !types.isProxy(record.bytes)
+    && Object.getPrototypeOf(record.bytes) === Uint8Array.prototype;
 }
 
 function executeBundle(
