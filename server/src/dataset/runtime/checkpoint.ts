@@ -23,6 +23,7 @@ import { OperationAbortedError, throwIfAborted } from "../cooperative.js";
 import { parseOperationResultManifest } from "../contracts/operation-result.js";
 import type { OperationResultManifest } from "@biomed/contracts";
 import { sha256Json } from "./digests.js";
+import type { CoreReleaseIdentity } from "./release-identity.js";
 import {
   parseOperationAttempt,
   type OperationAttempt,
@@ -81,6 +82,88 @@ export function findReusable(
     }
   }
   return null;
+}
+
+const CHECKPOINT_SHA256 = /^[0-9a-f]{64}$/u;
+const CHECKPOINT_RELEASE_IDENTITY = /^(?:sha256:[0-9a-f]{64}|ref:[A-Za-z0-9][A-Za-z0-9._:@+-]{0,127})$/u;
+
+/** Identity persisted beside a fixed operation checkpoint. */
+export interface FixedOperationCheckpointIdentity {
+  readonly core_release_identity?: string | null;
+  readonly fixed_operation_implementation_component_digest?: string | null;
+}
+
+export type CheckpointNotReusableCode =
+  | "CHECKPOINT_REUSE_IDENTITY_MISSING"
+  | "CHECKPOINT_REUSE_IDENTITY_INVALID"
+  | "CHECKPOINT_CORE_RELEASE_IDENTITY_MISMATCH"
+  | "CHECKPOINT_OPERATION_IMPLEMENTATION_DIGEST_MISMATCH";
+
+export type FixedOperationCheckpointReuseDecision =
+  | {
+      readonly kind: "reusable";
+      readonly identity_digest: string;
+    }
+  | {
+      readonly kind: "not_reusable";
+      readonly code: CheckpointNotReusableCode;
+    };
+
+/**
+ * Bind fixed-operation checkpoint reuse to both the validated Core release and
+ * its deployed implementation component. This staging-only predicate performs
+ * no checkpoint lookup or runtime wiring; absent, malformed, or stale identity
+ * evidence is an explicit typed cache miss.
+ */
+export function verifyFixedOperationCheckpointIdentity(
+  checkpoint: FixedOperationCheckpointIdentity | null | undefined,
+  expected: {
+    readonly coreReleaseIdentity: CoreReleaseIdentity;
+    readonly implementationComponentDigest?: string | null;
+  },
+): FixedOperationCheckpointReuseDecision {
+  if (
+    checkpoint === null || checkpoint === undefined ||
+    checkpoint.core_release_identity === null ||
+    checkpoint.core_release_identity === undefined ||
+    checkpoint.fixed_operation_implementation_component_digest === null ||
+    checkpoint.fixed_operation_implementation_component_digest === undefined ||
+    expected.implementationComponentDigest === null ||
+    expected.implementationComponentDigest === undefined
+  ) {
+    return { kind: "not_reusable", code: "CHECKPOINT_REUSE_IDENTITY_MISSING" };
+  }
+
+  if (
+    !CHECKPOINT_RELEASE_IDENTITY.test(expected.coreReleaseIdentity) ||
+    !CHECKPOINT_RELEASE_IDENTITY.test(checkpoint.core_release_identity) ||
+    !CHECKPOINT_SHA256.test(expected.implementationComponentDigest) ||
+    !CHECKPOINT_SHA256.test(checkpoint.fixed_operation_implementation_component_digest)
+  ) {
+    return { kind: "not_reusable", code: "CHECKPOINT_REUSE_IDENTITY_INVALID" };
+  }
+
+  if (checkpoint.core_release_identity !== expected.coreReleaseIdentity) {
+    return { kind: "not_reusable", code: "CHECKPOINT_CORE_RELEASE_IDENTITY_MISMATCH" };
+  }
+  if (
+    checkpoint.fixed_operation_implementation_component_digest !==
+    expected.implementationComponentDigest
+  ) {
+    return {
+      kind: "not_reusable",
+      code: "CHECKPOINT_OPERATION_IMPLEMENTATION_DIGEST_MISMATCH",
+    };
+  }
+
+  return {
+    kind: "reusable",
+    identity_digest: sha256Json({
+      core_release_identity: expected.coreReleaseIdentity,
+      fixed_operation_implementation_component_digest:
+        expected.implementationComponentDigest,
+    }),
+  };
 }
 
 /** Append a new operation attempt (append-only, never mutate existing). */

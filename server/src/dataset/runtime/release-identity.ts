@@ -5,6 +5,13 @@ const SAFE_REF = /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,127}$/u;
 
 export type CoreRuntimeEnvironment = "production" | "staging" | "dev" | "test";
 
+declare const CORE_RELEASE_IDENTITY: unique symbol;
+
+/** Canonical identity returned only after Core startup validation succeeds. */
+export type CoreReleaseIdentity = string & {
+  readonly [CORE_RELEASE_IDENTITY]: true;
+};
+
 export interface ResolveCoreReleaseIdentityOptions {
   environment: CoreRuntimeEnvironment;
   configuredIdentity?: string | null;
@@ -29,16 +36,21 @@ export class CoreReleaseIdentityStartupError extends Error {
 
 // Deliberately module-local and never persisted. Reloading this module models a
 // process restart and must produce a different identity.
-const PROCESS_RELEASE_IDENTITY = `ref:process-${randomUUID()}`;
+const PROCESS_RELEASE_IDENTITY = `ref:process-${randomUUID()}` as CoreReleaseIdentity;
 
-function canonicalIdentity(value: string, source: "configured identity" | "build artifact digest"): string {
+function canonicalIdentity(
+  value: string,
+  source: "configured identity" | "build artifact digest",
+): CoreReleaseIdentity {
   const candidate = value.trim();
   const digest = candidate.startsWith("sha256:") ? candidate.slice("sha256:".length) : candidate;
-  if (SHA256.test(digest)) return `sha256:${digest}`;
+  if (SHA256.test(digest)) return `sha256:${digest}` as CoreReleaseIdentity;
 
   if (source === "configured identity" && candidate.startsWith("ref:")) {
     const ref = candidate.slice("ref:".length);
-    if (SAFE_REF.test(ref) && !ref.startsWith("process-")) return `ref:${ref}`;
+    if (SAFE_REF.test(ref) && !ref.startsWith("process-")) {
+      return `ref:${ref}` as CoreReleaseIdentity;
+    }
   }
 
   throw new CoreReleaseIdentityStartupError(
@@ -56,7 +68,7 @@ function canonicalIdentity(value: string, source: "configured identity" | "build
  */
 export function resolveCoreReleaseIdentity(
   options: ResolveCoreReleaseIdentityOptions,
-): string {
+): CoreReleaseIdentity {
   const { environment, configuredIdentity, buildArtifactDigest } = options;
   if (configuredIdentity !== undefined && configuredIdentity !== null && configuredIdentity.trim() !== "") {
     try {
@@ -71,7 +83,7 @@ export function resolveCoreReleaseIdentity(
 
   if (buildArtifactDigest !== undefined && buildArtifactDigest !== null && buildArtifactDigest.trim() !== "") {
     const digest = buildArtifactDigest.trim();
-    if (SHA256.test(digest)) return `sha256:${digest}`;
+    if (SHA256.test(digest)) return `sha256:${digest}` as CoreReleaseIdentity;
     throw new CoreReleaseIdentityStartupError(
       "CORE_RELEASE_IDENTITY_INVALID",
       environment,

@@ -5,12 +5,17 @@ import {
   resolveCoreReleaseIdentity,
 } from "../src/dataset/runtime/release-identity.js";
 import {
+  verifyFixedOperationCheckpointIdentity,
+  type FixedOperationCheckpointIdentity,
+} from "../src/dataset/runtime/checkpoint.js";
+import {
   computeOperationDigest,
   type DigestScope,
 } from "../src/dataset/runtime/digests.js";
 import type { OperationSpec } from "../src/dataset/runtime/operations.js";
 
 const SHA256 = "a".repeat(64);
+const IMPLEMENTATION_DIGEST = "b".repeat(64);
 const operation: OperationSpec = {
   operation_id: "derive:sequence",
   kind: "derive",
@@ -93,5 +98,81 @@ describe("core release identity", () => {
     const second = secondModule.resolveCoreReleaseIdentity({ environment: "dev" });
 
     expect(first).not.toBe(second);
+  });
+});
+
+function checkpointIdentity(
+  overrides: Partial<FixedOperationCheckpointIdentity> = {},
+): FixedOperationCheckpointIdentity {
+  return {
+    core_release_identity: "ref:release-a",
+    fixed_operation_implementation_component_digest: IMPLEMENTATION_DIGEST,
+    ...overrides,
+  };
+}
+
+describe("fixed operation checkpoint reuse identity", () => {
+  const coreReleaseIdentity = resolveCoreReleaseIdentity({
+    environment: "staging",
+    configuredIdentity: "ref:release-a",
+  });
+
+  test("reuses only when the validated Core release and implementation component match", () => {
+    const result = verifyFixedOperationCheckpointIdentity(checkpointIdentity(), {
+      coreReleaseIdentity,
+      implementationComponentDigest: IMPLEMENTATION_DIGEST,
+    });
+
+    expect(result.kind).toBe("reusable");
+    expect(result).toEqual({
+      kind: "reusable",
+      identity_digest: expect.stringMatching(/^[0-9a-f]{64}$/),
+    });
+  });
+
+  test("fails closed with typed not-reusable results for missing identity components", () => {
+    expect(verifyFixedOperationCheckpointIdentity(null, {
+      coreReleaseIdentity,
+      implementationComponentDigest: IMPLEMENTATION_DIGEST,
+    })).toEqual({
+      kind: "not_reusable",
+      code: "CHECKPOINT_REUSE_IDENTITY_MISSING",
+    });
+    expect(verifyFixedOperationCheckpointIdentity(checkpointIdentity({
+      fixed_operation_implementation_component_digest: null,
+    }), {
+      coreReleaseIdentity,
+      implementationComponentDigest: IMPLEMENTATION_DIGEST,
+    })).toEqual({
+      kind: "not_reusable",
+      code: "CHECKPOINT_REUSE_IDENTITY_MISSING",
+    });
+    expect(verifyFixedOperationCheckpointIdentity(checkpointIdentity(), {
+      coreReleaseIdentity,
+    })).toEqual({
+      kind: "not_reusable",
+      code: "CHECKPOINT_REUSE_IDENTITY_MISSING",
+    });
+  });
+
+  test("fails closed with typed mismatch results when either bound identity changes", () => {
+    expect(verifyFixedOperationCheckpointIdentity(checkpointIdentity({
+      core_release_identity: "ref:release-b",
+    }), {
+      coreReleaseIdentity,
+      implementationComponentDigest: IMPLEMENTATION_DIGEST,
+    })).toEqual({
+      kind: "not_reusable",
+      code: "CHECKPOINT_CORE_RELEASE_IDENTITY_MISMATCH",
+    });
+    expect(verifyFixedOperationCheckpointIdentity(checkpointIdentity({
+      fixed_operation_implementation_component_digest: "c".repeat(64),
+    }), {
+      coreReleaseIdentity,
+      implementationComponentDigest: IMPLEMENTATION_DIGEST,
+    })).toEqual({
+      kind: "not_reusable",
+      code: "CHECKPOINT_OPERATION_IMPLEMENTATION_DIGEST_MISMATCH",
+    });
   });
 });
