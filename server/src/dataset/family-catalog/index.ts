@@ -5,6 +5,7 @@ import type {
 } from "@biomed/contracts";
 
 export type FamilyCatalogEntryKind = "family_spec" | "dataset_transform";
+export type FamilyCatalogExecutionPurpose = "sandbox" | "fixture" | "shadow" | "production";
 
 /**
  * Catalog identity, scope, and execution trust are deliberately independent.
@@ -30,6 +31,7 @@ export type FamilyCatalogError =
       digests: readonly string[];
     }
   | { code: "invalid_reference"; message: string }
+  | { code: "invalid_execution_purpose"; purpose: unknown }
   | { code: "not_found"; ref: Readonly<Partial<ScopeQualifiedRef>> }
   | { code: "ambiguous_reference"; candidates: readonly ScopeQualifiedRef[] }
   | { code: "example_not_executable"; ref: ScopeQualifiedRef }
@@ -39,6 +41,7 @@ export type FamilyCatalogError =
       code: "status_not_executable";
       ref: ScopeQualifiedRef;
       status: TransformTrustStatus;
+      purpose: FamilyCatalogExecutionPurpose;
     };
 
 export type FamilyCatalogResult<T> =
@@ -67,13 +70,25 @@ const STATUSES = new Set<TransformTrustStatus>([
   "revoked",
   "retired",
 ]);
-const EXECUTABLE_STATUSES = new Set<TransformTrustStatus>([
-  "sandbox_executable",
-  "fixture_verified",
-  "shadow_verified",
-  "trusted_e2e_verified",
-  "activated",
-]);
+const EXECUTABLE_STATUSES_BY_PURPOSE: Readonly<
+  Record<FamilyCatalogExecutionPurpose, ReadonlySet<TransformTrustStatus>>
+> = {
+  sandbox: new Set([
+    "sandbox_executable",
+    "fixture_verified",
+    "shadow_verified",
+    "trusted_e2e_verified",
+    "activated",
+  ]),
+  fixture: new Set([
+    "fixture_verified",
+    "shadow_verified",
+    "trusted_e2e_verified",
+    "activated",
+  ]),
+  shadow: new Set(["shadow_verified", "trusted_e2e_verified", "activated"]),
+  production: new Set(["activated"]),
+};
 const ENTRY_KINDS = new Set<FamilyCatalogEntryKind>(["family_spec", "dataset_transform"]);
 const ENTRY_KEYS = new Set(["kind", "scope", "id", "version", "digest", "status", "value"]);
 const EXACT_REF_KEYS = new Set(["scope", "id", "version", "digest"]);
@@ -234,7 +249,18 @@ export function inspectFamilyCatalogEntry<T>(
 export function resolveFamilyCatalogExecution<T>(
   catalog: FamilyCatalog<T>,
   refValue: unknown,
+  purposeValue: unknown,
 ): FamilyCatalogResult<T> {
+  if (
+    typeof purposeValue !== "string"
+    || !(purposeValue in EXECUTABLE_STATUSES_BY_PURPOSE)
+  ) {
+    return {
+      ok: false,
+      error: { code: "invalid_execution_purpose", purpose: purposeValue },
+    };
+  }
+  const purpose = purposeValue as FamilyCatalogExecutionPurpose;
   const ref = parseExactRef(refValue);
   if ("code" in ref) return { ok: false, error: ref };
 
@@ -252,10 +278,15 @@ export function resolveFamilyCatalogExecution<T>(
   if (resolved.entry.status === "revoked") {
     return { ok: false, error: { code: "execution_revoked", ref } };
   }
-  if (!EXECUTABLE_STATUSES.has(resolved.entry.status)) {
+  if (!EXECUTABLE_STATUSES_BY_PURPOSE[purpose].has(resolved.entry.status)) {
     return {
       ok: false,
-      error: { code: "status_not_executable", ref, status: resolved.entry.status },
+      error: {
+        code: "status_not_executable",
+        ref,
+        status: resolved.entry.status,
+        purpose,
+      },
     };
   }
   return resolved;

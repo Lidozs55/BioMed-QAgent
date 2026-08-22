@@ -41,7 +41,7 @@ describe("family catalog T6 scope-qualified exact resolution", () => {
       id: "normalize-expression",
       version: "1.0.0",
       digest: DIGEST_B,
-    });
+    }, "production");
 
     expect(resolved).toEqual({
       ok: true,
@@ -57,7 +57,7 @@ describe("family catalog T6 scope-qualified exact resolution", () => {
       id: "normalize-expression",
       version: "1.0.0",
       digest: DIGEST_C,
-    })).toMatchObject({ ok: false, error: { code: "not_found" } });
+    }, "production")).toMatchObject({ ok: false, error: { code: "not_found" } });
   });
 
   it("fails closed when a production execution reference is not exact or has unknown fields", () => {
@@ -69,7 +69,7 @@ describe("family catalog T6 scope-qualified exact resolution", () => {
       scope: "task",
       id: "normalize-expression",
       version: "1.0.0",
-    })).toMatchObject({ ok: false, error: { code: "invalid_reference" } });
+    }, "sandbox")).toMatchObject({ ok: false, error: { code: "invalid_reference" } });
 
     expect(resolveFamilyCatalogExecution(created.catalog, {
       scope: "task",
@@ -77,7 +77,17 @@ describe("family catalog T6 scope-qualified exact resolution", () => {
       version: "1.0.0",
       digest: DIGEST_A,
       fallbackScope: "system",
-    })).toMatchObject({ ok: false, error: { code: "invalid_reference" } });
+    }, "sandbox")).toMatchObject({ ok: false, error: { code: "invalid_reference" } });
+
+    expect(resolveFamilyCatalogExecution(created.catalog, {
+      scope: "task",
+      id: "normalize-expression",
+      version: "1.0.0",
+      digest: DIGEST_A,
+    }, "unknown")).toMatchObject({
+      ok: false,
+      error: { code: "invalid_execution_purpose", purpose: "unknown" },
+    });
   });
 
   it("returns explicit ambiguity for an unqualified multi-candidate lookup without scope priority", () => {
@@ -133,7 +143,7 @@ describe("family catalog T6 scope-qualified exact resolution", () => {
     if (!created.ok) return;
 
     const ref = { scope: "task", id: revoked.id, version: revoked.version, digest: revoked.digest } as const;
-    expect(resolveFamilyCatalogExecution(created.catalog, ref)).toMatchObject({
+    expect(resolveFamilyCatalogExecution(created.catalog, ref, "sandbox")).toMatchObject({
       ok: false,
       error: { code: "execution_revoked", ref },
     });
@@ -156,15 +166,15 @@ describe("family catalog T6 scope-qualified exact resolution", () => {
       id: sandboxTask.id,
       version: sandboxTask.version,
       digest: sandboxTask.digest,
-    })).toEqual({ ok: true, entry: sandboxTask });
+    }, "sandbox")).toEqual({ ok: true, entry: sandboxTask });
     expect(resolveFamilyCatalogExecution(created.catalog, {
       scope: blockedCurated.scope,
       id: blockedCurated.id,
       version: blockedCurated.version,
       digest: blockedCurated.digest,
-    })).toMatchObject({
+    }, "sandbox")).toMatchObject({
       ok: false,
-      error: { code: "status_not_executable", status: "submitted" },
+      error: { code: "status_not_executable", status: "submitted", purpose: "sandbox" },
     });
   });
 
@@ -180,7 +190,7 @@ describe("family catalog T6 scope-qualified exact resolution", () => {
       version: familySpec.version,
       digest: familySpec.digest,
     } as const;
-    expect(resolveFamilyCatalogExecution(created.catalog, ref)).toMatchObject({
+    expect(resolveFamilyCatalogExecution(created.catalog, ref, "production")).toMatchObject({
       ok: false,
       error: { code: "entry_not_executable", ref, kind: "family_spec" },
     });
@@ -194,7 +204,7 @@ describe("family catalog T6 scope-qualified exact resolution", () => {
     if (!created.ok) return;
 
     const ref = { scope: "example", id: example.id, version: example.version, digest: example.digest } as const;
-    expect(resolveFamilyCatalogExecution(created.catalog, ref)).toMatchObject({
+    expect(resolveFamilyCatalogExecution(created.catalog, ref, "sandbox")).toMatchObject({
       ok: false,
       error: { code: "example_not_executable", ref },
     });
@@ -214,12 +224,49 @@ describe("family catalog T6 scope-qualified exact resolution", () => {
         id: blocked.id,
         version: blocked.version,
         digest: blocked.digest,
-      })).toMatchObject({
+      }, "sandbox")).toMatchObject({
         ok: false,
-        error: { code: "status_not_executable", status },
+        error: { code: "status_not_executable", status, purpose: "sandbox" },
       });
     },
   );
+
+  it("enforces separate sandbox, fixture, shadow, and production trust thresholds", () => {
+    const statuses = [
+      "sandbox_executable",
+      "fixture_verified",
+      "shadow_verified",
+      "trusted_e2e_verified",
+      "activated",
+    ] as const;
+    const created = createFamilyCatalog(statuses.map((status, index) => entry({
+      id: `transform-${index}`,
+      status,
+    })));
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const allowedByPurpose = {
+      sandbox: new Set(statuses),
+      fixture: new Set(statuses.slice(1)),
+      shadow: new Set(statuses.slice(2)),
+      production: new Set(["activated"]),
+    } as const;
+    for (const purpose of ["sandbox", "fixture", "shadow", "production"] as const) {
+      for (const [index, status] of statuses.entries()) {
+        const candidate = entry({ id: `transform-${index}`, status });
+        const result = resolveFamilyCatalogExecution(created.catalog, {
+          scope: candidate.scope,
+          id: candidate.id,
+          version: candidate.version,
+          digest: candidate.digest,
+        }, purpose);
+        expect(result.ok, `${status} for ${purpose}`).toBe(
+          allowedByPurpose[purpose].has(status),
+        );
+      }
+    }
+  });
 
   it("returns ambiguity candidates in deterministic identity order", () => {
     const left = entry({ scope: "user", digest: DIGEST_C });
