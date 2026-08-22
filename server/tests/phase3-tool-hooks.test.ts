@@ -187,6 +187,45 @@ describe("createPhase3ToolHooks query identity", () => {
     }
   });
 
+  it("pairs identical same-source queries FIFO because the hook API carries no call token", async () => {
+    const { payloads, recordRunEvent } = collect();
+    const hooks = createPhase3ToolHooks(recordRunEvent, () => "run_1");
+
+    // Two concurrent queries with the same query string from one source: the
+    // hook API has no call token to link an end to its start, so correlation
+    // is a deterministic FIFO approximation (first end closes the first start)
+    // rather than traceable causality.
+    hooks.onQueryStarted?.("TP53", "pubmed");
+    hooks.onQueryStarted?.("TP53", "pubmed");
+    await flush();
+    hooks.onQuery?.("TP53", "pubmed", "success", 5);
+    await flush();
+    hooks.onQuery?.("TP53", "pubmed", "not_found", 0);
+    await flush();
+
+    expect(queryOperationIds(payloads)).toEqual([
+      "tool:pubmed:query:1", // started (first)
+      "tool:pubmed:query:2", // started (second)
+      "tool:pubmed:query:1", // first end FIFO-pairs with the first start
+      "tool:pubmed:query:1", // completed first chain
+      "tool:pubmed:query:2", // second end FIFO-pairs with the second start
+      "tool:pubmed:query:2", // completed second chain
+    ]);
+
+    // Each chain still opens exactly once and closes exactly once.
+    for (const id of new Set(queryOperationIds(payloads))) {
+      expect(
+        ofType(payloads, "operation_started").filter((p) => p.operation_id === id),
+      ).toHaveLength(1);
+      expect(
+        ofType(payloads, "operation_progress").filter((p) => p.operation_id === id),
+      ).toHaveLength(1);
+      expect(
+        ofType(payloads, "operation_completed").filter((p) => p.operation_id === id),
+      ).toHaveLength(1);
+    }
+  });
+
   it("gives sequential same-source queries distinct cards instead of reusing one operation_id", async () => {
     const { payloads, recordRunEvent } = collect();
     const hooks = createPhase3ToolHooks(recordRunEvent, () => "run_1");
