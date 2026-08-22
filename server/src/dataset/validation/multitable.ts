@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 
 import type {
   DatasetSchemaV2,
@@ -24,6 +25,23 @@ import { parsePublicationCandidateRef, parseRelationDefinition, parseTableDefini
 import { parseDatasetSchemaV2 } from "../contracts/schema.js";
 import { assertRelativePath } from "../contracts/primitives.js";
 import { checkpoint, CHECKPOINT_STRIDE, throwIfAborted } from "../cooperative.js";
+import {
+  decideValidatorResources,
+  MULTITABLE_RESOURCE_PREFLIGHT_TELEMETRY_SCHEMA_VERSION,
+  type MultiTableResourcePreflightTelemetry,
+  type MultiTableResourceValidationOptions,
+  type MultiTableValidationOptions,
+  type ResourceBaselineDecision,
+  type ResourceKeyEstimate,
+} from "./resource-baseline.js";
+
+export type {
+  MultiTableResourceEstimates,
+  MultiTableResourcePreflightTelemetry,
+  MultiTableResourceTelemetrySink,
+  MultiTableResourceValidationOptions,
+  MultiTableValidationOptions,
+} from "./resource-baseline.js";
 
 interface TableScan {
   rowCount: number;
@@ -49,6 +67,65 @@ function check(
   detail: string,
 ): void {
   checks.push({ check_id: checkId, scope, passed, detail });
+}
+
+function copyKeyEstimates(
+  estimates: readonly ResourceKeyEstimate[],
+): ResourceKeyEstimate[] {
+  return estimates.map((estimate) => ({ ...estimate }));
+}
+
+async function resourcePreflight(
+  options: MultiTableResourceValidationOptions,
+  signal?: AbortSignal | null,
+): Promise<ResourceBaselineDecision> {
+  throwIfAborted(signal);
+  const keyEstimates = copyKeyEstimates(options.estimates.keyEstimates);
+  const startedAt = performance.now();
+  const decision = decideValidatorResources({
+    rowEstimate: options.estimates.rowEstimate,
+    keyEstimates,
+    configuredHeapBytes: options.estimates.configuredHeapBytes,
+    configuredTempBytes: options.estimates.configuredTempBytes,
+    // T11 has not production-wired a disk tuple index into this validator.
+    // This must remain false until disk mode replaces, rather than falls
+    // through to, the Map-backed scan below.
+    diskIndexAvailable: false,
+    cancelCapable: signal !== undefined && signal !== null,
+  }, options.policy);
+  const telemetry: MultiTableResourcePreflightTelemetry = {
+    schemaVersion: MULTITABLE_RESOURCE_PREFLIGHT_TELEMETRY_SCHEMA_VERSION,
+    validatorMode: decision.validatorMode,
+    thresholdBasis: decision.thresholdBasis === null ? null : { ...decision.thresholdBasis },
+    rowEstimate: options.estimates.rowEstimate,
+    keyEstimates,
+    configuredHeapBytes: options.estimates.configuredHeapBytes,
+    configuredTempBytes: options.estimates.configuredTempBytes,
+    estimatedHeapBytes: decision.estimatedHeapBytes,
+    estimatedTempBytes: decision.estimatedTempBytes,
+    durationMs: Math.max(0, performance.now() - startedAt),
+    heapBytes: process.memoryUsage().heapUsed,
+    // No disk index or temp-byte instrument exists at this boundary yet.
+    tempBytes: null,
+    failureReason: decision.failureReason,
+  };
+  try {
+    await options.telemetrySink(telemetry);
+  } catch (error) {
+    throw new Error("multi-table resource telemetry sink failed", { cause: error });
+  }
+  throwIfAborted(signal);
+  return decision;
+}
+
+function resourceDecisionDetail(decision: ResourceBaselineDecision): string {
+  return JSON.stringify({
+    validator_mode: decision.validatorMode,
+    threshold_basis: decision.thresholdBasis,
+    estimated_heap_bytes: decision.estimatedHeapBytes,
+    estimated_temp_bytes: decision.estimatedTempBytes,
+    failure_reason: decision.failureReason,
+  });
 }
 
 function sameStrings(left: readonly string[], right: readonly string[]): boolean {
@@ -426,12 +503,35 @@ function validateDefinitions(
   return valid;
 }
 
+/**
+ * Validate a trusted multi-table publication candidate.
+ *
+ * The two-argument form is retained for legacy small-input callers and keeps
+ * its existing result shape and behavior. It does not constitute Family Host
+ * large-input admission. Such callers must explicitly pass resource options
+ * backed by measured estimates and an injected benchmark-derived policy.
+ */
 export async function validateMultiTableCandidate(
   request: MultiTableValidationRequest,
   signal?: AbortSignal | null,
+  options?: MultiTableValidationOptions,
 ): Promise<MultiTableValidationResult> {
   throwIfAborted(signal);
   const checks: MultiTableValidationCheck[] = [];
+  if (options !== undefined) {
+    const decision = await resourcePreflight(options.resourceBaseline, signal);
+    const memoryMode = decision.validatorMode === "memory";
+    check(
+      checks,
+      "resource_baseline",
+      request.candidate.candidate_id,
+      memoryMode,
+      resourceDecisionDetail(decision),
+    );
+    // Disk mode is intentionally unavailable at this integration boundary.
+    // Rejecting here prevents the existing Map-backed scan from running.
+    if (!memoryMode) return { passed: false, checks };
+  }
   try {
     parsePublicationCandidateRef(request.candidate);
     for (const table of request.tables) {

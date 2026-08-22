@@ -100,6 +100,70 @@ export interface ResourceBaselineDecision {
   telemetry: ResourceBaselineTelemetry;
 }
 
+export const MULTITABLE_RESOURCE_PREFLIGHT_TELEMETRY_SCHEMA_VERSION =
+  "b3-multitable-resource-preflight.v1" as const;
+
+/**
+ * Caller-measured estimates accepted by the multi-table validator's explicit
+ * resource preflight. The validator does not derive or verify these values;
+ * only a trusted caller with representative, same-policy measurements may use
+ * them for large-input admission.
+ */
+export interface MultiTableResourceEstimates {
+  rowEstimate: number | null;
+  keyEstimates: readonly ResourceKeyEstimate[];
+  configuredHeapBytes: number | null;
+  configuredTempBytes: number | null;
+}
+
+/**
+ * One auditable preflight record emitted before the validator opens a table.
+ * Decision fields are deterministic for a policy and estimate tuple. Observed
+ * fields are runtime samples: durationMs covers the preflight decision only,
+ * heapBytes is process.heapUsed at emission (not an attributed peak), and
+ * tempBytes remains null until an instrumented disk index exists.
+ */
+export interface MultiTableResourcePreflightTelemetry {
+  schemaVersion: typeof MULTITABLE_RESOURCE_PREFLIGHT_TELEMETRY_SCHEMA_VERSION;
+  validatorMode: ValidatorMode;
+  thresholdBasis: ResourceThresholdBasis | null;
+  rowEstimate: number | null;
+  keyEstimates: readonly ResourceKeyEstimate[];
+  configuredHeapBytes: number | null;
+  configuredTempBytes: number | null;
+  estimatedHeapBytes: number | null;
+  estimatedTempBytes: number | null;
+  durationMs: number;
+  heapBytes: number;
+  /** Null means unmeasured; it must not be interpreted as zero bytes. */
+  tempBytes: null;
+  failureReason: ResourceBaselineFailureReason | null;
+}
+
+export type MultiTableResourceTelemetrySink = (
+  telemetry: MultiTableResourcePreflightTelemetry,
+) => void | Promise<void>;
+
+export interface MultiTableResourceValidationOptions {
+  /**
+   * Required caller-injected policy. No global or production default exists;
+   * the caller owns the representative benchmark evidence behind its values.
+   */
+  policy: ResourceBaselinePolicy;
+  estimates: MultiTableResourceEstimates;
+  /** Required audit boundary. A sink error fails closed before table I/O. */
+  telemetrySink: MultiTableResourceTelemetrySink;
+}
+
+/**
+ * Explicit C-T4 opt-in for validateMultiTableCandidate. Omitting this object
+ * preserves the legacy small-input path and return shape, but that path is not
+ * Family Host large-input admission.
+ */
+export interface MultiTableValidationOptions {
+  resourceBaseline: MultiTableResourceValidationOptions;
+}
+
 const MAX_SAFE_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 
 function blankTelemetry(
