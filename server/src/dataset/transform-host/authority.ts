@@ -1,3 +1,5 @@
+import { types } from "node:util";
+
 import type {
   InputAssetReceipt,
   InputResultReceipt,
@@ -7,6 +9,34 @@ import type {
 import { TransformHostError } from "./errors.js";
 import { isSha256 } from "./hashing.js";
 
+const CONTEXT_KEYS = new Set([
+  "authorizationToken",
+  "taskId",
+  "runId",
+  "buildId",
+  "invocationId",
+  "attempt",
+  "generation",
+  "requestDigest",
+  "parametersDigest",
+  "familySpecDigest",
+  "projectionDigest",
+  "implementationDigest",
+  "bundleDigest",
+  "codeBundleRef",
+  "compilerDigest",
+  "runtimeDigest",
+  "policyDigest",
+  "resourceClassId",
+  "resourceLimits",
+  "deadline",
+  "cancelFence",
+  "inputHandles",
+  "outputHandles",
+  "inputAssetReceipts",
+  "inputResultReceipts",
+]);
+const CLAIM_KEYS = new Set(["authorizationToken", "taskId", "generation"]);
 const AUTHORITY_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const OPAQUE_HANDLE = /^(?:in|out)_[A-Za-z0-9_-]{1,124}$/;
 const MAX_AUTHORIZED_INPUTS = 64;
@@ -72,9 +102,8 @@ export interface CoreAuthorityClaim {
 export function assertCoreAuthoritativeContext(
   context: CoreAuthoritativeTransformContext,
 ): void {
-  if (!Object.isFrozen(context) || !Object.isFrozen(context.authorizationToken)) {
-    throw invalid("Core authoritative context and token must be immutable");
-  }
+  assertExactFrozenDataObject(context, CONTEXT_KEYS, "Core authoritative context");
+  assertOpaqueAuthorityToken(context.authorizationToken);
   for (const [label, value] of [
     ["taskId", context.taskId],
     ["runId", context.runId],
@@ -145,6 +174,8 @@ export function assertCoreAuthorityClaim(
   context: CoreAuthoritativeTransformContext,
   claim: CoreAuthorityClaim,
 ): void {
+  assertCoreAuthoritativeContext(context);
+  assertExactFrozenDataObject(claim, CLAIM_KEYS, "Core authority claim");
   if (
     claim.authorizationToken !== context.authorizationToken
     || claim.taskId !== context.taskId
@@ -220,6 +251,56 @@ function validateResultReceipts(receipts: readonly Readonly<InputResultReceipt>[
     ) {
       throw invalid("Core result receipt identity is invalid");
     }
+  }
+}
+
+function assertExactFrozenDataObject(
+  value: unknown,
+  expectedKeys: ReadonlySet<string>,
+  label: string,
+): asserts value is Record<string, unknown> {
+  if (
+    typeof value !== "object"
+    || value === null
+    || Array.isArray(value)
+    || types.isProxy(value)
+    || !Object.isFrozen(value)
+  ) {
+    throw invalid(`${label} must be an immutable plain non-Proxy object`);
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw invalid(`${label} must have a plain object prototype`);
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const keys = Reflect.ownKeys(descriptors);
+  if (
+    keys.length !== expectedKeys.size
+    || keys.some((key) => typeof key !== "string" || !expectedKeys.has(key))
+  ) {
+    throw invalid(`${label} has unknown or missing fields`);
+  }
+  for (const key of keys) {
+    const descriptor = descriptors[key as string];
+    if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+      throw invalid(`${label}.${String(key)} must be an enumerable data property`);
+    }
+  }
+}
+
+function assertOpaqueAuthorityToken(value: unknown): asserts value is object {
+  if (
+    typeof value !== "object"
+    || value === null
+    || Array.isArray(value)
+    || types.isProxy(value)
+    || !Object.isFrozen(value)
+  ) {
+    throw invalid("Core authority token must be an immutable non-Proxy object identity");
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw invalid("Core authority token must have a plain object prototype");
   }
 }
 

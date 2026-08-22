@@ -278,10 +278,10 @@ describe("Host-owned bundle and input snapshots", () => {
     expect(() => quarantine.declareOutput(claim(context), "TABLE.csv")).toThrow(/collide/);
     expect(() => quarantine.declareOutput(claim(context), "NUL")).toThrow(/portable/);
     await expect(quarantine.verifyInputSnapshot(claim(context), { ...receipt })).rejects.toThrow(/replaced/);
-    await expect(quarantine.verifyInputSnapshot({
+    await expect(quarantine.verifyInputSnapshot(frozen({
       ...claim(context),
       taskId: "task_other",
-    }, receipt)).rejects.toThrow(/Core-authoritative/);
+    }), receipt)).rejects.toThrow(/Core-authoritative/);
 
     const linkPath = path.join(registeredRoot, "link.tsv");
     try {
@@ -343,6 +343,69 @@ describe("versioned permanently-disabled Host protocol", () => {
       granted_capabilities: [],
     });
     expect(parseTransformExecutionReceipt(result.receipt, "$receipt")).toEqual(result.receipt);
+  });
+
+  test("rejects Core context and claim accessors or proxies without invoking them", () => {
+    const validContext = authorityContext();
+    let reads = 0;
+    const accessorContext = { ...validContext };
+    Object.defineProperty(accessorContext, "taskId", {
+      enumerable: true,
+      get() {
+        reads += 1;
+        return "task_1";
+      },
+    });
+    Object.freeze(accessorContext);
+    expect(() => new NonProductionTransformHost({
+      hostImplementationDigest: HEX_B,
+      authorityContext: accessorContext,
+    })).toThrow(/data property/);
+    expect(reads).toBe(0);
+
+    const proxyContext = new Proxy(validContext, {
+      get() {
+        reads += 1;
+        return undefined;
+      },
+      getOwnPropertyDescriptor() {
+        reads += 1;
+        return undefined;
+      },
+      getPrototypeOf() {
+        reads += 1;
+        return Object.prototype;
+      },
+      ownKeys() {
+        reads += 1;
+        return [];
+      },
+    });
+    expect(() => new NonProductionTransformHost({
+      hostImplementationDigest: HEX_B,
+      authorityContext: proxyContext,
+    })).toThrow(/non-Proxy/);
+    expect(reads).toBe(0);
+
+    const host = new NonProductionTransformHost({
+      hostImplementationDigest: HEX_B,
+      authorityContext: validContext,
+      now: () => new Date("2026-08-22T00:00:00Z"),
+    });
+    const accessorClaim = { ...claim(validContext) };
+    Object.defineProperty(accessorClaim, "taskId", {
+      enumerable: true,
+      get() {
+        reads += 1;
+        return "task_1";
+      },
+    });
+    Object.freeze(accessorClaim);
+    expect(() => host.execute({
+      invocation: invocation(validContext),
+      authorityClaim: accessorClaim,
+    })).toThrow(/data property/);
+    expect(reads).toBe(0);
   });
 
   test("rejects protocol smuggling, duplicate handles, and wrong authority", () => {
