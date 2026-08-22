@@ -1,0 +1,83 @@
+{
+  "schema_version": "1.0",
+  "example_id": "bioactivity-measurement",
+  "family_id": "bioactivity_measurement",
+  "retrieval_only": true,
+  "host_availability": "unavailable",
+  "catalog": {
+    "kind": "family_spec",
+    "scope": "example",
+    "id": "bioactivity_measurement.reference",
+    "version": "1.0.0",
+    "digest": "a00c6b5726f916ad4ab1cb806fb3e6efe94801a25db221766b8da4899ca205eb",
+    "status": "submitted",
+    "executable": false
+  },
+  "claims": {
+    "dataset_transform": false,
+    "compiler_or_bundle": false,
+    "implementation_identity": false,
+    "host_receipt": false,
+    "core_admission": false,
+    "host_fixture": false,
+    "shadow": false,
+    "e3": false,
+    "publication": false
+  },
+  "contracts_api_dependencies": [
+    "parseFamilySpec",
+    "computeFamilySpecDigest",
+    "verifyFamilySpecDigest",
+    "stableStringify"
+  ],
+  "identity": {
+    "input_path": "fixtures/input/source-records.json",
+    "input_sha256": "e075a7591bcc5367ec604dc7aa67268ea7d68e8d30fdc81322d250465fc10aaf",
+    "source_asset_id": "asset_e075a7591bcc5367ec604dc7aa67268ea7d68e8d30fdc81322d250465fc10aaf",
+    "dataset_id": "ds_1fcb3a44148f1168ac5c43bc70646f2f3d181cbc518f44ffef4c8eb361296ea3",
+    "dataset_revision_id": "dsrev_cd2d04b2686b65863f2824c25effc19f0bee8ca83230ac0873052d16e4770fff",
+    "canonical_rules": {
+      "asset_id": "asset_<sha256(exact input fixture bytes)>",
+      "dataset_id": "ds_<sha256(stableStringify(dataset identity body))>",
+      "dataset_revision_id": "dsrev_<sha256(stableStringify(revision identity body))>",
+      "dataset_identity_body": "{\"canonical_accessions\":[\"chembl_activity:ACT_REFERENCE_1\",\"chembl_activity:ACT_REFERENCE_2\",\"chembl_activity:ACT_REFERENCE_3\",\"chembl_assay:CHEMBL_A100\",\"chembl_compound:CHEMBL25\",\"chembl_target:CHEMBL_T100\",\"pubchem_cid:2244\"],\"scheme\":\"bioactivity_dataset_identity.v1\",\"source_namespace\":\"chembl_pubchem\"}",
+      "revision_identity_body": "{\"carrier_asset_ids\":[\"asset_e075a7591bcc5367ec604dc7aa67268ea7d68e8d30fdc81322d250465fc10aaf\"],\"dataset_id\":\"ds_1fcb3a44148f1168ac5c43bc70646f2f3d181cbc518f44ffef4c8eb361296ea3\",\"provider_snapshot\":\"chembl_pubchem_checked_fixture_2026_08_22\",\"revision_token\":\"reference_revision_1\",\"scheme\":\"bioactivity_dataset_revision_identity.v1\"}",
+      "build_id_participates": false
+    }
+  },
+  "expected_outputs": {
+    "activities": {
+      "path": "fixtures/expected/activities.jsonl",
+      "row_count": 3,
+      "sha256": "942d5a69f30f02b3c8de961ee8bfc104a177a3001ab62ee63c6b64bcecfab797"
+    },
+    "compounds": {
+      "path": "fixtures/expected/compounds.jsonl",
+      "row_count": 2,
+      "sha256": "ede2216c809577d9f6d84d1671db8de5a8b8b6cb02fb7d36738155b29444a6aa"
+    },
+    "assays": {
+      "path": "fixtures/expected/assays.jsonl",
+      "row_count": 1,
+      "sha256": "6371c8858d2b81b3374ab83d3caacf2ce37d17e3a55c36ffd227df9cdff029de"
+    },
+    "targets": {
+      "path": "fixtures/expected/targets.jsonl",
+      "row_count": 1,
+      "sha256": "2f130e71395b472a0d5a6356dc4d6a3f4d43d876dc66159d2df4973eb1bc9c4e"
+    },
+    "compound_crosswalks": {
+      "path": "fixtures/expected/compound-crosswalks.jsonl",
+      "row_count": 1,
+      "sha256": "bb57066e79df3a96743e337490c8c58fd0f845d6b5cd82ebce408bb09ec2340a"
+    }
+  },
+  "retrieval_tags": [
+    "bioactivity-measurement",
+    "multi-table",
+    "compound-identity",
+    "crosswalk",
+    "token-preservation",
+    "retrieval-only"
+  ]
+}
