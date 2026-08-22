@@ -317,6 +317,15 @@ export interface WarningItem extends ConversationItemBase {
   message: string;
 }
 
+export interface PermissionItem extends ConversationItemBase {
+  kind: "permission";
+  requestId: string;
+  capability: PendingPermission["capability"];
+  summary: string;
+  status: "requested" | "allowed" | "denied";
+  grantScope: "once" | "run" | "task" | "persistent" | null;
+}
+
 export interface ArtifactItem extends ConversationItemBase {
   kind: "artifact";
   artifactId: string;
@@ -339,6 +348,7 @@ export type ConversationItem =
   | OperationItem
   | ProgressItem
   | WarningItem
+  | PermissionItem
   | ArtifactItem
   | BuildReportItem;
 

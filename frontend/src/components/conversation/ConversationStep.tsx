@@ -2,6 +2,7 @@ import type { ConversationItem, DownloadControl } from "@/runtime/types";
 import { BuildReportCard } from "./BuildReportCard";
 import { AssistantSegment } from "./AssistantSegment";
 import { OperationStep } from "./OperationStep";
+import { PermissionStep } from "./PermissionStep";
 import { ProgressStep } from "./ProgressStep";
 import { ReasoningBlock } from "./ReasoningBlock";
 import { StageStep } from "./StageStep";
@@ -33,6 +34,8 @@ export function ConversationStep({ item, downloadControl }: ConversationStepProp
       return <ProgressStep item={item} />;
     case "warning":
       return <WarningStep item={item} />;
+    case "permission":
+      return <PermissionStep item={item} />;
     case "build_report":
       return <BuildReportCard item={item} />;
     default:

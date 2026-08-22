@@ -1,6 +1,6 @@
 import type { EventEnvelope, EventPayload } from "../contracts";
 import type { TaskProjection } from "../types";
-import { upsertRun } from "./shared";
+import { upsertItem, upsertRun } from "./shared";
 
 /**
  * Agent permission control plane reducer (plan §30–§31).
@@ -22,9 +22,25 @@ export function applyPermissionEvent(
 ): TaskProjection {
   const runId = envelope.run_id;
   if (runId === null) return task;
+  const itemId = `permission:${runId}:${payload.request_id}`;
   if (payload.type === "permission_requested") {
+    const projected = upsertItem(
+      upsertRun(task, runId, (run) => ({ ...run }), "running", envelope.timestamp),
+      {
+        kind: "permission",
+        itemId,
+        runId,
+        sequence: envelope.sequence,
+        createdAt: envelope.timestamp,
+        requestId: payload.request_id,
+        capability: payload.capability,
+        summary: payload.summary,
+        status: "requested",
+        grantScope: null,
+      },
+    );
     return {
-      ...upsertRun(task, runId, (run) => ({ ...run }), "running", envelope.timestamp),
+      ...projected,
       pendingPermission: {
         runId,
         requestId: payload.request_id,
@@ -40,16 +56,23 @@ export function applyPermissionEvent(
       },
     };
   }
-  const pending = task.pendingPermission;
-  // A resolved event clears the pending request only when it matches the
-  // currently pending identity; a stale/superseded resolution must not
-  // dismiss a newer request.
+  const existing = task.items.find((item) => item.itemId === itemId);
+  const projected = existing?.kind === "permission"
+    ? upsertItem(task, {
+        ...existing,
+        status: payload.decision === "allow" ? "allowed" : "denied",
+        grantScope: payload.grant_scope,
+      })
+    : task;
+  const pending = projected.pendingPermission;
+  // A stale/superseded resolution may close its own historical item, but must
+  // not dismiss the newer currently pending request.
   if (
     pending === null ||
     pending.runId !== runId ||
     pending.requestId !== payload.request_id
   ) {
-    return task;
+    return projected;
   }
-  return { ...task, pendingPermission: null };
+  return { ...projected, pendingPermission: null };
 }

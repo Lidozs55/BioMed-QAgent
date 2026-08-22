@@ -197,7 +197,7 @@ Host 不是实际 OS sandbox；implementation digest 不覆盖 bundle/dependency
 
 ### P2
 - [x] **createPhase3ToolHooks并发identity bug**：query lifecycle已使用per-source call-scoped sequence；不同query可乱序准确闭合，identical legacy queries显式FIFO，不再覆盖同一UI card。
-- [ ] **Phase 9 后续 — 权限事件进入历史 Conversation timeline**。
+- [x] **Phase 9后续 — 权限事件进入历史Conversation timeline**：permission request/resolution按request identity投影为durable item，resolved后保留原timeline位置与grant scope；stale resolution不清新pending request。
 - [x] **Agent INSTRUCTIONS**：现行Pi `PHASE1_SYSTEM_PROMPT` 已要求用户批准max-turn续跑后以下一轮 `[MAX_TURNS_REACHED]` 开头，并有prompt-shape test。
 - [ ] **设置页供应商/模型列表分页与搜索后端**（当前全量返回）。
 
