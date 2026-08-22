@@ -365,7 +365,26 @@ export function createFixtureDatasetTransform(
   value: unknown,
   result: FixtureOnlyCompilationResult,
 ): DatasetTransform {
-  assertHostCompiledResult(result);
+  return createDatasetTransformFromCompilation(value, result, "$.fixture_transform");
+}
+
+/**
+ * Construct the descriptor for the explicit in-process backend from the exact
+ * Host-owned compilation result. This is not an isolation or trust boundary.
+ */
+export function createInProcessDatasetTransform(
+  value: unknown,
+  result: InProcessUnisolatedCompilationResult,
+): DatasetTransform {
+  return createDatasetTransformFromCompilation(value, result, "$.in_process_transform");
+}
+
+function createDatasetTransformFromCompilation(
+  value: unknown,
+  result: HostCompilationResult,
+  path: string,
+): DatasetTransform {
+  hostCompiledBytes(result);
   const metadata = parseDescriptorMetadata(value);
   return parseDatasetTransform({
     ...metadata,
@@ -378,17 +397,13 @@ export function createFixtureDatasetTransform(
     runtime_policy_version: result.policyVersion,
     dependency_closure_digest: result.dependencyClosureDigest,
     code_bundle_ref: result.codeBundleRef,
-  }, "$.fixture_transform");
+  }, path);
 }
 
 /** Internal Host hand-off: rejects structurally forged fixture results. */
 export function copyHostCompiledFixtureBytes(result: HostCompilationResult): Uint8Array {
   const bytes = hostCompiledBytes(result);
   return Uint8Array.from(bytes);
-}
-
-function assertHostCompiledResult(result: FixtureOnlyCompilationResult): void {
-  hostCompiledBytes(result);
 }
 
 function hostCompiledBytes(result: HostCompilationResult): Uint8Array {

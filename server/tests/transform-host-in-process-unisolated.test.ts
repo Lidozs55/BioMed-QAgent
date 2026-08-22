@@ -7,6 +7,7 @@ import { afterEach, describe, expect, test } from "vitest";
 
 import {
   compileTransformInProcessUnisolated,
+  createInProcessDatasetTransform,
   InProcessUnisolatedTransformHost,
   sha256Bytes,
   TransformBundleStore,
@@ -125,6 +126,44 @@ function current(): boolean {
 }
 
 describe("explicit in-process unisolated Transform Host", () => {
+  test("constructs a strict descriptor only from the Host-owned compilation", async () => {
+    const compiled = await compileTransformInProcessUnisolated({ source: SUCCESS_SOURCE });
+    const descriptor = createInProcessDatasetTransform({
+      transform_id: "dynamic_transform",
+      version: "1.0.0",
+      entrypoint: "transform.run",
+      declared_input_roles: [],
+      declared_output_tables: [{ table_id: "table_one", schema_ref: "schema:one" }],
+      bound_family_spec_digest: "a".repeat(64),
+      bound_projection_digest: "a".repeat(64),
+      determinism_profile: "deterministic",
+      resource_class: "fixture",
+      origin: "agent",
+      scope: "task",
+      review_refs: [],
+    }, compiled);
+
+    expect(descriptor).toMatchObject({
+      source_digest: compiled.sourceDigest,
+      bundle_digest: compiled.bundleDigest,
+      code_bundle_ref: compiled.codeBundleRef,
+    });
+    expect(() => createInProcessDatasetTransform({
+      transform_id: "dynamic_transform",
+      version: "1.0.0",
+      entrypoint: "transform.run",
+      declared_input_roles: [],
+      declared_output_tables: [{ table_id: "table_one", schema_ref: "schema:one" }],
+      bound_family_spec_digest: "a".repeat(64),
+      bound_projection_digest: "a".repeat(64),
+      determinism_profile: "deterministic",
+      resource_class: "fixture",
+      origin: "agent",
+      scope: "task",
+      review_refs: [],
+    }, { ...compiled })).toThrow(/not produced/);
+  });
+
   test("executes only the admitted content-addressed bundle and emits an honest receipt", async () => {
     const fixture = await setup(SUCCESS_SOURCE);
     try {
