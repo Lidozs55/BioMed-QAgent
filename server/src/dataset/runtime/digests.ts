@@ -13,6 +13,7 @@ import type { OperationResultManifest } from "@biomed/contracts";
 import { canonicalDigest, canonicalJson } from "../adapters/identity.js";
 import type { SourceAsset } from "../contracts/index.js";
 import type { OperationSpec } from "./operations.js";
+import { resolveCoreReleaseIdentity } from "./release-identity.js";
 
 /**
  * Canonical JSON serialization matching Python ``json.dumps(
@@ -34,7 +35,12 @@ export interface DigestScope {
   parameterScope: Readonly<Record<string, unknown>>;
   sourceAssets?: Readonly<Record<string, SourceAsset>>;
   mappingAssets?: Readonly<Record<string, SourceAsset>>;
+  /** Server-owned release identity; omitted callers resolve a process identity in dev/test. */
+  coreReleaseIdentity?: string;
+  /** Operation-owned identity, such as a registered provider or derive digest. */
   implementationVersions?: Readonly<Record<string, string>>;
+  /** Explicit operation identities for callers that do not use implementationVersions. */
+  operationIdentities?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -63,6 +69,7 @@ export function computeInputDigest(op: OperationSpec, scope: DigestScope): strin
     );
   }
   payload["parameter_scope"] = scope.parameterScope;
+  payload["operation_digest"] = computeOperationDigest(op, scope);
   if (scope.sourceAssets && Object.keys(scope.sourceAssets).length > 0) {
     payload["source_assets"] = Object.fromEntries(
       Object.entries(scope.sourceAssets)
@@ -86,17 +93,48 @@ export function computeInputDigest(op: OperationSpec, scope: DigestScope): strin
   return sha256Json(payload);
 }
 
+/** Resolve the server-owned identity at the digest boundary when a caller did not inject one. */
+function digestCoreReleaseIdentity(scope: Pick<DigestScope, "coreReleaseIdentity">): string {
+  if (scope.coreReleaseIdentity !== undefined) return scope.coreReleaseIdentity;
+  const environment = process.env.NODE_ENV === "production" || process.env.NODE_ENV === "staging"
+    ? process.env.NODE_ENV
+    : process.env.NODE_ENV === "test" ? "test" : "dev";
+  return resolveCoreReleaseIdentity({ environment });
+}
+
 /**
- * Parameter digest: the implementation version is part of the reuse contract
- * (ARCHITECTURE §5.2), so an upgraded adapter/parser never serves stale
- * output under a matching parameter digest.
+ * Operation identity is always a composition: changing Core release identity
+ * invalidates the operation even when its registered implementation identity
+ * is unchanged. This does not claim that either value fingerprints source
+ * bytes or an immutable artifact closure.
+ */
+export function computeOperationDigest(
+  op: OperationSpec,
+  scope: Pick<DigestScope, "coreReleaseIdentity" | "implementationVersions" | "operationIdentities">,
+): string {
+  const operationIdentity = scope.operationIdentities?.[op.operation_id]
+    ?? scope.implementationVersions?.[op.operation_id]
+    ?? `operation:${op.operation_id}`;
+  return sha256Json({
+    core_release_identity: digestCoreReleaseIdentity(scope),
+    operation_id: op.operation_id,
+    operation_identity: operationIdentity,
+  });
+}
+
+/** Backward-compatible name for the operation implementation digest contract. */
+export const computeImplementationDigest = computeOperationDigest;
+
+/**
+ * Parameter digest: the composed operation identity is part of the reuse
+ * contract, so Core or operation implementation changes invalidate reuse.
  */
 export function computeParameterDigest(op: OperationSpec, scope: DigestScope): string {
   return sha256Json({
     build_id: scope.buildId,
     operation_id: op.operation_id,
     parameters: scope.parameterScope,
-    implementation_version: scope.implementationVersions?.[op.operation_id] ?? null,
+    operation_digest: computeOperationDigest(op, scope),
   });
 }
 
