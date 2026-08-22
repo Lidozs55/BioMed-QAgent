@@ -619,6 +619,7 @@ export interface DatasetTransform {
   declared_input_roles: DeclaredInputRole[];
   declared_output_tables: DeclaredTableRef[];
   bound_family_spec_digest: string;
+  bound_projection_digest: string;
   determinism_profile: DeterminismProfile;
   resource_class: string;
   origin: string;
@@ -745,6 +746,7 @@ const TRANSFORM_KEYS = new Set([
   "declared_input_roles",
   "declared_output_tables",
   "bound_family_spec_digest",
+  "bound_projection_digest",
   "determinism_profile",
   "resource_class",
   "origin",
@@ -990,6 +992,10 @@ export function parseDatasetTransform(value: unknown, path: string): DatasetTran
     bound_family_spec_digest: assertHex64(
       ownValue(object, "bound_family_spec_digest", path),
       `${path}.bound_family_spec_digest`,
+    ),
+    bound_projection_digest: assertHex64(
+      ownValue(object, "bound_projection_digest", path),
+      `${path}.bound_projection_digest`,
     ),
     determinism_profile: assertEnum(
       ownValue(object, "determinism_profile", path),

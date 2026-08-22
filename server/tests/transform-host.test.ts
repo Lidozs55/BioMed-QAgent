@@ -139,6 +139,7 @@ function descriptorMetadata(): Parameters<typeof createFixtureDatasetTransform>[
     declared_input_roles: [],
     declared_output_tables: [],
     bound_family_spec_digest: HEX_A,
+    bound_projection_digest: HEX_A,
     determinism_profile: "deterministic",
     resource_class: "fixture",
     origin: "agent",

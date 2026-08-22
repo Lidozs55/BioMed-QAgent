@@ -332,6 +332,7 @@ describe("family-transform strict lexical policies", () => {
       declared_input_roles: [],
       declared_output_tables: [],
       bound_family_spec_digest: A,
+      bound_projection_digest: B,
       determinism_profile: "deterministic",
       resource_class: "standard",
       origin: "agent",
@@ -343,6 +344,10 @@ describe("family-transform strict lexical policies", () => {
       ...transform,
       code_bundle_ref: `bundle_${C}`,
     }, "$")) .toThrow(/bundle_digest|code_bundle_ref/);
+    const withoutProjection: Partial<DatasetTransform> = { ...transform };
+    delete withoutProjection.bound_projection_digest;
+    expect(() => parseDatasetTransform(withoutProjection, "$"))
+      .toThrow(/bound_projection_digest/);
   });
 
   it("requires exact identity schemes instead of silently correcting them", () => {

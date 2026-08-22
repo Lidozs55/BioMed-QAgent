@@ -25,6 +25,7 @@ const DESCRIPTOR_METADATA_KEYS = new Set([
   "declared_input_roles",
   "declared_output_tables",
   "bound_family_spec_digest",
+  "bound_projection_digest",
   "determinism_profile",
   "resource_class",
   "origin",
@@ -102,6 +103,7 @@ export type FixtureTransformDescriptorMetadata = Pick<
   | "declared_input_roles"
   | "declared_output_tables"
   | "bound_family_spec_digest"
+  | "bound_projection_digest"
   | "determinism_profile"
   | "resource_class"
   | "origin"

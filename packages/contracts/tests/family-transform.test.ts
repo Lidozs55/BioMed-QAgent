@@ -168,6 +168,7 @@ describe("A-T1 DatasetTransform descriptor + TransformExecutionReceipt", () => {
     declared_input_roles: [],
     declared_output_tables: [],
     bound_family_spec_digest: HEX,
+    bound_projection_digest: HEX,
     determinism_profile: "deterministic",
     resource_class: "standard",
     origin: "agent",
