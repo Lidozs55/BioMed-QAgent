@@ -1,6 +1,6 @@
 ---
 name: chembl
-description: Search the ChEMBL database for molecules (research-only; findings never route into dataset builds).
+description: Search ChEMBL for controlled identifiers, then use the fixed Core provider for formal bioactivity builds.
 ---
 
 # ChEMBL discovery
@@ -14,7 +14,7 @@ Query ChEMBL with `search_chembl` using a free-text search string.
 
 ## Constraints
 
-- **Research-only source.** ChEMBL findings are for investigation and evidence
-  only — never declare `chembl` as a dataset build source, and never route its
-  results into `execute_dataset_build`.
-- Cite the ChEMBL id or URL for every reported finding.
+- `search_chembl` output is discovery evidence only and is never itself a build carrier.
+- For a formal `bioactivity_measurement` build, use discovered controlled IDs only to construct a binding with `source="chembl"`, `adapter_id="bioactivity.chembl_json.v1"`, and builtin `provider_id="chembl.files.v1"`. Omit `source_files`: Dataset Core must refetch and register the immutable API response.
+- The Core provider requires exactly one real ChEMBL target ID, 1–32 real ChEMBL compound IDs, and controlled activity types (`IC50`, `EC50`, `Ki`, `Kd`) in spec entities. Never invent mutant target IDs; if ChEMBL does not establish a separate target, preserve the variant as context rather than a target identifier.
+- Cite the ChEMBL ID or URL for every reported finding.

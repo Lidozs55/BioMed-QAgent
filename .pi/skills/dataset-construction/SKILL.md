@@ -22,6 +22,7 @@ output.
    task-relative source_files / mapping_files / metadata_files references.
    Omit missing source_files when the binding has a registered Core acquisition
    provider; do not download or parse that provider again with workspace commands.
+   - For `bioactivity_measurement`, ChEMBL/PubChem search tools only discover controlled IDs. Formal bytes must be reacquired by Core with `chembl.files.v1` / `pubchem.files.v1`; omit those bindings from `source_files`. A PubChem binding is optional and supports one exact CID crosswalk per build.
    - **gene-level builds fed by probe-level sources (e.g. GEO `geo_probe`) MUST
      declare a probe→gene annotation** via `mapping_files={"<binding_id>":
      "<GPL annotation relative path>"}` — one entry per binding, keyed by the same
