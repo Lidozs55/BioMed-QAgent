@@ -223,7 +223,6 @@ function validateExpectedOutputs(
   const tableKeys = new Set<string>();
   const paths = new Set<string>();
   const artifacts = new Set<string>();
-  const locatorRefs = new Set<string>();
   const knownAssets = new Set(expected.input_asset_receipts.map((input) => input.asset_id));
 
   return expected.expected_outputs.map((descriptor, index) => {
@@ -280,12 +279,14 @@ function validateExpectedOutputs(
       rejection("OUTPUT_CLOSURE_MISMATCH", "output table/schema tuples must be unique");
     }
     tableKeys.add(tableKey);
-    if (paths.has(relativePath) || artifacts.has(descriptor.artifact_ref) || locatorRefs.has(descriptor.locator_ref)) {
-      rejection("OUTPUT_CLOSURE_MISMATCH", "output paths, artifact refs, and locator refs must be unique");
+    if (paths.has(relativePath) || artifacts.has(descriptor.artifact_ref)) {
+      rejection("OUTPUT_CLOSURE_MISMATCH", "output paths and artifact refs must be unique");
     }
+    // Multiple tables derived from one registered source legitimately share its
+    // locator_ref. Table identity remains closed by table/schema, artifact_ref,
+    // relative_path, and the admitted receipt digest tuple.
     paths.add(relativePath);
     artifacts.add(descriptor.artifact_ref);
-    locatorRefs.add(descriptor.locator_ref);
     return {
       ...descriptor,
       relative_path: relativePath,
