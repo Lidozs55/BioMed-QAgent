@@ -128,6 +128,9 @@ export async function createBusinessToolBundle(
   // Deterministic, network-free tools.
   register([createAnalyzePapersTool(context.hooks ?? {})], "literature_understanding");
   register([createResearchDataGuidanceTool({ docsRoot: context.guidanceDocsRoot })], "research_data_guidance");
+  // This task/run-scoped tool is injected by phase3-composition once the
+  // authoritative SourceAssetRegistry and Dataset Core context exist.
+  unavailable.add("submit_dynamic_family_build");
 
   // Curated external data sources (P5-03..P5-06).
   register(createPubmedTools({
