@@ -23,6 +23,7 @@ import path from "node:path";
 import type {
   DeterministicDeriveRequest,
   JsonValue,
+  ProviderRevisionEvidenceV1,
   PublicationCandidate,
 } from "@biomed/contracts";
 
@@ -86,6 +87,13 @@ export interface TypeScriptDatasetCoreOptions {
 
 export type CoreEventSinkEvent = Parameters<NonNullable<CoreEventSink>>[0];
 
+export interface ProviderRevisionEvidenceContext {
+  /** null is an explicit absence; no build/request/time fallback is permitted. */
+  providerRevisionEvidence: readonly ProviderRevisionEvidenceV1[] | null;
+}
+
+export interface ValidateContext extends ProviderRevisionEvidenceContext {}
+
 export interface ExecuteContext {
   runId: string;
   /** binding_id → SourceAsset acquired or resolved by Core. */
@@ -96,10 +104,21 @@ export interface ExecuteContext {
   mappingAssets?: Readonly<Record<string, SourceAsset>>;
   /** binding_id → explicit metadata SourceAsset (e.g. GEO SOFT metadata). */
   metadataAssets?: Readonly<Record<string, SourceAsset>>;
+  /** Core-verified provider facts, or explicit absence for unchanged V1 paths. */
+  providerRevisionEvidence?: readonly ProviderRevisionEvidenceV1[] | null;
   /** Optional server-owned fixed derive slot. */
   deriveRequest?: DeterministicDeriveRequest | null;
   deriveCapability?: DeterministicDeriveCapability | null;
   signal?: AbortSignal;
+}
+
+export function requireAuthoritativeProviderRevisionEvidence(
+  context: ProviderRevisionEvidenceContext,
+): readonly ProviderRevisionEvidenceV1[] {
+  if (context.providerRevisionEvidence === null || context.providerRevisionEvidence.length === 0) {
+    throw new BuildError("authoritative dataset revision identity requires provider revision evidence");
+  }
+  return context.providerRevisionEvidence;
 }
 
 export interface BuildRecord {
@@ -696,7 +715,13 @@ export class TypeScriptDatasetCore {
     this.taskRoot = options.taskRoot;
   }
 
-  async validateDatasetBuildSpec(spec: DatasetBuildSpec): Promise<SpecValidationResult> {
+  async validateDatasetBuildSpec(
+    spec: DatasetBuildSpec,
+    context: ValidateContext = { providerRevisionEvidence: null },
+  ): Promise<SpecValidationResult> {
+    // V1 admission intentionally ignores these future authoritative facts.
+    // Keeping explicit null in the context prevents local fallback synthesis.
+    void context.providerRevisionEvidence;
     const familyRegistry = createDefaultDatasetFamilyRegistry();
     const validator = new SpecValidator(
       familyRegistry.schemaRegistry(),

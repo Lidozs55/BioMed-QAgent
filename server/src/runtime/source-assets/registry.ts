@@ -165,6 +165,33 @@ export class SourceAssetRegistry {
     return this.resolveWithRole(assetId, "carrier");
   }
 
+  async resolveRole(
+    assetId: string,
+    role: RegisteredSourceAssetRole,
+  ): Promise<CoreResolvedRegisteredAsset> {
+    return this.resolveWithRole(assetId, role);
+  }
+
+  async verifyRegistrationReceipt(
+    value: SourceAssetRegistrationReceipt,
+  ): Promise<SourceAssetRegistrationReceipt> {
+    await this.load();
+    const receipt = parseSourceAssetRegistrationReceipt(value, this.taskId);
+    const registered = this.registrations.get(registrationKey(
+      receipt.asset_ref.asset_id,
+      receipt.asset_ref.role,
+    ));
+    if (registered === undefined) {
+      throw new Error("provider revision evidence references an unregistered asset receipt");
+    }
+    if (JSON.stringify(registered) !== JSON.stringify(receipt)) {
+      throw new Error("provider revision evidence does not match the task-owned asset receipt");
+    }
+    const file = await this.checkedFile(registered);
+    for await (const chunk of this.verifiedStream(file, registered)) void chunk;
+    return cloneReceipt(registered);
+  }
+
   async resolveAny(assetId: string): Promise<CoreResolvedRegisteredAsset> {
     await this.load();
     const receipt = this.registrations.get(registrationKey(assetId, "carrier")) ??
@@ -177,7 +204,7 @@ export class SourceAssetRegistry {
 
   private async resolveWithRole(
     assetId: string,
-    role: "source" | "carrier",
+    role: RegisteredSourceAssetRole,
   ): Promise<CoreResolvedRegisteredAsset> {
     await this.load();
     const ref = parseRegisteredSourceAssetRef({
