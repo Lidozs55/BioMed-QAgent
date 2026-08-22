@@ -176,8 +176,11 @@ describe("BuildSpec 2.0 Core readmission", () => {
       },
     ]);
     expect(result.evidence).toMatchObject({
+      task_id: TASK_ID,
+      build_id: BUILD_ID,
+      registry_generation: GENERATION,
       registry_snapshot_digest: D,
-      ordered_receipt_refs: [A, B],
+      ordered_receipt_digests: [A, B],
       ordered_capability_refs: [
         `curated:transform_buildspec:1.0.0:${B}`,
         `system:policy_buildspec:1.0.0:${C}`,
@@ -273,7 +276,7 @@ describe("BuildSpec 2.0 Core readmission", () => {
     const base = await fixture();
     const hybrid = { ...base.proposal, spec_kind: "resolved" };
     expect((await capture(() => resolveDatasetBuildProposal2(hybrid, base.context))).code)
-      .toBe("invalid_context");
+      .toBe("invalid_proposal");
 
     let reads = 0;
     const accessor = { ...base.proposal };
@@ -285,12 +288,12 @@ describe("BuildSpec 2.0 Core readmission", () => {
       },
     });
     expect((await capture(() => resolveDatasetBuildProposal2(accessor, base.context))).code)
-      .toBe("invalid_context");
+      .toBe("invalid_proposal");
     expect(reads).toBe(0);
 
     const proxy = new Proxy(base.proposal, { get() { reads += 1; return undefined; } });
     expect((await capture(() => resolveDatasetBuildProposal2(proxy, base.context))).code)
-      .toBe("invalid_context");
+      .toBe("invalid_proposal");
     expect(reads).toBe(0);
   });
 

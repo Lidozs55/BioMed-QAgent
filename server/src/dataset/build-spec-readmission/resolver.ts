@@ -310,7 +310,7 @@ export async function resolveDatasetBuildProposal2(
   try {
     proposal = parseDatasetBuildProposal2(proposalInput, "$proposal");
   } catch (error) {
-    throw new BuildSpecResolutionError("invalid_context", error instanceof Error ? error.message : "Invalid proposal", "$proposal");
+    throw new BuildSpecResolutionError("invalid_proposal", error instanceof Error ? error.message : "Invalid proposal", "$proposal");
   }
   const context = parseContext(contextInput);
   if (context.family.family_status === "revoked") {
@@ -334,15 +334,19 @@ export async function resolveDatasetBuildProposal2(
   const orderedCapabilityRefs = [
     ...resolveCapabilityRefs(proposal.transform_refs, context.transforms, "dataset_transform"),
     ...resolveCapabilityRefs(proposal.policy_refs, context.policies, "policy"),
-  ];  const resolvedBindings: ResolvedDatasetBuildSpec2["source_bindings"] = [];
+  ];
+  if (context.family.family_spec.scope === "example") {
+    resolutionError("example_execution_forbidden", "Example-scoped family specs cannot execute", "$.context.family.family_spec.scope");
+  }
+  const resolvedBindings: ResolvedDatasetBuildSpec2["source_bindings"] = [];
   if (proposal.build_id !== context.build_id) {
     resolutionError("build_mismatch", "Proposal build_id does not match the Core resolution context", "$.proposal.build_id");
   }
-  const orderedReceiptRefs: string[] = [];
+  const orderedReceiptDigests: string[] = [];
   for (const binding of proposal.source_bindings) {
     const [resolvedBinding, receiptDigest] = resolveBinding(binding, context);
     resolvedBindings.push(resolvedBinding);
-    orderedReceiptRefs.push(receiptDigest);
+    orderedReceiptDigests.push(receiptDigest);
   }
   const resolved = parseResolvedDatasetBuildSpec2({
     ...proposal,
@@ -351,10 +355,13 @@ export async function resolveDatasetBuildProposal2(
   }, "$resolved");
   const [proposalDigest, resolvedDigest] = await Promise.all([digest(proposal), digest(resolved)]);
   const evidence: BuildSpecResolutionEvidence = {
+    task_id: context.task_id,
+    build_id: context.build_id,
+    registry_generation: context.registry_generation,
     proposal_digest: proposalDigest,
     resolved_digest: resolvedDigest,
     registry_snapshot_digest: context.registry_snapshot_digest,
-    ordered_receipt_refs: orderedReceiptRefs,
+    ordered_receipt_digests: orderedReceiptDigests,
     ordered_capability_refs: orderedCapabilityRefs,
   };
   return { resolved, evidence };

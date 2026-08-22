@@ -74,10 +74,13 @@ export interface BuildSpecResolutionContext {
 }
 
 export interface BuildSpecResolutionEvidence {
+  task_id: string;
+  build_id: string;
+  registry_generation: number;
   proposal_digest: string;
   resolved_digest: string;
   registry_snapshot_digest: string;
-  ordered_receipt_refs: string[];
+  ordered_receipt_digests: string[];
   ordered_capability_refs: string[];
 }
 
