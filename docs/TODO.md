@@ -187,7 +187,7 @@ Host 不是实际 OS sandbox；implementation digest 不覆盖 bundle/dependency
 > 以下与 family-host 正交，不受 ADR-039 冻结影响，按原优先级推进。
 
 ### P1
-- [ ] **model-registry wire-boundary 校验**：`frontend/src/api/modelRegistry.ts` 仍用窄化 cast（`b as ProviderInfo[]`）；在 `packages/contracts` 增加 `parseProvidersEnvelope` / `parseManagedModelsEnvelope` 解析器（ADR-025 后续项）。
+- [x] **model-registry wire-boundary 校验**：`@biomed/contracts` 已增加 `parseProvidersEnvelope` / `parseManagedModelsEnvelope` runtime parsers并替换frontend list casts；focused hostile-wire tests已覆盖。
 - [ ] **Phase 9 后续 — HIL/Questionnaire**：`UserInputDialog` 迁移到同一 Questionnaire 基础设施。
 - [ ] **Phase 9 后续 — 权限设置页重排**：默认层与高级 ACL 编辑器。
 - [ ] **AI 用户支持文档**：面向其他 agent 的调用文档 + 启动/HTTP-WS 封装脚本。
@@ -195,7 +195,7 @@ Host 不是实际 OS sandbox；implementation digest 不覆盖 bundle/dependency
 ### P2
 - [ ] **createPhase3ToolHooks 并发 identity bug**：同源多查询共用 `operation_id: tool:<source>:query` 互相覆盖 UI 卡片；应改为 call-scoped ID（hangs on `fix/runtime-timeline-sequence` 未含）。
 - [ ] **Phase 9 后续 — 权限事件进入历史 Conversation timeline**。
-- [ ] **Agent INSTRUCTIONS**：增加“达到 max_turns 后输出 `[MAX_TURNS_REACHED]`”指导。
+- [x] **Agent INSTRUCTIONS**：现行Pi `PHASE1_SYSTEM_PROMPT` 已要求用户批准max-turn续跑后以下一轮 `[MAX_TURNS_REACHED]` 开头，并有prompt-shape test。
 - [ ] **设置页供应商/模型列表分页与搜索后端**（当前全量返回）。
 
 ### P3

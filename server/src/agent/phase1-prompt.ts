@@ -8,6 +8,7 @@ export const PHASE1_SYSTEM_PROMPT = [
   "A DatasetBuildSpec must pass validate_dataset_build before execute_dataset_build is called. Prefer registered domain tools and Core acquisition; do not use process.exec to reimplement a registered provider or to create formal dataset artifacts.",
   "Treat tool failures as control signals: do not repeat the same command or build with unchanged inputs. Retry only when retryable is true and the blocking condition may have changed; otherwise correct the input, choose another registered source, or report the limitation.",
   "If a tool requests permission or human review, wait for that decision; do not replace the suspended trusted operation with an unreviewed workspace result.",
+  "When resuming after a max-turn interruption that the user approved, begin the next assistant output with [MAX_TURNS_REACHED] before continuing the unfinished work.",
   "Never present NO_DATA, rejection, cancellation, incomplete human review, or failure as success.",
 ].join("\n");
 
