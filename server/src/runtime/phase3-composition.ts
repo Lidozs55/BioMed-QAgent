@@ -39,6 +39,7 @@ import {
 import { coreEventToPayload } from "../dataset/service/events.js";
 import { createDatasetCoreService } from "../dataset/service/dataset-core.js";
 import { submitDynamicFamilyBuild } from "../dataset/dynamic-family/submission.js";
+import { publishDynamicFamily } from "../dataset/dynamic-family/publication.js";
 import { TypeScriptDatasetCore } from "../dataset/service/ts-core.js";
 import { PublicHttpClient } from "../external/network/http-client.js";
 import { ContentCache } from "../external/acquisition/content-cache.js";
@@ -482,20 +483,72 @@ export async function createPhase3Runtime(
             runtimeLimits: limits,
             signal,
           });
+          const product = await publishDynamicFamily({
+            taskId,
+            taskRoot,
+            workspaceRoot,
+            buildId: submission.build_proposal.build_id,
+            execution: result,
+            validationProfileRef: submission.family_spec.validation_policy_ref,
+            signal,
+          });
+          const publicationManifestSha = product.publication.publication.manifest_sha256;
+          if (publicationManifestSha === undefined) {
+            throw new Error("dynamic publication is missing its manifest byte receipt");
+          }
+          await recordRunEvent({
+            type: "publication_created",
+            publication_id: product.publication.publication.publication_id,
+            run_id: currentRunId,
+            manifest_sha256: publicationManifestSha,
+            supersedes_publication_id: product.publication.publication.supersedes_publication_id,
+            published_at: product.publication.publication.published_at,
+          });
+          for (const artifact of product.manifest.artifacts) {
+            await recordRunEvent({
+              type: "artifact_produced",
+              artifact: {
+                artifact_id: artifact.artifact_id,
+                name: artifact.relative_path.split("/").at(-1) ?? artifact.relative_path,
+                role: artifact.role,
+                relative_path: artifact.relative_path,
+                media_type: artifact.media_type,
+                size_bytes: artifact.size_bytes,
+                sha256: artifact.sha256,
+                generated_by_step_id: `dynamic:${submission.build_proposal.build_id}`,
+              },
+            });
+          }
+          buildResult = {
+            schema_version: "1.0",
+            build_id: submission.build_proposal.build_id,
+            status: "succeeded",
+            valid_row_count: product.manifest.row_count,
+            successful_sources: [...product.candidate.registered_asset_ids],
+            rejected_sources: [],
+            available_artifact_roles: [...new Set(product.manifest.artifacts.map((artifact) => artifact.role))],
+            publication_id: product.publication.publication.publication_id,
+            reason_codes: [],
+            user_summary: "Dynamic family product validated and published.",
+            recommended_next_action: "Download immutable publication artifacts through the Artifact API.",
+          };
           return {
             ok: true,
-            status: "executed_not_published",
+            status: "published",
             build_id: submission.build_proposal.build_id,
+            publication_id: product.publication.publication.publication_id,
+            manifest_id: product.manifest.manifest_id,
+            manifest_sha256: publicationManifestSha,
             operation_result_manifest_id: result.operationResult.result_manifest_id,
             tables: result.materialization.candidate.tables.map((table) => table.definition.table_id),
             relations: result.materialization.candidate.relations.map((relation) => relation.relation_id),
+            artifacts: product.manifest.artifacts,
             backend: result.receipt.sandbox_backend,
             security_boundary: false,
           };
         },
       });
       const datasetTools = createDatasetBuildTools({
-
         client: service,
         taskId,
         taskRoot,

@@ -11,6 +11,7 @@ import {
   parseDynamicFamilyBuildSubmission,
 } from "../src/agent/tools/dynamic-family-build.js";
 import { submitDynamicFamilyBuild } from "../src/dataset/dynamic-family/submission.js";
+import { publishDynamicFamily } from "../src/dataset/dynamic-family/publication.js";
 import { SourceAssetRegistry } from "../src/runtime/source-assets/registry.js";
 
 const A = "a".repeat(64);
@@ -152,6 +153,17 @@ describe("dynamic family build tool boundary", () => {
       expect(result.receipt.sandbox_backend).toBe("in_process_unisolated");
       expect(result.operationResult.output_summary).toMatchObject({ tables: { records: { row_count: 1 } } });
       expect(result.materialization.candidate.tables[0]?.definition.table_id).toBe("records");
+      const published = await publishDynamicFamily({
+        taskId: "task_dynamic", taskRoot: root,
+        workspaceRoot: path.join(root, "agent-workspace"),
+        buildId: parsed.build_proposal.build_id,
+        execution: result,
+        validationProfileRef: parsed.family_spec.validation_policy_ref,
+      });
+      expect(published.validation.status).toBe("passed");
+      expect(published.assessment.product_status).toBe("publishable");
+      expect(published.publication.publication.manifest_sha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(published.manifest.artifacts.map((artifact) => artifact.role)).toContain("provenance");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

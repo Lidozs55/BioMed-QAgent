@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
-import { mkdir } from "node:fs/promises";
+import { mkdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import {
   buildTransformDescriptorDigestCanonical,
   computeImplementationDigest,
   type InputAssetReceipt,
+  type OperationResultManifest,
   type ResourceLimits,
   type RuntimeLimits,
   type SourceLocatorV2,
@@ -21,6 +22,7 @@ import {
 import type { CoreAuthoritativeTransformContext } from "../transform-host/authority.js";
 import type { InProcessUnisolatedInputBytes } from "../transform-host/in-process-unisolated.js";
 import type { ExpectedTransformInvocation } from "../transform-admission/types.js";
+import { materializeDynamicFamilyCandidate } from "./index.js";
 import {
   executeDynamicFamilyTransform,
   type ExecuteDynamicFamilyTransformResult,
@@ -42,9 +44,14 @@ export interface SubmitDynamicFamilyBuildInput {
  * the explicit in-process unisolated runtime. This is not a sandbox, isolation
  * mechanism, or security boundary, and this function does not publish.
  */
+export interface SubmitDynamicFamilyBuildResult extends ExecuteDynamicFamilyTransformResult {
+  /** Core-only root; callers must never expose this path to the Agent. */
+  readonly trustedRoot: string;
+}
+
 export async function submitDynamicFamilyBuild(
   input: SubmitDynamicFamilyBuildInput,
-): Promise<ExecuteDynamicFamilyTransformResult> {
+): Promise<SubmitDynamicFamilyBuildResult> {
   const now = input.now ?? (() => new Date());
   const proposal = input.submission.build_proposal;
   const projection = input.submission.projection;
@@ -235,7 +242,8 @@ export async function submitDynamicFamilyBuild(
   });
   const coreCommitParent = path.join(input.taskRoot, "builds", proposal.build_id, "dynamic-results");
   await mkdir(coreCommitParent, { recursive: true });
-  return executeDynamicFamilyTransform({
+  let trustedRoot: string | null = null;
+  const result = await executeDynamicFamilyTransform({
     familySpec: input.submission.family_spec,
     projection,
     transformSource: input.submission.transform_source,
@@ -246,12 +254,99 @@ export async function submitDynamicFamilyBuild(
     bundleRoot: path.join(input.taskRoot, "state", "dynamic-transform-bundles"),
     coreCommitParent,
     readCurrentCancelFence: () => expectedInvocation.cancel_fence,
-    resolveCommittedRoot: (rootRef) => path.join(coreCommitParent, rootRef),
+    resolveCommittedRoot: (rootRef) => {
+      trustedRoot = path.join(coreCommitParent, rootRef);
+      return trustedRoot;
+    },
     isGenerationCurrent: (generation, cancelFence) =>
       generation === context.generation && cancelFence === context.cancelFence && !input.signal?.aborted,
     signal: input.signal,
     now,
   });
+  if (trustedRoot === null) throw new Error("Core operation admission did not resolve its committed root");
+  const evidenceRoot = path.join(input.taskRoot, "builds", proposal.build_id, "dynamic-evidence");
+  await mkdir(evidenceRoot, { recursive: true });
+  const selectedTables = [
+    ...projection.primary_tables,
+    ...projection.supporting_tables,
+    ...projection.derived_tables,
+  ];
+  const tableOutputs = Object.fromEntries(await Promise.all(selectedTables.map(async (tableId) => {
+    const provenance = await coreEvidenceResult({
+      root: evidenceRoot, kind: "provenance", tableId, taskId: input.taskId,
+      buildId: proposal.build_id, operation: result.operationResult,
+      implementationDigest, inputAssetIds: assetReceipts.map((receipt) => receipt.asset_id), now,
+    });
+    const confidence = await coreEvidenceResult({
+      root: evidenceRoot, kind: "confidence", tableId, taskId: input.taskId,
+      buildId: proposal.build_id, operation: result.operationResult,
+      implementationDigest, inputAssetIds: assetReceipts.map((receipt) => receipt.asset_id), now,
+    });
+    return [tableId, { data: result.operationResult, provenance: [provenance], confidence: [confidence], audit: [] }];
+  })));
+  const materialization = await materializeDynamicFamilyCandidate({
+    taskId: input.taskId,
+    buildId: proposal.build_id,
+    familySpec: input.submission.family_spec,
+    projection,
+    tableOutputs,
+  });
+  return { ...result, materialization, trustedRoot };
+}
+
+async function coreEvidenceResult(input: {
+  root: string;
+  kind: "provenance" | "confidence";
+  tableId: string;
+  taskId: string;
+  buildId: string;
+  operation: OperationResultManifest;
+  implementationDigest: string;
+  inputAssetIds: string[];
+  now: () => Date;
+}): Promise<OperationResultManifest> {
+  const relativePath = `${input.kind}/${input.tableId}.json`;
+  const absolutePath = path.join(input.root, ...relativePath.split("/"));
+  await mkdir(path.dirname(absolutePath), { recursive: true });
+  const body = `${JSON.stringify({
+    schema_version: "1.0",
+    evidence_kind: input.kind,
+    table_id: input.tableId,
+    source_operation_result_manifest_id: input.operation.result_manifest_id,
+    registered_asset_ids: input.inputAssetIds,
+    confidence: input.kind === "confidence" ? "source_preserved" : undefined,
+  })}\n`;
+  await writeFile(absolutePath, body, "utf8");
+  const digest = sha256(body);
+  const size = (await stat(absolutePath)).size;
+  const identity = sha256(`${input.kind}\0${input.tableId}\0${input.operation.result_manifest_id}`).slice(0, 24);
+  const committedAt = input.now().toISOString();
+  return {
+    schema_version: "1.0",
+    result_manifest_id: `result_${identity}`,
+    task_id: input.taskId,
+    build_id: input.buildId,
+    attempt: 1,
+    operation_id: `derive_${identity}`,
+    operation_attempt_id: `attempt_${identity}`,
+    operation_kind: "derive",
+    status: "succeeded",
+    input_digest: input.operation.output_digest ?? input.operation.input_digest,
+    parameter_digest: canonicalDigest({ table_id: input.tableId, evidence_kind: input.kind }),
+    implementation_digest: input.implementationDigest,
+    output_kind: "derived_evidence",
+    output_digest: digest,
+    output_summary: { table_id: input.tableId, evidence_kind: input.kind },
+    output_files: [{ relative_path: relativePath, size_bytes: size, sha256: digest }],
+    dependency_closure: {
+      input_asset_ids: [...input.inputAssetIds],
+      upstream_result_manifest_ids: [input.operation.result_manifest_id],
+      parameter_digest: canonicalDigest({ table_id: input.tableId, evidence_kind: input.kind }),
+      implementation_digest: input.implementationDigest,
+    },
+    commit: { state: "committed", commit_id: `commit_${identity}`, committed_at: committedAt },
+    migration: { mode: "native", legacy_checkpoint_path: null, migrated_at: null },
+  };
 }
 
 function resourceLimitsFor(limits: RuntimeLimits): Readonly<ResourceLimits> {
