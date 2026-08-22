@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 
 import { DEFAULT_RUNTIME_LIMITS, type RuntimeLimits } from "@biomed/contracts";
@@ -474,10 +475,35 @@ export async function createPhase3Runtime(
       const workspaceTools = createWorkspaceTools(workspace);
       const dynamicFamilyTool = createDynamicFamilyBuildTool({
         submit: async (submission, signal) => {
+          const registeredSources: Record<string, string> = { ...submission.registered_sources };
+          for (const [bindingId, request] of Object.entries(submission.acquisition_requests)) {
+            const acquired = await acquisitionRuntime.acquire({
+              schema_version: "1.0",
+              request_id: `request_${randomUUID()}`,
+              task_id: taskId,
+              build_id: submission.build_proposal.build_id,
+              binding_id: bindingId,
+              mode: "builtin",
+              provider_id: request.provider_id,
+              recipe_id: null,
+              recipe_version: null,
+              parameters: { ...request.parameters },
+            }, signal);
+            if (acquired.sourceAsset === null) {
+              throw new Error(`Core acquisition did not register source binding '${bindingId}'`);
+            }
+            registeredSources[bindingId] = acquired.sourceAsset.asset_id;
+          }
+          const resolvedSubmission = Object.freeze({
+            ...submission,
+            registered_sources: Object.freeze(registeredSources),
+            acquisition_requests: Object.freeze({}),
+          });
           const result = await submitDynamicFamilyBuild({
+
             taskId,
             runId: currentRunId,
-            submission,
+            submission: resolvedSubmission,
             sourceAssetRegistry,
             taskRoot,
             runtimeLimits: limits,
@@ -543,6 +569,7 @@ export async function createPhase3Runtime(
             tables: result.materialization.candidate.tables.map((table) => table.definition.table_id),
             relations: result.materialization.candidate.relations.map((relation) => relation.relation_id),
             artifacts: product.manifest.artifacts,
+            source_acquisition_provenance: result.sourceAcquisitionProvenance,
             backend: result.receipt.sandbox_backend,
             security_boundary: false,
           };

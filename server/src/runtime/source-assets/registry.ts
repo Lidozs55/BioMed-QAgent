@@ -18,6 +18,9 @@ import { readJsonFileOrNull, writeJsonAtomic } from "../../persistence/atomic-js
 import { requireSafeId } from "../safe-id.js";
 
 const REGISTRY_FILE = "state/source-asset-registrations.json";
+const CORE_ACQUISITION_FILE = "state/core-acquisition-provenance.json";
+const DIGEST = /^[0-9a-f]{64}$/;
+const PROVIDER_ID = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/;
 const ROLES = new Set<RegisteredSourceAssetRole>(["source", "mapping", "metadata", "carrier"]);
 
 type TelemetryEvent = "asset_ref_used" | "legacy_path_compatibility_used";
@@ -27,6 +30,24 @@ export interface RegisterSourceAssetInput {
   relativePath: string;
   role?: RegisteredSourceAssetRole;
   mediaType?: string;
+}
+
+export interface CoreAcquisitionProvenanceInput {
+  readonly provider_id: string;
+  readonly implementation_digest: string;
+  readonly request_identity_digest: string;
+}
+
+export interface CoreAcquisitionProvenance extends CoreAcquisitionProvenanceInput {
+  readonly schema_version: "1.0";
+  readonly task_id: string;
+  readonly receipt_id: string;
+  readonly asset_id: string;
+  readonly role: RegisteredSourceAssetRole;
+}
+
+export interface CoreResolvedAcquiredAsset extends CoreResolvedRegisteredAsset {
+  readonly acquisition_provenance: CoreAcquisitionProvenance;
 }
 
 export interface SourceAssetRegistryOptions {
@@ -70,6 +91,7 @@ export class SourceAssetRegistry {
   private readonly now: () => Date;
   private readonly onTelemetry: ((event: TelemetryEvent, relativePath: string) => void) | null;
   private readonly registrations = new Map<string, SourceAssetRegistrationReceipt>();
+  private readonly coreAcquisitions = new Map<string, CoreAcquisitionProvenance>();
   private loaded = false;
 
   constructor(
@@ -97,11 +119,23 @@ export class SourceAssetRegistry {
         );
       }
     }
+    const provenanceRecords = await readJsonFileOrNull<unknown>(path.join(this.root, CORE_ACQUISITION_FILE));
+    if (provenanceRecords !== null) {
+      if (!Array.isArray(provenanceRecords)) throw new TypeError("Core acquisition provenance must be an array");
+      for (const value of provenanceRecords) {
+        const provenance = parseCoreAcquisitionProvenance(value, this.taskId);
+        this.coreAcquisitions.set(registrationKey(provenance.asset_id, provenance.role), provenance);
+      }
+    }
     this.loaded = true;
   }
 
   private async persist(): Promise<void> {
     await writeJsonAtomic(path.join(this.root, REGISTRY_FILE), [...this.registrations.values()]);
+  }
+
+  private async persistCoreAcquisitions(): Promise<void> {
+    await writeJsonAtomic(path.join(this.root, CORE_ACQUISITION_FILE), [...this.coreAcquisitions.values()]);
   }
 
   async register(input: RegisterSourceAssetInput): Promise<SourceAssetRegistrationReceipt> {
@@ -192,6 +226,57 @@ export class SourceAssetRegistry {
     return cloneReceipt(registered);
   }
 
+  async registerCoreAcquisitionProvenance(
+    receiptValue: SourceAssetRegistrationReceipt,
+    input: CoreAcquisitionProvenanceInput,
+  ): Promise<CoreAcquisitionProvenance> {
+    await this.load();
+    const receipt = parseSourceAssetRegistrationReceipt(receiptValue, this.taskId);
+    const key = registrationKey(receipt.asset_ref.asset_id, receipt.asset_ref.role);
+    const registered = this.registrations.get(key);
+    if (registered === undefined || JSON.stringify(registered) !== JSON.stringify(receipt)) {
+      throw new Error("Core acquisition provenance requires the exact task-owned registration receipt");
+    }
+    const provenance = parseCoreAcquisitionProvenance({
+      schema_version: "1.0",
+      task_id: this.taskId,
+      receipt_id: receipt.receipt_id,
+      asset_id: receipt.asset_ref.asset_id,
+      role: receipt.asset_ref.role,
+      ...input,
+    }, this.taskId);
+    const existing = this.coreAcquisitions.get(key);
+    if (existing !== undefined && JSON.stringify(existing) !== JSON.stringify(provenance)) {
+      throw new Error("registered asset already has conflicting Core acquisition provenance");
+    }
+    this.coreAcquisitions.set(key, provenance);
+    await this.persistCoreAcquisitions();
+    return structuredClone(provenance);
+  }
+
+  async resolveCoreAcquired(assetId: string): Promise<CoreResolvedAcquiredAsset> {
+    await this.load();
+    const receipt = this.registrations.get(registrationKey(assetId, "carrier")) ??
+      this.registrations.get(registrationKey(assetId, "source"));
+    if (receipt === undefined) throw new Error("registered asset was not found");
+    const provenance = this.coreAcquisitions.get(registrationKey(assetId, receipt.asset_ref.role));
+    if (
+      provenance === undefined
+      || provenance.task_id !== receipt.task_id
+      || provenance.receipt_id !== receipt.receipt_id
+      || provenance.asset_id !== receipt.asset_ref.asset_id
+      || provenance.role !== receipt.asset_ref.role
+    ) {
+      throw new Error("formal dynamic carrier lacks exact Core acquisition provenance");
+    }
+    const file = await this.checkedFile(receipt);
+    return {
+      registration_receipt: cloneReceipt(receipt),
+      content: this.verifiedStream(file, receipt),
+      acquisition_provenance: structuredClone(provenance),
+    };
+  }
+
   async resolveAny(assetId: string): Promise<CoreResolvedRegisteredAsset> {
     await this.load();
     const receipt = this.registrations.get(registrationKey(assetId, "carrier")) ??
@@ -250,6 +335,38 @@ export class SourceAssetRegistry {
     if (bytes !== receipt.size_bytes) throw new Error("registered asset size drift detected");
     if (hash.digest("hex") !== receipt.sha256) throw new Error("registered asset hash drift detected");
   }
+}
+
+function parseCoreAcquisitionProvenance(value: unknown, taskId: string): CoreAcquisitionProvenance {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("Core acquisition provenance must be an object");
+  }
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record).sort();
+  const expected = [
+    "asset_id", "implementation_digest", "provider_id", "receipt_id",
+    "request_identity_digest", "role", "schema_version", "task_id",
+  ].sort();
+  if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) {
+    throw new TypeError("Core acquisition provenance has unknown or missing fields");
+  }
+  if (
+    record.schema_version !== "1.0"
+    || record.task_id !== taskId
+    || typeof record.receipt_id !== "string"
+    || !/^receipt_[0-9a-f-]{36}$/.test(record.receipt_id)
+    || typeof record.asset_id !== "string"
+    || !/^asset_[0-9a-f]{64}$/.test(record.asset_id)
+    || typeof record.role !== "string"
+    || !ROLES.has(record.role as RegisteredSourceAssetRole)
+    || typeof record.provider_id !== "string"
+    || !PROVIDER_ID.test(record.provider_id)
+    || typeof record.implementation_digest !== "string"
+    || !DIGEST.test(record.implementation_digest)
+    || typeof record.request_identity_digest !== "string"
+    || !DIGEST.test(record.request_identity_digest)
+  ) throw new TypeError("Core acquisition provenance is invalid");
+  return structuredClone(record) as unknown as CoreAcquisitionProvenance;
 }
 
 export type { TelemetryEvent };

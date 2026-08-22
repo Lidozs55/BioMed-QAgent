@@ -14,7 +14,10 @@ import {
 } from "@biomed/contracts";
 
 import type { ParsedDynamicFamilyBuildSubmission } from "../../agent/tools/dynamic-family-build.js";
-import type { SourceAssetRegistry } from "../../runtime/source-assets/registry.js";
+import type {
+  CoreAcquisitionProvenance,
+  SourceAssetRegistry,
+} from "../../runtime/source-assets/registry.js";
 import { canonicalDigest } from "../adapters/identity.js";
 import {
   compileTransformInProcessUnisolated,
@@ -47,6 +50,7 @@ export interface SubmitDynamicFamilyBuildInput {
 export interface SubmitDynamicFamilyBuildResult extends ExecuteDynamicFamilyTransformResult {
   /** Core-only root; callers must never expose this path to the Agent. */
   readonly trustedRoot: string;
+  readonly sourceAcquisitionProvenance: readonly CoreAcquisitionProvenance[];
 }
 
 export async function submitDynamicFamilyBuild(
@@ -62,6 +66,7 @@ export async function submitDynamicFamilyBuild(
   }
 
   const assetReceipts: InputAssetReceipt[] = [];
+  const sourceAcquisitionProvenance: CoreAcquisitionProvenance[] = [];
   const sourceLocators: SourceLocatorV2[] = [];
   const runtimeInputs: Readonly<InProcessUnisolatedInputBytes>[] = [];
   for (const [index, binding] of bindings.entries()) {
@@ -70,9 +75,10 @@ export async function submitDynamicFamilyBuild(
       throw new TypeError(`transform input role does not match binding '${binding.binding_id}'`);
     }
     const assetId = input.submission.registered_sources[binding.binding_id]!;
-    const resolved = await input.sourceAssetRegistry.resolveAny(assetId);
+    const resolved = await input.sourceAssetRegistry.resolveCoreAcquired(assetId);
     const bytes = await collectBytes(resolved.content, 512 * 1024 * 1024);
     const registration = resolved.registration_receipt;
+    sourceAcquisitionProvenance.push(resolved.acquisition_provenance);
     const receipt = Object.freeze({
       asset_id: registration.asset_ref.asset_id,
       role: binding.input_requirement_ref,
@@ -291,7 +297,12 @@ export async function submitDynamicFamilyBuild(
     projection,
     tableOutputs,
   });
-  return { ...result, materialization, trustedRoot };
+  return {
+    ...result,
+    materialization,
+    trustedRoot,
+    sourceAcquisitionProvenance: Object.freeze(sourceAcquisitionProvenance),
+  };
 }
 
 async function coreEvidenceResult(input: {

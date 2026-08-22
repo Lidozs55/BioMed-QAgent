@@ -126,6 +126,7 @@ export async function publishDynamicFamily(
       size_bytes: receipt.size_bytes,
     })),
     source_receipts: input.execution.receipt.input_asset_receipts,
+    core_acquisition_provenance: input.execution.sourceAcquisitionProvenance,
   }, null, 2)}\n`, "utf8");
   await writeFile(path.join(outputDir, "product_assessment.json"), `${JSON.stringify(assessment, null, 2)}\n`, "utf8");
 

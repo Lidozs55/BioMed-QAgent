@@ -1,6 +1,7 @@
 import { types } from "node:util";
 
 import {
+  assertJsonValue,
   parseDatasetBuildProposal2,
   parseDatasetTransform,
   parseFamilySpec,
@@ -27,6 +28,7 @@ const TOP_KEYS = new Set([
   "transform_metadata",
   "build_proposal",
   "registered_sources",
+  "acquisition_requests",
 ]);
 const MAX_SOURCE_BYTES = 256 * 1024;
 const HEX = "0".repeat(64);
@@ -45,6 +47,10 @@ export interface ParsedDynamicFamilyBuildSubmission {
     | "dependency_closure_digest" | "code_bundle_ref">;
   readonly build_proposal: DatasetBuildProposal2;
   readonly registered_sources: Readonly<Record<string, string>>;
+  readonly acquisition_requests: Readonly<Record<string, {
+    readonly provider_id: string;
+    readonly parameters: Readonly<Record<string, import("@biomed/contracts").JsonValue>>;
+  }>>;
 }
 
 export interface DynamicFamilyBuildToolOptions {
@@ -75,8 +81,18 @@ export function createDynamicFamilyBuildTool(
         build_proposal: { type: "object" },
         registered_sources: {
           type: "object",
-          description: "Exact binding_id to task-owned asset_<sha256> closure. Paths and discovery bytes are forbidden.",
+          description: "Binding IDs already backed by Core-acquired task assets. Browser/download/discovery assets and paths are forbidden.",
           additionalProperties: { type: "string", pattern: "^asset_[0-9a-f]{64}$" },
+        },
+        acquisition_requests: {
+          type: "object",
+          description: "Binding IDs to fixed Core provider requests; use this for formal ChEMBL/PubChem/GEO/GDC/Xena/PDB acquisition.",
+          additionalProperties: {
+            type: "object",
+            properties: { provider_id: { type: "string" }, parameters: { type: "object" } },
+            required: ["provider_id", "parameters"],
+            additionalProperties: false,
+          },
         },
       },
       required: [...TOP_KEYS],
@@ -125,6 +141,8 @@ export async function parseDynamicFamilyBuildSubmission(
   }
   const proposal = parseDatasetBuildProposal2(record.build_proposal, "$.build_proposal");
   const registeredSources = parseRegisteredSources(record.registered_sources, proposal);
+  const acquisitionRequests = parseAcquisitionRequests(record.acquisition_requests, proposal);
+  assertSourceClosure(proposal, registeredSources, acquisitionRequests);
   if (
     proposal.family_spec_ref.id !== family.family_spec_id
     || proposal.family_spec_ref.version !== family.semantic_version
@@ -143,6 +161,7 @@ export async function parseDynamicFamilyBuildSubmission(
     transform_metadata: transform,
     build_proposal: proposal,
     registered_sources: registeredSources,
+    acquisition_requests: acquisitionRequests,
   });
 }
 
@@ -151,7 +170,7 @@ function parseRegisteredSources(
   proposal: DatasetBuildProposal2,
 ): Readonly<Record<string, string>> {
   const bindingIds = new Set(proposal.source_bindings.map((binding) => binding.binding_id));
-  const record = exactDataRecord(value, bindingIds, "$.registered_sources");
+  const record = subsetDataRecord(value, bindingIds, "$.registered_sources");
   const result = Object.create(null) as Record<string, string>;
   for (const [bindingId, assetId] of Object.entries(record)) {
     if (typeof assetId !== "string" || !/^asset_[0-9a-f]{64}$/.test(assetId)) {
@@ -160,6 +179,45 @@ function parseRegisteredSources(
     result[bindingId] = assetId;
   }
   return Object.freeze(result);
+}
+
+function parseAcquisitionRequests(
+  value: unknown,
+  proposal: DatasetBuildProposal2,
+): ParsedDynamicFamilyBuildSubmission["acquisition_requests"] {
+  const bindingIds = new Set(proposal.source_bindings.map((binding) => binding.binding_id));
+  const record = subsetDataRecord(value, bindingIds, "$.acquisition_requests");
+  const result = Object.create(null) as Record<string, { provider_id: string; parameters: Readonly<Record<string, import("@biomed/contracts").JsonValue>> }>;
+  for (const [bindingId, raw] of Object.entries(record)) {
+    const request = exactDataRecord(raw, new Set(["provider_id", "parameters"]), `$.acquisition_requests.${bindingId}`);
+    if (typeof request.provider_id !== "string" || !/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/.test(request.provider_id)) {
+      throw new TypeError(`acquisition_requests.${bindingId}.provider_id is invalid`);
+    }
+    const parameters = assertJsonValue(
+      request.parameters,
+      `$.acquisition_requests.${bindingId}.parameters`,
+    );
+    if (parameters === null || typeof parameters !== "object" || Array.isArray(parameters)) {
+      throw new TypeError(`acquisition_requests.${bindingId}.parameters must be a JSON object`);
+    }
+    result[bindingId] = Object.freeze({
+      provider_id: request.provider_id,
+      parameters: Object.freeze(parameters),
+    });
+  }
+  return Object.freeze(result);
+}
+
+function assertSourceClosure(
+  proposal: DatasetBuildProposal2,
+  registered: Readonly<Record<string, string>>,
+  acquisitions: ParsedDynamicFamilyBuildSubmission["acquisition_requests"],
+): void {
+  const expected = proposal.source_bindings.map((binding) => binding.binding_id).sort();
+  const actual = [...Object.keys(registered), ...Object.keys(acquisitions)].sort();
+  if (actual.length !== expected.length || actual.some((value, index) => value !== expected[index])) {
+    throw new TypeError("registered_sources and acquisition_requests must form one disjoint exact binding closure");
+  }
 }
 
 function parseMetadata(value: unknown): ParsedDynamicFamilyBuildSubmission["transform_metadata"] {
@@ -213,6 +271,30 @@ function exactDataRecord(value: unknown, keys: ReadonlySet<string>, label: strin
       throw new TypeError(`${label}.${String(key)} must be an enumerable data property`);
     }
     result[key as string] = descriptor.value;
+  }
+  return result;
+}
+
+function subsetDataRecord(
+  value: unknown,
+  allowedKeys: ReadonlySet<string> | null,
+  label: string,
+): DataRecord {
+  if (value === null || typeof value !== "object" || Array.isArray(value) || types.isProxy(value)) {
+    throw new TypeError(`${label} must be a plain non-Proxy object`);
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) throw new TypeError(`${label} must have a plain prototype`);
+  const result = Object.create(null) as DataRecord;
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== "string" || (allowedKeys !== null && !allowedKeys.has(key))) {
+      throw new TypeError(`${label} has an unknown field`);
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) {
+      throw new TypeError(`${label}.${key} must be an enumerable data property`);
+    }
+    result[key] = descriptor.value;
   }
   return result;
 }

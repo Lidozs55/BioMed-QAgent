@@ -38,8 +38,10 @@ output.
      sandbox, isolation mechanism, or security boundary**; never describe it as one.
    - a canonical-digest-valid task/user/curated/system `FamilySpec`, selected
      Projection, strict transform metadata/source, and BuildSpec 2.0 proposal;
-   - `registered_sources={"<binding_id>": "asset_<sha256>"}` closing every source
-     binding. Never pass paths or discovery response bytes.
+   - Close every source binding exactly once with either:
+     - an acquisition-requests object mapping each binding ID to a fixed Core provider ID plus parameters (preferred for formal GEO/GDC/Xena/PDB/ChEMBL/PubChem acquisition), or
+     - a registered-sources object mapping each binding ID to an asset SHA-256 ID only when that asset ID was returned by a previous fixed Core acquisition.
+     Browser/download/discovery registrations are rejected as formal carriers. Registered assets live in Core task storage, not the Agent Workspace: never use workspace search or process execution to locate or parse them. Never pass paths or response bytes.
    - deterministic output handles out-0, out-1, … in projection order; each
      output must use a registered input receipt ID as its locator reference.
    The Host owns compilation. If the first submission reports the exact

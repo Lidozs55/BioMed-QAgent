@@ -77,6 +77,7 @@ async function submission(): Promise<Record<string, unknown>> {
       scope: "task", review_refs: [],
     },
     registered_sources: { source_binding: `asset_${A}` },
+    acquisition_requests: {},
     build_proposal: {
       schema_version: "2.0", spec_kind: "proposal", build_id: "build_dynamic",
       family_spec_ref: { scope: "task", id: family.family_spec_id, version: family.semantic_version, digest: family.canonical_digest },
@@ -97,6 +98,24 @@ describe("dynamic family build tool boundary", () => {
     expect(parsed.execution_backend).toBe("in_process_unisolated");
     expect(parsed.family_spec.scope).toBe("task");
     expect(parsed.projection.projection_id).toBe("projection_dynamic");
+  });
+
+  test("accepts a fixed Core provider request instead of a pre-registered carrier", async () => {
+    const raw = await submission();
+    raw.registered_sources = {};
+    raw.acquisition_requests = {
+      source_binding: {
+        provider_id: "chembl.files.v1",
+        parameters: {
+          source: "chembl",
+          accession: "CHEMBL203",
+          entities: { target_ids: ["CHEMBL203"], compound_ids: ["CHEMBL25"] },
+        },
+      },
+    };
+    const parsed = await parseDynamicFamilyBuildSubmission(raw);
+    expect(parsed.acquisition_requests.source_binding?.provider_id).toBe("chembl.files.v1");
+    expect(parsed.registered_sources).toEqual({});
   });
 
   test("exposes one callback-backed Agent tool without weakening parsing", async () => {
@@ -130,6 +149,15 @@ describe("dynamic family build tool boundary", () => {
       raw.registered_sources = { source_binding: receipt.asset_ref.asset_id };
       raw.transform_source = `export const transform = { run({ inputs }) { const [input] = inputs; return { outputs: [{ handle: "out_0", table_id: "records", schema_ref: "schema_records", locator_ref: input.receipt_id, content: "record_id,value\\nr1,1\\n", row_count: 1 }] }; } };`;
       let parsed = await parseDynamicFamilyBuildSubmission(raw);
+      await expect(submitDynamicFamilyBuild({
+        taskId: "task_dynamic", runId: "run_dynamic", submission: parsed,
+        sourceAssetRegistry: registry, taskRoot: root, runtimeLimits: DEFAULT_RUNTIME_LIMITS,
+      })).rejects.toThrow(/Core acquisition provenance/);
+      await registry.registerCoreAcquisitionProvenance(receipt, {
+        provider_id: "fixture.files.v1",
+        implementation_digest: A,
+        request_identity_digest: B,
+      });
       let expectedDigest = "";
       await expect(submitDynamicFamilyBuild({
         taskId: "task_dynamic", runId: "run_dynamic", submission: parsed,
