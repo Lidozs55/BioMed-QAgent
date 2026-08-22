@@ -18,6 +18,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join, resolve, sep } from "node:path";
+import { types } from "node:util";
 import { sha256FileStream } from "../adapters/hashing.js";
 import { OperationAbortedError, throwIfAborted } from "../cooperative.js";
 import { parseOperationResultManifest } from "../contracts/operation-result.js";
@@ -86,11 +87,53 @@ export function findReusable(
 
 const CHECKPOINT_SHA256 = /^[0-9a-f]{64}$/u;
 const CHECKPOINT_RELEASE_IDENTITY = /^(?:sha256:[0-9a-f]{64}|ref:[A-Za-z0-9][A-Za-z0-9._:@+-]{0,127})$/u;
+const PERSISTED_IDENTITY_KEYS = new Set([
+  "core_release_identity",
+  "fixed_operation_implementation_component_digest",
+]);
+const EXPECTED_IDENTITY_KEYS = new Set([
+  "coreReleaseIdentity",
+  "implementationComponentDigest",
+]);
+
+type CheckpointIdentityRecord = Record<string, unknown>;
+
+function snapshotCheckpointIdentityRecord(
+  value: unknown,
+  keys: ReadonlySet<string>,
+  label: string,
+): CheckpointIdentityRecord {
+  if (
+    value === null || typeof value !== "object" || Array.isArray(value)
+    || types.isProxy(value) || !Object.isFrozen(value)
+  ) {
+    throw new TypeError(`${label} must be a frozen plain non-Proxy object`);
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError(`${label} must have a plain object prototype`);
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const ownKeys = Reflect.ownKeys(descriptors);
+  if (ownKeys.length !== keys.size || ownKeys.some((key) =>
+    typeof key !== "string" || !keys.has(key))) {
+    throw new TypeError(`${label} has unknown or missing fields`);
+  }
+  const result = Object.create(null) as CheckpointIdentityRecord;
+  for (const key of ownKeys) {
+    const descriptor = descriptors[key as string];
+    if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) {
+      throw new TypeError(`${label}.${String(key)} must be an enumerable data property`);
+    }
+    result[key as string] = descriptor.value;
+  }
+  return result;
+}
 
 /** Identity persisted beside a fixed operation checkpoint. */
 export interface FixedOperationCheckpointIdentity {
-  readonly core_release_identity?: string | null;
-  readonly fixed_operation_implementation_component_digest?: string | null;
+  readonly core_release_identity: string | null | undefined;
+  readonly fixed_operation_implementation_component_digest: string | null | undefined;
 }
 
 export type CheckpointNotReusableCode =
@@ -117,51 +160,62 @@ export type FixedOperationCheckpointReuseDecision =
  */
 export function verifyFixedOperationCheckpointIdentity(
   checkpoint: FixedOperationCheckpointIdentity | null | undefined,
-  expected: {
+  expected: Readonly<{
     readonly coreReleaseIdentity: CoreReleaseIdentity;
-    readonly implementationComponentDigest?: string | null;
-  },
+    readonly implementationComponentDigest: string | null | undefined;
+  }>,
 ): FixedOperationCheckpointReuseDecision {
+  const expectedRecord = snapshotCheckpointIdentityRecord(
+    expected,
+    EXPECTED_IDENTITY_KEYS,
+    "expected checkpoint identity",
+  );
+  if (checkpoint === null || checkpoint === undefined) {
+    return { kind: "not_reusable", code: "CHECKPOINT_REUSE_IDENTITY_MISSING" };
+  }
+  const checkpointRecord = snapshotCheckpointIdentityRecord(
+    checkpoint,
+    PERSISTED_IDENTITY_KEYS,
+    "persisted checkpoint identity",
+  );
+  const coreReleaseIdentity = expectedRecord.coreReleaseIdentity;
+  const expectedImplementationDigest = expectedRecord.implementationComponentDigest;
+  const persistedReleaseIdentity = checkpointRecord.core_release_identity;
+  const persistedImplementationDigest =
+    checkpointRecord.fixed_operation_implementation_component_digest;
   if (
-    checkpoint === null || checkpoint === undefined ||
-    checkpoint.core_release_identity === null ||
-    checkpoint.core_release_identity === undefined ||
-    checkpoint.fixed_operation_implementation_component_digest === null ||
-    checkpoint.fixed_operation_implementation_component_digest === undefined ||
-    expected.implementationComponentDigest === null ||
-    expected.implementationComponentDigest === undefined
+    persistedReleaseIdentity === null || persistedReleaseIdentity === undefined ||
+    persistedImplementationDigest === null || persistedImplementationDigest === undefined ||
+    expectedImplementationDigest === null || expectedImplementationDigest === undefined
   ) {
     return { kind: "not_reusable", code: "CHECKPOINT_REUSE_IDENTITY_MISSING" };
   }
-
   if (
-    !CHECKPOINT_RELEASE_IDENTITY.test(expected.coreReleaseIdentity) ||
-    !CHECKPOINT_RELEASE_IDENTITY.test(checkpoint.core_release_identity) ||
-    !CHECKPOINT_SHA256.test(expected.implementationComponentDigest) ||
-    !CHECKPOINT_SHA256.test(checkpoint.fixed_operation_implementation_component_digest)
+    typeof coreReleaseIdentity !== "string" ||
+    typeof persistedReleaseIdentity !== "string" ||
+    typeof expectedImplementationDigest !== "string" ||
+    typeof persistedImplementationDigest !== "string" ||
+    !CHECKPOINT_RELEASE_IDENTITY.test(coreReleaseIdentity) ||
+    !CHECKPOINT_RELEASE_IDENTITY.test(persistedReleaseIdentity) ||
+    !CHECKPOINT_SHA256.test(expectedImplementationDigest) ||
+    !CHECKPOINT_SHA256.test(persistedImplementationDigest)
   ) {
     return { kind: "not_reusable", code: "CHECKPOINT_REUSE_IDENTITY_INVALID" };
   }
-
-  if (checkpoint.core_release_identity !== expected.coreReleaseIdentity) {
+  if (persistedReleaseIdentity !== coreReleaseIdentity) {
     return { kind: "not_reusable", code: "CHECKPOINT_CORE_RELEASE_IDENTITY_MISMATCH" };
   }
-  if (
-    checkpoint.fixed_operation_implementation_component_digest !==
-    expected.implementationComponentDigest
-  ) {
+  if (persistedImplementationDigest !== expectedImplementationDigest) {
     return {
       kind: "not_reusable",
       code: "CHECKPOINT_OPERATION_IMPLEMENTATION_DIGEST_MISMATCH",
     };
   }
-
   return {
     kind: "reusable",
     identity_digest: sha256Json({
-      core_release_identity: expected.coreReleaseIdentity,
-      fixed_operation_implementation_component_digest:
-        expected.implementationComponentDigest,
+      core_release_identity: coreReleaseIdentity,
+      fixed_operation_implementation_component_digest: expectedImplementationDigest,
     }),
   };
 }

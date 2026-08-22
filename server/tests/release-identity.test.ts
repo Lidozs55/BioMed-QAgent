@@ -103,12 +103,12 @@ describe("core release identity", () => {
 
 function checkpointIdentity(
   overrides: Partial<FixedOperationCheckpointIdentity> = {},
-): FixedOperationCheckpointIdentity {
-  return {
+): Readonly<FixedOperationCheckpointIdentity> {
+  return Object.freeze({
     core_release_identity: "ref:release-a",
     fixed_operation_implementation_component_digest: IMPLEMENTATION_DIGEST,
     ...overrides,
-  };
+  });
 }
 
 describe("fixed operation checkpoint reuse identity", () => {
@@ -116,14 +116,17 @@ describe("fixed operation checkpoint reuse identity", () => {
     environment: "staging",
     configuredIdentity: "ref:release-a",
   });
+  const expectedIdentity = (implementationComponentDigest: string | null | undefined) =>
+    Object.freeze({
+    coreReleaseIdentity,
+    implementationComponentDigest,
+  });
 
   test("reuses only when the validated Core release and implementation component match", () => {
-    const result = verifyFixedOperationCheckpointIdentity(checkpointIdentity(), {
-      coreReleaseIdentity,
-      implementationComponentDigest: IMPLEMENTATION_DIGEST,
-    });
-
-    expect(result.kind).toBe("reusable");
+    const result = verifyFixedOperationCheckpointIdentity(
+      checkpointIdentity(),
+      expectedIdentity(IMPLEMENTATION_DIGEST),
+    );
     expect(result).toEqual({
       kind: "reusable",
       identity_digest: expect.stringMatching(/^[0-9a-f]{64}$/),
@@ -131,25 +134,20 @@ describe("fixed operation checkpoint reuse identity", () => {
   });
 
   test("fails closed with typed not-reusable results for missing identity components", () => {
-    expect(verifyFixedOperationCheckpointIdentity(null, {
-      coreReleaseIdentity,
-      implementationComponentDigest: IMPLEMENTATION_DIGEST,
-    })).toEqual({
+    expect(verifyFixedOperationCheckpointIdentity(null, expectedIdentity(IMPLEMENTATION_DIGEST))).toEqual({
       kind: "not_reusable",
       code: "CHECKPOINT_REUSE_IDENTITY_MISSING",
     });
     expect(verifyFixedOperationCheckpointIdentity(checkpointIdentity({
       fixed_operation_implementation_component_digest: null,
-    }), {
-      coreReleaseIdentity,
-      implementationComponentDigest: IMPLEMENTATION_DIGEST,
-    })).toEqual({
+    }), expectedIdentity(IMPLEMENTATION_DIGEST))).toEqual({
       kind: "not_reusable",
       code: "CHECKPOINT_REUSE_IDENTITY_MISSING",
     });
-    expect(verifyFixedOperationCheckpointIdentity(checkpointIdentity(), {
-      coreReleaseIdentity,
-    })).toEqual({
+    expect(verifyFixedOperationCheckpointIdentity(
+      checkpointIdentity(),
+      expectedIdentity(undefined),
+    )).toEqual({
       kind: "not_reusable",
       code: "CHECKPOINT_REUSE_IDENTITY_MISSING",
     });
@@ -158,21 +156,49 @@ describe("fixed operation checkpoint reuse identity", () => {
   test("fails closed with typed mismatch results when either bound identity changes", () => {
     expect(verifyFixedOperationCheckpointIdentity(checkpointIdentity({
       core_release_identity: "ref:release-b",
-    }), {
-      coreReleaseIdentity,
-      implementationComponentDigest: IMPLEMENTATION_DIGEST,
-    })).toEqual({
+    }), expectedIdentity(IMPLEMENTATION_DIGEST))).toEqual({
       kind: "not_reusable",
       code: "CHECKPOINT_CORE_RELEASE_IDENTITY_MISMATCH",
     });
     expect(verifyFixedOperationCheckpointIdentity(checkpointIdentity({
       fixed_operation_implementation_component_digest: "c".repeat(64),
-    }), {
-      coreReleaseIdentity,
-      implementationComponentDigest: IMPLEMENTATION_DIGEST,
-    })).toEqual({
+    }), expectedIdentity(IMPLEMENTATION_DIGEST))).toEqual({
       kind: "not_reusable",
       code: "CHECKPOINT_OPERATION_IMPLEMENTATION_DIGEST_MISMATCH",
     });
+  });
+
+  test("rejects mutable, accessor, Proxy, symbol, and unknown records without reads", () => {
+    expect(() => verifyFixedOperationCheckpointIdentity(
+      { ...checkpointIdentity() },
+      expectedIdentity(IMPLEMENTATION_DIGEST),
+    )).toThrow(/frozen plain/);
+
+    let reads = 0;
+    const accessor = { ...checkpointIdentity() } as Record<string, unknown>;
+    Object.defineProperty(accessor, "core_release_identity", {
+      enumerable: true,
+      get() { reads += 1; return "ref:release-a"; },
+    });
+    Object.freeze(accessor);
+    expect(() => verifyFixedOperationCheckpointIdentity(
+      accessor as unknown as FixedOperationCheckpointIdentity,
+      expectedIdentity(IMPLEMENTATION_DIGEST),
+    )).toThrow(/data property/);
+    expect(reads).toBe(0);
+
+    const proxy = new Proxy(checkpointIdentity(), {
+      get() { reads += 1; return undefined; },
+    });
+    expect(() => verifyFixedOperationCheckpointIdentity(proxy, expectedIdentity(IMPLEMENTATION_DIGEST)))
+      .toThrow(/non-Proxy/);
+    expect(reads).toBe(0);
+
+    expect(() => verifyFixedOperationCheckpointIdentity(Object.freeze({
+      ...checkpointIdentity(), extra: true,
+    }) as unknown as FixedOperationCheckpointIdentity, expectedIdentity(IMPLEMENTATION_DIGEST))).toThrow(/unknown/);
+    expect(() => verifyFixedOperationCheckpointIdentity(Object.freeze({
+      ...checkpointIdentity(), [Symbol("hidden")]: true,
+    }) as unknown as FixedOperationCheckpointIdentity, expectedIdentity(IMPLEMENTATION_DIGEST))).toThrow(/unknown/);
   });
 });
