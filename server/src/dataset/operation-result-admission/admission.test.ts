@@ -9,7 +9,6 @@ import {
   computeImplementationDigest,
   type FamilySpec,
   type ImplementationDigestInput,
-  type OperationResultManifest,
   type SourceLocatorV2,
   type TransformDescriptorDigestInput,
   type TransformExecutionReceipt,

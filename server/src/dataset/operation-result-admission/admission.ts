@@ -311,13 +311,16 @@ function assertInvocationBinding(
     );
   }
   const generation = evidence.generation;
+  if (generation === null) {
+    rejection("INVALID_EVIDENCE", "admitted evidence must carry generation");
+  }
   if (generation !== expected.generation) {
     const phase = generation < expected.generation
       ? "is stale (behind the expected generation)"
       : "is from a future generation";
     rejection(
       "LATE_GENERATION",
-      `quarantine evidence generation=${evidence.generation} ${phase} (expected generation=${expected.generation})`,
+      `quarantine evidence generation=${generation} ${phase} (expected generation=${expected.generation})`,
     );
   }
 }
