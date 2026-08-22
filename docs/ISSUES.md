@@ -56,11 +56,17 @@
 
 ### Expression dataset/revision identity 尚未接 authoritative Core path
 
+- [ ] 已新增 staging-only `authoritative_dataset_identity.v1` context：它从 frozen registration facts 校验 task/build/generation、provider snapshot、revision token 与 asset digest closure，并明确 buildId 不参与 dataset/revision digest；尚未从 `DatasetCore` 传递 task-owned registration receipts，也未接生产 adapters/V2 registry。
 - [ ] expression adapters 当前 V1 rows 仍使用 `buildId` 作为 `dataset_id`。候选 `1b3dca3b` 不能原样合入：
       它允许 caller 传可选 identity context，并在仍声明 `gene_expression.*.v1` schema 时增加
       `dataset_revision_id` 列。正确迁移需先定义显式 V2 schema/PK，再把 task-owned
       `SourceAssetRegistrationReceipt` 从 `DatasetCore` service 传给 TS Core，由 Core 从 frozen binding +
       registered source/mapping/metadata carrier closure 构造 context；缺事实 fail closed，V1 不静默扩列。
+
+### Family Host staging-only execution slots
+
+- [ ] 已新增 server-owned `fixed_transform_slot.v1` staging admission：exact-key、generation/capability/digest/asset checks，并固定返回 `executable=false`、`runtimeWired=false`；未接默认 Agent build route、统一 executor 或 `registered_multitable.runtime.v1`。
+- [ ] B3 candidate `f53348b8` 未合入：其新增 disk 类型/import 未进入执行路径，`diskIndexAvailable` 仍硬编码为 `false`，validator 仍在 memory 之外 fail closed；继续保持 `sandbox_unavailable`/disk opt-in 未接通状态。
 
 ### 可选测试补强（自 LEFTOVERS 历史快照迁移，非阻塞）
 

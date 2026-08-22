@@ -85,6 +85,7 @@ Host 不是实际 OS sandbox；implementation digest 不覆盖 bundle/dependency
       - 验收：`DatasetBuildSpec 1.0` snapshot 不变；2.0 proposal 与 resolved spec 分离、Core re-admission 可独立测试；unknown field fail closed
       - ⚠ FamilySpec **禁止**含源码/函数/任意 validator/merge expression/文件路径/网络权限/Publisher threshold/Core nodes（`01 §1.1`）；**禁止**把 `schema_refs` 塞入 BuildSpec 1.0
 - [ ] **A-T2** identity / projection / relation / audit 契约（依赖 A-T0）
+      - 状态：三层 identity、revision-scoped V2 schema primitives、probe mapping validator 与 staging authoritative identity context 已落地；仍缺 `DatasetCore` task-owned registration receipt 传递和生产 adapter wiring
       - 设计：`02-product-identity-relations.md`（全）、`09 §2 T2`
       - 产物：`dataset_id` / `dataset_revision_id` / `asset_id` 三层身份、sample 复合键、`probe_gene_mapping` coverage relation（`many_to_many` + `profile_defined`）、`AuditArtifactDefinition`（**不新增** `audit` TableRole）
       - 验收：同 sample 不同 revision 不碰撞；audit row 不计入产品 table/row count 或 assessment requirement；`integrator.ts` 中 `dataset_id = buildId` 路径有红灯测试与迁移计划
@@ -136,6 +137,7 @@ Host 不是实际 OS sandbox；implementation digest 不覆盖 bundle/dependency
       - 验收：未声明文件/table/schema 拒绝；locator 不得指向未知输入；failed/cancelled Host 不产生 committed Core output
       - ⚠ 针对**冻结 Receipt 类型**解码，用测试夹具驱动单测；Host output receipt **不得**直接转 Publication artifact（`10 §5#4`）
 - [ ] **C-T9** fixed transform slot（依赖 A-T1 冻结类型、C-T8）
+      - 状态：server-owned fixed-slot admission 与 hostile-input tests 已落地为 staging-only；未接 `registered_multitable.runtime.v1` 或默认 Agent build route
       - 设计：`05-core-execution-product-gate.md §6`、`09 §2 T9`
       - 产物：server-owned plan slot、transform capability admission、不引入 DAG
       - 验收：`registered_multitable.runtime.v1` 旁路问题登记并有统一 executor 修复门，不在旁路继续叠加 transform
