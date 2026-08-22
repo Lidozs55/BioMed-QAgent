@@ -13,7 +13,7 @@
 
 - 代码：`pnpm test` / `pnpm lint` / `pnpm typecheck` / `pnpm build`；涉及 `database/` 时另跑 Python bridge gates。
 - 新增 Transform Host 必须额外跑：sandbox/red-team、resource、cancel/restart、digest/replay、Artifact API hash 测试（来源 `09-execution-matrix.md §9`）。
-- 每个实现分支合并前须提供：契约版本/digest、trust/status、resource evidence、tests、same-commit artifact refs、rollback plan，并明确 `example_only / sandbox_executable / shadow_verified / trusted_e2e_verified / activated` 状态（来源 `09 §8`）。
+- 每个实现分支合并前须提供：契约版本/digest、trust/status、resource evidence、tests、same-commit artifact refs、rollback plan，并明确冻结的 `submitted / sandbox_executable / fixture_verified / shadow_verified / trusted_e2e_verified / activated / revoked / retired` 状态；retrieval-only example 表示为 `scope=example + status=submitted`，不是另一个 trust status（来源 `04 §2`、`09 §8`）。
 
 ## 分支命名（来源 `09-execution-matrix.md §8`）
 

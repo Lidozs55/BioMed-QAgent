@@ -38,15 +38,16 @@ Example 不得：
 ## 3. 每个 Family 的迁移状态
 
 ```text
-example_only
-  -> host_fixture_verified
-  -> core_shadow_verified
+scope=example + status=submitted   # retrieval-only, not executable
+  -> sandbox_executable
+  -> fixture_verified
+  -> shadow_verified
   -> trusted_e2e_verified
   -> activated
-  -> legacy_retired
+  -> retired                       # only after legacy retirement gates close
 ```
 
-状态必须按 projection/source/transform capability 记录，而不是一个 family-level green flag。`activated` 可撤销；撤销不修改历史 Publication。
+状态词汇以冻结的 `TransformTrustStatus` wire contract 为准；`example_only` 不是额外 trust status，而是 `scope=example` 且不可执行的目录语义。状态必须按 projection/source/transform capability 记录，而不是一个 family-level green flag。`activated` 可撤销；撤销不修改历史 Publication。
 
 ## 4. 推荐顺序
 
