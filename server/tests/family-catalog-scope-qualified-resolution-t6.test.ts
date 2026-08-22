@@ -13,8 +13,8 @@ const DIGEST_B = "b".repeat(64);
 const DIGEST_C = "c".repeat(64);
 
 function entry(
-  overrides: Partial<FamilyCatalogEntry<string>> = {},
-): FamilyCatalogEntry<string> {
+  overrides: Partial<FamilyCatalogEntry> = {},
+): FamilyCatalogEntry {
   return {
     kind: "dataset_transform",
     scope: "task",
@@ -22,7 +22,6 @@ function entry(
     version: "1.0.0",
     digest: DIGEST_A,
     status: "sandbox_executable",
-    value: "fixture-transform",
     ...overrides,
   };
 }
@@ -31,7 +30,7 @@ describe("family catalog T6 scope-qualified exact resolution", () => {
   it("resolves a production execution only by exact scope, id, version, and digest", () => {
     const created = createFamilyCatalog([
       entry(),
-      entry({ scope: "system", digest: DIGEST_B, status: "activated", value: "system-transform" }),
+      entry({ scope: "system", digest: DIGEST_B, status: "activated" }),
     ]);
     expect(created.ok).toBe(true);
     if (!created.ok) return;
@@ -49,7 +48,6 @@ describe("family catalog T6 scope-qualified exact resolution", () => {
         scope: "system",
         digest: DIGEST_B,
         status: "activated",
-        value: "system-transform",
       }),
     });
     expect(resolveFamilyCatalogExecution(created.catalog, {
@@ -92,8 +90,8 @@ describe("family catalog T6 scope-qualified exact resolution", () => {
 
   it("returns explicit ambiguity for an unqualified multi-candidate lookup without scope priority", () => {
     const created = createFamilyCatalog([
-      entry({ scope: "curated", status: "activated", value: "curated-transform" }),
-      entry({ scope: "task", digest: DIGEST_B, value: "task-transform" }),
+      entry({ scope: "curated", status: "activated" }),
+      entry({ scope: "task", digest: DIGEST_B }),
     ]);
     expect(created.ok).toBe(true);
     if (!created.ok) return;
@@ -282,12 +280,14 @@ describe("family catalog T6 scope-qualified exact resolution", () => {
     );
   });
 
-  it("validates catalog entries at runtime instead of trusting TypeScript callers", () => {
+  it("keeps the catalog metadata-only and validates entries at runtime", () => {
     for (const malformed of [
       { ...entry(), scope: "workspace" },
       { ...entry(), id: " normalize-expression" },
       { ...entry(), version: "1.0.0\u0000" },
       { ...entry(), id: "normalize-e\u0301xpression" },
+      { ...entry(), value: { mutable: true } },
+      { ...entry(), code_bundle_ref: "workspace/transform.ts" },
     ]) {
       expect(createFamilyCatalog([malformed])).toMatchObject({
         ok: false,

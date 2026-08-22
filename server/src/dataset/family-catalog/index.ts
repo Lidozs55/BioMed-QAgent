@@ -9,16 +9,18 @@ export type FamilyCatalogExecutionPurpose = "sandbox" | "fixture" | "shadow" | "
 
 /**
  * Catalog identity, scope, and execution trust are deliberately independent.
- * `value` is opaque to this primitive; contract parsing belongs at admission.
+ * Entries contain metadata only: executable bytes and FamilySpec/Transform
+ * payloads must be loaded from a content-addressed admission store and rehashed
+ * against `digest`. Keeping payloads out of this snapshot closes post-admission
+ * mutation and digest/value substitution at the catalog boundary.
  */
-export interface FamilyCatalogEntry<T = unknown> extends ScopeQualifiedRef {
+export interface FamilyCatalogEntry extends ScopeQualifiedRef {
   kind: FamilyCatalogEntryKind;
   status: TransformTrustStatus;
-  value: T;
 }
 
-export interface FamilyCatalog<T = unknown> {
-  readonly entries: readonly FamilyCatalogEntry<T>[];
+export interface FamilyCatalog {
+  readonly entries: readonly FamilyCatalogEntry[];
 }
 
 export type FamilyCatalogError =
@@ -44,12 +46,12 @@ export type FamilyCatalogError =
       purpose: FamilyCatalogExecutionPurpose;
     };
 
-export type FamilyCatalogResult<T> =
-  | { ok: true; entry: FamilyCatalogEntry<T> }
+export type FamilyCatalogResult =
+  | { ok: true; entry: FamilyCatalogEntry }
   | { ok: false; error: FamilyCatalogError };
 
-export type FamilyCatalogCreateResult<T> =
-  | { ok: true; catalog: FamilyCatalog<T> }
+export type FamilyCatalogCreateResult =
+  | { ok: true; catalog: FamilyCatalog }
   | { ok: false; error: FamilyCatalogError };
 
 export interface FamilyCatalogDiscoveryRef {
@@ -90,7 +92,7 @@ const EXECUTABLE_STATUSES_BY_PURPOSE: Readonly<
   production: new Set(["activated"]),
 };
 const ENTRY_KINDS = new Set<FamilyCatalogEntryKind>(["family_spec", "dataset_transform"]);
-const ENTRY_KEYS = new Set(["kind", "scope", "id", "version", "digest", "status", "value"]);
+const ENTRY_KEYS = new Set(["kind", "scope", "id", "version", "digest", "status"]);
 const EXACT_REF_KEYS = new Set(["scope", "id", "version", "digest"]);
 const DISCOVERY_REF_KEYS = new Set(["scope", "id", "version", "digest"]);
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
@@ -114,7 +116,7 @@ function isCanonicalNonEmptyString(value: unknown): value is string {
     });
 }
 
-function parseEntry<T>(value: unknown, index: number): FamilyCatalogCreateResult<T> | FamilyCatalogEntry<T> {
+function parseEntry(value: unknown, index: number): FamilyCatalogCreateResult | FamilyCatalogEntry {
   if (!isRecord(value) || !hasOnlyKeys(value, ENTRY_KEYS)) {
     return invalidEntry(index, "entry must be an object with only catalog entry fields");
   }
@@ -133,10 +135,6 @@ function parseEntry<T>(value: unknown, index: number): FamilyCatalogCreateResult
   if (!STATUSES.has(value.status as TransformTrustStatus)) {
     return invalidEntry(index, "status is not supported");
   }
-  if (!("value" in value)) {
-    return invalidEntry(index, "value is required");
-  }
-
   return Object.freeze({
     kind: value.kind as FamilyCatalogEntryKind,
     scope: value.scope as TransformScope,
@@ -144,11 +142,10 @@ function parseEntry<T>(value: unknown, index: number): FamilyCatalogCreateResult
     version: value.version,
     digest: value.digest,
     status: value.status as TransformTrustStatus,
-    value: value.value as T,
   });
 }
 
-function invalidEntry<T>(index: number, message: string): FamilyCatalogCreateResult<T> {
+function invalidEntry(index: number, message: string): FamilyCatalogCreateResult {
   return { ok: false, error: { code: "invalid_entry", index, message } };
 }
 
@@ -161,13 +158,13 @@ function exactKey(entry: ScopeQualifiedRef): string {
 }
 
 /** Build a validated immutable in-memory catalog. No I/O or registration occurs. */
-export function createFamilyCatalog<T = unknown>(entries: readonly unknown[]): FamilyCatalogCreateResult<T> {
-  const parsed: FamilyCatalogEntry<T>[] = [];
+export function createFamilyCatalog(entries: readonly unknown[]): FamilyCatalogCreateResult {
+  const parsed: FamilyCatalogEntry[] = [];
   const identityDigests = new Map<string, Set<string>>();
   const exactEntries = new Set<string>();
 
   for (let index = 0; index < entries.length; index += 1) {
-    const result = parseEntry<T>(entries[index], index);
+    const result = parseEntry(entries[index], index);
     if ("ok" in result) return result;
 
     const identity = identityKey(result);
@@ -225,7 +222,7 @@ function parseExactRef(value: unknown): ScopeQualifiedRef | { code: "invalid_ref
   };
 }
 
-function exactLookup<T>(catalog: FamilyCatalog<T>, ref: ScopeQualifiedRef): FamilyCatalogResult<T> {
+function exactLookup(catalog: FamilyCatalog, ref: ScopeQualifiedRef): FamilyCatalogResult {
   const match = catalog.entries.find((entry) => exactKey(entry) === exactKey(ref));
   return match === undefined
     ? { ok: false, error: { code: "not_found", ref } }
@@ -233,10 +230,10 @@ function exactLookup<T>(catalog: FamilyCatalog<T>, ref: ScopeQualifiedRef): Fami
 }
 
 /** Exact lookup for historical inspection. Trust status never hides old records. */
-export function inspectFamilyCatalogEntry<T>(
-  catalog: FamilyCatalog<T>,
+export function inspectFamilyCatalogEntry(
+  catalog: FamilyCatalog,
   refValue: unknown,
-): FamilyCatalogResult<T> {
+): FamilyCatalogResult {
   const ref = parseExactRef(refValue);
   if ("code" in ref) return { ok: false, error: ref };
   return exactLookup(catalog, ref);
@@ -246,11 +243,11 @@ export function inspectFamilyCatalogEntry<T>(
  * Resolve a reference for a new execution. This always requires the complete
  * production identity and applies execution status independently from scope.
  */
-export function resolveFamilyCatalogExecution<T>(
-  catalog: FamilyCatalog<T>,
+export function resolveFamilyCatalogExecution(
+  catalog: FamilyCatalog,
   refValue: unknown,
   purposeValue: unknown,
-): FamilyCatalogResult<T> {
+): FamilyCatalogResult {
   if (
     typeof purposeValue !== "string"
     || !(purposeValue in EXECUTABLE_STATUSES_BY_PURPOSE)
@@ -319,10 +316,10 @@ function parseDiscoveryRef(
 }
 
 /** Unqualified discovery lookup; multiple candidates are always explicit ambiguity. */
-export function resolveFamilyCatalogDiscovery<T>(
-  catalog: FamilyCatalog<T>,
+export function resolveFamilyCatalogDiscovery(
+  catalog: FamilyCatalog,
   refValue: unknown,
-): FamilyCatalogResult<T> {
+): FamilyCatalogResult {
   const ref = parseDiscoveryRef(refValue);
   if ("code" in ref) return { ok: false, error: ref };
 
