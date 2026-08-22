@@ -21,7 +21,7 @@ const RESOURCE_LIMIT_KEYS = new Set([
   "open_files",
   "pids",
 ]);
-const SAFE_REF = /^[A-Za-z0-9][A-Za-z0-9._:@/+\-]{0,1023}$/u;
+const SAFE_REF = /^[A-Za-z0-9][A-Za-z0-9._:@/+-]{0,1023}$/u;
 const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u;
 
 export interface CoreAuthorizedInputHandle {
