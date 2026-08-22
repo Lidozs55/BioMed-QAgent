@@ -53,7 +53,7 @@ in [migration/README.md](../migration/README.md).
 > 注：`026-durable-hil-confidence-protocol.md` 与 `026-agent-workspace-permissions.md` 编号
 > 均为 026（两个独立工作流各自分配）；两者互不替代，均处于 Accepted 状态。
 
-| [ADR-039](039-family-transform-host.md) | FamilySpec and controlled DatasetTransform Host separate dynamic transformation from Core publication trust | Deferred |
+| [ADR-039](039-family-transform-host.md) | FamilySpec and explicit in-process unisolated DatasetTransform execution remain subordinate to Core publication trust | Accepted |
 
 New records use the next available three-digit number and the sections `Status`,
 `Context`, `Decision`, and `Consequences`. A superseding ADR must link both ways;

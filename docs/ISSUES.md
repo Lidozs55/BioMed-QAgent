@@ -24,7 +24,7 @@
 
 - [ ] 2026-08-14 复现：`server/tests/phase5/build-lock.test.ts` 在 `pnpm test` / `vitest run` 并行负载下偶发失败（真实子进程对文件锁的时序竞争 + CPU 争抢），单文件隔离 8/8 通过；与 settings/http/contracts/artifacts 分层重构无关。根治方向：进程间同步闩或放宽时窗/重试（详见 `docs/archive/LEFTOVERS-2026-08-09.md` §K1）。
 
-### FamilySpec/Core 非-sandbox剩余收敛门（ADR-039 Transform Host已Deferred）
+### FamilySpec/Core + non-isolated dynamic route剩余收敛门（ADR-039已Accepted）
 
 - [x] 初始 `808279ac` 的 prototype/accessor smuggling、sparse array、`NaN`/Infinity、unsafe integer、
       identity scheme coercion、无界/不安全 ID、receipt terminal/resource/output/cancel closure与
@@ -32,7 +32,7 @@
       contracts tests关闭；FamilySpec digest有唯一 helper/known vector，parser本身不自动授信digest。
 - [x] M1 wire/readmission gates：contracts post-hardening coverage、BuildSpec proposal→resolved pure Core
       readmission、HTTP/JSON ingress raw duplicate-key decoder已落地并有 focused tests。
-- **当前范围状态**：ADR-039已Deferred；动态transform、sandbox/IPC与依赖真实Host的M3 evidence不再开发，也不计入当前A/C非-sandbox收敛条件。已有Host模块保持disabled/staging，不得宣称activation。
+- **当前范围状态**：显式`in_process_unisolated` dynamic transform已接production，且明确不是sandbox/安全边界；sandbox/container/IPC仍不开发。M3等待同一冻结commit/单Host的Gold证据，Gold6另需真实HIL acceptance。
 
 ### FamilySpec/Core执行面剩余收敛项
 
@@ -40,15 +40,13 @@
 - [x] Core transform admission：旧 `64f43602` 已弃用；当前 staging实现以Core-owned expected invocation
       全量比对 task/build/generation/digest/input/output/resource/cancel，FD重哈希、closed-world检查、
       独立commit root原子复制/fsync/重开复验，并只返回opaque quarantine evidence，不创建Publication。
-      当前唯一成功fixture明确标记synthetic；ADR-039 Host已Deferred，因此该fail-closed Core gate不接production Host route。
+      当前Core gate已接`submit_dynamic_family_build` production route：private quarantine→native OperationResult→B3→ProductAssessment→immutable Publication；synthetic fixture仍不作为release evidence。
 - [x] disk tuple primitive：旧 `f261f6f6` 已弃用；当前isolated index使用SQLite BLOB canonical tuple encoding，
       preserving field order，拒绝lone surrogate，streaming iterator（无`.all()`）、quota/cancel/error poison、
       owner generation与Windows cleanup；1M unique测试通过。`diskIndexAvailable`仍false，C-T11 runtime wiring未完成。
 - [x] FamilySpec topology：旧 `9778de1d` 已弃用并缩减为proposal-only pure topology linter，不输出
       digest/trust/admission/resource授权。完整semantic admission仍等待BuildSpec resolver/authoritative registry。
-- [x] disabled Host spike：旧 `2566efd1` 已由Host-owned compile/digest/store、descriptor-safe Core authority、
-      private input snapshot和all-platform `sandbox_unavailable` fixture替代；无exec/vm/worker/child-process且无production inbound import。
-      B-T6/B-T7已整体Deferred：保留fail-closed guard，不继续开发backend/proof/IPC，不接production。
+- [x] explicit non-isolated Host：Host-owned compile/digest/store、descriptor-safe Core authority、registered input snapshot、bounded execution和quarantine admission已接production。backend固定标记`in_process_unisolated`；`node:vm`只用于同步timeout。isolated sandbox/container/IPC仍Deferred。
 
 ### Expression dataset/revision identity 尚未接 authoritative Core path
 
@@ -61,7 +59,7 @@
 
 ### Family Host staging-only execution slots
 
-- [x] server-owned `fixed_transform_slot.v1` fail-closed staging admission：exact-key、generation/capability/digest/asset checks，并固定返回 `executable=false`、`runtimeWired=false`；ADR-039 Host execution已Deferred，因此不接默认Agent build route、统一executor或`registered_multitable.runtime.v1`。
+- [x] server-owned dynamic fixed slot：exact-key、generation/digest/registered-asset checks；`submit_dynamic_family_build`已接统一non-isolated executor和Core publication，不经`registered_multitable.runtime.v1`旁路。
 - [ ] B3 candidates`f53348b8`/`e7ba9647`未合入；已由`16c6d22d`替代为真实explicit staging PK disk path（owner/quota/cancel/cleanup/no-fallback/memory parity）。default production capability仍不启用disk；FK/cardinality index reuse与measured production threshold仍缺。
 
 ### 可选测试补强（自 LEFTOVERS 历史快照迁移，非阻塞）

@@ -1,8 +1,8 @@
 # Family Host + Transform Host 计划集
 
-> 状态：非-sandbox FamilySpec/Core 收敛继续；ADR-039 Transform Host 路线已 Deferred
-> 代码基线：历史计划基于 `main@94be4a9e`（2026-08-21）；当前行为以代码与 `docs/TODO.md` 为准
-> 当前范围：Agent-authored DatasetTransform、sandbox backend、IPC worker与真实Host shadow/release evidence整体暂缓；已有disabled Host/proof/admission fixtures仅作fail-closed guard。
+> 状态：**历史Batch 0–2计划集**；ADR-039现已Accepted，当前行为以代码、ADR-039、`docs/architecture/FAMILY-HOST-03-execution-constraints.md`与`docs/TODO.md`为准。
+> 代码基线：历史计划基于 `main@94be4a9e`（2026-08-21）。
+> 当前范围：显式`in_process_unisolated` production route已落地；它不是sandbox/安全边界。sandbox/container/IPC worker仍不开发。
 
 ## 目标
 
@@ -11,7 +11,7 @@
 ```text
 Agent authors FamilySpec + DatasetTransform
   -> Family Host admission
-  -> isolated Transform Host execution
+  -> explicit in-process unisolated Transform Host execution
   -> Core output admission / integration / validation / assessment
   -> Core-only Publication
 ```
@@ -34,10 +34,10 @@ Agent authors FamilySpec + DatasetTransform
 
 ## 当前承诺范围
 
-- **继续推进**：声明式 FamilySpec contracts、authoritative identity/relation、B3 bounded/disk primitives、Core-owned fixed deterministic slot、checkpoint/release/publication verification。
-- **Deferred**：isolated Transform Host MVP、sandbox backend、IPC worker、Agent-authored transform execution，以及依赖真实Host的expression/bioactivity shadow与activation evidence。
-- **不在当前迭代承诺**：全六 Family迁移、默认动态Agent build、旧Registry一次性删除、Transform promotion市场或通用DAG。
-- Deferred项不得用disabled fixtures、synthetic benchmarks或静态examples标记完成；未来恢复须重新做go/no-go。
+- **已落地**：FamilySpec contracts、registered input/digest closure、显式non-isolated execution、quarantine/native result、generic B3、ProductAssessment与immutable Publication。
+- **Deferred**：isolated Host、sandbox/container、IPC worker。
+- **当前release gate**：同一冻结commit/单Host的Gold1–Gold6证据；Gold6另需真实HIL acceptance。
+- **不在当前迭代承诺**：旧Registry一次性删除、Transform promotion市场或通用DAG。
 
 ## 永久边界
 

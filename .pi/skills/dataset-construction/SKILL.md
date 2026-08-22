@@ -32,12 +32,28 @@ output.
        research_data_guidance skill, expression_omics.md section 3, for the
        mechanism). Prefer a gene-level source (GDC/Xena) or a probe-level schema
        when no probe→gene annotation is available.
-4. Treat a failed result as actionable state. Retry unchanged inputs only when
+4. When a frozen multi-table topology cannot be expressed by a registered static
+   family, use `submit_dynamic_family_build` with:
+   - `execution_backend="in_process_unisolated"` exactly. This backend is **not a
+     sandbox, isolation mechanism, or security boundary**; never describe it as one.
+   - a canonical-digest-valid task/user/curated/system `FamilySpec`, selected
+     Projection, strict transform metadata/source, and BuildSpec 2.0 proposal;
+   - `registered_sources={"<binding_id>": "asset_<sha256>"}` closing every source
+     binding. Never pass paths or discovery response bytes.
+   - deterministic output handles `out_0`, `out_1`, … in projection order; each
+     output must use a registered input `receipt_id` as its `locator_ref`.
+   The Host owns compilation. If the first submission reports the exact
+   Host-compiled descriptor digest, replace the proposal transform-ref digest with
+   that value and resubmit; do not bypass or invent the digest. Treat only the
+   returned immutable Publication as formal output. A schema containing
+   `review_status` or `human_review_status` remains `human_review_pending` until
+   genuine HIL acceptance exists.
+5. Treat a failed result as actionable state. Retry unchanged inputs only when
    `retryable` is true and the external condition may have changed. For
    non-retryable errors, change the spec or registered source selection; for a
    permission or human-review request, wait for the decision instead of replacing
    the trusted operation with workspace output.
-5. Only a successful Publication is formal output. Never describe rejection,
+6. Only a successful Publication is formal output. Never describe rejection,
    NO_DATA, cancellation, incomplete review, or failure as success; never
    fabricate file names when reporting artifacts.
 
@@ -46,7 +62,9 @@ output.
 - The trusted Dataset Core owns acquisition for registered providers,
   validation, compatibility gating, integration, and immutable publication.
   Agent filesystem writes are restricted to staging — never write into
-  artifacts/ or publications directly.
+  artifacts/ or publications directly. Dynamic execution remains Core-owned but
+  is process-local and unisolated; its AST policy and `node:vm` timeout are not
+  malicious-code defenses.
 - `workspace_exec` is for bounded staging or diagnosis when no registered tool
   provides the operation. A non-zero exit code is a failed tool call. Do not
   repeat the same command or build with unchanged inputs.
