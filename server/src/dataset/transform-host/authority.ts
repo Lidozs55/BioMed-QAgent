@@ -21,6 +21,7 @@ const CONTEXT_KEYS = new Set([
   "parametersDigest",
   "familySpecDigest",
   "projectionDigest",
+  "transformDescriptorDigest",
   "implementationDigest",
   "bundleDigest",
   "codeBundleRef",
@@ -77,6 +78,7 @@ export interface CoreAuthoritativeTransformContext {
   readonly parametersDigest: string;
   readonly familySpecDigest: string;
   readonly projectionDigest: string;
+  readonly transformDescriptorDigest: string;
   readonly implementationDigest: string;
   readonly bundleDigest: string;
   readonly codeBundleRef: string;
@@ -119,6 +121,7 @@ export function assertCoreAuthoritativeContext(
     ["parametersDigest", context.parametersDigest],
     ["familySpecDigest", context.familySpecDigest],
     ["projectionDigest", context.projectionDigest],
+    ["transformDescriptorDigest", context.transformDescriptorDigest],
     ["implementationDigest", context.implementationDigest],
     ["bundleDigest", context.bundleDigest],
     ["compilerDigest", context.compilerDigest],

@@ -263,7 +263,7 @@ export class InProcessUnisolatedTransformHost {
       parameters_digest: this.#context.parametersDigest,
       family_spec_digest: this.#context.familySpecDigest,
       projection_digest: this.#context.projectionDigest,
-      transform_digest: this.#context.implementationDigest,
+      transform_digest: this.#context.transformDescriptorDigest,
       bundle_digest: this.#context.bundleDigest,
       compiler_digest: this.#context.compilerDigest,
       runtime_digest: this.#context.runtimeDigest,

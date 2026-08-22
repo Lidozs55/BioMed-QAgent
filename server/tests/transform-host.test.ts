@@ -74,6 +74,7 @@ function authorityContext(options: ContextOptions = {}): CoreAuthoritativeTransf
     parametersDigest: HEX_A,
     familySpecDigest: HEX_A,
     projectionDigest: HEX_A,
+    transformDescriptorDigest: HEX_B,
     implementationDigest: compilation?.implementationDigest ?? HEX_A,
     bundleDigest: compilation?.bundleDigest ?? HEX_A,
     codeBundleRef: compilation?.codeBundleRef ?? `bundle_${HEX_A}`,

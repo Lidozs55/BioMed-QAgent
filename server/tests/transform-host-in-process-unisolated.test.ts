@@ -68,6 +68,7 @@ function context(compiled: InProcessUnisolatedCompilationResult): CoreAuthoritat
     parametersDigest: "a".repeat(64),
     familySpecDigest: "a".repeat(64),
     projectionDigest: "a".repeat(64),
+    transformDescriptorDigest: "c".repeat(64),
     implementationDigest: compiled.implementationDigest,
     bundleDigest: compiled.bundleDigest,
     codeBundleRef: compiled.codeBundleRef,
@@ -136,6 +137,7 @@ describe("explicit in-process unisolated Transform Host", () => {
       expect(result.receipt).toMatchObject({
         sandbox_backend: "in_process_unisolated",
         exit_state: "succeeded",
+        transform_digest: fixture.authority.transformDescriptorDigest,
         bundle_digest: fixture.bundle.sha256,
         generation: fixture.authority.generation,
       });
