@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0",
+  "annotation_asset_id": "asset_2330dd816b01bfc4ee07b6b0b12bab581094204faee6e6c8c4232bbe17de4602",
+  "expected_mapping_rows": 5,
+  "expected_expression_probes": 4,
+  "mapping_status_counts": {
+    "mapped": 2,
+    "unmapped": 1,
+    "ambiguous": 2
+  },
+  "every_expression_probe_has_mapping_assertion": true
+}

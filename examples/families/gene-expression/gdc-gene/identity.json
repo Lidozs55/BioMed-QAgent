@@ -1,0 +1,35 @@
+{
+  "schema_version": "1.0",
+  "source_namespace": "gdc",
+  "canonical_accessions": [
+    "TCGA-LUAD"
+  ],
+  "revision_token": null,
+  "provider_snapshot": "gdc:TCGA-LUAD:example-snapshot-v1",
+  "carrier_assets": [
+    {
+      "path": "gdc-gene/fixtures/input/gene-expression.csv",
+      "media_type": "text/csv",
+      "sha256": "ef91815a4629a82a0f13145c6ad87f0e930f78caeef24dc45add571f87dd6825",
+      "asset_id": "asset_ef91815a4629a82a0f13145c6ad87f0e930f78caeef24dc45add571f87dd6825",
+      "source_locator": "example://gdc-gene/fixtures/input/gene-expression.csv"
+    }
+  ],
+  "dataset_identity_records": [
+    {
+      "dataset_id": "ds_a3dbf9270393a4c8bb7475902bcfe14b1d7974720638cceb55fb39526ffad623",
+      "dataset_revision_id": "dsrev_3f4a4a37b3a49a0a1f8efa6bd218afd115e4b4c54edf9af24864fd93206bffd5",
+      "asset_id": "asset_ef91815a4629a82a0f13145c6ad87f0e930f78caeef24dc45add571f87dd6825"
+    }
+  ],
+  "sample_identities": [
+    {
+      "dataset_revision_id": "dsrev_3f4a4a37b3a49a0a1f8efa6bd218afd115e4b4c54edf9af24864fd93206bffd5",
+      "sample_id": "TCGA-55-7570-01A"
+    },
+    {
+      "dataset_revision_id": "dsrev_3f4a4a37b3a49a0a1f8efa6bd218afd115e4b4c54edf9af24864fd93206bffd5",
+      "sample_id": "TCGA-55-7726-01A"
+    }
+  ]
+}

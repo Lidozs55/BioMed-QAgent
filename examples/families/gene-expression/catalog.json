@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0",
+  "catalog_id": "gene-expression.retrieval-examples",
+  "scope": "example",
+  "status": "submitted",
+  "executable": false,
+  "entries": [
+    {
+      "kind": "family_spec",
+      "metadata_only": true,
+      "scope": "example",
+      "id": "gene_expression.reference",
+      "version": "2.0.0",
+      "digest": "76d20efdea7224a46fa02ccc2c4f2ccf080efaa1a3881414d23af4597d823af1",
+      "status": "submitted",
+      "executable": false
+    }
+  ]
+}

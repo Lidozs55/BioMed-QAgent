@@ -1,0 +1,35 @@
+{
+  "schema_version": "1.0",
+  "source_namespace": "geo",
+  "canonical_accessions": [
+    "GSE178352"
+  ],
+  "revision_token": null,
+  "provider_snapshot": "geo:GSE178352:example-snapshot-v1",
+  "carrier_assets": [
+    {
+      "path": "geo-gene/fixtures/input/series-matrix.csv",
+      "media_type": "text/csv",
+      "sha256": "499e7c724167f83966649d34dac6345d4a4f9ac606ec078149d6bd542beb8c45",
+      "asset_id": "asset_499e7c724167f83966649d34dac6345d4a4f9ac606ec078149d6bd542beb8c45",
+      "source_locator": "example://geo-gene/fixtures/input/series-matrix.csv"
+    }
+  ],
+  "dataset_identity_records": [
+    {
+      "dataset_id": "ds_0d0cb9f7838b06a3039ae9bc9b98db254a0f10444f0d4e0bb18bfa065615ee0d",
+      "dataset_revision_id": "dsrev_b3692116947cf1043654f3d3b1d7402378eaa0e06fa1bf68720614a64e72889b",
+      "asset_id": "asset_499e7c724167f83966649d34dac6345d4a4f9ac606ec078149d6bd542beb8c45"
+    }
+  ],
+  "sample_identities": [
+    {
+      "dataset_revision_id": "dsrev_b3692116947cf1043654f3d3b1d7402378eaa0e06fa1bf68720614a64e72889b",
+      "sample_id": "GSM1001"
+    },
+    {
+      "dataset_revision_id": "dsrev_b3692116947cf1043654f3d3b1d7402378eaa0e06fa1bf68720614a64e72889b",
+      "sample_id": "GSM1002"
+    }
+  ]
+}

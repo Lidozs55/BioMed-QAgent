@@ -1,0 +1,49 @@
+{
+  "schema_version": "1.0",
+  "example_id": "geo-probe",
+  "scope": "example",
+  "status": "submitted",
+  "executable": false,
+  "projection_ref": "expression_probe.v2",
+  "probe_mapping_support": "supported_with_assertions",
+  "identity_ref": "geo-probe/identity.json",
+  "source_sketch_ref": "geo-probe/retrieval-source-sketch.json",
+  "artifacts": [
+    {
+      "path": "geo-probe/fixtures/input/series-matrix.csv",
+      "role": "source_carrier",
+      "sha256": "4f4777aac7db9a21dd846e9a94dbe1f43d7f59478b3d22d76916ed07766cdf3a",
+      "size_bytes": 89
+    },
+    {
+      "path": "geo-probe/fixtures/input/gpl570-annotation.csv",
+      "role": "source_carrier",
+      "sha256": "2330dd816b01bfc4ee07b6b0b12bab581094204faee6e6c8c4232bbe17de4602",
+      "size_bytes": 351
+    },
+    {
+      "path": "geo-probe/fixtures/expected/expression.csv",
+      "role": "expected_v2_table",
+      "sha256": "62b2c0f3cde6a58f23785a5efbedca6111430325727d70206a43fc713df35ec0",
+      "size_bytes": 3941
+    },
+    {
+      "path": "geo-probe/fixtures/expected/samples.csv",
+      "role": "expected_v2_table",
+      "sha256": "b5ab63702b4c9e37cd47cea57673d8cb96c503ad11c15962cd1abb26305a4d66",
+      "size_bytes": 433
+    },
+    {
+      "path": "geo-probe/fixtures/expected/datasets.csv",
+      "role": "expected_v2_table",
+      "sha256": "1835c0a943b51757cb767e26ecf349d326141a80b7ed1a1997e81d50c91e4c96",
+      "size_bytes": 514
+    },
+    {
+      "path": "geo-probe/fixtures/expected/probe_gene_mapping.csv",
+      "role": "expected_v2_table",
+      "sha256": "25809e03516d5987a6765095a0053797b18b44e962a0397178e79a0d3f1beac4",
+      "size_bytes": 1931
+    }
+  ]
+}

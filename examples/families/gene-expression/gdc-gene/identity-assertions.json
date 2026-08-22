@@ -1,0 +1,16 @@
+{
+  "schema_version": "1.0",
+  "projection_ref": "expression_gene.v2",
+  "dataset_id": "ds_a3dbf9270393a4c8bb7475902bcfe14b1d7974720638cceb55fb39526ffad623",
+  "dataset_revision_id": "dsrev_3f4a4a37b3a49a0a1f8efa6bd218afd115e4b4c54edf9af24864fd93206bffd5",
+  "carrier_asset_ids": [
+    "asset_ef91815a4629a82a0f13145c6ad87f0e930f78caeef24dc45add571f87dd6825"
+  ],
+  "primary_key_fields": [
+    "dataset_revision_id",
+    "sample_id",
+    "gene_id",
+    "measurement_type"
+  ],
+  "expected_expression_rows": 4
+}

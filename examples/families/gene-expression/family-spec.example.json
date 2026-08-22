@@ -1,0 +1,403 @@
+{
+  "family_spec_id": "gene_expression.reference",
+  "semantic_version": "2.0.0",
+  "projections": [
+    {
+      "projection_id": "expression_gene.v2",
+      "schema_version": "2.0",
+      "primary_tables": [
+        "gene_expression"
+      ],
+      "supporting_tables": [
+        "gene_samples",
+        "gene_datasets"
+      ],
+      "derived_tables": [],
+      "required": [
+        "gene_expression",
+        "gene_samples",
+        "gene_datasets"
+      ],
+      "optional": [],
+      "allow_empty": [],
+      "relations": [
+        "gene_expression_samples",
+        "gene_expression_datasets"
+      ],
+      "row_granularity": "gene_sample_measurement",
+      "compatibility_dimensions": [
+        "schema_ref",
+        "row_granularity",
+        "taxon",
+        "reference_version",
+        "gene_id_namespace",
+        "measurement_type",
+        "value_semantics",
+        "value_scale",
+        "expression_unit",
+        "is_normalized"
+      ],
+      "merge_identity_fields": [
+        "dataset_revision_id",
+        "sample_id",
+        "gene_id",
+        "measurement_type"
+      ],
+      "validation_policy_ref": "example:gene_expression.gene.validation.v2",
+      "assessment_policy_ref": "example:gene_expression.gene.assessment.v2"
+    },
+    {
+      "projection_id": "expression_probe.v2",
+      "schema_version": "2.0",
+      "primary_tables": [
+        "probe_expression"
+      ],
+      "supporting_tables": [
+        "probe_samples",
+        "probe_datasets",
+        "probe_gene_mapping"
+      ],
+      "derived_tables": [],
+      "required": [
+        "probe_expression",
+        "probe_samples",
+        "probe_datasets",
+        "probe_gene_mapping"
+      ],
+      "optional": [],
+      "allow_empty": [],
+      "relations": [
+        "probe_expression_samples",
+        "probe_expression_datasets",
+        "probe_expression_mapping_coverage"
+      ],
+      "row_granularity": "probe_sample_measurement",
+      "compatibility_dimensions": [
+        "schema_ref",
+        "row_granularity",
+        "taxon",
+        "reference_version",
+        "platform_id",
+        "gene_id_namespace",
+        "measurement_type",
+        "value_semantics",
+        "value_scale",
+        "expression_unit",
+        "is_normalized"
+      ],
+      "merge_identity_fields": [
+        "dataset_revision_id",
+        "probe_id",
+        "platform_id",
+        "sample_id"
+      ],
+      "validation_policy_ref": "example:gene_expression.probe.validation.v2",
+      "assessment_policy_ref": "example:gene_expression.probe.assessment.v2"
+    }
+  ],
+  "table_definitions": [
+    {
+      "table_id": "gene_expression",
+      "schema_ref": "gene_expression.long.v2",
+      "role": "primary",
+      "required": true,
+      "allow_empty": false,
+      "primary_key": [
+        "dataset_revision_id",
+        "sample_id",
+        "gene_id",
+        "measurement_type"
+      ],
+      "field_names": [
+        "record_id",
+        "dataset_id",
+        "dataset_revision_id",
+        "source_id",
+        "asset_id",
+        "gene_id_raw",
+        "gene_id",
+        "gene_id_namespace",
+        "gene_id_version",
+        "sample_id",
+        "source_sample_alias",
+        "measurement_type",
+        "value_semantics",
+        "value_scale",
+        "is_normalized",
+        "is_integer_expected",
+        "expression_value",
+        "expression_unit",
+        "source_logical_file",
+        "source_line_number",
+        "source_column_index",
+        "source_column_name",
+        "source_raw_value"
+      ]
+    },
+    {
+      "table_id": "gene_samples",
+      "schema_ref": "expression_samples.v2",
+      "role": "supporting",
+      "required": true,
+      "allow_empty": false,
+      "primary_key": [
+        "dataset_revision_id",
+        "sample_id"
+      ],
+      "field_names": [
+        "dataset_revision_id",
+        "sample_id",
+        "source_sample_alias",
+        "taxon",
+        "platform_id",
+        "source_locator"
+      ]
+    },
+    {
+      "table_id": "gene_datasets",
+      "schema_ref": "expression_datasets.v2",
+      "role": "supporting",
+      "required": true,
+      "allow_empty": false,
+      "primary_key": [
+        "dataset_revision_id"
+      ],
+      "field_names": [
+        "dataset_id",
+        "dataset_revision_id",
+        "source_namespace",
+        "canonical_accession",
+        "revision_token",
+        "provider_snapshot",
+        "carrier_asset_ids",
+        "source_locator"
+      ]
+    },
+    {
+      "table_id": "probe_expression",
+      "schema_ref": "gene_expression.probe_long.v2",
+      "role": "primary",
+      "required": true,
+      "allow_empty": false,
+      "primary_key": [
+        "dataset_revision_id",
+        "probe_id",
+        "platform_id",
+        "sample_id"
+      ],
+      "field_names": [
+        "record_id",
+        "dataset_id",
+        "dataset_revision_id",
+        "source_id",
+        "asset_id",
+        "probe_id",
+        "platform_id",
+        "sample_id",
+        "value",
+        "gene_id_namespace",
+        "value_semantics",
+        "value_scale",
+        "expression_unit",
+        "is_normalized",
+        "is_integer_expected",
+        "source_sample_alias",
+        "measurement_type",
+        "source_logical_file",
+        "source_line_number",
+        "source_column_index",
+        "source_column_name",
+        "source_raw_value"
+      ]
+    },
+    {
+      "table_id": "probe_samples",
+      "schema_ref": "expression_probe_samples.v2",
+      "role": "supporting",
+      "required": true,
+      "allow_empty": false,
+      "primary_key": [
+        "dataset_revision_id",
+        "sample_id"
+      ],
+      "field_names": [
+        "dataset_revision_id",
+        "sample_id",
+        "source_sample_alias",
+        "taxon",
+        "platform_id",
+        "source_locator"
+      ]
+    },
+    {
+      "table_id": "probe_datasets",
+      "schema_ref": "expression_probe_datasets.v2",
+      "role": "supporting",
+      "required": true,
+      "allow_empty": false,
+      "primary_key": [
+        "dataset_revision_id"
+      ],
+      "field_names": [
+        "dataset_id",
+        "dataset_revision_id",
+        "source_namespace",
+        "canonical_accession",
+        "revision_token",
+        "provider_snapshot",
+        "carrier_asset_ids",
+        "source_locator"
+      ]
+    },
+    {
+      "table_id": "probe_gene_mapping",
+      "schema_ref": "probe_mapping_assertion.v1",
+      "role": "supporting",
+      "required": true,
+      "allow_empty": false,
+      "primary_key": [
+        "mapping_assertion_id"
+      ],
+      "field_names": [
+        "mapping_assertion_id",
+        "dataset_revision_id",
+        "mapping_scope_id",
+        "platform_id",
+        "probe_id",
+        "target_gene_id",
+        "target_namespace",
+        "annotation_asset_id",
+        "mapping_rule_id",
+        "mapping_status"
+      ]
+    }
+  ],
+  "relations": [
+    {
+      "relation_id": "gene_expression_samples",
+      "from_table_id": "gene_expression",
+      "from_fields": [
+        "dataset_revision_id",
+        "sample_id"
+      ],
+      "to_table_id": "gene_samples",
+      "to_fields": [
+        "dataset_revision_id",
+        "sample_id"
+      ],
+      "cardinality": "many_to_one",
+      "missing_policy": "reject"
+    },
+    {
+      "relation_id": "gene_expression_datasets",
+      "from_table_id": "gene_expression",
+      "from_fields": [
+        "dataset_revision_id"
+      ],
+      "to_table_id": "gene_datasets",
+      "to_fields": [
+        "dataset_revision_id"
+      ],
+      "cardinality": "many_to_one",
+      "missing_policy": "reject"
+    },
+    {
+      "relation_id": "probe_expression_samples",
+      "from_table_id": "probe_expression",
+      "from_fields": [
+        "dataset_revision_id",
+        "sample_id"
+      ],
+      "to_table_id": "probe_samples",
+      "to_fields": [
+        "dataset_revision_id",
+        "sample_id"
+      ],
+      "cardinality": "many_to_one",
+      "missing_policy": "reject"
+    },
+    {
+      "relation_id": "probe_expression_datasets",
+      "from_table_id": "probe_expression",
+      "from_fields": [
+        "dataset_revision_id"
+      ],
+      "to_table_id": "probe_datasets",
+      "to_fields": [
+        "dataset_revision_id"
+      ],
+      "cardinality": "many_to_one",
+      "missing_policy": "reject"
+    },
+    {
+      "relation_id": "probe_expression_mapping_coverage",
+      "from_table_id": "probe_expression",
+      "from_fields": [
+        "dataset_revision_id",
+        "platform_id",
+        "probe_id"
+      ],
+      "to_table_id": "probe_gene_mapping",
+      "to_fields": [
+        "dataset_revision_id",
+        "platform_id",
+        "probe_id"
+      ],
+      "cardinality": "many_to_many",
+      "missing_policy": "reject"
+    }
+  ],
+  "identity": {
+    "dataset_id_scheme": "ds_hash",
+    "dataset_revision_id_scheme": "dsrev_hash",
+    "asset_id_scheme": "asset_sha256",
+    "sample_identity_fields": [
+      "dataset_revision_id",
+      "sample_id"
+    ],
+    "probe_mapping_assertion_pk": "mapping_assertion_id"
+  },
+  "transform_capability_refs": [],
+  "declared_outputs": [
+    {
+      "table_id": "gene_expression",
+      "schema_ref": "gene_expression.long.v2"
+    },
+    {
+      "table_id": "gene_samples",
+      "schema_ref": "expression_samples.v2"
+    },
+    {
+      "table_id": "gene_datasets",
+      "schema_ref": "expression_datasets.v2"
+    },
+    {
+      "table_id": "probe_expression",
+      "schema_ref": "gene_expression.probe_long.v2"
+    },
+    {
+      "table_id": "probe_samples",
+      "schema_ref": "expression_probe_samples.v2"
+    },
+    {
+      "table_id": "probe_datasets",
+      "schema_ref": "expression_probe_datasets.v2"
+    },
+    {
+      "table_id": "probe_gene_mapping",
+      "schema_ref": "probe_mapping_assertion.v1"
+    }
+  ],
+  "integration_policy_ref": "example:gene_expression.partitioned.integration.v2",
+  "validation_policy_ref": "example:gene_expression.validation.v2",
+  "assessment_policy_ref": "example:gene_expression.assessment.v2",
+  "resource_class_request": "none",
+  "scope": "example",
+  "author": "BioMed-QAgent static retrieval example",
+  "evidence_refs": [
+    "example-evidence:geo-gene-source-sketch",
+    "example-evidence:geo-probe-source-sketch",
+    "example-evidence:gdc-gene-source-sketch"
+  ],
+  "canonical_digest": "76d20efdea7224a46fa02ccc2c4f2ccf080efaa1a3881414d23af4597d823af1"
+}
