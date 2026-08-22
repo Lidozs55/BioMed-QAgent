@@ -1,8 +1,17 @@
-import { computeFamilySpecDigest, type FamilySpec, type Projection } from "@biomed/contracts";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+import { DEFAULT_RUNTIME_LIMITS, computeFamilySpecDigest, type FamilySpec, type Projection } from "@biomed/contracts";
 import { describe, expect, test } from "vitest";
 
 import { canonicalDigest } from "../src/dataset/adapters/identity.js";
-import { parseDynamicFamilyBuildSubmission } from "../src/agent/tools/dynamic-family-build.js";
+import {
+  createDynamicFamilyBuildTool,
+  parseDynamicFamilyBuildSubmission,
+} from "../src/agent/tools/dynamic-family-build.js";
+import { submitDynamicFamilyBuild } from "../src/dataset/dynamic-family/submission.js";
+import { SourceAssetRegistry } from "../src/runtime/source-assets/registry.js";
 
 const A = "a".repeat(64);
 const B = "b".repeat(64);
@@ -66,6 +75,7 @@ async function submission(): Promise<Record<string, unknown>> {
       determinism_profile: "deterministic", resource_class: "small", origin: "agent",
       scope: "task", review_refs: [],
     },
+    registered_sources: { source_binding: `asset_${A}` },
     build_proposal: {
       schema_version: "2.0", spec_kind: "proposal", build_id: "build_dynamic",
       family_spec_ref: { scope: "task", id: family.family_spec_id, version: family.semantic_version, digest: family.canonical_digest },
@@ -88,12 +98,72 @@ describe("dynamic family build tool boundary", () => {
     expect(parsed.projection.projection_id).toBe("projection_dynamic");
   });
 
+  test("exposes one callback-backed Agent tool without weakening parsing", async () => {
+    let received: unknown;
+    const tool = createDynamicFamilyBuildTool({
+      submit: async (value) => {
+        received = value;
+        return { ok: true, build_id: value.build_proposal.build_id };
+      },
+    });
+    const result = await tool.execute(await submission());
+    expect(tool.name).toBe("submit_dynamic_family_build");
+    expect(result.isError).not.toBe(true);
+    expect(received).toMatchObject({ execution_backend: "in_process_unisolated" });
+
+    const invalid = await submission();
+    invalid.execution_backend = "sandbox";
+    const rejected = await tool.execute(invalid);
+    expect(rejected.isError).toBe(true);
+    expect(rejected.content).toContain("dynamic_build_rejected");
+  });
+
+  test("executes registered bytes through the total unisolated Core composition", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "dynamic-family-submit-"));
+    try {
+      await mkdir(path.join(root, "source_assets"), { recursive: true });
+      await writeFile(path.join(root, "source_assets", "source.csv"), "record_id,value\nr1,1\n", "utf8");
+      const registry = new SourceAssetRegistry("task_dynamic", root);
+      const receipt = await registry.register({ sourceId: "source_dynamic", relativePath: "source_assets/source.csv" });
+      const raw = await submission();
+      raw.registered_sources = { source_binding: receipt.asset_ref.asset_id };
+      raw.transform_source = `export const transform = { run({ inputs }) { const [input] = inputs; return { outputs: [{ handle: "out_0", table_id: "records", schema_ref: "schema_records", locator_ref: input.receipt_id, content: "record_id,value\\nr1,1\\n", row_count: 1 }] }; } };`;
+      let parsed = await parseDynamicFamilyBuildSubmission(raw);
+      let expectedDigest = "";
+      await expect(submitDynamicFamilyBuild({
+        taskId: "task_dynamic", runId: "run_dynamic", submission: parsed,
+        sourceAssetRegistry: registry, taskRoot: root, runtimeLimits: DEFAULT_RUNTIME_LIMITS,
+      })).rejects.toThrow(/Host-compiled descriptor ([0-9a-f]{64})/);
+      try {
+        await submitDynamicFamilyBuild({
+          taskId: "task_dynamic", runId: "run_dynamic", submission: parsed,
+          sourceAssetRegistry: registry, taskRoot: root, runtimeLimits: DEFAULT_RUNTIME_LIMITS,
+        });
+      } catch (error) {
+        expectedDigest = /([0-9a-f]{64})/.exec((error as Error).message)?.[1] ?? "";
+      }
+      const proposal = raw.build_proposal as { transform_refs: Array<{ digest: string }> };
+      proposal.transform_refs[0]!.digest = expectedDigest;
+      parsed = await parseDynamicFamilyBuildSubmission(raw);
+      const result = await submitDynamicFamilyBuild({
+        taskId: "task_dynamic", runId: "run_dynamic", submission: parsed,
+        sourceAssetRegistry: registry, taskRoot: root, runtimeLimits: DEFAULT_RUNTIME_LIMITS,
+      });
+      expect(result.receipt.sandbox_backend).toBe("in_process_unisolated");
+      expect(result.operationResult.output_summary).toMatchObject({ tables: { records: { row_count: 1 } } });
+      expect(result.materialization.candidate.tables[0]?.definition.table_id).toBe("records");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("rejects sandbox claims, direct paths, examples, and unknown fields", async () => {
     const sandbox = await submission();
     sandbox.execution_backend = "container";
     await expect(parseDynamicFamilyBuildSubmission(sandbox)).rejects.toThrow(/explicit/);
-    const directPath = { ...await submission(), workspace_path: "workspace/data.csv" };
-    await expect(parseDynamicFamilyBuildSubmission(directPath)).rejects.toThrow(/unknown/);
+    const directPath = await submission();
+    directPath.registered_sources = { source_binding: "workspace/data.csv" };
+    await expect(parseDynamicFamilyBuildSubmission(directPath)).rejects.toThrow(/asset_<sha256>/);
     const example = await submission();
     example.family_spec = { ...(example.family_spec as FamilySpec), scope: "example" };
     await expect(parseDynamicFamilyBuildSubmission(example)).rejects.toThrow(/example|digest/);

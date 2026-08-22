@@ -5,6 +5,7 @@ import { DEFAULT_RUNTIME_LIMITS, type RuntimeLimits } from "@biomed/contracts";
 import type { BioMedAgentAdapter, BioMedModelConfig } from "../agent/contracts.js";
 import { PiAgentAdapter } from "../agent/pi-adapter.js";
 import { createDatasetBuildTools } from "../agent/tools/dataset-build.js";
+import { createDynamicFamilyBuildTool } from "../agent/tools/dynamic-family-build.js";
 import { createBusinessToolBundle } from "../agent/tools/business-tools.js";
 import { createDeclarativeDatabaseTools } from "../agent/tools/declarative-db.js";
 import { assertUniqueToolNames } from "../agent/tools/registry.js";
@@ -37,6 +38,7 @@ import {
 } from "../dataset/acquisition/runtime.js";
 import { coreEventToPayload } from "../dataset/service/events.js";
 import { createDatasetCoreService } from "../dataset/service/dataset-core.js";
+import { submitDynamicFamilyBuild } from "../dataset/dynamic-family/submission.js";
 import { TypeScriptDatasetCore } from "../dataset/service/ts-core.js";
 import { PublicHttpClient } from "../external/network/http-client.js";
 import { ContentCache } from "../external/acquisition/content-cache.js";
@@ -291,13 +293,14 @@ export function createPhase3AcquisitionRuntime(options: {
   taskRoot: string;
   cache: ContentCache;
   client: PublicHttpClient;
+  sourceAssetRegistry?: SourceAssetRegistry;
 }): CoreAcquisitionRuntime {
   const registry = new CoreAcquisitionRegistry();
   registry.registerProvider(createChemblFilesProvider());
   for (const provider of createFixedBiomedicalProviders()) registry.registerProvider(provider);
   return new CoreAcquisitionRuntime({
     ...options,
-    sourceAssetRegistry: new SourceAssetRegistry(options.taskId, options.taskRoot),
+    sourceAssetRegistry: options.sourceAssetRegistry ?? new SourceAssetRegistry(options.taskId, options.taskRoot),
     registry,
   });
 }
@@ -396,11 +399,13 @@ export async function createPhase3Runtime(
         timeoutMs: limits.http_timeout_seconds * 1000,
       });
       const cache = new ContentCache(path.join(taskRoot, "cache"));
+      const sourceAssetRegistry = new SourceAssetRegistry(taskId, taskRoot);
       const acquisitionRuntime = createPhase3AcquisitionRuntime({
         taskId,
         taskRoot,
         cache,
         client,
+        sourceAssetRegistry,
       });
       const service = createDatasetCoreService({
         tsCore,
@@ -466,7 +471,31 @@ export async function createPhase3Runtime(
             return [] as Awaited<ReturnType<typeof createDeclarativeDatabaseTools>>;
           });
       const workspaceTools = createWorkspaceTools(workspace);
+      const dynamicFamilyTool = createDynamicFamilyBuildTool({
+        submit: async (submission, signal) => {
+          const result = await submitDynamicFamilyBuild({
+            taskId,
+            runId: currentRunId,
+            submission,
+            sourceAssetRegistry,
+            taskRoot,
+            runtimeLimits: limits,
+            signal,
+          });
+          return {
+            ok: true,
+            status: "executed_not_published",
+            build_id: submission.build_proposal.build_id,
+            operation_result_manifest_id: result.operationResult.result_manifest_id,
+            tables: result.materialization.candidate.tables.map((table) => table.definition.table_id),
+            relations: result.materialization.candidate.relations.map((relation) => relation.relation_id),
+            backend: result.receipt.sandbox_backend,
+            security_boundary: false,
+          };
+        },
+      });
       const datasetTools = createDatasetBuildTools({
+
         client: service,
         taskId,
         taskRoot,
@@ -521,6 +550,7 @@ export async function createPhase3Runtime(
         ...bundle.tools,
         ...dynamicTools,
         ...datasetTools,
+        dynamicFamilyTool,
         ...importTools,
       ]);
       return {
@@ -530,6 +560,7 @@ export async function createPhase3Runtime(
           ...bundle.tools,
           ...dynamicTools,
           ...datasetTools,
+          dynamicFamilyTool,
           ...importTools,
         ],
         permissionBroker,

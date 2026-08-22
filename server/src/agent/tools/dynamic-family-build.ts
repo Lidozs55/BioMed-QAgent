@@ -12,6 +12,11 @@ import {
 } from "@biomed/contracts";
 
 import { canonicalDigest } from "../../dataset/adapters/identity.js";
+import type {
+  BioMedAgentTool,
+  BioMedToolExecutionContext,
+  BioMedToolResult,
+} from "../contracts.js";
 
 const TOP_KEYS = new Set([
   "schema_version",
@@ -21,6 +26,7 @@ const TOP_KEYS = new Set([
   "transform_source",
   "transform_metadata",
   "build_proposal",
+  "registered_sources",
 ]);
 const MAX_SOURCE_BYTES = 256 * 1024;
 const HEX = "0".repeat(64);
@@ -38,6 +44,59 @@ export interface ParsedDynamicFamilyBuildSubmission {
     | "compiler_options_digest" | "runtime_abi_version" | "runtime_policy_version"
     | "dependency_closure_digest" | "code_bundle_ref">;
   readonly build_proposal: DatasetBuildProposal2;
+  readonly registered_sources: Readonly<Record<string, string>>;
+}
+
+export interface DynamicFamilyBuildToolOptions {
+  readonly submit: (
+    submission: ParsedDynamicFamilyBuildSubmission,
+    signal: AbortSignal | undefined,
+    context: BioMedToolExecutionContext | undefined,
+  ) => Promise<unknown>;
+}
+
+export function createDynamicFamilyBuildTool(
+  options: DynamicFamilyBuildToolOptions,
+): BioMedAgentTool {
+  return {
+    name: "submit_dynamic_family_build",
+    label: "Submit Dynamic Family Build",
+    description:
+      "Submit a digest-bound FamilySpec and DatasetTransform to the explicit in_process_unisolated runtime. This runtime is not a sandbox, isolation mechanism, or security boundary. Registered asset/result references are required; direct paths and discovery bytes are forbidden.",
+    parameters: {
+      type: "object",
+      properties: {
+        schema_version: { type: "string", enum: ["1.0"] },
+        execution_backend: { type: "string", enum: ["in_process_unisolated"] },
+        family_spec: { type: "object" },
+        projection_id: { type: "string", minLength: 1 },
+        transform_source: { type: "string", minLength: 1, maxLength: MAX_SOURCE_BYTES },
+        transform_metadata: { type: "object" },
+        build_proposal: { type: "object" },
+        registered_sources: {
+          type: "object",
+          description: "Exact binding_id to task-owned asset_<sha256> closure. Paths and discovery bytes are forbidden.",
+          additionalProperties: { type: "string", pattern: "^asset_[0-9a-f]{64}$" },
+        },
+      },
+      required: [...TOP_KEYS],
+      additionalProperties: false,
+    },
+    async execute(value, signal, context): Promise<BioMedToolResult> {
+      try {
+        const submission = await parseDynamicFamilyBuildSubmission(value);
+        const details = await options.submit(submission, signal, context);
+        return { content: JSON.stringify(details), details };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return {
+          content: JSON.stringify({ ok: false, error: { code: "dynamic_build_rejected", message } }),
+          details: { ok: false, error: { code: "dynamic_build_rejected", message } },
+          isError: true,
+        };
+      }
+    },
+  };
 }
 
 /** Strict wire boundary only. It never executes code or grants publication authority. */
@@ -65,6 +124,7 @@ export async function parseDynamicFamilyBuildSubmission(
     throw new TypeError("transform metadata does not bind the selected executable FamilySpec projection");
   }
   const proposal = parseDatasetBuildProposal2(record.build_proposal, "$.build_proposal");
+  const registeredSources = parseRegisteredSources(record.registered_sources, proposal);
   if (
     proposal.family_spec_ref.id !== family.family_spec_id
     || proposal.family_spec_ref.version !== family.semantic_version
@@ -82,7 +142,24 @@ export async function parseDynamicFamilyBuildSubmission(
     transform_source: source,
     transform_metadata: transform,
     build_proposal: proposal,
+    registered_sources: registeredSources,
   });
+}
+
+function parseRegisteredSources(
+  value: unknown,
+  proposal: DatasetBuildProposal2,
+): Readonly<Record<string, string>> {
+  const bindingIds = new Set(proposal.source_bindings.map((binding) => binding.binding_id));
+  const record = exactDataRecord(value, bindingIds, "$.registered_sources");
+  const result = Object.create(null) as Record<string, string>;
+  for (const [bindingId, assetId] of Object.entries(record)) {
+    if (typeof assetId !== "string" || !/^asset_[0-9a-f]{64}$/.test(assetId)) {
+      throw new TypeError(`registered_sources.${bindingId} must be a task-owned asset_<sha256> ID`);
+    }
+    result[bindingId] = assetId;
+  }
+  return Object.freeze(result);
 }
 
 function parseMetadata(value: unknown): ParsedDynamicFamilyBuildSubmission["transform_metadata"] {
