@@ -546,7 +546,9 @@ function parseWireResult(value: unknown, expectedHandles: readonly string[]): Wi
     const output = entry as Record<string, unknown>;
     const keys = ["content", "handle", "locator_ref", "row_count", "schema_ref", "table_id"];
     if (Object.keys(output).sort().join(",") !== keys.join(",")) {
-      throw invalid(`Transform output ${index} has unknown or missing fields`);
+      throw invalid(
+        `Transform output ${index} must be a wire envelope with exactly: content, handle, locator_ref, row_count, schema_ref, table_id; it is not a rows object`, 
+      );
     }
     const handle = stringField(output.handle, `outputs[${index}].handle`);
     if (handle !== expectedHandles[index]) throw invalid("Transform output handle order does not match declaration");

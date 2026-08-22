@@ -73,6 +73,11 @@ import { defineTransform } from "@biomed/transform-sdk/v1";
 export const transform = defineTransform({ run() { while (true) {} } });
 `;
 
+const INVALID_OUTPUT_SOURCE = `
+import { defineTransform } from "@biomed/transform-sdk/v1";
+export const transform = defineTransform({ run() { return { outputs: [{ rows: [] }] }; } });
+`;
+
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
@@ -403,6 +408,23 @@ describe("explicit in-process unisolated Transform Host", () => {
         inputs: Object.freeze([input.request]),
         isGenerationCurrent: current,
       })).rejects.toMatchObject({ code: "resource_limit_exceeded" });
+    } finally {
+      await fixture.store.dispose();
+    }
+  });
+
+  test("reports the exact output wire-envelope keys on malformed output", async () => {
+    const fixture = await setup(INVALID_OUTPUT_SOURCE);
+    try {
+      const result = await fixture.host.execute({
+        authorityClaim: fixture.authorityClaim,
+        bundle: fixture.bundle,
+        isGenerationCurrent: current,
+      });
+      expect(result.receipt.exit_state).toBe("failed");
+      expect(result.stderr).toContain(
+        "Transform output 0 must be a wire envelope with exactly: content, handle, locator_ref, row_count, schema_ref, table_id; it is not a rows object",
+      );
     } finally {
       await fixture.store.dispose();
     }
