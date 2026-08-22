@@ -2,6 +2,7 @@ import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import ts from "typescript";
 import { describe, expect, test } from "vitest";
 
 type ImportUse = {
@@ -63,15 +64,42 @@ function parseStaticImports(source: string): ImportUse[] {
   return imports;
 }
 
-function parseRuntimeModuleSpecifiers(source: string): string[] {
-  const code = withoutComments(source);
-  const specifiers = parseStaticImports(source)
-    .filter((use) => !use.typeOnly)
-    .map((use) => use.source);
-  for (const match of code.matchAll(/\bimport\s*\(\s*["']([^"']+)["']\s*\)/g)) {
-    specifiers.push(match[1]);
+function dynamicImportSpecifiers(source: string): Array<string | null> {
+  const sourceFile = ts.createSourceFile(
+    "architecture-guard-input.ts",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const specifiers: Array<string | null> = [];
+  function visit(node: ts.Node): void {
+    if (
+      ts.isCallExpression(node)
+      && node.expression.kind === ts.SyntaxKind.ImportKeyword
+    ) {
+      const argument = node.arguments[0];
+      specifiers.push(
+        argument !== undefined && ts.isStringLiteralLike(argument)
+          ? argument.text
+          : null,
+      );
+    }
+    ts.forEachChild(node, visit);
   }
+  visit(sourceFile);
   return specifiers;
+}
+
+function parseRuntimeModuleSpecifiers(source: string): string[] {
+  return [
+    ...parseStaticImports(source)
+      .filter((use) => !use.typeOnly)
+      .map((use) => use.source),
+    ...dynamicImportSpecifiers(source).filter(
+      (specifier): specifier is string => specifier !== null,
+    ),
+  ];
 }
 
 function importsStagedFamilyHostModule(source: string): boolean {
@@ -87,7 +115,7 @@ function checkSource(file: string, source: string): Violation[] {
     violations.push({ file, reason });
   };
 
-  if (/\bimport\s*\(/.test(code)) add("dynamic import is not allowed");
+  if (dynamicImportSpecifiers(source).length > 0) add("dynamic import is not allowed");
   for (const use of parseStaticImports(source)) {
     const normalized = use.source.replaceAll("\\", "/").toLowerCase();
     if (normalized === "node:vm" || normalized === "vm") add("node:vm import");
@@ -172,8 +200,14 @@ async function scanInboundFamilyHostImports(): Promise<Violation[]> {
 }
 
 describe("Transform Host architecture guard", () => {
-  test("does not confuse comments or safe type-only contracts imports with violations", () => {
-    expect(checkSource("safe.ts", `// node:vm and Publisher\nimport type { DatasetTransform } from "@biomed/contracts";`)).toEqual([]);
+  test("does not confuse comments, strings, or safe type-only imports with violations", () => {
+    expect(checkSource(
+      "safe.ts",
+      `// node:vm and Publisher\nimport type { DatasetTransform } from "@biomed/contracts";\nconst message = "Dynamic import() is forbidden";`,
+    )).toEqual([]);
+    expect(checkSource("bad-dynamic.ts", 'await import("./worker.js");')).toEqual([
+      { file: "bad-dynamic.ts", reason: "dynamic import is not allowed" },
+    ]);
   });
 
   test("fixture helper catches forbidden node:vm, worker_threads, and Publisher imports", () => {
