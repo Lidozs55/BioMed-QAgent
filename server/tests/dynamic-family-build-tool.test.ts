@@ -123,7 +123,9 @@ describe("dynamic family build tool boundary", () => {
     const schema = JSON.stringify(tool.parameters);
     expect(schema).toContain('"table_definitions"');
     expect(schema).toContain('"field_names"');
-    expect(schema).toContain("TypeScript source only");
+    expect(schema).toContain("Synchronous TypeScript only");
+    expect(schema).toContain("target_records");
+    expect(schema).toContain("maxItems");
     expect(schema).toContain("chembl.files.v1");
     expect(schema).toContain("pubchem.files.v1");
     expect(schema).toContain("geo.files.v1");

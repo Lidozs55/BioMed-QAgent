@@ -105,7 +105,11 @@ function dynamicFamilyBuildParameters(): Record<string, unknown> {
       schema_version: { type: "string", enum: ["2.0"] },
       primary_tables: ids, supporting_tables: ids, derived_tables: ids,
       required: ids, optional: ids, allow_empty: ids, relations: ids,
-      row_granularity: safeId, compatibility_dimensions: ids, merge_identity_fields: ids,
+      row_granularity: {
+        ...safeId,
+        description: "Machine identifier, not prose; for bioactivity use activity_measurement.",
+      },
+      compatibility_dimensions: ids, merge_identity_fields: ids,
       validation_policy_ref: safeId, assessment_policy_ref: safeId,
     },
     required: [
@@ -240,6 +244,23 @@ function dynamicFamilyBuildParameters(): Record<string, unknown> {
     },
     required: ["source", "accession", "entities"], additionalProperties: false,
   });
+  const pubchemParameters = {
+    type: "object",
+    description: "Exactly one CID per binding. For multiple compounds create multiple source bindings/acquisition requests.",
+    properties: {
+      source: { type: "string", enum: ["pubchem"] },
+      accession: { type: "string", pattern: "^[1-9][0-9]*$" },
+      entities: {
+        type: "object",
+        properties: {
+          pubchem_cids: { type: "array", minItems: 1, maxItems: 1, items: { type: "string", pattern: "^[1-9][0-9]*$" } },
+          compound_ids: { type: "array", minItems: 1, maxItems: 1, items: { type: "string", pattern: "^[1-9][0-9]*$" } },
+        },
+        additionalProperties: false,
+      },
+    },
+    required: ["source", "accession", "entities"], additionalProperties: false,
+  };
   const acquisition = {
     type: "object",
     oneOf: [
@@ -253,7 +274,7 @@ function dynamicFamilyBuildParameters(): Record<string, unknown> {
       {
         properties: {
           provider_id: { type: "string", enum: ["pubchem.files.v1"] },
-          parameters: fixedParameters("pubchem", "One positive PubChem CID."),
+          parameters: pubchemParameters,
         },
         required: ["provider_id", "parameters"], additionalProperties: false,
       },
@@ -276,11 +297,15 @@ function dynamicFamilyBuildParameters(): Record<string, unknown> {
     properties: {
       schema_version: { type: "string", enum: ["1.0"] },
       execution_backend: { type: "string", enum: ["in_process_unisolated"] },
-      family_spec: familySpec,
+      family_spec: {
+        ...familySpec,
+        description:
+          "For normalized bioactivity use exactly target_records, compound_records, assay_records, activity_records (primary), and compound_crosswalk; activity_records has many-to-one relations to target_records, compound_records, and assay_records. canonical_digest is SHA-256 canonical JSON excluding canonical_digest; use zeros for the first digest handshake.",
+      },
       projection_id: safeId,
       transform_source: {
         type: "string", minLength: 1, maxLength: MAX_SOURCE_BYTES,
-        description: "TypeScript source only (not Python). Export const transform={run({inputs}){...}}. Return {outputs:[{handle:'out_0',table_id,schema_ref,locator_ref:inputs[0].receipt_id,content:'CSV text',row_count}]}.",
+        description: "Synchronous TypeScript only (not Python, not async/Promise). Export const transform={run({inputs}){...}}. Each frozen input is exactly {handle,receipt_kind,receipt_id,text}; destructure the array and JSON.parse(input.text). Do not import or use process/require/globalThis/eval, input.text(), computed property access, or filesystem/network APIs. Return {outputs:[{handle:'out_0',table_id,schema_ref,locator_ref:firstInput.receipt_id,content:'CSV text',row_count}]} in projection table order.",
       },
       transform_metadata: transformMetadata,
       build_proposal: buildProposal,
@@ -289,7 +314,7 @@ function dynamicFamilyBuildParameters(): Record<string, unknown> {
         additionalProperties: { type: "string", pattern: "^asset_[0-9a-f]{64}$" },
       },
       acquisition_requests: {
-        type: "object", description: "Preferred formal input path. Keys exactly match unresolved build_proposal source binding IDs.",
+        type: "object", description: "Preferred formal input path. Keys exactly match unresolved build_proposal source binding IDs. PubChem accepts exactly one CID per binding; create one binding/request per CID.",
         additionalProperties: acquisition,
       },
     },
