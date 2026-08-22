@@ -26,6 +26,24 @@ function collect(): {
 
 const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
+/** Narrow EventPayload to the operation lifecycle family and its members. */
+const ofType = <T extends EventPayload["type"]>(
+  payloads: EventPayload[],
+  type: T,
+): Array<Extract<EventPayload, { type: T }>> =>
+  payloads.filter((p): p is Extract<EventPayload, { type: T }> => p.type === type);
+
+/** operation_ids in emission order (all tool-query events are lifecycle events). */
+const queryOperationIds = (payloads: EventPayload[]): string[] =>
+  payloads.flatMap((p) =>
+    p.type === "operation_started" ||
+    p.type === "operation_progress" ||
+    p.type === "operation_completed" ||
+    p.type === "operation_failed"
+      ? [p.operation_id]
+      : [],
+  );
+
 describe("createPhase3ToolHooks query lifecycle", () => {
   it("opens with a readable label and closes with succeeded on success", async () => {
     const { payloads, recordRunEvent } = collect();
@@ -39,14 +57,14 @@ describe("createPhase3ToolHooks query lifecycle", () => {
     expect(payloads).toEqual([
       {
         type: "operation_started",
-        operation_id: "tool:pubmed:query",
+        operation_id: "tool:pubmed:query:1",
         label: "检索 PubMed",
         category: "discovery",
         attempt: 1,
       },
       {
         type: "operation_progress",
-        operation_id: "tool:pubmed:query",
+        operation_id: "tool:pubmed:query:1",
         kind: "query",
         current: 5,
         total: null,
@@ -54,7 +72,7 @@ describe("createPhase3ToolHooks query lifecycle", () => {
       },
       {
         type: "operation_completed",
-        operation_id: "tool:pubmed:query",
+        operation_id: "tool:pubmed:query:1",
         status: "succeeded",
       },
     ]);
@@ -78,7 +96,7 @@ describe("createPhase3ToolHooks query lifecycle", () => {
     );
     expect(failed).toEqual({
       type: "operation_failed",
-      operation_id: "tool:gdc:query",
+      operation_id: "tool:gdc:query:1",
       status: "failed",
       error: null,
     });
@@ -87,7 +105,7 @@ describe("createPhase3ToolHooks query lifecycle", () => {
     );
     expect(skipped).toEqual({
       type: "operation_completed",
-      operation_id: "tool:reactome:query",
+      operation_id: "tool:reactome:query:1",
       status: "skipped",
     });
   });
@@ -105,7 +123,7 @@ describe("createPhase3ToolHooks query lifecycle", () => {
       payloads.find((payload) => payload.type === "operation_completed"),
     ).toEqual({
       type: "operation_completed",
-      operation_id: "tool:local_cache:query",
+      operation_id: "tool:local_cache:query:1",
       status: "succeeded",
     });
   });
@@ -119,9 +137,114 @@ describe("createPhase3ToolHooks query lifecycle", () => {
 
     expect(payloads[0]).toMatchObject({
       type: "operation_started",
-      operation_id: "tool:mystery_source:query",
+      operation_id: "tool:mystery_source:query:1",
       label: "检索 mystery_source",
     });
+  });
+});
+
+describe("createPhase3ToolHooks query identity", () => {
+  it("scopes operation ids per query call so concurrent same-source queries do not collide", async () => {
+    const { payloads, recordRunEvent } = collect();
+    const hooks = createPhase3ToolHooks(recordRunEvent, () => "run_1");
+
+    // Two concurrent pubmed queries: both start before either ends, and the
+    // second finishes first (out-of-order completion). Before the fix both
+    // chains shared ``tool:pubmed:query``, so the reducer merged them onto a
+    // single UI card and start/progress/end events interleaved.
+    hooks.onQueryStarted?.("TP53", "pubmed");
+    hooks.onQueryStarted?.("BRCA", "pubmed");
+    await flush();
+    hooks.onQuery?.("BRCA", "pubmed", "success", 3);
+    await flush();
+    hooks.onQuery?.("TP53", "pubmed", "success", 5);
+    await flush();
+
+    const started = ofType(payloads, "operation_started");
+    const progressed = ofType(payloads, "operation_progress");
+    const completed = ofType(payloads, "operation_completed");
+    expect(started).toHaveLength(2);
+    expect(progressed).toHaveLength(2);
+    expect(completed).toHaveLength(2);
+
+    // Every query call owns a distinct, deterministic call-scoped id; the
+    // out-of-order finish still closes the card opened by its own start.
+    expect(queryOperationIds(payloads)).toEqual([
+      "tool:pubmed:query:1", // started TP53
+      "tool:pubmed:query:2", // started BRCA
+      "tool:pubmed:query:2", // progress BRCA (finishes first)
+      "tool:pubmed:query:2", // completed BRCA
+      "tool:pubmed:query:1", // progress TP53 (ends last)
+      "tool:pubmed:query:1", // completed TP53
+    ]);
+
+    // Stable start/progress/end correlation: each id opens exactly once and
+    // closes exactly once.
+    for (const id of new Set(queryOperationIds(payloads))) {
+      expect(started.filter((p) => p.operation_id === id)).toHaveLength(1);
+      expect(progressed.filter((p) => p.operation_id === id)).toHaveLength(1);
+      expect(completed.filter((p) => p.operation_id === id)).toHaveLength(1);
+    }
+  });
+
+  it("gives sequential same-source queries distinct cards instead of reusing one operation_id", async () => {
+    const { payloads, recordRunEvent } = collect();
+    const hooks = createPhase3ToolHooks(recordRunEvent, () => "run_1");
+
+    hooks.onQueryStarted?.("TP53", "pubmed");
+    await flush();
+    hooks.onQuery?.("TP53", "pubmed", "success", 5);
+    await flush();
+    hooks.onQueryStarted?.("BRCA", "pubmed");
+    await flush();
+    hooks.onQuery?.("BRCA", "pubmed", "not_found", 0);
+    await flush();
+
+    expect(queryOperationIds(payloads)).toEqual([
+      "tool:pubmed:query:1", // first query chain
+      "tool:pubmed:query:1",
+      "tool:pubmed:query:1",
+      "tool:pubmed:query:2", // second query chain
+      "tool:pubmed:query:2",
+      "tool:pubmed:query:2",
+    ]);
+  });
+
+  it("terminates terminal-only queries (no onQueryStarted) with their own call-scoped id", async () => {
+    const { payloads, recordRunEvent } = collect();
+    const hooks = createPhase3ToolHooks(recordRunEvent, () => "run_1");
+
+    // Older call sites may emit onQuery without onQueryStarted; the terminal
+    // chain must not collide with a later started query from the same source.
+    hooks.onQuery?.("legacy", "geo", "success", 2);
+    await flush();
+    hooks.onQueryStarted?.("TP53", "geo");
+    await flush();
+    hooks.onQuery?.("TP53", "geo", "success", 5);
+    await flush();
+
+    expect(queryOperationIds(payloads)).toEqual([
+      "tool:geo:query:1", // progress legacy
+      "tool:geo:query:1", // completed legacy
+      "tool:geo:query:2", // started TP53
+      "tool:geo:query:2", // progress TP53
+      "tool:geo:query:2", // completed TP53
+    ]);
+  });
+
+  it("is deterministic: the same call sequence on a fresh hook instance reproduces identical ids", async () => {
+    const run = async (): Promise<EventPayload[]> => {
+      const { payloads, recordRunEvent } = collect();
+      const hooks = createPhase3ToolHooks(recordRunEvent, () => "run_1");
+      hooks.onQueryStarted?.("TP53", "pubmed");
+      hooks.onQueryStarted?.("BRCA", "pubmed");
+      hooks.onQuery?.("BRCA", "pubmed", "success", 3);
+      hooks.onQuery?.("TP53", "pubmed", "success", 5);
+      await flush();
+      return payloads;
+    };
+
+    expect(await run()).toEqual(await run());
   });
 });
 

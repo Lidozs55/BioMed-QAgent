@@ -79,6 +79,19 @@ const QUERY_SOURCE_LABELS: Readonly<Record<string, string>> = {
  * - ``onQueryStarted``/``onQuery`` pair per query: started fires when the
  *   query begins, the terminal event when it ends (success/not_found /
  *   page_fallback → succeeded, skipped → skipped, failed → failed).
+ * - Query operation ids are **call-scoped**: each ``onQueryStarted``/``onQuery``
+ *   pair gets its own ``tool:<source>:query:<seq>`` id (per-source sequence),
+ *   so concurrent or repeated queries from the same source no longer collide
+ *   onto a single UI card. ``onQuery`` reuses the id its matching started call
+ *   allocated (matched by source + query string, FIFO); terminal-only calls
+ *   (older call sites without ``onQueryStarted``) still terminate with a fresh
+ *   id instead of reopening a previous card. Ids are deterministic — replaying
+ *   the same hook call order yields identical ids, keeping the event log
+ *   reproducible.
+ *   **Limitation**: the hook API carries no call token, so two *identical*
+ *   query strings from the same source cannot be causality-traced; they are
+ *   paired FIFO (first end closes the first start), which is deterministic but
+ *   may not reflect the true start/end pairing.
  * - ``onProgress`` opens progress-only operations (``tool:discovery:*``,
  *   ``tool:acquisition:*``) once per run — they have no natural end signal,
  *   so the run-terminal fallback on the frontend closes them.
@@ -91,11 +104,45 @@ export function createPhase3ToolHooks(
   currentRunId: () => string,
 ): ToolHooks {
   const startedProgressOps = new Set<string>();
+  // Per-source sequence for call-scoped query ids (``tool:<source>:query:<seq>``)
+  // and the started-but-not-yet-finished queries awaiting their terminal call.
+  const querySequences = new Map<string, number>();
+  const pendingQueries = new Map<
+    string,
+    Array<{ query: string; operationId: string }>
+  >();
+
+  const nextQueryId = (source: string): string => {
+    const seq = (querySequences.get(source) ?? 0) + 1;
+    querySequences.set(source, seq);
+    return `tool:${source}:query:${seq}`;
+  };
+  // Correlate an ``onQuery`` terminal call with its ``onQueryStarted``: the
+  // first pending entry for this source whose query string matches (FIFO), so
+  // out-of-order completions of *different* queries still close the card their
+  // own start opened. Identical query strings are indistinguishable without a
+  // call token, so they pair FIFO (deterministic approximation).
+  const consumeQueryId = (query: string, source: string): string => {
+    const pending = pendingQueries.get(source);
+    if (pending !== undefined) {
+      const index = pending.findIndex((entry) => entry.query === query);
+      if (index !== -1) {
+        const [entry] = pending.splice(index, 1);
+        if (pending.length === 0) pendingQueries.delete(source);
+        return entry.operationId;
+      }
+    }
+    return nextQueryId(source);
+  };
   return {
-    onQueryStarted: (_query, source) => {
+    onQueryStarted: (query, source) => {
+      const operationId = nextQueryId(source);
+      const pending = pendingQueries.get(source) ?? [];
+      pending.push({ query, operationId });
+      pendingQueries.set(source, pending);
       void recordRunEvent({
         type: "operation_started",
-        operation_id: `tool:${source}:query`,
+        operation_id: operationId,
         label: `检索 ${QUERY_SOURCE_LABELS[source] ?? source}`,
         category: "discovery",
         attempt: 1,
@@ -104,9 +151,10 @@ export function createPhase3ToolHooks(
       });
     },
     onQuery: (query, source, status, recordsCount = 0) => {
+      const operationId = consumeQueryId(query, source);
       void recordRunEvent({
         type: "operation_progress",
-        operation_id: `tool:${source}:query`,
+        operation_id: operationId,
         kind: "query",
         current: Math.max(0, recordsCount),
         total: null,
@@ -123,19 +171,19 @@ export function createPhase3ToolHooks(
           status === "failed"
             ? recordRunEvent({
                 type: "operation_failed",
-                operation_id: `tool:${source}:query`,
+                operation_id: operationId,
                 status: "failed",
                 error: null,
               })
             : status === "skipped"
               ? recordRunEvent({
                   type: "operation_completed",
-                  operation_id: `tool:${source}:query`,
+                  operation_id: operationId,
                   status: "skipped",
                 })
               : recordRunEvent({
                   type: "operation_completed",
-                  operation_id: `tool:${source}:query`,
+                  operation_id: operationId,
                   status: "succeeded",
                 }),
         )
