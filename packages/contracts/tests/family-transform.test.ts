@@ -22,6 +22,10 @@ import {
 } from "../src/family-transform";
 
 const HEX = "a".repeat(64);
+const HEX_B = "b".repeat(64);
+const DATASET_ID = `ds_${HEX}`;
+const DATASET_REVISION_ID = `dsrev_${HEX_B}`;
+const ASSET_ID = `asset_${HEX}`;
 
 describe("A-T1 FamilySpec contract (strict, code-free)", () => {
   const baseFamily: FamilySpec = {
@@ -113,6 +117,7 @@ describe("A-T1 DatasetBuildSpec 1.0 snapshot untouched + 2.0 separated", () => {
     const ref: ScopeQualifiedRef = { scope: "curated", id: "fs_x", version: "2.0.0", digest: HEX };
     const spec2: DatasetBuildSpec2 = {
       schema_version: "2.0",
+      spec_kind: "resolved",
       build_id: "build_1",
       family_spec_ref: ref,
       projection_ref: "proj_gene",
@@ -131,6 +136,7 @@ describe("A-T1 DatasetBuildSpec 1.0 snapshot untouched + 2.0 separated", () => {
     const ref: ScopeQualifiedRef = { scope: "curated", id: "fs_x", version: "2.0.0", digest: HEX };
     const bad = {
       schema_version: "2.0",
+      spec_kind: "resolved",
       build_id: "build_1",
       family_spec_ref: ref,
       projection_ref: "proj_gene",
@@ -179,12 +185,15 @@ describe("A-T1 DatasetTransform descriptor + TransformExecutionReceipt", () => {
   });
 
   const receipt: TransformExecutionReceipt = {
+    schema_version: "1.0",
     task_id: "task_1",
     run_id: "run_1",
     build_id: "build_1",
     invocation_id: "inv_1",
     attempt: 1,
     generation: 1,
+    request_digest: HEX,
+    parameters_digest: HEX,
     family_spec_digest: HEX,
     projection_digest: HEX,
     transform_digest: HEX,
@@ -195,8 +204,21 @@ describe("A-T1 DatasetTransform descriptor + TransformExecutionReceipt", () => {
     input_asset_receipts: [],
     input_result_receipts: [],
     granted_capabilities: ["bounded_reader"],
-    resource_limits: { cpu_ms: 1000, rss_bytes: 1, temp_bytes: 1, output_bytes: 1, open_files: 64 },
+    resource_limits: {
+      wall_ms: 2000,
+      cpu_ms: 1000,
+      rss_bytes: 1,
+      temp_bytes: 1,
+      output_bytes: 1,
+      log_bytes: 1,
+      open_files: 64,
+      pids: 1,
+    },
+    sandbox_backend: "container",
+    sandbox_config_digest: HEX,
     exit_state: "succeeded",
+    exit_code: 0,
+    exit_signal: null,
     wall_ms: 10,
     cpu_ms: 10,
     rss_bytes: 1,
@@ -208,8 +230,12 @@ describe("A-T1 DatasetTransform descriptor + TransformExecutionReceipt", () => {
     stderr_ref: "stderr_1",
     audit_refs: [],
     cancellation_state: "none",
+    cancel_requested_at: null,
+    deadline_at: "2026-08-21T00:01:00Z",
+    started_at: "2026-08-21T00:00:00Z",
+    finished_at: "2026-08-21T00:00:01Z",
     host_implementation_digest: HEX,
-    host_issued_at: "2026-08-21T00:00:00Z",
+    host_issued_at: "2026-08-21T00:00:02Z",
   };
 
   it("parses a valid receipt", () => {
@@ -230,21 +256,24 @@ describe("A-T1 DatasetTransform descriptor + TransformExecutionReceipt", () => {
 describe("A-T2 identity / projection / relation / audit", () => {
   it("parses dataset/sample/probe identity (no build_id leakage)", () => {
     const id = parseDatasetIdentity(
-      { dataset_id: "ds_1", dataset_revision_id: "dsrev_1", asset_id: "asset_" + HEX },
+      { dataset_id: DATASET_ID, dataset_revision_id: DATASET_REVISION_ID, asset_id: ASSET_ID },
       "$",
     );
-    expect(id.dataset_id).toBe("ds_1");
+    expect(id.dataset_id).toBe(DATASET_ID);
     expect(id.dataset_id).not.toMatch(/^build_/);
   });
 
   it("REJECTS dataset_id that equals a build_id shape", () => {
     expect(() =>
-      parseDatasetIdentity({ dataset_id: "build_123", dataset_revision_id: "dsrev_1", asset_id: "asset_x" }, "$"),
+      parseDatasetIdentity(
+        { dataset_id: "build_123", dataset_revision_id: DATASET_REVISION_ID, asset_id: ASSET_ID },
+        "$",
+      ),
     ).toThrow(/dataset_id|build/);
   });
 
   it("parses sample composite key (dataset_revision_id, sample_id)", () => {
-    const s = parseSampleIdentity({ dataset_revision_id: "dsrev_1", sample_id: "S1" }, "$");
+    const s = parseSampleIdentity({ dataset_revision_id: DATASET_REVISION_ID, sample_id: "S1" }, "$");
     expect(s.sample_id).toBe("S1");
   });
 
@@ -252,13 +281,13 @@ describe("A-T2 identity / projection / relation / audit", () => {
     const p = parseProbeMappingAssertion(
       {
         mapping_assertion_id: "ma_1",
-        dataset_revision_id: "dsrev_1",
+        dataset_revision_id: DATASET_REVISION_ID,
         mapping_scope_id: "scope_1",
         platform_id: "plat_1",
         probe_id: "pb_1",
         target_gene_id: null,
         target_namespace: null,
-        annotation_asset_id: "asset_x",
+        annotation_asset_id: ASSET_ID,
         mapping_rule_id: "rule_1",
         mapping_status: "unmapped",
       },
