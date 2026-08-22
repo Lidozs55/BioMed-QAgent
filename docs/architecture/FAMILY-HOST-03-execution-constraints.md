@@ -1,8 +1,8 @@
 # FAMILY-HOST-03：FamilySpec + Transform Host 执行约束
 
-> 状态：目标约束，具体生产接线等待 ADR-039 接受和 Batch 0–2 验收
+> 状态：ADR-039 Deferred路线的防回退约束；当前不开发Transform Host/sandbox/IPC生产接线
 >
-> 本文件取代旧版中以 Runtime Extension 为中心的表述。约束适用于 Dataset Core、Family Host、Transform Host、Agent、examples、Validation 和 Publication。
+> 非-sandbox Core/FamilySpec边界继续适用；Transform Host相关条款只约束已有fail-closed guard与未来可能的重新提案，不构成当前实现承诺。
 
 ## 不变边界
 

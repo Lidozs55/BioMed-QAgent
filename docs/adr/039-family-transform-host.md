@@ -2,9 +2,11 @@
 
 ## Status
 
-Proposed — 2026-08-21。
+Deferred — 2026-08-22（原 Proposed — 2026-08-21）。
 
-本 ADR 是 `docs/plans/family-host/` v2 计划的目标决策，不代表当前仓库已经具备动态 Transform Host。接受前，Agent-authored transform 仍遵守 ADR-034/038 的 candidate-only 限制。
+本 ADR 所定义的 Agent-authored DatasetTransform、隔离 Transform Host、sandbox backend 与 IPC worker 已按产品范围决策整体暂缓，当前不继续开发、不接生产路由，也不作为非-sandbox FamilySpec/Core 收敛的完成条件。已有 disabled Host、quarantine、proof/admission fixtures 保留为 fail-closed guard，不构成可执行能力或激活证据。
+
+若未来重启动态 Transform Host，必须通过新的 ADR 或将本 ADR 明确恢复为 Proposed，并重新完成独立低权限隔离、Host protocol、真实消费者 shadow、trusted E2E 与 release evidence；不得从 Deferred 直接视为 Accepted。Agent-authored transform 继续遵守 ADR-034/038 的 candidate-only 限制。
 
 ## Context
 
@@ -12,7 +14,9 @@ Proposed — 2026-08-21。
 
 现有六个 Family 是有价值的生产回归样例，但把它们永久扩张为六套 Core 领域框架会继续增加 family/provider/assembler 分支。需要一个统一、受控、可复现的动态转换边界，同时不能把 Agent 变成 Publisher 或任意 DAG 编排器。
 
-## Decision
+## Deferred decision
+
+以下是暂缓路线的目标设计，仅约束已有 fail-closed guard 和未来可能的重启条件；它不是当前生产实现承诺。
 
 ### 1. FamilySpec 与 DatasetTransform 分离
 
@@ -48,7 +52,13 @@ DatasetTransform 只能进入服务端声明的固定 slot。Agent 不能提交 
 
 ## Consequences
 
-### Positive
+### Current consequences
+
+- 当前继续交付声明式 FamilySpec、Core-owned identity/relation/B3/fixed deterministic slot、checkpoint/release/publication verification；这些能力不执行 Agent-authored code。
+- B-T6/B-T7 以及依赖真实 Host 的 D-E2/D-E3/D-R1 execution evidence 从当前里程碑移入 Deferred backlog。
+- 已有 Transform Host staging modules 保持 all-platform `sandbox_unavailable`，不得接默认 build route。
+
+### Positive (if resumed)
 
 - Agent 可以为未知格式提出可执行转换，但代码执行有独立隔离面；
 - Core 仍是唯一产品信任和 Publication 权威；

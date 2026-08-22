@@ -19,4 +19,4 @@ retrieval examples
 - [Family Host + Transform Host 计划集](../plans/family-host/README.md)
 - [ADR-039: FamilySpec 与受控 DatasetTransform Host](../adr/039-family-transform-host.md)
 
-重要边界：ADR-039 当前仍为 Proposed。现有静态 Registry、registered adapters、fixed derive slot 和 Core Publisher 在 ADR 接受及对应实现前继续有效。不得依据本历史文档直接实现动态代码执行或删除现有 Family runtime。
+重要边界：ADR-039 已Deferred。现有静态Registry、registered adapters、fixed derive slot和Core Publisher继续有效；当前不开发动态Transform Host/sandbox/IPC。不得依据本历史文档实现动态代码执行或删除现有Family runtime。

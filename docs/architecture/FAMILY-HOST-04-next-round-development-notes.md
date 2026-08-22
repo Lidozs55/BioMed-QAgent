@@ -33,4 +33,4 @@ FamilySpec + DatasetTransform
 - GEO/GDC 共享 integration framework，但只在兼容 partition 内 merge；
 - B3 必须按真实 workload 渐进 disk-backed，而不是一次性重写。
 
-ADR-039 当前仍为 Proposed。在其接受前，动态 Transform 只允许做 contract/security/非生产 fixture 工作，不能接默认 build route 或删除现有静态 Family runtime。
+ADR-039 已Deferred。当前不继续开发动态Transform Host/sandbox/IPC；已有fixture保持fail closed，不能接默认build route或删除现有静态Family runtime。

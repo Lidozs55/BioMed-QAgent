@@ -1,13 +1,12 @@
 # BioMed-QAgent 开发 TODO
 
-> 当前主线：**Family Host + Transform Host** 计划集（目标 ADR-039，Proposed）。
+> 当前主线：**FamilySpec + Core deterministic primitives** 收敛；ADR-039 Transform Host 路线已 **Deferred**。
 > 详细设计见 `docs/plans/family-host/`（`00-overview` … `09-execution-matrix`）。
 > 本文件将计划拆为 4 个开发者组 A/B/C/D，按「**冻结契约类型**」一层解耦，使各组尽量并行推进。
 > 文档 `10-consistency-review` 为一致性审查，不单独列任务。
 >
-> ADR-039 接受前：可完成 contract / threat model / isolated fixture Host / shadow tooling，
-> 但**不得**接默认 build route、不得激活 Agent-authored transform、不得删除 static runtime。
-> 当前承诺截止：**Batch 0 + Batch 1 + Batch 2A（expression shadow）+ Batch 2B go/no-go**。
+> 当前范围不开发sandbox backend、IPC worker或Agent-authored transform execution；已有disabled Host/fixture/proof modules保持fail closed，**不得**接默认build route、不得激活Agent-authored transform、不得删除static runtime。
+> 当前承诺截止：完成A/C非-sandbox contracts、identity、B3、fixed slot、checkpoint/release/publication verification；Host execution与其shadow/release evidence移入Deferred backlog。
 >
 > **2026-08-22 red-team 状态**：`808279ac` 仅是初始 DTO/计划草案；其 wire-parser 缺口已由
 > `76df8008`、`3ed0ade5`、`f32f563f` 关闭：descriptor-safe own-data parsing、dense/finite/safe-number
@@ -20,7 +19,7 @@
 ## 全局质量门（每次提交必过）
 
 - 代码：`pnpm test` / `pnpm lint` / `pnpm typecheck` / `pnpm build`；涉及 `database/` 时另跑 Python bridge gates。
-- 新增 Transform Host 必须额外跑：sandbox/red-team、resource、cancel/restart、digest/replay、Artifact API hash 测试（来源 `09-execution-matrix.md §9`）。
+- Deferred Transform Host代码不得新增production wiring；若未来恢复，须重新启用sandbox/red-team、resource、cancel/restart、digest/replay、Artifact API hash全套门禁（来源 `09-execution-matrix.md §9`）。
 - 每个实现分支合并前须提供：契约版本/digest、trust/status、resource evidence、tests、same-commit artifact refs、rollback plan，并明确冻结的 `submitted / sandbox_executable / fixture_verified / shadow_verified / trusted_e2e_verified / activated / revoked / retired` 状态；retrieval-only example 表示为 `scope=example + status=submitted`，不是另一个 trust status（来源 `04 §2`、`09 §8`）。
 
 ## 分支命名（来源 `09-execution-matrix.md §8`）
@@ -43,11 +42,11 @@
 - **D 的示例/目录编写与 B/C 并行**（对照冻结契约）；只有 E2 的 shadow 执行、E3 的 go/no-go、R1 的 release 核对
   在 B+C 合入后作为**集成闸门**进行。
 
-### 并行里程碑
+### 当前里程碑
 
-- **M1（A 落地契约 PR）**：`@biomed/contracts` 冻结 DTO / parser / digest / identity / B3 接口 → 解除 B/C/D 阻塞。
-- **M2（B ∥ C ∥ D-编写 并行）**：B 实现 Host；C 实现 admission/validation/disk；D 编写 examples/fixtures/catalog。
-- **M3（集成闸门）**：B+C 合入后，D-E2 shadow 执行 + E3 go/no-go + R1 release 核对。
+- **M1（A contracts）**：`@biomed/contracts` DTO/parser/digest/identity/B3接口。
+- **M2（C + D静态资产）**：Core admission/validation/disk/fixed-slot/release verification；examples保持retrieval-only。
+- **Deferred M3**：真实Host execution、D-E2 shadow执行、E3真实第二消费者与R1 activation核对；不计入当前完成条件。
 
 ## 目录归属（各组独立目录，减少 merge 冲突）
 
@@ -98,9 +97,9 @@ Host 不是实际 OS sandbox；implementation digest 不覆盖 bundle/dependency
 
 ---
 
-## 开发者 B — Transform Host（隔离执行平面，与 C 并行）
+## 开发者 B — Transform Host（Deferred，不再开发）
 
-> 依赖 **A 冻结类型**（T1/T3）。**不阻塞 C**：C 针对同一冻结 `TransformExecutionReceipt` 类型编码。
+> B-T5已落地的disabled fixture保留为fail-closed guard。B-T6/B-T7及任何sandbox/IPC/Agent-code execution整体暂缓，不阻塞A/C非-sandbox任务完成。
 
 - [x] **B-T5** compiler / admission spike（依赖 A-T1、A-T3 冻结类型）
       - 状态：Host-owned source normalization/AST policy/transpile/digest/content-addressed store已落地；结果固定为 `fixture_only_unexecutable`，不等于B-T6 sandbox
@@ -108,12 +107,12 @@ Host 不是实际 OS sandbox；implementation digest 不覆盖 bundle/dependency
       - 产物：source normalization、AST/import policy、content-addressed bundle receipt（产出符合 A-T1 冻结形状）
       - 验收：v1 仅允许 Transform SDK/Host allowlist；无任意 npm/native addon/dynamic import/eval
       - ⚠ 静态检查只缩小攻击面、**不能替代隔离**（`03 §2`）
-- [ ] **B-T6** isolated Transform Host MVP（依赖 A-T0、B-T5）
+- [ ] **B-T6 [Deferred]** isolated Transform Host MVP（依赖 A-T0、B-T5）
       - 设计：`03-transform-host-security.md §3`、`09 §2 T6`
       - 产物：独立低权限 worker/backend、opaque asset handles、quarantine output、hard kill
       - 验收：无网络/DNS/代理、不继承凭据、不挂载 repo/workspace/settings/Publication；symlink/junction/device escape fail closed
       - ⚠ `worker_threads` / `node:vm` / 同账户 `child_process` / workspace `process.exec` **均不能**当安全边界（`03 §1`、README 永久边界）；Windows 不达标则禁激活
-- [ ] **B-T7** Host protocol / receipt（依赖 A-T1、A-T3、B-T6）
+- [ ] **B-T7 [Deferred]** Host protocol / receipt（依赖 A-T1、A-T3、B-T6）
       - 设计：`03-transform-host-security.md §4`、`01 §1.3`、`09 §2 T7`
       - 产物：framed versioned IPC、invocation/generation/quota/cancel、terminal reason、TransformExecutionReceipt 签发（符合 A-T1 冻结形状，含全 digest + input/output receipts + resource usage）
       - 验收：Host success 不自动创建 OperationResult/Publication；receipt 缺任一 input/output/runtime digest → Core 拒绝
@@ -165,17 +164,17 @@ Host 不是实际 OS sandbox；implementation digest 不覆盖 bundle/dependency
       - 产物：`examples/families/gene-expression/`（GEO gene/probe、GDC gene）、projection examples、dataset revision、mapping assertion fixtures、`retrieval-metadata.json`
       - 验收：example 目录不产生 Registry side effect、不自动注册为 production capability；`examples/` 不被 `server/src` import 或扫描
       - ⚠ 不得以目录名/文件名代替 exact digest；example 不直接执行（`07 §2`、`04 §6`）
-- [ ] **D-E2** expression shadow vertical slice（**M3 集成闸门**：依赖 B-T6..T7、C-T8..T11、D-E1 均已合入）
+- [ ] **D-E2 [Deferred]** expression shadow vertical slice（依赖未来恢复的B-T6..T7）
       - 设计：`06-expression-vertical-slice.md`、`08-activation-release.md §3`、`09 §5`
       - 产物：Host→Core→assessment→artifact 奇偶比对、shadow publication/artifact hash parity、rollback 演练
       - 验收：GEO/GDC 共享 integration framework 但仅兼容 partition 内 merge；GDC 无 probe mapping 时诚实声明 unsupported/allow-empty；大输入不走全量 Buffer/object[] 或无界 B3 Map；task/run/build/Host receipt/Core result/validation/publication 证据完整
       - ⚠ shadow 失败不自动 fallback 成功；通过只代表 shadow verified，不自动激活 family（`08 §3`、`06 §5`）
-- [ ] **D-E3** second real consumer — bioactivity_measurement（**M3 go/no-go 闸门**：依赖 B-T6..T7、C-T8..T11）
+- [ ] **D-E3 [Deferred]** second real consumer — bioactivity_measurement（依赖未来恢复的B-T6..T7）
       - 设计：`07-family-examples-migration.md §4.2`、`09 §6`
       - 产物：bioactivity example 复用相同 Host/Core path 的证据
       - 验收：输入/output topology 可由 FamilySpec 描述，不依赖新 family-specific Core branch；至少一个 capability 可做独立 shadow/rollback
       - ⚠ 不满足则退回 contract/primitive 修复，不扩展到其余四族（`09 §6`）
-- [ ] **D-R1** release / go-no-go（**M3 闸门**：依赖 D-E2、D-E3）
+- [ ] **D-R1 [Deferred]** Transform Host release / go-no-go（依赖未来恢复的D-E2、D-E3）
       - 设计：`08-activation-release.md`（全）、`09 §5-6`
       - 产物：trusted E2E、rollback、activation 建议、release gates **R1-R5** 核对（contract/security/Core gate/operational recovery/representative E2E）
       - 验收：仅当 R1-R5 全过且至少两个真实消费者才建议 activation；legacy 删除须满足 `08 §6` 七条件
@@ -200,7 +199,7 @@ Host 不是实际 OS sandbox；implementation digest 不覆盖 bundle/dependency
 - [ ] **设置页供应商/模型列表分页与搜索后端**（当前全量返回）。
 
 ### P3
-- [ ] **沙箱环境**：为数据安全提供沙箱保证（与 Transform Host 隔离正交，属通用数据保障）。
+- [ ] **沙箱环境 [Deferred]**：通用数据安全sandbox及Transform Host隔离均暂缓；未经新的明确决策不开发。
 
 ---
 

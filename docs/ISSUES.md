@@ -24,19 +24,17 @@
 
 - [ ] 2026-08-14 复现：`server/tests/phase5/build-lock.test.ts` 在 `pnpm test` / `vitest run` 并行负载下偶发失败（真实子进程对文件锁的时序竞争 + CPU 争抢），单文件隔离 8/8 通过；与 settings/http/contracts/artifacts 分层重构无关。根治方向：进程间同步闩或放宽时窗/重试（详见 `docs/archive/LEFTOVERS-2026-08-09.md` §K1）。
 
-### Family Host M1 剩余收敛门（ADR-039 activation blocker）
+### FamilySpec/Core 非-sandbox剩余收敛门（ADR-039 Transform Host已Deferred）
 
 - [x] 初始 `808279ac` 的 prototype/accessor smuggling、sparse array、`NaN`/Infinity、unsafe integer、
       identity scheme coercion、无界/不安全 ID、receipt terminal/resource/output/cancel closure与
       BuildSpec 2.0 proposal/resolved split，已由 `76df8008`、`3ed0ade5`、`f32f563f` 及 adversarial
       contracts tests关闭；FamilySpec digest有唯一 helper/known vector，parser本身不自动授信digest。
 - [x] M1 wire/readmission gates：contracts post-hardening coverage、BuildSpec proposal→resolved pure Core
-      readmission、HTTP/JSON ingress raw duplicate-key decoder已落地并有 focused tests；剩余生产 activation
-      仍受统一 executor/sandbox/publication gate阻塞。
-- **当前风险状态**：ADR-039 仍 Proposed，动态 transform 未接生产，所以不是已上线 P0；
-  在上述门关闭前，B/C 只能落 disabled fixture 或 staging pure module，M1/M3不得宣称完成。
+      readmission、HTTP/JSON ingress raw duplicate-key decoder已落地并有 focused tests。
+- **当前范围状态**：ADR-039已Deferred；动态transform、sandbox/IPC与依赖真实Host的M3 evidence不再开发，也不计入当前A/C非-sandbox收敛条件。已有Host模块保持disabled/staging，不得宣称activation。
 
-### Family Host 执行面剩余激活阻塞
+### FamilySpec/Core执行面剩余收敛项
 
 - [ ] checkpoint/reuse：旧候选 `3f1cfdd3`/`3f308046` 仍允许 publish generic shortcut或不诚实
       rehydrate fallback，均保持未合入。需要 publish shortcut禁用 + honest startup release identity +
@@ -52,7 +50,7 @@
       digest/trust/admission/resource授权。完整semantic admission仍等待BuildSpec resolver/authoritative registry。
 - [x] disabled Host spike：旧 `2566efd1` 已由Host-owned compile/digest/store、descriptor-safe Core authority、
       private input snapshot和all-platform `sandbox_unavailable` fixture替代；无exec/vm/worker/child-process且无production inbound import。
-      未有独立低权限OS/container backend前，B-T6/B-T7仍不得激活。
+      B-T6/B-T7已整体Deferred：保留fail-closed guard，不继续开发backend/proof/IPC，不接production。
 
 ### Expression dataset/revision identity 尚未接 authoritative Core path
 
