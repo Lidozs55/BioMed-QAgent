@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildFamilySpecDigestCanonical,
   buildImplementationDigestCanonical,
   buildTransformDescriptorDigestCanonical,
+  computeFamilySpecDigest,
   computeImplementationDigest,
   parseDatasetBuildProposal2,
   parseDatasetBuildSpec2,
@@ -14,6 +16,7 @@ import {
   parseScopeQualifiedRef,
   parseTransformExecutionReceipt,
   stableStringify,
+  verifyFamilySpecDigest,
   type DatasetBuildProposal2,
   type DatasetTransform,
   type FamilySpec,
@@ -439,6 +442,36 @@ describe("family-transform strict lexical policies", () => {
       .toThrow(/ISO|host_issued_at/);
     expect(() => parseTransformExecutionReceipt({ ...receipt, host_issued_at: "2026-02-30T00:00:00Z" }, "$"))
       .toThrow(/ISO|host_issued_at/);
+  });
+});
+
+describe("FamilySpec canonical digest closure", () => {
+  it("excludes only canonical_digest and preserves every declared array order", async () => {
+    const canonical = buildFamilySpecDigestCanonical(family);
+    expect(canonical).not.toContain("canonical_digest");
+    const digest = await computeFamilySpecDigest(family);
+    expect(digest).toMatch(/^[0-9a-f]{64}$/);
+    expect(await verifyFamilySpecDigest({ ...family, canonical_digest: digest })).toBe(true);
+    expect(await verifyFamilySpecDigest({ ...family, canonical_digest: B })).toBe(false);
+
+    const reordered: FamilySpec = {
+      ...family,
+      evidence_refs: ["evidence_b", "evidence_a"],
+    };
+    const reversed: FamilySpec = {
+      ...reordered,
+      evidence_refs: [...reordered.evidence_refs].reverse(),
+    };
+    await expect(computeFamilySpecDigest(reordered)).resolves.not.toBe(
+      await computeFamilySpecDigest(reversed),
+    );
+  });
+
+  it("has a stable known vector and ignores the embedded digest value", async () => {
+    const first = await computeFamilySpecDigest(family);
+    const second = await computeFamilySpecDigest({ ...family, canonical_digest: D });
+    expect(second).toBe(first);
+    expect(first).toBe("8fe7a1d6f07000ca22e9257e76bda5bf716b28099fd90b8bb03fb2c1873d9290");
   });
 });
 

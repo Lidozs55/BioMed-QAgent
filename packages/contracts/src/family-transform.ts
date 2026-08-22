@@ -600,6 +600,9 @@ export interface FamilySpec {
   evidence_refs: string[];
 }
 
+/** Canonical digest body; excludes the self-referential canonical_digest. */
+export type FamilySpecDigestBody = Omit<FamilySpec, "canonical_digest">;
+
 export interface DatasetTransform {
   transform_id: string;
   version: string;
@@ -922,6 +925,27 @@ export function parseFamilySpec(value: unknown, path: string): FamilySpec {
     evidence_refs: getArray(object, "evidence_refs", path, (item, index) =>
       assertSafeRef(item, `${path}.evidence_refs[${index}]`),
     ),
+  };
+}
+
+export function familySpecDigestBody(spec: FamilySpec): FamilySpecDigestBody {
+  const parsed = parseFamilySpec(spec, "$family_spec");
+  return {
+    family_spec_id: parsed.family_spec_id,
+    semantic_version: parsed.semantic_version,
+    projections: parsed.projections,
+    table_definitions: parsed.table_definitions,
+    relations: parsed.relations,
+    identity: parsed.identity,
+    transform_capability_refs: parsed.transform_capability_refs,
+    declared_outputs: parsed.declared_outputs,
+    integration_policy_ref: parsed.integration_policy_ref,
+    validation_policy_ref: parsed.validation_policy_ref,
+    assessment_policy_ref: parsed.assessment_policy_ref,
+    resource_class_request: parsed.resource_class_request,
+    scope: parsed.scope,
+    author: parsed.author,
+    evidence_refs: parsed.evidence_refs,
   };
 }
 
@@ -1609,19 +1633,37 @@ export function buildTransformDescriptorDigestCanonical(
   return stableStringify(parseTransformDescriptorDigestInput(input, "$transform_descriptor_digest"));
 }
 
-function toHex(buffer: ArrayBuffer): string {
-  return Array.from(new Uint8Array(buffer))
+function toHex(buffer: ArrayBuffer): string {  return Array.from(new Uint8Array(buffer))
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
 }
 
-/** Host-computed SHA-256 over the frozen implementation canonical bytes. */
-export async function computeImplementationDigest(input: ImplementationDigestInput): Promise<string> {
-  const canonical = buildImplementationDigestCanonical(input);
+async function sha256Canonical(canonical: string): Promise<string> {
   const bytes = new TextEncoder().encode(canonical);
   const cryptoObject = globalThis.crypto;
   if (!cryptoObject?.subtle) {
     throw new APIError(500, "Web Crypto (crypto.subtle) is unavailable in this environment");
   }
   return toHex(await cryptoObject.subtle.digest("SHA-256", bytes));
+}
+
+/** Canonical bytes for FamilySpec identity; every array preserves declaration order. */
+export function buildFamilySpecDigestCanonical(spec: FamilySpec): string {
+  return stableStringify(familySpecDigestBody(spec));
+}
+
+/** Compute FamilySpec identity without trusting the embedded canonical_digest. */
+export async function computeFamilySpecDigest(spec: FamilySpec): Promise<string> {
+  return sha256Canonical(buildFamilySpecDigestCanonical(spec));
+}
+
+/** Explicit verification boundary; parseFamilySpec alone does not confer digest trust. */
+export async function verifyFamilySpecDigest(spec: FamilySpec): Promise<boolean> {
+  const parsed = parseFamilySpec(spec, "$family_spec");
+  return (await computeFamilySpecDigest(parsed)) === parsed.canonical_digest;
+}
+
+/** Host-computed SHA-256 over the frozen implementation canonical bytes. */
+export async function computeImplementationDigest(input: ImplementationDigestInput): Promise<string> {
+  return sha256Canonical(buildImplementationDigestCanonical(input));
 }
