@@ -64,7 +64,7 @@ Host 不是实际 OS sandbox；implementation digest 不覆盖 bundle/dependency
 
 **禁止提案：** ① `workspace_exec node/tsx transform.ts`；② 同进程 `eval/import` Agent code；③ transform 自报 digest 或只用 ID/version；④ output receipt 直接转 Publication artifact；⑤ memory B3 扫大表到 OOM；⑥ 所有 ambiguity 交 LLM（须 typed decision + policy + Core replay）；⑦ 以六 example 目录存在证明 capability 已迁移；⑧ Batch 2 前设计 promotion 市场/全六族删除/通用 DAG。
 
-**每 PR 必答（来源 `10 §6`）：** 变更属于 contract/Host/Core/example/release 哪层？输入是否 exact asset/result handle + ownership/hash closure？代码是否在批准隔离 backend？output 是否 quarantine→重哈希→strict parse→Core committed？digest 是否进入 checkpoint identity？大数据是否 bounded/disk-backed？cancel/timeout/restart/late worker 有测试？ProductAssessment 与 Publication 是否同 selected run/build/candidate？是否至少第二真实消费者才称 generic？legacy 删除条件/shadow evidence/rollback 是否具备？
+**每 PR 必答（来源 `10 §6`）：** 变更属于contract/Core/example/release哪层？输入是否exact asset/result handle + ownership/hash closure？output是否strict parse→Core committed？digest是否进入checkpoint identity？大数据是否bounded/disk-backed？cancel/timeout/restart有测试？ProductAssessment与Publication是否同selected run/build/candidate？不得以example/fixture称generic。若未来恢复Host路线，才额外回答批准隔离backend、quarantine/late-worker、第二真实消费者、shadow/rollback等Deferred门禁。
 
 ---
 
@@ -72,10 +72,11 @@ Host 不是实际 OS sandbox；implementation digest 不覆盖 bundle/dependency
 
 > 本组交付**冻结契约类型**，是 M1 的唯一产出；不依赖其他组。B/C/D 对照本文档与计划直接开工。
 
-- [x] **A-T0** ADR-039 proposal + 威胁模型 + 平台/沙箱 backend 支持矩阵
+- [x] **A-T0** ADR-039 proposal评估 + 威胁模型 + 平台/沙箱backend支持矩阵
+      - 状态：设计与威胁评估已完成；ADR-039随后转为Deferred，backend不继续开发
       - 设计：`00-overview.md §7`、`03-transform-host-security.md §1/§3`
-      - 产物：Proposed ADR-039、threat-model 文档、sandbox backend decision（含 Windows 达标/不达标结论）
-      - 验收：明确 production 仅允许独立低权限 OS/容器 backend；Windows 不达标则该平台禁激活
+      - 产物：Deferred ADR-039、threat-model文档、未来恢复时适用的sandbox backend decision矩阵
+      - 验收：已有Host路径保持all-platform fail closed；未来若恢复，只允许重新审查后的独立低权限OS/容器backend
       - ⚠ 不得修改已 accepted ADR 的历史 Decision 文字以隐藏冲突（`09 §3` 禁止）
 - [x] **A-T1** FamilySpec / DatasetTransform / TransformExecutionReceipt / BuildSpec 2.0 契约（依赖 A-T0）
       - 状态：strict DTO/parser/canonical digest、raw JSON duplicate-key ingress、proposal/resolved wire shape 与纯 Core readmission 已落地；readmission绑定 exact capability/asset/result、task/build/generation/receipt evidence；不代表已接生产 runtime
