@@ -8,6 +8,11 @@
 > ADR-039 接受前：可完成 contract / threat model / isolated fixture Host / shadow tooling，
 > 但**不得**接默认 build route、不得激活 Agent-authored transform、不得删除 static runtime。
 > 当前承诺截止：**Batch 0 + Batch 1 + Batch 2A（expression shadow）+ Batch 2B go/no-go**。
+>
+> **2026-08-22 red-team 状态**：`808279ac` 只作为 DTO/计划草案基线，不得再称为安全冻结的 M1。
+> Wire parser 仍需关闭 prototype/accessor、sparse array、non-finite/unsafe integer、identity-scheme
+> coercion、bounded safe ID 与 receipt/digest closure；BuildSpec 2.0 仍须拆 proposal/resolved。修复并通过
+> adversarial contracts tests 前，B/C 只能做 disabled/isolated fixture 或纯模块，M3 activation 继续阻塞。
 
 ## 全局质量门（每次提交必过）
 
@@ -26,8 +31,8 @@
 
 ## 并行模型（最大化并行，最小化组间阻塞）
 
-- **解耦原则**：组间依赖只发生在「冻结契约类型」一层，**不发生在实现层**。计划文档 `01/02/03` 已冻结
-  FamilySpec / DatasetTransform / TransformExecutionReceipt / identity / digest / B3 disk 接口形状，B/C/D 可直接对照文档开工。
+- **解耦原则**：组间依赖只发生在「冻结契约类型」一层，**不发生在实现层**。计划文档 `01/02/03` 定义目标形状；
+  当前 contracts red-team blocker 关闭前，它们只可驱动 isolated fixture / pure-module 开发，不可视为 production-frozen admission ABI。
 - **A 是唯一被依赖的组**，但只交付冻结的 DTO/parser/digest 算法/identity/B3 接口（一个小而明确的首批 PR），随后 B/C/D 并行。
 - **B（Host 生产者）与 C（Core 消费者）互相并行**：两者都针对 A 冻结的 `TransformExecutionReceipt` / `FamilySpec` /
   identity 类型编码；C 的 admission/checkpoint 用冻结 Receipt 类型 + 测试夹具驱动，**不依赖 B 的 worker 实现**。
