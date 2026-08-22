@@ -17,10 +17,7 @@ import {
   type MultiTableResourcePreflightTelemetry,
   type MultiTableValidationOptions,
 } from "../src/dataset/validation/multitable.js";
-import type {
-  MultiTableResourceEstimates,
-  ResourceBaselinePolicy,
-} from "../src/dataset/validation/resource-baseline.js";
+import type { ResourceBaselinePolicy } from "../src/dataset/validation/resource-baseline.js";
 
 const DIGEST = "0".repeat(64);
 const roots: string[] = [];
@@ -55,49 +52,39 @@ const definition: TableDefinition = {
   field_names: ["row_id"],
 };
 
-const policy: ResourceBaselinePolicy = {
+const basePolicy: ResourceBaselinePolicy = {
   policyId: "ct4-validator-test-policy",
-  memoryThresholdBytes: 1_000,
+  // One measured row costs 10 row bytes + 18 UTF-16 tuple payload bytes +
+  // 5 key-entry bytes + 2 tuple-field bytes = 35 bytes.
+  memoryThresholdBytes: 35,
   heapQuotaBytes: 2_000,
   tempQuotaBytes: 10_000,
   rowOverheadBytes: 10,
   keyEntryOverheadBytes: 5,
   tupleFieldOverheadBytes: 2,
+  maxRowCharacters: 4_096,
+  maxFieldCharacters: 2_048,
 };
 
-function estimates(tupleWidthEstimateBytes: number | null): MultiTableResourceEstimates {
-  return {
-    rowEstimate: 0,
-    keyEstimates: [{
-      keyId: "rows:primary",
-      entryEstimate: 1,
-      tupleWidthEstimateBytes,
-      tupleFieldCount: 1,
-    }],
-    configuredHeapBytes: 2_000,
-    configuredTempBytes: 10_000,
-  };
-}
-
 function resourceOptions(
-  measuredEstimates: MultiTableResourceEstimates,
   telemetrySink: MultiTableValidationOptions["resourceBaseline"]["telemetrySink"],
+  policy: ResourceBaselinePolicy = basePolicy,
 ): MultiTableValidationOptions {
   return {
     resourceBaseline: {
       policy,
-      estimates: measuredEstimates,
+      configuredHeapBytes: 2_000,
+      configuredTempBytes: 10_000,
       telemetrySink,
     },
   };
 }
 
-async function validationRequest(): Promise<MultiTableValidationRequest> {
+async function validationRequest(content = "row_id\nrow-1\n"): Promise<MultiTableValidationRequest> {
   const trustedRoot = await mkdtemp(path.join(os.tmpdir(), "ct4-preflight-trusted-"));
   const forbiddenRoot = await mkdtemp(path.join(os.tmpdir(), "ct4-preflight-forbidden-"));
   roots.push(trustedRoot, forbiddenRoot);
   const relativePath = "rows.csv";
-  const content = "row_id\nrow-1\n";
   const filePath = path.join(trustedRoot, relativePath);
   await writeFile(filePath, content, "utf8");
   const fileStat = await stat(filePath);
@@ -173,6 +160,10 @@ async function validationRequest(): Promise<MultiTableValidationRequest> {
   };
 }
 
+function resourceSignal(): AbortSignal {
+  return new AbortController().signal;
+}
+
 function deterministicTelemetry(
   telemetry: MultiTableResourcePreflightTelemetry,
 ): Omit<MultiTableResourcePreflightTelemetry, "durationMs" | "heapBytes"> {
@@ -186,61 +177,129 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-describe("C-T4 multi-table resource preflight", () => {
-  it("admits the exact memory threshold and emits one auditable telemetry record", async () => {
+describe("C-T4 multi-table measured resource preflight", () => {
+  it("admits the exact measured memory threshold and binds telemetry to Core receipts", async () => {
     const request = await validationRequest();
     const telemetry: MultiTableResourcePreflightTelemetry[] = [];
 
     const result = await validateMultiTableCandidate(
       request,
-      undefined,
-      resourceOptions(estimates(993), (event) => {
+      resourceSignal(),
+      resourceOptions((event) => {
         telemetry.push(event);
       }),
     );
 
     expect(result.passed).toBe(true);
-    expect(result.checks[0]).toEqual(expect.objectContaining({
+    expect(result.checks).toContainEqual(expect.objectContaining({
       check_id: "resource_baseline",
       passed: true,
     }));
     expect(telemetry).toHaveLength(1);
     expect(deterministicTelemetry(telemetry[0]!)).toEqual({
-      schemaVersion: "b3-multitable-resource-preflight.v1",
+      schemaVersion: "b3-multitable-resource-preflight.v2",
+      measurementSource: "core_receipted_table_scan.v1",
       validatorMode: "memory",
       thresholdBasis: {
-        policyId: policy.policyId,
-        memoryThresholdBytes: 1_000,
+        policyId: basePolicy.policyId,
+        memoryThresholdBytes: 35,
         policyHeapQuotaBytes: 2_000,
         configuredHeapBytes: 2_000,
-        effectiveMemoryThresholdBytes: 1_000,
+        effectiveMemoryThresholdBytes: 35,
         policyTempQuotaBytes: 10_000,
         configuredTempBytes: 10_000,
         effectiveTempQuotaBytes: 10_000,
       },
-      rowEstimate: 0,
+      measuredInputs: [{
+        tableId: "rows",
+        resultManifestId: "result_ct4_rows",
+        relativePath: "rows.csv",
+        sizeBytes: 13,
+        sha256: createHash("sha256").update("row_id\nrow-1\n").digest("hex"),
+      }],
+      measurementComplete: true,
+      rowEstimate: 1,
       keyEstimates: [{
-        keyId: "rows:primary",
+        keyId: '["rows",["row_id"]]',
         entryEstimate: 1,
-        tupleWidthEstimateBytes: 993,
+        tupleWidthEstimateBytes: 18,
         tupleFieldCount: 1,
       }],
       configuredHeapBytes: 2_000,
       configuredTempBytes: 10_000,
-      estimatedHeapBytes: 1_000,
-      estimatedTempBytes: 1_000,
+      estimatedHeapBytes: 35,
+      estimatedTempBytes: 35,
       tempBytes: null,
       failureReason: null,
     });
-    expect(telemetry[0]!.durationMs).toBeGreaterThanOrEqual(0);
-    expect(telemetry[0]!.heapBytes).toBeGreaterThan(0);
   });
 
-  it("rejects the first byte above memory before iterating or scanning tables", async () => {
+  it("rejects the first measured byte above memory before building key maps", async () => {
+    const request = await validationRequest();
+    const telemetry: MultiTableResourcePreflightTelemetry[] = [];
+    const belowMeasuredSize = { ...basePolicy, memoryThresholdBytes: 34 };
+
+    const result = await validateMultiTableCandidate(
+      request,
+      resourceSignal(),
+      resourceOptions((event) => {
+        telemetry.push(event);
+      }, belowMeasuredSize),
+    );
+
+    expect(result.passed).toBe(false);
+    expect(result.checks).toContainEqual(expect.objectContaining({
+      check_id: "resource_baseline",
+      passed: false,
+      detail: expect.stringContaining('"failure_reason":"disk_unavailable"'),
+    }));
+    expect(result.checks.some((item) => item.check_id === "primary_key_uniqueness")).toBe(false);
+    expect(result.checks.some((item) => item.check_id === "data_type")).toBe(false);
+    expect(telemetry[0]).toEqual(expect.objectContaining({
+      validatorMode: "reject",
+      rowEstimate: 1,
+      estimatedHeapBytes: 35,
+      failureReason: "disk_unavailable",
+    }));
+  });
+
+  it("ignores forged caller estimates and derives a larger input from receipted bytes", async () => {
+    const request = await validationRequest("row_id\nrow-1\nrow-2\n");
+    const telemetry: MultiTableResourcePreflightTelemetry[] = [];
+    const optionsWithForgedEstimates = {
+      ...resourceOptions((event) => {
+        telemetry.push(event);
+      }),
+      estimates: {
+        rowEstimate: 0,
+        keyEstimates: [],
+        configuredHeapBytes: 2_000,
+        configuredTempBytes: 10_000,
+      },
+    };
+
+    const result = await validateMultiTableCandidate(
+      request,
+      resourceSignal(),
+      optionsWithForgedEstimates,
+    );
+
+    expect(result.passed).toBe(false);
+    expect(telemetry[0]).toEqual(expect.objectContaining({
+      measurementSource: "core_receipted_table_scan.v1",
+      measurementComplete: true,
+      rowEstimate: 2,
+      keyEstimates: [expect.objectContaining({ entryEstimate: 2 })],
+      estimatedHeapBytes: 70,
+      failureReason: "disk_unavailable",
+    }));
+  });
+
+  it("requires cancellation capability before inspecting resource-gated tables", async () => {
     const request = await validationRequest();
     request.tables = new Proxy(request.tables, {
       get(target, property, receiver) {
-        if (property === Symbol.iterator) throw new Error("tables must not be scanned");
+        if (property === Symbol.iterator) throw new Error("table input must not be inspected");
         return Reflect.get(target, property, receiver);
       },
     });
@@ -249,9 +308,41 @@ describe("C-T4 multi-table resource preflight", () => {
     const result = await validateMultiTableCandidate(
       request,
       undefined,
-      resourceOptions(estimates(994), (event) => {
+      resourceOptions((event) => {
         telemetry.push(event);
       }),
+    );
+
+    expect(result.passed).toBe(false);
+    expect(result.checks).toEqual([expect.objectContaining({
+      check_id: "resource_baseline",
+      passed: false,
+      detail: expect.stringContaining('"failure_reason":"cancel_unavailable"'),
+    })]);
+    expect(telemetry).toEqual([expect.objectContaining({
+      measurementSource: "configuration_precheck.v1",
+      measurementComplete: false,
+      failureReason: "cancel_unavailable",
+    })]);
+  });
+
+  it("rejects invalid resource configuration before inspecting table inputs", async () => {
+    const request = await validationRequest();
+    request.tables = new Proxy(request.tables, {
+      get(target, property, receiver) {
+        if (property === Symbol.iterator) throw new Error("table input must not be inspected");
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const telemetry: MultiTableResourcePreflightTelemetry[] = [];
+    const invalidPolicy = { ...basePolicy, maxFieldCharacters: 0 };
+
+    const result = await validateMultiTableCandidate(
+      request,
+      resourceSignal(),
+      resourceOptions((event) => {
+        telemetry.push(event);
+      }, invalidPolicy),
     );
 
     expect(result).toEqual({
@@ -259,65 +350,56 @@ describe("C-T4 multi-table resource preflight", () => {
       checks: [expect.objectContaining({
         check_id: "resource_baseline",
         passed: false,
-        detail: expect.stringContaining('"failure_reason":"disk_unavailable"'),
+        detail: expect.stringContaining('"failure_reason":"invalid_policy"'),
       })],
     });
-    expect(telemetry).toHaveLength(1);
-    expect(telemetry[0]).toEqual(expect.objectContaining({
-      validatorMode: "reject",
-      estimatedHeapBytes: 1_001,
-      failureReason: "disk_unavailable",
-      tempBytes: null,
-    }));
+    expect(telemetry).toEqual([expect.objectContaining({
+      measurementSource: "configuration_precheck.v1",
+      measuredInputs: [],
+      measurementComplete: false,
+      rowEstimate: null,
+      failureReason: "invalid_policy",
+    })]);
   });
 
-  it.each([
-    ["unknown", estimates(null), "unknown_estimate"],
-    ["invalid", { ...estimates(1), rowEstimate: -1 }, "invalid_estimate"],
-  ] as const)("fails closed for %s estimates before scanning", async (_label, measured, reason) => {
-    const request = await validationRequest();
-    request.tables = new Proxy(request.tables, {
-      get(target, property, receiver) {
-        if (property === Symbol.iterator) throw new Error("tables must not be scanned");
-        return Reflect.get(target, property, receiver);
-      },
-    });
+  it("fails bounded measurement on an oversized row and emits rejection telemetry", async () => {
+    const oversized = `row_id\n${"x".repeat(8_192)}`;
+    const request = await validationRequest(oversized);
     const telemetry: MultiTableResourcePreflightTelemetry[] = [];
 
     const result = await validateMultiTableCandidate(
       request,
-      undefined,
-      resourceOptions(measured, (event) => {
+      resourceSignal(),
+      resourceOptions((event) => {
         telemetry.push(event);
       }),
     );
 
     expect(result.passed).toBe(false);
-    expect(result.checks).toHaveLength(1);
-    expect(result.checks[0]!.detail).toContain(`"failure_reason":"${reason}"`);
-    expect(telemetry[0]).toEqual(expect.objectContaining({
-      validatorMode: "reject",
-      estimatedHeapBytes: null,
-      estimatedTempBytes: null,
-      failureReason: reason,
+    expect(result.checks).toContainEqual(expect.objectContaining({
+      check_id: "resource_measurement",
+      passed: false,
+      detail: expect.stringContaining("exceeds 4096 chars"),
     }));
+    expect(telemetry).toEqual([expect.objectContaining({
+      measurementSource: "core_receipted_table_scan.v1",
+      validatorMode: "reject",
+      measuredInputs: [],
+      measurementComplete: false,
+      rowEstimate: null,
+      failureReason: "measurement_failed",
+    })]);
   });
 
-  it("honors AbortSignal after telemetry and before table scanning", async () => {
+  it("honors AbortSignal after measured telemetry and before key-map scanning", async () => {
     const request = await validationRequest();
-    request.tables = new Proxy(request.tables, {
-      get(target, property, receiver) {
-        if (property === Symbol.iterator) throw new Error("tables must not be scanned");
-        return Reflect.get(target, property, receiver);
-      },
-    });
     const controller = new AbortController();
     let telemetryCount = 0;
 
     await expect(validateMultiTableCandidate(
       request,
       controller.signal,
-      resourceOptions(estimates(993), () => {
+      resourceOptions(() => {
         telemetryCount += 1;
         controller.abort();
       }),
@@ -325,15 +407,15 @@ describe("C-T4 multi-table resource preflight", () => {
     expect(telemetryCount).toBe(1);
   });
 
-  it("emits deterministic decision fields once and fails closed on sink errors", async () => {
+  it("emits deterministic measured decision fields and fails closed on sink errors", async () => {
     const request = await validationRequest();
     const telemetry: MultiTableResourcePreflightTelemetry[] = [];
-    const options = resourceOptions(estimates(993), (event) => {
+    const options = resourceOptions((event) => {
       telemetry.push(event);
     });
 
-    await validateMultiTableCandidate(request, undefined, options);
-    await validateMultiTableCandidate(request, undefined, options);
+    await validateMultiTableCandidate(request, resourceSignal(), options);
+    await validateMultiTableCandidate(request, resourceSignal(), options);
 
     expect(telemetry).toHaveLength(2);
     expect(deterministicTelemetry(telemetry[0]!)).toEqual(deterministicTelemetry(telemetry[1]!));
@@ -341,8 +423,8 @@ describe("C-T4 multi-table resource preflight", () => {
     const sinkFailure = new Error("audit storage unavailable");
     await expect(validateMultiTableCandidate(
       request,
-      undefined,
-      resourceOptions(estimates(993), () => {
+      resourceSignal(),
+      resourceOptions(() => {
         throw sinkFailure;
       }),
     )).rejects.toMatchObject({

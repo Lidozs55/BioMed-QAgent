@@ -117,6 +117,16 @@ export async function* delimitedRowsFromFileAsync(
           throwIfAborted(signal);
         }
       }
+      if (maxRowChars !== null) {
+        const pendingRowChars = pending.endsWith("\r")
+          ? pending.length - 1
+          : pending.length;
+        if (pendingRowChars > maxRowChars) {
+          throw new DelimitedBoundsError(
+            `row ${line + 1} exceeds ${maxRowChars} chars`,
+          );
+        }
+      }
     }
     pending += decoder.end();
     if (pending.length > 0) {

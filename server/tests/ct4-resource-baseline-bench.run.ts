@@ -29,6 +29,8 @@ const policy: ResourceBaselinePolicy = {
   rowOverheadBytes: 24,
   keyEntryOverheadBytes: 72,
   tupleFieldOverheadBytes: 8,
+  maxRowCharacters: 1_048_576,
+  maxFieldCharacters: 524_288,
 };
 
 const input = {

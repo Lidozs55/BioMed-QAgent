@@ -11,7 +11,10 @@ import type {
   SchemaFieldV2,
 } from "@biomed/contracts";
 
-import { delimitedRowsFromFileAsync } from "../adapters/text.js";
+import {
+  delimitedRowsFromFileAsync,
+  type DelimitedRowBounds,
+} from "../adapters/text.js";
 import type {
   MultiTableValidationCheck,
   MultiTableValidationRequest,
@@ -27,7 +30,12 @@ import { assertRelativePath } from "../contracts/primitives.js";
 import { checkpoint, CHECKPOINT_STRIDE, throwIfAborted } from "../cooperative.js";
 import {
   decideValidatorResources,
+  MULTITABLE_RESOURCE_CONFIGURATION_SOURCE,
+  MULTITABLE_RESOURCE_MEASUREMENT_SOURCE,
   MULTITABLE_RESOURCE_PREFLIGHT_TELEMETRY_SCHEMA_VERSION,
+  type MultiTableMeasuredInput,
+  type MultiTableMeasuredResources,
+  type MultiTableResourceMeasurementSource,
   type MultiTableResourcePreflightTelemetry,
   type MultiTableResourceValidationOptions,
   type MultiTableValidationOptions,
@@ -36,7 +44,8 @@ import {
 } from "./resource-baseline.js";
 
 export type {
-  MultiTableResourceEstimates,
+  MultiTableMeasuredInput,
+  MultiTableMeasuredResources,
   MultiTableResourcePreflightTelemetry,
   MultiTableResourceTelemetrySink,
   MultiTableResourceValidationOptions,
@@ -46,6 +55,14 @@ export type {
 interface TableScan {
   rowCount: number;
   keyCounts: Map<string, Map<string, number>>;
+}
+
+interface ResolvedTrustedTable {
+  path: string;
+  size: number;
+  sha256: string;
+  resultManifestId: string;
+  relativePath: string;
 }
 
 const SUPPORTED_DATA_TYPES = new Set([
@@ -75,39 +92,48 @@ function copyKeyEstimates(
   return estimates.map((estimate) => ({ ...estimate }));
 }
 
-async function resourcePreflight(
+function copyMeasuredInputs(
+  inputs: readonly MultiTableMeasuredInput[],
+): MultiTableMeasuredInput[] {
+  return inputs.map((input) => ({ ...input }));
+}
+
+interface ResourceTelemetryFacts {
+  measurementSource: MultiTableResourceMeasurementSource;
+  measuredInputs: readonly MultiTableMeasuredInput[];
+  measurementComplete: boolean;
+  rowEstimate: number | null;
+  keyEstimates: readonly ResourceKeyEstimate[];
+  validatorMode: MultiTableResourcePreflightTelemetry["validatorMode"];
+  thresholdBasis: MultiTableResourcePreflightTelemetry["thresholdBasis"];
+  estimatedHeapBytes: number | null;
+  estimatedTempBytes: number | null;
+  failureReason: MultiTableResourcePreflightTelemetry["failureReason"];
+}
+
+async function emitResourceTelemetry(
   options: MultiTableResourceValidationOptions,
+  facts: ResourceTelemetryFacts,
+  startedAt: number,
   signal?: AbortSignal | null,
-): Promise<ResourceBaselineDecision> {
-  throwIfAborted(signal);
-  const keyEstimates = copyKeyEstimates(options.estimates.keyEstimates);
-  const startedAt = performance.now();
-  const decision = decideValidatorResources({
-    rowEstimate: options.estimates.rowEstimate,
-    keyEstimates,
-    configuredHeapBytes: options.estimates.configuredHeapBytes,
-    configuredTempBytes: options.estimates.configuredTempBytes,
-    // T11 has not production-wired a disk tuple index into this validator.
-    // This must remain false until disk mode replaces, rather than falls
-    // through to, the Map-backed scan below.
-    diskIndexAvailable: false,
-    cancelCapable: signal !== undefined && signal !== null,
-  }, options.policy);
+): Promise<void> {
   const telemetry: MultiTableResourcePreflightTelemetry = {
     schemaVersion: MULTITABLE_RESOURCE_PREFLIGHT_TELEMETRY_SCHEMA_VERSION,
-    validatorMode: decision.validatorMode,
-    thresholdBasis: decision.thresholdBasis === null ? null : { ...decision.thresholdBasis },
-    rowEstimate: options.estimates.rowEstimate,
-    keyEstimates,
-    configuredHeapBytes: options.estimates.configuredHeapBytes,
-    configuredTempBytes: options.estimates.configuredTempBytes,
-    estimatedHeapBytes: decision.estimatedHeapBytes,
-    estimatedTempBytes: decision.estimatedTempBytes,
+    measurementSource: facts.measurementSource,
+    validatorMode: facts.validatorMode,
+    thresholdBasis: facts.thresholdBasis === null ? null : { ...facts.thresholdBasis },
+    measuredInputs: copyMeasuredInputs(facts.measuredInputs),
+    measurementComplete: facts.measurementComplete,
+    rowEstimate: facts.rowEstimate,
+    keyEstimates: copyKeyEstimates(facts.keyEstimates),
+    configuredHeapBytes: options.configuredHeapBytes,
+    configuredTempBytes: options.configuredTempBytes,
+    estimatedHeapBytes: facts.estimatedHeapBytes,
+    estimatedTempBytes: facts.estimatedTempBytes,
     durationMs: Math.max(0, performance.now() - startedAt),
     heapBytes: process.memoryUsage().heapUsed,
-    // No disk index or temp-byte instrument exists at this boundary yet.
     tempBytes: null,
-    failureReason: decision.failureReason,
+    failureReason: facts.failureReason,
   };
   try {
     await options.telemetrySink(telemetry);
@@ -115,6 +141,77 @@ async function resourcePreflight(
     throw new Error("multi-table resource telemetry sink failed", { cause: error });
   }
   throwIfAborted(signal);
+}
+
+function resourceConfigurationDecision(
+  options: MultiTableResourceValidationOptions,
+  signal?: AbortSignal | null,
+): ResourceBaselineDecision {
+  const decision = decideValidatorResources({
+    rowEstimate: 0,
+    keyEstimates: [],
+    configuredHeapBytes: options.configuredHeapBytes,
+    configuredTempBytes: options.configuredTempBytes,
+    diskIndexAvailable: false,
+    cancelCapable: signal !== undefined && signal !== null,
+  }, options.policy);
+  if (decision.validatorMode !== "memory" || (signal !== undefined && signal !== null)) {
+    return decision;
+  }
+  return {
+    ...decision,
+    validatorMode: "reject",
+    failureReason: "cancel_unavailable",
+    telemetry: {
+      ...decision.telemetry,
+      failureReason: "cancel_unavailable",
+    },
+  };
+}
+
+function resourceScanBounds(
+  options: MultiTableResourceValidationOptions,
+  expectedFields: number,
+): DelimitedRowBounds {
+  return {
+    maxRowChars: options.policy.maxRowCharacters,
+    maxFieldChars: options.policy.maxFieldCharacters,
+    maxRowFields: expectedFields,
+  };
+}
+
+async function resourcePreflight(
+  options: MultiTableResourceValidationOptions,
+  measured: MultiTableMeasuredResources,
+  startedAt: number,
+  signal?: AbortSignal | null,
+): Promise<ResourceBaselineDecision> {
+  throwIfAborted(signal);
+  const keyEstimates = copyKeyEstimates(measured.keyEstimates);
+  const measuredInputs = copyMeasuredInputs(measured.measuredInputs);
+  const decision = decideValidatorResources({
+    rowEstimate: measured.rowEstimate,
+    keyEstimates,
+    configuredHeapBytes: options.configuredHeapBytes,
+    configuredTempBytes: options.configuredTempBytes,
+    // T11 has not production-wired a disk tuple index into this validator.
+    // This must remain false until disk mode replaces, rather than falls
+    // through to, the Map-backed scan below.
+    diskIndexAvailable: false,
+    cancelCapable: signal !== undefined && signal !== null,
+  }, options.policy);
+  await emitResourceTelemetry(options, {
+    measurementSource: MULTITABLE_RESOURCE_MEASUREMENT_SOURCE,
+    validatorMode: decision.validatorMode,
+    thresholdBasis: decision.thresholdBasis,
+    measuredInputs,
+    measurementComplete: true,
+    rowEstimate: measured.rowEstimate,
+    keyEstimates,
+    estimatedHeapBytes: decision.estimatedHeapBytes,
+    estimatedTempBytes: decision.estimatedTempBytes,
+    failureReason: decision.failureReason,
+  }, startedAt, signal);
   return decision;
 }
 
@@ -172,7 +269,7 @@ async function resolveTrustedTablePath(
   trustedRoot: string,
   forbiddenRoots: readonly string[],
   signal?: AbortSignal | null,
-): Promise<{ path: string; size: number; sha256: string }> {
+): Promise<ResolvedTrustedTable> {
   const file = table.file;
   if (file === null) throw new Error("table has no file reference");
   if (file.origin !== "core_operation_result") {
@@ -204,15 +301,132 @@ async function resolveTrustedTablePath(
   if (fileStat.size !== receipt.size_bytes) throw new Error("table size does not match its Core receipt");
   const digest = await sha256File(actualPath, signal);
   if (digest !== receipt.sha256.toLowerCase()) throw new Error("table hash does not match its Core receipt");
-  return { path: actualPath, size: fileStat.size, sha256: digest };
+  return {
+    path: actualPath,
+    size: fileStat.size,
+    sha256: digest,
+    resultManifestId: result.result_manifest_id,
+    relativePath,
+  };
 }
 
 function fieldsKey(fields: readonly string[]): string {
-  return fields.join("\u001f");
+  return JSON.stringify(fields);
 }
 
 function tupleKey(values: readonly string[]): string {
   return JSON.stringify(values);
+}
+
+function tuplePayloadBytes(values: readonly string[]): number {
+  // Map keys are JavaScript strings. Two bytes per UTF-16 code unit is a
+  // conservative, deterministic payload estimate independent of V8's optional
+  // one-byte string representation.
+  return tupleKey(values).length * 2;
+}
+
+interface MutableKeyMeasurement {
+  keyId: string;
+  entryEstimate: number;
+  tupleWidthEstimateBytes: number;
+  tupleFieldCount: number;
+}
+
+async function measureTableResources(
+  table: MultiTableValidationTable,
+  resolved: ResolvedTrustedTable,
+  request: MultiTableValidationRequest,
+  options: MultiTableResourceValidationOptions,
+  signal?: AbortSignal | null,
+): Promise<{ input: MultiTableMeasuredInput; rows: number; keys: ResourceKeyEstimate[] }> {
+  const tableId = table.definition.table_id;
+  const expectedHeader = table.definition.field_names;
+  const combinations = relationCombos(tableId, table.schema, request.relations);
+  const keys = combinations.map((fields): MutableKeyMeasurement => ({
+    keyId: JSON.stringify([tableId, fields]),
+    entryEstimate: 0,
+    tupleWidthEstimateBytes: 0,
+    tupleFieldCount: fields.length,
+  }));
+  let header: string[] | null = null;
+  let rows = 0;
+  for await (const row of delimitedRowsFromFileAsync(
+    resolved.path,
+    table.file?.delimiter ?? ",",
+    signal,
+    resourceScanBounds(options, expectedHeader.length),
+  )) {
+    if (header === null) {
+      header = row.values;
+      if (!sameStrings(header, expectedHeader)) {
+        throw new Error(`resource measurement header mismatch for ${tableId}`);
+      }
+      continue;
+    }
+    if (row.values.length === 0) continue;
+    if (row.values.length !== expectedHeader.length) {
+      throw new Error(`resource measurement row width mismatch for ${tableId}`);
+    }
+    rows += 1;
+    if (!Number.isSafeInteger(rows)) {
+      throw new Error(`resource measurement row count overflow for ${tableId}`);
+    }
+    const values = new Map(expectedHeader.map((name, index) => [name, row.values[index] ?? ""]));
+    for (let index = 0; index < combinations.length; index += 1) {
+      const fields = combinations[index] ?? [];
+      const measurement = keys[index];
+      if (measurement === undefined) throw new Error("resource measurement key closure failed");
+      measurement.entryEstimate = rows;
+      measurement.tupleWidthEstimateBytes = Math.max(
+        measurement.tupleWidthEstimateBytes,
+        tuplePayloadBytes(fields.map((field) => values.get(field) ?? "")),
+      );
+    }
+    if (rows % CHECKPOINT_STRIDE === 0) await checkpoint(signal);
+  }
+  if (header === null) throw new Error(`resource measurement found no header for ${tableId}`);
+  return {
+    input: {
+      tableId,
+      resultManifestId: resolved.resultManifestId,
+      relativePath: resolved.relativePath,
+      sizeBytes: resolved.size,
+      sha256: resolved.sha256,
+    },
+    rows,
+    keys,
+  };
+}
+
+async function measureResources(
+  request: MultiTableValidationRequest,
+  resolvedTables: ReadonlyMap<string, ResolvedTrustedTable>,
+  options: MultiTableResourceValidationOptions,
+  signal?: AbortSignal | null,
+): Promise<MultiTableMeasuredResources> {
+  const measuredInputs: MultiTableMeasuredInput[] = [];
+  const keyEstimates: ResourceKeyEstimate[] = [];
+  let rowEstimate = 0;
+  for (const table of request.tables) {
+    const resolved = resolvedTables.get(table.definition.table_id);
+    if (resolved === undefined) continue;
+    const measured = await measureTableResources(
+      table,
+      resolved,
+      request,
+      options,
+      signal,
+    );
+    measuredInputs.push(measured.input);
+    keyEstimates.push(...measured.keys);
+    rowEstimate += measured.rows;
+    if (!Number.isSafeInteger(rowEstimate)) throw new Error("resource measurement row count overflow");
+  }
+  return {
+    measuredInputs,
+    rowEstimate,
+    keyEstimates,
+  };
 }
 
 function validDate(value: string): boolean {
@@ -267,12 +481,53 @@ function tableTokenRules(
   return rules.filter((rule) => rule.table_id === tableId);
 }
 
+interface MemoryScanBudget {
+  remainingBytes: bigint;
+  rowOverheadBytes: bigint;
+  keyEntryOverheadBytes: bigint;
+  tupleFieldOverheadBytes: bigint;
+}
+
+function createMemoryScanBudget(
+  decision: ResourceBaselineDecision,
+  options: MultiTableResourceValidationOptions,
+): MemoryScanBudget {
+  const threshold = decision.thresholdBasis?.effectiveMemoryThresholdBytes;
+  if (threshold === undefined) {
+    throw new Error("memory resource decision has no effective threshold");
+  }
+  return {
+    remainingBytes: BigInt(threshold),
+    rowOverheadBytes: BigInt(options.policy.rowOverheadBytes),
+    keyEntryOverheadBytes: BigInt(options.policy.keyEntryOverheadBytes),
+    tupleFieldOverheadBytes: BigInt(options.policy.tupleFieldOverheadBytes),
+  };
+}
+
+function reserveMemoryScanRow(
+  budget: MemoryScanBudget,
+  tuplePayloads: readonly { bytes: number; fieldCount: number }[],
+): void {
+  let required = budget.rowOverheadBytes;
+  for (const tuple of tuplePayloads) {
+    required += budget.keyEntryOverheadBytes
+      + BigInt(tuple.bytes)
+      + BigInt(tuple.fieldCount) * budget.tupleFieldOverheadBytes;
+  }
+  if (required > budget.remainingBytes) {
+    throw new Error("measured memory threshold exceeded during table scan");
+  }
+  budget.remainingBytes -= required;
+}
+
 async function scanTable(
   table: MultiTableValidationTable,
   filePath: string,
   request: MultiTableValidationRequest,
   checks: MultiTableValidationCheck[],
   signal?: AbortSignal | null,
+  memoryBudget?: MemoryScanBudget,
+  scanBounds?: DelimitedRowBounds,
 ): Promise<TableScan> {
   const tableId = table.definition.table_id;
   const expectedHeader = table.definition.field_names;
@@ -296,7 +551,12 @@ async function scanTable(
     }
   }
 
-  for await (const row of delimitedRowsFromFileAsync(filePath, table.file?.delimiter ?? ",", signal)) {
+  for await (const row of delimitedRowsFromFileAsync(
+    filePath,
+    table.file?.delimiter ?? ",",
+    signal,
+    scanBounds,
+  )) {
     if (header === null) {
       header = row.values;
       continue;
@@ -318,10 +578,22 @@ async function scanTable(
     }
     const primaryValues = table.schema.primary_key.map((field) => values.get(field) ?? "");
     if (primaryValues.some((value) => value === "")) primaryKeyNulls += 1;
-    for (const fields of combinations) {
+    const encodedKeys = combinations.map((fields) => {
       const valuesForKey = fields.map((field) => values.get(field) ?? "");
+      return {
+        fields,
+        encoded: tupleKey(valuesForKey),
+        bytes: tuplePayloadBytes(valuesForKey),
+      };
+    });
+    if (memoryBudget !== undefined) {
+      reserveMemoryScanRow(
+        memoryBudget,
+        encodedKeys.map(({ bytes, fields }) => ({ bytes, fieldCount: fields.length })),
+      );
+    }
+    for (const { fields, encoded } of encodedKeys) {
       const counts = keyCounts.get(fieldsKey(fields));
-      const encoded = tupleKey(valuesForKey);
       counts?.set(encoded, (counts.get(encoded) ?? 0) + 1);
     }
     for (const rule of tokenRules) {
@@ -508,8 +780,9 @@ function validateDefinitions(
  *
  * The two-argument form is retained for legacy small-input callers and keeps
  * its existing result shape and behavior. It does not constitute Family Host
- * large-input admission. Such callers must explicitly pass resource options
- * backed by measured estimates and an injected benchmark-derived policy.
+ * large-input admission. Such callers must explicitly pass resource options;
+ * the validator then derives estimates from Core-receipted bytes before it
+ * allocates any PK/FK Map.
  */
 export async function validateMultiTableCandidate(
   request: MultiTableValidationRequest,
@@ -519,18 +792,30 @@ export async function validateMultiTableCandidate(
   throwIfAborted(signal);
   const checks: MultiTableValidationCheck[] = [];
   if (options !== undefined) {
-    const decision = await resourcePreflight(options.resourceBaseline, signal);
-    const memoryMode = decision.validatorMode === "memory";
-    check(
-      checks,
-      "resource_baseline",
-      request.candidate.candidate_id,
-      memoryMode,
-      resourceDecisionDetail(decision),
-    );
-    // Disk mode is intentionally unavailable at this integration boundary.
-    // Rejecting here prevents the existing Map-backed scan from running.
-    if (!memoryMode) return { passed: false, checks };
+    const startedAt = performance.now();
+    const configuration = resourceConfigurationDecision(options.resourceBaseline, signal);
+    if (configuration.validatorMode !== "memory") {
+      await emitResourceTelemetry(options.resourceBaseline, {
+        measurementSource: MULTITABLE_RESOURCE_CONFIGURATION_SOURCE,
+        validatorMode: configuration.validatorMode,
+        thresholdBasis: configuration.thresholdBasis,
+        measuredInputs: [],
+        measurementComplete: false,
+        rowEstimate: null,
+        keyEstimates: [],
+        estimatedHeapBytes: configuration.estimatedHeapBytes,
+        estimatedTempBytes: configuration.estimatedTempBytes,
+        failureReason: configuration.failureReason,
+      }, startedAt, signal);
+      check(
+        checks,
+        "resource_baseline",
+        request.candidate.candidate_id,
+        false,
+        resourceDecisionDetail(configuration),
+      );
+      return { passed: false, checks };
+    }
   }
   try {
     parsePublicationCandidateRef(request.candidate);
@@ -564,6 +849,7 @@ export async function validateMultiTableCandidate(
     return { passed: false, checks };
   }
 
+  const resolvedTables = new Map<string, ResolvedTrustedTable>();
   const scans = new Map<string, TableScan>();
   for (const table of request.tables) {
     const tableId = table.definition.table_id;
@@ -571,17 +857,107 @@ export async function validateMultiTableCandidate(
       const allowed = !table.definition.required;
       check(checks, "trusted_table_input", tableId, allowed,
         allowed ? "optional table is absent" : "required table has no Core file reference");
-      if (!allowed) continue;
-      scans.set(tableId, { rowCount: 0, keyCounts: new Map() });
+      if (allowed) scans.set(tableId, { rowCount: 0, keyCounts: new Map() });
       continue;
     }
     try {
       const resolved = await resolveTrustedTablePath(
         request, table, trustedRoot, forbiddenRoots, signal,
       );
+      resolvedTables.set(tableId, resolved);
       check(checks, "trusted_table_input", tableId, true,
         `${table.file.relative_path}; size=${resolved.size}; sha256=${resolved.sha256}`);
-      scans.set(tableId, await scanTable(table, resolved.path, request, checks, signal));
+    } catch (error) {
+      check(checks, "trusted_table_input", tableId, false,
+        error instanceof Error ? error.message : String(error));
+    }
+  }
+  if (
+    options !== undefined
+    && checks.some((item) => item.check_id === "trusted_table_input" && !item.passed)
+  ) {
+    return { passed: false, checks };
+  }
+
+  let memoryBudget: MemoryScanBudget | undefined;
+  if (options !== undefined) {
+    const startedAt = performance.now();
+    let measured: MultiTableMeasuredResources;
+    try {
+      measured = await measureResources(
+        request,
+        resolvedTables,
+        options.resourceBaseline,
+        signal,
+      );
+    } catch (error) {
+      await emitResourceTelemetry(options.resourceBaseline, {
+        measurementSource: MULTITABLE_RESOURCE_MEASUREMENT_SOURCE,
+        validatorMode: "reject",
+        thresholdBasis: null,
+        measuredInputs: [],
+        measurementComplete: false,
+        rowEstimate: null,
+        keyEstimates: [],
+        estimatedHeapBytes: null,
+        estimatedTempBytes: null,
+        failureReason: "measurement_failed",
+      }, startedAt, signal);
+      check(checks, "resource_measurement", request.candidate.candidate_id, false,
+        error instanceof Error ? error.message : String(error));
+      return { passed: false, checks };
+    }
+    const decision = await resourcePreflight(
+      options.resourceBaseline,
+      measured,
+      startedAt,
+      signal,
+    );
+    const memoryMode = decision.validatorMode === "memory";
+    check(
+      checks,
+      "resource_baseline",
+      request.candidate.candidate_id,
+      memoryMode,
+      resourceDecisionDetail(decision),
+    );
+    // Disk mode is intentionally unavailable at this integration boundary.
+    // Rejecting here prevents the existing Map-backed scan from running.
+    if (!memoryMode) return { passed: false, checks };
+    memoryBudget = createMemoryScanBudget(decision, options.resourceBaseline);
+  }
+
+  for (const table of request.tables) {
+    const tableId = table.definition.table_id;
+    const resolved = resolvedTables.get(tableId);
+    if (resolved === undefined) continue;
+    try {
+      // Recheck the receipt digest immediately before the Map-building pass.
+      // This narrows but does not eliminate path-level TOCTOU; immutable
+      // Core-owned descriptor snapshots remain a C-T8/T11 activation gate.
+      const digest = await sha256File(resolved.path, signal);
+      if (digest !== resolved.sha256) {
+        throw new Error("table changed after resource measurement");
+      }
+      const scan = await scanTable(
+        table,
+        resolved.path,
+        request,
+        checks,
+        signal,
+        memoryBudget,
+        options === undefined
+          ? undefined
+          : resourceScanBounds(
+            options.resourceBaseline,
+            table.definition.field_names.length,
+          ),
+      );
+      const digestAfterScan = await sha256File(resolved.path, signal);
+      if (digestAfterScan !== resolved.sha256) {
+        throw new Error("table changed during validation scan");
+      }
+      scans.set(tableId, scan);
     } catch (error) {
       check(checks, "trusted_table_input", tableId, false,
         error instanceof Error ? error.message : String(error));

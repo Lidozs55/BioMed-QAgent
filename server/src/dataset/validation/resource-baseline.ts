@@ -19,7 +19,8 @@ export type ResourceBaselineFailureReason =
   | "estimate_overflow"
   | "disk_unavailable"
   | "cancel_unavailable"
-  | "temp_quota_exceeded";
+  | "temp_quota_exceeded"
+  | "measurement_failed";
 
 export interface ResourceKeyEstimate {
   /** Stable identity for one PK/FK/relation tuple index. */
@@ -55,6 +56,10 @@ export interface ResourceBaselinePolicy {
   keyEntryOverheadBytes: number;
   /** Conservative bookkeeping estimate for each field in an encoded tuple. */
   tupleFieldOverheadBytes: number;
+  /** Benchmark-backed hard cap for one decoded delimited row. */
+  maxRowCharacters: number;
+  /** Benchmark-backed hard cap for one decoded field. */
+  maxFieldCharacters: number;
 }
 
 export interface ResourceThresholdBasis {
@@ -101,30 +106,45 @@ export interface ResourceBaselineDecision {
 }
 
 export const MULTITABLE_RESOURCE_PREFLIGHT_TELEMETRY_SCHEMA_VERSION =
-  "b3-multitable-resource-preflight.v1" as const;
+  "b3-multitable-resource-preflight.v2" as const;
 
-/**
- * Caller-measured estimates accepted by the multi-table validator's explicit
- * resource preflight. The validator does not derive or verify these values;
- * only a trusted caller with representative, same-policy measurements may use
- * them for large-input admission.
- */
-export interface MultiTableResourceEstimates {
-  rowEstimate: number | null;
+export const MULTITABLE_RESOURCE_MEASUREMENT_SOURCE =
+  "core_receipted_table_scan.v1" as const;
+export const MULTITABLE_RESOURCE_CONFIGURATION_SOURCE =
+  "configuration_precheck.v1" as const;
+export type MultiTableResourceMeasurementSource =
+  | typeof MULTITABLE_RESOURCE_MEASUREMENT_SOURCE
+  | typeof MULTITABLE_RESOURCE_CONFIGURATION_SOURCE;
+
+/** Core-receipted file identity used by the bounded measurement pass. */
+export interface MultiTableMeasuredInput {
+  tableId: string;
+  resultManifestId: string;
+  relativePath: string;
+  sizeBytes: number;
+  sha256: string;
+}
+
+export interface MultiTableMeasuredResources {
+  measuredInputs: readonly MultiTableMeasuredInput[];
+  rowEstimate: number;
   keyEstimates: readonly ResourceKeyEstimate[];
-  configuredHeapBytes: number | null;
-  configuredTempBytes: number | null;
 }
 
 /**
- * One auditable preflight record emitted before the validator opens a table.
- * Decision fields are deterministic for a policy and estimate tuple. Observed
- * fields are runtime samples: durationMs covers the preflight decision only,
- * heapBytes is process.heapUsed at emission (not an attributed peak), and
- * tempBytes remains null until an instrumented disk index exists.
+ * One auditable record emitted after a bounded measurement pass and before the
+ * validator allocates PK/FK Maps. Decision fields are deterministic for the
+ * receipted bytes and policy. Observed fields are runtime samples:
+ * durationMs covers measurement plus decision, heapBytes is process.heapUsed
+ * at emission (not an attributed peak), and tempBytes remains null until an
+ * instrumented disk index exists.
  */
 export interface MultiTableResourcePreflightTelemetry {
   schemaVersion: typeof MULTITABLE_RESOURCE_PREFLIGHT_TELEMETRY_SCHEMA_VERSION;
+  measurementSource: MultiTableResourceMeasurementSource;
+  measuredInputs: readonly MultiTableMeasuredInput[];
+  /** False means row/key values are a sufficient lower bound after early rejection. */
+  measurementComplete: boolean;
   validatorMode: ValidatorMode;
   thresholdBasis: ResourceThresholdBasis | null;
   rowEstimate: number | null;
@@ -150,8 +170,11 @@ export interface MultiTableResourceValidationOptions {
    * the caller owns the representative benchmark evidence behind its values.
    */
   policy: ResourceBaselinePolicy;
-  estimates: MultiTableResourceEstimates;
-  /** Required audit boundary. A sink error fails closed before table I/O. */
+  /** Runtime heap ceiling supplied by the Core composition boundary. */
+  configuredHeapBytes: number | null;
+  /** Runtime temp ceiling supplied by the Core composition boundary. */
+  configuredTempBytes: number | null;
+  /** Required audit boundary. A sink error fails closed before Map allocation. */
   telemetrySink: MultiTableResourceTelemetrySink;
 }
 
@@ -205,7 +228,12 @@ function validPolicy(policy: ResourceBaselinePolicy): boolean {
     isNonNegativeSafeInteger(policy.tempQuotaBytes) &&
     isNonNegativeSafeInteger(policy.rowOverheadBytes) &&
     isNonNegativeSafeInteger(policy.keyEntryOverheadBytes) &&
-    isNonNegativeSafeInteger(policy.tupleFieldOverheadBytes);
+    isNonNegativeSafeInteger(policy.tupleFieldOverheadBytes) &&
+    Number.isSafeInteger(policy.maxRowCharacters) &&
+    policy.maxRowCharacters > 0 &&
+    Number.isSafeInteger(policy.maxFieldCharacters) &&
+    policy.maxFieldCharacters > 0 &&
+    policy.maxFieldCharacters <= policy.maxRowCharacters;
 }
 
 function unknownInput(input: ResourceBaselineInput): boolean {

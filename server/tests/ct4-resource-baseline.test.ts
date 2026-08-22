@@ -15,6 +15,8 @@ const policy: ResourceBaselinePolicy = {
   rowOverheadBytes: 10,
   keyEntryOverheadBytes: 5,
   tupleFieldOverheadBytes: 2,
+  maxRowCharacters: 4_096,
+  maxFieldCharacters: 2_048,
 };
 
 function input(overrides: Partial<ResourceBaselineInput> = {}): ResourceBaselineInput {
