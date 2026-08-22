@@ -73,7 +73,7 @@ Host 不是实际 OS sandbox；implementation digest 不覆盖 bundle/dependency
 
 > 本组交付**冻结契约类型**，是 M1 的唯一产出；不依赖其他组。B/C/D 对照本文档与计划直接开工。
 
-- [ ] **A-T0** ADR-039 proposal + 威胁模型 + 平台/沙箱 backend 支持矩阵
+- [x] **A-T0** ADR-039 proposal + 威胁模型 + 平台/沙箱 backend 支持矩阵
       - 设计：`00-overview.md §7`、`03-transform-host-security.md §1/§3`
       - 产物：Proposed ADR-039、threat-model 文档、sandbox backend decision（含 Windows 达标/不达标结论）
       - 验收：明确 production 仅允许独立低权限 OS/容器 backend；Windows 不达标则该平台禁激活
@@ -101,7 +101,8 @@ Host 不是实际 OS sandbox；implementation digest 不覆盖 bundle/dependency
 
 > 依赖 **A 冻结类型**（T1/T3）。**不阻塞 C**：C 针对同一冻结 `TransformExecutionReceipt` 类型编码。
 
-- [ ] **B-T5** compiler / admission spike（依赖 A-T1、A-T3 冻结类型）
+- [x] **B-T5** compiler / admission spike（依赖 A-T1、A-T3 冻结类型）
+      - 状态：Host-owned source normalization/AST policy/transpile/digest/content-addressed store已落地；结果固定为 `fixture_only_unexecutable`，不等于B-T6 sandbox
       - 设计：`03-transform-host-security.md §2`、`01 §2 SDK`、`09 §2 T5`
       - 产物：source normalization、AST/import policy、content-addressed bundle receipt（产出符合 A-T1 冻结形状）
       - 验收：v1 仅允许 Transform SDK/Host allowlist；无任意 npm/native addon/dynamic import/eval
@@ -156,7 +157,8 @@ Host 不是实际 OS sandbox；implementation digest 不覆盖 bundle/dependency
 > **编写阶段**（examples/fixtures/catalog/retrieval-metadata）依赖 **A 冻结类型**，与 B/C 并行。
 > **执行/核对阶段**（E2 shadow、E3 go/no-go、R1 release）为 M3 集成闸门，需 B+C 合入。
 
-- [ ] **D-E1** expression examples（编写依赖 A-T2 冻结 identity 类型；fixture 执行依赖 B-T5）
+- [x] **D-E1** expression examples（编写依赖 A-T2 冻结 identity 类型；fixture执行仍受B-T6阻塞）
+      - 状态：GEO gene/probe + GDC gene retrieval fixtures、revision/identity/mapping assertions与metadata已落地并由真实contracts/helper验证；scope=example/status=submitted，无DatasetTransform/Registry副作用
       - 设计：`06-expression-vertical-slice.md`、`07-family-examples-migration.md §4`、`04-catalog-scope-resolution.md`、`09 §2 E1`
       - 产物：`examples/families/gene-expression/`（GEO gene/probe、GDC gene）、projection examples、dataset revision、mapping assertion fixtures、`retrieval-metadata.json`
       - 验收：example 目录不产生 Registry side effect、不自动注册为 production capability；`examples/` 不被 `server/src` import 或扫描

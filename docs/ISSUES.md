@@ -35,24 +35,23 @@
 - **当前风险状态**：ADR-039 仍 Proposed，动态 transform 未接生产，所以不是已上线 P0；
   在上述门关闭前，B/C 只能落 disabled fixture 或 staging pure module，M1/M3不得宣称完成。
 
-### Family Host 候选执行面需重做（不得原样合入）
+### Family Host 执行面剩余激活阻塞
 
-- [ ] `3f1cfdd3`：publish 仍可走 generic checkpoint shortcut；production release identity 未在
-      startup 闭合，dev fallback 跨重启不诚实，reuse/rehydrate 仍缺 output/sidecar/dependency/TOCTOU
-      全闭包。最小门：publish shortcut 禁用 + honest release identity + typed receipted rehydrate。
-- [ ] `64f43602`：Core transform admission 信任 caller/Host 自报上下文，且重哈希后没有原子复制到
-      Core-owned immutable root；不得生成 `core_admitted` trust-bearing receipt。必须由 Core-owned
-      expected invocation 对 task/build/generation/digest/input/output/resource/cancel 全量比对，再复制、
-      fsync、重开重哈希；仍不得直接创建 Publication。
-- [ ] `f261f6f6`：SQLite tuple index 未接 B3，TEXT key 会在 lone surrogate 上碰撞，quota/取消/cleanup
-      不是 hard fail-closed，`entries().all()` 会回载全部 key。需 BLOB canonical encoding、poison-on-error、
-      transaction quota、bounded query 与 memory/disk parity 后才能接 `multitable.ts`。
-- [ ] `9778de1d`：caller 声明的 canonical digest/scope/resource/exact refs 被包装成 `admitted`，
-      不能作为 semantic admission。只可缩减为不含 digest/trust/authorization 的 pure topology linter；
-      完整 admission 等待 canonical digest 与 authoritative resolver receipts。
-- [ ] `2566efd1`：仅可作为 all-platform `sandbox_unavailable` fixture；caller-provided emitted bundle /
-      allowlist、source→bundle provenance、hardlink/symlink/junction/TOCTOU 和 opaque-handle ownership 未闭合。
-      未有独立低权限 OS/container backend 前不得提升为 production sandbox。
+- [ ] checkpoint/reuse：旧候选 `3f1cfdd3`/`3f308046` 仍允许 publish generic shortcut或不诚实
+      rehydrate fallback，均保持未合入。需要 publish shortcut禁用 + honest startup release identity +
+      typed receipted rehydrate + restart/TOCTOU闭包。
+- [x] Core transform admission：旧 `64f43602` 已弃用；当前 staging实现以Core-owned expected invocation
+      全量比对 task/build/generation/digest/input/output/resource/cancel，FD重哈希、closed-world检查、
+      独立commit root原子复制/fsync/重开复验，并只返回opaque quarantine evidence，不创建Publication。
+      当前唯一成功fixture明确标记synthetic；production Host仍sandbox_unavailable，所以C-T8 runtime wiring未完成。
+- [x] disk tuple primitive：旧 `f261f6f6` 已弃用；当前isolated index使用SQLite BLOB canonical tuple encoding，
+      preserving field order，拒绝lone surrogate，streaming iterator（无`.all()`）、quota/cancel/error poison、
+      owner generation与Windows cleanup；1M unique测试通过。`diskIndexAvailable`仍false，C-T11 runtime wiring未完成。
+- [x] FamilySpec topology：旧 `9778de1d` 已弃用并缩减为proposal-only pure topology linter，不输出
+      digest/trust/admission/resource授权。完整semantic admission仍等待BuildSpec resolver/authoritative registry。
+- [x] disabled Host spike：旧 `2566efd1` 已由Host-owned compile/digest/store、descriptor-safe Core authority、
+      private input snapshot和all-platform `sandbox_unavailable` fixture替代；无exec/vm/worker/child-process且无production inbound import。
+      未有独立低权限OS/container backend前，B-T6/B-T7仍不得激活。
 
 ### Expression dataset/revision identity 尚未接 authoritative Core path
 
