@@ -5,7 +5,7 @@ import path from "node:path";
 
 import {
   copyHostCompiledFixtureBytes,
-  type FixtureOnlyCompilationResult,
+  type HostCompilationResult,
 } from "./admission.js";
 import {
   assertCoreAuthoritativeContext,
@@ -21,7 +21,7 @@ import {
   sameIdentity,
   type FileSystemIdentity,
 } from "./filesystem.js";
-import { sha256FileHandle } from "./hashing.js";
+import { sha256Bytes, sha256FileHandle } from "./hashing.js";
 
 export interface StoredTransformBundle {
   handle: string;
@@ -29,8 +29,8 @@ export interface StoredTransformBundle {
   sizeBytes: number;
   implementationDigest: string;
   generation: number;
-  executable: false;
-  status: "fixture_only_unexecutable";
+  executable: boolean;
+  status: "fixture_only_unexecutable" | "admitted_in_process_unisolated";
 }
 
 interface HeldBundle {
@@ -67,7 +67,7 @@ export class TransformBundleStore {
 
   async put(
     claim: CoreAuthorityClaim,
-    compiled: FixtureOnlyCompilationResult,
+    compiled: HostCompilationResult,
   ): Promise<StoredTransformBundle> {
     assertCoreAuthorityClaim(this.#context, claim);
     await this.#assertRootUnchanged();
@@ -117,8 +117,8 @@ export class TransformBundleStore {
         sizeBytes: held.size,
         implementationDigest: compiled.implementationDigest,
         generation: this.#context.generation,
-        executable: false,
-        status: "fixture_only_unexecutable",
+        executable: compiled.executable,
+        status: compiled.status,
       });
       this.#bundles.set(handle, {
         file,
@@ -154,16 +154,40 @@ export class TransformBundleStore {
     }
   }
 
+  /**
+   * Return a copy of the exact admitted bytes after rechecking the retained
+   * content-addressed snapshot. Callers cannot execute a path or caller bytes.
+   */
+  async readVerifiedBytes(
+    claim: CoreAuthorityClaim,
+    receipt: StoredTransformBundle,
+  ): Promise<Uint8Array> {
+    await this.verify(claim, receipt);
+    const held = this.#bundles.get(receipt.handle);
+    if (!held) throw conflict("Unknown opaque bundle handle");
+    const bytes = Buffer.alloc(receipt.sizeBytes);
+    let offset = 0;
+    while (offset < bytes.byteLength) {
+      const { bytesRead } = await held.file.read(bytes, offset, bytes.byteLength - offset, offset);
+      if (bytesRead === 0) throw conflict("Host-owned bundle snapshot was truncated");
+      offset += bytesRead;
+    }
+    if (sha256Bytes(bytes) !== receipt.sha256) {
+      throw conflict("Host-owned bundle digest changed immediately before execution");
+    }
+    return Uint8Array.from(bytes);
+  }
+
   async dispose(): Promise<void> {
     const bundles = [...this.#bundles.values()];
     this.#bundles.clear();
     await Promise.all(bundles.map(({ file }) => file.close()));
   }
 
-  #assertCompiledClosure(compiled: FixtureOnlyCompilationResult): void {
+  #assertCompiledClosure(compiled: HostCompilationResult): void {
     if (
-      compiled.status !== "fixture_only_unexecutable"
-      || compiled.executable !== false
+      (compiled.status !== "fixture_only_unexecutable"
+        && compiled.status !== "admitted_in_process_unisolated")
       || compiled.trustBearingAdmission !== false
       || compiled.bundleDigest !== this.#context.bundleDigest
       || compiled.compilerDigest !== this.#context.compilerDigest

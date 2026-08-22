@@ -66,7 +66,8 @@ export type SandboxBackend =
   | "unavailable"
   | "container"
   | "linux_namespace"
-  | "windows_job_object";
+  | "windows_job_object"
+  | "in_process_unisolated";
 
 const TRANSFORM_SCOPES: readonly TransformScope[] = [
   "example",
@@ -99,6 +100,7 @@ const SANDBOX_BACKENDS: readonly SandboxBackend[] = [
   "container",
   "linux_namespace",
   "windows_job_object",
+  "in_process_unisolated",
 ];
 const MAPPING_STATUSES = ["mapped", "unmapped", "ambiguous"] as const;
 
