@@ -130,13 +130,13 @@ Host 不是实际 OS sandbox；implementation digest 不覆盖 bundle/dependency
       - 设计：`05-core-execution-product-gate.md §4 B3-D0`、`09 §2 T4`
       - 产物：现有 `validation/multitable.ts` benchmark/telemetry（row/key estimate、validator mode、heap/temp/duration/failure reason）、阈值、large-input benchmark harness（memory parity oracle）
       - 验收：超阈值强制 disk mode 或 fail closed，不再无界 `Map` 到 OOM
-- [ ] **C-T8** Core quarantine admission（依赖 A 冻结类型 T1/T2/T3）
+- [x] **C-T8** Core quarantine admission（依赖 A 冻结类型 T1/T2/T3）
       - 设计：`05-core-execution-product-gate.md §1/§6`、`03 §6 quarantine handoff`、`09 §2 T8`
       - 产物：Host 输出重哈希、schema/locator/output closure 校验、native OperationResultManifest 构造
       - 验收：未声明文件/table/schema 拒绝；locator 不得指向未知输入；failed/cancelled Host 不产生 committed Core output
       - ⚠ 针对**冻结 Receipt 类型**解码，用测试夹具驱动单测；Host output receipt **不得**直接转 Publication artifact（`10 §5#4`）
-- [ ] **C-T9** fixed transform slot（依赖 A-T1 冻结类型、C-T8）
-      - 状态：server-owned fixed-slot admission 与 hostile-input tests 已落地为 staging-only；未接 `registered_multitable.runtime.v1` 或默认 Agent build route
+- [x] **C-T9** fixed transform slot（依赖 A-T1 冻结类型、C-T8）
+      - 状态：server-owned fixed-slot admission 与 hostile-input tests 已落地为 fail-closed staging gate；因ADR-039 Host execution已Deferred，明确不接 `registered_multitable.runtime.v1` 或默认Agent build route
       - 设计：`05-core-execution-product-gate.md §6`、`09 §2 T9`
       - 产物：server-owned plan slot、transform capability admission、不引入 DAG
       - 验收：`registered_multitable.runtime.v1` 旁路问题登记并有统一 executor 修复门，不在旁路继续叠加 transform
