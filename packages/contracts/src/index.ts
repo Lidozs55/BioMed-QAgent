@@ -30,5 +30,6 @@ export * from "./runtime/errors.js";
 export * from "./runtime/json-text.js";
 export * from "./runtime/primitives.js";
 export * from "./runtime/settings.js";
+export * from "./runtime/model-registry.js";
 export * from "./runtime/dataset-build.js";
 export * from "./runtime/durable-build.js";
