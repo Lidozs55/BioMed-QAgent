@@ -1,4 +1,5 @@
 import vm from "node:vm";
+import { types } from "node:util";
 
 import {
   parseTransformExecutionReceipt,
@@ -430,7 +431,9 @@ function formatLogValue(value: unknown): string {
 }
 
 function isVmTimeout(error: unknown): boolean {
-  return error instanceof Error && "code" in error && error.code === "ERR_SCRIPT_EXECUTION_TIMEOUT";
+  return types.isNativeError(error)
+    && (("code" in error && error.code === "ERR_SCRIPT_EXECUTION_TIMEOUT")
+      || /Script execution timed out/u.test(error.message));
 }
 
 function invalid(message: string, cause?: unknown): TransformHostError {

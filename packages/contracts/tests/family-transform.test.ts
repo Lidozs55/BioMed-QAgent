@@ -239,8 +239,12 @@ describe("A-T1 DatasetTransform descriptor + TransformExecutionReceipt", () => {
     host_issued_at: "2026-08-21T00:00:02Z",
   };
 
-  it("parses a valid receipt", () => {
+  it("parses valid isolated and honestly named unisolated receipts", () => {
     expect(parseTransformExecutionReceipt(receipt, "$").exit_state).toBe("succeeded");
+    expect(parseTransformExecutionReceipt({
+      ...receipt,
+      sandbox_backend: "in_process_unisolated",
+    }, "$").sandbox_backend).toBe("in_process_unisolated");
   });
 
   it("REJECTS a receipt missing any required digest", () => {

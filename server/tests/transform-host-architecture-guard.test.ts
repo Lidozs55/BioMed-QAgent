@@ -36,8 +36,6 @@ const STAGED_FAMILY_HOST_ROOTS = [
   path.join(SERVER_SRC, "dataset", "family-release"),
   path.join(SERVER_SRC, "dataset", "bioactivity-gate"),
   path.join(SERVER_SRC, "dataset", "shadow-parity"),
-  path.join(SERVER_SRC, "dataset", "relations"),
-  path.join(SERVER_SRC, "dataset", "validation", "disk-index.ts"),
 ] as const;
 const UNIQUELY_NAMED_STAGED_MODULE = /(?:^|[\\/])(?:transform-host|transform-admission|operation-result-admission|build-spec-readmission|family-catalog|family-spec-admission|family-spec-topology|transform-slot|publish-verifier|shadow|family-release|bioactivity-gate|shadow-parity)(?:[\\/]|$)/;
 
@@ -154,7 +152,10 @@ function checkSource(file: string, source: string): Violation[] {
   if (dynamicImportSpecifiers(source).length > 0) add("dynamic import is not allowed");
   for (const use of parseStaticImports(source)) {
     const normalized = use.source.replaceAll("\\", "/").toLowerCase();
-    if (normalized === "node:vm" || normalized === "vm") add("node:vm import");
+    if (
+      (normalized === "node:vm" || normalized === "vm")
+      && file.replaceAll("\\", "/") !== "in-process-unisolated.ts"
+    ) add("node:vm import");
     if (normalized === "worker_threads" || normalized === "node:worker_threads") add("worker_threads import");
     if (normalized.includes("child_process") || normalized.includes("process-exec") || normalized.includes("workspace/exec")) {
       add("process execution import");
@@ -184,6 +185,15 @@ function checkSource(file: string, source: string): Violation[] {
     const hasNetworkIsolation = /(?:network\s+(?:deny|isolation|isolat)|deny\s+network|networkDenied)/i.test(code);
     if (!hasJobObject || !hasAcl || !hasNetworkIsolation) {
       add("Windows capability is enabled without Job Object, low-privilege ACL, and network isolation");
+    }
+  }
+  if (file.replaceAll("\\", "/") === "in-process-unisolated.ts") {
+    if (!/explicitlyEnabled\s*:\s*true/.test(code)) add("unisolated backend is not explicit opt-in");
+    if (!/NOT a sandbox, isolation mechanism, or security boundary/.test(source)) {
+      add("unisolated backend does not state that it is not a security boundary");
+    }
+    if (/\b(?:child_process|worker_threads|container|ipc)\b/i.test(code)) {
+      add("unisolated backend claims or uses process/container/IPC isolation");
     }
   }
   return violations;
@@ -255,6 +265,10 @@ describe("Transform Host architecture guard", () => {
     expect(violations.map((violation) => violation.reason)).toEqual(
       expect.arrayContaining(["node:vm import", "worker_threads import", "Publisher/publication import"]),
     );
+    expect(checkSource(
+      "in-process-unisolated.ts",
+      `import vm from "node:vm";\n// Explicit opt-in; NOT a sandbox, isolation mechanism, or security boundary.\nconst options = { explicitlyEnabled: true };`,
+    )).toEqual([]);
   });
 
   test("fixture helper catches inbound static, export, and dynamic staging wiring", () => {
@@ -273,7 +287,6 @@ describe("Transform Host architecture guard", () => {
       "family-release",
       "bioactivity-gate",
       "shadow-parity",
-      "relations",
     ]) {
       expect(importsStagedFamilyHostModule(
         `import { staged } from "../dataset/${moduleName}/index.js";`,
@@ -291,7 +304,7 @@ describe("Transform Host architecture guard", () => {
     expect(importsStagedFamilyHostModule(
       'import { openDiskIndex } from "../dataset/validation/disk-index.js";',
       fixtureFile,
-    )).toBe(true);
+    )).toBe(false);
     expect(importsStagedFamilyHostModule(
       'import { geoRelation } from "../dataset/adapters/geo/relations.js";',
       fixtureFile,

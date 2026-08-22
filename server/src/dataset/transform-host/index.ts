@@ -5,6 +5,7 @@ export * from "./errors.js";
 export * from "./filesystem.js";
 export * from "./hashing.js";
 export * from "./host.js";
+export * from "./in-process-unisolated.js";
 export * from "./protocol.js";
 export * from "./quarantine.js";
 export * from "./sandbox.js";
