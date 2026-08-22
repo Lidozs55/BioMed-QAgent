@@ -42,8 +42,13 @@ output.
      - an acquisition-requests object mapping each binding ID to a fixed Core provider ID plus parameters (preferred for formal GEO/GDC/Xena/PDB/ChEMBL/PubChem acquisition), or
      - a registered-sources object mapping each binding ID to an asset SHA-256 ID only when that asset ID was returned by a previous fixed Core acquisition.
      Browser/download/discovery registrations are rejected as formal carriers. Registered assets live in Core task storage, not the Agent Workspace: never use workspace search or process execution to locate or parse them. Never pass paths or response bytes.
-   - deterministic output handles out-0, out-1, … in projection order; each
-     output must use a registered input receipt ID as its locator reference.
+   - Runtime inputs are ordered by source bindings and use handles in-0, in-1,
+     …, not binding IDs. Every bracket element-access syntax is rejected,
+     including array indexes and regex match indexes; use destructuring,
+     forEach/map/find/shift, dot access, and named regex groups.
+   - deterministic output handles out-0, out-1, … in primary + supporting +
+     derived projection order. Each output needs a non-empty registered input
+     receipt ID as locator; multiple tables from one source may share it.
    The Host owns compilation. If the first submission reports the exact
    Host-compiled descriptor digest, replace the proposal transform-ref digest with
    that value and resubmit; do not bypass or invent the digest. Treat only the

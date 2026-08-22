@@ -305,7 +305,7 @@ function dynamicFamilyBuildParameters(): Record<string, unknown> {
       projection_id: safeId,
       transform_source: {
         type: "string", minLength: 1, maxLength: MAX_SOURCE_BYTES,
-        description: "Synchronous TypeScript only (not Python, not async/Promise). Export const transform={run({inputs}){...}}. Each frozen input is exactly {handle,receipt_kind,receipt_id,text}; destructure the array and JSON.parse(input.text). Do not import or use process/require/globalThis/eval, input.text(), computed property access, or filesystem/network APIs. Return {outputs:[{handle:'out_0',table_id,schema_ref,locator_ref:firstInput.receipt_id,content:'CSV text',row_count}]} in projection table order.",
+        description: "Synchronous TypeScript only (not Python, not async/Promise). Export const transform={run({inputs}){...}}. Inputs are ordered exactly like build_proposal.source_bindings and are named in_0, in_1, ... (not binding IDs); each frozen input is {handle,receipt_kind,receipt_id,text}. Use array destructuring (const [first,...rest]=inputs), forEach/map/find/shift, dot properties, and named regex groups. EVERY bracket element access is forbidden, including inputs[0], lines[i], match[1], object['key'], and dynamic keys. Do not import or use process/require/globalThis/eval, input.text(), filesystem, or network. Return outputs out_0, out_1, ... in primary+supporting+derived projection order. locator_ref must be non-empty and may use the same first.receipt_id for every table derived from that source.",
       },
       transform_metadata: transformMetadata,
       build_proposal: buildProposal,
