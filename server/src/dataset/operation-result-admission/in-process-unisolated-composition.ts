@@ -55,6 +55,11 @@ export async function admitInProcessUnisolatedResult(
       read_current_cancel_fence: input.read_current_cancel_fence,
       now: input.now,
     });
+    if (evidence.decision !== "admitted") {
+      throw new TypeError(
+        `In-process quarantine admission rejected: ${evidence.rejection_code ?? "unknown"}: ${evidence.rejection_detail ?? "no detail"}`,
+      );
+    }
 
     return await admitOperationResultFromQuarantine({
       evidence,

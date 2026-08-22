@@ -18,7 +18,6 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import type { InProcessUnisolatedResult } from "../transform-host/in-process-unisolated.js";
 import type { ExpectedTransformInvocation } from "../transform-admission/types.js";
-import { OperationResultAdmissionError } from "./admission.js";
 import { admitInProcessUnisolatedResult } from "./in-process-unisolated-composition.js";
 import type { ExpectedOperationAdmission } from "./types.js";
 
@@ -187,7 +186,7 @@ async function createFixture(): Promise<Fixture> {
     deadline_at: "2026-08-22T00:01:00.000Z",
     started_at: "2026-08-22T00:00:00.000Z",
     finished_at: "2026-08-22T00:00:01.000Z",
-    host_implementation_digest: HEX_C,
+    host_implementation_digest: implementationDigest,
     host_issued_at: "2026-08-22T00:00:01.000Z",
   };
   const expectedInvocation: ExpectedTransformInvocation = {
@@ -307,9 +306,7 @@ describe("Core in-process unisolated result composition", () => {
       outputs: [{ handle: "out_table", bytes: new TextEncoder().encode("sample_id,value\nS1,2\n") }],
     };
 
-    await expect(compose(fixture, result)).rejects.toMatchObject<OperationResultAdmissionError>({
-      code: "REJECTED_EVIDENCE",
-    });
+    await expect(compose(fixture, result)).rejects.toThrow(/OUTPUT_BYTES_MISMATCH/);
     await expect(readdir(fixture.commitParent)).resolves.toEqual([]);
   });
 
