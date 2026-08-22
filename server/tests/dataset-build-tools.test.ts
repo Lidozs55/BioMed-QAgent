@@ -259,6 +259,27 @@ describe("Pi DatasetBuild tools", () => {
     });
   });
 
+  test("rejects duplicate decoded keys in a JSON-encoded spec", async () => {
+    const [validateTool] = createDatasetBuildTools({
+      client: { validate: vi.fn(), execute: vi.fn() },
+      taskId: "task_tool",
+      taskRoot: await toolTaskRoot(),
+      runId: () => "run_tool",
+      piSessionId: () => "pi_tool",
+    });
+    const duplicated = JSON.stringify(spec).replace(
+      `"build_id":"${spec.build_id}"`,
+      `"build_id":"${spec.build_id}","\\u0062uild_id":"build_shadow"`,
+    );
+    const result = await validateTool!.execute(
+      { spec: duplicated },
+      new AbortController().signal,
+      { toolCallId: "call_duplicate_string" },
+    );
+    expect(result).toMatchObject({ isError: true });
+    expect(JSON.stringify(result)).toContain("duplicate object key");
+  });
+
   test("reports a clear error when the spec string is not valid JSON", async () => {
     const [validateTool] = createDatasetBuildTools({
       client: { validate: vi.fn(), execute: vi.fn() },

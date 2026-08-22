@@ -5,6 +5,8 @@
  */
 import type { IncomingMessage } from "node:http";
 
+import { parseJsonTextStrict } from "@biomed/contracts";
+
 import { HttpError } from "./error.js";
 
 export interface ApiSurface {
@@ -32,8 +34,14 @@ export async function readJsonBody(
     chunks.push(buffer);
   }
   try {
-    return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}") as unknown;
-  } catch {
-    throw new HttpError(400, "request body is not valid JSON");
+    return parseJsonTextStrict(
+      Buffer.concat(chunks).toString("utf8") || "{}",
+      { maxChars: maxBytes },
+    );
+  } catch (error) {
+    throw new HttpError(
+      400,
+      error instanceof Error ? error.message : "request body is not valid JSON",
+    );
   }
 }

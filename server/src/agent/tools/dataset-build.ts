@@ -7,6 +7,7 @@ import type {
   DatasetBridgeBuildData,
   DatasetBuildSpec,
 } from "@biomed/contracts";
+import { parseJsonTextStrict } from "@biomed/contracts";
 
 import { saveBuildContinuation } from "../../runtime/build-continuation.js";
 import { fixedBiomedicalAcquisitionParameters } from "../../dataset/acquisition/biomedical-providers.js";
@@ -65,7 +66,7 @@ function specArgument(value: Record<string, unknown>): DatasetBuildSpec {
   if (typeof spec === "string") {
     let parsed: unknown;
     try {
-      parsed = JSON.parse(spec);
+      parsed = parseJsonTextStrict(spec, { maxChars: MAX_CONTENT });
     } catch (error) {
       throw new TypeError(
         `spec must be a DatasetBuildSpec object or a JSON-encoded string: ${(error as Error).message}`,

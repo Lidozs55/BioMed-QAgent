@@ -107,6 +107,16 @@ describe("Phase 7 product API", () => {
     });
     expect(JSON.parse(await readFile(path.join(root, "settings", "personalization.json"), "utf8")))
       .toMatchObject({ personality: "rigorous" });
+
+    const duplicateKey = await fetch(`${base}/personalization`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: '{"personality":"rigorous","\\u0070ersonality":"friendly"}',
+    });
+    expect(duplicateKey.status).toBe(400);
+    expect(await duplicateKey.json()).toMatchObject({
+      detail: expect.stringContaining("duplicate object key"),
+    });
   });
 
   test("reports the fixed TS/Pi/TS architecture and rejects unsupported methods", async () => {
