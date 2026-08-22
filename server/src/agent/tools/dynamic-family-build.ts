@@ -2,10 +2,10 @@ import { types } from "node:util";
 
 import {
   assertJsonValue,
+  computeFamilySpecDigest,
   parseDatasetBuildProposal2,
   parseDatasetTransform,
   parseFamilySpec,
-  verifyFamilySpecDigest,
   type DatasetBuildProposal2,
   type DatasetTransform,
   type FamilySpec,
@@ -68,36 +68,8 @@ export function createDynamicFamilyBuildTool(
     name: "submit_dynamic_family_build",
     label: "Submit Dynamic Family Build",
     description:
-      "Submit a digest-bound FamilySpec and DatasetTransform to the explicit in_process_unisolated runtime. This runtime is not a sandbox, isolation mechanism, or security boundary. Registered asset/result references are required; direct paths and discovery bytes are forbidden.",
-    parameters: {
-      type: "object",
-      properties: {
-        schema_version: { type: "string", enum: ["1.0"] },
-        execution_backend: { type: "string", enum: ["in_process_unisolated"] },
-        family_spec: { type: "object" },
-        projection_id: { type: "string", minLength: 1 },
-        transform_source: { type: "string", minLength: 1, maxLength: MAX_SOURCE_BYTES },
-        transform_metadata: { type: "object" },
-        build_proposal: { type: "object" },
-        registered_sources: {
-          type: "object",
-          description: "Binding IDs already backed by Core-acquired task assets. Browser/download/discovery assets and paths are forbidden.",
-          additionalProperties: { type: "string", pattern: "^asset_[0-9a-f]{64}$" },
-        },
-        acquisition_requests: {
-          type: "object",
-          description: "Binding IDs to fixed Core provider requests; use this for formal ChEMBL/PubChem/GEO/GDC/Xena/PDB acquisition.",
-          additionalProperties: {
-            type: "object",
-            properties: { provider_id: { type: "string" }, parameters: { type: "object" } },
-            required: ["provider_id", "parameters"],
-            additionalProperties: false,
-          },
-        },
-      },
-      required: [...TOP_KEYS],
-      additionalProperties: false,
-    },
+      "Submit a strict FamilySpec + TypeScript DatasetTransform to the explicit in_process_unisolated runtime and trusted Core publication path. This is not a sandbox, isolation mechanism, or security boundary. Use fixed Core acquisition_requests; direct paths and discovery bytes are forbidden. For computed digests, submit a 64-zero placeholder once, then replace it with the exact digest returned by the rejection.",
+    parameters: dynamicFamilyBuildParameters(),
     async execute(value, signal, context): Promise<BioMedToolResult> {
       try {
         const submission = await parseDynamicFamilyBuildSubmission(value);
@@ -115,6 +87,217 @@ export function createDynamicFamilyBuildTool(
   };
 }
 
+function dynamicFamilyBuildParameters(): Record<string, unknown> {
+  const digest = { type: "string", pattern: "^[0-9a-f]{64}$" };
+  const safeId = { type: "string", pattern: "^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,255}$" };
+  const ids = { type: "array", items: safeId, maxItems: 128 };
+  const scope = { type: "string", enum: ["task", "user", "curated", "system"] };
+  const scopeRef = {
+    type: "object",
+    properties: { scope, id: safeId, version: safeId, digest },
+    required: ["scope", "id", "version", "digest"],
+    additionalProperties: false,
+  };
+  const projection = {
+    type: "object",
+    properties: {
+      projection_id: safeId,
+      schema_version: { type: "string", enum: ["2.0"] },
+      primary_tables: ids, supporting_tables: ids, derived_tables: ids,
+      required: ids, optional: ids, allow_empty: ids, relations: ids,
+      row_granularity: safeId, compatibility_dimensions: ids, merge_identity_fields: ids,
+      validation_policy_ref: safeId, assessment_policy_ref: safeId,
+    },
+    required: [
+      "projection_id", "schema_version", "primary_tables", "supporting_tables",
+      "derived_tables", "required", "optional", "allow_empty", "relations",
+      "row_granularity", "compatibility_dimensions", "merge_identity_fields",
+      "validation_policy_ref", "assessment_policy_ref",
+    ],
+    additionalProperties: false,
+  };
+  const tableDefinition = {
+    type: "object",
+    properties: {
+      table_id: safeId, schema_ref: safeId,
+      role: { type: "string", enum: ["primary", "supporting", "derived"] },
+      required: { type: "boolean" }, allow_empty: { type: "boolean" },
+      primary_key: ids, field_names: ids,
+    },
+    required: ["table_id", "schema_ref", "role", "required", "allow_empty", "primary_key", "field_names"],
+    additionalProperties: false,
+  };
+  const relation = {
+    type: "object",
+    properties: {
+      relation_id: safeId, from_table_id: safeId, from_fields: ids,
+      to_table_id: safeId, to_fields: ids,
+      cardinality: { type: "string", enum: ["one_to_one", "one_to_many", "many_to_one", "many_to_many"] },
+      missing_policy: { type: "string", enum: ["reject", "allow_empty", "allow_missing", "profile_defined"] },
+    },
+    required: ["relation_id", "from_table_id", "from_fields", "to_table_id", "to_fields", "cardinality", "missing_policy"],
+    additionalProperties: false,
+  };
+  const declaredTable = {
+    type: "object",
+    properties: { table_id: safeId, schema_ref: safeId },
+    required: ["table_id", "schema_ref"],
+    additionalProperties: false,
+  };
+  const familySpec = {
+    type: "object",
+    description: "Declarative topology only. canonical_digest is SHA-256 of canonical JSON excluding canonical_digest; a zero placeholder receives the expected digest in a rejection.",
+    properties: {
+      family_spec_id: safeId, semantic_version: safeId, canonical_digest: digest,
+      projections: { type: "array", minItems: 1, items: projection },
+      table_definitions: { type: "array", minItems: 1, items: tableDefinition },
+      relations: { type: "array", items: relation },
+      identity: {
+        type: "object",
+        properties: {
+          dataset_id_scheme: { type: "string", enum: ["ds_hash"] },
+          dataset_revision_id_scheme: { type: "string", enum: ["dsrev_hash"] },
+          asset_id_scheme: { type: "string", enum: ["asset_sha256"] },
+          sample_identity_fields: ids, probe_mapping_assertion_pk: safeId,
+        },
+        required: ["dataset_id_scheme", "dataset_revision_id_scheme", "asset_id_scheme", "sample_identity_fields", "probe_mapping_assertion_pk"],
+        additionalProperties: false,
+      },
+      transform_capability_refs: ids,
+      declared_outputs: { type: "array", minItems: 1, items: declaredTable },
+      integration_policy_ref: safeId, validation_policy_ref: safeId,
+      assessment_policy_ref: safeId, resource_class_request: safeId,
+      scope, author: { type: "string", minLength: 1 }, evidence_refs: ids,
+    },
+    required: [
+      "family_spec_id", "semantic_version", "canonical_digest", "projections",
+      "table_definitions", "relations", "identity", "transform_capability_refs",
+      "declared_outputs", "integration_policy_ref", "validation_policy_ref",
+      "assessment_policy_ref", "resource_class_request", "scope", "author", "evidence_refs",
+    ],
+    additionalProperties: false,
+  };
+  const transformMetadata = {
+    type: "object",
+    description: "Metadata for a TypeScript module exporting transform.run({inputs}); inputs are frozen UTF-8 registered bytes and outputs use out_0, out_1, ... in projection order.",
+    properties: {
+      transform_id: safeId, version: safeId, entrypoint: { type: "string", enum: ["transform.run"] },
+      declared_input_roles: {
+        type: "array", minItems: 1, items: {
+          type: "object",
+          properties: {
+            role: safeId, media_type: { type: "string", minLength: 1 },
+            constraint_ref: { anyOf: [safeId, { type: "null" }] },
+          },
+          required: ["role", "media_type", "constraint_ref"], additionalProperties: false,
+        },
+      },
+      declared_output_tables: { type: "array", minItems: 1, items: declaredTable },
+      bound_family_spec_digest: digest, bound_projection_digest: digest,
+      determinism_profile: { type: "string", enum: ["deterministic", "non_deterministic"] },
+      resource_class: safeId, origin: safeId, scope,
+      review_refs: ids,
+    },
+    required: [
+      "transform_id", "version", "entrypoint", "declared_input_roles",
+      "declared_output_tables", "bound_family_spec_digest", "bound_projection_digest",
+      "determinism_profile", "resource_class", "origin", "scope", "review_refs",
+    ],
+    additionalProperties: false,
+  };
+  const proposalBinding = {
+    type: "object",
+    properties: {
+      binding_id: safeId, source: safeId, input_requirement_ref: safeId,
+      parameters: { type: "object" },
+    },
+    required: ["binding_id", "source", "input_requirement_ref", "parameters"],
+    additionalProperties: false,
+  };
+  const buildProposal = {
+    type: "object",
+    properties: {
+      schema_version: { type: "string", enum: ["2.0"] },
+      spec_kind: { type: "string", enum: ["proposal"] },
+      build_id: safeId, family_spec_ref: scopeRef, projection_ref: safeId,
+      source_bindings: { type: "array", minItems: 1, items: proposalBinding },
+      transform_refs: { type: "array", minItems: 1, maxItems: 1, items: scopeRef },
+      policy_refs: { type: "array", items: scopeRef },
+      output_format: safeId, idempotency_identity: safeId,
+    },
+    required: [
+      "schema_version", "spec_kind", "build_id", "family_spec_ref", "projection_ref",
+      "source_bindings", "transform_refs", "policy_refs", "output_format", "idempotency_identity",
+    ],
+    additionalProperties: false,
+  };
+  const fixedParameters = (sourceName: string, accessionDescription: string) => ({
+    type: "object",
+    properties: {
+      source: { type: "string", enum: [sourceName] },
+      accession: { anyOf: [{ type: "string", description: accessionDescription }, { type: "null" }] },
+      entities: { type: "object", additionalProperties: { type: "array", items: { type: "string" } } },
+    },
+    required: ["source", "accession", "entities"], additionalProperties: false,
+  });
+  const acquisition = {
+    type: "object",
+    oneOf: [
+      {
+        properties: {
+          provider_id: { type: "string", enum: ["chembl.files.v1"] },
+          parameters: fixedParameters("chembl", "Exactly one target CHEMBL ID; compound IDs belong in entities.chembl_compounds."),
+        },
+        required: ["provider_id", "parameters"], additionalProperties: false,
+      },
+      {
+        properties: {
+          provider_id: { type: "string", enum: ["pubchem.files.v1"] },
+          parameters: fixedParameters("pubchem", "One positive PubChem CID."),
+        },
+        required: ["provider_id", "parameters"], additionalProperties: false,
+      },
+      ...[
+        ["geo.files.v1", "geo"],
+        ["gdc.files.v1", "gdc"],
+        ["xena.files.v1", "xena"],
+        ["pdb.files.v1", "pdb"],
+      ].map(([providerId, sourceName]) => ({
+        properties: {
+          provider_id: { type: "string", enum: [providerId] },
+          parameters: fixedParameters(sourceName!, "One provider-controlled accession or entity identifier."),
+        },
+        required: ["provider_id", "parameters"], additionalProperties: false,
+      })),
+    ],
+  };
+  return {
+    type: "object",
+    properties: {
+      schema_version: { type: "string", enum: ["1.0"] },
+      execution_backend: { type: "string", enum: ["in_process_unisolated"] },
+      family_spec: familySpec,
+      projection_id: safeId,
+      transform_source: {
+        type: "string", minLength: 1, maxLength: MAX_SOURCE_BYTES,
+        description: "TypeScript source only (not Python). Export const transform={run({inputs}){...}}. Return {outputs:[{handle:'out_0',table_id,schema_ref,locator_ref:inputs[0].receipt_id,content:'CSV text',row_count}]}.",
+      },
+      transform_metadata: transformMetadata,
+      build_proposal: buildProposal,
+      registered_sources: {
+        type: "object", description: "Usually {}. Only Core-acquired asset IDs are accepted.",
+        additionalProperties: { type: "string", pattern: "^asset_[0-9a-f]{64}$" },
+      },
+      acquisition_requests: {
+        type: "object", description: "Preferred formal input path. Keys exactly match unresolved build_proposal source binding IDs.",
+        additionalProperties: acquisition,
+      },
+    },
+    required: [...TOP_KEYS],
+    additionalProperties: false,
+  };
+}
+
 /** Strict wire boundary only. It never executes code or grants publication authority. */
 export async function parseDynamicFamilyBuildSubmission(
   value: unknown,
@@ -126,18 +309,24 @@ export async function parseDynamicFamilyBuildSubmission(
   }
   const family = parseFamilySpec(record.family_spec, "$.family_spec");
   if (family.scope === "example") throw new TypeError("example FamilySpec cannot execute");
-  if (!(await verifyFamilySpecDigest(family))) throw new TypeError("FamilySpec canonical digest is invalid");
+  const expectedFamilyDigest = await computeFamilySpecDigest(family);
+  if (family.canonical_digest !== expectedFamilyDigest) {
+    throw new TypeError(`FamilySpec canonical_digest must equal ${expectedFamilyDigest}`);
+  }
   if (typeof record.projection_id !== "string") throw new TypeError("projection_id must be a string");
   const projection = family.projections.find((item) => item.projection_id === record.projection_id);
   if (projection === undefined) throw new TypeError(`unknown FamilySpec projection '${record.projection_id}'`);
   const source = sourceText(record.transform_source);
   const transform = parseMetadata(record.transform_metadata);
+  const expectedProjectionDigest = projectionDigest(projection);
   if (
     transform.scope === "example"
     || transform.bound_family_spec_digest !== family.canonical_digest
-    || transform.bound_projection_digest !== projectionDigest(projection)
+    || transform.bound_projection_digest !== expectedProjectionDigest
   ) {
-    throw new TypeError("transform metadata does not bind the selected executable FamilySpec projection");
+    throw new TypeError(
+      `transform metadata must bind family ${family.canonical_digest} and projection ${expectedProjectionDigest}`,
+    );
   }
   const proposal = parseDatasetBuildProposal2(record.build_proposal, "$.build_proposal");
   const registeredSources = parseRegisteredSources(record.registered_sources, proposal);

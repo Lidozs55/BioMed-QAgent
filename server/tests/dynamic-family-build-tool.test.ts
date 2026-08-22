@@ -118,6 +118,24 @@ describe("dynamic family build tool boundary", () => {
     expect(parsed.registered_sources).toEqual({});
   });
 
+  test("exposes the complete nested contract and fixed-provider parameter guidance", () => {
+    const tool = createDynamicFamilyBuildTool({ submit: async () => ({ ok: true }) });
+    const schema = JSON.stringify(tool.parameters);
+    expect(schema).toContain('"table_definitions"');
+    expect(schema).toContain('"field_names"');
+    expect(schema).toContain("TypeScript source only");
+    expect(schema).toContain("chembl.files.v1");
+    expect(schema).toContain("pubchem.files.v1");
+    expect(schema).toContain("geo.files.v1");
+  });
+
+  test("returns computable family and projection binding digests", async () => {
+    const raw = await submission();
+    const family = raw.family_spec as FamilySpec;
+    raw.family_spec = { ...family, canonical_digest: "0".repeat(64) };
+    await expect(parseDynamicFamilyBuildSubmission(raw)).rejects.toThrow(/canonical_digest must equal [0-9a-f]{64}/);
+  });
+
   test("exposes one callback-backed Agent tool without weakening parsing", async () => {
     let received: unknown;
     const tool = createDynamicFamilyBuildTool({
