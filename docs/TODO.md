@@ -78,8 +78,8 @@ Host 不是实际 OS sandbox；implementation digest 不覆盖 bundle/dependency
       - 产物：Proposed ADR-039、threat-model 文档、sandbox backend decision（含 Windows 达标/不达标结论）
       - 验收：明确 production 仅允许独立低权限 OS/容器 backend；Windows 不达标则该平台禁激活
       - ⚠ 不得修改已 accepted ADR 的历史 Decision 文字以隐藏冲突（`09 §3` 禁止）
-- [ ] **A-T1** FamilySpec / DatasetTransform / TransformExecutionReceipt / BuildSpec 2.0 契约（依赖 A-T0）
-      - 状态：strict DTO/parser/canonical digest 与 proposal/resolved wire shape 已落地；Core re-admission 与独立 post-hardening review 在飞，故未勾选
+- [x] **A-T1** FamilySpec / DatasetTransform / TransformExecutionReceipt / BuildSpec 2.0 契约（依赖 A-T0）
+      - 状态：strict DTO/parser/canonical digest、raw JSON duplicate-key ingress、proposal/resolved wire shape 与纯 Core readmission 已落地；readmission绑定 exact capability/asset/result、task/build/generation/receipt evidence；不代表已接生产 runtime
       - 设计：`01-family-transform-contracts.md`（全）、`09 §2 T1`
       - 产物：`@biomed/contracts` strict DTO + parser、canonical digest fixtures（**冻结形状，供 B/C 消费**）
       - 验收：`DatasetBuildSpec 1.0` snapshot 不变；2.0 proposal 与 resolved spec 分离、Core re-admission 可独立测试；unknown field fail closed

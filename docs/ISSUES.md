@@ -30,8 +30,9 @@
       identity scheme coercion、无界/不安全 ID、receipt terminal/resource/output/cancel closure与
       BuildSpec 2.0 proposal/resolved split，已由 `76df8008`、`3ed0ade5`、`f32f563f` 及 adversarial
       contracts tests关闭；FamilySpec digest有唯一 helper/known vector，parser本身不自动授信digest。
-- [ ] 剩余 M1 门：独立 post-hardening red-team；纯 Core BuildSpec proposal→resolved re-admission；
-      HTTP/JSON ingress层 raw duplicate-key decoder（已构造JavaScript object parser无法追溯重复key）。
+- [x] M1 wire/readmission gates：contracts post-hardening coverage、BuildSpec proposal→resolved pure Core
+      readmission、HTTP/JSON ingress raw duplicate-key decoder已落地并有 focused tests；剩余生产 activation
+      仍受统一 executor/sandbox/publication gate阻塞。
 - **当前风险状态**：ADR-039 仍 Proposed，动态 transform 未接生产，所以不是已上线 P0；
   在上述门关闭前，B/C 只能落 disabled fixture 或 staging pure module，M1/M3不得宣称完成。
 
