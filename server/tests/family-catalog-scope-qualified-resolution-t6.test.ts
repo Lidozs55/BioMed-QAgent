@@ -286,6 +286,9 @@ describe("family catalog T6 scope-qualified exact resolution", () => {
       { ...entry(), id: " normalize-expression" },
       { ...entry(), version: "1.0.0\u0000" },
       { ...entry(), id: "normalize-e\u0301xpression" },
+      { ...entry(), id: "../normalize-expression" },
+      { ...entry(), id: `transform-${"a".repeat(256)}` },
+      { ...entry(), id: "transform-\u202Eexe" },
       { ...entry(), value: { mutable: true } },
       { ...entry(), code_bundle_ref: "workspace/transform.ts" },
     ]) {
@@ -294,5 +297,63 @@ describe("family catalog T6 scope-qualified exact resolution", () => {
         error: { code: "invalid_entry", index: 0 },
       });
     }
+  });
+
+  it("rejects non-plain, hidden, symbol, and prototype-smuggled metadata", () => {
+    const inherited = Object.create({ kind: "dataset_transform" }) as Record<string, unknown>;
+    Object.assign(inherited, entry());
+    delete inherited.kind;
+
+    const hidden = { ...entry() };
+    Object.defineProperty(hidden, "hidden", { value: true, enumerable: false });
+    const symbol = { ...entry(), [Symbol("hidden")]: true };
+    const prototypeSmuggled = JSON.parse(
+      `{"__proto__":{"kind":"dataset_transform"},"scope":"task","id":"normalize-expression","version":"1.0.0","digest":"${DIGEST_A}","status":"sandbox_executable"}`,
+    ) as unknown;
+
+    for (const malformed of [inherited, hidden, symbol, prototypeSmuggled]) {
+      expect(createFamilyCatalog([malformed])).toMatchObject({
+        ok: false,
+        error: { code: "invalid_entry", index: 0 },
+      });
+    }
+  });
+
+  it("never invokes accessors while rejecting catalog entries or references", () => {
+    let reads = 0;
+    const accessorEntry = { ...entry() };
+    Object.defineProperty(accessorEntry, "kind", {
+      enumerable: true,
+      get() {
+        reads += 1;
+        return "dataset_transform";
+      },
+    });
+    expect(createFamilyCatalog([accessorEntry])).toMatchObject({
+      ok: false,
+      error: { code: "invalid_entry", index: 0 },
+    });
+
+    const created = createFamilyCatalog([entry()]);
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    const accessorRef = {
+      scope: "task",
+      id: "normalize-expression",
+      version: "1.0.0",
+      digest: DIGEST_A,
+    };
+    Object.defineProperty(accessorRef, "id", {
+      enumerable: true,
+      get() {
+        reads += 1;
+        return "normalize-expression";
+      },
+    });
+    expect(inspectFamilyCatalogEntry(created.catalog, accessorRef)).toMatchObject({
+      ok: false,
+      error: { code: "invalid_reference" },
+    });
+    expect(reads).toBe(0);
   });
 });

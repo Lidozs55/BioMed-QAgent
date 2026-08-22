@@ -96,52 +96,68 @@ const ENTRY_KEYS = new Set(["kind", "scope", "id", "version", "digest", "status"
 const EXACT_REF_KEYS = new Set(["scope", "id", "version", "digest"]);
 const DISCOVERY_REF_KEYS = new Set(["scope", "id", "version", "digest"]);
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+const SAFE_CATALOG_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+/**
+ * Snapshot a plain wire object without invoking accessors. Catalog metadata is
+ * JSON-shaped: symbols, hidden fields, custom prototypes, missing fields, and
+ * accessor properties are all rejected before any field value is consumed.
+ */
+function snapshotDataRecord(
+  value: unknown,
+  allowed: ReadonlySet<string>,
+  required: ReadonlySet<string>,
+): Record<string, unknown> | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return null;
+
+  const snapshot: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  const seen = new Set<string>();
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== "string" || !allowed.has(key)) return null;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor === undefined || !descriptor.enumerable || !("value" in descriptor)) return null;
+    snapshot[key] = descriptor.value;
+    seen.add(key);
+  }
+  if ([...required].some((key) => !seen.has(key))) return null;
+  return snapshot;
 }
 
-function hasOnlyKeys(value: Record<string, unknown>, allowed: ReadonlySet<string>): boolean {
-  return Object.keys(value).every((key) => allowed.has(key));
-}
-
-function isCanonicalNonEmptyString(value: unknown): value is string {
+function isSafeCatalogToken(value: unknown): value is string {
   return typeof value === "string"
-    && value.length > 0
-    && value.trim() === value
     && value.normalize("NFC") === value
-    && ![...value].some((character) => {
-      const codePoint = character.codePointAt(0);
-      return codePoint !== undefined && (codePoint <= 31 || codePoint === 127);
-    });
+    && SAFE_CATALOG_TOKEN.test(value);
 }
 
 function parseEntry(value: unknown, index: number): FamilyCatalogCreateResult | FamilyCatalogEntry {
-  if (!isRecord(value) || !hasOnlyKeys(value, ENTRY_KEYS)) {
-    return invalidEntry(index, "entry must be an object with only catalog entry fields");
+  const record = snapshotDataRecord(value, ENTRY_KEYS, ENTRY_KEYS);
+  if (record === null) {
+    return invalidEntry(index, "entry must contain only plain catalog data fields");
   }
-  if (!ENTRY_KINDS.has(value.kind as FamilyCatalogEntryKind)) {
+  if (!ENTRY_KINDS.has(record.kind as FamilyCatalogEntryKind)) {
     return invalidEntry(index, "kind is not supported");
   }
-  if (!SCOPES.has(value.scope as TransformScope)) {
+  if (!SCOPES.has(record.scope as TransformScope)) {
     return invalidEntry(index, "scope is not supported");
   }
-  if (!isCanonicalNonEmptyString(value.id) || !isCanonicalNonEmptyString(value.version)) {
-    return invalidEntry(index, "id and version must be non-empty canonical strings");
+  if (!isSafeCatalogToken(record.id) || !isSafeCatalogToken(record.version)) {
+    return invalidEntry(index, "id and version must be bounded safe catalog tokens");
   }
-  if (typeof value.digest !== "string" || !SHA256_PATTERN.test(value.digest)) {
+  if (typeof record.digest !== "string" || !SHA256_PATTERN.test(record.digest)) {
     return invalidEntry(index, "digest must be a lowercase SHA-256 hex string");
   }
-  if (!STATUSES.has(value.status as TransformTrustStatus)) {
+  if (!STATUSES.has(record.status as TransformTrustStatus)) {
     return invalidEntry(index, "status is not supported");
   }
   return Object.freeze({
-    kind: value.kind as FamilyCatalogEntryKind,
-    scope: value.scope as TransformScope,
-    id: value.id,
-    version: value.version,
-    digest: value.digest,
-    status: value.status as TransformTrustStatus,
+    kind: record.kind as FamilyCatalogEntryKind,
+    scope: record.scope as TransformScope,
+    id: record.id,
+    version: record.version,
+    digest: record.digest,
+    status: record.status as TransformTrustStatus,
   });
 }
 
@@ -199,26 +215,27 @@ export function createFamilyCatalog(entries: readonly unknown[]): FamilyCatalogC
 }
 
 function parseExactRef(value: unknown): ScopeQualifiedRef | { code: "invalid_reference"; message: string } {
-  if (!isRecord(value) || !hasOnlyKeys(value, EXACT_REF_KEYS) || Object.keys(value).length !== 4) {
+  const record = snapshotDataRecord(value, EXACT_REF_KEYS, EXACT_REF_KEYS);
+  if (record === null) {
     return {
       code: "invalid_reference",
-      message: "execution and inspection require exact scope, id, version, and digest only",
+      message: "execution and inspection require exact plain scope, id, version, and digest fields",
     };
   }
-  if (!SCOPES.has(value.scope as TransformScope)) {
+  if (!SCOPES.has(record.scope as TransformScope)) {
     return { code: "invalid_reference", message: "scope is not supported" };
   }
-  if (!isCanonicalNonEmptyString(value.id) || !isCanonicalNonEmptyString(value.version)) {
-    return { code: "invalid_reference", message: "id and version must be non-empty canonical strings" };
+  if (!isSafeCatalogToken(record.id) || !isSafeCatalogToken(record.version)) {
+    return { code: "invalid_reference", message: "id and version must be bounded safe catalog tokens" };
   }
-  if (typeof value.digest !== "string" || !SHA256_PATTERN.test(value.digest)) {
+  if (typeof record.digest !== "string" || !SHA256_PATTERN.test(record.digest)) {
     return { code: "invalid_reference", message: "digest must be a lowercase SHA-256 hex string" };
   }
   return {
-    scope: value.scope as TransformScope,
-    id: value.id,
-    version: value.version,
-    digest: value.digest,
+    scope: record.scope as TransformScope,
+    id: record.id,
+    version: record.version,
+    digest: record.digest,
   };
 }
 
@@ -250,7 +267,7 @@ export function resolveFamilyCatalogExecution(
 ): FamilyCatalogResult {
   if (
     typeof purposeValue !== "string"
-    || !(purposeValue in EXECUTABLE_STATUSES_BY_PURPOSE)
+    || !Object.hasOwn(EXECUTABLE_STATUSES_BY_PURPOSE, purposeValue)
   ) {
     return {
       ok: false,
@@ -292,26 +309,27 @@ export function resolveFamilyCatalogExecution(
 function parseDiscoveryRef(
   value: unknown,
 ): FamilyCatalogDiscoveryRef | { code: "invalid_reference"; message: string } {
-  if (!isRecord(value) || !hasOnlyKeys(value, DISCOVERY_REF_KEYS)) {
-    return { code: "invalid_reference", message: "discovery reference contains invalid fields" };
+  const record = snapshotDataRecord(value, DISCOVERY_REF_KEYS, new Set(["id"]));
+  if (record === null) {
+    return { code: "invalid_reference", message: "discovery reference contains invalid data fields" };
   }
-  if (!isCanonicalNonEmptyString(value.id)) {
-    return { code: "invalid_reference", message: "id must be a non-empty canonical string" };
+  if (!isSafeCatalogToken(record.id)) {
+    return { code: "invalid_reference", message: "id must be a bounded safe catalog token" };
   }
-  if (value.version !== undefined && !isCanonicalNonEmptyString(value.version)) {
-    return { code: "invalid_reference", message: "version must be a non-empty canonical string when present" };
+  if (record.version !== undefined && !isSafeCatalogToken(record.version)) {
+    return { code: "invalid_reference", message: "version must be a bounded safe catalog token when present" };
   }
-  if (value.scope !== undefined && !SCOPES.has(value.scope as TransformScope)) {
+  if (record.scope !== undefined && !SCOPES.has(record.scope as TransformScope)) {
     return { code: "invalid_reference", message: "scope is not supported" };
   }
-  if (value.digest !== undefined && (typeof value.digest !== "string" || !SHA256_PATTERN.test(value.digest))) {
+  if (record.digest !== undefined && (typeof record.digest !== "string" || !SHA256_PATTERN.test(record.digest))) {
     return { code: "invalid_reference", message: "digest must be a lowercase SHA-256 hex string" };
   }
   return {
-    id: value.id,
-    ...(value.version === undefined ? {} : { version: value.version }),
-    ...(value.scope === undefined ? {} : { scope: value.scope as TransformScope }),
-    ...(value.digest === undefined ? {} : { digest: value.digest }),
+    id: record.id,
+    ...(record.version === undefined ? {} : { version: record.version as string }),
+    ...(record.scope === undefined ? {} : { scope: record.scope as TransformScope }),
+    ...(record.digest === undefined ? {} : { digest: record.digest as string }),
   };
 }
 
