@@ -284,15 +284,15 @@ describe("Core transform quarantine admission", () => {
       row_count: 1,
       header: ["sample_id", "value"],
     });
-    expect(evidence.committed_root).not.toBeNull();
-    if (evidence.committed_root === null) throw new Error("expected committed root");
-    expect(path.dirname(evidence.committed_root)).toBe(await realpath(fixture.commitParent));
-    expect(
-      evidence.committed_root.toLowerCase().startsWith(fixture.quarantineRoot.toLowerCase()),
-    ).toBe(false);
-    await expect(
-      readFile(path.join(evidence.committed_root, "expression.csv")),
-    ).resolves.toEqual(TABLE_BYTES);
+    expect(evidence.committed_root_ref).toMatch(/^transform-quarantine-/);
+    if (evidence.committed_root_ref === null) throw new Error("expected committed root ref");
+    expect(path.isAbsolute(evidence.committed_root_ref)).toBe(false);
+    const committedPath = path.join(
+      await realpath(fixture.commitParent),
+      evidence.committed_root_ref,
+    );
+    expect(committedPath.toLowerCase().startsWith(fixture.quarantineRoot.toLowerCase())).toBe(false);
+    await expect(readFile(path.join(committedPath, "expression.csv"))).resolves.toEqual(TABLE_BYTES);
   });
 
   it("rejects receipt-shaped input without an explicit evidence class", async () => {
@@ -344,6 +344,27 @@ describe("Core transform quarantine admission", () => {
     expect(failedEvidence.rejection_code).toBe("NON_SUCCESS_TERMINAL_STATE");
     expect(cancelEvidence.rejection_code).toBe("LATE_CANCELLATION");
     await expect(readdir(fixture.commitParent)).resolves.toEqual([]);
+  });
+
+  it("rejects non-canonical expected digests and expired deadlines before copying", async () => {
+    const digestFixture = await createFixture();
+    const digestEvidence = await admitTransformExecution({
+      ...digestFixture.request,
+      expected_invocation: {
+        ...digestFixture.expected,
+        request_digest: digestFixture.expected.request_digest.toUpperCase(),
+      },
+    });
+    expect(digestEvidence.rejection_code).toBe("INVALID_EXPECTED_INVOCATION");
+    await expect(readdir(digestFixture.commitParent)).resolves.toEqual([]);
+
+    const deadlineFixture = await createFixture();
+    const deadlineEvidence = await admitTransformExecution({
+      ...deadlineFixture.request,
+      now: () => new Date("2026-08-21T00:02:00.000Z"),
+    });
+    expect(deadlineEvidence.rejection_code).toBe("DEADLINE_FENCE_VIOLATION");
+    await expect(readdir(deadlineFixture.commitParent)).resolves.toEqual([]);
   });
 
   it("rejects an invocation identity mismatch before copying", async () => {

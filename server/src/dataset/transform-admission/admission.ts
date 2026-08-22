@@ -121,11 +121,10 @@ function assertNoNul(value: string, name: string): void {
 }
 
 function assertDigest(value: string, name: string): string {
-  const normalized = value.toLowerCase();
-  if (!SHA256_PATTERN.test(normalized)) {
-    rejection("INVALID_EXPECTED_INVOCATION", `${name} must be a SHA-256 digest`);
+  if (!SHA256_PATTERN.test(value)) {
+    rejection("INVALID_EXPECTED_INVOCATION", `${name} must be a lowercase SHA-256 digest`);
   }
-  return normalized;
+  return value;
 }
 
 function assertSafeNonNegativeInteger(value: number, name: string): void {
@@ -409,8 +408,18 @@ async function validateExpectedInvocation(
   if (expected.cancel_fence.cancellation_state !== "none") {
     rejection("LATE_CANCELLATION", "an invocation with an existing cancellation cannot be admitted");
   }
-  if (!Number.isFinite(Date.parse(expected.deadline_fence.deadline_at))) {
-    rejection("INVALID_EXPECTED_INVOCATION", "deadline fence must be an ISO timestamp");
+  const deadline = Date.parse(expected.deadline_fence.deadline_at);
+  const canonicalDeadline = Number.isFinite(deadline)
+    ? new Date(deadline).toISOString()
+    : null;
+  if (
+    canonicalDeadline === null
+    || (
+      expected.deadline_fence.deadline_at !== canonicalDeadline
+      && expected.deadline_fence.deadline_at !== canonicalDeadline.replace(".000Z", "Z")
+    )
+  ) {
+    rejection("INVALID_EXPECTED_INVOCATION", "deadline fence must be a canonical UTC timestamp");
   }
   return outputs;
 }
@@ -918,6 +927,13 @@ async function copyAndVerifyOutput(
   descriptor: ExpectedTransformOutputDescriptor,
 ): Promise<PreparedOutput> {
   const source = await openVerifiedFile(quarantine, descriptor.relative_path, "quarantine root");
+  if (source.snapshot.size !== receipt.size_bytes) {
+    await source.handle.close();
+    rejection(
+      "OUTPUT_BYTES_MISMATCH",
+      `${descriptor.relative_path} size differs from its receipt before copy`,
+    );
+  }
   const destinationPath = path.join(stagingRoot, ...descriptor.relative_path.split("/"));
   const destination = await open(destinationPath, "wx", 0o600);
   try {
@@ -977,7 +993,7 @@ function makeEvidence(
   hostReceiptDigest: string | null,
   now: Date,
   admitted: {
-    committedRoot: string;
+    committedRootRef: string;
     outputDigest: string;
     outputs: CoreCommittedTransformOutput[];
   } | null,
@@ -1022,7 +1038,7 @@ function makeEvidence(
     ...identity,
     rejection_code: rejected?.code ?? null,
     rejection_detail: rejected?.detail ?? null,
-    committed_root: admitted?.committedRoot ?? null,
+    committed_root_ref: admitted?.committedRootRef ?? null,
     output_digest: admitted?.outputDigest ?? null,
     outputs: admitted?.outputs ?? [],
     issued_at: now.toISOString(),
@@ -1044,6 +1060,9 @@ export async function admitTransformExecution(
   request: TransformAdmissionRequest,
 ): Promise<TransformQuarantineAdmissionEvidence> {
   const now = (request.now ?? (() => new Date()))();
+  if (!Number.isFinite(now.getTime())) {
+    throw new TypeError("Core admission clock returned an invalid timestamp");
+  }
   let envelope: ReceiptEnvelope;
   try {
     envelope = receiptEnvelope(request.receipt_evidence);
@@ -1107,6 +1126,9 @@ export async function admitTransformExecution(
   let committedRootPath: string | null = null;
   try {
     const outputs = await validateExpectedInvocation(request.expected_invocation);
+    if (now.getTime() > Date.parse(request.expected_invocation.deadline_fence.deadline_at)) {
+      rejection("DEADLINE_FENCE_VIOLATION", "Core admission started after the invocation deadline");
+    }
     assertInvocationBinding(receipt, request.expected_invocation);
     assertOutputReceiptClosure(receipt.quarantined_output_receipts, outputs);
     await assertCurrentCancelFence(request, "before quarantine verification");
@@ -1179,7 +1201,7 @@ export async function admitTransformExecution(
       receipt,
       hostReceiptDigest,
       now,
-      { committedRoot: committedRootPath, outputDigest, outputs: stagedOutputs },
+      { committedRootRef: rootName, outputDigest, outputs: stagedOutputs },
       null,
     );
     committedRootPath = null;

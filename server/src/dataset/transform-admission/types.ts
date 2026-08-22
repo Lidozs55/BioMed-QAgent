@@ -157,7 +157,8 @@ export interface TransformQuarantineAdmissionEvidence {
   generation: number | null;
   rejection_code: TransformAdmissionRejectionCode | null;
   rejection_detail: string | null;
-  committed_root: string | null;
+  /** Opaque child reference below the Core-owned commit parent; never an absolute path. */
+  committed_root_ref: string | null;
   output_digest: string | null;
   outputs: CoreCommittedTransformOutput[];
   issued_at: string;
