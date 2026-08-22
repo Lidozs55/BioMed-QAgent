@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
-import { lstat, readFile, realpath, stat } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { lstat, opendir, realpath, stat } from "node:fs/promises";
+import { types } from "node:util";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
 import type {
@@ -104,7 +106,6 @@ export interface AuthoritativePublicationEvidence {
   readonly receipt: AuthoritativePublicationReceipt;
   readonly operation_result: OperationResultManifest;
   readonly assessment: ProductAssessment;
-  readonly artifact_root: string;
   readonly checks: readonly PublicationVerificationCheck[];
 }
 
@@ -189,7 +190,6 @@ export async function verifyAuthoritativePublicationForReuse(
       receipt,
       operation_result: operationResult,
       assessment,
-      artifact_root: resolved.artifact_root,
       checks,
     });
   } catch {
@@ -207,7 +207,9 @@ function validRequest(input: Readonly<AuthoritativePublicationReuseRequest>): bo
 }
 
 function validateReceipt(value: AuthoritativePublicationReceipt): AuthoritativePublicationReceipt | null {
-  if (!isPlainRecord(value)) return null;
+  const snapshot = snapshotPlainData(value);
+  if (!isPlainRecord(snapshot)) return null;
+  value = snapshot as unknown as AuthoritativePublicationReceipt;
   if (value.schema_version !== "1.0" || !SAFE_ID.test(value.task_id) ||
       !SAFE_ID.test(value.build_id) || !SAFE_ID.test(value.run_id) ||
       !SAFE_ID.test(value.publication_id) || !SAFE_ID.test(value.manifest_id) ||
@@ -219,12 +221,15 @@ function validateReceipt(value: AuthoritativePublicationReceipt): AuthoritativeP
       !SHA256.test(value.asset_digest) || !SHA256.test(value.receipt_digest) ||
       !Array.isArray(value.assets) || !Array.isArray(value.artifacts) ||
       !isPlainRecord(value.assessment)) return null;
-  if (!value.assets.every((asset) => isPlainRecord(asset) && SAFE_ID.test(asset.asset_id) &&
-      Number.isSafeInteger(asset.size_bytes) && asset.size_bytes >= 0 && SHA256.test(asset.sha256))) return null;
+  if (!value.assets.every((asset) => isPlainRecord(asset) &&
+      typeof asset.asset_id === "string" && SAFE_ID.test(asset.asset_id) &&
+      typeof asset.size_bytes === "number" && Number.isSafeInteger(asset.size_bytes) && asset.size_bytes >= 0 &&
+      typeof asset.sha256 === "string" && SHA256.test(asset.sha256))) return null;
   if (!value.artifacts.every((artifact) => isPlainRecord(artifact) &&
       typeof artifact.schema === "string" && artifact.schema.length > 0 &&
-      validRelativeLocator(artifact.locator) && Number.isSafeInteger(artifact.size_bytes) &&
-      artifact.size_bytes >= 0 && SHA256.test(artifact.sha256))) return null;
+      typeof artifact.locator === "string" && validRelativeLocator(artifact.locator) &&
+      typeof artifact.size_bytes === "number" && Number.isSafeInteger(artifact.size_bytes) &&
+      artifact.size_bytes >= 0 && typeof artifact.sha256 === "string" && SHA256.test(artifact.sha256))) return null;
   const assessment = value.assessment;
   if (typeof assessment.requirement_id !== "string" || assessment.requirement_id.length === 0 ||
       typeof assessment.package_id !== "string" || assessment.package_id.length === 0 ||
@@ -310,6 +315,11 @@ async function validArtifactFiles(
   if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) return false;
   if (normalize(await realpath(root)) !== normalize(root)) return false;
 
+  const actualLocators = await listRegularFiles(root);
+  const expectedLocators = [...receipt.artifacts.map((artifact) => artifact.locator)].sort();
+  if (actualLocators.length !== expectedLocators.length ||
+      actualLocators.some((locator, index) => locator !== expectedLocators[index])) return false;
+
   for (const artifact of receipt.artifacts) {
     const target = resolve(root, ...artifact.locator.split("/"));
     const rootRelative = relative(root, target);
@@ -322,8 +332,9 @@ async function validArtifactFiles(
     }
     const info = await stat(target);
     if (!info.isFile() || info.nlink > 1 || info.size !== artifact.size_bytes) return false;
-    const digest = createHash("sha256").update(await readFile(target)).digest("hex");
-    if (digest !== artifact.sha256) return false;
+    const digest = createHash("sha256");
+    for await (const chunk of createReadStream(target)) digest.update(chunk);
+    if (digest.digest("hex") !== artifact.sha256) return false;
   }
 
   return result.output_files.every((file) => receipt.artifacts.some((artifact) => artifact.locator === file.relative_path));
@@ -338,9 +349,64 @@ function normalize(value: string): string {
   return process.platform === "win32" ? value.toLowerCase() : value;
 }
 
-function isPlainRecord(value: unknown): value is Record<string, any> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
-  return Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null;
+async function listRegularFiles(root: string): Promise<string[]> {
+  const files: string[] = [];
+  async function visit(directory: string, prefix: string): Promise<void> {
+    const entries = [];
+    for await (const entry of await opendir(directory)) entries.push(entry);
+    entries.sort((left, right) => left.name.localeCompare(right.name));
+    for (const entry of entries) {
+      const locator = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
+      const target = resolve(directory, entry.name);
+      const info = await lstat(target);
+      if (info.isSymbolicLink()) throw new TypeError("publication artifacts must not contain symbolic links");
+      if (info.isDirectory()) await visit(target, locator);
+      else if (info.isFile()) files.push(locator);
+      else throw new TypeError("publication artifacts must contain regular files only");
+    }
+  }
+  await visit(root, "");
+  return files.sort();
+}
+
+function snapshotPlainData(value: unknown): unknown {
+  if (value === null || typeof value !== "object") return value;
+  if (types.isProxy(value)) throw new TypeError("publication evidence must not contain proxies");
+  if (Array.isArray(value)) {
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+    if (!lengthDescriptor || !("value" in lengthDescriptor) || lengthDescriptor.value !== value.length) {
+      throw new TypeError("invalid array length");
+    }
+    const copy: unknown[] = [];
+    for (let index = 0; index < value.length; index += 1) {
+      const descriptor = descriptors[String(index)];
+      if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+        throw new TypeError("publication evidence arrays must be dense data arrays");
+      }
+      copy.push(snapshotPlainData(descriptor.value));
+    }
+    return copy;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) throw new TypeError("publication evidence must be plain data");
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const copy: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  for (const key of Reflect.ownKeys(descriptors)) {
+    if (typeof key !== "string") throw new TypeError("publication evidence must use string keys");
+    const descriptor = descriptors[key];
+    if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+      throw new TypeError("publication evidence must use enumerable data properties");
+    }
+    copy[key] = snapshotPlainData(descriptor.value);
+  }
+  return copy;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value) || types.isProxy(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 function freeze<T>(value: T): T {
