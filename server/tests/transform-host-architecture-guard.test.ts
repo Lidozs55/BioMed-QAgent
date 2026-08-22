@@ -15,13 +15,12 @@ type Violation = {
   reason: string;
 };
 
-const TRANSFORM_HOST = path.resolve(
+const SERVER_SRC = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
   "src",
-  "dataset",
-  "transform-host",
 );
+const TRANSFORM_HOST = path.join(SERVER_SRC, "dataset", "transform-host");
 
 /** Remove comments while retaining strings, so policy terms in comments cannot trigger the guard. */
 function withoutComments(source: string): string {
@@ -45,11 +44,32 @@ function parseStaticImports(source: string): ImportUse[] {
   for (const match of code.matchAll(sideEffectImportPattern)) {
     imports.push({ source: match[1], clause: "", typeOnly: false });
   }
+  const exportPattern = /\bexport\s+(type\s+)?[\s\S]*?\s+from\s+["']([^"']+)["']/g;
+  for (const match of code.matchAll(exportPattern)) {
+    imports.push({ source: match[2], clause: "export", typeOnly: Boolean(match[1]) });
+  }
   const requirePattern = /\brequire\s*\(\s*["']([^"']+)["']\s*\)/g;
   for (const match of code.matchAll(requirePattern)) {
     imports.push({ source: match[1], clause: "require", typeOnly: false });
   }
   return imports;
+}
+
+function parseRuntimeModuleSpecifiers(source: string): string[] {
+  const code = withoutComments(source);
+  const specifiers = parseStaticImports(source)
+    .filter((use) => !use.typeOnly)
+    .map((use) => use.source);
+  for (const match of code.matchAll(/\bimport\s*\(\s*["']([^"']+)["']\s*\)/g)) {
+    specifiers.push(match[1]);
+  }
+  return specifiers;
+}
+
+function importsTransformHost(source: string): boolean {
+  return parseRuntimeModuleSpecifiers(source).some((specifier) =>
+    /(?:^|[\\/])transform-host(?:[\\/]|$)/.test(specifier),
+  );
 }
 
 function checkSource(file: string, source: string): Violation[] {
@@ -97,7 +117,7 @@ function checkSource(file: string, source: string): Violation[] {
   return violations;
 }
 
-async function collectSources(): Promise<string[]> {
+async function collectSources(root: string): Promise<string[]> {
   try {
     const sources: string[] = [];
     async function walk(directory: string): Promise<void> {
@@ -107,7 +127,7 @@ async function collectSources(): Promise<string[]> {
         else if (/\.(?:ts|tsx|mts|cts)$/.test(entry.name)) sources.push(full);
       }
     }
-    await walk(TRANSFORM_HOST);
+    await walk(root);
     return sources;
   } catch (error: unknown) {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") return [];
@@ -117,8 +137,22 @@ async function collectSources(): Promise<string[]> {
 
 async function scanTransformHost(): Promise<Violation[]> {
   const violations: Violation[] = [];
-  for (const file of await collectSources()) {
+  for (const file of await collectSources(TRANSFORM_HOST)) {
     violations.push(...checkSource(path.relative(TRANSFORM_HOST, file), await readFile(file, "utf8")));
+  }
+  return violations;
+}
+
+async function scanInboundTransformHostImports(): Promise<Violation[]> {
+  const violations: Violation[] = [];
+  for (const file of await collectSources(SERVER_SRC)) {
+    if (file === TRANSFORM_HOST || file.startsWith(`${TRANSFORM_HOST}${path.sep}`)) continue;
+    if (importsTransformHost(await readFile(file, "utf8"))) {
+      violations.push({
+        file: path.relative(SERVER_SRC, file),
+        reason: "Transform Host is imported outside its disabled fixture boundary",
+      });
+    }
   }
   return violations;
 }
@@ -139,6 +173,14 @@ describe("Transform Host architecture guard", () => {
     );
   });
 
+  test("fixture helper catches inbound static, export, and dynamic Host wiring", () => {
+    expect(importsTransformHost('import { createHost } from "../dataset/transform-host/index.js";')).toBe(true);
+    expect(importsTransformHost('export { createHost } from "./transform-host/host.js";')).toBe(true);
+    expect(importsTransformHost('await import("@/dataset/transform-host/index.js");')).toBe(true);
+    expect(importsTransformHost('import type { HostReceipt } from "../dataset/transform-host/protocol.js";')).toBe(false);
+    expect(importsTransformHost('// import "../dataset/transform-host/index.js";')).toBe(false);
+  });
+
   test("fixture helper catches a pseudo-enabled unsafe Windows backend", () => {
     const violations = checkSource(
       "bad-backend.ts",
@@ -152,5 +194,9 @@ describe("Transform Host architecture guard", () => {
 
   test("active transform-host sources satisfy the fail-closed policy", async () => {
     expect(await scanTransformHost()).toEqual([]);
+  });
+
+  test("production server sources do not wire the disabled Transform Host", async () => {
+    expect(await scanInboundTransformHostImports()).toEqual([]);
   });
 });
