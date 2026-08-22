@@ -88,16 +88,59 @@ function summaryCount(
   return value;
 }
 
-function parseTableSummary(result: OperationResultManifest): TableSummary {
+function parseTableSummary(
+  result: OperationResultManifest,
+  tableId: string,
+): TableSummary {
+  const summaries = result.output_summary.tables;
+  let summary: Readonly<Record<string, JsonValue>> = result.output_summary;
+  if (summaries !== undefined) {
+    if (summaries === null || typeof summaries !== "object" || Array.isArray(summaries)) {
+      throw new Error("dynamic family multi-table summary requires a table object");
+    }
+    const selected = Reflect.get(summaries, tableId);
+    if (selected === null || typeof selected !== "object" || Array.isArray(selected)) {
+      throw new Error(`dynamic family multi-table summary is missing '${tableId}'`);
+    }
+    summary = selected as Readonly<Record<string, JsonValue>>;
+  }
   return {
-    table_id: summaryString(result.output_summary, "table_id"),
-    dataset_family: summaryString(result.output_summary, "dataset_family"),
-    row_granularity: summaryString(result.output_summary, "row_granularity"),
-    schema_ref: summaryString(result.output_summary, "schema_ref"),
-    row_count: summaryCount(result.output_summary, "row_count"),
-    column_count: summaryCount(result.output_summary, "column_count"),
-    primary_file_sha256: summaryString(result.output_summary, "primary_file_sha256"),
+    table_id: summaryString(summary, "table_id"),
+    dataset_family: summaryString(summary, "dataset_family"),
+    row_granularity: summaryString(summary, "row_granularity"),
+    schema_ref: summaryString(summary, "schema_ref"),
+    row_count: summaryCount(summary, "row_count"),
+    column_count: summaryCount(summary, "column_count"),
+    primary_file_sha256: summaryString(summary, "primary_file_sha256"),
   };
+}
+
+function assertSharedSummaryClosure(
+  outputs: Readonly<Record<string, DynamicFamilyTableOutputs>>,
+): void {
+  const referenced = new Map<string, { result: OperationResultManifest; tables: string[] }>();
+  for (const [tableId, table] of Object.entries(outputs)) {
+    const entry = referenced.get(table.data.result_manifest_id) ?? { result: table.data, tables: [] };
+    entry.tables.push(tableId);
+    referenced.set(table.data.result_manifest_id, entry);
+  }
+  for (const { result, tables } of referenced.values()) {
+    const summaries = result.output_summary.tables;
+    if (summaries === undefined) {
+      if (tables.length !== 1) {
+        throw new Error("a shared dynamic OperationResult requires output_summary.tables");
+      }
+      continue;
+    }
+    if (summaries === null || typeof summaries !== "object" || Array.isArray(summaries)) {
+      throw new Error("dynamic family multi-table summary requires a table object");
+    }
+    const actual = Object.keys(summaries).sort();
+    const expected = [...tables].sort();
+    if (actual.length !== expected.length || actual.some((tableId, index) => tableId !== expected[index])) {
+      throw new Error("dynamic family multi-table summary must exactly close referenced tables");
+    }
+  }
 }
 
 function selectedTableIds(projection: Projection): string[] {
@@ -280,6 +323,7 @@ export async function materializeDynamicFamilyCandidate(
     selectedIds,
     new Set(spec.table_definitions.map((table) => table.table_id)),
   );
+  assertSharedSummaryClosure(input.tableOutputs);
   const schemas = materializeSelectedSchemas(spec, projection);
   const schemaByTable = new Map(definitions.map((definition, index) => [definition.table_id, schemas[index]!]));
   const allResults: OperationResultManifest[] = [];
@@ -298,7 +342,7 @@ export async function materializeDynamicFamilyCandidate(
       outputKind: "integrated_table",
     });
     const schema = schemaByTable.get(definition.table_id)!;
-    const summary = parseTableSummary(data);
+    const summary = parseTableSummary(data, definition.table_id);
     if (
       summary.table_id !== definition.table_id
       || summary.dataset_family !== spec.family_spec_id

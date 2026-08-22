@@ -246,6 +246,57 @@ describe("dynamic FamilySpec materializer", () => {
     ]);
   });
 
+  it("assembles a shared native multi-table OperationResult with exact summary closure", async () => {
+    const base = result({ tableId: "edges", assetId: ASSET_A, digest: A });
+    const shared: OperationResultManifest = {
+      ...base,
+      result_manifest_id: "result_shared_dynamic_tables",
+      output_digest: "d".repeat(64),
+      output_summary: {
+        tables: {
+          edges: {
+            table_id: "edges", dataset_family: "family_network_fixture",
+            row_granularity: PROJECTION.row_granularity, schema_ref: "schema.network.edges.v2",
+            row_count: 2, column_count: 3, primary_file_sha256: A,
+          },
+          nodes: {
+            table_id: "nodes", dataset_family: "family_network_fixture",
+            row_granularity: PROJECTION.row_granularity, schema_ref: "schema.network.nodes.v2",
+            row_count: 2, column_count: 2, primary_file_sha256: B,
+          },
+          node_labels: {
+            table_id: "node_labels", dataset_family: "family_network_fixture",
+            row_granularity: PROJECTION.row_granularity, schema_ref: "schema.network.labels.v2",
+            row_count: 0, column_count: 2, primary_file_sha256: C,
+          },
+        },
+      },
+      output_files: [
+        { relative_path: "tables/edges.csv", size_bytes: 17, sha256: A },
+        { relative_path: "tables/nodes.csv", size_bytes: 17, sha256: B },
+        { relative_path: "tables/node_labels.csv", size_bytes: 0, sha256: C },
+      ],
+    };
+    const input = await assemblyInput();
+    const tableOutputs = Object.fromEntries(Object.entries(input.tableOutputs).map(([tableId, outputs]) => [
+      tableId,
+      { ...outputs, data: shared },
+    ]));
+
+    const materialized = await materializeDynamicFamilyCandidate({ ...input, tableOutputs });
+    expect(materialized.candidate.tables.map((table) => table.data_ref.output_file_index)).toEqual([0, 1, 2]);
+
+    const invalid = structuredClone(shared);
+    const tables = invalid.output_summary.tables as Record<string, unknown>;
+    tables.extra = { table_id: "extra" };
+    const invalidOutputs = Object.fromEntries(Object.entries(tableOutputs).map(([tableId, outputs]) => [
+      tableId,
+      { ...outputs, data: invalid },
+    ]));
+    await expect(materializeDynamicFamilyCandidate({ ...input, tableOutputs: invalidOutputs }))
+      .rejects.toThrow(/exactly close referenced tables/);
+  });
+
   it("assembles tables, relations, evidence, assets, and optional emptiness from only the projection closure", async () => {
     const input = await assemblyInput();
     const labels = input.tableOutputs.node_labels!;
