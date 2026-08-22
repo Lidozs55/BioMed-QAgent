@@ -8,6 +8,7 @@ export type * from "./dataset-multitable.js";
 export type * from "./publication-candidate.js";
 export type * from "./source-locator.js";
 export type * from "./source-asset.js";
+export type * from "./provider-revision-evidence.js";
 export type * from "./operation-result.js";
 export type * from "./deterministic-derive.js";
 export * from "./family-transform.js";
