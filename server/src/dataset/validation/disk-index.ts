@@ -539,24 +539,29 @@ export class TupleIndex {
       this.commitTransaction();
       this.batches += 1;
     } catch (error) {
-      const failure = isSqliteFull(error)
+      const quotaFailure = isSqliteFull(error)
         ? new DiskIndexResourceLimitError(
           `B3 disk index quota exceeded before committing ${this.quotaBytes} bytes`,
           { cause: error },
         )
-        : error;
+        : null;
       try {
         this.rollbackTransaction();
       } catch (rollbackError) {
         this.rows = previousRows;
-        throw new AggregateError([failure, rollbackError], "tuple index write and rollback failed");
+        throw new AggregateError(
+          [quotaFailure ?? error, rollbackError],
+          "tuple index write and rollback failed",
+          { cause: rollbackError },
+        );
       }
       this.rows = previousRows;
       for (const [key, entry] of previousMemory) {
         if (entry === undefined) this.memory.delete(key);
         else this.memory.set(key, entry);
       }
-      throw failure;
+      if (quotaFailure !== null) throw quotaFailure;
+      throw error;
     }
   }
 
