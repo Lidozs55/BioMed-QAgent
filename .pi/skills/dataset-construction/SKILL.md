@@ -51,10 +51,13 @@ output.
    review-status or human-review-status remains human-review-pending until
    genuine HIL acceptance exists.
 5. Treat a failed result as actionable state. Retry unchanged inputs only when
-   retryable is true and the external condition may have changed. For
-   non-retryable errors, change the spec or registered source selection; for a
-   permission or human-review request, wait for the decision instead of replacing
-   the trusted operation with workspace output.
+   retryable is true and the external condition may have changed. A non-retryable
+   static adapter/transform rejection or requested-field/topology mismatch means
+   the registered static family is unsuitable: stop static execution and required-
+   field vocabulary probing, then switch immediately to
+   `submit_dynamic_family_build`. For a permission or human-review request, wait
+   for the decision instead of replacing the trusted operation with workspace
+   output.
 6. Only a successful Publication is formal output. Never describe rejection,
    NO_DATA, cancellation, incomplete review, or failure as success; never
    fabricate file names when reporting artifacts.
