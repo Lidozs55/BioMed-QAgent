@@ -72,13 +72,27 @@ export async function admitInProcessUnisolatedResult(
   }
 }
 
+function boundedRuntimeDiagnostic(stderr: string): string {
+  let sanitized = "";
+  for (const character of stderr) {
+    const code = character.charCodeAt(0);
+    if (code === 0) sanitized += "\\0";
+    else if ((code < 32 && code !== 9 && code !== 10 && code !== 13) || code === 127) sanitized += "?";
+    else sanitized += character;
+    if (sanitized.length >= 2_048) break;
+  }
+  return sanitized.trim().slice(0, 2_048);
+}
+
 function assertCompletedOutputClosure(
   result: InProcessUnisolatedResult,
   expected: ExpectedTransformInvocation,
 ): void {
   if (result.receipt.exit_state !== "succeeded") {
+    const diagnostic = boundedRuntimeDiagnostic(result.stderr);
     throw new TypeError(
-      `Cannot compose non-succeeded in-process result: ${result.receipt.exit_state}`,
+      `Cannot compose non-succeeded in-process result: ${result.receipt.exit_state}`
+      + (diagnostic.length === 0 ? "" : `: ${diagnostic}`),
     );
   }
   const receipts = result.receipt.quarantined_output_receipts;

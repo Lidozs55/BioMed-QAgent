@@ -322,10 +322,11 @@ describe("Core in-process unisolated result composition", () => {
         quarantined_output_receipts: [],
       },
       outputs: [],
+      stderr: "TypeError: Cannot read properties of undefined\0\u0001",
     };
 
     await expect(compose(fixture, result)).rejects.toThrow(
-      "Cannot compose non-succeeded in-process result: failed",
+      "Cannot compose non-succeeded in-process result: failed: TypeError: Cannot read properties of undefined\\0?",
     );
     await expect(readdir(fixture.commitParent)).resolves.toEqual([]);
   });
