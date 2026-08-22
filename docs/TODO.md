@@ -85,12 +85,13 @@ Host 不是实际 OS sandbox；implementation digest 不覆盖 bundle/dependency
       - 验收：`DatasetBuildSpec 1.0` snapshot 不变；2.0 proposal 与 resolved spec 分离、Core re-admission 可独立测试；unknown field fail closed
       - ⚠ FamilySpec **禁止**含源码/函数/任意 validator/merge expression/文件路径/网络权限/Publisher threshold/Core nodes（`01 §1.1`）；**禁止**把 `schema_refs` 塞入 BuildSpec 1.0
 - [ ] **A-T2** identity / projection / relation / audit 契约（依赖 A-T0）
-      - 状态：三层 identity、revision-scoped V2 schema primitives、probe mapping validator 与 staging authoritative identity context 已落地；仍缺 `DatasetCore` task-owned registration receipt 传递和生产 adapter wiring
+      - 状态：三层identity、revision-scoped V2 schema primitives、probe mapping validator、staging authoritative identity context与strict `ProviderRevisionEvidenceV1`已落地；仍缺`DatasetCore` task-owned evidence transport和production adapter wiring
       - 设计：`02-product-identity-relations.md`（全）、`09 §2 T2`
       - 产物：`dataset_id` / `dataset_revision_id` / `asset_id` 三层身份、sample 复合键、`probe_gene_mapping` coverage relation（`many_to_many` + `profile_defined`）、`AuditArtifactDefinition`（**不新增** `audit` TableRole）
       - 验收：同 sample 不同 revision 不碰撞；audit row 不计入产品 table/row count 或 assessment requirement；`integrator.ts` 中 `dataset_id = buildId` 路径有红灯测试与迁移计划
       - ⚠ 一个 Schema 不能同时表达 gene_sample 与 probe_sample（`02 §1`）
 - [ ] **A-T3** implementation identity digest（依赖 A-T1）
+      - 状态：strict six-component implementation identity、Core release identity与fixed-operation checkpoint identity verifier已落地；仍缺checkpoint persistence/reuse composition wiring
       - 设计：`01-family-transform-contracts.md §3`、`09 §2 T3`
       - 产物：bundle/compiler/dependency/runtime/policy digest 算法 + checkpoint invalidation 规则（**B 计算、C 校验共用**）
       - 验收：同 version 不同 source/dependency/compiler → 不同 implementation digest；checkpoint reuse 同时匹配 input/params/FamilySpec/implementation/runtime/policy digest
@@ -143,6 +144,7 @@ Host 不是实际 OS sandbox；implementation digest 不覆盖 bundle/dependency
       - 验收：`registered_multitable.runtime.v1` 旁路问题登记并有统一 executor 修复门，不在旁路继续叠加 transform
       - ⚠ Batch 1 不得接默认 Agent build tool；Transform 不能决定 merge winner/validation threshold/ProductAssessment/Publication（`01 §1.2`、`03 §6`）
 - [ ] **C-T10** checkpoint / lease / recovery（依赖 A-T3 冻结 digest、C-T9）
+      - 状态：publish shortcut已禁用；strict Core release/implementation identity reuse verifier与publication verifier已落地，checkpoint持久化接线仍进行中
       - 设计：`05-core-execution-product-gate.md §6`、`08-activation-release.md §4 R4`、`09 §2 T10`
       - 产物：Host/Core owner fencing、orphan cleanup、publish reuse 修复
       - 验收：cancel/timeout/restart/stale worker/late commit 不误提交；publish 必须重验证 authoritative receipt，或禁止 publish shortcut；固定 operation 的 implementation identity 绑定真实部署版本
@@ -194,7 +196,7 @@ Host 不是实际 OS sandbox；implementation digest 不覆盖 bundle/dependency
 - [x] **AI用户支持文档**：新增`docs/AGENT_API_QUICKSTART.md`；stdlib-only `scripts/run-driver.mjs`现支持health就绪重试、create/submit/snapshot/events durable replay，且有进程级HTTP测试。
 
 ### P2
-- [ ] **createPhase3ToolHooks 并发 identity bug**：同源多查询共用 `operation_id: tool:<source>:query` 互相覆盖 UI 卡片；应改为 call-scoped ID（hangs on `fix/runtime-timeline-sequence` 未含）。
+- [x] **createPhase3ToolHooks并发identity bug**：query lifecycle已使用per-source call-scoped sequence；不同query可乱序准确闭合，identical legacy queries显式FIFO，不再覆盖同一UI card。
 - [ ] **Phase 9 后续 — 权限事件进入历史 Conversation timeline**。
 - [x] **Agent INSTRUCTIONS**：现行Pi `PHASE1_SYSTEM_PROMPT` 已要求用户批准max-turn续跑后以下一轮 `[MAX_TURNS_REACHED]` 开头，并有prompt-shape test。
 - [ ] **设置页供应商/模型列表分页与搜索后端**（当前全量返回）。
