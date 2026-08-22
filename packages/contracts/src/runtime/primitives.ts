@@ -15,6 +15,7 @@ const MAX_ARRAY_LENGTH = 10_000;
 const MAX_OBJECT_KEYS = 10_000;
 const MAX_JSON_DEPTH = 64;
 const MAX_JSON_NODES = 100_000;
+const MAX_JSON_CHARACTERS = 4_194_304;
 
 interface NodeUtilTypes {
   isProxy(value: unknown): boolean;
@@ -126,6 +127,7 @@ function arrayValues(value: unknown, path: string): unknown[] {
 
 interface JsonWalkState {
   nodes: number;
+  characters: number;
 }
 
 function assertJsonValueInternal(
@@ -145,6 +147,13 @@ function assertJsonValueInternal(
   if (value === null) return null;
   if (typeof value === "string") {
     const string = assertValidUnicode(assertString(value, path), path);
+    state.characters += string.length;
+    if (state.characters > MAX_JSON_CHARACTERS) {
+      throw new APIError(
+        502,
+        `JSON value at ${path} exceeds ${MAX_JSON_CHARACTERS} aggregate characters`,
+      );
+    }
     return canonicalizeUnicode ? string.normalize("NFC") : string;
   }
   if (typeof value === "number") {
@@ -176,6 +185,13 @@ function assertJsonValueInternal(
     const normalizedKeys = new Set<string>();
     for (const key of keys) {
       const validKey = assertValidUnicode(key, `${path} key`);
+      state.characters += validKey.length;
+      if (state.characters > MAX_JSON_CHARACTERS) {
+        throw new APIError(
+          502,
+          `JSON value at ${path} exceeds ${MAX_JSON_CHARACTERS} aggregate characters`,
+        );
+      }
       const normalizedKey = canonicalizeUnicode ? validKey.normalize("NFC") : validKey;
       if (normalizedKeys.has(normalizedKey)) {
         throw new APIError(
@@ -204,12 +220,12 @@ function assertJsonValueInternal(
 }
 
 export function assertJsonValue(value: unknown, path: string): JsonValue {
-  return assertJsonValueInternal(value, path, 0, { nodes: 0 }, false);
+  return assertJsonValueInternal(value, path, 0, { nodes: 0, characters: 0 }, false);
 }
 
 /** JSON-safe snapshot for deterministic digest canonicalization only. */
 export function assertCanonicalJsonValue(value: unknown, path: string): JsonValue {
-  return assertJsonValueInternal(value, path, 0, { nodes: 0 }, true);
+  return assertJsonValueInternal(value, path, 0, { nodes: 0, characters: 0 }, true);
 }
 
 export function assertJsonRecord(value: unknown, path: string): Record<string, JsonValue> {

@@ -23,6 +23,7 @@ import {
   assertCanonicalJsonValue,
   assertHex64,
   assertJsonRecord,
+  assertJsonValue,
   assertNonNegativeInt,
   assertNumber,
   assertObject,
@@ -897,7 +898,7 @@ function parseRelationDefinition(value: unknown, path: string): RelationDefiniti
 }
 
 export function parseFamilySpec(value: unknown, path: string): FamilySpec {
-  const object = strictObject(value, path, FAMILY_KEYS);
+  const object = strictObject(assertJsonValue(value, path), path, FAMILY_KEYS);
   return {
     family_spec_id: getSafeId(object, "family_spec_id", path),
     semantic_version: getSafeId(object, "semantic_version", path),
@@ -952,7 +953,7 @@ export function familySpecDigestBody(spec: FamilySpec): FamilySpecDigestBody {
 }
 
 export function parseDatasetTransform(value: unknown, path: string): DatasetTransform {
-  const object = strictObject(value, path, TRANSFORM_KEYS);
+  const object = strictObject(assertJsonValue(value, path), path, TRANSFORM_KEYS);
   const bundleDigest = assertHex64(
     ownValue(object, "bundle_digest", path),
     `${path}.bundle_digest`,
@@ -1101,7 +1102,7 @@ function parseResourceLimits(value: unknown, path: string): ResourceLimits {
 }
 
 export function parseTransformExecutionReceipt(value: unknown, path: string): TransformExecutionReceipt {
-  const object = strictObject(value, path, RECEIPT_KEYS);
+  const object = strictObject(assertJsonValue(value, path), path, RECEIPT_KEYS);
   if (ownValue(object, "schema_version", path) !== "1.0") {
     throw new APIError(502, `TransformExecutionReceipt.schema_version must be "1.0" at ${path}`);
   }
@@ -1428,7 +1429,7 @@ function parseBuild2Base(
 }
 
 export function parseDatasetBuildProposal2(value: unknown, path: string): DatasetBuildProposal2 {
-  const object = strictObject(value, path, BUILD2_KEYS);
+  const object = strictObject(assertJsonValue(value, path), path, BUILD2_KEYS);
   const base = parseBuild2Base(object, path);
   if (ownValue(object, "spec_kind", path) !== "proposal") {
     throw new APIError(502, `DatasetBuildProposal2.spec_kind must be "proposal" at ${path}`);
@@ -1446,7 +1447,7 @@ export function parseResolvedDatasetBuildSpec2(
   value: unknown,
   path: string,
 ): ResolvedDatasetBuildSpec2 {
-  const object = strictObject(value, path, BUILD2_KEYS);
+  const object = strictObject(assertJsonValue(value, path), path, BUILD2_KEYS);
   const base = parseBuild2Base(object, path);
   if (ownValue(object, "spec_kind", path) !== "resolved") {
     throw new APIError(502, `ResolvedDatasetBuildSpec2.spec_kind must be "resolved" at ${path}`);

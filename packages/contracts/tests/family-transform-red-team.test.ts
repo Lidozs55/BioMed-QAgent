@@ -275,6 +275,16 @@ describe("family-transform object parser red-team boundary", () => {
 });
 
 describe("JSON and canonicalization red-team boundary", () => {
+  it("rejects aggregate payloads that exceed the whole-object character budget", () => {
+    expect(() => parseFamilySpec({
+      ...family,
+      evidence_refs: Array.from(
+        { length: 9_000 },
+        (_value, index) => `evidence_${index}_${"x".repeat(480)}`,
+      ),
+    }, "$")) .toThrow(/aggregate characters/);
+  });
+
   it("rejects sparse arrays and unsafe JSON numbers", () => {
     const sparse = new Array<unknown>(1);
     expect(() => assertArray(sparse, "$", (value) => value)).toThrow(/sparse|index/i);
