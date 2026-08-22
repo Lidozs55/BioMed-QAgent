@@ -29,6 +29,13 @@ import { parseDatasetSchemaV2 } from "../contracts/schema.js";
 import { assertRelativePath } from "../contracts/primitives.js";
 import { checkpoint, CHECKPOINT_STRIDE, throwIfAborted } from "../cooperative.js";
 import {
+  createTupleIndex,
+  DiskIndexOwnershipError,
+  DiskIndexResourceLimitError,
+  type PrimaryKeyIndexCheck,
+  type TupleIndex,
+} from "./disk-index.js";
+import {
   decideValidatorResources,
   MULTITABLE_RESOURCE_CONFIGURATION_SOURCE,
   MULTITABLE_RESOURCE_MEASUREMENT_SOURCE,
@@ -36,6 +43,7 @@ import {
   type MultiTableMeasuredInput,
   type MultiTableMeasuredResources,
   type MultiTableResourceMeasurementSource,
+  type MultiTablePrimaryKeyDiskIndexOptions,
   type MultiTableResourcePreflightTelemetry,
   type MultiTableResourceValidationOptions,
   type MultiTableValidationOptions,
@@ -184,6 +192,7 @@ async function resourcePreflight(
   options: MultiTableResourceValidationOptions,
   measured: MultiTableMeasuredResources,
   startedAt: number,
+  diskIndexAvailable: boolean,
   signal?: AbortSignal | null,
 ): Promise<ResourceBaselineDecision> {
   throwIfAborted(signal);
@@ -194,10 +203,9 @@ async function resourcePreflight(
     keyEstimates,
     configuredHeapBytes: options.configuredHeapBytes,
     configuredTempBytes: options.configuredTempBytes,
-    // T11 has not production-wired a disk tuple index into this validator.
-    // This must remain false until disk mode replaces, rather than falls
-    // through to, the Map-backed scan below.
-    diskIndexAvailable: false,
+    // Disk is available only to the explicit C-T11 staging PK path. The
+    // production/default call shape never flips this capability globally.
+    diskIndexAvailable,
     cancelCapable: signal !== undefined && signal !== null,
   }, options.policy);
   await emitResourceTelemetry(options, {
@@ -223,6 +231,44 @@ function resourceDecisionDetail(decision: ResourceBaselineDecision): string {
     estimated_temp_bytes: decision.estimatedTempBytes,
     failure_reason: decision.failureReason,
   });
+}
+
+function validateDiskIndexOwner(
+  request: MultiTableValidationRequest,
+  options: MultiTablePrimaryKeyDiskIndexOptions,
+): void {
+  if (
+    options.owner.taskId !== request.task_id
+    || options.owner.generation !== options.currentGeneration
+  ) {
+    throw new DiskIndexOwnershipError(
+      "B3 disk index owner must match the current validation task and generation",
+    );
+  }
+  if (!Number.isSafeInteger(options.currentGeneration) || options.currentGeneration < 0) {
+    throw new DiskIndexOwnershipError(
+      "B3 disk index generation must be a non-negative safe integer",
+    );
+  }
+  if (!Number.isSafeInteger(options.quotaBytesPerIndex) || options.quotaBytesPerIndex <= 0) {
+    throw new DiskIndexResourceLimitError(
+      "B3 disk index quota must be a positive safe integer",
+    );
+  }
+}
+
+function assertDiskIndexQuota(
+  options: MultiTablePrimaryKeyDiskIndexOptions,
+  decision: ResourceBaselineDecision,
+  indexCount: number,
+): void {
+  const effectiveQuota = decision.thresholdBasis?.effectiveTempQuotaBytes;
+  const reserved = BigInt(options.quotaBytesPerIndex) * BigInt(indexCount);
+  if (effectiveQuota === undefined || reserved > BigInt(effectiveQuota)) {
+    throw new DiskIndexResourceLimitError(
+      "B3 disk index reservations exceed the selected temp quota",
+    );
+  }
 }
 
 function sameStrings(left: readonly string[], right: readonly string[]): boolean {
@@ -528,13 +574,19 @@ async function scanTable(
   signal?: AbortSignal | null,
   memoryBudget?: MemoryScanBudget,
   scanBounds?: DelimitedRowBounds,
+  primaryKeyIndex?: TupleIndex,
 ): Promise<TableScan> {
   const tableId = table.definition.table_id;
   const expectedHeader = table.definition.field_names;
   const declaredFields = new Set(expectedHeader);
   const scannedFields = table.schema.fields.filter((field) => declaredFields.has(field.name));
   const combinations = relationCombos(tableId, table.schema, request.relations);
-  const keyCounts = new Map(combinations.map((fields) => [fieldsKey(fields), new Map<string, number>()]));
+  const memoryCombinations = primaryKeyIndex === undefined
+    ? combinations
+    : combinations.filter((fields) => !sameStrings(fields, table.schema.primary_key));
+  const keyCounts = new Map(
+    memoryCombinations.map((fields) => [fieldsKey(fields), new Map<string, number>()]),
+  );
   const tokenRules = tableTokenRules(tableId, request.policy.token_preservation_rules);
   let header: string[] | null = null;
   let rowCount = 0;
@@ -543,6 +595,7 @@ async function scanTable(
   let typeFailures = 0;
   let tokenFailures = 0;
   let primaryKeyNulls = 0;
+  let primaryKeyBatch: string[][] = [];
   let unsupportedType: string | null = null;
 
   for (const field of scannedFields) {
@@ -577,8 +630,16 @@ async function scanTable(
       }
     }
     const primaryValues = table.schema.primary_key.map((field) => values.get(field) ?? "");
-    if (primaryValues.some((value) => value === "")) primaryKeyNulls += 1;
-    const encodedKeys = combinations.map((fields) => {
+    if (primaryKeyIndex === undefined) {
+      if (primaryValues.some((value) => value === "")) primaryKeyNulls += 1;
+    } else {
+      primaryKeyBatch.push(primaryValues);
+      if (primaryKeyBatch.length === CHECKPOINT_STRIDE) {
+        await primaryKeyIndex.addBatch(primaryKeyBatch, signal);
+        primaryKeyBatch = [];
+      }
+    }
+    const encodedKeys = memoryCombinations.map((fields) => {
       const valuesForKey = fields.map((field) => values.get(field) ?? "");
       return {
         fields,
@@ -604,6 +665,10 @@ async function scanTable(
     if (rowCount % CHECKPOINT_STRIDE === 0) await checkpoint(signal);
   }
 
+  if (primaryKeyIndex !== undefined && primaryKeyBatch.length > 0) {
+    await primaryKeyIndex.addBatch(primaryKeyBatch, signal);
+  }
+
   check(checks, "header_order", tableId, sameStrings(header ?? [], expectedHeader),
     `actual=${JSON.stringify(header ?? [])}; expected=${JSON.stringify(expectedHeader)}`);
   check(checks, "row_width", tableId, malformedWidth === 0,
@@ -615,10 +680,19 @@ async function scanTable(
   const emptyAllowed = table.definition.role !== "primary" && table.definition.allow_empty;
   check(checks, "required_allow_empty", tableId, rowCount > 0 || emptyAllowed,
     `rows=${rowCount}; role=${table.definition.role}; required=${table.definition.required}; allow_empty=${table.definition.allow_empty}`);
-  const pkCounts = keyCounts.get(fieldsKey(table.schema.primary_key)) ?? new Map();
-  const duplicatePrimaryKeys = [...pkCounts.values()].filter((count) => count > 1).length;
-  check(checks, "primary_key_uniqueness", tableId, duplicatePrimaryKeys === 0 && primaryKeyNulls === 0,
-    `${duplicatePrimaryKeys} duplicate primary key value(s); null_or_blank=${primaryKeyNulls}`);
+  const primaryKeyResult: PrimaryKeyIndexCheck = primaryKeyIndex === undefined
+    ? (() => {
+        const pkCounts = keyCounts.get(fieldsKey(table.schema.primary_key)) ?? new Map();
+        const duplicateKeys = countDuplicates(pkCounts);
+        return {
+          duplicateKeys,
+          nullOrBlankRows: primaryKeyNulls,
+          passed: duplicateKeys === 0 && primaryKeyNulls === 0,
+        };
+      })()
+    : primaryKeyIndex.primaryKeyCheck();
+  check(checks, "primary_key_uniqueness", tableId, primaryKeyResult.passed,
+    `${primaryKeyResult.duplicateKeys} duplicate primary key value(s); null_or_blank=${primaryKeyResult.nullOrBlankRows}`);
   check(checks, "token_preservation", tableId, tokenFailures === 0,
     `${tokenFailures} relation/unit token mismatch(es) across ${tokenRules.length} rule(s)`);
   return { rowCount, keyCounts };
@@ -911,30 +985,71 @@ export async function validateMultiTableCandidate(
       options.resourceBaseline,
       measured,
       startedAt,
+      options.stagingPrimaryKeyDiskIndex !== undefined,
       signal,
     );
-    const memoryMode = decision.validatorMode === "memory";
+    const admitted = decision.validatorMode !== "reject";
     check(
       checks,
       "resource_baseline",
       request.candidate.candidate_id,
-      memoryMode,
+      admitted,
       resourceDecisionDetail(decision),
     );
-    // Disk mode is intentionally unavailable at this integration boundary.
-    // Rejecting here prevents the existing Map-backed scan from running.
-    if (!memoryMode) return { passed: false, checks };
-    memoryBudget = createMemoryScanBudget(decision, options.resourceBaseline);
+    if (!admitted) return { passed: false, checks };
+    if (decision.validatorMode === "memory") {
+      memoryBudget = createMemoryScanBudget(decision, options.resourceBaseline);
+    } else {
+      const diskOptions = options.stagingPrimaryKeyDiskIndex;
+      if (diskOptions === undefined) {
+        throw new Error("disk validator selected without explicit staging options");
+      }
+      validateDiskIndexOwner(request, diskOptions);
+      throwIfAborted(signal);
+      if (request.relations.length > 0) {
+        check(
+          checks,
+          "resource_baseline",
+          request.candidate.candidate_id,
+          false,
+          "PK-only disk staging does not yet support FK/cardinality indexes",
+        );
+        return { passed: false, checks };
+      }
+      assertDiskIndexQuota(diskOptions, decision, resolvedTables.size);
+    }
   }
 
+  const diskOptions = options?.stagingPrimaryKeyDiskIndex;
+  const diskMode = diskOptions !== undefined && memoryBudget === undefined;
   for (const table of request.tables) {
     const tableId = table.definition.table_id;
     const resolved = resolvedTables.get(tableId);
     if (resolved === undefined) continue;
+    let primaryKeyIndex: TupleIndex | undefined;
     try {
-      // Recheck the receipt digest immediately before the Map-building pass.
+      if (diskMode) {
+        if (diskOptions === undefined) throw new Error("disk validator options are unavailable");
+        primaryKeyIndex = await createTupleIndex({
+          mode: "disk",
+          owner: diskOptions.owner,
+          directory: diskOptions.directory,
+          quotaBytes: diskOptions.quotaBytesPerIndex,
+          batchSize: diskOptions.batchSize,
+        });
+        const owner = primaryKeyIndex.ownerBinding();
+        if (
+          owner.taskId !== request.task_id
+          || owner.generation !== diskOptions.currentGeneration
+        ) {
+          throw new DiskIndexOwnershipError(
+            "created B3 disk index is not bound to the current validation owner",
+          );
+        }
+      }
+      // Recheck the receipt digest immediately before the selected index pass.
       // This narrows but does not eliminate path-level TOCTOU; immutable
-      // Core-owned descriptor snapshots remain a C-T8/T11 activation gate.
+      // Core-owned descriptor snapshots remain a later activation gate.
       const digest = await sha256File(resolved.path, signal);
       if (digest !== resolved.sha256) {
         throw new Error("table changed after resource measurement");
@@ -952,6 +1067,7 @@ export async function validateMultiTableCandidate(
             options.resourceBaseline,
             table.definition.field_names.length,
           ),
+        primaryKeyIndex,
       );
       const digestAfterScan = await sha256File(resolved.path, signal);
       if (digestAfterScan !== resolved.sha256) {
@@ -959,8 +1075,11 @@ export async function validateMultiTableCandidate(
       }
       scans.set(tableId, scan);
     } catch (error) {
+      if (diskMode) throw error;
       check(checks, "trusted_table_input", tableId, false,
         error instanceof Error ? error.message : String(error));
+    } finally {
+      await primaryKeyIndex?.cleanup();
     }
   }
   for (const relation of request.relations) validateRelation(request, relation, scans, checks);

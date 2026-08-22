@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { access, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -8,10 +8,16 @@ import type {
   OperationResultManifest,
   TableDefinition,
 } from "@biomed/contracts";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { MultiTableValidationRequest } from "../src/dataset/contracts/validation.js";
 import { OperationAbortedError } from "../src/dataset/cooperative.js";
+import {
+  DiskIndexOwnershipError,
+  DiskIndexResourceLimitError,
+  TupleIndex,
+  type Tuple,
+} from "../src/dataset/validation/disk-index.js";
 import {
   validateMultiTableCandidate,
   type MultiTableResourcePreflightTelemetry,
@@ -174,6 +180,7 @@ function deterministicTelemetry(
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -431,6 +438,174 @@ describe("C-T4 multi-table measured resource preflight", () => {
       message: "multi-table resource telemetry sink failed",
       cause: sinkFailure,
     });
+  });
+
+  it("executes the real disk TupleIndex PK path with memory check-order/result parity", async () => {
+    const request = await validationRequest("row_id\nduplicate\nduplicate\n");
+    const memoryTelemetry: MultiTableResourcePreflightTelemetry[] = [];
+    const diskTelemetry: MultiTableResourcePreflightTelemetry[] = [];
+    const memoryPolicy = {
+      ...basePolicy,
+      memoryThresholdBytes: 1_000_000,
+      tempQuotaBytes: 128 * 1024 * 1024,
+    };
+    const diskPolicy = { ...memoryPolicy, memoryThresholdBytes: 0 };
+    const memoryOptions = resourceOptions((event) => {
+      memoryTelemetry.push(event);
+    }, memoryPolicy);
+    memoryOptions.resourceBaseline.configuredTempBytes = 128 * 1024 * 1024;
+    const memory = await validateMultiTableCandidate(request, resourceSignal(), memoryOptions);
+
+    const createSpy = vi.spyOn(TupleIndex, "create");
+    const addBatchSpy = vi.spyOn(TupleIndex.prototype, "addBatch");
+    const primaryKeyCheckSpy = vi.spyOn(TupleIndex.prototype, "primaryKeyCheck");
+    const cleanupSpy = vi.spyOn(TupleIndex.prototype, "cleanup");
+    const diskOptions = resourceOptions((event) => {
+      diskTelemetry.push(event);
+    }, diskPolicy);
+    diskOptions.resourceBaseline.configuredTempBytes = 128 * 1024 * 1024;
+    diskOptions.stagingPrimaryKeyDiskIndex = {
+      owner: { taskId: request.task_id, generation: 4 },
+      currentGeneration: 4,
+      quotaBytesPerIndex: 64 * 1024 * 1024,
+      batchSize: 2,
+    };
+    const disk = await validateMultiTableCandidate(request, resourceSignal(), diskOptions);
+
+    expect(createSpy).toHaveBeenCalledWith(expect.objectContaining({
+      mode: "disk",
+      owner: { taskId: request.task_id, generation: 4 },
+    }));
+    expect(addBatchSpy).toHaveBeenCalled();
+    expect(primaryKeyCheckSpy).toHaveBeenCalledTimes(1);
+    expect(cleanupSpy).toHaveBeenCalledTimes(1);
+    expect(memoryTelemetry).toEqual([expect.objectContaining({ validatorMode: "memory" })]);
+    expect(diskTelemetry).toEqual([expect.objectContaining({ validatorMode: "disk" })]);
+    expect(disk.checks.filter((item) => item.check_id !== "resource_baseline")).toEqual(
+      memory.checks.filter((item) => item.check_id !== "resource_baseline"),
+    );
+    expect(disk.passed).toBe(memory.passed);
+    expect(disk.checks.find((item) => item.check_id === "primary_key_uniqueness")).toEqual(
+      expect.objectContaining({ passed: false, detail: "1 duplicate primary key value(s); null_or_blank=0" }),
+    );
+  });
+
+  it("uses the selected disk PK result without falling back to the Map result", async () => {
+    const request = await validationRequest();
+    const policy = {
+      ...basePolicy,
+      memoryThresholdBytes: 0,
+      tempQuotaBytes: 128 * 1024 * 1024,
+    };
+    const options = resourceOptions(() => undefined, policy);
+    options.resourceBaseline.configuredTempBytes = 128 * 1024 * 1024;
+    options.stagingPrimaryKeyDiskIndex = {
+      owner: { taskId: request.task_id, generation: 5 },
+      currentGeneration: 5,
+      quotaBytesPerIndex: 64 * 1024 * 1024,
+    };
+    vi.spyOn(TupleIndex.prototype, "primaryKeyCheck").mockReturnValue({
+      duplicateKeys: 7,
+      nullOrBlankRows: 0,
+      passed: false,
+    });
+
+    const result = await validateMultiTableCandidate(request, resourceSignal(), options);
+
+    expect(result.passed).toBe(false);
+    expect(result.checks.find((item) => item.check_id === "primary_key_uniqueness")).toEqual(
+      expect.objectContaining({ passed: false, detail: "7 duplicate primary key value(s); null_or_blank=0" }),
+    );
+  });
+
+  it.each([
+    ["another task", { taskId: "task_other", generation: 3 }, 3],
+    ["a stale generation", { taskId: "task_ct4", generation: 2 }, 3],
+  ])("rejects disk index ownership for %s before index creation", async (_label, owner, currentGeneration) => {
+    const request = await validationRequest();
+    const policy = {
+      ...basePolicy,
+      memoryThresholdBytes: 0,
+      tempQuotaBytes: 128 * 1024 * 1024,
+    };
+    const options = resourceOptions(() => undefined, policy);
+    options.resourceBaseline.configuredTempBytes = 128 * 1024 * 1024;
+    options.stagingPrimaryKeyDiskIndex = {
+      owner,
+      currentGeneration,
+      quotaBytesPerIndex: 64 * 1024 * 1024,
+    };
+    const createSpy = vi.spyOn(TupleIndex, "create");
+
+    await expect(validateMultiTableCandidate(request, resourceSignal(), options))
+      .rejects.toBeInstanceOf(DiskIndexOwnershipError);
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects cancellation from disk addBatch and cleans the selected index in finally", async () => {
+    const request = await validationRequest("row_id\nrow-1\nrow-2\n");
+    const controller = new AbortController();
+    const policy = {
+      ...basePolicy,
+      memoryThresholdBytes: 0,
+      tempQuotaBytes: 128 * 1024 * 1024,
+    };
+    const options = resourceOptions(() => undefined, policy);
+    options.resourceBaseline.configuredTempBytes = 128 * 1024 * 1024;
+    options.stagingPrimaryKeyDiskIndex = {
+      owner: { taskId: request.task_id, generation: 6 },
+      currentGeneration: 6,
+      quotaBytesPerIndex: 64 * 1024 * 1024,
+    };
+    const originalAddBatch = TupleIndex.prototype.addBatch;
+    vi.spyOn(TupleIndex.prototype, "addBatch").mockImplementation(async function (
+      this: TupleIndex,
+      values: Iterable<Tuple>,
+      signal?: AbortSignal | null,
+    ) {
+      controller.abort();
+      await originalAddBatch.call(this, values, signal);
+    });
+    const cleanupSpy = vi.spyOn(TupleIndex.prototype, "cleanup");
+
+    await expect(validateMultiTableCandidate(request, controller.signal, options))
+      .rejects.toBeInstanceOf(OperationAbortedError);
+    expect(cleanupSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a disk quota failure and removes the selected index in finally", async () => {
+    const values = Array.from(
+      { length: 96 },
+      (_, index) => `${index}:${"x".repeat(1_024)}`,
+    );
+    const request = await validationRequest(`row_id\n${values.join("\n")}\n`);
+    const policy = {
+      ...basePolicy,
+      memoryThresholdBytes: 0,
+      tempQuotaBytes: 2 * 1024 * 1024,
+    };
+    const options = resourceOptions(() => undefined, policy);
+    options.resourceBaseline.configuredTempBytes = 2 * 1024 * 1024;
+    options.stagingPrimaryKeyDiskIndex = {
+      owner: { taskId: request.task_id, generation: 7 },
+      currentGeneration: 7,
+      quotaBytesPerIndex: 32 * 1024,
+      batchSize: 128,
+    };
+    let storagePath: string | null = null;
+    const originalCreate = TupleIndex.create.bind(TupleIndex);
+    vi.spyOn(TupleIndex, "create").mockImplementation(async (indexOptions) => {
+      const index = await originalCreate(indexOptions);
+      storagePath = index.storagePath();
+      return index;
+    });
+    const cleanupSpy = vi.spyOn(TupleIndex.prototype, "cleanup");
+
+    await expect(validateMultiTableCandidate(request, resourceSignal(), options))
+      .rejects.toBeInstanceOf(DiskIndexResourceLimitError);
+    expect(cleanupSpy).toHaveBeenCalledTimes(1);
+    if (storagePath === null) throw new Error("disk index storage path was not captured");
+    await expect(access(storagePath)).rejects.toThrow();
   });
 
   it("keeps legacy callers on their unchanged result shape without claiming resource admission", async () => {
