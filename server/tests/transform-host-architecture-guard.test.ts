@@ -27,9 +27,12 @@ const STAGED_FAMILY_HOST_ROOTS = [
   path.join(SERVER_SRC, "dataset", "transform-admission"),
   path.join(SERVER_SRC, "dataset", "family-catalog"),
   path.join(SERVER_SRC, "dataset", "family-spec-admission"),
+  path.join(SERVER_SRC, "dataset", "family-spec-topology"),
   path.join(SERVER_SRC, "dataset", "shadow-parity"),
+  path.join(SERVER_SRC, "dataset", "relations"),
+  path.join(SERVER_SRC, "dataset", "validation", "disk-index.ts"),
 ] as const;
-const STAGED_FAMILY_HOST_MODULE = /(?:^|[\\/])(?:transform-host|transform-admission|family-catalog|family-spec-admission|shadow-parity)(?:[\\/]|$)/;
+const UNIQUELY_NAMED_STAGED_MODULE = /(?:^|[\\/])(?:transform-host|transform-admission|family-catalog|family-spec-admission|family-spec-topology|shadow-parity)(?:[\\/]|$)/;
 
 /** Remove comments while retaining strings, so policy terms in comments cannot trigger the guard. */
 function withoutComments(source: string): string {
@@ -102,9 +105,35 @@ function parseRuntimeModuleSpecifiers(source: string): string[] {
   ];
 }
 
-function importsStagedFamilyHostModule(source: string): boolean {
+function stripModuleExtension(value: string): string {
+  return value.replace(/\.(?:c|m)?(?:j|t)s$/u, "");
+}
+
+function moduleTarget(importingFile: string, specifier: string): string | null {
+  if (specifier.startsWith("./") || specifier.startsWith("../")) {
+    return path.resolve(path.dirname(importingFile), specifier);
+  }
+  if (specifier.startsWith("@/")) {
+    return path.resolve(SERVER_SRC, specifier.slice(2));
+  }
+  return null;
+}
+
+function targetsStagedFamilyHostRoot(importingFile: string, specifier: string): boolean {
+  if (UNIQUELY_NAMED_STAGED_MODULE.test(specifier)) return true;
+  const target = moduleTarget(importingFile, specifier);
+  if (target === null) return false;
+  const targetWithoutExtension = stripModuleExtension(target);
+  return STAGED_FAMILY_HOST_ROOTS.some((root) => {
+    const rootWithoutExtension = stripModuleExtension(root);
+    return targetWithoutExtension === rootWithoutExtension
+      || target.startsWith(`${root}${path.sep}`);
+  });
+}
+
+function importsStagedFamilyHostModule(source: string, importingFile: string): boolean {
   return parseRuntimeModuleSpecifiers(source).some((specifier) =>
-    STAGED_FAMILY_HOST_MODULE.test(specifier),
+    targetsStagedFamilyHostRoot(importingFile, specifier),
   );
 }
 
@@ -189,7 +218,7 @@ async function scanInboundFamilyHostImports(): Promise<Violation[]> {
   const violations: Violation[] = [];
   for (const file of await collectSources(SERVER_SRC)) {
     if (isInsideStagedFamilyHostRoot(file)) continue;
-    if (importsStagedFamilyHostModule(await readFile(file, "utf8"))) {
+    if (importsStagedFamilyHostModule(await readFile(file, "utf8"), file)) {
       violations.push({
         file: path.relative(SERVER_SRC, file),
         reason: "staged Family Host module is imported by production server source",
@@ -222,28 +251,44 @@ describe("Transform Host architecture guard", () => {
   });
 
   test("fixture helper catches inbound static, export, and dynamic staging wiring", () => {
+    const fixtureFile = path.join(SERVER_SRC, "service", "guard-fixture.ts");
     for (const moduleName of [
       "transform-host",
       "transform-admission",
       "family-catalog",
       "family-spec-admission",
+      "family-spec-topology",
       "shadow-parity",
+      "relations",
     ]) {
       expect(importsStagedFamilyHostModule(
         `import { staged } from "../dataset/${moduleName}/index.js";`,
+        fixtureFile,
       )).toBe(true);
       expect(importsStagedFamilyHostModule(
-        `export { staged } from "./${moduleName}/index.js";`,
+        `export { staged } from "../dataset/${moduleName}/index.js";`,
+        fixtureFile,
       )).toBe(true);
       expect(importsStagedFamilyHostModule(
         `await import("@/dataset/${moduleName}/index.js");`,
+        fixtureFile,
       )).toBe(true);
     }
     expect(importsStagedFamilyHostModule(
+      'import { openDiskIndex } from "../dataset/validation/disk-index.js";',
+      fixtureFile,
+    )).toBe(true);
+    expect(importsStagedFamilyHostModule(
+      'import { geoRelation } from "../dataset/adapters/geo/relations.js";',
+      fixtureFile,
+    )).toBe(false);
+    expect(importsStagedFamilyHostModule(
       'import type { HostReceipt } from "../dataset/transform-host/protocol.js";',
+      fixtureFile,
     )).toBe(false);
     expect(importsStagedFamilyHostModule(
       '// import "../dataset/transform-host/index.js";',
+      fixtureFile,
     )).toBe(false);
   });
 
