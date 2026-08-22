@@ -1,9 +1,11 @@
 import {
   assertArray,
   assertHex64,
+  assertJsonValue,
   assertNonNegativeInt,
   assertObject,
   assertString,
+  parseFamilySpec,
   parseDatasetBuildProposal2,
   parseResolvedDatasetBuildSpec2,
   stableStringify,
@@ -16,6 +18,7 @@ import {
 
 import {
   BuildSpecResolutionError,
+  type BuildSpecCapabilityRecord,
   type BuildSpecRegisteredRecord,
   type BuildSpecResolution,
   type BuildSpecResolutionContext,
@@ -35,14 +38,28 @@ const FAMILY_STATUSES: readonly FamilyStatus[] = [
 ];
 
 const CONTEXT_KEYS = new Set([
+  "task_id",
+  "build_id",
   "registry_generation",
   "registry_snapshot_digest",
   "family",
+  "transforms",
+  "policies",
   "assets",
   "results",
 ]);
 const FAMILY_KEYS = new Set(["family_spec", "family_status"]);
-const RECORD_KEYS = new Set(["binding_id", "task_id", "generation", "registered_ref", "receipt_digest"]);
+const CAPABILITY_KEYS = new Set(["kind", "scope", "id", "version", "digest", "status"]);
+const RECORD_KEYS = new Set([
+  "binding_id",
+  "source",
+  "input_requirement_ref",
+  "task_id",
+  "build_id",
+  "generation",
+  "registered_ref",
+  "receipt_digest",
+]);
 
 function ownValue(object: Record<string, unknown>, key: string, path: string): unknown {
   const descriptor = Object.getOwnPropertyDescriptor(object, key);
@@ -94,11 +111,38 @@ function parseStatus(value: unknown, path: string): FamilyStatus {
   return status as FamilyStatus;
 }
 
+function parseCapability(value: unknown, path: string): BuildSpecCapabilityRecord {
+  const object = strictRecord(value, path, CAPABILITY_KEYS);
+  const kind = safeString(ownValue(object, "kind", path), `${path}.kind`);
+  if (kind !== "dataset_transform" && kind !== "policy") {
+    throw new BuildSpecResolutionError("invalid_context", `Unsupported capability kind at ${path}`, path);
+  }
+  const scope = safeString(ownValue(object, "scope", path), `${path}.scope`);
+  if (!["example", "task", "user", "curated", "system"].includes(scope)) {
+    throw new BuildSpecResolutionError("invalid_context", `Unsupported capability scope at ${path}`, path);
+  }
+  return {
+    kind,
+    scope: scope as BuildSpecCapabilityRecord["scope"],
+    id: safeString(ownValue(object, "id", path), `${path}.id`),
+    version: safeString(ownValue(object, "version", path), `${path}.version`),
+    digest: safeHex(ownValue(object, "digest", path), `${path}.digest`),
+    status: parseStatus(ownValue(object, "status", path), `${path}.status`),
+  };
+}
+
 function parseRegisteredRecord(value: unknown, path: string): BuildSpecRegisteredRecord {
   const object = strictRecord(value, path, RECORD_KEYS);
   return {
     binding_id: safeString(ownValue(object, "binding_id", path), `${path}.binding_id`),
-    task_id: safeString(ownValue(object, "task_id", path), `${path}.task_id`),
+    source: safeString(ownValue(object, "source", path), `${path}.source`),
+    input_requirement_ref: safeString(ownValue(object, "input_requirement_ref", path), `${path}.input_requirement_ref`),
+    task_id: ownValue(object, "task_id", path) === null
+      ? null
+      : safeString(ownValue(object, "task_id", path), `${path}.task_id`),
+    build_id: ownValue(object, "build_id", path) === null
+      ? null
+      : safeString(ownValue(object, "build_id", path), `${path}.build_id`),
     generation: safeGeneration(ownValue(object, "generation", path), `${path}.generation`),
     registered_ref: safeString(ownValue(object, "registered_ref", path), `${path}.registered_ref`),
     receipt_digest: safeHex(ownValue(object, "receipt_digest", path), `${path}.receipt_digest`),
@@ -106,14 +150,27 @@ function parseRegisteredRecord(value: unknown, path: string): BuildSpecRegistere
 }
 
 function parseContext(value: unknown): BuildSpecResolutionContext {
-  const object = strictRecord(value, "$context", CONTEXT_KEYS);
+  const object = strictRecord(assertJsonValue(value, "$context"), "$context", CONTEXT_KEYS);
   const familyObject = strictRecord(ownValue(object, "family", "$context"), "$context.family", FAMILY_KEYS);
   let familySpec: FamilySpec;
   try {
-    familySpec = assertObject(ownValue(familyObject, "family_spec", "$context.family"), "$context.family.family_spec") as unknown as FamilySpec;
+    familySpec = parseFamilySpec(
+      ownValue(familyObject, "family_spec", "$context.family"),
+      "$context.family.family_spec",
+    );
   } catch (error) {
     throw new BuildSpecResolutionError("invalid_context", error instanceof Error ? error.message : "Invalid family_spec", "$context.family.family_spec");
   }
+  const transforms = assertArray(
+    ownValue(object, "transforms", "$context"),
+    "$context.transforms",
+    (item, index) => parseCapability(item, `$context.transforms[${index}]`),
+  );
+  const policies = assertArray(
+    ownValue(object, "policies", "$context"),
+    "$context.policies",
+    (item, index) => parseCapability(item, `$context.policies[${index}]`),
+  );
   const assets = assertArray(
     ownValue(object, "assets", "$context"),
     "$context.assets",
@@ -125,12 +182,16 @@ function parseContext(value: unknown): BuildSpecResolutionContext {
     (item, index) => parseRegisteredRecord(item, `$context.results[${index}]`),
   );
   return {
+    task_id: safeString(ownValue(object, "task_id", "$context"), "$context.task_id"),
+    build_id: safeString(ownValue(object, "build_id", "$context"), "$context.build_id"),
     registry_generation: safeGeneration(ownValue(object, "registry_generation", "$context"), "$context.registry_generation"),
     registry_snapshot_digest: safeHex(ownValue(object, "registry_snapshot_digest", "$context"), "$context.registry_snapshot_digest"),
     family: {
       family_spec: familySpec,
       family_status: parseStatus(ownValue(familyObject, "family_status", "$context.family"), "$context.family.family_status"),
     },
+    transforms,
+    policies,
     assets,
     results,
   };
@@ -138,6 +199,39 @@ function parseContext(value: unknown): BuildSpecResolutionContext {
 
 function resolutionError(code: BuildSpecResolutionError["code"], message: string, path: string): never {
   throw new BuildSpecResolutionError(code, message, path);
+}
+
+function resolveCapabilityRefs(
+  refs: readonly { scope: string; id: string; version: string; digest: string }[],
+  records: readonly BuildSpecCapabilityRecord[],
+  kind: BuildSpecCapabilityRecord["kind"],
+): string[] {
+  return refs.map((ref) => {
+    const matches = records.filter((record) =>
+      record.kind === kind
+      && record.scope === ref.scope
+      && record.id === ref.id
+      && record.version === ref.version
+      && record.digest === ref.digest,
+    );
+    if (matches.length === 0) {
+      resolutionError("unknown_capability", `No exact ${kind} capability for ${ref.id}@${ref.version}`, `$.${kind}s`);
+    }
+    if (matches.length > 1) {
+      resolutionError("capability_ambiguous", `Multiple exact ${kind} capabilities for ${ref.id}@${ref.version}`, `$.${kind}s`);
+    }
+    const capability = matches[0]!;
+    if (capability.scope === "example") {
+      resolutionError("example_execution_forbidden", `Example ${kind} cannot execute`, `$.${kind}s`);
+    }
+    if (capability.status === "revoked" || capability.status === "retired") {
+      resolutionError("family_revoked", `${kind} capability is revoked or retired`, `$.${kind}s`);
+    }
+    if (capability.status !== "activated") {
+      resolutionError("capability_not_activated", `${kind} capability is not activated`, `$.${kind}s`);
+    }
+    return `${capability.scope}:${capability.id}:${capability.version}:${capability.digest}`;
+  });
 }
 
 function digest(value: JsonValue | DatasetBuildProposal2 | ResolvedDatasetBuildSpec2): Promise<string> {
@@ -153,12 +247,20 @@ function digest(value: JsonValue | DatasetBuildProposal2 | ResolvedDatasetBuildS
 
 function findUniqueRecord(
   records: readonly BuildSpecRegisteredRecord[],
-  bindingId: string,
+  binding: DatasetBuildProposal2["source_bindings"][number],
   label: "asset" | "result",
 ): BuildSpecRegisteredRecord | null {
-  const matches = records.filter((record) => record.binding_id === bindingId);
+  const matches = records.filter((record) =>
+    record.binding_id === binding.binding_id
+    && record.source === binding.source
+    && record.input_requirement_ref === binding.input_requirement_ref,
+  );
   if (matches.length > 1) {
-    resolutionError("duplicate_binding", `Duplicate ${label} binding "${bindingId}"`, `$.${label}s`);
+    resolutionError(
+      "duplicate_binding",
+      `Duplicate ${label} binding "${binding.binding_id}"`,
+      `$.${label}s`,
+    );
   }
   return matches[0] ?? null;
 }
@@ -167,8 +269,8 @@ function resolveBinding(
   binding: DatasetBuildProposal2["source_bindings"][number],
   context: BuildSpecResolutionContext,
 ): [ResolvedDatasetBuildSpec2["source_bindings"][number], string] {
-  const asset = findUniqueRecord(context.assets, binding.binding_id, "asset");
-  const result = findUniqueRecord(context.results, binding.binding_id, "result");
+  const asset = findUniqueRecord(context.assets, binding, "asset");
+  const result = findUniqueRecord(context.results, binding, "result");
   if (asset && result) {
     resolutionError("ambiguous_binding", `Binding "${binding.binding_id}" matches both asset and result`, `$.source_bindings.${binding.binding_id}`);
   }
@@ -176,8 +278,11 @@ function resolveBinding(
   if (!record) {
     resolutionError("unknown_binding", `No registered asset or result for binding "${binding.binding_id}"`, `$.source_bindings.${binding.binding_id}`);
   }
-  if (record.task_id !== contextTaskId(context)) {
+  if (record.task_id !== null && record.task_id !== context.task_id) {
     resolutionError("cross_task_binding", `Binding "${binding.binding_id}" belongs to another task`, `$.source_bindings.${binding.binding_id}`);
+  }
+  if (record.build_id !== null && record.build_id !== context.build_id) {
+    resolutionError("build_mismatch", `Binding "${binding.binding_id}" belongs to another build`, `$.source_bindings.${binding.binding_id}`);
   }
   if (record.generation !== context.registry_generation) {
     resolutionError("stale_generation", `Binding "${binding.binding_id}" is from generation ${record.generation}`, `$.source_bindings.${binding.binding_id}`);
@@ -195,15 +300,6 @@ function resolveBinding(
     },
     record.receipt_digest,
   ];
-}
-
-function contextTaskId(context: BuildSpecResolutionContext): string {
-  const records = [...context.assets, ...context.results];
-  const taskIds = new Set(records.map((record) => record.task_id));
-  if (taskIds.size !== 1) {
-    resolutionError("invalid_context", "Context records must identify exactly one task", "$.assets");
-  }
-  return [...taskIds][0] as string;
 }
 
 export async function resolveDatasetBuildProposal2(
@@ -226,10 +322,22 @@ export async function resolveDatasetBuildProposal2(
   if (!(await verifyFamilySpecDigest(context.family.family_spec))) {
     resolutionError("family_spec_digest_mismatch", "Family spec digest does not match its canonical body", "$.context.family.family_spec.canonical_digest");
   }
-  if (context.family.family_spec.canonical_digest !== proposal.family_spec_ref.digest) {
-    resolutionError("family_spec_digest_mismatch", "Proposal family spec digest does not match the registry family spec", "$.proposal.family_spec_ref.digest");
+  const familySpec = context.family.family_spec;
+  if (
+    proposal.family_spec_ref.scope !== familySpec.scope
+    || proposal.family_spec_ref.id !== familySpec.family_spec_id
+    || proposal.family_spec_ref.version !== familySpec.semantic_version
+    || proposal.family_spec_ref.digest !== familySpec.canonical_digest
+  ) {
+    resolutionError("family_spec_digest_mismatch", "Proposal family spec reference does not exactly match the verified registry family", "$.proposal.family_spec_ref");
   }
-  const resolvedBindings: ResolvedDatasetBuildSpec2["source_bindings"] = [];
+  const orderedCapabilityRefs = [
+    ...resolveCapabilityRefs(proposal.transform_refs, context.transforms, "dataset_transform"),
+    ...resolveCapabilityRefs(proposal.policy_refs, context.policies, "policy"),
+  ];  const resolvedBindings: ResolvedDatasetBuildSpec2["source_bindings"] = [];
+  if (proposal.build_id !== context.build_id) {
+    resolutionError("build_mismatch", "Proposal build_id does not match the Core resolution context", "$.proposal.build_id");
+  }
   const orderedReceiptRefs: string[] = [];
   for (const binding of proposal.source_bindings) {
     const [resolvedBinding, receiptDigest] = resolveBinding(binding, context);
@@ -247,6 +355,7 @@ export async function resolveDatasetBuildProposal2(
     resolved_digest: resolvedDigest,
     registry_snapshot_digest: context.registry_snapshot_digest,
     ordered_receipt_refs: orderedReceiptRefs,
+    ordered_capability_refs: orderedCapabilityRefs,
   };
   return { resolved, evidence };
 }
