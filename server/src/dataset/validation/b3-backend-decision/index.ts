@@ -1,5 +1,5 @@
 /**
- * B3 backend decision gate (C-T4/T11 staging).
+ * B3 backend decision gate (C-T4/T11 production boundary).
  *
  * Pure Core decision boundary that selects the validator backend for one
  * Core-owned build generation: in-memory Maps, the injected disk tuple
@@ -7,16 +7,15 @@
  * scan: when disk is requested but any capability is missing, the answer
  * is reject, never a silent downgrade to memory.
  *
- * Staging scope — this module is intentionally NOT wired anywhere:
- * - It is not exported from `validation/index.ts`, and no legacy caller
- *   imports it. `validateMultiTableCandidate` and the disk-index/resource
- *   baseline modules keep their current behavior unchanged.
- * - It has no publication or OperationResult semantics: `decideB3Backend`
- *   is synchronous, performs no I/O, persists nothing, emits no telemetry,
- *   and returns only a plain typed decision value.
- * - `DiskTupleIndexFactory` is an injected structural contract reserved
- *   for the T11 runtime wiring; this gate never invokes `createIndex`.
+ * The gate is wired into the production multitable validator
+ * (`validateMultiTableCandidate`), which feeds it the measured resource
+ * decision and the injected disk capabilities. The gate stays pure: it
+ * performs no I/O, never invokes the factory, persists nothing, emits no
+ * telemetry, and returns only a plain typed decision value. The injected
+ * factory creates the real SQLite-backed `TupleIndex` instances after the
+ * gate admits disk mode.
  */
+import type { TupleIndex } from "../disk-index.js";
 import type { ResourceBaselineDecision } from "../resource-baseline.js";
 
 /** Core-owned identity of one build generation the gate decides for. */
@@ -33,17 +32,19 @@ export interface B3DiskOwner {
   readonly generation: number;
 }
 
-/** Minimal disk tuple index shape the injected factory is expected to create. */
-export interface B3DiskTupleIndex {
-  readonly indexId: string;
-  close(): Promise<void>;
-}
+/**
+ * The real disk tuple index created by the injected factory. Alias of the
+ * SQLite-backed `TupleIndex`; the gate never invokes `createIndex` and only
+ * checks presence and identity.
+ */
+export type B3DiskTupleIndex = TupleIndex;
 
 export interface B3DiskIndexCreationOptions {
   readonly owner: B3DiskOwner;
   readonly directory?: string;
   readonly quotaBytes?: number;
   readonly signal?: AbortSignal | null;
+  readonly batchSize?: number;
 }
 
 /**
@@ -52,7 +53,7 @@ export interface B3DiskIndexCreationOptions {
  */
 export interface B3DiskTupleIndexFactory {
   readonly factoryId: string;
-  createIndex(options: B3DiskIndexCreationOptions): B3DiskTupleIndex;
+  createIndex(options: B3DiskIndexCreationOptions): Promise<B3DiskTupleIndex>;
 }
 
 /** Memory/disk parity proof: digest plus an artifact reference. */
@@ -63,7 +64,7 @@ export interface B3ParityProof {
   readonly ref: string;
 }
 
-/** Cleanup capability the future disk-mode wiring is expected to own. */
+/** Cleanup capability the production disk-mode wiring owns for its owner. */
 export interface B3CleanupCapability {
   readonly ownerId: string;
   cleanup(owner: B3DiskOwner): void | Promise<void>;

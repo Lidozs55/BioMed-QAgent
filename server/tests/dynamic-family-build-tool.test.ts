@@ -13,7 +13,12 @@ import {
 import { submitDynamicFamilyBuild } from "../src/dataset/dynamic-family/submission.js";
 import { computeHILEvidenceDigest } from "../src/dataset/contracts/hil-evidence.js";
 import { expectedOutputLocatorClosure } from "../src/dataset/dynamic-family/execution.js";
-import { publishDynamicFamily } from "../src/dataset/dynamic-family/publication.js";
+import { publishDynamicFamily, type PublishDynamicFamilyInput } from "../src/dataset/dynamic-family/publication.js";
+import {
+  PRODUCTION_B3_CONFIGURED_HEAP_BYTES,
+  PRODUCTION_B3_CONFIGURED_TEMP_BYTES,
+  PRODUCTION_B3_RESOURCE_POLICY,
+} from "../src/dataset/validation/b3-production-policy.js";
 import { SourceAssetRegistry } from "../src/runtime/source-assets/registry.js";
 
 const A = "a".repeat(64);
@@ -268,6 +273,7 @@ describe("dynamic family build tool boundary", () => {
         buildId: parsed.build_proposal.build_id,
         execution: result,
         validationProfileRef: parsed.family_spec.validation_policy_ref,
+        signal: new AbortController().signal,
       };
       await expect(publishDynamicFamily(publishInput)).rejects.toThrow(/durable HIL gate/);
       for (const action of ["reject", "approve"] as const) {
@@ -369,5 +375,142 @@ describe("dynamic family build tool boundary", () => {
     expect(reads).toBe(0);
     const symbol = { ...await submission(), [Symbol("sandbox")]: true };
     await expect(parseDynamicFamilyBuildSubmission(symbol)).rejects.toThrow(/unknown/);
+  });
+});
+
+/**
+ * Full Core composition for one tiny records build, returning a publish-ready
+ * execution plus the task/build identity. The digest handshake is resolved by
+ * re-submitting with the expected transform descriptor digest.
+ */
+async function executedSubmission(
+  root: string,
+  content = "record_id,value\nr1,1\n",
+): Promise<{ publishInput: PublishDynamicFamilyInput; buildId: string }> {
+  await mkdir(path.join(root, "source_assets"), { recursive: true });
+  await writeFile(path.join(root, "source_assets", "source.csv"), "record_id,value\nr1,1\n", "utf8");
+  const registry = new SourceAssetRegistry("task_dynamic", root);
+  const receipt = await registry.register({
+    sourceId: "source_dynamic",
+    relativePath: "source_assets/source.csv",
+  });
+  const raw = await submission();
+  raw.registered_sources = { source_binding: receipt.asset_ref.asset_id };
+  raw.transform_source = `export const transform = { run({ inputs }) { const [input] = inputs; return { outputs: [{ handle: "out_0", table_id: "records", schema_ref: "schema_records", locator_ref: input.receipt_id, content: ${JSON.stringify(content)}, row_count: 1 }] }; } };`;
+  let parsed = await parseDynamicFamilyBuildSubmission(raw);
+  await registry.registerCoreAcquisitionProvenance(receipt, {
+    provider_id: "fixture.files.v1",
+    implementation_digest: A,
+    request_identity_digest: B,
+  });
+  try {
+    await submitDynamicFamilyBuild({
+      taskId: "task_dynamic", runId: "run_dynamic", submission: parsed,
+      sourceAssetRegistry: registry, taskRoot: root, runtimeLimits: DEFAULT_RUNTIME_LIMITS,
+    });
+  } catch (error) {
+    const expectedDigest = /([0-9a-f]{64})/.exec((error as Error).message)?.[1] ?? "";
+    if (expectedDigest.length === 0) throw error;
+    const proposal = raw.build_proposal as { transform_refs: Array<{ digest: string }> };
+    proposal.transform_refs[0]!.digest = expectedDigest;
+    parsed = await parseDynamicFamilyBuildSubmission(raw);
+  }
+  const result = await submitDynamicFamilyBuild({
+    taskId: "task_dynamic", runId: "run_dynamic", submission: parsed,
+    sourceAssetRegistry: registry, taskRoot: root, runtimeLimits: DEFAULT_RUNTIME_LIMITS,
+  });
+  const buildId = parsed.build_proposal.build_id;
+  return {
+    buildId,
+    publishInput: {
+      taskId: "task_dynamic",
+      taskRoot: root,
+      workspaceRoot: path.join(root, "agent-workspace"),
+      buildId,
+      execution: result,
+      validationProfileRef: parsed.family_spec.validation_policy_ref,
+      signal: new AbortController().signal,
+    },
+  };
+}
+
+async function resourceReport(root: string, buildId: string): Promise<Record<string, unknown>> {
+  return JSON.parse(await readFile(
+    path.join(root, "datasets_build", buildId, "resource_report.json"),
+    "utf8",
+  )) as Record<string, unknown>;
+}
+
+describe("production B3 resource/disk lane", () => {
+  test("routes production publication B3 through the measured memory lane and records the report", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "dynamic-family-b3-memory-"));
+    try {
+      const { publishInput, buildId } = await executedSubmission(root);
+      const published = await publishDynamicFamily(publishInput);
+
+      expect(published.validation.status).toBe("passed");
+      const report = await resourceReport(root, buildId);
+      expect(report.schemaVersion).toBe("b3-multitable-resource-preflight.v2");
+      expect(report.measurementSource).toBe("core_receipted_table_scan.v1");
+      expect(report.validatorMode).toBe("memory");
+      expect(report.failureReason).toBeNull();
+      expect((report.measuredInputs as unknown[])).toHaveLength(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("selects the explicit disk lane above threshold and cleans the task-owned indexes", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "dynamic-family-b3-disk-"));
+    try {
+      const { publishInput, buildId } = await executedSubmission(root);
+      const published = await publishDynamicFamily({
+        ...publishInput,
+        b3Validation: {
+          policy: {
+            ...PRODUCTION_B3_RESOURCE_POLICY,
+            policyId: "b3-production-e2e-disk-test",
+            memoryThresholdBytes: 0,
+          },
+          configuredHeapBytes: PRODUCTION_B3_CONFIGURED_HEAP_BYTES,
+          configuredTempBytes: PRODUCTION_B3_CONFIGURED_TEMP_BYTES,
+        },
+      });
+
+      expect(published.validation.status).toBe("passed");
+      const report = await resourceReport(root, buildId);
+      expect(report.validatorMode).toBe("disk");
+      expect(report.failureReason).toBeNull();
+      await expect(access(path.join(root, "builds", buildId, "b3-index"))).rejects.toThrow();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("fails closed when the measured resource decision rejects above the temp quota", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "dynamic-family-b3-reject-"));
+    try {
+      const { publishInput, buildId } = await executedSubmission(root);
+      await expect(publishDynamicFamily({
+        ...publishInput,
+        b3Validation: {
+          policy: {
+            ...PRODUCTION_B3_RESOURCE_POLICY,
+            policyId: "b3-production-e2e-reject-test",
+            memoryThresholdBytes: 0,
+            tempQuotaBytes: 1,
+          },
+          configuredHeapBytes: PRODUCTION_B3_CONFIGURED_HEAP_BYTES,
+          configuredTempBytes: PRODUCTION_B3_CONFIGURED_TEMP_BYTES,
+        },
+      })).rejects.toThrow(/not publishable/);
+
+      const report = await resourceReport(root, buildId);
+      expect(report.validatorMode).toBe("reject");
+      expect(report.failureReason).toBe("temp_quota_exceeded");
+      await expect(access(path.join(root, "builds", buildId, "b3-index"))).rejects.toThrow();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
