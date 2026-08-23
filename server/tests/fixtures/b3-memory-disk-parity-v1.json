@@ -1,0 +1,21 @@
+{
+  "schema_version": "b3-memory-disk-parity-evidence.v1",
+  "description": "Recorded memory/disk B3 checks digest parity on the C-T11 relation fixture (parents/children with one many_to_one FK, one missing referenced key, one duplicated FK value). trusted_root and resource_baseline checks are excluded: trusted_root detail embeds an absolute host path and resource_baseline carries the selected validator mode.",
+  "fixture": {
+    "tables": [
+      "parents",
+      "children"
+    ],
+    "relations": [
+      "children_parent"
+    ],
+    "rows": {
+      "parents": 2,
+      "children": 3
+    },
+    "memoryChecksCount": 32,
+    "diskChecksCount": 32
+  },
+  "memoryChecksDigest": "00efc1bd91f8b2c3c110f92ca012ee758a431121e004718dc5aa040ff807cd30",
+  "diskChecksDigest": "00efc1bd91f8b2c3c110f92ca012ee758a431121e004718dc5aa040ff807cd30"
+}
