@@ -142,7 +142,7 @@ export interface BuildDetail {
   task_id: string;
   manifest_ref: string;
   build_result: BuildResult | null;
-  manifest: DatasetManifest;
+  manifest: VersionedDatasetManifest;
   publication: DatasetPublication | null;
   artifacts: ManifestArtifactEntry[];
 }

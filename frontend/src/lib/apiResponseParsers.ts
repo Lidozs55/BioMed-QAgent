@@ -9,6 +9,7 @@ import {
   parseBuildResult,
   assertString,
   assertNumber,
+  assertBoolean,
   assertObject,
   assertArray,
   assertStringOrNull,
@@ -27,18 +28,23 @@ import {
 import type {
   BuildDetail,
   BuildPage,
-  DatasetManifest,
+  DatasetManifestV1,
+  DatasetManifestV2,
   DatasetPublication,
   DownloadResumeAccepted,
   EventPage,
   ManifestArtifactEntry,
   MessagePage,
+  PublicationCandidateRef,
   PublicationSummary,
+  RelationDefinition,
   RunSummary,
   SubagentErrorCode,
   TaskPage,
   TaskRunAccepted,
   TaskSnapshot,
+  TableDefinition,
+  VersionedDatasetManifest,
 } from "@/runtime/contracts";
 import { parseEventPayload } from "@/lib/eventParsers";
 import { formalHILLinkageMatches } from "@/lib/eventParsersPipeline";
@@ -460,7 +466,21 @@ function parseManifestArtifactEntry(
   };
 }
 
-function parseDatasetManifest(json: unknown, path: string): DatasetManifest {
+function assertUniqueTopologyIds(
+  values: readonly string[],
+  path: string,
+  label: string,
+): void {
+  const seen = new Set<string>();
+  for (const value of values) {
+    if (seen.has(value)) {
+      throw new APIError(502, `Duplicate ${label} "${value}" at ${path}`);
+    }
+    seen.add(value);
+  }
+}
+
+function parseDatasetManifestV1Fields(json: unknown, path: string): DatasetManifestV1 {
   const obj = assertObject(json, path);
   return {
     manifest_id: assertString(Reflect.get(obj, "manifest_id"), `${path}.manifest_id`, true),
@@ -478,6 +498,148 @@ function parseDatasetManifest(json: unknown, path: string): DatasetManifest {
     confidence_summary: assertJsonRecord(Reflect.get(obj, "confidence_summary"), `${path}.confidence_summary`),
     provenance_summary: assertJsonRecord(Reflect.get(obj, "provenance_summary"), `${path}.provenance_summary`),
   };
+}
+
+const TABLE_ROLES = ["primary", "supporting", "derived"] as const;
+const RELATION_CARDINALITIES = ["one_to_one", "one_to_many", "many_to_one", "many_to_many"] as const;
+const RELATION_MISSING_POLICIES = ["reject", "allow_empty", "allow_missing", "profile_defined"] as const;
+
+function parseStringArray(value: unknown, path: string, nonEmpty: boolean): string[] {
+  const values = assertArray(value, path, (entry, index) => assertString(entry, `${path}[${index}]`, true));
+  if (nonEmpty && values.length === 0) {
+    throw new APIError(502, `Expected non-empty array at ${path}`);
+  }
+  return values;
+}
+
+function parseTableDefinition(json: unknown, path: string): TableDefinition {
+  const obj = assertObject(json, path);
+  const primaryKey = parseStringArray(Reflect.get(obj, "primary_key"), `${path}.primary_key`, true);
+  const fieldNames = parseStringArray(Reflect.get(obj, "field_names"), `${path}.field_names`, true);
+  assertUniqueTopologyIds(fieldNames, `${path}.field_names`, "field name");
+  assertUniqueTopologyIds(primaryKey, `${path}.primary_key`, "primary key field");
+  if (primaryKey.some((field) => !fieldNames.includes(field))) {
+    throw new APIError(502, `Primary key at ${path}.primary_key references an undeclared field`);
+  }
+  return {
+    table_id: assertString(Reflect.get(obj, "table_id"), `${path}.table_id`, true),
+    schema_ref: assertString(Reflect.get(obj, "schema_ref"), `${path}.schema_ref`, true),
+    role: assertFinite(Reflect.get(obj, "role"), `${path}.role`, TABLE_ROLES),
+    required: assertBoolean(Reflect.get(obj, "required"), `${path}.required`),
+    allow_empty: assertBoolean(Reflect.get(obj, "allow_empty"), `${path}.allow_empty`),
+    primary_key: primaryKey,
+    field_names: fieldNames,
+  };
+}
+
+function parseRelationDefinition(json: unknown, path: string): RelationDefinition {
+  const obj = assertObject(json, path);
+  const fromFields = parseStringArray(Reflect.get(obj, "from_fields"), `${path}.from_fields`, true);
+  const toFields = parseStringArray(Reflect.get(obj, "to_fields"), `${path}.to_fields`, true);
+  assertUniqueTopologyIds(fromFields, `${path}.from_fields`, "relation source field");
+  assertUniqueTopologyIds(toFields, `${path}.to_fields`, "relation target field");
+  if (fromFields.length !== toFields.length) {
+    throw new APIError(502, `Relation field pairs at ${path} must have equal lengths`);
+  }
+  return {
+    relation_id: assertString(Reflect.get(obj, "relation_id"), `${path}.relation_id`, true),
+    from_table_id: assertString(Reflect.get(obj, "from_table_id"), `${path}.from_table_id`, true),
+    from_fields: fromFields,
+    to_table_id: assertString(Reflect.get(obj, "to_table_id"), `${path}.to_table_id`, true),
+    to_fields: toFields,
+    cardinality: assertFinite(Reflect.get(obj, "cardinality"), `${path}.cardinality`, RELATION_CARDINALITIES),
+    missing_policy: assertFinite(Reflect.get(obj, "missing_policy"), `${path}.missing_policy`, RELATION_MISSING_POLICIES),
+  };
+}
+
+function parsePublicationCandidateRef(json: unknown, path: string): PublicationCandidateRef {
+  const obj = assertObject(json, path);
+  const tableIds = parseStringArray(Reflect.get(obj, "table_ids"), `${path}.table_ids`, true);
+  const relationIds = parseStringArray(Reflect.get(obj, "relation_ids"), `${path}.relation_ids`, false);
+  const provenanceRefs = parseStringArray(Reflect.get(obj, "provenance_refs"), `${path}.provenance_refs`, false);
+  const confidenceRefs = parseStringArray(Reflect.get(obj, "confidence_refs"), `${path}.confidence_refs`, false);
+  const auditRefs = parseStringArray(Reflect.get(obj, "audit_refs"), `${path}.audit_refs`, false);
+  assertUniqueTopologyIds(tableIds, `${path}.table_ids`, "candidate table reference");
+  assertUniqueTopologyIds(relationIds, `${path}.relation_ids`, "candidate relation reference");
+  assertUniqueTopologyIds(provenanceRefs, `${path}.provenance_refs`, "candidate provenance reference");
+  assertUniqueTopologyIds(confidenceRefs, `${path}.confidence_refs`, "candidate confidence reference");
+  assertUniqueTopologyIds(auditRefs, `${path}.audit_refs`, "candidate audit reference");
+  return {
+    candidate_id: assertString(Reflect.get(obj, "candidate_id"), `${path}.candidate_id`, true),
+    table_ids: tableIds,
+    relation_ids: relationIds,
+    provenance_refs: provenanceRefs,
+    confidence_refs: confidenceRefs,
+    audit_refs: auditRefs,
+  };
+}
+
+function validateTopologyReferences(
+  tables: readonly TableDefinition[],
+  relations: readonly RelationDefinition[],
+  candidateRefs: readonly PublicationCandidateRef[],
+  path: string,
+): void {
+  assertUniqueTopologyIds(tables.map((table) => table.table_id), `${path}.tables`, "table ID");
+  assertUniqueTopologyIds(relations.map((relation) => relation.relation_id), `${path}.relations`, "relation ID");
+  assertUniqueTopologyIds(candidateRefs.map((candidate) => candidate.candidate_id), `${path}.candidate_refs`, "candidate ID");
+
+  const tablesById = new Map(tables.map((table) => [table.table_id, table]));
+  const relationsById = new Map(relations.map((relation) => [relation.relation_id, relation]));
+  for (const relation of relations) {
+    const fromTable = tablesById.get(relation.from_table_id);
+    const toTable = tablesById.get(relation.to_table_id);
+    if (fromTable === undefined || toTable === undefined) {
+      throw new APIError(502, `Relation "${relation.relation_id}" references an unknown table at ${path}.relations`);
+    }
+    if (relation.from_fields.length !== relation.to_fields.length) {
+      throw new APIError(502, `Relation "${relation.relation_id}" has unequal field-pair lengths at ${path}.relations`);
+    }
+    if (relation.from_fields.some((field) => !fromTable.field_names.includes(field))) {
+      throw new APIError(502, `Relation "${relation.relation_id}" references a missing source field at ${path}.relations`);
+    }
+    if (relation.to_fields.some((field) => !toTable.field_names.includes(field))) {
+      throw new APIError(502, `Relation "${relation.relation_id}" references a missing target field at ${path}.relations`);
+    }
+  }
+  for (const candidate of candidateRefs) {
+    if (candidate.table_ids.some((tableId) => !tablesById.has(tableId))) {
+      throw new APIError(502, `Candidate "${candidate.candidate_id}" references an unknown table at ${path}.candidate_refs`);
+    }
+    if (candidate.relation_ids.some((relationId) => !relationsById.has(relationId))) {
+      throw new APIError(502, `Candidate "${candidate.candidate_id}" references an unknown relation at ${path}.candidate_refs`);
+    }
+  }
+}
+
+function parseVersionedDatasetManifest(json: unknown, path: string): VersionedDatasetManifest {
+  const object = assertObject(json, path);
+  const common = parseDatasetManifestV1Fields(object, path);
+  const schemaVersion = Reflect.get(object, "schema_version");
+  if (schemaVersion !== undefined && schemaVersion !== "1.0" && schemaVersion !== "2.0") {
+    throw new APIError(502, `Expected "1.0"|"2.0" or absent at ${path}.schema_version, got ${String(schemaVersion)}`);
+  }
+  if (schemaVersion !== "2.0") {
+    return schemaVersion === "1.0" ? { ...common, schema_version: "1.0" } : common;
+  }
+
+  const tables = assertArray(Reflect.get(object, "tables"), `${path}.tables`, (value, index) =>
+    parseTableDefinition(value, `${path}.tables[${index}]`),
+  );
+  const relations = assertArray(Reflect.get(object, "relations"), `${path}.relations`, (value, index) =>
+    parseRelationDefinition(value, `${path}.relations[${index}]`),
+  );
+  const candidateRefs = assertArray(Reflect.get(object, "candidate_refs"), `${path}.candidate_refs`, (value, index) =>
+    parsePublicationCandidateRef(value, `${path}.candidate_refs[${index}]`),
+  );
+  validateTopologyReferences(tables, relations, candidateRefs, path);
+  return {
+    ...common,
+    schema_version: "2.0",
+    tables,
+    relations,
+    candidate_refs: candidateRefs,
+  } satisfies DatasetManifestV2;
 }
 
 function parseDatasetPublication(
@@ -528,7 +690,7 @@ export function parseBuildDetail(json: unknown): BuildDetail {
     task_id: assertString(Reflect.get(obj, "task_id"), "build response.task_id", true),
     manifest_ref: assertString(Reflect.get(obj, "manifest_ref"), "build response.manifest_ref", true),
     build_result: assertOptionalNull(Reflect.get(obj, "build_result"), "build response.build_result", (value, p) => parseBuildResult(value, p)),
-    manifest: parseDatasetManifest(Reflect.get(obj, "manifest"), "build response.manifest"),
+    manifest: parseVersionedDatasetManifest(Reflect.get(obj, "manifest"), "build response.manifest"),
     publication: assertOptionalNull(Reflect.get(obj, "publication"), "build response.publication", (value, p) => parseDatasetPublication(value, p)),
     artifacts: assertArray(Reflect.get(obj, "artifacts"), "build response.artifacts", (value, index) => parseManifestArtifactEntry(value, `build response.artifacts[${index}]`)),
   };
