@@ -6,6 +6,7 @@ import {
 
 import { BuildArtifactCard } from "@/components/artifacts/BuildArtifactCard";
 import { artifactBasename } from "@/components/artifacts/artifactPreview";
+import { FamilyTopologyExplorer } from "@/components/family-host/relations/FamilyTopologyExplorer";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -511,6 +512,7 @@ function BuildViewerContent({
 
   const { detail } = state;
   const manifest = detail.manifest;
+  const topologyManifest = manifest.schema_version === "2.0" ? manifest : null;
   const result = detail.build_result;
   const rowCount = result?.valid_row_count ?? manifest.row_count;
   const successfulSources = result?.successful_sources.length ?? 0;
@@ -581,6 +583,7 @@ function BuildViewerContent({
           <TabsTrigger value="sources">来源</TabsTrigger>
           <TabsTrigger value="processing">处理</TabsTrigger>
           <TabsTrigger value="warnings">警告</TabsTrigger>
+          {topologyManifest !== null && <TabsTrigger value="topology">结构</TabsTrigger>}
         </TabsList>
         <ScrollArea className="min-h-0 min-w-0 flex-1">
           <TabsContent value="primary" className="min-h-0">
@@ -595,6 +598,11 @@ function BuildViewerContent({
           <TabsContent value="warnings" className="min-h-0">
             <WarningsTab detail={detail} taskId={taskId} />
           </TabsContent>
+          {topologyManifest !== null && (
+            <TabsContent value="topology" className="min-h-0">
+              <FamilyTopologyExplorer manifest={topologyManifest} publication={detail.publication} />
+            </TabsContent>
+          )}
         </ScrollArea>
       </Tabs>
     </div>

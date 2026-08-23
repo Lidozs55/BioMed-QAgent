@@ -7,6 +7,7 @@ import type {
   BuildDetail,
   BuildResult,
   DatasetManifest,
+  DatasetManifestV2,
 } from "@/runtime/contracts";
 import { createInitialRuntimeState } from "@/runtime/reducer";
 import { useAgentStore } from "@/stores/agentStore";
@@ -135,6 +136,54 @@ function manifest(overrides: Partial<DatasetManifest> = {}): DatasetManifest {
   };
 }
 
+function topologyManifest(): DatasetManifestV2 {
+  return {
+    ...manifest(),
+    schema_version: "2.0",
+    tables: [
+      {
+        table_id: "expression",
+        schema_ref: "schema.expression.v2",
+        role: "primary",
+        required: true,
+        allow_empty: false,
+        primary_key: ["dataset_revision_id", "sample_id", "feature_id"],
+        field_names: ["dataset_revision_id", "sample_id", "feature_id", "value"],
+      },
+      {
+        table_id: "samples",
+        schema_ref: "schema.samples.v2",
+        role: "supporting",
+        required: true,
+        allow_empty: false,
+        primary_key: ["dataset_revision_id", "sample_id"],
+        field_names: ["dataset_revision_id", "sample_id", "condition"],
+      },
+    ],
+    relations: [
+      {
+        relation_id: "expression_samples",
+        from_table_id: "expression",
+        from_fields: ["dataset_revision_id", "sample_id"],
+        to_table_id: "samples",
+        to_fields: ["dataset_revision_id", "sample_id"],
+        cardinality: "many_to_one",
+        missing_policy: "reject",
+      },
+    ],
+    candidate_refs: [
+      {
+        candidate_id: "candidate_topology",
+        table_ids: ["expression", "samples"],
+        relation_ids: ["expression_samples"],
+        provenance_refs: ["result_provenance"],
+        confidence_refs: ["result_confidence"],
+        audit_refs: [],
+      },
+    ],
+  };
+}
+
 function buildDetail(
   overrides: Partial<BuildDetail> = {},
   result: BuildResult = SUCCEEDED_RESULT,
@@ -235,6 +284,19 @@ describe("BuildResultsViewer", () => {
     expect(screen.getByText("2 处")).toBeInTheDocument();
     // provenance coverage (header stat + sources tab both render the ratio)
     expect(screen.getAllByText("95.24%").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("tab", { name: "结构" })).not.toBeInTheDocument();
+  });
+
+  it("renders the V2-only structure tab with the family topology explorer", async () => {
+    const v2 = topologyManifest();
+    stubBuildFetch(buildDetail({ manifest: v2, artifacts: v2.artifacts }));
+
+    render(<BuildResultsViewer buildId="build_abc" taskId="task_results" />);
+
+    expect(await screen.findByRole("tab", { name: "结构" })).toBeVisible();
+    fireEvent.click(screen.getByRole("tab", { name: "结构" }));
+    expect(await screen.findByRole("table", { name: "表关系" })).toBeVisible();
+    expect(screen.getByText("expression_samples")).toBeVisible();
   });
 
   it("passes the task id to the builds API so colliding build ids resolve to this task", async () => {
