@@ -55,9 +55,42 @@ function nodeCenter(model: TopologyModel, tableId: string) {
   return { x: point.x + NODE_WIDTH / 2, y: point.y + NODE_HEIGHT / 2 };
 }
 
+interface Point {
+  readonly x: number;
+  readonly y: number;
+}
+
+function nodeBoundaryPoint(from: Point, toward: Point): Point {
+  const deltaX = toward.x - from.x;
+  const deltaY = toward.y - from.y;
+  const boundaryScale = 1 / Math.max(
+    Math.abs(deltaX) / (NODE_WIDTH / 2),
+    Math.abs(deltaY) / (NODE_HEIGHT / 2),
+  );
+  return {
+    x: from.x + deltaX * boundaryScale,
+    y: from.y + deltaY * boundaryScale,
+  };
+}
+
+function selfRelationPath(center: Point): string {
+  const direction = center.x <= CANVAS_WIDTH / 2 ? 1 : -1;
+  const from = { x: center.x + (NODE_WIDTH / 2) * direction, y: center.y };
+  const to = { x: center.x, y: center.y + NODE_HEIGHT / 2 };
+  const controlX = from.x + 24 * direction;
+  const controlY = to.y + 24;
+  return `M ${from.x} ${from.y} C ${controlX} ${from.y}, ${controlX} ${controlY}, ${to.x} ${to.y}`;
+}
+
 export function relationPath(model: TopologyModel, relation: RelationDefinition): string {
-  const from = nodeCenter(model, relation.from_table_id);
-  const to = nodeCenter(model, relation.to_table_id);
+  const fromCenter = nodeCenter(model, relation.from_table_id);
+  const toCenter = nodeCenter(model, relation.to_table_id);
+  if (fromCenter.x === toCenter.x && fromCenter.y === toCenter.y) {
+    return selfRelationPath(fromCenter);
+  }
+
+  const from = nodeBoundaryPoint(fromCenter, toCenter);
+  const to = nodeBoundaryPoint(toCenter, fromCenter);
   const horizontalDistance = Math.max(48, Math.abs(to.x - from.x) * 0.45);
   const direction = to.x >= from.x ? 1 : -1;
   const firstControlX = from.x + horizontalDistance * direction;

@@ -1,7 +1,11 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import type { DatasetManifestV2, TableDefinition } from "@biomed/contracts";
+import type {
+  DatasetManifestV2,
+  RelationDefinition,
+  TableDefinition,
+} from "@biomed/contracts";
 
 import { FamilyTopologyExplorer } from "@/components/family-host/relations/FamilyTopologyExplorer";
 import { nodePoint, relationPath } from "@/components/family-host/relations/TopologyMap";
@@ -115,6 +119,19 @@ function manifest(overrides: Partial<DatasetManifestV2> = {}): DatasetManifestV2
     ],
     ...overrides,
   };
+}
+
+function pathEndpoints(path: string): {
+  readonly from: readonly [number, number];
+  readonly to: readonly [number, number];
+} {
+  const coordinates = path.match(/-?\d+(?:\.\d+)?/g)?.map(Number);
+  if (coordinates?.length !== 8) throw new Error(`unexpected cubic path '${path}'`);
+  const [fromX, fromY, , , , , toX, toY] = coordinates;
+  if (fromX === undefined || fromY === undefined || toX === undefined || toY === undefined) {
+    throw new Error(`missing cubic path endpoint in '${path}'`);
+  }
+  return { from: [fromX, fromY], to: [toX, toY] };
 }
 
 describe("FamilyTopologyExplorer", () => {
@@ -275,16 +292,46 @@ describe("FamilyTopologyExplorer", () => {
     expect(screen.getByText("dataset_revision_id + sample_id", { exact: true })).toBeVisible();
   });
 
-  it("keeps exported topology geometry deterministic", () => {
+  it("anchors every relation path on the source and target card boundaries", () => {
     const model = buildTopologyModel(manifest());
     expect(nodePoint(model, "expression")).toEqual({ x: 24, y: 48 });
     expect(nodePoint(model, "samples")).toEqual({ x: 324, y: 48 });
     expect(nodePoint(model, "sources")).toEqual({ x: 324, y: 192 });
     expect(nodePoint(model, "quality")).toEqual({ x: 624, y: 48 });
 
-    const relation = model.relationsById.get("expression_samples");
-    if (relation === undefined) throw new Error("expected expression_samples relation");
-    expect(relationPath(model, relation)).toMatch(/^M 144 104 C /);
-    expect(relationPath(model, relation)).toMatch(/ 444 104$/);
+    const expectedEndpoints = new Map<
+      string,
+      { readonly from: readonly [number, number]; readonly to: readonly [number, number] }
+    >([
+      ["expression_quality", { from: [264, 104], to: [624, 104] }],
+      ["expression_samples", { from: [264, 104], to: [324, 104] }],
+      ["samples_sources", { from: [444, 160], to: [444, 192] }],
+    ]);
+
+    expect(model.relations).toHaveLength(expectedEndpoints.size);
+    for (const relation of model.relations) {
+      expect(pathEndpoints(relationPath(model, relation))).toEqual(
+        expectedEndpoints.get(relation.relation_id),
+      );
+    }
+  });
+
+  it("keeps a self relation outside the card with two boundary anchors", () => {
+    const model = buildTopologyModel(manifest());
+    const selfRelation: RelationDefinition = {
+      relation_id: "expression_self",
+      from_table_id: "expression",
+      from_fields: ["sample_id"],
+      to_table_id: "expression",
+      to_fields: ["sample_id"],
+      cardinality: "one_to_one",
+      missing_policy: "reject",
+    };
+
+    expect(pathEndpoints(relationPath(model, selfRelation))).toEqual({
+      from: [264, 104],
+      to: [144, 160],
+    });
+    expect(relationPath(model, selfRelation)).not.toMatch(/NaN|Infinity/);
   });
 });
