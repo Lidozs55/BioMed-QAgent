@@ -244,6 +244,16 @@ function dynamicFamilyBuildParameters(): Record<string, unknown> {
     },
     required: ["source", "accession", "entities"], additionalProperties: false,
   });
+  const pubmedParameters = {
+    type: "object",
+    description: "One PMCID per binding. This Core provider retrieves Europe PMC full-text XML only; it does not formalize browser, PDF, VLM, or workspace outputs.",
+    properties: {
+      source: { type: "string", enum: ["pubmed"] },
+      accession: { type: "string", pattern: "^PMC[1-9][0-9]*$" },
+      entities: { type: "object", properties: {}, additionalProperties: false },
+    },
+    required: ["source", "accession", "entities"], additionalProperties: false,
+  };
   const pubchemParameters = {
     type: "object",
     description: "Exactly one CID per binding. For multiple compounds create multiple source bindings/acquisition requests.",
@@ -275,6 +285,13 @@ function dynamicFamilyBuildParameters(): Record<string, unknown> {
         properties: {
           provider_id: { type: "string", enum: ["pubchem.files.v1"] },
           parameters: pubchemParameters,
+        },
+        required: ["provider_id", "parameters"], additionalProperties: false,
+      },
+      {
+        properties: {
+          provider_id: { type: "string", enum: ["pubmed.files.v1"] },
+          parameters: pubmedParameters,
         },
         required: ["provider_id", "parameters"], additionalProperties: false,
       },
@@ -314,7 +331,7 @@ function dynamicFamilyBuildParameters(): Record<string, unknown> {
         additionalProperties: { type: "string", pattern: "^asset_[0-9a-f]{64}$" },
       },
       acquisition_requests: {
-        type: "object", description: "Preferred formal input path. Keys exactly match unresolved build_proposal source binding IDs. PubChem accepts exactly one CID per binding; create one binding/request per CID.",
+        type: "object", description: "Preferred formal input path. Keys exactly match unresolved build_proposal source binding IDs. PubChem accepts one CID and PubMed accepts one PMCID per binding; create one binding/request per formal carrier.",
         additionalProperties: acquisition,
       },
     },

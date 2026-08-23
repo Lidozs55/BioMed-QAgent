@@ -137,6 +137,24 @@ describe("dynamic family build tool boundary", () => {
     expect(parsed.registered_sources).toEqual({});
   });
 
+  test("accepts a PubMed full-text Core acquisition request", async () => {
+    const raw = await submission();
+    raw.registered_sources = {};
+    raw.acquisition_requests = {
+      source_binding: {
+        provider_id: "pubmed.files.v1",
+        parameters: {
+          source: "pubmed",
+          accession: "PMC10408569",
+          entities: {},
+        },
+      },
+    };
+    const parsed = await parseDynamicFamilyBuildSubmission(raw);
+    expect(parsed.acquisition_requests.source_binding?.provider_id).toBe("pubmed.files.v1");
+    expect(parsed.registered_sources).toEqual({});
+  });
+
   test("exposes the complete nested contract and fixed-provider parameter guidance", () => {
     const tool = createDynamicFamilyBuildTool({ submit: async () => ({ ok: true }) });
     const schema = JSON.stringify(tool.parameters);
@@ -147,6 +165,9 @@ describe("dynamic family build tool boundary", () => {
     expect(schema).toContain("maxItems");
     expect(schema).toContain("chembl.files.v1");
     expect(schema).toContain("pubchem.files.v1");
+    expect(schema).toContain("pubmed.files.v1");
+    expect(schema).toContain("One PMCID per binding");
+    expect(schema).toContain("^PMC[1-9][0-9]*$");
     expect(schema).toContain("geo.files.v1");
   });
 
