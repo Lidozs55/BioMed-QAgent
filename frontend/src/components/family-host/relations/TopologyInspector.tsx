@@ -257,7 +257,16 @@ function RelationPairs({ model, relation }: { readonly model: TopologyModel; rea
         <CardTitle className="text-sm">端点字段配对</CardTitle>
         <CardDescription>按 relation 声明的顺序展示字段配对，不推断记录级 lineage。</CardDescription>
       </CardHeader>
-      <CardContent>
+      <CardContent className="flex min-w-0 flex-col gap-3">
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <p className="text-xs font-medium text-muted-foreground">字段键映射摘要</p>
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-xs">
+            <code className="break-words text-foreground">{formatFields(relation.from_fields)}</code>
+            <span aria-hidden="true" className="text-muted-foreground">→</span>
+            <code className="break-words text-foreground">目标 · {formatFields(relation.to_fields)}</code>
+          </div>
+        </div>
+        <Separator />
         <Table aria-label={`${relation.relation_id} 字段配对`}>
           <TableHeader>
             <TableRow>
@@ -276,11 +285,7 @@ function RelationPairs({ model, relation }: { readonly model: TopologyModel; rea
                       <span className="truncate text-xs text-muted-foreground">
                         {relationTableLabel(model, relation.from_table_id)}
                       </span>
-                      {index === 0 ? (
-                        <code className="break-words text-xs text-foreground">{formatFields(relation.from_fields)}</code>
-                      ) : (
-                        <code className="break-words text-xs text-foreground">{fromField}</code>
-                      )}
+                      <code className="break-words text-xs text-foreground">{fromField}</code>
                     </div>
                   </TableCell>
                   <TableCell>
@@ -288,9 +293,7 @@ function RelationPairs({ model, relation }: { readonly model: TopologyModel; rea
                       <span className="truncate text-xs text-muted-foreground">
                         {relationTableLabel(model, relation.to_table_id)}
                       </span>
-                      <code className="break-words text-xs text-foreground">
-                        {index === 0 ? `目标 · ${formatFields(relation.to_fields)}` : toField}
-                      </code>
+                      <code className="break-words text-xs text-foreground">{toField}</code>
                     </div>
                   </TableCell>
                 </TableRow>
@@ -331,7 +334,7 @@ export function TopologyInspector({ model, selection, onOpenChange }: TopologyIn
 
   return (
     <Sheet modal={false} open={selection !== null} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="gap-0 overflow-y-auto sm:max-w-xl">
+      <SheetContent side="right" showOverlay={false} className="gap-0 overflow-y-auto sm:max-w-xl">
         <SheetHeader className="border-b">
           <SheetTitle>{isRelation ? "关系详情" : "表详情"}</SheetTitle>
           <SheetDescription>
