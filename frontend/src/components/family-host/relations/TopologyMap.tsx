@@ -79,17 +79,176 @@ interface RelationLayout {
   readonly label: Point;
 }
 
-function nodeBoundaryPoint(from: Point, toward: Point): Point {
-  const deltaX = toward.x - from.x;
-  const deltaY = toward.y - from.y;
-  const boundaryScale = 1 / Math.max(
-    Math.abs(deltaX) / (NODE_WIDTH / 2),
-    Math.abs(deltaY) / (NODE_HEIGHT / 2),
+interface Rect {
+  readonly left: number;
+  readonly right: number;
+  readonly top: number;
+  readonly bottom: number;
+}
+
+type PortDirection = "top" | "right" | "bottom" | "left";
+
+interface Port {
+  readonly boundary: Point;
+  readonly outer: Point;
+}
+
+const ROUTE_PADDING = 4;
+const PORT_DIRECTIONS: readonly PortDirection[] = ["right", "bottom", "left", "top"];
+
+function topologyCanvasHeight(model: TopologyModel): number {
+  const maxLaneSize = model.lanes.reduce(
+    (maximum, lane) => Math.max(maximum, lane.tables.length),
+    0,
   );
+  return Math.max(420, maxLaneSize * ROW_HEIGHT + 72);
+}
+
+function tableRects(model: TopologyModel): readonly Rect[] {
+  return model.lanes.flatMap((lane) =>
+    lane.tables.map((table) => {
+      const point = nodePoint(model, table.table_id);
+      return {
+        left: point.x,
+        right: point.x + NODE_WIDTH,
+        top: point.y,
+        bottom: point.y + NODE_HEIGHT,
+      };
+    }),
+  );
+}
+
+function inflateRect(rect: Rect): Rect {
   return {
-    x: from.x + deltaX * boundaryScale,
-    y: from.y + deltaY * boundaryScale,
+    left: rect.left - ROUTE_PADDING,
+    right: rect.right + ROUTE_PADDING,
+    top: rect.top - ROUTE_PADDING,
+    bottom: rect.bottom + ROUTE_PADDING,
   };
+}
+
+function port(center: Point, direction: PortDirection, clearance: number): Port {
+  if (direction === "left") {
+    return {
+      boundary: { x: center.x - NODE_WIDTH / 2, y: center.y },
+      outer: { x: center.x - NODE_WIDTH / 2 - clearance, y: center.y },
+    };
+  }
+  if (direction === "right") {
+    return {
+      boundary: { x: center.x + NODE_WIDTH / 2, y: center.y },
+      outer: { x: center.x + NODE_WIDTH / 2 + clearance, y: center.y },
+    };
+  }
+  if (direction === "top") {
+    return {
+      boundary: { x: center.x, y: center.y - NODE_HEIGHT / 2 },
+      outer: { x: center.x, y: center.y - NODE_HEIGHT / 2 - clearance },
+    };
+  }
+  return {
+    boundary: { x: center.x, y: center.y + NODE_HEIGHT / 2 },
+    outer: { x: center.x, y: center.y + NODE_HEIGHT / 2 + clearance },
+  };
+}
+
+function pointInsideRect(point: Point, rect: Rect): boolean {
+  return point.x > rect.left && point.x < rect.right && point.y > rect.top && point.y < rect.bottom;
+}
+
+function segmentCrossesRect(from: Point, to: Point, rect: Rect): boolean {
+  if (from.y === to.y) {
+    return from.y > rect.top
+      && from.y < rect.bottom
+      && Math.max(from.x, to.x) > rect.left
+      && Math.min(from.x, to.x) < rect.right;
+  }
+  return from.x > rect.left
+    && from.x < rect.right
+    && Math.max(from.y, to.y) > rect.top
+    && Math.min(from.y, to.y) < rect.bottom;
+}
+
+function compressPath(points: readonly Point[]): readonly Point[] {
+  const unique = points.filter((point, index) => {
+    const previous = points[index - 1];
+    return previous === undefined || previous.x !== point.x || previous.y !== point.y;
+  });
+  const compressed: Point[] = [];
+  for (const point of unique) {
+    while (compressed.length >= 2) {
+      const before = compressed[compressed.length - 2]!;
+      const previous = compressed[compressed.length - 1]!;
+      const collinear = (before.x === previous.x && previous.x === point.x)
+        || (before.y === previous.y && previous.y === point.y);
+      if (!collinear) break;
+      compressed.pop();
+    }
+    compressed.push(point);
+  }
+  return compressed;
+}
+
+function gridRoute(
+  start: Point,
+  end: Point,
+  obstacles: readonly Rect[],
+  canvasHeight: number,
+): readonly Point[] | undefined {
+  const xCoordinates = new Set<number>([4, CANVAS_WIDTH - 4, start.x, end.x]);
+  const yCoordinates = new Set<number>([4, canvasHeight - 4, start.y, end.y]);
+  for (const rect of obstacles) {
+    xCoordinates.add(rect.left);
+    xCoordinates.add(rect.right);
+    yCoordinates.add(rect.top);
+    yCoordinates.add(rect.bottom);
+  }
+  const xs = [...xCoordinates].sort((left, right) => left - right);
+  const ys = [...yCoordinates].sort((left, right) => left - right);
+  const startX = xs.indexOf(start.x);
+  const startY = ys.indexOf(start.y);
+  const endX = xs.indexOf(end.x);
+  const endY = ys.indexOf(end.y);
+  const key = (xIndex: number, yIndex: number) => `${xIndex}:${yIndex}`;
+  const startKey = key(startX, startY);
+  const endKey = key(endX, endY);
+  const queue: Array<readonly [number, number]> = [[startX, startY]];
+  const parents = new Map<string, string | null>([[startKey, null]]);
+  const indicesByKey = new Map<string, readonly [number, number]>([[startKey, [startX, startY]]]);
+  let cursor = 0;
+
+  while (cursor < queue.length && !parents.has(endKey)) {
+    const [xIndex, yIndex] = queue[cursor++]!;
+    const point = { x: xs[xIndex]!, y: ys[yIndex]! };
+    const neighbors: Array<readonly [number, number]> = [
+      [xIndex + 1, yIndex],
+      [xIndex, yIndex + 1],
+      [xIndex - 1, yIndex],
+      [xIndex, yIndex - 1],
+    ];
+    for (const [nextX, nextY] of neighbors) {
+      if (nextX < 0 || nextX >= xs.length || nextY < 0 || nextY >= ys.length) continue;
+      const nextKey = key(nextX, nextY);
+      if (parents.has(nextKey)) continue;
+      const nextPoint = { x: xs[nextX]!, y: ys[nextY]! };
+      if (obstacles.some((rect) => pointInsideRect(nextPoint, rect))) continue;
+      if (obstacles.some((rect) => segmentCrossesRect(point, nextPoint, rect))) continue;
+      parents.set(nextKey, key(xIndex, yIndex));
+      indicesByKey.set(nextKey, [nextX, nextY]);
+      queue.push([nextX, nextY]);
+    }
+  }
+
+  if (!parents.has(endKey)) return undefined;
+  const reversed: Point[] = [];
+  let currentKey: string | null = endKey;
+  while (currentKey !== null) {
+    const indices = indicesByKey.get(currentKey);
+    if (indices === undefined) return undefined;
+    reversed.push({ x: xs[indices[0]]!, y: ys[indices[1]]! });
+    currentKey = parents.get(currentKey) ?? null;
+  }
+  return reversed.reverse();
 }
 
 function parallelRelationIndex(model: TopologyModel, relation: RelationDefinition): number {
@@ -101,73 +260,69 @@ function parallelRelationIndex(model: TopologyModel, relation: RelationDefinitio
     .findIndex((candidate) => candidate.relation_id === relation.relation_id);
 }
 
-function detourClearance(rankOnSide: number): number {
-  return 8 + (16 * (rankOnSide + 1)) / (rankOnSide + 2);
+function portClearance(parallelIndex: number): number {
+  return 8 + (8 * (parallelIndex + 1)) / (parallelIndex + 2);
 }
 
-function selfRelationLayout(center: Point, parallelIndex: number): RelationLayout {
-  const direction = center.x <= CANVAS_WIDTH / 2 ? 1 : -1;
-  const from = { x: center.x + (NODE_WIDTH / 2) * direction, y: center.y };
-  const to = { x: center.x, y: center.y + NODE_HEIGHT / 2 };
-  const clearance = 12 + detourClearance(parallelIndex);
-  const outsideX = from.x + clearance * direction;
-  const outsideY = to.y + clearance;
-  return {
-    path: `M ${from.x} ${from.y} L ${outsideX} ${from.y} L ${outsideX} ${outsideY} L ${to.x} ${outsideY} L ${to.x} ${to.y}`,
-    label: { x: outsideX, y: from.y },
-  };
+function opposite(direction: PortDirection): PortDirection {
+  if (direction === "left") return "right";
+  if (direction === "right") return "left";
+  if (direction === "top") return "bottom";
+  return "top";
 }
 
-function directRelationLayout(from: Point, to: Point): RelationLayout {
-  const horizontalDistance = Math.max(48, Math.abs(to.x - from.x) * 0.45);
-  const direction = to.x >= from.x ? 1 : -1;
-  const firstControlX = from.x + horizontalDistance * direction;
-  const secondControlX = to.x - horizontalDistance * direction;
-  return {
-    path: `M ${from.x} ${from.y} C ${firstControlX} ${from.y}, ${secondControlX} ${to.y}, ${to.x} ${to.y}`,
-    label: { x: (from.x + to.x) / 2, y: Math.max(from.y, to.y) + 16 },
-  };
+function preferredDirections(from: Point, to: Point): readonly PortDirection[] {
+  const horizontal: PortDirection = to.x >= from.x ? "right" : "left";
+  const vertical: PortDirection = to.y >= from.y ? "bottom" : "top";
+  return Math.abs(to.x - from.x) >= Math.abs(to.y - from.y)
+    ? [horizontal, vertical, opposite(vertical), opposite(horizontal)]
+    : [vertical, horizontal, opposite(horizontal), opposite(vertical)];
 }
 
-function horizontalDetourLayout(
+function relationPortPairs(
   fromCenter: Point,
   toCenter: Point,
-  side: "above" | "below",
-  clearance: number,
-): RelationLayout {
-  const boundaryY = side === "above"
-    ? fromCenter.y - NODE_HEIGHT / 2
-    : fromCenter.y + NODE_HEIGHT / 2;
-  const targetBoundaryY = side === "above"
-    ? toCenter.y - NODE_HEIGHT / 2
-    : toCenter.y + NODE_HEIGHT / 2;
-  const routeY = side === "above"
-    ? Math.min(boundaryY, targetBoundaryY) - clearance
-    : Math.max(boundaryY, targetBoundaryY) + clearance;
-  return {
-    path: `M ${fromCenter.x} ${boundaryY} L ${fromCenter.x} ${routeY} L ${toCenter.x} ${routeY} L ${toCenter.x} ${targetBoundaryY}`,
-    label: { x: (fromCenter.x + toCenter.x) / 2, y: routeY },
-  };
+  selfRelation: boolean,
+  parallelIndex: number,
+): readonly (readonly [PortDirection, PortDirection])[] {
+  const fromDirections = selfRelation
+    ? PORT_DIRECTIONS
+    : preferredDirections(fromCenter, toCenter);
+  const toDirections = selfRelation
+    ? PORT_DIRECTIONS
+    : preferredDirections(toCenter, fromCenter);
+  const pairs = fromDirections.flatMap((fromDirection, fromIndex) =>
+    toDirections.map((toDirection, toIndex) => ({
+      fromDirection,
+      toDirection,
+      score: fromIndex + toIndex,
+    })),
+  )
+    .filter(({ fromDirection, toDirection }) => !selfRelation || fromDirection !== toDirection)
+    .sort((left, right) =>
+      left.score - right.score
+      || left.fromDirection.localeCompare(right.fromDirection)
+      || left.toDirection.localeCompare(right.toDirection),
+    )
+    .map(({ fromDirection, toDirection }) => [fromDirection, toDirection] as const);
+  const offset = parallelIndex % pairs.length;
+  return [...pairs.slice(offset), ...pairs.slice(0, offset)];
 }
 
-function verticalDetourLayout(
-  fromCenter: Point,
-  toCenter: Point,
-  side: "left" | "right",
-  clearance: number,
-): RelationLayout {
-  const boundaryX = side === "left"
-    ? fromCenter.x - NODE_WIDTH / 2
-    : fromCenter.x + NODE_WIDTH / 2;
-  const targetBoundaryX = side === "left"
-    ? toCenter.x - NODE_WIDTH / 2
-    : toCenter.x + NODE_WIDTH / 2;
-  const routeX = side === "left"
-    ? Math.min(boundaryX, targetBoundaryX) - clearance
-    : Math.max(boundaryX, targetBoundaryX) + clearance;
+function pathLabel(points: readonly Point[], canvasHeight: number): Point {
+  let label = points[0] ?? { x: CANVAS_WIDTH / 2, y: canvasHeight / 2 };
+  let longest = -1;
+  for (let index = 1; index < points.length; index += 1) {
+    const from = points[index - 1]!;
+    const to = points[index]!;
+    const length = Math.abs(to.x - from.x) + Math.abs(to.y - from.y);
+    if (length <= longest) continue;
+    longest = length;
+    label = { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 };
+  }
   return {
-    path: `M ${boundaryX} ${fromCenter.y} L ${routeX} ${fromCenter.y} L ${routeX} ${toCenter.y} L ${targetBoundaryX} ${toCenter.y}`,
-    label: { x: routeX + (side === "left" ? -8 : 8), y: (fromCenter.y + toCenter.y) / 2 },
+    x: Math.min(CANVAS_WIDTH - 10, Math.max(10, label.x)),
+    y: Math.min(canvasHeight - 10, Math.max(10, label.y)),
   };
 }
 
@@ -175,50 +330,27 @@ function relationLayout(model: TopologyModel, relation: RelationDefinition): Rel
   const fromCenter = nodeCenter(model, relation.from_table_id);
   const toCenter = nodeCenter(model, relation.to_table_id);
   const parallelIndex = Math.max(0, parallelRelationIndex(model, relation));
-  if (fromCenter.x === toCenter.x && fromCenter.y === toCenter.y) {
-    return selfRelationLayout(fromCenter, parallelIndex);
+  const selfRelation = relation.from_table_id === relation.to_table_id;
+  const clearance = portClearance(parallelIndex);
+  const obstacles = tableRects(model).map(inflateRect);
+  const canvasHeight = topologyCanvasHeight(model);
+  for (const [fromDirection, toDirection] of relationPortPairs(
+    fromCenter,
+    toCenter,
+    selfRelation,
+    parallelIndex,
+  )) {
+    const fromPort = port(fromCenter, fromDirection, clearance);
+    const toPort = port(toCenter, toDirection, clearance);
+    const route = gridRoute(fromPort.outer, toPort.outer, obstacles, canvasHeight);
+    if (route === undefined) continue;
+    const points = compressPath([fromPort.boundary, ...route, toPort.boundary]);
+    return {
+      path: points.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`).join(" "),
+      label: pathLabel(points, canvasHeight),
+    };
   }
-
-  const sameRow = fromCenter.y === toCenter.y;
-  const sameLane = fromCenter.x === toCenter.x;
-  const laneDistance = Math.abs(toCenter.x - fromCenter.x) / 300;
-  const rowDistance = Math.abs(toCenter.y - fromCenter.y) / ROW_HEIGHT;
-
-  if (sameRow && (laneDistance > 1 || parallelIndex > 0)) {
-    const routedIndex = laneDistance > 1 ? parallelIndex : parallelIndex - 1;
-    const preferredSide = laneDistance > 1 ? "below" : "above";
-    const side = routedIndex % 2 === 0
-      ? preferredSide
-      : preferredSide === "above" ? "below" : "above";
-    return horizontalDetourLayout(
-      fromCenter,
-      toCenter,
-      side,
-      detourClearance(Math.floor(routedIndex / 2)),
-    );
-  }
-  if (sameLane && (rowDistance > 1 || parallelIndex > 0)) {
-    const routedIndex = rowDistance > 1 ? parallelIndex : parallelIndex - 1;
-    const side = routedIndex % 2 === 0 ? "right" : "left";
-    return verticalDetourLayout(
-      fromCenter,
-      toCenter,
-      side,
-      detourClearance(Math.floor(routedIndex / 2)),
-    );
-  }
-
-  const from = nodeBoundaryPoint(fromCenter, toCenter);
-  const to = nodeBoundaryPoint(toCenter, fromCenter);
-  const layout = directRelationLayout(from, to);
-  if (sameRow) {
-    const point = nodePoint(model, relation.from_table_id);
-    return { ...layout, label: { x: layout.label.x, y: point.y + NODE_HEIGHT + 16 } };
-  }
-  if (sameLane) {
-    return { ...layout, label: { x: fromCenter.x + NODE_WIDTH / 2 + 16, y: layout.label.y } };
-  }
-  return layout;
+  throw new Error(`Unable to route topology relation '${relation.relation_id}'`);
 }
 
 export function relationPath(model: TopologyModel, relation: RelationDefinition): string {

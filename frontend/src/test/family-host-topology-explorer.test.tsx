@@ -393,7 +393,27 @@ describe("FamilyTopologyExplorer", () => {
       primary_key: ["sample_id"],
       field_names: ["sample_id", "audit_status"],
     };
-    const geometryTables = [...tables, lastSupportingTable];
+    const laterDerivedTables: TableDefinition[] = [
+      {
+        table_id: "y_quality",
+        schema_ref: "schema.quality.v2",
+        role: "derived",
+        required: false,
+        allow_empty: true,
+        primary_key: ["sample_id"],
+        field_names: ["sample_id", "quality_score"],
+      },
+      {
+        table_id: "z_quality",
+        schema_ref: "schema.quality.v2",
+        role: "derived",
+        required: false,
+        allow_empty: true,
+        primary_key: ["sample_id"],
+        field_names: ["sample_id", "quality_score"],
+      },
+    ];
+    const geometryTables = [...tables, lastSupportingTable, ...laterDerivedTables];
     const geometryRelations: RelationDefinition[] = [
       {
         relation_id: "forward_horizontal",
@@ -468,6 +488,15 @@ describe("FamilyTopologyExplorer", () => {
         missing_policy: "allow_empty",
       },
       {
+        relation_id: "cross_rows_and_lanes",
+        from_table_id: "expression",
+        from_fields: ["sample_id"],
+        to_table_id: "z_quality",
+        to_fields: ["sample_id"],
+        cardinality: "one_to_many",
+        missing_policy: "allow_missing",
+      },
+      {
         relation_id: "left_self",
         from_table_id: "expression",
         from_fields: ["sample_id"],
@@ -493,6 +522,7 @@ describe("FamilyTopologyExplorer", () => {
     expect(nodePoint(model, "sources")).toEqual({ x: 324, y: 192 });
     expect(nodePoint(model, "z_audits")).toEqual({ x: 324, y: 336 });
     expect(nodePoint(model, "quality")).toEqual({ x: 624, y: 48 });
+    expect(nodePoint(model, "z_quality")).toEqual({ x: 624, y: 336 });
 
     for (const relation of model.relations) {
       const path = relationPath(model, relation);
@@ -579,6 +609,15 @@ describe("FamilyTopologyExplorer", () => {
         cardinality: "one_to_one",
         missing_policy: "allow_empty",
       },
+      ...["a", "b", "c", "d"].map((suffix): RelationDefinition => ({
+        relation_id: `self_parallel_${suffix}`,
+        from_table_id: "samples",
+        from_fields: ["sample_id"],
+        to_table_id: "samples",
+        to_fields: ["sample_id"],
+        cardinality: "one_to_one",
+        missing_policy: "allow_empty",
+      })),
     ];
     const model = buildTopologyModel(manifest({ relations: parallelRelations }));
     const paths = model.relations.map((relation) => relationPath(model, relation));
