@@ -49,6 +49,7 @@ export interface BuildState {
   operation_attempts: OperationAttempt[];
   inflight_attempt: OperationAttempt | null;
   completed_operations: Record<string, string>;
+  fixed_operation_checkpoint_identities: FixedOperationCheckpointIdentityState;
 }
 
 export function newBuildState(taskId: string, buildId: string): BuildState {
@@ -58,6 +59,7 @@ export function newBuildState(taskId: string, buildId: string): BuildState {
     operation_attempts: [],
     inflight_attempt: null,
     completed_operations: {},
+    fixed_operation_checkpoint_identities: nativeFixedOperationCheckpointIdentityState(),
   };
 }
 
@@ -134,6 +136,126 @@ function snapshotCheckpointIdentityRecord(
 export interface FixedOperationCheckpointIdentity {
   readonly core_release_identity: string | null | undefined;
   readonly fixed_operation_implementation_component_digest: string | null | undefined;
+}
+
+export type FixedOperationCheckpointMigrationState =
+  | "native"
+  | "legacy_identity_missing";
+
+/**
+ * Per-operation identities persisted in the same atomic BuildState snapshot as
+ * the attempt and completion projection. A legacy state has no identity
+ * evidence and therefore cannot make an old checkpoint reusable.
+ */
+export interface FixedOperationCheckpointIdentityState {
+  readonly schema_version: "1.0";
+  migration_state: FixedOperationCheckpointMigrationState;
+  readonly operations: Record<string, Readonly<FixedOperationCheckpointIdentity>>;
+}
+
+const FIXED_OPERATION_IDENTITY_STATE_KEYS = new Set([
+  "schema_version",
+  "migration_state",
+  "operations",
+]);
+
+function nativeFixedOperationCheckpointIdentityState(): FixedOperationCheckpointIdentityState {
+  return {
+    schema_version: "1.0",
+    migration_state: "native",
+    operations: {},
+  };
+}
+
+function parseFixedOperationCheckpointIdentity(
+  value: unknown,
+  operationId: string,
+): Readonly<FixedOperationCheckpointIdentity> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError(`fixed operation checkpoint identity '${operationId}' must be an object`);
+  }
+  const record = value as Record<string, unknown>;
+  const keys = Reflect.ownKeys(record);
+  if (
+    keys.length !== PERSISTED_IDENTITY_KEYS.size ||
+    keys.some((key) => typeof key !== "string" || !PERSISTED_IDENTITY_KEYS.has(key))
+  ) {
+    throw new TypeError(`fixed operation checkpoint identity '${operationId}' has unknown or missing fields`);
+  }
+  return Object.freeze({
+    core_release_identity: record.core_release_identity as string | null | undefined,
+    fixed_operation_implementation_component_digest:
+      record.fixed_operation_implementation_component_digest as string | null | undefined,
+  });
+}
+
+function parseFixedOperationCheckpointIdentityState(
+  value: unknown,
+): FixedOperationCheckpointIdentityState {
+  if (value === undefined) {
+    return {
+      schema_version: "1.0",
+      migration_state: "legacy_identity_missing",
+      operations: {},
+    };
+  }
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("fixed operation checkpoint identities must be an object");
+  }
+  const record = value as Record<string, unknown>;
+  const keys = Reflect.ownKeys(record);
+  if (
+    keys.length !== FIXED_OPERATION_IDENTITY_STATE_KEYS.size ||
+    keys.some((key) => typeof key !== "string" || !FIXED_OPERATION_IDENTITY_STATE_KEYS.has(key))
+  ) {
+    throw new TypeError("fixed operation checkpoint identities have unknown or missing fields");
+  }
+  if (record.schema_version !== "1.0") {
+    throw new TypeError("fixed operation checkpoint identity schema_version must be '1.0'");
+  }
+  if (record.migration_state !== "native" && record.migration_state !== "legacy_identity_missing") {
+    throw new TypeError("fixed operation checkpoint identity migration_state is invalid");
+  }
+  if (
+    record.operations === null || typeof record.operations !== "object" ||
+    Array.isArray(record.operations)
+  ) {
+    throw new TypeError("fixed operation checkpoint identity operations must be an object");
+  }
+  const operations = Object.fromEntries(Object.entries(record.operations).map(
+    ([operationId, identity]) => [
+      operationId,
+      parseFixedOperationCheckpointIdentity(identity, operationId),
+    ],
+  ));
+  return {
+    schema_version: "1.0",
+    migration_state: record.migration_state,
+    operations,
+  };
+}
+
+/** Persist the identity only as part of a successful fixed operation commit. */
+export function markFixedOperationCheckpointIdentity(
+  state: BuildState,
+  operationId: string,
+  identity: Readonly<FixedOperationCheckpointIdentity>,
+): void {
+  state.fixed_operation_checkpoint_identities.migration_state = "native";
+  state.fixed_operation_checkpoint_identities.operations[operationId] = Object.freeze({
+    core_release_identity: identity.core_release_identity,
+    fixed_operation_implementation_component_digest:
+      identity.fixed_operation_implementation_component_digest,
+  });
+}
+
+/** Return persisted identity evidence for one operation, or null for legacy state. */
+export function fixedOperationCheckpointIdentity(
+  state: BuildState,
+  operationId: string,
+): Readonly<FixedOperationCheckpointIdentity> | null {
+  if (state.fixed_operation_checkpoint_identities.migration_state !== "native") return null;
+  return state.fixed_operation_checkpoint_identities.operations[operationId] ?? null;
 }
 
 export type CheckpointNotReusableCode =
@@ -236,6 +358,7 @@ interface BuildStateFile {
   operation_attempts: unknown[];
   inflight_attempt: unknown;
   completed_operations: Record<string, string>;
+  fixed_operation_checkpoint_identities?: unknown;
 }
 
 /**
@@ -262,6 +385,9 @@ export function loadBuildState(stateDir: string, taskId: string, buildId: string
           ? null
           : parseOperationAttempt(parsed.inflight_attempt),
       completed_operations: parsed.completed_operations,
+      fixed_operation_checkpoint_identities: parseFixedOperationCheckpointIdentityState(
+        parsed.fixed_operation_checkpoint_identities,
+      ),
     };
   }
   return newBuildState(taskId, buildId);
@@ -325,6 +451,7 @@ export async function loadOperationOutput(
     operationId: string;
     operationAttemptId: string;
     outputDigest: string;
+    expectedFiles?: readonly StageOutputFile[];
   },
   cancellationSignal?: AbortSignal | null,
 ): Promise<Record<string, unknown> | null> {
@@ -341,7 +468,9 @@ export async function loadOperationOutput(
       envelope.operation_attempt_id !== options.operationAttemptId ||
       envelope.output_digest !== options.outputDigest ||
       envelope.output_digest !== outputDigest ||
-      envelope.output_sha256 !== outputDigest
+      envelope.output_sha256 !== outputDigest ||
+      (options.expectedFiles !== undefined &&
+        JSON.stringify(envelope.files) !== JSON.stringify(options.expectedFiles))
     ) {
       return null;
     }
@@ -358,6 +487,21 @@ export async function loadOperationOutput(
       if (!fileStat.isFile()) return null;
       if (fileStat.size !== file.size_bytes) return null;
       if ((await sha256FileStream(resolved, cancellationSignal)) !== file.sha256) return null;
+      // A successful hash is not enough when the path can be replaced while
+      // it is being read. Re-stat after hashing so a late replacement or
+      // append cannot turn an unverified byte sequence into a reusable
+      // checkpoint.
+      const afterHash = lstatSync(resolved, { throwIfNoEntry: false });
+      if (
+        afterHash === undefined ||
+        afterHash.isSymbolicLink() ||
+        !afterHash.isFile() ||
+        afterHash.dev !== fileStat.dev ||
+        afterHash.ino !== fileStat.ino ||
+        afterHash.size !== file.size_bytes ||
+        afterHash.mtimeMs !== fileStat.mtimeMs ||
+        afterHash.ctimeMs !== fileStat.ctimeMs
+      ) return null;
     }
     return envelope.output;
   } catch (error) {

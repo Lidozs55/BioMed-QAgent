@@ -33,16 +33,28 @@ import { LockLostError } from "../service/build-lock.js";
 import {
   appendAttempt,
   findReusable,
+  fixedOperationCheckpointIdentity,
   loadBuildState,
   loadOperationOutput,
   loadOperationResultManifest,
   markCompleted,
+  markFixedOperationCheckpointIdentity,
   saveBuildState,
   saveOperationOutput,
   saveOperationResultManifest,
   validateAttemptLogPrefix,
+  verifyFixedOperationCheckpointIdentity,
+  type FixedOperationCheckpointIdentity,
 } from "./checkpoint.js";
-import { computeInputDigest, computeParameterDigest, sha256Json, type DigestScope } from "./digests.js";
+import {
+  computeInputDigest,
+  computeOperationDigest,
+  computeOperationImplementationComponentDigest,
+  computeParameterDigest,
+  digestCoreReleaseIdentity,
+  sha256Json,
+  type DigestScope,
+} from "./digests.js";
 import {
   makeErrorDetail,
   type OperationAttempt,
@@ -171,6 +183,8 @@ export interface ExecutorOptions {
   operationTimeoutMs?: number;
   /** Fixed-slot request; included only in derive checkpoint identity. */
   deriveRequest?: DeterministicDeriveRequest | null;
+  /** Validated server-owned release identity used by fixed-operation reuse. */
+  coreReleaseIdentity?: string | null;
   /**
    * Eager checkpoint rehydration (cross-restart continuation): when true,
    * completed operations with digest-matched, verified result files are
@@ -208,6 +222,7 @@ export class DatasetBuildExecutor {
   private readonly cancellationRequested: (() => boolean) | null;
   private readonly cancellationSignal: AbortSignal | null;
   private readonly parameterScope: Readonly<Record<string, unknown>>;
+  private readonly coreReleaseIdentity: ReturnType<typeof digestCoreReleaseIdentity>;
   private readonly implementationVersions: Readonly<Record<string, string>>;
   private readonly sourceAssets: Readonly<Record<string, SourceAsset>>;
   private readonly mappingAssets: Readonly<Record<string, SourceAsset>>;
@@ -235,6 +250,9 @@ export class DatasetBuildExecutor {
     this.cancellationRequested = options.cancellationRequested ?? null;
     this.cancellationSignal = options.cancellationSignal ?? null;
     this.parameterScope = options.parameterScope ?? {};
+    this.coreReleaseIdentity = digestCoreReleaseIdentity({
+      coreReleaseIdentity: options.coreReleaseIdentity ?? undefined,
+    });
     this.implementationVersions = options.implementationVersions ?? {};
     this.sourceAssets = options.sourceAssets ?? {};
     this.mappingAssets = options.mappingAssets ?? {};
@@ -358,6 +376,23 @@ export class DatasetBuildExecutor {
         computeParameterDigest(op, scope),
       );
       if (reusable === null || reusable.output_digest !== outputDigest) continue;
+      if (!this.isReusableCheckpointIdentity(op, state)) {
+        delete state.completed_operations[op.operation_id];
+        saveBuildState(this.stateDir, state);
+        continue;
+      }
+      const resultManifest = loadOperationResultManifest(this.stateDir, op.operation_id);
+      if (
+        resultManifest === null ||
+        resultManifest.status !== "succeeded" ||
+        resultManifest.operation_attempt_id !== reusable.operation_attempt_id ||
+        resultManifest.output_digest !== reusable.output_digest ||
+        resultManifest.implementation_digest !== this.implementationDigest(op)
+      ) {
+        delete state.completed_operations[op.operation_id];
+        saveBuildState(this.stateDir, state);
+        continue;
+      }
       const loaded = await loadOperationOutput(this.stateDir, {
         taskRoot: this.taskRoot,
         taskId: this.taskId,
@@ -365,6 +400,7 @@ export class DatasetBuildExecutor {
         operationId: op.operation_id,
         operationAttemptId: reusable.operation_attempt_id,
         outputDigest: reusable.output_digest,
+        expectedFiles: resultManifest.output_files,
       }, this.cancellationSignal);
       if (loaded === null) {
         // Fail closed: a completed marker whose result files are missing or
@@ -545,10 +581,38 @@ export class DatasetBuildExecutor {
   }
 
   private implementationDigest(op: OperationSpec): string {
-    return sha256Json({
-      operation_id: op.operation_id,
-      implementation_version: this.implementationVersions[op.operation_id] ?? null,
+    return computeOperationDigest(op, {
+      coreReleaseIdentity: this.coreReleaseIdentity,
+      implementationVersions: this.implementationVersions,
     });
+  }
+
+  private checkpointIdentity(op: OperationSpec): FixedOperationCheckpointIdentity {
+    return Object.freeze({
+      core_release_identity: this.coreReleaseIdentity,
+      fixed_operation_implementation_component_digest:
+        computeOperationImplementationComponentDigest(op, {
+          implementationVersions: this.implementationVersions,
+        }),
+    });
+  }
+
+  private isReusableCheckpointIdentity(
+    op: OperationSpec,
+    state: ReturnType<typeof loadBuildState>,
+  ): boolean {
+    const persisted = fixedOperationCheckpointIdentity(state, op.operation_id);
+    const decision = verifyFixedOperationCheckpointIdentity(
+      persisted,
+      Object.freeze({
+        coreReleaseIdentity: this.coreReleaseIdentity,
+        implementationComponentDigest:
+          computeOperationImplementationComponentDigest(op, {
+            implementationVersions: this.implementationVersions,
+          }),
+      }),
+    );
+    return decision.kind === "reusable";
   }
 
   /** Sorted, deduplicated asset ids covered by the input digest closure. */
@@ -717,6 +781,12 @@ export class DatasetBuildExecutor {
       throw error;
     }
 
+    // The runner may finish after cancellation or a stale authority fence;
+    // never publish its files, manifest, or identity into reusable state.
+    if (this.isCancelled()) {
+      this.discardOutputs?.(op);
+      throw new BuildCancelledError(`operation ${op.operation_id} completed after cancel request`);
+    }
     const outputDigest = sha256Json(result.output);
     const finished = this.nowIso();
     saveOperationOutput(this.stateDir, {
@@ -753,6 +823,7 @@ export class DatasetBuildExecutor {
     appendAttempt(state, succeeded);
     state.inflight_attempt = null;
     markCompleted(state, op.operation_id, outputDigest);
+    markFixedOperationCheckpointIdentity(state, op.operation_id, this.checkpointIdentity(op));
     saveBuildState(this.stateDir, state);
     this.persistAttempts();
 
@@ -778,11 +849,14 @@ export class DatasetBuildExecutor {
     if (state === null) throw new Error("build state not loaded");
     const reusable = findReusable(state, op.operation_id, inputDigest, parameterDigest);
     if (reusable === null || reusable.output_digest === null) return false;
+    if (!this.isReusableCheckpointIdentity(op, state)) return false;
     const resultManifest = loadOperationResultManifest(this.stateDir, op.operation_id);
     if (
       resultManifest === null ||
+      resultManifest.status !== "succeeded" ||
       resultManifest.operation_attempt_id !== reusable.operation_attempt_id ||
-      resultManifest.output_digest !== reusable.output_digest
+      resultManifest.output_digest !== reusable.output_digest ||
+      resultManifest.implementation_digest !== this.implementationDigest(op)
     ) return false;
     const completed = state.completed_operations[op.operation_id];
     if (completed !== reusable.output_digest) return false;
@@ -793,6 +867,7 @@ export class DatasetBuildExecutor {
       operationId: op.operation_id,
       operationAttemptId: reusable.operation_attempt_id,
       outputDigest: reusable.output_digest,
+      expectedFiles: resultManifest.output_files,
     }, this.cancellationSignal);
     if (loaded === null) return false;
 
@@ -979,6 +1054,7 @@ export class DatasetBuildExecutor {
         : this.parameterScope,
       sourceAssets: this.sourceAssets,
       mappingAssets: this.mappingAssets,
+      coreReleaseIdentity: this.coreReleaseIdentity,
       implementationVersions: this.implementationVersions,
     };
   }
