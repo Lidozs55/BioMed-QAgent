@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import type { DatasetManifestV2, TableDefinition } from "@biomed/contracts";
@@ -188,6 +188,28 @@ describe("FamilyTopologyExplorer", () => {
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.queryByRole("dialog", { name: "关系详情" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /expression.*主表/ })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("returns focus to the latest triggering node or relation button after Escape closes the inspector", async () => {
+    render(<FamilyTopologyExplorer manifest={manifest()} publication={null} />);
+
+    const tableButton = screen.getByRole("button", { name: /expression.*主表/ });
+    const relationButton = screen.getByRole("button", { name: /查看关系 expression_samples/ });
+    tableButton.focus();
+    expect(document.activeElement).toBe(tableButton);
+
+    fireEvent.click(tableButton);
+    expect(screen.getByRole("dialog", { name: "表详情" })).toBeVisible();
+    relationButton.focus();
+    fireEvent.click(relationButton);
+    expect(screen.getByRole("dialog", { name: "关系详情" })).toBeVisible();
+    const closeButton = screen.getByRole("button", { name: "Close" });
+    closeButton.focus();
+    expect(document.activeElement).toBe(closeButton);
+    fireEvent.keyDown(closeButton, { key: "Escape" });
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "关系详情" })).not.toBeInTheDocument());
+    await waitFor(() => expect(document.activeElement).toBe(relationButton));
   });
 
   it("renders one source and target field pair per relation row", () => {

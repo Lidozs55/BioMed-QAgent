@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import type { DatasetManifestV2, DatasetPublication, RelationDefinition } from "@biomed/contracts";
 
 import { Badge } from "@/components/ui/badge";
@@ -127,7 +127,7 @@ export function TopologySummary({
 export interface RelationTableProps {
   readonly model: TopologyModel;
   readonly selection: TopologySelection;
-  readonly onSelect: (selection: TopologySelection) => void;
+  readonly onSelect: (selection: TopologySelection, trigger: HTMLElement) => void;
 }
 
 export function RelationTable({ model, selection, onSelect }: RelationTableProps) {
@@ -180,7 +180,9 @@ export function RelationTable({ model, selection, onSelect }: RelationTableProps
                         aria-label={`查看关系 ${relation.relation_id}`}
                         aria-pressed={selected}
                         className="h-auto max-w-full justify-start p-0 text-left font-mono text-xs"
-                        onClick={() => onSelect({ kind: "relation", id: relation.relation_id })}
+                        onClick={(event) =>
+                          onSelect({ kind: "relation", id: relation.relation_id }, event.currentTarget)
+                        }
                       >
                         {relation.relation_id}
                       </Button>
@@ -211,15 +213,21 @@ export function RelationTable({ model, selection, onSelect }: RelationTableProps
 export function FamilyTopologyExplorer({ manifest, publication }: FamilyTopologyExplorerProps) {
   const model = useMemo(() => buildTopologyModel(manifest), [manifest]);
   const [selection, setSelection] = useState<TopologySelection>(null);
+  const focusReturnRef = useRef<HTMLElement | null>(null);
+  const handleSelect = useCallback((nextSelection: TopologySelection, trigger: HTMLElement) => {
+    focusReturnRef.current = trigger;
+    setSelection(nextSelection);
+  }, []);
 
   return (
     <div className="flex min-w-0 flex-col gap-4">
       <TopologySummary model={model} manifest={manifest} publication={publication} />
-      <TopologyMap model={model} selection={selection} onSelect={setSelection} />
-      <RelationTable model={model} selection={selection} onSelect={setSelection} />
+      <TopologyMap model={model} selection={selection} onSelect={handleSelect} />
+      <RelationTable model={model} selection={selection} onSelect={handleSelect} />
       <TopologyInspector
         model={model}
         selection={selection}
+        finalFocus={focusReturnRef}
         onOpenChange={(open) => {
           if (!open) setSelection(null);
         }}

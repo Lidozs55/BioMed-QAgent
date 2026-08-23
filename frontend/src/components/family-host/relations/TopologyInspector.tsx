@@ -1,3 +1,4 @@
+import type { RefObject } from "react";
 import type { RelationDefinition, TableDefinition } from "@biomed/contracts";
 
 import {
@@ -55,6 +56,7 @@ const MISSING_POLICY_LABELS: Record<RelationDefinition["missing_policy"], string
 export interface TopologyInspectorProps {
   readonly model: TopologyModel;
   readonly selection: TopologySelection;
+  readonly finalFocus: RefObject<HTMLElement | null>;
   readonly onOpenChange: (open: boolean) => void;
 }
 
@@ -327,14 +329,19 @@ function RelationInspector({ model, relation }: { readonly model: TopologyModel;
   );
 }
 
-export function TopologyInspector({ model, selection, onOpenChange }: TopologyInspectorProps) {
+export function TopologyInspector({ model, selection, finalFocus, onOpenChange }: TopologyInspectorProps) {
   const table = selection?.kind === "table" ? model.tablesById.get(selection.id) : undefined;
   const relation = selection?.kind === "relation" ? model.relationsById.get(selection.id) : undefined;
   const isRelation = relation !== undefined;
 
   return (
     <Sheet modal={false} open={selection !== null} onOpenChange={onOpenChange}>
-      <SheetContent side="right" showOverlay={false} className="gap-0 overflow-y-auto sm:max-w-xl">
+      <SheetContent
+        side="right"
+        showOverlay={false}
+        finalFocus={finalFocus}
+        className="gap-0 overflow-y-auto sm:max-w-xl"
+      >
         <SheetHeader className="border-b">
           <SheetTitle>{isRelation ? "关系详情" : "表详情"}</SheetTitle>
           <SheetDescription>

@@ -40,7 +40,7 @@ const ROLE_BADGE_VARIANTS: Record<TableRole, "default" | "secondary" | "outline"
 export interface TopologyMapProps {
   readonly model: TopologyModel;
   readonly selection: TopologySelection;
-  readonly onSelect: (selection: TopologySelection) => void;
+  readonly onSelect: (selection: TopologySelection, trigger: HTMLElement) => void;
 }
 
 export function nodePoint(model: TopologyModel, tableId: string) {
@@ -94,7 +94,7 @@ function TopologyNode({
   readonly model: TopologyModel;
   readonly table: TableDefinition;
   readonly selection: TopologySelection;
-  readonly onSelect: (selection: TopologySelection) => void;
+  readonly onSelect: (selection: TopologySelection, trigger: HTMLElement) => void;
 }) {
   const selected = selection?.kind === "table" && selection.id === table.table_id;
   const connected = relationsForTable(model, table.table_id).some((relation) =>
@@ -114,7 +114,7 @@ function TopologyNode({
         width: NODE_WIDTH,
         height: NODE_HEIGHT,
       }}
-      onClick={() => onSelect({ kind: "table", id: table.table_id })}
+      onClick={(event) => onSelect({ kind: "table", id: table.table_id }, event.currentTarget)}
     >
       <span className="flex w-full min-w-0 items-center justify-between gap-2">
         <span className="min-w-0 truncate font-mono text-xs font-semibold text-foreground">
