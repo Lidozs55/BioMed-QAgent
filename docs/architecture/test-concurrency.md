@@ -1,46 +1,44 @@
 # Test Concurrency Budget
 
-> 2026-08 测试并发调优：本地默认**有界并发**，CI 才允许扩大 worker pool。
+> 2026-08 测试并发调优：本地与 CI 的全量测试统一限制为最多 **2** 个 workspace、worker 或文件内并发执行单元，避免开发机和共享 runner 触发 CPU/功耗限制。
 
 ## 为什么
 
-Vitest 非 watch 模式默认按 `os.availableParallelism()` 启动 worker。根目录
-`pnpm test` 又是 `pnpm -r`（默认 4 个 workspace 并发），叠加后很容易出现：
+Vitest 非 watch 模式默认按 `os.availableParallelism()` 启动 worker。根目录递归执行多个 workspace 时，如果每层独立扩池，会形成：
 
 ```text
-workspace 并发 × vitest workers ≈ 4 × 16 = 64 个执行线程
+workspace 并发 × vitest workers × test.concurrent
 ```
 
-笔记本上会瞬间吃满 Package Power → 功耗墙 → 全核降频，更热且未必更快。
+这会瞬间吃满 CPU、触发功耗墙或共享 runner 限流，并放大 timing-sensitive 测试抖动。仓库默认因此采用固定值 2，而不是按机器核数或百分比自动扩大。
 
-## 当前预算（本机默认）
+## 当前预算
 
-| 层 | 控制 | 默认值 | CI（`CI=true`） |
-| --- | --- | --- | --- |
-| workspace 并发 | 根 `package.json` `test` 脚本 `--workspace-concurrency=2` | 2 | 2 |
-| server | `server/vitest.config.ts` `pool: "forks"` | 2 workers / 4 concurrent | 75% / 8 |
-| frontend | `frontend/vitest.config.ts` `pool: "threads"` | 4 workers / 4 concurrent | 75% / 8 |
-| contracts | `packages/contracts/vitest.config.ts` `pool: "threads"` | 2 workers / 2 concurrent | 75% / 4 |
+| 层 | 控制 | 本地与 CI 默认值 |
+| --- | --- | --- |
+| workspace 并发 | 根 `package.json` 的 `test` / `test:full` | 2 |
+| server | `server/vitest.config.ts`，forks pool | 2 workers / 2 concurrent |
+| frontend | `frontend/vitest.config.ts`，threads pool | 2 workers / 2 concurrent |
+| contracts | `packages/contracts/vitest.config.ts`，threads pool | 2 workers / 2 concurrent |
 
-最大活跃执行单元 ≈ 2 workspace × 2~4 worker ≈ 4~8，远低于 64。
+`pnpm test` 与 `pnpm test:full` 都遵守同一上限；`test:full` 表示运行完整测试集合，不再表示解除并发限制。
 
 ## 选型依据
 
-- **server → forks**：server 测试大量涉及 SQLite / 文件系统 / 子进程
-  （Python bridge、pi、playwright、真实 child process），fork 进程池隔离
-  更稳，且便于按需降 worker。
-- **frontend / contracts → threads**：纯 TS / jsdom 无子进程，threads 更快。
-- **`maxConcurrency`**：限制测试文件内部 `test.concurrent` 的并行度。
+- **server → forks**：server 测试涉及 SQLite、文件系统和子进程，fork 隔离更稳。
+- **frontend / contracts → threads**：纯 TS/jsdom 使用 threads，但 worker 数仍固定为 2。
+- **`maxConcurrency=2`**：同时限制测试文件内部的 `test.concurrent`。
 
-## 如何覆盖
+## 临时覆盖
 
-- 本地全速（不推荐日常用）：`pnpm test:full`（去掉 workspace 并发限制；
-  vitest 层仍看 `CI` 环境变量）。
-- CI（GitHub Actions 自带 `CI=true`）自动放开 vitest worker 上限。
-- 临时降速：`pnpm --filter @biomed/server test -- --maxWorkers=1` 等
-  vitest CLI 参数直接透传。
+排查单个 timing-sensitive 测试时可以进一步降低，例如：
+
+```bash
+pnpm --filter @biomed/server test -- --maxWorkers=1 --maxConcurrency=1
+```
+
+不得在日常 full gate 或 CI 中把并发提高到 2 以上；如果未来需要提高，必须先提交代表性耗时、CPU 和 flaky-rate 证据，并同步本文及三个 Vitest 配置。
 
 ## 原则
 
-> 本地测试默认不允许按照 `os.availableParallelism()` 吃满 CPU；CI 才允许
-> 扩大 worker pool。固定值（而非百分比）保证不同开发机行为一致。
+> 全量测试默认最多并行 2；focused 单文件测试可正常运行，但仍不得通过额外参数把 worker/concurrency 提高到 2 以上。
