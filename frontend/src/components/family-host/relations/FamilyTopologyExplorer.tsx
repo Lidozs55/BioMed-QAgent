@@ -29,6 +29,7 @@ import { Button } from "@/components/ui/button";
 
 import { TopologyInspector } from "./TopologyInspector";
 import { ROLE_LABELS, TopologyMap } from "./TopologyMap";
+import { restoreTopologyFocus } from "./topology-focus";
 import {
   buildTopologyModel,
   type TopologyModel,
@@ -220,14 +221,10 @@ export function FamilyTopologyExplorer({ manifest, publication }: FamilyTopology
     setSelection(nextSelection);
   }, []);
   const handleInspectorOpenChange = useCallback((open: boolean) => {
-    if (open) return;
-    setSelection(null);
-    queueMicrotask(() => {
-      const trigger = focusReturnRef.current;
-      if (document.activeElement === document.body && trigger?.isConnected) {
-        trigger.focus();
-      }
-    });
+    if (!open) setSelection(null);
+  }, []);
+  const handleInspectorOpenChangeComplete = useCallback((open: boolean) => {
+    if (!open) restoreTopologyFocus(focusReturnRef.current);
   }, []);
 
   return (
@@ -240,6 +237,7 @@ export function FamilyTopologyExplorer({ manifest, publication }: FamilyTopology
         selection={selection}
         finalFocus={finalFocus}
         onOpenChange={handleInspectorOpenChange}
+        onOpenChangeComplete={handleInspectorOpenChangeComplete}
       />
     </div>
   );

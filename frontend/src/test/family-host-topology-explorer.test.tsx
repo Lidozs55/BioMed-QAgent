@@ -6,6 +6,7 @@ import type { DatasetManifestV2, TableDefinition } from "@biomed/contracts";
 import { FamilyTopologyExplorer } from "@/components/family-host/relations/FamilyTopologyExplorer";
 import { nodePoint, relationPath } from "@/components/family-host/relations/TopologyMap";
 import { buildTopologyModel } from "@/components/family-host/relations/topology-model";
+import { restoreTopologyFocus } from "@/components/family-host/relations/topology-focus";
 
 const tables: TableDefinition[] = [
   {
@@ -117,6 +118,18 @@ function manifest(overrides: Partial<DatasetManifestV2> = {}): DatasetManifestV2
 }
 
 describe("FamilyTopologyExplorer", () => {
+  it("restores focus to a connected topology trigger", () => {
+    const trigger = document.createElement("button");
+    document.body.append(trigger);
+    const other = document.createElement("button");
+    document.body.append(other);
+    other.focus();
+
+    restoreTopologyFocus(trigger);
+
+    expect(document.activeElement).toBe(trigger);
+  });
+
   it("opens relation and table details from the topology map", () => {
     render(<FamilyTopologyExplorer manifest={manifest()} publication={null} />);
 

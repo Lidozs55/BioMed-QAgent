@@ -57,6 +57,7 @@ export interface TopologyInspectorProps {
   readonly selection: TopologySelection;
   readonly finalFocus: () => HTMLElement | null;
   readonly onOpenChange: (open: boolean) => void;
+  readonly onOpenChangeComplete: (open: boolean) => void;
 }
 
 function formatFields(fields: readonly string[]): string {
@@ -328,13 +329,24 @@ function RelationInspector({ model, relation }: { readonly model: TopologyModel;
   );
 }
 
-export function TopologyInspector({ model, selection, finalFocus, onOpenChange }: TopologyInspectorProps) {
+export function TopologyInspector({
+  model,
+  selection,
+  finalFocus,
+  onOpenChange,
+  onOpenChangeComplete,
+}: TopologyInspectorProps) {
   const table = selection?.kind === "table" ? model.tablesById.get(selection.id) : undefined;
   const relation = selection?.kind === "relation" ? model.relationsById.get(selection.id) : undefined;
   const isRelation = relation !== undefined;
 
   return (
-    <Sheet modal={false} open={selection !== null} onOpenChange={onOpenChange}>
+    <Sheet
+      modal={false}
+      open={selection !== null}
+      onOpenChange={onOpenChange}
+      onOpenChangeComplete={onOpenChangeComplete}
+    >
       <SheetContent
         side="right"
         showOverlay={false}
