@@ -54,7 +54,9 @@ function input(overrides: Partial<B3BackendDecisionInput> = {}): B3BackendDecisi
     measured: measuredDecision(),
     factory: {
       factoryId: "isolated-tuple-index.v1",
-      createIndex: () => ({ indexId: "index", close: async () => {} }),
+      createIndex: async () => {
+        throw new Error("the backend gate must never invoke the factory");
+      },
     },
     snapshotImmutable: true,
     parityProof: { digest: "ab".repeat(32), ref: "b3-parity/evidence/1" },
@@ -126,7 +128,14 @@ describe("C-T4/T11 B3 backend decision gate", () => {
       { name: "missing factory", overrides: { factory: null }, reason: "disk_unavailable" },
       {
         name: "empty factory id",
-        overrides: { factory: { factoryId: " ", createIndex: () => ({ indexId: "i", close: async () => {} }) } },
+        overrides: {
+          factory: {
+            factoryId: " ",
+            createIndex: async () => {
+              throw new Error("the backend gate must never invoke the factory");
+            },
+          },
+        },
         reason: "disk_unavailable",
       },
       { name: "missing parity proof", overrides: { parityProof: null }, reason: "parity_proof_missing" },

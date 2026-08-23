@@ -23,6 +23,17 @@ import { computeHILEvidenceDigest } from "../contracts/hil-evidence.js";
 import { packageDigest } from "../publish/manifest.js";
 import { promotePublication, type PublishResult } from "../publish/publisher.js";
 import { validateMultiTableCandidate } from "../validation/multitable.js";
+import {
+  PRODUCTION_B3_CONFIGURED_HEAP_BYTES,
+  PRODUCTION_B3_CONFIGURED_TEMP_BYTES,
+  PRODUCTION_B3_DISK_BATCH_SIZE,
+  PRODUCTION_B3_DISK_QUOTA_BYTES_PER_INDEX,
+  PRODUCTION_B3_PARITY_PROOF,
+  PRODUCTION_B3_RESOURCE_POLICY,
+  createProductionB3DiskFactory,
+} from "../validation/b3-production-policy.js";
+import type { B3CleanupCapability } from "../validation/b3-backend-decision/index.js";
+import type { ResourceBaselinePolicy } from "../validation/resource-baseline.js";
 
 interface DynamicPublicationHILInput {
   readonly build_id: string | null;
@@ -51,6 +62,18 @@ export interface PublishDynamicFamilyInput {
   readonly signal?: AbortSignal;
   readonly publishedAt?: string;
   readonly hilGate?: DynamicPublicationHILGate | null;
+  /**
+   * Production B3 resource/disk lane overrides (tests). Omitted values use
+   * the benchmark-backed production policy and configured budgets.
+   */
+  readonly b3Validation?: PublishDynamicFamilyB3Options;
+}
+
+/** Measured resource policy and configured budgets for the production B3 lane. */
+export interface PublishDynamicFamilyB3Options {
+  readonly policy: ResourceBaselinePolicy;
+  readonly configuredHeapBytes: number;
+  readonly configuredTempBytes: number;
 }
 
 export interface PublishDynamicFamilyResult {
@@ -74,7 +97,7 @@ export async function publishDynamicFamily(
   await rm(path.join(outputDir, "tables"), { recursive: true, force: true });
   for (const mutableFile of [
     "schema.json", "provenance.json", "product_assessment.json",
-    "validation_report.json", "dataset_manifest.json",
+    "validation_report.json", "resource_report.json", "dataset_manifest.json",
   ]) {
     await rm(path.join(outputDir, mutableFile), { force: true });
   }
@@ -119,16 +142,73 @@ export async function publishDynamicFamily(
     });
   }
   await mkdir(input.workspaceRoot, { recursive: true });
+  const b3Policy = input.b3Validation?.policy ?? PRODUCTION_B3_RESOURCE_POLICY;
+  const b3ConfiguredHeapBytes = input.b3Validation?.configuredHeapBytes
+    ?? PRODUCTION_B3_CONFIGURED_HEAP_BYTES;
+  const b3ConfiguredTempBytes = input.b3Validation?.configuredTempBytes
+    ?? PRODUCTION_B3_CONFIGURED_TEMP_BYTES;
+  const b3IndexRoot = path.join(input.taskRoot, "builds", input.buildId, "b3-index");
+  await mkdir(b3IndexRoot, { recursive: true });
+  const b3Cleanup: B3CleanupCapability = {
+    ownerId: `${input.taskId}:${input.buildId}`,
+    cleanup: async () => {
+      await rm(b3IndexRoot, { recursive: true, force: true });
+    },
+  };
+  let validationFailed = false;
   const b3 = await validateMultiTableCandidate({
-    task_id: input.taskId,
-    build_id: input.buildId,
-    candidate: candidateReference(candidate),
-    tables: validationTables,
-    relations: candidate.relations,
-    trusted_root: outputDir,
-    forbidden_roots: [input.workspaceRoot],
-    policy: { token_preservation_rules: [], profile_relation_missing_policies: {} },
-  }, input.signal);
+      task_id: input.taskId,
+      build_id: input.buildId,
+      candidate: candidateReference(candidate),
+      tables: validationTables,
+      relations: candidate.relations,
+      trusted_root: outputDir,
+      forbidden_roots: [input.workspaceRoot],
+      policy: { token_preservation_rules: [], profile_relation_missing_policies: {} },
+    }, input.signal, {
+      resourceBaseline: {
+        policy: b3Policy,
+        configuredHeapBytes: b3ConfiguredHeapBytes,
+        configuredTempBytes: b3ConfiguredTempBytes,
+        telemetrySink: async (telemetry) => {
+          await writeFile(
+            path.join(outputDir, "resource_report.json"),
+            `${JSON.stringify(telemetry, null, 2)}\n`,
+            "utf8",
+          );
+        },
+      },
+      b3Backend: {
+        owner: {
+          taskId: input.taskId,
+          buildId: input.buildId,
+          generation: input.execution.receipt.generation,
+        },
+        factory: createProductionB3DiskFactory(),
+        snapshotImmutable: true,
+        parityProof: PRODUCTION_B3_PARITY_PROOF,
+        cleanup: b3Cleanup,
+        directory: b3IndexRoot,
+        quotaBytesPerIndex: PRODUCTION_B3_DISK_QUOTA_BYTES_PER_INDEX,
+        batchSize: PRODUCTION_B3_DISK_BATCH_SIZE,
+      },
+    }).catch((error: unknown) => {
+      validationFailed = true;
+      throw error;
+    }).finally(async () => {
+      // The validator cleans individual indexes, but task ownership also
+      // requires removing the parent directory on every validation path. Do
+      // not let owner cleanup replace an error from validation itself.
+      try {
+        await b3Cleanup.cleanup({
+          taskId: input.taskId,
+          buildId: input.buildId,
+          generation: input.execution.receipt.generation,
+        });
+      } catch (cleanupError) {
+        if (!validationFailed) throw cleanupError;
+      }
+    });
   const failed = b3.checks.filter((check) => !check.passed);
   const requiresHilAcceptance = input.execution.materialization.schemas.some((schema) =>
     schema.fields.some((field) => field.name === "review_status" || field.name === "human_review_status"),

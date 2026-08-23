@@ -178,33 +178,6 @@ export interface MultiTableResourceValidationOptions {
   telemetrySink: MultiTableResourceTelemetrySink;
 }
 
-/**
- * Explicit C-T11 staging-only opt-in for the real disk-backed PK TupleIndex.
- * The owner must be the current task/generation; the validator checks both
- * before creating any index and rechecks each created index binding.
- */
-export interface MultiTablePrimaryKeyDiskIndexOptions {
-  owner: {
-    taskId: string;
-    generation: number;
-  };
-  currentGeneration: number;
-  directory?: string;
-  quotaBytesPerIndex: number;
-  batchSize?: number;
-}
-
-/**
- * Explicit C-T4 opt-in for validateMultiTableCandidate. Omitting this object
- * preserves the legacy small-input path and return shape, but that path is not
- * Family Host large-input admission.
- */
-export interface MultiTableValidationOptions {
-  resourceBaseline: MultiTableResourceValidationOptions;
-  /** PK-only C-T11 slice. FK/cardinality indexes remain memory-backed. */
-  stagingPrimaryKeyDiskIndex?: MultiTablePrimaryKeyDiskIndexOptions;
-}
-
 const MAX_SAFE_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 
 function blankTelemetry(

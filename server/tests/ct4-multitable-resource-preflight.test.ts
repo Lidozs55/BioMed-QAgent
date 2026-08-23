@@ -13,13 +13,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MultiTableValidationRequest } from "../src/dataset/contracts/validation.js";
 import { OperationAbortedError } from "../src/dataset/cooperative.js";
 import {
-  DiskIndexOwnershipError,
   DiskIndexResourceLimitError,
   TupleIndex,
+  createTupleIndex,
   type Tuple,
 } from "../src/dataset/validation/disk-index.js";
 import {
   validateMultiTableCandidate,
+  type MultiTableB3BackendOptions,
   type MultiTableResourcePreflightTelemetry,
   type MultiTableValidationOptions,
 } from "../src/dataset/validation/multitable.js";
@@ -168,6 +169,53 @@ async function validationRequest(content = "row_id\nrow-1\n"): Promise<MultiTabl
 
 function resourceSignal(): AbortSignal {
   return new AbortController().signal;
+}
+
+/** Production-shaped factory that creates the real disk TupleIndex. */
+function diskFactory(): MultiTableB3BackendOptions["factory"] {
+  return {
+    factoryId: "test-tuple-index.v1",
+    createIndex: async (options) => createTupleIndex({
+      mode: "disk",
+      owner: { taskId: options.owner.taskId, generation: options.owner.generation },
+      directory: options.directory,
+      quotaBytes: options.quotaBytes,
+      batchSize: options.batchSize,
+    }),
+  };
+}
+
+/** Production B3 backend capability for one Core-owned validation. */
+function b3Backend(
+  request: MultiTableValidationRequest,
+  overrides: Partial<MultiTableB3BackendOptions> = {},
+): MultiTableB3BackendOptions {
+  return {
+    owner: { taskId: request.task_id, buildId: request.build_id, generation: 3 },
+    factory: diskFactory(),
+    snapshotImmutable: true,
+    parityProof: { digest: "ab".repeat(32), ref: "b3-parity/evidence/test-1" },
+    cleanup: { ownerId: `b3:${request.task_id}`, cleanup: async () => {} },
+    quotaBytesPerIndex: 64 * 1024 * 1024,
+    ...overrides,
+  };
+}
+
+/** Above-threshold options that force the disk decision for one table. */
+function diskOptions(
+  request: MultiTableValidationRequest,
+  telemetrySink: MultiTableValidationOptions["resourceBaseline"]["telemetrySink"],
+  overrides: Partial<MultiTableB3BackendOptions> = {},
+): MultiTableValidationOptions {
+  const policy = {
+    ...basePolicy,
+    memoryThresholdBytes: 0,
+    tempQuotaBytes: 128 * 1024 * 1024,
+  };
+  const options = resourceOptions(telemetrySink, policy);
+  options.resourceBaseline.configuredTempBytes = 128 * 1024 * 1024;
+  options.b3Backend = b3Backend(request, overrides);
+  return options;
 }
 
 function deterministicTelemetry(
@@ -449,7 +497,6 @@ describe("C-T4 multi-table measured resource preflight", () => {
       memoryThresholdBytes: 1_000_000,
       tempQuotaBytes: 128 * 1024 * 1024,
     };
-    const diskPolicy = { ...memoryPolicy, memoryThresholdBytes: 0 };
     const memoryOptions = resourceOptions((event) => {
       memoryTelemetry.push(event);
     }, memoryPolicy);
@@ -460,17 +507,16 @@ describe("C-T4 multi-table measured resource preflight", () => {
     const addBatchSpy = vi.spyOn(TupleIndex.prototype, "addBatch");
     const primaryKeyCheckSpy = vi.spyOn(TupleIndex.prototype, "primaryKeyCheck");
     const cleanupSpy = vi.spyOn(TupleIndex.prototype, "cleanup");
-    const diskOptions = resourceOptions((event) => {
-      diskTelemetry.push(event);
-    }, diskPolicy);
-    diskOptions.resourceBaseline.configuredTempBytes = 128 * 1024 * 1024;
-    diskOptions.stagingPrimaryKeyDiskIndex = {
-      owner: { taskId: request.task_id, generation: 4 },
-      currentGeneration: 4,
-      quotaBytesPerIndex: 64 * 1024 * 1024,
-      batchSize: 2,
-    };
-    const disk = await validateMultiTableCandidate(request, resourceSignal(), diskOptions);
+    const disk = await validateMultiTableCandidate(
+      request,
+      resourceSignal(),
+      diskOptions(request, (event) => {
+        diskTelemetry.push(event);
+      }, {
+        owner: { taskId: request.task_id, buildId: request.build_id, generation: 4 },
+        batchSize: 2,
+      }),
+    );
 
     expect(createSpy).toHaveBeenCalledWith(expect.objectContaining({
       mode: "disk",
@@ -492,18 +538,9 @@ describe("C-T4 multi-table measured resource preflight", () => {
 
   it("uses the selected disk PK result without falling back to the Map result", async () => {
     const request = await validationRequest();
-    const policy = {
-      ...basePolicy,
-      memoryThresholdBytes: 0,
-      tempQuotaBytes: 128 * 1024 * 1024,
-    };
-    const options = resourceOptions(() => undefined, policy);
-    options.resourceBaseline.configuredTempBytes = 128 * 1024 * 1024;
-    options.stagingPrimaryKeyDiskIndex = {
-      owner: { taskId: request.task_id, generation: 5 },
-      currentGeneration: 5,
-      quotaBytesPerIndex: 64 * 1024 * 1024,
-    };
+    const options = diskOptions(request, () => undefined, {
+      owner: { taskId: request.task_id, buildId: request.build_id, generation: 5 },
+    });
     vi.spyOn(TupleIndex.prototype, "primaryKeyCheck").mockReturnValue({
       duplicateKeys: 7,
       nullOrBlankRows: 0,
@@ -519,44 +556,52 @@ describe("C-T4 multi-table measured resource preflight", () => {
   });
 
   it.each([
-    ["another task", { taskId: "task_other", generation: 3 }, 3],
-    ["a stale generation", { taskId: "task_ct4", generation: 2 }, 3],
-  ])("rejects disk index ownership for %s before index creation", async (_label, owner, currentGeneration) => {
+    ["another task", { taskId: "task_other", buildId: "build_ct4", generation: 3 }],
+    ["another build", { taskId: "task_ct4", buildId: "build_other", generation: 3 }],
+  ])("fails closed on %s before any index creation", async (_label, owner) => {
     const request = await validationRequest();
-    const policy = {
-      ...basePolicy,
-      memoryThresholdBytes: 0,
-      tempQuotaBytes: 128 * 1024 * 1024,
-    };
-    const options = resourceOptions(() => undefined, policy);
-    options.resourceBaseline.configuredTempBytes = 128 * 1024 * 1024;
-    options.stagingPrimaryKeyDiskIndex = {
-      owner,
-      currentGeneration,
-      quotaBytesPerIndex: 64 * 1024 * 1024,
-    };
+    const options = diskOptions(request, () => undefined, { owner });
     const createSpy = vi.spyOn(TupleIndex, "create");
 
-    await expect(validateMultiTableCandidate(request, resourceSignal(), options))
-      .rejects.toBeInstanceOf(DiskIndexOwnershipError);
+    const result = await validateMultiTableCandidate(request, resourceSignal(), options);
+
+    expect(result.passed).toBe(false);
+    expect(result.checks).toContainEqual(expect.objectContaining({
+      check_id: "resource_baseline",
+      passed: false,
+      detail: expect.stringContaining('"backend_reason":"owner_mismatch"'),
+    }));
+    expect(result.checks.some((item) => item.check_id === "primary_key_uniqueness")).toBe(false);
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a missing parity proof", { parityProof: null }, "parity_proof_missing"],
+    ["a mutable snapshot", { snapshotImmutable: false }, "snapshot_mutable"],
+    ["missing cleanup", { cleanup: null }, "cleanup_unavailable"],
+  ])("fails closed when the backend gate rejects on %s", async (_label, override, reason) => {
+    const request = await validationRequest();
+    const options = diskOptions(request, () => undefined, override);
+    const createSpy = vi.spyOn(TupleIndex, "create");
+
+    const result = await validateMultiTableCandidate(request, resourceSignal(), options);
+
+    expect(result.passed).toBe(false);
+    expect(result.checks).toContainEqual(expect.objectContaining({
+      check_id: "resource_baseline",
+      passed: false,
+      detail: expect.stringContaining(`"backend_reason":"${reason}"`),
+    }));
+    expect(result.checks.some((item) => item.check_id === "primary_key_uniqueness")).toBe(false);
     expect(createSpy).not.toHaveBeenCalled();
   });
 
   it("rejects cancellation from disk addBatch and cleans the selected index in finally", async () => {
     const request = await validationRequest("row_id\nrow-1\nrow-2\n");
     const controller = new AbortController();
-    const policy = {
-      ...basePolicy,
-      memoryThresholdBytes: 0,
-      tempQuotaBytes: 128 * 1024 * 1024,
-    };
-    const options = resourceOptions(() => undefined, policy);
-    options.resourceBaseline.configuredTempBytes = 128 * 1024 * 1024;
-    options.stagingPrimaryKeyDiskIndex = {
-      owner: { taskId: request.task_id, generation: 6 },
-      currentGeneration: 6,
-      quotaBytesPerIndex: 64 * 1024 * 1024,
-    };
+    const options = diskOptions(request, () => undefined, {
+      owner: { taskId: request.task_id, buildId: request.build_id, generation: 6 },
+    });
     const originalAddBatch = TupleIndex.prototype.addBatch;
     vi.spyOn(TupleIndex.prototype, "addBatch").mockImplementation(async function (
       this: TupleIndex,
@@ -579,19 +624,11 @@ describe("C-T4 multi-table measured resource preflight", () => {
       (_, index) => `${index}:${"x".repeat(1_024)}`,
     );
     const request = await validationRequest(`row_id\n${values.join("\n")}\n`);
-    const policy = {
-      ...basePolicy,
-      memoryThresholdBytes: 0,
-      tempQuotaBytes: 2 * 1024 * 1024,
-    };
-    const options = resourceOptions(() => undefined, policy);
-    options.resourceBaseline.configuredTempBytes = 2 * 1024 * 1024;
-    options.stagingPrimaryKeyDiskIndex = {
-      owner: { taskId: request.task_id, generation: 7 },
-      currentGeneration: 7,
+    const options = diskOptions(request, () => undefined, {
+      owner: { taskId: request.task_id, buildId: request.build_id, generation: 7 },
       quotaBytesPerIndex: 32 * 1024,
       batchSize: 128,
-    };
+    });
     let storagePath: string | null = null;
     const originalCreate = TupleIndex.create.bind(TupleIndex);
     vi.spyOn(TupleIndex, "create").mockImplementation(async (indexOptions) => {
