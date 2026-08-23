@@ -121,17 +121,108 @@ function manifest(overrides: Partial<DatasetManifestV2> = {}): DatasetManifestV2
   };
 }
 
-function pathEndpoints(path: string): {
-  readonly from: readonly [number, number];
-  readonly to: readonly [number, number];
-} {
-  const coordinates = path.match(/-?\d+(?:\.\d+)?/g)?.map(Number);
-  if (coordinates?.length !== 8) throw new Error(`unexpected cubic path '${path}'`);
-  const [fromX, fromY, , , , , toX, toY] = coordinates;
-  if (fromX === undefined || fromY === undefined || toX === undefined || toY === undefined) {
-    throw new Error(`missing cubic path endpoint in '${path}'`);
+interface PathPoint {
+  readonly x: number;
+  readonly y: number;
+}
+
+function samplePath(path: string): readonly PathPoint[] {
+  const tokens = path.match(/[MLC]|-?\d+(?:\.\d+)?/g);
+  if (tokens === null) throw new Error(`empty path '${path}'`);
+
+  let index = 0;
+  let current: PathPoint | undefined;
+  const points: PathPoint[] = [];
+  const readNumber = (): number => {
+    const token = tokens[index];
+    index += 1;
+    if (token === undefined || token === "M" || token === "L" || token === "C") {
+      throw new Error(`missing path coordinate in '${path}'`);
+    }
+    return Number(token);
+  };
+
+  while (index < tokens.length) {
+    const command = tokens[index];
+    index += 1;
+    if (command === "M") {
+      current = { x: readNumber(), y: readNumber() };
+      points.push(current);
+      continue;
+    }
+    if (current === undefined) throw new Error(`path '${path}' does not start with M`);
+
+    if (command === "L") {
+      const end = { x: readNumber(), y: readNumber() };
+      const start = current;
+      for (let step = 1; step <= 24; step += 1) {
+        const ratio = step / 24;
+        points.push({
+          x: start.x + (end.x - start.x) * ratio,
+          y: start.y + (end.y - start.y) * ratio,
+        });
+      }
+      current = end;
+      continue;
+    }
+
+    if (command === "C") {
+      const firstControl = { x: readNumber(), y: readNumber() };
+      const secondControl = { x: readNumber(), y: readNumber() };
+      const end = { x: readNumber(), y: readNumber() };
+      const start = current;
+      for (let step = 1; step <= 96; step += 1) {
+        const ratio = step / 96;
+        const inverse = 1 - ratio;
+        points.push({
+          x:
+            inverse ** 3 * start.x
+            + 3 * inverse ** 2 * ratio * firstControl.x
+            + 3 * inverse * ratio ** 2 * secondControl.x
+            + ratio ** 3 * end.x,
+          y:
+            inverse ** 3 * start.y
+            + 3 * inverse ** 2 * ratio * firstControl.y
+            + 3 * inverse * ratio ** 2 * secondControl.y
+            + ratio ** 3 * end.y,
+        });
+      }
+      current = end;
+      continue;
+    }
+
+    throw new Error(`unsupported path command '${command}' in '${path}'`);
   }
-  return { from: [fromX, fromY], to: [toX, toY] };
+
+  return points;
+}
+
+function cardBounds(model: ReturnType<typeof buildTopologyModel>, tableId: string) {
+  const point = nodePoint(model, tableId);
+  return {
+    left: point.x,
+    right: point.x + 240,
+    top: point.y,
+    bottom: point.y + 112,
+  };
+}
+
+function isOnCardBoundary(point: PathPoint, bounds: ReturnType<typeof cardBounds>): boolean {
+  const withinX = point.x >= bounds.left && point.x <= bounds.right;
+  const withinY = point.y >= bounds.top && point.y <= bounds.bottom;
+  return (
+    (withinY && (point.x === bounds.left || point.x === bounds.right))
+    || (withinX && (point.y === bounds.top || point.y === bounds.bottom))
+  );
+}
+
+function isInsideCard(point: PathPoint, bounds: ReturnType<typeof cardBounds>): boolean {
+  return (
+    point.x > bounds.left
+    && point.x < bounds.right
+    && point.y > bounds.top
+    && point.y < bounds.bottom
+  );
 }
 
 describe("FamilyTopologyExplorer", () => {
@@ -292,46 +383,193 @@ describe("FamilyTopologyExplorer", () => {
     expect(screen.getByText("dataset_revision_id + sample_id", { exact: true })).toBeVisible();
   });
 
-  it("anchors every relation path on the source and target card boundaries", () => {
-    const model = buildTopologyModel(manifest());
+  it("keeps forward, reverse, vertical, diagonal, cross-lane, and self paths outside every card", () => {
+    const geometryRelations: RelationDefinition[] = [
+      {
+        relation_id: "forward_horizontal",
+        from_table_id: "expression",
+        from_fields: ["sample_id"],
+        to_table_id: "samples",
+        to_fields: ["sample_id"],
+        cardinality: "many_to_one",
+        missing_policy: "reject",
+      },
+      {
+        relation_id: "reverse_horizontal",
+        from_table_id: "samples",
+        from_fields: ["sample_id"],
+        to_table_id: "expression",
+        to_fields: ["sample_id"],
+        cardinality: "one_to_many",
+        missing_policy: "reject",
+      },
+      {
+        relation_id: "forward_vertical",
+        from_table_id: "samples",
+        from_fields: ["source_id"],
+        to_table_id: "sources",
+        to_fields: ["source_id"],
+        cardinality: "many_to_one",
+        missing_policy: "reject",
+      },
+      {
+        relation_id: "reverse_vertical",
+        from_table_id: "sources",
+        from_fields: ["source_id"],
+        to_table_id: "samples",
+        to_fields: ["source_id"],
+        cardinality: "one_to_many",
+        missing_policy: "reject",
+      },
+      {
+        relation_id: "forward_diagonal",
+        from_table_id: "expression",
+        from_fields: ["sample_id"],
+        to_table_id: "sources",
+        to_fields: ["source_id"],
+        cardinality: "many_to_one",
+        missing_policy: "allow_missing",
+      },
+      {
+        relation_id: "reverse_diagonal",
+        from_table_id: "sources",
+        from_fields: ["source_id"],
+        to_table_id: "expression",
+        to_fields: ["sample_id"],
+        cardinality: "one_to_many",
+        missing_policy: "allow_missing",
+      },
+      {
+        relation_id: "cross_middle_lane",
+        from_table_id: "expression",
+        from_fields: ["sample_id"],
+        to_table_id: "quality",
+        to_fields: ["sample_id"],
+        cardinality: "one_to_one",
+        missing_policy: "allow_empty",
+      },
+      {
+        relation_id: "left_self",
+        from_table_id: "expression",
+        from_fields: ["sample_id"],
+        to_table_id: "expression",
+        to_fields: ["sample_id"],
+        cardinality: "one_to_one",
+        missing_policy: "reject",
+      },
+      {
+        relation_id: "right_self",
+        from_table_id: "quality",
+        from_fields: ["sample_id"],
+        to_table_id: "quality",
+        to_fields: ["sample_id"],
+        cardinality: "one_to_one",
+        missing_policy: "allow_empty",
+      },
+    ];
+    const model = buildTopologyModel(manifest({ relations: geometryRelations }));
+
     expect(nodePoint(model, "expression")).toEqual({ x: 24, y: 48 });
     expect(nodePoint(model, "samples")).toEqual({ x: 324, y: 48 });
     expect(nodePoint(model, "sources")).toEqual({ x: 324, y: 192 });
     expect(nodePoint(model, "quality")).toEqual({ x: 624, y: 48 });
 
-    const expectedEndpoints = new Map<
-      string,
-      { readonly from: readonly [number, number]; readonly to: readonly [number, number] }
-    >([
-      ["expression_quality", { from: [264, 104], to: [624, 104] }],
-      ["expression_samples", { from: [264, 104], to: [324, 104] }],
-      ["samples_sources", { from: [444, 160], to: [444, 192] }],
-    ]);
-
-    expect(model.relations).toHaveLength(expectedEndpoints.size);
     for (const relation of model.relations) {
-      expect(pathEndpoints(relationPath(model, relation))).toEqual(
-        expectedEndpoints.get(relation.relation_id),
-      );
+      const path = relationPath(model, relation);
+      const samples = samplePath(path);
+      const first = samples[0];
+      const last = samples[samples.length - 1];
+      expect(path).not.toMatch(/NaN|Infinity/);
+      expect(first).toBeDefined();
+      expect(last).toBeDefined();
+      expect(
+        isOnCardBoundary(first!, cardBounds(model, relation.from_table_id)),
+        `${relation.relation_id} must start on its source card boundary`,
+      ).toBe(true);
+      expect(
+        isOnCardBoundary(last!, cardBounds(model, relation.to_table_id)),
+        `${relation.relation_id} must end on its target card boundary`,
+      ).toBe(true);
+
+      for (const table of tables) {
+        const interiorSamples = samples.filter((point) =>
+          isInsideCard(point, cardBounds(model, table.table_id)),
+        );
+        expect(
+          interiorSamples,
+          `${relation.relation_id} must not enter ${table.table_id}`,
+        ).toEqual([]);
+      }
     }
   });
 
-  it("keeps a self relation outside the card with two boundary anchors", () => {
-    const model = buildTopologyModel(manifest());
-    const selfRelation: RelationDefinition = {
-      relation_id: "expression_self",
-      from_table_id: "expression",
-      from_fields: ["sample_id"],
-      to_table_id: "expression",
-      to_fields: ["sample_id"],
-      cardinality: "one_to_one",
-      missing_policy: "reject",
-    };
+  it("uses deterministic separated routes for multiple relations with the same endpoints", () => {
+    const parallelRelations: RelationDefinition[] = [
+      {
+        relation_id: "parallel_a",
+        from_table_id: "expression",
+        from_fields: ["sample_id"],
+        to_table_id: "samples",
+        to_fields: ["sample_id"],
+        cardinality: "many_to_one",
+        missing_policy: "reject",
+      },
+      {
+        relation_id: "parallel_b",
+        from_table_id: "samples",
+        from_fields: ["sample_id"],
+        to_table_id: "expression",
+        to_fields: ["sample_id"],
+        cardinality: "one_to_many",
+        missing_policy: "allow_missing",
+      },
+      {
+        relation_id: "parallel_c",
+        from_table_id: "expression",
+        from_fields: ["dataset_revision_id"],
+        to_table_id: "samples",
+        to_fields: ["dataset_revision_id"],
+        cardinality: "one_to_one",
+        missing_policy: "allow_empty",
+      },
+    ];
+    const model = buildTopologyModel(manifest({ relations: parallelRelations }));
+    const paths = model.relations.map((relation) => relationPath(model, relation));
 
-    expect(pathEndpoints(relationPath(model, selfRelation))).toEqual({
-      from: [264, 104],
-      to: [144, 160],
-    });
-    expect(relationPath(model, selfRelation)).not.toMatch(/NaN|Infinity/);
+    expect(new Set(paths)).toHaveLength(parallelRelations.length);
+    expect(model.relations.map((relation) => relationPath(model, relation))).toEqual(paths);
+  });
+
+  it("shows deterministic edge markers and complete presentational labels for every relation", () => {
+    render(<FamilyTopologyExplorer manifest={manifest()} publication={null} />);
+
+    const svg = document.querySelector('svg[aria-hidden="true"]');
+    const markers = [...(svg?.querySelectorAll("[data-relation-marker]") ?? [])];
+    expect(markers.map((marker) => marker.textContent)).toEqual(["R1", "R2", "R3"]);
+    for (const marker of markers) {
+      expect(marker.getAttribute("x") ?? "").not.toMatch(/NaN|Infinity/);
+      expect(marker.getAttribute("y") ?? "").not.toMatch(/NaN|Infinity/);
+    }
+
+    const legend = screen.getByTestId("topology-relation-legend");
+    const labels = [...legend.querySelectorAll("[data-relation-label]")];
+    expect(labels.map((label) => label.getAttribute("data-relation-label"))).toEqual([
+      "expression_quality",
+      "expression_samples",
+      "samples_sources",
+    ]);
+    expect(labels.map((label) => label.getAttribute("data-cardinality"))).toEqual([
+      "one_to_one",
+      "many_to_one",
+      "many_to_one",
+    ]);
+    expect(labels.map((label) => label.getAttribute("data-missing-policy"))).toEqual([
+      "allow_empty",
+      "reject",
+      "reject",
+    ]);
+    expect(labels[0]).toHaveTextContent("expression_quality");
+    expect(labels[0]).toHaveTextContent("1:1");
+    expect(labels[0]).toHaveTextContent("允许空表");
   });
 });
