@@ -384,6 +384,16 @@ describe("FamilyTopologyExplorer", () => {
   });
 
   it("keeps forward, reverse, vertical, diagonal, cross-lane, and self paths outside every card", () => {
+    const lastSupportingTable: TableDefinition = {
+      table_id: "z_audits",
+      schema_ref: "schema.audits.v2",
+      role: "supporting",
+      required: false,
+      allow_empty: true,
+      primary_key: ["sample_id"],
+      field_names: ["sample_id", "audit_status"],
+    };
+    const geometryTables = [...tables, lastSupportingTable];
     const geometryRelations: RelationDefinition[] = [
       {
         relation_id: "forward_horizontal",
@@ -420,6 +430,15 @@ describe("FamilyTopologyExplorer", () => {
         to_fields: ["source_id"],
         cardinality: "one_to_many",
         missing_policy: "reject",
+      },
+      {
+        relation_id: "skip_middle_vertical",
+        from_table_id: "samples",
+        from_fields: ["sample_id"],
+        to_table_id: "z_audits",
+        to_fields: ["sample_id"],
+        cardinality: "one_to_many",
+        missing_policy: "allow_missing",
       },
       {
         relation_id: "forward_diagonal",
@@ -467,11 +486,12 @@ describe("FamilyTopologyExplorer", () => {
         missing_policy: "allow_empty",
       },
     ];
-    const model = buildTopologyModel(manifest({ relations: geometryRelations }));
+    const model = buildTopologyModel(manifest({ tables: geometryTables, relations: geometryRelations }));
 
     expect(nodePoint(model, "expression")).toEqual({ x: 24, y: 48 });
     expect(nodePoint(model, "samples")).toEqual({ x: 324, y: 48 });
     expect(nodePoint(model, "sources")).toEqual({ x: 324, y: 192 });
+    expect(nodePoint(model, "z_audits")).toEqual({ x: 324, y: 336 });
     expect(nodePoint(model, "quality")).toEqual({ x: 624, y: 48 });
 
     for (const relation of model.relations) {
@@ -491,7 +511,7 @@ describe("FamilyTopologyExplorer", () => {
         `${relation.relation_id} must end on its target card boundary`,
       ).toBe(true);
 
-      for (const table of tables) {
+      for (const table of geometryTables) {
         const interiorSamples = samples.filter((point) =>
           isInsideCard(point, cardBounds(model, table.table_id)),
         );
@@ -528,6 +548,33 @@ describe("FamilyTopologyExplorer", () => {
         from_table_id: "expression",
         from_fields: ["dataset_revision_id"],
         to_table_id: "samples",
+        to_fields: ["dataset_revision_id"],
+        cardinality: "one_to_one",
+        missing_policy: "allow_empty",
+      },
+      {
+        relation_id: "parallel_d",
+        from_table_id: "samples",
+        from_fields: ["dataset_revision_id"],
+        to_table_id: "expression",
+        to_fields: ["dataset_revision_id"],
+        cardinality: "many_to_many",
+        missing_policy: "profile_defined",
+      },
+      {
+        relation_id: "wide_parallel_a",
+        from_table_id: "expression",
+        from_fields: ["dataset_revision_id"],
+        to_table_id: "quality",
+        to_fields: ["dataset_revision_id"],
+        cardinality: "one_to_one",
+        missing_policy: "reject",
+      },
+      {
+        relation_id: "wide_parallel_b",
+        from_table_id: "quality",
+        from_fields: ["dataset_revision_id"],
+        to_table_id: "expression",
         to_fields: ["dataset_revision_id"],
         cardinality: "one_to_one",
         missing_policy: "allow_empty",

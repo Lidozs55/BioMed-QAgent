@@ -101,16 +101,20 @@ function parallelRelationIndex(model: TopologyModel, relation: RelationDefinitio
     .findIndex((candidate) => candidate.relation_id === relation.relation_id);
 }
 
+function detourClearance(rankOnSide: number): number {
+  return 8 + (16 * (rankOnSide + 1)) / (rankOnSide + 2);
+}
+
 function selfRelationLayout(center: Point, parallelIndex: number): RelationLayout {
   const direction = center.x <= CANVAS_WIDTH / 2 ? 1 : -1;
   const from = { x: center.x + (NODE_WIDTH / 2) * direction, y: center.y };
   const to = { x: center.x, y: center.y + NODE_HEIGHT / 2 };
-  const clearance = 24 + parallelIndex * 12;
+  const clearance = 12 + detourClearance(parallelIndex);
   const outsideX = from.x + clearance * direction;
   const outsideY = to.y + clearance;
   return {
     path: `M ${from.x} ${from.y} L ${outsideX} ${from.y} L ${outsideX} ${outsideY} L ${to.x} ${outsideY} L ${to.x} ${to.y}`,
-    label: { x: (outsideX + to.x) / 2, y: outsideY + 12 },
+    label: { x: outsideX, y: from.y },
   };
 }
 
@@ -178,14 +182,30 @@ function relationLayout(model: TopologyModel, relation: RelationDefinition): Rel
   const sameRow = fromCenter.y === toCenter.y;
   const sameLane = fromCenter.x === toCenter.x;
   const laneDistance = Math.abs(toCenter.x - fromCenter.x) / 300;
+  const rowDistance = Math.abs(toCenter.y - fromCenter.y) / ROW_HEIGHT;
 
   if (sameRow && (laneDistance > 1 || parallelIndex > 0)) {
-    const side = laneDistance > 1 || parallelIndex % 2 === 0 ? "below" : "above";
-    return horizontalDetourLayout(fromCenter, toCenter, side, 16);
+    const routedIndex = laneDistance > 1 ? parallelIndex : parallelIndex - 1;
+    const preferredSide = laneDistance > 1 ? "below" : "above";
+    const side = routedIndex % 2 === 0
+      ? preferredSide
+      : preferredSide === "above" ? "below" : "above";
+    return horizontalDetourLayout(
+      fromCenter,
+      toCenter,
+      side,
+      detourClearance(Math.floor(routedIndex / 2)),
+    );
   }
-  if (sameLane && parallelIndex > 0) {
-    const side = parallelIndex % 2 === 0 ? "right" : "left";
-    return verticalDetourLayout(fromCenter, toCenter, side, 16);
+  if (sameLane && (rowDistance > 1 || parallelIndex > 0)) {
+    const routedIndex = rowDistance > 1 ? parallelIndex : parallelIndex - 1;
+    const side = routedIndex % 2 === 0 ? "right" : "left";
+    return verticalDetourLayout(
+      fromCenter,
+      toCenter,
+      side,
+      detourClearance(Math.floor(routedIndex / 2)),
+    );
   }
 
   const from = nodeBoundaryPoint(fromCenter, toCenter);
