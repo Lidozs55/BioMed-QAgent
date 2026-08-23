@@ -23,6 +23,7 @@ output.
    Omit missing source_files when the binding has a registered Core acquisition
    provider; do not download or parse that provider again with workspace commands.
    - For bioactivity measurement, ChEMBL/PubChem search tools only discover controlled IDs. Formal bytes must be reacquired by Core with `chembl.files.v1` / `pubchem.files.v1`; omit those bindings from source files. A PubChem binding is optional and supports one exact CID crosswalk per build.
+   - For open-access literature full text, request one PMCID per binding through `pubmed.files.v1`; Core retrieves Europe PMC XML. Browser/PDF/VLM/workspace outputs remain preparation material. Literature-derived quantitative/chart products use the tables paper_records, experiment_records, primary activity_value_records, chart_series, chart_points, and supplementary_asset_records; estimated chart evidence carries the fields human_review_status / review_status and remains pending until genuine evidence-bound HIL acceptance.
    - **gene-level builds fed by probe-level sources (e.g. GEO geo-probe) MUST
      declare a probe→gene annotation** via `mapping_files={"<binding_id>":
      "<GPL annotation relative path>"}` — one entry per binding, keyed by the same
