@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Sheet,
   SheetContent,
@@ -83,9 +84,23 @@ function SubagentList({
 
 export function SubagentPanelToggle() {
   return (
-    <Button type="button" variant="ghost" size="icon-sm" className="hidden md:inline-flex" onClick={toggleSubagentPanel} aria-label="切换子任务面板">
-      <SidebarSimpleIcon />
-    </Button>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            className="hidden md:inline-flex"
+            onClick={toggleSubagentPanel}
+            aria-label="切换子任务面板"
+          />
+        }
+      >
+        <SidebarSimpleIcon />
+      </TooltipTrigger>
+      <TooltipContent>打开或关闭子任务面板</TooltipContent>
+    </Tooltip>
   );
 }
 

@@ -9,6 +9,7 @@ import {
   type PiUpstreamEvent,
   type PiUpstreamSession,
 } from "../src/agent/pi-adapter.js";
+import { PHASE1_SYSTEM_PROMPT } from "../src/agent/phase1-prompt.js";
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -68,6 +69,29 @@ async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
   for await (const value of iterable) values.push(value);
   return values;
 }
+
+describe("Pi system prompt", () => {
+  test("marks an approved max-turn continuation explicitly", () => {
+    expect(PHASE1_SYSTEM_PROMPT).toContain("[MAX_TURNS_REACHED]");
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/resuming after a max-turn interruption.*user approved/i);
+  });
+
+  test("keeps literature chart evidence on the reviewed six-table topology", () => {
+    for (const tableId of [
+      "paper_records",
+      "experiment_records",
+      "activity_value_records",
+      "chart_series",
+      "chart_points",
+      "supplementary_asset_records",
+    ]) {
+      expect(PHASE1_SYSTEM_PROMPT).toContain(tableId);
+    }
+    expect(PHASE1_SYSTEM_PROMPT).toContain("human_review_status");
+    expect(PHASE1_SYSTEM_PROMPT).toContain("review_status");
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/must remain human_review_pending/i);
+  });
+});
 
 describe("Pi model profile mapping", () => {
   test("maps portable and DashScope-specific parameters", () => {

@@ -115,13 +115,14 @@ Agent 不获得 DAG、Publisher、task output/state/settings、网络或任意 n
 
 ## 7. ADR 治理
 
-新增 [ADR-039](../../adr/039-family-transform-host.md) 作为 **Proposed** 目标决策。它被接受前：
+[ADR-039](../../adr/039-family-transform-host.md) 现已 **Accepted**。本文件其余内容是历史设计输入；当前执行边界见`docs/architecture/FAMILY-HOST-03-execution-constraints.md`：
 
-- 当前 ADR-027/033/034/036/038 与 production 行为继续有效；
-- 可以完成 contract、threat model、isolated fixture Host 和 shadow tooling；
-- 不得接默认 build route、不得激活 Agent-authored transform、不得删除 static runtime。
+- ADR-027/033/034/036/038 与production行为继续有效；
+- 显式`in_process_unisolated` dynamic route已落地，但不是sandbox/安全边界；
+- sandbox/container/IPC不开发；static runtime不删除；
+- Core继续独占quarantine admission、native OperationResult、B3、ProductAssessment与Publication。
 
-ADR-039 接受时再逐项标注 supersede/narrow：
+若未来增加isolated backend，再通过独立ADR逐项评估supersede/narrow：
 
 - ADR-027 static Registry -> legacy compatibility facade；
 - ADR-033 family-specific assembler -> contract-driven generic assembly；

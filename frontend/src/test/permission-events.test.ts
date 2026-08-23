@@ -72,6 +72,13 @@ describe("permission event reducer (P4)", () => {
       resource: "D:\\datasets\\TCGA\\clinical.csv",
       summary: "读取文件 D:\\datasets\\TCGA\\clinical.csv",
     });
+    expect(state.tasksById.task_p1?.items).toContainEqual(expect.objectContaining({
+      kind: "permission",
+      itemId: "permission:run_ts_1:permission_abc",
+      requestId: "permission_abc",
+      status: "requested",
+      sequence: 2,
+    }));
   });
 
   test("permission_resolved clears the matching pending request", () => {
@@ -83,6 +90,13 @@ describe("permission event reducer (P4)", () => {
       grant_scope: "run",
     }));
     expect(resolved.tasksById.task_p2?.pendingPermission).toBeNull();
+    expect(resolved.tasksById.task_p2?.items).toContainEqual(expect.objectContaining({
+      kind: "permission",
+      itemId: "permission:run_ts_1:permission_abc",
+      status: "allowed",
+      grantScope: "run",
+      sequence: 2,
+    }));
   });
 
   test("a stale resolution does not dismiss a newer pending request", () => {
@@ -107,6 +121,10 @@ describe("permission event reducer (P4)", () => {
       grant_scope: null,
     }));
     expect(staleResolve.tasksById.task_p3?.pendingPermission?.requestId).toBe("permission_new");
+    expect(staleResolve.tasksById.task_p3?.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ requestId: "permission_old", status: "denied" }),
+      expect.objectContaining({ requestId: "permission_new", status: "requested" }),
+    ]));
   });
 
   test("run cancellation clears the pending permission", () => {

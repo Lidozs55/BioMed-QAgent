@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 
 import { DEFAULT_RUNTIME_LIMITS, type RuntimeLimits } from "@biomed/contracts";
@@ -5,6 +6,7 @@ import { DEFAULT_RUNTIME_LIMITS, type RuntimeLimits } from "@biomed/contracts";
 import type { BioMedAgentAdapter, BioMedModelConfig } from "../agent/contracts.js";
 import { PiAgentAdapter } from "../agent/pi-adapter.js";
 import { createDatasetBuildTools } from "../agent/tools/dataset-build.js";
+import { createDynamicFamilyBuildTool } from "../agent/tools/dynamic-family-build.js";
 import { createBusinessToolBundle } from "../agent/tools/business-tools.js";
 import { createDeclarativeDatabaseTools } from "../agent/tools/declarative-db.js";
 import { assertUniqueToolNames } from "../agent/tools/registry.js";
@@ -37,6 +39,8 @@ import {
 } from "../dataset/acquisition/runtime.js";
 import { coreEventToPayload } from "../dataset/service/events.js";
 import { createDatasetCoreService } from "../dataset/service/dataset-core.js";
+import { submitDynamicFamilyBuild } from "../dataset/dynamic-family/submission.js";
+import { publishDynamicFamily } from "../dataset/dynamic-family/publication.js";
 import { TypeScriptDatasetCore } from "../dataset/service/ts-core.js";
 import { PublicHttpClient } from "../external/network/http-client.js";
 import { ContentCache } from "../external/acquisition/content-cache.js";
@@ -79,6 +83,16 @@ const QUERY_SOURCE_LABELS: Readonly<Record<string, string>> = {
  * - ``onQueryStarted``/``onQuery`` pair per query: started fires when the
  *   query begins, the terminal event when it ends (success/not_found /
  *   page_fallback → succeeded, skipped → skipped, failed → failed).
+ * - Query operation ids are **call-scoped**: each ``onQueryStarted``/``onQuery``
+ *   pair gets its own ``tool:<source>:query:<seq>`` id (per-source sequence),
+ *   so concurrent or repeated queries from the same source no longer collide
+ *   onto a single UI card. ``onQuery`` reuses the id its matching started call
+ *   allocated. ``onQueryStarted`` returns an opaque call token that ``onQuery``
+ *   can pass back to preserve causality even when identical same-source calls
+ *   finish out of order. Callers that omit the token retain deterministic
+ *   source + query FIFO pairing; terminal-only calls still receive a fresh id.
+ *   Ids are deterministic — replaying the same hook call order yields identical
+ *   ids, keeping the event log reproducible.
  * - ``onProgress`` opens progress-only operations (``tool:discovery:*``,
  *   ``tool:acquisition:*``) once per run — they have no natural end signal,
  *   so the run-terminal fallback on the frontend closes them.
@@ -91,22 +105,85 @@ export function createPhase3ToolHooks(
   currentRunId: () => string,
 ): ToolHooks {
   const startedProgressOps = new Set<string>();
+  // Per-source sequence for call-scoped query ids (``tool:<source>:query:<seq>``)
+  // and the started-but-not-yet-finished queries awaiting their terminal call.
+  const querySequences = new Map<string, number>();
+  interface PendingQuery {
+    query: string;
+    source: string;
+    operationId: string;
+  }
+  const pendingQueries = new Map<string, PendingQuery[]>();
+  const pendingQueryTokens = new Map<object, PendingQuery>();
+
+  const nextQueryId = (source: string): string => {
+    const seq = (querySequences.get(source) ?? 0) + 1;
+    querySequences.set(source, seq);
+    return `tool:${source}:query:${seq}`;
+  };
+  const removePendingQuery = (entry: PendingQuery): void => {
+    const pending = pendingQueries.get(entry.source);
+    const index = pending?.indexOf(entry) ?? -1;
+    if (pending !== undefined && index !== -1) {
+      pending.splice(index, 1);
+      if (pending.length === 0) pendingQueries.delete(entry.source);
+    }
+  };
+  // Prefer exact token correlation. Legacy callers that omit a token consume
+  // the first matching source + query entry (FIFO), preserving prior behavior.
+  const consumeQueryId = (query: string, source: string, callToken?: unknown): string => {
+    if (callToken !== undefined) {
+      const tokenEntry = typeof callToken === "object" && callToken !== null
+        ? pendingQueryTokens.get(callToken)
+        : undefined;
+      if (tokenEntry !== undefined && tokenEntry.source === source) {
+        pendingQueryTokens.delete(callToken as object);
+        removePendingQuery(tokenEntry);
+        return tokenEntry.operationId;
+      }
+      return nextQueryId(source);
+    }
+
+    const pending = pendingQueries.get(source);
+    const index = pending?.findIndex((entry) => entry.query === query) ?? -1;
+    if (pending !== undefined && index !== -1) {
+      const [entry] = pending.splice(index, 1);
+      if (pending.length === 0) pendingQueries.delete(source);
+      for (const [token, tokenEntry] of pendingQueryTokens) {
+        if (tokenEntry === entry) {
+          pendingQueryTokens.delete(token);
+          break;
+        }
+      }
+      return entry.operationId;
+    }
+    return nextQueryId(source);
+  };
   return {
-    onQueryStarted: (_query, source) => {
+    onQueryStarted: (query, source) => {
+      const operationId = nextQueryId(source);
+      const entry = { query, source, operationId };
+      const callToken = Object.freeze({ operationId });
+      const pending = pendingQueries.get(source) ?? [];
+      pending.push(entry);
+      pendingQueries.set(source, pending);
+      pendingQueryTokens.set(callToken, entry);
       void recordRunEvent({
         type: "operation_started",
-        operation_id: `tool:${source}:query`,
+        operation_id: operationId,
         label: `检索 ${QUERY_SOURCE_LABELS[source] ?? source}`,
         category: "discovery",
         attempt: 1,
       }).catch((error: unknown) => {
         console.warn("tool.query_started_event_failed", error);
       });
+      return callToken;
     },
-    onQuery: (query, source, status, recordsCount = 0) => {
+    onQuery: (query, source, status, recordsCount = 0, callToken) => {
+      const operationId = consumeQueryId(query, source, callToken);
       void recordRunEvent({
         type: "operation_progress",
-        operation_id: `tool:${source}:query`,
+        operation_id: operationId,
         kind: "query",
         current: Math.max(0, recordsCount),
         total: null,
@@ -123,19 +200,19 @@ export function createPhase3ToolHooks(
           status === "failed"
             ? recordRunEvent({
                 type: "operation_failed",
-                operation_id: `tool:${source}:query`,
+                operation_id: operationId,
                 status: "failed",
                 error: null,
               })
             : status === "skipped"
               ? recordRunEvent({
                   type: "operation_completed",
-                  operation_id: `tool:${source}:query`,
+                  operation_id: operationId,
                   status: "skipped",
                 })
               : recordRunEvent({
                   type: "operation_completed",
-                  operation_id: `tool:${source}:query`,
+                  operation_id: operationId,
                   status: "succeeded",
                 }),
         )
@@ -218,13 +295,14 @@ export function createPhase3AcquisitionRuntime(options: {
   taskRoot: string;
   cache: ContentCache;
   client: PublicHttpClient;
+  sourceAssetRegistry?: SourceAssetRegistry;
 }): CoreAcquisitionRuntime {
   const registry = new CoreAcquisitionRegistry();
   registry.registerProvider(createChemblFilesProvider());
   for (const provider of createFixedBiomedicalProviders()) registry.registerProvider(provider);
   return new CoreAcquisitionRuntime({
     ...options,
-    sourceAssetRegistry: new SourceAssetRegistry(options.taskId, options.taskRoot),
+    sourceAssetRegistry: options.sourceAssetRegistry ?? new SourceAssetRegistry(options.taskId, options.taskRoot),
     registry,
   });
 }
@@ -323,11 +401,13 @@ export async function createPhase3Runtime(
         timeoutMs: limits.http_timeout_seconds * 1000,
       });
       const cache = new ContentCache(path.join(taskRoot, "cache"));
+      const sourceAssetRegistry = new SourceAssetRegistry(taskId, taskRoot);
       const acquisitionRuntime = createPhase3AcquisitionRuntime({
         taskId,
         taskRoot,
         cache,
         client,
+        sourceAssetRegistry,
       });
       const service = createDatasetCoreService({
         tsCore,
@@ -393,6 +473,111 @@ export async function createPhase3Runtime(
             return [] as Awaited<ReturnType<typeof createDeclarativeDatabaseTools>>;
           });
       const workspaceTools = createWorkspaceTools(workspace);
+      const dynamicFamilyTool = createDynamicFamilyBuildTool({
+        submit: async (submission, signal) => {
+          const registeredSources: Record<string, string> = { ...submission.registered_sources };
+          const acquisitionRequestDigests: Record<string, string> = {};
+          for (const [bindingId, request] of Object.entries(submission.acquisition_requests)) {
+            const acquired = await acquisitionRuntime.acquire({
+              schema_version: "1.0",
+              request_id: `request_${randomUUID()}`,
+              task_id: taskId,
+              build_id: submission.build_proposal.build_id,
+              binding_id: bindingId,
+              mode: "builtin",
+              provider_id: request.provider_id,
+              recipe_id: null,
+              recipe_version: null,
+              parameters: { ...request.parameters },
+            }, signal);
+            if (acquired.sourceAsset === null) {
+              throw new Error(`Core acquisition did not register source binding '${bindingId}'`);
+            }
+            registeredSources[bindingId] = acquired.sourceAsset.asset_id;
+            acquisitionRequestDigests[bindingId] = acquired.requestIdentityDigest;
+          }
+          const resolvedSubmission = Object.freeze({
+            ...submission,
+            registered_sources: Object.freeze(registeredSources),
+            acquisition_requests: Object.freeze({}),
+          });
+          const result = await submitDynamicFamilyBuild({
+
+            taskId,
+            runId: currentRunId,
+            submission: resolvedSubmission,
+            sourceAssetRegistry,
+            taskRoot,
+            runtimeLimits: limits,
+            sourceAcquisitionRequestDigests: Object.freeze(acquisitionRequestDigests),
+            signal,
+          });
+          const product = await publishDynamicFamily({
+            taskId,
+            taskRoot,
+            workspaceRoot,
+            buildId: submission.build_proposal.build_id,
+            execution: result,
+            validationProfileRef: submission.family_spec.validation_policy_ref,
+            signal,
+          });
+          const publicationManifestSha = product.publication.publication.manifest_sha256;
+          if (publicationManifestSha === undefined) {
+            throw new Error("dynamic publication is missing its manifest byte receipt");
+          }
+          await recordRunEvent({
+            type: "publication_created",
+            publication_id: product.publication.publication.publication_id,
+            run_id: currentRunId,
+            manifest_sha256: publicationManifestSha,
+            supersedes_publication_id: product.publication.publication.supersedes_publication_id,
+            published_at: product.publication.publication.published_at,
+          });
+          for (const artifact of product.manifest.artifacts) {
+            await recordRunEvent({
+              type: "artifact_produced",
+              artifact: {
+                artifact_id: artifact.artifact_id,
+                name: artifact.relative_path.split("/").at(-1) ?? artifact.relative_path,
+                role: artifact.role,
+                relative_path: artifact.relative_path,
+                media_type: artifact.media_type,
+                size_bytes: artifact.size_bytes,
+                sha256: artifact.sha256,
+                generated_by_step_id: `dynamic:${submission.build_proposal.build_id}`,
+              },
+            });
+          }
+          buildResult = {
+            schema_version: "1.0",
+            build_id: submission.build_proposal.build_id,
+            status: "succeeded",
+            valid_row_count: product.manifest.row_count,
+            successful_sources: [...product.candidate.registered_asset_ids],
+            rejected_sources: [],
+            available_artifact_roles: [...new Set(product.manifest.artifacts.map((artifact) => artifact.role))],
+            publication_id: product.publication.publication.publication_id,
+            reason_codes: [],
+            user_summary: "Dynamic family product validated and published.",
+            recommended_next_action: "Download immutable publication artifacts through the Artifact API.",
+          };
+          return {
+            ok: true,
+            status: "published",
+            build_id: submission.build_proposal.build_id,
+            publication_id: product.publication.publication.publication_id,
+            manifest_id: product.manifest.manifest_id,
+            manifest_sha256: publicationManifestSha,
+            operation_result_manifest_id: result.operationResult.result_manifest_id,
+            tables: result.materialization.candidate.tables.map((table) => table.definition.table_id),
+            relations: result.materialization.candidate.relations.map((relation) => relation.relation_id),
+            artifacts: product.manifest.artifacts,
+            source_acquisition_provenance: result.sourceAcquisitionProvenance,
+            backend: result.receipt.sandbox_backend,
+            security_boundary: false,
+          };
+        },
+      });
       const datasetTools = createDatasetBuildTools({
         client: service,
         taskId,
@@ -448,6 +633,7 @@ export async function createPhase3Runtime(
         ...bundle.tools,
         ...dynamicTools,
         ...datasetTools,
+        dynamicFamilyTool,
         ...importTools,
       ]);
       return {
@@ -457,6 +643,7 @@ export async function createPhase3Runtime(
           ...bundle.tools,
           ...dynamicTools,
           ...datasetTools,
+          dynamicFamilyTool,
           ...importTools,
         ],
         permissionBroker,

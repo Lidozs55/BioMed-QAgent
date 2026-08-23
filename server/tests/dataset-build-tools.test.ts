@@ -222,6 +222,40 @@ describe("Pi DatasetBuild tools", () => {
     });
   });
 
+  test("routes non-retryable static transform rejection to the dynamic family tool", async () => {
+    const execute = vi.fn(async (): Promise<DatasetBridgeResponse> => ({
+      version: 1, request_id: "request_execute", ok: false, data: null,
+      error: {
+        code: "invalid_input",
+        message: "ChEMBL bioactivity transform rejected: activity value is required",
+        retryable: false,
+        details: {},
+      },
+    }));
+    const validate = vi.fn(async (): Promise<DatasetBridgeResponse> => ({
+      version: 1, request_id: "request_validate", ok: true,
+      data: { valid: true, reason_codes: [], reasons: [] }, error: null,
+    }));
+    const tools = createDatasetBuildTools({
+      client: { validate, execute },
+      taskId: "task_tool", taskRoot: await toolTaskRoot(),
+      runId: () => "run_tool", piSessionId: () => "pi_tool",
+    });
+    const result = await tools[1]!.execute({
+      spec,
+      source_files: { binding_gdc: "source_assets/file.tsv" },
+      mapping_files: {}, metadata_files: {},
+    });
+    expect(result).toMatchObject({
+      isError: true,
+      details: {
+        do_not_retry_static: true,
+        recommended_next_action: expect.stringContaining("submit_dynamic_family_build"),
+      },
+    });
+    expect(result.content).toContain("Stop static schema/required_fields probing");
+  });
+
   test("accepts a JSON-encoded string spec (agent serialization slip)", async () => {
     const validate = vi.fn(async (): Promise<DatasetBridgeResponse> => ({
       version: 1, request_id: "request_validate", ok: true,

@@ -4,6 +4,7 @@ import { createDefaultRegisteredTableRegistry } from "../src/dataset/adapters/re
 import {
   DatasetFamilyRegistry,
   createDefaultDatasetFamilyRegistry,
+  registeredTableSchemasById,
 } from "../src/dataset/families/index.js";
 import { providerCarrierBinding } from "../src/dataset/runtime/provider-bindings.js";
 
@@ -53,6 +54,33 @@ describe("DatasetFamilyRegistry", () => {
     });
   });
 
+  test("derives provider table schemas from registered family table bindings", () => {
+    const registry = createDefaultDatasetFamilyRegistry();
+
+    expect(Object.fromEntries(registeredTableSchemasById(registry.get("target_evidence"))))
+      .toMatchObject({
+        targets: { schema_id: "target_evidence.target.v1" },
+        evidence: { schema_id: "target_evidence.evidence.v1" },
+        sources: { schema_id: "target_evidence.source.v1" },
+        supporting: { schema_id: "target_evidence.supporting.v1" },
+      });
+    expect(Object.fromEntries(registeredTableSchemasById(registry.get("protein_structure"))))
+      .toMatchObject({
+        structures: { schema_id: "protein_structure.structure.v1" },
+        chains: { schema_id: "protein_structure.chain.v1" },
+        ligands: { schema_id: "protein_structure.ligand.v1" },
+        sources: { schema_id: "protein_structure.source.v1" },
+      });
+    expect(Object.fromEntries(registeredTableSchemasById(registry.get("bioactivity_measurement"))))
+      .toMatchObject({
+        activities: { schema_id: "bioactivity_measurement.activity.v1" },
+        compounds: { schema_id: "bioactivity_measurement.compound.v1" },
+        assays: { schema_id: "bioactivity_measurement.assay.v1" },
+        targets: { schema_id: "bioactivity_measurement.target.v1" },
+        compound_crosswalks: { schema_id: "bioactivity_measurement.compound_crosswalk.v1" },
+      });
+  });
+
   test("registers the PubChem identity carrier without an Agent table parser", () => {
     const family = createDefaultDatasetFamilyRegistry().get("bioactivity_measurement");
 
@@ -61,6 +89,7 @@ describe("DatasetFamilyRegistry", () => {
     );
     expect(family.sources.find((source) => source.source === "pubchem")).toMatchObject({
       source: "pubchem",
+      table_id: "compound_crosswalks",
       adapter_id: "bioactivity.pubchem_identity.v1",
       schema_refs: ["bioactivity_measurement.compound_crosswalk.v1"],
       parameters_required: false,

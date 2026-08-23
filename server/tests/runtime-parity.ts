@@ -222,10 +222,15 @@ export async function checkRuntimeParity(options: { outputRoot: string }): Promi
     const runner2 = new RecordingRunner();
     const second = await makeExecutor({ outputRoot: out, runner: runner2 }).run();
     check(issues, second.status === "completed", "reuse: second run completed");
-    checkDeepEqual(issues, runner2.calls, [], "reuse: second run reuses every operation");
+    checkDeepEqual(
+      issues,
+      runner2.calls,
+      ["publish"],
+      "reuse: publish is re-executed because generic publication shortcut is disabled",
+    );
     const state = loadBuildState(join(out, "state"), "task_1", "build_test");
     const skipped = state.operation_attempts.filter((attempt) => attempt.status === "skipped");
-    check(issues, skipped.length === 11, "reuse: 11 skipped attempts");
+    check(issues, skipped.length === 10, "reuse: 10 non-publication operations skipped");
   }
 
   // test_executor_reruns_when_parameters_change
@@ -251,7 +256,12 @@ export async function checkRuntimeParity(options: { outputRoot: string }): Promi
     check(issues, runner.calls.length === 11, "adapter params: first run executes all");
     const runner2 = new RecordingRunner();
     await makeExecutor({ outputRoot: out, runner: runner2, scope: log2Scope }).run();
-    checkDeepEqual(issues, runner2.calls, [], "adapter params: identical normalized params reuse");
+    checkDeepEqual(
+      issues,
+      runner2.calls,
+      ["publish"],
+      "adapter params: non-publication operations reuse while publish re-executes",
+    );
     const runner3 = new RecordingRunner();
     await makeExecutor({ outputRoot: out, runner: runner3, scope: linearScope }).run();
     check(issues, runner3.calls.length === 11, "adapter params: scale change invalidates every checkpoint");

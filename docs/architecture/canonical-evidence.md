@@ -86,15 +86,14 @@ never by Agent prose or workspace files.
 
 ## Supplementary Transforms
 
-> **Target update:** ADR-039 proposes replacing the old `RegisteredTransform`
-> promotion model with one versioned `DatasetTransform` ABI executed by an
-> isolated Transform Host. The current repository does not implement that Host;
-> until ADR-039 is accepted and its security gates pass, Agent-authored scripts
-> remain candidate research transforms only.
+> **Deferred target:** ADR-039 described replacing the old `RegisteredTransform`
+> promotion model with a versioned `DatasetTransform` ABI in an isolated Host,
+> but the Host/sandbox/IPC route is now deferred. Agent-authored scripts remain
+> candidate research transforms only and cannot enter the product path.
 
-A future `DatasetTransform` may be submitted from the Agent workspace, but it
-must be normalized, compiled, content-addressed, and executed outside the TS
-Application Host in an OS/container isolation backend. The Host produces only a
+If a future decision resumes `DatasetTransform`, it may be submitted from the
+Agent workspace only after it can be normalized, compiled, content-addressed,
+and executed outside the TS Application Host in an approved isolation backend. The Host produces only a
 `TransformExecutionReceipt` and invocation-scoped quarantine outputs. Core must
 rehash and admit those outputs, bind them to registered SourceAsset or committed
 OperationResult inputs, validate canonical entity/relation/evidence semantics,

@@ -282,7 +282,7 @@ export function createSearchGeoTool(options: GeoToolsOptions): BioMedAgentTool {
           isError: true,
         };
       }
-      hooks.onQueryStarted(effectiveTerm, "geo");
+      const queryCallToken = hooks.onQueryStarted(effectiveTerm, "geo");
       const discovery =
         options.discovery ??
         new GeoEutilsClient({
@@ -293,7 +293,7 @@ export function createSearchGeoTool(options: GeoToolsOptions): BioMedAgentTool {
       try {
         const result = await searchGeoSeries(discovery, effectiveTerm, maxResults, signal);
         const records = result.records.map((item) => geoRecordJson(item));
-        hooks.onQuery(effectiveTerm, "geo", "success", records.length);
+        hooks.onQuery(effectiveTerm, "geo", "success", records.length, queryCallToken);
         hooks.onProgress("discovery", "discovered_records", {
           current: records.length,
           total: result.total_count,
@@ -310,7 +310,7 @@ export function createSearchGeoTool(options: GeoToolsOptions): BioMedAgentTool {
         };
         return { content: JSON.stringify(payload) };
       } catch (error) {
-        hooks.onQuery(effectiveTerm, "geo", "failed", 0);
+        hooks.onQuery(effectiveTerm, "geo", "failed", 0, queryCallToken);
         const failure = errorResult(error);
         const details = failure.details as { code: string; retryable: boolean };
         const payload: GeoSearchPayload & { code: string; retryable: boolean } = {

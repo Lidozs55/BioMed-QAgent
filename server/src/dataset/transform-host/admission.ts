@@ -13,6 +13,8 @@ import { sha256Bytes } from "./hashing.js";
 export const TRANSFORM_HOST_PROTOCOL_VERSION = "1.0" as const;
 export const TRANSFORM_HOST_POLICY_VERSION = "fixture-only.1" as const;
 export const TRANSFORM_RUNTIME_ABI_VERSION = "unavailable.1" as const;
+export const UNISOLATED_TRANSFORM_POLICY_VERSION = "in-process-unisolated.1" as const;
+export const UNISOLATED_TRANSFORM_RUNTIME_ABI_VERSION = "in-process-unisolated.1" as const;
 export const TRANSFORM_SDK_MODULE = "@biomed/transform-sdk/v1" as const;
 export const TRANSFORM_HOST_FIXTURE_PROFILE_ID = "fixture-ts-v1" as const;
 
@@ -33,7 +35,7 @@ const DESCRIPTOR_METADATA_KEYS = new Set([
   "review_refs",
 ]);
 const COMPILER_ID = "typescript.transpileModule";
-const COMPILED_FIXTURE_BYTES = new WeakMap<object, Uint8Array>();
+const COMPILED_BUNDLE_BYTES = new WeakMap<object, Uint8Array>();
 
 const FORBIDDEN_IDENTIFIERS = Object.freeze([
   "Bun",
@@ -138,6 +140,26 @@ export interface FixtureOnlyCompilationResult {
   implementationDigest: string;
 }
 
+/**
+ * Host-compiled bundle admitted only for the explicitly opted-in in-process
+ * backend. Static admission narrows the API surface but is not isolation and
+ * establishes no security boundary.
+ */
+export interface InProcessUnisolatedCompilationResult
+  extends Omit<
+    FixtureOnlyCompilationResult,
+    "status" | "executable" | "runtimeAbiVersion" | "policyVersion"
+  > {
+  status: "admitted_in_process_unisolated";
+  executable: true;
+  runtimeAbiVersion: typeof UNISOLATED_TRANSFORM_RUNTIME_ABI_VERSION;
+  policyVersion: typeof UNISOLATED_TRANSFORM_POLICY_VERSION;
+}
+
+export type HostCompilationResult =
+  | FixtureOnlyCompilationResult
+  | InProcessUnisolatedCompilationResult;
+
 /** Frozen normalization used before all Host-owned compilation and hashing. */
 export function normalizeTransformSource(source: string): string {
   if (source.includes("\0")) {
@@ -239,7 +261,98 @@ export async function compileTransformFixtureOnly(value: unknown): Promise<Fixtu
     policyDigest,
     implementationDigest,
   });
-  COMPILED_FIXTURE_BYTES.set(result, Uint8Array.from(emittedBundleBytes));
+  COMPILED_BUNDLE_BYTES.set(result, Uint8Array.from(emittedBundleBytes));
+  return result;
+}
+
+/**
+ * Compile the same statically admitted source to a CommonJS bundle consumed by
+ * the synchronous in-process backend. This is an explicit non-isolated mode;
+ * neither compilation nor the runtime backend is a security boundary.
+ */
+export async function compileTransformInProcessUnisolated(
+  value: unknown,
+): Promise<InProcessUnisolatedCompilationResult> {
+  const fixture = await compileTransformFixtureOnly(value);
+  const profile = resolveServerOwnedProfile();
+  const compilerOptions = {
+    ...COMPILER_OPTIONS,
+    module: ts.ModuleKind.CommonJS,
+  } satisfies ts.CompilerOptions;
+  const transpiled = ts.transpileModule(fixture.normalizedSource, {
+    fileName: "transform.ts",
+    reportDiagnostics: true,
+    compilerOptions,
+  });
+  const syntaxError = (transpiled.diagnostics ?? []).find(
+    (diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error,
+  );
+  if (syntaxError) {
+    throw new TransformHostError(
+      "source_invalid",
+      `Transform source is not valid isolated TypeScript: ${ts.flattenDiagnosticMessageText(syntaxError.messageText, "\n")}`,
+    );
+  }
+
+  const emittedBundleBytes = new TextEncoder().encode(transpiled.outputText);
+  const bundleDigest = sha256Bytes(emittedBundleBytes);
+  const compilerOptionsDigest = sha256Bytes(canonicalJson({
+    inlineSourceMap: false,
+    inlineSources: false,
+    isolatedModules: true,
+    module: "CommonJS",
+    removeComments: false,
+    sourceMap: false,
+    target: "ES2022",
+  }));
+  const compilerDigest = sha256Bytes(canonicalJson({
+    compilerId: COMPILER_ID,
+    compilerOptionsDigest,
+    compilerVersion: ts.version,
+    dependencyClosureDigest: fixture.dependencyClosureDigest,
+  }));
+  const policyDigest = sha256Bytes(canonicalJson({
+    allowedModules: profile.allowedModules,
+    forbiddenIdentifiers: FORBIDDEN_IDENTIFIERS,
+    maxSourceBytes: MAX_SOURCE_BYTES,
+    policyVersion: UNISOLATED_TRANSFORM_POLICY_VERSION,
+    profileId: profile.id,
+    runtimeAbiVersion: UNISOLATED_TRANSFORM_RUNTIME_ABI_VERSION,
+    securityBoundary: false,
+    staticChecksAreSandbox: false,
+  }));
+  const implementationDigest = await computeImplementationDigest({
+    normalized_source_sha256: fixture.sourceDigest,
+    emitted_bundle_sha256: bundleDigest,
+    compiler_id: COMPILER_ID,
+    compiler_version: ts.version,
+    compiler_options_digest: compilerOptionsDigest,
+    dependency_closure_digest: fixture.dependencyClosureDigest,
+    runtime_abi_version: UNISOLATED_TRANSFORM_RUNTIME_ABI_VERSION,
+    host_policy_version: policyDigest,
+  });
+  const result: InProcessUnisolatedCompilationResult = Object.freeze({
+    status: "admitted_in_process_unisolated",
+    executable: true,
+    trustBearingAdmission: false,
+    profileId: fixture.profileId,
+    normalizedSource: fixture.normalizedSource,
+    sourceDigest: fixture.sourceDigest,
+    importedModules: fixture.importedModules,
+    emittedBundleSizeBytes: emittedBundleBytes.byteLength,
+    bundleDigest,
+    codeBundleRef: `bundle_${bundleDigest}`,
+    compilerId: COMPILER_ID,
+    compilerVersion: ts.version,
+    compilerOptionsDigest,
+    compilerDigest,
+    dependencyClosureDigest: fixture.dependencyClosureDigest,
+    runtimeAbiVersion: UNISOLATED_TRANSFORM_RUNTIME_ABI_VERSION,
+    policyVersion: UNISOLATED_TRANSFORM_POLICY_VERSION,
+    policyDigest,
+    implementationDigest,
+  });
+  COMPILED_BUNDLE_BYTES.set(result, Uint8Array.from(emittedBundleBytes));
   return result;
 }
 
@@ -252,7 +365,26 @@ export function createFixtureDatasetTransform(
   value: unknown,
   result: FixtureOnlyCompilationResult,
 ): DatasetTransform {
-  assertHostCompiledResult(result);
+  return createDatasetTransformFromCompilation(value, result, "$.fixture_transform");
+}
+
+/**
+ * Construct the descriptor for the explicit in-process backend from the exact
+ * Host-owned compilation result. This is not an isolation or trust boundary.
+ */
+export function createInProcessDatasetTransform(
+  value: unknown,
+  result: InProcessUnisolatedCompilationResult,
+): DatasetTransform {
+  return createDatasetTransformFromCompilation(value, result, "$.in_process_transform");
+}
+
+function createDatasetTransformFromCompilation(
+  value: unknown,
+  result: HostCompilationResult,
+  path: string,
+): DatasetTransform {
+  hostCompiledBytes(result);
   const metadata = parseDescriptorMetadata(value);
   return parseDatasetTransform({
     ...metadata,
@@ -265,21 +397,17 @@ export function createFixtureDatasetTransform(
     runtime_policy_version: result.policyVersion,
     dependency_closure_digest: result.dependencyClosureDigest,
     code_bundle_ref: result.codeBundleRef,
-  }, "$.fixture_transform");
+  }, path);
 }
 
 /** Internal Host hand-off: rejects structurally forged fixture results. */
-export function copyHostCompiledFixtureBytes(result: FixtureOnlyCompilationResult): Uint8Array {
+export function copyHostCompiledFixtureBytes(result: HostCompilationResult): Uint8Array {
   const bytes = hostCompiledBytes(result);
   return Uint8Array.from(bytes);
 }
 
-function assertHostCompiledResult(result: FixtureOnlyCompilationResult): void {
-  hostCompiledBytes(result);
-}
-
-function hostCompiledBytes(result: FixtureOnlyCompilationResult): Uint8Array {
-  const bytes = COMPILED_FIXTURE_BYTES.get(result);
+function hostCompiledBytes(result: HostCompilationResult): Uint8Array {
+  const bytes = COMPILED_BUNDLE_BYTES.get(result);
   if (!bytes) {
     throw new TransformHostError(
       "descriptor_mismatch",

@@ -142,6 +142,21 @@ function boundedStrings(values: readonly string[], limit = 32): string[] {
   return values.slice(0, limit).map((value) => value.slice(0, 200));
 }
 
+function dynamicFallback(response: DatasetBridgeResponse): Record<string, unknown> {
+  if (
+    !response.ok
+    && response.error.retryable === false
+    && /\btransform rejected:/i.test(response.error.message)
+  ) {
+    return {
+      do_not_retry_static: true,
+      recommended_next_action:
+        "Stop static schema/required_fields probing. Use submit_dynamic_family_build with the requested exact multi-table topology, a TypeScript transform, and fixed Core acquisition_requests.",
+    };
+  }
+  return {};
+}
+
 function resultSummary(response: DatasetBridgeResponse): Record<string, unknown> {
   if (!response.ok) {
     return {
@@ -149,6 +164,7 @@ function resultSummary(response: DatasetBridgeResponse): Record<string, unknown>
       request_id: response.request_id,
       message: response.error.message.slice(0, 500),
       retryable: response.error.retryable,
+      ...dynamicFallback(response),
       ...(response.error.details.build_id === undefined ? {} : { build_id: response.error.details.build_id }),
       ...(response.error.details.publication_id === undefined ? {} : { publication_id: response.error.details.publication_id }),
       ...(response.error.details.reason_codes === undefined ? {} : {
@@ -195,6 +211,7 @@ function resultFor(response: DatasetBridgeResponse): BioMedToolResult {
         request_id: response.request_id,
         message: response.error.message,
         retryable: response.error.retryable,
+        ...dynamicFallback(response),
         ...response.error.details,
       };
   return {

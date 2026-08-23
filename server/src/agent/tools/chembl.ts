@@ -32,8 +32,12 @@ export function createChemblTools(deps: ChemblToolDeps): BioMedAgentTool[] {
         "first; falls back to the rendered search page when the API is unavailable or " +
         "returns an unexpected shape. Returns JSON with source, query, count, records " +
         "(chembl_id, preferred_name, molecule_type, max_phase, url), method_used, and " +
-        "attempts. ChEMBL is an Agent-only research source: findings must never be " +
-        "routed into dataset builds.",
+        "attempts. Search bytes are discovery-only, but verified ChEMBL IDs may be " +
+        "used in a bioactivity build whose fixed chembl.files.v1 Core provider " +
+        "refetches and registers the formal source response. Human EGFR/erbB1 is " +
+        "CHEMBL203; preserve L858R/T790M as assay/activity variant context unless " +
+        "a registered result proves a distinct target ID, and do not enumerate " +
+        "browser target resources after CHEMBL203 is established.",
       source: "chembl",
       queryHint: "'aspirin', 'EGFR inhibitor', 'kinase'",
       recordHint: "molecule",

@@ -1,6 +1,6 @@
 ---
 name: chembl
-description: Search the ChEMBL database for molecules (research-only; findings never route into dataset builds).
+description: Search ChEMBL for controlled identifiers, then use the fixed Core provider for formal bioactivity builds.
 ---
 
 # ChEMBL discovery
@@ -14,7 +14,9 @@ Query ChEMBL with `search_chembl` using a free-text search string.
 
 ## Constraints
 
-- **Research-only source.** ChEMBL findings are for investigation and evidence
-  only — never declare `chembl` as a dataset build source, and never route its
-  results into `execute_dataset_build`.
-- Cite the ChEMBL id or URL for every reported finding.
+- `search_chembl` output is discovery evidence only and is never itself a build carrier.
+- For a formal bioactivity measurement build, use discovered controlled IDs only. In a static build use a binding with `source="chembl"`, `adapter_id="bioactivity.chembl_json.v1"`, and builtin `provider_id="chembl.files.v1"`; omit `source_files`. In submit_dynamic_family_build, put the equivalent fixed provider and parameters under acquisition-requests. Dataset Core must refetch, register, and provenance-bind the immutable API response. Do not download/search the registered file from the Agent Workspace.
+- The normalized dynamic bioactivity topology is generic, not case-specific: target-records, compound-records, assay-records, primary activity-records, and compound-crosswalk; relate each activity many-to-one to target, compound, and assay. Use machine row granularity activity-measurement (not prose). PubChem fixed acquisition accepts one CID per binding, so use one binding/request per compound CID.
+- The Core provider requires exactly one real ChEMBL target ID, 1–32 real ChEMBL compound IDs, and controlled activity types (`IC50`, `EC50`, `Ki`, `Kd`) in spec entities. Never invent mutant target IDs; if ChEMBL does not establish a separate target, preserve the variant as context rather than a target identifier.
+- Stable controlled record: human EGFR (erbB1) is ChEMBL target CHEMBL203 (`https://www.ebi.ac.uk/chembl/explore/target/CHEMBL203`). For L858R/T790M bioactivity integration, use CHEMBL203 for formal acquisition and preserve L858R/T790M from assay/activity metadata in the variant columns unless a registered ChEMBL result already proves a distinct target ID. Do not enumerate target API resources or browser-search for speculative mutant target IDs after CHEMBL203 is established.
+- Cite the ChEMBL ID or URL for every reported finding.

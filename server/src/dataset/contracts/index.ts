@@ -8,6 +8,7 @@ export * from "./primitives.js";
 export * from "./enums.js";
 export * from "./schema.js";
 export * from "./source.js";
+export * from "./provider-revision-evidence.js";
 export * from "./operation-result.js";
 export * from "./deterministic-derive.js";
 export * from "./acquisition.js";

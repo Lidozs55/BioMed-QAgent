@@ -2,74 +2,111 @@
 
 ## Status
 
-Proposed — 2026-08-21。
+Accepted — 2026-08-22（原 Proposed / Deferred）。
 
-本 ADR 是 `docs/plans/family-host/` v2 计划的目标决策，不代表当前仓库已经具备动态 Transform Host。接受前，Agent-authored transform 仍遵守 ADR-034/038 的 candidate-only 限制。
+当前批准的是**显式启用的进程内非隔离执行**，backend receipt 固定为
+`in_process_unisolated`。它不是 sandbox、隔离机制或安全边界，不能用于抵御恶意
+transform。当前范围明确不开发 container、IPC worker 或独立低权限 process backend。
+
+`node:vm` 仅用于同步 wall-time interruption；它不提供权限、网络、文件系统、进程或
+内存隔离。任何文档、UI、receipt 或 release evidence 都不得把它描述为 sandbox。
 
 ## Context
 
-当前 Dataset Core 通过静态 `DatasetFamilyRegistry`、registered adapter、family assembler 和固定 operation skeleton 提供已注册数据能力。Agent 可以发现和整理未知数据，但无法为新数据格式提出可执行的正式转换逻辑。另一方面，当前 `workspace process.exec` 是同 OS 账户下的授权命令执行，明确不是 sandbox；`worker_threads`、`node:vm` 和普通 `child_process` 也不能单独安全执行不可信 TypeScript。
+静态 `DatasetFamilyRegistry` 和 family-specific assembler 无法表达未知数据格式及冻结的
+多表 topology。永久扩张领域分支会使 Core 同时承担动态格式转换与产品信任判断。
+我们需要统一的声明式 `FamilySpec` + executable `DatasetTransform` 边界，同时保持
+SourceAsset、OperationResult、B3、ProductAssessment、Publication 和 Artifact API 的
+Core authority。
 
-现有六个 Family 是有价值的生产回归样例，但把它们永久扩张为六套 Core 领域框架会继续增加 family/provider/assembler 分支。需要一个统一、受控、可复现的动态转换边界，同时不能把 Agent 变成 Publisher 或任意 DAG 编排器。
+隔离执行不在本轮范围内。接受非隔离执行意味着 transform source 必须被视为拥有
+Application Host 进程权限；AST deny list、`node:vm`、bounded SDK 和 timeout 只能减少
+误用和失控，不是恶意代码防御。该风险必须由显式 opt-in 和产品部署信任模型承担。
 
 ## Decision
 
 ### 1. FamilySpec 与 DatasetTransform 分离
 
-`FamilySpec` 是不含代码的声明式数据产品契约，描述 projection、schema、table/relation、identity、compatibility、integration、validation、assessment 和资源请求。
+`FamilySpec` 是不含代码/path/DAG 的声明式数据产品契约，描述 projection、tables、
+relations、identity、validation、assessment 和资源请求。`DatasetTransform` 是固定
+ABI 的转换代码，绑定 exact FamilySpec/Projection/implementation digests、registered
+input handles 和 declared outputs；它不能定义 arbitrary DAG、merge winner、validator、
+ProductAssessment 或 Publisher。
 
-`DatasetTransform` 是统一的可执行转换 ABI，声明输入 asset/result handles、输出 schema/table、FamilySpec digest、实现/编译器/依赖/runtime/policy digest 和 determinism profile。它不选择 merge winner、validation threshold、ProductAssessment、PublicationCandidate、Publisher 或任意 DAG。
+### 2. 当前 backend：`in_process_unisolated`
 
-不再把“Agent transform”和“Trusted Extension”设计为两套 executable ABI。来源、scope、执行状态、复用状态和 activation 独立记录；统一 ABI 不等于统一信任等级。
+当前唯一动态 backend 在 TS Application Host 进程内执行，必须满足：
 
-### 2. Transform Host 是独立隔离执行面
+- 调用方显式选择 `execution_backend=in_process_unisolated`；
+- receipt 同样诚实记录 `in_process_unisolated` 和 `securityBoundary=false`；
+- source 由 Host normalize/compile，bundle content-addressed，并在执行前重验 SHA-256；
+- 输入只来自当前 task 的 registered immutable asset/result receipts，按 exact handle/order/
+  owner/size/digest 重新验证；不向 transform 暴露路径、credentials 或 workspace API；
+- bounded output/log、deadline、generation/cancel fence 在 admission 前生效；
+- `node:vm` 只提供同步 timeout，不提供隔离；
+- 该 backend 不接受 `sandbox`、`secure`、`isolated` 等能力声明。
 
-Transform 必须在独立进程或等价容器中执行，不能在 TS Application Host 中 `eval/import`，也不能使用 workspace `process.exec` 作为生产执行器。受支持 backend 必须提供低权限 OS identity、输入只读、独立 quarantine 输出、网络 deny、凭据不继承、CPU/RSS/PID/disk/open-file 限制、hard timeout kill、process-tree cleanup 和 worker generation fence。
-
-若目标平台不能提供等价隔离，Agent-authored transform 保持 disabled；不得降级为同账户 spawn、`node:vm` 或 `worker_threads`。
+未来若增加 isolated backend，必须单独 ADR，完成 OS identity、network deny、credential
+stripping、read-only inputs、quota/hard kill/process-tree cleanup 和 cross-platform release
+evidence。不得把当前 backend 原地改名为 sandbox。
 
 ### 3. Host receipt 不等于 Core trust
 
-Host 只产生 `TransformExecutionReceipt` 和 invocation-scoped quarantine output。Core 必须重新 hash、严格解析声明输出、检查 source locator/input closure、创建 native `OperationResultManifest`，然后执行 compatibility partition、deterministic integration、B3、科学语义验证、ProductAssessment 和 Publisher。
+Transform 只产生 `TransformExecutionReceipt` 和 invocation-scoped bytes。Core 必须把
+bytes 写入私有 quarantine、重新 hash、执行 closed-world output admission，并创建 native
+`OperationResultManifest`。随后才可 materialize dynamic string-preserving schemas、运行
+multi-table B3、创建 Core evidence、ProductAssessment 和 immutable Publication。
 
-Agent、Transform Host、workspace、FamilySpec 均不能直接创建正式 Publication。
+Agent、Transform、FamilySpec、workspace 和 Host receipt 都不能直接创建 Publication。
 
-### 4. 固定 slot，不引入 Agent DAG
+### 4. 严格 submission 与 identity
 
-DatasetTransform 只能进入服务端声明的固定 slot。Agent 不能提交 nodes/edges、任意 merge function、任意 validator 或 acquisition WorkflowRecipe code。WorkflowRecipe 仍只负责受控 acquisition 并产出 SourceAsset。
+`submit_dynamic_family_build` 只接受 exact-key、descriptor-safe、digest-bound input：
 
-### 5. Family 的长期形态
+- valid `FamilySpec` canonical digest 和 selected Projection digest；
+- Host-compiled transform descriptor digest（首次 mismatch 会返回 expected digest，调用方
+  必须用该 digest 重提；不能跳过 readmission）；
+- `binding_id → asset_<sha256>` 的 task-owned registered source closure；
+- 禁止 direct/workspace paths、discovery response bytes、unknown fields、Proxy/accessor objects、
+  example scope 和 sandbox/security claims；
+- `build_id` 只是 execution proposal identity，不能生成 dataset/provider revision identity。
 
-现有六个 Family 逐 capability 迁移为 `examples/families/` 下的 retrieval-based reference examples，承担 few-shot、SDK example、fixture、shadow parity 和回归用途。Example 不被 Core import、启动扫描或自动注册为 production capability。只有 exact scope/id/version/digest 的 capability 经过 Host fixture、Core shadow、trusted E2E 和 activation gate 后才能启用；legacy path 按 capability 逐项退休。
+### 5. Generic materialization and publication
 
-### 6. 兼容和版本
+FamilySpec 缺少科学 field types 时，dynamic tables 使用保守的
+`dynamic_string_preserving.v1`；不得推断 numeric/unit/ontology/domain semantics。一个 native
+multi-table OperationResult 可用 strict `output_summary.tables` 描述多表，但 summary keys 必须
+精确闭合 projection tables。B3、Core-derived provenance/confidence manifests、
+ProductAssessment、Publisher 和 Artifact API hash verification 仍是正式产品门禁。
 
-`DatasetBuildSpec 1.0` 不增加 `schema_refs` 或 transform path。动态路径使用新的版本化 DTO，引用 exact FamilySpec/Projection/Transform digests；Core 重新 admission。现有 SourceAsset、OperationResult、checkpoint、B3、ProductAssessment、Publisher 和历史 Manifest/Publication readers 保持兼容。
+包含 `review_status` 或 `human_review_status` 的 schema 必须 fail closed 为
+`human_review_pending`，直到存在真实 HIL acceptance evidence；不能由 Agent 自动批准。
+
+### 6. Fixed slot, not Agent DAG
+
+DatasetTransform 仅进入服务端固定 dynamic-family slot。Agent 不能提交 arbitrary
+nodes/edges、merge function、validator、acquisition code 或 publication path。
 
 ## Consequences
 
 ### Positive
 
-- Agent 可以为未知格式提出可执行转换，但代码执行有独立隔离面；
-- Core 仍是唯一产品信任和 Publication 权威；
-- 领域 Family 可从 Core hardcode 逐步迁为可检索参考实现；
-- 同一 Transform ABI 避免两套扩展运行时；
-- implementation digest、input receipt、quarantine、Core gate 和 replay 保证可审计。
+- 未知/冻结多表 topology 不再要求新增 family-ID dispatch；
+- registered source receipts 到 immutable Publication 的同一 Core trust chain 可复用；
+- non-isolated runtime 的限制和风险在 contract、receipt、docs 与 tests 中保持诚实；
+- static registered runtime 继续兼容，动态路径不会放宽现有 provider boundary。
 
 ### Costs and risks
 
-- 必须先实现真实 OS/container isolation，不能用 Node 内置机制冒充 sandbox；
-- compiler/bundle/dependency/runtime identity、资源和 deterministic replay 需要新 contract；
-- `registered_multitable.runtime.v1` 旁路必须先回到通用 executor 生命周期；
-- 只有两个真实消费者证明 primitive 可复用后，才能推广为 generic；
-- Windows 等平台若无等价隔离只能禁用动态 transform。
+- transform code与Application Host同权限；恶意代码风险不由当前机制缓解；
+- 进程级RSS/PID/open-file限制只是声明/门禁，不能像OS sandbox那样强制；
+- 多进程Host并发写同一task event log的race仍需独立修复；Gold运行冻结期间必须只运行一个Host；
+- `dynamic_string_preserving.v1` 只保证结构保真，不代表科学语义完整；
+- HIL、family-specific scientific assessment 和未来isolated backend仍是独立工作。
 
 ## Relationship to Earlier ADRs
 
-- ADR-020：当前代码已完成 Python Core 迁移；本 ADR 提议保留 Core deterministic admission/integration/validation/assessment/publication，而把领域转换放入受控 Host，接受后需正式 supersede 历史 Phase 0/1 ownership wording。
-- ADR-027：静态 Family Registry 先保留为 DatasetBuildSpec 1.0 compatibility facade，最终由 admitted FamilySpec/capability resolution 逐步替代。
-- ADR-028：现有 `TableRole` 不加入 `audit`；processing audit 使用独立 audit artifact contract。
-- ADR-033：保留 Core-only PublicationCandidate，长期用 contract-driven assembly 替代 family-specific handler registry。
-- ADR-034：registered adapter 继续只接受 Core asset receipt 和 registered parser；Agent transform 走独立 Host，不放宽 adapter 边界。
-- ADR-036：fixed deterministic derive slot 保留；DatasetTransform 也是 fixed slot，不是通用 DAG。
-- ADR-038：ProductAssessment、digest、registered inputs、resource/no-network 和 Publisher 边界保留；“promoted before any execution”改为 sandbox execution 与 publication activation 分离。
+- ADR-027：静态 registry 保持兼容 facade；dynamic topology 不增加 family-ID branches。
+- ADR-033/034：PublicationCandidate 和 provider acquisition 继续 Core-owned；discovery bytes 不是 carrier。
+- ADR-036：dynamic transform 和 deterministic derive 都是 fixed slot，不是通用 DAG。
+- ADR-038：registered inputs、digest、B3、ProductAssessment 和 Publisher authority 保持不变。

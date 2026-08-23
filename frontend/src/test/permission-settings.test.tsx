@@ -55,6 +55,7 @@ describe("AgentPermissionSettingsSection (P6)", () => {
     await waitFor(() => {
       expect(screen.getAllByText("权限模式").length).toBeGreaterThan(0);
     });
+    fireEvent.click(screen.getByRole("button", { name: "高级 ACL 设置" }));
     expect(screen.getByText(/访问项目或外部文件、执行命令时询问你/)).toBeTruthy();
     expect(screen.getByText(/暂无持久规则/)).toBeTruthy();
   });
@@ -103,8 +104,10 @@ describe("AgentPermissionSettingsSection (P6)", () => {
       }),
     })} />);
     await waitFor(() => {
-      expect(screen.getByText("D:\\datasets\\TCGA")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "高级 ACL 设置" })).toBeTruthy();
     });
+    fireEvent.click(screen.getByRole("button", { name: "高级 ACL 设置" }));
+    expect(screen.getByText("D:\\datasets\\TCGA")).toBeTruthy();
     expect(screen.getByText("读取")).toBeTruthy();
     expect(screen.getByText("递归")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /删除规则/ }));
@@ -123,8 +126,10 @@ describe("AgentPermissionSettingsSection (P6)", () => {
       }),
     })} />);
     await waitFor(() => {
-      expect(screen.getAllByText(/始终允许命令执行/).length).toBeGreaterThan(0);
+      expect(screen.getByRole("button", { name: "高级 ACL 设置" })).toBeTruthy();
     });
+    fireEvent.click(screen.getByRole("button", { name: "高级 ACL 设置" }));
+    expect(screen.getAllByText(/始终允许命令执行/).length).toBeGreaterThan(0);
   });
 
   it("toggles the persistent exec switch through the API", async () => {
@@ -138,8 +143,10 @@ describe("AgentPermissionSettingsSection (P6)", () => {
       setAgentPermissionsPersistentExec: setPersistentExec,
     })} />);
     await waitFor(() => {
-      expect(screen.getByRole("switch", { name: "始终允许命令执行" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "高级 ACL 设置" })).toBeTruthy();
     });
+    fireEvent.click(screen.getByRole("button", { name: "高级 ACL 设置" }));
+    expect(screen.getByRole("switch", { name: "始终允许命令执行" })).toBeTruthy();
     fireEvent.click(screen.getByRole("switch", { name: "始终允许命令执行" }));
     await waitFor(() => {
       expect(setPersistentExec).toHaveBeenCalledWith(true);
@@ -156,8 +163,10 @@ describe("AgentPermissionSettingsSection (P6)", () => {
       }),
     })} />);
     await waitFor(() => {
-      expect(screen.getByRole("switch", { name: "始终允许命令执行" })).toHaveAttribute("aria-disabled", "true");
+      expect(screen.getByRole("button", { name: "高级 ACL 设置" })).toBeTruthy();
     });
+    fireEvent.click(screen.getByRole("button", { name: "高级 ACL 设置" }));
+    expect(screen.getByRole("switch", { name: "始终允许命令执行" })).toHaveAttribute("aria-disabled", "true");
     expect(screen.getByText(/受限模式下命令执行始终拒绝/)).toBeTruthy();
   });
 });
@@ -192,8 +201,10 @@ describe("AgentPermissionSettingsSection temp grants + rule creation (round-3 au
       revokeAgentTempGrant: revokeGrant,
     })} />);
     await waitFor(() => {
-      expect(screen.getByText("D:\\datasets\\TCGA")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "高级 ACL 设置" })).toBeTruthy();
     });
+    fireEvent.click(screen.getByRole("button", { name: "高级 ACL 设置" }));
+    expect(screen.getByText("D:\\datasets\\TCGA")).toBeTruthy();
     // A whole-scope (root null) grant is labeled explicitly.
     expect(screen.getByText(/整个工作区范围/)).toBeTruthy();
     expect(screen.getByText("本 Run")).toBeTruthy();
@@ -214,8 +225,10 @@ describe("AgentPermissionSettingsSection temp grants + rule creation (round-3 au
     });
     render(<AgentPermissionSettingsSection api={mockApi({ addAgentPermissionRule: addRule })} />);
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /添加规则/ })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "高级 ACL 设置" })).toBeTruthy();
     });
+    fireEvent.click(screen.getByRole("button", { name: "高级 ACL 设置" }));
+    expect(screen.getByRole("button", { name: /添加规则/ })).toBeTruthy();
     fireEvent.change(screen.getByLabelText(/路径（绝对路径，自动规范化）/), {
       target: { value: "D:\\datasets\\TCGA" },
     });

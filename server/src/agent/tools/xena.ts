@@ -108,14 +108,14 @@ export async function searchXena(
   const term = expectString(args, "term", "");
   const effectiveTerm = query || term;
   const hooks = noopHooks(deps.hooks);
-  hooks.onQueryStarted(effectiveTerm, "xena");
+  const queryCallToken = hooks.onQueryStarted(effectiveTerm, "xena");
   const pace = (): Promise<void> => rateLimit("https://ucsc-xena.s3.us-east-1.amazonaws.com", deps.rateLimitMs ?? XENA_RATE_LIMIT_MS);
 
   let allDatasets: XenaHubRecord[];
   try {
     allDatasets = await fetchXenaHubIndex(deps.client, { signal, rateLimit: pace });
   } catch (error) {
-    hooks.onQuery(effectiveTerm, "xena", "failed", 0);
+    hooks.onQuery(effectiveTerm, "xena", "failed", 0, queryCallToken);
     return {
       source: "xena",
       term: effectiveTerm,
@@ -129,7 +129,7 @@ export async function searchXena(
     ? allDatasets.filter((record) => matchXenaRecord(record, effectiveTerm.trim()))
     : allDatasets;
 
-  hooks.onQuery(effectiveTerm, "xena", "success", matched.length);
+  hooks.onQuery(effectiveTerm, "xena", "success", matched.length, queryCallToken);
   return {
     source: "xena",
     term: effectiveTerm,

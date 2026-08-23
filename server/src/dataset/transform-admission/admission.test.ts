@@ -295,6 +295,81 @@ describe("Core transform quarantine admission", () => {
     await expect(readFile(path.join(committedPath, "expression.csv"))).resolves.toEqual(TABLE_BYTES);
   });
 
+  it("admits multiple output tables that share one registered source locator", async () => {
+    const fixture = await createFixture();
+    await writeFile(path.join(fixture.quarantineRoot, "supporting.csv"), TABLE_BYTES);
+    const secondDeclared = { table_id: "supporting", schema_ref: "schema_supporting_v1" };
+    const familySeed: FamilySpec = {
+      ...fixture.expected.family_spec,
+      canonical_digest: HEX_A,
+      declared_outputs: [...fixture.expected.family_spec.declared_outputs, secondDeclared],
+    };
+    const familySpec: FamilySpec = {
+      ...familySeed,
+      canonical_digest: await computeFamilySpecDigest(familySeed),
+    };
+    const transformDescriptor: TransformDescriptorDigestInput = {
+      ...fixture.expected.transform_descriptor,
+      bound_family_spec_digest: familySpec.canonical_digest,
+      declared_output_tables: [
+        ...fixture.expected.transform_descriptor.declared_output_tables,
+        secondDeclared,
+      ],
+    };
+    const transformDescriptorDigest = sha256(
+      buildTransformDescriptorDigestCanonical(transformDescriptor),
+    );
+    const secondExpected = {
+      ...fixture.expected.expected_outputs[0],
+      table_id: "supporting",
+      schema_ref: "schema_supporting_v1",
+      artifact_ref: "artifact_supporting_fixture",
+      // Deliberately shared: both tables derive from the same source receipt.
+      locator_ref: fixture.expected.expected_outputs[0]!.locator_ref,
+      relative_path: "supporting.csv",
+    };
+    const secondReceipt = {
+      ...fixture.receipt.quarantined_output_receipts[0]!,
+      table_id: "supporting",
+      schema_ref: "schema_supporting_v1",
+      artifact_ref: "artifact_supporting_fixture",
+      locator_ref: fixture.receipt.quarantined_output_receipts[0]!.locator_ref,
+    };
+    const receipt: TransformExecutionReceipt = {
+      ...fixture.receipt,
+      family_spec_digest: familySpec.canonical_digest,
+      transform_digest: transformDescriptorDigest,
+      output_bytes: TABLE_BYTES.byteLength * 2,
+      quarantined_output_receipts: [
+        ...fixture.receipt.quarantined_output_receipts,
+        secondReceipt,
+      ],
+    };
+    const expected: ExpectedTransformInvocation = {
+      ...fixture.expected,
+      family_spec: familySpec,
+      transform_descriptor: transformDescriptor,
+      transform_descriptor_digest: transformDescriptorDigest,
+      expected_outputs: [...fixture.expected.expected_outputs, secondExpected],
+    };
+    const evidence = await admitTransformExecution({
+      ...fixture.request,
+      receipt_evidence: {
+        evidence_class: "synthetic_test_fixture_receipt",
+        fixture_id: "fixture_shared_locator_receipt",
+        fixture_receipt: receipt,
+      },
+      expected_invocation: expected,
+    });
+
+    expect(evidence.decision).toBe("admitted");
+    expect(evidence.outputs).toHaveLength(2);
+    expect(evidence.outputs.map((output) => output.locator_ref)).toEqual([
+      fixture.expected.expected_outputs[0]!.locator_ref,
+      fixture.expected.expected_outputs[0]!.locator_ref,
+    ]);
+  });
+
   it("rejects receipt-shaped input without an explicit evidence class", async () => {
     const fixture = await createFixture();
     const evidence = await admitTransformExecution({

@@ -21,5 +21,6 @@ Use `search_pubchem` to find compounds by name (e.g. "aspirin", "curcumin"),
 
 ## Constraints
 
-- **Research-only source.** PubChem data is for investigation and evidence
-  only — never declare `pubchem` as a dataset build source.
+- Search/detail responses are discovery evidence only and are never themselves build carriers.
+- For a formal bioactivity measurement compound-identity build, use one verified positive CID. In a static build use a binding with `source="pubchem"`, `adapter_id="bioactivity.pubchem_identity.v1"`, and builtin `provider_id="pubchem.files.v1"`; omit source files. In submit_dynamic_family_build, put the equivalent fixed provider and parameters under acquisition-requests. Dataset Core must refetch, register, and provenance-bind the immutable PubChem JSON response. Do not inspect the registered file through workspace tools.
+- PubChem identity is accepted only when its InChIKey exactly matches one ChEMBL compound in the same build; do not infer a crosswalk from names alone.

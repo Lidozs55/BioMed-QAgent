@@ -186,6 +186,7 @@ describe("business tool bundle (P5-02/P5-12)", () => {
       "search_local_cache",
       "describe_local_cache",
       "get_cache_dataset",
+      "submit_dynamic_family_build",
     ]));
     // Analysis tools register with the full bundle.
     for (const name of [

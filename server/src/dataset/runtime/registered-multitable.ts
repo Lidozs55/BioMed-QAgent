@@ -29,7 +29,10 @@ import { sha256FileStream } from "../adapters/hashing.js";
 import { createDefaultFamilyAssemblerRegistry } from "../assembly/index.js";
 import type { DatasetBuildSpec, ValidationResult } from "../contracts/index.js";
 import type { DatasetFamilyDefinition } from "../families/index.js";
-import { createDefaultDatasetFamilyRegistry } from "../families/index.js";
+import {
+  createDefaultDatasetFamilyRegistry,
+  registeredTableSchemasById,
+} from "../families/index.js";
 import { packageDigest } from "../publish/manifest.js";
 import { promotePublication, type PublishResult } from "../publish/publisher.js";
 import { validateMultiTableCandidate } from "../validation/multitable.js";
@@ -38,7 +41,6 @@ import { providerCarrierBinding } from "./provider-bindings.js";
 import { parseProteinStructureCarrier } from "../families/protein-structure/provider.js";
 import { transformChemblRegisteredAssets } from "../families/bioactivity-measurement/chembl.js";
 import {
-  bioactivityCompoundCrosswalkSchema,
   buildBioactivityIdentity,
   normalizeBioactivityInchiKey,
   parsePubChemIdentityCarrier,
@@ -46,11 +48,6 @@ import {
 } from "../families/bioactivity-measurement/index.js";
 import { transformBioCLiteratureEvidence } from "../families/literature-evidence/provider.js";
 import { expandTargetEvidenceJsonCarriers } from "../families/target-evidence/provider-json.js";
-import { literatureEvidenceTables } from "../families/literature-evidence/schema.js";
-import { targetEvidenceTableSchemas } from "../families/target-evidence/schemas.js";
-import { buildProteinStructureTables } from "../families/protein-structure/schemas.js";
-import { bioactivityTableEntries } from "../families/bioactivity-measurement/schemas.js";
-
 const IMPLEMENTATION_DIGEST = createHash("sha256")
   .update("registered_multitable.runtime.v1")
   .digest("hex");
@@ -514,36 +511,11 @@ export async function executeRegisteredMultiTableBuild(
       aggregateRows.compound_crosswalks = [...identityResult.compound_crosswalks];
     }
     const rows: ProviderRows = aggregateRows;
+    const registeredSchemas = registeredTableSchemasById(family);
     const tableSchemas = new Map<string, DatasetSchemaV2>();
     for (const tableId of Object.keys(rows)) {
-      const schema = family.schemas.find((candidate): candidate is DatasetSchemaV2 => candidate.schema_version === "2.0" &&
-        candidate.schema_id.split(".")[1] === tableId);
-      if (schema !== undefined && schema.schema_version === "2.0") tableSchemas.set(tableId, schema);
-    }
-    // Schema IDs are family-owned and the table ID is the final component for
-    // these registered families. Prefer the authoritative assembler tables when
-    // a family uses a different schema suffix.
-    if (family.id === "literature_evidence") {
-      for (const entry of literatureEvidenceTables) {
-        if (entry.schema.schema_version === "2.0") tableSchemas.set(entry.definition.table_id, entry.schema);
-      }
-    } else if (family.id === "target_evidence") {
-      for (const [tableId, schema] of Object.entries(targetEvidenceTableSchemas)) {
-        if (schema.schema_version === "2.0") tableSchemas.set(tableId, schema);
-      }
-    } else if (family.id === "protein_structure") {
-      const tables = buildProteinStructureTables();
-      tableSchemas.set("structures", tables.structure);
-      tableSchemas.set("chains", tables.chain);
-      tableSchemas.set("ligands", tables.ligand);
-      tableSchemas.set("sources", tables.source);
-    } else if (family.id === "bioactivity_measurement") {
-      for (const entry of bioactivityTableEntries()) {
-        if (entry.schema.schema_version === "2.0") tableSchemas.set(entry.tableId, entry.schema);
-      }
-      if (rows.compound_crosswalks !== undefined) {
-        tableSchemas.set("compound_crosswalks", bioactivityCompoundCrosswalkSchema);
-      }
+      const schema = registeredSchemas.get(tableId);
+      if (schema !== undefined) tableSchemas.set(tableId, schema);
     }
     for (const tableId of Object.keys(rows)) {
       if (!tableSchemas.has(tableId)) {

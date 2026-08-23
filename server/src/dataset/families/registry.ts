@@ -201,6 +201,38 @@ function validateDefinition(definition: DatasetFamilyDefinition): void {
   }
 }
 
+export function registeredTableSchemasById(
+  definition: Pick<DatasetFamilyDefinition, "id" | "schemas" | "sources">,
+): ReadonlyMap<string, DatasetSchemaV2> {
+  const schemas = new Map<string, DatasetSchemaV2>();
+  for (const source of definition.sources) {
+    if (source.table_id === undefined) continue;
+    if (source.schema_refs.length !== 1) {
+      throw new Error(
+        `registered table '${definition.id}/${source.table_id}' must reference exactly one schema`,
+      );
+    }
+    const schemaRef = source.schema_refs[0]!;
+    const schema = definition.schemas.find(
+      (candidate): candidate is DatasetSchemaV2 =>
+        candidate.schema_id === schemaRef && candidate.schema_version === "2.0",
+    );
+    if (schema === undefined) {
+      throw new Error(
+        `registered table '${definition.id}/${source.table_id}' requires Schema 2.0 '${schemaRef}'`,
+      );
+    }
+    const existing = schemas.get(source.table_id);
+    if (existing !== undefined && existing.schema_id !== schema.schema_id) {
+      throw new Error(
+        `registered table '${definition.id}/${source.table_id}' has conflicting schemas`,
+      );
+    }
+    schemas.set(source.table_id, schema);
+  }
+  return schemas;
+}
+
 export class DatasetFamilyRegistry {
   private readonly definitions = new Map<string, DatasetFamilyDefinition>();
 
@@ -550,6 +582,7 @@ export function bioactivityMeasurementFamilyDefinition(): DatasetFamilyDefinitio
       validateParameters: noAdapterParameters,
     }, {
       source: "pubchem",
+      table_id: "compound_crosswalks",
       adapter_id: "bioactivity.pubchem_identity.v1",
       schema_refs: [bioactivityCompoundCrosswalkSchema.schema_id],
       parameters_required: false,

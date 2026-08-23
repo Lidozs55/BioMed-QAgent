@@ -1,13 +1,10 @@
 # BioMed-QAgent 开发 TODO
 
-> 当前主线：**Family Host + Transform Host** 计划集（目标 ADR-039，Proposed）。
-> 详细设计见 `docs/plans/family-host/`（`00-overview` … `09-execution-matrix`）。
-> 本文件将计划拆为 4 个开发者组 A/B/C/D，按「**冻结契约类型**」一层解耦，使各组尽量并行推进。
-> 文档 `10-consistency-review` 为一致性审查，不单独列任务。
+> 当前主线：**FamilySpec + Core deterministic primitives + 显式非隔离动态执行** 收敛；ADR-039 已接受 `in_process_unisolated` production route。
+> 详细设计见 `docs/plans/family-host/`（历史批次计划）与当前约束 `docs/architecture/FAMILY-HOST-03-execution-constraints.md`。
 >
-> ADR-039 接受前：可完成 contract / threat model / isolated fixture Host / shadow tooling，
-> 但**不得**接默认 build route、不得激活 Agent-authored transform、不得删除 static runtime。
-> 当前承诺截止：**Batch 0 + Batch 1 + Batch 2A（expression shadow）+ Batch 2B go/no-go**。
+> 当前范围明确**不开发** sandbox/container/IPC worker/独立低权限process backend。`in_process_unisolated` 不是sandbox、隔离机制或安全边界；`node:vm`只用于同步timeout。
+> 当前动态流程已接入：registered receipts → compile/digest closure → unisolated execute → quarantine/native OperationResult → B3/ProductAssessment → immutable Publication。剩余release条件是同一冻结commit、单Host的Gold1–Gold6证据；Gold6必须等待真实HIL acceptance。
 >
 > **2026-08-22 red-team 状态**：`808279ac` 仅是初始 DTO/计划草案；其 wire-parser 缺口已由
 > `76df8008`、`3ed0ade5`、`f32f563f` 关闭：descriptor-safe own-data parsing、dense/finite/safe-number
@@ -20,7 +17,7 @@
 ## 全局质量门（每次提交必过）
 
 - 代码：`pnpm test` / `pnpm lint` / `pnpm typecheck` / `pnpm build`；涉及 `database/` 时另跑 Python bridge gates。
-- 新增 Transform Host 必须额外跑：sandbox/red-team、resource、cancel/restart、digest/replay、Artifact API hash 测试（来源 `09-execution-matrix.md §9`）。
+- 动态production wiring必须诚实声明`in_process_unisolated`并保留registered input、digest、resource/cancel、quarantine、native result、B3、ProductAssessment、Publication与Artifact API hash全套门禁。未来isolated backend须独立ADR，不得把当前backend改名为sandbox。
 - 每个实现分支合并前须提供：契约版本/digest、trust/status、resource evidence、tests、same-commit artifact refs、rollback plan，并明确冻结的 `submitted / sandbox_executable / fixture_verified / shadow_verified / trusted_e2e_verified / activated / revoked / retired` 状态；retrieval-only example 表示为 `scope=example + status=submitted`，不是另一个 trust status（来源 `04 §2`、`09 §8`）。
 
 ## 分支命名（来源 `09-execution-matrix.md §8`）
@@ -43,11 +40,11 @@
 - **D 的示例/目录编写与 B/C 并行**（对照冻结契约）；只有 E2 的 shadow 执行、E3 的 go/no-go、R1 的 release 核对
   在 B+C 合入后作为**集成闸门**进行。
 
-### 并行里程碑
+### 当前里程碑
 
-- **M1（A 落地契约 PR）**：`@biomed/contracts` 冻结 DTO / parser / digest / identity / B3 接口 → 解除 B/C/D 阻塞。
-- **M2（B ∥ C ∥ D-编写 并行）**：B 实现 Host；C 实现 admission/validation/disk；D 编写 examples/fixtures/catalog。
-- **M3（集成闸门）**：B+C 合入后，D-E2 shadow 执行 + E3 go/no-go + R1 release 核对。
+- **M1（A contracts）**：`@biomed/contracts` DTO/parser/digest/identity/B3接口。
+- **M2（C + D静态资产）**：Core admission/validation/disk/fixed-slot/release verification；examples保持retrieval-only。
+- **M3（当前release gate）**：显式非隔离Host execution与Core publication flow已落地；等待同一冻结commit/单Host的Gold1–Gold6证据，Gold6另需真实HIL acceptance。
 
 ## 目录归属（各组独立目录，减少 merge 冲突）
 
@@ -61,11 +58,11 @@
 ## 全局 guardrail（违反即回退，来源 `10-consistency-review.md §5` / `08-activation-release.md §7`）
 
 **停止条件（任一触发立即停 activation，回到 contract/security/closure 修复）：**
-Host 不是实际 OS sandbox；implementation digest 不覆盖 bundle/dependency/runtime；quarantine output 能绕过 Core；B3 大表仍无界 `Map`；只有一个真实消费者；或 ProductAssessment 与 Publication identity 不一致。
+把`in_process_unisolated`宣称为sandbox；implementation digest不覆盖bundle/dependency/runtime；registered input或quarantine output能绕过Core；B3越过resource gate；或ProductAssessment与Publication identity不一致。
 
-**禁止提案：** ① `workspace_exec node/tsx transform.ts`；② 同进程 `eval/import` Agent code；③ transform 自报 digest 或只用 ID/version；④ output receipt 直接转 Publication artifact；⑤ memory B3 扫大表到 OOM；⑥ 所有 ambiguity 交 LLM（须 typed decision + policy + Core replay）；⑦ 以六 example 目录存在证明 capability 已迁移；⑧ Batch 2 前设计 promotion 市场/全六族删除/通用 DAG。
+**禁止提案：** ① `workspace_exec node/tsx transform.ts`；② 把`node:vm`/同进程执行称为隔离；③ transform自报digest或只用ID/version；④ output receipt直接转Publication artifact；⑤ memory B3扫大表到OOM；⑥ ambiguity交LLM代替typed/Core replay；⑦以example/static fixture称trusted E2E；⑧通用Agent DAG。
 
-**每 PR 必答（来源 `10 §6`）：** 变更属于 contract/Host/Core/example/release 哪层？输入是否 exact asset/result handle + ownership/hash closure？代码是否在批准隔离 backend？output 是否 quarantine→重哈希→strict parse→Core committed？digest 是否进入 checkpoint identity？大数据是否 bounded/disk-backed？cancel/timeout/restart/late worker 有测试？ProductAssessment 与 Publication 是否同 selected run/build/candidate？是否至少第二真实消费者才称 generic？legacy 删除条件/shadow evidence/rollback 是否具备？
+**每 PR 必答（来源 `10 §6`）：** 变更属于contract/Core/example/release哪层？输入是否exact asset/result handle + ownership/hash closure？output是否strict parse→Core committed？digest是否进入checkpoint identity？大数据是否bounded/disk-backed？cancel/timeout/restart有测试？ProductAssessment与Publication是否同selected run/build/candidate？不得以example/fixture称generic。若未来恢复Host路线，才额外回答批准隔离backend、quarantine/late-worker、第二真实消费者、shadow/rollback等Deferred门禁。
 
 ---
 
@@ -73,10 +70,11 @@ Host 不是实际 OS sandbox；implementation digest 不覆盖 bundle/dependency
 
 > 本组交付**冻结契约类型**，是 M1 的唯一产出；不依赖其他组。B/C/D 对照本文档与计划直接开工。
 
-- [x] **A-T0** ADR-039 proposal + 威胁模型 + 平台/沙箱 backend 支持矩阵
-      - 设计：`00-overview.md §7`、`03-transform-host-security.md §1/§3`
-      - 产物：Proposed ADR-039、threat-model 文档、sandbox backend decision（含 Windows 达标/不达标结论）
-      - 验收：明确 production 仅允许独立低权限 OS/容器 backend；Windows 不达标则该平台禁激活
+- [x] **A-T0** ADR-039 proposal评估 + 威胁模型 + 平台/沙箱backend支持矩阵
+      - 状态：ADR-039已Accepted；当前明确接受显式`in_process_unisolated`风险，isolated backend不继续开发
+      - 设计：`00-overview.md §7`（历史）与`architecture/FAMILY-HOST-03-execution-constraints.md`（当前）
+      - 产物：Accepted ADR-039、threat-model文档、未来isolated backend适用的decision矩阵
+      - 验收：当前Host诚实fail open only under explicit opt-in但不声称隔离；未来isolated backend须独立ADR和OS/容器证据
       - ⚠ 不得修改已 accepted ADR 的历史 Decision 文字以隐藏冲突（`09 §3` 禁止）
 - [x] **A-T1** FamilySpec / DatasetTransform / TransformExecutionReceipt / BuildSpec 2.0 契约（依赖 A-T0）
       - 状态：strict DTO/parser/canonical digest、raw JSON duplicate-key ingress、proposal/resolved wire shape 与纯 Core readmission 已落地；readmission绑定 exact capability/asset/result、task/build/generation/receipt evidence；不代表已接生产 runtime
@@ -85,11 +83,13 @@ Host 不是实际 OS sandbox；implementation digest 不覆盖 bundle/dependency
       - 验收：`DatasetBuildSpec 1.0` snapshot 不变；2.0 proposal 与 resolved spec 分离、Core re-admission 可独立测试；unknown field fail closed
       - ⚠ FamilySpec **禁止**含源码/函数/任意 validator/merge expression/文件路径/网络权限/Publisher threshold/Core nodes（`01 §1.1`）；**禁止**把 `schema_refs` 塞入 BuildSpec 1.0
 - [ ] **A-T2** identity / projection / relation / audit 契约（依赖 A-T0）
+      - 状态：三层identity、revision-scoped V2 schema primitives、probe mapping validator、staging authoritative identity context与strict `ProviderRevisionEvidenceV1`已落地；仍缺`DatasetCore` task-owned evidence transport和production adapter wiring
       - 设计：`02-product-identity-relations.md`（全）、`09 §2 T2`
       - 产物：`dataset_id` / `dataset_revision_id` / `asset_id` 三层身份、sample 复合键、`probe_gene_mapping` coverage relation（`many_to_many` + `profile_defined`）、`AuditArtifactDefinition`（**不新增** `audit` TableRole）
       - 验收：同 sample 不同 revision 不碰撞；audit row 不计入产品 table/row count 或 assessment requirement；`integrator.ts` 中 `dataset_id = buildId` 路径有红灯测试与迁移计划
       - ⚠ 一个 Schema 不能同时表达 gene_sample 与 probe_sample（`02 §1`）
 - [ ] **A-T3** implementation identity digest（依赖 A-T1）
+      - 状态：strict six-component implementation identity、Core release identity与fixed-operation checkpoint identity verifier已落地；仍缺checkpoint persistence/reuse composition wiring
       - 设计：`01-family-transform-contracts.md §3`、`09 §2 T3`
       - 产物：bundle/compiler/dependency/runtime/policy digest 算法 + checkpoint invalidation 规则（**B 计算、C 校验共用**）
       - 验收：同 version 不同 source/dependency/compiler → 不同 implementation digest；checkpoint reuse 同时匹配 input/params/FamilySpec/implementation/runtime/policy digest
@@ -97,9 +97,9 @@ Host 不是实际 OS sandbox；implementation digest 不覆盖 bundle/dependency
 
 ---
 
-## 开发者 B — Transform Host（隔离执行平面，与 C 并行）
+## 开发者 B — Transform Host（non-isolated active；isolated backend deferred）
 
-> 依赖 **A 冻结类型**（T1/T3）。**不阻塞 C**：C 针对同一冻结 `TransformExecutionReceipt` 类型编码。
+> 当前只支持显式`in_process_unisolated`。sandbox/container/IPC backend仍Deferred；当前runtime不得冒充安全边界。
 
 - [x] **B-T5** compiler / admission spike（依赖 A-T1、A-T3 冻结类型）
       - 状态：Host-owned source normalization/AST policy/transpile/digest/content-addressed store已落地；结果固定为 `fixture_only_unexecutable`，不等于B-T6 sandbox
@@ -107,16 +107,15 @@ Host 不是实际 OS sandbox；implementation digest 不覆盖 bundle/dependency
       - 产物：source normalization、AST/import policy、content-addressed bundle receipt（产出符合 A-T1 冻结形状）
       - 验收：v1 仅允许 Transform SDK/Host allowlist；无任意 npm/native addon/dynamic import/eval
       - ⚠ 静态检查只缩小攻击面、**不能替代隔离**（`03 §2`）
-- [ ] **B-T6** isolated Transform Host MVP（依赖 A-T0、B-T5）
+- [ ] **B-T6 [Deferred]** isolated Transform Host MVP（依赖 A-T0、B-T5）
       - 设计：`03-transform-host-security.md §3`、`09 §2 T6`
       - 产物：独立低权限 worker/backend、opaque asset handles、quarantine output、hard kill
       - 验收：无网络/DNS/代理、不继承凭据、不挂载 repo/workspace/settings/Publication；symlink/junction/device escape fail closed
       - ⚠ `worker_threads` / `node:vm` / 同账户 `child_process` / workspace `process.exec` **均不能**当安全边界（`03 §1`、README 永久边界）；Windows 不达标则禁激活
-- [ ] **B-T7** Host protocol / receipt（依赖 A-T1、A-T3、B-T6）
-      - 设计：`03-transform-host-security.md §4`、`01 §1.3`、`09 §2 T7`
-      - 产物：framed versioned IPC、invocation/generation/quota/cancel、terminal reason、TransformExecutionReceipt 签发（符合 A-T1 冻结形状，含全 digest + input/output receipts + resource usage）
-      - 验收：Host success 不自动创建 OperationResult/Publication；receipt 缺任一 input/output/runtime digest → Core 拒绝
-      - ⚠ 执行前后重新核验 code/input digest 关闭 TOCTOU；receipt 只证明“bytes 在该隔离策略下产生”，不证明科学语义（`03 §4/§6`）
+- [x] **B-T7** in-process Host protocol / receipt（依赖 A-T1、A-T3）
+      - 状态：invocation/generation/quota/cancel、terminal reason、registered input bytes、bounded output/log与`TransformExecutionReceipt`已接production route；backend诚实标记`in_process_unisolated`
+      - 验收：Host success不自动创建OperationResult/Publication；receipt缺任一input/output/runtime digest时Core拒绝
+      - ⚠ receipt只证明bytes由该非隔离runtime产生，不证明隔离、安全或科学语义
 
 ---
 
@@ -126,25 +125,28 @@ Host 不是实际 OS sandbox；implementation digest 不覆盖 bundle/dependency
 > admission/checkpoint；与 B 仅类型耦合，M3 前不汇合。
 
 - [ ] **C-T4** B3 / resource baseline（依赖 A-T2 冻结 identity 类型）
-      - 状态：`d2153aa1` 已由 Core-receipted bytes 做 bounded measurement、cancel-aware preflight、Map 前阈值拒绝和 v2 telemetry；disk wiring、production measured threshold 与 immutable descriptor snapshot仍缺
+      - 状态：Core-receipted bytes bounded measurement、cancel-aware preflight、Map前阈值拒绝、v2 telemetry与explicit staging PK disk selection已落地；production measured threshold与immutable descriptor snapshot仍缺
       - 设计：`05-core-execution-product-gate.md §4 B3-D0`、`09 §2 T4`
       - 产物：现有 `validation/multitable.ts` benchmark/telemetry（row/key estimate、validator mode、heap/temp/duration/failure reason）、阈值、large-input benchmark harness（memory parity oracle）
       - 验收：超阈值强制 disk mode 或 fail closed，不再无界 `Map` 到 OOM
-- [ ] **C-T8** Core quarantine admission（依赖 A 冻结类型 T1/T2/T3）
+- [x] **C-T8** Core quarantine admission（依赖 A 冻结类型 T1/T2/T3）
       - 设计：`05-core-execution-product-gate.md §1/§6`、`03 §6 quarantine handoff`、`09 §2 T8`
       - 产物：Host 输出重哈希、schema/locator/output closure 校验、native OperationResultManifest 构造
       - 验收：未声明文件/table/schema 拒绝；locator 不得指向未知输入；failed/cancelled Host 不产生 committed Core output
       - ⚠ 针对**冻结 Receipt 类型**解码，用测试夹具驱动单测；Host output receipt **不得**直接转 Publication artifact（`10 §5#4`）
-- [ ] **C-T9** fixed transform slot（依赖 A-T1 冻结类型、C-T8）
+- [x] **C-T9** fixed transform slot（依赖 A-T1 冻结类型、C-T8）
+      - 状态：server-owned fixed-slot admission、hostile-input tests与`submit_dynamic_family_build` production route已落地；不经`registered_multitable.runtime.v1`旁路
       - 设计：`05-core-execution-product-gate.md §6`、`09 §2 T9`
       - 产物：server-owned plan slot、transform capability admission、不引入 DAG
       - 验收：`registered_multitable.runtime.v1` 旁路问题登记并有统一 executor 修复门，不在旁路继续叠加 transform
       - ⚠ Batch 1 不得接默认 Agent build tool；Transform 不能决定 merge winner/validation threshold/ProductAssessment/Publication（`01 §1.2`、`03 §6`）
 - [ ] **C-T10** checkpoint / lease / recovery（依赖 A-T3 冻结 digest、C-T9）
+      - 状态：publish shortcut已禁用；strict Core release/implementation identity reuse verifier与publication verifier已落地，checkpoint持久化接线仍进行中
       - 设计：`05-core-execution-product-gate.md §6`、`08-activation-release.md §4 R4`、`09 §2 T10`
       - 产物：Host/Core owner fencing、orphan cleanup、publish reuse 修复
       - 验收：cancel/timeout/restart/stale worker/late commit 不误提交；publish 必须重验证 authoritative receipt，或禁止 publish shortcut；固定 operation 的 implementation identity 绑定真实部署版本
 - [ ] **C-T11** B3 disk mode（PK/FK first hotspot）（依赖 A-T2 冻结 identity 类型、C-T4）
+      - 状态：explicit staging PK path已真实调用disk TupleIndex，覆盖owner/quota/cancel/cleanup/no-fallback与memory check parity；FK/cardinality index reuse仍缺，default/production path保持不变
       - 设计：`05-core-execution-product-gate.md §4 B3-D1/D2`、`09 §2 T11`
       - 产物：disk-backed tuple index（quota/cancel/batch tx/cleanup、确定性 key encoding）、memory parity
       - 验收：memory/disk B3 fixture 的 checks/ordering/digest parity；复用同一 index 支持 cardinality/relation；不新增 `family.id ===` 语义分支
@@ -163,17 +165,17 @@ Host 不是实际 OS sandbox；implementation digest 不覆盖 bundle/dependency
       - 产物：`examples/families/gene-expression/`（GEO gene/probe、GDC gene）、projection examples、dataset revision、mapping assertion fixtures、`retrieval-metadata.json`
       - 验收：example 目录不产生 Registry side effect、不自动注册为 production capability；`examples/` 不被 `server/src` import 或扫描
       - ⚠ 不得以目录名/文件名代替 exact digest；example 不直接执行（`07 §2`、`04 §6`）
-- [ ] **D-E2** expression shadow vertical slice（**M3 集成闸门**：依赖 B-T6..T7、C-T8..T11、D-E1 均已合入）
+- [ ] **D-E2 [Deferred]** expression shadow vertical slice（依赖未来恢复的B-T6..T7）
       - 设计：`06-expression-vertical-slice.md`、`08-activation-release.md §3`、`09 §5`
       - 产物：Host→Core→assessment→artifact 奇偶比对、shadow publication/artifact hash parity、rollback 演练
       - 验收：GEO/GDC 共享 integration framework 但仅兼容 partition 内 merge；GDC 无 probe mapping 时诚实声明 unsupported/allow-empty；大输入不走全量 Buffer/object[] 或无界 B3 Map；task/run/build/Host receipt/Core result/validation/publication 证据完整
       - ⚠ shadow 失败不自动 fallback 成功；通过只代表 shadow verified，不自动激活 family（`08 §3`、`06 §5`）
-- [ ] **D-E3** second real consumer — bioactivity_measurement（**M3 go/no-go 闸门**：依赖 B-T6..T7、C-T8..T11）
+- [ ] **D-E3 [Deferred]** second real consumer — bioactivity_measurement（依赖未来恢复的B-T6..T7）
       - 设计：`07-family-examples-migration.md §4.2`、`09 §6`
       - 产物：bioactivity example 复用相同 Host/Core path 的证据
       - 验收：输入/output topology 可由 FamilySpec 描述，不依赖新 family-specific Core branch；至少一个 capability 可做独立 shadow/rollback
       - ⚠ 不满足则退回 contract/primitive 修复，不扩展到其余四族（`09 §6`）
-- [ ] **D-R1** release / go-no-go（**M3 闸门**：依赖 D-E2、D-E3）
+- [ ] **D-R1 [Deferred]** Transform Host release / go-no-go（依赖未来恢复的D-E2、D-E3）
       - 设计：`08-activation-release.md`（全）、`09 §5-6`
       - 产物：trusted E2E、rollback、activation 建议、release gates **R1-R5** 核对（contract/security/Core gate/operational recovery/representative E2E）
       - 验收：仅当 R1-R5 全过且至少两个真实消费者才建议 activation；legacy 删除须满足 `08 §6` 七条件
@@ -186,19 +188,19 @@ Host 不是实际 OS sandbox；implementation digest 不覆盖 bundle/dependency
 > 以下与 family-host 正交，不受 ADR-039 冻结影响，按原优先级推进。
 
 ### P1
-- [ ] **model-registry wire-boundary 校验**：`frontend/src/api/modelRegistry.ts` 仍用窄化 cast（`b as ProviderInfo[]`）；在 `packages/contracts` 增加 `parseProvidersEnvelope` / `parseManagedModelsEnvelope` 解析器（ADR-025 后续项）。
+- [x] **model-registry wire-boundary 校验**：`@biomed/contracts` 已增加 `parseProvidersEnvelope` / `parseManagedModelsEnvelope` runtime parsers并替换frontend list casts；focused hostile-wire tests已覆盖。
 - [ ] **Phase 9 后续 — HIL/Questionnaire**：`UserInputDialog` 迁移到同一 Questionnaire 基础设施。
-- [ ] **Phase 9 后续 — 权限设置页重排**：默认层与高级 ACL 编辑器。
-- [ ] **AI 用户支持文档**：面向其他 agent 的调用文档 + 启动/HTTP-WS 封装脚本。
+- [x] **Phase 9 后续 — 权限设置页重排**：默认层与高级 ACL 编辑器。
+- [x] **AI用户支持文档**：新增`docs/AGENT_API_QUICKSTART.md`；stdlib-only `scripts/run-driver.mjs`现支持health就绪重试、create/submit/snapshot/events durable replay，且有进程级HTTP测试。
 
 ### P2
-- [ ] **createPhase3ToolHooks 并发 identity bug**：同源多查询共用 `operation_id: tool:<source>:query` 互相覆盖 UI 卡片；应改为 call-scoped ID（hangs on `fix/runtime-timeline-sequence` 未含）。
-- [ ] **Phase 9 后续 — 权限事件进入历史 Conversation timeline**。
-- [ ] **Agent INSTRUCTIONS**：增加“达到 max_turns 后输出 `[MAX_TURNS_REACHED]`”指导。
+- [x] **createPhase3ToolHooks并发identity bug**：query lifecycle已使用per-source call-scoped sequence；不同query可乱序准确闭合，identical legacy queries显式FIFO，不再覆盖同一UI card。
+- [x] **Phase 9后续 — 权限事件进入历史Conversation timeline**：permission request/resolution按request identity投影为durable item，resolved后保留原timeline位置与grant scope；stale resolution不清新pending request。
+- [x] **Agent INSTRUCTIONS**：现行Pi `PHASE1_SYSTEM_PROMPT` 已要求用户批准max-turn续跑后以下一轮 `[MAX_TURNS_REACHED]` 开头，并有prompt-shape test。
 - [ ] **设置页供应商/模型列表分页与搜索后端**（当前全量返回）。
 
 ### P3
-- [ ] **沙箱环境**：为数据安全提供沙箱保证（与 Transform Host 隔离正交，属通用数据保障）。
+- [ ] **沙箱环境 [Deferred]**：通用数据安全sandbox及Transform Host隔离均暂缓；未经新的明确决策不开发。
 
 ---
 
