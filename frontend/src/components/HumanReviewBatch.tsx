@@ -8,6 +8,7 @@ import {
 } from "@phosphor-icons/react";
 import type { HILDecision, HILRequest, JsonValue } from "@biomed/contracts";
 
+import { PublicationAcceptanceReview } from "@/components/PublicationAcceptanceReview";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -51,7 +52,7 @@ function evidenceText(value: JsonValue): string {
   return JSON.stringify(value);
 }
 
-export function HumanReviewBatch({
+function GenericHumanReviewBatch({
   request,
   disabled,
   submittingAction,
@@ -213,4 +214,11 @@ export function HumanReviewBatch({
       </CardContent>
     </Card>
   );
+}
+
+export function HumanReviewBatch(props: HumanReviewBatchProps) {
+  if (props.request.review_type === "publication_acceptance") {
+    return <PublicationAcceptanceReview {...props} />;
+  }
+  return <GenericHumanReviewBatch {...props} />;
 }
