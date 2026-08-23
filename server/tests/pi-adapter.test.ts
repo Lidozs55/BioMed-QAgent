@@ -90,6 +90,7 @@ describe("Pi system prompt", () => {
     expect(PHASE1_SYSTEM_PROMPT).toContain("human_review_status");
     expect(PHASE1_SYSTEM_PROMPT).toContain("review_status");
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/must remain human_review_pending/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/replace that binding with another independently confirmed open-access PMCID/i);
   });
 });
 
