@@ -72,7 +72,27 @@ function v2Manifest() {
   };
 }
 
-function detail(manifest = v2Manifest()) {
+function v1Manifest() {
+  const manifest = v2Manifest();
+  return {
+    manifest_id: manifest.manifest_id,
+    task_id: manifest.task_id,
+    build_id: manifest.build_id,
+    dataset_family: manifest.dataset_family,
+    row_granularity: manifest.row_granularity,
+    schema_ref: manifest.schema_ref,
+    primary_key: manifest.primary_key,
+    row_count: manifest.row_count,
+    sha256: manifest.sha256,
+    artifacts: manifest.artifacts,
+    source_summary: manifest.source_summary,
+    validation_summary: manifest.validation_summary,
+    confidence_summary: manifest.confidence_summary,
+    provenance_summary: manifest.provenance_summary,
+  };
+}
+
+function detail(manifest: Record<string, unknown> = v2Manifest()) {
   return {
     build_id: "build_topology",
     task_id: "task_topology",
@@ -101,5 +121,64 @@ describe("V2 build manifest parsing", () => {
     { candidate_refs: [{ ...v2Manifest().candidate_refs[0], relation_ids: ["missing_relation"] }] },
   ])("rejects malformed topology references", (override) => {
     expect(() => parseBuildDetail(detail({ ...v2Manifest(), ...override }))).toThrow();
+  });
+
+  it.each([
+    ["empty tables", () => ({ tables: [], relations: [], candidate_refs: [] })],
+    ["no primary table", () => {
+      const manifest = v2Manifest();
+      for (const table of manifest.tables) table.role = "supporting";
+      return { tables: manifest.tables };
+    }],
+    ["empty candidate refs", () => ({ candidate_refs: [] })],
+  ])("rejects V2 structural invariant violation: %s", (_name, override) => {
+    expect(() => parseBuildDetail(detail({ ...v2Manifest(), ...override() }))).toThrow();
+  });
+
+  it("keeps the legacy V1 manifest shape unchanged", () => {
+    const parsed = parseBuildDetail(detail(v1Manifest()));
+    expect(parsed.manifest.schema_version).toBeUndefined();
+    expect(parsed.manifest).toEqual(v1Manifest());
+    expect("tables" in parsed.manifest).toBe(false);
+  });
+
+  it.each([
+    ["table", () => {
+      const manifest = v2Manifest();
+      manifest.tables.push({ ...manifest.tables[0] });
+      return { tables: manifest.tables };
+    }],
+    ["relation", () => {
+      const manifest = v2Manifest();
+      manifest.relations.push({ ...manifest.relations[0] });
+      return { relations: manifest.relations };
+    }],
+    ["candidate", () => {
+      const manifest = v2Manifest();
+      manifest.candidate_refs.push({ ...manifest.candidate_refs[0] });
+      return { candidate_refs: manifest.candidate_refs };
+    }],
+  ])("rejects duplicate %s IDs", (_name, override) => {
+    expect(() => parseBuildDetail(detail({ ...v2Manifest(), ...override() }))).toThrow();
+  });
+
+  it.each([
+    ["table role", () => {
+      const manifest = v2Manifest();
+      manifest.tables[0].role = "invalid";
+      return { tables: manifest.tables };
+    }],
+    ["relation cardinality", () => {
+      const manifest = v2Manifest();
+      manifest.relations[0].cardinality = "invalid";
+      return { relations: manifest.relations };
+    }],
+    ["relation missing policy", () => {
+      const manifest = v2Manifest();
+      manifest.relations[0].missing_policy = "invalid";
+      return { relations: manifest.relations };
+    }],
+  ])("rejects invalid %s", (_name, override) => {
+    expect(() => parseBuildDetail(detail({ ...v2Manifest(), ...override() }))).toThrow();
   });
 });

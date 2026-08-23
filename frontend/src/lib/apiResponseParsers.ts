@@ -632,6 +632,15 @@ function parseVersionedDatasetManifest(json: unknown, path: string): VersionedDa
   const candidateRefs = assertArray(Reflect.get(object, "candidate_refs"), `${path}.candidate_refs`, (value, index) =>
     parsePublicationCandidateRef(value, `${path}.candidate_refs[${index}]`),
   );
+  if (tables.length === 0) {
+    throw new APIError(502, `DatasetManifest.tables must be a non-empty array at ${path}.tables`);
+  }
+  if (!tables.some((table) => table.role === "primary")) {
+    throw new APIError(502, `DatasetManifest must declare a primary table at ${path}.tables`);
+  }
+  if (candidateRefs.length === 0) {
+    throw new APIError(502, `DatasetManifest.candidate_refs must be a non-empty array at ${path}.candidate_refs`);
+  }
   validateTopologyReferences(tables, relations, candidateRefs, path);
   return {
     ...common,
