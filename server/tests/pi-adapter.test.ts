@@ -198,6 +198,19 @@ describe("PiAgentAdapter", () => {
     expect(events.filter((event) => event.type === "turn_completed")).toHaveLength(1);
   });
 
+  test("fails the turn when Pi ends with an upstream error stop reason", async () => {
+    const upstream = new FakeUpstreamSession();
+    upstream.promptImplementation = async () => {
+      upstream.emit({ type: "message_end", assistantStopReason: "error" });
+    };
+    const session = await new PiAgentAdapter({
+      createUpstreamSession: async () => upstream,
+    }).createSession(sessionConfig);
+
+    await expect(collect(session.run("finish the dataset")))
+      .rejects.toThrow("Agent runtime request failed");
+  });
+
   test("ignores aborted or summary-less Pi compaction completions", async () => {
     const upstream = new FakeUpstreamSession();
     upstream.promptImplementation = async () => {
