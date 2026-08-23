@@ -1,5 +1,7 @@
 # Batch 0–2 执行矩阵
 
+> 历史执行矩阵：Batch 0–2 的分工和 branch 名不再是当前任务源。Family Host/Core non-isolated 主链已进入稳定 `main` 基线；剩余工作按 `docs/TODO.md` 的独立 worktree lanes 推进，isolated T6 与依赖它的旧 shadow/release 项继续 Deferred。
+
 ## 1. 现阶段承诺
 
 这套计划不是一个迭代内完成全平台的任务单。当前开发截止线是：

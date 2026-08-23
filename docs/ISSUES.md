@@ -32,11 +32,11 @@
       contracts tests关闭；FamilySpec digest有唯一 helper/known vector，parser本身不自动授信digest。
 - [x] M1 wire/readmission gates：contracts post-hardening coverage、BuildSpec proposal→resolved pure Core
       readmission、HTTP/JSON ingress raw duplicate-key decoder已落地并有 focused tests。
-- **当前范围状态**：显式`in_process_unisolated` dynamic transform已接production，且明确不是sandbox/安全边界；sandbox/container/IPC仍不开发。M3等待同一冻结commit/单Host的Gold证据，Gold6另需真实HIL acceptance。
+- **当前范围状态**：显式`in_process_unisolated` Host/Core publication chain已达到可合入`main`的稳定基线，且明确不是sandbox/安全边界；sandbox/container/IPC仍不开发。M3仍等待同一冻结commit/单Host的Gold证据，Gold6另需真实publication acceptance；应用provider可用性是live rerun外部前置条件。
 
 ### FamilySpec/Core执行面剩余收敛项
 
-- [ ] checkpoint/reuse：旧候选`3f1cfdd3`/`3f308046`保持未合入；generic publish shortcut已禁用，startup release identity、strict fixed-operation reuse verifier与publication verifier已落地。剩余项是把identity持久化并在真实reuse前调用verifier，以及restart/TOCTOU回归测试。
+- [ ] checkpoint/reuse：旧候选`3f1cfdd3`/`3f308046`保持未合入；generic publish shortcut已禁用，startup release identity、strict fixed-operation reuse verifier与publication verifier已落地。剩余项是把identity持久化并在真实reuse前调用verifier，以及restart/TOCTOU回归测试；从最新`main`开独立worktree实现，不直接合并旧候选。
 - [x] Core transform admission：旧 `64f43602` 已弃用；当前 staging实现以Core-owned expected invocation
       全量比对 task/build/generation/digest/input/output/resource/cancel，FD重哈希、closed-world检查、
       独立commit root原子复制/fsync/重开复验，并只返回opaque quarantine evidence，不创建Publication。

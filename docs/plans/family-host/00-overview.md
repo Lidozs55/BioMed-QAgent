@@ -118,9 +118,10 @@ Agent 不获得 DAG、Publisher、task output/state/settings、网络或任意 n
 [ADR-039](../../adr/039-family-transform-host.md) 现已 **Accepted**。本文件其余内容是历史设计输入；当前执行边界见`docs/architecture/FAMILY-HOST-03-execution-constraints.md`：
 
 - ADR-027/033/034/036/038 与production行为继续有效；
-- 显式`in_process_unisolated` dynamic route已落地，但不是sandbox/安全边界；
+- 显式`in_process_unisolated` dynamic route与Core publication chain已作为稳定`main`基线落地，但不是sandbox/安全边界；
 - sandbox/container/IPC不开发；static runtime不删除；
-- Core继续独占quarantine admission、native OperationResult、B3、ProductAssessment与Publication。
+- Core继续独占quarantine admission、native OperationResult、B3、ProductAssessment、evidence-bound publication HIL与Publication；
+- 后续checkpoint/restart/resource/identity、family closure与frontend UX在独立分支/worktree并行，integration hotspots串行合并。
 
 若未来增加isolated backend，再通过独立ADR逐项评估supersede/narrow：
 

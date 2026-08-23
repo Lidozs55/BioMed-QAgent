@@ -1,5 +1,7 @@
 # FamilySpec、DatasetTransform 与执行收据契约
 
+> 历史计划说明：本文件记录 Batch 0–2 契约设计。当前生产实现已采用 ADR-039 接受的显式 `in_process_unisolated` backend；涉及 sandbox availability/activation 的旧门槛仅适用于未来 isolated backend，不覆盖当前代码与 receipt。当前状态以 ADR-039、`docs/architecture/FAMILY-HOST-03-execution-constraints.md` 和 `docs/TODO.md` 为准。
+
 ## 1. 三个独立对象
 
 ### 1.1 FamilySpec

@@ -54,6 +54,10 @@ Key invariants:
   `server/tests/phase8-architecture-guard.test.ts` and
   `database/tests/test_database_store.py::test_no_forbidden_imports_in_database_package`).
 - New wire DTOs belong in `@biomed/contracts` first.
+- The explicit `in_process_unisolated` Family Host/Core publication chain is a
+  stable `main` baseline. Continue recovery/resource/identity hardening, family
+  product closure, frontend UX, and release evidence on dedicated branches or
+  worktrees; do not reopen sandbox/container/IPC work without a new ADR.
 - Always treat code as the source of truth for skill/tool implementation status —
   do not assume from documentation alone.
 

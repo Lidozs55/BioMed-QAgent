@@ -80,7 +80,10 @@ multi-table OperationResult 可用 strict `output_summary.tables` 描述多表�
 ProductAssessment、Publisher 和 Artifact API hash verification 仍是正式产品门禁。
 
 包含 `review_status` 或 `human_review_status` 的 schema 必须 fail closed 为
-`human_review_pending`，直到存在真实 HIL acceptance evidence；不能由 Agent 自动批准。
+`human_review_pending`。Core 必须在 B3 后创建候选、ProductAssessment 与 table bytes 绑定的
+`publication_acceptance` HIL；只有 matching `accept` 可以发布，credential `approve` 不能满足该门，
+accepted review identity/snapshot 必须进入最终 assessment/provenance。当前同一 live process 内支持
+suspend/resume；跨 Host 重启 continuation 尚未完成，必须 fail closed。
 
 ### 6. Fixed slot, not Agent DAG
 
@@ -102,7 +105,9 @@ nodes/edges、merge function、validator、acquisition code 或 publication path
 - 进程级RSS/PID/open-file限制只是声明/门禁，不能像OS sandbox那样强制；
 - 多进程Host并发写同一task event log的race仍需独立修复；Gold运行冻结期间必须只运行一个Host；
 - `dynamic_string_preserving.v1` 只保证结构保真，不代表科学语义完整；
-- HIL、family-specific scientific assessment 和未来isolated backend仍是独立工作。
+- evidence-bound publication HIL 已接入；跨 Host restart continuation、family-specific scientific
+  assessment、production resource/identity hardening 与未来isolated backend仍是独立工作；
+- 当前 Host/Core 主链可作为 `main` 稳定基线，但这不等于 Gold release gate 已通过。
 
 ## Relationship to Earlier ADRs
 

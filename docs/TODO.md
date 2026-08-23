@@ -4,15 +4,10 @@
 > 详细设计见 `docs/plans/family-host/`（历史批次计划）与当前约束 `docs/architecture/FAMILY-HOST-03-execution-constraints.md`。
 >
 > 当前范围明确**不开发** sandbox/container/IPC worker/独立低权限process backend。`in_process_unisolated` 不是sandbox、隔离机制或安全边界；`node:vm`只用于同步timeout。
-> 当前动态流程已接入：registered receipts → compile/digest closure → unisolated execute → quarantine/native OperationResult → B3/ProductAssessment → immutable Publication。剩余release条件是同一冻结commit、单Host的Gold1–Gold6证据；Gold6必须等待真实HIL acceptance。
+> 当前动态流程已接入：registered receipts → compile/digest closure → unisolated execute → quarantine/native OperationResult → B3/ProductAssessment → evidence-bound HIL → immutable Publication。该 Host/Core 主链已达到可合入 `main` 的稳定基线；后续 hardening、identity/recovery/resource wiring、专用前端 UX 与 family 产品闭包继续使用独立分支/worktree。
+> 当前仍未满足 release：必须在一个最终冻结 commit、单 Host 上完成 Gold1–Gold6 可信证据，Gold6 必须等待真实 publication acceptance；应用 provider 的账户可用性是 live rerun 的外部前置条件。
 >
-> **2026-08-22 red-team 状态**：`808279ac` 仅是初始 DTO/计划草案；其 wire-parser 缺口已由
-> `76df8008`、`3ed0ade5`、`f32f563f` 关闭：descriptor-safe own-data parsing、dense/finite/safe-number
-> 检查、strict identity scheme、bounded safe ID/ref、receipt terminal/resource/output/cancel closure、
-> BuildSpec 2.0 proposal/resolved 分离、FamilySpec canonical digest known vector 均有 adversarial tests。
-> M1 仍等待独立 post-hardening review、纯 Core BuildSpec re-admission，以及未来 HTTP/JSON ingress 的
-> raw duplicate-key decoder边界；因此 B/C 仍只可做 disabled/isolated fixture 或 staging pure module，
-> ADR-039 与 M3 activation 继续阻塞。
+> **2026-08-22 red-team 状态**：初始 DTO/计划草案的 wire-parser 缺口已关闭：descriptor-safe own-data parsing、dense/finite/safe-number 检查、strict identity scheme、bounded safe ID/ref、receipt terminal/resource/output/cancel closure、BuildSpec 2.0 proposal/resolved 分离、raw duplicate-key ingress、纯 Core re-admission 与 FamilySpec canonical digest known vector 均有 adversarial tests。当前未关闭项以 A-T2/A-T3、C-T4/C-T10/C-T11 和 Gold release gate 为准，不再把已落地的 non-isolated production route 描述为 staging-only。
 
 ## 全局质量门（每次提交必过）
 
@@ -25,7 +20,7 @@
 | 组 | 建议分支 | 覆盖任务 |
 |---|---|---|
 | A | `feat/transform-contracts` | T0-T3 |
-| B | `feat/transform-host-sandbox` | T5-T7 |
+| B | `feat/family-host-runtime-hardening` | T5/T7 与 non-isolated runtime hardening；isolated T6 Deferred |
 | C | `feat/core-transform-admission` + `feat/dataset-validation-disk-index` | T4/T8-T11 |
 | D | `feat/expression-host-shadow` + `feat/bioactivity-host-shadow` | E1/E2/E3/R1 |
 
@@ -191,16 +186,18 @@
 - [x] **model-registry wire-boundary 校验**：`@biomed/contracts` 已增加 `parseProvidersEnvelope` / `parseManagedModelsEnvelope` runtime parsers并替换frontend list casts；focused hostile-wire tests已覆盖。
 - [ ] **Phase 9 后续 — HIL/Questionnaire**：`UserInputDialog` 迁移到同一 Questionnaire 基础设施。
 - [x] **Phase 9 后续 — 权限设置页重排**：默认层与高级 ACL 编辑器。
-- [x] **AI用户支持文档**：新增`docs/AGENT_API_QUICKSTART.md`；stdlib-only `scripts/run-driver.mjs`现支持health就绪重试、create/submit/snapshot/events durable replay，且有进程级HTTP测试。
+- [x] **AI用户支持文档与配套脚本**：`docs/AGENT_API_QUICKSTART.md` 已说明安装、`.env`、HTTP/WS调用和结果获取；stdlib-only `scripts/run-driver.mjs` 已支持 health 重试、create/submit/snapshot/events durable replay，并有进程级HTTP测试。
 
 ### P2
 - [x] **createPhase3ToolHooks并发identity bug**：query lifecycle已使用per-source call-scoped sequence；不同query可乱序准确闭合，identical legacy queries显式FIFO，不再覆盖同一UI card。
 - [x] **Phase 9后续 — 权限事件进入历史Conversation timeline**：permission request/resolution按request identity投影为durable item，resolved后保留原timeline位置与grant scope；stale resolution不清新pending request。
 - [x] **Agent INSTRUCTIONS**：现行Pi `PHASE1_SYSTEM_PROMPT` 已要求用户批准max-turn续跑后以下一轮 `[MAX_TURNS_REACHED]` 开头，并有prompt-shape test。
+- [ ] **主 prompt 迭代优化（类 Darwin 进化式迭代）**：Family Host 稳定主链合入 `main` 后，对 `PHASE1_SYSTEM_PROMPT` 做可复现的变异/选择评测，优化完成度、速度与成本；不得以 Gold-specific 条件污染 production prompt。
 - [ ] **设置页供应商/模型列表分页与搜索后端**（当前全量返回）。
 
 ### P3
-- [ ] **沙箱环境 [Deferred]**：通用数据安全sandbox及Transform Host隔离均暂缓；未经新的明确决策不开发。
+- [ ] **可拆卸工具包实现纠错**：`scripts/solidify-run.mjs --toolkit` 不应重复摘要 SKILL.md；应为 `server/src/agent/tools/` 下的 TS 工具生成独立使用文档（用途、参数、返回、依赖、独立调用方式），方便其他 agent 在受限环境直接使用。
+- [ ] **沙箱环境 [Deferred]**：通用数据安全sandbox及Transform Host隔离均暂缓；未经新的明确ADR/决策不开发，当前 `in_process_unisolated` 不得称为安全边界。
 
 ---
 

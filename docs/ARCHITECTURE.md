@@ -11,7 +11,7 @@
 >   （已归档）见 [archive/BioMed-QAgent_Pipeline_Refactor_Design.md](archive/BioMed-QAgent_Pipeline_Refactor_Design.md)；
 >   执行任务由 [TODO.md](TODO.md) 承担；**功能/能力现状（能做什么，面向
 >   汇报）由 [FEATURES.md](FEATURES.md) 承担**。各文档不互相复制。
-> - **实现状态**：迁移 Phase 0-9 全部完成（2026-08-16）；当前处于 Phase 4 Gold
+> - **实现状态**：迁移 Phase 0-9 全部完成（2026-08-16）；显式 `in_process_unisolated` Family Host/Core publication chain 已形成稳定 `main` 基线；当前处于 Phase 4 Gold
 >   审计向 Phase 5 hardening/release 过渡的系统收敛阶段。唯一正式拓扑为
 >   TypeScript Host 权威实现 formal `/api/v1`、durable Task/Run/Event、模型设置、
 >   product API 与 TS Dataset Core；Agent = Pi（`server/src/agent/pi-adapter.ts`）。

@@ -2,7 +2,7 @@
 
 > 状态：**历史Batch 0–2计划集**；ADR-039现已Accepted，当前行为以代码、ADR-039、`docs/architecture/FAMILY-HOST-03-execution-constraints.md`与`docs/TODO.md`为准。
 > 代码基线：历史计划基于 `main@94be4a9e`（2026-08-21）。
-> 当前范围：显式`in_process_unisolated` production route已落地；它不是sandbox/安全边界。sandbox/container/IPC worker仍不开发。
+> 当前范围：显式`in_process_unisolated` Host/Core publication chain已作为稳定`main`基线落地；它不是sandbox/安全边界。sandbox/container/IPC worker仍不开发。后续实现按`docs/TODO.md`的并行分支/worktree计划推进。
 
 ## 目标
 
@@ -36,7 +36,8 @@ Agent authors FamilySpec + DatasetTransform
 
 - **已落地**：FamilySpec contracts、registered input/digest closure、显式non-isolated execution、quarantine/native result、generic B3、ProductAssessment与immutable Publication。
 - **Deferred**：isolated Host、sandbox/container、IPC worker。
-- **当前release gate**：同一冻结commit/单Host的Gold1–Gold6证据；Gold6另需真实HIL acceptance。
+- **当前release gate**：同一冻结commit/单Host的Gold1–Gold6证据；Gold6另需真实`publication_acceptance`。历史或跨提交 publication 仅是诊断证据。
+- **合入后并行方向**：checkpoint/lease/restart、B3 production resource/disk、authoritative identity、family 产品闭包与专用前端 Family Host UX；integration hotspots 串行合并。
 - **不在当前迭代承诺**：旧Registry一次性删除、Transform promotion市场或通用DAG。
 
 ## 永久边界
