@@ -6,6 +6,16 @@ import type {
   ProductScore,
 } from "@/runtime/contracts";
 
+export interface ProductAssessmentSummaryData {
+  requirement_id: string | null;
+  package_id: string | null;
+  package_version: string | null;
+  product_status: ProductAssessment["product_status"];
+  scores: ProductScore[];
+  missing_requirements: string[];
+  blockers: ProductBlocker[];
+}
+
 export interface DynamicFamilyToolOutput {
   ok: boolean;
   status: string | null;
@@ -186,7 +196,7 @@ function parseBlockers(value: unknown): ProductBlocker[] {
 }
 
 /** Parse the ProductAssessment projection carried in a manifest confidence summary. */
-export function parseProductAssessmentSummary(value: unknown): ProductAssessment | null {
+export function parseProductAssessmentSummary(value: unknown): ProductAssessmentSummaryData | null {
   const object = record(value);
   const status = object?.product_status;
   if (
@@ -195,10 +205,9 @@ export function parseProductAssessmentSummary(value: unknown): ProductAssessment
   ) return null;
   const blockers = parseBlockers(object.blockers);
   return {
-    schema_version: "1.0",
-    requirement_id: stringValue(object.requirement_id) ?? "manifest-confidence-summary",
-    package_id: stringValue(object.package_id) ?? "unknown",
-    package_version: stringValue(object.package_version) ?? "unknown",
+    requirement_id: stringValue(object.requirement_id),
+    package_id: stringValue(object.package_id),
+    package_version: stringValue(object.package_version),
     product_status: status,
     scores: parseScores(object.scores),
     missing_requirements: stringArray(object.missing_requirements),
@@ -206,8 +215,8 @@ export function parseProductAssessmentSummary(value: unknown): ProductAssessment
   };
 }
 
-/** Return ProductAssessment only when the current manifest exposes its summary. */
-export function productAssessmentFromManifest(manifest: DatasetManifest): ProductAssessment | null {
+/** Return the assessment summary only when the current manifest exposes it. */
+export function productAssessmentFromManifest(manifest: DatasetManifest): ProductAssessmentSummaryData | null {
   const confidence = record(manifest.confidence_summary);
   if (confidence === null) return null;
   const direct = parseProductAssessmentSummary(confidence.product_assessment);
@@ -220,10 +229,6 @@ export function productAssessmentFromManifest(manifest: DatasetManifest): Produc
     status !== "publishable"
   ) return null;
   return parseProductAssessmentSummary({
-    schema_version: "1.0",
-    requirement_id: "manifest-confidence-summary",
-    package_id: manifest.manifest_id,
-    package_version: "unknown",
     product_status: status,
     scores: confidence.product_scores,
     missing_requirements: blockers.map((blocker) => blocker.requirement_id),
