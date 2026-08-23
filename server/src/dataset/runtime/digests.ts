@@ -13,7 +13,10 @@ import type { OperationResultManifest } from "@biomed/contracts";
 import { canonicalDigest, canonicalJson } from "../adapters/identity.js";
 import type { SourceAsset } from "../contracts/index.js";
 import type { OperationSpec } from "./operations.js";
-import { resolveCoreReleaseIdentity } from "./release-identity.js";
+import {
+  resolveCoreReleaseIdentity,
+  type CoreReleaseIdentity,
+} from "./release-identity.js";
 
 /**
  * Canonical JSON serialization matching Python ``json.dumps(
@@ -36,7 +39,7 @@ export interface DigestScope {
   sourceAssets?: Readonly<Record<string, SourceAsset>>;
   mappingAssets?: Readonly<Record<string, SourceAsset>>;
   /** Server-owned release identity; omitted callers resolve a process identity in dev/test. */
-  coreReleaseIdentity?: string;
+  coreReleaseIdentity?: CoreReleaseIdentity | string;
   /** Operation-owned identity, such as a registered provider or derive digest. */
   implementationVersions?: Readonly<Record<string, string>>;
   /** Explicit operation identities for callers that do not use implementationVersions. */
@@ -94,8 +97,26 @@ export function computeInputDigest(op: OperationSpec, scope: DigestScope): strin
 }
 
 /** Resolve the server-owned identity at the digest boundary when a caller did not inject one. */
-function digestCoreReleaseIdentity(scope: Pick<DigestScope, "coreReleaseIdentity">): string {
-  if (scope.coreReleaseIdentity !== undefined) return scope.coreReleaseIdentity;
+export function digestCoreReleaseIdentity(
+  scope: Pick<DigestScope, "coreReleaseIdentity">,
+): CoreReleaseIdentity {
+  if (scope.coreReleaseIdentity !== undefined) {
+    const identity = scope.coreReleaseIdentity;
+    if (typeof identity !== "string") {
+      throw new TypeError("core release identity must be a safe canonical release identity");
+    }
+    // Dataset Core passes its already-resolved dev/test process identity back
+    // through every digest scope. Startup configuration still rejects this
+    // value; the digest boundary must not treat an internal branded identity
+    // as fresh untrusted configuration.
+    if (/^ref:process-[0-9a-f-]{36}$/u.test(identity)) {
+      return identity as CoreReleaseIdentity;
+    }
+    return resolveCoreReleaseIdentity({
+      environment: "test",
+      configuredIdentity: identity,
+    });
+  }
   const environment = process.env.NODE_ENV === "production" || process.env.NODE_ENV === "staging"
     ? process.env.NODE_ENV
     : process.env.NODE_ENV === "test" ? "test" : "dev";
@@ -117,6 +138,20 @@ export function computeOperationDigest(
     ?? `operation:${op.operation_id}`;
   return sha256Json({
     core_release_identity: digestCoreReleaseIdentity(scope),
+    operation_id: op.operation_id,
+    operation_identity: operationIdentity,
+  });
+}
+
+/** The operation-owned component used by fixed-operation checkpoint identity. */
+export function computeOperationImplementationComponentDigest(
+  op: OperationSpec,
+  scope: Pick<DigestScope, "implementationVersions" | "operationIdentities">,
+): string {
+  const operationIdentity = scope.operationIdentities?.[op.operation_id]
+    ?? scope.implementationVersions?.[op.operation_id]
+    ?? `operation:${op.operation_id}`;
+  return sha256Json({
     operation_id: op.operation_id,
     operation_identity: operationIdentity,
   });

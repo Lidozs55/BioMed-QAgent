@@ -435,8 +435,10 @@ describe("durable formal Agent runtime", () => {
 
     // Complete the run; the workspace must observe the end of THIS run id.
     adapter.gates[0]?.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    expect(endedRuns).toContain(accepted.run_id);
+    await expect.poll(
+      () => endedRuns.includes(accepted.run_id),
+      { timeout: 5_000 },
+    ).toBe(true);
 
     // A second run in the same session triggers the hook again.
     const second = await fetch(`http://127.0.0.1:${port}/api/v1/tasks/${accepted.task_id}/runs`, {
@@ -447,8 +449,10 @@ describe("durable formal Agent runtime", () => {
     expect(second.status).toBe(202);
     await new Promise((resolve) => setTimeout(resolve, 0));
     adapter.gates[1]?.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    expect(endedRuns.length).toBeGreaterThanOrEqual(2);
+    await expect.poll(
+      () => endedRuns.length,
+      { timeout: 5_000 },
+    ).toBeGreaterThanOrEqual(2);
 
     await runtime.close();
   });
