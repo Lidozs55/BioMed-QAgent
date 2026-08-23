@@ -519,6 +519,7 @@ export async function createPhase3Runtime(
             buildId: submission.build_proposal.build_id,
             execution: result,
             validationProfileRef: submission.family_spec.validation_policy_ref,
+            hilGate: approvalGate,
             signal,
           });
           const publicationManifestSha = product.publication.publication.manifest_sha256;

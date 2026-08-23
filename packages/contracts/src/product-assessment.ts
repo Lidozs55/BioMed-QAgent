@@ -160,6 +160,17 @@ export interface ProductEvidenceSnapshot {
   artifacts: readonly ProductArtifactFact[];
 }
 
+export interface ProductHumanReviewEvidence {
+  policy_ref: string;
+  request_id: string;
+  review_id: string;
+  evidence_digest: string;
+  decision: "accept";
+  reviewer: "user";
+  reviewed_at: string;
+  reason: string | null;
+}
+
 export interface ProductAssessment {
   schema_version: "1.0";
   requirement_id: string;
@@ -169,4 +180,5 @@ export interface ProductAssessment {
   scores: readonly ProductScore[];
   missing_requirements: readonly string[];
   blockers: readonly ProductBlocker[];
+  human_review_evidence?: readonly ProductHumanReviewEvidence[];
 }

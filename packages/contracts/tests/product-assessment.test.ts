@@ -32,6 +32,44 @@ describe("ProductAssessment runtime contract", () => {
     expect(parseProductAssessment(value)).toEqual(assessment());
   });
 
+  test("accepts exact publication review evidence on a publishable assessment", () => {
+    const parsed = parseProductAssessment(assessment({
+      human_review_evidence: [{
+        policy_ref: "dynamic_family_hil_acceptance.v1",
+        request_id: "hil_review_1",
+        review_id: "review_1",
+        evidence_digest: "a".repeat(64),
+        decision: "accept",
+        reviewer: "user",
+        reviewed_at: "2026-08-23T00:00:00.000Z",
+        reason: "Reviewed the evidence-bound tables",
+      }],
+    }));
+    expect(parsed.human_review_evidence?.[0]?.decision).toBe("accept");
+  });
+
+  test("rejects malformed publication review evidence", () => {
+    const valid = {
+      policy_ref: "dynamic_family_hil_acceptance.v1",
+      request_id: "hil_review_1",
+      review_id: "review_1",
+      evidence_digest: "a".repeat(64),
+      decision: "accept" as const,
+      reviewer: "user" as const,
+      reviewed_at: "2026-08-23T00:00:00.000Z",
+      reason: null,
+    };
+    expect(() => parseProductAssessment(assessment({
+      human_review_evidence: [{ ...valid, evidence_digest: "bad" }],
+    }))).toThrow(/digest/i);
+    expect(() => parseProductAssessment(assessment({
+      human_review_evidence: [{ ...valid, decision: "reject" as "accept" }],
+    }))).toThrow(/decision/i);
+    expect(() => parseProductAssessment({
+      ...assessment(), human_review_evidence: [{ ...valid, unexpected: true }],
+    })).toThrow(/field/i);
+  });
+
   test("accepts validated only for reproducibility blockers", () => {
     const parsed = parseProductAssessment(assessment({
       product_status: "validated",

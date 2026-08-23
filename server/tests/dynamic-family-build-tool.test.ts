@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -11,6 +11,7 @@ import {
   parseDynamicFamilyBuildSubmission,
 } from "../src/agent/tools/dynamic-family-build.js";
 import { submitDynamicFamilyBuild } from "../src/dataset/dynamic-family/submission.js";
+import { computeHILEvidenceDigest } from "../src/dataset/contracts/hil-evidence.js";
 import { expectedOutputLocatorClosure } from "../src/dataset/dynamic-family/execution.js";
 import { publishDynamicFamily } from "../src/dataset/dynamic-family/publication.js";
 import { SourceAssetRegistry } from "../src/runtime/source-assets/registry.js";
@@ -206,8 +207,18 @@ describe("dynamic family build tool boundary", () => {
       const registry = new SourceAssetRegistry("task_dynamic", root);
       const receipt = await registry.register({ sourceId: "source_dynamic", relativePath: "source_assets/source.csv" });
       const raw = await submission();
+      const reviewFamily = raw.family_spec as FamilySpec;
+      reviewFamily.table_definitions[0]!.field_names.push("review_status");
+      reviewFamily.canonical_digest = await computeFamilySpecDigest(reviewFamily);
+      const reviewMetadata = raw.transform_metadata as { bound_family_spec_digest: string };
+      reviewMetadata.bound_family_spec_digest = reviewFamily.canonical_digest;
+      const reviewProposal = raw.build_proposal as {
+        family_spec_ref: { digest: string };
+        transform_refs: Array<{ digest: string }>;
+      };
+      reviewProposal.family_spec_ref.digest = reviewFamily.canonical_digest;
       raw.registered_sources = { source_binding: receipt.asset_ref.asset_id };
-      raw.transform_source = `export const transform = { run({ inputs }) { const [input] = inputs; return { outputs: [{ handle: "out_0", table_id: "records", schema_ref: "schema_records", locator_ref: input.receipt_id, content: "record_id,value\\nr1,1\\n", row_count: 1 }] }; } };`;
+      raw.transform_source = `export const transform = { run({ inputs }) { const [input] = inputs; return { outputs: [{ handle: "out_0", table_id: "records", schema_ref: "schema_records", locator_ref: input.receipt_id, content: "record_id,value,review_status\\nr1,1,human_review_pending\\n", row_count: 1 }] }; } };`;
       let parsed = await parseDynamicFamilyBuildSubmission(raw);
       const mismatchedRole = structuredClone(raw);
       const mismatchedMetadata = mismatchedRole.transform_metadata as {
@@ -251,17 +262,80 @@ describe("dynamic family build tool boundary", () => {
       expect(result.receipt.sandbox_backend).toBe("in_process_unisolated");
       expect(result.operationResult.output_summary).toMatchObject({ tables: { records: { row_count: 1 } } });
       expect(result.materialization.candidate.tables[0]?.definition.table_id).toBe("records");
-      const published = await publishDynamicFamily({
+      const publishInput = {
         taskId: "task_dynamic", taskRoot: root,
         workspaceRoot: path.join(root, "agent-workspace"),
         buildId: parsed.build_proposal.build_id,
         execution: result,
         validationProfileRef: parsed.family_spec.validation_policy_ref,
+      };
+      await expect(publishDynamicFamily(publishInput)).rejects.toThrow(/durable HIL gate/);
+      for (const action of ["reject", "approve"] as const) {
+        await expect(publishDynamicFamily({
+          ...publishInput,
+          hilGate: {
+            requestHIL: async (input) => ({
+              schema_version: "1.0",
+              review_id: `review_${action}`,
+              request_id: `hil_${action}`,
+              decision: { action },
+              reviewer: "user",
+              reviewed_at: "2026-08-23T00:00:00.000Z",
+              evidence_digest: computeHILEvidenceDigest(input),
+              reason: null,
+            }),
+          },
+        })).rejects.toThrow(new RegExp(`not accepted: ${action}`));
+      }
+      await expect(publishDynamicFamily({
+        ...publishInput,
+        hilGate: {
+          requestHIL: async () => ({
+            schema_version: "1.0",
+            review_id: "review_mismatch",
+            request_id: "hil_mismatch",
+            decision: { action: "accept" },
+            reviewer: "user",
+            reviewed_at: "2026-08-23T00:00:00.000Z",
+            evidence_digest: "f".repeat(64),
+            reason: null,
+          }),
+        },
+      })).rejects.toThrow(/evidence digest does not match/);
+      await expect(access(path.join(root, "datasets_build", parsed.build_proposal.build_id, "publish")))
+        .rejects.toThrow();
+
+      let reviewRequest: { review_type: string; evidence: unknown } | null = null;
+      const published = await publishDynamicFamily({
+        ...publishInput,
+        hilGate: {
+          requestHIL: async (input) => {
+            reviewRequest = input;
+            return {
+              schema_version: "1.0",
+              review_id: "review_dynamic",
+              request_id: "hil_dynamic",
+              decision: { action: "accept" },
+              reviewer: "user",
+              reviewed_at: "2026-08-23T00:00:00.000Z",
+              evidence_digest: computeHILEvidenceDigest(input),
+              reason: "Reviewed the candidate",
+            };
+          },
+        },
       });
       expect(published.validation.status).toBe("passed");
       expect(published.assessment.product_status).toBe("publishable");
+      expect(reviewRequest).toMatchObject({ review_type: "publication_acceptance" });
+      expect(published.assessment.human_review_evidence).toMatchObject([{ decision: "accept" }]);
       expect(published.publication.publication.manifest_sha256).toMatch(/^[0-9a-f]{64}$/);
       expect(published.manifest.artifacts.map((artifact) => artifact.role)).toContain("provenance");
+      const provenance = JSON.parse(await readFile(
+        path.join(root, "datasets_build", parsed.build_proposal.build_id, "provenance.json"),
+        "utf8",
+      )) as { hil_acceptance?: { decision?: string; evidence_digest?: string } };
+      expect(provenance.hil_acceptance).toMatchObject({ decision: "accept" });
+      expect(provenance.hil_acceptance?.evidence_digest).toMatch(/^[0-9a-f]{64}$/);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

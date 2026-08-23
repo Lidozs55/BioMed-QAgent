@@ -2,20 +2,44 @@ import { createHash } from "node:crypto";
 import { copyFile, mkdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import type {
-  DatasetManifestV2,
-  ManifestArtifactEntry,
-  ProductAssessment,
-  PublicationCandidate,
+import {
+  parseProductAssessment,
+  type DatasetManifestV2,
+  type HILReviewItem,
+  type HILSubject,
+  type HumanReviewRecord,
+  type JsonValue,
+  type ManifestArtifactEntry,
+  type ProductAssessment,
+  type PublicationCandidate,
 } from "@biomed/contracts";
 
 import type { ValidationResult } from "../contracts/validation.js";
 
 import type { SubmitDynamicFamilyBuildResult } from "./submission.js";
 import { sha256FileStream } from "../adapters/hashing.js";
+import { canonicalDigest } from "../adapters/identity.js";
+import { computeHILEvidenceDigest } from "../contracts/hil-evidence.js";
 import { packageDigest } from "../publish/manifest.js";
 import { promotePublication, type PublishResult } from "../publish/publisher.js";
 import { validateMultiTableCandidate } from "../validation/multitable.js";
+
+interface DynamicPublicationHILInput {
+  readonly build_id: string | null;
+  readonly kind: "data_review";
+  readonly review_type: "publication_acceptance";
+  readonly blocking: true;
+  readonly subject: HILSubject;
+  readonly review_items: HILReviewItem[];
+  readonly summary: string;
+  readonly evidence: JsonValue;
+  readonly policy_ref: "dynamic_family_hil_acceptance.v1";
+  readonly idempotency_key: string;
+}
+
+export interface DynamicPublicationHILGate {
+  requestHIL(input: DynamicPublicationHILInput, signal?: AbortSignal): Promise<HumanReviewRecord>;
+}
 
 export interface PublishDynamicFamilyInput {
   readonly taskId: string;
@@ -26,6 +50,7 @@ export interface PublishDynamicFamilyInput {
   readonly validationProfileRef: string;
   readonly signal?: AbortSignal;
   readonly publishedAt?: string;
+  readonly hilGate?: DynamicPublicationHILGate | null;
 }
 
 export interface PublishDynamicFamilyResult {
@@ -108,9 +133,122 @@ export async function publishDynamicFamily(
   const requiresHilAcceptance = input.execution.materialization.schemas.some((schema) =>
     schema.fields.some((field) => field.name === "review_status" || field.name === "human_review_status"),
   );
-  const assessment = structuralAssessment(candidate, failed.length === 0, requiresHilAcceptance);
+  let assessment = parseProductAssessment(
+    structuralAssessment(candidate, failed.length === 0, requiresHilAcceptance, false),
+  );
+  let hilAcceptance: Record<string, JsonValue> | null = null;
 
   await writeFile(path.join(outputDir, "schema.json"), `${JSON.stringify(input.execution.materialization.schemas, null, 2)}\n`, "utf8");
+  const assessmentPath = path.join(outputDir, "product_assessment.json");
+  await writeFile(assessmentPath, `${JSON.stringify(assessment, null, 2)}\n`, "utf8");
+
+  if (failed.length === 0 && requiresHilAcceptance) {
+    if (input.hilGate === undefined || input.hilGate === null) {
+      throw new Error("dynamic publication requires a durable HIL gate");
+    }
+    const provisionalAssessment = await fileReceipt(assessmentPath);
+    const tables = await Promise.all(candidate.tables.map(async (table) => {
+      const output = operation.output_files[table.data_ref.output_file_index]!;
+      const receipt = await fileReceipt(path.join(outputDir, ...output.relative_path.split("/")));
+      if (receipt.sha256 !== output.sha256 || receipt.size_bytes !== output.size_bytes) {
+        throw new Error(`dynamic review staging drifted for '${table.definition.table_id}'`);
+      }
+      return {
+        table_id: table.definition.table_id,
+        role: table.definition.role,
+        schema_ref: table.definition.schema_ref,
+        relative_path: output.relative_path,
+        row_count: table.row_count,
+        sha256: receipt.sha256,
+        size_bytes: receipt.size_bytes,
+      };
+    }));
+    const reviewedSnapshot = toJsonValue({
+      candidate: {
+        ...candidateReference(candidate),
+        canonical_sha256: canonicalDigest(candidate),
+        task_id: candidate.task_id,
+        build_id: candidate.build_id,
+        dataset_family: candidate.dataset_family,
+        row_granularity: candidate.row_granularity,
+        registered_asset_ids: candidate.registered_asset_ids,
+      },
+      provisional_assessment: {
+        requirement_id: assessment.requirement_id,
+        relative_path: "product_assessment.json",
+        sha256: provisionalAssessment.sha256,
+        size_bytes: provisionalAssessment.size_bytes,
+        product_status: assessment.product_status,
+        missing_requirements: assessment.missing_requirements,
+      },
+      b3: {
+        profile_ref: input.validationProfileRef,
+        checks_sha256: canonicalDigest(b3.checks),
+        checked_count: b3.checks.length,
+        failed_count: 0,
+      },
+      tables,
+    });
+    const subject: HILSubject = {
+      candidate_ids: [candidate.candidate_id],
+      table_ids: candidate.tables.map((table) => table.definition.table_id),
+    };
+    const reviewItems: HILReviewItem[] = [{
+      item_id: candidate.candidate_id,
+      summary: "Review the evidence-bound dynamic publication candidate",
+      subject,
+      evidence: { reviewed_snapshot: reviewedSnapshot },
+      proposed_value: { action: "publish" },
+      confidence_level: null,
+    }];
+    const request = {
+      build_id: input.buildId,
+      kind: "data_review" as const,
+      review_type: "publication_acceptance" as const,
+      blocking: true as const,
+      subject,
+      review_items: reviewItems,
+      summary: "Accept the evidence-bound dynamic publication candidate",
+      evidence: reviewedSnapshot,
+      policy_ref: "dynamic_family_hil_acceptance.v1" as const,
+      idempotency_key: `dynamic-family-publication:${input.buildId}:${candidate.candidate_id}:${provisionalAssessment.sha256}`,
+    };
+    const expectedEvidenceDigest = computeHILEvidenceDigest(request);
+    const review = await input.hilGate.requestHIL(request, input.signal);
+    if (review.evidence_digest !== expectedEvidenceDigest) {
+      throw new Error("dynamic publication review evidence digest does not match the reviewed candidate");
+    }
+    if (review.decision.action !== "accept") {
+      throw new Error(`dynamic publication review was not accepted: ${review.decision.action}`);
+    }
+    const currentAssessment = await fileReceipt(assessmentPath);
+    if (currentAssessment.sha256 !== provisionalAssessment.sha256 || currentAssessment.size_bytes !== provisionalAssessment.size_bytes) {
+      throw new Error("dynamic publication provisional assessment drifted after review");
+    }
+    for (const table of tables) {
+      const current = await fileReceipt(path.join(outputDir, ...table.relative_path.split("/")));
+      if (current.sha256 !== table.sha256 || current.size_bytes !== table.size_bytes) {
+        throw new Error(`dynamic publication table '${table.table_id}' drifted after review`);
+      }
+    }
+    const reviewEvidence = {
+      policy_ref: request.policy_ref,
+      request_id: review.request_id,
+      review_id: review.review_id,
+      evidence_digest: review.evidence_digest,
+      decision: "accept" as const,
+      reviewer: review.reviewer,
+      reviewed_at: review.reviewed_at,
+      reason: review.reason,
+    };
+    assessment = parseProductAssessment({
+      ...structuralAssessment(candidate, true, true, true),
+      human_review_evidence: [reviewEvidence],
+    });
+    hilAcceptance = toJsonValue({ ...reviewEvidence, reviewed_snapshot: reviewedSnapshot }) as Record<string, JsonValue>;
+    await writeFile(assessmentPath, `${JSON.stringify(assessment, null, 2)}\n`, "utf8");
+  }
+
   await writeFile(path.join(outputDir, "provenance.json"), `${JSON.stringify({
     schema_version: "1.0",
     task_id: input.taskId,
@@ -127,8 +265,8 @@ export async function publishDynamicFamily(
     })),
     source_receipts: input.execution.receipt.input_asset_receipts,
     core_acquisition_provenance: input.execution.sourceAcquisitionProvenance,
+    ...(hilAcceptance === null ? {} : { hil_acceptance: hilAcceptance }),
   }, null, 2)}\n`, "utf8");
-  await writeFile(path.join(outputDir, "product_assessment.json"), `${JSON.stringify(assessment, null, 2)}\n`, "utf8");
 
   const artifacts: ManifestArtifactEntry[] = [];
   for (const table of candidate.tables) {
@@ -155,7 +293,11 @@ export async function publishDynamicFamily(
     product_assessment: assessment,
   }, null, 2)}\n`, "utf8");
   if (validation.status !== "passed") {
-    throw new Error(`dynamic multi-table product is not publishable: ${failed.map((check) => `${check.scope}:${check.check_id}`).join(", ")}`);
+    const reasons = [
+      ...failed.map((check) => `${check.scope}:${check.check_id}`),
+      ...assessment.blockers.map((blocker) => `${blocker.requirement_id}:${blocker.code}`),
+    ];
+    throw new Error(`dynamic multi-table product is not publishable: ${reasons.join(", ")}`);
   }
   const primary = candidate.tables.find((table) => table.definition.role === "primary");
   if (primary === undefined) throw new Error("dynamic product has no primary table");
@@ -210,10 +352,11 @@ function structuralAssessment(
   candidate: PublicationCandidate,
   passed: boolean,
   requiresHilAcceptance: boolean,
+  hilAccepted: boolean,
 ): ProductAssessment {
   const tableCount = candidate.tables.length;
   const relationCount = candidate.relations.length;
-  const score = (dimension: "schema" | "relations" | "provenance" | "reproducibility", satisfied: number, required: number) => ({
+  const score = (dimension: ProductAssessment["scores"][number]["dimension"], satisfied: number, required: number) => ({
     dimension, score: required === 0 ? 1 : satisfied / required, satisfied, required,
   });
   return {
@@ -221,16 +364,18 @@ function structuralAssessment(
     requirement_id: "dynamic_family_structural_b3.v1",
     package_id: candidate.candidate_id,
     package_version: "1.0",
-    product_status: passed && !requiresHilAcceptance ? "publishable" : "incomplete",
+    product_status: passed && (!requiresHilAcceptance || hilAccepted) ? "publishable" : "incomplete",
     scores: [
       score("schema", passed ? tableCount : 0, tableCount),
       score("relations", passed ? relationCount : 0, relationCount),
+      score("identifiers", 0, 0),
       score("provenance", passed ? candidate.registered_asset_ids.length : 0, candidate.registered_asset_ids.length),
+      score("confidence", requiresHilAcceptance ? (hilAccepted ? 1 : 0) : 0, requiresHilAcceptance ? 1 : 0),
       score("reproducibility", passed ? 1 : 0, 1),
     ],
     missing_requirements: [
       ...(passed ? [] : ["dynamic_family_structural_b3.v1"]),
-      ...(requiresHilAcceptance ? ["dynamic_family_hil_acceptance.v1"] : []),
+      ...(requiresHilAcceptance && !hilAccepted ? ["dynamic_family_hil_acceptance.v1"] : []),
     ],
     blockers: [
       ...(passed ? [] : [{
@@ -239,7 +384,7 @@ function structuralAssessment(
         code: "artifact_incomplete" as const,
         message: "generic multi-table validation did not pass",
       }]),
-      ...(requiresHilAcceptance ? [{
+      ...(requiresHilAcceptance && !hilAccepted ? [{
         requirement_id: "dynamic_family_hil_acceptance.v1",
         dimension: "confidence" as const,
         code: "human_review_pending" as const,
@@ -260,6 +405,15 @@ function candidateReference(candidate: PublicationCandidate) {
     confidence_refs: candidate.confidence_refs.map(ref),
     audit_refs: candidate.audit_refs.map(ref),
   };
+}
+
+function toJsonValue(value: unknown): JsonValue {
+  return JSON.parse(JSON.stringify(value)) as JsonValue;
+}
+
+async function fileReceipt(absolutePath: string): Promise<{ sha256: string; size_bytes: number }> {
+  const info = await stat(absolutePath);
+  return { sha256: await sha256FileStream(absolutePath), size_bytes: info.size };
 }
 
 async function artifact(

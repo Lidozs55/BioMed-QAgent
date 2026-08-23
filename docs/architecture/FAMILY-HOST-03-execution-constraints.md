@@ -14,7 +14,7 @@
 6. **Publication authority**：只有Core创建PublicationCandidate、B3结果、ProductAssessment和Publication。Agent/Transform/FamilySpec/workspace不能直接publish。
 7. **Conservative semantics**：FamilySpec没有科学field type时只生成`dynamic_string_preserving.v1`；不得推断numeric/unit/ontology/domain语义。
 8. **Provenance closure**：每个table必须有disjoint data/provenance/confidence refs，并闭合到registered assets和native OperationResults。
-9. **HIL fail closed**：含`review_status`/`human_review_status`字段的产品必须保持`human_review_pending`，直到有真实HIL acceptance evidence。
+9. **HIL fail closed**：含`review_status`/`human_review_status`字段的产品必须保持`human_review_pending`，直到Core在B3后创建、候选/assessment/table字节证据绑定的`publication_acceptance` HIL并收到matching `accept`；credential `approve`不能满足此门。accepted review identity/snapshot必须进入immutable assessment/provenance。当前动态publication HIL支持同一live process内suspend/resume；跨Host重启的deterministic dynamic continuation尚未完成，重启场景必须fail closed，不能声称自动恢复。
 10. **Scope/trust分离**：scope不表示trust；example scope不可执行；正式引用使用exact scope/id/version/digest。
 11. **Identity分层**：dataset/revision/asset/build/transform/publication identity不可互换；不得从buildId、用户参数、注册时间或本地执行事实合成dataset/provider revision identity。
 12. **Resource/cancellation fences**：deadline、generation、cancel fence、bounded input/output/log在admission前生效；当前进程内backend不能声称OS级RSS/PID/open-file enforcement。
@@ -34,7 +34,9 @@ registered immutable source receipts
   -> native multi-table OperationResultManifest
   -> dynamic_string_preserving.v1 materialization
   -> generic multi-table B3
-  -> Core provenance/confidence evidence + ProductAssessment
+  -> Core provenance/confidence evidence + provisional ProductAssessment
+  -> evidence-bound publication_acceptance HIL（仅review-status产品）
+  -> accepted review re-hash + final ProductAssessment/provenance
   -> atomic immutable Publication
   -> Artifact API download + SHA-256 verification
 ```

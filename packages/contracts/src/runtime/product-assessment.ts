@@ -1,6 +1,7 @@
 import type {
   ProductAssessment,
   ProductBlocker,
+  ProductHumanReviewEvidence,
   ProductScore,
   ProductScoreDimension,
   ProductStatus,
@@ -9,10 +10,12 @@ import { APIError } from "./errors.js";
 import {
   assertArray,
   assertFinite,
+  assertHex64,
   assertNonNegativeInt,
   assertNumber,
   assertObject,
   assertString,
+  assertStringOrNull,
 } from "./primitives.js";
 
 const DIMENSIONS = [
@@ -86,6 +89,24 @@ function parseBlocker(value: unknown, path: string): ProductBlocker {
   };
 }
 
+function parseHumanReviewEvidence(value: unknown, path: string): ProductHumanReviewEvidence {
+  const evidence = assertObject(value, path);
+  exactKeys(evidence, [
+    "policy_ref", "request_id", "review_id", "evidence_digest", "decision",
+    "reviewer", "reviewed_at", "reason",
+  ], path);
+  return {
+    policy_ref: safeId(evidence.policy_ref, `${path}.policy_ref`),
+    request_id: safeId(evidence.request_id, `${path}.request_id`),
+    review_id: safeId(evidence.review_id, `${path}.review_id`),
+    evidence_digest: assertHex64(evidence.evidence_digest, `${path}.evidence_digest`),
+    decision: assertFinite(evidence.decision, `${path}.decision`, ["accept"] as const),
+    reviewer: assertFinite(evidence.reviewer, `${path}.reviewer`, ["user"] as const),
+    reviewed_at: boundedText(evidence.reviewed_at, `${path}.reviewed_at`, 64),
+    reason: assertStringOrNull(evidence.reason, `${path}.reason`),
+  };
+}
+
 function compareBlockers(left: ProductBlocker, right: ProductBlocker): number {
   return left.requirement_id.localeCompare(right.requirement_id) ||
     left.dimension.localeCompare(right.dimension) ||
@@ -124,6 +145,7 @@ export function parseProductAssessment(value: unknown): ProductAssessment {
     "scores",
     "missing_requirements",
     "blockers",
+    "human_review_evidence",
   ], "product assessment");
   if (assessment.schema_version !== "1.0") {
     throw new APIError(502, 'Expected "1.0" at product assessment.schema_version');
@@ -164,6 +186,13 @@ export function parseProductAssessment(value: unknown): ProductAssessment {
       missingRequirements.some((valueId, index) => valueId !== blockerRequirements[index])) {
     throw new APIError(502, "ProductAssessment missing requirements must match blocker requirement IDs");
   }
+  const humanReviewEvidence = assessment.human_review_evidence === undefined
+    ? undefined
+    : assertArray(
+        assessment.human_review_evidence,
+        "product assessment.human_review_evidence",
+        (entry, index) => parseHumanReviewEvidence(entry, `product assessment.human_review_evidence[${index}]`),
+      );
   const parsed: ProductAssessment = {
     schema_version: "1.0",
     requirement_id: safeId(assessment.requirement_id, "product assessment.requirement_id"),
@@ -173,6 +202,7 @@ export function parseProductAssessment(value: unknown): ProductAssessment {
     scores,
     missing_requirements: missingRequirements,
     blockers,
+    ...(humanReviewEvidence === undefined ? {} : { human_review_evidence: humanReviewEvidence }),
   };
   validateStatus(parsed);
   return parsed;
