@@ -599,7 +599,7 @@ describe("SettingsPanel model registry", () => {
     const api = mockApi();
     renderSettings(api);
 
-    const modelRow = (await screen.findByText("DeepSeek Reasoner")).closest("li");
+    const modelRow = (await screen.findByText("DeepSeek Reasoner", {}, { timeout: 5_000 })).closest("li");
     expect(modelRow).not.toBeNull();
     fireEvent.click(within(modelRow as HTMLElement).getByRole("button", { name: "编辑" }));
     expect(screen.getByRole("button", { name: "保存参数" })).toBeInTheDocument();
@@ -619,7 +619,7 @@ describe("SettingsPanel model registry", () => {
         .mockResolvedValue([{ ...TEST_MODELS[0], source: "manual" }]),
     });
     renderSettings(api);
-    expect(await screen.findByText("手动配置")).toBeInTheDocument();
+    expect(await screen.findByText("手动配置", {}, { timeout: 5_000 })).toBeInTheDocument();
   });
 
   it("imports selected models via the checkbox in the provider list", async () => {

@@ -3,9 +3,9 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     // 纯 TS 契约测试，轻量且无子进程/文件系统依赖，threads 池足够；
-    // 只有 3 个测试文件，worker 压到 2 即可。CI（CI=true）才放开。
+    // worker 与文件内并发均固定为 2，CI 也不放宽共享 CPU 预算。
     pool: "threads",
-    maxWorkers: process.env.CI ? "75%" : 2,
-    maxConcurrency: process.env.CI ? 4 : 2,
+    maxWorkers: 2,
+    maxConcurrency: 2,
   },
 });
