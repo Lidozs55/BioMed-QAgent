@@ -4,7 +4,10 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import type { ProductAssessment } from "@/runtime/contracts";
-import type { DynamicFamilyToolOutput } from "@/lib/familyHost";
+import type {
+  DynamicFamilyToolOutput,
+  ProductAssessmentSummaryData,
+} from "@/lib/familyHost";
 import { statusLabel } from "@/lib/familyHost";
 
 const SCORE_LABELS: Record<ProductAssessment["scores"][number]["dimension"], string> = {
@@ -31,18 +34,26 @@ function digest(value: string | null): string {
   return `${value.slice(0, 12)}…`;
 }
 
-function ProductAssessmentSummary({ assessment }: { assessment: ProductAssessment }) {
+function ProductAssessmentSummary({ assessment }: { assessment: ProductAssessmentSummaryData }) {
   return (
     <Card size="sm" className="border-border/70 shadow-none">
       <CardHeader className="gap-2 pb-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <CardTitle className="text-sm">ProductAssessment</CardTitle>
-          <Badge variant={assessment.product_status === "publishable" ? "secondary" : "destructive"}>
+          <Badge
+            variant={
+              assessment.product_status === "publishable"
+                ? "secondary"
+                : assessment.product_status === "validated"
+                  ? "outline"
+                  : "destructive"
+            }
+          >
             {PRODUCT_STATUS_LABELS[assessment.product_status]}
           </Badge>
         </div>
         <CardDescription>
-          {assessment.package_id} · requirement {assessment.requirement_id}
+          {assessment.package_id ?? "package 未提供"} · requirement {assessment.requirement_id ?? "未提供"}
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
