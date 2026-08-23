@@ -586,13 +586,20 @@ describe("SettingsPanel model registry", () => {
     });
     renderSettings(api);
 
-    const activate = await screen.findByRole("button", { name: "设为当前" });
+    const activate = await screen.findByRole(
+      "button",
+      { name: "设为当前" },
+      { timeout: 10_000 },
+    );
     fireEvent.click(activate);
 
-    await waitFor(() => expect(api.activateManagedModel).toHaveBeenCalledWith("model-1"));
+    await waitFor(
+      () => expect(api.activateManagedModel).toHaveBeenCalledWith("model-1"),
+      { timeout: 10_000 },
+    );
     await waitFor(() => {
       expect(screen.getAllByText(/deepseek-reasoner/).length).toBeGreaterThan(0);
-    });
+    }, { timeout: 10_000 });
   });
 
   it("edits a maintained model inline without opening the add-model dialog", async () => {

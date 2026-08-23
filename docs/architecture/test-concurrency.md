@@ -1,6 +1,6 @@
 # Test Concurrency Budget
 
-> 2026-08 测试并发调优：本地与 CI 的全量测试统一限制为最多 **2** 个 workspace、worker 或文件内并发执行单元，避免开发机和共享 runner 触发 CPU/功耗限制。
+> 2026-08 测试并发调优：本地与 CI 的全量测试在任一时刻统一限制为最多 **2** 个测试 worker，避免开发机和共享 runner 触发 CPU/功耗限制。
 
 ## 为什么
 
@@ -16,12 +16,12 @@ workspace 并发 × vitest workers × test.concurrent
 
 | 层 | 控制 | 本地与 CI 默认值 |
 | --- | --- | --- |
-| workspace 并发 | 根 `package.json` 的 `test` / `test:full` | 2 |
+| workspace 并发 | 根 `package.json` 的 `test` / `test:full` | 1（workspace 顺序执行） |
 | server | `server/vitest.config.ts`，forks pool | 2 workers / 2 concurrent |
 | frontend | `frontend/vitest.config.ts`，threads pool | 2 workers / 2 concurrent |
 | contracts | `packages/contracts/vitest.config.ts`，threads pool | 2 workers / 2 concurrent |
 
-`pnpm test` 与 `pnpm test:full` 都遵守同一上限；`test:full` 表示运行完整测试集合，不再表示解除并发限制。
+`pnpm test` 与 `pnpm test:full` 都遵守同一上限；`test:full` 表示运行完整测试集合，不再表示解除并发限制。workspace 必须顺序执行，否则两个 workspace 各自启动 2 个 worker 时，全机实际会同时运行 4 个 worker，违反总预算。
 
 ## 选型依据
 
@@ -41,4 +41,4 @@ pnpm --filter @biomed/server test -- --maxWorkers=1 --maxConcurrency=1
 
 ## 原则
 
-> 全量测试默认最多并行 2；focused 单文件测试可正常运行，但仍不得通过额外参数把 worker/concurrency 提高到 2 以上。
+> 全量测试默认在全机范围最多并行 2 个测试 worker；focused 单文件测试可正常运行，但仍不得通过额外参数把 worker/concurrency 提高到 2 以上。
