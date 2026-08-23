@@ -212,6 +212,32 @@ describe("FamilyTopologyExplorer", () => {
     await waitFor(() => expect(document.activeElement).toBe(relationButton));
   });
 
+  it("returns focus to a table trigger when switching from relation details before Escape", async () => {
+    render(<FamilyTopologyExplorer manifest={manifest()} publication={null} />);
+
+    const relationButton = screen.getByRole("button", { name: /查看关系 expression_samples/ });
+    const tableButton = screen.getByRole("button", { name: /expression.*主表/ });
+    relationButton.focus();
+    expect(document.activeElement).toBe(relationButton);
+
+    fireEvent.click(relationButton);
+    expect(screen.getByRole("dialog", { name: "关系详情" })).toBeVisible();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Close" })));
+    fireEvent.pointerDown(tableButton);
+    tableButton.focus();
+    fireEvent.click(tableButton);
+    expect(screen.getByRole("dialog", { name: "表详情" })).toBeVisible();
+    const closeButton = screen.getByRole("button", { name: "Close" });
+    closeButton.focus();
+    closeButton.blur();
+    expect(document.activeElement).toBe(document.body);
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "表详情" })).not.toBeInTheDocument());
+    await new Promise((resolve) => setTimeout(resolve, 1400));
+    await waitFor(() => expect(document.activeElement).toBe(tableButton));
+  });
+
   it("renders one source and target field pair per relation row", () => {
     render(<FamilyTopologyExplorer manifest={manifest()} publication={null} />);
 

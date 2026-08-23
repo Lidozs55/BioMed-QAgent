@@ -214,9 +214,20 @@ export function FamilyTopologyExplorer({ manifest, publication }: FamilyTopology
   const model = useMemo(() => buildTopologyModel(manifest), [manifest]);
   const [selection, setSelection] = useState<TopologySelection>(null);
   const focusReturnRef = useRef<HTMLElement | null>(null);
+  const finalFocus = useCallback(() => focusReturnRef.current, []);
   const handleSelect = useCallback((nextSelection: TopologySelection, trigger: HTMLElement) => {
     focusReturnRef.current = trigger;
     setSelection(nextSelection);
+  }, []);
+  const handleInspectorOpenChange = useCallback((open: boolean) => {
+    if (open) return;
+    setSelection(null);
+    queueMicrotask(() => {
+      const trigger = focusReturnRef.current;
+      if (document.activeElement === document.body && trigger?.isConnected) {
+        trigger.focus();
+      }
+    });
   }, []);
 
   return (
@@ -227,10 +238,8 @@ export function FamilyTopologyExplorer({ manifest, publication }: FamilyTopology
       <TopologyInspector
         model={model}
         selection={selection}
-        finalFocus={focusReturnRef}
-        onOpenChange={(open) => {
-          if (!open) setSelection(null);
-        }}
+        finalFocus={finalFocus}
+        onOpenChange={handleInspectorOpenChange}
       />
     </div>
   );

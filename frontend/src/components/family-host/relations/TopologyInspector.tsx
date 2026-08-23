@@ -1,4 +1,3 @@
-import type { RefObject } from "react";
 import type { RelationDefinition, TableDefinition } from "@biomed/contracts";
 
 import {
@@ -56,7 +55,7 @@ const MISSING_POLICY_LABELS: Record<RelationDefinition["missing_policy"], string
 export interface TopologyInspectorProps {
   readonly model: TopologyModel;
   readonly selection: TopologySelection;
-  readonly finalFocus: RefObject<HTMLElement | null>;
+  readonly finalFocus: () => HTMLElement | null;
   readonly onOpenChange: (open: boolean) => void;
 }
 
