@@ -209,6 +209,16 @@ describe("dynamic family build tool boundary", () => {
       raw.registered_sources = { source_binding: receipt.asset_ref.asset_id };
       raw.transform_source = `export const transform = { run({ inputs }) { const [input] = inputs; return { outputs: [{ handle: "out_0", table_id: "records", schema_ref: "schema_records", locator_ref: input.receipt_id, content: "record_id,value\\nr1,1\\n", row_count: 1 }] }; } };`;
       let parsed = await parseDynamicFamilyBuildSubmission(raw);
+      const mismatchedRole = structuredClone(raw);
+      const mismatchedMetadata = mismatchedRole.transform_metadata as {
+        declared_input_roles: Array<{ role: string }>;
+      };
+      mismatchedMetadata.declared_input_roles[0]!.role = "wrong_role";
+      await expect(submitDynamicFamilyBuild({
+        taskId: "task_dynamic", runId: "run_dynamic",
+        submission: await parseDynamicFamilyBuildSubmission(mismatchedRole),
+        sourceAssetRegistry: registry, taskRoot: root, runtimeLimits: DEFAULT_RUNTIME_LIMITS,
+      })).rejects.toThrow(/binding 'source_binding'.*expected 'source'.*received 'wrong_role'/);
       await expect(submitDynamicFamilyBuild({
         taskId: "task_dynamic", runId: "run_dynamic", submission: parsed,
         sourceAssetRegistry: registry, taskRoot: root, runtimeLimits: DEFAULT_RUNTIME_LIMITS,

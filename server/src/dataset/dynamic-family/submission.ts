@@ -74,7 +74,9 @@ export async function submitDynamicFamilyBuild(
   for (const [index, binding] of bindings.entries()) {
     const declared = input.submission.transform_metadata.declared_input_roles[index]!;
     if (declared.role !== binding.input_requirement_ref) {
-      throw new TypeError(`transform input role does not match binding '${binding.binding_id}'`);
+      throw new TypeError(
+        `transform input role does not match binding '${binding.binding_id}': expected '${binding.input_requirement_ref}', received '${declared.role}'`,
+      );
     }
     const assetId = input.submission.registered_sources[binding.binding_id]!;
     const resolved = await input.sourceAssetRegistry.resolveCoreAcquired(
