@@ -178,6 +178,19 @@ export function validateChartExtraction(
         `chart_data_points.csv row ${index + 1}: missing confidence_reason on model-extracted point '${row.point_id}'`,
       );
     }
+    if (row.human_review_state === "not_required") {
+      violations.push(
+        `chart_data_points.csv row ${index + 1}: model-extracted point '${row.point_id}' must not bypass human review`,
+      );
+    }
+    if (
+      (row.human_review_state === "accepted" || row.human_review_state === "corrected") &&
+      row.review_id.trim() === ""
+    ) {
+      violations.push(
+        `chart_data_points.csv row ${index + 1}: reviewed model-extracted point '${row.point_id}' is missing review_id`,
+      );
+    }
   });
   return violations;
 }

@@ -237,6 +237,7 @@ export function normalizeChartJson(
   };
 
   const pointRows: ChartPointRow[] = [];
+  const modelExtracted = chartRow.extraction_tier === "" || chartRow.extraction_tier.startsWith("L1");
   dataPoints.forEach((point, index) => {
     if (typeof point !== "object" || point === null || Array.isArray(point)) return;
     const record = point as Record<string, unknown>;
@@ -267,9 +268,9 @@ export function normalizeChartJson(
       x_value: stringField(record.x),
       y_value: stringField(record.y),
       series_label: stringField(record.series_label),
-      confidence_level: confidenceLevel,
+      confidence_level: modelExtracted && confidenceLevel === "high" ? "medium" : confidenceLevel,
       confidence_reason: confidenceReason,
-      human_review_state: confidenceLevel === "low" ? "pending" : "not_required",
+      human_review_state: modelExtracted ? "pending" : "not_required",
       review_id: "",
       original_x_value: "",
       original_y_value: "",

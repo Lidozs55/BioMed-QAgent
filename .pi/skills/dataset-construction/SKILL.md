@@ -50,9 +50,11 @@ output.
    - deterministic output handles out-0, out-1, … in primary + supporting +
      derived projection order. Each output needs a non-empty registered input
      receipt ID as locator; multiple tables from one source may share it.
-   The Host owns compilation. If the first submission reports the exact
+   The Host owns compilation. If any submission reports the exact
    Host-compiled descriptor digest, replace the proposal transform-ref digest with
-   that value and resubmit; do not bypass or invent the digest. Treat only the
+   that latest value and resubmit; source, role, binding, family, projection, or
+   transform changes can all change it. Do not stop on a descriptor handshake
+   rejection, bypass it, or invent the digest. Treat only the
    returned immutable Publication as formal output. A schema containing
    review-status or human-review-status remains human-review-pending until
    genuine HIL acceptance exists.

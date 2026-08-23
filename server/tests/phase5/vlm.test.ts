@@ -116,6 +116,8 @@ describe("normalizeChartJson", () => {
     expect(pointRows).toHaveLength(2);
     expect(pointRows[0]?.x_value).toBe("S1");
     expect(pointRows[0]?.y_value).toBe("1.2");
+    expect(pointRows.map((point) => point.confidence_level)).toEqual(["medium", "medium"]);
+    expect(pointRows.map((point) => point.human_review_state)).toEqual(["pending", "pending"]);
     expect(validateChartData([chartRow], pointRows)).toEqual([]);
   });
 
@@ -339,8 +341,18 @@ describe("extract_chart_data_vlm tool", () => {
     expect(confidenceArtifact.batch_defaults).toEqual([]);
     expect(confidenceArtifact.record_overrides).toHaveLength(2);
     expect(confidenceArtifact.record_overrides).toEqual(expect.arrayContaining([
-      expect.objectContaining({ channel: "vlm", level: "medium" }),
+      expect.objectContaining({
+        channel: "vlm",
+        level: "medium",
+        components: expect.objectContaining({ human_review_state: "pending" }),
+      }),
     ]));
+    const pointCsv = await readFile(
+      path.join(taskRoot, "parsed", "chart_data", CHART_POINTS_CSV_NAME),
+      "utf8",
+    );
+    expect(pointCsv).not.toContain(",high,");
+    expect(pointCsv).not.toContain(",not_required,");
     await writeFile(path.join(figureDir, "chart-second.png"), tinyPng(100));
     const secondResult = await tool.execute({
       source_path: "source_assets/figures/chart-second.png",
