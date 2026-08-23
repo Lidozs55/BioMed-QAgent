@@ -221,7 +221,10 @@ async function verifiedFamilySpec(value: FamilySpec): Promise<FamilySpec> {
   }
   const topology = checkFamilySpecTopology(spec);
   if (!topology.topology_valid) {
-    throw new Error(`invalid FamilySpec topology: ${topology.issues.map((issue) => issue.code).join(", ")}`);
+    const details = topology.issues
+      .map((issue) => `${issue.code}@${issue.path}: ${issue.message}`)
+      .join("; ");
+    throw new Error(`invalid FamilySpec topology: ${details}`);
   }
   return spec;
 }

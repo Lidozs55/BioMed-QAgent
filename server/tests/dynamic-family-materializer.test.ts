@@ -402,7 +402,7 @@ describe("dynamic FamilySpec materializer", () => {
     invalid.table_definitions[0]!.primary_key = [];
     invalid.canonical_digest = await computeFamilySpecDigest(invalid);
     await expect(materializeDynamicFamilyCandidate({ ...base, familySpec: invalid }))
-      .rejects.toThrow(/invalid FamilySpec topology: PRIMARY_KEY_EMPTY/);
+      .rejects.toThrow(/invalid FamilySpec topology: PRIMARY_KEY_EMPTY.*table_definitions\["edges"\]\.primary_key.*at least one field/);
 
     await expect(materializeDynamicFamilyCandidate({
       ...base,
