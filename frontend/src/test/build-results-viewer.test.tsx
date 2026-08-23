@@ -295,8 +295,9 @@ describe("BuildResultsViewer", () => {
 
     expect(await screen.findByRole("tab", { name: "结构" })).toBeVisible();
     fireEvent.click(screen.getByRole("tab", { name: "结构" }));
-    expect(await screen.findByRole("table", { name: "表关系" })).toBeVisible();
-    expect(screen.getByText("expression_samples")).toBeVisible();
+    const relationTable = await screen.findByRole("table", { name: "表关系" });
+    expect(relationTable).toBeVisible();
+    expect(relationTable).toHaveTextContent("expression_samples");
   });
 
   it("passes the task id to the builds API so colliding build ids resolve to this task", async () => {
