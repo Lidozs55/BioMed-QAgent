@@ -50,7 +50,7 @@ function runTailChild(
   return new Promise((resolve, reject) => {
     const child = spawn(
       process.execPath,
-      [`--max-old-space-size=${heapMb}`, viteNodeEntry, CHILD, workRoot, String(rowCount)],
+      ["--no-warnings", `--max-old-space-size=${heapMb}`, viteNodeEntry, CHILD, workRoot, String(rowCount)],
       { stdio: "pipe" },
     );
     let stdout = "";

@@ -331,14 +331,22 @@ export class DatasetBuildExecutor {
     if (!this.rehydrateCompletedRunners) return;
     const state = this.state;
     if (state === null) return;
-    // With a fully completed plan nothing will execute downstream of the
-    // reused operations, so in-memory state is irrelevant (and re-running
-    // one-shot work like publish must never happen).
+    // A completed publish marker is never a restart shortcut: publication is
+    // an external side effect whose startup identity must be re-established.
+    // Clear only the marker here; runPlan will execute publish normally.
+    const completedPublish = this.plan.find(
+      (op) => op.kind === "publish" && state.completed_operations[op.operation_id] !== undefined,
+    );
+    if (completedPublish !== undefined) {
+      delete state.completed_operations[completedPublish.operation_id];
+      saveBuildState(this.stateDir, state);
+    }
     const hasIncomplete = this.plan.some(
       (op) => state.completed_operations[op.operation_id] === undefined,
     );
     if (!hasIncomplete) return;
     for (const op of this.plan) {
+      if (op.kind === "publish") continue;
       if (this.isCancelled()) return;
       const outputDigest = state.completed_operations[op.operation_id];
       if (outputDigest === undefined) continue;
@@ -638,17 +646,19 @@ export class DatasetBuildExecutor {
     const inputDigest = computeInputDigest(op, scope);
     const parameterDigest = computeParameterDigest(op, scope);
 
-    if (!force && (await this.tryReuseOperation(op, inputDigest, parameterDigest))) {
-      await this.emit({
-        type: "operation_completed",
-        operationId: op.operation_id,
-        label: op.label ?? null,
-        category: op.category,
-        status: "skipped",
-        outputDigest: null,
-        reusedOperationAttemptId: this.lastReusedAttemptId,
-      });
-      return;
+    if (op.kind !== "publish") {
+      if (!force && (await this.tryReuseOperation(op, inputDigest, parameterDigest))) {
+        await this.emit({
+          type: "operation_completed",
+          operationId: op.operation_id,
+          label: op.label ?? null,
+          category: op.category,
+          status: "skipped",
+          outputDigest: null,
+          reusedOperationAttemptId: this.lastReusedAttemptId,
+        });
+        return;
+      }
     }
 
     const state = this.state;

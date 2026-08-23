@@ -30,5 +30,13 @@ PNG/JPG image or PDF.
 ## Constraints
 
 - Extracted data is preparation material, not a formal artifact: it may inform
-  research but never replaces the trusted `execute_dataset_build` publication
-  path.
+  research but never replaces the trusted Dataset Core publication path.
+- A literature-derived quantitative product uses the tables paper_records,
+  experiment_records, primary activity_value_records, chart_series,
+  chart_points, and supplementary_asset_records; do not collapse it into a
+  generic evidence/papers pair.
+- Chart series carry human_review_status, and chart points carry review_status.
+  Estimated or uncertain values remain human_review_pending until genuine
+  evidence-bound HIL acceptance.
+- Approval to use VLM credentials is not chart-data review and must never be
+  treated as publication acceptance.

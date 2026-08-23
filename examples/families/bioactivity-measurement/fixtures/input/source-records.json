@@ -1,0 +1,120 @@
+{
+  "schema_version": "1.0",
+  "dataset": {
+    "source_namespace": "chembl_pubchem",
+    "revision_token": "reference_revision_1",
+    "provider_snapshot": "chembl_pubchem_checked_fixture_2026_08_22"
+  },
+  "sources": {
+    "chembl": {
+      "source_id": "source_chembl_activity_reference",
+      "activities": [
+        {
+          "activity_id": "ACT_REFERENCE_1",
+          "molecule_chembl_id": "CHEMBL25",
+          "molecule_pref_name": "ASPIRIN",
+          "assay_chembl_id": "CHEMBL_A100",
+          "target_chembl_id": "CHEMBL_T100",
+          "standard_type": "IC50",
+          "value": "12.5",
+          "relation": "<",
+          "units": "nM",
+          "standard_value": "12.5",
+          "standard_relation": "<",
+          "standard_units": "nM",
+          "canonical_smiles": "CC(=O)OC1=CC=CC=C1C(=O)O",
+          "standard_inchi_key": "BSYNRYMUTXBXSQ-UHFFFAOYSA-N",
+          "molecular_formula": "C9H8O4",
+          "molecular_weight": 180.16
+        },
+        {
+          "activity_id": "ACT_REFERENCE_2",
+          "molecule_chembl_id": "CHEMBL25",
+          "molecule_pref_name": "ASPIRIN",
+          "assay_chembl_id": "CHEMBL_A100",
+          "target_chembl_id": "CHEMBL_T100",
+          "standard_type": "IC50",
+          "value": "1.0",
+          "relation": ">",
+          "units": "uM",
+          "standard_value": "1000",
+          "standard_relation": ">",
+          "standard_units": "nM",
+          "canonical_smiles": "CC(=O)OC1=CC=CC=C1C(=O)O",
+          "standard_inchi_key": "BSYNRYMUTXBXSQ-UHFFFAOYSA-N",
+          "molecular_formula": "C9H8O4",
+          "molecular_weight": 180.16
+        },
+        {
+          "activity_id": "ACT_REFERENCE_3",
+          "molecule_chembl_id": "CHEMBL25",
+          "molecule_pref_name": "ASPIRIN",
+          "assay_chembl_id": "CHEMBL_A100",
+          "target_chembl_id": "CHEMBL_T100",
+          "standard_type": "IC50",
+          "value": "75",
+          "relation": "=",
+          "units": "nM",
+          "standard_value": "75",
+          "standard_relation": "=",
+          "standard_units": "nM",
+          "canonical_smiles": "CC(=O)OC1=CC=CC=C1C(=O)O",
+          "standard_inchi_key": "BSYNRYMUTXBXSQ-UHFFFAOYSA-N",
+          "molecular_formula": "C9H8O4",
+          "molecular_weight": 180.16
+        }
+      ],
+      "assays": [
+        {
+          "assay_chembl_id": "CHEMBL_A100",
+          "assay_type": "B",
+          "description": "Reference biochemical inhibition assay",
+          "assay_organism": "Homo sapiens",
+          "cell_line": null,
+          "target_chembl_id": "CHEMBL_T100",
+          "bao_format": "BAO_0000357"
+        }
+      ],
+      "targets": [
+        {
+          "target_chembl_id": "CHEMBL_T100",
+          "target_type": "SINGLE PROTEIN",
+          "pref_name": "Cyclooxygenase-2",
+          "organism": "Homo sapiens"
+        }
+      ]
+    },
+    "pubchem": {
+      "source_id": "source_pubchem_identity_reference",
+      "compounds": [
+        {
+          "cid": 2244,
+          "molecular_formula": "C9H8O4",
+          "molecular_weight": 180.16,
+          "iupac_name": "2-acetyloxybenzoic acid",
+          "canonical_smiles": "CC(=O)OC1=CC=CC=C1C(=O)O",
+          "isomeric_smiles": "CC(=O)OC1=CC=CC=C1C(=O)O",
+          "inchi_key": "BSYNRYMUTXBXSQ-UHFFFAOYSA-N",
+          "inchi": "InChI=1S/C9H8O4"
+        }
+      ]
+    }
+  },
+  "crosswalks": [
+    {
+      "crosswalk_id": "XWALK_ASPIRIN_1",
+      "left_id": "CHEMBL25",
+      "left_namespace": "chembl_compound",
+      "right_id": "2244",
+      "right_namespace": "pubchem_cid",
+      "relation_type": "equivalent",
+      "match_method": "exact_inchi_key",
+      "match_evidence": "BSYNRYMUTXBXSQ-UHFFFAOYSA-N",
+      "conflict_status": "none",
+      "conflict_details": null,
+      "confidence_score": 1,
+      "confidence_level": "high",
+      "source_id": "source_crosswalk_reference"
+    }
+  ]
+}

@@ -1,5 +1,7 @@
 # FamilySpec、DatasetTransform 与执行收据契约
 
+> 历史计划说明：本文件记录 Batch 0–2 契约设计。当前生产实现已采用 ADR-039 接受的显式 `in_process_unisolated` backend；涉及 sandbox availability/activation 的旧门槛仅适用于未来 isolated backend，不覆盖当前代码与 receipt。当前状态以 ADR-039、`docs/architecture/FAMILY-HOST-03-execution-constraints.md` 和 `docs/TODO.md` 为准。
+
 ## 1. 三个独立对象
 
 ### 1.1 FamilySpec
@@ -16,6 +18,8 @@ FamilySpec 只描述数据产品，至少绑定：
 - scope、author/evidence refs。
 
 FamilySpec 禁止包含源码、函数、任意 validator/merge expression、文件路径、网络权限、Publisher threshold、Core nodes/edges。
+
+`canonical_digest` 的输入是 strict-parse 后、**排除自引用 `canonical_digest` 字段**的完整 FamilySpec body：对象键按 canonical JSON 排序、字符串按 NFC canonicalize，所有数组保持声明顺序（尤其 PK/relation tuple、projection/output/policy/evidence 声明）。`parseFamilySpec()` 只证明 wire shape；只有显式 `computeFamilySpecDigest()` / `verifyFamilySpecDigest()` 才证明 embedded digest 与 body 匹配。
 
 ### 1.2 DatasetTransform
 
@@ -53,7 +57,7 @@ Transform 不能决定 source acquisition、merge winner、validation threshold�
 - cancellation/timeout/OOM状态；
 - Host implementation digest和时间。
 
-Host receipt 证明“这段 bytes 在该隔离策略下产生这些 quarantined bytes”，不证明科学语义正确，也不能直接满足 Publisher。
+Host receipt 证明“这段 bytes 在该隔离策略下产生这些 quarantined bytes”，不证明科学语义正确，也不能直接满足 Publisher。若平台没有已证明的隔离 backend，receipt 必须使用 `sandbox_backend="unavailable" + exit_state="sandbox_unavailable"`，不得虚报 container/namespace/Job Object，也不得包含 worker exit 或 quarantined outputs。
 
 ## 2. Transform SDK
 
@@ -117,6 +121,8 @@ hash(
 
 Agent 可以 author proposal；Family Host resolver 输出 fully resolved、digest-bound spec；Core 在执行前重新 admission。2.0 不允许 Agent设置 validation threshold、resource 上限以上的值或 arbitrary DAG。
 
+Wire DTO 固定为 `DatasetBuildProposal2(spec_kind="proposal")` 与 `ResolvedDatasetBuildSpec2(spec_kind="resolved")` 两种 exact shape。Proposal binding 只有 `input_requirement_ref`；resolved binding 对 `registered_asset_ref` / `registered_result_ref` 要求 exactly-one。兼容入口 `parseDatasetBuildSpec2()` 是 resolved-only alias，不做 version/shape sniffing，也不接受 proposal/hybrid。
+
 ## 6. Contract 工作包
 
 ### C0：严格 DTO 与 parser
@@ -125,7 +131,7 @@ Agent 可以 author proposal；Family Host resolver 输出 fully resolved、dige
 
 ### C1：canonical digest
 
-冻结 canonical JSON、排序、Unicode、line endings、source normalization、compiler options和dependency closure算法。
+冻结 canonical JSON、排序、Unicode、line endings、source normalization、compiler options和dependency closure算法。当前 contracts 已冻结 FamilySpec body、implementation digest 与 transform descriptor canonical bytes；raw JSON duplicate-key rejection仍属于 HTTP/JSON decoder边界，不能由已构造的 JavaScript object parser伪装实现。
 
 ### C2：Host/Core 双重 admission
 

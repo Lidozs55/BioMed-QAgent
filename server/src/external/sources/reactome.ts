@@ -142,7 +142,7 @@ export async function searchReactome(
   maxResults: number,
   context: SourceQueryContext,
 ): Promise<Record<string, unknown>> {
-  context.onQueryStarted?.(term, "reactome");
+  const queryCallToken = context.onQueryStarted?.(term, "reactome");
   const encoded = quoteQuery(term);
   const apiUrl =
     `${REACTOME_API_BASE}/search/query?query=${encoded}` +
@@ -170,7 +170,7 @@ export async function searchReactome(
   } catch (error) {
     if (isAbortError(error) || context.signal?.aborted === true) throw error;
     if (!(error instanceof FallbackFailure)) throw error;
-    context.onQuery?.(term, "reactome", "failed", 0);
+    context.onQuery?.(term, "reactome", "failed", 0, queryCallToken);
     return fallbackError("reactome", pageUrl, error);
   }
 
@@ -211,7 +211,7 @@ export async function searchReactome(
           url: `${REACTOME_PAGE_BASE}/${stId}`,
         });
       }
-      context.onQuery?.(term, "reactome", "success", records.length);
+      context.onQuery?.(term, "reactome", "success", records.length, queryCallToken);
       return {
         source: "reactome",
         term,
@@ -230,7 +230,7 @@ export async function searchReactome(
       // Python logs a warning and falls through to the page fallback.
     }
   }
-  context.onQuery?.(term, "reactome", "page_fallback", 0);
+  context.onQuery?.(term, "reactome", "page_fallback", 0, queryCallToken);
   return pageFallback("reactome", pageUrl, fetched);
 }
 
@@ -239,7 +239,7 @@ export async function getPathway(
   pathwayId: string,
   context: SourceQueryContext,
 ): Promise<Record<string, unknown>> {
-  context.onQueryStarted?.(pathwayId, "reactome");
+  const queryCallToken = context.onQueryStarted?.(pathwayId, "reactome");
   const apiUrl = `${REACTOME_API_BASE}/data/query/${pathwayId}`;
   const pageUrl = `${REACTOME_PAGE_BASE}/${pathwayId}`;
 
@@ -264,7 +264,7 @@ export async function getPathway(
   } catch (error) {
     if (isAbortError(error) || context.signal?.aborted === true) throw error;
     if (!(error instanceof FallbackFailure)) throw error;
-    context.onQuery?.(pathwayId, "reactome", "failed", 0);
+    context.onQuery?.(pathwayId, "reactome", "failed", 0, queryCallToken);
     return fallbackError("reactome", pageUrl, error);
   }
 
@@ -289,7 +289,7 @@ export async function getPathway(
         summation: stripHtml(typeof document["summation"] === "string" ? document["summation"] : ""),
         release_date: typeof document["releaseDate"] === "string" ? document["releaseDate"] : "",
       };
-      context.onQuery?.(pathwayId, "reactome", "success", 1);
+      context.onQuery?.(pathwayId, "reactome", "success", 1, queryCallToken);
       return {
         source: "reactome",
         pathway_id: pathwayId,
@@ -302,7 +302,7 @@ export async function getPathway(
       // Python logs a warning and falls through to the page fallback.
     }
   }
-  context.onQuery?.(pathwayId, "reactome", "page_fallback", 0);
+  context.onQuery?.(pathwayId, "reactome", "page_fallback", 0, queryCallToken);
   return pageFallback("reactome", pageUrl, fetched);
 }
 

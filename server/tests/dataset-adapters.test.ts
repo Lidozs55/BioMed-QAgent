@@ -11,7 +11,12 @@ import { parseDownloadAttempt, parseSourceAsset } from "../src/dataset/contracts
 import { OperationAbortedError } from "../src/dataset/cooperative.js";
 import { getAdapter } from "../src/dataset/adapters/index.js";
 import { BufferedCsvWriter } from "../src/dataset/adapters/base.js";
-import { csvLine, delimitedRowsFromFileAsync, delimitedRowsWithLines } from "../src/dataset/adapters/text.js";
+import {
+  csvLine,
+  DelimitedBoundsError,
+  delimitedRowsFromFileAsync,
+  delimitedRowsWithLines,
+} from "../src/dataset/adapters/text.js";
 import {
   checkAdapterContractParity,
   checkAdapterFixtureParity,
@@ -132,6 +137,19 @@ describe("streaming source parsing (WP-A2)", () => {
       streamedGz.push(row);
     }
     expect(streamedGz).toEqual(rows);
+  });
+
+  test("bounded streaming rejects an oversized unterminated row", async () => {
+    const root = mkdtempSync(join(tmpdir(), "stream-bounds-"));
+    const sourcePath = join(root, "oversized.tsv");
+    writeFileSync(sourcePath, "x".repeat(2 * 1024 * 1024));
+    const rows = delimitedRowsFromFileAsync(sourcePath, "\t", undefined, {
+      maxRowChars: 1024,
+      maxFieldChars: 1024,
+      maxRowFields: 2,
+    });
+
+    await expect(rows.next()).rejects.toBeInstanceOf(DelimitedBoundsError);
   });
 
   test("abort mid-stream stops consumption far before EOF (bounded memory)", async () => {

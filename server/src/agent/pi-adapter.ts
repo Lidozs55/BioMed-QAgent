@@ -516,6 +516,9 @@ class PiBioMedAgentSession implements BioMedAgentSession {
       active.assistantStopReason = undefined;
       await this.upstream.continueAfterLength();
     }
+    if (!active.cancelled && active.assistantStopReason === "error") {
+      throw new Error("Pi runtime ended with an upstream error");
+    }
   }
 
   private queueDelta(

@@ -37,6 +37,23 @@ files with `download_supplementary`.
   toward the per-source follow-up budget.
 - Three not_found follow-ups on the same source: switch source or move on.
 
+## Formal quantitative evidence builds
+
+- Discovery search, supplementary downloads, PDFs, VLM outputs, and workspace
+  CSVs are preparation material, not formal carriers.
+- For open-access full text used by a dynamic build, request one exact PMCID per
+  source binding with the fixed Core provider `pubmed.files.v1`. Core retrieves
+  and provenance-binds Europe PMC XML; never invent another literature provider.
+- Literature-derived quantitative evidence uses the generic six-table topology:
+  paper_records, experiment_records, primary activity_value_records,
+  chart_series, chart_points, and supplementary_asset_records.
+- Preserve raw value, raw unit, relation, original text, source locator,
+  extraction method, and confidence. The chart_series.human_review_status and
+  chart_points.review_status fields are mandatory for chart evidence.
+- Estimated or uncertain chart evidence remains human_review_pending until a
+  genuine evidence-bound HIL acceptance. Credential-use approval is not a data
+  review and cannot release the publication.
+
 ## Citations
 
 Reported literature findings must carry a PMID (or DOI/PubMed link). Never

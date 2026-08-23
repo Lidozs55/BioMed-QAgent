@@ -1,0 +1,306 @@
+{
+  "family_spec_id": "bioactivity_measurement.reference",
+  "semantic_version": "1.0.0",
+  "canonical_digest": "a00c6b5726f916ad4ab1cb806fb3e6efe94801a25db221766b8da4899ca205eb",
+  "projections": [
+    {
+      "projection_id": "bioactivity_measurement.reference.v1",
+      "schema_version": "2.0",
+      "primary_tables": [
+        "activities"
+      ],
+      "supporting_tables": [
+        "compounds",
+        "assays",
+        "targets",
+        "compound_crosswalks"
+      ],
+      "derived_tables": [],
+      "required": [
+        "activities",
+        "compounds",
+        "assays",
+        "targets"
+      ],
+      "optional": [
+        "compound_crosswalks"
+      ],
+      "allow_empty": [],
+      "relations": [
+        "activity_compound",
+        "activity_assay",
+        "activity_target",
+        "assay_target",
+        "crosswalk_left_compound",
+        "crosswalk_right_compound"
+      ],
+      "row_granularity": "compound_assay_target_activity_measurement",
+      "compatibility_dimensions": [
+        "measurement_type",
+        "value_semantics",
+        "value_scale",
+        "expression_unit",
+        "normalization_state",
+        "target_namespace"
+      ],
+      "merge_identity_fields": [
+        "activity_id"
+      ],
+      "validation_policy_ref": "example:bioactivity_measurement.validation.v1",
+      "assessment_policy_ref": "example:bioactivity_measurement.assessment.v1"
+    }
+  ],
+  "table_definitions": [
+    {
+      "table_id": "activities",
+      "schema_ref": "bioactivity_measurement.activity.v1",
+      "role": "primary",
+      "required": true,
+      "allow_empty": false,
+      "primary_key": [
+        "activity_id"
+      ],
+      "field_names": [
+        "activity_id",
+        "compound_id",
+        "compound_id_namespace",
+        "assay_id",
+        "assay_id_namespace",
+        "target_id",
+        "target_namespace",
+        "activity_type",
+        "raw_value",
+        "raw_relation",
+        "preserved_relation",
+        "raw_unit",
+        "preserved_raw_unit",
+        "standardized_value",
+        "standardized_unit",
+        "source_id",
+        "source_asset_id",
+        "source_locator"
+      ]
+    },
+    {
+      "table_id": "compounds",
+      "schema_ref": "bioactivity_measurement.compound.v1",
+      "role": "supporting",
+      "required": true,
+      "allow_empty": false,
+      "primary_key": [
+        "compound_id",
+        "compound_id_namespace"
+      ],
+      "field_names": [
+        "compound_id",
+        "compound_id_namespace",
+        "preferred_name",
+        "canonical_smiles",
+        "isomeric_smiles",
+        "inchi",
+        "inchi_key",
+        "molecular_formula",
+        "molecular_weight",
+        "source_id"
+      ]
+    },
+    {
+      "table_id": "assays",
+      "schema_ref": "bioactivity_measurement.assay.v1",
+      "role": "supporting",
+      "required": true,
+      "allow_empty": false,
+      "primary_key": [
+        "assay_id",
+        "assay_id_namespace"
+      ],
+      "field_names": [
+        "assay_id",
+        "assay_id_namespace",
+        "assay_type",
+        "description",
+        "organism",
+        "cell_line",
+        "target_entity_id",
+        "target_entity_namespace",
+        "bao_format_id",
+        "source_id"
+      ]
+    },
+    {
+      "table_id": "targets",
+      "schema_ref": "bioactivity_measurement.target.v1",
+      "role": "supporting",
+      "required": true,
+      "allow_empty": false,
+      "primary_key": [
+        "entity_id",
+        "entity_namespace"
+      ],
+      "field_names": [
+        "entity_id",
+        "entity_namespace",
+        "entity_type",
+        "preferred_name",
+        "organism",
+        "source_id"
+      ]
+    },
+    {
+      "table_id": "compound_crosswalks",
+      "schema_ref": "bioactivity_measurement.compound_crosswalk.v1",
+      "role": "supporting",
+      "required": false,
+      "allow_empty": false,
+      "primary_key": [
+        "crosswalk_id"
+      ],
+      "field_names": [
+        "crosswalk_id",
+        "left_id",
+        "left_namespace",
+        "right_id",
+        "right_namespace",
+        "relation_type",
+        "match_method",
+        "match_evidence",
+        "conflict_status",
+        "conflict_details",
+        "confidence_score",
+        "confidence_level",
+        "source_id"
+      ]
+    }
+  ],
+  "relations": [
+    {
+      "relation_id": "activity_compound",
+      "from_table_id": "activities",
+      "from_fields": [
+        "compound_id",
+        "compound_id_namespace"
+      ],
+      "to_table_id": "compounds",
+      "to_fields": [
+        "compound_id",
+        "compound_id_namespace"
+      ],
+      "cardinality": "many_to_one",
+      "missing_policy": "reject"
+    },
+    {
+      "relation_id": "activity_assay",
+      "from_table_id": "activities",
+      "from_fields": [
+        "assay_id",
+        "assay_id_namespace"
+      ],
+      "to_table_id": "assays",
+      "to_fields": [
+        "assay_id",
+        "assay_id_namespace"
+      ],
+      "cardinality": "many_to_one",
+      "missing_policy": "reject"
+    },
+    {
+      "relation_id": "activity_target",
+      "from_table_id": "activities",
+      "from_fields": [
+        "target_id",
+        "target_namespace"
+      ],
+      "to_table_id": "targets",
+      "to_fields": [
+        "entity_id",
+        "entity_namespace"
+      ],
+      "cardinality": "many_to_one",
+      "missing_policy": "reject"
+    },
+    {
+      "relation_id": "assay_target",
+      "from_table_id": "assays",
+      "from_fields": [
+        "target_entity_id",
+        "target_entity_namespace"
+      ],
+      "to_table_id": "targets",
+      "to_fields": [
+        "entity_id",
+        "entity_namespace"
+      ],
+      "cardinality": "many_to_one",
+      "missing_policy": "reject"
+    },
+    {
+      "relation_id": "crosswalk_left_compound",
+      "from_table_id": "compound_crosswalks",
+      "from_fields": [
+        "left_id",
+        "left_namespace"
+      ],
+      "to_table_id": "compounds",
+      "to_fields": [
+        "compound_id",
+        "compound_id_namespace"
+      ],
+      "cardinality": "many_to_one",
+      "missing_policy": "reject"
+    },
+    {
+      "relation_id": "crosswalk_right_compound",
+      "from_table_id": "compound_crosswalks",
+      "from_fields": [
+        "right_id",
+        "right_namespace"
+      ],
+      "to_table_id": "compounds",
+      "to_fields": [
+        "compound_id",
+        "compound_id_namespace"
+      ],
+      "cardinality": "many_to_one",
+      "missing_policy": "reject"
+    }
+  ],
+  "identity": {
+    "dataset_id_scheme": "ds_hash",
+    "dataset_revision_id_scheme": "dsrev_hash",
+    "asset_id_scheme": "asset_sha256",
+    "sample_identity_fields": [],
+    "probe_mapping_assertion_pk": "not_applicable"
+  },
+  "transform_capability_refs": [],
+  "declared_outputs": [
+    {
+      "table_id": "activities",
+      "schema_ref": "bioactivity_measurement.activity.v1"
+    },
+    {
+      "table_id": "compounds",
+      "schema_ref": "bioactivity_measurement.compound.v1"
+    },
+    {
+      "table_id": "assays",
+      "schema_ref": "bioactivity_measurement.assay.v1"
+    },
+    {
+      "table_id": "targets",
+      "schema_ref": "bioactivity_measurement.target.v1"
+    },
+    {
+      "table_id": "compound_crosswalks",
+      "schema_ref": "bioactivity_measurement.compound_crosswalk.v1"
+    }
+  ],
+  "integration_policy_ref": "example:bioactivity_measurement.integration.v1",
+  "validation_policy_ref": "example:bioactivity_measurement.validation.v1",
+  "assessment_policy_ref": "example:bioactivity_measurement.assessment.v1",
+  "resource_class_request": "small_fixture",
+  "scope": "example",
+  "author": "BioMed-QAgent retrieval reference",
+  "evidence_refs": [
+    "fixtures/input/source-records.json"
+  ]
+}

@@ -9,16 +9,30 @@
 
 export type QueryStatus = "success" | "not_found" | "failed" | "skipped" | "page_fallback";
 
+/**
+ * Opaque, in-process correlation value for one query hook call. ``unknown`` is
+ * intentional: callers may only pass the value back to ``onQuery`` and legacy
+ * callbacks that return an incidental value remain source-compatible.
+ */
+export type QueryCallToken = unknown;
+
 export interface ToolHooks {
   /**
    * Query lifecycle start (parity with the V2 operation lifecycle, Design
    * §15.1). Emitted once per query at its beginning so the runtime can open
    * an ``operation_started`` event; the matching ``onQuery`` call at the end
-   * closes it with ``operation_completed``/``operation_failed``.
+   * closes it with ``operation_completed``/``operation_failed``. Hooks may
+   * return an opaque call token for the terminal call to pass back.
    */
-  onQueryStarted?: (query: string, source: string) => void;
-  /** Python run_ctx.log_query parity. */
-  onQuery?: (query: string, source: string, status: QueryStatus, recordsCount?: number) => void;
+  onQueryStarted?: (query: string, source: string) => QueryCallToken;
+  /** Python run_ctx.log_query parity. The token is optional for legacy FIFO pairing. */
+  onQuery?: (
+    query: string,
+    source: string,
+    status: QueryStatus,
+    recordsCount?: number,
+    callToken?: QueryCallToken,
+  ) => void;
   /** Python stage progress parity (stage, kind, payload). */
   onProgress?: (stage: string, kind: string, payload: Record<string, unknown>) => void;
 }

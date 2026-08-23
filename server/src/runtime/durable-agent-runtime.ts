@@ -18,7 +18,7 @@ import type {
   TaskMode,
   WebSocketControlFrame,
 } from "@biomed/contracts";
-import { parseResumeHILInput } from "@biomed/contracts";
+import { parseJsonTextStrict, parseResumeHILInput } from "@biomed/contracts";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 
 import {
@@ -173,7 +173,10 @@ async function readJsonBody(request: IncomingMessage): Promise<Record<string, un
     if (size > MAX_BODY_BYTES) throw new TypeError("Request body is too large");
     chunks.push(bytes);
   }
-  const value: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  const value = parseJsonTextStrict(
+    Buffer.concat(chunks).toString("utf8"),
+    { maxChars: MAX_BODY_BYTES },
+  );
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new TypeError("Request body must be an object");
   }

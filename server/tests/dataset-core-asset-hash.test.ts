@@ -107,7 +107,7 @@ function runHashChild(
   return new Promise((resolve, reject) => {
     const child = spawn(
       process.execPath,
-      [`--max-old-space-size=${heapMb}`, viteNodeEntry, script, workRoot, String(sizeMiB)],
+      ["--no-warnings", `--max-old-space-size=${heapMb}`, viteNodeEntry, script, workRoot, String(sizeMiB)],
       { stdio: "pipe" },
     );
     let stdout = "";
@@ -256,7 +256,7 @@ describe("TASK-047-A1 streaming asset hash", () => {
     if (!envelope.ok) expect(envelope.error.message).toContain("task identity");
   });
 
-  it("rejects an asset ID passed as a mapping path instead of source input", async () => {
+  it("rejects an unregistered mapping-role asset ID", async () => {
     const { core } = await newCore();
     const assetId = `asset_${"a".repeat(64)}`;
     const envelope = await new TsDatasetCoreAdapter(core).execute({
@@ -269,7 +269,7 @@ describe("TASK-047-A1 streaming asset hash", () => {
       mappingFiles: { binding_gdc: assetId },
     });
     expect(envelope.ok).toBe(false);
-    if (!envelope.ok) expect(envelope.error.message).toContain("only valid in source_files");
+    if (!envelope.ok) expect(envelope.error.message).toContain("registered asset");
   });
 
   it("resolves through the adapter and records bytes/hash time without content", async () => {

@@ -167,10 +167,8 @@ export class CoreAcquisitionRuntime {
 
   async acquire(rawRequest: CoreAcquisitionRequest, signal?: AbortSignal): Promise<CoreAcquisitionResult> {
     const { request, handler, recipe } = this.#registry.resolve(rawRequest, this.#taskId);
-    const requestIdentityDigest = acquisitionRequestIdentity(
-      request,
-      recipe?.implementation_digest ?? handler.implementationDigest,
-    );
+    const implementationDigest = recipe?.implementation_digest ?? handler.implementationDigest;
+    const requestIdentityDigest = acquisitionRequestIdentity(request, implementationDigest);
     const plan = await handler.plan(request);
     const partRelativePath = `source_assets/.acquisition/${requestIdentityDigest}.part`;
     const partPath = path.join(this.#taskRoot, ...partRelativePath.split("/"));
@@ -204,6 +202,11 @@ export class CoreAcquisitionRuntime {
         if (receipt.sha256 !== result.asset.sha256 || receipt.size_bytes !== result.asset.size_bytes) {
           throw new Error("acquired source asset hash drift detected during registration");
         }
+        await this.#assets.registerCoreAcquisitionProvenance(receipt, {
+          provider_id: handler.providerId,
+          implementation_digest: implementationDigest,
+          request_identity_digest: requestIdentityDigest,
+        });
         asset = receipt.asset_ref;
       }
       const attempt = parseCoreDownloadAttempt({
@@ -236,6 +239,11 @@ export class CoreAcquisitionRuntime {
         const extractionAssets: RegisteredSourceAssetRef[] = [];
         for (const extraction of plan.extractionAssets ?? []) {
           const receipt = await this.#assets.register(extraction);
+          await this.#assets.registerCoreAcquisitionProvenance(receipt, {
+            provider_id: handler.providerId,
+            implementation_digest: implementationDigest,
+            request_identity_digest: requestIdentityDigest,
+          });
           extractionAssets.push(receipt.asset_ref);
         }
         return { requestIdentityDigest, attempts, sourceAsset: asset, extractionAssets };

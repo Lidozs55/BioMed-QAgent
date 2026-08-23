@@ -1,0 +1,3 @@
+dataset_revision_id,sample_id,source_sample_alias,taxon,platform_id,source_locator
+dsrev_b3692116947cf1043654f3d3b1d7402378eaa0e06fa1bf68720614a64e72889b,GSM1001,GSM1001,Homo sapiens,GPL570,example://geo-gene/fixtures/input/series-matrix.csv#column=GSM1001
+dsrev_b3692116947cf1043654f3d3b1d7402378eaa0e06fa1bf68720614a64e72889b,GSM1002,GSM1002,Homo sapiens,GPL570,example://geo-gene/fixtures/input/series-matrix.csv#column=GSM1002

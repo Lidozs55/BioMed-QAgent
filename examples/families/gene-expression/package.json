@@ -1,0 +1,10 @@
+{
+  "name": "@biomed/example-gene-expression-retrieval",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "generate": "node generate-fixtures.mjs --write",
+    "check-generated": "node generate-fixtures.mjs",
+    "validate": "node validate-fixtures.mjs"
+  }
+}

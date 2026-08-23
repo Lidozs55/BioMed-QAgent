@@ -1,0 +1,1 @@
+{"assay_id":"CHEMBL_A100","assay_id_namespace":"chembl_assay","assay_type":"binding","bao_format_id":"BAO_0000357","cell_line":null,"description":"Reference biochemical inhibition assay","organism":"Homo sapiens","source_id":"source_chembl_activity_reference","target_entity_id":"CHEMBL_T100","target_entity_namespace":"chembl_target"}

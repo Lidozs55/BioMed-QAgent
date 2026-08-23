@@ -8,8 +8,10 @@ export type * from "./dataset-multitable.js";
 export type * from "./publication-candidate.js";
 export type * from "./source-locator.js";
 export type * from "./source-asset.js";
+export type * from "./provider-revision-evidence.js";
 export type * from "./operation-result.js";
 export type * from "./deterministic-derive.js";
+export * from "./family-transform.js";
 export type * from "./acquisition.js";
 export * from "./dataset-bridge.js";
 export type * from "./events.js";
@@ -26,7 +28,9 @@ export type * from "./databases.js";
 
 /* ---- Shared runtime parsers & protocol error (frontend + server wire layer) ---- */
 export * from "./runtime/errors.js";
+export * from "./runtime/json-text.js";
 export * from "./runtime/primitives.js";
 export * from "./runtime/settings.js";
+export * from "./runtime/model-registry.js";
 export * from "./runtime/dataset-build.js";
 export * from "./runtime/durable-build.js";

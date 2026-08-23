@@ -1,5 +1,11 @@
+import type { DatasetSchemaV2, SchemaFieldV2 } from "@biomed/contracts";
+
 import type { DatasetSchema, SchemaField } from "../contracts/index.js";
-import { parseDatasetSchema, SCHEMA_VERSION } from "../contracts/index.js";
+import {
+  parseDatasetSchema,
+  parseDatasetSchemaV2,
+  SCHEMA_VERSION,
+} from "../contracts/index.js";
 import {
   EXPRESSION_FAMILY_FIELDS,
   EXPRESSION_PRIMARY_KEY,
@@ -109,5 +115,84 @@ export function buildProbeExpressionSchema(): DatasetSchema {
     rowGranularity: "probe_sample_measurement",
     primaryKey: PROBE_PRIMARY_KEY,
     fields,
+  });
+}
+
+function revisionIdentityField(): SchemaFieldV2 {
+  return {
+    schema_version: "2.0",
+    name: "dataset_revision_id",
+    data_type: "string",
+    semantic_role: "foreign_key",
+    required: true,
+    nullable: false,
+    unit_policy: null,
+    ontology: null,
+    description:
+      "Content-addressed dataset revision identity derived from dataset identity, provider snapshot, and carrier assets",
+    derivation_policy: "core_owned_dataset_revision_identity.v1",
+  };
+}
+
+function v2Field(field: SchemaField): SchemaFieldV2 {
+  return {
+    schema_version: "2.0",
+    name: field.name,
+    data_type: field.data_type,
+    semantic_role: field.semantic_role,
+    required: field.required,
+    nullable: !field.required,
+    unit_policy: field.unit_policy,
+    ontology: field.ontology,
+    description: field.description,
+    derivation_policy: field.derivation_policy,
+  };
+}
+
+function revisionScopedFields(schema: DatasetSchema): SchemaFieldV2[] {
+  const fields = schema.fields.map(v2Field);
+  const datasetIdIndex = fields.findIndex((field) => field.name === "dataset_id");
+  if (datasetIdIndex < 0) {
+    throw new TypeError("expression schema must declare dataset_id before revision scoping");
+  }
+  fields.splice(datasetIdIndex + 1, 0, revisionIdentityField());
+  return fields;
+}
+
+/**
+ * Unregistered Family Host target schema. It is deliberately not added to the
+ * default family Registry until Core can construct identity from task-owned
+ * registration receipts. V1 remains the production/golden compatibility path.
+ */
+export function buildGeneExpressionSchemaV2(): DatasetSchemaV2 {
+  return parseDatasetSchemaV2({
+    schema_version: "2.0",
+    schema_id: "gene_expression.long.v2",
+    dataset_family: "gene_expression",
+    row_granularity: "gene_sample_measurement",
+    primary_key: [
+      "dataset_revision_id",
+      "sample_id",
+      "gene_id",
+      "measurement_type",
+    ],
+    fields: revisionScopedFields(buildGeneExpressionSchema()),
+  });
+}
+
+/** Probe-level V2 target with revision-scoped composite identity. */
+export function buildProbeExpressionSchemaV2(): DatasetSchemaV2 {
+  return parseDatasetSchemaV2({
+    schema_version: "2.0",
+    schema_id: "gene_expression.probe_long.v2",
+    dataset_family: "gene_expression",
+    row_granularity: "probe_sample_measurement",
+    primary_key: [
+      "dataset_revision_id",
+      "probe_id",
+      "platform_id",
+      "sample_id",
+    ],
+    fields: revisionScopedFields(buildProbeExpressionSchema()),
   });
 }

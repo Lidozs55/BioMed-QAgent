@@ -62,21 +62,21 @@ export function createLocalCacheTools(deps: LocalCacheToolDeps): BioMedAgentTool
       const record = argumentsValue as { query?: unknown; max_results?: unknown };
       const query = typeof record.query === "string" ? record.query : "";
       const maxResults = typeof record.max_results === "number" ? record.max_results : 10;
-      hooks.onQueryStarted(query, "local_cache");
+      const queryCallToken = hooks.onQueryStarted(query, "local_cache");
       let manifests: CacheDatasetManifest[];
       try {
         manifests = await db.call<CacheDatasetManifest[]>(BRIDGE_OP.CACHE_SEARCH, { query, limit: maxResults }, deps.timeoutMs);
       } catch (error) {
-        hooks.onQuery(query, "local_cache", "failed", 0);
+        hooks.onQuery(query, "local_cache", "failed", 0, queryCallToken);
         return {
           content: `本地缓存未初始化: ${error instanceof Error ? error.message : String(error)}`,
           isError: error instanceof DatabaseBridgeUnavailableError ? undefined : true,
         };
       }
       if (manifests.length > 0) {
-        hooks.onQuery(query, "local_cache", "success", manifests.length);
+        hooks.onQuery(query, "local_cache", "success", manifests.length, queryCallToken);
       } else {
-        hooks.onQuery(query, "local_cache", "not_found", 0);
+        hooks.onQuery(query, "local_cache", "not_found", 0, queryCallToken);
       }
       if (manifests.length === 0) {
         return { content: JSON.stringify({ source: "local_cache", query, results: [] }) };

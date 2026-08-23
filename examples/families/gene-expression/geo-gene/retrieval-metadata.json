@@ -1,0 +1,37 @@
+{
+  "schema_version": "1.0",
+  "example_id": "geo-gene",
+  "scope": "example",
+  "status": "submitted",
+  "executable": false,
+  "projection_ref": "expression_gene.v2",
+  "probe_mapping_support": "not_applicable",
+  "identity_ref": "geo-gene/identity.json",
+  "source_sketch_ref": "geo-gene/retrieval-source-sketch.json",
+  "artifacts": [
+    {
+      "path": "geo-gene/fixtures/input/series-matrix.csv",
+      "role": "source_carrier",
+      "sha256": "499e7c724167f83966649d34dac6345d4a4f9ac606ec078149d6bd542beb8c45",
+      "size_bytes": 72
+    },
+    {
+      "path": "geo-gene/fixtures/expected/expression.csv",
+      "role": "expected_v2_table",
+      "sha256": "ff74a860727bcc72b22ec1ca5b9767bd02dcf803efbbc6bb591ee29df2a8fe99",
+      "size_bytes": 2239
+    },
+    {
+      "path": "geo-gene/fixtures/expected/samples.csv",
+      "role": "expected_v2_table",
+      "sha256": "f37043f102b48fca36d9c556677cb1fadee7c9e0ea1e196d50d220d819409340",
+      "size_bytes": 431
+    },
+    {
+      "path": "geo-gene/fixtures/expected/datasets.csv",
+      "role": "expected_v2_table",
+      "sha256": "38ff1978532b1d07239d82f19f76438ec71160b11fffeed9374a1bc55e41d37f",
+      "size_bytes": 435
+    }
+  ]
+}

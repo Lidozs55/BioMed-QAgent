@@ -20,6 +20,7 @@ import {
 
 import { readJsonFileOrNull, writeJsonAtomic } from "../persistence/atomic-json.js";
 import { canonicalDigest, canonicalJson } from "../dataset/adapters/identity.js";
+import { computeHILEvidenceDigest } from "../dataset/contracts/hil-evidence.js";
 import { requireSafeId, SAFE_ID } from "./safe-id.js";
 import type { DurableTaskRepository } from "./task-repository.js";
 
@@ -121,20 +122,7 @@ export class DurableHILStore {
     if (input.idempotency_key.trim() === "") {
       throw new TypeError("idempotency_key must not be empty");
     }
-    const evidenceSnapshot: Record<string, JsonValue> = {
-      kind: input.kind,
-      review_type: input.review_type,
-      subject: { ...input.subject },
-      review_items: input.review_items.map((item) => ({
-        ...item,
-        subject: { ...item.subject },
-        evidence: { ...item.evidence },
-      })),
-      summary: input.summary,
-      evidence: input.evidence,
-      policy_ref: input.policy_ref,
-    };
-    const evidenceDigest = canonicalDigest(evidenceSnapshot);
+    const evidenceDigest = computeHILEvidenceDigest(input);
     const baseRequestId = `hil_${canonicalDigest({
       task_id: input.task_id,
       run_id: input.run_id,

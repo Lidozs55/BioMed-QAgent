@@ -12,7 +12,7 @@
 
 import path from "node:path";
 
-import type { QueryStatus } from "../../agent/tools/tool-hooks.js";
+import type { ToolHooks } from "../../agent/tools/tool-hooks.js";
 import type { DataLevel } from "../../dataset/contracts/enums.js";
 import type { SourceRecord } from "../../dataset/contracts/source.js";
 import { acquireSource } from "../acquisition/downloader.js";
@@ -43,8 +43,8 @@ export interface DownloadDeps {
   rateLimitMs?: number;
   maxDownloadBytes?: number;
   timeoutMs?: number;
-  onQueryStarted?: (query: string, source: string) => void;
-  onQuery?: (query: string, source: string, status: QueryStatus, recordsCount?: number) => void;
+  onQueryStarted?: ToolHooks["onQueryStarted"];
+  onQuery?: ToolHooks["onQuery"];
   /** Global cache registrar (raw downloads → data/cache). */
   registrar?: import("../../persistence/cache-registrar.js").CacheRegistrar | null;
   /** Task id used as cache provenance. */
@@ -136,7 +136,7 @@ export async function searchPdb(
   maxResults: number,
   context: SourceQueryContext,
 ): Promise<Record<string, unknown>> {
-  context.onQueryStarted?.(term, "pdb");
+  const queryCallToken = context.onQueryStarted?.(term, "pdb");
   let data: unknown;
   try {
     const fetched = await apiFetch(context.client, SEARCH_API, {
@@ -151,7 +151,7 @@ export async function searchPdb(
     data = JSON.parse(fetched.content) as unknown;
   } catch (error) {
     if (isAbortError(error) || context.signal?.aborted === true) throw error;
-    context.onQuery?.(term, "pdb", "failed", 0);
+    context.onQuery?.(term, "pdb", "failed", 0, queryCallToken);
     return {
       source: "pdb",
       term,
@@ -163,7 +163,7 @@ export async function searchPdb(
 
   const document = isRecord(data) ? data : {};
   const resultSet = Array.isArray(document["result_set"]) ? document["result_set"] : [];
-  context.onQuery?.(term, "pdb", "success", resultSet.length);
+  context.onQuery?.(term, "pdb", "success", resultSet.length, queryCallToken);
 
   const records: Array<Record<string, unknown>> = [];
   const enrichLimit = Math.min(resultSet.length, DESCRIBE_BATCH_LIMIT);
@@ -200,7 +200,7 @@ export async function describePdb(
   context: SourceQueryContext,
 ): Promise<Record<string, unknown>> {
   const normalized = pdbId.trim().toLowerCase();
-  context.onQueryStarted?.(normalized, "pdb");
+  const queryCallToken = context.onQueryStarted?.(normalized, "pdb");
   const url = `${DATA_API}${normalized}`;
   let data: unknown;
   try {
@@ -214,7 +214,7 @@ export async function describePdb(
     data = JSON.parse(fetched.content) as unknown;
   } catch (error) {
     if (isAbortError(error) || context.signal?.aborted === true) throw error;
-    context.onQuery?.(normalized, "pdb", "failed", 0);
+    context.onQuery?.(normalized, "pdb", "failed", 0, queryCallToken);
     return {
       source: "pdb",
       pdb_id: normalized,
@@ -233,7 +233,7 @@ export async function describePdb(
   const accession = isRecord(document["rcsb_accession_info"]) ? document["rcsb_accession_info"] : {};
   const resolutions = Array.isArray(rcsb["resolution_combined"]) ? rcsb["resolution_combined"] : [];
 
-  context.onQuery?.(normalized, "pdb", "success", 1);
+  context.onQuery?.(normalized, "pdb", "success", 1, queryCallToken);
   return {
     source: "pdb",
     pdb_id: normalized.toUpperCase(),
@@ -259,7 +259,7 @@ export async function downloadPdb(
 ): Promise<Record<string, unknown>> {
   const normalizedId = pdbId.trim().toLowerCase();
   const normalizedType = fileType.toLowerCase().trim();
-  deps.onQueryStarted?.(normalizedId, "pdb");
+  const queryCallToken = deps.onQueryStarted?.(normalizedId, "pdb");
 
   let url: string;
   let filename: string;
@@ -315,12 +315,12 @@ export async function downloadPdb(
       asset: result.asset,
     };
     if (result.asset !== null) {
-      deps.onQuery?.(filename, "pdb", "success", 1);
+      deps.onQuery?.(filename, "pdb", "success", 1, queryCallToken);
       payload["local_files"] = [path.join(deps.taskRoot, result.asset.relative_path)];
       payload["format_hint"] = formatHint;
       payload["retrieved_at"] = retrievedAt;
     } else {
-      deps.onQuery?.(filename, "pdb", "failed", 0);
+      deps.onQuery?.(filename, "pdb", "failed", 0, queryCallToken);
       payload["error"] = result.attempt.error_message;
     }
     return payload;

@@ -16,13 +16,51 @@
 
 ### 工作区右上角按钮缺少 tooltip
 
-- [ ] 主界面工作区右上角三个 UI 按钮缺少 tooltip 说明。
+- [x] 主界面工作区右上角设置、子任务面板、主题按钮已使用shadcn/Base UI Tooltip，并保留明确aria-label与结构测试。
       **状态（2026-08-17）**：侧栏底部已简化（`fddf6911`，设置入口复用
       Sidebar 菜单原语）；右上角按钮现状需复验，若仍缺 tooltip 则补。
 
 ### 测试稳定性：`build-lock.test.ts` 全量跑偶发失败（自 LEFTOVERS 历史快照迁移）
 
 - [ ] 2026-08-14 复现：`server/tests/phase5/build-lock.test.ts` 在 `pnpm test` / `vitest run` 并行负载下偶发失败（真实子进程对文件锁的时序竞争 + CPU 争抢），单文件隔离 8/8 通过；与 settings/http/contracts/artifacts 分层重构无关。根治方向：进程间同步闩或放宽时窗/重试（详见 `docs/archive/LEFTOVERS-2026-08-09.md` §K1）。
+
+### FamilySpec/Core + non-isolated dynamic route剩余收敛门（ADR-039已Accepted）
+
+- [x] 初始 `808279ac` 的 prototype/accessor smuggling、sparse array、`NaN`/Infinity、unsafe integer、
+      identity scheme coercion、无界/不安全 ID、receipt terminal/resource/output/cancel closure与
+      BuildSpec 2.0 proposal/resolved split，已由 `76df8008`、`3ed0ade5`、`f32f563f` 及 adversarial
+      contracts tests关闭；FamilySpec digest有唯一 helper/known vector，parser本身不自动授信digest。
+- [x] M1 wire/readmission gates：contracts post-hardening coverage、BuildSpec proposal→resolved pure Core
+      readmission、HTTP/JSON ingress raw duplicate-key decoder已落地并有 focused tests。
+- **当前范围状态**：显式`in_process_unisolated` Host/Core publication chain已达到可合入`main`的稳定基线，且明确不是sandbox/安全边界；sandbox/container/IPC仍不开发。M3仍等待同一冻结commit/单Host的Gold证据，Gold6另需真实publication acceptance；应用provider可用性是live rerun外部前置条件。
+
+### FamilySpec/Core执行面剩余收敛项
+
+- [ ] checkpoint/reuse：旧候选`3f1cfdd3`/`3f308046`保持未合入；generic publish shortcut已禁用，startup release identity、strict fixed-operation reuse verifier与publication verifier已落地。剩余项是把identity持久化并在真实reuse前调用verifier，以及restart/TOCTOU回归测试；从最新`main`开独立worktree实现，不直接合并旧候选。
+- [x] Core transform admission：旧 `64f43602` 已弃用；当前 staging实现以Core-owned expected invocation
+      全量比对 task/build/generation/digest/input/output/resource/cancel，FD重哈希、closed-world检查、
+      独立commit root原子复制/fsync/重开复验，并只返回opaque quarantine evidence，不创建Publication。
+      当前Core gate已接`submit_dynamic_family_build` production route：private quarantine→native OperationResult→B3→ProductAssessment→immutable Publication；synthetic fixture仍不作为release evidence。
+- [x] disk tuple primitive：旧 `f261f6f6` 已弃用；当前isolated index使用SQLite BLOB canonical tuple encoding，
+      preserving field order，拒绝lone surrogate，streaming iterator（无`.all()`）、quota/cancel/error poison、
+      owner generation与Windows cleanup；1M unique测试通过。`diskIndexAvailable`仍false，C-T11 runtime wiring未完成。
+- [x] FamilySpec topology：旧 `9778de1d` 已弃用并缩减为proposal-only pure topology linter，不输出
+      digest/trust/admission/resource授权。完整semantic admission仍等待BuildSpec resolver/authoritative registry。
+- [x] explicit non-isolated Host：Host-owned compile/digest/store、descriptor-safe Core authority、registered input snapshot、bounded execution和quarantine admission已接production。backend固定标记`in_process_unisolated`；`node:vm`只用于同步timeout。isolated sandbox/container/IPC仍Deferred。
+
+### Expression dataset/revision identity 尚未接 authoritative Core path
+
+- [ ] 已新增 staging-only `authoritative_dataset_identity.v1` context：它从 frozen registration facts 校验 task/build/generation、provider snapshot、revision token 与 asset digest closure，并明确 buildId 不参与 dataset/revision digest；尚未从 `DatasetCore` 传递 task-owned registration receipts，也未接生产 adapters/V2 registry。
+- [ ] expression adapters 当前 V1 rows 仍使用 `buildId` 作为 `dataset_id`。候选 `1b3dca3b` 不能原样合入：
+      它允许 caller 传可选 identity context，并在仍声明 `gene_expression.*.v1` schema 时增加
+      `dataset_revision_id` 列。正确迁移需先定义显式 V2 schema/PK，再把 task-owned
+      `SourceAssetRegistrationReceipt` 从 `DatasetCore` service 传给 TS Core，由 Core 从 frozen binding +
+      registered source/mapping/metadata carrier closure 构造 context；缺事实 fail closed，V1 不静默扩列。
+
+### Family Host staging-only execution slots
+
+- [x] server-owned dynamic fixed slot：exact-key、generation/digest/registered-asset checks；`submit_dynamic_family_build`已接统一non-isolated executor和Core publication，不经`registered_multitable.runtime.v1`旁路。
+- [ ] B3 candidates`f53348b8`/`e7ba9647`未合入；已由`16c6d22d`替代为真实explicit staging PK disk path（owner/quota/cancel/cleanup/no-fallback/memory parity）。default production capability仍不启用disk；FK/cardinality index reuse与measured production threshold仍缺。
 
 ### 可选测试补强（自 LEFTOVERS 历史快照迁移，非阻塞）
 

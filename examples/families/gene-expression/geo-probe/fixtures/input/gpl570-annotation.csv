@@ -1,0 +1,6 @@
+probe_id,target_gene_id,target_namespace,mapping_rule_id,mapping_status
+1007_s_at,DDR1,gene_symbol,geo.gpl570.annotation.v1,mapped
+1053_at,,,geo.gpl570.annotation.v1,unmapped
+117_at,HSPA6,gene_symbol,geo.gpl570.annotation.v1,ambiguous
+117_at,HSPA7,gene_symbol,geo.gpl570.annotation.v1,ambiguous
+121_at,PAX8,gene_symbol,geo.gpl570.annotation.v1,mapped

@@ -1,5 +1,7 @@
 # Batch 0–2 执行矩阵
 
+> 历史执行矩阵：Batch 0–2 的分工和 branch 名不再是当前任务源。Family Host/Core non-isolated 主链已进入稳定 `main` 基线；剩余工作按 `docs/TODO.md` 的独立 worktree lanes 推进，isolated T6 与依赖它的旧 shadow/release 项继续 Deferred。
+
 ## 1. 现阶段承诺
 
 这套计划不是一个迭代内完成全平台的任务单。当前开发截止线是：
@@ -156,7 +158,7 @@ Batch 3+ 才讨论：
 - `feat/expression-host-shadow`：E1/E2；
 - `feat/bioactivity-host-shadow`：E3。
 
-每个实现分支合并前必须提供：契约版本/digest、trust/status、resource evidence、tests、same-commit artifact refs、rollback plan，并明确 `example_only` / `sandbox_executable` / `shadow_verified` / `trusted_e2e_verified` / `activated` 状态。
+每个实现分支合并前必须提供：契约版本/digest、trust/status、resource evidence、tests、same-commit artifact refs、rollback plan，并明确冻结的 `submitted` / `sandbox_executable` / `fixture_verified` / `shadow_verified` / `trusted_e2e_verified` / `activated` / `revoked` / `retired` 状态；retrieval-only example 使用 `scope=example + status=submitted` 表示。
 
 ## 9. 全局质量门
 

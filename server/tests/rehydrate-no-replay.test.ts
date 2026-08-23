@@ -3,9 +3,9 @@
  *
  * Locks the WP-A5 acceptance criteria: after a restart the
  * parse/canonicalize/integrate runners are invoked 0 times for completed
- * operations; a fully completed build restores the publish output from disk;
- * tampered/removed result files fail closed and re-run only the minimal
- * downstream closure.
+ * operations; a fully completed build re-runs publish without restoring its
+ * old publication summary; tampered/removed result files fail closed and
+ * re-run only the minimal downstream closure.
  */
 
 import { describe, expect, test } from "vitest";
@@ -19,10 +19,14 @@ import {
   buildOperationPlan,
   BuildCancelledError,
   DatasetBuildExecutor,
+  loadOperationOutput,
   loadOperationResultManifest,
   makeOperationOutput,
+  saveOperationOutput,
+  sha256Json,
   stageOutputFile,
   type OperationOutput,
+  type OperationOutputEnvelope,
   type OperationSpec,
 } from "../src/dataset/runtime/index.js";
 
@@ -157,7 +161,7 @@ function makeExecutor(options: {
 }
 
 describe("A5I Increment 3 rehydration without runner replay", () => {
-  test("fully completed build: second run never calls the runner again", async () => {
+  test("fully completed build: second run reuses prior operations but reruns publish", async () => {
     const root = mkdtempSync(join(tmpdir(), "rehydrate-"));
     try {
       const sourceAssets = {
@@ -174,7 +178,9 @@ describe("A5I Increment 3 rehydration without runner replay", () => {
       const ex2 = makeExecutor({ outputRoot: root, runner: second, sourceAssets, rehydrateCompletedRunners: true });
       const outcome = await ex2.run();
       expect(outcome.status).toBe("completed");
-      expect(second.calls).toEqual([]);
+      // C-T10: a completed publication marker is not a restart shortcut.
+      expect(second.calls).toEqual(["publish"]);
+      expect(ex2.getOutput("publish")).toMatchObject({ operation_id: "publish", kind: "publish" });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -199,7 +205,7 @@ describe("A5I Increment 3 rehydration without runner replay", () => {
     }
   });
 
-  test("fully completed build: publish output and result manifest restore from disk", async () => {
+  test("fully completed build: publish output and result manifest are recreated", async () => {
     const root = mkdtempSync(join(tmpdir(), "rehydrate-full-"));
     try {
       const first = new RecordingRunner();
@@ -215,6 +221,48 @@ describe("A5I Increment 3 rehydration without runner replay", () => {
       expect(publishOutput).toBeDefined();
       expect(publishOutput).toMatchObject({ operation_id: "publish", kind: "publish" });
       expect(loadOperationResultManifest(join(root, "state"), "publish")).not.toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("loadOperationOutput requires both output digest fields to match the JSON output", async () => {
+    const root = mkdtempSync(join(tmpdir(), "rehydrate-output-digest-"));
+    try {
+      const output: Record<string, unknown> = { rows: 1 };
+      const base: OperationOutputEnvelope = {
+        task_id: "task_1",
+        build_id: "build_test",
+        operation_id: "canonicalize:srcbind_gdc",
+        operation_attempt_id: "attempt_1",
+        output_digest: sha256Json(output),
+        output_sha256: sha256Json(output),
+        output,
+        files: [],
+      };
+      const options = {
+        taskRoot: root,
+        taskId: base.task_id,
+        buildId: base.build_id,
+        operationId: base.operation_id,
+        operationAttemptId: base.operation_attempt_id,
+        outputDigest: base.output_digest,
+      };
+
+      saveOperationOutput(join(root, "state"), {
+        ...base,
+        output_sha256: "0".repeat(64),
+      });
+      await expect(loadOperationOutput(join(root, "state"), options)).resolves.toBeNull();
+
+      const wrongDigest = "1".repeat(64);
+      saveOperationOutput(join(root, "state"), {
+        ...base,
+        output_digest: wrongDigest,
+      });
+      await expect(
+        loadOperationOutput(join(root, "state"), { ...options, outputDigest: wrongDigest }),
+      ).resolves.toBeNull();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

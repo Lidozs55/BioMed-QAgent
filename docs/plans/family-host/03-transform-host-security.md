@@ -1,5 +1,7 @@
 # Transform Host：编译、隔离、资源与安全门
 
+> 历史计划说明：本文件的 isolated/sandbox 门槛属于未来 backend 评估。当前生产实现是 ADR-039 接受的显式 `in_process_unisolated` backend，不是安全边界；sandbox/container/IPC 不在当前开发范围。当前约束见 `docs/architecture/FAMILY-HOST-03-execution-constraints.md`。
+
 ## 1. 威胁模型
 
 Agent-authored TS 按默认不可信代码处理。攻击/故障包括：读取 repo/settings/其他 task/Publication、网络外传、进程派生、无限循环、内存/磁盘耗尽、依赖替换、symlink escape、伪造 locator/receipt、取消后 late commit。

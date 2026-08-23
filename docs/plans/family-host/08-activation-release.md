@@ -26,14 +26,17 @@ Host receipt、exit code、CSV 存在、BuildResult succeeded、历史 publicati
 按 exact scope/id/version/digest 的 capability 记录：
 
 ```text
-example_only
-host_fixture_verified
-core_shadow_verified
+submitted
+sandbox_executable
+fixture_verified
+shadow_verified
 trusted_e2e_verified
 activated
 revoked
 retired
 ```
+
+`example_only` 是 `scope=example + status=submitted` 的 retrieval-only 语义，不是另一套 trust status。`example` scope 在任何 status 下都不可直接执行。
 
 - `activated` 是 release capability，不是代码可信标签；
 - Agent-authored transform 即使 sandbox_executable，也不能跳过 Core gate；

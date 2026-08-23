@@ -51,6 +51,33 @@ describe("durable HIL contracts", () => {
     });
   });
 
+  it("parses a publication-acceptance data review subject", () => {
+    expect(parseHILRequest({
+      schema_version: "1.0",
+      request_id: "hil_publication",
+      task_id: "task_123",
+      run_id: "run_123",
+      build_id: "build_123",
+      kind: "data_review",
+      review_type: "publication_acceptance",
+      status: "pending",
+      blocking: true,
+      subject: {
+        candidate_ids: ["candidate_123"],
+        table_ids: ["activity_value_records", "chart_series"],
+      },
+      review_items: [],
+      summary: "Review evidence-bound publication candidate",
+      evidence_digest: DIGEST,
+      policy_ref: "dynamic_family_hil_acceptance.v1",
+      created_at: "2026-08-16T01:02:03.000Z",
+      resolved_at: null,
+    })).toMatchObject({
+      review_type: "publication_acceptance",
+      subject: { candidate_ids: ["candidate_123"], table_ids: ["activity_value_records", "chart_series"] },
+    });
+  });
+
   it.each([
     [{ action: "approve" }],
     [{ action: "accept" }],

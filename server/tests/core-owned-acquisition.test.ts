@@ -139,6 +139,29 @@ describe("TASK-C2I Core-owned acquisition", () => {
 
     const resolved = await fixture.assets.resolve(result.sourceAsset.asset_id);
     expect(resolved.registration_receipt).toMatchObject({ sha256: SHA256, task_id: "task_c2i" });
+    await expect(fixture.assets.resolveCoreAcquired(result.sourceAsset.asset_id)).resolves.toMatchObject({
+      acquisition_provenance: {
+        provider_id: "fixture_provider",
+        implementation_digest: IMPLEMENTATION_DIGEST,
+        request_identity_digest: result.requestIdentityDigest,
+      },
+    });
+
+    const second = await fixture.runtime.acquire({
+      ...request(),
+      request_id: "request_second",
+      build_id: "build_second",
+    });
+    expect(second.sourceAsset?.asset_id).toBe(result.sourceAsset.asset_id);
+    expect(second.requestIdentityDigest).not.toBe(result.requestIdentityDigest);
+    await expect(fixture.assets.resolveCoreAcquired(
+      result.sourceAsset.asset_id,
+      second.requestIdentityDigest,
+    )).resolves.toMatchObject({
+      acquisition_provenance: { request_identity_digest: second.requestIdentityDigest },
+    });
+    await expect(fixture.assets.resolveCoreAcquired(result.sourceAsset.asset_id))
+      .rejects.toThrow(/ambiguous Core acquisition provenance/);
     const chunks: Buffer[] = [];
     for await (const chunk of resolved.content) chunks.push(Buffer.from(chunk));
     expect(Buffer.concat(chunks)).toEqual(Buffer.from(CONTENT));

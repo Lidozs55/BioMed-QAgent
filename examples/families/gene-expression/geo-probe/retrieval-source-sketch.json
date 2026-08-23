@@ -1,0 +1,38 @@
+{
+  "schema_version": "1.0",
+  "sketch_id": "geo-probe.retrieval-source-sketch",
+  "scope": "example",
+  "status": "submitted",
+  "executable": false,
+  "source_database": "geo",
+  "source_level": "probe",
+  "projection_ref": "expression_probe.v2",
+  "carrier_shapes": [
+    {
+      "role": "expression_matrix",
+      "path": "geo-probe/fixtures/input/series-matrix.csv",
+      "identifier_column": "probe_id",
+      "sample_columns": [
+        "GSM1001",
+        "GSM1002"
+      ]
+    },
+    {
+      "role": "probe_annotation",
+      "path": "geo-probe/fixtures/input/gpl570-annotation.csv",
+      "required_columns": [
+        "probe_id",
+        "target_gene_id",
+        "target_namespace",
+        "mapping_rule_id",
+        "mapping_status"
+      ]
+    }
+  ],
+  "retrieval_guidance": [
+    "Preserve source identifiers and raw values before normalization.",
+    "Hash every carrier byte-for-byte before deriving revision identity.",
+    "Keep gene-level and probe-level rows in separate projections."
+  ],
+  "probe_level_supported": true
+}

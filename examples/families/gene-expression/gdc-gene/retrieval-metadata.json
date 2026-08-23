@@ -1,0 +1,37 @@
+{
+  "schema_version": "1.0",
+  "example_id": "gdc-gene",
+  "scope": "example",
+  "status": "submitted",
+  "executable": false,
+  "projection_ref": "expression_gene.v2",
+  "probe_mapping_support": "unsupported",
+  "identity_ref": "gdc-gene/identity.json",
+  "source_sketch_ref": "gdc-gene/retrieval-source-sketch.json",
+  "artifacts": [
+    {
+      "path": "gdc-gene/fixtures/input/gene-expression.csv",
+      "role": "source_carrier",
+      "sha256": "ef91815a4629a82a0f13145c6ad87f0e930f78caeef24dc45add571f87dd6825",
+      "size_bytes": 84
+    },
+    {
+      "path": "gdc-gene/fixtures/expected/expression.csv",
+      "role": "expected_v2_table",
+      "sha256": "e39b97abd35e3c8367971f5fb444589c62cb1ce16d092f111c6ab92e690e49cd",
+      "size_bytes": 2215
+    },
+    {
+      "path": "gdc-gene/fixtures/expected/samples.csv",
+      "role": "expected_v2_table",
+      "sha256": "2182044b7c7fbf996fe79ee18835ca2fcc7ba103b687276ffa25747d829b8774",
+      "size_bytes": 477
+    },
+    {
+      "path": "gdc-gene/fixtures/expected/datasets.csv",
+      "role": "expected_v2_table",
+      "sha256": "0fecde0cf120c124bbb1b59ba698942b53ca2a068d58f0be8e46cafff16a16dd",
+      "size_bytes": 435
+    }
+  ]
+}

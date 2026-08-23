@@ -1,13 +1,13 @@
 /**
  * Model registry API client (``/api/v1/model-registry/*``).
  *
- * NOTE: the server model-registry responses are currently typed through the
- * contracts DTOs but not field-level validated at the wire boundary (the
- * other endpoint groups parse). Runtime validation for these DTOs is tracked
- * as follow-up work — see docs/TODO.md.
  */
 import type { Http } from "@/api/http";
-import { parseModelSettings } from "@biomed/contracts";
+import {
+  parseManagedModelsEnvelope,
+  parseModelSettings,
+  parseProvidersEnvelope,
+} from "@biomed/contracts";
 import type {
   DiscoveredModelInfo,
   ManagedModelInfo,
@@ -39,7 +39,7 @@ export interface ModelRegistryApi {
 export function createModelRegistryApi(http: Http): ModelRegistryApi {
   return {
     fetchProviders: () =>
-      http.request(`${http.baseUrl}/model-registry/providers`).then((b) => b as ProviderInfo[]),
+      http.request(`${http.baseUrl}/model-registry/providers`).then(parseProvidersEnvelope),
     createProvider: (input) =>
       http.request(`${http.baseUrl}/model-registry/providers`, {
         method: "POST",
@@ -59,7 +59,7 @@ export function createModelRegistryApi(http: Http): ModelRegistryApi {
     fetchProviderParamSpecs: (id) =>
       http.request(`${http.baseUrl}/model-registry/providers/${http.encodeId(id)}/param-specs`).then((b) => b as ParameterSpec[]),
     fetchManagedModels: () =>
-      http.request(`${http.baseUrl}/model-registry/models`).then((b) => b as ManagedModelInfo[]),
+      http.request(`${http.baseUrl}/model-registry/models`).then(parseManagedModelsEnvelope),
     createManagedModel: (input) =>
       http.request(`${http.baseUrl}/model-registry/models`, {
         method: "POST",

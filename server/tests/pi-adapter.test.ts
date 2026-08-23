@@ -9,6 +9,7 @@ import {
   type PiUpstreamEvent,
   type PiUpstreamSession,
 } from "../src/agent/pi-adapter.js";
+import { PHASE1_SYSTEM_PROMPT } from "../src/agent/phase1-prompt.js";
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -68,6 +69,32 @@ async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
   for await (const value of iterable) values.push(value);
   return values;
 }
+
+describe("Pi system prompt", () => {
+  test("marks an approved max-turn continuation explicitly", () => {
+    expect(PHASE1_SYSTEM_PROMPT).toContain("[MAX_TURNS_REACHED]");
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/resuming after a max-turn interruption.*user approved/i);
+  });
+
+  test("keeps literature chart evidence on the reviewed six-table topology", () => {
+    for (const tableId of [
+      "paper_records",
+      "experiment_records",
+      "activity_value_records",
+      "chart_series",
+      "chart_points",
+      "supplementary_asset_records",
+    ]) {
+      expect(PHASE1_SYSTEM_PROMPT).toContain(tableId);
+    }
+    expect(PHASE1_SYSTEM_PROMPT).toContain("human_review_status");
+    expect(PHASE1_SYSTEM_PROMPT).toContain("review_status");
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/must remain human_review_pending/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/replace that binding with another independently confirmed open-access PMCID/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/resubmit with the latest Host-compiled descriptor digest/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/do not stop on a descriptor handshake rejection/i);
+  });
+});
 
 describe("Pi model profile mapping", () => {
   test("maps portable and DashScope-specific parameters", () => {
@@ -169,6 +196,19 @@ describe("PiAgentAdapter", () => {
 
     expect(upstream.continueAfterLength).toHaveBeenCalledOnce();
     expect(events.filter((event) => event.type === "turn_completed")).toHaveLength(1);
+  });
+
+  test("fails the turn when Pi ends with an upstream error stop reason", async () => {
+    const upstream = new FakeUpstreamSession();
+    upstream.promptImplementation = async () => {
+      upstream.emit({ type: "message_end", assistantStopReason: "error" });
+    };
+    const session = await new PiAgentAdapter({
+      createUpstreamSession: async () => upstream,
+    }).createSession(sessionConfig);
+
+    await expect(collect(session.run("finish the dataset")))
+      .rejects.toThrow("Agent runtime request failed");
   });
 
   test("ignores aborted or summary-less Pi compaction completions", async () => {

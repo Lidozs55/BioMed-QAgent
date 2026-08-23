@@ -1,0 +1,27 @@
+{
+  "schema_version": "1.0",
+  "sketch_id": "gdc-gene.retrieval-source-sketch",
+  "scope": "example",
+  "status": "submitted",
+  "executable": false,
+  "source_database": "gdc",
+  "source_level": "gene",
+  "projection_ref": "expression_gene.v2",
+  "carrier_shapes": [
+    {
+      "role": "expression_matrix",
+      "path": "gdc-gene/fixtures/input/gene-expression.csv",
+      "identifier_column": "gene_id",
+      "sample_columns": [
+        "TCGA-55-7570-01A",
+        "TCGA-55-7726-01A"
+      ]
+    }
+  ],
+  "retrieval_guidance": [
+    "Preserve source identifiers and raw values before normalization.",
+    "Hash every carrier byte-for-byte before deriving revision identity.",
+    "Keep gene-level and probe-level rows in separate projections."
+  ],
+  "probe_level_supported": false
+}

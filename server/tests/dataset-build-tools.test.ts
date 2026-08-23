@@ -222,6 +222,40 @@ describe("Pi DatasetBuild tools", () => {
     });
   });
 
+  test("routes non-retryable static transform rejection to the dynamic family tool", async () => {
+    const execute = vi.fn(async (): Promise<DatasetBridgeResponse> => ({
+      version: 1, request_id: "request_execute", ok: false, data: null,
+      error: {
+        code: "invalid_input",
+        message: "ChEMBL bioactivity transform rejected: activity value is required",
+        retryable: false,
+        details: {},
+      },
+    }));
+    const validate = vi.fn(async (): Promise<DatasetBridgeResponse> => ({
+      version: 1, request_id: "request_validate", ok: true,
+      data: { valid: true, reason_codes: [], reasons: [] }, error: null,
+    }));
+    const tools = createDatasetBuildTools({
+      client: { validate, execute },
+      taskId: "task_tool", taskRoot: await toolTaskRoot(),
+      runId: () => "run_tool", piSessionId: () => "pi_tool",
+    });
+    const result = await tools[1]!.execute({
+      spec,
+      source_files: { binding_gdc: "source_assets/file.tsv" },
+      mapping_files: {}, metadata_files: {},
+    });
+    expect(result).toMatchObject({
+      isError: true,
+      details: {
+        do_not_retry_static: true,
+        recommended_next_action: expect.stringContaining("submit_dynamic_family_build"),
+      },
+    });
+    expect(result.content).toContain("Stop static schema/required_fields probing");
+  });
+
   test("accepts a JSON-encoded string spec (agent serialization slip)", async () => {
     const validate = vi.fn(async (): Promise<DatasetBridgeResponse> => ({
       version: 1, request_id: "request_validate", ok: true,
@@ -257,6 +291,27 @@ describe("Pi DatasetBuild tools", () => {
     expect(executeParameters.properties.spec).toMatchObject({
       anyOf: [{ oneOf: expect.any(Array) }, { type: "string" }],
     });
+  });
+
+  test("rejects duplicate decoded keys in a JSON-encoded spec", async () => {
+    const [validateTool] = createDatasetBuildTools({
+      client: { validate: vi.fn(), execute: vi.fn() },
+      taskId: "task_tool",
+      taskRoot: await toolTaskRoot(),
+      runId: () => "run_tool",
+      piSessionId: () => "pi_tool",
+    });
+    const duplicated = JSON.stringify(spec).replace(
+      `"build_id":"${spec.build_id}"`,
+      `"build_id":"${spec.build_id}","\\u0062uild_id":"build_shadow"`,
+    );
+    const result = await validateTool!.execute(
+      { spec: duplicated },
+      new AbortController().signal,
+      { toolCallId: "call_duplicate_string" },
+    );
+    expect(result).toMatchObject({ isError: true });
+    expect(JSON.stringify(result)).toContain("duplicate object key");
   });
 
   test("reports a clear error when the spec string is not valid JSON", async () => {

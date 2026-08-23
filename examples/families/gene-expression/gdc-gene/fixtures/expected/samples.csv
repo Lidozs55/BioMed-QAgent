@@ -1,0 +1,3 @@
+dataset_revision_id,sample_id,source_sample_alias,taxon,platform_id,source_locator
+dsrev_3f4a4a37b3a49a0a1f8efa6bd218afd115e4b4c54edf9af24864fd93206bffd5,TCGA-55-7570-01A,TCGA-55-7570-01A,Homo sapiens,,example://gdc-gene/fixtures/input/gene-expression.csv#column=TCGA-55-7570-01A
+dsrev_3f4a4a37b3a49a0a1f8efa6bd218afd115e4b4c54edf9af24864fd93206bffd5,TCGA-55-7726-01A,TCGA-55-7726-01A,Homo sapiens,,example://gdc-gene/fixtures/input/gene-expression.csv#column=TCGA-55-7726-01A

@@ -27,6 +27,7 @@ export const HIL_REVIEW_TYPES = [
   "vlm_extraction",
   "source_conflict",
   "measurement_semantics",
+  "publication_acceptance",
 ] as const;
 export type HILReviewType = (typeof HIL_REVIEW_TYPES)[number];
 
@@ -41,6 +42,8 @@ export interface HILSubject {
   record_ids?: string[];
   mapping_ids?: string[];
   provenance_ids?: string[];
+  candidate_ids?: string[];
+  table_ids?: string[];
 }
 
 export interface HILReviewItem {
@@ -109,6 +112,8 @@ export function parseHILSubject(value: unknown, path = "subject"): HILSubject {
   const recordIds = parseStringArray(obj.record_ids, `${path}.record_ids`);
   const mappingIds = parseStringArray(obj.mapping_ids, `${path}.mapping_ids`);
   const provenanceIds = parseStringArray(obj.provenance_ids, `${path}.provenance_ids`);
+  const candidateIds = parseStringArray(obj.candidate_ids, `${path}.candidate_ids`);
+  const tableIds = parseStringArray(obj.table_ids, `${path}.table_ids`);
   return {
     ...(bindingId === undefined
       ? {}
@@ -116,6 +121,8 @@ export function parseHILSubject(value: unknown, path = "subject"): HILSubject {
     ...(recordIds === undefined ? {} : { record_ids: recordIds }),
     ...(mappingIds === undefined ? {} : { mapping_ids: mappingIds }),
     ...(provenanceIds === undefined ? {} : { provenance_ids: provenanceIds }),
+    ...(candidateIds === undefined ? {} : { candidate_ids: candidateIds }),
+    ...(tableIds === undefined ? {} : { table_ids: tableIds }),
   };
 }
 

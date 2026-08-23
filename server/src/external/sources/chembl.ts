@@ -64,7 +64,7 @@ export async function searchChembl(
   maxResults: number,
   context: SourceQueryContext,
 ): Promise<Record<string, unknown>> {
-  context.onQueryStarted?.(query, "chembl");
+  const queryCallToken = context.onQueryStarted?.(query, "chembl");
   const apiUrl =
     `${CHEMBL_API_BASE}/molecule/search?q=${quoteQuery(query)}` +
     `&limit=${maxResults}&format=json`;
@@ -85,7 +85,7 @@ export async function searchChembl(
   } catch (error) {
     if (isAbortError(error) || context.signal?.aborted === true) throw error;
     if (!(error instanceof FallbackFailure)) throw error;
-    context.onQuery?.(query, "chembl", "failed", 0);
+    context.onQuery?.(query, "chembl", "failed", 0, queryCallToken);
     return {
       source: "chembl",
       query,
@@ -115,7 +115,7 @@ export async function searchChembl(
     const pageMeta = isRecord(document["page_meta"]) ? document["page_meta"] : {};
     const totalCount =
       typeof pageMeta["total_count"] === "number" ? pageMeta["total_count"] : records.length;
-    context.onQuery?.(query, "chembl", "success", records.length);
+    context.onQuery?.(query, "chembl", "success", records.length, queryCallToken);
     return {
       source: "chembl",
       query,
@@ -128,7 +128,7 @@ export async function searchChembl(
     };
   }
 
-  context.onQuery?.(query, "chembl", "success", 0);
+  context.onQuery?.(query, "chembl", "success", 0, queryCallToken);
   return {
     source: "chembl",
     query,

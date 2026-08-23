@@ -11,7 +11,7 @@
 >   （已归档）见 [archive/BioMed-QAgent_Pipeline_Refactor_Design.md](archive/BioMed-QAgent_Pipeline_Refactor_Design.md)；
 >   执行任务由 [TODO.md](TODO.md) 承担；**功能/能力现状（能做什么，面向
 >   汇报）由 [FEATURES.md](FEATURES.md) 承担**。各文档不互相复制。
-> - **实现状态**：迁移 Phase 0-9 全部完成（2026-08-16）；当前处于 Phase 4 Gold
+> - **实现状态**：迁移 Phase 0-9 全部完成（2026-08-16）；显式 `in_process_unisolated` Family Host/Core publication chain 已形成稳定 `main` 基线；当前处于 Phase 4 Gold
 >   审计向 Phase 5 hardening/release 过渡的系统收敛阶段。唯一正式拓扑为
 >   TypeScript Host 权威实现 formal `/api/v1`、durable Task/Run/Event、模型设置、
 >   product API 与 TS Dataset Core；Agent = Pi（`server/src/agent/pi-adapter.ts`）。
@@ -50,7 +50,7 @@
 | §24 | 文档治理 | 本文 |
 | — 当前收敛路线 | Phase 4 Gold audit → Phase 5 hardening/release | [plans/2026-08-20-phase4-to-phase5-hardening-roadmap.md](plans/2026-08-20-phase4-to-phase5-hardening-roadmap.md) |
 | — 近期执行 | Gold evaluator E1-E5 | [plans/2026-08-20-gold-evaluator-near-term-plan.md](plans/2026-08-20-gold-evaluator-near-term-plan.md) |
-| — Family Host + Transform Host（目标规划） | FamilySpec、受控 DatasetTransform Host、examples 迁移与 Batch 0–2 执行计划 | [plans/family-host/README.md](plans/family-host/README.md) + [ADR-039](adr/039-family-transform-host.md) |
+| — FamilySpec/Core + dynamic transform | 显式 `in_process_unisolated` production route；不是sandbox/安全边界；Core仍独占B3/assessment/publication | [architecture/FAMILY-HOST-03-execution-constraints.md](architecture/FAMILY-HOST-03-execution-constraints.md) + [ADR-039](adr/039-family-transform-host.md) |
 | — 缓存设计（现行） | Cache 契约、Schema 标识与构建参数（详见 ADR-015 与 §9-13） | [architecture/result-validation.md](architecture/result-validation.md) §9-13 + [ADR-015](adr/015-cache-schema-build-parameters.md)；历史详细设计见 [archive/cache-design-2026-08.md](archive/cache-design-2026-08.md) |
 | — 模型供应商参数 | 供应商/模型参数与目录事实（现行 TS `server/src/settings/model-registry/`） | [architecture/model-provider-params.md](architecture/model-provider-params.md) |
 | — 运行限制 | 运行时资源上限与设置契约 | [architecture/runtime-limits.md](architecture/runtime-limits.md) |

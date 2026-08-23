@@ -19,6 +19,7 @@ BioMed-QAgent 是一个面向生物医学研究数据的 **Agent + 确定性 Pip
 | --- | --- |
 | [docs/FEATURES.md](docs/FEATURES.md) | **功能 / 能力全景**：系统能做什么，逐项对齐赛题评价维度，含演示视频建议脚本。适合产品、数据、写 PPT 的协作者。 |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | **技术架构权威**：系统如何组织、边界、事件模型、数据契约、安全。适合工程师与架构评审。 |
+| [docs/AGENT_API_QUICKSTART.md](docs/AGENT_API_QUICKSTART.md) | **Agent/API调用入口**：启动就绪、创建/续跑、durable event replay和WS最小闭环。 |
 | [docs/architecture/roadmap.md](docs/architecture/roadmap.md) + [docs/TODO.md](docs/TODO.md) | **未来规划**：演进方向、待决问题、开放任务与进度。 |
 
 ## 核心能力
@@ -350,12 +351,14 @@ pnpm build      # tsc -b && vite build
 
 ## 未来规划
 
-演进方向、待决问题、非目标与被否决方案见
+Family Host 的显式 `in_process_unisolated` 主链已作为稳定基线接入：Agent-authored
+FamilySpec/transform 仍须经过 registered inputs、Host digest/receipt、Core quarantine、B3、
+ProductAssessment、evidence-bound HIL 与 immutable Publication；该 backend 不是 sandbox 或安全边界。
+后续 recovery/resource/identity hardening、专用前端 UX 与 family 产品闭包继续在独立分支/worktree
+开发。演进方向、待决问题、非目标与被否决方案见
 [docs/architecture/roadmap.md](docs/architecture/roadmap.md)；当前开放任务（P0–P3、
-Gold 受可信 Publication 验收）见 [docs/TODO.md](docs/TODO.md)。核心方向包括：把
-非表达类研究主题（靶点 / 变异 / 结构 / 活性 / 文献 / 图表）接入受信任的多表
-Publication（Canonical Evidence Product Layer），以及大型 GEO 矩阵的流式 / 资源上限
-处理（均已在 roadmap / TODO 中记录，README 不重复维护）。
+Gold 受可信 Publication 验收）见 [docs/TODO.md](docs/TODO.md)。最终 release 仍要求同一冻结 commit、
+单 Host 的 Gold1–Gold6 可信证据，不能以历史/跨提交 publication 替代。
 
 ## 桌面 / 生产打包
 
