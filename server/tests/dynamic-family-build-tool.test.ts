@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { DEFAULT_RUNTIME_LIMITS, computeFamilySpecDigest, type FamilySpec, type Projection } from "@biomed/contracts";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import { canonicalDigest } from "../src/dataset/adapters/identity.js";
 import {
@@ -19,6 +19,11 @@ import {
   PRODUCTION_B3_CONFIGURED_TEMP_BYTES,
   PRODUCTION_B3_RESOURCE_POLICY,
 } from "../src/dataset/validation/b3-production-policy.js";
+import {
+  DiskIndexResourceLimitError,
+  TupleIndex,
+} from "../src/dataset/validation/disk-index.js";
+import { OperationAbortedError } from "../src/dataset/cooperative.js";
 import { SourceAssetRegistry } from "../src/runtime/source-assets/registry.js";
 
 const A = "a".repeat(64);
@@ -511,6 +516,74 @@ describe("production B3 resource/disk lane", () => {
       await expect(access(path.join(root, "builds", buildId, "b3-index"))).rejects.toThrow();
     } finally {
       await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("cleans task-owned B3 indexes when disk validation throws, is cancelled, or hits quota", async () => {
+    const cases = [
+      {
+        name: "validation throws",
+        run: async (publishInput: PublishDynamicFamilyInput) => {
+          const validationError = new Error("synthetic B3 validation failure");
+          vi.spyOn(TupleIndex.prototype, "primaryKeyCheck").mockImplementation(() => {
+            throw validationError;
+          });
+          await expect(publishDynamicFamily({
+            ...publishInput,
+            b3Validation: {
+              policy: { ...PRODUCTION_B3_RESOURCE_POLICY, memoryThresholdBytes: 0 },
+              configuredHeapBytes: PRODUCTION_B3_CONFIGURED_HEAP_BYTES,
+              configuredTempBytes: PRODUCTION_B3_CONFIGURED_TEMP_BYTES,
+            },
+          })).rejects.toBe(validationError);
+        },
+      },
+      {
+        name: "cancellation occurs",
+        run: async (publishInput: PublishDynamicFamilyInput) => {
+          const controller = new AbortController();
+          controller.abort();
+          await expect(publishDynamicFamily({
+            ...publishInput,
+            signal: controller.signal,
+            b3Validation: {
+              policy: { ...PRODUCTION_B3_RESOURCE_POLICY, memoryThresholdBytes: 0 },
+              configuredHeapBytes: PRODUCTION_B3_CONFIGURED_HEAP_BYTES,
+              configuredTempBytes: PRODUCTION_B3_CONFIGURED_TEMP_BYTES,
+            },
+          })).rejects.toBeInstanceOf(OperationAbortedError);
+        },
+      },
+      {
+        name: "quota fails",
+        run: async (publishInput: PublishDynamicFamilyInput) => {
+          const originalCreate = TupleIndex.create.bind(TupleIndex);
+          vi.spyOn(TupleIndex, "create").mockImplementation(async (options) =>
+            originalCreate({ ...options, quotaBytes: 32 * 1024 }));
+          await expect(publishDynamicFamily({
+            ...publishInput,
+            b3Validation: {
+              policy: { ...PRODUCTION_B3_RESOURCE_POLICY, memoryThresholdBytes: 0 },
+              configuredHeapBytes: PRODUCTION_B3_CONFIGURED_HEAP_BYTES,
+              configuredTempBytes: PRODUCTION_B3_CONFIGURED_TEMP_BYTES,
+            },
+          })).rejects.toBeInstanceOf(DiskIndexResourceLimitError);
+        },
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const root = await mkdtemp(path.join(os.tmpdir(), `dynamic-family-b3-cleanup-${testCase.name.replaceAll(" ", "-")}-`));
+      try {
+        const { publishInput, buildId } = await executedSubmission(root, testCase.name === "quota fails"
+          ? `record_id,value\n${"x".repeat(40_000)},1\n`
+          : undefined);
+        await testCase.run(publishInput);
+        await expect(access(path.join(root, "builds", buildId, "b3-index"))).rejects.toThrow();
+      } finally {
+        vi.restoreAllMocks();
+        await rm(root, { recursive: true, force: true });
+      }
     }
   });
 });
