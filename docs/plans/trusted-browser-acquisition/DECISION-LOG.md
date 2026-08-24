@@ -207,3 +207,11 @@ risks, and verification results for later audit.
 - Reason: Validate real public database download behavior without coupling normal
   tests to external availability or creating a publication in the smoke path.
 - Status: both live downloads passed with HTTP 200 and verified SHA-256 receipts.
+
+## 2026-08-24 / D-025
+
+- Decision: Browser family materialization requires non-empty provenance and
+  confidence result refs for every projection-selected table.
+- Reason: The previous empty arrays could never satisfy ProductAssessment and
+  would hide a trust gap between browser evidence and a publishable candidate.
+- Status: implemented and focused-verified.

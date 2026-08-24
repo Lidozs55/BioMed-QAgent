@@ -22,6 +22,6 @@ const familySpec = { family_spec_id: "family_browser", semantic_version: "2.0.0"
 
 describe("materializeBrowserIntegratedFamily", () => {
   it("fails closed when a projection-selected table is missing", async () => {
-    await expect(materializeBrowserIntegratedFamily({ taskId: "task_family", buildId: "build_family", familySpec, projection, integratedTables: { one: result("one") } })).rejects.toThrow("missing selected table");
+    await expect(materializeBrowserIntegratedFamily({ taskId: "task_family", buildId: "build_family", familySpec, projection, tableOutputs: { one: { data: result("one"), provenance: [result("one_provenance")], confidence: [result("one_confidence")], audit: [] } } })).rejects.toThrow("missing selected table");
   });
 });

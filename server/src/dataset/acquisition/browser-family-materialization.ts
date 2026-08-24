@@ -1,4 +1,5 @@
-import type { FamilySpec, OperationResultManifest, Projection } from "@biomed/contracts";
+import type { FamilySpec, Projection } from "@biomed/contracts";
+import type { DynamicFamilyTableOutputs } from "../dynamic-family/index.js";
 import {
   materializeDynamicFamilyCandidate,
   type DynamicFamilyMaterialization,
@@ -9,7 +10,7 @@ export interface BrowserFamilyMaterializationInput {
   buildId: string;
   familySpec: FamilySpec;
   projection: Projection;
-  integratedTables: Readonly<Record<string, OperationResultManifest>>;
+  tableOutputs: Readonly<Record<string, DynamicFamilyTableOutputs>>;
 }
 
 /**
@@ -25,13 +26,15 @@ export async function materializeBrowserIntegratedFamily(
     ...input.projection.derived_tables,
   ];
   const tableOutputs = Object.fromEntries(selected.map((tableId) => {
-    const integratedTable = input.integratedTables[tableId];
-    if (integratedTable === undefined) throw new Error(`browser family materialization is missing selected table: ${tableId}`);
-    if (integratedTable.operation_kind !== "integrate" || integratedTable.output_kind !== "integrated_table") {
+    const output = input.tableOutputs[tableId];
+    if (output === undefined) throw new Error(`browser family materialization is missing selected table: ${tableId}`);
+    if (output.data.operation_kind !== "integrate" || output.data.output_kind !== "integrated_table") {
       throw new Error(`browser family materialization requires integrated-table result: ${tableId}`);
     }
-    if (integratedTable.output_summary.table_id !== tableId) throw new Error(`browser integrated result table mismatch: ${tableId}`);
-    return [tableId, { data: integratedTable, provenance: [], confidence: [], audit: [] }];
+    if (output.data.output_summary.table_id !== tableId) throw new Error(`browser integrated result table mismatch: ${tableId}`);
+    if (output.provenance.length === 0) throw new Error(`browser family materialization requires provenance results: ${tableId}`);
+    if (output.confidence.length === 0) throw new Error(`browser family materialization requires confidence results: ${tableId}`);
+    return [tableId, output];
   }));
   return materializeDynamicFamilyCandidate({
     taskId: input.taskId,
