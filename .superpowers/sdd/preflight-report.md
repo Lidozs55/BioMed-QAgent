@@ -124,5 +124,7 @@ Gate results:
 
 ## Commit and remote state
 
-- Commit: pending until the report and implementation are staged.
-- Push: pending to `origin/feat/family-host-dynamic-preflight`.
+- Implementation commit: `d014afcbf7d8639ba7091aa01adda3f1b6bffdf6`
+  (`feat(server): add dynamic family preflight receipt protocol`).
+- The finalized report update is committed next and the resulting branch is
+  pushed to `origin/feat/family-host-dynamic-preflight` without force-push.
