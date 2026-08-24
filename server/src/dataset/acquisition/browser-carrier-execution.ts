@@ -20,6 +20,7 @@ export interface BrowserCarrierParserExecutionInput {
   implementationDigest: string;
   tableId: string;
   familyId: string;
+  rowGranularity: string;
   sourceAssetRegistry: SourceAssetRegistry;
   signal?: AbortSignal | null;
 }
@@ -40,6 +41,7 @@ export interface BrowserCarrierIntegrationInput {
   buildId: string;
   outputDir: string;
   familyId: string;
+  rowGranularity: string;
   requestIdentityDigest: string;
   implementationDigest: string;
 }
@@ -143,6 +145,7 @@ export async function integrateBrowserParsedTable(
     output_summary: {
       table_id: input.parsed.tableId,
       dataset_family: input.familyId,
+      row_granularity: input.rowGranularity,
       schema_ref: input.parsed.operationResult.output_summary.schema_ref,
       row_count: input.parsed.adapter.audit.accepted_row_count,
       column_count: input.parsed.adapter.schema.fields.length,
@@ -216,6 +219,7 @@ export async function executeBrowserCarrierParser(
       output_summary: {
         table_id: input.tableId,
         dataset_family: input.familyId,
+        row_granularity: input.rowGranularity,
         schema_ref: input.schemaRef,
         row_count: result.audit.accepted_row_count,
         column_count: result.schema.fields.length,

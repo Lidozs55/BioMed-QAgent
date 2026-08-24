@@ -30,6 +30,7 @@ describe("executeBrowserCarrierParser", () => {
       parserVersion: "1",
       tableId: "fixture_table",
       familyId: "fixture_family",
+      rowGranularity: "row",
       sourceAssetRegistry: registry,
     })).rejects.toThrow(/Core acquisition provenance/);
   });
@@ -43,7 +44,7 @@ describe("executeBrowserCarrierParser", () => {
     await expect(executeBrowserCarrierParser({
       taskId: "task_carrier_result", buildId: "build_carrier", outputDir: path.join(root, "build"), assetId: receipt.asset_ref.asset_id,
       requestIdentityDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", schemaRef: "fixture_schema", adapterId: "fixture", parserVersion: "1",
-      implementationDigest: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", tableId: "fixture_table", familyId: "fixture_family", sourceAssetRegistry: registry,
+      implementationDigest: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", tableId: "fixture_table", familyId: "fixture_family", rowGranularity: "row", sourceAssetRegistry: registry,
     })).rejects.toThrow();
   });
 });

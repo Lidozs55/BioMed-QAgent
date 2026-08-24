@@ -191,3 +191,11 @@ risks, and verification results for later audit.
   parsing alone does not establish those semantics. The integration copy is
   rehashed and references the parsed manifest in dependency closure.
 - Status: implemented and focused-verified; family publication integration pending.
+
+## 2026-08-24 / D-023
+
+- Decision: Require every projection-selected table in the browser family bridge
+  to have an integrated OperationResult; no missing-table or empty-table inference.
+- Reason: Generic browser acquisition must not turn one successfully parsed
+  source into an incomplete or fabricated family publication.
+- Status: implemented; server/contracts typecheck and lint pass.
