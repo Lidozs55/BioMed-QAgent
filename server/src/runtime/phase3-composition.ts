@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 
-import { DEFAULT_RUNTIME_LIMITS, type DynamicFamilyPreflightReceipt, type RuntimeLimits } from "@biomed/contracts";
+import { DEFAULT_RUNTIME_LIMITS, type RuntimeLimits } from "@biomed/contracts";
 
 import type { BioMedAgentAdapter, BioMedModelConfig } from "../agent/contracts.js";
 import { PiAgentAdapter } from "../agent/pi-adapter.js";
@@ -43,6 +43,7 @@ import {
 } from "../dataset/acquisition/runtime.js";
 import { coreEventToPayload } from "../dataset/service/events.js";
 import { createDatasetCoreService } from "../dataset/service/dataset-core.js";
+import { acquireBuildLock } from "../dataset/service/build-lock.js";
 import { submitDynamicFamilyBuild } from "../dataset/dynamic-family/submission.js";
 import {
   dynamicFamilyPreflightSubmissionDigest,
@@ -62,6 +63,9 @@ import {
   createDurableAgentRuntime,
   type DurableAgentRuntime,
 } from "./durable-agent-runtime.js";
+import { createDynamicFamilyPreflightCoordinator } from "./dynamic-family-preflight-coordinator.js";
+
+export { createDynamicFamilyPreflightCoordinator } from "./dynamic-family-preflight-coordinator.js";
 
 /**
  * Display names for query sources used in operation_started labels
@@ -353,11 +357,7 @@ export async function createPhase3Runtime(
       let currentRunId = runId;
       let currentPiSessionId = "pi_session_pending";
       let buildResult: import("@biomed/contracts").BuildResult | null = null;
-      let dynamicFamilyGeneration = 0;
-      const dynamicFamilyPreflight = new Map<string, {
-        readonly receipt: DynamicFamilyPreflightReceipt;
-        readonly submission: ParsedDynamicFamilyBuildSubmission;
-      }>();
+      const dynamicFamilyPreflight = createDynamicFamilyPreflightCoordinator();
       // Agent-owned directory: data/workspaces/<taskId> (plan §2.1).
       const workspaceRoot = await workspaceManager.ensure(taskId);
       // Framework-owned output: data/output/tasks/<taskId> (plan §3.2).
@@ -505,43 +505,58 @@ export async function createPhase3Runtime(
       });
       const dynamicFamilyPrepareTool = createPrepareDynamicFamilyBuildTool({
         prepare: async (submission) => {
+          const preparation = dynamicFamilyPreflight.beginPrepare(submission.build_proposal.build_id);
           const receipt = await prepareDynamicFamilyBuild({
             taskId,
             buildId: submission.build_proposal.build_id,
-            generation: dynamicFamilyGeneration,
+            generation: preparation.generation,
             submission,
             runtimeLimits: limits,
             planAcquisition: (planning) => planCoreAcquisition(submission, planning),
           });
-          dynamicFamilyPreflight.set(receipt.receipt_digest, { receipt, submission });
+          dynamicFamilyPreflight.commitPrepare(
+            preparation,
+            receipt,
+            dynamicFamilyPreflightSubmissionDigest(submission),
+          );
           return receipt;
         },
       });
       const dynamicFamilyTool = createDynamicFamilyBuildTool({
-        requirePreflight: true,
         submit: async (submission, signal, _context, preflightReceipt) => {
           if (preflightReceipt === undefined) {
             throw new Error("submit_dynamic_family_build requires a preflight receipt");
-          }
-          const committed = dynamicFamilyPreflight.get(preflightReceipt.receipt_digest);
-          if (committed === undefined) {
-            throw new Error("preflight receipt is unknown, stale, or cross-run");
-          }
-          if (dynamicFamilyPreflightSubmissionDigest(committed.submission) !== dynamicFamilyPreflightSubmissionDigest(submission)) {
-            throw new Error("preflight receipt does not match the submitted build facts");
           }
           await validateDynamicFamilyPreflightReceipt({
             receipt: preflightReceipt,
             submission,
             taskId,
             buildId: submission.build_proposal.build_id,
-            generation: dynamicFamilyGeneration,
+            generation: preflightReceipt.generation,
             runtimeLimits: limits,
             planAcquisition: (planning) => planCoreAcquisition(submission, planning),
           });
+          const buildLock = await acquireBuildLock(
+            { lockRoot: path.join(taskRoot, "state", "build-locks") },
+            taskId,
+            submission.build_proposal.build_id,
+            `dynamic-family:${currentRunId}:${randomUUID()}`,
+          );
+          let reservation: ReturnType<typeof dynamicFamilyPreflight.reserve> | null = null;
+          try {
+            reservation = dynamicFamilyPreflight.reserve(
+              preflightReceipt,
+              dynamicFamilyPreflightSubmissionDigest(submission),
+            );
           const registeredSources: Record<string, string> = { ...submission.registered_sources };
           const acquisitionRequestDigests: Record<string, string> = {};
+          const planByBinding = new Map(
+            preflightReceipt.acquisition_plan.map((entry) => [entry.binding_id, entry]),
+          );
           for (const [bindingId, request] of Object.entries(submission.acquisition_requests)) {
+            if (!dynamicFamilyPreflight.isCurrent(reservation)) {
+              throw new Error("dynamic family preflight generation is stale");
+            }
             const acquired = await acquisitionRuntime.acquire({
               schema_version: "1.0",
               request_id: `request_${randomUUID()}`,
@@ -554,11 +569,22 @@ export async function createPhase3Runtime(
               recipe_version: null,
               parameters: { ...request.parameters },
             }, signal);
+            const planned = planByBinding.get(bindingId);
+            if (
+              planned?.mode !== "builtin"
+              || planned.provider_id !== request.provider_id
+              || planned.request_digest !== acquired.requestIdentityDigest
+            ) {
+              throw new Error(`Core acquisition identity drifted for binding '${bindingId}'`);
+            }
             if (acquired.sourceAsset === null) {
               throw new Error(`Core acquisition did not register source binding '${bindingId}'`);
             }
             registeredSources[bindingId] = acquired.sourceAsset.asset_id;
             acquisitionRequestDigests[bindingId] = acquired.requestIdentityDigest;
+          }
+          if (!dynamicFamilyPreflight.isCurrent(reservation)) {
+            throw new Error("dynamic family preflight generation is stale");
           }
           const resolvedSubmission = Object.freeze({
             ...submission,
@@ -577,9 +603,20 @@ export async function createPhase3Runtime(
             preflightReceipt,
             preflightSubmission: submission,
             planAcquisition: (planning) => planCoreAcquisition(submission, planning),
+            isGenerationCurrent: (candidateGeneration, cancelFence) =>
+              candidateGeneration === reservation?.generation
+              && reservation !== null
+              && dynamicFamilyPreflight.isCurrent(reservation)
+              && cancelFence.length > 0,
             sourceAcquisitionRequestDigests: Object.freeze(acquisitionRequestDigests),
             signal,
           });
+          if (!dynamicFamilyPreflight.isCurrent(reservation)) {
+            throw new Error("dynamic family preflight generation is stale");
+          }
+          if (!(await buildLock.assertOwned())) {
+            throw new Error("dynamic family build lock fence was lost");
+          }
           const product = await publishDynamicFamily({
             taskId,
             taskRoot,
@@ -590,8 +627,6 @@ export async function createPhase3Runtime(
             hilGate: approvalGate,
             signal,
           });
-          dynamicFamilyGeneration += 1;
-          dynamicFamilyPreflight.delete(preflightReceipt.receipt_digest);
           const publicationManifestSha = product.publication.publication.manifest_sha256;
           if (publicationManifestSha === undefined) {
             throw new Error("dynamic publication is missing its manifest byte receipt");
@@ -647,6 +682,10 @@ export async function createPhase3Runtime(
             backend: result.receipt.sandbox_backend,
             security_boundary: false,
           };
+          } finally {
+            if (reservation !== null) dynamicFamilyPreflight.complete(reservation);
+            await buildLock.release();
+          }
         },
       });
       const datasetTools = createDatasetBuildTools({

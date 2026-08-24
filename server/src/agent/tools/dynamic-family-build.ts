@@ -60,10 +60,8 @@ export interface DynamicFamilyBuildToolOptions {
     submission: ParsedDynamicFamilyBuildSubmission,
     signal: AbortSignal | undefined,
     context: BioMedToolExecutionContext | undefined,
-    preflightReceipt?: DynamicFamilyPreflightReceipt,
+    preflightReceipt: DynamicFamilyPreflightReceipt,
   ) => Promise<unknown>;
-  /** Only explicit legacy unit adapters may disable the V2 receipt requirement. */
-  readonly requirePreflight?: boolean;
 }
 
 export interface PrepareDynamicFamilyBuildToolOptions {
@@ -77,16 +75,15 @@ export interface PrepareDynamicFamilyBuildToolOptions {
 export function createDynamicFamilyBuildTool(
   options: DynamicFamilyBuildToolOptions,
 ): BioMedAgentTool {
-  const requirePreflight = options.requirePreflight !== false;
   return {
     name: "submit_dynamic_family_build",
     label: "Submit Dynamic Family Build",
     description:
       "Submit a strict FamilySpec + TypeScript DatasetTransform with the exact prepare_dynamic_family_build receipt to the explicit in_process_unisolated runtime and trusted Core publication path. This is not a sandbox, isolation mechanism, or security boundary. Use fixed Core acquisition_requests; direct paths and discovery bytes are forbidden.",
-    parameters: dynamicFamilyBuildParameters(requirePreflight),
+    parameters: dynamicFamilyBuildParameters(true),
     async execute(value, signal, context): Promise<BioMedToolResult> {
       try {
-        const parsed = await parseDynamicFamilyBuildSubmitRequest(value, requirePreflight);
+        const parsed = await parseDynamicFamilyBuildSubmitRequest(value);
         const details = await options.submit(parsed.submission, signal, context, parsed.preflightReceipt);
         return { content: JSON.stringify(details), details };
       } catch (error) {
@@ -134,7 +131,7 @@ export function createDynamicFamilyBuildTools(options: {
 }): readonly [BioMedAgentTool, BioMedAgentTool] {
   return [
     createPrepareDynamicFamilyBuildTool({ prepare: options.prepare }),
-    createDynamicFamilyBuildTool({ submit: options.submit, requirePreflight: true }),
+    createDynamicFamilyBuildTool({ submit: options.submit }),
   ];
 }
 
@@ -508,38 +505,23 @@ export async function parseDynamicFamilyBuildSubmission(
 
 export interface ParsedDynamicFamilyBuildSubmitRequest {
   readonly submission: ParsedDynamicFamilyBuildSubmission;
-  readonly preflightReceipt?: DynamicFamilyPreflightReceipt;
+  readonly preflightReceipt: DynamicFamilyPreflightReceipt;
 }
 
 /** Strict submit wire parser; production callers must present the receipt. */
 export async function parseDynamicFamilyBuildSubmitRequest(
   value: unknown,
-  requirePreflight = true,
 ): Promise<ParsedDynamicFamilyBuildSubmitRequest> {
   const keys = new Set([...TOP_KEYS, "preflight_receipt"]);
-  let record: DataRecord;
-  let hasReceipt = false;
-  if (requirePreflight) {
-    record = exactDataRecord(value, keys, "$dynamic_family_build_submit");
-    hasReceipt = Object.hasOwn(record, "preflight_receipt");
-    if (!hasReceipt) {
-      throw new TypeError("submit_dynamic_family_build requires preflight_receipt from prepare_dynamic_family_build");
-    }
-  } else {
-    try {
-      record = exactDataRecord(value, TOP_KEYS, "$dynamic_family_build_submit");
-    } catch {
-      record = exactDataRecord(value, keys, "$dynamic_family_build_submit");
-      hasReceipt = Object.hasOwn(record, "preflight_receipt");
-    }
+  const record = exactDataRecord(value, keys, "$dynamic_family_build_submit");
+  if (!Object.hasOwn(record, "preflight_receipt")) {
+    throw new TypeError("submit_dynamic_family_build requires preflight_receipt from prepare_dynamic_family_build");
   }
   const base = Object.create(null) as DataRecord;
   for (const key of TOP_KEYS) base[key] = record[key];
   const submission = await parseDynamicFamilyBuildSubmission(base);
-  const preflightReceipt = hasReceipt
-    ? parseDynamicFamilyPreflightReceipt(record.preflight_receipt, "$.preflight_receipt")
-    : undefined;
-  return Object.freeze({ submission, ...(preflightReceipt === undefined ? {} : { preflightReceipt }) });
+  const preflightReceipt = parseDynamicFamilyPreflightReceipt(record.preflight_receipt, "$.preflight_receipt");
+  return Object.freeze({ submission, preflightReceipt });
 }
 
 function parseRegisteredSources(

@@ -162,4 +162,12 @@ describe(".pi/skills manifest integrity", () => {
       expect((skill.frontmatter.description ?? "").length).toBeLessThanOrEqual(300);
     }
   });
+
+  test("dataset-construction documents the dynamic prepare/submit receipt protocol", async () => {
+    const skill = await readSkill("dataset-construction");
+    expect(skill.body).toMatch(/prepare_dynamic_family_build/);
+    expect(skill.body).toMatch(/bind.*descriptor digest/i);
+    expect(skill.body).toMatch(/unchanged receipt/i);
+    expect(skill.body).toMatch(/fresh prepare.*(?:source|projection|transform).*change/i);
+  });
 });

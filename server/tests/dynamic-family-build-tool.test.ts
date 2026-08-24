@@ -11,6 +11,7 @@ import {
   parseDynamicFamilyBuildSubmission,
 } from "../src/agent/tools/dynamic-family-build.js";
 import { submitDynamicFamilyBuild } from "../src/dataset/dynamic-family/submission.js";
+import { prepareDynamicFamilyBuild } from "../src/dataset/dynamic-family/preflight.js";
 import { computeHILEvidenceDigest } from "../src/dataset/contracts/hil-evidence.js";
 import { expectedOutputLocatorClosure } from "../src/dataset/dynamic-family/execution.js";
 import { publishDynamicFamily, type PublishDynamicFamilyInput } from "../src/dataset/dynamic-family/publication.js";
@@ -104,6 +105,26 @@ async function submission(): Promise<Record<string, unknown>> {
   };
 }
 
+async function prepareForSubmit(
+  raw: Record<string, unknown>,
+  taskId = "task_dynamic",
+  buildId = "build_dynamic",
+): Promise<{
+  submission: Awaited<ReturnType<typeof parseDynamicFamilyBuildSubmission>>;
+  receipt: Awaited<ReturnType<typeof prepareDynamicFamilyBuild>>;
+}> {
+  const initial = await parseDynamicFamilyBuildSubmission(raw);
+  const receipt = await prepareDynamicFamilyBuild({
+    taskId,
+    buildId,
+    generation: 0,
+    submission: initial,
+  });
+  (raw.build_proposal as { transform_refs: Array<{ digest: string }> }).transform_refs[0]!.digest = receipt.host_descriptor_digest;
+  const prepared = await parseDynamicFamilyBuildSubmission(raw);
+  return { submission: prepared, receipt };
+}
+
 describe("dynamic family build tool boundary", () => {
   test("requires committed outputs only for locators used by declared outputs", () => {
     const output = (tableId: string, locatorRef: string) => ({
@@ -191,19 +212,29 @@ describe("dynamic family build tool boundary", () => {
 
   test("exposes one callback-backed Agent tool without weakening parsing", async () => {
     let received: unknown;
+    const raw = await submission();
+    const parsed = await parseDynamicFamilyBuildSubmission(raw);
+    const receipt = await prepareDynamicFamilyBuild({
+      taskId: "task_dynamic",
+      buildId: "build_dynamic",
+      generation: 0,
+      submission: parsed,
+    });
+    (raw.build_proposal as { transform_refs: Array<{ digest: string }> }).transform_refs[0]!.digest = receipt.host_descriptor_digest;
+    raw.preflight_receipt = receipt;
     const tool = createDynamicFamilyBuildTool({
-      requirePreflight: false,
-      submit: async (value) => {
+      submit: async (value, _signal, _context, submittedReceipt) => {
         received = value;
+        expect(submittedReceipt.receipt_digest).toBe(receipt.receipt_digest);
         return { ok: true, build_id: value.build_proposal.build_id };
       },
     });
-    const result = await tool.execute(await submission());
+    const result = await tool.execute(raw);
     expect(tool.name).toBe("submit_dynamic_family_build");
     expect(result.isError).not.toBe(true);
     expect(received).toMatchObject({ execution_backend: "in_process_unisolated" });
 
-    const invalid = await submission();
+    const invalid = structuredClone(raw);
     invalid.execution_backend = "sandbox";
     const rejected = await tool.execute(invalid);
     expect(rejected.isError).toBe(true);
@@ -236,39 +267,28 @@ describe("dynamic family build tool boundary", () => {
         declared_input_roles: Array<{ role: string }>;
       };
       mismatchedMetadata.declared_input_roles[0]!.role = "wrong_role";
-      await expect(submitDynamicFamilyBuild({
-        taskId: "task_dynamic", runId: "run_dynamic",
+      await expect(prepareDynamicFamilyBuild({
+        taskId: "task_dynamic",
+        buildId: "build_dynamic",
+        generation: 0,
         submission: await parseDynamicFamilyBuildSubmission(mismatchedRole),
-        sourceAssetRegistry: registry, taskRoot: root, runtimeLimits: DEFAULT_RUNTIME_LIMITS,
       })).rejects.toThrow(/binding 'source_binding'.*expected 'source'.*received 'wrong_role'/);
+      const prepared = await prepareForSubmit(raw);
+      parsed = prepared.submission;
       await expect(submitDynamicFamilyBuild({
         taskId: "task_dynamic", runId: "run_dynamic", submission: parsed,
         sourceAssetRegistry: registry, taskRoot: root, runtimeLimits: DEFAULT_RUNTIME_LIMITS,
+        generation: 0, preflightReceipt: prepared.receipt, preflightSubmission: parsed,
       })).rejects.toThrow(/Core acquisition provenance/);
       await registry.registerCoreAcquisitionProvenance(receipt, {
         provider_id: "fixture.files.v1",
         implementation_digest: A,
         request_identity_digest: B,
       });
-      let expectedDigest = "";
-      await expect(submitDynamicFamilyBuild({
-        taskId: "task_dynamic", runId: "run_dynamic", submission: parsed,
-        sourceAssetRegistry: registry, taskRoot: root, runtimeLimits: DEFAULT_RUNTIME_LIMITS,
-      })).rejects.toThrow(/Host-compiled descriptor ([0-9a-f]{64})/);
-      try {
-        await submitDynamicFamilyBuild({
-          taskId: "task_dynamic", runId: "run_dynamic", submission: parsed,
-          sourceAssetRegistry: registry, taskRoot: root, runtimeLimits: DEFAULT_RUNTIME_LIMITS,
-        });
-      } catch (error) {
-        expectedDigest = /([0-9a-f]{64})/.exec((error as Error).message)?.[1] ?? "";
-      }
-      const proposal = raw.build_proposal as { transform_refs: Array<{ digest: string }> };
-      proposal.transform_refs[0]!.digest = expectedDigest;
-      parsed = await parseDynamicFamilyBuildSubmission(raw);
       const result = await submitDynamicFamilyBuild({
         taskId: "task_dynamic", runId: "run_dynamic", submission: parsed,
         sourceAssetRegistry: registry, taskRoot: root, runtimeLimits: DEFAULT_RUNTIME_LIMITS,
+        generation: 0, preflightReceipt: prepared.receipt, preflightSubmission: parsed,
       });
       expect(result.receipt.sandbox_backend).toBe("in_process_unisolated");
       expect(result.operationResult.output_summary).toMatchObject({ tables: { records: { row_count: 1 } } });
@@ -403,27 +423,17 @@ async function executedSubmission(
   const raw = await submission();
   raw.registered_sources = { source_binding: receipt.asset_ref.asset_id };
   raw.transform_source = `export const transform = { run({ inputs }) { const [input] = inputs; return { outputs: [{ handle: "out_0", table_id: "records", schema_ref: "schema_records", locator_ref: input.receipt_id, content: ${JSON.stringify(content)}, row_count: 1 }] }; } };`;
-  let parsed = await parseDynamicFamilyBuildSubmission(raw);
   await registry.registerCoreAcquisitionProvenance(receipt, {
     provider_id: "fixture.files.v1",
     implementation_digest: A,
     request_identity_digest: B,
   });
-  try {
-    await submitDynamicFamilyBuild({
-      taskId: "task_dynamic", runId: "run_dynamic", submission: parsed,
-      sourceAssetRegistry: registry, taskRoot: root, runtimeLimits: DEFAULT_RUNTIME_LIMITS,
-    });
-  } catch (error) {
-    const expectedDigest = /([0-9a-f]{64})/.exec((error as Error).message)?.[1] ?? "";
-    if (expectedDigest.length === 0) throw error;
-    const proposal = raw.build_proposal as { transform_refs: Array<{ digest: string }> };
-    proposal.transform_refs[0]!.digest = expectedDigest;
-    parsed = await parseDynamicFamilyBuildSubmission(raw);
-  }
+  const prepared = await prepareForSubmit(raw);
+  const parsed = prepared.submission;
   const result = await submitDynamicFamilyBuild({
     taskId: "task_dynamic", runId: "run_dynamic", submission: parsed,
     sourceAssetRegistry: registry, taskRoot: root, runtimeLimits: DEFAULT_RUNTIME_LIMITS,
+    generation: 0, preflightReceipt: prepared.receipt, preflightSubmission: parsed,
   });
   const buildId = parsed.build_proposal.build_id;
   return {

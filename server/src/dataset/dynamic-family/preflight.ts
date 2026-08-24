@@ -10,6 +10,8 @@ import {
 
 import type { ParsedDynamicFamilyBuildSubmission } from "../../agent/tools/dynamic-family-build.js";
 import { canonicalDigest } from "../adapters/identity.js";
+import type { CoreAcquisitionPlan } from "../acquisition/runtime.js";
+import { parseWorkflowRecipeRef } from "../contracts/acquisition.js";
 import { checkFamilySpecTopology } from "../family-spec-topology/index.js";
 import { materializeDynamicFamilySchemas } from "./index.js";
 import { prepareDynamicFamilyHostDescriptor } from "./submission.js";
@@ -29,7 +31,7 @@ export interface PrepareDynamicFamilyBuildInput {
   readonly submission: ParsedDynamicFamilyBuildSubmission;
   readonly runtimeLimits?: RuntimeLimits;
   /** Provider planning only; this callback must not acquire or register bytes. */
-  readonly planAcquisition?: (input: DynamicFamilyAcquisitionPlanningInput) => Promise<unknown>;
+  readonly planAcquisition?: (input: DynamicFamilyAcquisitionPlanningInput) => Promise<CoreAcquisitionPlan>;
 }
 
 export interface ValidateDynamicFamilyPreflightInput {
@@ -149,6 +151,44 @@ function planRequestDigest(input: {
   });
 }
 
+function parseCoreAcquisitionPlan(
+  value: unknown,
+  request: AcquisitionRequest,
+  binding: Binding,
+): CoreAcquisitionPlan {
+  if (value === null || typeof value !== "object") {
+    throw new TypeError(`dynamic preflight Core acquisition plan is missing for binding '${binding.binding_id}'`);
+  }
+  const record = value as Record<string, unknown>;
+  const requestIdentityDigest = record.requestIdentityDigest;
+  const providerId = record.providerId;
+  const implementationDigest = record.implementationDigest;
+  let recipe: CoreAcquisitionPlan["recipe"] = null;
+  if (record.recipe !== null) {
+    try {
+      recipe = parseWorkflowRecipeRef(record.recipe);
+    } catch {
+      throw new TypeError(`dynamic preflight Core acquisition plan is malformed for binding '${binding.binding_id}'`);
+    }
+  }
+  if (
+    typeof requestIdentityDigest !== "string"
+    || !/^[0-9a-f]{64}$/.test(requestIdentityDigest)
+    || typeof providerId !== "string"
+    || providerId !== request.provider_id
+    || typeof implementationDigest !== "string"
+    || !/^[0-9a-f]{64}$/.test(implementationDigest)
+  ) {
+    throw new TypeError(`dynamic preflight Core acquisition plan is malformed for binding '${binding.binding_id}'`);
+  }
+  return {
+    requestIdentityDigest,
+    providerId,
+    implementationDigest,
+    recipe,
+  };
+}
+
 async function acquisitionPlan(
   input: PrepareDynamicFamilyBuildInput,
 ): Promise<DynamicFamilyPreflightAcquisitionPlanEntry[]> {
@@ -176,18 +216,14 @@ async function acquisitionPlan(
     if (request === undefined) {
       throw new TypeError(`dynamic preflight has no acquisition plan for binding '${binding.binding_id}'`);
     }
-    const planned = await input.planAcquisition?.({ binding, request });
-    const plannedDigest = planned !== null && typeof planned === "object"
-      ? Reflect.get(planned, "requestIdentityDigest")
-      : undefined;
-    const requestDigest = typeof plannedDigest === "string" && /^[0-9a-f]{64}$/.test(plannedDigest)
-      ? plannedDigest
-      : planRequestDigest({
-          binding,
-          mode: "builtin",
-          assetId: null,
-          request,
-        });
+    if (input.planAcquisition === undefined) {
+      throw new TypeError(`dynamic preflight Core acquisition plan is missing for binding '${binding.binding_id}'`);
+    }
+    const planned = parseCoreAcquisitionPlan(
+      await input.planAcquisition({ binding, request }),
+      request,
+      binding,
+    );
     result.push({
       binding_id: binding.binding_id,
       input_requirement_ref: binding.input_requirement_ref,
@@ -195,7 +231,7 @@ async function acquisitionPlan(
       mode: "builtin",
       asset_id: null,
       provider_id: request.provider_id,
-      request_digest: requestDigest,
+      request_digest: planned.requestIdentityDigest,
     });
   }
   return result;

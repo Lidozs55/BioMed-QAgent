@@ -16,6 +16,7 @@ import {
 } from "@biomed/contracts";
 
 import type { ParsedDynamicFamilyBuildSubmission } from "../../agent/tools/dynamic-family-build.js";
+import type { CoreAcquisitionPlan } from "../acquisition/runtime.js";
 import type {
   CoreAcquisitionProvenance,
   SourceAssetRegistry,
@@ -45,13 +46,15 @@ export interface SubmitDynamicFamilyBuildInput {
   readonly taskRoot: string;
   readonly runtimeLimits: RuntimeLimits;
   /** Core-owned build generation bound by the preflight receipt. */
-  readonly generation?: number;
-  /** Required by the production two-phase path; absent only for legacy unit callers. */
-  readonly preflightReceipt?: DynamicFamilyPreflightReceipt;
+  readonly generation: number;
+  /** Required by the production two-phase path. */
+  readonly preflightReceipt: DynamicFamilyPreflightReceipt;
   /** The exact proposal submitted to prepare, before Core resolves acquisitions. */
-  readonly preflightSubmission?: ParsedDynamicFamilyBuildSubmission;
+  readonly preflightSubmission: ParsedDynamicFamilyBuildSubmission;
   /** Core-only cheap provider planning reused to verify the committed receipt. */
-  readonly planAcquisition?: (input: DynamicFamilyAcquisitionPlanningInput) => Promise<unknown>;
+  readonly planAcquisition?: (input: DynamicFamilyAcquisitionPlanningInput) => Promise<CoreAcquisitionPlan>;
+  /** Live Core generation fence checked by the Host during execution. */
+  readonly isGenerationCurrent?: (generation: number, cancelFence: string) => boolean;
   /** Core-internal exact acquisition identity selection; never accepted from the Agent. */
   readonly sourceAcquisitionRequestDigests?: Readonly<Record<string, string>>;
   readonly signal?: AbortSignal;
@@ -156,17 +159,24 @@ export async function submitDynamicFamilyBuild(
   input: SubmitDynamicFamilyBuildInput,
 ): Promise<SubmitDynamicFamilyBuildResult> {
   const now = input.now ?? (() => new Date());
-  if (input.preflightReceipt !== undefined) {
-    await validateDynamicFamilyPreflightReceipt({
-      receipt: input.preflightReceipt,
-      submission: input.preflightSubmission ?? input.submission,
-      taskId: input.taskId,
-      buildId: input.submission.build_proposal.build_id,
-      generation: input.generation ?? 0,
-      runtimeLimits: input.runtimeLimits,
-      planAcquisition: input.planAcquisition,
-    });
+  if (input.preflightReceipt === undefined) {
+    throw new TypeError("dynamic family submit requires a preflight receipt");
   }
+  if (input.preflightSubmission === undefined) {
+    throw new TypeError("dynamic family submit requires the prepared submission");
+  }
+  if (!Number.isSafeInteger(input.generation) || input.generation < 0) {
+    throw new TypeError("dynamic family submit requires a non-negative generation");
+  }
+  await validateDynamicFamilyPreflightReceipt({
+    receipt: input.preflightReceipt,
+    submission: input.preflightSubmission,
+    taskId: input.taskId,
+    buildId: input.submission.build_proposal.build_id,
+    generation: input.generation,
+    runtimeLimits: input.runtimeLimits,
+    planAcquisition: input.planAcquisition,
+  });
   const proposal = input.submission.build_proposal;
   const projection = input.submission.projection;
   const bindings = proposal.source_bindings;
@@ -244,10 +254,7 @@ export async function submitDynamicFamilyBuild(
       `build proposal transform_ref must bind the Host-compiled descriptor ${transformDescriptorDigest}`,
     );
   }
-  const generation = input.generation ?? 0;
-  if (!Number.isSafeInteger(generation) || generation < 0) {
-    throw new TypeError("dynamic family generation must be a non-negative safe integer");
-  }
+  const generation = input.generation;
   const invocationId = `dynamic_${sha256(`${input.taskId}\0${input.runId}\0${proposal.build_id}\0${generation}`).slice(0, 24)}`;
   const outputTables = [
     ...projection.primary_tables,
@@ -363,7 +370,10 @@ export async function submitDynamicFamilyBuild(
       return trustedRoot;
     },
     isGenerationCurrent: (candidateGeneration, cancelFence) =>
-      candidateGeneration === context.generation && cancelFence === context.cancelFence && !input.signal?.aborted,
+      candidateGeneration === context.generation
+      && cancelFence === context.cancelFence
+      && !input.signal?.aborted
+      && (input.isGenerationCurrent?.(candidateGeneration, cancelFence) ?? true),
     signal: input.signal,
     now,
   });
