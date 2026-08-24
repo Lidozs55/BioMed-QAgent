@@ -14,7 +14,7 @@ describe("ContextUsageInline", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "上下文窗口已使用 1%" }));
+    fireEvent.click(screen.getByRole("button", { name: "上下文窗口已使用 1%（估算）" }));
     const compactButton = screen.getByRole("button", { name: "压缩上下文" });
 
     expect(compactButton).toBeEnabled();
