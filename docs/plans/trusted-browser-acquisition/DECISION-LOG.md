@@ -215,3 +215,11 @@ risks, and verification results for later audit.
 - Reason: The previous empty arrays could never satisfy ProductAssessment and
   would hide a trust gap between browser evidence and a publishable candidate.
 - Status: implemented and focused-verified.
+
+## 2026-08-24 / D-026
+
+- Decision: Generate browser table provenance/confidence manifests only from
+  explicit source evidence manifests, with upstream IDs and asset closure.
+- Reason: ProductAssessment must be able to trace an integrated table back to
+  browser evidence; empty or inferred evidence is not acceptable.
+- Status: implemented and focused-verified.
