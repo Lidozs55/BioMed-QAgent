@@ -38,6 +38,17 @@
   registry (`server/src/settings/model-registry/store.ts`), not from the
   upstream response.
 
+## Active model selection
+
+- `active` on a maintained model is the authoritative current-model flag;
+  `settings.model_name` is a runtime mirror, not a selector identity.
+- When the first maintained model is created and no model is active yet,
+  the service automatically activates it so the workspace model selector is
+  immediately usable. Once a model is active, adding more models never
+  changes the current selection.
+- Deleting the active model or its provider clears the mirrored runtime
+  settings, and `resolveActiveModel` refuses an empty model identity.
+
 ## Model-level parameter profiles (2026-08-10)
 
 - `profiles.py` now carries `MODEL_PARAM_SPECS` (keyed provider → model id)

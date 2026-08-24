@@ -42,10 +42,13 @@ export function resolveActiveConfig(
   const provider = activeProvider(registry);
   const model = activeModel(registry);
   const apiKey = activeApiKey(registry, auth);
-  if (apiKey === "") throw new Error("Pi provider credentials are required");
+  const modelId = model?.model_id ?? settings.model_name;
+  if (apiKey === "" || modelId.trim() === "") {
+    throw new Error("Pi provider credentials and model are required");
+  }
   return {
     provider: provider?.preset_id ?? provider?.id ?? environment.PI_PROVIDER ?? "openai-compatible",
-    modelId: model?.model_id ?? settings.model_name,
+    modelId,
     apiKey,
     baseUrl: provider?.base_url ?? settings.base_url,
     contextWindow: model?.context_window ?? settings.context_window ?? 131_072,
