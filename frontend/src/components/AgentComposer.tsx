@@ -144,6 +144,14 @@ export function AgentComposer({
     () => sortedModels.find((m) => m.id === selectedModelId),
     [sortedModels, selectedModelId],
   );
+  const selectedModelLabel = selectedModelDisplay?.name ??
+    (
+      selectedModelId !== "" &&
+      hasApiKey &&
+      sortedModels.length === 0
+        ? selectedModelId
+        : "选择模型"
+    );
 
   // Case-insensitive search over both name and id, consumed by the Combobox
   // root's internal filtering (the input lives inside the popup).
@@ -403,7 +411,7 @@ export function AgentComposer({
                   }
                 >
                   <span className="truncate max-w-28">
-                    {selectedModelDisplay?.name ?? selectedModelId ?? "选择模型"}
+                    {selectedModelLabel}
                   </span>
                 </ComboboxTrigger>
                 <ComboboxContent

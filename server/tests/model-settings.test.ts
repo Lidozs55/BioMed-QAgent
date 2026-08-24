@@ -88,6 +88,145 @@ describe("TypeScript model settings", () => {
       .toContain("sk-secret-provider-value");
   });
 
+  test("activates the first managed model automatically and keeps it as runtime settings", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const baseUrl = await serve(service);
+
+    const providerResponse = await fetch(`${baseUrl}/api/v1/model-registry/providers`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Auto Provider",
+        base_url: "https://models.example/v1",
+        api_key: "sk-auto-secret",
+      }),
+    });
+    const provider = await providerResponse.json() as Record<string, unknown>;
+    const modelResponse = await fetch(`${baseUrl}/api/v1/model-registry/models`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        provider_id: provider.id,
+        model_id: "custom-auto",
+        context_window: 64000,
+      }),
+    });
+    const model = await modelResponse.json() as Record<string, unknown>;
+
+    expect(model.active).toBe(true);
+    const settings = await (await fetch(`${baseUrl}/api/v1/settings`)).json() as Record<string, unknown>;
+    expect(settings.model_name).toBe("custom-auto");
+    expect(settings.run_ready).toBe(true);
+    await expect(service.resolveActiveModel()).resolves.toMatchObject({
+      provider: provider.id,
+      modelId: "custom-auto",
+      apiKey: "sk-auto-secret",
+      baseUrl: "https://models.example/v1",
+    });
+  });
+
+  test("does not replace an already active model when another model is added", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const baseUrl = await serve(service);
+
+    const providerResponse = await fetch(`${baseUrl}/api/v1/model-registry/providers`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Active Provider",
+        base_url: "https://models.example/v1",
+        api_key: "sk-active-secret",
+      }),
+    });
+    const provider = await providerResponse.json() as Record<string, unknown>;
+    const create = async (modelId: string): Promise<Record<string, unknown>> => {
+      const response = await fetch(`${baseUrl}/api/v1/model-registry/models`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider_id: provider.id, model_id: modelId }),
+      });
+      return await response.json() as Record<string, unknown>;
+    };
+
+    const first = await create("first-model");
+    const second = await create("second-model");
+    const models = await (await fetch(`${baseUrl}/api/v1/model-registry/models`)).json() as Array<Record<string, unknown>>;
+    const active = models.filter((model) => model.active === true);
+
+    expect(first.active).toBe(true);
+    expect(second.active).toBe(false);
+    expect(active).toHaveLength(1);
+    expect((active[0] as Record<string, unknown>).model_id).toBe("first-model");
+    expect((await service.resolveActiveModel()).modelId).toBe("first-model");
+  });
+
+  test("clears active runtime settings when the active model is deleted", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const baseUrl = await serve(service);
+    const providerResponse = await fetch(`${baseUrl}/api/v1/model-registry/providers`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Delete Provider",
+        base_url: "https://models.example/v1",
+        api_key: "sk-delete-secret",
+      }),
+    });
+    const provider = await providerResponse.json() as Record<string, unknown>;
+    const modelResponse = await fetch(`${baseUrl}/api/v1/model-registry/models`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ provider_id: provider.id, model_id: "delete-me" }),
+    });
+    const model = await modelResponse.json() as Record<string, unknown>;
+
+    await fetch(`${baseUrl}/api/v1/model-registry/models/${String(model.id)}`, {
+      method: "DELETE",
+    });
+    const settings = await (await fetch(`${baseUrl}/api/v1/settings`)).json() as Record<string, unknown>;
+
+    expect(settings.model_name).toBe("");
+    expect(settings.run_ready).toBe(false);
+    expect(settings.run_block_reason).not.toBeNull();
+    await expect(service.resolveActiveModel()).rejects.toThrow();
+  });
+
+  test("clears active runtime settings when the active provider is deleted", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const baseUrl = await serve(service);
+    const providerResponse = await fetch(`${baseUrl}/api/v1/model-registry/providers`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Delete Provider Active",
+        base_url: "https://models.example/v1",
+        api_key: "sk-delete-provider-secret",
+      }),
+    });
+    const provider = await providerResponse.json() as Record<string, unknown>;
+    const modelResponse = await fetch(`${baseUrl}/api/v1/model-registry/models`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ provider_id: provider.id, model_id: "delete-provider-model" }),
+    });
+    const model = await modelResponse.json() as Record<string, unknown>;
+
+    await fetch(`${baseUrl}/api/v1/model-registry/providers/${String(provider.id)}`, {
+      method: "DELETE",
+    });
+    const settings = await (await fetch(`${baseUrl}/api/v1/settings`)).json() as Record<string, unknown>;
+
+    expect(settings.model_name).toBe("");
+    expect(settings.run_ready).toBe(false);
+    expect(settings.run_block_reason).not.toBeNull();
+    await expect(service.resolveActiveModel()).rejects.toThrow();
+    expect(model.id).toBeTruthy();
+  });
+
   test("persists, validates, and resets runtime limits", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
     const service = await ModelSettingsService.create({ settingsDir, environment: {} });

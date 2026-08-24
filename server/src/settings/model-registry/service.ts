@@ -149,6 +149,12 @@ export class ModelSettingsService {
       : this.auth.provider_api_keys[settings.provider_id] ?? "";
     const contextWindow = settings.context_window ?? 131_072;
     const reserve = Math.ceil(contextWindow * settings.safety_reserve_ratio);
+    const modelName = settings.model_name.trim();
+    const runBlockReason = apiKey === ""
+      ? "provider credentials are required"
+      : modelName === ""
+        ? "model configuration is required"
+        : null;
     return {
       base_url: settings.base_url,
       api_key: maskApiKey(apiKey),
@@ -163,8 +169,8 @@ export class ModelSettingsService {
       compaction_trigger_ratio: settings.compaction_trigger_ratio,
       compaction_target_ratio: settings.compaction_target_ratio,
       available_input_tokens: Math.max(1, contextWindow - settings.max_tokens - reserve),
-      run_ready: apiKey !== "",
-      run_block_reason: apiKey === "" ? "provider credentials are required" : null,
+      run_ready: apiKey !== "" && runBlockReason === null,
+      run_block_reason: runBlockReason,
       runtime_limits: settings.runtime_limits,
     };
   }
@@ -260,12 +266,20 @@ export class ModelSettingsService {
   deleteProvider(id: string): Promise<void> {
     return this.mutate(() => {
       this.provider(id);
+      const wasActiveProvider =
+        this.registry.settings.provider_id === id ||
+        (
+          this.registry.settings.active_model_id !== null &&
+          this.registry.models.some(
+            (item) => item.id === this.registry.settings.active_model_id &&
+              item.provider_id === id,
+          )
+        );
       this.registry.providers = this.registry.providers.filter((item) => item.id !== id);
       this.registry.models = this.registry.models.filter((item) => item.provider_id !== id);
       delete this.auth.provider_api_keys[id];
-      if (this.registry.settings.provider_id === id) {
-        this.registry.settings.provider_id = null;
-        this.registry.settings.active_model_id = null;
+      if (wasActiveProvider) {
+        this.clearActiveModel();
       }
     });
   }
@@ -306,7 +320,16 @@ export class ModelSettingsService {
         created_at: current,
         updated_at: current,
       };
+      const hasActiveModel =
+        this.registry.models.some((item) => item.active) ||
+        (
+          this.registry.settings.active_model_id !== null &&
+          this.registry.models.some(
+            (item) => item.id === this.registry.settings.active_model_id,
+          )
+        );
       this.registry.models.push(created);
+      if (!hasActiveModel) this.activateInMemory(created);
     }).then(() => created);
   }
 
@@ -330,7 +353,7 @@ export class ModelSettingsService {
       this.model(id);
       this.registry.models = this.registry.models.filter((item) => item.id !== id);
       if (this.registry.settings.active_model_id === id) {
-        this.registry.settings.active_model_id = null;
+        this.clearActiveModel();
       }
     });
   }
@@ -407,6 +430,15 @@ export class ModelSettingsService {
     if (typeof model.params.repetition_penalty === "number") settings.advanced.repetition_penalty = model.params.repetition_penalty;
     if (typeof model.params.enable_search === "boolean") settings.advanced.enable_search = model.params.enable_search;
     if (typeof model.params.thinking_mode === "boolean") settings.advanced.thinking_mode = model.params.thinking_mode;
+  }
+
+  private clearActiveModel(): void {
+    const settings = this.registry.settings;
+    settings.provider_id = null;
+    settings.active_model_id = null;
+    settings.model_name = "";
+    settings.base_url = "";
+    settings.context_window = null;
   }
 
   /**

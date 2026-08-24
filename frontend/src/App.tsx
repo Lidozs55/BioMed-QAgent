@@ -26,7 +26,11 @@ import {
   type ModelInfo,
   type ModelSettings,
 } from "@/hooks/useAPI";
-import { managedModelsToChoices } from "@/lib/modelChoices";
+import {
+  hasConfiguredModelApiKey,
+  managedModelsToChoices,
+  resolveActiveModelId,
+} from "@/lib/modelChoices";
 import { errorMessage } from "@/lib/utils";
 import { RuntimeController } from "@/runtime/controller";
 
@@ -94,12 +98,14 @@ export default function App() {
     try {
       const currentSettings = await api.fetchSettings();
       setSettings(currentSettings);
-      setSelectedModelId(currentSettings.model_name);
       const managed = await api.fetchManagedModels().catch(() => []);
       setManagedModels(managed);
       setModels(managedModelsToChoices(managed));
+      setSelectedModelId(resolveActiveModelId(currentSettings, managed));
     } catch {
       setModels([]);
+      setManagedModels([]);
+      setSelectedModelId("");
     }
   }, [api]);
 
@@ -121,12 +127,20 @@ export default function App() {
 
   const handleModelChange = useCallback(
     async (modelId: string) => {
-      const model = managedModels.find((entry) => entry.model_id === modelId);
+      const model = managedModels.find((entry) => entry.id === modelId);
       if (!model) return;
       try {
         const updated = await api.activateManagedModel(model.id);
         setSettings(updated);
-        setSelectedModelId(updated.model_name);
+        setSelectedModelId(model.id);
+        setManagedModels((current) => current.map((entry) => ({
+          ...entry,
+          active: entry.id === model.id,
+        })));
+        setModels((current) => current.map((choice) => ({
+          ...choice,
+          recommended: choice.id === model.id,
+        })));
         toast.success(`已切换当前模型为 ${model.name}`);
       } catch {
         toast.error("模型切换失败");
@@ -237,7 +251,7 @@ export default function App() {
                   api.injectTaskContext(taskId, text)
                 }
                 models={models}
-                hasApiKey={models.length > 0}
+                hasApiKey={hasConfiguredModelApiKey(settings, models)}
                 selectedModelId={selectedModelId}
                 onModelChange={handleModelChange}
                 onOpenSettings={() => setSettingsOpen(true)}

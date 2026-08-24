@@ -442,11 +442,54 @@ describe("SettingsPanel model registry", () => {
     expect(screen.queryByText("当前模型")).not.toBeInTheDocument();
   });
 
+  it("hides the phantom current-model panel when only a stale default name exists", async () => {
+    const api = mockApi({
+      fetchSettings: vi.fn().mockResolvedValue({
+        ...TEST_SETTINGS,
+        model_name: "qwen-plus",
+        api_key_configured: false,
+      }),
+      fetchManagedModels: vi.fn().mockResolvedValue([
+        { ...TEST_MODELS[0], active: false },
+      ]),
+    });
+    renderSettings(api);
+
+    await screen.findByText("供应商管理");
+    expect(screen.queryByText("当前模型")).not.toBeInTheDocument();
+  });
+
+  it("uses the active managed model even when settings.model_name is stale", async () => {
+    const api = mockApi({
+      fetchSettings: vi.fn().mockResolvedValue({
+        ...TEST_SETTINGS,
+        model_name: "qwen-plus",
+        api_key_configured: false,
+      }),
+      fetchManagedModels: vi.fn().mockResolvedValue([
+        {
+          ...TEST_MODELS[0],
+          active: true,
+        },
+      ]),
+    });
+    renderSettings(api);
+
+    const currentSection = (await screen.findByRole("heading", {
+      name: "当前模型",
+    })).closest("section");
+    expect(currentSection).not.toBeNull();
+    expect(
+      within(currentSection as HTMLElement).getByText("DeepSeek Reasoner"),
+    ).toBeVisible();
+  });
+
   it("shows active model information without parameter editing controls", async () => {
     const api = mockApi({
       fetchManagedModels: vi.fn().mockResolvedValue([
         {
           ...TEST_MODELS[0],
+          active: true,
           model_id: "deepseek-chat",
           name: "DeepSeek Chat",
           params: { temperature: 0.7, max_tokens: 8192 },
