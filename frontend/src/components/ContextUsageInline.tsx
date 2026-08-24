@@ -120,7 +120,7 @@ export function ContextUsageInline({
             size="sm"
             variant="outline"
             className="h-8 w-full gap-1.5 text-xs"
-            disabled={compacting || pct <= 65}
+            disabled={compacting}
             onClick={handleCompact}
           >
             {compacting ? (

@@ -6,6 +6,7 @@ import {
 } from "@phosphor-icons/react";
 import { toast } from "sonner";
 
+import { isNothingToCompactError } from "@/lib/compactErrors";
 import { AgentComposer } from "@/components/AgentComposer";
 import { LoadingScreen } from "@/components/LoadingScreen";
 import {
@@ -314,7 +315,13 @@ export function ChatPanel({
       await compactTask(activeTaskId);
       toast.success("上下文压缩已触发", { description: "早期内容将被摘要以释放上下文空间" });
     } catch (e) {
-      toast.error("压缩失败", { description: e instanceof Error ? e.message : "请求失败" });
+      if (isNothingToCompactError(e)) {
+        toast.info("当前没有可压缩的对话内容", {
+          description: "上下文尚无可摘要的早期内容，继续对话即可",
+        });
+      } else {
+        toast.error("压缩失败", { description: e instanceof Error ? e.message : "请求失败" });
+      }
     } finally {
       setCompacting(false);
     }

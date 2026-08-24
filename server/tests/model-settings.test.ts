@@ -75,7 +75,7 @@ describe("TypeScript model settings", () => {
       contextWindow: 64000,
       maxTokens: 3072,
       compactionTriggerRatio: 0.85,
-      compactionTargetRatio: 0.6,
+      compactionTargetRatio: 0.45,
       temperature: 0.25,
       topP: 0.8,
       repetitionPenalty: 1,

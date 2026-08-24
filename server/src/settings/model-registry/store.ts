@@ -111,7 +111,7 @@ export function defaultRegistry(environment: Record<string, string | undefined>)
       context_window: null,
       safety_reserve_ratio: 0.05,
       compaction_trigger_ratio: 0.85,
-      compaction_target_ratio: 0.6,
+      compaction_target_ratio: 0.45,
       advanced: { ...ADVANCED_DEFAULTS },
       runtime_limits: { ...RUNTIME_DEFAULTS },
       runtime_limits_version: 1,
