@@ -28,18 +28,19 @@ import { parseAdapterParams } from "../contracts/index.js";
 import { CHECKPOINT_STRIDE, checkpoint } from "../cooperative.js";
 import {
   SourceAdapter,
+  sourceLongIdentityValues,
   type ExtractContext,
   type ExtractResult,
   type RowWriter,
 } from "./base.js";
 import { AdapterError, BuildError, EmptySourceError } from "./errors.js";
 import { geoExpressionAdapter } from "./geo/index.js";
-import { makeRecordId } from "./identity.js";
 import { type DelimitedRow } from "./text.js";
 
 export {
   REJECTED_COLUMNS,
   SOURCE_LONG_COLUMNS,
+  SOURCE_LONG_COLUMNS_V2,
   SourceAdapter,
   rowGranularityFor,
   type RowWriter,
@@ -67,12 +68,13 @@ function mapping(options: {
   targetField: string;
   transform: string;
   evidence: string;
+  targetSchemaRef?: string;
 }): FieldMapping {
   return {
     schema_version: "1.0",
     mapping_id: `map_${options.bindingId}_${options.mappingId}`,
     source_schema_ref: `binding_${options.bindingId}.source`,
-    target_schema_ref: "gene_expression.long.v1",
+    target_schema_ref: options.targetSchemaRef ?? "gene_expression.long.v1",
     source_field: options.sourceField,
     target_field: options.targetField,
     transform: options.transform,
@@ -89,6 +91,7 @@ function wideMatrixMappings(options: {
   samples: readonly string[];
   geneEvidence: string;
   sampleEvidence: string;
+  targetSchemaRef?: string;
 }): FieldMapping[] {
   const mappings = [
     mapping({
@@ -98,6 +101,7 @@ function wideMatrixMappings(options: {
       targetField: "gene_id_raw",
       transform: "identity",
       evidence: options.geneEvidence,
+      targetSchemaRef: options.targetSchemaRef,
     }),
   ];
   for (const sample of options.samples) {
@@ -109,6 +113,7 @@ function wideMatrixMappings(options: {
         targetField: "sample_id",
         transform: "wide_to_long_sample_id",
         evidence: options.sampleEvidence,
+        targetSchemaRef: options.targetSchemaRef,
       }),
     );
     mappings.push(
@@ -119,6 +124,7 @@ function wideMatrixMappings(options: {
         targetField: "expression_value",
         transform: "wide_to_long_value",
         evidence: options.sampleEvidence,
+        targetSchemaRef: options.targetSchemaRef,
       }),
     );
   }
@@ -161,15 +167,19 @@ function longRow(options: {
   expressionValue: string;
   expressionUnit: string;
   sourceName: string;
+  identityContext: ExtractContext["identityContext"];
   line: number;
   column: number;
   columnName: string;
 }): string[] {
   return [
-    makeRecordId(options.buildId, options.geneIdRaw, options.sampleId),
-    options.buildId,
-    options.sourceAsset.source_id,
-    options.sourceAsset.asset_id,
+    ...sourceLongIdentityValues({
+      identityContext: options.identityContext,
+      buildId: options.buildId,
+      sourceAsset: options.sourceAsset,
+      geneIdRaw: options.geneIdRaw,
+      sampleId: options.sampleId,
+    }),
     options.geneIdRaw,
     // Python _long_row omits gene_id_namespace_declared; DictWriter writes "".
     "",
@@ -197,6 +207,7 @@ function emitMatrixCells(options: {
   sourceAsset: SourceAsset;
   buildId: string;
   sourceName: string;
+  identityContext: ExtractContext["identityContext"];
   line: number;
   values: readonly string[];
   header: readonly string[];
@@ -238,6 +249,7 @@ function emitMatrixCells(options: {
         expressionValue: raw,
         expressionUnit: "expression_value",
         sourceName: options.sourceName,
+        identityContext: options.identityContext,
         line: options.line,
         column,
         columnName: sampleId,
@@ -328,7 +340,7 @@ export class GdcExpressionAdapter extends SourceAdapter {
     context: ExtractContext & { headerLine: number; header: string[] },
     signal?: AbortSignal | null,
   ): Promise<ExtractResult> {
-    const { headerLine, header, sourceAsset, buildId, bindingId, sourceName } = context;
+    const { headerLine, header, sourceAsset, buildId, bindingId, sourceName, identityContext, schemaRef } = context;
     const samples = header
       .slice(1)
       .filter((column) => !GDC_ANNOTATION_COLUMNS.has(column));
@@ -346,6 +358,7 @@ export class GdcExpressionAdapter extends SourceAdapter {
       samples,
       geneEvidence: "GDC files API: gene_id column header",
       sampleEvidence: "matrix sample column header",
+      targetSchemaRef: identityContext === null ? undefined : schemaRef,
     });
     let sourceRowCount = 0;
     let rowCount = 0;
@@ -365,6 +378,7 @@ export class GdcExpressionAdapter extends SourceAdapter {
         sourceAsset,
         buildId,
         sourceName,
+        identityContext,
         line,
         values,
         header,
@@ -397,7 +411,7 @@ export class GdcExpressionAdapter extends SourceAdapter {
     context: ExtractContext & { headerLine: number; header: string[] },
     signal?: AbortSignal | null,
   ): Promise<ExtractResult> {
-    const { headerLine, header, sourceAsset, buildId, bindingId, sourceName } = context;
+    const { headerLine, header, sourceAsset, buildId, bindingId, sourceName, identityContext, schemaRef } = context;
     if (new Set(header).size !== header.length) {
       throw new AdapterError("GDC STAR-counts columns must be unique");
     }
@@ -412,6 +426,7 @@ export class GdcExpressionAdapter extends SourceAdapter {
         targetField: "gene_id_raw",
         transform: "identity",
         evidence: "GDC STAR-counts gene_id column",
+        targetSchemaRef: identityContext === null ? undefined : schemaRef,
       }),
       mapping({
         mappingId: "metric_to_value",
@@ -420,6 +435,7 @@ export class GdcExpressionAdapter extends SourceAdapter {
         targetField: "expression_value",
         transform: "column_value",
         evidence: "GDC STAR-counts metric column",
+        targetSchemaRef: identityContext === null ? undefined : schemaRef,
       }),
       mapping({
         mappingId: "filename_to_sample",
@@ -428,6 +444,7 @@ export class GdcExpressionAdapter extends SourceAdapter {
         targetField: "sample_id",
         transform: "filename_sample",
         evidence: "GDC STAR-counts file naming (one sample per file)",
+        targetSchemaRef: identityContext === null ? undefined : schemaRef,
       }),
     ];
     const isTpm = metric === "tpm_unstranded";
@@ -492,6 +509,7 @@ export class GdcExpressionAdapter extends SourceAdapter {
           expressionValue: raw,
           expressionUnit: metric,
           sourceName,
+          identityContext,
           line,
           column: metricColumn,
           columnName: metric,
@@ -532,7 +550,7 @@ export class XenaMatrixAdapter extends SourceAdapter {
     signal?: AbortSignal | null,
   ): Promise<ExtractResult> {
     const { headerLine, header } = await nextHeaderAsync(rows);
-    const { sourceAsset, buildId, bindingId, sourceName } = context;
+    const { sourceAsset, buildId, bindingId, sourceName, identityContext, schemaRef } = context;
     const samples = header.slice(1);
     if (samples.length === 0 || samples.some((sample) => sample.length === 0)) {
       throw new AdapterError("Xena matrix sample headers must not be blank");
@@ -545,6 +563,7 @@ export class XenaMatrixAdapter extends SourceAdapter {
       samples,
       geneEvidence: "Xena matrix gene_id column header",
       sampleEvidence: "matrix sample column header",
+      targetSchemaRef: identityContext === null ? undefined : schemaRef,
     });
     let sourceRowCount = 0;
     let rowCount = 0;
@@ -569,6 +588,7 @@ export class XenaMatrixAdapter extends SourceAdapter {
         sourceAsset,
         buildId,
         sourceName,
+        identityContext,
         line,
         values,
         header,

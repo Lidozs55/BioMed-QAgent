@@ -5,6 +5,7 @@
 
 export * from "./errors.js";
 export * from "./identity.js";
+export * from "./identity-context.js";
 export * from "./hashing.js";
 export * from "./text.js";
 export * from "./adapters.js";

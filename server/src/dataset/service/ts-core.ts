@@ -25,6 +25,7 @@ import type {
   JsonValue,
   ProviderRevisionEvidenceV1,
   PublicationCandidate,
+  SourceAssetRegistrationReceipt,
 } from "@biomed/contracts";
 
 import type {
@@ -74,6 +75,10 @@ import type { HumanReviewState } from "../contracts/data.js";
 import type { DeterministicDeriveCapability } from "../derive/index.js";
 import { executeRegisteredMultiTableBuild } from "../runtime/registered-multitable.js";
 import { resolveCoreReleaseIdentity, type CoreReleaseIdentity } from "../runtime/release-identity.js";
+import {
+  deriveProductionExpressionIdentity,
+} from "../identity/production.js";
+import type { ExpressionAdapterIdentityContext } from "../adapters/identity-context.js";
 
 export interface TypeScriptDatasetCoreOptions {
   taskId: string;
@@ -109,6 +114,8 @@ export interface ExecuteContext {
   metadataAssets?: Readonly<Record<string, SourceAsset>>;
   /** Core-verified provider facts, or explicit absence for unchanged V1 paths. */
   providerRevisionEvidence?: readonly ProviderRevisionEvidenceV1[] | null;
+  /** Exact task-owned registration receipts resolved for this build. */
+  registrationReceipts?: readonly SourceAssetRegistrationReceipt[] | null;
   /** Optional server-owned fixed derive slot. */
   deriveRequest?: DeterministicDeriveRequest | null;
   deriveCapability?: DeterministicDeriveCapability | null;
@@ -274,6 +281,8 @@ export function createTsCoreOperationRunner(options: {
   registeredSourceAssetIds?: ReadonlySet<string>;
   mappingAssets: Readonly<Record<string, SourceAsset>>;
   metadataAssets: Readonly<Record<string, SourceAsset>>;
+  identityContexts?: ReadonlyMap<string, ExpressionAdapterIdentityContext>;
+  identityContext?: Pick<ExpressionAdapterIdentityContext, "datasetId" | "datasetRevisionId" | "carrierAssetIds"> | null;
   deriveRequest?: DeterministicDeriveRequest | null;
   deriveCapability?: DeterministicDeriveCapability | null;
   runnerState: RunnerState;
@@ -284,7 +293,20 @@ export function createTsCoreOperationRunner(options: {
   fence?: (() => Promise<boolean>) | null;
   hilGate?: DatasetHILGate | null;
 }): OperationRunner {
-  const { spec, taskId, taskRoot, outputDir, sourceAssets, mappingAssets, metadataAssets, runnerState, bindings, rehydratedBindingIds } = options;
+  const {
+    spec,
+    taskId,
+    taskRoot,
+    outputDir,
+    sourceAssets,
+    mappingAssets,
+    metadataAssets,
+    runnerState,
+    bindings,
+    rehydratedBindingIds,
+  } = options;
+  const identityContexts = options.identityContexts ?? new Map<string, ExpressionAdapterIdentityContext>();
+  const identityContext = options.identityContext ?? null;
   const registeredSourceAssetIds = options.registeredSourceAssetIds ?? null;
   const fence = options.fence ?? null;
   const hilGate = options.hilGate ?? null;
@@ -347,6 +369,7 @@ export function createTsCoreOperationRunner(options: {
           outputDir,
           parameters,
           metadataPath,
+          identityContext: identityContexts.get(binding.binding_id) ?? null,
           signal,
         });
         runnerState.batches.set(binding.binding_id, batch);
@@ -467,6 +490,7 @@ export function createTsCoreOperationRunner(options: {
           buildId: spec.build_id,
           outputDir,
           signal,
+          identityContext,
         });
         runnerState.integration = integration;
         const successfulAssetIds = runnerState.canonicalResults
@@ -729,9 +753,9 @@ export class TypeScriptDatasetCore {
     spec: DatasetBuildSpec,
     context: ValidateContext = { providerRevisionEvidence: null },
   ): Promise<SpecValidationResult> {
-    // V1 admission intentionally ignores these future authoritative facts.
-    // Keeping explicit null in the context prevents local fallback synthesis.
-    void context.providerRevisionEvidence;
+    if (spec.schema_ref === "gene_expression.long.v2" || spec.schema_ref === "gene_expression.probe_long.v2") {
+      requireAuthoritativeProviderRevisionEvidence(context);
+    }
     const familyRegistry = createDefaultDatasetFamilyRegistry();
     const validator = new SpecValidator(
       familyRegistry.schemaRegistry(),
@@ -752,6 +776,15 @@ export class TypeScriptDatasetCore {
     const familyRegistry = createDefaultDatasetFamilyRegistry();
     const family = familyRegistry.get(spec.dataset_family);
     familyRegistry.schemaRegistry().get(spec.schema_ref);
+    const identityDerivation = deriveProductionExpressionIdentity({
+      spec,
+      taskId,
+      sourceAssets: context.sourceAssets ?? {},
+      mappingAssets: context.mappingAssets ?? {},
+      metadataAssets: context.metadataAssets ?? {},
+      providerRevisionEvidence: context.providerRevisionEvidence,
+      registrationReceipts: context.registrationReceipts,
+    });
     if (family.runtime_id === "registered_multitable.runtime.v1") {
       if (context.registeredSourceAssetIds === undefined) {
         throw new BuildError("registered multi-table execution requires task-owned registered asset IDs");
@@ -819,6 +852,8 @@ export class TypeScriptDatasetCore {
       registeredSourceAssetIds: context.registeredSourceAssetIds,
       mappingAssets: context.mappingAssets ?? {},
       metadataAssets: context.metadataAssets ?? {},
+      identityContexts: identityDerivation?.byBinding ?? new Map(),
+      identityContext: identityDerivation?.context ?? null,
       deriveRequest: context.deriveRequest ?? null,
       deriveCapability: context.deriveCapability ?? null,
       runnerState,

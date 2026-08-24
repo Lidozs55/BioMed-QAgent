@@ -24,6 +24,7 @@ import { asPosix } from "../adapters/paths.js";
 import { delimitedRowsFromFileAsync } from "../adapters/text.js";
 import type { DataBatch, DatasetSchema, FileAsset } from "../contracts/index.js";
 import { parseDataBatch, parseFileAsset } from "../contracts/index.js";
+import type { ExpressionAdapterIdentityContext } from "../adapters/identity-context.js";
 
 export const MERGE_STRATEGY_APPEND = "append_by_canonical_row";
 
@@ -88,8 +89,19 @@ export async function integrate(options: {
   signal?: AbortSignal | null;
   /** WP-A6: bound the temp key-table's on-disk size (bytes). */
   tempStore?: { quotaBytes: number };
+  /** Core-derived identity capability for revision-scoped V2 integration. */
+  identityContext?: Pick<ExpressionAdapterIdentityContext, "datasetId" | "datasetRevisionId" | "carrierAssetIds"> | null;
 }): Promise<IntegrationResult> {
-  const { results, mergeStrategy, schema, buildId, outputDir, signal, tempStore } = options;
+  const {
+    results,
+    mergeStrategy,
+    schema,
+    buildId,
+    outputDir,
+    signal,
+    tempStore,
+    identityContext = null,
+  } = options;
   throwIfAborted(signal);
   const strategy = MERGE_STRATEGY_ALIASES[mergeStrategy] ?? mergeStrategy;
   if (strategy !== MERGE_STRATEGY_APPEND) {
@@ -112,6 +124,10 @@ export async function integrate(options: {
   const idField = schema.fields.some((field) => field.name === "probe_id")
     ? "probe_id"
     : "gene_id";
+  const revisionScoped = schema.fields.some((field) => field.name === "dataset_revision_id");
+  if (revisionScoped && identityContext === null) {
+    throw new IntegratorError("revision-scoped integration requires Core-derived dataset identity");
+  }
   // WP-A6: column-name whitelist before the identity tuple is interpolated
   // into SQL, so an out-of-contract schema cannot inject a column reference.
   if (idField !== "gene_id" && idField !== "probe_id") {
@@ -123,12 +139,15 @@ export async function integrate(options: {
   let tempStoreBytes = 0;
   let tempStoreRows: number;
   const quotaBytes = tempStore?.quotaBytes ?? TEMP_STORE_DEFAULT_QUOTA_BYTES;
+  const conflictColumns = revisionScoped
+    ? ["conflict_id", "dataset_revision_id", ...CONFLICT_COLUMNS.slice(1)]
+    : CONFLICT_COLUMNS;
 
 // Streamed outputs: row buffers are flushed in bounded chunks so the
   // merged/conflicts files never accumulate in memory (M2 large-file fix;
   // same shared BufferedCsvWriter the source adapters use).
   const mergedWriter = new BufferedCsvWriter(mergedPath, columns);
-  const conflictWriter = new BufferedCsvWriter(conflictsPath, CONFLICT_COLUMNS);
+  const conflictWriter = new BufferedCsvWriter(conflictsPath, conflictColumns);
   // WP-A6: O(unique) `seen` Map is replaced by a disk-backed temp table
   // (same canonical identity, first-source-wins), so peak JS heap stays flat
   // while rows scale. Task-path temp db is discarded in `finally`.
@@ -139,20 +158,24 @@ export async function integrate(options: {
     db.exec("PRAGMA synchronous=OFF;");
     db.exec(`
       CREATE TABLE seen (
+        ${revisionScoped ? "dataset_revision_id TEXT NOT NULL," : ""}
         ${idField} TEXT NOT NULL,
         sample_id TEXT NOT NULL,
         measurement_type TEXT NOT NULL,
         value_semantics TEXT NOT NULL,
         value TEXT NOT NULL,
         asset_id TEXT NOT NULL,
-        PRIMARY KEY (${idField}, sample_id, measurement_type, value_semantics)
+        PRIMARY KEY (${revisionScoped ? "dataset_revision_id, " : ""}${idField}, sample_id, measurement_type, value_semantics)
       )
     `);
+    const keyColumns = revisionScoped
+      ? ["dataset_revision_id", idField, "sample_id", "measurement_type", "value_semantics"]
+      : [idField, "sample_id", "measurement_type", "value_semantics"];
     const insertSeen = db.prepare(
-      `INSERT INTO seen (${idField}, sample_id, measurement_type, value_semantics, value, asset_id) VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO seen (${keyColumns.join(", ")}, value, asset_id) VALUES (${keyColumns.map(() => "?").join(", ")}, ?, ?)`,
     );
     const selectSeen = db.prepare(
-      `SELECT value, asset_id FROM seen WHERE ${idField}=? AND sample_id=? AND measurement_type=? AND value_semantics=?`,
+      `SELECT value, asset_id FROM seen WHERE ${keyColumns.map((column) => `${column}=?`).join(" AND ")}`,
     );
     // WP-A6: insert in bounded transactions (one per checkpoint stride). The
     // dedup SELECT always sees prior rows (cached pages), COMMIT flushes to
@@ -172,7 +195,13 @@ export async function integrate(options: {
           tempStoreBytes = await enforceTempQuota(tempDbPath, quotaBytes);
           if (inTransaction) db.exec("BEGIN");
         }
-        const keyParts = rowIdentity(row, idField);
+        const keyParts = rowIdentity(row, idField, revisionScoped);
+        if (identityContext !== null && (
+          row.dataset_id !== identityContext.datasetId
+          || row.dataset_revision_id !== identityContext.datasetRevisionId
+        )) {
+          throw new IntegratorError("canonical row identity does not match Core-derived dataset identity");
+        }
         const value = row["expression_value"] ?? "";
         const existing = selectSeen.get(...keyParts) as
           | { value: string; asset_id: string }
@@ -190,11 +219,11 @@ export async function integrate(options: {
           continue;
         }
         conflictWriter.writeRow([
-          `conflict_${keyParts[0]}_${keyParts[1]}_${rowCount}`,
-          keyParts[0],
-          keyParts[1],
-          keyParts[2],
-          keyParts[3],
+          revisionScoped
+            ? `conflict_${keyParts.join("_")}_${rowCount}`
+            : `conflict_${keyParts[0]}_${keyParts[1]}_${rowCount}`,
+          ...(revisionScoped ? [keyParts[0]] : []),
+          ...(revisionScoped ? keyParts.slice(1) : keyParts),
           existing.asset_id,
           existing.value,
           row["asset_id"] ?? "",
@@ -240,7 +269,11 @@ export async function integrate(options: {
     conflict_count: conflictCount,
     source_batches: results.map((result) => result.batch.binding_id),
     merge_strategy: MERGE_STRATEGY_APPEND,
-    dataset_id: buildId,
+    dataset_id: identityContext?.datasetId ?? buildId,
+    ...(identityContext === null ? {} : {
+      dataset_revision_id: identityContext.datasetRevisionId,
+      carrier_asset_ids: [...identityContext.carrierAssetIds],
+    }),
   };
   const mergedBatch = parseDataBatch({
     schema_version: "1.0",
@@ -297,8 +330,10 @@ async function enforceTempQuota(
 function rowIdentity(
   row: Record<string, string>,
   idField: string,
-): [string, string, string, string] {
+  revisionScoped: boolean,
+): string[] {
   return [
+    ...(revisionScoped ? [row.dataset_revision_id ?? ""] : []),
     row[idField] ?? "",
     row["sample_id"] ?? "",
     row["measurement_type"] ?? "",

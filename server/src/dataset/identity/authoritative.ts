@@ -35,7 +35,7 @@ const FACT_KEYS = new Set([
 export type ExpressionV2SchemaRef =
   | "gene_expression.long.v2"
   | "gene_expression.probe_long.v2";
-export type RegistrationRole = "source" | "mapping" | "metadata";
+export type RegistrationRole = "source" | "mapping" | "metadata" | "carrier";
 
 export interface SourceAssetRegistrationFact {
   readonly bindingId: string;
@@ -48,7 +48,7 @@ export interface SourceAssetRegistrationFact {
   readonly buildId: string;
   readonly generation: number;
   readonly providerSnapshot: string;
-  readonly revisionToken: string;
+  readonly revisionToken: string | null;
   readonly accession: string;
 }
 
@@ -68,7 +68,7 @@ export interface AuthoritativeDatasetIdentityContext {
   readonly datasetRevisionId: string;
   readonly carrierAssetIds: readonly string[];
   readonly providerSnapshot: string;
-  readonly revisionToken: string;
+  readonly revisionToken: string | null;
   readonly schemaRef: ExpressionV2SchemaRef;
   readonly primaryKey: readonly string[];
   readonly sampleIdentityFields: readonly ["dataset_revision_id", "sample_id"];
@@ -130,7 +130,7 @@ function parseFact(value: unknown, index: number): SourceAssetRegistrationFact {
   const label = `facts[${index}]`;
   const record = snapshot(value, FACT_KEYS, label);
   const role = record.role;
-  if (role !== "source" && role !== "mapping" && role !== "metadata") {
+  if (role !== "source" && role !== "mapping" && role !== "metadata" && role !== "carrier") {
     throw new TypeError(`${label}.role is not registered`);
   }
   const assetId = validateAssetId(stringValue(record.assetId, `${label}.assetId`));
@@ -149,7 +149,9 @@ function parseFact(value: unknown, index: number): SourceAssetRegistrationFact {
     buildId: safeId(record.buildId, `${label}.buildId`),
     generation: safeInteger(record.generation, `${label}.generation`),
     providerSnapshot: stringValue(record.providerSnapshot, `${label}.providerSnapshot`),
-    revisionToken: stringValue(record.revisionToken, `${label}.revisionToken`),
+    revisionToken: record.revisionToken === null
+      ? null
+      : stringValue(record.revisionToken, `${label}.revisionToken`),
     accession: stringValue(record.accession, `${label}.accession`),
   });
 }
@@ -163,7 +165,7 @@ export function createAuthoritativeDatasetIdentityContext(
   const generation = safeInteger(record.generation, "generation");
   const schemaRef = record.schemaRef;
   if (schemaRef !== "gene_expression.long.v2" && schemaRef !== "gene_expression.probe_long.v2") {
-    throw new TypeError("schemaRef is not an unregistered expression V2 schema");
+    throw new TypeError("schemaRef must be a registered expression V2 schema");
   }
   if (!Array.isArray(record.canonicalAccessions) || !Object.isFrozen(record.canonicalAccessions)) {
     throw new TypeError("canonicalAccessions must be a frozen array");

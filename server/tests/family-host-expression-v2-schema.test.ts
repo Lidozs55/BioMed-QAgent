@@ -52,7 +52,7 @@ describe("family-host expression revision-scoped V2 schema primitives", () => {
     expect(parseDatasetSchemaV2(revisionScoped)).toEqual(revisionScoped);
   });
 
-  it("uses explicit V2 nullability and stays out of the production registry until receipt wiring lands", () => {
+  it("uses explicit V2 nullability and is registered after receipt wiring", () => {
     for (const schema of [buildGeneExpressionSchemaV2(), buildProbeExpressionSchemaV2()]) {
       expect(schema.schema_version).toBe("2.0");
       expect(schema.fields.every((field) =>
@@ -61,7 +61,7 @@ describe("family-host expression revision-scoped V2 schema primitives", () => {
     }
 
     const registry = createDefaultSchemaRegistry();
-    expect(registry.contains("gene_expression.long.v2")).toBe(false);
-    expect(registry.contains("gene_expression.probe_long.v2")).toBe(false);
+    expect(registry.contains("gene_expression.long.v2")).toBe(true);
+    expect(registry.contains("gene_expression.probe_long.v2")).toBe(true);
   });
 });

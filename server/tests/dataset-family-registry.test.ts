@@ -135,6 +135,8 @@ describe("DatasetFamilyRegistry", () => {
       validation_profiles_by_schema: {
         "gene_expression.long.v1": ["missing.release.v1"],
         "gene_expression.probe_long.v1": ["missing.release.v1"],
+        "gene_expression.long.v2": ["missing.release.v1"],
+        "gene_expression.probe_long.v2": ["missing.release.v1"],
       },
     }])).toThrow(/validation profile 'missing.release.v1' is not registered/);
     expect(() => new DatasetFamilyRegistry([{
