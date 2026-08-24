@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { mkdir, rm, stat } from "node:fs/promises";
 import { createWriteStream } from "node:fs";
 import path from "node:path";
+import type { OperationResultManifest } from "@biomed/contracts";
+import { parseOperationResultManifest } from "../contracts/operation-result.js";
 import type { RegisteredTableAdapterResult, RegisteredTableSink, RegisteredTableRow } from "../adapters/registered/types.js";
 import { RegisteredTableAdapter, createDefaultRegisteredTableRegistry } from "../adapters/registered/index.js";
 import type { SourceAssetRegistry } from "../../runtime/source-assets/registry.js";
@@ -15,7 +17,9 @@ export interface BrowserCarrierParserExecutionInput {
   schemaRef: string;
   adapterId: string;
   parserVersion: string;
+  implementationDigest: string;
   tableId: string;
+  familyId: string;
   sourceAssetRegistry: SourceAssetRegistry;
   signal?: AbortSignal | null;
 }
@@ -27,6 +31,7 @@ export interface BrowserCarrierParserExecutionResult {
   absolutePath: string;
   sha256: string;
   sizeBytes: number;
+  operationResult: OperationResultManifest;
 }
 
 function csvCell(value: unknown): string {
@@ -113,7 +118,51 @@ export async function executeBrowserCarrierParser(
     await sink.close();
     const info = await stat(absolutePath);
     if (info.size !== sink.sizeBytes) throw new Error("browser parser output size changed during commit");
-    return { adapter: result, tableId: input.tableId, relativePath, absolutePath, sha256: sink.sha256, sizeBytes: info.size };
+    const outputSha256 = sink.sha256;
+    const parameterDigest = createHash("sha256")
+      .update(JSON.stringify({ table_id: input.tableId, adapter_id: input.adapterId, parser_version: input.parserVersion }), "utf8")
+      .digest("hex");
+    const operationResult = parseOperationResultManifest({
+      schema_version: "1.0",
+      result_manifest_id: `result_${input.buildId}_${input.tableId}`,
+      task_id: input.taskId,
+      build_id: input.buildId,
+      operation_id: `parse_browser_${input.tableId}`,
+      operation_kind: "parse",
+      operation_attempt_id: `attempt_${input.buildId}_${input.tableId}`,
+      attempt: 1,
+      status: "succeeded",
+      input_digest: input.requestIdentityDigest,
+      parameter_digest: parameterDigest,
+      implementation_digest: input.implementationDigest,
+      output_digest: outputSha256,
+      output_kind: "parsed_table",
+      output_summary: {
+        table_id: input.tableId,
+        dataset_family: input.familyId,
+        schema_ref: input.schemaRef,
+        row_count: result.audit.accepted_row_count,
+        column_count: result.schema.fields.length,
+      },
+      output_files: [{ relative_path: relativePath, size_bytes: info.size, sha256: outputSha256 }],
+      dependency_closure: {
+        input_asset_ids: [input.assetId],
+        upstream_result_manifest_ids: [],
+        parameter_digest: parameterDigest,
+        implementation_digest: input.implementationDigest,
+      },
+      commit: { state: "committed", commit_id: `commit_${input.buildId}_${input.tableId}`, committed_at: new Date().toISOString() },
+      migration: { mode: "native", legacy_checkpoint_path: null, migrated_at: null },
+    }, input.taskId, input.buildId);
+    return {
+      adapter: result,
+      tableId: input.tableId,
+      relativePath,
+      absolutePath,
+      sha256: outputSha256,
+      sizeBytes: info.size,
+      operationResult,
+    };
   } catch (error) {
     await sink.rollback();
     throw error;

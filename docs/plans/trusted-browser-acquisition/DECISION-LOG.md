@@ -173,3 +173,13 @@ risks, and verification results for later audit.
 - Reason: A registered carrier without Core acquisition provenance must not be
   parsed into a formal result; parser success is not publication authority.
 - Status: implemented and focused-verified.
+
+## 2026-08-24 / D-021
+
+- Decision: Browser carrier parser output is represented as a native
+  `OperationResultManifest` with `operation_kind=parse` and
+  `output_kind=parsed_table`; it is not a publication candidate.
+- Reason: Existing OperationResult contracts provide the correct immutable hash,
+  dependency, schema, and task/build closure before family validation.
+- Status: implemented and focused-verified; family materialization/publication
+  integration remains pending.
