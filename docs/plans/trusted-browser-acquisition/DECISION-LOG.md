@@ -223,3 +223,11 @@ risks, and verification results for later audit.
 - Reason: ProductAssessment must be able to trace an integrated table back to
   browser evidence; empty or inferred evidence is not acceptable.
 - Status: implemented and focused-verified.
+
+## 2026-08-24 / D-027
+
+- Decision: Carrier parser execution accepts only recipe ID/version and a
+  Core-owned resolver; adapter ID and parser version are never caller-selected.
+- Reason: Passing parser identity from Agent input would bypass PROMOTED recipe
+  authority and undermine the trusted browser boundary.
+- Status: implemented and typecheck/lint verified.

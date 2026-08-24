@@ -7,6 +7,7 @@ import { parseOperationResultManifest } from "../contracts/operation-result.js";
 import type { RegisteredTableAdapterResult, RegisteredTableSink, RegisteredTableRow } from "../adapters/registered/types.js";
 import { RegisteredTableAdapter, createDefaultRegisteredTableRegistry } from "../adapters/registered/index.js";
 import type { SourceAssetRegistry } from "../../runtime/source-assets/registry.js";
+import type { BrowserParserRecipeResolver } from "./browser-formalization.js";
 
 export interface BrowserCarrierParserExecutionInput {
   taskId: string;
@@ -15,8 +16,9 @@ export interface BrowserCarrierParserExecutionInput {
   assetId: string;
   requestIdentityDigest: string;
   schemaRef: string;
-  adapterId: string;
-  parserVersion: string;
+  recipeId: string;
+  recipeVersion: string;
+  recipeRegistry: BrowserParserRecipeResolver;
   implementationDigest: string;
   tableId: string;
   familyId: string;
@@ -177,9 +179,31 @@ export async function executeBrowserCarrierParser(
     input.requestIdentityDigest,
     "carrier",
   );
+  const evidence = {
+    schema_version: "1.0" as const,
+    evidence_id: `carrier_${input.assetId}`,
+    task_id: input.taskId,
+    run_id: null,
+    requested_url: resolved.acquisition_provenance.canonical_accession ?? resolved.registration_receipt.relative_path,
+    final_url: resolved.acquisition_provenance.canonical_accession ?? resolved.registration_receipt.relative_path,
+    redirect_chain: [],
+    status: 200,
+    media_type: resolved.registration_receipt.media_type,
+    retrieved_at: resolved.acquisition_provenance.provider_revision_token ?? new Date().toISOString(),
+    bytes_received: resolved.registration_receipt.size_bytes,
+    sha256: resolved.registration_receipt.sha256,
+    browser_policy_revision: "public-http-browser.v1" as const,
+    source_asset_id: resolved.registration_receipt.asset_ref.asset_id,
+    source_id: resolved.registration_receipt.source_id,
+    relative_path: resolved.registration_receipt.relative_path,
+    download_attempt_id: "formalized",
+    provider_id: "browser.snapshot.v1" as const,
+    provider_implementation_digest: resolved.acquisition_provenance.implementation_digest,
+  };
+  const recipe = input.recipeRegistry.resolve(input.recipeId, input.recipeVersion, evidence);
   const parser = createDefaultRegisteredTableRegistry();
   const adapter = new RegisteredTableAdapter(parser);
-  const registration = parser.resolve(input.adapterId, input.parserVersion);
+  const registration = parser.resolve(recipe.adapter_id, recipe.parser_version);
   if (registration.schema.schema_id !== input.schemaRef) throw new Error("browser carrier schema binding mismatch");
   const relativePath = `tables/${input.tableId}.csv`;
   const absolutePath = path.join(input.outputDir, ...relativePath.split("/"));
@@ -191,15 +215,15 @@ export async function executeBrowserCarrierParser(
       task_id: input.taskId,
       asset_id: input.assetId,
       schema_ref: input.schemaRef,
-      adapter_id: input.adapterId,
-      parser_version: input.parserVersion,
+      adapter_id: recipe.adapter_id,
+      parser_version: recipe.parser_version,
     }, resolved, sink, input.signal);
     await sink.close();
     const info = await stat(absolutePath);
     if (info.size !== sink.sizeBytes) throw new Error("browser parser output size changed during commit");
     const outputSha256 = sink.sha256;
     const parameterDigest = createHash("sha256")
-      .update(JSON.stringify({ table_id: input.tableId, adapter_id: input.adapterId, parser_version: input.parserVersion }), "utf8")
+      .update(JSON.stringify({ table_id: input.tableId, recipe_id: recipe.ref.recipe_id, recipe_version: recipe.ref.recipe_version }), "utf8")
       .digest("hex");
     const operationResult = parseOperationResultManifest({
       schema_version: "1.0",
