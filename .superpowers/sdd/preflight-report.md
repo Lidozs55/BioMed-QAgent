@@ -287,3 +287,15 @@ composition tests are in `server/tests/skill-manifests.test.ts` and
 - Focused command: `pnpm --filter @biomed/server test -- tests/dynamic-family-phase3-composition.test.ts tests/dynamic-family-build-tool.test.ts tests/dynamic-family-preflight.test.ts tests/skill-manifests.test.ts tests/family-host-core-dispatch-guard.test.ts tests/acquisition-first-composition.test.ts --maxWorkers=2` — 6 files, 44 tests passed.
 - `pnpm --filter @biomed/server typecheck` and
   `pnpm --filter @biomed/server lint` — passed.
+
+## Final serialized full-gate evidence after the final review fix
+
+- Contracts Vitest: `pnpm --filter @biomed/contracts test -- --maxWorkers=2` —
+  12 files, 118 tests passed.
+- Server Vitest: `pnpm --filter @biomed/server test -- --maxWorkers=2` —
+  165 files passed, 1 skipped; 1604 tests passed, 11 skipped.
+- Frontend Vitest: `pnpm --filter @biomed/frontend test -- --maxWorkers=2` —
+  67 files, 836 tests passed.
+- `pnpm lint`, `pnpm typecheck`, `pnpm build`, and `pnpm docs:check` — passed.
+- `uv run python database/bridge.py --self-test`, `uv run pytest database/tests`
+  (88 passed), and `uv run ruff check database` — passed.
