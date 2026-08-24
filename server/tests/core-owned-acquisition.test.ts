@@ -112,6 +112,49 @@ afterEach(async () => {
 });
 
 describe("TASK-C2I Core-owned acquisition", () => {
+  it("emits provider revision evidence from the registered provider and exact receipt", async () => {
+    const registry = new CoreAcquisitionRegistry();
+    const base = provider();
+    registry.registerProvider({
+      ...base,
+      plan: (input) => ({
+        ...base.plan(input),
+        providerRevisionFacts: {
+          canonical_accession: "EGFR",
+          provider_snapshot_identity: "fixture-snapshot:v1",
+          provider_revision_token: "fixture-revision:v1",
+        },
+      } as AcquisitionProviderHandler["plan"] extends (...args: never[]) => infer Return ? Return : never),
+    });
+    const fixture = await runtime({
+      registry,
+      executor: async () => ({
+        status: 200,
+        headers: { "content-type": "text/tab-separated-values", "content-length": String(Buffer.byteLength(CONTENT)) },
+        body: (async function* (): AsyncIterable<Buffer> { yield Buffer.from(CONTENT); })(),
+      }),
+    });
+
+    const result = await fixture.runtime.acquire(request());
+    expect(result).toHaveProperty("providerRevisionEvidence");
+    expect(result.providerRevisionEvidence).toMatchObject([{
+      canonical_accession: "EGFR",
+      provider_snapshot_identity: "fixture-snapshot:v1",
+      provider_revision_token: "fixture-revision:v1",
+      source_asset_registration_receipt: {
+        asset_ref: { asset_id: result.sourceAsset.asset_id },
+      },
+    }]);
+    await expect(fixture.assets.resolveCoreAcquired(result.sourceAsset.asset_id, result.requestIdentityDigest))
+      .resolves.toMatchObject({
+        acquisition_provenance: {
+          canonical_accession: "EGFR",
+          provider_snapshot_identity: "fixture-snapshot:v1",
+          provider_revision_token: "fixture-revision:v1",
+        },
+      });
+  });
+
   it("executes a fixed builtin provider and registers an immutable source asset", async () => {
     let calls = 0;
     const fixture = await runtime({

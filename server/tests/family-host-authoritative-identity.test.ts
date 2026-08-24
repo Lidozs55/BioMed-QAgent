@@ -43,7 +43,7 @@ function input(overrides: Partial<AuthoritativeDatasetIdentityInput> = {}): Read
 }
 
 describe("authoritative expression identity context", () => {
-  test("binds existing unregistered V2 schemas and revision-scoped keys", () => {
+  test("binds registered V2 schemas and revision-scoped keys", () => {
     const gene = createAuthoritativeDatasetIdentityContext(input());
     expect(gene.schemaRef).toBe(buildGeneExpressionSchemaV2().schema_id);
     expect(gene.primaryKey).toEqual([

@@ -160,9 +160,9 @@ function revisionScopedFields(schema: DatasetSchema): SchemaFieldV2[] {
 }
 
 /**
- * Unregistered Family Host target schema. It is deliberately not added to the
- * default family Registry until Core can construct identity from task-owned
- * registration receipts. V1 remains the production/golden compatibility path.
+ * Revision-scoped Family Host target schema. It is registered only alongside
+ * the Core identity derivation path; V1 remains the production/golden
+ * compatibility path.
  */
 export function buildGeneExpressionSchemaV2(): DatasetSchemaV2 {
   return parseDatasetSchemaV2({

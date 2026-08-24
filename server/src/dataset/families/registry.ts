@@ -39,7 +39,9 @@ import {
 } from "./bioactivity-measurement/index.js";
 import {
   buildGeneExpressionSchema,
+  buildGeneExpressionSchemaV2,
   buildProbeExpressionSchema,
+  buildProbeExpressionSchemaV2,
 } from "../schema/expression.js";
 import { SchemaRegistry } from "../schema/store.js";
 import { getValidationProfile } from "../validation/profile.js";
@@ -377,7 +379,12 @@ export function geneExpressionFamilyDefinition(): DatasetFamilyDefinition {
   return {
     id: "gene_expression",
     runtime_id: "gene_expression.runtime.v1",
-    schemas: [buildGeneExpressionSchema(), buildProbeExpressionSchema()],
+    schemas: [
+      buildGeneExpressionSchema(),
+      buildProbeExpressionSchema(),
+      buildGeneExpressionSchemaV2(),
+      buildProbeExpressionSchemaV2(),
+    ],
     granularities: [
       { id: "gene_sample_measurement", target_entity_level: "gene" },
       { id: "probe_sample_measurement", target_entity_level: "probe" },
@@ -385,6 +392,8 @@ export function geneExpressionFamilyDefinition(): DatasetFamilyDefinition {
     validation_profiles_by_schema: {
       "gene_expression.long.v1": ["gene_expression.release.v1"],
       "gene_expression.probe_long.v1": ["gene_expression.probe_release.v1"],
+      "gene_expression.long.v2": ["gene_expression.release.v1"],
+      "gene_expression.probe_long.v2": ["gene_expression.probe_release.v1"],
     },
     normalization_profile_refs: [expressionNormalizationV1().profile_id],
     default_normalization_profile_ref: expressionNormalizationV1().profile_id,
@@ -398,7 +407,7 @@ export function geneExpressionFamilyDefinition(): DatasetFamilyDefinition {
       {
         source: "gdc",
         adapter_id: "gdc.expression.v1",
-        schema_refs: ["gene_expression.long.v1"],
+        schema_refs: ["gene_expression.long.v1", "gene_expression.long.v2"],
         parameters_required: false,
         parameter_schema: emptyParameters,
         validateParameters: noAdapterParameters,
@@ -409,6 +418,8 @@ export function geneExpressionFamilyDefinition(): DatasetFamilyDefinition {
         schema_refs: [
           "gene_expression.long.v1",
           "gene_expression.probe_long.v1",
+          "gene_expression.long.v2",
+          "gene_expression.probe_long.v2",
         ],
         parameters_required: true,
         parameter_schema: geoParameters,
@@ -417,7 +428,7 @@ export function geneExpressionFamilyDefinition(): DatasetFamilyDefinition {
       {
         source: "ucsc_xena",
         adapter_id: "xena.matrix.v1",
-        schema_refs: ["gene_expression.long.v1"],
+        schema_refs: ["gene_expression.long.v1", "gene_expression.long.v2"],
         parameters_required: false,
         parameter_schema: emptyParameters,
         validateParameters: noAdapterParameters,

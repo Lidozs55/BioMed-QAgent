@@ -80,7 +80,7 @@ class Runner {
   };
 }
 
-function executor(root: string, runner: Runner, overrides: Partial<ConstructorParameters<typeof DatasetBuildExecutor>[0]> = {}) {
+function executor(root: string, runner: Runner, overrides: Partial<ConstructorParameters<typeof DatasetBuildExecutor>[0]> = {}, authoritativeIdentityDigest?: string) {
   return new DatasetBuildExecutor({
     taskId: "task_recovery",
     buildId: spec().build_id,
@@ -91,7 +91,11 @@ function executor(root: string, runner: Runner, overrides: Partial<ConstructorPa
     coreReleaseIdentity: RELEASE,
     implementationVersions: { "parse:binding_gdc": IMPLEMENTATION },
     ...overrides,
-  });
+    // The identity digest is a Core-owned checkpoint closure, not an Agent
+    // parameter. Keep this test typed against the pre-fix surface so RED is
+    // observable until the executor consumes it.
+    ...(authoritativeIdentityDigest === undefined ? {} : { authoritativeIdentityDigest }),
+  } as ConstructorParameters<typeof DatasetBuildExecutor>[0] & { authoritativeIdentityDigest?: string });
 }
 
 describe("Family Host checkpoint recovery lane", () => {
@@ -118,6 +122,19 @@ describe("Family Host checkpoint recovery lane", () => {
       expect((await executor(root, first).run()).status).toBe("completed");
       const second = new Runner(root);
       expect((await executor(root, second, changed).run()).status).toBe("completed");
+      expect(second.calls).toContain("parse:binding_gdc");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("provider revision identity changes invalidate every operation checkpoint", async () => {
+    const root = mkdtempSync(join(tmpdir(), "family-restart-provider-revision-"));
+    try {
+      const first = new Runner(root);
+      expect((await executor(root, first, {}, "1".repeat(64)).run()).status).toBe("completed");
+      const second = new Runner(root);
+      expect((await executor(root, second, {}, "2".repeat(64)).run()).status).toBe("completed");
       expect(second.calls).toContain("parse:binding_gdc");
     } finally {
       rmSync(root, { recursive: true, force: true });

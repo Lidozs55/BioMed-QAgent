@@ -186,6 +186,12 @@ export interface ExecutorOptions {
   /** Validated server-owned release identity used by fixed-operation reuse. */
   coreReleaseIdentity?: string | null;
   /**
+   * Core-derived authoritative dataset identity closure. When present it is
+   * folded into every operation's input/parameter digest so a provider
+   * revision change cannot reuse a stale checkpoint.
+   */
+  authoritativeIdentityDigest?: string | null;
+  /**
    * Eager checkpoint rehydration (cross-restart continuation): when true,
    * completed operations with digest-matched, verified result files are
    * loaded into ``this.outputs`` and surfaced via ``onRehydratedOperation``
@@ -231,6 +237,7 @@ export class DatasetBuildExecutor {
   private readonly perBindingOutcomes: Record<string, BindingRejection>;
   private readonly operationTimeoutMs: number;
   private readonly deriveRequest: DeterministicDeriveRequest | null;
+  private readonly authoritativeIdentityDigest: string | null;
   private readonly rehydrateCompletedRunners: boolean;
   private readonly onRehydratedOperation: ((op: OperationSpec, output: Record<string, unknown>, manifest: OperationResultManifest) => void | Promise<void>) | null;
   private readonly eventSink: CoreEventSink | null;
@@ -261,6 +268,10 @@ export class DatasetBuildExecutor {
     this.perBindingOutcomes = options.perBindingOutcomes ?? {};
     this.operationTimeoutMs = options.operationTimeoutMs ?? 0;
     this.deriveRequest = options.deriveRequest ?? null;
+    this.authoritativeIdentityDigest = options.authoritativeIdentityDigest ?? null;
+    if (this.authoritativeIdentityDigest !== null && !/^[0-9a-f]{64}$/u.test(this.authoritativeIdentityDigest)) {
+      throw new TypeError("authoritative identity digest must be a lowercase SHA-256 hex digest");
+    }
     this.rehydrateCompletedRunners = options.rehydrateCompletedRunners ?? false;
     this.onRehydratedOperation = options.onRehydratedOperation ?? null;
     this.eventSink = options.eventSink ?? null;
@@ -1042,6 +1053,9 @@ export class DatasetBuildExecutor {
   }
 
   private digestScope(op: OperationSpec): DigestScope {
+    const parameterScope = op.kind === "derive" && this.deriveRequest !== null
+      ? { ...this.parameterScope, derive_request: this.deriveRequest }
+      : this.parameterScope;
     return {
       buildId: this.buildId,
       upstream: this.availableUpstream(op),
@@ -1049,9 +1063,9 @@ export class DatasetBuildExecutor {
         const result = loadOperationResultManifest(this.stateDir, operationId);
         return result === null ? [] : [[operationId, result]];
       })),
-      parameterScope: op.kind === "derive" && this.deriveRequest !== null
-        ? { ...this.parameterScope, derive_request: this.deriveRequest }
-        : this.parameterScope,
+      parameterScope: this.authoritativeIdentityDigest === null
+        ? parameterScope
+        : { ...parameterScope, authoritative_identity_digest: this.authoritativeIdentityDigest },
       sourceAssets: this.sourceAssets,
       mappingAssets: this.mappingAssets,
       coreReleaseIdentity: this.coreReleaseIdentity,

@@ -508,7 +508,11 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
     }
     // Spec-level validation first: reject invalid input before any file read
     // or hash (TASK-047-A1: invalid spec = zero file reads).
-    const validation = await this.core.validateDatasetBuildSpec(input.spec);
+    const validation = await this.core.validateDatasetBuildSpec(input.spec, {
+      providerRevisionEvidence: input.providerRevisionEvidence === undefined
+        ? null
+        : input.providerRevisionEvidence,
+    });
     if (!validation.valid) {
       return {
         version: DATASET_BRIDGE_VERSION,
@@ -532,6 +536,7 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
       input.spec.dataset_family,
       input.spec.source_bindings[0]?.source ?? "",
       input.spec.source_bindings[0]?.adapter_id ?? "",
+      input.spec.schema_ref,
     );
     try {
       const buildReceipts = new Map<string, SourceAssetRegistrationReceipt>();
@@ -582,6 +587,7 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
         mappingAssets,
         metadataAssets,
         providerRevisionEvidence,
+        registrationReceipts: Object.freeze([...buildReceipts.values()]),
         signal: input.signal,
       });
       return this.buildExecutionEnvelope(record, registeredSourceAssetIds);

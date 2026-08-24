@@ -15,7 +15,11 @@ import { parseDataBatch } from "../contracts/index.js";
 import { throwIfAborted } from "../cooperative.js";
 import { AdapterError } from "./errors.js";
 import { sha256FileStream } from "./hashing.js";
-import { assetIdFromSha256 } from "./identity.js";
+import { assetIdFromSha256, makeRecordId } from "./identity.js";
+import {
+  parseExpressionAdapterIdentityContext,
+  type ExpressionAdapterIdentityContext,
+} from "./identity-context.js";
 import {
   csvLine,
   delimitedRowsFromFileAsync,
@@ -44,6 +48,48 @@ export const SOURCE_LONG_COLUMNS: readonly string[] = [
   "source_column_name",
   "source_raw_value",
 ];
+
+/** Explicit revision-scoped source-long layout. V1 remains unchanged. */
+export const SOURCE_LONG_COLUMNS_V2: readonly string[] = [
+  "record_id",
+  "dataset_id",
+  "dataset_revision_id",
+  ...SOURCE_LONG_COLUMNS.slice(2),
+];
+
+export function sourceLongColumns(
+  identityContext: ExpressionAdapterIdentityContext | null,
+): readonly string[] {
+  return identityContext === null ? SOURCE_LONG_COLUMNS : SOURCE_LONG_COLUMNS_V2;
+}
+
+export function sourceLongIdentityValues(options: {
+  identityContext: ExpressionAdapterIdentityContext | null;
+  buildId: string;
+  sourceAsset: SourceAsset;
+  geneIdRaw: string;
+  sampleId: string;
+}): string[] {
+  if (options.identityContext === null) {
+    return [
+      makeRecordId(options.buildId, options.geneIdRaw, options.sampleId),
+      options.buildId,
+      options.sourceAsset.source_id,
+      options.sourceAsset.asset_id,
+    ];
+  }
+  const context = options.identityContext;
+  if (context.sourceAssetId !== options.sourceAsset.asset_id) {
+    throw new AdapterError("expression identity source asset does not match parse input");
+  }
+  return [
+    makeRecordId(context.datasetRevisionId, options.geneIdRaw, options.sampleId),
+    context.datasetId,
+    context.datasetRevisionId,
+    options.sourceAsset.source_id,
+    options.sourceAsset.asset_id,
+  ];
+}
 
 /** Parse-level rejection audit row shape (Python mirror). */
 export const REJECTED_COLUMNS: readonly string[] = [
@@ -127,6 +173,8 @@ export interface ExtractContext {
   bindingId: string;
   sourceName: string;
   parameters: AdapterParams | null;
+  identityContext: ExpressionAdapterIdentityContext | null;
+  schemaRef: string;
 }
 
 export interface ExtractResult {
@@ -149,7 +197,7 @@ async function verifySha256(
 
 /** Map the target schema to the parsed row granularity (Python mirror). */
 export function rowGranularityFor(schemaRef: string): string {
-  return schemaRef === "gene_expression.probe_long.v1"
+  return schemaRef === "gene_expression.probe_long.v1" || schemaRef === "gene_expression.probe_long.v2"
     ? "probe_sample_measurement"
     : "gene_sample_measurement";
 }
@@ -169,6 +217,8 @@ export abstract class SourceAdapter {
       schemaRef: string;
       outputDir: string;
       parameters?: AdapterParams | null;
+      /** Core-derived identity capability required by expression V2. */
+      identityContext?: ExpressionAdapterIdentityContext | null;
       /** Task-relative filesystem path of an explicit metadata asset (e.g.
        * GEO SOFT ``metadata_files``); adapters that do not consume it ignore
        * the field. */
@@ -178,6 +228,18 @@ export abstract class SourceAdapter {
   ): Promise<DataBatch> {
     const { buildId, bindingId, schemaRef, outputDir } = options;
     const parameters = options.parameters ?? null;
+    const identityContext = schemaRef.endsWith(".v2")
+      ? parseExpressionAdapterIdentityContext(options.identityContext)
+      : options.identityContext === undefined || options.identityContext === null
+        ? null
+        : (() => {
+            throw new AdapterError("V1 expression adapters cannot receive V2 identity context");
+          })();
+    if (identityContext !== null && identityContext.schemaRef !== schemaRef) {
+      throw new AdapterError(
+        `expression identity schemaRef does not match parse schemaRef: ${identityContext.schemaRef} != ${schemaRef}`,
+      );
+    }
     const signal = options.signal ?? null;
     await verifySha256(sourcePath, sourceAsset.sha256, signal);
     throwIfAborted(signal);
@@ -186,7 +248,7 @@ export abstract class SourceAdapter {
     mkdirSync(batchDir, { recursive: true });
     const outputPath = join(batchDir, `${bindingId}.csv`);
     const rejectedPath = join(batchDir, `${bindingId}_rejected.csv`);
-    const longWriter = new BufferedCsvWriter(outputPath, SOURCE_LONG_COLUMNS);
+    const longWriter = new BufferedCsvWriter(outputPath, sourceLongColumns(identityContext));
     const rejectedWriter = new BufferedCsvWriter(rejectedPath, REJECTED_COLUMNS);
     try {
       const rows = delimitedRowsFromFileAsync(sourcePath, "\t", signal);
@@ -194,7 +256,7 @@ export abstract class SourceAdapter {
         rows,
         longWriter,
         rejectedWriter,
-        { sourceAsset, buildId, bindingId, sourceName, parameters },
+        { sourceAsset, buildId, bindingId, sourceName, parameters, identityContext, schemaRef },
         signal,
       );
       longWriter.flush();
@@ -220,10 +282,19 @@ export abstract class SourceAdapter {
         schema_ref: schemaRef,
         file_asset: fileAsset,
         row_count: rowCount,
-        column_count: SOURCE_LONG_COLUMNS.length,
+        column_count: sourceLongColumns(identityContext).length,
         parser_id: this.adapter_id,
         parser_version: this.version,
-        statistics: { ...statistics, row_count: rowCount, rejected_count: rejectedCount },
+        statistics: {
+          ...statistics,
+          row_count: rowCount,
+          rejected_count: rejectedCount,
+          ...(identityContext === null ? {} : {
+            dataset_id: identityContext.datasetId,
+            dataset_revision_id: identityContext.datasetRevisionId,
+            carrier_asset_ids: [...identityContext.carrierAssetIds],
+          }),
+        },
         warnings,
         declared_mappings: mappings,
       });

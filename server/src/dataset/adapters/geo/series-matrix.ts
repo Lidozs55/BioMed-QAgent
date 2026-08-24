@@ -42,7 +42,9 @@ import {
   BufferedCsvWriter,
   REJECTED_COLUMNS,
   SOURCE_LONG_COLUMNS,
+  SOURCE_LONG_COLUMNS_V2,
   SourceAdapter,
+  sourceLongIdentityValues,
   rowGranularityFor,
   type ExtractContext,
   type ExtractResult,
@@ -50,7 +52,8 @@ import {
 } from "../base.js";
 import { CHECKPOINT_STRIDE, checkpoint, throwIfAborted } from "../../cooperative.js";
 import { AdapterError, EmptySourceError } from "../errors.js";
-import { assetIdFromSha256, makeRecordId } from "../identity.js";
+import { assetIdFromSha256 } from "../identity.js";
+import { parseExpressionAdapterIdentityContext, type ExpressionAdapterIdentityContext } from "../identity-context.js";
 import { sha256FileStream } from "../hashing.js";
 import {
   delimitedRowsFromFileAsync,
@@ -112,12 +115,13 @@ function mapping(options: {
   targetField: string;
   transform: string;
   evidence: string;
+  targetSchemaRef?: string;
 }): FieldMapping {
   return {
     schema_version: "1.0",
     mapping_id: `map_${options.bindingId}_${options.mappingId}`,
     source_schema_ref: `binding_${options.bindingId}.source`,
-    target_schema_ref: "gene_expression.long.v1",
+    target_schema_ref: options.targetSchemaRef ?? "gene_expression.long.v1",
     source_field: options.sourceField,
     target_field: options.targetField,
     transform: options.transform,
@@ -134,6 +138,7 @@ function wideMatrixMappings(options: {
   samples: readonly string[];
   geneEvidence: string;
   sampleEvidence: string;
+  targetSchemaRef?: string;
 }): FieldMapping[] {
   const mappings = [
     mapping({
@@ -143,6 +148,7 @@ function wideMatrixMappings(options: {
       targetField: "gene_id_raw",
       transform: "identity",
       evidence: options.geneEvidence,
+      targetSchemaRef: options.targetSchemaRef,
     }),
   ];
   for (const sample of options.samples) {
@@ -154,6 +160,7 @@ function wideMatrixMappings(options: {
         targetField: "sample_id",
         transform: "wide_to_long_sample_id",
         evidence: options.sampleEvidence,
+        targetSchemaRef: options.targetSchemaRef,
       }),
       mapping({
         mappingId: `value_${sample}`,
@@ -162,6 +169,7 @@ function wideMatrixMappings(options: {
         targetField: "expression_value",
         transform: "wide_to_long_value",
         evidence: options.sampleEvidence,
+        targetSchemaRef: options.targetSchemaRef,
       }),
     );
   }
@@ -178,15 +186,19 @@ function longRow(options: {
   parameters: AdapterParams;
   expressionValue: string;
   sourceName: string;
+  identityContext: ExpressionAdapterIdentityContext | null;
   line: number;
   column: number;
   columnName: string;
 }): string[] {
   return [
-    makeRecordId(options.buildId, options.geneIdRaw, options.sampleId),
-    options.buildId,
-    options.sourceAsset.source_id,
-    options.sourceAsset.asset_id,
+    ...sourceLongIdentityValues({
+      identityContext: options.identityContext,
+      buildId: options.buildId,
+      sourceAsset: options.sourceAsset,
+      geneIdRaw: options.geneIdRaw,
+      sampleId: options.sampleId,
+    }),
     options.geneIdRaw,
     options.declared,
     options.sampleId,
@@ -242,6 +254,7 @@ interface EmitCellsOptions {
   parameters: AdapterParams;
   measurementType: string;
   declared: string;
+  identityContext: ExpressionAdapterIdentityContext | null;
 }
 
 /** Python ``_emit_geo_cells``: one wide-matrix row -> long rows. */
@@ -282,6 +295,7 @@ function emitGeoCells(options: EmitCellsOptions): {
         parameters: options.parameters,
         expressionValue: raw,
         sourceName: options.sourceName,
+        identityContext: options.identityContext,
         line: options.line,
         column,
         columnName: sampleId,
@@ -325,6 +339,8 @@ interface GeoExtractContext {
   bindingId: string;
   sourceName: string;
   parameters: AdapterParams;
+  identityContext: ExpressionAdapterIdentityContext | null;
+  schemaRef: string;
 }
 
 interface GeoExtractOutcome {
@@ -346,7 +362,7 @@ async function extractTximportRows(
   context: GeoExtractContext,
   signal?: AbortSignal | null,
 ): Promise<GeoExtractOutcome> {
-  const { sourceAsset, buildId, bindingId, sourceName, parameters } = context;
+  const { sourceAsset, buildId, bindingId, sourceName, parameters, identityContext, schemaRef } = context;
   let header: string[] | null = null;
   let samples: string[] = [];
   let mappings: FieldMapping[] = [];
@@ -389,6 +405,7 @@ async function extractTximportRows(
         samples,
         geneEvidence: "tximport counts gene column (first data column)",
         sampleEvidence: "tximport counts.<sample> column header",
+        targetSchemaRef: identityContext === null ? undefined : schemaRef,
       });
       for (const { index, alias } of countFields) {
         sampleColumns[alias] = index + 1;
@@ -412,6 +429,7 @@ async function extractTximportRows(
       sourceAsset,
       buildId,
       sourceName,
+      identityContext,
       line,
       values,
       samples,
@@ -451,7 +469,7 @@ async function extractSeriesMatrixRows(
   context: GeoExtractContext,
   signal?: AbortSignal | null,
 ): Promise<GeoExtractOutcome> {
-  const { sourceAsset, buildId, bindingId, sourceName, parameters } = context;
+  const { sourceAsset, buildId, bindingId, sourceName, parameters, identityContext, schemaRef } = context;
   let inBlock = false;
   let header: string[] | null = null;
   let samples: string[] = [];
@@ -516,6 +534,7 @@ async function extractSeriesMatrixRows(
       sourceAsset,
       buildId,
       sourceName,
+      identityContext,
       line,
       values,
       samples,
@@ -550,6 +569,7 @@ async function extractSeriesMatrixRows(
     samples,
     geneEvidence: "GEO series matrix ID_REF column header",
     sampleEvidence: "series matrix sample column header",
+    targetSchemaRef: identityContext === null ? undefined : schemaRef,
   });
   const statistics = geoStatistics({
     parameters,
@@ -606,7 +626,7 @@ async function extractSupplementaryRows(
   context: GeoExtractContext,
   signal?: AbortSignal | null,
 ): Promise<GeoExtractOutcome> {
-  const { sourceAsset, buildId, bindingId, sourceName, parameters } = context;
+  const { sourceAsset, buildId, bindingId, sourceName, parameters, identityContext, schemaRef } = context;
   let delimiter = parameters.delimiter;
   let header: string[] | null = null;
   let samples: string[] = [];
@@ -685,6 +705,7 @@ async function extractSupplementaryRows(
       sourceAsset,
       buildId,
       sourceName,
+      identityContext,
       line,
       values,
       samples,
@@ -714,6 +735,7 @@ async function extractSupplementaryRows(
     samples,
     geneEvidence: "supplementary expression matrix first column header",
     sampleEvidence: "supplementary matrix sample column header",
+    targetSchemaRef: identityContext === null ? undefined : schemaRef,
   });
   return {
     statistics: geoStatistics({
@@ -736,6 +758,8 @@ export interface GeoParseOptions {
   schemaRef: string;
   outputDir: string;
   parameters?: AdapterParams | null;
+  /** Core-derived identity capability required by expression V2. */
+  identityContext?: ExpressionAdapterIdentityContext | null;
   /** Python ``metadata_path``: explicit SOFT metadata for tximport/suppl. */
   metadataPath?: string | null;
   /** Cooperative abort signal from the executor (M2 I-03/I-04). */
@@ -768,6 +792,18 @@ export class GeoExpressionAdapter extends SourceAdapter {
       metadataPath = null,
     } = options;
     const parameters = options.parameters ?? null;
+    const identityContext = schemaRef.endsWith(".v2")
+      ? parseExpressionAdapterIdentityContext(options.identityContext)
+      : options.identityContext === undefined || options.identityContext === null
+        ? null
+        : (() => {
+            throw new AdapterError("V1 expression adapters cannot receive V2 identity context");
+          })();
+    if (identityContext !== null && identityContext.schemaRef !== schemaRef) {
+      throw new AdapterError(
+        `expression identity schemaRef does not match parse schemaRef: ${identityContext.schemaRef} != ${schemaRef}`,
+      );
+    }
     const signal = options.signal ?? null;
     const digest = await sha256FileStream(sourcePath, signal);
     if (digest !== sourceAsset.sha256) {
@@ -782,7 +818,10 @@ export class GeoExpressionAdapter extends SourceAdapter {
     const outputPath = join(batchDir, `${bindingId}.csv`);
     const rejectedPath = join(batchDir, `${bindingId}_rejected.csv`);
     const supportingPaths: string[] = [];
-    const longWriter = new BufferedCsvWriter(outputPath, SOURCE_LONG_COLUMNS);
+    const longWriter = new BufferedCsvWriter(
+      outputPath,
+      identityContext === null ? SOURCE_LONG_COLUMNS : SOURCE_LONG_COLUMNS_V2,
+    );
     const rejectedWriter = new BufferedCsvWriter(rejectedPath, REJECTED_COLUMNS);
     try {
       if (parameters === null) {
@@ -802,7 +841,7 @@ export class GeoExpressionAdapter extends SourceAdapter {
             rows,
             longWriter,
             rejectedWriter,
-            { sourceAsset, buildId, bindingId, sourceName, parameters },
+            { sourceAsset, buildId, bindingId, sourceName, parameters, identityContext, schemaRef },
             signal,
           );
         } catch (error) {
@@ -820,14 +859,14 @@ export class GeoExpressionAdapter extends SourceAdapter {
                 rows,
                 longWriter,
                 rejectedWriter,
-                { sourceAsset, buildId, bindingId, sourceName, parameters },
+                { sourceAsset, buildId, bindingId, sourceName, parameters, identityContext, schemaRef },
                 signal,
               )
             : await extractTximportRows(
                 rows,
                 longWriter,
                 rejectedWriter,
-                { sourceAsset, buildId, bindingId, sourceName, parameters },
+                { sourceAsset, buildId, bindingId, sourceName, parameters, identityContext, schemaRef },
                 signal,
               );
           sampleMetadataText = extraction.sampleMetadataText ?? null;
@@ -875,7 +914,9 @@ export class GeoExpressionAdapter extends SourceAdapter {
         schema_ref: schemaRef,
         file_asset: fileAsset,
         row_count: rowCount,
-        column_count: SOURCE_LONG_COLUMNS.length,
+        column_count: identityContext === null
+          ? SOURCE_LONG_COLUMNS.length
+          : SOURCE_LONG_COLUMNS_V2.length,
         parser_id: this.adapter_id,
         parser_version: this.version,
         statistics: {
@@ -885,6 +926,11 @@ export class GeoExpressionAdapter extends SourceAdapter {
           supporting_assets: supportingPaths.map((supportingPath) =>
             relative(outputDir, supportingPath).replace(/\\/g, "/"),
           ),
+          ...(identityContext === null ? {} : {
+            dataset_id: identityContext.datasetId,
+            dataset_revision_id: identityContext.datasetRevisionId,
+            carrier_asset_ids: [...identityContext.carrierAssetIds],
+          }),
         },
         warnings,
         declared_mappings: mappings,
@@ -982,6 +1028,8 @@ export class GeoExpressionAdapter extends SourceAdapter {
       bindingId: context.bindingId,
       sourceName: context.sourceName,
       parameters: context.parameters,
+      identityContext: context.identityContext,
+      schemaRef: context.schemaRef,
     };
     if (context.parameters.format === "supplementary_matrix") {
       return extractSupplementaryRows(

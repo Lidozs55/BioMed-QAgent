@@ -435,7 +435,7 @@ export async function canonicalize(
       canonicalRow.expression_unit = unit;
     }
     canonicalRow.record_id = makeRecordId(
-      row.dataset_id,
+      row.dataset_revision_id ?? row.dataset_id,
       row.gene_id_raw,
       row.sample_id,
     );

@@ -7,6 +7,10 @@ import type {
   AcquisitionProviderHandler,
 } from "./runtime.js";
 import { CHEMBL_FILES_PROVIDER_ID } from "./chembl-provider.js";
+import {
+  GDC_FILES_PROVIDER_ID,
+  GEO_FILES_PROVIDER_ID,
+} from "./expression-providers.js";
 
 export const FIXED_BIOMEDICAL_PROVIDER_IDS = Object.freeze({
   pdb: "pdb.files.v1",
@@ -273,9 +277,15 @@ export function fixedBiomedicalAcquisitionParameters(options: {
   const providerIds: ReadonlySet<string> = new Set([
     ...Object.values(FIXED_BIOMEDICAL_PROVIDER_IDS),
     CHEMBL_FILES_PROVIDER_ID,
+    GEO_FILES_PROVIDER_ID,
+    GDC_FILES_PROVIDER_ID,
   ]);
   if (!providerIds.has(options.providerId ?? "")) return null;
-  if (Object.keys(options.bindingParameters).length !== 0) {
+  if (
+    options.providerId !== GEO_FILES_PROVIDER_ID
+    && options.providerId !== GDC_FILES_PROVIDER_ID
+    && Object.keys(options.bindingParameters).length !== 0
+  ) {
     throw new TypeError(`${options.providerId} does not accept binding parameters`);
   }
   return {

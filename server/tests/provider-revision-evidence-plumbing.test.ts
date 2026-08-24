@@ -265,6 +265,11 @@ describe("ProviderRevisionEvidence Dataset Core plumbing", () => {
     const context = contexts[0];
     if (context === undefined) throw new Error("execute context was not captured");
     expect(context.providerRevisionEvidence).toEqual(providerRevisionEvidence);
+    expect(context.registrationReceipts).toEqual([
+      sourceReceipt,
+      mappingReceipt,
+      metadataReceipt,
+    ]);
     expect(context.sourceAssets?.binding_gdc?.successful_attempt_id).toBe(sourceReceipt.receipt_id);
     expect(context.mappingAssets?.binding_gdc?.successful_attempt_id).toBe(mappingReceipt.receipt_id);
     expect(context.metadataAssets?.binding_gdc?.successful_attempt_id).toBe(metadataReceipt.receipt_id);
@@ -317,8 +322,8 @@ describe("ProviderRevisionEvidence Dataset Core plumbing", () => {
     expect(() => requireAuthoritativeProviderRevisionEvidence({
       providerRevisionEvidence: null,
     })).toThrow(/requires provider revision evidence/);
-    expect(createDefaultSchemaRegistry().contains("gene_expression.long.v2")).toBe(false);
-    expect(createDefaultSchemaRegistry().contains("gene_expression.probe_long.v2")).toBe(false);
+    expect(createDefaultSchemaRegistry().contains("gene_expression.long.v2")).toBe(true);
+    expect(createDefaultSchemaRegistry().contains("gene_expression.probe_long.v2")).toBe(true);
   });
 
   it("uses byte-derived asset IDs rather than build, user, or time values", async () => {

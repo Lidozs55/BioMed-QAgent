@@ -34,6 +34,10 @@ import {
 import { createChemblFilesProvider } from "../dataset/acquisition/chembl-provider.js";
 import { createFixedBiomedicalProviders } from "../dataset/acquisition/biomedical-providers.js";
 import {
+  createGdcFilesProvider,
+  createGeoFilesProvider,
+} from "../dataset/acquisition/expression-providers.js";
+import {
   CoreAcquisitionRegistry,
   CoreAcquisitionRuntime,
 } from "../dataset/acquisition/runtime.js";
@@ -299,6 +303,8 @@ export function createPhase3AcquisitionRuntime(options: {
 }): CoreAcquisitionRuntime {
   const registry = new CoreAcquisitionRegistry();
   registry.registerProvider(createChemblFilesProvider());
+  registry.registerProvider(createGeoFilesProvider());
+  registry.registerProvider(createGdcFilesProvider());
   for (const provider of createFixedBiomedicalProviders()) registry.registerProvider(provider);
   return new CoreAcquisitionRuntime({
     ...options,
