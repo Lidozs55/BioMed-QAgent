@@ -18,6 +18,17 @@ export {
 } from "./guidance.js";
 export { noopHooks, type QueryStatus, type ToolHooks, type ToolServiceDeps } from "./tool-hooks.js";
 export {
+  createDynamicFamilyBuildTool,
+  createDynamicFamilyBuildTools,
+  createPrepareDynamicFamilyBuildTool,
+  parseDynamicFamilyBuildSubmission,
+  parseDynamicFamilyBuildSubmitRequest,
+  type DynamicFamilyBuildToolOptions,
+  type ParsedDynamicFamilyBuildSubmission,
+  type ParsedDynamicFamilyBuildSubmitRequest,
+  type PrepareDynamicFamilyBuildToolOptions,
+} from "./dynamic-family-build.js";
+export {
   createBusinessToolBundle,
   type BusinessToolBundle,
   type BusinessToolBundleContext,

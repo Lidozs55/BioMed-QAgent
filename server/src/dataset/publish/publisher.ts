@@ -53,6 +53,8 @@ export interface PublishOptions {
   /** I-04 publish fence: re-verified immediately before the immutable rename;
    *  the build must still own its build lock, or it is a displaced lease. */
   fence?: (() => boolean | Promise<boolean>) | null;
+  /** Deterministic coordination hook immediately before the final fence. */
+  beforeFinalFence?: (() => void | Promise<void>) | null;
   /** A7 disk budget: the projected immutable version size (sum of the
    *  manifest artifact receipts + the manifest file). When set, promotion is
    *  refused before staging if the projected size exceeds this bound. */
@@ -218,6 +220,7 @@ export async function promotePublication(options: PublishOptions): Promise<Publi
     // fence re-checks lease ownership at the same boundary so a build whose
     // lock was taken over can never publish late.
     throwIfAborted(signal);
+    await options.beforeFinalFence?.();
     if (fence !== null && !(await fence())) {
       throw new LockLostError(
         "build lock was taken over before the final rename (displaced lease)",

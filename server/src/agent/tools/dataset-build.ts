@@ -151,7 +151,7 @@ function dynamicFallback(response: DatasetBridgeResponse): Record<string, unknow
     return {
       do_not_retry_static: true,
       recommended_next_action:
-        "Stop static schema/required_fields probing. Use submit_dynamic_family_build with the requested exact multi-table topology, a TypeScript transform, and fixed Core acquisition_requests.",
+        "Stop static schema/required_fields probing. Use prepare_dynamic_family_build for the requested exact multi-table topology, bind its Host descriptor digest, then submit_dynamic_family_build with the fixed Core acquisition_requests and unchanged preflight receipt.",
     };
   }
   return {};

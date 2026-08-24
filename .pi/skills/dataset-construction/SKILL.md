@@ -34,7 +34,13 @@ output.
        mechanism). Prefer a gene-level source (GDC/Xena) or a probe-level schema
        when no probe→gene annotation is available.
 4. When a frozen multi-table topology cannot be expressed by a registered static
-   family, use `submit_dynamic_family_build` with:
+   family, use the fixed two-phase dynamic protocol: call
+   `prepare_dynamic_family_build` first, bind the proposal transform-ref digest
+   to the returned Host descriptor digest, then call
+   `submit_dynamic_family_build` with that unchanged receipt. A fresh prepare
+   after source/projection/transform changes is mandatory; also prepare after
+   any committed role, binding, or acquisition-request change, FamilySpec,
+   Projection, or transform fact changes. Use this protocol with:
    - `execution_backend="in_process_unisolated"` exactly. This backend is **not a
      sandbox, isolation mechanism, or security boundary**; never describe it as one.
    - a canonical-digest-valid task/user/curated/system `FamilySpec`, selected
@@ -50,22 +56,23 @@ output.
    - deterministic output handles out-0, out-1, … in primary + supporting +
      derived projection order. Each output needs a non-empty registered input
      receipt ID as locator; multiple tables from one source may share it.
-   The Host owns compilation. If any submission reports the exact
-   Host-compiled descriptor digest, replace the proposal transform-ref digest with
-   that latest value and resubmit; source, role, binding, family, projection, or
-   transform changes can all change it. Do not stop on a descriptor handshake
-   rejection, bypass it, or invent the digest. Treat only the
-   returned immutable Publication as formal output. A schema containing
+   The Host owns compilation. Bind `build_proposal.transform_refs[0].digest` to
+   `preflight_receipt.host_descriptor_digest` exactly, and pass the unchanged
+   receipt to submit. Do not repeat a failure-driven descriptor handshake,
+   bypass the receipt, or invent a digest. Treat only the returned immutable
+   Publication as formal output. A schema containing
    review-status or human-review-status remains human-review-pending until
    genuine HIL acceptance exists.
 5. Treat a failed result as actionable state. Retry unchanged inputs only when
    retryable is true and the external condition may have changed. A non-retryable
    static adapter/transform rejection or requested-field/topology mismatch means
    the registered static family is unsuitable: stop static execution and required-
-   field vocabulary probing, then switch immediately to
-   `submit_dynamic_family_build`. For a permission or human-review request, wait
-   for the decision instead of replacing the trusted operation with workspace
-   output.
+   field vocabulary probing, then switch immediately to the fixed dynamic
+   protocol: call `prepare_dynamic_family_build`, bind the proposal transform-ref
+   digest to the returned Host descriptor digest, and call
+   `submit_dynamic_family_build` with that unchanged receipt. For a permission
+   or human-review request, wait for the decision instead of replacing the
+   trusted operation with workspace output.
 6. Only a successful Publication is formal output. Never describe rejection,
    NO_DATA, cancellation, incomplete review, or failure as success; never
    fabricate file names when reporting artifacts.

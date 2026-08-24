@@ -162,4 +162,26 @@ describe(".pi/skills manifest integrity", () => {
       expect((skill.frontmatter.description ?? "").length).toBeLessThanOrEqual(300);
     }
   });
+
+  test("dataset-construction documents the dynamic prepare/submit receipt protocol", async () => {
+    const skill = await readSkill("dataset-construction");
+    expect(skill.body).toMatch(/prepare_dynamic_family_build/);
+    expect(skill.body).toMatch(/bind[\s\S]*descriptor digest/i);
+    expect(skill.body).toMatch(/unchanged receipt/i);
+    expect(skill.body).toMatch(/fresh prepare[\s\S]*(?:source|projection|transform)[\s\S]*change/i);
+  });
+
+  test("dataset-construction never bypasses prepare after a committed fact change", async () => {
+    const skill = await readSkill("dataset-construction");
+    expect(skill.body).toMatch(/switch immediately to\s+the fixed dynamic\s+protocol/i);
+    const stepFive = skill.body.slice(skill.body.indexOf("5. Treat a failed"));
+    expect(stepFive).toMatch(/fixed dynamic\s+protocol/i);
+    const prepare = stepFive.indexOf("prepare_dynamic_family_build");
+    const submit = stepFive.indexOf("submit_dynamic_family_build", prepare);
+    expect(prepare).toBeGreaterThanOrEqual(0);
+    expect(submit).toBeGreaterThan(prepare);
+    expect(stepFive.slice(prepare, submit + "submit_dynamic_family_build".length))
+      .toMatch(/descriptor digest/i);
+    expect(stepFive).not.toMatch(/switch immediately to\s+\n?\s*`submit_dynamic_family_build`/i);
+  });
 });

@@ -112,6 +112,38 @@ afterEach(async () => {
 });
 
 describe("TASK-C2I Core-owned acquisition", () => {
+  it("plans a provider request without downloading or registering an attempt", async () => {
+    let planCalls = 0;
+    let downloadCalls = 0;
+    const registry = new CoreAcquisitionRegistry();
+    const baseProvider = provider();
+    registry.registerProvider({
+      ...baseProvider,
+      plan: (plannedRequest) => {
+        planCalls += 1;
+        return baseProvider.plan(plannedRequest);
+      },
+    });
+    const fixture = await runtime({
+      registry,
+      executor: async () => {
+        downloadCalls += 1;
+        throw new Error("planning must not download");
+      },
+    });
+
+    const result = await fixture.runtime.plan(request());
+
+    expect(result).toMatchObject({
+      requestIdentityDigest: acquisitionRequestIdentity(request(), IMPLEMENTATION_DIGEST),
+      providerId: "fixture_provider",
+      implementationDigest: IMPLEMENTATION_DIGEST,
+      recipe: null,
+    });
+    expect(planCalls).toBe(1);
+    expect(downloadCalls).toBe(0);
+  });
+
   it("emits provider revision evidence from the registered provider and exact receipt", async () => {
     const registry = new CoreAcquisitionRegistry();
     const base = provider();

@@ -62,6 +62,10 @@ export interface PublishDynamicFamilyInput {
   readonly signal?: AbortSignal;
   readonly publishedAt?: string;
   readonly hilGate?: DynamicPublicationHILGate | null;
+  /** Live Host generation fence; checked before staged writes and promotion. */
+  readonly isGenerationCurrent: () => boolean | Promise<boolean>;
+  /** Optional hook immediately before the immutable rename fence (tests). */
+  readonly beforeFinalFence?: () => Promise<void>;
   /**
    * Production B3 resource/disk lane overrides (tests). Omitted values use
    * the benchmark-backed production policy and configured budgets.
@@ -88,25 +92,35 @@ export interface PublishDynamicFamilyResult {
 export async function publishDynamicFamily(
   input: PublishDynamicFamilyInput,
 ): Promise<PublishDynamicFamilyResult> {
+  const assertGenerationCurrent = async (): Promise<void> => {
+    if (!(await input.isGenerationCurrent())) {
+      throw new Error("dynamic family preflight generation is stale");
+    }
+  };
   const candidate = input.execution.materialization.candidate;
   if (candidate.task_id !== input.taskId || candidate.build_id !== input.buildId) {
     throw new TypeError("dynamic publication identity does not match the Core task/build");
   }
+  await assertGenerationCurrent();
   const outputDir = path.join(input.taskRoot, "datasets_build", input.buildId);
   await mkdir(outputDir, { recursive: true });
+  await assertGenerationCurrent();
   await rm(path.join(outputDir, "tables"), { recursive: true, force: true });
   for (const mutableFile of [
     "schema.json", "provenance.json", "product_assessment.json",
     "validation_report.json", "resource_report.json", "dataset_manifest.json",
   ]) {
+    await assertGenerationCurrent();
     await rm(path.join(outputDir, mutableFile), { force: true });
   }
+  await assertGenerationCurrent();
   await mkdir(path.join(outputDir, "tables"), { recursive: true });
 
   const schemaByRef = new Map(input.execution.materialization.schemas.map((schema) => [schema.schema_id, schema]));
   const operation = input.execution.operationResult;
   const validationTables = [];
   for (const [tableIndex, table] of candidate.tables.entries()) {
+    await assertGenerationCurrent();
     const output = operation.output_files[table.data_ref.output_file_index];
     const schema = schemaByRef.get(table.definition.schema_ref);
     if (
@@ -117,7 +131,9 @@ export async function publishDynamicFamily(
     const source = path.join(input.execution.trustedRoot, ...output.relative_path.split("/"));
     const destination = path.join(outputDir, ...output.relative_path.split("/"));
     await mkdir(path.dirname(destination), { recursive: true });
+    await assertGenerationCurrent();
     await copyFile(source, destination);
+    await assertGenerationCurrent();
     if ((await sha256FileStream(destination)) !== output.sha256) {
       throw new Error(`dynamic product copy drifted for '${table.definition.table_id}'`);
     }
@@ -141,6 +157,7 @@ export async function publishDynamicFamily(
       confidence_refs: [key(confidenceRef)],
     });
   }
+  await assertGenerationCurrent();
   await mkdir(input.workspaceRoot, { recursive: true });
   const b3Policy = input.b3Validation?.policy ?? PRODUCTION_B3_RESOURCE_POLICY;
   const b3ConfiguredHeapBytes = input.b3Validation?.configuredHeapBytes
@@ -148,6 +165,7 @@ export async function publishDynamicFamily(
   const b3ConfiguredTempBytes = input.b3Validation?.configuredTempBytes
     ?? PRODUCTION_B3_CONFIGURED_TEMP_BYTES;
   const b3IndexRoot = path.join(input.taskRoot, "builds", input.buildId, "b3-index");
+  await assertGenerationCurrent();
   await mkdir(b3IndexRoot, { recursive: true });
   const b3Cleanup: B3CleanupCapability = {
     ownerId: `${input.taskId}:${input.buildId}`,
@@ -171,6 +189,7 @@ export async function publishDynamicFamily(
         configuredHeapBytes: b3ConfiguredHeapBytes,
         configuredTempBytes: b3ConfiguredTempBytes,
         telemetrySink: async (telemetry) => {
+          await assertGenerationCurrent();
           await writeFile(
             path.join(outputDir, "resource_report.json"),
             `${JSON.stringify(telemetry, null, 2)}\n`,
@@ -209,6 +228,7 @@ export async function publishDynamicFamily(
         if (!validationFailed) throw cleanupError;
       }
     });
+  await assertGenerationCurrent();
   const failed = b3.checks.filter((check) => !check.passed);
   const requiresHilAcceptance = input.execution.materialization.schemas.some((schema) =>
     schema.fields.some((field) => field.name === "review_status" || field.name === "human_review_status"),
@@ -218,8 +238,10 @@ export async function publishDynamicFamily(
   );
   let hilAcceptance: Record<string, JsonValue> | null = null;
 
+  await assertGenerationCurrent();
   await writeFile(path.join(outputDir, "schema.json"), `${JSON.stringify(input.execution.materialization.schemas, null, 2)}\n`, "utf8");
   const assessmentPath = path.join(outputDir, "product_assessment.json");
+  await assertGenerationCurrent();
   await writeFile(assessmentPath, `${JSON.stringify(assessment, null, 2)}\n`, "utf8");
 
   if (failed.length === 0 && requiresHilAcceptance) {
@@ -293,8 +315,10 @@ export async function publishDynamicFamily(
       policy_ref: "dynamic_family_hil_acceptance.v1" as const,
       idempotency_key: `dynamic-family-publication:${input.buildId}:${candidate.candidate_id}:${provisionalAssessment.sha256}`,
     };
+    await assertGenerationCurrent();
     const expectedEvidenceDigest = computeHILEvidenceDigest(request);
     const review = await input.hilGate.requestHIL(request, input.signal);
+    await assertGenerationCurrent();
     if (review.evidence_digest !== expectedEvidenceDigest) {
       throw new Error("dynamic publication review evidence digest does not match the reviewed candidate");
     }
@@ -326,9 +350,11 @@ export async function publishDynamicFamily(
       human_review_evidence: [reviewEvidence],
     });
     hilAcceptance = toJsonValue({ ...reviewEvidence, reviewed_snapshot: reviewedSnapshot }) as Record<string, JsonValue>;
+    await assertGenerationCurrent();
     await writeFile(assessmentPath, `${JSON.stringify(assessment, null, 2)}\n`, "utf8");
   }
 
+  await assertGenerationCurrent();
   await writeFile(path.join(outputDir, "provenance.json"), `${JSON.stringify({
     schema_version: "1.0",
     task_id: input.taskId,
@@ -350,6 +376,7 @@ export async function publishDynamicFamily(
 
   const artifacts: ManifestArtifactEntry[] = [];
   for (const table of candidate.tables) {
+    await assertGenerationCurrent();
     const output = operation.output_files[table.data_ref.output_file_index]!;
     artifacts.push(await artifact(outputDir, output.relative_path,
       table.definition.role === "primary" ? "primary_dataset" : "supporting_dataset", "text/csv"));
@@ -357,6 +384,7 @@ export async function publishDynamicFamily(
   artifacts.push(await artifact(outputDir, "schema.json", "schema", "application/json"));
   artifacts.push(await artifact(outputDir, "provenance.json", "provenance", "application/json"));
   artifacts.push(await artifact(outputDir, "product_assessment.json", "audit_report", "application/json"));
+  await assertGenerationCurrent();
   const packageSha = packageDigest(artifacts);
   const validation: ValidationResult = {
     schema_version: "1.0",
@@ -367,6 +395,7 @@ export async function publishDynamicFamily(
     failed_count: failed.length + (assessment.product_status === "publishable" ? 0 : 1),
     report_path: "validation_report.json",
   };
+  await assertGenerationCurrent();
   await writeFile(path.join(outputDir, "validation_report.json"), `${JSON.stringify({
     profile_ref: validation.profile_ref,
     checks: b3.checks,
@@ -415,7 +444,9 @@ export async function publishDynamicFamily(
     relations: candidate.relations,
     candidate_refs: [candidateReference(candidate)],
   };
+  await assertGenerationCurrent();
   await writeFile(path.join(outputDir, "dataset_manifest.json"), `${JSON.stringify(manifest)}\n`, "utf8");
+  await assertGenerationCurrent();
   const publication = await promotePublication({
     outputDir,
     manifest,
@@ -424,6 +455,11 @@ export async function publishDynamicFamily(
     expectedSourceAssetIds: new Set(candidate.registered_asset_ids),
     publishedAt: input.publishedAt,
     signal: input.signal,
+    beforeFinalFence: input.beforeFinalFence,
+    fence: async () => {
+      await assertGenerationCurrent();
+      return true;
+    },
   });
   return { candidate, manifest, validation, assessment, publication };
 }

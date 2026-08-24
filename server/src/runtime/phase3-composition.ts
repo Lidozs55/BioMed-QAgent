@@ -6,7 +6,11 @@ import { DEFAULT_RUNTIME_LIMITS, type RuntimeLimits } from "@biomed/contracts";
 import type { BioMedAgentAdapter, BioMedModelConfig } from "../agent/contracts.js";
 import { PiAgentAdapter } from "../agent/pi-adapter.js";
 import { createDatasetBuildTools } from "../agent/tools/dataset-build.js";
-import { createDynamicFamilyBuildTool } from "../agent/tools/dynamic-family-build.js";
+import {
+  createDynamicFamilyBuildTool,
+  createPrepareDynamicFamilyBuildTool,
+  type ParsedDynamicFamilyBuildSubmission,
+} from "../agent/tools/dynamic-family-build.js";
 import { createBusinessToolBundle } from "../agent/tools/business-tools.js";
 import { createDeclarativeDatabaseTools } from "../agent/tools/declarative-db.js";
 import { assertUniqueToolNames } from "../agent/tools/registry.js";
@@ -43,7 +47,14 @@ import {
 } from "../dataset/acquisition/runtime.js";
 import { coreEventToPayload } from "../dataset/service/events.js";
 import { createDatasetCoreService } from "../dataset/service/dataset-core.js";
+import { acquireBuildLock } from "../dataset/service/build-lock.js";
 import { submitDynamicFamilyBuild } from "../dataset/dynamic-family/submission.js";
+import {
+  dynamicFamilyPreflightSubmissionDigest,
+  prepareDynamicFamilyBuild,
+  validateDynamicFamilyPreflightReceipt,
+} from "../dataset/dynamic-family/preflight.js";
+import type { DynamicFamilyAcquisitionPlanningInput } from "../dataset/dynamic-family/preflight.js";
 import { publishDynamicFamily } from "../dataset/dynamic-family/publication.js";
 import { TypeScriptDatasetCore } from "../dataset/service/ts-core.js";
 import { PublicHttpClient } from "../external/network/http-client.js";
@@ -56,6 +67,9 @@ import {
   createDurableAgentRuntime,
   type DurableAgentRuntime,
 } from "./durable-agent-runtime.js";
+import { createDynamicFamilyPreflightCoordinator } from "./dynamic-family-preflight-coordinator.js";
+
+export { createDynamicFamilyPreflightCoordinator } from "./dynamic-family-preflight-coordinator.js";
 
 /**
  * Display names for query sources used in operation_started labels
@@ -292,6 +306,30 @@ export interface Phase3RuntimeOptions {
   browserPool?: import("../external/browser/pool.js").NodeBrowserPool | null;
   /** VLM chart-extraction config; missing fields keep env defaults. */
   vlmConfig?: Partial<VlmConfig> | null;
+  /**
+   * Trusted composition seams used by production fixtures to observe the
+   * acquisition/transform/publication boundary without replacing phase3.
+   */
+  dynamicFamilySeams?: Phase3DynamicFamilySeams;
+}
+
+export type Phase3AcquisitionRuntime = Pick<CoreAcquisitionRuntime, "plan" | "acquire">;
+
+export interface Phase3DynamicFamilySeams {
+  readonly createAcquisitionRuntime?: (options: {
+    taskId: string;
+    taskRoot: string;
+    cache: ContentCache;
+    client: PublicHttpClient;
+    sourceAssetRegistry: SourceAssetRegistry;
+    registrar: CacheRegistrar | null;
+  }) => Phase3AcquisitionRuntime;
+  readonly submitDynamicFamilyBuild?: typeof submitDynamicFamilyBuild;
+  readonly publishDynamicFamily?: typeof publishDynamicFamily;
+  /** Test-only observation seam for deterministic final-fence races. */
+  readonly assertBuildLockOwned?: (assertOwned: () => Promise<boolean>) => Promise<boolean>;
+  /** Test-only gate immediately before the publisher's final rename fence. */
+  readonly beforeDynamicFamilyFinalFence?: () => Promise<void>;
 }
 
 export function createPhase3AcquisitionRuntime(options: {
@@ -300,6 +338,7 @@ export function createPhase3AcquisitionRuntime(options: {
   cache: ContentCache;
   client: PublicHttpClient;
   sourceAssetRegistry?: SourceAssetRegistry;
+  registrar?: CacheRegistrar | null;
 }): CoreAcquisitionRuntime {
   const registry = new CoreAcquisitionRegistry();
   registry.registerProvider(createChemblFilesProvider());
@@ -349,6 +388,7 @@ export async function createPhase3Runtime(
       let currentRunId = runId;
       let currentPiSessionId = "pi_session_pending";
       let buildResult: import("@biomed/contracts").BuildResult | null = null;
+      const dynamicFamilyPreflight = createDynamicFamilyPreflightCoordinator();
       // Agent-owned directory: data/workspaces/<taskId> (plan §2.1).
       const workspaceRoot = await workspaceManager.ensure(taskId);
       // Framework-owned output: data/output/tasks/<taskId> (plan §3.2).
@@ -408,12 +448,20 @@ export async function createPhase3Runtime(
       });
       const cache = new ContentCache(path.join(taskRoot, "cache"));
       const sourceAssetRegistry = new SourceAssetRegistry(taskId, taskRoot);
-      const acquisitionRuntime = createPhase3AcquisitionRuntime({
+      const acquisitionRuntime = options.dynamicFamilySeams?.createAcquisitionRuntime?.({
         taskId,
         taskRoot,
         cache,
         client,
         sourceAssetRegistry,
+        registrar,
+      }) ?? createPhase3AcquisitionRuntime({
+        taskId,
+        taskRoot,
+        cache,
+        client,
+        sourceAssetRegistry,
+        registrar,
       });
       const service = createDatasetCoreService({
         tsCore,
@@ -479,11 +527,79 @@ export async function createPhase3Runtime(
             return [] as Awaited<ReturnType<typeof createDeclarativeDatabaseTools>>;
           });
       const workspaceTools = createWorkspaceTools(workspace);
+      const planCoreAcquisition = async (
+        submission: ParsedDynamicFamilyBuildSubmission,
+        { binding, request }: DynamicFamilyAcquisitionPlanningInput,
+      ) => acquisitionRuntime.plan({
+        schema_version: "1.0",
+        request_id: `preflight_${submission.build_proposal.build_id}_${binding.binding_id}`,
+        task_id: taskId,
+        build_id: submission.build_proposal.build_id,
+        binding_id: binding.binding_id,
+        mode: "builtin",
+        provider_id: request.provider_id,
+        recipe_id: null,
+        recipe_version: null,
+        parameters: { ...request.parameters },
+      });
+      const dynamicFamilyPrepareTool = createPrepareDynamicFamilyBuildTool({
+        prepare: async (submission) => {
+          const preparation = dynamicFamilyPreflight.beginPrepare(submission.build_proposal.build_id);
+          const receipt = await prepareDynamicFamilyBuild({
+            taskId,
+            buildId: submission.build_proposal.build_id,
+            generation: preparation.generation,
+            submission,
+            runtimeLimits: limits,
+            planAcquisition: (planning) => planCoreAcquisition(submission, planning),
+          });
+          dynamicFamilyPreflight.commitPrepare(
+            preparation,
+            receipt,
+            dynamicFamilyPreflightSubmissionDigest(submission),
+          );
+          return receipt;
+        },
+      });
       const dynamicFamilyTool = createDynamicFamilyBuildTool({
-        submit: async (submission, signal) => {
+        submit: async (submission, signal, _context, preflightReceipt) => {
+          if (preflightReceipt === undefined) {
+            throw new Error("submit_dynamic_family_build requires a preflight receipt");
+          }
+          await validateDynamicFamilyPreflightReceipt({
+            receipt: preflightReceipt,
+            submission,
+            taskId,
+            buildId: submission.build_proposal.build_id,
+            generation: preflightReceipt.generation,
+            runtimeLimits: limits,
+            planAcquisition: (planning) => planCoreAcquisition(submission, planning),
+          });
+          const buildLock = await acquireBuildLock(
+            { lockRoot: path.join(taskRoot, "state", "build-locks") },
+            taskId,
+            submission.build_proposal.build_id,
+            `dynamic-family:${currentRunId}:${randomUUID()}`,
+          );
+          const assertBuildLockOwned = (): Promise<boolean> => {
+            const seam = options.dynamicFamilySeams?.assertBuildLockOwned;
+            return seam === undefined ? buildLock.assertOwned() : seam(() => buildLock.assertOwned());
+          };
+          let reservation: ReturnType<typeof dynamicFamilyPreflight.reserve> | null = null;
+          try {
+            reservation = dynamicFamilyPreflight.reserve(
+              preflightReceipt,
+              dynamicFamilyPreflightSubmissionDigest(submission),
+            );
           const registeredSources: Record<string, string> = { ...submission.registered_sources };
           const acquisitionRequestDigests: Record<string, string> = {};
+          const planByBinding = new Map(
+            preflightReceipt.acquisition_plan.map((entry) => [entry.binding_id, entry]),
+          );
           for (const [bindingId, request] of Object.entries(submission.acquisition_requests)) {
+            if (!dynamicFamilyPreflight.isCurrent(reservation)) {
+              throw new Error("dynamic family preflight generation is stale");
+            }
             const acquired = await acquisitionRuntime.acquire({
               schema_version: "1.0",
               request_id: `request_${randomUUID()}`,
@@ -496,18 +612,29 @@ export async function createPhase3Runtime(
               recipe_version: null,
               parameters: { ...request.parameters },
             }, signal);
+            const planned = planByBinding.get(bindingId);
+            if (
+              planned?.mode !== "builtin"
+              || planned.provider_id !== request.provider_id
+              || planned.request_digest !== acquired.requestIdentityDigest
+            ) {
+              throw new Error(`Core acquisition identity drifted for binding '${bindingId}'`);
+            }
             if (acquired.sourceAsset === null) {
               throw new Error(`Core acquisition did not register source binding '${bindingId}'`);
             }
             registeredSources[bindingId] = acquired.sourceAsset.asset_id;
             acquisitionRequestDigests[bindingId] = acquired.requestIdentityDigest;
           }
+          if (!dynamicFamilyPreflight.isCurrent(reservation)) {
+            throw new Error("dynamic family preflight generation is stale");
+          }
           const resolvedSubmission = Object.freeze({
             ...submission,
             registered_sources: Object.freeze(registeredSources),
             acquisition_requests: Object.freeze({}),
           });
-          const result = await submitDynamicFamilyBuild({
+          const result = await (options.dynamicFamilySeams?.submitDynamicFamilyBuild ?? submitDynamicFamilyBuild)({
 
             taskId,
             runId: currentRunId,
@@ -515,10 +642,25 @@ export async function createPhase3Runtime(
             sourceAssetRegistry,
             taskRoot,
             runtimeLimits: limits,
+            generation: preflightReceipt.generation,
+            preflightReceipt,
+            preflightSubmission: submission,
+            planAcquisition: (planning) => planCoreAcquisition(submission, planning),
+            isGenerationCurrent: (candidateGeneration, cancelFence) =>
+              candidateGeneration === reservation?.generation
+              && reservation !== null
+              && dynamicFamilyPreflight.isCurrent(reservation)
+              && cancelFence.length > 0,
             sourceAcquisitionRequestDigests: Object.freeze(acquisitionRequestDigests),
             signal,
           });
-          const product = await publishDynamicFamily({
+          if (!(await assertBuildLockOwned())) {
+            throw new Error("dynamic family build lock fence was lost");
+          }
+          if (!dynamicFamilyPreflight.isCurrent(reservation)) {
+            throw new Error("dynamic family preflight generation is stale");
+          }
+          const product = await (options.dynamicFamilySeams?.publishDynamicFamily ?? publishDynamicFamily)({
             taskId,
             taskRoot,
             workspaceRoot,
@@ -527,6 +669,11 @@ export async function createPhase3Runtime(
             validationProfileRef: submission.family_spec.validation_policy_ref,
             hilGate: approvalGate,
             signal,
+            isGenerationCurrent: async () =>
+              reservation !== null
+              && await assertBuildLockOwned()
+              && dynamicFamilyPreflight.isCurrent(reservation),
+            beforeFinalFence: options.dynamicFamilySeams?.beforeDynamicFamilyFinalFence,
           });
           const publicationManifestSha = product.publication.publication.manifest_sha256;
           if (publicationManifestSha === undefined) {
@@ -583,6 +730,10 @@ export async function createPhase3Runtime(
             backend: result.receipt.sandbox_backend,
             security_boundary: false,
           };
+          } finally {
+            if (reservation !== null) dynamicFamilyPreflight.complete(reservation);
+            await buildLock.release();
+          }
         },
       });
       const datasetTools = createDatasetBuildTools({
@@ -640,6 +791,7 @@ export async function createPhase3Runtime(
         ...bundle.tools,
         ...dynamicTools,
         ...datasetTools,
+        dynamicFamilyPrepareTool,
         dynamicFamilyTool,
         ...importTools,
       ]);
@@ -650,6 +802,7 @@ export async function createPhase3Runtime(
           ...bundle.tools,
           ...dynamicTools,
           ...datasetTools,
+          dynamicFamilyPrepareTool,
           dynamicFamilyTool,
           ...importTools,
         ],

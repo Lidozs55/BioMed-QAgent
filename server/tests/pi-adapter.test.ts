@@ -91,8 +91,8 @@ describe("Pi system prompt", () => {
     expect(PHASE1_SYSTEM_PROMPT).toContain("review_status");
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/must remain human_review_pending/i);
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/replace that binding with another independently confirmed open-access PMCID/i);
-    expect(PHASE1_SYSTEM_PROMPT).toMatch(/resubmit with the latest Host-compiled descriptor digest/i);
-    expect(PHASE1_SYSTEM_PROMPT).toMatch(/do not stop on a descriptor handshake rejection/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/fresh prepare_dynamic_family_build receipt/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/no failure-driven digest handshake/i);
   });
 });
 
