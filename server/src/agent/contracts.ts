@@ -89,6 +89,8 @@ export interface BioMedModelConfig {
   repetitionPenalty?: number;
   enableSearch?: boolean;
   thinkingMode?: boolean;
+  /** Provider/model parameter overrides saved in the model registry. */
+  params?: Record<string, unknown>;
 }
 
 export interface BioMedSessionConfig {

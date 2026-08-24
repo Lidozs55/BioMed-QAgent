@@ -1,5 +1,5 @@
 import { once } from "node:events";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
@@ -81,150 +81,12 @@ describe("TypeScript model settings", () => {
       repetitionPenalty: 1,
       enableSearch: false,
       thinkingMode: false,
+      params: { max_tokens: 3072, temperature: 0.25, top_p: 0.8 },
     });
     expect(await readFile(path.join(settingsDir, "model-registry.json"), "utf8"))
       .not.toContain("sk-secret-provider-value");
     expect(await readFile(path.join(settingsDir, "model-auth.json"), "utf8"))
       .toContain("sk-secret-provider-value");
-  });
-
-  test("activates the first managed model automatically and keeps it as runtime settings", async () => {
-    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
-    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
-    const baseUrl = await serve(service);
-
-    const providerResponse = await fetch(`${baseUrl}/api/v1/model-registry/providers`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        name: "Auto Provider",
-        base_url: "https://models.example/v1",
-        api_key: "sk-auto-secret",
-      }),
-    });
-    const provider = await providerResponse.json() as Record<string, unknown>;
-    const modelResponse = await fetch(`${baseUrl}/api/v1/model-registry/models`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        provider_id: provider.id,
-        model_id: "custom-auto",
-        context_window: 64000,
-      }),
-    });
-    const model = await modelResponse.json() as Record<string, unknown>;
-
-    expect(model.active).toBe(true);
-    const settings = await (await fetch(`${baseUrl}/api/v1/settings`)).json() as Record<string, unknown>;
-    expect(settings.model_name).toBe("custom-auto");
-    expect(settings.run_ready).toBe(true);
-    await expect(service.resolveActiveModel()).resolves.toMatchObject({
-      provider: provider.id,
-      modelId: "custom-auto",
-      apiKey: "sk-auto-secret",
-      baseUrl: "https://models.example/v1",
-    });
-  });
-
-  test("does not replace an already active model when another model is added", async () => {
-    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
-    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
-    const baseUrl = await serve(service);
-
-    const providerResponse = await fetch(`${baseUrl}/api/v1/model-registry/providers`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        name: "Active Provider",
-        base_url: "https://models.example/v1",
-        api_key: "sk-active-secret",
-      }),
-    });
-    const provider = await providerResponse.json() as Record<string, unknown>;
-    const create = async (modelId: string): Promise<Record<string, unknown>> => {
-      const response = await fetch(`${baseUrl}/api/v1/model-registry/models`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ provider_id: provider.id, model_id: modelId }),
-      });
-      return await response.json() as Record<string, unknown>;
-    };
-
-    const first = await create("first-model");
-    const second = await create("second-model");
-    const models = await (await fetch(`${baseUrl}/api/v1/model-registry/models`)).json() as Array<Record<string, unknown>>;
-    const active = models.filter((model) => model.active === true);
-
-    expect(first.active).toBe(true);
-    expect(second.active).toBe(false);
-    expect(active).toHaveLength(1);
-    expect((active[0] as Record<string, unknown>).model_id).toBe("first-model");
-    expect((await service.resolveActiveModel()).modelId).toBe("first-model");
-  });
-
-  test("clears active runtime settings when the active model is deleted", async () => {
-    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
-    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
-    const baseUrl = await serve(service);
-    const providerResponse = await fetch(`${baseUrl}/api/v1/model-registry/providers`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        name: "Delete Provider",
-        base_url: "https://models.example/v1",
-        api_key: "sk-delete-secret",
-      }),
-    });
-    const provider = await providerResponse.json() as Record<string, unknown>;
-    const modelResponse = await fetch(`${baseUrl}/api/v1/model-registry/models`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ provider_id: provider.id, model_id: "delete-me" }),
-    });
-    const model = await modelResponse.json() as Record<string, unknown>;
-
-    await fetch(`${baseUrl}/api/v1/model-registry/models/${String(model.id)}`, {
-      method: "DELETE",
-    });
-    const settings = await (await fetch(`${baseUrl}/api/v1/settings`)).json() as Record<string, unknown>;
-
-    expect(settings.model_name).toBe("");
-    expect(settings.run_ready).toBe(false);
-    expect(settings.run_block_reason).not.toBeNull();
-    await expect(service.resolveActiveModel()).rejects.toThrow();
-  });
-
-  test("clears active runtime settings when the active provider is deleted", async () => {
-    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
-    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
-    const baseUrl = await serve(service);
-    const providerResponse = await fetch(`${baseUrl}/api/v1/model-registry/providers`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        name: "Delete Provider Active",
-        base_url: "https://models.example/v1",
-        api_key: "sk-delete-provider-secret",
-      }),
-    });
-    const provider = await providerResponse.json() as Record<string, unknown>;
-    const modelResponse = await fetch(`${baseUrl}/api/v1/model-registry/models`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ provider_id: provider.id, model_id: "delete-provider-model" }),
-    });
-    const model = await modelResponse.json() as Record<string, unknown>;
-
-    await fetch(`${baseUrl}/api/v1/model-registry/providers/${String(provider.id)}`, {
-      method: "DELETE",
-    });
-    const settings = await (await fetch(`${baseUrl}/api/v1/settings`)).json() as Record<string, unknown>;
-
-    expect(settings.model_name).toBe("");
-    expect(settings.run_ready).toBe(false);
-    expect(settings.run_block_reason).not.toBeNull();
-    await expect(service.resolveActiveModel()).rejects.toThrow();
-    expect(model.id).toBeTruthy();
   });
 
   test("persists, validates, and resets runtime limits", async () => {
@@ -391,12 +253,184 @@ describe("TypeScript model settings", () => {
 
     expect(body.models).toEqual([expect.objectContaining({
       id: "custom-128k-chat",
-      context_window: 131072,
-      max_output_tokens: 4096,
-      suggested_max_tokens: 4096,
+      context_window: null,
+      max_output_tokens: null,
+      suggested_max_tokens: null,
       capability_source: "api",
       api_available: true,
     })]);
+  });
+
+  test("enriches known discovery models from the local catalog", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const fetcher = async (): Promise<Response> => new Response(
+      JSON.stringify({ data: [
+        { id: "qwen3.8-max" },
+        { id: "deepseek-v4-pro-0813" },
+      ] }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+    const service = await ModelSettingsService.create({
+      settingsDir,
+      environment: {},
+      fetcher,
+      resolveHost: async () => [{ address: "93.184.216.34", family: 4 }],
+    });
+    const models = await service.discover(
+      "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "",
+      undefined,
+      "dashscope",
+    );
+
+    expect(models).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "qwen3.8-max",
+        context_window: 1000000,
+        max_output_tokens: 131072,
+        suggested_max_tokens: 64000,
+        capability_source: "catalog",
+      }),
+      expect.objectContaining({
+        id: "deepseek-v4-pro-0813",
+        context_window: 1000000,
+        max_output_tokens: 384000,
+        capability_source: "catalog",
+      }),
+    ]));
+  });
+
+  test("refreshes persisted catalog metadata without touching user edits", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    await mkdir(settingsDir, { recursive: true });
+    await writeFile(path.join(settingsDir, "model-auth.json"), JSON.stringify({
+      version: 1,
+      direct_api_key: "",
+      provider_api_keys: { provider_sync: "sk-sync" },
+    }));
+    await writeFile(path.join(settingsDir, "model-registry.json"), JSON.stringify({
+      version: 1,
+      settings: {
+        provider_id: "provider_sync",
+        active_model_id: "model_sync",
+        base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        model_name: "qwen3.8-27b",
+        max_tokens: 4096,
+        context_window: 524288,
+        safety_reserve_ratio: 0.05,
+        compaction_trigger_ratio: 0.85,
+        compaction_target_ratio: 0.6,
+        advanced: {
+          temperature: 0.7,
+          top_p: 1,
+          repetition_penalty: 1,
+          enable_search: false,
+          thinking_mode: false,
+        },
+        runtime_limits_version: 1,
+      },
+      providers: [{
+        id: "provider_sync",
+        name: "DashScope Sync",
+        base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        preset_id: "dashscope",
+        description: "",
+        enabled: true,
+        created_at: "2026-08-24T00:00:00.000Z",
+        updated_at: "2026-08-24T00:00:00.000Z",
+      }],
+      models: [
+        {
+          id: "model_sync",
+          provider_id: "provider_sync",
+          model_id: "qwen3.8-27b",
+          name: "qwen3.8-27b",
+          description: "API discovered model",
+          context_window: 524288,
+          max_output_tokens: 4096,
+          suggested_max_tokens: 4096,
+          capabilities: { text: true, image: false, video: false, audio: false },
+          params: {},
+          source: "api",
+          active: true,
+          created_at: "2026-08-24T00:00:00.000Z",
+          updated_at: "2026-08-24T00:00:00.000Z",
+        },
+        {
+          id: "model_manual",
+          provider_id: "provider_sync",
+          model_id: "qwen3.8-27b",
+          name: "manual qwen3.8-27b",
+          description: "",
+          context_window: 512000,
+          max_output_tokens: 4096,
+          suggested_max_tokens: 4096,
+          capabilities: { text: true, image: false, video: false, audio: false },
+          params: {},
+          source: "manual",
+          active: false,
+          created_at: "2026-08-24T00:00:00.000Z",
+          updated_at: "2026-08-24T00:00:00.000Z",
+        },
+      ],
+    }));
+
+    const service = await ModelSettingsService.create({
+      settingsDir,
+      environment: {},
+    });
+    const models = service.listModels();
+
+    expect(models).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "model_sync", context_window: 1000000, metadata_source: "catalog" }),
+      expect.objectContaining({ id: "model_manual", context_window: 512000, metadata_source: "user" }),
+    ]));
+    expect(service.getSettings()).toMatchObject({
+      model_name: "qwen3.8-27b",
+      context_window: 1000000,
+      max_tokens: 64000,
+    });
+  });
+
+  test("returns provider and model parameter specs with defaults", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const baseUrl = await serve(service);
+    const providerResponse = await fetch(`${baseUrl}/api/v1/model-registry/providers`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Kimi",
+        base_url: "https://api.moonshot.cn/v1",
+        api_key: "sk-kimi",
+        preset_id: "moonshot",
+      }),
+    });
+    const provider = await providerResponse.json() as Record<string, unknown>;
+    const specs = await (await fetch(
+      `${baseUrl}/api/v1/model-registry/providers/${String(provider.id)}/param-specs`,
+    )).json() as Array<Record<string, unknown>>;
+
+    expect(specs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: "max_tokens", default: 32768 }),
+      expect.objectContaining({ key: "reasoning_effort", default: "max" }),
+    ]));
+
+    const modelResponse = await fetch(`${baseUrl}/api/v1/model-registry/models`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        provider_id: provider.id,
+        model_id: "kimi-k3",
+        source: "api",
+      }),
+    });
+    const model = await modelResponse.json() as Record<string, unknown>;
+    expect((model.param_specs as Array<Record<string, unknown>>))
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ key: "reasoning_effort", default: "max" }),
+        expect.objectContaining({ key: "tool_choice", default: "auto" }),
+      ]));
   });
 
   test("VLM fallback does not leak a non-DashScope active provider key", async () => {

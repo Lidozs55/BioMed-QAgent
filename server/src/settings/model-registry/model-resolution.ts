@@ -60,6 +60,7 @@ export function resolveActiveConfig(
     repetitionPenalty: settings.advanced.repetition_penalty,
     enableSearch: settings.advanced.enable_search,
     thinkingMode: settings.advanced.thinking_mode,
+    params: model?.params ?? {},
   };
 }
 

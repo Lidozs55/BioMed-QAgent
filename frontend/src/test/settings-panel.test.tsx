@@ -532,8 +532,8 @@ describe("SettingsPanel model registry", () => {
 
     // Provider is auto-selected and the list is discovered automatically.
     await screen.findByText("DeepSeek Chat");
-    // API 发现且不在目录里的模型，上下文显示“未知”而不是猜测数字。
-    expect(screen.getAllByText("未知").length).toBeGreaterThan(0);
+    // 有目录/API 元数据时显示真实上下文；只有真正未知才显示“未知”。
+    expect(screen.getAllByText("65.5K").length).toBeGreaterThan(0);
     const importButton = await screen.findByRole("button", { name: "导入" });
     fireEvent.click(importButton);
 
@@ -579,6 +579,22 @@ describe("SettingsPanel model registry", () => {
     });
   });
 
+  it("shows unknown only when a discovered model has no context window", async () => {
+    const api = mockApi({
+      discoverProviderModels: vi.fn().mockResolvedValue([
+        { ...DISCOVERED[0], context_window: null },
+      ]),
+    });
+    renderSettings(api);
+
+    const addModel = await screen.findByRole("button", { name: "添加模型" });
+    await waitFor(() => expect(addModel).not.toBeDisabled());
+    fireEvent.click(addModel);
+    await screen.findByText("DeepSeek Chat");
+
+    expect(screen.getAllByText("未知").length).toBeGreaterThan(0);
+  });
+
   it("edits model config via JSON view, restores defaults, and keeps it in sync", async () => {
     const api = mockApi({
       fetchManagedModels: vi.fn().mockResolvedValue([
@@ -613,6 +629,7 @@ describe("SettingsPanel model registry", () => {
       name: "配置 JSON",
     }) as HTMLTextAreaElement;
     expect(jsonArea.value).toContain('"temperature"');
+    expect(jsonArea.value).toContain('"max_tokens"');
 
     fireEvent.click(screen.getByRole("button", { name: "恢复默认" }));
     expect(jsonArea.value).toContain('"temperature": 0.7');

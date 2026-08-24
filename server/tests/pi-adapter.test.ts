@@ -127,6 +127,28 @@ describe("Pi model profile mapping", () => {
       },
     )).toEqual({ model: "custom-chat", top_p: 0.75 });
   });
+
+  test("injects saved registry parameters into the upstream payload", () => {
+    expect(applyModelProfileToPayload(
+      { model: "custom-chat" },
+      {
+        provider: "custom",
+        modelId: "custom-chat",
+        apiKey: "secret",
+        baseUrl: "https://models.example/v1",
+        params: {
+          reasoning_effort: "high",
+          tool_choice: "required",
+          max_tokens: 999,
+          temperature: 0.2,
+        },
+      },
+    )).toEqual({
+      model: "custom-chat",
+      reasoning_effort: "high",
+      tool_choice: "required",
+    });
+  });
 });
 describe("PiAgentAdapter", () => {
   afterEach(() => {

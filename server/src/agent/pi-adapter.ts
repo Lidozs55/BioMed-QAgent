@@ -316,13 +316,24 @@ export function applyModelProfileToPayload(
     return payload;
   }
   const next: Record<string, unknown> = { ...payload };
+  const dashScopeQwen = usesDashScopeQwen(selected);
+  for (const [key, value] of Object.entries(selected.params ?? {})) {
+    if (value === undefined) continue;
+    if (key === "max_tokens" || key === "temperature" || key === "top_p") continue;
+    if (key === "context_window" || key === "max_output_tokens" ||
+        key === "suggested_max_tokens" || key === "capabilities") continue;
+    if (dashScopeQwen &&
+        (key === "repetition_penalty" || key === "enable_search" ||
+         key === "thinking_mode" || key === "enable_thinking")) continue;
+    next[key] = value;
+  }
   if (selected.topP !== undefined) next.top_p = selected.topP;
-  if (usesDashScopeQwen(selected)) {
+  if (dashScopeQwen) {
     if (selected.repetitionPenalty !== undefined) {
       next.repetition_penalty = selected.repetitionPenalty;
     }
     if (selected.enableSearch !== undefined) next.enable_search = selected.enableSearch;
-    if (selected.thinkingMode === true) next.enable_thinking = true;
+    if (selected.thinkingMode !== undefined) next.enable_thinking = selected.thinkingMode;
   }
   return next;
 }

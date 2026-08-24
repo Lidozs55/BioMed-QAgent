@@ -3,26 +3,25 @@
 > Reference for the per-provider parameter profiles and model catalog data.
 > Current implementation (TypeScript): `server/src/settings/model-registry/` and
 > `packages/contracts/src/model-registry.ts`; the legacy `backend/` paths were
-> removed in Phase 8. Facts below were verified against official docs on 2026-08-10.
+> removed in Phase 8. Facts below were verified against official docs on 2026-08-24.
 
-## Model catalog maintenance (verified 2026-08-11)
+## Model catalog maintenance (verified 2026-08-24)
 
 - The **single source of truth** for model metadata (context window, max
-  output, capabilities, pricing, family) is now TypeScript:
-  `packages/contracts/src/model-registry.ts` (transport shapes) plus
-  `server/src/settings/model-registry/catalog.ts` (vendor presets and model
-  catalog). The legacy `backend/app/model_info/providers/*.py` was removed in
-  Phase 8; vendor presets (DashScope-native Qwen plus third-party IDs served
-  by Alibaba Model Studio, e.g. `deepseek-v4-flash-0731`, `kimi/kimi-k3`)
-  now live in the TS catalog.
+  output, suggested output, capabilities) is now TypeScript:
+  `server/src/settings/model-registry/model-catalog.ts` (verified model facts)
+  plus `server/src/settings/model-registry/catalog.ts` (provider/model parameter
+  profiles). `packages/contracts/src/model-registry.ts` only carries transport
+  shapes. The legacy `backend/app/model_info/providers/*.py` was removed in
+  Phase 8; the facts were restored and re-checked against the CC Switch local
+  presets and official vendor pages on 2026-08-24, including
+  `deepseek-v4-pro-0813`, `ZHIPU/GLM-5.3`, `qwen3.8-27b` and
+  `qwen3.8-2.4t-a95b`.
 - The Python generated mirrors (`catalog_qwen.py`, `catalog_compatible.py`)
   and `backend/scripts/regenerate_model_info.py` were removed with
   `backend/` in Phase 8. The TS catalog is source-controlled directly:
-  update `server/src/settings/model-registry/catalog.ts` (or
-  `packages/contracts/src/model-registry.ts`) instead of regenerating.
-- Data was re-verified against official pages (OpenAI, DeepSeek, Alibaba
-  Model Studio, Kimi, Zhipu, MiniMax, Groq, xAI, Mistral, Baichuan) and the
-  relay-standard database models.dev on 2026-08-11.
+  update `server/src/settings/model-registry/model-catalog.ts` and
+  `catalog.ts` instead of regenerating from legacy Python files.
 
 ## How the pieces fit
 
@@ -34,9 +33,13 @@
   provider/model, context window, base URL, API key) is in
   `server/src/settings/model-registry/model-resolution.ts`.
 - Provider `/v1/models` discovery returns only `id` (+`owned_by`); context
-  window / max output / capabilities are enriched from the local TS model
-  registry (`server/src/settings/model-registry/store.ts`), not from the
-  upstream response.
+  window / max output / capabilities are enriched from `model-catalog.ts`.
+  Unknown ids return `context_window: null` and the UI shows “未知” instead of
+  inventing a number; `guessContextWindow` is not used by discovery.
+- Durable model rows carry `metadata_source` (`catalog`/`api`/`user`).
+  On startup, catalog- and API-sourced rows whose ids appear in the local
+  catalog are refreshed; rows explicitly edited by the user (`user`, including
+  all `manual` rows) are never overwritten.
 
 ## Active model selection
 
@@ -49,15 +52,13 @@
 - Deleting the active model or its provider clears the mirrored runtime
   settings, and `resolveActiveModel` refuses an empty model identity.
 
-## Model-level parameter profiles (2026-08-10)
+## Model-level parameter profiles (2026-08-24)
 
-- `profiles.py` now carries `MODEL_PARAM_SPECS` (keyed provider → model id)
-  so each known model only exposes the parameters it actually supports per
-  official docs. Examples: `glm-4.5` has `thinking` but not
-  `reasoning_effort` (GLM-5.2+ only); `kimi-k3` has
-  `reasoning_effort`/`tool_choice` but not `temperature` (fixed); `grok-4.5`
-  has no presence/frequency penalty or `stop` (errors on reasoning models);
-  `deepseek-reasoner` drops temperature/top_p/penalties/logprobs.
+- `catalog.ts` carries provider parameter profiles plus model-level overrides
+  so each known model exposes the parameters it actually supports per official
+  docs. Examples: `glm-5.3` uses `reasoning_effort`/`thinking`; `kimi-k3`
+  uses `reasoning_effort`/`tool_choice`; `grok-4.5` always reasons and only
+  adjusts effort; `deepseek-v4` exposes thinking/reasoning effort.
 - DashScope families are covered by `MODEL_PARAM_PREFIXES` (longest-prefix
   match, plus keyword rules for non-chat models): Qwen3.8 uses
   `reasoning_effort` (`low/medium/xhigh`, default `xhigh`, mutually exclusive
@@ -66,24 +67,21 @@
   `do_sample` / `seed`, image models (`qwen-image-*`, `wan*`) expose
   `size`/`n`/`negative_prompt`/`prompt_extend`/`watermark`, embeddings expose
   `dimension`, and ASR/music models expose no chat parameters at all.
-- Precedence in `ProviderModelStore.get_param_specs`: DB model-pattern
-  override → code model profile → DB generic provider row → code provider
-  profile → all-params fallback.
-- Discovery re-attaches per-model specs after `/v1/models` is fetched, so
-  imported models carry their own `param_specs` snapshot.
-- On startup `ProviderModelStore` re-syncs the generic (empty-pattern)
-  `parameter_profiles` rows with the code catalog (`INSERT OR REPLACE`), so
-  databases seeded by older app versions pick up enriched parameter sets and
-  new providers automatically.  The maintained-model list always serves the
-  current model-aware profile instead of stale import-time snapshots.
+- Precedence in `paramSpecsFor(providerId, modelId)`: model override →
+  provider profile → generic fallback.
+- Discovery and managed-model responses re-attach current specs from
+  `catalog.ts`, so imported models never rely on stale import-time snapshots.
 - The graphical editor shows main parameters and collapses the advanced
   section; the JSON config view serializes **every** supported parameter
-  (spec defaults + current values), so nothing is hidden.
-- The `parameter_profiles` table stays an override layer; per-model support
-  data lives in code because it tracks official API docs and changes with
-  model releases.
+  (spec defaults + current values), so it opens non-empty even when stored
+  `params` is empty.
+- Saved `params` are carried through `BioMedModelConfig.params` and merged into
+  the Pi/OpenAI-compatible request payload by `applyModelProfileToPayload`.
+  Portable fields (`max_tokens`/`temperature`/`top_p`) remain controlled by the
+  active runtime settings; provider-specific fields like `reasoning_effort`,
+  `tool_choice` and `thinking` are forwarded as-is.
 
-## Verified parameter facts (2026-08-10)
+## Verified parameter facts (2026-08-24)
 
 ### 智谱 GLM (`docs.bigmodel.cn/cn/guide/start/concept-param`)
 
@@ -141,8 +139,8 @@
 
 ## Model catalog conventions
 
-- `ModelDetail.max_output_tokens` is the hard upper bound;
+- `ModelCatalogEntry.max_output_tokens` is the hard upper bound;
   `suggested_max_tokens` is the UI default (often more conservative).
-- Discovery enrichment always consults the local catalog first
-  (`get_known_model`), so registering a model here also fixes its discovered
-  metadata without relying on `guess_context_window` heuristics.
+- Discovery enrichment consults `lookupModelCatalog` first, so registering a
+  model in `model-catalog.ts` fixes its discovered metadata without relying on
+  `guessContextWindow` heuristics.

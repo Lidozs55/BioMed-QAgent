@@ -11,7 +11,7 @@ import { readJsonBody } from "../../http/body.js";
 import { HttpError } from "../../http/error.js";
 import { sendJson, sendNoContent } from "../../http/response.js";
 import { asRecord, requiredString, type JsonObject } from "../../http/validation.js";
-import { PARAM_SPECS, VENDORS } from "./catalog.js";
+import { VENDORS } from "./catalog.js";
 import type { ModelSettingsService } from "./service.js";
 
 export function createSettingsRouter(service: ModelSettingsService): {
@@ -77,8 +77,7 @@ export function createSettingsRouter(service: ModelSettingsService): {
     }
     const specsMatch = /^\/api\/v1\/model-registry\/providers\/([^/]+)\/param-specs$/.exec(pathname);
     if (specsMatch !== null && method === "GET") {
-      service.getProvider(decodeURIComponent(specsMatch[1]!));
-      return send(response, 200, PARAM_SPECS);
+      return send(response, 200, service.providerParamSpecs(decodeURIComponent(specsMatch[1]!)));
     }
     if (method === "GET" && pathname === "/api/v1/model-registry/models") {
       return send(response, 200, service.listModels());
