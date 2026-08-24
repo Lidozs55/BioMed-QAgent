@@ -300,6 +300,7 @@ describe("dynamic family build tool boundary", () => {
         execution: result,
         validationProfileRef: parsed.family_spec.validation_policy_ref,
         signal: new AbortController().signal,
+        isGenerationCurrent: () => true,
       };
       await expect(publishDynamicFamily(publishInput)).rejects.toThrow(/durable HIL gate/);
       for (const action of ["reject", "approve"] as const) {
@@ -412,6 +413,7 @@ describe("dynamic family build tool boundary", () => {
 async function executedSubmission(
   root: string,
   content = "record_id,value\nr1,1\n",
+  reviewStatus = false,
 ): Promise<{ publishInput: PublishDynamicFamilyInput; buildId: string }> {
   await mkdir(path.join(root, "source_assets"), { recursive: true });
   await writeFile(path.join(root, "source_assets", "source.csv"), "record_id,value\nr1,1\n", "utf8");
@@ -421,6 +423,15 @@ async function executedSubmission(
     relativePath: "source_assets/source.csv",
   });
   const raw = await submission();
+  if (reviewStatus) {
+    const reviewFamily = raw.family_spec as FamilySpec;
+    reviewFamily.table_definitions[0]!.field_names.push("review_status");
+    reviewFamily.canonical_digest = await computeFamilySpecDigest(reviewFamily);
+    (raw.transform_metadata as { bound_family_spec_digest: string }).bound_family_spec_digest =
+      reviewFamily.canonical_digest;
+    (raw.build_proposal as { family_spec_ref: { digest: string } }).family_spec_ref.digest =
+      reviewFamily.canonical_digest;
+  }
   raw.registered_sources = { source_binding: receipt.asset_ref.asset_id };
   raw.transform_source = `export const transform = { run({ inputs }) { const [input] = inputs; return { outputs: [{ handle: "out_0", table_id: "records", schema_ref: "schema_records", locator_ref: input.receipt_id, content: ${JSON.stringify(content)}, row_count: 1 }] }; } };`;
   await registry.registerCoreAcquisitionProvenance(receipt, {
@@ -446,9 +457,53 @@ async function executedSubmission(
       execution: result,
       validationProfileRef: parsed.family_spec.validation_policy_ref,
       signal: new AbortController().signal,
+      isGenerationCurrent: () => true,
     },
   };
 }
+
+test("publication fence rejects a generation superseded while HIL is pending", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "dynamic-family-publication-fence-"));
+  try {
+    const { publishInput, buildId } = await executedSubmission(
+      root,
+      "record_id,value,review_status\nr1,1,human_review_pending\n",
+      true,
+    );
+    let current = true;
+    let enteredReview!: () => void;
+    const reviewEntered = new Promise<void>((resolve) => { enteredReview = resolve; });
+    let releaseReview!: () => void;
+    const reviewReleased = new Promise<void>((resolve) => { releaseReview = resolve; });
+    const publishing = publishDynamicFamily({
+      ...publishInput,
+      isGenerationCurrent: () => current,
+      hilGate: {
+        requestHIL: async (input) => {
+          enteredReview();
+          await reviewReleased;
+          return {
+            schema_version: "1.0",
+            review_id: "review_fence",
+            request_id: "hil_fence",
+            decision: { action: "accept" },
+            reviewer: "user",
+            reviewed_at: "2026-08-24T00:00:00.000Z",
+            evidence_digest: computeHILEvidenceDigest(input),
+            reason: null,
+          };
+        },
+      },
+    });
+    await reviewEntered;
+    current = false;
+    releaseReview();
+    await expect(publishing).rejects.toThrow(/generation|stale/i);
+    await expect(access(path.join(root, "datasets_build", buildId, "publish"))).rejects.toThrow();
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 async function resourceReport(root: string, buildId: string): Promise<Record<string, unknown>> {
   return JSON.parse(await readFile(

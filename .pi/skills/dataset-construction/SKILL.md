@@ -37,11 +37,10 @@ output.
    family, use the fixed two-phase dynamic protocol: call
    `prepare_dynamic_family_build` first, bind the proposal transform-ref digest
    to the returned Host descriptor digest, then call
-   `submit_dynamic_family_build` with that unchanged receipt. Run a fresh
-   Fresh prepare after source/projection/transform changes is mandatory; also
-   prepare after any committed role, binding, or acquisition-request change,
-   FamilySpec, Projection, or transform fact changes. Use the submit protocol
-   with (bind the Host descriptor digest before submit):
+   `submit_dynamic_family_build` with that unchanged receipt. A fresh prepare
+   after source/projection/transform changes is mandatory; also prepare after
+   any committed role, binding, or acquisition-request change, FamilySpec,
+   Projection, or transform fact changes. Use this protocol with:
    - `execution_backend="in_process_unisolated"` exactly. This backend is **not a
      sandbox, isolation mechanism, or security boundary**; never describe it as one.
    - a canonical-digest-valid task/user/curated/system `FamilySpec`, selected
@@ -68,10 +67,12 @@ output.
    retryable is true and the external condition may have changed. A non-retryable
    static adapter/transform rejection or requested-field/topology mismatch means
    the registered static family is unsuitable: stop static execution and required-
-   field vocabulary probing, then switch immediately to
-   `submit_dynamic_family_build`. For a permission or human-review request, wait
-   for the decision instead of replacing the trusted operation with workspace
-   output.
+   field vocabulary probing, then switch immediately to the fixed dynamic
+   protocol: call `prepare_dynamic_family_build`, bind the proposal transform-ref
+   digest to the returned Host descriptor digest, and call
+   `submit_dynamic_family_build` with that unchanged receipt. For a permission
+   or human-review request, wait for the decision instead of replacing the
+   trusted operation with workspace output.
 6. Only a successful Publication is formal output. Never describe rejection,
    NO_DATA, cancellation, incomplete review, or failure as success; never
    fabricate file names when reporting artifacts.

@@ -302,6 +302,26 @@ export interface Phase3RuntimeOptions {
   browserPool?: import("../external/browser/pool.js").NodeBrowserPool | null;
   /** VLM chart-extraction config; missing fields keep env defaults. */
   vlmConfig?: Partial<VlmConfig> | null;
+  /**
+   * Trusted composition seams used by production fixtures to observe the
+   * acquisition/transform/publication boundary without replacing phase3.
+   */
+  dynamicFamilySeams?: Phase3DynamicFamilySeams;
+}
+
+export type Phase3AcquisitionRuntime = Pick<CoreAcquisitionRuntime, "plan" | "acquire">;
+
+export interface Phase3DynamicFamilySeams {
+  readonly createAcquisitionRuntime?: (options: {
+    taskId: string;
+    taskRoot: string;
+    cache: ContentCache;
+    client: PublicHttpClient;
+    sourceAssetRegistry: SourceAssetRegistry;
+    registrar: CacheRegistrar | null;
+  }) => Phase3AcquisitionRuntime;
+  readonly submitDynamicFamilyBuild?: typeof submitDynamicFamilyBuild;
+  readonly publishDynamicFamily?: typeof publishDynamicFamily;
 }
 
 export function createPhase3AcquisitionRuntime(options: {
@@ -310,6 +330,7 @@ export function createPhase3AcquisitionRuntime(options: {
   cache: ContentCache;
   client: PublicHttpClient;
   sourceAssetRegistry?: SourceAssetRegistry;
+  registrar?: CacheRegistrar | null;
 }): CoreAcquisitionRuntime {
   const registry = new CoreAcquisitionRegistry();
   registry.registerProvider(createChemblFilesProvider());
@@ -417,12 +438,20 @@ export async function createPhase3Runtime(
       });
       const cache = new ContentCache(path.join(taskRoot, "cache"));
       const sourceAssetRegistry = new SourceAssetRegistry(taskId, taskRoot);
-      const acquisitionRuntime = createPhase3AcquisitionRuntime({
+      const acquisitionRuntime = options.dynamicFamilySeams?.createAcquisitionRuntime?.({
         taskId,
         taskRoot,
         cache,
         client,
         sourceAssetRegistry,
+        registrar,
+      }) ?? createPhase3AcquisitionRuntime({
+        taskId,
+        taskRoot,
+        cache,
+        client,
+        sourceAssetRegistry,
+        registrar,
       });
       const service = createDatasetCoreService({
         tsCore,
@@ -591,7 +620,7 @@ export async function createPhase3Runtime(
             registered_sources: Object.freeze(registeredSources),
             acquisition_requests: Object.freeze({}),
           });
-          const result = await submitDynamicFamilyBuild({
+          const result = await (options.dynamicFamilySeams?.submitDynamicFamilyBuild ?? submitDynamicFamilyBuild)({
 
             taskId,
             runId: currentRunId,
@@ -617,7 +646,7 @@ export async function createPhase3Runtime(
           if (!(await buildLock.assertOwned())) {
             throw new Error("dynamic family build lock fence was lost");
           }
-          const product = await publishDynamicFamily({
+          const product = await (options.dynamicFamilySeams?.publishDynamicFamily ?? publishDynamicFamily)({
             taskId,
             taskRoot,
             workspaceRoot,
@@ -626,6 +655,10 @@ export async function createPhase3Runtime(
             validationProfileRef: submission.family_spec.validation_policy_ref,
             hilGate: approvalGate,
             signal,
+            isGenerationCurrent: async () =>
+              reservation !== null
+              && dynamicFamilyPreflight.isCurrent(reservation)
+              && await buildLock.assertOwned(),
           });
           const publicationManifestSha = product.publication.publication.manifest_sha256;
           if (publicationManifestSha === undefined) {

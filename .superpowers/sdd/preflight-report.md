@@ -203,6 +203,42 @@ Exact RED/GREEN evidence (all Vitest commands explicitly used
   architecture/TODO documentation. Those shared files were intentionally not
   edited in this lane.
 
+## Second review fix wave
+
+The second review findings were verified against the production phase3
+composition. Publication previously received only a build-lock check before
+entering its async staging/HIL/promotion path; a new prepare could invalidate
+the reservation while those writes continued. The publication boundary now
+requires an async live-generation fence, checks it before staged mutations,
+after B3 and HIL gates, before every final manifest write, and again through
+the publisher's immutable-rename fence. Phase3 supplies a fence that combines
+the current reservation with build-lock ownership.
+
+The dataset-construction skill no longer switches directly from a failed static
+family to submit. Both its normal dynamic path and its failure fallback require
+prepare, Host descriptor digest binding, and submit with the unchanged receipt;
+fresh prepare is required after committed fact changes.
+
+Exact second-wave RED/GREEN evidence (all Vitest commands used
+`--maxWorkers=2`):
+
+- RED: `pnpm --filter @biomed/server test -- tests/skill-manifests.test.ts --maxWorkers=2` — 1 of 9 tests failed (8 passed); the new stale-step assertion found step 5 still switched directly to submit.
+- GREEN: same skill-manifest command — 9 tests passed.
+- RED: `pnpm --filter @biomed/server test -- tests/dynamic-family-build-tool.test.ts -t "publication fence rejects" --maxWorkers=2` — 1 failed, 14 skipped; publication resolved after the HIL gate even after the generation fence was invalidated.
+- GREEN: same publication-fence command — 1 passed, 14 skipped; no publication directory was created.
+- GREEN: `pnpm --filter @biomed/server test -- tests/dynamic-family-phase3-composition.test.ts --maxWorkers=2` — 1 production-composition test passed, covering duplicate submit, valid old receipt supersession, real build lock, injected Core acquisition, actual Host transform execution, and publication suppression.
+- GREEN: covering aggregate — `pnpm --filter @biomed/server test -- tests/dynamic-family-phase3-composition.test.ts tests/dynamic-family-build-tool.test.ts tests/dynamic-family-preflight.test.ts tests/skill-manifests.test.ts tests/family-host-core-dispatch-guard.test.ts tests/acquisition-first-composition.test.ts --maxWorkers=2` — 6 files, 43 tests passed.
+- GREEN: `pnpm --filter @biomed/server typecheck` and `pnpm --filter @biomed/server lint` — both passed.
+
+The phase3 composition now exposes trusted test/fixture seams for the real
+acquisition, transform, and publication call chain without replacing the
+phase3 runtime. The composition test pauses publication after the valid old
+receipt has acquired and transformed, starts a superseding prepare while the
+build lock is still held, then releases publication; the live fence rejects
+before staging and both duplicate submits return errors. The new skill and
+composition tests are in `server/tests/skill-manifests.test.ts` and
+`server/tests/dynamic-family-phase3-composition.test.ts`.
+
 ## Commit and remote state
 
 - Implementation commit: `d014afcbf7d8639ba7091aa01adda3f1b6bffdf6`
@@ -211,5 +247,6 @@ Exact RED/GREEN evidence (all Vitest commands explicitly used
   (`fix(server): fence dynamic family preflight consumption`).
 - Guard false-positive fix commit: `c981825d8e75d7f6d22586d520fde152ac280a8a`
   (`fix(server): avoid generic core guard false positive`).
-- The report was finalized after the post-fix gates and is pushed to
-  `origin/feat/family-host-dynamic-preflight` without force-push.
+- The first review report is pushed at `8e254dea`; this second review fix wave
+  is focused-green but uncommitted and awaits the parent's serialized full-gate
+  slot before the next normal commit/push.
