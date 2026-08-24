@@ -135,11 +135,15 @@ export function deriveProductionExpressionIdentity(
     evidence.push(parsed);
   }
   const assets = bindingAssets(input);
+  const identityEvidence = evidence.filter((value) =>
+    value.source_asset_registration_receipt.asset_ref.role === "source" ||
+    value.source_asset_registration_receipt.asset_ref.role === "carrier",
+  );
+  if (identityEvidence.length === 0) {
+    fail("provider revision evidence must cover a source or carrier receipt");
+  }
   const identityEvidenceKeys = new Set(
-    evidence
-      .filter((value) => value.source_asset_registration_receipt.asset_ref.role === "source" ||
-        value.source_asset_registration_receipt.asset_ref.role === "carrier")
-      .map((value) => receiptKey(value.source_asset_registration_receipt)),
+    identityEvidence.map((value) => receiptKey(value.source_asset_registration_receipt)),
   );
   const requiredIdentityReceiptKeys = new Set(
     [...owned.entries()]
@@ -152,6 +156,9 @@ export function deriveProductionExpressionIdentity(
   ) {
     fail("registered carrier receipt closure is not fully covered by provider revision evidence");
   }
+  // Mapping/metadata evidence is never used as identity authority, but any
+  // provider facts supplied for the same closure must still be internally
+  // consistent before Core admits the build.
   const evidenceSnapshots = new Set(evidence.map((value) => value.provider_snapshot_identity));
   const evidenceTokens = new Set(evidence.map((value) => value.provider_revision_token));
   if (evidenceSnapshots.size !== 1 || evidenceTokens.size !== 1) {
@@ -173,6 +180,11 @@ export function deriveProductionExpressionIdentity(
       fail(`registered receipt for '${entry.bindingId}' does not match the Core asset record`);
     }
   }
+  for (const receipt of owned.values()) {
+    if (bindingForReceipt(receipt, assets) === undefined) {
+      fail(`registration receipt '${receiptKey(receipt)}' is not covered by the Core asset closure`);
+    }
+  }
 
   const sourceBindings = input.spec.source_bindings;
   if (sourceBindings.length === 0) fail("at least one source binding is required");
@@ -183,15 +195,19 @@ export function deriveProductionExpressionIdentity(
   }
   const accessionSet = new Set<string>();
   const facts: SourceAssetRegistrationFact[] = [];
-  for (const parsed of evidence.filter((value) =>
-    value.source_asset_registration_receipt.asset_ref.role === "source" ||
-    value.source_asset_registration_receipt.asset_ref.role === "carrier")) {
-    const receipt = parsed.source_asset_registration_receipt;
+  const evidenceByReceipt = new Map(
+    identityEvidence.map((parsed) => [receiptKey(parsed.source_asset_registration_receipt), parsed]),
+  );
+  const trustedProviderEvidence = identityEvidence[0]!;
+  for (const receipt of owned.values()) {
+    const parsed = evidenceByReceipt.get(receiptKey(receipt));
+    const providerSnapshot = parsed?.provider_snapshot_identity ?? trustedProviderEvidence.provider_snapshot_identity;
+    const revisionToken = parsed?.provider_revision_token ?? trustedProviderEvidence.provider_revision_token;
+    const accession = normalized(parsed?.canonical_accession ?? trustedProviderEvidence.canonical_accession);
     const binding = bindingForReceipt(receipt, assets);
-    const accession = normalized(parsed.canonical_accession);
     if (accession.length === 0) fail("canonical accession is blank");
     accessionSet.add(accession);
-    if (binding !== undefined && binding.role === "source") {
+    if (parsed !== undefined && binding !== undefined && binding.role === "source") {
       const declared = input.spec.source_bindings.find((candidate) => candidate.binding_id === binding.bindingId)?.accession;
       if (declared !== undefined && declared !== null && normalized(declared) !== accession) {
         fail(`caller accession for '${binding.bindingId}' disagrees with provider evidence`);
@@ -209,8 +225,8 @@ export function deriveProductionExpressionIdentity(
       taskId: receipt.task_id,
       buildId: input.spec.build_id,
       generation: 0,
-      providerSnapshot: parsed.provider_snapshot_identity,
-      revisionToken: parsed.provider_revision_token,
+      providerSnapshot,
+      revisionToken,
       accession,
     }));
   }

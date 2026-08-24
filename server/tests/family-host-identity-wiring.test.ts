@@ -332,4 +332,88 @@ describe("authoritative expression identity production wiring", () => {
       registrationReceipts: [receipt],
     })).rejects.toThrow(/Core acquisition provenance/);
   });
+
+  test("all exact source, mapping, and metadata receipts contribute to revision identity", () => {
+    const sourcePath = fixture("gdc_expression.tsv");
+    const sourceAsset = assetFor(sourcePath);
+    const mappingAsset = {
+      ...sourceAsset,
+      asset_id: `asset_${"e".repeat(64)}`,
+      sha256: "e".repeat(64),
+      relative_path: "source_assets/mapping.tsv",
+      source_id: "binding_gdc_mapping",
+    };
+    const metadataAsset = {
+      ...sourceAsset,
+      asset_id: `asset_${"f".repeat(64)}`,
+      sha256: "f".repeat(64),
+      relative_path: "source_assets/metadata.tsv",
+      source_id: "binding_gdc_metadata",
+    };
+    const mappingReceipt = {
+      ...receiptFor(mappingAsset),
+      receipt_id: "receipt_identity_mapping",
+      asset_ref: { ...receiptFor(mappingAsset).asset_ref, asset_id: mappingAsset.asset_id, role: "mapping" as const },
+      relative_path: mappingAsset.relative_path,
+      source_id: mappingAsset.source_id,
+    };
+    const metadataReceipt = {
+      ...receiptFor(metadataAsset),
+      receipt_id: "receipt_identity_metadata",
+      asset_ref: { ...receiptFor(metadataAsset).asset_ref, asset_id: metadataAsset.asset_id, role: "metadata" as const },
+      relative_path: metadataAsset.relative_path,
+      source_id: metadataAsset.source_id,
+    };
+    const sourceReceipt = receiptFor(sourceAsset);
+    const base = {
+      spec: v2Spec(),
+      taskId: "task_identity_derivation",
+      sourceAssets: { binding_gdc: sourceAsset },
+      mappingAssets: { binding_gdc: mappingAsset },
+      metadataAssets: { binding_gdc: metadataAsset },
+      providerRevisionEvidence: [providerEvidence(sourceReceipt)],
+      registrationReceipts: [sourceReceipt, mappingReceipt, metadataReceipt],
+    } as const;
+
+    const withClosure = deriveProductionExpressionIdentity(base);
+    const sourceOnly = deriveProductionExpressionIdentity({
+      ...base,
+      mappingAssets: {},
+      metadataAssets: {},
+      registrationReceipts: [sourceReceipt],
+    });
+    expect(withClosure?.context.datasetRevisionId).not.toBe(sourceOnly?.context.datasetRevisionId);
+
+    const changedMappingAsset = { ...mappingAsset, asset_id: `asset_${"a".repeat(64)}`, sha256: "a".repeat(64) };
+    const changedMappingReceipt = {
+      ...mappingReceipt,
+      receipt_id: "receipt_identity_mapping_changed",
+      asset_ref: { ...mappingReceipt.asset_ref, asset_id: changedMappingAsset.asset_id },
+      sha256: changedMappingAsset.sha256,
+    };
+    const changed = deriveProductionExpressionIdentity({
+      ...base,
+      mappingAssets: { binding_gdc: changedMappingAsset },
+      registrationReceipts: [sourceReceipt, changedMappingReceipt, metadataReceipt],
+    });
+    expect(changed?.context.datasetRevisionId).not.toBe(withClosure?.context.datasetRevisionId);
+
+    const changedMetadataAsset = {
+      ...metadataAsset,
+      asset_id: `asset_${"c".repeat(64)}`,
+      sha256: "c".repeat(64),
+    };
+    const changedMetadataReceipt = {
+      ...metadataReceipt,
+      receipt_id: "receipt_identity_metadata_changed",
+      asset_ref: { ...metadataReceipt.asset_ref, asset_id: changedMetadataAsset.asset_id },
+      sha256: changedMetadataAsset.sha256,
+    };
+    const changedMetadata = deriveProductionExpressionIdentity({
+      ...base,
+      metadataAssets: { binding_gdc: changedMetadataAsset },
+      registrationReceipts: [sourceReceipt, mappingReceipt, changedMetadataReceipt],
+    });
+    expect(changedMetadata?.context.datasetRevisionId).not.toBe(withClosure?.context.datasetRevisionId);
+  });
 });

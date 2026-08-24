@@ -66,6 +66,9 @@ export interface AuthoritativeDatasetIdentityContext {
   readonly contextKind: "authoritative_dataset_identity.v1";
   readonly datasetId: string;
   readonly datasetRevisionId: string;
+  /** All exact source/carrier/mapping/metadata receipts in the build closure. */
+  readonly closureAssetIds: readonly string[];
+  /** Source/carrier subset used by adapter publication identity records. */
   readonly carrierAssetIds: readonly string[];
   readonly providerSnapshot: string;
   readonly revisionToken: string | null;
@@ -189,9 +192,16 @@ export function createAuthoritativeDatasetIdentityContext(
   if (accessions.some((accession) => !factAccessions.has(accession))) {
     throw new TypeError("canonical accession closure is not supported by carrier receipts");
   }
-  const carrierAssetIds = [...new Set(facts.map((fact) => fact.assetId))].sort();
-  if (carrierAssetIds.length !== facts.length) {
-    throw new TypeError("carrier receipt asset IDs must be unique");
+  const closureAssetIds = [...new Set(facts.map((fact) => fact.assetId))].sort();
+  if (closureAssetIds.length !== facts.length) {
+    throw new TypeError("identity closure asset IDs must be unique");
+  }
+  const carrierAssetIds = facts
+    .filter((fact) => fact.role === "source" || fact.role === "carrier")
+    .map((fact) => fact.assetId)
+    .sort();
+  if (carrierAssetIds.length === 0) {
+    throw new TypeError("identity closure must contain a source or carrier receipt");
   }
   const datasetId = createDatasetId({
     sourceNamespace: stringValue(record.sourceNamespace, "sourceNamespace"),
@@ -203,7 +213,9 @@ export function createAuthoritativeDatasetIdentityContext(
     datasetId,
     revisionToken,
     providerSnapshot,
-    carrierAssetIds,
+    // The revision hash covers the complete exact receipt closure. The
+    // historical field name is retained for the stable identity primitive.
+    carrierAssetIds: closureAssetIds,
   });
   const primaryKey = schemaRef === "gene_expression.long.v2"
     ? ["dataset_revision_id", "sample_id", "gene_id", "measurement_type"]
@@ -212,6 +224,7 @@ export function createAuthoritativeDatasetIdentityContext(
     contextKind: "authoritative_dataset_identity.v1",
     datasetId,
     datasetRevisionId,
+    closureAssetIds: Object.freeze(closureAssetIds),
     carrierAssetIds: Object.freeze(carrierAssetIds),
     providerSnapshot,
     revisionToken,

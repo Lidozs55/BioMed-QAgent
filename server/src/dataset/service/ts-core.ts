@@ -963,6 +963,7 @@ export class TypeScriptDatasetCore {
         : canonicalDigest({
           dataset_id: identityDerivation.context.datasetId,
           dataset_revision_id: identityDerivation.context.datasetRevisionId,
+          closure_asset_ids: [...identityDerivation.context.closureAssetIds],
           carrier_asset_ids: [...identityDerivation.context.carrierAssetIds],
         }),
       deriveRequest: context.deriveRequest ?? null,

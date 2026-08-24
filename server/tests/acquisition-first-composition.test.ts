@@ -15,6 +15,7 @@ import { FIXED_BIOMEDICAL_PROVIDER_IDS } from "../src/dataset/acquisition/biomed
 import { ContentCache } from "../src/external/acquisition/content-cache.js";
 import { PublicHttpClient } from "../src/external/network/http-client.js";
 import { createPhase3AcquisitionRuntime } from "../src/runtime/phase3-composition.js";
+import { SourceAssetRegistry } from "../src/runtime/source-assets/registry.js";
 
 const roots: string[] = [];
 const CONTENT = JSON.stringify({ activities: [], page_meta: { total_count: 0 } });
@@ -48,6 +49,58 @@ afterEach(async () => {
 });
 
 describe("acquisition-first phase3 composition", () => {
+  it.each([
+    ["geo", "geo.files.v1", "GSE178352", "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE178nnn/GSE178352/matrix/GSE178352_series_matrix.txt.gz"],
+    ["gdc", "gdc.files.v1", "FILE-123", "https://api.gdc.cancer.gov/data/FILE-123"],
+  ])("registers the production %s expression provider with trusted revision facts", async (source, providerId, accession, expectedUrl) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), `acquisition-first-${source}-`));
+    roots.push(root);
+    const bytes = Buffer.from("gene_id\tS1\nTP53\t1\n");
+    const executor = vi.fn(async ({ url }: { url: URL }) => {
+      expect(url.toString()).toBe(expectedUrl);
+      return {
+        status: 200,
+        headers: {
+          "content-type": "text/tab-separated-values",
+          "content-length": String(bytes.length),
+        },
+        body: (async function* (): AsyncIterable<Buffer> { yield bytes; })(),
+      };
+    });
+    const registry = new SourceAssetRegistry(source === "geo" ? "task_geo" : "task_gdc", root);
+    const runtime = createPhase3AcquisitionRuntime({
+      taskId: source === "geo" ? "task_geo" : "task_gdc",
+      taskRoot: root,
+      cache: new ContentCache(path.join(root, "cache")),
+      client: new PublicHttpClient({
+        resolve: async () => [{ address: "93.184.216.34", family: 4 }],
+        executor,
+      }),
+      sourceAssetRegistry: registry,
+    });
+
+    const result = await runtime.acquire({
+      ...request(),
+      request_id: `request_${source}`,
+      task_id: source === "geo" ? "task_geo" : "task_gdc",
+      binding_id: `binding_${source}`,
+      provider_id: providerId,
+      parameters: { source, accession, entities: {} },
+    });
+
+    expect(result.providerRevisionEvidence).toMatchObject([{
+      canonical_accession: accession,
+      provider_snapshot_identity: expect.stringContaining(`${source}:`),
+      source_asset_registration_receipt: { asset_ref: { role: "carrier" } },
+    }]);
+    await expect(registry.resolveCoreAcquired(result.sourceAsset.asset_id)).resolves.toMatchObject({
+      acquisition_provenance: {
+        canonical_accession: accession,
+        provider_snapshot_identity: expect.stringContaining(`${source}:`),
+      },
+    });
+  });
+
   it("registers the fixed ChEMBL provider and publishes a carrier asset", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "acquisition-first-"));
     roots.push(root);
