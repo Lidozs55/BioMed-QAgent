@@ -208,9 +208,13 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
         recipe_id: { type: "string" },
         recipe_version: { type: "string" },
         binding_id: { type: "string" },
+        family_id: { type: "string" },
+        schema_ref: { type: "string" },
+        table_id: { type: "string" },
+        input_role: { type: "string" },
         intended_role: { type: "string", enum: ["source", "mapping", "metadata", "carrier"] },
       },
-      required: ["evidence_id", "recipe_id", "recipe_version", "binding_id", "intended_role"],
+      required: ["evidence_id", "recipe_id", "recipe_version", "binding_id", "family_id", "schema_ref", "table_id", "input_role", "intended_role"],
       additionalProperties: false,
     },
     execute: async (argumentsValue, signal) => {
@@ -222,6 +226,10 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
       const recipeId = typeof record.recipe_id === "string" ? record.recipe_id : "";
       const recipeVersion = typeof record.recipe_version === "string" ? record.recipe_version : "";
       const bindingId = typeof record.binding_id === "string" ? record.binding_id : "";
+      const familyId = typeof record.family_id === "string" ? record.family_id : "";
+      const schemaRef = typeof record.schema_ref === "string" ? record.schema_ref : "";
+      const tableId = typeof record.table_id === "string" ? record.table_id : "";
+      const inputRole = typeof record.input_role === "string" ? record.input_role : "";
       const intendedRole = typeof record.intended_role === "string" ? record.intended_role : "";
       const stored = await options.evidenceStore.get(evidenceId);
       const taskId = typeof options.taskId === "function" ? options.taskId() : options.taskId;
@@ -230,7 +238,7 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
       const now = new Date().toISOString();
       const proposal = await options.proposalStore.put({
         schema_version: "1.0",
-        proposal_id: `browser_proposal_${canonicalDigest({ evidence: stored.evidenceDigest, recipeId, recipeVersion, bindingId }).slice(0, 32)}`,
+        proposal_id: `browser_proposal_${canonicalDigest({ evidence: stored.evidenceDigest, recipeId, recipeVersion, bindingId, familyId, schemaRef, tableId, inputRole }).slice(0, 32)}`,
         evidence_digest: stored.evidenceDigest,
         task_id: taskId,
         run_id: runId,
@@ -239,6 +247,10 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
         recipe_id: recipeId,
         recipe_version: recipeVersion,
         binding_id: bindingId,
+        family_id: familyId,
+        schema_ref: schemaRef,
+        table_id: tableId,
+        input_role: inputRole,
         intended_role: intendedRole as "source" | "mapping" | "metadata" | "carrier",
         status: "hil_pending",
         created_at: now,
@@ -252,6 +264,7 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
         blocking: true,
         subject: {
           binding_id: bindingId,
+          table_ids: [tableId],
           evidence_ids: [evidenceId],
           source_asset_ids: [stored.evidence.source_asset_id],
           locator_urls: [stored.evidence.final_url],
@@ -274,6 +287,10 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
           recipe_id: recipeId,
           recipe_version: recipeVersion,
           binding_id: bindingId,
+          family_id: familyId,
+          schema_ref: schemaRef,
+          table_id: tableId,
+          input_role: inputRole,
         },
         policy_ref: "browser.acquisition.formalization.v1",
         idempotency_key: `browser-formalization:${proposal.proposal_id}`,

@@ -147,4 +147,13 @@ risks, and verification results for later audit.
   OperationResult, B3, ProductAssessment, and publication remain Core-owned.
 - Reason: Media parsing is not dataset semantics. Unknown databases need a
   promoted recipe plus an explicit family contract, not inferred publication.
-- Status: pending next implementation slice.
+- Status: enforced by the current proposal/schema checks; execution remains pending.
+
+## 2026-08-24 / D-018
+
+- Decision: Store `schema_ref` on browser recipe registration rather than
+  extending the generic `WorkflowRecipeRef` with browser-only fields.
+- Reason: Existing workflow recipe contracts are shared by other acquisition
+  paths; browser parser schema binding is a registry concern and must not widen
+  unrelated wire DTOs.
+- Status: implemented and focused-verified.

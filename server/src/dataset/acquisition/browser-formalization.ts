@@ -82,6 +82,9 @@ export class BrowserFormalizationService {
     }
 
     const recipe = this.#recipes.resolve(proposal.recipe_id, proposal.recipe_version, evidence);
+    if (recipe.schema_ref !== proposal.schema_ref) {
+      throw new Error("browser recipe schema does not match proposal schema binding");
+    }
     const registration = await this.#assets.register({
       sourceId: evidence.source_id,
       relativePath: evidence.relative_path,
@@ -100,6 +103,10 @@ export class BrowserFormalizationService {
       provider_implementation_digest: BROWSER_ACQUISITION_PROVIDER_IMPLEMENTATION_DIGEST,
       recipe_id: recipe.ref.recipe_id,
       recipe_version: String(recipe.ref.recipe_version),
+      family_id: proposal.family_id,
+      schema_ref: proposal.schema_ref,
+      table_id: proposal.table_id,
+      input_role: proposal.input_role,
       generation: proposal.generation,
     });
     const provenance = await this.#assets.registerCoreAcquisitionProvenance(registration, {

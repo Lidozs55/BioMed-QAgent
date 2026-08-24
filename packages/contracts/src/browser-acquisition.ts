@@ -53,6 +53,10 @@ export interface BrowserAcquisitionProposal {
   recipe_id: string;
   recipe_version: string;
   binding_id: string;
+  family_id: string;
+  schema_ref: string;
+  table_id: string;
+  input_role: string;
   intended_role: "source" | "mapping" | "metadata" | "carrier";
   status: "draft" | "hil_pending" | "accepted" | "rejected" | "formalizing" | "formalized" | "failed";
   created_at: string;
@@ -119,6 +123,10 @@ export function parseBrowserAcquisitionProposal(
     recipe_id: assertString(obj.recipe_id, `${path}.recipe_id`, true),
     recipe_version: assertString(obj.recipe_version, `${path}.recipe_version`, true),
     binding_id: assertString(obj.binding_id, `${path}.binding_id`, true),
+    family_id: assertString(obj.family_id, `${path}.family_id`, true),
+    schema_ref: assertString(obj.schema_ref, `${path}.schema_ref`, true),
+    table_id: assertString(obj.table_id, `${path}.table_id`, true),
+    input_role: assertString(obj.input_role, `${path}.input_role`, true),
     intended_role: assertFinite(obj.intended_role, `${path}.intended_role`, ["source", "mapping", "metadata", "carrier"] as const),
     status: assertFinite(obj.status, `${path}.status`, ["draft", "hil_pending", "accepted", "rejected", "formalizing", "formalized", "failed"] as const),
     created_at: assertString(obj.created_at, `${path}.created_at`, true),

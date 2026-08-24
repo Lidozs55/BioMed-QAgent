@@ -20,7 +20,7 @@ function fixture(): { evidence: BrowserAcquisitionEvidence; proposal: BrowserAcq
   };
   const proposal: BrowserAcquisitionProposal = {
     schema_version: "1.0", proposal_id: "browser_proposal_formal", evidence_digest: "", task_id: "task_formal", run_id: "run_formal", build_id: null, generation: 1,
-    recipe_id: "fixture.tsv", recipe_version: "1", binding_id: "source", intended_role: "carrier", status: "accepted", created_at: evidence.retrieved_at, updated_at: evidence.retrieved_at, failure_reason: null,
+    recipe_id: "fixture.tsv", recipe_version: "1", binding_id: "source", family_id: "fixture_family", schema_ref: "fixture_schema", table_id: "fixture_table", input_role: "source", intended_role: "carrier", status: "accepted", created_at: evidence.retrieved_at, updated_at: evidence.retrieved_at, failure_reason: null,
   };
   const review: HumanReviewRecord = { schema_version: "1.0", review_id: "review_formal", request_id: "hil_formal", decision: { action: "accept" }, reviewer: "user", reviewed_at: evidence.retrieved_at, evidence_digest: "", reason: null };
   return { evidence, proposal, review };
@@ -39,7 +39,7 @@ describe("BrowserFormalizationService", () => {
     const review = { ...parts.review, evidence_digest: stored.evidenceDigest };
     const result = await new BrowserFormalizationService({
       evidenceStore, proposalStore, sourceAssetRegistry: new SourceAssetRegistry("task_formal", taskRoot),
-      recipeRegistry: { resolve: () => ({ ref: { schema_version: "1.0", recipe_id: "fixture.tsv", recipe_version: 1, status: "PROMOTED", implementation_digest: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }, adapter_id: "fixture", parser_version: "1", media_types: ["text/tab-separated-values"] }) },
+      recipeRegistry: { resolve: () => ({ ref: { schema_version: "1.0", recipe_id: "fixture.tsv", recipe_version: 1, status: "PROMOTED", implementation_digest: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }, schema_ref: "fixture_schema", adapter_id: "fixture", parser_version: "1", media_types: ["text/tab-separated-values"] }) },
     }).formalize({ proposal, evidence: parts.evidence, review });
     expect(result.registration.asset_ref.role).toBe("carrier");
     expect(result.provenance.provider_id).toBe(BROWSER_ACQUISITION_PROVIDER_ID);
@@ -53,6 +53,6 @@ describe("BrowserFormalizationService", () => {
     const parts = fixture(); const evidenceStore = new BrowserAcquisitionEvidenceStore({ taskRoot });
     const stored = await evidenceStore.put(parts.evidence); const proposalStore = new BrowserAcquisitionProposalStore(taskRoot);
     const proposal = await proposalStore.put({ ...parts.proposal, evidence_digest: stored.evidenceDigest });
-    await expect(new BrowserFormalizationService({ evidenceStore, proposalStore, sourceAssetRegistry: new SourceAssetRegistry("task_formal", taskRoot), recipeRegistry: { resolve: () => ({ ref: { schema_version: "1.0", recipe_id: "fixture.tsv", recipe_version: 1, status: "PROMOTED", implementation_digest: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }, adapter_id: "fixture", parser_version: "1", media_types: ["text/tab-separated-values"] }) } }).formalize({ proposal, evidence: parts.evidence, review: { ...parts.review, evidence_digest: stored.evidenceDigest, decision: { action: "approve" } } })).rejects.toThrow("was approve");
+    await expect(new BrowserFormalizationService({ evidenceStore, proposalStore, sourceAssetRegistry: new SourceAssetRegistry("task_formal", taskRoot), recipeRegistry: { resolve: () => ({ ref: { schema_version: "1.0", recipe_id: "fixture.tsv", recipe_version: 1, status: "PROMOTED", implementation_digest: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }, schema_ref: "fixture_schema", adapter_id: "fixture", parser_version: "1", media_types: ["text/tab-separated-values"] }) } }).formalize({ proposal, evidence: parts.evidence, review: { ...parts.review, evidence_digest: stored.evidenceDigest, decision: { action: "approve" } } })).rejects.toThrow("was approve");
   });
 });
