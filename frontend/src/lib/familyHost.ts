@@ -1,6 +1,6 @@
 import type {
-  DatasetManifest,
   HILRequest,
+  VersionedDatasetManifest,
   ProductAssessment,
   ProductBlocker,
   ProductScore,
@@ -216,7 +216,7 @@ export function parseProductAssessmentSummary(value: unknown): ProductAssessment
 }
 
 /** Return the assessment summary only when the current manifest exposes it. */
-export function productAssessmentFromManifest(manifest: DatasetManifest): ProductAssessmentSummaryData | null {
+export function productAssessmentFromManifest(manifest: VersionedDatasetManifest): ProductAssessmentSummaryData | null {
   const confidence = record(manifest.confidence_summary);
   if (confidence === null) return null;
   const direct = parseProductAssessmentSummary(confidence.product_assessment);
