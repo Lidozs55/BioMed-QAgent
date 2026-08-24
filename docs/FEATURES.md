@@ -171,6 +171,9 @@ BioMed-QAgent 是一个**生物医学数据智能检索与整合系统**：用�
   **可复用 `.mjs` 脚本候选 + SKILL.md 候选 + 分析报告**（`--toolkit` 可生成独立
   工具包文档）；生产路径固化需人工评审（详见
   [architecture/skill-self-iteration.md](architecture/skill-self-iteration.md)）。
+- **历史个性化 Skill 迭代**：设置页可选择一个 curated Skill 与最近已结束任务，
+  由当前配置模型提炼带证据引用的用户偏好、数据处理方式和完整 SKILL.md 候选；
+  历史在发送前脱敏并受预算限制，候选持久化但不自动激活（ADR-040）。
 
 ---
 

@@ -44,6 +44,11 @@ function mockApi(overrides: Partial<SettingsAPIClient> = {}): SettingsAPIClient 
     fetchCacheDatasets: vi.fn().mockResolvedValue({ items: [] }),
     deleteCacheDataset: vi.fn().mockResolvedValue(undefined),
     clearCacheDatasets: vi.fn().mockResolvedValue(0),
+    fetchSkillIterationContext: vi.fn().mockResolvedValue({
+      schema_version: "1.0", targets: [], history_tasks: [],
+      defaults: { max_tasks: 12, max_messages_per_task: 20 }, privacy_notice: "notice",
+    }),
+    startSkillIteration: vi.fn(),
     ...overrides,
   };
   return base;

@@ -251,6 +251,8 @@ Ctrl+⌘ 可对单条消息执行相反操作。半透明侧边栏开启时，�
 | GET | `/cache/datasets/{dataset_id}` | 缓存数据集详情 |
 | GET | `/cache/datasets/{dataset_id}/artifacts/{artifact_id}` | 下载缓存数据集 Artifact |
 | GET | `/cache/export` | 全量缓存 ZIP 导出 |
+| GET | `/skill-iterations/context` | 列出 curated Skill 目标与可选的终态历史范围 |
+| POST | `/skill-iterations` | 调用当前模型生成并持久化个性化 Skill 审查候选 |
 | WS | `/ws` | durable events + realtime assistant stream |
 
 **API 不变量**：

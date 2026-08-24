@@ -23,6 +23,7 @@ export type * from "./websocket.js";
 
 /* ---- Wire DTO types (settings / model registry / declarative databases) ---- */
 export * from "./settings.js";
+export * from "./skill-iteration.js";
 export type * from "./model-registry.js";
 export type * from "./databases.js";
 

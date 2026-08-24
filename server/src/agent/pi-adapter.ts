@@ -418,6 +418,72 @@ async function createRealUpstreamSession(
   };
 }
 
+export interface OneShotTextGenerationInput {
+  model: BioMedModelConfig;
+  systemPrompt: string;
+  prompt: string;
+  cwd: string;
+  signal?: AbortSignal;
+}
+
+/**
+ * Runs a tool-free, one-shot model turn for control-plane workflows while
+ * keeping Pi/model-provider details inside the adapter boundary.
+ */
+export async function generateOneShotText(
+  input: OneShotTextGenerationInput,
+): Promise<string> {
+  if (input.systemPrompt.trim() === "" || input.prompt.trim() === "") {
+    throw new TypeError("One-shot model prompts must not be empty");
+  }
+  const upstream = await createRealUpstreamSession({
+    taskId: "skill_iteration",
+    runId: "run_skill_iteration",
+    cwd: input.cwd,
+    model: input.model,
+    systemPrompt: input.systemPrompt,
+    skillRoots: [],
+    resourceRoots: [],
+    tools: [],
+  }, process.env);
+  let output = "";
+  let stopReason: string | undefined;
+  const unsubscribe = upstream.subscribe((event) => {
+    const message = event.assistantMessageEvent;
+    if (event.type === "message_update" && message?.type === "text_delta") {
+      output += message.delta ?? "";
+      if (output.length > 100_000) void upstream.abort();
+    } else if (event.type === "message_end") {
+      stopReason = event.assistantStopReason;
+    }
+  });
+  const abort = (): void => {
+    void upstream.abort();
+  };
+  const isAborted = (): boolean => input.signal?.aborted === true;
+  input.signal?.addEventListener("abort", abort, { once: true });
+  try {
+    if (isAborted()) throw new Error("Model generation was cancelled");
+    await upstream.prompt(input.prompt);
+    while (stopReason === "length") {
+      if (upstream.continueAfterLength === undefined) {
+        throw new Error("Model generation was truncated");
+      }
+      stopReason = undefined;
+      await upstream.continueAfterLength();
+    }
+    if (isAborted()) throw new Error("Model generation was cancelled");
+    if (stopReason === "error") throw new Error("Model generation failed upstream");
+    if (output.length > 100_000) throw new Error("Model generation exceeded the output limit");
+    if (output.trim() === "") throw new Error("Model generation returned no text");
+    return output;
+  } finally {
+    input.signal?.removeEventListener("abort", abort);
+    unsubscribe();
+    upstream.dispose();
+  }
+}
+
 export function toPiCustomTools(
   tools: readonly BioMedAgentTool[],
 ): ToolDefinition[] {

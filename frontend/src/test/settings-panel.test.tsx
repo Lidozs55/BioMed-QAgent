@@ -189,6 +189,11 @@ function mockApi(overrides: Partial<SettingsAPIClient> = {}): SettingsAPIClient 
     fetchCacheDatasets: vi.fn().mockResolvedValue({ items: [] }),
     deleteCacheDataset: vi.fn().mockResolvedValue(undefined),
     clearCacheDatasets: vi.fn().mockResolvedValue(0),
+    fetchSkillIterationContext: vi.fn().mockResolvedValue({
+      schema_version: "1.0", targets: [], history_tasks: [],
+      defaults: { max_tasks: 12, max_messages_per_task: 20 }, privacy_notice: "notice",
+    }),
+    startSkillIteration: vi.fn(),
   };
   return { ...base, ...overrides };
 }
@@ -228,6 +233,16 @@ describe("SettingsPanel model registry", () => {
     expect((await screen.findAllByText("DeepSeek")).length).toBeGreaterThan(0);
     expect(screen.getAllByText("https://api.deepseek.com/v1").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "添加供应商" })).toBeInTheDocument();
+  });
+
+  it("opens the personalized Skill iteration entry from Agent settings", async () => {
+    renderSettings(mockApi());
+
+    const navigation = screen.getByRole("navigation", { name: "设置分类" });
+    fireEvent.click(within(navigation).getByRole("button", { name: "Skill 迭代" }));
+
+    expect(await screen.findByText("个性化 Skill 迭代")).toBeVisible();
+    expect(screen.getByText(/候选不会自动覆盖/)).toBeVisible();
   });
 
   it("exports local cache from the general settings section", async () => {

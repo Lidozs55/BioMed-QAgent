@@ -65,6 +65,45 @@ describe("saveSettings preserves response", () => {
   });
 });
 
+describe("skill iteration API boundary", () => {
+  it("parses context and posts the selected evidence scope", async () => {
+    const digest = "a".repeat(64);
+    const context = {
+      schema_version: "1.0",
+      targets: [{ name: "geo", description: "GEO", category: "acquisition", source_digest: digest }],
+      history_tasks: [{
+        task_id: "task_1",
+        title: "GEO",
+        updated_at: "2026-08-24T00:00:00Z",
+        message_count: 2,
+      }],
+      defaults: { max_tasks: 12, max_messages_per_task: 20 },
+      privacy_notice: "notice",
+    };
+    const fetcher = vi.fn<FetchLike>().mockResolvedValue(jsonResponse(context));
+    const api = createAPIClient({ fetcher });
+
+    expect((await api.fetchSkillIterationContext()).targets[0]?.name).toBe("geo");
+    expect(fetcher).toHaveBeenCalledWith("/api/v1/skill-iterations/context", undefined);
+  });
+
+  it("rejects a malformed candidate response", async () => {
+    const fetcher = vi.fn<FetchLike>().mockResolvedValue(jsonResponse({
+      schema_version: "1.0",
+      iteration_id: "skill_iter_1",
+      status: "activated",
+    }));
+    const api = createAPIClient({ fetcher });
+
+    await expect(api.startSkillIteration({
+      schema_version: "1.0",
+      target_skill: "geo",
+      task_ids: ["task_1"],
+      user_focus: "",
+    })).rejects.toThrow(APIError);
+  });
+});
+
 /* ---- valid user_input_required event ---- */
 describe("event payload valid construction", () => {
   it("accepts valid user_input_required event", async () => {

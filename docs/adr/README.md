@@ -55,6 +55,7 @@ in [migration/README.md](../migration/README.md) as historical evidence.
 > rewriting their decisions. New records continue from the next unused integer.
 
 | [ADR-039](039-family-transform-host.md) | FamilySpec and explicit in-process unisolated DatasetTransform execution remain subordinate to Core publication trust | Accepted |
+| [ADR-040](040-personalized-skill-iteration.md) | Historical personalization produces evidence-bound Skill candidates, never automatic activation | Accepted |
 
 New records use the next available three-digit number and the sections `Status`,
 `Context`, `Decision`, and `Consequences`. A superseding ADR must link both ways;

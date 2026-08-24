@@ -34,6 +34,9 @@ import {
   ProviderUpdateInput,
   RuntimeLimits,
   ServerSource,
+  SkillIterationCandidate,
+  SkillIterationContext,
+  StartSkillIterationRequest,
   VendorInfo,
 } from "@biomed/contracts";
 import type {
@@ -70,6 +73,9 @@ export type {
   ProviderUpdateInput,
   RuntimeLimits,
   ServerSource,
+  SkillIterationCandidate,
+  SkillIterationContext,
+  StartSkillIterationRequest,
   VendorInfo,
 };
 
@@ -87,6 +93,8 @@ export interface SettingsAPIClient {
   saveSettings: (changes: ModelSettingsUpdate) => Promise<ModelSettings>;
   fetchPersonalization: () => Promise<PersonalizationSettings>;
   savePersonalization: (changes: PersonalizationUpdate) => Promise<PersonalizationSettings>;
+  fetchSkillIterationContext: () => Promise<SkillIterationContext>;
+  startSkillIteration: (request: StartSkillIterationRequest) => Promise<SkillIterationCandidate>;
   fetchVendors: () => Promise<VendorInfo[]>;
   fetchModels: (preview: ModelPreviewRequest) => Promise<ModelInfo[]>;
   fetchProviders: () => Promise<ProviderInfo[]>;

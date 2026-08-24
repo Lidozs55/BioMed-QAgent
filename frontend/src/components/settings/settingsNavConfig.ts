@@ -51,6 +51,7 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
     id: "agent",
     label: "Agent",
     items: [
+      { id: "skill-iteration", label: "Skill 迭代", icon: Sparkles },
       { id: "permissions", label: "权限", icon: ShieldCheck },
       { id: "runtime-limits", label: "运行限制", icon: Timer },
     ],
