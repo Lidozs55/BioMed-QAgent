@@ -542,7 +542,26 @@ export function applyConversationCompactedEvent(
     code: null,
     message: null,
   });
-  return { ...next, compacting: false };
+  return {
+    ...next,
+    compacting: false,
+    contextTokensUsed: undefined,
+    contextTokensSource: undefined,
+    contextCompactionSequence: envelope.sequence,
+  };
+}
+
+export function applyContextUsageEvent(
+  task: TaskProjection,
+  payload: Extract<EventPayload, { type: "context_usage" }>,
+): TaskProjection {
+  return {
+    ...task,
+    contextWindow: payload.context_window,
+    contextTokensUsed: payload.tokens ?? undefined,
+    contextTokensSource: payload.tokens === null ? undefined : "runtime",
+    compacting: false,
+  };
 }
 
 export function applyFixtureEvent(

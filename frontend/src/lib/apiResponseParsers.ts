@@ -59,7 +59,7 @@ const STAGE_EVENT_TYPES = new Set(["stage_started", "stage_completed", "stage_fa
 const RUNTIME_EVENT_TYPES = new Set([
   "run_queued", "run_started", "run_finalizing", "run_completed", "run_failed",
   "run_cancel_requested", "run_cancelled", "run_interrupted", "publication_created",
-  "assistant_delta", "assistant_reasoning_delta", "tool_started", "conversation_compacted",
+  "assistant_delta", "assistant_reasoning_delta", "tool_started", "context_usage", "conversation_compacted",
   "operation_started", "operation_progress", "operation_completed", "operation_failed",
   "subagent_queued", "subagent_started", "subagent_progress", "subagent_completed",
   "subagent_failed", "subagent_cancel_requested", "subagent_cancelled",
@@ -91,7 +91,7 @@ function assertEventSchemaVersion(v: unknown, path: string): "1.0" | "2.0" {
   throw new APIError(502, `Expected "1.0"|"2.0" at ${path}, got ${String(v)}`);
 }
 
-export function assertEventType(v: unknown, path: string): "task_created" | "plan_ready" | "user_input_required" | "user_input_resumed" | "stage_started" | "stage_completed" | "stage_failed" | "stage_skipped" | "stage_progress" | "tool_called" | "tool_completed" | "tool_started" | "warning" | "artifact_produced" | "task_cancel_requested" | "task_cancelled" | "task_recovered" | "task_completed" | "task_failed" | "run_queued" | "run_started" | "run_finalizing" | "run_completed" | "run_failed" | "run_cancel_requested" | "run_cancelled" | "run_interrupted" | "publication_created" | "assistant_delta" | "assistant_reasoning_delta" | "conversation_compacted" | "permission_requested" | "permission_resolved" | "operation_started" | "operation_progress" | "operation_completed" | "operation_failed" | "subagent_queued" | "subagent_started" | "subagent_progress" | "subagent_completed" | "subagent_failed" | "subagent_cancel_requested" | "subagent_cancelled" | "subagent_interrupted" | "subagent_input_required" | "subagent_input_resumed" {
+export function assertEventType(v: unknown, path: string): "task_created" | "plan_ready" | "user_input_required" | "user_input_resumed" | "stage_started" | "stage_completed" | "stage_failed" | "stage_skipped" | "stage_progress" | "tool_called" | "tool_completed" | "tool_started" | "warning" | "artifact_produced" | "task_cancel_requested" | "task_cancelled" | "task_recovered" | "task_completed" | "task_failed" | "run_queued" | "run_started" | "run_finalizing" | "run_completed" | "run_failed" | "run_cancel_requested" | "run_cancelled" | "run_interrupted" | "publication_created" | "assistant_delta" | "assistant_reasoning_delta" | "context_usage" | "conversation_compacted" | "permission_requested" | "permission_resolved" | "operation_started" | "operation_progress" | "operation_completed" | "operation_failed" | "subagent_queued" | "subagent_started" | "subagent_progress" | "subagent_completed" | "subagent_failed" | "subagent_cancel_requested" | "subagent_cancelled" | "subagent_interrupted" | "subagent_input_required" | "subagent_input_resumed" {
   if (typeof v !== "string") throw new APIError(502, `Expected event type string at ${path}, got ${typeof v}`);
   switch (v) {
     case "task_created": case "plan_ready": case "user_input_required": case "user_input_resumed":
@@ -100,7 +100,7 @@ export function assertEventType(v: unknown, path: string): "task_created" | "pla
     case "task_cancel_requested": case "task_cancelled": case "task_recovered": case "task_completed": case "task_failed":
     case "run_queued": case "run_started": case "run_finalizing": case "run_completed": case "run_failed":
     case "run_cancel_requested": case "run_cancelled": case "run_interrupted": case "publication_created":
-    case "assistant_delta": case "assistant_reasoning_delta": case "conversation_compacted":
+    case "assistant_delta": case "assistant_reasoning_delta": case "context_usage": case "conversation_compacted":
     case "permission_requested": case "permission_resolved":
     case "operation_started": case "operation_progress": case "operation_completed": case "operation_failed":
     case "subagent_queued": case "subagent_started": case "subagent_progress": case "subagent_completed":

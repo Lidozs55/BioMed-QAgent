@@ -190,6 +190,26 @@ export function parseRuntimeEventPayload(payloadObj: Record<string, unknown>, pa
       if (!/^[0-9a-f]{64}$/.test(summary_digest)) throw new APIError(502, "Expected 64-char hex string at " + path + ".summary_digest");
       return { type: "conversation_compacted", covered_through_run_id, summary_digest };
     }
+    case "context_usage": {
+      const tokensValue = Reflect.get(payloadObj, "tokens");
+      const percentValue = Reflect.get(payloadObj, "percent");
+      const tokens = tokensValue === null ? null : assertNumber(tokensValue, path + ".tokens");
+      const percent = percentValue === null ? null : assertNumber(percentValue, path + ".percent");
+      const context_window = assertNumber(Reflect.get(payloadObj, "context_window"), path + ".context_window");
+      if (!Number.isInteger(context_window) || context_window <= 0) {
+        throw new APIError(502, "Expected a positive integer at " + path + ".context_window");
+      }
+      if (tokens !== null && (!Number.isInteger(tokens) || tokens < 0)) {
+        throw new APIError(502, "Expected a non-negative integer or null at " + path + ".tokens");
+      }
+      if (percent !== null && (!Number.isFinite(percent) || percent < 0)) {
+        throw new APIError(502, "Expected a non-negative number or null at " + path + ".percent");
+      }
+      if (Reflect.get(payloadObj, "source") !== "runtime") {
+        throw new APIError(502, "Expected runtime source at " + path + ".source");
+      }
+      return { type: "context_usage", tokens, context_window, percent, source: "runtime" };
+    }
     case "subagent_queued":
       return {
         type: "subagent_queued",

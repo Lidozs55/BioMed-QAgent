@@ -61,6 +61,7 @@ const EVENT_TYPES = new Set([
   "assistant_delta",
   "assistant_reasoning_delta",
   "tool_started",
+  "context_usage",
   "conversation_compacted",
   "subagent_queued",
   "subagent_started",
@@ -181,6 +182,7 @@ function isEventEnvelope(value: unknown): value is EventEnvelope {
     value.type === "assistant_delta" ||
     value.type === "assistant_reasoning_delta" ||
     value.type === "tool_started" ||
+    value.type === "context_usage" ||
     value.type === "conversation_compacted" ||
     value.type.startsWith("subagent_") ||
     (value.type === "tool_completed" &&
@@ -393,6 +395,19 @@ function payloadShapeMatches(
         typeof payload.covered_through_run_id === "string" &&
         typeof payload.summary_digest === "string"
       );
+    case "context_usage": {
+      const tokens = payload.tokens;
+      const contextWindow = payload.context_window;
+      const percent = payload.percent;
+      return (
+        (tokens === null || (typeof tokens === "number" && Number.isInteger(tokens) && tokens >= 0)) &&
+        typeof contextWindow === "number" &&
+        Number.isInteger(contextWindow) &&
+        contextWindow > 0 &&
+        (percent === null || (typeof percent === "number" && Number.isFinite(percent) && percent >= 0)) &&
+        payload.source === "runtime"
+      );
+    }
     case "permission_requested":
       return (
         typeof payload.request_id === "string" &&

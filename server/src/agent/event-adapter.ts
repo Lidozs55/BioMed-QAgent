@@ -113,6 +113,7 @@ export class PiEventAdapter {
         "tool_progress",
         "tool_completed",
         "context_compacted",
+        "context_usage",
         "turn_cancelled",
         "turn_completed",
       ].includes(type)
@@ -180,6 +181,16 @@ export class PiEventAdapter {
             type: "conversation_compacted",
             covered_through_run_id: runId,
             summary_digest: createHash("sha256").update(event.summary, "utf8").digest("hex"),
+          }),
+        ];
+      case "context_usage":
+        return [
+          this.envelope(runId, {
+            type: "context_usage",
+            tokens: event.tokens,
+            context_window: event.contextWindow,
+            percent: event.percent,
+            source: event.source,
           }),
         ];
       case "turn_cancelled":

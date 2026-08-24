@@ -383,8 +383,12 @@ export interface TaskProjection {
   currentReasoningSegmentByRun: Record<string, number>;
   /** Total context window capacity in tokens (from model settings). */
   contextWindow?: number;
-  /** Estimated tokens currently used in the conversation. */
+  /** Tokens currently used in the conversation (runtime value when available). */
   contextTokensUsed?: number;
+  /** Source of the displayed context usage. */
+  contextTokensSource?: "runtime" | "ui_estimate";
+  /** Event sequence after which the fallback estimate should restart. */
+  contextCompactionSequence?: number;
   /** Whether a context compaction is currently in progress. */
   compacting?: boolean;
   /** ID of the latest publication for this task (null when none was produced). */

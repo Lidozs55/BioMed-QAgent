@@ -9,6 +9,7 @@ import {
   applyToolStartedEvent,
 } from "./stream";
 import {
+  applyContextUsageEvent,
   applyConversationCompactedEvent,
   applyFixtureEvent,
   applyPublicationCreatedEvent,
@@ -160,6 +161,10 @@ export function reduceRuntimeEvent(
     }
     case "conversation_compacted": {
       task = applyConversationCompactedEvent(task, envelope, payload);
+      break;
+    }
+    case "context_usage": {
+      task = applyContextUsageEvent(task, payload);
       break;
     }
     case "artifact_produced": {

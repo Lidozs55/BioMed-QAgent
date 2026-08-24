@@ -89,8 +89,10 @@ interface AgentComposerProps {
   selectedModelId?: string;
   /** Context window capacity in tokens (for inline usage indicator) */
   contextWindow?: number;
-  /** Estimated tokens currently used in the conversation */
+  /** Tokens currently used in the conversation (runtime value when available). */
   contextTokensUsed?: number;
+  /** Source of the context usage value */
+  contextTokensSource?: "runtime" | "ui_estimate";
   /** Called when the user requests context compaction */
   onCompact?: () => void;
 }
@@ -119,6 +121,7 @@ export function AgentComposer({
   selectedModelId,
   contextWindow,
   contextTokensUsed,
+  contextTokensSource,
   onCompact,
 }: AgentComposerProps) {
   // Attachment state (legacy, always applicable)
@@ -334,6 +337,7 @@ export function AgentComposer({
           <ContextUsageInline
             usedTokens={contextTokensUsed ?? 0}
             totalTokens={contextWindow}
+            source={contextTokensSource}
             onCompact={onCompact}
           />
         )}

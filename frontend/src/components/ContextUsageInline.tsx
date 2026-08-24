@@ -19,7 +19,7 @@ import { cn } from "@/lib/utils";
 /* ------------------------------------------------------------------ */
 
 export interface ContextUsageInlineProps {
-  /** Estimated tokens currently used. */
+  /** Tokens currently used (runtime value when available). */
   usedTokens: number;
   /** Total context window capacity in tokens. */
   totalTokens: number;
@@ -27,6 +27,8 @@ export interface ContextUsageInlineProps {
   compacting?: boolean;
   /** Called when the user requests context compaction. */
   onCompact?: () => void;
+  /** Whether the value came from Pi runtime usage or the UI fallback. */
+  source?: "runtime" | "ui_estimate";
 }
 
 /* ------------------------------------------------------------------ */
@@ -54,6 +56,7 @@ export function ContextUsageInline({
   totalTokens,
   compacting = false,
   onCompact,
+  source = "ui_estimate",
 }: ContextUsageInlineProps) {
   const [open, setOpen] = useState(false);
 
@@ -73,7 +76,7 @@ export function ContextUsageInline({
           <button
             type="button"
             className="flex cursor-pointer items-center gap-1 rounded px-1 py-0.5 transition-colors hover:bg-muted/60"
-            aria-label={`上下文窗口已使用 ${pct}%`}
+            aria-label={`上下文窗口已使用 ${pct}%${source === "ui_estimate" ? "（估算）" : "（运行时）"}`}
           >
             {/* Mini progress bar */}
             <div className="relative h-1 w-10 overflow-hidden rounded-full bg-muted">
@@ -110,7 +113,7 @@ export function ContextUsageInline({
           </div>
           {/* Token count detail */}
           <p className="text-[11px] text-muted-foreground">
-            {formatTokenCount(usedTokens)} / {formatTokenCount(totalTokens)} tokens
+            {formatTokenCount(usedTokens)} / {formatTokenCount(totalTokens)} tokens · {source === "runtime" ? "运行时" : "估算"}
           </p>
           {/* Compact button */}
           <Button
