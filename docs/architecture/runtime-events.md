@@ -169,7 +169,9 @@ Phase 8 移除 Python 运行时后该逻辑不复存在，自动压缩一度缺�
 - 手动 `POST /tasks/{task_id}/compact` 仍直接调用 Pi `session.compact()` 并自行
   持久化 `conversation_compacted`。压缩不再要求任务处于 active run：空闲任务用最近
   一次 run 作为 `covered_through_run_id`，进程内没有会话时按持久化 Pi 会话惰性重建，
-  压缩后立即释放临时会话。
+  压缩后立即释放临时会话。惰性重建前先检查 `state/pi-session` 是否存在 `.jsonl`
+  会话文件；没有可压缩内容时返回 `409 Task has no conversation to compact`，前端将其
+  呈现为信息提示而非失败。
 - Pi 的 `compaction_end`（成功且带摘要）经 adapter 投影为 BioMed 的
   `context_compacted`，再由 `PiEventAdapter` 持久化为
   `conversation_compacted`（`summary_digest` 为摘要的 sha256）；前端据此在时间线

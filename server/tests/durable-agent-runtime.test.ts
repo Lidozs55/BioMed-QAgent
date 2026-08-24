@@ -333,6 +333,67 @@ describe("durable formal Agent runtime", () => {
     await runtime.close();
   });
 
+  test("refuses idle compaction without a persisted Pi session instead of creating one", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "biomed-durable-idle-no-session-"));
+    roots.push(root);
+    const workspaceFactory = async () => ({
+      root,
+      tools: [],
+      dispose: async () => undefined,
+    });
+    const adapterA = new ControlledAdapter();
+    const runtimeA = await createDurableAgentRuntime({
+      tasksRoot: root,
+      adapter: adapterA,
+      workspaceFactory,
+    });
+    const serverA = createServer((request, response) => {
+      if (!runtimeA.handle(request, response)) response.writeHead(404).end();
+    });
+    serverA.listen(0, "127.0.0.1");
+    await once(serverA, "listening");
+    servers.push(serverA);
+    const baseA = `http://127.0.0.1:${(serverA.address() as AddressInfo).port}`;
+    const accepted = await (await fetch(`${baseA}/api/v1/tasks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        request_id: "request-idle-no-session",
+        input: "no pi session is persisted",
+        databases: [],
+        mode: "agent",
+      }),
+    })).json() as { task_id: string; run_id: string };
+    await expect.poll(() => adapterA.gates.length).toBe(1);
+    adapterA.gates[0]?.resolve();
+    await expect.poll(async () => (
+      await runtimeA.repository.getSnapshot(accepted.task_id)
+    )?.task.status).toBe("completed");
+    await runtimeA.close();
+
+    const adapterB = new ControlledAdapter();
+    const runtimeB = await createDurableAgentRuntime({
+      tasksRoot: root,
+      adapter: adapterB,
+      workspaceFactory,
+    });
+    const serverB = createServer((request, response) => {
+      if (!runtimeB.handle(request, response)) response.writeHead(404).end();
+    });
+    serverB.listen(0, "127.0.0.1");
+    await once(serverB, "listening");
+    servers.push(serverB);
+    const baseB = `http://127.0.0.1:${(serverB.address() as AddressInfo).port}`;
+
+    const compacted = await fetch(`${baseB}/api/v1/tasks/${accepted.task_id}/compact`, {
+      method: "POST",
+    });
+    expect(compacted.status).toBe(409);
+    expect(await compacted.json()).toEqual({ detail: "Task has no conversation to compact" });
+    expect(adapterB.compactions).toEqual([]);
+    await runtimeB.close();
+  });
+
   test("maps steer and compaction to Pi, rejects unknown subagents, and deletes terminal tasks", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "biomed-durable-controls-"));
     roots.push(root);

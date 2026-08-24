@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { Readable } from "node:stream";
 
 import { sha256Bytes } from "../dataset/adapters/hashing.js";
@@ -1151,6 +1151,20 @@ export async function createDurableAgentRuntime(
     let task = activeTasks.get(taskId);
     let temporarySession = false;
     if (task === undefined) {
+      const sessionDir = path.join(options.tasksRoot, taskId, "state", "pi-session");
+      let hasPersistedSession: boolean;
+      try {
+        hasPersistedSession = (await readdir(sessionDir))
+          .some((name) => name.endsWith(".jsonl"));
+      } catch {
+        hasPersistedSession = false;
+      }
+      if (!hasPersistedSession) {
+        throw new DurableTaskConflictError(
+          "active_run",
+          "Task has no conversation to compact",
+        );
+      }
       task = await createSession(taskId, runId, snapshot.task.mode ?? "agent");
       temporarySession = true;
     }

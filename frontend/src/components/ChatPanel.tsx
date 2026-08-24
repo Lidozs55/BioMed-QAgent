@@ -20,6 +20,7 @@ import { openSubagentPanel } from "@/components/subagentPanelControl";
 import { TaskStatusIcon } from "@/components/taskStatus";
 import { UserInputDialog } from "@/components/UserInputDialog";
 import { PermissionQuestionnaire } from "@/components/intervention/PermissionQuestionnaire";
+import { isNothingToCompactError } from "@/lib/compactErrors";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -299,7 +300,13 @@ export function ChatPanel({
       await compactTask(activeTaskId);
       toast.success("上下文压缩已触发", { description: "早期内容将被摘要以释放上下文空间" });
     } catch (e) {
-      toast.error("压缩失败", { description: e instanceof Error ? e.message : "请求失败" });
+      if (isNothingToCompactError(e)) {
+        toast.info("当前没有可压缩的对话内容", {
+          description: "上下文尚无可摘要的早期内容，继续对话即可",
+        });
+      } else {
+        toast.error("压缩失败", { description: e instanceof Error ? e.message : "请求失败" });
+      }
     } finally {
       setCompacting(false);
     }
