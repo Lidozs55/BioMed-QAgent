@@ -31,6 +31,11 @@ import path from "node:path";
 import { load } from "cheerio";
 
 import type { BioMedAgentTool } from "../contracts.js";
+import {
+  BROWSER_ACQUISITION_POLICY_REVISION,
+  BROWSER_ACQUISITION_PROVIDER_ID,
+  type BrowserAcquisitionEvidence,
+} from "@biomed/contracts";
 import type { ContentCache } from "../../external/acquisition/content-cache.js";
 import { canonicalRequestHash } from "../../external/acquisition/content-cache.js";
 import { ensureAcquisitionDirs, sourceAssetPath, taskWorkDirs, assertSafeFilename } from "../../external/acquisition/workdir.js";
@@ -40,13 +45,18 @@ import { BROWSER_HEADERS, MAX_CRAWLER_DOWNLOAD_BYTES } from "../../external/craw
 import { makeSourceId } from "../../external/sources/fallback.js";
 import { DATA_LEVEL, DATABASE } from "../../dataset/contracts/enums.js";
 import type { DownloadAttempt, SourceAsset } from "../../dataset/contracts/source.js";
-import { assetIdFromSha256 } from "../../dataset/adapters/identity.js";
+import { assetIdFromSha256, canonicalDigest } from "../../dataset/adapters/identity.js";
 import type { ToolHooks } from "./tool-hooks.js";
 import { noopHooks } from "./tool-hooks.js";
 import { errorMessage } from "./result.js";
 
 const MAX_BODY_CHARS = 5000;
 const SOURCE = "browser";
+const BROWSER_PROVIDER_IMPLEMENTATION_DIGEST = canonicalDigest({
+  provider_id: BROWSER_ACQUISITION_PROVIDER_ID,
+  policy_revision: BROWSER_ACQUISITION_POLICY_REVISION,
+  implementation: "public-http-browser-receipt-v1",
+});
 
 /** Python ``_validate_download_filename`` parity. */
 function validateDownloadFilename(filename: string): void {
@@ -112,6 +122,8 @@ export interface BrowserToolsOptions {
   registrar?: import("../../persistence/cache-registrar.js").CacheRegistrar | null;
   /** Task id used as cache provenance. */
   taskId?: string | (() => string);
+  /** Run id used to bind browser evidence to one durable run. */
+  runId?: string | (() => string);
 }
 
 export const NAVIGATE_PAGE_TOOL_NAME = "navigate_page";
@@ -347,6 +359,27 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
           derived_from_asset_id: null,
           data_level: DATA_LEVEL.METADATA,
         };
+        const taskId = typeof options.taskId === "function" ? options.taskId() : options.taskId ?? "unknown_task";
+        const runId = typeof options.runId === "function" ? options.runId() : options.runId ?? null;
+        const evidence: BrowserAcquisitionEvidence = {
+          schema_version: "1.0",
+          evidence_id: `browser_evidence_${canonicalDigest({ taskId, runId, checksum, url, finalUrl: response.url }).slice(0, 32)}`,
+          task_id: taskId,
+          run_id: runId,
+          requested_url: url,
+          final_url: response.url,
+          redirect_chain: response.redirectChain ?? [],
+          status: response.status,
+          media_type: mediaType,
+          retrieved_at: finishedAt,
+          bytes_received: bytesReceived,
+          sha256: checksum,
+          browser_policy_revision: BROWSER_ACQUISITION_POLICY_REVISION,
+          source_asset_id: asset.asset_id,
+          download_attempt_id: attempt.attempt_id,
+          provider_id: BROWSER_ACQUISITION_PROVIDER_ID,
+          provider_implementation_digest: BROWSER_PROVIDER_IMPLEMENTATION_DIGEST,
+        };
         hooks.onQuery(filename, SOURCE, "success", 1);
         return {
           content: JSON.stringify({
@@ -358,6 +391,8 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
             retrieved_at: finishedAt,
             source_asset: asset,
             download_attempt: attempt,
+            browser_acquisition_evidence: evidence,
+            formal_status: "preparation_only",
           }),
         };
       } catch (error) {
