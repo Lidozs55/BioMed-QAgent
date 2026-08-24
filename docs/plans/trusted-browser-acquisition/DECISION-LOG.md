@@ -254,5 +254,13 @@ risks, and verification results for later audit.
 - Reason: The existing publication path reads transform receipt fields that do
   not exist for browser parser execution. A cast would fabricate transform
   provenance and weaken auditability.
-- Status: handoff validator implemented and focused-verified; publisher variant
-  integration remains pending.
+- Status: publisher union implemented; browser variant invocation test pending.
+
+## 2026-08-24 / D-030
+
+- Decision: Publisher resolves browser table files by result-manifest ID and
+  writes `execution_kind: browser`; transform-only receipt fields are omitted.
+- Reason: Browser execution may contain multiple integrated results and cannot
+  truthfully provide transform digest, Host implementation digest, or transform
+  input receipts.
+- Status: typecheck/lint and existing publication/materialization tests pass.
