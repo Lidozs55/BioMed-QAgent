@@ -56,6 +56,27 @@ export const SKILL_TOOL_MAP: readonly SkillToolMapping[] = Object.freeze([
     ["lookup_dbsnp"],
   ),
   mapping(
+    "openfda",
+    "discovery",
+    ["openfda", "faers"],
+    "Look up exact MedDRA reaction counts from official openFDA FAERS aggregates.",
+    ["lookup_openfda_dili_counts"],
+  ),
+  mapping(
+    "clinvar",
+    "discovery",
+    ["clinvar", "ncbi"],
+    "Look up total and pathogenic ClinVar variant counts for verified gene symbols.",
+    ["lookup_clinvar_counts"],
+  ),
+  mapping(
+    "mgnify",
+    "discovery",
+    ["mgnify", "metagenomics"],
+    "Search official MGnify study metadata through its JSON API without browser rendering.",
+    ["search_mgnify_studies"],
+  ),
+  mapping(
     "chembl",
     "discovery",
     ["chembl"],
