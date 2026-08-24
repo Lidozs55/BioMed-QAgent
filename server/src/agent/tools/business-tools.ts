@@ -46,6 +46,7 @@ import type { VlmConfig } from "../../processing/vlm/vlm-client.js";
 import type { ToolApprovalGate, ToolHooks, ToolServiceDeps } from "./tool-hooks.js";
 import type { DatasetHILGate } from "../../dataset/review/hil-policy.js";
 import { BrowserAcquisitionEvidenceStore } from "../../runtime/browser-acquisition-store.js";
+import { BrowserAcquisitionProposalStore } from "../../runtime/browser-acquisition-proposal-store.js";
 
 export interface BusinessToolBundleContext {
   /** Absolute task root (TaskWorkDir root). */
@@ -220,10 +221,18 @@ export async function createBusinessToolBundle(
       taskId: context.taskId,
       runId: context.runId,
       evidenceStore: new BrowserAcquisitionEvidenceStore({ taskRoot }),
+      proposalStore: new BrowserAcquisitionProposalStore(taskRoot),
+      formalizationHIL: context.hilGate ?? undefined,
       maxDownloadBytes: limits.max_download_mib * 1024 * 1024,
       downloadTimeoutMs: limits.download_timeout_seconds * 1000,
     });
-    register([browserTools.navigatePage, browserTools.downloadFromPage], "browser");
+    register([
+      browserTools.navigatePage,
+      browserTools.downloadFromPage,
+      ...(context.hilGate === null || context.hilGate === undefined
+        ? []
+        : [browserTools.proposeFormalization]),
+    ], "browser");
     const captureTools = createWebVisualCaptureTools({
       taskRoot,
       crawler: context.browser.crawler,

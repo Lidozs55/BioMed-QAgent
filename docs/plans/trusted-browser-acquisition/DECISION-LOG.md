@@ -78,4 +78,29 @@ risks, and verification results for later audit.
   negative tests; no Gold-specific adapter is allowed in this branch yet.
 - Reason: Establish the trust boundary and test fail-closed behavior before
   adding real-source coverage.
-- Status: in progress.
+- Status: completed; commits `b86949e1` and `5ef46fae`.
+
+## 2026-08-24 / D-010
+
+- Decision: Persist browser evidence at `<taskRoot>/state/browser-acquisition-evidence.json`
+  using atomic replacement and re-parse/re-digest on read.
+- Reason: Browser bytes must survive restart with a verifiable receipt, while an
+  identity collision or corrupted state must fail closed.
+- Status: completed in `5ef46fae`.
+
+## 2026-08-24 / D-011
+
+- Decision: Add `browser_acquisition_formalization` as a distinct HIL review type
+  and expose evidence/source/locator IDs in its subject.
+- Reason: Formalization approval is not publication acceptance and needs a
+  dedicated closed wire contract.
+- Status: completed in the current implementation slice.
+
+## 2026-08-24 / D-012
+
+- Decision: `propose_browser_acquisition_formalization` creates a persisted
+  proposal and blocking HIL only; it never parses, registers, or publishes.
+- Reason: Core must remain authoritative and the first HIL boundary must not
+  accidentally become a publication shortcut.
+- Status: completed in the current implementation slice; parser formalization
+  remains a later phase.
