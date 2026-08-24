@@ -148,20 +148,48 @@ describe("PiAgentAdapter", () => {
 
   test("maps product compaction ratios onto Pi compaction settings", () => {
     expect(resolvePiCompactionOverrides(131_072, 0.85, 0.45)).toEqual({
-      compaction: { enabled: true, reserveTokens: 19_661, keepRecentTokens: 58_982 },
+      compaction: { enabled: true, reserveTokens: 19_661, keepRecentTokens: 43_253 },
     });
     expect(resolvePiCompactionOverrides(131_072, 0.95, 0.45).compaction.reserveTokens)
       .toBe(6_554);
   });
 
-  test("clamps keepRecentTokens so compaction leaves room for the reserve budget", () => {
+  test("clamps window-based fallback so compaction leaves room for the reserve budget", () => {
     expect(resolvePiCompactionOverrides(32_768, 0.10, 0.99)).toEqual({
       compaction: {
         enabled: true,
         reserveTokens: 29_491,
-        keepRecentTokens: 3_277,
+        keepRecentTokens: 1_638,
       },
     });
+  });
+
+  test("sizes the recent keep budget from the current context when it is known", () => {
+    // 524k window, ~123k tokens in session: the keep budget is bounded by a
+    // 5% window floor plus the reserved summary headroom, so a moderately
+    // sized conversation remains compactable.
+    expect(resolvePiCompactionOverrides(524_288, 0.85, 0.45, 123_637)).toEqual({
+      compaction: {
+        enabled: true,
+        reserveTokens: 78_643,
+        keepRecentTokens: 26_214,
+      },
+    });
+  });
+
+  test("leaves summary headroom when the conversation is large", () => {
+    expect(resolvePiCompactionOverrides(524_288, 0.85, 0.45, 500_000)).toEqual({
+      compaction: {
+        enabled: true,
+        reserveTokens: 78_643,
+        keepRecentTokens: 162_086,
+      },
+    });
+  });
+
+  test("never compacts a conversation that is already below the target", () => {
+    const small = resolvePiCompactionOverrides(524_288, 0.85, 0.45, 20_000);
+    expect(small.compaction.keepRecentTokens).toBeGreaterThanOrEqual(20_000);
   });
 
   test("detects model or context-window changes that require reconciliation", () => {

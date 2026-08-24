@@ -55,6 +55,8 @@ export interface PiUpstreamSession {
    * the Pi model registry, session model, and compaction budgets.
    */
   reconcileConfig?(): Promise<void>;
+  /** Current session context usage (token estimate and window percent). */
+  contextUsage?(): { tokens: number | null; percent: number | null } | undefined;
   subscribe(listener: (event: PiUpstreamEvent) => void): () => void;
   abort(): Promise<void>;
   dispose(): void;
@@ -110,6 +112,12 @@ const MAX_TEXT = 4_096;
 const MAX_DEPTH = 3;
 const MAX_ITEMS = 20;
 const DELTA_FLUSH_INTERVAL_MS = 32;
+/** Minimum recent context kept after compaction, as a fraction of the window. */
+const MIN_KEEP_RATIO = 0.05;
+/** Maximum final compaction target, as a fraction of the window. */
+const MAX_KEEP_RATIO = 0.6;
+/** Fraction of the Pi reserve budget available to the compaction summary. */
+const SUMMARY_BUDGET_RATIO = 0.8;
 const LENGTH_CONTINUATION_MESSAGE =
   "The previous assistant turn was truncated by the model length limit. " +
   "Continue the same task from the compacted context without repeating completed work. " +
@@ -222,24 +230,46 @@ function usesDashScopeQwen(selected: BioMedModelConfig): boolean {
 /**
  * Translate product-level compaction ratios onto Pi's absolute compaction
  * settings. Pi compacts when context tokens exceed
- * ``contextWindow - reserveTokens`` and keeps approximately
- * ``keepRecentTokens`` tokens from the end of the conversation.
+ * ``contextWindow - reserveTokens``. When the current context size is known,
+ * the final target is ``currentTokens x targetRatio`` (clamped to 5%-60% of
+ * the window); the keep budget leaves the summary its reserved headroom so the
+ * result adapts to content density instead of always keeping a fixed window
+ * fraction. Without a known size the window-based fallback is used.
  */
 export function resolvePiCompactionOverrides(
   contextWindow: number,
   triggerRatio: number,
   targetRatio: number,
+  currentTokens?: number | null,
 ): { compaction: { enabled: boolean; reserveTokens: number; keepRecentTokens: number } } {
   const reserveTokens = Math.max(0, Math.round(contextWindow * (1 - triggerRatio)));
-  const targetKeep = Math.max(0, Math.round(contextWindow * targetRatio));
+  // Pi caps the compaction summary at 80% of the reserve budget; pre-reserve
+  // that headroom so a dense summary never displaces the recent context.
+  const summaryBudget = Math.round(SUMMARY_BUDGET_RATIO * reserveTokens);
+  const floorKeep = Math.round(contextWindow * MIN_KEEP_RATIO);
+  const capKeep = Math.round(contextWindow * MAX_KEEP_RATIO);
+  const hasKnownUsage = currentTokens !== null &&
+    currentTokens !== undefined &&
+    Number.isFinite(currentTokens) &&
+    currentTokens > 0;
+  const finalTarget = hasKnownUsage
+    ? Math.min(Math.max(Math.round(currentTokens * targetRatio), floorKeep), capKeep)
+    : Math.min(Math.max(Math.round(contextWindow * targetRatio), floorKeep), capKeep);
+  const desiredKeep = Math.max(floorKeep, finalTarget - summaryBudget);
+  const keptRecent = Math.min(
+    desiredKeep,
+    Math.max(0, contextWindow - reserveTokens),
+  );
+  // When the whole conversation already fits under the final target, Pi would
+  // keep everything anyway; leave its settings in the no-op range.
+  const effectiveKeep = hasKnownUsage && currentTokens <= finalTarget
+    ? Math.max(currentTokens, keptRecent)
+    : keptRecent;
   return {
     compaction: {
       enabled: true,
       reserveTokens,
-      // Pi keeps at least ``reserveTokens`` for the compaction summary plus the
-      // incoming prompt. Never let ``keepRecentTokens`` eat that budget, or a
-      // small context window becomes un-compactable after a model switch.
-      keepRecentTokens: Math.min(targetKeep, Math.max(0, contextWindow - reserveTokens)),
+      keepRecentTokens: effectiveKeep,
     },
   };
 }
@@ -437,44 +467,45 @@ async function createRealUpstreamSession(
           await modelRuntime.setRuntimeApiKey(next.provider, next.apiKey, {
             allowNetwork: false,
           });
-          current = next;
         }
-        return;
+      } else {
+        modelRuntime.registerProvider(next.provider, {
+          api: "openai-completions",
+          baseUrl: next.baseUrl,
+          models: [
+            {
+              id: next.modelId,
+              name: next.modelId,
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: next.contextWindow ?? 131_072,
+              maxTokens: next.maxTokens ?? 8_192,
+            },
+          ],
+        });
+        await modelRuntime.setRuntimeApiKey(next.provider, next.apiKey, {
+          allowNetwork: false,
+        });
+        const nextModel = modelRuntime.getModel(next.provider, next.modelId);
+        if (nextModel === undefined) {
+          throw new BioMedAgentError(
+            "INVALID_CONFIGURATION",
+            "Configured Pi model is unavailable",
+          );
+        }
+        await session.setModel(nextModel);
       }
-      modelRuntime.registerProvider(next.provider, {
-        api: "openai-completions",
-        baseUrl: next.baseUrl,
-        models: [
-          {
-            id: next.modelId,
-            name: next.modelId,
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: next.contextWindow ?? 131_072,
-            maxTokens: next.maxTokens ?? 8_192,
-          },
-        ],
-      });
-      await modelRuntime.setRuntimeApiKey(next.provider, next.apiKey, {
-        allowNetwork: false,
-      });
-      const nextModel = modelRuntime.getModel(next.provider, next.modelId);
-      if (nextModel === undefined) {
-        throw new BioMedAgentError(
-          "INVALID_CONFIGURATION",
-          "Configured Pi model is unavailable",
-        );
-      }
-      await session.setModel(nextModel);
       if (
         next.compactionTriggerRatio !== undefined &&
         next.compactionTargetRatio !== undefined
       ) {
+        const usage = session.getContextUsage();
         settingsManager.applyOverrides(resolvePiCompactionOverrides(
           next.contextWindow ?? 131_072,
           next.compactionTriggerRatio,
           next.compactionTargetRatio,
+          usage?.tokens ?? null,
         ));
       }
       current = next;
@@ -493,6 +524,12 @@ async function createRealUpstreamSession(
       return { summary: result.summary };
     },
     reconcileConfig,
+    contextUsage: () => {
+      const usage = session.getContextUsage();
+      return usage === undefined
+        ? undefined
+        : { tokens: usage.tokens, percent: usage.percent };
+    },
     subscribe(listener) {
       return session.subscribe((event) => listener(toUpstreamEvent(event)));
     },
