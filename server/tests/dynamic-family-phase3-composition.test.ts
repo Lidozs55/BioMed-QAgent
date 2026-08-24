@@ -1,5 +1,5 @@
 import { createServer, type Server } from "node:http";
-import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -118,10 +118,12 @@ describe("dynamic family phase3 composition fencing", () => {
   test("serializes duplicate submit and fences transform/publication after superseding prepare", async () => {
     const tasksRoot = await mkdtemp(path.join(os.tmpdir(), "phase3-dynamic-composition-"));
     roots.push(tasksRoot);
-    const workspacesRoot = path.join(path.dirname(tasksRoot), "phase3-workspaces");
+    const workspacesRoot = await mkdtemp(path.join(os.tmpdir(), "phase3-dynamic-workspaces-"));
+    roots.push(workspacesRoot);
     const transformEntered = deferred();
-    const publicationEntered = deferred();
-    const releasePublication = deferred();
+    const promotionFenceEntered = deferred();
+    const releasePromotionFence = deferred();
+    let inPromotionFence = false;
     let acquisitionCalls = 0;
     let transformCalls = 0;
     let publicationCalls = 0;
@@ -185,10 +187,10 @@ describe("dynamic family phase3 composition fencing", () => {
               submitTool.execute(structuredClone(submitPayload)),
             ];
             await transformEntered.promise;
-            await publicationEntered.promise;
+            await promotionFenceEntered.promise;
             const supersedingPrepare = await prepareTool.execute(raw);
-            if (supersedingPrepare.isError === true) throw new Error(`superseding prepare failed: ${supersedingPrepare.content}`);
-            releasePublication.resolve();
+            expect(supersedingPrepare.isError).not.toBe(true);
+            releasePromotionFence.resolve();
             const results = await Promise.all(duplicateSubmits);
             expect(results.every((result) => result.isError === true)).toBe(true);
             expect(acquisitionCalls).toBe(1);
@@ -212,6 +214,14 @@ describe("dynamic family phase3 composition fencing", () => {
       resolveRuntimeLimits: () => ({ ...DEFAULT_RUNTIME_LIMITS, build_timeout_seconds: 30 }),
       dynamicFamilySeams: {
         createAcquisitionRuntime: acquisitionRuntimeFactory,
+        assertBuildLockOwned: async (assertOwned) => {
+          if (inPromotionFence) {
+            inPromotionFence = false;
+            promotionFenceEntered.resolve();
+            await releasePromotionFence.promise;
+          }
+          return assertOwned();
+        },
         submitDynamicFamilyBuild: async (input) => {
           const result = await actualSubmit(input);
           transformCalls += 1;
@@ -220,9 +230,13 @@ describe("dynamic family phase3 composition fencing", () => {
         },
         publishDynamicFamily: async (input) => {
           publicationCalls += 1;
-          publicationEntered.resolve();
-          await releasePublication.promise;
-          return actualPublish(input);
+          return actualPublish({
+            ...input,
+            signal: input.signal ?? new AbortController().signal,
+          });
+        },
+        beforeDynamicFamilyFinalFence: async () => {
+          inPromotionFence = true;
         },
       },
     });
@@ -246,9 +260,133 @@ describe("dynamic family phase3 composition fencing", () => {
     await expect.poll(async () => {
       const snapshot = await runtime.repository.getSnapshot(accepted.task_id);
       return snapshot?.runs.find((run) => run.run_id === accepted.run_id)?.status;
-    }).toBe("completed");
-    await expect(access(path.join(tasksRoot, accepted.task_id, "datasets_build", "build_phase3", "publish")))
-      .rejects.toThrow();
+    }, { timeout: 30_000 }).toBe("completed");
+    const publishRoot = path.join(tasksRoot, accepted.task_id, "datasets_build", "build_phase3", "publish");
+    await expect(readdir(publishRoot)).resolves.toEqual([]);
+    const events = await runtime.repository.listEvents(accepted.task_id, 0);
+    expect(events.some((event) => event.payload.type === "publication_created")).toBe(false);
+    await runtime.close();
+  });
+
+  test("publishes a valid prepared receipt through the complete phase3 composition", async () => {
+    const tasksRoot = await mkdtemp(path.join(os.tmpdir(), "phase3-dynamic-success-"));
+    roots.push(tasksRoot);
+    const workspacesRoot = await mkdtemp(path.join(os.tmpdir(), "phase3-dynamic-success-workspaces-"));
+    roots.push(workspacesRoot);
+    let acquisitionCalls = 0;
+    let transformCalls = 0;
+    let publicationCalls = 0;
+    const actualSubmit = submitDynamicFamilyBuild;
+    const actualPublish = publishDynamicFamily;
+    const acquisitionRuntimeFactory: NonNullable<Phase3DynamicFamilySeams["createAcquisitionRuntime"]> = ({
+      taskRoot,
+      sourceAssetRegistry,
+    }): Phase3AcquisitionRuntime => ({
+      plan: async () => ({
+        requestIdentityDigest: REQUEST_DIGEST,
+        providerId: "geo.files.v1",
+        implementationDigest: IMPLEMENTATION_DIGEST,
+        recipe: null,
+      }),
+      acquire: async (request): Promise<CoreAcquisitionResult> => {
+        acquisitionCalls += 1;
+        const sourceDir = path.join(taskRoot, "source_assets");
+        await mkdir(sourceDir, { recursive: true });
+        await writeFile(path.join(sourceDir, "geo.csv"), "record_id,value\nr1,1\n", "utf8");
+        const receipt = await sourceAssetRegistry.register({
+          sourceId: `geo_success_${acquisitionCalls}`,
+          relativePath: "source_assets/geo.csv",
+        });
+        await sourceAssetRegistry.registerCoreAcquisitionProvenance(receipt, {
+          provider_id: request.provider_id!,
+          implementation_digest: IMPLEMENTATION_DIGEST,
+          request_identity_digest: REQUEST_DIGEST,
+        });
+        return {
+          requestIdentityDigest: REQUEST_DIGEST,
+          attempts: [],
+          sourceAsset: receipt.asset_ref,
+          extractionAssets: [],
+        };
+      },
+    });
+    const adapter: BioMedAgentAdapter = {
+      async createSession(config: BioMedSessionConfig): Promise<BioMedAgentSession> {
+        const tools = config.tools ?? [];
+        const prepareTool = tools.find((tool) => tool.name === "prepare_dynamic_family_build");
+        const submitTool = tools.find((tool) => tool.name === "submit_dynamic_family_build");
+        if (prepareTool === undefined || submitTool === undefined) throw new Error("dynamic tools were not injected");
+        return {
+          piSessionId: `pi_success_${config.taskId}`,
+          taskId: config.taskId,
+          runId: config.runId,
+          run: async function* run(): AsyncIterable<import("../src/agent/contracts.js").BioMedAgentEvent> {
+            const raw = await rawSubmission();
+            const prepared = await prepareTool.execute(raw);
+            if (prepared.isError === true) throw new Error(`prepare failed: ${prepared.content}`);
+            const receipt = (JSON.parse(prepared.content) as { preflight_receipt: DynamicFamilyPreflightReceipt }).preflight_receipt;
+            const submitPayload = structuredClone(raw);
+            (submitPayload.build_proposal as { transform_refs: Array<{ digest: string }> }).transform_refs[0]!.digest =
+              receipt.host_descriptor_digest;
+            submitPayload.preflight_receipt = receipt;
+            const submitted = await submitTool.execute(submitPayload);
+            expect(submitted.isError).not.toBe(true);
+            yield { type: "turn_completed" };
+          },
+          cancel: async () => undefined,
+          dispose: async () => undefined,
+        };
+      },
+    };
+    const runtime = await createPhase3Runtime({
+      tasksRoot,
+      workspacesRoot,
+      repositoryRoot: path.resolve("."),
+      agentExecPolicy: null,
+      adapter,
+      database: null,
+      browserPool: null,
+      resolveRuntimeLimits: () => ({ ...DEFAULT_RUNTIME_LIMITS, build_timeout_seconds: 30 }),
+      dynamicFamilySeams: {
+        createAcquisitionRuntime: acquisitionRuntimeFactory,
+        submitDynamicFamilyBuild: async (input) => {
+          transformCalls += 1;
+          return actualSubmit(input);
+        },
+        publishDynamicFamily: async (input) => {
+          publicationCalls += 1;
+          return actualPublish({ ...input, signal: input.signal ?? new AbortController().signal });
+        },
+      },
+    });
+    const server = createServer((request, response) => { void runtime.handle(request, response); });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (address === null || typeof address === "string") throw new Error("phase3 success test server has no address");
+    const created = await fetch(`http://127.0.0.1:${address.port}/api/v1/tasks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        request_id: "phase3_dynamic_success",
+        input: "publish the prepared dynamic family",
+        databases: [],
+        mode: "agent",
+      }),
+    });
+    expect(created.status).toBe(202);
+    const accepted = await created.json() as { task_id: string; run_id: string };
+    await expect.poll(async () => {
+      const snapshot = await runtime.repository.getSnapshot(accepted.task_id);
+      return snapshot?.runs.find((run) => run.run_id === accepted.run_id)?.status;
+    }, { timeout: 30_000 }).toBe("completed");
+    expect(acquisitionCalls).toBe(1);
+    expect(transformCalls).toBe(1);
+    expect(publicationCalls).toBe(1);
+    await access(path.join(tasksRoot, accepted.task_id, "datasets_build", "build_phase3", "publish"));
+    const events = await runtime.repository.listEvents(accepted.task_id, 0);
+    expect(events.some((event) => event.payload.type === "publication_created")).toBe(true);
+    expect(events.some((event) => event.payload.type === "artifact_produced")).toBe(true);
     await runtime.close();
   });
 });

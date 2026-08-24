@@ -64,6 +64,8 @@ export interface PublishDynamicFamilyInput {
   readonly hilGate?: DynamicPublicationHILGate | null;
   /** Live Host generation fence; checked before staged writes and promotion. */
   readonly isGenerationCurrent: () => boolean | Promise<boolean>;
+  /** Optional hook immediately before the immutable rename fence (tests). */
+  readonly beforeFinalFence?: () => Promise<void>;
   /**
    * Production B3 resource/disk lane overrides (tests). Omitted values use
    * the benchmark-backed production policy and configured budgets.
@@ -453,12 +455,12 @@ export async function publishDynamicFamily(
     expectedSourceAssetIds: new Set(candidate.registered_asset_ids),
     publishedAt: input.publishedAt,
     signal: input.signal,
+    beforeFinalFence: input.beforeFinalFence,
     fence: async () => {
       await assertGenerationCurrent();
       return true;
     },
   });
-  await assertGenerationCurrent();
   return { candidate, manifest, validation, assessment, publication };
 }
 

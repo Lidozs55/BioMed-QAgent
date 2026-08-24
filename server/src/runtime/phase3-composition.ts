@@ -322,6 +322,10 @@ export interface Phase3DynamicFamilySeams {
   }) => Phase3AcquisitionRuntime;
   readonly submitDynamicFamilyBuild?: typeof submitDynamicFamilyBuild;
   readonly publishDynamicFamily?: typeof publishDynamicFamily;
+  /** Test-only observation seam for deterministic final-fence races. */
+  readonly assertBuildLockOwned?: (assertOwned: () => Promise<boolean>) => Promise<boolean>;
+  /** Test-only gate immediately before the publisher's final rename fence. */
+  readonly beforeDynamicFamilyFinalFence?: () => Promise<void>;
 }
 
 export function createPhase3AcquisitionRuntime(options: {
@@ -571,6 +575,10 @@ export async function createPhase3Runtime(
             submission.build_proposal.build_id,
             `dynamic-family:${currentRunId}:${randomUUID()}`,
           );
+          const assertBuildLockOwned = (): Promise<boolean> => {
+            const seam = options.dynamicFamilySeams?.assertBuildLockOwned;
+            return seam === undefined ? buildLock.assertOwned() : seam(() => buildLock.assertOwned());
+          };
           let reservation: ReturnType<typeof dynamicFamilyPreflight.reserve> | null = null;
           try {
             reservation = dynamicFamilyPreflight.reserve(
@@ -640,11 +648,11 @@ export async function createPhase3Runtime(
             sourceAcquisitionRequestDigests: Object.freeze(acquisitionRequestDigests),
             signal,
           });
+          if (!(await assertBuildLockOwned())) {
+            throw new Error("dynamic family build lock fence was lost");
+          }
           if (!dynamicFamilyPreflight.isCurrent(reservation)) {
             throw new Error("dynamic family preflight generation is stale");
-          }
-          if (!(await buildLock.assertOwned())) {
-            throw new Error("dynamic family build lock fence was lost");
           }
           const product = await (options.dynamicFamilySeams?.publishDynamicFamily ?? publishDynamicFamily)({
             taskId,
@@ -657,8 +665,9 @@ export async function createPhase3Runtime(
             signal,
             isGenerationCurrent: async () =>
               reservation !== null
-              && dynamicFamilyPreflight.isCurrent(reservation)
-              && await buildLock.assertOwned(),
+              && await assertBuildLockOwned()
+              && dynamicFamilyPreflight.isCurrent(reservation),
+            beforeFinalFence: options.dynamicFamilySeams?.beforeDynamicFamilyFinalFence,
           });
           const publicationManifestSha = product.publication.publication.manifest_sha256;
           if (publicationManifestSha === undefined) {
