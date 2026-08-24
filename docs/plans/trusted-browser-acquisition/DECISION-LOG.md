@@ -129,4 +129,22 @@ risks, and verification results for later audit.
 - Reason: Existing `DurableHILGate.requestHIL` already provides durable request,
   resolution, and restart behavior; a duplicate continuation mechanism would
   create competing state machines.
-- Status: implemented and verified with 49 focused tests.
+- Status: implemented and verified with focused tests.
+
+## 2026-08-24 / D-016
+
+- Decision: Reuse `RegisteredTableRegistry` as the parser authority and add a
+  generic browser recipe registry that resolves only PROMOTED recipes.
+- Reason: Existing production parser registration already forbids dynamic import,
+  eval, and Agent-provided parser code. A second parser registry would weaken
+  that boundary.
+- Status: implemented; 37 focused browser/formalization/store tests pass.
+
+## 2026-08-24 / D-017
+
+- Decision: Do not add a generic parser-to-publication shortcut. A recipe may
+  parse a carrier only when an explicit FamilySpec/schema/table binding exists;
+  OperationResult, B3, ProductAssessment, and publication remain Core-owned.
+- Reason: Media parsing is not dataset semantics. Unknown databases need a
+  promoted recipe plus an explicit family contract, not inferred publication.
+- Status: pending next implementation slice.

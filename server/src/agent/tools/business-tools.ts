@@ -48,6 +48,8 @@ import type { DatasetHILGate } from "../../dataset/review/hil-policy.js";
 import { BrowserAcquisitionEvidenceStore } from "../../runtime/browser-acquisition-store.js";
 import { BrowserAcquisitionProposalStore } from "../../runtime/browser-acquisition-proposal-store.js";
 import { BrowserFormalizationService } from "../../dataset/acquisition/browser-formalization.js";
+import { BrowserParserRecipeRegistry } from "../../dataset/acquisition/browser-recipe-registry.js";
+import { createDefaultRegisteredTableRegistry } from "../../dataset/adapters/registered/index.js";
 import type { SourceAssetRegistry } from "../../runtime/source-assets/registry.js";
 
 export interface BusinessToolBundleContext {
@@ -232,6 +234,7 @@ export async function createBusinessToolBundle(
           evidenceStore: new BrowserAcquisitionEvidenceStore({ taskRoot }),
           proposalStore: new BrowserAcquisitionProposalStore(taskRoot),
           sourceAssetRegistry: context.sourceAssetRegistry,
+          recipeRegistry: new BrowserParserRecipeRegistry(createDefaultRegisteredTableRegistry()),
         }),
       maxDownloadBytes: limits.max_download_mib * 1024 * 1024,
       downloadTimeoutMs: limits.download_timeout_seconds * 1000,

@@ -12,6 +12,7 @@ import { canonicalDigest } from "../adapters/identity.js";
 import type { BrowserAcquisitionEvidenceStore } from "../../runtime/browser-acquisition-store.js";
 import type { BrowserAcquisitionProposalStore } from "../../runtime/browser-acquisition-proposal-store.js";
 import type { SourceAssetRegistry, CoreAcquisitionProvenance } from "../../runtime/source-assets/registry.js";
+import type { BrowserParserRecipeRegistration } from "./browser-recipe-registry.js";
 
 export interface BrowserFormalizationInput {
   proposal: BrowserAcquisitionProposal;
@@ -28,10 +29,15 @@ export interface BrowserFormalizationResult {
   provenance: CoreAcquisitionProvenance;
 }
 
+export interface BrowserParserRecipeResolver {
+  resolve(recipeId: string, recipeVersion: string, evidence: BrowserAcquisitionEvidence): BrowserParserRecipeRegistration;
+}
+
 export interface BrowserFormalizationServiceOptions {
   evidenceStore: BrowserAcquisitionEvidenceStore;
   proposalStore: BrowserAcquisitionProposalStore;
   sourceAssetRegistry: SourceAssetRegistry;
+  recipeRegistry: BrowserParserRecipeResolver;
 }
 
 /**
@@ -43,11 +49,13 @@ export class BrowserFormalizationService {
   readonly #evidenceStore: BrowserAcquisitionEvidenceStore;
   readonly #proposalStore: BrowserAcquisitionProposalStore;
   readonly #assets: SourceAssetRegistry;
+  readonly #recipes: BrowserParserRecipeResolver;
 
   constructor(options: BrowserFormalizationServiceOptions) {
     this.#evidenceStore = options.evidenceStore;
     this.#proposalStore = options.proposalStore;
     this.#assets = options.sourceAssetRegistry;
+    this.#recipes = options.recipeRegistry;
   }
 
   async formalize(input: BrowserFormalizationInput): Promise<BrowserFormalizationResult> {
@@ -73,6 +81,7 @@ export class BrowserFormalizationService {
       throw new Error("browser evidence provider identity is not Core-approved");
     }
 
+    const recipe = this.#recipes.resolve(proposal.recipe_id, proposal.recipe_version, evidence);
     const registration = await this.#assets.register({
       sourceId: evidence.source_id,
       relativePath: evidence.relative_path,
@@ -89,8 +98,8 @@ export class BrowserFormalizationService {
       evidence_digest: proposal.evidence_digest,
       carrier_provider_id: BROWSER_ACQUISITION_PROVIDER_ID,
       provider_implementation_digest: BROWSER_ACQUISITION_PROVIDER_IMPLEMENTATION_DIGEST,
-      recipe_id: proposal.recipe_id,
-      recipe_version: proposal.recipe_version,
+      recipe_id: recipe.ref.recipe_id,
+      recipe_version: String(recipe.ref.recipe_version),
       generation: proposal.generation,
     });
     const provenance = await this.#assets.registerCoreAcquisitionProvenance(registration, {
