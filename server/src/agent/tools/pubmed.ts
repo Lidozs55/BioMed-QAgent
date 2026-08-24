@@ -9,8 +9,9 @@
  * Failures propagate so the tool result is marked ``isError`` (Python raises
  * through the Agents SDK).
  *
- * ``download_supplementary`` resolves a PMID through the 3-tier publication
- * fallback (direct PDF → Unpaywall → Europe PMC fullTextXML) via
+ * ``download_supplementary`` resolves a PMID to the Europe PMC supplementary
+ * archive first, then uses the 3-tier publication fallback (direct PDF →
+ * Unpaywall → Europe PMC fullTextXML) when no archive is available. All bytes use
  * ``acquireSource`` — the P5-D3 single sanctioned download path — and returns
  * the stable keys ``source/accession/source_url/local_files/source_assets/
  * download_attempts/format_hint/retrieved_at`` plus ``warnings`` when earlier
@@ -23,6 +24,7 @@ import path from "node:path";
 
 import type { SourceRecord } from "../../dataset/contracts/source.js";
 import { ContentCache } from "../../external/acquisition/content-cache.js";
+import { acquireSource, CURATED_SOURCE_HOSTS } from "../../external/acquisition/downloader.js";
 import { NcbiEutilsClient, defaultNcbiClientConfig, type NcbiClientConfig } from "../../external/ncbi/client.js";
 import {
   searchPubmed,
@@ -174,13 +176,59 @@ export async function downloadSupplementaryAdapter(
     retrieved_at: retrievedAt,
   };
   const filename = `pubmed_${pmid}.pdf`;
+  const supplementaryFilename = `pubmed_${pmid}_supplementary.zip`;
 
   // Throttle to whole-megabyte steps (Python _report_progress parity).
-  const progress = createDownloadProgressReporter(
+  const supplementaryProgress = createDownloadProgressReporter(
+    deps.hooks,
+    { source: "pubmed", accession: pmid, filename: supplementaryFilename },
+    { bytesStep: 1024 * 1024 },
+  );
+  const fallbackProgress = createDownloadProgressReporter(
     deps.hooks,
     { source: "pubmed", accession: pmid, filename },
     { bytesStep: 1024 * 1024 },
   );
+
+  const supplementaryUrl =
+    `https://www.ebi.ac.uk/europepmc/webservices/rest/${pmcid.toUpperCase()}/supplementaryFiles`;
+  const supplementarySource: SourceRecord = {
+    ...source,
+    source_id: makeSourceId("pubmed", `${pmid}:supplementary`, supplementaryUrl),
+    url: supplementaryUrl,
+  };
+  const supplementary = await acquireSource({
+    source: supplementarySource,
+    filename: supplementaryFilename,
+    workdirRoot: deps.taskRoot,
+    cache: deps.cache,
+    client: deps.http,
+    dataLevel: "metadata",
+    maxBytes,
+    expectedMediaTypes: new Set(["application/zip"]),
+    accept: "application/zip",
+    signal,
+    timeoutMs: deps.downloadTimeoutMs,
+    allowedHosts: CURATED_SOURCE_HOSTS,
+    progress: supplementaryProgress,
+    onPublished: (published) => deps.registrar?.register("publication", published, deps.taskId),
+  });
+  if (supplementary.asset !== null && supplementary.attempt.status === "succeeded") {
+    return {
+      source: "pubmed",
+      accession: pmid,
+      source_url: supplementaryUrl,
+      local_files: [path.join(deps.taskRoot, supplementary.asset.relative_path)],
+      source_assets: [supplementary.asset],
+      download_attempts: [supplementary.attempt],
+      format_hint: "supplementary_archive",
+      retrieved_at: retrievedAt,
+    };
+  }
+
+  const supplementaryWarning =
+    `supplementary_archive: attempt status=${supplementary.attempt.status}, ` +
+    `error=${supplementary.attempt.error_message ?? "none"}`;
 
   try {
     const outcome = await acquirePublicationWithFallback({
@@ -197,7 +245,7 @@ export async function downloadSupplementaryAdapter(
       timeoutMs: deps.downloadTimeoutMs,
       email: deps.email,
       lookupPdf: deps.lookupPdf,
-      progress,
+      progress: fallbackProgress,
       registrar: deps.registrar,
       taskId: deps.taskId,
     });
@@ -208,11 +256,14 @@ export async function downloadSupplementaryAdapter(
       source_url: pmcUrl,
       local_files: asset === null ? [] : [path.join(deps.taskRoot, asset.relative_path)],
       source_assets: asset === null ? [] : [asset],
-      download_attempts: outcome.attempts,
-      format_hint: "supplementary",
+      download_attempts: [supplementary.attempt, ...outcome.attempts],
+      format_hint:
+        asset?.media_type.includes("xml") === true || asset?.relative_path.toLowerCase().endsWith(".xml") === true
+          ? "full_text_xml"
+          : "publication_pdf",
       retrieved_at: retrievedAt,
     };
-    if (outcome.tierFailures.length > 0) payload["warnings"] = outcome.tierFailures;
+    payload["warnings"] = [supplementaryWarning, ...outcome.tierFailures];
     return payload;
   } catch (error) {
     if (error instanceof PublicationFallbackError) {
@@ -221,8 +272,8 @@ export async function downloadSupplementaryAdapter(
         accession: pmid,
         source_url: pmcUrl,
         error: error.message,
-        details: error.failures,
-        download_attempts: error.attempts,
+        details: [supplementaryWarning, ...error.failures],
+        download_attempts: [supplementary.attempt, ...error.attempts],
       };
     }
     throw error;
@@ -296,8 +347,8 @@ function downloadSupplementaryTool(deps: PubmedServiceDeps): BioMedAgentTool {
     label: "Download PubMed supplementary materials",
     description:
       "Download open-access supplementary materials for a PubMed article " +
-      "given its PMID. Resolves the article through a 3-tier fallback " +
-      "(direct PDF → Unpaywall → Europe PMC fullTextXML), downloads it to the " +
+      "given its PMID. Downloads the official Europe PMC supplementary ZIP " +
+      "when available, then falls back to the publication PDF/fullTextXML, and writes it to the " +
       "task work directory via the acquisition service, and returns metadata JSON.",
     parameters: {
       type: "object",

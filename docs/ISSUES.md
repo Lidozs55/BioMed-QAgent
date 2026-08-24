@@ -26,6 +26,17 @@
 - **solidify-run：** `server/tests/solidify-run.test.ts` 在 Vitest collect 阶段对合法的 vitest import 报 `SyntaxError: Invalid or unexpected token`；文件与 HEAD blob 一致且 `tsc` 通过，需继续定位 Vite/Vitest transform 输入。
 - **下一步：** 分别核对 B3 证据生成/提交闭包；用最小 transform reproduction 定位 solidify-run collect failure。不得在不重生证据的情况下只改 digest，也不得跳过测试。
 
+## 数据族与 Gold 评测
+
+### gold7 Alzheimer GWAS 请求没有可用的正式 family/provider
+
+- **状态：** 2026-08-24 在真实 run `task_ts_c93256a6-f374-4bc8-9795-d0a5ff3bc109` 复现，待架构设计与实现。
+- **现象：** 当前 production Dataset Family Registry 没有 Alzheimer GWAS family，也没有覆盖 GWAS Catalog、Bellenguez supplementary table、dbSNP/Ensembl 坐标整合的 Core Acquisition Provider。现有 `variant_evidence` family 的语义和表结构不等价，不能直接套用。
+- **证据：** run 事件流未出现 `validate_dataset_build`、`execute_dataset_build` 或 `submit_dynamic_family_build`；最终 `run_completed` 携带 `build_result: null`、`artifact_count=0`、`current_publication_id=null`。Agent 在浏览器/补充材料请求失败后改写 workspace CSV，并明确采用“已知/代表性”位点，未进入正式发布链。
+- **影响：** 复合 biomedical 请求可能在没有可用 family/provider 时退化为 workspace 草稿，任务状态却仍显示 completed；不能形成可追溯的 formal DatasetPublication，也容易诱发模拟数据。
+- **局部缓解：** `fix/gold7-real-source-acquisition` 已让 discovery 工具优先获取 Europe PMC 官方 supplementary ZIP，并新增按规范数字路径调用 NCBI RefSNP API 的 `lookup_dbsnp`。2026-08-24 live smoke 成功获取 Bellenguez PMC9005347 的 27,656,649-byte ZIP（SHA-256 `a2902ab4…6ed26`）和 rs429358 RefSNP 记录。真实复测 `e2e-gold7-010` 成功命中两条新工具路径；同时发现并修复并行 dbSNP 批次缺少共享 NCBI 配额/重试的问题，并禁止把部分成功描述成全量验证。这些只修复调研/获取阻塞，不构成 Core provider 或正式 publication 能力。
+- **下一步：** 设计并登记适合 GWAS association 语义的 family/schema、来源 provider 和 dynamic admission 闭环；在能力缺失时让 Agent/运行时产生明确的 `NO_DATA` 或 `spec_rejected` 结果。不得把 workspace 文件自动提升为 Artifact，不得以 `variant_evidence` 代替 GWAS family。
+
 ## 可选测试缺口
 
 这些是非阻塞的覆盖增强，不代表已观察到生产故障：

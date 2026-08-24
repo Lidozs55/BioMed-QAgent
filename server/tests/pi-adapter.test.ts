@@ -71,6 +71,16 @@ async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
 }
 
 describe("Pi system prompt", () => {
+  test("forbids synthetic replacement data and limits unavailable-source choices", () => {
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/never fabricate, simulate, approximate, infer, or use representative values/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/stop and report the unavailable source/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/request concrete user help/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/continue researching a genuinely independent real source/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/do not create replacement rows or fill missing values from model memory/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/partial tool success verifies only the records returned as successful/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/never claim full-source or whole-dataset verification from a successful subset/i);
+  });
+
   test("marks an approved max-turn continuation explicitly", () => {
     expect(PHASE1_SYSTEM_PROMPT).toContain("[MAX_TURNS_REACHED]");
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/after an approved max-turn interruption/i);
