@@ -75,7 +75,10 @@ function geoPlan(parameters: ExpressionParameters): AcquisitionDownloadPlan {
   if (!GEO_ACCESSION.test(accession)) {
     throw new TypeError(`${GEO_FILES_PROVIDER_ID} requires a valid GEO series accession`);
   }
-  const prefix = `${accession.slice(0, -3)}nnn`;
+  const numericAccession = accession.slice(3);
+  const prefix = numericAccession.length <= 3
+    ? "GSEnnn"
+    : `GSE${numericAccession.slice(0, -3)}nnn`;
   return {
     source: {
       schema_version: "1.0",

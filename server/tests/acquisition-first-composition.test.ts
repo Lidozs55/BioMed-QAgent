@@ -12,6 +12,10 @@ import {
   createChemblFilesProvider,
 } from "../src/dataset/acquisition/chembl-provider.js";
 import { FIXED_BIOMEDICAL_PROVIDER_IDS } from "../src/dataset/acquisition/biomedical-providers.js";
+import {
+  createGeoFilesProvider,
+  GEO_FILES_PROVIDER_ID,
+} from "../src/dataset/acquisition/expression-providers.js";
 import { ContentCache } from "../src/external/acquisition/content-cache.js";
 import { PublicHttpClient } from "../src/external/network/http-client.js";
 import { createPhase3AcquisitionRuntime } from "../src/runtime/phase3-composition.js";
@@ -49,6 +53,23 @@ afterEach(async () => {
 });
 
 describe("acquisition-first phase3 composition", () => {
+  it.each([
+    ["GSE1", "GSEnnn"],
+    ["GSE99", "GSEnnn"],
+    ["GSE100", "GSEnnn"],
+  ])("uses the NCBI GEO GSEnnn group for %s", (accession, group) => {
+    const plan = createGeoFilesProvider().plan({
+      ...request(),
+      provider_id: GEO_FILES_PROVIDER_ID,
+      parameters: { source: "geo", accession, entities: {} },
+    });
+    expect(plan).toMatchObject({
+      source: {
+        url: `https://ftp.ncbi.nlm.nih.gov/geo/series/${group}/${accession}/matrix/${accession}_series_matrix.txt.gz`,
+      },
+    });
+  });
+
   it.each([
     ["geo", "geo.files.v1", "GSE178352", "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE178nnn/GSE178352/matrix/GSE178352_series_matrix.txt.gz"],
     ["gdc", "gdc.files.v1", "FILE-123", "https://api.gdc.cancer.gov/data/FILE-123"],
