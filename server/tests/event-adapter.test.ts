@@ -112,6 +112,27 @@ describe("PiEventAdapter", () => {
     });
   });
 
+  test("maps runtime context usage into a durable context_usage event", () => {
+    const { adapter } = createAdapter();
+
+    const events = adapter.adapt(runId, {
+      type: "context_usage",
+      tokens: 12_345,
+      contextWindow: 131_072,
+      percent: 9.41,
+      source: "runtime",
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.payload).toEqual({
+      type: "context_usage",
+      tokens: 12_345,
+      context_window: 131_072,
+      percent: 9.41,
+      source: "runtime",
+    });
+  });
+
   test("a turn that ended after compaction is not terminal until completeRun", () => {
     const { adapter } = createAdapter();
     const events = [

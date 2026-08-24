@@ -42,7 +42,14 @@ export type BioMedAgentEvent =
     }
   | { type: "turn_completed" }
   | { type: "turn_cancelled"; reason?: string }
-  | { type: "context_compacted"; summary: string };
+  | { type: "context_compacted"; summary: string }
+  | {
+      type: "context_usage";
+      tokens: number | null;
+      contextWindow: number;
+      percent: number | null;
+      source: "runtime";
+    };
 
 export interface BioMedToolResult {
   content: string;

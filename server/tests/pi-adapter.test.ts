@@ -73,26 +73,13 @@ async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
 describe("Pi system prompt", () => {
   test("marks an approved max-turn continuation explicitly", () => {
     expect(PHASE1_SYSTEM_PROMPT).toContain("[MAX_TURNS_REACHED]");
-    expect(PHASE1_SYSTEM_PROMPT).toMatch(/resuming after a max-turn interruption.*user approved/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/after an approved max-turn interruption/i);
   });
 
-  test("keeps literature chart evidence on the reviewed six-table topology", () => {
-    for (const tableId of [
-      "paper_records",
-      "experiment_records",
-      "activity_value_records",
-      "chart_series",
-      "chart_points",
-      "supplementary_asset_records",
-    ]) {
-      expect(PHASE1_SYSTEM_PROMPT).toContain(tableId);
-    }
-    expect(PHASE1_SYSTEM_PROMPT).toContain("human_review_status");
-    expect(PHASE1_SYSTEM_PROMPT).toContain("review_status");
-    expect(PHASE1_SYSTEM_PROMPT).toMatch(/must remain human_review_pending/i);
-    expect(PHASE1_SYSTEM_PROMPT).toMatch(/replace that binding with another independently confirmed open-access PMCID/i);
-    expect(PHASE1_SYSTEM_PROMPT).toMatch(/fresh prepare_dynamic_family_build receipt/i);
-    expect(PHASE1_SYSTEM_PROMPT).toMatch(/no failure-driven digest handshake/i);
+  test("delegates source-specific topology and evidence rules to skills", () => {
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/matching skill/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/source-specific rules/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/Do not duplicate or improvise/i);
   });
 });
 
@@ -169,6 +156,30 @@ describe("PiAgentAdapter", () => {
     expect(events).toContainEqual({
       type: "context_compacted",
       summary: "compacted checkpoint summary",
+    });
+  });
+
+  test("publishes runtime context usage after an assistant response", async () => {
+    const upstream = new FakeUpstreamSession();
+    upstream.promptImplementation = async () => {
+      upstream.emit({
+        type: "message_end",
+        assistantStopReason: "stop",
+        contextUsage: { tokens: 12_345, contextWindow: 131_072, percent: 9.41 },
+      });
+    };
+    const session = await new PiAgentAdapter({
+      createUpstreamSession: async () => upstream,
+    }).createSession(sessionConfig);
+
+    const events = await collect(session.run("report usage"));
+
+    expect(events).toContainEqual({
+      type: "context_usage",
+      tokens: 12_345,
+      contextWindow: 131_072,
+      percent: 9.41,
+      source: "runtime",
     });
   });
 

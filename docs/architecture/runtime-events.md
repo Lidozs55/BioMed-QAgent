@@ -162,6 +162,10 @@ Phase 8 移除 Python 运行时后该逻辑不复存在，自动压缩一度缺�
   `conversation_compacted`（`summary_digest` 为摘要的 sha256）；前端据此在时间线
   记录压缩活动并复位 `compacting`。aborted 或缺失摘要的压缩完成事件不产生
   durable 事件，避免伪记录。
+- Assistant `message_end` 与 `compaction_end` 同步读取 Pi 的
+  `session.getContextUsage()`，投影为 durable `context_usage`（`tokens` / `percent`
+  在 Pi 暂无可信值时为 `null`）。前端优先显示该运行时值；只有尚未收到可信值时，
+  才按当前保留的对话项估算，并在 `conversation_compacted` 后从压缩边界重新估算。
 - 模型以 `stopReason=length` 截断时不能把 `session.prompt()` 的正常返回等同于任务
   完成。Pi 边界在其自动压缩结束后发送不可见的 runtime continuation，沿用同一
   Run、Session 与工具状态继续执行；只有后续 assistant 以非 `length` 原因结束，

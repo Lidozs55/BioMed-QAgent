@@ -1,16 +1,12 @@
 /**
  * Frontend-side token usage estimation from conversation items.
  *
- * The backend does not currently emit per-turn token usage events,
- * so we estimate based on character count of conversation content
- * plus fixed overhead (system prompt + tool schemas).
+ * This fallback is used only before the Pi runtime reports authoritative
+ * context usage. It intentionally estimates the retained conversation rather
+ * than guessing provider-specific system prompts and tool serialization.
  *
- * Key heuristics:
- * - Mixed CJK/English text: ~2 characters per token (Chinese chars are
- *   typically 1-2 tokens each, English ~4 chars/token; blended ~2)
- * - Fixed overhead per request: system prompt (~1500 tokens) +
- *   8 tool JSON schemas (~3500 tokens) ≈ 5000 tokens baseline
- * - Message wrapper overhead: ~20% on top of content tokens
+ * Mixed CJK/English text is approximated at ~2 characters per token, with a
+ * 20% message-wrapper allowance.
  */
 
 import type { ConversationItem } from "@/runtime/types";
@@ -19,16 +15,20 @@ import type { ConversationItem } from "@/runtime/types";
 const CHARS_PER_TOKEN = 2;
 
 /**
- * Fixed token overhead sent with every API request regardless of
- * conversation length: system prompt (INSTRUCTIONS ~2870 chars) +
- * serialized tool schemas for 8 tools (~14KB source → ~3500 tokens).
+ * The UI cannot know the provider's system prompt/tool serialization. The
+ * runtime reports the authoritative Pi context usage when available, so the
+ * fallback intentionally estimates conversation content only.
  */
-const FIXED_OVERHEAD_TOKENS = 5_000;
+const FIXED_OVERHEAD_TOKENS = 0;
 
 /** Estimate total tokens consumed by a list of conversation items. */
-export function estimateContextTokens(items: readonly ConversationItem[]): number {
+export function estimateContextTokens(
+  items: readonly ConversationItem[],
+  afterSequence = 0,
+): number {
   let chars = 0;
   for (const item of items) {
+    if (item.sequence <= afterSequence) continue;
     switch (item.kind) {
       case "user_message":
         chars += item.content.length;

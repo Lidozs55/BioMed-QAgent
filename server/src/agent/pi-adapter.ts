@@ -40,6 +40,11 @@ export interface PiUpstreamEvent {
   aborted?: boolean;
   errorMessage?: string;
   compactionResult?: { summary: string } | undefined;
+  contextUsage?: {
+    tokens: number | null;
+    contextWindow: number;
+    percent: number | null;
+  };
 }
 
 export interface PiUpstreamSession {
@@ -48,6 +53,11 @@ export interface PiUpstreamSession {
   continueAfterLength?(): Promise<void>;
   steer?(text: string): Promise<void>;
   compact?(): Promise<{ summary: string }>;
+  getContextUsage?(): {
+    tokens: number | null;
+    contextWindow: number;
+    percent: number | null;
+  } | undefined;
   subscribe(listener: (event: PiUpstreamEvent) => void): () => void;
   abort(): Promise<void>;
   dispose(): void;
@@ -410,8 +420,22 @@ async function createRealUpstreamSession(
       const result = await session.compact();
       return { summary: result.summary };
     },
+    getContextUsage: () => session.getContextUsage(),
     subscribe(listener) {
-      return session.subscribe((event) => listener(toUpstreamEvent(event)));
+      return session.subscribe((event) => {
+        const mapped = toUpstreamEvent(event);
+        if (event.type === "message_end" && event.message.role === "assistant") {
+          const usage = session.getContextUsage();
+          listener(usage === undefined ? mapped : { ...mapped, contextUsage: usage });
+          return;
+        }
+        if (event.type === "compaction_end") {
+          const usage = session.getContextUsage();
+          listener(usage === undefined ? mapped : { ...mapped, contextUsage: usage });
+          return;
+        }
+        listener(mapped);
+      });
     },
     abort: () => session.abort(),
     dispose: () => session.dispose(),
@@ -567,8 +591,30 @@ class PiBioMedAgentSession implements BioMedAgentSession {
       if (event.aborted !== true && typeof summary === "string" && summary.trim() !== "") {
         this.pushBoundary(active, { event: { type: "context_compacted", summary } });
       }
+      if (event.contextUsage !== undefined) {
+        this.pushBoundary(active, {
+          event: {
+            type: "context_usage",
+            tokens: event.contextUsage.tokens,
+            contextWindow: event.contextUsage.contextWindow,
+            percent: event.contextUsage.percent,
+            source: "runtime",
+          },
+        });
+      }
     } else if (event.type === "message_end" && event.assistantStopReason !== undefined) {
       active.assistantStopReason = event.assistantStopReason;
+      if (event.contextUsage !== undefined) {
+        this.pushBoundary(active, {
+          event: {
+            type: "context_usage",
+            tokens: event.contextUsage.tokens,
+            contextWindow: event.contextUsage.contextWindow,
+            percent: event.contextUsage.percent,
+            source: "runtime",
+          },
+        });
+      }
     }
   }
 

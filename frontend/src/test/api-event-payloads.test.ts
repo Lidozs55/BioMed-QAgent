@@ -187,6 +187,40 @@ describe("parseEventPayload — runtime event family", () => {
     expect(() => parseEventPayload(o({ type: "conversation_compacted", covered_through_run_id: "r1", summary_digest: "bad" }), "conversation_compacted", "p")).toThrow(APIError);
   });
 
+  it("context_usage — parses runtime usage and accepts unknown tokens after compaction", () => {
+    const r = parseEventPayload(
+      o({
+        type: "context_usage",
+        tokens: null,
+        context_window: 131_072,
+        percent: null,
+        source: "runtime",
+      }),
+      "context_usage",
+      "p",
+    );
+    expect(r).toEqual({
+      type: "context_usage",
+      tokens: null,
+      context_window: 131_072,
+      percent: null,
+      source: "runtime",
+    });
+  });
+
+  it("context_usage — rejects non-runtime sources and invalid token counts", () => {
+    expect(() => parseEventPayload(
+      o({ type: "context_usage", tokens: -1, context_window: 131_072, percent: 1, source: "runtime" }),
+      "context_usage",
+      "p",
+    )).toThrow(APIError);
+    expect(() => parseEventPayload(
+      o({ type: "context_usage", tokens: 1, context_window: 131_072, percent: 1, source: "ui_estimate" }),
+      "context_usage",
+      "p",
+    )).toThrow(APIError);
+  });
+
   it("run_queued — validates input is non-empty", () => {
     expect(() => parseEventPayload(o({ type: "run_queued", request_id: "r1", input: "" }), "run_queued", "p")).toThrow(APIError);
   });

@@ -287,16 +287,23 @@ export function ChatPanel({
   const setDraftInput = useAgentStore((state) => state.setDraftInput);
   const setDraftError = useAgentStore((state) => state.setDraftError);
 
-  // Estimate context token usage from conversation items
-  const estimatedTokens = useMemo(() => estimateContextTokens(items), [items]);
+  // Prefer Pi's runtime usage. The fallback is conversation-only and restarts
+  // after compaction so the UI never presents the full event timeline as the
+  // model request context.
+  const contextTokensSource = activeTask?.contextTokensSource ?? "ui_estimate";
+  const effectiveContextWindow = activeTask?.contextWindow ?? contextWindow;
+  const estimatedTokens = useMemo(
+    () => activeTask?.contextTokensUsed ?? estimateContextTokens(items, activeTask?.contextCompactionSequence ?? 0),
+    [activeTask?.contextCompactionSequence, activeTask?.contextTokensUsed, items],
+  );
 
   // Context compaction handler
   const [, setCompacting] = useState(false);
   const handleCompact = useCallback(async () => {
     if (activeTaskId === null || compactTask === undefined) return;
     // Manual compaction threshold: only allow when usage > 65%
-    const pct = contextWindow && contextWindow > 0
-      ? Math.round((estimatedTokens / contextWindow) * 100)
+    const pct = effectiveContextWindow && effectiveContextWindow > 0
+      ? Math.round((estimatedTokens / effectiveContextWindow) * 100)
       : 0;
     if (pct <= 65) {
       toast.info("上下文占用较低，无需压缩", { description: `当前占用 ${pct}%，超过 65% 时才建议压缩` });
@@ -311,7 +318,7 @@ export function ChatPanel({
     } finally {
       setCompacting(false);
     }
-  }, [activeTaskId, compactTask, contextWindow, estimatedTokens]);
+  }, [activeTaskId, compactTask, effectiveContextWindow, estimatedTokens]);
 
   const [submittingDraftKey, setSubmittingDraftKey] = useState<string | null>(null);
   const [importPending, setImportPending] = useState(false);
@@ -1065,8 +1072,9 @@ export function ChatPanel({
                 onOpenSettings={onOpenSettings}
                 onModelChange={onModelChange}
                 selectedModelId={selectedModelId}
-                contextWindow={showContextUsage ? contextWindow : undefined}
+                contextWindow={showContextUsage ? effectiveContextWindow : undefined}
                 contextTokensUsed={estimatedTokens}
+                contextTokensSource={contextTokensSource}
                 onCompact={handleCompact}
               />
               {continuationError && <p role="alert" className="mt-2 px-2 text-xs text-destructive">{continuationError}</p>}

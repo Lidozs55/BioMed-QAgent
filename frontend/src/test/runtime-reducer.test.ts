@@ -2985,6 +2985,44 @@ describe("conversation items projection", () => {
     });
   });
 
+  it("projects runtime context usage and resets it after compaction", () => {
+    let state = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_context")),
+      false,
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_context", "run_context", 1, {
+        type: "context_usage",
+        tokens: 12_345,
+        context_window: 131_072,
+        percent: 9.41,
+        source: "runtime",
+      }),
+    );
+    expect(state.tasksById.task_context).toMatchObject({
+      contextTokensUsed: 12_345,
+      contextTokensSource: "runtime",
+      contextWindow: 131_072,
+      compacting: false,
+    });
+
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_context", "run_context", 2, {
+        type: "conversation_compacted",
+        covered_through_run_id: "run_context",
+        summary_digest: "digest",
+      }),
+    );
+    expect(state.tasksById.task_context).toMatchObject({
+      contextTokensUsed: undefined,
+      contextTokensSource: undefined,
+      contextCompactionSequence: 2,
+    });
+  });
+
   it("deactivates streaming reasoning items on run_finalizing", () => {
     let state = setup();
     state = reduceRuntimeEvent(

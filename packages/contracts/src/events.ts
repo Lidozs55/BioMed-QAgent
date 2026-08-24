@@ -91,6 +91,15 @@ export type AssistantReasoningDeltaPayload = {
   delta: string;
 };
 
+export type ContextUsagePayload = {
+  type: "context_usage";
+  /** Runtime-reported context tokens; null means Pi has no trustworthy value yet. */
+  tokens: number | null;
+  context_window: number;
+  percent: number | null;
+  source: "runtime";
+};
+
 export type EventPayload =
   | DurableBuildEventPayload
   | { type: "task_created"; topic: string }
@@ -201,6 +210,7 @@ export type EventPayload =
     }
   | AssistantDeltaPayload
   | AssistantReasoningDeltaPayload
+  | ContextUsagePayload
   | {
       type: "tool_started";
       tool_call_id: string;
