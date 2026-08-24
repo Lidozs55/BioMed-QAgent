@@ -452,6 +452,40 @@ describe("ChatPanel", () => {
     }));
   });
 
+  it("asks for confirmation before running with a context budget warning", async () => {
+    useAgentStore.getState().showNewDraft();
+    act(() => {
+      useAgentStore.getState().setDraftSelectedDatabaseIds(["pubmed", "geo"]);
+    });
+    const startTask = vi.fn().mockResolvedValue({
+      request_id: "req_context",
+      task_id: "task_context",
+      run_id: "run_context",
+      status: "queued",
+    } satisfies TaskRunAccepted);
+    render(
+      <ChatPanel
+        startTask={startTask}
+        runBlockReason="上下文窗口不足以容纳最大输出和保留空间"
+        hasApiKey={true}
+      />,
+    );
+    fireEvent.change(screen.getByPlaceholderText("输入研究目标..."), {
+      target: { value: "Run with warning" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "开始研究" }));
+
+    expect(startTask).not.toHaveBeenCalled();
+    expect(await screen.findByRole("button", { name: "仍然运行" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "仍然运行" }));
+
+    await waitFor(() => expect(startTask).toHaveBeenCalledWith({
+      input: "Run with warning",
+      databases: ["pubmed", "geo"],
+      mode: "agent",
+    }));
+  });
+
   it("keeps a blank draft usable while another task is running", async () => {
     seedBackgroundTask();
     act(() => useAgentStore.getState().showNewDraft());

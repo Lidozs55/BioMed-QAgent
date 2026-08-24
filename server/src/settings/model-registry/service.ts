@@ -149,6 +149,15 @@ export class ModelSettingsService {
       : this.auth.provider_api_keys[settings.provider_id] ?? "";
     const contextWindow = settings.context_window ?? 131_072;
     const reserve = Math.ceil(contextWindow * settings.safety_reserve_ratio);
+    // Pi clamps max output to the remaining context budget; a zero/negative
+    // budget still requires user confirmation before running because Pi would
+    // otherwise silently turn the request into a 1-token response.
+    const availableInputTokens = Math.max(0, contextWindow - settings.max_tokens - reserve);
+    const runBlockReason = apiKey === ""
+      ? "provider credentials are required"
+      : availableInputTokens <= 0
+        ? "上下文窗口不足以容纳最大输出和保留空间"
+        : null;
     return {
       base_url: settings.base_url,
       api_key: maskApiKey(apiKey),
@@ -162,9 +171,9 @@ export class ModelSettingsService {
       safety_reserve_tokens: reserve,
       compaction_trigger_ratio: settings.compaction_trigger_ratio,
       compaction_target_ratio: settings.compaction_target_ratio,
-      available_input_tokens: Math.max(1, contextWindow - settings.max_tokens - reserve),
+      available_input_tokens: availableInputTokens,
       run_ready: apiKey !== "",
-      run_block_reason: apiKey === "" ? "provider credentials are required" : null,
+      run_block_reason: runBlockReason,
       runtime_limits: settings.runtime_limits,
     };
   }

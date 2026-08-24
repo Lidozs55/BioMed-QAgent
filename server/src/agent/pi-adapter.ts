@@ -55,6 +55,8 @@ export interface PiUpstreamSession {
    * the Pi model registry, session model, and compaction budgets.
    */
   reconcileConfig?(): Promise<void>;
+  /** Current session context usage (token estimate and window percent). */
+  contextUsage?(): { tokens: number | null; percent: number | null } | undefined;
   subscribe(listener: (event: PiUpstreamEvent) => void): () => void;
   abort(): Promise<void>;
   dispose(): void;
@@ -98,6 +100,10 @@ interface ActiveTurn {
   cancelled: boolean;
   terminal: boolean;
   reason?: string;
+  reasoningChars: number;
+  assistantChars: number;
+  toolEvents: number;
+  lengthContinuationStalls: number;
   pendingDelta?: Extract<
     BioMedAgentEvent,
     { type: "assistant_delta" | "reasoning_delta" }
@@ -110,6 +116,16 @@ const MAX_TEXT = 4_096;
 const MAX_DEPTH = 3;
 const MAX_ITEMS = 20;
 const DELTA_FLUSH_INTERVAL_MS = 32;
+/** Minimum recent context kept after compaction, as a fraction of the window. */
+const MIN_KEEP_RATIO = 0.05;
+/** Maximum final compaction target, as a fraction of the window. */
+const MAX_KEEP_RATIO = 0.6;
+/** Fraction of the Pi reserve budget available to the compaction summary. */
+const SUMMARY_BUDGET_RATIO = 0.8;
+// Guard against a pathological length loop: three continuations with almost no
+// new assistant/reasoning/tool progress indicate a degenerate configuration.
+const MAX_STALLED_LENGTH_CONTINUATIONS = 3;
+const MIN_PROGRESS_CHARS = 32;
 const LENGTH_CONTINUATION_MESSAGE =
   "The previous assistant turn was truncated by the model length limit. " +
   "Continue the same task from the compacted context without repeating completed work. " +
@@ -229,17 +245,36 @@ export function resolvePiCompactionOverrides(
   contextWindow: number,
   triggerRatio: number,
   targetRatio: number,
+  currentTokens?: number | null,
 ): { compaction: { enabled: boolean; reserveTokens: number; keepRecentTokens: number } } {
   const reserveTokens = Math.max(0, Math.round(contextWindow * (1 - triggerRatio)));
-  const targetKeep = Math.max(0, Math.round(contextWindow * targetRatio));
+  // Pi caps the compaction summary at 80% of the reserve budget; pre-reserve
+  // that headroom so a dense summary never displaces the recent context.
+  const summaryBudget = Math.round(SUMMARY_BUDGET_RATIO * reserveTokens);
+  const floorKeep = Math.round(contextWindow * MIN_KEEP_RATIO);
+  const capKeep = Math.round(contextWindow * MAX_KEEP_RATIO);
+  const hasKnownUsage = currentTokens !== null &&
+    currentTokens !== undefined &&
+    Number.isFinite(currentTokens) &&
+    currentTokens > 0;
+  const finalTarget = hasKnownUsage
+    ? Math.min(Math.max(Math.round(currentTokens * targetRatio), floorKeep), capKeep)
+    : Math.min(Math.max(Math.round(contextWindow * targetRatio), floorKeep), capKeep);
+  const desiredKeep = Math.max(floorKeep, finalTarget - summaryBudget);
+  const keptRecent = Math.min(
+    desiredKeep,
+    Math.max(0, contextWindow - reserveTokens),
+  );
+  // When the whole conversation already fits under the final target, Pi would
+  // keep everything anyway; leave its settings in the no-op range.
+  const effectiveKeep = hasKnownUsage && currentTokens <= finalTarget
+    ? Math.max(currentTokens, keptRecent)
+    : keptRecent;
   return {
     compaction: {
       enabled: true,
       reserveTokens,
-      // Pi keeps at least ``reserveTokens`` for the compaction summary plus the
-      // incoming prompt. Never let ``keepRecentTokens`` eat that budget, or a
-      // small context window becomes un-compactable after a model switch.
-      keepRecentTokens: Math.min(targetKeep, Math.max(0, contextWindow - reserveTokens)),
+      keepRecentTokens: effectiveKeep,
     },
   };
 }
@@ -439,42 +474,44 @@ async function createRealUpstreamSession(
           });
           current = next;
         }
-        return;
+      } else {
+        modelRuntime.registerProvider(next.provider, {
+          api: "openai-completions",
+          baseUrl: next.baseUrl,
+          models: [
+            {
+              id: next.modelId,
+              name: next.modelId,
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: next.contextWindow ?? 131_072,
+              maxTokens: next.maxTokens ?? 8_192,
+            },
+          ],
+        });
+        await modelRuntime.setRuntimeApiKey(next.provider, next.apiKey, {
+          allowNetwork: false,
+        });
+        const nextModel = modelRuntime.getModel(next.provider, next.modelId);
+        if (nextModel === undefined) {
+          throw new BioMedAgentError(
+            "INVALID_CONFIGURATION",
+            "Configured Pi model is unavailable",
+          );
+        }
+        await session.setModel(nextModel);
       }
-      modelRuntime.registerProvider(next.provider, {
-        api: "openai-completions",
-        baseUrl: next.baseUrl,
-        models: [
-          {
-            id: next.modelId,
-            name: next.modelId,
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: next.contextWindow ?? 131_072,
-            maxTokens: next.maxTokens ?? 8_192,
-          },
-        ],
-      });
-      await modelRuntime.setRuntimeApiKey(next.provider, next.apiKey, {
-        allowNetwork: false,
-      });
-      const nextModel = modelRuntime.getModel(next.provider, next.modelId);
-      if (nextModel === undefined) {
-        throw new BioMedAgentError(
-          "INVALID_CONFIGURATION",
-          "Configured Pi model is unavailable",
-        );
-      }
-      await session.setModel(nextModel);
       if (
         next.compactionTriggerRatio !== undefined &&
         next.compactionTargetRatio !== undefined
       ) {
+        const usage = session.getContextUsage();
         settingsManager.applyOverrides(resolvePiCompactionOverrides(
           next.contextWindow ?? 131_072,
           next.compactionTriggerRatio,
           next.compactionTargetRatio,
+          usage?.tokens ?? null,
         ));
       }
       current = next;
@@ -493,6 +530,12 @@ async function createRealUpstreamSession(
       return { summary: result.summary };
     },
     reconcileConfig,
+    contextUsage: () => {
+      const usage = session.getContextUsage();
+      return usage === undefined
+        ? undefined
+        : { tokens: usage.tokens, percent: usage.percent };
+    },
     subscribe(listener) {
       return session.subscribe((event) => listener(toUpstreamEvent(event)));
     },
@@ -530,12 +573,16 @@ export async function generateOneShotText(
     tools: [],
   }, process.env);
   let output = "";
+  let reasoningChars = 0;
+  let lengthContinuationStalls = 0;
   let stopReason: string | undefined;
   const unsubscribe = upstream.subscribe((event) => {
     const message = event.assistantMessageEvent;
     if (event.type === "message_update" && message?.type === "text_delta") {
       output += message.delta ?? "";
       if (output.length > 100_000) void upstream.abort();
+    } else if (event.type === "message_update" && message?.type === "thinking_delta") {
+      reasoningChars += (message.delta ?? "").length;
     } else if (event.type === "message_end") {
       stopReason = event.assistantStopReason;
     }
@@ -552,8 +599,21 @@ export async function generateOneShotText(
       if (upstream.continueAfterLength === undefined) {
         throw new Error("Model generation was truncated");
       }
+      const beforeOutput = output.length;
+      const beforeReasoning = reasoningChars;
       stopReason = undefined;
       await upstream.continueAfterLength();
+      const madeProgress =
+        output.length > beforeOutput ||
+        reasoningChars - beforeReasoning >= MIN_PROGRESS_CHARS;
+      if (!madeProgress) {
+        lengthContinuationStalls += 1;
+        if (lengthContinuationStalls >= MAX_STALLED_LENGTH_CONTINUATIONS) {
+          throw new Error("Model length continuation made no meaningful progress");
+        }
+      } else {
+        lengthContinuationStalls = 0;
+      }
     }
     if (isAborted()) throw new Error("Model generation was cancelled");
     if (stopReason === "error") throw new Error("Model generation failed upstream");
@@ -621,6 +681,7 @@ class PiBioMedAgentSession implements BioMedAgentSession {
         this.queueDelta(active, "reasoning_delta", message.delta);
       }
     } else if (event.type === "tool_execution_start") {
+      active.toolEvents += 1;
       this.pushBoundary(active, {
         event: {
           type: "tool_started",
@@ -637,6 +698,7 @@ class PiBioMedAgentSession implements BioMedAgentSession {
         },
       });
     } else if (event.type === "tool_execution_end") {
+      active.toolEvents += 1;
       this.pushBoundary(active, {
         event: {
           type: "tool_completed",
@@ -662,8 +724,23 @@ class PiBioMedAgentSession implements BioMedAgentSession {
       if (this.upstream.continueAfterLength === undefined) {
         throw new Error("Pi runtime cannot continue a length-truncated turn");
       }
+      const beforeReasoning = active.reasoningChars;
+      const beforeAssistant = active.assistantChars;
+      const beforeTools = active.toolEvents;
       active.assistantStopReason = undefined;
       await this.upstream.continueAfterLength();
+      const madeProgress =
+        active.assistantChars > beforeAssistant ||
+        active.reasoningChars - beforeReasoning >= MIN_PROGRESS_CHARS ||
+        active.toolEvents > beforeTools;
+      if (!madeProgress) {
+        active.lengthContinuationStalls += 1;
+        if (active.lengthContinuationStalls >= MAX_STALLED_LENGTH_CONTINUATIONS) {
+          throw new Error("Pi runtime length continuation made no meaningful progress");
+        }
+      } else {
+        active.lengthContinuationStalls = 0;
+      }
     }
     if (!active.cancelled && active.assistantStopReason === "error") {
       throw new Error("Pi runtime ended with an upstream error");
@@ -676,6 +753,11 @@ class PiBioMedAgentSession implements BioMedAgentSession {
     rawDelta: string,
   ): void {
     const delta = boundedText(rawDelta);
+    if (type === "reasoning_delta") {
+      active.reasoningChars += delta.length;
+    } else {
+      active.assistantChars += delta.length;
+    }
     const pending = active.pendingDelta;
     if (
       pending !== undefined &&
@@ -738,6 +820,10 @@ class PiBioMedAgentSession implements BioMedAgentSession {
       queue: new EventQueue(),
       cancelled: false,
       terminal: false,
+      reasoningChars: 0,
+      assistantChars: 0,
+      toolEvents: 0,
+      lengthContinuationStalls: 0,
     };
     this.activeTurn = active;
     const onAbort = (): void => {
