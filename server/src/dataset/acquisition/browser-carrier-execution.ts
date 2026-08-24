@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, rm, stat } from "node:fs/promises";
+import { copyFile, mkdir, rm, stat } from "node:fs/promises";
 import { createWriteStream } from "node:fs";
 import path from "node:path";
 import type { OperationResultManifest } from "@biomed/contracts";
@@ -32,6 +32,24 @@ export interface BrowserCarrierParserExecutionResult {
   sha256: string;
   sizeBytes: number;
   operationResult: OperationResultManifest;
+}
+
+export interface BrowserCarrierIntegrationInput {
+  parsed: BrowserCarrierParserExecutionResult;
+  taskId: string;
+  buildId: string;
+  outputDir: string;
+  familyId: string;
+  requestIdentityDigest: string;
+  implementationDigest: string;
+}
+
+export interface BrowserCarrierIntegrationResult {
+  operationResult: OperationResultManifest;
+  relativePath: string;
+  absolutePath: string;
+  sha256: string;
+  sizeBytes: number;
 }
 
 function csvCell(value: unknown): string {
@@ -90,6 +108,64 @@ class CarrierCsvSink implements RegisteredTableSink {
 }
 
 /** Core-only carrier parser boundary; it stops before OperationResult/publication. */
+export async function integrateBrowserParsedTable(
+  input: BrowserCarrierIntegrationInput,
+): Promise<BrowserCarrierIntegrationResult> {
+  if (input.parsed.operationResult.status !== "succeeded" || input.parsed.operationResult.output_kind !== "parsed_table") {
+    throw new Error("browser integration requires a succeeded parsed-table OperationResult");
+  }
+  const relativePath = `tables/${input.parsed.tableId}.csv`;
+  const absolutePath = path.join(input.outputDir, ...relativePath.split("/"));
+  await mkdir(path.dirname(absolutePath), { recursive: true });
+  await copyFile(input.parsed.absolutePath, absolutePath);
+  const info = await stat(absolutePath);
+  const sha256 = await sha256File(absolutePath);
+  if (info.size !== input.parsed.sizeBytes || sha256 !== input.parsed.sha256) {
+    await rm(absolutePath, { force: true });
+    throw new Error("browser integration output drifted from parsed-table bytes");
+  }
+  const parameterDigest = createHash("sha256").update(JSON.stringify({ table_id: input.parsed.tableId, family_id: input.familyId }), "utf8").digest("hex");
+  const operationResult = parseOperationResultManifest({
+    schema_version: "1.0",
+    result_manifest_id: `result_${input.buildId}_${input.parsed.tableId}_integrated`,
+    task_id: input.taskId,
+    build_id: input.buildId,
+    operation_id: `integrate_browser_${input.parsed.tableId}`,
+    operation_kind: "integrate",
+    operation_attempt_id: `attempt_${input.buildId}_${input.parsed.tableId}_integrated`,
+    attempt: 1,
+    status: "succeeded",
+    input_digest: input.parsed.operationResult.output_digest,
+    parameter_digest: parameterDigest,
+    implementation_digest: input.implementationDigest,
+    output_digest: sha256,
+    output_kind: "integrated_table",
+    output_summary: {
+      table_id: input.parsed.tableId,
+      dataset_family: input.familyId,
+      schema_ref: input.parsed.operationResult.output_summary.schema_ref,
+      row_count: input.parsed.adapter.audit.accepted_row_count,
+      column_count: input.parsed.adapter.schema.fields.length,
+      primary_file_sha256: sha256,
+    },
+    output_files: [{ relative_path: relativePath, size_bytes: info.size, sha256 }],
+    dependency_closure: {
+      input_asset_ids: input.parsed.operationResult.dependency_closure.input_asset_ids,
+      upstream_result_manifest_ids: [input.parsed.operationResult.result_manifest_id],
+      parameter_digest: parameterDigest,
+      implementation_digest: input.implementationDigest,
+    },
+    commit: { state: "committed", commit_id: `commit_${input.buildId}_${input.parsed.tableId}_integrated`, committed_at: new Date().toISOString() },
+    migration: { mode: "native", legacy_checkpoint_path: null, migrated_at: null },
+  }, input.taskId, input.buildId);
+  return { operationResult, relativePath, absolutePath, sha256, sizeBytes: info.size };
+}
+
+async function sha256File(filePath: string): Promise<string> {
+  const bytes = await (await import("node:fs/promises")).readFile(filePath);
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
 export async function executeBrowserCarrierParser(
   input: BrowserCarrierParserExecutionInput,
 ): Promise<BrowserCarrierParserExecutionResult> {

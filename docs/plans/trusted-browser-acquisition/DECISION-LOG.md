@@ -181,5 +181,13 @@ risks, and verification results for later audit.
   `output_kind=parsed_table`; it is not a publication candidate.
 - Reason: Existing OperationResult contracts provide the correct immutable hash,
   dependency, schema, and task/build closure before family validation.
-- Status: implemented and focused-verified; family materialization/publication
-  integration remains pending.
+- Status: implemented and focused-verified.
+
+## 2026-08-24 / D-022
+
+- Decision: Add an explicit deterministic `parsed_table` to `integrated_table`
+  operation before dynamic-family materialization; never relabel parser output.
+- Reason: Dataset family assembly requires integrated-table semantics, while media
+  parsing alone does not establish those semantics. The integration copy is
+  rehashed and references the parsed manifest in dependency closure.
+- Status: implemented and focused-verified; family publication integration pending.
