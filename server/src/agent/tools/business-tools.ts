@@ -45,6 +45,7 @@ import { createChartDataVlmTool } from "./extract-chart-data-vlm.js";
 import type { VlmConfig } from "../../processing/vlm/vlm-client.js";
 import type { ToolApprovalGate, ToolHooks, ToolServiceDeps } from "./tool-hooks.js";
 import type { DatasetHILGate } from "../../dataset/review/hil-policy.js";
+import { BrowserAcquisitionEvidenceStore } from "../../runtime/browser-acquisition-store.js";
 
 export interface BusinessToolBundleContext {
   /** Absolute task root (TaskWorkDir root). */
@@ -217,6 +218,8 @@ export async function createBusinessToolBundle(
       hooks: context.hooks,
       registrar: context.registrar,
       taskId: context.taskId,
+      runId: context.runId,
+      evidenceStore: new BrowserAcquisitionEvidenceStore({ taskRoot }),
       maxDownloadBytes: limits.max_download_mib * 1024 * 1024,
       downloadTimeoutMs: limits.download_timeout_seconds * 1000,
     });

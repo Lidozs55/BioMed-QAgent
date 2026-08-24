@@ -47,6 +47,7 @@ import { DATA_LEVEL, DATABASE } from "../../dataset/contracts/enums.js";
 import type { DownloadAttempt, SourceAsset } from "../../dataset/contracts/source.js";
 import { assetIdFromSha256, canonicalDigest } from "../../dataset/adapters/identity.js";
 import type { ToolHooks } from "./tool-hooks.js";
+import type { BrowserAcquisitionEvidenceStore } from "../../runtime/browser-acquisition-store.js";
 import { noopHooks } from "./tool-hooks.js";
 import { errorMessage } from "./result.js";
 
@@ -124,6 +125,7 @@ export interface BrowserToolsOptions {
   taskId?: string | (() => string);
   /** Run id used to bind browser evidence to one durable run. */
   runId?: string | (() => string);
+  evidenceStore?: BrowserAcquisitionEvidenceStore;
 }
 
 export const NAVIGATE_PAGE_TOOL_NAME = "navigate_page";
@@ -380,6 +382,9 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
           provider_id: BROWSER_ACQUISITION_PROVIDER_ID,
           provider_implementation_digest: BROWSER_PROVIDER_IMPLEMENTATION_DIGEST,
         };
+        const persistedEvidence = options.evidenceStore === undefined
+          ? null
+          : await options.evidenceStore.put(evidence);
         hooks.onQuery(filename, SOURCE, "success", 1);
         return {
           content: JSON.stringify({
@@ -392,6 +397,7 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
             source_asset: asset,
             download_attempt: attempt,
             browser_acquisition_evidence: evidence,
+            browser_evidence_digest: persistedEvidence?.evidenceDigest ?? canonicalDigest(evidence),
             formal_status: "preparation_only",
           }),
         };
