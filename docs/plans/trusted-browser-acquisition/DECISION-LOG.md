@@ -165,3 +165,11 @@ risks, and verification results for later audit.
 - Reason: Browser formalization produces a carrier-role receipt. Re-labeling it
   as source would weaken role semantics and make provenance ambiguous.
 - Status: implemented; existing registered-table and browser focused tests pass.
+
+## 2026-08-24 / D-020
+
+- Decision: Browser carrier parsing requires exact `resolveCoreAcquired` provenance
+  and writes only task build staging output until OperationResult admission.
+- Reason: A registered carrier without Core acquisition provenance must not be
+  parsed into a formal result; parser success is not publication authority.
+- Status: implemented and focused-verified.
