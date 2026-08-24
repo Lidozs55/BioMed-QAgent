@@ -284,6 +284,44 @@ describe("TypeScript model settings", () => {
     expect(service.resolveRuntimeLimits()).toEqual(DEFAULT_RUNTIME_LIMITS);
   });
 
+  test("exposes a context budget warning while keeping the API-ready state", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const baseUrl = await serve(service);
+
+    const providerResponse = await fetch(`${baseUrl}/api/v1/model-registry/providers`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Small Context Provider",
+        base_url: "https://models.example/v1",
+        api_key: "sk-small-context-provider",
+      }),
+    });
+    const provider = await providerResponse.json() as Record<string, unknown>;
+    const modelResponse = await fetch(`${baseUrl}/api/v1/model-registry/models`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        provider_id: provider.id,
+        model_id: "small-context-chat",
+        context_window: 4094,
+        source: "manual",
+      }),
+    });
+    const model = await modelResponse.json() as Record<string, unknown>;
+    await fetch(`${baseUrl}/api/v1/model-registry/models/${String(model.id)}/activate`, {
+      method: "POST",
+    });
+
+    expect(service.getSettings()).toMatchObject({
+      context_window: 4094,
+      available_input_tokens: 0,
+      run_ready: true,
+      run_block_reason: "上下文窗口不足以容纳最大输出和保留空间",
+    });
+  });
+
   test("migrates unversioned legacy runtime limits to the widened defaults", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
     await ModelSettingsService.create({ settingsDir, environment: {} });

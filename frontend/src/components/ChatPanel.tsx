@@ -117,7 +117,7 @@ interface ChatPanelProps {
   selectedModelId?: string;
   /** Context window capacity in tokens from model settings */
   contextWindow?: number;
-  /** Non-null when model settings block task creation (e.g. missing context window) */
+  /** Non-null when task creation requires explicit user confirmation (e.g. context budget warning) */
   runBlockReason?: string | null;
 }
 
@@ -325,6 +325,7 @@ export function ChatPanel({
   const [continuationDrafts, setContinuationDrafts] = useState<Record<string, string>>({});
   const [continuationPendingByTask, setContinuationPendingByTask] = useState<Record<string, boolean>>({});
   const [continuationErrors, setContinuationErrors] = useState<Record<string, string>>({});
+  const [pendingSubmission, setPendingSubmission] = useState<StartTaskInput | null>(null);
   const [queuedFollowUps, setQueuedFollowUps] = useState<
     Record<string, QueuedMessage[]>
   >({});
@@ -492,22 +493,12 @@ export function ChatPanel({
     return "选择已完成的 Agent 任务后继续提问";
   }, [activeTask, continuationPending]);
 
-  const submitTask = async (mode: StartTaskInput["mode"] = "agent") => {
-    const input = draftInput.trim();
-    if (!input || isSubmitting) return;
-    if (selectedDatabases.length === 0) {
-      setDraftError("请至少选择一个数据源");
-      return;
-    }
-    if (runBlockReason) {
-      setDraftError(`模型配置不完整：${runBlockReason}。请在设置中配置上下文窗口或选择已有模型。`);
-      return;
-    }
-    const submissionKey = draftKey(input, selectedDatabases);
+  const performSubmission = async (submission: StartTaskInput) => {
+    const submissionKey = draftKey(submission.input, submission.databases);
     setDraftError(null);
     setSubmittingDraftKey(submissionKey);
     try {
-      await startTask({ input, databases: selectedDatabases, mode });
+      await startTask(submission);
       const currentDraft = useAgentStore.getState().draft;
       if (draftKey(currentDraft.input, currentDraft.selectedDatabaseIds) === submissionKey) {
         setDraftInput("");
@@ -520,6 +511,29 @@ export function ChatPanel({
     } finally {
       setSubmittingDraftKey((current) => current === submissionKey ? null : current);
     }
+  };
+
+  const submitTask = async (mode: StartTaskInput["mode"] = "agent") => {
+    const input = draftInput.trim();
+    if (!input || isSubmitting) return;
+    if (selectedDatabases.length === 0) {
+      setDraftError("请至少选择一个数据源");
+      return;
+    }
+    if (hasApiKey === false) {
+      setDraftError("请先在设置中配置 API Key");
+      return;
+    }
+    const submission: StartTaskInput = {
+      input,
+      databases: selectedDatabases,
+      mode,
+    };
+    if (runBlockReason) {
+      setPendingSubmission(submission);
+      return;
+    }
+    await performSubmission(submission);
   };
 
   const submitFiles = async (files: File[], note: string) => {
@@ -820,6 +834,44 @@ export function ChatPanel({
     void sendContinuationWithMode(followUpMode);
   };
 
+  const contextBudgetWarningDialog = pendingSubmission === null ? null : (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="context-budget-warning-title"
+        className="w-full max-w-sm rounded-xl bg-popover p-4 text-sm text-popover-foreground shadow-lg ring-1 ring-foreground/10"
+      >
+        <h3
+          id="context-budget-warning-title"
+          className="font-heading text-base font-medium"
+        >
+          上下文预算提示
+        </h3>
+        <p className="mt-2 text-sm text-muted-foreground">
+          {runBlockReason ?? "当前模型配置可能导致模型输出被截断，是否仍要继续？"}
+        </p>
+        <div className="mt-4 flex justify-end gap-2">
+          <Button
+            variant="outline"
+            onClick={() => setPendingSubmission(null)}
+          >
+            取消
+          </Button>
+          <Button
+            onClick={() => {
+              const submission = pendingSubmission;
+              setPendingSubmission(null);
+              if (submission !== null) void performSubmission(submission);
+            }}
+          >
+            仍然运行
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+
   if (activeTaskId === null) {
     return (
       <div className="flex h-full min-h-0 min-w-0 items-center justify-center overflow-y-auto px-4 py-10">
@@ -866,6 +918,7 @@ export function ChatPanel({
             <p className="mt-3 text-center text-xs text-muted-foreground">未连接到后端</p>
           )}
         </div>
+        {contextBudgetWarningDialog}
       </div>
     );
   }
@@ -1127,6 +1180,7 @@ export function ChatPanel({
         </div>
       </MessageScrollerProvider>
       {resumeRun !== undefined && <UserInputDialog task={activeTask} onResumeRun={resumeRun} />}
+      {contextBudgetWarningDialog}
     </div>
   );
 }
