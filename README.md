@@ -40,6 +40,46 @@ BioMed-QAgent 面向生物医学开放数据，把自然语言需求转化为可
 
 要求：Node.js 22.19+、pnpm 11.14、Python 3.12+、uv、Git。
 
+### 环境要求
+
+| 组件            | 要求                                          |
+| --------------- | --------------------------------------------- |
+| Python          | 3.12+（仅 `database/` persistence bridge 需要） |
+| Node.js         | 22.19+                                        |
+| Python 包管理器 | [uv](https://docs.astral.sh/uv/)（`uv sync` 安装 database 项目） |
+| Node 包管理器   | [pnpm](https://pnpm.io/)（不要使用 npm）       |
+| LLM             | DashScope API Key，或其他 OpenAI 兼容模型配置 |
+| 可选            | Playwright Chromium，用于网页视觉证据采集     |
+
+### 1. 配置应用
+
+Windows 首次打开终端时先初始化 UTF-8 环境，避免 PowerShell/cmd/Git Bash 的系统代码页（常见为 GBK）损坏中文 JSON、Python 输出或 Agent steer 文本：
+
+**PowerShell（仅当前终端）：**
+
+```powershell
+. .\scripts\utf8-init.ps1
+```
+
+**cmd（仅当前终端）：**
+
+```bat
+call scripts\utf8-init.cmd
+```
+
+脚本设置 code page 65001、`PYTHONUTF8=1`、`PYTHONIOENCODING=utf-8`、`LANG/LC_ALL=C.UTF-8`。`pnpm dev` 本身仍使用 Node UTF-8 API；服务端还会拒绝包含 U+FFFD 或非法 surrogate 的 task/steer 文本，防止损坏指令继续执行。
+
+在完成上述初始化后，在项目根目录复制环境变量模板，然后编辑根 `.env`；正常 `pnpm dev` 会读取它，由 TS Host 与 Pi 消费：
+
+**Windows PowerShell**：
+
+```powershell
+Copy-Item .env.example .env
+notepad .env
+```
+
+**macOS / Linux / Git Bash**：
+
 ```bash
 git clone <repository-url>
 cd BioMedQAgent

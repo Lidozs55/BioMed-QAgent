@@ -18,6 +18,12 @@
 
 set -euo pipefail
 
+# Keep Python and child-process text on UTF-8 on Windows Git Bash and POSIX.
+export PYTHONUTF8=1
+export PYTHONIOENCODING=utf-8
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 AGENT_DIR="$REPO_ROOT/scripts/commonly-agent"
 

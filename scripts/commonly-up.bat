@@ -15,6 +15,13 @@ rem ---------------------------------------------------------------------------
 setlocal EnableExtensions
 setlocal EnableDelayedExpansion
 
+rem ----- force UTF-8 for Windows console and Python webhook SDK -----
+chcp 65001 >nul
+set "PYTHONUTF8=1"
+set "PYTHONIOENCODING=utf-8"
+set "LANG=C.UTF-8"
+set "LC_ALL=C.UTF-8"
+
 rem ----- locate the repo root from this script's own path (%~dp0) -----
 set "REPO_ROOT=%~dp0.."
 set "AGENT_DIR=%REPO_ROOT%\scripts\commonly-agent"

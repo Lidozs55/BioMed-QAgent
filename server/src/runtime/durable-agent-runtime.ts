@@ -184,12 +184,22 @@ async function readJsonBody(request: IncomingMessage): Promise<Record<string, un
   return value as Record<string, unknown>;
 }
 
+function rejectCorruptedText(value: string, field: string): string {
+  if (value.includes("\uFFFD")) {
+    throw new TypeError(`${field} contains corrupted UTF-8 text (U+FFFD replacement character)`);
+  }
+  if (/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value)) {
+    throw new TypeError(`${field} contains an invalid UTF-16 surrogate`);
+  }
+  return value;
+}
+
 function requiredString(body: Record<string, unknown>, name: string, max = 128): string {
   const value = body[name];
   if (typeof value !== "string" || value.trim() === "" || value.length > max) {
     throw new TypeError(`${name} must be a bounded non-empty string`);
   }
-  return value;
+  return rejectCorruptedText(value, name);
 }
 
 function inputString(body: Record<string, unknown>): string {

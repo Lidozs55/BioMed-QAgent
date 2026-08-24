@@ -327,6 +327,16 @@ describe("durable formal Agent runtime", () => {
     });
     expect(adapter.steering[0]).toContain("focus on TP53");
 
+    const corruptedSteer = await fetch(`${base}/api/v1/tasks/${accepted.task_id}/inject-context`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "损坏文本\uFFFD", expected_run_id: accepted.run_id }),
+    });
+    expect(corruptedSteer.status).toBe(422);
+    expect(await corruptedSteer.json()).toMatchObject({
+      detail: expect.stringContaining("corrupted UTF-8"),
+    });
+
     const compacted = await fetch(`${base}/api/v1/tasks/${accepted.task_id}/compact`, {
       method: "POST",
     });

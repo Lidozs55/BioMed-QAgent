@@ -404,7 +404,7 @@ describe("governed Task Workspace (data/workspaces/<taskId>)", () => {
         executable: process.execPath,
         args: [
           "-e",
-          "process.stdout.write(JSON.stringify({cwd:process.cwd(),secret:process.env.BIOMED_TEST_SECRET})); process.stderr.write(process.cwd()+'\\n'+'e'.repeat(1024))",
+          "process.stdout.write(JSON.stringify({cwd:process.cwd(),secret:process.env.BIOMED_TEST_SECRET,pythonUtf8:process.env.PYTHONUTF8,pythonEncoding:process.env.PYTHONIOENCODING,lang:process.env.LANG,lcAll:process.env.LC_ALL})); process.stderr.write(process.cwd()+'\\n'+'e'.repeat(1024))",
         ],
       });
 
@@ -418,6 +418,10 @@ describe("governed Task Workspace (data/workspaces/<taskId>)", () => {
       expect(result.stdout).toContain(JSON.stringify(workspaceRoot));
       expect(result.stderr).toContain(workspaceRoot);
       expect(result.stdout).not.toContain("parent-secret");
+      expect(result.stdout).toContain('"pythonUtf8":"1"');
+      expect(result.stdout).toContain('"pythonEncoding":"utf-8"');
+      expect(result.stdout).toContain('"lang":"C.UTF-8"');
+      expect(result.stdout).toContain('"lcAll":"C.UTF-8"');
       expect(Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr)).toBeLessThanOrEqual(512);
 
       const rejected = await workspace.exec({ executable: "node & whoami", args: [] });

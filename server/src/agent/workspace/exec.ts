@@ -22,6 +22,8 @@ const SAFE_ENVIRONMENT_KEYS = new Set([
   "TMP",
   "TMPDIR",
   "WINDIR",
+  "PYTHONUTF8",
+  "PYTHONIOENCODING",
 ]);
 
 interface ActiveCommand {
@@ -172,7 +174,13 @@ function rejectedResult(command: string[], message: string, durationMs = 0): Wor
 }
 
 function safeEnvironment(): NodeJS.ProcessEnv {
-  const combined = { ...process.env };
+  const combined = {
+    ...process.env,
+    PYTHONUTF8: "1",
+    PYTHONIOENCODING: "utf-8",
+    LANG: "C.UTF-8",
+    LC_ALL: "C.UTF-8",
+  };
   return Object.fromEntries(
     Object.entries(combined).filter(
       ([key, value]) => value !== undefined && SAFE_ENVIRONMENT_KEYS.has(key.toUpperCase()),
