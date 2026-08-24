@@ -263,4 +263,13 @@ risks, and verification results for later audit.
 - Reason: Browser execution may contain multiple integrated results and cannot
   truthfully provide transform digest, Host implementation digest, or transform
   input receipts.
-- Status: typecheck/lint and existing publication/materialization tests pass.
+- Status: implemented and verified with browser execution publication test.
+
+## 2026-08-24 / D-031
+
+- Decision: Browser provenance projection records Core acquisition source asset
+  IDs and provenance, with no fabricated transform input receipts or digests.
+- Reason: Release invariants require source asset closure, while browser parser
+  execution has no transform receipt. The first browser variant test exposed
+  this gap and the fix was validated by the same publication test.
+- Status: implemented; focused test, typecheck, and lint pass.

@@ -302,6 +302,37 @@ describe("dynamic family build tool boundary", () => {
         signal: new AbortController().signal,
         isGenerationCurrent: () => true,
       };
+      const browserRoot = path.join(root, "browser-publication");
+      const browserPublication = await publishDynamicFamily({
+        ...publishInput,
+        taskRoot: browserRoot,
+        workspaceRoot: path.join(browserRoot, "agent-workspace"),
+        execution: {
+          kind: "browser" as const,
+          materialization: result.materialization,
+          integratedResults: [result.operationResult],
+          trustedRoot: result.trustedRoot,
+          generation: result.receipt.generation,
+          sourceAcquisitionProvenance: result.sourceAcquisitionProvenance,
+        },
+        hilGate: {
+          requestHIL: async (input) => ({
+            schema_version: "1.0",
+            review_id: "review_browser",
+            request_id: "hil_browser",
+            decision: { action: "accept" },
+            reviewer: "user",
+            reviewed_at: "2026-08-23T00:00:00.000Z",
+            evidence_digest: computeHILEvidenceDigest(input),
+            reason: "Reviewed browser execution candidate",
+          }),
+        },
+      });
+      expect(browserPublication.validation.status).toBe("passed");
+      expect(browserPublication.publication.publication.manifest_sha256).toMatch(/^[0-9a-f]{64}$/);
+      const browserProvenance = JSON.parse(await readFile(path.join(browserRoot, "datasets_build", parsed.build_proposal.build_id, "provenance.json"), "utf8")) as { execution_kind?: string; transform_digest?: string };
+      expect(browserProvenance.execution_kind).toBe("browser");
+      expect(browserProvenance.transform_digest).toBeUndefined();
       await expect(publishDynamicFamily(publishInput)).rejects.toThrow(/durable HIL gate/);
       for (const action of ["reject", "approve"] as const) {
         await expect(publishDynamicFamily({

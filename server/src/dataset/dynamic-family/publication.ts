@@ -395,6 +395,13 @@ export async function publishDynamicFamily(
       input_asset_receipts: transformExecution!.receipt.input_asset_receipts,
     } : {}),
     operation_result_manifest_ids: integratedResults.map((result) => result.result_manifest_id),
+    sources: sourceAcquisitionProvenance.map((provenance) => ({
+      asset_id: provenance.asset_id,
+      locator_ref: provenance.canonical_accession ?? provenance.provider_id,
+      sha256: null,
+      size_bytes: null,
+    })),
+    source_receipts: [],
     core_acquisition_provenance: sourceAcquisitionProvenance,
     ...(hilAcceptance === null ? {} : { hil_acceptance: hilAcceptance }),
   }, null, 2)}\n`, "utf8");
