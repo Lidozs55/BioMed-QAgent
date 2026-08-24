@@ -157,3 +157,11 @@ risks, and verification results for later audit.
   paths; browser parser schema binding is a registry concern and must not widen
   unrelated wire DTOs.
 - Status: implemented and focused-verified.
+
+## 2026-08-24 / D-019
+
+- Decision: Add an explicit `parseCarrier` adapter entry point; preserve
+  source-only behavior of the existing `parse` method.
+- Reason: Browser formalization produces a carrier-role receipt. Re-labeling it
+  as source would weaken role semantics and make provenance ambiguous.
+- Status: implemented; existing registered-table and browser focused tests pass.

@@ -213,10 +213,11 @@ function validateRegistration(
   request: RegisteredTableAdapterRequest,
   asset: CoreResolvedRegisteredAsset,
   parser: RegisteredTableParserDefinition,
+  allowedRole: "source" | "carrier" = "source",
 ): void {
   const receipt = parseSourceAssetRegistrationReceipt(asset.registration_receipt, request.task_id);
   if (receipt.asset_ref.asset_id !== request.asset_id) throw new Error("resolved receipt does not match requested asset ID");
-  if (receipt.asset_ref.role !== "source") throw new Error("registered-table adapter requires a source-role asset");
+  if (receipt.asset_ref.role !== allowedRole) throw new Error(`registered-table adapter requires a ${allowedRole}-role asset`);
   if (receipt.path_compatibility.mode !== "asset_id") throw new Error("legacy task paths are not trusted registered-table inputs");
   if (!parser.media_types.includes(receipt.media_type.toLowerCase())) {
     throw new Error(`registered asset media type is not allowed by parser: ${receipt.media_type}`);
@@ -528,6 +529,25 @@ export class RegisteredTableAdapter {
     sink: RegisteredTableSink,
     signal?: AbortSignal | null,
   ): Promise<RegisteredTableAdapterResult> {
+    return this.#parse(requestValue, asset, sink, signal, "source");
+  }
+
+  async parseCarrier(
+    requestValue: unknown,
+    asset: CoreResolvedRegisteredAsset,
+    sink: RegisteredTableSink,
+    signal?: AbortSignal | null,
+  ): Promise<RegisteredTableAdapterResult> {
+    return this.#parse(requestValue, asset, sink, signal, "carrier");
+  }
+
+  async #parse(
+    requestValue: unknown,
+    asset: CoreResolvedRegisteredAsset,
+    sink: RegisteredTableSink,
+    signal: AbortSignal | null | undefined,
+    allowedRole: "source" | "carrier",
+  ): Promise<RegisteredTableAdapterResult> {
     const request = parseRegisteredTableAdapterRequest(requestValue);
     let schema: DatasetSchemaV2 = {
       schema_version: "2.0",
@@ -557,7 +577,7 @@ export class RegisteredTableAdapter {
         throw new Error(`unknown or mismatched schema_ref: ${request.schema_ref}`);
       }
       validateParser(schema, parser);
-      validateRegistration(request, asset, parser);
+      validateRegistration(request, asset, parser, allowedRole);
       if (parser.format === "json") {
         const bytes = await collectVerifiedBytes(asset.content, parser, audit, signal);
         await parseJson(bytes, asset.registration_receipt, schema, parser, sink, audit);
