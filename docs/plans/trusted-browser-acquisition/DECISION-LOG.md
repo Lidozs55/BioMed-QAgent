@@ -239,3 +239,13 @@ risks, and verification results for later audit.
 - Reason: HIL approval of retrieval evidence is not proof that carrier
   registration, recipe resolution, or hash closure succeeded.
 - Status: implemented; 37 focused browser/formalization/store tests and lint pass.
+
+## 2026-08-24 / D-029
+
+- Decision: Browser publication handoff is a distinct execution variant rather
+  than a cast to `SubmitDynamicFamilyBuildResult`.
+- Reason: The existing publication path reads transform receipt fields that do
+  not exist for browser parser execution. A cast would fabricate transform
+  provenance and weaken auditability.
+- Status: handoff validator implemented and focused-verified; publisher variant
+  integration remains pending.
