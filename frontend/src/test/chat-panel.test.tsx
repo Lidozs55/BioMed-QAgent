@@ -644,7 +644,7 @@ describe("ChatPanel", () => {
     expect(screen.getByText("Streaming answer")).toBeInTheDocument();
   });
 
-  it("shows a stall hint with a cancel action when a running task has no events", () => {
+  it("shows a stall hint with a cancel action when a running task has no events", async () => {
     useAgentStore.getState().mergeTaskPage(
       {
         active_items: [
@@ -677,7 +677,10 @@ describe("ChatPanel", () => {
     );
 
     expect(screen.getByText(/没有任何新事件/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "取消当前任务" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "取消当前任务" }));
+      await Promise.resolve();
+    });
     expect(cancelRun).toHaveBeenCalledWith("task_stalled", "run_stalled");
   });
 
@@ -686,6 +689,56 @@ describe("ChatPanel", () => {
     useAgentStore.getState().setActiveTaskId("task_background");
     render(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
     expect(screen.queryByText(/没有任何新事件/)).not.toBeInTheDocument();
+  });
+
+  it("shows a stop generation action while an agent run is active", () => {
+    seedBackgroundTask();
+    useAgentStore.getState().setActiveTaskId("task_background");
+    render(
+      <ChatPanel
+        startTask={vi.fn()}
+        continueTask={vi.fn()}
+        cancelRun={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "停止生成" })).toBeInTheDocument();
+  });
+
+  it("does not show a stop generation action for a terminal task", () => {
+    seedTerminalTask();
+    render(
+      <ChatPanel
+        startTask={vi.fn()}
+        continueTask={vi.fn()}
+        cancelRun={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "停止生成" })).not.toBeInTheDocument();
+  });
+
+  it("disables the stop action while cancellation is in flight", async () => {
+    seedBackgroundTask();
+    useAgentStore.getState().setActiveTaskId("task_background");
+    const pending = deferred<void>();
+    const cancelRun = vi.fn(() => pending.promise);
+    render(
+      <ChatPanel
+        startTask={vi.fn()}
+        continueTask={vi.fn()}
+        cancelRun={cancelRun}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "停止生成" }));
+    expect(cancelRun).toHaveBeenCalledWith("task_background", "run_background");
+    expect(screen.getByRole("button", { name: "正在取消…" })).toBeDisabled();
+
+    await act(async () => pending.resolve());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "停止生成" })).toBeEnabled(),
+    );
   });
 
   it("shows failed status without duplicating the run failure alert", () => {
