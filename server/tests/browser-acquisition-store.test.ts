@@ -25,6 +25,8 @@ function evidence(taskId: string): BrowserAcquisitionEvidence {
     sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     browser_policy_revision: BROWSER_ACQUISITION_POLICY_REVISION,
     source_asset_id: "asset_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    source_id: "browser_source",
+    relative_path: "source_assets/source.tsv",
     download_attempt_id: "download_attempt_fixture",
     provider_id: BROWSER_ACQUISITION_PROVIDER_ID,
     provider_implementation_digest: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
