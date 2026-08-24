@@ -247,6 +247,20 @@ composition tests are in `server/tests/skill-manifests.test.ts` and
   (`fix(server): fence dynamic family preflight consumption`).
 - Guard false-positive fix commit: `c981825d8e75d7f6d22586d520fde152ac280a8a`
   (`fix(server): avoid generic core guard false positive`).
-- The first review report is pushed at `8e254dea`; this second review fix wave
-  is focused-green but uncommitted and awaits the parent's serialized full-gate
-  slot before the next normal commit/push.
+- Second review fix commit: `144c6c1e`
+  (`fix(server): close dynamic family publication fence`), pushed to
+  `origin/feat/family-host-dynamic-preflight`.
+
+## Serialized full-gate evidence
+
+- Contracts Vitest: `pnpm --filter @biomed/contracts test -- --maxWorkers=2` —
+  12 files passed, 118 tests passed.
+- Server Vitest: `pnpm --filter @biomed/server test -- --maxWorkers=2` —
+  165 files passed, 1 skipped; 1603 tests passed, 11 skipped.
+- Frontend Vitest: `pnpm --filter @biomed/frontend test -- --maxWorkers=2` —
+  67 files passed, 836 tests passed. The first run had one startup-history
+  test timeout under the full-suite load; its focused rerun passed, and the
+  required full suite was rerun successfully.
+- `pnpm lint`, `pnpm typecheck`, `pnpm build`, and `pnpm docs:check` — passed.
+- `uv run python database/bridge.py --self-test`, `uv run pytest database/tests`
+  (88 passed), and `uv run ruff check database` — passed.
