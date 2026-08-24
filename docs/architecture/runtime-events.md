@@ -155,8 +155,21 @@ Phase 8 移除 Python 运行时后该逻辑不复存在，自动压缩一度缺�
   Pi `CompactionSettings`：`reserveTokens = round(window × (1 - trigger))`、
   `keepRecentTokens = round(window × target)`，并保持 `enabled=true`。Pi
   `AgentSession` 内建的 threshold / overflow 自动压缩因此沿用产品阈值。
+- 产品默认值为 `trigger=0.85`、`target=0.45`：自动压缩在上下文占用约 85% 时触发，
+  压缩后保留最近约 45% 窗口的轮次作为工作上下文。`45%` 是在“保留原上下文核心内容”
+  与“尽可能释放空间”之间的默认取舍；信息极度密集或多次压缩后，摘要本身占用的空间会
+  自然使压缩效率下降，这属于预期行为，不再额外拔高目标比例。换算时保证
+  `keepRecentTokens ≤ window - reserveTokens`，避免小上下文窗口下出现“保留预算吃掉
+  全部可摘要内容、导致无法压缩”的失效状态。
+- 每轮 `run()` 与手动压缩前，adapter 都会用 `resolveActiveConfig` 重新解析当前模型；
+  若 provider/模型/上下文窗口/压缩比例发生变化，会先在 Pi `ModelRuntime` 重新注册
+  新模型并调用 `session.setModel()`，再重算 `CompactionSettings`。这解决了中途切换
+  不同上下文窗口模型后，旧会话仍按旧窗口保留大量历史、既触发不了压缩又可能把超窗口
+  上下文发给新模型的问题。
 - 手动 `POST /tasks/{task_id}/compact` 仍直接调用 Pi `session.compact()` 并自行
-  持久化 `conversation_compacted`。
+  持久化 `conversation_compacted`。压缩不再要求任务处于 active run：空闲任务用最近
+  一次 run 作为 `covered_through_run_id`，进程内没有会话时按持久化 Pi 会话惰性重建，
+  压缩后立即释放临时会话。
 - Pi 的 `compaction_end`（成功且带摘要）经 adapter 投影为 BioMed 的
   `context_compacted`，再由 `PiEventAdapter` 持久化为
   `conversation_compacted`（`summary_digest` 为摘要的 sha256）；前端据此在时间线

@@ -282,6 +282,57 @@ describe("durable formal Agent runtime", () => {
     await runtime.close();
   });
 
+  test("compacts an idle task that has no active run", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "biomed-durable-idle-compact-"));
+    roots.push(root);
+    const adapter = new ControlledAdapter();
+    const runtime = await createDurableAgentRuntime({
+      tasksRoot: root,
+      adapter,
+      workspaceFactory: async () => ({ root, tools: [], dispose: async () => undefined }),
+    });
+    const server = createServer((request, response) => {
+      if (!runtime.handle(request, response)) response.writeHead(404).end();
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    servers.push(server);
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const accepted = await (await fetch(`${base}/api/v1/tasks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        request_id: "request-idle-compact",
+        input: "finish then compact",
+        databases: [],
+        mode: "agent",
+      }),
+    })).json() as { task_id: string; run_id: string };
+    await expect.poll(() => adapter.gates.length).toBe(1);
+    adapter.gates[0]?.resolve();
+    await expect.poll(async () => {
+      const snapshot = await runtime.repository.getSnapshot(accepted.task_id);
+      return snapshot?.task.status;
+    }).toBe("completed");
+
+    const compacted = await fetch(`${base}/api/v1/tasks/${accepted.task_id}/compact`, {
+      method: "POST",
+    });
+    expect(compacted.status).toBe(202);
+    expect(await compacted.json()).toMatchObject({
+      status: "compaction_requested",
+      task_id: accepted.task_id,
+      run_id: accepted.run_id,
+    });
+    expect(adapter.compactions).toEqual(["compacted durable conversation"]);
+    const events = await runtime.repository.listEvents(accepted.task_id, 0);
+    expect(events.at(-1)?.payload).toMatchObject({
+      type: "conversation_compacted",
+      covered_through_run_id: accepted.run_id,
+    });
+    await runtime.close();
+  });
+
   test("maps steer and compaction to Pi, rejects unknown subagents, and deletes terminal tasks", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "biomed-durable-controls-"));
     roots.push(root);

@@ -5,6 +5,7 @@ import {
   PiAgentAdapter,
   applyModelProfileToPayload,
   resolvePiCompactionOverrides,
+  shouldReconfigureSession,
   toPiCustomTools,
   type PiUpstreamEvent,
   type PiUpstreamSession,
@@ -32,6 +33,10 @@ class FakeUpstreamSession implements PiUpstreamSession {
   readonly prompts: string[] = [];
   readonly abort = vi.fn(async (): Promise<void> => undefined);
   readonly dispose = vi.fn();
+  readonly reconcileConfig = vi.fn(async (): Promise<void> => undefined);
+  readonly compact = vi.fn(async (): Promise<{ summary: string }> => ({
+    summary: "compacted manually",
+  }));
   private readonly listeners = new Set<(event: PiUpstreamEvent) => void>();
   promptImplementation: (input: string) => Promise<void> = async () => undefined;
   continueAfterLengthImplementation: () => Promise<void> = async () => undefined;
@@ -142,11 +147,60 @@ describe("PiAgentAdapter", () => {
   });
 
   test("maps product compaction ratios onto Pi compaction settings", () => {
-    expect(resolvePiCompactionOverrides(131_072, 0.85, 0.6)).toEqual({
-      compaction: { enabled: true, reserveTokens: 19_661, keepRecentTokens: 78_643 },
+    expect(resolvePiCompactionOverrides(131_072, 0.85, 0.45)).toEqual({
+      compaction: { enabled: true, reserveTokens: 19_661, keepRecentTokens: 58_982 },
     });
-    expect(resolvePiCompactionOverrides(131_072, 0.95, 0.6).compaction.reserveTokens)
+    expect(resolvePiCompactionOverrides(131_072, 0.95, 0.45).compaction.reserveTokens)
       .toBe(6_554);
+  });
+
+  test("clamps keepRecentTokens so compaction leaves room for the reserve budget", () => {
+    expect(resolvePiCompactionOverrides(32_768, 0.10, 0.99)).toEqual({
+      compaction: {
+        enabled: true,
+        reserveTokens: 29_491,
+        keepRecentTokens: 3_277,
+      },
+    });
+  });
+
+  test("detects model or context-window changes that require reconciliation", () => {
+    const base = {
+      provider: "dashscope",
+      modelId: "qwen-plus",
+      apiKey: "secret",
+      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      contextWindow: 131_072,
+      compactionTriggerRatio: 0.85,
+      compactionTargetRatio: 0.45,
+    };
+    expect(shouldReconfigureSession(base, base)).toBe(false);
+    expect(shouldReconfigureSession(base, { ...base, modelId: "qwen-max" })).toBe(true);
+    expect(shouldReconfigureSession(base, { ...base, contextWindow: 32_768 })).toBe(true);
+    expect(shouldReconfigureSession(base, { ...base, compactionTargetRatio: 0.6 })).toBe(true);
+  });
+
+  test("reconciles the active model configuration before each run", async () => {
+    const upstream = new FakeUpstreamSession();
+    const session = await new PiAgentAdapter({
+      createUpstreamSession: async () => upstream,
+    }).createSession(sessionConfig);
+
+    await collect(session.run("continue"));
+
+    expect(upstream.reconcileConfig).toHaveBeenCalledOnce();
+  });
+
+  test("reconciles the active model configuration before manual compaction", async () => {
+    const upstream = new FakeUpstreamSession();
+    const session = await new PiAgentAdapter({
+      createUpstreamSession: async () => upstream,
+    }).createSession(sessionConfig);
+
+    await session.compact?.();
+
+    expect(upstream.reconcileConfig).toHaveBeenCalledOnce();
+    expect(upstream.compact).toHaveBeenCalledOnce();
   });
 
   test("projects a successful Pi compaction into the BioMed event stream", async () => {
