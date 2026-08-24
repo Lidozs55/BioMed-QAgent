@@ -150,11 +150,14 @@ export class ModelSettingsService {
     const contextWindow = settings.context_window ?? 131_072;
     const reserve = Math.ceil(contextWindow * settings.safety_reserve_ratio);
     const modelName = settings.model_name.trim();
+    const availableInputTokens = Math.max(0, contextWindow - settings.max_tokens - reserve);
     const runBlockReason = apiKey === ""
       ? "provider credentials are required"
       : modelName === ""
         ? "model configuration is required"
-        : null;
+        : availableInputTokens <= 0
+          ? "上下文窗口不足以容纳最大输出和保留空间"
+          : null;
     return {
       base_url: settings.base_url,
       api_key: maskApiKey(apiKey),
@@ -168,8 +171,8 @@ export class ModelSettingsService {
       safety_reserve_tokens: reserve,
       compaction_trigger_ratio: settings.compaction_trigger_ratio,
       compaction_target_ratio: settings.compaction_target_ratio,
-      available_input_tokens: Math.max(1, contextWindow - settings.max_tokens - reserve),
-      run_ready: apiKey !== "" && runBlockReason === null,
+      available_input_tokens: availableInputTokens,
+      run_ready: apiKey !== "" && modelName !== "",
       run_block_reason: runBlockReason,
       runtime_limits: settings.runtime_limits,
     };

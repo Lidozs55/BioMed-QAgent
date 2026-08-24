@@ -209,6 +209,23 @@ describe("PiAgentAdapter", () => {
     expect(events.filter((event) => event.type === "turn_completed")).toHaveLength(1);
   });
 
+  test("fails a length continuation that makes no meaningful progress", async () => {
+    const upstream = new FakeUpstreamSession();
+    upstream.promptImplementation = async () => {
+      upstream.emit({ type: "message_end", assistantStopReason: "length" });
+    };
+    upstream.continueAfterLengthImplementation = async () => {
+      upstream.emit({ type: "message_end", assistantStopReason: "length" });
+    };
+    const session = await new PiAgentAdapter({
+      createUpstreamSession: async () => upstream,
+    }).createSession(sessionConfig);
+
+    await expect(collect(session.run("finish the dataset")))
+      .rejects.toThrow("Agent runtime request failed");
+    expect(upstream.continueAfterLength).toHaveBeenCalledTimes(3);
+  });
+
   test("fails the turn when Pi ends with an upstream error stop reason", async () => {
     const upstream = new FakeUpstreamSession();
     upstream.promptImplementation = async () => {
