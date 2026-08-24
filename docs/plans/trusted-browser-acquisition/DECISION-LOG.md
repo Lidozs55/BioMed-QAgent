@@ -120,3 +120,13 @@ risks, and verification results for later audit.
 - Reason: Content-addressed browser evidence alone does not prove the current
   task-owned file has not drifted since retrieval.
 - Status: focused formalization tests pass.
+
+## 2026-08-24 / D-015
+
+- Decision: Invoke `BrowserFormalizationService` immediately after the dedicated
+  HIL returns `decision.action === "accept"`; reject/other actions return without
+  carrier registration.
+- Reason: Existing `DurableHILGate.requestHIL` already provides durable request,
+  resolution, and restart behavior; a duplicate continuation mechanism would
+  create competing state machines.
+- Status: implemented and verified with 49 focused tests.

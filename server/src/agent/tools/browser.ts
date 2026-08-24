@@ -51,6 +51,7 @@ import type { ToolHooks } from "./tool-hooks.js";
 import type { BrowserAcquisitionEvidenceStore } from "../../runtime/browser-acquisition-store.js";
 import { BrowserAcquisitionProposalStore } from "../../runtime/browser-acquisition-proposal-store.js";
 import type { DatasetHILGate } from "../../dataset/review/hil-policy.js";
+import type { BrowserFormalizationService } from "../../dataset/acquisition/browser-formalization.js";
 import { noopHooks } from "./tool-hooks.js";
 import { errorMessage } from "./result.js";
 
@@ -127,6 +128,7 @@ export interface BrowserToolsOptions {
   evidenceStore?: BrowserAcquisitionEvidenceStore;
   proposalStore?: BrowserAcquisitionProposalStore;
   formalizationHIL?: DatasetHILGate;
+  formalizationService?: BrowserFormalizationService;
 }
 
 export const NAVIGATE_PAGE_TOOL_NAME = "navigate_page";
@@ -212,7 +214,7 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
       additionalProperties: false,
     },
     execute: async (argumentsValue, signal) => {
-      if (options.evidenceStore === undefined || options.proposalStore === undefined || options.formalizationHIL === undefined) {
+      if (options.evidenceStore === undefined || options.proposalStore === undefined || options.formalizationHIL === undefined || options.formalizationService === undefined) {
         throw new Error("browser formalization is unavailable without Core evidence/proposal/HIL services");
       }
       const record = argumentsValue as Record<string, unknown>;
@@ -281,7 +283,11 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
         status: accepted ? "accepted" : "rejected",
         failure_reason: accepted ? null : `formalization review ${review.decision.action}`,
       });
-      return { content: JSON.stringify({ proposal, review, formalization_status: accepted ? "accepted" : "rejected", publication_status: "not_published" }) };
+      if (!accepted) {
+        return { content: JSON.stringify({ proposal, review, formalization_status: "rejected", publication_status: "not_published" }) };
+      }
+      const formalized = await options.formalizationService.formalize({ proposal, evidence: stored.evidence, review });
+      return { content: JSON.stringify({ proposal: formalized.proposal, review, formalization_status: "formalized", registration: formalized.registration, publication_status: "not_published" }) };
     },
   };
 

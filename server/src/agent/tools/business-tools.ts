@@ -47,6 +47,8 @@ import type { ToolApprovalGate, ToolHooks, ToolServiceDeps } from "./tool-hooks.
 import type { DatasetHILGate } from "../../dataset/review/hil-policy.js";
 import { BrowserAcquisitionEvidenceStore } from "../../runtime/browser-acquisition-store.js";
 import { BrowserAcquisitionProposalStore } from "../../runtime/browser-acquisition-proposal-store.js";
+import { BrowserFormalizationService } from "../../dataset/acquisition/browser-formalization.js";
+import type { SourceAssetRegistry } from "../../runtime/source-assets/registry.js";
 
 export interface BusinessToolBundleContext {
   /** Absolute task root (TaskWorkDir root). */
@@ -81,6 +83,7 @@ export interface BusinessToolBundleContext {
   disabledTools?: ReadonlySet<string>;
   /** Global cache registrar: registers raw downloads into the dataset cache. */
   registrar?: import("../../persistence/cache-registrar.js").CacheRegistrar | null;
+  sourceAssetRegistry?: SourceAssetRegistry;
   /** Task id used as cache provenance (``created_by_task_id``). */
   taskId?: string | (() => string);
 }
@@ -223,6 +226,13 @@ export async function createBusinessToolBundle(
       evidenceStore: new BrowserAcquisitionEvidenceStore({ taskRoot }),
       proposalStore: new BrowserAcquisitionProposalStore(taskRoot),
       formalizationHIL: context.hilGate ?? undefined,
+      formalizationService: context.sourceAssetRegistry === undefined
+        ? undefined
+        : new BrowserFormalizationService({
+          evidenceStore: new BrowserAcquisitionEvidenceStore({ taskRoot }),
+          proposalStore: new BrowserAcquisitionProposalStore(taskRoot),
+          sourceAssetRegistry: context.sourceAssetRegistry,
+        }),
       maxDownloadBytes: limits.max_download_mib * 1024 * 1024,
       downloadTimeoutMs: limits.download_timeout_seconds * 1000,
     });

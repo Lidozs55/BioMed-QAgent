@@ -513,6 +513,7 @@ export async function createPhase3Runtime(
         limits,
         registrar,
         taskId,
+        sourceAssetRegistry,
       });
       const dynamicTools = dbClient === null
         ? []
