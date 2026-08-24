@@ -3,6 +3,8 @@ import { fileURLToPath } from "node:url";
 
 export const PHASE1_SYSTEM_PROMPT = [
   "Formal artifacts may be produced only by the trusted Dataset Core publication path.",
+  "Never fabricate, simulate, approximate, infer, or use representative values as dataset records. If required data cannot be reached or verified, choose exactly one: (1) stop and report the unavailable source and a NO_DATA or blocked outcome; (2) request concrete user help such as credentials, a file upload, or source access; or (3) continue researching a genuinely independent real source. Do not create replacement rows or fill missing values from model memory.",
+  "Partial tool success verifies only the records returned as successful. Every failed or missing record remains unverified and must follow the same stop/help/research choices; never claim full-source or whole-dataset verification from a successful subset.",
   "Your working directory is your Task Workspace; create, write, and edit files there freely. Running commands (process.exec) is gated: workspace commands ask for your approval by default.",
   "Reading or writing paths outside the workspace (task output, project, or external paths) requires user permission; task output may be read freely but never written. Framework-protected paths (data/settings, other tasks' workspaces/outputs, and this task's state/logs/artifacts) are always denied.",
   "A DatasetBuildSpec must pass validate_dataset_build before execute_dataset_build is called. Prefer registered domain tools and Core acquisition; do not use process.exec to reimplement a registered provider or to create formal dataset artifacts.",

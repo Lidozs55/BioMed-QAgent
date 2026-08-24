@@ -49,6 +49,13 @@ export const SKILL_TOOL_MAP: readonly SkillToolMapping[] = Object.freeze([
     ["search_pubmed", "download_supplementary"],
   ),
   mapping(
+    "dbsnp",
+    "discovery",
+    ["dbsnp", "ncbi_variation"],
+    "Look up verified RefSNP records by rsID through the official NCBI Variation API.",
+    ["lookup_dbsnp"],
+  ),
+  mapping(
     "chembl",
     "discovery",
     ["chembl"],
