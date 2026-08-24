@@ -7,11 +7,10 @@ export default defineConfig({
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
 
-    // 有界并发：本机默认 4 个 worker（threads 池足够，React/jsdom 测试无子进程），
-    // CI（CI=true）才扩大到机器可用并行度。
+    // 有界并发：本地与 CI 都固定为 2，避免 React/jsdom worker 在共享 CPU 上争抢。
     pool: 'threads',
-    maxWorkers: process.env.CI ? '75%' : 4,
-    maxConcurrency: process.env.CI ? 8 : 4,
+    maxWorkers: 2,
+    maxConcurrency: 2,
   },
   resolve: {
     alias: {

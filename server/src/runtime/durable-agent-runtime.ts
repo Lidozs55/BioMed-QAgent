@@ -13,6 +13,7 @@ import type {
   EventEnvelope,
   EventPayload,
   HumanReviewRecord,
+  HILRequest,
   JsonValue,
   ResumeHILInput,
   TaskMode,
@@ -277,6 +278,12 @@ function rawDataText(raw: RawData): string {
   return Buffer.from(raw).toString("utf8");
 }
 
+function isDynamicPublicationAcceptance(
+  request: Pick<HILRequest, "build_id" | "review_type"> | null,
+): boolean {
+  return request?.build_id !== null && request?.review_type === "publication_acceptance";
+}
+
 function controlError(
   code: string,
   message: string,
@@ -303,6 +310,27 @@ export async function createDurableAgentRuntime(
   const workspaceManager = options.workspaceManager ?? new DiskWorkspaceManager({
     workspacesRoot: path.join(path.dirname(path.dirname(options.tasksRoot)), "workspaces"),
   });
+
+  const failClosedDynamicPublicationRecovery = async (
+    taskId: string,
+    runId: string,
+  ): Promise<void> => {
+    await hilStore.cancelPendingForRun(taskId, runId);
+    const snapshot = await repository.getSnapshot(taskId);
+    const run = snapshot?.runs.find((candidate) => candidate.run_id === runId);
+    if (
+      run !== undefined &&
+      run.status !== "completed" &&
+      run.status !== "failed" &&
+      run.status !== "cancelled"
+    ) {
+      await repository.appendRunEvent(taskId, runId, {
+        type: "run_failed",
+        error: "Dynamic publication HIL cannot continue after Application Host restart without a deterministic continuation",
+        error_code: "configuration_error",
+      });
+    }
+  };
 
   const activeTasks = new Map<string, ActiveTask>();
   const activeDownloads = new Map<string, ActiveDownloadHandle>();
@@ -862,11 +890,14 @@ export async function createDurableAgentRuntime(
           endedRun?.status === "failed" ||
           endedRun?.status === "cancelled";
         if (!terminal && activeTasks.get(taskId) === undefined) {
-          await startSuspendedBuildContinuation(
+          const started = await startSuspendedBuildContinuation(
             taskId,
             runId,
             storedRequest?.build_id ?? null,
           );
+          if (!started && isDynamicPublicationAcceptance(storedRequest)) {
+            await failClosedDynamicPublicationRecovery(taskId, runId);
+          }
         }
         return repository.getSnapshot(taskId);
       }
@@ -909,6 +940,10 @@ export async function createDurableAgentRuntime(
         storedRequest?.build_id ?? null,
       );
       if (started) return repository.getSnapshot(taskId);
+      if (isDynamicPublicationAcceptance(storedRequest)) {
+        await failClosedDynamicPublicationRecovery(taskId, runId);
+        return repository.getSnapshot(taskId);
+      }
     }
     const recoveredTask = await createSession(
       taskId,
@@ -1483,6 +1518,10 @@ export async function createDurableAgentRuntime(
   });
 
   for (const recovery of hilRecoveries) {
+    if (isDynamicPublicationAcceptance(recovery.request)) {
+      await failClosedDynamicPublicationRecovery(recovery.task_id, recovery.run_id);
+      continue;
+    }
     if (recovery.review === null) continue;
     try {
       const recoveredTask = await createSession(

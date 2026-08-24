@@ -6,6 +6,10 @@ import {
 } from "@phosphor-icons/react";
 
 import { cn } from "@/lib/utils";
+import {
+  parseDynamicFamilyToolOutputText,
+} from "@/lib/familyHost";
+import { FamilyHostStatusCard } from "@/components/FamilyHostStatusCard";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Message, MessageContent } from "@/components/ui/message";
 import { Spinner } from "@/components/ui/spinner";
@@ -33,6 +37,10 @@ export function ToolCallStep({ item, downloadControl }: ToolCallStepProps) {
   const [expanded, setExpanded] = useState(false);
   const isRunning = item.status === "running";
   const isDownload = item.progress?.kind === "downloaded_bytes";
+  const dynamicFamilyOutput =
+    item.toolName === "submit_dynamic_family_build"
+      ? parseDynamicFamilyToolOutputText(item.output)
+      : null;
 
   return (
     <Message align="start">
@@ -82,6 +90,7 @@ export function ToolCallStep({ item, downloadControl }: ToolCallStepProps) {
                 />
               </div>
             )}
+            {dynamicFamilyOutput !== null && <FamilyHostStatusCard output={dynamicFamilyOutput} />}
             {expanded && (
               <div className="mt-1 flex flex-col gap-1 text-sm">
                 {item.arguments && (

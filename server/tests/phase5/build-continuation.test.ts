@@ -134,6 +134,17 @@ async function waitForPendingRequest(
   throw new Error("pending HIL request never appeared");
 }
 
+async function waitForLivePendingGate(
+  gate: DurableApprovalGate,
+  runId: string,
+): Promise<void> {
+  for (let attempt = 0; attempt < 400; attempt += 1) {
+    if (gate.hasPending(runId)) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("live HIL waiter never appeared");
+}
+
 describe("deterministic build continuation (cross-restart resume)", () => {
   test("a fresh core instance resumes a checkpointed build mid-canonicalize", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "biomed-cont-core-"));
@@ -232,6 +243,7 @@ describe("deterministic build continuation (cross-restart resume)", () => {
       mappingAssets: await resolveAssetMap(taskRoot, assets.mapping_files),
     });
     const request = await waitForPendingRequest(store, taskId, runId);
+    await waitForLivePendingGate(gate, runId);
     // The human answers while the first process is alive: the review is
     // persisted and delivered to the in-flight waiter.
     const review = await store.resolveRequest(taskId, runId, {

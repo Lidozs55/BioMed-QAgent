@@ -31,6 +31,8 @@ import {
   TabsTrigger,
 } from "@/components/ui/tabs";
 import { useAPI } from "@/hooks/useAPI";
+import { ProductAssessmentSummary } from "@/components/FamilyHostStatusCard";
+import { productAssessmentFromManifest } from "@/lib/familyHost";
 import { cn } from "@/lib/utils";
 import type {
   BuildDetail,
@@ -261,6 +263,7 @@ function ProcessingTab({
 }) {
   const validation = detail.manifest.validation_summary;
   const confidence = detail.manifest.confidence_summary;
+  const productAssessment = productAssessmentFromManifest(detail.manifest);
   const validationStatus = summaryString(validation, "status");
   const checkedCount = summaryNumber(validation, "checked_count");
   const failedCount = summaryNumber(validation, "failed_count");
@@ -334,6 +337,7 @@ function ProcessingTab({
           </div>
         </CardContent>
       </Card>
+      {productAssessment !== null && <ProductAssessmentSummary assessment={productAssessment} />}
       <Card size="sm" className="min-w-0">
         <CardHeader>
           <CardTitle className="text-sm">可信度分布</CardTitle>

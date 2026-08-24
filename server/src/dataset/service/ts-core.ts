@@ -73,10 +73,13 @@ import { delimitedRowsFromFileAsync } from "../adapters/text.js";
 import type { HumanReviewState } from "../contracts/data.js";
 import type { DeterministicDeriveCapability } from "../derive/index.js";
 import { executeRegisteredMultiTableBuild } from "../runtime/registered-multitable.js";
+import { resolveCoreReleaseIdentity, type CoreReleaseIdentity } from "../runtime/release-identity.js";
 
 export interface TypeScriptDatasetCoreOptions {
   taskId: string;
   taskRoot: string;
+  /** Verified server-owned release identity used by checkpoint reuse. */
+  coreReleaseIdentity?: string | null;
   /** Optional per-operation wall-clock timeout (ms). */
   operationTimeoutMs?: number;
   /** Core operation lifecycle sink, receiving the owning build id (M2 I-05). */
@@ -707,10 +710,17 @@ export class TypeScriptDatasetCore {
   readonly taskId: string;
   readonly taskRoot: string;
   private readonly options: TypeScriptDatasetCoreOptions;
+  private readonly coreReleaseIdentity: CoreReleaseIdentity;
   private readonly activeCancels = new Map<string, AbortController>();
 
   constructor(options: TypeScriptDatasetCoreOptions) {
     this.options = options;
+    this.coreReleaseIdentity = resolveCoreReleaseIdentity({
+      environment: process.env.NODE_ENV === "production" || process.env.NODE_ENV === "staging"
+        ? process.env.NODE_ENV
+        : process.env.NODE_ENV === "test" ? "test" : "dev",
+      configuredIdentity: options.coreReleaseIdentity,
+    });
     this.taskId = options.taskId;
     this.taskRoot = options.taskRoot;
   }
@@ -830,6 +840,7 @@ export class TypeScriptDatasetCore {
       cancellationRequested: () => signal.aborted,
       cancellationSignal: signal,
       operationTimeoutMs: this.options.operationTimeoutMs ?? 0,
+      coreReleaseIdentity: this.coreReleaseIdentity,
       deriveRequest: context.deriveRequest ?? null,
       implementationVersions: context.deriveCapability === undefined || context.deriveCapability === null
         ? null

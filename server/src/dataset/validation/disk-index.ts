@@ -52,6 +52,13 @@ export interface RelationIndexCheckOptions {
   /** null represents an unresolved profile_defined policy and therefore fails closed. */
   readonly missingPolicy: ResolvedRelationMissingPolicy | null;
   readonly signal?: AbortSignal | null;
+  /**
+   * Memory-parity row count for the referenced table (includes malformed
+   * rows, exactly like the validator's memory scan counter). When provided,
+   * it replaces the inserted-row count for the allow_empty reference test so
+   * memory and disk relation checks stay identical.
+   */
+  readonly referencedRowCount?: number;
 }
 
 interface MemoryEntry {
@@ -457,7 +464,9 @@ export class TupleIndex {
         (options.cardinality === "one_to_many" && fromDuplicateKeys === 0) ||
         (options.cardinality === "many_to_one" && toDuplicateKeys === 0) ||
         options.cardinality === "many_to_many";
-      const referencedEmpty = referenced.rows === 0;
+      const referencedEmpty = options.referencedRowCount === undefined
+        ? referenced.rows === 0
+        : options.referencedRowCount === 0;
       const missingAllowed = options.missingPolicy === "allow_missing" ||
         (options.missingPolicy === "allow_empty" && referencedEmpty);
       const missingPolicyPassed = options.missingPolicy !== null &&
