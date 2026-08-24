@@ -536,6 +536,7 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
       input.spec.dataset_family,
       input.spec.source_bindings[0]?.source ?? "",
       input.spec.source_bindings[0]?.adapter_id ?? "",
+      input.spec.schema_ref,
     );
     try {
       const buildReceipts = new Map<string, SourceAssetRegistrationReceipt>();

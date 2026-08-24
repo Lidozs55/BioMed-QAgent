@@ -2,10 +2,24 @@ export interface ProviderCarrierBinding {
   readonly familyId: string;
   readonly source: string;
   readonly adapterId: string;
+  /** Optional schema gate for providers whose carrier role is V2-only. */
+  readonly schemaRefs?: readonly string[];
 }
 
 /** Fixed Core-owned provider carrier bindings. Agent input cannot extend this set. */
 export const PROVIDER_CARRIER_BINDINGS: readonly ProviderCarrierBinding[] = Object.freeze([
+  {
+    familyId: "gene_expression",
+    source: "geo",
+    adapterId: "geo.expression.v1",
+    schemaRefs: ["gene_expression.long.v2", "gene_expression.probe_long.v2"],
+  },
+  {
+    familyId: "gene_expression",
+    source: "gdc",
+    adapterId: "gdc.expression.v1",
+    schemaRefs: ["gene_expression.long.v2"],
+  },
   { familyId: "literature_evidence", source: "pubmed", adapterId: "literature.bioc_xml.v1" },
   { familyId: "target_evidence", source: "uniprot", adapterId: "target.evidence.uniprot.v1" },
   { familyId: "target_evidence", source: "ncbi_clinvar", adapterId: "target.evidence.clinvar.v1" },
@@ -19,9 +33,13 @@ export function providerCarrierBinding(
   familyId: string,
   source: string,
   adapterId: string,
+  schemaRef?: string,
 ): ProviderCarrierBinding | null {
   return PROVIDER_CARRIER_BINDINGS.find((binding) =>
-    binding.familyId === familyId && binding.source === source && binding.adapterId === adapterId,
+    binding.familyId === familyId
+      && binding.source === source
+      && binding.adapterId === adapterId
+      && (schemaRef === undefined || binding.schemaRefs === undefined || binding.schemaRefs.includes(schemaRef)),
   ) ?? null;
 }
 

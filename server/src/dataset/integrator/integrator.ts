@@ -51,6 +51,23 @@ export const CONFLICT_COLUMNS = [
   "action",
 ] as const;
 
+interface V2IntegrationContract {
+  readonly keyColumns: readonly string[];
+  readonly valueColumn: string;
+}
+
+/** V2 keys/measurements are schema contracts, not inferred V1 columns. */
+const V2_INTEGRATION_CONTRACTS: Readonly<Record<string, V2IntegrationContract>> = {
+  "gene_expression.long.v2": {
+    keyColumns: ["dataset_revision_id", "sample_id", "gene_id", "measurement_type"],
+    valueColumn: "expression_value",
+  },
+  "gene_expression.probe_long.v2": {
+    keyColumns: ["dataset_revision_id", "probe_id", "platform_id", "sample_id"],
+    valueColumn: "value",
+  },
+};
+
 /** Unsupported merge strategy or zero sources (Python ``IntegratorError``). */
 export class IntegratorError extends BuildError {}
 
@@ -119,8 +136,8 @@ export async function integrate(options: {
   const conflictsPath = join(mergedDir, "conflicts.csv");
 
   const columns = schema.fields.map((field) => field.name);
-  // Phase 5 T7: the probe contract keys rows by probe_id (no gene_id
-  // column); row identity follows the schema's entity identifier.
+  // V1 keeps its historical inferred tuple byte-for-byte. V2 uses the
+  // registered schema-specific contract, including probe platform identity.
   const idField = schema.fields.some((field) => field.name === "probe_id")
     ? "probe_id"
     : "gene_id";
@@ -133,6 +150,16 @@ export async function integrate(options: {
   if (idField !== "gene_id" && idField !== "probe_id") {
     throw new IntegratorError(`unsupported identity field ${idField}`);
   }
+  const v2Contract = revisionScoped ? V2_INTEGRATION_CONTRACTS[schema.schema_id] : undefined;
+  if (revisionScoped && v2Contract === undefined) {
+    throw new IntegratorError(`unsupported revision-scoped schema contract ${schema.schema_id}`);
+  }
+  const keyColumns = v2Contract?.keyColumns ?? [idField, "sample_id", "measurement_type", "value_semantics"];
+  const valueColumn = v2Contract?.valueColumn ?? "expression_value";
+  const fieldNames = new Set(columns);
+  if (v2Contract !== undefined && (keyColumns.some((column) => !fieldNames.has(column)) || !fieldNames.has(valueColumn))) {
+    throw new IntegratorError(`schema ${schema.schema_id} does not declare its integration contract columns`);
+  }
   let rowCount = 0;
   let dedupCount = 0;
   let conflictCount = 0;
@@ -140,7 +167,7 @@ export async function integrate(options: {
   let tempStoreRows: number;
   const quotaBytes = tempStore?.quotaBytes ?? TEMP_STORE_DEFAULT_QUOTA_BYTES;
   const conflictColumns = revisionScoped
-    ? ["conflict_id", "dataset_revision_id", ...CONFLICT_COLUMNS.slice(1)]
+    ? ["conflict_id", ...keyColumns, "first_source_asset_id", "first_value", "second_source_asset_id", "second_value", "action"]
     : CONFLICT_COLUMNS;
 
 // Streamed outputs: row buffers are flushed in bounded chunks so the
@@ -158,19 +185,12 @@ export async function integrate(options: {
     db.exec("PRAGMA synchronous=OFF;");
     db.exec(`
       CREATE TABLE seen (
-        ${revisionScoped ? "dataset_revision_id TEXT NOT NULL," : ""}
-        ${idField} TEXT NOT NULL,
-        sample_id TEXT NOT NULL,
-        measurement_type TEXT NOT NULL,
-        value_semantics TEXT NOT NULL,
+        ${keyColumns.map((column) => `${column} TEXT NOT NULL`).join(",\n        ")},
         value TEXT NOT NULL,
         asset_id TEXT NOT NULL,
-        PRIMARY KEY (${revisionScoped ? "dataset_revision_id, " : ""}${idField}, sample_id, measurement_type, value_semantics)
+        PRIMARY KEY (${keyColumns.join(", ")})
       )
     `);
-    const keyColumns = revisionScoped
-      ? ["dataset_revision_id", idField, "sample_id", "measurement_type", "value_semantics"]
-      : [idField, "sample_id", "measurement_type", "value_semantics"];
     const insertSeen = db.prepare(
       `INSERT INTO seen (${keyColumns.join(", ")}, value, asset_id) VALUES (${keyColumns.map(() => "?").join(", ")}, ?, ?)`,
     );
@@ -195,14 +215,14 @@ export async function integrate(options: {
           tempStoreBytes = await enforceTempQuota(tempDbPath, quotaBytes);
           if (inTransaction) db.exec("BEGIN");
         }
-        const keyParts = rowIdentity(row, idField, revisionScoped);
+        const keyParts = rowIdentity(row, keyColumns);
         if (identityContext !== null && (
           row.dataset_id !== identityContext.datasetId
           || row.dataset_revision_id !== identityContext.datasetRevisionId
         )) {
           throw new IntegratorError("canonical row identity does not match Core-derived dataset identity");
         }
-        const value = row["expression_value"] ?? "";
+        const value = row[valueColumn] ?? "";
         const existing = selectSeen.get(...keyParts) as
           | { value: string; asset_id: string }
           | undefined;
@@ -222,8 +242,7 @@ export async function integrate(options: {
           revisionScoped
             ? `conflict_${keyParts.join("_")}_${rowCount}`
             : `conflict_${keyParts[0]}_${keyParts[1]}_${rowCount}`,
-          ...(revisionScoped ? [keyParts[0]] : []),
-          ...(revisionScoped ? keyParts.slice(1) : keyParts),
+          ...keyParts,
           existing.asset_id,
           existing.value,
           row["asset_id"] ?? "",
@@ -329,16 +348,9 @@ async function enforceTempQuota(
 
 function rowIdentity(
   row: Record<string, string>,
-  idField: string,
-  revisionScoped: boolean,
+  keyColumns: readonly string[],
 ): string[] {
-  return [
-    ...(revisionScoped ? [row.dataset_revision_id ?? ""] : []),
-    row[idField] ?? "",
-    row["sample_id"] ?? "",
-    row["measurement_type"] ?? "",
-    row["value_semantics"] ?? "",
-  ];
+  return keyColumns.map((column) => row[column] ?? "");
 }
 
 /** Python csv.DictReader: header row + per-row field dicts. */

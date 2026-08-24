@@ -36,6 +36,11 @@ export interface CoreAcquisitionProvenanceInput {
   readonly provider_id: string;
   readonly implementation_digest: string;
   readonly request_identity_digest: string;
+  /** Provider-produced revision facts; null for acquisitions that do not
+   * participate in an authoritative dataset identity contract. */
+  readonly canonical_accession?: string | null;
+  readonly provider_snapshot_identity?: string | null;
+  readonly provider_revision_token?: string | null;
 }
 
 export interface CoreAcquisitionProvenance extends CoreAcquisitionProvenanceInput {
@@ -44,6 +49,9 @@ export interface CoreAcquisitionProvenance extends CoreAcquisitionProvenanceInpu
   readonly receipt_id: string;
   readonly asset_id: string;
   readonly role: RegisteredSourceAssetRole;
+  readonly canonical_accession: string | null;
+  readonly provider_snapshot_identity: string | null;
+  readonly provider_revision_token: string | null;
 }
 
 export interface CoreResolvedAcquiredAsset extends CoreResolvedRegisteredAsset {
@@ -261,6 +269,9 @@ export class SourceAssetRegistry {
       asset_id: receipt.asset_ref.asset_id,
       role: receipt.asset_ref.role,
       ...input,
+      canonical_accession: input.canonical_accession ?? null,
+      provider_snapshot_identity: input.provider_snapshot_identity ?? null,
+      provider_revision_token: input.provider_revision_token ?? null,
     }, this.taskId);
     const acquisitionKey = provenanceKey(
       receipt.asset_ref.asset_id,
@@ -279,10 +290,13 @@ export class SourceAssetRegistry {
   async resolveCoreAcquired(
     assetId: string,
     requestIdentityDigest?: string,
+    role?: RegisteredSourceAssetRole,
   ): Promise<CoreResolvedAcquiredAsset> {
     await this.load();
-    const receipt = this.registrations.get(registrationKey(assetId, "carrier")) ??
-      this.registrations.get(registrationKey(assetId, "source"));
+    const receipt = role === undefined
+      ? this.registrations.get(registrationKey(assetId, "carrier")) ??
+        this.registrations.get(registrationKey(assetId, "source"))
+      : this.registrations.get(registrationKey(assetId, role));
     if (receipt === undefined) throw new Error("registered asset was not found");
     if (requestIdentityDigest !== undefined && !DIGEST.test(requestIdentityDigest)) {
       throw new TypeError("Core acquisition request identity digest is invalid");
@@ -379,11 +393,17 @@ function parseCoreAcquisitionProvenance(value: unknown, taskId: string): CoreAcq
   }
   const record = value as Record<string, unknown>;
   const keys = Object.keys(record).sort();
-  const expected = [
+  const legacyExpected = [
     "asset_id", "implementation_digest", "provider_id", "receipt_id",
     "request_identity_digest", "role", "schema_version", "task_id",
   ].sort();
-  if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) {
+  const expected = [
+    ...legacyExpected,
+    "canonical_accession", "provider_revision_token", "provider_snapshot_identity",
+  ].sort();
+  const legacy = keys.length === legacyExpected.length && keys.every((key, index) => key === legacyExpected[index]);
+  const current = keys.length === expected.length && keys.every((key, index) => key === expected[index]);
+  if (!legacy && !current) {
     throw new TypeError("Core acquisition provenance has unknown or missing fields");
   }
   if (
@@ -402,7 +422,20 @@ function parseCoreAcquisitionProvenance(value: unknown, taskId: string): CoreAcq
     || typeof record.request_identity_digest !== "string"
     || !DIGEST.test(record.request_identity_digest)
   ) throw new TypeError("Core acquisition provenance is invalid");
-  return structuredClone(record) as unknown as CoreAcquisitionProvenance;
+  const optionalText = (name: string): string | null => {
+    const item = record[name];
+    if (item === null || item === undefined) return null;
+    if (typeof item !== "string" || item.trim() === "") {
+      throw new TypeError(`Core acquisition provenance ${name} is invalid`);
+    }
+    return item;
+  };
+  return structuredClone({
+    ...record,
+    canonical_accession: optionalText("canonical_accession"),
+    provider_snapshot_identity: optionalText("provider_snapshot_identity"),
+    provider_revision_token: optionalText("provider_revision_token"),
+  }) as unknown as CoreAcquisitionProvenance;
 }
 
 export type { TelemetryEvent };

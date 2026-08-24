@@ -36,10 +36,11 @@ import type {
   VersionedDatasetManifest,
   ValidationResult,
 } from "../contracts/index.js";
-import { parsePublicationCandidate } from "../contracts/index.js";
+import { parsePublicationCandidate, parseProviderRevisionEvidenceV1 } from "../contracts/index.js";
 import { BuildError } from "../adapters/errors.js";
 import { throwIfAborted } from "../cooperative.js";
 import { adapterParamsForBinding, getAdapter } from "../adapters/adapters.js";
+import { canonicalDigest } from "../adapters/identity.js";
 import { sha256FileStream } from "../adapters/hashing.js";
 import { createDefaultFamilyAssemblerRegistry } from "../assembly/index.js";
 import { buildProbeMapping } from "../adapters/geo/probe-mapping.js";
@@ -75,6 +76,7 @@ import type { HumanReviewState } from "../contracts/data.js";
 import type { DeterministicDeriveCapability } from "../derive/index.js";
 import { executeRegisteredMultiTableBuild } from "../runtime/registered-multitable.js";
 import { resolveCoreReleaseIdentity, type CoreReleaseIdentity } from "../runtime/release-identity.js";
+import { SourceAssetRegistry } from "../../runtime/source-assets/registry.js";
 import {
   deriveProductionExpressionIdentity,
 } from "../identity/production.js";
@@ -129,6 +131,78 @@ export function requireAuthoritativeProviderRevisionEvidence(
     throw new BuildError("authoritative dataset revision identity requires provider revision evidence");
   }
   return context.providerRevisionEvidence;
+}
+
+function isExpressionV2Schema(schemaRef: string): boolean {
+  return schemaRef === "gene_expression.long.v2" || schemaRef === "gene_expression.probe_long.v2";
+}
+
+function receiptKey(receipt: SourceAssetRegistrationReceipt): string {
+  return `${receipt.asset_ref.role}:${receipt.asset_ref.asset_id}`;
+}
+
+/**
+ * Rebuild revision evidence from the persisted Core acquisition provenance.
+ * The execute context may carry evidence for legacy plumbing, but V2 never
+ * admits that caller value: only a registered provider provenance record tied
+ * to the exact receipt resolved for this build can become identity evidence.
+ */
+async function acquireTrustedProviderRevisionEvidence(options: {
+  spec: DatasetBuildSpec;
+  taskId: string;
+  taskRoot: string;
+  sourceAssets: Readonly<Record<string, SourceAsset>>;
+  registrationReceipts: readonly SourceAssetRegistrationReceipt[] | null | undefined;
+}): Promise<readonly ProviderRevisionEvidenceV1[] | null> {
+  if (!isExpressionV2Schema(options.spec.schema_ref)) return null;
+  if (options.registrationReceipts === undefined || options.registrationReceipts === null) {
+    throw new BuildError("authoritative dataset identity requires task-owned registration receipts");
+  }
+  const owned = new Map(options.registrationReceipts.map((receipt) => [receiptKey(receipt), receipt]));
+  const registry = new SourceAssetRegistry(options.taskId, options.taskRoot);
+  const evidence: ProviderRevisionEvidenceV1[] = [];
+  const seen = new Set<string>();
+  for (const asset of Object.values(options.sourceAssets)) {
+    const ownedReceiptForAsset = [...owned.values()].find((receipt) => receipt.asset_ref.asset_id === asset.asset_id);
+    let acquired: Awaited<ReturnType<SourceAssetRegistry["resolveCoreAcquired"]>>;
+    try {
+      acquired = await registry.resolveCoreAcquired(
+        asset.asset_id,
+        undefined,
+        ownedReceiptForAsset?.asset_ref.role,
+      );
+    } catch (error) {
+      throw new BuildError(
+        `authoritative dataset identity requires Core acquisition provenance for '${asset.asset_id}': ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    const receipt = acquired.registration_receipt;
+    const ownedReceipt = owned.get(receiptKey(receipt));
+    if (ownedReceipt === undefined || JSON.stringify(ownedReceipt) !== JSON.stringify(receipt)) {
+      throw new BuildError(`Core acquisition provenance receipt '${receiptKey(receipt)}' is not bound to this build`);
+    }
+    const provenance = acquired.acquisition_provenance;
+    if (
+      provenance.canonical_accession === null
+      || provenance.provider_snapshot_identity === null
+    ) {
+      throw new BuildError(`registered Core acquisition '${asset.asset_id}' has no provider revision evidence`);
+    }
+    const key = receiptKey(receipt);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    evidence.push(parseProviderRevisionEvidenceV1({
+      schema_version: "1.0",
+      canonical_accession: provenance.canonical_accession,
+      provider_snapshot_identity: provenance.provider_snapshot_identity,
+      provider_revision_token: provenance.provider_revision_token,
+      source_asset_registration_receipt: receipt,
+    }));
+  }
+  if (evidence.length === 0) {
+    throw new BuildError("authoritative dataset identity requires Core-acquired source assets");
+  }
+  return Object.freeze(evidence);
 }
 
 export interface BuildRecord {
@@ -753,9 +827,10 @@ export class TypeScriptDatasetCore {
     spec: DatasetBuildSpec,
     context: ValidateContext = { providerRevisionEvidence: null },
   ): Promise<SpecValidationResult> {
-    if (spec.schema_ref === "gene_expression.long.v2" || spec.schema_ref === "gene_expression.probe_long.v2") {
-      requireAuthoritativeProviderRevisionEvidence(context);
-    }
+    // Validation is intentionally pure spec admission.  Provider revision
+    // evidence is acquired and admitted only after Core resolves task assets
+    // in executeDatasetBuild.
+    void context;
     const familyRegistry = createDefaultDatasetFamilyRegistry();
     const validator = new SpecValidator(
       familyRegistry.schemaRegistry(),
@@ -776,13 +851,20 @@ export class TypeScriptDatasetCore {
     const familyRegistry = createDefaultDatasetFamilyRegistry();
     const family = familyRegistry.get(spec.dataset_family);
     familyRegistry.schemaRegistry().get(spec.schema_ref);
+    const trustedProviderRevisionEvidence = await acquireTrustedProviderRevisionEvidence({
+      spec,
+      taskId,
+      taskRoot,
+      sourceAssets: context.sourceAssets ?? {},
+      registrationReceipts: context.registrationReceipts,
+    });
     const identityDerivation = deriveProductionExpressionIdentity({
       spec,
       taskId,
       sourceAssets: context.sourceAssets ?? {},
       mappingAssets: context.mappingAssets ?? {},
       metadataAssets: context.metadataAssets ?? {},
-      providerRevisionEvidence: context.providerRevisionEvidence,
+      providerRevisionEvidence: trustedProviderRevisionEvidence,
       registrationReceipts: context.registrationReceipts,
     });
     if (family.runtime_id === "registered_multitable.runtime.v1") {
@@ -876,6 +958,13 @@ export class TypeScriptDatasetCore {
       cancellationSignal: signal,
       operationTimeoutMs: this.options.operationTimeoutMs ?? 0,
       coreReleaseIdentity: this.coreReleaseIdentity,
+      authoritativeIdentityDigest: identityDerivation === null
+        ? null
+        : canonicalDigest({
+          dataset_id: identityDerivation.context.datasetId,
+          dataset_revision_id: identityDerivation.context.datasetRevisionId,
+          carrier_asset_ids: [...identityDerivation.context.carrierAssetIds],
+        }),
       deriveRequest: context.deriveRequest ?? null,
       implementationVersions: context.deriveCapability === undefined || context.deriveCapability === null
         ? null

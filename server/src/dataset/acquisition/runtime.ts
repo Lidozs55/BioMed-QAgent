@@ -6,6 +6,7 @@ import type {
   CoreAcquisitionRequest,
   CoreDownloadAttempt,
   JsonValue,
+  ProviderRevisionEvidenceV1,
   RegisteredSourceAssetRef,
   WorkflowRecipeRef,
 } from "@biomed/contracts";
@@ -15,6 +16,7 @@ import {
   parseCoreDownloadAttempt,
   parseWorkflowRecipeRef,
 } from "../contracts/acquisition.js";
+import { parseProviderRevisionEvidenceV1 } from "../contracts/provider-revision-evidence.js";
 import type { DataLevel } from "../contracts/enums.js";
 import type { SourceRecord } from "../contracts/source.js";
 import {
@@ -53,6 +55,18 @@ export interface AcquisitionDownloadPlan {
   assetRole?: "source" | "carrier";
   /** Trusted provider-produced extraction outputs; never populated by request parameters. */
   extractionAssets?: readonly AcquisitionExtractionAsset[];
+  /**
+   * Trusted provider-produced revision facts.  These facts are attached to
+   * the exact registration receipt by CoreAcquisitionRuntime; request
+   * parameters and tool inputs never populate this field.
+   */
+  providerRevisionFacts?: AcquisitionProviderRevisionFacts;
+}
+
+export interface AcquisitionProviderRevisionFacts {
+  readonly canonical_accession: string;
+  readonly provider_snapshot_identity: string;
+  readonly provider_revision_token: string | null;
 }
 
 export interface AcquisitionProviderHandler {
@@ -114,6 +128,8 @@ export interface CoreAcquisitionResult {
   attempts: CoreDownloadAttempt[];
   sourceAsset: RegisteredSourceAssetRef;
   extractionAssets: RegisteredSourceAssetRef[];
+  /** Core-created evidence, each item bound to a registered asset receipt. */
+  providerRevisionEvidence?: readonly ProviderRevisionEvidenceV1[];
 }
 
 export class CoreAcquisitionError extends Error {
@@ -130,6 +146,39 @@ export class CoreAcquisitionError extends Error {
     this.retryable = retryable;
     this.details = details;
   }
+}
+
+function trustedProviderRevisionFacts(
+  value: AcquisitionProviderRevisionFacts | undefined,
+): AcquisitionProviderRevisionFacts | null {
+  if (value === undefined) return null;
+  if (
+    typeof value.canonical_accession !== "string" || value.canonical_accession.trim() === ""
+    || typeof value.provider_snapshot_identity !== "string" || value.provider_snapshot_identity.trim() === ""
+    || (value.provider_revision_token !== null && typeof value.provider_revision_token !== "string")
+  ) {
+    throw new TypeError("registered acquisition provider revision facts are invalid");
+  }
+  return Object.freeze({
+    canonical_accession: value.canonical_accession.normalize("NFC").trim(),
+    provider_snapshot_identity: value.provider_snapshot_identity.normalize("NFC").trim(),
+    provider_revision_token: value.provider_revision_token === null
+      ? null
+      : value.provider_revision_token.normalize("NFC").trim(),
+  });
+}
+
+function evidenceForReceipt(
+  facts: AcquisitionProviderRevisionFacts,
+  receipt: import("@biomed/contracts").SourceAssetRegistrationReceipt,
+): ProviderRevisionEvidenceV1 {
+  return parseProviderRevisionEvidenceV1({
+    schema_version: "1.0",
+    canonical_accession: facts.canonical_accession,
+    provider_snapshot_identity: facts.provider_snapshot_identity,
+    provider_revision_token: facts.provider_revision_token,
+    source_asset_registration_receipt: receipt,
+  });
 }
 
 export interface CoreAcquisitionRuntimeOptions {
@@ -170,10 +219,12 @@ export class CoreAcquisitionRuntime {
     const implementationDigest = recipe?.implementation_digest ?? handler.implementationDigest;
     const requestIdentityDigest = acquisitionRequestIdentity(request, implementationDigest);
     const plan = await handler.plan(request);
+    const providerRevisionFacts = trustedProviderRevisionFacts(plan.providerRevisionFacts);
     const partRelativePath = `source_assets/.acquisition/${requestIdentityDigest}.part`;
     const partPath = path.join(this.#taskRoot, ...partRelativePath.split("/"));
     await mkdir(path.dirname(partPath), { recursive: true });
     const attempts: CoreDownloadAttempt[] = [];
+    const providerRevisionEvidence: ProviderRevisionEvidenceV1[] = [];
     let resumedFromAttemptId: string | null = null;
 
     for (let attemptNumber = 1; attemptNumber <= this.#maxAttempts; attemptNumber += 1) {
@@ -206,7 +257,15 @@ export class CoreAcquisitionRuntime {
           provider_id: handler.providerId,
           implementation_digest: implementationDigest,
           request_identity_digest: requestIdentityDigest,
+          ...(providerRevisionFacts === null ? {} : {
+            canonical_accession: providerRevisionFacts.canonical_accession,
+            provider_snapshot_identity: providerRevisionFacts.provider_snapshot_identity,
+            provider_revision_token: providerRevisionFacts.provider_revision_token,
+          }),
         });
+        if (providerRevisionFacts !== null) {
+          providerRevisionEvidence.push(evidenceForReceipt(providerRevisionFacts, receipt));
+        }
         asset = receipt.asset_ref;
       }
       const attempt = parseCoreDownloadAttempt({
@@ -243,10 +302,24 @@ export class CoreAcquisitionRuntime {
             provider_id: handler.providerId,
             implementation_digest: implementationDigest,
             request_identity_digest: requestIdentityDigest,
+            ...(providerRevisionFacts === null ? {} : {
+              canonical_accession: providerRevisionFacts.canonical_accession,
+              provider_snapshot_identity: providerRevisionFacts.provider_snapshot_identity,
+              provider_revision_token: providerRevisionFacts.provider_revision_token,
+            }),
           });
           extractionAssets.push(receipt.asset_ref);
+          if (providerRevisionFacts !== null) {
+            providerRevisionEvidence.push(evidenceForReceipt(providerRevisionFacts, receipt));
+          }
         }
-        return { requestIdentityDigest, attempts, sourceAsset: asset, extractionAssets };
+        return {
+          requestIdentityDigest,
+          attempts,
+          sourceAsset: asset,
+          extractionAssets,
+          providerRevisionEvidence: Object.freeze(providerRevisionEvidence),
+        };
       }
       if (!retryable || attemptNumber === this.#maxAttempts) {
         const errorCode = result.attempt.error_code ?? "unknown_error";

@@ -134,11 +134,29 @@ export function deriveProductionExpressionIdentity(
     }
     evidence.push(parsed);
   }
-  if (evidenceKeys.size !== owned.size || [...owned.keys()].some((key) => !evidenceKeys.has(key))) {
-    fail("registered receipt closure is not fully covered by provider revision evidence");
-  }
-
   const assets = bindingAssets(input);
+  const identityEvidenceKeys = new Set(
+    evidence
+      .filter((value) => value.source_asset_registration_receipt.asset_ref.role === "source" ||
+        value.source_asset_registration_receipt.asset_ref.role === "carrier")
+      .map((value) => receiptKey(value.source_asset_registration_receipt)),
+  );
+  const requiredIdentityReceiptKeys = new Set(
+    [...owned.entries()]
+      .filter(([, receipt]) => receipt.asset_ref.role === "source" || receipt.asset_ref.role === "carrier")
+      .map(([key]) => key),
+  );
+  if (
+    identityEvidenceKeys.size !== requiredIdentityReceiptKeys.size
+    || [...requiredIdentityReceiptKeys].some((key) => !identityEvidenceKeys.has(key))
+  ) {
+    fail("registered carrier receipt closure is not fully covered by provider revision evidence");
+  }
+  const evidenceSnapshots = new Set(evidence.map((value) => value.provider_snapshot_identity));
+  const evidenceTokens = new Set(evidence.map((value) => value.provider_revision_token));
+  if (evidenceSnapshots.size !== 1 || evidenceTokens.size !== 1) {
+    fail("carrier receipts do not share one provider revision snapshot");
+  }
   for (const entry of assets) {
     const role: AssetRole = entry.role;
     const key = `${role}:${entry.asset.asset_id}`;
@@ -165,7 +183,9 @@ export function deriveProductionExpressionIdentity(
   }
   const accessionSet = new Set<string>();
   const facts: SourceAssetRegistrationFact[] = [];
-  for (const parsed of evidence) {
+  for (const parsed of evidence.filter((value) =>
+    value.source_asset_registration_receipt.asset_ref.role === "source" ||
+    value.source_asset_registration_receipt.asset_ref.role === "carrier")) {
     const receipt = parsed.source_asset_registration_receipt;
     const binding = bindingForReceipt(receipt, assets);
     const accession = normalized(parsed.canonical_accession);

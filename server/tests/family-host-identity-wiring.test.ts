@@ -270,6 +270,14 @@ describe("authoritative expression identity production wiring", () => {
       relative_path: "source_assets/gdc_expression.tsv",
       successful_attempt_id: receipt.receipt_id,
     };
+    await registry.registerCoreAcquisitionProvenance(receipt, {
+      provider_id: "gdc.files.v1",
+      implementation_digest: "a".repeat(64),
+      request_identity_digest: "b".repeat(64),
+      canonical_accession: "GDC:TEST",
+      provider_snapshot_identity: "gdc-fixture-snapshot:v1",
+      provider_revision_token: null,
+    });
     const core = new TypeScriptDatasetCore({ taskId, taskRoot });
     const record = await core.executeDatasetBuild({
       ...v2Spec(),
@@ -296,5 +304,32 @@ describe("authoritative expression identity production wiring", () => {
     expect(datasetRevisionId).toMatch(/^dsrev_[0-9a-f]{64}$/);
     expect(datasetId).not.toBe("build_identity_core");
     expect(primary).toContain(datasetRevisionId ?? "missing-revision");
+  });
+
+  test("Core rejects caller self-reported V2 evidence without provider acquisition provenance", async () => {
+    const sourcePath = fixture("gdc_expression.tsv");
+    const taskRoot = mkdtempSync(path.join(tmpdir(), "identity-wiring-spoof-"));
+    roots.push(taskRoot);
+    mkdirSync(path.join(taskRoot, "source_assets"), { recursive: true });
+    writeFileSync(path.join(taskRoot, "source_assets", "gdc_expression.tsv"), readFileSync(sourcePath));
+    const taskId = "task_identity_spoof";
+    const registry = new SourceAssetRegistry(taskId, taskRoot);
+    const receipt = await registry.register({
+      sourceId: "binding_gdc",
+      relativePath: "source_assets/gdc_expression.tsv",
+      role: "source",
+    });
+    const asset: SourceAsset = {
+      ...assetFor(sourcePath),
+      relative_path: receipt.relative_path,
+      successful_attempt_id: receipt.receipt_id,
+    };
+
+    await expect(new TypeScriptDatasetCore({ taskId, taskRoot }).executeDatasetBuild(v2Spec(), {
+      runId: "run_identity_spoof",
+      sourceAssets: { binding_gdc: asset },
+      providerRevisionEvidence: [providerEvidence(receipt)],
+      registrationReceipts: [receipt],
+    })).rejects.toThrow(/Core acquisition provenance/);
   });
 });
