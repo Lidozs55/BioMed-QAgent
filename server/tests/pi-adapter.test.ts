@@ -159,9 +159,13 @@ describe("PiAgentAdapter", () => {
     });
   });
 
-  test("publishes runtime context usage after an assistant response", async () => {
+  test("accepts a minimal input and publishes runtime context usage", async () => {
     const upstream = new FakeUpstreamSession();
     upstream.promptImplementation = async () => {
+      upstream.emit({
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "OK" },
+      });
       upstream.emit({
         type: "message_end",
         assistantStopReason: "stop",
@@ -172,15 +176,20 @@ describe("PiAgentAdapter", () => {
       createUpstreamSession: async () => upstream,
     }).createSession(sessionConfig);
 
-    const events = await collect(session.run("report usage"));
+    const events = await collect(session.run("请只回复 OK"));
 
-    expect(events).toContainEqual({
-      type: "context_usage",
-      tokens: 12_345,
-      contextWindow: 131_072,
-      percent: 9.41,
-      source: "runtime",
-    });
+    expect(events).toEqual([
+      { type: "turn_started" },
+      { type: "assistant_delta", delta: "OK" },
+      {
+        type: "context_usage",
+        tokens: 12_345,
+        contextWindow: 131_072,
+        percent: 9.41,
+        source: "runtime",
+      },
+      { type: "turn_completed" },
+    ]);
   });
 
   test("continues a length-truncated Pi turn before reporting completion", async () => {
