@@ -161,7 +161,7 @@ function parseCoreAcquisitionPlan(
   }
   const record = value as Record<string, unknown>;
   const requestIdentityDigest = record.requestIdentityDigest;
-  const providerId = record.providerId;
+  const plannedProviderId = record.providerId;
   const implementationDigest = record.implementationDigest;
   let recipe: CoreAcquisitionPlan["recipe"] = null;
   if (record.recipe !== null) {
@@ -174,8 +174,8 @@ function parseCoreAcquisitionPlan(
   if (
     typeof requestIdentityDigest !== "string"
     || !/^[0-9a-f]{64}$/.test(requestIdentityDigest)
-    || typeof providerId !== "string"
-    || providerId !== request.provider_id
+    || typeof plannedProviderId !== "string"
+    || plannedProviderId !== request.provider_id
     || typeof implementationDigest !== "string"
     || !/^[0-9a-f]{64}$/.test(implementationDigest)
   ) {
@@ -183,7 +183,7 @@ function parseCoreAcquisitionPlan(
   }
   return {
     requestIdentityDigest,
-    providerId,
+    providerId: plannedProviderId,
     implementationDigest,
     recipe,
   };
