@@ -12,6 +12,7 @@ import {
 export const BROWSER_ACQUISITION_EVIDENCE_SCHEMA_VERSION = "1.0" as const;
 export const BROWSER_ACQUISITION_PROVIDER_ID = "browser.snapshot.v1" as const;
 export const BROWSER_ACQUISITION_POLICY_REVISION = "public-http-browser.v1" as const;
+export const BROWSER_ACQUISITION_PROVIDER_IMPLEMENTATION_DIGEST = "f1ebb48ce3a21e42b55c92ce2bee805d2e25dcf7d836346ec5fda2fac4d8aac9" as const;
 
 export interface BrowserRedirectHop {
   from_url: string;
@@ -34,6 +35,8 @@ export interface BrowserAcquisitionEvidence {
   sha256: string;
   browser_policy_revision: typeof BROWSER_ACQUISITION_POLICY_REVISION;
   source_asset_id: string;
+  source_id: string;
+  relative_path: string;
   download_attempt_id: string;
   provider_id: typeof BROWSER_ACQUISITION_PROVIDER_ID;
   provider_implementation_digest: string;
@@ -89,6 +92,8 @@ export function parseBrowserAcquisitionEvidence(
       [BROWSER_ACQUISITION_POLICY_REVISION] as const,
     ),
     source_asset_id: assertString(obj.source_asset_id, `${path}.source_asset_id`, true),
+    source_id: assertString(obj.source_id, `${path}.source_id`, true),
+    relative_path: assertString(obj.relative_path, `${path}.relative_path`, true),
     download_attempt_id: assertString(obj.download_attempt_id, `${path}.download_attempt_id`, true),
     provider_id: assertFinite(obj.provider_id, `${path}.provider_id`, [BROWSER_ACQUISITION_PROVIDER_ID] as const),
     provider_implementation_digest: assertHex64(

@@ -34,6 +34,7 @@ import type { BioMedAgentTool } from "../contracts.js";
 import {
   BROWSER_ACQUISITION_POLICY_REVISION,
   BROWSER_ACQUISITION_PROVIDER_ID,
+  BROWSER_ACQUISITION_PROVIDER_IMPLEMENTATION_DIGEST,
   type BrowserAcquisitionEvidence,
 } from "@biomed/contracts";
 import type { ContentCache } from "../../external/acquisition/content-cache.js";
@@ -55,11 +56,7 @@ import { errorMessage } from "./result.js";
 
 const MAX_BODY_CHARS = 5000;
 const SOURCE = "browser";
-const BROWSER_PROVIDER_IMPLEMENTATION_DIGEST = canonicalDigest({
-  provider_id: BROWSER_ACQUISITION_PROVIDER_ID,
-  policy_revision: BROWSER_ACQUISITION_POLICY_REVISION,
-  implementation: "public-http-browser-receipt-v1",
-});
+const BROWSER_PROVIDER_IMPLEMENTATION_DIGEST = BROWSER_ACQUISITION_PROVIDER_IMPLEMENTATION_DIGEST;
 
 /** Python ``_validate_download_filename`` parity. */
 function validateDownloadFilename(filename: string): void {
@@ -474,6 +471,8 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
           sha256: checksum,
           browser_policy_revision: BROWSER_ACQUISITION_POLICY_REVISION,
           source_asset_id: asset.asset_id,
+          source_id: asset.source_id,
+          relative_path: asset.relative_path,
           download_attempt_id: attempt.attempt_id,
           provider_id: BROWSER_ACQUISITION_PROVIDER_ID,
           provider_implementation_digest: BROWSER_PROVIDER_IMPLEMENTATION_DIGEST,

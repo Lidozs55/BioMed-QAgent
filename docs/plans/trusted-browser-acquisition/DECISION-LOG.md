@@ -103,4 +103,20 @@ risks, and verification results for later audit.
 - Reason: Core must remain authoritative and the first HIL boundary must not
   accidentally become a publication shortcut.
 - Status: completed in the current implementation slice; parser formalization
-  remains a later phase.
+  and runtime continuation remain later phases.
+
+## 2026-08-24 / D-013
+
+- Decision: Core formalization is implemented as a service adjacent to
+  `CoreAcquisitionRuntime`, not inside the browser tool.
+- Reason: Only Core may register carrier assets and write acquisition provenance;
+  the browser tool remains receipt/proposal/HIL-only.
+- Status: focused tests pass; runtime HIL continuation remains pending.
+
+## 2026-08-24 / D-014
+
+- Decision: Carrier registration rechecks the persisted receipt's source ID,
+  relative path, exact SHA-256, and byte size before writing provenance.
+- Reason: Content-addressed browser evidence alone does not prove the current
+  task-owned file has not drifted since retrieval.
+- Status: focused formalization tests pass.
