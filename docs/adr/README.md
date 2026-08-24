@@ -1,12 +1,12 @@
 # Architecture Decision Records
 
-This directory is the single index for all architecture decisions (ADR-001-039).
+This directory is the single index for all architecture decisions through ADR-039.
 ADR-001-016 were extracted verbatim from the legacy top-level index; the original
 discussion history, rejected designs and pitfalls remain in
 [legacy-decisions-and-lessons.md](legacy-decisions-and-lessons.md). ADRs explain why a
 boundary exists. The current architecture remains authoritative in
 [ARCHITECTURE.md](../ARCHITECTURE.md), while Phase 1 operating contracts are indexed
-in [migration/README.md](../migration/README.md).
+in [migration/README.md](../migration/README.md) as historical evidence.
 
 | ADR | Decision | Status |
 | --- | --- | --- |
@@ -29,14 +29,14 @@ in [migration/README.md](../migration/README.md).
 | [ADR-017](017-pi-agent-runtime.md) | Pi replaces the custom Agent layer, not deterministic dataset semantics | Accepted |
 | [ADR-018](018-single-ts-application-host.md) | One TypeScript Application Host and one browser-facing port | Accepted |
 | [ADR-019](019-session-task-run-build-boundary.md) | Pi Session, BioMed Task, Run, and DatasetBuild remain distinct | Accepted |
-| [ADR-020](020-dataset-core-remains-deterministic.md) | Python V2 Dataset Core remains authoritative in Phase 0/1 | Accepted |
+| [ADR-020](020-dataset-core-remains-deterministic.md) | Python V2 Dataset Core remains authoritative in Phase 0/1 | Superseded after Phase 8; historical Phase 0/1 decision |
 | [ADR-021](021-pi-adapter-boundary.md) | Pi dependencies are isolated behind one adapter | Accepted |
-| [ADR-022](022-phase1-legacy-core-bridge.md) | Phase 1 uses a named-operation Legacy Dataset Core bridge | Accepted |
+| [ADR-022](022-phase1-legacy-core-bridge.md) | Phase 1 uses a named-operation Legacy Dataset Core bridge | Superseded after Phase 8; historical Phase 1 decision |
 | [ADR-023](023-workspace-policy.md) | Agent writes remain staging-only and publications remain immutable | Accepted |
 | [ADR-024](024-contract-source-of-truth.md) | `@biomed/contracts` is canonical for TypeScript wire DTOs | Accepted |
 | [ADR-025](025-layered-validation-http-persistence.md) | One runtime validation layer and one HTTP/persistence layer per process | Accepted |
-| [ADR-026](026-durable-hil-confidence-protocol.md) | Durable evidence-bound HIL remains distinct from confidence and validation | Accepted |
-| [ADR-026](026-agent-workspace-permissions.md) | Agent Workspace is `data/workspaces/<taskId>`; everything outside goes through allow/ask/deny; Publication trust is hash-verified | Accepted |
+| [ADR-026A](026-durable-hil-confidence-protocol.md) | Durable evidence-bound HIL remains distinct from confidence and validation | Accepted |
+| [ADR-026B](026-agent-workspace-permissions.md) | Agent Workspace is `data/workspaces/<taskId>`; everything outside goes through allow/ask/deny; Publication trust is hash-verified | Accepted |
 | [ADR-027](027-dataset-family-registry.md) | Dataset families are registered runtime capabilities | Accepted |
 | [ADR-028](028-multitable-contracts.md) | Versioned multi-table publication contracts and evidence locators | Accepted |
 | [ADR-029](029-source-asset-registration.md) | Core-owned SourceAsset registration receipts and task ownership | Accepted |
@@ -48,10 +48,11 @@ in [migration/README.md](../migration/README.md).
 | [ADR-035](035-biomedical-common-schemas.md) | Parameterized biomedical common schemas remain non-production capabilities | Accepted |
 | [ADR-036](036-deterministic-derive-slot.md) | Fixed deterministic derive slot and registered algorithm provenance | Accepted |
 | [ADR-037](037-durable-build-api-state-machine.md) | Durable Build API, idempotency, and independent state machine | Accepted |
-| [ADR-038](038-canonical-evidence-product-layer.md) | Canonical Evidence Product Layer separates execution from biomedical product completeness | Proposed; transform execution boundary is superseded by ADR-039 proposal |
+| [ADR-038](038-canonical-evidence-product-layer.md) | Canonical Evidence Product Layer separates execution from biomedical product completeness | Proposed; partially implemented; transform target superseded by accepted ADR-039 |
 
-> 注：`026-durable-hil-confidence-protocol.md` 与 `026-agent-workspace-permissions.md` 编号
-> 均为 026（两个独立工作流各自分配）；两者互不替代，均处于 Accepted 状态。
+> Historical note: two records were independently assigned number 026. This
+> index disambiguates them as ADR-026A/026B without renaming accepted files or
+> rewriting their decisions. New records continue from the next unused integer.
 
 | [ADR-039](039-family-transform-host.md) | FamilySpec and explicit in-process unisolated DatasetTransform execution remain subordinate to Core publication trust | Accepted |
 

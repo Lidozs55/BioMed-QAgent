@@ -1,7 +1,6 @@
 /**
  * D-E3 second-consumer go/no-go gate (staging) — minimal bioactivity_measurement
- * readiness decision (docs/TODO.md D-E3; docs/plans/family-host/09-execution-
- * matrix.md §6, 07-family-examples-migration.md §4.1).
+ * readiness decision (ADR-038/039 and docs/architecture/canonical-evidence.md).
  *
  * Pure Core decision boundary that evaluates whether bioactivity_measurement
  * can be admitted as the second real consumer of the generic Host/Core path

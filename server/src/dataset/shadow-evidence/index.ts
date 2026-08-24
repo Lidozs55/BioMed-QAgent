@@ -1,7 +1,6 @@
 /**
  * D-E2 shadow evidence gate (staging) — minimal Core-owned shadow run
- * comparison (docs/TODO.md D-E2; docs/plans/family-host/06-expression-
- * vertical-slice.md §3, 08-activation-release.md §3, 09 §5).
+ * comparison (ADR-038/039 and docs/architecture/canonical-evidence.md).
  *
  * Pure Core decision boundary that compares two selected shadow runs
  * (legacy vs Host) of the same frozen input closure. The untrusted caller

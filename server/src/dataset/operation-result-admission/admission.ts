@@ -1,7 +1,7 @@
 /**
  * C-T8 Core quarantine admission, stage 2: OperationResult admission
- * (docs/plans/family-host/05-core-execution-product-gate.md §1/§6; C-T8 in
- * docs/TODO.md). Stage 1 (`transform-admission`) returns only opaque
+ * (ADR-033/039 and the current Family Host execution constraints). Stage 1
+ * (`transform-admission`) returns only opaque
  * quarantine evidence; this pure adapter re-reads the immutable committed
  * root through a Core-owned opaque resolver, re-verifies hash/size and the
  * closed world, and constructs a strict native `OperationResultManifest`

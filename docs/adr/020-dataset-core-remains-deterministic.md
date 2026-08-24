@@ -2,7 +2,13 @@
 
 ## Status
 
-Accepted — 2026-08-12.
+Superseded — 2026-08-14 by the Phase 8 TypeScript Dataset Core migration.
+
+This record remains the authoritative Phase 0/1 decision: deterministic dataset
+semantics were never delegated to Pi. The current implementation is the
+TypeScript Dataset Core described in [the architecture](../ARCHITECTURE.md); the
+retirement evidence is in
+[PHASE8_FINAL_VERIFICATION.md](../migration/PHASE8_FINAL_VERIFICATION.md).
 
 ## Context
 

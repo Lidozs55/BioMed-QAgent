@@ -34,7 +34,7 @@ const ENTITY_LEVEL_BY_GRANULARITY: Record<string, string> = {
 
 export const GEO_EXPRESSION_ADAPTER_ID = "geo.expression.v1";
 
-/** Source capabilities (Python ``SOURCE_CAPABILITIES``, TODO §1.4). */
+/** Source capability declarations admitted by the TypeScript Dataset Core. */
 const SOURCE_CAPABILITIES: Record<string, string> = {
   pubmed: "pipeline_supported",
   geo: "pipeline_supported",

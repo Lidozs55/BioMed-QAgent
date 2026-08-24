@@ -115,7 +115,7 @@ Agent 不获得 DAG、Publisher、task output/state/settings、网络或任意 n
 
 ## 7. ADR 治理
 
-[ADR-039](../../adr/039-family-transform-host.md) 现已 **Accepted**。本文件其余内容是历史设计输入；当前执行边界见`docs/architecture/FAMILY-HOST-03-execution-constraints.md`：
+[ADR-039](../../../adr/039-family-transform-host.md) 现已 **Accepted**。本文件其余内容是历史设计输入；当前执行边界见`docs/architecture/FAMILY-HOST-03-execution-constraints.md`：
 
 - ADR-027/033/034/036/038 与production行为继续有效；
 - 显式`in_process_unisolated` dynamic route与Core publication chain已作为稳定`main`基线落地，但不是sandbox/安全边界；

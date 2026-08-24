@@ -16,7 +16,7 @@ retrieval examples
 
 请改读：
 
-- [Family Host + Transform Host 计划集](../plans/family-host/README.md)
-- [ADR-039: FamilySpec 与受控 DatasetTransform Host](../adr/039-family-transform-host.md)
+- [Family Host + Transform Host 计划集](../plans/family-host-2026-08-21/README.md)
+- [ADR-039: FamilySpec 与受控 DatasetTransform Host](../../adr/039-family-transform-host.md)
 
 重要边界：ADR-039现已Accepted。当前仅批准显式`in_process_unisolated` fixed slot；它不是sandbox或安全边界，sandbox/container/IPC仍不开发。现有静态Registry、registered adapters、fixed derive slot和Core Publisher继续有效；不得依据本历史文档删除现有Family runtime。

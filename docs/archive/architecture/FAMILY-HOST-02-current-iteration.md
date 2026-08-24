@@ -8,8 +8,8 @@
 
 请改读：
 
-- [06-expression-vertical-slice.md](../plans/family-host/06-expression-vertical-slice.md)
-- [05-core-execution-product-gate.md](../plans/family-host/05-core-execution-product-gate.md)
-- [09-execution-matrix.md](../plans/family-host/09-execution-matrix.md)
+- [06-expression-vertical-slice.md](../plans/family-host-2026-08-21/06-expression-vertical-slice.md)
+- [05-core-execution-product-gate.md](../plans/family-host-2026-08-21/05-core-execution-product-gate.md)
+- [09-execution-matrix.md](../plans/family-host-2026-08-21/09-execution-matrix.md)
 
 当前保留的有效结论：gene/probe 使用不同 projection；dataset/revision/asset identity 分层；GEO/GDC 只在兼容 partition 内整合；B3 大表按真实 workload 渐进 disk-backed；Publication 仍只能由 Core 创建。

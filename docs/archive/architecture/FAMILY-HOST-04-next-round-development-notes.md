@@ -16,11 +16,11 @@ FamilySpec + DatasetTransform
 
 请改读：
 
-- [01-family-transform-contracts.md](../plans/family-host/01-family-transform-contracts.md)
-- [02-product-identity-relations.md](../plans/family-host/02-product-identity-relations.md)
-- [03-transform-host-security.md](../plans/family-host/03-transform-host-security.md)
-- [05-core-execution-product-gate.md](../plans/family-host/05-core-execution-product-gate.md)
-- [09-execution-matrix.md](../plans/family-host/09-execution-matrix.md)
+- [01-family-transform-contracts.md](../plans/family-host-2026-08-21/01-family-transform-contracts.md)
+- [02-product-identity-relations.md](../plans/family-host-2026-08-21/02-product-identity-relations.md)
+- [03-transform-host-security.md](../plans/family-host-2026-08-21/03-transform-host-security.md)
+- [05-core-execution-product-gate.md](../plans/family-host-2026-08-21/05-core-execution-product-gate.md)
+- [09-execution-matrix.md](../plans/family-host-2026-08-21/09-execution-matrix.md)
 
 仍然有效的审计结论：
 
