@@ -331,6 +331,7 @@ export function ChatPanel({
   const [steeringRuns, setSteeringRuns] = useState<Record<string, string | null>>(
     {},
   );
+  const [cancellingRunId, setCancellingRunId] = useState<string | null>(null);
   const [olderMessagesPendingByTask, setOlderMessagesPendingByTask] = useState<Record<string, boolean>>({});
   const [olderMessagesErrors, setOlderMessagesErrors] = useState<Record<string, string>>({});
   // Sentinel observed while the conversation starts scrolled to the newest
@@ -373,21 +374,36 @@ export function ChatPanel({
       : 0;
   const stalled =
     activeRunId !== null && Number.isFinite(stallMs) && stallMs > STALL_THRESHOLD_MS;
-  const cancelStalledRun = useCallback(async () => {
+  const canCancelActiveRun =
+    activeRunId !== null &&
+    activeTask !== undefined &&
+    activeTask.summary.mode === "agent" &&
+    (activeTask.summary.status === "running" ||
+      activeTask.summary.status === "finalizing") &&
+    cancelRun !== undefined;
+  const cancelActiveRun = useCallback(async () => {
     if (activeTaskId === null || activeTask === undefined) return;
     const runId = activeTask.summary.active_run_id;
-    if (runId === null || cancelRun === undefined) return;
+    if (runId === null || cancelRun === undefined || cancellingRunId === runId) {
+      return;
+    }
+    setCancellingRunId(runId);
     try {
       await cancelRun(activeTaskId, runId);
-      toast.success("已发送取消请求", {
-        description: "任务将在当前步骤结束后停止，可重新提问重试",
+      toast.success("已停止生成", {
+        description: "可重新提问继续",
       });
     } catch (error) {
-      toast.error("取消失败", {
+      toast.error("停止生成失败", {
         description: errorMessage(error, "请稍后重试"),
       });
+    } finally {
+      setCancellingRunId((current) => current === runId ? null : current);
     }
-  }, [activeTaskId, activeTask, cancelRun]);
+  }, [activeTaskId, activeTask, cancelRun, cancellingRunId]);
+  const cancelStalledRun = useCallback(async () => {
+    await cancelActiveRun();
+  }, [cancelActiveRun]);
   /**
    * Pause/resume controls for download operations. Pause cancels the current
    * run when the download belongs to an active host run (the server keeps the
@@ -881,21 +897,49 @@ export function ChatPanel({
                 ? formatActiveItemStatus(activeItem)
                 : buildLabel ?? STATUS_LABELS[activeTask.summary.status]}
             </MarkerContent>
-            {isMobile && subagentCount > 0 ? (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="ml-auto"
-                onClick={openSubagentPanel}
-                aria-label={`查看 ${subagentCount} 个子任务`}
-              >
-                {activeSubagentCount > 0 ? (
-                  <Spinner data-icon="inline-start" aria-hidden="true" />
+            {(canCancelActiveRun || (isMobile && subagentCount > 0)) && (
+              <div className="ml-auto flex items-center gap-2">
+                {canCancelActiveRun && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={cancellingRunId === activeRunId}
+                    onClick={() => void cancelActiveRun()}
+                    aria-label={
+                      cancellingRunId === activeRunId
+                        ? "正在取消…"
+                        : "停止生成"
+                    }
+                  >
+                    {cancellingRunId === activeRunId ? (
+                      <>
+                        <Spinner data-icon="inline-start" aria-hidden="true" />
+                        正在取消…
+                      </>
+                    ) : (
+                      "停止生成"
+                    )}
+                  </Button>
+                )}
+                {isMobile && subagentCount > 0 ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={openSubagentPanel}
+                    aria-label={`查看 ${subagentCount} 个子任务`}
+                  >
+                    {activeSubagentCount > 0 ? (
+                      <Spinner data-icon="inline-start" aria-hidden="true" />
+                    ) : null}
+                    <Badge variant="secondary">
+                      {activeSubagentCount} 个运行中
+                    </Badge>
+                  </Button>
                 ) : null}
-                <Badge variant="secondary">{activeSubagentCount} 个运行中</Badge>
-              </Button>
-            ) : null}
+              </div>
+            )}
           </Marker>
           {renderLatestRunSummary(latestRun)}
         </div>
