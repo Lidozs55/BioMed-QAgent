@@ -30,12 +30,10 @@ identity before acquisition or registered-byte resolution. Production phase3
 composition validates the receipt before acquisition, then reuses the same Core
 planning seam before execution; generation advances after publication.
 
-The V2 dynamic tool is strict by default. The explicit `requirePreflight: false`
-option remains only for legacy direct unit adapters that exercise the low-level
-submit function; phase3 production composition always uses the strict path. The
-prepare tool is included in the Dataset Core skill mapping and is marked
-task/run-scoped unavailable in the generic business bundle until phase3 injects
-its authoritative context.
+The V2 dynamic tool and public submit boundary are strict: there is no
+production-facing `requirePreflight: false` option. The prepare tool is included
+in the Dataset Core skill mapping and is marked task/run-scoped unavailable in
+the generic business bundle until phase3 injects its authoritative context.
 
 ## TDD evidence
 
@@ -52,7 +50,7 @@ Additional regression RED/GREEN cycles captured during implementation:
 - Planner identity test: 1 failed of 6 with `dynamic preflight acquisition plan does not match`; after wiring the same Core planner into prepare, validate, and submit, 6/6 passed.
 - Skill/tool mapping: 2 failures of 32 when the new prepare tool was not mapped; after adding the mapping and unavailable marker, 32/32 passed.
 - Pi prompt compatibility test: 1 failure of 24 because it still asserted the removed descriptor-handshake wording; the assertion now checks the fixed prepare receipt wording and 24/24 passes.
-- Strict factory default: the new receipt-only test failed when the factory default was permissive; the default is now strict and the legacy bypass is explicit.
+- Strict factory default: the new receipt-only test failed when the factory default was permissive; the default is now strict and legacy direct tests were migrated to prepare first.
 
 ## Focused verification
 
@@ -75,11 +73,11 @@ contracts typecheck also passed. `git diff --check` passed.
 
 ## Full-gate status
 
-The serialized full-gate slot was granted before the following commands were
-run, and every command completed successfully in sequence. The recursive test
-invocation passed 118 contract tests, 1,594 server tests with 11 intentional
-skips, and 836 frontend tests. Every full Vitest invocation used
-`--maxWorkers=2`:
+The first serialized full-gate slot was granted before the following
+pre-review-fix commands were run, and every command completed successfully in
+sequence. That recursive test invocation passed 118 contract tests, 1,594
+server tests with 11 intentional skips, and 836 frontend tests. Every full
+Vitest invocation used `--maxWorkers=2`:
 
 ```text
 node scripts/check-workspace-foundation.mjs
@@ -110,6 +108,89 @@ Gate results:
 - `uv run pytest database/tests`: 88 passed.
 - `uv run ruff check database`: passed.
 
+## Review fix wave
+
+The review findings were verified against the production composition and closed
+with a focused TDD cycle. The first post-fix serialized full-gate attempt passed
+the foundation, documentation-link, and contracts/frontend test stages but
+stopped at the server test stage when its static generic-Core dispatch guard
+flagged a false positive introduced by a local variable named `providerId` in
+the new typed-plan parser. The variable was renamed to `plannedProviderId`
+without changing the wire field or validation semantics.
+The focused guard and affected aggregate now pass; a new serialized slot was
+requested before rerunning the remaining full gates and was subsequently
+granted.
+
+Exact first post-fix full-gate evidence:
+
+- `node scripts/check-workspace-foundation.mjs`: passed.
+- `node scripts/check-doc-links.mjs`: passed.
+- `pnpm -r --workspace-concurrency=1 --if-present test -- --maxWorkers=2`:
+  contracts 118 passed; frontend 836 passed; server 1 failed, 1,599 passed,
+  and 11 skipped (163 files passed, 1 failed, 1 skipped). The remaining full
+  lint/typecheck/build/docs/Python gates were not started after this failure.
+
+The parent then granted a new serialized slot. The corrected server suite and
+all remaining required gates completed sequentially:
+
+```text
+pnpm --filter @biomed/server test -- --maxWorkers=2
+pnpm lint
+pnpm typecheck
+pnpm build
+pnpm docs:check
+uv run python database/bridge.py --self-test
+uv run pytest database/tests
+uv run ruff check database
+```
+
+Final post-fix gate results:
+
+- `pnpm --filter @biomed/server test -- --maxWorkers=2`: 164 files passed,
+  1 skipped; 1,600 tests passed and 11 skipped.
+- `pnpm lint`: passed for server and frontend with zero warnings.
+- `pnpm typecheck`: passed for contracts, server, and frontend.
+- `pnpm build`: passed for contracts, server, and frontend. Vite emitted the
+  existing large-chunk advisory only.
+- `pnpm docs:check`: passed (`Documentation links: OK`).
+- `uv run python database/bridge.py --self-test`: `SELF-TEST OK`.
+- `uv run pytest database/tests`: 88 passed.
+- `uv run ruff check database`: passed (`All checks passed!`).
+
+Implemented changes:
+
+- Phase3 now owns per-build generation state. A new prepare synchronously
+  supersedes the prior receipt; submit validates, acquires the task/build lock,
+  atomically consumes the current receipt before acquisition, and clears the
+  reservation on success or failure. The live reservation fence is passed into
+  Host execution, so supersession suppresses transform/publication continuation.
+- Public `submitDynamicFamilyBuild` and `createDynamicFamilyBuildTool` require
+  generation, prepared submission, and receipt; the parser/factory no longer has
+  a `requirePreflight: false` bypass. Legacy direct tests now prepare first.
+- Every builtin acquisition requires a typed Core `CoreAcquisitionPlan` with a
+  valid identity/provider/implementation digest and recipe; missing, malformed,
+  or drifted planning is rejected. Acquisition compares its committed identity
+  with the receipt before transform execution.
+- `.pi/skills/dataset-construction/SKILL.md` now documents prepare, descriptor
+  digest binding, unchanged receipt submit, and fresh prepare after fact changes.
+
+Exact RED/GREEN evidence (all Vitest commands explicitly used
+`--maxWorkers=2`):
+
+- RED: `pnpm --filter @biomed/server test -- tests/dynamic-family-preflight.test.ts tests/skill-manifests.test.ts --maxWorkers=2` — exit 1; 2 files failed, 5 tests failed (13 passed), covering missing coordinator, planner fallback, low-level bypass, and stale skill guidance.
+- RED: `pnpm --filter @biomed/server test -- tests/dynamic-family-preflight.test.ts -t "rejects missing and malformed Core plans" --maxWorkers=2` — exit 1; 1 failed, 9 skipped because malformed recipe planning was accepted.
+- GREEN: same planner command — 1 passed, 9 skipped.
+- GREEN: `pnpm --filter @biomed/server test -- tests/dynamic-family-preflight.test.ts -t "dynamic family preflight composition fencing" --maxWorkers=2` — 2 passed, 8 skipped.
+- GREEN: `pnpm --filter @biomed/server test -- tests/dynamic-family-preflight.test.ts tests/dynamic-family-build-tool.test.ts --maxWorkers=2` — 2 files, 24 tests passed.
+- GREEN: `pnpm --filter @biomed/server test -- tests/skill-manifests.test.ts --maxWorkers=2` — 8 tests passed.
+- GREEN: `pnpm --filter @biomed/server test -- tests/dynamic-family-preflight.test.ts --maxWorkers=2` — 11 tests passed, including composition-side-effect and valid re-digested stale-receipt coverage.
+- GREEN: affected aggregate — `pnpm --filter @biomed/server test -- tests/dynamic-family-preflight.test.ts tests/dynamic-family-build-tool.test.ts tests/core-owned-acquisition.test.ts tests/acquisition-first-composition.test.ts tests/phase5/tools-deterministic.test.ts tests/skill-tool-map.test.ts tests/skill-manifests.test.ts tests/pi-adapter.test.ts tests/transform-host-in-process-unisolated.test.ts --maxWorkers=2` — 9 files, 114 tests passed.
+- GREEN: `pnpm --filter @biomed/server typecheck` and `pnpm --filter @biomed/server lint` — both passed.
+- RED: `pnpm --filter @biomed/server test -- tests/family-host-core-dispatch-guard.test.ts --maxWorkers=2` — 1 failed, 2 passed; the guard reported `dynamic-family/preflight.ts` / `providerId string-literal dispatch` from the `typeof providerId !== "string"` check.
+- GREEN: same dispatch-guard command after renaming the local variable to `plannedProviderId` — 3 tests passed.
+- GREEN: affected aggregate including the dispatch guard — 10 files, 117 tests passed.
+- GREEN: `pnpm --filter @biomed/server typecheck` and `pnpm --filter @biomed/server lint` after the guard fix — both passed.
+
 ## Self-review and follow-up suggestions
 
 - No sandbox/container/IPC, generic DAG, or new dependency was introduced.
@@ -126,5 +207,9 @@ Gate results:
 
 - Implementation commit: `d014afcbf7d8639ba7091aa01adda3f1b6bffdf6`
   (`feat(server): add dynamic family preflight receipt protocol`).
-- The finalized report update is committed next and the resulting branch is
-  pushed to `origin/feat/family-host-dynamic-preflight` without force-push.
+- Review fix commit: `4b90ac37253c99837c10ee15aaaae80ae72e336b`
+  (`fix(server): fence dynamic family preflight consumption`).
+- Guard false-positive fix commit: `c981825d8e75d7f6d22586d520fde152ac280a8a`
+  (`fix(server): avoid generic core guard false positive`).
+- The report was finalized after the post-fix gates and is pushed to
+  `origin/feat/family-host-dynamic-preflight` without force-push.
