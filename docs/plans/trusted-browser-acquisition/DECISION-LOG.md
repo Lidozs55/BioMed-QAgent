@@ -199,3 +199,11 @@ risks, and verification results for later audit.
 - Reason: Generic browser acquisition must not turn one successfully parsed
   source into an incomplete or fabricated family publication.
 - Status: implemented; server/contracts typecheck and lint pass.
+
+## 2026-08-24 / D-024
+
+- Decision: Add opt-in live browser smoke tests for NCBI E-utilities and MGnify;
+  default CI remains network-free and skipped live tests never count as pass.
+- Reason: Validate real public database download behavior without coupling normal
+  tests to external availability or creating a publication in the smoke path.
+- Status: both live downloads passed with HTTP 200 and verified SHA-256 receipts.

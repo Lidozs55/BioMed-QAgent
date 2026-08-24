@@ -156,6 +156,40 @@ describeLive("live:uniprot", () => {
   }, 60_000);
 });
 
+describeLive("live:trusted-browser-databases", () => {
+  it.each([
+    ["ncbi", "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=gene&term=TP53%5BGene%20Name%5D%20AND%20human%5BOrganism%5D&retmode=json"],
+    ["mgnify", "https://www.ebi.ac.uk/metagenomics/api/v1/studies?page_size=1"],
+  ])("downloads a real %s database response with a receipt", async (_name, url) => {
+    const { PublicHttpClient } = await import("../../src/external/network/http-client.js");
+    const { NodeBrowserPool } = await import("../../src/external/browser/pool.js");
+    const { CrawlerFacade } = await import("../../src/external/crawler/crawler.js");
+    const { ContentCache } = await import("../../src/external/acquisition/content-cache.js");
+    const { createBrowserTools } = await import("../../src/agent/tools/browser.js");
+    const client = new PublicHttpClient();
+    const browserPool = new NodeBrowserPool({ maxContexts: 1 });
+    await browserPool.start();
+    try {
+      const result = await createBrowserTools({
+        taskRoot,
+        cache: new ContentCache(path.join(taskRoot, "cache")),
+        client,
+        crawler: new CrawlerFacade({ browserPool, client }),
+        taskId: "live_browser_task",
+        runId: "live_browser_run",
+      })[1]!.execute({ url, filename: `${_name}.json` });
+      expect(result.isError).toBeUndefined();
+      const parsed = JSON.parse(result.content) as { browser_acquisition_evidence?: { status: number; sha256: string; final_url: string }; formal_status?: string };
+      expect(parsed.formal_status).toBe("preparation_only");
+      expect(parsed.browser_acquisition_evidence?.status).toBe(200);
+      expect(parsed.browser_acquisition_evidence?.sha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(parsed.browser_acquisition_evidence?.final_url).toMatch(/^https:\/\//);
+    } finally {
+      await browserPool.close();
+    }
+  }, 120_000);
+});
+
 describeLive("live:browser", () => {
   it("navigates a public page through the Playwright browser pool", async () => {
     const { NodeBrowserPool } = await import("../../src/external/browser/pool.js");
