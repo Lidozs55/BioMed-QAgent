@@ -303,8 +303,14 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
       if (!accepted) {
         return { content: JSON.stringify({ proposal, review, formalization_status: "rejected", publication_status: "not_published" }) };
       }
-      const formalized = await options.formalizationService.formalize({ proposal, evidence: stored.evidence, review });
-      return { content: JSON.stringify({ proposal: formalized.proposal, review, formalization_status: "formalized", registration: formalized.registration, publication_status: "not_published" }) };
+      try {
+        const formalized = await options.formalizationService.formalize({ proposal, evidence: stored.evidence, review });
+        return { content: JSON.stringify({ proposal: formalized.proposal, review, formalization_status: "formalized", registration: formalized.registration, publication_status: "not_published" }) };
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        const failed = await options.proposalStore.update(proposal.proposal_id, { status: "failed", failure_reason: reason });
+        throw new Error(`browser formalization failed for ${failed.proposal_id}: ${reason}`, { cause: error });
+      }
     },
   };
 

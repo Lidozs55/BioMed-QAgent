@@ -231,3 +231,11 @@ risks, and verification results for later audit.
 - Reason: Passing parser identity from Agent input would bypass PROMOTED recipe
   authority and undermine the trusted browser boundary.
 - Status: implemented and typecheck/lint verified.
+
+## 2026-08-24 / D-028
+
+- Decision: A formalization HIL accept followed by Core verification failure
+  transitions the persisted proposal to `failed`, preserving the exact error.
+- Reason: HIL approval of retrieval evidence is not proof that carrier
+  registration, recipe resolution, or hash closure succeeded.
+- Status: implemented; 37 focused browser/formalization/store tests and lint pass.
