@@ -237,7 +237,7 @@ export default function App() {
                   api.injectTaskContext(taskId, text)
                 }
                 models={models}
-                hasApiKey={models.length > 0}
+                hasApiKey={settings?.api_key_configured ?? models.length > 0}
                 selectedModelId={selectedModelId}
                 onModelChange={handleModelChange}
                 onOpenSettings={() => setSettingsOpen(true)}

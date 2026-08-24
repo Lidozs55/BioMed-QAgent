@@ -15,6 +15,7 @@ import { readJsonFile, writeJsonAtomic } from "../../persistence/atomic-json.js"
 import { ADVANCED_DEFAULTS, RUNTIME_DEFAULTS } from "./catalog.js";
 
 export type ModelSource = "api" | "manual" | "catalog";
+export type ModelMetadataSource = "catalog" | "api" | "user";
 
 export interface ProviderRecord {
   id: string;
@@ -39,6 +40,12 @@ export interface ModelRecord {
   capabilities: { text: boolean; image: boolean; video: boolean; audio: boolean };
   params: JsonObject;
   source: ModelSource;
+  /**
+   * Which layer last owned the model metadata:
+   * ``catalog`` = code catalog refresh is allowed, ``api`` = discovered but
+   * not in the catalog, ``user`` = user-edited and must never be overwritten.
+   */
+  metadata_source?: ModelMetadataSource;
   active: boolean;
   created_at: string;
   updated_at: string;
@@ -176,6 +183,7 @@ export function bootstrapEnvironmentDefaults(
     capabilities: { text: true, image: false, video: false, audio: false },
     params: {},
     source: "catalog",
+    metadata_source: "catalog",
     active: true,
     created_at: now,
     updated_at: now,

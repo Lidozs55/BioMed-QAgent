@@ -91,6 +91,10 @@ interface ActiveTurn {
   cancelled: boolean;
   terminal: boolean;
   reason?: string;
+  reasoningChars: number;
+  assistantChars: number;
+  toolEvents: number;
+  lengthContinuationStalls: number;
   pendingDelta?: Extract<
     BioMedAgentEvent,
     { type: "assistant_delta" | "reasoning_delta" }
@@ -103,6 +107,10 @@ const MAX_TEXT = 4_096;
 const MAX_DEPTH = 3;
 const MAX_ITEMS = 20;
 const DELTA_FLUSH_INTERVAL_MS = 32;
+// Guard against a pathological length loop: three continuations with almost no
+// new assistant/reasoning/tool progress indicate a degenerate configuration.
+const MAX_STALLED_LENGTH_CONTINUATIONS = 3;
+const MIN_PROGRESS_CHARS = 32;
 const LENGTH_CONTINUATION_MESSAGE =
   "The previous assistant turn was truncated by the model length limit. " +
   "Continue the same task from the compacted context without repeating completed work. " +
@@ -240,13 +248,24 @@ export function applyModelProfileToPayload(
     return payload;
   }
   const next: Record<string, unknown> = { ...payload };
+  const dashScopeQwen = usesDashScopeQwen(selected);
+  for (const [key, value] of Object.entries(selected.params ?? {})) {
+    if (value === undefined) continue;
+    if (key === "max_tokens" || key === "temperature" || key === "top_p") continue;
+    if (key === "context_window" || key === "max_output_tokens" ||
+        key === "suggested_max_tokens" || key === "capabilities") continue;
+    if (dashScopeQwen &&
+        (key === "repetition_penalty" || key === "enable_search" ||
+         key === "thinking_mode" || key === "enable_thinking")) continue;
+    next[key] = value;
+  }
   if (selected.topP !== undefined) next.top_p = selected.topP;
-  if (usesDashScopeQwen(selected)) {
+  if (dashScopeQwen) {
     if (selected.repetitionPenalty !== undefined) {
       next.repetition_penalty = selected.repetitionPenalty;
     }
     if (selected.enableSearch !== undefined) next.enable_search = selected.enableSearch;
-    if (selected.thinkingMode === true) next.enable_thinking = true;
+    if (selected.thinkingMode !== undefined) next.enable_thinking = selected.thinkingMode;
   }
   return next;
 }
@@ -447,12 +466,16 @@ export async function generateOneShotText(
     tools: [],
   }, process.env);
   let output = "";
+  let reasoningChars = 0;
+  let lengthContinuationStalls = 0;
   let stopReason: string | undefined;
   const unsubscribe = upstream.subscribe((event) => {
     const message = event.assistantMessageEvent;
     if (event.type === "message_update" && message?.type === "text_delta") {
       output += message.delta ?? "";
       if (output.length > 100_000) void upstream.abort();
+    } else if (event.type === "message_update" && message?.type === "thinking_delta") {
+      reasoningChars += (message.delta ?? "").length;
     } else if (event.type === "message_end") {
       stopReason = event.assistantStopReason;
     }
@@ -469,8 +492,21 @@ export async function generateOneShotText(
       if (upstream.continueAfterLength === undefined) {
         throw new Error("Model generation was truncated");
       }
+      const beforeOutput = output.length;
+      const beforeReasoning = reasoningChars;
       stopReason = undefined;
       await upstream.continueAfterLength();
+      const madeProgress =
+        output.length > beforeOutput ||
+        reasoningChars - beforeReasoning >= MIN_PROGRESS_CHARS;
+      if (!madeProgress) {
+        lengthContinuationStalls += 1;
+        if (lengthContinuationStalls >= MAX_STALLED_LENGTH_CONTINUATIONS) {
+          throw new Error("Model length continuation made no meaningful progress");
+        }
+      } else {
+        lengthContinuationStalls = 0;
+      }
     }
     if (isAborted()) throw new Error("Model generation was cancelled");
     if (stopReason === "error") throw new Error("Model generation failed upstream");
@@ -538,6 +574,7 @@ class PiBioMedAgentSession implements BioMedAgentSession {
         this.queueDelta(active, "reasoning_delta", message.delta);
       }
     } else if (event.type === "tool_execution_start") {
+      active.toolEvents += 1;
       this.pushBoundary(active, {
         event: {
           type: "tool_started",
@@ -554,6 +591,7 @@ class PiBioMedAgentSession implements BioMedAgentSession {
         },
       });
     } else if (event.type === "tool_execution_end") {
+      active.toolEvents += 1;
       this.pushBoundary(active, {
         event: {
           type: "tool_completed",
@@ -579,8 +617,23 @@ class PiBioMedAgentSession implements BioMedAgentSession {
       if (this.upstream.continueAfterLength === undefined) {
         throw new Error("Pi runtime cannot continue a length-truncated turn");
       }
+      const beforeReasoning = active.reasoningChars;
+      const beforeAssistant = active.assistantChars;
+      const beforeTools = active.toolEvents;
       active.assistantStopReason = undefined;
       await this.upstream.continueAfterLength();
+      const madeProgress =
+        active.assistantChars > beforeAssistant ||
+        active.reasoningChars - beforeReasoning >= MIN_PROGRESS_CHARS ||
+        active.toolEvents > beforeTools;
+      if (!madeProgress) {
+        active.lengthContinuationStalls += 1;
+        if (active.lengthContinuationStalls >= MAX_STALLED_LENGTH_CONTINUATIONS) {
+          throw new Error("Pi runtime length continuation made no meaningful progress");
+        }
+      } else {
+        active.lengthContinuationStalls = 0;
+      }
     }
     if (!active.cancelled && active.assistantStopReason === "error") {
       throw new Error("Pi runtime ended with an upstream error");
@@ -593,6 +646,11 @@ class PiBioMedAgentSession implements BioMedAgentSession {
     rawDelta: string,
   ): void {
     const delta = boundedText(rawDelta);
+    if (type === "reasoning_delta") {
+      active.reasoningChars += delta.length;
+    } else {
+      active.assistantChars += delta.length;
+    }
     const pending = active.pendingDelta;
     if (
       pending !== undefined &&
@@ -654,6 +712,10 @@ class PiBioMedAgentSession implements BioMedAgentSession {
       queue: new EventQueue(),
       cancelled: false,
       terminal: false,
+      reasoningChars: 0,
+      assistantChars: 0,
+      toolEvents: 0,
+      lengthContinuationStalls: 0,
     };
     this.activeTurn = active;
     const onAbort = (): void => {

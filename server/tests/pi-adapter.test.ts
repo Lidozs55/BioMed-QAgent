@@ -135,6 +135,28 @@ describe("Pi model profile mapping", () => {
       },
     )).toEqual({ model: "custom-chat", top_p: 0.75 });
   });
+
+  test("injects saved registry parameters into the upstream payload", () => {
+    expect(applyModelProfileToPayload(
+      { model: "custom-chat" },
+      {
+        provider: "custom",
+        modelId: "custom-chat",
+        apiKey: "secret",
+        baseUrl: "https://models.example/v1",
+        params: {
+          reasoning_effort: "high",
+          tool_choice: "required",
+          max_tokens: 999,
+          temperature: 0.2,
+        },
+      },
+    )).toEqual({
+      model: "custom-chat",
+      reasoning_effort: "high",
+      tool_choice: "required",
+    });
+  });
 });
 describe("PiAgentAdapter", () => {
   afterEach(() => {
@@ -196,6 +218,23 @@ describe("PiAgentAdapter", () => {
 
     expect(upstream.continueAfterLength).toHaveBeenCalledOnce();
     expect(events.filter((event) => event.type === "turn_completed")).toHaveLength(1);
+  });
+
+  test("fails a length continuation that makes no meaningful progress", async () => {
+    const upstream = new FakeUpstreamSession();
+    upstream.promptImplementation = async () => {
+      upstream.emit({ type: "message_end", assistantStopReason: "length" });
+    };
+    upstream.continueAfterLengthImplementation = async () => {
+      upstream.emit({ type: "message_end", assistantStopReason: "length" });
+    };
+    const session = await new PiAgentAdapter({
+      createUpstreamSession: async () => upstream,
+    }).createSession(sessionConfig);
+
+    await expect(collect(session.run("finish the dataset")))
+      .rejects.toThrow("Agent runtime request failed");
+    expect(upstream.continueAfterLength).toHaveBeenCalledTimes(3);
   });
 
   test("fails the turn when Pi ends with an upstream error stop reason", async () => {
