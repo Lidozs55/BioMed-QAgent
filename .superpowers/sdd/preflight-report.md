@@ -264,3 +264,26 @@ composition tests are in `server/tests/skill-manifests.test.ts` and
 - `pnpm lint`, `pnpm typecheck`, `pnpm build`, and `pnpm docs:check` — passed.
 - `uv run python database/bridge.py --self-test`, `uv run pytest database/tests`
   (88 passed), and `uv run ruff check database` — passed.
+
+## Final review fix wave (TDD RED)
+
+- Added a production-composition regression that pauses the final build-lock
+  fence, supersedes the valid receipt, and asserts no publication rename or
+  `publication_created` event; it also uses a unique temporary workspace root.
+- RED command: `pnpm --filter @biomed/server test -- tests/dynamic-family-phase3-composition.test.ts --maxWorkers=2`.
+  Result: failed; the run remained `queued` because the new final-fence seam is
+  not wired yet (the test timed out waiting for completion).
+
+## Final review fix wave (GREEN)
+
+- `phase3-composition.ts` now rechecks the live generation after the awaited
+  build-lock assertion and uses the same ordering in the publication fence.
+  The publisher exposes a test-only `beforeFinalFence` hook at the actual
+  immutable rename boundary; a superseding prepare during that awaited fence
+  leaves the publish directory empty and records no `publication_created`
+  event. A successful composition path also proves a valid receipt reaches
+  acquisition, transform, publication, and `publication_created`/
+  `artifact_produced` events.
+- Focused command: `pnpm --filter @biomed/server test -- tests/dynamic-family-phase3-composition.test.ts tests/dynamic-family-build-tool.test.ts tests/dynamic-family-preflight.test.ts tests/skill-manifests.test.ts tests/family-host-core-dispatch-guard.test.ts tests/acquisition-first-composition.test.ts --maxWorkers=2` — 6 files, 44 tests passed.
+- `pnpm --filter @biomed/server typecheck` and
+  `pnpm --filter @biomed/server lint` — passed.
