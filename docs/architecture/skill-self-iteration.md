@@ -72,6 +72,25 @@ Run 完成
 固化到生产路径始终经人工评审；引擎仅在任务目录自动产出候选（安全、可审计、不越权）。
 这也意味着 `solidify-run.mjs` 本身就是一个「固化为可复用脚本」的最小闭环样例。
 
+## 设置页个性化迭代
+
+设置页的 Skill 迭代入口扩展了候选生成能力，但不改变 curated 单一事实源：
+
+1. 用户选择一个 .pi/skills 下的目标 Skill；默认是负责可信任务构建的
+   dataset-construction。
+2. 用户明确选择最近 3/5/10/12 个已结束任务，并可提供本次迭代重点。
+3. 服务端只读取 Task reducer 投影的 user/assistant 消息，排除 system/tool/reasoning，
+   对常见密钥模式脱敏，并限制每任务消息数、单条长度和总字符数。
+4. 当前配置模型在无工具的一次性 Pi session 中读取
+   personalized-skill-evolver/SKILL.md、目标 Skill、固定工具映射和带引用的历史。
+5. 严格 JSON 输出必须包含个性化需求、证据引用、数据处理偏好、完整 SKILL.md
+   候选与审查警告；服务端校验证据白名单、target name、mapped tools 和禁止面。
+6. 候选绑定源 SHA-256、模型、任务 ID 和时间，原子写入
+   data/settings/skill-iterations。它不会自动写入 .pi/skills 或改变活动 Run。
+
+该流程与 PHASE1_SYSTEM_PROMPT 的 Darwin 式优化是两项独立能力。候选提升仍需人工
+审查、验证、提交与回滚点，详见 ADR-040。
+
 ## 一致性
 
 - 不新增 Python / FastAPI / experimental Pi 面；不触碰 trusted runtime 的

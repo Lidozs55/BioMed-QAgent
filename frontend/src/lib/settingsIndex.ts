@@ -208,6 +208,13 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     anchor: "settings-export-cache",
   },
   {
+    id: "skill-iteration.generate",
+    title: "个性化 Skill 迭代",
+    keywords: ["skill", "技能", "迭代", "自进化", "历史交互", "个性化", "候选"],
+    section: "skill-iteration",
+    anchor: "settings-skill-iteration",
+  },
+  {
     id: "runtime.command-timeout",
     title: "命令执行超时",
     keywords: ["runtime", "运行限制", "timeout", "超时", "命令", "秒"],

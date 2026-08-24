@@ -6,6 +6,7 @@ import type { RuntimeLimits } from "@biomed/contracts";
 import type { ApplicationHostOptions } from "./app/create-app.js";
 import { LifecycleRegistry } from "./app/lifecycle.js";
 import type { BioMedModelConfig } from "./agent/contracts.js";
+import { createSkillIterationApi } from "./agent/skill-iteration/api.js";
 import type { HostConfig } from "./config.js";
 import { NodeBrowserPool } from "./external/browser/pool.js";
 import { DatabaseClient } from "./persistence/db-client.js";
@@ -46,6 +47,7 @@ export interface BootstrapInput {
   browserPool?: NodeBrowserPool;
   modelSettings?: ModelSettingsSurface;
   productApi?: ApiSurface;
+  skillIterationApi?: ApiSurface;
   createFormalRuntime?: (options: Phase3RuntimeOptions) => Promise<FormalRuntime>;
 }
 
@@ -84,6 +86,12 @@ export async function createBootstrapOptions(input: BootstrapInput): Promise<Boo
     settingsDir,
     database,
   });
+  const skillIterationApi = input.skillIterationApi ?? createSkillIterationApi({
+    repositoryRoot,
+    tasksRoot,
+    settingsDir,
+    resolveModel: modelSettings.resolveActiveModel,
+  });
   const permissionBrokerRegistry = new PermissionBrokerRegistry();
   const vlmConfig = modelSettings.resolveVlmConfig === undefined
     ? undefined
@@ -102,6 +110,7 @@ export async function createBootstrapOptions(input: BootstrapInput): Promise<Boo
     },
     hostApi: combineApis(
       productApi,
+      skillIterationApi,
       modelSettings,
       createPermissionSettingsApi(permissionPolicyStore, permissionBrokerRegistry),
     ),

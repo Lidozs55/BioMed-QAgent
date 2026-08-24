@@ -8,6 +8,8 @@ import {
   parseModelSettings,
   parseModelsEnvelope,
   parsePersonalization,
+  parseSkillIterationCandidate,
+  parseSkillIterationContext,
   parseVendorsEnvelope,
 } from "@biomed/contracts";
 import type {
@@ -18,6 +20,9 @@ import type {
   ModelSettingsUpdate,
   PersonalizationSettings,
   PersonalizationUpdate,
+  SkillIterationCandidate,
+  SkillIterationContext,
+  StartSkillIterationRequest,
   VendorInfo,
 } from "@/api/types";
 
@@ -26,6 +31,8 @@ export interface SettingsApi {
   saveSettings: (changes: ModelSettingsUpdate) => Promise<ModelSettings>;
   fetchPersonalization: () => Promise<PersonalizationSettings>;
   savePersonalization: (changes: PersonalizationUpdate) => Promise<PersonalizationSettings>;
+  fetchSkillIterationContext: () => Promise<SkillIterationContext>;
+  startSkillIteration: (request: StartSkillIterationRequest) => Promise<SkillIterationCandidate>;
   fetchVendors: () => Promise<VendorInfo[]>;
   fetchModels: (preview: ModelPreviewRequest) => Promise<ModelInfo[]>;
   fetchAgentPermissions: () => Promise<AgentPermissionSettings>;
@@ -78,6 +85,15 @@ export function createSettingsApi(http: Http): SettingsApi {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(changes),
       }).then((b) => parsePersonalization(b)),
+    fetchSkillIterationContext: () =>
+      http.request(http.baseUrl + "/skill-iterations/context")
+        .then((body) => parseSkillIterationContext(body)),
+    startSkillIteration: (request) =>
+      http.request(http.baseUrl + "/skill-iterations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
+      }).then((body) => parseSkillIterationCandidate(body)),
     fetchVendors: () =>
       http.request(`${http.baseUrl}/vendors`).then((b) => parseVendorsEnvelope(b)).then(({ vendors }) => vendors),
     fetchModels: (preview) =>
