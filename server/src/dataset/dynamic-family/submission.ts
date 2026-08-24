@@ -5,6 +5,8 @@ import path from "node:path";
 import {
   buildTransformDescriptorDigestCanonical,
   computeImplementationDigest,
+  DEFAULT_RUNTIME_LIMITS,
+  type DynamicFamilyPreflightReceipt,
   type InputAssetReceipt,
   type OperationResultManifest,
   type ResourceLimits,
@@ -27,6 +29,10 @@ import type { InProcessUnisolatedInputBytes } from "../transform-host/in-process
 import type { ExpectedTransformInvocation } from "../transform-admission/types.js";
 import { materializeDynamicFamilyCandidate } from "./index.js";
 import {
+  validateDynamicFamilyPreflightReceipt,
+  type DynamicFamilyAcquisitionPlanningInput,
+} from "./preflight.js";
+import {
   executeDynamicFamilyTransform,
   type ExecuteDynamicFamilyTransformResult,
 } from "./execution.js";
@@ -38,10 +44,101 @@ export interface SubmitDynamicFamilyBuildInput {
   readonly sourceAssetRegistry: SourceAssetRegistry;
   readonly taskRoot: string;
   readonly runtimeLimits: RuntimeLimits;
+  /** Core-owned build generation bound by the preflight receipt. */
+  readonly generation?: number;
+  /** Required by the production two-phase path; absent only for legacy unit callers. */
+  readonly preflightReceipt?: DynamicFamilyPreflightReceipt;
+  /** The exact proposal submitted to prepare, before Core resolves acquisitions. */
+  readonly preflightSubmission?: ParsedDynamicFamilyBuildSubmission;
+  /** Core-only cheap provider planning reused to verify the committed receipt. */
+  readonly planAcquisition?: (input: DynamicFamilyAcquisitionPlanningInput) => Promise<unknown>;
   /** Core-internal exact acquisition identity selection; never accepted from the Agent. */
   readonly sourceAcquisitionRequestDigests?: Readonly<Record<string, string>>;
   readonly signal?: AbortSignal;
   readonly now?: () => Date;
+}
+
+export type CompiledDynamicFamilyTransform = Awaited<ReturnType<typeof compileTransformInProcessUnisolated>>;
+
+export interface DynamicFamilyHostDescriptorPreparation {
+  readonly compiled: CompiledDynamicFamilyTransform;
+  readonly implementation: {
+    readonly normalized_source_sha256: string;
+    readonly emitted_bundle_sha256: string;
+    readonly compiler_id: string;
+    readonly compiler_version: string;
+    readonly compiler_options_digest: string;
+    readonly dependency_closure_digest: string;
+    readonly runtime_abi_version: string;
+    readonly host_policy_version: string;
+  };
+  readonly implementationDigest: string;
+  readonly projectionDigest: string;
+  readonly runtimeDigest: string;
+  readonly resourceLimits: Readonly<ResourceLimits>;
+  readonly resourcePolicyDigest: string;
+  readonly descriptorInput: TransformDescriptorDigestInput;
+  readonly transformDescriptorDigest: string;
+}
+
+/**
+ * Compile and digest the exact Host descriptor once for preflight and again
+ * before execution. This keeps the receipt on the same admission primitives
+ * as the execution path instead of introducing a second descriptor policy.
+ */
+export async function prepareDynamicFamilyHostDescriptor(input: {
+  readonly submission: ParsedDynamicFamilyBuildSubmission;
+  readonly runtimeLimits?: RuntimeLimits;
+}): Promise<DynamicFamilyHostDescriptorPreparation> {
+  const compiled = await compileTransformInProcessUnisolated({
+    source: input.submission.transform_source,
+  });
+  const implementation = {
+    normalized_source_sha256: compiled.sourceDigest,
+    emitted_bundle_sha256: compiled.bundleDigest,
+    compiler_id: compiled.compilerId,
+    compiler_version: compiled.compilerVersion,
+    compiler_options_digest: compiled.compilerOptionsDigest,
+    dependency_closure_digest: compiled.dependencyClosureDigest,
+    runtime_abi_version: compiled.runtimeAbiVersion,
+    host_policy_version: compiled.policyDigest,
+  } as const;
+  const implementationDigest = await computeImplementationDigest(implementation);
+  const projectionDigest = canonicalDigest(input.submission.projection);
+  const runtimeDigest = canonicalDigest({
+    runtime_abi_version: compiled.runtimeAbiVersion,
+    runtime_policy_version: compiled.policyVersion,
+  });
+  const resourceLimits = resourceLimitsFor(input.runtimeLimits ?? DEFAULT_RUNTIME_LIMITS);
+  const resourcePolicyDigest = canonicalDigest({
+    resource_class: input.submission.transform_metadata.resource_class,
+    resource_limits: resourceLimits,
+  });
+  const descriptorInput: TransformDescriptorDigestInput = {
+    transform_id: input.submission.transform_metadata.transform_id,
+    version: input.submission.transform_metadata.version,
+    entrypoint: input.submission.transform_metadata.entrypoint,
+    implementation_digest: implementationDigest,
+    bound_family_spec_digest: input.submission.family_spec.canonical_digest,
+    bound_projection_digest: projectionDigest,
+    declared_input_roles: [...input.submission.transform_metadata.declared_input_roles],
+    declared_output_tables: [...input.submission.transform_metadata.declared_output_tables],
+    runtime_policy_digest: runtimeDigest,
+    import_policy_digest: compiled.policyDigest,
+    resource_policy_digest: resourcePolicyDigest,
+  };
+  const transformDescriptorDigest = sha256(buildTransformDescriptorDigestCanonical(descriptorInput));
+  return {
+    compiled,
+    implementation,
+    implementationDigest,
+    projectionDigest,
+    runtimeDigest,
+    resourceLimits,
+    resourcePolicyDigest,
+    descriptorInput,
+    transformDescriptorDigest,
+  };
 }
 
 /**
@@ -59,6 +156,17 @@ export async function submitDynamicFamilyBuild(
   input: SubmitDynamicFamilyBuildInput,
 ): Promise<SubmitDynamicFamilyBuildResult> {
   const now = input.now ?? (() => new Date());
+  if (input.preflightReceipt !== undefined) {
+    await validateDynamicFamilyPreflightReceipt({
+      receipt: input.preflightReceipt,
+      submission: input.preflightSubmission ?? input.submission,
+      taskId: input.taskId,
+      buildId: input.submission.build_proposal.build_id,
+      generation: input.generation ?? 0,
+      runtimeLimits: input.runtimeLimits,
+      planAcquisition: input.planAcquisition,
+    });
+  }
   const proposal = input.submission.build_proposal;
   const projection = input.submission.projection;
   const bindings = proposal.source_bindings;
@@ -110,41 +218,20 @@ export async function submitDynamicFamilyBuild(
     runtimeInputs.push(Object.freeze({ ...handle, bytes }));
   }
 
-  const compiled = await compileTransformInProcessUnisolated({
-    source: input.submission.transform_source,
+  const descriptor = await prepareDynamicFamilyHostDescriptor({
+    submission: input.submission,
+    runtimeLimits: input.runtimeLimits,
   });
-  const implementation = {
-    normalized_source_sha256: compiled.sourceDigest,
-    emitted_bundle_sha256: compiled.bundleDigest,
-    compiler_id: compiled.compilerId,
-    compiler_version: compiled.compilerVersion,
-    compiler_options_digest: compiled.compilerOptionsDigest,
-    dependency_closure_digest: compiled.dependencyClosureDigest,
-    runtime_abi_version: compiled.runtimeAbiVersion,
-    host_policy_version: compiled.policyDigest,
-  };
-  const implementationDigest = await computeImplementationDigest(implementation);
-  const projectionDigest = canonicalDigest(projection);
-  const runtimeDigest = canonicalDigest({
-    runtime_abi_version: compiled.runtimeAbiVersion,
-    runtime_policy_version: compiled.policyVersion,
-  });
-  const resourceLimits = resourceLimitsFor(input.runtimeLimits);
-  const resourcePolicyDigest = canonicalDigest({ resource_class: input.submission.transform_metadata.resource_class, resource_limits: resourceLimits });
-  const descriptorInput: TransformDescriptorDigestInput = {
-    transform_id: input.submission.transform_metadata.transform_id,
-    version: input.submission.transform_metadata.version,
-    entrypoint: input.submission.transform_metadata.entrypoint,
-    implementation_digest: implementationDigest,
-    bound_family_spec_digest: input.submission.family_spec.canonical_digest,
-    bound_projection_digest: projectionDigest,
-    declared_input_roles: [...input.submission.transform_metadata.declared_input_roles],
-    declared_output_tables: [...input.submission.transform_metadata.declared_output_tables],
-    runtime_policy_digest: runtimeDigest,
-    import_policy_digest: compiled.policyDigest,
-    resource_policy_digest: resourcePolicyDigest,
-  };
-  const transformDescriptorDigest = sha256(buildTransformDescriptorDigestCanonical(descriptorInput));
+  const {
+    compiled,
+    implementation,
+    implementationDigest,
+    projectionDigest,
+    runtimeDigest,
+    resourceLimits,
+    descriptorInput,
+    transformDescriptorDigest,
+  } = descriptor;
   const transformRefs = proposal.transform_refs;
   if (
     transformRefs.length !== 1
@@ -157,7 +244,11 @@ export async function submitDynamicFamilyBuild(
       `build proposal transform_ref must bind the Host-compiled descriptor ${transformDescriptorDigest}`,
     );
   }
-  const invocationId = `dynamic_${sha256(`${input.taskId}\0${input.runId}\0${proposal.build_id}`).slice(0, 24)}`;
+  const generation = input.generation ?? 0;
+  if (!Number.isSafeInteger(generation) || generation < 0) {
+    throw new TypeError("dynamic family generation must be a non-negative safe integer");
+  }
+  const invocationId = `dynamic_${sha256(`${input.taskId}\0${input.runId}\0${proposal.build_id}\0${generation}`).slice(0, 24)}`;
   const outputTables = [
     ...projection.primary_tables,
     ...projection.supporting_tables,
@@ -195,7 +286,7 @@ export async function submitDynamicFamilyBuild(
     build_id: proposal.build_id,
     invocation_id: invocationId,
     attempt: 1,
-    generation: 0,
+    generation,
     request_digest: requestDigest,
     parameters_digest: parametersDigest,
     family_spec: input.submission.family_spec,
@@ -232,7 +323,7 @@ export async function submitDynamicFamilyBuild(
     buildId: proposal.build_id,
     invocationId,
     attempt: 1,
-    generation: 0,
+    generation,
     requestDigest,
     parametersDigest,
     familySpecDigest: input.submission.family_spec.canonical_digest,
@@ -271,8 +362,8 @@ export async function submitDynamicFamilyBuild(
       trustedRoot = path.join(coreCommitParent, rootRef);
       return trustedRoot;
     },
-    isGenerationCurrent: (generation, cancelFence) =>
-      generation === context.generation && cancelFence === context.cancelFence && !input.signal?.aborted,
+    isGenerationCurrent: (candidateGeneration, cancelFence) =>
+      candidateGeneration === context.generation && cancelFence === context.cancelFence && !input.signal?.aborted,
     signal: input.signal,
     now,
   });
@@ -367,7 +458,7 @@ async function coreEvidenceResult(input: {
   };
 }
 
-function resourceLimitsFor(limits: RuntimeLimits): Readonly<ResourceLimits> {
+export function resourceLimitsFor(limits: RuntimeLimits): Readonly<ResourceLimits> {
   const wall = limits.dataset_operation_timeout_seconds * 1_000;
   return Object.freeze({
     wall_ms: wall,

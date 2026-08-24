@@ -180,7 +180,12 @@ export const SKILL_TOOL_MAP: readonly SkillToolMapping[] = Object.freeze([
     // pipeline tools as validate_dataset_build_spec / execute_dataset_build
     // (backend/app/pipeline/dataset_build_tool.py); Phase 5/8 converges on
     // these Pi names.
-    ["validate_dataset_build", "execute_dataset_build", "submit_dynamic_family_build"],
+    [
+      "validate_dataset_build",
+      "execute_dataset_build",
+      "prepare_dynamic_family_build",
+      "submit_dynamic_family_build",
+    ],
   ),
 ]);
 

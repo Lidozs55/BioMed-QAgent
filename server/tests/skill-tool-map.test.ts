@@ -62,6 +62,7 @@ describe("stable Skill ↔ Tool mapping", () => {
     expect(core?.tools).toEqual([
       "validate_dataset_build",
       "execute_dataset_build",
+      "prepare_dynamic_family_build",
       "submit_dynamic_family_build",
     ]);
   });

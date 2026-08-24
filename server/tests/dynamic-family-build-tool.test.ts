@@ -192,6 +192,7 @@ describe("dynamic family build tool boundary", () => {
   test("exposes one callback-backed Agent tool without weakening parsing", async () => {
     let received: unknown;
     const tool = createDynamicFamilyBuildTool({
+      requirePreflight: false,
       submit: async (value) => {
         received = value;
         return { ok: true, build_id: value.build_proposal.build_id };

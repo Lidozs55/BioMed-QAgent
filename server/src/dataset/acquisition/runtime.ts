@@ -116,6 +116,13 @@ export interface CoreAcquisitionResult {
   extractionAssets: RegisteredSourceAssetRef[];
 }
 
+export interface CoreAcquisitionPlan {
+  readonly requestIdentityDigest: string;
+  readonly providerId: string;
+  readonly implementationDigest: string;
+  readonly recipe: WorkflowRecipeRef | null;
+}
+
 export class CoreAcquisitionError extends Error {
   readonly retryable: boolean;
   readonly details: { provider_id: string; error_code: string | null; attempts: number };
@@ -163,6 +170,24 @@ export class CoreAcquisitionRuntime {
     this.#registry = options.registry;
     this.#maxAttempts = options.maxAttempts ?? 3;
     this.#registrar = options.registrar ?? null;
+  }
+
+  /**
+   * Resolve and validate a provider request without downloading, registering,
+   * or creating an acquisition attempt. Provider `plan` is the existing cheap
+   * admission seam; the returned identity is deterministic for the request.
+   */
+  async plan(rawRequest: CoreAcquisitionRequest): Promise<CoreAcquisitionPlan> {
+    const { request, handler, recipe } = this.#registry.resolve(rawRequest, this.#taskId);
+    const implementationDigest = recipe?.implementation_digest ?? handler.implementationDigest;
+    const requestIdentityDigest = acquisitionRequestIdentity(request, implementationDigest);
+    await handler.plan(request);
+    return Object.freeze({
+      requestIdentityDigest,
+      providerId: handler.providerId,
+      implementationDigest,
+      recipe,
+    });
   }
 
   async acquire(rawRequest: CoreAcquisitionRequest, signal?: AbortSignal): Promise<CoreAcquisitionResult> {

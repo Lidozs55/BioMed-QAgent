@@ -1,12 +1,16 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 
-import { DEFAULT_RUNTIME_LIMITS, type RuntimeLimits } from "@biomed/contracts";
+import { DEFAULT_RUNTIME_LIMITS, type DynamicFamilyPreflightReceipt, type RuntimeLimits } from "@biomed/contracts";
 
 import type { BioMedAgentAdapter, BioMedModelConfig } from "../agent/contracts.js";
 import { PiAgentAdapter } from "../agent/pi-adapter.js";
 import { createDatasetBuildTools } from "../agent/tools/dataset-build.js";
-import { createDynamicFamilyBuildTool } from "../agent/tools/dynamic-family-build.js";
+import {
+  createDynamicFamilyBuildTool,
+  createPrepareDynamicFamilyBuildTool,
+  type ParsedDynamicFamilyBuildSubmission,
+} from "../agent/tools/dynamic-family-build.js";
 import { createBusinessToolBundle } from "../agent/tools/business-tools.js";
 import { createDeclarativeDatabaseTools } from "../agent/tools/declarative-db.js";
 import { assertUniqueToolNames } from "../agent/tools/registry.js";
@@ -40,6 +44,12 @@ import {
 import { coreEventToPayload } from "../dataset/service/events.js";
 import { createDatasetCoreService } from "../dataset/service/dataset-core.js";
 import { submitDynamicFamilyBuild } from "../dataset/dynamic-family/submission.js";
+import {
+  dynamicFamilyPreflightSubmissionDigest,
+  prepareDynamicFamilyBuild,
+  validateDynamicFamilyPreflightReceipt,
+} from "../dataset/dynamic-family/preflight.js";
+import type { DynamicFamilyAcquisitionPlanningInput } from "../dataset/dynamic-family/preflight.js";
 import { publishDynamicFamily } from "../dataset/dynamic-family/publication.js";
 import { TypeScriptDatasetCore } from "../dataset/service/ts-core.js";
 import { PublicHttpClient } from "../external/network/http-client.js";
@@ -343,6 +353,11 @@ export async function createPhase3Runtime(
       let currentRunId = runId;
       let currentPiSessionId = "pi_session_pending";
       let buildResult: import("@biomed/contracts").BuildResult | null = null;
+      let dynamicFamilyGeneration = 0;
+      const dynamicFamilyPreflight = new Map<string, {
+        readonly receipt: DynamicFamilyPreflightReceipt;
+        readonly submission: ParsedDynamicFamilyBuildSubmission;
+      }>();
       // Agent-owned directory: data/workspaces/<taskId> (plan §2.1).
       const workspaceRoot = await workspaceManager.ensure(taskId);
       // Framework-owned output: data/output/tasks/<taskId> (plan §3.2).
@@ -473,8 +488,57 @@ export async function createPhase3Runtime(
             return [] as Awaited<ReturnType<typeof createDeclarativeDatabaseTools>>;
           });
       const workspaceTools = createWorkspaceTools(workspace);
+      const planCoreAcquisition = async (
+        submission: ParsedDynamicFamilyBuildSubmission,
+        { binding, request }: DynamicFamilyAcquisitionPlanningInput,
+      ) => acquisitionRuntime.plan({
+        schema_version: "1.0",
+        request_id: `preflight_${submission.build_proposal.build_id}_${binding.binding_id}`,
+        task_id: taskId,
+        build_id: submission.build_proposal.build_id,
+        binding_id: binding.binding_id,
+        mode: "builtin",
+        provider_id: request.provider_id,
+        recipe_id: null,
+        recipe_version: null,
+        parameters: { ...request.parameters },
+      });
+      const dynamicFamilyPrepareTool = createPrepareDynamicFamilyBuildTool({
+        prepare: async (submission) => {
+          const receipt = await prepareDynamicFamilyBuild({
+            taskId,
+            buildId: submission.build_proposal.build_id,
+            generation: dynamicFamilyGeneration,
+            submission,
+            runtimeLimits: limits,
+            planAcquisition: (planning) => planCoreAcquisition(submission, planning),
+          });
+          dynamicFamilyPreflight.set(receipt.receipt_digest, { receipt, submission });
+          return receipt;
+        },
+      });
       const dynamicFamilyTool = createDynamicFamilyBuildTool({
-        submit: async (submission, signal) => {
+        requirePreflight: true,
+        submit: async (submission, signal, _context, preflightReceipt) => {
+          if (preflightReceipt === undefined) {
+            throw new Error("submit_dynamic_family_build requires a preflight receipt");
+          }
+          const committed = dynamicFamilyPreflight.get(preflightReceipt.receipt_digest);
+          if (committed === undefined) {
+            throw new Error("preflight receipt is unknown, stale, or cross-run");
+          }
+          if (dynamicFamilyPreflightSubmissionDigest(committed.submission) !== dynamicFamilyPreflightSubmissionDigest(submission)) {
+            throw new Error("preflight receipt does not match the submitted build facts");
+          }
+          await validateDynamicFamilyPreflightReceipt({
+            receipt: preflightReceipt,
+            submission,
+            taskId,
+            buildId: submission.build_proposal.build_id,
+            generation: dynamicFamilyGeneration,
+            runtimeLimits: limits,
+            planAcquisition: (planning) => planCoreAcquisition(submission, planning),
+          });
           const registeredSources: Record<string, string> = { ...submission.registered_sources };
           const acquisitionRequestDigests: Record<string, string> = {};
           for (const [bindingId, request] of Object.entries(submission.acquisition_requests)) {
@@ -509,6 +573,10 @@ export async function createPhase3Runtime(
             sourceAssetRegistry,
             taskRoot,
             runtimeLimits: limits,
+            generation: preflightReceipt.generation,
+            preflightReceipt,
+            preflightSubmission: submission,
+            planAcquisition: (planning) => planCoreAcquisition(submission, planning),
             sourceAcquisitionRequestDigests: Object.freeze(acquisitionRequestDigests),
             signal,
           });
@@ -522,6 +590,8 @@ export async function createPhase3Runtime(
             hilGate: approvalGate,
             signal,
           });
+          dynamicFamilyGeneration += 1;
+          dynamicFamilyPreflight.delete(preflightReceipt.receipt_digest);
           const publicationManifestSha = product.publication.publication.manifest_sha256;
           if (publicationManifestSha === undefined) {
             throw new Error("dynamic publication is missing its manifest byte receipt");
@@ -634,6 +704,7 @@ export async function createPhase3Runtime(
         ...bundle.tools,
         ...dynamicTools,
         ...datasetTools,
+        dynamicFamilyPrepareTool,
         dynamicFamilyTool,
         ...importTools,
       ]);
@@ -644,6 +715,7 @@ export async function createPhase3Runtime(
           ...bundle.tools,
           ...dynamicTools,
           ...datasetTools,
+          dynamicFamilyPrepareTool,
           dynamicFamilyTool,
           ...importTools,
         ],
