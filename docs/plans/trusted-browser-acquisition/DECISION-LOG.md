@@ -208,6 +208,13 @@ risks, and verification results for later audit.
   tests to external availability or creating a publication in the smoke path.
 - Status: both live downloads passed with HTTP 200 and verified SHA-256 receipts.
 
+## 2026-08-24 / D-032
+
+- Decision: browser parser/integration results use an explicit `BrowserPublicationHandoff`; they are not cast to `SubmitDynamicFamilyBuildResult` or treated as transform receipts.
+- The handoff binds task/run/build/generation, preflight, selected projection tables, integrated result manifests, source acquisition provenance, browser evidence digests, and a Core-only trusted root.
+- Every selected table must carry integrated data plus provenance and confidence evidence; missing closure fails closed.
+- Publication adapter work remains separate from this handoff contract.
+
 ## 2026-08-24 / D-025
 
 - Decision: Browser family materialization requires non-empty provenance and
