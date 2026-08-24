@@ -100,6 +100,7 @@ pnpm test:full                    # full-speed tests (fastest local run)
 pnpm lint                         # workspace lint
 pnpm typecheck                    # workspace TypeScript checks
 pnpm build                        # workspace production builds
+pnpm docs:check                   # current Markdown local-link validation
 ```
 
 Tests run with bounded concurrency by default; for concurrency, CI behavior, and

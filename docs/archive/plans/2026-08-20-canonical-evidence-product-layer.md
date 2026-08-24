@@ -8,8 +8,8 @@ Long-term additive semantic design reference. Phase 0 (`ProductRequirementManife
 roadmap**; they are not the current default execution sequence.
 
 The supplementary-transform portion of this document is superseded as a target
-execution model by the Proposed [ADR-039](../adr/039-family-transform-host.md)
-and the [Family Host + Transform Host plan set](family-host/README.md): the
+execution model by the Proposed [ADR-039](../../adr/039-family-transform-host.md)
+and the [Family Host + Transform Host plan set](family-host-2026-08-21/README.md): the
 future executable boundary is one isolated `DatasetTransform` Host, not a
 second `RegisteredTransform` ABI. Until ADR-039 is accepted, the current
 candidate-only restriction remains in force.
@@ -179,7 +179,7 @@ a Gold4-specific escape hatch.
 Only after the IR/package need is justified and the Transform Host security gates
 are accepted should the project add one versioned `DatasetTransform` ABI. An Agent
 may submit candidate source, but production execution must use the isolated Host
-planned in `docs/plans/family-host/03-transform-host-security.md`.
+planned in `docs/archive/plans/family-host-2026-08-21/03-transform-host-security.md`.
 
 The Host/Core boundary must bind:
 

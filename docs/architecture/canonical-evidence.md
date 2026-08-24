@@ -1,9 +1,10 @@
 # Canonical Evidence Product Layer
 
-This chapter defines the semantic product layer planned in
-[the implementation plan](../plans/2026-08-20-canonical-evidence-product-layer.md).
-It is additive to the existing Dataset Core pipeline and does not create an
-Agent-controlled workflow graph.
+This chapter defines the semantic product layer introduced by
+[ADR-038](../adr/038-canonical-evidence-product-layer.md). It is additive to the
+existing Dataset Core pipeline and does not create an Agent-controlled workflow
+graph. The completed implementation plan is historical and remains under
+`docs/archive/plans/`.
 
 ## Purpose
 

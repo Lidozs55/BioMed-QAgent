@@ -2,7 +2,13 @@
 
 ## Status
 
-Accepted — 2026-08-12.
+Superseded — 2026-08-14 by the Phase 8 retirement of the legacy Dataset Core.
+
+The decision below remains the Phase 1 transport record. The bridge and
+`server/src/legacy/` no longer exist; Python is now limited to the persistence
+bridge described in [the architecture](../ARCHITECTURE.md). See
+[PHASE8_FINAL_VERIFICATION.md](../migration/PHASE8_FINAL_VERIFICATION.md) for
+retirement evidence.
 
 ## Context
 

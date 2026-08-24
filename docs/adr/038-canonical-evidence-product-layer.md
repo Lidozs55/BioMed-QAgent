@@ -2,9 +2,14 @@
 
 ## Status
 
-Proposed — 2026-08-20.
+Proposed — 2026-08-20; partially implemented.
 
-> The supplementary-transform execution model in this proposal is superseded as a target by the Proposed [ADR-039](039-family-transform-host.md): the future boundary is one isolated `DatasetTransform` Host, while this ADR's ProductAssessment and canonical evidence decisions remain the semantic foundation. Until ADR-039 is accepted, the existing candidate-only restriction remains in force.
+> [ADR-039](039-family-transform-host.md) is now Accepted and supersedes this
+> proposal's supplementary/isolated transform target with the explicit
+> `in_process_unisolated` fixed slot. The ProductAssessment and canonical
+> evidence portions remain the proposed semantic foundation and are implemented
+> incrementally; this status does not by itself authorize new production
+> packages or relax Publisher gates.
 
 ## Context
 

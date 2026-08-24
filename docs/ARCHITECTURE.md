@@ -1,18 +1,16 @@
 
 # BioMed-QAgent 架构
 
-> **文档元数据（documentation-lifecycle）**
+> **文档元数据**
 >
 > - **受众**：所有在本仓库工作的 agent 与工程师；前端、后端、测试、运维评审。
 > - **权威性**：本文是系统架构的**单一权威入口**（source of truth）。
 >   任何与本文矛盾的实现都视为缺陷；任何架构变更必须先修订对应章节或新增 ADR。
-> - **职责分工**：本文回答"系统是什么、怎么组织、约束是什么"；具体决策的
->   "为什么"由 ADR 索引（[adr/README.md](adr/README.md)）承担；历史实现规格
->   （已归档）见 [archive/BioMed-QAgent_Pipeline_Refactor_Design.md](archive/BioMed-QAgent_Pipeline_Refactor_Design.md)；
->   执行任务由 [TODO.md](TODO.md) 承担；**功能/能力现状（能做什么，面向
->   汇报）由 [FEATURES.md](FEATURES.md) 承担**。各文档不互相复制。
-> - **实现状态**：迁移 Phase 0-9 全部完成（2026-08-16）；显式 `in_process_unisolated` Family Host/Core publication chain 已形成稳定 `main` 基线；当前处于 Phase 4 Gold
->   审计向 Phase 5 hardening/release 过渡的系统收敛阶段。唯一正式拓扑为
+> - **职责分工**：本文回答“系统是什么、怎么组织、约束是什么”。全仓文档职责与
+>   生命周期见 [文档地图](README.md)，决策原因见 [ADR 索引](adr/README.md)，
+>   当前工作见 [TODO.md](TODO.md)，能力现状见 [FEATURES.md](FEATURES.md)。
+> - **实现状态**：迁移 Phase 0-9 已完成；显式 `in_process_unisolated` Family Host/Core
+>   publication chain 已形成稳定 `main` 基线。唯一正式拓扑为
 >   TypeScript Host 权威实现 formal `/api/v1`、durable Task/Run/Event、模型设置、
 >   product API 与 TS Dataset Core；Agent = Pi（`server/src/agent/pi-adapter.ts`）。
 >   legacy FastAPI / Python Core / experimental Pi / rollback feature flags 已全部
@@ -21,20 +19,16 @@
 > - **验证与失效**：每个里程碑、每次新增/修订 ADR、数据族接入或执行模型变化
 >   时对照本文校验一致性；与代码现状矛盾且未标注待落地、或被新 ADR 推翻而未
 >   同步修订时，本文标记为 `stale`。
-> - **最后验证（Last Verified）**：2026-08-21。
+> - **最后验证（Last Verified）**：2026-08-24（对照 `main@a884b159`）。
 > - **交叉引用约定**：本文档章节写作 `§N`；引用 ADR 索引的章节写作 `ADR §N`。
 
 ---
 
-## 文档地图
+## 架构章节地图
 
-除下表按章节拆分外，另设**功能/能力全景**文档：面向汇报与不了解系统的协作者，
-描述"系统能做什么"并映射赛题评价维度——见
-[FEATURES.md](FEATURES.md)（本节涉及的功能名词与其权威定义均立足本文，功能文档
-不重复解释契约与边界）。未来演进方向统一见
-[architecture/roadmap.md](architecture/roadmap.md)。
-
-章节编号在拆分后保持原样（如 §14.2 位于 runtime-events.md）。
+本表只索引架构章节；产品、操作、计划、证据与历史文档统一由
+[文档地图](README.md) 导航。章节编号在拆分后保持原样（如 §14.2 位于
+`runtime-events.md`）。
 
 | 章节 | 主题 | 位置 |
 | --- | --- | --- |
@@ -47,35 +41,12 @@
 | §18, §21-§23, 附录 A | 迁移历史 / Demo 决策 / 待决问题 / 非目标 / 被否决方案 | [architecture/roadmap.md](architecture/roadmap.md) |
 | §19 | 顶层不变量 | 本文 |
 | — Skill 自生成/自迭代 | 流程固化 + 可拆卸工具包 + 自迭代闭环 | [architecture/skill-self-iteration.md](architecture/skill-self-iteration.md) |
-| §24 | 文档治理 | 本文 |
-| — 当前收敛路线 | Phase 4 Gold audit → Phase 5 hardening/release | [plans/2026-08-20-phase4-to-phase5-hardening-roadmap.md](plans/2026-08-20-phase4-to-phase5-hardening-roadmap.md) |
-| — 近期执行 | Gold evaluator E1-E5 | [plans/2026-08-20-gold-evaluator-near-term-plan.md](plans/2026-08-20-gold-evaluator-near-term-plan.md) |
+| §24 | 架构文档更新规则 | 本文 |
 | — FamilySpec/Core + dynamic transform | 显式 `in_process_unisolated` production route；不是sandbox/安全边界；Core仍独占B3/assessment/publication | [architecture/FAMILY-HOST-03-execution-constraints.md](architecture/FAMILY-HOST-03-execution-constraints.md) + [ADR-039](adr/039-family-transform-host.md) |
-| — 缓存设计（现行） | Cache 契约、Schema 标识与构建参数（详见 ADR-015 与 §9-13） | [architecture/result-validation.md](architecture/result-validation.md) §9-13 + [ADR-015](adr/015-cache-schema-build-parameters.md)；历史详细设计见 [archive/cache-design-2026-08.md](archive/cache-design-2026-08.md) |
+| — 缓存设计 | Cache 契约、Schema 标识与构建参数 | [architecture/result-validation.md](architecture/result-validation.md) §9-13 + [ADR-015](adr/015-cache-schema-build-parameters.md) |
 | — 模型供应商参数 | 供应商/模型参数与目录事实（现行 TS `server/src/settings/model-registry/`） | [architecture/model-provider-params.md](architecture/model-provider-params.md) |
 | — 运行限制 | 运行时资源上限与设置契约 | [architecture/runtime-limits.md](architecture/runtime-limits.md) |
 | — 测试并发预算 | 本地有界并发、CI 放宽与 worker 预算 | [architecture/test-concurrency.md](architecture/test-concurrency.md) |
-| — 代码重复审计 | jscpd 重复代码审计报告 | [audit/code-audit-jscpd.md](audit/code-audit-jscpd.md) |
-
-### 文档位置变更对照（2026-08-21 整理）
-
-> 本仓库 2026-08-21 做过一轮文档解耦/清理。**没有内容被删除**：文档只移动/归档，
-> 或可从 git 历史恢复。找不到旧路径时按此表定位：
-
-| 原路径 | 现在位置 |
-| --- | --- |
-| `docs/LEFTOVERS.md` | `docs/archive/LEFTOVERS-2026-08-09.md`（开放项已并入 `docs/ISSUES.md`） |
-| `docs/CACHE_DESIGN.md` | `docs/archive/cache-design-2026-08.md`（现行缓存见 ADR-015 + `architecture/result-validation.md` §9-13） |
-| `docs/MODEL_PROVIDER_PARAMS.md` | `docs/architecture/model-provider-params.md` |
-| `docs/runtime-limits.md` | `docs/architecture/runtime-limits.md` |
-| `docs/test-concurrency.md` | `docs/architecture/test-concurrency.md` |
-| `docs/code-audit-jscpd.md` | `docs/audit/code-audit-jscpd.md` |
-| `docs/BioMed-QAgent_Architecture_Decisions_and_Lessons.md` | 拆分：`docs/adr/001-*` ~ `016-*` + `docs/adr/legacy-decisions-and-lessons.md` |
-| `docs/BioMed-QAgent_Pipeline_Refactor_Design.md` | `docs/archive/BioMed-QAgent_Pipeline_Refactor_Design.md`（历史设计） |
-| `.claude/skills/shadcn/` 与 `.agents/skills/shadcn/` | **保留（框架适配副本，非冗余）**：`.agents/` 供 Codex/OpenAI agent，`.claude/` 供 Claude Code；内容一致，各框架各读各的，勿当作重复清理 |
-| `.superpowers/` | 已删除（历史生成报告，git 历史可恢复） |
-| `audit-results/` | 已删除（一次性审计快照，git 历史可恢复） |
-| `assets/logo/*-v2..v5` | 已删除（被替代版本，git 历史可恢复） |
 
 ---
 ## 1. 产品定义与边界
@@ -380,49 +351,25 @@ supersedes_publication_id
 
 ## 24. 文档治理
 
-### 24.1 文档权威性矩阵
+全仓文档类型、生命周期、归档和不重复规则统一由 [文档地图](README.md) 维护，
+本文不复制该矩阵。架构侧额外遵循：
 
-| 主题 | 权威文档 | 状态 |
-| --- | --- | --- |
-| 系统架构（是什么 / 怎么组织 / 约束） | `docs/ARCHITECTURE.md`（本文） | V2 目标，权威 |
-| 功能 / 能力全景（能做什么，面向汇报） | `docs/FEATURES.md` | 功能现状，权威（架构语义以本文为准） |
-| 未来演进方向（待决问题 / 非目标等） | `docs/architecture/roadmap.md` | 规划与已否决方案，权威 |
-| 架构决策（为什么） | `docs/adr/README.md` | ADR 索引（001-038），权威 |
-| 迁移执行记录（historical） | `docs/migration/` | 已完成迁移（Phase 0-8）的执行记录，不反映当前系统 |
-| V2 重构设计（历史） | `docs/archive/BioMed-QAgent_Pipeline_Refactor_Design.md` | Python backend 时代提案，已被 Phase 8 TS 迁移取代，仅参考 |
-| V1 架构（历史现状） | `docs/archive/ARCHITECTURE_V1.md` | Legacy，仅参考 |
-| 执行任务 | `docs/TODO.md` | 任务清单，不承担架构解释 |
-| 赛题背景与评分 | `PROBLEM.md` | 外部约束，权威 |
-| Agent 通用规则 | `AGENTS.md` | 工作流约束，权威 |
+- 重大边界变化必须新增 ADR，不能在 Prompt、TODO 或实现笔记中悄悄改变；
+- ADR 接受或替代后同步本文及对应 `architecture/` 章节，并更新顶部 `Last Verified`；
+- 与代码矛盾且未标注待落地的章节应立即标为 `stale` 并登记修复；
+- Prompt 只表达意图层原则，稳定规则进入 contracts、Core 或 versioned policy。
 
-### 24.2 不重复规则
-
-- **一个概念一处权威**：每个架构概念只在本文定义权威表述；其他文档引用本文而
-  不复述。
-- **历史 Review 与 Survey 不作为现行架构依据**：已推翻结论必须标注
-  `superseded by ADR-xxx`。
-- **TODO 不承担架构解释**：TODO 只记录执行任务，长期架构解释必须进入本文或新
-  ADR。
-- **Prompt 不承担 Workflow Engine 职责**：稳定规则进入契约和服务端 Validator；
-  Prompt 只保留意图层原则（见 ADR §21.8 踩坑）。
-
-### 24.3 ADR 流程
-
-每个重大边界变化必须新增 ADR，不在 Prompt 或 TODO 中悄悄改变。ADR 形成后同步
-修订本文相关章节，并在本文顶部元数据更新 `Last Verified`。本文与代码现状矛盾
-且未标注为待落地时，标记 `stale` 并在下一里程碑修复。
-
-### 24.4 新增数据族 / 来源的最小文档要求
+### 24.1 新增数据族 / 来源的最小文档要求
 
 新增数据族或来源时，必须更新：
 
 1. §3.2（数据族与行粒度）、§7（来源能力）、§10（Validation Profile）、
    §16（Skill 仓库）相关章节（位置见上文文档地图）；
 2. 对应 ADR（若涉及边界变化）；
-3. `docs/TODO.md` 的执行任务条目；
+3. 仍有开放工作时更新 `docs/TODO.md`；
 4. Schema Registry 与 Validation Profile 注册条目。
 
-### 24.5 防止再次走偏的简短规则
+### 24.2 防止再次走偏的简短规则
 
 开始设计任何新功能前，先回答三句话：
 
