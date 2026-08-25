@@ -93,6 +93,8 @@ interface AgentComposerProps {
   contextTokensUsed?: number;
   /** Source of the context usage value */
   contextTokensSource?: "runtime" | "ui_estimate";
+  /** Whether a context compaction request is currently in progress. */
+  compacting?: boolean;
   /** Called when the user requests context compaction */
   onCompact?: () => void;
 }
@@ -122,6 +124,7 @@ export function AgentComposer({
   contextWindow,
   contextTokensUsed,
   contextTokensSource,
+  compacting = false,
   onCompact,
 }: AgentComposerProps) {
   // Attachment state (legacy, always applicable)
@@ -346,6 +349,7 @@ export function AgentComposer({
             usedTokens={contextTokensUsed ?? 0}
             totalTokens={contextWindow}
             source={contextTokensSource}
+            compacting={compacting}
             onCompact={onCompact}
           />
         )}

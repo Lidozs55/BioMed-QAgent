@@ -11,6 +11,8 @@ import {
 import {
   applyContextUsageEvent,
   applyConversationCompactedEvent,
+  applyConversationCompactionFailedEvent,
+  applyConversationCompactionStartedEvent,
   applyFixtureEvent,
   applyPublicationCreatedEvent,
   applyRunQueuedEvent,
@@ -161,6 +163,14 @@ export function reduceRuntimeEvent(
     }
     case "conversation_compacted": {
       task = applyConversationCompactedEvent(task, envelope, payload);
+      break;
+    }
+    case "conversation_compaction_started": {
+      task = applyConversationCompactionStartedEvent(task, envelope, payload);
+      break;
+    }
+    case "conversation_compaction_failed": {
+      task = applyConversationCompactionFailedEvent(task, envelope, payload);
       break;
     }
     case "context_usage": {

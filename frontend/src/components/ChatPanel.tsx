@@ -299,9 +299,14 @@ export function ChatPanel({
   );
 
   // Context compaction handler
-  const [, setCompacting] = useState(false);
+  const [compacting, setCompacting] = useState(false);
   const handleCompact = useCallback(async () => {
-    if (activeTaskId === null || compactTask === undefined) return;
+    if (activeTaskId === null || compactTask === undefined) {
+      toast.info("当前没有可压缩的对话内容", {
+        description: "请先选择一个包含对话的任务",
+      });
+      return;
+    }
     setCompacting(true);
     try {
       await compactTask(activeTaskId);
@@ -1171,6 +1176,7 @@ export function ChatPanel({
                 contextWindow={showContextUsage ? effectiveContextWindow : undefined}
                 contextTokensUsed={estimatedTokens}
                 contextTokensSource={contextTokensSource}
+                compacting={compacting}
                 onCompact={handleCompact}
               />
               {continuationError && <p role="alert" className="mt-2 px-2 text-xs text-destructive">{continuationError}</p>}

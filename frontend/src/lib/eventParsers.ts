@@ -14,6 +14,7 @@ const RUNTIME_TYPES = new Set([
   "run_queued", "run_started", "run_finalizing", "run_completed", "run_failed",
   "run_cancel_requested", "run_cancelled", "run_interrupted", "publication_created",
   "assistant_delta", "assistant_reasoning_delta", "tool_started", "context_usage", "conversation_compacted",
+  "conversation_compaction_started", "conversation_compaction_failed",
   "permission_requested", "permission_resolved",
   "operation_started", "operation_progress", "operation_completed", "operation_failed",
   "subagent_queued", "subagent_started", "subagent_progress", "subagent_completed",
