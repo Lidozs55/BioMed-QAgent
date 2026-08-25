@@ -63,14 +63,15 @@ describe("stable Skill ↔ Tool mapping", () => {
     const core = SKILL_TOOL_MAP.find((mapping) => mapping.name === "dataset-construction");
     expect(core).toBeDefined();
     expect(core?.tools).toEqual([
+      "inspect_dataset_build_routes",
       "validate_dataset_build",
       "execute_dataset_build",
       "prepare_dynamic_family_build",
       "submit_dynamic_family_build",
     ]);
-    expect(core?.routing).toMatch(/choose exactly one route/i);
-    expect(core?.routing).toMatch(/static schema/i);
-    expect(core?.routing).toMatch(/dynamic acquisition schema/i);
+    expect(core?.routing).toMatch(/inspect routes first/i);
+    expect(core?.routing).toMatch(/exact static match/i);
+    expect(core?.routing).toMatch(/acquisition-only carriers/i);
   });
 
   test("routes GWAS Catalog through its wired Dynamic Family provider", () => {

@@ -459,6 +459,7 @@ export async function createDurableAgentRuntime(
         sessionDir,
         tools: workspace.tools,
         initialToolNames: [
+          "inspect_dataset_build_routes",
           "validate_dataset_build",
           "execute_dataset_build",
           "prepare_dynamic_family_build",

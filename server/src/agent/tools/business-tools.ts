@@ -142,6 +142,7 @@ export async function createBusinessToolBundle(
   register([createResearchDataGuidanceTool({ docsRoot: context.guidanceDocsRoot })], "research_data_guidance");
   // This task/run-scoped tool is injected by phase3-composition once the
   // authoritative SourceAssetRegistry and Dataset Core context exist.
+  unavailable.add("inspect_dataset_build_routes");
   unavailable.add("prepare_dynamic_family_build");
   unavailable.add("submit_dynamic_family_build");
 

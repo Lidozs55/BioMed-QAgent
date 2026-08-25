@@ -196,8 +196,10 @@ describe("dynamic family build tool boundary", () => {
     } });
     const schema = JSON.stringify(tool.parameters);
     expect(prepare.description).toMatch(/do not prevalidate.*validate_dataset_build/i);
-    expect(prepare.description).toMatch(/acquisition_requests schema is authoritative/i);
-    expect(tool.description).toMatch(/provider listed in the acquisition_requests schema is wired/i);
+    expect(prepare.description).toMatch(/inspect_dataset_build_routes/i);
+    expect(prepare.description).toMatch(/every input is dynamic-bindable/i);
+    expect(tool.description).toMatch(/dynamic\.direct_bindings/i);
+    expect(tool.description).toMatch(/execution contract, not proof of semantic or publication closure/i);
     expect(schema).toContain('"table_definitions"');
     expect(schema).toContain('"field_names"');
     expect(schema).toContain("Synchronous TypeScript only");

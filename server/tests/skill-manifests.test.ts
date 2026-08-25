@@ -174,15 +174,15 @@ describe(".pi/skills manifest integrity", () => {
   test("dataset-construction never bypasses prepare after a committed fact change", async () => {
     const skill = await readSkill("dataset-construction");
     expect(skill.body).toMatch(/switch immediately to\s+the fixed dynamic\s+protocol/i);
-    const stepFive = skill.body.slice(skill.body.indexOf("5. Treat a failed"));
-    expect(stepFive).toMatch(/fixed dynamic\s+protocol/i);
-    const prepare = stepFive.indexOf("prepare_dynamic_family_build");
-    const submit = stepFive.indexOf("submit_dynamic_family_build", prepare);
+    const recoveryStep = skill.body.slice(skill.body.indexOf("6. Treat a failed"));
+    expect(recoveryStep).toMatch(/fixed dynamic\s+protocol/i);
+    const prepare = recoveryStep.indexOf("prepare_dynamic_family_build");
+    const submit = recoveryStep.indexOf("submit_dynamic_family_build", prepare);
     expect(prepare).toBeGreaterThanOrEqual(0);
     expect(submit).toBeGreaterThan(prepare);
-    expect(stepFive.slice(prepare, submit + "submit_dynamic_family_build".length))
+    expect(recoveryStep.slice(prepare, submit + "submit_dynamic_family_build".length))
       .toMatch(/descriptor digest/i);
-    expect(stepFive).not.toMatch(/switch immediately to\s+\n?\s*`submit_dynamic_family_build`/i);
+    expect(recoveryStep).not.toMatch(/switch immediately to\s+\n?\s*`submit_dynamic_family_build`/i);
   });
 
   test("dataset construction stays source-neutral while source skills own provider rules", async () => {

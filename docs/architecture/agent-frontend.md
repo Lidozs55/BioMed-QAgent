@@ -22,7 +22,8 @@
 - **直接工具实现**：业务工具在 `server/src/agent/tools/`（PubMed/NCBI、GEO、
   GDC/Xena、GWAS Catalog、ChEMBL/UniProt/PDB/PubChem/Reactome、浏览器与网页截图、PDF/VLM、
   统计绘图、local cache 等），经 `createBusinessToolBundle` 注册进 Pi Session。
-  生产首轮只激活 Dataset Core 构建工具和 `activate_agent_tools` 入口；其他工具
+  生产首轮只激活只读 `inspect_dataset_build_routes`、Dataset Core 构建工具和
+  `activate_agent_tools` 入口；其他工具
   通过入口按需激活，并在同一 Session 内累计保留，避免把完整 JSON Schema 一次性
   发送给模型或让后续激活意外移除已用工具。工具仍受同一权限、Core 和发布门禁约束，
   激活不改变能力边界。首轮 system context 同时注入当前 Session 完整但有界的
@@ -33,10 +34,11 @@
 - **GWAS Catalog 路由**：`lookup_gwas_catalog` 通过官方 EMBL-EBI HAL API 将 PMID
   解析为 GCST study，或按 GCST/rsID 返回有界 association 证据；缺失的总数和字段
   保持 `null`。该工具只负责 discovery，正式 Dynamic Family 输入仍由 Core provider
-  `gwas-catalog.associations.v1` 重新获取。该 provider 出现在 Dynamic Family 工具的
-  `acquisition_requests` schema 中即表示 dynamic acquisition 已接线；GWAS Catalog
-  不在 static family/schema 枚举中不表示该 provider 不可用，也不要求先新增 static
-  GWAS family。
+  `gwas-catalog.associations.v1` 重新获取。`inspect_dataset_build_routes` 从生产 static
+  Registry 和统一 provider catalog 实时投影 route facts：该 provider 属于可直接绑定的
+  dynamic input；GWAS Catalog 不在 static family/schema 枚举中不表示 provider 不可用，
+  也不要求先新增 static GWAS family。该事实只证明 acquisition/输入解码已接线，不证明
+  FamilySpec、Projection、transform、源站可达性或 publication 已闭环。
 - **四个类别**：discovery / acquisition / processing / analysis。
 - 不变式不变：download 记录 `DownloadAttempt`，成功校验后才返回
   `SourceAsset`；processing 只接受成功的本地 `SourceAsset` 或受控
@@ -48,6 +50,10 @@
 Main Agent 直接持有全部业务工具（`search_pubmed`、`search_geo`、
 `describe_geo`、`download_geo`、…），加上：
 
+- `inspect_dataset_build_routes`：无参数、无网络、无持久状态的 capability view；
+  从 production static family Registry 与 Core provider catalog 生成 exact static matches、
+  Dynamic Family 可直接绑定输入，以及仍需 provenance-bound extraction 的 acquisition-only
+  carrier。它不解释 topic，也不验证或发布 build；
 - `validate_dataset_build_spec` / `execute_dataset_build`：校验并提交自包含
   `DatasetBuildSpec`（唯一正式产物入口）。`execute_dataset_build` 的
   `source_files`、`mapping_files`、`metadata_files` 都按 binding_id 映射；source
@@ -87,13 +93,15 @@ Core 路径、纠正输入、仅重试可重试失败并寻找独立真实来源
 权限或 evidence-bound HIL 挂起的可信调用必须等待原调用恢复，不能以 workspace
 脚本产物替代。
 
-Static 与 Dynamic 工具是互斥的两条规格入口，不是串行探测步骤：只有 family、schema、
-source 和 topology 均在 `validate_dataset_build` schema 中时才走 static
-`validate -> execute`；否则直接走 dynamic `prepare -> submit`。Static validator 的
-拒绝或枚举缺项只描述 static registry，不能用于判断 dynamic provider 是否接线。
-Dynamic 工具 `acquisition_requests` 的 provider 枚举直接派生自
-`provider-catalog.ts`，是该路径的权威 capability view，并由 handler/descriptor 闭包测试
-防止“schema 声称可用但 runtime 未接线”。
+Static 与 Dynamic 工具是互斥的两条规格入口，不是串行探测步骤。dataset-producing
+请求先调用 `inspect_dataset_build_routes`：只有 family、schema、source 和 topology 有
+exact static match 时才走 `validate -> execute`；否则仅在各输入被列为 dynamic-bindable
+或已有 task-owned Core asset 时走 `prepare -> submit`。Static validator 的拒绝或枚举缺项
+只描述 static registry，不能用于判断 dynamic provider 是否接线。Dynamic 工具的
+`acquisition_requests` schema 仍是具体提交的执行契约，但 route capability view 来自同一
+`provider-catalog.ts`；handler/descriptor、route view/schema 均通过派生/闭包测试防止漂移。
+binary archive 即使已有 Core acquisition handler，也会显示为 acquisition-only，不能误报为
+Dynamic transform 已可直接消费。
 
 ### 16.3 用户扩展（声明式数据库）
 

@@ -157,6 +157,7 @@ describe("durable formal Agent runtime", () => {
     const accepted = await admitted.json() as { task_id: string; run_id: string };
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(adapter.configs[0]?.initialToolNames).toEqual([
+      "inspect_dataset_build_routes",
       "validate_dataset_build",
       "execute_dataset_build",
       "prepare_dynamic_family_build",

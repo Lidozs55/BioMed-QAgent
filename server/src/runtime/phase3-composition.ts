@@ -6,6 +6,7 @@ import { DEFAULT_RUNTIME_LIMITS, type RuntimeLimits } from "@biomed/contracts";
 import type { BioMedAgentAdapter, BioMedModelConfig } from "../agent/contracts.js";
 import { PiAgentAdapter } from "../agent/pi-adapter.js";
 import { createDatasetBuildTools } from "../agent/tools/dataset-build.js";
+import { createDatasetRoutePreflightTool } from "../agent/tools/dataset-route-preflight.js";
 import {
   createDynamicFamilyBuildTool,
   createPrepareDynamicFamilyBuildTool,
@@ -778,6 +779,7 @@ export async function createPhase3Runtime(
           }
         },
       });
+      const datasetRoutePreflightTool = createDatasetRoutePreflightTool();
       // Import tasks (user-uploaded files): restore the LLM cleaning flow —
       // inspect the uploaded files and commit the cleaned raw files into the
       // global cache under the user_import namespace.
@@ -789,6 +791,7 @@ export async function createPhase3Runtime(
         ...bundle.tools,
         ...dynamicTools,
         ...datasetTools,
+        datasetRoutePreflightTool,
         dynamicFamilyPrepareTool,
         dynamicFamilyTool,
         ...importTools,
@@ -800,6 +803,7 @@ export async function createPhase3Runtime(
           ...bundle.tools,
           ...dynamicTools,
           ...datasetTools,
+          datasetRoutePreflightTool,
           dynamicFamilyPrepareTool,
           dynamicFamilyTool,
           ...importTools,
