@@ -954,47 +954,22 @@ export function ChatPanel({
                 ? formatActiveItemStatus(activeItem)
                 : buildLabel ?? STATUS_LABELS[activeTask.summary.status]}
             </MarkerContent>
-            {(canCancelActiveRun || (isMobile && subagentCount > 0)) && (
+            {isMobile && subagentCount > 0 && (
               <div className="ml-auto flex items-center gap-2">
-                {canCancelActiveRun && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={cancellingRunId === activeRunId}
-                    onClick={() => void cancelActiveRun()}
-                    aria-label={
-                      cancellingRunId === activeRunId
-                        ? "正在取消…"
-                        : "停止生成"
-                    }
-                  >
-                    {cancellingRunId === activeRunId ? (
-                      <>
-                        <Spinner data-icon="inline-start" aria-hidden="true" />
-                        正在取消…
-                      </>
-                    ) : (
-                      "停止生成"
-                    )}
-                  </Button>
-                )}
-                {isMobile && subagentCount > 0 ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={openSubagentPanel}
-                    aria-label={`查看 ${subagentCount} 个子任务`}
-                  >
-                    {activeSubagentCount > 0 ? (
-                      <Spinner data-icon="inline-start" aria-hidden="true" />
-                    ) : null}
-                    <Badge variant="secondary">
-                      {activeSubagentCount} 个运行中
-                    </Badge>
-                  </Button>
-                ) : null}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={openSubagentPanel}
+                  aria-label={`查看 ${subagentCount} 个子任务`}
+                >
+                  {activeSubagentCount > 0 ? (
+                    <Spinner data-icon="inline-start" aria-hidden="true" />
+                  ) : null}
+                  <Badge variant="secondary">
+                    {activeSubagentCount} 个运行中
+                  </Badge>
+                </Button>
               </div>
             )}
           </Marker>
@@ -1160,6 +1135,9 @@ export function ChatPanel({
                 disabled={!continuationEditable}
                 pending={continuationPending || importPending}
                 sendDisabled={!continuationSendable || !continuationInput.trim()}
+                canStop={canCancelActiveRun}
+                onStop={() => void cancelActiveRun()}
+                stopping={cancellingRunId === activeRunId}
                 compact
                 className="shadow-md"
                 onSubmitFiles={

@@ -5,6 +5,7 @@ import {
   FileIcon,
   ImageIcon,
   PlusIcon,
+  SquareIcon,
   XIcon,
 } from "@phosphor-icons/react";
 
@@ -67,6 +68,12 @@ interface AgentComposerProps {
   disabled?: boolean;
   sendDisabled?: boolean;
   pending?: boolean;
+  /** 任务运行中且可取消时传入：输入为空时按钮变为停止方块并调用 onStop。 */
+  canStop?: boolean;
+  /** 停止按钮点击回调（canStop 且输入为空时生效）。 */
+  onStop?: () => void;
+  /** 停止请求进行中：按钮显示加载态并禁用。 */
+  stopping?: boolean;
   showDataSources?: boolean;
   onDataSourceChange?: () => void;
   /**
@@ -110,6 +117,9 @@ export function AgentComposer({
   disabled = false,
   sendDisabled = false,
   pending = false,
+  canStop = false,
+  onStop,
+  stopping = false,
   showDataSources = false,
   onDataSourceChange,
   onSubmitFiles,
@@ -258,6 +268,19 @@ export function AgentComposer({
   };
 
   const sendDisabledFinal = pending || (hasFiles ? !canSubmitFiles : sendDisabled);
+  // 运行中且输入为空时，发送键切换为“停止生成”空心方块。
+  const stopActive =
+    canStop && !hasFiles && !disabled && !pending && value.trim() === "";
+  const stopInFlight = stopActive && stopping;
+  const submitButtonDisabled =
+    stopInFlight || (stopActive ? false : sendDisabledFinal);
+  const submitButtonAriaLabel = stopInFlight
+    ? "正在取消…"
+    : stopActive
+      ? "停止生成"
+      : pending
+        ? "提交中"
+        : sendAriaLabel;
 
   return (
     <div
@@ -497,12 +520,20 @@ export function AgentComposer({
             type="button"
             size="icon-sm"
             className="rounded-full"
-            onClick={() => void handleSubmit()}
-            disabled={sendDisabledFinal}
-            aria-label={pending ? "提交中" : sendAriaLabel}
+            onClick={() => {
+              if (stopActive && onStop !== undefined) {
+                onStop();
+              } else {
+                void handleSubmit();
+              }
+            }}
+            disabled={submitButtonDisabled}
+            aria-label={submitButtonAriaLabel}
           >
-            {pending ? (
+            {stopInFlight || pending ? (
               <Spinner aria-hidden="true" />
+            ) : stopActive ? (
+              <SquareIcon weight="bold" aria-hidden="true" />
             ) : (
               <ArrowUpIcon weight="bold" aria-hidden="true" />
             )}
