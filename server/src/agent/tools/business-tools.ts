@@ -49,6 +49,12 @@ import { createChartDataVlmTool } from "./extract-chart-data-vlm.js";
 import type { VlmConfig } from "../../processing/vlm/vlm-client.js";
 import type { ToolApprovalGate, ToolHooks, ToolServiceDeps } from "./tool-hooks.js";
 import type { DatasetHILGate } from "../../dataset/review/hil-policy.js";
+import { BrowserAcquisitionEvidenceStore } from "../../runtime/browser-acquisition-store.js";
+import { BrowserAcquisitionProposalStore } from "../../runtime/browser-acquisition-proposal-store.js";
+import { BrowserFormalizationService } from "../../dataset/acquisition/browser-formalization.js";
+import { BrowserParserRecipeRegistry } from "../../dataset/acquisition/browser-recipe-registry.js";
+import { createDefaultRegisteredTableRegistry } from "../../dataset/adapters/registered/index.js";
+import type { SourceAssetRegistry } from "../../runtime/source-assets/registry.js";
 
 export interface BusinessToolBundleContext {
   /** Absolute task root (TaskWorkDir root). */
@@ -83,6 +89,8 @@ export interface BusinessToolBundleContext {
   disabledTools?: ReadonlySet<string>;
   /** Global cache registrar: registers raw downloads into the dataset cache. */
   registrar?: import("../../persistence/cache-registrar.js").CacheRegistrar | null;
+  sourceAssetRegistry?: SourceAssetRegistry;
+  browserRecipeRegistry?: BrowserParserRecipeRegistry;
   /** Task id used as cache provenance (``created_by_task_id``). */
   taskId?: string | (() => string);
 }
@@ -225,10 +233,28 @@ export async function createBusinessToolBundle(
       hooks: context.hooks,
       registrar: context.registrar,
       taskId: context.taskId,
+      runId: context.runId,
+      evidenceStore: new BrowserAcquisitionEvidenceStore({ taskRoot }),
+      proposalStore: new BrowserAcquisitionProposalStore(taskRoot),
+      formalizationHIL: context.hilGate ?? undefined,
+      formalizationService: context.sourceAssetRegistry === undefined
+        ? undefined
+        : new BrowserFormalizationService({
+          evidenceStore: new BrowserAcquisitionEvidenceStore({ taskRoot }),
+          proposalStore: new BrowserAcquisitionProposalStore(taskRoot),
+          sourceAssetRegistry: context.sourceAssetRegistry,
+          recipeRegistry: context.browserRecipeRegistry ?? new BrowserParserRecipeRegistry(createDefaultRegisteredTableRegistry()),
+        }),
       maxDownloadBytes: limits.max_download_mib * 1024 * 1024,
       downloadTimeoutMs: limits.download_timeout_seconds * 1000,
     });
-    register([browserTools.navigatePage, browserTools.downloadFromPage], "browser");
+    register([
+      browserTools.navigatePage,
+      browserTools.downloadFromPage,
+      ...(context.hilGate === null || context.hilGate === undefined
+        ? []
+        : [browserTools.proposeFormalization]),
+    ], "browser");
     const captureTools = createWebVisualCaptureTools({
       taskRoot,
       crawler: context.browser.crawler,

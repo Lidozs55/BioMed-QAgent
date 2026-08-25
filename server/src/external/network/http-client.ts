@@ -31,9 +31,17 @@ import {
 } from "./url-policy.js";
 import { resolveAllAddresses, type AddressResolver } from "./dns.js";
 
+export interface HttpRedirectHop {
+  from_url: string;
+  to_url: string;
+  status: number;
+}
+
 export interface HttpClientResponse {
   status: number;
   headers: Record<string, string>;
+  /** Redirects followed before the final response. */
+  redirectChain?: HttpRedirectHop[];
   /** Streaming body (async iterable of chunks). */
   body: AsyncIterable<Buffer>;
   /** Final URL after redirects. */
@@ -217,6 +225,7 @@ export class PublicHttpClient {
 
     let currentUrl = value;
     let redirected = 0;
+    const redirectChain: HttpRedirectHop[] = [];
     try {
       for (;;) {
         await validateUrl(currentUrl);
@@ -237,6 +246,7 @@ export class PublicHttpClient {
           if (redirected >= maxRedirects) throw new UnsafeUrlError("download exceeded redirect limit");
           const nextUrl = new URL(location, currentUrl).toString();
           await validateRedirect(currentUrl, nextUrl);
+          redirectChain.push({ from_url: currentUrl, to_url: nextUrl, status: response.status });
           currentUrl = nextUrl;
           redirected += 1;
           continue;
@@ -283,6 +293,7 @@ export class PublicHttpClient {
         return {
           status: response.status,
           headers: response.headers,
+          redirectChain: [...redirectChain],
           body: consume(),
           url: currentUrl,
           discard,
