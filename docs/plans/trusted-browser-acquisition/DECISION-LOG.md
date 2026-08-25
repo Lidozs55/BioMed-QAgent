@@ -282,7 +282,7 @@ risks, and verification results for later audit.
 - Browser publication carries the acceptance receipt and skips only the redundant `publication_acceptance` HIL. B3, product assessment, hash checks, generation fences, and immutable publication remain mandatory.
 - A new HIL is required when evidence bytes/digest, source/provenance identity, family/schema/table/input binding, parser recipe, or publication scope changes, or when a later independent data-quality decision is needed.
 - Reason: Requiring a human decision at each deterministic stage was redundant and created avoidable runtime/HIL state complexity without improving the trust boundary.
-- Status: implemented on `feat/browser-evidence-acceptance`, pending focused verification.
+- Status: implemented on `feat/browser-evidence-acceptance`, merged into `feat/trusted-browser-acquisition` as `6360be32`; focused verification passed.
 
 ## 2026-08-24 / D-032
 
