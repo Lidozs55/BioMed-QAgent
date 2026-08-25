@@ -13,16 +13,22 @@ function output(tableId: string): DynamicFamilyTableOutputs {
 }
 
 const projection = { primary_tables: ["one"], supporting_tables: [], derived_tables: [], projection_id: "projection", schema_version: "2.0" } as unknown as Projection;
+const acceptance = { requestId: "hil_browser", reviewId: "review_browser", hilEvidenceDigest: "b".repeat(64), acceptedBrowserEvidenceDigests: ["a".repeat(64)], reviewer: "user" as const, reviewedAt: "2026-08-24T00:00:00Z", reason: null };
 
 describe("createBrowserPublicationHandoff", () => {
   it("accepts a closed browser table handoff", () => {
     const table = output("one");
-    const handoff = createBrowserPublicationHandoff({ taskId: "task", runId: "run", buildId: "build", generation: 1, familySpec: {} as FamilySpec, projection, preflightReceipt: {} as never, tableOutputs: { one: table }, integratedResults: [table.data], sourceAcquisitionProvenance: [{} as never], browserEvidenceDigests: ["a".repeat(64)], trustedRoot: "D:/trusted" });
+    const handoff = createBrowserPublicationHandoff({ taskId: "task", runId: "run", buildId: "build", generation: 1, familySpec: {} as FamilySpec, projection, preflightReceipt: {} as never, tableOutputs: { one: table }, integratedResults: [table.data], sourceAcquisitionProvenance: [{} as never], browserEvidenceDigests: ["a".repeat(64)], browserEvidenceAcceptance: acceptance, trustedRoot: "D:/trusted" });
     expect(handoff.kind).toBe("browser_publication_handoff");
   });
 
   it("rejects missing browser evidence", () => {
     const table = output("one");
-    expect(() => createBrowserPublicationHandoff({ taskId: "task", runId: "run", buildId: "build", generation: 1, familySpec: {} as FamilySpec, projection, preflightReceipt: {} as never, tableOutputs: { one: table }, integratedResults: [table.data], sourceAcquisitionProvenance: [{} as never], browserEvidenceDigests: [], trustedRoot: "D:/trusted" })).toThrow("evidence digests");
+    expect(() => createBrowserPublicationHandoff({ taskId: "task", runId: "run", buildId: "build", generation: 1, familySpec: {} as FamilySpec, projection, preflightReceipt: {} as never, tableOutputs: { one: table }, integratedResults: [table.data], sourceAcquisitionProvenance: [{} as never], browserEvidenceDigests: [], browserEvidenceAcceptance: acceptance, trustedRoot: "D:/trusted" })).toThrow("evidence digests");
+  });
+
+  it("rejects an acceptance that does not cover the publication evidence", () => {
+    const table = output("one");
+    expect(() => createBrowserPublicationHandoff({ taskId: "task", runId: "run", buildId: "build", generation: 1, familySpec: {} as FamilySpec, projection, preflightReceipt: {} as never, tableOutputs: { one: table }, integratedResults: [table.data], sourceAcquisitionProvenance: [{} as never], browserEvidenceDigests: ["c".repeat(64)], browserEvidenceAcceptance: acceptance, trustedRoot: "D:/trusted" })).toThrow("does not cover");
   });
 });

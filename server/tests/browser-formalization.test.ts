@@ -40,7 +40,7 @@ describe("BrowserFormalizationService", () => {
     const result = await new BrowserFormalizationService({
       evidenceStore, proposalStore, sourceAssetRegistry: new SourceAssetRegistry("task_formal", taskRoot),
       recipeRegistry: { resolve: () => ({ ref: { schema_version: "1.0", recipe_id: "fixture.tsv", recipe_version: 1, status: "PROMOTED", implementation_digest: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }, schema_ref: "fixture_schema", adapter_id: "fixture", parser_version: "1", media_types: ["text/tab-separated-values"] }) },
-    }).formalize({ proposal, evidence: parts.evidence, review });
+    }).formalize({ proposal, evidence: parts.evidence, review, expectedHILEvidenceDigest: stored.evidenceDigest, acceptedBrowserEvidenceDigests: [stored.evidenceDigest] });
     expect(result.registration.asset_ref.role).toBe("carrier");
     expect(result.provenance.provider_id).toBe(BROWSER_ACQUISITION_PROVIDER_ID);
     expect(result.proposal.status).toBe("formalized");
@@ -53,6 +53,6 @@ describe("BrowserFormalizationService", () => {
     const parts = fixture(); const evidenceStore = new BrowserAcquisitionEvidenceStore({ taskRoot });
     const stored = await evidenceStore.put(parts.evidence); const proposalStore = new BrowserAcquisitionProposalStore(taskRoot);
     const proposal = await proposalStore.put({ ...parts.proposal, evidence_digest: stored.evidenceDigest });
-    await expect(new BrowserFormalizationService({ evidenceStore, proposalStore, sourceAssetRegistry: new SourceAssetRegistry("task_formal", taskRoot), recipeRegistry: { resolve: () => ({ ref: { schema_version: "1.0", recipe_id: "fixture.tsv", recipe_version: 1, status: "PROMOTED", implementation_digest: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }, schema_ref: "fixture_schema", adapter_id: "fixture", parser_version: "1", media_types: ["text/tab-separated-values"] }) } }).formalize({ proposal, evidence: parts.evidence, review: { ...parts.review, evidence_digest: stored.evidenceDigest, decision: { action: "approve" } } })).rejects.toThrow("was approve");
+    await expect(new BrowserFormalizationService({ evidenceStore, proposalStore, sourceAssetRegistry: new SourceAssetRegistry("task_formal", taskRoot), recipeRegistry: { resolve: () => ({ ref: { schema_version: "1.0", recipe_id: "fixture.tsv", recipe_version: 1, status: "PROMOTED", implementation_digest: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }, schema_ref: "fixture_schema", adapter_id: "fixture", parser_version: "1", media_types: ["text/tab-separated-values"] }) } }).formalize({ proposal, evidence: parts.evidence, review: { ...parts.review, evidence_digest: stored.evidenceDigest, decision: { action: "approve" } }, expectedHILEvidenceDigest: stored.evidenceDigest, acceptedBrowserEvidenceDigests: [stored.evidenceDigest] })).rejects.toThrow("was approve");
   });
 });

@@ -13,12 +13,12 @@ bytes as publication artifacts by default.
 Agent discovery
   -> guarded browser navigation/download
   -> Host-persisted evidence + byte/hash receipt
-  -> Core-owned formalization proposal
-  -> formalization HIL
+  -> Core-owned browser evidence acceptance proposal
+  -> one browser evidence acceptance HIL
   -> fixed recipe/provider formalization
   -> preflight-bound registered carrier
   -> Dataset Core validation/OperationResult
-  -> ProductAssessment/publication HIL
+  -> ProductAssessment and deterministic publication checks
   -> immutable Publication/Artifact API
 ```
 
@@ -57,10 +57,13 @@ identity.
    `failed`. Every transition binds proposal/evidence/recipe/provider digests,
    task/run/build/generation, and source byte hash. Missing state or cross-Host
    continuation fails closed.
-5. Add a closed-contract HIL type named
-   `browser_acquisition_formalization`, with explicit accept/reject actions and
-   a dedicated prompt kind. It authorizes only the exact evidence digest, never
-   publication. ProductAssessment/publication HIL remains separate.
+5. Add a closed-contract HIL type named `browser_evidence_acceptance`, with
+   explicit accept/reject actions and a snapshot covering the exact evidence
+   digest(s), source/provenance, bindings, promoted recipe, and intended
+   publication scope. Acceptance authorizes only the deterministic Core pipeline
+   for that exact closure; it does not authorize changed inputs or arbitrary
+   code. Keep `browser_acquisition_formalization` readable for recovery of old
+   requests, but do not create it for new browser proposals.
 6. Fail closed on redirect-host changes, non-public/authenticated pages, URL
    credentials, mutable URLs without Host snapshots, unsupported media, duplicate
    or ambiguous evidence, digest drift, stale generation, missing/unpromoted
@@ -81,12 +84,13 @@ identity.
 4. Enforce ordering:
 
    ```text
-   evidence receipt -> formalization HIL -> preflight/descriptor -> fixed parser
+   evidence receipt -> browser evidence acceptance HIL -> preflight/descriptor -> fixed parser
    ```
 
-   Parser execution is forbidden while formalization HIL is pending/rejected.
-   Preflight must include accepted evidence digest, fixed carrier identity, recipe
-   digest, source binding, and the tuple must be in the final submission digest.
+   Parser execution is forbidden while browser evidence acceptance is
+   pending/rejected. Preflight must include the accepted evidence digest, fixed
+   carrier identity, recipe digest, source binding, and the tuple must be in the
+   final submission digest.
 5. Run the fixed parser bounded and cancellably. Its output enters private
    quarantine, then existing closed-world OperationResult admission and output
    hash checks.
@@ -102,13 +106,15 @@ identity.
 1. Add a generic proposal tool after browser navigation/download. It cannot
    publish, register provider records, mark evidence trusted, or choose parser
    implementation.
-2. Core creates the formalization HIL containing URL/redirects/final URL,
-   byte/hash, media type, source identity, recipe, intended bindings, and risks.
-   Resolve only the valid decision object for this review type. Rejection/expiry
-   remains fail-closed.
-3. Permit one blocking HIL at a time. Formalization HIL resolves before parser
-   execution and before any later publication HIL is created. Same-Host restart
-   may resume exact persisted state; cross-Host unresolved HIL fails closed.
+2. Core creates one browser evidence acceptance HIL containing
+   URL/redirects/final URL, byte/hash, media type, source identity, promoted
+   recipe, intended bindings, risks, and intended publication scope. Resolve
+   only the valid decision object for this review type. Rejection/expiry remains
+   fail-closed.
+3. Permit one blocking HIL at a time. Browser evidence acceptance resolves before
+   parser execution; no redundant publication HIL is created for the same
+   accepted closure. Same-Host restart may resume exact persisted state;
+   cross-Host unresolved HIL fails closed.
 4. Return bounded diagnostics distinguishing fetch failure, formalization
    rejection, recipe/parser failure, schema/topology failure,
    identity/provenance mismatch, and publication assessment failure.
@@ -153,12 +159,13 @@ Independent `deepseek-v4-flash` review identified and this plan resolves:
 - closed HIL enum/prompt kind and one-blocking-HIL sequencing;
 - proposal state/restart persistence and cross-Host fail-closed behavior;
 - recipe promotion authority and binary-media parser requirements;
-- separation of generic browser route from Gold-specific adapters.
+- separation of generic browser route from Gold-specific adapters;
+- one-time browser evidence acceptance instead of redundant stage approvals.
 
 Main-thread self-review: this plan preserves Core authority, does not let browser
-bytes become formal by themselves, keeps publication HIL separate, rejects
-Agent-supplied trust/provider/parser identity, and uses existing preflight,
-identity, quarantine, B3, recovery, and Artifact API gates. The first
+bytes become formal by themselves, uses one evidence-bound acceptance closure,
+rejects Agent-supplied trust/provider/parser identity, and keeps preflight,
+identity, quarantine, B3, ProductAssessment, recovery, and Artifact API gates. The first
 implementation slice must be contracts/evidence persistence and negative tests;
 no source-specific adapter may land before that slice passes.
 

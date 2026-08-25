@@ -51,6 +51,32 @@ describe("durable HIL contracts", () => {
     });
   });
 
+  it("parses a one-time browser evidence acceptance review", () => {
+    expect(parseHILRequest({
+      schema_version: "1.0",
+      request_id: "hil_browser_acceptance",
+      task_id: "task_123",
+      run_id: "run_123",
+      build_id: null,
+      kind: "data_review",
+      review_type: "browser_evidence_acceptance",
+      status: "pending",
+      blocking: true,
+      subject: {
+        evidence_ids: ["evidence_123"],
+        source_asset_ids: ["asset_123"],
+        table_ids: ["records"],
+        locator_urls: ["https://example.org/records.tsv"],
+      },
+      review_items: [],
+      summary: "Accept the exact browser evidence and build binding",
+      evidence_digest: DIGEST,
+      policy_ref: "browser.acquisition.evidence-acceptance.v1",
+      created_at: "2026-08-25T00:00:00.000Z",
+      resolved_at: null,
+    })).toMatchObject({ review_type: "browser_evidence_acceptance", blocking: true });
+  });
+
   it("parses a publication-acceptance data review subject", () => {
     expect(parseHILRequest({
       schema_version: "1.0",
