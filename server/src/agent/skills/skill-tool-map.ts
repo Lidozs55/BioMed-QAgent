@@ -72,7 +72,7 @@ export const SKILL_TOOL_MAP: readonly SkillToolMapping[] = Object.freeze([
     "discovery",
     ["gwas_catalog", "ebi_gwas"],
     "Find official GWAS Catalog studies by PubMed ID and association records by GCST accession or rsID.",
-    "Use PubMed IDs to resolve exact GCST studies, then query associations by GCST or rsID. Results are discovery evidence; formal Dynamic Family input reacquires one verified GCST or rsID per binding through gwas-catalog.associations.v1.",
+    "Resolve exact GCST studies, then query by GCST or rsID. Results are discovery only. gwas-catalog.associations.v1 is wired for Dynamic Family acquisition and does not require a static GWAS family; use one verified GCST or rsID per binding.",
     ["lookup_gwas_catalog"],
   ),
   mapping(
@@ -243,7 +243,7 @@ export const SKILL_TOOL_MAP: readonly SkillToolMapping[] = Object.freeze([
     "analysis",
     [],
     "Construct a DatasetBuild through the trusted Dataset Core boundary.",
-    "Required for dataset, CSV, table, or multi-source record outputs. Split by semantic family and row granularity, validate before execute, use dynamic family submission for unsupported topology, and treat only Publication as formal success.",
+    "Choose exactly one route. Use validate then execute only when family/source/topology appear in the static schema. Otherwise use prepare then submit; providers in the dynamic acquisition schema are wired even when absent from static enums. Only Publication is formal.",
     // Pi-side tool names. The legacy Python Agent registers the equivalent
     // pipeline tools as validate_dataset_build_spec / execute_dataset_build
     // (backend/app/pipeline/dataset_build_tool.py); Phase 5/8 converges on

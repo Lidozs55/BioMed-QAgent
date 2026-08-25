@@ -80,7 +80,7 @@ export function createDynamicFamilyBuildTool(
     name: "submit_dynamic_family_build",
     label: "Submit Dynamic Family Build",
     description:
-      "Submit a strict FamilySpec + TypeScript DatasetTransform with the exact prepare_dynamic_family_build receipt to the explicit in_process_unisolated runtime and trusted Core publication path. This is not a sandbox, isolation mechanism, or security boundary. Use fixed Core acquisition_requests; direct paths and discovery bytes are forbidden.",
+      "Submit a strict FamilySpec + TypeScript DatasetTransform with the exact prepare_dynamic_family_build receipt to the explicit in_process_unisolated runtime and trusted Core publication path. A provider listed in the acquisition_requests schema is wired for this dynamic route even if absent from static family enums. This is not a sandbox, isolation mechanism, or security boundary. Direct paths and discovery bytes are forbidden.",
     parameters: dynamicFamilyBuildParameters(true),
     async execute(value, signal, context): Promise<BioMedToolResult> {
       try {
@@ -106,7 +106,7 @@ export function createPrepareDynamicFamilyBuildTool(
     name: "prepare_dynamic_family_build",
     label: "Prepare Dynamic Family Build",
     description:
-      "Perform deterministic, side-effect-free structural preflight for a dynamic FamilySpec build before any expensive acquisition. Returns the exact FamilySpec, Projection, Host descriptor, input-role, output-closure, topology, and acquisition-plan facts committed in a task/build/generation-bound receipt.",
+      "Use directly when no registered static family expresses the required topology; do not prevalidate a dynamic FamilySpec with validate_dataset_build. The acquisition_requests schema is authoritative for dynamic provider wiring. This deterministic, side-effect-free preflight returns the structural and acquisition-plan facts committed in a task/build/generation-bound receipt.",
     parameters: dynamicFamilyBuildParameters(false),
     async execute(value, signal, context): Promise<BioMedToolResult> {
       try {
@@ -412,7 +412,7 @@ function dynamicFamilyBuildParameters(includePreflightReceipt: boolean): Record<
         additionalProperties: { type: "string", pattern: "^asset_[0-9a-f]{64}$" },
       },
       acquisition_requests: {
-        type: "object", description: "Preferred formal input path. Keys exactly match unresolved build_proposal source binding IDs. PubChem accepts one CID and PubMed accepts one PMCID per binding; create one binding/request per formal carrier.",
+        type: "object", description: "Preferred formal input path. Every provider listed here is runtime-wired for Dynamic Family acquisition; absence means unavailable through this route. Keys exactly match unresolved build_proposal source binding IDs. Create one binding/request per formal carrier.",
         additionalProperties: acquisition,
       },
     },

@@ -33,7 +33,10 @@
 - **GWAS Catalog 路由**：`lookup_gwas_catalog` 通过官方 EMBL-EBI HAL API 将 PMID
   解析为 GCST study，或按 GCST/rsID 返回有界 association 证据；缺失的总数和字段
   保持 `null`。该工具只负责 discovery，正式 Dynamic Family 输入仍由 Core provider
-  `gwas-catalog.associations.v1` 重新获取。
+  `gwas-catalog.associations.v1` 重新获取。该 provider 出现在 Dynamic Family 工具的
+  `acquisition_requests` schema 中即表示 dynamic acquisition 已接线；GWAS Catalog
+  不在 static family/schema 枚举中不表示该 provider 不可用，也不要求先新增 static
+  GWAS family。
 - **四个类别**：discovery / acquisition / processing / analysis。
 - 不变式不变：download 记录 `DownloadAttempt`，成功校验后才返回
   `SourceAsset`；processing 只接受成功的本地 `SourceAsset` 或受控
@@ -83,6 +86,14 @@ Core 路径、纠正输入、仅重试可重试失败并寻找独立真实来源
 明确携带 `retryable` 时才允许透传 true，普通参数/解析异常默认不可重试。
 权限或 evidence-bound HIL 挂起的可信调用必须等待原调用恢复，不能以 workspace
 脚本产物替代。
+
+Static 与 Dynamic 工具是互斥的两条规格入口，不是串行探测步骤：只有 family、schema、
+source 和 topology 均在 `validate_dataset_build` schema 中时才走 static
+`validate -> execute`；否则直接走 dynamic `prepare -> submit`。Static validator 的
+拒绝或枚举缺项只描述 static registry，不能用于判断 dynamic provider 是否接线。
+Dynamic 工具 `acquisition_requests` 的 provider 枚举直接派生自
+`provider-catalog.ts`，是该路径的权威 capability view，并由 handler/descriptor 闭包测试
+防止“schema 声称可用但 runtime 未接线”。
 
 ### 16.3 用户扩展（声明式数据库）
 
