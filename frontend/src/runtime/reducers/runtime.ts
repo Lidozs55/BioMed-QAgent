@@ -527,7 +527,7 @@ export function applyConversationCompactedEvent(
   envelope: EventEnvelope,
   payload: Extract<EventPayload, { type: "conversation_compacted" }>,
 ): TaskProjection {
-  const next = upsertActivity(task, {
+  const withActivity = upsertActivity(task, {
     activityId: `event:${envelope.sequence}`,
     taskId: envelope.task_id,
     runId: envelope.run_id,
@@ -542,6 +542,15 @@ export function applyConversationCompactedEvent(
     code: null,
     message: null,
   });
+  const next = upsertItem(withActivity, {
+    kind: "compaction",
+    itemId: `compaction:${payload.compaction_id}`,
+    runId: envelope.run_id ?? "",
+    sequence: envelope.sequence,
+    createdAt: envelope.timestamp,
+    status: "completed",
+    message: null,
+  });
   return {
     ...next,
     compacting: false,
@@ -549,6 +558,40 @@ export function applyConversationCompactedEvent(
     contextTokensSource: undefined,
     contextCompactionSequence: envelope.sequence,
   };
+}
+
+export function applyConversationCompactionStartedEvent(
+  task: TaskProjection,
+  envelope: EventEnvelope,
+  payload: Extract<EventPayload, { type: "conversation_compaction_started" }>,
+): TaskProjection {
+  const next = upsertItem(task, {
+    kind: "compaction",
+    itemId: `compaction:${payload.compaction_id}`,
+    runId: envelope.run_id ?? "",
+    sequence: envelope.sequence,
+    createdAt: envelope.timestamp,
+    status: "running",
+    message: null,
+  });
+  return { ...next, compacting: true };
+}
+
+export function applyConversationCompactionFailedEvent(
+  task: TaskProjection,
+  envelope: EventEnvelope,
+  payload: Extract<EventPayload, { type: "conversation_compaction_failed" }>,
+): TaskProjection {
+  const next = upsertItem(task, {
+    kind: "compaction",
+    itemId: `compaction:${payload.compaction_id}`,
+    runId: envelope.run_id ?? "",
+    sequence: envelope.sequence,
+    createdAt: envelope.timestamp,
+    status: payload.reason === "no_content" ? "no_content" : "failed",
+    message: payload.message ?? null,
+  });
+  return { ...next, compacting: false };
 }
 
 export function applyContextUsageEvent(

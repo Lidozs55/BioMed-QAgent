@@ -219,8 +219,21 @@ export type EventPayload =
     }
   | {
       type: "conversation_compacted";
+      compaction_id: string;
       covered_through_run_id: string;
       summary_digest: string;
+    }
+  | {
+      type: "conversation_compaction_started";
+      compaction_id: string;
+      covered_through_run_id: string;
+    }
+  | {
+      type: "conversation_compaction_failed";
+      compaction_id: string;
+      covered_through_run_id: string;
+      reason: "no_content" | "error";
+      message?: string | null;
     }
   // V2 build-execution lifecycle (Design §15.1). Informational: the reducer
   // advances the cursor without changing state.

@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { Readable } from "node:stream";
@@ -1174,15 +1174,36 @@ export async function createDurableAgentRuntime(
       temporarySession = true;
     }
     try {
+      const compactionId = randomUUID();
       if (task.session.compact === undefined) {
+        await repository.appendRunEvent(taskId, runId, {
+          type: "conversation_compaction_failed",
+          compaction_id: compactionId,
+          covered_through_run_id: runId,
+          reason: "error",
+          message: "Task compaction is unavailable",
+        });
         throw new DurableTaskConflictError("active_run", "Task compaction is unavailable");
       }
+      await repository.appendRunEvent(taskId, runId, {
+        type: "conversation_compaction_started",
+        compaction_id: compactionId,
+        covered_through_run_id: runId,
+      });
       let result: { summary: string };
       try {
         result = await task.session.compact();
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        if (/Nothing to compact|Already compacted/.test(message)) {
+        const noContent = /Nothing to compact|Already compacted/.test(message);
+        await repository.appendRunEvent(taskId, runId, {
+          type: "conversation_compaction_failed",
+          compaction_id: compactionId,
+          covered_through_run_id: runId,
+          reason: noContent ? "no_content" : "error",
+          message,
+        });
+        if (noContent) {
           throw new DurableTaskConflictError(
             "active_run",
             "Task has no conversation to compact",
@@ -1192,6 +1213,7 @@ export async function createDurableAgentRuntime(
       }
       await repository.appendRunEvent(taskId, runId, {
         type: "conversation_compacted",
+        compaction_id: compactionId,
         covered_through_run_id: runId,
         summary_digest: createHash("sha256").update(result.summary, "utf8").digest("hex"),
       });

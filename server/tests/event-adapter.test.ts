@@ -107,6 +107,7 @@ describe("PiEventAdapter", () => {
     expect(events).toHaveLength(1);
     expect(events[0]?.payload).toEqual({
       type: "conversation_compacted",
+      compaction_id: expect.any(String),
       covered_through_run_id: runId,
       summary_digest: createHash("sha256").update(summary, "utf8").digest("hex"),
     });

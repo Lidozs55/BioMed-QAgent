@@ -88,6 +88,7 @@ export type ActivityKind =
   | "progress"
   | "warning"
   | "conversation_compacted"
+  | "conversation_compaction"
   | "fixture_event";
 
 export interface ActivityProjection {
@@ -339,6 +340,12 @@ export interface BuildReportItem extends ConversationItemBase {
   buildId: string;
 }
 
+export interface CompactionItem extends ConversationItemBase {
+  kind: "compaction";
+  status: "running" | "completed" | "no_content" | "failed";
+  message: string | null;
+}
+
 export type ConversationItem =
   | UserMessageItem
   | AssistantSegmentItem
@@ -350,7 +357,8 @@ export type ConversationItem =
   | WarningItem
   | PermissionItem
   | ArtifactItem
-  | BuildReportItem;
+  | BuildReportItem
+  | CompactionItem;
 
 export interface SequenceGapMarker {
   expected: number;

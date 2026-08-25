@@ -116,6 +116,7 @@ describe("Pi auto-compaction durable projection", () => {
     expect(compacted).toHaveLength(1);
     expect(compacted[0]?.payload).toEqual({
       type: "conversation_compacted",
+      compaction_id: expect.any(String),
       covered_through_run_id: accepted.run_id,
       summary_digest: createHash("sha256").update("e2e checkpoint summary", "utf8").digest("hex"),
     });

@@ -48,6 +48,7 @@ class ControlledAdapter implements BioMedAgentAdapter {
   readonly runs: string[] = [];
   readonly steering: string[] = [];
   readonly compactions: string[] = [];
+  compactError: Error | null = null;
   private cancelled = false;
 
   async createSession(config: BioMedSessionConfig): Promise<BioMedAgentSession> {
@@ -63,7 +64,8 @@ class ControlledAdapter implements BioMedAgentAdapter {
       steer: async (text) => {
         this.steering.push(text);
       },
-      compact: async () => {
+      compact: async (): Promise<{ summary: string }> => {
+        if (this.compactError !== null) throw this.compactError;
         const summary = "compacted durable conversation";
         this.compactions.push(summary);
         return { summary };
@@ -81,6 +83,13 @@ class ControlledAdapter implements BioMedAgentAdapter {
     await gate.promise;
     if (this.cancelled) yield { type: "turn_cancelled", reason: "user requested" };
     else yield { type: "turn_completed" };
+  }
+}
+
+class NoContentControlledAdapter extends ControlledAdapter {
+  constructor() {
+    super();
+    this.compactError = new Error("Nothing to compact");
   }
 }
 
@@ -328,6 +337,60 @@ describe("durable formal Agent runtime", () => {
     const events = await runtime.repository.listEvents(accepted.task_id, 0);
     expect(events.at(-1)?.payload).toMatchObject({
       type: "conversation_compacted",
+      covered_through_run_id: accepted.run_id,
+    });
+    expect(events.at(-2)?.payload).toMatchObject({
+      type: "conversation_compaction_started",
+      covered_through_run_id: accepted.run_id,
+    });
+    await runtime.close();
+  });
+
+  test("records compaction started and no-content failed status for idle compaction", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "biomed-durable-idle-no-content-"));
+    roots.push(root);
+    const adapter = new NoContentControlledAdapter();
+    const runtime = await createDurableAgentRuntime({
+      tasksRoot: root,
+      adapter,
+      workspaceFactory: async () => ({ root, tools: [], dispose: async () => undefined }),
+    });
+    const server = createServer((request, response) => {
+      if (!runtime.handle(request, response)) response.writeHead(404).end();
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    servers.push(server);
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const accepted = await (await fetch(`${base}/api/v1/tasks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        request_id: "request-idle-no-content",
+        input: "finish then compact",
+        databases: [],
+        mode: "agent",
+      }),
+    })).json() as { task_id: string; run_id: string };
+    await expect.poll(() => adapter.gates.length).toBe(1);
+    adapter.gates[0]?.resolve();
+    await expect.poll(async () => {
+      const snapshot = await runtime.repository.getSnapshot(accepted.task_id);
+      return snapshot?.task.status;
+    }).toBe("completed");
+
+    const response = await fetch(`${base}/api/v1/tasks/${accepted.task_id}/compact`, {
+      method: "POST",
+    });
+    expect(response.status).toBe(409);
+    const events = await runtime.repository.listEvents(accepted.task_id, 0);
+    expect(events.at(-2)?.payload).toMatchObject({
+      type: "conversation_compaction_started",
+      covered_through_run_id: accepted.run_id,
+    });
+    expect(events.at(-1)?.payload).toMatchObject({
+      type: "conversation_compaction_failed",
+      reason: "no_content",
       covered_through_run_id: accepted.run_id,
     });
     await runtime.close();

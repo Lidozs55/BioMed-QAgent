@@ -63,6 +63,8 @@ const EVENT_TYPES = new Set([
   "tool_started",
   "context_usage",
   "conversation_compacted",
+  "conversation_compaction_started",
+  "conversation_compaction_failed",
   "subagent_queued",
   "subagent_started",
   "subagent_progress",

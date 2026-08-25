@@ -185,10 +185,30 @@ export function parseRuntimeEventPayload(payloadObj: Record<string, unknown>, pa
       return { type: "tool_started", tool_call_id, tool_name, arguments: arguments_ };
     }
     case "conversation_compacted": {
+      const compaction_id = assertString(Reflect.get(payloadObj, "compaction_id"), path + ".compaction_id");
       const covered_through_run_id = assertString(Reflect.get(payloadObj, "covered_through_run_id"), path + ".covered_through_run_id");
       const summary_digest = assertString(Reflect.get(payloadObj, "summary_digest"), path + ".summary_digest");
       if (!/^[0-9a-f]{64}$/.test(summary_digest)) throw new APIError(502, "Expected 64-char hex string at " + path + ".summary_digest");
-      return { type: "conversation_compacted", covered_through_run_id, summary_digest };
+      return { type: "conversation_compacted", compaction_id, covered_through_run_id, summary_digest };
+    }
+    case "conversation_compaction_started": {
+      const compaction_id = assertString(Reflect.get(payloadObj, "compaction_id"), path + ".compaction_id");
+      const covered_through_run_id = assertString(Reflect.get(payloadObj, "covered_through_run_id"), path + ".covered_through_run_id");
+      return { type: "conversation_compaction_started", compaction_id, covered_through_run_id };
+    }
+    case "conversation_compaction_failed": {
+      const compaction_id = assertString(Reflect.get(payloadObj, "compaction_id"), path + ".compaction_id");
+      const covered_through_run_id = assertString(Reflect.get(payloadObj, "covered_through_run_id"), path + ".covered_through_run_id");
+      const reason = assertFinite(
+        Reflect.get(payloadObj, "reason"),
+        path + ".reason",
+        ["no_content", "error"] as const,
+      );
+      const rawMessage = Reflect.get(payloadObj, "message");
+      const message = rawMessage === null || rawMessage === undefined
+        ? null
+        : assertString(rawMessage, path + ".message");
+      return { type: "conversation_compaction_failed", compaction_id, covered_through_run_id, reason, message };
     }
     case "context_usage": {
       const tokensValue = Reflect.get(payloadObj, "tokens");
