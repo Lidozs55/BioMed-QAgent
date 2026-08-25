@@ -274,6 +274,28 @@ risks, and verification results for later audit.
   this gap and the fix was validated by the same publication test.
 - Status: implemented; focused test, typecheck, and lint pass.
 
+## 2026-08-25 / D-034
+
+- Decision: Production browser parser recipes are derived only from Core-owned
+  `RegisteredTableRegistry` entries and are promoted through a default
+  `BrowserParserRecipeRegistry` catalog. Recipe implementation identity binds the
+  complete registered schema/parser definition; the Agent cannot submit JSON
+  pointers, field mappings, parser code, or implementation digests.
+- Decision: Browser formalization and browser carrier execution must share the same
+  registered-table registry instance. Creating a fresh default parser registry at
+  execution time is forbidden because it can drift from the registry against which
+  the recipe was promoted.
+- Decision: Do not register a catch-all `browser.json.v1` recipe. A generic recipe
+  that accepts arbitrary task-authored schema/pointers would turn Dynamic Family
+  metadata into parser authority and bypass Core promotion. Gold10 remains
+  fail-closed until its task-scope schema is connected through the collaborator's
+  Core-owned parser/extraction-result admission boundary.
+- Coordination: `fix/generic-registered-table-schema-dispatch` changes family schema
+  derivation and registered multitable dispatch only. This slice is limited to the
+  browser recipe catalog and shared parser-registry composition; no overlapping
+  family/topology/provider/result-admission files are modified.
+- Status: implemented on `feat/promoted-browser-recipe-catalog`; server suite, typecheck, lint, build, and focused fail-closed tests pass.
+
 ## 2026-08-25 / D-033
 
 - Decision: Replace the normal two-stage browser formalization/publication approval sequence with one `browser_evidence_acceptance` HIL.
