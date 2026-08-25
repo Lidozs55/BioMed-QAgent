@@ -86,6 +86,7 @@ export interface BusinessToolBundleContext {
   /** Global cache registrar: registers raw downloads into the dataset cache. */
   registrar?: import("../../persistence/cache-registrar.js").CacheRegistrar | null;
   sourceAssetRegistry?: SourceAssetRegistry;
+  browserRecipeRegistry?: BrowserParserRecipeRegistry;
   /** Task id used as cache provenance (``created_by_task_id``). */
   taskId?: string | (() => string);
 }
@@ -234,7 +235,7 @@ export async function createBusinessToolBundle(
           evidenceStore: new BrowserAcquisitionEvidenceStore({ taskRoot }),
           proposalStore: new BrowserAcquisitionProposalStore(taskRoot),
           sourceAssetRegistry: context.sourceAssetRegistry,
-          recipeRegistry: new BrowserParserRecipeRegistry(createDefaultRegisteredTableRegistry()),
+          recipeRegistry: context.browserRecipeRegistry ?? new BrowserParserRecipeRegistry(createDefaultRegisteredTableRegistry()),
         }),
       maxDownloadBytes: limits.max_download_mib * 1024 * 1024,
       downloadTimeoutMs: limits.download_timeout_seconds * 1000,

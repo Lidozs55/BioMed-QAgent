@@ -273,3 +273,11 @@ risks, and verification results for later audit.
   execution has no transform receipt. The first browser variant test exposed
   this gap and the fix was validated by the same publication test.
 - Status: implemented; focused test, typecheck, and lint pass.
+
+## 2026-08-24 / D-032
+
+- Decision: Phase3 owns one injectable browser recipe registry per runtime;
+  browser tools never create an independent production registry.
+- Reason: Recipe promotion and revision identity must be shared by acquisition,
+  formalization, parser execution, and publication within a runtime.
+- Status: implemented; server/contracts typecheck and lint pass.
