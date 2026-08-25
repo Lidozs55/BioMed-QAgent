@@ -22,17 +22,6 @@ output.
    task-relative source_files / mapping_files / metadata_files references.
    Omit missing source_files when the binding has a registered Core acquisition
    provider; do not download or parse that provider again with workspace commands.
-   - For bioactivity measurement, ChEMBL/PubChem search tools only discover controlled IDs. Formal bytes must be reacquired by Core with `chembl.files.v1` / `pubchem.files.v1`; omit those bindings from source files. A PubChem binding is optional and supports one exact CID crosswalk per build.
-   - For open-access literature full text, request one PMCID per binding through `pubmed.files.v1`; Core retrieves Europe PMC XML. Browser/PDF/VLM/workspace outputs remain preparation material. Literature-derived quantitative/chart products use the tables paper_records, experiment_records, primary activity_value_records, chart_series, chart_points, and supplementary_asset_records; estimated chart evidence carries the fields human_review_status / review_status and remains pending until genuine evidence-bound HIL acceptance.
-   - **gene-level builds fed by probe-level sources (e.g. GEO geo-probe) MUST
-     declare a probe→gene annotation** via `mapping_files={"<binding_id>":
-     "<GPL annotation relative path>"}` — one entry per binding, keyed by the same
-     binding_id as the source. Omitting it lets `validate_dataset_build` pass but the
-     binding fails the gene-required coverage/residual gate and the run lands on
-       `status: "no_data"` / `reason_codes: ["no_primary_data"]` (see the
-       research_data_guidance skill, expression_omics.md section 3, for the
-       mechanism). Prefer a gene-level source (GDC/Xena) or a probe-level schema
-       when no probe→gene annotation is available.
 4. When a frozen multi-table topology cannot be expressed by a registered static
    family, use `submit_dynamic_family_build` with:
    - `execution_backend="in_process_unisolated"` exactly. This backend is **not a

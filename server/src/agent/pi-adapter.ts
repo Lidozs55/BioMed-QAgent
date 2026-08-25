@@ -23,6 +23,7 @@ import {
 } from "./contracts.js";
 import { PHASE1_SYSTEM_PROMPT, phase1ResourceRoots } from "./phase1-prompt.js";
 import { requireSafeId as validateSafeId } from "./ids.js";
+import { SKILL_TOOL_MAP } from "./skills/skill-tool-map.js";
 
 type Environment = Record<string, string | undefined>;
 
@@ -107,6 +108,8 @@ const LENGTH_CONTINUATION_MESSAGE =
   "The previous assistant turn was truncated by the model length limit. " +
   "Continue the same task from the compacted context without repeating completed work. " +
   "Finish the remaining tool calls, required data artifacts, validation, and final response.";
+export const TOOL_ACTIVATION_NAME = "activate_agent_tools";
+const MAX_ACTIVATED_TOOLS = 12;
 
 function boundedText(value: string): string {
   return value.slice(0, MAX_TEXT);
@@ -133,6 +136,121 @@ function boundedValue(value: unknown, depth = 0): unknown {
     );
   }
   return String(value).slice(0, MAX_TEXT);
+}
+
+export function toolCatalogPrompt(
+  tools: readonly BioMedAgentTool[],
+  initialToolNames: readonly string[],
+): string {
+  if (tools.length === 0) return "";
+  const initial = new Set(initialToolNames);
+  const available = new Map(tools.map((tool) => [tool.name, tool]));
+  const mappedToolNames = new Set<string>();
+  const skillEntries = SKILL_TOOL_MAP.flatMap((skill) => {
+    const skillTools = skill.tools.filter((name) => available.has(name));
+    if (skillTools.length === 0) return [];
+    for (const name of skillTools) mappedToolNames.add(name);
+    const toolList = skillTools
+      .map((name) => `${name}${initial.has(name) ? " (active)" : ""}`)
+      .join(", ");
+    return [
+      `- ${skill.name} [${skill.category}]`,
+      `  Function: ${skill.description}`,
+      `  Route/boundary: ${skill.routing}`,
+      `  Tools: ${toolList}`,
+    ];
+  });
+  const otherTools = tools
+    .filter((tool) => !mappedToolNames.has(tool.name))
+    .map((tool) => {
+      const summary = tool.description.replace(/\s+/g, " ").trim().slice(0, 180);
+      return `- ${tool.name}${initial.has(tool.name) ? " (active)" : ""}: ${summary}`;
+    });
+  return [
+    "",
+    "Available curated skill/tool map (complete for this session):",
+    "Use it before substantive work to choose the route and respect each trust boundary.",
+    "Tools marked (active) have full schemas now. For other listed tools, call activate_agent_tools before use; activation does not bypass permissions, validation, or publication gates.",
+    ...skillEntries,
+    ...(otherTools.length === 0
+      ? []
+      : [
+          "Other optional tools (not owned by a curated biomedical skill):",
+          ...otherTools,
+        ]),
+  ].join("\n");
+}
+
+export function activationToolDefinition(
+  tools: readonly BioMedAgentTool[],
+  initialToolNames: readonly string[],
+  setActiveTools: (names: readonly string[]) => void,
+): ToolDefinition {
+  const allNames = new Set(tools.map((tool) => tool.name));
+  const initial = [...new Set(initialToolNames)].filter((name) => allNames.has(name));
+  const optional = tools
+    .filter((tool) => !initial.includes(tool.name))
+    .map((tool) => tool.name)
+    .sort();
+  const activated = new Set<string>();
+  return {
+    name: TOOL_ACTIVATION_NAME,
+    label: "Activate Agent Tools",
+    description:
+      "Add a bounded set of optional tools for the next model turn. Previously activated tools and Dataset Core tools remain available.",
+    parameters: {
+      type: "object",
+      properties: {
+        tool_names: {
+          type: "array",
+          minItems: 1,
+          maxItems: MAX_ACTIVATED_TOOLS,
+          items: { type: "string", enum: optional },
+        },
+      },
+      required: ["tool_names"],
+      additionalProperties: false,
+    },
+    async execute(_toolCallId, parameters) {
+      const record = parameters as Record<string, unknown>;
+      const requested = Array.isArray(record.tool_names)
+        ? record.tool_names.filter((name): name is string => typeof name === "string")
+        : [];
+      const selected = [...new Set(requested)].filter((name) => optional.includes(name));
+      const unknown = [...new Set(requested)].filter((name) => !optional.includes(name));
+      if (selected.length === 0) {
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ ok: false, error: "tool_names must contain an optional catalog tool" }),
+          }],
+          details: { ok: false, unknown_tools: unknown },
+        };
+      }
+      for (const name of selected) activated.add(name);
+      const activeOptional = optional.filter((name) => activated.has(name));
+      setActiveTools([...initial, TOOL_ACTIVATION_NAME, ...activeOptional]);
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            ok: true,
+            activated_tools: selected,
+            active_optional_tools: activeOptional,
+            unknown_tools: unknown,
+            next_turn: true,
+          }),
+        }],
+        details: {
+          ok: true,
+          activated_tools: selected,
+          active_optional_tools: activeOptional,
+          unknown_tools: unknown,
+          next_turn: true,
+        },
+      };
+    },
+  };
 }
 
 function requireSafeId(name: string, value: string): void {
@@ -385,6 +503,25 @@ async function createRealUpstreamSession(
     systemPrompt: config.systemPrompt,
   });
   await resourceLoader.reload();
+  const configuredTools = config.tools ?? [];
+  const allToolNames = configuredTools.map((tool) => tool.name);
+  const initialToolNames = config.initialToolNames === undefined
+    ? allToolNames
+    : [...new Set(config.initialToolNames)].filter((name) => allToolNames.includes(name));
+  const piSessionRef: {
+    current?: Awaited<ReturnType<typeof createAgentSession>>["session"];
+  } = {};
+  const activationTool = activationToolDefinition(
+    configuredTools,
+    initialToolNames,
+    (names) => piSessionRef.current?.setActiveToolsByName([...names]),
+  );
+  const customTools = configuredTools.length === 0
+    ? []
+    : [...toPiCustomTools(configuredTools), activationTool];
+  const allowedToolNames = configuredTools.length === 0
+    ? []
+    : [...allToolNames, TOOL_ACTIVATION_NAME];
   const { session } = await createAgentSession({
     cwd: config.cwd,
     model,
@@ -395,8 +532,13 @@ async function createRealUpstreamSession(
       : SessionManager.continueRecent(config.cwd, config.sessionDir),
     settingsManager,
     noTools: (config.tools?.length ?? 0) > 0 ? "builtin" : "all",
-    customTools: toPiCustomTools(config.tools ?? []),
+    tools: allowedToolNames,
+    customTools,
   });
+  piSessionRef.current = session;
+  if (configuredTools.length > 0) {
+    session.setActiveToolsByName([...initialToolNames, TOOL_ACTIVATION_NAME]);
+  }
   return {
     sessionId: session.sessionId,
     prompt: (input) => session.prompt(input),
@@ -808,7 +950,9 @@ export class PiAgentAdapter implements BioMedAgentAdapter {
       const optionalSkillRoots = await this.optionalSkillRoots();
       validated = await validateSessionConfig({
         ...config,
-        systemPrompt: PHASE1_SYSTEM_PROMPT,
+        systemPrompt:
+          PHASE1_SYSTEM_PROMPT +
+          toolCatalogPrompt(config.tools ?? [], config.initialToolNames ?? (config.tools ?? []).map((tool) => tool.name)),
         skillRoots: [...optionalSkillRoots, ...(config.skillRoots ?? [])],
       });
       const upstream = await this.createUpstreamSession(validated);

@@ -458,6 +458,11 @@ export async function createDurableAgentRuntime(
         cwd: workspace.root,
         sessionDir,
         tools: workspace.tools,
+        initialToolNames: [
+          "validate_dataset_build",
+          "execute_dataset_build",
+          "submit_dynamic_family_build",
+        ],
         cleanup: disposeWorkspace,
       });
       workspace.setPiSessionId?.(session.piSessionId);

@@ -162,4 +162,38 @@ describe(".pi/skills manifest integrity", () => {
       expect((skill.frontmatter.description ?? "").length).toBeLessThanOrEqual(300);
     }
   });
+
+  test("dataset construction stays source-neutral while source skills own provider rules", async () => {
+    const dataset = await readSkill("dataset-construction");
+    for (const sourceSpecificRule of [
+      "pubmed.files.v1",
+      "chembl.files.v1",
+      "pubchem.files.v1",
+      "probe-to-gene",
+    ]) {
+      expect(dataset.body, sourceSpecificRule).not.toContain(sourceSpecificRule);
+    }
+
+    expect((await readSkill("pubmed")).body).toContain("pubmed.files.v1");
+    expect((await readSkill("chembl")).body).toContain("chembl.files.v1");
+    expect((await readSkill("pubchem")).body).toContain("pubchem.files.v1");
+    expect((await readSkill("geo")).body).toMatch(/probe-(?:to-gene|level)/i);
+
+    const pubmed = await readSkill("pubmed");
+    for (const tableId of [
+      "paper_records",
+      "experiment_records",
+      "activity_value_records",
+      "chart_series",
+      "chart_points",
+      "supplementary_asset_records",
+    ]) {
+      expect(pubmed.body).toContain(tableId);
+    }
+    expect(pubmed.body).toContain("human_review_status");
+    expect(pubmed.body).toContain("review_status");
+    expect(pubmed.body).toMatch(/remains human_review_pending/i);
+    expect(dataset.body).toMatch(/replace the proposal transform-ref digest/i);
+    expect(dataset.body).toMatch(/do not stop on a descriptor handshake\s+rejection/i);
+  });
 });

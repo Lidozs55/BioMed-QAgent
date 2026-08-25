@@ -13,7 +13,6 @@ import { saveBuildContinuation } from "../../runtime/build-continuation.js";
 import { fixedBiomedicalAcquisitionParameters } from "../../dataset/acquisition/biomedical-providers.js";
 import {
   createDefaultDatasetFamilyRegistry,
-  type DatasetFamilyDefinition,
 } from "../../dataset/families/index.js";
 import type {
   BioMedAgentTool,
@@ -319,136 +318,102 @@ function captureSpecRejected(
   });
 }
 
-function datasetFamilySpecSchema(definition: DatasetFamilyDefinition): object {
-  const stringArray = {
-    type: "array",
-    items: { type: "string" },
-  } as const;
-  const stringArrayRecord = {
+function datasetBuildSpecSchema(): object {
+  const definitions = createDefaultDatasetFamilyRegistry().definitionsList();
+  const schemas = definitions.flatMap((definition) => definition.schemas);
+  const sources = definitions.flatMap((definition) => definition.sources);
+  const stringArray = { type: "array", items: { type: "string" } } as const;
+  const stringArrayRecord = { type: "object", additionalProperties: stringArray } as const;
+  const nullableString = { anyOf: [{ type: "string" }, { type: "null" }] } as const;
+  const unique = (values: readonly string[]): string[] => [...new Set(values)].sort();
+  const familyIds = unique(definitions.map((definition) => definition.id));
+  const schemaIds = unique(schemas.map((schema) => schema.schema_id));
+  const granularities = unique(schemas.map((schema) => schema.row_granularity));
+  const sourceIds = unique(sources.map((source) => source.source));
+  const adapterIds = unique(sources.map((source) => source.adapter_id));
+  const normalizationProfiles = unique(
+    definitions.flatMap((definition) => [...definition.normalization_profile_refs]),
+  );
+  const validationProfiles = unique(
+    definitions.flatMap((definition) => definition.validation_profile_refs),
+  );
+  const mergeStrategies = unique(
+    definitions.flatMap((definition) => [...definition.merge_strategies]),
+  );
+  const outputFormats = unique(definitions.flatMap((definition) => [...definition.output_formats]));
+  const parameters = {
     type: "object",
-    additionalProperties: stringArray,
-  } as const;
-  const nullableString = {
-    anyOf: [{ type: "string" }, { type: "null" }],
+    description:
+      "Provider parameters are checked by the selected Core adapter. Use the source skill or a Core rejection to correct incompatible fields.",
+    additionalProperties: true,
   } as const;
   const acquisition = {
     type: "object",
     description:
-      "How the immutable SourceAsset was acquired. For built-in downloads use mode=builtin and provider_id=<source>.files.v1; omit recipe fields.",
+      "For registered downloads use mode=builtin and the provider_id returned by the selected source capability.",
     properties: {
       schema_version: { type: "string", enum: ["1.0"] },
       mode: { type: "string", enum: ["builtin", "workflow_recipe"] },
-      provider_id: {
-        ...nullableString,
-        description: "Required for builtin mode, for example geo.files.v1.",
-      },
-      recipe_id: {
-        ...nullableString,
-        description: "Required only for workflow_recipe mode.",
-      },
-      recipe_version: {
-        anyOf: [{ type: "integer", minimum: 1 }, { type: "null" }],
-        description: "Required only for workflow_recipe mode.",
-      },
+      provider_id: nullableString,
+      recipe_id: nullableString,
+      recipe_version: { anyOf: [{ type: "integer", minimum: 1 }, { type: "null" }] },
     },
     required: ["mode"],
     additionalProperties: false,
   } as const;
-  const schemaVariants = definition.schemas.map((schema) => {
-    const granularity = definition.granularities.find(
-      (candidate) => candidate.id === schema.row_granularity,
-    )!;
-    const sourceBinding = {
-      oneOf: definition.sources
-        .filter((source) =>
-          definition.runtime_id === "registered_multitable.runtime.v1" ||
-          source.schema_refs.includes(schema.schema_id),
-        )
-        .map((source) => ({
-          type: "object",
-          properties: {
-            schema_version: { type: "string", enum: ["1.0"] },
-            binding_id: {
-              type: "string",
-              pattern: "^[A-Za-z0-9_-]{1,128}$",
-              description: "Stable ID also used as the key in source_files and mapping_files.",
-            },
-            source: { type: "string", enum: [source.source] },
-            acquisition,
-            adapter_id: { type: "string", enum: [source.adapter_id] },
-            accession: nullableString,
-            parameters: source.parameter_schema,
-          },
-          required: [
-            "binding_id",
-            "source",
-            "acquisition",
-            "adapter_id",
-            ...(source.parameters_required ? ["parameters"] : []),
-          ],
-          additionalProperties: false,
-        })),
-    } as const;
-    return {
-      type: "object",
-      description:
-        "Complete frozen DatasetBuildSpec. Execute mappings use the same binding_id keys.",
-      properties: {
-        schema_version: { type: "string", enum: ["1.0"] },
-        build_id: { type: "string", pattern: "^[A-Za-z0-9_-]{1,128}$" },
-        objective: { type: "string", minLength: 1 },
-        dataset_family: { type: "string", enum: [definition.id] },
-        row_granularity: { type: "string", enum: [schema.row_granularity] },
-        entities: stringArrayRecord,
-        cohort_filters: stringArrayRecord,
-        required_fields: stringArray,
-        schema_ref: { type: "string", enum: [schema.schema_id] },
-        source_bindings: { type: "array", minItems: 1, items: sourceBinding },
-        normalization_profile_ref: {
-          anyOf: [
-            { type: "string", enum: [...definition.normalization_profile_refs] },
-            { type: "null" },
-          ],
-        },
-        merge_strategy: { type: "string", enum: [...definition.merge_strategies] },
-        validation_profile_ref: {
-          type: "string",
-          enum: [...definition.validation_profiles_by_schema[schema.schema_id]!],
-        },
-        output_format: { type: "string", enum: [...definition.output_formats] },
-        target_entity_level: {
-          anyOf: [
-            ...(granularity.target_entity_level === null
-              ? []
-              : [{ type: "string", enum: [granularity.target_entity_level] }]),
-            { type: "null" },
-          ],
-        },
+  const sourceBinding = {
+    type: "object",
+    description:
+      "One source binding. Compatibility between source, adapter, schema and parameters is enforced by Dataset Core.",
+    properties: {
+      schema_version: { type: "string", enum: ["1.0"] },
+      binding_id: {
+        type: "string",
+        pattern: "^[A-Za-z0-9_-]{1,128}$",
+        description: "Stable ID also used as the key in source_files and mapping_files.",
       },
-      required: [
-        "build_id",
-        "objective",
-        "dataset_family",
-        "row_granularity",
-        "schema_ref",
-        "source_bindings",
-        "validation_profile_ref",
-      ],
-      additionalProperties: false,
-    } as const;
-  });
-  return schemaVariants.length === 1
-    ? schemaVariants[0]!
-    : { oneOf: schemaVariants };
-}
-
-function datasetBuildSpecSchema(): object {
-  const definitions = createDefaultDatasetFamilyRegistry().definitionsList();
-  if (definitions.length === 1) {
-    return datasetFamilySpecSchema(definitions[0]!);
-  }
+      source: { type: "string", enum: sourceIds },
+      acquisition,
+      adapter_id: { type: "string", enum: adapterIds },
+      accession: nullableString,
+      parameters,
+    },
+    required: ["binding_id", "source", "acquisition", "adapter_id"],
+    additionalProperties: false,
+  } as const;
   return {
-    oneOf: definitions.map((definition) => datasetFamilySpecSchema(definition)),
+    type: "object",
+    description:
+      `Compact DatasetBuildSpec contract. Choose one compatible family/schema/source combination; Core performs the authoritative compatibility check. Families: ${familyIds.join(", ")}. Schemas: ${schemaIds.join(", ")}. Row granularities: ${granularities.join(", ")}.`,
+    properties: {
+      schema_version: { type: "string", enum: ["1.0"] },
+      build_id: { type: "string", pattern: "^[A-Za-z0-9_-]{1,128}$" },
+      objective: { type: "string", minLength: 1 },
+      dataset_family: { type: "string", enum: familyIds },
+      row_granularity: { type: "string", enum: granularities },
+      entities: stringArrayRecord,
+      cohort_filters: stringArrayRecord,
+      required_fields: stringArray,
+      schema_ref: { type: "string", enum: schemaIds },
+      source_bindings: { type: "array", minItems: 1, items: sourceBinding },
+      normalization_profile_ref: {
+        anyOf: [{ type: "string", enum: normalizationProfiles }, { type: "null" }],
+      },
+      merge_strategy: { type: "string", enum: mergeStrategies },
+      validation_profile_ref: { type: "string", enum: validationProfiles },
+      output_format: { type: "string", enum: outputFormats },
+      target_entity_level: nullableString,
+    },
+    required: [
+      "build_id",
+      "objective",
+      "dataset_family",
+      "row_granularity",
+      "schema_ref",
+      "source_bindings",
+      "validation_profile_ref",
+    ],
+    additionalProperties: false,
   };
 }
 
