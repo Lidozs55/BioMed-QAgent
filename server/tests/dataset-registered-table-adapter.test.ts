@@ -125,7 +125,21 @@ function registry(): RegisteredTableRegistry {
   value.register({
     schema: proteinSchema,
     parser: {
+      adapter_id: "registered_protein_xlsx",
+      parser_version: "1_0_0",
+      schema_ref: proteinSchema.schema_id,
+      format: "xlsx",
+      sheet_name: "Data",
+      fields: delimitedFields,
+      media_types: ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
+      limits: LIMITS,
+    },
+  });
+  value.register({
+    schema: proteinSchema,
+    parser: {
       adapter_id: "registered_protein_tsv",
+
       parser_version: "1_0_0",
       schema_ref: proteinSchema.schema_id,
       format: "tsv",
@@ -251,6 +265,18 @@ describe("schema-driven registered SourceAsset table adapter", () => {
     }));
     expect(sink.committed?.audit.status).toBe("accepted");
     expect(sink.rolledBack).toBeNull();
+  });
+
+  it("parses a registered XLSX worksheet with typed values and cell locators", async () => {
+    const { result, sink, registrationReceipt } = await parseFixture(
+      "proteins.xlsx",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "registered_protein_xlsx",
+    );
+
+    expect(result.audit).toMatchObject({ format: "xlsx", accepted_row_count: 2, rejected_row_count: 0, actual_sha256: registrationReceipt.sha256, actual_size_bytes: registrationReceipt.size_bytes });
+    expect(sink.stagedRows[0]?.values).toMatchObject({ accession: "P04637", reviewed: true, taxon_id: 9606 });
+    expect(sink.stagedRows[0]?.locators.accession).toEqual(expect.objectContaining({ logical_file: "source_assets/uniprot/search.json#Data", locator_type: "xml_cell", row_index: 1, column_index: 0 }));
   });
 
   it("supports strict CSV parsing with source line/column locators", async () => {
