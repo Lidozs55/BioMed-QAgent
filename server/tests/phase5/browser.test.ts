@@ -518,6 +518,15 @@ describe("browser tools", () => {
     expect(attempt["source_id"]).toBe(asset["source_id"]);
     expect(asset["successful_attempt_id"]).toBe(attempt["attempt_id"]);
     expect(data["retrieved_at"]).toBe(attempt["finished_at"]);
+    expect(data["formal_status"]).toBe("preparation_only");
+    const evidence = data["browser_acquisition_evidence"] as Record<string, unknown>;
+    expect(evidence["requested_url"]).toBe(url);
+    expect(evidence["final_url"]).toBe(url);
+    expect(evidence["redirect_chain"]).toEqual([]);
+    expect(evidence["source_asset_id"]).toBe(asset["asset_id"]);
+    expect(evidence["download_attempt_id"]).toBe(attempt["attempt_id"]);
+    expect(evidence["provider_id"]).toBe("browser.snapshot.v1");
+    expect(evidence["sha256"]).toBe(expectedSha);
     expect(queries).toEqual([["data.pdf", "browser", "success", 1]]);
   });
 

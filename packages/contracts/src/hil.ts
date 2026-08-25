@@ -27,6 +27,8 @@ export const HIL_REVIEW_TYPES = [
   "vlm_extraction",
   "source_conflict",
   "measurement_semantics",
+  "browser_acquisition_formalization",
+  "browser_evidence_acceptance",
   "publication_acceptance",
 ] as const;
 export type HILReviewType = (typeof HIL_REVIEW_TYPES)[number];
@@ -44,6 +46,9 @@ export interface HILSubject {
   provenance_ids?: string[];
   candidate_ids?: string[];
   table_ids?: string[];
+  evidence_ids?: string[];
+  source_asset_ids?: string[];
+  locator_urls?: string[];
 }
 
 export interface HILReviewItem {
@@ -114,6 +119,9 @@ export function parseHILSubject(value: unknown, path = "subject"): HILSubject {
   const provenanceIds = parseStringArray(obj.provenance_ids, `${path}.provenance_ids`);
   const candidateIds = parseStringArray(obj.candidate_ids, `${path}.candidate_ids`);
   const tableIds = parseStringArray(obj.table_ids, `${path}.table_ids`);
+  const evidenceIds = parseStringArray(obj.evidence_ids, `${path}.evidence_ids`);
+  const sourceAssetIds = parseStringArray(obj.source_asset_ids, `${path}.source_asset_ids`);
+  const locatorUrls = parseStringArray(obj.locator_urls, `${path}.locator_urls`);
   return {
     ...(bindingId === undefined
       ? {}
@@ -123,6 +131,9 @@ export function parseHILSubject(value: unknown, path = "subject"): HILSubject {
     ...(provenanceIds === undefined ? {} : { provenance_ids: provenanceIds }),
     ...(candidateIds === undefined ? {} : { candidate_ids: candidateIds }),
     ...(tableIds === undefined ? {} : { table_ids: tableIds }),
+    ...(evidenceIds === undefined ? {} : { evidence_ids: evidenceIds }),
+    ...(sourceAssetIds === undefined ? {} : { source_asset_ids: sourceAssetIds }),
+    ...(locatorUrls === undefined ? {} : { locator_urls: locatorUrls }),
   };
 }
 

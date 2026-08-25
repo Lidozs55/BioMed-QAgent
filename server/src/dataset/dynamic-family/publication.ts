@@ -17,6 +17,9 @@ import {
 import type { ValidationResult } from "../contracts/validation.js";
 
 import type { SubmitDynamicFamilyBuildResult } from "./submission.js";
+import type { OperationResultManifest } from "@biomed/contracts";
+import type { CoreAcquisitionProvenance } from "../../runtime/source-assets/registry.js";
+import type { BrowserEvidenceAcceptance } from "../acquisition/browser-publication-handoff.js";
 import { sha256FileStream } from "../adapters/hashing.js";
 import { canonicalDigest } from "../adapters/identity.js";
 import { computeHILEvidenceDigest } from "../contracts/hil-evidence.js";
@@ -52,12 +55,25 @@ export interface DynamicPublicationHILGate {
   requestHIL(input: DynamicPublicationHILInput, signal?: AbortSignal): Promise<HumanReviewRecord>;
 }
 
+export interface BrowserPublicationExecution {
+  readonly kind: "browser";
+  readonly materialization: SubmitDynamicFamilyBuildResult["materialization"];
+  readonly integratedResults: readonly OperationResultManifest[];
+  readonly trustedRoot: string;
+  readonly generation: number;
+  readonly sourceAcquisitionProvenance: readonly CoreAcquisitionProvenance[];
+  readonly browserEvidenceDigests: readonly string[];
+  readonly browserEvidenceAcceptance: BrowserEvidenceAcceptance;
+}
+
+export type DynamicPublicationExecution = SubmitDynamicFamilyBuildResult | BrowserPublicationExecution;
+
 export interface PublishDynamicFamilyInput {
   readonly taskId: string;
   readonly taskRoot: string;
   readonly workspaceRoot: string;
   readonly buildId: string;
-  readonly execution: SubmitDynamicFamilyBuildResult;
+  readonly execution: DynamicPublicationExecution;
   readonly validationProfileRef: string;
   readonly signal?: AbortSignal;
   readonly publishedAt?: string;
@@ -98,6 +114,24 @@ export async function publishDynamicFamily(
     }
   };
   const candidate = input.execution.materialization.candidate;
+  const isBrowserExecution = (execution: DynamicPublicationExecution): execution is BrowserPublicationExecution => "kind" in execution && execution.kind === "browser";
+  const browserExecution = isBrowserExecution(input.execution) ? input.execution : null;
+  const transformExecution = browserExecution === null ? input.execution as SubmitDynamicFamilyBuildResult : null;
+  if (browserExecution === null && transformExecution === null) throw new Error("dynamic publication execution variant is missing");
+  const executionGeneration = browserExecution === null ? transformExecution!.receipt.generation : browserExecution.generation;
+  const integratedResults: readonly OperationResultManifest[] = browserExecution === null ? [transformExecution!.operationResult] : browserExecution.integratedResults;
+  const operationById = new Map<string, OperationResultManifest>(integratedResults.map((result) => [result.result_manifest_id, result]));
+  const sourceAcquisitionProvenance = input.execution.sourceAcquisitionProvenance;
+  if (browserExecution !== null) {
+    if (browserExecution.browserEvidenceAcceptance.hilEvidenceDigest.length !== 64 || browserExecution.browserEvidenceAcceptance.acceptedBrowserEvidenceDigests.length === 0) {
+      throw new Error("browser publication requires one accepted evidence-bound review");
+    }
+    const accepted = [...browserExecution.browserEvidenceAcceptance.acceptedBrowserEvidenceDigests].sort();
+    const published = [...browserExecution.browserEvidenceDigests].sort();
+    if (accepted.length !== published.length || accepted.some((digest, index) => digest !== published[index])) {
+      throw new Error("browser publication evidence is outside the accepted browser evidence closure");
+    }
+  }
   if (candidate.task_id !== input.taskId || candidate.build_id !== input.buildId) {
     throw new TypeError("dynamic publication identity does not match the Core task/build");
   }
@@ -117,11 +151,17 @@ export async function publishDynamicFamily(
   await mkdir(path.join(outputDir, "tables"), { recursive: true });
 
   const schemaByRef = new Map(input.execution.materialization.schemas.map((schema) => [schema.schema_id, schema]));
-  const operation = input.execution.operationResult;
+  const resultForRef = (ref: { result_manifest_id: string }): OperationResultManifest => {
+    const result = operationById.get(ref.result_manifest_id);
+    if (result === undefined) throw new Error(`dynamic candidate result is missing: ${ref.result_manifest_id}`);
+    return result;
+  };
+  const outputForRef = (ref: { result_manifest_id: string; output_file_index: number }) =>
+    resultForRef(ref).output_files[ref.output_file_index];
   const validationTables = [];
   for (const [tableIndex, table] of candidate.tables.entries()) {
     await assertGenerationCurrent();
-    const output = operation.output_files[table.data_ref.output_file_index];
+    const output = outputForRef(table.data_ref);
     const schema = schemaByRef.get(table.definition.schema_ref);
     if (
       output === undefined
@@ -151,7 +191,7 @@ export async function publishDynamicFamily(
         origin: "core_operation_result" as const,
         relative_path: output.relative_path,
         delimiter: "," as const,
-        operation_result: operation,
+        operation_result: resultForRef(table.data_ref),
       },
       provenance_refs: [key(provenanceRef)],
       confidence_refs: [key(confidenceRef)],
@@ -201,7 +241,7 @@ export async function publishDynamicFamily(
         owner: {
           taskId: input.taskId,
           buildId: input.buildId,
-          generation: input.execution.receipt.generation,
+          generation: executionGeneration,
         },
         factory: createProductionB3DiskFactory(),
         snapshotImmutable: true,
@@ -222,7 +262,7 @@ export async function publishDynamicFamily(
         await b3Cleanup.cleanup({
           taskId: input.taskId,
           buildId: input.buildId,
-          generation: input.execution.receipt.generation,
+          generation: executionGeneration,
         });
       } catch (cleanupError) {
         if (!validationFailed) throw cleanupError;
@@ -234,7 +274,7 @@ export async function publishDynamicFamily(
     schema.fields.some((field) => field.name === "review_status" || field.name === "human_review_status"),
   );
   let assessment = parseProductAssessment(
-    structuralAssessment(candidate, failed.length === 0, requiresHilAcceptance, false),
+    structuralAssessment(candidate, failed.length === 0, requiresHilAcceptance, browserExecution !== null),
   );
   let hilAcceptance: Record<string, JsonValue> | null = null;
 
@@ -244,13 +284,14 @@ export async function publishDynamicFamily(
   await assertGenerationCurrent();
   await writeFile(assessmentPath, `${JSON.stringify(assessment, null, 2)}\n`, "utf8");
 
-  if (failed.length === 0 && requiresHilAcceptance) {
+  if (failed.length === 0 && requiresHilAcceptance && browserExecution === null) {
     if (input.hilGate === undefined || input.hilGate === null) {
       throw new Error("dynamic publication requires a durable HIL gate");
     }
     const provisionalAssessment = await fileReceipt(assessmentPath);
     const tables = await Promise.all(candidate.tables.map(async (table) => {
-      const output = operation.output_files[table.data_ref.output_file_index]!;
+      const output = outputForRef(table.data_ref);
+      if (output === undefined) throw new Error(`dynamic review table output is missing: ${table.definition.table_id}`);
       const receipt = await fileReceipt(path.join(outputDir, ...output.relative_path.split("/")));
       if (receipt.sha256 !== output.sha256 || receipt.size_bytes !== output.size_bytes) {
         throw new Error(`dynamic review staging drifted for '${table.definition.table_id}'`);
@@ -360,24 +401,30 @@ export async function publishDynamicFamily(
     task_id: input.taskId,
     build_id: input.buildId,
     registered_asset_ids: candidate.registered_asset_ids,
-    transform_digest: input.execution.receipt.transform_digest,
-    implementation_digest: input.execution.receipt.host_implementation_digest,
-    operation_result_manifest_id: operation.result_manifest_id,
-    sources: input.execution.receipt.input_asset_receipts.map((receipt) => ({
-      asset_id: receipt.asset_id,
-      locator_ref: receipt.locator_ref,
-      sha256: receipt.sha256,
-      size_bytes: receipt.size_bytes,
+    execution_kind: browserExecution === null ? "transform" : "browser",
+    ...(browserExecution === null ? {
+      transform_digest: transformExecution!.receipt.transform_digest,
+      implementation_digest: transformExecution!.receipt.host_implementation_digest,
+      input_asset_receipts: transformExecution!.receipt.input_asset_receipts,
+    } : {}),
+    operation_result_manifest_ids: integratedResults.map((result) => result.result_manifest_id),
+    sources: sourceAcquisitionProvenance.map((provenance) => ({
+      asset_id: provenance.asset_id,
+      locator_ref: provenance.canonical_accession ?? provenance.provider_id,
+      sha256: null,
+      size_bytes: null,
     })),
-    source_receipts: input.execution.receipt.input_asset_receipts,
-    core_acquisition_provenance: input.execution.sourceAcquisitionProvenance,
+    source_receipts: [],
+    core_acquisition_provenance: sourceAcquisitionProvenance,
     ...(hilAcceptance === null ? {} : { hil_acceptance: hilAcceptance }),
+    ...(browserExecution === null ? {} : { browser_evidence_acceptance: browserExecution.browserEvidenceAcceptance }),
   }, null, 2)}\n`, "utf8");
 
   const artifacts: ManifestArtifactEntry[] = [];
   for (const table of candidate.tables) {
     await assertGenerationCurrent();
-    const output = operation.output_files[table.data_ref.output_file_index]!;
+    const output = outputForRef(table.data_ref);
+    if (output === undefined) throw new Error(`dynamic artifact output is missing: ${table.definition.table_id}`);
     artifacts.push(await artifact(outputDir, output.relative_path,
       table.definition.role === "primary" ? "primary_dataset" : "supporting_dataset", "text/csv"));
   }

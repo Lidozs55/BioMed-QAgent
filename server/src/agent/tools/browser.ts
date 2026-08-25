@@ -31,6 +31,12 @@ import path from "node:path";
 import { load } from "cheerio";
 
 import type { BioMedAgentTool } from "../contracts.js";
+import {
+  BROWSER_ACQUISITION_POLICY_REVISION,
+  BROWSER_ACQUISITION_PROVIDER_ID,
+  BROWSER_ACQUISITION_PROVIDER_IMPLEMENTATION_DIGEST,
+  type BrowserAcquisitionEvidence,
+} from "@biomed/contracts";
 import type { ContentCache } from "../../external/acquisition/content-cache.js";
 import { canonicalRequestHash } from "../../external/acquisition/content-cache.js";
 import { ensureAcquisitionDirs, sourceAssetPath, taskWorkDirs, assertSafeFilename } from "../../external/acquisition/workdir.js";
@@ -40,13 +46,19 @@ import { BROWSER_HEADERS, MAX_CRAWLER_DOWNLOAD_BYTES } from "../../external/craw
 import { makeSourceId } from "../../external/sources/fallback.js";
 import { DATA_LEVEL, DATABASE } from "../../dataset/contracts/enums.js";
 import type { DownloadAttempt, SourceAsset } from "../../dataset/contracts/source.js";
-import { assetIdFromSha256 } from "../../dataset/adapters/identity.js";
+import { assetIdFromSha256, canonicalDigest } from "../../dataset/adapters/identity.js";
 import type { ToolHooks } from "./tool-hooks.js";
+import type { BrowserAcquisitionEvidenceStore } from "../../runtime/browser-acquisition-store.js";
+import { BrowserAcquisitionProposalStore } from "../../runtime/browser-acquisition-proposal-store.js";
+import type { DatasetHILGate } from "../../dataset/review/hil-policy.js";
+import type { BrowserFormalizationService } from "../../dataset/acquisition/browser-formalization.js";
+import { computeHILEvidenceDigest } from "../../dataset/contracts/hil-evidence.js";
 import { noopHooks } from "./tool-hooks.js";
 import { errorMessage } from "./result.js";
 
 const MAX_BODY_CHARS = 5000;
 const SOURCE = "browser";
+const BROWSER_PROVIDER_IMPLEMENTATION_DIGEST = BROWSER_ACQUISITION_PROVIDER_IMPLEMENTATION_DIGEST;
 
 /** Python ``_validate_download_filename`` parity. */
 function validateDownloadFilename(filename: string): void {
@@ -112,14 +124,22 @@ export interface BrowserToolsOptions {
   registrar?: import("../../persistence/cache-registrar.js").CacheRegistrar | null;
   /** Task id used as cache provenance. */
   taskId?: string | (() => string);
+  /** Run id used to bind browser evidence to one durable run. */
+  runId?: string | (() => string);
+  evidenceStore?: BrowserAcquisitionEvidenceStore;
+  proposalStore?: BrowserAcquisitionProposalStore;
+  formalizationHIL?: DatasetHILGate;
+  formalizationService?: BrowserFormalizationService;
 }
 
 export const NAVIGATE_PAGE_TOOL_NAME = "navigate_page";
 export const DOWNLOAD_FROM_PAGE_TOOL_NAME = "download_from_page";
+export const PROPOSE_BROWSER_FORMALIZATION_TOOL_NAME = "propose_browser_evidence_acceptance";
 
 export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentTool[] & {
   navigatePage: BioMedAgentTool;
   downloadFromPage: BioMedAgentTool;
+  proposeFormalization: BioMedAgentTool;
 } {
   const hooks = noopHooks(options.hooks);
 
@@ -174,6 +194,131 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
         return {
           content: JSON.stringify({ url, error: errorMessage(error) }),
         };
+      }
+    },
+  };
+
+  const proposeFormalization: BioMedAgentTool = {
+    name: PROPOSE_BROWSER_FORMALIZATION_TOOL_NAME,
+    label: "Request browser evidence acceptance",
+    description: "Request one Core-owned review for the complete browser evidence and binding; acceptance authorizes the deterministic Core pipeline, not arbitrary code or data changes.",
+    parameters: {
+      type: "object",
+      properties: {
+        evidence_id: { type: "string" },
+        recipe_id: { type: "string" },
+        recipe_version: { type: "string" },
+        binding_id: { type: "string" },
+        family_id: { type: "string" },
+        schema_ref: { type: "string" },
+        table_id: { type: "string" },
+        input_role: { type: "string" },
+        intended_role: { type: "string", enum: ["source", "mapping", "metadata", "carrier"] },
+      },
+      required: ["evidence_id", "recipe_id", "recipe_version", "binding_id", "family_id", "schema_ref", "table_id", "input_role", "intended_role"],
+      additionalProperties: false,
+    },
+    execute: async (argumentsValue, signal) => {
+      if (options.evidenceStore === undefined || options.proposalStore === undefined || options.formalizationHIL === undefined || options.formalizationService === undefined) {
+        throw new Error("browser formalization is unavailable without Core evidence/proposal/HIL services");
+      }
+      const record = argumentsValue as Record<string, unknown>;
+      const evidenceId = typeof record.evidence_id === "string" ? record.evidence_id : "";
+      const recipeId = typeof record.recipe_id === "string" ? record.recipe_id : "";
+      const recipeVersion = typeof record.recipe_version === "string" ? record.recipe_version : "";
+      const bindingId = typeof record.binding_id === "string" ? record.binding_id : "";
+      const familyId = typeof record.family_id === "string" ? record.family_id : "";
+      const schemaRef = typeof record.schema_ref === "string" ? record.schema_ref : "";
+      const tableId = typeof record.table_id === "string" ? record.table_id : "";
+      const inputRole = typeof record.input_role === "string" ? record.input_role : "";
+      const intendedRole = typeof record.intended_role === "string" ? record.intended_role : "";
+      const stored = await options.evidenceStore.get(evidenceId);
+      const taskId = typeof options.taskId === "function" ? options.taskId() : options.taskId;
+      const runId = typeof options.runId === "function" ? options.runId() : options.runId;
+      if (!taskId || !runId) throw new Error("browser formalization requires task and run identity");
+      const now = new Date().toISOString();
+      const proposal = await options.proposalStore.put({
+        schema_version: "1.0",
+        proposal_id: `browser_proposal_${canonicalDigest({ evidence: stored.evidenceDigest, recipeId, recipeVersion, bindingId, familyId, schemaRef, tableId, inputRole }).slice(0, 32)}`,
+        evidence_digest: stored.evidenceDigest,
+        task_id: taskId,
+        run_id: runId,
+        build_id: null,
+        generation: 1,
+        recipe_id: recipeId,
+        recipe_version: recipeVersion,
+        binding_id: bindingId,
+        family_id: familyId,
+        schema_ref: schemaRef,
+        table_id: tableId,
+        input_role: inputRole,
+        intended_role: intendedRole as "source" | "mapping" | "metadata" | "carrier",
+        status: "hil_pending",
+        created_at: now,
+        updated_at: now,
+        failure_reason: null,
+      });
+      const request: Parameters<DatasetHILGate["requestHIL"]>[0] = {
+        build_id: null,
+        kind: "data_review",
+        review_type: "browser_evidence_acceptance",
+        blocking: true,
+        subject: {
+          binding_id: bindingId,
+          table_ids: [tableId],
+          evidence_ids: [evidenceId],
+          source_asset_ids: [stored.evidence.source_asset_id],
+          locator_urls: [stored.evidence.final_url],
+        },
+        review_items: [],
+        summary: `Review browser evidence ${evidenceId} for Core formalization`,
+        evidence: {
+          evidence_id: evidenceId,
+          evidence_digest: stored.evidenceDigest,
+          requested_url: stored.evidence.requested_url,
+          final_url: stored.evidence.final_url,
+          redirect_chain: stored.evidence.redirect_chain.map((hop) => ({
+            from_url: hop.from_url,
+            to_url: hop.to_url,
+            status: hop.status,
+          })),
+          media_type: stored.evidence.media_type,
+          bytes_received: stored.evidence.bytes_received,
+          sha256: stored.evidence.sha256,
+          recipe_id: recipeId,
+          recipe_version: recipeVersion,
+          binding_id: bindingId,
+          family_id: familyId,
+          schema_ref: schemaRef,
+          table_id: tableId,
+          input_role: inputRole,
+        },
+        policy_ref: "browser.acquisition.evidence-acceptance.v1",
+        idempotency_key: `browser-formalization:${proposal.proposal_id}`,
+      };
+      const expectedHILEvidenceDigest = computeHILEvidenceDigest(request);
+      const review = await options.formalizationHIL.requestHIL(request, signal);
+      const accepted = review.decision.action === "accept";
+      await options.proposalStore.update(proposal.proposal_id, {
+        status: accepted ? "accepted" : "rejected",
+        failure_reason: accepted ? null : `formalization review ${review.decision.action}`,
+      });
+      if (!accepted) {
+        return { content: JSON.stringify({ proposal, review, formalization_status: "rejected", publication_status: "not_published" }) };
+      }
+      try {
+        const formalized = await options.formalizationService.formalize({
+          proposal,
+          evidence: stored.evidence,
+          review,
+          expectedHILEvidenceDigest,
+          acceptedBrowserEvidenceDigests: [stored.evidenceDigest],
+        });
+        return { content: JSON.stringify({ proposal: formalized.proposal, review, formalization_status: "formalized", browser_evidence_acceptance: { request_id: review.request_id, review_id: review.review_id, hil_evidence_digest: review.evidence_digest, accepted_browser_evidence_digests: [stored.evidenceDigest], reviewer: review.reviewer, reviewed_at: review.reviewed_at, reason: review.reason }, registration: formalized.registration, publication_status: "pipeline_continues_without_additional_browser_review" }) };
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        const failed = await options.proposalStore.update(proposal.proposal_id, { status: "failed", failure_reason: reason });
+        throw new Error(`browser formalization failed for ${failed.proposal_id}: ${reason}`, { cause: error });
       }
     },
   };
@@ -347,6 +492,32 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
           derived_from_asset_id: null,
           data_level: DATA_LEVEL.METADATA,
         };
+        const taskId = typeof options.taskId === "function" ? options.taskId() : options.taskId ?? "unknown_task";
+        const runId = typeof options.runId === "function" ? options.runId() : options.runId ?? null;
+        const evidence: BrowserAcquisitionEvidence = {
+          schema_version: "1.0",
+          evidence_id: `browser_evidence_${canonicalDigest({ taskId, runId, checksum, url, finalUrl: response.url }).slice(0, 32)}`,
+          task_id: taskId,
+          run_id: runId,
+          requested_url: url,
+          final_url: response.url,
+          redirect_chain: response.redirectChain ?? [],
+          status: response.status,
+          media_type: mediaType,
+          retrieved_at: finishedAt,
+          bytes_received: bytesReceived,
+          sha256: checksum,
+          browser_policy_revision: BROWSER_ACQUISITION_POLICY_REVISION,
+          source_asset_id: asset.asset_id,
+          source_id: asset.source_id,
+          relative_path: asset.relative_path,
+          download_attempt_id: attempt.attempt_id,
+          provider_id: BROWSER_ACQUISITION_PROVIDER_ID,
+          provider_implementation_digest: BROWSER_PROVIDER_IMPLEMENTATION_DIGEST,
+        };
+        const persistedEvidence = options.evidenceStore === undefined
+          ? null
+          : await options.evidenceStore.put(evidence);
         hooks.onQuery(filename, SOURCE, "success", 1);
         return {
           content: JSON.stringify({
@@ -358,6 +529,9 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
             retrieved_at: finishedAt,
             source_asset: asset,
             download_attempt: attempt,
+            browser_acquisition_evidence: evidence,
+            browser_evidence_digest: persistedEvidence?.evidenceDigest ?? canonicalDigest(evidence),
+            formal_status: "preparation_only",
           }),
         };
       } catch (error) {
@@ -375,5 +549,9 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
     },
   };
 
-  return Object.assign([navigatePage, downloadFromPage], { navigatePage, downloadFromPage });
+  return Object.assign([navigatePage, downloadFromPage, proposeFormalization], {
+    navigatePage,
+    downloadFromPage,
+    proposeFormalization,
+  });
 }

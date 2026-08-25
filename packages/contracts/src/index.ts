@@ -13,6 +13,7 @@ export type * from "./operation-result.js";
 export type * from "./deterministic-derive.js";
 export * from "./family-transform.js";
 export * from "./dynamic-family-preflight.js";
+export * from "./browser-acquisition.js";
 export type * from "./acquisition.js";
 export * from "./dataset-bridge.js";
 export type * from "./events.js";
