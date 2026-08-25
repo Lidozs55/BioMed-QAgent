@@ -57,8 +57,7 @@ import {
 import type { DynamicFamilyAcquisitionPlanningInput } from "../dataset/dynamic-family/preflight.js";
 import { publishDynamicFamily } from "../dataset/dynamic-family/publication.js";
 import { TypeScriptDatasetCore } from "../dataset/service/ts-core.js";
-import { BrowserParserRecipeRegistry } from "../dataset/acquisition/browser-recipe-registry.js";
-import { createDefaultRegisteredTableRegistry } from "../dataset/adapters/registered/index.js";
+import { BrowserParserRecipeRegistry, createDefaultBrowserParserRecipeRegistry } from "../dataset/acquisition/browser-recipe-registry.js";
 import { PublicHttpClient } from "../external/network/http-client.js";
 import { ContentCache } from "../external/acquisition/content-cache.js";
 import { DatabaseClient } from "../persistence/db-client.js";
@@ -452,7 +451,7 @@ export async function createPhase3Runtime(
       });
       const cache = new ContentCache(path.join(taskRoot, "cache"));
       const sourceAssetRegistry = new SourceAssetRegistry(taskId, taskRoot);
-      const browserRecipeRegistry = options.browserRecipeRegistry ?? new BrowserParserRecipeRegistry(createDefaultRegisteredTableRegistry());
+      const browserRecipeRegistry = options.browserRecipeRegistry ?? createDefaultBrowserParserRecipeRegistry();
       const acquisitionRuntime = options.dynamicFamilySeams?.createAcquisitionRuntime?.({
         taskId,
         taskRoot,

@@ -570,7 +570,7 @@ function ensureNoRejectedRows(audit: RegisteredTableAudit): void {
 }
 
 export class RegisteredTableAdapter {
-  constructor(private readonly registry: RegisteredTableRegistry) {}
+  constructor(private readonly registry: Pick<RegisteredTableRegistry, "resolve">) {}
 
   async parse(
     requestValue: unknown,
