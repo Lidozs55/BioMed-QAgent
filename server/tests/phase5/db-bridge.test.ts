@@ -4,7 +4,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { mkdir } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -31,8 +31,7 @@ describeIf("database bridge + local cache tools", () => {
   let client: DatabaseClient;
 
   beforeAll(async () => {
-    const dir = path.join(os.tmpdir(), `p5-db-${Math.random().toString(36).slice(2)}`);
-    await mkdir(dir, { recursive: true });
+    const dir = await mkdtemp(path.join(os.tmpdir(), "p5-db-"));
     root = dir;
     client = new DatabaseClient({
       cacheDir: path.join(root, "cache"),

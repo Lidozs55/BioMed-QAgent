@@ -71,6 +71,24 @@ async function writeNested(target: string, content: string | Buffer): Promise<vo
   await writeFile(target, content);
 }
 
+async function waitForPermissionRequest(permissionFixture: {
+  broker: { hasPending(runId: string): boolean };
+  events: Array<{ type: string; request_id?: string }>;
+}): Promise<string> {
+  await expect.poll(
+    () => permissionFixture.broker.hasPending("run-1"),
+    { timeout: 10_000 },
+  ).toBe(true);
+  await expect.poll(() => permissionFixture.events.some(
+    (event) => event.type === "permission_requested" && event.request_id !== undefined,
+  ), { timeout: 10_000 }).toBe(true);
+  const requestId = permissionFixture.events
+    .filter((event) => event.type === "permission_requested")
+    .at(-1)?.request_id;
+  if (requestId === undefined) throw new Error("permission request id missing");
+  return requestId;
+}
+
 async function removeEventually(root: string): Promise<void> {
   let lastError: unknown;
   for (let attempt = 0; attempt < 50; attempt += 1) {
@@ -183,9 +201,7 @@ describe("governed Task Workspace (data/workspaces/<taskId>)", () => {
     // path, classifies as project scope, and is gated by the broker
     // (ask_when_needed → ask → suspend).
     const requested = workspace.read({ path: candidate });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(permissionFixture.broker.hasPending("run-1")).toBe(true);
-    const requestId = (permissionFixture.events.at(-1) as { request_id: string }).request_id;
+    const requestId = await waitForPermissionRequest(permissionFixture);
     await permissionFixture.broker.resolve("run-1", requestId, "deny");
     await expect(requested).rejects.toMatchObject({ name: "PermissionDeniedError" });
   });
@@ -213,9 +229,7 @@ describe("governed Task Workspace (data/workspaces/<taskId>)", () => {
     const { workspace, permissionFixture } = await fixture();
     // Default ask_when_needed: an external read suspends the tool call.
     const requested = workspace.read({ path: external });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(permissionFixture.broker.hasPending("run-1")).toBe(true);
-    const requestId = (permissionFixture.events.at(-1) as { request_id: string }).request_id;
+    const requestId = await waitForPermissionRequest(permissionFixture);
     await permissionFixture.broker.resolve("run-1", requestId, "deny");
     await expect(requested).rejects.toMatchObject({ name: "PermissionDeniedError" });
 
@@ -311,9 +325,7 @@ describe("governed Task Workspace (data/workspaces/<taskId>)", () => {
 
     // The escaped target is classified external → ask → deny.
     const requested = workspace.read({ path: "notes/escape/secret.txt" });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(permissionFixture.broker.hasPending("run-1")).toBe(true);
-    const requestId = (permissionFixture.events.at(-1) as { request_id: string }).request_id;
+    const requestId = await waitForPermissionRequest(permissionFixture);
     await permissionFixture.broker.resolve("run-1", requestId, "deny");
     await expect(requested).rejects.toMatchObject({ name: "PermissionDeniedError" });
 
@@ -374,9 +386,7 @@ describe("governed Task Workspace (data/workspaces/<taskId>)", () => {
       args: ["--token=secret-value"],
     });
     // Default ask_when_needed: the exec request suspends until resolved.
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(permissionFixture.broker.hasPending("run-1")).toBe(true);
-    const requestId = (permissionFixture.events.at(-1) as { request_id: string }).request_id;
+    const requestId = await waitForPermissionRequest(permissionFixture);
     await permissionFixture.broker.resolve("run-1", requestId, "deny");
     const result = await resultPromise;
 
@@ -528,7 +538,7 @@ describe("governed Task Workspace (data/workspaces/<taskId>)", () => {
       executable: process.execPath,
       args: ["--version"],
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForPermissionRequest(permissionFixture);
     const request = permissionFixture.events.at(-1) as { command: string } | undefined;
     expect(request?.command).toBeDefined();
     // Two different executables named python.exe must be distinguishable:
@@ -632,13 +642,15 @@ describe("governed Task Workspace (data/workspaces/<taskId>)", () => {
     }
 
     const reading = workspace.read({ path: link });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(permissionFixture.broker.hasPending("run-1")).toBe(true);
+    await waitForPermissionRequest(permissionFixture);
     // While the approval waits, the link is swapped to the OTHER target.
     await rm(link);
     await symlink(path.join(secretDir, "current.csv"), link);
-    const requestId = permissionFixture.events.at(-1) as { request_id: string };
-    await permissionFixture.broker.resolve("run-1", requestId.request_id, "allow", "once");
+    const requestId = permissionFixture.events
+      .filter((event) => event.type === "permission_requested")
+      .at(-1)?.request_id;
+    if (requestId === undefined) throw new Error("permission request id missing");
+    await permissionFixture.broker.resolve("run-1", requestId, "allow", "once");
 
     // The approved read must NOT follow the new target: it fails closed.
     await expect(reading).rejects.toMatchObject({ code: "PATH_ESCAPE" });
@@ -675,9 +687,8 @@ describe("governed Task Workspace (data/workspaces/<taskId>)", () => {
     await writeNested(target, "x");
     // A real resolution passes verification. (external read asks; approve it)
     const resolution = resolveAgentPath(context, target, "fs.read");
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    const request = permissionFixture.events.at(-1) as { request_id: string };
-    await permissionFixture.broker.resolve("run-1", request.request_id, "allow", "once");
+    const requestId = await waitForPermissionRequest(permissionFixture);
+    await permissionFixture.broker.resolve("run-1", requestId, "allow", "once");
     const resolved = await resolution;
     await expect(verifyAgentPathUnchanged(context, resolved)).resolves.toBeUndefined();
     // A fabricated stale approval (canonical pointing elsewhere) is rejected.

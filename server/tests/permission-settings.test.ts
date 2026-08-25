@@ -412,8 +412,7 @@ describe("agent permission settings API (P6)", () => {
     // placeholder so the eventual ``rejects`` assertion is not flagged as an
     // unhandled rejection in between.
     suspended.catch(() => undefined);
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(broker.hasPending("run_ts_1")).toBe(true);
+    await expect.poll(() => broker.hasPending("run_ts_1"), { timeout: 10_000 }).toBe(true);
 
     const restricted = await fetch(`${base}/api/v1/settings/agent-permissions`, {
       method: "PUT",

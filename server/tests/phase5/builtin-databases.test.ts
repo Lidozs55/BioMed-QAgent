@@ -8,7 +8,7 @@
  * Python records, and the product API merge semantics.
  */
 
-import { rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
@@ -29,7 +29,7 @@ const roots: string[] = [];
 const servers: Array<ReturnType<typeof createServer>> = [];
 
 async function temporaryDirectory(label: string): Promise<string> {
-  const root = path.join(os.tmpdir(), `phase8-${label}-${Math.random().toString(36).slice(2)}`);
+  const root = await mkdtemp(path.join(os.tmpdir(), `phase8-${label}-`));
   roots.push(root);
   return root;
 }
@@ -68,8 +68,10 @@ class FakeDatabase implements ProductDatabaseClient {
 }
 
 afterAll(async () => {
-  for (const server of servers) server.close();
-  for (const root of roots) await rm(root, { recursive: true, force: true }).catch(() => undefined);
+  await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  })));
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }).catch(() => undefined)));
 });
 
 describe("builtin database catalogue", () => {

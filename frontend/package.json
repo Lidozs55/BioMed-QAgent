@@ -4,15 +4,15 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "predev": "pnpm --filter @biomed/contracts build",
+    "predev": "node ../scripts/build-contracts-if-needed.mjs",
     "dev": "vite",
-    "prebuild": "pnpm --filter @biomed/contracts build",
+    "prebuild": "node ../scripts/build-contracts-if-needed.mjs",
     "build": "tsc -b && vite build",
     "lint": "eslint . --max-warnings 0",
     "tsc": "tsc -b",
     "typecheck": "tsc -b",
     "preview": "vite preview",
-    "pretest": "pnpm --filter @biomed/contracts build",
+    "pretest": "node ../scripts/build-contracts-if-needed.mjs",
     "test": "vitest run",
     "test:watch": "vitest"
   },

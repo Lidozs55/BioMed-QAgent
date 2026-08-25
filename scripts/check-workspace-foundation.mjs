@@ -45,6 +45,7 @@ for (const script of ["dev:legacy-backend", "dev:host-proxy-only", "dev:legacy-r
 assert.equal(typeof rootPackage.scripts?.start, "string", "Missing root start script");
 
 requireFile("pnpm-workspace.yaml");
+requireFile("scripts/build-contracts-if-needed.mjs");
 const workspace = readFileSync(pathFromRoot("pnpm-workspace.yaml"), "utf8");
 for (const packagePath of ["frontend", "server", "packages/*"]) {
   assert.match(workspace, new RegExp(`^\\s*- ${packagePath.replace("*", "\\*")}\\s*$`, "m"));
@@ -60,6 +61,13 @@ assert.equal(frontendPackage.name, "@biomed/frontend");
 assert.equal(frontendPackage.packageManager, undefined);
 assert.equal(frontendPackage.scripts?.dev, "vite", "Frontend dev behavior must remain Vite");
 assert.equal(typeof frontendPackage.scripts?.typecheck, "string");
+for (const script of ["predev", "prebuild", "pretest"]) {
+  assert.equal(
+    frontendPackage.scripts?.[script],
+    "node ../scripts/build-contracts-if-needed.mjs",
+    `Frontend ${script} must ensure its runtime contracts dependency`,
+  );
+}
 
 for (const config of ["tsconfig.json", "tsconfig.app.json", "tsconfig.node.json"]) {
   const tsconfig = readJson(`frontend/${config}`);
@@ -69,17 +77,22 @@ for (const config of ["tsconfig.json", "tsconfig.app.json", "tsconfig.node.json"
 const serverPackage = readJson("server/package.json");
 assert.equal(serverPackage.name, "@biomed/server");
 assert.equal(serverPackage.packageManager, undefined);
-for (const script of ["predev", "pretest"]) {
+for (const script of ["predev", "pretest", "prestart"]) {
   assert.equal(
     serverPackage.scripts?.[script],
-    "pnpm --filter @biomed/contracts build",
-    `Server ${script} must build its runtime contracts dependency`,
+    "node ../scripts/build-contracts-if-needed.mjs",
+    `Server ${script} must ensure its runtime contracts dependency`,
   );
 }
 assert.equal(readJson("server/tsconfig.json").extends, "../tsconfig.base.json");
 
 const contractsPackage = readJson("packages/contracts/package.json");
 assert.equal(contractsPackage.name, "@biomed/contracts");
+assert.equal(
+  contractsPackage.scripts?.build,
+  "node ../../scripts/build-contracts-if-needed.mjs",
+  "Contracts build must use the shared cached build entrypoint",
+);
 assert.equal(contractsPackage.packageManager, undefined);
 assert.equal(
   readJson("packages/contracts/tsconfig.json").extends,

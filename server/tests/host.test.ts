@@ -193,12 +193,13 @@ describe("application host (Phase 8: no legacy proxy, no experimental Pi)", () =
   test("listens before initialization; requests get 503 starting until ready", async () => {
     let resolveRuntime: () => void = () => undefined;
     const runtimeGate = new Promise<void>((resolve) => { resolveRuntime = resolve; });
-    let actualPort = 0;
+    let resolveListening: (port: number) => void = () => undefined;
+    const listening = new Promise<number>((resolve) => { resolveListening = resolve; });
     const listenPublic = async (server: import("node:http").Server): Promise<void> => {
       await new Promise<void>((resolve, reject) => {
         server.once("error", reject);
         server.listen(0, "127.0.0.1", () => {
-          actualPort = (server.address() as AddressInfo).port;
+          resolveListening((server.address() as AddressInfo).port);
           resolve();
         });
       });
@@ -229,7 +230,7 @@ describe("application host (Phase 8: no legacy proxy, no experimental Pi)", () =
     ).then((created) => { host = created; });
 
     // 初始化期间端口已可用：返回 503 {"status":"starting"}。
-    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+    const actualPort = await listening;
     expect(host).toBeUndefined();
     const starting = await fetch(`http://127.0.0.1:${actualPort}/`);
     expect(starting.status).toBe(503);

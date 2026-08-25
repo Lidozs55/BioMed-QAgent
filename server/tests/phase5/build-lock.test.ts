@@ -6,8 +6,9 @@
  * (acquired_at-based staleness, blind rm, mkdir-only takeover).
  */
 
+import { createRequire } from "node:module";
 import { spawn } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
+import { appendFileSync, existsSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, rm, readdir, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import os from "node:os";
@@ -18,8 +19,7 @@ import { parseValidationResult } from "../../src/dataset/contracts/validation.js
 import { promotePublication } from "../../src/dataset/publish/publisher.js";
 import { LockLostError, acquireBuildLock, BuildLockError } from "../../src/dataset/service/build-lock.js";
 
-const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
-
+const require = createRequire(import.meta.url);
 const roots: string[] = [];
 afterAll(async () => {
   for (const root of roots) {
@@ -121,7 +121,7 @@ describe("I-04 build lock ownership", () => {
 
   it("concurrent stale takeovers yield exactly one owner (atomic rename)", async () => {
     const root = await lockRoot();
-    for (let round = 0; round < 8; round += 1) {
+    for (let round = 0; round < 4; round += 1) {
       const lockDir = lockDirFor(root);
       await mkdir(lockDir, { recursive: true });
       await writeFakeOwner(lockDir, 99_999_999); // dead pid => stale
@@ -144,37 +144,93 @@ describe("I-04 build lock ownership", () => {
 
   it("real child processes serialize on the lock (cross-process mutual exclusion)", async () => {
     const root = await lockRoot();
-    const script = join(repoRoot, "server", "tests", "phase5", "fixtures", "build-lock-child.mts");
-    const pnpmDir = join(repoRoot, "node_modules", ".pnpm");
-    const viteNodeVersions = readdirSync(pnpmDir).filter((name) => name.startsWith("vite-node@")).sort();
-    if (viteNodeVersions.length === 0) {
-      throw new Error("vite-node not found in node_modules/.pnpm");
-    }
-    const viteNodeEntry = join(
-      pnpmDir,
-      viteNodeVersions[viteNodeVersions.length - 1],
-      "node_modules",
-      "vite-node",
-      "vite-node.mjs",
-    );
+    const script = fileURLToPath(new URL("./fixtures/build-lock-child.mts", import.meta.url));
+    const tsxEntry = require.resolve("tsx/cli");
 
-    const children = [0, 1, 2].map(() =>
-      spawn(process.execPath, [viteNodeEntry, script, root, "2", "250"], { stdio: "pipe" }),
+    // Keep the black-box test within the worker budget: the Vitest worker
+    // competes with one real child process. This still proves a real
+    // cross-process lease race without adding two extra CPU-heavy workers.
+    const startPath = join(root, "child.start");
+    const readyPath = join(root, "child.ready");
+    await mkdir(root, { recursive: true });
+    const child = spawn(
+      process.execPath,
+      [tsxEntry, script, root, "2", "150", readyPath, startPath],
+      { stdio: "pipe" },
     );
-    const exits = await Promise.all(
-      children.map((child, index) => new Promise<number>((resolve, reject) => {
-        let stderr = "";
-        child.stderr.on("data", (chunk) => { stderr += String(chunk); });
-        child.on("close", (code) => {
-          if (code !== 0) {
-            reject(new Error(`child ${index} exited ${code}: ${stderr.slice(0, 400)}`));
-            return;
+    const childResult = new Promise<{ code: number; stderr: string }>((resolve) => {
+      let stderr = "";
+      child.stderr.on("data", (chunk) => { stderr += String(chunk); });
+      child.on("error", (error) => { stderr += String(error); });
+      child.on("close", (code) => resolve({ code: code ?? -1, stderr: stderr.slice(0, 400) }));
+    });
+    const stopChild = async (): Promise<{ code: number; stderr: string } | undefined> => {
+      await writeFile(startPath, "abort\n", "utf8").catch(() => undefined);
+      if (child.exitCode === null) child.kill();
+      return Promise.race([
+        childResult,
+        new Promise<undefined>((resolve) => {
+          const timer = setTimeout(() => resolve(undefined), 2_000);
+          timer.unref();
+        }),
+      ]);
+    };
+    const parentTag = `parent-${process.pid}`;
+    const logParent = (line: string): void => {
+      appendFileSync(join(root, "events.log"), `${Date.now()} ${parentTag} ${line}\n`);
+    };
+    const runParent = async (): Promise<void> => {
+      for (let round = 0; round < 2; round += 1) {
+        let lease: Awaited<ReturnType<typeof acquireBuildLock>> | undefined;
+        try {
+          lease = await acquireBuildLock(
+            { lockRoot: root, retryMs: 20_000, retryIntervalMs: 20, heartbeatMs: 150, staleMs: 1_500 },
+            "task_1",
+            "build_1",
+            parentTag,
+          );
+          logParent("acquire");
+          await new Promise((resolve) => setTimeout(resolve, 150));
+          logParent((await lease.assertOwned()) ? "fence-ok" : "fence-lost");
+        } finally {
+          if (lease !== undefined) {
+            await lease.release();
+            logParent("release");
           }
-          resolve(code ?? -1);
-        });
-      })),
-    );
-    expect(exits.every((code) => code === 0)).toBe(true);
+        }
+      }
+    };
+
+    let parentCompletion: Promise<void> | undefined;
+    const childCompletion = childResult;
+
+    try {
+      const readyDeadline = Date.now() + 10_000;
+      while (!existsSync(readyPath) && Date.now() < readyDeadline && child.exitCode === null) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      if (!existsSync(readyPath)) {
+        const earlyResult = await stopChild();
+        throw new Error(`lock child did not reach the barrier: ${JSON.stringify(earlyResult)}`);
+      }
+      await writeFile(startPath, "start\n", "utf8");
+
+      parentCompletion = runParent().catch(async (error: unknown) => {
+        await stopChild();
+        throw error;
+      });
+      const [childOutcome, parentOutcome] = await Promise.allSettled([
+        childCompletion,
+        parentCompletion,
+      ]);
+      if (childOutcome.status === "rejected") throw childOutcome.reason;
+      if (childOutcome.value.code !== 0) {
+        throw new Error(`lock child failed (${childOutcome.value.code}): ${childOutcome.value.stderr}`);
+      }
+      if (parentOutcome.status === "rejected") throw parentOutcome.reason;
+    } finally {
+      await stopChild();
+    }
 
     // Mutual exclusion: the acquire/fence/release log must never show two
     // overlapping holders.

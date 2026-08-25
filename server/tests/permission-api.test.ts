@@ -34,6 +34,17 @@ import type { EventEnvelope } from "@biomed/contracts";
 
 const roots: string[] = [];
 
+async function waitForPermissionEvent(eventsUrl: string): Promise<EventEnvelope> {
+  let requested: EventEnvelope | null = null;
+  await expect.poll(async () => {
+    const page = await fetch(eventsUrl).then((response) => response.json()) as { events: EventEnvelope[] };
+    requested = page.events.find((event) => event.type === "permission_requested") ?? null;
+    return requested;
+  }, { timeout: 10_000, interval: 25 }).not.toBeNull();
+  if (requested === null) throw new Error("permission_requested event missing");
+  return requested;
+}
+
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;
   const promise = new Promise<void>((res) => {
@@ -171,17 +182,10 @@ describe("permission control plane over HTTP (P3)", () => {
 
     // Wait for the durable permission_requested event (the tool call is
     // suspended inside the run loop).
-    let requested: EventEnvelope | null = null;
-    for (let attempt = 0; attempt < 100; attempt += 1) {
-      const page = await fetch(
-        `http://127.0.0.1:${port}/api/v1/tasks/${accepted.task_id}/events?after_sequence=0`,
-      ).then((response) => response.json()) as { events: EventEnvelope[] };
-      requested = page.events.find((event) => event.type === "permission_requested") ?? null;
-      if (requested !== null) break;
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    }
-    expect(requested).not.toBeNull();
-    const requestedPayload = requested?.payload;
+    const requested = await waitForPermissionEvent(
+      `http://127.0.0.1:${port}/api/v1/tasks/${accepted.task_id}/events?after_sequence=0`,
+    );
+    const requestedPayload = requested.payload;
     if (requestedPayload === undefined || requestedPayload.type !== "permission_requested") {
       throw new Error("permission_requested payload missing");
     }
@@ -305,19 +309,13 @@ describe("permission control plane over HTTP (P3)", () => {
     });
     const accepted = await created.json() as { task_id: string; run_id: string };
 
-    let requestId: string | null = null;
-    for (let attempt = 0; attempt < 100; attempt += 1) {
-      const page = await fetch(
-        `http://127.0.0.1:${port}/api/v1/tasks/${accepted.task_id}/events?after_sequence=0`,
-      ).then((response) => response.json()) as { events: EventEnvelope[] };
-      const requested = page.events.find((event) => event.type === "permission_requested");
-      if (requested !== undefined && requested.payload.type === "permission_requested") {
-        requestId = requested.payload.request_id;
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 20));
+    const requested = await waitForPermissionEvent(
+      `http://127.0.0.1:${port}/api/v1/tasks/${accepted.task_id}/events?after_sequence=0`,
+    );
+    if (requested.payload.type !== "permission_requested") {
+      throw new Error("permission_requested payload missing");
     }
-    expect(requestId).not.toBeNull();
+    const requestId = requested.payload.request_id;
 
     await fetch(
       `http://127.0.0.1:${port}/api/v1/tasks/${accepted.task_id}/runs/${accepted.run_id}/permissions/${requestId}`,
