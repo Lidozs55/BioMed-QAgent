@@ -96,6 +96,7 @@ export async function migrateLegacyRegistry(
         },
         params: parseStoredJson(row.params),
         source: row.source === "api" || row.source === "catalog" ? row.source : "manual",
+        metadata_source: row.source === "manual" ? "user" : "catalog",
         active: Boolean(row.active),
         created_at: String(row.created_at),
         updated_at: String(row.updated_at),

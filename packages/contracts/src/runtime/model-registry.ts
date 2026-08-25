@@ -95,10 +95,23 @@ function parseManagedModel(value: unknown, index: number): ManagedModelInfo {
     params: assertJsonRecord(Reflect.get(object, "params"), `${path}.params`),
     param_specs: assertArray(Reflect.get(object, "param_specs"), `${path}.param_specs`, (item, itemIndex) => parseParameterSpec(item, `${path}.param_specs[${itemIndex}]`)),
     source,
+    metadata_source: parseOptionalMetadataSource(Reflect.get(object, "metadata_source"), `${path}.metadata_source`),
     active: assertBoolean(Reflect.get(object, "active"), `${path}.active`),
     created_at: assertString(Reflect.get(object, "created_at"), `${path}.created_at`),
     updated_at: assertString(Reflect.get(object, "updated_at"), `${path}.updated_at`),
   };
+}
+
+function parseOptionalMetadataSource(
+  value: unknown,
+  path: string,
+): "catalog" | "api" | "user" | undefined {
+  if (value === undefined) return undefined;
+  const candidate = assertString(value, path);
+  if (candidate !== "catalog" && candidate !== "api" && candidate !== "user") {
+    throw new APIError(502, `Unexpected metadata source at ${path}: ${candidate}`);
+  }
+  return candidate;
 }
 
 export function parseProvidersEnvelope(body: unknown): ProviderInfo[] {

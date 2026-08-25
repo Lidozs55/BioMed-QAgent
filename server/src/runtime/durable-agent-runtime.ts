@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { Readable } from "node:stream";
 
 import { sha256Bytes } from "../dataset/adapters/hashing.js";
@@ -1145,21 +1145,60 @@ export async function createDurableAgentRuntime(
   async function compactTask(taskId: string): Promise<Record<string, string>> {
     const snapshot = await repository.getSnapshot(taskId);
     if (snapshot === null) throw new ReferenceError("Task not found");
-    const runId = snapshot.task.active_run_id;
+    // Manual compaction is allowed at any point in a task's life, not only
+    // while a run is active. When idle, compact against the latest run and
+    // lazily rebuild the persisted Pi session if this process does not hold
+    // one (e.g. after a server restart).
+    const runId = snapshot.task.active_run_id ?? snapshot.runs.at(-1)?.run_id ?? null;
     if (runId === null) {
-      throw new DurableTaskConflictError("active_run", "Task has no active run to compact");
+      throw new DurableTaskConflictError("active_run", "Task has no conversation to compact");
     }
-    const task = activeTasks.get(taskId);
-    if (task === undefined || task.activeRunId !== runId || task.session.compact === undefined) {
-      throw new DurableTaskConflictError("active_run", "Task compaction is unavailable");
+    let task = activeTasks.get(taskId);
+    let temporarySession = false;
+    if (task === undefined) {
+      const sessionDir = path.join(options.tasksRoot, taskId, "state", "pi-session");
+      let hasPersistedSession: boolean;
+      try {
+        hasPersistedSession = (await readdir(sessionDir))
+          .some((name) => name.endsWith(".jsonl"));
+      } catch {
+        hasPersistedSession = false;
+      }
+      if (!hasPersistedSession) {
+        throw new DurableTaskConflictError(
+          "active_run",
+          "Task has no conversation to compact",
+        );
+      }
+      task = await createSession(taskId, runId, snapshot.task.mode ?? "agent");
+      temporarySession = true;
     }
-    const result = await task.session.compact();
-    await repository.appendRunEvent(taskId, runId, {
-      type: "conversation_compacted",
-      covered_through_run_id: runId,
-      summary_digest: createHash("sha256").update(result.summary, "utf8").digest("hex"),
-    });
-    return { status: "compaction_requested", task_id: taskId, run_id: runId };
+    try {
+      if (task.session.compact === undefined) {
+        throw new DurableTaskConflictError("active_run", "Task compaction is unavailable");
+      }
+      let result: { summary: string };
+      try {
+        result = await task.session.compact();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (/Nothing to compact|Already compacted/.test(message)) {
+          throw new DurableTaskConflictError(
+            "active_run",
+            "Task has no conversation to compact",
+          );
+        }
+        throw error;
+      }
+      await repository.appendRunEvent(taskId, runId, {
+        type: "conversation_compacted",
+        covered_through_run_id: runId,
+        summary_digest: createHash("sha256").update(result.summary, "utf8").digest("hex"),
+      });
+      return { status: "compaction_requested", task_id: taskId, run_id: runId };
+    } finally {
+      if (temporarySession) await task.session.dispose();
+    }
   }
 
   async function injectContext(

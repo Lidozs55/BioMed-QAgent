@@ -15,6 +15,7 @@ import path from "node:path";
 import {
   DEFAULT_RUNTIME_LIMITS,
   RUNTIME_LIMIT_RANGES,
+  type ParameterSpec,
   type RuntimeLimits,
 } from "@biomed/contracts";
 
@@ -34,7 +35,7 @@ import {
   requiredString,
   type JsonObject,
 } from "../../http/validation.js";
-import { guessContextWindow, PARAM_SPECS } from "./catalog.js";
+import { catalogCapacity, catalogContextWindow, lookupModelCatalog, paramSpecsFor } from "./catalog.js";
 import { migrateLegacyRegistry, migrateLegacySettings } from "./migration.js";
 import { resolveActiveConfig, resolveVlmConfig } from "./model-resolution.js";
 import { createSettingsRouter } from "./routes.js";
@@ -121,6 +122,7 @@ export class ModelSettingsService {
       (model) => service.activateInMemory(model),
     );
     bootstrapEnvironmentDefaults(service.registry, service.auth, environment);
+    service.syncCatalogMetadata();
     await service.persist();
     return service;
   }
@@ -149,6 +151,18 @@ export class ModelSettingsService {
       : this.auth.provider_api_keys[settings.provider_id] ?? "";
     const contextWindow = settings.context_window ?? 131_072;
     const reserve = Math.ceil(contextWindow * settings.safety_reserve_ratio);
+    const modelName = settings.model_name.trim();
+    // Pi clamps max output to the remaining context budget; a zero/negative
+    // budget still requires user confirmation before running because Pi would
+    // otherwise silently turn the request into a 1-token response.
+    const availableInputTokens = Math.max(0, contextWindow - settings.max_tokens - reserve);
+    const runBlockReason = apiKey === ""
+      ? "provider credentials are required"
+      : modelName === ""
+        ? "model configuration is required"
+        : availableInputTokens <= 0
+          ? "上下文窗口不足以容纳最大输出和保留空间"
+          : null;
     return {
       base_url: settings.base_url,
       api_key: maskApiKey(apiKey),
@@ -162,9 +176,9 @@ export class ModelSettingsService {
       safety_reserve_tokens: reserve,
       compaction_trigger_ratio: settings.compaction_trigger_ratio,
       compaction_target_ratio: settings.compaction_target_ratio,
-      available_input_tokens: Math.max(1, contextWindow - settings.max_tokens - reserve),
-      run_ready: apiKey !== "",
-      run_block_reason: apiKey === "" ? "provider credentials are required" : null,
+      available_input_tokens: availableInputTokens,
+      run_ready: apiKey !== "" && modelName !== "",
+      run_block_reason: runBlockReason,
       runtime_limits: settings.runtime_limits,
     };
   }
@@ -210,6 +224,11 @@ export class ModelSettingsService {
 
   getProvider(id: string): ProviderRecord {
     return this.provider(id);
+  }
+
+  providerParamSpecs(id: string): ParameterSpec[] {
+    const provider = this.provider(id);
+    return paramSpecsFor(provider.preset_id ?? provider.id);
   }
 
   listProviders(): JsonObject[] {
@@ -285,6 +304,7 @@ export class ModelSettingsService {
       }
       const current = timestamp();
       const capabilities = optionalRecord(body.capabilities);
+      const source = body.source === "api" || body.source === "catalog" ? body.source : "manual";
       created = {
         id: `model_${randomUUID().replaceAll("-", "")}`,
         provider_id: providerId,
@@ -301,12 +321,26 @@ export class ModelSettingsService {
           audio: capabilities.audio === true,
         },
         params: optionalRecord(body.params),
-        source: body.source === "api" || body.source === "catalog" ? body.source : "manual",
+        source,
+        metadata_source: source === "manual" ? "user" : "catalog",
         active: false,
         created_at: current,
         updated_at: current,
       };
+      this.applyCatalogMetadata(created, true);
+      created.metadata_source = source === "manual"
+        ? "user"
+        : lookupModelCatalog(created.model_id) === undefined ? "api" : "catalog";
+      const hasActiveModel =
+        this.registry.models.some((item) => item.active) ||
+        (
+          this.registry.settings.active_model_id !== null &&
+          this.registry.models.some(
+            (item) => item.id === this.registry.settings.active_model_id,
+          )
+        );
       this.registry.models.push(created);
+      if (!hasActiveModel) this.activateInMemory(created);
     }).then(() => created);
   }
 
@@ -320,6 +354,12 @@ export class ModelSettingsService {
       if (body.max_output_tokens !== undefined) model.max_output_tokens = body.max_output_tokens === null ? null : boundedNumber(body.max_output_tokens, "max_output_tokens", 1);
       if (body.suggested_max_tokens !== undefined) model.suggested_max_tokens = body.suggested_max_tokens === null ? null : boundedNumber(body.suggested_max_tokens, "suggested_max_tokens", 1);
       if (body.params !== undefined) model.params = { ...model.params, ...asRecord(body.params) };
+      if (body.context_window !== undefined ||
+          body.max_output_tokens !== undefined ||
+          body.suggested_max_tokens !== undefined ||
+          body.capabilities !== undefined) {
+        model.metadata_source = "user";
+      }
       model.updated_at = timestamp();
       updated = model;
     }).then(() => updated);
@@ -345,6 +385,8 @@ export class ModelSettingsService {
     return this.discover(
       provider.base_url,
       this.auth.provider_api_keys[provider.id] ?? "",
+      undefined,
+      provider.preset_id ?? provider.id,
     );
   }
 
@@ -387,7 +429,7 @@ export class ModelSettingsService {
       provider_name: provider.name,
       provider_base_url: provider.base_url,
       provider_api_key_configured: (this.auth.provider_api_keys[provider.id] ?? "") !== "",
-      param_specs: PARAM_SPECS,
+      param_specs: paramSpecsFor(provider.preset_id ?? provider.id, model.model_id),
     };
   }
 
@@ -430,7 +472,12 @@ export class ModelSettingsService {
     return new URL(rawUrl);
   }
 
-  async discover(baseUrl: string, apiKey: string, query?: string): Promise<JsonObject[]> {
+  async discover(
+    baseUrl: string,
+    apiKey: string,
+    query?: string,
+    providerId?: string,
+  ): Promise<JsonObject[]> {
     const target = await this.publicProviderUrl(baseUrl, apiKey);
     target.pathname = `${target.pathname.replace(/\/$/, "")}/models`;
     const response = await this.fetcher(target, {
@@ -447,19 +494,79 @@ export class ModelSettingsService {
       const candidate = optionalRecord(item);
       if (typeof candidate.id !== "string" ||
           (query !== undefined && !candidate.id.toLowerCase().includes(query.toLowerCase()))) return [];
+      const known = lookupModelCatalog(candidate.id);
+      const specsProviderId = providerId ?? detectVendorFromBaseUrl(baseUrl) ?? "unknown";
       return [{
         id: candidate.id,
         name: candidate.id,
         description: "API discovered model",
-        context_window: guessContextWindow(candidate.id),
-        max_output_tokens: 4096,
-        suggested_max_tokens: 4096,
-        capabilities: { text: true, image: false, video: false, audio: false },
+        context_window: known === undefined ? null : catalogContextWindow(known),
+        max_output_tokens: known === undefined ? null : catalogCapacity(known.max_output_tokens),
+        suggested_max_tokens: known === undefined ? null : catalogCapacity(known.suggested_max_tokens),
+        capabilities: known?.capabilities ?? { text: true, image: false, video: false, audio: false },
         recommended: candidate.id === this.registry.settings.model_name,
-        param_specs: PARAM_SPECS,
-        capability_source: "api",
+        param_specs: paramSpecsFor(specsProviderId, candidate.id),
+        capability_source: known === undefined ? "api" : "catalog",
         api_available: true,
       }];
     });
+  }
+
+  /**
+   * Refresh persisted records from the local catalog on startup.
+   *
+   * Records whose metadata was explicitly edited by the user (``user``) stay
+   * untouched; API-discovered and catalog-sourced records are updated when the
+   * catalog contains a verified fact for the model id.
+   */
+  private syncCatalogMetadata(): void {
+    for (const model of this.registry.models) {
+      if (model.source === "manual" || model.metadata_source === "user") {
+        if (model.metadata_source === undefined) model.metadata_source = "user";
+        continue;
+      }
+      const entry = lookupModelCatalog(model.model_id);
+      if (entry === undefined) {
+        if (model.metadata_source === "catalog") model.metadata_source = "api";
+        continue;
+      }
+      this.applyCatalogMetadata(model, false);
+    }
+    const active = this.registry.models.find((item) => item.active);
+    if (active !== undefined && active.metadata_source !== "user") {
+      const settings = this.registry.settings;
+      settings.active_model_id = active.id;
+      settings.context_window = active.context_window ?? settings.context_window;
+      const maxTokens = active.params.max_tokens ?? active.suggested_max_tokens ?? active.max_output_tokens;
+      if (typeof maxTokens === "number") settings.max_tokens = maxTokens;
+    }
+  }
+
+  private applyCatalogMetadata(model: ModelRecord, force: boolean): void {
+    const entry = lookupModelCatalog(model.model_id);
+    if (entry === undefined) return;
+    if (!force && (model.metadata_source === "user" || model.source === "manual")) return;
+    model.context_window = catalogContextWindow(entry);
+    model.max_output_tokens = catalogCapacity(entry.max_output_tokens);
+    model.suggested_max_tokens = catalogCapacity(entry.suggested_max_tokens);
+    model.capabilities = { ...entry.capabilities };
+    model.metadata_source = "catalog";
+  }
+}
+
+function detectVendorFromBaseUrl(rawUrl: string): string | null {
+  try {
+    const host = new URL(rawUrl).hostname.toLowerCase();
+    if (host.includes("dashscope.aliyuncs.com")) return "dashscope";
+    if (host.includes("api.deepseek.com")) return "deepseek";
+    if (host.includes("open.bigmodel.cn") || host.includes("api.z.ai")) return "zhipu";
+    if (host.includes("api.moonshot.cn") || host.includes("api.moonshot.ai")) return "moonshot";
+    if (host.includes("api.groq.com")) return "groq";
+    if (host.includes("api.x.ai")) return "xai";
+    if (host.includes("api.mistral.ai")) return "mistral";
+    if (host.includes("api.openai.com")) return "openai";
+    return null;
+  } catch {
+    return null;
   }
 }

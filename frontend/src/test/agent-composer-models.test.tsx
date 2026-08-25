@@ -5,7 +5,11 @@ import { describe, expect, it, vi } from "vitest";
 import {
   AgentComposer,
 } from "@/components/AgentComposer";
-import { managedModelsToChoices } from "@/lib/modelChoices";
+import {
+  hasConfiguredModelApiKey,
+  managedModelsToChoices,
+  resolveActiveModelId,
+} from "@/lib/modelChoices";
 import type { ManagedModelInfo, ModelInfo } from "@/hooks/useAPI";
 
 const REAL_MODELS: ModelInfo[] = [
@@ -106,11 +110,11 @@ async function openModelSelector() {
 }
 
 describe("managedModelsToChoices (configured model list)", () => {
-  it("maps managed models into selector choices keyed by model_id", () => {
+  it("maps managed models into selector choices keyed by the unique managed id", () => {
     const choices = managedModelsToChoices(MANAGED_MODELS);
     expect(choices).toHaveLength(2);
     expect(choices[0]).toMatchObject({
-      id: "qwen3.7-flash",
+      id: "managed-1",
       name: "Qwen3.7 Flash",
       description: "DashScope · qwen3.7-flash",
       context_window: 262144,
@@ -118,8 +122,69 @@ describe("managedModelsToChoices (configured model list)", () => {
       recommended: true,
       api_available: true,
     });
-    expect(choices[1].id).toBe("deepseek-chat");
+    expect(choices[1].id).toBe("managed-2");
     expect(choices[1].recommended).toBe(false);
+  });
+
+  it("keeps selector ids unique when providers reuse the same model_id", () => {
+    const duplicates: ManagedModelInfo[] = [
+      {
+        ...MANAGED_MODELS[0],
+        id: "managed-a",
+        provider_id: "provider-a",
+        provider_name: "Provider A",
+        model_id: "shared-model",
+      },
+      {
+        ...MANAGED_MODELS[1],
+        id: "managed-b",
+        provider_id: "provider-b",
+        provider_name: "Provider B",
+        model_id: "shared-model",
+      },
+    ];
+    const choices = managedModelsToChoices(duplicates);
+
+    expect(choices.map((choice) => choice.id)).toEqual(["managed-a", "managed-b"]);
+    expect(new Set(choices.map((choice) => choice.id)).size).toBe(2);
+  });
+});
+
+describe("active model selection helpers", () => {
+  it("prefers an active managed model over a stale settings.model_name", () => {
+    expect(resolveActiveModelId(
+      { model_name: "qwen-plus", api_key_configured: false },
+      [{ ...MANAGED_MODELS[0], active: true }],
+    )).toBe("managed-1");
+  });
+
+  it("does not present a stale default without credentials or an active model", () => {
+    expect(resolveActiveModelId(
+      { model_name: "qwen-plus", api_key_configured: false },
+      [{ ...MANAGED_MODELS[1], active: false }],
+    )).toBe("");
+  });
+
+  it("keeps a legacy direct model when no managed model is active but a key exists", () => {
+    expect(resolveActiveModelId(
+      { model_name: "legacy-model", api_key_configured: true },
+      [],
+    )).toBe("legacy-model");
+  });
+
+  it("reports an API key when settings or any managed choice has one", () => {
+    expect(hasConfiguredModelApiKey(
+      { api_key_configured: true },
+      [],
+    )).toBe(true);
+    expect(hasConfiguredModelApiKey(
+      { api_key_configured: false },
+      [{ ...REAL_MODELS[0], api_available: true }],
+    )).toBe(true);
+    expect(hasConfiguredModelApiKey(
+      { api_key_configured: false },
+      [{ ...REAL_MODELS[0], api_available: false }],
+    )).toBe(false);
   });
 });
 
@@ -217,5 +282,18 @@ describe("AgentComposer model selector", () => {
       screen.queryByRole("button", { name: "切换主模型" }),
     ).not.toBeInTheDocument();
     expect(screen.queryByText("主模型")).not.toBeInTheDocument();
+  });
+
+  it("does not render an unknown raw model id when the selected id is stale", () => {
+    renderComposer({
+      models: managedModelsToChoices([
+        { ...MANAGED_MODELS[0], active: true },
+      ]),
+      hasApiKey: true,
+      selectedModelId: "qwen-plus",
+    });
+
+    expect(screen.queryByText("qwen-plus")).not.toBeInTheDocument();
+    expect(screen.getByText("选择模型")).toBeVisible();
   });
 });

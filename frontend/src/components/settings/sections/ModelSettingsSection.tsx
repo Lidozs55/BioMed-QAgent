@@ -145,8 +145,10 @@ export function ModelSettingsSection({
   }, [refreshRegistry]);
 
   const activeModelId = settings?.model_name ?? "";
-  const activeManagedModel =
-    managedModels.find((model) => model.model_id === activeModelId) ?? null;
+  const activeManagedModel = managedModels.find((model) => model.active) ?? null;
+  const hasActiveModel =
+    activeManagedModel !== null ||
+    (activeModelId !== "" && settings?.api_key_configured === true);
 
   return (
     <div className="flex flex-col gap-10">
@@ -177,7 +179,7 @@ export function ModelSettingsSection({
               providers={providers}
               managedModels={managedModels}
               loading={registryLoading}
-              activeModelName={activeModelId || null}
+              activeModelName={activeManagedModel?.model_id ?? null}
               onActivated={onActivated}
               onChanged={() => void refreshRegistry()}
             />
@@ -185,7 +187,7 @@ export function ModelSettingsSection({
         </SettingCard>
       </SettingSection>
 
-      {settings && activeModelId && (
+      {settings && hasActiveModel && (
         <SettingSection
           title="当前模型"
           description="当前任务使用的模型信息，参数请在“模型列表”中维护。"

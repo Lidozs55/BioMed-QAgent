@@ -252,6 +252,13 @@ durable `assistant_delta` 无 `stream_id`（Pi adapter 路径）时，`stream.ts
 显示"可能已挂起"提示并给出取消入口（`STALL_THRESHOLD_MS`）。下载类工具会
 周期性上报 `operation_progress`（downloaded_bytes），因此正常大文件下载不会误报。
 
+Agent 任务处于 `running` / `finalizing` 时，顶部任务状态条常驻"停止生成"按钮；
+点击后立即切换为"正在取消…"并调用
+`POST /api/v1/tasks/{task_id}/runs/{run_id}/cancel`，不会强制等待完整回复生成。
+该入口与 2 分钟无事件提示共用同一个取消处理：后端经 Pi `abort()` 结束当前模型调用，
+通过 `run_cancel_requested` / `run_cancelled` 更新任务状态；前端保留已经流式生成的
+正文，用户可随后重新提问。
+
 **下载进度与直接续传**（P5-D3 part 文件 + 独立端点）：字节级下载进度只渲染在
 `tool_call` 气泡内（`DownloadProgress`），operation 行只保留状态徽章，避免时间线
 出现两条重复进度条。`pipeline.ts` 把 `downloaded_bytes` 进度绑定到所属工具调用：

@@ -215,6 +215,24 @@ describe("ChatPanel", () => {
     expect(screen.getByRole("textbox", { name: "研究目标" })).toHaveClass("min-h-28");
   });
 
+  it("allows manual compaction even when context usage is low", async () => {
+    seedTerminalTask();
+    const compactTask = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ChatPanel
+        startTask={vi.fn()}
+        compactTask={compactTask}
+        contextWindow={131_072}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /上下文窗口已使用/ }));
+    fireEvent.click(screen.getByRole("button", { name: "压缩上下文" }));
+
+    await waitFor(() => expect(compactTask).toHaveBeenCalledOnce());
+    expect(compactTask).toHaveBeenCalledWith("task_terminal");
+  });
+
   it("shows active task artifacts before the attachment control", () => {
     seedTerminalTask();
     const state = useAgentStore.getState();
@@ -452,6 +470,40 @@ describe("ChatPanel", () => {
     }));
   });
 
+  it("asks for confirmation before running with a context budget warning", async () => {
+    useAgentStore.getState().showNewDraft();
+    act(() => {
+      useAgentStore.getState().setDraftSelectedDatabaseIds(["pubmed", "geo"]);
+    });
+    const startTask = vi.fn().mockResolvedValue({
+      request_id: "req_context",
+      task_id: "task_context",
+      run_id: "run_context",
+      status: "queued",
+    } satisfies TaskRunAccepted);
+    render(
+      <ChatPanel
+        startTask={startTask}
+        runBlockReason="上下文窗口不足以容纳最大输出和保留空间"
+        hasApiKey={true}
+      />,
+    );
+    fireEvent.change(screen.getByPlaceholderText("输入研究目标..."), {
+      target: { value: "Run with warning" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "开始研究" }));
+
+    expect(startTask).not.toHaveBeenCalled();
+    expect(await screen.findByRole("button", { name: "仍然运行" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "仍然运行" }));
+
+    await waitFor(() => expect(startTask).toHaveBeenCalledWith({
+      input: "Run with warning",
+      databases: ["pubmed", "geo"],
+      mode: "agent",
+    }));
+  });
+
   it("keeps a blank draft usable while another task is running", async () => {
     seedBackgroundTask();
     act(() => useAgentStore.getState().showNewDraft());
@@ -644,7 +696,7 @@ describe("ChatPanel", () => {
     expect(screen.getByText("Streaming answer")).toBeInTheDocument();
   });
 
-  it("shows a stall hint with a cancel action when a running task has no events", () => {
+  it("shows a stall hint with a cancel action when a running task has no events", async () => {
     useAgentStore.getState().mergeTaskPage(
       {
         active_items: [
@@ -677,7 +729,10 @@ describe("ChatPanel", () => {
     );
 
     expect(screen.getByText(/没有任何新事件/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "取消当前任务" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "取消当前任务" }));
+      await Promise.resolve();
+    });
     expect(cancelRun).toHaveBeenCalledWith("task_stalled", "run_stalled");
   });
 
@@ -686,6 +741,56 @@ describe("ChatPanel", () => {
     useAgentStore.getState().setActiveTaskId("task_background");
     render(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
     expect(screen.queryByText(/没有任何新事件/)).not.toBeInTheDocument();
+  });
+
+  it("shows a stop generation action while an agent run is active", () => {
+    seedBackgroundTask();
+    useAgentStore.getState().setActiveTaskId("task_background");
+    render(
+      <ChatPanel
+        startTask={vi.fn()}
+        continueTask={vi.fn()}
+        cancelRun={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "停止生成" })).toBeInTheDocument();
+  });
+
+  it("does not show a stop generation action for a terminal task", () => {
+    seedTerminalTask();
+    render(
+      <ChatPanel
+        startTask={vi.fn()}
+        continueTask={vi.fn()}
+        cancelRun={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "停止生成" })).not.toBeInTheDocument();
+  });
+
+  it("disables the stop action while cancellation is in flight", async () => {
+    seedBackgroundTask();
+    useAgentStore.getState().setActiveTaskId("task_background");
+    const pending = deferred<void>();
+    const cancelRun = vi.fn(() => pending.promise);
+    render(
+      <ChatPanel
+        startTask={vi.fn()}
+        continueTask={vi.fn()}
+        cancelRun={cancelRun}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "停止生成" }));
+    expect(cancelRun).toHaveBeenCalledWith("task_background", "run_background");
+    expect(screen.getByRole("button", { name: "正在取消…" })).toBeDisabled();
+
+    await act(async () => pending.resolve());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "停止生成" })).toBeEnabled(),
+    );
   });
 
   it("shows failed status without duplicating the run failure alert", () => {

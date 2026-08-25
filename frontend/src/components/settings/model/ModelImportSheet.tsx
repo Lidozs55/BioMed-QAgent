@@ -232,8 +232,15 @@ export function ModelImportSheet({
   ]);
 
   const selectDiscovered = (item: DiscoveredModelInfo) => {
-    setSelectedId(item.id);
-    setParams(defaultParams(item));
+    const imported = providerModels.find((model) => model.model_id === item.id);
+    if (imported !== undefined) {
+      setSelectedId(imported.id);
+      setParams(imported.params);
+      setExpandedId(imported.id);
+    } else {
+      setSelectedId(item.id);
+      setParams(defaultParams(item));
+    }
   };
 
   const openManual = async () => {
@@ -613,9 +620,7 @@ export function ModelImportSheet({
                           </button>
                           <div className="flex shrink-0 items-center gap-2">
                             <span className="text-xs text-muted-foreground">
-                              {item.capability_source === "api"
-                                ? "未知"
-                                : formatContextWindow(item.context_window)}
+                              {formatContextWindow(item.context_window)}
                             </span>
                             {capabilityChips(item.capabilities)}
                           </div>

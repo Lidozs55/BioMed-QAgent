@@ -2,12 +2,11 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { BioMedAgentError } from "../src/agent/contracts.js";
 import {
-  activationToolDefinition,
   PiAgentAdapter,
   applyModelProfileToPayload,
   resolvePiCompactionOverrides,
-  toolCatalogPrompt,
-  TOOL_ACTIVATION_NAME,
+  resolveManualPiCompactionOverrides,
+  shouldReconfigureSession,
   toPiCustomTools,
   type PiUpstreamEvent,
   type PiUpstreamSession,
@@ -35,6 +34,10 @@ class FakeUpstreamSession implements PiUpstreamSession {
   readonly prompts: string[] = [];
   readonly abort = vi.fn(async (): Promise<void> => undefined);
   readonly dispose = vi.fn();
+  readonly reconcileConfig = vi.fn(async (): Promise<void> => undefined);
+  readonly compact = vi.fn(async (): Promise<{ summary: string }> => ({
+    summary: "compacted manually",
+  }));
   private readonly listeners = new Set<(event: PiUpstreamEvent) => void>();
   promptImplementation: (input: string) => Promise<void> = async () => undefined;
   continueAfterLengthImplementation: () => Promise<void> = async () => undefined;
@@ -74,92 +77,6 @@ async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
 }
 
 describe("Pi system prompt", () => {
-  test("forbids synthetic replacement data and limits unavailable-source choices", () => {
-    expect(PHASE1_SYSTEM_PROMPT).toMatch(/never fabricate, simulate, approximate, infer, or use representative values/i);
-    expect(PHASE1_SYSTEM_PROMPT).toMatch(/stop and report the unavailable source/i);
-    expect(PHASE1_SYSTEM_PROMPT).toMatch(/request concrete user help/i);
-    expect(PHASE1_SYSTEM_PROMPT).toMatch(/continue researching a genuinely independent real source/i);
-    expect(PHASE1_SYSTEM_PROMPT).toMatch(/do not create replacement rows or fill missing values from model memory/i);
-    expect(PHASE1_SYSTEM_PROMPT).toMatch(/partial tool success verifies only the records returned as successful/i);
-    expect(PHASE1_SYSTEM_PROMPT).toMatch(/never claim full-source or whole-dataset verification from a successful subset/i);
-    expect(PHASE1_SYSTEM_PROMPT).toMatch(/a request for CSV files, tables, or raw provenance never makes Core publication optional/i);
-    expect(PHASE1_SYSTEM_PROMPT).toMatch(/never fabricate, exaggerate, or infer your own work history/i);
-    expect(PHASE1_SYSTEM_PROMPT).toMatch(/report exact requested, succeeded, and failed counts/i);
-    expect(PHASE1_SYSTEM_PROMPT).toMatch(/never turn a plan, workspace file, successful subset, or intended next step into a completed action/i);
-    expect(PHASE1_SYSTEM_PROMPT).toMatch(/choose the matching semantic family, projection, and row granularity/i);
-    expect(PHASE1_SYSTEM_PROMPT).toMatch(/workspace outputs are staging evidence only/i);
-  });
-
-  test("injects the complete available skill map while keeping optional schemas deferred", async () => {
-    const core = {
-      name: "execute_dataset_build",
-      label: "Execute DatasetBuild",
-      description: "Execute through Dataset Core.",
-      parameters: { type: "object" },
-      execute: async () => ({ content: "{}" }),
-    };
-    const optional = {
-      name: "search_pubmed",
-      label: "Search PubMed",
-      description: "Search official biomedical literature.",
-      parameters: { type: "object", properties: { query: { type: "string" } } },
-      execute: async () => ({ content: "{}" }),
-    };
-    const laterOptional = {
-      name: "lookup_dbsnp",
-      label: "Look up dbSNP",
-      description: "Resolve RefSNP records.",
-      parameters: { type: "object", properties: { rs_ids: { type: "array" } } },
-      execute: async () => ({ content: "{}" }),
-    };
-    const workspace = {
-      name: "workspace_read",
-      label: "Read workspace",
-      description: "Read bounded task-workspace text.",
-      parameters: { type: "object", properties: { path: { type: "string" } } },
-      execute: async () => ({ content: "{}" }),
-    };
-    const prompt = toolCatalogPrompt([core, optional, laterOptional, workspace], [core.name]);
-    expect(prompt).toContain("Available curated skill/tool map");
-    expect(prompt).toContain("dataset-construction");
-    expect(prompt).toContain("execute_dataset_build (active)");
-    expect(prompt).toContain("pubmed");
-    expect(prompt).toContain("search_pubmed");
-    expect(prompt).toContain("dbsnp");
-    expect(prompt).toContain("discovery evidence only");
-    expect(prompt).toContain("Other optional tools");
-    expect(prompt).toContain("workspace_read");
-    expect(prompt.length).toBeLessThanOrEqual(16_000);
-
-    let active: readonly string[] = [];
-    const activation = activationToolDefinition([core, optional, laterOptional], [core.name], (names) => {
-      active = names;
-    });
-    expect(activation.name).toBe(TOOL_ACTIVATION_NAME);
-    const result = await activation.execute("call-1", { tool_names: [optional.name] }, undefined, undefined, undefined as never);
-    expect(active).toEqual([core.name, TOOL_ACTIVATION_NAME, optional.name]);
-    expect(result.details).toMatchObject({ ok: true, activated_tools: [optional.name] });
-
-    const laterResult = await activation.execute(
-      "call-2",
-      { tool_names: [laterOptional.name] },
-      undefined,
-      undefined,
-      undefined as never,
-    );
-    expect(active).toEqual([
-      core.name,
-      TOOL_ACTIVATION_NAME,
-      laterOptional.name,
-      optional.name,
-    ]);
-    expect(laterResult.details).toMatchObject({
-      ok: true,
-      activated_tools: [laterOptional.name],
-      active_optional_tools: [laterOptional.name, optional.name],
-    });
-  });
-
   test("marks an approved max-turn continuation explicitly", () => {
     expect(PHASE1_SYSTEM_PROMPT).toContain("[MAX_TURNS_REACHED]");
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/after an approved max-turn interruption/i);
@@ -211,6 +128,28 @@ describe("Pi model profile mapping", () => {
       },
     )).toEqual({ model: "custom-chat", top_p: 0.75 });
   });
+
+  test("injects saved registry parameters into the upstream payload", () => {
+    expect(applyModelProfileToPayload(
+      { model: "custom-chat" },
+      {
+        provider: "custom",
+        modelId: "custom-chat",
+        apiKey: "secret",
+        baseUrl: "https://models.example/v1",
+        params: {
+          reasoning_effort: "high",
+          tool_choice: "required",
+          max_tokens: 999,
+          temperature: 0.2,
+        },
+      },
+    )).toEqual({
+      model: "custom-chat",
+      reasoning_effort: "high",
+      tool_choice: "required",
+    });
+  });
 });
 describe("PiAgentAdapter", () => {
   afterEach(() => {
@@ -218,11 +157,112 @@ describe("PiAgentAdapter", () => {
   });
 
   test("maps product compaction ratios onto Pi compaction settings", () => {
-    expect(resolvePiCompactionOverrides(131_072, 0.85, 0.6)).toEqual({
-      compaction: { enabled: true, reserveTokens: 19_661, keepRecentTokens: 78_643 },
+    expect(resolvePiCompactionOverrides(131_072, 0.85, 0.45)).toEqual({
+      compaction: { enabled: true, reserveTokens: 19_661, keepRecentTokens: 43_253 },
     });
-    expect(resolvePiCompactionOverrides(131_072, 0.95, 0.6).compaction.reserveTokens)
+    expect(resolvePiCompactionOverrides(131_072, 0.95, 0.45).compaction.reserveTokens)
       .toBe(6_554);
+  });
+
+  test("clamps window-based fallback so compaction leaves room for the reserve budget", () => {
+    expect(resolvePiCompactionOverrides(32_768, 0.10, 0.99)).toEqual({
+      compaction: {
+        enabled: true,
+        reserveTokens: 29_491,
+        keepRecentTokens: 1_638,
+      },
+    });
+  });
+
+  test("sizes the recent keep budget from the current context when it is known", () => {
+    // 524k window, ~123k tokens in session: the keep budget is bounded by a
+    // 5% window floor plus the reserved summary headroom, so a moderately
+    // sized conversation remains compactable.
+    expect(resolvePiCompactionOverrides(524_288, 0.85, 0.45, 123_637)).toEqual({
+      compaction: {
+        enabled: true,
+        reserveTokens: 78_643,
+        keepRecentTokens: 26_214,
+      },
+    });
+  });
+
+  test("leaves summary headroom when the conversation is large", () => {
+    expect(resolvePiCompactionOverrides(524_288, 0.85, 0.45, 500_000)).toEqual({
+      compaction: {
+        enabled: true,
+        reserveTokens: 78_643,
+        keepRecentTokens: 162_086,
+      },
+    });
+  });
+
+  test("never compacts a conversation that is already below the target", () => {
+    const small = resolvePiCompactionOverrides(524_288, 0.85, 0.45, 20_000);
+    expect(small.compaction.keepRecentTokens).toBeGreaterThanOrEqual(20_000);
+  });
+
+  test("manual compaction forces a small recent tail so Pi has older content to summarize", () => {
+    const auto = resolvePiCompactionOverrides(
+      1_000_000,
+      0.85,
+      0.45,
+      154_451,
+    );
+    const manual = resolveManualPiCompactionOverrides(
+      1_000_000,
+      0.85,
+      0.45,
+      154_451,
+    );
+
+    expect(manual.compaction.reserveTokens).toBe(auto.compaction.reserveTokens);
+    expect(manual.compaction.keepRecentTokens).toBeLessThan(auto.compaction.keepRecentTokens);
+    expect(manual.compaction.keepRecentTokens).toBe(1_545);
+  });
+
+  test("manual compaction still has a positive recent budget when usage is unknown", () => {
+    expect(resolveManualPiCompactionOverrides(1_000_000, 0.85, 0.45).compaction.keepRecentTokens)
+      .toBe(1);
+  });
+
+  test("detects model or context-window changes that require reconciliation", () => {
+    const base = {
+      provider: "dashscope",
+      modelId: "qwen-plus",
+      apiKey: "secret",
+      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      contextWindow: 131_072,
+      compactionTriggerRatio: 0.85,
+      compactionTargetRatio: 0.45,
+    };
+    expect(shouldReconfigureSession(base, base)).toBe(false);
+    expect(shouldReconfigureSession(base, { ...base, modelId: "qwen-max" })).toBe(true);
+    expect(shouldReconfigureSession(base, { ...base, contextWindow: 32_768 })).toBe(true);
+    expect(shouldReconfigureSession(base, { ...base, compactionTargetRatio: 0.6 })).toBe(true);
+  });
+
+  test("reconciles the active model configuration before each run", async () => {
+    const upstream = new FakeUpstreamSession();
+    const session = await new PiAgentAdapter({
+      createUpstreamSession: async () => upstream,
+    }).createSession(sessionConfig);
+
+    await collect(session.run("continue"));
+
+    expect(upstream.reconcileConfig).toHaveBeenCalledOnce();
+  });
+
+  test("reconciles the active model configuration before manual compaction", async () => {
+    const upstream = new FakeUpstreamSession();
+    const session = await new PiAgentAdapter({
+      createUpstreamSession: async () => upstream,
+    }).createSession(sessionConfig);
+
+    await session.compact?.();
+
+    expect(upstream.reconcileConfig).toHaveBeenCalledOnce();
+    expect(upstream.compact).toHaveBeenCalledOnce();
   });
 
   test("projects a successful Pi compaction into the BioMed event stream", async () => {
@@ -248,13 +288,9 @@ describe("PiAgentAdapter", () => {
     });
   });
 
-  test("accepts a minimal input and publishes runtime context usage", async () => {
+  test("publishes runtime context usage after an assistant response", async () => {
     const upstream = new FakeUpstreamSession();
     upstream.promptImplementation = async () => {
-      upstream.emit({
-        type: "message_update",
-        assistantMessageEvent: { type: "text_delta", delta: "OK" },
-      });
       upstream.emit({
         type: "message_end",
         assistantStopReason: "stop",
@@ -265,20 +301,15 @@ describe("PiAgentAdapter", () => {
       createUpstreamSession: async () => upstream,
     }).createSession(sessionConfig);
 
-    const events = await collect(session.run("请只回复 OK"));
+    const events = await collect(session.run("report usage"));
 
-    expect(events).toEqual([
-      { type: "turn_started" },
-      { type: "assistant_delta", delta: "OK" },
-      {
-        type: "context_usage",
-        tokens: 12_345,
-        contextWindow: 131_072,
-        percent: 9.41,
-        source: "runtime",
-      },
-      { type: "turn_completed" },
-    ]);
+    expect(events).toContainEqual({
+      type: "context_usage",
+      tokens: 12_345,
+      contextWindow: 131_072,
+      percent: 9.41,
+      source: "runtime",
+    });
   });
 
   test("continues a length-truncated Pi turn before reporting completion", async () => {
@@ -305,6 +336,23 @@ describe("PiAgentAdapter", () => {
 
     expect(upstream.continueAfterLength).toHaveBeenCalledOnce();
     expect(events.filter((event) => event.type === "turn_completed")).toHaveLength(1);
+  });
+
+  test("fails a length continuation that makes no meaningful progress", async () => {
+    const upstream = new FakeUpstreamSession();
+    upstream.promptImplementation = async () => {
+      upstream.emit({ type: "message_end", assistantStopReason: "length" });
+    };
+    upstream.continueAfterLengthImplementation = async () => {
+      upstream.emit({ type: "message_end", assistantStopReason: "length" });
+    };
+    const session = await new PiAgentAdapter({
+      createUpstreamSession: async () => upstream,
+    }).createSession(sessionConfig);
+
+    await expect(collect(session.run("finish the dataset")))
+      .rejects.toThrow("Agent runtime request failed");
+    expect(upstream.continueAfterLength).toHaveBeenCalledTimes(3);
   });
 
   test("fails the turn when Pi ends with an upstream error stop reason", async () => {

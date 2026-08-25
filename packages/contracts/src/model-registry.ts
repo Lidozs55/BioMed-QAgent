@@ -72,6 +72,7 @@ export interface ManagedModelInfo {
   params: Record<string, unknown>;
   param_specs: ParameterSpec[];
   source: "api" | "manual" | "catalog";
+  metadata_source?: "catalog" | "api" | "user";
   active: boolean;
   created_at: string;
   updated_at: string;
@@ -102,4 +103,5 @@ export interface DiscoveredModelInfo {
   recommended?: boolean;
   param_specs?: ParameterSpec[];
   capability_source?: "catalog" | "api";
+  metadata_source?: "catalog" | "api" | "user";
 }

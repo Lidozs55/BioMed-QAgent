@@ -23,7 +23,6 @@ import {
 } from "./contracts.js";
 import { PHASE1_SYSTEM_PROMPT, phase1ResourceRoots } from "./phase1-prompt.js";
 import { requireSafeId as validateSafeId } from "./ids.js";
-import { SKILL_TOOL_MAP } from "./skills/skill-tool-map.js";
 
 type Environment = Record<string, string | undefined>;
 
@@ -54,6 +53,15 @@ export interface PiUpstreamSession {
   continueAfterLength?(): Promise<void>;
   steer?(text: string): Promise<void>;
   compact?(): Promise<{ summary: string }>;
+  /**
+   * Reconcile the session with the currently active product model config.
+   * Called before every prompt and before manual compaction so a mid-task
+   * model switch (which may change the context window) is always reflected in
+   * the Pi model registry, session model, and compaction budgets.
+   */
+  reconcileConfig?(): Promise<void>;
+  /** Current session context usage (token estimate and window percent). */
+  contextUsage?(): { tokens: number | null; percent: number | null } | undefined;
   getContextUsage?(): {
     tokens: number | null;
     contextWindow: number;
@@ -102,6 +110,10 @@ interface ActiveTurn {
   cancelled: boolean;
   terminal: boolean;
   reason?: string;
+  reasoningChars: number;
+  assistantChars: number;
+  toolEvents: number;
+  lengthContinuationStalls: number;
   pendingDelta?: Extract<
     BioMedAgentEvent,
     { type: "assistant_delta" | "reasoning_delta" }
@@ -114,12 +126,22 @@ const MAX_TEXT = 4_096;
 const MAX_DEPTH = 3;
 const MAX_ITEMS = 20;
 const DELTA_FLUSH_INTERVAL_MS = 32;
+// Guard against a pathological length loop: three continuations with almost no
+// new assistant/reasoning/tool progress indicate a degenerate configuration.
+const MAX_STALLED_LENGTH_CONTINUATIONS = 3;
+const MIN_PROGRESS_CHARS = 32;
+/** Minimum recent context kept after compaction, as a fraction of the window. */
+const MIN_KEEP_RATIO = 0.05;
+/** Maximum final compaction target, as a fraction of the window. */
+const MAX_KEEP_RATIO = 0.6;
+/** Fraction of the Pi reserve budget available to the compaction summary. */
+const SUMMARY_BUDGET_RATIO = 0.8;
+/** Manual compaction keeps only a tiny recent tail so Pi always has older content to summarize. */
+const MANUAL_KEEP_RECENT_RATIO = 0.01;
 const LENGTH_CONTINUATION_MESSAGE =
   "The previous assistant turn was truncated by the model length limit. " +
   "Continue the same task from the compacted context without repeating completed work. " +
   "Finish the remaining tool calls, required data artifacts, validation, and final response.";
-export const TOOL_ACTIVATION_NAME = "activate_agent_tools";
-const MAX_ACTIVATED_TOOLS = 12;
 
 function boundedText(value: string): string {
   return value.slice(0, MAX_TEXT);
@@ -146,121 +168,6 @@ function boundedValue(value: unknown, depth = 0): unknown {
     );
   }
   return String(value).slice(0, MAX_TEXT);
-}
-
-export function toolCatalogPrompt(
-  tools: readonly BioMedAgentTool[],
-  initialToolNames: readonly string[],
-): string {
-  if (tools.length === 0) return "";
-  const initial = new Set(initialToolNames);
-  const available = new Map(tools.map((tool) => [tool.name, tool]));
-  const mappedToolNames = new Set<string>();
-  const skillEntries = SKILL_TOOL_MAP.flatMap((skill) => {
-    const skillTools = skill.tools.filter((name) => available.has(name));
-    if (skillTools.length === 0) return [];
-    for (const name of skillTools) mappedToolNames.add(name);
-    const toolList = skillTools
-      .map((name) => `${name}${initial.has(name) ? " (active)" : ""}`)
-      .join(", ");
-    return [
-      `- ${skill.name} [${skill.category}]`,
-      `  Function: ${skill.description}`,
-      `  Route/boundary: ${skill.routing}`,
-      `  Tools: ${toolList}`,
-    ];
-  });
-  const otherTools = tools
-    .filter((tool) => !mappedToolNames.has(tool.name))
-    .map((tool) => {
-      const summary = tool.description.replace(/\s+/g, " ").trim().slice(0, 180);
-      return `- ${tool.name}${initial.has(tool.name) ? " (active)" : ""}: ${summary}`;
-    });
-  return [
-    "",
-    "Available curated skill/tool map (complete for this session):",
-    "Use it before substantive work to choose the route and respect each trust boundary.",
-    "Tools marked (active) have full schemas now. For other listed tools, call activate_agent_tools before use; activation does not bypass permissions, validation, or publication gates.",
-    ...skillEntries,
-    ...(otherTools.length === 0
-      ? []
-      : [
-          "Other optional tools (not owned by a curated biomedical skill):",
-          ...otherTools,
-        ]),
-  ].join("\n");
-}
-
-export function activationToolDefinition(
-  tools: readonly BioMedAgentTool[],
-  initialToolNames: readonly string[],
-  setActiveTools: (names: readonly string[]) => void,
-): ToolDefinition {
-  const allNames = new Set(tools.map((tool) => tool.name));
-  const initial = [...new Set(initialToolNames)].filter((name) => allNames.has(name));
-  const optional = tools
-    .filter((tool) => !initial.includes(tool.name))
-    .map((tool) => tool.name)
-    .sort();
-  const activated = new Set<string>();
-  return {
-    name: TOOL_ACTIVATION_NAME,
-    label: "Activate Agent Tools",
-    description:
-      "Add a bounded set of optional tools for the next model turn. Previously activated tools and Dataset Core tools remain available.",
-    parameters: {
-      type: "object",
-      properties: {
-        tool_names: {
-          type: "array",
-          minItems: 1,
-          maxItems: MAX_ACTIVATED_TOOLS,
-          items: { type: "string", enum: optional },
-        },
-      },
-      required: ["tool_names"],
-      additionalProperties: false,
-    },
-    async execute(_toolCallId, parameters) {
-      const record = parameters as Record<string, unknown>;
-      const requested = Array.isArray(record.tool_names)
-        ? record.tool_names.filter((name): name is string => typeof name === "string")
-        : [];
-      const selected = [...new Set(requested)].filter((name) => optional.includes(name));
-      const unknown = [...new Set(requested)].filter((name) => !optional.includes(name));
-      if (selected.length === 0) {
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({ ok: false, error: "tool_names must contain an optional catalog tool" }),
-          }],
-          details: { ok: false, unknown_tools: unknown },
-        };
-      }
-      for (const name of selected) activated.add(name);
-      const activeOptional = optional.filter((name) => activated.has(name));
-      setActiveTools([...initial, TOOL_ACTIVATION_NAME, ...activeOptional]);
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify({
-            ok: true,
-            activated_tools: selected,
-            active_optional_tools: activeOptional,
-            unknown_tools: unknown,
-            next_turn: true,
-          }),
-        }],
-        details: {
-          ok: true,
-          activated_tools: selected,
-          active_optional_tools: activeOptional,
-          unknown_tools: unknown,
-          next_turn: true,
-        },
-      };
-    },
-  };
 }
 
 function requireSafeId(name: string, value: string): void {
@@ -350,14 +257,88 @@ export function resolvePiCompactionOverrides(
   contextWindow: number,
   triggerRatio: number,
   targetRatio: number,
+  currentTokens?: number | null,
 ): { compaction: { enabled: boolean; reserveTokens: number; keepRecentTokens: number } } {
+  const reserveTokens = Math.max(0, Math.round(contextWindow * (1 - triggerRatio)));
+  // Pi caps the compaction summary at 80% of the reserve budget; pre-reserve
+  // that headroom so a dense summary never displaces the recent context.
+  const summaryBudget = Math.round(SUMMARY_BUDGET_RATIO * reserveTokens);
+  const floorKeep = Math.round(contextWindow * MIN_KEEP_RATIO);
+  const capKeep = Math.round(contextWindow * MAX_KEEP_RATIO);
+  const hasKnownUsage = currentTokens !== null &&
+    currentTokens !== undefined &&
+    Number.isFinite(currentTokens) &&
+    currentTokens > 0;
+  const finalTarget = hasKnownUsage
+    ? Math.min(Math.max(Math.round(currentTokens * targetRatio), floorKeep), capKeep)
+    : Math.min(Math.max(Math.round(contextWindow * targetRatio), floorKeep), capKeep);
+  const desiredKeep = Math.max(floorKeep, finalTarget - summaryBudget);
+  const keptRecent = Math.min(
+    desiredKeep,
+    Math.max(0, contextWindow - reserveTokens),
+  );
+  // When the whole conversation already fits under the final target, Pi would
+  // keep everything anyway; leave its settings in the no-op range.
+  const effectiveKeep = hasKnownUsage && currentTokens <= finalTarget
+    ? Math.max(currentTokens, keptRecent)
+    : keptRecent;
   return {
     compaction: {
       enabled: true,
-      reserveTokens: Math.max(0, Math.round(contextWindow * (1 - triggerRatio))),
-      keepRecentTokens: Math.max(0, Math.round(contextWindow * targetRatio)),
+      reserveTokens,
+      keepRecentTokens: effectiveKeep,
     },
   };
+}
+
+/**
+ * Manual compaction forces a small recent tail even when the automatic keep
+ * budget would leave Pi with zero messages to summarize below the threshold.
+ */
+export function resolveManualPiCompactionOverrides(
+  contextWindow: number,
+  triggerRatio: number,
+  targetRatio: number,
+  currentTokens?: number | null,
+): { compaction: { enabled: boolean; reserveTokens: number; keepRecentTokens: number } } {
+  const auto = resolvePiCompactionOverrides(
+    contextWindow,
+    triggerRatio,
+    targetRatio,
+    currentTokens,
+  );
+  const hasKnownUsage = currentTokens !== null &&
+    currentTokens !== undefined &&
+    Number.isFinite(currentTokens) &&
+    currentTokens > 0;
+  const keepRecentTokens = hasKnownUsage
+    ? Math.max(1, Math.round(currentTokens * MANUAL_KEEP_RECENT_RATIO))
+    : 1;
+  return {
+    compaction: {
+      ...auto.compaction,
+      keepRecentTokens,
+    },
+  };
+}
+
+/**
+ * Whether a freshly resolved product config requires re-applying the Pi
+ * session model / context window / compaction budgets.
+ */
+export function shouldReconfigureSession(
+  current: BioMedModelConfig,
+  next: BioMedModelConfig,
+): boolean {
+  const windowOf = (config: BioMedModelConfig): number => config.contextWindow ?? 131_072;
+  return (
+    current.provider !== next.provider ||
+    current.modelId !== next.modelId ||
+    current.baseUrl !== next.baseUrl ||
+    windowOf(current) !== windowOf(next) ||
+    current.compactionTriggerRatio !== next.compactionTriggerRatio ||
+    current.compactionTargetRatio !== next.compactionTargetRatio
+  );
 }
 
 export function applyModelProfileToPayload(
@@ -368,13 +349,24 @@ export function applyModelProfileToPayload(
     return payload;
   }
   const next: Record<string, unknown> = { ...payload };
+  const dashScopeQwen = usesDashScopeQwen(selected);
+  for (const [key, value] of Object.entries(selected.params ?? {})) {
+    if (value === undefined) continue;
+    if (key === "max_tokens" || key === "temperature" || key === "top_p") continue;
+    if (key === "context_window" || key === "max_output_tokens" ||
+        key === "suggested_max_tokens" || key === "capabilities") continue;
+    if (dashScopeQwen &&
+        (key === "repetition_penalty" || key === "enable_search" ||
+         key === "thinking_mode" || key === "enable_thinking")) continue;
+    next[key] = value;
+  }
   if (selected.topP !== undefined) next.top_p = selected.topP;
-  if (usesDashScopeQwen(selected)) {
+  if (dashScopeQwen) {
     if (selected.repetitionPenalty !== undefined) {
       next.repetition_penalty = selected.repetitionPenalty;
     }
     if (selected.enableSearch !== undefined) next.enable_search = selected.enableSearch;
-    if (selected.thinkingMode === true) next.enable_thinking = true;
+    if (selected.thinkingMode !== undefined) next.enable_thinking = selected.thinkingMode;
   }
   return next;
 }
@@ -440,30 +432,30 @@ async function createRealUpstreamSession(
   environment: Environment,
   resolveModel?: () => Promise<BioMedModelConfig>,
 ): Promise<PiUpstreamSession> {
-  const selected = config.model ?? (resolveModel === undefined
+  let current = config.model ?? (resolveModel === undefined
     ? modelFromEnvironment(environment)
     : await resolveModel());
-  const contextWindow = selected.contextWindow ?? 131_072;
+  const currentWindow = (): number => current.contextWindow ?? 131_072;
   const modelRuntime = await ModelRuntime.create({
     allowModelNetwork: false,
     modelsPath: null,
   });
-  modelRuntime.registerProvider(selected.provider, {
+  modelRuntime.registerProvider(current.provider, {
     api: "openai-completions",
-    baseUrl: selected.baseUrl,
+    baseUrl: current.baseUrl,
     models: [
       {
-        id: selected.modelId,
-        name: selected.modelId,
+        id: current.modelId,
+        name: current.modelId,
         reasoning: false,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow,
-        maxTokens: selected.maxTokens ?? 8_192,
+        contextWindow: currentWindow(),
+        maxTokens: current.maxTokens ?? 8_192,
       },
     ],
   });
-  await modelRuntime.setRuntimeApiKey(selected.provider, selected.apiKey, {
+  await modelRuntime.setRuntimeApiKey(current.provider, current.apiKey, {
     allowNetwork: false,
   });
   const streamSimple = modelRuntime.streamSimple.bind(modelRuntime);
@@ -471,17 +463,17 @@ async function createRealUpstreamSession(
     const upstreamPayload = options?.onPayload;
     return streamSimple(model, context, {
       ...options,
-      maxTokens: selected.maxTokens ?? options?.maxTokens,
-      temperature: selected.temperature ?? options?.temperature,
+      maxTokens: current.maxTokens ?? options?.maxTokens,
+      temperature: current.temperature ?? options?.temperature,
       onPayload: async (payload, payloadModel) => {
         const transformed = upstreamPayload === undefined
           ? payload
           : (await upstreamPayload(payload, payloadModel)) ?? payload;
-        return applyModelProfileToPayload(transformed, selected);
+        return applyModelProfileToPayload(transformed, current);
       },
     });
   };
-  const model = modelRuntime.getModel(selected.provider, selected.modelId);
+  const model = modelRuntime.getModel(current.provider, current.modelId);
   if (model === undefined) {
     throw new BioMedAgentError(
       "INVALID_CONFIGURATION",
@@ -490,13 +482,14 @@ async function createRealUpstreamSession(
   }
   const settingsManager = SettingsManager.inMemory();
   if (
-    selected.compactionTriggerRatio !== undefined &&
-    selected.compactionTargetRatio !== undefined
+    current.compactionTriggerRatio !== undefined &&
+    current.compactionTargetRatio !== undefined
   ) {
     settingsManager.applyOverrides(resolvePiCompactionOverrides(
-      contextWindow,
-      selected.compactionTriggerRatio,
-      selected.compactionTargetRatio,
+      currentWindow(),
+      current.compactionTriggerRatio,
+      current.compactionTargetRatio,
+      null,
     ));
   }
   const resourceLoader = new DefaultResourceLoader({
@@ -513,25 +506,6 @@ async function createRealUpstreamSession(
     systemPrompt: config.systemPrompt,
   });
   await resourceLoader.reload();
-  const configuredTools = config.tools ?? [];
-  const allToolNames = configuredTools.map((tool) => tool.name);
-  const initialToolNames = config.initialToolNames === undefined
-    ? allToolNames
-    : [...new Set(config.initialToolNames)].filter((name) => allToolNames.includes(name));
-  const piSessionRef: {
-    current?: Awaited<ReturnType<typeof createAgentSession>>["session"];
-  } = {};
-  const activationTool = activationToolDefinition(
-    configuredTools,
-    initialToolNames,
-    (names) => piSessionRef.current?.setActiveToolsByName([...names]),
-  );
-  const customTools = configuredTools.length === 0
-    ? []
-    : [...toPiCustomTools(configuredTools), activationTool];
-  const allowedToolNames = configuredTools.length === 0
-    ? []
-    : [...allToolNames, TOOL_ACTIVATION_NAME];
   const { session } = await createAgentSession({
     cwd: config.cwd,
     model,
@@ -542,13 +516,60 @@ async function createRealUpstreamSession(
       : SessionManager.continueRecent(config.cwd, config.sessionDir),
     settingsManager,
     noTools: (config.tools?.length ?? 0) > 0 ? "builtin" : "all",
-    tools: allowedToolNames,
-    customTools,
+    customTools: toPiCustomTools(config.tools ?? []),
   });
-  piSessionRef.current = session;
-  if (configuredTools.length > 0) {
-    session.setActiveToolsByName([...initialToolNames, TOOL_ACTIVATION_NAME]);
-  }
+  const reconcileConfig = resolveModel === undefined
+    ? undefined
+    : async (): Promise<void> => {
+      const next = await resolveModel();
+      if (!shouldReconfigureSession(current, next)) {
+        if (current.apiKey !== next.apiKey) {
+          await modelRuntime.setRuntimeApiKey(next.provider, next.apiKey, {
+            allowNetwork: false,
+          });
+        }
+      } else {
+        modelRuntime.registerProvider(next.provider, {
+          api: "openai-completions",
+          baseUrl: next.baseUrl,
+          models: [
+            {
+              id: next.modelId,
+              name: next.modelId,
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: next.contextWindow ?? 131_072,
+              maxTokens: next.maxTokens ?? 8_192,
+            },
+          ],
+        });
+        await modelRuntime.setRuntimeApiKey(next.provider, next.apiKey, {
+          allowNetwork: false,
+        });
+        const nextModel = modelRuntime.getModel(next.provider, next.modelId);
+        if (nextModel === undefined) {
+          throw new BioMedAgentError(
+            "INVALID_CONFIGURATION",
+            "Configured Pi model is unavailable",
+          );
+        }
+        await session.setModel(nextModel);
+      }
+      if (
+        next.compactionTriggerRatio !== undefined &&
+        next.compactionTargetRatio !== undefined
+      ) {
+        const usage = session.getContextUsage();
+        settingsManager.applyOverrides(resolvePiCompactionOverrides(
+          next.contextWindow ?? 131_072,
+          next.compactionTriggerRatio,
+          next.compactionTargetRatio,
+          usage?.tokens ?? null,
+        ));
+      }
+      current = next;
+    };
   return {
     sessionId: session.sessionId,
     prompt: (input) => session.prompt(input),
@@ -559,10 +580,48 @@ async function createRealUpstreamSession(
     }, { triggerTurn: true }),
     steer: (text) => session.steer(text),
     compact: async () => {
-      const result = await session.compact();
-      return { summary: result.summary };
+      const usage = session.getContextUsage();
+      const autoOverrides =
+        current.compactionTriggerRatio !== undefined &&
+        current.compactionTargetRatio !== undefined
+          ? resolvePiCompactionOverrides(
+              currentWindow(),
+              current.compactionTriggerRatio,
+              current.compactionTargetRatio,
+              usage?.tokens ?? null,
+            )
+          : undefined;
+      const manualOverrides = autoOverrides === undefined
+        ? undefined
+        : current.compactionTriggerRatio !== undefined &&
+            current.compactionTargetRatio !== undefined
+          ? resolveManualPiCompactionOverrides(
+              currentWindow(),
+              current.compactionTriggerRatio,
+              current.compactionTargetRatio,
+              usage?.tokens ?? null,
+            )
+          : undefined;
+      if (manualOverrides !== undefined) {
+        settingsManager.applyOverrides(manualOverrides);
+      }
+      try {
+        const result = await session.compact();
+        return { summary: result.summary };
+      } finally {
+        if (autoOverrides !== undefined) {
+          settingsManager.applyOverrides(autoOverrides);
+        }
+      }
     },
     getContextUsage: () => session.getContextUsage(),
+    reconcileConfig,
+    contextUsage: () => {
+      const usage = session.getContextUsage();
+      return usage === undefined
+        ? undefined
+        : { tokens: usage.tokens, percent: usage.percent };
+    },
     subscribe(listener) {
       return session.subscribe((event) => {
         const mapped = toUpstreamEvent(event);
@@ -613,12 +672,16 @@ export async function generateOneShotText(
     tools: [],
   }, process.env);
   let output = "";
+  let reasoningChars = 0;
+  let lengthContinuationStalls = 0;
   let stopReason: string | undefined;
   const unsubscribe = upstream.subscribe((event) => {
     const message = event.assistantMessageEvent;
     if (event.type === "message_update" && message?.type === "text_delta") {
       output += message.delta ?? "";
       if (output.length > 100_000) void upstream.abort();
+    } else if (event.type === "message_update" && message?.type === "thinking_delta") {
+      reasoningChars += (message.delta ?? "").length;
     } else if (event.type === "message_end") {
       stopReason = event.assistantStopReason;
     }
@@ -635,8 +698,21 @@ export async function generateOneShotText(
       if (upstream.continueAfterLength === undefined) {
         throw new Error("Model generation was truncated");
       }
+      const beforeOutput = output.length;
+      const beforeReasoning = reasoningChars;
       stopReason = undefined;
       await upstream.continueAfterLength();
+      const madeProgress =
+        output.length > beforeOutput ||
+        reasoningChars - beforeReasoning >= MIN_PROGRESS_CHARS;
+      if (!madeProgress) {
+        lengthContinuationStalls += 1;
+        if (lengthContinuationStalls >= MAX_STALLED_LENGTH_CONTINUATIONS) {
+          throw new Error("Model length continuation made no meaningful progress");
+        }
+      } else {
+        lengthContinuationStalls = 0;
+      }
     }
     if (isAborted()) throw new Error("Model generation was cancelled");
     if (stopReason === "error") throw new Error("Model generation failed upstream");
@@ -704,6 +780,7 @@ class PiBioMedAgentSession implements BioMedAgentSession {
         this.queueDelta(active, "reasoning_delta", message.delta);
       }
     } else if (event.type === "tool_execution_start") {
+      active.toolEvents += 1;
       this.pushBoundary(active, {
         event: {
           type: "tool_started",
@@ -720,6 +797,7 @@ class PiBioMedAgentSession implements BioMedAgentSession {
         },
       });
     } else if (event.type === "tool_execution_end") {
+      active.toolEvents += 1;
       this.pushBoundary(active, {
         event: {
           type: "tool_completed",
@@ -767,8 +845,23 @@ class PiBioMedAgentSession implements BioMedAgentSession {
       if (this.upstream.continueAfterLength === undefined) {
         throw new Error("Pi runtime cannot continue a length-truncated turn");
       }
+      const beforeReasoning = active.reasoningChars;
+      const beforeAssistant = active.assistantChars;
+      const beforeTools = active.toolEvents;
       active.assistantStopReason = undefined;
       await this.upstream.continueAfterLength();
+      const madeProgress =
+        active.assistantChars > beforeAssistant ||
+        active.reasoningChars - beforeReasoning >= MIN_PROGRESS_CHARS ||
+        active.toolEvents > beforeTools;
+      if (!madeProgress) {
+        active.lengthContinuationStalls += 1;
+        if (active.lengthContinuationStalls >= MAX_STALLED_LENGTH_CONTINUATIONS) {
+          throw new Error("Pi runtime length continuation made no meaningful progress");
+        }
+      } else {
+        active.lengthContinuationStalls = 0;
+      }
     }
     if (!active.cancelled && active.assistantStopReason === "error") {
       throw new Error("Pi runtime ended with an upstream error");
@@ -781,6 +874,11 @@ class PiBioMedAgentSession implements BioMedAgentSession {
     rawDelta: string,
   ): void {
     const delta = boundedText(rawDelta);
+    if (type === "reasoning_delta") {
+      active.reasoningChars += delta.length;
+    } else {
+      active.assistantChars += delta.length;
+    }
     const pending = active.pendingDelta;
     if (
       pending !== undefined &&
@@ -838,10 +936,15 @@ class PiBioMedAgentSession implements BioMedAgentSession {
         "Agent input must not be empty",
       );
     }
+    await this.upstream.reconcileConfig?.();
     const active: ActiveTurn = {
       queue: new EventQueue(),
       cancelled: false,
       terminal: false,
+      reasoningChars: 0,
+      assistantChars: 0,
+      toolEvents: 0,
+      lengthContinuationStalls: 0,
     };
     this.activeTurn = active;
     const onAbort = (): void => {
@@ -922,6 +1025,7 @@ class PiBioMedAgentSession implements BioMedAgentSession {
   }
 
   async compact(): Promise<{ summary: string }> {
+    await this.upstream.reconcileConfig?.();
     if (this.upstream.compact === undefined) {
       throw new BioMedAgentError("UPSTREAM_FAILURE", "Agent runtime does not support compaction");
     }
@@ -996,9 +1100,7 @@ export class PiAgentAdapter implements BioMedAgentAdapter {
       const optionalSkillRoots = await this.optionalSkillRoots();
       validated = await validateSessionConfig({
         ...config,
-        systemPrompt:
-          PHASE1_SYSTEM_PROMPT +
-          toolCatalogPrompt(config.tools ?? [], config.initialToolNames ?? (config.tools ?? []).map((tool) => tool.name)),
+        systemPrompt: PHASE1_SYSTEM_PROMPT,
         skillRoots: [...optionalSkillRoots, ...(config.skillRoots ?? [])],
       });
       const upstream = await this.createUpstreamSession(validated);

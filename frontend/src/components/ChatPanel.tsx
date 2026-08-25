@@ -20,6 +20,7 @@ import { openSubagentPanel } from "@/components/subagentPanelControl";
 import { TaskStatusIcon } from "@/components/taskStatus";
 import { UserInputDialog } from "@/components/UserInputDialog";
 import { PermissionQuestionnaire } from "@/components/intervention/PermissionQuestionnaire";
+import { isNothingToCompactError } from "@/lib/compactErrors";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -117,7 +118,7 @@ interface ChatPanelProps {
   selectedModelId?: string;
   /** Context window capacity in tokens from model settings */
   contextWindow?: number;
-  /** Non-null when model settings block task creation (e.g. missing context window) */
+  /** Non-null when task creation requires explicit user confirmation (e.g. context budget warning) */
   runBlockReason?: string | null;
 }
 
@@ -301,36 +302,36 @@ export function ChatPanel({
   const [, setCompacting] = useState(false);
   const handleCompact = useCallback(async () => {
     if (activeTaskId === null || compactTask === undefined) return;
-    // Manual compaction threshold: only allow when usage > 65%
-    const pct = effectiveContextWindow && effectiveContextWindow > 0
-      ? Math.round((estimatedTokens / effectiveContextWindow) * 100)
-      : 0;
-    if (pct <= 65) {
-      toast.info("上下文占用较低，无需压缩", { description: `当前占用 ${pct}%，超过 65% 时才建议压缩` });
-      return;
-    }
     setCompacting(true);
     try {
       await compactTask(activeTaskId);
       toast.success("上下文压缩已触发", { description: "早期内容将被摘要以释放上下文空间" });
     } catch (e) {
-      toast.error("压缩失败", { description: e instanceof Error ? e.message : "请求失败" });
+      if (isNothingToCompactError(e)) {
+        toast.info("当前没有可压缩的对话内容", {
+          description: "上下文尚无可摘要的早期内容，继续对话即可",
+        });
+      } else {
+        toast.error("压缩失败", { description: e instanceof Error ? e.message : "请求失败" });
+      }
     } finally {
       setCompacting(false);
     }
-  }, [activeTaskId, compactTask, effectiveContextWindow, estimatedTokens]);
+  }, [activeTaskId, compactTask]);
 
   const [submittingDraftKey, setSubmittingDraftKey] = useState<string | null>(null);
   const [importPending, setImportPending] = useState(false);
   const [continuationDrafts, setContinuationDrafts] = useState<Record<string, string>>({});
   const [continuationPendingByTask, setContinuationPendingByTask] = useState<Record<string, boolean>>({});
   const [continuationErrors, setContinuationErrors] = useState<Record<string, string>>({});
+  const [pendingSubmission, setPendingSubmission] = useState<StartTaskInput | null>(null);
   const [queuedFollowUps, setQueuedFollowUps] = useState<
     Record<string, QueuedMessage[]>
   >({});
   const [steeringRuns, setSteeringRuns] = useState<Record<string, string | null>>(
     {},
   );
+  const [cancellingRunId, setCancellingRunId] = useState<string | null>(null);
   const [olderMessagesPendingByTask, setOlderMessagesPendingByTask] = useState<Record<string, boolean>>({});
   const [olderMessagesErrors, setOlderMessagesErrors] = useState<Record<string, string>>({});
   // Sentinel observed while the conversation starts scrolled to the newest
@@ -373,21 +374,36 @@ export function ChatPanel({
       : 0;
   const stalled =
     activeRunId !== null && Number.isFinite(stallMs) && stallMs > STALL_THRESHOLD_MS;
-  const cancelStalledRun = useCallback(async () => {
+  const canCancelActiveRun =
+    activeRunId !== null &&
+    activeTask !== undefined &&
+    activeTask.summary.mode === "agent" &&
+    (activeTask.summary.status === "running" ||
+      activeTask.summary.status === "finalizing") &&
+    cancelRun !== undefined;
+  const cancelActiveRun = useCallback(async () => {
     if (activeTaskId === null || activeTask === undefined) return;
     const runId = activeTask.summary.active_run_id;
-    if (runId === null || cancelRun === undefined) return;
+    if (runId === null || cancelRun === undefined || cancellingRunId === runId) {
+      return;
+    }
+    setCancellingRunId(runId);
     try {
       await cancelRun(activeTaskId, runId);
-      toast.success("已发送取消请求", {
-        description: "任务将在当前步骤结束后停止，可重新提问重试",
+      toast.success("已停止生成", {
+        description: "可重新提问继续",
       });
     } catch (error) {
-      toast.error("取消失败", {
+      toast.error("停止生成失败", {
         description: errorMessage(error, "请稍后重试"),
       });
+    } finally {
+      setCancellingRunId((current) => current === runId ? null : current);
     }
-  }, [activeTaskId, activeTask, cancelRun]);
+  }, [activeTaskId, activeTask, cancelRun, cancellingRunId]);
+  const cancelStalledRun = useCallback(async () => {
+    await cancelActiveRun();
+  }, [cancelActiveRun]);
   /**
    * Pause/resume controls for download operations. Pause cancels the current
    * run when the download belongs to an active host run (the server keeps the
@@ -476,22 +492,12 @@ export function ChatPanel({
     return "选择已完成的 Agent 任务后继续提问";
   }, [activeTask, continuationPending]);
 
-  const submitTask = async (mode: StartTaskInput["mode"] = "agent") => {
-    const input = draftInput.trim();
-    if (!input || isSubmitting) return;
-    if (selectedDatabases.length === 0) {
-      setDraftError("请至少选择一个数据源");
-      return;
-    }
-    if (runBlockReason) {
-      setDraftError(`模型配置不完整：${runBlockReason}。请在设置中配置上下文窗口或选择已有模型。`);
-      return;
-    }
-    const submissionKey = draftKey(input, selectedDatabases);
+  const performSubmission = async (submission: StartTaskInput) => {
+    const submissionKey = draftKey(submission.input, submission.databases);
     setDraftError(null);
     setSubmittingDraftKey(submissionKey);
     try {
-      await startTask({ input, databases: selectedDatabases, mode });
+      await startTask(submission);
       const currentDraft = useAgentStore.getState().draft;
       if (draftKey(currentDraft.input, currentDraft.selectedDatabaseIds) === submissionKey) {
         setDraftInput("");
@@ -504,6 +510,29 @@ export function ChatPanel({
     } finally {
       setSubmittingDraftKey((current) => current === submissionKey ? null : current);
     }
+  };
+
+  const submitTask = async (mode: StartTaskInput["mode"] = "agent") => {
+    const input = draftInput.trim();
+    if (!input || isSubmitting) return;
+    if (selectedDatabases.length === 0) {
+      setDraftError("请至少选择一个数据源");
+      return;
+    }
+    if (hasApiKey === false) {
+      setDraftError("请先在设置中配置 API Key");
+      return;
+    }
+    const submission: StartTaskInput = {
+      input,
+      databases: selectedDatabases,
+      mode,
+    };
+    if (runBlockReason) {
+      setPendingSubmission(submission);
+      return;
+    }
+    await performSubmission(submission);
   };
 
   const submitFiles = async (files: File[], note: string) => {
@@ -804,6 +833,44 @@ export function ChatPanel({
     void sendContinuationWithMode(followUpMode);
   };
 
+  const contextBudgetWarningDialog = pendingSubmission === null ? null : (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="context-budget-warning-title"
+        className="w-full max-w-sm rounded-xl bg-popover p-4 text-sm text-popover-foreground shadow-lg ring-1 ring-foreground/10"
+      >
+        <h3
+          id="context-budget-warning-title"
+          className="font-heading text-base font-medium"
+        >
+          上下文预算提示
+        </h3>
+        <p className="mt-2 text-sm text-muted-foreground">
+          {runBlockReason ?? "当前模型配置可能导致模型输出被截断，是否仍要继续？"}
+        </p>
+        <div className="mt-4 flex justify-end gap-2">
+          <Button
+            variant="outline"
+            onClick={() => setPendingSubmission(null)}
+          >
+            取消
+          </Button>
+          <Button
+            onClick={() => {
+              const submission = pendingSubmission;
+              setPendingSubmission(null);
+              if (submission !== null) void performSubmission(submission);
+            }}
+          >
+            仍然运行
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+
   if (activeTaskId === null) {
     return (
       <div className="flex h-full min-h-0 min-w-0 items-center justify-center overflow-y-auto px-4 py-10">
@@ -850,6 +917,7 @@ export function ChatPanel({
             <p className="mt-3 text-center text-xs text-muted-foreground">未连接到后端</p>
           )}
         </div>
+        {contextBudgetWarningDialog}
       </div>
     );
   }
@@ -881,21 +949,49 @@ export function ChatPanel({
                 ? formatActiveItemStatus(activeItem)
                 : buildLabel ?? STATUS_LABELS[activeTask.summary.status]}
             </MarkerContent>
-            {isMobile && subagentCount > 0 ? (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="ml-auto"
-                onClick={openSubagentPanel}
-                aria-label={`查看 ${subagentCount} 个子任务`}
-              >
-                {activeSubagentCount > 0 ? (
-                  <Spinner data-icon="inline-start" aria-hidden="true" />
+            {(canCancelActiveRun || (isMobile && subagentCount > 0)) && (
+              <div className="ml-auto flex items-center gap-2">
+                {canCancelActiveRun && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={cancellingRunId === activeRunId}
+                    onClick={() => void cancelActiveRun()}
+                    aria-label={
+                      cancellingRunId === activeRunId
+                        ? "正在取消…"
+                        : "停止生成"
+                    }
+                  >
+                    {cancellingRunId === activeRunId ? (
+                      <>
+                        <Spinner data-icon="inline-start" aria-hidden="true" />
+                        正在取消…
+                      </>
+                    ) : (
+                      "停止生成"
+                    )}
+                  </Button>
+                )}
+                {isMobile && subagentCount > 0 ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={openSubagentPanel}
+                    aria-label={`查看 ${subagentCount} 个子任务`}
+                  >
+                    {activeSubagentCount > 0 ? (
+                      <Spinner data-icon="inline-start" aria-hidden="true" />
+                    ) : null}
+                    <Badge variant="secondary">
+                      {activeSubagentCount} 个运行中
+                    </Badge>
+                  </Button>
                 ) : null}
-                <Badge variant="secondary">{activeSubagentCount} 个运行中</Badge>
-              </Button>
-            ) : null}
+              </div>
+            )}
           </Marker>
           {renderLatestRunSummary(latestRun)}
         </div>
@@ -1083,6 +1179,7 @@ export function ChatPanel({
         </div>
       </MessageScrollerProvider>
       {resumeRun !== undefined && <UserInputDialog task={activeTask} onResumeRun={resumeRun} />}
+      {contextBudgetWarningDialog}
     </div>
   );
 }
