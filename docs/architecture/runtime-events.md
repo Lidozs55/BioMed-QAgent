@@ -152,11 +152,29 @@ Phase 8 移除 Python 运行时后该逻辑不复存在，自动压缩一度缺�
 
 - `resolveActiveConfig` 把产品的 `compaction_trigger_ratio` /
   `compaction_target_ratio` 快照进 `BioMedModelConfig`；`pi-adapter.ts` 将其换算为
-  Pi `CompactionSettings`：`reserveTokens = round(window × (1 - trigger))`、
-  `keepRecentTokens = round(window × target)`，并保持 `enabled=true`。Pi
+  Pi `CompactionSettings`：`reserveTokens = round(window × (1 - trigger))`，
+  `keepRecentTokens` 则由“最终上下文目标”动态推导，并保持 `enabled=true`。Pi
   `AgentSession` 内建的 threshold / overflow 自动压缩因此沿用产品阈值。
+- 产品默认值为 `trigger=0.85`、`target=0.45`：自动压缩在上下文占用约 85% 时触发，
+  压缩目标按**当前会话 token × `target`**计算（再钳制到窗口的 5%~60%），而不是把
+  `target` 当作窗口的固定比例。最终上下文由“摘要 + 最近轮次”组成：Pi 先为摘要预留
+  最多 80%×`reserveTokens` 的空间，剩余预留给最近轮次，因此重复信息多时摘要更短、
+  实际压缩更狠；信息密集时摘要会吃满预留预算，最近轮次自动收缩，保住早期核心内容。
+  当整个会话已经小于最终目标时，Pi 会保持全部内容并拒绝压缩（对应前端的“没有可压缩
+  内容”提示）；`keepRecentTokens ≤ window - reserveTokens` 始终成立，避免小窗口下
+  预算互相挤占。
+- 每轮 `run()` 与手动压缩前，adapter 都会用 `resolveActiveConfig` 重新解析当前模型；
+  若 provider/模型/上下文窗口/压缩比例发生变化，会先在 Pi `ModelRuntime` 重新注册
+  新模型并调用 `session.setModel()`，再重算 `CompactionSettings`。这解决了中途切换
+  不同上下文窗口模型后，旧会话仍按旧窗口保留大量历史、既触发不了压缩又可能把超窗口
+  上下文发给新模型的问题。即使模型未变化，每轮也会读取 Pi 当前上下文用量并重算
+  `keepRecentTokens`，让预算跟随实际对话规模而非固定窗口比例。
 - 手动 `POST /tasks/{task_id}/compact` 仍直接调用 Pi `session.compact()` 并自行
-  持久化 `conversation_compacted`。
+  持久化 `conversation_compacted`。压缩不再要求任务处于 active run：空闲任务用最近
+  一次 run 作为 `covered_through_run_id`，进程内没有会话时按持久化 Pi 会话惰性重建，
+  压缩后立即释放临时会话。惰性重建前先检查 `state/pi-session` 是否存在 `.jsonl`
+  会话文件；没有可压缩内容时返回 `409 Task has no conversation to compact`，前端将其
+  呈现为信息提示而非失败。
 - Pi 的 `compaction_end`（成功且带摘要）经 adapter 投影为 BioMed 的
   `context_compacted`，再由 `PiEventAdapter` 持久化为
   `conversation_compacted`（`summary_digest` 为摘要的 sha256）；前端据此在时间线
