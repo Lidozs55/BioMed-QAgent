@@ -2,9 +2,12 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { BioMedAgentError } from "../src/agent/contracts.js";
 import {
+  activationToolDefinition,
   PiAgentAdapter,
   applyModelProfileToPayload,
   resolvePiCompactionOverrides,
+  toolCatalogPrompt,
+  TOOL_ACTIVATION_NAME,
   toPiCustomTools,
   type PiUpstreamEvent,
   type PiUpstreamSession,
@@ -79,6 +82,82 @@ describe("Pi system prompt", () => {
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/do not create replacement rows or fill missing values from model memory/i);
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/partial tool success verifies only the records returned as successful/i);
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/never claim full-source or whole-dataset verification from a successful subset/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/a request for CSV files, tables, or raw provenance never makes Core publication optional/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/never fabricate, exaggerate, or infer your own work history/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/report exact requested, succeeded, and failed counts/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/never turn a plan, workspace file, successful subset, or intended next step into a completed action/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/choose the matching semantic family, projection, and row granularity/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/workspace outputs are staging evidence only/i);
+  });
+
+  test("injects the complete available skill map while keeping optional schemas deferred", async () => {
+    const core = {
+      name: "execute_dataset_build",
+      label: "Execute DatasetBuild",
+      description: "Execute through Dataset Core.",
+      parameters: { type: "object" },
+      execute: async () => ({ content: "{}" }),
+    };
+    const optional = {
+      name: "search_pubmed",
+      label: "Search PubMed",
+      description: "Search official biomedical literature.",
+      parameters: { type: "object", properties: { query: { type: "string" } } },
+      execute: async () => ({ content: "{}" }),
+    };
+    const laterOptional = {
+      name: "lookup_dbsnp",
+      label: "Look up dbSNP",
+      description: "Resolve RefSNP records.",
+      parameters: { type: "object", properties: { rs_ids: { type: "array" } } },
+      execute: async () => ({ content: "{}" }),
+    };
+    const workspace = {
+      name: "workspace_read",
+      label: "Read workspace",
+      description: "Read bounded task-workspace text.",
+      parameters: { type: "object", properties: { path: { type: "string" } } },
+      execute: async () => ({ content: "{}" }),
+    };
+    const prompt = toolCatalogPrompt([core, optional, laterOptional, workspace], [core.name]);
+    expect(prompt).toContain("Available curated skill/tool map");
+    expect(prompt).toContain("dataset-construction");
+    expect(prompt).toContain("execute_dataset_build (active)");
+    expect(prompt).toContain("pubmed");
+    expect(prompt).toContain("search_pubmed");
+    expect(prompt).toContain("dbsnp");
+    expect(prompt).toContain("discovery evidence only");
+    expect(prompt).toContain("Other optional tools");
+    expect(prompt).toContain("workspace_read");
+    expect(prompt.length).toBeLessThanOrEqual(16_000);
+
+    let active: readonly string[] = [];
+    const activation = activationToolDefinition([core, optional, laterOptional], [core.name], (names) => {
+      active = names;
+    });
+    expect(activation.name).toBe(TOOL_ACTIVATION_NAME);
+    const result = await activation.execute("call-1", { tool_names: [optional.name] }, undefined, undefined, undefined as never);
+    expect(active).toEqual([core.name, TOOL_ACTIVATION_NAME, optional.name]);
+    expect(result.details).toMatchObject({ ok: true, activated_tools: [optional.name] });
+
+    const laterResult = await activation.execute(
+      "call-2",
+      { tool_names: [laterOptional.name] },
+      undefined,
+      undefined,
+      undefined as never,
+    );
+    expect(active).toEqual([
+      core.name,
+      TOOL_ACTIVATION_NAME,
+      laterOptional.name,
+      optional.name,
+    ]);
+    expect(laterResult.details).toMatchObject({
+      ok: true,
+      activated_tools: [laterOptional.name],
+      active_optional_tools: [laterOptional.name, optional.name],
+    });
   });
 
   test("marks an approved max-turn continuation explicitly", () => {

@@ -23,7 +23,7 @@ afterEach(async () => {
 });
 
 describe("Pi DatasetBuild tools", () => {
-  test("exposes the frozen DatasetBuildSpec contract to the model", async () => {
+  test("exposes a compact DatasetBuildSpec contract while retaining Core validation", async () => {
     const [validateTool, executeTool] = createDatasetBuildTools({
       client: { validate: vi.fn(), execute: vi.fn() },
       taskId: "task_tool",
@@ -37,42 +37,15 @@ describe("Pi DatasetBuild tools", () => {
     const specWrapper = validateParameters.properties.spec as {
       anyOf: Array<Record<string, unknown>>;
     };
-    const expressionSchema = specWrapper.anyOf[0] as {
-      oneOf: Array<{
-        additionalProperties?: boolean;
-        required?: string[];
-        properties?: Record<string, Record<string, unknown>>;
-        oneOf?: Array<{
-          additionalProperties: boolean;
-          required: string[];
-          properties: Record<string, Record<string, unknown>>;
-        }>;
-      }>;
-    };
-    type SchemaVariant = {
-      additionalProperties: boolean;
-      required: string[];
+    const compactSchema = specWrapper.anyOf[0] as {
+      type: string;
       properties: Record<string, Record<string, unknown>>;
+      required: string[];
+      additionalProperties: boolean;
     };
-    const variants = expressionSchema.oneOf.flatMap((variant): SchemaVariant[] => {
-      if (variant.oneOf !== undefined) return variant.oneOf;
-      if (variant.properties === undefined || variant.required === undefined || variant.additionalProperties === undefined) return [];
-      return [{ additionalProperties: variant.additionalProperties, required: variant.required, properties: variant.properties }];
-    });
-    const schemaRef = (
-      variant: { properties: Record<string, Record<string, unknown>> },
-    ): string => (variant.properties.schema_ref.enum as string[])[0]!;
-    const geneVariant = variants.find(
-      (variant) => schemaRef(variant) === "gene_expression.long.v1",
-    )!;
-    const probeVariant = variants.find(
-      (variant) => schemaRef(variant) === "gene_expression.probe_long.v1",
-    )!;
-
-    expect(variants.length).toBeGreaterThanOrEqual(2);
-    expect(geneVariant.properties.dataset_family.enum).toEqual(["gene_expression"]);
-    expect(geneVariant.additionalProperties).toBe(false);
-    expect(geneVariant.required).toEqual([
+    expect(compactSchema.type).toBe("object");
+    expect(compactSchema.additionalProperties).toBe(false);
+    expect(compactSchema.required).toEqual([
       "build_id",
       "objective",
       "dataset_family",
@@ -81,82 +54,21 @@ describe("Pi DatasetBuild tools", () => {
       "source_bindings",
       "validation_profile_ref",
     ]);
-    expect(geneVariant.properties.validation_profile_ref.enum).toEqual([
-      "gene_expression.release.v1",
-    ]);
-    expect(probeVariant.properties.validation_profile_ref.enum).toEqual([
-      "gene_expression.probe_release.v1",
-    ]);
-
-    const sourceBindings = geneVariant.properties.source_bindings as {
-      items: {
-        oneOf: Array<{
-          properties: Record<string, Record<string, unknown>>;
-          required: string[];
-        }>;
-      };
+    expect(compactSchema.properties.dataset_family.enum).toContain("gene_expression");
+    expect(compactSchema.properties.dataset_family.enum).toContain("bioactivity_measurement");
+    expect(compactSchema.properties.schema_ref.enum).toContain("gene_expression.long.v1");
+    expect(compactSchema.properties.schema_ref.enum).toContain("variant_evidence.assertion.v1");
+    const sourceBinding = compactSchema.properties.source_bindings as {
+      items: { properties: Record<string, Record<string, unknown>> };
     };
-    const sourceOptions = sourceBindings.items.oneOf;
-    const adapterId = (
-      option: { properties: Record<string, Record<string, unknown>> },
-    ): string => (option.properties.adapter_id.enum as string[])[0]!;
-    expect(sourceOptions.map((option) => adapterId(option))).toEqual([
-      "gdc.expression.v1",
+    expect(sourceBinding.items.properties.source.enum).toContain("geo");
+    expect(sourceBinding.items.properties.adapter_id.enum).toContain(
       "geo.expression.v1",
-      "xena.matrix.v1",
-    ]);
-    const geoSource = sourceOptions.find(
-      (option) => adapterId(option) === "geo.expression.v1",
-    )!;
-    const gdcSource = sourceOptions.find(
-      (option) => adapterId(option) === "gdc.expression.v1",
-    )!;
-    expect(gdcSource.properties.parameters).toMatchObject({
-      properties: {},
-      additionalProperties: false,
+    );
+    expect(sourceBinding.items.properties.parameters).toMatchObject({
+      type: "object",
+      additionalProperties: true,
     });
-    expect(geoSource.required).toContain("parameters");
-    expect(geoSource.properties.parameters.required).toEqual([
-      "format",
-      "value_semantics",
-      "value_scale",
-      "expression_unit",
-    ]);
-    expect(geoSource.properties.parameters.properties).toMatchObject({
-      format: { enum: ["tximport_counts", "series_matrix", "supplementary_matrix"] },
-      value_semantics: {
-        enum: ["expression_value", "normalized_expression", "raw_count"],
-      },
-      value_scale: { enum: ["linear", "log2", "log10", "unknown"] },
-      expression_unit: { type: "string" },
-      is_normalized: { type: "boolean" },
-      platform_ids: { type: "array" },
-    });
-    const probeSources = probeVariant.properties.source_bindings as {
-      items: {
-        oneOf: Array<{ properties: Record<string, Record<string, unknown>> }>;
-      };
-    };
-    expect(probeSources.items.oneOf.map((option) => adapterId(option))).toEqual([
-      "geo.expression.v1",
-    ]);
-
-    const bioactivityVariant = variants.find(
-      (variant) => schemaRef(variant) === "bioactivity_measurement.activity.v1",
-    )!;
-    const bioactivitySources = bioactivityVariant.properties.source_bindings as {
-      items: {
-        oneOf: Array<{ properties: Record<string, Record<string, unknown>> }>;
-      };
-    };
-    expect(bioactivitySources.items.oneOf.map((option) => adapterId(option))).toEqual([
-      "bioactivity.chembl_json.v1",
-      "bioactivity.pubchem_identity.v1",
-      "registered_bioactivity_activities_json",
-      "registered_bioactivity_assays_json",
-      "registered_bioactivity_compounds_json",
-      "registered_bioactivity_targets_json",
-    ]);
 
     const executeParameters = executeTool!.parameters as {
       properties: Record<string, Record<string, unknown>>;
@@ -173,6 +85,8 @@ describe("Pi DatasetBuild tools", () => {
     );
     expect(executeParameters.required).toEqual(["spec"]);
     expect((specWrapper.anyOf[1] as Record<string, unknown>).type).toBe("string");
+    expect(JSON.stringify(validateTool!.parameters).length).toBeLessThan(20_000);
+    expect(JSON.stringify(executeTool!.parameters).length).toBeLessThan(22_000);
   });
 
   test("validates before execute and propagates the Pi AbortSignal", async () => {
@@ -289,7 +203,7 @@ describe("Pi DatasetBuild tools", () => {
       properties: Record<string, Record<string, unknown>>;
     };
     expect(executeParameters.properties.spec).toMatchObject({
-      anyOf: [{ oneOf: expect.any(Array) }, { type: "string" }],
+      anyOf: [{ type: "object" }, { type: "string" }],
     });
   });
 
@@ -835,11 +749,7 @@ describe("Pi DatasetBuild tools", () => {
     }));
   });
 
-  test("exposes a typed DatasetBuildSpec schema so the agent stops inventing wrapper structures", async () => {
-    // Regression (e2e gold2): the spec parameter schema was an opaque
-    // {type:"object", additionalProperties:true}, so the agent invented
-    // {config:{schema:...}} and the validator saw schema_ref=None. The tool
-    // schema must name the top-level fields and the registered values.
+  test("exposes a compact typed DatasetBuildSpec schema", async () => {
     const tools = createDatasetBuildTools({
       client: { validate: async () => ({ version: 1, request_id: "r", ok: true, data: { valid: true, reason_codes: [], reasons: [] }, error: null }), execute: async () => ({ version: 1, request_id: "r", ok: false, data: null, error: { code: "no_data", message: "x", retryable: false, details: {} } }) },
       taskId: "task_tool",
@@ -852,37 +762,49 @@ describe("Pi DatasetBuild tools", () => {
     }).properties?.spec as {
       anyOf: Array<Record<string, unknown>>;
     };
-    const expressionSchema = specWrapper.anyOf[0] as {
-      oneOf: Array<{
-        properties?: Record<string, Record<string, unknown>>;
-        required?: string[];
-        additionalProperties?: boolean;
-        oneOf?: Array<{
-          properties: Record<string, Record<string, unknown>>;
-          required: string[];
-          additionalProperties: boolean;
-        }>;
-      }>;
-    };
-    type SchemaVariant = {
+    expect((specWrapper.anyOf[1] as Record<string, unknown>).type).toBe("string");
+    const compactSchema = specWrapper.anyOf[0] as {
       properties: Record<string, Record<string, unknown>>;
       required: string[];
       additionalProperties: boolean;
     };
-    expect((specWrapper.anyOf[1] as Record<string, unknown>).type).toBe("string");
-    const variants = expressionSchema.oneOf.flatMap((variant): SchemaVariant[] => {
-      if (variant.oneOf !== undefined) return variant.oneOf;
-      if (variant.properties === undefined || variant.required === undefined || variant.additionalProperties === undefined) return [];
-      return [{ properties: variant.properties, required: variant.required, additionalProperties: variant.additionalProperties }];
+    expect(compactSchema.additionalProperties).toBe(false);
+    expect(compactSchema.required).toContain("schema_ref");
+    expect(compactSchema.required).toContain("validation_profile_ref");
+    expect(compactSchema.required).toContain("source_bindings");
+    expect(compactSchema.properties.schema_ref.enum).toContain("gene_expression.long.v1");
+    expect(compactSchema.properties.validation_profile_ref.enum).toContain(
+      "gene_expression.release.v1",
+    );
+    expect(JSON.stringify(tools[0]!.parameters).length).toBeLessThan(20_000);
+  });
+
+  test("keeps family/schema compatibility authoritative after schema compaction", async () => {
+    const validate = vi.fn(async (): Promise<DatasetBridgeResponse> => ({
+      version: 1,
+      request_id: "request_validate",
+      ok: false,
+      data: null,
+      error: {
+        code: "spec_rejected",
+        message: "family/schema mismatch",
+        retryable: false,
+        details: { reason_codes: ["family_schema_mismatch"] },
+      },
+    }));
+    const [validateTool] = createDatasetBuildTools({
+      client: { validate, execute: vi.fn() },
+      taskId: "task_tool",
+      taskRoot: await toolTaskRoot(),
+      runId: () => "run_tool",
+      piSessionId: () => "pi_tool",
     });
-    expect(variants.length).toBeGreaterThanOrEqual(2);
-    for (const variant of variants) {
-      expect(variant.additionalProperties).toBe(false);
-      expect(variant.required).toContain("schema_ref");
-      expect(variant.required).toContain("validation_profile_ref");
-      expect(variant.required).toContain("source_bindings");
-      expect(variant.properties.schema_ref.enum).toHaveLength(1);
-      expect(variant.properties.validation_profile_ref.enum).toHaveLength(1);
-    }
+    const result = await validateTool!.execute({
+      spec: { ...spec, dataset_family: "variant_evidence" },
+    });
+    expect(validate).toHaveBeenCalledWith(expect.objectContaining({
+      spec: expect.objectContaining({ dataset_family: "variant_evidence" }),
+    }));
+    expect(result).toMatchObject({ isError: true, details: { code: "spec_rejected" } });
   });
 });
