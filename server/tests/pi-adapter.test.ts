@@ -5,6 +5,7 @@ import {
   PiAgentAdapter,
   applyModelProfileToPayload,
   resolvePiCompactionOverrides,
+  resolveManualPiCompactionOverrides,
   shouldReconfigureSession,
   toPiCustomTools,
   type PiUpstreamEvent,
@@ -199,6 +200,30 @@ describe("PiAgentAdapter", () => {
   test("never compacts a conversation that is already below the target", () => {
     const small = resolvePiCompactionOverrides(524_288, 0.85, 0.45, 20_000);
     expect(small.compaction.keepRecentTokens).toBeGreaterThanOrEqual(20_000);
+  });
+
+  test("manual compaction forces a small recent tail so Pi has older content to summarize", () => {
+    const auto = resolvePiCompactionOverrides(
+      1_000_000,
+      0.85,
+      0.45,
+      154_451,
+    );
+    const manual = resolveManualPiCompactionOverrides(
+      1_000_000,
+      0.85,
+      0.45,
+      154_451,
+    );
+
+    expect(manual.compaction.reserveTokens).toBe(auto.compaction.reserveTokens);
+    expect(manual.compaction.keepRecentTokens).toBeLessThan(auto.compaction.keepRecentTokens);
+    expect(manual.compaction.keepRecentTokens).toBe(1_545);
+  });
+
+  test("manual compaction still has a positive recent budget when usage is unknown", () => {
+    expect(resolveManualPiCompactionOverrides(1_000_000, 0.85, 0.45).compaction.keepRecentTokens)
+      .toBe(1);
   });
 
   test("detects model or context-window changes that require reconciliation", () => {
