@@ -12,25 +12,31 @@ output.
 
 ## Protocol
 
-1. After source discovery and vetting, construct one DatasetBuildSpec per
+1. For every dataset-producing request, call `inspect_dataset_build_routes`
+   before substantive acquisition. Its output is derived from the live static
+   family registry and Core provider catalog. It distinguishes exact static
+   family/source capabilities, inputs that Dynamic Family can bind directly,
+   and acquisition-only carriers that still require a provenance-bound formal
+   extraction. Provider wiring alone does not prove semantic topology,
+   transform validity, source availability, or publication eligibility.
+2. After source discovery and vetting, construct one DatasetBuildSpec per
    dataset family + row granularity (expression, mutation, pathway demands
    split into separate builds).
-2. Choose exactly one build route before substantive acquisition:
+3. Choose exactly one build route before substantive acquisition:
    - Use the static route only when the required family, schema, source, and
      topology all appear in the `validate_dataset_build` schema. Then call
      `validate_dataset_build` and fix every structured error
    (unknown_schema, family_mismatch, profile_not_allowed, …) before
      executing. Never submit a static spec that failed validation.
-   - Otherwise use the dynamic route in step 4 directly. Do not pass a dynamic
+   - Otherwise use the dynamic route in step 5 directly. Do not pass a dynamic
      FamilySpec to `validate_dataset_build`, and do not treat a static rejection
      or a source missing from static enums as evidence that dynamic acquisition
-     is unavailable. Providers enumerated by the dynamic tools'
-     acquisition-request schema are the authoritative wired capabilities.
-3. On the static route, call `execute_dataset_build` with the spec plus any already-registered
+     is unavailable. Use the route preflight facts instead.
+4. On the static route, call `execute_dataset_build` with the spec plus any already-registered
    task-relative source_files / mapping_files / metadata_files references.
    Omit missing source_files when the binding has a registered Core acquisition
    provider; do not download or parse that provider again with workspace commands.
-4. When a frozen multi-table topology cannot be expressed by a registered static
+5. When a frozen multi-table topology cannot be expressed by a registered static
    family, use the fixed two-phase dynamic protocol: call
    `prepare_dynamic_family_build` first, bind the proposal transform-ref digest
    to the returned Host descriptor digest, then call
@@ -61,7 +67,7 @@ output.
    Publication as formal output. A schema containing
    review-status or human-review-status remains human-review-pending until
    genuine HIL acceptance exists.
-5. Treat a failed result as actionable state. Retry unchanged inputs only when
+6. Treat a failed result as actionable state. Retry unchanged inputs only when
    retryable is true and the external condition may have changed. A non-retryable
    static adapter/transform rejection or requested-field/topology mismatch means
    the registered static family is unsuitable: stop static execution and required-
@@ -71,7 +77,7 @@ output.
    `submit_dynamic_family_build` with that unchanged receipt. For a permission
    or human-review request, wait for the decision instead of replacing the
    trusted operation with workspace output.
-6. Only a successful Publication is formal output. Never describe rejection,
+7. Only a successful Publication is formal output. Never describe rejection,
    NO_DATA, cancellation, incomplete review, or failure as success; never
    fabricate file names when reporting artifacts.
 

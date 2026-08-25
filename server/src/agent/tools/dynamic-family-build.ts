@@ -80,7 +80,7 @@ export function createDynamicFamilyBuildTool(
     name: "submit_dynamic_family_build",
     label: "Submit Dynamic Family Build",
     description:
-      "Submit a strict FamilySpec + TypeScript DatasetTransform with the exact prepare_dynamic_family_build receipt to the explicit in_process_unisolated runtime and trusted Core publication path. A provider listed in the acquisition_requests schema is wired for this dynamic route even if absent from static family enums. This is not a sandbox, isolation mechanism, or security boundary. Direct paths and discovery bytes are forbidden.",
+      "Submit a strict FamilySpec + TypeScript DatasetTransform with the exact prepare_dynamic_family_build receipt to the explicit in_process_unisolated runtime and trusted Core publication path. Use only providers reported in inspect_dataset_build_routes.dynamic.direct_bindings; the acquisition_requests schema is the execution contract, not proof of semantic or publication closure. This is not a sandbox, isolation mechanism, or security boundary. Direct paths and discovery bytes are forbidden.",
     parameters: dynamicFamilyBuildParameters(true),
     async execute(value, signal, context): Promise<BioMedToolResult> {
       try {
@@ -106,7 +106,7 @@ export function createPrepareDynamicFamilyBuildTool(
     name: "prepare_dynamic_family_build",
     label: "Prepare Dynamic Family Build",
     description:
-      "Use directly when no registered static family expresses the required topology; do not prevalidate a dynamic FamilySpec with validate_dataset_build. The acquisition_requests schema is authoritative for dynamic provider wiring. This deterministic, side-effect-free preflight returns the structural and acquisition-plan facts committed in a task/build/generation-bound receipt.",
+      "Use after inspect_dataset_build_routes when no registered static family expresses the required topology and every input is dynamic-bindable or a prior task-owned Core asset. Do not prevalidate a dynamic FamilySpec with validate_dataset_build. This deterministic, side-effect-free preflight validates the submitted topology and acquisition plan and returns a task/build/generation-bound receipt.",
     parameters: dynamicFamilyBuildParameters(false),
     async execute(value, signal, context): Promise<BioMedToolResult> {
       try {
