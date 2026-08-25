@@ -3,7 +3,7 @@
  *
  * The builtin catalogue moved from Python (``builtin_skill_records``) to
  * TypeScript (``server/src/product/builtin-databases.ts``). These tests pin
- * the migrated facts (names, categories, versions, pipeline support,
+ * the migrated facts (names, categories, versions) and current pipeline support,
  * user-selectability) so the TS catalogue cannot drift from the retired
  * Python records, and the product API merge semantics.
  */
@@ -22,6 +22,7 @@ import {
   getBuiltinDatabase,
   listBuiltinDatabases,
 } from "../../src/product/builtin-databases.js";
+import { CORE_ACQUISITION_PROVIDER_DESCRIPTORS } from "../../src/dataset/acquisition/provider-catalog.js";
 import { createProductApi, type ProductDatabaseClient } from "../../src/product/product-api.js";
 
 const roots: string[] = [];
@@ -72,12 +73,12 @@ afterAll(async () => {
 });
 
 describe("builtin database catalogue", () => {
-  test("exposes exactly the 9 user-selectable builtins with migrated facts", () => {
+  test("exposes every curated database skill with current pipeline facts", () => {
     const entries = listBuiltinDatabases(new Set());
     const names = entries.map((entry) => entry.name);
-    // Retired Python builtin_skill_records(): the 9 selectable databases.
     expect(names).toEqual([
-      "pubmed", "chembl", "uniprot", "geo", "gdc", "xena", "pdb", "pubchem", "reactome",
+      "pubmed", "dbsnp", "openfda", "clinvar", "mgnify", "chembl", "uniprot",
+      "geo", "gdc", "xena", "pdb", "pubchem", "reactome",
     ]);
     expect(new Set(names)).toEqual(BUILTIN_DATABASE_NAMES);
 
@@ -86,16 +87,12 @@ describe("builtin database catalogue", () => {
     expect(byName.get("pubmed")).toMatchObject({ version: "0.2.0", category: "discovery" });
     expect(byName.get("geo")).toMatchObject({ version: "0.5.0", category: "acquisition" });
     expect(byName.get("gdc")).toMatchObject({ version: "0.1.0", category: "acquisition" });
-    // pipeline_supported migrated from SOURCE_CAPABILITIES
+    // Every selectable builtin now has a formal Core acquisition route.
     expect(byName.get("pubmed")?.pipeline_supported).toBe(true);
     expect(byName.get("geo")?.pipeline_supported).toBe(true);
     expect(byName.get("gdc")?.pipeline_supported).toBe(true);
     expect(byName.get("xena")?.pipeline_supported).toBe(true);
-    expect(byName.get("reactome")?.pipeline_supported).toBe(false);
-    expect(byName.get("pdb")?.pipeline_supported).toBe(false);
-    expect(byName.get("pubchem")?.pipeline_supported).toBe(false);
-    expect(byName.get("chembl")?.pipeline_supported).toBe(false);
-    expect(byName.get("uniprot")?.pipeline_supported).toBe(false);
+    for (const entry of entries) expect(entry.pipeline_supported).toBe(true);
 
     for (const entry of entries) {
       expect(entry.origin).toBe("builtin");
@@ -103,6 +100,13 @@ describe("builtin database catalogue", () => {
       expect(entry.declarative_manifest).toBeNull();
       expect(entry.capability).toBe(entry.pipeline_supported ? "pipeline_supported" : "research_only");
       expect(entry.description.length).toBeGreaterThan(0);
+    }
+  });
+
+  test("keeps every selectable builtin database connected to a formal Core provider", () => {
+    const providerDatabases = new Set(CORE_ACQUISITION_PROVIDER_DESCRIPTORS.map((entry) => entry.databaseId));
+    for (const database of listBuiltinDatabases(new Set())) {
+      expect(providerDatabases.has(database.name), database.name).toBe(true);
     }
   });
 

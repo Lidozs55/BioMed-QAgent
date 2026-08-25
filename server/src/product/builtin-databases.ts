@@ -4,11 +4,12 @@
  * The builtin database metadata moved from Python
  * (``backend/app/skills/builtin`` → ``builtin_skill_records``) to TypeScript:
  * this module is the single source of truth for the user-selectable builtin
- * databases shown in the UI (pubmed / geo / gdc / xena / pdb / pubchem /
- * reactome / chembl / uniprot).
+ * databases shown in the UI (literature, variation, safety, omics,
+ * structure, chemistry, and pathway sources represented in SKILL_TOOL_MAP).
  *
  * Descriptions come from ``SKILL_TOOL_MAP`` (skill ↔ tool contract); the
- * version and pipeline_supported facts mirror the retired Python records.
+ * Versions mirror the retired Python records. Pipeline support reflects the
+ * current Core provider catalog, including task-scope Dynamic Family builds.
  * The enabled/disabled state is persisted by the Python DB bridge
  * (``database.database_store``) and passed in by the caller.
  */
@@ -34,17 +35,21 @@ interface BuiltinDatabaseRecord {
   pipeline_supported: boolean;
 }
 
-/** Static facts for the selectable builtin databases (retired Python records). */
+/** Static facts for the selectable builtin databases. */
 const BUILTIN_DATABASE_RECORDS: Record<string, BuiltinDatabaseRecord> = {
   pubmed: { version: "0.2.0", pipeline_supported: true },
-  chembl: { version: "0.1.0", pipeline_supported: false },
-  uniprot: { version: "0.1.0", pipeline_supported: false },
+  dbsnp: { version: "0.1.0", pipeline_supported: true },
+  openfda: { version: "0.1.0", pipeline_supported: true },
+  clinvar: { version: "0.1.0", pipeline_supported: true },
+  mgnify: { version: "0.1.0", pipeline_supported: true },
+  chembl: { version: "0.1.0", pipeline_supported: true },
+  uniprot: { version: "0.1.0", pipeline_supported: true },
   geo: { version: "0.5.0", pipeline_supported: true },
   gdc: { version: "0.1.0", pipeline_supported: true },
   xena: { version: "0.1.0", pipeline_supported: true },
-  pdb: { version: "0.1.0", pipeline_supported: false },
-  pubchem: { version: "0.1.0", pipeline_supported: false },
-  reactome: { version: "0.1.0", pipeline_supported: false },
+  pdb: { version: "0.1.0", pipeline_supported: true },
+  pubchem: { version: "0.1.0", pipeline_supported: true },
+  reactome: { version: "0.1.0", pipeline_supported: true },
 };
 
 /**

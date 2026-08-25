@@ -63,8 +63,16 @@ Validator、Compatibility Gate、Validation Profile 或 Publisher。Agent-facing
 不得在工具适配层丢失；相同输入只能在明确可重试且外部条件可能已变化时重试。
 Agent 对自身工作记录也必须 evidence-bound：只能按当前 Run 的 tool result/event 声明
 调用、验证、覆盖率、BuildResult、Publication 和完成状态；抽样成功不能写成全量验证，
-计划、workspace 文件或 intended next step 不能写成已完成动作。CSV/表格/原始溯源等
-输出格式要求不放宽 Dataset Core Publication 边界。
+计划、workspace 文件或 intended next step 不能写成已完成动作。主 Prompt 将规则组织为
+显式 dataset completion contract：是否属于 dataset-producing task 由“查找、整合或输出
+数据产品”的任务语义决定，不由 CSV/表格/原始溯源等输出格式决定；每个请求的语义
+产品都必须有当前 Run 的 BuildResult 和 immutable Publication 才能声明正式完成。缺少
+Core provider/formal carrier 时不得在首次受阻后立即降级；应先尝试适用的 static/dynamic
+Core 路径、纠正输入、仅重试可重试失败并寻找独立真实来源。合理路径耗尽后可交付明确
+标注为 provisional/staging 的 workspace CSV，但必须同步报告 blocked/NO_DATA、缺失来源或
+覆盖范围，并请求完成正式 publication 所需的具体帮助；不得称其为已验证、已发布、正式
+完成或 Dataset Core Publication。该 Prompt 约束是模型侧局部缓解，不替代 runtime 对
+`run_completed(build_result=null)` 的终态门禁。
 工具返回给模型的 `content` 必须是有界且合法的结构化摘要；完整内核响应保留在
 `details`/durable evidence 中，不能通过字符切片破坏 JSON 或丢失 publication 状态。
 业务工具的共享失败形状为 `{ error, code, retryable, status_code? }`；只有底层错误

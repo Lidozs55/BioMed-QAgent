@@ -103,7 +103,7 @@ function sourceId(providerId: string, accession: string): string {
 
 function sourcePlan(options: {
   providerId: string;
-  database: "pdb" | "pubmed" | "uniprot" | "pubchem" | "browser";
+  database: "pdb" | "pubmed" | "uniprot" | "pubchem" | "clinvar" | "clinicaltrials_gov";
   accession: string;
   url: string;
   title: string;
@@ -205,7 +205,7 @@ const DEFINITIONS: readonly ProviderDefinition[] = Object.freeze([
     normalizeIdentifier: (value) => value.toUpperCase(),
     plan: (identifier) => sourcePlan({
       providerId: FIXED_BIOMEDICAL_PROVIDER_IDS.clinvar,
-      database: "browser",
+      database: "clinvar",
       accession: identifier,
       url: `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=clinvar&retmode=json&id=${encodeURIComponent(identifier)}`,
       title: `NCBI ClinVar summary ${identifier}`,
@@ -225,7 +225,7 @@ const DEFINITIONS: readonly ProviderDefinition[] = Object.freeze([
     normalizeIdentifier: (value) => value.toUpperCase(),
     plan: (identifier) => sourcePlan({
       providerId: FIXED_BIOMEDICAL_PROVIDER_IDS.clinicalTrials,
-      database: "browser",
+      database: "clinicaltrials_gov",
       accession: identifier,
       url: `https://clinicaltrials.gov/api/v2/studies?query.id=${identifier}&pageSize=1&format=json`,
       title: `ClinicalTrials.gov study ${identifier}`,

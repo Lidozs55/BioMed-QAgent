@@ -77,9 +77,65 @@ async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
 }
 
 describe("Pi system prompt", () => {
+  test("defines dataset completion by task semantics instead of requested file format", () => {
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /^\[Dataset completion contract\][\s\S]*\[Evidence integrity\][\s\S]*\[Trusted execution\][\s\S]*\[Control and recovery\][\s\S]*$/,
+    );
+    expect(PHASE1_SYSTEM_PROMPT.length).toBeLessThanOrEqual(7_000);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /completion is determined by task semantics, never by the requested file format/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /formal completion requires every requested semantic product to have a current-run Dataset Core BuildResult and immutable Publication/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /do not fall back after the first obstacle/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /only after reasonable formal-route attempts and genuinely independent real-source alternatives are exhausted/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /may deliver a clearly labeled provisional workspace CSV/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /report the exact formal-route blocker or NO_DATA outcome[\s\S]*request concrete user help/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /never call a provisional workspace CSV validated, published, formally complete, or a Dataset Core Publication/i,
+    );
+  });
+
+  test("forbids synthetic replacement data and bounds provisional fallback", () => {
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/never fabricate, simulate, approximate, infer, or use representative values/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/report the unavailable source and exact coverage/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/request concrete user help/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/continue researching a genuinely independent real source/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/may include only real, source-traceable records already acquired and verified/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/do not create replacement rows or fill missing values from model memory/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/partial tool success verifies only the records returned as successful/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/never claim full-source or whole-dataset verification from a successful subset/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/never fabricate, exaggerate, or infer your own work history/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/report exact requested, succeeded, and failed counts/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/never turn a plan, workspace file, successful subset, or intended next step into a completed action/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/choose the matching semantic family, projection, and row granularity/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/workspace outputs are staging evidence only/i);
+  });
+
   test("marks an approved max-turn continuation explicitly", () => {
     expect(PHASE1_SYSTEM_PROMPT).toContain("[MAX_TURNS_REACHED]");
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/after an approved max-turn interruption/i);
+  });
+
+  test("guides adjusted-parameter retries before switching source or reporting NO_DATA", () => {
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /retry the same route after adjusting the parameters/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/retry only genuinely transient conditions/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/never repeat an unchanged failing call/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /adjusted[- ]parameter[\s\S]*switch to a genuinely independent reliable source[\s\S]*report NO_DATA or the unavailable source/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/openFDA FAERS aggregate lookup/i);
   });
 
   test("delegates source-specific topology and evidence rules to skills", () => {

@@ -1,5 +1,6 @@
 import vm from "node:vm";
 import { types } from "node:util";
+import { gunzipSync } from "node:zlib";
 
 import {
   parseTransformExecutionReceipt,
@@ -19,6 +20,7 @@ import { sha256Bytes } from "./hashing.js";
 
 const SDK_MODULE = "@biomed/transform-sdk/v1";
 const RUNTIME_POLICY = "in-process-unisolated.1";
+const GZIP_MAGIC = Object.freeze([0x1f, 0x8b]);
 
 export interface InProcessUnisolatedInputBytes {
   readonly handle: string;
@@ -404,6 +406,7 @@ function prepareRuntimeInputs(
   );
   const runtimeInputs: RuntimeInput[] = [];
   let sizeBytes = 0;
+  let decodedSizeBytes = 0;
 
   for (const [index, expectedHandle] of context.inputHandles.entries()) {
     const input = inputs[index];
@@ -438,13 +441,34 @@ function prepareRuntimeInputs(
         "Aggregate transform input bytes exceed temp_bytes",
       );
     }
+    let decodedBytes: Uint8Array = bytes;
+    try {
+      if (bytes[0] === GZIP_MAGIC[0] && bytes[1] === GZIP_MAGIC[1]) {
+        decodedBytes = Uint8Array.from(gunzipSync(bytes, {
+          maxOutputLength: context.resourceLimits.temp_bytes - decodedSizeBytes,
+        }));
+      }
+    } catch (error) {
+      throw new TransformHostError(
+        "resource_limit_exceeded",
+        "Registered gzip transform input could not be decoded within temp_bytes",
+        { cause: error },
+      );
+    }
+    decodedSizeBytes += decodedBytes.byteLength;
+    if (decodedSizeBytes > context.resourceLimits.temp_bytes) {
+      throw new TransformHostError(
+        "resource_limit_exceeded",
+        "Decoded transform input bytes exceed temp_bytes",
+      );
+    }
     let text: string;
     try {
-      text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      text = new TextDecoder("utf-8", { fatal: true }).decode(decodedBytes);
     } catch (error) {
       throw new TransformHostError(
         "runtime_invalid",
-        "Registered transform input must contain valid UTF-8 text",
+        "Registered transform input must contain UTF-8 text or gzip-compressed UTF-8 text",
         { cause: error },
       );
     }

@@ -25,7 +25,8 @@ import { ContentCache } from "../../src/external/acquisition/content-cache.js";
 import { CrawlerFacade } from "../../src/external/crawler/index.js";
 import type { BrowserPoolClient } from "../../src/external/crawler/index.js";
 import { createBrowserTools } from "../../src/agent/tools/browser.js";
-import { fakeResolver, localExecutor, PUBLIC_IP, startFixtureServer, type FixtureServer } from "./helpers.js";
+import type { RequestExecutor } from "../../src/external/network/http-client.js";
+import { fakeResolver, localExecutor, PUBLIC_IP, SECOND_PUBLIC_IP, startFixtureServer, type FixtureServer } from "./helpers.js";
 import { fixtureEgressPolicy } from "./fixtures/browser/policy.js";
 
 const FIXTURES = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "browser");
@@ -466,6 +467,7 @@ describe("browser tools", () => {
       method_used: "crawl",
       error: "lifespan-owned browser pool is unavailable",
     });
+    expect(result.isError).toBe(true);
   });
 
   it("download_from_page stages a SourceAsset through the sanctioned path", async () => {
@@ -497,6 +499,7 @@ describe("browser tools", () => {
 
     const url = `http://127.0.0.1:${server.port}/data.pdf`;
     const result = await downloadFromPage.execute({ url, filename: "data.pdf" });
+    expect(result.isError, result.content).toBeUndefined();
     const data = JSON.parse(result.content) as Record<string, unknown>;
     expect(data["source"]).toBe("browser");
     expect(data["source_url"]).toBe(url);
@@ -528,6 +531,164 @@ describe("browser tools", () => {
     expect(evidence["provider_id"]).toBe("browser.snapshot.v1");
     expect(evidence["sha256"]).toBe(expectedSha);
     expect(queries).toEqual([["data.pdf", "browser", "success", 1]]);
+  });
+
+  it("download_from_page reports HTTP failures as an honest isError for agent recovery", async () => {
+    const server = await startFixtureServer((_req, res) => {
+      res.writeHead(404, { "content-type": "text/plain" });
+      res.end("not found");
+    });
+    servers.push(server);
+    const client = new PublicHttpClient({
+      resolve: fakeResolver({ "127.0.0.1": [PUBLIC_IP] }),
+      executor: localExecutor(server.port),
+    });
+    const facade = new CrawlerFacade({ minInterval: 0 });
+    const [, downloadFromPage] = createBrowserTools({
+      taskRoot: root,
+      cache: new ContentCache(path.join(root, "cache")),
+      client,
+      crawler: facade,
+    });
+
+    const url = `http://127.0.0.1:${server.port}/data.pdf`;
+    const result = await downloadFromPage.execute({ url, filename: "data.pdf" });
+    expect(result.isError).toBe(true);
+    const data = JSON.parse(result.content) as Record<string, unknown>;
+    expect(data["error"]).toBe("HTTP 404");
+    expect(data["local_files"]).toEqual([]);
+  });
+
+  it("download_from_page fail-fasts a host after 2 consecutive transport failures", async () => {
+    const requestCounts = new Map<string, number>();
+    const routed: RequestExecutor = async (request) => {
+      const host = request.url.hostname;
+      requestCounts.set(host, (requestCounts.get(host) ?? 0) + 1);
+      throw new Error("simulated transport failure");
+    };
+    const client = new PublicHttpClient({
+      resolve: fakeResolver({ "host-a.example": [PUBLIC_IP] }),
+      executor: routed,
+    });
+    const [, downloadFromPage] = createBrowserTools({
+      taskRoot: root,
+      cache: new ContentCache(path.join(root, "cache")),
+      client,
+      crawler: new CrawlerFacade({ minInterval: 0 }),
+    });
+
+    const url = "http://host-a.example/data.pdf";
+    const first = await downloadFromPage.execute({ url, filename: "a.pdf" });
+    expect(first.isError).toBe(true);
+    expect(requestCounts.get("host-a.example")).toBe(1);
+
+    const second = await downloadFromPage.execute({ url, filename: "b.pdf" });
+    expect(second.isError).toBe(true);
+    expect(requestCounts.get("host-a.example")).toBe(2);
+
+    const frozen = await downloadFromPage.execute({ url, filename: "c.pdf" });
+    expect(frozen.isError).toBe(true);
+    const data = JSON.parse(frozen.content) as Record<string, unknown>;
+    expect(data["no_data"]).toBe(true);
+    expect(data["error"]).toBe("host is unreachable: host-a.example");
+    expect(data["local_files"]).toEqual([]);
+    expect(requestCounts.get("host-a.example")).toBe(2);
+  });
+
+  it("download_from_page per-host fail-fast does not freeze unrelated hosts", async () => {
+    const requestCounts = new Map<string, number>();
+    const routed: RequestExecutor = async (request) => {
+      const host = request.url.hostname;
+      requestCounts.set(host, (requestCounts.get(host) ?? 0) + 1);
+      throw new Error(`simulated transport failure for ${host}`);
+    };
+    const client = new PublicHttpClient({
+      resolve: fakeResolver({
+        "host-a.example": [PUBLIC_IP],
+        "host-b.example": [SECOND_PUBLIC_IP],
+      }),
+      executor: routed,
+    });
+    const [, downloadFromPage] = createBrowserTools({
+      taskRoot: root,
+      cache: new ContentCache(path.join(root, "cache")),
+      client,
+      crawler: new CrawlerFacade({ minInterval: 0 }),
+    });
+
+    const urlA = "http://host-a.example/data.pdf";
+    await downloadFromPage.execute({ url: urlA, filename: "a1.pdf" });
+    await downloadFromPage.execute({ url: urlA, filename: "a2.pdf" });
+    const frozen = await downloadFromPage.execute({ url: urlA, filename: "a3.pdf" });
+    expect(JSON.parse(frozen.content)["no_data"]).toBe(true);
+    expect(requestCounts.get("host-a.example")).toBe(2);
+
+    const resultB = await downloadFromPage.execute({ url: "http://host-b.example/data.pdf", filename: "b.pdf" });
+    expect(resultB.isError).toBe(true);
+    expect(requestCounts.get("host-b.example")).toBe(1);
+  });
+
+  it("download_from_page does not freeze a reachable host after endpoint-specific HTTP failures", async () => {
+    const server = await startFixtureServer((_req, res) => {
+      res.writeHead(404, { "content-type": "text/plain" });
+      res.end("not found");
+    });
+    servers.push(server);
+    let requestCount = 0;
+    const routed: RequestExecutor = (request) => {
+      requestCount += 1;
+      return localExecutor(server.port)(request);
+    };
+    const client = new PublicHttpClient({
+      resolve: fakeResolver({ "host-a.example": [PUBLIC_IP] }),
+      executor: routed,
+    });
+    const [, downloadFromPage] = createBrowserTools({
+      taskRoot: root,
+      cache: new ContentCache(path.join(root, "cache")),
+      client,
+      crawler: new CrawlerFacade({ minInterval: 0 }),
+    });
+
+    for (const filename of ["a.pdf", "b.pdf", "c.pdf"]) {
+      const result = await downloadFromPage.execute({
+        url: `http://host-a.example/${filename}`,
+        filename,
+      });
+      expect(result.isError).toBe(true);
+      expect(JSON.parse(result.content)["error"]).toBe("HTTP 404");
+    }
+    expect(requestCount).toBe(3);
+  });
+
+  it("download_from_page marks an unresolvable host as isError with a deterministic transport error", async () => {
+    const server = await startFixtureServer((_req, res) => {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("unused");
+    });
+    servers.push(server);
+    const client = new PublicHttpClient({
+      resolve: fakeResolver({}),
+      executor: localExecutor(server.port),
+    });
+    const [, downloadFromPage] = createBrowserTools({
+      taskRoot: root,
+      cache: new ContentCache(path.join(root, "cache")),
+      client,
+      crawler: new CrawlerFacade({ minInterval: 0 }),
+    });
+
+    const before = server.requests.length;
+    const result = await downloadFromPage.execute({
+      url: "http://unresolvable.example/data.pdf",
+      filename: "data.pdf",
+    });
+    expect(result.isError).toBe(true);
+    const data = JSON.parse(result.content) as Record<string, unknown>;
+    expect(data["error"]).toBe("URL hostname could not be resolved: unresolvable.example");
+    expect(data["source"]).toBe("browser");
+    expect(data["accession"]).toBe("data.pdf");
+    expect(server.requests.length).toBe(before);
   });
 
   it("download_from_page rejects unsafe filenames before any transport", async () => {

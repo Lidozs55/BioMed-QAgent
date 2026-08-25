@@ -22,6 +22,7 @@ import { BROWSER_UA } from "../gdc/api.js";
 
 export const XENA_HUB_BASE = "https://toil-xena-hub.s3.us-east-1.amazonaws.com";
 export const XENA_DOWNLOAD_BASE = `${XENA_HUB_BASE}/download`;
+export const XENA_TCGA_HUB_BASE = "https://tcga-xena-hub.s3.us-east-1.amazonaws.com";
 /** Official Xena hub query endpoint (replaces the S3 listing, which the
  * bucket policy denies with HTTP 403). */
 export const XENA_QUERY_URL = "https://toil.xenahubs.net/data/";
@@ -323,7 +324,10 @@ export function buildXenaDownloadUrl(datasetId: string): string {
     normalized = datasetId;
   }
   const baseId = normalized.endsWith(".gz") ? normalized.slice(0, -3) : normalized;
-  return `${XENA_DOWNLOAD_BASE}/${baseId}.gz`;
+  const downloadBase = /^TCGA\./i.test(baseId)
+    ? `${XENA_TCGA_HUB_BASE}/download`
+    : XENA_DOWNLOAD_BASE;
+  return `${downloadBase}/${baseId}.gz`;
 }
 
 /** Local filename for a remote ``{dataset_id}.gz`` (slashes flattened). */

@@ -39,6 +39,7 @@ import {
 
 const XENA_QUERY_HOST = "toil.xenahubs.net";
 const XENA_S3_HOST = "toil-xena-hub.s3.us-east-1.amazonaws.com";
+const XENA_TCGA_S3_HOST = "tcga-xena-hub.s3.us-east-1.amazonaws.com";
 const FIXTURES = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 
 function fixture(name: string): string {
@@ -67,6 +68,7 @@ function client(port: number): PublicHttpClient {
     resolve: fakeResolver({
       [XENA_QUERY_HOST]: [PUBLIC_IP],
       [XENA_S3_HOST]: [PUBLIC_IP],
+      [XENA_TCGA_S3_HOST]: [PUBLIC_IP],
     }),
     executor: localExecutor(port),
   });
@@ -314,7 +316,7 @@ describe("download_xena", () => {
     expect(result.dataset_id).toBe("TCGA.BRCA.sampleMap/HiSeqV2");
     expect(result.cohort).toBeUndefined();
     expect(result.source_url).toBe(
-      "https://toil-xena-hub.s3.us-east-1.amazonaws.com/download/TCGA.BRCA.sampleMap/HiSeqV2.gz",
+      "https://tcga-xena-hub.s3.us-east-1.amazonaws.com/download/TCGA.BRCA.sampleMap/HiSeqV2.gz",
     );
     expect(result.local_files).toHaveLength(2);
     expect(result.format_hint).toBe("xena_tsv");

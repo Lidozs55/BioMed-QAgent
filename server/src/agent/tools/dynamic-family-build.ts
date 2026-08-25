@@ -15,6 +15,7 @@ import {
 } from "@biomed/contracts";
 
 import { canonicalDigest } from "../../dataset/adapters/identity.js";
+import { DYNAMIC_ACQUISITION_PROVIDER_DESCRIPTORS } from "../../dataset/acquisition/provider-catalog.js";
 import type {
   BioMedAgentTool,
   BioMedToolExecutionContext,
@@ -321,41 +322,20 @@ function dynamicFamilyBuildParameters(includePreflightReceipt: boolean): Record<
   };
   const acquisition = {
     type: "object",
-    oneOf: [
-      {
+    oneOf: DYNAMIC_ACQUISITION_PROVIDER_DESCRIPTORS.map((descriptor) => {
+      const parameters = descriptor.parameterContract === "pubchem"
+        ? pubchemParameters
+        : descriptor.parameterContract === "pubmed"
+          ? pubmedParameters
+          : fixedParameters(descriptor.source, descriptor.inputHint);
+      return {
         properties: {
-          provider_id: { type: "string", enum: ["chembl.files.v1"] },
-          parameters: fixedParameters("chembl", "Exactly one target CHEMBL ID; compound IDs belong in entities.chembl_compounds."),
+          provider_id: { type: "string", enum: [descriptor.providerId] },
+          parameters,
         },
         required: ["provider_id", "parameters"], additionalProperties: false,
-      },
-      {
-        properties: {
-          provider_id: { type: "string", enum: ["pubchem.files.v1"] },
-          parameters: pubchemParameters,
-        },
-        required: ["provider_id", "parameters"], additionalProperties: false,
-      },
-      {
-        properties: {
-          provider_id: { type: "string", enum: ["pubmed.files.v1"] },
-          parameters: pubmedParameters,
-        },
-        required: ["provider_id", "parameters"], additionalProperties: false,
-      },
-      ...[
-        ["geo.files.v1", "geo"],
-        ["gdc.files.v1", "gdc"],
-        ["xena.files.v1", "xena"],
-        ["pdb.files.v1", "pdb"],
-      ].map(([providerId, sourceName]) => ({
-        properties: {
-          provider_id: { type: "string", enum: [providerId] },
-          parameters: fixedParameters(sourceName!, "One provider-controlled accession or entity identifier."),
-        },
-        required: ["provider_id", "parameters"], additionalProperties: false,
-      })),
-    ],
+      };
+    }),
   };
   const preflightReceipt = {
     type: "object",

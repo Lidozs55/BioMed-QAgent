@@ -176,33 +176,66 @@ workspace integration script。终态是：
 ```
 
 本次事件中没有 `conversation_compacted`，所以不能把未发布归因于上下文耗尽。问题
-分为三个独立层次：
+分为四个独立层次：
 
 ### 7.1 路径选择失败
 
-`submit_dynamic_family_build` 当时已由 runtime 注入；system prompt 也明确规定正式
-artifact 只能经 Core，并要求 exact multi-table/raw-retention 使用 dynamic route。
-Agent 仍直接选择更熟悉、更短的 workspace/Python 流程。当前没有 capability preflight
-强制它在调研前选择 formal projection，也没有终态门阻止 dataset-producing request
-在从未提交 Build 时报告 completed。
+`submit_dynamic_family_build` 当时已由 runtime 注入；system prompt 也规定正式 artifact
+只能经 Core，但只把“CSV 不使 Publication 可选”写成并列规则，没有定义不可绕过的
+dataset completion contract。Agent 因而仍选择更熟悉、更短的 workspace/Python 流程，
+并主动推断“用户只要 CSV，所以 formal Publication 可能没有必要”。Prompt 现已改为按
+任务语义识别 dataset-producing request，并要求每个请求的语义产品都有当前 Run 的
+BuildResult + immutable Publication 才能声明正式完成。缺 provider/carrier 时不得在首次
+受阻后立即降级；应先尝试可用 static/dynamic 路径并寻找独立真实来源。合理路径耗尽后可
+交付明确标注为 provisional 的 workspace CSV，但必须同步报告 blocked/NO_DATA、覆盖缺口并
+请求具体帮助，且不得称其为 Dataset Core Publication 或正式成功。该改动只是路径选择的局部缓解：当前仍没有
+capability preflight 强制调研前选择 formal projection，也没有终态门阻止从未提交 Build
+的 dataset-producing request 报告 completed。
 
 ### 7.2 动态工具可用性不足
 
-动态工具要求一次提交完整 FamilySpec、Projection、TypeScript transform、proposal、
-registered source/acquisition bindings 和多项 digest；首次还要用 zero digest 触发
-readmission，再按返回值重提。它缺少小型 planning/scaffold 接口来返回：匹配的
+动态工具支持 task-scope FamilySpec，所以“不注册新的 production family”本身不是
+拓扑阻塞；但 Agent 仍需准备完整 FamilySpec、Projection、TypeScript transform、
+proposal、registered source/acquisition bindings 和多项 digest，并严格执行
+`prepare_dynamic_family_build` -> 绑定 Host descriptor digest ->
+`submit_dynamic_family_build` 两阶段协议。它缺少小型 planning/scaffold 接口来返回：匹配的
 semantic family/projection、行粒度、可用 providers、缺失 blockers 和服务端生成的
 合法 skeleton。这增加了模型跳过正式路径的概率，但本次日志只能证明“未选择”，
 不能把动机单因果归结为 schema 大小。
 
 ### 7.3 Core acquisition closure 缺失
 
-即使 Agent 尝试 dynamic build，当时 Core provider 仅有 PDB、PubMed full-text XML、
-UniProt、ClinVar、ClinicalTrials.gov、PubChem 和 ChEMBL 文件路径；没有 GWAS Catalog、
-Europe PMC supplementary archive/XLSX 或 NCBI RefSNP provider。dynamic build 只接受
-task-owned registered immutable assets 或固定 Core acquisition requests，浏览器下载、
-discovery response 和 workspace bytes 都不能成为正式 carrier。因此 gold7 在能力上
-也不可能形成完整 Publication。
+这里的 **Core provider** 是注册在 Dataset Core acquisition runtime 中的确定性获取处理器；
+它约束可访问的来源、请求参数、实现 revision、资源限制和 provenance，并把响应登记成
+当前 task 拥有的 content-addressed SourceAsset。**Formal carrier** 是随后被 Dataset Core
+接受为 build 输入的那组不可变字节及其闭包，至少绑定 asset ID/SHA-256、大小、角色、
+registration receipt 和精确 acquisition provenance。浏览器响应或 workspace 文件是证据，
+但在经过上述可信获取与登记前不是 formal carrier。
+
+2026-08-25 的基础接线已消除 runtime 与 Dynamic schema 的双份 provider 清单：两者统一
+派生自 `provider-catalog.ts`。除原有 GEO/GDC/ChEMBL/PDB/PubMed/UniProt/ClinVar/
+ClinicalTrials/PubChem 外，现已补入 Xena、Reactome、RefSNP、MGnify、openFDA 和
+GWAS Catalog association provider。所有 user-selectable builtin database 都有 formal Core
+provider；Dynamic transform 还支持受 `temp_bytes` 限制的 gzip UTF-8 解码，因此 GEO/Xena
+压缩文本不再因 raw fatal UTF-8 解码而失败。`registered_sources` 仍必须闭合到同一 task 中
+带 exact Core acquisition provenance 的 asset，浏览器下载、discovery response 和 workspace
+bytes 仍不能成为正式 carrier。
+
+因此，“没接线的数据源也能通过 Dynamic Family publication”需要区分两种接线。若仅指
+没有注册 production static family，结论成立：task-scope `FamilySpec` 可以补足语义拓扑。
+若指数据源没有任何 Core acquisition/formal carrier 接线，结论不成立：当前 submission
+对每个 binding 调用 `SourceAssetRegistry.resolveCoreAcquired`，只接受带 exact Core
+acquisition provenance 的 task-owned asset。Dynamic Family 解决 family/topology 注册缺口，
+不负责把任意 discovery、浏览器或 workspace bytes 提升为可信输入；后者仍需通用 Core
+provider，或未来由 Core 提交并可验证 provenance 的 parser/extraction result。
+
+Bellenguez supplementary 仍有第二层阻塞：dynamic transform host 不能直接消费 ZIP/XLSX。
+Core acquisition 已能通过 `europepmc.supplementary.v1` 登记官方 archive carrier，也能登记
+provider-declared `extractionAssets`，但
+phase3 dynamic binding 当前固定选择 `acquired.sourceAsset`，没有选择可信解析后 extraction
+asset 的协议。因此，仅新增一个下载 supplementary ZIP 的 provider 仍然不能接通 gold7；
+必须让 Core 确定性提取/解析并把 provenance-bound UTF-8 CSV/JSON 选为 formal binding，
+或扩展 dynamic input 以接受 Core committed parser OperationResult。后者范围更大。
 
 ### 7.4 错误成功终态
 
@@ -211,22 +244,49 @@ discovery response 和 workspace bytes 都不能成为正式 carrier。因此 go
 completed。对于明确要求数据集产物的 agent-mode request，这不是可接受的成功结果。
 它应在已选择的 projections 均有 BuildResult/结构化 blocker 后才能完成。
 
+### 7.5 不注册 production family 的最小接线
+
+若“不新增 family”指不把新定义注册进 production static Registry，gold7 可以先用
+task-scope Dynamic FamilySpec 验证：分别为 variant-trait、region-trait、variant placement
+和 variant/region-gene annotation 提交独立 projection/build。若它指连 task-scope
+FamilySpec 都不允许，则不可行，因为每个 DatasetBuild 都必须声明 family + projection +
+row granularity；`variant_evidence` 又不能承载统计关联语义。
+
+最小接线不新增 static family，但仍需新增通用 Core 能力：
+
+1. **已完成：** GWAS Catalog provider 返回官方 association/study HAL JSON，并冻结请求与
+   provider revision；它可供多个 task-scope/未来 static family 使用。live smoke 以非 gold
+   study `GCST90012877` 返回 HTTP 200。
+2. **已完成：** RefSNP provider 按受控 rsID 请求返回官方 UTF-8 JSON，保留原始 placement
+   和 allele provenance；live smoke 以非 gold `rs7412` 返回 HTTP 200。
+3. **待完成：** Europe PMC supplementary provider 已下载并登记官方 archive；Core 仍需
+   确定性选择附件、解析 XLSX
+   sheet 为 UTF-8 CSV，并把 raw archive -> attachment -> parsed table 的 hash/locator 链
+   绑定到所选 formal input。优先扩展 acquisition result 以显式选择 provider-owned
+   extraction asset；不要让 Agent 指定路径，也不要把 workspace 解析结果提升为 carrier。
+4. 用上述 Core-acquired 文本输入走现有 prepare/submit、generic multi-table B3、
+   ProductAssessment 和 immutable Publication。先用非 Alzheimer trait 与至少两个来源
+   证明 provider/family 多对多，再决定是否把已验证 FamilySpec 提升到 production Registry。
+
 ## 8. 修复顺序与验收
 
 1. **Capability preflight**：研究前解析候选 semantic family/projection，返回可用 Core
    providers 与缺失 provider blockers；不按数据库创建 family。
 2. **Server scaffold**：服务端根据选中 projection 生成 digest-bound FamilySpec/build
    skeleton；Agent 只补来源参数和 transform，避免手写整个协议。
-3. **Provider closure**：实现通用的 GWAS Catalog association、Europe PMC supplementary
-   archive 和 RefSNP providers。一个 provider 可绑定多个 family adapters；provider
-   失败产生明确 acquisition outcome。
-4. **Family/projection implementation**：先用非 gold fixture 分别证明
-   variant-trait、region-trait、variant placement 和 variant/region-gene annotation；
-   再做跨数据库 merge compatibility/拒绝测试。
-5. **Terminal enforcement**：dataset-producing request 未调用 formal build，或仍有未决
+3. **Provider/carrier closure**：实现通用的 GWAS Catalog association、Europe PMC
+   supplementary table 和 RefSNP providers；为 binary supplementary 增加 Core-owned
+   extraction asset 选择或 committed parser-result 输入。一个 provider 可绑定多个 family
+   adapters；provider 失败产生明确 acquisition outcome。
+4. **Dynamic bridge without static registration**：用 task-scope FamilySpec 和非 gold fixture
+   分别证明 variant-trait、region-trait、variant placement 和 variant/region-gene annotation
+   可走完整 Publication；不得把 task-scope success 写成 production family 已注册。
+5. **Family/projection implementation**：在 dynamic bridge 证据后决定是否提升为 production
+   family，并做跨数据库 merge compatibility/拒绝测试。
+6. **Terminal enforcement**：dataset-producing request 未调用 formal build，或仍有未决
    projection 时，不得成功为 `run_completed(build_result=null)`；返回结构化
    `no_data`、`spec_rejected` 或 blocked outcome。
-6. **Gold7 E2E**：只把 TOPIC.txt 交给 qwen3.7-plus；正式成功标准是每个所需
+7. **Gold7 E2E**：只把 TOPIC.txt 交给 qwen3.7-plus；正式成功标准是每个所需
    projection 都有 Core-owned BuildResult、Publication、provenance closure 和 Artifact
    API hash。workspace 产物不计入通过。
 

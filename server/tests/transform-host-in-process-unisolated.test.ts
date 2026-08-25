@@ -1,6 +1,7 @@
 import { chmod, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { gzipSync } from "node:zlib";
 
 import type { InputAssetReceipt, ResourceLimits } from "@biomed/contracts";
 import { afterEach, describe, expect, test } from "vitest";
@@ -338,6 +339,40 @@ describe("explicit in-process unisolated Transform Host", () => {
         })]),
         isGenerationCurrent: current,
       })).rejects.toMatchObject({ code: "runtime_invalid" });
+    } finally {
+      await fixture.store.dispose();
+    }
+  });
+
+  test("decodes a Core-owned gzip text carrier before running admitted code", async () => {
+    const content = "gene,value\nAPOE,2\n";
+    const bytes = Uint8Array.from(gzipSync(content));
+    const digest = sha256Bytes(bytes);
+    const receipt = Object.freeze({
+      asset_id: `asset_${digest}`,
+      role: "source_table",
+      sha256: digest,
+      size_bytes: bytes.byteLength,
+      locator_ref: `registered:${digest}`,
+    });
+    const handle = Object.freeze({
+      handle: "in_source",
+      receiptKind: "asset" as const,
+      receiptId: receipt.asset_id,
+    });
+    const fixture = await setup(INPUT_SOURCE, {
+      inputHandles: Object.freeze([handle]),
+      inputAssetReceipts: Object.freeze([receipt]),
+    });
+    try {
+      const result = await fixture.host.execute({
+        authorityClaim: fixture.authorityClaim,
+        bundle: fixture.bundle,
+        inputs: Object.freeze([Object.freeze({ ...handle, bytes })]),
+        isGenerationCurrent: current,
+      });
+      expect(new TextDecoder().decode(result.outputs[0]?.bytes)).toBe(content);
+      expect(result.receipt.input_asset_receipts[0]?.sha256).toBe(digest);
     } finally {
       await fixture.store.dispose();
     }

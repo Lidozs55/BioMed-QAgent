@@ -59,10 +59,19 @@ import { errorMessage } from "./result.js";
 const MAX_BODY_CHARS = 5000;
 const SOURCE = "browser";
 const BROWSER_PROVIDER_IMPLEMENTATION_DIGEST = BROWSER_ACQUISITION_PROVIDER_IMPLEMENTATION_DIGEST;
+const HOST_FAIL_FAST_THRESHOLD = 2;
 
 /** Python ``_validate_download_filename`` parity. */
 function validateDownloadFilename(filename: string): void {
   assertSafeFilename(filename, "source asset filename is unsafe");
+}
+
+function urlHostname(value: string): string | null {
+  try {
+    return new URL(value).hostname || null;
+  } catch {
+    return null;
+  }
 }
 
 /** Python ``_extract_title`` (BeautifulSoup → cheerio). */
@@ -143,6 +152,7 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
   proposeFormalization: BioMedAgentTool;
 } {
   const hooks = noopHooks(options.hooks);
+  const hostFailureCounts = new Map<string, number>();
 
   const navigatePage: BioMedAgentTool = {
     name: NAVIGATE_PAGE_TOOL_NAME,
@@ -175,6 +185,7 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
               method_used: result.method_used,
               error: result.error ?? `HTTP ${result.status_code}`,
             }),
+            isError: true,
           };
         }
         const html = result.content;
@@ -194,6 +205,7 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
         hooks.onQuery(url, SOURCE, "failed", 0);
         return {
           content: JSON.stringify({ url, error: errorMessage(error) }),
+          isError: true,
         };
       }
     },
@@ -357,6 +369,22 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
       const url = typeof record.url === "string" ? record.url : "";
       const filename = typeof record.filename === "string" ? record.filename : "";
       hooks.onQueryStarted(filename, SOURCE);
+      const hostname = urlHostname(url);
+      if (hostname !== null && (hostFailureCounts.get(hostname) ?? 0) >= HOST_FAIL_FAST_THRESHOLD) {
+        hooks.onQuery(filename, SOURCE, "failed", 0);
+        return {
+          content: JSON.stringify({
+            source: SOURCE,
+            accession: filename,
+            source_url: url,
+            local_files: [],
+            no_data: true,
+            error: `host is unreachable: ${hostname}`,
+          }),
+          isError: true,
+        };
+      }
+      let transportStarted = false;
       try {
         validateDownloadFilename(filename);
         const dirs = taskWorkDirs(options.taskRoot);
@@ -377,6 +405,7 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
         const attemptId = `download_attempt_${randomUUID()}`;
         const startedAt = new Date().toISOString();
         await options.crawler.pace(url);
+        transportStarted = true;
         const response = await options.client.request(url, {
           headers: { ...BROWSER_HEADERS },
           signal,
@@ -393,6 +422,7 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
               local_files: [],
               error: `HTTP ${response.status}`,
             }),
+            isError: true,
           };
         }
         const mediaType = (response.headers["content-type"] ?? "application/octet-stream")
@@ -506,13 +536,14 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
         };
         const taskId = typeof options.taskId === "function" ? options.taskId() : options.taskId ?? "unknown_task";
         const runId = typeof options.runId === "function" ? options.runId() : options.runId ?? null;
+        const finalUrl = response.url ?? url;
         const evidence: BrowserAcquisitionEvidence = {
           schema_version: "1.0",
-          evidence_id: `browser_evidence_${canonicalDigest({ taskId, runId, checksum, url, finalUrl: response.url }).slice(0, 32)}`,
+          evidence_id: `browser_evidence_${canonicalDigest({ taskId, runId, checksum, url, finalUrl }).slice(0, 32)}`,
           task_id: taskId,
           run_id: runId,
           requested_url: url,
-          final_url: response.url,
+          final_url: finalUrl,
           redirect_chain: response.redirectChain ?? [],
           status: response.status,
           media_type: mediaType,
@@ -530,6 +561,9 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
         const persistedEvidence = options.evidenceStore === undefined
           ? null
           : await options.evidenceStore.put(evidence);
+        if (hostname !== null) {
+          hostFailureCounts.set(hostname, 0);
+        }
         hooks.onQuery(filename, SOURCE, "success", 1);
         return {
           content: JSON.stringify({
@@ -548,6 +582,9 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
         };
       } catch (error) {
         if (signal?.aborted === true) throw error;
+        if (hostname !== null && transportStarted) {
+          hostFailureCounts.set(hostname, (hostFailureCounts.get(hostname) ?? 0) + 1);
+        }
         hooks.onQuery(filename, SOURCE, "failed", 0);
         return {
           content: JSON.stringify({
@@ -556,6 +593,7 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
             source_url: url,
             error: errorMessage(error),
           }),
+          isError: true,
         };
       }
     },
