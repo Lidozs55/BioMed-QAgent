@@ -184,7 +184,51 @@ describe("parseEventPayload — runtime event family", () => {
   });
 
   it("conversation_compacted — validates summary_digest is hex", () => {
-    expect(() => parseEventPayload(o({ type: "conversation_compacted", covered_through_run_id: "r1", summary_digest: "bad" }), "conversation_compacted", "p")).toThrow(APIError);
+    expect(() => parseEventPayload(o({ type: "conversation_compacted", compaction_id: "c1", covered_through_run_id: "r1", summary_digest: "bad" }), "conversation_compacted", "p")).toThrow(APIError);
+  });
+
+  it("conversation_compaction_started — parses a compact request status", () => {
+    const r = parseEventPayload(
+      o({ type: "conversation_compaction_started", compaction_id: "c1", covered_through_run_id: "r1" }),
+      "conversation_compaction_started",
+      "p",
+    );
+    expect(r).toEqual({
+      type: "conversation_compaction_started",
+      compaction_id: "c1",
+      covered_through_run_id: "r1",
+    });
+  });
+
+  it("conversation_compaction_failed — accepts no_content and error reasons", () => {
+    const noContent = parseEventPayload(
+      o({
+        type: "conversation_compaction_failed",
+        compaction_id: "c1",
+        covered_through_run_id: "r1",
+        reason: "no_content",
+        message: "Nothing to compact",
+      }),
+      "conversation_compaction_failed",
+      "p",
+    );
+    expect(noContent).toEqual({
+      type: "conversation_compaction_failed",
+      compaction_id: "c1",
+      covered_through_run_id: "r1",
+      reason: "no_content",
+      message: "Nothing to compact",
+    });
+    expect(() => parseEventPayload(
+      o({
+        type: "conversation_compaction_failed",
+        compaction_id: "c1",
+        covered_through_run_id: "r1",
+        reason: "unexpected",
+      }),
+      "conversation_compaction_failed",
+      "p",
+    )).toThrow(APIError);
   });
 
   it("context_usage — parses runtime usage and accepts unknown tokens after compaction", () => {

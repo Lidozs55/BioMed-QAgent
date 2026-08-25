@@ -179,6 +179,7 @@ export class PiEventAdapter {
         return [
           this.envelope(runId, {
             type: "conversation_compacted",
+            compaction_id: randomUUID(),
             covered_through_run_id: runId,
             summary_digest: createHash("sha256").update(event.summary, "utf8").digest("hex"),
           }),

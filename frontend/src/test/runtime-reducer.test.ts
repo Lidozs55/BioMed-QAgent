@@ -2940,7 +2940,7 @@ describe("conversation items projection", () => {
     });
   });
 
-  it("does not create items for plan_ready, user_input_required, or conversation_compacted", () => {
+  it("creates a completed compaction timeline item for conversation_compacted", () => {
     let state = setup();
     state = reduceRuntimeEvent(
       state,
@@ -2973,15 +2973,54 @@ describe("conversation items projection", () => {
       state,
       envelope("task_items", "run_items", 4, {
         type: "conversation_compacted",
+        compaction_id: "compaction-test-1",
         covered_through_run_id: "run_old",
         summary_digest: "digest",
       }),
     );
 
-    // run_queued creates 1 user_message item; the other three create none.
-    expect(state.tasksById.task_items.items).toHaveLength(1);
+    // run_queued creates 1 user_message item; compaction creates its own timeline item.
+    expect(state.tasksById.task_items.items).toHaveLength(2);
     expect(state.tasksById.task_items.items[0]).toMatchObject({
       kind: "user_message",
+    });
+    expect(state.tasksById.task_items.items[1]).toMatchObject({
+      kind: "compaction",
+      status: "completed",
+    });
+  });
+
+  it("projects compaction started and failed status into the timeline", () => {
+    let state = setup();
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 1, {
+        type: "conversation_compaction_started",
+        compaction_id: "compaction-running",
+        covered_through_run_id: "run_items",
+      }),
+    );
+    expect(state.tasksById.task_items.compacting).toBe(true);
+    expect(state.tasksById.task_items.items[0]).toMatchObject({
+      kind: "compaction",
+      status: "running",
+    });
+
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 2, {
+        type: "conversation_compaction_failed",
+        compaction_id: "compaction-running",
+        covered_through_run_id: "run_items",
+        reason: "no_content",
+        message: "Nothing to compact",
+      }),
+    );
+    expect(state.tasksById.task_items.compacting).toBe(false);
+    expect(state.tasksById.task_items.items[0]).toMatchObject({
+      kind: "compaction",
+      status: "no_content",
+      message: "Nothing to compact",
     });
   });
 
@@ -3012,6 +3051,7 @@ describe("conversation items projection", () => {
       state,
       envelope("task_context", "run_context", 2, {
         type: "conversation_compacted",
+        compaction_id: "compaction-test-2",
         covered_through_run_id: "run_context",
         summary_digest: "digest",
       }),

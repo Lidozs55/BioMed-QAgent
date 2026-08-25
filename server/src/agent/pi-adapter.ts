@@ -352,13 +352,25 @@ export function applyModelProfileToPayload(
   const dashScopeQwen = usesDashScopeQwen(selected);
   for (const [key, value] of Object.entries(selected.params ?? {})) {
     if (value === undefined) continue;
+    if (key === "top_logprobs" && selected.params?.logprobs !== true) continue;
     if (key === "max_tokens" || key === "temperature" || key === "top_p") continue;
     if (key === "context_window" || key === "max_output_tokens" ||
         key === "suggested_max_tokens" || key === "capabilities") continue;
     if (dashScopeQwen &&
         (key === "repetition_penalty" || key === "enable_search" ||
          key === "thinking_mode" || key === "enable_thinking")) continue;
-    next[key] = value;
+    next[key] = key === "thinking" && typeof value === "string"
+      ? (() => {
+          try {
+            const parsed = JSON.parse(value) as unknown;
+            return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+              ? parsed
+              : value;
+          } catch {
+            return value;
+          }
+        })()
+      : value;
   }
   if (selected.topP !== undefined) next.top_p = selected.topP;
   if (dashScopeQwen) {

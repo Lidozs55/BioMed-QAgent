@@ -142,11 +142,16 @@ describe("Pi model profile mapping", () => {
           tool_choice: "required",
           max_tokens: 999,
           temperature: 0.2,
+          logprobs: false,
+          top_logprobs: 0,
+          thinking: '{"type":"enabled"}',
         },
       },
     )).toEqual({
       model: "custom-chat",
+      logprobs: false,
       reasoning_effort: "high",
+      thinking: { type: "enabled" },
       tool_choice: "required",
     });
   });
