@@ -24,6 +24,12 @@ import type { DatasetCoreService } from "../../dataset/service/dataset-core.js";
 
 const MAX_ID = 128;
 const MAX_CONTENT = 4_096;
+const STATIC_ROUTE_CONTEXT = Object.freeze({
+  route_scope: "static_registered_family",
+  dynamic_provider_availability_evaluated: false,
+  route_guidance:
+    "This result covers only the static registered-family route. It does not determine Dynamic Family provider availability; inspect prepare_dynamic_family_build.acquisition_requests instead.",
+});
 
 export interface DatasetBuildToolDiagnostic {
   taskId: string;
@@ -159,6 +165,7 @@ function dynamicFallback(response: DatasetBridgeResponse): Record<string, unknow
 function resultSummary(response: DatasetBridgeResponse): Record<string, unknown> {
   if (!response.ok) {
     return {
+      ...STATIC_ROUTE_CONTEXT,
       code: response.error.code,
       request_id: response.request_id,
       message: response.error.message.slice(0, 500),
@@ -194,6 +201,7 @@ function resultSummary(response: DatasetBridgeResponse): Record<string, unknown>
     };
   }
   return {
+    ...STATIC_ROUTE_CONTEXT,
     code: "ok",
     request_id: response.request_id,
     valid: response.data.valid,
@@ -204,7 +212,7 @@ function resultSummary(response: DatasetBridgeResponse): Record<string, unknown>
 
 function resultFor(response: DatasetBridgeResponse): BioMedToolResult {
   const details = response.ok
-    ? { code: "ok", request_id: response.request_id, data: response.data }
+    ? { ...STATIC_ROUTE_CONTEXT, code: "ok", request_id: response.request_id, data: response.data }
     : {
         code: response.error.code,
         request_id: response.request_id,
@@ -212,6 +220,7 @@ function resultFor(response: DatasetBridgeResponse): BioMedToolResult {
         retryable: response.error.retryable,
         ...dynamicFallback(response),
         ...response.error.details,
+        ...STATIC_ROUTE_CONTEXT,
       };
   return {
     content: JSON.stringify(resultSummary(response)),
@@ -450,7 +459,8 @@ export function createDatasetBuildTools(
     {
       name: "validate_dataset_build",
       label: "Validate DatasetBuildSpec",
-      description: "Validate the frozen DatasetBuildSpec through the trusted Dataset Core.",
+      description:
+        "Static registered-family route only: validate a DatasetBuildSpec whose family, schema, source, and topology appear in this tool schema. This does not test Dynamic Family provider availability; use prepare_dynamic_family_build for unsupported topology.",
       parameters: {
         type: "object",
         properties: { spec: specSchema },
@@ -489,7 +499,8 @@ export function createDatasetBuildTools(
     {
       name: "execute_dataset_build",
       label: "Execute DatasetBuildSpec",
-      description: "Validate, execute, and publish a dataset through the trusted Dataset Core.",
+      description:
+        "Static registered-family route only: validate, execute, and publish a DatasetBuildSpec represented by this tool schema. For unsupported topology use prepare_dynamic_family_build then submit_dynamic_family_build.",
       parameters: {
         type: "object",
         properties: {

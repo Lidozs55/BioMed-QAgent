@@ -163,11 +163,25 @@ describe("Pi DatasetBuild tools", () => {
     expect(result).toMatchObject({
       isError: true,
       details: {
+        route_scope: "static_registered_family",
+        dynamic_provider_availability_evaluated: false,
         do_not_retry_static: true,
         recommended_next_action: expect.stringContaining("submit_dynamic_family_build"),
       },
     });
+    expect(result.content).toContain("This result covers only the static registered-family route");
     expect(result.content).toContain("Stop static schema/required_fields probing");
+  });
+
+  test("labels DatasetBuildSpec tools as static-route capabilities", async () => {
+    const tools = createDatasetBuildTools({
+      client: { validate: vi.fn(), execute: vi.fn() },
+      taskId: "task_tool", taskRoot: await toolTaskRoot(),
+      runId: () => "run_tool", piSessionId: () => "pi_tool",
+    });
+    expect(tools[0]?.description).toMatch(/static registered-family route only/i);
+    expect(tools[0]?.description).toMatch(/does not test Dynamic Family provider availability/i);
+    expect(tools[1]?.description).toMatch(/static registered-family route only/i);
   });
 
   test("accepts a JSON-encoded string spec (agent serialization slip)", async () => {

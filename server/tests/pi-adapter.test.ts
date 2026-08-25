@@ -107,6 +107,18 @@ describe("Pi system prompt", () => {
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
       /never call a provisional workspace CSV validated, published, formally complete, or a Dataset Core Publication/i,
     );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /static route only when the required family, schema, source, and topology are present in the static tool schema/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /do not use static validation failure or absence from its enums as evidence that the dynamic route is unavailable/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /a provider listed in the dynamic acquisition_requests schema is wired for Dynamic Family acquisition/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /gwas-catalog\.associations\.v1/i,
+    );
   });
 
   test("publishes a bounded tool catalog and cumulatively activates optional schemas", async () => {

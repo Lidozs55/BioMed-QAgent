@@ -68,6 +68,16 @@ describe("stable Skill ↔ Tool mapping", () => {
       "prepare_dynamic_family_build",
       "submit_dynamic_family_build",
     ]);
+    expect(core?.routing).toMatch(/choose exactly one route/i);
+    expect(core?.routing).toMatch(/static schema/i);
+    expect(core?.routing).toMatch(/dynamic acquisition schema/i);
+  });
+
+  test("routes GWAS Catalog through its wired Dynamic Family provider", () => {
+    const gwas = SKILL_TOOL_MAP.find((mapping) => mapping.name === "gwas_catalog");
+    expect(gwas?.routing).toMatch(/gwas-catalog\.associations\.v1/i);
+    expect(gwas?.routing).toMatch(/wired for Dynamic Family/i);
+    expect(gwas?.routing).toMatch(/does not require a static GWAS family/i);
   });
 
   test("mapping entries are frozen at runtime", () => {

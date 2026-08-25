@@ -15,10 +15,18 @@ output.
 1. After source discovery and vetting, construct one DatasetBuildSpec per
    dataset family + row granularity (expression, mutation, pathway demands
    split into separate builds).
-2. Call `validate_dataset_build` and fix every structured error
+2. Choose exactly one build route before substantive acquisition:
+   - Use the static route only when the required family, schema, source, and
+     topology all appear in the `validate_dataset_build` schema. Then call
+     `validate_dataset_build` and fix every structured error
    (unknown_schema, family_mismatch, profile_not_allowed, …) before
-   executing — never submit a spec that failed validation.
-3. Call `execute_dataset_build` with the spec plus any already-registered
+     executing. Never submit a static spec that failed validation.
+   - Otherwise use the dynamic route in step 4 directly. Do not pass a dynamic
+     FamilySpec to `validate_dataset_build`, and do not treat a static rejection
+     or a source missing from static enums as evidence that dynamic acquisition
+     is unavailable. Providers enumerated by the dynamic tools'
+     acquisition-request schema are the authoritative wired capabilities.
+3. On the static route, call `execute_dataset_build` with the spec plus any already-registered
    task-relative source_files / mapping_files / metadata_files references.
    Omit missing source_files when the binding has a registered Core acquisition
    provider; do not download or parse that provider again with workspace commands.
@@ -35,7 +43,8 @@ output.
    - a canonical-digest-valid task/user/curated/system `FamilySpec`, selected
      Projection, strict transform metadata/source, and BuildSpec 2.0 proposal;
    - Close every source binding exactly once with either:
-     - an acquisition-requests object mapping each binding ID to a fixed Core provider ID plus parameters (preferred for formal GEO/GDC/Xena/PDB/ChEMBL/PubChem acquisition), or
+     - an acquisition-requests object mapping each binding ID to a provider
+       enumerated in the dynamic tool schema plus its parameters (preferred), or
      - a registered-sources object mapping each binding ID to an asset SHA-256 ID only when that asset ID was returned by a previous fixed Core acquisition.
      Browser/download/discovery registrations are rejected as formal carriers. Registered assets live in Core task storage, not the Agent Workspace: never use workspace search or process execution to locate or parse them. Never pass paths or response bytes.
    - Runtime inputs are ordered by source bindings and use handles in-0, in-1,

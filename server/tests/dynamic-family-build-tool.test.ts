@@ -7,6 +7,7 @@ import { describe, expect, test, vi } from "vitest";
 
 import { canonicalDigest } from "../src/dataset/adapters/identity.js";
 import {
+  createPrepareDynamicFamilyBuildTool,
   createDynamicFamilyBuildTool,
   parseDynamicFamilyBuildSubmission,
 } from "../src/agent/tools/dynamic-family-build.js";
@@ -190,7 +191,13 @@ describe("dynamic family build tool boundary", () => {
 
   test("exposes the complete nested contract and fixed-provider parameter guidance", () => {
     const tool = createDynamicFamilyBuildTool({ submit: async () => ({ ok: true }) });
+    const prepare = createPrepareDynamicFamilyBuildTool({ prepare: async () => {
+      throw new Error("not called");
+    } });
     const schema = JSON.stringify(tool.parameters);
+    expect(prepare.description).toMatch(/do not prevalidate.*validate_dataset_build/i);
+    expect(prepare.description).toMatch(/acquisition_requests schema is authoritative/i);
+    expect(tool.description).toMatch(/provider listed in the acquisition_requests schema is wired/i);
     expect(schema).toContain('"table_definitions"');
     expect(schema).toContain('"field_names"');
     expect(schema).toContain("Synchronous TypeScript only");
@@ -207,6 +214,7 @@ describe("dynamic family build tool boundary", () => {
       expect(schema).toContain(`"${descriptor.source}"`);
     }
     expect(schema).not.toContain("europepmc.supplementary.v1");
+    expect(schema).toContain("Every provider listed here is runtime-wired for Dynamic Family acquisition");
   });
 
   test("returns computable family and projection binding digests", async () => {
