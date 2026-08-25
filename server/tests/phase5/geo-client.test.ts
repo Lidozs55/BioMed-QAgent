@@ -4,7 +4,7 @@
  * ``backend/tests/integration/test_ncbi_skill_adapters.py``).
  */
 
-import { mkdir, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -108,8 +108,7 @@ describe("GeoEutilsClient request policy", () => {
   let root: string;
 
   beforeEach(async () => {
-    const dir = path.join(os.tmpdir(), `p5-geo-client-${Math.random().toString(36).slice(2)}`);
-    await mkdir(dir, { recursive: true });
+    const dir = await mkdtemp(path.join(os.tmpdir(), "p5-geo-client-"));
     root = dir;
   });
 
@@ -263,8 +262,7 @@ describe("get_geo_listing retry policy", () => {
   let root: string;
 
   beforeEach(async () => {
-    const dir = path.join(os.tmpdir(), `p5-geo-listing-${Math.random().toString(36).slice(2)}`);
-    await mkdir(dir, { recursive: true });
+    const dir = await mkdtemp(path.join(os.tmpdir(), "p5-geo-listing-"));
     root = dir;
   });
 

@@ -4,7 +4,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -43,8 +43,7 @@ let dirs: ReturnType<typeof taskWorkDirs>;
 const fixtures: FixtureServer[] = [];
 
 beforeEach(async () => {
-  const dir = path.join(os.tmpdir(), `p5-acq-${Math.random().toString(36).slice(2)}`);
-  await mkdir(dir, { recursive: true });
+  const dir = await mkdtemp(path.join(os.tmpdir(), "p5-acq-"));
   root = dir;
   dirs = taskWorkDirs(root);
 });

@@ -7,7 +7,7 @@
  */
 
 import { gzipSync, gunzipSync } from "node:zlib";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -173,8 +173,7 @@ describe("search_geo", () => {
   let root: string;
 
   beforeEach(async () => {
-    root = path.join(os.tmpdir(), `p5-geo-tools-${Math.random().toString(36).slice(2)}`);
-    await mkdir(root, { recursive: true });
+    root = await mkdtemp(path.join(os.tmpdir(), "p5-geo-tools-"));
   });
 
   afterEach(async () => {
@@ -260,8 +259,7 @@ describe("describe_geo", () => {
   let root: string;
 
   beforeEach(async () => {
-    root = path.join(os.tmpdir(), `p5-geo-tools-${Math.random().toString(36).slice(2)}`);
-    await mkdir(root, { recursive: true });
+    root = await mkdtemp(path.join(os.tmpdir(), "p5-geo-tools-"));
   });
 
   afterEach(async () => {
@@ -309,8 +307,7 @@ describe("list_geo_supplementary_files", () => {
   let root: string;
 
   beforeEach(async () => {
-    root = path.join(os.tmpdir(), `p5-geo-tools-${Math.random().toString(36).slice(2)}`);
-    await mkdir(root, { recursive: true });
+    root = await mkdtemp(path.join(os.tmpdir(), "p5-geo-tools-"));
   });
 
   afterEach(async () => {
@@ -385,8 +382,7 @@ describe("download_geo", () => {
   let root: string;
 
   beforeEach(async () => {
-    root = path.join(os.tmpdir(), `p5-geo-tools-${Math.random().toString(36).slice(2)}`);
-    await mkdir(root, { recursive: true });
+    root = await mkdtemp(path.join(os.tmpdir(), "p5-geo-tools-"));
   });
 
   afterEach(async () => {
@@ -663,8 +659,7 @@ describe("download_geo_platform_annotation", () => {
   let root: string;
 
   beforeEach(async () => {
-    root = path.join(os.tmpdir(), `p5-geo-tools-${Math.random().toString(36).slice(2)}`);
-    await mkdir(root, { recursive: true });
+    root = await mkdtemp(path.join(os.tmpdir(), "p5-geo-tools-"));
   });
 
   afterEach(async () => {

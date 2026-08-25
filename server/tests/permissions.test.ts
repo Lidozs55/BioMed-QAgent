@@ -55,6 +55,25 @@ async function fixture(options: {
   return { base, workspaceRoot, taskOutputRoot, repositoryRoot, broker, evaluator, grants, policyStore, audit, events };
 }
 
+type PermissionEvent = { type: string; request_id?: string };
+
+async function waitForPermissionRequest(
+  events: readonly PermissionEvent[],
+  minimumCount = 1,
+): Promise<string> {
+  await expect.poll(
+    () => events.filter((event) => event.type === "permission_requested").length,
+    { timeout: 10_000, interval: 10 },
+  ).toBeGreaterThanOrEqual(minimumCount);
+  const requestId = events.filter((event) => event.type === "permission_requested").at(-1)?.request_id;
+  if (requestId === undefined) throw new Error("permission request id missing");
+  return requestId;
+}
+
+async function waitForPendingPermission(broker: PermissionBroker): Promise<void> {
+  await expect.poll(() => broker.hasPending("run_ts_1"), { timeout: 10_000, interval: 10 }).toBe(true);
+}
+
 async function classify(input: string, workspaceAnchor: string, repositoryRoot: string, taskOutputRoot: string, dataRoot = repositoryRoot) {
   const normalized = await normalizeAgentPathFor(input, workspaceAnchor);
   return {
@@ -259,9 +278,9 @@ describe("PermissionEvaluator decision order (P1)", () => {
       canonicalResource: path.join(baseExternal(), "clinical.csv"),
       scope: "external",
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(ask.broker.hasPending("run_ts_1")).toBe(true);
-    await ask.broker.resolve("run_ts_1", (ask.events.at(-1) as { request_id: string }).request_id, "allow", "once");
+    await waitForPendingPermission(ask.broker);
+    const requestId = await waitForPermissionRequest(ask.events);
+    await ask.broker.resolve("run_ts_1", requestId, "allow", "once");
     await expect(externalAsk).resolves.toMatchObject({ decision: "allow" });
 
     const restricted = await fixture({ preset: "restricted" });
@@ -388,7 +407,7 @@ describe("PermissionEvaluator decision order (P1)", () => {
       canonicalResource: path.join(baseExternal(), "x.csv"),
       scope: "external",
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForPendingPermission(broker);
     expect(broker.hasPending("run_ts_1")).toBe(true);
   });
 });
@@ -402,9 +421,8 @@ describe("PermissionBroker suspend/resume (P1)", () => {
       canonicalResource: path.join(baseExternal(), "clinical.csv"),
       scope: "external",
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    const requestId = await waitForPermissionRequest(events);
     expect(events.at(-1)).toMatchObject({ type: "permission_requested" });
-    const requestId = (events.at(-1) as { request_id: string }).request_id;
 
     const resolved = await broker.resolve("run_ts_1", requestId, "allow", "once");
     expect(resolved).toBe(true);
@@ -422,8 +440,7 @@ describe("PermissionBroker suspend/resume (P1)", () => {
       canonicalResource: path.join(baseExternal(), "clinical.csv"),
       scope: "external",
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    const requestId = (events.at(-1) as { request_id: string }).request_id;
+    const requestId = await waitForPermissionRequest(events);
     await broker.resolve("run_ts_1", requestId, "deny");
     await expect(requested).rejects.toBeInstanceOf(PermissionDeniedError);
   });
@@ -437,8 +454,7 @@ describe("PermissionBroker suspend/resume (P1)", () => {
       canonicalResource: external,
       scope: "external",
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    const requestId = (events.at(-1) as { request_id: string }).request_id;
+    const requestId = await waitForPermissionRequest(events);
     await broker.resolve("run_ts_1", requestId, "allow", "run");
     await expect(first).resolves.toMatchObject({ decision: "allow" });
 
@@ -459,9 +475,9 @@ describe("PermissionBroker suspend/resume (P1)", () => {
       canonicalResource: sibling,
       scope: "external",
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    const siblingRequestId = await waitForPermissionRequest(events, 2);
     expect(broker.hasPending("run_ts_1")).toBe(true);
-    await broker.resolve("run_ts_1", (events.at(-1) as { request_id: string }).request_id, "deny");
+    await broker.resolve("run_ts_1", siblingRequestId, "deny");
     await expect(second).rejects.toBeInstanceOf(PermissionDeniedError);
     expect(events.filter((event) => event.type === "permission_requested")).toHaveLength(2);
   });
@@ -475,8 +491,7 @@ describe("PermissionBroker suspend/resume (P1)", () => {
       canonicalResource: external,
       scope: "external",
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    const requestId = (events.at(-1) as { request_id: string }).request_id;
+    const requestId = await waitForPermissionRequest(events);
     await broker.resolve("run_ts_1", requestId, "allow", "run");
     await expect(requested).resolves.toMatchObject({ decision: "allow" });
     const granted = grants.list();
@@ -506,8 +521,7 @@ describe("PermissionBroker suspend/resume (P1)", () => {
       canonicalResource: external,
       scope: "external",
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    const requestId = (events.at(-1) as { request_id: string }).request_id;
+    const requestId = await waitForPermissionRequest(events);
     await broker.resolve("run_ts_1", requestId, "allow", "task");
     await expect(first).resolves.toMatchObject({ decision: "allow" });
     grants.clearRun("run_ts_1");
@@ -528,8 +542,7 @@ describe("PermissionBroker suspend/resume (P1)", () => {
       canonicalResource: external,
       scope: "external",
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    const requestId = (events.at(-1) as { request_id: string }).request_id;
+    const requestId = await waitForPermissionRequest(events);
     await broker.resolve("run_ts_1", requestId, "allow", "persistent");
     await expect(requested).resolves.toMatchObject({ decision: "allow" });
 
@@ -556,8 +569,7 @@ describe("PermissionBroker suspend/resume (P1)", () => {
       canonicalResource: path.join(baseExternal(), "x.csv"),
       scope: "external",
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    const requestId = (events.at(-1) as { request_id: string }).request_id;
+    const requestId = await waitForPermissionRequest(events);
     expect(await broker.resolve("run_ts_1", requestId, "allow", "once")).toBe(true);
     expect(await broker.resolve("run_ts_1", requestId, "allow", "once")).toBe(false);
     await expect(requested).resolves.toMatchObject({ decision: "allow" });
@@ -634,8 +646,7 @@ describe("PermissionBroker suspend/resume (P1)", () => {
       canonicalResource: path.join(baseExternal(), "x.csv"),
       scope: "external",
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    const requestId = (events.at(-1) as { request_id: string }).request_id;
+    const requestId = await waitForPermissionRequest(events);
     // Swap in a failing event recorder AFTER the request was suspended.
     (broker as unknown as { recordRunEvent: BrokerOptions["recordRunEvent"] }).recordRunEvent = failingEvents;
     await expect(broker.resolve("run_ts_1", requestId, "allow", "once")).rejects.toThrow(
@@ -654,7 +665,7 @@ describe("PermissionBroker suspend/resume (P1)", () => {
       canonicalResource: path.join(baseExternal(), "x.csv"),
       scope: "external",
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForPendingPermission(broker);
     expect(broker.hasPending("run_ts_1")).toBe(true);
     broker.rejectPending("run_ts_1", new Error("run cancelled"));
     await expect(requested).rejects.toThrow("run cancelled");
@@ -669,9 +680,8 @@ describe("PermissionBroker suspend/resume (P1)", () => {
       cwd: ask.workspaceRoot,
       scope: "workspace",
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    const requestId = await waitForPermissionRequest(ask.events);
     expect(ask.events.at(-1)).toMatchObject({ type: "permission_requested", capability: "process.exec" });
-    const requestId = (ask.events.at(-1) as { request_id: string }).request_id;
     await ask.broker.resolve("run_ts_1", requestId, "allow", "persistent");
     await expect(pending).resolves.toMatchObject({ decision: "allow" });
 
@@ -767,8 +777,7 @@ describe("PermissionBroker suspend/resume (P1)", () => {
       canonicalResource: path.join(baseExternal(), "a.csv"),
       scope: "external",
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    const requestId = (events.at(-1) as { request_id: string }).request_id;
+    const requestId = await waitForPermissionRequest(events);
 
     // A different runId with the same requestId must not resolve it.
     expect(await broker.resolve("run_other", requestId, "allow", "once")).toBe(false);
@@ -783,7 +792,7 @@ describe("PermissionBroker suspend/resume (P1)", () => {
       canonicalResource: path.join(baseExternal(), "a.csv"),
       scope: "external",
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForPendingPermission(broker);
     await expect(broker.evaluate({
       capability: "fs.read",
       resource: path.join(baseExternal(), "b.csv"),
@@ -803,8 +812,7 @@ describe("permission audit (P1)", () => {
       canonicalResource: resource,
       scope: "external",
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    const requestId = (events.at(-1) as { request_id: string }).request_id;
+    const requestId = await waitForPermissionRequest(events);
     await broker.resolve("run_ts_1", requestId, "allow", "run");
     await expect(requested).resolves.toMatchObject({ decision: "allow" });
 
@@ -840,9 +848,9 @@ describe("round-3 audit: stale pending re-validation (P0)", () => {
       canonicalResource: external,
       scope: "external",
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForPendingPermission(broker);
     expect(broker.hasPending("run_ts_1")).toBe(true);
-    const requestId = (events.at(-1) as { request_id: string }).request_id;
+    const requestId = await waitForPermissionRequest(events);
 
     // The user switches to Restricted while the request is pending.
     await policyStore.setPreset("restricted");
@@ -866,8 +874,7 @@ describe("round-3 audit: stale pending re-validation (P0)", () => {
       canonicalResource: external,
       scope: "external",
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    const requestId = (events.at(-1) as { request_id: string }).request_id;
+    const requestId = await waitForPermissionRequest(events);
     await policyStore.addRule({
       capability: "fs.read",
       path: external,
@@ -887,7 +894,7 @@ describe("round-3 audit: stale pending re-validation (P0)", () => {
       canonicalResource: path.join(baseExternal(), "a.csv"),
       scope: "external",
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForPendingPermission(broker);
     await broker.invalidateAllPending(new Error("preset switched to restricted; pending permissions revoked"));
     await expect(first).rejects.toThrow("preset switched to restricted");
     expect(broker.hasPending("run_ts_1")).toBe(false);
@@ -933,8 +940,7 @@ describe("round-3 audit: broker rollback (transactional grants)", () => {
       cwd: workspaceRoot,
       scope: "external",
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    const requestId = (events.at(-1) as { request_id: string }).request_id;
+    const requestId = await waitForPermissionRequest(events);
     (broker as unknown as { recordRunEvent: BrokerOptions["recordRunEvent"] }).recordRunEvent = async () => {
       throw new Error("event stream unwritable");
     };
@@ -1034,9 +1040,9 @@ describe("round-3 audit: sensitive scope", () => {
       canonicalResource: envFile,
       scope: "sensitive",
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForPendingPermission(broker);
     expect(broker.hasPending("run_ts_1")).toBe(true);
-    const requestId = (events.at(-1) as { request_id: string }).request_id;
+    const requestId = await waitForPermissionRequest(events);
     await broker.resolve("run_ts_1", requestId, "deny");
     await expect(requested).rejects.toBeInstanceOf(PermissionDeniedError);
 

@@ -5,7 +5,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -57,8 +57,7 @@ let root: string;
 const fixtures: FixtureServer[] = [];
 
 beforeEach(async () => {
-  root = path.join(os.tmpdir(), `p5-gdc-${Math.random().toString(36).slice(2)}`);
-  await mkdir(root, { recursive: true });
+  root = await mkdtemp(path.join(os.tmpdir(), "p5-gdc-"));
 });
 
 afterEach(async () => {

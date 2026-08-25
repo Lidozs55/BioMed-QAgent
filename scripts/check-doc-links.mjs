@@ -11,6 +11,10 @@ const skippedDirectories = new Set([
   "dist",
   "node_modules",
   ".venv",
+  ".omo",
+  ".sisyphus",
+  ".superpowers",
+  ".worktree",
 ]);
 const historicalRoots = [
   resolve(repoRoot, "docs/archive"),
