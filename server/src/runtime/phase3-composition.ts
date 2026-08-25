@@ -35,12 +35,7 @@ import {
   TemporaryGrantStore,
   type PermissionPolicyStore,
 } from "../agent/permissions/index.js";
-import { createChemblFilesProvider } from "../dataset/acquisition/chembl-provider.js";
-import { createFixedBiomedicalProviders } from "../dataset/acquisition/biomedical-providers.js";
-import {
-  createGdcFilesProvider,
-  createGeoFilesProvider,
-} from "../dataset/acquisition/expression-providers.js";
+import { createCoreAcquisitionProviders } from "../dataset/acquisition/provider-catalog.js";
 import {
   CoreAcquisitionRegistry,
   CoreAcquisitionRuntime,
@@ -344,10 +339,7 @@ export function createPhase3AcquisitionRuntime(options: {
   registrar?: CacheRegistrar | null;
 }): CoreAcquisitionRuntime {
   const registry = new CoreAcquisitionRegistry();
-  registry.registerProvider(createChemblFilesProvider());
-  registry.registerProvider(createGeoFilesProvider());
-  registry.registerProvider(createGdcFilesProvider());
-  for (const provider of createFixedBiomedicalProviders()) registry.registerProvider(provider);
+  for (const provider of createCoreAcquisitionProviders()) registry.registerProvider(provider);
   return new CoreAcquisitionRuntime({
     ...options,
     sourceAssetRegistry: options.sourceAssetRegistry ?? new SourceAssetRegistry(options.taskId, options.taskRoot),

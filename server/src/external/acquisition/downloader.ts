@@ -70,6 +70,7 @@ export const CURATED_SOURCE_HOSTS: ReadonlySet<string> = new Set([
   "reactome.org",
   // UCSC Xena (S3)
   "toil-xena-hub.s3.us-east-1.amazonaws.com",
+  "tcga-xena-hub.s3.us-east-1.amazonaws.com",
   // Unpaywall (DOI → OA PDF URL lookup)
   "api.unpaywall.org",
   // Europe PMC (PMCID → fullTextXML)

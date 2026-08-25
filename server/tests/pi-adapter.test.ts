@@ -86,24 +86,31 @@ describe("Pi system prompt", () => {
       /completion is determined by task semantics, never by the requested file format/i,
     );
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
-      /complete only when every requested semantic product has a current-run Dataset Core BuildResult and immutable Publication/i,
+      /formal completion requires every requested semantic product to have a current-run Dataset Core BuildResult and immutable Publication/i,
     );
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
-      /workspace files are staging only: never present them as a completed, delivered, usable, or formally published dataset/i,
+      /do not fall back after the first obstacle/i,
     );
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
-      /lacks a Core provider or formal carrier[\s\S]*blocked or NO_DATA/i,
+      /only after reasonable formal-route attempts and genuinely independent real-source alternatives are exhausted/i,
     );
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
-      /do not downgrade the task to workspace CSV delivery/i,
+      /may deliver a clearly labeled provisional workspace CSV/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /report the exact formal-route blocker or NO_DATA outcome[\s\S]*request concrete user help/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /never call a provisional workspace CSV validated, published, formally complete, or a Dataset Core Publication/i,
     );
   });
 
-  test("forbids synthetic replacement data and limits unavailable-source choices", () => {
+  test("forbids synthetic replacement data and bounds provisional fallback", () => {
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/never fabricate, simulate, approximate, infer, or use representative values/i);
-    expect(PHASE1_SYSTEM_PROMPT).toMatch(/stop and report the unavailable source/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/report the unavailable source and exact coverage/i);
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/request concrete user help/i);
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/continue researching a genuinely independent real source/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/may include only real, source-traceable records already acquired and verified/i);
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/do not create replacement rows or fill missing values from model memory/i);
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/partial tool success verifies only the records returned as successful/i);
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/never claim full-source or whole-dataset verification from a successful subset/i);
@@ -150,7 +157,7 @@ describe("Pi system prompt", () => {
     expect(prompt).toContain("pubmed");
     expect(prompt).toContain("search_pubmed");
     expect(prompt).toContain("dbsnp");
-    expect(prompt).toContain("discovery evidence only");
+    expect(prompt).toContain("Core provider dbsnp.files.v1");
     expect(prompt).toContain("Other optional tools");
     expect(prompt).toContain("workspace_read");
     expect(prompt.length).toBeLessThanOrEqual(16_000);

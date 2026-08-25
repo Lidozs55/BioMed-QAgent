@@ -26,6 +26,7 @@ import {
 } from "../src/dataset/validation/disk-index.js";
 import { OperationAbortedError } from "../src/dataset/cooperative.js";
 import { SourceAssetRegistry } from "../src/runtime/source-assets/registry.js";
+import { DYNAMIC_ACQUISITION_PROVIDER_DESCRIPTORS } from "../src/dataset/acquisition/provider-catalog.js";
 
 const A = "a".repeat(64);
 const B = "b".repeat(64);
@@ -201,6 +202,11 @@ describe("dynamic family build tool boundary", () => {
     expect(schema).toContain("One PMCID per binding");
     expect(schema).toContain("^PMC[1-9][0-9]*$");
     expect(schema).toContain("geo.files.v1");
+    for (const descriptor of DYNAMIC_ACQUISITION_PROVIDER_DESCRIPTORS) {
+      expect(schema).toContain(descriptor.providerId);
+      expect(schema).toContain(`"${descriptor.source}"`);
+    }
+    expect(schema).not.toContain("europepmc.supplementary.v1");
   });
 
   test("returns computable family and projection binding digests", async () => {

@@ -185,8 +185,10 @@ workspace integration script。终态是：
 dataset completion contract。Agent 因而仍选择更熟悉、更短的 workspace/Python 流程，
 并主动推断“用户只要 CSV，所以 formal Publication 可能没有必要”。Prompt 现已改为按
 任务语义识别 dataset-producing request，并要求每个请求的语义产品都有当前 Run 的
-BuildResult + immutable Publication 才能声明完成；缺 provider/carrier 时必须 blocked/
-NO_DATA/求助，不能降级为 workspace CSV。该改动只是路径选择的局部缓解：当前仍没有
+BuildResult + immutable Publication 才能声明正式完成。缺 provider/carrier 时不得在首次
+受阻后立即降级；应先尝试可用 static/dynamic 路径并寻找独立真实来源。合理路径耗尽后可
+交付明确标注为 provisional 的 workspace CSV，但必须同步报告 blocked/NO_DATA、覆盖缺口并
+请求具体帮助，且不得称其为 Dataset Core Publication 或正式成功。该改动只是路径选择的局部缓解：当前仍没有
 capability preflight 强制调研前选择 formal projection，也没有终态门阻止从未提交 Build
 的 dataset-producing request 报告 completed。
 
@@ -203,16 +205,33 @@ semantic family/projection、行粒度、可用 providers、缺失 blockers 和�
 
 ### 7.3 Core acquisition closure 缺失
 
-即使 Agent 尝试 dynamic build，当前 Agent-facing dynamic acquisition schema 也只开放
-`geo.files.v1`、`gdc.files.v1`、`xena.files.v1`、`pdb.files.v1`、
-`pubmed.files.v1`（仅 full-text XML）、`chembl.files.v1` 和 `pubchem.files.v1`；没有
-GWAS Catalog association、Europe PMC supplementary archive/table 或 NCBI RefSNP
-provider。`registered_sources` 还必须闭合到同一 task 中带 exact Core acquisition
-provenance 的 asset，浏览器下载、discovery response 和 workspace bytes 都不能成为
-正式 carrier。
+这里的 **Core provider** 是注册在 Dataset Core acquisition runtime 中的确定性获取处理器；
+它约束可访问的来源、请求参数、实现 revision、资源限制和 provenance，并把响应登记成
+当前 task 拥有的 content-addressed SourceAsset。**Formal carrier** 是随后被 Dataset Core
+接受为 build 输入的那组不可变字节及其闭包，至少绑定 asset ID/SHA-256、大小、角色、
+registration receipt 和精确 acquisition provenance。浏览器响应或 workspace 文件是证据，
+但在经过上述可信获取与登记前不是 formal carrier。
 
-Bellenguez 还有第二层阻塞：dynamic transform host 以 fatal UTF-8 解码每个输入，不能
-直接消费 ZIP/XLSX。Core acquisition 虽能登记 provider-declared `extractionAssets`，但
+2026-08-25 的基础接线已消除 runtime 与 Dynamic schema 的双份 provider 清单：两者统一
+派生自 `provider-catalog.ts`。除原有 GEO/GDC/ChEMBL/PDB/PubMed/UniProt/ClinVar/
+ClinicalTrials/PubChem 外，现已补入 Xena、Reactome、RefSNP、MGnify、openFDA 和
+GWAS Catalog association provider。所有 user-selectable builtin database 都有 formal Core
+provider；Dynamic transform 还支持受 `temp_bytes` 限制的 gzip UTF-8 解码，因此 GEO/Xena
+压缩文本不再因 raw fatal UTF-8 解码而失败。`registered_sources` 仍必须闭合到同一 task 中
+带 exact Core acquisition provenance 的 asset，浏览器下载、discovery response 和 workspace
+bytes 仍不能成为正式 carrier。
+
+因此，“没接线的数据源也能通过 Dynamic Family publication”需要区分两种接线。若仅指
+没有注册 production static family，结论成立：task-scope `FamilySpec` 可以补足语义拓扑。
+若指数据源没有任何 Core acquisition/formal carrier 接线，结论不成立：当前 submission
+对每个 binding 调用 `SourceAssetRegistry.resolveCoreAcquired`，只接受带 exact Core
+acquisition provenance 的 task-owned asset。Dynamic Family 解决 family/topology 注册缺口，
+不负责把任意 discovery、浏览器或 workspace bytes 提升为可信输入；后者仍需通用 Core
+provider，或未来由 Core 提交并可验证 provenance 的 parser/extraction result。
+
+Bellenguez supplementary 仍有第二层阻塞：dynamic transform host 不能直接消费 ZIP/XLSX。
+Core acquisition 已能通过 `europepmc.supplementary.v1` 登记官方 archive carrier，也能登记
+provider-declared `extractionAssets`，但
 phase3 dynamic binding 当前固定选择 `acquired.sourceAsset`，没有选择可信解析后 extraction
 asset 的协议。因此，仅新增一个下载 supplementary ZIP 的 provider 仍然不能接通 gold7；
 必须让 Core 确定性提取/解析并把 provenance-bound UTF-8 CSV/JSON 选为 formal binding，
@@ -235,11 +254,13 @@ row granularity；`variant_evidence` 又不能承载统计关联语义。
 
 最小接线不新增 static family，但仍需新增通用 Core 能力：
 
-1. GWAS Catalog provider 返回官方分页 association/study JSON，并冻结请求与 provider
-   revision；它可供多个 task-scope/未来 static family 使用。
-2. RefSNP provider 按受控 rsID 请求返回官方 UTF-8 JSON，保留 assembly、sequence、
-   placement 和 allele provenance；批量策略由 provider 控制，不由 Agent 拼 URL。
-3. Europe PMC supplementary provider 下载官方 archive，Core 确定性选择附件、解析 XLSX
+1. **已完成：** GWAS Catalog provider 返回官方 association/study HAL JSON，并冻结请求与
+   provider revision；它可供多个 task-scope/未来 static family 使用。live smoke 以非 gold
+   study `GCST90012877` 返回 HTTP 200。
+2. **已完成：** RefSNP provider 按受控 rsID 请求返回官方 UTF-8 JSON，保留原始 placement
+   和 allele provenance；live smoke 以非 gold `rs7412` 返回 HTTP 200。
+3. **待完成：** Europe PMC supplementary provider 已下载并登记官方 archive；Core 仍需
+   确定性选择附件、解析 XLSX
    sheet 为 UTF-8 CSV，并把 raw archive -> attachment -> parsed table 的 hash/locator 链
    绑定到所选 formal input。优先扩展 acquisition result 以显式选择 provider-owned
    extraction asset；不要让 Agent 指定路径，也不要把 workspace 解析结果提升为 carrier。

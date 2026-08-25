@@ -39,6 +39,20 @@
 
 > 决策依据：2026-08-15 任务 `task_ts_888508a7`（Xena 多 GB 数据集下载无进度反馈）。
 
+### 4.2 Core provider catalog 与 Dynamic Family
+
+`server/src/dataset/acquisition/provider-catalog.ts` 是 built-in acquisition capability 的
+单一清单：phase3 runtime provider 注册与 Dynamic Family 的 acquisition tool schema 都从
+该清单派生，不能分别维护 enum。descriptor 同时声明数据库目录 ID、固定 source、参数
+契约和 carrier 编码；runtime handler 数量/顺序与 descriptor 必须形成 exact closure。
+
+当前所有 user-selectable builtin database 都有 Core provider，并可复用于 task-scope
+Dynamic Family；dbSNP、MGnify、openFDA 和 GWAS Catalog association 也有受控官方 API
+provider。Dynamic transform 接受 UTF-8 与受 `temp_bytes` 上限约束的 gzip-compressed UTF-8，
+仍按原始 carrier SHA-256/receipt/provenance 建立权威输入闭包。ZIP/XLSX 等多附件 binary
+archive 只有在 Core 确定性选择附件、sheet 并提交可验证 extraction result 后才能进入
+Dynamic schema；仅下载并注册 archive 不等于可消费的 Dynamic input。
+
 ---
 
 ## 5. 执行模型：服务端固定构建骨架

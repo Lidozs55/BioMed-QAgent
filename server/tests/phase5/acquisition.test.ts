@@ -650,6 +650,7 @@ describe("curated host allowlist", () => {
       "pubchem.ncbi.nlm.nih.gov",
       "reactome.org",
       "search.rcsb.org",
+      "tcga-xena-hub.s3.us-east-1.amazonaws.com",
       "toil-xena-hub.s3.us-east-1.amazonaws.com",
       "www.ebi.ac.uk",
       "www.ncbi.nlm.nih.gov",
