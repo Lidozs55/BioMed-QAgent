@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { StringDecoder } from "node:string_decoder";
+import * as XLSX from "xlsx";
 import type { DatasetSchemaV2, JsonValue, SchemaFieldV2 } from "@biomed/contracts";
 
 import {
@@ -19,6 +20,7 @@ import type {
   CoreResolvedRegisteredAsset,
   RegisteredDelimitedParserDefinition,
   RegisteredJsonParserDefinition,
+  RegisteredXlsxParserDefinition,
   RegisteredTableAdapterRequest,
   RegisteredTableAdapterResult,
   RegisteredTableAudit,
@@ -457,6 +459,53 @@ function rowFromValues(
   return { row: { row_index: rowIndex, values: converted, locators }, rejection: null };
 }
 
+async function parseXlsx(
+  bytes: Buffer,
+  receipt: CoreResolvedRegisteredAsset["registration_receipt"],
+  schema: DatasetSchemaV2,
+  parser: RegisteredXlsxParserDefinition,
+  sink: RegisteredTableSink,
+  audit: RegisteredTableAudit,
+): Promise<void> {
+  const workbook = XLSX.read(bytes, { type: "buffer", cellDates: false, cellNF: false, cellText: false });
+  const sheet = workbook.Sheets[parser.sheet_name];
+  if (sheet === undefined) throw new Error(`xlsx sheet not found: ${parser.sheet_name}`);
+  const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: true, defval: null, blankrows: false });
+  if (rows.length === 0) throw new Error("xlsx sheet has no header row");
+  const expectedHeader = parser.fields.map((field) => field.source_column);
+  const header = rows[0]?.map((value) => value === null ? "" : String(value)) ?? [];
+  if (header.length !== expectedHeader.length || header.some((value, index) => value !== expectedHeader[index])) {
+    throw new Error(`xlsx header mismatch: actual=${JSON.stringify(header)} expected=${JSON.stringify(expectedHeader)}`);
+  }
+  if (rows.length - 1 > parser.limits.max_rows) throw new Error(`asset exceeds parser max_rows (${parser.limits.max_rows})`);
+  for (let index = 1; index < rows.length; index += 1) {
+    const values = rows[index] ?? [];
+    if (values.length > parser.limits.max_columns) throw new Error("xlsx row exceeds parser max_columns");
+    if (values.length !== expectedHeader.length) {
+      await writeRejection(sink, audit, {
+        row_index: index,
+        reason_code: "row_width_mismatch",
+        reason: `row has ${values.length} fields; expected ${expectedHeader.length}`,
+        source_locator: { locator_version: "2.0", locator_type: "xml_cell", asset_id: receipt.asset_ref.asset_id, logical_file: receipt.relative_path, raw_value: JSON.stringify(values), xml_path: `/${parser.sheet_name}/row[${index + 1}]`, table_id: parser.sheet_name, row_index: index, column_index: 0 },
+      });
+      continue;
+    }
+    const parsed = rowFromValues(values, schema, (fieldIndex) => ({
+      locator_version: "2.0",
+      locator_type: "xml_cell",
+      asset_id: receipt.asset_ref.asset_id,
+      logical_file: `${receipt.relative_path}#${parser.sheet_name}`,
+      raw_value: String(values[fieldIndex] ?? ""),
+      xml_path: `/${parser.sheet_name}/row[${index + 1}]/cell[${fieldIndex + 1}]`,
+      table_id: parser.sheet_name,
+      row_index: index,
+      column_index: fieldIndex,
+    }), index);
+    if (parsed.rejection !== null) await writeRejection(sink, audit, parsed.rejection);
+    else { await sink.writeRow(parsed.row); audit.accepted_row_count += 1; }
+  }
+}
+
 async function parseJson(
   bytes: Buffer,
   receipt: CoreResolvedRegisteredAsset["registration_receipt"],
@@ -561,6 +610,9 @@ export class RegisteredTableAdapter {
       if (parser.format === "json") {
         const bytes = await collectVerifiedBytes(asset.content, parser, audit, signal);
         await parseJson(bytes, asset.registration_receipt, schema, parser, sink, audit);
+      } else if (parser.format === "xlsx") {
+        const bytes = await collectVerifiedBytes(asset.content, parser, audit, signal);
+        await parseXlsx(bytes, asset.registration_receipt, schema, parser, sink, audit);
       } else {
         await parseDelimited(asset.content, asset.registration_receipt, schema, parser, sink, audit, signal);
       }
