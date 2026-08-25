@@ -274,6 +274,16 @@ risks, and verification results for later audit.
   this gap and the fix was validated by the same publication test.
 - Status: implemented; focused test, typecheck, and lint pass.
 
+## 2026-08-25 / D-033
+
+- Decision: Replace the normal two-stage browser formalization/publication approval sequence with one `browser_evidence_acceptance` HIL.
+- The review snapshot contains the exact browser evidence digest(s), source URL and redirect receipt, carrier identity, family/schema/table/input bindings, promoted recipe identity, and intended publication scope.
+- An accepted snapshot authorizes only the deterministic Core pipeline for that exact closure: carrier registration, parser execution, OperationResult admission, integration, provenance/confidence evidence closure, B3, ProductAssessment, and publication. It never authorizes arbitrary code, a different digest, a changed recipe, or a changed binding.
+- Browser publication carries the acceptance receipt and skips only the redundant `publication_acceptance` HIL. B3, product assessment, hash checks, generation fences, and immutable publication remain mandatory.
+- A new HIL is required when evidence bytes/digest, source/provenance identity, family/schema/table/input binding, parser recipe, or publication scope changes, or when a later independent data-quality decision is needed.
+- Reason: Requiring a human decision at each deterministic stage was redundant and created avoidable runtime/HIL state complexity without improving the trust boundary.
+- Status: implemented on `feat/browser-evidence-acceptance`, pending focused verification.
+
 ## 2026-08-24 / D-032
 
 - Decision: Phase3 owns one injectable browser recipe registry per runtime;

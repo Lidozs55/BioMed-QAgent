@@ -28,6 +28,7 @@ export const HIL_REVIEW_TYPES = [
   "source_conflict",
   "measurement_semantics",
   "browser_acquisition_formalization",
+  "browser_evidence_acceptance",
   "publication_acceptance",
 ] as const;
 export type HILReviewType = (typeof HIL_REVIEW_TYPES)[number];

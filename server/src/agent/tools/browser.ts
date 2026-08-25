@@ -52,6 +52,7 @@ import type { BrowserAcquisitionEvidenceStore } from "../../runtime/browser-acqu
 import { BrowserAcquisitionProposalStore } from "../../runtime/browser-acquisition-proposal-store.js";
 import type { DatasetHILGate } from "../../dataset/review/hil-policy.js";
 import type { BrowserFormalizationService } from "../../dataset/acquisition/browser-formalization.js";
+import { computeHILEvidenceDigest } from "../../dataset/contracts/hil-evidence.js";
 import { noopHooks } from "./tool-hooks.js";
 import { errorMessage } from "./result.js";
 
@@ -133,7 +134,7 @@ export interface BrowserToolsOptions {
 
 export const NAVIGATE_PAGE_TOOL_NAME = "navigate_page";
 export const DOWNLOAD_FROM_PAGE_TOOL_NAME = "download_from_page";
-export const PROPOSE_BROWSER_FORMALIZATION_TOOL_NAME = "propose_browser_acquisition_formalization";
+export const PROPOSE_BROWSER_FORMALIZATION_TOOL_NAME = "propose_browser_evidence_acceptance";
 
 export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentTool[] & {
   navigatePage: BioMedAgentTool;
@@ -199,8 +200,8 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
 
   const proposeFormalization: BioMedAgentTool = {
     name: PROPOSE_BROWSER_FORMALIZATION_TOOL_NAME,
-    label: "Propose browser source formalization",
-    description: "Request Core-owned review for one persisted browser receipt; this does not parse or publish.",
+    label: "Request browser evidence acceptance",
+    description: "Request one Core-owned review for the complete browser evidence and binding; acceptance authorizes the deterministic Core pipeline, not arbitrary code or data changes.",
     parameters: {
       type: "object",
       properties: {
@@ -257,10 +258,10 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
         updated_at: now,
         failure_reason: null,
       });
-      const review = await options.formalizationHIL.requestHIL({
+      const request: Parameters<DatasetHILGate["requestHIL"]>[0] = {
         build_id: null,
         kind: "data_review",
-        review_type: "browser_acquisition_formalization",
+        review_type: "browser_evidence_acceptance",
         blocking: true,
         subject: {
           binding_id: bindingId,
@@ -292,9 +293,11 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
           table_id: tableId,
           input_role: inputRole,
         },
-        policy_ref: "browser.acquisition.formalization.v1",
+        policy_ref: "browser.acquisition.evidence-acceptance.v1",
         idempotency_key: `browser-formalization:${proposal.proposal_id}`,
-      }, signal);
+      };
+      const expectedHILEvidenceDigest = computeHILEvidenceDigest(request);
+      const review = await options.formalizationHIL.requestHIL(request, signal);
       const accepted = review.decision.action === "accept";
       await options.proposalStore.update(proposal.proposal_id, {
         status: accepted ? "accepted" : "rejected",
@@ -304,8 +307,14 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
         return { content: JSON.stringify({ proposal, review, formalization_status: "rejected", publication_status: "not_published" }) };
       }
       try {
-        const formalized = await options.formalizationService.formalize({ proposal, evidence: stored.evidence, review });
-        return { content: JSON.stringify({ proposal: formalized.proposal, review, formalization_status: "formalized", registration: formalized.registration, publication_status: "not_published" }) };
+        const formalized = await options.formalizationService.formalize({
+          proposal,
+          evidence: stored.evidence,
+          review,
+          expectedHILEvidenceDigest,
+          acceptedBrowserEvidenceDigests: [stored.evidenceDigest],
+        });
+        return { content: JSON.stringify({ proposal: formalized.proposal, review, formalization_status: "formalized", browser_evidence_acceptance: { request_id: review.request_id, review_id: review.review_id, hil_evidence_digest: review.evidence_digest, accepted_browser_evidence_digests: [stored.evidenceDigest], reviewer: review.reviewer, reviewed_at: review.reviewed_at, reason: review.reason }, registration: formalized.registration, publication_status: "pipeline_continues_without_additional_browser_review" }) };
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
         const failed = await options.proposalStore.update(proposal.proposal_id, { status: "failed", failure_reason: reason });

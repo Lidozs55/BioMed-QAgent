@@ -20,6 +20,8 @@
   - 验收：input/params/FamilySpec/implementation/runtime/policy 任一 digest 改变都会使 checkpoint 失效；cancel/timeout/restart/stale generation 不能提交或复用旧 Publication。
 - [ ] **统一 HIL Questionnaire。** 将 `UserInputDialog` 迁移到现有 Questionnaire 基础设施。
   - 验收：现有权限和 publication acceptance 流程行为不回退；历史事件仍可重放。
+- [ ] **数据集请求 formal-route preflight 与终态闭包。** 在调研前返回候选 semantic family/projection、单一行粒度、可用 Core providers 和缺失 blockers；由服务端生成 digest-bound dynamic build skeleton。明确要求数据集的 agent run 未提交 BuildResult 或仍有未决 projection 时，不得以 `run_completed(build_result=null)` 成功结束。
+  - 验收：gold7 类复合请求被拆为多个 projection/build；无 provider 时产生结构化 `no_data`/`spec_rejected`/blocked outcome；现有非数据问答仍可无 BuildResult 完成；事件重放结果一致。
 
 ## P2 — Product and developer experience
 
@@ -29,6 +31,8 @@
   - 验收：契约先进入 `@biomed/contracts`；边界、空页和 hostile-wire 用例有测试。
 - [ ] **可拆卸工具包纠错。** `scripts/solidify-run.mjs --toolkit` 应为 `server/src/agent/tools/` 的 TS 工具生成独立调用说明，而不是重复摘要 `SKILL.md`。
   - 验收：输出包含用途、参数、返回值、依赖和独立调用方式，并有确定性 fixture 测试。
+- [ ] **Trait association / genomic annotation 可复用 family 闭包。** 按 [`architecture/trait-association-and-genomic-annotation-design.md`](architecture/trait-association-and-genomic-annotation-design.md) 实现来源无关的 projections 与 GWAS Catalog、supplementary archive、RefSNP 通用 providers；provider 与 family 保持多对多。
+  - 验收：至少一个非 Alzheimer trait、两个不同数据库证明复用；variant/gene/region 粒度分别构建；不兼容 assembly、effect scale、allele/model 或 mapping method 的输入 fail closed；正式 Publication 通过 provenance/B3/ProductAssessment/Artifact hash 门。
 
 ## Deferred / 非当前工作
 

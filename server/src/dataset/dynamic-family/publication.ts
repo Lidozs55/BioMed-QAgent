@@ -19,6 +19,7 @@ import type { ValidationResult } from "../contracts/validation.js";
 import type { SubmitDynamicFamilyBuildResult } from "./submission.js";
 import type { OperationResultManifest } from "@biomed/contracts";
 import type { CoreAcquisitionProvenance } from "../../runtime/source-assets/registry.js";
+import type { BrowserEvidenceAcceptance } from "../acquisition/browser-publication-handoff.js";
 import { sha256FileStream } from "../adapters/hashing.js";
 import { canonicalDigest } from "../adapters/identity.js";
 import { computeHILEvidenceDigest } from "../contracts/hil-evidence.js";
@@ -61,6 +62,8 @@ export interface BrowserPublicationExecution {
   readonly trustedRoot: string;
   readonly generation: number;
   readonly sourceAcquisitionProvenance: readonly CoreAcquisitionProvenance[];
+  readonly browserEvidenceDigests: readonly string[];
+  readonly browserEvidenceAcceptance: BrowserEvidenceAcceptance;
 }
 
 export type DynamicPublicationExecution = SubmitDynamicFamilyBuildResult | BrowserPublicationExecution;
@@ -119,6 +122,16 @@ export async function publishDynamicFamily(
   const integratedResults: readonly OperationResultManifest[] = browserExecution === null ? [transformExecution!.operationResult] : browserExecution.integratedResults;
   const operationById = new Map<string, OperationResultManifest>(integratedResults.map((result) => [result.result_manifest_id, result]));
   const sourceAcquisitionProvenance = input.execution.sourceAcquisitionProvenance;
+  if (browserExecution !== null) {
+    if (browserExecution.browserEvidenceAcceptance.hilEvidenceDigest.length !== 64 || browserExecution.browserEvidenceAcceptance.acceptedBrowserEvidenceDigests.length === 0) {
+      throw new Error("browser publication requires one accepted evidence-bound review");
+    }
+    const accepted = [...browserExecution.browserEvidenceAcceptance.acceptedBrowserEvidenceDigests].sort();
+    const published = [...browserExecution.browserEvidenceDigests].sort();
+    if (accepted.length !== published.length || accepted.some((digest, index) => digest !== published[index])) {
+      throw new Error("browser publication evidence is outside the accepted browser evidence closure");
+    }
+  }
   if (candidate.task_id !== input.taskId || candidate.build_id !== input.buildId) {
     throw new TypeError("dynamic publication identity does not match the Core task/build");
   }
@@ -261,7 +274,7 @@ export async function publishDynamicFamily(
     schema.fields.some((field) => field.name === "review_status" || field.name === "human_review_status"),
   );
   let assessment = parseProductAssessment(
-    structuralAssessment(candidate, failed.length === 0, requiresHilAcceptance, false),
+    structuralAssessment(candidate, failed.length === 0, requiresHilAcceptance, browserExecution !== null),
   );
   let hilAcceptance: Record<string, JsonValue> | null = null;
 
@@ -271,7 +284,7 @@ export async function publishDynamicFamily(
   await assertGenerationCurrent();
   await writeFile(assessmentPath, `${JSON.stringify(assessment, null, 2)}\n`, "utf8");
 
-  if (failed.length === 0 && requiresHilAcceptance) {
+  if (failed.length === 0 && requiresHilAcceptance && browserExecution === null) {
     if (input.hilGate === undefined || input.hilGate === null) {
       throw new Error("dynamic publication requires a durable HIL gate");
     }
@@ -404,6 +417,7 @@ export async function publishDynamicFamily(
     source_receipts: [],
     core_acquisition_provenance: sourceAcquisitionProvenance,
     ...(hilAcceptance === null ? {} : { hil_acceptance: hilAcceptance }),
+    ...(browserExecution === null ? {} : { browser_evidence_acceptance: browserExecution.browserEvidenceAcceptance }),
   }, null, 2)}\n`, "utf8");
 
   const artifacts: ManifestArtifactEntry[] = [];

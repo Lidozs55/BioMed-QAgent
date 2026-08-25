@@ -18,6 +18,8 @@ export interface BrowserFormalizationInput {
   proposal: BrowserAcquisitionProposal;
   evidence: BrowserAcquisitionEvidence;
   review: HumanReviewRecord;
+  expectedHILEvidenceDigest: string;
+  acceptedBrowserEvidenceDigests: readonly string[];
 }
 
 export interface BrowserFormalizationResult {
@@ -61,8 +63,11 @@ export class BrowserFormalizationService {
   async formalize(input: BrowserFormalizationInput): Promise<BrowserFormalizationResult> {
     const proposal = parseBrowserAcquisitionProposal(input.proposal);
     const review = input.review;
-    if (review.request_id === "" || review.evidence_digest !== proposal.evidence_digest) {
-      throw new Error("browser formalization review is not bound to the proposal evidence digest");
+    if (review.request_id === "" || review.evidence_digest !== input.expectedHILEvidenceDigest) {
+      throw new Error("browser formalization review is not bound to the expected HIL snapshot");
+    }
+    if (!input.acceptedBrowserEvidenceDigests.includes(proposal.evidence_digest)) {
+      throw new Error("browser formalization review does not cover the proposal evidence digest");
     }
     if (review.decision.action !== "accept") {
       throw new Error(`browser formalization review was ${review.decision.action}`);

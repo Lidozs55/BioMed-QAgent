@@ -1,0 +1,234 @@
+# Trait Association and Genomic Annotation Family Design
+
+> 状态：设计草案，尚未注册 production family。本文由 gold7 暴露的问题触发，
+> 但定义的是来源无关、疾病无关的语义能力。它取代此前按数据库/用例命名的
+> `gwas_association` 草案；不把 discovery 工具或 workspace 文件提升为正式输入。
+
+## 1. 结论
+
+不能建立 `gwas_association` family。GWAS 是一种研究方法/来源类别，不是稳定的
+数据产品语义；同一个 GWAS 来源可以同时提供 variant-trait 统计关联、locus-trait
+关联、variant-gene 注释和 study metadata，而这些行不能互相合并。反过来，同一种
+variant-trait 关联也可以来自 GWAS Catalog、FinnGen、dbGaP、Open Targets Genetics
+或论文补充表。
+
+本设计只新增两个候选语义 family：
+
+1. `trait_association_evidence`：实体与 trait/phenotype 之间的统计关联证据；
+2. `genomic_annotation_evidence`：基因组实体的参考定位及实体间注释/映射证据。
+
+每个 family 可声明多个 projection，但一次 DatasetBuild 只选择一个 projection，且
+只有一种主行粒度。study、paper、source 和 provenance 是可复用 supporting tables，
+不是 family。gold7 因而需要多个独立 Build/Publication，由同一产品需求关联起来，
+而不是一个 family 发布三种 primary granularity。
+
+## 2. Family 划分准则
+
+family 的边界由“这行数据声称什么、如何比较、何时可合并”决定，不由数据库、
+论文、疾病、文件格式或 benchmark case 决定：
+
+- family 名称在替换或增加数据库后仍应成立；
+- 一个数据库可以映射到多个 family，一个 family 可以接收多个数据库；
+- projection 固定主实体、行粒度、key semantics 和 measurement semantics；
+- 只有选中相同 projection 且兼容性维度一致的记录才可进入同一 merge；
+- 来源报告值、确定性派生值和推断值必须保留不同 evidence/method；
+- 公共 entity/paper/source/crosswalk schema 可以复用，但不单独构成 production family；
+- 无法归入现有语义的产品才新增 family，不能为数据库或输出表名逐个建 family。
+
+这与 ADR-002 的四元组约束一致：
+
+```text
+dataset_family + row_granularity + key_semantics + measurement_semantics
+```
+
+## 3. 候选 family 与 projection
+
+### 3.1 `trait_association_evidence`
+
+功能语义是“某个分析在明确人群/模型下报告一个实体与 trait 的统计关联”。它不
+限定 GWAS，也不限定实体一定是 variant 或 gene。
+
+| projection | 一行代表 | 必须保留的关键语义 | 可复用来源示例 |
+| --- | --- | --- | --- |
+| `variant_trait_association` | analysis × variant × trait × tested/effect allele | analysis/study identity、trait、variant/reference、allele orientation、P 值 relation、effect type/value/SE/CI、population/model | GWAS Catalog、FinnGen、dbGaP summary statistics、Open Targets Genetics、论文关联表 |
+| `genomic_region_trait_association` | analysis × source-defined region/locus × trait | locus definition method、interval/assembly、lead variant、independence/credible-set method、统计量 | GWAS Catalog（有明确 locus 时）、Bellenguez supplementary、fine-mapping/credible-set resources |
+| `gene_trait_association` | analysis × gene × trait | gene namespace、gene-level method、P 值/effect/score 的明确类型、population/model | MAGMA/SAIGE-GENE 等 gene-based results、Open Targets Genetics 中有直接 gene-level statistical semantics 的结果 |
+
+三个 projection 必须分别构建。`gene_trait_association` 只接受真正的 gene-based
+analysis；GWAS Catalog 的 `MAPPED_GENE`、最近基因或 variant-to-gene score 不是
+gene-level association，不能转换成该 projection。
+
+study metadata 可作为每个 projection 的 supporting `studies` 表。它不成为独立
+family，除非未来用户产品的主对象就是 study registry，而且有独立的合并和验证语义。
+
+### 3.2 `genomic_annotation_evidence`
+
+功能语义是“一个来源或确定性 resolver 对基因组实体身份、参考位置或实体间关系
+作出的注释”。它不限定 dbSNP、Ensembl 或 GWAS。
+
+| projection | 一行代表 | 必须保留的关键语义 | 可复用来源示例 |
+| --- | --- | --- | --- |
+| `variant_reference_placement` | variant identity × reference assembly/sequence × placement | variant namespace、assembly/sequence version、position、alleles、placement status、resolver version | dbSNP/RefSNP、Ensembl Variation、gnomAD、Allele Registry |
+| `variant_gene_annotation` | variant × gene × annotation assertion | mapping method、direction、distance/score（若有）、reported/derived status、source locator | GWAS Catalog mapped genes、Ensembl VEP、Open Targets Genetics V2G、eQTL/fine-mapping resources |
+| `region_gene_annotation` | source-defined genomic region × gene × annotation assertion | region identity/assembly、membership or mapping method、reported/derived status | Bellenguez reported loci/genes、credible-set resources、functional mapping pipelines |
+
+`reported_gene`、`nearest_gene`、`coding_consequence`、`eQTL`、`chromatin_contact` 和
+`fine_mapping` 是不同 mapping methods。它们可以保存在同一 projection 中作为不同
+evidence assertions，但默认不能静默折叠成一个“最终基因”。冲突应保留，选择优先级
+属于显式 product policy，而不是 adapter 隐含行为。
+
+### 3.3 现有 family 的复用边界
+
+| 现有 family | GWAS 相关数据何时可以使用 | 不能承载什么 |
+| --- | --- | --- |
+| `target_evidence` | 来源直接给出 gene/protein target assertion，或上层产品在保留推导链后发布候选 target | 不能把 mapped gene 当 gene-level association；不能用通用 JSON 吞掉 P 值、效应、allele/model 语义 |
+| `variant_evidence` | ClinVar 类“一个 condition 下的 variant assertion”，并保留 assertion/conflict 状态 | 不是统计 association；不能承载 GWAS study、effect、locus 或 gene mapping |
+| `literature_evidence` | 论文中一个可定位的 experiment-level evidence assertion 是用户所需主产品时 | 论文附件作为 carrier 不会自动把关联矩阵变成 literature evidence |
+| `gene_expression` | 请求本身包含可比较的 gene × sample expression measurements 时 | 不能承载 gene-trait association 或 variant-gene annotation |
+
+因此，“挂到朴素的单基因 family”只在主语义确实是 target assertion 时成立。gold7
+中的 gene 信息主要是 variant/region-to-gene annotation；它应进入
+`genomic_annotation_evidence`，而不是因为行里出现 gene 就进入 `target_evidence`。
+
+## 4. 数据库与 family 的多对多审查
+
+下表描述来源能够直接提供的语义，而不是仅凭数据库名称推断。`conditional` 表示
+必须检查具体记录/endpoint 的统计或 assertion 语义。
+
+| 来源 | Trait association | Genomic annotation | Variant assertion | Target evidence | 说明 |
+| --- | --- | --- | --- | --- | --- |
+| GWAS Catalog | yes：variant；有定义时 region | yes：reported mapped genes | no | conditional/downstream | mapped gene 不是 gene-level association |
+| Bellenguez supplementary | yes：variant/region | yes：reported region-gene/variant-gene | no | no | 表格/工作表与行定位必须保留 |
+| dbSNP/RefSNP | no | yes：variant placement/identity | no | no | 不提供 trait effect |
+| Ensembl VEP/Variation | no | yes | no | no | consequence/nearest-gene method 必须标记 |
+| Open Targets Genetics | yes | yes：V2G | no | yes/conditional | 同一数据库可供多个独立 Build 使用 |
+| FinnGen / dbGaP summary | yes | conditional | no | no | effect scale、allele 和 population 决定兼容性 |
+| ClinVar | no statistical association | yes：placement support | yes | conditional | 临床 assertion 不等于关联统计 |
+| DisGeNET | conditional：仅在 projection/profile 接受其 evidence model 时 | no | no | yes | 通常更适合 target evidence，不冒充 GWAS statistics |
+| gnomAD | no trait association | yes | no | no | population frequency 需要其它 measurement family 时另行设计 |
+| PGS Catalog | no（默认） | conditional | no | no | 模型权重/性能属于 predictive-model family，不应塞入 association |
+
+这个矩阵同时证明两个方向：新增 family 可被非 GWAS 数据库复用；GWAS 数据源也
+可以复用多个 family。provider registration 仍按数据库/API 实现，但 provider ID
+不得泄漏为 family identity。
+
+## 5. 合并资格
+
+共享 family 名称不等于可以合并。进入同一 Build 前至少要匹配：
+
+1. 相同 projection 和主行粒度；
+2. 相同或可审计 crosswalk 后的 entity/trait namespace；
+3. 对 genomic entity，相同 reference assembly/sequence 与 allele orientation；
+4. 相容的 analysis unit、population/cohort、model 和 ancestry 语义；
+5. 相容的 measurement type/scale，例如 beta、odds ratio、hazard ratio、P 值及其
+   relation token（`<`、`>`、`=`、`±`）不能互换；
+6. 相同 dedup identity。不同 study/analysis 的同一 rsID 是不同 association，默认
+   union 并保留来源，不能按 rsID 静默去重；
+7. 每行绑定 immutable SourceAsset、provider revision、source locator 和转换证据。
+
+只有显式、版本化的转换（例如 log(OR) 与 beta 的科学上合法转换）才能改变 measurement
+scale；无法证明兼容时分开发布，而不是填空或择一覆盖。
+
+## 6. Gold7 的正确 Build 分解
+
+gold7 至少拆为以下正式产品；具体输出列由 TOPIC 的需求 manifest 决定：
+
+1. `trait_association_evidence/variant_trait_association`：GWAS Catalog 与 Bellenguez
+   中逐 variant 的统计关联；
+2. `trait_association_evidence/genomic_region_trait_association`：Bellenguez 报告的
+   independent loci，及其它来源中确有同等 locus definition 的记录；
+3. `genomic_annotation_evidence/variant_reference_placement`：dbSNP/其它 resolver 的
+   GRCh38 identity/placement evidence；
+4. `genomic_annotation_evidence/variant_gene_annotation` 或
+   `region_gene_annotation`：按来源实际报告粒度发布 mapping assertions。
+
+`studies`、`papers`、`sources`、`evidence` 和 crosswalk 是各 Build 的 supporting
+tables。若用户还要候选靶点，应在上述 Publications 之后生成单独且可追溯的
+`target_evidence` product；不能把候选 target 反写成源数据库报告的 gene association。
+
+产品层需要记录这几份 Publication 共同满足一个 ProductRequirementManifest。任何
+一个来源不可达时，应返回该 projection 的结构化 blocker/`no_data`，不能用另一
+projection 的行补齐，也不能把 workspace CSV 计为交付。
+
+## 7. 为什么 gold7 没有正式产物
+
+真实 rerun：
+
+```text
+task_ts_ae9b71f9-02af-44ae-a3b4-f75ba8a98d02
+run_ts_2b037d08-a5c2-45b9-a84a-a45066541064
+```
+
+事件流有 1,238 个事件、34 次工具调用，其中 `workspace_exec` 17 次、浏览/下载
+10 次、`lookup_dbsnp` 4 次；以下正式工具调用均为 0：
+
+```text
+validate_dataset_build
+execute_dataset_build
+submit_dynamic_family_build
+```
+
+Agent 的首段计划直接是“获取数据后生成 three linked tables”，随后写入并运行 Python
+workspace integration script。终态是：
+
+```json
+{"type":"run_completed","build_result":null}
+```
+
+本次事件中没有 `conversation_compacted`，所以不能把未发布归因于上下文耗尽。问题
+分为三个独立层次：
+
+### 7.1 路径选择失败
+
+`submit_dynamic_family_build` 当时已由 runtime 注入；system prompt 也明确规定正式
+artifact 只能经 Core，并要求 exact multi-table/raw-retention 使用 dynamic route。
+Agent 仍直接选择更熟悉、更短的 workspace/Python 流程。当前没有 capability preflight
+强制它在调研前选择 formal projection，也没有终态门阻止 dataset-producing request
+在从未提交 Build 时报告 completed。
+
+### 7.2 动态工具可用性不足
+
+动态工具要求一次提交完整 FamilySpec、Projection、TypeScript transform、proposal、
+registered source/acquisition bindings 和多项 digest；首次还要用 zero digest 触发
+readmission，再按返回值重提。它缺少小型 planning/scaffold 接口来返回：匹配的
+semantic family/projection、行粒度、可用 providers、缺失 blockers 和服务端生成的
+合法 skeleton。这增加了模型跳过正式路径的概率，但本次日志只能证明“未选择”，
+不能把动机单因果归结为 schema 大小。
+
+### 7.3 Core acquisition closure 缺失
+
+即使 Agent 尝试 dynamic build，当时 Core provider 仅有 PDB、PubMed full-text XML、
+UniProt、ClinVar、ClinicalTrials.gov、PubChem 和 ChEMBL 文件路径；没有 GWAS Catalog、
+Europe PMC supplementary archive/XLSX 或 NCBI RefSNP provider。dynamic build 只接受
+task-owned registered immutable assets 或固定 Core acquisition requests，浏览器下载、
+discovery response 和 workspace bytes 都不能成为正式 carrier。因此 gold7 在能力上
+也不可能形成完整 Publication。
+
+### 7.4 错误成功终态
+
+`turn_completed` 当前无条件映射为 `run_completed`，runtime 只是把
+`workspace.consumeBuildResult()` 的空值写为 `build_result:null`；reducer 又把它显示为
+completed。对于明确要求数据集产物的 agent-mode request，这不是可接受的成功结果。
+它应在已选择的 projections 均有 BuildResult/结构化 blocker 后才能完成。
+
+## 8. 修复顺序与验收
+
+1. **Capability preflight**：研究前解析候选 semantic family/projection，返回可用 Core
+   providers 与缺失 provider blockers；不按数据库创建 family。
+2. **Server scaffold**：服务端根据选中 projection 生成 digest-bound FamilySpec/build
+   skeleton；Agent 只补来源参数和 transform，避免手写整个协议。
+3. **Provider closure**：实现通用的 GWAS Catalog association、Europe PMC supplementary
+   archive 和 RefSNP providers。一个 provider 可绑定多个 family adapters；provider
+   失败产生明确 acquisition outcome。
+4. **Family/projection implementation**：先用非 gold fixture 分别证明
+   variant-trait、region-trait、variant placement 和 variant/region-gene annotation；
+   再做跨数据库 merge compatibility/拒绝测试。
+5. **Terminal enforcement**：dataset-producing request 未调用 formal build，或仍有未决
+   projection 时，不得成功为 `run_completed(build_result=null)`；返回结构化
+   `no_data`、`spec_rejected` 或 blocked outcome。
+6. **Gold7 E2E**：只把 TOPIC.txt 交给 qwen3.7-plus；正式成功标准是每个所需
+   projection 都有 Core-owned BuildResult、Publication、provenance closure 和 Artifact
+   API hash。workspace 产物不计入通过。
+
+在实现前必须用至少一个非 Alzheimer、至少两个不同来源的 fixture 审查 family 复用，
+并用反例证明不相容的 projection/measurement 会 fail closed。

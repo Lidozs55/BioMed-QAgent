@@ -5,7 +5,7 @@ import type {
 } from "@biomed/contracts";
 import type { SourceLocator } from "../../contracts/source.js";
 
-export type RegisteredTableFormat = "csv" | "tsv" | "json";
+export type RegisteredTableFormat = "csv" | "tsv" | "json" | "xlsx";
 
 export interface RegisteredTableParserLimits {
   max_bytes: number;
@@ -38,6 +38,13 @@ export interface RegisteredDelimitedParserDefinition
   fields: readonly RegisteredDelimitedFieldMapping[];
 }
 
+export interface RegisteredXlsxParserDefinition
+  extends RegisteredTableParserDefinitionBase {
+  format: "xlsx";
+  sheet_name: string;
+  fields: readonly RegisteredDelimitedFieldMapping[];
+}
+
 export interface RegisteredJsonParserDefinition
   extends RegisteredTableParserDefinitionBase {
   format: "json";
@@ -47,7 +54,8 @@ export interface RegisteredJsonParserDefinition
 
 export type RegisteredTableParserDefinition =
   | RegisteredDelimitedParserDefinition
-  | RegisteredJsonParserDefinition;
+  | RegisteredJsonParserDefinition
+  | RegisteredXlsxParserDefinition;
 
 export interface RegisteredTableAdapterRequest {
   schema_version: "1.0";

@@ -314,6 +314,16 @@ describe("dynamic family build tool boundary", () => {
           trustedRoot: result.trustedRoot,
           generation: result.receipt.generation,
           sourceAcquisitionProvenance: result.sourceAcquisitionProvenance,
+          browserEvidenceDigests: ["a".repeat(64)],
+          browserEvidenceAcceptance: {
+            requestId: "hil_browser",
+            reviewId: "review_browser",
+            hilEvidenceDigest: "b".repeat(64),
+            acceptedBrowserEvidenceDigests: ["a".repeat(64)],
+            reviewer: "user",
+            reviewedAt: "2026-08-23T00:00:00.000Z",
+            reason: "Reviewed browser evidence",
+          },
         },
         hilGate: {
           requestHIL: async (input) => ({

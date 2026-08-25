@@ -15,7 +15,7 @@ function collect<T>(iterable: Iterable<T>): T[] {
 }
 
 describe("stable Skill ↔ Tool mapping", () => {
-  test("maps every migrated skill with a category, sources, description, and tools", () => {
+  test("maps every migrated skill with bounded function and routing guidance", () => {
     expect(SKILL_TOOL_MAP.length).toBeGreaterThanOrEqual(18);
     for (const mapping of SKILL_TOOL_MAP) {
       expect(mapping.name, mapping.name).toMatch(SKILL_NAME);
@@ -27,6 +27,9 @@ describe("stable Skill ↔ Tool mapping", () => {
         expect(source.trim(), mapping.name).not.toBe("");
       }
       expect(mapping.description.length, mapping.name).toBeGreaterThan(0);
+      expect(mapping.description.length, mapping.name).toBeLessThanOrEqual(200);
+      expect(mapping.routing.length, mapping.name).toBeGreaterThan(0);
+      expect(mapping.routing.length, mapping.name).toBeLessThanOrEqual(280);
       expect(mapping.tools.length, mapping.name).toBeGreaterThan(0);
     }
   });

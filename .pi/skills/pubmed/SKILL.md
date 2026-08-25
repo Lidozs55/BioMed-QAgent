@@ -25,7 +25,9 @@ files with `download_supplementary`.
   returned records (bounded by max_results).
 - Use `download_supplementary` for supplementary material files (.xlsx, .csv,
   .tsv, .txt, .zip, .xls, .docx, .pdf) from the PMC open-access article page
-  for a given PMID.
+  for a given PMID. The tool first downloads Europe PMC's official
+  supplementary ZIP; if none is available, format_hint values full_text_xml or
+  publication_pdf identify the publication fallback accurately.
 - Zero results: retry with different keywords or field combinations, never the
   same query. Natural-language long queries that return zero hits may be
   retried once in simplified structured form.

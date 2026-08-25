@@ -7,6 +7,16 @@ import type {
 import type { CoreAcquisitionProvenance } from "../../runtime/source-assets/registry.js";
 import type { DynamicFamilyTableOutputs } from "../dynamic-family/index.js";
 
+export interface BrowserEvidenceAcceptance {
+  readonly requestId: string;
+  readonly reviewId: string;
+  readonly hilEvidenceDigest: string;
+  readonly acceptedBrowserEvidenceDigests: readonly string[];
+  readonly reviewer: "user";
+  readonly reviewedAt: string;
+  readonly reason: string | null;
+}
+
 export interface BrowserPublicationHandoffInput {
   taskId: string;
   runId: string;
@@ -19,6 +29,7 @@ export interface BrowserPublicationHandoffInput {
   integratedResults: readonly OperationResultManifest[];
   sourceAcquisitionProvenance: readonly CoreAcquisitionProvenance[];
   browserEvidenceDigests: readonly string[];
+  browserEvidenceAcceptance: BrowserEvidenceAcceptance;
   trustedRoot: string;
 }
 
@@ -35,6 +46,7 @@ export interface BrowserPublicationHandoff {
   readonly integratedResults: readonly OperationResultManifest[];
   readonly sourceAcquisitionProvenance: readonly CoreAcquisitionProvenance[];
   readonly browserEvidenceDigests: readonly string[];
+  readonly browserEvidenceAcceptance: BrowserEvidenceAcceptance;
   readonly trustedRoot: string;
 }
 
@@ -54,6 +66,22 @@ export function createBrowserPublicationHandoff(
   }
   if (input.browserEvidenceDigests.length === 0) {
     throw new TypeError("browser publication handoff requires browser evidence digests");
+  }
+  if (input.browserEvidenceAcceptance.requestId.length === 0 || input.browserEvidenceAcceptance.reviewId.length === 0) {
+    throw new TypeError("browser publication handoff requires browser evidence acceptance identity");
+  }
+  if (input.browserEvidenceAcceptance.hilEvidenceDigest.length !== 64 || !/^[0-9a-f]+$/.test(input.browserEvidenceAcceptance.hilEvidenceDigest)) {
+    throw new TypeError("browser publication handoff requires a valid HIL evidence digest");
+  }
+  const acceptedEvidence = new Set(input.browserEvidenceAcceptance.acceptedBrowserEvidenceDigests);
+  if (acceptedEvidence.size === 0 || acceptedEvidence.size !== input.browserEvidenceAcceptance.acceptedBrowserEvidenceDigests.length) {
+    throw new TypeError("browser evidence acceptance requires unique browser evidence digests");
+  }
+  for (const digest of input.browserEvidenceAcceptance.acceptedBrowserEvidenceDigests) {
+    if (digest.length !== 64 || !/^[0-9a-f]+$/.test(digest)) throw new TypeError("browser evidence acceptance contains an invalid browser evidence digest");
+  }
+  if (acceptedEvidence.size !== input.browserEvidenceDigests.length || input.browserEvidenceDigests.some((digest) => !acceptedEvidence.has(digest))) {
+    throw new TypeError("browser evidence acceptance does not cover the publication evidence");
   }
   if (input.sourceAcquisitionProvenance.length === 0) {
     throw new TypeError("browser publication handoff requires acquisition provenance");
@@ -94,6 +122,7 @@ export function createBrowserPublicationHandoff(
     integratedResults: [...input.integratedResults],
     sourceAcquisitionProvenance: [...input.sourceAcquisitionProvenance],
     browserEvidenceDigests: [...input.browserEvidenceDigests],
+    browserEvidenceAcceptance: { ...input.browserEvidenceAcceptance },
     trustedRoot: input.trustedRoot,
   });
 }
