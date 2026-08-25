@@ -68,6 +68,14 @@ export const SKILL_TOOL_MAP: readonly SkillToolMapping[] = Object.freeze([
     ["lookup_dbsnp"],
   ),
   mapping(
+    "gwas_catalog",
+    "discovery",
+    ["gwas_catalog", "ebi_gwas"],
+    "Find official GWAS Catalog studies by PubMed ID and association records by GCST accession or rsID.",
+    "Use PubMed IDs to resolve exact GCST studies, then query associations by GCST or rsID. Results are discovery evidence; formal Dynamic Family input reacquires one verified GCST or rsID per binding through gwas-catalog.associations.v1.",
+    ["lookup_gwas_catalog"],
+  ),
+  mapping(
     "openfda",
     "discovery",
     ["openfda", "faers"],

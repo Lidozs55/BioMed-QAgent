@@ -461,6 +461,7 @@ export async function createDurableAgentRuntime(
         initialToolNames: [
           "validate_dataset_build",
           "execute_dataset_build",
+          "prepare_dynamic_family_build",
           "submit_dynamic_family_build",
         ],
         cleanup: disposeWorkspace,

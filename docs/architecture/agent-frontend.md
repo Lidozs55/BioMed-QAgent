@@ -20,7 +20,7 @@
 - **稳定映射**：`server/src/agent/skills/skill-tool-map.ts` 是 Skill ↔ Tool
   名称的单一事实源；`server/tests/skill-manifests.test.ts` 钉住，禁止漂移。
 - **直接工具实现**：业务工具在 `server/src/agent/tools/`（PubMed/NCBI、GEO、
-  GDC/Xena、ChEMBL/UniProt/PDB/PubChem/Reactome、浏览器与网页截图、PDF/VLM、
+  GDC/Xena、GWAS Catalog、ChEMBL/UniProt/PDB/PubChem/Reactome、浏览器与网页截图、PDF/VLM、
   统计绘图、local cache 等），经 `createBusinessToolBundle` 注册进 Pi Session。
   生产首轮只激活 Dataset Core 构建工具和 `activate_agent_tools` 入口；其他工具
   通过入口按需激活，并在同一 Session 内累计保留，避免把完整 JSON Schema 一次性
@@ -30,6 +30,10 @@
   已激活；因此 Agent 在正式工作前即可规划路径，而非等到工具调用后才收到知识。
   未激活工具仍只在调用 `activate_agent_tools` 后的下一轮注入完整 schema。这不是恢复
   已退役的 `find_skill` / `invoke_skill` 动态发现协议。
+- **GWAS Catalog 路由**：`lookup_gwas_catalog` 通过官方 EMBL-EBI HAL API 将 PMID
+  解析为 GCST study，或按 GCST/rsID 返回有界 association 证据；缺失的总数和字段
+  保持 `null`。该工具只负责 discovery，正式 Dynamic Family 输入仍由 Core provider
+  `gwas-catalog.associations.v1` 重新获取。
 - **四个类别**：discovery / acquisition / processing / analysis。
 - 不变式不变：download 记录 `DownloadAttempt`，成功校验后才返回
   `SourceAsset`；processing 只接受成功的本地 `SourceAsset` 或受控

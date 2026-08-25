@@ -46,12 +46,14 @@ function deferred(): Deferred {
 class ControlledAdapter implements BioMedAgentAdapter {
   readonly gates: Deferred[] = [];
   readonly runs: string[] = [];
+  readonly configs: BioMedSessionConfig[] = [];
   readonly steering: string[] = [];
   readonly compactions: string[] = [];
   compactError: Error | null = null;
   private cancelled = false;
 
   async createSession(config: BioMedSessionConfig): Promise<BioMedAgentSession> {
+    this.configs.push(config);
     return {
       piSessionId: `pi_${config.taskId}`,
       taskId: config.taskId,
@@ -154,6 +156,12 @@ describe("durable formal Agent runtime", () => {
     expect(admitted.status).toBe(202);
     const accepted = await admitted.json() as { task_id: string; run_id: string };
     await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(adapter.configs[0]?.initialToolNames).toEqual([
+      "validate_dataset_build",
+      "execute_dataset_build",
+      "prepare_dynamic_family_build",
+      "submit_dynamic_family_build",
+    ]);
 
     const socket = new WebSocket(`ws://127.0.0.1:${port}/api/v1/ws`);
     await once(socket, "open");
