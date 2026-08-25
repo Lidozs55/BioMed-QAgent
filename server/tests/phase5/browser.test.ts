@@ -499,6 +499,7 @@ describe("browser tools", () => {
 
     const url = `http://127.0.0.1:${server.port}/data.pdf`;
     const result = await downloadFromPage.execute({ url, filename: "data.pdf" });
+    expect(result.isError, result.content).toBeUndefined();
     const data = JSON.parse(result.content) as Record<string, unknown>;
     expect(data["source"]).toBe("browser");
     expect(data["source_url"]).toBe(url);

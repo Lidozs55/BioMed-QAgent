@@ -536,13 +536,14 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
         };
         const taskId = typeof options.taskId === "function" ? options.taskId() : options.taskId ?? "unknown_task";
         const runId = typeof options.runId === "function" ? options.runId() : options.runId ?? null;
+        const finalUrl = response.url ?? url;
         const evidence: BrowserAcquisitionEvidence = {
           schema_version: "1.0",
-          evidence_id: `browser_evidence_${canonicalDigest({ taskId, runId, checksum, url, finalUrl: response.url }).slice(0, 32)}`,
+          evidence_id: `browser_evidence_${canonicalDigest({ taskId, runId, checksum, url, finalUrl }).slice(0, 32)}`,
           task_id: taskId,
           run_id: runId,
           requested_url: url,
-          final_url: response.url,
+          final_url: finalUrl,
           redirect_chain: response.redirectChain ?? [],
           status: response.status,
           media_type: mediaType,
