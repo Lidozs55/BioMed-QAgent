@@ -1,4 +1,11 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ChatPanel } from "@/components/ChatPanel";
@@ -746,6 +753,27 @@ describe("ChatPanel", () => {
   it("shows a stop generation action while an agent run is active", () => {
     seedBackgroundTask();
     useAgentStore.getState().setActiveTaskId("task_background");
+    const { container } = render(
+      <ChatPanel
+        startTask={vi.fn()}
+        continueTask={vi.fn()}
+        cancelRun={vi.fn()}
+      />,
+    );
+
+    const composer = container.querySelector<HTMLElement>(
+      '[data-slot="agent-composer"]',
+    );
+    expect(composer).not.toBeNull();
+    if (composer === null) return;
+    expect(
+      within(composer).getByRole("button", { name: "停止生成" }),
+    ).toBeEnabled();
+  });
+
+  it("keeps the send action while input has text during an active run", () => {
+    seedBackgroundTask();
+    useAgentStore.getState().setActiveTaskId("task_background");
     render(
       <ChatPanel
         startTask={vi.fn()}
@@ -754,7 +782,16 @@ describe("ChatPanel", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "停止生成" })).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", { name: "继续提问" }), {
+      target: { value: "keep going" },
+    });
+
+    expect(
+      screen.getByRole("button", { name: "发送继续问题" }),
+    ).toBeEnabled();
+    expect(
+      screen.queryByRole("button", { name: "停止生成" }),
+    ).not.toBeInTheDocument();
   });
 
   it("does not show a stop generation action for a terminal task", () => {
@@ -1237,10 +1274,10 @@ describe("ChatPanel", () => {
     );
 
     const input = screen.getByRole("textbox", { name: "继续提问" });
-    const send = screen.getByRole("button", { name: "发送继续问题" });
     expect(input).toBeEnabled();
     fireEvent.change(input, { target: { value: "send this when ready" } });
     expect(input).toHaveValue("send this when ready");
+    const send = screen.getByRole("button", { name: "发送继续问题" });
     expect(send).toBeEnabled();
     fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
     expect(continueTask).not.toHaveBeenCalled();
