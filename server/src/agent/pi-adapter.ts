@@ -136,6 +136,8 @@ const MIN_KEEP_RATIO = 0.05;
 const MAX_KEEP_RATIO = 0.6;
 /** Fraction of the Pi reserve budget available to the compaction summary. */
 const SUMMARY_BUDGET_RATIO = 0.8;
+/** Manual compaction keeps only a tiny recent tail so Pi always has older content to summarize. */
+const MANUAL_KEEP_RECENT_RATIO = 0.01;
 const LENGTH_CONTINUATION_MESSAGE =
   "The previous assistant turn was truncated by the model length limit. " +
   "Continue the same task from the compacted context without repeating completed work. " +
@@ -285,6 +287,37 @@ export function resolvePiCompactionOverrides(
       enabled: true,
       reserveTokens,
       keepRecentTokens: effectiveKeep,
+    },
+  };
+}
+
+/**
+ * Manual compaction forces a small recent tail even when the automatic keep
+ * budget would leave Pi with zero messages to summarize below the threshold.
+ */
+export function resolveManualPiCompactionOverrides(
+  contextWindow: number,
+  triggerRatio: number,
+  targetRatio: number,
+  currentTokens?: number | null,
+): { compaction: { enabled: boolean; reserveTokens: number; keepRecentTokens: number } } {
+  const auto = resolvePiCompactionOverrides(
+    contextWindow,
+    triggerRatio,
+    targetRatio,
+    currentTokens,
+  );
+  const hasKnownUsage = currentTokens !== null &&
+    currentTokens !== undefined &&
+    Number.isFinite(currentTokens) &&
+    currentTokens > 0;
+  const keepRecentTokens = hasKnownUsage
+    ? Math.max(1, Math.round(currentTokens * MANUAL_KEEP_RECENT_RATIO))
+    : 1;
+  return {
+    compaction: {
+      ...auto.compaction,
+      keepRecentTokens,
     },
   };
 }
@@ -547,8 +580,39 @@ async function createRealUpstreamSession(
     }, { triggerTurn: true }),
     steer: (text) => session.steer(text),
     compact: async () => {
-      const result = await session.compact();
-      return { summary: result.summary };
+      const usage = session.getContextUsage();
+      const autoOverrides =
+        current.compactionTriggerRatio !== undefined &&
+        current.compactionTargetRatio !== undefined
+          ? resolvePiCompactionOverrides(
+              currentWindow(),
+              current.compactionTriggerRatio,
+              current.compactionTargetRatio,
+              usage?.tokens ?? null,
+            )
+          : undefined;
+      const manualOverrides = autoOverrides === undefined
+        ? undefined
+        : current.compactionTriggerRatio !== undefined &&
+            current.compactionTargetRatio !== undefined
+          ? resolveManualPiCompactionOverrides(
+              currentWindow(),
+              current.compactionTriggerRatio,
+              current.compactionTargetRatio,
+              usage?.tokens ?? null,
+            )
+          : undefined;
+      if (manualOverrides !== undefined) {
+        settingsManager.applyOverrides(manualOverrides);
+      }
+      try {
+        const result = await session.compact();
+        return { summary: result.summary };
+      } finally {
+        if (autoOverrides !== undefined) {
+          settingsManager.applyOverrides(autoOverrides);
+        }
+      }
     },
     getContextUsage: () => session.getContextUsage(),
     reconcileConfig,
