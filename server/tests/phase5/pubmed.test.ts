@@ -967,7 +967,7 @@ describe("acquirePublicationWithFallback", () => {
       }
       if (url.includes("/fullTextXML")) {
         res.writeHead(200, {
-          "content-type": "application/xml",
+          "content-type": "text/xml",
           "content-length": String(EPMC_XML.length),
         });
         res.end(EPMC_XML);
@@ -988,7 +988,7 @@ describe("acquirePublicationWithFallback", () => {
       doi: "10.7554/eLife.64977",
       pmcid: "PMC8275131",
     });
-    expect(outcome.result.asset?.media_type).toBe("application/xml");
+    expect(outcome.result.asset?.media_type).toBe("text/xml");
     expect(outcome.result.asset?.relative_path.endsWith("PMC8275131.xml")).toBe(true);
     expect(outcome.result.attempt.url).toContain("/europepmc/webservices/rest/PMC8275131/fullTextXML");
     expect(outcome.result.asset?.sha256).toBe(createHash("sha256").update(EPMC_XML).digest("hex"));
@@ -1154,7 +1154,8 @@ describe("downloadSupplementaryAdapter", () => {
     expect(payload.error).toBe("Failed to fetch PubMed record: NCBI returned HTTP 500: down");
   });
 
-  it("runs the full fallback chain and publishes the EPMC XML asset", async () => {
+  it("downloads the Europe PMC supplementary archive before publication fallback", async () => {
+    const supplementaryZip = Buffer.from("PK\x03\x04fixture-supplementary-archive");
     const fixture = await startFixtureServer(async (req, res) => {
       const url = req.url ?? "";
       if (url.includes("efetch.fcgi")) {
@@ -1162,14 +1163,57 @@ describe("downloadSupplementaryAdapter", () => {
         res.end(await pyFixture("pubmed_34180400.xml"));
         return;
       }
-      if (url.startsWith("/v2/")) {
+      if (url.includes("/supplementaryFiles")) {
+        res.writeHead(200, {
+          "content-type": "application/zip",
+          "content-length": String(supplementaryZip.length),
+        });
+        res.end(supplementaryZip);
+        return;
+      }
+      res.writeHead(500);
+      res.end("publication fallback must not run after supplementary success");
+    });
+    fixtures.push(fixture);
+    const http = fixtureHttpClient(fixture.port);
+    const eutils = new NcbiEutilsClient({ http, config: testConfig(), limiter: immediateLimiter() });
+    const payload = (await downloadSupplementaryAdapter("34180400", 1, {
+      eutils,
+      http,
+      cache: new ContentCache(path.join(root, "cache")),
+      taskRoot: root,
+    })) as {
+      local_files: string[];
+      source_assets: Array<{ media_type: string }>;
+      download_attempts: Array<{ status: string; url: string }>;
+      format_hint: string;
+      warnings?: string[];
+    };
+    expect(payload.local_files[0]?.endsWith("pubmed_34180400_supplementary.zip")).toBe(true);
+    expect(await readFile(payload.local_files[0] ?? "")).toEqual(supplementaryZip);
+    expect(payload.source_assets[0]?.media_type).toBe("application/zip");
+    expect(payload.download_attempts).toHaveLength(1);
+    expect(payload.download_attempts[0]?.url).toContain("/PMC8275131/supplementaryFiles");
+    expect(payload.format_hint).toBe("supplementary_archive");
+    expect(payload.warnings).toBeUndefined();
+  });
+
+  it("falls back to the EPMC XML asset when no supplementary archive is available", async () => {
+    const fixture = await startFixtureServer(async (req, res) => {
+      const url = req.url ?? "";
+      if (url.includes("efetch.fcgi")) {
+        res.writeHead(200, { "content-type": "application/xml" });
+        res.end(await pyFixture("pubmed_34180400.xml"));
+        return;
+      }
+      if (url.includes("/supplementaryFiles") || url.startsWith("/v2/")) {
         res.writeHead(404, { "content-type": "application/json" });
         res.end("{}");
         return;
       }
       if (url.includes("/fullTextXML")) {
         res.writeHead(200, {
-          "content-type": "application/xml",
+          "content-type": "text/xml",
           "content-length": String(EPMC_XML.length),
         });
         res.end(EPMC_XML);
@@ -1206,18 +1250,22 @@ describe("downloadSupplementaryAdapter", () => {
     expect(payload.local_files[0]?.endsWith("pubmed_34180400.xml")).toBe(true);
     expect(await readFile(payload.local_files[0] ?? "")).toEqual(EPMC_XML);
     expect(payload.source_assets).toHaveLength(1);
-    expect(payload.source_assets[0]?.media_type).toBe("application/xml");
-    expect(payload.download_attempts).toHaveLength(1);
-    expect(payload.download_attempts[0]?.status).toBe("succeeded");
-    expect(payload.download_attempts[0]?.url).toContain("/europepmc/webservices/rest/PMC8275131/fullTextXML");
-    expect(payload.format_hint).toBe("supplementary");
+    expect(payload.source_assets[0]?.media_type).toBe("text/xml");
+    expect(payload.download_attempts).toHaveLength(2);
+    expect(payload.download_attempts[0]?.status).toBe("failed");
+    expect(payload.download_attempts[0]?.url).toContain("/PMC8275131/supplementaryFiles");
+    expect(payload.download_attempts[1]?.status).toBe("succeeded");
+    expect(payload.download_attempts[1]?.url).toContain("/europepmc/webservices/rest/PMC8275131/fullTextXML");
+    expect(payload.format_hint).toBe("full_text_xml");
     expect(payload.retrieved_at).toBeTruthy();
     expect(payload.warnings).toEqual([
+      expect.stringContaining("supplementary_archive"),
       "tier1_direct: skipped (source.url not a direct PDF link)",
       "tier2_unpaywall_lookup: DOI not found in Unpaywall: 10.7554/eLife.64977",
     ]);
     expect(hooks[0]?.[0]).toBe("acquisition");
     expect(hooks[0]?.[1]).toBe("downloaded_bytes");
+    expect(hooks.at(-1)?.[2]).toMatchObject({ filename: "pubmed_34180400.pdf" });
   });
 
   it("returns the all-tiers-failed error payload with details and attempts", async () => {
@@ -1252,13 +1300,15 @@ describe("downloadSupplementaryAdapter", () => {
     expect(payload.source_url).toBe(PMC_URL);
     expect(payload.error).toContain("all PDF acquisition tiers failed");
     expect(payload.details).toEqual([
+      expect.stringContaining("supplementary_archive"),
       "tier1_direct: skipped (source.url not a direct PDF link)",
       "tier2_unpaywall_lookup: DOI not found in Unpaywall: 10.7554/eLife.64977",
       expect.stringContaining("tier3_epmc: attempt status=failed"),
     ]);
-    expect(payload.download_attempts).toHaveLength(1);
+    expect(payload.download_attempts).toHaveLength(2);
     expect(payload.download_attempts[0]?.status).toBe("failed");
-    expect(payload.download_attempts[0]?.error_code).toBe("network_error");
+    expect(payload.download_attempts[1]?.status).toBe("failed");
+    expect(payload.download_attempts[1]?.error_code).toBe("network_error");
   });
 });
 

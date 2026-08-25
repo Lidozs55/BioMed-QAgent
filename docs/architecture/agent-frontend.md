@@ -21,8 +21,15 @@
   名称的单一事实源；`server/tests/skill-manifests.test.ts` 钉住，禁止漂移。
 - **直接工具实现**：业务工具在 `server/src/agent/tools/`（PubMed/NCBI、GEO、
   GDC/Xena、ChEMBL/UniProt/PDB/PubChem/Reactome、浏览器与网页截图、PDF/VLM、
-  统计绘图、local cache 等），经 `createBusinessToolBundle` 一次性注册进 Pi
-  Session（无 find_skill/invoke_skill 网关）。
+  统计绘图、local cache 等），经 `createBusinessToolBundle` 注册进 Pi Session。
+  生产首轮只激活 Dataset Core 构建工具和 `activate_agent_tools` 入口；其他工具
+  通过入口按需激活，并在同一 Session 内累计保留，避免把完整 JSON Schema 一次性
+  发送给模型或让后续激活意外移除已用工具。工具仍受同一权限、Core 和发布门禁约束，
+  激活不改变能力边界。首轮 system context 同时注入当前 Session 完整但有界的
+  Skill↔Tool map：每项含简短功能、route/trust boundary、可用工具名及 schema 是否
+  已激活；因此 Agent 在正式工作前即可规划路径，而非等到工具调用后才收到知识。
+  未激活工具仍只在调用 `activate_agent_tools` 后的下一轮注入完整 schema。这不是恢复
+  已退役的 `find_skill` / `invoke_skill` 动态发现协议。
 - **四个类别**：discovery / acquisition / processing / analysis。
 - 不变式不变：download 记录 `DownloadAttempt`，成功校验后才返回
   `SourceAsset`；processing 只接受成功的本地 `SourceAsset` 或受控
@@ -54,6 +61,10 @@ Agent-only 数据源或子 Agent 的自然语言结果作为正式数据，也�
 Validator、Compatibility Gate、Validation Profile 或 Publisher。Agent-facing 工具必须
 保留确定性内核返回的失败语义：进程非零退出是失败，Dataset Core 的 `retryable`
 不得在工具适配层丢失；相同输入只能在明确可重试且外部条件可能已变化时重试。
+Agent 对自身工作记录也必须 evidence-bound：只能按当前 Run 的 tool result/event 声明
+调用、验证、覆盖率、BuildResult、Publication 和完成状态；抽样成功不能写成全量验证，
+计划、workspace 文件或 intended next step 不能写成已完成动作。CSV/表格/原始溯源等
+输出格式要求不放宽 Dataset Core Publication 边界。
 工具返回给模型的 `content` 必须是有界且合法的结构化摘要；完整内核响应保留在
 `details`/durable evidence 中，不能通过字符切片破坏 JSON 或丢失 publication 状态。
 业务工具的共享失败形状为 `{ error, code, retryable, status_code? }`；只有底层错误
