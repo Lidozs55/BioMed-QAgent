@@ -29,7 +29,7 @@ const TRUSTED_EXECUTION = [
 
 const CONTROL_AND_RECOVERY = [
   "[Control and recovery]",
-  "Treat tool failures as control signals. Retry only when retryable is true and the external condition may have changed; otherwise correct the input, choose another registered source, or report the limitation.",
+  "Treat tool failures as control signals with a fixed recovery order. On a fetch failure, first retry the same route after adjusting the parameters: diagnose the error, fix the URL, query, or filename, and retry only genuinely transient conditions such as HTTP 429, HTTP 5xx, or timeout. Never repeat an unchanged failing call. Only after adjusted-parameter retries still fail, switch to a genuinely independent reliable source that can verify the same fact; for FDA drug-event reaction counts, use the openFDA FAERS aggregate lookup. Only after the switch-source attempt fails or the data is genuinely absent, report NO_DATA or the unavailable source — never earlier. Otherwise correct the input, choose another registered source, or report the limitation.",
   "If a tool requests permission or human review, wait for that decision; do not replace the suspended trusted operation with an unreviewed workspace result.",
   "After an approved max-turn interruption, start the next response with [MAX_TURNS_REACHED] before continuing unfinished work.",
   "Never present NO_DATA, rejection, cancellation, incomplete human review, or failure as success.",

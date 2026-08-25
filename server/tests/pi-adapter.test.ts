@@ -196,6 +196,18 @@ describe("Pi system prompt", () => {
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/after an approved max-turn interruption/i);
   });
 
+  test("guides adjusted-parameter retries before switching source or reporting NO_DATA", () => {
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /retry the same route after adjusting the parameters/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/retry only genuinely transient conditions/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/never repeat an unchanged failing call/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /adjusted[- ]parameter[\s\S]*switch to a genuinely independent reliable source[\s\S]*report NO_DATA or the unavailable source/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/openFDA FAERS aggregate lookup/i);
+  });
+
   test("delegates source-specific topology and evidence rules to skills", () => {
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/matching skill/i);
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/source-specific rules/i);
