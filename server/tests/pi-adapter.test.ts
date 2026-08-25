@@ -77,6 +77,113 @@ async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
 }
 
 describe("Pi system prompt", () => {
+  test("defines dataset completion by task semantics instead of requested file format", () => {
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /^\[Dataset completion contract\][\s\S]*\[Evidence integrity\][\s\S]*\[Trusted execution\][\s\S]*\[Control and recovery\][\s\S]*$/,
+    );
+    expect(PHASE1_SYSTEM_PROMPT.length).toBeLessThanOrEqual(7_000);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /completion is determined by task semantics, never by the requested file format/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /complete only when every requested semantic product has a current-run Dataset Core BuildResult and immutable Publication/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /workspace files are staging only: never present them as a completed, delivered, usable, or formally published dataset/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /lacks a Core provider or formal carrier[\s\S]*blocked or NO_DATA/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /do not downgrade the task to workspace CSV delivery/i,
+    );
+  });
+
+  test("forbids synthetic replacement data and limits unavailable-source choices", () => {
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/never fabricate, simulate, approximate, infer, or use representative values/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/stop and report the unavailable source/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/request concrete user help/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/continue researching a genuinely independent real source/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/do not create replacement rows or fill missing values from model memory/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/partial tool success verifies only the records returned as successful/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/never claim full-source or whole-dataset verification from a successful subset/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/never fabricate, exaggerate, or infer your own work history/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/report exact requested, succeeded, and failed counts/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/never turn a plan, workspace file, successful subset, or intended next step into a completed action/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/choose the matching semantic family, projection, and row granularity/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/workspace outputs are staging evidence only/i);
+  });
+
+  test("injects the complete available skill map while keeping optional schemas deferred", async () => {
+    const core = {
+      name: "execute_dataset_build",
+      label: "Execute DatasetBuild",
+      description: "Execute through Dataset Core.",
+      parameters: { type: "object" },
+      execute: async () => ({ content: "{}" }),
+    };
+    const optional = {
+      name: "search_pubmed",
+      label: "Search PubMed",
+      description: "Search official biomedical literature.",
+      parameters: { type: "object", properties: { query: { type: "string" } } },
+      execute: async () => ({ content: "{}" }),
+    };
+    const laterOptional = {
+      name: "lookup_dbsnp",
+      label: "Look up dbSNP",
+      description: "Resolve RefSNP records.",
+      parameters: { type: "object", properties: { rs_ids: { type: "array" } } },
+      execute: async () => ({ content: "{}" }),
+    };
+    const workspace = {
+      name: "workspace_read",
+      label: "Read workspace",
+      description: "Read bounded task-workspace text.",
+      parameters: { type: "object", properties: { path: { type: "string" } } },
+      execute: async () => ({ content: "{}" }),
+    };
+    const prompt = toolCatalogPrompt([core, optional, laterOptional, workspace], [core.name]);
+    expect(prompt).toContain("Available curated skill/tool map");
+    expect(prompt).toContain("dataset-construction");
+    expect(prompt).toContain("execute_dataset_build (active)");
+    expect(prompt).toContain("pubmed");
+    expect(prompt).toContain("search_pubmed");
+    expect(prompt).toContain("dbsnp");
+    expect(prompt).toContain("discovery evidence only");
+    expect(prompt).toContain("Other optional tools");
+    expect(prompt).toContain("workspace_read");
+    expect(prompt.length).toBeLessThanOrEqual(16_000);
+
+    let active: readonly string[] = [];
+    const activation = activationToolDefinition([core, optional, laterOptional], [core.name], (names) => {
+      active = names;
+    });
+    expect(activation.name).toBe(TOOL_ACTIVATION_NAME);
+    const result = await activation.execute("call-1", { tool_names: [optional.name] }, undefined, undefined, undefined as never);
+    expect(active).toEqual([core.name, TOOL_ACTIVATION_NAME, optional.name]);
+    expect(result.details).toMatchObject({ ok: true, activated_tools: [optional.name] });
+
+    const laterResult = await activation.execute(
+      "call-2",
+      { tool_names: [laterOptional.name] },
+      undefined,
+      undefined,
+      undefined as never,
+    );
+    expect(active).toEqual([
+      core.name,
+      TOOL_ACTIVATION_NAME,
+      laterOptional.name,
+      optional.name,
+    ]);
+    expect(laterResult.details).toMatchObject({
+      ok: true,
+      activated_tools: [laterOptional.name],
+      active_optional_tools: [laterOptional.name, optional.name],
+    });
+  });
+
   test("marks an approved max-turn continuation explicitly", () => {
     expect(PHASE1_SYSTEM_PROMPT).toContain("[MAX_TURNS_REACHED]");
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/after an approved max-turn interruption/i);
