@@ -31,6 +31,10 @@ import { assertUniqueToolNames } from "./registry.js";
 import { createAnalyzePapersTool, type AnalyzePapersHooks } from "./literature-understanding.js";
 import { createResearchDataGuidanceTool } from "./guidance.js";
 import { createPubmedTools } from "./pubmed.js";
+import { createDbsnpTools } from "./dbsnp.js";
+import { createOpenFdaTools } from "./openfda.js";
+import { createClinvarTools } from "./clinvar.js";
+import { createMgnifyTools } from "./mgnify.js";
 import { createGeoTools } from "./geo.js";
 import { createGdcTools } from "./gdc.js";
 import { createXenaTools } from "./xena.js";
@@ -141,6 +145,10 @@ export async function createBusinessToolBundle(
     downloadTimeoutMs: limits.download_timeout_seconds * 1000,
     config: { totalTimeoutMs: limits.http_timeout_seconds * 1000 },
   }), "pubmed");
+  register(createDbsnpTools({ client }), "dbsnp");
+  register(createOpenFdaTools({ client }), "openfda");
+  register(createClinvarTools({ client }), "clinvar");
+  register(createMgnifyTools({ client }), "mgnify");
   register(createGeoTools({
     taskRoot,
     cache,

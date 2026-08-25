@@ -215,6 +215,24 @@ describe("ChatPanel", () => {
     expect(screen.getByRole("textbox", { name: "研究目标" })).toHaveClass("min-h-28");
   });
 
+  it("allows manual compaction even when context usage is low", async () => {
+    seedTerminalTask();
+    const compactTask = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ChatPanel
+        startTask={vi.fn()}
+        compactTask={compactTask}
+        contextWindow={131_072}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /上下文窗口已使用/ }));
+    fireEvent.click(screen.getByRole("button", { name: "压缩上下文" }));
+
+    await waitFor(() => expect(compactTask).toHaveBeenCalledOnce());
+    expect(compactTask).toHaveBeenCalledWith("task_terminal");
+  });
+
   it("shows active task artifacts before the attachment control", () => {
     seedTerminalTask();
     const state = useAgentStore.getState();

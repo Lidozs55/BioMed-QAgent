@@ -103,6 +103,8 @@ export interface BioMedSessionConfig {
   skillRoots?: readonly string[];
   systemPrompt?: string;
   tools?: readonly BioMedAgentTool[];
+  /** Tools whose full schemas are available on the first model turn. */
+  initialToolNames?: readonly string[];
   cleanup?: () => Promise<void>;
 }
 

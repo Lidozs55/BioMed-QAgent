@@ -6,7 +6,6 @@ import {
 } from "@phosphor-icons/react";
 import { toast } from "sonner";
 
-import { isNothingToCompactError } from "@/lib/compactErrors";
 import { AgentComposer } from "@/components/AgentComposer";
 import { LoadingScreen } from "@/components/LoadingScreen";
 import {
@@ -21,6 +20,7 @@ import { openSubagentPanel } from "@/components/subagentPanelControl";
 import { TaskStatusIcon } from "@/components/taskStatus";
 import { UserInputDialog } from "@/components/UserInputDialog";
 import { PermissionQuestionnaire } from "@/components/intervention/PermissionQuestionnaire";
+import { isNothingToCompactError } from "@/lib/compactErrors";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -302,14 +302,6 @@ export function ChatPanel({
   const [, setCompacting] = useState(false);
   const handleCompact = useCallback(async () => {
     if (activeTaskId === null || compactTask === undefined) return;
-    // Manual compaction threshold: only allow when usage > 65%
-    const pct = effectiveContextWindow && effectiveContextWindow > 0
-      ? Math.round((estimatedTokens / effectiveContextWindow) * 100)
-      : 0;
-    if (pct <= 65) {
-      toast.info("上下文占用较低，无需压缩", { description: `当前占用 ${pct}%，超过 65% 时才建议压缩` });
-      return;
-    }
     setCompacting(true);
     try {
       await compactTask(activeTaskId);
@@ -325,7 +317,7 @@ export function ChatPanel({
     } finally {
       setCompacting(false);
     }
-  }, [activeTaskId, compactTask, effectiveContextWindow, estimatedTokens]);
+  }, [activeTaskId, compactTask]);
 
   const [submittingDraftKey, setSubmittingDraftKey] = useState<string | null>(null);
   const [importPending, setImportPending] = useState(false);
