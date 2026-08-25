@@ -51,7 +51,7 @@ import type { ToolHooks } from "./tool-hooks.js";
 import type { BrowserAcquisitionEvidenceStore } from "../../runtime/browser-acquisition-store.js";
 import { BrowserAcquisitionProposalStore } from "../../runtime/browser-acquisition-proposal-store.js";
 import type { DatasetHILGate } from "../../dataset/review/hil-policy.js";
-import type { BrowserFormalizationService } from "../../dataset/acquisition/browser-formalization.js";
+import type { BrowserFormalizationService, BrowserParserRecipeResolver } from "../../dataset/acquisition/browser-formalization.js";
 import { computeHILEvidenceDigest } from "../../dataset/contracts/hil-evidence.js";
 import { noopHooks } from "./tool-hooks.js";
 import { errorMessage } from "./result.js";
@@ -130,6 +130,7 @@ export interface BrowserToolsOptions {
   proposalStore?: BrowserAcquisitionProposalStore;
   formalizationHIL?: DatasetHILGate;
   formalizationService?: BrowserFormalizationService;
+  recipeRegistry?: BrowserParserRecipeResolver & { list(): string[] };
 }
 
 export const NAVIGATE_PAGE_TOOL_NAME = "navigate_page";
@@ -201,7 +202,7 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
   const proposeFormalization: BioMedAgentTool = {
     name: PROPOSE_BROWSER_FORMALIZATION_TOOL_NAME,
     label: "Request browser evidence acceptance",
-    description: "Request one Core-owned review for the complete browser evidence and binding; acceptance authorizes the deterministic Core pipeline, not arbitrary code or data changes.",
+    description: "Request one Core-owned review for the complete browser evidence and binding. recipe_id must be a Core-promoted browser.registered.* recipe; unknown recipes fail before HIL. Acceptance authorizes the deterministic Core pipeline, not arbitrary code or data changes.",
     parameters: {
       type: "object",
       properties: {
@@ -219,8 +220,8 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
       additionalProperties: false,
     },
     execute: async (argumentsValue, signal) => {
-      if (options.evidenceStore === undefined || options.proposalStore === undefined || options.formalizationHIL === undefined || options.formalizationService === undefined) {
-        throw new Error("browser formalization is unavailable without Core evidence/proposal/HIL services");
+      if (options.evidenceStore === undefined || options.proposalStore === undefined || options.formalizationHIL === undefined || options.formalizationService === undefined || options.recipeRegistry === undefined) {
+        throw new Error("browser formalization is unavailable without Core evidence/proposal/HIL/recipe services");
       }
       const record = argumentsValue as Record<string, unknown>;
       const evidenceId = typeof record.evidence_id === "string" ? record.evidence_id : "";
@@ -233,6 +234,16 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
       const inputRole = typeof record.input_role === "string" ? record.input_role : "";
       const intendedRole = typeof record.intended_role === "string" ? record.intended_role : "";
       const stored = await options.evidenceStore.get(evidenceId);
+      let promotedRecipe;
+      try {
+        promotedRecipe = options.recipeRegistry.resolve(recipeId, recipeVersion, stored.evidence);
+      } catch (error) {
+        const available = options.recipeRegistry.list();
+        throw new Error(`${errorMessage(error)}; available PROMOTED browser recipes: ${available.length === 0 ? "none" : available.join(", ")}`, { cause: error });
+      }
+      if (promotedRecipe.schema_ref !== schemaRef) {
+        throw new Error(`browser recipe schema does not match proposal schema binding: expected ${promotedRecipe.schema_ref}`);
+      }
       const taskId = typeof options.taskId === "function" ? options.taskId() : options.taskId;
       const runId = typeof options.runId === "function" ? options.runId() : options.runId;
       if (!taskId || !runId) throw new Error("browser formalization requires task and run identity");
@@ -287,6 +298,7 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
           sha256: stored.evidence.sha256,
           recipe_id: recipeId,
           recipe_version: recipeVersion,
+          recipe_implementation_digest: promotedRecipe.ref.implementation_digest,
           binding_id: bindingId,
           family_id: familyId,
           schema_ref: schemaRef,

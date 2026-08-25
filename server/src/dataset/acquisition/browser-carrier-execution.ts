@@ -5,7 +5,7 @@ import path from "node:path";
 import type { OperationResultManifest } from "@biomed/contracts";
 import { parseOperationResultManifest } from "../contracts/operation-result.js";
 import type { RegisteredTableAdapterResult, RegisteredTableSink, RegisteredTableRow } from "../adapters/registered/types.js";
-import { RegisteredTableAdapter, createDefaultRegisteredTableRegistry } from "../adapters/registered/index.js";
+import { RegisteredTableAdapter } from "../adapters/registered/index.js";
 import type { SourceAssetRegistry } from "../../runtime/source-assets/registry.js";
 import type { BrowserParserRecipeResolver } from "./browser-formalization.js";
 
@@ -201,9 +201,11 @@ export async function executeBrowserCarrierParser(
     provider_implementation_digest: resolved.acquisition_provenance.implementation_digest,
   };
   const recipe = input.recipeRegistry.resolve(input.recipeId, input.recipeVersion, evidence);
-  const parser = createDefaultRegisteredTableRegistry();
-  const adapter = new RegisteredTableAdapter(parser);
-  const registration = parser.resolve(recipe.adapter_id, recipe.parser_version);
+  const registeredTables = {
+    resolve: (adapterId: string, parserVersion: string) => input.recipeRegistry.resolveRegisteredTable(adapterId, parserVersion),
+  };
+  const adapter = new RegisteredTableAdapter(registeredTables);
+  const registration = registeredTables.resolve(recipe.adapter_id, recipe.parser_version);
   if (registration.schema.schema_id !== input.schemaRef) throw new Error("browser carrier schema binding mismatch");
   const relativePath = `tables/${input.tableId}.csv`;
   const absolutePath = path.join(input.outputDir, ...relativePath.split("/"));

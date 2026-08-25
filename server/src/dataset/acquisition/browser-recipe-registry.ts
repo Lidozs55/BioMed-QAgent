@@ -1,6 +1,8 @@
 import type { WorkflowRecipeRef } from "@biomed/contracts";
 import type { BrowserAcquisitionEvidence } from "@biomed/contracts";
-import type { RegisteredTableRegistry } from "../adapters/registered/registry.js";
+import { canonicalDigest } from "../adapters/identity.js";
+import { createDefaultRegisteredTableRegistry } from "../adapters/registered/default-registry.js";
+import type { RegisteredTableAdapterRegistration, RegisteredTableRegistry } from "../adapters/registered/registry.js";
 
 export interface BrowserParserRecipeRegistration {
   ref: WorkflowRecipeRef;
@@ -62,7 +64,45 @@ export class BrowserParserRecipeRegistry {
     };
   }
 
+  resolveRegisteredTable(adapterId: string, parserVersion: string): RegisteredTableAdapterRegistration {
+    return this.#registeredTables.resolve(adapterId, parserVersion);
+  }
+
   list(): string[] {
     return [...this.#recipes.keys()].sort();
   }
+}
+
+export function browserRecipeId(adapterId: string, parserVersion: string): string {
+  return `browser.registered.${adapterId}.${parserVersion}`;
+}
+
+/**
+ * Promote only parsers already compiled into the Core-owned registered-table
+ * registry. The digest binds the full schema/parser definition, not an
+ * Agent-supplied alias or field mapping.
+ */
+export function createDefaultBrowserParserRecipeRegistry(
+  registeredTables: RegisteredTableRegistry = createDefaultRegisteredTableRegistry(),
+): BrowserParserRecipeRegistry {
+  const recipes = new BrowserParserRecipeRegistry(registeredTables);
+  for (const registration of registeredTables.entries()) {
+    recipes.register({
+      ref: {
+        schema_version: "1.0",
+        recipe_id: browserRecipeId(registration.parser.adapter_id, registration.parser.parser_version),
+        recipe_version: 1,
+        status: "PROMOTED",
+        implementation_digest: canonicalDigest({
+          schema: registration.schema,
+          parser: registration.parser,
+        }),
+      },
+      schema_ref: registration.schema.schema_id,
+      adapter_id: registration.parser.adapter_id,
+      parser_version: registration.parser.parser_version,
+      media_types: [...registration.parser.media_types],
+    });
+  }
+  return recipes;
 }

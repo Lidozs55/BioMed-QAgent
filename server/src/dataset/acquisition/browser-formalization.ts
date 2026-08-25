@@ -13,6 +13,7 @@ import type { BrowserAcquisitionEvidenceStore } from "../../runtime/browser-acqu
 import type { BrowserAcquisitionProposalStore } from "../../runtime/browser-acquisition-proposal-store.js";
 import type { SourceAssetRegistry, CoreAcquisitionProvenance } from "../../runtime/source-assets/registry.js";
 import type { BrowserParserRecipeRegistration } from "./browser-recipe-registry.js";
+import type { RegisteredTableAdapterRegistration } from "../adapters/registered/registry.js";
 
 export interface BrowserFormalizationInput {
   proposal: BrowserAcquisitionProposal;
@@ -33,6 +34,7 @@ export interface BrowserFormalizationResult {
 
 export interface BrowserParserRecipeResolver {
   resolve(recipeId: string, recipeVersion: string, evidence: BrowserAcquisitionEvidence): BrowserParserRecipeRegistration;
+  resolveRegisteredTable(adapterId: string, parserVersion: string): RegisteredTableAdapterRegistration;
 }
 
 export interface BrowserFormalizationServiceOptions {
