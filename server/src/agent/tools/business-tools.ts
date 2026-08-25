@@ -35,6 +35,7 @@ import { createDbsnpTools } from "./dbsnp.js";
 import { createOpenFdaTools } from "./openfda.js";
 import { createClinvarTools } from "./clinvar.js";
 import { createMgnifyTools } from "./mgnify.js";
+import { createGwasCatalogTools } from "./gwas-catalog.js";
 import { createGeoTools } from "./geo.js";
 import { createGdcTools } from "./gdc.js";
 import { createXenaTools } from "./xena.js";
@@ -156,6 +157,7 @@ export async function createBusinessToolBundle(
   register(createOpenFdaTools({ client }), "openfda");
   register(createClinvarTools({ client }), "clinvar");
   register(createMgnifyTools({ client }), "mgnify");
+  register(createGwasCatalogTools({ client }), "gwas_catalog");
   register(createGeoTools({
     taskRoot,
     cache,

@@ -1,12 +1,16 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { BioMedAgentError } from "../src/agent/contracts.js";
+import { SKILL_TOOL_NAMES } from "../src/agent/skills/skill-tool-map.js";
 import {
+  activationToolDefinition,
   PiAgentAdapter,
   applyModelProfileToPayload,
   resolvePiCompactionOverrides,
   resolveManualPiCompactionOverrides,
   shouldReconfigureSession,
+  toolCatalogPrompt,
+  TOOL_ACTIVATION_NAME,
   toPiCustomTools,
   type PiUpstreamEvent,
   type PiUpstreamSession,
@@ -103,6 +107,61 @@ describe("Pi system prompt", () => {
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
       /never call a provisional workspace CSV validated, published, formally complete, or a Dataset Core Publication/i,
     );
+  });
+
+  test("publishes a bounded tool catalog and cumulatively activates optional schemas", async () => {
+    const tool = (name: string, description: string) => ({
+      name,
+      label: name,
+      description,
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ content: "{}" }),
+    });
+    const core = tool("execute_dataset_build", "Execute a trusted Dataset Core build.");
+    const prepare = tool("prepare_dynamic_family_build", "Prepare a Dynamic Family build.");
+    const pubmed = tool("search_pubmed", "Search PubMed.");
+    const gwas = tool("lookup_gwas_catalog", "Look up GWAS Catalog records.");
+    const tools = [core, prepare, pubmed, gwas];
+    const initial = [core.name, prepare.name];
+
+    const prompt = toolCatalogPrompt(tools, initial);
+    expect(prompt).toContain("Available curated skill/tool map");
+    expect(prompt).toContain("execute_dataset_build (active)");
+    expect(prompt).toContain("prepare_dynamic_family_build (active)");
+    expect(prompt).toContain("lookup_gwas_catalog");
+    expect(prompt.length).toBeLessThanOrEqual(16_000);
+
+    const completeCatalogTools = [...SKILL_TOOL_NAMES].map((name) => tool(name, `${name} tool.`));
+    expect(toolCatalogPrompt(completeCatalogTools, initial).length).toBeLessThanOrEqual(16_000);
+
+    let active: readonly string[] = [];
+    const activation = activationToolDefinition(tools, initial, (names) => {
+      active = names;
+    });
+    const first = await activation.execute(
+      "call-1",
+      { tool_names: [gwas.name] },
+      undefined,
+      undefined,
+      undefined as never,
+    );
+    expect(active).toEqual([core.name, prepare.name, TOOL_ACTIVATION_NAME, gwas.name]);
+    expect(first.details).toMatchObject({ ok: true, activated_tools: [gwas.name] });
+
+    await activation.execute(
+      "call-2",
+      { tool_names: [pubmed.name, "not_registered"] },
+      undefined,
+      undefined,
+      undefined as never,
+    );
+    expect(active).toEqual([
+      core.name,
+      prepare.name,
+      TOOL_ACTIVATION_NAME,
+      gwas.name,
+      pubmed.name,
+    ]);
   });
 
   test("forbids synthetic replacement data and bounds provisional fallback", () => {

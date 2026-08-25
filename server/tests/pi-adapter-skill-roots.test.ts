@@ -128,6 +128,42 @@ describe("PiAgentAdapter skill-root loading (Phase 2)", () => {
     expect(config?.skillRoots).toContain(extra);
   });
 
+  test("injects the tool catalog and first-turn activation markers into the session prompt", async () => {
+    const cwd = await tempDir();
+    const upstream = new FakeUpstream();
+    const { adapter } = adapterWith(upstream, repositorySkillsRoot);
+    const tools = [
+      {
+        name: "execute_dataset_build",
+        label: "Execute DatasetBuild",
+        description: "Execute through Dataset Core.",
+        parameters: { type: "object" },
+        execute: async () => ({ content: "{}" }),
+      },
+      {
+        name: "lookup_gwas_catalog",
+        label: "Look up GWAS Catalog",
+        description: "Resolve official GWAS Catalog identifiers and records.",
+        parameters: { type: "object" },
+        execute: async () => ({ content: "{}" }),
+      },
+    ];
+
+    await adapter.createSession({
+      taskId: "task_test",
+      runId: "run_test",
+      cwd,
+      tools,
+      initialToolNames: ["execute_dataset_build"],
+    });
+
+    const prompt = upstream.configs[0]?.systemPrompt ?? "";
+    expect(prompt).toContain("Available curated skill/tool map");
+    expect(prompt).toContain("execute_dataset_build (active)");
+    expect(prompt).toContain("lookup_gwas_catalog");
+    expect(prompt).toContain("activate_agent_tools");
+  });
+
   test("a file at the skill-root path degrades like a missing root", async () => {
     const cwd = await tempDir();
     const file = path.join(cwd, "SKILL.md");

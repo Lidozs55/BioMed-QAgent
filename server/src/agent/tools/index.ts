@@ -18,6 +18,13 @@ export {
 } from "./guidance.js";
 export { noopHooks, type QueryStatus, type ToolHooks, type ToolServiceDeps } from "./tool-hooks.js";
 export {
+  LOOKUP_GWAS_CATALOG_TOOL_NAME,
+  createGwasCatalogTools,
+  lookupGwasCatalog,
+  type GwasCatalogQueryType,
+  type GwasCatalogLookupResult,
+} from "./gwas-catalog.js";
+export {
   createDynamicFamilyBuildTool,
   createDynamicFamilyBuildTools,
   createPrepareDynamicFamilyBuildTool,
