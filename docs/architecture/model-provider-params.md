@@ -79,7 +79,10 @@
   the Pi/OpenAI-compatible request payload by `applyModelProfileToPayload`.
   Portable fields (`max_tokens`/`temperature`/`top_p`) remain controlled by the
   active runtime settings; provider-specific fields like `reasoning_effort`,
-  `tool_choice` and `thinking` are forwarded as-is.
+  `tool_choice` and `thinking` are forwarded. `thinking` is normalized from a
+  JSON string (the registry/editor representation) to an object before the
+  request, and `top_logprobs` is omitted unless `logprobs` is true — both are
+  required to avoid OpenAI-compatible providers (e.g. DeepSeek) returning 400.
 
 ## Verified parameter facts (2026-08-24)
 
