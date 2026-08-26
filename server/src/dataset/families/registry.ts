@@ -44,6 +44,13 @@ import {
   GUT_MICROBIOME_TAXON_TABLE_ID,
 } from "./gut-microbiome/index.js";
 import {
+  createInheritedDiseaseEvidenceRegisteredTableRegistry,
+  inheritedDiseaseEvidenceSchemas,
+  INHERITED_DISEASE_EVIDENCE_FAMILY_ID,
+  inheritedDiseaseEvidenceTables,
+  inheritedDiseaseEvidenceValidationPolicy,
+} from "./inherited-disease-evidence/index.js";
+import {
   buildGeneExpressionSchema,
   buildGeneExpressionSchemaV2,
   buildProbeExpressionSchema,
@@ -103,6 +110,7 @@ function sortedUnique(values: readonly string[], label: string): string[] {
 const PRODUCTION_RUNTIME_BY_FAMILY: Readonly<Record<string, string>> = {
   gene_expression: "gene_expression.runtime.v1",
   literature_evidence: "registered_multitable.runtime.v1",
+  inherited_disease_gene_evidence: "registered_multitable.runtime.v1",
   target_evidence: "registered_multitable.runtime.v1",
   variant_evidence: "registered_multitable.runtime.v1",
   protein_structure: "registered_multitable.runtime.v1",
@@ -608,6 +616,47 @@ export function gutMicrobiomeFamilyDefinition(): DatasetFamilyDefinition {
   });
 }
 
+export function inheritedDiseaseEvidenceFamilyDefinition(): DatasetFamilyDefinition {
+  const registrations = createInheritedDiseaseEvidenceRegisteredTableRegistry().entries();
+  const providerSources = [
+    { source: "orphanet_en_product1", adapterId: "inherited_disease.orphanet_product1.v1" },
+    { source: "orphanet_en_product6", adapterId: "inherited_disease.orphanet_product6.v1" },
+    { source: "hgnc_approved", adapterId: "inherited_disease.hgnc_approved.v1" },
+    { source: "clinvar_gene_esearch", adapterId: "inherited_disease.clinvar_gene_esearch.v1" },
+    { source: "clingen_gene_validity", adapterId: "inherited_disease.clingen_gene_validity.v1" },
+  ] as const;
+  return registeredFamily({
+    id: INHERITED_DISEASE_EVIDENCE_FAMILY_ID,
+    schemas: inheritedDiseaseEvidenceSchemas,
+    profileRef: "inherited_disease_gene_evidence.release.v1",
+    validationPolicy: inheritedDiseaseEvidenceValidationPolicy(),
+    sources: [
+      ...providerSources.map(({ source, adapterId }) => ({
+        source,
+        adapter_id: adapterId,
+        schema_refs: [inheritedDiseaseEvidenceTables[2]!.schema.schema_id],
+        parameters_required: false,
+        parameter_schema: emptyAdapterParameterSchema(),
+        validateParameters: noAdapterParameters,
+      })),
+      ...registrations.map((registration) => {
+        const table = inheritedDiseaseEvidenceTables.find(
+          (entry) => entry.schema.schema_id === registration.schema.schema_id,
+        );
+        if (table === undefined) {
+          throw new Error(`inherited disease parser schema '${registration.schema.schema_id}' is not registered`);
+        }
+        return registeredSource({
+          source: `registered_inherited_disease_${table.tableId}`,
+          tableId: table.tableId,
+          adapterId: registration.parser.adapter_id,
+          schemaRef: registration.schema.schema_id,
+        });
+      }),
+    ],
+  });
+}
+
 export function bioactivityMeasurementFamilyDefinition(): DatasetFamilyDefinition {
   const entries = bioactivityTableEntries();
   const registrations = createBioactivityRegisteredTableRegistry().entries();
@@ -647,5 +696,6 @@ export function createDefaultDatasetFamilyRegistry(): DatasetFamilyRegistry {
     proteinStructureFamilyDefinition(),
     bioactivityMeasurementFamilyDefinition(),
     gutMicrobiomeFamilyDefinition(),
+    inheritedDiseaseEvidenceFamilyDefinition(),
   ]);
 }

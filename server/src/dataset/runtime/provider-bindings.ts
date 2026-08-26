@@ -27,6 +27,11 @@ export const PROVIDER_CARRIER_BINDINGS: readonly ProviderCarrierBinding[] = Obje
   { familyId: "protein_structure", source: "pdb", adapterId: "protein.structure.carrier.v1" },
   { familyId: "bioactivity_measurement", source: "chembl", adapterId: "bioactivity.chembl_json.v1" },
   { familyId: "bioactivity_measurement", source: "pubchem", adapterId: "bioactivity.pubchem_identity.v1" },
+  { familyId: "inherited_disease_gene_evidence", source: "orphanet_en_product1", adapterId: "inherited_disease.orphanet_product1.v1" },
+  { familyId: "inherited_disease_gene_evidence", source: "orphanet_en_product6", adapterId: "inherited_disease.orphanet_product6.v1" },
+  { familyId: "inherited_disease_gene_evidence", source: "hgnc_approved", adapterId: "inherited_disease.hgnc_approved.v1" },
+  { familyId: "inherited_disease_gene_evidence", source: "clinvar_gene_esearch", adapterId: "inherited_disease.clinvar_gene_esearch.v1" },
+  { familyId: "inherited_disease_gene_evidence", source: "clingen_gene_validity", adapterId: "inherited_disease.clingen_gene_validity.v1" },
 ]);
 
 export function providerCarrierBinding(

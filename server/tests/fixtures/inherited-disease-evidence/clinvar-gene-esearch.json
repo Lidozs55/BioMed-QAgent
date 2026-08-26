@@ -1,0 +1,10 @@
+{
+  "esearchresult": {
+    "count": "7",
+    "retmax": "0",
+    "retstart": "0",
+    "idlist": [],
+    "translationset": [],
+    "querytranslation": "NGD1[gene] AND (pathogenic[Clinical Significance] OR likely pathogenic[Clinical Significance])"
+  }
+}

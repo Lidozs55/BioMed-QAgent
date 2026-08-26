@@ -38,6 +38,7 @@ import { promotePublication, type PublishResult } from "../publish/publisher.js"
 import { validateMultiTableCandidate } from "../validation/multitable.js";
 import { SourceAssetRegistry } from "../../runtime/source-assets/registry.js";
 import { providerCarrierBinding } from "./provider-bindings.js";
+import { providerCarrierTransformForFamily, type ProviderCarrierTransformInput } from "./provider-transforms.js";
 import { parseProteinStructureCarrier } from "../families/protein-structure/provider.js";
 import { transformChemblRegisteredAssets } from "../families/bioactivity-measurement/chembl.js";
 import {
@@ -423,6 +424,7 @@ export async function executeRegisteredMultiTableBuild(
   const providerBindings = input.spec.source_bindings.filter((binding) =>
     providerCarrierBinding(family.id, binding.source, binding.adapter_id) !== null,
   );
+  const familyProviderTransform = providerCarrierTransformForFamily(family.id);
   if (providerBindings.length > 0) {
     if (providerBindings.length !== input.spec.source_bindings.length) {
       throw new Error("provider carrier dispatch cannot mix provider and registered-table bindings");
@@ -430,6 +432,7 @@ export async function executeRegisteredMultiTableBuild(
     const aggregateRows: Record<string, object[]> = {};
     const assetIds: string[] = [];
     const pubchemCarriers: BioactivityPubChemCarrier[] = [];
+    const familyTransformInputs: ProviderCarrierTransformInput[] = [];
     let chemblCarrierCount = 0;
     for (const binding of providerBindings) {
       const provider = providerCarrierBinding(family.id, binding.source, binding.adapter_id)!;
@@ -438,6 +441,17 @@ export async function executeRegisteredMultiTableBuild(
       const resolved = await carrierBytes(assetRegistry, assetId);
       sourceReceipts.set(assetId, resolved.receipt);
       assetIds.push(assetId);
+      if (familyProviderTransform !== null) {
+        familyTransformInputs.push({
+          familyId: family.id,
+          source: provider.source,
+          adapterId: provider.adapterId,
+          assetId,
+          receipt: resolved.receipt,
+          bytes: resolved.bytes,
+        });
+        continue;
+      }
       if (family.id === "bioactivity_measurement" &&
           provider.source === "pubchem" &&
           provider.adapterId === "bioactivity.pubchem_identity.v1") {
@@ -462,6 +476,12 @@ export async function executeRegisteredMultiTableBuild(
         receipt: resolved.receipt,
         bytes: resolved.bytes,
       });
+      for (const [tableId, rows] of Object.entries(expanded)) {
+        (aggregateRows[tableId] ??= []).push(...rows);
+      }
+    }
+    if (familyProviderTransform !== null) {
+      const expanded = familyProviderTransform(familyTransformInputs);
       for (const [tableId, rows] of Object.entries(expanded)) {
         (aggregateRows[tableId] ??= []).push(...rows);
       }

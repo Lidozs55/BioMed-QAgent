@@ -5,6 +5,6 @@
     "retstart": "0",
     "idlist": [],
     "translationset": [],
-    "querytranslation": "BTK[gene]"
+    "querytranslation": "BTK[gene] AND (pathogenic[Clinical Significance] OR likely pathogenic[Clinical Significance])"
   }
 }

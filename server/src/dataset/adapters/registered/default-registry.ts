@@ -5,6 +5,7 @@ import { createVariantEvidenceRegisteredTableRegistry } from "../../families/var
 import { createProteinStructureRegisteredTableRegistry } from "../../families/protein-structure/index.js";
 import { createBioactivityRegisteredTableRegistry } from "../../families/bioactivity-measurement/index.js";
 import { createGutMicrobiomeRegisteredTableRegistry } from "../../families/gut-microbiome/index.js";
+import { createInheritedDiseaseEvidenceRegisteredTableRegistry } from "../../families/inherited-disease-evidence/index.js";
 
 export function createDefaultRegisteredTableRegistry(): RegisteredTableRegistry {
   const registry = new RegisteredTableRegistry();
@@ -15,6 +16,7 @@ export function createDefaultRegisteredTableRegistry(): RegisteredTableRegistry 
     createProteinStructureRegisteredTableRegistry(),
     createBioactivityRegisteredTableRegistry(),
     createGutMicrobiomeRegisteredTableRegistry(),
+    createInheritedDiseaseEvidenceRegisteredTableRegistry(),
   ]) {
     for (const registration of familyRegistry.entries()) registry.register(registration);
   }

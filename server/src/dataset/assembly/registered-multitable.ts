@@ -6,6 +6,7 @@ import { assembleTargetEvidenceCandidate } from "../families/target-evidence/ind
 import { assembleVariantEvidenceCandidate } from "../families/variant-evidence/index.js";
 import { assembleProteinStructureCandidate } from "../families/protein-structure/index.js";
 import { assembleBioactivityCandidate } from "../families/bioactivity-measurement/index.js";
+import { inheritedDiseaseEvidenceAssembler } from "../families/inherited-disease-evidence/index.js";
 
 function results(input: FamilyAssemblyInput): Readonly<Record<string, OperationResultManifest>> {
   if (input.integrationResults === undefined) {
@@ -125,6 +126,8 @@ export const proteinStructureRegisteredAssembler: FamilyAssemblerHandler = {
     registeredAssetIds: input.registeredAssetIds,
   }),
 };
+
+export const inheritedDiseaseEvidenceRegisteredAssembler: FamilyAssemblerHandler = inheritedDiseaseEvidenceAssembler;
 
 export const bioactivityRegisteredAssembler: FamilyAssemblerHandler = {
   familyId: "bioactivity_measurement",
