@@ -558,6 +558,16 @@ export function proteinStructureFamilyDefinition(): DatasetFamilyDefinition {
     { tableId: "sources", schema: tables.source },
   ];
   const registrations = createProteinStructureRegisteredTableRegistry().entries();
+  // Multiple registered parsers may share one schema (e.g. JSON + XLSX media
+  // variants for the same table). The family dispatch surface keeps one
+  // canonical source per schema; the extra parser remains promoted in the
+  // registered-table registry for the browser recipe catalog and carrier path.
+  const seenSchemas = new Set<string>();
+  const canonicalRegistrations = registrations.filter((registration) => {
+    if (seenSchemas.has(registration.schema.schema_id)) return false;
+    seenSchemas.add(registration.schema.schema_id);
+    return true;
+  });
   return registeredFamily({
     id: PROTEIN_STRUCTURE_FAMILY_ID,
     schemas: entries.map((entry) => entry.schema),
@@ -569,7 +579,7 @@ export function proteinStructureFamilyDefinition(): DatasetFamilyDefinition {
       parameters_required: false,
       parameter_schema: emptyAdapterParameterSchema(),
       validateParameters: noAdapterParameters,
-    }, ...registrations.map((registration) => {
+    }, ...canonicalRegistrations.map((registration) => {
       const entry = entries.find((item) => item.schema.schema_id === registration.schema.schema_id)!;
       return registeredSource({ source: `registered_structure_${entry.tableId}`, tableId: entry.tableId, adapterId: registration.parser.adapter_id, schemaRef: registration.schema.schema_id });
     })],

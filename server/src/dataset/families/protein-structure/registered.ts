@@ -15,6 +15,13 @@ function fields(names: readonly string[]) {
   }));
 }
 
+function columns(names: readonly string[]) {
+  return names.map((name) => ({
+    source_column: name,
+    target_field: name,
+  }));
+}
+
 export function createProteinStructureRegisteredTableRegistry(): RegisteredTableRegistry {
   const schemas = buildProteinStructureTables();
   const registry = new RegisteredTableRegistry();
@@ -54,5 +61,21 @@ export function createProteinStructureRegisteredTableRegistry(): RegisteredTable
       },
     });
   }
+  // XLSX variant for the structure table: PDB/literature summary spreadsheets are a
+  // Core-owned promoted browser target, so the default browser recipe catalog can
+  // bind the spreadsheet media type without any Agent-supplied parser.
+  registry.register({
+    schema: schemas.structure,
+    parser: {
+      adapter_id: "registered_protein_structure_xlsx",
+      parser_version: "1_0_0",
+      schema_ref: schemas.structure.schema_id,
+      format: "xlsx",
+      sheet_name: "Data",
+      fields: columns(schemas.structure.fields.map((item) => item.name)),
+      media_types: ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
+      limits: LIMITS,
+    },
+  });
   return registry;
 }

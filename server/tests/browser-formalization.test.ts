@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -8,6 +9,10 @@ import { BrowserAcquisitionEvidenceStore } from "../src/runtime/browser-acquisit
 import { BrowserAcquisitionProposalStore } from "../src/runtime/browser-acquisition-proposal-store.js";
 import { SourceAssetRegistry } from "../src/runtime/source-assets/registry.js";
 import { BrowserFormalizationService } from "../src/dataset/acquisition/browser-formalization.js";
+import { createDefaultBrowserParserRecipeRegistry } from "../src/dataset/acquisition/browser-recipe-registry.js";
+
+const XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+const XLSX_FIXTURE = path.join(import.meta.dirname, "fixtures", "registered-table", "protein-structure.xlsx");
 
 function fixture(): { evidence: BrowserAcquisitionEvidence; proposal: BrowserAcquisitionProposal; review: HumanReviewRecord } {
   const evidence: BrowserAcquisitionEvidence = {
@@ -54,5 +59,46 @@ describe("BrowserFormalizationService", () => {
     const stored = await evidenceStore.put(parts.evidence); const proposalStore = new BrowserAcquisitionProposalStore(taskRoot);
     const proposal = await proposalStore.put({ ...parts.proposal, evidence_digest: stored.evidenceDigest });
     await expect(new BrowserFormalizationService({ evidenceStore, proposalStore, sourceAssetRegistry: new SourceAssetRegistry("task_formal", taskRoot), recipeRegistry: { resolve: () => ({ ref: { schema_version: "1.0", recipe_id: "fixture.tsv", recipe_version: 1, status: "PROMOTED", implementation_digest: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }, schema_ref: "fixture_schema", adapter_id: "fixture", parser_version: "1", media_types: ["text/tab-separated-values"] }), resolveRegisteredTable: () => { throw new Error("not reached"); } } }).formalize({ proposal, evidence: parts.evidence, review: { ...parts.review, evidence_digest: stored.evidenceDigest, decision: { action: "approve" } }, expectedHILEvidenceDigest: stored.evidenceDigest, acceptedBrowserEvidenceDigests: [stored.evidenceDigest] })).rejects.toThrow("was approve");
+  });
+
+  it("formalizes an XLSX carrier through the promoted recipe catalog and binds the evidence digest", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "browser-formal-"));
+    const taskRoot = path.join(root, "task"); await mkdir(path.join(taskRoot, "source_assets"), { recursive: true });
+    const bytes = await readFile(XLSX_FIXTURE);
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    await writeFile(path.join(taskRoot, "source_assets/source.xlsx"), bytes);
+    const evidence: BrowserAcquisitionEvidence = {
+      schema_version: "1.0", evidence_id: "browser_evidence_xlsx_formal", task_id: "task_formal_xlsx", run_id: "run_formal_xlsx",
+      requested_url: "https://example.org/protein-structure.xlsx", final_url: "https://example.org/protein-structure.xlsx", redirect_chain: [],
+      status: 200, media_type: XLSX_MEDIA_TYPE, retrieved_at: "2026-08-25T00:00:00.000Z", bytes_received: bytes.length,
+      sha256, browser_policy_revision: BROWSER_ACQUISITION_POLICY_REVISION,
+      source_asset_id: `asset_${sha256}`, source_id: "browser_source", relative_path: "source_assets/source.xlsx",
+      download_attempt_id: "download_attempt_xlsx_formal", provider_id: BROWSER_ACQUISITION_PROVIDER_ID, provider_implementation_digest: BROWSER_ACQUISITION_PROVIDER_IMPLEMENTATION_DIGEST,
+    };
+    const evidenceStore = new BrowserAcquisitionEvidenceStore({ taskRoot });
+    const stored = await evidenceStore.put(evidence);
+    const proposalStore = new BrowserAcquisitionProposalStore(taskRoot);
+    const proposal = await proposalStore.put({
+      schema_version: "1.0", proposal_id: "browser_proposal_xlsx_formal", evidence_digest: stored.evidenceDigest,
+      task_id: "task_formal_xlsx", run_id: "run_formal_xlsx", build_id: null, generation: 1,
+      recipe_id: "browser.registered.registered_protein_structure_xlsx.1_0_0", recipe_version: "1",
+      binding_id: "structure_binding", family_id: "protein_structure", schema_ref: "protein_structure.structure.v1",
+      table_id: "structures", input_role: "structures", intended_role: "carrier", status: "accepted",
+      created_at: evidence.retrieved_at, updated_at: evidence.retrieved_at, failure_reason: null,
+    });
+    const review: HumanReviewRecord = { schema_version: "1.0", review_id: "review_xlsx_formal", request_id: "hil_xlsx_formal", decision: { action: "accept" }, reviewer: "user", reviewed_at: evidence.retrieved_at, evidence_digest: stored.evidenceDigest, reason: null };
+
+    const result = await new BrowserFormalizationService({
+      evidenceStore, proposalStore,
+      sourceAssetRegistry: new SourceAssetRegistry("task_formal_xlsx", taskRoot),
+      recipeRegistry: createDefaultBrowserParserRecipeRegistry(),
+    }).formalize({ proposal, evidence, review, expectedHILEvidenceDigest: stored.evidenceDigest, acceptedBrowserEvidenceDigests: [stored.evidenceDigest] });
+
+    expect(result.registration.asset_ref.role).toBe("carrier");
+    expect(result.registration.sha256).toBe(sha256);
+    expect(result.registration.size_bytes).toBe(bytes.length);
+    expect(result.provenance.provider_id).toBe(BROWSER_ACQUISITION_PROVIDER_ID);
+    expect(result.requestIdentityDigest).toMatch(/^[0-9a-f]{64}$/);
+    expect(result.proposal.status).toBe("formalized");
   });
 });
