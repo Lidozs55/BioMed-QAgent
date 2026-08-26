@@ -1,19 +1,21 @@
+/*
 import { useState } from "react";
 import { PlusIcon, StarIcon } from "@phosphor-icons/react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+
 import { Spinner } from "@/components/ui/spinner";
-import { Textarea } from "@/components/ui/textarea";
+
+import { ModelDetailDialog } from "@/components/settings/model/ModelDetailDialog";
 import { ModelImportSheet } from "@/components/settings/model/ModelImportSheet";
-import { ParameterEditor } from "@/components/settings/model/ParameterEditor";
+
 import type {
   ManagedModelInfo,
-  ModelCapabilities,
+  
   ModelSettings,
-  ParameterSpec,
+  
   ProviderInfo,
   SettingsAPIClient,
 } from "@/hooks/useAPI";
@@ -34,7 +36,7 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : "请求失败";
 }
 
-/** 来源标签：API/目录导入的模型显示供应商名称，手动添加的显示“手动配置”。 */
+/** 来源标签：API/目录导入的模型显示供应商名称，手动添加的显示“手动配置”。 * /
 function sourceBadgeLabel(model: ManagedModelInfo): string {
   return model.source === "manual" ? "手动配置" : model.provider_name;
 }
@@ -72,22 +74,28 @@ export function ModelListManager({
   const [sheetOpen, setSheetOpen] = useState(false);
   const [activatingId, setActivatingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editParams, setEditParams] = useState<Record<string, unknown>>({});
-  const [editContextWindow, setEditContextWindow] = useState("");
-  const [editJsonOpen, setEditJsonOpen] = useState(false);
-  const [editJsonText, setEditJsonText] = useState("");
-  const [editJsonError, setEditJsonError] = useState<string | null>(null);
-  const [savingEdit, setSavingEdit] = useState(false);
+  const [detailModel, setDetailModel] = useState<ManagedModelInfo | null>(null);
+    const [detailOpen, setDetailOpen] = useState(false);
+  
+  
+  
+  
+  
+  
 
-  const editingModel = managedModels.find((model) => model.id === editingId) ?? null;
+  
 
   const openAdd = () => {
     setSheetOpen(true);
   };
 
-  const toggleEdit = (model: ManagedModelInfo) => {
-    if (editingId === model.id) {
+  const openDetail = (model: ManagedModelInfo) => {
+      setDetailModel(model);
+      setDetailOpen(true);
+
+
+    
+    
       setEditingId(null);
       return;
     }
@@ -145,7 +153,7 @@ export function ModelListManager({
     }
   };
 
-  /** 上下文窗口仅在用户改动后才随保存提交；清空表示不限制（未知）。 */
+  /** 上下文窗口仅在用户改动后才随保存提交；清空表示不限制（未知）。 * /
   const saveEdit = async (model: ManagedModelInfo) => {
     const raw = editContextWindow.trim();
     const current = model.context_window === null ? "" : String(model.context_window);
@@ -158,7 +166,7 @@ export function ModelListManager({
       const parsed = Number(raw);
       if (!Number.isFinite(parsed) || parsed <= 0) {
         toast.error("上下文窗口必须为正整数（Tokens）");
-        return;
+
       }
       contextWindow = parsed;
     }
@@ -404,3 +412,7 @@ export function ModelListManager({
     </div>
   );
 }
+*/
+
+export { ModelListManager } from "./ModelListManagerImpl";
+
