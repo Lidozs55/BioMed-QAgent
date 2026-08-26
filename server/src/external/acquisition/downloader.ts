@@ -91,6 +91,14 @@ export interface AcquireSourceOptions {
   expectedMediaTypes?: ReadonlySet<string>;
   accept?: string;
   requestHeaders?: Readonly<Record<string, string>>;
+  /**
+   * HTTP method for this acquisition; defaults to GET. POST sends `body` as
+   * JSON and is never resumable (no Range support); GET behavior is
+   * unchanged and remains the only resumable method.
+   */
+  method?: "GET" | "POST";
+  /** Raw request body for POST acquisitions; forbidden for GET. */
+  body?: string;
   progress?: AcquisitionProgress;
   signal?: AbortSignal;
   timeoutMs?: number;
@@ -276,12 +284,17 @@ export async function acquireSource(options: AcquireSourceOptions): Promise<Acqu
     expectedMediaTypes,
     accept = "text/tab-separated-values",
     requestHeaders,
+    method = "GET",
+    body,
     progress,
     signal,
     allowedHosts = CURATED_SOURCE_HOSTS,
     resolve,
   } = options;
   const resolver = resolve ?? client.resolve;
+  if (method !== "GET" && method !== "POST") throw new TypeError("acquisition HTTP method must be GET or POST");
+  if (method === "POST" && body === undefined) throw new TypeError("POST acquisition requires a JSON request body");
+  if (method === "GET" && body !== undefined) throw new TypeError("GET acquisition must not carry a request body");
   assertSafeFilename(filename);
   const dirs = taskWorkDirs(workdirRoot);
   await ensureAcquisitionDirs(dirs);
@@ -306,7 +319,8 @@ export async function acquireSource(options: AcquireSourceOptions): Promise<Acqu
       sourceDatabase: source.database,
     });
   };
-  let resumeOffset = options.resumeFromBytes ?? 0;
+  // POST bodies are not resumable: Range resumption is a GET-only concern.
+  let resumeOffset = method === "POST" ? 0 : options.resumeFromBytes ?? 0;
   if (resumeOffset > 0) {
     const partStat = await stat(partPath).catch(() => null);
     if (partStat === null || !partStat.isFile() || partStat.size !== resumeOffset) {
@@ -345,7 +359,10 @@ export async function acquireSource(options: AcquireSourceOptions): Promise<Acqu
     if (maxBytes <= 0) {
       throw new AcquisitionError("validation_error", "max_bytes must be positive");
     }
-    const requestHash = canonicalRequestHash(source.database, source.accession, source.url);
+    const requestVariant = method !== "GET" || body !== undefined
+      ? { method, body: body ?? "" }
+      : undefined;
+    const requestHash = canonicalRequestHash(source.database, source.accession, source.url, requestVariant);
     const cached = await cache.readMetadata(requestHash);
     if (cached !== null) {
       const cachedSha = cached.sha256;
@@ -416,12 +433,17 @@ export async function acquireSource(options: AcquireSourceOptions): Promise<Acqu
     }
     const headers: Record<string, string> = { ...requestHeaders };
     headers["Accept"] = accept;
+    if (method === "POST" && headers["Content-Type"] === undefined && headers["content-type"] === undefined) {
+      headers["Content-Type"] = "application/json";
+    }
     if (resumeOffset > 0) {
       headers["Range"] = `bytes=${resumeOffset}-`;
     }
     let response: Awaited<ReturnType<PublicHttpClient["request"]>>;
     try {
       response = await client.request(source.url, {
+        method,
+        body,
         headers,
         signal,
         timeoutMs: options.timeoutMs,

@@ -2,6 +2,7 @@ import type { AcquisitionProviderHandler } from "./runtime.js";
 import { createChemblFilesProvider, CHEMBL_FILES_PROVIDER_ID } from "./chembl-provider.js";
 import { createGdcFilesProvider, createGeoFilesProvider, GDC_FILES_PROVIDER_ID, GEO_FILES_PROVIDER_ID } from "./expression-providers.js";
 import { createFixedBiomedicalProviders, FIXED_BIOMEDICAL_PROVIDER_IDS } from "./biomedical-providers.js";
+import { createGmrepoFilesProvider, GMREPO_FILES_PROVIDER_ID } from "./gmrepo-provider.js";
 import { createExtendedAcquisitionProviders, EXTENDED_PROVIDER_IDS } from "./extended-providers.js";
 
 export type AcquisitionParameterContract = "fixed" | "chembl" | "pubchem" | "pubmed";
@@ -43,6 +44,7 @@ export const CORE_ACQUISITION_PROVIDER_DESCRIPTORS: readonly CoreAcquisitionProv
   descriptor(EXTENDED_PROVIDER_IDS.openfda, "openfda_faers", "fixed", "One drug generic name per binding.", "utf8", "openfda"),
   descriptor(EXTENDED_PROVIDER_IDS.gwasCatalog, "gwas_catalog", "fixed", "One GCST study accession or rsID per binding.", "utf8", null),
   descriptor(EXTENDED_PROVIDER_IDS.europePmcSupplementary, "europepmc_supplementary", "fixed", "One PMCID per binding; retrieves the official supplementary ZIP carrier.", "binary_archive", null),
+  descriptor(GMREPO_FILES_PROVIDER_ID, "gmrepo", "fixed", "One MeSH disease ID per binding; POSTs the official GMRepo API for associated-species prevalence."),
 ]);
 
 export const DYNAMIC_ACQUISITION_PROVIDER_DESCRIPTORS: readonly CoreAcquisitionProviderDescriptor[] =
@@ -55,5 +57,6 @@ export function createCoreAcquisitionProviders(): readonly AcquisitionProviderHa
     createGdcFilesProvider(),
     ...createFixedBiomedicalProviders(),
     ...createExtendedAcquisitionProviders(),
+    createGmrepoFilesProvider(),
   ];
 }
