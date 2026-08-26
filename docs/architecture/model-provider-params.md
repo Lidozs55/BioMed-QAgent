@@ -40,6 +40,13 @@
   On startup, catalog- and API-sourced rows whose ids appear in the local
   catalog are refreshed; rows explicitly edited by the user (`user`, including
   all `manual` rows) are never overwritten.
+- The model list editor allows editing the context window of **any** model,
+  including API/catalog-sourced ones (`PUT /model-registry/models/{id}` with
+  `context_window`; empty string on the client clears it to `null` = 未知).
+  The edit marks the row `metadata_source: user` so catalog refresh skips it,
+  and when the edited model is the active one the runtime
+  `settings.context_window` is synced immediately (same rule as the startup
+  catalog sync), so the Pi session and the context-budget UI follow at once.
 
 ## Active model selection
 

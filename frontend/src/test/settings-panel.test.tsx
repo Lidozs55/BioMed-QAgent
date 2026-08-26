@@ -694,6 +694,27 @@ describe("SettingsPanel model registry", () => {
     expect(screen.getAllByText("DeepSeek").length).toBeGreaterThan(0);
   });
 
+  it("edits the context window of an API-sourced model inline", async () => {
+    const api = mockApi();
+    renderSettings(api);
+
+    const modelRow = (await screen.findByText("DeepSeek Reasoner", {}, { timeout: 5_000 })).closest("li");
+    expect(modelRow).not.toBeNull();
+    fireEvent.click(within(modelRow as HTMLElement).getByRole("button", { name: "编辑" }));
+
+    const contextInput = within(modelRow as HTMLElement).getByRole("spinbutton", { name: "上下文窗口" });
+    expect(contextInput).toHaveValue(65536);
+    fireEvent.change(contextInput, { target: { value: "131072" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存参数" }));
+
+    await waitFor(() => expect(api.updateManagedModel).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.updateManagedModel).mock.calls[0]?.[0]).toBe("model-1");
+    expect(vi.mocked(api.updateManagedModel).mock.calls[0]?.[1]).toMatchObject({
+      context_window: 131072,
+      params: { temperature: 0.5 },
+    });
+  });
+
   it("shows a manual-config badge for manually added models", async () => {
     const api = mockApi({
       fetchManagedModels: vi

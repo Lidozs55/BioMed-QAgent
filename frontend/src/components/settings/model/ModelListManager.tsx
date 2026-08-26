@@ -4,6 +4,7 @@ import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { ModelImportSheet } from "@/components/settings/model/ModelImportSheet";
@@ -73,6 +74,7 @@ export function ModelListManager({
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editParams, setEditParams] = useState<Record<string, unknown>>({});
+  const [editContextWindow, setEditContextWindow] = useState("");
   const [editJsonOpen, setEditJsonOpen] = useState(false);
   const [editJsonText, setEditJsonText] = useState("");
   const [editJsonError, setEditJsonError] = useState<string | null>(null);
@@ -91,6 +93,7 @@ export function ModelListManager({
     }
     setEditingId(model.id);
     setEditParams({ ...model.params });
+    setEditContextWindow(model.context_window === null ? "" : String(model.context_window));
     setEditJsonOpen(false);
     setEditJsonError(null);
   };
@@ -137,10 +140,29 @@ export function ModelListManager({
     }
   };
 
+  /** 上下文窗口仅在用户改动后才随保存提交；清空表示不限制（未知）。 */
   const saveEdit = async (model: ManagedModelInfo) => {
+    const raw = editContextWindow.trim();
+    const current = model.context_window === null ? "" : String(model.context_window);
+    let contextWindow: number | null | undefined;
+    if (raw === current) {
+      contextWindow = undefined;
+    } else if (raw === "") {
+      contextWindow = null;
+    } else {
+      const parsed = Number(raw);
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        toast.error("上下文窗口必须为正整数（Tokens）");
+        return;
+      }
+      contextWindow = parsed;
+    }
     setSavingEdit(true);
     try {
-      await api.updateManagedModel(model.id, { params: editParams });
+      await api.updateManagedModel(model.id, {
+        params: editParams,
+        ...(contextWindow !== undefined ? { context_window: contextWindow } : {}),
+      });
       toast.success(`已保存 ${model.name} 的参数`);
       setEditingId(null);
       onChanged();
@@ -275,7 +297,18 @@ export function ModelListManager({
                         <dt className="text-muted-foreground">模型 ID</dt>
                         <dd className="truncate">{model.model_id}</dd>
                         <dt className="text-muted-foreground">上下文窗口</dt>
-                        <dd>{formatContextWindow(model.context_window)}</dd>
+                        <dd>
+                          <Input
+                            type="number"
+                            min={1}
+                            value={editContextWindow}
+                            onChange={(event) => setEditContextWindow(event.target.value)}
+                            className="h-8 w-40"
+                            aria-label="上下文窗口"
+                            title="上下文窗口（Tokens），清空表示未知"
+                            placeholder="未知"
+                          />
+                        </dd>
                         <dt className="text-muted-foreground">最大输出</dt>
                         <dd>{formatContextWindow(model.max_output_tokens)}</dd>
                         <dt className="text-muted-foreground">能力</dt>
