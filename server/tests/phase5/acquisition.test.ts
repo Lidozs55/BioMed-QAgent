@@ -648,11 +648,14 @@ describe("curated host allowlist", () => {
       "ftp.ncbi.nlm.nih.gov",
       "pubchem.ncbi.nlm.nih.gov",
       "reactome.org",
+      "search.clinicalgenome.org",
       "search.rcsb.org",
+      "storage.googleapis.com",
       "tcga-xena-hub.s3.us-east-1.amazonaws.com",
       "toil-xena-hub.s3.us-east-1.amazonaws.com",
       "www.ebi.ac.uk",
       "www.ncbi.nlm.nih.gov",
+      "www.orphadata.com",
     ]);
   });
 });

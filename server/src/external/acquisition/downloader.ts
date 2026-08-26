@@ -75,6 +75,10 @@ export const CURATED_SOURCE_HOSTS: ReadonlySet<string> = new Set([
   "api.unpaywall.org",
   // Europe PMC (PMCID → fullTextXML)
   "www.ebi.ac.uk",
+  // Gold9 official biomedical response forms
+  "www.orphadata.com",
+  "storage.googleapis.com",
+  "search.clinicalgenome.org",
 ]);
 
 export interface AcquireSourceOptions {

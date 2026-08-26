@@ -4,6 +4,7 @@ import { createGdcFilesProvider, createGeoFilesProvider, GDC_FILES_PROVIDER_ID, 
 import { createFixedBiomedicalProviders, FIXED_BIOMEDICAL_PROVIDER_IDS } from "./biomedical-providers.js";
 import { createGmrepoFilesProvider, GMREPO_FILES_PROVIDER_ID } from "./gmrepo-provider.js";
 import { createExtendedAcquisitionProviders, EXTENDED_PROVIDER_IDS } from "./extended-providers.js";
+import { createGold9AcquisitionProviders, GOLD9_PROVIDER_IDS } from "./gold9-providers.js";
 
 export type AcquisitionParameterContract = "fixed" | "chembl" | "pubchem" | "pubmed";
 
@@ -45,6 +46,11 @@ export const CORE_ACQUISITION_PROVIDER_DESCRIPTORS: readonly CoreAcquisitionProv
   descriptor(EXTENDED_PROVIDER_IDS.gwasCatalog, "gwas_catalog", "fixed", "One GCST study accession or rsID per binding.", "utf8", null),
   descriptor(EXTENDED_PROVIDER_IDS.europePmcSupplementary, "europepmc_supplementary", "fixed", "One PMCID per binding; retrieves the official supplementary ZIP carrier.", "binary_archive", null),
   descriptor(GMREPO_FILES_PROVIDER_ID, "gmrepo", "fixed", "One MeSH disease ID per binding; POSTs the official GMRepo API for associated-species prevalence."),
+  descriptor(GOLD9_PROVIDER_IDS.orphanetProduct1, "orphanet_en_product1", "fixed", "The fixed en_product1 Orphanet XML response form.", "utf8", null),
+  descriptor(GOLD9_PROVIDER_IDS.orphanetProduct6, "orphanet_en_product6", "fixed", "The fixed en_product6 Orphanet XML response form.", "utf8", null),
+  descriptor(GOLD9_PROVIDER_IDS.hgncApproved, "hgnc_approved", "fixed", "The current HGNC approved complete-set TSV.", "utf8", null),
+  descriptor(GOLD9_PROVIDER_IDS.clinvarGeneEsearch, "clinvar_gene_esearch", "fixed", "One HGNC gene symbol per ClinVar ESearch JSON response.", "utf8", "clinvar"),
+  descriptor(GOLD9_PROVIDER_IDS.clingenGeneValidity, "clingen_gene_validity", "fixed", "The current ClinGen gene-validity CSV response.", "utf8", null),
 ]);
 
 export const DYNAMIC_ACQUISITION_PROVIDER_DESCRIPTORS: readonly CoreAcquisitionProviderDescriptor[] =
@@ -58,5 +64,6 @@ export function createCoreAcquisitionProviders(): readonly AcquisitionProviderHa
     ...createFixedBiomedicalProviders(),
     ...createExtendedAcquisitionProviders(),
     createGmrepoFilesProvider(),
+    ...createGold9AcquisitionProviders(),
   ];
 }
