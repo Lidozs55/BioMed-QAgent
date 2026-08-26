@@ -12,6 +12,7 @@ import {
   GEO_FILES_PROVIDER_ID,
 } from "./expression-providers.js";
 import { GOLD9_PROVIDER_IDS } from "./gold9-providers.js";
+import { NCBI_TAXONOMY_FILES_PROVIDER_ID } from "./ncbi-taxonomy-provider.js";
 
 export const FIXED_BIOMEDICAL_PROVIDER_IDS = Object.freeze({
   pdb: "pdb.files.v1",
@@ -281,6 +282,7 @@ export function fixedBiomedicalAcquisitionParameters(options: {
     GEO_FILES_PROVIDER_ID,
     GDC_FILES_PROVIDER_ID,
     ...Object.values(GOLD9_PROVIDER_IDS),
+    NCBI_TAXONOMY_FILES_PROVIDER_ID,
   ]);
   if (!providerIds.has(options.providerId ?? "")) return null;
   if (

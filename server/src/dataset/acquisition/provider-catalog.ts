@@ -5,6 +5,7 @@ import { createFixedBiomedicalProviders, FIXED_BIOMEDICAL_PROVIDER_IDS } from ".
 import { createGmrepoFilesProvider, GMREPO_FILES_PROVIDER_ID } from "./gmrepo-provider.js";
 import { createExtendedAcquisitionProviders, EXTENDED_PROVIDER_IDS } from "./extended-providers.js";
 import { createGold9AcquisitionProviders, GOLD9_PROVIDER_IDS } from "./gold9-providers.js";
+import { createNcbiTaxonomyFilesProvider, NCBI_TAXONOMY_FILES_PROVIDER_ID } from "./ncbi-taxonomy-provider.js";
 
 export type AcquisitionParameterContract = "fixed" | "chembl" | "pubchem" | "pubmed";
 
@@ -51,6 +52,7 @@ export const CORE_ACQUISITION_PROVIDER_DESCRIPTORS: readonly CoreAcquisitionProv
   descriptor(GOLD9_PROVIDER_IDS.hgncApproved, "hgnc_approved", "fixed", "The current HGNC approved complete-set TSV.", "utf8", null),
   descriptor(GOLD9_PROVIDER_IDS.clinvarGeneEsearch, "clinvar_gene_esearch", "fixed", "One HGNC gene symbol per ClinVar ESearch JSON response.", "utf8", "clinvar"),
   descriptor(GOLD9_PROVIDER_IDS.clingenGeneValidity, "clingen_gene_validity", "fixed", "The current ClinGen gene-validity CSV response.", "utf8", null),
+  descriptor(NCBI_TAXONOMY_FILES_PROVIDER_ID, "ncbi_taxonomy", "fixed", "One NCBI Taxonomy name or taxid per binding; fixed E-utilities ESearch JSON or EFetch XML response.", "utf8", "ncbi_taxonomy"),
 ]);
 
 export const DYNAMIC_ACQUISITION_PROVIDER_DESCRIPTORS: readonly CoreAcquisitionProviderDescriptor[] =
@@ -65,5 +67,6 @@ export function createCoreAcquisitionProviders(): readonly AcquisitionProviderHa
     ...createExtendedAcquisitionProviders(),
     createGmrepoFilesProvider(),
     ...createGold9AcquisitionProviders(),
+    createNcbiTaxonomyFilesProvider(),
   ];
 }

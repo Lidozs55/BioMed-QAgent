@@ -146,6 +146,7 @@ export const DATABASE = {
   ORPHANET: "orphanet",
   HGNC: "hgnc",
   CLINGEN: "clingen",
+  NCBI_TAXONOMY: "ncbi_taxonomy",
 } as const;
 export type Database = (typeof DATABASE)[keyof typeof DATABASE];
 
@@ -234,6 +235,7 @@ export const SOURCE_CAPABILITIES: Record<Database, SourceCapability> = {
   orphanet: "research_only",
   hgnc: "research_only",
   clingen: "research_only",
+  ncbi_taxonomy: "research_only",
 };
 
 // Stable identifier aliases users may pass to pipeline/skill entry points
@@ -267,6 +269,8 @@ export const DATABASE_IDENTIFIER_ALIASES: Record<string, Database> = {
   clingen: "clingen",
   clingen_gene_validity: "clingen",
   clinvar_gene_esearch: "clinvar",
+  ncbi_taxonomy: "ncbi_taxonomy",
+  taxonomy: "ncbi_taxonomy",
 };
 
 /** Resolve a user-facing database alias to its canonical Database value. */
