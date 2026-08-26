@@ -544,10 +544,12 @@ describe("SettingsPanel model registry", () => {
       source: "api",
     });
 
-    // The imported model now appears in the maintained list and can be saved.
-    await waitFor(() => expect(api.fetchManagedModels).toHaveBeenCalled());
-    expect(screen.getByRole("button", { name: "保存参数" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "保存参数" }));
+    // The imported model now appears in the maintained list; save its
+    // parameters through the floating detail dialog.
+    const sheetDialog = await screen.findByRole("dialog", { name: "添加 / 管理模型" });
+    fireEvent.click(await within(sheetDialog).findByRole("button", { name: "详情" }));
+    const detailDialog = await screen.findByRole("dialog", { name: "模型详情" });
+    fireEvent.click(within(detailDialog).getByRole("button", { name: "保存参数" }));
     await waitFor(() => expect(api.updateManagedModel).toHaveBeenCalledTimes(1));
   });
 
@@ -614,34 +616,30 @@ describe("SettingsPanel model registry", () => {
     fireEvent.click(addModel);
     await screen.findAllByText("DeepSeek Chat");
 
-    // Select the model in the right column (left list + right row both match).
-    const modelRows = await screen.findAllByRole("button", { name: /DeepSeek Chat/ });
-    fireEvent.click(modelRows[1]);
+    // Open the floating detail dialog from the maintained model row.
+    const sheetDialog = await screen.findByRole("dialog", { name: "添加 / 管理模型" });
+    fireEvent.click(await within(sheetDialog).findByRole("button", { name: "详情" }));
+    const detailDialog = await screen.findByRole("dialog", { name: "模型详情" });
 
-    // The detail toggle in the header collapses and re-opens the detail area.
-    fireEvent.click(screen.getByRole("button", { name: "收起详情" }));
-    expect(screen.queryByRole("button", { name: "配置 JSON" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "详情" }));
+    fireEvent.click(within(detailDialog).getByRole("button", { name: "配置 JSON" }));
 
-    fireEvent.click(screen.getByRole("button", { name: "配置 JSON" }));
-
-    const jsonArea = screen.getByRole("textbox", {
+    const jsonArea = within(detailDialog).getByRole("textbox", {
       name: "配置 JSON",
     }) as HTMLTextAreaElement;
     expect(jsonArea.value).toContain('"temperature"');
     expect(jsonArea.value).toContain('"max_tokens"');
 
-    fireEvent.click(screen.getByRole("button", { name: "恢复默认" }));
+    fireEvent.click(within(detailDialog).getByRole("button", { name: "恢复默认" }));
     expect(jsonArea.value).toContain('"temperature": 0.7');
 
     fireEvent.change(jsonArea, {
       target: { value: '{\n  "temperature": 0.9\n}' },
     });
-    fireEvent.click(screen.getByRole("button", { name: "格式化" }));
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    fireEvent.click(within(detailDialog).getByRole("button", { name: "格式化" }));
+    fireEvent.click(within(detailDialog).getByRole("button", { name: "应用" }));
 
     expect(screen.getByLabelText("Temperature")).toHaveValue(0.9);
-    fireEvent.click(screen.getByRole("button", { name: "保存参数" }));
+    fireEvent.click(within(detailDialog).getByRole("button", { name: "保存参数" }));
     await waitFor(() => expect(api.updateManagedModel).toHaveBeenCalledTimes(1));
     expect(vi.mocked(api.updateManagedModel).mock.calls[0]?.[1]).toMatchObject({
       params: { temperature: 0.9 },
@@ -677,13 +675,14 @@ describe("SettingsPanel model registry", () => {
     }, { timeout: 10_000 });
   });
 
-  it("edits a maintained model inline without opening the add-model dialog", async () => {
+  it("edits a maintained model via the floating detail dialog without opening the add-model dialog", async () => {
     const api = mockApi();
     renderSettings(api);
 
     const modelRow = (await screen.findByText("DeepSeek Reasoner", {}, { timeout: 5_000 })).closest("li");
     expect(modelRow).not.toBeNull();
-    fireEvent.click(within(modelRow as HTMLElement).getByRole("button", { name: "编辑" }));
+    fireEvent.click(within(modelRow as HTMLElement).getByRole("button", { name: "详情" }));
+    expect(screen.getByRole("dialog", { name: "模型详情" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "保存参数" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "配置 JSON" })).toBeInTheDocument();
     expect(
@@ -694,18 +693,19 @@ describe("SettingsPanel model registry", () => {
     expect(screen.getAllByText("DeepSeek").length).toBeGreaterThan(0);
   });
 
-  it("edits the context window of an API-sourced model inline", async () => {
+  it("edits the context window of an API-sourced model in the floating detail dialog", async () => {
     const api = mockApi();
     renderSettings(api);
 
     const modelRow = (await screen.findByText("DeepSeek Reasoner", {}, { timeout: 5_000 })).closest("li");
     expect(modelRow).not.toBeNull();
-    fireEvent.click(within(modelRow as HTMLElement).getByRole("button", { name: "编辑" }));
+    fireEvent.click(within(modelRow as HTMLElement).getByRole("button", { name: "详情" }));
 
-    const contextInput = within(modelRow as HTMLElement).getByRole("spinbutton", { name: "上下文窗口" });
+    const detailDialog = await screen.findByRole("dialog", { name: "模型详情" });
+    const contextInput = within(detailDialog).getByRole("spinbutton", { name: "上下文窗口" });
     expect(contextInput).toHaveValue(65536);
     fireEvent.change(contextInput, { target: { value: "131072" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存参数" }));
+    fireEvent.click(within(detailDialog).getByRole("button", { name: "保存参数" }));
 
     await waitFor(() => expect(api.updateManagedModel).toHaveBeenCalledTimes(1));
     expect(vi.mocked(api.updateManagedModel).mock.calls[0]?.[0]).toBe("model-1");
@@ -721,16 +721,17 @@ describe("SettingsPanel model registry", () => {
 
     const modelRow = (await screen.findByText("DeepSeek Reasoner", {}, { timeout: 5_000 })).closest("li");
     expect(modelRow).not.toBeNull();
-    fireEvent.click(within(modelRow as HTMLElement).getByRole("button", { name: "编辑" }));
+    fireEvent.click(within(modelRow as HTMLElement).getByRole("button", { name: "详情" }));
 
+    const detailDialog = await screen.findByRole("dialog", { name: "模型详情" });
     // 打开 JSON 视图：按钮文案切换为“返回图形编辑”。
-    fireEvent.click(screen.getByRole("button", { name: "配置 JSON" }));
-    expect(screen.getByLabelText("配置 JSON")).toBeInTheDocument();
+    fireEvent.click(within(detailDialog).getByRole("button", { name: "配置 JSON" }));
+    expect(within(detailDialog).getByLabelText("配置 JSON")).toBeInTheDocument();
 
     // 点击“返回图形编辑”：JSON 收起、图形视图恢复，且不触发保存。
-    fireEvent.click(screen.getByRole("button", { name: "返回图形编辑" }));
-    expect(screen.queryByLabelText("配置 JSON")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "配置 JSON" })).toBeInTheDocument();
+    fireEvent.click(within(detailDialog).getByRole("button", { name: "返回图形编辑" }));
+    expect(within(detailDialog).queryByLabelText("配置 JSON")).not.toBeInTheDocument();
+    expect(within(detailDialog).getByRole("button", { name: "配置 JSON" })).toBeInTheDocument();
     expect(api.updateManagedModel).not.toHaveBeenCalled();
   });
 
