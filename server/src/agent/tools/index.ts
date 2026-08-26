@@ -36,6 +36,10 @@ export {
   type PrepareDynamicFamilyBuildToolOptions,
 } from "./dynamic-family-build.js";
 export {
+  createDatasetRoutePreflightTool,
+  datasetRouteCapabilities,
+} from "./dataset-route-preflight.js";
+export {
   createBusinessToolBundle,
   type BusinessToolBundle,
   type BusinessToolBundleContext,

@@ -53,6 +53,12 @@ provider。Dynamic transform 接受 UTF-8 与受 `temp_bytes` 上限约束的 gz
 archive 只有在 Core 确定性选择附件、sheet 并提交可验证 extraction result 后才能进入
 Dynamic schema；仅下载并注册 archive 不等于可消费的 Dynamic input。
 
+Agent 在数据获取前通过无副作用的 `inspect_dataset_build_routes` 查看该能力清单的当前
+投影。输出严格区分 static exact match、Dynamic 可直接绑定的 UTF-8/gzip UTF-8 provider，
+以及 acquisition-only binary carrier；provider 已接线只证明可信 acquisition/输入解码，
+不证明 FamilySpec/Projection/transform/源站可达性或 Publication closure。具体 Dynamic
+提交仍由 `acquisition_requests` schema 和 `prepare_dynamic_family_build` receipt 校验。
+
 ---
 
 ## 5. 执行模型：服务端固定构建骨架

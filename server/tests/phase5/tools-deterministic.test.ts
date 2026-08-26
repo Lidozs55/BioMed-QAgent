@@ -186,6 +186,7 @@ describe("business tool bundle (P5-02/P5-12)", () => {
       "search_local_cache",
       "describe_local_cache",
       "get_cache_dataset",
+      "inspect_dataset_build_routes",
       "prepare_dynamic_family_build",
       "submit_dynamic_family_build",
     ]));

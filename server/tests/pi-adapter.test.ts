@@ -108,17 +108,16 @@ describe("Pi system prompt", () => {
       /never call a provisional workspace CSV validated, published, formally complete, or a Dataset Core Publication/i,
     );
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
-      /static route only when the required family, schema, source, and topology are present in the static tool schema/i,
+      /static route only for an exact listed family, schema, source, and topology match/i,
     );
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
-      /do not use static validation failure or absence from its enums as evidence that the dynamic route is unavailable/i,
+      /never infer provider availability from static enums/i,
     );
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
-      /a provider listed in the dynamic acquisition_requests schema is wired for Dynamic Family acquisition/i,
+      /a dynamic-bindable provider is wired for trusted acquisition and input decoding/i,
     );
-    expect(PHASE1_SYSTEM_PROMPT).toMatch(
-      /gwas-catalog\.associations\.v1/i,
-    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/Core-acquisition-only binary carrier/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/call inspect_dataset_build_routes/i);
   });
 
   test("publishes a bounded tool catalog and cumulatively activates optional schemas", async () => {
@@ -131,13 +130,15 @@ describe("Pi system prompt", () => {
     });
     const core = tool("execute_dataset_build", "Execute a trusted Dataset Core build.");
     const prepare = tool("prepare_dynamic_family_build", "Prepare a Dynamic Family build.");
+    const inspect = tool("inspect_dataset_build_routes", "Inspect formal Dataset Core routes.");
     const pubmed = tool("search_pubmed", "Search PubMed.");
     const gwas = tool("lookup_gwas_catalog", "Look up GWAS Catalog records.");
-    const tools = [core, prepare, pubmed, gwas];
-    const initial = [core.name, prepare.name];
+    const tools = [inspect, core, prepare, pubmed, gwas];
+    const initial = [inspect.name, core.name, prepare.name];
 
     const prompt = toolCatalogPrompt(tools, initial);
     expect(prompt).toContain("Available curated skill/tool map");
+    expect(prompt).toContain("inspect_dataset_build_routes (active)");
     expect(prompt).toContain("execute_dataset_build (active)");
     expect(prompt).toContain("prepare_dynamic_family_build (active)");
     expect(prompt).toContain("lookup_gwas_catalog");
@@ -157,7 +158,7 @@ describe("Pi system prompt", () => {
       undefined,
       undefined as never,
     );
-    expect(active).toEqual([core.name, prepare.name, TOOL_ACTIVATION_NAME, gwas.name]);
+    expect(active).toEqual([inspect.name, core.name, prepare.name, TOOL_ACTIVATION_NAME, gwas.name]);
     expect(first.details).toMatchObject({ ok: true, activated_tools: [gwas.name] });
 
     await activation.execute(
@@ -168,6 +169,7 @@ describe("Pi system prompt", () => {
       undefined as never,
     );
     expect(active).toEqual([
+      inspect.name,
       core.name,
       prepare.name,
       TOOL_ACTIVATION_NAME,
@@ -188,7 +190,7 @@ describe("Pi system prompt", () => {
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/never fabricate, exaggerate, or infer your own work history/i);
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/report exact requested, succeeded, and failed counts/i);
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/never turn a plan, workspace file, successful subset, or intended next step into a completed action/i);
-    expect(PHASE1_SYSTEM_PROMPT).toMatch(/choose the matching semantic family, projection, and row granularity/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/declare the matching semantic family, projection, and row granularity/i);
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/workspace outputs are staging evidence only/i);
   });
 

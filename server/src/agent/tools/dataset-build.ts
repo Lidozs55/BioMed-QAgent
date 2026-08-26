@@ -28,7 +28,7 @@ const STATIC_ROUTE_CONTEXT = Object.freeze({
   route_scope: "static_registered_family",
   dynamic_provider_availability_evaluated: false,
   route_guidance:
-    "This result covers only the static registered-family route. It does not determine Dynamic Family provider availability; inspect prepare_dynamic_family_build.acquisition_requests instead.",
+    "This result covers only the static registered-family route. It does not determine Dynamic Family provider availability; call inspect_dataset_build_routes instead.",
 });
 
 export interface DatasetBuildToolDiagnostic {
@@ -460,7 +460,7 @@ export function createDatasetBuildTools(
       name: "validate_dataset_build",
       label: "Validate DatasetBuildSpec",
       description:
-        "Static registered-family route only: validate a DatasetBuildSpec whose family, schema, source, and topology appear in this tool schema. This does not test Dynamic Family provider availability; use prepare_dynamic_family_build for unsupported topology.",
+        "Static registered-family route only: validate a DatasetBuildSpec whose family, schema, source, and topology are an exact match from inspect_dataset_build_routes. This does not test Dynamic Family provider availability.",
       parameters: {
         type: "object",
         properties: { spec: specSchema },
@@ -500,7 +500,7 @@ export function createDatasetBuildTools(
       name: "execute_dataset_build",
       label: "Execute DatasetBuildSpec",
       description:
-        "Static registered-family route only: validate, execute, and publish a DatasetBuildSpec represented by this tool schema. For unsupported topology use prepare_dynamic_family_build then submit_dynamic_family_build.",
+        "Static registered-family route only: validate, execute, and publish an exact static match from inspect_dataset_build_routes. For unsupported topology use the dynamic route only when the preflight reports closed inputs.",
       parameters: {
         type: "object",
         properties: {

@@ -237,6 +237,7 @@ describe("runtime Pi-path isolation gate (P5-13)", () => {
       "download_from_page",
       "capture_web_page",
       "capture_page_section",
+      "inspect_dataset_build_routes",
       "execute_dataset_build",
     ]) {
       expect(names.has(name), `expected ${name} to be wired into the Pi session`).toBe(true);
