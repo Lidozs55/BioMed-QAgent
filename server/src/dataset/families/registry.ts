@@ -151,8 +151,14 @@ function validateDefinition(definition: DatasetFamilyDefinition): void {
   sortedUnique(definition.granularities.map((item) => item.id), `${definition.id}.granularities`);
   sortedUnique(definition.validation_profile_refs, `${definition.id}.validation_profile_refs`);
   sortedUnique(definition.merge_strategies, `${definition.id}.merge_strategies`);
-  sortedUnique(definition.sources.map((source) => source.source), `${definition.id}.source ids`);
-  sortedUnique(definition.sources.map((source) => source.adapter_id), `${definition.id}.adapters`);
+  sortedUnique(
+    definition.sources.map((source) => `${source.source}\u0000${source.adapter_id}`),
+    `${definition.id}.source ids`,
+  );
+  sortedUnique(
+    definition.sources.map((source) => `${source.source}\u0000${source.adapter_id}`),
+    `${definition.id}.adapters`,
+  );
   if (!definition.normalization_profile_refs.includes(definition.default_normalization_profile_ref)) {
     throw new Error(
       `default normalization profile '${definition.default_normalization_profile_ref}' is not declared`,
@@ -609,20 +615,39 @@ export function gutMicrobiomeFamilyDefinition(): DatasetFamilyDefinition {
   const formalRegistrations = registrations.filter(
     (registration) => registration.parser.adapter_id !== GUT_MICROBIOME_TAXON_TSV_ADAPTER_ID,
   );
+  const providerSources = [
+    { source: "mgnify", adapterId: "registered_gut_microbiome_study_json", schemaRef: "gut_microbiome.study.v1" },
+    { source: "mgnify", adapterId: "registered_gut_microbiome_taxon_long_tsv", schemaRef: "gut_microbiome.taxon_records.v1" },
+    { source: "mgnify", adapterId: "registered_gut_microbiome_taxon_json", schemaRef: "gut_microbiome.taxon_records.v1" },
+    { source: "mgnify", adapterId: "registered_gut_microbiome_differential_abundance_xlsx", schemaRef: "gut_microbiome.differential_abundance.v1" },
+    { source: "ncbi_taxonomy", adapterId: "gut_microbiome.ncbi_taxonomy_esearch_json.v1", schemaRef: "gut_microbiome.taxon_records.v1" },
+    { source: "ncbi_taxonomy", adapterId: "gut_microbiome.ncbi_taxonomy_efetch_xml.v1", schemaRef: "gut_microbiome.taxon_records.v1" },
+    { source: "gmrepo", adapterId: "gut_microbiome.gmrepo_associated_species_json.v1", schemaRef: "gut_microbiome.reference_prevalence.v1" },
+  ] as const;
   return registeredFamily({
     id: GUT_MICROBIOME_FAMILY_ID,
     schemas: gutMicrobiomeSchemas,
     profileRef: "gut_microbiome.release.v1",
-    sources: formalRegistrations.map((registration) => {
-      const tableId = tableBySchema.get(registration.schema.schema_id);
-      if (tableId === undefined) throw new Error(`gut microbiome parser has unknown schema '${registration.schema.schema_id}'`);
-      return registeredSource({
-        source: `registered_gut_microbiome_${tableId}_${registration.parser.adapter_id}`,
-        tableId,
-        adapterId: registration.parser.adapter_id,
-        schemaRef: registration.schema.schema_id,
-      });
-    }),
+    sources: [
+      ...providerSources.map(({ source, adapterId, schemaRef }) => ({
+        source,
+        adapter_id: adapterId,
+        schema_refs: [schemaRef],
+        parameters_required: false,
+        parameter_schema: emptyAdapterParameterSchema(),
+        validateParameters: noAdapterParameters,
+      })),
+      ...formalRegistrations.map((registration) => {
+        const tableId = tableBySchema.get(registration.schema.schema_id);
+        if (tableId === undefined) throw new Error(`gut microbiome parser has unknown schema '${registration.schema.schema_id}'`);
+        return registeredSource({
+          source: `registered_gut_microbiome_${tableId}_${registration.parser.adapter_id}`,
+          tableId,
+          adapterId: registration.parser.adapter_id,
+          schemaRef: registration.schema.schema_id,
+        });
+      }),
+    ],
   });
 }
 

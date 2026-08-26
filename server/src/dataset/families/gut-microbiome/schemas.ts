@@ -362,7 +362,7 @@ export const gutMicrobiomeRelations: readonly RelationDefinition[] = Object.free
     fromFields: ["study_id", "taxon_id"],
     toTableId: GUT_MICROBIOME_TAXON_TABLE_ID,
     toFields: ["study_id", "taxon_id"],
-    cardinality: "many_to_one",
+    cardinality: "many_to_many",
     missingPolicy: "reject",
   }),
   buildBiomedicalRelation({
@@ -372,24 +372,9 @@ export const gutMicrobiomeRelations: readonly RelationDefinition[] = Object.free
     fromFields: ["study_id", "taxon_id"],
     toTableId: GUT_MICROBIOME_TAXON_TABLE_ID,
     toFields: ["study_id", "taxon_id"],
-    cardinality: "many_to_one",
+    cardinality: "many_to_many",
     missingPolicy: "reject",
   }),
-  ...([
-    GUT_MICROBIOME_STUDY_TABLE_ID,
-    GUT_MICROBIOME_TAXON_TABLE_ID,
-    GUT_MICROBIOME_DIFFERENTIAL_ABUNDANCE_TABLE_ID,
-    GUT_MICROBIOME_REFERENCE_PREVALENCE_TABLE_ID,
-  ] as const).map((tableId) => buildBiomedicalRelation({
-    relationType: "entity_identity_link",
-    relationId: `${tableId}_source`,
-    fromTableId: tableId,
-    fromFields: ["source_id"],
-    toTableId: "sources",
-    toFields: ["source_id"],
-    cardinality: "many_to_one",
-    missingPolicy: "reject",
-  })),
 ]);
 
 function tableDefinition(tableId: string, schema: DatasetSchemaV2, role: "primary" | "supporting"): TableDefinition {

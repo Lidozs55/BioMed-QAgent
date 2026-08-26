@@ -355,10 +355,39 @@ export class SpecValidator {
       const resolved = DATABASE_IDENTIFIER_ALIASES[binding.source.trim().toLowerCase()];
       const canonicalSource = resolved ?? binding.source;
       const sourceDefinition = familyDefinition?.sources.find(
+        (source) => source.source === canonicalSource && source.adapter_id === binding.adapter_id,
+      );
+      const sourceDefinitionBySource = familyDefinition?.sources.find(
         (source) => source.source === canonicalSource,
       );
+      const declaredProviderBinding = providerCarrierBinding(
+        familyDefinition?.id ?? "",
+        canonicalSource,
+        binding.adapter_id,
+      );
+      const admittedProviderBinding = providerCarrierBinding(
+        familyDefinition?.id ?? "",
+        canonicalSource,
+        binding.adapter_id,
+        undefined,
+        binding.acquisition?.provider_id,
+      );
       if (familyDefinition !== null) {
-        if (sourceDefinition === undefined) {
+        if (declaredProviderBinding !== null && admittedProviderBinding === null) {
+          codes.push("provider_binding_mismatch");
+          reasons.push(
+            `binding ${pyRepr(binding.binding_id)} provider ${pyRepr(binding.acquisition?.provider_id ?? null)} ` +
+              `is not admitted for ${pyRepr(canonicalSource)}/${pyRepr(binding.adapter_id)}`,
+          );
+        }
+        if (sourceDefinition === undefined && sourceDefinitionBySource !== undefined) {
+          codes.push("adapter_source_mismatch");
+          reasons.push(
+            `binding ${pyRepr(binding.binding_id)} adapter ${pyRepr(binding.adapter_id)} ` +
+              `does not match source ${pyRepr(binding.source)} ` +
+              `(expected ${pyRepr(sourceDefinitionBySource.adapter_id)})`,
+          );
+        } else if (sourceDefinition === undefined) {
           codes.push("source_family_mismatch");
           reasons.push(
             `binding ${pyRepr(binding.binding_id)} source ${pyRepr(binding.source)} ` +
@@ -372,13 +401,6 @@ export class SpecValidator {
           reasons.push(
             `binding ${pyRepr(binding.binding_id)} source ${pyRepr(binding.source)} ` +
               `does not support schema ${pyRepr(spec.schema_ref)}`,
-          );
-        } else if (sourceDefinition.adapter_id !== binding.adapter_id) {
-          codes.push("adapter_source_mismatch");
-          reasons.push(
-            `binding ${pyRepr(binding.binding_id)} adapter ${pyRepr(binding.adapter_id)} ` +
-              `does not match source ${pyRepr(binding.source)} ` +
-              `(expected ${pyRepr(sourceDefinition.adapter_id)})`,
           );
         } else if (normalizationProfile !== null) {
           for (const issue of sourceDefinition.validateParameters(

@@ -1,18 +1,27 @@
-import type { SourceAssetRegistrationReceipt } from "@biomed/contracts";
+import type { JsonValue, SourceAssetRegistrationReceipt } from "@biomed/contracts";
 
-import {
-  parseInheritedDiseaseEvidenceCarriers,
-  type InheritedDiseaseEvidenceCarrier,
-  type InheritedDiseaseEvidenceRows,
-} from "../families/inherited-disease-evidence/index.js";
-
+/**
+ * Input presented to a Core-owned provider transform.  The transform receives
+ * the verified bytes and the exact task-owned registration receipt; it never
+ * receives a workspace path or an Agent-authored parser.
+ */
 export interface ProviderCarrierTransformInput {
-  familyId: string;
-  source: string;
-  adapterId: string;
-  assetId: string;
-  receipt: SourceAssetRegistrationReceipt;
-  bytes: Buffer;
+  readonly familyId: string;
+  readonly source: string;
+  readonly providerId: string;
+  readonly adapterId: string;
+  readonly bindingId: string;
+  readonly tableId?: string;
+  readonly inputRole?: string;
+  readonly schemaRef?: string;
+  readonly accession?: string | null;
+  readonly assetId: string;
+  readonly receipt: SourceAssetRegistrationReceipt;
+  readonly bytes: Buffer;
+  /** Optional source-binding parameters used only as transform facts. */
+  readonly parameters?: Readonly<Record<string, JsonValue>>;
+  /** Read-only DatasetBuildSpec entities used only as transform facts. */
+  readonly entities?: Readonly<Record<string, readonly string[]>>;
 }
 
 export type ProviderCarrierRows = Readonly<Record<string, readonly object[]>>;
@@ -20,40 +29,57 @@ export type ProviderCarrierBatchTransform = (
   inputs: readonly ProviderCarrierTransformInput[],
 ) => ProviderCarrierRows;
 
-interface ProviderCarrierTransformRegistration {
+export interface ProviderCarrierTransformRegistration {
   readonly familyId: string;
   readonly transform: ProviderCarrierBatchTransform;
 }
 
-function inheritedDiseaseRows(
-  inputs: readonly ProviderCarrierTransformInput[],
-): ProviderCarrierRows {
-  const carriers: InheritedDiseaseEvidenceCarrier[] = inputs.map((input) => ({
-    source: input.source as InheritedDiseaseEvidenceCarrier["source"],
-    sourceId: input.receipt.source_id,
-    assetId: input.assetId,
-    logicalFile: input.receipt.relative_path,
-    retrievedAt: input.receipt.registered_at,
-    bytes: input.bytes,
-  }));
-  const rows: InheritedDiseaseEvidenceRows = parseInheritedDiseaseEvidenceCarriers(carriers);
-  return {
-    gene_records: rows.gene_records,
-    disease_records: rows.disease_records,
-    gene_disease_records: rows.gene_disease_records,
-    gene_evidence_crosswalk: rows.gene_evidence_crosswalk,
-  };
+/**
+ * Core dispatch registry for fixed provider transforms.  The generic runtime
+ * only consumes this registry; family modules are injected by the family
+ * composition root and are not imported from this module.
+ */
+export class ProviderCarrierTransformRegistry {
+  readonly #transforms = new Map<string, ProviderCarrierTransformRegistration>();
+
+  constructor(initial: readonly ProviderCarrierTransformRegistration[] = []) {
+    for (const registration of initial) this.register(registration);
+  }
+
+  register(registration: ProviderCarrierTransformRegistration): void {
+    if (registration.familyId.trim() === "") {
+      throw new Error("provider transform family ID must not be blank");
+    }
+    if (typeof registration.transform !== "function") {
+      throw new TypeError(`provider transform '${registration.familyId}' is missing its handler`);
+    }
+    if (this.#transforms.has(registration.familyId)) {
+      throw new Error(`provider transform '${registration.familyId}' is already registered`);
+    }
+    this.#transforms.set(registration.familyId, Object.freeze({ ...registration }));
+  }
+
+  has(familyId: string): boolean {
+    return this.#transforms.has(familyId);
+  }
+
+  get(familyId: string): ProviderCarrierTransformRegistration {
+    const registration = this.#transforms.get(familyId);
+    if (registration === undefined) {
+      throw new Error(`dataset family '${familyId}' has no provider transform handler`);
+    }
+    return registration;
+  }
+
+  list(): string[] {
+    return [...this.#transforms.keys()].sort();
+  }
 }
 
-const PROVIDER_CARRIER_TRANSFORMS: readonly ProviderCarrierTransformRegistration[] = Object.freeze([
-  Object.freeze({
-    familyId: "inherited_disease_gene_evidence",
-    transform: inheritedDiseaseRows,
-  }),
-]);
-
+/** Resolve a transform from an explicitly injected registry. */
 export function providerCarrierTransformForFamily(
   familyId: string,
+  registry: ProviderCarrierTransformRegistry = new ProviderCarrierTransformRegistry(),
 ): ProviderCarrierBatchTransform | null {
-  return PROVIDER_CARRIER_TRANSFORMS.find((entry) => entry.familyId === familyId)?.transform ?? null;
+  return registry.has(familyId) ? registry.get(familyId).transform : null;
 }

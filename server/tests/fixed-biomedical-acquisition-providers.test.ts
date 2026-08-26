@@ -7,6 +7,8 @@ import {
   FIXED_BIOMEDICAL_PROVIDER_IDS,
   fixedBiomedicalAcquisitionParameters,
 } from "../src/dataset/acquisition/biomedical-providers.js";
+import { GMREPO_FILES_PROVIDER_ID } from "../src/dataset/acquisition/gmrepo-provider.js";
+import { EXTENDED_PROVIDER_IDS } from "../src/dataset/acquisition/extended-providers.js";
 import { CoreAcquisitionRegistry } from "../src/dataset/acquisition/runtime.js";
 
 function request(options: {
@@ -197,6 +199,23 @@ describe("fixed biomedical acquisition provider registry", () => {
       entities: { gene: ["EGFR"] },
     }), "task_provider");
     expect(() => missingId.handler.plan(missingId.request)).toThrow(/valid PDB ID/);
+  });
+
+  it("projects Gold10 acquisition providers through the same fixed parameter allowlist", () => {
+    expect(fixedBiomedicalAcquisitionParameters({
+      providerId: EXTENDED_PROVIDER_IDS.mgnify,
+      source: "mgnify",
+      accession: "MGYS00005374",
+      entities: { study_id: ["MGYS00005374"] },
+      bindingParameters: {},
+    })).toEqual({ source: "mgnify", accession: "MGYS00005374", entities: { study_id: ["MGYS00005374"] } });
+    expect(fixedBiomedicalAcquisitionParameters({
+      providerId: GMREPO_FILES_PROVIDER_ID,
+      source: "gmrepo",
+      accession: "D006262",
+      entities: { study_id: ["MGYS00005374"] },
+      bindingParameters: {},
+    })).toEqual({ source: "gmrepo", accession: "D006262", entities: { study_id: ["MGYS00005374"] } });
   });
 
   it("projects only validated binding accession and server-owned entities", () => {
