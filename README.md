@@ -15,15 +15,15 @@ BioMed-QAgent 面向生物医学开放数据，把自然语言需求转化为可
 
 本 README 是仓库的统一首入口。下面直接导航到各类权威信息；更细的文档职责、生命周期和归档规则见 [`docs/README.md`](docs/README.md)。
 
-| 想了解 | 入口 |
-| --- | --- |
-| 产品目标与评分要求 | [`PROBLEM.md`](PROBLEM.md) |
-| 现行技术架构 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
-| 功能与能力全景 | [`docs/FEATURES.md`](docs/FEATURES.md) |
-| 本地开发 | [`docs/DEVELOPER_QUICKSTART.md`](docs/DEVELOPER_QUICKSTART.md) |
-| 当前任务 / 已知问题 | [`docs/TODO.md`](docs/TODO.md) / [`docs/ISSUES.md`](docs/ISSUES.md) |
-| Agent API 调用 | [`docs/AGENT_API_QUICKSTART.md`](docs/AGENT_API_QUICKSTART.md) |
-| ADR、专题章节及历史归档 | [`docs/README.md`](docs/README.md) |
+| 想了解                  | 入口                                                                  |
+| ----------------------- | --------------------------------------------------------------------- |
+| 产品目标与评分要求      | [`PROBLEM.md`](PROBLEM.md)                                           |
+| 现行技术架构            | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)                       |
+| 功能与能力全景          | [`docs/FEATURES.md`](docs/FEATURES.md)                               |
+| 本地开发                | [`docs/DEVELOPER_QUICKSTART.md`](docs/DEVELOPER_QUICKSTART.md)       |
+| 当前任务 / 已知问题     | [`docs/TODO.md`](docs/TODO.md) / [`docs/ISSUES.md`](docs/ISSUES.md) |
+| Agent API 调用          | [`docs/AGENT_API_QUICKSTART.md`](docs/AGENT_API_QUICKSTART.md)       |
+| ADR、专题章节及历史归档 | [`docs/README.md`](docs/README.md)                                   |
 
 ## 核心边界
 
@@ -42,14 +42,14 @@ BioMed-QAgent 面向生物医学开放数据，把自然语言需求转化为可
 
 ### 环境要求
 
-| 组件            | 要求                                          |
-| --------------- | --------------------------------------------- |
-| Python          | 3.12+（仅 `database/` persistence bridge 需要） |
-| Node.js         | 22.19+                                        |
+| 组件            | 要求                                                              |
+| --------------- | ----------------------------------------------------------------- |
+| Python          | 3.12+（仅`database/` persistence bridge 需要）                  |
+| Node.js         | 22.19+                                                            |
 | Python 包管理器 | [uv](https://docs.astral.sh/uv/)（`uv sync` 安装 database 项目） |
-| Node 包管理器   | [pnpm](https://pnpm.io/)（不要使用 npm）       |
-| LLM             | DashScope API Key，或其他 OpenAI 兼容模型配置 |
-| 可选            | Playwright Chromium，用于网页视觉证据采集     |
+| Node 包管理器   | [pnpm](https://pnpm.io/)（不要使用 npm）                           |
+| LLM             | DashScope API Key，或其他 OpenAI 兼容模型配置                     |
+| 可选            | Playwright Chromium，用于网页视觉证据采集                         |
 
 ### 1. 配置应用
 
