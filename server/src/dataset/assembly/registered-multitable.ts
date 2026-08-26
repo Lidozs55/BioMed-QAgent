@@ -6,6 +6,7 @@ import { assembleTargetEvidenceCandidate } from "../families/target-evidence/ind
 import { assembleVariantEvidenceCandidate } from "../families/variant-evidence/index.js";
 import { assembleProteinStructureCandidate } from "../families/protein-structure/index.js";
 import { assembleBioactivityCandidate } from "../families/bioactivity-measurement/index.js";
+import { assembleGutMicrobiomeCandidate } from "../families/gut-microbiome/index.js";
 import { inheritedDiseaseEvidenceAssembler } from "../families/inherited-disease-evidence/index.js";
 
 function results(input: FamilyAssemblyInput): Readonly<Record<string, OperationResultManifest>> {
@@ -123,6 +124,24 @@ export const proteinStructureRegisteredAssembler: FamilyAssemblerHandler = {
     datasetFamily: input.datasetFamily,
     rowGranularity: input.rowGranularity,
     tables: tableInputs(input, ["structures", "chains", "ligands", "sources"] as const),
+    registeredAssetIds: input.registeredAssetIds,
+  }),
+};
+
+export const gutMicrobiomeRegisteredAssembler: FamilyAssemblerHandler = {
+  familyId: "gut_microbiome",
+  handlerId: "gut_microbiome.assembler.v1",
+  assemble: (input) => assembleGutMicrobiomeCandidate({
+    taskId: input.taskId,
+    buildId: input.buildId,
+    datasetFamily: input.datasetFamily,
+    rowGranularity: input.rowGranularity,
+    tables: tableInputs(input, [
+      "study_records",
+      "taxon_records",
+      "differential_abundance_records",
+      "reference_prevalence_records",
+    ] as const),
     registeredAssetIds: input.registeredAssetIds,
   }),
 };

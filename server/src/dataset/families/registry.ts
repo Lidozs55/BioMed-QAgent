@@ -39,9 +39,10 @@ import {
 } from "./bioactivity-measurement/index.js";
 import {
   createGutMicrobiomeRegisteredTableRegistry,
-  gutMicrobiomeTaxonSchema,
+  GUT_MICROBIOME_TAXON_TSV_ADAPTER_ID,
+  gutMicrobiomeSchemas,
+  gutMicrobiomeTableDefinitions,
   GUT_MICROBIOME_FAMILY_ID,
-  GUT_MICROBIOME_TAXON_TABLE_ID,
 } from "./gut-microbiome/index.js";
 import {
   createInheritedDiseaseEvidenceRegisteredTableRegistry,
@@ -603,16 +604,25 @@ export function proteinStructureFamilyDefinition(): DatasetFamilyDefinition {
 
 export function gutMicrobiomeFamilyDefinition(): DatasetFamilyDefinition {
   const registrations = createGutMicrobiomeRegisteredTableRegistry().entries();
+  const definitions = gutMicrobiomeTableDefinitions();
+  const tableBySchema = new Map(definitions.map((definition) => [definition.schema_ref, definition.table_id]));
+  const formalRegistrations = registrations.filter(
+    (registration) => registration.parser.adapter_id !== GUT_MICROBIOME_TAXON_TSV_ADAPTER_ID,
+  );
   return registeredFamily({
     id: GUT_MICROBIOME_FAMILY_ID,
-    schemas: [gutMicrobiomeTaxonSchema],
+    schemas: gutMicrobiomeSchemas,
     profileRef: "gut_microbiome.release.v1",
-    sources: registrations.map((registration) => registeredSource({
-      source: "mgnify",
-      tableId: GUT_MICROBIOME_TAXON_TABLE_ID,
-      adapterId: registration.parser.adapter_id,
-      schemaRef: registration.schema.schema_id,
-    })),
+    sources: formalRegistrations.map((registration) => {
+      const tableId = tableBySchema.get(registration.schema.schema_id);
+      if (tableId === undefined) throw new Error(`gut microbiome parser has unknown schema '${registration.schema.schema_id}'`);
+      return registeredSource({
+        source: `registered_gut_microbiome_${tableId}_${registration.parser.adapter_id}`,
+        tableId,
+        adapterId: registration.parser.adapter_id,
+        schemaRef: registration.schema.schema_id,
+      });
+    }),
   });
 }
 

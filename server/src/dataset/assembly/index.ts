@@ -7,6 +7,7 @@ import { geneExpressionAssembler } from "./expression.js";
 import { FamilyAssemblerRegistry } from "./registry.js";
 import {
   bioactivityRegisteredAssembler,
+  gutMicrobiomeRegisteredAssembler,
   inheritedDiseaseEvidenceRegisteredAssembler,
   literatureEvidenceRegisteredAssembler,
   proteinStructureRegisteredAssembler,
@@ -22,6 +23,7 @@ export function createDefaultFamilyAssemblerRegistry(): FamilyAssemblerRegistry 
     variantEvidenceRegisteredAssembler,
     proteinStructureRegisteredAssembler,
     bioactivityRegisteredAssembler,
+    gutMicrobiomeRegisteredAssembler,
     inheritedDiseaseEvidenceRegisteredAssembler,
   ]);
 }

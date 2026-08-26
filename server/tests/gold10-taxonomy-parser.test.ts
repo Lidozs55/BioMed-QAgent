@@ -20,6 +20,8 @@ import {
 } from "../src/dataset/acquisition/browser-recipe-registry.js";
 import {
   GUT_MICROBIOME_FAMILY_ID,
+  GUT_MICROBIOME_TAXON_LONG_TSV_ADAPTER_ID,
+  GUT_MICROBIOME_TAXON_RECORD_SCHEMA_ID,
   GUT_MICROBIOME_TAXON_SCHEMA_ID,
   GUT_MICROBIOME_TAXON_TABLE_ID,
 } from "../src/dataset/families/gut-microbiome/index.js";
@@ -77,12 +79,12 @@ function receipt(bytes: Buffer): SourceAssetRegistrationReceipt {
   };
 }
 
-function request(assetId: string) {
+function request(assetId: string, schemaRef = GUT_MICROBIOME_TAXON_SCHEMA_ID) {
   return {
     schema_version: "1.0" as const,
     task_id: "task_gold10_taxonomy",
     asset_id: assetId,
-    schema_ref: GUT_MICROBIOME_TAXON_SCHEMA_ID,
+    schema_ref: schemaRef,
     adapter_id: ADAPTER_ID,
     parser_version: PARSER_VERSION,
   };
@@ -91,12 +93,12 @@ function request(assetId: string) {
 describe("Gold10 MGnify taxonomy TSV binding", () => {
   it("reproduces the missing family/schema/media binding before parser registration", () => {
     const family = createDefaultDatasetFamilyRegistry().get(GUT_MICROBIOME_FAMILY_ID);
-    const schema = family.schemas.find((item) => item.schema_id === GUT_MICROBIOME_TAXON_SCHEMA_ID);
+    const schema = family.schemas.find((item) => item.schema_id === GUT_MICROBIOME_TAXON_RECORD_SCHEMA_ID);
     expect(schema).toBeDefined();
     expect(schema?.dataset_family).toBe(GUT_MICROBIOME_FAMILY_ID);
     expect(schema?.schema_id).not.toContain("protein_structure");
     expect(registeredTableSchemasById(family).get(GUT_MICROBIOME_TAXON_TABLE_ID)?.schema_id)
-      .toBe(GUT_MICROBIOME_TAXON_SCHEMA_ID);
+      .toBe(GUT_MICROBIOME_TAXON_RECORD_SCHEMA_ID);
 
     const registration = createDefaultRegisteredTableRegistry().entries().find(
       (entry) => entry.parser.adapter_id === ADAPTER_ID,
@@ -113,6 +115,49 @@ describe("Gold10 MGnify taxonomy TSV binding", () => {
         value_column: "abundance",
       },
     });
+  });
+
+  it("registers a separate strict long-form parser for the four-table family", async () => {
+    const tables = createDefaultRegisteredTableRegistry();
+    const registration = tables.resolve(GUT_MICROBIOME_TAXON_LONG_TSV_ADAPTER_ID, PARSER_VERSION);
+    expect(registration.schema.schema_id).toBe(GUT_MICROBIOME_TAXON_RECORD_SCHEMA_ID);
+    expect(registration.parser).toMatchObject({
+      adapter_id: GUT_MICROBIOME_TAXON_LONG_TSV_ADAPTER_ID,
+      format: "tsv",
+      media_types: [MEDIA_TYPE],
+    });
+    expect(registration.parser.format).toBe("tsv");
+    if (registration.parser.format !== "tsv") throw new Error("expected the formal taxon parser to be TSV");
+    expect(registration.parser.layout).not.toBe("sample_matrix");
+    expect(registration.parser.fields.map((field) => field.target_field)).toEqual([
+      "study_id",
+      "sample_id",
+      "taxon_path",
+      "taxon_id",
+      "abundance",
+      "source_id",
+      "source_asset_id",
+      "source_locator",
+    ]);
+
+    const registrationReceipt = receipt(CONTENT);
+    const sink = new MemorySink();
+    await expect(new RegisteredTableAdapter(tables).parse(
+      {
+        ...request(
+          registrationReceipt.asset_ref.asset_id,
+          GUT_MICROBIOME_TAXON_RECORD_SCHEMA_ID,
+        ),
+        adapter_id: GUT_MICROBIOME_TAXON_LONG_TSV_ADAPTER_ID,
+      },
+      {
+        registration_receipt: registrationReceipt,
+        content: (async function* () { yield CONTENT; })(),
+      },
+      sink,
+    )).rejects.toThrow(/header mismatch/);
+    expect(sink.committed).toBeNull();
+    expect(sink.rolledBack?.fatal_reason_code).toBe("registered_table_rejected");
   });
 
   it("rejects a taxonomy carrier whose media type is not the promoted TSV type", async () => {
@@ -206,7 +251,9 @@ describe("Gold10 MGnify taxonomy TSV binding", () => {
     expect(resolved.ref.implementation_digest).toMatch(/^[0-9a-f]{64}$/);
     expect(registration.schema.schema_id).not.toContain("protein_structure");
     expect(recipes.list()).toContain(`${recipeId}@1`);
-    expect(recipes.list().some((id) => id.includes("json.v1"))).toBe(false);
+    expect(recipes.list()).toContain(
+      `${browserRecipeId("registered_gut_microbiome_study_json", PARSER_VERSION)}@1`,
+    );
     expect(recipes.list().some((id) => id.includes("docx") || id.includes(".xls."))).toBe(false);
   });
 });
