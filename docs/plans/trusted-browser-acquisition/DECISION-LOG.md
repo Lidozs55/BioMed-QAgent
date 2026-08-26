@@ -313,3 +313,25 @@ risks, and verification results for later audit.
 - Reason: Recipe promotion and revision identity must be shared by acquisition,
   formalization, parser execution, and publication within a runtime.
 - Status: implemented; server/contracts typecheck and lint pass.
+
+## 2026-08-26 / D-035
+
+- Decision: Register the first production XLSX browser parser recipe for the
+  Core-owned protein-structure `protein_structure.structure.v1` schema
+  (`registered_protein_structure_xlsx`, sheet `Data`, media type
+  `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`), so the
+  default browser recipe catalog promotes `browser.registered.registered_protein_structure_xlsx.1_0_0@1`.
+- Decision: Do NOT register catch-all aliases (`browser.json.v1@1`) and do NOT
+  fabricate parsers for formats without a Core-owned registered parser. DOCX
+  (wordprocessing) and legacy XLS (`application/vnd.ms-excel`) remain fail-closed:
+  no recipe is promoted for them and resolving evidence with those media types is
+  rejected before any HIL or proposal is created.
+- Decision: The registered-table family dispatch surface keeps one canonical
+  source per schema; the extra XLSX parser stays promoted in the shared
+  registered-table registry for the browser recipe catalog and carrier execution.
+- Reason: Binary office formats need explicitly promoted Core parsers; a generic
+  recipe or invented parser would bypass Core promotion authority (D-007/D-034).
+- Status: implemented on `feat/gold10-browser-recipe-coverage`; server suite
+  (1719 passed), typecheck, and lint pass. Gold10-style sources can now bind a
+  Core-promoted XLSX recipe through evidence acceptance HIL -> formalization ->
+  carrier parse; DOCX/XLS remain blocked until a Core-owned parser exists.

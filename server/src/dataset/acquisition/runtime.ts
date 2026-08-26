@@ -50,6 +50,14 @@ export interface AcquisitionDownloadPlan {
   expectedMediaTypes?: ReadonlySet<string>;
   accept?: string;
   requestHeaders?: Readonly<Record<string, string>>;
+  /**
+   * HTTP method for this acquisition; defaults to GET. POST sends `body` as
+   * JSON through the same policy-pinned transport and is never resumable;
+   * request parameters and tool inputs never populate this field.
+   */
+  method?: "GET" | "POST";
+  /** Raw JSON request body for POST acquisitions; forbidden for GET. */
+  body?: string;
   allowedHosts?: ReadonlySet<string>;
   /** Trusted provider-selected registry role; never populated by request parameters. */
   assetRole?: "source" | "carrier";

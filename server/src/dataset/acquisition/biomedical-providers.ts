@@ -11,6 +11,7 @@ import {
   GDC_FILES_PROVIDER_ID,
   GEO_FILES_PROVIDER_ID,
 } from "./expression-providers.js";
+import { GOLD9_PROVIDER_IDS } from "./gold9-providers.js";
 
 export const FIXED_BIOMEDICAL_PROVIDER_IDS = Object.freeze({
   pdb: "pdb.files.v1",
@@ -279,6 +280,7 @@ export function fixedBiomedicalAcquisitionParameters(options: {
     CHEMBL_FILES_PROVIDER_ID,
     GEO_FILES_PROVIDER_ID,
     GDC_FILES_PROVIDER_ID,
+    ...Object.values(GOLD9_PROVIDER_IDS),
   ]);
   if (!providerIds.has(options.providerId ?? "")) return null;
   if (

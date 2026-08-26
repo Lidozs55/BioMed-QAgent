@@ -1,26 +1,19 @@
-/*
 import { useState } from "react";
 import { PlusIcon, StarIcon } from "@phosphor-icons/react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-
 import { Spinner } from "@/components/ui/spinner";
-
 import { ModelDetailDialog } from "@/components/settings/model/ModelDetailDialog";
 import { ModelImportSheet } from "@/components/settings/model/ModelImportSheet";
-
 import type {
   ManagedModelInfo,
-  
   ModelSettings,
-  
   ProviderInfo,
   SettingsAPIClient,
 } from "@/hooks/useAPI";
 import { formatContextWindow } from "@/lib/tokenFormat";
-import { cn } from "@/lib/utils";
 
 interface ModelListManagerProps {
   api: SettingsAPIClient;
@@ -36,30 +29,9 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : "请求失败";
 }
 
-/** 来源标签：API/目录导入的模型显示供应商名称，手动添加的显示“手动配置”。 * /
+/** 来源标签：API/目录导入的模型显示供应商名称，手动添加的显示“手动配置”。 */
 function sourceBadgeLabel(model: ManagedModelInfo): string {
   return model.source === "manual" ? "手动配置" : model.provider_name;
-}
-
-function capabilitiesLabel(capabilities: ModelCapabilities): string {
-  const labels: string[] = [];
-  if (capabilities.text) labels.push("文本");
-  if (capabilities.image) labels.push("图像");
-  if (capabilities.video) labels.push("视频");
-  if (capabilities.audio) labels.push("音频");
-  return labels.length > 0 ? labels.join("、") : "—";
-}
-
-function allParamsJson(
-  specs: ParameterSpec[],
-  params: Record<string, unknown>,
-): string {
-  const merged: Record<string, unknown> = {};
-  for (const spec of specs) {
-    if (spec.default !== undefined) merged[spec.key] = spec.default;
-  }
-  for (const [key, value] of Object.entries(params)) merged[key] = value;
-  return JSON.stringify(merged, null, 2);
 }
 
 export function ModelListManager({
@@ -75,115 +47,15 @@ export function ModelListManager({
   const [activatingId, setActivatingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [detailModel, setDetailModel] = useState<ManagedModelInfo | null>(null);
-    const [detailOpen, setDetailOpen] = useState(false);
-  
-  
-  
-  
-  
-  
-
-  
+  const [detailOpen, setDetailOpen] = useState(false);
 
   const openAdd = () => {
     setSheetOpen(true);
   };
 
   const openDetail = (model: ManagedModelInfo) => {
-      setDetailModel(model);
-      setDetailOpen(true);
-
-
-    
-    
-      setEditingId(null);
-      return;
-    }
-    setEditingId(model.id);
-    setEditParams({ ...model.params });
-    setEditContextWindow(model.context_window === null ? "" : String(model.context_window));
-    setEditJsonOpen(false);
-    setEditJsonError(null);
-  };
-
-  const toggleEditJson = () => {
-    if (editJsonOpen) {
-      // “返回图形编辑”：收起 JSON，保留已编辑文本，回到图形参数视图。
-      setEditJsonOpen(false);
-      return;
-    }
-    if (!editingModel) return;
-    setEditJsonText(allParamsJson(editingModel.param_specs, editParams));
-    setEditJsonError(null);
-    setEditJsonOpen(true);
-  };
-
-  const formatEditJson = () => {
-    try {
-      const parsed: unknown = JSON.parse(editJsonText);
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        throw new Error("配置必须是 JSON 对象");
-      }
-      setEditJsonText(JSON.stringify(parsed, null, 2));
-      setEditJsonError(null);
-    } catch (error) {
-      setEditJsonError(error instanceof Error ? error.message : "JSON 格式错误");
-    }
-  };
-
-  const restoreEditJson = () => {
-    if (!editingModel) return;
-    setEditJsonText(allParamsJson(editingModel.param_specs, {}));
-    setEditJsonError(null);
-    toast.success("已恢复为默认参数");
-  };
-
-  const applyEditJson = () => {
-    try {
-      const parsed: unknown = JSON.parse(editJsonText);
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        throw new Error("配置必须是 JSON 对象");
-      }
-      setEditParams(parsed as Record<string, unknown>);
-      setEditJsonOpen(false);
-      setEditJsonError(null);
-      toast.success("JSON 配置已应用，记得保存参数");
-    } catch (error) {
-      setEditJsonError(error instanceof Error ? error.message : "JSON 格式错误");
-    }
-  };
-
-  /** 上下文窗口仅在用户改动后才随保存提交；清空表示不限制（未知）。 * /
-  const saveEdit = async (model: ManagedModelInfo) => {
-    const raw = editContextWindow.trim();
-    const current = model.context_window === null ? "" : String(model.context_window);
-    let contextWindow: number | null | undefined;
-    if (raw === current) {
-      contextWindow = undefined;
-    } else if (raw === "") {
-      contextWindow = null;
-    } else {
-      const parsed = Number(raw);
-      if (!Number.isFinite(parsed) || parsed <= 0) {
-        toast.error("上下文窗口必须为正整数（Tokens）");
-
-      }
-      contextWindow = parsed;
-    }
-    setSavingEdit(true);
-    try {
-      await api.updateManagedModel(model.id, {
-        params: editParams,
-        ...(contextWindow !== undefined ? { context_window: contextWindow } : {}),
-      });
-      toast.success(`已保存 ${model.name} 的参数`);
-      setEditingId(null);
-      onChanged();
-    } catch (error) {
-      toast.error("保存失败", { description: errorText(error) });
-    } finally {
-      setSavingEdit(false);
-    }
+    setDetailModel(model);
+    setDetailOpen(true);
   };
 
   const activate = async (model: ManagedModelInfo) => {
@@ -246,10 +118,9 @@ export function ModelListManager({
         <ul className="flex flex-col gap-2">
           {managedModels.map((model) => {
             const isActive = model.model_id === activeModelName;
-            const editing = editingId === model.id;
             return (
-              <li key={model.id} className="overflow-hidden rounded-xl border bg-card">
-                <div className="flex items-center justify-between gap-3 px-4 py-3">
+              <li key={model.id} className="rounded-xl border bg-card px-4 py-3">
+                <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="truncate text-sm font-medium">{model.name}</span>
@@ -269,8 +140,8 @@ export function ModelListManager({
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-1.5">
-                    <Button variant="ghost" size="sm" onClick={() => toggleEdit(model)}>
-                      {editing ? "收起" : "编辑"}
+                    <Button variant="ghost" size="sm" onClick={() => openDetail(model)}>
+                      详情
                     </Button>
                     <Button
                       variant={isActive ? "outline" : "default"}
@@ -301,105 +172,23 @@ export function ModelListManager({
                     )}
                   </div>
                 </div>
-                {editing && (
-                  <div className="border-t bg-muted/30 px-4 py-4">
-                    <div className="grid gap-5 md:grid-cols-2">
-                      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-xs">
-                        <dt className="text-muted-foreground">供应商</dt>
-                        <dd className="truncate">{model.provider_name}</dd>
-                        <dt className="text-muted-foreground">模型 ID</dt>
-                        <dd className="truncate">{model.model_id}</dd>
-                        <dt className="text-muted-foreground">上下文窗口</dt>
-                        <dd>
-                          <Input
-                            type="number"
-                            min={1}
-                            value={editContextWindow}
-                            onChange={(event) => setEditContextWindow(event.target.value)}
-                            className="h-8 w-40"
-                            aria-label="上下文窗口"
-                            title="上下文窗口（Tokens），清空表示未知"
-                            placeholder="未知"
-                          />
-                        </dd>
-                        <dt className="text-muted-foreground">最大输出</dt>
-                        <dd>{formatContextWindow(model.max_output_tokens)}</dd>
-                        <dt className="text-muted-foreground">能力</dt>
-                        <dd>{capabilitiesLabel(model.capabilities)}</dd>
-                        <dt className="text-muted-foreground">来源</dt>
-                        <dd>{sourceBadgeLabel(model)}</dd>
-                      </dl>
-                      <div>
-                        {editJsonOpen ? (
-                          <div className="flex flex-col gap-2">
-                            <Textarea
-                              value={editJsonText}
-                              onChange={(event) => {
-                                setEditJsonText(event.target.value);
-                                setEditJsonError(null);
-                              }}
-                              className="h-56 w-full resize-none font-mono text-xs"
-                              spellCheck={false}
-                              aria-label="配置 JSON"
-                            />
-                            {editJsonError && (
-                              <p className="text-xs text-destructive" role="alert">
-                                {editJsonError}
-                              </p>
-                            )}
-                            <div className="flex items-center gap-2">
-                              <Button variant="outline" size="sm" onClick={restoreEditJson}>
-                                恢复默认
-                              </Button>
-                              <Button variant="outline" size="sm" onClick={formatEditJson}>
-                                格式化
-                              </Button>
-                              <Button size="sm" onClick={applyEditJson}>
-                                应用
-                              </Button>
-                            </div>
-                          </div>
-                        ) : (
-                          <ParameterEditor
-                            specs={model.param_specs}
-                            params={editParams}
-                            onChange={setEditParams}
-                          />
-                        )}
-                      </div>
-                    </div>
-                    <div className="mt-4 flex items-center justify-between gap-3 border-t pt-3">
-                      {model.source !== "manual" && (
-                        <p className="text-xs text-warning">
-                          官方提供的参数，请谨慎修改
-                        </p>
-                      )}
-                      <div
-                        className={cn(
-                          "flex items-center gap-2",
-                          model.source === "manual" && "ml-auto",
-                        )}
-                      >
-                        <Button variant="outline" size="sm" onClick={toggleEditJson}>
-                          {editJsonOpen ? "返回图形编辑" : "配置 JSON"}
-                        </Button>
-                        <Button
-                          size="sm"
-                          onClick={() => void saveEdit(model)}
-                          disabled={savingEdit}
-                        >
-                          {savingEdit && <Spinner data-icon="inline-start" />}
-                          保存参数
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                )}
               </li>
             );
           })}
         </ul>
       )}
+
+      <ModelDetailDialog
+        key={detailModel?.id ?? "closed"}
+          open={detailOpen}
+        onOpenChange={(next) => {
+            setDetailOpen(next);
+            if (!next) setDetailModel(null);
+          }}
+        model={detailModel}
+        api={api}
+        onSaved={onChanged}
+      />
 
       <ModelImportSheet
         open={sheetOpen}
@@ -412,7 +201,3 @@ export function ModelListManager({
     </div>
   );
 }
-*/
-
-export { ModelListManager } from "./ModelListManagerImpl";
-

@@ -17,15 +17,36 @@ function canonicalSha256(value: string): string {
   return checksum;
 }
 
+/**
+ * Non-default HTTP request identity for the content cache. GET requests
+ * without a body keep the historical (database, accession, url) key; POST
+ * acquisitions include method + body so distinct requests to the same URL
+ * never share a cache entry.
+ */
+export interface RequestIdentityVariant {
+  method: string;
+  body?: string;
+}
+
 /** Deterministic SHA-256 of canonical request identity (database, accession, url). */
-export function canonicalRequestHash(database: string, accession: string, url: string): string {
-  // Key order matches Python json.dumps(..., sort_keys=True): accession,
-  // database, url. Separators default to no-whitespace in JSON.stringify,
-  // matching separators=(",", ":").
+export function canonicalRequestHash(
+  database: string,
+  accession: string,
+  url: string,
+  variant?: RequestIdentityVariant,
+): string {
+  // Key order matches Python json.dumps(..., sort_keys=True) for the base
+  // (GET) identity: accession, database, url. The POST method/body extension
+  // is TypeScript-only (Python had no POST acquisition path) and is appended
+  // in insertion order after the base keys.
   const canonical = JSON.stringify({
     accession: accession.trim().toLowerCase(),
     database: database.trim().toLowerCase(),
     url: url.trim(),
+    ...(variant === undefined ? {} : {
+      method: variant.method,
+      body: variant.body ?? "",
+    }),
   });
   return createHash("sha256").update(canonical).digest("hex");
 }

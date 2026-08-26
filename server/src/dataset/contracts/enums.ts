@@ -139,9 +139,13 @@ export const DATABASE = {
   MGNIFY: "mgnify",
   OPENFDA: "openfda",
   GWAS_CATALOG: "gwas_catalog",
+  GMREPO: "gmrepo",
   BROWSER: "browser",
   UNIPROT: "uniprot",
   CHEMBL: "chembl",
+  ORPHANET: "orphanet",
+  HGNC: "hgnc",
+  CLINGEN: "clingen",
 } as const;
 export type Database = (typeof DATABASE)[keyof typeof DATABASE];
 
@@ -221,11 +225,15 @@ export const SOURCE_CAPABILITIES: Record<Database, SourceCapability> = {
   mgnify: "research_only",
   openfda: "research_only",
   gwas_catalog: "research_only",
+  gmrepo: "research_only",
   pdb: "research_only",
   pubchem: "research_only",
   browser: "research_only",
   uniprot: "research_only",
   chembl: "research_only",
+  orphanet: "research_only",
+  hgnc: "research_only",
+  clingen: "research_only",
 };
 
 // Stable identifier aliases users may pass to pipeline/skill entry points
@@ -246,10 +254,19 @@ export const DATABASE_IDENTIFIER_ALIASES: Record<string, Database> = {
   openfda: "openfda",
   openfda_faers: "openfda",
   gwas_catalog: "gwas_catalog",
+  gmrepo: "gmrepo",
   pubchem: "pubchem",
   browser: "browser",
   uniprot: "uniprot",
   chembl: "chembl",
+  orphanet: "orphanet",
+  orphanet_en_product1: "orphanet",
+  orphanet_en_product6: "orphanet",
+  hgnc: "hgnc",
+  hgnc_approved: "hgnc",
+  clingen: "clingen",
+  clingen_gene_validity: "clingen",
+  clinvar_gene_esearch: "clinvar",
 };
 
 /** Resolve a user-facing database alias to its canonical Database value. */
