@@ -15,6 +15,7 @@ describe("DatasetFamilyRegistry", () => {
     expect(registry.list()).toEqual([
       "bioactivity_measurement",
       "gene_expression",
+      "gut_microbiome",
       "literature_evidence",
       "protein_structure",
       "target_evidence",
@@ -28,6 +29,7 @@ describe("DatasetFamilyRegistry", () => {
       "variant_evidence.assertion.v1",
       "protein_structure.structure.v1",
       "bioactivity_measurement.activity.v1",
+      "gut_microbiome.taxon.v1",
     ]));
     expect(registry.validationProfileRefs()).toEqual(expect.arrayContaining([
       "gene_expression.probe_release.v1",
@@ -37,6 +39,7 @@ describe("DatasetFamilyRegistry", () => {
       "variant_evidence.release.v1",
       "protein_structure.release.v1",
       "bioactivity_measurement.release.v1",
+      "gut_microbiome.release.v1",
     ]));
     expect(registry.get("gene_expression")).toMatchObject({
       id: "gene_expression",

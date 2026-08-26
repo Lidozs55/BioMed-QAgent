@@ -57,6 +57,7 @@ export const NORMALIZATION_PROFILES: Readonly<Record<string, NormalizationProfil
   "variant_evidence.registered.v1": registeredTableNormalization("variant_evidence"),
   "protein_structure.registered.v1": registeredTableNormalization("protein_structure"),
   "bioactivity_measurement.registered.v1": registeredTableNormalization("bioactivity_measurement"),
+  "gut_microbiome.registered.v1": registeredTableNormalization("gut_microbiome"),
 };
 
 /** Resolve ``profileRef``; the default expression profile when omitted. */

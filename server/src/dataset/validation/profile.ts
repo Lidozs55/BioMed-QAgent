@@ -923,6 +923,12 @@ const VALIDATION_PROFILES: Readonly<Record<string, ValidationProfileRuntime>> = 
     description: "Strict registered bioactivity measurement multi-table release gate.", required_entity_level: "any",
     confidence_gate: { block_pending_human_review: true, required_fields_min_level: "medium", allow_low_confidence_primary: false, max_low_confidence_fraction: 0, require_review_for_channels: ["vlm", "llm", "ocr", "web_extraction"] },
   })),
+  "gut_microbiome.release.v1": new RegisteredMultitableValidationProfile(parseValidationProfile({
+    profile_id: "gut_microbiome.release.v1", dataset_family: "gut_microbiome",
+    acceptance: { minimum_valid_rows: 1, allow_empty_primary_dataset: false, allow_partial_publish: false },
+    description: "Strict registered MGnify taxonomy table release gate.", required_entity_level: "any",
+    confidence_gate: { block_pending_human_review: true, required_fields_min_level: "medium", allow_low_confidence_primary: false, max_low_confidence_fraction: 0, require_review_for_channels: ["vlm", "llm", "ocr", "web_extraction"] },
+  })),
 };
 
 /** Registered validation profile refs (server allowlist). */

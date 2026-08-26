@@ -64,6 +64,7 @@ describe("parameterized biomedical common schemas", () => {
     expect(createDefaultDatasetFamilyRegistry().list()).toEqual([
       "bioactivity_measurement",
       "gene_expression",
+      "gut_microbiome",
       "literature_evidence",
       "protein_structure",
       "target_evidence",

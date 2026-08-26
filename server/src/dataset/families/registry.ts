@@ -38,6 +38,12 @@ import {
   BIOACTIVITY_FAMILY_ID,
 } from "./bioactivity-measurement/index.js";
 import {
+  createGutMicrobiomeRegisteredTableRegistry,
+  gutMicrobiomeTaxonSchema,
+  GUT_MICROBIOME_FAMILY_ID,
+  GUT_MICROBIOME_TAXON_TABLE_ID,
+} from "./gut-microbiome/index.js";
+import {
   buildGeneExpressionSchema,
   buildGeneExpressionSchemaV2,
   buildProbeExpressionSchema,
@@ -101,6 +107,7 @@ const PRODUCTION_RUNTIME_BY_FAMILY: Readonly<Record<string, string>> = {
   variant_evidence: "registered_multitable.runtime.v1",
   protein_structure: "registered_multitable.runtime.v1",
   bioactivity_measurement: "registered_multitable.runtime.v1",
+  gut_microbiome: "registered_multitable.runtime.v1",
 };
 
 function validateDefinition(definition: DatasetFamilyDefinition): void {
@@ -586,6 +593,21 @@ export function proteinStructureFamilyDefinition(): DatasetFamilyDefinition {
   });
 }
 
+export function gutMicrobiomeFamilyDefinition(): DatasetFamilyDefinition {
+  const registrations = createGutMicrobiomeRegisteredTableRegistry().entries();
+  return registeredFamily({
+    id: GUT_MICROBIOME_FAMILY_ID,
+    schemas: [gutMicrobiomeTaxonSchema],
+    profileRef: "gut_microbiome.release.v1",
+    sources: registrations.map((registration) => registeredSource({
+      source: "mgnify",
+      tableId: GUT_MICROBIOME_TAXON_TABLE_ID,
+      adapterId: registration.parser.adapter_id,
+      schemaRef: registration.schema.schema_id,
+    })),
+  });
+}
+
 export function bioactivityMeasurementFamilyDefinition(): DatasetFamilyDefinition {
   const entries = bioactivityTableEntries();
   const registrations = createBioactivityRegisteredTableRegistry().entries();
@@ -624,5 +646,6 @@ export function createDefaultDatasetFamilyRegistry(): DatasetFamilyRegistry {
     variantEvidenceFamilyDefinition(),
     proteinStructureFamilyDefinition(),
     bioactivityMeasurementFamilyDefinition(),
+    gutMicrobiomeFamilyDefinition(),
   ]);
 }
