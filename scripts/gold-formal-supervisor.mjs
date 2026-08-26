@@ -9,7 +9,7 @@
  * invocation. This program never executes commands itself.
  */
 import { createHash } from "node:crypto";
-import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 
@@ -250,6 +250,14 @@ async function atomicWrite(file, value) {
   await mkdir(path.dirname(file), { recursive: true });
   const temporary = `${file}.tmp-${process.pid}-${Date.now().toString(36)}`;
   await writeFile(temporary, value, { encoding: "utf8", flag: "wx" });
+  try {
+    await unlink(file);
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      await unlink(temporary).catch(() => undefined);
+      throw error;
+    }
+  }
   await rename(temporary, file);
 }
 
