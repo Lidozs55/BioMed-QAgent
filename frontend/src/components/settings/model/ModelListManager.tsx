@@ -98,7 +98,12 @@ export function ModelListManager({
     setEditJsonError(null);
   };
 
-  const openEditJson = () => {
+  const toggleEditJson = () => {
+    if (editJsonOpen) {
+      // “返回图形编辑”：收起 JSON，保留已编辑文本，回到图形参数视图。
+      setEditJsonOpen(false);
+      return;
+    }
     if (!editingModel) return;
     setEditJsonText(allParamsJson(editingModel.param_specs, editParams));
     setEditJsonError(null);
@@ -367,7 +372,7 @@ export function ModelListManager({
                           model.source === "manual" && "ml-auto",
                         )}
                       >
-                        <Button variant="outline" size="sm" onClick={openEditJson}>
+                        <Button variant="outline" size="sm" onClick={toggleEditJson}>
                           {editJsonOpen ? "返回图形编辑" : "配置 JSON"}
                         </Button>
                         <Button
