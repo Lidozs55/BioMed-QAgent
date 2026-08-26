@@ -810,6 +810,7 @@ export async function createPhase3Runtime(
         ],
         permissionBroker,
         setRunId: (nextRunId: string) => {
+          if (currentRunId !== nextRunId) buildResult = null;
           currentRunId = nextRunId;
           workspace.setRunId(nextRunId);
           permissionBroker.bindRun(nextRunId);
@@ -822,6 +823,7 @@ export async function createPhase3Runtime(
           buildResult = null;
           return result;
         },
+        peekBuildResult: () => buildResult,
         onRunEnd: (endedRunId: string) => {
           // Round-4 audit: run-bound temporary grants die with the run.
           grants.clearRun(endedRunId);

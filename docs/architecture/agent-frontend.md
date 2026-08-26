@@ -84,10 +84,18 @@ Core provider/formal carrier 时不得在首次受阻后立即降级；应先尝
 Core 路径、纠正输入、仅重试可重试失败并寻找独立真实来源。合理路径耗尽后可交付明确
 标注为 provisional/staging 的 workspace CSV，但必须同步报告 blocked/NO_DATA、缺失来源或
 覆盖范围，并请求完成正式 publication 所需的具体帮助；不得称其为已验证、已发布、正式
-完成或 Dataset Core Publication。该 Prompt 约束是模型侧局部缓解，不替代 runtime 对
-`run_completed(build_result=null)` 的终态门禁。
+完成或 Dataset Core Publication。该 Prompt 约束是模型侧局部缓解，只约束正式产物
+声明；它不构成 `run_completed(build_result=null)` 的终态门禁。
+在显式请求元数据与适用范围完成评审前，Run、Build 与 Publication 保持正交。
 工具返回给模型的 `content` 必须是有界且合法的结构化摘要；完整内核响应保留在
 `details`/durable evidence 中，不能通过字符切片破坏 JSON 或丢失 publication 状态。
+
+每次 LLM 调用前，Pi 的 `context` hook 会追加一个不可见、非持久的 Run progress
+custom message。该状态块固定四行且不超过 520 字符，只投影当前 Run 的工作阶段、
+工具成功/失败/进行中计数、最近工具结果、当前 BuildResult/Publication，以及一条
+failure-aware 后续动作。工具结果只记录名称与状态，不复制参数、返回正文或敏感内容；
+新 Run 启动时计数清零，compaction continuation 不清零。状态块仅提供注意力提示，
+不写 durable event，不改变 reducer，也不阻止或生成 `run_completed`。
 业务工具的共享失败形状为 `{ error, code, retryable, status_code? }`；只有底层错误
 明确携带 `retryable` 时才允许透传 true，普通参数/解析异常默认不可重试。
 权限或 evidence-bound HIL 挂起的可信调用必须等待原调用恢复，不能以 workspace

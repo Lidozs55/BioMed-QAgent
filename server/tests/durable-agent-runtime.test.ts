@@ -49,6 +49,7 @@ class ControlledAdapter implements BioMedAgentAdapter {
   readonly configs: BioMedSessionConfig[] = [];
   readonly steering: string[] = [];
   readonly compactions: string[] = [];
+  progressResets = 0;
   compactError: Error | null = null;
   private cancelled = false;
 
@@ -59,6 +60,9 @@ class ControlledAdapter implements BioMedAgentAdapter {
       taskId: config.taskId,
       runId: config.runId,
       run: (input) => this.run(input),
+      resetRunProgress: () => {
+        this.progressResets += 1;
+      },
       cancel: async () => {
         this.cancelled = true;
         this.gates.at(-1)?.resolve();
@@ -163,6 +167,8 @@ describe("durable formal Agent runtime", () => {
       "prepare_dynamic_family_build",
       "submit_dynamic_family_build",
     ]);
+    expect(adapter.configs[0]?.getBuildResult?.()).toBeNull();
+    expect(adapter.progressResets).toBe(1);
 
     const socket = new WebSocket(`ws://127.0.0.1:${port}/api/v1/ws`);
     await once(socket, "open");
@@ -182,6 +188,7 @@ describe("durable formal Agent runtime", () => {
     adapter.gates[0]?.resolve();
     const completed = await nextEvent(frames, "run_completed");
     expect(completed.sequence).toBe(5);
+    expect(completed.payload).toEqual({ type: "run_completed", build_result: null });
 
     const snapshotResponse = await fetch(
       `http://127.0.0.1:${port}/api/v1/tasks/${accepted.task_id}`,

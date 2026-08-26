@@ -20,8 +20,8 @@
   - 验收：input/params/FamilySpec/implementation/runtime/policy 任一 digest 改变都会使 checkpoint 失效；cancel/timeout/restart/stale generation 不能提交或复用旧 Publication。
 - [ ] **统一 HIL Questionnaire。** 将 `UserInputDialog` 迁移到现有 Questionnaire 基础设施。
   - 验收：现有权限和 publication acceptance 流程行为不回退；历史事件仍可重放。
-- [ ] **数据集请求 formal-route preflight 与终态闭包。** 在调研前返回候选 semantic family/projection、单一行粒度、可用 Core providers 和缺失 blockers；由服务端生成 digest-bound dynamic build skeleton。明确要求数据集的 agent run 未提交 BuildResult 或仍有未决 projection 时，不得以 `run_completed(build_result=null)` 成功结束。
-  - 验收：gold7 类复合请求被拆为多个 projection/build；无 provider 时产生结构化 `no_data`/`spec_rejected`/blocked outcome；现有非数据问答仍可无 BuildResult 完成；事件重放结果一致。
+- [ ] **数据集请求 formal-route scaffold。** 只读 capability preflight 已接入；继续由服务端生成 digest-bound dynamic build skeleton，并为候选 semantic family/projection、单一行粒度、可用 Core providers 和缺失 blockers 提供确定性输入。
+  - 验收：gold7 类复合请求可拆为多个 projection/build；无 provider 时形成结构化 blocker，且不把 workspace 文件提升为正式产物；事件重放结果一致。
 
 ## P2 — Product and developer experience
 
@@ -37,6 +37,7 @@
 ## Deferred / 非当前工作
 
 - **Isolated Transform Host / 通用 sandbox：** 除非新的 ADR 明确恢复该方向，否则不实施 container、IPC worker 或独立低权限进程；不得把 `node:vm` 或同进程执行改称 sandbox。
+- **BuildResult 驱动 Run 终态闭包：** 暂不实施“只有 Build 为 `succeeded` / `partial_success` / `no_data` / `spec_rejected` 时 Run 才完成”。Run、Build 与 Publication 保持正交；简短 Run progress context 仅作软提示。待协作讨论形成显式请求元数据和适用范围后再评审。
 - **通用 Agent DAG、Transform 市场、一次性删除静态 Registry：** 不属于当前发布闭环。
 
 ## 完成规则
