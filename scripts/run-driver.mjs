@@ -69,8 +69,8 @@ function endpoint(baseUrl, pathname) {
 async function postInput(baseUrl, pathname, inputPath, requestId, createTask) {
   const input = readUtf8Input(inputPath);
   const payload = createTask
-    ? { request_id: requestId, input, mode: "agent" }
-    : { request_id: requestId, input };
+    ? { request_id: requestId, input, databases: [], mode: "agent" }
+    : { request_id: requestId, input, databases: [] };
   const response = await fetch(endpoint(baseUrl, pathname), {
     method: "POST",
     headers: { "content-type": "application/json" },
