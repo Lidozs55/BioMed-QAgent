@@ -694,6 +694,46 @@ describe("SettingsPanel model registry", () => {
     expect(screen.getAllByText("DeepSeek").length).toBeGreaterThan(0);
   });
 
+  it("edits the context window of an API-sourced model inline", async () => {
+    const api = mockApi();
+    renderSettings(api);
+
+    const modelRow = (await screen.findByText("DeepSeek Reasoner", {}, { timeout: 5_000 })).closest("li");
+    expect(modelRow).not.toBeNull();
+    fireEvent.click(within(modelRow as HTMLElement).getByRole("button", { name: "编辑" }));
+
+    const contextInput = within(modelRow as HTMLElement).getByRole("spinbutton", { name: "上下文窗口" });
+    expect(contextInput).toHaveValue(65536);
+    fireEvent.change(contextInput, { target: { value: "131072" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存参数" }));
+
+    await waitFor(() => expect(api.updateManagedModel).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.updateManagedModel).mock.calls[0]?.[0]).toBe("model-1");
+    expect(vi.mocked(api.updateManagedModel).mock.calls[0]?.[1]).toMatchObject({
+      context_window: 131072,
+      params: { temperature: 0.5 },
+    });
+  });
+
+  it("returns from the JSON view back to the graphical editor without applying", async () => {
+    const api = mockApi();
+    renderSettings(api);
+
+    const modelRow = (await screen.findByText("DeepSeek Reasoner", {}, { timeout: 5_000 })).closest("li");
+    expect(modelRow).not.toBeNull();
+    fireEvent.click(within(modelRow as HTMLElement).getByRole("button", { name: "编辑" }));
+
+    // 打开 JSON 视图：按钮文案切换为“返回图形编辑”。
+    fireEvent.click(screen.getByRole("button", { name: "配置 JSON" }));
+    expect(screen.getByLabelText("配置 JSON")).toBeInTheDocument();
+
+    // 点击“返回图形编辑”：JSON 收起、图形视图恢复，且不触发保存。
+    fireEvent.click(screen.getByRole("button", { name: "返回图形编辑" }));
+    expect(screen.queryByLabelText("配置 JSON")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "配置 JSON" })).toBeInTheDocument();
+    expect(api.updateManagedModel).not.toHaveBeenCalled();
+  });
+
   it("shows a manual-config badge for manually added models", async () => {
     const api = mockApi({
       fetchManagedModels: vi

@@ -360,6 +360,13 @@ export class ModelSettingsService {
           body.capabilities !== undefined) {
         model.metadata_source = "user";
       }
+      // 活动模型的上下文窗口被用户修改后，跟随同步运行时设置，
+      // 保证 getSettings()/Pi 会话使用新窗口（与 syncCatalogMetadata 一致）。
+      if (body.context_window !== undefined &&
+          this.registry.settings.active_model_id === id) {
+        const settings = this.registry.settings;
+        settings.context_window = model.context_window ?? settings.context_window;
+      }
       model.updated_at = timestamp();
       updated = model;
     }).then(() => updated);

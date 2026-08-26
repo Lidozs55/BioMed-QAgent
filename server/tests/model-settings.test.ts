@@ -89,6 +89,51 @@ describe("TypeScript model settings", () => {
       .toContain("sk-secret-provider-value");
   });
 
+  test("allows editing the context window of an API-sourced model and syncs active settings", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const baseUrl = await serve(service);
+
+    const providerResponse = await fetch(`${baseUrl}/api/v1/model-registry/providers`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Custom OpenAI",
+        base_url: "https://models.example/v1",
+        api_key: "sk-custom-window",
+      }),
+    });
+    const provider = await providerResponse.json() as Record<string, unknown>;
+
+    const modelResponse = await fetch(`${baseUrl}/api/v1/model-registry/models`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        provider_id: provider.id,
+        model_id: "custom-chat",
+        source: "api",
+        context_window: 64000,
+      }),
+    });
+    const model = await modelResponse.json() as Record<string, unknown>;
+    expect(model).toMatchObject({ context_window: 64000, source: "api", active: true });
+
+    const updateResponse = await fetch(
+      `${baseUrl}/api/v1/model-registry/models/${String(model.id)}`,
+      {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ context_window: 131072 }),
+      },
+    );
+    const updated = await updateResponse.json() as Record<string, unknown>;
+    expect(updated).toMatchObject({ context_window: 131072, metadata_source: "user" });
+
+    const settings = await (await fetch(`${baseUrl}/api/v1/settings`)).json() as Record<string, unknown>;
+    expect(settings.context_window).toBe(131072);
+    expect(await service.resolveActiveModel()).toMatchObject({ contextWindow: 131072 });
+  });
+
   test("persists, validates, and resets runtime limits", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
     const service = await ModelSettingsService.create({ settingsDir, environment: {} });
