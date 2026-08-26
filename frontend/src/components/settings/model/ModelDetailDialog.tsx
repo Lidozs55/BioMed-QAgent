@@ -1,5 +1,4 @@
-/*
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -22,7 +21,6 @@ import type {
   ParameterSpec,
   SettingsAPIClient,
 } from "@/hooks/useAPI";
-import { cn } from "@/lib/utils";
 
 interface ModelDetailDialogProps {
   open: boolean;
@@ -68,23 +66,21 @@ export function ModelDetailDialog({
   api,
   onSaved,
 }: ModelDetailDialogProps) {
-  const [params, setParams] = useState<Record<string, unknown>>({});
-  const [contextWindow, setContextWindow] = useState("");
-  const [maxOutputTokens, setMaxOutputTokens] = useState("");
+  const [params, setParams] = useState<Record<string, unknown>>(() =>
+    model ? { ...model.params } : {},
+  );
+  const [contextWindow, setContextWindow] = useState(() =>
+    model?.context_window == null ? "" : String(model.context_window),
+  );
+  const [maxOutputTokens, setMaxOutputTokens] = useState(() =>
+    model?.max_output_tokens == null ? "" : String(model.max_output_tokens),
+  );
   const [jsonOpen, setJsonOpen] = useState(false);
-  const [jsonText, setJsonText] = useState("");
+  const [jsonText, setJsonText] = useState(() =>
+    model ? allParamsJson(model.param_specs, model.params) : "",
+  );
   const [jsonError, setJsonError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    if (!open || !model) return;
-    setParams({ ...model.params });
-    setContextWindow(model.context_window === null ? "" : String(model.context_window));
-    setMaxOutputTokens(model.max_output_tokens === null ? "" : String(model.max_output_tokens));
-    setJsonOpen(false);
-    setJsonText(allParamsJson(model.param_specs, model.params));
-    setJsonError(null);
-  }, [open, model]);
 
   if (!model) return null;
 
@@ -229,9 +225,6 @@ export function ModelDetailDialog({
                 aria-label="最大输出 Tokens"
               />
             </div>
-            
-              
-            </p>
           </div>
         </div>
 
@@ -258,7 +251,7 @@ export function ModelDetailDialog({
               {jsonError && (
                 <p className="text-xs text-destructive" role="alert">
                   {jsonError}
-  
+                </p>
               )}
               <div className="flex items-center gap-2">
                 <Button variant="outline" size="sm" onClick={restoreJson}>
@@ -285,12 +278,7 @@ export function ModelDetailDialog({
           <p className="text-xs text-warning">官方提供的参数，请谨慎修改</p>
         )}
 
-        <DialogFooter className={cn(isOfficial && "justify-between")}>
-          {isOfficial && (
-            <span className="text-xs text-warning sm:self-center">
-              官方提供的参数，请谨慎修改
-            </span>
-          )}
+        <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             取消
           </Button>
@@ -303,7 +291,3 @@ export function ModelDetailDialog({
     </Dialog>
   );
 }
-*/
-
-export { ModelDetailDialog } from "./ModelDetailDialogFinal2";
-

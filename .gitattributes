@@ -1,5 +1,10 @@
 # Prevent line-ending conversion for test fixtures (SHA256 integrity)
 server/tests/phase5/fixtures/**/* -text
+server/tests/fixtures/**/* -text
+
+# Node CLI scripts carry a shebang and are imported by tests; keep them LF
+# (CRLF breaks the esbuild transform used by vitest on Windows)
+scripts/*.mjs -text
 
 # Shell hooks must remain LF (CRLF breaks sh execution on Windows)
 .husky/* -text

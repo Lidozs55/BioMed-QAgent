@@ -1,5 +1,3 @@
-/*
-// @ts-nocheck
 import {
   useCallback,
   useEffect,
@@ -9,7 +7,6 @@ import {
   type ReactNode,
 } from "react";
 import {
-  ArrowLeftIcon,
   MagnifyingGlassIcon,
   PlusIcon,
 } from "@phosphor-icons/react";
@@ -28,6 +25,7 @@ import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { formatContextWindow } from "@/lib/tokenFormat";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -35,8 +33,8 @@ import {
   SelectTrigger,
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
-import { Textarea } from "@/components/ui/textarea";
 import { ParameterEditor } from "@/components/settings/model/ParameterEditor";
+import { ModelDetailDialog } from "@/components/settings/model/ModelDetailDialog";
 import type {
   DiscoveredModelInfo,
   ManagedModelInfo,
@@ -91,6 +89,19 @@ function defaultParamsFromSpecs(specs: ParameterSpec[]): Record<string, unknown>
   return params;
 }
 
+function allParamsJson(
+  specs: ParameterSpec[],
+  params: Record<string, unknown>,
+): string {
+  const merged: Record<string, unknown> = {};
+  for (const spec of specs) {
+    if (spec.default !== undefined) merged[spec.key] = spec.default;
+  }
+  for (const [key, value] of Object.entries(params)) merged[key] = value;
+  return JSON.stringify(merged, null, 2);
+}
+
+
 function capabilityChips(
   capabilities: DiscoveredModelInfo["capabilities"] | undefined,
 ): ReactNode {
@@ -117,7 +128,7 @@ function capabilityChips(
   );
 }
 
-function LegacyModelImportSheet({
+export function ModelImportSheet({
   open,
   onOpenChange,
   api,
@@ -135,26 +146,29 @@ function LegacyModelImportSheet({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [multiSelect, setMultiSelect] = useState(false);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [params, setParams] = useState<Record<string, unknown>>({});
   const [saving, setSaving] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  const [view, setView] = useState<"list" | "json">("list");
-  const [jsonText, setJsonText] = useState("");
-  const [jsonError, setJsonError] = useState<string | null>(null);
+
+  const [detailModel, setDetailModel] = useState<ManagedModelInfo | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
 
   const [manualOpen, setManualOpen] = useState(false);
   const [manualLoading, setManualLoading] = useState(false);
   const [manualSpecs, setManualSpecs] = useState<ParameterSpec[]>([]);
   const [manualDraft, setManualDraft] = useState<ManualDraft>(EMPTY_MANUAL_DRAFT);
   const wasOpenRef = useRef(false);
+    const [manualJsonOpen, setManualJsonOpen] = useState(false);
+    const [manualJsonText, setManualJsonText] = useState("");
+    const [manualJsonError, setManualJsonError] = useState<string | null>(null);
+    
+    
+    
 
   const selectedProvider = providers.find((provider) => provider.id === providerId) ?? null;
   const providerModels = useMemo(
     () => managedModels.filter((model) => model.provider_id === providerId),
     [managedModels, providerId],
   );
-  const selected = providerModels.find((model) => model.id === selectedId) ?? null;
 
   const resetForProvider = useCallback((nextProviderId: string) => {
     setProviderId(nextProviderId);
@@ -162,15 +176,15 @@ function LegacyModelImportSheet({
     setDiscoverError(null);
     setSearch("");
     setSelectedId(null);
-    setExpandedId(null);
     setSelectedIds(new Set());
     setMultiSelect(false);
-    setParams({});
+    setDetailModel(null);
+    setDetailOpen(false);
     setManualOpen(false);
     setManualDraft(EMPTY_MANUAL_DRAFT);
-    setView("list");
-    setJsonText("");
-    setJsonError(null);
+    setManualJsonOpen(false);
+    setManualJsonText("");
+    setManualJsonError(null);
   }, []);
 
   const discover = useCallback(
@@ -211,8 +225,6 @@ function LegacyModelImportSheet({
         void discover(initialProviderId);
         if (initialModelId) {
           setSelectedId(initialModelId);
-          const existing = managedModels.find((model) => model.id === initialModelId);
-          if (existing) setParams(existing.params);
         }
       } else if (providers.length === 1) {
         const singleId = providers[0].id;
@@ -235,14 +247,7 @@ function LegacyModelImportSheet({
 
   const selectDiscovered = (item: DiscoveredModelInfo) => {
     const imported = providerModels.find((model) => model.model_id === item.id);
-    if (imported !== undefined) {
-      setSelectedId(imported.id);
-      setParams(imported.params);
-      setExpandedId(imported.id);
-    } else {
-      setSelectedId(item.id);
-      setParams(defaultParams(item));
-    }
+    setSelectedId(imported?.id ?? item.id);
   };
 
   const openManual = async () => {
@@ -250,6 +255,10 @@ function LegacyModelImportSheet({
     setManualOpen(true);
     setManualLoading(true);
     setManualDraft(EMPTY_MANUAL_DRAFT);
+    setManualJsonOpen(false);
+    setManualJsonText("");
+    
+    setManualJsonError(null);
     try {
       const specs = await api.fetchProviderParamSpecs(providerId);
       setManualSpecs(specs);
@@ -264,6 +273,51 @@ function LegacyModelImportSheet({
       setManualLoading(false);
     }
   };
+
+    const toggleManualJson = () => {
+      if (manualJsonOpen) {
+        setManualJsonOpen(false);
+        return;
+      }
+      setManualJsonText(allParamsJson(manualSpecs, manualDraft.params));
+      setManualJsonError(null);
+      setManualJsonOpen(true);
+    };
+
+    const formatManualJson = () => {
+      try {
+        const parsed: unknown = JSON.parse(manualJsonText);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          throw new Error("配置必须是 JSON 对象");
+        }
+        setManualJsonText(JSON.stringify(parsed, null, 2));
+        setManualJsonError(null);
+      } catch (error) {
+        setManualJsonError(error instanceof Error ? error.message : "JSON 格式错误");
+      }
+    };
+
+    const restoreManualJson = () => {
+      setManualJsonText(allParamsJson(manualSpecs, {}));
+      setManualJsonError(null);
+      toast.success("已恢复为默认参数");
+    };
+
+    const applyManualJson = () => {
+      try {
+        const parsed: unknown = JSON.parse(manualJsonText);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          throw new Error("配置必须是 JSON 对象");
+        }
+        setManualDraft({ ...manualDraft, params: parsed as Record<string, unknown> });
+        setManualJsonOpen(false);
+        setManualJsonError(null);
+        toast.success("JSON 配置已应用");
+      } catch (error) {
+        setManualJsonError(error instanceof Error ? error.message : "JSON 格式错误");
+      }
+    };
+
 
   const saveManual = async () => {
     const modelId = manualDraft.modelId.trim();
@@ -289,27 +343,10 @@ function LegacyModelImportSheet({
       toast.success(`已添加 ${created.name}`);
       await onSaved();
       setSelectedId(created.id);
-      setExpandedId(created.id);
-      setParams(created.params);
       setManualOpen(false);
       setManualDraft(EMPTY_MANUAL_DRAFT);
     } catch (error) {
       toast.error("添加失败", { description: errorText(error) });
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const saveSelected = async () => {
-    if (!selected) return;
-    setSaving(true);
-    try {
-      const updated = await api.updateManagedModel(selected.id, { params });
-      toast.success(`已保存 ${updated.name} 的参数`);
-      await onSaved();
-      setParams(updated.params);
-    } catch (error) {
-      toast.error("保存失败", { description: errorText(error) });
     } finally {
       setSaving(false);
     }
@@ -320,10 +357,10 @@ function LegacyModelImportSheet({
       await api.deleteManagedModel(model.id);
       toast.success(`已移除 ${model.name}`);
       await onSaved();
-      if (selectedId === model.id || expandedId === model.id) {
+      if (selectedId === model.id || detailModel?.id === model.id) {
         setSelectedId(null);
-        setExpandedId(null);
-        setParams({});
+        setDetailModel(null);
+        setDetailOpen(false);
       }
     } catch (error) {
       toast.error("移除失败", { description: errorText(error) });
@@ -334,82 +371,12 @@ function LegacyModelImportSheet({
 
   const selectModel = (model: ManagedModelInfo) => {
     setSelectedId(model.id);
-    setParams(model.params);
-    setExpandedId(model.id);
   };
 
-  const toggleDetail = (model: ManagedModelInfo) => {
-    setSelectedId(model.id);
-    setParams(model.params);
-    setExpandedId((current) => (current === model.id ? null : model.id));
+  const openDetail = (model: ManagedModelInfo) => {
+    setDetailModel(model);
+    setDetailOpen(true);
   };
-
-  const selectedIsOfficial =
-    selected?.source === "api" || selected?.source === "catalog";
-
-  const openJson = () => {
-    const allParams: Record<string, unknown> = {};
-    for (const spec of selectedSpecs) {
-      if (spec.default !== undefined) allParams[spec.key] = spec.default;
-    }
-    for (const [key, value] of Object.entries(params)) {
-      allParams[key] = value;
-    }
-    setJsonText(JSON.stringify(allParams, null, 2));
-    setJsonError(null);
-    setView("json");
-  };
-
-  const backToList = () => {
-    setView("list");
-    setJsonError(null);
-  };
-
-  const formatJson = () => {
-    try {
-      const parsed: unknown = JSON.parse(jsonText);
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        throw new Error("配置必须是 JSON 对象");
-      }
-      setJsonText(JSON.stringify(parsed, null, 2));
-      setJsonError(null);
-    } catch (error) {
-      setJsonError(error instanceof Error ? error.message : "JSON 格式错误");
-    }
-  };
-
-  const restoreDefaults = () => {
-    const defaults = defaultParamsFromSpecs(selectedSpecs);
-    setJsonText(JSON.stringify(defaults, null, 2));
-    setJsonError(null);
-    toast.success("已恢复为默认参数");
-  };
-
-  const saveJson = () => {
-    try {
-      const parsed: unknown = JSON.parse(jsonText);
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        throw new Error("配置必须是 JSON 对象");
-      }
-      setParams(parsed as Record<string, unknown>);
-      setView("list");
-      setJsonError(null);
-      toast.success("JSON 配置已应用，记得保存参数");
-    } catch (error) {
-      setJsonError(error instanceof Error ? error.message : "JSON 格式错误");
-    }
-  };
-
-  const filtered = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    if (!query) return discovered;
-    return discovered.filter(
-      (item) => item.id.toLowerCase().includes(query) || item.name.toLowerCase().includes(query),
-    );
-  }, [discovered, search]);
-
-  const importedIds = new Set(providerModels.map((model) => model.model_id));
-  const selectedSpecs = selected?.param_specs ?? [];
 
   const createFromDiscovered = async (
     item: DiscoveredModelInfo,
@@ -435,8 +402,6 @@ function LegacyModelImportSheet({
       toast.success(`已导入 ${created.name}`);
       await onSaved();
       setSelectedId(created.id);
-      setExpandedId(created.id);
-      setParams(created.params);
       setSelectedIds(new Set());
     } catch (error) {
       toast.error("导入失败", { description: errorText(error) });
@@ -476,8 +441,6 @@ function LegacyModelImportSheet({
       await onSaved();
       if (last) {
         setSelectedId(last.id);
-        setExpandedId(last.id);
-        setParams(last.params);
       }
       setSelectedIds(new Set());
     } catch (error) {
@@ -486,6 +449,19 @@ function LegacyModelImportSheet({
       setSaving(false);
     }
   };
+
+  
+    // eslint-disable-next-line react-hooks/preserve-manual-memoization
+    const filtered = useMemo(() => {
+      const query = search.trim().toLowerCase();
+    if (!query) return discovered;
+    return discovered.filter(
+      (item) => item.id.toLowerCase().includes(query) || item.name.toLowerCase().includes(query),
+    );
+    }, [discovered, search]);
+  
+
+  const importedIds = new Set(providerModels.map((model) => model.model_id));
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -524,9 +500,9 @@ function LegacyModelImportSheet({
           </div>
         </div>
 
-        {providerId && view === "list" && (
+        {providerId && (
           <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-hidden px-5 py-4 md:grid-cols-2">
-            {/* Left: provider returned model list * /}
+            {/* Left: provider returned model list */}
             <div className="flex min-h-0 flex-col overflow-hidden rounded-xl border bg-card">
               <div className="flex shrink-0 items-center gap-2 border-b p-3">
                 <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
@@ -636,14 +612,15 @@ function LegacyModelImportSheet({
                             {imported ? "已导入" : "导入"}
                           </Button>
                         </li>
-                      );
+                    );
+                      
                     })}
                   </ul>
                 )}
               </ScrollArea>
             </div>
 
-            {/* Right: selected / maintained models * /}
+            {/* Right: selected / maintained models */}
             <div className="flex min-h-0 flex-col overflow-hidden rounded-xl border bg-card">
               <div className="flex shrink-0 items-center justify-between gap-3 border-b p-3">
                 <p className="text-sm font-medium">
@@ -667,157 +644,70 @@ function LegacyModelImportSheet({
                   </div>
                 ) : (
                   <ul className="divide-y">
-                    {providerModels.map((model) => {
-                      const expanded = expandedId === model.id;
-                      return (
-                        <li key={model.id}>
-                          <div
-                            className={cn(
-                              "flex items-center justify-between gap-2 px-3 py-2",
-                              expanded && "bg-accent",
-                            )}
+                    {providerModels.map((model) => (
+                      <li key={model.id}>
+                        <div className="flex items-center justify-between gap-2 px-3 py-2">
+                          <button
+                            type="button"
+                            className="min-w-0 flex-1 text-left"
+                            onClick={() => selectModel(model)}
                           >
-                            <button
-                              type="button"
-                              className="min-w-0 flex-1 text-left"
-                              onClick={() => selectModel(model)}
+                            <span className="truncate text-sm">{model.name}</span>
+                            <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+                              {model.model_id}
+                            </span>
+                          </button>
+                          <div className="flex shrink-0 items-center gap-1">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="shrink-0"
+                              onClick={() => openDetail(model)}
                             >
-                              <span className="truncate text-sm">{model.name}</span>
-                              <span className="mt-0.5 block truncate text-xs text-muted-foreground">
-                                {model.model_id}
-                              </span>
-                            </button>
-                            <div className="flex shrink-0 items-center gap-1">
+                              详情
+                            </Button>
+                            {confirmDeleteId === model.id ? (
+                              <Button
+                                variant="destructive"
+                                size="sm"
+                                className="shrink-0"
+                                onClick={() => void removeModel(model)}
+                              >
+                                确认移除
+                              </Button>
+                            ) : (
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                className="shrink-0"
-                                onClick={() => toggleDetail(model)}
+                                className="shrink-0 text-destructive"
+                                onClick={() => setConfirmDeleteId(model.id)}
                               >
-                                {expanded ? "收起详情" : "详情"}
+                                移除
                               </Button>
-                              {confirmDeleteId === model.id ? (
-                                <Button
-                                  variant="destructive"
-                                  size="sm"
-                                  className="shrink-0"
-                                  onClick={() => void removeModel(model)}
-                                >
-                                  确认移除
-                                </Button>
-                              ) : (
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="shrink-0 text-destructive"
-                                  onClick={() => setConfirmDeleteId(model.id)}
-                                >
-                                  移除
-                                </Button>
-                              )}
-                            </div>
+                            )}
                           </div>
-                          {expanded && selected && (
-                            <div className="flex flex-col gap-3 border-t bg-muted/30 px-3 py-3">
-                              <div>
-                                <p className="text-sm font-medium">{model.name}</p>
-                                <p className="mt-0.5 text-xs text-muted-foreground">
-                                  {model.model_id} · 上下文{" "}
-                                  {formatContextWindow(model.context_window)}
-                                </p>
-                              </div>
-                              <ParameterEditor
-                                specs={model.param_specs}
-                                params={params}
-                                onChange={setParams}
-                              />
-                              <div className="flex items-center justify-between gap-3 border-t pt-3">
-                                {selectedIsOfficial && (
-                                  <p className="text-xs text-warning">
-                                    官方提供的参数，请谨慎修改
-                                  </p>
-                                )}
-                                <div
-                                  className={cn(
-                                    "flex items-center gap-2",
-                                    !selectedIsOfficial && "ml-auto",
-                                  )}
-                                >
-                                  <Button variant="outline" size="sm" onClick={openJson}>
-                                    配置 JSON
-                                  </Button>
-                                  <Button
-                                    size="sm"
-                                    onClick={() => void saveSelected()}
-                                    disabled={saving}
-                                  >
-                                    {saving && <Spinner data-icon="inline-start" />}
-                                    保存参数
-                                  </Button>
-                                </div>
-                              </div>
-                            </div>
-                          )}
-                        </li>
-                      );
-                    })}
+                        </div>
+                      </li>
+                    ))}
                   </ul>
                 )}
               </ScrollArea>
             </div>
           </div>
         )}
-
-        {view === "json" && selected && (
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-            <DialogHeader className="border-b px-5 py-3">
-              <div className="flex items-center gap-2">
-                <Button variant="ghost" size="sm" onClick={backToList}>
-                  <ArrowLeftIcon data-icon="inline-start" />
-                  返回
-                </Button>
-                <DialogTitle className="text-sm">配置 JSON</DialogTitle>
-              </div>
-              <DialogDescription>
-                直接编辑 {selected.name} 的参数配置；官方提供的参数请谨慎修改。
-              </DialogDescription>
-            </DialogHeader>
-            {selectedIsOfficial && (
-              <div className="shrink-0 border-b bg-warning/5 px-5 py-2 text-xs text-warning">
-                官方提供的参数，请谨慎修改
-              </div>
-            )}
-            <div className="min-h-0 flex-1 p-4">
-              <Textarea
-                value={jsonText}
-                onChange={(event) => {
-                  setJsonText(event.target.value);
-                  setJsonError(null);
-                }}
-                className="h-full w-full resize-none font-mono text-xs"
-                spellCheck={false}
-                aria-label="配置 JSON"
-              />
-            </div>
-            {jsonError && (
-              <p className="shrink-0 px-5 pb-2 text-xs text-destructive" role="alert">
-                {jsonError}
-              </p>
-            )}
-            <DialogFooter className="mx-0 mb-0 border-t px-5 py-3">
-              <Button variant="outline" onClick={restoreDefaults}>
-                恢复默认
-              </Button>
-              <Button variant="outline" onClick={formatJson}>
-                格式化
-              </Button>
-              <Button onClick={saveJson} disabled={saving}>
-                保存
-              </Button>
-            </DialogFooter>
-          </div>
-        )}
       </DialogContent>
+
+      <ModelDetailDialog
+        key={detailModel?.id ?? "closed"}
+          open={detailOpen}
+        onOpenChange={(next) => {
+            setDetailOpen(next);
+            if (!next) setDetailModel(null);
+          }}
+        model={detailModel}
+        api={api}
+        onSaved={onSaved}
+      />
 
       <Dialog open={manualOpen} onOpenChange={setManualOpen}>
         <DialogContent className="max-h-[calc(100svh-2rem)] overflow-auto sm:max-w-lg">
@@ -862,12 +752,46 @@ function LegacyModelImportSheet({
               />
             </Field>
             <div className="border-t pt-3">
-              <p className="mb-3 text-sm font-medium">模型参数</p>
+              <div className="mb-3 flex items-center justify-between gap-3">
+                  <p className="text-sm font-medium">模型参数</p>
+                  <Button variant="outline" size="sm" onClick={toggleManualJson}>
+                    {manualJsonOpen ? "返回图形编辑" : "配置 JSON"}
+                  </Button>
+                </div>
               {manualLoading ? (
                 <div className="flex items-center gap-2 py-2 text-xs text-muted-foreground">
                   <Spinner />
                   正在加载参数...
                 </div>
+                ) : manualJsonOpen ? (
+                  <div className="flex flex-col gap-2">
+                    <Textarea
+                      value={manualJsonText}
+                      onChange={(event) => {
+                        setManualJsonText(event.target.value);
+                        setManualJsonError(null);
+                      }}
+                      className="h-56 w-full resize-none font-mono text-xs"
+                      spellCheck={false}
+                      aria-label="配置 JSON"
+                    />
+                    {manualJsonError && (
+                      <p className="text-xs text-destructive" role="alert">
+                        {manualJsonError}
+                      </p>
+                    )}
+                    <div className="flex items-center gap-2">
+                      <Button variant="outline" size="sm" onClick={restoreManualJson}>
+                        恢复默认
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={formatManualJson}>
+                        格式化
+                      </Button>
+                      <Button size="sm" onClick={applyManualJson}>
+                        应用
+                      </Button>
+                    </div>
+                  </div>
               ) : (
                 <ParameterEditor
                   specs={manualSpecs}
@@ -894,7 +818,3 @@ function LegacyModelImportSheet({
     </Dialog>
   );
 }
-*/
-export { ModelImportSheet } from "./ModelImportSheetFinal";
-
-

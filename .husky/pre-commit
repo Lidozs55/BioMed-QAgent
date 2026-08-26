@@ -23,11 +23,11 @@ if git diff --cached --name-only --diff-filter=ACM | grep -Eq '^database/.*\.py$
 then
   echo "pre-commit: ruff check database"
   uv run ruff check database
-  # echo "pre-commit: pytest database/tests"
-  # uv run pytest database/tests
+  echo "pre-commit: pytest database/tests"
+  uv run pytest database/tests
 fi
 
-# echo "pre-commit: unit tests"
-# pnpm test
+echo "pre-commit: unit tests"
+pnpm test
 
 echo "pre-commit: all quality gates passed"
