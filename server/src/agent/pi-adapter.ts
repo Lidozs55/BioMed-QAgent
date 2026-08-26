@@ -8,6 +8,7 @@ import {
   SessionManager,
   SettingsManager,
   type AgentSessionEvent,
+  type InlineExtension,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 
@@ -23,6 +24,10 @@ import {
 } from "./contracts.js";
 import { PHASE1_SYSTEM_PROMPT, phase1ResourceRoots } from "./phase1-prompt.js";
 import { requireSafeId as validateSafeId } from "./ids.js";
+import {
+  RunProgressContextTracker,
+  runProgressContextMessage,
+} from "./run-progress-context.js";
 import { SKILL_TOOL_MAP } from "./skills/skill-tool-map.js";
 
 type Environment = Record<string, string | undefined>;
@@ -51,6 +56,7 @@ export interface PiUpstreamEvent {
 export interface PiUpstreamSession {
   readonly sessionId: string;
   prompt(input: string): Promise<void>;
+  resetRunProgress?(): void;
   continueAfterLength?(): Promise<void>;
   steer?(text: string): Promise<void>;
   compact?(): Promise<{ summary: string }>;
@@ -145,6 +151,26 @@ const LENGTH_CONTINUATION_MESSAGE =
   "Finish the remaining tool calls, required data artifacts, validation, and final response.";
 export const TOOL_ACTIVATION_NAME = "activate_agent_tools";
 const MAX_ACTIVATED_TOOLS = 12;
+
+function runProgressContextExtension(
+  tracker: RunProgressContextTracker,
+): InlineExtension {
+  return {
+    name: "biomed-run-progress",
+    hidden: true,
+    factory(pi) {
+      pi.on("tool_execution_start", (event) => {
+        tracker.toolStarted(event.toolCallId, event.toolName);
+      });
+      pi.on("tool_execution_end", (event) => {
+        tracker.toolCompleted(event.toolCallId, event.toolName, event.isError);
+      });
+      pi.on("context", (event) => ({
+        messages: [...event.messages, runProgressContextMessage(tracker)],
+      }));
+    },
+  };
+}
 
 function boundedText(value: string): string {
   return value.slice(0, MAX_TEXT);
@@ -622,6 +648,9 @@ async function createRealUpstreamSession(
       null,
     ));
   }
+  const runProgressTracker = config.getBuildResult === undefined
+    ? undefined
+    : new RunProgressContextTracker(config.getBuildResult);
   const resourceLoader = new DefaultResourceLoader({
     cwd: config.cwd,
     agentDir: path.join(config.cwd, ".pi"),
@@ -634,6 +663,9 @@ async function createRealUpstreamSession(
     noThemes: true,
     noContextFiles: true,
     systemPrompt: config.systemPrompt,
+    extensionFactories: runProgressTracker === undefined
+      ? []
+      : [runProgressContextExtension(runProgressTracker)],
   });
   await resourceLoader.reload();
   const configuredTools = config.tools ?? [];
@@ -727,6 +759,7 @@ async function createRealUpstreamSession(
   return {
     sessionId: session.sessionId,
     prompt: (input) => session.prompt(input),
+    resetRunProgress: () => runProgressTracker?.reset(),
     continueAfterLength: () => session.sendCustomMessage({
       customType: "biomed_length_continuation",
       content: LENGTH_CONTINUATION_MESSAGE,
@@ -1166,6 +1199,10 @@ class PiBioMedAgentSession implements BioMedAgentSession {
         ? { type: "turn_cancelled" }
         : { type: "turn_cancelled", reason: boundedText(reason) },
     });
+  }
+
+  resetRunProgress(): void {
+    this.upstream.resetRunProgress?.();
   }
 
   async steer(text: string): Promise<void> {

@@ -1,3 +1,5 @@
+import type { BuildResult } from "@biomed/contracts";
+
 export type BioMedAgentErrorCode =
   | "INVALID_CONFIGURATION"
   | "INVALID_SESSION_CONFIG"
@@ -105,6 +107,8 @@ export interface BioMedSessionConfig {
   tools?: readonly BioMedAgentTool[];
   /** Tools whose full schemas are available on the first model turn. */
   initialToolNames?: readonly string[];
+  /** Current run product state, read without consuming the terminal BuildResult. */
+  getBuildResult?: () => BuildResult | null;
   cleanup?: () => Promise<void>;
 }
 
@@ -117,6 +121,7 @@ export interface BioMedAgentSession {
   readonly taskId: string;
   readonly runId: string;
   run(input: string, options?: RunOptions): AsyncIterable<BioMedAgentEvent>;
+  resetRunProgress?(): void;
   steer?(text: string): Promise<void>;
   compact?(): Promise<{ summary: string }>;
   cancel(reason?: string): Promise<void>;

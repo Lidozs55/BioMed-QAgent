@@ -76,6 +76,7 @@ export interface DurableAgentWorkspace {
   permissionBroker?: PermissionBroker;
   setRunId?: (runId: string) => void;
   setPiSessionId?: (piSessionId: string) => void;
+  peekBuildResult?: () => BuildResult | null;
   consumeBuildResult?: () => BuildResult | null;
   /**
    * Run-termination hook (round-4 audit): the workspace clears per-run
@@ -420,6 +421,7 @@ export async function createDurableAgentRuntime(
     }
     task.workspace.setRunId?.(runId);
     task.approvalGate.setRunId(runId);
+    task.session.resetRunProgress?.();
     task.activeRunId = runId;
     const execution = consumeRun(taskId, runId, input);
     activeExecutions.add(execution);
@@ -465,6 +467,7 @@ export async function createDurableAgentRuntime(
           "prepare_dynamic_family_build",
           "submit_dynamic_family_build",
         ],
+        getBuildResult: () => workspace.peekBuildResult?.() ?? null,
         cleanup: disposeWorkspace,
       });
       workspace.setPiSessionId?.(session.piSessionId);
