@@ -212,6 +212,9 @@ base64 送 Qwen-VL；PDF 先用 `server/src/processing/vlm/pdf-images.ts` 提取
 产物 `parsed/chart_data/chart_data.csv` + `chart_data_points.csv`（UTF-8 BOM，
 Excel 兼容）。每行 `source_asset_id` 将 chart 追溯到原始图片 / PDF。超过 VLM
 尺寸/字节上限的图片不自动降采样，工具返回明确错误提示以更清晰的分辨率重新截图。
+框架在 `data/output/tasks/<taskId>/` 保留处理原件，同时把这三项 preparation-only
+输出（含 `confidence_records.json`）同步到 Agent Workspace 的同名相对路径，供后续
+`workspace_read` 使用；Workspace 副本不具有 Dataset Core Publication 权威。
 
 > 决策依据：ADR-003（保留可信内核）、ADR-007（Agent 不决定数据值）。
 

@@ -59,6 +59,8 @@ import type { SourceAssetRegistry } from "../../runtime/source-assets/registry.j
 export interface BusinessToolBundleContext {
   /** Absolute task root (TaskWorkDir root). */
   taskRoot: string;
+  /** Agent-owned preparation root for readable processing outputs. */
+  workspaceRoot?: string;
   hooks?: ToolHooks;
   /** Per-run analysis staging key; may be a live getter for later runs. */
   runId?: string | (() => string);
@@ -289,6 +291,7 @@ export async function createBusinessToolBundle(
   register(createPdfTools(shared), "pdf_extraction");
   register(createChartDataVlmTool({
     ...shared,
+    workspaceRoot: context.workspaceRoot,
     vlmConfig: context.vlmConfig,
     httpClient: client,
     onWarning: context.onWarning,

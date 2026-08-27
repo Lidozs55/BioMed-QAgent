@@ -294,7 +294,8 @@ describe("extract_chart_data_vlm tool", () => {
 
   it("runs L1 over a fixture VLM server and writes chart CSVs with provenance", async () => {
     const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-vlm-"));
-    roots.push(taskRoot);
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "p5-vlm-workspace-"));
+    roots.push(taskRoot, workspaceRoot);
     const fixture = await startFixtureServer((_req, res) => {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ choices: [{ message: { content: GOOD_VLM_JSON } }] }));
@@ -306,6 +307,7 @@ describe("extract_chart_data_vlm tool", () => {
     });
     const [tool] = createChartDataVlmTool({
       taskRoot,
+      workspaceRoot,
       approvalGate: { request: async () => "approve" },
       vlmConfig: { apiKey: "k", baseUrl: "https://vlm.example.com/v1", model: "qwen-vl-max" },
       httpClient,
@@ -328,6 +330,18 @@ describe("extract_chart_data_vlm tool", () => {
     expect(parsed.outputs.some((output) => output.endsWith(CHART_CSV_NAME))).toBe(true);
     expect(parsed.outputs.some((output) => output.endsWith(CHART_POINTS_CSV_NAME))).toBe(true);
     expect(parsed.outputs.some((output) => output.endsWith("confidence_records.json"))).toBe(true);
+    await expect(readFile(
+      path.join(workspaceRoot, "parsed", "chart_data", CHART_CSV_NAME),
+      "utf8",
+    )).resolves.toContain("bar");
+    await expect(readFile(
+      path.join(workspaceRoot, "parsed", "chart_data", CHART_POINTS_CSV_NAME),
+      "utf8",
+    )).resolves.toContain("S1");
+    await expect(readFile(
+      path.join(workspaceRoot, "parsed", "chart_data", "confidence_records.json"),
+      "utf8",
+    )).resolves.toContain("human_review_state");
     const confidenceArtifact = JSON.parse(
       await readFile(path.join(taskRoot, "parsed", "chart_data", "confidence_records.json"), "utf8"),
     ) as {

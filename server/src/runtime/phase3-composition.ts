@@ -500,6 +500,7 @@ export async function createPhase3Runtime(
       );
       const bundle = await createBusinessToolBundle({
         taskRoot: taskRoot,
+        workspaceRoot,
         db: dbClient,
         approvalGate,
         hilGate: approvalGate,

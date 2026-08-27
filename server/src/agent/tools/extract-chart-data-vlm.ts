@@ -8,6 +8,7 @@
  * ``DASHSCOPE_API_KEY`` / ``DASHSCOPE_BASE_URL`` env fallbacks.
  */
 
+import { copyFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 
 import type { BioMedAgentTool } from "../contracts.js";
@@ -30,6 +31,8 @@ import { errorResult } from "./result.js";
 export const EXTRACT_CHART_DATA_VLM_TOOL_NAME = "extract_chart_data_vlm";
 
 export interface ChartDataVlmToolDeps extends ToolServiceDeps {
+  /** Agent-owned preparation root. Framework output remains authoritative. */
+  workspaceRoot?: string;
   hooks?: ToolHooks;
   vlmConfig?: Partial<VlmConfig>;
   /** Injectable HTTP client (fixture tests; default is the public policy client). */
@@ -44,6 +47,27 @@ function expectString(value: unknown, field: string, fallback: string): string {
   if (value === undefined || value === null) return fallback;
   if (typeof value !== "string") throw new TypeError(`${field} must be a string`);
   return value;
+}
+
+async function mirrorPreparationOutputs(
+  result: VlmResult,
+  taskRoot: string,
+  workspaceRoot: string | undefined,
+): Promise<void> {
+  if (result.status !== "ok" || workspaceRoot === undefined) return;
+  const resolvedTaskRoot = path.resolve(taskRoot);
+  const resolvedWorkspaceRoot = path.resolve(workspaceRoot);
+  if (resolvedTaskRoot === resolvedWorkspaceRoot) return;
+  for (const output of result.outputs) {
+    const source = path.resolve(resolvedTaskRoot, output);
+    const relative = path.relative(resolvedTaskRoot, source);
+    if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) {
+      throw new Error(`VLM preparation output escaped the task root: ${output}`);
+    }
+    const destination = path.join(resolvedWorkspaceRoot, relative);
+    await mkdir(path.dirname(destination), { recursive: true });
+    await copyFile(source, destination);
+  }
 }
 
 /**
@@ -136,6 +160,7 @@ export function createChartDataVlmTool(deps: ChartDataVlmToolDeps): BioMedAgentT
       let result: VlmResult;
       try {
         result = await tools.extractChartDataVlm(sourcePath, hint, signal);
+        await mirrorPreparationOutputs(result, deps.taskRoot, deps.workspaceRoot);
       } catch (error) {
         const failure = errorResult(error);
         return {
