@@ -44,11 +44,12 @@ used to exercise/restrict event pages.
    reuses that run and cursor; it never posts a second run.
 5. Permission requests are classified without executing anything. Only a
    canonical `fs.read` in the current task workspace (excluding secret-named
-   files) and the fixed diagnostic command strings (`node --version`,
-   `node -v`, `python --version`, `python3 --version`, `git --version`) with a
-   workspace cwd are automatically allowed, once. Network, shell fragments,
-   writes/edits, secrets, external paths, and unknown/越界 requests stop with
-   exit code `20`.
+   files) and the argument-free, workspace-local fixed parser form
+   `node parse*.js` / `node parse*.mjs` are automatically allowed, once.
+   Recognized shell-wrapper or subprocess-network bypasses are automatically
+   denied once so the same run can recover through governed tools. Malformed,
+   secret, external, unknown, and other out-of-policy requests remain
+   fail-closed and stop with exit code `20`.
 6. Every `kind=data_review` request stops with exit code `21` and writes
    `HIL-STOP.json`. `browser_evidence_acceptance` and
    `publication_acceptance` are treated as data-review stops regardless of

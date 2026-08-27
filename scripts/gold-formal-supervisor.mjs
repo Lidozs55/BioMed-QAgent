@@ -43,6 +43,8 @@ const MAX_PROMPT_BYTES = 64 * 1024;
 const MAX_JSON_BYTES = 8 * 1024 * 1024;
 const FIXED_PARSER_EXECUTABLES = new Set(["node", "node.exe"]);
 const FIXED_PARSER_SCRIPT = /^parse(?:[-_][a-z0-9][a-z0-9_-]*)?\.m?js$/iu;
+const KNOWN_SHELL_WRAPPER = /(?:^|[\\/])(?:bash|cmd(?:\.exe)?|powershell(?:\.exe)?|pwsh(?:\.exe)?|sh)(?:\s|$)/iu;
+const KNOWN_NETWORK_BYPASS = /(?:^|[\\/])(?:curl|wget)(?:\.exe)?(?:\s|$)|https?:\/\//iu;
 const SECRET_KEY = /(?:access[_-]?token|api[_-]?key|authorization|credential|password|private[_-]?key|secret|token)/iu;
 const SECRET_BASENAME = /^(?:\.env(?!\.example$)(?:\..*)?|credentials?\.json|secrets?\.json|.*\.(?:key|pem|p12|pfx)|.*(?:secret|credential|token|password|private[_-]?key).*)$/iu;
 const SHELL_META = /[;&|<>`\n\r$()]/u;
@@ -143,6 +145,11 @@ export function isFixedParserCommand(command, cwd, workspaceRoot) {
   return pathWithin(workspaceRoot, scriptPath) && !sensitivePath(scriptPath);
 }
 
+function isKnownExecBypass(command) {
+  return typeof command === "string" &&
+    (KNOWN_SHELL_WRAPPER.test(command) || KNOWN_NETWORK_BYPASS.test(command));
+}
+
 /**
  * Fail-closed permission classifier. It has no network/shell/secret branch.
  * `canonical_resource` is preferred because the Host already canonicalizes it.
@@ -172,6 +179,14 @@ export function classifyPermission(request, options = {}) {
         decision: "allow",
         grant_scope: "once",
         reason: "fixed shell-free parser command",
+      };
+    }
+    if (isKnownExecBypass(request.command)) {
+      return {
+        action: "deny",
+        decision: "deny",
+        grant_scope: null,
+        reason: "known shell or network subprocess bypass",
       };
     }
     return { action: "stop", reason: "process.exec is not a fixed parser command" };
@@ -618,9 +633,12 @@ async function postNewRun(api, taskId, requestId, prompt) {
 }
 
 async function resolvePermission(api, taskId, runId, request, decision) {
-  if (decision.action !== "allow") return;
+  if (decision.action !== "allow" && decision.action !== "deny") return;
   if (typeof request.request_id !== "string") throw new SupervisorError("protocol", "permission request id is missing");
-  await api.request("POST", `/api/v1/tasks/${encodeURIComponent(taskId)}/runs/${encodeURIComponent(runId)}/permissions/${encodeURIComponent(request.request_id)}`, { decision: "allow", grant_scope: decision.grant_scope });
+  await api.request("POST", `/api/v1/tasks/${encodeURIComponent(taskId)}/runs/${encodeURIComponent(runId)}/permissions/${encodeURIComponent(request.request_id)}`, {
+    decision: decision.decision,
+    grant_scope: decision.grant_scope,
+  });
 }
 
 async function latestHumanResolution(evidenceDir) {
@@ -820,7 +838,7 @@ export async function supervise(input, dependencies = {}) {
       const permission = permissionRequest(event);
       if (isRunEvent && permission !== null && typeof permission.request_id === "string" && !permissionAlreadyHandled(records, permission.request_id)) {
         const decision = classifyPermission(permission, { workspaceRoot });
-        if (decision.action !== "allow") {
+        if (decision.action === "stop") {
           await appendJsonl(path.join(options.evidenceDir, "permissions.jsonl"), { request_id: permission.request_id, decision });
           state.stopped = true;
           await writeState(options.evidenceDir, { ...state, task_id: options.taskId, case_label: options.caseLabel });
