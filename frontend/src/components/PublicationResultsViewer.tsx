@@ -110,7 +110,7 @@ function PrimaryDataTab({
     <div className="flex min-w-0 flex-col gap-3">
       <PublicationArtifactCard
         entry={primary}
-        publicationId={detail.requirement_id}
+        publicationId={detail.publication_id}
         taskId={taskId}
         previewCsv
       />
@@ -162,14 +162,14 @@ function SourceTab({
       {provenanceEntry !== undefined && (
         <PublicationArtifactCard
           entry={provenanceEntry}
-          publicationId={detail.requirement_id}
+          publicationId={detail.publication_id}
           taskId={taskId}
         />
       )}
       {schemaEntry !== undefined && (
         <PublicationArtifactCard
           entry={schemaEntry}
-          publicationId={detail.requirement_id}
+          publicationId={detail.publication_id}
           taskId={taskId}
         />
       )}
@@ -312,14 +312,14 @@ function ProcessingTab({
       {evidenceEntry !== undefined && (
         <PublicationArtifactCard
           entry={evidenceEntry}
-          publicationId={detail.requirement_id}
+          publicationId={detail.publication_id}
           taskId={taskId}
         />
       )}
       {provenanceEntry !== undefined && (
         <PublicationArtifactCard
           entry={provenanceEntry}
-          publicationId={detail.requirement_id}
+          publicationId={detail.publication_id}
           taskId={taskId}
         />
       )}
@@ -327,7 +327,7 @@ function ProcessingTab({
         <PublicationArtifactCard
           key={entry.artifact_id}
           entry={entry}
-          publicationId={detail.requirement_id}
+          publicationId={detail.publication_id}
           taskId={taskId}
           previewCsv
         />
@@ -362,7 +362,7 @@ function WarningsTab({
         <PublicationArtifactCard
           key={entry.artifact_id}
           entry={entry}
-          publicationId={detail.requirement_id}
+          publicationId={detail.publication_id}
           taskId={taskId}
           previewCsv
         />

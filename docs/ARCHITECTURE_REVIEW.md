@@ -554,8 +554,8 @@ Bridge 拒绝任意 SQL，也不导入 Agent、Skill 或 Dataset Core。缓存�
 | 数据查找完备性 | 18/25 | 来源广、支持网页/数据库/附件/上传/缓存，但查找由 Agent 策略驱动，尚无可验证的“来源宇宙、分页覆盖率、查全率”证明 |
 | 来源可追溯性 | 24/25 | SourceAsset、Provider revision、SourceLocator、OperationResult、Manifest 和消费时重验构成了很强的证据链 |
 | 清洗整合可靠性 | 22/25 | 静态路线确定性强，字段/单位/HIL/去重/冲突/PK-FK 门禁细；动态路线当前非隔离，且不同 Family 的语义验证深度不完全一致 |
-| 输出格式可用性 | 20/25 | 单/多表 CSV、schema、provenance、audit 和拓扑清晰；但当前前端 artifact URL 参数缺陷会影响下载，图表正式发布链也未闭合 |
-| **合计** | **84/100** | 架构明显高于“Agent 生成 CSV”型方案，主要失分在可验证查全、图表正式化和产品收尾 |
+| 输出格式可用性 | 21/25 | 单/多表 CSV、schema/provenance/audit 和拓扑清晰，正式 artifact 路由已按 `publication_id` 闭合；图表正式发布链仍未闭合 |
+| **合计** | **85/100** | 架构明显高于“Agent 生成 CSV”型方案，主要失分在可验证查全、图表正式化和真实案例验收 |
 
 ### 20.2 最强竞争点
 
@@ -565,7 +565,7 @@ Bridge 拒绝任意 SQL，也不导入 Agent、Skill 或 Dataset Core。缓存�
 4. **修正机制真实**：不是在 prompt 中口头“让人确认”，而是证据绑定、可持久化、可恢复的结构化 HIL。
 5. **多表产品模型成熟**：Family/Projection/Table/Relation/ProductAssessment 比单一宽表更适合真实生物医学数据。
 
-### 20.3 高优先级问题
+### 20.3 高优先级问题与修复状态
 
 #### A. 动态 Transform 没有操作系统隔离
 
@@ -575,9 +575,9 @@ Bridge 拒绝任意 SQL，也不导入 Agent、Skill 或 Dataset Core。缓存�
 
 图表能力本身较完整，但默认注册表没有接入 chart-evidence Family 模块。建议最小化补齐一条受控正式路线：VLM 输出先生成带 bbox/model/prompt/transform/review 的 evidence asset，再由注册 Adapter、chart validation 和 ProductAssessment 发布。不要让任意 parsed CSV 直接获得发布权。
 
-#### C. Publication Viewer 使用了错误的 artifact 路由参数
+#### C. Publication Viewer artifact 路由参数（已修复）
 
-[`frontend/src/components/PublicationResultsViewer.tsx`](../frontend/src/components/PublicationResultsViewer.tsx) 在多个 `PublicationArtifactCard` 调用中传入 `detail.requirement_id`，而 API 路径要求 `publication_id`。Publisher 生成的是 `pub_<requirement>_<digest>`，两者通常不同，因此正式产物详情能加载，但 artifact 预览/下载可能 404。现有组件测试的 manifest 没有 artifact，未覆盖该行为。
+[`frontend/src/components/PublicationResultsViewer.tsx`](../frontend/src/components/PublicationResultsViewer.tsx) 已将所有 `PublicationArtifactCard` 统一改为传入 `detail.publication_id`。[`frontend/src/test/publication-components.test.tsx`](../frontend/src/test/publication-components.test.tsx) 使用 `publication_id !== requirement_id` 且包含主数据 artifact 的详情对象锁定实际请求 URL，覆盖了此前 manifest 无 artifact 时遗漏的回归场景。
 
 #### D. 查找“完备性”缺乏可量化证明
 
@@ -644,4 +644,4 @@ Bridge 拒绝任意 SQL，也不导入 Agent、Skill 或 Dataset Core。缓存�
 
 当前架构的主干是合理且有必要的：Agent/Core 分权、固定规格、内容寻址、逐阶段 checkpoint、证据绑定 HIL 和原子发布都直接服务于赛题的“可靠、可追溯、可修正”，不是为了抽象而抽象。
 
-需要谨慎的不是再增加一层框架，而是补齐三项可验收闭环：图表 evidence 到 Publication、查询覆盖率 artifact、前端正式 artifact 下载。与此同时，动态 transform 的隔离必须作为部署前置条件，而不应通过文案弱化。完成这些后，项目最有竞争力的卖点会从“数据源和工具很多”提升为“每一条正式科学数据都能解释来源、处理、质量和修正历史”。
+需要谨慎的不是再增加一层框架，而是继续补齐两项可验收闭环：图表 evidence 到 Publication、查询覆盖率 artifact，并维持前端正式 artifact 下载的回归覆盖。动态 transform 的非隔离边界必须继续如实披露，除非新 ADR 恢复隔离方向。完成这些后，项目最有竞争力的卖点会从“数据源和工具很多”提升为“每一条正式科学数据都能解释来源、处理、质量和修正历史”。
