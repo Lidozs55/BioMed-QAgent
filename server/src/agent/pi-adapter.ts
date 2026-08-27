@@ -498,6 +498,7 @@ export function applyModelProfileToPayload(
     if (value === undefined) continue;
     if (key === "top_logprobs" && selected.params?.logprobs !== true) continue;
     if (key === "max_tokens" || key === "temperature" || key === "top_p") continue;
+    if (key === "reasoning_effort" && value === "off") continue; // 思考强度=关闭：不向上游透传无效值
     if (key === "context_window" || key === "max_output_tokens" ||
         key === "suggested_max_tokens" || key === "capabilities") continue;
     if (dashScopeQwen &&
@@ -523,6 +524,9 @@ export function applyModelProfileToPayload(
     }
     if (selected.enableSearch !== undefined) next.enable_search = selected.enableSearch;
     if (selected.thinkingMode !== undefined) next.enable_thinking = selected.thinkingMode;
+    // 思考开关已并入思考强度：显式选择“关闭”时强制关闭思考，
+    // 优先级高于旧的思维链模式开关。
+    if (selected.params?.reasoning_effort === "off") next.enable_thinking = false;
   }
   return next;
 }

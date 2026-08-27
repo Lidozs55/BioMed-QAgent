@@ -72,9 +72,14 @@ export function ModelDetailDialog({
   const [contextWindow, setContextWindow] = useState(() =>
     model?.context_window == null ? "" : String(model.context_window),
   );
-  const [maxOutputTokens, setMaxOutputTokens] = useState(() =>
-    model?.max_output_tokens == null ? "" : String(model.max_output_tokens),
-  );
+  const [maxOutputTokens, setMaxOutputTokens] = useState(() => {
+    if (model == null) return "";
+    // 以 params.max_tokens（运行时优先）为准；未设置时回退到 max_output_tokens。
+    const fromParams = model.params.max_tokens;
+    const effective =
+      typeof fromParams === "number" ? fromParams : model.max_output_tokens;
+    return effective == null ? "" : String(effective);
+  });
   const [jsonOpen, setJsonOpen] = useState(false);
   const [jsonText, setJsonText] = useState(() =>
     model ? allParamsJson(model.param_specs, model.params) : "",
@@ -145,10 +150,19 @@ export function ModelDetailDialog({
       return;
     }
 
-    const patch: Partial<ManagedModelInput> = { params };
+    const patch: Partial<ManagedModelInput> = {};
     if (parsedContext !== model.context_window) {
       patch.context_window = parsedContext;
     }
+    // “最大输出 Tokens”以顶部输入框为唯一入口：同步写入 params.max_tokens
+    //（运行时优先字段），避免与图形编辑器中的同名列重复调整。
+    const nextParams = { ...params };
+    if (parsedMax === null) {
+      delete nextParams.max_tokens;
+    } else {
+      nextParams.max_tokens = parsedMax;
+    }
+    patch.params = nextParams;
     if (parsedMax !== model.max_output_tokens) {
       patch.max_output_tokens = parsedMax;
     }
@@ -270,6 +284,7 @@ export function ModelDetailDialog({
               specs={model.param_specs}
               params={params}
               onChange={setParams}
+              hiddenKeys={["max_tokens", "enable_thinking"]}
             />
           )}
         </div>

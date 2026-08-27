@@ -16,6 +16,12 @@ interface ParameterEditorProps {
   specs: ParameterSpec[];
   params: Record<string, unknown>;
   onChange: (next: Record<string, unknown>) => void;
+  /**
+   * Spec keys to hide from the graphical editor (and from the extra-params
+   * list), e.g. when the same setting is exposed as a dedicated control above
+   * the editor. Stored values remain untouched.
+   */
+  hiddenKeys?: string[];
 }
 
 function currentValue(params: Record<string, unknown>, spec: ParameterSpec): unknown {
@@ -118,12 +124,21 @@ function SpecField({
   );
 }
 
-export function ParameterEditor({ specs, params, onChange }: ParameterEditorProps) {
+export function ParameterEditor({
+  specs,
+  params,
+  onChange,
+  hiddenKeys = [],
+}: ParameterEditorProps) {
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  const specKeys = new Set(specs.map((spec) => spec.key));
-  const extraKeys = Object.keys(params).filter((key) => !specKeys.has(key));
-  const advancedSpecs = specs.filter((spec) => spec.advanced);
-  const regularSpecs = specs.filter((spec) => !spec.advanced);
+  const hidden = new Set(hiddenKeys);
+  const visibleSpecs = specs.filter((spec) => !hidden.has(spec.key));
+  const specKeys = new Set(visibleSpecs.map((spec) => spec.key));
+  const extraKeys = Object.keys(params).filter(
+    (key) => !specKeys.has(key) && !hidden.has(key),
+  );
+  const advancedSpecs = visibleSpecs.filter((spec) => spec.advanced);
+  const regularSpecs = visibleSpecs.filter((spec) => !spec.advanced);
 
   const patch = (key: string, next: unknown) => {
     const updated = { ...params };
