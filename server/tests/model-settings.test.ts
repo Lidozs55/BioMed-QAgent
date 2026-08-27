@@ -478,6 +478,47 @@ describe("TypeScript model settings", () => {
       ]));
   });
 
+  test("merges the thinking toggle into reasoning_effort with an off default", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const baseUrl = await serve(service);
+
+    const createProvider = async (name: string, presetId?: string) => {
+      const response = await fetch(`${baseUrl}/api/v1/model-registry/providers`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name,
+          base_url: "https://models.example/v1",
+          api_key: "sk-test",
+          ...(presetId === undefined ? {} : { preset_id: presetId }),
+        }),
+      });
+      return (await response.json()) as { id: string };
+    };
+
+    // DashScope profile and the generic fallback both expose the merged
+    // control and no longer carry the separate enable_thinking toggle.
+    const dashscope = await createProvider("DashScope Test", "dashscope");
+    const fallback = await createProvider("Generic Test");
+    for (const provider of [dashscope, fallback]) {
+      const specs = await (await fetch(
+        `${baseUrl}/api/v1/model-registry/providers/${provider.id}/param-specs`,
+      )).json() as Array<Record<string, unknown>>;
+
+      expect(specs).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          key: "reasoning_effort",
+          default: "off",
+          options: expect.arrayContaining([
+            expect.objectContaining({ value: "off", label: "关闭" }),
+          ]),
+        }),
+      ]));
+      expect(specs.some((spec) => spec.key === "enable_thinking")).toBe(false);
+    }
+  });
+
   test("VLM fallback does not leak a non-DashScope active provider key", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
     const service = await ModelSettingsService.create({ settingsDir, environment: {} });

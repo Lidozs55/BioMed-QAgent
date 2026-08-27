@@ -69,7 +69,7 @@
   adjusts effort; `deepseek-v4` exposes thinking/reasoning effort.
 - DashScope families are covered by `MODEL_PARAM_PREFIXES` (longest-prefix
   match, plus keyword rules for non-chat models): Qwen3.8 uses
-  `reasoning_effort` (`low/medium/xhigh`, default `xhigh`, mutually exclusive
+  `reasoning_effort` (`off/low/medium/xhigh`, default `off`, mutually exclusive
   with `thinking_budget`), Qwen3.7/3.6/3.5 use `enable_thinking` +
   `thinking_budget` (caps 256K/128K), Qwen3-VL adds `presence_penalty` /
   `do_sample` / `seed`, image models (`qwen-image-*`, `wan*`) expose
@@ -83,6 +83,20 @@
   section; the JSON config view serializes **every** supported parameter
   (spec defaults + current values), so it opens non-empty even when stored
   `params` is empty.
+- The thinking on/off switch is merged into the `reasoning_effort` select
+  (generic fallback and DashScope profiles): the first option is
+  `off`/“关闭”, which is also the default, and the separate
+  `enable_thinking` toggle was removed from the spec surface. At runtime
+  `applyModelProfileToPayload` never forwards `reasoning_effort: "off"`
+  upstream, and for DashScope Qwen models an explicit “关闭” forces
+  `enable_thinking: false` (it wins over the legacy chain-of-thought toggle).
+- In the model detail dialog the top “上下文窗口 / 最大输出 Tokens” inputs are
+  the single entry points for those two capacity settings: the graphical
+  parameter editor hides the `max_tokens` spec row (and the merged-away
+  `enable_thinking` key from stored params) via `ParameterEditor`’s
+  `hiddenKeys`, and saving syncs the top “最大输出 Tokens” value into
+  `params.max_tokens` (the runtime-preferred field) so the control stays
+  authoritative. The raw JSON view still shows the full param surface.
 - Saved `params` are carried through `BioMedModelConfig.params` and merged into
   the Pi/OpenAI-compatible request payload by `applyModelProfileToPayload`.
   Portable fields (`max_tokens`/`temperature`/`top_p`) remain controlled by the

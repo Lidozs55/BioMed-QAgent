@@ -284,6 +284,41 @@ describe("Pi model profile mapping", () => {
       tool_choice: "required",
     });
   });
+
+  test("treats merged reasoning_effort 'off' as thinking disabled", () => {
+    // DashScope: explicit 关闭 wins over the legacy chain-of-thought toggle and
+    // the invalid "off" value is never forwarded upstream.
+    expect(applyModelProfileToPayload(
+      { model: "qwen-plus", messages: [] },
+      {
+        provider: "dashscope",
+        modelId: "qwen-plus",
+        apiKey: "secret",
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        thinkingMode: true,
+        params: { reasoning_effort: "off", temperature: 0.2 },
+      },
+    )).toEqual({
+      model: "qwen-plus",
+      messages: [],
+      enable_thinking: false,
+    });
+
+    // Other providers: just drop the invalid value, keep the rest.
+    expect(applyModelProfileToPayload(
+      { model: "custom-chat" },
+      {
+        provider: "custom",
+        modelId: "custom-chat",
+        apiKey: "secret",
+        baseUrl: "https://models.example/v1",
+        params: { reasoning_effort: "off", tool_choice: "auto" },
+      },
+    )).toEqual({
+      model: "custom-chat",
+      tool_choice: "auto",
+    });
+  });
 });
 describe("PiAgentAdapter", () => {
   afterEach(() => {

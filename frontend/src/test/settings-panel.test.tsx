@@ -715,6 +715,38 @@ describe("SettingsPanel model registry", () => {
     });
   });
 
+  it("keeps a single max-output control and syncs params.max_tokens on save", async () => {
+    const api = mockApi({
+      fetchManagedModels: vi.fn().mockResolvedValue([
+        {
+          ...TEST_MODELS[0],
+          params: { temperature: 0.5, max_tokens: 8192, enable_thinking: false },
+        },
+      ]),
+    });
+    renderSettings(api);
+
+    const modelRow = (await screen.findByText("DeepSeek Reasoner", {}, { timeout: 5_000 })).closest("li");
+    expect(modelRow).not.toBeNull();
+    fireEvent.click(within(modelRow as HTMLElement).getByRole("button", { name: "详情" }));
+
+    const detailDialog = await screen.findByRole("dialog", { name: "模型详情" });
+    // 顶部输入框是“最大输出 Tokens”的唯一调整入口：图形参数区不再重复该行，
+    // 旧存储的 max_tokens/enable_thinking 也不会落入“额外参数”。
+    const maxOutputInputs = within(detailDialog).getAllByLabelText("最大输出 Tokens");
+    expect(maxOutputInputs).toHaveLength(1);
+    expect(maxOutputInputs[0]).toHaveValue(8192);
+
+    fireEvent.change(maxOutputInputs[0], { target: { value: "16384" } });
+    fireEvent.click(within(detailDialog).getByRole("button", { name: "保存参数" }));
+
+    await waitFor(() => expect(api.updateManagedModel).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.updateManagedModel).mock.calls[0]?.[1]).toMatchObject({
+      max_output_tokens: 16384,
+      params: { temperature: 0.5, max_tokens: 16384 },
+    });
+  });
+
   it("returns from the JSON view back to the graphical editor without applying", async () => {
     const api = mockApi();
     renderSettings(api);

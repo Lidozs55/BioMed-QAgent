@@ -60,9 +60,11 @@ export const FALLBACK_PARAM_SPECS: ParameterSpec[] = [
     "思考强度",
     "select",
     {
-      defaultValue: "high",
+      // 思考开关已并入思考强度：选择“关闭”即关闭思考（运行时不再透传）。
+      defaultValue: "off",
       advanced: true,
       options: [
+        { value: "off", label: "关闭" },
         { value: "low", label: "低" },
         { value: "medium", label: "中" },
         { value: "high", label: "高" },
@@ -70,7 +72,6 @@ export const FALLBACK_PARAM_SPECS: ParameterSpec[] = [
       ],
     },
   ),
-  spec("enable_thinking", "思考模式", "boolean", { defaultValue: false, advanced: true }),
   spec("thinking_budget", "思考预算（Tokens）", "integer", { min: 0, advanced: true }),
   spec("stop", "停止词（多个用英文逗号分隔）", "string", { advanced: true }),
   spec("stream", "流式输出", "boolean", { defaultValue: true, advanced: true }),
@@ -106,16 +107,17 @@ export const PROFILE_PROVIDER_SPECS: Record<string, ParameterSpec[]> = {
     spec("top_k", "Top K", "integer", { min: 1, max: 100, advanced: true }),
     spec("repetition_penalty", "重复惩罚", "number", { defaultValue: 1, min: 0, max: 2 }),
     spec("stop", "停止词（多个用英文逗号分隔）", "string", { advanced: true }),
-    spec("enable_thinking", "思考模式", "boolean", { defaultValue: false, advanced: true }),
     spec("thinking_budget", "思考预算（Tokens）", "integer", { min: 0, advanced: true }),
     spec(
       "reasoning_effort",
       "思考强度（Qwen3.8）",
       "select",
       {
-        defaultValue: "xhigh",
+        // 思考开关已并入思考强度：选择“关闭”即关闭思考（运行时不再透传）。
+        defaultValue: "off",
         advanced: true,
         options: [
+          { value: "off", label: "关闭" },
           { value: "low", label: "低" },
           { value: "medium", label: "中" },
           { value: "xhigh", label: "超高" },
