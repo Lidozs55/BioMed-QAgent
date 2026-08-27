@@ -7,12 +7,11 @@ import { afterEach, describe, expect, test } from "vitest";
 import {
   classifyStep,
   parameterizeArgs,
-  parseFrontmatter,
   renderScriptCandidate,
   renderSkillCandidate,
   renderToolkitDoc,
   renderToolkitIndex,
-  scanSkills,
+  scanToolModules,
   traceFlow,
 } from "../../scripts/solidify-run.mjs";
 
@@ -168,43 +167,79 @@ describe("renderSkillCandidate", () => {
   });
 });
 
-describe("parseFrontmatter", () => {
-  test("extracts description and body from SKILL.md", () => {
-    const parsed = parseFrontmatter(
-      ['---', 'name: analysis', 'description: "Statistical tools."', "---", "", "# Body", "content"].join("\n"),
-    );
-    expect(parsed.description).toBe("Statistical tools.");
-    expect(parsed.body).toContain("# Body");
-  });
-
-  test("returns raw text as body when frontmatter missing", () => {
-    const parsed = parseFrontmatter("# nothing here");
-    expect(parsed.description).toBe("");
-    expect(parsed.body).toBe("# nothing here");
-  });
-});
-
 describe("toolkit generation", () => {
-  test("scanSkills + renderToolkitDoc produce standalone docs", async () => {
+  test("scans TypeScript tool metadata and renders standalone invocation docs", async () => {
     const dir = await fixtureDir();
-    const skillDir = path.join(dir, "analysis");
-    await mkdir(skillDir);
+    const toolsDir = path.join(dir, "tools");
+    await mkdir(toolsDir);
     await writeFile(
-      path.join(skillDir, "SKILL.md"),
-      ['---', "name: analysis", "description: Statistical tools.", "---", "", "# Analysis", "Use tools."].join("\n"),
+      path.join(toolsDir, "fixture-search.ts"),
+      [
+        "/** Fixture lookup tools used for deterministic toolkit tests. */",
+        `// Unicode index regression: ${String.fromCodePoint(0x1f9ea)}`,
+        'import type { BioMedAgentTool } from "../contracts.js";',
+        'import type { FixtureClient } from "../../external/fixture-client.js";',
+        'const unsafeCharacters = /["\\\\]/u;',
+        "",
+        'export const LOOKUP_FIXTURE_TOOL_NAME = "lookup_fixture";',
+        "export interface FixtureToolDeps { client: FixtureClient; }",
+        "export function createLookupFixtureTool(deps: FixtureToolDeps): BioMedAgentTool {",
+        "  return createFixtureTools(deps)[0];",
+        "}",
+        "export function createFixtureTools(deps: FixtureToolDeps): BioMedAgentTool[] {",
+        "  const tool: BioMedAgentTool = {",
+        "    name: LOOKUP_FIXTURE_TOOL_NAME,",
+        '    label: "Lookup fixture",',
+        '    description: "Lookup " + "fixture records.",',
+        "    parameters: {",
+        '      type: "object",',
+        "      properties: {",
+        '        query: { type: "string", description: "Fixture query." },',
+        "      },",
+        '      required: ["query"],',
+        "      additionalProperties: false,",
+        "    },",
+        "    async execute(value) {",
+        "      const details = await deps.client.lookup(value);",
+        "      return { content: JSON.stringify(details), details };",
+        "    },",
+        "  };",
+        "  return [tool];",
+        "}",
+      ].join("\n"),
     );
+    await writeFile(path.join(toolsDir, "helper.ts"), 'export const helper = "not a tool";\n');
 
-    const skills = await scanSkills(dir);
-    expect(skills).toHaveLength(1);
-    expect(skills[0]).toMatchObject({ name: "analysis", slug: "analysis" });
+    const modules = await scanToolModules(toolsDir);
+    expect(modules).toHaveLength(1);
+    expect(modules[0]).toMatchObject({ moduleName: "fixture-search", slug: "fixture-search" });
+    expect(modules[0].tools).toEqual([
+      expect.objectContaining({
+        name: "lookup_fixture",
+        description: "Lookup fixture records.",
+      }),
+    ]);
+    expect(modules[0].imports).toContain("../../external/fixture-client.js");
+    expect(modules[0].factories).toContainEqual(expect.objectContaining({ name: "createFixtureTools" }));
 
-    const doc = await renderToolkitDoc(skills[0].sourcePath, dir);
-    expect(doc).toContain("# analysis");
-    expect(doc).toContain("Statistical tools.");
-    expect(doc).toContain("Use tools.");
+    const doc = renderToolkitDoc(modules[0]);
+    expect(doc).toContain("# fixture-search");
+    expect(doc).toContain("## 用途");
+    expect(doc).toContain("Lookup fixture records.");
+    expect(doc).toContain("## 参数");
+    expect(doc).toContain('query: { type: "string"');
+    expect(doc).toContain("## 返回值");
+    expect(doc).toContain("BioMedToolResult");
+    expect(doc).toContain("## 依赖");
+    expect(doc).toContain("FixtureToolDeps");
+    expect(doc).toContain("## 独立调用方式");
+    expect(doc).toContain("createFixtureTools(dependencies)");
+    expect(doc).not.toContain("createLookupFixtureTool(dependencies)");
+    expect(doc).not.toContain("SKILL.md");
 
-    const index = renderToolkitIndex(skills);
-    expect(index).toContain("analysis");
-    expect(index).toContain("./analysis.md");
+    const index = renderToolkitIndex(modules);
+    expect(index).toContain("fixture-search");
+    expect(index).toContain("lookup_fixture");
+    expect(index).toContain("./fixture-search.md");
   });
 });

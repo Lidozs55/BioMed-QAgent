@@ -13,8 +13,9 @@
    使同类任务不必从头让 agent 重新一步步调用，降低调用成本。
 2. **SKILL.md 固化**：把验证过的稳定流程沉淀为 Skill 知识候选，供人工评审后提升进
    curated 的 `.pi/skills/`。
-3. **可拆卸工具包**：为已登记的工具/技能生成**独立文档**，使单个工具可以被其他 agent
-   单独调用（不强制完整启动整个项目）。
+3. **可拆卸工具包**：从 `server/src/agent/tools/` 的 TypeScript 工具事实生成**独立调用
+   文档**，使其他 agent 能看到用途、参数、返回值、依赖和调用骨架，而不是重复摘要
+   已经写给主 Agent 的 `SKILL.md`。
 4. **自迭代闭环**：每次 Run 结束后可触发分析，产出上述固化产物并回填到任务目录，
    形成「执行 → 分析 → 固化 → 复用」的闭环。
 
@@ -41,7 +42,7 @@
 | 模式 | 输入 | 产物 | 目的 |
 | --- | --- | --- | --- |
 | 默认 | `<taskId|taskDir>` | `events.jsonl` 的工具流摘要 + 固化石（可复用脚本候选 + SKILL.md 候选）写到该任务的 `solidification/` | 流程固化 + SKILL.md 固化 + 自迭代分析 |
-| `--toolkit <outDir>` | `.pi/skills/*/SKILL.md` | 每技能独立 Markdown 文档 + `README.md` 索引到 `outDir`（默认 `docs/toolkit/`） | 可拆卸工具包 |
+| `--toolkit <outDir>` | `server/src/agent/tools/*.ts` 中的静态 `BioMedAgentTool` 元数据 | 每工具模块独立 Markdown 文档 + `README.md` 索引到 `outDir`（默认 `docs/toolkit/`） | 可拆卸工具包 |
 
 ### 纯函数设计（供 vitest 直接测试）
 
@@ -56,8 +57,14 @@
   `.mjs` 可复用脚本骨架（占位参数化，剥离任务专属路径/run id）。
 - `renderSkillCandidate(steps, meta) → string`：渲染带 frontmatter
   （`name`/`description`）的 SKILL.md 候选，供人工评审后提升进 `.pi/skills/`。
-- `scanSkills(skillsRoot) → SkillInfo[]` / `renderToolkitDoc(info)` /
-  `renderToolkitIndex(list) → string`：生成可拆卸工具包文档。
+- `scanToolModules(toolsRoot) → ToolModuleEntry[]` / `renderToolkitDoc(entry)` /
+  `renderToolkitIndex(list) → string`：以受限词法扫描提取静态工具名、description、
+  parameters schema、导出工厂签名和 import 依赖，并生成可拆卸工具包文档。动态
+  schema 表达式保持源码引用，不猜测运行时值。
+
+`--toolkit` 生成的是调用文档，不复制工具实现，也不绕过运行边界。调用者仍需按工厂
+签名注入 task-scoped 服务，并遵守 workspace、网络策略、HIL 和 Dataset Core 门禁；
+“无需完整启动项目”不等于“无需依赖或安全上下文”。
 
 ### 闭环工作流
 

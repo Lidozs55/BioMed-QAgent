@@ -20,8 +20,8 @@
  *       SKILL-candidate-<name>.md  SKILL.md 固化候选（待人工评审后提升进 .pi/skills/）
  *
  * --toolkit 模式（可拆卸工具包）：
- *   - 扫描 .pi/skills 下每个技能目录中的 SKILL.md，生成独立 Markdown 文档 + README
- *     索引到 outDir（默认 docs/toolkit/），可被任何 agent 单独调用。
+ *   - 扫描 server/src/agent/tools 下的 TypeScript 工具定义，生成独立 Markdown 文档
+ *     + README 索引到 outDir（默认 docs/toolkit/），可被其他 agent 单独调用。
  *
  * 固化到生产路径（scripts/、.pi/skills/）必须经人工评审(HIL)；本脚本只在任务/文档
  * 目录自动产出候选，不擅自写入生产路径。见 docs/architecture/skill-self-iteration.md。
@@ -31,7 +31,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 const TASKS_ROOT = path.resolve("data/output/tasks");
-const SKILLS_ROOT = path.resolve(".pi/skills");
+const TOOLS_ROOT = path.resolve("server/src/agent/tools");
 
 /** 确定性可重放的工具族：前缀匹配（分析/统计/绘图/本地 PDF 提取）。 */
 const DETERMINISTIC_PATTERNS = [/^generate_/, /^run_/, /^basic_/, /^extract_pdf_/];
@@ -61,7 +61,7 @@ const USAGE = `
   node scripts/solidify-run.mjs --help
 
 Options:
-  --toolkit [outDir]  生成 .pi/skills 每技能独立 Markdown 文档 + README 索引
+  --toolkit [outDir]  为 server/src/agent/tools 的 TS 工具生成独立调用文档 + README 索引
                       outDir 默认 docs/toolkit/
   -h, --help          显示本帮助
 `.trim();
@@ -215,42 +215,343 @@ written only to the task's solidification/ directory; promoting it here (curated
 `;
 }
 
-/** 从 printableKeys / description 组合出一个稳定的工具族标签，作为剧本说明。 */
+/** 从工具或模块名称生成稳定文件名。 */
 function slug(name) {
   return String(name).replace(/[^a-z0-9-]/gi, "-").toLowerCase().replace(/-+/g, "-").replace(/^-|-$/g, "");
 }
 
-export async function renderToolkitDoc(filepath, skillsRoot) {
-  const text = await readFile(filepath, "utf8");
-  const parsed = parseFrontmatter(text);
-  const rel = path.relative(skillsRoot, filepath);
-  const skillName = rel.split(path.sep)[0];
-  return `# ${skillName}
+function leadingModulePurpose(source) {
+  const match = /^\s*\/\*\*([\s\S]*?)\*\//u.exec(source);
+  if (!match) return "TypeScript Agent tool module.";
+  return match[1]
+    .split(/\r?\n/u)
+    .map((line) => line.replace(/^\s*\* ?/u, "").trim())
+    .filter(Boolean)
+    .join(" ");
+}
 
-> ${parsed.description || "No description."}
->
-> source: \`.pi/skills/${rel.replaceAll("\\", "/")}\`
+function importedModules(source) {
+  const imports = [];
+  const pattern = /\bfrom\s+["']([^"']+)["']/gu;
+  for (const match of source.matchAll(pattern)) imports.push(match[1]);
+  return [...new Set(imports)].sort((a, b) => a.localeCompare(b));
+}
 
-${parsed.body}
+function staticStringConstants(source) {
+  const constants = new Map();
+  const pattern = /\b(?:export\s+)?const\s+([A-Z][A-Z0-9_]*)\s*=\s*(["'])([^"'\r\n]+)\2\s*;/gu;
+  for (const match of source.matchAll(pattern)) constants.set(match[1], match[3]);
+  return constants;
+}
+
+function codeMask(source) {
+  const mask = new Array(source.length).fill(true);
+  let state = "code";
+  let regexClass = false;
+  for (let i = 0; i < source.length; i += 1) {
+    const char = source[i];
+    const next = source[i + 1];
+    if (state === "line") {
+      mask[i] = false;
+      if (char === "\n") state = "code";
+    } else if (state === "block") {
+      mask[i] = false;
+      if (char === "*" && next === "/") {
+        mask[i + 1] = false;
+        i += 1;
+        state = "code";
+      }
+    } else if (state === "regex") {
+      mask[i] = false;
+      if (char === "\\") {
+        if (i + 1 < source.length) mask[++i] = false;
+      } else if (char === "[") {
+        regexClass = true;
+      } else if (char === "]") {
+        regexClass = false;
+      } else if (char === "/" && !regexClass) {
+        state = "code";
+      }
+    } else if (state === "single" || state === "double" || state === "template") {
+      mask[i] = false;
+      if (char === "\\") {
+        if (i + 1 < source.length) mask[++i] = false;
+      } else if (
+        (state === "single" && char === "'") ||
+        (state === "double" && char === '"') ||
+        (state === "template" && char === "`")
+      ) {
+        state = "code";
+      }
+    } else if (char === "/" && next === "/") {
+      mask[i] = false;
+      mask[i + 1] = false;
+      i += 1;
+      state = "line";
+    } else if (char === "/" && next === "*") {
+      mask[i] = false;
+      mask[i + 1] = false;
+      i += 1;
+      state = "block";
+    } else if (char === "/" && regexCanStart(source, i)) {
+      mask[i] = false;
+      regexClass = false;
+      state = "regex";
+    } else if (char === "'") {
+      mask[i] = false;
+      state = "single";
+    } else if (char === '"') {
+      mask[i] = false;
+      state = "double";
+    } else if (char === "`") {
+      mask[i] = false;
+      state = "template";
+    }
+  }
+  return mask;
+}
+
+function regexCanStart(source, position) {
+  let previous = position - 1;
+  while (previous >= 0 && /\s/u.test(source[previous])) previous -= 1;
+  if (previous < 0) return true;
+  return /[([{,:;=!?&|]/u.test(source[previous]);
+}
+
+function matchingDelimiter(source, mask, start, open, close) {
+  let depth = 0;
+  for (let i = start; i < source.length; i += 1) {
+    if (!mask[i]) continue;
+    if (source[i] === open) depth += 1;
+    else if (source[i] === close && --depth === 0) return i;
+  }
+  return -1;
+}
+
+function objectRanges(source, mask) {
+  const stack = [];
+  const ranges = [];
+  for (let i = 0; i < source.length; i += 1) {
+    if (!mask[i]) continue;
+    if (source[i] === "{") stack.push(i);
+    else if (source[i] === "}" && stack.length > 0) ranges.push({ start: stack.pop(), end: i });
+  }
+  return ranges;
+}
+
+function enclosingObject(ranges, position) {
+  return ranges
+    .filter((range) => range.start < position && position < range.end)
+    .sort((a, b) => b.start - a.start)[0];
+}
+
+function propertyExpression(source, mask, range, key) {
+  const pattern = new RegExp(`\\b${key}\\s*:`, "gu");
+  pattern.lastIndex = range.start + 1;
+  for (let match = pattern.exec(source); match && match.index < range.end; match = pattern.exec(source)) {
+    if (!mask[match.index]) continue;
+    let curly = 1;
+    let square = 0;
+    let round = 0;
+    for (let i = range.start + 1; i < match.index; i += 1) {
+      if (!mask[i]) continue;
+      if (source[i] === "{") curly += 1;
+      else if (source[i] === "}") curly -= 1;
+      else if (source[i] === "[") square += 1;
+      else if (source[i] === "]") square -= 1;
+      else if (source[i] === "(") round += 1;
+      else if (source[i] === ")") round -= 1;
+    }
+    if (curly !== 1 || square !== 0 || round !== 0) continue;
+    const colon = source.indexOf(":", match.index);
+    const valueStart = colon + 1;
+    curly = 1;
+    square = 0;
+    round = 0;
+    for (let i = valueStart; i < range.end; i += 1) {
+      if (!mask[i]) continue;
+      const char = source[i];
+      if (char === "{") curly += 1;
+      else if (char === "}") curly -= 1;
+      else if (char === "[") square += 1;
+      else if (char === "]") square -= 1;
+      else if (char === "(") round += 1;
+      else if (char === ")") round -= 1;
+      if (char === "," && curly === 1 && square === 0 && round === 0) {
+        return source.slice(valueStart, i).trim();
+      }
+    }
+  }
+  return null;
+}
+
+function evaluateStaticString(expression, constants) {
+  if (expression === null) return null;
+  const identifier = /^[A-Z][A-Z0-9_]*$/u.exec(expression);
+  if (identifier) return constants.get(identifier[0]) ?? null;
+  const parts = expression.split(/\s*\+\s*/u);
+  const values = [];
+  for (const part of parts) {
+    const trimmed = part.trim();
+    if (/^"(?:[^"\\]|\\.)*"$/u.test(trimmed)) {
+      values.push(JSON.parse(trimmed));
+    } else if (/^'(?:[^'\\]|\\.)*'$/u.test(trimmed)) {
+      values.push(trimmed.slice(1, -1).replace(/\\'/gu, "'").replace(/\\\\/gu, "\\"));
+    } else if (constants.has(trimmed)) {
+      values.push(constants.get(trimmed));
+    } else {
+      return null;
+    }
+  }
+  return values.join("");
+}
+
+function exportedFactories(source, mask) {
+  const factories = [];
+  const pattern = /\bexport\s+(?:async\s+)?function\s+(create[A-Za-z0-9]+Tools?)\s*\(/gu;
+  for (const match of source.matchAll(pattern)) {
+    const open = source.indexOf("(", match.index);
+    const close = matchingDelimiter(source, mask, open, "(", ")");
+    if (close === -1) continue;
+    factories.push({
+      name: match[1],
+      signature: source.slice(match.index, close + 1).replace(/\s+/gu, " ").trim(),
+    });
+  }
+  return factories;
+}
+
+function extractTools(source, mask, constants) {
+  const ranges = objectRanges(source, mask);
+  const byName = new Map();
+  const pattern = /\bname\s*:\s*([A-Z][A-Z0-9_]*|"[a-z][a-z0-9_]*"|'[a-z][a-z0-9_]*')\s*,/gu;
+  for (const match of source.matchAll(pattern)) {
+    const range = enclosingObject(ranges, match.index);
+    if (range === undefined) continue;
+    const descriptionExpression = propertyExpression(source, mask, range, "description");
+    if (descriptionExpression === null) continue;
+    const rawName = match[1];
+    const name = rawName.startsWith('"') || rawName.startsWith("'")
+      ? rawName.slice(1, -1)
+      : constants.get(rawName);
+    if (name === undefined) continue;
+    const description = evaluateStaticString(descriptionExpression, constants) ?? descriptionExpression;
+    const parameters = propertyExpression(source, mask, range, "parameters");
+    byName.set(name, {
+      name,
+      description,
+      parametersSource: parameters ?? "由共享工厂提供；请参见本模块源码与工厂签名。",
+    });
+  }
+  return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export async function scanToolModules(toolsRoot) {
+  let filenames;
+  try {
+    filenames = await readdir(toolsRoot);
+  } catch {
+    return [];
+  }
+  const modules = [];
+  for (const filename of filenames.filter((name) => name.endsWith(".ts")).sort()) {
+    const sourcePath = path.join(toolsRoot, filename);
+    const source = await readFile(sourcePath, "utf8");
+    if (!source.includes("BioMedAgentTool")) continue;
+    const mask = codeMask(source);
+    const constants = staticStringConstants(source);
+    const tools = extractTools(source, mask, constants);
+    const factories = exportedFactories(source, mask);
+    if (tools.length === 0 || factories.length === 0) continue;
+    const moduleName = filename.replace(/\.ts$/u, "");
+    modules.push({
+      moduleName,
+      slug: slug(moduleName),
+      purpose: leadingModulePurpose(source),
+      sourcePath,
+      imports: importedModules(source),
+      factories,
+      tools,
+    });
+  }
+  return modules;
+}
+
+export function renderToolkitDoc(entry) {
+  const factory = entry.factories.find((item) => item.name.endsWith("Tools")) ?? entry.factories[0];
+  const toolSections = entry.tools.map((tool) => `### \`${tool.name}\`
+
+${tool.description}
+
+#### 参数
+
+\`\`\`ts
+${tool.parametersSource}
+\`\`\`
+
+#### 返回值
+
+\`execute\` 返回 \`Promise<BioMedToolResult>\`：\`content\` 是提供给 Agent 的字符串，\`details\` 保留结构化结果，失败时设置 \`isError: true\`。
+`).join("\n");
+  const imports = entry.imports.map((dependency) => `- \`${dependency}\``).join("\n");
+  const factories = entry.factories.map((item) => `- \`${item.signature}\``).join("\n");
+  const invocations = entry.tools.map((tool) => `### \`${tool.name}\`
+
+\`\`\`ts
+import { ${factory.name} } from "./server/src/agent/tools/${entry.moduleName}.js";
+
+const dependencies = /* 按工厂签名注入 task-scoped 依赖 */;
+const argumentsValue = /* 按该工具 parameters schema 提供参数 */;
+const created = await ${factory.name}(dependencies);
+const tools = Array.isArray(created) ? created : [created];
+const tool = tools.find((candidate) => candidate.name === ${JSON.stringify(tool.name)});
+if (tool === undefined) throw new Error("tool is unavailable for the supplied capabilities");
+const result = await tool.execute(argumentsValue, undefined, { toolCallId: "standalone-call" });
+if (result.isError) throw new Error(result.content);
+console.log(result.details ?? result.content);
+\`\`\`
+`).join("\n");
+  return `# ${entry.moduleName}
+
+> source: \`server/src/agent/tools/${path.basename(entry.sourcePath)}\`
+
+## 用途
+
+${entry.purpose}
+
+## 工具
+
+${toolSections}
+## 依赖
+
+工厂签名：
+
+${factories}
+
+源码导入：
+
+${imports || "- （无外部导入）"}
+
+依赖必须由调用方显式注入；不要在独立脚本中绕过 Task workspace、网络策略、HIL 或 Dataset Core 边界。
+
+## 独立调用方式
+
+在仓库根目录的 TypeScript/tsx 脚本中调用，不需要启动完整 Host：
+
+${invocations}
 `;
 }
 
 export function renderToolkitIndex(entries) {
   const rows = entries
-    .map(
-      (e) =>
-        `| [${e.name}](./${encodeURIComponent(e.slug)}.md) | ${String(e.description)
-          .replace(/\|/g, "\\|")
-          .replace(/\s+/g, " ")
-          .slice(0, 120)} |`,
-    )
+    .map((entry) => `| [${entry.moduleName}](./${encodeURIComponent(entry.slug)}.md) | ${entry.tools.map((tool) => `\`${tool.name}\``).join(", ")} |`)
     .join("\n");
   return `# BioMed-QAgent 可拆卸工具包
 
-> 由 \`scripts/solidify-run.mjs --toolkit\` 生成。每个技能一份独立 Markdown，
-> 可被任何 agent 单独调用，无需完整启动整个项目。
+> 由 \`scripts/solidify-run.mjs --toolkit\` 从 \`server/src/agent/tools/\` 的
+> TypeScript 工具事实生成。每个模块一份独立调用文档，不复制 \`SKILL.md\`。
 
-| 技能 | 说明 |
+| 工具模块 | 工具名 |
 | --- | --- |
 ${rows || "| _(空)_ |" }
 
@@ -259,41 +560,6 @@ ${rows || "| _(空)_ |" }
 node scripts/solidify-run.mjs --toolkit docs/toolkit
 \`\`\`
 `;
-}
-
-/** 解析 SKILL.md frontmatter（--- 包裹的 YAML 风格 name/description）。 */
-export function parseFrontmatter(text) {
-  const trimmed = String(text);
-  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/u.exec(trimmed);
-  if (!match) return { description: "", body: trimmed };
-  const fields = {};
-  for (const line of match[1].split(/\r?\n/u)) {
-    const m = /^([a-zA-Z0-9_-]+):\s*(.*)$/u.exec(line);
-    if (m) fields[m[1]] = m[2].replace(/^["']|["']$/g, "");
-  }
-  return { description: fields.description ?? "", body: match[2].replace(/^\s*\n/u, "") };
-}
-
-export async function scanSkills(skillsRoot) {
-  const out = [];
-  let names;
-  try {
-    names = await readdir(skillsRoot);
-  } catch {
-    return [];
-  }
-  for (const dir of names) {
-    const filepath = path.join(skillsRoot, dir, "SKILL.md");
-    try {
-      if (!(await stat(filepath)).isFile()) continue;
-      const text = await readFile(filepath, "utf8");
-      const parsed = parseFrontmatter(text);
-      out.push({ name: dir, slug: slug(dir), description: parsed.description, sourcePath: filepath });
-    } catch {
-      /* skip unreadable skill dir */
-    }
-  }
-  return out.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 async function readJsonlLines(filePath) {
@@ -373,15 +639,15 @@ async function solidifyTask(task) {
 
 async function toolkit(input) {
   const outDir = input === null ? path.resolve("docs/toolkit") : path.resolve(input);
-  const skills = await scanSkills(SKILLS_ROOT);
-  if (skills.length === 0) fail(`未在 ${SKILLS_ROOT} 找到任何技能`);
+  const modules = await scanToolModules(TOOLS_ROOT);
+  if (modules.length === 0) fail(`未在 ${TOOLS_ROOT} 找到任何静态 TS 工具定义`);
   await mkdir(outDir, { recursive: true });
-  await writeFile(path.join(outDir, "README.md"), renderToolkitIndex(skills));
-  for (const skill of skills) {
-    const doc = await renderToolkitDoc(skill.sourcePath, SKILLS_ROOT);
-    await writeFile(path.join(outDir, `${skill.slug}.md`), doc);
+  await writeFile(path.join(outDir, "README.md"), renderToolkitIndex(modules));
+  for (const entry of modules) {
+    await writeFile(path.join(outDir, `${entry.slug}.md`), renderToolkitDoc(entry));
   }
-  console.log(`已生成可拆卸工具包: ${outDir}（${skills.length} 个技能 + README.md）`);
+  const toolCount = modules.reduce((total, entry) => total + entry.tools.length, 0);
+  console.log(`已生成可拆卸工具包: ${outDir}（${modules.length} 个模块 / ${toolCount} 个工具 + README.md）`);
   return outDir;
 }
 
