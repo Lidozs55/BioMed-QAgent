@@ -363,8 +363,9 @@ CI runs the full suite plus lint/typecheck/build on every PR and every push to
 blast radius cannot be determined.
 
 The local pre-commit hook (`.husky/pre-commit`, see `docs/git-hooks.md`) runs
-typecheck/lint plus targeted unit tests for the staged workspaces (full suite
-for cross-cutting sources; ruff+pytest when `database/` changes).
+typecheck/lint (plus ruff when `database/` Python sources change) — it does not
+run tests, so a green commit is not a green test run; run the targeted tests
+yourself before pushing/merging.
 Docs-only commits skip these gates automatically; any other bypass needs a stated
 reason. Commit messages are enforced by commitlint: `type(scope): subject`
 (`feat/fix/docs/chore/test/refactor/...`) with optional task-id prefix
