@@ -13,6 +13,7 @@ const {
   classifyHIL,
   classifyPermission,
   classifyTerminal,
+  currentPublicationIdFrom,
   digestManifestFile,
   digestPackage,
   supervise,
@@ -101,13 +102,6 @@ function taskSnapshot(status: string, activeRunId: string | null, currentPublica
       title: "fixture",
       status,
       active_run_id: activeRunId,
-      current_publication_id: currentPublicationId,
-      publications: currentPublicationId === null ? [] : [{
-        publication_id: currentPublicationId,
-        manifest_sha256: MANIFEST_SHA,
-        supersedes_publication_id: null,
-        published_at: "2026-08-26T00:00:03.000Z",
-      }],
       created_at: "2026-08-26T00:00:00.000Z",
       updated_at: "2026-08-26T00:00:00.000Z",
       latest_sequence: 3,
@@ -127,6 +121,13 @@ function taskSnapshot(status: string, activeRunId: string | null, currentPublica
     }],
     messages: [],
     older_messages_cursor: null,
+    current_publication_id: currentPublicationId,
+    publications: currentPublicationId === null ? [] : [{
+      publication_id: currentPublicationId,
+      manifest_sha256: MANIFEST_SHA,
+      supersedes_publication_id: null,
+      published_at: "2026-08-26T00:00:03.000Z",
+    }],
   };
 }
 
@@ -239,6 +240,19 @@ describe("Gold formal rerun supervisor", () => {
       publication: { publication_id: PUBLICATION_ID },
     }).classification).toBe("succeeded_publication");
     expect(classifyTerminal({ run: { status: "completed" }, publication: null }).classification).toBe("blocked_no_publication");
+  });
+
+  test("reads current_publication_id from the snapshot top level, not from the task object", () => {
+    // The durable reducer emits current_publication_id as a top-level
+    // snapshot field (task-reducer.ts); snapshot.task carries no such key.
+    // Reading it from snapshot.task silently downgraded every supervised
+    // publication closure to blocked_no_publication.
+    expect(currentPublicationIdFrom({
+      task: { task_id: "task_ts_x" },
+      current_publication_id: PUBLICATION_ID,
+    })).toBe(PUBLICATION_ID);
+    expect(currentPublicationIdFrom({ task: { task_id: "task_ts_x" }, current_publication_id: null })).toBe(null);
+    expect(currentPublicationIdFrom({ task: { current_publication_id: PUBLICATION_ID } })).toBe(null);
   });
 
   test("rejects replacement-character and malformed UTF-8 prompts", () => {
