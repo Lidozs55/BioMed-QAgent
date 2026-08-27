@@ -95,8 +95,11 @@ Before starting any task, consult:
 ```bash
 pnpm install --frozen-lockfile    # single workspace lockfile
 pnpm dev                          # TS Host + Pi + TS Core + Vite (only normal entry)
-pnpm test                         # contracts + server + frontend tests
+pnpm test                         # full workspace tests (cross-cutting changes / CI parity)
 pnpm test:full                    # full-speed tests (fastest local run)
+pnpm --filter @biomed/server test     # targeted: server/ changes only
+pnpm --filter @biomed/frontend test   # targeted: frontend/ changes only
+pnpm --filter @biomed/contracts test  # targeted: packages/contracts/ quick feedback
 pnpm lint                         # workspace lint
 pnpm typecheck                    # workspace TypeScript checks
 pnpm build                        # workspace production builds
@@ -336,15 +339,32 @@ Merge constraints:
 
 ### Quality Gates
 
-All checks in **Common Commands** must pass **before pushing a branch and before
-merging to `main`**:
+**Targeted testing is the default**: test what your changes touch — do not run
+the full suite on every commit or push. All gates below must pass **before
+pushing a branch and before merging to `main`**:
 
-- Root: `pnpm test`, `pnpm lint`, `pnpm typecheck`, `pnpm build`.
-- Python bridge: `uv run python database/bridge.py --self-test`,
-  `uv run pytest database/tests`, `uv run ruff check database`.
+- Workspace-wide: `pnpm lint`, `pnpm typecheck`, `pnpm build`.
+- Targeted tests, by changed area:
+  - `server/` → `pnpm --filter @biomed/server test`
+  - `frontend/` → `pnpm --filter @biomed/frontend test`
+  - `database/` → `uv run python database/bridge.py --self-test`,
+    `uv run pytest database/tests`, `uv run ruff check database`
+  - Cross-cutting sources (`packages/contracts/`, root config files,
+    `scripts/`) → full `pnpm test`, because the blast radius spans workspaces.
+
+**Failing-test loop**: while tests fail, re-run only the failing tests —
+`pnpm --filter <pkg> test -- <test-file>` or
+`uv run pytest database/tests/<file>::<case>` — until every failure passes;
+then re-run the targeted suite for the changed area once to confirm no
+regressions. Avoid full-suite runs inside this loop.
+
+CI runs the full suite plus lint/typecheck/build on every PR and every push to
+`main`. Run the full suite locally only for cross-cutting changes or when the
+blast radius cannot be determined.
 
 The local pre-commit hook (`.husky/pre-commit`, see `docs/git-hooks.md`) runs
-typecheck/lint/test before every commit, plus ruff+pytest when `database/` changes.
+typecheck/lint plus targeted unit tests for the staged workspaces (full suite
+for cross-cutting sources; ruff+pytest when `database/` changes).
 Docs-only commits skip these gates automatically; any other bypass needs a stated
 reason. Commit messages are enforced by commitlint: `type(scope): subject`
 (`feat/fix/docs/chore/test/refactor/...`) with optional task-id prefix
@@ -383,9 +403,10 @@ task, all items are mandatory and this checklist is the Definition of Done; if t
 round ends with incomplete work, complete the applicable items before starting the
 next round.
 
-1. **Quality gates** — all checks in Git Workflow §Quality Gates pass: `pnpm test`,
-   `pnpm lint`, `pnpm typecheck`, `pnpm build`; if `database/` changed,
-   `uv run pytest database/tests` and `uv run ruff check database` also pass.
+1. **Quality gates** — Git Workflow §Quality Gates pass: lint, typecheck,
+   build, plus targeted tests for every changed area (failing-test loop
+   completed); if `database/` changed, the bridge gates also pass. Full
+   `pnpm test` only where the policy requires cross-cutting coverage.
 2. **Tests** — new behavior is covered by tests, or the fixed bug has a reproducing
    test that now passes.
 3. **Branch & merge** — multi-file work used a dedicated branch; single-file `main`
