@@ -33,7 +33,7 @@
 
 当前实现支持 `gene_expression`、`literature_evidence`、`target_evidence`、`variant_evidence`、`protein_structure` 和 `bioactivity_measurement` 六类静态数据产品，并提供动态 Family 协议处理静态注册表无法表达的多表拓扑。来源文件通过 SourceAsset、SHA-256、Provider revision evidence 和 SourceLocator 进入证据链；不确定的字段映射、未知单位和低置信度抽取可以触发可持久化的人在回路请求；任务中断后可依据事件、操作摘要和 checkpoint 恢复，而不要求模型重新解释已经确认的数据变换。
 
-本文进一步给出面向赛题四项指标的评估方案与 Gold 案例模板。基于静态代码审查，项目在来源可追溯性、清洗整合可靠性和可修正闭环上具有较强设计；当前主要不足是检索完备性尚缺统一覆盖率证据、图表提取尚未接入默认正式发布主链、动态 Transform 尚不具备操作系统级安全隔离，以及正式产物前端下载存在待修复的参数接线问题。真实案例效果与成本收益仍需在团队 Gold 数据上补充定量实验。
+本文进一步给出面向赛题四项指标的评估方案与 Gold 案例模板。基于静态代码审查，项目在来源可追溯性、清洗整合可靠性和可修正闭环上具有较强设计；当前主要不足是检索完备性尚缺统一覆盖率证据、图表提取尚未接入默认正式发布主链，以及动态 Transform 尚不具备操作系统级安全隔离。正式产物前端已按 `publication_id` 生成 artifact URL，并加入标识分离的回归测试。真实案例效果与成本收益仍需在团队 Gold 数据上补充定量实验。
 
 **关键词：** 科学数据整合；生物医学数据；大语言模型智能体；Qwen；数据溯源；人在回路；多源异构数据；可复现数据产品
 
@@ -718,8 +718,8 @@ Saving_{human}=1-\frac{T_{human,system}}{T_{human,manual}}
 | 数据查找完备性 | 18/25 | 数据源和工具覆盖较广，也区分发现与正式采集；但查询计划、分页终点和来源宇宙尚未形成统一 artifact，无法定量证明查全 |
 | 来源可追溯性 | 24/25 | SourceAsset、Provider revision、SourceLocator、OperationResult、Manifest 和消费重验构成完整证据链，是当前最强项 |
 | 清洗整合可靠性 | 22/25 | 静态路线确定性强，单位/粒度/字段/HIL/冲突/PK-FK 门禁细；动态 Transform 未隔离，不同 Family 的领域语义验证深度仍不一致 |
-| 输出格式可用性 | 20/25 | 支持单/多表 CSV、Schema、Provenance、Audit、Validation 和拓扑；但前端 artifact URL 接线缺陷与图表正式链缺口影响产品完成度 |
-| **合计** | **84/100** | 架构显著优于“Agent 直接生成 CSV”，最终得分取决于 Gold 指标、现场稳定性和产品缺口修复 |
+| 输出格式可用性 | 21/25 | 支持单/多表 CSV、Schema、Provenance、Audit、Validation 和拓扑，前端 artifact URL 已按 `publication_id` 修复并覆盖回归；图表正式链仍有缺口 |
+| **合计** | **85/100** | 架构显著优于“Agent 直接生成 CSV”，最终得分取决于 Gold 指标、现场稳定性和剩余产品闭环 |
 
 ### 9.2 最具竞争力的部分
 
@@ -777,10 +777,9 @@ Saving_{human}=1-\frac{T_{human,system}}{T_{human,manual}}
 1. 动态 Family Transform 当前明确为 `in_process_unisolated`，代码返回 `security_boundary: false`；它不是操作系统沙箱。
 2. 图表提取工具和 `chart-evidence` 模块未接入默认 Family Registry/正式 Publication 主链。
 3. 查找完备性主要依赖 Agent 策略，缺少统一 QueryPlan/SourceCoverage artifact。
-4. 当前 Publication Viewer 在 artifact URL 处把 `requirement_id` 用作需要 `publication_id` 的参数，正式预览或下载可能出现 404。
-5. 不同静态 Family 的领域语义验证深度不同，PK/FK 通过不能替代科学正确性。
-6. PDF 无框线表格解析带启发式成分，复杂布局需要专门 Gold 基准。
-7. 非确定性抽取即使通过格式校验，也仍需按 confidence 与 review state 处理。
+4. 不同静态 Family 的领域语义验证深度不同，PK/FK 通过不能替代科学正确性。
+5. PDF 无框线表格解析带启发式成分，复杂布局需要专门 Gold 基准。
+6. 非确定性抽取即使通过格式校验，也仍需按 confidence 与 review state 处理。
 
 ---
 
@@ -794,7 +793,7 @@ Saving_{human}=1-\frac{T_{human,system}}{T_{human,manual}}
 
 第三，以隔离 worker 或容器替换动态 Transform 的进程内执行，使 CPU、内存、网络、文件系统和超时限制由 Host 可验证，而非由调用方自报。
 
-第四，修复 Publication artifact 前端路由参数并增加包含真实 artifact 的组件与端到端测试，确保详情、预览和下载统一按 `publication_id` 工作。
+第四，在已有 `publication_id` 路由回归测试基础上补充真实 Host 的端到端预览与下载验证，确保详情、预览和下载持续使用同一 Publication 身份。
 
 第五，基于团队 Gold 案例建立持续评价集，覆盖来源查找、解析、实体映射、单位、冲突、HIL、恢复、篡改检测和成本；每次 Provider、Adapter、Prompt 或模型升级都运行回归。
 
@@ -844,7 +843,7 @@ BioMed-QAgent 针对赛题“从科学问题到可用数据”建立了一条从
 | 数据清洗 | Schema、缺失门、rejected rows、单位/尺度检查 | 清洗前后统计、拒绝原因 | 机制已实现；案例待补 |
 | 字段对齐 | FieldMapping、Canonicalizer、probe mapping、HIL | 映射表、覆盖率、歧义 decision | 机制已实现；案例待补 |
 | 来源标注 | SourceAsset、revision、locator、Manifest | 从 CSV 行跳回来源的演示 | 机制已实现；演示待录制 |
-| 结构化输出 | 单/多表 CSV + Schema + Relations | Publication 下载包 | 后端已实现；前端参数待修 |
+| 结构化输出 | 单/多表 CSV + Schema + Relations | Publication 下载包 | 前后端路由已接通；真实 Host 下载证据待补 |
 | 图表数据 | Qwen-VL/PDF/caption 降级、confidence | 点级 Gold、bbox、review | processing 已实现；正式链待接通 |
 | 错误修正 | Durable HIL + correction + resume + supersedes | 修正前后版本对比 | 机制已实现；Gold 演示待补 |
 
@@ -883,7 +882,7 @@ BioMed-QAgent 针对赛题“从科学问题到可用数据”建立了一条从
 - [ ] 至少两个端到端 Publication 下载包；
 - [ ] 至少一个 HIL correction 与 supersedes 演示；
 - [ ] PDF 表格和图表点级 Gold；
-- [ ] 修复前端 artifact URL 后的端到端截图；
+- [ ] 补充前端 artifact URL 的真实 Host 端到端截图；
 - [ ] 动态 Transform 安全边界的答辩表述；
 - [ ] API 地址、测试账号/密钥说明和可交互前端地址；
 - [ ] 10 分钟内演示视频；

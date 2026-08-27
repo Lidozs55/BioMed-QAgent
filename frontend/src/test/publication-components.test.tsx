@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import PublicationResultsViewer from "@/components/PublicationResultsViewer";
@@ -40,6 +40,29 @@ const detail: PublicationDetail = {
   artifacts: [],
 };
 
+const detailWithPrimaryArtifact: PublicationDetail = {
+  ...detail,
+  manifest: {
+    ...detail.manifest,
+    artifacts: [{
+      artifact_id: "primary_csv",
+      role: "primary_dataset",
+      relative_path: "primary.csv",
+      media_type: "text/csv",
+      size_bytes: 16,
+      sha256: "b".repeat(64),
+    }],
+  },
+  artifacts: [{
+    artifact_id: "primary_csv",
+    role: "primary_dataset",
+    relative_path: "primary.csv",
+    media_type: "text/csv",
+    size_bytes: 16,
+    sha256: "b".repeat(64),
+  }],
+};
+
 afterEach(() => vi.unstubAllGlobals());
 
 function stubPublication(): void {
@@ -56,6 +79,31 @@ describe("Publication components", () => {
     expect(await screen.findByText("数据发布产物")).toBeVisible();
     expect(screen.getByText("需求 requirement_1 · task_1")).toBeVisible();
     expect(screen.getByText("4 行")).toBeVisible();
+  });
+
+  it("loads artifacts by publication id rather than requirement id", async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/artifacts/")) {
+        return new Response("record_id\nrecord_1\n", {
+          status: 200,
+          headers: { "Content-Type": "text/csv" },
+        });
+      }
+      return new Response(JSON.stringify(detailWithPrimaryArtifact), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetcher);
+
+    render(<PublicationResultsViewer publicationId="pub_1" taskId="task_1" />);
+
+    await waitFor(() => {
+      expect(fetcher).toHaveBeenCalledWith(
+        "/api/v1/publications/pub_1/artifacts/primary_csv?task_id=task_1",
+      );
+    });
   });
 
   it("renders a conversation publication report", async () => {
