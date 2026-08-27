@@ -193,6 +193,12 @@ const DEFINITIONS: readonly Definition[] = Object.freeze([
       dataLevel: "repository_processed", maxBytes: MAX_DATASET_BYTES,
       expectedMediaTypes: new Set(["application/zip", "application/octet-stream"]),
       accept: "application/zip", allowedHosts: new Set(["www.ebi.ac.uk"]), assetRole: "carrier",
+      zipMemberExtraction: {
+        extensions: [".csv", ".tsv", ".tab", ".xlsx"],
+        maxMembers: 24,
+        maxMemberBytes: 32 * 1024 * 1024,
+        role: "carrier",
+      },
     }),
   },
 ]);
@@ -223,6 +229,7 @@ export function createExtendedAcquisitionProviders(): readonly AcquisitionProvid
           accept: planned.accept,
           allowedHosts: planned.allowedHosts,
           assetRole: planned.assetRole,
+          zipMemberExtraction: planned.zipMemberExtraction,
           providerRevisionFacts: {
             canonical_accession: parameters.accession,
             provider_snapshot_identity: `${providerId}:official-endpoint`,

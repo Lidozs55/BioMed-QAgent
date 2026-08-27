@@ -513,7 +513,10 @@ export function createDatasetExecutionTools(
             if (options.client.acquire === undefined) {
               throw new Error(`Core acquisition is unavailable for binding '${binding.binding_id}'`);
             }
-            const acquired = await options.client.acquire({
+            if (options.client.acquire === undefined) {
+            throw new TypeError("Core acquisition is unavailable");
+          }
+          const acquired = await options.client.acquire({
               ...identity,
               request: acquisitionRequest(options, spec, binding),
             });
@@ -562,6 +565,104 @@ export function createDatasetExecutionTools(
         } catch (error) {
           diagnostic(options, "execute_dataset_execution", context, started, response, codeForCaught(error), requirementId);
           return caught(error);
+        }
+      },
+    },
+    {
+      name: "acquire_core_carrier",
+      label: "Acquire Core-Only Carrier",
+      description:
+        "Fixed Core acquisition for acquisition-only carriers such as Europe PMC supplementary archives. " +
+        "Run ONE provider per call with a valid binding accession; returns the immutable carrier asset id plus " +
+        "provenance-bound extracted member asset ids (csv/tsv/xlsx). Reference those member asset ids as " +
+        "registered sources on the dynamic route — never browser or workspace downloads.",
+      parameters: {
+        type: "object",
+        properties: {
+          provider_id: {
+            type: "string",
+            description: "Exactly one acquisition-only provider id, e.g. europepmc.supplementary.v1.",
+          },
+          source: { type: "string", description: "The provider's declared source, e.g. europepmc_supplementary." },
+          accession: { type: "string", description: "One valid accession for the provider, e.g. PMC9005347." },
+        },
+        required: ["provider_id", "source", "accession"],
+        additionalProperties: false,
+      },
+      async execute(value, signal, context) {
+        try {
+          const args = object(value);
+          const nonEmpty = (key: string): string => {
+            const value1 = args[key];
+            if (typeof value1 !== "string" || value1.trim() === "") {
+              throw new TypeError(`acquire_core_carrier requires a non-empty ${key}`);
+            }
+            return value1.trim();
+          };
+          const providerId = nonEmpty("provider_id");
+          const source = nonEmpty("source");
+          const accession = nonEmpty("accession");
+          const descriptor = CORE_ACQUISITION_PROVIDER_DESCRIPTORS.find(
+            (entry) => entry.providerId === providerId && entry.source === source,
+          );
+          if (descriptor === undefined || descriptor.dynamicInput !== "binary_archive") {
+            return {
+              content: JSON.stringify({
+                ok: false,
+                error: {
+                  code: "provider_not_acquisition_only",
+                  message:
+                    `${providerId}/${source} is not an acquisition-only binary carrier; ` +
+                    "use its binding provider through validate/execute or the dynamic acquisition requests instead",
+                },
+              }),
+              isError: true,
+            };
+          }
+          const requirementId = `carrier_${providerId}_${accession}`.replace(/[^A-Za-z0-9_-]/g, "_");
+          if (options.client.acquire === undefined) {
+            throw new TypeError("Core acquisition is unavailable");
+          }
+          const acquired = await options.client.acquire({
+            taskId: options.taskId,
+            runId: options.runId(),
+            piSessionId: options.piSessionId(),
+            toolCallId: context?.toolCallId ?? "unknown",
+            signal,
+            request: {
+              schema_version: "1.0",
+              request_id: `req_${requirementId}`.slice(0, 128),
+              task_id: options.taskId,
+              requirement_id: requirementId,
+              binding_id: "binding_carrier",
+              mode: "builtin",
+              provider_id: providerId,
+              recipe_id: null,
+              recipe_version: null,
+              parameters: { source, accession, entities: {} },
+            },
+          });
+          return {
+            content: JSON.stringify({
+              ok: true,
+              carrier_asset_id: acquired.sourceAsset.asset_id,
+              media_type: null,
+              extraction_assets: acquired.extractionAssets.map((asset) => ({
+                asset_id: asset.asset_id,
+                role: asset.role,
+              })),
+              next_step:
+                "Reference these extraction asset ids in the dynamic route's registered_sources for the matching binding.",
+            }),
+          };
+        } catch (error) {
+          return {
+            content: JSON.stringify({
+              ok: false,
+              error: { code: "acquire_failed", message: error instanceof Error ? error.message : String(error) },
+            }),
+            isError: true,
+          };
         }
       },
     },

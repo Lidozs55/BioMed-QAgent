@@ -51,7 +51,7 @@ function acquisitionOnlyProvider(
     input_hint: descriptor.inputHint,
     route_status: "requires_formal_extraction",
     blocker:
-      "Core can acquire the immutable binary carrier, but Dynamic Family cannot bind it directly. A provenance-bound UTF-8 extraction asset and supported selection path are required before submit.",
+      "Dynamic Family cannot bind the binary archive directly. Call acquire_core_carrier with this provider once, then reference the returned provenance-bound extraction member asset ids as registered sources.",
   };
 }
 

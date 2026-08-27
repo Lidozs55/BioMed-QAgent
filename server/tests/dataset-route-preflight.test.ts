@@ -36,7 +36,7 @@ describe("dataset formal-route capability preflight", () => {
       input_kind: "binary_archive",
       route_status: "requires_formal_extraction",
     });
-    expect(supplementary?.blocker).toMatch(/provenance-bound UTF-8 extraction asset/i);
+    expect(supplementary?.blocker).toMatch(/acquire_core_carrier/i);
     expect(capabilities.dynamic.direct_bindings).not.toContainEqual(
       expect.objectContaining({ provider_id: "europepmc.supplementary.v1" }),
     );
