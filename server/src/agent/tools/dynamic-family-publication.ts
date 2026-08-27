@@ -73,6 +73,24 @@ export interface PrepareDynamicFamilyPublicationToolOptions {
   ) => Promise<DynamicFamilyPreflightReceipt>;
 }
 
+/**
+ * Preserve structured per-binding diagnostics (CoreAcquisitionError and any
+ * wrapped error carrying `details`/`retryable`) alongside the message, so a
+ * failed submit reports which binding/provider/host failed instead of only
+ * the aggregate message.
+ */
+function structuredError(error: unknown): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  if (error !== null && typeof error === "object") {
+    if ("retryable" in error && typeof error.retryable === "boolean") body.retryable = error.retryable;
+    const details = (error as { details?: unknown }).details;
+    if (details !== null && typeof details === "object" && !Array.isArray(details)) {
+      body.acquisition = details;
+    }
+  }
+  return body;
+}
+
 export function createDynamicFamilyPublicationTool(
   options: DynamicFamilyPublicationToolOptions,
 ): BioMedAgentTool {
@@ -89,9 +107,10 @@ export function createDynamicFamilyPublicationTool(
         return { content: JSON.stringify(details), details };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        const errorBody = { code: "dynamic_publication_rejected", message, ...structuredError(error) };
         return {
-          content: JSON.stringify({ ok: false, error: { code: "dynamic_publication_rejected", message } }),
-          details: { ok: false, error: { code: "dynamic_publication_rejected", message } },
+          content: JSON.stringify({ ok: false, error: errorBody }),
+          details: { ok: false, error: errorBody },
           isError: true,
         };
       }

@@ -168,6 +168,16 @@ export type DownloadStatus = (typeof DOWNLOAD_STATUS)[keyof typeof DOWNLOAD_STAT
 export const ERROR_CODE = {
   CONFIGURATION_ERROR: "configuration_error",
   NETWORK_ERROR: "network_error",
+  // Fine-grained transport failures (subclassifications of network_error).
+  DNS_FAILURE: "dns_failure",
+  TLS_FAILURE: "tls_failure",
+  CONNECT_REFUSED: "connect_refused",
+  CONNECT_TIMEOUT: "connect_timeout",
+  CONNECTION_RESET: "connection_reset",
+  HTTP_SERVER_ERROR: "http_server_error",
+  HTTP_CLIENT_ERROR: "http_client_error",
+  MEDIA_MISMATCH: "media_mismatch",
+  SIZE_EXCEEDED: "size_exceeded",
   TIMEOUT: "timeout",
   DOWNLOAD_INCOMPLETE: "download_incomplete",
   CHECKSUM_MISMATCH: "checksum_mismatch",

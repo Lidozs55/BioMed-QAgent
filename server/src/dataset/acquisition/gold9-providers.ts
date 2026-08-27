@@ -14,8 +14,10 @@ export const GOLD9_PROVIDER_IDS = Object.freeze({
 });
 
 export const GOLD9_IMPLEMENTATION_DIGESTS = Object.freeze({
-  orphanetProduct1: "a4e4c7c2b5ccf4099c8d353c94fce704fa80b87f581f1a56b2dd23c1c0d72f45",
-  orphanetProduct6: "f3d92b5d5f56c0f64bcb1473c2de0ea80613b6a6e46bbfbba13a18a3ca5b56ef",
+  // v2: Orphanet carriers now carry an explicit per-plan wall-clock timeout
+  // budget (45/20 min) instead of the generic 5-minute HTTP timeout.
+  orphanetProduct1: "c2257b4731a7659fcdc3e4cf334d5a3c007f91e87c1cd512cf8490767300002b",
+  orphanetProduct6: "703942a006baa1c74f954d95c965521347a83d8f161c4b001bcb42e2f88a6774",
   hgncApproved: "c2c85835ffbc8ebf8ff9a74e39b99e188e13d14e3bb8a97ae4f6dd38b77ae92b",
   clinvarGeneEsearch: "5bf4d1f29bdc44ecbe735439c55f77db11773f6269551ab3b92cf76d3f19d3fd",
   clingenGeneValidity: "5f29c06b8d09320a3b4a1de93d0a7fc9402a01d06a81a9b94091fd6c1e8e9111",
@@ -81,6 +83,8 @@ function plan(options: {
   mediaTypes: ReadonlySet<string>;
   accept: string;
   host: string;
+  /** Large-carrier wall-clock budget; defaults to the generic HTTP timeout. */
+  timeoutMs?: number;
 }): AcquisitionDownloadPlan {
   return {
     source: {
@@ -99,6 +103,7 @@ function plan(options: {
     accept: options.accept,
     allowedHosts: new Set([options.host]),
     assetRole: "carrier",
+    ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
     providerRevisionFacts: {
       canonical_accession: options.accession,
       provider_snapshot_identity: `${options.providerId}:official-endpoint`,
@@ -126,14 +131,20 @@ export function createGold9AcquisitionProviders(): readonly AcquisitionProviderH
   const tsv = new Set(["text/tab-separated-values", "text/plain", "application/octet-stream"]);
   const json = new Set(["application/json", "text/plain"]);
   const csv = new Set(["text/csv", "text/plain", "application/octet-stream"]);
+  // Measured 2026-08-27 from the formal Gold9 rerun journal: en_product1.xml
+  // is ~52 MB and orphadata throughput ranged 18-170 KB/s (a 300 s default
+  // budget killed three attempts at 92% completion). 45/20 minute budgets
+  // keep both carriers inside one wall-clock window even at worst throughput.
+  const ORPHANET_PRODUCT1_TIMEOUT_MS = 45 * 60_000;
+  const ORPHANET_PRODUCT6_TIMEOUT_MS = 20 * 60_000;
   return [
     provider(GOLD9_PROVIDER_IDS.orphanetProduct1, GOLD9_IMPLEMENTATION_DIGESTS.orphanetProduct1, (request) => {
       const { accession } = parseParameters(request, GOLD9_PROVIDER_IDS.orphanetProduct1, "orphanet_en_product1", (value) => value === "en_product1", "Orphanet product accession");
-      return plan({ providerId: GOLD9_PROVIDER_IDS.orphanetProduct1, source: "orphanet_en_product1", database: "orphanet", accession, url: "https://www.orphadata.com/data/xml/en_product1.xml", title: "Orphanet en_product1 XML", filename: "en_product1.xml", mediaTypes: xml, accept: "application/xml,text/xml;q=0.9", host: "www.orphadata.com" });
+      return plan({ providerId: GOLD9_PROVIDER_IDS.orphanetProduct1, source: "orphanet_en_product1", database: "orphanet", accession, url: "https://www.orphadata.com/data/xml/en_product1.xml", title: "Orphanet en_product1 XML", filename: "en_product1.xml", mediaTypes: xml, accept: "application/xml,text/xml;q=0.9", host: "www.orphadata.com", timeoutMs: ORPHANET_PRODUCT1_TIMEOUT_MS });
     }),
     provider(GOLD9_PROVIDER_IDS.orphanetProduct6, GOLD9_IMPLEMENTATION_DIGESTS.orphanetProduct6, (request) => {
       const { accession } = parseParameters(request, GOLD9_PROVIDER_IDS.orphanetProduct6, "orphanet_en_product6", (value) => value === "en_product6", "Orphanet product accession");
-      return plan({ providerId: GOLD9_PROVIDER_IDS.orphanetProduct6, source: "orphanet_en_product6", database: "orphanet", accession, url: "https://www.orphadata.com/data/xml/en_product6.xml", title: "Orphanet en_product6 XML", filename: "en_product6.xml", mediaTypes: xml, accept: "application/xml,text/xml;q=0.9", host: "www.orphadata.com" });
+      return plan({ providerId: GOLD9_PROVIDER_IDS.orphanetProduct6, source: "orphanet_en_product6", database: "orphanet", accession, url: "https://www.orphadata.com/data/xml/en_product6.xml", title: "Orphanet en_product6 XML", filename: "en_product6.xml", mediaTypes: xml, accept: "application/xml,text/xml;q=0.9", host: "www.orphadata.com", timeoutMs: ORPHANET_PRODUCT6_TIMEOUT_MS });
     }),
     provider(GOLD9_PROVIDER_IDS.hgncApproved, GOLD9_IMPLEMENTATION_DIGESTS.hgncApproved, (request) => {
       const { accession } = parseParameters(request, GOLD9_PROVIDER_IDS.hgncApproved, "hgnc_approved", (value) => value === "current", "HGNC approved snapshot accession");

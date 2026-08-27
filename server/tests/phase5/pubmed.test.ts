@@ -1308,7 +1308,9 @@ describe("downloadSupplementaryAdapter", () => {
     expect(payload.download_attempts).toHaveLength(2);
     expect(payload.download_attempts[0]?.status).toBe("failed");
     expect(payload.download_attempts[1]?.status).toBe("failed");
-    expect(payload.download_attempts[1]?.error_code).toBe("network_error");
+    // The fixture serves 404 for the tier URLs: the fine-grained taxonomy
+    // classifies deterministic HTTP client errors instead of network_error.
+    expect(payload.download_attempts[1]?.error_code).toBe("http_client_error");
   });
 });
 

@@ -61,6 +61,13 @@ export interface AcquisitionDownloadPlan {
   allowedHosts?: ReadonlySet<string>;
   /** Trusted provider-selected registry role; never populated by request parameters. */
   assetRole?: "source" | "carrier";
+  /**
+   * Per-plan wall-clock download budget in ms, overriding the generic HTTP
+   * timeout for providers whose carriers are known to be large and slow
+   * (e.g. Orphanet en_product1, ~52 MB). Trusted provider output only;
+   * request parameters and tool inputs never populate this field.
+   */
+  timeoutMs?: number;
   /** Trusted provider-produced extraction outputs; never populated by request parameters. */
   extractionAssets?: readonly AcquisitionExtractionAsset[];
   /**
@@ -147,13 +154,25 @@ export interface CoreAcquisitionPlan {
   readonly recipe: WorkflowRecipeRef | null;
 }
 
+/** Per-binding failure diagnostics surfaced to the tool layer verbatim. */
+export interface CoreAcquisitionErrorDetails {
+  provider_id: string;
+  error_code: string | null;
+  attempts: number;
+  binding_id?: string;
+  url?: string;
+  endpoint_host?: string;
+  elapsed_ms?: number;
+  timeout_stage?: "wall_clock" | null;
+}
+
 export class CoreAcquisitionError extends Error {
   readonly retryable: boolean;
-  readonly details: { provider_id: string; error_code: string | null; attempts: number };
+  readonly details: CoreAcquisitionErrorDetails;
 
   constructor(
     message: string,
-    details: { provider_id: string; error_code: string | null; attempts: number },
+    details: CoreAcquisitionErrorDetails,
     retryable: boolean,
   ) {
     super(message);
@@ -256,6 +275,7 @@ export class CoreAcquisitionRuntime {
     const partRelativePath = `source_assets/.acquisition/${requestIdentityDigest}.part`;
     const partPath = path.join(this.#taskRoot, ...partRelativePath.split("/"));
     await mkdir(path.dirname(partPath), { recursive: true });
+    const acquireStartedAtMs = Date.now();
     const attempts: CoreDownloadAttempt[] = [];
     const providerRevisionEvidence: ProviderRevisionEvidenceV1[] = [];
     let resumedFromAttemptId: string | null = null;
@@ -274,7 +294,19 @@ export class CoreAcquisitionRuntime {
           this.#registrar?.register("core", published, this.#taskId),
       } satisfies AcquireSourceOptions);
       const retryable = result.attempt.status === "failed" &&
-        ["network_error", "timeout", "download_incomplete", "internal_error"].includes(result.attempt.error_code ?? "");
+        [
+          "network_error",
+          // Fine-grained retryable transport subclasses (DNS may be transient,
+          // refused/timeout/reset sockets usually are, 5xx/408/429 servers heal).
+          "dns_failure",
+          "connect_refused",
+          "connect_timeout",
+          "connection_reset",
+          "http_server_error",
+          "timeout",
+          "download_incomplete",
+          "internal_error",
+        ].includes(result.attempt.error_code ?? "");
       let asset: RegisteredSourceAssetRef | null = null;
       if (result.asset !== null) {
         const receipt = await this.#assets.register({
@@ -362,6 +394,7 @@ export class CoreAcquisitionRuntime {
             provider_id: handler.providerId,
             error_code: result.attempt.error_code,
             attempts: attemptNumber,
+            ...acquisitionFailureContext(request, plan, acquireStartedAtMs, result.attempt.error_code),
           },
           false,
         );
@@ -370,7 +403,12 @@ export class CoreAcquisitionRuntime {
     }
     throw new CoreAcquisitionError(
       "acquisition exhausted attempts",
-      { provider_id: handler.providerId, error_code: "attempts_exhausted", attempts: this.#maxAttempts },
+      {
+        provider_id: handler.providerId,
+        error_code: "attempts_exhausted",
+        attempts: this.#maxAttempts,
+        ...acquisitionFailureContext(request, plan, acquireStartedAtMs, null),
+      },
       false,
     );
   }
@@ -382,6 +420,32 @@ export class CoreAcquisitionRuntime {
     if (!Array.isArray(attempts)) throw new TypeError("core acquisition attempts must be an array");
     await writeJsonAtomic(file, [...attempts, attempt]);
   }
+}
+
+/**
+ * Extra per-binding diagnostics attached to CoreAcquisitionError so the tool
+ * layer can report exactly which binding/provider/host failed and how long
+ * the wall-clock budget lasted before giving up.
+ */
+function acquisitionFailureContext(
+  request: CoreAcquisitionRequest,
+  plan: AcquisitionDownloadPlan,
+  startedAtMs: number,
+  errorCode: string | null,
+): Pick<CoreAcquisitionErrorDetails, "binding_id" | "url" | "endpoint_host" | "elapsed_ms" | "timeout_stage"> {
+  let endpointHost: string | undefined;
+  try {
+    endpointHost = new URL(plan.source.url).host;
+  } catch {
+    endpointHost = undefined;
+  }
+  return {
+    binding_id: request.binding_id,
+    url: plan.source.url,
+    endpoint_host: endpointHost,
+    elapsed_ms: Date.now() - startedAtMs,
+    timeout_stage: errorCode === "timeout" ? "wall_clock" : null,
+  };
 }
 
 export function acquisitionRequestIdentity(

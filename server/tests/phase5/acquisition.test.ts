@@ -183,7 +183,7 @@ describe("acquireSource failure paths", () => {
   it("rejects declared oversize before reading", async () => {
     const { result } = await acquire({ content: "x", headers: { "content-type": "text/plain", "content-length": "99999999" }, maxBytes: 100 });
     expect(result.attempt.status).toBe("failed");
-    expect(result.attempt.error_code).toBe("download_incomplete");
+    expect(result.attempt.error_code).toBe("size_exceeded");
     expect(result.attempt.error_message).toBe("declared content length exceeds maximum");
     expect(result.asset).toBeNull();
     await expect(noPartFiles()).resolves.toBe(true);
@@ -198,7 +198,7 @@ describe("acquireSource failure paths", () => {
       },
     });
     expect(result.attempt.status).toBe("failed");
-    expect(result.attempt.error_code).toBe("download_incomplete");
+    expect(result.attempt.error_code).toBe("size_exceeded");
     expect(result.attempt.error_message).toBe("download exceeded maximum size");
     await expect(noPartFiles()).resolves.toBe(true);
   });
@@ -238,7 +238,7 @@ describe("acquireSource failure paths", () => {
 
   it("rejects unexpected media types", async () => {
     const { result } = await acquire({ content: "<html/>", headers: { "content-type": "text/html" }, expectedMediaTypes: new Set(["text/plain"]) });
-    expect(result.attempt.error_code).toBe("validation_error");
+    expect(result.attempt.error_code).toBe("media_mismatch");
     expect(result.attempt.error_message).toBe("unexpected content type: text/html");
   });
 
@@ -287,7 +287,7 @@ describe("acquireSource failure paths", () => {
       allowedHosts: new Set([HOST]),
     });
     expect(result.attempt.status).toBe("failed");
-    expect(result.attempt.error_code).toBe("network_error");
+    expect(result.attempt.error_code).toBe("http_server_error");
     expect(result.attempt.error_message).toBe("download returned HTTP 503");
   });
 
