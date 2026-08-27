@@ -336,6 +336,31 @@ describe("Gold10 gut microbiome provider runtime dispatch", () => {
     ]);
   });
 
+  it("reports every binding-level accession/parameter violation in one validation pass", () => {
+    const registry = createDefaultDatasetFamilyRegistry();
+    const validator = new SpecValidator(registry.schemaRegistry(), registry.validationProfileRefs(), registry);
+    const base = spec({ requirementId: "req_gold10_binding_checks" });
+    const broken: DatasetExecutionSpec = {
+      ...base,
+      source_bindings: base.source_bindings.map((binding) => {
+        if (binding.binding_id === "binding_study") {
+          return { ...binding, accession: null, parameters: { disease_id: "D003924" } };
+        }
+        if (binding.binding_id === "binding_prevalence") {
+          return { ...binding, accession: "D006262" };
+        }
+        return binding;
+      }),
+    };
+    const result = validator.validate(broken);
+    expect(result.valid).toBe(false);
+    expect(result.reason_codes).toContain("binding_accession_missing");
+    expect(result.reason_codes).toContain("binding_parameters_rejected");
+    expect(result.reason_codes).toContain("binding_accession_invalid");
+    expect(result.reasons.join("\n")).toContain("MGYS00000322");
+    expect(result.reasons.join("\n")).toContain("spec.entities");
+  });
+
   it("still accepts entity-light specs statically because carriers may self-describe disease fields", () => {
     const registry = createDefaultDatasetFamilyRegistry();
     const validator = new SpecValidator(registry.schemaRegistry(), registry.validationProfileRefs(), registry);
