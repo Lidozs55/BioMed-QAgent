@@ -22,7 +22,7 @@ import type {
 } from "../../dataset/contracts/source.js";
 import type { DataLevel } from "../../dataset/contracts/enums.js";
 import { assetIdFromSha256 } from "../../dataset/adapters/identity.js";
-import { AcquisitionError, isAbortError } from "../network/errors.js";
+import { AcquisitionError, classifyTransportFailure, httpFailureCode, isAbortError } from "../network/errors.js";
 import { UnsafeUrlError } from "../network/errors.js";
 import { PublicHttpClient } from "../network/http-client.js";
 import { validateHttpsSourceUrl } from "../network/url-policy.js";
@@ -265,7 +265,7 @@ function errorCodeFrom(error: unknown): AcquisitionError["code"] {
     return error instanceof Error && error.name === "TimeoutError" ? "timeout" : "cancelled";
   }
   if (error instanceof AcquisitionError) return error.code;
-  return "internal_error";
+  return classifyTransportFailure(error) ?? "internal_error";
 }
 
 /**
@@ -376,7 +376,7 @@ export async function acquireSource(options: AcquireSourceOptions): Promise<Acqu
         const cachedSize = cachedStat.size;
         const cachedMediaType = (cached.media_type ?? "application/octet-stream").split(";", 1)[0].trim().toLowerCase();
         if (cachedSize > maxBytes) {
-          throw new AcquisitionError("download_incomplete", "cached download exceeds maximum size");
+          throw new AcquisitionError("size_exceeded", "cached download exceeds maximum size");
         }
         if (expectedSize !== undefined && cachedSize !== expectedSize) {
           throw new AcquisitionError("download_incomplete", "cached download expected size mismatch");
@@ -494,7 +494,7 @@ export async function acquireSource(options: AcquireSourceOptions): Promise<Acqu
     }
     if (response.status < 200 || response.status >= 300) {
       await response.discard();
-      return fail("network_error", `download returned HTTP ${response.status}`);
+      return fail(httpFailureCode(response.status), `download returned HTTP ${response.status}`);
     }
     let append = false;
     if (resumeOffset > 0 && response.status === 206) {
@@ -512,7 +512,7 @@ export async function acquireSource(options: AcquireSourceOptions): Promise<Acqu
     if (declaredLength !== null && declaredLength + resumeOffset > maxBytes) {
       await response.discard();
       await cleanupPart();
-      return fail("download_incomplete", "declared content length exceeds maximum");
+      return fail("size_exceeded", "declared content length exceeds maximum");
     }
 
     const mediaType = mediaTypeFromHeader(response.headers);
@@ -528,7 +528,7 @@ export async function acquireSource(options: AcquireSourceOptions): Promise<Acqu
           }
           bytesReceived += chunk.length;
           if (bytesReceived > maxBytes) {
-            throw new AcquisitionError("download_incomplete", "download exceeded maximum size");
+            throw new AcquisitionError("size_exceeded", "download exceeded maximum size");
           }
           sha.update(chunk);
           md5.update(chunk);
@@ -578,7 +578,7 @@ export async function acquireSource(options: AcquireSourceOptions): Promise<Acqu
     }
     if (expectedMediaTypes !== undefined && !expectedMediaTypes.has(mediaType)) {
       await cleanupPart();
-      return fail("validation_error", `unexpected content type: ${mediaType || "missing"}`);
+      return fail("media_mismatch", `unexpected content type: ${mediaType || "missing"}`);
     }
     if (expectedSize !== undefined && bytesReceived !== expectedSize) {
       await cleanupPart();

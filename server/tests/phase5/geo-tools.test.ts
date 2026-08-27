@@ -624,7 +624,7 @@ describe("download_geo", () => {
     const payload = JSON.parse(result.content) as Record<string, unknown>;
     const attempt = payload.attempt as Record<string, unknown>;
     expect(attempt.status).toBe("failed");
-    expect(attempt.error_code).toBe("download_incomplete");
+    expect(attempt.error_code).toBe("size_exceeded");
     expect(payload.error).toBe("declared content length exceeds maximum");
   });
 

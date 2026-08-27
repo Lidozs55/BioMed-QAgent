@@ -12,6 +12,7 @@ import {
   parseDynamicFamilyPublicationSubmission,
 } from "../src/agent/tools/dynamic-family-publication.js";
 import { submitDynamicFamilyPublication } from "../src/dataset/dynamic-family/submission.js";
+import { CoreAcquisitionError } from "../src/dataset/acquisition/runtime.js";
 import { prepareDynamicFamilyPublication } from "../src/dataset/dynamic-family/preflight.js";
 import { computeHILEvidenceDigest } from "../src/dataset/contracts/hil-evidence.js";
 import { expectedOutputLocatorClosure } from "../src/dataset/dynamic-family/execution.js";
@@ -255,6 +256,54 @@ describe("dynamic family build tool boundary", () => {
     const rejected = await tool.execute(invalid);
     expect(rejected.isError).toBe(true);
     expect(rejected.content).toContain("dynamic_publication_rejected");
+  });
+
+  test("preserves per-binding acquisition diagnostics when submit fails", async () => {
+    const raw = await submission();
+    const parsed = await parseDynamicFamilyPublicationSubmission(raw);
+    const receipt = await prepareDynamicFamilyPublication({
+      taskId: "task_dynamic",
+      requirementId: "build_dynamic",
+      generation: 0,
+      submission: parsed,
+    });
+    (raw.execution_proposal as { transform_refs: Array<{ digest: string }> }).transform_refs[0]!.digest = receipt.host_descriptor_digest;
+    raw.preflight_receipt = receipt;
+    const tool = createDynamicFamilyPublicationTool({
+      submit: async () => {
+        // Reproduces the Gold10 GMRepo failure shape: a classified per-binding
+        // CoreAcquisitionError must survive to the tool output verbatim.
+        throw new CoreAcquisitionError(
+          "acquisition failed: http_client_error",
+          {
+            provider_id: "gmrepo.files.v1",
+            error_code: "http_client_error",
+            attempts: 1,
+            binding_id: "binding_prevalence",
+            url: "https://gmrepo.humangut.info/api/getAssociatedSpeciesByMeshID/",
+            endpoint_host: "gmrepo.humangut.info",
+            elapsed_ms: 118,
+            timeout_stage: null,
+          },
+          false,
+        );
+      },
+    });
+    const rejected = await tool.execute(raw);
+    expect(rejected.isError).toBe(true);
+    const body = JSON.parse(rejected.content) as { error: Record<string, unknown> };
+    expect(body.error.code).toBe("dynamic_publication_rejected");
+    expect(body.error.message).toBe("acquisition failed: http_client_error");
+    expect(body.error.retryable).toBe(false);
+    expect(body.error.acquisition).toMatchObject({
+      provider_id: "gmrepo.files.v1",
+      binding_id: "binding_prevalence",
+      endpoint_host: "gmrepo.humangut.info",
+      error_code: "http_client_error",
+      attempts: 1,
+      elapsed_ms: 118,
+      timeout_stage: null,
+    });
   });
 
   test("executes registered bytes through the total unisolated Core composition", async () => {

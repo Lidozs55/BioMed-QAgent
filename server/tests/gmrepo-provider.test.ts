@@ -40,7 +40,9 @@ import { SourceAssetRegistry } from "../src/runtime/source-assets/registry.js";
 
 const roots: string[] = [];
 const HOST = "gmrepo.humangut.info";
-const ENDPOINT = `https://${HOST}/api/getAssociatedSpeciesByMeshID`;
+// Trailing slash is part of the contract: Django APPEND_SLASH turns a
+// slash-less POST into HTTP 500 (the Gold10 "network_error" root cause).
+const ENDPOINT = `https://${HOST}/api/getAssociatedSpeciesByMeshID/`;
 const MESH_HEALTH = "D006262";
 const MESH_UC = "D003093";
 
@@ -193,14 +195,14 @@ describe("GMRepo POST-only acquisition", () => {
 
     expect(failure).toBeInstanceOf(CoreAcquisitionError);
     expect(failure).toMatchObject({
-      details: { provider_id: "gmrepo.get-only.v1", error_code: "network_error", attempts: 3 },
+      details: { provider_id: "gmrepo.get-only.v1", error_code: "http_client_error", attempts: 1 },
       retryable: false,
     });
-    // Every attempt was a GET; the POST JSON body was never sent, so the
-    // endpoint could never serve data and the fetch is recorded as no-data.
-    expect(requests).toHaveLength(3);
-    expect(requests.every((entry) => entry.method === "GET")).toBe(true);
-    expect(requests.every((entry) => entry.body === null)).toBe(true);
+    // The only attempt was a GET (deterministic 4xx, not retried); the POST
+    // JSON body was never sent, so the endpoint could never serve data.
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({ method: "GET" });
+    expect(requests[0]!.body === null).toBe(true);
   });
 
   it("acquires GMRepo species data through the trusted POST acquisition path", async () => {
