@@ -3,7 +3,7 @@
  * the release-invariants gate of ``invariants.py``).
  *
  * A publication is a content-addressed immutable version directory
- * (``publish/<build_id>_<digest16>``) written via a staged temp directory +
+ * (``publish/<requirement_id>_<digest16>``) written via a staged temp directory +
  * rename so a crash never leaves a half-written publication and a prior
  * version is never mutated.  The release gate runs immediately before
  * promotion; the pending-input gate is rechecked at the rename boundary.
@@ -22,9 +22,9 @@ import type {
 } from "../contracts/index.js";
 import { parsePublicationCandidate } from "../contracts/index.js";
 import { throwIfAborted } from "../cooperative.js";
-import { BuildError } from "../adapters/errors.js";
+import { ExecutionError } from "../adapters/errors.js";
 import { asPosix } from "../adapters/paths.js";
-import { LockLostError } from "../service/build-lock.js";
+import { LockLostError } from "../service/execution-lock.js";
 import { pythonJsonDumps } from "../runtime/digests.js";
 import { checkReleaseInvariants, findLatestPublication, PUBLISH_DIR } from "./invariants.js";
 import { MANIFEST_FILE } from "./manifest.js";
@@ -33,10 +33,10 @@ import { MANIFEST_FILE } from "./manifest.js";
 export const PUBLICATION_REFUSED_PREFIX = "publication refused: main input pending";
 
 /** The build reached publication while a correction pause is pending. */
-export class PublicationRefusedError extends BuildError {}
+export class PublicationRefusedError extends ExecutionError {}
 
 /** The atomic promotion failed (I/O error during staging or rename). */
-export class AtomicPromotionError extends BuildError {}
+export class AtomicPromotionError extends ExecutionError {}
 
 export interface PublishOptions {
   outputDir: string;
@@ -92,7 +92,7 @@ export async function promotePublication(options: PublishOptions): Promise<Publi
     const manifestPrimary = manifest.artifacts.find((artifact) => artifact.role === "primary_dataset");
     if (
       candidate.task_id !== manifest.task_id ||
-      candidate.build_id !== manifest.build_id ||
+      candidate.requirement_id !== manifest.requirement_id ||
       candidate.dataset_family !== manifest.dataset_family ||
       candidate.row_granularity !== manifest.row_granularity ||
       primary === undefined ||
@@ -100,7 +100,7 @@ export async function promotePublication(options: PublishOptions): Promise<Publi
       primary.row_count !== manifest.row_count ||
       primary.data_ref.output_file_sha256 !== manifestPrimary.sha256
     ) {
-      throw new BuildError("publication candidate does not match the validated manifest");
+      throw new ExecutionError("publication candidate does not match the validated manifest");
     }
   }
   const invariants = await checkReleaseInvariants({
@@ -111,22 +111,22 @@ export async function promotePublication(options: PublishOptions): Promise<Publi
     signal,
   });
   if (!invariants.passed) {
-    throw new BuildError(
+    throw new ExecutionError(
       `release invariants failed: ${invariants.violations.join("; ")}`,
     );
   }
 
   const publishDir = join(options.outputDir, PUBLISH_DIR);
   mkdirSync(publishDir, { recursive: true });
-  const versionName = `${manifest.build_id}_${manifest.sha256.slice(0, 16)}`;
+  const versionName = `${manifest.requirement_id}_${manifest.sha256.slice(0, 16)}`;
   const versionDir = join(publishDir, versionName);
   if (existsSync(versionDir)) {
-    throw new BuildError(
+    throw new ExecutionError(
       `atomic promotion: version directory already exists: ${versionName}`,
     );
   }
-  const superseded = findLatestPublication(publishDir, manifest.build_id);
-  const publicationId = `pub_${manifest.build_id}_${manifest.sha256.slice(0, 16)}`;
+  const superseded = findLatestPublication(publishDir, manifest.requirement_id);
+  const publicationId = `pub_${manifest.requirement_id}_${manifest.sha256.slice(0, 16)}`;
   // P7 trust anchor: bind the dataset_manifest.json FILE BYTES into the
   // publication receipt. The artifact reader recomputes this digest from the
   // stored manifest file and rejects any record whose file does not match —
@@ -151,7 +151,7 @@ export async function promotePublication(options: PublishOptions): Promise<Publi
       manifest.artifacts.reduce((sum, artifact) => sum + artifact.size_bytes, 0) +
       manifestBytes.length;
     if (projected > options.maxVersionBytes) {
-      throw new BuildError(
+      throw new ExecutionError(
         `publication package exceeds disk budget: ${projected} bytes > ${options.maxVersionBytes} bytes`,
       );
     }

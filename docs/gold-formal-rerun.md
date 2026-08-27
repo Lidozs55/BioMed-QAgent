@@ -64,10 +64,12 @@ human record and posted to the Host; it is not guessed from the report.
 
 Terminal runs are classified as `succeeded_publication`,
 `blocked_no_publication`, or `failed_or_cancelled`. A successful closure must
-have a completed run, a `succeeded` BuildResult, and a publication. The
-supervisor then GETs build detail/publication/artifact listing and downloads
-every listed artifact, recalculating byte size and SHA-256 before writing
-`artifacts.jsonl` and `closure.json`.
+have a completed run and a publication whose `run_id` matches the supervised
+run (the task's `current_publication_id` from a later run is reported as
+`blocked_publication_mismatch`). The supervisor then GETs the publication
+detail, downloads every listed artifact plus the special `dataset_manifest`
+artifact through `/api/v1/publications/:id/artifacts/...`, recalculating byte
+size and SHA-256 before writing `artifacts.jsonl` and `closure.json`.
 
 The closure records two different digests:
 

@@ -37,7 +37,7 @@ export interface ProteinStructureTableAssemblyInput {
 
 export interface ProteinStructureAssemblyInput {
   taskId: string;
-  buildId: string;
+  requirementId: string;
   datasetFamily: string;
   rowGranularity: string;
   tables: readonly ProteinStructureTableAssemblyInput[];
@@ -138,7 +138,7 @@ function evidenceRefs(
   return resultRefs({
     results,
     taskId: input.taskId,
-    buildId: input.buildId,
+    requirementId: input.requirementId,
   });
 }
 
@@ -173,7 +173,7 @@ export function assembleProteinStructureCandidate(
     const result = requireCoreResult({
       result: tableInput.result,
       taskId: input.taskId,
-      buildId: input.buildId,
+      requirementId: input.requirementId,
       operationKind: "integrate",
       outputKind: "integrated_table",
     });
@@ -203,7 +203,7 @@ export function assembleProteinStructureCandidate(
   const candidateBody = {
     schema_version: "1.0" as const,
     task_id: input.taskId,
-    build_id: input.buildId,
+    requirement_id: input.requirementId,
     dataset_family: PROTEIN_STRUCTURE_FAMILY_ID,
     row_granularity: PROTEIN_STRUCTURE_ROW_GRANULARITY,
     tables: validated.map((item) => ({
@@ -217,7 +217,7 @@ export function assembleProteinStructureCandidate(
     audit_refs: resultRefs({
       results: input.auditResults ?? [],
       taskId: input.taskId,
-      buildId: input.buildId,
+      requirementId: input.requirementId,
     }),
     registered_asset_ids: assets,
   };

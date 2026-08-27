@@ -1,9 +1,9 @@
 /**
  * Shared safe-identifier guard for task/run/build identifiers that become
  * filesystem names. This single implementation replaces copies that used to
- * live in ``task-repository.ts``, ``hil-store.ts``, ``build-continuation.ts``,
+ * live in ``task-repository.ts``, ``hil-store.ts``, ``execution-continuation.ts``,
  * ``artifact-store.ts``, ``durable-agent-runtime.ts`` and
- * ``product/build-store.ts`` (identical regex + identical error).
+ * ``product/publication-store.ts`` (identical regex + identical error).
  */
 export const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 

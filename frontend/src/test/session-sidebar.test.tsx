@@ -4,12 +4,7 @@ import { toast } from "sonner";
 
 import { SessionSidebar } from "@/components/SessionSidebar";
 import { SidebarProvider } from "@/components/ui/sidebar";
-import type {
-  BuildResult,
-  BuildResultStatus,
-  RunStatus,
-  TaskSummary,
-} from "@/runtime/contracts";
+import type { RunStatus, TaskSummary } from "@/runtime/contracts";
 import { createInitialRuntimeState } from "@/runtime/reducer";
 import { useAgentStore } from "@/stores/agentStore";
 
@@ -24,7 +19,6 @@ function summary(
   status: RunStatus,
   title = taskId,
   artifactCount?: number,
-  latestBuildStatus?: BuildResultStatus | null,
 ): TaskSummary {
   return {
     task_id: taskId,
@@ -33,7 +27,6 @@ function summary(
     title,
     status,
     artifact_count: artifactCount,
-    latest_build_status: latestBuildStatus,
     active_run_id:
       status === "queued" ||
       status === "running" ||
@@ -48,26 +41,11 @@ function summary(
   };
 }
 
-function buildResult(status: BuildResultStatus): BuildResult {
-  return {
-    status,
-    valid_row_count: 0,
-    successful_sources: [],
-    rejected_sources: [],
-    available_artifact_roles: [],
-    publication_id: null,
-    reason_codes: [],
-    user_summary: "",
-    recommended_next_action: "",
-  };
-}
-
 function seedRunSummary(
   taskId: string,
   runId: string,
   options: {
     status?: RunStatus;
-    buildStatus?: BuildResultStatus;
     userMessage?: string | null;
   } = {},
 ): void {
@@ -95,10 +73,6 @@ function seedRunSummary(
             error: null,
             summary: {
               run_status: runStatus,
-              build_result:
-                options.buildStatus === undefined
-                  ? null
-                  : buildResult(options.buildStatus),
               error_code: null,
               cancelled_at_stage: null,
               user_message: options.userMessage ?? null,
@@ -394,7 +368,7 @@ describe("SessionSidebar", () => {
       },
       false,
     );
-    seedRunSummary("completed", "run_completed", { buildStatus: "no_data" });
+    seedRunSummary("completed", "run_completed");
     const { container } = renderSidebar();
 
     const iconFor = (name: string) =>
@@ -412,58 +386,6 @@ describe("SessionSidebar", () => {
     for (const badge of container.querySelectorAll('[data-slot="badge"]')) {
       expect(badge).not.toHaveTextContent(/运行中|排队中|已完成|失败|已取消|已中断/);
     }
-  });
-
-  it("renders four-state outcome from run.summary.build_result", () => {
-    useAgentStore.getState().mergeTaskPage(
-      {
-        active_items: [],
-        items: [
-          summary("succeeded", "completed", "Succeeded"),
-          summary("partial", "completed", "Partial"),
-          summary("no_data", "completed", "No Data"),
-          summary("rejected", "completed", "Rejected"),
-          summary("error", "failed", "Error"),
-        ],
-        next_cursor: null,
-      },
-      false,
-    );
-    seedRunSummary("succeeded", "run_succeeded", {
-      buildStatus: "succeeded",
-    });
-    seedRunSummary("partial", "run_partial", {
-      buildStatus: "partial_success",
-    });
-    seedRunSummary("no_data", "run_no_data", {
-      buildStatus: "no_data",
-      userMessage: "未检索到数据",
-    });
-    seedRunSummary("rejected", "run_rejected", {
-      buildStatus: "spec_rejected",
-    });
-
-    renderSidebar();
-
-    const iconFor = (name: string) =>
-      screen.getByRole("button", { name }).querySelector("svg");
-    const iconPath = (name: string) =>
-      iconFor(name)?.querySelector("path")?.getAttribute("d") ?? null;
-    expect(iconFor("Succeeded 已完成")).toHaveClass("text-success");
-    expect(iconFor("Partial 已完成")).toHaveClass("text-success");
-    expect(iconFor("No Data 已完成")).not.toHaveClass(
-      "text-info",
-      "text-success",
-      "text-destructive",
-    );
-    expect(iconFor("Rejected 已完成")).toHaveClass("text-destructive");
-    expect(iconFor("Error 失败")).toHaveClass("text-destructive");
-    // icon identity matches the build result (not just color classes)
-    expect(iconPath("Succeeded 已完成")).toContain("M173.66,98.34a8,8"); // CheckCircleIcon
-    expect(iconPath("Partial 已完成")).toContain("M173.66,98.34a8,8"); // CheckCircleIcon
-    expect(iconPath("No Data 已完成")).toContain("M112,84a12,12,0,1,1"); // InfoIcon
-    expect(iconPath("Rejected 已完成")).toContain("m88,104a87.56"); // ProhibitIcon
-    expect(iconPath("Error 失败")).toContain("Zm-8-80V80"); // WarningCircleIcon
   });
 
   it("classifies history summaries without hydrated runs via artifact_count", () => {
@@ -495,95 +417,6 @@ describe("SessionSidebar", () => {
     expect(iconFor("Cancelled 已取消")).not.toHaveClass("text-destructive");
     expect(iconFor("Failed 失败")).toHaveClass("text-destructive");
     expect(iconFor("Interrupted 已中断")).toHaveClass("text-destructive");
-  });
-
-  it("classifies history rows from summary.latest_build_status", () => {
-    useAgentStore.getState().mergeTaskPage(
-      {
-        active_items: [],
-        items: [
-          summary("legacy_no_data", "failed", "Legacy No Data", 0, "no_data"),
-          summary("genuine_error", "failed", "Genuine Error", 0),
-          summary("with_data", "completed", "With Data", 0, "succeeded"),
-          summary("rejected", "completed", "Rejected", 0, "spec_rejected"),
-        ],
-        next_cursor: null,
-      },
-      false,
-    );
-
-    renderSidebar();
-
-    const iconFor = (name: string) =>
-      screen.getByRole("button", { name }).querySelector("svg");
-    expect(iconFor("Legacy No Data 失败")).not.toHaveClass("text-destructive");
-    expect(iconFor("Genuine Error 失败")).toHaveClass("text-destructive");
-    expect(iconFor("With Data 已完成")).toHaveClass("text-success");
-    expect(iconFor("Rejected 已完成")).toHaveClass("text-destructive");
-  });
-
-  it("renders legacy no-artifact failures as neutral once run data hydrates", () => {
-    useAgentStore.getState().mergeTaskPage(
-      {
-        active_items: [],
-        items: [
-          summary("legacy_no_data", "failed", "Legacy No Data", 0),
-          summary("genuine_error", "failed", "Genuine Error", 0),
-        ],
-        next_cursor: null,
-      },
-      false,
-    );
-    useAgentStore.setState({
-      tasksById: {
-        ...useAgentStore.getState().tasksById,
-        legacy_no_data: {
-          ...useAgentStore.getState().tasksById.legacy_no_data,
-          runsById: {
-            run_legacy_no_data: {
-              runId: "run_legacy_no_data",
-              taskId: "legacy_no_data",
-              requestId: null,
-              status: "failed",
-              input: null,
-              createdAt: CREATED_AT,
-              updatedAt: CREATED_AT,
-              startedAt: CREATED_AT,
-              finishedAt: CREATED_AT,
-              error: "run failed without producing any artifacts",
-              summary: null,
-            },
-          },
-          runOrder: ["run_legacy_no_data"],
-        },
-        genuine_error: {
-          ...useAgentStore.getState().tasksById.genuine_error,
-          runsById: {
-            run_genuine_error: {
-              runId: "run_genuine_error",
-              taskId: "genuine_error",
-              requestId: null,
-              status: "failed",
-              input: null,
-              createdAt: CREATED_AT,
-              updatedAt: CREATED_AT,
-              startedAt: CREATED_AT,
-              finishedAt: CREATED_AT,
-              error: "model request failed: connection refused",
-              summary: null,
-            },
-          },
-          runOrder: ["run_genuine_error"],
-        },
-      },
-    });
-
-    renderSidebar();
-
-    const iconFor = (name: string) =>
-      screen.getByRole("button", { name }).querySelector("svg");
-    expect(iconFor("Legacy No Data 失败")).not.toHaveClass("text-destructive");
-    expect(iconFor("Genuine Error 失败")).toHaveClass("text-destructive");
   });
 
   it("separates active cancellation from terminal deletion", async () => {

@@ -1,6 +1,6 @@
 /**
  * Artifact display helpers shared by the legacy artifact store view
- * (ResultsViewer) and the V2 manifest view (BuildResultsViewer).
+ * (ResultsViewer) and the V2 manifest view (PublicationResultsViewer).
  */
 import { getExtension } from "@/lib/fileUtils";
 import type { ManifestArtifactEntry } from "@/runtime/contracts";

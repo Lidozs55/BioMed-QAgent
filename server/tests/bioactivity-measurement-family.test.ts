@@ -150,7 +150,8 @@ async function resultFor(
     schema_version: "1.0",
     result_manifest_id: `result_${tableId}`,
     task_id: "task_bioactivity",
-    build_id: "build_bioactivity",
+    run_id: "run_bioactivity",
+    requirement_id: "build_bioactivity",
     operation_id: `integrate_${tableId}`,
     operation_kind: "integrate",
     operation_attempt_id: `attempt_${tableId}`,
@@ -180,7 +181,6 @@ async function resultFor(
       commit_id: `commit_${tableId}`,
       committed_at: "2026-08-18T00:00:00Z",
     },
-    migration: { mode: "native", legacy_checkpoint_path: null, migrated_at: null },
   };
 }
 
@@ -365,7 +365,7 @@ describe("bioactivity_measurement B5A module", () => {
     const prepared = await prepare(rows);
     const candidate = assembleBioactivityCandidate({
       taskId: "task_bioactivity",
-      buildId: "build_bioactivity",
+      requirementId: "build_bioactivity",
       datasetFamily: BIOACTIVITY_FAMILY_ID,
       rowGranularity: BIOACTIVITY_ROW_GRANULARITY,
       tables: bioactivityTableEntries().map((entry, index) => ({
@@ -390,7 +390,7 @@ describe("bioactivity_measurement B5A module", () => {
 
     const validation = await validateBioactivityCandidate({
       task_id: "task_bioactivity",
-      build_id: "build_bioactivity",
+      requirement_id: "build_bioactivity",
       candidate: candidateRefs(prepared.tables),
       tables: prepared.tables,
       relations: [...bioactivityRelations],
@@ -450,7 +450,7 @@ describe("bioactivity_measurement B5A module", () => {
     const crosswalkResult = prepared.results.at(-1)!;
     const candidate = assembleBioactivityCandidate({
       taskId: "task_bioactivity",
-      buildId: "build_bioactivity",
+      requirementId: "build_bioactivity",
       datasetFamily: BIOACTIVITY_FAMILY_ID,
       rowGranularity: BIOACTIVITY_ROW_GRANULARITY,
       tables: [...legacyInputs, {
@@ -471,7 +471,7 @@ describe("bioactivity_measurement B5A module", () => {
 
     const validation = await validateBioactivityCandidate({
       task_id: "task_bioactivity",
-      build_id: "build_bioactivity",
+      requirement_id: "build_bioactivity",
       candidate: candidateRefs(prepared.tables, relations),
       tables: prepared.tables,
       relations,
@@ -484,7 +484,7 @@ describe("bioactivity_measurement B5A module", () => {
     const broken = await prepare(rows, [{ ...crosswalk, right_id: "9999" }]);
     const rejected = await validateBioactivityCandidate({
       task_id: "task_bioactivity",
-      build_id: "build_bioactivity",
+      requirement_id: "build_bioactivity",
       candidate: candidateRefs(broken.tables, relations),
       tables: broken.tables,
       relations,
@@ -515,7 +515,7 @@ describe("bioactivity_measurement B5A module", () => {
     const prepared = await prepare(invalid);
     const rejected = await validateBioactivityCandidate({
       task_id: "task_bioactivity",
-      build_id: "build_bioactivity",
+      requirement_id: "build_bioactivity",
       candidate: candidateRefs(prepared.tables),
       tables: prepared.tables,
       relations: [...bioactivityRelations],
@@ -532,7 +532,7 @@ describe("bioactivity_measurement B5A module", () => {
     validPrepared.tables[0]!.provenance_refs = [];
     const missingProvenance = await validateBioactivityCandidate({
       task_id: "task_bioactivity",
-      build_id: "build_bioactivity",
+      requirement_id: "build_bioactivity",
       candidate: candidateRefs(validPrepared.tables),
       tables: validPrepared.tables,
       relations: [...bioactivityRelations],
@@ -548,7 +548,7 @@ describe("bioactivity_measurement B5A module", () => {
     const prepared = await prepare(rows);
     await expect(validateBioactivityCandidate({
       task_id: "task_bioactivity",
-      build_id: "build_bioactivity",
+      requirement_id: "build_bioactivity",
       candidate: candidateRefs(prepared.tables.slice(0, 3)),
       tables: prepared.tables.slice(0, 3),
       relations: bioactivityRelations.slice(0, 2),

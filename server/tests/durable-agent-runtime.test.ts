@@ -49,6 +49,7 @@ class ControlledAdapter implements BioMedAgentAdapter {
   readonly configs: BioMedSessionConfig[] = [];
   readonly steering: string[] = [];
   readonly compactions: string[] = [];
+  progressResets = 0;
   compactError: Error | null = null;
   private cancelled = false;
 
@@ -59,6 +60,9 @@ class ControlledAdapter implements BioMedAgentAdapter {
       taskId: config.taskId,
       runId: config.runId,
       run: (input) => this.run(input),
+      resetRunProgress: () => {
+        this.progressResets += 1;
+      },
       cancel: async () => {
         this.cancelled = true;
         this.gates.at(-1)?.resolve();
@@ -157,11 +161,13 @@ describe("durable formal Agent runtime", () => {
     const accepted = await admitted.json() as { task_id: string; run_id: string };
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(adapter.configs[0]?.initialToolNames).toEqual([
-      "validate_dataset_build",
-      "execute_dataset_build",
-      "prepare_dynamic_family_build",
-      "submit_dynamic_family_build",
+      "inspect_dataset_execution_routes",
+      "validate_dataset_execution",
+      "execute_dataset_execution",
+      "prepare_dynamic_family_publication",
+      "submit_dynamic_family_publication",
     ]);
+    expect(adapter.progressResets).toBe(1);
 
     const socket = new WebSocket(`ws://127.0.0.1:${port}/api/v1/ws`);
     await once(socket, "open");
@@ -181,6 +187,7 @@ describe("durable formal Agent runtime", () => {
     adapter.gates[0]?.resolve();
     const completed = await nextEvent(frames, "run_completed");
     expect(completed.sequence).toBe(5);
+    expect(completed.payload).toEqual({ type: "run_completed" });
 
     const snapshotResponse = await fetch(
       `http://127.0.0.1:${port}/api/v1/tasks/${accepted.task_id}`,
@@ -675,13 +682,11 @@ describe("durable formal Agent runtime", () => {
         databases: [],
         mode: "agent",
       }),
-    })).json() as { task_id: string };
-    const buildDir = path.join(root, accepted.task_id, "datasets_build", "build_one");
+    })).json() as { task_id: string; run_id: string };
+    const executionDir = path.join(root, accepted.task_id, "dataset_runs", accepted.run_id, "build_one");
     const primary = "gene_id,value\nTP53,1\n";
     const sha256 = createHash("sha256").update(primary).digest("hex");
-    await mkdir(path.join(buildDir, "merged"), { recursive: true });
-    await mkdir(path.join(buildDir, "publish", "version_1"), { recursive: true });
-    const publicationDir = path.join(buildDir, "publish", "version_1");
+    const publicationDir = path.join(executionDir, "publish", "publication_one");
     await mkdir(path.join(publicationDir, "merged"), { recursive: true });
     await writeFile(path.join(publicationDir, "merged", "primary.csv"), primary, "utf8");
     const digest = packageDigest([{
@@ -696,7 +701,11 @@ describe("durable formal Agent runtime", () => {
     await writeFile(path.join(publicationDir, "dataset_manifest.json"), JSON.stringify({
       manifest_id: `manifest_${digest.slice(0, 16)}`,
       task_id: accepted.task_id,
-      build_id: "build_one",
+      requirement_id: "build_one",
+      dataset_family: "gene_expression",
+      row_granularity: "gene",
+      schema_ref: "gene.v1",
+      row_count: 1,
       sha256: digest,
       artifacts: [{
         artifact_id: "artifact_primary",

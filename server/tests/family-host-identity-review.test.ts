@@ -6,14 +6,14 @@ import { gzipSync } from "node:zlib";
 
 import { describe, expect, it } from "vitest";
 
-import { createDatasetBuildTools } from "../src/agent/tools/dataset-build.js";
+import { createDatasetExecutionTools } from "../src/agent/tools/dataset-execution.js";
 import {
   CoreAcquisitionRegistry,
   CoreAcquisitionRuntime,
   type AcquisitionProviderHandler,
 } from "../src/dataset/acquisition/runtime.js";
 import { integrate } from "../src/dataset/integrator/integrator.js";
-import { parseDatasetBuildSpec, parseSourceAsset } from "../src/dataset/contracts/index.js";
+import { parseDatasetExecutionSpec, parseSourceAsset } from "../src/dataset/contracts/index.js";
 import { buildProbeExpressionSchemaV2 } from "../src/dataset/schema/expression.js";
 import { parseDataBatch } from "../src/dataset/contracts/data.js";
 import { TsDatasetCoreAdapter } from "../src/dataset/service/dataset-core.js";
@@ -123,9 +123,9 @@ describe("Family Host identity review regressions", () => {
       const service = new TsDatasetCoreAdapter(core, {
         acquisition: (input) => acquisition.acquire(input.request, input.signal),
       });
-      const spec = parseDatasetBuildSpec({
+      const spec = parseDatasetExecutionSpec({
         schema_version: "1.0",
-        build_id: "build_identity_tool",
+        requirement_id: "requirement_identity_tool",
         objective: "publish trusted GDC identity",
         dataset_family: "gene_expression",
         row_granularity: "gene_sample_measurement",
@@ -141,7 +141,7 @@ describe("Family Host identity review regressions", () => {
         }],
         validation_profile_ref: "gene_expression.release.v1",
       });
-      const tools = createDatasetBuildTools({
+      const tools = createDatasetExecutionTools({
         client: service,
         taskId: "task_identity_tool",
         taskRoot: root,
@@ -151,9 +151,9 @@ describe("Family Host identity review regressions", () => {
       const result = await tools[1]!.execute({ spec, mapping_files: {} });
       expect(result.isError, JSON.stringify(result)).toBe(false);
       expect(result.details).toMatchObject({ code: "ok" });
-      const primary = await readFile(path.join(root, "datasets_build", spec.build_id, "merged", "primary.csv"), "utf8");
+      const primary = await readFile(path.join(root, "dataset_runs", "run_identity_tool", spec.requirement_id, "merged", "primary.csv"), "utf8");
       expect(primary).toContain("dataset_revision_id");
-      expect(primary).not.toContain(spec.build_id);
+      expect(primary).not.toContain(spec.requirement_id);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -191,7 +191,7 @@ describe("Family Host identity review regressions", () => {
         }],
         mergeStrategy: "append_by_canonical_row",
         schema,
-        buildId: "build_probe_identity_review",
+        requirementId: "build_probe_identity_review",
         outputDir: root,
         identityContext: {
           datasetId: DATASET_ID,
@@ -267,9 +267,9 @@ describe("Family Host identity review regressions", () => {
         });
       }
       const core = new TypeScriptDatasetCore({ taskId, taskRoot: root });
-      const spec = parseDatasetBuildSpec({
+      const spec = parseDatasetExecutionSpec({
         schema_version: "1.0",
-        build_id: "build_geo_probe_identity",
+        requirement_id: "build_geo_probe_identity",
         objective: "publish multi-platform GEO probes",
         dataset_family: "gene_expression",
         row_granularity: "probe_sample_measurement",
@@ -299,13 +299,13 @@ describe("Family Host identity review regressions", () => {
         validation_profile_ref: "gene_expression.probe_release.v1",
         target_entity_level: "probe",
       });
-      const record = await core.executeDatasetBuild(spec, {
+      const record = await core.executeDatasetExecution(spec, {
         runId: "run_geo_probe_identity",
         sourceAssets: { geo_gpl570: first.asset, geo_gpl571: second.asset },
         registrationReceipts: [firstReceipt, secondReceipt],
       });
       expect(record.status, record.error ?? "no error").toBe("completed");
-      const primary = await readFile(path.join(root, "datasets_build", spec.build_id, "merged", "primary.csv"), "utf8");
+      const primary = await readFile(path.join(root, "dataset_runs", "run_geo_probe_identity", spec.requirement_id, "merged", "primary.csv"), "utf8");
       expect(primary).toContain("platform_id");
       expect(primary).toContain("GPL570");
       expect(primary).toContain("GPL571");

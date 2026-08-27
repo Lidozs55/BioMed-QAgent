@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ArrowsOutIcon, DownloadIcon } from "@phosphor-icons/react";
 
-import BuildResultsViewer from "@/components/BuildResultsViewer";
+import PublicationResultsViewer from "@/components/PublicationResultsViewer";
 import { CsvPreview } from "@/components/artifacts/CsvPreview";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -29,17 +29,17 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { useAPI } from "@/hooks/useAPI";
 import { fileType, formatSize, triggerArtifactDownload } from "@/lib/fileUtils";
-import type { BuildDetail, JsonValue } from "@/runtime/contracts";
-import type { BuildReportItem } from "@/runtime/types";
+import type { PublicationDetail, JsonValue } from "@/runtime/contracts";
+import type { PublicationReportItem } from "@/runtime/types";
 
-interface BuildReportCardProps {
-  item: BuildReportItem;
+interface PublicationReportCardProps {
+  item: PublicationReportItem;
   download?: (url: string, filename: string) => void;
 }
 
 type LoadState =
   | { status: "loading" }
-  | { status: "ready"; detail: BuildDetail }
+  | { status: "ready"; detail: PublicationDetail }
   | { status: "error" };
 
 function summaryNumber(
@@ -71,26 +71,7 @@ function SummaryCell({ label, value }: { label: string; value: string }) {
   );
 }
 
-function statusLabel(status: BuildDetail["build_result"] extends infer R
-  ? R extends { status: infer S }
-    ? S
-    : never
-  : never): string {
-  switch (status) {
-    case "succeeded":
-      return "已完成";
-    case "partial_success":
-      return "部分完成";
-    case "no_data":
-      return "无主数据";
-    case "spec_rejected":
-      return "规格未通过";
-    default:
-      return "构建完成";
-  }
-}
-
-export function BuildReportCard({ item, download = triggerArtifactDownload }: BuildReportCardProps) {
+export function PublicationReportCard({ item, download = triggerArtifactDownload }: PublicationReportCardProps) {
   const api = useAPI();
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [reloadKey, setReloadKey] = useState(0);
@@ -99,7 +80,7 @@ export function BuildReportCard({ item, download = triggerArtifactDownload }: Bu
   useEffect(() => {
     let cancelled = false;
     void api
-      .fetchBuild(item.buildId, item.taskId)
+      .fetchPublication(item.publicationId, item.taskId)
       .then((detail) => {
         if (!cancelled) setState({ status: "ready", detail });
       })
@@ -109,14 +90,14 @@ export function BuildReportCard({ item, download = triggerArtifactDownload }: Bu
     return () => {
       cancelled = true;
     };
-  }, [api, item.buildId, item.taskId, reloadKey]);
+  }, [api, item.publicationId, item.taskId, reloadKey]);
 
   if (state.status === "loading") {
     return (
       <Card size="sm" className="w-full min-w-0">
         <CardContent className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
           <Spinner />
-          加载构建结果...
+          加载发布产物...
         </CardContent>
       </Card>
     );
@@ -127,7 +108,7 @@ export function BuildReportCard({ item, download = triggerArtifactDownload }: Bu
       <Card size="sm" className="w-full min-w-0">
         <Empty className="min-h-40">
           <EmptyHeader>
-            <EmptyTitle>无法加载构建结果</EmptyTitle>
+            <EmptyTitle>无法加载发布产物</EmptyTitle>
             <EmptyDescription>请稍后重试或检查任务状态。</EmptyDescription>
           </EmptyHeader>
           <Button
@@ -147,21 +128,18 @@ export function BuildReportCard({ item, download = triggerArtifactDownload }: Bu
 
   const { detail } = state;
   const manifest = detail.manifest;
-  const result = detail.build_result;
   const primary = manifest.artifacts.find((entry) => entry.role === "primary_dataset");
   const validation = manifest.validation_summary;
-  const successfulSources = result?.successful_sources.length ?? 0;
-  const rejectedSources = result?.rejected_sources.length ?? 0;
   const checkedCount = summaryNumber(validation, "checked_count");
   const failedCount = summaryNumber(validation, "failed_count");
   const anomalyCount = summaryNumber(manifest.confidence_summary, "detected_anomaly_count");
   const warningCount = manifest.artifacts.filter((entry) => /warning/i.test(artifactName(entry.relative_path))).length;
-  const rowCount = result?.valid_row_count ?? manifest.row_count;
+  const rowCount = manifest.row_count;
 
   const downloadAll = () => {
     for (const entry of detail.artifacts) {
       download(
-        api.getBuildArtifactUrl(detail.build_id, entry.artifact_id, item.taskId),
+        api.getPublicationArtifactUrl(detail.publication_id, entry.artifact_id, item.taskId),
         artifactName(entry.relative_path),
       );
     }
@@ -174,17 +152,13 @@ export function BuildReportCard({ item, download = triggerArtifactDownload }: Bu
           <div className="flex min-w-0 items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-                <CardTitle className="text-sm">数据构建结果</CardTitle>
+                <CardTitle className="text-sm">数据发布产物</CardTitle>
                 <Badge variant="outline">{manifest.dataset_family}</Badge>
                 <Badge variant="outline">{manifest.row_granularity}</Badge>
-                {result !== null && (
-                  <Badge variant={result.status === "succeeded" ? "secondary" : "outline"}>
-                    {statusLabel(result.status)}
-                  </Badge>
-                )}
+                <Badge variant="secondary">已发布</Badge>
               </div>
               <CardDescription>
-                {rowCount} 行 · 构建 {detail.build_id}
+                {rowCount} 行 · 需求 {detail.requirement_id}
               </CardDescription>
             </div>
             <Button
@@ -199,20 +173,6 @@ export function BuildReportCard({ item, download = triggerArtifactDownload }: Bu
           </div>
         </CardHeader>
         <CardContent className="flex min-w-0 flex-col gap-4">
-          {result !== null && result.status !== "succeeded" && (
-            <div
-              className={
-                result.status === "no_data"
-                  ? "rounded-md border border-info/30 bg-info/5 px-3 py-2 text-sm"
-                  : "rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-sm"
-              }
-            >
-              <p className="font-medium">{result.user_summary || statusLabel(result.status)}</p>
-              {result.recommended_next_action !== "" && (
-                <p className="mt-1 text-xs text-muted-foreground">{result.recommended_next_action}</p>
-              )}
-            </div>
-          )}
           <div className="flex min-w-0 flex-col gap-2">
             <div className="flex min-w-0 items-baseline justify-between gap-2">
               <p className="text-sm font-medium">主数据预览</p>
@@ -226,22 +186,18 @@ export function BuildReportCard({ item, download = triggerArtifactDownload }: Bu
               <Empty className="border-0 py-5">
                 <EmptyHeader>
                   <EmptyTitle>无主数据</EmptyTitle>
-                  <EmptyDescription>本次构建没有生成主数据产物。</EmptyDescription>
+                  <EmptyDescription>本次发布没有主数据产物。</EmptyDescription>
                 </EmptyHeader>
               </Empty>
             ) : (
               <CsvPreview
-                artifactUrl={api.getBuildArtifactUrl(detail.build_id, primary.artifact_id, item.taskId)}
+                artifactUrl={api.getPublicationArtifactUrl(detail.publication_id, primary.artifact_id, item.taskId)}
                 noDataMessage="无数据"
                 maxRows={10}
               />
             )}
           </div>
           <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-3">
-            <SummaryCell
-              label="来源"
-              value={`${successfulSources} 成功 · ${rejectedSources} 被拒`}
-            />
             <SummaryCell
               label="处理"
               value={`${summaryString(validation, "status") ?? "未知"} · ${checkedCount ?? "—"} 项 / ${failedCount ?? "—"} 失败 · ${anomalyCount ?? 0} 异常`}
@@ -287,13 +243,13 @@ export function BuildReportCard({ item, download = triggerArtifactDownload }: Bu
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="flex max-h-[85vh] max-w-[min(1120px,calc(100vw-2rem))] flex-col sm:max-w-[min(1120px,calc(100vw-2rem))]">
           <DialogHeader>
-            <DialogTitle>构建详情</DialogTitle>
+            <DialogTitle>发布详情</DialogTitle>
             <DialogDescription>
-              {manifest.dataset_family} · {detail.build_id}
+              {manifest.dataset_family} · {detail.requirement_id}
             </DialogDescription>
           </DialogHeader>
           <div className="min-h-0 flex-1 overflow-y-auto">
-            <BuildResultsViewer buildId={detail.build_id} taskId={item.taskId} />
+            <PublicationResultsViewer publicationId={detail.publication_id} taskId={item.taskId} />
           </div>
         </DialogContent>
       </Dialog>

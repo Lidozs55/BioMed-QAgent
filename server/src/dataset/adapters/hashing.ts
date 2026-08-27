@@ -14,7 +14,7 @@ import { throwIfAborted } from "../cooperative.js";
 
 /** SHA-256 hex of in-memory bytes (deduplicated from the copies in
  * ``dataset/service/dataset-core.ts``, ``runtime/artifact-store.ts``,
- * ``runtime/durable-agent-runtime.ts`` and ``product/build-store.ts``). */
+ * ``runtime/durable-agent-runtime.ts`` and ``product/publication-store.ts``). */
 export function sha256Bytes(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
 }

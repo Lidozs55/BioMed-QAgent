@@ -34,7 +34,7 @@ export interface TargetEvidenceTableAssemblyInput {
 
 export interface TargetEvidenceAssemblyInput {
   taskId: string;
-  buildId: string;
+  requirementId: string;
   datasetFamily: string;
   rowGranularity: string;
   tables: readonly TargetEvidenceTableAssemblyInput[];
@@ -148,7 +148,7 @@ function validateTableInput(
   const result = requireCoreResult({
     result: table.result,
     taskId: input.taskId,
-    buildId: input.buildId,
+    requirementId: input.requirementId,
     operationKind: "integrate",
     outputKind: "integrated_table",
   });
@@ -172,8 +172,8 @@ function validateTableInput(
   return {
     result,
     summary,
-    provenance: resultRefs({ results: table.provenanceResults, taskId: input.taskId, buildId: input.buildId }),
-    confidence: resultRefs({ results: table.confidenceResults, taskId: input.taskId, buildId: input.buildId }),
+    provenance: resultRefs({ results: table.provenanceResults, taskId: input.taskId, requirementId: input.requirementId }),
+    confidence: resultRefs({ results: table.confidenceResults, taskId: input.taskId, requirementId: input.requirementId }),
   };
 }
 
@@ -215,7 +215,7 @@ export function assembleTargetEvidenceCandidate(
   const candidateBody = {
     schema_version: "1.0" as const,
     task_id: input.taskId,
-    build_id: input.buildId,
+    requirement_id: input.requirementId,
     dataset_family: TARGET_EVIDENCE_FAMILY_ID,
     row_granularity: TARGET_EVIDENCE_ROW_GRANULARITY,
     tables,
@@ -225,7 +225,7 @@ export function assembleTargetEvidenceCandidate(
     audit_refs: resultRefs({
       results: input.auditResults ?? [],
       taskId: input.taskId,
-      buildId: input.buildId,
+      requirementId: input.requirementId,
     }),
     registered_asset_ids: assets,
   };

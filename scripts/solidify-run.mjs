@@ -37,8 +37,8 @@ const SKILLS_ROOT = path.resolve(".pi/skills");
 const DETERMINISTIC_PATTERNS = [/^generate_/, /^run_/, /^basic_/, /^extract_pdf_/];
 /** 确定性可重放的工具全名（本地数据集执行等）。 */
 const DETERMINISTIC_EXACT = new Set([
-  "validate_dataset_build",
-  "execute_dataset_build",
+  "validate_dataset_execution",
+  "execute_dataset_execution",
   "get_research_data_guidance",
 ]);
 /** 采集类：需网络/外部队列/凭据，仅记录不自动重放。 */

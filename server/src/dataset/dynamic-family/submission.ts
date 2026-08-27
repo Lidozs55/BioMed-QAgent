@@ -15,7 +15,7 @@ import {
   type TransformDescriptorDigestInput,
 } from "@biomed/contracts";
 
-import type { ParsedDynamicFamilyBuildSubmission } from "../../agent/tools/dynamic-family-build.js";
+import type { ParsedDynamicFamilyPublicationSubmission } from "../../agent/tools/dynamic-family-publication.js";
 import type { CoreAcquisitionPlan } from "../acquisition/runtime.js";
 import type {
   CoreAcquisitionProvenance,
@@ -38,10 +38,10 @@ import {
   type ExecuteDynamicFamilyTransformResult,
 } from "./execution.js";
 
-export interface SubmitDynamicFamilyBuildInput {
+export interface SubmitDynamicFamilyPublicationInput {
   readonly taskId: string;
   readonly runId: string;
-  readonly submission: ParsedDynamicFamilyBuildSubmission;
+  readonly submission: ParsedDynamicFamilyPublicationSubmission;
   readonly sourceAssetRegistry: SourceAssetRegistry;
   readonly taskRoot: string;
   readonly runtimeLimits: RuntimeLimits;
@@ -50,7 +50,7 @@ export interface SubmitDynamicFamilyBuildInput {
   /** Required by the production two-phase path. */
   readonly preflightReceipt: DynamicFamilyPreflightReceipt;
   /** The exact proposal submitted to prepare, before Core resolves acquisitions. */
-  readonly preflightSubmission: ParsedDynamicFamilyBuildSubmission;
+  readonly preflightSubmission: ParsedDynamicFamilyPublicationSubmission;
   /** Core-only cheap provider planning reused to verify the committed receipt. */
   readonly planAcquisition?: (input: DynamicFamilyAcquisitionPlanningInput) => Promise<CoreAcquisitionPlan>;
   /** Live Core generation fence checked by the Host during execution. */
@@ -90,7 +90,7 @@ export interface DynamicFamilyHostDescriptorPreparation {
  * as the execution path instead of introducing a second descriptor policy.
  */
 export async function prepareDynamicFamilyHostDescriptor(input: {
-  readonly submission: ParsedDynamicFamilyBuildSubmission;
+  readonly submission: ParsedDynamicFamilyPublicationSubmission;
   readonly runtimeLimits?: RuntimeLimits;
 }): Promise<DynamicFamilyHostDescriptorPreparation> {
   const compiled = await compileTransformInProcessUnisolated({
@@ -149,15 +149,15 @@ export async function prepareDynamicFamilyHostDescriptor(input: {
  * the explicit in-process unisolated runtime. This is not a sandbox, isolation
  * mechanism, or security boundary, and this function does not publish.
  */
-export interface SubmitDynamicFamilyBuildResult extends ExecuteDynamicFamilyTransformResult {
+export interface DynamicFamilyExecutionResult extends ExecuteDynamicFamilyTransformResult {
   /** Core-only root; callers must never expose this path to the Agent. */
   readonly trustedRoot: string;
   readonly sourceAcquisitionProvenance: readonly CoreAcquisitionProvenance[];
 }
 
-export async function submitDynamicFamilyBuild(
-  input: SubmitDynamicFamilyBuildInput,
-): Promise<SubmitDynamicFamilyBuildResult> {
+export async function submitDynamicFamilyPublication(
+  input: SubmitDynamicFamilyPublicationInput,
+): Promise<DynamicFamilyExecutionResult> {
   const now = input.now ?? (() => new Date());
   if (input.preflightReceipt === undefined) {
     throw new TypeError("dynamic family submit requires a preflight receipt");
@@ -172,17 +172,17 @@ export async function submitDynamicFamilyBuild(
     receipt: input.preflightReceipt,
     submission: input.preflightSubmission,
     taskId: input.taskId,
-    buildId: input.submission.build_proposal.build_id,
+    requirementId: input.submission.execution_proposal.requirement_id,
     generation: input.generation,
     runtimeLimits: input.runtimeLimits,
     planAcquisition: input.planAcquisition,
   });
-  const proposal = input.submission.build_proposal;
+  const proposal = input.submission.execution_proposal;
   const projection = input.submission.projection;
   const bindings = proposal.source_bindings;
   if (bindings.length === 0) throw new TypeError("dynamic transform requires at least one registered input");
   if (bindings.length !== input.submission.transform_metadata.declared_input_roles.length) {
-    throw new TypeError("transform declared input roles do not close build source bindings");
+    throw new TypeError("transform declared input roles do not close execution source bindings");
   }
 
   const assetReceipts: InputAssetReceipt[] = [];
@@ -255,7 +255,7 @@ export async function submitDynamicFamilyBuild(
     );
   }
   const generation = input.generation;
-  const invocationId = `dynamic_${sha256(`${input.taskId}\0${input.runId}\0${proposal.build_id}\0${generation}`).slice(0, 24)}`;
+  const invocationId = `dynamic_${sha256(`${input.taskId}\0${input.runId}\0${proposal.requirement_id}\0${generation}`).slice(0, 24)}`;
   const outputTables = [
     ...projection.primary_tables,
     ...projection.supporting_tables,
@@ -290,7 +290,7 @@ export async function submitDynamicFamilyBuild(
     owner: "dataset_core",
     task_id: input.taskId,
     run_id: input.runId,
-    build_id: proposal.build_id,
+    requirement_id: proposal.requirement_id,
     invocation_id: invocationId,
     attempt: 1,
     generation,
@@ -327,7 +327,7 @@ export async function submitDynamicFamilyBuild(
     authorizationToken,
     taskId: input.taskId,
     runId: input.runId,
-    buildId: proposal.build_id,
+    requirementId: proposal.requirement_id,
     invocationId,
     attempt: 1,
     generation,
@@ -351,7 +351,8 @@ export async function submitDynamicFamilyBuild(
     inputAssetReceipts: Object.freeze(assetReceipts),
     inputResultReceipts: Object.freeze([]),
   });
-  const coreCommitParent = path.join(input.taskRoot, "builds", proposal.build_id, "dynamic-results");
+  const executionRoot = path.join(input.taskRoot, "dataset_runs", input.runId, proposal.requirement_id);
+  const coreCommitParent = path.join(executionRoot, "dynamic-results");
   await mkdir(coreCommitParent, { recursive: true });
   let trustedRoot: string | null = null;
   const result = await executeDynamicFamilyTransform({
@@ -378,7 +379,7 @@ export async function submitDynamicFamilyBuild(
     now,
   });
   if (trustedRoot === null) throw new Error("Core operation admission did not resolve its committed root");
-  const evidenceRoot = path.join(input.taskRoot, "builds", proposal.build_id, "dynamic-evidence");
+  const evidenceRoot = path.join(executionRoot, "dynamic-evidence");
   await mkdir(evidenceRoot, { recursive: true });
   const selectedTables = [
     ...projection.primary_tables,
@@ -388,19 +389,22 @@ export async function submitDynamicFamilyBuild(
   const tableOutputs = Object.fromEntries(await Promise.all(selectedTables.map(async (tableId) => {
     const provenance = await coreEvidenceResult({
       root: evidenceRoot, kind: "provenance", tableId, taskId: input.taskId,
-      buildId: proposal.build_id, operation: result.operationResult,
+      runId: input.runId,
+      requirementId: proposal.requirement_id, operation: result.operationResult,
       implementationDigest, inputAssetIds: assetReceipts.map((receipt) => receipt.asset_id), now,
     });
     const confidence = await coreEvidenceResult({
       root: evidenceRoot, kind: "confidence", tableId, taskId: input.taskId,
-      buildId: proposal.build_id, operation: result.operationResult,
+      runId: input.runId,
+      requirementId: proposal.requirement_id, operation: result.operationResult,
       implementationDigest, inputAssetIds: assetReceipts.map((receipt) => receipt.asset_id), now,
     });
     return [tableId, { data: result.operationResult, provenance: [provenance], confidence: [confidence], audit: [] }];
   })));
   const materialization = await materializeDynamicFamilyCandidate({
     taskId: input.taskId,
-    buildId: proposal.build_id,
+    runId: input.runId,
+    requirementId: proposal.requirement_id,
     familySpec: input.submission.family_spec,
     projection,
     tableOutputs,
@@ -418,7 +422,8 @@ async function coreEvidenceResult(input: {
   kind: "provenance" | "confidence";
   tableId: string;
   taskId: string;
-  buildId: string;
+  runId: string;
+  requirementId: string;
   operation: OperationResultManifest;
   implementationDigest: string;
   inputAssetIds: string[];
@@ -444,7 +449,8 @@ async function coreEvidenceResult(input: {
     schema_version: "1.0",
     result_manifest_id: `result_${identity}`,
     task_id: input.taskId,
-    build_id: input.buildId,
+    run_id: input.runId,
+    requirement_id: input.requirementId,
     attempt: 1,
     operation_id: `derive_${identity}`,
     operation_attempt_id: `attempt_${identity}`,
@@ -464,7 +470,6 @@ async function coreEvidenceResult(input: {
       implementation_digest: input.implementationDigest,
     },
     commit: { state: "committed", commit_id: `commit_${identity}`, committed_at: committedAt },
-    migration: { mode: "native", legacy_checkpoint_path: null, migrated_at: null },
   };
 }
 

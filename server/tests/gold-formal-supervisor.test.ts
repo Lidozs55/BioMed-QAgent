@@ -19,13 +19,59 @@ const {
   validateCleanUtf8Bytes,
   verifyArtifactBytes,
 } = await import(supervisorUrl.href);
-
 type JsonRecord = Record<string, unknown>;
 const roots: string[] = [];
 const TASK_ID = "task_ts_fixture";
 const RUN_ID = "run_ts_fixture";
 const REQUEST_ID = "request_fixture";
+const PUBLICATION_ID = "publication_fixture";
 const WORKSPACE_ROOT = path.join(tmpdir(), "gold-formal-workspace", TASK_ID);
+
+function sha256Hex(bytes: Buffer): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+const ARTIFACT_BYTES = Buffer.from("artifact bytes\n", "utf8");
+const MANIFEST_BYTES = Buffer.from("{\"manifest\":true}\n", "utf8");
+const MANIFEST_SHA = sha256Hex(MANIFEST_BYTES);
+const DATA_ARTIFACT = {
+  schema_version: "1.0",
+  artifact_id: "artifact_data",
+  role: "primary_dataset",
+  relative_path: "merged/data.csv",
+  media_type: "text/csv",
+  size_bytes: ARTIFACT_BYTES.length,
+  sha256: sha256Hex(ARTIFACT_BYTES),
+};
+/** Same path+NUL+sha algorithm the Dataset Core publisher uses. */
+const PACKAGE_DIGEST = digestPackage([{ relative_path: DATA_ARTIFACT.relative_path, sha256: DATA_ARTIFACT.sha256 }]);
+const PUBLICATION_DETAIL = {
+  publication_id: PUBLICATION_ID,
+  requirement_id: "req_fixture",
+  run_id: RUN_ID,
+  task_id: TASK_ID,
+  manifest_ref: "dataset_runs/run_ts_fixture/req_fixture/publish/publication_fixture/dataset_manifest.json",
+  manifest: {
+    manifest_id: `manifest_${PACKAGE_DIGEST.slice(0, 16)}`,
+    task_id: TASK_ID,
+    dataset_family: "fixture_family",
+    row_granularity: "record",
+    schema_ref: "fixture.record.v1",
+    row_count: 1,
+    sha256: PACKAGE_DIGEST,
+    artifacts: [DATA_ARTIFACT],
+  },
+  publication: {
+    schema_version: "1.1",
+    publication_id: PUBLICATION_ID,
+    manifest_ref: "dataset_runs/run_ts_fixture/req_fixture/publish/publication_fixture/dataset_manifest.json",
+    manifest_sha256: MANIFEST_SHA,
+    validation_result_ref: "validation_fixture",
+    published_at: "2026-08-26T00:00:03.000Z",
+    supersedes_publication_id: null,
+  },
+  artifacts: [DATA_ARTIFACT],
+};
 
 function json(response: ServerResponse, status: number, value: unknown): void {
   response.writeHead(status, { "content-type": "application/json; charset=utf-8" });
@@ -46,7 +92,7 @@ function event(sequence: number, payload: JsonRecord, type = String(payload.type
   };
 }
 
-function taskSnapshot(status: string, activeRunId: string | null, summary: JsonRecord | null = null): JsonRecord {
+function taskSnapshot(status: string, activeRunId: string | null, currentPublicationId: string | null = null): JsonRecord {
   return {
     task: {
       task_id: TASK_ID,
@@ -55,6 +101,13 @@ function taskSnapshot(status: string, activeRunId: string | null, summary: JsonR
       title: "fixture",
       status,
       active_run_id: activeRunId,
+      current_publication_id: currentPublicationId,
+      publications: currentPublicationId === null ? [] : [{
+        publication_id: currentPublicationId,
+        manifest_sha256: MANIFEST_SHA,
+        supersedes_publication_id: null,
+        published_at: "2026-08-26T00:00:03.000Z",
+      }],
       created_at: "2026-08-26T00:00:00.000Z",
       updated_at: "2026-08-26T00:00:00.000Z",
       latest_sequence: 3,
@@ -70,7 +123,7 @@ function taskSnapshot(status: string, activeRunId: string | null, summary: JsonR
       started_at: "2026-08-26T00:00:00.000Z",
       finished_at: status === "completed" ? "2026-08-26T00:00:03.000Z" : null,
       error: null,
-      summary,
+      summary: null,
     }],
     messages: [],
     older_messages_cursor: null,
@@ -119,7 +172,7 @@ function healthy(): JsonRecord {
   return { status: "ok", app_host: "ts", agent_runtime: "pi", dataset_core: "ts" };
 }
 
-function apiServer(config: { events: JsonRecord[]; snapshot: JsonRecord; detail?: JsonRecord; artifacts?: Array<{ artifact_id: string; size: number; sha256: string; role?: string; relative_path?: string }>; bytes?: Record<string, Buffer>; completeOnRun?: boolean; onRun?: (body: JsonRecord) => void; onResume?: (body: JsonRecord) => void }): Promise<{ server: Server; baseUrl: string }> {
+function apiServer(config: { events: JsonRecord[]; snapshot: JsonRecord; completeOnRun?: boolean; onRun?: (body: JsonRecord) => void; onResume?: (body: JsonRecord) => void }): Promise<{ server: Server; baseUrl: string }> {
   let snapshot = config.snapshot;
   return listen((request, response) => {
     void (async () => {
@@ -134,9 +187,8 @@ function apiServer(config: { events: JsonRecord[]; snapshot: JsonRecord; detail?
       }
       if (url.pathname === `/api/v1/tasks/${TASK_ID}/runs` && request.method === "POST") {
         config.onRun?.(JSON.parse(await readBody(request)) as JsonRecord);
-        snapshot = config.completeOnRun
-          ? taskSnapshot("completed", null, ((config.snapshot.runs as JsonRecord[] | undefined)?.[0]?.summary as JsonRecord | null) ?? null)
-          : taskSnapshot("running", RUN_ID);
+        const currentPublicationId = config.completeOnRun === true ? PUBLICATION_ID : null;
+        snapshot = taskSnapshot(config.completeOnRun ? "completed" : "running", config.completeOnRun ? null : RUN_ID, currentPublicationId);
         json(response, 202, { schema_version: "1.0", request_id: REQUEST_ID, task_id: TASK_ID, run_id: RUN_ID, status: "queued" });
         return;
       }
@@ -146,15 +198,17 @@ function apiServer(config: { events: JsonRecord[]; snapshot: JsonRecord; detail?
       }
       if (url.pathname === `/api/v1/tasks/${TASK_ID}/runs/${RUN_ID}/resume` && request.method === "POST") {
         config.onResume?.(JSON.parse(await readBody(request)) as JsonRecord);
-        snapshot = taskSnapshot("completed", null, ((config.snapshot.runs as JsonRecord[] | undefined)?.[0]?.summary as JsonRecord | null) ?? null);
+        snapshot = taskSnapshot("completed", null, PUBLICATION_ID);
         json(response, 200, snapshot);
         return;
       }
-      if (url.pathname === "/api/v1/builds/build_fixture" && request.method === "GET") { json(response, 200, config.detail ?? {}); return; }
-      if (url.pathname === `/api/v1/tasks/${TASK_ID}/artifacts` && request.method === "GET") { json(response, 200, { artifacts: config.artifacts ?? [] }); return; }
-      const artifact = new RegExp(`^/api/v1/tasks/${TASK_ID}/artifacts/([^/]+)$`).exec(url.pathname);
-      if (artifact !== null && request.method === "GET") {
-        const bytes = config.bytes?.[decodeURIComponent(artifact[1] ?? "")];
+      if (url.pathname === `/api/v1/publications/${PUBLICATION_ID}` && request.method === "GET") { json(response, 200, PUBLICATION_DETAIL); return; }
+      const pubArtifact = new RegExp(`^/api/v1/publications/${PUBLICATION_ID}/artifacts/([^/]+)$`).exec(url.pathname);
+      if (pubArtifact !== null && request.method === "GET") {
+        const artifactId = decodeURIComponent(pubArtifact[1] ?? "");
+        const bytes = artifactId === "dataset_manifest"
+          ? MANIFEST_BYTES
+          : artifactId === DATA_ARTIFACT.artifact_id ? ARTIFACT_BYTES : undefined;
         if (bytes === undefined) { json(response, 404, { detail: "missing" }); return; }
         response.writeHead(200, { "content-type": "application/octet-stream", "content-length": String(bytes.length) });
         response.end(bytes);
@@ -180,10 +234,10 @@ describe("Gold formal rerun supervisor", () => {
   test("exports stable exit codes and terminal classifications", () => {
     expect(EXIT_CODES.SUCCESS).toBe(0);
     expect(classifyTerminal({
-      run: { status: "completed", summary: { build_result: { status: "succeeded" } } },
-      build: null,
-      publication: { publication_id: "publication_fixture" },
+      run: { status: "completed" },
+      publication: { publication_id: PUBLICATION_ID },
     }).classification).toBe("succeeded_publication");
+    expect(classifyTerminal({ run: { status: "completed" }, publication: null }).classification).toBe("blocked_no_publication");
   });
 
   test("rejects replacement-character and malformed UTF-8 prompts", () => {
@@ -223,27 +277,23 @@ describe("Gold formal rerun supervisor", () => {
 
   test("runs the success closure through paged events and artifact downloads", async () => {
     const fixture = await setup();
-    const content = Buffer.from("artifact bytes\n", "utf8");
-    const manifest = Buffer.from("{\"manifest\":true}\n", "utf8");
-    const artifact = { artifact_id: "artifact_data", role: "primary_dataset", relative_path: "merged/data.csv", size: content.length, sha256: createHash("sha256").update(content).digest("hex") };
-    const manifestReceipt = { artifact_id: "dataset_manifest", size: manifest.length, sha256: createHash("sha256").update(manifest).digest("hex") };
-    const buildResult = { status: "succeeded", build_id: "build_fixture", publication_id: "publication_fixture" };
-    const snapshot = taskSnapshot("queued", null, { build_result: buildResult });
     const host = await apiServer({
-      events: [event(1, { type: "run_started" }, "run_started"), event(2, { type: "stage_completed", stage: "validation" }, "stage_completed"), event(3, { type: "run_completed", build_result: buildResult }, "run_completed")],
-      snapshot,
-      detail: { build_id: "build_fixture", task_id: TASK_ID, build_result: buildResult, manifest: { sha256: "8763ce58218241eb33b417593f3959a35d1ccf33c633d2690f51dbf731201b1d", artifacts: [{ artifact_id: artifact.artifact_id, relative_path: artifact.relative_path, role: artifact.role, size_bytes: artifact.size, sha256: artifact.sha256 }] }, publication: { publication_id: "publication_fixture" } },
-      artifacts: [artifact, manifestReceipt],
-      bytes: { artifact_data: content, dataset_manifest: manifest },
+      events: [event(1, { type: "run_started" }, "run_started"), event(2, { type: "stage_completed", stage: "validation" }, "stage_completed"), event(3, { type: "run_completed" }, "run_completed")],
+      snapshot: taskSnapshot("queued", null),
       completeOnRun: true,
     });
     try {
       const result = await supervise(options({ ...fixture, baseUrl: host.baseUrl }));
       expect(result.terminal.classification).toBe("succeeded_publication");
-      expect(result.artifacts).toHaveLength(2);
-      expect(result.manifest_file_digest).toBe(manifestReceipt.sha256);
-      expect(JSON.parse(await readFile(path.join(fixture.evidenceDir, "closure.json"), "utf8")).package_digest).toBeTypeOf("string");
+      expect(result.artifacts).toHaveLength(1);
+      expect(result.manifest_file_digest).toBe(MANIFEST_SHA);
+      const closure = JSON.parse(await readFile(path.join(fixture.evidenceDir, "closure.json"), "utf8")) as JsonRecord;
+      expect(closure.package_digest).toBe(PACKAGE_DIGEST);
+      const closurePublication = closure.publication as JsonRecord;
+      expect(closurePublication.publication_id).toBe(PUBLICATION_ID);
       expect(JSON.parse(await readFile(path.join(fixture.evidenceDir, "supervisor-state.json"), "utf8")).after_sequence).toBe(2);
+      await readFile(path.join(fixture.evidenceDir, "artifacts", DATA_ARTIFACT.artifact_id));
+      await readFile(path.join(fixture.evidenceDir, "artifacts", "dataset_manifest"));
     } finally { await close(host.server); }
   });
 });

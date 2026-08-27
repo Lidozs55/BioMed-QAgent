@@ -36,7 +36,7 @@ export interface InheritedDiseaseEvidenceTableAssemblyInput {
 
 export interface InheritedDiseaseEvidenceAssemblyInput {
   taskId: string;
-  buildId: string;
+  requirementId: string;
   datasetFamily: string;
   rowGranularity: string;
   schema: DatasetSchemaV2;
@@ -143,7 +143,7 @@ function validateEvidenceRefs(
   if (results.length === 0) {
     throw new Error(`inherited disease table '${table.tableId}' requires ${kind} results`);
   }
-  return resultRefs({ results, taskId: input.taskId, buildId: input.buildId });
+  return resultRefs({ results, taskId: input.taskId, requirementId: input.requirementId });
 }
 
 export function assembleInheritedDiseaseEvidenceCandidate(
@@ -182,7 +182,7 @@ export function assembleInheritedDiseaseEvidenceCandidate(
     const result = requireCoreResult({
       result: tableInput.result,
       taskId: input.taskId,
-      buildId: input.buildId,
+      requirementId: input.requirementId,
       operationKind: "integrate",
       outputKind: "integrated_table",
     });
@@ -218,7 +218,7 @@ export function assembleInheritedDiseaseEvidenceCandidate(
   const candidateBody = {
     schema_version: "1.0" as const,
     task_id: input.taskId,
-    build_id: input.buildId,
+    requirement_id: input.requirementId,
     dataset_family: INHERITED_DISEASE_EVIDENCE_FAMILY_ID,
     row_granularity: INHERITED_DISEASE_EVIDENCE_ROW_GRANULARITY,
     tables: validated.map((item) => ({
@@ -232,7 +232,7 @@ export function assembleInheritedDiseaseEvidenceCandidate(
     audit_refs: resultRefs({
       results: input.auditResults ?? [],
       taskId: input.taskId,
-      buildId: input.buildId,
+      requirementId: input.requirementId,
     }),
     registered_asset_ids: assets,
   };
@@ -253,7 +253,7 @@ export const inheritedDiseaseEvidenceAssembler: FamilyAssemblerHandler = Object.
     const schema = tableEntry("gene_disease_records").schema;
     return assembleInheritedDiseaseEvidenceCandidate({
       taskId: input.taskId,
-      buildId: input.buildId,
+      requirementId: input.requirementId,
       datasetFamily: input.datasetFamily,
       rowGranularity: input.rowGranularity,
       schema,

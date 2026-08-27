@@ -5,11 +5,11 @@
  * compatibility gate and validation profiles report structured rejections.
  */
 
-/** Base class for a failed dataset build step (Python BuildError). */
-export class BuildError extends Error {}
+/** Base class for a failed dataset build step (Python ExecutionError). */
+export class ExecutionError extends Error {}
 
 /** A source could not be parsed (malformed input, checksum mismatch). */
-export class AdapterError extends BuildError {}
+export class AdapterError extends ExecutionError {}
 
 /**
  * A source file parsed to zero data rows (header-only input). Carries the
@@ -34,7 +34,7 @@ export class EmptySourceError extends AdapterError {
  * phase-A operations are skipped and phase B only receives the bindings that
  * did not raise (Python ``BindingRejectedError``).
  */
-export class BindingRejectedError extends BuildError {
+export class BindingRejectedError extends ExecutionError {
   readonly rejection: { binding_id: string; kind: "no_primary" | "error"; reason_code: string; message: string };
 
   constructor(rejection: {

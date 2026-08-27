@@ -5,7 +5,7 @@ import path from "node:path";
 import * as XLSX from "xlsx";
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { DatasetBuildSpec, SourceAsset } from "../src/dataset/contracts/index.js";
+import type { DatasetExecutionSpec, SourceAsset } from "../src/dataset/contracts/index.js";
 import {
   GUT_MICROBIOME_FAMILY_ID,
   GUT_MICROBIOME_ROW_GRANULARITY,
@@ -72,9 +72,9 @@ function xlsxCarrier(): Buffer {
   return Buffer.from(XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }));
 }
 
-function spec(options: { buildId: string; wrongProvider?: boolean; includeRegisteredBinding?: boolean }): DatasetBuildSpec {
+function spec(options: { requirementId: string; wrongProvider?: boolean; includeRegisteredBinding?: boolean }): DatasetExecutionSpec {
   const providerForGmrepo = options.wrongProvider === true ? "mgnify.files.v1" : "gmrepo.files.v1";
-  const bindings: DatasetBuildSpec["source_bindings"] = [
+  const bindings: DatasetExecutionSpec["source_bindings"] = [
     {
       schema_version: "1.0" as const,
       binding_id: "binding_study",
@@ -143,7 +143,7 @@ function spec(options: { buildId: string; wrongProvider?: boolean; includeRegist
   }
   return {
     schema_version: "1.0",
-    build_id: options.buildId,
+    requirement_id: options.requirementId,
     objective: "Publish a receipt-closed gut microbiome association fixture",
     dataset_family: GUT_MICROBIOME_FAMILY_ID,
     row_granularity: GUT_MICROBIOME_ROW_GRANULARITY,
@@ -223,7 +223,7 @@ describe("Gold10 gut microbiome provider runtime dispatch", () => {
       registry.validationProfileRefs(),
       registry,
     );
-    const result = validator.validate(spec({ buildId: "build_gold10_wrong_provider", wrongProvider: true }));
+    const result = validator.validate(spec({ requirementId: "req_gold10_wrong_provider", wrongProvider: true }));
     expect(result.valid).toBe(false);
     expect(result.reason_codes).toContain("provider_binding_mismatch");
   });
@@ -245,10 +245,10 @@ describe("Gold10 gut microbiome provider runtime dispatch", () => {
     const result = await executeRegisteredMultiTableBuild({
       taskId,
       taskRoot,
-      spec: spec({ buildId: "build_gold10_provider_runtime" }),
+      spec: spec({ requirementId: "req_gold10_provider_runtime" }),
       registeredAssetIds: Object.fromEntries(Object.entries(sourceAssets).map(([bindingId, asset]) => [bindingId, asset.asset_id])),
     });
-    expect(result.publication.publicationId).toMatch(/^pub_build_gold10_provider_runtime_/);
+    expect(result.publication.publicationId).toMatch(/^pub_req_gold10_provider_runtime_/);
     expect(result.manifest.tables.map((table) => table.table_id)).toEqual([
       "study_records",
       "taxon_records",
@@ -257,7 +257,7 @@ describe("Gold10 gut microbiome provider runtime dispatch", () => {
     ]);
     expect(result.manifest.provenance_summary.source_count).toBe(registeredAssetIds.size);
     expect(result.candidate.registered_asset_ids.sort()).toEqual([...registeredAssetIds].sort());
-    const output = await readFile(path.join(taskRoot, "datasets_build", "build_gold10_provider_runtime", "tables", "taxon_records.csv"), "utf8");
+    const output = await readFile(path.join(taskRoot, "dataset_runs", "run_test", "req_gold10_provider_runtime", "tables", "taxon_records.csv"), "utf8");
     expect(output).toContain("1234");
     expect(output).toContain("source_mgnify_taxon_fixture");
   });
@@ -278,13 +278,13 @@ describe("Gold10 gut microbiome provider runtime dispatch", () => {
     await expect(executeRegisteredMultiTableBuild({
       taskId,
       taskRoot,
-      spec: spec({ buildId: "build_gold10_wrong_provider", wrongProvider: true }),
+      spec: spec({ requirementId: "req_gold10_wrong_provider", wrongProvider: true }),
       registeredAssetIds: assets,
     })).rejects.toThrow(/provider|registered table capability|binding/);
     await expect(executeRegisteredMultiTableBuild({
       taskId,
       taskRoot,
-      spec: spec({ buildId: "build_gold10_mixed", includeRegisteredBinding: true }),
+      spec: spec({ requirementId: "req_gold10_mixed", includeRegisteredBinding: true }),
       registeredAssetIds: { ...assets, binding_registered_extra: receipts.study.asset_ref.asset_id },
     })).rejects.toThrow(/cannot mix provider and registered-table bindings/);
     const differentialBytes = await readFile(path.join(taskRoot, "source_assets/differential.xlsx"));

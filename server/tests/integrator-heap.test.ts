@@ -142,7 +142,7 @@ async function integrateResults(
     results,
     mergeStrategy: "append_by_canonical_row",
     schema: buildGeneExpressionSchema(),
-    buildId: `build_${join(outputDir, "out")}`,
+    requirementId: `build_${join(outputDir, "out")}`,
     outputDir: join(outputDir, "out"),
     signal: signal ?? null,
     tempStore,

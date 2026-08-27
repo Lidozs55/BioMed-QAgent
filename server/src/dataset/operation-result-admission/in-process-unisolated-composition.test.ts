@@ -139,7 +139,7 @@ async function createFixture(): Promise<Fixture> {
     schema_version: "1.0",
     task_id: "task_unisolated_composition",
     run_id: "run_unisolated_composition",
-    build_id: "build_unisolated_composition",
+    requirement_id: "build_unisolated_composition",
     invocation_id: "invocation_unisolated_composition",
     attempt: 1,
     generation: 2,
@@ -193,7 +193,7 @@ async function createFixture(): Promise<Fixture> {
     owner: "dataset_core",
     task_id: receipt.task_id,
     run_id: receipt.run_id,
-    build_id: receipt.build_id,
+    requirement_id: receipt.requirement_id,
     invocation_id: receipt.invocation_id,
     attempt: receipt.attempt,
     generation: receipt.generation,
@@ -231,7 +231,8 @@ async function createFixture(): Promise<Fixture> {
   };
   const expectedOperation: ExpectedOperationAdmission = {
     task_id: receipt.task_id,
-    build_id: receipt.build_id,
+    run_id: receipt.run_id,
+    requirement_id: receipt.requirement_id,
     attempt: receipt.attempt,
     generation: receipt.generation,
     expected_exit_state: "succeeded",
@@ -278,10 +279,9 @@ describe("Core in-process unisolated result composition", () => {
 
     expect(manifest).toMatchObject({
       task_id: fixture.expectedInvocation.task_id,
-      build_id: fixture.expectedInvocation.build_id,
+      requirement_id: fixture.expectedInvocation.requirement_id,
       status: "succeeded",
       output_kind: "integrated_table",
-      migration: { mode: "native", legacy_checkpoint_path: null, migrated_at: null },
     });
     expect(manifest.output_files).toEqual([{
       relative_path: "tables/expression.csv",

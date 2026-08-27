@@ -304,7 +304,7 @@ describe("durable event transport", () => {
       stage_attempt_id: null,
       sequence: 1,
       timestamp: "2026-07-14T00:00:01Z",
-      payload: { type: "run_completed", build_result: null },
+      payload: { type: "run_completed" },
     });
 
     expect(transport.isSubscribed("task_a")).toBe(false);
@@ -554,7 +554,7 @@ describe("durable event transport", () => {
       stage_attempt_id: null,
       sequence: 2,
       timestamp: "2026-07-14T00:00:02Z",
-      payload: { type: "run_completed", build_result: null },
+      payload: { type: "run_completed" },
     });
 
     const after = useAgentStore.getState().tasksById.task_a;
@@ -1080,7 +1080,7 @@ describe("durable event transport", () => {
             request_id: requestId,
             task_id: taskId,
             run_id: runId,
-            build_id: "build_1",
+            requirement_id: "build_1",
             kind: "semantic_review",
             review_type: "field_mapping",
             status: "pending",

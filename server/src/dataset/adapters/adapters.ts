@@ -33,7 +33,7 @@ import {
   type ExtractResult,
   type RowWriter,
 } from "./base.js";
-import { AdapterError, BuildError, EmptySourceError } from "./errors.js";
+import { AdapterError, ExecutionError, EmptySourceError } from "./errors.js";
 import { geoExpressionAdapter } from "./geo/index.js";
 import { type DelimitedRow } from "./text.js";
 
@@ -155,7 +155,7 @@ function rejectedRecord(options: {
 }
 
 function longRow(options: {
-  buildId: string;
+  requirementId: string;
   sourceAsset: SourceAsset;
   geneIdRaw: string;
   sampleId: string;
@@ -175,7 +175,7 @@ function longRow(options: {
   return [
     ...sourceLongIdentityValues({
       identityContext: options.identityContext,
-      buildId: options.buildId,
+      requirementId: options.requirementId,
       sourceAsset: options.sourceAsset,
       geneIdRaw: options.geneIdRaw,
       sampleId: options.sampleId,
@@ -205,7 +205,7 @@ function emitMatrixCells(options: {
   rejectedWriter: RowWriter;
   batchId: string;
   sourceAsset: SourceAsset;
-  buildId: string;
+  requirementId: string;
   sourceName: string;
   identityContext: ExtractContext["identityContext"];
   line: number;
@@ -237,7 +237,7 @@ function emitMatrixCells(options: {
     }
     options.longWriter.writeRow(
       longRow({
-        buildId: options.buildId,
+        requirementId: options.requirementId,
         sourceAsset: options.sourceAsset,
         geneIdRaw,
         sampleId,
@@ -269,7 +269,7 @@ export function adapterParamsForBinding(binding: SourceBinding): AdapterParams |
   try {
     return parseAdapterParams(parameters);
   } catch (error) {
-    throw new BuildError(
+    throw new ExecutionError(
       `binding ${binding.binding_id} has invalid adapter parameters: ${
         error instanceof Error ? error.message : String(error)
       }`,
@@ -340,7 +340,7 @@ export class GdcExpressionAdapter extends SourceAdapter {
     context: ExtractContext & { headerLine: number; header: string[] },
     signal?: AbortSignal | null,
   ): Promise<ExtractResult> {
-    const { headerLine, header, sourceAsset, buildId, bindingId, sourceName, identityContext, schemaRef } = context;
+    const { headerLine, header, sourceAsset, requirementId, bindingId, sourceName, identityContext, schemaRef } = context;
     const samples = header
       .slice(1)
       .filter((column) => !GDC_ANNOTATION_COLUMNS.has(column));
@@ -376,7 +376,7 @@ export class GdcExpressionAdapter extends SourceAdapter {
         rejectedWriter,
         batchId,
         sourceAsset,
-        buildId,
+        requirementId,
         sourceName,
         identityContext,
         line,
@@ -411,7 +411,7 @@ export class GdcExpressionAdapter extends SourceAdapter {
     context: ExtractContext & { headerLine: number; header: string[] },
     signal?: AbortSignal | null,
   ): Promise<ExtractResult> {
-    const { headerLine, header, sourceAsset, buildId, bindingId, sourceName, identityContext, schemaRef } = context;
+    const { headerLine, header, sourceAsset, requirementId, bindingId, sourceName, identityContext, schemaRef } = context;
     if (new Set(header).size !== header.length) {
       throw new AdapterError("GDC STAR-counts columns must be unique");
     }
@@ -497,7 +497,7 @@ export class GdcExpressionAdapter extends SourceAdapter {
       }
       longWriter.writeRow(
         longRow({
-          buildId,
+          requirementId,
           sourceAsset,
           geneIdRaw,
           sampleId,
@@ -550,7 +550,7 @@ export class XenaMatrixAdapter extends SourceAdapter {
     signal?: AbortSignal | null,
   ): Promise<ExtractResult> {
     const { headerLine, header } = await nextHeaderAsync(rows);
-    const { sourceAsset, buildId, bindingId, sourceName, identityContext, schemaRef } = context;
+    const { sourceAsset, requirementId, bindingId, sourceName, identityContext, schemaRef } = context;
     const samples = header.slice(1);
     if (samples.length === 0 || samples.some((sample) => sample.length === 0)) {
       throw new AdapterError("Xena matrix sample headers must not be blank");
@@ -586,7 +586,7 @@ export class XenaMatrixAdapter extends SourceAdapter {
         rejectedWriter,
         batchId,
         sourceAsset,
-        buildId,
+        requirementId,
         sourceName,
         identityContext,
         line,

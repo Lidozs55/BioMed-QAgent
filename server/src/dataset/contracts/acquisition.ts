@@ -20,7 +20,7 @@ import {
 } from "./primitives.js";
 import { parseRegisteredSourceAssetRef } from "./source.js";
 
-const REQUEST_KEYS = ["schema_version", "request_id", "task_id", "build_id", "binding_id", "mode", "provider_id", "recipe_id", "recipe_version", "parameters"] as const;
+const REQUEST_KEYS = ["schema_version", "request_id", "task_id", "requirement_id", "binding_id", "mode", "provider_id", "recipe_id", "recipe_version", "parameters"] as const;
 const RECIPE_KEYS = ["schema_version", "recipe_id", "recipe_version", "status", "implementation_digest"] as const;
 const LINEAGE_KEYS = ["schema_version", "cache_key", "request_identity_digest", "cache_blob_sha256", "resumed_from_attempt_id", "part_relative_path"] as const;
 const ATTEMPT_KEYS = ["schema_version", "attempt_id", "request_id", "task_id", "provider_id", "attempt_number", "status", "url", "bytes_received", "error_code", "retryable", "started_at", "finished_at", "cache_lineage", "asset"] as const;
@@ -63,7 +63,7 @@ export function parseCoreAcquisitionRequest(
       throw new TypeError("workflow recipe must be PROMOTED and match request identity");
     }
   }
-  return { schema_version: "1.0", request_id: id(record.request_id, "CoreAcquisitionRequest.request_id"), task_id: taskId, build_id: id(record.build_id, "CoreAcquisitionRequest.build_id"), binding_id: id(record.binding_id, "CoreAcquisitionRequest.binding_id"), mode, provider_id: parsedProviderId, recipe_id: recipeId, recipe_version: recipeVersion, parameters: assertJsonRecord(record.parameters, "CoreAcquisitionRequest.parameters") };
+  return { schema_version: "1.0", request_id: id(record.request_id, "CoreAcquisitionRequest.request_id"), task_id: taskId, requirement_id: id(record.requirement_id, "CoreAcquisitionRequest.requirement_id"), binding_id: id(record.binding_id, "CoreAcquisitionRequest.binding_id"), mode, provider_id: parsedProviderId, recipe_id: recipeId, recipe_version: recipeVersion, parameters: assertJsonRecord(record.parameters, "CoreAcquisitionRequest.parameters") };
 }
 
 export function parseWorkflowRecipeRef(value: unknown): WorkflowRecipeRef {

@@ -40,7 +40,7 @@ import type { SourceAsset } from "../src/dataset/contracts/index.js";
 import {
   ADAPTER_REGISTRY,
   AdapterError,
-  BuildError,
+  ExecutionError,
   REJECTED_COLUMNS,
   SOURCE_LONG_COLUMNS,
   SourceAdapter,
@@ -389,7 +389,7 @@ export async function checkAdapterContractParity(): Promise<string[]> {
     /must be one of/,
   );
 
-  // adapterParamsForBinding: empty parameters -> null; invalid -> BuildError.
+  // adapterParamsForBinding: empty parameters -> null; invalid -> ExecutionError.
   const emptyBinding = parseSourceBinding({
     schema_version: "1.0",
     binding_id: "binding_1",
@@ -421,10 +421,10 @@ export async function checkAdapterContractParity(): Promise<string[]> {
   });
   await checkThrows(
     issues,
-    "invalid binding parameters raise BuildError",
+    "invalid binding parameters raise ExecutionError",
     () => adapterParamsForBinding(invalidBinding),
     /invalid adapter parameters/,
-    BuildError,
+    ExecutionError,
   );
 
   return issues;
@@ -443,7 +443,7 @@ async function runAdapter(
 ) {
   const asset = sourceAssetFromFixture(fixturesRoot, fixture);
   return adapter.parse(asset, join(fixturesRoot, fixture), {
-    buildId: "build_test",
+    requirementId: "build_test",
     bindingId: "binding_1",
     schemaRef: "gene_expression.long.v1",
     outputDir,
@@ -622,7 +622,7 @@ export async function checkAdapterFixtureParity(options: AdapterFixtureOptions):
     "checksum mismatch raises AdapterError",
     () =>
       gdc.parse(tampered, join(fixtures, "gdc/gdc_expression.tsv"), {
-        buildId: "build_test",
+        requirementId: "build_test",
         bindingId: "binding_1",
         schemaRef: "gene_expression.long.v1",
         outputDir: checksumOut,
@@ -645,7 +645,7 @@ export async function checkAdapterFixtureParity(options: AdapterFixtureOptions):
     "malformed header raises AdapterError",
     () =>
       gdc.parse(sourceAssetFromPath(malformedPath), malformedPath, {
-        buildId: "build_test",
+        requirementId: "build_test",
         bindingId: "binding_1",
         schemaRef: "gene_expression.long.v1",
         outputDir: malformedOut,
@@ -659,7 +659,7 @@ export async function checkAdapterFixtureParity(options: AdapterFixtureOptions):
   const badValuePath = join(badValueOut, "bad_value.tsv");
   writeFixtureFile(badValuePath, "gene_id\tS1\nTP53\tnan-value\n", "utf8");
   const badValueBatch = await gdc.parse(sourceAssetFromPath(badValuePath), badValuePath, {
-    buildId: "build_test",
+    requirementId: "build_test",
     bindingId: "binding_1",
     schemaRef: "gene_expression.long.v1",
     outputDir: badValueOut,
@@ -679,7 +679,7 @@ export async function checkAdapterFixtureParity(options: AdapterFixtureOptions):
   const specialPath = join(specialOut, "special.tsv");
   writeFixtureFile(specialPath, "gene_id\tS1\tS2\nTP53\tnan\tinf\nBRCA1\t3\t4.25\n", "utf8");
   const specialBatch = await gdc.parse(sourceAssetFromPath(specialPath), specialPath, {
-    buildId: "build_test",
+    requirementId: "build_test",
     bindingId: "binding_1",
     schemaRef: "gene_expression.long.v1",
     outputDir: specialOut,
@@ -702,7 +702,7 @@ export async function checkAdapterFixtureParity(options: AdapterFixtureOptions):
     "utf8",
   );
   const annotatedBatch = await gdc.parse(sourceAssetFromPath(annotatedPath), annotatedPath, {
-    buildId: "build_test",
+    requirementId: "build_test",
     bindingId: "binding_1",
     schemaRef: "gene_expression.long.v1",
     outputDir: annotatedOut,
@@ -724,7 +724,7 @@ export async function checkAdapterFixtureParity(options: AdapterFixtureOptions):
     gzipSync(readFileSync(join(fixtures, "gdc/gdc_expression.tsv"))),
   );
   const gzipBatch = await gdc.parse(sourceAssetFromPath(gzipPath), gzipPath, {
-    buildId: "build_test",
+    requirementId: "build_test",
     bindingId: "binding_1",
     schemaRef: "gene_expression.long.v1",
     outputDir: gzipOut,
@@ -740,7 +740,7 @@ export async function checkAdapterFixtureParity(options: AdapterFixtureOptions):
     "utf8",
   );
   const starFallback = await gdc.parse(sourceAssetFromPath(starFallbackPath), starFallbackPath, {
-    buildId: "build_test",
+    requirementId: "build_test",
     bindingId: "binding_1",
     schemaRef: "gene_expression.long.v1",
     outputDir: starFallbackOut,
@@ -770,7 +770,7 @@ export async function checkAdapterFixtureParity(options: AdapterFixtureOptions):
     "GDC blank line raises AdapterError",
     () =>
       gdc.parse(sourceAssetFromPath(blankGdcPath), blankGdcPath, {
-        buildId: "build_test",
+        requirementId: "build_test",
         bindingId: "binding_1",
         schemaRef: "gene_expression.long.v1",
         outputDir: blankGdcOut,
@@ -782,7 +782,7 @@ export async function checkAdapterFixtureParity(options: AdapterFixtureOptions):
   const blankXenaPath = join(blankXenaOut, "xena_blank.tsv");
   writeFixtureFile(blankXenaPath, "gene_id\tS1\nTP53\t1.5\n\nBRCA1\t3\n", "utf8");
   const blankXenaBatch = await xena.parse(sourceAssetFromPath(blankXenaPath), blankXenaPath, {
-    buildId: "build_test",
+    requirementId: "build_test",
     bindingId: "binding_1",
     schemaRef: "gene_expression.long.v1",
     outputDir: blankXenaOut,

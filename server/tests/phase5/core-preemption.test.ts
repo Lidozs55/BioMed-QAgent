@@ -1,7 +1,7 @@
 /**
  * M2 I-03/I-04 closure: the REAL TypeScript Dataset Core operations — not a
  * fake async runner — are preemptible by wall-clock operation timeout and by
- * cancel (HTTP AbortSignal and the build-lock-scoped ``cancelDatasetBuild``
+ * cancel (HTTP AbortSignal and the execution-lock-scoped ``cancelDatasetExecution``
  * path).
  *
  * The deterministic chain is cooperative by design: heavy sections (adapter
@@ -20,7 +20,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
-  parseDatasetBuildSpec,
+  parseDatasetExecutionSpec,
   parseSourceAsset,
   type SourceAsset,
 } from "../../src/dataset/contracts/index.js";
@@ -46,10 +46,10 @@ function largeGdcMatrix(): Buffer {
   return Buffer.from(parts.join(""), "utf8");
 }
 
-function spec(buildId: string): ReturnType<typeof parseDatasetBuildSpec> {
-  return parseDatasetBuildSpec({
+function spec(requirementId: string): ReturnType<typeof parseDatasetExecutionSpec> {
+  return parseDatasetExecutionSpec({
     schema_version: "1.0",
-    build_id: buildId,
+    requirement_id: requirementId,
     objective: "preemptible real core operations",
     dataset_family: "gene_expression",
     row_granularity: "gene_sample_measurement",
@@ -70,17 +70,17 @@ async function newCore(options: {
 } = {}): Promise<{
   taskRoot: string;
   core: TypeScriptDatasetCore;
-  events: Array<{ event: CoreOperationEvent; buildId: string }>;
+  events: Array<{ event: CoreOperationEvent; requirementId: string }>;
 }> {
   const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-preempt-"));
   roots.push(taskRoot);
-  const events: Array<{ event: CoreOperationEvent; buildId: string }> = [];
+  const events: Array<{ event: CoreOperationEvent; requirementId: string }> = [];
   const core = new TypeScriptDatasetCore({
     taskId: "task_preempt",
     taskRoot,
     operationTimeoutMs: options.operationTimeoutMs ?? 0,
-    eventSink: async (event, buildId) => {
-      events.push({ event, buildId });
+    eventSink: async (event, requirementId) => {
+      events.push({ event, requirementId });
     },
   });
   return { taskRoot, core, events };
@@ -119,7 +119,7 @@ async function installSource(
  * mid-operation regardless of machine load (the event sink emits
  * ``operation_started`` before the operation body runs). */
 async function waitForParseStarted(
-  events: Array<{ event: CoreOperationEvent; buildId: string }>,
+  events: Array<{ event: CoreOperationEvent; requirementId: string }>,
 ): Promise<void> {
   const deadline = Date.now() + 15_000;
   while (
@@ -140,19 +140,19 @@ describe("real Core operation preemption (M2 I-03/I-04)", () => {
   it("interrupts a real adapter parse with a typed wall-clock timeout", async () => {
     const { taskRoot, core, events } = await newCore({ operationTimeoutMs: 150 });
     const asset = await installSource(taskRoot, largeGdcMatrix());
-    const record = await core.executeDatasetBuild(spec("build_timeout"), {
+    const record = await core.executeDatasetExecution(spec("build_timeout"), {
       runId: "run_timeout",
       sourceAssets: { binding_gdc: asset },
     });
-    // With a synchronous parse the build would COMPLETE before the timer
+    // With a synchronous parse the execution would complete before the timer
     // could fire; the cooperative chain aborts at the next checkpoint and
     // the executor records the typed timeout failure.
     expect(record.status).toBe("failed");
     expect(record.error).toContain("timed out after 150ms");
     const kinds = events.map(({ event }) => event.type);
     expect(kinds).toContain("operation_failed");
-    expect(kinds).toContain("build_failed");
-    // No publication may exist for a timed-out build.
+    expect(kinds).toContain("execution_failed");
+    // No publication may exist for a timed-out execution.
     expect(record.publication_id).toBeNull();
   });
 
@@ -160,7 +160,7 @@ describe("real Core operation preemption (M2 I-03/I-04)", () => {
     const { taskRoot, core, events } = await newCore();
     const asset = await installSource(taskRoot, largeGdcMatrix());
     const controller = new AbortController();
-    const promise = core.executeDatasetBuild(spec("build_cancel"), {
+    const promise = core.executeDatasetExecution(spec("build_cancel"), {
       runId: "run_cancel",
       sourceAssets: { binding_gdc: asset },
       signal: controller.signal,
@@ -171,24 +171,24 @@ describe("real Core operation preemption (M2 I-03/I-04)", () => {
     expect(record.status).toBe("cancelled");
     expect(record.publication_id).toBeNull();
     const kinds = events.map(({ event }) => event.type);
-    expect(kinds).toContain("build_cancelled");
+    expect(kinds).toContain("execution_cancelled");
   });
 
-  it("interrupts a real adapter parse via cancelDatasetBuild (activeCancels)", async () => {
+  it("interrupts a real adapter parse via cancelDatasetExecution (activeCancels)", async () => {
     const { taskRoot, core, events } = await newCore();
     const asset = await installSource(taskRoot, largeGdcMatrix());
-    const promise = core.executeDatasetBuild(spec("build_cancel_active"), {
+    const promise = core.executeDatasetExecution(spec("build_cancel_active"), {
       runId: "run_cancel_active",
       sourceAssets: { binding_gdc: asset },
     });
     await waitForParseStarted(events);
-    core.cancelDatasetBuild("build_cancel_active");
+    core.cancelDatasetExecution("build_cancel_active");
     const record = await promise;
     expect(record.status).toBe("cancelled");
     expect(record.publication_id).toBeNull();
     const kinds = events.map(({ event }) => event.type);
-    expect(kinds).toContain("build_cancelled");
-    // A cancelled build must not leave a reusable "succeeded" attempt for
+    expect(kinds).toContain("execution_cancelled");
+    // A cancelled execution must not leave a reusable "succeeded" attempt for
     // the interrupted operation: acquire may legitimately succeed before the
     // cancel lands, but the parse that was in flight when the cancel fired
     // must be recorded as cancelled (digest-matched reuse only honours
@@ -196,7 +196,8 @@ describe("real Core operation preemption (M2 I-03/I-04)", () => {
     // half-finished batch).
     const stateAttemptsPath = path.join(
       taskRoot,
-      "datasets_build",
+      "dataset_runs",
+      "run_cancel_active",
       "build_cancel_active",
       "state",
       "operation_attempts.jsonl",

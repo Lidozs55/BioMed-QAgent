@@ -80,7 +80,7 @@ describe("Dataset Core HIL policy", () => {
       batch: batch({ proposed: true }),
       profile: expressionNormalizationV1(),
       gate: fixture.gate,
-      buildId: "build_1",
+      requirementId: "build_1",
     });
     expect(fixture.requests).toHaveLength(1);
     expect(fixture.requests[0]).toMatchObject({
@@ -109,7 +109,7 @@ describe("Dataset Core HIL policy", () => {
       batch: batch({ proposed: true }),
       profile: expressionNormalizationV1(),
       gate: fixture.gate,
-      buildId: "build_1",
+      requirementId: "build_1",
     });
 
     expect(reviewed.batch.statistics.mapping_human_review_state).toBe("corrected");
@@ -160,7 +160,7 @@ describe("Dataset Core HIL policy", () => {
       batch: batch({ unit: "counts_per_thousand" }),
       profile: expressionNormalizationV1(),
       gate: fixture.gate,
-      buildId: "build_1",
+      requirementId: "build_1",
     });
     expect(fixture.requests[0]?.review_type).toBe("unit_conversion");
     expect(reviewed.unitCorrection).toEqual({
@@ -193,7 +193,7 @@ describe("Dataset Core HIL policy", () => {
       batch: batch({ unit: "counts_per_thousand" }),
       profile,
       gate: null,
-      buildId: "build_1",
+      requirementId: "build_1",
     });
 
     expect(reviewed.unitCorrection).toEqual({
@@ -226,7 +226,7 @@ describe("Dataset Core HIL policy", () => {
       batch: batch({ unit: "mystery" }),
       profile,
       gate: null,
-      buildId: "build_1",
+      requirementId: "build_1",
     })).rejects.toThrow(/safe linear formula/);
   });
 
@@ -250,7 +250,7 @@ describe("Dataset Core HIL policy", () => {
         batch: batch({ unit: "mystery" }),
         profile: expressionNormalizationV1(),
         gate: fixture.gate,
-        buildId: "build_1",
+        requirementId: "build_1",
       }),
     ).rejects.toThrow(/finite number/);
   });
@@ -262,7 +262,7 @@ describe("Dataset Core HIL policy", () => {
         batch: batch({ proposed: true }),
         profile: expressionNormalizationV1(),
         gate: fixture.gate,
-        buildId: "build_1",
+        requirementId: "build_1",
       }),
     ).rejects.toThrow(/skipped/);
   });

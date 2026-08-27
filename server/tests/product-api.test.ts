@@ -134,19 +134,19 @@ describe("Phase 7 product API", () => {
     expect(await unsupported.json()).toEqual({ detail: "Method not allowed" });
   });
 
-  test("serves TS build list, detail, and verified artifacts (A7 immutable-root download)", async () => {
-    const root = await temporaryDirectory("phase7-build-");
+  test("serves Publication list, detail, and verified artifacts", async () => {
+    const root = await temporaryDirectory("phase7-publication-");
     const database = new FakeDatabase();
     const taskId = "task_ts_example";
-    const buildId = "build_example";
-    const buildDir = path.join(root, "output", "tasks", taskId, "datasets_build", buildId);
+    const runId = "run_example";
+    const requirementId = "build_example";
+    const publicationId = "publication_example";
+    const executionDir = path.join(root, "output", "tasks", taskId, "dataset_runs", runId, requirementId);
     const artifact = Buffer.from("gene,value\nTP53,1\n", "utf8");
     const sha256 = createHash("sha256").update(artifact).digest("hex");
-    await mkdir(path.join(buildDir, "artifacts"), { recursive: true });
-    await writeFile(path.join(buildDir, "artifacts", "primary.csv"), artifact);
     const manifest = {
       schema_version: "1.0", manifest_id: "manifest_example", task_id: taskId,
-      build_id: buildId, dataset_family: "gene_expression", row_granularity: "gene",
+      requirement_id: requirementId, dataset_family: "gene_expression", row_granularity: "gene",
       schema_ref: "gene.v1", primary_key: ["gene"], row_count: 1, sha256,
       artifacts: [{
         artifact_id: "artifact_primary", role: "primary_dataset",
@@ -156,65 +156,34 @@ describe("Phase 7 product API", () => {
       source_summary: { geo: 1 }, validation_summary: {}, confidence_summary: {},
       provenance_summary: {},
     };
-    await writeFile(path.join(buildDir, "dataset_manifest.json"), JSON.stringify(manifest));
-    // A7: the official download reads ONLY from an immutable publication root,
-    // so a build must be published (not just staged in the mutable build dir).
-    const versionDir = path.join(buildDir, "publish", "version_1");
+    const versionDir = path.join(executionDir, "publish", publicationId);
     await mkdir(path.join(versionDir, "artifacts"), { recursive: true });
     await writeFile(path.join(versionDir, "artifacts", "primary.csv"), artifact);
-    await writeFile(path.join(versionDir, "dataset_manifest.json"), JSON.stringify(manifest));
+    const manifestBytes = Buffer.from(JSON.stringify(manifest));
+    await writeFile(path.join(versionDir, "dataset_manifest.json"), manifestBytes);
     await writeFile(path.join(versionDir, "publication.json"), JSON.stringify({
-      publication_id: `pub_${buildId}_${sha256.slice(0, 16)}`,
-      manifest_ref: `datasets_build/${buildId}/dataset_manifest.json`,
-      manifest_sha256: sha256,
+      schema_version: "1.1",
+      publication_id: publicationId,
+      manifest_ref: "dataset_manifest.json",
+      manifest_sha256: createHash("sha256").update(manifestBytes).digest("hex"),
+      validation_result_ref: "validation_report.json",
       published_at: "2026-08-19T00:00:00Z",
+      supersedes_publication_id: null,
     }));
     const { base } = await startApi(root, database);
 
-    const page = await (await fetch(`${base}/builds`)).json() as { items: unknown[] };
+    const page = await (await fetch(`${base}/publications`)).json() as { items: unknown[] };
     expect(page.items).toHaveLength(1);
-    expect(page.items[0]).toMatchObject({ build_id: buildId, task_id: taskId, status: "success" });
-    const detail = await (await fetch(`${base}/builds/${buildId}?task_id=${taskId}`)).json();
-    expect(detail).toMatchObject({ build_id: buildId, manifest, artifacts: manifest.artifacts });
-    const downloaded = await fetch(`${base}/builds/${buildId}/artifacts/artifact_primary?task_id=${taskId}`);
+    expect(page.items[0]).toMatchObject({ publication_id: publicationId, requirement_id: requirementId, run_id: runId, task_id: taskId });
+    const detail = await (await fetch(`${base}/publications/${publicationId}?task_id=${taskId}`)).json();
+    expect(detail).toMatchObject({ publication_id: publicationId, requirement_id: requirementId, manifest, artifacts: manifest.artifacts });
+    const downloaded = await fetch(`${base}/publications/${publicationId}/artifacts/artifact_primary?task_id=${taskId}`);
     expect(downloaded.status).toBe(200);
     const body = Buffer.from(await downloaded.arrayBuffer());
     expect(body).toEqual(artifact);
     expect(createHash("sha256").update(body).digest("hex")).toBe(sha256);
     expect(downloaded.headers.get("content-length")).toBe(String(artifact.length));
 
-    // A7: a same-name file placed in the MUTABLE build dir can never affect the
-    // official download — it must still serve the immutable publication bytes.
-    await writeFile(path.join(buildDir, "artifacts", "primary.csv"), Buffer.from("tampered", "utf8"));
-    const afterTamper = await fetch(`${base}/builds/${buildId}/artifacts/artifact_primary?task_id=${taskId}`);
-    const tamperedBody = Buffer.from(await afterTamper.arrayBuffer());
-    expect(tamperedBody).toEqual(artifact);
-    expect(createHash("sha256").update(tamperedBody).digest("hex")).toBe(sha256);
-  });
-
-  test("starts, gets, and cancels a durable build with typed responses", async () => {
-    const root = await temporaryDirectory("c3i-product-");
-    const { base } = await startApi(root, new FakeDatabase());
-    const request = {
-      schema_version: "1.0", idempotency_key: "idem_product_c3i",
-      task_id: "task_product_c3i", run_id: "run_product_c3i",
-      spec: {
-        schema_version: "1.0", build_id: "build_product_c3i", objective: "test",
-        dataset_family: "gene_expression", row_granularity: "gene_sample_measurement",
-        entities: {}, cohort_filters: {}, required_fields: [], schema_ref: "gene_expression.long.v1",
-        source_bindings: [{ schema_version: "1.0", binding_id: "binding_1", source: "fixture",
-          acquisition: { schema_version: "1.0", mode: "builtin", provider_id: "fixture.v1", recipe_id: null, recipe_version: null },
-          adapter_id: "fixture.expression.v1", accession: null, parameters: {} }],
-        normalization_profile_ref: null, merge_strategy: "append_by_canonical_row",
-        validation_profile_ref: "gene_expression.release.v1", output_format: "csv", target_entity_level: null,
-      },
-    };
-    const started = await fetch(`${base}/builds`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(request) });
-    expect(started.status).toBe(202);
-    expect(await started.json()).toMatchObject({ idempotent_replay: false, build: { status: "queued", build_id: "build_product_c3i" } });
-    expect(await (await fetch(`${base}/builds/build_product_c3i`)).json()).toMatchObject({ build: { status: "queued" } });
-    const cancelled = await fetch(`${base}/builds/build_product_c3i/cancel`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ schema_version: "1.0", request_id: "cancel_product_c3i", task_id: "task_product_c3i", run_id: "run_product_c3i", reason: null }) });
-    expect(await cancelled.json()).toMatchObject({ disposition: "accepted", status: "cancel_requested", terminal: false });
   });
 
   test("serves cache metadata and a ZIP export", async () => {

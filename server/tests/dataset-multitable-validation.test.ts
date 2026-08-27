@@ -120,7 +120,8 @@ async function operationResult(
     schema_version: "1.0",
     result_manifest_id: `result_${tableId}`,
     task_id: "task_1",
-    build_id: "build_1",
+    run_id: "run_test",
+    requirement_id: "build_1",
     operation_id: `integrate_${tableId}`,
     operation_kind: "integrate",
     operation_attempt_id: `attempt_${tableId}`,
@@ -147,11 +148,6 @@ async function operationResult(
       state: "committed",
       commit_id: `commit_${tableId}`,
       committed_at: "2026-08-18T00:00:00Z",
-    },
-    migration: {
-      mode: "native",
-      legacy_checkpoint_path: null,
-      migrated_at: null,
     },
   };
 }
@@ -195,7 +191,8 @@ async function validRequest(options: {
   ];
   return {
     task_id: "task_1",
-    build_id: "build_1",
+    run_id: "run_test",
+    requirement_id: "build_1",
     candidate: {
       candidate_id: "candidate_1",
       table_ids: tables.map((item) => item.definition.table_id),

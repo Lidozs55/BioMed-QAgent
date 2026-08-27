@@ -391,7 +391,7 @@ export function acquisitionRequestIdentity(
   if (!/^[0-9a-f]{64}$/.test(implementationDigest)) throw new TypeError("acquisition implementation_digest is invalid");
   const canonical = canonicalJson({
     task_id: request.task_id,
-    build_id: request.build_id,
+    requirement_id: request.requirement_id,
     binding_id: request.binding_id,
     mode: request.mode,
     provider_id: request.provider_id,

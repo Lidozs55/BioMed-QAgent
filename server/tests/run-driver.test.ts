@@ -91,7 +91,7 @@ describe("run-driver agent HTTP wrapper", () => {
         {
           method: "POST",
           url: "/api/v1/tasks",
-          body: { request_id: "request_1", input: "研究 TP53 表达", mode: "agent" },
+          body: { request_id: "request_1", input: "研究 TP53 表达", databases: [], mode: "agent" },
         },
         { method: "GET", url: "/api/v1/tasks/task%201/events?after_sequence=7&limit=25" },
       ]);

@@ -44,7 +44,7 @@ async function writeVerifiedEnvelope(root: string): Promise<{
   const output: Record<string, unknown> = { rows: 2, columns: ["probe", "symbol", "value"] };
   const envelope: OperationOutputEnvelope = {
     task_id: "task_a5i",
-    build_id: "build_a5i",
+    requirement_id: "build_a5i",
     operation_id: "canonicalize:binding_geo",
     operation_attempt_id: "attempt_1",
     output_digest: sha256Json(output),
@@ -59,7 +59,7 @@ async function writeVerifiedEnvelope(root: string): Promise<{
 function loadOptions(taskRoot: string, envelope: OperationOutputEnvelope): {
   taskRoot: string;
   taskId: string;
-  buildId: string;
+  requirementId: string;
   operationId: string;
   operationAttemptId: string;
   outputDigest: string;
@@ -67,7 +67,7 @@ function loadOptions(taskRoot: string, envelope: OperationOutputEnvelope): {
   return {
     taskRoot,
     taskId: envelope.task_id,
-    buildId: envelope.build_id,
+    requirementId: envelope.requirement_id,
     operationId: envelope.operation_id,
     operationAttemptId: envelope.operation_attempt_id,
     outputDigest: envelope.output_digest,
@@ -110,7 +110,7 @@ describe("loadOperationOutput streaming verification", () => {
     const output: Record<string, unknown> = { rows: 4 * 1024 * 1024, columns: ["a", "b", "c"] };
     const envelope: OperationOutputEnvelope = {
       task_id: "task_a5i",
-      build_id: "build_a5i",
+      requirement_id: "build_a5i",
       operation_id: "canonicalize:binding_geo",
       operation_attempt_id: "attempt_1",
       output_digest: sha256Json(output),

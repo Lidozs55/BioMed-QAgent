@@ -4,10 +4,10 @@ import {
   assertJsonValue,
   computeFamilySpecDigest,
   parseDynamicFamilyPreflightReceipt,
-  parseDatasetBuildProposal2,
+  parseDatasetExecutionProposal2,
   parseDatasetTransform,
   parseFamilySpec,
-  type DatasetBuildProposal2,
+  type DatasetExecutionProposal2,
   type DynamicFamilyPreflightReceipt,
   type DatasetTransform,
   type FamilySpec,
@@ -29,7 +29,7 @@ const TOP_KEYS = new Set([
   "projection_id",
   "transform_source",
   "transform_metadata",
-  "build_proposal",
+  "execution_proposal",
   "registered_sources",
   "acquisition_requests",
 ]);
@@ -38,7 +38,7 @@ const HEX = "0".repeat(64);
 
 type DataRecord = Record<string, unknown>;
 
-export interface ParsedDynamicFamilyBuildSubmission {
+export interface ParsedDynamicFamilyPublicationSubmission {
   readonly schema_version: "1.0";
   readonly execution_backend: "in_process_unisolated";
   readonly family_spec: FamilySpec;
@@ -48,7 +48,7 @@ export interface ParsedDynamicFamilyBuildSubmission {
     | "source_digest" | "bundle_digest" | "compiler_id" | "compiler_version"
     | "compiler_options_digest" | "runtime_abi_version" | "runtime_policy_version"
     | "dependency_closure_digest" | "code_bundle_ref">;
-  readonly build_proposal: DatasetBuildProposal2;
+  readonly execution_proposal: DatasetExecutionProposal2;
   readonly registered_sources: Readonly<Record<string, string>>;
   readonly acquisition_requests: Readonly<Record<string, {
     readonly provider_id: string;
@@ -56,42 +56,42 @@ export interface ParsedDynamicFamilyBuildSubmission {
   }>>;
 }
 
-export interface DynamicFamilyBuildToolOptions {
+export interface DynamicFamilyPublicationToolOptions {
   readonly submit: (
-    submission: ParsedDynamicFamilyBuildSubmission,
+    submission: ParsedDynamicFamilyPublicationSubmission,
     signal: AbortSignal | undefined,
     context: BioMedToolExecutionContext | undefined,
     preflightReceipt: DynamicFamilyPreflightReceipt,
   ) => Promise<unknown>;
 }
 
-export interface PrepareDynamicFamilyBuildToolOptions {
+export interface PrepareDynamicFamilyPublicationToolOptions {
   readonly prepare: (
-    submission: ParsedDynamicFamilyBuildSubmission,
+    submission: ParsedDynamicFamilyPublicationSubmission,
     signal: AbortSignal | undefined,
     context: BioMedToolExecutionContext | undefined,
   ) => Promise<DynamicFamilyPreflightReceipt>;
 }
 
-export function createDynamicFamilyBuildTool(
-  options: DynamicFamilyBuildToolOptions,
+export function createDynamicFamilyPublicationTool(
+  options: DynamicFamilyPublicationToolOptions,
 ): BioMedAgentTool {
   return {
-    name: "submit_dynamic_family_build",
-    label: "Submit Dynamic Family Build",
+    name: "submit_dynamic_family_publication",
+    label: "Submit Dynamic Family Publication",
     description:
-      "Submit a strict FamilySpec + TypeScript DatasetTransform with the exact prepare_dynamic_family_build receipt to the explicit in_process_unisolated runtime and trusted Core publication path. A provider listed in the acquisition_requests schema is wired for this dynamic route even if absent from static family enums. This is not a sandbox, isolation mechanism, or security boundary. Direct paths and discovery bytes are forbidden.",
-    parameters: dynamicFamilyBuildParameters(true),
+      "Submit a strict FamilySpec + TypeScript DatasetTransform with the exact prepare_dynamic_family_publication receipt to the explicit in_process_unisolated runtime and trusted Core publication path. Use only providers reported in inspect_dataset_execution_routes.dynamic.direct_bindings; the acquisition_requests schema is the execution contract, not proof of semantic or publication closure. This is not a sandbox, isolation mechanism, or security boundary. Direct paths and discovery bytes are forbidden.",
+    parameters: dynamicFamilyPublicationParameters(true),
     async execute(value, signal, context): Promise<BioMedToolResult> {
       try {
-        const parsed = await parseDynamicFamilyBuildSubmitRequest(value);
+        const parsed = await parseDynamicFamilyPublicationSubmitRequest(value);
         const details = await options.submit(parsed.submission, signal, context, parsed.preflightReceipt);
         return { content: JSON.stringify(details), details };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return {
-          content: JSON.stringify({ ok: false, error: { code: "dynamic_build_rejected", message } }),
-          details: { ok: false, error: { code: "dynamic_build_rejected", message } },
+          content: JSON.stringify({ ok: false, error: { code: "dynamic_publication_rejected", message } }),
+          details: { ok: false, error: { code: "dynamic_publication_rejected", message } },
           isError: true,
         };
       }
@@ -99,18 +99,18 @@ export function createDynamicFamilyBuildTool(
   };
 }
 
-export function createPrepareDynamicFamilyBuildTool(
-  options: PrepareDynamicFamilyBuildToolOptions,
+export function createPrepareDynamicFamilyPublicationTool(
+  options: PrepareDynamicFamilyPublicationToolOptions,
 ): BioMedAgentTool {
   return {
-    name: "prepare_dynamic_family_build",
-    label: "Prepare Dynamic Family Build",
+    name: "prepare_dynamic_family_publication",
+    label: "Prepare Dynamic Family Publication",
     description:
-      "Use directly when no registered static family expresses the required topology; do not prevalidate a dynamic FamilySpec with validate_dataset_build. The acquisition_requests schema is authoritative for dynamic provider wiring. This deterministic, side-effect-free preflight returns the structural and acquisition-plan facts committed in a task/build/generation-bound receipt.",
-    parameters: dynamicFamilyBuildParameters(false),
+      "Use after inspect_dataset_execution_routes when no registered static family expresses the required topology and every input is dynamic-bindable or a prior task-owned Core asset. Do not prevalidate a dynamic FamilySpec with validate_dataset_execution. This deterministic, side-effect-free preflight validates the submitted topology and acquisition plan and returns a task/requirement/generation-bound receipt.",
+    parameters: dynamicFamilyPublicationParameters(false),
     async execute(value, signal, context): Promise<BioMedToolResult> {
       try {
-        const submission = await parseDynamicFamilyBuildSubmission(value);
+        const submission = await parseDynamicFamilyPublicationSubmission(value);
         const receipt = await options.prepare(submission, signal, context);
         const details = { ok: true, status: "prepared", preflight_receipt: receipt };
         return { content: JSON.stringify(details), details };
@@ -126,17 +126,17 @@ export function createPrepareDynamicFamilyBuildTool(
   };
 }
 
-export function createDynamicFamilyBuildTools(options: {
-  readonly prepare: PrepareDynamicFamilyBuildToolOptions["prepare"];
-  readonly submit: DynamicFamilyBuildToolOptions["submit"];
+export function createDynamicFamilyPublicationTools(options: {
+  readonly prepare: PrepareDynamicFamilyPublicationToolOptions["prepare"];
+  readonly submit: DynamicFamilyPublicationToolOptions["submit"];
 }): readonly [BioMedAgentTool, BioMedAgentTool] {
   return [
-    createPrepareDynamicFamilyBuildTool({ prepare: options.prepare }),
-    createDynamicFamilyBuildTool({ submit: options.submit }),
+    createPrepareDynamicFamilyPublicationTool({ prepare: options.prepare }),
+    createDynamicFamilyPublicationTool({ submit: options.submit }),
   ];
 }
 
-function dynamicFamilyBuildParameters(includePreflightReceipt: boolean): Record<string, unknown> {
+function dynamicFamilyPublicationParameters(includePreflightReceipt: boolean): Record<string, unknown> {
   const digest = { type: "string", pattern: "^[0-9a-f]{64}$" };
   const safeId = { type: "string", pattern: "^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,255}$" };
   const ids = { type: "array", items: safeId, maxItems: 128 };
@@ -199,7 +199,7 @@ function dynamicFamilyBuildParameters(includePreflightReceipt: boolean): Record<
   };
   const familySpec = {
     type: "object",
-      description: "Declarative topology only. canonical_digest is SHA-256 of canonical JSON excluding canonical_digest; compute and bind it before prepare_dynamic_family_build.",
+      description: "Declarative topology only. canonical_digest is SHA-256 of canonical JSON excluding canonical_digest; compute and bind it before prepare_dynamic_family_publication.",
     properties: {
       family_spec_id: safeId, semantic_version: safeId, canonical_digest: digest,
       projections: { type: "array", minItems: 1, items: projection },
@@ -272,14 +272,14 @@ function dynamicFamilyBuildParameters(includePreflightReceipt: boolean): Record<
     properties: {
       schema_version: { type: "string", enum: ["2.0"] },
       spec_kind: { type: "string", enum: ["proposal"] },
-      build_id: safeId, family_spec_ref: scopeRef, projection_ref: safeId,
+      requirement_id: safeId, family_spec_ref: scopeRef, projection_ref: safeId,
       source_bindings: { type: "array", minItems: 1, items: proposalBinding },
       transform_refs: { type: "array", minItems: 1, maxItems: 1, items: scopeRef },
       policy_refs: { type: "array", items: scopeRef },
       output_format: safeId, idempotency_identity: safeId,
     },
     required: [
-      "schema_version", "spec_kind", "build_id", "family_spec_ref", "projection_ref",
+      "schema_version", "spec_kind", "requirement_id", "family_spec_ref", "projection_ref",
       "source_bindings", "transform_refs", "policy_refs", "output_format", "idempotency_identity",
     ],
     additionalProperties: false,
@@ -342,7 +342,7 @@ function dynamicFamilyBuildParameters(includePreflightReceipt: boolean): Record<
     properties: {
       schema_version: { type: "string", enum: ["1.0"] },
       task_id: safeId,
-      build_id: safeId,
+      requirement_id: safeId,
       generation: { type: "integer", minimum: 0 },
       family_spec_digest: digest,
       projection_digest: digest,
@@ -384,7 +384,7 @@ function dynamicFamilyBuildParameters(includePreflightReceipt: boolean): Record<
       receipt_digest: digest,
     },
     required: [
-      "schema_version", "task_id", "build_id", "generation", "family_spec_digest", "projection_digest",
+      "schema_version", "task_id", "requirement_id", "generation", "family_spec_digest", "projection_digest",
       "host_descriptor_digest", "submission_digest", "required_input_roles", "output_closure",
       "topology_diagnostics", "acquisition_plan", "receipt_digest",
     ],
@@ -398,21 +398,21 @@ function dynamicFamilyBuildParameters(includePreflightReceipt: boolean): Record<
       family_spec: {
         ...familySpec,
         description:
-          "For normalized bioactivity use exactly target_records, compound_records, assay_records, activity_records (primary), and compound_crosswalk; activity_records has many-to-one relations to target_records, compound_records, and assay_records. canonical_digest is SHA-256 canonical JSON excluding canonical_digest; prepare_dynamic_family_build commits the resulting structural facts.",
+          "For normalized bioactivity use exactly target_records, compound_records, assay_records, activity_records (primary), and compound_crosswalk; activity_records has many-to-one relations to target_records, compound_records, and assay_records. canonical_digest is SHA-256 canonical JSON excluding canonical_digest; prepare_dynamic_family_publication commits the resulting structural facts.",
       },
       projection_id: safeId,
       transform_source: {
         type: "string", minLength: 1, maxLength: MAX_SOURCE_BYTES,
-        description: "Synchronous TypeScript only (not Python, not async/Promise). Export const transform={run({inputs}){...}}. Inputs are ordered exactly like build_proposal.source_bindings and are named in_0, in_1, ... (not binding IDs); each frozen input is {handle,receipt_kind,receipt_id,text}. Use array destructuring (const [first,...rest]=inputs), forEach/map/find/shift, dot properties, and named regex groups. EVERY bracket element access is forbidden, including inputs[0], lines[i], match[1], object['key'], and dynamic keys. Do not import or use process/require/globalThis/eval, input.text(), filesystem, or network. Return exactly {outputs:[...]} and no other top-level keys. Every outputs entry is a wire envelope, NOT a rows object: exactly {content:'complete CSV text including header',handle:'out_0',locator_ref:first.receipt_id,row_count:<data rows>,schema_ref:'<declared schema>',table_id:'<declared table>'}. Use out_0, out_1, ... in primary+supporting+derived projection order. locator_ref must be non-empty and may use the same first.receipt_id for every table derived from that source.",
+        description: "Synchronous TypeScript only (not Python, not async/Promise). Export const transform={run({inputs}){...}}. Inputs are ordered exactly like execution_proposal.source_bindings and are named in_0, in_1, ... (not binding IDs); each frozen input is {handle,receipt_kind,receipt_id,text}. Use array destructuring (const [first,...rest]=inputs), forEach/map/find/shift, dot properties, and named regex groups. EVERY bracket element access is forbidden, including inputs[0], lines[i], match[1], object['key'], and dynamic keys. Do not import or use process/require/globalThis/eval, input.text(), filesystem, or network. Return exactly {outputs:[...]} and no other top-level keys. Every outputs entry is a wire envelope, NOT a rows object: exactly {content:'complete CSV text including header',handle:'out_0',locator_ref:first.receipt_id,row_count:<data rows>,schema_ref:'<declared schema>',table_id:'<declared table>'}. Use out_0, out_1, ... in primary+supporting+derived projection order. locator_ref must be non-empty and may use the same first.receipt_id for every table derived from that source.",
       },
       transform_metadata: transformMetadata,
-      build_proposal: buildProposal,
+      execution_proposal: buildProposal,
       registered_sources: {
         type: "object", description: "Usually {}. Only Core-acquired asset IDs are accepted.",
         additionalProperties: { type: "string", pattern: "^asset_[0-9a-f]{64}$" },
       },
       acquisition_requests: {
-        type: "object", description: "Preferred formal input path. Every provider listed here is runtime-wired for Dynamic Family acquisition; absence means unavailable through this route. Keys exactly match unresolved build_proposal source binding IDs. Create one binding/request per formal carrier.",
+        type: "object", description: "Preferred formal input path. Every provider listed here is runtime-wired for Dynamic Family acquisition; absence means unavailable through this route. Keys exactly match unresolved execution_proposal source binding IDs. Create one binding/request per formal carrier.",
         additionalProperties: acquisition,
       },
     },
@@ -428,13 +428,13 @@ function dynamicFamilyBuildParameters(includePreflightReceipt: boolean): Record<
 }
 
 /** Strict wire boundary only. It never executes code or grants publication authority. */
-export async function parseDynamicFamilyBuildSubmission(
+export async function parseDynamicFamilyPublicationSubmission(
   value: unknown,
-): Promise<ParsedDynamicFamilyBuildSubmission> {
-  const record = exactDataRecord(value, TOP_KEYS, "$dynamic_family_build");
-  if (record.schema_version !== "1.0") throw new TypeError("dynamic family build schema_version must be 1.0");
+): Promise<ParsedDynamicFamilyPublicationSubmission> {
+  const record = exactDataRecord(value, TOP_KEYS, "$dynamic_family_publication");
+  if (record.schema_version !== "1.0") throw new TypeError("dynamic family publication schema_version must be 1.0");
   if (record.execution_backend !== "in_process_unisolated") {
-    throw new TypeError("dynamic family builds require the explicit in_process_unisolated backend");
+    throw new TypeError("dynamic family publications require the explicit in_process_unisolated backend");
   }
   const family = parseFamilySpec(record.family_spec, "$.family_spec");
   if (family.scope === "example") throw new TypeError("example FamilySpec cannot execute");
@@ -457,7 +457,7 @@ export async function parseDynamicFamilyBuildSubmission(
       `transform metadata must bind family ${family.canonical_digest} and projection ${expectedProjectionDigest}`,
     );
   }
-  const proposal = parseDatasetBuildProposal2(record.build_proposal, "$.build_proposal");
+  const proposal = parseDatasetExecutionProposal2(record.execution_proposal, "$.execution_proposal");
   const registeredSources = parseRegisteredSources(record.registered_sources, proposal);
   const acquisitionRequests = parseAcquisitionRequests(record.acquisition_requests, proposal);
   assertSourceClosure(proposal, registeredSources, acquisitionRequests);
@@ -468,7 +468,7 @@ export async function parseDynamicFamilyBuildSubmission(
     || proposal.family_spec_ref.scope !== family.scope
     || proposal.projection_ref !== projection.projection_id
   ) {
-    throw new TypeError("build proposal does not bind the exact FamilySpec projection");
+    throw new TypeError("execution proposal does not bind the exact FamilySpec projection");
   }
   return Object.freeze({
     schema_version: "1.0",
@@ -477,36 +477,36 @@ export async function parseDynamicFamilyBuildSubmission(
     projection,
     transform_source: source,
     transform_metadata: transform,
-    build_proposal: proposal,
+    execution_proposal: proposal,
     registered_sources: registeredSources,
     acquisition_requests: acquisitionRequests,
   });
 }
 
-export interface ParsedDynamicFamilyBuildSubmitRequest {
-  readonly submission: ParsedDynamicFamilyBuildSubmission;
+export interface ParsedDynamicFamilyPublicationSubmitRequest {
+  readonly submission: ParsedDynamicFamilyPublicationSubmission;
   readonly preflightReceipt: DynamicFamilyPreflightReceipt;
 }
 
 /** Strict submit wire parser; production callers must present the receipt. */
-export async function parseDynamicFamilyBuildSubmitRequest(
+export async function parseDynamicFamilyPublicationSubmitRequest(
   value: unknown,
-): Promise<ParsedDynamicFamilyBuildSubmitRequest> {
+): Promise<ParsedDynamicFamilyPublicationSubmitRequest> {
   const keys = new Set([...TOP_KEYS, "preflight_receipt"]);
-  const record = exactDataRecord(value, keys, "$dynamic_family_build_submit");
+  const record = exactDataRecord(value, keys, "$dynamic_family_publication_submit");
   if (!Object.hasOwn(record, "preflight_receipt")) {
-    throw new TypeError("submit_dynamic_family_build requires preflight_receipt from prepare_dynamic_family_build");
+    throw new TypeError("submit_dynamic_family_publication requires preflight_receipt from prepare_dynamic_family_publication");
   }
   const base = Object.create(null) as DataRecord;
   for (const key of TOP_KEYS) base[key] = record[key];
-  const submission = await parseDynamicFamilyBuildSubmission(base);
+  const submission = await parseDynamicFamilyPublicationSubmission(base);
   const preflightReceipt = parseDynamicFamilyPreflightReceipt(record.preflight_receipt, "$.preflight_receipt");
   return Object.freeze({ submission, preflightReceipt });
 }
 
 function parseRegisteredSources(
   value: unknown,
-  proposal: DatasetBuildProposal2,
+  proposal: DatasetExecutionProposal2,
 ): Readonly<Record<string, string>> {
   const bindingIds = new Set(proposal.source_bindings.map((binding) => binding.binding_id));
   const record = subsetDataRecord(value, bindingIds, "$.registered_sources");
@@ -522,8 +522,8 @@ function parseRegisteredSources(
 
 function parseAcquisitionRequests(
   value: unknown,
-  proposal: DatasetBuildProposal2,
-): ParsedDynamicFamilyBuildSubmission["acquisition_requests"] {
+  proposal: DatasetExecutionProposal2,
+): ParsedDynamicFamilyPublicationSubmission["acquisition_requests"] {
   const bindingIds = new Set(proposal.source_bindings.map((binding) => binding.binding_id));
   const record = subsetDataRecord(value, bindingIds, "$.acquisition_requests");
   const result = Object.create(null) as Record<string, { provider_id: string; parameters: Readonly<Record<string, import("@biomed/contracts").JsonValue>> }>;
@@ -548,9 +548,9 @@ function parseAcquisitionRequests(
 }
 
 function assertSourceClosure(
-  proposal: DatasetBuildProposal2,
+  proposal: DatasetExecutionProposal2,
   registered: Readonly<Record<string, string>>,
-  acquisitions: ParsedDynamicFamilyBuildSubmission["acquisition_requests"],
+  acquisitions: ParsedDynamicFamilyPublicationSubmission["acquisition_requests"],
 ): void {
   const expected = proposal.source_bindings.map((binding) => binding.binding_id).sort();
   const actual = [...Object.keys(registered), ...Object.keys(acquisitions)].sort();
@@ -559,7 +559,7 @@ function assertSourceClosure(
   }
 }
 
-function parseMetadata(value: unknown): ParsedDynamicFamilyBuildSubmission["transform_metadata"] {
+function parseMetadata(value: unknown): ParsedDynamicFamilyPublicationSubmission["transform_metadata"] {
   const parsed = parseDatasetTransform({
     ...exactDataRecord(value, new Set([
       "transform_id", "version", "entrypoint", "declared_input_roles",

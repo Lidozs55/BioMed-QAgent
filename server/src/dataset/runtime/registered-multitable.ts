@@ -4,7 +4,7 @@ import { readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type {
-  DatasetBuildSourceBinding,
+  DatasetExecutionSourceBinding,
   DatasetManifestV2,
   DatasetSchemaV2,
   JsonValue,
@@ -27,7 +27,7 @@ import {
 } from "../adapters/registered/index.js";
 import { sha256FileStream } from "../adapters/hashing.js";
 import { createDefaultFamilyAssemblerRegistry } from "../assembly/index.js";
-import type { DatasetBuildSpec, ValidationResult } from "../contracts/index.js";
+import type { DatasetExecutionSpec, ValidationResult } from "../contracts/index.js";
 import type { DatasetFamilyDefinition } from "../families/index.js";
 import {
   createDefaultDatasetFamilyRegistry,
@@ -146,7 +146,8 @@ function chemblCarrierDocuments(document: Record<string, unknown>): {
 
 async function tableResult(options: {
   taskId: string;
-  buildId: string;
+  runId: string;
+  requirementId: string;
   familyId: string;
   tableId: string;
   schema: DatasetSchemaV2;
@@ -159,12 +160,13 @@ async function tableResult(options: {
   const rowCount = Math.max(0, (await readFile(options.absolutePath, "utf8")).trimEnd().split("\n").length - 1);
   return {
     schema_version: "1.0",
-    result_manifest_id: `result_${options.buildId}_${options.tableId}`,
+    result_manifest_id: `result_${options.requirementId}_${options.tableId}`,
     task_id: options.taskId,
-    build_id: options.buildId,
+    run_id: options.runId,
+    requirement_id: options.requirementId,
     operation_id: `integrate_${options.tableId}`,
     operation_kind: "integrate",
-    operation_attempt_id: `attempt_${options.buildId}_${options.tableId}`,
+    operation_attempt_id: `attempt_${options.requirementId}_${options.tableId}`,
     attempt: 1,
     status: "succeeded",
     input_digest: digest([[...options.assetIds].sort(), options.schema.schema_id]),
@@ -188,8 +190,7 @@ async function tableResult(options: {
       parameter_digest: digest({ table_id: options.tableId }),
       implementation_digest: IMPLEMENTATION_DIGEST,
     },
-    commit: { state: "committed", commit_id: `commit_${options.buildId}_${options.tableId}`, committed_at: new Date().toISOString() },
-    migration: { mode: "native", legacy_checkpoint_path: null, migrated_at: null },
+    commit: { state: "committed", commit_id: `commit_${options.requirementId}_${options.tableId}`, committed_at: new Date().toISOString() },
   };
 }
 
@@ -229,7 +230,7 @@ function candidateRef(candidate: PublicationCandidate) {
 export interface RegisteredMultiTableExecutionInput {
   taskId: string;
   taskRoot: string;
-  spec: DatasetBuildSpec;
+  spec: DatasetExecutionSpec;
   /** binding_id -> content-addressed task-owned asset ID */
   registeredAssetIds: Readonly<Record<string, string>>;
   forbiddenRoots?: readonly string[];
@@ -248,13 +249,13 @@ export interface RegisteredMultiTableExecutionResult {
 type ProviderRows = Readonly<Record<string, readonly object[]>>;
 
 interface BioactivityPubChemCarrier {
-  binding: DatasetBuildSourceBinding;
+  binding: DatasetExecutionSourceBinding;
   receipt: SourceAssetRegistrationReceipt;
   bytes: Buffer;
   expectedCid: number;
 }
 
-function positivePubChemCid(binding: DatasetBuildSourceBinding, spec: DatasetBuildSpec): number {
+function positivePubChemCid(binding: DatasetExecutionSourceBinding, spec: DatasetExecutionSpec): number {
   const controlledKeys = ["pubchem", "pubchem_cid", "pubchem_cids", "compound", "compound_id", "compound_ids"];
   const candidates = [
     ...(binding.accession === null ? [] : [binding.accession]),
@@ -380,7 +381,8 @@ function providerRows(input: {
 async function writeProviderTables(options: {
   outputDir: string;
   taskId: string;
-  buildId: string;
+  runId: string;
+  requirementId: string;
   familyId: string;
   schemas: ReadonlyMap<string, DatasetSchemaV2>;
   rows: ProviderRows;
@@ -403,7 +405,8 @@ async function writeProviderTables(options: {
     }
     results[tableId] = await tableResult({
       taskId: options.taskId,
-      buildId: options.buildId,
+      runId: options.runId,
+      requirementId: options.requirementId,
       familyId: options.familyId,
       tableId,
       schema,
@@ -419,12 +422,13 @@ async function writeProviderTables(options: {
 export async function executeRegisteredMultiTableBuild(
   input: RegisteredMultiTableExecutionInput,
 ): Promise<RegisteredMultiTableExecutionResult> {
+  const runId = input.runId ?? "run_test";
   const familyRegistry = createDefaultDatasetFamilyRegistry();
   const family = familyRegistry.get(input.spec.dataset_family);
   if (family.runtime_id !== "registered_multitable.runtime.v1") {
     throw new Error(`family '${family.id}' does not use the registered multi-table runtime`);
   }
-  const outputDir = path.join(input.taskRoot, "datasets_build", input.spec.build_id);
+  const outputDir = path.join(input.taskRoot, "dataset_runs", runId, input.spec.requirement_id);
   mkdirSync(path.join(outputDir, "tables"), { recursive: true });
   const assetRegistry = new SourceAssetRegistry(input.taskId, input.taskRoot);
   const parserRegistry = createDefaultRegisteredTableRegistry();
@@ -589,7 +593,8 @@ export async function executeRegisteredMultiTableBuild(
     Object.assign(tableResults, await writeProviderTables({
       outputDir,
       taskId: input.taskId,
-      buildId: input.spec.build_id,
+      runId,
+      requirementId: input.spec.requirement_id,
       familyId: family.id,
       schemas: tableSchemas,
       rows,
@@ -649,7 +654,8 @@ export async function executeRegisteredMultiTableBuild(
     }
     tableResults[source.table_id] = await tableResult({
       taskId: input.taskId,
-      buildId: input.spec.build_id,
+      runId,
+      requirementId: input.spec.requirement_id,
       familyId: family.id,
       tableId: source.table_id,
       schema: registration.schema,
@@ -666,7 +672,8 @@ export async function executeRegisteredMultiTableBuild(
   const registeredAssets = [...sourceReceipts.keys()].sort();
   const candidate = createDefaultFamilyAssemblerRegistry().createCapability(family.id).assemble({
     taskId: input.taskId,
-    buildId: input.spec.build_id,
+    runId,
+    requirementId: input.spec.requirement_id,
     datasetFamily: family.id,
     rowGranularity: input.spec.row_granularity,
     schema: primarySchema,
@@ -696,7 +703,7 @@ export async function executeRegisteredMultiTableBuild(
   mkdirSync(defaultForbiddenRoot, { recursive: true });
   const b3 = await validateMultiTableCandidate({
     task_id: input.taskId,
-    build_id: input.spec.build_id,
+    requirement_id: input.spec.requirement_id,
     candidate: candidateRef(candidate),
     tables: validationTables,
     relations: candidate.relations,
@@ -756,7 +763,7 @@ export async function executeRegisteredMultiTableBuild(
     schema_version: "2.0",
     manifest_id: `manifest_${packageSha.slice(0, 16)}`,
     task_id: input.taskId,
-    build_id: input.spec.build_id,
+    requirement_id: input.spec.requirement_id,
     dataset_family: family.id,
     row_granularity: input.spec.row_granularity,
     schema_ref: primary.definition.schema_ref,

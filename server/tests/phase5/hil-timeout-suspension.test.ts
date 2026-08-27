@@ -22,11 +22,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { HumanReviewRecord } from "@biomed/contracts";
 
 import { parseDataBatch } from "../../src/dataset/contracts/data.js";
-import type { DatasetBuildSpec } from "../../src/dataset/contracts/index.js";
+import type { DatasetExecutionSpec } from "../../src/dataset/contracts/index.js";
 import { expressionNormalizationV1 } from "../../src/dataset/canonicalizer/profiles.js";
 import { reviewBatchForHIL } from "../../src/dataset/review/hil-policy.js";
 import {
-  DatasetBuildExecutor,
+  DatasetExecutionExecutor,
 } from "../../src/dataset/runtime/executor.js";
 import { buildOperationPlan, makeOperationOutput } from "../../src/dataset/runtime/index.js";
 import { DurableHILGate } from "../../src/runtime/hil-gate.js";
@@ -39,10 +39,10 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-function spec(overrides: Record<string, unknown> = {}): DatasetBuildSpec {
+function spec(overrides: Record<string, unknown> = {}): DatasetExecutionSpec {
   return {
     schema_version: "1.0",
-    build_id: "build_hil",
+    requirement_id: "build_hil",
     objective: "compare TP53 expression",
     dataset_family: "gene_expression",
     row_granularity: "gene_sample_measurement",
@@ -56,7 +56,7 @@ function spec(overrides: Record<string, unknown> = {}): DatasetBuildSpec {
     }],
     validation_profile_ref: "gene_expression.release.v1",
     ...overrides,
-  } as DatasetBuildSpec;
+  } as DatasetExecutionSpec;
 }
 
 async function fixture(): Promise<{
@@ -153,10 +153,10 @@ describe("HIL wait vs operation timeout (review P0/P1)", () => {
     const { taskId, runId, store, gate } = await fixture();
     const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-hil-susp-"));
     roots.push(taskRoot);
-    const buildSpec = spec({ build_id: "build_suspend" });
-    const executor = new DatasetBuildExecutor({
+    const buildSpec = spec({ requirement_id: "build_suspend" });
+    const executor = new DatasetExecutionExecutor({
       taskId,
-      buildId: "build_suspend",
+      requirementId: "build_suspend",
       stateDir: path.join(taskRoot, "state"),
       taskRoot,
       plan: buildOperationPlan(buildSpec),
@@ -169,7 +169,7 @@ describe("HIL wait vs operation timeout (review P0/P1)", () => {
             batch: batchWithProposedMappings(),
             profile: expressionNormalizationV1(),
             gate,
-            buildId: "build_suspend",
+            requirementId: "build_suspend",
             signal,
             suspension: suspension ?? null,
           });
@@ -210,12 +210,12 @@ describe("HIL wait vs operation timeout (review P0/P1)", () => {
     const { taskId, runId, store, gate } = await fixture();
     const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-hil-budget-"));
     roots.push(taskRoot);
-    const executor = new DatasetBuildExecutor({
+    const executor = new DatasetExecutionExecutor({
       taskId,
-      buildId: "build_budget",
+      requirementId: "build_budget",
       stateDir: path.join(taskRoot, "state"),
       taskRoot,
-      plan: buildOperationPlan(spec({ build_id: "build_budget" })),
+      plan: buildOperationPlan(spec({ requirement_id: "build_budget" })),
       runOperation: async (op, _upstream, signal, suspension) => {
         if (op.kind === "acquire") {
           return makeOperationOutput({ binding_id: op.category, source_id: "s", asset_id: "a" });
@@ -225,7 +225,7 @@ describe("HIL wait vs operation timeout (review P0/P1)", () => {
             batch: batchWithProposedMappings(),
             profile: expressionNormalizationV1(),
             gate,
-            buildId: "build_budget",
+            requirementId: "build_budget",
             signal,
             suspension: suspension ?? null,
           });
@@ -262,12 +262,12 @@ describe("HIL wait vs operation timeout (review P0/P1)", () => {
     const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-hil-cancel-"));
     roots.push(taskRoot);
     const cancellationSignal = new AbortController();
-    const executor = new DatasetBuildExecutor({
+    const executor = new DatasetExecutionExecutor({
       taskId,
-      buildId: "build_cancel",
+      requirementId: "build_cancel",
       stateDir: path.join(taskRoot, "state"),
       taskRoot,
-      plan: buildOperationPlan(spec({ build_id: "build_cancel" })),
+      plan: buildOperationPlan(spec({ requirement_id: "build_cancel" })),
       runOperation: async (op, _upstream, signal, suspension) => {
         if (op.kind === "acquire") {
           return makeOperationOutput({ binding_id: op.category, source_id: "s", asset_id: "a" });
@@ -277,7 +277,7 @@ describe("HIL wait vs operation timeout (review P0/P1)", () => {
             batch: batchWithProposedMappings(),
             profile: expressionNormalizationV1(),
             gate,
-            buildId: "build_cancel",
+            requirementId: "build_cancel",
             signal,
             suspension: suspension ?? null,
           });
@@ -303,7 +303,7 @@ describe("HIL wait vs operation timeout (review P0/P1)", () => {
     const { taskId, runId, store, gate } = await fixture();
     const controller = new AbortController();
     const first = gate.requestHIL({
-      build_id: "build_replay",
+      requirement_id: "build_replay",
       kind: "semantic_review",
       review_type: "field_mapping",
       blocking: true,
@@ -324,7 +324,7 @@ describe("HIL wait vs operation timeout (review P0/P1)", () => {
     // The same operation replays with the same deterministic input: it must
     // NOT return the cancelled request.
     const second = gate.requestHIL({
-      build_id: "build_replay",
+      requirement_id: "build_replay",
       kind: "semantic_review",
       review_type: "field_mapping",
       blocking: true,
@@ -353,12 +353,12 @@ describe("executor suspension mechanics", () => {
   it("keeps the timeout paused across repeated suspensions", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "p5-suspend-mech-"));
     roots.push(root);
-    const executor = new DatasetBuildExecutor({
+    const executor = new DatasetExecutionExecutor({
       taskId: "task_t",
-      buildId: "build_t",
+      requirementId: "build_t",
       stateDir: path.join(root, "state"),
       taskRoot: root,
-      plan: buildOperationPlan(spec({ build_id: "build_t" })),
+      plan: buildOperationPlan(spec({ requirement_id: "build_t" })),
       runOperation: async (op, _upstream, _signal, suspension) => {
         if (op.kind === "acquire") {
           return makeOperationOutput({ binding_id: op.category, source_id: "s", asset_id: "a" });
@@ -379,12 +379,12 @@ describe("executor suspension mechanics", () => {
   it("still times out a runner that never suspends", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "p5-suspend-timeout-"));
     roots.push(root);
-    const executor = new DatasetBuildExecutor({
+    const executor = new DatasetExecutionExecutor({
       taskId: "task_t",
-      buildId: "build_t",
+      requirementId: "build_t",
       stateDir: path.join(root, "state"),
       taskRoot: root,
-      plan: buildOperationPlan(spec({ build_id: "build_t" })),
+      plan: buildOperationPlan(spec({ requirement_id: "build_t" })),
       runOperation: async (op) => {
         if (op.kind === "acquire") {
           return makeOperationOutput({ binding_id: op.category, source_id: "s", asset_id: "a" });

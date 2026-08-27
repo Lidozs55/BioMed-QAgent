@@ -90,7 +90,7 @@ export const targetEvidenceRegisteredAssembler: FamilyAssemblerHandler = {
   handlerId: "target_evidence.assembler.v1",
   assemble: (input) => assembleTargetEvidenceCandidate({
     taskId: input.taskId,
-    buildId: input.buildId,
+    requirementId: input.requirementId,
     datasetFamily: input.datasetFamily,
     rowGranularity: input.rowGranularity,
     tables: tableInputs(input, ["targets", "evidence", "sources", "supporting"] as const),
@@ -120,7 +120,7 @@ export const proteinStructureRegisteredAssembler: FamilyAssemblerHandler = {
   handlerId: "protein_structure.assembler.v1",
   assemble: (input) => assembleProteinStructureCandidate({
     taskId: input.taskId,
-    buildId: input.buildId,
+    requirementId: input.requirementId,
     datasetFamily: input.datasetFamily,
     rowGranularity: input.rowGranularity,
     tables: tableInputs(input, ["structures", "chains", "ligands", "sources"] as const),
@@ -133,7 +133,7 @@ export const gutMicrobiomeRegisteredAssembler: FamilyAssemblerHandler = {
   handlerId: "gut_microbiome.assembler.v1",
   assemble: (input) => assembleGutMicrobiomeCandidate({
     taskId: input.taskId,
-    buildId: input.buildId,
+    requirementId: input.requirementId,
     datasetFamily: input.datasetFamily,
     rowGranularity: input.rowGranularity,
     tables: tableInputs(input, [
@@ -158,7 +158,7 @@ export const bioactivityRegisteredAssembler: FamilyAssemblerHandler = {
       : tableInputs(input, ["compound_crosswalks"] as const);
     return assembleBioactivityCandidate({
       taskId: input.taskId,
-      buildId: input.buildId,
+      requirementId: input.requirementId,
       datasetFamily: input.datasetFamily,
       rowGranularity: input.rowGranularity,
       tables: [...baseTables, ...identityTables],

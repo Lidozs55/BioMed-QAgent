@@ -109,7 +109,7 @@ function evidenceRefs(
     const result = requireCoreResult({
       result: value,
       taskId: input.taskId,
-      buildId: input.buildId,
+      requirementId: input.requirementId,
     });
     const tableId = result.output_summary.table_id;
     if (typeof tableId !== "string" || !tableIds.has(tableId)) {
@@ -123,7 +123,7 @@ function evidenceRefs(
   if (covered.size !== tableIds.size) {
     throw new Error(`${kind} requires exactly one result for every literature table`);
   }
-  return resultRefs({ results: values, taskId: input.taskId, buildId: input.buildId });
+  return resultRefs({ results: values, taskId: input.taskId, requirementId: input.requirementId });
 }
 
 export type LiteratureEvidenceAssemblyInput = Omit<FamilyAssemblyInput, "schema"> & {
@@ -154,7 +154,7 @@ export function assembleLiteratureEvidenceCandidate(
   const integrationResult = requireCoreResult({
     result: input.integrationResult,
     taskId: input.taskId,
-    buildId: input.buildId,
+    requirementId: input.requirementId,
     operationKind: "integrate",
     outputKind: "integrated_table",
   });
@@ -182,7 +182,7 @@ export function assembleLiteratureEvidenceCandidate(
   const candidateBody = {
     schema_version: "1.0" as const,
     task_id: input.taskId,
-    build_id: input.buildId,
+    requirement_id: input.requirementId,
     dataset_family: input.datasetFamily,
     row_granularity: input.rowGranularity,
     tables,
@@ -192,7 +192,7 @@ export function assembleLiteratureEvidenceCandidate(
     audit_refs: resultRefs({
       results: input.auditResults ?? [],
       taskId: input.taskId,
-      buildId: input.buildId,
+      requirementId: input.requirementId,
     }),
     registered_asset_ids: assets,
   };

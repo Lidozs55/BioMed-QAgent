@@ -101,7 +101,7 @@ export function parseDatasetManifestV2(
   options: MultiTableManifestParseOptions = {},
 ): DatasetManifestV2 {
   assertExactKeys(value, [
-    "schema_version", "manifest_id", "task_id", "build_id", "dataset_family",
+    "schema_version", "manifest_id", "task_id", "requirement_id", "dataset_family",
     "row_granularity", "schema_ref", "primary_key", "row_count", "sha256", "artifacts",
     "source_summary", "validation_summary", "confidence_summary", "provenance_summary",
     "tables", "relations", "candidate_refs",
@@ -155,7 +155,7 @@ export function parseDatasetManifestV2(
     schema_version: "2.0",
     manifest_id: assertNonEmptyString(value.manifest_id, "DatasetManifest.manifest_id"),
     task_id: assertNonEmptyString(value.task_id, "DatasetManifest.task_id"),
-    build_id: assertNonEmptyString(value.build_id, "DatasetManifest.build_id"),
+    requirement_id: assertNonEmptyString(value.requirement_id, "DatasetManifest.requirement_id"),
     dataset_family: assertNonEmptyString(value.dataset_family, "DatasetManifest.dataset_family"),
     row_granularity: assertNonEmptyString(value.row_granularity, "DatasetManifest.row_granularity"),
     schema_ref: assertNonEmptyString(value.schema_ref, "DatasetManifest.schema_ref"),

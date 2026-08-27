@@ -88,7 +88,7 @@ export class NonProductionTransformHost {
       schema_version: "1.0",
       task_id: this.#context.taskId,
       run_id: this.#context.runId,
-      build_id: this.#context.buildId,
+      requirement_id: this.#context.requirementId,
       invocation_id: this.#context.invocationId,
       attempt: this.#context.attempt,
       generation: this.#context.generation,
@@ -146,7 +146,7 @@ function assertInvocationMatchesContext(
   };
   compare("taskId", invocation.taskId, context.taskId);
   compare("runId", invocation.runId, context.runId);
-  compare("buildId", invocation.buildId, context.buildId);
+  compare("requirementId", invocation.requirementId, context.requirementId);
   compare("invocationId", invocation.invocationId, context.invocationId);
   compare("attempt", invocation.attempt, context.attempt);
   compare("generation", invocation.generation, context.generation);

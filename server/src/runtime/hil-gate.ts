@@ -76,7 +76,7 @@ export class DurableHILGate implements HILGateHandle {
   ): Promise<"approve" | "reject"> {
     this.permissionInvocation += 1;
     const review = await this.requestHIL({
-      build_id: null,
+      requirement_id: null,
       kind: "permission",
       review_type: null,
       blocking: true,

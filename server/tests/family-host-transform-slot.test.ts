@@ -12,7 +12,7 @@ function input(overrides: Partial<FixedTransformSlotInput> = {}): Readonly<Fixed
   return Object.freeze({
     slotId: "family_transform.fixed.v1",
     taskId: "task_slot",
-    buildId: "build_slot",
+    requirementId: "build_slot",
     generation: 3,
     expectedGeneration: 3,
     capability: Object.freeze({

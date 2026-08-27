@@ -1,10 +1,6 @@
 import { useEffect, useState } from "react";
-import {
-  InfoIcon,
-  WarningCircleIcon,
-} from "@phosphor-icons/react";
 
-import { BuildArtifactCard } from "@/components/artifacts/BuildArtifactCard";
+import { PublicationArtifactCard } from "@/components/artifacts/PublicationArtifactCard";
 import { artifactBasename } from "@/components/artifacts/artifactPreview";
 import { FamilyTopologyExplorer } from "@/components/family-host/relations/FamilyTopologyExplorer";
 import { Badge } from "@/components/ui/badge";
@@ -33,11 +29,8 @@ import {
 import { useAPI } from "@/hooks/useAPI";
 import { ProductAssessmentSummary } from "@/components/FamilyHostStatusCard";
 import { productAssessmentFromManifest } from "@/lib/familyHost";
-import { cn } from "@/lib/utils";
 import type {
-  BuildDetail,
-  BuildResult,
-  BuildResultStatus,
+  PublicationDetail,
   JsonValue,
 } from "@/runtime/contracts";
 
@@ -77,76 +70,6 @@ function formatCoverage(ratio: number | undefined): string {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Outcome banner: NO_DATA / PARTIAL_SUCCESS / SPEC_REJECTED          */
-/*  NO_DATA is informational (sky) — never a red internal error.       */
-/* ------------------------------------------------------------------ */
-
-const BANNER_STYLES: Partial<
-  Record<BuildResultStatus, { className: string; iconClass: string; Icon: typeof InfoIcon }>
-> = {
-  no_data: {
-    className: "border-info/30 bg-info/5",
-    iconClass: "text-info",
-    Icon: InfoIcon,
-  },
-  partial_success: {
-    className: "border-warning/30 bg-warning/5",
-    iconClass: "text-warning",
-    Icon: WarningCircleIcon,
-  },
-  spec_rejected: {
-    className: "border-warning/30 bg-warning/5",
-    iconClass: "text-warning",
-    Icon: WarningCircleIcon,
-  },
-};
-
-function BuildBanner({ result }: { result: BuildResult }) {
-  if (result.status === "succeeded") return null;
-  const style = BANNER_STYLES[result.status];
-  if (style === undefined) return null;
-  const { className, iconClass, Icon } = style;
-  const title = result.user_summary !== "" ? result.user_summary : "构建未完成";
-  return (
-    <div
-      data-status={result.status}
-      className={cn("flex min-w-0 items-start gap-2 rounded-lg border p-3", className)}
-    >
-      <Icon
-        aria-hidden="true"
-        className={cn("mt-0.5 size-4 shrink-0", iconClass)}
-      />
-      <div className="min-w-0">
-        <p className="text-sm font-medium leading-snug">{title}</p>
-        {result.recommended_next_action !== "" && (
-          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-            {result.recommended_next_action}
-          </p>
-        )}
-        {result.reason_codes.length > 0 && (
-          <div className="mt-1 flex flex-wrap gap-1">
-            {result.reason_codes.map((code) => (
-              <Badge key={code} variant="outline">{code}</Badge>
-            ))}
-          </div>
-        )}
-        {result.binding_failures !== undefined && result.binding_failures.length > 0 && (
-          <ul className="mt-2 flex flex-col gap-1 border-t pt-2 text-xs text-muted-foreground">
-            {result.binding_failures.map((failure) => (
-              <li key={failure.binding_id} className="flex flex-wrap items-baseline gap-x-2">
-                <span className="font-medium text-foreground">{failure.binding_id}</span>
-                <Badge variant="outline">{failure.reason_code}</Badge>
-                {failure.message !== "" && <span>{failure.message}</span>}
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ */
 /*  Small building blocks                                              */
 /* ------------------------------------------------------------------ */
 
@@ -167,7 +90,7 @@ function PrimaryDataTab({
   detail,
   taskId,
 }: {
-  detail: BuildDetail;
+  detail: PublicationDetail;
   taskId?: string | null;
 }) {
   const primary = detail.manifest.artifacts.find(
@@ -178,16 +101,16 @@ function PrimaryDataTab({
       <Empty>
         <EmptyHeader>
           <EmptyTitle>无主数据</EmptyTitle>
-          <EmptyDescription>本次构建没有生成主数据产物。</EmptyDescription>
+          <EmptyDescription>本次发布没有主数据产物。</EmptyDescription>
         </EmptyHeader>
       </Empty>
     );
   }
   return (
     <div className="flex min-w-0 flex-col gap-3">
-      <BuildArtifactCard
+      <PublicationArtifactCard
         entry={primary}
-        buildId={detail.build_id}
+        publicationId={detail.requirement_id}
         taskId={taskId}
         previewCsv
       />
@@ -199,7 +122,7 @@ function SourceTab({
   detail,
   taskId,
 }: {
-  detail: BuildDetail;
+  detail: PublicationDetail;
   taskId?: string | null;
 }) {
   const provenance = detail.manifest.provenance_summary;
@@ -237,16 +160,16 @@ function SourceTab({
         </CardContent>
       </Card>
       {provenanceEntry !== undefined && (
-        <BuildArtifactCard
+        <PublicationArtifactCard
           entry={provenanceEntry}
-          buildId={detail.build_id}
+          publicationId={detail.requirement_id}
           taskId={taskId}
         />
       )}
       {schemaEntry !== undefined && (
-        <BuildArtifactCard
+        <PublicationArtifactCard
           entry={schemaEntry}
-          buildId={detail.build_id}
+          publicationId={detail.requirement_id}
           taskId={taskId}
         />
       )}
@@ -258,7 +181,7 @@ function ProcessingTab({
   detail,
   taskId,
 }: {
-  detail: BuildDetail;
+  detail: PublicationDetail;
   taskId?: string | null;
 }) {
   const validation = detail.manifest.validation_summary;
@@ -387,24 +310,24 @@ function ProcessingTab({
         </CardContent>
       </Card>
       {evidenceEntry !== undefined && (
-        <BuildArtifactCard
+        <PublicationArtifactCard
           entry={evidenceEntry}
-          buildId={detail.build_id}
+          publicationId={detail.requirement_id}
           taskId={taskId}
         />
       )}
       {provenanceEntry !== undefined && (
-        <BuildArtifactCard
+        <PublicationArtifactCard
           entry={provenanceEntry}
-          buildId={detail.build_id}
+          publicationId={detail.requirement_id}
           taskId={taskId}
         />
       )}
       {auditEntries.filter((entry) => entry.artifact_id !== evidenceEntry?.artifact_id).map((entry) => (
-        <BuildArtifactCard
+        <PublicationArtifactCard
           key={entry.artifact_id}
           entry={entry}
-          buildId={detail.build_id}
+          publicationId={detail.requirement_id}
           taskId={taskId}
           previewCsv
         />
@@ -417,7 +340,7 @@ function WarningsTab({
   detail,
   taskId,
 }: {
-  detail: BuildDetail;
+  detail: PublicationDetail;
   taskId?: string | null;
 }) {
   const warningEntries = detail.manifest.artifacts.filter((entry) =>
@@ -428,7 +351,7 @@ function WarningsTab({
       <Empty>
         <EmptyHeader>
           <EmptyTitle>无警告</EmptyTitle>
-          <EmptyDescription>未发现警告文件，本次构建没有需要关注的警告。</EmptyDescription>
+          <EmptyDescription>未发现警告文件，本次发布没有需要关注的警告。</EmptyDescription>
         </EmptyHeader>
       </Empty>
     );
@@ -436,10 +359,10 @@ function WarningsTab({
   return (
     <div className="flex min-w-0 flex-col gap-3">
       {warningEntries.map((entry) => (
-        <BuildArtifactCard
+        <PublicationArtifactCard
           key={entry.artifact_id}
           entry={entry}
-          buildId={detail.build_id}
+          publicationId={detail.requirement_id}
           taskId={taskId}
           previewCsv
         />
@@ -449,24 +372,24 @@ function WarningsTab({
 }
 
 /* ------------------------------------------------------------------ */
-/*  BuildResultsViewer                                                 */
+/*  PublicationResultsViewer                                                 */
 /* ------------------------------------------------------------------ */
 
-interface BuildResultsViewerProps {
-  buildId: string;
+interface PublicationResultsViewerProps {
+  publicationId: string;
   taskId?: string | null;
 }
 
 type LoadState =
   | { status: "loading" }
-  | { status: "ready"; detail: BuildDetail }
+  | { status: "ready"; detail: PublicationDetail }
   | { status: "error" };
 
-function BuildViewerContent({
-  buildId,
+function PublicationViewerContent({
+  publicationId,
   taskId,
 }: {
-  buildId: string;
+  publicationId: string;
   taskId?: string | null;
 }) {
   const api = useAPI();
@@ -476,7 +399,7 @@ function BuildViewerContent({
   useEffect(() => {
     let cancelled = false;
     void api
-      .fetchBuild(buildId, taskId)
+      .fetchPublication(publicationId, taskId)
       .then((detail) => {
         if (!cancelled) setState({ status: "ready", detail });
       })
@@ -486,13 +409,13 @@ function BuildViewerContent({
     return () => {
       cancelled = true;
     };
-  }, [api, buildId, taskId, reloadKey]);
+  }, [api, publicationId, taskId, reloadKey]);
 
   if (state.status === "loading") {
     return (
       <div className="flex min-w-0 items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
         <Spinner />
-        加载构建结果...
+        加载发布产物...
       </div>
     );
   }
@@ -500,7 +423,7 @@ function BuildViewerContent({
     return (
       <Empty className="min-h-48">
         <EmptyHeader>
-          <EmptyTitle>无法加载构建结果</EmptyTitle>
+          <EmptyTitle>无法加载发布产物</EmptyTitle>
           <EmptyDescription>请稍后重试或检查任务状态。</EmptyDescription>
         </EmptyHeader>
         <Button
@@ -517,10 +440,7 @@ function BuildViewerContent({
   const { detail } = state;
   const manifest = detail.manifest;
   const topologyManifest = manifest.schema_version === "2.0" ? manifest : null;
-  const result = detail.build_result;
-  const rowCount = result?.valid_row_count ?? manifest.row_count;
-  const successfulSources = result?.successful_sources.length ?? 0;
-  const rejectedSources = result?.rejected_sources.length ?? 0;
+  const rowCount = manifest.row_count;
   const validation = manifest.validation_summary;
   const checkedCount = summaryNumber(validation, "checked_count");
   const failedCount = summaryNumber(validation, "failed_count");
@@ -533,30 +453,21 @@ function BuildViewerContent({
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col gap-4">
-      {result !== null && <BuildBanner result={result} />}
       <Card size="sm" className="min-w-0 shrink-0">
         <CardHeader>
           <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-            <CardTitle className="text-sm">数据构建结果</CardTitle>
+            <CardTitle className="text-sm">数据发布产物</CardTitle>
             <Badge variant="outline">{manifest.dataset_family}</Badge>
             <Badge variant="outline">{manifest.row_granularity}</Badge>
             <Badge variant="outline">{manifest.schema_ref}</Badge>
           </div>
           <CardDescription>
-            构建 {detail.build_id} · {detail.task_id}
+            需求 {detail.requirement_id} · {detail.task_id}
           </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
             <SummaryStat label="有效行数" value={`${rowCount} 行`} />
-            <SummaryStat
-              label="来源成功"
-              value={`${successfulSources} 个来源成功`}
-            />
-            <SummaryStat
-              label="来源被拒"
-              value={`${rejectedSources} 个来源被拒绝`}
-            />
             <div className="min-w-0">
               <p className="text-xs text-muted-foreground">Validation</p>
               <Badge
@@ -613,16 +524,16 @@ function BuildViewerContent({
   );
 }
 
-export default function BuildResultsViewer({
-  buildId,
+export default function PublicationResultsViewer({
+  publicationId,
   taskId,
-}: BuildResultsViewerProps) {
-  // Remount per build id so a new build always starts from a fresh loading
+}: PublicationResultsViewerProps) {
+  // Remount per publication so a new immutable product starts from a fresh loading
   // state (no stale detail, no setState-in-effect reset).
   return (
-    <BuildViewerContent
-      key={buildId}
-      buildId={buildId}
+    <PublicationViewerContent
+      key={publicationId}
+      publicationId={publicationId}
       taskId={taskId}
     />
   );

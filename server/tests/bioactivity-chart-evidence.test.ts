@@ -183,7 +183,8 @@ function resultFor(
     schema_version: "1.0",
     result_manifest_id: `result_${tableId}`,
     task_id: "task_chart",
-    build_id: "build_chart",
+    run_id: "run_chart",
+    requirement_id: "build_chart",
     operation_id: `integrate_${tableId}`,
     operation_kind: "integrate",
     operation_attempt_id: `attempt_${tableId}`,
@@ -217,7 +218,6 @@ function resultFor(
       commit_id: `commit_${tableId}`,
       committed_at: "2026-08-18T00:00:00Z",
     },
-    migration: { mode: "native", legacy_checkpoint_path: null, migrated_at: null },
   };
 }
 
@@ -230,7 +230,8 @@ function evidenceResult(
     schema_version: "1.0",
     result_manifest_id: `result_${kind}_${tableId}`,
     task_id: "task_chart",
-    build_id: "build_chart",
+    run_id: "run_chart",
+    requirement_id: "build_chart",
     operation_id: `${kind}_${tableId}`,
     operation_kind: "canonicalize",
     operation_attempt_id: `attempt_${kind}_${tableId}`,
@@ -254,7 +255,6 @@ function evidenceResult(
       commit_id: `commit_${kind}_${tableId}`,
       committed_at: "2026-08-18T00:00:00Z",
     },
-    migration: { mode: "native", legacy_checkpoint_path: null, migrated_at: null },
   };
 }
 
@@ -273,7 +273,7 @@ function candidateValidationRequest(
   ];
   return {
     task_id: "task_chart",
-    build_id: "build_chart",
+    requirement_id: "build_chart",
     candidate: {
       candidate_id: "candidate_chart_validation",
       table_ids: allTableIds,
@@ -332,7 +332,7 @@ describe("bioactivity chart evidence B6A module", () => {
     const candidate = assembleBioactivityChartEvidenceCandidate({
       bioactivity: {
         taskId: "task_chart",
-        buildId: "build_chart",
+        requirementId: "build_chart",
         datasetFamily: "bioactivity_measurement",
         rowGranularity: "one compound-assay-target activity measurement",
         tables: bioactivityTableEntries().map((entry, index) => ({

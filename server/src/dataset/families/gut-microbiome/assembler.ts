@@ -25,7 +25,7 @@ export interface GutMicrobiomeTableAssemblyInput {
 
 export interface GutMicrobiomeAssemblyInput {
   taskId: string;
-  buildId: string;
+  requirementId: string;
   datasetFamily: string;
   rowGranularity: string;
   tables: readonly GutMicrobiomeTableAssemblyInput[];
@@ -102,7 +102,7 @@ function evidenceRefs(
   kind: "provenance" | "confidence",
 ) {
   if (results.length === 0) throw new Error(`gut microbiome table '${tableId}' requires ${kind} results`);
-  return resultRefs({ results, taskId: input.taskId, buildId: input.buildId });
+  return resultRefs({ results, taskId: input.taskId, requirementId: input.requirementId });
 }
 
 export function assembleGutMicrobiomeCandidate(input: GutMicrobiomeAssemblyInput): PublicationCandidate {
@@ -128,7 +128,7 @@ export function assembleGutMicrobiomeCandidate(input: GutMicrobiomeAssemblyInput
     const result = requireCoreResult({
       result: tableInput.result,
       taskId: input.taskId,
-      buildId: input.buildId,
+      requirementId: input.requirementId,
       operationKind: "integrate",
       outputKind: "integrated_table",
     });
@@ -154,7 +154,7 @@ export function assembleGutMicrobiomeCandidate(input: GutMicrobiomeAssemblyInput
   const candidateBody = {
     schema_version: "1.0" as const,
     task_id: input.taskId,
-    build_id: input.buildId,
+    requirement_id: input.requirementId,
     dataset_family: GUT_MICROBIOME_FAMILY_ID,
     row_granularity: GUT_MICROBIOME_ROW_GRANULARITY,
     tables: validated.map((item) => ({
@@ -165,7 +165,7 @@ export function assembleGutMicrobiomeCandidate(input: GutMicrobiomeAssemblyInput
     relations: [...gutMicrobiomeRelations],
     provenance_refs: validated.flatMap((item) => item.provenance),
     confidence_refs: validated.flatMap((item) => item.confidence),
-    audit_refs: resultRefs({ results: input.auditResults ?? [], taskId: input.taskId, buildId: input.buildId }),
+    audit_refs: resultRefs({ results: input.auditResults ?? [], taskId: input.taskId, requirementId: input.requirementId }),
     registered_asset_ids: assets,
   };
   return parsePublicationCandidate({

@@ -1,7 +1,6 @@
 /**
- * Build execution runtime — fixed skeleton plan, operation digests, build
- * state checkpointing and the deterministic executor semantics (migration
- * plan Phase 4 step 10).  Mirrors `backend/app/datasets/runtime/`.
+ * Dataset execution runtime: operation plans, digests, checkpoints, and the
+ * deterministic executor semantics.
  */
 
 export * from "./operations.js";

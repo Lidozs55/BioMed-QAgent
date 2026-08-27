@@ -33,17 +33,8 @@ export const TERMINAL_RUN_STATUSES = Object.freeze([
   "cancelled",
   "interrupted",
 ]);
-export const TERMINAL_BUILD_STATUSES = Object.freeze([
-  "succeeded",
-  "partial_success",
-  "no_data",
-  "spec_rejected",
-  "failed",
-  "cancelled",
-]);
 
 const TERMINAL_RUN_SET = new Set(TERMINAL_RUN_STATUSES);
-const TERMINAL_BUILD_SET = new Set(TERMINAL_BUILD_STATUSES);
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
 const SHA256 = /^[0-9a-f]{64}$/u;
 const DEFAULT_TIMEOUT_MS = 3_600_000;
@@ -428,25 +419,17 @@ export function classifyHIL(event) {
 }
 
 /** Terminal classifier used by both the supervisor and fixture tests. */
-export function classifyTerminal({ run, build, publication }) {
+export function classifyTerminal({ run, publication }) {
   const runStatus = run?.status ?? null;
-  const buildResult = run?.summary?.build_result ?? run?.build_result ?? build?.build_result ?? build?.terminal_result ?? build?.result ?? null;
-  const buildStatus = buildResult?.status ?? build?.status ?? null;
   const hasPublication = publication !== null && publication !== undefined;
-  if (runStatus === "completed" && buildStatus === "succeeded" && hasPublication) {
-    const buildPublicationId = buildResult?.publication_id;
-    const publicationId = publication?.publication_id;
-    if (typeof buildPublicationId === "string" && typeof publicationId === "string" && buildPublicationId !== publicationId) {
-      return { classification: "blocked_publication_mismatch", buildResult, publication };
-    }
-    return { classification: "succeeded_publication", buildResult, publication };
+  if (runStatus === "completed" && hasPublication) {
+    return { classification: "succeeded_publication", publication };
   }
-  if (runStatus === "completed" && buildStatus === "succeeded" && !hasPublication) return { classification: "blocked_no_publication", buildResult, publication: null };
-  if (runStatus === "completed" && buildStatus === null) return { classification: "blocked_no_build_result", buildResult: null, publication: publication ?? null };
-  if (TERMINAL_RUN_SET.has(runStatus) || TERMINAL_BUILD_SET.has(buildStatus)) {
-    return { classification: "failed_or_cancelled", status: runStatus ?? buildStatus, buildResult, publication: publication ?? null };
+  if (runStatus === "completed" && !hasPublication) return { classification: "blocked_no_publication", publication: null };
+  if (TERMINAL_RUN_SET.has(runStatus)) {
+    return { classification: "failed_or_cancelled", status: runStatus, publication: publication ?? null };
   }
-  return { classification: "nonterminal", status: runStatus ?? buildStatus, buildResult, publication: publication ?? null };
+  return { classification: "nonterminal", status: runStatus, publication: publication ?? null };
 }
 
 export function verifyArtifactBytes(bytes, receipt, label = receipt?.artifact_id ?? "artifact") {
@@ -518,55 +501,74 @@ function runFrom(snapshot, runId) {
   return snapshot.runs.find((run) => isRecord(run) && run.run_id === runId) ?? null;
 }
 
-function buildResultFrom(snapshot, run, buildDetail) {
-  return run?.summary?.build_result ?? run?.build_result ?? buildDetail?.build_result ?? buildDetail?.build?.terminal_result ?? buildDetail?.build?.build_result ?? buildDetail?.terminal_result ?? null;
+function currentPublicationIdFrom(snapshot) {
+  const value = isRecord(snapshot?.task) ? snapshot.task.current_publication_id : undefined;
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "string" || !SAFE_ID.test(value)) throw new SupervisorError("protocol", "current_publication_id is malformed");
+  return value;
 }
 
-function buildIdFrom(buildResult, buildDetail) {
-  return buildResult?.build_id ?? buildDetail?.build_id ?? buildDetail?.build?.build_id ?? null;
+/** Strict summary view; run binding (detail.run_id) is enforced by the caller. */
+function publicationSummaryOf(detail) {
+  if (
+    !isRecord(detail)
+    || typeof detail.publication_id !== "string"
+    || typeof detail.run_id !== "string"
+    || !isRecord(detail.publication)
+  ) throw new SupervisorError("protocol", "publication detail response is invalid");
+  return {
+    publication_id: detail.publication_id,
+    requirement_id: typeof detail.requirement_id === "string" ? detail.requirement_id : null,
+    manifest_ref: typeof detail.manifest_ref === "string" ? detail.manifest_ref : null,
+    manifest_sha256: typeof detail.publication.manifest_sha256 === "string" ? detail.publication.manifest_sha256 : null,
+    published_at: typeof detail.publication.published_at === "string" ? detail.publication.published_at : null,
+  };
 }
 
-function publicationFrom(snapshot, buildResult, buildDetail) {
-  if (isRecord(buildDetail?.publication)) return buildDetail.publication;
-  if (isRecord(buildDetail?.build?.publication)) return buildDetail.build.publication;
-  if (Array.isArray(snapshot?.publications) && typeof buildResult?.publication_id === "string") {
-    return snapshot.publications.find((item) => item?.publication_id === buildResult.publication_id) ?? null;
-  }
-  return null;
-}
-
-function artifactEntries(detail, listing) {
-  const manifestEntries = isRecord(detail?.manifest) && Array.isArray(detail.manifest.artifacts)
-    ? detail.manifest.artifacts
-    : isRecord(detail?.build?.spec) && Array.isArray(detail.build.spec.artifacts)
-      ? detail.build.spec.artifacts
-      : [];
-  if (!isRecord(listing) || !Array.isArray(listing.artifacts)) throw new SupervisorError("artifact", "artifact listing is invalid");
-  return listing.artifacts.map((item) => {
-    if (!isRecord(item) || typeof item.artifact_id !== "string" || !SAFE_ID.test(item.artifact_id) || typeof item.sha256 !== "string" || !SHA256.test(item.sha256)) throw new SupervisorError("artifact", "artifact receipt is invalid");
-    const size = item.size ?? item.size_bytes;
-    if (!Number.isInteger(size) || size < 0) throw new SupervisorError("artifact", "artifact size receipt is invalid");
-    const manifest = manifestEntries.find((candidate) => candidate?.artifact_id === item.artifact_id);
-    const relativePath = manifest?.relative_path ?? (item.artifact_id === "dataset_manifest" ? "dataset_manifest.json" : null);
-    if (item.artifact_id !== "dataset_manifest" && typeof relativePath !== "string") throw new SupervisorError("artifact", `artifact ${item.artifact_id} has no manifest relative_path`);
+function artifactReceipts(detail) {
+  const entries = Array.isArray(detail?.artifacts)
+    ? detail.artifacts
+    : isRecord(detail?.manifest) && Array.isArray(detail.manifest.artifacts)
+      ? detail.manifest.artifacts
+      : null;
+  if (!Array.isArray(entries)) throw new SupervisorError("artifact", "publication artifacts are missing");
+  return entries.map((item) => {
+    if (
+      !isRecord(item)
+      || typeof item.artifact_id !== "string"
+      || !SAFE_ID.test(item.artifact_id)
+      || typeof item.relative_path !== "string"
+      || item.relative_path === ""
+      || typeof item.sha256 !== "string"
+      || !SHA256.test(item.sha256)
+    ) throw new SupervisorError("artifact", "artifact receipt is invalid");
+    if (item.artifact_id === "dataset_manifest") throw new SupervisorError("artifact", "dataset_manifest must not appear in the published artifact entries");
+    if (!Number.isInteger(item.size_bytes) || item.size_bytes < 0) throw new SupervisorError("artifact", "artifact size receipt is invalid");
     return {
-      ...item,
-      size,
-      relative_path: relativePath,
-      role: manifest?.role ?? item.role ?? null,
+      artifact_id: item.artifact_id,
+      relative_path: item.relative_path,
+      role: typeof item.role === "string" ? item.role : null,
+      size: item.size_bytes,
+      sha256: item.sha256,
     };
   });
 }
 
-/** GET listing, download each file, and recalculate every file digest. */
+/** Download every published artifact plus the manifest and recompute all digests. */
 export async function verifyArtifacts(api, taskId, evidenceDir, detail = null) {
-  const listing = await api.request("GET", `/api/v1/tasks/${encodeURIComponent(taskId)}/artifacts`);
-  const entries = artifactEntries(detail, listing);
-  if (!entries.some((entry) => entry.artifact_id === "dataset_manifest")) throw new SupervisorError("artifact", "dataset_manifest is missing from artifact listing");
+  if (!isRecord(detail) || typeof detail.publication_id !== "string" || !SAFE_ID.test(detail.publication_id)) {
+    throw new SupervisorError("artifact", "publication identity for downloads is invalid");
+  }
+  const manifestSha = isRecord(detail.publication) && typeof detail.publication.manifest_sha256 === "string"
+    ? detail.publication.manifest_sha256
+    : null;
+  if (manifestSha === null || !SHA256.test(manifestSha)) throw new SupervisorError("artifact", "publication receipt has no valid manifest_sha256");
+  const base = `/api/v1/publications/${encodeURIComponent(detail.publication_id)}`;
+  const taskQuery = `?task_id=${encodeURIComponent(taskId)}`;
   const records = [];
   const packageEntries = [];
-  for (const entry of entries) {
-    const downloaded = await api.download(`/api/v1/tasks/${encodeURIComponent(taskId)}/artifacts/${encodeURIComponent(entry.artifact_id)}`);
+  for (const entry of artifactReceipts(detail)) {
+    const downloaded = await api.download(`${base}/artifacts/${encodeURIComponent(entry.artifact_id)}${taskQuery}`);
     const fileDigest = verifyArtifactBytes(downloaded.bytes, entry, entry.artifact_id);
     const record = {
       artifact_id: entry.artifact_id,
@@ -579,17 +581,33 @@ export async function verifyArtifacts(api, taskId, evidenceDir, detail = null) {
       file_digest_match: true,
     };
     records.push(record);
-    if (entry.artifact_id !== "dataset_manifest") packageEntries.push({ relative_path: entry.relative_path, sha256: entry.sha256 });
+    packageEntries.push({ relative_path: entry.relative_path, sha256: entry.sha256 });
     await appendJsonl(path.join(evidenceDir, "artifacts.jsonl"), record);
     await mkdir(path.join(evidenceDir, "artifacts"), { recursive: true });
     await writeFile(path.join(evidenceDir, "artifacts", entry.artifact_id), downloaded.bytes, { flag: "w" });
   }
+  const manifestDownloaded = await api.download(`${base}/artifacts/dataset_manifest${taskQuery}`);
+  const manifestFileDigest = digestManifestFile(manifestDownloaded.bytes);
+  if (manifestFileDigest !== manifestSha) {
+    throw new SupervisorError("artifact", "dataset_manifest digest mismatch", {
+      expected_sha256: manifestSha,
+      actual_sha256: manifestFileDigest,
+    });
+  }
+  await mkdir(path.join(evidenceDir, "artifacts"), { recursive: true });
+  await writeFile(path.join(evidenceDir, "artifacts", "dataset_manifest"), manifestDownloaded.bytes, { flag: "w" });
+  await appendJsonl(path.join(evidenceDir, "artifacts.jsonl"), {
+    artifact_id: "dataset_manifest",
+    expected_file_sha256: manifestSha,
+    actual_file_sha256: manifestFileDigest,
+    actual_size: manifestDownloaded.bytes.byteLength,
+    file_digest_match: true,
+  });
   const packageDigest = digestPackage(packageEntries);
-  const manifestRecord = records.find((record) => record.artifact_id === "dataset_manifest");
   return {
     artifacts: records,
     package_digest: packageDigest,
-    manifest_file_digest: manifestRecord?.actual_file_sha256 ?? null,
+    manifest_file_digest: manifestFileDigest,
   };
 }
 
@@ -865,26 +883,47 @@ export async function supervise(input, dependencies = {}) {
       continue;
     }
 
-    const buildResult = buildResultFrom(snapshot, run, null);
-    const buildId = buildIdFrom(buildResult, null);
-    const buildDetail = buildId === null
-      ? null
-      : await api.request("GET", `/api/v1/builds/${encodeURIComponent(buildId)}?task_id=${encodeURIComponent(options.taskId)}`);
-    const finalBuildResult = buildResultFrom(snapshot, run, buildDetail);
-    const finalBuildId = buildIdFrom(finalBuildResult, buildDetail);
-    const publication = publicationFrom(snapshot, finalBuildResult, buildDetail);
-    const observedFinalCommit = checkExpectedCommit(options.expectedCommit, buildDetail, buildDetail?.build, snapshot);
-    const terminal = classifyTerminal({ run: { ...run, summary: { ...(run.summary ?? {}), build_result: finalBuildResult } }, build: buildDetail, publication });
+    const currentPublicationId = currentPublicationIdFrom(snapshot);
+    let publicationDetail = null;
+    if (currentPublicationId !== null) {
+      publicationDetail = await api.request(
+        "GET",
+        `/api/v1/publications/${encodeURIComponent(currentPublicationId)}?task_id=${encodeURIComponent(options.taskId)}`,
+      );
+      publicationSummaryOf(publicationDetail);
+      if (publicationDetail.publication_id !== currentPublicationId) {
+        throw new SupervisorError("protocol", "publication detail does not match the task's current publication");
+      }
+    }
+    // A "current" publication produced by a later run is never claimable as
+    // this supervised run's outcome.
+    const boundPublication = publicationDetail !== null && publicationDetail.run_id === runId
+      ? publicationSummaryOf(publicationDetail)
+      : null;
+    let terminal;
+    if (publicationDetail !== null && boundPublication === null) {
+      terminal = {
+        classification: "blocked_publication_mismatch",
+        expected_run_id: runId,
+        actual_run_id: publicationDetail.run_id,
+        publication_id: publicationDetail.publication_id,
+        publication: null,
+      };
+    } else {
+      terminal = classifyTerminal({ run, publication: boundPublication });
+    }
+    const observedFinalCommit = checkExpectedCommit(options.expectedCommit, snapshot, publicationDetail);
     if (terminal.classification !== "succeeded_publication") {
       await atomicWrite(path.join(options.evidenceDir, "closure.json"), `${JSON.stringify(redacted({ schema_version: "1.0", case_label: options.caseLabel, task_id: options.taskId, run_id: runId, expected_commit: options.expectedCommit ?? null, observed_commit: observedFinalCommit ?? healthCommit, health, terminal }), null, 2)}\n`);
       throw errorForTerminal(terminal);
     }
-    if (finalBuildId === null) throw new SupervisorError("artifact", "successful build has no build id");
-    const verified = await verifyArtifacts(api, options.taskId, options.evidenceDir, buildDetail);
-    const expectedPackageDigest = typeof buildDetail?.manifest?.sha256 === "string"
-      ? buildDetail.manifest.sha256
-      : typeof buildDetail?.build?.manifest?.sha256 === "string" ? buildDetail.build.manifest.sha256 : null;
-    if (expectedPackageDigest === null || verified.package_digest !== expectedPackageDigest) throw new SupervisorError("artifact", "package digest mismatch");
+    const verified = await verifyArtifacts(api, options.taskId, options.evidenceDir, publicationDetail);
+    if (
+      !isRecord(publicationDetail.manifest)
+      || typeof publicationDetail.manifest.sha256 !== "string"
+      || !SHA256.test(publicationDetail.manifest.sha256)
+    ) throw new SupervisorError("artifact", "publication manifest has no valid package sha256");
+    if (verified.package_digest !== publicationDetail.manifest.sha256) throw new SupervisorError("artifact", "package digest mismatch");
     const closure = {
       schema_version: "1.0",
       case_label: options.caseLabel,
@@ -894,8 +933,8 @@ export async function supervise(input, dependencies = {}) {
       run_id: runId,
       health: redacted(health),
       terminal: redacted(terminal),
-      build: redacted(buildDetail),
-      publication: redacted(publication),
+      publication: redacted(boundPublication),
+      publication_detail: redacted(publicationDetail),
       package_digest: verified.package_digest,
       manifest_file_digest: verified.manifest_file_digest,
       artifacts: verified.artifacts,

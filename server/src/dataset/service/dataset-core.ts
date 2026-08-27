@@ -13,16 +13,15 @@ import { readdir, stat } from "node:fs/promises";
 import { performance } from "node:perf_hooks";
 import path from "node:path";
 
-import { BuildError } from "../adapters/errors.js";
+import { ExecutionError } from "../adapters/errors.js";
 import { sha256FileStreamWithSize } from "../adapters/hashing.js";
 import { OperationAbortedError, throwIfAborted } from "../cooperative.js";
 
 import {
   DATASET_BRIDGE_VERSION,
-  type BuildResult,
   type CoreAcquisitionRequest,
   type DatasetBridgeResponse,
-  type DatasetBuildSpec,
+  type DatasetExecutionSpec,
   type ProviderRevisionEvidenceV1,
   type RegisteredSourceAssetRole,
   type SourceAssetRegistrationReceipt,
@@ -37,7 +36,7 @@ import { createDefaultDatasetFamilyRegistry } from "../families/index.js";
 import { providerCarrierBinding } from "../runtime/provider-bindings.js";
 import { SourceAssetRegistry } from "../../runtime/source-assets/registry.js";
 import type { SpecValidationResult } from "../validation/index.js";
-import type { BuildRecord, TypeScriptDatasetCore } from "./ts-core.js";
+import type { ExecutionRecord, TypeScriptDatasetCore } from "./ts-core.js";
 
 export interface DatasetCoreIdentity {
   taskId: string;
@@ -47,14 +46,14 @@ export interface DatasetCoreIdentity {
   signal?: AbortSignal;
 }
 
-export interface ValidateDatasetBuildInput extends DatasetCoreIdentity {
-  spec: DatasetBuildSpec;
+export interface ValidateDatasetExecutionInput extends DatasetCoreIdentity {
+  spec: DatasetExecutionSpec;
   /** Optional until an authoritative revision-scoped schema path is activated. */
   providerRevisionEvidence?: readonly ProviderRevisionEvidenceV1[];
 }
 
-export interface ExecuteDatasetBuildInput extends DatasetCoreIdentity {
-  spec: DatasetBuildSpec;
+export interface ExecuteDatasetExecutionInput extends DatasetCoreIdentity {
+  spec: DatasetExecutionSpec;
   sourceFiles: Record<string, string>;
   mappingFiles: Record<string, string>;
   metadataFiles?: Record<string, string>;
@@ -67,7 +66,7 @@ export interface DatasetCoreCancelInput {
   runId: string;
   piSessionId: string;
   toolCallId: string;
-  buildId: string;
+  requirementId: string;
 }
 
 export interface DatasetCoreAcquireInput extends DatasetCoreIdentity {
@@ -75,13 +74,13 @@ export interface DatasetCoreAcquireInput extends DatasetCoreIdentity {
 }
 
 export interface DatasetCoreService {
-  validate(input: ValidateDatasetBuildInput): Promise<DatasetBridgeResponse>;
+  validate(input: ValidateDatasetExecutionInput): Promise<DatasetBridgeResponse>;
   acquire(input: DatasetCoreAcquireInput): Promise<CoreAcquisitionResult>;
-  execute(input: ExecuteDatasetBuildInput): Promise<DatasetBridgeResponse>;
+  execute(input: ExecuteDatasetExecutionInput): Promise<DatasetBridgeResponse>;
   cancel(input: DatasetCoreCancelInput): Promise<void>;
 }
 
-export type { BuildRecord };
+export type { ExecutionRecord };
 
 function mediaTypeFor(filename: string): string {
   const ext = path.extname(filename).toLowerCase();
@@ -132,7 +131,7 @@ export async function resolveReferencedAsset(
   const { sha256, bytes } = await sha256FileStreamWithSize(full, signal);
   const hashMs = Math.max(0, performance.now() - started);
   if (bytes !== info.size) {
-    throw new BuildError(
+    throw new ExecutionError(
       `source asset changed while hashing (TOCTOU guard): stat size ${info.size} != read ${bytes} bytes for '${reference}'`,
     );
   }
@@ -166,11 +165,11 @@ async function uniqueAssetFile(taskRoot: string, assetId: string, signal?: Abort
   const assetRoot = path.resolve(taskRoot, "source_assets", assetId);
   const sourceRoot = path.resolve(taskRoot, "source_assets");
   if (!assetRoot.startsWith(`${sourceRoot}${path.sep}`)) {
-    throw new BuildError(`registered asset '${assetId}' escaped source_assets`);
+    throw new ExecutionError(`registered asset '${assetId}' escaped source_assets`);
   }
   const rootInfo = await stat(assetRoot).catch(() => null);
   if (rootInfo === null || !rootInfo.isDirectory()) {
-    throw new BuildError(`registered asset '${assetId}' directory is missing`);
+    throw new ExecutionError(`registered asset '${assetId}' directory is missing`);
   }
   const files: string[] = [];
   const visit = async (directory: string): Promise<void> => {
@@ -179,23 +178,23 @@ async function uniqueAssetFile(taskRoot: string, assetId: string, signal?: Abort
       throwIfAborted(signal);
       const candidate = path.join(directory, entry.name);
       if (entry.isSymbolicLink()) {
-        throw new BuildError(`registered asset '${assetId}' contains a symbolic link`);
+        throw new ExecutionError(`registered asset '${assetId}' contains a symbolic link`);
       }
       if (entry.isDirectory()) {
         await visit(candidate);
       } else if (entry.isFile()) {
         files.push(candidate);
       } else {
-        throw new BuildError(`registered asset '${assetId}' contains a non-file entry`);
+        throw new ExecutionError(`registered asset '${assetId}' contains a non-file entry`);
       }
       if (files.length > 1) {
-        throw new BuildError(`registered asset '${assetId}' must contain exactly one file`);
+        throw new ExecutionError(`registered asset '${assetId}' must contain exactly one file`);
       }
     }
   };
   await visit(assetRoot);
   const file = files[0];
-  if (file === undefined) throw new BuildError(`registered asset '${assetId}' contains no file`);
+  if (file === undefined) throw new ExecutionError(`registered asset '${assetId}' contains no file`);
   return path.relative(taskRoot, file).split(path.sep).join("/");
 }
 
@@ -221,7 +220,7 @@ interface VerifiedRegisteredAsset {
   receipt: SourceAssetRegistrationReceipt;
 }
 
-class ProviderRevisionEvidenceError extends BuildError {}
+class ProviderRevisionEvidenceError extends ExecutionError {}
 
 async function verifyRegisteredAssetStream(
   registry: SourceAssetRegistry,
@@ -232,7 +231,7 @@ async function verifyRegisteredAssetStream(
   throwIfAborted(signal);
   const resolved = await registry.resolveRole(assetId, role);
   if (resolved.registration_receipt.asset_ref.asset_id !== assetId) {
-    throw new BuildError(`registered asset receipt does not match '${assetId}'`);
+    throw new ExecutionError(`registered asset receipt does not match '${assetId}'`);
   }
   for await (const chunk of resolved.content) {
     void chunk;
@@ -333,46 +332,6 @@ function validationEnvelope(
   };
 }
 
-function buildResultFrom(record: BuildRecord): BuildResult {
-  const manifest = record.manifest;
-  const status: BuildResult["status"] = record.rejected_sources.length > 0
-    ? "partial_success"
-    : "succeeded";
-  return {
-    status,
-    valid_row_count: manifest?.row_count ?? 0,
-    successful_sources: manifest === null ? [] : Object.keys(manifest.source_summary),
-    rejected_sources: record.rejected_sources,
-    available_artifact_roles: manifest === null
-      ? []
-      : [...new Set(manifest.artifacts.map((entry) => entry.role))],
-    publication_id: record.publication_id,
-    reason_codes: [],
-    user_summary: record.rejected_sources.length > 0
-      ? `Dataset build completed with ${record.rejected_sources.length} rejected source(s).`
-      : "Dataset build completed and published.",
-    recommended_next_action: record.rejected_sources.length > 0
-      ? "review rejected source bindings"
-      : "none",
-    build_id: record.build_id,
-  };
-}
-
-function noDataResultFrom(record: BuildRecord): BuildResult {
-  return {
-    status: "no_data",
-    valid_row_count: 0,
-    successful_sources: [],
-    rejected_sources: record.rejected_sources,
-    available_artifact_roles: [],
-    publication_id: null,
-    reason_codes: ["no_primary_data"],
-    user_summary: "Every source binding was rejected; no data could be built.",
-    recommended_next_action: "review the rejected bindings and retry with valid sources",
-    build_id: record.build_id,
-  };
-}
-
 /** The opt-in TypeScript Deterministic Core behind the frozen bridge shape. */
 export class TsDatasetCoreAdapter implements DatasetCoreService {
   private readonly taskRoot: string;
@@ -391,7 +350,7 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
     this.acquisition = options.acquisition ?? null;
   }
 
-  async validate(input: ValidateDatasetBuildInput): Promise<DatasetBridgeResponse> {
+  async validate(input: ValidateDatasetExecutionInput): Promise<DatasetBridgeResponse> {
     if (input.taskId !== this.core.taskId) {
       return invalidInputEnvelope("dataset build task identity does not match the Core task", ["taskId"]);
     }
@@ -401,12 +360,12 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
         input.taskId,
         new SourceAssetRegistry(input.taskId, this.taskRoot),
       );
-      const result = await this.core.validateDatasetBuildSpec(input.spec, {
+      const result = await this.core.validateDatasetExecutionSpec(input.spec, {
         providerRevisionEvidence,
       });
       return validationEnvelope(newRequestId(), result);
     } catch (error) {
-      if (error instanceof BuildError || error instanceof TypeError) {
+      if (error instanceof ExecutionError || error instanceof TypeError) {
         return invalidInputEnvelope(
           error instanceof Error ? error.message : String(error),
           ["providerRevisionEvidence"],
@@ -445,7 +404,7 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
             role: registeredAssetRole,
           });
           if (receipt.asset_ref.asset_id !== reference || receipt.relative_path !== relativePath) {
-            throw new BuildError(`registered asset receipt does not match '${reference}'`);
+            throw new ExecutionError(`registered asset receipt does not match '${reference}'`);
           }
           const verified = await verifyRegisteredAssetStream(
             registry,
@@ -466,8 +425,8 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
             sha256: verified.asset.sha256,
           });
         } catch (error) {
-          if (error instanceof OperationAbortedError || error instanceof BuildError) throw error;
-          throw new BuildError(
+          if (error instanceof OperationAbortedError || error instanceof ExecutionError) throw error;
+          throw new ExecutionError(
             `registered asset '${reference}' was rejected: ${error instanceof Error ? error.message : String(error)}`,
           );
         }
@@ -502,13 +461,13 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
     }
   }
 
-  async execute(input: ExecuteDatasetBuildInput): Promise<DatasetBridgeResponse> {
+  async execute(input: ExecuteDatasetExecutionInput): Promise<DatasetBridgeResponse> {
     if (input.taskId !== this.core.taskId) {
       return invalidInputEnvelope("dataset build task identity does not match the Core task", ["taskId"]);
     }
     // Spec-level validation first: reject invalid input before any file read
     // or hash (TASK-047-A1: invalid spec = zero file reads).
-    const validation = await this.core.validateDatasetBuildSpec(input.spec, {
+    const validation = await this.core.validateDatasetExecutionSpec(input.spec, {
       providerRevisionEvidence: input.providerRevisionEvidence === undefined
         ? null
         : input.providerRevisionEvidence,
@@ -580,7 +539,7 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
       const registeredIdsForCore = family.runtime_id === "registered_multitable.runtime.v1"
         ? registeredSourceAssetIds
         : undefined;
-      const record = await this.core.executeDatasetBuild(input.spec, {
+      const record = await this.core.executeDatasetExecution(input.spec, {
         runId: input.runId,
         sourceAssets,
         registeredSourceAssetIds: registeredIdsForCore,
@@ -620,7 +579,7 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
           },
         };
       }
-      if (error instanceof BuildError) {
+      if (error instanceof ExecutionError) {
         return {
           version: DATASET_BRIDGE_VERSION,
           request_id: newRequestId(),
@@ -639,43 +598,66 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
   }
 
   private buildExecutionEnvelope(
-    record: BuildRecord,
+    record: ExecutionRecord,
     registeredSourceAssetIds: ReadonlySet<string>,
   ): DatasetBridgeResponse {
     if (record.status !== "completed") {
-      const allRejected = record.rejected_sources.length > 0;
+      const noPrimaryData = record.rejected_sources.length > 0;
       return {
         version: DATASET_BRIDGE_VERSION,
         request_id: newRequestId(),
         ok: false,
         data: null,
         error: {
-          code: record.status === "cancelled" ? "cancelled" : "core_execution_error",
+          code: record.status === "cancelled"
+            ? "cancelled"
+            : noPrimaryData
+              ? "no_data"
+              : "core_execution_error",
           message: record.error ?? "Dataset Core execution failed",
           retryable: record.status !== "cancelled",
-          details: allRejected
-            ? { build_result: noDataResultFrom(record) }
-            : {},
+          details: noPrimaryData
+            ? {
+                requirement_id: record.requirement_id,
+                reason_codes: ["no_primary_data", ...record.rejected_sources],
+              }
+            : { requirement_id: record.requirement_id },
         },
       };
     }
     const manifest = record.manifest;
+    if (manifest === null || record.publication == null || record.publication_id === null) {
+      return {
+        version: DATASET_BRIDGE_VERSION,
+        request_id: newRequestId(),
+        ok: false,
+        data: null,
+        error: {
+          code: "no_data",
+          message: "Dataset execution produced no publishable primary dataset",
+          retryable: false,
+          details: {
+            requirement_id: record.requirement_id,
+            reason_codes: ["no_primary_data", ...record.rejected_sources],
+          },
+        },
+      };
+    }
     return {
       version: DATASET_BRIDGE_VERSION,
       request_id: newRequestId(),
       ok: true,
       data: {
-        build_id: record.build_id,
-        build_result: buildResultFrom(record),
+        requirement_id: record.requirement_id,
         publication_id: record.publication_id,
-        publication: record.publication ?? null,
-        manifest: manifest === null ? null : {
-          build_id: manifest.build_id,
+        publication: record.publication,
+        manifest: {
+          requirement_id: manifest.requirement_id,
           manifest_id: manifest.manifest_id,
           sha256: manifest.sha256,
         },
-        artifacts: manifest === null ? [] : manifest.artifacts.map((entry) => ({
-          build_id: manifest.build_id,
+        artifacts: manifest.artifacts.map((entry) => ({
+          requirement_id: manifest.requirement_id,
           artifact_id: entry.artifact_id,
           name: path.posix.basename(entry.relative_path),
           role: entry.role,
@@ -697,7 +679,7 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
   }
 
   async cancel(input: DatasetCoreCancelInput): Promise<void> {
-    this.core.cancelDatasetBuild(input.buildId);
+    this.core.cancelDatasetExecution(input.requirementId);
   }
 }
 
@@ -710,4 +692,4 @@ export function createDatasetCoreService(options: {
   return new TsDatasetCoreAdapter(options.tsCore, options);
 }
 
-export type { DatasetBuildSpec };
+export type { DatasetExecutionSpec };

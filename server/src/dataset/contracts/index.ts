@@ -5,6 +5,7 @@
  */
 
 export * from "./primitives.js";
+export type { ArtifactRole } from "@biomed/contracts";
 export * from "./enums.js";
 export * from "./schema.js";
 export * from "./source.js";
@@ -15,7 +16,6 @@ export * from "./acquisition.js";
 export * from "./data.js";
 export * from "./validation.js";
 export * from "./profiles.js";
-export * from "./result.js";
 export * from "./manifest.js";
 export * from "./multitable.js";
 export * from "./publication-candidate.js";

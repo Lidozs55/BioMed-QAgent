@@ -109,7 +109,7 @@ export class DeterministicDeriveRegistry {
           schema_version: "1.0",
           result_id: resultId(request.request_identity_digest, outputDigest),
           task_id: request.task_id,
-          build_id: request.build_id,
+          requirement_id: request.requirement_id,
           slot: "derive",
           request_id: request.request_id,
           request_identity_digest: request.request_identity_digest,
@@ -118,7 +118,7 @@ export class DeterministicDeriveRegistry {
           output_digest: outputDigest,
           output_summary: outputSummary,
           provenance,
-        }, request.task_id, request.build_id);
+        }, request.task_id, request.requirement_id);
       },
     });
   }

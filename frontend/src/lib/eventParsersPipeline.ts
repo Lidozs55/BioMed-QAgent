@@ -1,6 +1,5 @@
 import { APIError } from "@/api/errors";
 import {
-  parseBuildResult,
   parseHILDecision,
   parseHILRequest,
 } from "@biomed/contracts";
@@ -180,14 +179,9 @@ export function parsePipelineEventPayload(payloadObj: Record<string, unknown>, p
         failed_count: assertNonNegativeInt(Reflect.get(valObj, "failed_count"), path + ".validation.failed_count"),
         report_path: assertString(Reflect.get(valObj, "report_path"), path + ".validation.report_path"),
       };
-      const rawBuildResult = Reflect.get(payloadObj, "build_result");
       return {
         type: "task_completed",
         validation,
-        build_result:
-          rawBuildResult === undefined || rawBuildResult === null
-            ? null
-            : parseBuildResult(rawBuildResult, path + ".build_result"),
       };
     }
     case "task_failed": {

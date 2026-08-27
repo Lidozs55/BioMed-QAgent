@@ -22,7 +22,8 @@
 - **直接工具实现**：业务工具在 `server/src/agent/tools/`（PubMed/NCBI、GEO、
   GDC/Xena、GWAS Catalog、ChEMBL/UniProt/PDB/PubChem/Reactome、浏览器与网页截图、PDF/VLM、
   统计绘图、local cache 等），经 `createBusinessToolBundle` 注册进 Pi Session。
-  生产首轮只激活 Dataset Core 构建工具和 `activate_agent_tools` 入口；其他工具
+  生产首轮只激活只读 `inspect_dataset_execution_routes`、Dataset Core 执行工具和
+  `activate_agent_tools` 入口；其他工具
   通过入口按需激活，并在同一 Session 内累计保留，避免把完整 JSON Schema 一次性
   发送给模型或让后续激活意外移除已用工具。工具仍受同一权限、Core 和发布门禁约束，
   激活不改变能力边界。首轮 system context 同时注入当前 Session 完整但有界的
@@ -33,10 +34,11 @@
 - **GWAS Catalog 路由**：`lookup_gwas_catalog` 通过官方 EMBL-EBI HAL API 将 PMID
   解析为 GCST study，或按 GCST/rsID 返回有界 association 证据；缺失的总数和字段
   保持 `null`。该工具只负责 discovery，正式 Dynamic Family 输入仍由 Core provider
-  `gwas-catalog.associations.v1` 重新获取。该 provider 出现在 Dynamic Family 工具的
-  `acquisition_requests` schema 中即表示 dynamic acquisition 已接线；GWAS Catalog
-  不在 static family/schema 枚举中不表示该 provider 不可用，也不要求先新增 static
-  GWAS family。
+  `gwas-catalog.associations.v1` 重新获取。`inspect_dataset_execution_routes` 从生产 static
+  Registry 和统一 provider catalog 实时投影 route facts：该 provider 属于可直接绑定的
+  dynamic input；GWAS Catalog 不在 static family/schema 枚举中不表示 provider 不可用，
+  也不要求先新增 static GWAS family。该事实只证明 acquisition/输入解码已接线，不证明
+  FamilySpec、Projection、transform、源站可达性或 publication 已闭环。
 - **四个类别**：discovery / acquisition / processing / analysis。
 - 不变式不变：download 记录 `DownloadAttempt`，成功校验后才返回
   `SourceAsset`；processing 只接受成功的本地 `SourceAsset` 或受控
@@ -48,8 +50,12 @@
 Main Agent 直接持有全部业务工具（`search_pubmed`、`search_geo`、
 `describe_geo`、`download_geo`、…），加上：
 
-- `validate_dataset_build_spec` / `execute_dataset_build`：校验并提交自包含
-  `DatasetBuildSpec`（唯一正式产物入口）。`execute_dataset_build` 的
+- `inspect_dataset_execution_routes`：无参数、无网络、无持久状态的 capability view；
+  从 production static family Registry 与 Core provider catalog 生成 exact static matches、
+  Dynamic Family 可直接绑定输入，以及仍需 provenance-bound extraction 的 acquisition-only
+  carrier。它不解释 topic，也不验证或发布 requirement；
+- `validate_dataset_execution` / `execute_dataset_execution`：校验并提交自包含
+  `DatasetExecutionSpec`（静态 family 的正式执行入口）。`execute_dataset_execution` 的
   `source_files`、`mapping_files`、`metadata_files` 都按 binding_id 映射；source
   缺失时由 registered Core acquisition 补齐，mapping/metadata 缺失表示该
   adapter 不需要额外载体。Host 在 acquisition 前拒绝未知 binding key；
@@ -63,37 +69,48 @@ Main Agent 直接持有全部业务工具（`search_pubmed`、`search_geo`、
 优先使用这些来源，但也可以探索公开、免登录且不需要私密凭据的其他来源。登录、
 CAPTCHA、付费、凭据和服务条款边界仍必须进入 HIL。
 
-Agent 只负责形成 `DatasetBuildSpec` 和必要的来源证据；不能写入发布阈值、不能把
+Agent 只负责形成 `DatasetExecutionSpec` 和必要的来源证据；不能写入发布阈值、不能把
 Agent-only 数据源或子 Agent 的自然语言结果作为正式数据，也不能绕过 Spec
 Validator、Compatibility Gate、Validation Profile 或 Publisher。Agent-facing 工具必须
 保留确定性内核返回的失败语义：进程非零退出是失败，Dataset Core 的 `retryable`
 不得在工具适配层丢失；相同输入只能在明确可重试且外部条件可能已变化时重试。
 Agent 对自身工作记录也必须 evidence-bound：只能按当前 Run 的 tool result/event 声明
-调用、验证、覆盖率、BuildResult、Publication 和完成状态；抽样成功不能写成全量验证，
+调用、验证、覆盖率、OperationResult、ProductAssessment、Publication 和完成状态；抽样成功不能写成全量验证，
 计划、workspace 文件或 intended next step 不能写成已完成动作。主 Prompt 将规则组织为
 显式 dataset completion contract：是否属于 dataset-producing task 由“查找、整合或输出
 数据产品”的任务语义决定，不由 CSV/表格/原始溯源等输出格式决定；每个请求的语义
-产品都必须有当前 Run 的 BuildResult 和 immutable Publication 才能声明正式完成。缺少
+产品都必须有当前 Run/requirement 的可发布 ProductAssessment 和 immutable Publication 才能声明正式完成。缺少
 Core provider/formal carrier 时不得在首次受阻后立即降级；应先尝试适用的 static/dynamic
 Core 路径、纠正输入、仅重试可重试失败并寻找独立真实来源。合理路径耗尽后可交付明确
 标注为 provisional/staging 的 workspace CSV，但必须同步报告 blocked/NO_DATA、缺失来源或
 覆盖范围，并请求完成正式 publication 所需的具体帮助；不得称其为已验证、已发布、正式
-完成或 Dataset Core Publication。该 Prompt 约束是模型侧局部缓解，不替代 runtime 对
-`run_completed(build_result=null)` 的终态门禁。
+完成或 Dataset Core Publication。该 Prompt 约束是模型侧局部缓解，只约束正式产物
+声明；它不构成 `run_completed(build_result=null)` 的终态门禁。
+Run 完成不要求一定产生 Publication；非数据汇报可以只由 RunSummary 完成。数据产品是否正式完成由
+ProductAssessment 与 Publication 证明，而不是由独立中间生命周期门禁证明。
 工具返回给模型的 `content` 必须是有界且合法的结构化摘要；完整内核响应保留在
 `details`/durable evidence 中，不能通过字符切片破坏 JSON 或丢失 publication 状态。
+
+每次 LLM 调用前，Pi 的 `context` hook 会追加一个不可见、非持久的 Run progress
+custom message。该状态块固定四行且不超过 520 字符，只投影当前 Run 的工作阶段、
+工具成功/失败/进行中计数、最近工具结果、当前 OperationResult/ProductAssessment/Publication，以及一条
+failure-aware 后续动作。工具结果只记录名称与状态，不复制参数、返回正文或敏感内容；
+新 Run 启动时计数清零，compaction continuation 不清零。状态块仅提供注意力提示，
+不写 durable event，不改变 reducer，也不阻止或生成 `run_completed`。
 业务工具的共享失败形状为 `{ error, code, retryable, status_code? }`；只有底层错误
 明确携带 `retryable` 时才允许透传 true，普通参数/解析异常默认不可重试。
 权限或 evidence-bound HIL 挂起的可信调用必须等待原调用恢复，不能以 workspace
 脚本产物替代。
 
-Static 与 Dynamic 工具是互斥的两条规格入口，不是串行探测步骤：只有 family、schema、
-source 和 topology 均在 `validate_dataset_build` schema 中时才走 static
-`validate -> execute`；否则直接走 dynamic `prepare -> submit`。Static validator 的
-拒绝或枚举缺项只描述 static registry，不能用于判断 dynamic provider 是否接线。
-Dynamic 工具 `acquisition_requests` 的 provider 枚举直接派生自
-`provider-catalog.ts`，是该路径的权威 capability view，并由 handler/descriptor 闭包测试
-防止“schema 声称可用但 runtime 未接线”。
+Static 与 Dynamic 工具是互斥的两条规格入口，不是串行探测步骤。dataset-producing
+请求先调用 `inspect_dataset_execution_routes`：只有 family、schema、source 和 topology 有
+exact static match 时才走 `validate -> execute`；否则仅在各输入被列为 dynamic-bindable
+或已有 task-owned Core asset 时走 `prepare -> submit`。Static validator 的拒绝或枚举缺项
+只描述 static registry，不能用于判断 dynamic provider 是否接线。Dynamic 工具的
+`acquisition_requests` schema 仍是具体提交的执行契约，但 route capability view 来自同一
+`provider-catalog.ts`；handler/descriptor、route view/schema 均通过派生/闭包测试防止漂移。
+binary archive 即使已有 Core acquisition handler，也会显示为 acquisition-only，不能误报为
+Dynamic transform 已可直接消费。
 
 ### 16.3 用户扩展（声明式数据库）
 
@@ -135,12 +152,12 @@ DRAFT
 VERIFIED
   -> 受限试用或 HIL 确认
 PROMOTED
-  -> 生产 DatasetBuild 可发现和执行
+  -> 生产 requirement 可发现和执行
 REJECTED
   -> 永不执行
 ```
 
-生产 Build 只自动发现 `PROMOTED` Recipe；`VERIFIED` 只能在明确受限试用或 HIL
+生产执行只自动发现 `PROMOTED` Recipe；`VERIFIED` 只能在明确受限试用或 HIL
 确认后引用。消费链为：
 
 ```text
@@ -153,7 +170,7 @@ WorkflowRecipe（PROMOTED）
 Validation Profile、决定发布，或包含 Python / JavaScript / Shell 等任意代码字段。
 
 **Agent ↔ Dataset Runtime 边界**：Main Agent 使用子 Agent 的结构化结果形成
-`DatasetBuildSpec.source_bindings`。正式获取必须由内置 Acquisition Provider 或
+`DatasetExecutionSpec.source_bindings`。正式获取必须由内置 Acquisition Provider 或
 受控 WorkflowRecipe 完成；SourceResearchAgent 的资产若要进入正式流程，仍需经过
 SourceBinding、SourceAsset 校验和 Adapter 能力检查。正式 DatasetPublication 只
 能由 Validation Gate 和 Publisher 产生，子 Agent 完成事件、自然语言结果或
@@ -313,7 +330,7 @@ Agent 任务处于 `running` / `finalizing` 时，顶部任务状态条常驻"�
 ### 17.3 结果展示
 
 `ResultsViewer.tsx` 动态读取 CSV 头与行（`Papa.parse`，预览前 100 行），
-**不硬编码 22 列 Schema**；`BuildResultsViewer` 读取 `BuildResult` 与
+**不硬编码 22 列 Schema**；`PublicationResultsViewer` 读取 Publication 与
 `dataset_manifest.json`（含 `dataset_family`），识别主数据与辅助表并按数据族
 选择结果 Tab 与列渲染策略。界面必须显式展示 family、row granularity、有效行数、
 来源覆盖、Validation 状态、confidence 分布、provenance 覆盖率，以及

@@ -29,7 +29,7 @@ export interface DynamicFamilyPreflightAcquisitionPlanEntry {
 export interface DynamicFamilyPreflightReceipt {
   schema_version: "1.0";
   task_id: string;
-  build_id: string;
+  requirement_id: string;
   generation: number;
   family_spec_digest: string;
   projection_digest: string;
@@ -43,7 +43,7 @@ export interface DynamicFamilyPreflightReceipt {
 }
 
 const RECEIPT_KEYS = new Set([
-  "schema_version", "task_id", "build_id", "generation", "family_spec_digest",
+  "schema_version", "task_id", "requirement_id", "generation", "family_spec_digest",
   "projection_digest", "host_descriptor_digest", "submission_digest",
   "required_input_roles", "output_closure", "topology_diagnostics", "acquisition_plan", "receipt_digest",
 ]);
@@ -159,7 +159,7 @@ export function parseDynamicFamilyPreflightReceipt(
   return {
     schema_version: "1.0",
     task_id: safeId(object.task_id, `${path}.task_id`),
-    build_id: safeId(object.build_id, `${path}.build_id`),
+    requirement_id: safeId(object.requirement_id, `${path}.requirement_id`),
     generation: assertNonNegativeInt(object.generation, `${path}.generation`),
     family_spec_digest: assertHex64(object.family_spec_digest, `${path}.family_spec_digest`),
     projection_digest: assertHex64(object.projection_digest, `${path}.projection_digest`),
@@ -180,7 +180,7 @@ export function dynamicFamilyPreflightReceiptDigestBody(
   return {
     schema_version: parsed.schema_version,
     task_id: parsed.task_id,
-    build_id: parsed.build_id,
+    requirement_id: parsed.requirement_id,
     generation: parsed.generation,
     family_spec_digest: parsed.family_spec_digest,
     projection_digest: parsed.projection_digest,

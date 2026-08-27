@@ -11,10 +11,7 @@ import biomedLogoV2 from "../../../assets/logo/Logo-title.svg";
 
 import { TaskStatusIcon } from "@/components/taskStatus";
 import { TASK_STATUS_META } from "@/components/taskStatusMeta";
-import {
-  latestBuildStatus,
-  taskOutcome,
-} from "@/components/taskOutcome";
+import { taskOutcome } from "@/components/taskOutcome";
 import {
   Alert,
   AlertDescription,
@@ -83,7 +80,6 @@ function TaskRow({
   const { summary } = task;
   const status = TASK_STATUS_META[summary.status];
   const active = isActiveStatus(summary.status);
-  const buildStatus = latestBuildStatus(task);
   const outcome = taskOutcome(task);
   const statusIconClass = active
     ? "text-primary"
@@ -109,7 +105,6 @@ function TaskRow({
       >
         <TaskStatusIcon
           status={summary.status}
-          buildStatus={buildStatus ?? undefined}
           className={statusIconClass}
         />
         <span className="min-w-0 flex-1 truncate" title={summary.title}>

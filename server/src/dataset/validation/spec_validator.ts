@@ -1,13 +1,13 @@
 /**
- * Spec Validator for DatasetBuildSpec (ARCHITECTURE §3.1; Design §9.2; Python
+ * Spec Validator for DatasetExecutionSpec (ARCHITECTURE §3.1; Design §9.2; Python
  * ``backend/app/datasets/spec_validator.py``).
  *
  * Pure function module. A rejected spec yields structured reason codes
- * consumed later by ``BuildResult.SPEC_REJECTED``.
+ * returned as a typed ``spec_rejected`` bridge error.
  */
 
 import { parseAdapterParams } from "../contracts/index.js";
-import type { DatasetBuildSpec } from "../contracts/index.js";
+import type { DatasetExecutionSpec } from "../contracts/index.js";
 import { getNormalizationProfile } from "../canonicalizer/index.js";
 import type { DatasetFamilyRegistry } from "../families/index.js";
 import { getValidationProfile } from "./profile.js";
@@ -105,7 +105,7 @@ function familyDefinitionFor(
 }
 
 function validateLegacyAdapterParameters(
-  binding: DatasetBuildSpec["source_bindings"][number],
+  binding: DatasetExecutionSpec["source_bindings"][number],
   normalizationProfile: ReturnType<typeof resolveNormalizationProfile>,
   codes: string[],
   reasons: string[],
@@ -190,7 +190,7 @@ export class SpecValidator {
     this.familyRegistry = familyRegistry;
   }
 
-  validate(spec: DatasetBuildSpec): SpecValidationResult {
+  validate(spec: DatasetExecutionSpec): SpecValidationResult {
     const codes: string[] = [];
     const reasons: string[] = [];
     const familyDefinition = familyDefinitionFor(

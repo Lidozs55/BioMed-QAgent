@@ -1,15 +1,14 @@
 import { createHash } from "node:crypto";
 
 import type {
-  BuildResult,
   CoreAcquisitionRequest,
   DatasetBridgeResponse,
-  DatasetBridgeBuildData,
-  DatasetBuildSpec,
+  DatasetBridgePublicationData,
+  DatasetExecutionSpec,
 } from "@biomed/contracts";
 import { parseJsonTextStrict } from "@biomed/contracts";
 
-import { saveBuildContinuation } from "../../runtime/build-continuation.js";
+import { saveExecutionContinuation } from "../../runtime/execution-continuation.js";
 import { fixedBiomedicalAcquisitionParameters } from "../../dataset/acquisition/biomedical-providers.js";
 import { CORE_ACQUISITION_PROVIDER_DESCRIPTORS } from "../../dataset/acquisition/provider-catalog.js";
 import {
@@ -20,7 +19,7 @@ import type {
   BioMedToolExecutionContext,
   BioMedToolResult,
 } from "../contracts.js";
-import { parseDatasetBuildSpec } from "../../dataset/contracts/index.js";
+import { parseDatasetExecutionSpec } from "../../dataset/contracts/index.js";
 import { providerCarrierBinding } from "../../dataset/runtime/provider-bindings.js";
 import type { DatasetCoreService } from "../../dataset/service/dataset-core.js";
 
@@ -30,22 +29,22 @@ const STATIC_ROUTE_CONTEXT = Object.freeze({
   route_scope: "static_registered_family",
   dynamic_provider_availability_evaluated: false,
   route_guidance:
-    "This result covers only the static registered-family route. It does not determine Dynamic Family provider availability; inspect prepare_dynamic_family_build.acquisition_requests instead.",
+    "This result covers only the static registered-family route. It does not determine Dynamic Family provider availability; call inspect_dataset_execution_routes instead.",
 });
 
-export interface DatasetBuildToolDiagnostic {
+export interface DatasetExecutionToolDiagnostic {
   taskId: string;
   runId: string;
   piSessionId: string;
   toolCallId: string;
-  toolName: "validate_dataset_build" | "execute_dataset_build";
+  toolName: "validate_dataset_execution" | "execute_dataset_execution";
   requestId?: string;
-  buildId?: string;
+  requirementId?: string;
   code: "ok" | string;
   durationMs: number;
 }
 
-export interface DatasetBuildToolOptions {
+export interface DatasetExecutionToolOptions {
   client: Pick<DatasetCoreService, "validate" | "execute"> &
     Partial<Pick<DatasetCoreService, "acquire">>;
   taskId: string;
@@ -55,9 +54,8 @@ export interface DatasetBuildToolOptions {
   taskRoot: string;
   runId: () => string;
   piSessionId: () => string;
-  onDiagnostic?: (diagnostic: DatasetBuildToolDiagnostic) => void;
-  onBuildResult?: (result: BuildResult | null) => void;
-  onPublication?: (data: DatasetBridgeBuildData) => void | Promise<void>;
+  onDiagnostic?: (diagnostic: DatasetExecutionToolDiagnostic) => void;
+  onPublication?: (data: DatasetBridgePublicationData) => void | Promise<void>;
   now?: () => number;
 }
 
@@ -68,7 +66,7 @@ function object(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function specArgument(value: Record<string, unknown>): DatasetBuildSpec {
+function specArgument(value: Record<string, unknown>): DatasetExecutionSpec {
   const spec = value.spec;
   if (typeof spec === "string") {
     let parsed: unknown;
@@ -76,13 +74,13 @@ function specArgument(value: Record<string, unknown>): DatasetBuildSpec {
       parsed = parseJsonTextStrict(spec, { maxChars: MAX_CONTENT });
     } catch (error) {
       throw new TypeError(
-        `spec must be a DatasetBuildSpec object or a JSON-encoded string: ${(error as Error).message}`,
+        `spec must be a DatasetExecutionSpec object or a JSON-encoded string: ${(error as Error).message}`,
         { cause: error },
       );
     }
-    return parseDatasetBuildSpec(parsed);
+    return parseDatasetExecutionSpec(parsed);
   }
-  return parseDatasetBuildSpec(spec);
+  return parseDatasetExecutionSpec(spec);
 }
 
 function mappingArgument(
@@ -105,7 +103,7 @@ function registeredSourceAssetIds(sourceFiles: Record<string, string>): string[]
 }
 
 function assertKnownBindings(
-  spec: DatasetBuildSpec,
+  spec: DatasetExecutionSpec,
   references: Record<string, string>,
   field: "source_files" | "mapping_files" | "metadata_files",
 ): void {
@@ -117,12 +115,12 @@ function assertKnownBindings(
 }
 
 function acquisitionRequest(
-  options: DatasetBuildToolOptions,
-  spec: DatasetBuildSpec,
-  binding: DatasetBuildSpec["source_bindings"][number],
+  options: DatasetExecutionToolOptions,
+  spec: DatasetExecutionSpec,
+  binding: DatasetExecutionSpec["source_bindings"][number],
 ): CoreAcquisitionRequest {
   const requestDigest = createHash("sha256")
-    .update(`${options.taskId}\u0000${options.runId()}\u0000${spec.build_id}\u0000${binding.binding_id}`)
+    .update(`${options.taskId}\u0000${options.runId()}\u0000${spec.requirement_id}\u0000${binding.binding_id}`)
     .digest("hex");
   const fixedParameters = fixedBiomedicalAcquisitionParameters({
     providerId: binding.acquisition.provider_id,
@@ -135,7 +133,7 @@ function acquisitionRequest(
     schema_version: "1.0",
     request_id: `acq_${requestDigest}`,
     task_id: options.taskId,
-    build_id: spec.build_id,
+    requirement_id: spec.requirement_id,
     binding_id: binding.binding_id,
     mode: binding.acquisition.mode,
     provider_id: binding.acquisition.provider_id,
@@ -158,7 +156,7 @@ function dynamicFallback(response: DatasetBridgeResponse): Record<string, unknow
     return {
       do_not_retry_static: true,
       recommended_next_action:
-        "Stop static schema/required_fields probing. Use prepare_dynamic_family_build for the requested exact multi-table topology, bind its Host descriptor digest, then submit_dynamic_family_build with the fixed Core acquisition_requests and unchanged preflight receipt.",
+        "Stop static schema/required_fields probing. Use prepare_dynamic_family_publication for the requested exact multi-table topology, bind its Host descriptor digest, then submit_dynamic_family_publication with the fixed Core acquisition_requests and unchanged preflight receipt.",
     };
   }
   return {};
@@ -173,33 +171,23 @@ function resultSummary(response: DatasetBridgeResponse): Record<string, unknown>
       message: response.error.message.slice(0, 500),
       retryable: response.error.retryable,
       ...dynamicFallback(response),
-      ...(response.error.details.build_id === undefined ? {} : { build_id: response.error.details.build_id }),
+      ...(response.error.details.requirement_id === undefined ? {} : { requirement_id: response.error.details.requirement_id }),
       ...(response.error.details.publication_id === undefined ? {} : { publication_id: response.error.details.publication_id }),
       ...(response.error.details.reason_codes === undefined ? {} : {
         reason_codes: boundedStrings(response.error.details.reason_codes),
       }),
-      ...(response.error.details.build_result === undefined ? {} : {
-        build_status: response.error.details.build_result.status,
-        valid_row_count: response.error.details.build_result.valid_row_count,
-        build_publication_id: response.error.details.build_result.publication_id,
-        recommended_next_action: response.error.details.build_result.recommended_next_action.slice(0, 500),
-      }),
     };
   }
-  if ("build_result" in response.data) {
-    const result = response.data.build_result;
+  if ("publication" in response.data) {
     return {
       code: "ok",
       request_id: response.request_id,
-      build_id: response.data.build_id,
-      build_status: result.status,
-      valid_row_count: result.valid_row_count,
+      requirement_id: response.data.requirement_id,
       publication_id: response.data.publication_id,
-      manifest_id: response.data.manifest?.manifest_id ?? null,
+      manifest_id: response.data.manifest.manifest_id,
       artifact_count: response.data.artifacts.length,
       artifact_roles: boundedStrings(response.data.artifacts.map((artifact) => artifact.role)),
       registered_source_asset_count: response.data.registeredSourceAssetIds.length,
-      recommended_next_action: result.recommended_next_action.slice(0, 500),
     };
   }
   return {
@@ -232,13 +220,13 @@ function resultFor(response: DatasetBridgeResponse): BioMedToolResult {
 }
 
 function diagnostic(
-  options: DatasetBuildToolOptions,
-  toolName: DatasetBuildToolDiagnostic["toolName"],
+  options: DatasetExecutionToolOptions,
+  toolName: DatasetExecutionToolDiagnostic["toolName"],
   context: BioMedToolExecutionContext | undefined,
   started: number,
   response: DatasetBridgeResponse | undefined,
   code: string,
-  buildId?: string,
+  requirementId?: string,
 ): void {
   options.onDiagnostic?.({
     taskId: options.taskId.slice(0, MAX_ID),
@@ -247,7 +235,7 @@ function diagnostic(
     toolCallId: (context?.toolCallId ?? "unknown").slice(0, MAX_ID),
     toolName,
     requestId: response?.request_id.slice(0, MAX_ID),
-    buildId: buildId?.slice(0, MAX_ID),
+    requirementId: requirementId?.slice(0, MAX_ID),
     code: code.slice(0, MAX_ID),
     durationMs: Math.max(0, (options.now ?? Date.now)() - started),
   });
@@ -290,46 +278,19 @@ function caught(error: unknown): BioMedToolResult {
   };
 }
 
-async function captureBuildResult(
-  options: DatasetBuildToolOptions,
+async function capturePublication(
+  options: DatasetExecutionToolOptions,
   response: DatasetBridgeResponse,
 ): Promise<void> {
   if (response.ok) {
-    if ("build_result" in response.data) {
-      options.onBuildResult?.(response.data.build_result);
-      if (response.data.publication !== undefined && response.data.publication !== null) {
-        await options.onPublication?.(response.data);
-      }
+    if ("publication" in response.data) {
+      await options.onPublication?.(response.data);
     }
     return;
   }
-  if (response.error.details.build_result !== undefined) {
-    options.onBuildResult?.(response.error.details.build_result);
-  }
 }
 
-function captureSpecRejected(
-  options: DatasetBuildToolOptions,
-  response: DatasetBridgeResponse,
-  buildId: string,
-): void {
-  if (response.ok || response.error.code !== "spec_rejected") return;
-  const reasonCodes = response.error.details.reason_codes ?? [];
-  options.onBuildResult?.({
-    status: "spec_rejected",
-    valid_row_count: 0,
-    successful_sources: [],
-    rejected_sources: [],
-    available_artifact_roles: [],
-    publication_id: null,
-    reason_codes: reasonCodes,
-    user_summary: response.error.message,
-    recommended_next_action: "Correct the DatasetBuildSpec and validate it again.",
-    build_id: buildId,
-  });
-}
-
-function datasetBuildSpecSchema(): object {
+function datasetExecutionSpecSchema(): object {
   const definitions = createDefaultDatasetFamilyRegistry().definitionsList();
   const schemas = definitions.flatMap((definition) => definition.schemas);
   const sources = definitions.flatMap((definition) => definition.sources);
@@ -402,10 +363,10 @@ function datasetBuildSpecSchema(): object {
   return {
     type: "object",
     description:
-      `Compact DatasetBuildSpec contract. Choose one compatible family/schema/source combination; Core performs the authoritative compatibility check. Families: ${familyIds.join(", ")}. Schemas: ${schemaIds.join(", ")}. Row granularities: ${granularities.join(", ")}.`,
+      `Compact DatasetExecutionSpec contract. Choose one compatible family/schema/source combination; Core performs the authoritative compatibility check. Families: ${familyIds.join(", ")}. Schemas: ${schemaIds.join(", ")}. Row granularities: ${granularities.join(", ")}.`,
     properties: {
       schema_version: { type: "string", enum: ["1.0"] },
-      build_id: { type: "string", pattern: "^[A-Za-z0-9_-]{1,128}$" },
+      requirement_id: { type: "string", pattern: "^[A-Za-z0-9_-]{1,128}$" },
       objective: { type: "string", minLength: 1 },
       dataset_family: { type: "string", enum: familyIds },
       row_granularity: { type: "string", enum: granularities },
@@ -423,7 +384,7 @@ function datasetBuildSpecSchema(): object {
       target_entity_level: nullableString,
     },
     required: [
-      "build_id",
+      "requirement_id",
       "objective",
       "dataset_family",
       "row_granularity",
@@ -435,16 +396,16 @@ function datasetBuildSpecSchema(): object {
   };
 }
 
-export function createDatasetBuildTools(
-  options: DatasetBuildToolOptions,
+export function createDatasetExecutionTools(
+  options: DatasetExecutionToolOptions,
 ): BioMedAgentTool[] {
   const specSchema = {
     anyOf: [
-      datasetBuildSpecSchema(),
+      datasetExecutionSpecSchema(),
       { type: "string", minLength: 1 },
     ],
     description:
-      "Frozen DatasetBuildSpec. Pass it as a JSON object, or as a JSON-encoded string for compatibility with clients that serialize nested arguments.",
+      "Frozen DatasetExecutionSpec. Pass it as a JSON object, or as a JSON-encoded string for compatibility with clients that serialize nested arguments.",
   } as const;
   const sourceFilesSchema = {
     type: "object",
@@ -466,10 +427,10 @@ export function createDatasetBuildTools(
   } as const;
   return [
     {
-      name: "validate_dataset_build",
-      label: "Validate DatasetBuildSpec",
+      name: "validate_dataset_execution",
+      label: "Validate DatasetExecutionSpec",
       description:
-        "Static registered-family route only: validate a DatasetBuildSpec whose family, schema, source, and topology appear in this tool schema. This does not test Dynamic Family provider availability; use prepare_dynamic_family_build for unsupported topology.",
+        "Static registered-family route only: validate a DatasetExecutionSpec whose family, schema, source, and topology are an exact match from inspect_dataset_execution_routes. This does not test Dynamic Family provider availability.",
       parameters: {
         type: "object",
         properties: { spec: specSchema },
@@ -488,11 +449,9 @@ export function createDatasetBuildTools(
             spec: specArgument(object(value)),
             signal,
           });
-          if (response.ok) options.onBuildResult?.(null);
-          captureSpecRejected(options, response, specArgument(object(value)).build_id);
           diagnostic(
             options,
-            "validate_dataset_build",
+            "validate_dataset_execution",
             context,
             started,
             response,
@@ -500,16 +459,16 @@ export function createDatasetBuildTools(
           );
           return resultFor(response);
         } catch (error) {
-          diagnostic(options, "validate_dataset_build", context, started, response, codeForCaught(error));
+          diagnostic(options, "validate_dataset_execution", context, started, response, codeForCaught(error));
           return caught(error);
         }
       },
     },
     {
-      name: "execute_dataset_build",
-      label: "Execute DatasetBuildSpec",
+      name: "execute_dataset_execution",
+      label: "Execute DatasetExecutionSpec",
       description:
-        "Static registered-family route only: validate, execute, and publish a DatasetBuildSpec represented by this tool schema. For unsupported topology use prepare_dynamic_family_build then submit_dynamic_family_build.",
+        "Static registered-family route only: validate, execute, and publish an exact static match from inspect_dataset_execution_routes. For unsupported topology use the dynamic route only when the preflight reports closed inputs.",
       parameters: {
         type: "object",
         properties: {
@@ -524,11 +483,11 @@ export function createDatasetBuildTools(
       async execute(value, signal, context) {
         const started = (options.now ?? Date.now)();
         let response: DatasetBridgeResponse | undefined;
-        let buildId: string | undefined;
+        let requirementId: string | undefined;
         try {
           const args = object(value);
           const spec = specArgument(args);
-          buildId = spec.build_id;
+          requirementId = spec.requirement_id;
           const identity = {
             taskId: options.taskId,
             runId: options.runId(),
@@ -540,11 +499,9 @@ export function createDatasetBuildTools(
           const validation = await options.client.validate(identity);
           if (!validation.ok) {
             response = validation;
-            captureSpecRejected(options, validation, buildId);
-            diagnostic(options, "execute_dataset_build", context, started, response, validation.error.code, buildId);
+            diagnostic(options, "execute_dataset_execution", context, started, response, validation.error.code, requirementId);
             return resultFor(validation);
           }
-          options.onBuildResult?.(null);
           const sourceFiles = mappingArgument(args, "source_files", true);
           assertKnownBindings(spec, sourceFiles, "source_files");
           const mappingFiles = mappingArgument(args, "mapping_files", true);
@@ -566,9 +523,9 @@ export function createDatasetBuildTools(
           // a later restart replays the exact same invocation (same spec and
           // asset references) onto the original run without asking the model.
           try {
-            await saveBuildContinuation(options.taskRoot, {
+            await saveExecutionContinuation(options.taskRoot, {
               schema_version: 1,
-              build_id: buildId,
+              requirement_id: requirementId,
               task_id: options.taskId,
               run_id: options.runId(),
               pi_session_id: options.piSessionId(),
@@ -591,19 +548,19 @@ export function createDatasetBuildTools(
             mappingFiles,
             metadataFiles,
           });
-          await captureBuildResult(options, response);
+          await capturePublication(options, response);
           diagnostic(
             options,
-            "execute_dataset_build",
+            "execute_dataset_execution",
             context,
             started,
             response,
             response.ok ? "ok" : response.error.code,
-            buildId,
+            requirementId,
           );
           return resultFor(response);
         } catch (error) {
-          diagnostic(options, "execute_dataset_build", context, started, response, codeForCaught(error), buildId);
+          diagnostic(options, "execute_dataset_execution", context, started, response, codeForCaught(error), requirementId);
           return caught(error);
         }
       },

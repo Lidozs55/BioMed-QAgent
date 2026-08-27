@@ -37,7 +37,7 @@ const FIXED_NOW = "2026-01-02T00:00:00.000Z";
 function ref(runId: string, overrides: Partial<BioactivityEvidenceRef> = {}): BioactivityEvidenceRef {
   return {
     task_id: BIO_TASK,
-    build_id: BIO_BUILD,
+    requirement_id: BIO_BUILD,
     run_id: runId,
     commit: COMMIT,
     digest: SPEC_DIGEST,
@@ -52,14 +52,14 @@ function reference(overrides: Partial<BioactivityReferenceConsumer> = {}): Bioac
     consumer_id: "gene_expression",
     family_id: "gene_expression",
     task_id: REF_TASK,
-    build_id: REF_BUILD,
+    requirement_id: REF_BUILD,
     run_id: REF_RUN,
     implementation_digest: IMPL_REF,
     input_digest: INPUT_REF,
     output_digest: OUTPUT_REF,
-    host_contract_ref: ref("run-expression-host-1", { task_id: REF_TASK, build_id: REF_BUILD, digest: CONTRACT_DIGEST }),
-    core_contract_ref: ref("run-expression-core-1", { task_id: REF_TASK, build_id: REF_BUILD, digest: CONTRACT_DIGEST }),
-    publication_ref: ref("run-expression-pub-1", { task_id: REF_TASK, build_id: REF_BUILD, digest: PUB_REF }),
+    host_contract_ref: ref("run-expression-host-1", { task_id: REF_TASK, requirement_id: REF_BUILD, digest: CONTRACT_DIGEST }),
+    core_contract_ref: ref("run-expression-core-1", { task_id: REF_TASK, requirement_id: REF_BUILD, digest: CONTRACT_DIGEST }),
+    publication_ref: ref("run-expression-pub-1", { task_id: REF_TASK, requirement_id: REF_BUILD, digest: PUB_REF }),
     publication_semantics_digest: SEMANTICS_DIGEST,
     provenance_semantics_digest: SEMANTICS_DIGEST,
     relation_semantics_digest: SEMANTICS_DIGEST,
@@ -94,7 +94,7 @@ function claim(overrides: Partial<BioactivityConsumerClaim> = {}): BioactivityCo
     revision_id: REVISION_ID,
     dataset_ref: ref("run-bio-dataset"),
     task_id: BIO_TASK,
-    build_id: BIO_BUILD,
+    requirement_id: BIO_BUILD,
     run_id: BIO_RUN,
     implementation_digest: IMPL_BIO,
     input_digest: INPUT_BIO,
@@ -263,7 +263,7 @@ describe("D-E3 bioactivity second-consumer go/no-go gate", () => {
 
     // Internal inconsistency: a claim ref bound to another task/build/run.
     const detachedRef = evaluateBioactivityConsumer(readyInput({
-      host_contract_ref: ref("run-bio-host-1", { task_id: REF_TASK, build_id: REF_BUILD, digest: CONTRACT_DIGEST }),
+      host_contract_ref: ref("run-bio-host-1", { task_id: REF_TASK, requirement_id: REF_BUILD, digest: CONTRACT_DIGEST }),
     }));
     expect(detachedRef.decision).toBe("go_no_go");
     expect(detachedRef.recommendation).toBe("no_go");

@@ -21,14 +21,14 @@ import type { ResourceBaselineDecision } from "../resource-baseline.js";
 /** Core-owned identity of one build generation the gate decides for. */
 export interface B3CoreIdentity {
   readonly taskId: string;
-  readonly buildId: string;
+  readonly requirementId: string;
   readonly generation: number;
 }
 
 /** Owner capability binding a disk index to the Core-owned identity. */
 export interface B3DiskOwner {
   readonly taskId: string;
-  readonly buildId: string;
+  readonly requirementId: string;
   readonly generation: number;
 }
 
@@ -71,9 +71,9 @@ export interface B3CleanupCapability {
 }
 
 export interface B3BackendDecisionInput {
-  /** Core-owned identity (task_id/build_id/generation). */
+  /** Core-owned identity (task_id/requirement_id/generation). */
   readonly taskId: string;
-  readonly buildId: string;
+  readonly requirementId: string;
   readonly generation: number;
   /** Measured resource decision produced by `decideValidatorResources`. */
   readonly measured: ResourceBaselineDecision;
@@ -108,7 +108,7 @@ export type B3BackendRejectReason =
 export interface B3MemoryDecision {
   readonly outcome: "memory";
   readonly taskId: string;
-  readonly buildId: string;
+  readonly requirementId: string;
   readonly generation: number;
   readonly estimatedHeapBytes: number;
   readonly effectiveMemoryThresholdBytes: number;
@@ -117,7 +117,7 @@ export interface B3MemoryDecision {
 export interface B3DiskDecision {
   readonly outcome: "disk";
   readonly taskId: string;
-  readonly buildId: string;
+  readonly requirementId: string;
   readonly generation: number;
   readonly factoryId: string;
   readonly parityProofRef: string;
@@ -141,7 +141,7 @@ function reject(reason: B3BackendRejectReason, detail: string): B3RejectDecision
 
 function validIdentity(input: B3BackendDecisionInput): boolean {
   return input.taskId.trim().length > 0 &&
-    input.buildId.trim().length > 0 &&
+    input.requirementId.trim().length > 0 &&
     Number.isSafeInteger(input.generation) &&
     input.generation >= 0;
 }
@@ -168,7 +168,7 @@ function validCleanup(cleanup: B3CleanupCapability | null): cleanup is B3Cleanup
  */
 export function decideB3Backend(input: B3BackendDecisionInput): B3BackendDecision {
   if (!validIdentity(input)) {
-    return reject("invalid_input", "task_id/build_id/generation must be Core-owned and well formed");
+    return reject("invalid_input", "task_id/requirement_id/generation must be Core-owned and well formed");
   }
   const measured = input.measured;
   if (measured.failureReason !== null) {
@@ -191,7 +191,7 @@ export function decideB3Backend(input: B3BackendDecisionInput): B3BackendDecisio
     return {
       outcome: "memory",
       taskId: input.taskId,
-      buildId: input.buildId,
+      requirementId: input.requirementId,
       generation: input.generation,
       estimatedHeapBytes,
       effectiveMemoryThresholdBytes,
@@ -216,9 +216,9 @@ export function decideB3Backend(input: B3BackendDecisionInput): B3BackendDecisio
   if (input.owner === null) {
     return reject("owner_mismatch", "no disk index owner capability injected");
   }
-  if (input.owner.taskId !== input.taskId || input.owner.buildId !== input.buildId) {
+  if (input.owner.taskId !== input.taskId || input.owner.requirementId !== input.requirementId) {
     return reject("owner_mismatch",
-      `owner identity ${input.owner.taskId}/${input.owner.buildId} does not match ${input.taskId}/${input.buildId}`);
+      `owner identity ${input.owner.taskId}/${input.owner.requirementId} does not match ${input.taskId}/${input.requirementId}`);
   }
   if (input.owner.generation !== input.generation) {
     return reject("late_generation",
@@ -241,7 +241,7 @@ export function decideB3Backend(input: B3BackendDecisionInput): B3BackendDecisio
   return {
     outcome: "disk",
     taskId: input.taskId,
-    buildId: input.buildId,
+    requirementId: input.requirementId,
     generation: input.generation,
     factoryId: input.factory.factoryId,
     parityProofRef: input.parityProof.ref,

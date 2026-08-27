@@ -13,7 +13,7 @@ function receipt(): DynamicFamilyPreflightReceipt {
   return {
     schema_version: "1.0",
     task_id: "task_1",
-    build_id: "build_1",
+    requirement_id: "build_1",
     generation: 0,
     family_spec_digest: DIGEST,
     projection_digest: DIGEST,

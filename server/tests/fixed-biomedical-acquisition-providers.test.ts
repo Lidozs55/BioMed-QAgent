@@ -22,7 +22,7 @@ function request(options: {
     schema_version: "1.0",
     request_id: `request_${options.providerId.replaceAll(".", "_")}`,
     task_id: "task_provider",
-    build_id: "build_provider",
+    requirement_id: "build_provider",
     binding_id: "binding_provider",
     mode: "builtin",
     provider_id: options.providerId,

@@ -41,17 +41,12 @@ export interface OperationResultCommitReceipt {
   committed_at: string;
 }
 
-export interface OperationResultMigration {
-  mode: "native" | "legacy_read_only";
-  legacy_checkpoint_path: string | null;
-  migrated_at: string | null;
-}
-
 export interface OperationResultManifest {
   schema_version: "1.0";
   result_manifest_id: string;
   task_id: string;
-  build_id: string;
+  run_id: string;
+  requirement_id: string;
   operation_id: string;
   operation_kind: OperationResultKind;
   operation_attempt_id: string;
@@ -66,5 +61,4 @@ export interface OperationResultManifest {
   output_files: OperationResultFileReceipt[];
   dependency_closure: OperationResultDependencyClosure;
   commit: OperationResultCommitReceipt;
-  migration: OperationResultMigration;
 }

@@ -89,7 +89,7 @@ function parseAdapterBatch(options: {
   const adapter = getAdapter(options.adapterId);
   const asset = sourceAssetFromFixture(options.fixturesRoot, options.fixture);
   return adapter.parse(asset, join(options.fixturesRoot, options.fixture), {
-    buildId: "build_test",
+    requirementId: "build_test",
     bindingId: options.bindingId,
     schemaRef: "gene_expression.long.v1",
     outputDir: options.outputDir,
@@ -123,7 +123,7 @@ function integrateOptions(options: {
     results: options.results,
     mergeStrategy: options.mergeStrategy ?? "append_by_canonical_row",
     schema: buildGeneExpressionSchema(),
-    buildId: "build_test",
+    requirementId: "build_test",
     outputDir: options.outputDir,
   };
 }

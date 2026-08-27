@@ -9,7 +9,6 @@ import { sha256Bytes } from "../dataset/adapters/hashing.js";
 import { SAFE_ID } from "./safe-id.js";
 
 import type {
-  BuildResult,
   EventEnvelope,
   EventPayload,
   HumanReviewRecord,
@@ -49,7 +48,7 @@ import {
 
 import { DurableHILStore, HILConflictError } from "./hil-store.js";
 
-import { readBuildContinuation } from "./build-continuation.js";
+import { readExecutionContinuation } from "./execution-continuation.js";
 
 import { DiskWorkspaceManager, type WorkspaceManager } from "../agent/workspace/workspace-manager.js";
 
@@ -76,7 +75,7 @@ export interface DurableAgentWorkspace {
   permissionBroker?: PermissionBroker;
   setRunId?: (runId: string) => void;
   setPiSessionId?: (piSessionId: string) => void;
-  consumeBuildResult?: () => BuildResult | null;
+  getCurrentPublicationId?: () => string | null;
   /**
    * Run-termination hook (round-4 audit): the workspace clears per-run
    * temporary grants when the run ends, so the settings UI never lists
@@ -137,7 +136,7 @@ interface ActiveDownloadHandle {
 }
 
 /**
- * A deterministic dataset-build continuation (cross-restart resume) that is
+ * A deterministic dataset-execution continuation (cross-restart resume) that is
  * currently in flight for a run. Tracked independently of ``activeTasks``:
  * the continuation runs the TS Core executor with a lightweight tool
  * workspace (no AI session) so the resumed build never depends on the model
@@ -289,9 +288,9 @@ function rawDataText(raw: RawData): string {
 }
 
 function isDynamicPublicationAcceptance(
-  request: Pick<HILRequest, "build_id" | "review_type"> | null,
+  request: Pick<HILRequest, "requirement_id" | "review_type"> | null,
 ): boolean {
-  return request?.build_id !== null && request?.review_type === "publication_acceptance";
+  return request?.requirement_id !== null && request?.review_type === "publication_acceptance";
 }
 
 function controlError(
@@ -362,14 +361,7 @@ export async function createDurableAgentRuntime(
         let compacted = false;
         for await (const source of task.session.run(turnInput)) {
           if (suspendedRuns.has(runKey)) return;
-          const payloads = task.adapter.adapt(runId, source).map((event) =>
-            event.payload.type === "run_completed"
-              ? {
-                  type: "run_completed" as const,
-                  build_result: task.workspace.consumeBuildResult?.() ?? null,
-                }
-              : event.payload,
-          );
+          const payloads = task.adapter.adapt(runId, source).map((event) => event.payload);
           for (const payload of payloads) {
             if (payload.type === "conversation_compacted") compacted = true;
           }
@@ -383,14 +375,7 @@ export async function createDurableAgentRuntime(
         // or the resume budget is exhausted (then force the terminal event).
         if (!compacted || suspendedRuns.has(runKey)) break;
         if (continuation >= MAX_COMPACTION_CONTINUATIONS) {
-          const payloads = task.adapter.completeRun(runId).map((event) =>
-            event.payload.type === "run_completed"
-              ? {
-                  type: "run_completed" as const,
-                  build_result: task.workspace.consumeBuildResult?.() ?? null,
-                }
-              : event.payload,
-          );
+          const payloads = task.adapter.completeRun(runId).map((event) => event.payload);
           if (payloads.length > 0) {
             await repository.appendRunEvents(taskId, runId, payloads);
           }
@@ -420,6 +405,7 @@ export async function createDurableAgentRuntime(
     }
     task.workspace.setRunId?.(runId);
     task.approvalGate.setRunId(runId);
+    task.session.resetRunProgress?.();
     task.activeRunId = runId;
     const execution = consumeRun(taskId, runId, input);
     activeExecutions.add(execution);
@@ -459,11 +445,13 @@ export async function createDurableAgentRuntime(
         sessionDir,
         tools: workspace.tools,
         initialToolNames: [
-          "validate_dataset_build",
-          "execute_dataset_build",
-          "prepare_dynamic_family_build",
-          "submit_dynamic_family_build",
+          "inspect_dataset_execution_routes",
+          "validate_dataset_execution",
+          "execute_dataset_execution",
+          "prepare_dynamic_family_publication",
+          "submit_dynamic_family_publication",
         ],
+        getCurrentPublicationId: () => workspace.getCurrentPublicationId?.() ?? null,
         cleanup: disposeWorkspace,
       });
       workspace.setPiSessionId?.(session.piSessionId);
@@ -906,10 +894,10 @@ export async function createDurableAgentRuntime(
           endedRun?.status === "failed" ||
           endedRun?.status === "cancelled";
         if (!terminal && activeTasks.get(taskId) === undefined) {
-          const started = await startSuspendedBuildContinuation(
+          const started = await startSuspendedExecutionContinuation(
             taskId,
             runId,
-            storedRequest?.build_id ?? null,
+            storedRequest?.requirement_id ?? null,
           );
           if (!started && isDynamicPublicationAcceptance(storedRequest)) {
             await failClosedDynamicPublicationRecovery(taskId, runId);
@@ -939,7 +927,7 @@ export async function createDurableAgentRuntime(
     const key = `${taskId}:${runId}`;
     const continuation = activeContinuations.get(key);
     if (continuation !== undefined) {
-      // A deterministic build continuation is already in flight for this
+      // A deterministic execution continuation is already in flight for this
       // run: deliver the resolution to its gate. If the executor is not
       // yet waiting on this request, the store lookup resolves it when the
       // continuation reaches it — never a second driver.
@@ -950,10 +938,10 @@ export async function createDurableAgentRuntime(
       return repository.getSnapshot(taskId);
     }
     if (task === undefined) {
-      const started = await startSuspendedBuildContinuation(
+      const started = await startSuspendedExecutionContinuation(
         taskId,
         runId,
-        storedRequest?.build_id ?? null,
+        storedRequest?.requirement_id ?? null,
       );
       if (started) return repository.getSnapshot(taskId);
       if (isDynamicPublicationAcceptance(storedRequest)) {
@@ -994,21 +982,21 @@ export async function createDurableAgentRuntime(
    * false when this run has no durable continuation record (e.g. permission
    * requests) and the caller should fall back to the legacy resume prompt.
    */
-  async function startSuspendedBuildContinuation(
+  async function startSuspendedExecutionContinuation(
     taskId: string,
     runId: string,
-    buildId: string | null,
+    requirementId: string | null,
   ): Promise<boolean> {
-    if (buildId === null) return false;
+    if (requirementId === null) return false;
     const snapshot = await repository.getSnapshot(taskId);
     if (snapshot === null || !snapshot.runs.some((run) => run.run_id === runId)) {
       return false;
     }
     const key = `${taskId}:${runId}`;
     if (activeContinuations.has(key)) return true;
-    const continuation = await readBuildContinuation(
+    const continuation = await readExecutionContinuation(
       path.join(options.tasksRoot, taskId),
-      buildId,
+      requirementId,
     );
     if (continuation === null || continuation.run_id !== runId) return false;
     const approvalGate = new DurableApprovalGate(taskId, repository, runId);
@@ -1023,7 +1011,7 @@ export async function createDurableAgentRuntime(
     });
     workspace.setRunId?.(runId);
     const tool = workspace.tools.find(
-      (candidate) => candidate.name === "execute_dataset_build",
+      (candidate) => candidate.name === "execute_dataset_execution",
     );
     if (tool === undefined) {
       await workspace.dispose();
@@ -1036,7 +1024,7 @@ export async function createDurableAgentRuntime(
       promise: Promise.resolve(),
     };
     let promise: Promise<void> = Promise.resolve();
-    promise = executeBuildContinuation(
+    promise = executeExecutionContinuation(
       taskId,
       runId,
       tool,
@@ -1050,7 +1038,6 @@ export async function createDurableAgentRuntime(
           : {}),
       },
       controller.signal,
-      workspace,
     ).finally(() => {
       if (activeContinuations.get(key)?.promise === promise) {
         activeContinuations.delete(key);
@@ -1066,17 +1053,16 @@ export async function createDurableAgentRuntime(
    * Deterministic executor driving one suspended build to a terminal run
    * event. Matches ``executeDownloadResume``: the original tool-call bubble
    * is upserted via a replayed ``tool_started`` and closed by
-   * ``tool_completed``; the run then finalizes with ``run_completed`` (with
-   * the build result) or ``run_failed``. No LLM turn is involved.
+   * ``tool_completed``; the run then finalizes with ``run_completed`` or
+   * ``run_failed``. No LLM turn is involved.
    */
-  async function executeBuildContinuation(
+  async function executeExecutionContinuation(
     taskId: string,
     runId: string,
     tool: BioMedAgentTool,
     toolCallId: string,
     argumentsValue: Record<string, unknown>,
     signal: AbortSignal,
-    workspace: DurableAgentWorkspace,
   ): Promise<void> {
     await repository.appendRunEvent(taskId, runId, {
       type: "tool_started",
@@ -1115,14 +1101,11 @@ export async function createDurableAgentRuntime(
     if (result.isError === true) {
       await repository.appendRunEvent(taskId, runId, {
         type: "run_failed",
-        error: "Dataset build continuation failed",
+        error: "Dataset execution continuation failed",
       });
       return;
     }
-    await repository.appendRunEvent(taskId, runId, {
-      type: "run_completed",
-      build_result: workspace.consumeBuildResult?.() ?? null,
-    });
+    await repository.appendRunEvent(taskId, runId, { type: "run_completed" });
   }
 
   function resumeRun(

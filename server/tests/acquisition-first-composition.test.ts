@@ -38,7 +38,7 @@ function request(parameters: CoreAcquisitionRequest["parameters"] = CHEMBL_PARAM
     schema_version: "1.0",
     request_id: "request_chembl",
     task_id: "task_chembl",
-    build_id: "build_chembl",
+    requirement_id: "build_chembl",
     binding_id: "binding_chembl",
     mode: "builtin",
     provider_id: CHEMBL_FILES_PROVIDER_ID,

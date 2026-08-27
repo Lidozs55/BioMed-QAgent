@@ -3,12 +3,12 @@ import { describe, expect, test } from "vitest";
 import {
   parseDatasetBridgeRequest,
   parseDatasetBridgeResponse,
-  type DatasetBuildSpec,
+  type DatasetExecutionSpec,
 } from "../src/index.js";
 
-const spec: DatasetBuildSpec = {
+const spec: DatasetExecutionSpec = {
   schema_version: "1.0",
-  build_id: "build_bridge_1",
+  requirement_id: "build_bridge_1",
   objective: "Build a fixture dataset",
   dataset_family: "gene_expression",
   row_granularity: "gene_sample_measurement",
@@ -48,7 +48,7 @@ function request() {
     run_id: "run_bridge_1",
     pi_session_id: "pi_bridge_1",
     tool_call_id: "tool_bridge_1",
-    op: "execute_dataset_build",
+    op: "execute_dataset_execution",
     args: {
       spec,
       source_files: { binding_gdc: "source_assets/gdc.tsv" },

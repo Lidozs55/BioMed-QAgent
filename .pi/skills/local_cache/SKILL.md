@@ -31,4 +31,4 @@ build main table) from user imports and prior research-task artifacts.
 ## Constraints
 
 - Cache reads are research aids; a cache hit never replaces the trusted
-  `execute_dataset_build` publication path for formal artifacts.
+  `execute_dataset_execution` publication path for formal artifacts.

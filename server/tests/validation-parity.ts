@@ -13,9 +13,9 @@ import { dirname, join } from "node:path";
 
 import { deepEqual } from "./contract-parity.js";
 import {
-  parseDatasetBuildSpec,
+  parseDatasetExecutionSpec,
   parseDatasetManifest,
-  type DatasetBuildSpec,
+  type DatasetExecutionSpec,
   type DatasetManifest,
 } from "../src/dataset/contracts/index.js";
 import {
@@ -331,7 +331,7 @@ function manifest(rowCount: number): DatasetManifest {
     schema_version: "1.0",
     manifest_id: "manifest_test",
     task_id: "task_test",
-    build_id: "build_test",
+    requirement_id: "build_test",
     dataset_family: "gene_expression",
     row_granularity: "gene_sample_measurement",
     schema_ref: "gene_expression.long.v1",
@@ -1016,7 +1016,7 @@ export async function checkRowBounds(): Promise<string[]> {
 
 function specBase(): Record<string, unknown> {
   return {
-    build_id: "build_test",
+    requirement_id: "build_test",
     objective: "compare TP53 expression",
     dataset_family: "gene_expression",
     row_granularity: "gene_sample_measurement",
@@ -1034,8 +1034,8 @@ function specBase(): Record<string, unknown> {
   };
 }
 
-function spec(overrides: Record<string, unknown> = {}): DatasetBuildSpec {
-  return parseDatasetBuildSpec({ ...specBase(), ...overrides });
+function spec(overrides: Record<string, unknown> = {}): DatasetExecutionSpec {
+  return parseDatasetExecutionSpec({ ...specBase(), ...overrides });
 }
 
 function geoBinding(parameters: Record<string, unknown>): Record<string, unknown> {
@@ -1048,8 +1048,8 @@ function geoBinding(parameters: Record<string, unknown>): Record<string, unknown
   };
 }
 
-function geoSpec(overrides: Record<string, unknown> = {}): DatasetBuildSpec {
-  return parseDatasetBuildSpec({
+function geoSpec(overrides: Record<string, unknown> = {}): DatasetExecutionSpec {
+  return parseDatasetExecutionSpec({
     ...specBase(),
     source_bindings: [geoBinding({})],
     ...overrides,

@@ -1,7 +1,7 @@
 import type { ProviderRevisionEvidenceV1, SourceAssetRegistrationReceipt } from "@biomed/contracts";
-import type { DatasetBuildSpec, SourceAsset } from "../contracts/index.js";
+import type { DatasetExecutionSpec, SourceAsset } from "../contracts/index.js";
 import { parseProviderRevisionEvidenceV1 } from "../contracts/index.js";
-import { BuildError } from "../adapters/errors.js";
+import { ExecutionError } from "../adapters/errors.js";
 import {
   createAuthoritativeDatasetIdentityContext,
   type AuthoritativeDatasetIdentityContext,
@@ -16,7 +16,7 @@ import {
 type AssetRole = "source" | "mapping" | "metadata" | "carrier";
 
 export interface ProductionIdentityDerivationInput {
-  readonly spec: DatasetBuildSpec;
+  readonly spec: DatasetExecutionSpec;
   readonly taskId: string;
   readonly sourceAssets: Readonly<Record<string, SourceAsset>>;
   readonly mappingAssets: Readonly<Record<string, SourceAsset>>;
@@ -35,7 +35,7 @@ function isExpressionV2Schema(schemaRef: string): schemaRef is ExpressionV2Schem
 }
 
 function fail(message: string): never {
-  throw new BuildError(`authoritative dataset identity rejected: ${message}`);
+  throw new ExecutionError(`authoritative dataset identity rejected: ${message}`);
 }
 
 function receiptKey(receipt: SourceAssetRegistrationReceipt): string {
@@ -223,7 +223,7 @@ export function deriveProductionExpressionIdentity(
       sha256: receipt.sha256,
       sizeBytes: receipt.size_bytes,
       taskId: receipt.task_id,
-      buildId: input.spec.build_id,
+      requirementId: input.spec.requirement_id,
       generation: 0,
       providerSnapshot,
       revisionToken,
@@ -237,7 +237,7 @@ export function deriveProductionExpressionIdentity(
       sourceNamespace,
       canonicalAccessions: Object.freeze([...accessionSet].sort()),
       taskId: input.taskId,
-      buildId: input.spec.build_id,
+      requirementId: input.spec.requirement_id,
       generation: 0,
       schemaRef: input.spec.schema_ref,
       facts: Object.freeze(facts),

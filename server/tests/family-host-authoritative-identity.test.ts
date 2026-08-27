@@ -20,7 +20,7 @@ function fact(overrides: Partial<SourceAssetRegistrationFact> = {}): Readonly<So
     sha256,
     sizeBytes: 100,
     taskId: "task_identity",
-    buildId: "build_one",
+    requirementId: "build_one",
     generation: 3,
     providerSnapshot: "geo:2026-08-22T00:00:00Z",
     revisionToken: "2026-08-22T00:00:00Z",
@@ -34,7 +34,7 @@ function input(overrides: Partial<AuthoritativeDatasetIdentityInput> = {}): Read
     sourceNamespace: "geo",
     canonicalAccessions: Object.freeze(["GSE1"]),
     taskId: "task_identity",
-    buildId: "build_one",
+    requirementId: "build_one",
     generation: 3,
     schemaRef: "gene_expression.long.v2",
     facts: Object.freeze([fact()]),
@@ -61,8 +61,8 @@ describe("authoritative expression identity context", () => {
   test("build identity is ownership-only and never changes dataset identity", () => {
     const first = createAuthoritativeDatasetIdentityContext(input());
     const second = createAuthoritativeDatasetIdentityContext(input({
-      buildId: "build_two",
-      facts: Object.freeze([fact({ buildId: "build_two" })]),
+      requirementId: "build_two",
+      facts: Object.freeze([fact({ requirementId: "build_two" })]),
     }));
     expect(second.datasetId).toBe(first.datasetId);
     expect(second.datasetRevisionId).toBe(first.datasetRevisionId);

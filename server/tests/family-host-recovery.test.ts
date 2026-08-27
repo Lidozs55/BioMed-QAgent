@@ -12,11 +12,11 @@ import { join } from "node:path";
 
 import { describe, expect, test } from "vitest";
 
-import { parseDatasetBuildSpec } from "../src/dataset/contracts/index.js";
+import { parseDatasetExecutionSpec } from "../src/dataset/contracts/index.js";
 import {
   buildOperationPlan,
-  DatasetBuildExecutor,
-  loadBuildState,
+  DatasetExecutionExecutor,
+  loadExecutionState,
   makeOperationOutput,
   stageOutputFile,
   type OperationOutput,
@@ -30,9 +30,9 @@ const RELEASE = "sha256:" + "1".repeat(64);
 const IMPLEMENTATION = "fixed-operation-v1";
 
 function spec() {
-  return parseDatasetBuildSpec({
+  return parseDatasetExecutionSpec({
     schema_version: "1.0",
-    build_id: "build_recovery",
+    requirement_id: "build_recovery",
     objective: "checkpoint recovery",
     dataset_family: "gene_expression",
     row_granularity: "gene_sample_measurement",
@@ -80,10 +80,10 @@ class Runner {
   };
 }
 
-function executor(root: string, runner: Runner, overrides: Partial<ConstructorParameters<typeof DatasetBuildExecutor>[0]> = {}, authoritativeIdentityDigest?: string) {
-  return new DatasetBuildExecutor({
+function executor(root: string, runner: Runner, overrides: Partial<ConstructorParameters<typeof DatasetExecutionExecutor>[0]> = {}, authoritativeIdentityDigest?: string) {
+  return new DatasetExecutionExecutor({
     taskId: "task_recovery",
-    buildId: spec().build_id,
+    requirementId: spec().requirement_id,
     stateDir: join(root, "state"),
     taskRoot: root,
     plan: buildOperationPlan(spec()),
@@ -95,7 +95,7 @@ function executor(root: string, runner: Runner, overrides: Partial<ConstructorPa
     // parameter. Keep this test typed against the pre-fix surface so RED is
     // observable until the executor consumes it.
     ...(authoritativeIdentityDigest === undefined ? {} : { authoritativeIdentityDigest }),
-  } as ConstructorParameters<typeof DatasetBuildExecutor>[0] & { authoritativeIdentityDigest?: string });
+  } as ConstructorParameters<typeof DatasetExecutionExecutor>[0] & { authoritativeIdentityDigest?: string });
 }
 
 describe("Family Host checkpoint recovery lane", () => {
@@ -146,14 +146,14 @@ describe("Family Host checkpoint recovery lane", () => {
     try {
       const first = new Runner(root);
       expect((await executor(root, first).run()).status).toBe("completed");
-      const statePath = join(root, "state", "build_state.json");
+      const statePath = join(root, "state", "execution_state.json");
       const persisted = JSON.parse(readFileSync(statePath, "utf8")) as Record<string, unknown>;
       delete persisted.fixed_operation_checkpoint_identities;
       writeFileSync(statePath, `${JSON.stringify(persisted)}\n`, "utf8");
       const second = new Runner(root);
       expect((await executor(root, second).run()).status).toBe("completed");
       expect(second.calls).toContain("parse:binding_gdc");
-      expect(loadBuildState(join(root, "state"), "task_recovery", "build_recovery")
+      expect(loadExecutionState(join(root, "state"), "task_recovery", "run_test", "build_recovery")
         .fixed_operation_checkpoint_identities.migration_state).toBe("native");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -214,7 +214,7 @@ describe("Family Host checkpoint recovery lane", () => {
         cancellationRequested: () => !current,
       }).run();
       expect(outcome.status).toBe("cancelled");
-      const state = loadBuildState(join(root, "state"), "task_recovery", "build_recovery");
+      const state = loadExecutionState(join(root, "state"), "task_recovery", "run_test", "build_recovery");
       expect(state.completed_operations["parse:binding_gdc"]).toBeUndefined();
       expect(state.operation_attempts.some((attempt) => attempt.operation_id === "parse:binding_gdc" && attempt.status === "succeeded")).toBe(false);
     } finally {
@@ -240,7 +240,7 @@ describe("Family Host checkpoint recovery lane", () => {
       const request = await store.createRequest({
         task_id: accepted.task_id,
         run_id: accepted.run_id,
-        build_id: "build_dynamic",
+        requirement_id: "build_dynamic",
         kind: "data_review",
         review_type: "publication_acceptance",
         blocking: true,

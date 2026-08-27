@@ -74,7 +74,7 @@ export interface MultiTableB3BackendOptions {
   /** Core-owned identity the disk indexes are bound to. */
   readonly owner: {
     readonly taskId: string;
-    readonly buildId: string;
+    readonly requirementId: string;
     readonly generation: number;
   };
   /** Creates the real disk-backed TupleIndex instances for PK/FK combos. */
@@ -361,7 +361,7 @@ function operationAllowsTable(result: OperationResultManifest): boolean {
     (result.operation_kind === "integrate" && result.output_kind === "integrated_table") ||
     (result.operation_kind === "assemble" && result.output_kind === "publication_candidate") ||
     (result.operation_kind === "derive" && result.output_kind === "derived_evidence");
-  return allowed && result.status === "succeeded" && result.migration.mode === "native";
+  return allowed && result.status === "succeeded";
 }
 
 async function resolveTrustedTablePath(
@@ -379,7 +379,8 @@ async function resolveTrustedTablePath(
   const result = parseOperationResultManifest(
     file.operation_result,
     request.task_id,
-    request.build_id,
+    request.run_id,
+    request.requirement_id,
   );
   if (!operationAllowsTable(result)) {
     throw new Error("table file is not from a successful native Core table operation");
@@ -1115,7 +1116,7 @@ export async function validateMultiTableCandidate(
     // explicit disk selection.
     const backend = decideB3Backend({
       taskId: request.task_id,
-      buildId: request.build_id,
+      requirementId: request.requirement_id,
       generation: options.b3Backend?.owner.generation ?? 0,
       measured: decision,
       factory: options.b3Backend?.factory ?? null,
@@ -1178,7 +1179,7 @@ export async function validateMultiTableCandidate(
             const index = await b3Backend.factory.createIndex({
               owner: {
                 taskId: request.task_id,
-                buildId: request.build_id,
+                requirementId: request.requirement_id,
                 generation: b3Backend.owner.generation,
               },
               directory: b3Backend.directory,

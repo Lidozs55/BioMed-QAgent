@@ -26,5 +26,5 @@
   等下层记录当作独立样本量；差异分析的分组（tumor vs normal）必须 ≥2 组且设计匹配。
 - **机制驱动而非关键词驱动**：先从综述/文献提取候选机制与基因，再按具体实体查询
   结构/通路/化合物库，最后进入表达构建。
-- **构建纪律**：正式产物仅由 `execute_dataset_build` 生成；先 `validate_dataset_build_spec`
+- **执行纪律**：正式产物仅由 `execute_dataset_execution` 生成；先 `validate_dataset_execution`
   预检，不把不同 family/granularity 的数据塞进同一 spec。

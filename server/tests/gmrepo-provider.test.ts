@@ -58,7 +58,7 @@ function request(meshId: string): CoreAcquisitionRequest {
     schema_version: "1.0",
     request_id: `request_gmrepo_${meshId}`,
     task_id: "task_gmrepo",
-    build_id: "build_gmrepo",
+    requirement_id: "build_gmrepo",
     binding_id: "binding_gmrepo",
     mode: "builtin",
     provider_id: GMREPO_FILES_PROVIDER_ID,

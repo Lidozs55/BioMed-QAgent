@@ -22,7 +22,7 @@ export async function readJsonFile<T>(filePath: string): Promise<T | undefined> 
  * rethrows any other failure (parse errors surface as errors). Replaces the
  * identical ENOENT-handling read helpers that used to be duplicated in
  * ``runtime/task-repository.ts``, ``runtime/hil-store.ts`` and
- * ``runtime/build-continuation.ts``.
+ * ``runtime/execution-continuation.ts``.
  */
 export async function readJsonFileOrNull<T>(filePath: string): Promise<T | null> {
   try {

@@ -694,7 +694,7 @@ describe("end-to-end: downloaded GDC file parses with the TS GdcExpressionAdapte
 
     const outputDir = path.join(root, "adapter-out");
     const batch = await getAdapter("gdc.expression.v1").parse(asset, downloaded ?? "", {
-      buildId: "build_test",
+      requirementId: "build_test",
       bindingId: "binding_1",
       schemaRef: "gene_expression.long.v1",
       outputDir,

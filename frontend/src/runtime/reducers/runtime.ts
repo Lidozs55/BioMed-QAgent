@@ -1,7 +1,7 @@
 import type {
   EventEnvelope,
   EventPayload,
-  PublicationSummary,
+  TaskPublicationSummary,
   RunStatus,
   RunSummary,
   StageName,
@@ -38,10 +38,7 @@ function terminalStatus(type: EventEnvelope["type"]): RunStatus | null {
 }
 
 /**
- * Project a per-run outcome summary from a terminal event payload.
- * Mirrors backend ``app.runtime.state._run_summary_for``: partial projection
- * is legal, so legacy events missing ``build_result`` / ``error_code`` /
- * ``cancelled_at_stage`` still produce a summary.
+ * Project a per-run summary from a terminal event payload.
  */
 function summaryForTerminalPayload(
   payload: Extract<
@@ -57,15 +54,13 @@ function summaryForTerminalPayload(
     case "run_completed":
       return {
         run_status: status,
-        build_result: payload.build_result ?? null,
         error_code: null,
         cancelled_at_stage: null,
-        user_message: payload.build_result?.user_summary ?? null,
+        user_message: null,
       };
     case "run_failed":
       return {
         run_status: status,
-        build_result: null,
         error_code: payload.error_code ?? null,
         cancelled_at_stage: null,
         user_message: payload.error,
@@ -73,7 +68,6 @@ function summaryForTerminalPayload(
     case "run_cancelled":
       return {
         run_status: status,
-        build_result: null,
         error_code: null,
         cancelled_at_stage: payload.cancelled_at_stage ?? null,
         user_message: payload.reason,
@@ -81,7 +75,6 @@ function summaryForTerminalPayload(
     case "run_interrupted":
       return {
         run_status: status,
-        build_result: null,
         error_code: null,
         cancelled_at_stage: null,
         user_message: payload.reason,
@@ -435,20 +428,6 @@ export function applyRunTerminalEvent(
   );
   next = deactivateRunAssistantStream(next, runId);
   next = deactivateRunStreamingItems(next, runId);
-  if (payload.type === "run_completed") {
-    const buildId = payload.build_result?.build_id;
-    if (buildId !== undefined && buildId !== null) {
-      next = upsertItem(next, {
-        kind: "build_report",
-        itemId: `report:${runId}`,
-        runId,
-        sequence: envelope.sequence,
-        createdAt: envelope.timestamp,
-        taskId: envelope.task_id,
-        buildId,
-      });
-    }
-  }
   return next;
 
 }
@@ -476,17 +455,26 @@ export function applyPublicationCreatedEvent(
     return task;
   }
   const previous = task.currentPublicationId;
-  const publication: PublicationSummary = {
+  const publication: TaskPublicationSummary = {
     publication_id: payload.publication_id,
     manifest_sha256: payload.manifest_sha256,
     supersedes_publication_id: payload.supersedes_publication_id ?? previous,
     published_at: payload.published_at,
   };
-  return {
+  const next = {
     ...task,
     currentPublicationId: payload.publication_id,
     publications: [...task.publications, publication],
   };
+  return upsertItem(next, {
+    kind: "publication_report",
+    itemId: `publication:${payload.publication_id}`,
+    runId: envelope.run_id,
+    sequence: envelope.sequence,
+    createdAt: envelope.timestamp,
+    taskId: envelope.task_id,
+    publicationId: payload.publication_id,
+  });
 }
 
 export function applyWarningEvent(

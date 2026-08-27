@@ -16,27 +16,10 @@ const ARTIFACT_SHA = "c".repeat(64);
 const TASK_ID = "task-fixture";
 const RUN_ID = "run-fixture";
 const REQUEST_ID = "request-fixture";
-const BUILD_ID = "build-fixture";
 const PUBLICATION_ID = "publication-fixture";
 const roots: string[] = [];
 
 type JsonObject = Record<string, unknown>;
-
-function buildResult(overrides: JsonObject = {}): JsonObject {
-  return {
-    status: "succeeded",
-    valid_row_count: 2,
-    successful_sources: ["source-fixture"],
-    rejected_sources: [],
-    available_artifact_roles: ["primary_dataset"],
-    publication_id: PUBLICATION_ID,
-    reason_codes: [],
-    user_summary: "Published fixture data.",
-    recommended_next_action: "none",
-    build_id: BUILD_ID,
-    ...overrides,
-  };
-}
 
 function accepted(overrides: JsonObject = {}): JsonObject {
   return {
@@ -231,7 +214,6 @@ function arrayValue(value: unknown): unknown[] {
 }
 
 function canonicalEvidence(overrides: JsonObject = {}): JsonObject {
-  const result = buildResult();
   return {
     product_commit: PRODUCT_COMMIT,
     request_id: REQUEST_ID,
@@ -244,7 +226,7 @@ function canonicalEvidence(overrides: JsonObject = {}): JsonObject {
         task_id: TASK_ID,
         request_id: REQUEST_ID,
         status: "completed",
-        summary: { build_result: result },
+        summary: null,
       }],
       messages: [{
         message_id: "message-final",
@@ -273,7 +255,7 @@ function canonicalEvidence(overrides: JsonObject = {}): JsonObject {
         published_at: "2026-08-20T00:00:02.000Z",
       }),
       event(3, "artifact_produced", { artifact: artifactReceipt() }),
-      event(4, "run_completed", { build_result: result }),
+      event(4, "run_completed", {}),
     ],
     artifact_list: artifactList(),
     artifact_hashes: artifactHashes(),
@@ -322,11 +304,6 @@ describe("trusted evidence-chain projection", () => {
       state: "present",
       task_status: "completed",
       run_status: "completed",
-    });
-    expect(result.build).toMatchObject({
-      state: "present",
-      build_id: BUILD_ID,
-      publication_id: PUBLICATION_ID,
     });
     expect(result.publication).toMatchObject({
       state: "present",
@@ -488,7 +465,7 @@ describe("trusted evidence-chain projection", () => {
     expect(result.gaps.map((gap) => gap.code)).toContain("semantic_product.not_projected");
   });
 
-  test("projects a terminal-only legacy bundle without inventing a BuildResult", () => {
+  test("projects a terminal-only bundle without inventing a Publication", () => {
     const result = project({
       product_commit: PRODUCT_COMMIT,
       request_id: REQUEST_ID,
@@ -502,30 +479,13 @@ describe("trusted evidence-chain projection", () => {
           run_id: RUN_ID,
           request_id: REQUEST_ID,
           status: "completed",
-          summary: { build_result: null },
+          summary: null,
         },
       },
-      task_builds: [{ task_id: TASK_ID, run_id: RUN_ID, build_id: BUILD_ID }],
     });
 
     expect(result.terminal.state).toBe("present");
-    expect(result.build).toMatchObject({ state: "receipt_only", build_id: BUILD_ID });
     expect(result.publication.state).toBe("missing");
-  });
-
-  test("does not let an identity-less build sidecar authenticate its own BuildResult", () => {
-    const base = canonicalEvidence();
-    const snapshot = base.snapshot as JsonObject;
-    const runs = snapshot.runs as JsonObject[];
-    runs[0] = { ...runs[0], summary: { build_result: null } };
-    base.events = arrayValue(base.events).filter((entry) => (entry as JsonObject).type !== "run_completed");
-    base.builds = [{ build_id: BUILD_ID, result: buildResult() }];
-    const result = project(base);
-
-    expect(result.build).toMatchObject({
-      state: "missing",
-      result: null,
-    });
   });
 
   test("detects conflicting task, run, and publication identities", () => {
@@ -539,7 +499,7 @@ describe("trusted evidence-chain projection", () => {
           task_id: TASK_ID,
           request_id: REQUEST_ID,
           status: "completed",
-          summary: { build_result: buildResult() },
+          summary: null,
         }],
         messages: [],
         publications: [{
@@ -665,7 +625,7 @@ describe("trusted evidence-chain projection", () => {
     });
   });
 
-  test("ignores terminal, build, and publication events from unrelated runs", () => {
+  test("ignores terminal and publication events from unrelated runs", () => {
     const unrelated = [
       event(20, "publication_created", {
         publication_id: "publication-other",
@@ -674,19 +634,13 @@ describe("trusted evidence-chain projection", () => {
         supersedes_publication_id: null,
         published_at: "2026-08-20T00:00:20.000Z",
       }, { run_id: "run-other" }),
-      event(21, "run_completed", {
-        build_result: buildResult({
-          build_id: "build-other",
-          publication_id: "publication-other",
-        }),
-      }, { run_id: "run-other" }),
+      event(21, "run_completed", {}, { run_id: "run-other" }),
     ];
     const evidence = canonicalEvidence({
       events: [...(canonicalEvidence().events as unknown[]), ...unrelated],
     });
     const result = project(evidence);
 
-    expect(result.build.build_id).toBe(BUILD_ID);
     expect(result.publication.publication_id).toBe(PUBLICATION_ID);
     expect(result.publication.source_refs.join(" ")).not.toContain("publication-other");
   });

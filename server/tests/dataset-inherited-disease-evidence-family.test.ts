@@ -152,7 +152,7 @@ describe("inherited disease evidence family", () => {
       taskRoot: root,
       spec: {
         schema_version: "1.0",
-        build_id: "build_inherited_disease",
+        requirement_id: "req_inherited_disease",
         objective: "Build inherited disease gene evidence",
         dataset_family: INHERITED_DISEASE_EVIDENCE_FAMILY_ID,
         row_granularity: INHERITED_DISEASE_EVIDENCE_ROW_GRANULARITY,
@@ -171,7 +171,7 @@ describe("inherited disease evidence family", () => {
     expect(result.manifest.tables.map((table) => table.table_id)).toEqual([
       "gene_records", "disease_records", "gene_disease_records", "gene_evidence_crosswalk",
     ]);
-    expect(result.publication.publicationId).toMatch(/^pub_build_inherited_disease_/);
+    expect(result.publication.publicationId).toMatch(/^pub_req_inherited_disease_/);
     const driftFile = path.join(root, "source_assets", "clinvar-gene-esearch.json");
     await writeFile(driftFile, "drift\n");
     await expect((async () => {

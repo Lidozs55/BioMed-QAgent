@@ -16,5 +16,5 @@ Query UniProt with `search_uniprot` using a free-text search string.
 
 - **Research-only source.** UniProt findings are for investigation and
   evidence only — never declare `uniprot` as a dataset build source, and never
-  route its results into `execute_dataset_build`.
+  route its results into `execute_dataset_execution`.
 - Cite the UniProt accession or URL for every reported finding.

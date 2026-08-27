@@ -29,7 +29,7 @@ const INPUT_KEYS = [
   "schema_version", "input_id", "kind", "digest", "asset_ref", "committed_result_ref",
 ] as const;
 const REQUEST_KEYS = [
-  "schema_version", "slot", "request_id", "task_id", "build_id", "algorithm_id",
+  "schema_version", "slot", "request_id", "task_id", "requirement_id", "algorithm_id",
   "algorithm_version", "implementation_digest", "parameters", "reference", "inputs",
   "output_schema_ref", "request_identity_digest",
 ] as const;
@@ -39,7 +39,7 @@ const PROVENANCE_KEYS = [
   "output_schema_ref", "output_digest",
 ] as const;
 const RECEIPT_KEYS = [
-  "schema_version", "result_id", "task_id", "build_id", "slot", "request_id",
+  "schema_version", "result_id", "task_id", "requirement_id", "slot", "request_id",
   "request_identity_digest", "output_kind", "output_schema_ref", "output_digest",
   "output_summary", "provenance",
 ] as const;
@@ -211,23 +211,23 @@ export function assertDeterministicDeriveRequestIdentity(
 export function parseDeterministicDeriveRequest(
   value: unknown,
   expectedTaskId?: string,
-  expectedBuildId?: string,
+  expectedRequirementId?: string,
 ): DeterministicDeriveRequest {
   const record = assertRecord(value, "DeterministicDeriveRequest");
   assertExactKeys(record, REQUEST_KEYS, "DeterministicDeriveRequest");
   if (record.schema_version !== "1.0") throw new TypeError("DeterministicDeriveRequest.schema_version must be 1.0");
   if (record.slot !== "derive") throw new TypeError("DeterministicDeriveRequest.slot must be derive");
   const taskId = assertSafeId(record.task_id, "DeterministicDeriveRequest.task_id");
-  const buildId = assertSafeId(record.build_id, "DeterministicDeriveRequest.build_id");
+  const requirementId = assertSafeId(record.requirement_id, "DeterministicDeriveRequest.requirement_id");
   if (expectedTaskId !== undefined && taskId !== expectedTaskId) throw new TypeError("derive request belongs to a different task");
-  if (expectedBuildId !== undefined && buildId !== expectedBuildId) throw new TypeError("derive request belongs to a different build");
+  if (expectedRequirementId !== undefined && requirementId !== expectedRequirementId) throw new TypeError("derive request belongs to a different build");
   const inputs = parseInputs(record.inputs, taskId);
   const request: DeterministicDeriveRequest = {
     schema_version: "1.0",
     slot: "derive",
     request_id: assertSafeId(record.request_id, "DeterministicDeriveRequest.request_id"),
     task_id: taskId,
-    build_id: buildId,
+    requirement_id: requirementId,
     algorithm_id: assertSafeId(record.algorithm_id, "DeterministicDeriveRequest.algorithm_id"),
     algorithm_version: assertVersion(record.algorithm_version, "DeterministicDeriveRequest.algorithm_version"),
     implementation_digest: parseImplementationDigest(record.implementation_digest, "DeterministicDeriveRequest.implementation_digest"),
@@ -273,7 +273,7 @@ export function parseDeterministicDeriveProvenance(
 export function parseDeterministicDeriveResultReceipt(
   value: unknown,
   expectedTaskId?: string,
-  expectedBuildId?: string,
+  expectedRequirementId?: string,
 ): DeterministicDeriveResultReceipt {
   const record = assertRecord(value, "DeterministicDeriveResultReceipt");
   assertExactKeys(record, RECEIPT_KEYS, "DeterministicDeriveResultReceipt");
@@ -281,9 +281,9 @@ export function parseDeterministicDeriveResultReceipt(
   if (record.slot !== "derive") throw new TypeError("DeterministicDeriveResultReceipt.slot must be derive");
   if (record.output_kind !== "derived_evidence") throw new TypeError("DeterministicDeriveResultReceipt.output_kind must be derived_evidence");
   const taskId = assertSafeId(record.task_id, "DeterministicDeriveResultReceipt.task_id");
-  const buildId = assertSafeId(record.build_id, "DeterministicDeriveResultReceipt.build_id");
+  const requirementId = assertSafeId(record.requirement_id, "DeterministicDeriveResultReceipt.requirement_id");
   if (expectedTaskId !== undefined && taskId !== expectedTaskId) throw new TypeError("derive result belongs to a different task");
-  if (expectedBuildId !== undefined && buildId !== expectedBuildId) throw new TypeError("derive result belongs to a different build");
+  if (expectedRequirementId !== undefined && requirementId !== expectedRequirementId) throw new TypeError("derive result belongs to a different build");
   const provenance = parseDeterministicDeriveProvenance(record.provenance, taskId);
   const requestIdentityDigest = assertSha256(record.request_identity_digest, "DeterministicDeriveResultReceipt.request_identity_digest");
   const outputDigest = assertSha256(record.output_digest, "DeterministicDeriveResultReceipt.output_digest");
@@ -296,7 +296,7 @@ export function parseDeterministicDeriveResultReceipt(
     schema_version: "1.0",
     result_id: assertSafeId(record.result_id, "DeterministicDeriveResultReceipt.result_id"),
     task_id: taskId,
-    build_id: buildId,
+    requirement_id: requirementId,
     slot: "derive",
     request_id: assertSafeId(record.request_id, "DeterministicDeriveResultReceipt.request_id"),
     request_identity_digest: requestIdentityDigest,

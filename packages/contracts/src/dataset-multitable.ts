@@ -60,7 +60,7 @@ export interface DatasetManifestV2 {
   schema_version: "2.0";
   manifest_id: string;
   task_id: string;
-  build_id: string;
+  requirement_id: string;
   dataset_family: string;
   row_granularity: string;
   schema_ref: string;

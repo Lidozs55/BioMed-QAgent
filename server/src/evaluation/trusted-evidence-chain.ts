@@ -4,7 +4,6 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 
 import {
   parseProductAssessment,
-  type BuildResult,
   type ProductAssessment,
   type ProductStatus,
 } from "@biomed/contracts";
@@ -38,19 +37,11 @@ export interface TrustedEvidenceSourceAsset extends TrustedEvidenceFact {
   source_ids: readonly string[];
 }
 
-export interface TrustedEvidenceBuild extends TrustedEvidenceFact {
-  build_id: string | null;
-  build_ids: readonly string[];
-  publication_id: string | null;
-  result: BuildResult | null;
-}
-
 export interface TrustedEvidencePublication extends TrustedEvidenceFact {
   publication_id: string | null;
   publication_ids: readonly string[];
   manifest_sha256: string | null;
   authoritative: boolean;
-  consistent_with_build: boolean;
 }
 
 export interface TrustedEvidenceArtifactItem {
@@ -120,14 +111,9 @@ export type TrustedEvidenceGapCode =
   | "semantic_product.not_publishable"
   | "semantic_product.identity_unverified"
   | "semantic_product.conflicting"
-  | "build.missing"
-  | "build.receipt_only"
-  | "build.conflicting"
-  | "build.malformed"
   | "publication.missing"
   | "publication.receipt_only"
   | "publication.conflicting"
-  | "publication.build_result_mismatch"
   | "artifact.receipts_missing"
   | "artifact.download_verification_missing"
   | "artifact.hash_mismatch"
@@ -147,7 +133,6 @@ export interface TrustedEvidenceGap {
     | "terminal"
     | "trusted_input"
     | "semantic_product"
-    | "build"
     | "publication"
     | "artifact"
     | "final_answer"
@@ -180,7 +165,6 @@ export interface TrustedEvidenceChainProjection {
   terminal: TrustedEvidenceTerminal;
   source_assets: TrustedEvidenceSourceAsset;
   semantic_product: TrustedEvidenceSemanticProduct;
-  build: TrustedEvidenceBuild;
   publication: TrustedEvidencePublication;
   artifacts: TrustedEvidenceArtifacts;
   final_answer: TrustedEvidenceFinalAnswer;
@@ -228,14 +212,6 @@ interface EventRecord {
   task_id: string | null;
   run_id: string | null;
   payload: JsonObject;
-}
-
-interface ParsedBuildCandidate {
-  build_id: string | null;
-  task_id: string | null;
-  run_id: string | null;
-  result: BuildResult | null;
-  ref: string;
 }
 
 interface PublicationCandidate {
@@ -586,168 +562,11 @@ function projectTerminal(
   };
 }
 
-function parseBuildResult(value: unknown): BuildResult | null {
-  const source = object(value);
-  const status = source.status;
-  if (status !== "succeeded" && status !== "partial_success" && status !== "no_data" && status !== "spec_rejected") return null;
-  const validRowCount = nonNegativeInteger(source.valid_row_count);
-  const successfulSources = array(source.successful_sources).map(text);
-  const rejectedSources = array(source.rejected_sources).map(text);
-  const roles = array(source.available_artifact_roles).map(text);
-  const reasonCodes = array(source.reason_codes).map(text);
-  if (
-    validRowCount === null || successfulSources.some((entry) => entry === null) ||
-    rejectedSources.some((entry) => entry === null) || roles.some((entry) => entry === null) ||
-    reasonCodes.some((entry) => entry === null) || text(source.user_summary) === null ||
-    text(source.recommended_next_action) === null ||
-    (source.publication_id !== null && id(source.publication_id) === null)
-  ) return null;
-  const result: BuildResult = {
-    schema_version: source.schema_version === "1.0" ? "1.0" : undefined,
-    status,
-    valid_row_count: validRowCount,
-    successful_sources: successfulSources as string[],
-    rejected_sources: rejectedSources as string[],
-    available_artifact_roles: roles as string[],
-    publication_id: source.publication_id === null ? null : id(source.publication_id),
-    reason_codes: reasonCodes as string[],
-    user_summary: text(source.user_summary) ?? "",
-    recommended_next_action: text(source.recommended_next_action) ?? "",
-  };
-  const buildId = source.build_id === null || source.build_id === undefined ? null : id(source.build_id);
-  if (source.build_id !== undefined && source.build_id !== null && buildId === null) return null;
-  result.build_id = buildId;
-  if (Array.isArray(source.binding_failures)) {
-    const failures = source.binding_failures.flatMap((entry) => {
-      const failure = object(entry);
-      const bindingId = id(failure.binding_id);
-      const reasonCode = text(failure.reason_code);
-      const message = text(failure.message);
-      return bindingId !== null && reasonCode !== null && message !== null
-        ? [{ schema_version: failure.schema_version === "1.0" ? "1.0" as const : undefined, binding_id: bindingId, reason_code: reasonCode, message }]
-        : [];
-    });
-    if (failures.length !== source.binding_failures.length) return null;
-    result.binding_failures = failures;
-  }
-  return result;
-}
-
-function buildResultAt(value: unknown): BuildResult | null {
-  if (!isObject(value)) return null;
-  for (const key of ["build_result", "result", "terminal_result"] as const) {
-    const candidate = parseBuildResult(value[key]);
-    if (candidate !== null) return candidate;
-  }
-  return parseBuildResult(value);
-}
-
-function candidateIdentityMatches(
-  candidate: ParsedBuildCandidate,
-  selected: SelectedIdentity,
-): boolean {
-  if (candidate.task_id !== null && selected.values.task_id !== null && candidate.task_id !== selected.values.task_id) return false;
-  if (candidate.run_id !== null && selected.values.run_id !== null && candidate.run_id !== selected.values.run_id) return false;
-  if (candidate.result !== null) {
-    return selected.values.run_id !== null && candidate.run_id === selected.values.run_id;
-  }
-  return candidate.run_id === selected.values.run_id ||
-    (candidate.run_id === null && candidate.task_id !== null && candidate.task_id === selected.values.task_id);
-}
-
-function collectBuildCandidates(
-  evidence: JsonObject,
-  evidenceRef: string,
-  selected: SelectedIdentity,
-  matchingEvents: readonly EventRecord[],
-): { candidates: ParsedBuildCandidate[]; malformedRefs: string[] } {
-  const candidates: ParsedBuildCandidate[] = [];
-  const malformedRefs: string[] = [];
-  const add = (candidate: ParsedBuildCandidate): void => {
-    if (candidateIdentityMatches(candidate, selected)) candidates.push(candidate);
-  };
-  for (const event of matchingEvents) {
-    const type = eventType(event);
-    if (type !== "run_completed" && type !== "task_completed") continue;
-    const payload = event.payload;
-    const resultValue = payload.build_result;
-    if (resultValue === null || resultValue === undefined) continue;
-    const result = parseBuildResult(resultValue);
-    const buildId = id(event.value.build_id) ?? id(payload.build_id) ?? (result?.build_id ?? null);
-    if (result === null) malformedRefs.push(event.ref);
-    add({ build_id: buildId, task_id: event.task_id, run_id: event.run_id, result, ref: event.ref });
-  }
-  const snapshot = object(evidence.snapshot);
-  const snapshotRun = array(snapshot.runs).map(object).find((run) => id(run.run_id) === selected.values.run_id);
-  if (snapshotRun !== undefined) {
-    const resultValue = object(object(snapshotRun.summary).build_result);
-    if (Object.keys(resultValue).length > 0) {
-      const result = parseBuildResult(resultValue);
-      if (result === null) malformedRefs.push(`${evidenceRef}.snapshot.runs`);
-      add({ build_id: result?.build_id ?? null, task_id: id(snapshotRun.task_id), run_id: id(snapshotRun.run_id), result, ref: `${evidenceRef}.snapshot.runs` });
-    }
-  }
-  const terminalRun = object(object(evidence.terminal).run);
-  const terminalSummary = object(terminalRun.summary);
-  const terminalBuildValue = terminalSummary.build_result;
-  const terminalResult = parseBuildResult(terminalBuildValue);
-  if (terminalResult !== null) {
-    add({ build_id: terminalResult.build_id ?? null, task_id: id(terminalRun.task_id), run_id: id(terminalRun.run_id), result: terminalResult, ref: `${evidenceRef}.terminal.run.summary` });
-  } else if (terminalBuildValue !== undefined && terminalBuildValue !== null) {
-    malformedRefs.push(`${evidenceRef}.terminal.run.summary.build_result`);
-  }
-  for (const key of ["task_builds", "builds"] as const) {
-    const value = evidence[key];
-    const entries = Array.isArray(value)
-      ? value
-      : isObject(value) ? Object.values(value) : [];
-    for (const [index, entryValue] of entries.entries()) {
-      const entry = object(entryValue);
-      const result = buildResultAt(entry);
-      const buildId = id(entry.build_id) ?? id(entry.id) ?? (result?.build_id ?? null);
-      if (result === null && buildId === null) continue;
-      if (result === null && Object.keys(entry).some((keyName) => ["build_result", "result", "terminal_result"].includes(keyName))) {
-        malformedRefs.push(`${evidenceRef}.${key}[${index}]`);
-      }
-      add({ build_id: buildId, task_id: id(entry.task_id) ?? id(object(entry.detail).task_id), run_id: id(entry.run_id) ?? id(object(entry.detail).run_id), result, ref: `${evidenceRef}.${key}[${index}]` });
-    }
-  }
-  return { candidates, malformedRefs: sortedUnique(malformedRefs) };
-}
-
-function projectBuild(
-  evidence: JsonObject,
-  evidenceRef: string,
-  selected: SelectedIdentity,
-  matchingEvents: readonly EventRecord[],
-): { fact: TrustedEvidenceBuild; malformedRefs: string[] } {
-  const collected = collectBuildCandidates(evidence, evidenceRef, selected, matchingEvents);
-  const candidates = collected.candidates;
-  const buildIds = sortedUnique(candidates.flatMap((candidate) => candidate.build_id === null ? [] : [candidate.build_id]));
-  const results = candidates.filter((candidate): candidate is ParsedBuildCandidate & { result: BuildResult } => candidate.result !== null);
-  const resultKeys = sortedUnique(results.map((candidate) => stableStringify(candidate.result)));
-  const refs = sortedUnique(candidates.map((candidate) => candidate.ref));
-  const conflict = collected.malformedRefs.length > 0 || resultKeys.length > 1;
-  const result = results[0]?.result ?? null;
-  const publicationIds = sortedUnique(results.flatMap((candidate) => candidate.result.publication_id === null ? [] : [candidate.result.publication_id]));
-  if (candidates.length === 0) {
-    return { fact: { state: "missing", source_refs: [], build_id: null, build_ids: [], publication_id: null, result: null }, malformedRefs: collected.malformedRefs };
-  }
-  if (conflict) {
-    return { fact: { state: "conflicting", source_refs: sortedUnique([...refs, ...collected.malformedRefs]), build_id: buildIds[0] ?? null, build_ids: buildIds, publication_id: publicationIds[0] ?? null, result }, malformedRefs: collected.malformedRefs };
-  }
-  if (result === null) {
-    return { fact: { state: "receipt_only", source_refs: refs, build_id: buildIds[0] ?? null, build_ids: buildIds, publication_id: null, result: null }, malformedRefs: collected.malformedRefs };
-  }
-  return { fact: { state: "present", source_refs: refs, build_id: result.build_id ?? buildIds[0] ?? null, build_ids: buildIds, publication_id: result.publication_id, result }, malformedRefs: collected.malformedRefs };
-}
-
 function collectPublicationCandidates(
   evidence: JsonObject,
   evidenceRef: string,
   selected: SelectedIdentity,
   matchingEvents: readonly EventRecord[],
-  build: TrustedEvidenceBuild,
 ): PublicationCandidate[] {
   const candidates: PublicationCandidate[] = [];
   const add = (candidate: PublicationCandidate): void => {
@@ -790,7 +609,6 @@ function collectPublicationCandidates(
   const snapshotCurrent = id(snapshot.current_publication_id);
   if (terminalCurrent !== null) add({ publication_id: terminalCurrent, manifest_sha256: null, run_id: null, task_id: selected.values.task_id, authoritative: false, ref: `${evidenceRef}.terminal.current_publication_id` });
   if (snapshotCurrent !== null) add({ publication_id: snapshotCurrent, manifest_sha256: null, run_id: null, task_id: selected.values.task_id, authoritative: false, ref: `${evidenceRef}.snapshot.current_publication_id` });
-  if (build.publication_id !== null) add({ publication_id: build.publication_id, manifest_sha256: null, run_id: selected.values.run_id, task_id: selected.values.task_id, authoritative: false, ref: `${evidenceRef}.build_result.publication_id` });
   return candidates;
 }
 
@@ -799,12 +617,11 @@ function projectPublication(
   evidenceRef: string,
   selected: SelectedIdentity,
   matchingEvents: readonly EventRecord[],
-  build: TrustedEvidenceBuild,
 ): TrustedEvidencePublication {
-  const candidates = collectPublicationCandidates(evidence, evidenceRef, selected, matchingEvents, build);
+  const candidates = collectPublicationCandidates(evidence, evidenceRef, selected, matchingEvents);
   const ids = sortedUnique(candidates.map((candidate) => candidate.publication_id));
   if (candidates.length === 0) {
-    return { state: "missing", source_refs: [], publication_id: null, publication_ids: [], manifest_sha256: null, authoritative: false, consistent_with_build: true };
+    return { state: "missing", source_refs: [], publication_id: null, publication_ids: [], manifest_sha256: null, authoritative: false };
   }
   const grouped = new Map<string, PublicationCandidate[]>();
   for (const candidate of candidates) grouped.set(candidate.publication_id, [...(grouped.get(candidate.publication_id) ?? []), candidate]);
@@ -813,11 +630,8 @@ function projectPublication(
     return manifests.length > 1 ? [group] : [];
   });
   const authoritative = candidates.filter((candidate) => candidate.authoritative);
-  const buildPublicationId = build.publication_id;
-  const consistentWithBuild = buildPublicationId === null || candidates.some((candidate) => candidate.publication_id === buildPublicationId && candidate.authoritative);
-  const mismatch = buildPublicationId !== null && authoritative.length > 0 && !consistentWithBuild;
-  const conflict = groupConflicts.length > 0 || mismatch;
-  const selectedId = buildPublicationId ?? id(object(evidence.snapshot).current_publication_id) ?? authoritative.at(-1)?.publication_id ?? ids[0] ?? null;
+  const conflict = groupConflicts.length > 0;
+  const selectedId = id(object(evidence.snapshot).current_publication_id) ?? authoritative.at(-1)?.publication_id ?? ids[0] ?? null;
   const selectedGroup = selectedId === null ? [] : grouped.get(selectedId) ?? [];
   const manifestValues = sortedUnique(selectedGroup.flatMap((candidate) => candidate.manifest_sha256 === null ? [] : [candidate.manifest_sha256]));
   const refs = sortedUnique(candidates.map((candidate) => candidate.ref));
@@ -828,7 +642,6 @@ function projectPublication(
     publication_ids: ids,
     manifest_sha256: manifestValues[0] ?? null,
     authoritative: authoritative.length > 0,
-    consistent_with_build: consistentWithBuild,
   };
 }
 
@@ -1035,7 +848,6 @@ function emptySemanticProduct(
 function projectSemanticProduct(
   artifacts: TrustedEvidenceArtifacts,
   publicationEvidence: PublicationArtifactEvidence,
-  build: TrustedEvidenceBuild,
   publication: TrustedEvidencePublication,
   expectedIdentity: ExpectedProductAssessmentIdentity | undefined,
 ): TrustedEvidenceSemanticProduct {
@@ -1050,12 +862,10 @@ function projectSemanticProduct(
     return emptySemanticProduct("receipt_only", [...sourceRefs, ...publication.source_refs]);
   }
   if (publication.state === "conflicting" || publicationEvidence.state === "conflicting" ||
-      publicationEvidence.publication_id !== publication.publication_id ||
-      build.publication_id !== null && publicationEvidence.publication_id !== build.publication_id) {
+      publicationEvidence.publication_id !== publication.publication_id) {
     return emptySemanticProduct("conflicting", [...sourceRefs, ...publication.source_refs, publicationEvidence.source_ref]);
   }
-  if (publication.state !== "present" || !publication.authoritative || !publication.consistent_with_build ||
-      build.state !== "present" || build.publication_id === null || publicationEvidence.state !== "present") {
+  if (publication.state !== "present" || !publication.authoritative || publicationEvidence.state !== "present") {
     return emptySemanticProduct("receipt_only", [...sourceRefs, ...publication.source_refs]);
   }
   if (artifactItem.state !== "present" || !artifactItem.produced_receipt ||
@@ -1247,7 +1057,6 @@ const GAP_STAGE_ORDER: readonly TrustedEvidenceGap["stage"][] = [
   "terminal",
   "trusted_input",
   "semantic_product",
-  "build",
   "publication",
   "artifact",
   "final_answer",
@@ -1374,8 +1183,7 @@ export function projectTrustedEvidenceChain(input: ProjectTrustedEvidenceChainIn
   const events = parseEvents(evidence, evidenceRef);
   const selectedEventProjection = selectedEvents(events, identityProjection.selected);
   const terminal = projectTerminal(evidence, evidenceRef, identityProjection.selected, selectedEventProjection.events, selectedEventProjection.identityConflictRefs);
-  const buildProjection = projectBuild(evidence, evidenceRef, identityProjection.selected, selectedEventProjection.events);
-  const publication = projectPublication(evidence, evidenceRef, identityProjection.selected, selectedEventProjection.events, buildProjection.fact);
+  const publication = projectPublication(evidence, evidenceRef, identityProjection.selected, selectedEventProjection.events);
   const artifactProjection = projectArtifacts(
     evidence,
     evidenceRef,
@@ -1389,7 +1197,6 @@ export function projectTrustedEvidenceChain(input: ProjectTrustedEvidenceChainIn
   const semanticProduct = projectSemanticProduct(
     artifacts,
     artifactProjection.publicationEvidence,
-    buildProjection.fact,
     publication,
     expectedAssessment,
   );
@@ -1414,14 +1221,9 @@ export function projectTrustedEvidenceChain(input: ProjectTrustedEvidenceChainIn
   } else if (semanticProduct.product_status === "validated") {
     gaps.push(gap("semantic_product.not_publishable", "semantic_product", "Projected ProductAssessment is validated but not publishable", semanticProduct.source_refs));
   }
-  if (buildProjection.fact.state === "missing") gaps.push(gap("build.missing", "build", "No matching BuildResult or build receipt was found", buildProjection.fact.source_refs));
-  if (buildProjection.fact.state === "receipt_only") gaps.push(gap("build.receipt_only", "build", "Only a build or operation identifier was observed; BuildResult is absent", buildProjection.fact.source_refs));
-  if (buildProjection.fact.state === "conflicting") gaps.push(gap("build.conflicting", "build", "Matching BuildResult receipts conflict", buildProjection.fact.source_refs));
-  if (buildProjection.malformedRefs.length > 0) gaps.push(gap("build.malformed", "build", "A matching build result was malformed and was not trusted", buildProjection.malformedRefs));
   if (publication.state === "missing") gaps.push(gap("publication.missing", "publication", "No publication identifier or receipt matched the selected run", publication.source_refs));
   if (publication.state === "receipt_only") gaps.push(gap("publication.receipt_only", "publication", "Publication identifier exists without an authoritative publication receipt", publication.source_refs));
   if (publication.state === "conflicting") gaps.push(gap("publication.conflicting", "publication", "Publication receipts or manifest hashes conflict", publication.source_refs));
-  if (!publication.consistent_with_build) gaps.push(gap("publication.build_result_mismatch", "publication", "BuildResult.publication_id does not match an authoritative publication receipt", publication.source_refs));
   if (artifacts.items.length === 0) gaps.push(gap("artifact.receipts_missing", "artifact", "No artifact production or artifact API receipt was observed", [evidenceRef]));
   if (artifacts.state === "conflicting") {
     gaps.push(gap("artifact.conflicting", "artifact", "Artifact production/list/download receipts conflict", artifacts.source_refs));
@@ -1441,7 +1243,6 @@ export function projectTrustedEvidenceChain(input: ProjectTrustedEvidenceChainIn
     ...(input.hil === undefined ? [] : [hilRef]),
     ...identityProjection.identity.source_refs,
     ...terminal.source_refs,
-    ...buildProjection.fact.source_refs,
     ...publication.source_refs,
     ...artifacts.source_refs,
     ...finalAnswer.source_refs,
@@ -1455,7 +1256,6 @@ export function projectTrustedEvidenceChain(input: ProjectTrustedEvidenceChainIn
     terminal,
     source_assets: sourceAssets,
     semantic_product: semanticProduct,
-    build: buildProjection.fact,
     publication,
     artifacts,
     final_answer: finalAnswer,

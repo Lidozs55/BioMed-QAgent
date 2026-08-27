@@ -37,11 +37,11 @@ geo.expression.v1 绑定必须声明 `parameters`，且字段须与服务端 nor
 - `value_semantics`：在 `expression_value` / `normalized_expression` / `raw_count` 中选
 - `value_scale`：`linear` / `log2` / `log10` / `unknown`（诚实声明，不猜测）
 - `expression_unit`：**必须属于 profile 允许集**（如 `log2_expression`、`tpm_unstranded`、
-  `fpkm`、`estimated_count`、`expression_value` 等）——`validate_dataset_build_spec` 会
+  `fpkm`、`estimated_count`、`expression_value` 等）——`validate_dataset_execution` 会
   对未知单位返回 `unknown_unit` reason code 并列出允许值，按提示修正，不要带病构建。
 - `platform_ids`：声明 GPL 平台号（`^GPL\d+$`），供平台审计与 probe 映射使用。
 
-每个不同 GSE 必须使用独立的 `DatasetBuildSpec` 和 `execute_dataset_build` 调用，不跨
+每个不同 GSE 必须使用独立的 `DatasetExecutionSpec` 和 `execute_dataset_execution` 调用，不跨
 GSE 拼接行。series matrix 的 `!Sample_*` 字段会自动发布为 `sample_metadata.csv`；若
 表达主文件是 tximport/补充矩阵，则把同一 GSE 的 family SOFT 通过
 `metadata_files={"binding_id": "<SOFT 相对路径>"}` 传给构建工具。tumor/normal 分组
@@ -50,7 +50,7 @@ GSE 拼接行。series matrix 的 `!Sample_*` 字段会自动发布为 `sample_m
 ### gene 级绑定：probe→gene 映射必须经 `mapping_files` 声明
 
 当 schema 是 gene 级（`gene_expression.long.v1` / `gene_sample_measurement`）而源是
-GEO 探针（`geo_probe`）时，**必须在 `execute_dataset_build` 里为同一个 binding 提供
+GEO 探针（`geo_probe`）时，**必须在 `execute_dataset_execution` 里为同一个 binding 提供
 probe→gene 平台注释**：
 
 ```text
@@ -118,7 +118,7 @@ mapping_files = { "<binding_id>": "<GPL 注释相对路径>" }
 ## 6. 失败处理
 
 - `no_data` 且 rejected.csv 显示 `unknown_unit`/`unknown_semantics`：修正 AdapterParams
-  后重新 `validate_dataset_build_spec`，不要用相同参数重跑；
+  后重新 `validate_dataset_execution`，不要用相同参数重跑；
 - `no_data` / `no_primary_data`（probe 未折叠 / gene-required coverage 未达标，机制见
   §3）：补上 `mapping_files[binding_id]` 的 probe→gene 注释后重试，或改走 gene 级源
   （GDC/Xena），或改用 probe 级 schema 发布；不要沿用缺失映射的参数重跑；

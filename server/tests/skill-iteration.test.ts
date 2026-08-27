@@ -39,7 +39,6 @@ async function completedTask(tasksRoot: string, input: string, assistant: string
   });
   await repository.appendRunEvent(accepted.task_id, accepted.run_id, {
     type: "run_completed",
-    build_result: null,
   });
   const snapshot = await repository.getSnapshot(accepted.task_id);
   return {

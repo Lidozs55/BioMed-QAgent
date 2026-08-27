@@ -27,7 +27,7 @@ export type FamilyReleaseBlockerCode =
 /** Every claim in the release packet is bound to an exact execution and rollback. */
 export interface FamilyReleaseEvidenceRef {
   readonly task_id: string;
-  readonly build_id: string;
+  readonly requirement_id: string;
   readonly run_id: string;
   readonly commit: string;
   readonly digest: string;
@@ -123,7 +123,7 @@ function nonEmpty(value: string): boolean {
 
 function refIsExact(ref: FamilyReleaseEvidenceRef): boolean {
   return nonEmpty(ref.task_id)
-    && nonEmpty(ref.build_id)
+    && nonEmpty(ref.requirement_id)
     && nonEmpty(ref.run_id)
     && COMMIT.test(ref.commit)
     && HEX_DIGEST.test(ref.digest)
@@ -289,9 +289,9 @@ export function evaluateFamilyHostRelease(input: FamilyHostReleaseInput): Family
 }
 
 export function compareFamilyReleaseEvidence(left: FamilyReleaseEvidenceRef, right: FamilyReleaseEvidenceRef): number {
-  return [left.task_id, left.build_id, left.run_id, left.commit, left.digest, left.rollback_ref]
+  return [left.task_id, left.requirement_id, left.run_id, left.commit, left.digest, left.rollback_ref]
     .join("\u0000")
-    .localeCompare([right.task_id, right.build_id, right.run_id, right.commit, right.digest, right.rollback_ref].join("\u0000"));
+    .localeCompare([right.task_id, right.requirement_id, right.run_id, right.commit, right.digest, right.rollback_ref].join("\u0000"));
 }
 
 export function familyReleaseGateIndex(gate: FamilyReleaseGate): number {

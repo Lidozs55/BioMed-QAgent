@@ -24,7 +24,7 @@ canonicalizer 按 normalization profile 对每行做 fail-closed 校验，拒绝
 - `value_semantics` 必须在 `expression_value`/`normalized_expression`/`raw_count`——
   否则 `unknown_semantics`；
 - `value_scale` 必须是 `linear`/`log2`/`log10`/`unknown`——诚实声明，**不猜测**；
-- 这些在 spec 预检阶段就会拦截（`validate_dataset_build_spec` 返回 reason_code 并列出
+- 这些在 spec 预检阶段就会拦截（`validate_dataset_execution` 返回 reason_code 并列出
   允许值），不要带病构建。
 
 ## 3. 缺失、重复与异常（保守口径）

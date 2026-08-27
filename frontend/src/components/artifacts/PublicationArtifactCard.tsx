@@ -14,20 +14,20 @@ import { formatSize } from "@/lib/fileUtils";
 import type { ManifestArtifactEntry } from "@/runtime/contracts";
 
 /** V2 manifest-driven build artifact card. */
-export function BuildArtifactCard({
+export function PublicationArtifactCard({
   entry,
-  buildId,
+  publicationId,
   taskId,
   previewCsv,
 }: {
   entry: ManifestArtifactEntry;
-  buildId: string;
+  publicationId: string;
   taskId?: string | null;
   previewCsv?: boolean;
 }) {
-  const { getBuildArtifactUrl } = useAPI();
+  const { getPublicationArtifactUrl } = useAPI();
   const name = artifactBasename(entry);
-  const url = getBuildArtifactUrl(buildId, entry.artifact_id, taskId);
+  const url = getPublicationArtifactUrl(publicationId, entry.artifact_id, taskId);
   const previewable = previewCsv === true && isCsvPreviewable(name);
   return (
     <Card size="sm" className="min-w-0">

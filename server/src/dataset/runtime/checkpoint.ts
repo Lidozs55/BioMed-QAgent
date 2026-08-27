@@ -41,21 +41,23 @@ export function operationFilename(operationId: string): string {
 
 /**
  * Build execution state with append-only operation-attempt history (Python
- * ``BuildState``).
+ * ``ExecutionState``).
  */
-export interface BuildState {
+export interface ExecutionState {
   task_id: string;
-  build_id: string;
+  run_id: string;
+  requirement_id: string;
   operation_attempts: OperationAttempt[];
   inflight_attempt: OperationAttempt | null;
   completed_operations: Record<string, string>;
   fixed_operation_checkpoint_identities: FixedOperationCheckpointIdentityState;
 }
 
-export function newBuildState(taskId: string, buildId: string): BuildState {
+export function newExecutionState(taskId: string, runId: string, requirementId: string): ExecutionState {
   return {
     task_id: taskId,
-    build_id: buildId,
+    run_id: runId,
+    requirement_id: requirementId,
     operation_attempts: [],
     inflight_attempt: null,
     completed_operations: {},
@@ -65,10 +67,10 @@ export function newBuildState(taskId: string, buildId: string): BuildState {
 
 /**
  * Find a SUCCEEDED attempt matching the given digests (idempotency).  The
- * scan is in reverse append order (Python ``BuildState.find_reusable``).
+ * scan is in reverse append order (Python ``ExecutionState.find_reusable``).
  */
 export function findReusable(
-  state: BuildState,
+  state: ExecutionState,
   operationId: string,
   inputDigest: string,
   parameterDigest: string,
@@ -143,7 +145,7 @@ export type FixedOperationCheckpointMigrationState =
   | "legacy_identity_missing";
 
 /**
- * Per-operation identities persisted in the same atomic BuildState snapshot as
+ * Per-operation identities persisted in the same atomic ExecutionState snapshot as
  * the attempt and completion projection. A legacy state has no identity
  * evidence and therefore cannot make an old checkpoint reusable.
  */
@@ -237,7 +239,7 @@ function parseFixedOperationCheckpointIdentityState(
 
 /** Persist the identity only as part of a successful fixed operation commit. */
 export function markFixedOperationCheckpointIdentity(
-  state: BuildState,
+  state: ExecutionState,
   operationId: string,
   identity: Readonly<FixedOperationCheckpointIdentity>,
 ): void {
@@ -251,7 +253,7 @@ export function markFixedOperationCheckpointIdentity(
 
 /** Return persisted identity evidence for one operation, or null for legacy state. */
 export function fixedOperationCheckpointIdentity(
-  state: BuildState,
+  state: ExecutionState,
   operationId: string,
 ): Readonly<FixedOperationCheckpointIdentity> | null {
   if (state.fixed_operation_checkpoint_identities.migration_state !== "native") return null;
@@ -343,18 +345,19 @@ export function verifyFixedOperationCheckpointIdentity(
 }
 
 /** Append a new operation attempt (append-only, never mutate existing). */
-export function appendAttempt(state: BuildState, attempt: OperationAttempt): void {
+export function appendAttempt(state: ExecutionState, attempt: OperationAttempt): void {
   state.operation_attempts.push(attempt);
 }
 
 /** Record the output digest of a completed operation. */
-export function markCompleted(state: BuildState, operationId: string, outputDigest: string): void {
+export function markCompleted(state: ExecutionState, operationId: string, outputDigest: string): void {
   state.completed_operations[operationId] = outputDigest;
 }
 
-interface BuildStateFile {
+interface ExecutionStateFile {
   task_id: string;
-  build_id: string;
+  run_id: string;
+  requirement_id: string;
   operation_attempts: unknown[];
   inflight_attempt: unknown;
   completed_operations: Record<string, string>;
@@ -365,18 +368,19 @@ interface BuildStateFile {
  * Load build state from disk, or create a fresh one.  Throws on task/build id
  * mismatch to guard against workdir reuse or accidental id confusion.
  */
-export function loadBuildState(stateDir: string, taskId: string, buildId: string): BuildState {
-  const stateFile = join(stateDir, "build_state.json");
+export function loadExecutionState(stateDir: string, taskId: string, runId: string, requirementId: string): ExecutionState {
+  const stateFile = join(stateDir, "execution_state.json");
   if (existsSync(stateFile)) {
-    const parsed = JSON.parse(readFileSync(stateFile, "utf8")) as BuildStateFile;
-    if (parsed.task_id !== taskId || parsed.build_id !== buildId) {
+    const parsed = JSON.parse(readFileSync(stateFile, "utf8")) as ExecutionStateFile;
+    if (parsed.task_id !== taskId || parsed.run_id !== runId || parsed.requirement_id !== requirementId) {
       throw new Error(
-        `build state id mismatch: file has ${parsed.task_id!}/${parsed.build_id!}, requested ${taskId}/${buildId}`,
+        `execution state id mismatch: file has ${parsed.task_id!}/${parsed.run_id!}/${parsed.requirement_id!}, requested ${taskId}/${runId}/${requirementId}`,
       );
     }
     return {
       task_id: parsed.task_id,
-      build_id: parsed.build_id,
+      run_id: parsed.run_id,
+      requirement_id: parsed.requirement_id,
       operation_attempts: parsed.operation_attempts.map((item) =>
         parseOperationAttempt(item),
       ),
@@ -390,13 +394,13 @@ export function loadBuildState(stateDir: string, taskId: string, buildId: string
       ),
     };
   }
-  return newBuildState(taskId, buildId);
+  return newExecutionState(taskId, runId, requirementId);
 }
 
 /** Persist build state atomically via temp file + rename. */
-export function saveBuildState(stateDir: string, state: BuildState): void {
+export function saveExecutionState(stateDir: string, state: ExecutionState): void {
   mkdirSync(stateDir, { recursive: true });
-  const stateFile = join(stateDir, "build_state.json");
+  const stateFile = join(stateDir, "execution_state.json");
   const tmp = `${stateFile}.part`;
   const payload = `${JSON.stringify(state, null, 2)}\n`;
   writeFileSync(tmp, payload, "utf8");
@@ -406,7 +410,8 @@ export function saveBuildState(stateDir: string, state: BuildState): void {
 /** Versioned, attempt-bound checkpoint for one operation output. */
 export interface OperationOutputEnvelope {
   task_id: string;
-  build_id: string;
+  run_id?: string;
+  requirement_id: string;
   operation_id: string;
   operation_attempt_id: string;
   output_digest: string;
@@ -447,7 +452,8 @@ export async function loadOperationOutput(
   options: {
     taskRoot: string;
     taskId: string;
-    buildId: string;
+    runId?: string;
+    requirementId: string;
     operationId: string;
     operationAttemptId: string;
     outputDigest: string;
@@ -463,7 +469,8 @@ export async function loadOperationOutput(
     const outputDigest = sha256Json(envelope.output);
     if (
       envelope.task_id !== options.taskId ||
-      envelope.build_id !== options.buildId ||
+      (envelope.run_id ?? "run_test") !== (options.runId ?? "run_test") ||
+      envelope.requirement_id !== options.requirementId ||
       envelope.operation_id !== options.operationId ||
       envelope.operation_attempt_id !== options.operationAttemptId ||
       envelope.output_digest !== options.outputDigest ||
@@ -517,7 +524,7 @@ export async function loadOperationOutput(
  * diverged from the state projection (Python ``validate_attempt_log_prefix``).
  */
 export function validateAttemptLogPrefix(
-  state: BuildState,
+  state: ExecutionState,
   attemptsPath: string,
 ): number {
   if (!existsSync(attemptsPath)) return 0;
@@ -576,6 +583,9 @@ export function saveOperationResultManifest(
 export function loadOperationResultManifest(
   stateDir: string,
   operationId: string,
+  taskId?: string,
+  runId?: string,
+  requirementId?: string,
 ): OperationResultManifest | null {
   const manifestFile = join(
     stateDir,
@@ -583,7 +593,12 @@ export function loadOperationResultManifest(
   );
   if (!existsSync(manifestFile)) return null;
   try {
-    return parseOperationResultManifest(JSON.parse(readFileSync(manifestFile, "utf8")));
+    return parseOperationResultManifest(
+      JSON.parse(readFileSync(manifestFile, "utf8")),
+      taskId,
+      runId,
+      requirementId,
+    );
   } catch {
     return null;
   }

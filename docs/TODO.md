@@ -8,20 +8,20 @@
 
 ## P0 — Release evidence
 
-- [ ] **冻结单 Host Gold1–Gold6 证据。** 在同一 commit、同一 Host 与同一 data root 上记录 task/run/build、registered input、OperationResult、B3、ProductAssessment、Publication 与 Artifact API hash 证据；缺失证据必须标为 blocked/unknown，不能用历史产物补齐。
+- [ ] **冻结单 Host Gold1–Gold6 证据。** 在同一 commit、同一 Host 与同一 data root 上记录 task/run/requirement、registered input、OperationResult、B3、ProductAssessment、Publication 与 Artifact API hash 证据；缺失证据必须标为 blocked/unknown，不能用历史产物补齐。
   - 验收：Gold1–Gold5 的每项结论可回溯到同提交证据；Gold6 只有在真实 `publication_acceptance` HIL 后才可通过。
   - 前置：应用 provider 账户与 live source 可用；运行期间不得并行启动第二个 Host。
 
 ## P1 — Runtime hardening
 
 - [ ] **权威 dataset/revision identity 接入生产路径。** 从 `DatasetCore` 传递 task-owned registration receipts，基于冻结 provider revision 与 asset closure 生成 identity；通过显式 V2 schema/PK 迁移 expression adapters。
-  - 验收：`dataset_id`/`dataset_revision_id` 不来自 `buildId`、注册时间或调用方自报；V1 schema 不静默扩列；缺少权威事实时 fail closed。
+  - 验收：`dataset_id`/`dataset_revision_id` 不来自 requirement ID、注册时间或调用方自报；V1 schema 不静默扩列；缺少权威事实时 fail closed。
 - [ ] **checkpoint/reuse/restart 闭环。** 持久化 implementation/release identity，在真实 reuse 前调用 verifier，并补齐 owner fencing、orphan cleanup、restart 与 TOCTOU 回归测试。
   - 验收：input/params/FamilySpec/implementation/runtime/policy 任一 digest 改变都会使 checkpoint 失效；cancel/timeout/restart/stale generation 不能提交或复用旧 Publication。
 - [ ] **统一 HIL Questionnaire。** 将 `UserInputDialog` 迁移到现有 Questionnaire 基础设施。
   - 验收：现有权限和 publication acceptance 流程行为不回退；历史事件仍可重放。
-- [ ] **数据集请求 formal-route preflight 与终态闭包。** 在调研前返回候选 semantic family/projection、单一行粒度、可用 Core providers 和缺失 blockers；由服务端生成 digest-bound dynamic build skeleton。明确要求数据集的 agent run 未提交 BuildResult 或仍有未决 projection 时，不得以 `run_completed(build_result=null)` 成功结束。
-  - 验收：gold7 类复合请求被拆为多个 projection/build；无 provider 时产生结构化 `no_data`/`spec_rejected`/blocked outcome；现有非数据问答仍可无 BuildResult 完成；事件重放结果一致。
+- [ ] **数据集请求 formal-route scaffold。** 只读 capability preflight 已接入；继续由服务端生成 digest-bound dynamic execution skeleton，并为候选 semantic family/projection、单一行粒度、可用 Core providers 和缺失 blockers 提供确定性输入。
+  - 验收：gold7 类复合请求可拆为多个 projection/requirement；无 provider 时形成结构化 blocker，且不把 workspace 文件提升为正式产物；事件重放结果一致。
 
 ## P2 — Product and developer experience
 
@@ -37,6 +37,7 @@
 ## Deferred / 非当前工作
 
 - **Isolated Transform Host / 通用 sandbox：** 除非新的 ADR 明确恢复该方向，否则不实施 container、IPC worker 或独立低权限进程；不得把 `node:vm` 或同进程执行改称 sandbox。
+- **Publication 驱动 Run 终态闭包：** 不实施“只有产生 Publication 时 Run 才完成”。非数据汇报无需 Publication；简短 Run progress context 仅作软提示，数据产品的正式完成由 ProductAssessment + Publication 证明。
 - **通用 Agent DAG、Transform 市场、一次性删除静态 Registry：** 不属于当前发布闭环。
 
 ## 完成规则

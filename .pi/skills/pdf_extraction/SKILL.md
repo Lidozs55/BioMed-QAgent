@@ -23,5 +23,5 @@ captions, and page count.
 ## Constraints
 
 - Extracted data is preparation material, not a formal artifact: it may inform
-  research but never replaces the trusted `execute_dataset_build` publication
+  research but never replaces the trusted `execute_dataset_execution` publication
   path.

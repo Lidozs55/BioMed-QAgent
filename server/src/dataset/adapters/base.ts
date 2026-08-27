@@ -65,15 +65,15 @@ export function sourceLongColumns(
 
 export function sourceLongIdentityValues(options: {
   identityContext: ExpressionAdapterIdentityContext | null;
-  buildId: string;
+  requirementId: string;
   sourceAsset: SourceAsset;
   geneIdRaw: string;
   sampleId: string;
 }): string[] {
   if (options.identityContext === null) {
     return [
-      makeRecordId(options.buildId, options.geneIdRaw, options.sampleId),
-      options.buildId,
+      makeRecordId(options.requirementId, options.geneIdRaw, options.sampleId),
+      options.requirementId,
       options.sourceAsset.source_id,
       options.sourceAsset.asset_id,
     ];
@@ -169,7 +169,7 @@ export class BufferedCsvWriter implements RowWriter {
 
 export interface ExtractContext {
   sourceAsset: SourceAsset;
-  buildId: string;
+  requirementId: string;
   bindingId: string;
   sourceName: string;
   parameters: AdapterParams | null;
@@ -212,7 +212,7 @@ export abstract class SourceAdapter {
     sourceAsset: SourceAsset,
     sourcePath: string,
     options: {
-      buildId: string;
+      requirementId: string;
       bindingId: string;
       schemaRef: string;
       outputDir: string;
@@ -226,7 +226,7 @@ export abstract class SourceAdapter {
       signal?: AbortSignal | null;
     },
   ): Promise<DataBatch> {
-    const { buildId, bindingId, schemaRef, outputDir } = options;
+    const { requirementId, bindingId, schemaRef, outputDir } = options;
     const parameters = options.parameters ?? null;
     const identityContext = schemaRef.endsWith(".v2")
       ? parseExpressionAdapterIdentityContext(options.identityContext)
@@ -256,7 +256,7 @@ export abstract class SourceAdapter {
         rows,
         longWriter,
         rejectedWriter,
-        { sourceAsset, buildId, bindingId, sourceName, parameters, identityContext, schemaRef },
+        { sourceAsset, requirementId, bindingId, sourceName, parameters, identityContext, schemaRef },
         signal,
       );
       longWriter.flush();

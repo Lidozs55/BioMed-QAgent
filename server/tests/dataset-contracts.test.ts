@@ -1,13 +1,10 @@
-import { readFileSync } from "node:fs";
-
 import { describe, expect, test } from "vitest";
 
-import type { DatasetBuildSpec, DatasetSchema } from "../src/dataset/contracts/index.js";
+import type { DatasetExecutionSpec, DatasetSchema } from "../src/dataset/contracts/index.js";
 import {
-  parseBuildResult,
   parseCoreAcquisitionRequest,
   parseCoreDownloadAttempt,
-  parseDatasetBuildSpec,
+  parseDatasetExecutionSpec,
   parseDatasetManifest,
   parseDatasetPublication,
   parseDatasetManifestV2,
@@ -21,50 +18,7 @@ import {
   parseValidationResult,
   parseWorkflowRecipeRef,
 } from "../src/dataset/contracts/index.js";
-import { checkContractParity } from "./contract-parity.js";
-import type { GoldenFixture } from "./contract-parity.js";
-import { datasetBuildSpec as spec } from "./dataset-bridge-fixture.js";
-
-const GOLDEN_OUTCOMES = ["succeeded", "partial_success", "no_data", "spec_rejected"];
-
-function loadGoldenFixture(outcome: string): GoldenFixture {
-  const raw = JSON.parse(
-    readFileSync(
-      new URL(`../../tests/migration/golden/${outcome}/fixture.json`, import.meta.url),
-      "utf8",
-    ),
-  ) as GoldenFixture;
-  return raw;
-}
-
-describe("Phase 4 step 1 contract parity (Python V2 fixtures)", () => {
-  test.each(GOLDEN_OUTCOMES)("%s fixture parses and round-trips", (outcome) => {
-    const issues = checkContractParity(loadGoldenFixture(outcome));
-    expect(issues).toEqual([]);
-  });
-
-  test("schema artifact parses as the registered DatasetSchema", () => {
-    const schema = JSON.parse(
-      readFileSync(
-        new URL(
-          "../../tests/migration/golden/succeeded/artifacts/schema.json",
-          import.meta.url,
-        ),
-        "utf8",
-      ),
-    ) as unknown;
-    const parsed = parseDatasetSchema(schema);
-    expect(parsed.schema_id).toBe("gene_expression.long.v1");
-    expect(parsed.primary_key).toEqual([
-      "dataset_id",
-      "sample_id",
-      "gene_id",
-      "measurement_type",
-    ]);
-    expect(parsed.fields).toHaveLength(22);
-    expect(parsed.fields.every((field) => field.schema_version === "1.0")).toBe(true);
-  });
-});
+import { datasetExecutionSpec as spec } from "./dataset-bridge-fixture.js";
 
 describe("contract invariants (mirror Pydantic model_validator)", () => {
   const validSchema: DatasetSchema = {
@@ -188,7 +142,7 @@ describe("contract invariants (mirror Pydantic model_validator)", () => {
       parseDatasetManifest({
         manifest_id: "manifest_1",
         task_id: "task_1",
-        build_id: "build_1",
+        requirement_id: "build_1",
         dataset_family: "gene_expression",
         row_granularity: "gene_sample_measurement",
         schema_ref: "gene_expression.long.v1",
@@ -202,15 +156,14 @@ describe("contract invariants (mirror Pydantic model_validator)", () => {
   test("OperationResultManifest parses native committed output and dependency closure", () => {
     const digest = "a".repeat(64);
     const parsed = parseOperationResultManifest({
-      schema_version: "1.0", result_manifest_id: "result_1", task_id: "task_1", build_id: "build_1",
+      schema_version: "1.0", result_manifest_id: "result_1", task_id: "task_1", run_id: "run_1", requirement_id: "build_1",
       operation_id: "parse:binding_1", operation_kind: "parse", operation_attempt_id: "attempt_1", attempt: 1,
       status: "succeeded", input_digest: digest, parameter_digest: digest, implementation_digest: digest,
       output_digest: digest, output_kind: "parsed_table", output_summary: { rows: 4 },
       output_files: [{ relative_path: "batches/binding_1.csv", size_bytes: 10, sha256: digest }],
       dependency_closure: { input_asset_ids: ["asset_1"], upstream_result_manifest_ids: [], parameter_digest: digest, implementation_digest: digest },
       commit: { state: "committed", commit_id: "commit_1", committed_at: "2026-08-18T00:00:00Z" },
-      migration: { mode: "native", legacy_checkpoint_path: null, migrated_at: null },
-    }, "task_1", "build_1");
+    }, "task_1", "run_1", "build_1");
     expect(parsed.operation_kind).toBe("parse");
     expect(parsed.output_files[0]?.sha256).toBe(digest);
   });
@@ -218,32 +171,30 @@ describe("contract invariants (mirror Pydantic model_validator)", () => {
   test("OperationResultManifest rejects replay/path/digest/kind/migration errors", () => {
     const digest = "a".repeat(64);
     const base = {
-      schema_version: "1.0", result_manifest_id: "result_1", task_id: "task_1", build_id: "build_1",
+      schema_version: "1.0", result_manifest_id: "result_1", task_id: "task_1", run_id: "run_1", requirement_id: "build_1",
       operation_id: "publish", operation_kind: "publish", operation_attempt_id: "attempt_1", attempt: 1,
       status: "succeeded", input_digest: digest, parameter_digest: digest, implementation_digest: digest,
       output_digest: digest, output_kind: "publication_manifest", output_summary: {}, output_files: [],
       dependency_closure: { input_asset_ids: [], upstream_result_manifest_ids: [], parameter_digest: digest, implementation_digest: digest },
       commit: { state: "committed", commit_id: "commit_1", committed_at: "2026-08-18T00:00:00Z" },
-      migration: { mode: "native", legacy_checkpoint_path: null, migrated_at: null },
     };
     expect(() => parseOperationResultManifest({ ...base, operation_id: "../escape" })).toThrow(/operation identifier/);
     expect(() => parseOperationResultManifest({ ...base, parameter_digest: "b".repeat(64) })).toThrow(/parameter digest/);
     expect(() => parseOperationResultManifest({ ...base, operation_kind: "assemble" })).toThrow(/assemble result/);
     expect(() => parseOperationResultManifest({ ...base, output_files: [{ relative_path: "../escape", size_bytes: 1, sha256: digest }] })).toThrow(/escape/);
-    expect(() => parseOperationResultManifest({ ...base, migration: { mode: "legacy_read_only", legacy_checkpoint_path: "state/old.json", migrated_at: null } })).toThrow(/requires read-only/);
+    expect(() => parseOperationResultManifest({ ...base, run_id: "run_other" }, "task_1", "run_1", "build_1")).toThrow(/different run/);
     expect(() => parseOperationResultManifest({ ...base, status: "failed", output_digest: digest })).toThrow(/must not carry/);
   });
 
   test("OperationResultManifest requires committed atomic receipt", () => {
     const digest = "a".repeat(64);
     expect(() => parseOperationResultManifest({
-      schema_version: "1.0", result_manifest_id: "result_1", task_id: "task_1", build_id: "build_1",
+      schema_version: "1.0", result_manifest_id: "result_1", task_id: "task_1", run_id: "run_1", requirement_id: "build_1",
       operation_id: "publish", operation_kind: "publish", operation_attempt_id: "attempt_1", attempt: 1,
       status: "succeeded", input_digest: digest, parameter_digest: digest, implementation_digest: digest,
       output_digest: digest, output_kind: "publication_manifest", output_summary: {}, output_files: [],
       dependency_closure: { input_asset_ids: [], upstream_result_manifest_ids: [], parameter_digest: digest, implementation_digest: digest },
       commit: { state: "pending", commit_id: "commit_1", committed_at: "2026-08-18T00:00:00Z" },
-      migration: { mode: "native", legacy_checkpoint_path: null, migrated_at: null },
     })).toThrow(/committed/);
   });
 
@@ -252,7 +203,7 @@ describe("contract invariants (mirror Pydantic model_validator)", () => {
       schema_version: "2.0",
       manifest_id: "manifest_v2",
       task_id: "task_1",
-      build_id: "build_1",
+      requirement_id: "build_1",
       dataset_family: "target_evidence",
       row_granularity: "target_record",
       schema_ref: "target.v1",
@@ -322,7 +273,7 @@ describe("contract invariants (mirror Pydantic model_validator)", () => {
       schema_version: "2.0",
       manifest_id: "manifest_v2",
       task_id: "task_1",
-      build_id: "build_1",
+      requirement_id: "build_1",
       dataset_family: "target_evidence",
       row_granularity: "target_record",
       schema_ref: "target.v1",
@@ -351,7 +302,7 @@ describe("contract invariants (mirror Pydantic model_validator)", () => {
     expect(() => parseDatasetManifest({
       manifest_id: "manifest_1",
       task_id: "task_1",
-      build_id: "build_1",
+      requirement_id: "build_1",
       dataset_family: "gene_expression",
       row_granularity: "gene_sample_measurement",
       schema_ref: "gene_expression.long.v1",
@@ -374,8 +325,10 @@ describe("contract invariants (mirror Pydantic model_validator)", () => {
   test("DatasetPublication rejects self-supersede", () => {
     expect(() =>
       parseDatasetPublication({
+        schema_version: "1.1",
         publication_id: "pub_1",
         manifest_ref: "manifest.json",
+        manifest_sha256: "a".repeat(64),
         validation_result_ref: "validation.json",
         published_at: "2026-08-11T00:00:00Z",
         supersedes_publication_id: "pub_1",
@@ -409,25 +362,12 @@ describe("contract invariants (mirror Pydantic model_validator)", () => {
       ...missing,
       manifest_sha256: "not-a-digest",
     })).toThrow(/SHA-256/);
-    // A 1.0 record may not smuggle a receipt.
+    // Retired schemas are rejected even if they carry a receipt.
     expect(() => parseDatasetPublication({
       ...missing,
       schema_version: "1.0",
       manifest_sha256: "a".repeat(64),
-    })).toThrow(/1\.0/);
-  });
-
-  test("DatasetPublication 1.0 (legacy) parses without a receipt", () => {
-    const parsed = parseDatasetPublication({
-      schema_version: "1.0",
-      publication_id: "pub_1",
-      manifest_ref: "manifest.json",
-      validation_result_ref: "validation.json",
-      published_at: "2026-08-11T00:00:00Z",
-      supersedes_publication_id: null,
-    });
-    expect(parsed.schema_version).toBe("1.0");
-    expect(parsed.manifest_sha256).toBeUndefined();
+    })).toThrow(/1\.1/);
   });
 
   test("FieldMapping keeps string-similarity mappings proposed", () => {
@@ -448,19 +388,19 @@ describe("contract invariants (mirror Pydantic model_validator)", () => {
 
   test("Core acquisition contracts bind provider/version/cache/retry identity", () => {
     const digest = "a".repeat(64);
-    const request = parseCoreAcquisitionRequest({ schema_version: "1.0", request_id: "request_1", task_id: "task_1", build_id: "build_1", binding_id: "binding_1", mode: "builtin", provider_id: "gdc_files_v1", recipe_id: null, recipe_version: null, parameters: { accession: "x" } }, "task_1");
+    const request = parseCoreAcquisitionRequest({ schema_version: "1.0", request_id: "request_1", task_id: "task_1", requirement_id: "build_1", binding_id: "binding_1", mode: "builtin", provider_id: "gdc_files_v1", recipe_id: null, recipe_version: null, parameters: { accession: "x" } }, "task_1");
     expect(request.provider_id).toBe("gdc_files_v1");
     const recipe = parseWorkflowRecipeRef({ schema_version: "1.0", recipe_id: "recipe_1", recipe_version: 2, status: "PROMOTED", implementation_digest: digest });
     expect(recipe.status).toBe("PROMOTED");
-    expect(parseCoreAcquisitionRequest({ schema_version: "1.0", request_id: "request_recipe", task_id: "task_1", build_id: "build_1", binding_id: "binding_1", mode: "workflow_recipe", provider_id: null, recipe_id: "recipe_1", recipe_version: 2, parameters: {} }, "task_1", recipe).recipe_id).toBe("recipe_1");
-    expect(() => parseCoreAcquisitionRequest({ schema_version: "1.0", request_id: "request_recipe", task_id: "task_1", build_id: "build_1", binding_id: "binding_1", mode: "workflow_recipe", provider_id: null, recipe_id: "recipe_1", recipe_version: 2, parameters: {} }, "task_1", { ...recipe, status: "DRAFT" })).toThrow(/PROMOTED/);
+    expect(parseCoreAcquisitionRequest({ schema_version: "1.0", request_id: "request_recipe", task_id: "task_1", requirement_id: "build_1", binding_id: "binding_1", mode: "workflow_recipe", provider_id: null, recipe_id: "recipe_1", recipe_version: 2, parameters: {} }, "task_1", recipe).recipe_id).toBe("recipe_1");
+    expect(() => parseCoreAcquisitionRequest({ schema_version: "1.0", request_id: "request_recipe", task_id: "task_1", requirement_id: "build_1", binding_id: "binding_1", mode: "workflow_recipe", provider_id: null, recipe_id: "recipe_1", recipe_version: 2, parameters: {} }, "task_1", { ...recipe, status: "DRAFT" })).toThrow(/PROMOTED/);
     const attempt = parseCoreDownloadAttempt({ schema_version: "1.0", attempt_id: "attempt_1", request_id: "request_1", task_id: "task_1", provider_id: "gdc_files_v1", attempt_number: 1, status: "succeeded", url: "https://example.test/file", bytes_received: 10, error_code: null, retryable: false, started_at: "2026-08-18T00:00:00Z", finished_at: "2026-08-18T00:00:01Z", cache_lineage: { schema_version: "1.0", cache_key: "cache_1", request_identity_digest: digest, cache_blob_sha256: digest, resumed_from_attempt_id: null, part_relative_path: null }, asset: { schema_version: "1.0", asset_id: `asset_${digest}`, task_id: "task_1", role: "source" } }, "task_1");
     expect(attempt.asset?.asset_id).toBe(`asset_${digest}`);
   });
 
   test("Core acquisition contracts reject arbitrary modes, unpromoted recipe use and invalid lineage", () => {
     const digest = "a".repeat(64);
-    const request = { schema_version: "1.0", request_id: "request_1", task_id: "task_1", build_id: "build_1", binding_id: "binding_1", mode: "builtin", provider_id: "gdc_files_v1", recipe_id: null, recipe_version: null, parameters: {} };
+    const request = { schema_version: "1.0", request_id: "request_1", task_id: "task_1", requirement_id: "build_1", binding_id: "binding_1", mode: "builtin", provider_id: "gdc_files_v1", recipe_id: null, recipe_version: null, parameters: {} };
     expect(() => parseCoreAcquisitionRequest({ ...request, mode: "agent_code" })).toThrow(/mode/);
     expect(() => parseCoreAcquisitionRequest({ ...request, mode: "workflow_recipe", provider_id: null, recipe_id: "recipe_1", recipe_version: null })).toThrow(/recipe identity/);
     const attempt = { schema_version: "1.0", attempt_id: "attempt_1", request_id: "request_1", task_id: "task_1", provider_id: "gdc_files_v1", attempt_number: 1, status: "failed", url: "https://example.test/file", bytes_received: 10, error_code: "timeout", retryable: true, started_at: "2026-08-18T00:00:00Z", finished_at: "2026-08-18T00:00:01Z", cache_lineage: { schema_version: "1.0", cache_key: "cache_1", request_identity_digest: digest, cache_blob_sha256: null, resumed_from_attempt_id: null, part_relative_path: "source_assets/file.part" }, asset: null };
@@ -503,48 +443,6 @@ describe("contract invariants (mirror Pydantic model_validator)", () => {
     ).toThrow(/requires recipe_version/);
   });
 
-  test("BuildResult rejects succeeded without publication", () => {
-    expect(() =>
-      parseBuildResult({
-        status: "succeeded",
-        valid_row_count: 4,
-        successful_sources: ["binding_1"],
-        publication_id: null,
-      }),
-    ).toThrow(/succeeded build requires publication_id/);
-  });
-
-  test("BuildResult rejects no_data with valid rows", () => {
-    expect(() =>
-      parseBuildResult({
-        status: "no_data",
-        valid_row_count: 4,
-        reason_codes: ["no_primary_data"],
-      }),
-    ).toThrow(/no_data build must have zero valid rows/);
-  });
-
-  test("BuildResult rejects spec_rejected without reason codes", () => {
-    expect(() =>
-      parseBuildResult({
-        status: "spec_rejected",
-        valid_row_count: 0,
-        reason_codes: [],
-      }),
-    ).toThrow(/spec_rejected build requires reason_codes/);
-  });
-
-  test("BuildResult rejects publication_id on no_data", () => {
-    expect(() =>
-      parseBuildResult({
-        status: "no_data",
-        valid_row_count: 0,
-        publication_id: "pub_1",
-        reason_codes: ["no_primary_data"],
-      }),
-    ).toThrow(/only valid for succeeded or partial_success/);
-  });
-
   test("FileAsset rejects an asset_id not derived from the sha256", () => {
     expect(() =>
       parseFileAsset({
@@ -571,15 +469,15 @@ describe("contract invariants (mirror Pydantic model_validator)", () => {
     ).toThrow(/must not be absolute or escape/);
   });
 
-  test("DatasetBuildSpec rejects unknown fields (extra=forbid)", () => {
-    expect(() => parseDatasetBuildSpec({ ...spec, smuggled_threshold: 1 })).toThrow(
+  test("DatasetExecutionSpec rejects unknown fields (extra=forbid)", () => {
+    expect(() => parseDatasetExecutionSpec({ ...spec, smuggled_threshold: 1 })).toThrow(
       /unknown fields/,
     );
   });
 
-  test("DatasetBuildSpec rejects a path-like binding_id", () => {
+  test("DatasetExecutionSpec rejects a path-like binding_id", () => {
     expect(() =>
-      parseDatasetBuildSpec({
+      parseDatasetExecutionSpec({
         ...spec,
         source_bindings: [
           { ...spec.source_bindings[0], binding_id: "../escape" },
@@ -588,18 +486,18 @@ describe("contract invariants (mirror Pydantic model_validator)", () => {
     ).toThrow(/safe path identifier/);
   });
 
-  test("DatasetBuildSpec keeps target_entity_level family-neutral", () => {
-    expect(parseDatasetBuildSpec({ ...spec, target_entity_level: "variant" }))
+  test("DatasetExecutionSpec keeps target_entity_level family-neutral", () => {
+    expect(parseDatasetExecutionSpec({ ...spec, target_entity_level: "variant" }))
       .toMatchObject({ target_entity_level: "variant" });
-    expect(() => parseDatasetBuildSpec({ ...spec, target_entity_level: "" }))
+    expect(() => parseDatasetExecutionSpec({ ...spec, target_entity_level: "" }))
       .toThrow(/non-empty string/);
-    expect(() => parseDatasetBuildSpec({ ...spec, target_entity_level: 1 }))
+    expect(() => parseDatasetExecutionSpec({ ...spec, target_entity_level: 1 }))
       .toThrow(/non-empty string/);
   });
 
-  test("DatasetBuildSpec normalizes missing schema_version", () => {
-    const withoutVersion: DatasetBuildSpec = { ...spec };
+  test("DatasetExecutionSpec normalizes missing schema_version", () => {
+    const withoutVersion: DatasetExecutionSpec = { ...spec };
     delete withoutVersion.schema_version;
-    expect(parseDatasetBuildSpec(withoutVersion).schema_version).toBe("1.0");
+    expect(parseDatasetExecutionSpec(withoutVersion).schema_version).toBe("1.0");
   });
 });

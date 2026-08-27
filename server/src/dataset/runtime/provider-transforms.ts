@@ -20,7 +20,7 @@ export interface ProviderCarrierTransformInput {
   readonly bytes: Buffer;
   /** Optional source-binding parameters used only as transform facts. */
   readonly parameters?: Readonly<Record<string, JsonValue>>;
-  /** Read-only DatasetBuildSpec entities used only as transform facts. */
+  /** Read-only DatasetExecutionSpec entities used only as transform facts. */
   readonly entities?: Readonly<Record<string, readonly string[]>>;
 }
 

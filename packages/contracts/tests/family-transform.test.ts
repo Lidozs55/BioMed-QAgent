@@ -4,7 +4,7 @@ import {
   buildImplementationDigestCanonical,
   computeImplementationDigest,
   parseAuditArtifactDefinition,
-  parseDatasetBuildSpec2,
+  parseResolvedDatasetExecutionSpec2,
   parseDatasetIdentity,
   parseDatasetTransform,
   parseFamilySpec,
@@ -14,7 +14,7 @@ import {
   parseScopeQualifiedRef,
   parseTransformExecutionReceipt,
   stableStringify,
-  type DatasetBuildSpec2,
+  type ResolvedDatasetExecutionSpec2,
   type DatasetTransform,
   type FamilySpec,
   type ScopeQualifiedRef,
@@ -112,13 +112,13 @@ describe("A-T1 FamilySpec contract (strict, code-free)", () => {
   });
 });
 
-describe("A-T1 DatasetBuildSpec 1.0 snapshot untouched + 2.0 separated", () => {
-  it("parses BuildSpec 2.0 with refs only (no schema_refs blob)", () => {
+describe("A-T1 DatasetExecutionSpec 1.0 snapshot untouched + 2.0 separated", () => {
+  it("parses a resolved execution spec with refs only", () => {
     const ref: ScopeQualifiedRef = { scope: "curated", id: "fs_x", version: "2.0.0", digest: HEX };
-    const spec2: DatasetBuildSpec2 = {
+    const spec2: ResolvedDatasetExecutionSpec2 = {
       schema_version: "2.0",
       spec_kind: "resolved",
-      build_id: "build_1",
+      requirement_id: "build_1",
       family_spec_ref: ref,
       projection_ref: "proj_gene",
       source_bindings: [],
@@ -127,17 +127,17 @@ describe("A-T1 DatasetBuildSpec 1.0 snapshot untouched + 2.0 separated", () => {
       output_format: "multitable",
       idempotency_identity: "idem_1",
     };
-    const parsed = parseDatasetBuildSpec2(spec2, "$");
+    const parsed = parseResolvedDatasetExecutionSpec2(spec2, "$");
     expect(parsed.schema_version).toBe("2.0");
     expect(parsed.family_spec_ref.digest).toBe(HEX);
   });
 
-  it("REJECTS schema_refs injected into BuildSpec 2.0", () => {
+  it("rejects schema_refs injected into an execution spec", () => {
     const ref: ScopeQualifiedRef = { scope: "curated", id: "fs_x", version: "2.0.0", digest: HEX };
     const bad = {
       schema_version: "2.0",
       spec_kind: "resolved",
-      build_id: "build_1",
+      requirement_id: "build_1",
       family_spec_ref: ref,
       projection_ref: "proj_gene",
       source_bindings: [],
@@ -146,8 +146,8 @@ describe("A-T1 DatasetBuildSpec 1.0 snapshot untouched + 2.0 separated", () => {
       output_format: "multitable",
       idempotency_identity: "idem_1",
       schema_refs: ["x"],
-    } as unknown as DatasetBuildSpec2;
-    expect(() => parseDatasetBuildSpec2(bad, "$")).toThrow(/Unknown field|schema_refs/);
+    } as unknown as ResolvedDatasetExecutionSpec2;
+    expect(() => parseResolvedDatasetExecutionSpec2(bad, "$")).toThrow(/Unknown field|schema_refs/);
   });
 });
 
@@ -189,7 +189,7 @@ describe("A-T1 DatasetTransform descriptor + TransformExecutionReceipt", () => {
     schema_version: "1.0",
     task_id: "task_1",
     run_id: "run_1",
-    build_id: "build_1",
+    requirement_id: "build_1",
     invocation_id: "inv_1",
     attempt: 1,
     generation: 1,
@@ -259,7 +259,7 @@ describe("A-T1 DatasetTransform descriptor + TransformExecutionReceipt", () => {
 });
 
 describe("A-T2 identity / projection / relation / audit", () => {
-  it("parses dataset/sample/probe identity (no build_id leakage)", () => {
+  it("parses dataset/sample/probe identity (no requirement_id leakage)", () => {
     const id = parseDatasetIdentity(
       { dataset_id: DATASET_ID, dataset_revision_id: DATASET_REVISION_ID, asset_id: ASSET_ID },
       "$",
@@ -268,7 +268,7 @@ describe("A-T2 identity / projection / relation / audit", () => {
     expect(id.dataset_id).not.toMatch(/^build_/);
   });
 
-  it("REJECTS dataset_id that equals a build_id shape", () => {
+  it("REJECTS dataset_id that equals a requirement_id shape", () => {
     expect(() =>
       parseDatasetIdentity(
         { dataset_id: "build_123", dataset_revision_id: DATASET_REVISION_ID, asset_id: ASSET_ID },

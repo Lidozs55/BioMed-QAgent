@@ -5,10 +5,10 @@ import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import type { DatasetBridgeResponse } from "@biomed/contracts";
-import { createDatasetBuildTools } from "../src/agent/tools/dataset-build.js";
+import { createDatasetExecutionTools } from "../src/agent/tools/dataset-execution.js";
 import { CoreAcquisitionError } from "../src/dataset/acquisition/runtime.js";
-import { readBuildContinuation } from "../src/runtime/build-continuation.js";
-import { datasetBuildSpec as spec } from "./dataset-bridge-fixture.js";
+import { readExecutionContinuation } from "../src/runtime/execution-continuation.js";
+import { datasetExecutionSpec as spec } from "./dataset-bridge-fixture.js";
 
 const roots: string[] = [];
 
@@ -22,9 +22,9 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-describe("Pi DatasetBuild tools", () => {
-  test("exposes a compact DatasetBuildSpec contract while retaining Core validation", async () => {
-    const [validateTool, executeTool] = createDatasetBuildTools({
+describe("Pi DatasetExecution tools", () => {
+  test("exposes a compact DatasetExecutionSpec contract while retaining Core validation", async () => {
+    const [validateTool, executeTool] = createDatasetExecutionTools({
       client: { validate: vi.fn(), execute: vi.fn() },
       taskId: "task_tool",
       taskRoot: await toolTaskRoot(),
@@ -46,7 +46,7 @@ describe("Pi DatasetBuild tools", () => {
     expect(compactSchema.type).toBe("object");
     expect(compactSchema.additionalProperties).toBe(false);
     expect(compactSchema.required).toEqual([
-      "build_id",
+      "requirement_id",
       "objective",
       "dataset_family",
       "row_granularity",
@@ -98,7 +98,7 @@ describe("Pi DatasetBuild tools", () => {
       version: 1, request_id: "request_execute", ok: false, data: null,
       error: { code: "no_data", message: "No data", retryable: false, details: {} },
     }));
-    const [validateTool, executeTool] = createDatasetBuildTools({
+    const [validateTool, executeTool] = createDatasetExecutionTools({
       client: { validate, execute },
       taskId: "task_tool",
       taskRoot: await toolTaskRoot(),
@@ -150,7 +150,7 @@ describe("Pi DatasetBuild tools", () => {
       version: 1, request_id: "request_validate", ok: true,
       data: { valid: true, reason_codes: [], reasons: [] }, error: null,
     }));
-    const tools = createDatasetBuildTools({
+    const tools = createDatasetExecutionTools({
       client: { validate, execute },
       taskId: "task_tool", taskRoot: await toolTaskRoot(),
       runId: () => "run_tool", piSessionId: () => "pi_tool",
@@ -166,15 +166,15 @@ describe("Pi DatasetBuild tools", () => {
         route_scope: "static_registered_family",
         dynamic_provider_availability_evaluated: false,
         do_not_retry_static: true,
-        recommended_next_action: expect.stringContaining("submit_dynamic_family_build"),
+        recommended_next_action: expect.stringContaining("submit_dynamic_family_publication"),
       },
     });
     expect(result.content).toContain("This result covers only the static registered-family route");
     expect(result.content).toContain("Stop static schema/required_fields probing");
   });
 
-  test("labels DatasetBuildSpec tools as static-route capabilities", async () => {
-    const tools = createDatasetBuildTools({
+  test("labels DatasetExecutionSpec tools as static-route capabilities", async () => {
+    const tools = createDatasetExecutionTools({
       client: { validate: vi.fn(), execute: vi.fn() },
       taskId: "task_tool", taskRoot: await toolTaskRoot(),
       runId: () => "run_tool", piSessionId: () => "pi_tool",
@@ -189,7 +189,7 @@ describe("Pi DatasetBuild tools", () => {
       version: 1, request_id: "request_validate", ok: true,
       data: { valid: true, reason_codes: [], reasons: [] }, error: null,
     }));
-    const [validateTool, executeTool] = createDatasetBuildTools({
+    const [validateTool, executeTool] = createDatasetExecutionTools({
       client: { validate, execute: vi.fn() },
       taskId: "task_tool",
       taskRoot: await toolTaskRoot(),
@@ -208,7 +208,7 @@ describe("Pi DatasetBuild tools", () => {
     expect(validate).toHaveBeenCalledWith(
       expect.objectContaining({
         spec: expect.objectContaining({
-          build_id: spec.build_id,
+          requirement_id: spec.requirement_id,
           dataset_family: spec.dataset_family,
         }),
       }),
@@ -222,7 +222,7 @@ describe("Pi DatasetBuild tools", () => {
   });
 
   test("rejects duplicate decoded keys in a JSON-encoded spec", async () => {
-    const [validateTool] = createDatasetBuildTools({
+    const [validateTool] = createDatasetExecutionTools({
       client: { validate: vi.fn(), execute: vi.fn() },
       taskId: "task_tool",
       taskRoot: await toolTaskRoot(),
@@ -230,8 +230,8 @@ describe("Pi DatasetBuild tools", () => {
       piSessionId: () => "pi_tool",
     });
     const duplicated = JSON.stringify(spec).replace(
-      `"build_id":"${spec.build_id}"`,
-      `"build_id":"${spec.build_id}","\\u0062uild_id":"build_shadow"`,
+      `"requirement_id":"${spec.requirement_id}"`,
+      `"requirement_id":"${spec.requirement_id}","\\u0072equirement_id":"requirement_shadow"`,
     );
     const result = await validateTool!.execute(
       { spec: duplicated },
@@ -243,7 +243,7 @@ describe("Pi DatasetBuild tools", () => {
   });
 
   test("reports a clear error when the spec string is not valid JSON", async () => {
-    const [validateTool] = createDatasetBuildTools({
+    const [validateTool] = createDatasetExecutionTools({
       client: { validate: vi.fn(), execute: vi.fn() },
       taskId: "task_tool",
       taskRoot: await toolTaskRoot(),
@@ -273,7 +273,7 @@ describe("Pi DatasetBuild tools", () => {
         details: { category: "network" },
       },
     }));
-    const [, tool] = createDatasetBuildTools({
+    const [, tool] = createDatasetExecutionTools({
       client: {
         validate: async () => ({
           version: 1,
@@ -304,7 +304,7 @@ describe("Pi DatasetBuild tools", () => {
       },
     });
 
-    const invalidTool = createDatasetBuildTools({
+    const invalidTool = createDatasetExecutionTools({
       client: {
         validate: async () => {
           throw new TypeError("malformed spec");
@@ -321,7 +321,7 @@ describe("Pi DatasetBuild tools", () => {
       details: { code: "invalid_input", retryable: false },
     });
 
-    const acquisitionTool = createDatasetBuildTools({
+    const acquisitionTool = createDatasetExecutionTools({
       client: {
         validate: async () => ({
           version: 1,
@@ -377,7 +377,7 @@ describe("Pi DatasetBuild tools", () => {
       version: 1, request_id: "request_execute", ok: false, data: null,
       error: { code: "no_data", message: "No data", retryable: false, details: {} },
     }));
-    const tools = createDatasetBuildTools({
+    const tools = createDatasetExecutionTools({
       client: { validate, acquire, execute },
       taskId: "task_tool",
       taskRoot: await toolTaskRoot(),
@@ -393,7 +393,7 @@ describe("Pi DatasetBuild tools", () => {
       request: expect.objectContaining({
         schema_version: "1.0",
         task_id: "task_tool",
-        build_id: spec.build_id,
+        requirement_id: spec.requirement_id,
         binding_id: "binding_gdc",
         mode: "builtin",
         provider_id: "gdc.v1",
@@ -436,7 +436,7 @@ describe("Pi DatasetBuild tools", () => {
       version: 1, request_id: "request_execute", ok: false, data: null,
       error: { code: "no_data", message: "No data", retryable: false, details: {} },
     }));
-    const tools = createDatasetBuildTools({
+    const tools = createDatasetExecutionTools({
       client: { validate, acquire, execute },
       taskId: "task_tool",
       taskRoot: await toolTaskRoot(),
@@ -445,7 +445,7 @@ describe("Pi DatasetBuild tools", () => {
     });
     const pdbSpec = {
       ...spec,
-      build_id: "build_pdb_provider",
+      requirement_id: "build_pdb_provider",
       entities: { pdb_ids: ["6M0J"] },
       source_bindings: [{
         ...spec.source_bindings[0]!,
@@ -480,7 +480,7 @@ describe("Pi DatasetBuild tools", () => {
     acquire.mockClear();
     const chemblSpec = {
       ...spec,
-      build_id: "build_chembl_provider",
+      requirement_id: "build_chembl_provider",
       dataset_family: "bioactivity_measurement",
       entities: {
         chembl_compounds: ["CHEMBL100", "CHEMBL200"],
@@ -525,7 +525,7 @@ describe("Pi DatasetBuild tools", () => {
     }));
     const acquire = vi.fn();
     const execute = vi.fn();
-    const tools = createDatasetBuildTools({
+    const tools = createDatasetExecutionTools({
       client: { validate, acquire, execute },
       taskId: "task_tool",
       taskRoot: await toolTaskRoot(),
@@ -545,7 +545,7 @@ describe("Pi DatasetBuild tools", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
-  test("forwards a Core-owned publication receipt after a successful build", async () => {
+  test("forwards a Core-owned Publication receipt after successful execution", async () => {
     const publication = {
       schema_version: "1.1" as const,
       publication_id: "pub_build_receipt",
@@ -560,23 +560,11 @@ describe("Pi DatasetBuild tools", () => {
       request_id: "request_execute",
       ok: true,
       data: {
-        build_id: spec.build_id,
-        build_result: {
-          status: "succeeded",
-          valid_row_count: 1,
-          successful_sources: ["binding_gdc"],
-          rejected_sources: [],
-          available_artifact_roles: ["primary_dataset"],
-          publication_id: publication.publication_id,
-          reason_codes: [],
-          user_summary: "published",
-          recommended_next_action: "download artifacts",
-          build_id: spec.build_id,
-        },
+        requirement_id: spec.requirement_id,
         publication_id: publication.publication_id,
         publication,
         manifest: {
-          build_id: spec.build_id,
+          requirement_id: spec.requirement_id,
           manifest_id: publication.manifest_ref,
           sha256: "b".repeat(64),
         },
@@ -587,7 +575,7 @@ describe("Pi DatasetBuild tools", () => {
       error: null,
     };
     const onPublication = vi.fn();
-    const tools = createDatasetBuildTools({
+    const tools = createDatasetExecutionTools({
       client: {
         validate: async () => ({
           version: 1,
@@ -614,8 +602,7 @@ describe("Pi DatasetBuild tools", () => {
     const summary = JSON.parse(result.content) as Record<string, unknown>;
     expect(summary).toMatchObject({
       code: "ok",
-      build_id: spec.build_id,
-      build_status: "succeeded",
+      requirement_id: spec.requirement_id,
       publication_id: publication.publication_id,
       artifact_count: 0,
     });
@@ -630,7 +617,7 @@ describe("Pi DatasetBuild tools", () => {
     }));
     const acquire = vi.fn();
     const execute = vi.fn();
-    const tools = createDatasetBuildTools({
+    const tools = createDatasetExecutionTools({
       client: { validate, acquire, execute },
       taskId: "task_tool",
       taskRoot: await toolTaskRoot(),
@@ -650,32 +637,19 @@ describe("Pi DatasetBuild tools", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
-  test("persists a continuation record before handing the build to the core", async () => {
+  test("persists a continuation record before handing execution to the core", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "biomed-tool-cont-"));
     roots.push(root);
     const execute = vi.fn(async (): Promise<DatasetBridgeResponse> => ({
-      version: 1, request_id: "request_execute", ok: true, data: {
-        build_id: spec.build_id,
-        build_result: {
-          status: "succeeded" as const,
-          valid_row_count: 0,
-          successful_sources: [],
-          rejected_sources: [],
-          available_artifact_roles: [],
-          publication_id: null,
-          reason_codes: [],
-          user_summary: "",
-          recommended_next_action: "",
-          build_id: spec.build_id,
-        },
-        publication_id: null,
-        manifest: null,
-        artifacts: [],
-        validation_summary: null,
-        registeredSourceAssetIds: [],
-      }, error: null,
+      version: 1, request_id: "request_execute", ok: false, data: null,
+      error: {
+        code: "no_data",
+        message: "No primary rows were found",
+        retryable: false,
+        details: { requirement_id: spec.requirement_id, reason_codes: ["no_primary_data"] },
+      },
     }));
-    const tools = createDatasetBuildTools({
+    const tools = createDatasetExecutionTools({
       client: { validate: async () => ({ version: 1, request_id: "r", ok: true, data: { valid: true, reason_codes: [], reasons: [] }, error: null }), execute },
       taskId: "task_tool",
       taskRoot: root,
@@ -691,11 +665,11 @@ describe("Pi DatasetBuild tools", () => {
       undefined,
       { toolCallId: "call_execute" },
     );
-    const record = await readBuildContinuation(root, spec.build_id);
+    const record = await readExecutionContinuation(root, spec.requirement_id);
     expect(record).not.toBeNull();
     expect(record).toMatchObject({
       schema_version: 1,
-      build_id: spec.build_id,
+      requirement_id: spec.requirement_id,
       task_id: "task_tool",
       run_id: "run_tool",
       pi_session_id: "pi_tool",
@@ -704,15 +678,15 @@ describe("Pi DatasetBuild tools", () => {
     expect(record?.source_files).toEqual({ binding_gdc: "source_assets/file.tsv" });
     expect(record?.registered_source_asset_ids).toEqual([]);
     expect(record?.mapping_files).toEqual({ binding_gdc: "source_assets/annot.txt" });
-    expect(record?.spec.build_id).toBe(spec.build_id);
+    expect(record?.spec.requirement_id).toBe(spec.requirement_id);
     // The record exists before the core was invoked: a crash during the
-    // build can always be resumed deterministically.
+    // execution can always be resumed deterministically.
     expect(execute).toHaveBeenCalledTimes(1);
   });
 
   test("strictly parses the spec before calling the Dataset Core", async () => {
     const validate = vi.fn();
-    const tools = createDatasetBuildTools({
+    const tools = createDatasetExecutionTools({
       client: { validate, execute: vi.fn() },
       taskId: "task_tool",
       taskRoot: await toolTaskRoot(),
@@ -736,9 +710,8 @@ describe("Pi DatasetBuild tools", () => {
     }));
     const execute = vi.fn();
     const diagnostic = vi.fn();
-    const onBuildResult = vi.fn();
-    const tools = createDatasetBuildTools({
-      client: { validate, execute }, taskId: "task_tool", taskRoot: await toolTaskRoot(), runId: () => "run_tool", piSessionId: () => "pi_tool", onDiagnostic: diagnostic, onBuildResult,
+    const tools = createDatasetExecutionTools({
+      client: { validate, execute }, taskId: "task_tool", taskRoot: await toolTaskRoot(), runId: () => "run_tool", piSessionId: () => "pi_tool", onDiagnostic: diagnostic,
     });
     const result = await tools[1]!.execute(
       { spec, source_files: {}, mapping_files: {} },
@@ -748,23 +721,18 @@ describe("Pi DatasetBuild tools", () => {
 
     expect(execute).not.toHaveBeenCalled();
     expect(result).toMatchObject({ isError: true, details: { code: "spec_rejected" } });
-    expect(onBuildResult).toHaveBeenCalledWith(expect.objectContaining({
-      status: "spec_rejected",
-      build_id: spec.build_id,
-      reason_codes: ["unknown_schema"],
-    }));
     expect(diagnostic).toHaveBeenCalledWith(expect.objectContaining({
       taskId: "task_tool",
       runId: "run_tool",
       piSessionId: "pi_tool",
       toolCallId: "x".repeat(128),
-      toolName: "execute_dataset_build",
+      toolName: "execute_dataset_execution",
       requestId: "request_reject",
     }));
   });
 
-  test("exposes a compact typed DatasetBuildSpec schema", async () => {
-    const tools = createDatasetBuildTools({
+  test("exposes a compact typed DatasetExecutionSpec schema", async () => {
+    const tools = createDatasetExecutionTools({
       client: { validate: async () => ({ version: 1, request_id: "r", ok: true, data: { valid: true, reason_codes: [], reasons: [] }, error: null }), execute: async () => ({ version: 1, request_id: "r", ok: false, data: null, error: { code: "no_data", message: "x", retryable: false, details: {} } }) },
       taskId: "task_tool",
       taskRoot: await toolTaskRoot(),
@@ -806,7 +774,7 @@ describe("Pi DatasetBuild tools", () => {
         details: { reason_codes: ["family_schema_mismatch"] },
       },
     }));
-    const [validateTool] = createDatasetBuildTools({
+    const [validateTool] = createDatasetExecutionTools({
       client: { validate, execute: vi.fn() },
       taskId: "task_tool",
       taskRoot: await toolTaskRoot(),

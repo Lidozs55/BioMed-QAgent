@@ -141,7 +141,6 @@ describe("runtime REST client", () => {
         created_at: "2026-07-14T00:00:00Z",
         updated_at: "2026-07-14T00:00:00Z",
         latest_sequence: 4,
-        latest_build_status: null,
       },
       runs: [],
       messages: [],
@@ -174,7 +173,7 @@ describe("runtime REST client", () => {
       ...event,
       subagent_id: null,
       parent_tool_call_id: null,
-      payload: { type: "run_completed", build_result: null },
+      payload: { type: "run_completed" },
     };
     const fetcher = vi
       .fn<FetchLike>()
@@ -256,23 +255,11 @@ describe("runtime REST client", () => {
     );
   });
 
-  it("lists and fetches V2 builds through the builds API", async () => {
-    const buildResult = {
-      status: "succeeded",
-      valid_row_count: 4,
-      successful_sources: ["binding_gdc"],
-      rejected_sources: [],
-      available_artifact_roles: ["primary_dataset"],
-      publication_id: "pub_1",
-      reason_codes: [],
-      user_summary: "ok",
-      recommended_next_action: "",
-      build_id: "build_1",
-    };
+  it("lists and fetches immutable publications", async () => {
     const manifest = {
       manifest_id: "manifest_1",
       task_id: "task_1",
-      build_id: "build_1",
+      requirement_id: "build_1",
       dataset_family: "gene_expression",
       row_granularity: "gene",
       schema_ref: "gene_expression.long.v1",
@@ -289,73 +276,90 @@ describe("runtime REST client", () => {
       .mockResolvedValueOnce(
         jsonResponse({ items: [
           {
-            build_id: "build_1",
+            requirement_id: "build_1",
+            run_id: "run_1",
             task_id: "task_1",
             dataset_family: "gene_expression",
             row_granularity: "gene",
             schema_ref: "gene_expression.long.v1",
             row_count: 4,
-            status: "succeeded",
             publication_id: "pub_1",
-            manifest_ref: "datasets_build/build_1/dataset_manifest.json",
+            manifest_ref: "dataset_runs/run_1/build_1/publish/pub_1/dataset_manifest.json",
             manifest_sha256: "a".repeat(64),
-            published_at: null,
-            build_result: buildResult,
+            published_at: "2026-07-14T00:00:00Z",
           },
         ], next_cursor: null }),
       )
       .mockResolvedValueOnce(
         jsonResponse({
-          build_id: "build_1",
+          publication_id: "pub_1",
+          requirement_id: "build_1",
+          run_id: "run_1",
           task_id: "task_1",
-          manifest_ref: "datasets_build/build_1/dataset_manifest.json",
-          build_result: buildResult,
+          manifest_ref: "dataset_runs/run_1/build_1/publish/pub_1/dataset_manifest.json",
           manifest,
-          publication: null,
+          publication: {
+            schema_version: "1.1",
+            publication_id: "pub_1",
+            manifest_ref: "dataset_runs/run_1/build_1/publish/pub_1/dataset_manifest.json",
+            manifest_sha256: "a".repeat(64),
+            validation_result_ref: "validation_report.json",
+            published_at: "2026-07-14T00:00:00Z",
+            supersedes_publication_id: null,
+          },
           artifacts: [],
         }),
       )
       .mockResolvedValueOnce(
         jsonResponse({
-          build_id: "build_1",
+          publication_id: "pub_1",
+          requirement_id: "build_1",
+          run_id: "run_1",
           task_id: "task_1",
-          manifest_ref: "datasets_build/build_1/dataset_manifest.json",
-          build_result: buildResult,
+          manifest_ref: "dataset_runs/run_1/build_1/publish/pub_1/dataset_manifest.json",
           manifest,
-          publication: null,
+          publication: {
+            schema_version: "1.1",
+            publication_id: "pub_1",
+            manifest_ref: "dataset_runs/run_1/build_1/publish/pub_1/dataset_manifest.json",
+            manifest_sha256: "a".repeat(64),
+            validation_result_ref: "validation_report.json",
+            published_at: "2026-07-14T00:00:00Z",
+            supersedes_publication_id: null,
+          },
           artifacts: [],
         }),
       );
     const api = createAPIClient({ fetcher });
 
-    const page = await api.fetchBuilds({ limit: 50 });
+    const page = await api.fetchPublications({ limit: 50 });
     expect(page.items).toHaveLength(1);
-    expect(page.items[0]?.build_id).toBe("build_1");
-    expect(fetcher).toHaveBeenNthCalledWith(1, "/api/v1/builds?limit=50", undefined);
+    expect(page.items[0]?.requirement_id).toBe("build_1");
+    expect(fetcher).toHaveBeenNthCalledWith(1, "/api/v1/publications?limit=50", undefined);
 
-    const detail = await api.fetchBuild("build_1");
+    const detail = await api.fetchPublication("build_1");
     expect(detail.manifest.dataset_family).toBe("gene_expression");
-    expect(detail.build_result?.valid_row_count).toBe(4);
-    expect(detail.build_result?.build_id).toBe("build_1");
-    expect(fetcher).toHaveBeenNthCalledWith(2, "/api/v1/builds/build_1", undefined);
-    expect(api.getBuildArtifactUrl("build_1", "artifact_x")).toBe(
-      "/api/v1/builds/build_1/artifacts/artifact_x",
+    expect(detail.publication_id).toBe("pub_1");
+    expect(detail.run_id).toBe("run_1");
+    expect(fetcher).toHaveBeenNthCalledWith(2, "/api/v1/publications/build_1", undefined);
+    expect(api.getPublicationArtifactUrl("build_1", "artifact_x")).toBe(
+      "/api/v1/publications/build_1/artifacts/artifact_x",
     );
 
-    // F7-02: an optional task_id scopes colliding build ids; it is only
+    // An optional task_id scopes colliding publication ids; it is only
     // appended when provided, and never with an empty/null value.
-    const scoped = await api.fetchBuild("build_1", "task_7");
+    const scoped = await api.fetchPublication("build_1", "task_7");
     expect(scoped.manifest.dataset_family).toBe("gene_expression");
     expect(fetcher).toHaveBeenNthCalledWith(
       3,
-      "/api/v1/builds/build_1?task_id=task_7",
+      "/api/v1/publications/build_1?task_id=task_7",
       undefined,
     );
-    expect(api.getBuildArtifactUrl("build_1", "artifact_x", "task_7")).toBe(
-      "/api/v1/builds/build_1/artifacts/artifact_x?task_id=task_7",
+    expect(api.getPublicationArtifactUrl("build_1", "artifact_x", "task_7")).toBe(
+      "/api/v1/publications/build_1/artifacts/artifact_x?task_id=task_7",
     );
-    expect(api.getBuildArtifactUrl("build_1", "artifact_x", null)).toBe(
-      "/api/v1/builds/build_1/artifacts/artifact_x",
+    expect(api.getPublicationArtifactUrl("build_1", "artifact_x", null)).toBe(
+      "/api/v1/publications/build_1/artifacts/artifact_x",
     );
   });
 

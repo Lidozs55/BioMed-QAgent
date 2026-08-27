@@ -17,7 +17,7 @@
  *   I/O goes through ``node:fs/promises`` / streams, which keep the loop
  *   responsive between chunks.
  *
- * The executor converts ``OperationAbortedError`` into ``BuildCancelledError``
+ * The executor converts ``OperationAbortedError`` into its execution cancellation error.
  * so a cancelled build finalizes as ``cancelled`` and a timed-out build as
  * ``failed``/``timeout`` (see ``runtime/executor.ts``).
  */

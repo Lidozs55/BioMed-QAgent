@@ -22,6 +22,6 @@ publication-quality visualizations on CSV datasets.
 
 - Outputs (PNGs, CSVs) go to the task artifacts directory as analysis
   material; formal dataset publications still come only from
-  `execute_dataset_build`.
+  `execute_dataset_execution`.
 - Verify input row counts and group assignments before running; report the
   statistical method and adjustment used with every result.

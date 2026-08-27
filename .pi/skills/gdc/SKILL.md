@@ -27,6 +27,6 @@ files (`download_gdc`).
 
 ## Build boundaries
 
-- One DatasetBuildSpec per cohort/dataset family; expression data from GDC
+- One DatasetExecutionSpec per cohort/dataset family; expression data from GDC
   enters the build through the gdc.expression.v1 adapter with
   `source: "gdc"`.

@@ -3,7 +3,7 @@ import type {
   AttemptStatus,
   DatabaseRecord,
   MessageRole,
-  PublicationSummary,
+  TaskPublicationSummary,
   RunStatus,
   RunSummary,
   StageName,
@@ -334,10 +334,10 @@ export interface ArtifactItem extends ConversationItemBase {
   sizeBytes: number;
   mediaType: string;
 }
-export interface BuildReportItem extends ConversationItemBase {
-  kind: "build_report";
+export interface PublicationReportItem extends ConversationItemBase {
+  kind: "publication_report";
   taskId: string;
-  buildId: string;
+  publicationId: string;
 }
 
 export interface CompactionItem extends ConversationItemBase {
@@ -357,7 +357,7 @@ export type ConversationItem =
   | WarningItem
   | PermissionItem
   | ArtifactItem
-  | BuildReportItem
+  | PublicationReportItem
   | CompactionItem;
 
 export interface SequenceGapMarker {
@@ -402,7 +402,7 @@ export interface TaskProjection {
   /** ID of the latest publication for this task (null when none was produced). */
   currentPublicationId: string | null;
   /** Immutable publication records in creation order. */
-  publications: PublicationSummary[];
+  publications: TaskPublicationSummary[];
   /**
    * Recoverable sequence gap: set when an event with
    * ``sequence > lastSequence + 1`` was rejected without advancing the

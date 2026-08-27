@@ -24,7 +24,7 @@ const MAX_BODY_CHARS = 5000;
 
 export const UNIPROT_USAGE_HINT =
   "UniProt 是 Agent-only 研究来源（research_only）：检索结果可用于" +
-  "调研与证据收集，但绝不能作为 DatasetBuildSpec 的 verified " +
+  "调研与证据收集，但绝不能作为 DatasetExecutionSpec 的 verified " +
   "source 进入数据构建——spec 校验会拒绝（source_not_pipeline_supported）。";
 
 /** Python ``_accept_uniprot_search_result``: dict with a ``results`` list. */

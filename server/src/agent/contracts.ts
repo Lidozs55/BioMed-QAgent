@@ -105,6 +105,8 @@ export interface BioMedSessionConfig {
   tools?: readonly BioMedAgentTool[];
   /** Tools whose full schemas are available on the first model turn. */
   initialToolNames?: readonly string[];
+  /** Current run's latest immutable publication, if one has been emitted. */
+  getCurrentPublicationId?: () => string | null;
   cleanup?: () => Promise<void>;
 }
 
@@ -117,6 +119,7 @@ export interface BioMedAgentSession {
   readonly taskId: string;
   readonly runId: string;
   run(input: string, options?: RunOptions): AsyncIterable<BioMedAgentEvent>;
+  resetRunProgress?(): void;
   steer?(text: string): Promise<void>;
   compact?(): Promise<{ summary: string }>;
   cancel(reason?: string): Promise<void>;
