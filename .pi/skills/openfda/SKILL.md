@@ -5,10 +5,23 @@ description: Look up exact MedDRA reaction counts from official openFDA FAERS ag
 
 # openFDA FAERS discovery
 
-Use `lookup_openfda_dili_counts` to retrieve current reaction-term counts for
-one to 20 generic drug names from the official openFDA drug-event API.
+## Drug-safety request routing
+
+For a drug-safety request, split the product by dimension and route each one
+deterministically:
+
+- MedDRA reaction/report counts for named drugs → `lookup_openfda_dili_counts`
+  (this skill). Do not reimplement the openFDA query with scripts, curl, or
+  browser downloads.
+- DILIrank severity classification or LiverTox evidence → these come only
+  from their official sources. When the official source is unreachable,
+  report that dimension as structured NO_DATA naming the failure; do not
+  substitute third-party mirrors, GitHub copies, or paper-attached replicas.
 
 ## How to use
+
+Use `lookup_openfda_dili_counts` to retrieve current reaction-term counts for
+one to 20 generic drug names from the official openFDA drug-event API.
 
 - Pass exact MedDRA preferred terms in the reaction terms argument. The tool makes one
   aggregate request per drug, then verifies requested terms omitted by the aggregate

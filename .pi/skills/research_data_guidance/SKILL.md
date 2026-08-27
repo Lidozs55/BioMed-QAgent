@@ -39,3 +39,13 @@ family covering the product, switch to
 summaries, and downloads are staging: the task is finished only by a Dataset
 Core Publication or an explicit structured NO_DATA - never by staging files
 alone.
+
+## Unreachable-source rule
+
+When the official/authoritative source for a requested dimension is
+unreachable (DNS failure, persistent HTTP error, or a dead endpoint), report
+that dimension as a structured NO_DATA/blocked outcome naming the source and
+the observed failure. Never substitute a third-party mirror, copied file, or
+unverified re-host of the same data: provenance cannot be established through
+them. Continue with the reachable official sources for the remaining
+dimensions instead of abandoning the whole request.
