@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -15,9 +16,11 @@ import { describe, expect, test } from "vitest";
 import { parseDatasetExecutionSpec } from "../src/dataset/contracts/index.js";
 import {
   buildOperationPlan,
+  cleanupOrphanedOperationCheckpoints,
   DatasetExecutionExecutor,
   loadExecutionState,
   makeOperationOutput,
+  operationFilename,
   stageOutputFile,
   type OperationOutput,
   type OperationSpec,
@@ -295,6 +298,67 @@ describe("Family Host checkpoint recovery lane", () => {
         error_code: "configuration_error",
       });
       await runtime.close();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("cleans orphaned operation checkpoints on a later run while keeping live checkpoints intact", async () => {
+    const root = mkdtempSync(join(tmpdir(), "family-orphan-cleanup-"));
+    try {
+      const first = new Runner(root);
+      expect((await executor(root, first).run()).status).toBe("completed");
+      const stateDir = join(root, "state");
+      const plan = buildOperationPlan(spec());
+      const liveNames = plan.map((op) => `${operationFilename(op.operation_id)}_output.json`);
+      expect(liveNames.length).toBeGreaterThan(3);
+
+      const orphanOutput = join(stateDir, "stale_binding_output.json");
+      const orphanResult = join(stateDir, "stale_binding_result.json");
+      const partFile = join(stateDir, "parse_binding_gdc_output.json.part");
+      const corruptFile = join(stateDir, "corrupt_result.json");
+      const misnamedLiveFile = join(stateDir, "misnamed_output.json");
+      writeFileSync(orphanOutput, `${JSON.stringify({ operation_id: "parse:stale_binding" })}\n`, "utf8");
+      writeFileSync(orphanResult, `${JSON.stringify({ operation_id: "canonicalize:stale_binding" })}\n`, "utf8");
+      writeFileSync(partFile, "partial write", "utf8");
+      writeFileSync(corruptFile, "{not json", "utf8");
+      writeFileSync(misnamedLiveFile, `${JSON.stringify({ operation_id: "parse:binding_gdc" })}\n`, "utf8");
+
+      const second = new Runner(root);
+      const outcome = await executor(root, second).run();
+      expect(outcome.status).toBe("completed");
+      for (const name of liveNames) {
+        expect(existsSync(join(stateDir, name))).toBe(true);
+      }
+      expect(existsSync(join(stateDir, `${operationFilename("parse:binding_gdc")}_result.json`))).toBe(true);
+      expect(existsSync(orphanOutput)).toBe(false);
+      expect(existsSync(orphanResult)).toBe(false);
+      expect(existsSync(partFile)).toBe(true);
+      expect(existsSync(corruptFile)).toBe(true);
+      expect(existsSync(misnamedLiveFile)).toBe(true);
+      expect(second.calls).toEqual(["publish"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("orphan cleanup is fail-closed: absent directories, live ids, and unreadable files are never removed", () => {
+    const root = mkdtempSync(join(tmpdir(), "family-orphan-failclosed-"));
+    try {
+      const stateDir = join(root, "state");
+      expect(cleanupOrphanedOperationCheckpoints(join(root, "absent"), new Set(["parse:binding_gdc"]))).toBe(0);
+      mkdirSync(stateDir, { recursive: true });
+      const known = new Set(["parse:binding_gdc", "canonicalize:binding_gdc"]);
+      const knownFile = join(stateDir, "canonicalize_binding_gdc_output.json");
+      const unknownFile = join(stateDir, "unknown_op_output.json");
+      const noIdFile = join(stateDir, "no_id_output.json");
+      writeFileSync(knownFile, `${JSON.stringify({ operation_id: "canonicalize:binding_gdc" })}\n`, "utf8");
+      writeFileSync(unknownFile, `${JSON.stringify({ operation_id: "parse:ghost" })}\n`, "utf8");
+      writeFileSync(noIdFile, `${JSON.stringify({ value: 1 })}\n`, "utf8");
+      expect(cleanupOrphanedOperationCheckpoints(stateDir, known)).toBe(1);
+      expect(existsSync(knownFile)).toBe(true);
+      expect(existsSync(unknownFile)).toBe(false);
+      expect(existsSync(noIdFile)).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

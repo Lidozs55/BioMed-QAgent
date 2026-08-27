@@ -32,6 +32,7 @@ import { OperationAbortedError, type OperationSuspension } from "../cooperative.
 import { LockLostError } from "../service/execution-lock.js";
 import {
   appendAttempt,
+  cleanupOrphanedOperationCheckpoints,
   findReusable,
   fixedOperationCheckpointIdentity,
   loadExecutionState,
@@ -293,6 +294,12 @@ export class DatasetExecutionExecutor {
     await this.emit({ type: "execution_started" });
     try {
       this.state = loadExecutionState(this.stateDir, this.taskId, this.runId, this.requirementId);
+      // Best-effort hygiene: drop checkpoint files for operations that are no
+      // longer in the fixed skeleton before any reuse/recovery read.
+      cleanupOrphanedOperationCheckpoints(
+        this.stateDir,
+        new Set(this.plan.map((op) => op.operation_id)),
+      );
       this.persistedAttemptCount = validateAttemptLogPrefix(
         this.state,
         this.attemptsPath(),
