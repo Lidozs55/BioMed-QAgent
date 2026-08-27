@@ -87,10 +87,11 @@ function parseManifest(value: unknown, taskId: string, requirementId: string): P
   };
 }
 
-function parsePublication(value: unknown, publicationId: string): DatasetPublication {
+function parsePublication(value: unknown): DatasetPublication {
   const item = object(value, "Publication receipt");
   if (
-    item.schema_version !== "1.1" || item.publication_id !== publicationId || !SAFE_ID.test(publicationId) ||
+    item.schema_version !== "1.1" || typeof item.publication_id !== "string" ||
+    !SAFE_ID.test(item.publication_id) ||
     typeof item.manifest_ref !== "string" || typeof item.validation_result_ref !== "string" ||
     typeof item.published_at !== "string" || typeof item.manifest_sha256 !== "string" ||
     !SHA256.test(item.manifest_sha256) ||
@@ -159,7 +160,14 @@ export class PublicationStore {
                 json(path.join(publicationDir, "publication.json")),
                 stat(manifestPath),
               ]);
-              const receipt = parsePublication(publicationValue, publicationId);
+              const receipt = parsePublication(publicationValue);
+              // Writers name the publish directory without the `pub_` prefix
+              // while the receipt carries the canonical prefixed id; accept
+              // both spellings and index the record by the receipt id that
+              // API callers query with.
+              if (receipt.publication_id !== publicationId && receipt.publication_id !== `pub_${publicationId}`) {
+                throw new PublicationStoreError("Publication receipt is invalid");
+              }
               const { sha256 } = await sha256FileStreamWithSize(manifestPath);
               if (sha256 !== receipt.manifest_sha256) {
                 throw new PublicationStoreError("Publication manifest receipt mismatch");
@@ -168,7 +176,7 @@ export class PublicationStore {
                 taskId,
                 runId,
                 requirementId,
-                publicationId,
+                publicationId: receipt.publication_id,
                 publicationDir,
                 manifestRef: `dataset_runs/${runId}/${requirementId}/publish/${publicationId}/dataset_manifest.json`,
                 manifest: parseManifest(manifestValue, taskId, requirementId),

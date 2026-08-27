@@ -140,7 +140,11 @@ describe("Phase 7 product API", () => {
     const taskId = "task_ts_example";
     const runId = "run_example";
     const requirementId = "build_example";
-    const publicationId = "publication_example";
+    // Real writers name the publish DIRECTORY without the `pub_` prefix while
+    // the receipt's publication_id carries it; API callers query by the
+    // receipt id.
+    const publicationDir = "publication_example";
+    const publicationId = "pub_publication_example";
     const executionDir = path.join(root, "output", "tasks", taskId, "dataset_runs", runId, requirementId);
     const artifact = Buffer.from("gene,value\nTP53,1\n", "utf8");
     const sha256 = createHash("sha256").update(artifact).digest("hex");
@@ -156,7 +160,7 @@ describe("Phase 7 product API", () => {
       source_summary: { geo: 1 }, validation_summary: {}, confidence_summary: {},
       provenance_summary: {},
     };
-    const versionDir = path.join(executionDir, "publish", publicationId);
+    const versionDir = path.join(executionDir, "publish", publicationDir);
     await mkdir(path.join(versionDir, "artifacts"), { recursive: true });
     await writeFile(path.join(versionDir, "artifacts", "primary.csv"), artifact);
     const manifestBytes = Buffer.from(JSON.stringify(manifest));

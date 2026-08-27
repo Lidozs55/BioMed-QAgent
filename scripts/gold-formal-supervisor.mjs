@@ -516,8 +516,10 @@ function runFrom(snapshot, runId) {
   return snapshot.runs.find((run) => isRecord(run) && run.run_id === runId) ?? null;
 }
 
-function currentPublicationIdFrom(snapshot) {
-  const value = isRecord(snapshot?.task) ? snapshot.task.current_publication_id : undefined;
+export function currentPublicationIdFrom(snapshot) {
+  // The durable reducer emits current_publication_id as a top-level snapshot
+  // field; snapshot.task has no such key.
+  const value = isRecord(snapshot) ? snapshot.current_publication_id : undefined;
   if (value === null || value === undefined) return null;
   if (typeof value !== "string" || !SAFE_ID.test(value)) throw new SupervisorError("protocol", "current_publication_id is malformed");
   return value;
