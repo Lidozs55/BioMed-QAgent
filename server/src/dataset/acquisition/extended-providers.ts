@@ -43,6 +43,8 @@ type Definition = {
   normalize: (value: string) => string;
   validate: (value: string) => boolean;
   identifierName: string;
+  /** Concrete valid-accession example surfaced verbatim in rejection messages. */
+  accessionExample?: string;
   plan: (identifier: string, entities: Parameters["entities"]) => Omit<AcquisitionDownloadPlan, "source"> & {
     url: string;
     title: string;
@@ -60,12 +62,20 @@ function parseParameters(request: CoreAcquisitionRequest, definition: Definition
   if (request.parameters.source !== definition.source) {
     throw new TypeError(`${providerId} requires binding source '${definition.source}'`);
   }
-  if (typeof request.parameters.accession !== "string") {
-    throw new TypeError(`${providerId} requires a ${definition.identifierName}`);
+  const accessionHint = definition.accessionExample === undefined
+    ? ""
+    : ` (one accession per binding, e.g. ${definition.accessionExample})`;
+  if (typeof request.parameters.accession !== "string" || request.parameters.accession.trim() === "") {
+    throw new TypeError(
+      `${providerId} requires a ${definition.identifierName} in binding.accession${accessionHint}; ` +
+        "put cross-cutting study context in spec.entities instead of binding.parameters",
+    );
   }
   const identifier = definition.normalize(request.parameters.accession.trim());
   if (!definition.validate(identifier)) {
-    throw new TypeError(`${providerId} requires a valid ${definition.identifierName}`);
+    throw new TypeError(
+      `${providerId} requires a valid ${definition.identifierName}${accessionHint}`,
+    );
   }
   const rawEntities = request.parameters.entities;
   if (rawEntities === null || Array.isArray(rawEntities) || typeof rawEntities !== "object") {
@@ -136,6 +146,7 @@ const DEFINITIONS: readonly Definition[] = Object.freeze([
   },
   {
     key: "mgnify", source: "mgnify", database: "mgnify", identifierName: "MGnify study accession",
+    accessionExample: "MGYS00000322",
     normalize: (value) => value.toUpperCase(), validate: (value) => /^MGYS[0-9]{8}$/.test(value),
     plan: (identifier) => ({
       url: `https://www.ebi.ac.uk/metagenomics/api/v1/studies/${identifier}`,
