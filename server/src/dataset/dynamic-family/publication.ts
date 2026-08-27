@@ -272,8 +272,15 @@ export async function publishDynamicFamily(
     });
   await assertGenerationCurrent();
   const failed = b3.checks.filter((check) => !check.passed);
+  const reviewFieldNames = new Set([
+    "review_status",
+    "human_review_status",
+    "confidence",
+    "confidence_level",
+    "extraction_confidence",
+  ]);
   const requiresHilAcceptance = input.execution.materialization.schemas.some((schema) =>
-    schema.fields.some((field) => field.name === "review_status" || field.name === "human_review_status"),
+    schema.fields.some((field) => reviewFieldNames.has(field.name)),
   );
   let assessment = parseProductAssessment(
     structuralAssessment(candidate, failed.length === 0, requiresHilAcceptance, browserExecution !== null),

@@ -87,10 +87,11 @@ function parseManifest(value: unknown, taskId: string, requirementId: string): P
   };
 }
 
-function parsePublication(value: unknown, publicationId: string): DatasetPublication {
+function parsePublication(value: unknown, versionName: string): DatasetPublication {
   const item = object(value, "Publication receipt");
   if (
-    item.schema_version !== "1.1" || item.publication_id !== publicationId || !SAFE_ID.test(publicationId) ||
+    item.schema_version !== "1.1" || typeof item.publication_id !== "string" ||
+    !SAFE_ID.test(item.publication_id) || item.publication_id !== `pub_${versionName}` ||
     typeof item.manifest_ref !== "string" || typeof item.validation_result_ref !== "string" ||
     typeof item.published_at !== "string" || typeof item.manifest_sha256 !== "string" ||
     !SHA256.test(item.manifest_sha256) ||
@@ -150,8 +151,8 @@ export class PublicationStore {
       for (const runId of await directories(path.join(taskRoot, "dataset_runs"))) {
         for (const requirementId of await directories(path.join(taskRoot, "dataset_runs", runId))) {
           const executionRoot = path.join(taskRoot, "dataset_runs", runId, requirementId);
-          for (const publicationId of await directories(path.join(executionRoot, "publish"))) {
-            const publicationDir = path.join(executionRoot, "publish", publicationId);
+          for (const versionName of await directories(path.join(executionRoot, "publish"))) {
+            const publicationDir = path.join(executionRoot, "publish", versionName);
             try {
               const manifestPath = path.join(publicationDir, "dataset_manifest.json");
               const [manifestValue, publicationValue, details] = await Promise.all([
@@ -159,7 +160,7 @@ export class PublicationStore {
                 json(path.join(publicationDir, "publication.json")),
                 stat(manifestPath),
               ]);
-              const receipt = parsePublication(publicationValue, publicationId);
+              const receipt = parsePublication(publicationValue, versionName);
               const { sha256 } = await sha256FileStreamWithSize(manifestPath);
               if (sha256 !== receipt.manifest_sha256) {
                 throw new PublicationStoreError("Publication manifest receipt mismatch");
@@ -168,9 +169,9 @@ export class PublicationStore {
                 taskId,
                 runId,
                 requirementId,
-                publicationId,
+                publicationId: receipt.publication_id,
                 publicationDir,
-                manifestRef: `dataset_runs/${runId}/${requirementId}/publish/${publicationId}/dataset_manifest.json`,
+                manifestRef: `dataset_runs/${runId}/${requirementId}/publish/${versionName}/dataset_manifest.json`,
                 manifest: parseManifest(manifestValue, taskId, requirementId),
                 publication: receipt,
                 modifiedAt: details.mtimeMs,
@@ -178,7 +179,7 @@ export class PublicationStore {
             } catch (error) {
               if (error instanceof PublicationStoreError) throw error;
               throw new PublicationStoreError(
-                `Publication ${publicationId} is corrupt: ${error instanceof Error ? error.message : String(error)}`,
+                `Publication ${versionName} is corrupt: ${error instanceof Error ? error.message : String(error)}`,
               );
             }
           }

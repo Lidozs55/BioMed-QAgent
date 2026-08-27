@@ -621,7 +621,7 @@ describe("dynamic family build tool boundary", () => {
 async function executedSubmission(
   root: string,
   content = "record_id,value\nr1,1\n",
-  reviewStatus = false,
+  reviewField: string | null = null,
 ): Promise<{ publishInput: PublishDynamicFamilyInput; requirementId: string }> {
   await mkdir(path.join(root, "source_assets"), { recursive: true });
   await writeFile(path.join(root, "source_assets", "source.csv"), "record_id,value\nr1,1\n", "utf8");
@@ -631,9 +631,9 @@ async function executedSubmission(
     relativePath: "source_assets/source.csv",
   });
   const raw = await submission();
-  if (reviewStatus) {
+  if (reviewField !== null) {
     const reviewFamily = raw.family_spec as FamilySpec;
-    reviewFamily.table_definitions[0]!.field_names.push("review_status");
+    reviewFamily.table_definitions[0]!.field_names.push(reviewField);
     reviewFamily.canonical_digest = await computeFamilySpecDigest(reviewFamily);
     (raw.transform_metadata as { bound_family_spec_digest: string }).bound_family_spec_digest =
       reviewFamily.canonical_digest;
@@ -671,13 +671,32 @@ async function executedSubmission(
   };
 }
 
+test.each(["confidence", "confidence_level", "extraction_confidence"])(
+  "requires publication acceptance HIL for dynamic extraction field '%s'",
+  async (reviewField) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "dynamic-family-confidence-hil-"));
+    try {
+      const { publishInput, requirementId } = await executedSubmission(
+        root,
+        `record_id,value,${reviewField}\nr1,1,high\n`,
+        reviewField,
+      );
+      await expect(publishDynamicFamily(publishInput)).rejects.toThrow(/durable HIL gate/);
+      await expect(access(path.join(root, "dataset_runs", "run_dynamic", requirementId, "publish")))
+        .rejects.toThrow();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
 test("publication fence rejects a generation superseded while HIL is pending", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "dynamic-family-publication-fence-"));
   try {
     const { publishInput, requirementId } = await executedSubmission(
       root,
       "record_id,value,review_status\nr1,1,human_review_pending\n",
-      true,
+      "review_status",
     );
     let current = true;
     let enteredReview!: () => void;

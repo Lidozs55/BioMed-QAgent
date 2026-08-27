@@ -140,7 +140,8 @@ describe("Phase 7 product API", () => {
     const taskId = "task_ts_example";
     const runId = "run_example";
     const requirementId = "build_example";
-    const publicationId = "publication_example";
+    const versionName = "build_example_0123456789abcdef";
+    const publicationId = `pub_${versionName}`;
     const executionDir = path.join(root, "output", "tasks", taskId, "dataset_runs", runId, requirementId);
     const artifact = Buffer.from("gene,value\nTP53,1\n", "utf8");
     const sha256 = createHash("sha256").update(artifact).digest("hex");
@@ -156,7 +157,7 @@ describe("Phase 7 product API", () => {
       source_summary: { geo: 1 }, validation_summary: {}, confidence_summary: {},
       provenance_summary: {},
     };
-    const versionDir = path.join(executionDir, "publish", publicationId);
+    const versionDir = path.join(executionDir, "publish", versionName);
     await mkdir(path.join(versionDir, "artifacts"), { recursive: true });
     await writeFile(path.join(versionDir, "artifacts", "primary.csv"), artifact);
     const manifestBytes = Buffer.from(JSON.stringify(manifest));
@@ -172,7 +173,9 @@ describe("Phase 7 product API", () => {
     }));
     const { base } = await startApi(root, database);
 
-    const page = await (await fetch(`${base}/publications`)).json() as { items: unknown[] };
+    const pageResponse = await fetch(`${base}/publications`);
+    expect(pageResponse.status, await pageResponse.clone().text()).toBe(200);
+    const page = await pageResponse.json() as { items: unknown[] };
     expect(page.items).toHaveLength(1);
     expect(page.items[0]).toMatchObject({ publication_id: publicationId, requirement_id: requirementId, run_id: runId, task_id: taskId });
     const detail = await (await fetch(`${base}/publications/${publicationId}?task_id=${taskId}`)).json();
