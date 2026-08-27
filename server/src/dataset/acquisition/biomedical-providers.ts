@@ -294,7 +294,9 @@ export function fixedBiomedicalAcquisitionParameters(options: {
     && options.providerId !== GDC_FILES_PROVIDER_ID
     && Object.keys(options.bindingParameters).length !== 0
   ) {
-    throw new TypeError(`${options.providerId} does not accept binding parameters`);
+    throw new TypeError(
+      `${options.providerId} does not accept binding parameters; this is a fixed provider — put its identifier in binding.accession and any cross-cutting study context in top-level spec.entities`,
+    );
   }
   return {
     source: options.source,

@@ -405,7 +405,7 @@ export function createDatasetExecutionTools(
       { type: "string", minLength: 1 },
     ],
     description:
-      "Frozen DatasetExecutionSpec. Pass it as a JSON object, or as a JSON-encoded string for compatibility with clients that serialize nested arguments.",
+      "Frozen DatasetExecutionSpec. Pass it as a JSON object, or as a JSON-encoded string for compatibility with clients that serialize nested arguments. Phenotype/study context goes into entities (one non-empty string per key: study identity plus required_entities groups like disease_id/disease_name/host_taxon_id for gut_microbiome) — binding.parameters carries none of them.",
   } as const;
   const sourceFilesSchema = {
     type: "object",
@@ -430,7 +430,7 @@ export function createDatasetExecutionTools(
       name: "validate_dataset_execution",
       label: "Validate DatasetExecutionSpec",
       description:
-        "Static registered-family route only: validate a DatasetExecutionSpec whose family, schema, source, and topology are an exact match from inspect_dataset_execution_routes. This does not test Dynamic Family provider availability.",
+        "Static registered-family route only: validate a DatasetExecutionSpec whose family, schema, source, and topology are an exact match from inspect_dataset_execution_routes. This does not test Dynamic Family provider availability. Static-first mandate: when the route inspection lists a family covering the requested product (e.g. gut_microbiome), validate this spec FIRST before any further research or workspace staging. Declare cross-cutting context such as disease_id / disease_name / host_taxon_id once in top-level spec.entities (mirroring that inspection output's required_entities); never inside binding.parameters.",
       parameters: {
         type: "object",
         properties: { spec: specSchema },

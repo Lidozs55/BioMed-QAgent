@@ -104,7 +104,7 @@ export const PROVIDER_CARRIER_BINDINGS: readonly ProviderCarrierBinding[] = Obje
   {
     familyId: "gut_microbiome",
     source: "gmrepo",
-    adapterId: "gut_microbiome.gmrepo_associated_species_json.v1",
+    adapterId: "gut_microbiome.gmrepo_taxon_phenotypes_json.v1",
     providerId: "gmrepo.files.v1",
     tableId: "reference_prevalence_records",
     inputRole: "reference_prevalence",

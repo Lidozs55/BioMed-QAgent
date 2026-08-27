@@ -130,16 +130,16 @@ describeLive("live:provider-smoke (Gold10 acquisition providers)", () => {
     expect(result.asset).not.toBeNull();
   });
 
-  it("GMRepo associated-species classifies upstream failures with per-binding diagnostics", async () => {
+  it("GMRepo taxon phenotype summary classifies upstream failures with per-binding diagnostics", async () => {
     const fixture = await runtime([createGmrepoFilesProvider()]);
-    const outcome = await fixture.runtime.acquire(request("gmrepo.files.v1", "gmrepo", "D006262"))
+    const outcome = await fixture.runtime.acquire(request("gmrepo.files.v1", "gmrepo", "1234"))
       .then((result) => ({ ok: true as const, result }))
       .catch((error: unknown) => ({ ok: false as const, error }));
     if (outcome.ok) {
       expect(outcome.result.sourceAsset.role).toBe("carrier");
       return;
     }
-    // Upstream is known-unhealthy (2026-08): a failure is only acceptable when
+    // The live endpoint is normally healthy; a failure is only acceptable when
     // it is fully attributed — classified error code plus binding/provider/
     // host/elapsed diagnostics on the CoreAcquisitionError.
     expect(outcome.error).toBeInstanceOf(CoreAcquisitionError);
@@ -151,6 +151,6 @@ describeLive("live:provider-smoke (Gold10 acquisition providers)", () => {
     expect(failure.details.binding_id).toBe("binding_smoke_gmrepo_files_v1");
     expect(failure.details.endpoint_host).toBe("gmrepo.humangut.info");
     expect(typeof failure.details.elapsed_ms).toBe("number");
-    expect(failure.details.url).toContain("/api/getAssociatedSpeciesByMeshID/");
+    expect(failure.details.url).toContain("/api/getPhenotypesAndAbundanceSummaryOfAAssociatedTaxon/");
   });
 });

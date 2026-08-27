@@ -85,6 +85,13 @@ export function datasetRouteCapabilities() {
           source: source.source,
           adapter_id: source.adapter_id,
           schemas: [...source.schema_refs],
+          ...(source.required_entity_groups !== undefined
+            ? {
+                required_entities: source.required_entity_groups.map((group) =>
+                  group.length === 1 ? group[0]! : [...group],
+                ),
+              }
+            : {}),
         })),
       })),
     },

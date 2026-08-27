@@ -37,7 +37,7 @@ describe("Core acquisition provider catalog", () => {
     ["openfda.files.v1", "openfda_faers", "ibuprofen", "api.fda.gov", "openfda"],
     ["gwas-catalog.associations.v1", "gwas_catalog", "rs429358", "www.ebi.ac.uk", "gwas_catalog"],
     ["europepmc.supplementary.v1", "europepmc_supplementary", "PMC9005347", "www.ebi.ac.uk", "pubmed"],
-    ["gmrepo.files.v1", "gmrepo", "D006262", "gmrepo.humangut.info", "gmrepo"],
+    ["gmrepo.files.v1", "gmrepo", "1234", "gmrepo.humangut.info", "gmrepo"],
   ])("plans %s through a provider-owned endpoint", async (providerId, source, accession, host, database) => {
     const provider = createCoreAcquisitionProviders().find((entry) => entry.providerId === providerId);
     expect(provider).toBeDefined();

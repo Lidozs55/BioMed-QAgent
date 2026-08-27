@@ -23,12 +23,16 @@ output.
    dataset family + row granularity (expression, mutation, pathway demands
    split into separate requirements).
 3. Choose exactly one execution route before substantive acquisition:
-   - Use the static route only when the required family, schema, source, and
-     topology all appear in the `validate_dataset_execution` schema. Then call
-     `validate_dataset_execution` and fix every structured error
-   (unknown_schema, family_mismatch, profile_not_allowed, …) before
-     executing. Never submit a static spec that failed validation.
-   - Otherwise use the dynamic route in step 5 directly. Do not pass a dynamic
+   - Static-first heuristic: when `inspect_dataset_execution_routes` lists a
+     static family whose tables cover the requested product (for example,
+     `gut_microbiome` for microbiome study/taxon/differential/prevalence
+     integration), you MUST attempt the static route first — validate the
+     spec, fix every structured error, then execute. Publish the static
+     family even when some auxiliary sources stay blocked; never skip
+     straight to Dynamic Family for a topology the static registry already
+     expresses.
+   - Use the dynamic route only when no static entry expresses the required
+     semantic topology. Do not pass a dynamic
      FamilySpec to `validate_dataset_execution`, and do not treat a static rejection
      or a source missing from static enums as evidence that dynamic acquisition
      is unavailable. Use the route preflight facts instead.
@@ -36,6 +40,16 @@ output.
    task-relative source_files / mapping_files / metadata_files references.
    Omit missing source_files when the binding has a registered Core acquisition
    provider; do not download or parse that provider again with workspace commands.
+   - Fixed providers accept only `source`, `accession`, and `entities`; never put
+     build inputs into `binding.parameters` — those are rejected outright.
+   - Declare phenotype/study context once in the top-level spec `entities` map:
+     for gut_microbiome study bindings (`registered_gut_microbiome_study_json`)
+     live MGnify JSON:API carriers carry no disease annotations, so declare
+     `disease_id` (MeSH ID such as D003924), `disease_name`, and
+     `host_taxon_id` (e.g. 9606), plus the study identity via one of
+     `study_id`/`study_accession`/accession. Self-describing fixed carriers may
+     embed these fields themselves; live acquisitions cannot. Each entity value
+     is exactly one non-empty string.
 5. When a frozen multi-table topology cannot be expressed by a registered static
    family, use the fixed two-phase dynamic protocol: call
    `prepare_dynamic_family_publication` first, then call
@@ -61,6 +75,21 @@ output.
    - deterministic output handles out-0, out-1, … in primary + supporting +
      derived projection order. Each output needs a non-empty registered input
      receipt ID as locator; multiple tables from one source may share it.
+   - Preflight closure rules (each rejection tells you exactly what failed):
+     - a projection declares exactly ONE primary table; all other tables are
+       supporting;
+     - per binding, `transform_metadata.declared_input_roles[].role` must be
+       the IDENTICAL string as that binding's `input_requirement_ref` in the
+       same submission (e.g. declare `mgnify_study_data` for a binding whose
+       requirement ref is `mgnify_study_data`, never a generic role such as
+       `csv_data`);
+     - the transform's declared output tables must equal the selected
+       projection's tables, in projection order — no extra and no missing.
+   - Worked single-source shape (one MGnify study → one primary table):
+     acquisition-request binds `mgnify.files.v1` with `{source: "mgnify",
+     accession: "MGYS00000322"}`; one transform compiles the study JSON into
+     one primary table with a registered-input locator; prepare returns the
+     server-bound descriptor digests; submit passes them unchanged.
    The Host owns compilation. Pass the prepared submission and unchanged
    preflight receipt directly to submit. Its Host descriptor digest is
    server-bound; do not recompute or edit digest bindings. Do not repeat a failure-driven descriptor handshake, bypass

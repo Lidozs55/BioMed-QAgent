@@ -30,7 +30,7 @@ const GUT_PROVIDER_ADAPTERS = new Map<string, ReadonlySet<string>>([
     "gut_microbiome.ncbi_taxonomy_efetch_xml.v1",
   ])],
   ["gmrepo.files.v1", new Set([
-    "gut_microbiome.gmrepo_associated_species_json.v1",
+    "gut_microbiome.gmrepo_taxon_phenotypes_json.v1",
   ])],
 ]);
 
@@ -103,7 +103,7 @@ function assertGutBinding(input: ProviderCarrierTransformInput): void {
     registered_gut_microbiome_differential_abundance_xlsx: new Set(["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"]),
     "gut_microbiome.ncbi_taxonomy_esearch_json.v1": new Set(["application/json", "text/plain"]),
     "gut_microbiome.ncbi_taxonomy_efetch_xml.v1": new Set(["application/xml", "text/xml", "text/plain"]),
-    "gut_microbiome.gmrepo_associated_species_json.v1": new Set(["application/json"]),
+    "gut_microbiome.gmrepo_taxon_phenotypes_json.v1": new Set(["application/json"]),
   };
   if (!mediaTypesByAdapter[input.adapterId]?.has(input.receipt.media_type.toLowerCase())) {
     fail(`adapter '${input.adapterId}' does not accept media type '${input.receipt.media_type}'`);
@@ -143,19 +143,47 @@ function gutMicrobiomeRows(inputs: readonly ProviderCarrierTransformInput[]): Pr
   for (const input of inputs) {
     if (input.familyId !== GUT_MICROBIOME_FAMILY_ID) fail(`unexpected family '${input.familyId}'`);
     assertGutBinding(input);
-    appendGutRows(aggregate, parseGutMicrobiomeCarrier({
-      assetId: input.assetId,
-      logicalFile: input.receipt.relative_path,
-      retrievedAt: input.receipt.registered_at,
-      mediaType: input.receipt.media_type,
-      bytes: input.bytes,
-      studyId: studyIdFor(input),
-      adapterId: input.adapterId,
-      sourceId: input.receipt.source_id,
-      diseaseId: entityValue(input, ["disease_id", "disease", "mesh_id"]),
-      diseaseName: entityValue(input, ["disease_name", "disease_label"]),
-      hostTaxonId: entityValue(input, ["host_taxon_id", "host_taxon", "host_species_taxon_id"]),
-    }));
+    try {
+      appendGutRows(aggregate, parseGutMicrobiomeCarrier({
+        assetId: input.assetId,
+        logicalFile: input.receipt.relative_path,
+        retrievedAt: input.receipt.registered_at,
+        mediaType: input.receipt.media_type,
+        bytes: input.bytes,
+        studyId: studyIdFor(input),
+        adapterId: input.adapterId,
+        sourceId: input.receipt.source_id,
+        diseaseId: entityValue(input, ["disease_id", "disease", "mesh_id"]),
+        diseaseName: entityValue(input, ["disease_name", "disease_label"]),
+        hostTaxonId: entityValue(input, ["host_taxon_id", "host_taxon", "host_species_taxon_id"]),
+      }));
+    } catch (error) {
+      // Live MGnify study carriers are JSON:API `data` envelopes whose
+      // attributes never carry disease annotations; rewrite the bare parse
+      // failure into the exact spec.entities remedy before it reaches the
+      // agent as an opaque invalid_input.
+      const missing = [
+        entityValue(input, ["disease_id", "disease", "mesh_id"]) === undefined
+          ? "'disease_id' (or 'disease'/'mesh_id', MeSH ID such as D003924)" : null,
+        entityValue(input, ["disease_name", "disease_label"]) === undefined
+          ? "'disease_name' (or 'disease_label')" : null,
+        entityValue(input, ["host_taxon_id", "host_taxon", "host_species_taxon_id"]) === undefined
+          ? "'host_taxon_id' (or 'host_taxon'/'host_species_taxon_id', e.g. 9606)" : null,
+      ].filter((item): item is string => item !== null);
+      if (
+        input.adapterId === "registered_gut_microbiome_study_json" &&
+        missing.length > 0 &&
+        error instanceof TypeError &&
+        /study\.(disease_id|disease_name|host_taxon_id) is required/.test(error.message)
+      ) {
+        fail(
+          `binding '${input.bindingId}' cannot construct study_records from this JSON:API carrier: ` +
+            `declare top-level spec.entities ${missing.join(", ")} — each exactly one non-empty string. ` +
+            "These fields are never carried by MGnify JSON:API attributes and must not be sent as binding.parameters.",
+        );
+      }
+      throw error;
+    }
   }
   assertGutMicrobiomeCarrierRows(aggregate);
   return {

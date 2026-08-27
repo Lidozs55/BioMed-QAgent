@@ -8,6 +8,8 @@
 
 ## P0 — Release evidence
 
+- [ ] **Gold10 肠道微生物组正式发布闭包（分支 `fix/gold10-publication-closure`）。** 已完成：路由披露 `required_entities`、dispatch 层 entities 补救报错、`gmrepo.files.v1` 迁移到存活的 per-taxon phenotype 端点（`gut_microbiome.gmrepo_taxon_phenotypes_json.v1`）、固定 provider 拒绝信息可操作化、技能文档静态优先/动态闭包规则；Playwright 浏览器本机可用。剩余：(a) 差异丰度载体闭合 —— Europe PMC 补充材料 ZIP → provenance-bound xlsx carrier 提取 + 版面灵活解析（需 Core 新能力，动 trust boundary 先补 ADR）；(b) NCBI 旧名→现行名 crosswalk schema 注册；(c) `deepseek-v4-flash` 多绑定 spec 授权成功率低，落地 P1 的 formal-route scaffold 或在 gold10 正式 pass 时临时使用更强模型（默认仍为 flash）。验收：单一 fresh run 内 `completed` 且 `artifact_count>0`、`current_publication_id` 非空、产物经 Artifact API 校验。
+
 - [ ] **冻结单 Host Gold1–Gold6 证据。** 在同一 commit、同一 Host 与同一 data root 上记录 task/run/requirement、registered input、OperationResult、B3、ProductAssessment、Publication 与 Artifact API hash 证据；缺失证据必须标为 blocked/unknown，不能用历史产物补齐。
   - 验收：Gold1–Gold5 的每项结论可回溯到同提交证据；Gold6 只有在真实 `publication_acceptance` HIL 后才可通过。
   - 前置：应用 provider 账户与 live source 可用；运行期间不得并行启动第二个 Host。
