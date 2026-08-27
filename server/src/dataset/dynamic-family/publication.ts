@@ -280,7 +280,7 @@ export async function publishDynamicFamily(
     "extraction_confidence",
   ]);
   const requiresHilAcceptance = input.execution.materialization.schemas.some((schema) =>
-    schema.fields.some((field) => reviewFieldNames.has(field.name)),
+    schema.fields.some((field) => reviewFieldNames.has(field.name.replaceAll("-", "_"))),
   );
   let assessment = parseProductAssessment(
     structuralAssessment(candidate, failed.length === 0, requiresHilAcceptance, browserExecution !== null),

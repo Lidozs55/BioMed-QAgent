@@ -671,7 +671,7 @@ async function executedSubmission(
   };
 }
 
-test.each(["confidence", "confidence_level", "extraction_confidence"])(
+test.each(["confidence", "confidence_level", "extraction_confidence", "extraction-confidence"])(
   "requires publication acceptance HIL for dynamic extraction field '%s'",
   async (reviewField) => {
     const root = await mkdtemp(path.join(os.tmpdir(), "dynamic-family-confidence-hil-"));
