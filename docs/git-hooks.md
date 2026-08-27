@@ -9,18 +9,14 @@ Installation requires `pnpm install` once; nothing else to configure.
 
 ### `.husky/pre-commit` — commit-time quality gates
 
-Blocks commits with syntax errors, lint violations, or failing unit tests:
+Blocks commits with type errors or lint violations. Unit tests are **not** run
+at commit time — run the targeted tests per `AGENTS.md` § Quality Gates before
+pushing/merging; a green commit is not a green test run.
 
 1. `pnpm typecheck` — workspace TypeScript (catches syntax + type errors).
 2. `pnpm lint` — workspace ESLint (`--max-warnings 0`).
-3. Python bridge gates, **only when `database/**/*.py` files are staged**:
-   `uv run ruff check database` then `uv run pytest database/tests`.
-4. Unit tests, **targeted to the staged workspaces** (`AGENTS.md` § Quality
-   Gates): `server/` → `pnpm --filter @biomed/server test`, `frontend/` →
-   `pnpm --filter @biomed/frontend test` (run sequentially with
-   `--workspace-concurrency=1`). Cross-cutting sources — root config files,
-   `scripts/`, or `packages/contracts/` — run the full `pnpm test` instead,
-   because their blast radius spans workspaces.
+3. `uv run ruff check database` — **only when `database/**/*.py` files are
+   staged** (ruff is lint; pytest belongs to Quality Gates, not the commit path).
 
 **Skip rule**: if the staged set contains no code/config files (docs, assets,
 `.md`, `.gitignore`, ...), all gates are skipped so doc-only commits stay fast.

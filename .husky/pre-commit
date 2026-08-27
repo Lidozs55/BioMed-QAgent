@@ -1,10 +1,12 @@
 #!/usr/bin/env sh
 
-# Pre-commit quality gates: block syntax errors, lint violations and failing
-# unit tests from being committed. Deliberate bypass: `git commit --no-verify`
-# (or HUSKY=0) — never dodge the gates without saying why.
+# Pre-commit quality gates: block type errors and lint violations from being
+# committed. Unit tests are NOT run here — run the targeted tests yourself per
+# AGENTS.md § Quality Gates before pushing a branch or merging to main; CI runs
+# the full suite on every PR and push to main. Deliberate bypass:
+# `git commit --no-verify` (or HUSKY=0) — never dodge the gates without saying why.
 
-# Skip the heavy gates when only docs/assets are staged (no code/config touched).
+# Skip the gates when only docs/assets are staged (no code/config touched).
 if ! git diff --cached --name-only --diff-filter=ACM | grep -Eq \
   '^(frontend|server|packages|database|scripts)/|\.(ts|tsx|js|mjs|cjs|jsx|py|css|html)$|^(package\.json|pnpm-workspace\.yaml|pnpm-lock\.yaml|pyproject\.toml|uv\.lock|tsconfig[^/]*)$'
 then
@@ -18,35 +20,12 @@ pnpm typecheck
 echo "pre-commit: lint"
 pnpm lint
 
-# Python database bridge gates — only when database/ Python sources are staged.
+# Ruff lint for the Python bridge — only when database/ Python sources are
+# staged (pytest stays out of the commit path; run it per Quality Gates).
 if git diff --cached --name-only --diff-filter=ACM | grep -Eq '^database/.*\.py$'
 then
   echo "pre-commit: ruff check database"
   uv run ruff check database
-  echo "pre-commit: pytest database/tests"
-  uv run pytest database/tests
-fi
-
-# Unit tests — targeted, not full-suite: run only the workspaces whose sources
-# are staged (AGENTS.md § Quality Gates). Cross-cutting sources (root config,
-# shared scripts, or the shared packages/contracts wire-DTO layer) fall back to
-# the full suite; CI also runs the full suite on every PR and push to main.
-staged=$(git diff --cached --name-only --diff-filter=ACM)
-if echo "$staged" | grep -qE '^(package\.json|pnpm-workspace\.yaml|pnpm-lock\.yaml|pyproject\.toml|uv\.lock|tsconfig[^/]*)$|^scripts/|^packages/'; then
-  echo "pre-commit: full unit tests (cross-cutting sources staged)"
-  pnpm test
-else
-  filters=""
-  echo "$staged" | grep -qE '^server/' && filters="$filters --filter @biomed/server"
-  echo "$staged" | grep -qE '^frontend/' && filters="$filters --filter @biomed/frontend"
-  if [ -n "$filters" ]; then
-    echo "pre-commit: targeted unit tests"
-    # --workspace-concurrency=1 keeps the machine-wide 2-worker budget
-    # (docs/architecture/test-concurrency.md).
-    pnpm --workspace-concurrency=1 $filters test
-  else
-    echo "pre-commit: no workspace sources staged — skipping unit tests"
-  fi
 fi
 
 echo "pre-commit: all quality gates passed"
