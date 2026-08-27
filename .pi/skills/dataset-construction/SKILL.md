@@ -38,16 +38,17 @@ output.
    provider; do not download or parse that provider again with workspace commands.
 5. When a frozen multi-table topology cannot be expressed by a registered static
    family, use the fixed two-phase dynamic protocol: call
-   `prepare_dynamic_family_publication` first, bind the proposal transform-ref digest
-   to the returned Host descriptor digest, then call
-   `submit_dynamic_family_publication` with that unchanged receipt. A fresh prepare
+   `prepare_dynamic_family_publication` first, then call
+   `submit_dynamic_family_publication` with the returned server-bound submission
+   and unchanged receipt. A fresh prepare
    after source/projection/transform changes is mandatory; also prepare after
    any committed role, binding, or acquisition-request change, FamilySpec,
    Projection, or transform fact changes. Use this protocol with:
    - `execution_backend="in_process_unisolated"` exactly. This backend is **not a
      sandbox, isolation mechanism, or security boundary**; never describe it as one.
-   - a canonical-digest-valid task/user/curated/system `FamilySpec`, selected
-     Projection, strict transform metadata/source, and execution proposal;
+   - a task/user/curated/system `FamilySpec`, selected Projection, strict
+     transform metadata/source, and execution proposal. Omit derived digest
+     properties from prepare; the server returns them in the prepared submission;
    - Close every source binding exactly once with either:
      - an acquisition-requests object mapping each binding ID to a provider
        enumerated in the dynamic tool schema plus its parameters (preferred), or
@@ -60,10 +61,10 @@ output.
    - deterministic output handles out-0, out-1, … in primary + supporting +
      derived projection order. Each output needs a non-empty registered input
      receipt ID as locator; multiple tables from one source may share it.
-   The Host owns compilation. Bind `execution_proposal.transform_refs[0].digest` to
-   `preflight_receipt.host_descriptor_digest` exactly, and pass the unchanged
-   receipt to submit. Do not repeat a failure-driven descriptor handshake,
-   bypass the receipt, or invent a digest. Treat only the returned immutable
+   The Host owns compilation. Pass the prepared submission and unchanged
+   preflight receipt directly to submit. Its Host descriptor digest is
+   server-bound; do not recompute or edit digest bindings. Do not repeat a failure-driven descriptor handshake, bypass
+   the receipt, or invent a digest. Treat only the returned immutable
    Publication as formal output. A schema containing
    review-status or human-review-status remains human-review-pending until
    genuine HIL acceptance exists.
@@ -72,9 +73,9 @@ output.
    static adapter/transform rejection or requested-field/topology mismatch means
    the registered static family is unsuitable: stop static execution and required-
    field vocabulary probing, then switch immediately to the fixed dynamic
-   protocol: call `prepare_dynamic_family_publication`, bind the proposal transform-ref
-   digest to the returned Host descriptor digest, and call
-   `submit_dynamic_family_publication` with that unchanged receipt. For a permission
+   protocol: call `prepare_dynamic_family_publication`, then call
+   `submit_dynamic_family_publication` with its unchanged prepared submission,
+   whose descriptor digest is server-bound, and receipt. For a permission
    or human-review request, wait for the decision instead of replacing the
    trusted operation with workspace output.
 7. Only a successful Publication is formal output. Never describe rejection,

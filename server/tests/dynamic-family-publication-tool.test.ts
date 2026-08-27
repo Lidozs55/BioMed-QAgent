@@ -9,6 +9,7 @@ import { canonicalDigest } from "../src/dataset/adapters/identity.js";
 import {
   createPrepareDynamicFamilyPublicationTool,
   createDynamicFamilyPublicationTool,
+  parseDynamicFamilyPublicationSubmitRequest,
   parseDynamicFamilyPublicationSubmission,
 } from "../src/agent/tools/dynamic-family-publication.js";
 import { submitDynamicFamilyPublication } from "../src/dataset/dynamic-family/submission.js";
@@ -224,6 +225,106 @@ describe("dynamic family build tool boundary", () => {
     const family = raw.family_spec as FamilySpec;
     raw.family_spec = { ...family, canonical_digest: "0".repeat(64) };
     await expect(parseDynamicFamilyPublicationSubmission(raw)).rejects.toThrow(/canonical_digest must equal [0-9a-f]{64}/);
+  });
+
+  test("prepare derives digest bindings and returns a strict submit-ready request", async () => {
+    const raw = await submission();
+    delete (raw.family_spec as Partial<FamilySpec>).canonical_digest;
+    const metadata = raw.transform_metadata as Record<string, unknown>;
+    delete metadata.bound_family_spec_digest;
+    delete metadata.bound_projection_digest;
+    const proposal = raw.execution_proposal as {
+      family_spec_ref: Record<string, unknown>;
+      transform_refs: Array<Record<string, unknown>>;
+    };
+    delete proposal.family_spec_ref.digest;
+    delete proposal.transform_refs[0]!.digest;
+
+    let preparedSubmission: unknown;
+    const tool = createPrepareDynamicFamilyPublicationTool({
+      prepare: async (value) => {
+        preparedSubmission = value;
+        return prepareDynamicFamilyPublication({
+          taskId: "task_dynamic",
+          requirementId: "build_dynamic",
+          generation: 0,
+          submission: value,
+        });
+      },
+    });
+    const result = await tool.execute(raw);
+
+    expect(result.isError).not.toBe(true);
+    expect(preparedSubmission).toMatchObject({
+      family_spec: { canonical_digest: expect.stringMatching(/^[0-9a-f]{64}$/) },
+      transform_metadata: {
+        bound_family_spec_digest: expect.stringMatching(/^[0-9a-f]{64}$/),
+        bound_projection_digest: expect.stringMatching(/^[0-9a-f]{64}$/),
+      },
+      execution_proposal: {
+        family_spec_ref: { digest: expect.stringMatching(/^[0-9a-f]{64}$/) },
+        transform_refs: [{ digest: expect.stringMatching(/^[0-9a-f]{64}$/) }],
+      },
+    });
+    const details = result.details as {
+      prepared_submission: Record<string, unknown>;
+      preflight_receipt: Record<string, unknown>;
+    };
+    const submit = await parseDynamicFamilyPublicationSubmitRequest({
+      ...details.prepared_submission,
+      preflight_receipt: details.preflight_receipt,
+    });
+    expect(submit.submission.execution_proposal.transform_refs[0]?.digest)
+      .toBe(submit.preflightReceipt.host_descriptor_digest);
+  });
+
+  test("prepare schema omits derived digests while retaining strict-request compatibility", async () => {
+    const complete = await submission();
+    const tool = createPrepareDynamicFamilyPublicationTool({
+      prepare: async (value) => prepareDynamicFamilyPublication({
+        taskId: "task_dynamic",
+        requirementId: "build_dynamic",
+        generation: 0,
+        submission: value,
+      }),
+    });
+    const parameterProperties = (tool.parameters as {
+      properties: { family_spec: { properties: Record<string, unknown> } };
+    }).properties;
+    expect(parameterProperties.family_spec.properties).not.toHaveProperty("canonical_digest");
+    expect(tool.description).toMatch(/without derived digest properties/i);
+    expect(tool.description).toMatch(/prepared_submission/i);
+
+    const legacyStrict = await tool.execute(complete);
+    expect(legacyStrict.isError).not.toBe(true);
+
+    const missingIdentity = await submission();
+    delete (missingIdentity.family_spec as Partial<FamilySpec>).canonical_digest;
+    const metadata = missingIdentity.transform_metadata as Record<string, unknown>;
+    delete metadata.bound_family_spec_digest;
+    delete metadata.bound_projection_digest;
+    const proposal = missingIdentity.execution_proposal as {
+      family_spec_ref: Record<string, unknown>;
+      transform_refs: Array<Record<string, unknown>>;
+    };
+    delete proposal.family_spec_ref.digest;
+    delete proposal.transform_refs[0]!.digest;
+    delete ((missingIdentity.family_spec as FamilySpec).identity as Partial<FamilySpec["identity"]>)
+      .probe_mapping_assertion_pk;
+    const rejected = await tool.execute(missingIdentity);
+    expect(rejected.isError).toBe(true);
+    expect(rejected.content).toMatch(/probe_mapping_assertion_pk/i);
+
+    let reads = 0;
+    const nestedProxy = await submission();
+    nestedProxy.family_spec = new Proxy(nestedProxy.family_spec as object, {
+      get() { reads += 1; return undefined; },
+      getOwnPropertyDescriptor() { reads += 1; return undefined; },
+    });
+    const hostile = await tool.execute(nestedProxy);
+    expect(hostile.isError).toBe(true);
+    expect(hostile.content).toMatch(/family_spec must be a non-Proxy object/);
+    expect(reads).toBe(0);
   });
 
   test("exposes one callback-backed Agent tool without weakening parsing", async () => {

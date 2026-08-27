@@ -81,7 +81,7 @@ export function createDynamicFamilyPublicationTool(
     label: "Submit Dynamic Family Publication",
     description:
       "Submit a strict FamilySpec + TypeScript DatasetTransform with the exact prepare_dynamic_family_publication receipt to the explicit in_process_unisolated runtime and trusted Core publication path. Use only providers reported in inspect_dataset_execution_routes.dynamic.direct_bindings; the acquisition_requests schema is the execution contract, not proof of semantic or publication closure. This is not a sandbox, isolation mechanism, or security boundary. Direct paths and discovery bytes are forbidden.",
-    parameters: dynamicFamilyPublicationParameters(true),
+    parameters: dynamicFamilyPublicationParameters("submit"),
     async execute(value, signal, context): Promise<BioMedToolResult> {
       try {
         const parsed = await parseDynamicFamilyPublicationSubmitRequest(value);
@@ -106,13 +106,22 @@ export function createPrepareDynamicFamilyPublicationTool(
     name: "prepare_dynamic_family_publication",
     label: "Prepare Dynamic Family Publication",
     description:
-      "Use after inspect_dataset_execution_routes when no registered static family expresses the required topology and every input is dynamic-bindable or a prior task-owned Core asset. Do not prevalidate a dynamic FamilySpec with validate_dataset_execution. This deterministic, side-effect-free preflight validates the submitted topology and acquisition plan and returns a task/requirement/generation-bound receipt.",
-    parameters: dynamicFamilyPublicationParameters(false),
+      "Use after inspect_dataset_execution_routes when no registered static family expresses the required topology and every input is dynamic-bindable or a prior task-owned Core asset. Do not prevalidate a dynamic FamilySpec with validate_dataset_execution. Submit semantic fields without derived digest properties. This deterministic, side-effect-free preflight derives all digest bindings, validates topology and acquisition planning, and returns prepared_submission plus a task/requirement/generation-bound preflight_receipt; pass both unchanged to submit_dynamic_family_publication.",
+    parameters: dynamicFamilyPublicationParameters("prepare"),
     async execute(value, signal, context): Promise<BioMedToolResult> {
       try {
-        const submission = await parseDynamicFamilyPublicationSubmission(value);
+        const submission = await parseDynamicFamilyPublicationPrepareSubmission(value);
         const receipt = await options.prepare(submission, signal, context);
-        const details = { ok: true, status: "prepared", preflight_receipt: receipt };
+        const preparedSubmission = dynamicFamilyPublicationWire(
+          submission,
+          receipt.host_descriptor_digest,
+        );
+        const details = {
+          ok: true,
+          status: "prepared",
+          prepared_submission: preparedSubmission,
+          preflight_receipt: receipt,
+        };
         return { content: JSON.stringify(details), details };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -136,7 +145,8 @@ export function createDynamicFamilyPublicationTools(options: {
   ];
 }
 
-function dynamicFamilyPublicationParameters(includePreflightReceipt: boolean): Record<string, unknown> {
+function dynamicFamilyPublicationParameters(mode: "prepare" | "submit"): Record<string, unknown> {
+  const includeDerivedBindings = mode === "submit";
   const digest = { type: "string", pattern: "^[0-9a-f]{64}$" };
   const safeId = { type: "string", pattern: "^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,255}$" };
   const ids = { type: "array", items: safeId, maxItems: 128 };
@@ -199,9 +209,12 @@ function dynamicFamilyPublicationParameters(includePreflightReceipt: boolean): R
   };
   const familySpec = {
     type: "object",
-      description: "Declarative topology only. canonical_digest is SHA-256 of canonical JSON excluding canonical_digest; compute and bind it before prepare_dynamic_family_publication.",
+    description: includeDerivedBindings
+      ? "Declarative topology bound to its server-derived canonical digest."
+      : "Declarative topology only. Omit canonical_digest; prepare_dynamic_family_publication derives and binds it.",
     properties: {
-      family_spec_id: safeId, semantic_version: safeId, canonical_digest: digest,
+      family_spec_id: safeId, semantic_version: safeId,
+      ...(includeDerivedBindings ? { canonical_digest: digest } : {}),
       projections: { type: "array", minItems: 1, items: projection },
       table_definitions: { type: "array", minItems: 1, items: tableDefinition },
       relations: { type: "array", items: relation },
@@ -223,7 +236,8 @@ function dynamicFamilyPublicationParameters(includePreflightReceipt: boolean): R
       scope, author: { type: "string", minLength: 1 }, evidence_refs: ids,
     },
     required: [
-      "family_spec_id", "semantic_version", "canonical_digest", "projections",
+      "family_spec_id", "semantic_version",
+      ...(includeDerivedBindings ? ["canonical_digest"] : []), "projections",
       "table_definitions", "relations", "identity", "transform_capability_refs",
       "declared_outputs", "integration_policy_ref", "validation_policy_ref",
       "assessment_policy_ref", "resource_class_request", "scope", "author", "evidence_refs",
@@ -246,14 +260,19 @@ function dynamicFamilyPublicationParameters(includePreflightReceipt: boolean): R
         },
       },
       declared_output_tables: { type: "array", minItems: 1, items: declaredTable },
-      bound_family_spec_digest: digest, bound_projection_digest: digest,
+      ...(includeDerivedBindings
+        ? { bound_family_spec_digest: digest, bound_projection_digest: digest }
+        : {}),
       determinism_profile: { type: "string", enum: ["deterministic", "non_deterministic"] },
       resource_class: safeId, origin: safeId, scope,
       review_refs: ids,
     },
     required: [
       "transform_id", "version", "entrypoint", "declared_input_roles",
-      "declared_output_tables", "bound_family_spec_digest", "bound_projection_digest",
+      "declared_output_tables",
+      ...(includeDerivedBindings
+        ? ["bound_family_spec_digest", "bound_projection_digest"]
+        : []),
       "determinism_profile", "resource_class", "origin", "scope", "review_refs",
     ],
     additionalProperties: false,
@@ -272,9 +291,24 @@ function dynamicFamilyPublicationParameters(includePreflightReceipt: boolean): R
     properties: {
       schema_version: { type: "string", enum: ["2.0"] },
       spec_kind: { type: "string", enum: ["proposal"] },
-      requirement_id: safeId, family_spec_ref: scopeRef, projection_ref: safeId,
+      requirement_id: safeId,
+      family_spec_ref: includeDerivedBindings ? scopeRef : {
+        type: "object",
+        properties: { scope, id: safeId, version: safeId },
+        required: ["scope", "id", "version"],
+        additionalProperties: false,
+      },
+      projection_ref: safeId,
       source_bindings: { type: "array", minItems: 1, items: proposalBinding },
-      transform_refs: { type: "array", minItems: 1, maxItems: 1, items: scopeRef },
+      transform_refs: {
+        type: "array", minItems: 1, maxItems: 1,
+        items: includeDerivedBindings ? scopeRef : {
+          type: "object",
+          properties: { scope, id: safeId, version: safeId },
+          required: ["scope", "id", "version"],
+          additionalProperties: false,
+        },
+      },
       policy_refs: { type: "array", items: scopeRef },
       output_format: safeId, idempotency_identity: safeId,
     },
@@ -398,7 +432,7 @@ function dynamicFamilyPublicationParameters(includePreflightReceipt: boolean): R
       family_spec: {
         ...familySpec,
         description:
-          "For normalized bioactivity use exactly target_records, compound_records, assay_records, activity_records (primary), and compound_crosswalk; activity_records has many-to-one relations to target_records, compound_records, and assay_records. canonical_digest is SHA-256 canonical JSON excluding canonical_digest; prepare_dynamic_family_publication commits the resulting structural facts.",
+          `For normalized bioactivity use exactly target_records, compound_records, assay_records, activity_records (primary), and compound_crosswalk; activity_records has many-to-one relations to target_records, compound_records, and assay_records. ${includeDerivedBindings ? "Use only the prepared server-bound digest values." : "Omit all derived digest properties; prepare_dynamic_family_publication computes and returns them in prepared_submission."}`,
       },
       projection_id: safeId,
       transform_source: {
@@ -419,12 +453,137 @@ function dynamicFamilyPublicationParameters(includePreflightReceipt: boolean): R
     required: [...TOP_KEYS],
     additionalProperties: false,
   };
-  if (includePreflightReceipt) {
+  if (mode === "submit") {
     const properties = schema.properties as Record<string, unknown>;
     properties.preflight_receipt = preflightReceipt;
     (schema.required as string[]).push("preflight_receipt");
   }
   return schema;
+}
+
+const FAMILY_SPEC_DRAFT_KEYS = new Set([
+  "family_spec_id", "semantic_version", "projections", "table_definitions",
+  "relations", "identity", "transform_capability_refs", "declared_outputs",
+  "integration_policy_ref", "validation_policy_ref", "assessment_policy_ref",
+  "resource_class_request", "scope", "author", "evidence_refs",
+]);
+const TRANSFORM_METADATA_DRAFT_KEYS = new Set([
+  "transform_id", "version", "entrypoint", "declared_input_roles",
+  "declared_output_tables", "determinism_profile", "resource_class", "origin",
+  "scope", "review_refs",
+]);
+const EXECUTION_PROPOSAL_KEYS = new Set([
+  "schema_version", "spec_kind", "requirement_id", "family_spec_ref",
+  "projection_ref", "source_bindings", "transform_refs", "policy_refs",
+  "output_format", "idempotency_identity",
+]);
+const UNDIGESTED_SCOPE_REF_KEYS = new Set(["scope", "id", "version"]);
+
+/**
+ * Prepare accepts only semantic facts. The server derives every digest that is
+ * a pure function of those facts, while submit keeps the existing strict wire.
+ */
+export async function parseDynamicFamilyPublicationPrepareSubmission(
+  value: unknown,
+): Promise<ParsedDynamicFamilyPublicationSubmission> {
+  const record = exactDataRecord(value, TOP_KEYS, "$dynamic_family_publication_prepare");
+  if (types.isProxy(record.family_spec)) {
+    throw new TypeError("$.family_spec must be a non-Proxy object");
+  }
+  if (
+    record.family_spec !== null
+    && typeof record.family_spec === "object"
+    && Object.hasOwn(record.family_spec, "canonical_digest")
+  ) {
+    // Persisted sessions may still carry the previous prepare schema. Keep the
+    // old strict request valid while advertising only the server-derived draft.
+    return parseDynamicFamilyPublicationSubmission(value);
+  }
+  const familyDraft = exactDataRecord(
+    record.family_spec,
+    FAMILY_SPEC_DRAFT_KEYS,
+    "$.family_spec",
+  );
+  const familySeed = parseFamilySpec({
+    ...familyDraft,
+    canonical_digest: HEX,
+  }, "$.family_spec");
+  const familyDigest = await computeFamilySpecDigest(familySeed);
+  const familySpec = { ...familyDraft, canonical_digest: familyDigest };
+  const parsedFamily = parseFamilySpec(familySpec, "$.family_spec");
+  if (typeof record.projection_id !== "string") throw new TypeError("projection_id must be a string");
+  const projection = parsedFamily.projections.find(
+    (item) => item.projection_id === record.projection_id,
+  );
+  if (projection === undefined) {
+    throw new TypeError(`unknown FamilySpec projection '${record.projection_id}'`);
+  }
+
+  const metadataDraft = exactDataRecord(
+    record.transform_metadata,
+    TRANSFORM_METADATA_DRAFT_KEYS,
+    "$.transform_metadata",
+  );
+  const proposalDraft = exactDataRecord(
+    record.execution_proposal,
+    EXECUTION_PROPOSAL_KEYS,
+    "$.execution_proposal",
+  );
+  const familyRef = exactDataRecord(
+    proposalDraft.family_spec_ref,
+    UNDIGESTED_SCOPE_REF_KEYS,
+    "$.execution_proposal.family_spec_ref",
+  );
+  const transformRefs = exactDataArray(
+    proposalDraft.transform_refs,
+    "$.execution_proposal.transform_refs",
+  );
+  if (transformRefs.length !== 1) {
+    throw new TypeError("execution_proposal.transform_refs must contain exactly one transform");
+  }
+  const transformRef = exactDataRecord(
+    transformRefs[0],
+    UNDIGESTED_SCOPE_REF_KEYS,
+    "$.execution_proposal.transform_refs[0]",
+  );
+  const projectionDigestValue = projectionDigest(projection);
+  return parseDynamicFamilyPublicationSubmission({
+    ...record,
+    family_spec: familySpec,
+    transform_metadata: {
+      ...metadataDraft,
+      bound_family_spec_digest: familyDigest,
+      bound_projection_digest: projectionDigestValue,
+    },
+    execution_proposal: {
+      ...proposalDraft,
+      family_spec_ref: { ...familyRef, digest: familyDigest },
+      transform_refs: [{ ...transformRef, digest: HEX }],
+    },
+  });
+}
+
+function dynamicFamilyPublicationWire(
+  submission: ParsedDynamicFamilyPublicationSubmission,
+  hostDescriptorDigest: string,
+): Record<string, unknown> {
+  return {
+    schema_version: submission.schema_version,
+    execution_backend: submission.execution_backend,
+    family_spec: submission.family_spec,
+    projection_id: submission.projection.projection_id,
+    transform_source: submission.transform_source,
+    transform_metadata: submission.transform_metadata,
+    execution_proposal: {
+      ...submission.execution_proposal,
+      transform_refs: submission.execution_proposal.transform_refs.map((ref) => ({
+        ...ref,
+        digest: hostDescriptorDigest,
+      })),
+    },
+    registered_sources: submission.registered_sources,
+    acquisition_requests: submission.acquisition_requests,
+  };
 }
 
 /** Strict wire boundary only. It never executes code or grants publication authority. */
@@ -610,6 +769,33 @@ function exactDataRecord(value: unknown, keys: ReadonlySet<string>, label: strin
       throw new TypeError(`${label}.${String(key)} must be an enumerable data property`);
     }
     result[key as string] = descriptor.value;
+  }
+  return result;
+}
+
+function exactDataArray(value: unknown, label: string): unknown[] {
+  if (!Array.isArray(value) || types.isProxy(value)) {
+    throw new TypeError(`${label} must be a non-Proxy array`);
+  }
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+  if (
+    lengthDescriptor === undefined
+    || !("value" in lengthDescriptor)
+    || typeof lengthDescriptor.value !== "number"
+    || !Number.isSafeInteger(lengthDescriptor.value)
+  ) {
+    throw new TypeError(`${label}.length must be a data property`);
+  }
+  const result: unknown[] = [];
+  for (let index = 0; index < lengthDescriptor.value; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) {
+      throw new TypeError(`${label}[${index}] must be an enumerable data property`);
+    }
+    result.push(descriptor.value);
+  }
+  if (Reflect.ownKeys(value).length !== result.length + 1) {
+    throw new TypeError(`${label} has unknown fields`);
   }
   return result;
 }

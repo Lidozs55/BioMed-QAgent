@@ -166,7 +166,8 @@ describe(".pi/skills manifest integrity", () => {
   test("dataset-construction documents the dynamic prepare/submit receipt protocol", async () => {
     const skill = await readSkill("dataset-construction");
     expect(skill.body).toMatch(/prepare_dynamic_family_publication/);
-    expect(skill.body).toMatch(/bind[\s\S]*descriptor digest/i);
+    expect(skill.body).toMatch(/descriptor digest[\s\S]*server-bound/i);
+    expect(skill.body).toMatch(/prepared submission/i);
     expect(skill.body).toMatch(/unchanged receipt/i);
     expect(skill.body).toMatch(/fresh prepare[\s\S]*(?:source|projection|transform)[\s\S]*change/i);
   });
@@ -180,8 +181,9 @@ describe(".pi/skills manifest integrity", () => {
     const submit = recoveryStep.indexOf("submit_dynamic_family_publication", prepare);
     expect(prepare).toBeGreaterThanOrEqual(0);
     expect(submit).toBeGreaterThan(prepare);
-    expect(recoveryStep.slice(prepare, submit + "submit_dynamic_family_publication".length))
-      .toMatch(/descriptor digest/i);
+    expect(recoveryStep).toMatch(
+      /prepare_dynamic_family_publication[\s\S]*submit_dynamic_family_publication[\s\S]*prepared submission[\s\S]*descriptor digest/i,
+    );
     expect(recoveryStep).not.toMatch(/switch immediately to\s+\n?\s*`submit_dynamic_family_publication`/i);
   });
 
@@ -215,7 +217,7 @@ describe(".pi/skills manifest integrity", () => {
     expect(pubmed.body).toContain("human_review_status");
     expect(pubmed.body).toContain("review_status");
     expect(pubmed.body).toMatch(/remains human_review_pending/i);
-    expect(dataset.body).toMatch(/bind the proposal transform-ref digest/i);
+    expect(dataset.body).toMatch(/descriptor digest is\s+server-bound/i);
     expect(dataset.body).toMatch(/do not repeat a failure-driven descriptor handshake/i);
   });
 });
