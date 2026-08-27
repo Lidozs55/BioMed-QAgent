@@ -190,6 +190,13 @@ describe("zip member extraction", () => {
     expect(result.extractionAssets).toHaveLength(2);
     for (const ref of result.extractionAssets) expect(ref.role).toBe("carrier");
     expect(result.extractionAssets[0]!.asset_id).toBe(`asset_${createHash("sha256").update(csv).digest("hex")}`);
+    const xlsxMember = result.extractionAssets[1]!;
+    const converted = await assets.resolveAny(xlsxMember.asset_id);
+    const convertedChunks: Buffer[] = [];
+    for await (const chunk of converted.content) convertedChunks.push(Buffer.from(chunk));
+    const convertedText = Buffer.concat(convertedChunks).toString("utf-8");
+    // The .xlsx member must be staged as parsed CSV text, not raw bytes.
+    expect(convertedText).toContain("P. micra");
     const resolved = await assets.resolveAny(result.extractionAssets[0]!.asset_id);
     const chunks: Buffer[] = [];
     for await (const chunk of resolved.content) chunks.push(Buffer.from(chunk));

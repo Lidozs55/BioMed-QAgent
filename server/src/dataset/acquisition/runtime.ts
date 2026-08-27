@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+
+import * as XLSX from "xlsx";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -583,12 +585,34 @@ async function extractZipCarrierMembers(
   const staged: StagedZipMember[] = [];
   for (const [index, member] of members.entries()) {
     const content = extractZipMember(buffer, member);
-    const relativePath = `source_assets/extracted/${result.requestIdentityDigest}/${index}_${member.storedName}`;
+    const extension = member.storedName.slice(member.storedName.lastIndexOf(".")).toLowerCase();
+    // XLSX members are converted to CSV text by Core at extraction time so
+    // downstream text-carrier consumers (e.g. Dynamic Family transforms) can
+    // read them; the conversion is deterministic and stays inside the
+    // Core-owned acquisition boundary.
+    let stagedContent = content;
+    let stagedName = member.storedName;
+    let mediaType = ZIP_MEMBER_MEDIA_TYPES[extension] ?? "application/octet-stream";
+    if (extension === ".xlsx") {
+      let workbook: XLSX.WorkBook;
+      try {
+        workbook = XLSX.read(content, { type: "buffer" });
+      } catch {
+        continue;
+      }
+      const sheetName = workbook.SheetNames[0];
+      const sheet = sheetName === undefined ? undefined : workbook.Sheets[sheetName];
+      if (sheet === undefined) continue;
+      const csvText = XLSX.utils.sheet_to_csv(sheet, { blankrows: false });
+      stagedContent = Buffer.from(csvText, "utf-8");
+      stagedName = `${member.storedName.slice(0, member.storedName.length - extension.length)}.csv`;
+      mediaType = "text/csv";
+    }
+    const relativePath = `source_assets/extracted/${result.requestIdentityDigest}/${index}_${stagedName}`;
     const absolutePath = path.join(taskRoot, ...relativePath.split("/"));
     await mkdir(path.dirname(absolutePath), { recursive: true });
-    await writeFile(absolutePath, content);
-    const extension = member.storedName.slice(member.storedName.lastIndexOf(".")).toLowerCase();
-    staged.push({ index, relativePath, mediaType: ZIP_MEMBER_MEDIA_TYPES[extension] ?? "application/octet-stream" });
+    await writeFile(absolutePath, stagedContent);
+    staged.push({ index, relativePath, mediaType });
   }
   return staged;
 }
