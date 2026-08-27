@@ -196,9 +196,11 @@ capability preflight 强制调研前选择 formal projection，也没有终态�
 
 动态工具支持 task-scope FamilySpec，所以“不注册新的 production family”本身不是
 拓扑阻塞；但 Agent 仍需准备完整 FamilySpec、Projection、TypeScript transform、
-proposal、registered source/acquisition bindings 和多项 digest，并严格执行
-`prepare_dynamic_family_build` -> 绑定 Host descriptor digest ->
-`submit_dynamic_family_build` 两阶段协议。它缺少小型 planning/scaffold 接口来返回：匹配的
+proposal 和 registered source/acquisition bindings，并严格执行 prepare/submit 两阶段协议。
+2026-08-27 已完成 scaffold 的第一个小步：prepare schema 不再要求 Agent 手写 Family、
+Projection、transform binding 和 Host descriptor digest；服务端派生这些值并返回可原样交给
+submit 的 `prepared_submission`，同时兼容旧的严格 prepare 请求。它仍缺少 planning/scaffold
+接口来返回：匹配的
 semantic family/projection、行粒度、可用 providers、缺失 blockers 和服务端生成的
 合法 skeleton。这增加了模型跳过正式路径的概率，但本次日志只能证明“未选择”，
 不能把动机单因果归结为 schema 大小。
@@ -272,8 +274,8 @@ row granularity；`variant_evidence` 又不能承载统计关联语义。
 
 1. **Capability preflight**：研究前解析候选 semantic family/projection，返回可用 Core
    providers 与缺失 provider blockers；不按数据库创建 family。
-2. **Server scaffold**：服务端根据选中 projection 生成 digest-bound FamilySpec/build
-   skeleton；Agent 只补来源参数和 transform，避免手写整个协议。
+2. **Server scaffold**：digest binding 子步骤已完成；继续由服务端根据选中 projection 生成
+   FamilySpec/build skeleton，使 Agent 只补来源参数和 transform，避免手写整个协议。
 3. **Provider/carrier closure**：实现通用的 GWAS Catalog association、Europe PMC
    supplementary table 和 RefSNP providers；为 binary supplementary 增加 Core-owned
    extraction asset 选择或 committed parser-result 输入。一个 provider 可绑定多个 family
