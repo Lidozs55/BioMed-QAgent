@@ -34,6 +34,23 @@ const ALLOWED_BACKTICK_TOKENS = new Set([
   "workspace_exec",
   // route preflight route_status value (schema field, not a tool)
   "requires_formal_extraction",
+  // static family id referenced by guidance (registry identifier, not a tool)
+  "gut_microbiome",
+  // fixed-provider acquisition request parameter names (not tools)
+  "source",
+  "accession",
+  "entities",
+  // entity/schema field names, declared input roles, and adapter ids
+  // referenced by dataset-construction guidance (identifiers, not tools)
+  "csv_data",
+  "mgnify_study_data",
+  "disease_id",
+  "disease_name",
+  "host_taxon_id",
+  "input_requirement_ref",
+  "registered_gut_microbiome_study_json",
+  "study_accession",
+  "study_id",
 ]);
 
 const SKILL_NAME = /^[a-z][a-z0-9_-]*$/;
