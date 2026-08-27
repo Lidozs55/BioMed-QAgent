@@ -22,12 +22,14 @@
 - **根因分层：** (1) 已有 capability inspection，但路径选择和 semantic projection 仍依赖模型，尚无终态门；(2) 动态工具输入复杂：单次提交要求完整 FamilySpec、Projection、transform、proposal、bindings 和 digest readmission，缺少服务端 scaffold；(3) supplementary extraction closure 缺失：Core 可登记官方 ZIP archive，但 phase3 dynamic binding 不能选择 provenance-bound XLSX-to-CSV extraction asset；(4) runtime 把未产生 BuildResult 的 dataset request 仍标为 completed。
 - **下一步：** 修订设计见 [`architecture/trait-association-and-genomic-annotation-design.md`](architecture/trait-association-and-genomic-annotation-design.md)。先用 fresh gold7 验证 capability inspection 是否被调用；随后另行评审 server-generated scaffold、supplementary extraction carrier 与只针对 dataset-producing request 的终态闭包。未来 static family 仍须来源无关并以非 Alzheimer trait/多数据库复用证明；能力缺失必须形成明确 `no_data`/`spec_rejected`/blocked outcome，不得把 workspace 文件自动提升为 Artifact。
 - **[P1] 修复（2026-08-27）：** phase-one prompt 与 `dataset-construction` skill 现在禁止用 `workspace_exec`/shell/网络子进程替代 governed acquisition、直接文件复制、archive inspection 或 formal carrier；`requires_formal_extraction` 且无 Core extraction carrier 时必须返回结构化 blocker/`NO_DATA`。formal Gold supervisor 对已知 shell/network 绕路自动 `deny` 后继续同一 run，未知命令仍停审；没有扩大自动 allow-list。
+- **[P1] 修复验证（2026-08-27 rerun2，`main@43928b79`）：** fresh run `task_ts_0753539c`（run `run_ts_7d94f85a`，`qwen3.8-27b`，证据 `data/gold-runs/43928b79-gold7-rerun2-execfix`）运行至 32,918 事件、123 次工具调用，**全程零 `workspace_exec`、零权限请求、零 shell/网络绕路尝试**——上一轮（496d61a2）在事件 8,221 处尝试 PowerShell 多语句，本轮越过该点后再未出现任何 exec 意图；工具面完全由 `download_from_page`/`lookup_gwas_catalog`/`lookup_dbsnp`/`inspect_dataset_execution_routes` 等 governed 工具构成。行为验证成立。run 未能自然终结：22:17 被外部 Host 重启的 `recoverActiveRuns` 扫描标记 `run_interrupted`（见下方多实例共享数据目录 hazard）；`continue` 续跑同样在约 4 分钟后被再次扫断。未产生 Publication/Artifact（与既有 extraction carrier 缺口一致），终态门与 scaffold 仍待闭环。
 
 ### gold8-gold10 仍缺正式 family/provider，部分上游来源不可达
 
 - **状态：** 2026-08-24 已修复可控 discovery 阻塞，正式 publication 能力仍缺失。
 - **gold8：** 新增 `lookup_openfda_dili_counts`，以有界官方查询替代超时的 Agent 脚本；live 变体复核发现 openFDA 聚合前 999 项会漏掉真实低频 PT，现已对聚合未返回的请求 PT 做 exact fallback，并区分官方 no-match 与 fallback 失败。ibuprofen 的 `HEPATIC INFARCTION`（7）和 `VANISHING BILE DUCT SYNDROME`（101）已通过 fallback 找回。当前环境访问任意 `www.fda.gov` 页面均返回 404，而 `api.fda.gov` 正常；DILIrank 完整文件不能因此改用论文附件或模拟分类冒充。正式 DILI family/provider 仍不存在。
 - **gold8 2026-08-27 rerun：** `main@496d61a2` task `task_ts_e4de01c2-cac5-4b8e-bc63-dd8e20617a3b` 使用 `qwen3.8-27b` 正常运行至 4,127 个事件，但未调用 `lookup_openfda_dili_counts`，转而通过 `curl.exe` 下载第三方 GitHub DILIrank README，触发权限请求 `permission_4c89a825-8d01-47de-a759-5834041549e5`。无 HIL、Publication 或 Artifact。生产 `workspace_exec` 现会在权限评估前拒绝 `curl`/`wget` 或 URL-bearing 命令，并提示使用 governed browser/download 工具或 registered Dataset Core provider；formal supervisor 同步自动 deny 该已知绕路后继续运行。
+- **gold8 修复验证（2026-08-27 rerun2，`main@43928b79`）：** fresh run `task_ts_4bbe04da`（run `run_ts_cbf62006`，`qwen3.8-27b`，证据 `data/gold-runs/43928b79-gold8-rerun2-execfix`）运行至 15,866 事件、59 次工具调用：**已调用 `lookup_openfda_dili_counts`**（上一轮从未调用），**零 curl/wget/URL 尝试**（Host 侧快速拒绝因此未触发，预防先于拦截）。唯一一次 `workspace_exec` 是良性 `python.exe --version` 探测：supervisor 按设计 fail-closed 停审（未知命令不自动放行），操作员经 Host API deny 并记录 `human-review.jsonl` 后 run 恢复并继续工作——停审/拒绝/恢复链路按设计工作。run 同样在 22:17 被外部 Host 重启扫描标记 `run_interrupted`，`continue` 续跑再次被扫断；未达自然终态，无 Publication/Artifact。
 - **gold9：** Europe PMC supplementary ZIP 优先链已对 IUIS PMID 41608114 live 成功（97,147 bytes，SHA-256 `7dfa5873…d9a277a`）；新增 `lookup_clinvar_counts`，BTK live 返回 total 1158、pathogenic/likely pathogenic 583。Orphadata/HGNC/ClinGen 仍需 provenance-bound provider，不能由 Agent 直接拼表。
 - **gold10：** 新增 `search_mgnify_studies` 绕过动态 browse 页面；live 变体复核发现官方字段实际为 `bioproject`，publications 则是 relationship 而非 attribute count，现已修正 BioProject 映射并输出官方 publications URL，不再产生假性 null count。T2D study `MGYS00000322` 返回 145 samples 与 `PRJEB1786`。`gmrepo.humandisease.info` 当前 DNS 解析失败；MGnify metadata 不能替代 GMRepo prevalence 或论文 differential abundance 数据。
 - **影响：** 三案现在可获取更多真实 discovery evidence，但仍不能产生 Dataset Core publication；外部失败必须保留为 `NO_DATA`/missing source，而不是零值或模拟行。
@@ -50,6 +52,17 @@
 - 双读 API 对真实 `execute_dataset_build` 产物的 E2E，以及 `build_result` 全量重启回放。
 - NO_DATA `data-variant` 与 `runId === null` reducer。
 - `/cache/datasets?limit=` 页帽与 hook 负向用例。
+
+## 运行环境
+
+### [P1] 多 Host 实例共享同一 data 目录会互相中断 run 并撕裂 events.jsonl
+
+- **状态：** 2026-08-27 晚在 gold7/gold8 rerun2（`main@43928b79`）中实际发生两次，run 证据见 `data/gold-runs/43928b79-gold*-rerun2-execfix*`。
+- **现象：** 任何 `createDurableAgentRuntime` 启动（即每个 Host 进程启动）都会对整个 `data/output/tasks/` 执行 `recoverActiveRuns`，把**不属于本进程内存**的所有 active run 追加 `run_interrupted`（reason 固定为 "Application Host restarted…"）。同机多实例（本例：5187/5199/8000 三个 Host 共用一个 data 目录）时，任何一个实例重启都会杀掉其他实例正在跑的 run；若被扫 run 所在实例仍在写事件，两个进程并发 append 同一 `events.jsonl` 会产生重复 sequence 的撕裂行，导致下一次任意 Host 启动时 `parseEvents` 直接启动失败（"events.jsonl sequence gap"）。
+- **实际后果：** gold7 rerun2（32,918 事件、零绕路）与 gold8 rerun2（15,866 事件、已走 openFDA）均在 22:17 被外部 8000 实例重启扫断；`continue` 续跑约 4 分钟后再次被扫断；两个任务的事件文件被撕裂后已手工修复（截断到各自 `run_interrupted`，原件备份为 `events.jsonl.corrupt-20260827*.bak`）。
+- **最小复现：** 同一 data 目录起两个 Host（A、B），在 A 上发起 run，再启动 B：A 的 run 立即被标记 `run_interrupted`。
+- **影响：** 单机协作开发/评测时，任何会话启动 `pnpm dev`/`pnpm start` 或第二个实例都会静默杀掉他人活跃 run，且可能留下使下一个 Host 无法启动的损坏事件文件。
+- **下一步：** 短期约定——同一 data 目录同时只允许一个 Host 实例（已在 `docs/gold-formal-rerun.md` 增加警示）；中期修复候选：实例启动时用进程级 lease/lock 文件（含 pid 与启动时间）令 `recoverActiveRuns` 只在确认前任进程已死时才扫；并对 `events.jsonl` 追加加独占锁或改为单写者队列。撕裂自愈（启动时截断重复 sequence 行）可作为兜底另议。
 
 ## 维护规则
 

@@ -85,3 +85,16 @@ successful closure is emitted. Other exit codes are stable and specific:
 and `33` protocol/HTTP validation failure. Standard output is a minimal closure
 identity only; prompts, response bodies, URLs containing credentials, and
 permission arguments are not printed.
+
+## Single-instance requirement
+
+The tasks root (`data/output/tasks/`) admits exactly **one** live Application
+Host process at a time. Every Host startup runs `recoverActiveRuns` over the
+whole directory and marks every active run that is not in its own memory as
+`run_interrupted`; two live instances therefore kill each other's runs, and
+concurrent event appends can corrupt `events.jsonl` badly enough that the next
+Host startup fails on a sequence-gap parse error. Before starting a Host or
+attaching a supervisor, confirm no other instance (dev or `--static`) is
+already serving the same data directory, and never run a second instance "just
+to be safe" — a restart sweep is guaranteed. See docs/ISSUES.md §运行环境 for
+the 2026-08-27 incident and repair notes.
