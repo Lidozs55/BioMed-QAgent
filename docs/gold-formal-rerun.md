@@ -98,3 +98,10 @@ attaching a supervisor, confirm no other instance (dev or `--static`) is
 already serving the same data directory, and never run a second instance "just
 to be safe" — a restart sweep is guaranteed. See docs/ISSUES.md §运行环境 for
 the 2026-08-27 incident and repair notes.
+
+Since `ac2ffaba` the runtime enforces this at startup: every Host claims an
+exclusive `.host-lease.json` on the tasks root, and a second **live** instance
+fails fast with `HostLeaseHeldError` instead of silently interrupting the
+first host's runs. A lease left by a dead process is taken over. Hosts built
+before this change write no lease, so during upgrades still verify manually
+that no old instance is running.

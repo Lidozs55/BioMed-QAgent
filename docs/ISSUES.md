@@ -23,6 +23,7 @@
 - **下一步：** 修订设计见 [`architecture/trait-association-and-genomic-annotation-design.md`](architecture/trait-association-and-genomic-annotation-design.md)。先用 fresh gold7 验证 capability inspection 是否被调用；随后另行评审 server-generated scaffold、supplementary extraction carrier 与只针对 dataset-producing request 的终态闭包。未来 static family 仍须来源无关并以非 Alzheimer trait/多数据库复用证明；能力缺失必须形成明确 `no_data`/`spec_rejected`/blocked outcome，不得把 workspace 文件自动提升为 Artifact。
 - **[P1] 修复（2026-08-27）：** phase-one prompt 与 `dataset-construction` skill 现在禁止用 `workspace_exec`/shell/网络子进程替代 governed acquisition、直接文件复制、archive inspection 或 formal carrier；`requires_formal_extraction` 且无 Core extraction carrier 时必须返回结构化 blocker/`NO_DATA`。formal Gold supervisor 对已知 shell/network 绕路自动 `deny` 后继续同一 run，未知命令仍停审；没有扩大自动 allow-list。
 - **[P1] 修复验证（2026-08-27 rerun2，`main@43928b79`）：** fresh run `task_ts_0753539c`（run `run_ts_7d94f85a`，`qwen3.8-27b`，证据 `data/gold-runs/43928b79-gold7-rerun2-execfix`）运行至 32,918 事件、123 次工具调用，**全程零 `workspace_exec`、零权限请求、零 shell/网络绕路尝试**——上一轮（496d61a2）在事件 8,221 处尝试 PowerShell 多语句，本轮越过该点后再未出现任何 exec 意图；工具面完全由 `download_from_page`/`lookup_gwas_catalog`/`lookup_dbsnp`/`inspect_dataset_execution_routes` 等 governed 工具构成。行为验证成立。run 未能自然终结：22:17 被外部 Host 重启的 `recoverActiveRuns` 扫描标记 `run_interrupted`（见下方多实例共享数据目录 hazard）；`continue` 续跑同样在约 4 分钟后被再次扫断。未产生 Publication/Artifact（与既有 extraction carrier 缺口一致），终态门与 scaffold 仍待闭环。
+- **[P1] extraction carrier 补齐（2026-08-27/28，`main@ac2ffaba`）：** `europepmc.supplementary.v1` 的 ZIP 成员提取现在把 `.xlsx` 成员按 worksheet 确定性解析为独立 provenance-bound UTF-8 CSV 资产（`xlsx-to-csv.ts`：OOXML 结构门 fail-closed、worksheet 数与单表字节上限、保留原始 xlsx 成员以维持 archive→attachment→parsed 链）；live smoke 已对真实 Bellenguez 归档（PMC9005347，27MB，12 个 worksheet 含 Supplementary Table 5 位点汇总表）全链验证。Agent 侧经 `acquire_core_carrier` 取得资产 id 后可作为 dynamic `registered_sources` 绑定。仍缺：server-generated scaffold（P1）与 Agent 侧 dynamic FamilySpec 的正式接线验证；trait-association family 的来源无关复用仍属 P2。
 
 ### gold8-gold10 仍缺正式 family/provider，部分上游来源不可达
 
@@ -62,7 +63,7 @@
 - **实际后果：** gold7 rerun2（32,918 事件、零绕路）与 gold8 rerun2（15,866 事件、已走 openFDA）均在 22:17 被外部 8000 实例重启扫断；`continue` 续跑约 4 分钟后再次被扫断；两个任务的事件文件被撕裂后已手工修复（截断到各自 `run_interrupted`，原件备份为 `events.jsonl.corrupt-20260827*.bak`）。
 - **最小复现：** 同一 data 目录起两个 Host（A、B），在 A 上发起 run，再启动 B：A 的 run 立即被标记 `run_interrupted`。
 - **影响：** 单机协作开发/评测时，任何会话启动 `pnpm dev`/`pnpm start` 或第二个实例都会静默杀掉他人活跃 run，且可能留下使下一个 Host 无法启动的损坏事件文件。
-- **下一步：** 短期约定——同一 data 目录同时只允许一个 Host 实例（已在 `docs/gold-formal-rerun.md` 增加警示）；中期修复候选：实例启动时用进程级 lease/lock 文件（含 pid 与启动时间）令 `recoverActiveRuns` 只在确认前任进程已死时才扫；并对 `events.jsonl` 追加加独占锁或改为单写者队列。撕裂自愈（启动时截断重复 sequence 行）可作为兜底另议。
+- **下一步：** 短期约定——同一 data 目录同时只允许一个 Host 实例（已在 `docs/gold-formal-rerun.md` 增加警示）；**已实现（`main@ac2ffaba`）**：runtime 启动即获取 tasks-root 排他 lease（`.host-lease.json`，含持有 pid），第二个**活**实例 fail-fast 拒绝启动（`HostLeaseHeldError`），死 pid 视为陈旧租约可接管；该保护只对新代码实例生效——升级期间仍在运行的旧实例没有 lease，仍需人工确认单实例。事件撕裂的追加级独占锁/单写者队列与撕裂自愈暂不做，lease 已消除并发写者来源。
 
 ## 维护规则
 
