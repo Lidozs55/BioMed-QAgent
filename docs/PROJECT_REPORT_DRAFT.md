@@ -739,7 +739,7 @@ Saving_{human}=1-\frac{T_{human,system}}{T_{human,manual}}
 2. **为什么需要大模型？** Qwen 用于自然语言需求编译、开放式来源发现和工具组合；如果来源、Schema 和流程完全固定，可直接使用 Core，不强行使用模型。
 3. **模型会不会改错数据？** 正式变换由注册 Core 执行；模型建议受 Schema 和质量门约束，非确定性抽取有 confidence cap，模糊情况进入 HIL。
 4. **Validation 通过是否代表科学正确？** 不代表。它证明结构、已编码语义规则、来源和发布完整性通过；领域结论和未编码语义仍需专家核查。
-5. **动态 Family 是否安全？** 当前运行后端是 `in_process_unisolated` 且 `security_boundary: false`，不能称为生产沙箱；公开多租户部署前必须隔离。
+5. **动态 Family 是否安全？** 当前运行后端是 `in_process_unisolated` 且 `security_boundary: false`，不能称为生产沙箱；它只适用于受控环境，当前产品不支持向公开多租户开放不可信 Transform。隔离后端只有在新 ADR 重新定义安全边界后才会恢复为实现方向。
 6. **图表能否正式发布？** 当前图表抽取和证据模块存在，但未接入默认正式主链，应标为 preview 或先补齐注册与验证接线。
 7. **系统是否真的比人工快？** 目前没有 Gold 用户实验数字，需按人工活跃时间、总时间、质量和复核成本分别比较。
 
@@ -791,7 +791,7 @@ Saving_{human}=1-\frac{T_{human,system}}{T_{human,manual}}
 
 第二，将图表 evidence 正式接入 Family Registry：VLM 结果先形成带 bbox、模型版本、提示摘要、transform provenance、confidence 和 review 的证据资产，再由注册 Adapter、chart validation 和 ProductAssessment 发布。
 
-第三，以隔离 worker 或容器替换动态 Transform 的进程内执行，使 CPU、内存、网络、文件系统和超时限制由 Host 可验证，而非由调用方自报。
+第三，持续把动态 Transform 的 `in_process_unisolated`、`security_boundary: false` 和受控环境限制作为部署前提。隔离 worker/container/IPC 不是当前路线；若未来需要支持公开多租户中的不可信 Transform，必须先以新 ADR 定义低权限身份、网络与凭据隔离、只读输入、硬配额/终止、进程树清理以及同提交发布证据，再决定是否实现。
 
 第四，在已有 `publication_id` 路由回归测试基础上补充真实 Host 的端到端预览与下载验证，确保详情、预览和下载持续使用同一 Publication 身份。
 
@@ -809,7 +809,7 @@ BioMed-QAgent 针对赛题“从科学问题到可用数据”建立了一条从
 
 系统通过 SourceAsset、版本证据、SourceLocator、OperationResult、Audit、Validation 和 Manifest 保留来源与处理过程；通过 Durable HIL 和 checkpoint 将人工反馈纳入可恢复执行；通过 Publication 把“任务完成”定义为可重验的数据产品，而不是一次性问答结果。这些设计直接回应赛题对多源异构处理、来源可追溯、清洗整合、结构化输出和错误修正的要求。
 
-从评审角度看，项目当前最有说服力的部分是 Agent/Core 分权、来源证据链、多表产品模型和反馈闭环。最需要补强的是可量化查全、真实 Gold 结果、图表正式发布、动态 Transform 隔离和前端产物下载。完成这些工作后，作品的核心表达应当是：**系统不仅能找到和整理科学数据，还能说明每条正式数据从哪里来、经过什么处理、质量如何、何处不确定，以及收到反馈后如何形成可追溯的新版本。**
+从评审角度看，项目当前最有说服力的部分是 Agent/Core 分权、来源证据链、多表产品模型和反馈闭环。最需要补强的是可量化查全、真实 Gold 结果、图表正式发布、动态 Transform 的边界披露和前端产物下载；隔离后端属于需新 ADR 才能恢复的条件性方向。完成当前闭环后，作品的核心表达应当是：**系统不仅能找到和整理科学数据，还能说明每条正式数据从哪里来、经过什么处理、质量如何、何处不确定，以及收到反馈后如何形成可追溯的新版本。**
 
 ---
 
