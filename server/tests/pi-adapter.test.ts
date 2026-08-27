@@ -962,6 +962,16 @@ describe("kimi sampling overrides", () => {
     expect(result.temperature).toBeUndefined();
     expect(result.top_p).toBeUndefined();
     expect(result.model).toBe("kimi-k3");
+
+    const withTopP = { model: "kimi-k3", messages: [], top_p: 1 };
+    const strippedTopP = applyModelProfileToPayload(withTopP, {
+      provider: "dashscope",
+      modelId: "kimi-k3",
+      apiKey: "sk-test",
+      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      topP: 1,
+    }) as typeof withTopP & { top_p?: number };
+    expect(strippedTopP.top_p).toBeUndefined();
   });
 
   test("keeps sampling overrides for qwen models", () => {

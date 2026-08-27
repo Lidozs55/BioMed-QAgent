@@ -530,7 +530,7 @@ export function applyModelProfileToPayload(
         })()
       : value;
   }
-  if (selected.topP !== undefined) next.top_p = selected.topP;
+  if (selected.topP !== undefined && !rejectsSamplingOverrides(selected)) next.top_p = selected.topP;
   if (dashScopeQwen) {
     if (selected.repetitionPenalty !== undefined) {
       next.repetition_penalty = selected.repetitionPenalty;
