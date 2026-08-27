@@ -1,9 +1,10 @@
-import { useState } from "react";
-import { PlusIcon, StarIcon } from "@phosphor-icons/react";
+import { useCallback, useEffect, useState } from "react";
+import { MagnifyingGlassIcon, PlusIcon, StarIcon } from "@phosphor-icons/react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { ModelDetailDialog } from "@/components/settings/model/ModelDetailDialog";
 import { ModelImportSheet } from "@/components/settings/model/ModelImportSheet";
@@ -19,11 +20,12 @@ interface ModelListManagerProps {
   api: SettingsAPIClient;
   providers: ProviderInfo[];
   managedModels: ManagedModelInfo[];
-  loading: boolean;
   activeModelName: string | null;
   onActivated: (settings: ModelSettings) => void;
   onChanged: () => void;
 }
+
+const MODEL_PAGE_SIZE = 20;
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : "请求失败";
@@ -38,7 +40,6 @@ export function ModelListManager({
   api,
   providers,
   managedModels,
-  loading,
   activeModelName,
   onActivated,
   onChanged,
@@ -48,6 +49,39 @@ export function ModelListManager({
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [detailModel, setDetailModel] = useState<ManagedModelInfo | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
+
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageModels, setPageModels] = useState<ManagedModelInfo[]>([]);
+  const [pageTotal, setPageTotal] = useState(0);
+  const [pageLoading, setPageLoading] = useState(true);
+
+  const loadPage = useCallback(async () => {
+    setPageLoading(true);
+    try {
+      const q = search.trim();
+      const result = await api.fetchManagedModelsPage({
+        page,
+        size: MODEL_PAGE_SIZE,
+        q: q === "" ? undefined : q,
+      });
+      setPageModels(result.items);
+      setPageTotal(result.total);
+    } catch (error) {
+      toast.error("模型列表加载失败", { description: errorText(error) });
+    } finally {
+      setPageLoading(false);
+    }
+  }, [api, page, search]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void loadPage();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [loadPage]);
+
+  const totalPages = Math.max(1, Math.ceil(pageTotal / MODEL_PAGE_SIZE));
 
   const openAdd = () => {
     setSheetOpen(true);
@@ -65,6 +99,7 @@ export function ModelListManager({
       onActivated(updated);
       toast.success(`已切换当前模型为 ${model.name}`);
       onChanged();
+      void loadPage();
     } catch (error) {
       toast.error("切换失败", { description: errorText(error) });
     } finally {
@@ -77,6 +112,7 @@ export function ModelListManager({
       await api.deleteManagedModel(model.id);
       toast.success(`已移除 ${model.name}`);
       onChanged();
+      void loadPage();
     } catch (error) {
       toast.error("移除失败", { description: errorText(error) });
     } finally {
@@ -106,17 +142,33 @@ export function ModelListManager({
         </p>
       )}
 
-      {loading ? (
+      <div className="relative">
+        <MagnifyingGlassIcon className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          value={search}
+          onChange={(event) => {
+            setSearch(event.target.value);
+            setPage(1);
+          }}
+          placeholder="搜索模型名称或 ID"
+          aria-label="搜索模型"
+          className="pl-8"
+        />
+      </div>
+
+      {pageLoading ? (
         <div className="flex items-center justify-center py-8 text-muted-foreground">
           <Spinner />
         </div>
-      ) : managedModels.length === 0 ? (
+      ) : pageModels.length === 0 ? (
         <div className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">
-          还没有维护的模型，点击“添加模型”开始。
+          {search.trim() === ""
+            ? "还没有维护的模型，点击“添加模型”开始。"
+            : "没有找到匹配的模型。"}
         </div>
       ) : (
         <ul className="flex flex-col gap-2">
-          {managedModels.map((model) => {
+          {pageModels.map((model) => {
             const isActive = model.model_id === activeModelName;
             return (
               <li key={model.id} className="rounded-xl border bg-card px-4 py-3">
@@ -176,6 +228,33 @@ export function ModelListManager({
             );
           })}
         </ul>
+      )}
+
+      {!pageLoading && pageTotal > 0 && (
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-xs text-muted-foreground">共 {pageTotal} 条</p>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={page <= 1}
+              onClick={() => setPage((current) => Math.max(1, current - 1))}
+            >
+              上一页
+            </Button>
+            <span className="text-xs text-muted-foreground">
+              第 {page} / {totalPages} 页
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={page >= totalPages}
+              onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+            >
+              下一页
+            </Button>
+          </div>
+        </div>
       )}
 
       <ModelDetailDialog

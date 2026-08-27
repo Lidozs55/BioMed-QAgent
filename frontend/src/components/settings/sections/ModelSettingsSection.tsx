@@ -178,7 +178,6 @@ export function ModelSettingsSection({
               api={api}
               providers={providers}
               managedModels={managedModels}
-              loading={registryLoading}
               activeModelName={activeManagedModel?.model_id ?? null}
               onActivated={onActivated}
               onChanged={() => void refreshRegistry()}

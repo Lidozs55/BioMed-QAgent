@@ -5,13 +5,17 @@
 import type { Http } from "@/api/http";
 import {
   parseManagedModelsEnvelope,
+  parseManagedModelsPage,
   parseModelSettings,
   parseProvidersEnvelope,
+  parseProvidersPage,
 } from "@biomed/contracts";
 import type {
   DiscoveredModelInfo,
   ManagedModelInfo,
   ManagedModelInput,
+  ModelRegistryListQuery,
+  ModelRegistryPage,
   ModelSettings,
   ParameterSpec,
   ProviderInfo,
@@ -21,12 +25,18 @@ import type {
 
 export interface ModelRegistryApi {
   fetchProviders: () => Promise<ProviderInfo[]>;
+  fetchProvidersPage: (
+    query?: ModelRegistryListQuery,
+  ) => Promise<ModelRegistryPage<ProviderInfo>>;
   createProvider: (input: ProviderInput) => Promise<ProviderInfo>;
   updateProvider: (id: string, patch: ProviderUpdateInput) => Promise<ProviderInfo>;
   deleteProvider: (id: string) => Promise<void>;
   discoverProviderModels: (id: string) => Promise<DiscoveredModelInfo[]>;
   fetchProviderParamSpecs: (id: string) => Promise<ParameterSpec[]>;
   fetchManagedModels: () => Promise<ManagedModelInfo[]>;
+  fetchManagedModelsPage: (
+    query?: ModelRegistryListQuery,
+  ) => Promise<ModelRegistryPage<ManagedModelInfo>>;
   createManagedModel: (input: ManagedModelInput) => Promise<ManagedModelInfo>;
   updateManagedModel: (
     id: string,
@@ -40,6 +50,14 @@ export function createModelRegistryApi(http: Http): ModelRegistryApi {
   return {
     fetchProviders: () =>
       http.request(`${http.baseUrl}/model-registry/providers`).then(parseProvidersEnvelope),
+    fetchProvidersPage: (query) =>
+      http.request(
+        http.withQuery(`${http.baseUrl}/model-registry/providers`, [
+          ["page", query?.page ?? 1],
+          ["size", query?.size],
+          ["q", query?.q],
+        ]),
+      ).then(parseProvidersPage),
     createProvider: (input) =>
       http.request(`${http.baseUrl}/model-registry/providers`, {
         method: "POST",
@@ -60,6 +78,14 @@ export function createModelRegistryApi(http: Http): ModelRegistryApi {
       http.request(`${http.baseUrl}/model-registry/providers/${http.encodeId(id)}/param-specs`).then((b) => b as ParameterSpec[]),
     fetchManagedModels: () =>
       http.request(`${http.baseUrl}/model-registry/models`).then(parseManagedModelsEnvelope),
+    fetchManagedModelsPage: (query) =>
+      http.request(
+        http.withQuery(`${http.baseUrl}/model-registry/models`, [
+          ["page", query?.page ?? 1],
+          ["size", query?.size],
+          ["q", query?.q],
+        ]),
+      ).then(parseManagedModelsPage),
     createManagedModel: (input) =>
       http.request(`${http.baseUrl}/model-registry/models`, {
         method: "POST",

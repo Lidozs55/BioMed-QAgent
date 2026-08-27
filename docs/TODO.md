@@ -35,7 +35,7 @@
 
 - [ ] **主 Prompt 可复现迭代。** 建立固定样例、指标和成本记录后再优化 `PHASE1_SYSTEM_PROMPT`。
   - 验收：变更有可复现实验对照，不引入 Gold case 特判，不放宽 Core 门禁。
-- [ ] **模型设置分页与搜索。** 为供应商/模型列表增加后端分页和搜索，并更新前端调用。
+- [x] **模型设置分页与搜索。** 为供应商/模型列表增加后端分页和搜索，并更新前端调用。
   - 验收：契约先进入 `@biomed/contracts`；边界、空页和 hostile-wire 用例有测试。
 - [ ] **Trait association / genomic annotation 可复用 family 闭包。** 按 [`architecture/trait-association-and-genomic-annotation-design.md`](architecture/trait-association-and-genomic-annotation-design.md) 实现来源无关的 projections 与 GWAS Catalog、supplementary archive、RefSNP 通用 providers；provider 与 family 保持多对多。
   - 验收：至少一个非 Alzheimer trait、两个不同数据库证明复用；variant/gene/region 粒度分别构建；不兼容 assembly、effect scale、allele/model 或 mapping method 的输入 fail closed；正式 Publication 通过 provenance/B3/ProductAssessment/Artifact hash 门。

@@ -149,6 +149,18 @@ function mockApi(overrides: Partial<SettingsAPIClient> = {}): SettingsAPIClient 
     discoverProviderModels: vi.fn().mockResolvedValue(DISCOVERED),
     fetchProviderParamSpecs: vi.fn().mockResolvedValue(SPECS),
     fetchManagedModels: vi.fn().mockResolvedValue(TEST_MODELS),
+    fetchProvidersPage: vi.fn().mockResolvedValue({
+      items: TEST_PROVIDERS,
+      total: TEST_PROVIDERS.length,
+      page: 1,
+      size: 20,
+    }),
+    fetchManagedModelsPage: vi.fn().mockResolvedValue({
+      items: TEST_MODELS,
+      total: TEST_MODELS.length,
+      page: 1,
+      size: 20,
+    }),
     createManagedModel: vi.fn().mockImplementation((input) =>
       Promise.resolve({
         ...TEST_MODELS[0],
@@ -652,6 +664,20 @@ describe("SettingsPanel model registry", () => {
         .fn()
         .mockResolvedValueOnce(TEST_MODELS)
         .mockResolvedValue([{ ...TEST_MODELS[0], active: true }]),
+      fetchManagedModelsPage: vi
+        .fn()
+        .mockResolvedValueOnce({
+          items: TEST_MODELS,
+          total: TEST_MODELS.length,
+          page: 1,
+          size: 20,
+        })
+        .mockResolvedValue({
+          items: [{ ...TEST_MODELS[0], active: true }],
+          total: 1,
+          page: 1,
+          size: 20,
+        }),
       activateManagedModel: vi.fn().mockResolvedValue({
         ...TEST_SETTINGS,
         model_name: "deepseek-reasoner",
@@ -723,6 +749,17 @@ describe("SettingsPanel model registry", () => {
           params: { temperature: 0.5, max_tokens: 8192, enable_thinking: false },
         },
       ]),
+      fetchManagedModelsPage: vi.fn().mockResolvedValue({
+        items: [
+          {
+            ...TEST_MODELS[0],
+            params: { temperature: 0.5, max_tokens: 8192, enable_thinking: false },
+          },
+        ],
+        total: 1,
+        page: 1,
+        size: 20,
+      }),
     });
     renderSettings(api);
 
@@ -772,6 +809,12 @@ describe("SettingsPanel model registry", () => {
       fetchManagedModels: vi
         .fn()
         .mockResolvedValue([{ ...TEST_MODELS[0], source: "manual" }]),
+      fetchManagedModelsPage: vi.fn().mockResolvedValue({
+        items: [{ ...TEST_MODELS[0], source: "manual" }],
+        total: 1,
+        page: 1,
+        size: 20,
+      }),
     });
     renderSettings(api);
     expect(await screen.findByText("手动配置", {}, { timeout: 5_000 })).toBeInTheDocument();
@@ -814,6 +857,71 @@ describe("SettingsPanel model registry", () => {
       provider_id: "provider-1",
       model_id: "deepseek-chat",
       source: "api",
+    });
+  });
+
+  it("searches the maintained model list through the paginated API", async () => {
+    const api = mockApi();
+    renderSettings(api);
+
+    await screen.findByText("DeepSeek Reasoner");
+
+    const searchInput = screen.getByRole("textbox", { name: "搜索模型" });
+    fireEvent.change(searchInput, { target: { value: "deepseek-reasoner" } });
+
+    await waitFor(() => {
+      expect(api.fetchManagedModelsPage).toHaveBeenLastCalledWith({
+        page: 1,
+        size: 20,
+        q: "deepseek-reasoner",
+      });
+    });
+  });
+
+  it("shows an empty state when the search has no matches", async () => {
+    const api = mockApi({
+      fetchManagedModelsPage: vi.fn().mockResolvedValue({
+        items: [],
+        total: 0,
+        page: 1,
+        size: 20,
+      }),
+    });
+    renderSettings(api);
+
+    await screen.findByText("还没有维护的模型，点击“添加模型”开始。");
+
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索模型" }), {
+      target: { value: "zzz" },
+    });
+    expect(await screen.findByText("没有找到匹配的模型。")).toBeInTheDocument();
+  });
+
+  it("navigates pages of the maintained model list", async () => {
+    const api = mockApi({
+      fetchManagedModelsPage: vi.fn().mockResolvedValue({
+        items: TEST_MODELS,
+        total: 25,
+        page: 1,
+        size: 20,
+      }),
+    });
+    renderSettings(api);
+
+    await screen.findByText("DeepSeek Reasoner");
+    expect(screen.getByText("共 25 条")).toBeInTheDocument();
+    expect(screen.getByText("第 1 / 2 页")).toBeInTheDocument();
+
+    const next = screen.getByRole("button", { name: "下一页" });
+    expect(next).not.toBeDisabled();
+    fireEvent.click(next);
+
+    await waitFor(() => {
+      expect(api.fetchManagedModelsPage).toHaveBeenLastCalledWith({
+        page: 2,
+        size: 20,
+        q: undefined,
+      });
     });
   });
 

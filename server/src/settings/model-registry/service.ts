@@ -15,6 +15,7 @@ import path from "node:path";
 import {
   DEFAULT_RUNTIME_LIMITS,
   RUNTIME_LIMIT_RANGES,
+  type ModelRegistryListQuery,
   type ParameterSpec,
   type RuntimeLimits,
 } from "@biomed/contracts";
@@ -64,6 +65,8 @@ function maskApiKey(value: string): string {
   if (value.length <= 12) return `${value.slice(0, 4)}****`;
   return `${value.slice(0, 8)}...${value.slice(-4)}`;
 }
+
+const DEFAULT_PAGE_SIZE = 20;
 
 function runtimeLimitsPatch(value: unknown): Partial<RuntimeLimits> {
   const record = asRecord(value);
@@ -291,6 +294,50 @@ export class ModelSettingsService {
 
   listModels(): JsonObject[] {
     return this.registry.models.map((model) => this.publicModel(model));
+  }
+
+  listProvidersPage(query: ModelRegistryListQuery): JsonObject {
+    return this.paginate(
+      this.registry.providers,
+      query,
+      (provider) => this.publicProvider(provider),
+      (provider, q) =>
+        [provider.name, provider.base_url, provider.preset_id ?? "", provider.description]
+          .some((value) => value.toLowerCase().includes(q)),
+    );
+  }
+
+  listModelsPage(query: ModelRegistryListQuery): JsonObject {
+    return this.paginate(
+      this.registry.models,
+      query,
+      (model) => this.publicModel(model),
+      (model, q) => this.matchesModelQ(model, q),
+    );
+  }
+
+  private paginate<T>(
+    records: T[],
+    query: ModelRegistryListQuery,
+    toPublic: (record: T) => JsonObject,
+    matches: (record: T, q: string) => boolean,
+  ): JsonObject {
+    const page = query.page ?? 1;
+    const size = query.size ?? DEFAULT_PAGE_SIZE;
+    const q = (query.q ?? "").trim().toLowerCase();
+    const filtered = q === "" ? records : records.filter((record) => matches(record, q));
+    return {
+      items: filtered.slice((page - 1) * size, page * size).map(toPublic),
+      total: filtered.length,
+      page,
+      size,
+    };
+  }
+
+  private matchesModelQ(model: ModelRecord, q: string): boolean {
+    const providerName = this.registry.providers.find((item) => item.id === model.provider_id)?.name ?? "";
+    return [model.model_id, model.name, model.description, model.source, providerName]
+      .some((value) => value.toLowerCase().includes(q));
   }
 
   createModel(body: JsonObject): Promise<ModelRecord> {

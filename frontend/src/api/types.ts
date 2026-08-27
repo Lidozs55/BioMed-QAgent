@@ -23,6 +23,8 @@ import {
   ModelCapabilities,
   ModelInfo,
   ModelPreviewRequest,
+  ModelRegistryListQuery,
+  ModelRegistryPage,
   ModelSettings,
   ModelSettingsUpdate,
   ParameterSpec,
@@ -62,6 +64,8 @@ export type {
   ModelCapabilities,
   ModelInfo,
   ModelPreviewRequest,
+  ModelRegistryListQuery,
+  ModelRegistryPage,
   ModelSettings,
   ModelSettingsUpdate,
   ParameterSpec,
@@ -104,6 +108,12 @@ export interface SettingsAPIClient {
   discoverProviderModels: (id: string) => Promise<DiscoveredModelInfo[]>;
   fetchProviderParamSpecs: (id: string) => Promise<ParameterSpec[]>;
   fetchManagedModels: () => Promise<ManagedModelInfo[]>;
+  fetchProvidersPage: (
+    query?: ModelRegistryListQuery,
+  ) => Promise<ModelRegistryPage<ProviderInfo>>;
+  fetchManagedModelsPage: (
+    query?: ModelRegistryListQuery,
+  ) => Promise<ModelRegistryPage<ManagedModelInfo>>;
   createManagedModel: (input: ManagedModelInput) => Promise<ManagedModelInfo>;
   updateManagedModel: (
     id: string,

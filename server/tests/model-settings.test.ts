@@ -684,6 +684,105 @@ describe("TypeScript model settings", () => {
   });
 });
 
+describe("model registry list pagination and search", () => {
+  async function loadedRegistry(): Promise<{ service: ModelSettingsService; baseUrl: string }> {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const baseUrl = await serve(service);
+    const createProvider = async (name: string): Promise<string> => {
+      const response = await fetch(`${baseUrl}/api/v1/model-registry/providers`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name,
+          base_url: `https://${name.toLowerCase().replaceAll(" ", "-")}.example/v1`,
+          api_key: `sk-${name.toLowerCase().replaceAll(" ", "-")}`,
+        }),
+      });
+      return String((await response.json() as Record<string, unknown>).id);
+    };
+    const alpha = await createProvider("Alpha Labs");
+    const beta = await createProvider("Beta Works");
+    await fetch(`${baseUrl}/api/v1/model-registry/models`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ provider_id: alpha, model_id: "alpha-chat" }),
+    });
+    await fetch(`${baseUrl}/api/v1/model-registry/models`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ provider_id: alpha, model_id: "zeta-pro", description: "long reasoning" }),
+    });
+    await fetch(`${baseUrl}/api/v1/model-registry/models`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ provider_id: beta, model_id: "beta-embed" }),
+    });
+    return { service, baseUrl };
+  }
+
+  test("paginates providers and models with stable totals and empty pages", async () => {
+    const { baseUrl } = await loadedRegistry();
+    const first = await (await fetch(`${baseUrl}/api/v1/model-registry/providers?page=1&size=2`))
+      .json() as Record<string, unknown>;
+    expect(Array.isArray(first.items)).toBe(true);
+    expect(first.items as unknown[]).toHaveLength(2);
+    expect(first.total).toBe(2);
+    expect(first.page).toBe(1);
+    expect(first.size).toBe(2);
+
+    const second = await (await fetch(`${baseUrl}/api/v1/model-registry/providers?page=2&size=2`))
+      .json() as Record<string, unknown>;
+    expect(second.items as unknown[]).toHaveLength(0);
+    expect(second.total).toBe(2);
+
+    const empty = await (await fetch(`${baseUrl}/api/v1/model-registry/models?page=9&size=2`))
+      .json() as Record<string, unknown>;
+    expect(empty.items as unknown[]).toHaveLength(0);
+    expect(empty.total).toBe(3);
+  });
+
+  test("filters providers and models by case-insensitive keyword", async () => {
+    const { baseUrl } = await loadedRegistry();
+    const providers = await (await fetch(`${baseUrl}/api/v1/model-registry/providers?q=alpha&page=1&size=10`))
+      .json() as Record<string, unknown>;
+    expect(providers.total).toBe(1);
+    expect((providers.items as Array<Record<string, unknown>>)[0]).toMatchObject({ name: "Alpha Labs" });
+
+    const byModelId = await (await fetch(`${baseUrl}/api/v1/model-registry/models?q=chat&page=1&size=10`))
+      .json() as Record<string, unknown>;
+    expect(byModelId.total).toBe(1);
+
+    const byProviderName = await (await fetch(`${baseUrl}/api/v1/model-registry/models?q=labs&page=1&size=10`))
+      .json() as Record<string, unknown>;
+    expect(byProviderName.total).toBe(2);
+
+    const byDescription = await (await fetch(`${baseUrl}/api/v1/model-registry/models?q=reasoning&page=1&size=10`))
+      .json() as Record<string, unknown>;
+    expect(byDescription.total).toBe(1);
+  });
+
+  test("rejects malformed pagination and search parameters", async () => {
+    const { baseUrl } = await loadedRegistry();
+    expect((await fetch(`${baseUrl}/api/v1/model-registry/providers?page=0`)).status).toBe(422);
+    expect((await fetch(`${baseUrl}/api/v1/model-registry/models?page=1.5`)).status).toBe(422);
+    expect((await fetch(`${baseUrl}/api/v1/model-registry/providers?size=abc`)).status).toBe(422);
+    expect((await fetch(`${baseUrl}/api/v1/model-registry/models?size=101`)).status).toBe(422);
+    expect((await fetch(`${baseUrl}/api/v1/model-registry/providers?q=a&size=0`)).status).toBe(422);
+  });
+
+  test("returns bare arrays without query params and envelopes once any param is present", async () => {
+    const { baseUrl } = await loadedRegistry();
+    const bare = await (await fetch(`${baseUrl}/api/v1/model-registry/providers`)).json() as unknown;
+    expect(Array.isArray(bare)).toBe(true);
+
+    const envelope = await (await fetch(`${baseUrl}/api/v1/model-registry/providers?q=`))
+      .json() as Record<string, unknown>;
+    expect(Array.isArray(envelope.items)).toBe(true);
+    expect(envelope.total).toBe(2);
+  });
+});
+
 function randomId(): string {
   return Math.random().toString(36).slice(2);
 }
