@@ -152,7 +152,8 @@ async function resultFor(
     schema_version: "1.0",
     result_manifest_id: `result_${operationId}`,
     task_id: "task_structure",
-    build_id: "build_structure",
+    run_id: "run_structure",
+    requirement_id: "build_structure",
     operation_id: operationId,
     operation_kind: operationId.startsWith("integrate_") ? "integrate" : "validate_profile",
     operation_attempt_id: `attempt_${operationId}`,
@@ -184,7 +185,6 @@ async function resultFor(
       commit_id: `commit_${operationId}`,
       committed_at: "2024-02-01T00:00:00Z",
     },
-    migration: { mode: "native", legacy_checkpoint_path: null, migrated_at: null },
   };
 }
 
@@ -246,7 +246,7 @@ async function assemble(rows: ProteinStructureRows) {
   const tableIds = ["structures", "chains", "ligands", "sources"] as const;
   const candidate = assembleProteinStructureCandidate({
     taskId: "task_structure",
-    buildId: "build_structure",
+    requirementId: "build_structure",
     datasetFamily: PROTEIN_STRUCTURE_FAMILY_ID,
     rowGranularity: PROTEIN_STRUCTURE_ROW_GRANULARITY,
     tables: prepared.results.map((result, index) => ({
@@ -408,7 +408,7 @@ describe("protein_structure B-owned module slice", () => {
     };
     const validation = await validateProteinStructureCandidate({
       task_id: "task_structure",
-      build_id: "build_structure",
+      requirement_id: "build_structure",
       candidate: candidateRefs,
       tables: prepared.tables,
       relations: [...prepared.schemas.relations],
@@ -431,7 +431,7 @@ describe("protein_structure B-owned module slice", () => {
     const prepared = await assemble(valid);
     await expect(validateProteinStructureCandidate({
       task_id: "task_structure",
-      build_id: "build_structure",
+      requirement_id: "build_structure",
       candidate: {
         candidate_id: prepared.candidate.candidate_id,
         table_ids: prepared.tables.map((table) => table.definition.table_id),
@@ -450,7 +450,7 @@ describe("protein_structure B-owned module slice", () => {
     prepared.tables[0]!.provenance_refs = [];
     const validation = await validateProteinStructureCandidate({
       task_id: "task_structure",
-      build_id: "build_structure",
+      requirement_id: "build_structure",
       candidate: {
         candidate_id: prepared.candidate.candidate_id,
         table_ids: prepared.tables.map((table) => table.definition.table_id),

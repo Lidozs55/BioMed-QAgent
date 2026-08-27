@@ -13,7 +13,7 @@
  * Runtime infrastructure added by M2: per-operation wall-clock timeout,
  * cooperative cancellation, build lock (one publisher per task+build), and
  * the core operation event sink. Publication layout stays
- * ``<taskRoot>/datasets_build/<buildId>/publish/<pubId>/...`` so the durable
+ * ``<taskRoot>/dataset_runs/<runId>/<requirementId>/publish/<pubId>/...`` so the durable
  * artifact API keeps serving files without changes.
  */
 
@@ -30,14 +30,14 @@ import type {
 
 import type {
   DataBatch,
-  DatasetBuildSpec,
+  DatasetExecutionSpec,
   DatasetManifest,
   SourceAsset,
   VersionedDatasetManifest,
   ValidationResult,
 } from "../contracts/index.js";
 import { parsePublicationCandidate, parseProviderRevisionEvidenceV1 } from "../contracts/index.js";
-import { BuildError } from "../adapters/errors.js";
+import { ExecutionError } from "../adapters/errors.js";
 import { throwIfAborted } from "../cooperative.js";
 import { adapterParamsForBinding, getAdapter } from "../adapters/adapters.js";
 import { canonicalDigest } from "../adapters/identity.js";
@@ -54,7 +54,7 @@ import { assembleManifest, buildProvenanceDocument, writeManifest } from "../pub
 import { promotePublication } from "../publish/publisher.js";
 import {
   buildOperationPlan,
-  DatasetBuildExecutor,
+  DatasetExecutionExecutor,
   makeOperationOutput,
   type CoreEventSink,
   type OperationOutput,
@@ -66,7 +66,7 @@ import {
   type SpecValidationResult,
 } from "../validation/index.js";
 import { createDefaultDatasetFamilyRegistry } from "../families/index.js";
-import { acquireBuildLock, type BuildLockLease } from "./build-lock.js";
+import { acquireExecutionLock, type ExecutionLockLease } from "./execution-lock.js";
 import type { DatasetHILGate } from "../review/hil-policy.js";
 import { reviewBatchForHIL } from "../review/hil-policy.js";
 import { evaluateConfidence, mappingConfidence } from "../confidence/evaluator.js";
@@ -90,7 +90,7 @@ export interface TypeScriptDatasetCoreOptions {
   /** Optional per-operation wall-clock timeout (ms). */
   operationTimeoutMs?: number;
   /** Core operation lifecycle sink, receiving the owning build id (M2 I-05). */
-  eventSink?: ((event: CoreEventSinkEvent, buildId: string) => void | Promise<void>) | null;
+  eventSink?: ((event: CoreEventSinkEvent, requirementId: string) => void | Promise<void>) | null;
   /** Runtime-owned durable review primitive; Dataset Core only supplies policy. */
   hilGate?: DatasetHILGate | null;
 }
@@ -128,7 +128,7 @@ export function requireAuthoritativeProviderRevisionEvidence(
   context: ProviderRevisionEvidenceContext,
 ): readonly ProviderRevisionEvidenceV1[] {
   if (context.providerRevisionEvidence === null || context.providerRevisionEvidence.length === 0) {
-    throw new BuildError("authoritative dataset revision identity requires provider revision evidence");
+    throw new ExecutionError("authoritative dataset revision identity requires provider revision evidence");
   }
   return context.providerRevisionEvidence;
 }
@@ -148,7 +148,7 @@ function receiptKey(receipt: SourceAssetRegistrationReceipt): string {
  * to the exact receipt resolved for this build can become identity evidence.
  */
 async function acquireTrustedProviderRevisionEvidence(options: {
-  spec: DatasetBuildSpec;
+  spec: DatasetExecutionSpec;
   taskId: string;
   taskRoot: string;
   sourceAssets: Readonly<Record<string, SourceAsset>>;
@@ -156,7 +156,7 @@ async function acquireTrustedProviderRevisionEvidence(options: {
 }): Promise<readonly ProviderRevisionEvidenceV1[] | null> {
   if (!isExpressionV2Schema(options.spec.schema_ref)) return null;
   if (options.registrationReceipts === undefined || options.registrationReceipts === null) {
-    throw new BuildError("authoritative dataset identity requires task-owned registration receipts");
+    throw new ExecutionError("authoritative dataset identity requires task-owned registration receipts");
   }
   const owned = new Map(options.registrationReceipts.map((receipt) => [receiptKey(receipt), receipt]));
   const registry = new SourceAssetRegistry(options.taskId, options.taskRoot);
@@ -172,21 +172,21 @@ async function acquireTrustedProviderRevisionEvidence(options: {
         ownedReceiptForAsset?.asset_ref.role,
       );
     } catch (error) {
-      throw new BuildError(
+      throw new ExecutionError(
         `authoritative dataset identity requires Core acquisition provenance for '${asset.asset_id}': ${error instanceof Error ? error.message : String(error)}`,
       );
     }
     const receipt = acquired.registration_receipt;
     const ownedReceipt = owned.get(receiptKey(receipt));
     if (ownedReceipt === undefined || JSON.stringify(ownedReceipt) !== JSON.stringify(receipt)) {
-      throw new BuildError(`Core acquisition provenance receipt '${receiptKey(receipt)}' is not bound to this build`);
+      throw new ExecutionError(`Core acquisition provenance receipt '${receiptKey(receipt)}' is not bound to this build`);
     }
     const provenance = acquired.acquisition_provenance;
     if (
       provenance.canonical_accession === null
       || provenance.provider_snapshot_identity === null
     ) {
-      throw new BuildError(`registered Core acquisition '${asset.asset_id}' has no provider revision evidence`);
+      throw new ExecutionError(`registered Core acquisition '${asset.asset_id}' has no provider revision evidence`);
     }
     const key = receiptKey(receipt);
     if (seen.has(key)) continue;
@@ -200,13 +200,13 @@ async function acquireTrustedProviderRevisionEvidence(options: {
     }));
   }
   if (evidence.length === 0) {
-    throw new BuildError("authoritative dataset identity requires Core-acquired source assets");
+    throw new ExecutionError("authoritative dataset identity requires Core-acquired source assets");
   }
   return Object.freeze(evidence);
 }
 
-export interface BuildRecord {
-  build_id: string;
+export interface ExecutionRecord {
+  requirement_id: string;
   status: string;
   error: string | null;
   publication_id: string | null;
@@ -281,10 +281,10 @@ async function effectiveConfidenceCounts(options: {
   for (const result of options.canonicalResults) {
     const asset = options.sourceAssets[result.batch.binding_id];
     if (asset === undefined) {
-      throw new BuildError(`confidence lineage is missing source asset for ${result.batch.binding_id}`);
+      throw new ExecutionError(`confidence lineage is missing source asset for ${result.batch.binding_id}`);
     }
     if (batchBySourceId.has(asset.source_id)) {
-      throw new BuildError(`confidence lineage source_id '${asset.source_id}' is ambiguous`);
+      throw new ExecutionError(`confidence lineage source_id '${asset.source_id}' is ambiguous`);
     }
     batchBySourceId.set(asset.source_id, result.batch.batch_id);
   }
@@ -300,21 +300,21 @@ async function effectiveConfidenceCounts(options: {
       headerSeen = true;
       sourceIndex = values.indexOf("source_id");
       if (sourceIndex < 0) {
-        throw new BuildError("integrated primary has no source_id lineage column");
+        throw new ExecutionError("integrated primary has no source_id lineage column");
       }
       continue;
     }
     const sourceId = values[sourceIndex] ?? "";
     const batchId = batchBySourceId.get(sourceId);
     if (batchId === undefined) {
-      throw new BuildError(`integrated row references unknown source_id '${sourceId}'`);
+      throw new ExecutionError(`integrated row references unknown source_id '${sourceId}'`);
     }
     counts.set(batchId, (counts.get(batchId) ?? 0) + 1);
   }
-  if (!headerSeen) throw new BuildError("integrated primary is missing its header");
+  if (!headerSeen) throw new ExecutionError("integrated primary is missing its header");
   const effectiveTotal = [...counts.values()].reduce((total, count) => total + count, 0);
   if (effectiveTotal !== options.integration.rowCount) {
-    throw new BuildError(
+    throw new ExecutionError(
       `confidence lineage count ${effectiveTotal} does not match integrated primary ${options.integration.rowCount}`,
     );
   }
@@ -347,8 +347,9 @@ function reviewedHumanState(
  * Returns sync or async OperationOutput per operation kind.
  */
 export function createTsCoreOperationRunner(options: {
-  spec: DatasetBuildSpec;
+  spec: DatasetExecutionSpec;
   taskId: string;
+  runId?: string;
   taskRoot: string;
   outputDir: string;
   sourceAssets: Readonly<Record<string, SourceAsset>>;
@@ -399,14 +400,14 @@ export function createTsCoreOperationRunner(options: {
       case "acquire": {
         const asset = sourceAssets[op.category];
         if (asset === undefined) {
-          throw new BuildError(`no source asset supplied for binding ${op.category!}`);
+          throw new ExecutionError(`no source asset supplied for binding ${op.category!}`);
         }
         if (registeredSourceAssetIds !== null && !registeredSourceAssetIds.has(asset.asset_id)) {
-          throw new BuildError(`source asset is not registered for binding ${op.category!}`);
+          throw new ExecutionError(`source asset is not registered for binding ${op.category!}`);
         }
         const assetPath = path.join(taskRoot, asset.relative_path);
         if (!existsSync(assetPath)) {
-          throw new BuildError(`source asset file is missing: ${asset.relative_path}`);
+          throw new ExecutionError(`source asset file is missing: ${asset.relative_path}`);
         }
         return makeOperationOutput({
           binding_id: op.category,
@@ -417,11 +418,11 @@ export function createTsCoreOperationRunner(options: {
       case "parse": {
         const binding = bindings.get(op.category);
         if (binding === undefined) {
-          throw new BuildError(`unknown binding ${op.category!}`);
+          throw new ExecutionError(`unknown binding ${op.category!}`);
         }
         const asset = sourceAssets[op.category];
         if (asset === undefined) {
-          throw new BuildError(`no source asset supplied for binding ${op.category!}`);
+          throw new ExecutionError(`no source asset supplied for binding ${op.category!}`);
         }
         const adapter = getAdapter(binding.adapter_id);
         const parameters = adapterParamsForBinding(binding);
@@ -431,13 +432,13 @@ export function createTsCoreOperationRunner(options: {
         if (metadataAsset !== undefined) {
           metadataPath = path.join(taskRoot, metadataAsset.relative_path);
           if (!existsSync(metadataPath)) {
-            throw new BuildError(
+            throw new ExecutionError(
               `metadata asset file is missing: ${metadataAsset.relative_path}`,
             );
           }
         }
         const batch = await adapter.parse(asset, sourcePath, {
-          buildId: spec.build_id,
+          requirementId: spec.requirement_id,
           bindingId: binding.binding_id,
           schemaRef: spec.schema_ref,
           outputDir,
@@ -468,14 +469,14 @@ export function createTsCoreOperationRunner(options: {
       case "canonicalize": {
         const parsedBatch = runnerState.batches.get(op.category);
         if (parsedBatch === undefined) {
-          throw new BuildError(`no parsed batch cached for binding ${op.category!}`);
+          throw new ExecutionError(`no parsed batch cached for binding ${op.category!}`);
         }
         const normalizationProfile = expressionNormalizationV1();
         const reviewed = await reviewBatchForHIL({
           batch: parsedBatch,
           profile: normalizationProfile,
           gate: hilGate,
-          buildId: spec.build_id,
+          requirementId: spec.requirement_id,
           signal,
           suspension: suspension ?? null,
         });
@@ -488,12 +489,12 @@ export function createTsCoreOperationRunner(options: {
         if (annotationAsset !== undefined) {
           const annotationPath = path.join(taskRoot, annotationAsset.relative_path);
           if (!existsSync(annotationPath)) {
-            throw new BuildError(
+            throw new ExecutionError(
               `mapping asset file is missing: ${annotationAsset.relative_path}`,
             );
           }
           if (batch.file_asset === null) {
-            throw new BuildError("batch file asset is missing before probe mapping");
+            throw new ExecutionError("batch file asset is missing before probe mapping");
           }
           const platformIds = Array.isArray(batch.statistics.platform_ids)
             ? batch.statistics.platform_ids.map(String)
@@ -549,19 +550,19 @@ export function createTsCoreOperationRunner(options: {
           results: runnerState.canonicalResults,
         });
         if (!gate.compatible) {
-          throw new BuildError(`compatibility gate failed: ${gate.reasons.join("; ")}`);
+          throw new ExecutionError(`compatibility gate failed: ${gate.reasons.join("; ")}`);
         }
         return makeOperationOutput({ compatible: true, reasons: [...gate.reasons] });
       }
       case "integrate": {
         if (runnerState.canonicalResults.length === 0) {
-          throw new BuildError("cannot integrate zero sources");
+          throw new ExecutionError("cannot integrate zero sources");
         }
         const integration = await integrate({
           results: runnerState.canonicalResults,
           mergeStrategy: spec.merge_strategy,
           schema,
-          buildId: spec.build_id,
+          requirementId: spec.requirement_id,
           outputDir,
           signal,
           identityContext,
@@ -593,11 +594,11 @@ export function createTsCoreOperationRunner(options: {
       case "assemble": {
         const integrationResult = upstreamResults.integrate;
         if (integrationResult === undefined) {
-          throw new BuildError("committed integration result is missing before assemble");
+          throw new ExecutionError("committed integration result is missing before assemble");
         }
         const candidate = assembler.assemble({
           taskId,
-          buildId: spec.build_id,
+          requirementId: spec.requirement_id,
           datasetFamily: spec.dataset_family,
           rowGranularity: spec.row_granularity,
           schema,
@@ -611,10 +612,10 @@ export function createTsCoreOperationRunner(options: {
       }
       case "derive": {
         if (deriveRequest === null || deriveCapability === null) {
-          throw new BuildError("derive slot handler is missing");
+          throw new ExecutionError("derive slot handler is missing");
         }
-        if (deriveRequest.task_id !== taskId || deriveRequest.build_id !== spec.build_id) {
-          throw new BuildError("derive request identity does not belong to this build");
+        if (deriveRequest.task_id !== taskId || deriveRequest.requirement_id !== spec.requirement_id) {
+          throw new ExecutionError("derive request identity does not belong to this build");
         }
         const receipt = deriveCapability.execute(deriveRequest);
         return makeOperationOutput({
@@ -629,15 +630,15 @@ export function createTsCoreOperationRunner(options: {
       }
       case "validate_profile": {
         const integration = runnerState.integration;
-        if (integration === null) throw new BuildError("integration result is missing");
+        if (integration === null) throw new ExecutionError("integration result is missing");
         const candidate = runnerState.candidate ?? parsePublicationCandidate(upstream.assemble);
         runnerState.candidate = candidate;
-        if (candidate.task_id !== taskId || candidate.build_id !== spec.build_id) {
-          throw new BuildError("publication candidate identity does not match the build");
+        if (candidate.task_id !== taskId || candidate.requirement_id !== spec.requirement_id) {
+          throw new ExecutionError("publication candidate identity does not match the build");
         }
         const primaryTable = candidate.tables.find((table) => table.definition.role === "primary");
         if (primaryTable === undefined || primaryTable.row_count !== integration.rowCount) {
-          throw new BuildError("publication candidate primary does not match integration");
+          throw new ExecutionError("publication candidate primary does not match integration");
         }
         const successfulAssets: Record<string, SourceAsset> = {};
         for (const result of runnerState.canonicalResults) {
@@ -708,7 +709,7 @@ export function createTsCoreOperationRunner(options: {
         const summary = sourceSummary([...bindings.keys()], runnerState);
         let manifest = await assembleManifest({
           taskId,
-          buildId: spec.build_id,
+          requirementId: spec.requirement_id,
           spec,
           schema,
           integration,
@@ -732,7 +733,7 @@ export function createTsCoreOperationRunner(options: {
         // Re-assemble with the authoritative validation and persist once.
         manifest = await assembleManifest({
           taskId,
-          buildId: spec.build_id,
+          requirementId: spec.requirement_id,
           spec,
           schema,
           integration,
@@ -758,15 +759,15 @@ export function createTsCoreOperationRunner(options: {
       case "publish": {
         const candidate = runnerState.candidate;
         if (candidate === null) {
-          throw new BuildError("publication candidate is missing before publish");
+          throw new ExecutionError("publication candidate is missing before publish");
         }
-        if (candidate.task_id !== taskId || candidate.build_id !== spec.build_id) {
-          throw new BuildError("publication candidate identity does not match publish build");
+        if (candidate.task_id !== taskId || candidate.requirement_id !== spec.requirement_id) {
+          throw new ExecutionError("publication candidate identity does not match publish build");
         }
         const manifest = runnerState.manifest;
         const validation = runnerState.validation;
         if (manifest === null || validation === null) {
-          throw new BuildError("validation result is missing before publish");
+          throw new ExecutionError("validation result is missing before publish");
         }
         // Provenance closure covers only phase-A-successful bindings (Python
         // expression_runner parity: rejected bindings contribute no rows).
@@ -798,7 +799,7 @@ export function createTsCoreOperationRunner(options: {
         });
       }
       default:
-        throw new BuildError(`unknown operation kind ${String(op.kind)}`);
+        throw new ExecutionError(`unknown operation kind ${String(op.kind)}`);
     }
   };
 }
@@ -823,13 +824,13 @@ export class TypeScriptDatasetCore {
     this.taskRoot = options.taskRoot;
   }
 
-  async validateDatasetBuildSpec(
-    spec: DatasetBuildSpec,
+  async validateDatasetExecutionSpec(
+    spec: DatasetExecutionSpec,
     context: ValidateContext = { providerRevisionEvidence: null },
   ): Promise<SpecValidationResult> {
     // Validation is intentionally pure spec admission.  Provider revision
     // evidence is acquired and admitted only after Core resolves task assets
-    // in executeDatasetBuild.
+    // in executeDatasetExecution.
     void context;
     const familyRegistry = createDefaultDatasetFamilyRegistry();
     const validator = new SpecValidator(
@@ -840,12 +841,12 @@ export class TypeScriptDatasetCore {
     return validator.validate(spec);
   }
 
-  async executeDatasetBuild(
-    spec: DatasetBuildSpec,
+  async executeDatasetExecution(
+    spec: DatasetExecutionSpec,
     context: ExecuteContext,
-  ): Promise<BuildRecord> {
+  ): Promise<ExecutionRecord> {
     const { taskId, taskRoot } = this.options;
-    const buildId = spec.build_id;
+    const requirementId = spec.requirement_id;
     // Admission lookups are pure and may throw. Resolve them before taking the
     // fenced build lease so invalid direct Core calls cannot strand the lock.
     const familyRegistry = createDefaultDatasetFamilyRegistry();
@@ -869,17 +870,17 @@ export class TypeScriptDatasetCore {
     });
     if (family.runtime_id === "registered_multitable.runtime.v1") {
       if (context.registeredSourceAssetIds === undefined) {
-        throw new BuildError("registered multi-table execution requires task-owned registered asset IDs");
+        throw new ExecutionError("registered multi-table execution requires task-owned registered asset IDs");
       }
       const registeredIds = Object.fromEntries(
         Object.entries(context.sourceAssets ?? {}).map(([bindingId, asset]) => [bindingId, asset.asset_id]),
       );
       for (const assetId of Object.values(registeredIds)) {
-        if (!context.registeredSourceAssetIds.has(assetId)) throw new BuildError(`source asset '${assetId}' is not task-registered`);
+        if (!context.registeredSourceAssetIds.has(assetId)) throw new ExecutionError(`source asset '${assetId}' is not task-registered`);
       }
       const result = await executeRegisteredMultiTableBuild({ taskId, taskRoot, spec, registeredAssetIds: registeredIds, runId: context.runId });
       return {
-        build_id: buildId,
+        requirement_id: requirementId,
         status: "completed",
         error: null,
         publication_id: result.publication.publicationId,
@@ -890,14 +891,14 @@ export class TypeScriptDatasetCore {
         rejected_sources: [],
       };
     }
-    const outputDir = path.join(taskRoot, "datasets_build", buildId);
+    const outputDir = path.join(taskRoot, "dataset_runs", context.runId, requirementId);
     const stateDir = path.join(outputDir, "state");
     mkdirSync(outputDir, { recursive: true });
 
-    const lease: BuildLockLease = await acquireBuildLock(
-      { lockRoot: path.join(taskRoot, "state", "build-locks") },
+    const lease: ExecutionLockLease = await acquireExecutionLock(
+      { lockRoot: path.join(taskRoot, "state", "execution-locks") },
       taskId,
-      buildId,
+      requirementId,
       context.runId,
     );
     const controller = new AbortController();
@@ -909,7 +910,7 @@ export class TypeScriptDatasetCore {
     } else {
       context.signal?.addEventListener("abort", onAbort, { once: true });
     }
-    this.activeCancels.set(buildId, controller);
+    this.activeCancels.set(requirementId, controller);
     const signal = combined.signal;
     const runnerState: RunnerState = {
       batches: new Map(),
@@ -944,9 +945,10 @@ export class TypeScriptDatasetCore {
       fence: async (): Promise<boolean> => lease.assertOwned(),
       hilGate: this.options.hilGate ?? null,
     });
-    const executor = new DatasetBuildExecutor({
+    const executor = new DatasetExecutionExecutor({
       taskId,
-      buildId,
+      runId: context.runId,
+      requirementId,
       stateDir,
       taskRoot,
       plan: buildOperationPlan(spec, {
@@ -1036,7 +1038,7 @@ export class TypeScriptDatasetCore {
       },
       eventSink: this.options.eventSink === undefined || this.options.eventSink === null
         ? null
-        : (event) => this.options.eventSink?.(event, buildId),
+        : (event) => this.options.eventSink?.(event, requirementId),
       sourceAssets: context.sourceAssets ?? {},
       mappingAssets: context.mappingAssets ?? {},
       perBindingOutcomes,
@@ -1047,7 +1049,7 @@ export class TypeScriptDatasetCore {
         }
       },
     });
-    let outcome: Awaited<ReturnType<DatasetBuildExecutor["run"]>>;
+    let outcome: Awaited<ReturnType<DatasetExecutionExecutor["run"]>>;
     try {
       outcome = await executor.run();
       // When the whole plan was checkpoint-completed (re-execution of a
@@ -1059,7 +1061,7 @@ export class TypeScriptDatasetCore {
           ? publishOutput.publication_id
           : null);
       return {
-        build_id: buildId,
+        requirement_id: requirementId,
         status: outcome.status,
         error: outcome.error === null ? null : outcome.error.message,
         publication_id: publicationId,
@@ -1070,20 +1072,20 @@ export class TypeScriptDatasetCore {
         rejected_sources: Object.keys(perBindingOutcomes),
       };
     } finally {
-      this.activeCancels.delete(buildId);
+      this.activeCancels.delete(requirementId);
       controller.signal.removeEventListener("abort", onAbort);
       context.signal?.removeEventListener("abort", onAbort);
       await lease.release();
     }
   }
 
-  cancelDatasetBuild(buildId: string): void {
-    this.activeCancels.get(buildId)?.abort();
+  cancelDatasetExecution(requirementId: string): void {
+    this.activeCancels.get(requirementId)?.abort();
   }
 
-  async getBuild(buildId: string): Promise<BuildRecord | null> {
+  async getExecution(runId: string, requirementId: string): Promise<ExecutionRecord | null> {
     const { taskRoot } = this.options;
-    const outputDir = path.join(taskRoot, "datasets_build", buildId);
+    const outputDir = path.join(taskRoot, "dataset_runs", runId, requirementId);
     const manifestPath = path.join(outputDir, "dataset_manifest.json");
     if (!existsSync(manifestPath)) return null;
     const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as DatasetManifest;
@@ -1092,7 +1094,7 @@ export class TypeScriptDatasetCore {
       ? (JSON.parse(await readFile(reportPath, "utf8")) as unknown)
       : null;
     return {
-      build_id: buildId,
+      requirement_id: requirementId,
       status: "completed",
       error: null,
       publication_id: null,
@@ -1104,10 +1106,10 @@ export class TypeScriptDatasetCore {
     };
   }
 
-  async listBuildArtifacts(buildId: string): Promise<Array<{ artifact_id: string; relative_path: string; role: string }>> {
-    const build = await this.getBuild(buildId);
-    if (build?.manifest === null || build?.manifest === undefined) return [];
-    return build.manifest.artifacts.map((entry) => ({
+  async listExecutionArtifacts(runId: string, requirementId: string): Promise<Array<{ artifact_id: string; relative_path: string; role: string }>> {
+    const execution = await this.getExecution(runId, requirementId);
+    if (execution?.manifest === null || execution?.manifest === undefined) return [];
+    return execution.manifest.artifacts.map((entry) => ({
       artifact_id: entry.artifact_id,
       relative_path: entry.relative_path,
       role: entry.role,
@@ -1115,4 +1117,4 @@ export class TypeScriptDatasetCore {
   }
 }
 
-export type { DatasetBuildSpec, SourceAsset, ValidationResult };
+export type { DatasetExecutionSpec, SourceAsset, ValidationResult };

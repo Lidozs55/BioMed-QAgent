@@ -5,8 +5,6 @@
 
 import { APIError } from "@/api/errors";
 import {
-  assertBuildResultStatus,
-  parseBuildResult,
   assertString,
   assertNumber,
   assertBoolean,
@@ -26,8 +24,8 @@ import {
   TASK_MODES,
 } from "@biomed/contracts";
 import type {
-  BuildDetail,
-  BuildPage,
+  PublicationDetail,
+  PublicationPage,
   DatasetManifestV1,
   DatasetManifestV2,
   DatasetPublication,
@@ -36,7 +34,7 @@ import type {
   ManifestArtifactEntry,
   MessagePage,
   PublicationCandidateRef,
-  PublicationSummary,
+  TaskPublicationSummary,
   RelationDefinition,
   RunSummary,
   SubagentErrorCode,
@@ -163,14 +161,13 @@ function parseRunSummary(json: unknown, path: string): RunSummary {
   const obj = assertObject(json, path);
   return {
     run_status: assertRunStatus(Reflect.get(obj, "run_status"), `${path}.run_status`),
-    build_result: assertOptionalNull(Reflect.get(obj, "build_result"), `${path}.build_result`, (value, p) => parseBuildResult(value, p)),
     error_code: assertOptionalNull(Reflect.get(obj, "error_code"), `${path}.error_code`, (value, p) => assertFinite(value, p, ERROR_CODES)),
     cancelled_at_stage: assertOptionalNull(Reflect.get(obj, "cancelled_at_stage"), `${path}.cancelled_at_stage`, (value, p) => assertFinite(value, p, STAGE_NAMES)),
     user_message: assertStringOrNull(Reflect.get(obj, "user_message"), `${path}.user_message`),
   };
 }
 
-function parsePublicationSummary(json: unknown, idx: number): PublicationSummary {
+function parseTaskPublicationSummary(json: unknown, idx: number): TaskPublicationSummary {
   const path = `publications[${idx}]`;
   const obj = assertObject(json, path);
   return {
@@ -274,11 +271,6 @@ export function parseTaskSnapshot(json: unknown): TaskSnapshot {
       updated_at: assertString(Reflect.get(task, "updated_at"), "task.updated_at"),
       latest_sequence: assertNumber(Reflect.get(task, "latest_sequence"), "task.latest_sequence"),
       artifact_count: optionalNumber(Reflect.get(task, "artifact_count")),
-      latest_build_status: assertOptionalNull(
-        Reflect.get(task, "latest_build_status"),
-        "task.latest_build_status",
-        assertBuildResultStatus,
-      ),
     },
     runs: assertArray(Reflect.get(obj, "runs"), "runs", parseRunRecord),
     messages: assertArray(Reflect.get(obj, "messages"), "messages", parseMessageRecord),
@@ -288,7 +280,7 @@ export function parseTaskSnapshot(json: unknown): TaskSnapshot {
     current_publication_id: assertStringOrNull(Reflect.get(obj, "current_publication_id"), "current_publication_id"),
     publications: rawPublications === undefined
       ? []
-      : assertArray(rawPublications, "publications", parsePublicationSummary),
+      : assertArray(rawPublications, "publications", parseTaskPublicationSummary),
     older_messages_cursor: assertStringOrNull(Reflect.get(obj, "older_messages_cursor"), "older_messages_cursor"),
   };
 }
@@ -317,11 +309,6 @@ function parseTaskSummary(json: unknown, path: string): TaskPage["active_items"]
     updated_at: assertString(Reflect.get(obj, "updated_at"), `${path}.updated_at`),
     latest_sequence: assertNumber(Reflect.get(obj, "latest_sequence"), `${path}.latest_sequence`),
     artifact_count: optionalNumber(Reflect.get(obj, "artifact_count")),
-    latest_build_status: assertOptionalNull(
-      Reflect.get(obj, "latest_build_status"),
-      `${path}.latest_build_status`,
-      assertBuildResultStatus,
-    ),
   };
 }
 
@@ -487,7 +474,7 @@ function parseDatasetManifestV1Fields(json: unknown, path: string): DatasetManif
   return {
     manifest_id: assertString(Reflect.get(obj, "manifest_id"), `${path}.manifest_id`, true),
     task_id: assertString(Reflect.get(obj, "task_id"), `${path}.task_id`, true),
-    build_id: assertString(Reflect.get(obj, "build_id"), `${path}.build_id`, true),
+    requirement_id: assertString(Reflect.get(obj, "requirement_id"), `${path}.requirement_id`, true),
     dataset_family: assertString(Reflect.get(obj, "dataset_family"), `${path}.dataset_family`, true),
     row_granularity: assertString(Reflect.get(obj, "row_granularity"), `${path}.row_granularity`, true),
     schema_ref: assertString(Reflect.get(obj, "schema_ref"), `${path}.schema_ref`, true),
@@ -658,7 +645,11 @@ function parseDatasetPublication(
   path: string,
 ): DatasetPublication {
   const obj = assertObject(json, path);
+  if (Reflect.get(obj, "schema_version") !== "1.1") {
+    throw new TypeError(`${path}.schema_version must be 1.1`);
+  }
   return {
+    schema_version: "1.1",
     publication_id: assertString(Reflect.get(obj, "publication_id"), `${path}.publication_id`, true),
     manifest_ref: assertString(Reflect.get(obj, "manifest_ref"), `${path}.manifest_ref`, true),
     manifest_sha256: assertString(Reflect.get(obj, "manifest_sha256"), `${path}.manifest_sha256`, true),
@@ -668,41 +659,41 @@ function parseDatasetPublication(
   };
 }
 
-function parseBuildSummary(json: unknown, path: string): BuildPage["items"][number] {
+function parsePublicationSummary(json: unknown, path: string): PublicationPage["items"][number] {
   const obj = assertObject(json, path);
   return {
-    build_id: assertString(Reflect.get(obj, "build_id"), `${path}.build_id`, true),
+    requirement_id: assertString(Reflect.get(obj, "requirement_id"), `${path}.requirement_id`, true),
     task_id: assertString(Reflect.get(obj, "task_id"), `${path}.task_id`, true),
     dataset_family: assertString(Reflect.get(obj, "dataset_family"), `${path}.dataset_family`, true),
     row_granularity: assertString(Reflect.get(obj, "row_granularity"), `${path}.row_granularity`, true),
     schema_ref: assertString(Reflect.get(obj, "schema_ref"), `${path}.schema_ref`, true),
     row_count: assertNonNegativeInt(Reflect.get(obj, "row_count"), `${path}.row_count`),
-    status: assertBuildResultStatus(Reflect.get(obj, "status"), `${path}.status`),
-    publication_id: assertStringOrNull(Reflect.get(obj, "publication_id"), `${path}.publication_id`),
+    publication_id: assertString(Reflect.get(obj, "publication_id"), `${path}.publication_id`, true),
     manifest_ref: assertString(Reflect.get(obj, "manifest_ref"), `${path}.manifest_ref`, true),
     manifest_sha256: assertString(Reflect.get(obj, "manifest_sha256"), `${path}.manifest_sha256`, true),
-    published_at: assertOptionalNull(Reflect.get(obj, "published_at"), `${path}.published_at`, (value, p) => assertString(value, p)),
-    build_result: assertOptionalNull(Reflect.get(obj, "build_result"), `${path}.build_result`, (value, p) => parseBuildResult(value, p)),
+    published_at: assertString(Reflect.get(obj, "published_at"), `${path}.published_at`, true),
+    run_id: assertString(Reflect.get(obj, "run_id"), `${path}.run_id`, true),
   };
 }
 
-export function parseBuildPage(json: unknown): BuildPage {
-  const obj = assertObject(json, "builds response");
+export function parsePublicationPage(json: unknown): PublicationPage {
+  const obj = assertObject(json, "publications response");
   return {
-    items: assertArray(Reflect.get(obj, "items"), "builds response.items", (value, index) => parseBuildSummary(value, `builds response.items[${index}]`)),
-    next_cursor: assertStringOrNull(Reflect.get(obj, "next_cursor"), "builds response.next_cursor"),
+    items: assertArray(Reflect.get(obj, "items"), "publications response.items", (value, index) => parsePublicationSummary(value, `publications response.items[${index}]`)),
+    next_cursor: assertStringOrNull(Reflect.get(obj, "next_cursor"), "publications response.next_cursor"),
   };
 }
 
-export function parseBuildDetail(json: unknown): BuildDetail {
-  const obj = assertObject(json, "build response");
+export function parsePublicationDetail(json: unknown): PublicationDetail {
+  const obj = assertObject(json, "publication response");
   return {
-    build_id: assertString(Reflect.get(obj, "build_id"), "build response.build_id", true),
-    task_id: assertString(Reflect.get(obj, "task_id"), "build response.task_id", true),
-    manifest_ref: assertString(Reflect.get(obj, "manifest_ref"), "build response.manifest_ref", true),
-    build_result: assertOptionalNull(Reflect.get(obj, "build_result"), "build response.build_result", (value, p) => parseBuildResult(value, p)),
-    manifest: parseVersionedDatasetManifest(Reflect.get(obj, "manifest"), "build response.manifest"),
-    publication: assertOptionalNull(Reflect.get(obj, "publication"), "build response.publication", (value, p) => parseDatasetPublication(value, p)),
-    artifacts: assertArray(Reflect.get(obj, "artifacts"), "build response.artifacts", (value, index) => parseManifestArtifactEntry(value, `build response.artifacts[${index}]`)),
+    publication_id: assertString(Reflect.get(obj, "publication_id"), "publication response.publication_id", true),
+    requirement_id: assertString(Reflect.get(obj, "requirement_id"), "publication response.requirement_id", true),
+    run_id: assertString(Reflect.get(obj, "run_id"), "publication response.run_id", true),
+    task_id: assertString(Reflect.get(obj, "task_id"), "publication response.task_id", true),
+    manifest_ref: assertString(Reflect.get(obj, "manifest_ref"), "publication response.manifest_ref", true),
+    manifest: parseVersionedDatasetManifest(Reflect.get(obj, "manifest"), "publication response.manifest"),
+    publication: parseDatasetPublication(Reflect.get(obj, "publication"), "publication response.publication"),
+    artifacts: assertArray(Reflect.get(obj, "artifacts"), "publication response.artifacts", (value, index) => parseManifestArtifactEntry(value, `publication response.artifacts[${index}]`)),
   };
 }

@@ -9,7 +9,7 @@ export interface CoreAcquisitionRequest {
   schema_version: "1.0";
   request_id: string;
   task_id: string;
-  build_id: string;
+  requirement_id: string;
   binding_id: string;
   mode: AcquisitionRequestMode;
   provider_id: string | null;

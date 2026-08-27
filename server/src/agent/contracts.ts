@@ -1,5 +1,3 @@
-import type { BuildResult } from "@biomed/contracts";
-
 export type BioMedAgentErrorCode =
   | "INVALID_CONFIGURATION"
   | "INVALID_SESSION_CONFIG"
@@ -107,8 +105,8 @@ export interface BioMedSessionConfig {
   tools?: readonly BioMedAgentTool[];
   /** Tools whose full schemas are available on the first model turn. */
   initialToolNames?: readonly string[];
-  /** Current run product state, read without consuming the terminal BuildResult. */
-  getBuildResult?: () => BuildResult | null;
+  /** Current run's latest immutable publication, if one has been emitted. */
+  getCurrentPublicationId?: () => string | null;
   cleanup?: () => Promise<void>;
 }
 

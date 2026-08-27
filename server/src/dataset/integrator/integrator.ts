@@ -17,7 +17,7 @@ import type { JsonValue } from "@biomed/contracts";
 import type { CanonicalizationResult } from "../canonicalizer/index.js";
 import { CHECKPOINT_STRIDE, checkpoint, throwIfAborted } from "../cooperative.js";
 import { BufferedCsvWriter } from "../adapters/base.js";
-import { BuildError } from "../adapters/errors.js";
+import { ExecutionError } from "../adapters/errors.js";
 import { sha256FileStream } from "../adapters/hashing.js";
 import { assetIdFromSha256 } from "../adapters/identity.js";
 import { asPosix } from "../adapters/paths.js";
@@ -69,7 +69,7 @@ const V2_INTEGRATION_CONTRACTS: Readonly<Record<string, V2IntegrationContract>> 
 };
 
 /** Unsupported merge strategy or zero sources (Python ``IntegratorError``). */
-export class IntegratorError extends BuildError {}
+export class IntegratorError extends ExecutionError {}
 
 /** Temp-store disk quota exceeded (WP-A6): fail closed, never OOM. */
 export class IntegratorResourceLimitError extends IntegratorError {
@@ -101,7 +101,7 @@ export async function integrate(options: {
   results: readonly CanonicalizationResult[];
   mergeStrategy: string;
   schema: DatasetSchema;
-  buildId: string;
+  requirementId: string;
   outputDir: string;
   signal?: AbortSignal | null;
   /** WP-A6: bound the temp key-table's on-disk size (bytes). */
@@ -113,7 +113,7 @@ export async function integrate(options: {
     results,
     mergeStrategy,
     schema,
-    buildId,
+    requirementId,
     outputDir,
     signal,
     tempStore,
@@ -288,7 +288,7 @@ export async function integrate(options: {
     conflict_count: conflictCount,
     source_batches: results.map((result) => result.batch.binding_id),
     merge_strategy: MERGE_STRATEGY_APPEND,
-    dataset_id: identityContext?.datasetId ?? buildId,
+    dataset_id: identityContext?.datasetId ?? requirementId,
     ...(identityContext === null ? {} : {
       dataset_revision_id: identityContext.datasetRevisionId,
       carrier_asset_ids: [...identityContext.carrierAssetIds],

@@ -48,7 +48,7 @@ export interface BrowserAcquisitionProposal {
   evidence_digest: string;
   task_id: string;
   run_id: string;
-  build_id: string | null;
+  requirement_id: string | null;
   generation: number;
   recipe_id: string;
   recipe_version: string;
@@ -118,7 +118,7 @@ export function parseBrowserAcquisitionProposal(
     evidence_digest: assertHex64(obj.evidence_digest, `${path}.evidence_digest`),
     task_id: assertString(obj.task_id, `${path}.task_id`, true),
     run_id: assertString(obj.run_id, `${path}.run_id`, true),
-    build_id: assertStringOrNull(obj.build_id, `${path}.build_id`),
+    requirement_id: assertStringOrNull(obj.requirement_id, `${path}.requirement_id`),
     generation: assertNumber(obj.generation, `${path}.generation`),
     recipe_id: assertString(obj.recipe_id, `${path}.recipe_id`, true),
     recipe_version: assertString(obj.recipe_version, `${path}.recipe_version`, true),

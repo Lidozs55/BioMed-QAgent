@@ -139,7 +139,8 @@ function result(options: {
     schema_version: "1.0",
     result_manifest_id: `result_${kind}_${tableId}_${serial}`,
     task_id: "task_dynamic",
-    build_id: "build_dynamic",
+    run_id: "run_test",
+    requirement_id: "build_dynamic",
     operation_id: `${operationKind}_${tableId}_${serial}`,
     operation_kind: operationKind,
     operation_attempt_id: `attempt_${serial}`,
@@ -175,11 +176,6 @@ function result(options: {
       commit_id: `commit_${serial}`,
       committed_at: "2026-08-23T00:00:00Z",
     },
-    migration: {
-      mode: "native",
-      legacy_checkpoint_path: null,
-      migrated_at: null,
-    },
   };
 }
 
@@ -197,7 +193,7 @@ async function assemblyInput(
 ): Promise<DynamicFamilyAssemblyInput> {
   return {
     taskId: "task_dynamic",
-    buildId: "build_dynamic",
+    requirementId: "build_dynamic",
     familySpec: await familySpec(),
     projection: structuredClone(PROJECTION),
     tableOutputs: {

@@ -171,7 +171,7 @@ describe("DurableApprovalGate", () => {
     const gate = new DurableApprovalGate(accepted.task_id, repository, accepted.run_id);
 
     const request = await gate.recordAdvisoryHIL({
-      build_id: "build_1",
+      requirement_id: "build_1",
       kind: "data_review",
       review_type: "vlm_extraction",
       blocking: false,
@@ -575,7 +575,7 @@ describe("HIL resume route (durable runtime)", () => {
     const request = await store.createRequest({
       task_id: accepted.task_id,
       run_id: accepted.run_id,
-      build_id: null,
+      requirement_id: null,
       kind: "permission",
       review_type: null,
       blocking: true,

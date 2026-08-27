@@ -214,11 +214,11 @@ export class DurableTaskRepository {
   async appendBuildEvent(
     taskId: string,
     runId: string,
-    buildId: string,
+    requirementId: string,
     payload: EventPayload,
   ): Promise<EventEnvelope> {
-    requireSafeId(buildId, "buildId");
-    return (await this.appendEvents(taskId, runId, [payload], buildId))[0];
+    requireSafeId(requirementId, "requirementId");
+    return (await this.appendEvents(taskId, runId, [payload], requirementId))[0];
   }
 
   async appendRunEvents(
@@ -234,7 +234,7 @@ export class DurableTaskRepository {
     taskId: string,
     runId: string | null,
     payloads: readonly EventPayload[],
-    buildId: string | null = null,
+    requirementId: string | null = null,
   ): Promise<EventEnvelope[]> {
     if (payloads.length === 0) throw new TypeError("payloads must not be empty");
     requireSafeId(taskId, "taskId");
@@ -251,7 +251,7 @@ export class DurableTaskRepository {
         type: payload.type,
         task_id: taskId,
         run_id: runId,
-        ...(buildId === null ? {} : { build_id: buildId }),
+        ...(requirementId === null ? {} : { requirement_id: requirementId }),
         stage_attempt_id: null,
         sequence: sequence + index + 1,
         timestamp,

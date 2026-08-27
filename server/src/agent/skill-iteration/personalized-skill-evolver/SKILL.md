@@ -78,7 +78,7 @@ The proposed skill must:
 - Keep every existing mapped tool available and use only the fixed mapped tool
   names supplied by the caller.
 - Preserve the Agent plus deterministic Dataset Core separation.
-- Preserve SourceAsset, DatasetBuildSpec, validation, confidence, provenance,
+- Preserve SourceAsset, DatasetExecutionSpec, validation, confidence, provenance,
   HIL, and publication boundaries that are relevant to the target.
 - Never authorize direct writes to formal artifacts or production skill paths.
 - Never introduce find_skill, invoke_skill, create_skill, SkillBuilderAgent,

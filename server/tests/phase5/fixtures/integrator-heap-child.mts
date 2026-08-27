@@ -86,7 +86,7 @@ await integrate({
   results,
   mergeStrategy: "append_by_canonical_row",
   schema: buildGeneExpressionSchema(),
-  buildId: `build_${count}`,
+  requirementId: `build_${count}`,
   outputDir: join(workRoot, "warmup"),
   signal: null,
 });
@@ -101,7 +101,7 @@ try {
     results,
     mergeStrategy: "append_by_canonical_row",
     schema: buildGeneExpressionSchema(),
-    buildId: `build_measure_${count}`,
+    requirementId: `build_measure_${count}`,
     outputDir: join(workRoot, "measure"),
     signal: null,
   });

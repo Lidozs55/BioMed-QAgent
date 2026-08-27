@@ -5,7 +5,7 @@ import { materializeBrowserIntegratedFamily } from "../src/dataset/acquisition/b
 function result(tableId: string): OperationResultManifest {
   const digest = tableId.padEnd(64, "0");
   return {
-    schema_version: "1.0", result_manifest_id: `result_${tableId}`, task_id: "task_family", build_id: "build_family",
+    schema_version: "1.0", result_manifest_id: `result_${tableId}`, task_id: "task_family", run_id: "run_family", requirement_id: "build_family",
     operation_id: `integrate_${tableId}`, operation_kind: "integrate", operation_attempt_id: `attempt_${tableId}`, attempt: 1,
     status: "succeeded", input_digest: "a".repeat(64), parameter_digest: "b".repeat(64), implementation_digest: "c".repeat(64),
     output_digest: digest, output_kind: "integrated_table",
@@ -13,7 +13,6 @@ function result(tableId: string): OperationResultManifest {
     output_files: [{ relative_path: `tables/${tableId}.csv`, size_bytes: 2, sha256: digest }],
     dependency_closure: { input_asset_ids: [`asset_${digest}`], upstream_result_manifest_ids: [], parameter_digest: "b".repeat(64), implementation_digest: "c".repeat(64) },
     commit: { state: "committed", commit_id: `commit_${tableId}`, committed_at: "2026-08-24T00:00:00Z" },
-    migration: { mode: "native", legacy_checkpoint_path: null, migrated_at: null },
   };
 }
 
@@ -22,6 +21,6 @@ const familySpec = { family_spec_id: "family_browser", semantic_version: "2.0.0"
 
 describe("materializeBrowserIntegratedFamily", () => {
   it("fails closed when a projection-selected table is missing", async () => {
-    await expect(materializeBrowserIntegratedFamily({ taskId: "task_family", buildId: "build_family", familySpec, projection, tableOutputs: { one: { data: result("one"), provenance: [result("one_provenance")], confidence: [result("one_confidence")], audit: [] } } })).rejects.toThrow("missing selected table");
+    await expect(materializeBrowserIntegratedFamily({ taskId: "task_family", requirementId: "build_family", familySpec, projection, tableOutputs: { one: { data: result("one"), provenance: [result("one_provenance")], confidence: [result("one_confidence")], audit: [] } } })).rejects.toThrow("missing selected table");
   });
 });

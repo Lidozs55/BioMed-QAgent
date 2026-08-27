@@ -35,7 +35,6 @@ import {
 } from "@/components/ui/message-scroller";
 import { Spinner } from "@/components/ui/spinner";
 import type {
-  BuildResultStatus,
   DownloadResumeAccepted,
   ResumeRunInput,
   StartTaskInput,
@@ -147,13 +146,6 @@ const STATUS_LABELS = {
  */
 const STALL_THRESHOLD_MS = 2 * 60 * 1000;
 
-const BUILD_LABELS: Record<BuildResultStatus, string> = {
-  succeeded: "构建成功",
-  partial_success: "部分成功",
-  no_data: "无数据",
-  spec_rejected: "规格被拒",
-};
-
 function formatActiveItemStatus(item: ConversationItem): string {
   switch (item.kind) {
     case "tool_call":
@@ -181,8 +173,7 @@ function formatActiveItemStatus(item: ConversationItem): string {
 
 /**
  * Compact secondary text for the latest terminal run, driven by the
- * server-provided ``RunSummary`` (Phase 4a acceptance): build outcomes
- * carry ``user_summary`` + ``recommended_next_action``, failed runs carry
+ * server-provided ``RunSummary``: failed runs carry
  * the stable ``error_code``/``user_message``, and cancelled/interrupted
  * runs carry ``cancelled_at_stage``. Renders nothing when the run has no
  * summary or none of the structured fields are populated.
@@ -193,14 +184,7 @@ function renderLatestRunSummary(
   const summary = latestRun?.summary ?? null;
   if (summary === null) return null;
   const lines: string[] = [];
-  if (summary.build_result !== null) {
-    if (summary.build_result.user_summary.length > 0) {
-      lines.push(summary.build_result.user_summary);
-    }
-    if (summary.build_result.recommended_next_action.length > 0) {
-      lines.push(summary.build_result.recommended_next_action);
-    }
-  } else if (summary.run_status === "failed") {
+  if (summary.run_status === "failed") {
     if (summary.error_code !== null) {
       lines.push(`错误码：${summary.error_code}`);
     }
@@ -465,11 +449,6 @@ export function ChatPanel({
   const latestRunId = activeTask?.runOrder[activeTask.runOrder.length - 1];
   const latestRun =
     latestRunId === undefined ? undefined : activeTask?.runsById[latestRunId];
-  const buildLabel =
-    activeTask?.summary.status === "completed" &&
-    latestRun?.summary?.build_result?.status !== undefined
-      ? BUILD_LABELS[latestRun.summary.build_result.status]
-      : undefined;
   // 后端进入 JSON 缓冲模式时会先 end() 当前 segment
   // （finish_reason="tool_call_pending"），标记为"正在准备工具调用"。
   // 此时虽然有 assistant_segment 但需要显示提示。
@@ -944,15 +923,12 @@ export function ChatPanel({
         <div className="flex shrink-0 flex-col">
           <Marker variant="border" className="px-5 py-2" role="status">
             <MarkerIcon>
-              <TaskStatusIcon
-                status={activeTask.summary.status}
-                buildStatus={latestRun?.summary?.build_result?.status}
-              />
+              <TaskStatusIcon status={activeTask.summary.status} />
             </MarkerIcon>
             <MarkerContent>
               {activeItem !== undefined && activeTask.summary.status === "running"
                 ? formatActiveItemStatus(activeItem)
-                : buildLabel ?? STATUS_LABELS[activeTask.summary.status]}
+                : STATUS_LABELS[activeTask.summary.status]}
             </MarkerContent>
             {isMobile && subagentCount > 0 && (
               <div className="ml-auto flex items-center gap-2">

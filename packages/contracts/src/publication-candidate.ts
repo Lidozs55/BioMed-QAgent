@@ -33,7 +33,7 @@ export interface PublicationCandidate {
   schema_version: "1.0";
   candidate_id: string;
   task_id: string;
-  build_id: string;
+  requirement_id: string;
   dataset_family: string;
   row_granularity: string;
   tables: PublicationCandidateTable[];

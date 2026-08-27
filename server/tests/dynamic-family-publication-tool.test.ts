@@ -7,12 +7,12 @@ import { describe, expect, test, vi } from "vitest";
 
 import { canonicalDigest } from "../src/dataset/adapters/identity.js";
 import {
-  createPrepareDynamicFamilyBuildTool,
-  createDynamicFamilyBuildTool,
-  parseDynamicFamilyBuildSubmission,
-} from "../src/agent/tools/dynamic-family-build.js";
-import { submitDynamicFamilyBuild } from "../src/dataset/dynamic-family/submission.js";
-import { prepareDynamicFamilyBuild } from "../src/dataset/dynamic-family/preflight.js";
+  createPrepareDynamicFamilyPublicationTool,
+  createDynamicFamilyPublicationTool,
+  parseDynamicFamilyPublicationSubmission,
+} from "../src/agent/tools/dynamic-family-publication.js";
+import { submitDynamicFamilyPublication } from "../src/dataset/dynamic-family/submission.js";
+import { prepareDynamicFamilyPublication } from "../src/dataset/dynamic-family/preflight.js";
 import { computeHILEvidenceDigest } from "../src/dataset/contracts/hil-evidence.js";
 import { expectedOutputLocatorClosure } from "../src/dataset/dynamic-family/execution.js";
 import { publishDynamicFamily, type PublishDynamicFamilyInput } from "../src/dataset/dynamic-family/publication.js";
@@ -93,8 +93,8 @@ async function submission(): Promise<Record<string, unknown>> {
     },
     registered_sources: { source_binding: `asset_${A}` },
     acquisition_requests: {},
-    build_proposal: {
-      schema_version: "2.0", spec_kind: "proposal", build_id: "build_dynamic",
+    execution_proposal: {
+      schema_version: "2.0", spec_kind: "proposal", requirement_id: "build_dynamic",
       family_spec_ref: { scope: "task", id: family.family_spec_id, version: family.semantic_version, digest: family.canonical_digest },
       projection_ref: projection.projection_id,
       transform_refs: [{ scope: "task", id: "transform_dynamic", version: "1.0.0", digest: B }],
@@ -110,20 +110,20 @@ async function submission(): Promise<Record<string, unknown>> {
 async function prepareForSubmit(
   raw: Record<string, unknown>,
   taskId = "task_dynamic",
-  buildId = "build_dynamic",
+  requirementId = "build_dynamic",
 ): Promise<{
-  submission: Awaited<ReturnType<typeof parseDynamicFamilyBuildSubmission>>;
-  receipt: Awaited<ReturnType<typeof prepareDynamicFamilyBuild>>;
+  submission: Awaited<ReturnType<typeof parseDynamicFamilyPublicationSubmission>>;
+  receipt: Awaited<ReturnType<typeof prepareDynamicFamilyPublication>>;
 }> {
-  const initial = await parseDynamicFamilyBuildSubmission(raw);
-  const receipt = await prepareDynamicFamilyBuild({
+  const initial = await parseDynamicFamilyPublicationSubmission(raw);
+  const receipt = await prepareDynamicFamilyPublication({
     taskId,
-    buildId,
+    requirementId,
     generation: 0,
     submission: initial,
   });
-  (raw.build_proposal as { transform_refs: Array<{ digest: string }> }).transform_refs[0]!.digest = receipt.host_descriptor_digest;
-  const prepared = await parseDynamicFamilyBuildSubmission(raw);
+  (raw.execution_proposal as { transform_refs: Array<{ digest: string }> }).transform_refs[0]!.digest = receipt.host_descriptor_digest;
+  const prepared = await parseDynamicFamilyPublicationSubmission(raw);
   return { submission: prepared, receipt };
 }
 
@@ -147,7 +147,7 @@ describe("dynamic family build tool boundary", () => {
   });
 
   test("parses only an explicitly unisolated, digest-bound submission", async () => {
-    const parsed = await parseDynamicFamilyBuildSubmission(await submission());
+    const parsed = await parseDynamicFamilyPublicationSubmission(await submission());
     expect(parsed.execution_backend).toBe("in_process_unisolated");
     expect(parsed.family_spec.scope).toBe("task");
     expect(parsed.projection.projection_id).toBe("projection_dynamic");
@@ -166,7 +166,7 @@ describe("dynamic family build tool boundary", () => {
         },
       },
     };
-    const parsed = await parseDynamicFamilyBuildSubmission(raw);
+    const parsed = await parseDynamicFamilyPublicationSubmission(raw);
     expect(parsed.acquisition_requests.source_binding?.provider_id).toBe("chembl.files.v1");
     expect(parsed.registered_sources).toEqual({});
   });
@@ -184,19 +184,19 @@ describe("dynamic family build tool boundary", () => {
         },
       },
     };
-    const parsed = await parseDynamicFamilyBuildSubmission(raw);
+    const parsed = await parseDynamicFamilyPublicationSubmission(raw);
     expect(parsed.acquisition_requests.source_binding?.provider_id).toBe("pubmed.files.v1");
     expect(parsed.registered_sources).toEqual({});
   });
 
   test("exposes the complete nested contract and fixed-provider parameter guidance", () => {
-    const tool = createDynamicFamilyBuildTool({ submit: async () => ({ ok: true }) });
-    const prepare = createPrepareDynamicFamilyBuildTool({ prepare: async () => {
+    const tool = createDynamicFamilyPublicationTool({ submit: async () => ({ ok: true }) });
+    const prepare = createPrepareDynamicFamilyPublicationTool({ prepare: async () => {
       throw new Error("not called");
     } });
     const schema = JSON.stringify(tool.parameters);
-    expect(prepare.description).toMatch(/do not prevalidate.*validate_dataset_build/i);
-    expect(prepare.description).toMatch(/inspect_dataset_build_routes/i);
+    expect(prepare.description).toMatch(/do not prevalidate.*validate_dataset_execution/i);
+    expect(prepare.description).toMatch(/inspect_dataset_execution_routes/i);
     expect(prepare.description).toMatch(/every input is dynamic-bindable/i);
     expect(tool.description).toMatch(/dynamic\.direct_bindings/i);
     expect(tool.description).toMatch(/execution contract, not proof of semantic or publication closure/i);
@@ -223,30 +223,30 @@ describe("dynamic family build tool boundary", () => {
     const raw = await submission();
     const family = raw.family_spec as FamilySpec;
     raw.family_spec = { ...family, canonical_digest: "0".repeat(64) };
-    await expect(parseDynamicFamilyBuildSubmission(raw)).rejects.toThrow(/canonical_digest must equal [0-9a-f]{64}/);
+    await expect(parseDynamicFamilyPublicationSubmission(raw)).rejects.toThrow(/canonical_digest must equal [0-9a-f]{64}/);
   });
 
   test("exposes one callback-backed Agent tool without weakening parsing", async () => {
     let received: unknown;
     const raw = await submission();
-    const parsed = await parseDynamicFamilyBuildSubmission(raw);
-    const receipt = await prepareDynamicFamilyBuild({
+    const parsed = await parseDynamicFamilyPublicationSubmission(raw);
+    const receipt = await prepareDynamicFamilyPublication({
       taskId: "task_dynamic",
-      buildId: "build_dynamic",
+      requirementId: "build_dynamic",
       generation: 0,
       submission: parsed,
     });
-    (raw.build_proposal as { transform_refs: Array<{ digest: string }> }).transform_refs[0]!.digest = receipt.host_descriptor_digest;
+    (raw.execution_proposal as { transform_refs: Array<{ digest: string }> }).transform_refs[0]!.digest = receipt.host_descriptor_digest;
     raw.preflight_receipt = receipt;
-    const tool = createDynamicFamilyBuildTool({
+    const tool = createDynamicFamilyPublicationTool({
       submit: async (value, _signal, _context, submittedReceipt) => {
         received = value;
         expect(submittedReceipt.receipt_digest).toBe(receipt.receipt_digest);
-        return { ok: true, build_id: value.build_proposal.build_id };
+        return { ok: true, requirement_id: value.execution_proposal.requirement_id };
       },
     });
     const result = await tool.execute(raw);
-    expect(tool.name).toBe("submit_dynamic_family_build");
+    expect(tool.name).toBe("submit_dynamic_family_publication");
     expect(result.isError).not.toBe(true);
     expect(received).toMatchObject({ execution_backend: "in_process_unisolated" });
 
@@ -254,7 +254,7 @@ describe("dynamic family build tool boundary", () => {
     invalid.execution_backend = "sandbox";
     const rejected = await tool.execute(invalid);
     expect(rejected.isError).toBe(true);
-    expect(rejected.content).toContain("dynamic_build_rejected");
+    expect(rejected.content).toContain("dynamic_publication_rejected");
   });
 
   test("executes registered bytes through the total unisolated Core composition", async () => {
@@ -270,28 +270,28 @@ describe("dynamic family build tool boundary", () => {
       reviewFamily.canonical_digest = await computeFamilySpecDigest(reviewFamily);
       const reviewMetadata = raw.transform_metadata as { bound_family_spec_digest: string };
       reviewMetadata.bound_family_spec_digest = reviewFamily.canonical_digest;
-      const reviewProposal = raw.build_proposal as {
+      const reviewProposal = raw.execution_proposal as {
         family_spec_ref: { digest: string };
         transform_refs: Array<{ digest: string }>;
       };
       reviewProposal.family_spec_ref.digest = reviewFamily.canonical_digest;
       raw.registered_sources = { source_binding: receipt.asset_ref.asset_id };
       raw.transform_source = `export const transform = { run({ inputs }) { const [input] = inputs; return { outputs: [{ handle: "out_0", table_id: "records", schema_ref: "schema_records", locator_ref: input.receipt_id, content: "record_id,value,review_status\\nr1,1,human_review_pending\\n", row_count: 1 }] }; } };`;
-      let parsed = await parseDynamicFamilyBuildSubmission(raw);
+      let parsed = await parseDynamicFamilyPublicationSubmission(raw);
       const mismatchedRole = structuredClone(raw);
       const mismatchedMetadata = mismatchedRole.transform_metadata as {
         declared_input_roles: Array<{ role: string }>;
       };
       mismatchedMetadata.declared_input_roles[0]!.role = "wrong_role";
-      await expect(prepareDynamicFamilyBuild({
+      await expect(prepareDynamicFamilyPublication({
         taskId: "task_dynamic",
-        buildId: "build_dynamic",
+        requirementId: "build_dynamic",
         generation: 0,
-        submission: await parseDynamicFamilyBuildSubmission(mismatchedRole),
+        submission: await parseDynamicFamilyPublicationSubmission(mismatchedRole),
       })).rejects.toThrow(/binding 'source_binding'.*expected 'source'.*received 'wrong_role'/);
       const prepared = await prepareForSubmit(raw);
       parsed = prepared.submission;
-      await expect(submitDynamicFamilyBuild({
+      await expect(submitDynamicFamilyPublication({
         taskId: "task_dynamic", runId: "run_dynamic", submission: parsed,
         sourceAssetRegistry: registry, taskRoot: root, runtimeLimits: DEFAULT_RUNTIME_LIMITS,
         generation: 0, preflightReceipt: prepared.receipt, preflightSubmission: parsed,
@@ -301,7 +301,7 @@ describe("dynamic family build tool boundary", () => {
         implementation_digest: A,
         request_identity_digest: B,
       });
-      const result = await submitDynamicFamilyBuild({
+      const result = await submitDynamicFamilyPublication({
         taskId: "task_dynamic", runId: "run_dynamic", submission: parsed,
         sourceAssetRegistry: registry, taskRoot: root, runtimeLimits: DEFAULT_RUNTIME_LIMITS,
         generation: 0, preflightReceipt: prepared.receipt, preflightSubmission: parsed,
@@ -311,8 +311,9 @@ describe("dynamic family build tool boundary", () => {
       expect(result.materialization.candidate.tables[0]?.definition.table_id).toBe("records");
       const publishInput = {
         taskId: "task_dynamic", taskRoot: root,
+        runId: "run_dynamic",
         workspaceRoot: path.join(root, "agent-workspace"),
-        buildId: parsed.build_proposal.build_id,
+        requirementId: parsed.execution_proposal.requirement_id,
         execution: result,
         validationProfileRef: parsed.family_spec.validation_policy_ref,
         signal: new AbortController().signal,
@@ -356,7 +357,7 @@ describe("dynamic family build tool boundary", () => {
       });
       expect(browserPublication.validation.status).toBe("passed");
       expect(browserPublication.publication.publication.manifest_sha256).toMatch(/^[0-9a-f]{64}$/);
-      const browserProvenance = JSON.parse(await readFile(path.join(browserRoot, "datasets_build", parsed.build_proposal.build_id, "provenance.json"), "utf8")) as { execution_kind?: string; transform_digest?: string };
+      const browserProvenance = JSON.parse(await readFile(path.join(browserRoot, "dataset_runs", "run_dynamic", parsed.execution_proposal.requirement_id, "provenance.json"), "utf8")) as { execution_kind?: string; transform_digest?: string };
       expect(browserProvenance.execution_kind).toBe("browser");
       expect(browserProvenance.transform_digest).toBeUndefined();
       await expect(publishDynamicFamily(publishInput)).rejects.toThrow(/durable HIL gate/);
@@ -392,7 +393,7 @@ describe("dynamic family build tool boundary", () => {
           }),
         },
       })).rejects.toThrow(/evidence digest does not match/);
-      await expect(access(path.join(root, "datasets_build", parsed.build_proposal.build_id, "publish")))
+      await expect(access(path.join(root, "dataset_runs", "run_dynamic", parsed.execution_proposal.requirement_id, "publish")))
         .rejects.toThrow();
 
       let reviewRequest: { review_type: string; evidence: unknown } | null = null;
@@ -421,7 +422,7 @@ describe("dynamic family build tool boundary", () => {
       expect(published.publication.publication.manifest_sha256).toMatch(/^[0-9a-f]{64}$/);
       expect(published.manifest.artifacts.map((artifact) => artifact.role)).toContain("provenance");
       const provenance = JSON.parse(await readFile(
-        path.join(root, "datasets_build", parsed.build_proposal.build_id, "provenance.json"),
+        path.join(root, "dataset_runs", "run_dynamic", parsed.execution_proposal.requirement_id, "provenance.json"),
         "utf8",
       )) as { hil_acceptance?: { decision?: string; evidence_digest?: string } };
       expect(provenance.hil_acceptance).toMatchObject({ decision: "accept" });
@@ -434,13 +435,13 @@ describe("dynamic family build tool boundary", () => {
   test("rejects sandbox claims, direct paths, examples, and unknown fields", async () => {
     const sandbox = await submission();
     sandbox.execution_backend = "container";
-    await expect(parseDynamicFamilyBuildSubmission(sandbox)).rejects.toThrow(/explicit/);
+    await expect(parseDynamicFamilyPublicationSubmission(sandbox)).rejects.toThrow(/explicit/);
     const directPath = await submission();
     directPath.registered_sources = { source_binding: "workspace/data.csv" };
-    await expect(parseDynamicFamilyBuildSubmission(directPath)).rejects.toThrow(/asset_<sha256>/);
+    await expect(parseDynamicFamilyPublicationSubmission(directPath)).rejects.toThrow(/asset_<sha256>/);
     const example = await submission();
     example.family_spec = { ...(example.family_spec as FamilySpec), scope: "example" };
-    await expect(parseDynamicFamilyBuildSubmission(example)).rejects.toThrow(/example|digest/);
+    await expect(parseDynamicFamilyPublicationSubmission(example)).rejects.toThrow(/example|digest/);
   });
 
   test("rejects accessors, Proxies, and symbols without reads", async () => {
@@ -450,15 +451,15 @@ describe("dynamic family build tool boundary", () => {
       enumerable: true,
       get() { reads += 1; return "malicious"; },
     });
-    await expect(parseDynamicFamilyBuildSubmission(accessor)).rejects.toThrow(/data property/);
+    await expect(parseDynamicFamilyPublicationSubmission(accessor)).rejects.toThrow(/data property/);
     expect(reads).toBe(0);
     const proxy = new Proxy(await submission(), {
       get() { reads += 1; return undefined; },
     });
-    await expect(parseDynamicFamilyBuildSubmission(proxy)).rejects.toThrow(/non-Proxy/);
+    await expect(parseDynamicFamilyPublicationSubmission(proxy)).rejects.toThrow(/non-Proxy/);
     expect(reads).toBe(0);
     const symbol = { ...await submission(), [Symbol("sandbox")]: true };
-    await expect(parseDynamicFamilyBuildSubmission(symbol)).rejects.toThrow(/unknown/);
+    await expect(parseDynamicFamilyPublicationSubmission(symbol)).rejects.toThrow(/unknown/);
   });
 });
 
@@ -471,7 +472,7 @@ async function executedSubmission(
   root: string,
   content = "record_id,value\nr1,1\n",
   reviewStatus = false,
-): Promise<{ publishInput: PublishDynamicFamilyInput; buildId: string }> {
+): Promise<{ publishInput: PublishDynamicFamilyInput; requirementId: string }> {
   await mkdir(path.join(root, "source_assets"), { recursive: true });
   await writeFile(path.join(root, "source_assets", "source.csv"), "record_id,value\nr1,1\n", "utf8");
   const registry = new SourceAssetRegistry("task_dynamic", root);
@@ -486,7 +487,7 @@ async function executedSubmission(
     reviewFamily.canonical_digest = await computeFamilySpecDigest(reviewFamily);
     (raw.transform_metadata as { bound_family_spec_digest: string }).bound_family_spec_digest =
       reviewFamily.canonical_digest;
-    (raw.build_proposal as { family_spec_ref: { digest: string } }).family_spec_ref.digest =
+    (raw.execution_proposal as { family_spec_ref: { digest: string } }).family_spec_ref.digest =
       reviewFamily.canonical_digest;
   }
   raw.registered_sources = { source_binding: receipt.asset_ref.asset_id };
@@ -498,19 +499,20 @@ async function executedSubmission(
   });
   const prepared = await prepareForSubmit(raw);
   const parsed = prepared.submission;
-  const result = await submitDynamicFamilyBuild({
+  const result = await submitDynamicFamilyPublication({
     taskId: "task_dynamic", runId: "run_dynamic", submission: parsed,
     sourceAssetRegistry: registry, taskRoot: root, runtimeLimits: DEFAULT_RUNTIME_LIMITS,
     generation: 0, preflightReceipt: prepared.receipt, preflightSubmission: parsed,
   });
-  const buildId = parsed.build_proposal.build_id;
+  const requirementId = parsed.execution_proposal.requirement_id;
   return {
-    buildId,
+    requirementId,
     publishInput: {
       taskId: "task_dynamic",
       taskRoot: root,
+      runId: "run_dynamic",
       workspaceRoot: path.join(root, "agent-workspace"),
-      buildId,
+      requirementId,
       execution: result,
       validationProfileRef: parsed.family_spec.validation_policy_ref,
       signal: new AbortController().signal,
@@ -522,7 +524,7 @@ async function executedSubmission(
 test("publication fence rejects a generation superseded while HIL is pending", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "dynamic-family-publication-fence-"));
   try {
-    const { publishInput, buildId } = await executedSubmission(
+    const { publishInput, requirementId } = await executedSubmission(
       root,
       "record_id,value,review_status\nr1,1,human_review_pending\n",
       true,
@@ -556,15 +558,15 @@ test("publication fence rejects a generation superseded while HIL is pending", a
     current = false;
     releaseReview();
     await expect(publishing).rejects.toThrow(/generation|stale/i);
-    await expect(access(path.join(root, "datasets_build", buildId, "publish"))).rejects.toThrow();
+    await expect(access(path.join(root, "dataset_runs", "run_dynamic", requirementId, "publish"))).rejects.toThrow();
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
 
-async function resourceReport(root: string, buildId: string): Promise<Record<string, unknown>> {
+async function resourceReport(root: string, requirementId: string): Promise<Record<string, unknown>> {
   return JSON.parse(await readFile(
-    path.join(root, "datasets_build", buildId, "resource_report.json"),
+    path.join(root, "dataset_runs", "run_dynamic", requirementId, "resource_report.json"),
     "utf8",
   )) as Record<string, unknown>;
 }
@@ -573,11 +575,11 @@ describe("production B3 resource/disk lane", () => {
   test("routes production publication B3 through the measured memory lane and records the report", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "dynamic-family-b3-memory-"));
     try {
-      const { publishInput, buildId } = await executedSubmission(root);
+      const { publishInput, requirementId } = await executedSubmission(root);
       const published = await publishDynamicFamily(publishInput);
 
       expect(published.validation.status).toBe("passed");
-      const report = await resourceReport(root, buildId);
+      const report = await resourceReport(root, requirementId);
       expect(report.schemaVersion).toBe("b3-multitable-resource-preflight.v2");
       expect(report.measurementSource).toBe("core_receipted_table_scan.v1");
       expect(report.validatorMode).toBe("memory");
@@ -591,7 +593,7 @@ describe("production B3 resource/disk lane", () => {
   test("selects the explicit disk lane above threshold and cleans the task-owned indexes", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "dynamic-family-b3-disk-"));
     try {
-      const { publishInput, buildId } = await executedSubmission(root);
+      const { publishInput, requirementId } = await executedSubmission(root);
       const published = await publishDynamicFamily({
         ...publishInput,
         b3Validation: {
@@ -606,10 +608,10 @@ describe("production B3 resource/disk lane", () => {
       });
 
       expect(published.validation.status).toBe("passed");
-      const report = await resourceReport(root, buildId);
+      const report = await resourceReport(root, requirementId);
       expect(report.validatorMode).toBe("disk");
       expect(report.failureReason).toBeNull();
-      await expect(access(path.join(root, "builds", buildId, "b3-index"))).rejects.toThrow();
+      await expect(access(path.join(root, "builds", requirementId, "b3-index"))).rejects.toThrow();
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -618,7 +620,7 @@ describe("production B3 resource/disk lane", () => {
   test("fails closed when the measured resource decision rejects above the temp quota", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "dynamic-family-b3-reject-"));
     try {
-      const { publishInput, buildId } = await executedSubmission(root);
+      const { publishInput, requirementId } = await executedSubmission(root);
       await expect(publishDynamicFamily({
         ...publishInput,
         b3Validation: {
@@ -633,10 +635,10 @@ describe("production B3 resource/disk lane", () => {
         },
       })).rejects.toThrow(/not publishable/);
 
-      const report = await resourceReport(root, buildId);
+      const report = await resourceReport(root, requirementId);
       expect(report.validatorMode).toBe("reject");
       expect(report.failureReason).toBe("temp_quota_exceeded");
-      await expect(access(path.join(root, "builds", buildId, "b3-index"))).rejects.toThrow();
+      await expect(access(path.join(root, "builds", requirementId, "b3-index"))).rejects.toThrow();
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -698,11 +700,11 @@ describe("production B3 resource/disk lane", () => {
     for (const testCase of cases) {
       const root = await mkdtemp(path.join(os.tmpdir(), `dynamic-family-b3-cleanup-${testCase.name.replaceAll(" ", "-")}-`));
       try {
-        const { publishInput, buildId } = await executedSubmission(root, testCase.name === "quota fails"
+        const { publishInput, requirementId } = await executedSubmission(root, testCase.name === "quota fails"
           ? `record_id,value\n${"x".repeat(40_000)},1\n`
           : undefined);
         await testCase.run(publishInput);
-        await expect(access(path.join(root, "builds", buildId, "b3-index"))).rejects.toThrow();
+        await expect(access(path.join(root, "builds", requirementId, "b3-index"))).rejects.toThrow();
       } finally {
         vi.restoreAllMocks();
         await rm(root, { recursive: true, force: true });

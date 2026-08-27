@@ -87,7 +87,7 @@ function requireTableResult(
   return requireCoreResult({
     result,
     taskId: input.taskId,
-    buildId: input.buildId,
+    requirementId: input.requirementId,
     operationKind: "integrate",
     outputKind: "integrated_table",
   });
@@ -134,7 +134,7 @@ export function assembleVariantEvidenceCandidate(
   const candidateBody = {
     schema_version: "1.0" as const,
     task_id: input.taskId,
-    build_id: input.buildId,
+    requirement_id: input.requirementId,
     dataset_family: VARIANT_EVIDENCE_FAMILY_ID,
     row_granularity: VARIANT_EVIDENCE_ROW_GRANULARITY,
     tables: [
@@ -158,17 +158,17 @@ export function assembleVariantEvidenceCandidate(
     provenance_refs: resultRefs({
       results: input.provenanceResults ?? [],
       taskId: input.taskId,
-      buildId: input.buildId,
+      requirementId: input.requirementId,
     }),
     confidence_refs: resultRefs({
       results: input.confidenceResults ?? [],
       taskId: input.taskId,
-      buildId: input.buildId,
+      requirementId: input.requirementId,
     }),
     audit_refs: resultRefs({
       results: input.auditResults ?? [],
       taskId: input.taskId,
-      buildId: input.buildId,
+      requirementId: input.requirementId,
     }),
     registered_asset_ids: assets,
   };

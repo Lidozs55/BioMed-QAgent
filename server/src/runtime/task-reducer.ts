@@ -1,7 +1,7 @@
 import type {
   EventEnvelope,
   MessageRecord,
-  PublicationSummary,
+  TaskPublicationSummary,
   RunRecord,
   RunStatus,
   TaskSnapshot,
@@ -33,7 +33,6 @@ function terminalSummary(
   if (event.payload.type === "run_completed") {
     return {
       run_status: status,
-      build_result: event.payload.build_result ?? null,
       error_code: null,
       cancelled_at_stage: null,
       user_message: null,
@@ -42,7 +41,6 @@ function terminalSummary(
   if (event.payload.type === "run_failed") {
     return {
       run_status: status,
-      build_result: null,
       error_code: event.payload.error_code ?? "internal_error",
       cancelled_at_stage: null,
       user_message: event.payload.error,
@@ -51,7 +49,6 @@ function terminalSummary(
   if (event.payload.type === "run_cancelled") {
     return {
       run_status: status,
-      build_result: null,
       error_code: "cancelled",
       cancelled_at_stage: event.payload.cancelled_at_stage ?? null,
       user_message: event.payload.reason ?? null,
@@ -60,7 +57,6 @@ function terminalSummary(
   if (event.payload.type === "run_interrupted") {
     return {
       run_status: status,
-      build_result: null,
       error_code: "internal_error",
       cancelled_at_stage: null,
       user_message: event.payload.reason,
@@ -110,7 +106,7 @@ export function reduceTaskEvents(
 ): TaskSnapshot {
   const runs: RunRecord[] = [];
   const messages: MessageRecord[] = [];
-  const publications: PublicationSummary[] = [];
+  const publications: TaskPublicationSummary[] = [];
   const artifactIds = new Set<string>();
   const assistantByRun = new Map<string, MessageRecord>();
   let currentPublicationId: string | null = null;
@@ -159,7 +155,7 @@ export function reduceTaskEvents(
         existing.content += event.payload.delta;
       }
     } else if (event.payload.type === "publication_created") {
-      const publication: PublicationSummary = {
+      const publication: TaskPublicationSummary = {
         publication_id: event.payload.publication_id,
         manifest_sha256: event.payload.manifest_sha256,
         supersedes_publication_id: event.payload.supersedes_publication_id,
@@ -180,7 +176,6 @@ export function reduceTaskEvents(
 
   const latestRun = runs.at(-1);
   const status = latestRun?.status ?? "queued";
-  const latestBuildStatus = latestRun?.summary?.build_result?.status ?? null;
   const latestEvent = events.at(-1);
   const task: TaskSummary = {
     schema_version: "1.0",
@@ -196,7 +191,6 @@ export function reduceTaskEvents(
     updated_at: latestEvent?.timestamp ?? metadata.created_at,
     latest_sequence: latestEvent?.sequence ?? 0,
     artifact_count: artifactCount,
-    latest_build_status: latestBuildStatus,
   };
   return {
     schema_version: "1.0",

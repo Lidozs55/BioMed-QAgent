@@ -18,7 +18,7 @@ export interface TransformInvocationV1 {
   operation: "execute_transform";
   taskId: string;
   runId: string;
-  buildId: string;
+  requirementId: string;
   invocationId: string;
   attempt: number;
   generation: number;
@@ -53,7 +53,7 @@ const INVOCATION_KEYS = new Set([
   "operation",
   "taskId",
   "runId",
-  "buildId",
+  "requirementId",
   "invocationId",
   "attempt",
   "generation",
@@ -87,7 +87,7 @@ export function parseTransformInvocationV1(value: unknown): TransformInvocationV
     operation: "execute_transform",
     taskId: boundedId(record.taskId, "$.taskId"),
     runId: boundedId(record.runId, "$.runId"),
-    buildId: boundedId(record.buildId, "$.buildId"),
+    requirementId: boundedId(record.requirementId, "$.requirementId"),
     invocationId: boundedId(record.invocationId, "$.invocationId"),
     attempt: boundedNonNegativeInt(record.attempt, "$.attempt"),
     generation: boundedNonNegativeInt(record.generation, "$.generation"),

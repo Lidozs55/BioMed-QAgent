@@ -27,7 +27,7 @@ const STAGED_FAMILY_HOST_ROOTS = [
   TRANSFORM_HOST,
   path.join(SERVER_SRC, "dataset", "transform-admission"),
   path.join(SERVER_SRC, "dataset", "operation-result-admission"),
-  path.join(SERVER_SRC, "dataset", "build-spec-readmission"),
+  path.join(SERVER_SRC, "dataset", "execution-spec-readmission"),
   path.join(SERVER_SRC, "dataset", "family-catalog"),
   path.join(SERVER_SRC, "dataset", "family-spec-admission"),
   path.join(SERVER_SRC, "dataset", "family-spec-topology"),
@@ -38,7 +38,7 @@ const STAGED_FAMILY_HOST_ROOTS = [
   path.join(SERVER_SRC, "dataset", "bioactivity-gate"),
   path.join(SERVER_SRC, "dataset", "shadow-parity"),
 ] as const;
-const UNIQUELY_NAMED_STAGED_MODULE = /(?:^|[\\/])(?:transform-host|transform-admission|operation-result-admission|build-spec-readmission|family-catalog|family-spec-admission|family-spec-topology|transform-slot|publish-verifier|shadow|family-release|bioactivity-gate|shadow-parity)(?:[\\/]|$)/;
+const UNIQUELY_NAMED_STAGED_MODULE = /(?:^|[\\/])(?:transform-host|transform-admission|operation-result-admission|execution-spec-readmission|family-catalog|family-spec-admission|family-spec-topology|transform-slot|publish-verifier|shadow|family-release|bioactivity-gate|shadow-parity)(?:[\\/]|$)/;
 
 /** Remove comments while retaining strings, so policy terms in comments cannot trigger the guard. */
 function withoutComments(source: string): string {
@@ -282,7 +282,7 @@ describe("Transform Host architecture guard", () => {
       "transform-host",
       "transform-admission",
       "operation-result-admission",
-      "build-spec-readmission",
+      "execution-spec-readmission",
       "family-catalog",
       "family-spec-admission",
       "family-spec-topology",

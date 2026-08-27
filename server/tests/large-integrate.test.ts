@@ -49,7 +49,7 @@ describe("large dataset integration", () => {
       }],
       mergeStrategy: "append_by_canonical_row",
       schema: buildGeneExpressionSchema(),
-      buildId: "build_10k",
+      requirementId: "build_10k",
       outputDir: join(root, "out"),
       signal: null,
     });

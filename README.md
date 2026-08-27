@@ -27,10 +27,10 @@ BioMed-QAgent 面向生物医学开放数据，把自然语言需求转化为可
 
 ## 核心边界
 
-- 一个 `DatasetBuild` 只有一个主数据 family 和一种 row granularity；复合需求拆为多个 Build。
+- 一个 dataset requirement 只有一个主数据 family 和一种 row granularity；复合需求拆为多个 requirement。
 - Agent 提交计划和受控规格，不直接制造科研值，也不能决定发布阈值。
 - SourceAsset、内容 hash、兼容性门、Validation Profile、provenance closure 和原子发布由 Core 强制执行。
-- `RunStatus`、`BuildResult`、`ValidationResult`、`ProductAssessment` 与 `DatasetPublication` 是不同状态。
+- `RunStatus`、`OperationResult`、`ValidationResult`、`ProductAssessment` 与 `DatasetPublication` 各有独立职责。
 - 正式产物只由 manifest 声明；workspace 文件、Transform output 或历史 artifact 不能绕过 Core 成为 Publication。
 - 动态 Family Host 仅支持显式 `in_process_unisolated` 路线。它不是 sandbox 或安全边界；`node:vm` 只提供同步 timeout。
 
@@ -127,7 +127,7 @@ data/
 └── output/tasks/<task_id>/
     ├── events.jsonl            # 追加写入的权威任务事实
     ├── snapshot.json           # 可由事件重建
-    └── builds/<build_id>/
+    └── dataset_runs/<run_id>/<requirement_id>/
         └── publish/             # 不可变 Publication
 ```
 
@@ -139,7 +139,7 @@ Agent workspace 与 Core publication 物理分离。API 只暴露经 manifest �
 - `/api/v1/tasks`：创建、读取、续跑和删除终态任务。
 - `/api/v1/tasks/{taskId}/events`：durable 事件重放。
 - `/api/v1/ws`：实时事件；断线后仍以 HTTP replay 补齐。
-- `/api/v1/builds`、`/api/v1/products`、`/api/v1/artifacts`：构建、产品评估和发布产物。
+- `/api/v1/publications`、`/api/v1/products`、`/api/v1/artifacts`：发布、产品评估和产物。
 - `/api/v1/settings`：模型与应用设置，密钥始终掩码返回。
 
 可执行调用示例、HIL 和终态处理见 [`docs/AGENT_API_QUICKSTART.md`](docs/AGENT_API_QUICKSTART.md)。

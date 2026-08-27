@@ -5,13 +5,13 @@ import { DEFAULT_RUNTIME_LIMITS, type RuntimeLimits } from "@biomed/contracts";
 
 import type { BioMedAgentAdapter, BioMedModelConfig } from "../agent/contracts.js";
 import { PiAgentAdapter } from "../agent/pi-adapter.js";
-import { createDatasetBuildTools } from "../agent/tools/dataset-build.js";
+import { createDatasetExecutionTools } from "../agent/tools/dataset-execution.js";
 import { createDatasetRoutePreflightTool } from "../agent/tools/dataset-route-preflight.js";
 import {
-  createDynamicFamilyBuildTool,
-  createPrepareDynamicFamilyBuildTool,
-  type ParsedDynamicFamilyBuildSubmission,
-} from "../agent/tools/dynamic-family-build.js";
+  createDynamicFamilyPublicationTool,
+  createPrepareDynamicFamilyPublicationTool,
+  type ParsedDynamicFamilyPublicationSubmission,
+} from "../agent/tools/dynamic-family-publication.js";
 import { createBusinessToolBundle } from "../agent/tools/business-tools.js";
 import { createDeclarativeDatabaseTools } from "../agent/tools/declarative-db.js";
 import { assertUniqueToolNames } from "../agent/tools/registry.js";
@@ -43,11 +43,11 @@ import {
 } from "../dataset/acquisition/runtime.js";
 import { coreEventToPayload } from "../dataset/service/events.js";
 import { createDatasetCoreService } from "../dataset/service/dataset-core.js";
-import { acquireBuildLock } from "../dataset/service/build-lock.js";
-import { submitDynamicFamilyBuild } from "../dataset/dynamic-family/submission.js";
+import { acquireExecutionLock } from "../dataset/service/execution-lock.js";
+import { submitDynamicFamilyPublication } from "../dataset/dynamic-family/submission.js";
 import {
   dynamicFamilyPreflightSubmissionDigest,
-  prepareDynamicFamilyBuild,
+  prepareDynamicFamilyPublication,
   validateDynamicFamilyPreflightReceipt,
 } from "../dataset/dynamic-family/preflight.js";
 import type { DynamicFamilyAcquisitionPlanningInput } from "../dataset/dynamic-family/preflight.js";
@@ -323,10 +323,10 @@ export interface Phase3DynamicFamilySeams {
     sourceAssetRegistry: SourceAssetRegistry;
     registrar: CacheRegistrar | null;
   }) => Phase3AcquisitionRuntime;
-  readonly submitDynamicFamilyBuild?: typeof submitDynamicFamilyBuild;
+  readonly submitDynamicFamilyPublication?: typeof submitDynamicFamilyPublication;
   readonly publishDynamicFamily?: typeof publishDynamicFamily;
   /** Test-only observation seam for deterministic final-fence races. */
-  readonly assertBuildLockOwned?: (assertOwned: () => Promise<boolean>) => Promise<boolean>;
+  readonly assertExecutionLockOwned?: (assertOwned: () => Promise<boolean>) => Promise<boolean>;
   /** Test-only gate immediately before the publisher's final rename fence. */
   readonly beforeDynamicFamilyFinalFence?: () => Promise<void>;
 }
@@ -383,7 +383,7 @@ export async function createPhase3Runtime(
       const limits = options.resolveRuntimeLimits?.() ?? DEFAULT_RUNTIME_LIMITS;
       let currentRunId = runId;
       let currentPiSessionId = "pi_session_pending";
-      let buildResult: import("@biomed/contracts").BuildResult | null = null;
+      let currentPublicationId: string | null = null;
       const dynamicFamilyPreflight = createDynamicFamilyPreflightCoordinator();
       // Agent-owned directory: data/workspaces/<taskId> (plan §2.1).
       const workspaceRoot = await workspaceManager.ensure(taskId);
@@ -435,8 +435,8 @@ export async function createPhase3Runtime(
         taskRoot: taskRoot,
         operationTimeoutMs: options.operationTimeoutMs ?? limits.dataset_operation_timeout_seconds * 1000,
         hilGate: approvalGate,
-        eventSink: async (event, buildId) => {
-          await recordRunEvent(coreEventToPayload(event, buildId));
+        eventSink: async (event, requirementId) => {
+          await recordRunEvent(coreEventToPayload(event, requirementId));
         },
       });
       const client = new PublicHttpClient({
@@ -527,13 +527,13 @@ export async function createPhase3Runtime(
           });
       const workspaceTools = createWorkspaceTools(workspace);
       const planCoreAcquisition = async (
-        submission: ParsedDynamicFamilyBuildSubmission,
+        submission: ParsedDynamicFamilyPublicationSubmission,
         { binding, request }: DynamicFamilyAcquisitionPlanningInput,
       ) => acquisitionRuntime.plan({
         schema_version: "1.0",
-        request_id: `preflight_${submission.build_proposal.build_id}_${binding.binding_id}`,
+        request_id: `preflight_${submission.execution_proposal.requirement_id}_${binding.binding_id}`,
         task_id: taskId,
-        build_id: submission.build_proposal.build_id,
+        requirement_id: submission.execution_proposal.requirement_id,
         binding_id: binding.binding_id,
         mode: "builtin",
         provider_id: request.provider_id,
@@ -541,12 +541,12 @@ export async function createPhase3Runtime(
         recipe_version: null,
         parameters: { ...request.parameters },
       });
-      const dynamicFamilyPrepareTool = createPrepareDynamicFamilyBuildTool({
+      const dynamicFamilyPrepareTool = createPrepareDynamicFamilyPublicationTool({
         prepare: async (submission) => {
-          const preparation = dynamicFamilyPreflight.beginPrepare(submission.build_proposal.build_id);
-          const receipt = await prepareDynamicFamilyBuild({
+          const preparation = dynamicFamilyPreflight.beginPrepare(submission.execution_proposal.requirement_id);
+          const receipt = await prepareDynamicFamilyPublication({
             taskId,
-            buildId: submission.build_proposal.build_id,
+            requirementId: submission.execution_proposal.requirement_id,
             generation: preparation.generation,
             submission,
             runtimeLimits: limits,
@@ -560,29 +560,29 @@ export async function createPhase3Runtime(
           return receipt;
         },
       });
-      const dynamicFamilyTool = createDynamicFamilyBuildTool({
+      const dynamicFamilyTool = createDynamicFamilyPublicationTool({
         submit: async (submission, signal, _context, preflightReceipt) => {
           if (preflightReceipt === undefined) {
-            throw new Error("submit_dynamic_family_build requires a preflight receipt");
+            throw new Error("submit_dynamic_family_publication requires a preflight receipt");
           }
           await validateDynamicFamilyPreflightReceipt({
             receipt: preflightReceipt,
             submission,
             taskId,
-            buildId: submission.build_proposal.build_id,
+            requirementId: submission.execution_proposal.requirement_id,
             generation: preflightReceipt.generation,
             runtimeLimits: limits,
             planAcquisition: (planning) => planCoreAcquisition(submission, planning),
           });
-          const buildLock = await acquireBuildLock(
-            { lockRoot: path.join(taskRoot, "state", "build-locks") },
+          const executionLock = await acquireExecutionLock(
+            { lockRoot: path.join(taskRoot, "state", "execution-locks") },
             taskId,
-            submission.build_proposal.build_id,
+            submission.execution_proposal.requirement_id,
             `dynamic-family:${currentRunId}:${randomUUID()}`,
           );
-          const assertBuildLockOwned = (): Promise<boolean> => {
-            const seam = options.dynamicFamilySeams?.assertBuildLockOwned;
-            return seam === undefined ? buildLock.assertOwned() : seam(() => buildLock.assertOwned());
+          const assertExecutionLockOwned = (): Promise<boolean> => {
+            const seam = options.dynamicFamilySeams?.assertExecutionLockOwned;
+            return seam === undefined ? executionLock.assertOwned() : seam(() => executionLock.assertOwned());
           };
           let reservation: ReturnType<typeof dynamicFamilyPreflight.reserve> | null = null;
           try {
@@ -603,7 +603,7 @@ export async function createPhase3Runtime(
               schema_version: "1.0",
               request_id: `request_${randomUUID()}`,
               task_id: taskId,
-              build_id: submission.build_proposal.build_id,
+              requirement_id: submission.execution_proposal.requirement_id,
               binding_id: bindingId,
               mode: "builtin",
               provider_id: request.provider_id,
@@ -633,7 +633,7 @@ export async function createPhase3Runtime(
             registered_sources: Object.freeze(registeredSources),
             acquisition_requests: Object.freeze({}),
           });
-          const result = await (options.dynamicFamilySeams?.submitDynamicFamilyBuild ?? submitDynamicFamilyBuild)({
+          const result = await (options.dynamicFamilySeams?.submitDynamicFamilyPublication ?? submitDynamicFamilyPublication)({
 
             taskId,
             runId: currentRunId,
@@ -653,8 +653,8 @@ export async function createPhase3Runtime(
             sourceAcquisitionRequestDigests: Object.freeze(acquisitionRequestDigests),
             signal,
           });
-          if (!(await assertBuildLockOwned())) {
-            throw new Error("dynamic family build lock fence was lost");
+          if (!(await assertExecutionLockOwned())) {
+            throw new Error("dynamic family execution lock fence was lost");
           }
           if (!dynamicFamilyPreflight.isCurrent(reservation)) {
             throw new Error("dynamic family preflight generation is stale");
@@ -663,14 +663,15 @@ export async function createPhase3Runtime(
             taskId,
             taskRoot,
             workspaceRoot,
-            buildId: submission.build_proposal.build_id,
+            runId: currentRunId,
+            requirementId: submission.execution_proposal.requirement_id,
             execution: result,
             validationProfileRef: submission.family_spec.validation_policy_ref,
             hilGate: approvalGate,
             signal,
             isGenerationCurrent: async () =>
               reservation !== null
-              && await assertBuildLockOwned()
+              && await assertExecutionLockOwned()
               && dynamicFamilyPreflight.isCurrent(reservation),
             beforeFinalFence: options.dynamicFamilySeams?.beforeDynamicFamilyFinalFence,
           });
@@ -686,6 +687,7 @@ export async function createPhase3Runtime(
             supersedes_publication_id: product.publication.publication.supersedes_publication_id,
             published_at: product.publication.publication.published_at,
           });
+          currentPublicationId = product.publication.publication.publication_id;
           for (const artifact of product.manifest.artifacts) {
             await recordRunEvent({
               type: "artifact_produced",
@@ -697,27 +699,14 @@ export async function createPhase3Runtime(
                 media_type: artifact.media_type,
                 size_bytes: artifact.size_bytes,
                 sha256: artifact.sha256,
-                generated_by_step_id: `dynamic:${submission.build_proposal.build_id}`,
+                generated_by_step_id: `dynamic:${submission.execution_proposal.requirement_id}`,
               },
             });
           }
-          buildResult = {
-            schema_version: "1.0",
-            build_id: submission.build_proposal.build_id,
-            status: "succeeded",
-            valid_row_count: product.manifest.row_count,
-            successful_sources: [...product.candidate.registered_asset_ids],
-            rejected_sources: [],
-            available_artifact_roles: [...new Set(product.manifest.artifacts.map((artifact) => artifact.role))],
-            publication_id: product.publication.publication.publication_id,
-            reason_codes: [],
-            user_summary: "Dynamic family product validated and published.",
-            recommended_next_action: "Download immutable publication artifacts through the Artifact API.",
-          };
           return {
             ok: true,
             status: "published",
-            build_id: submission.build_proposal.build_id,
+            requirement_id: submission.execution_proposal.requirement_id,
             publication_id: product.publication.publication.publication_id,
             manifest_id: product.manifest.manifest_id,
             manifest_sha256: publicationManifestSha,
@@ -731,26 +720,22 @@ export async function createPhase3Runtime(
           };
           } finally {
             if (reservation !== null) dynamicFamilyPreflight.complete(reservation);
-            await buildLock.release();
+            await executionLock.release();
           }
         },
       });
-      const datasetTools = createDatasetBuildTools({
+      const datasetTools = createDatasetExecutionTools({
         client: service,
         taskId,
         taskRoot,
         runId: () => currentRunId,
         piSessionId: () => currentPiSessionId,
         onDiagnostic: (diagnostic) => {
-          console.info("tool.dataset_build", diagnostic);
-        },
-        onBuildResult: (result) => {
-          buildResult = result;
+          console.info("tool.dataset_execution", diagnostic);
         },
         onPublication: async (data) => {
           const publication = data.publication;
-          if (publication === undefined || publication === null) return;
-          const manifestSha256 = publication.manifest_sha256 ?? data.manifest?.sha256;
+          const manifestSha256 = publication.manifest_sha256 ?? data.manifest.sha256;
           if (manifestSha256 === undefined) {
             throw new Error("published dataset response is missing a manifest receipt");
           }
@@ -762,6 +747,7 @@ export async function createPhase3Runtime(
             supersedes_publication_id: publication.supersedes_publication_id,
             published_at: publication.published_at,
           });
+          currentPublicationId = publication.publication_id;
           for (const artifact of data.artifacts) {
             await recordRunEvent({
               type: "artifact_produced",
@@ -810,7 +796,7 @@ export async function createPhase3Runtime(
         ],
         permissionBroker,
         setRunId: (nextRunId: string) => {
-          if (currentRunId !== nextRunId) buildResult = null;
+          if (currentRunId !== nextRunId) currentPublicationId = null;
           currentRunId = nextRunId;
           workspace.setRunId(nextRunId);
           permissionBroker.bindRun(nextRunId);
@@ -818,12 +804,7 @@ export async function createPhase3Runtime(
         setPiSessionId: (piSessionId: string) => {
           currentPiSessionId = piSessionId;
         },
-        consumeBuildResult: () => {
-          const result = buildResult;
-          buildResult = null;
-          return result;
-        },
-        peekBuildResult: () => buildResult,
+        getCurrentPublicationId: () => currentPublicationId,
         onRunEnd: (endedRunId: string) => {
           // Round-4 audit: run-bound temporary grants die with the run.
           grants.clearRun(endedRunId);

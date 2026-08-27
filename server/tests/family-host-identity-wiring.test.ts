@@ -10,7 +10,7 @@ import type {
 } from "@biomed/contracts";
 
 import { getAdapter } from "../src/dataset/adapters/adapters.js";
-import { parseDatasetBuildSpec, type SourceAsset } from "../src/dataset/contracts/index.js";
+import { parseDatasetExecutionSpec, type SourceAsset } from "../src/dataset/contracts/index.js";
 import { delimitedRowsWithLines } from "../src/dataset/adapters/text.js";
 import { deriveProductionExpressionIdentity } from "../src/dataset/identity/production.js";
 import { TypeScriptDatasetCore } from "../src/dataset/service/ts-core.js";
@@ -45,10 +45,10 @@ function assetFor(sourcePath: string): SourceAsset {
   };
 }
 
-function v2Spec(accession: string | null = null): ReturnType<typeof parseDatasetBuildSpec> {
-  return parseDatasetBuildSpec({
+function v2Spec(accession: string | null = null): ReturnType<typeof parseDatasetExecutionSpec> {
+  return parseDatasetExecutionSpec({
     schema_version: "1.0",
-    build_id: "build_identity_derivation",
+    requirement_id: "requirement_identity_derivation",
     objective: "identity derivation",
     dataset_family: "gene_expression",
     row_granularity: "gene_sample_measurement",
@@ -112,7 +112,7 @@ describe("authoritative expression identity production wiring", () => {
     roots.push(outputDir);
 
     const batch = await getAdapter("geo.expression.v1").parse(sourceAsset, sourcePath, {
-      buildId: "build_must_not_be_identity",
+      requirementId: "build_must_not_be_identity",
       bindingId: "binding_geo",
       schemaRef,
       outputDir,
@@ -153,7 +153,7 @@ describe("authoritative expression identity production wiring", () => {
     roots.push(outputDir);
 
     const batch = await getAdapter("gdc.expression.v1").parse(sourceAsset, sourcePath, {
-      buildId: "build_must_not_be_identity",
+      requirementId: "build_must_not_be_identity",
       bindingId: "binding_gdc",
       schemaRef: "gene_expression.long.v2",
       outputDir,
@@ -184,7 +184,7 @@ describe("authoritative expression identity production wiring", () => {
     roots.push(outputDir);
 
     await expect(getAdapter("gdc.expression.v1").parse(sourceAsset, sourcePath, {
-      buildId: "build_must_not_be_identity",
+      requirementId: "build_must_not_be_identity",
       bindingId: "binding_gdc",
       schemaRef: "gene_expression.long.v2",
       outputDir,
@@ -247,8 +247,8 @@ describe("authoritative expression identity production wiring", () => {
     const derived = deriveProductionExpressionIdentity(baseInput);
     expect(derived?.context.datasetId).toMatch(/^ds_[0-9a-f]{64}$/);
     expect(derived?.context.datasetRevisionId).toMatch(/^dsrev_[0-9a-f]{64}$/);
-    expect(derived?.context.datasetId).not.toBe(baseInput.spec.build_id);
-    expect(derived?.context.datasetRevisionId).not.toBe(baseInput.spec.build_id);
+    expect(derived?.context.datasetId).not.toBe(baseInput.spec.requirement_id);
+    expect(derived?.context.datasetRevisionId).not.toBe(baseInput.spec.requirement_id);
   });
 
   test("Core passes the authoritative V2 identity into a GDC publication path", async () => {
@@ -279,9 +279,9 @@ describe("authoritative expression identity production wiring", () => {
       provider_revision_token: null,
     });
     const core = new TypeScriptDatasetCore({ taskId, taskRoot });
-    const record = await core.executeDatasetBuild({
+    const record = await core.executeDatasetExecution({
       ...v2Spec(),
-      build_id: "build_identity_core",
+      requirement_id: "requirement_identity_core",
     }, {
       runId: "run_identity_core",
       sourceAssets: { binding_gdc: sourceAsset },
@@ -291,7 +291,7 @@ describe("authoritative expression identity production wiring", () => {
     expect(record.status, `record.error=${record.error ?? "null"}`).toBe("completed");
     expect(record.manifest?.schema_ref).toBe("gene_expression.long.v2");
     const primary = readFileSync(
-      path.join(taskRoot, "datasets_build", "build_identity_core", "merged", "primary.csv"),
+      path.join(taskRoot, "dataset_runs", "run_identity_core", "requirement_identity_core", "merged", "primary.csv"),
       "utf8",
     );
     const [headerLine, firstRow] = primary.split(/\r?\n/);
@@ -302,7 +302,7 @@ describe("authoritative expression identity production wiring", () => {
     expect(header).toContain("dataset_revision_id");
     expect(datasetId).toMatch(/^ds_[0-9a-f]{64}$/);
     expect(datasetRevisionId).toMatch(/^dsrev_[0-9a-f]{64}$/);
-    expect(datasetId).not.toBe("build_identity_core");
+    expect(datasetId).not.toBe("requirement_identity_core");
     expect(primary).toContain(datasetRevisionId ?? "missing-revision");
   });
 
@@ -325,7 +325,7 @@ describe("authoritative expression identity production wiring", () => {
       successful_attempt_id: receipt.receipt_id,
     };
 
-    await expect(new TypeScriptDatasetCore({ taskId, taskRoot }).executeDatasetBuild(v2Spec(), {
+    await expect(new TypeScriptDatasetCore({ taskId, taskRoot }).executeDatasetExecution(v2Spec(), {
       runId: "run_identity_spoof",
       sourceAssets: { binding_gdc: asset },
       providerRevisionEvidence: [providerEvidence(receipt)],

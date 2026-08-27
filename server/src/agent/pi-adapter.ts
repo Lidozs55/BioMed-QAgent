@@ -648,9 +648,9 @@ async function createRealUpstreamSession(
       null,
     ));
   }
-  const runProgressTracker = config.getBuildResult === undefined
+  const runProgressTracker = config.getCurrentPublicationId === undefined
     ? undefined
-    : new RunProgressContextTracker(config.getBuildResult);
+    : new RunProgressContextTracker(config.getCurrentPublicationId);
   const resourceLoader = new DefaultResourceLoader({
     cwd: config.cwd,
     agentDir: path.join(config.cwd, ".pi"),

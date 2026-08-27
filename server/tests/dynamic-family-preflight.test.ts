@@ -12,16 +12,16 @@ import {
 import { canonicalDigest } from "../src/dataset/adapters/identity.js";
 import type { CoreAcquisitionPlan } from "../src/dataset/acquisition/runtime.js";
 import {
-  prepareDynamicFamilyBuild,
+  prepareDynamicFamilyPublication,
   validateDynamicFamilyPreflightReceipt,
 } from "../src/dataset/dynamic-family/preflight.js";
-import { submitDynamicFamilyBuild } from "../src/dataset/dynamic-family/submission.js";
+import { submitDynamicFamilyPublication } from "../src/dataset/dynamic-family/submission.js";
 import type { SourceAssetRegistry } from "../src/runtime/source-assets/registry.js";
-import { parseDynamicFamilyBuildSubmission } from "../src/agent/tools/dynamic-family-build.js";
+import { parseDynamicFamilyPublicationSubmission } from "../src/agent/tools/dynamic-family-publication.js";
 import {
-  createDynamicFamilyBuildTool,
-  createPrepareDynamicFamilyBuildTool,
-} from "../src/agent/tools/dynamic-family-build.js";
+  createDynamicFamilyPublicationTool,
+  createPrepareDynamicFamilyPublicationTool,
+} from "../src/agent/tools/dynamic-family-publication.js";
 import { createDynamicFamilyPreflightCoordinator } from "../src/runtime/dynamic-family-preflight-coordinator.js";
 
 const DIGEST = "b".repeat(64);
@@ -80,8 +80,8 @@ async function rawSubmission(): Promise<Record<string, unknown>> {
     },
     registered_sources: { binding_1: `asset_${DIGEST}` },
     acquisition_requests: {},
-    build_proposal: {
-      schema_version: "2.0", spec_kind: "proposal", build_id: "build_preflight",
+    execution_proposal: {
+      schema_version: "2.0", spec_kind: "proposal", requirement_id: "build_preflight",
       family_spec_ref: { scope: "task", id: family.family_spec_id, version: family.semantic_version, digest: family.canonical_digest },
       projection_ref: projection.projection_id,
       transform_refs: [{ scope: "task", id: "transform_preflight", version: "1.0.0", digest: DIGEST }],
@@ -103,11 +103,11 @@ describe("dynamic family prepare/submit preflight", () => {
   it("exposes a fixed prepare tool and makes production submit receipt-only", async () => {
     let called = false;
     const raw = await rawSubmission();
-    const parsed = await parseDynamicFamilyBuildSubmission(raw);
-    const receipt = await prepareDynamicFamilyBuild({
-      taskId: "task_preflight", buildId: "build_preflight", generation: 0, submission: parsed,
+    const parsed = await parseDynamicFamilyPublicationSubmission(raw);
+    const receipt = await prepareDynamicFamilyPublication({
+      taskId: "task_preflight", requirementId: "build_preflight", generation: 0, submission: parsed,
     });
-    const prepare = createPrepareDynamicFamilyBuildTool({
+    const prepare = createPrepareDynamicFamilyPublicationTool({
       prepare: async () => receipt,
     });
     const prepared = await prepare.execute(raw);
@@ -117,7 +117,7 @@ describe("dynamic family prepare/submit preflight", () => {
       status: "prepared",
       preflight_receipt: { receipt_digest: receipt.receipt_digest },
     });
-    const submit = createDynamicFamilyBuildTool({
+    const submit = createDynamicFamilyPublicationTool({
       submit: async (_submission, _signal, _context, submittedReceipt) => {
         called = submittedReceipt?.receipt_digest === receipt.receipt_digest;
         return { ok: true };
@@ -126,7 +126,7 @@ describe("dynamic family prepare/submit preflight", () => {
     const missing = await submit.execute(raw);
     expect(missing.isError).toBe(true);
     expect(called).toBe(false);
-    (raw.build_proposal as { transform_refs: Array<{ digest: string }> }).transform_refs[0]!.digest = receipt.host_descriptor_digest;
+    (raw.execution_proposal as { transform_refs: Array<{ digest: string }> }).transform_refs[0]!.digest = receipt.host_descriptor_digest;
     raw.preflight_receipt = receipt;
     const accepted = await submit.execute(raw);
     expect(accepted.isError).not.toBe(true);
@@ -135,10 +135,10 @@ describe("dynamic family prepare/submit preflight", () => {
 
   it("prepares facts without acquisition or prohibited result objects", async () => {
     let planned = 0;
-    const submission = await parseDynamicFamilyBuildSubmission(await rawSubmission());
-    const receipt = await prepareDynamicFamilyBuild({
+    const submission = await parseDynamicFamilyPublicationSubmission(await rawSubmission());
+    const receipt = await prepareDynamicFamilyPublication({
       taskId: "task_preflight",
-      buildId: "build_preflight",
+      requirementId: "build_preflight",
       generation: 0,
       submission,
       planAcquisition: async () => {
@@ -161,11 +161,11 @@ describe("dynamic family prepare/submit preflight", () => {
   it("composition prepare tool exposes only the receipt and no publication side effects", async () => {
     let acquisitionCalls = 0;
     const raw = await rawSubmission();
-    const parsed = await parseDynamicFamilyBuildSubmission(raw);
-    const prepare = createPrepareDynamicFamilyBuildTool({
-      prepare: async (submission) => prepareDynamicFamilyBuild({
+    const parsed = await parseDynamicFamilyPublicationSubmission(raw);
+    const prepare = createPrepareDynamicFamilyPublicationTool({
+      prepare: async (submission) => prepareDynamicFamilyPublication({
         taskId: "task_preflight",
-        buildId: "build_preflight",
+        requirementId: "build_preflight",
         generation: 0,
         submission,
         planAcquisition: async () => {
@@ -184,7 +184,7 @@ describe("dynamic family prepare/submit preflight", () => {
     expect(acquisitionCalls).toBe(0);
     expect(result.content).toContain("preflight_receipt");
     expect(result.content).not.toMatch(/OperationResult|ProductAssessment|DatasetPublication|artifact/i);
-    expect(parsed.build_proposal.build_id).toBe("build_preflight");
+    expect(parsed.execution_proposal.requirement_id).toBe("build_preflight");
   });
 
   it("plans fixed Core acquisition without invoking acquisition", async () => {
@@ -196,10 +196,10 @@ describe("dynamic family prepare/submit preflight", () => {
         parameters: { source: "pubchem", accession: "2244", entities: { pubchem_cids: ["2244"] } },
       },
     };
-    const submission = await parseDynamicFamilyBuildSubmission(raw);
+    const submission = await parseDynamicFamilyPublicationSubmission(raw);
     let planned = 0;
-    const receipt = await prepareDynamicFamilyBuild({
-      taskId: "task_preflight", buildId: "build_preflight", generation: 0, submission,
+    const receipt = await prepareDynamicFamilyPublication({
+      taskId: "task_preflight", requirementId: "build_preflight", generation: 0, submission,
       planAcquisition: async () => {
         planned += 1;
         return {
@@ -225,20 +225,20 @@ describe("dynamic family prepare/submit preflight", () => {
         parameters: { source: "pubchem", accession: "2244", entities: { pubchem_cids: ["2244"] } },
       },
     };
-    const submission = await parseDynamicFamilyBuildSubmission(raw);
-    await expect(prepareDynamicFamilyBuild({
-      taskId: "task_preflight", buildId: "build_preflight", generation: 0, submission,
+    const submission = await parseDynamicFamilyPublicationSubmission(raw);
+    await expect(prepareDynamicFamilyPublication({
+      taskId: "task_preflight", requirementId: "build_preflight", generation: 0, submission,
     })).rejects.toThrow(/Core acquisition plan/);
-    await expect(prepareDynamicFamilyBuild({
-      taskId: "task_preflight", buildId: "build_preflight", generation: 0, submission,
+    await expect(prepareDynamicFamilyPublication({
+      taskId: "task_preflight", requirementId: "build_preflight", generation: 0, submission,
       planAcquisition: async () => undefined as unknown as CoreAcquisitionPlan,
     })).rejects.toThrow(/Core acquisition plan/);
-    await expect(prepareDynamicFamilyBuild({
-      taskId: "task_preflight", buildId: "build_preflight", generation: 0, submission,
+    await expect(prepareDynamicFamilyPublication({
+      taskId: "task_preflight", requirementId: "build_preflight", generation: 0, submission,
       planAcquisition: async () => ({ requestIdentityDigest: "not-a-digest" }) as unknown as CoreAcquisitionPlan,
     })).rejects.toThrow(/Core acquisition plan/);
-    await expect(prepareDynamicFamilyBuild({
-      taskId: "task_preflight", buildId: "build_preflight", generation: 0, submission,
+    await expect(prepareDynamicFamilyPublication({
+      taskId: "task_preflight", requirementId: "build_preflight", generation: 0, submission,
       planAcquisition: async () => ({
         requestIdentityDigest: "a".repeat(64),
         providerId: "pubchem.files.v1",
@@ -257,7 +257,7 @@ describe("dynamic family prepare/submit preflight", () => {
         parameters: { source: "pubchem", accession: "2244", entities: { pubchem_cids: ["2244"] } },
       },
     };
-    const preparedSubmission = await parseDynamicFamilyBuildSubmission(raw);
+    const preparedSubmission = await parseDynamicFamilyPublicationSubmission(raw);
     const requestIdentityDigest = "d".repeat(64);
     const planner = vi.fn(async () => ({
       requestIdentityDigest,
@@ -265,18 +265,18 @@ describe("dynamic family prepare/submit preflight", () => {
       implementationDigest: "b".repeat(64),
       recipe: null,
     }));
-    const receipt = await prepareDynamicFamilyBuild({
-      taskId: "task_preflight", buildId: "build_preflight", generation: 0,
+    const receipt = await prepareDynamicFamilyPublication({
+      taskId: "task_preflight", requirementId: "build_preflight", generation: 0,
       submission: preparedSubmission, planAcquisition: planner,
     });
     expect(receipt.acquisition_plan[0]?.request_digest).toBe(requestIdentityDigest);
-    (raw.build_proposal as { transform_refs: Array<{ digest: string }> }).transform_refs[0]!.digest = receipt.host_descriptor_digest;
-    const submittedSubmission = await parseDynamicFamilyBuildSubmission(raw);
+    (raw.execution_proposal as { transform_refs: Array<{ digest: string }> }).transform_refs[0]!.digest = receipt.host_descriptor_digest;
+    const submittedSubmission = await parseDynamicFamilyPublicationSubmission(raw);
     await expect(validateDynamicFamilyPreflightReceipt({
       receipt,
       submission: submittedSubmission,
       taskId: "task_preflight",
-      buildId: "build_preflight",
+      requirementId: "build_preflight",
       generation: 0,
       planAcquisition: planner,
     })).resolves.toEqual(receipt);
@@ -290,21 +290,21 @@ describe("dynamic family prepare/submit preflight", () => {
       receipt,
       submission: submittedSubmission,
       taskId: "task_preflight",
-      buildId: "build_preflight",
+      requirementId: "build_preflight",
       generation: 0,
       planAcquisition: planner,
     })).rejects.toThrow(/acquisition plan/);
   });
 
   it("rejects stale, cross-task, cross-build, tampered, and digest-drifted receipts", async () => {
-    const submission = await parseDynamicFamilyBuildSubmission(await rawSubmission());
-    const receipt = await prepareDynamicFamilyBuild({
-      taskId: "task_preflight", buildId: "build_preflight", generation: 3, submission,
+    const submission = await parseDynamicFamilyPublicationSubmission(await rawSubmission());
+    const receipt = await prepareDynamicFamilyPublication({
+      taskId: "task_preflight", requirementId: "build_preflight", generation: 3, submission,
     });
     const cases = [
-      { taskId: "task_preflight", buildId: "build_preflight", generation: 4, label: "stale generation" },
-      { taskId: "task_other", buildId: "build_preflight", generation: 3, label: "cross-task" },
-      { taskId: "task_preflight", buildId: "build_other", generation: 3, label: "cross-build" },
+      { taskId: "task_preflight", requirementId: "build_preflight", generation: 4, label: "stale generation" },
+      { taskId: "task_other", requirementId: "build_preflight", generation: 3, label: "cross-task" },
+      { taskId: "task_preflight", requirementId: "build_other", generation: 3, label: "cross-build" },
     ];
     for (const item of cases) {
       await expect(validateDynamicFamilyPreflightReceipt({
@@ -313,24 +313,24 @@ describe("dynamic family prepare/submit preflight", () => {
     }
     await expect(validateDynamicFamilyPreflightReceipt({
       receipt: { ...receipt, receipt_digest: "c".repeat(64) },
-      submission, taskId: "task_preflight", buildId: "build_preflight", generation: 3,
+      submission, taskId: "task_preflight", requirementId: "build_preflight", generation: 3,
     })).rejects.toThrow(/digest/);
     const changed = await rawSubmission();
     changed.transform_source = "export const transform = { run() { return { outputs: [{ nope: true }] }; } };";
-    const changedSubmission = await parseDynamicFamilyBuildSubmission(changed);
+    const changedSubmission = await parseDynamicFamilyPublicationSubmission(changed);
     await expect(validateDynamicFamilyPreflightReceipt({
-      receipt, submission: changedSubmission, taskId: "task_preflight", buildId: "build_preflight", generation: 3,
+      receipt, submission: changedSubmission, taskId: "task_preflight", requirementId: "build_preflight", generation: 3,
     })).rejects.toThrow(/descriptor|submission|digest/);
   });
 
   it("validates the receipt before resolving any registered bytes", async () => {
-    const submission = await parseDynamicFamilyBuildSubmission(await rawSubmission());
-    const receipt = await prepareDynamicFamilyBuild({
-      taskId: "task_preflight", buildId: "build_preflight", generation: 0, submission,
+    const submission = await parseDynamicFamilyPublicationSubmission(await rawSubmission());
+    const receipt = await prepareDynamicFamilyPublication({
+      taskId: "task_preflight", requirementId: "build_preflight", generation: 0, submission,
     });
     const resolveCoreAcquired = vi.fn();
     const stale = { ...receipt, generation: 1 };
-    await expect(submitDynamicFamilyBuild({
+    await expect(submitDynamicFamilyPublication({
       taskId: "task_preflight",
       runId: "run_preflight",
       submission,
@@ -345,9 +345,9 @@ describe("dynamic family prepare/submit preflight", () => {
   });
 
   it("requires a validated receipt before the public submit executor can resolve bytes", async () => {
-    const submission = await parseDynamicFamilyBuildSubmission(await rawSubmission());
+    const submission = await parseDynamicFamilyPublicationSubmission(await rawSubmission());
     const resolveCoreAcquired = vi.fn();
-    const submit = submitDynamicFamilyBuild as unknown as (input: Record<string, unknown>) => Promise<unknown>;
+    const submit = submitDynamicFamilyPublication as unknown as (input: Record<string, unknown>) => Promise<unknown>;
     await expect(submit({
       taskId: "task_preflight",
       runId: "run_preflight",
@@ -363,12 +363,12 @@ describe("dynamic family prepare/submit preflight", () => {
 describe("dynamic family preflight composition fencing", () => {
   it("uses per-build generations, supersedes active receipts, and cleans consumed entries", async () => {
     const coordinator = createDynamicFamilyPreflightCoordinator();
-    const submission = await parseDynamicFamilyBuildSubmission(await rawSubmission());
+    const submission = await parseDynamicFamilyPublicationSubmission(await rawSubmission());
     const submissionDigest = "1".repeat(64);
 
     const firstPreparation = coordinator.beginPrepare("build_preflight");
-    const firstReceipt = await prepareDynamicFamilyBuild({
-      taskId: "task_preflight", buildId: "build_preflight", generation: firstPreparation.generation, submission,
+    const firstReceipt = await prepareDynamicFamilyPublication({
+      taskId: "task_preflight", requirementId: "build_preflight", generation: firstPreparation.generation, submission,
     });
     coordinator.commitPrepare(firstPreparation, firstReceipt, submissionDigest);
     const otherBuildPreparation = coordinator.beginPrepare("build_other");
@@ -376,8 +376,8 @@ describe("dynamic family preflight composition fencing", () => {
 
     const secondPreparation = coordinator.beginPrepare("build_preflight");
     expect(secondPreparation.generation).toBe(firstPreparation.generation + 1);
-    const secondReceipt = await prepareDynamicFamilyBuild({
-      taskId: "task_preflight", buildId: "build_preflight", generation: secondPreparation.generation, submission,
+    const secondReceipt = await prepareDynamicFamilyPublication({
+      taskId: "task_preflight", requirementId: "build_preflight", generation: secondPreparation.generation, submission,
     });
     coordinator.commitPrepare(secondPreparation, secondReceipt, submissionDigest);
 
@@ -393,11 +393,11 @@ describe("dynamic family preflight composition fencing", () => {
 
   it("atomically consumes duplicate submits and fences transform side effects after supersession", async () => {
     const coordinator = createDynamicFamilyPreflightCoordinator();
-    const submission = await parseDynamicFamilyBuildSubmission(await rawSubmission());
+    const submission = await parseDynamicFamilyPublicationSubmission(await rawSubmission());
     const submissionDigest = "2".repeat(64);
     const preparation = coordinator.beginPrepare("build_preflight");
-    const receipt = await prepareDynamicFamilyBuild({
-      taskId: "task_preflight", buildId: "build_preflight", generation: preparation.generation, submission,
+    const receipt = await prepareDynamicFamilyPublication({
+      taskId: "task_preflight", requirementId: "build_preflight", generation: preparation.generation, submission,
     });
     coordinator.commitPrepare(preparation, receipt, submissionDigest);
     let acquisitions = 0;
@@ -422,8 +422,8 @@ describe("dynamic family preflight composition fencing", () => {
     expect(transforms).toBe(1);
 
     const nextPreparation = coordinator.beginPrepare("build_preflight");
-    const nextReceipt = await prepareDynamicFamilyBuild({
-      taskId: "task_preflight", buildId: "build_preflight", generation: nextPreparation.generation, submission,
+    const nextReceipt = await prepareDynamicFamilyPublication({
+      taskId: "task_preflight", requirementId: "build_preflight", generation: nextPreparation.generation, submission,
     });
     coordinator.commitPrepare(nextPreparation, nextReceipt, submissionDigest);
     const staleReservation = coordinator.reserve(nextReceipt, submissionDigest);

@@ -56,7 +56,8 @@ async function fixture(): Promise<{
     schema_version: "1.0",
     result_manifest_id: "result_1",
     task_id: "task_1",
-    build_id: "build_1",
+    run_id: "run_1",
+    requirement_id: "build_1",
     operation_id: "publish",
     operation_kind: "publish",
     operation_attempt_id: "attempt_1",
@@ -71,13 +72,12 @@ async function fixture(): Promise<{
     output_files: [{ relative_path: "dataset.csv", size_bytes: Buffer.byteLength(body), sha256: fileDigest }],
     dependency_closure: dependencyClosure,
     commit: { state: "committed", commit_id: "commit_1", committed_at: "2026-08-22T00:00:00Z" },
-    migration: { mode: "native", legacy_checkpoint_path: null, migrated_at: null },
   };
   const assets = [{ asset_id: "asset_1", size_bytes: 4, sha256: "b".repeat(64) }];
   const unsigned = {
     schema_version: "1.0" as const,
     task_id: "task_1",
-    build_id: "build_1",
+    requirement_id: "build_1",
     run_id: "run_1",
     attempt: 1,
     generation: 3,
@@ -100,7 +100,7 @@ async function fixture(): Promise<{
   return {
     request: {
       task_id: "task_1",
-      build_id: "build_1",
+      requirement_id: "build_1",
       run_id: "run_1",
       attempt: 1,
       publication_id: "publication_1",

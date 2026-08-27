@@ -31,7 +31,7 @@ import type {
 import { assertValueScale, parseDataBatch, parseFileAsset } from "../contracts/index.js";
 import { CHECKPOINT_STRIDE, checkpoint, throwIfAborted } from "../cooperative.js";
 import { BufferedCsvWriter } from "../adapters/base.js";
-import { BuildError } from "../adapters/errors.js";
+import { ExecutionError } from "../adapters/errors.js";
 import { assetIdFromSha256, makeRecordId } from "../adapters/identity.js";
 import { sha256FileStream } from "../adapters/hashing.js";
 import { csvLine, delimitedRowsFromFileAsync } from "../adapters/text.js";
@@ -265,11 +265,11 @@ export async function canonicalize(
     unitCorrection,
   } = options;
   if (batch.file_asset === null) {
-    throw new BuildError("batch has no file asset to canonicalize");
+    throw new ExecutionError("batch has no file asset to canonicalize");
   }
   const sourcePath = join(outputDir, batch.file_asset.relative_path);
   if (!isFileSync(sourcePath)) {
-    throw new BuildError(`batch file not found: ${sourcePath}`);
+    throw new ExecutionError(`batch file not found: ${sourcePath}`);
   }
   const canonicalDir = join(outputDir, "canonical");
   mkdirSync(canonicalDir, { recursive: true });

@@ -41,7 +41,7 @@ export interface DeterministicDeriveRequest {
   slot: DeterministicDeriveSlot;
   request_id: string;
   task_id: string;
-  build_id: string;
+  requirement_id: string;
   algorithm_id: string;
   algorithm_version: string;
   implementation_digest: string;
@@ -71,7 +71,7 @@ export interface DeterministicDeriveResultReceipt {
   schema_version: "1.0";
   result_id: string;
   task_id: string;
-  build_id: string;
+  requirement_id: string;
   slot: DeterministicDeriveSlot;
   request_id: string;
   request_identity_digest: string;

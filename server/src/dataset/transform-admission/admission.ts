@@ -305,7 +305,7 @@ async function validateExpectedInvocation(
   for (const [name, value] of [
     ["task_id", expected.task_id],
     ["run_id", expected.run_id],
-    ["build_id", expected.build_id],
+    ["requirement_id", expected.requirement_id],
     ["invocation_id", expected.invocation_id],
     ["request_digest", expected.request_digest],
     ["parameters_digest", expected.parameters_digest],
@@ -432,7 +432,7 @@ function assertInvocationBinding(
   const scalarBindings: ReadonlyArray<readonly [string, string | number, string | number]> = [
     ["task_id", receipt.task_id, expected.task_id],
     ["run_id", receipt.run_id, expected.run_id],
-    ["build_id", receipt.build_id, expected.build_id],
+    ["requirement_id", receipt.requirement_id, expected.requirement_id],
     ["invocation_id", receipt.invocation_id, expected.invocation_id],
     ["attempt", receipt.attempt, expected.attempt],
     ["generation", receipt.generation, expected.generation],
@@ -1004,7 +1004,7 @@ function makeEvidence(
     ? {
         task_id: null,
         run_id: null,
-        build_id: null,
+        requirement_id: null,
         invocation_id: null,
         attempt: null,
         generation: null,
@@ -1012,7 +1012,7 @@ function makeEvidence(
     : {
         task_id: receipt.task_id,
         run_id: receipt.run_id,
-        build_id: receipt.build_id,
+        requirement_id: receipt.requirement_id,
         invocation_id: receipt.invocation_id,
         attempt: receipt.attempt,
         generation: receipt.generation,

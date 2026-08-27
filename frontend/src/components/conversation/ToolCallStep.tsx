@@ -38,7 +38,7 @@ export function ToolCallStep({ item, downloadControl }: ToolCallStepProps) {
   const isRunning = item.status === "running";
   const isDownload = item.progress?.kind === "downloaded_bytes";
   const dynamicFamilyOutput =
-    item.toolName === "submit_dynamic_family_build"
+    item.toolName === "submit_dynamic_family_publication"
       ? parseDynamicFamilyToolOutputText(item.output)
       : null;
 

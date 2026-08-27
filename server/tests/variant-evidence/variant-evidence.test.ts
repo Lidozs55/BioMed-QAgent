@@ -145,7 +145,8 @@ async function resultFor(
     schema_version: "1.0",
     result_manifest_id: `result_${tableId}`,
     task_id: "task_variant",
-    build_id: "build_variant",
+    run_id: "run_variant",
+    requirement_id: "build_variant",
     operation_id: `integrate_${tableId}`,
     operation_kind: "integrate",
     operation_attempt_id: `attempt_${tableId}`,
@@ -176,7 +177,6 @@ async function resultFor(
       commit_id: `commit_${tableId}`,
       committed_at: "2026-08-18T00:00:00Z",
     },
-    migration: { mode: "native", legacy_checkpoint_path: null, migrated_at: null },
   };
 }
 
@@ -244,7 +244,7 @@ describe("variant_evidence B-owned module slice", () => {
     const capability = createVariantEvidenceAssemblerCapability();
     const candidate = capability.assemble({
       taskId: "task_variant",
-      buildId: "build_variant",
+      requirementId: "build_variant",
       datasetFamily: "variant_evidence",
       rowGranularity: VARIANT_EVIDENCE_ROW_GRANULARITY,
       schema: prepared.schemas.variant,
@@ -264,7 +264,7 @@ describe("variant_evidence B-owned module slice", () => {
 
     const validation = await validateMultiTableCandidate({
       task_id: "task_variant",
-      build_id: "build_variant",
+      requirement_id: "build_variant",
       candidate: {
         candidate_id: candidate.candidate_id,
         table_ids: prepared.tables.map((table) => table.definition.table_id),
@@ -313,7 +313,7 @@ describe("variant_evidence B-owned module slice", () => {
     const prepared = await prepareValidation(document);
     const validation = await validateMultiTableCandidate({
       task_id: "task_variant",
-      build_id: "build_variant",
+      requirement_id: "build_variant",
       candidate: {
         candidate_id: "candidate_bad_fk",
         table_ids: prepared.tables.map((table) => table.definition.table_id),
@@ -356,7 +356,7 @@ describe("variant_evidence B-owned module slice", () => {
     };
     const input = {
       taskId: "task_variant",
-      buildId: "build_variant",
+      requirementId: "build_variant",
       datasetFamily: "variant_evidence",
       rowGranularity: VARIANT_EVIDENCE_ROW_GRANULARITY,
       schema: prepared.schemas.variant,

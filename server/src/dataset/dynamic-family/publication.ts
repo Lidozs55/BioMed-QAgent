@@ -16,7 +16,7 @@ import {
 
 import type { ValidationResult } from "../contracts/validation.js";
 
-import type { SubmitDynamicFamilyBuildResult } from "./submission.js";
+import type { DynamicFamilyExecutionResult } from "./submission.js";
 import type { OperationResultManifest } from "@biomed/contracts";
 import type { CoreAcquisitionProvenance } from "../../runtime/source-assets/registry.js";
 import type { BrowserEvidenceAcceptance } from "../acquisition/browser-publication-handoff.js";
@@ -39,7 +39,7 @@ import type { B3CleanupCapability } from "../validation/b3-backend-decision/inde
 import type { ResourceBaselinePolicy } from "../validation/resource-baseline.js";
 
 interface DynamicPublicationHILInput {
-  readonly build_id: string | null;
+  readonly requirement_id: string | null;
   readonly kind: "data_review";
   readonly review_type: "publication_acceptance";
   readonly blocking: true;
@@ -57,7 +57,7 @@ export interface DynamicPublicationHILGate {
 
 export interface BrowserPublicationExecution {
   readonly kind: "browser";
-  readonly materialization: SubmitDynamicFamilyBuildResult["materialization"];
+  readonly materialization: DynamicFamilyExecutionResult["materialization"];
   readonly integratedResults: readonly OperationResultManifest[];
   readonly trustedRoot: string;
   readonly generation: number;
@@ -66,13 +66,14 @@ export interface BrowserPublicationExecution {
   readonly browserEvidenceAcceptance: BrowserEvidenceAcceptance;
 }
 
-export type DynamicPublicationExecution = SubmitDynamicFamilyBuildResult | BrowserPublicationExecution;
+export type DynamicPublicationExecution = DynamicFamilyExecutionResult | BrowserPublicationExecution;
 
 export interface PublishDynamicFamilyInput {
   readonly taskId: string;
   readonly taskRoot: string;
   readonly workspaceRoot: string;
-  readonly buildId: string;
+  readonly runId: string;
+  readonly requirementId: string;
   readonly execution: DynamicPublicationExecution;
   readonly validationProfileRef: string;
   readonly signal?: AbortSignal;
@@ -108,6 +109,7 @@ export interface PublishDynamicFamilyResult {
 export async function publishDynamicFamily(
   input: PublishDynamicFamilyInput,
 ): Promise<PublishDynamicFamilyResult> {
+  const runId = input.runId;
   const assertGenerationCurrent = async (): Promise<void> => {
     if (!(await input.isGenerationCurrent())) {
       throw new Error("dynamic family preflight generation is stale");
@@ -116,7 +118,7 @@ export async function publishDynamicFamily(
   const candidate = input.execution.materialization.candidate;
   const isBrowserExecution = (execution: DynamicPublicationExecution): execution is BrowserPublicationExecution => "kind" in execution && execution.kind === "browser";
   const browserExecution = isBrowserExecution(input.execution) ? input.execution : null;
-  const transformExecution = browserExecution === null ? input.execution as SubmitDynamicFamilyBuildResult : null;
+  const transformExecution = browserExecution === null ? input.execution as DynamicFamilyExecutionResult : null;
   if (browserExecution === null && transformExecution === null) throw new Error("dynamic publication execution variant is missing");
   const executionGeneration = browserExecution === null ? transformExecution!.receipt.generation : browserExecution.generation;
   const integratedResults: readonly OperationResultManifest[] = browserExecution === null ? [transformExecution!.operationResult] : browserExecution.integratedResults;
@@ -132,11 +134,11 @@ export async function publishDynamicFamily(
       throw new Error("browser publication evidence is outside the accepted browser evidence closure");
     }
   }
-  if (candidate.task_id !== input.taskId || candidate.build_id !== input.buildId) {
-    throw new TypeError("dynamic publication identity does not match the Core task/build");
+  if (candidate.task_id !== input.taskId || candidate.requirement_id !== input.requirementId) {
+    throw new TypeError("dynamic publication identity does not match the Core task/requirement");
   }
   await assertGenerationCurrent();
-  const outputDir = path.join(input.taskRoot, "datasets_build", input.buildId);
+  const outputDir = path.join(input.taskRoot, "dataset_runs", runId, input.requirementId);
   await mkdir(outputDir, { recursive: true });
   await assertGenerationCurrent();
   await rm(path.join(outputDir, "tables"), { recursive: true, force: true });
@@ -204,11 +206,11 @@ export async function publishDynamicFamily(
     ?? PRODUCTION_B3_CONFIGURED_HEAP_BYTES;
   const b3ConfiguredTempBytes = input.b3Validation?.configuredTempBytes
     ?? PRODUCTION_B3_CONFIGURED_TEMP_BYTES;
-  const b3IndexRoot = path.join(input.taskRoot, "builds", input.buildId, "b3-index");
+  const b3IndexRoot = path.join(input.taskRoot, "dataset_runs", runId, input.requirementId, "b3-index");
   await assertGenerationCurrent();
   await mkdir(b3IndexRoot, { recursive: true });
   const b3Cleanup: B3CleanupCapability = {
-    ownerId: `${input.taskId}:${input.buildId}`,
+    ownerId: `${input.taskId}:${input.requirementId}`,
     cleanup: async () => {
       await rm(b3IndexRoot, { recursive: true, force: true });
     },
@@ -216,7 +218,7 @@ export async function publishDynamicFamily(
   let validationFailed = false;
   const b3 = await validateMultiTableCandidate({
       task_id: input.taskId,
-      build_id: input.buildId,
+      requirement_id: input.requirementId,
       candidate: candidateReference(candidate),
       tables: validationTables,
       relations: candidate.relations,
@@ -240,7 +242,7 @@ export async function publishDynamicFamily(
       b3Backend: {
         owner: {
           taskId: input.taskId,
-          buildId: input.buildId,
+          requirementId: input.requirementId,
           generation: executionGeneration,
         },
         factory: createProductionB3DiskFactory(),
@@ -261,7 +263,7 @@ export async function publishDynamicFamily(
       try {
         await b3Cleanup.cleanup({
           taskId: input.taskId,
-          buildId: input.buildId,
+          requirementId: input.requirementId,
           generation: executionGeneration,
         });
       } catch (cleanupError) {
@@ -311,7 +313,7 @@ export async function publishDynamicFamily(
         ...candidateReference(candidate),
         canonical_sha256: canonicalDigest(candidate),
         task_id: candidate.task_id,
-        build_id: candidate.build_id,
+        requirement_id: candidate.requirement_id,
         dataset_family: candidate.dataset_family,
         row_granularity: candidate.row_granularity,
         registered_asset_ids: candidate.registered_asset_ids,
@@ -345,7 +347,7 @@ export async function publishDynamicFamily(
       confidence_level: null,
     }];
     const request = {
-      build_id: input.buildId,
+      requirement_id: input.requirementId,
       kind: "data_review" as const,
       review_type: "publication_acceptance" as const,
       blocking: true as const,
@@ -354,7 +356,7 @@ export async function publishDynamicFamily(
       summary: "Accept the evidence-bound dynamic publication candidate",
       evidence: reviewedSnapshot,
       policy_ref: "dynamic_family_hil_acceptance.v1" as const,
-      idempotency_key: `dynamic-family-publication:${input.buildId}:${candidate.candidate_id}:${provisionalAssessment.sha256}`,
+      idempotency_key: `dynamic-family-publication:${input.requirementId}:${candidate.candidate_id}:${provisionalAssessment.sha256}`,
     };
     await assertGenerationCurrent();
     const expectedEvidenceDigest = computeHILEvidenceDigest(request);
@@ -399,7 +401,7 @@ export async function publishDynamicFamily(
   await writeFile(path.join(outputDir, "provenance.json"), `${JSON.stringify({
     schema_version: "1.0",
     task_id: input.taskId,
-    build_id: input.buildId,
+    requirement_id: input.requirementId,
     registered_asset_ids: candidate.registered_asset_ids,
     execution_kind: browserExecution === null ? "transform" : "browser",
     ...(browserExecution === null ? {
@@ -461,7 +463,7 @@ export async function publishDynamicFamily(
     schema_version: "2.0",
     manifest_id: `manifest_${packageSha.slice(0, 16)}`,
     task_id: input.taskId,
-    build_id: input.buildId,
+    requirement_id: input.requirementId,
     dataset_family: candidate.dataset_family,
     row_granularity: candidate.row_granularity,
     schema_ref: primary.definition.schema_ref,

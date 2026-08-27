@@ -12,7 +12,7 @@ const INPUT_KEYS = new Set([
   "sourceNamespace",
   "canonicalAccessions",
   "taskId",
-  "buildId",
+  "requirementId",
   "generation",
   "schemaRef",
   "facts",
@@ -25,7 +25,7 @@ const FACT_KEYS = new Set([
   "sha256",
   "sizeBytes",
   "taskId",
-  "buildId",
+  "requirementId",
   "generation",
   "providerSnapshot",
   "revisionToken",
@@ -45,7 +45,7 @@ export interface SourceAssetRegistrationFact {
   readonly sha256: string;
   readonly sizeBytes: number;
   readonly taskId: string;
-  readonly buildId: string;
+  readonly requirementId: string;
   readonly generation: number;
   readonly providerSnapshot: string;
   readonly revisionToken: string | null;
@@ -56,7 +56,7 @@ export interface AuthoritativeDatasetIdentityInput {
   readonly sourceNamespace: string;
   readonly canonicalAccessions: readonly string[];
   readonly taskId: string;
-  readonly buildId: string;
+  readonly requirementId: string;
   readonly generation: number;
   readonly schemaRef: ExpressionV2SchemaRef;
   readonly facts: readonly SourceAssetRegistrationFact[];
@@ -149,7 +149,7 @@ function parseFact(value: unknown, index: number): SourceAssetRegistrationFact {
     sha256,
     sizeBytes: safeInteger(record.sizeBytes, `${label}.sizeBytes`),
     taskId: safeId(record.taskId, `${label}.taskId`),
-    buildId: safeId(record.buildId, `${label}.buildId`),
+    requirementId: safeId(record.requirementId, `${label}.requirementId`),
     generation: safeInteger(record.generation, `${label}.generation`),
     providerSnapshot: stringValue(record.providerSnapshot, `${label}.providerSnapshot`),
     revisionToken: record.revisionToken === null
@@ -164,7 +164,7 @@ export function createAuthoritativeDatasetIdentityContext(
 ): AuthoritativeDatasetIdentityContext {
   const record = snapshot(input, INPUT_KEYS, "identity context input");
   const taskId = safeId(record.taskId, "taskId");
-  const buildId = safeId(record.buildId, "buildId");
+  const requirementId = safeId(record.requirementId, "requirementId");
   const generation = safeInteger(record.generation, "generation");
   const schemaRef = record.schemaRef;
   if (schemaRef !== "gene_expression.long.v2" && schemaRef !== "gene_expression.probe_long.v2") {
@@ -186,7 +186,7 @@ export function createAuthoritativeDatasetIdentityContext(
     throw new TypeError("carrier receipts do not share one provider revision snapshot");
   }
   if (facts.some((fact) =>
-    fact.taskId !== taskId || fact.buildId !== buildId || fact.generation !== generation)) {
+    fact.taskId !== taskId || fact.requirementId !== requirementId || fact.generation !== generation)) {
     throw new TypeError("carrier receipt ownership does not match task/build/generation");
   }
   if (accessions.some((accession) => !factAccessions.has(accession))) {

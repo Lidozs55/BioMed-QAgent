@@ -9,15 +9,15 @@ import type {
 } from "@biomed/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { parseDatasetBuildSpec } from "../src/dataset/contracts/index.js";
+import { parseDatasetExecutionSpec } from "../src/dataset/contracts/index.js";
 import {
   TsDatasetCoreAdapter,
-  type ExecuteDatasetBuildInput,
+  type ExecuteDatasetExecutionInput,
 } from "../src/dataset/service/dataset-core.js";
 import {
   requireAuthoritativeProviderRevisionEvidence,
   TypeScriptDatasetCore,
-  type BuildRecord,
+  type ExecutionRecord,
   type ExecuteContext,
   type ValidateContext,
 } from "../src/dataset/service/ts-core.js";
@@ -27,22 +27,46 @@ import { SourceAssetRegistry } from "../src/runtime/source-assets/registry.js";
 const TASK_ID = "task_provider_revision_plumbing";
 const roots: string[] = [];
 
-const completedRecord = (buildId: string): BuildRecord => ({
-  build_id: buildId,
+const completedRecord = (requirementId: string): ExecutionRecord => ({
+  requirement_id: requirementId,
   status: "completed",
   error: null,
-  publication_id: null,
-  publication: null,
-  manifest: null,
+  publication_id: `publication_${requirementId}`,
+  publication: {
+    schema_version: "1.1",
+    publication_id: `publication_${requirementId}`,
+    manifest_ref: "dataset_manifest.json",
+    manifest_sha256: "a".repeat(64),
+    validation_result_ref: "validation_result.json",
+    published_at: "2026-08-18T00:00:00.000Z",
+    supersedes_publication_id: null,
+  },
+  manifest: {
+    schema_version: "1.0",
+    manifest_id: `manifest_${requirementId}`,
+    task_id: TASK_ID,
+    requirement_id: requirementId,
+    dataset_family: "gene_expression",
+    row_granularity: "gene_sample_measurement",
+    schema_ref: "gene_expression.long.v1",
+    primary_key: ["gene_id", "sample_id"],
+    row_count: 1,
+    sha256: "a".repeat(64),
+    artifacts: [],
+    source_summary: {},
+    validation_summary: {},
+    confidence_summary: {},
+    provenance_summary: {},
+  },
   validation: null,
   completed_operations: [],
   rejected_sources: [],
 });
 
-function spec(buildId: string): ReturnType<typeof parseDatasetBuildSpec> {
-  return parseDatasetBuildSpec({
+function spec(requirementId: string): ReturnType<typeof parseDatasetExecutionSpec> {
+  return parseDatasetExecutionSpec({
     schema_version: "1.0",
-    build_id: buildId,
+    requirement_id: requirementId,
     objective: "Provider revision evidence transport audit",
     dataset_family: "gene_expression",
     row_granularity: "gene_sample_measurement",
@@ -100,16 +124,16 @@ async function install(
 }
 
 function executeInput(
-  buildId: string,
+  requirementId: string,
   sourceFile: string,
-  overrides: Partial<ExecuteDatasetBuildInput> = {},
-): ExecuteDatasetBuildInput {
+  overrides: Partial<ExecuteDatasetExecutionInput> = {},
+): ExecuteDatasetExecutionInput {
   return {
     taskId: TASK_ID,
-    runId: `run_${buildId}`,
+    runId: `run_${requirementId}`,
     piSessionId: "pi_provider_revision",
     toolCallId: "call_provider_revision",
-    spec: spec(buildId),
+    spec: spec(requirementId),
     sourceFiles: { binding_gdc: sourceFile },
     mappingFiles: {},
     ...overrides,
@@ -200,7 +224,7 @@ describe("ProviderRevisionEvidence Dataset Core plumbing", () => {
       relativePath: sourceReceipt.relative_path,
       role: "mapping",
     });
-    vi.spyOn(core, "executeDatasetBuild").mockResolvedValue(completedRecord("build_binding"));
+    vi.spyOn(core, "executeDatasetExecution").mockResolvedValue(completedRecord("build_binding"));
 
     const wrongAsset = await adapter.execute(executeInput(
       "build_binding",
@@ -241,9 +265,9 @@ describe("ProviderRevisionEvidence Dataset Core plumbing", () => {
       "metadata",
     );
     const contexts: ExecuteContext[] = [];
-    vi.spyOn(core, "executeDatasetBuild").mockImplementation(async (buildSpec, received) => {
+    vi.spyOn(core, "executeDatasetExecution").mockImplementation(async (buildSpec, received) => {
       contexts.push(received);
-      return completedRecord(buildSpec.build_id);
+      return completedRecord(buildSpec.requirement_id);
     });
     const providerRevisionEvidence = [
       evidence(sourceReceipt),
@@ -292,15 +316,15 @@ describe("ProviderRevisionEvidence Dataset Core plumbing", () => {
     );
     const validateContexts: ValidateContext[] = [];
     const executeContexts: ExecuteContext[] = [];
-    vi.spyOn(core, "validateDatasetBuildSpec").mockImplementation(async (_spec, context = {
+    vi.spyOn(core, "validateDatasetExecutionSpec").mockImplementation(async (_spec, context = {
       providerRevisionEvidence: null,
     }) => {
       validateContexts.push(context);
       return { valid: true, reason_codes: [], reasons: [] };
     });
-    vi.spyOn(core, "executeDatasetBuild").mockImplementation(async (buildSpec, context) => {
+    vi.spyOn(core, "executeDatasetExecution").mockImplementation(async (buildSpec, context) => {
       executeContexts.push(context);
-      return completedRecord(buildSpec.build_id);
+      return completedRecord(buildSpec.requirement_id);
     });
 
     const validation = await adapter.validate({

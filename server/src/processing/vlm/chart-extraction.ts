@@ -127,7 +127,7 @@ export async function reviewLowConfidencePoints(options: {
     );
   }
   const review = await options.hilGate.requestHIL({
-    build_id: null,
+    requirement_id: null,
     kind: "data_review",
     review_type: "vlm_extraction",
     blocking: true,

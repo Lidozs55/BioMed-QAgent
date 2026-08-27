@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted — 2026-08-12.
+Superseded by ADR-041 - 2026-08-27. Retained as Build-domain decision history.
 
 ## Context
 

@@ -27,7 +27,8 @@ describe("executeBrowserCarrierParser", () => {
 
     await expect(executeBrowserCarrierParser({
       taskId: "task_carrier",
-      buildId: "build_carrier",
+      runId: "run_carrier",
+      requirementId: "build_carrier",
       outputDir: path.join(root, "build"),
       assetId: receipt.asset_ref.asset_id,
       requestIdentityDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -50,7 +51,7 @@ describe("executeBrowserCarrierParser", () => {
     const registry = new SourceAssetRegistry("task_carrier_result", root);
     const receipt = await registry.register({ sourceId: "browser_source", relativePath: "source_assets/source.json", role: "carrier", mediaType: "application/json" });
     await expect(executeBrowserCarrierParser({
-      taskId: "task_carrier_result", buildId: "build_carrier", outputDir: path.join(root, "build"), assetId: receipt.asset_ref.asset_id,
+      taskId: "task_carrier_result", runId: "run_carrier_result", requirementId: "build_carrier", outputDir: path.join(root, "build"), assetId: receipt.asset_ref.asset_id,
       requestIdentityDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", schemaRef: "fixture_schema", recipeId: "fixture.tsv", recipeVersion: "1", recipeRegistry: { resolve: () => ({ ref: { schema_version: "1.0", recipe_id: "fixture.tsv", recipe_version: 1, status: "PROMOTED", implementation_digest: "b".repeat(64) }, schema_ref: "fixture_schema", adapter_id: "fixture", parser_version: "1", media_types: ["application/json"] }), resolveRegisteredTable: () => { throw new Error("not reached"); } },
       implementationDigest: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", tableId: "fixture_table", familyId: "fixture_family", rowGranularity: "row", sourceAssetRegistry: registry,
     })).rejects.toThrow();
@@ -79,7 +80,8 @@ describe("executeBrowserCarrierParser", () => {
     const outputDir = path.join(root, "build");
     const result = await executeBrowserCarrierParser({
       taskId: "task_carrier_xlsx",
-      buildId: "build_carrier_xlsx",
+      runId: "run_carrier_xlsx",
+      requirementId: "build_carrier_xlsx",
       outputDir,
       assetId: receipt.asset_ref.asset_id,
       requestIdentityDigest: REQUEST_DIGEST,

@@ -25,16 +25,16 @@ export {
   type GwasCatalogLookupResult,
 } from "./gwas-catalog.js";
 export {
-  createDynamicFamilyBuildTool,
-  createDynamicFamilyBuildTools,
-  createPrepareDynamicFamilyBuildTool,
-  parseDynamicFamilyBuildSubmission,
-  parseDynamicFamilyBuildSubmitRequest,
-  type DynamicFamilyBuildToolOptions,
-  type ParsedDynamicFamilyBuildSubmission,
-  type ParsedDynamicFamilyBuildSubmitRequest,
-  type PrepareDynamicFamilyBuildToolOptions,
-} from "./dynamic-family-build.js";
+  createDynamicFamilyPublicationTool,
+  createDynamicFamilyPublicationTools,
+  createPrepareDynamicFamilyPublicationTool,
+  parseDynamicFamilyPublicationSubmission,
+  parseDynamicFamilyPublicationSubmitRequest,
+  type DynamicFamilyPublicationToolOptions,
+  type ParsedDynamicFamilyPublicationSubmission,
+  type ParsedDynamicFamilyPublicationSubmitRequest,
+  type PrepareDynamicFamilyPublicationToolOptions,
+} from "./dynamic-family-publication.js";
 export {
   createDatasetRoutePreflightTool,
   datasetRouteCapabilities,

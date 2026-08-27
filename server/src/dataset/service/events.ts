@@ -3,8 +3,8 @@
  *
  * Dataset Core internal types never reach the frontend: the sink converts
  * them into the frozen operation_* payloads the durable event log and the
- * frontend reducer already understand. Build lifecycle events ride on a
- * synthetic ``build:<buildId>`` operation identity so the UI groups them
+ * frontend reducer already understand. Execution lifecycle events ride on a
+ * synthetic ``execution:<requirementId>`` operation identity so the UI groups them
  * without new event types.
  */
 
@@ -14,15 +14,15 @@ import type { CoreOperationEvent } from "../runtime/executor.js";
 
 export function coreEventToPayload(
   event: CoreOperationEvent,
-  buildId: string,
+  requirementId: string,
 ): EventPayload {
   switch (event.type) {
-    case "build_started":
+    case "execution_started":
       return {
         type: "operation_started",
-        operation_id: `build:${buildId}`,
-        label: "构建",
-        category: "build",
+        operation_id: `execution:${requirementId}`,
+        label: "数据处理",
+        category: "execution",
       };
     case "operation_started":
       return {
@@ -53,16 +53,16 @@ export function coreEventToPayload(
           details: {},
         },
       };
-    case "build_completed":
+    case "execution_completed":
       return {
         type: "operation_completed",
-        operation_id: `build:${buildId}`,
+        operation_id: `execution:${requirementId}`,
         status: "succeeded",
       };
-    case "build_failed":
+    case "execution_failed":
       return {
         type: "operation_failed",
-        operation_id: `build:${buildId}`,
+        operation_id: `execution:${requirementId}`,
         status: "failed",
         error: event.error === null ? null : {
           code: event.error.code,
@@ -72,10 +72,10 @@ export function coreEventToPayload(
           details: {},
         },
       };
-    case "build_cancelled":
+    case "execution_cancelled":
       return {
         type: "operation_failed",
-        operation_id: `build:${buildId}`,
+        operation_id: `execution:${requirementId}`,
         status: "cancelled",
       };
   }

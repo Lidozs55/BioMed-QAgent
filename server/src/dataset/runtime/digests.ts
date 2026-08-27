@@ -31,7 +31,7 @@ export const stableStringify = canonicalJson;
 export const sha256Json = canonicalDigest;
 
 export interface DigestScope {
-  buildId: string;
+  requirementId: string;
   /** Upstream operation outputs keyed by operation_id. */
   upstream: Readonly<Record<string, Record<string, unknown>>>;
   upstreamResults?: Readonly<Record<string, OperationResultManifest>>;
@@ -54,7 +54,7 @@ export interface DigestScope {
  */
 export function computeInputDigest(op: OperationSpec, scope: DigestScope): string {
   const payload: Record<string, unknown> = {
-    build_id: scope.buildId,
+    requirement_id: scope.requirementId,
     operation_id: op.operation_id,
     upstream: Object.fromEntries(
       Object.entries(scope.upstream).map(([operationId, value]) => [
@@ -166,7 +166,7 @@ export const computeImplementationDigest = computeOperationDigest;
  */
 export function computeParameterDigest(op: OperationSpec, scope: DigestScope): string {
   return sha256Json({
-    build_id: scope.buildId,
+    requirement_id: scope.requirementId,
     operation_id: op.operation_id,
     parameters: scope.parameterScope,
     operation_digest: computeOperationDigest(op, scope),

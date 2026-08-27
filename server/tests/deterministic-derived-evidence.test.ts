@@ -33,7 +33,7 @@ function requestFor(
     slot: "derive" as const,
     request_id: `request_${algorithmId}`,
     task_id: "task_non_gold",
-    build_id: "build_non_gold",
+    requirement_id: "build_non_gold",
     algorithm_id: algorithmId,
     algorithm_version: "1.0.0",
     implementation_digest: IMPLEMENTATION_DIGEST,

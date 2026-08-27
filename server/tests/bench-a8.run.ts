@@ -19,7 +19,7 @@ import { copyFile, mkdtemp, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { parseDatasetBuildSpec } from "../src/dataset/contracts/index.js";
+import { parseDatasetExecutionSpec } from "../src/dataset/contracts/index.js";
 import { TypeScriptDatasetCore } from "../src/dataset/service/ts-core.js";
 import { TsDatasetCoreAdapter } from "../src/dataset/service/dataset-core.js";
 import type { CoreOperationEvent } from "../src/dataset/runtime/executor.js";
@@ -134,9 +134,9 @@ async function runBuild(taskRoot: string): Promise<BuildOutcome> {
     },
   });
 
-  const spec = parseDatasetBuildSpec({
+  const spec = parseDatasetExecutionSpec({
     schema_version: "1.0",
-    build_id: BUILD_ID,
+    requirement_id: BUILD_ID,
     objective: "A8 bulk GEO gene-level expression dataset (GSE325735 counts)",
     dataset_family: "gene_expression",
     row_granularity: "gene_sample_measurement",
@@ -191,7 +191,7 @@ async function runBuild(taskRoot: string): Promise<BuildOutcome> {
 }
 
 async function resolveVersionDir(taskRoot: string): Promise<string> {
-  const publishRoot = path.join(taskRoot, "datasets_build", BUILD_ID, "publish");
+  const publishRoot = path.join(taskRoot, "dataset_runs", "run_a8_gse325735", BUILD_ID, "publish");
   const entries = await readdir(publishRoot, { withFileTypes: true });
   const dirs = entries.filter((entry) => entry.isDirectory());
   if (dirs.length !== 1) {
@@ -203,7 +203,8 @@ async function resolveVersionDir(taskRoot: string): Promise<string> {
 async function loadOperationWall(taskRoot: string): Promise<Record<string, number>> {
   const logPath = path.join(
     taskRoot,
-    "datasets_build",
+    "dataset_runs",
+    "run_a8_gse325735",
     BUILD_ID,
     "state",
     "operation_attempts.jsonl",
@@ -229,7 +230,7 @@ async function loadOperationWall(taskRoot: string): Promise<Record<string, numbe
 interface ManifestLike {
   manifest_id: string;
   task_id: string;
-  build_id: string;
+  requirement_id: string;
   dataset_family: string;
   row_granularity: string;
   schema_ref: string;
@@ -285,7 +286,7 @@ async function produceReport(env: ReportEnv): Promise<Record<string, unknown>> {
     .toString("utf8").trim();
 
   const publishedStat = await dirStat(versionDir);
-  const workspaceStat = await dirStat(path.join(taskRoot, "datasets_build", BUILD_ID));
+  const workspaceStat = await dirStat(path.join(taskRoot, "dataset_runs", "run_a8_gse325735", BUILD_ID));
 
   const artifacts: Array<{
     role: string;
@@ -349,7 +350,7 @@ async function produceReport(env: ReportEnv): Promise<Record<string, unknown>> {
     metric_source: metricSource,
 
     accession: "GSE325735",
-    build_id: BUILD_ID,
+    requirement_id: BUILD_ID,
     task_id: TASK_ID,
     schema_ref: SCHEMA_REF,
     profile_ref: PROFILE_REF,

@@ -8,20 +8,18 @@ import { parseOperationResultManifest } from "../contracts/index.js";
 export function requireCoreResult(options: {
   result: OperationResultManifest;
   taskId: string;
-  buildId: string;
+  requirementId: string;
   operationKind?: OperationResultManifest["operation_kind"];
   outputKind?: OperationResultOutputKind;
 }): OperationResultManifest {
   const result = parseOperationResultManifest(
     options.result,
     options.taskId,
-    options.buildId,
+    options.result.run_id,
+    options.requirementId,
   );
   if (result.status !== "succeeded") {
     throw new Error(`Core result '${result.result_manifest_id}' must have succeeded`);
-  }
-  if (result.migration.mode !== "native") {
-    throw new Error(`Core result '${result.result_manifest_id}' must be native`);
   }
   if (options.operationKind !== undefined && result.operation_kind !== options.operationKind) {
     throw new Error(
@@ -60,7 +58,7 @@ export function resultRefForHash(
 export function resultRefs(options: {
   results: readonly OperationResultManifest[];
   taskId: string;
-  buildId: string;
+  requirementId: string;
 }): PublicationCandidateResultRef[] {
   return [...options.results]
     .sort((left, right) => left.result_manifest_id.localeCompare(right.result_manifest_id))
@@ -68,7 +66,7 @@ export function resultRefs(options: {
       const parsed = requireCoreResult({
         result,
         taskId: options.taskId,
-        buildId: options.buildId,
+        requirementId: options.requirementId,
       });
       return parsed.output_files.map((file, outputFileIndex) => ({
         result_manifest_id: parsed.result_manifest_id,

@@ -22,7 +22,6 @@ import {
   assertRecord,
   assertString,
   assertStringArray,
-  parsePublicationSchemaVersion,
   parseSchemaVersion,
 } from "./primitives.js";
 import { parseDatasetManifestV2 } from "./multitable.js";
@@ -89,7 +88,7 @@ const DATASET_MANIFEST_KEYS = [
   "schema_version",
   "manifest_id",
   "task_id",
-  "build_id",
+  "requirement_id",
   "dataset_family",
   "row_granularity",
   "schema_ref",
@@ -125,7 +124,7 @@ export function parseDatasetManifest(value: unknown): VersionedDatasetManifest {
     schema_version: parseSchemaVersion(record),
     manifest_id: assertNonEmptyString(record.manifest_id, "DatasetManifest.manifest_id"),
     task_id: assertNonEmptyString(record.task_id, "DatasetManifest.task_id"),
-    build_id: assertNonEmptyString(record.build_id, "DatasetManifest.build_id"),
+    requirement_id: assertNonEmptyString(record.requirement_id, "DatasetManifest.requirement_id"),
     dataset_family: assertNonEmptyString(
       record.dataset_family,
       "DatasetManifest.dataset_family",
@@ -182,25 +181,18 @@ export function parseDatasetPublication(value: unknown): DatasetPublication {
   if (supersedes === publicationId) {
     throw new TypeError("publication cannot supersede itself");
   }
-  const schemaVersion = parsePublicationSchemaVersion(record);
-  let manifestSha256: string | undefined;
-  if (schemaVersion === "1.1") {
-    // P7 trust anchor: SHA-256 of the dataset_manifest.json file bytes.
-    // A 1.1 record without the receipt is malformed and must not parse.
-    manifestSha256 = assertNonEmptyString(
-      record.manifest_sha256,
-      "DatasetPublication.manifest_sha256",
-    );
-    if (!PUBLICATION_SHA256.test(manifestSha256)) {
-      throw new TypeError("DatasetPublication.manifest_sha256 must be a SHA-256 hex digest");
-    }
-  } else if (record.manifest_sha256 !== undefined) {
-    // A legacy 1.0 record claiming a P7 receipt is mislabeled: reject it so
-    // a downgrade cannot smuggle an unverified file through a "legacy" tag.
-    throw new TypeError("DatasetPublication schema_version 1.0 must not carry manifest_sha256");
+  if (record.schema_version !== "1.1") {
+    throw new TypeError("DatasetPublication.schema_version must be 1.1");
+  }
+  const manifestSha256 = assertNonEmptyString(
+    record.manifest_sha256,
+    "DatasetPublication.manifest_sha256",
+  );
+  if (!PUBLICATION_SHA256.test(manifestSha256)) {
+    throw new TypeError("DatasetPublication.manifest_sha256 must be a SHA-256 hex digest");
   }
   const parsed: DatasetPublication = {
-    schema_version: schemaVersion,
+    schema_version: "1.1",
     publication_id: publicationId,
     manifest_ref: assertNonEmptyString(
       record.manifest_ref,
@@ -214,8 +206,8 @@ export function parseDatasetPublication(value: unknown): DatasetPublication {
       record.published_at,
       "DatasetPublication.published_at",
     ),
+    manifest_sha256: manifestSha256,
     supersedes_publication_id: supersedes,
   };
-  if (manifestSha256 !== undefined) parsed.manifest_sha256 = manifestSha256;
   return parsed;
 }

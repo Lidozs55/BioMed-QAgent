@@ -9,7 +9,7 @@ import {
   scratchOutputRoot,
 } from "./compat-gate-parity.js";
 import { checkExpressionCompatibility } from "../src/dataset/compat/index.js";
-import { parseDatasetBuildSpec } from "../src/dataset/contracts/index.js";
+import { parseDatasetExecutionSpec } from "../src/dataset/contracts/index.js";
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -27,8 +27,8 @@ describe("Phase 4 step 6 compat gate parity", () => {
   });
 
   test("no sources reports no_sources", () => {
-    const spec = parseDatasetBuildSpec({
-      build_id: "build_test",
+    const spec = parseDatasetExecutionSpec({
+      requirement_id: "build_test",
       objective: "compare expression",
       dataset_family: "gene_expression",
       row_granularity: "gene_sample_measurement",

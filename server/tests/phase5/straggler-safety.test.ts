@@ -28,11 +28,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { parseDatasetBuildSpec } from "../../src/dataset/contracts/index.js";
+import { parseDatasetExecutionSpec } from "../../src/dataset/contracts/index.js";
 import { SOURCE_LONG_COLUMNS } from "../../src/dataset/adapters/index.js";
 import {
   buildOperationPlan,
-  DatasetBuildExecutor,
+  DatasetExecutionExecutor,
   makeOperationOutput,
   type OperationOutput,
   type OperationSpec,
@@ -58,10 +58,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function buildSpec(): ReturnType<typeof parseDatasetBuildSpec> {
-  return parseDatasetBuildSpec({
+function buildSpec(): ReturnType<typeof parseDatasetExecutionSpec> {
+  return parseDatasetExecutionSpec({
     schema_version: "1.0",
-    build_id: "build_straggler",
+    requirement_id: "build_straggler",
     objective: "compare expression",
     dataset_family: "gene_expression",
     row_granularity: "gene_sample_measurement",
@@ -112,9 +112,9 @@ describe("M2 straggler safety (audit round 2)", () => {
           upstream: Object.keys(upstream).sort(),
         });
       };
-      const executor = new DatasetBuildExecutor({
+      const executor = new DatasetExecutionExecutor({
         taskId: "task_straggler",
-        buildId: spec.build_id,
+        requirementId: spec.requirement_id,
         stateDir: join(root, "state"),
         taskRoot: root,
         plan: buildOperationPlan(spec),
@@ -257,7 +257,7 @@ describe("M2 checkpoint coverage for rejection/dedup workloads (audit round 2)",
           results: [result],
           mergeStrategy: "append_by_canonical_row",
           schema,
-          buildId: "build_dup",
+          requirementId: "build_dup",
           outputDir: root,
           signal: controller.signal,
         }),

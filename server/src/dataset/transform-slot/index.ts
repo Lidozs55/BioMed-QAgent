@@ -5,7 +5,7 @@ import { canonicalDigest } from "../adapters/identity.js";
 const SHA256 = /^[0-9a-f]{64}$/;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
 const INPUT_KEYS = new Set([
-  "slotId", "taskId", "buildId", "generation", "expectedGeneration",
+  "slotId", "taskId", "requirementId", "generation", "expectedGeneration",
   "capability", "familySpecDigest", "projectionDigest", "policyDigests",
   "inputAssetIds", "upstreamResultManifestIds", "deadline", "cancelFence",
 ]);
@@ -24,7 +24,7 @@ export interface FixedTransformCapability {
 export interface FixedTransformSlotInput {
   readonly slotId: string;
   readonly taskId: string;
-  readonly buildId: string;
+  readonly requirementId: string;
   readonly generation: number;
   readonly expectedGeneration: number;
   readonly capability: FixedTransformCapability;
@@ -41,7 +41,7 @@ export interface TransformSlotDecision {
   readonly decisionKind: "fixed_transform_slot.v1";
   readonly slotId: string;
   readonly taskId: string;
-  readonly buildId: string;
+  readonly requirementId: string;
   readonly generation: number;
   readonly capabilityRef: string;
   readonly familySpecDigest: string;
@@ -104,7 +104,7 @@ export function admitFixedTransformSlot(input: FixedTransformSlotInput): Transfo
   const slotId = id(source.slotId, "slotId");
   if (!REGISTERED_SLOT_IDS.has(slotId)) throw new TypeError("slotId is not server-registered");
   const taskId = id(source.taskId, "taskId");
-  const buildId = id(source.buildId, "buildId");
+  const requirementId = id(source.requirementId, "requirementId");
   const currentGeneration = generation(source.generation, "generation");
   const expectedGeneration = generation(source.expectedGeneration, "expectedGeneration");
   if (currentGeneration !== expectedGeneration) throw new TypeError("slot generation is stale or from the future");
@@ -127,7 +127,7 @@ export function admitFixedTransformSlot(input: FixedTransformSlotInput): Transfo
   const cancelFence = id(source.cancelFence, "cancelFence");
   const capabilityRef = `${scope}:${capabilityId}:${capabilityVersion}:${capabilityDigest}`;
   const decisionBody = {
-    slot_id: slotId, task_id: taskId, build_id: buildId, generation: currentGeneration,
+    slot_id: slotId, task_id: taskId, requirement_id: requirementId, generation: currentGeneration,
     capability_ref: capabilityRef, family_spec_digest: familySpecDigest,
     projection_digest: projectionDigest, policy_digests: policyDigests,
     input_asset_ids: inputAssetIds, upstream_result_manifest_ids: upstreamResultManifestIds,
@@ -135,7 +135,7 @@ export function admitFixedTransformSlot(input: FixedTransformSlotInput): Transfo
   };
   return Object.freeze({
     decisionKind: "fixed_transform_slot.v1",
-    slotId, taskId, buildId, generation: currentGeneration, capabilityRef,
+    slotId, taskId, requirementId, generation: currentGeneration, capabilityRef,
     familySpecDigest, projectionDigest,
     policyDigests: Object.freeze(policyDigests),
     inputAssetIds: Object.freeze(inputAssetIds),

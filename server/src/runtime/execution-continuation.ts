@@ -1,4 +1,4 @@
-import type { DatasetBuildSpec } from "@biomed/contracts";
+import type { DatasetExecutionSpec } from "@biomed/contracts";
 
 import path from "node:path";
 
@@ -6,24 +6,24 @@ import { readJsonFileOrNull, writeJsonAtomic } from "../persistence/atomic-json.
 import { requireSafeId } from "./safe-id.js";
 
 /**
- * Durable record of a dataset-build invocation, persisted by the
- * ``execute_dataset_build`` tool before it hands the build to the TS Core.
+ * Durable record of a dataset-execution invocation, persisted by the
+ * ``execute_dataset_execution`` tool before it hands execution to the TS Core.
  *
  * On a process restart the deterministic continuation never asks the model
  * to "continue the task" from a synthetic prompt: the runtime reads this
  * record, rebuilds a tool workspace bound to the ORIGINAL run, replays the
  * same tool call (original ``tool_call_id``) and lets the executor resume
  * from its checkpointed state. The record lives under
- * ``state/hil/continuations/<build_id>.json`` inside the task root.
+ * ``state/hil/continuations/<requirement_id>.json`` inside the task root.
  */
-export interface SuspendedBuildContinuation {
+export interface SuspendedExecutionContinuation {
   schema_version: 1;
-  build_id: string;
+  requirement_id: string;
   task_id: string;
   run_id: string;
   pi_session_id: string;
   tool_call_id: string;
-  spec: DatasetBuildSpec;
+  spec: DatasetExecutionSpec;
   source_files: Record<string, string>;
   mapping_files: Record<string, string>;
   metadata_files: Record<string, string>;
@@ -31,28 +31,28 @@ export interface SuspendedBuildContinuation {
   created_at: string;
 }
 
-/** ``<taskRoot>/state/hil/continuations/<buildId>.json``. */
+/** ``<taskRoot>/state/hil/continuations/<requirementId>.json``. */
 export function continuationPath(
   taskRoot: string,
-  buildId: string,
+  requirementId: string,
 ): string {
-  requireSafeId(buildId, "build_id");
-  return path.join(taskRoot, "state", "hil", "continuations", `${buildId}.json`);
+  requireSafeId(requirementId, "requirement_id");
+  return path.join(taskRoot, "state", "hil", "continuations", `${requirementId}.json`);
 }
 
 /** Atomic write (tmp + rename) so a crash never leaves a partial record. */
-export async function saveBuildContinuation(
+export async function saveExecutionContinuation(
   taskRoot: string,
-  continuation: SuspendedBuildContinuation,
+  continuation: SuspendedExecutionContinuation,
 ): Promise<void> {
-  await writeJsonAtomic(continuationPath(taskRoot, continuation.build_id), continuation);
+  await writeJsonAtomic(continuationPath(taskRoot, continuation.requirement_id), continuation);
 }
 
-function parseContinuation(value: unknown): SuspendedBuildContinuation | null {
+function parseContinuation(value: unknown): SuspendedExecutionContinuation | null {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
   if (record.schema_version !== 1) return null;
-  for (const name of ["build_id", "task_id", "run_id", "pi_session_id", "tool_call_id", "created_at"] as const) {
+  for (const name of ["requirement_id", "task_id", "run_id", "pi_session_id", "tool_call_id", "created_at"] as const) {
     if (typeof record[name] !== "string" || record[name].trim() === "") return null;
   }
   for (const name of ["spec", "source_files", "mapping_files", "metadata_files"] as const) {
@@ -70,15 +70,15 @@ function parseContinuation(value: unknown): SuspendedBuildContinuation | null {
     registered_source_asset_ids: Array.isArray(record.registered_source_asset_ids)
       ? record.registered_source_asset_ids as string[]
       : [],
-  } as unknown as SuspendedBuildContinuation;
+  } as unknown as SuspendedExecutionContinuation;
 }
 
-export async function readBuildContinuation(
+export async function readExecutionContinuation(
   taskRoot: string,
-  buildId: string,
-): Promise<SuspendedBuildContinuation | null> {
+  requirementId: string,
+): Promise<SuspendedExecutionContinuation | null> {
   try {
-    const value = await readJsonFileOrNull<unknown>(continuationPath(taskRoot, buildId));
+    const value = await readJsonFileOrNull<unknown>(continuationPath(taskRoot, requirementId));
     return value === null ? null : parseContinuation(value);
   } catch {
     return null;

@@ -119,7 +119,7 @@ export const parityPolicy: ResourceBaselinePolicy = {
 
 async function operationResult(
   taskId: string,
-  buildId: string,
+  requirementId: string,
   manifestId: string,
   trustedRoot: string,
   relativePath: string,
@@ -132,7 +132,8 @@ async function operationResult(
     schema_version: "1.0",
     result_manifest_id: manifestId,
     task_id: taskId,
-    build_id: buildId,
+    run_id: "run_test",
+    requirement_id: requirementId,
     operation_id: `integrate_${manifestId}`,
     operation_kind: "integrate",
     operation_attempt_id: `attempt_${manifestId}`,
@@ -160,11 +161,6 @@ async function operationResult(
       commit_id: `commit_${manifestId}`,
       committed_at: "2026-08-23T00:00:00Z",
     },
-    migration: {
-      mode: "native",
-      legacy_checkpoint_path: null,
-      migrated_at: null,
-    },
   };
 }
 
@@ -173,18 +169,19 @@ export async function parityRequest(): Promise<{
   trustedRoot: string;
 }> {
   const taskId = "task_parity";
-  const buildId = "build_parity";
+  const requirementId = "build_parity";
   const trustedRoot = await mkdtemp(path.join(os.tmpdir(), "b3-parity-trusted-"));
   const forbiddenRoot = await mkdtemp(path.join(os.tmpdir(), "b3-parity-forbidden-"));
   const parents = await operationResult(
-    taskId, buildId, "result_parity_parents", trustedRoot, "parents.csv", PARENTS_CSV,
+    taskId, requirementId, "result_parity_parents", trustedRoot, "parents.csv", PARENTS_CSV,
   );
   const children = await operationResult(
-    taskId, buildId, "result_parity_children", trustedRoot, "children.csv", CHILDREN_CSV,
+    taskId, requirementId, "result_parity_children", trustedRoot, "children.csv", CHILDREN_CSV,
   );
   const request: MultiTableValidationRequest = {
     task_id: taskId,
-    build_id: buildId,
+    run_id: "run_test",
+    requirement_id: requirementId,
     candidate: {
       candidate_id: "candidate_parity",
       table_ids: [parentsDefinition.table_id, childrenDefinition.table_id],
@@ -283,7 +280,7 @@ export function diskOptions(
       telemetrySink,
     },
     b3Backend: {
-      owner: { taskId: request.task_id, buildId: request.build_id, generation: 0 },
+      owner: { taskId: request.task_id, requirementId: request.requirement_id, generation: 0 },
       factory: diskFactory(),
       snapshotImmutable: true,
       parityProof: { digest: "ab".repeat(32), ref: "b3-parity/evidence/parity-1" },

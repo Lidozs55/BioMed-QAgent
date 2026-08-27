@@ -150,7 +150,7 @@ async function createFixture(seeds: readonly OutputSeed[] = [EXPRESSION_SEED]): 
     host_receipt_digest: null,
     task_id: "task_operation_admission",
     run_id: "run_operation_admission",
-    build_id: "build_operation_admission",
+    requirement_id: "build_operation_admission",
     invocation_id: "invocation_operation_admission",
     attempt: 1,
     generation: 2,
@@ -174,7 +174,8 @@ async function createFixture(seeds: readonly OutputSeed[] = [EXPRESSION_SEED]): 
 function makeExpected(overrides: Partial<ExpectedOperationAdmission> = {}): ExpectedOperationAdmission {
   return {
     task_id: "task_operation_admission",
-    build_id: "build_operation_admission",
+    run_id: "run_operation_admission",
+    requirement_id: "build_operation_admission",
     attempt: 1,
     generation: 2,
     expected_exit_state: "succeeded",
@@ -310,7 +311,7 @@ async function createStageOneFixture(): Promise<{
     schema_version: "1.0",
     task_id: "task_operation_admission",
     run_id: "run_operation_admission",
-    build_id: "build_operation_admission",
+    requirement_id: "build_operation_admission",
     invocation_id: "invocation_operation_admission",
     attempt: 1,
     generation: 2,
@@ -365,7 +366,7 @@ async function createStageOneFixture(): Promise<{
     owner: "dataset_core",
     task_id: receipt.task_id,
     run_id: receipt.run_id,
-    build_id: receipt.build_id,
+    requirement_id: receipt.requirement_id,
     invocation_id: receipt.invocation_id,
     attempt: receipt.attempt,
     generation: receipt.generation,
@@ -437,11 +438,10 @@ describe("Core operation result admission", () => {
     const manifest = await admitOperationResultFromQuarantine(input);
 
     expect(manifest.status).toBe("succeeded");
-    expect(manifest.migration).toEqual({ mode: "native", legacy_checkpoint_path: null, migrated_at: null });
     expect(manifest.commit.state).toBe("committed");
     expect(manifest.commit.committed_at).toBe(COMMITTED_AT);
     expect(manifest.task_id).toBe(stage.evidence.task_id);
-    expect(manifest.build_id).toBe(stage.evidence.build_id);
+    expect(manifest.requirement_id).toBe(stage.evidence.requirement_id);
     expect(manifest.attempt).toBe(stage.evidence.attempt);
     expect(manifest.output_digest).toBe(stage.evidence.output_digest);
     expect(manifest.output_files).toEqual([
@@ -454,7 +454,8 @@ describe("Core operation result admission", () => {
     expect(manifest.result_manifest_id).toBe(
       canonicalDigest({
         task_id: manifest.task_id,
-        build_id: manifest.build_id,
+        run_id: manifest.run_id,
+        requirement_id: manifest.requirement_id,
         operation_id: manifest.operation_id,
         operation_attempt_id: manifest.operation_attempt_id,
       }),
@@ -463,11 +464,17 @@ describe("Core operation result admission", () => {
       canonicalDigest({ result_manifest_id: manifest.result_manifest_id, committed_at: COMMITTED_AT }),
     );
 
-    expect(parseOperationResultManifest(manifest, manifest.task_id, manifest.build_id)).toEqual(manifest);
+    expect(parseOperationResultManifest(
+      manifest,
+      manifest.task_id,
+      manifest.run_id,
+      manifest.requirement_id,
+    )).toEqual(manifest);
     expect(parseOperationResultManifest(
       JSON.parse(JSON.stringify(manifest)) as unknown,
       manifest.task_id,
-      manifest.build_id,
+      manifest.run_id,
+      manifest.requirement_id,
     )).toEqual(manifest);
     expect("candidate_id" in manifest).toBe(false);
     expect("publication_id" in manifest).toBe(false);
@@ -565,7 +572,7 @@ describe("Core operation result admission", () => {
   it("rejects cross-task, cross-build, and cross-attempt binding mismatches", async () => {
     const fixture = await createFixture();
     await expectRejection(makeInput(fixture, { task_id: "task_other" }), "CROSS_TASK_MISMATCH");
-    await expectRejection(makeInput(fixture, { build_id: "build_other" }), "CROSS_TASK_MISMATCH");
+    await expectRejection(makeInput(fixture, { requirement_id: "build_other" }), "CROSS_TASK_MISMATCH");
     await expectRejection(makeInput(fixture, { attempt: 2 }), "CROSS_TASK_MISMATCH");
   });
 

@@ -11,7 +11,6 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatPanel } from "@/components/ChatPanel";
 import { DatabaseSelector } from "@/components/DatabaseSelector";
 import type {
-  BuildResultStatus,
   TaskRunAccepted,
   TaskSnapshot,
 } from "@/runtime/contracts";
@@ -99,50 +98,6 @@ function seedTerminalTask(
   };
   useAgentStore.getState().hydrateTaskSnapshot(snapshot);
   useAgentStore.getState().setActiveTaskId(taskId);
-}
-
-function seedRunBuildResult(
-  buildStatus: BuildResultStatus,
-  userMessage: string,
-): void {
-  useAgentStore.setState((state) => {
-    const task = state.tasksById.task_terminal;
-    const runId = task.runOrder[task.runOrder.length - 1];
-    if (runId === undefined) return state;
-    return {
-      ...state,
-      tasksById: {
-        ...state.tasksById,
-        task_terminal: {
-          ...task,
-          runsById: {
-            ...task.runsById,
-            [runId]: {
-              ...task.runsById[runId],
-              status: "completed",
-              summary: {
-                run_status: "completed",
-                build_result: {
-                  status: buildStatus,
-                  valid_row_count: 0,
-                  successful_sources: [],
-                  rejected_sources: [],
-                  available_artifact_roles: [],
-                  publication_id: null,
-                  reason_codes: [],
-                  user_summary: userMessage,
-                  recommended_next_action: "",
-                },
-                error_code: null,
-                cancelled_at_stage: null,
-                user_message: userMessage,
-              },
-            },
-          },
-        },
-      },
-    };
-  });
 }
 
 function deferred<T>() {
@@ -859,230 +814,12 @@ describe("ChatPanel", () => {
     expect(screen.queryByText("模型未产出有效产物")).not.toBeInTheDocument();
   });
 
-  it("shows the no_data build label from the latest run summary", () => {
-    seedTerminalTask();
-    useAgentStore.setState((state) => {
-      const task = state.tasksById.task_terminal;
-      const runId = task.runOrder[task.runOrder.length - 1];
-      if (runId === undefined) return state;
-      return {
-        ...state,
-        tasksById: {
-          ...state.tasksById,
-          task_terminal: {
-            ...task,
-            runsById: {
-              ...task.runsById,
-              [runId]: {
-                ...task.runsById[runId],
-                status: "completed",
-                summary: {
-                  run_status: "completed",
-                  build_result: {
-                    status: "no_data",
-                    valid_row_count: 0,
-                    successful_sources: [],
-                    rejected_sources: ["pubmed"],
-                    available_artifact_roles: [],
-                    publication_id: null,
-                    reason_codes: ["no_records"],
-                    user_summary: "未检索到数据",
-                    recommended_next_action: "调整检索词后重试",
-                  },
-                  error_code: null,
-                  cancelled_at_stage: null,
-                  user_message: "未检索到数据",
-                },
-              },
-            },
-          },
-        },
-      };
-    });
-
-    render(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
-
-    expect(screen.getByRole("status")).toHaveTextContent("无数据");
-    expect(
-      screen.getByRole("status").querySelector("svg path")?.getAttribute("d"),
-    ).toContain("M112,84a12,12,0,1,1"); // InfoIcon, not CheckCircleIcon
-  });
-
-  it("shows the spec_rejected build label from the latest run summary", () => {
-    seedTerminalTask();
-    useAgentStore.setState((state) => {
-      const task = state.tasksById.task_terminal;
-      const runId = task.runOrder[task.runOrder.length - 1];
-      if (runId === undefined) return state;
-      return {
-        ...state,
-        tasksById: {
-          ...state.tasksById,
-          task_terminal: {
-            ...task,
-            runsById: {
-              ...task.runsById,
-              [runId]: {
-                ...task.runsById[runId],
-                status: "completed",
-                summary: {
-                  run_status: "completed",
-                  build_result: {
-                    status: "spec_rejected",
-                    valid_row_count: 0,
-                    successful_sources: [],
-                    rejected_sources: ["pubmed"],
-                    available_artifact_roles: [],
-                    publication_id: null,
-                    reason_codes: ["spec_rejected"],
-                    user_summary: "产物未通过规格校验",
-                    recommended_next_action: "修正规格后重试",
-                  },
-                  error_code: null,
-                  cancelled_at_stage: null,
-                  user_message: "产物未通过规格校验",
-                },
-              },
-            },
-          },
-        },
-      };
-    });
-
-    render(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
-
-    expect(screen.getByRole("status")).toHaveTextContent("规格被拒");
-    expect(
-      screen.getByRole("status").querySelector("svg path")?.getAttribute("d"),
-    ).toContain("m88,104a87.56"); // ProhibitIcon, not CheckCircleIcon
-  });
-
-  it("shows the succeeded build label from the latest run summary", () => {
-    seedTerminalTask();
-    seedRunBuildResult("succeeded", "检索完成");
-    render(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
-
-    expect(screen.getByRole("status")).toHaveTextContent("构建成功");
-    expect(
-      screen.getByRole("status").querySelector("svg path")?.getAttribute("d"),
-    ).toContain("M173.66,98.34a8,8"); // CheckCircleIcon
-  });
-
-  it("shows the partial_success build label from the latest run summary", () => {
-    seedTerminalTask();
-    seedRunBuildResult("partial_success", "部分来源未收录");
-    render(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
-
-    expect(screen.getByRole("status")).toHaveTextContent("部分成功");
-    expect(
-      screen.getByRole("status").querySelector("svg path")?.getAttribute("d"),
-    ).toContain("M173.66,98.34a8,8"); // CheckCircleIcon
-  });
-
-  it("keeps the generic completed label when the run summary has no build result", () => {
+  it("shows the generic completed label for a completed Run", () => {
     seedTerminalTask();
 
     render(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
 
     expect(screen.getByRole("status")).toHaveTextContent("任务已完成");
-  });
-
-  it("renders the latest run summary and recommended action for partial_success", () => {
-    seedTerminalTask();
-    useAgentStore.setState((state) => {
-      const task = state.tasksById.task_terminal;
-      const runId = task.runOrder[task.runOrder.length - 1];
-      if (runId === undefined) return state;
-      return {
-        ...state,
-        tasksById: {
-          ...state.tasksById,
-          task_terminal: {
-            ...task,
-            runsById: {
-              ...task.runsById,
-              [runId]: {
-                ...task.runsById[runId],
-                status: "completed",
-                summary: {
-                  run_status: "completed",
-                  build_result: {
-                    status: "partial_success",
-                    valid_row_count: 42,
-                    successful_sources: ["pubmed"],
-                    rejected_sources: ["geo"],
-                    available_artifact_roles: ["primary_dataset"],
-                    publication_id: "pub-1",
-                    reason_codes: ["partial_source_rejected"],
-                    user_summary: "部分来源未收录，已生成可用结果",
-                    recommended_next_action: "补充 GEO 检索后重新生成",
-                  },
-                  error_code: null,
-                  cancelled_at_stage: null,
-                  user_message: "部分来源未收录，已生成可用结果",
-                },
-              },
-            },
-          },
-        },
-      };
-    });
-
-    render(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
-
-    expect(
-      screen.getByText("部分来源未收录，已生成可用结果"),
-    ).toBeVisible();
-    expect(
-      screen.getByText("补充 GEO 检索后重新生成"),
-    ).toBeVisible();
-  });
-
-  it("renders the latest run rejection summary and recommended action for spec_rejected", () => {
-    seedTerminalTask();
-    useAgentStore.setState((state) => {
-      const task = state.tasksById.task_terminal;
-      const runId = task.runOrder[task.runOrder.length - 1];
-      if (runId === undefined) return state;
-      return {
-        ...state,
-        tasksById: {
-          ...state.tasksById,
-          task_terminal: {
-            ...task,
-            runsById: {
-              ...task.runsById,
-              [runId]: {
-                ...task.runsById[runId],
-                status: "completed",
-                summary: {
-                  run_status: "completed",
-                  build_result: {
-                    status: "spec_rejected",
-                    valid_row_count: 0,
-                    successful_sources: [],
-                    rejected_sources: ["pubmed"],
-                    available_artifact_roles: [],
-                    publication_id: null,
-                    reason_codes: ["spec_rejected"],
-                    user_summary: "产物未通过规格校验",
-                    recommended_next_action: "修正数据映射后重新生成",
-                  },
-                  error_code: null,
-                  cancelled_at_stage: null,
-                  user_message: "产物未通过规格校验",
-                },
-              },
-            },
-          },
-        },
-      };
-    });
-
-    render(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
-
-    expect(screen.getByText("产物未通过规格校验")).toBeVisible();
-    expect(screen.getByText("修正数据映射后重新生成")).toBeVisible();
   });
 
   it("renders the latest run stable error code and user message for failed", () => {
@@ -1105,7 +842,6 @@ describe("ChatPanel", () => {
                 status: "failed",
                 summary: {
                   run_status: "failed",
-                  build_result: null,
                   error_code: "download_incomplete",
                   cancelled_at_stage: null,
                   user_message: "下载中断，记录不完整",
@@ -1143,7 +879,6 @@ describe("ChatPanel", () => {
                 status: "cancelled",
                 summary: {
                   run_status: "cancelled",
-                  build_result: null,
                   error_code: null,
                   cancelled_at_stage: "processing",
                   user_message: "用户取消",

@@ -40,7 +40,7 @@ const CANDIDATE_KEYS = [
   "schema_version",
   "candidate_id",
   "task_id",
-  "build_id",
+  "requirement_id",
   "dataset_family",
   "row_granularity",
   "tables",
@@ -177,7 +177,7 @@ export function parsePublicationCandidate(value: unknown): PublicationCandidate 
     schema_version: "1.0",
     candidate_id: assertSafeId(record.candidate_id, "PublicationCandidate.candidate_id"),
     task_id: assertSafeId(record.task_id, "PublicationCandidate.task_id"),
-    build_id: assertSafeId(record.build_id, "PublicationCandidate.build_id"),
+    requirement_id: assertSafeId(record.requirement_id, "PublicationCandidate.requirement_id"),
     dataset_family: assertNonEmptyString(
       record.dataset_family,
       "PublicationCandidate.dataset_family",

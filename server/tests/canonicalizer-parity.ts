@@ -242,7 +242,7 @@ function parseAdapterBatch(options: {
   const adapter = getAdapter(options.adapterId);
   const asset = sourceAssetFromFixture(options.fixturesRoot, options.fixture);
   return adapter.parse(asset, join(options.fixturesRoot, options.fixture), {
-    buildId: "build_test",
+    requirementId: "build_test",
     bindingId: "binding_1",
     schemaRef: "gene_expression.long.v1",
     outputDir: options.outputDir,
@@ -607,7 +607,7 @@ export async function checkCanonicalizerFixtureParity(options: {
     partialAsset,
     partialPath,
     {
-      buildId: "build_test",
+      requirementId: "build_test",
       bindingId: "binding_1",
       schemaRef: "gene_expression.long.v1",
       outputDir: partialOut,
@@ -646,7 +646,7 @@ export async function checkCanonicalizerFixtureParity(options: {
   );
   const multiAsset = sourceAssetFromPath(multiPath);
   const multiBatch = await getAdapter("gdc.expression.v1").parse(multiAsset, multiPath, {
-    buildId: "build_test",
+    requirementId: "build_test",
     bindingId: "binding_1",
     schemaRef: "gene_expression.long.v1",
     outputDir: multiOut,

@@ -67,7 +67,7 @@ function evidenceByTable(options: {
   const expectedRefs = resultRefs({
     results: options.results,
     taskId: options.input.candidate.task_id,
-    buildId: options.input.candidate.build_id,
+    requirementId: options.input.candidate.requirement_id,
   });
   if (
     expectedRefs.length !== options.candidateRefs.length ||
@@ -79,7 +79,7 @@ function evidenceByTable(options: {
     const result = requireCoreResult({
       result: resultValue,
       taskId: options.input.candidate.task_id,
-      buildId: options.input.candidate.build_id,
+      requirementId: options.input.candidate.requirement_id,
     });
     const tableId = result.output_summary.table_id;
     if (typeof tableId !== "string" || !tableIds.has(tableId)) {
@@ -105,7 +105,7 @@ function trustedTableFiles(
   const integration = requireCoreResult({
     result: input.integration_result,
     taskId: input.candidate.task_id,
-    buildId: input.candidate.build_id,
+    requirementId: input.candidate.requirement_id,
     operationKind: "integrate",
     outputKind: "integrated_table",
   });
@@ -264,7 +264,7 @@ export async function validateLiteratureEvidenceCandidate(
   const candidate = parsePublicationCandidate(input.candidate);
   const result = await validateMultiTableCandidate({
     task_id: candidate.task_id,
-    build_id: candidate.build_id,
+    requirement_id: candidate.requirement_id,
     candidate: {
       candidate_id: candidate.candidate_id,
       table_ids: candidate.tables.map((table) => table.definition.table_id),

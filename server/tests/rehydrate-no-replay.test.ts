@@ -14,11 +14,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 
-import { parseDatasetBuildSpec, parseSourceAsset, type SourceAsset } from "../src/dataset/contracts/index.js";
+import { parseDatasetExecutionSpec, parseSourceAsset, type SourceAsset } from "../src/dataset/contracts/index.js";
 import {
   buildOperationPlan,
-  BuildCancelledError,
-  DatasetBuildExecutor,
+  ExecutionCancelledError,
+  DatasetExecutionExecutor,
   loadOperationOutput,
   loadOperationResultManifest,
   makeOperationOutput,
@@ -46,9 +46,9 @@ function binding(bindingId: string, source: string): Record<string, unknown> {
 }
 
 function spec() {
-  return parseDatasetBuildSpec({
+  return parseDatasetExecutionSpec({
     schema_version: "1.0",
-    build_id: "build_test",
+    requirement_id: "build_test",
     objective: "compare expression",
     dataset_family: "gene_expression",
     row_granularity: "gene_sample_measurement",
@@ -94,7 +94,7 @@ class CancelAtIntegrateRunner extends RecordingRunner {
     this.calls.push(op.operation_id);
     if (op.operation_id === "integrate" && !this.cancelled) {
       this.cancelled = true;
-      throw new BuildCancelledError("interrupt at integrate for partial-resume test");
+      throw new ExecutionCancelledError("interrupt at integrate for partial-resume test");
     }
     return makeOperationOutput({
       operation_id: op.operation_id,
@@ -143,11 +143,11 @@ function makeExecutor(options: {
   sourceAssets?: Readonly<Record<string, SourceAsset>> | null;
   implementationVersions?: Record<string, string> | null;
   rehydrateCompletedRunners?: boolean;
-}): DatasetBuildExecutor {
+}): DatasetExecutionExecutor {
   const buildSpec = spec();
-  return new DatasetBuildExecutor({
+  return new DatasetExecutionExecutor({
     taskId: "task_1",
-    buildId: buildSpec.build_id,
+    requirementId: buildSpec.requirement_id,
     stateDir: join(options.outputRoot, "state"),
     taskRoot: options.outputRoot,
     plan: buildOperationPlan(buildSpec),
@@ -232,7 +232,7 @@ describe("A5I Increment 3 rehydration without runner replay", () => {
       const output: Record<string, unknown> = { rows: 1 };
       const base: OperationOutputEnvelope = {
         task_id: "task_1",
-        build_id: "build_test",
+        requirement_id: "build_test",
         operation_id: "canonicalize:srcbind_gdc",
         operation_attempt_id: "attempt_1",
         output_digest: sha256Json(output),
@@ -243,7 +243,7 @@ describe("A5I Increment 3 rehydration without runner replay", () => {
       const options = {
         taskRoot: root,
         taskId: base.task_id,
-        buildId: base.build_id,
+        requirementId: base.requirement_id,
         operationId: base.operation_id,
         operationAttemptId: base.operation_attempt_id,
         outputDigest: base.output_digest,

@@ -106,7 +106,7 @@ BioMed-QAgent 是一个**生物医学数据智能检索与整合系统**：用�
 
 ### 3.4 来源标注 · 可追溯性
 
-- 每个 Build 的产物由 `dataset_manifest.json` 唯一权威声明（程序不硬编码文件名）；
+- 每个 requirement 的产物由 `dataset_manifest.json` 唯一权威声明（程序不硬编码文件名）；
 - 每条数据可通过 `SourceAsset` / locator / Adapter / Parser / Profile 引用回溯到
   原始来源与处理版本；
 - 产物含来源清单、来源关系、下载日志、字段映射、处理日志、质量报告、拒绝记录、

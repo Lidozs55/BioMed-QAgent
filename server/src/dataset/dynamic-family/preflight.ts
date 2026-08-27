@@ -8,7 +8,7 @@ import {
   type RuntimeLimits,
 } from "@biomed/contracts";
 
-import type { ParsedDynamicFamilyBuildSubmission } from "../../agent/tools/dynamic-family-build.js";
+import type { ParsedDynamicFamilyPublicationSubmission } from "../../agent/tools/dynamic-family-publication.js";
 import { canonicalDigest } from "../adapters/identity.js";
 import type { CoreAcquisitionPlan } from "../acquisition/runtime.js";
 import { parseWorkflowRecipeRef } from "../contracts/acquisition.js";
@@ -16,19 +16,19 @@ import { checkFamilySpecTopology } from "../family-spec-topology/index.js";
 import { materializeDynamicFamilySchemas } from "./index.js";
 import { prepareDynamicFamilyHostDescriptor } from "./submission.js";
 
-type Binding = ParsedDynamicFamilyBuildSubmission["build_proposal"]["source_bindings"][number];
-type AcquisitionRequest = ParsedDynamicFamilyBuildSubmission["acquisition_requests"][string];
+type Binding = ParsedDynamicFamilyPublicationSubmission["execution_proposal"]["source_bindings"][number];
+type AcquisitionRequest = ParsedDynamicFamilyPublicationSubmission["acquisition_requests"][string];
 
 export interface DynamicFamilyAcquisitionPlanningInput {
   readonly binding: Binding;
   readonly request: AcquisitionRequest;
 }
 
-export interface PrepareDynamicFamilyBuildInput {
+export interface PrepareDynamicFamilyPublicationInput {
   readonly taskId: string;
-  readonly buildId: string;
+  readonly requirementId: string;
   readonly generation: number;
-  readonly submission: ParsedDynamicFamilyBuildSubmission;
+  readonly submission: ParsedDynamicFamilyPublicationSubmission;
   readonly runtimeLimits?: RuntimeLimits;
   /** Provider planning only; this callback must not acquire or register bytes. */
   readonly planAcquisition?: (input: DynamicFamilyAcquisitionPlanningInput) => Promise<CoreAcquisitionPlan>;
@@ -36,13 +36,13 @@ export interface PrepareDynamicFamilyBuildInput {
 
 export interface ValidateDynamicFamilyPreflightInput {
   readonly receipt: unknown;
-  readonly submission: ParsedDynamicFamilyBuildSubmission;
+  readonly submission: ParsedDynamicFamilyPublicationSubmission;
   readonly taskId: string;
-  readonly buildId: string;
+  readonly requirementId: string;
   readonly generation: number;
   readonly runtimeLimits?: RuntimeLimits;
   /** Reuse the same cheap Core provider planning seam used by preparation. */
-  readonly planAcquisition?: PrepareDynamicFamilyBuildInput["planAcquisition"];
+  readonly planAcquisition?: PrepareDynamicFamilyPublicationInput["planAcquisition"];
 }
 
 function diagnosticFacts(
@@ -56,7 +56,7 @@ function diagnosticFacts(
   }));
 }
 
-function selectedOutputClosure(submission: ParsedDynamicFamilyBuildSubmission): string[] {
+function selectedOutputClosure(submission: ParsedDynamicFamilyPublicationSubmission): string[] {
   const projection = submission.projection;
   return [
     ...projection.primary_tables,
@@ -65,8 +65,8 @@ function selectedOutputClosure(submission: ParsedDynamicFamilyBuildSubmission): 
   ];
 }
 
-function requiredInputRoles(submission: ParsedDynamicFamilyBuildSubmission): string[] {
-  const bindings = submission.build_proposal.source_bindings;
+function requiredInputRoles(submission: ParsedDynamicFamilyPublicationSubmission): string[] {
+  const bindings = submission.execution_proposal.source_bindings;
   const declared = submission.transform_metadata.declared_input_roles;
   if (bindings.length === 0) throw new TypeError("dynamic preflight requires at least one input binding");
   if (bindings.length !== declared.length) {
@@ -87,7 +87,7 @@ function requiredInputRoles(submission: ParsedDynamicFamilyBuildSubmission): str
   return roles;
 }
 
-function assertDeclaredOutputClosure(submission: ParsedDynamicFamilyBuildSubmission): void {
+function assertDeclaredOutputClosure(submission: ParsedDynamicFamilyPublicationSubmission): void {
   const expected = selectedOutputClosure(submission);
   const declared = submission.transform_metadata.declared_output_tables;
   if (declared.length !== expected.length || declared.some((table, index) => table.table_id !== expected[index])) {
@@ -103,8 +103,8 @@ function assertDeclaredOutputClosure(submission: ParsedDynamicFamilyBuildSubmiss
   }
 }
 
-function logicalSubmissionDigestInput(submission: ParsedDynamicFamilyBuildSubmission): JsonValue {
-  const proposal = submission.build_proposal;
+function logicalSubmissionDigestInput(submission: ParsedDynamicFamilyPublicationSubmission): JsonValue {
+  const proposal = submission.execution_proposal;
   return {
     schema_version: submission.schema_version,
     execution_backend: submission.execution_backend,
@@ -112,7 +112,7 @@ function logicalSubmissionDigestInput(submission: ParsedDynamicFamilyBuildSubmis
     projection_id: submission.projection.projection_id,
     transform_source: submission.transform_source,
     transform_metadata: submission.transform_metadata as unknown as JsonValue,
-    build_proposal: {
+    execution_proposal: {
       ...proposal,
       // The Host descriptor digest is deliberately the prepared fact. The
       // submitter binds its proposal reference to this receipt fact.
@@ -128,7 +128,7 @@ function logicalSubmissionDigestInput(submission: ParsedDynamicFamilyBuildSubmis
 }
 
 export function dynamicFamilyPreflightSubmissionDigest(
-  submission: ParsedDynamicFamilyBuildSubmission,
+  submission: ParsedDynamicFamilyPublicationSubmission,
 ): string {
   return canonicalDigest(logicalSubmissionDigestInput(submission));
 }
@@ -190,10 +190,10 @@ function parseCoreAcquisitionPlan(
 }
 
 async function acquisitionPlan(
-  input: PrepareDynamicFamilyBuildInput,
+  input: PrepareDynamicFamilyPublicationInput,
 ): Promise<DynamicFamilyPreflightAcquisitionPlanEntry[]> {
   const result: DynamicFamilyPreflightAcquisitionPlanEntry[] = [];
-  for (const binding of input.submission.build_proposal.source_bindings) {
+  for (const binding of input.submission.execution_proposal.source_bindings) {
     const registeredAsset = input.submission.registered_sources[binding.binding_id];
     if (registeredAsset !== undefined) {
       result.push({
@@ -251,11 +251,11 @@ function freezeReceipt(receipt: DynamicFamilyPreflightReceipt): DynamicFamilyPre
  * Deterministic, side-effect-free structural preflight. No SourceAsset bytes,
  * OperationResult, assessment, publication, or artifact are touched here.
  */
-export async function prepareDynamicFamilyBuild(
-  input: PrepareDynamicFamilyBuildInput,
+export async function prepareDynamicFamilyPublication(
+  input: PrepareDynamicFamilyPublicationInput,
 ): Promise<DynamicFamilyPreflightReceipt> {
-  if (input.submission.build_proposal.build_id !== input.buildId) {
-    throw new TypeError("dynamic preflight build_id does not match the Core build context");
+  if (input.submission.execution_proposal.requirement_id !== input.requirementId) {
+    throw new TypeError("dynamic preflight requirement_id does not match the Core build context");
   }
   if (!Number.isSafeInteger(input.generation) || input.generation < 0) {
     throw new TypeError("dynamic preflight generation must be a non-negative safe integer");
@@ -277,7 +277,7 @@ export async function prepareDynamicFamilyBuild(
   const unsigned: DynamicFamilyPreflightReceipt = {
     schema_version: "1.0",
     task_id: input.taskId,
-    build_id: input.buildId,
+    requirement_id: input.requirementId,
     generation: input.generation,
     family_spec_digest: input.submission.family_spec.canonical_digest,
     projection_digest: descriptor.projectionDigest,
@@ -309,15 +309,15 @@ export async function validateDynamicFamilyPreflightReceipt(
   if (receipt.task_id !== input.taskId) {
     throw new TypeError("dynamic preflight receipt is cross-task");
   }
-  if (receipt.build_id !== input.buildId) {
+  if (receipt.requirement_id !== input.requirementId) {
     throw new TypeError("dynamic preflight receipt is cross-build");
   }
   if (receipt.generation !== input.generation) {
     throw new TypeError("dynamic preflight receipt has stale generation");
   }
-  const expected = await prepareDynamicFamilyBuild({
+  const expected = await prepareDynamicFamilyPublication({
     taskId: input.taskId,
-    buildId: input.buildId,
+    requirementId: input.requirementId,
     generation: input.generation,
     submission: input.submission,
     runtimeLimits: input.runtimeLimits,
@@ -347,7 +347,7 @@ export async function validateDynamicFamilyPreflightReceipt(
   if (!equalJson(receipt.acquisition_plan, expected.acquisition_plan)) {
     throw new TypeError("dynamic preflight acquisition plan does not match");
   }
-  const transformRef = input.submission.build_proposal.transform_refs[0];
+  const transformRef = input.submission.execution_proposal.transform_refs[0];
   if (transformRef === undefined || transformRef.digest !== receipt.host_descriptor_digest) {
     throw new TypeError("dynamic preflight submit must present the prepared Host descriptor digest");
   }

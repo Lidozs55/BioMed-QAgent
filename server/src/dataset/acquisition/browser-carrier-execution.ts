@@ -11,7 +11,8 @@ import type { BrowserParserRecipeResolver } from "./browser-formalization.js";
 
 export interface BrowserCarrierParserExecutionInput {
   taskId: string;
-  buildId: string;
+  runId: string;
+  requirementId: string;
   outputDir: string;
   assetId: string;
   requestIdentityDigest: string;
@@ -40,7 +41,8 @@ export interface BrowserCarrierParserExecutionResult {
 export interface BrowserCarrierIntegrationInput {
   parsed: BrowserCarrierParserExecutionResult;
   taskId: string;
-  buildId: string;
+  runId: string;
+  requirementId: string;
   outputDir: string;
   familyId: string;
   rowGranularity: string;
@@ -131,12 +133,13 @@ export async function integrateBrowserParsedTable(
   const parameterDigest = createHash("sha256").update(JSON.stringify({ table_id: input.parsed.tableId, family_id: input.familyId }), "utf8").digest("hex");
   const operationResult = parseOperationResultManifest({
     schema_version: "1.0",
-    result_manifest_id: `result_${input.buildId}_${input.parsed.tableId}_integrated`,
+    result_manifest_id: `result_${input.requirementId}_${input.parsed.tableId}_integrated`,
     task_id: input.taskId,
-    build_id: input.buildId,
+    run_id: input.runId,
+    requirement_id: input.requirementId,
     operation_id: `integrate_browser_${input.parsed.tableId}`,
     operation_kind: "integrate",
-    operation_attempt_id: `attempt_${input.buildId}_${input.parsed.tableId}_integrated`,
+    operation_attempt_id: `attempt_${input.requirementId}_${input.parsed.tableId}_integrated`,
     attempt: 1,
     status: "succeeded",
     input_digest: input.parsed.operationResult.output_digest,
@@ -160,9 +163,8 @@ export async function integrateBrowserParsedTable(
       parameter_digest: parameterDigest,
       implementation_digest: input.implementationDigest,
     },
-    commit: { state: "committed", commit_id: `commit_${input.buildId}_${input.parsed.tableId}_integrated`, committed_at: new Date().toISOString() },
-    migration: { mode: "native", legacy_checkpoint_path: null, migrated_at: null },
-  }, input.taskId, input.buildId);
+    commit: { state: "committed", commit_id: `commit_${input.requirementId}_${input.parsed.tableId}_integrated`, committed_at: new Date().toISOString() },
+  }, input.taskId, input.runId, input.requirementId);
   return { operationResult, relativePath, absolutePath, sha256, sizeBytes: info.size };
 }
 
@@ -183,7 +185,7 @@ export async function executeBrowserCarrierParser(
     schema_version: "1.0" as const,
     evidence_id: `carrier_${input.assetId}`,
     task_id: input.taskId,
-    run_id: null,
+    run_id: input.runId,
     requested_url: resolved.acquisition_provenance.canonical_accession ?? resolved.registration_receipt.relative_path,
     final_url: resolved.acquisition_provenance.canonical_accession ?? resolved.registration_receipt.relative_path,
     redirect_chain: [],
@@ -229,12 +231,13 @@ export async function executeBrowserCarrierParser(
       .digest("hex");
     const operationResult = parseOperationResultManifest({
       schema_version: "1.0",
-      result_manifest_id: `result_${input.buildId}_${input.tableId}`,
+      result_manifest_id: `result_${input.requirementId}_${input.tableId}`,
       task_id: input.taskId,
-      build_id: input.buildId,
+      run_id: input.runId,
+      requirement_id: input.requirementId,
       operation_id: `parse_browser_${input.tableId}`,
       operation_kind: "parse",
-      operation_attempt_id: `attempt_${input.buildId}_${input.tableId}`,
+      operation_attempt_id: `attempt_${input.requirementId}_${input.tableId}`,
       attempt: 1,
       status: "succeeded",
       input_digest: input.requestIdentityDigest,
@@ -257,9 +260,8 @@ export async function executeBrowserCarrierParser(
         parameter_digest: parameterDigest,
         implementation_digest: input.implementationDigest,
       },
-      commit: { state: "committed", commit_id: `commit_${input.buildId}_${input.tableId}`, committed_at: new Date().toISOString() },
-      migration: { mode: "native", legacy_checkpoint_path: null, migrated_at: null },
-    }, input.taskId, input.buildId);
+      commit: { state: "committed", commit_id: `commit_${input.requirementId}_${input.tableId}`, committed_at: new Date().toISOString() },
+    }, input.taskId, input.runId, input.requirementId);
     return {
       adapter: result,
       tableId: input.tableId,

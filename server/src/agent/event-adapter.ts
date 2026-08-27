@@ -207,7 +207,7 @@ export class PiEventAdapter {
         // runtime resumes with a fresh turn, so a compacted turn end is not
         // terminal. The runtime forces the terminal event via completeRun.
         if (this.compactedThisTurn) return [];
-        return this.terminal(runId, { type: "run_completed", build_result: null });
+        return this.terminal(runId, { type: "run_completed" });
       case "tool_progress":
         this.diagnostic("unmapped_upstream_event", event.type);
         return [];
@@ -232,10 +232,7 @@ export class PiEventAdapter {
    * already terminal emits nothing.
    */
   completeRun(runId: string): EventEnvelope[] {
-    return this.terminal(runId, {
-      type: "run_completed",
-      build_result: null,
-    });
+    return this.terminal(runId, { type: "run_completed" });
   }
 
   failed(runId: string, error: unknown): EventEnvelope[] {

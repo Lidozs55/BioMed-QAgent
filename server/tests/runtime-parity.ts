@@ -13,15 +13,15 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { parseDatasetBuildSpec } from "../src/dataset/contracts/index.js";
+import { parseDatasetExecutionSpec } from "../src/dataset/contracts/index.js";
 import {
   buildOperationPlan,
-  DatasetBuildExecutor,
-  loadBuildState,
+  DatasetExecutionExecutor,
+  loadExecutionState,
   makeOperationOutput,
-  newBuildState,
+  newExecutionState,
   parseOperationAttempt,
-  saveBuildState,
+  saveExecutionState,
   validateAttemptLogPrefix,
   type OperationOutput,
   type OperationSpec,
@@ -51,9 +51,9 @@ function binding(bindingId: string, source: string): Record<string, unknown> {
 }
 
 function spec() {
-  return parseDatasetBuildSpec({
+  return parseDatasetExecutionSpec({
     schema_version: "1.0",
-    build_id: "build_test",
+    requirement_id: "build_test",
     objective: "compare expression",
     dataset_family: "gene_expression",
     row_granularity: "gene_sample_measurement",
@@ -140,11 +140,11 @@ function makeExecutor(options: {
   resumeFrom?: string;
   implementationVersions?: Record<string, string>;
   plan?: OperationSpec[];
-}): DatasetBuildExecutor {
+}): DatasetExecutionExecutor {
   const buildSpec = spec();
-  return new DatasetBuildExecutor({
+  return new DatasetExecutionExecutor({
     taskId: "task_1",
-    buildId: buildSpec.build_id,
+    requirementId: buildSpec.requirement_id,
     stateDir: join(options.outputRoot, "state"),
     taskRoot: options.outputRoot,
     plan: options.plan ?? buildOperationPlan(buildSpec),
@@ -207,7 +207,7 @@ export async function checkRuntimeParity(options: { outputRoot: string }): Promi
     check(issues, outcome.error === null, "runs all: no error");
     check(issues, outcome.completedOperationIds.length === 11, "runs all: 11 completed ids");
     check(issues, runner.calls.length === 11, "runs all: 11 runner calls");
-    const state = loadBuildState(join(out, "state"), "task_1", "build_test");
+    const state = loadExecutionState(join(out, "state"), "task_1", "run_test", "build_test");
     const succeeded = state.operation_attempts.filter((attempt) => attempt.status === "succeeded");
     check(issues, succeeded.length === 11, "runs all: 11 succeeded attempts");
   }
@@ -228,7 +228,7 @@ export async function checkRuntimeParity(options: { outputRoot: string }): Promi
       ["publish"],
       "reuse: publish is re-executed because generic publication shortcut is disabled",
     );
-    const state = loadBuildState(join(out, "state"), "task_1", "build_test");
+    const state = loadExecutionState(join(out, "state"), "task_1", "run_test", "build_test");
     const skipped = state.operation_attempts.filter((attempt) => attempt.status === "skipped");
     check(issues, skipped.length === 10, "reuse: 10 non-publication operations skipped");
   }
@@ -279,7 +279,7 @@ export async function checkRuntimeParity(options: { outputRoot: string }): Promi
     const runner2 = new RecordingRunner();
     await makeExecutor({ outputRoot: out, runner: runner2, implementationVersions: upgraded }).run();
     checkDeepEqual(issues, runner2.calls, ["parse:srcbind_gdc", "canonicalize:srcbind_gdc", "compatibility_gate", "integrate", "assemble", "validate_profile", "publish"], "impl version: upgraded parse invalidates downstream");
-    const state = loadBuildState(join(out, "state"), "task_1", "build_test");
+    const state = loadExecutionState(join(out, "state"), "task_1", "run_test", "build_test");
     const parseAttempts = state.operation_attempts.filter(
       (attempt) => attempt.operation_id === "parse:srcbind_gdc",
     );
@@ -303,7 +303,7 @@ export async function checkRuntimeParity(options: { outputRoot: string }): Promi
     check(issues, second.status === "completed", "resume: completed");
     check(issues, second.completedOperationIds.length === 11, "resume: 11 completed ids");
     checkDeepEqual(issues, runner2.calls, ["integrate", "assemble", "validate_profile", "publish"], "resume: target and downstream re-execute");
-    const state = loadBuildState(join(out, "state"), "task_1", "build_test");
+    const state = loadExecutionState(join(out, "state"), "task_1", "run_test", "build_test");
     const integrate = state.operation_attempts.filter((attempt) => attempt.operation_id === "integrate");
     checkDeepEqual(
       issues,
@@ -335,7 +335,7 @@ export async function checkRuntimeParity(options: { outputRoot: string }): Promi
       ["canonicalize:srcbind_gdc", "compatibility_gate", "integrate", "assemble", "validate_profile", "publish"],
       "invalidate: downstream of changed digest re-executes",
     );
-    const state = loadBuildState(join(out, "state"), "task_1", "build_test");
+    const state = loadExecutionState(join(out, "state"), "task_1", "run_test", "build_test");
     const skipped = state.operation_attempts.filter((attempt) => attempt.status === "skipped");
     check(issues, skipped.length === 5, "invalidate: 5 reused upstream/sibling attempts");
   }
@@ -369,7 +369,7 @@ export async function checkRuntimeParity(options: { outputRoot: string }): Promi
     const runner = new RecordingRunner({ cancelAfter: 1, token });
     const outcome = await makeExecutor({ outputRoot: out, runner, token }).run();
     check(issues, outcome.status === "cancelled", "cancel: status cancelled");
-    const state = loadBuildState(join(out, "state"), "task_1", "build_test");
+    const state = loadExecutionState(join(out, "state"), "task_1", "run_test", "build_test");
     const cancelled = state.operation_attempts.filter((attempt) => attempt.status === "cancelled");
     check(issues, cancelled.length === 1, "cancel: completed-too-late attempt marked cancelled");
     checkDeepEqual(issues, outcome.completedOperationIds, [], "cancel: no completed operations");
@@ -384,7 +384,7 @@ export async function checkRuntimeParity(options: { outputRoot: string }): Promi
     const inflight = {
       operation_attempt_id: "operation_attempt_crashed",
       task_id: "task_1",
-      build_id: "build_test",
+      requirement_id: "build_test",
       operation_id: "parse:srcbind_gdc",
       attempt: 1,
       input_digest: "a".repeat(64),
@@ -397,14 +397,14 @@ export async function checkRuntimeParity(options: { outputRoot: string }): Promi
       error: null,
       reused_operation_attempt_id: null,
     };
-    const state = newBuildState("task_1", "build_test");
+    const state = newExecutionState("task_1", "run_test", "build_test");
     state.inflight_attempt = parseOperationAttempt(inflight);
-    saveBuildState(stateDir, state);
+    saveExecutionState(stateDir, state);
     const runner = new RecordingRunner();
     const outcome = await makeExecutor({ outputRoot: out, runner }).run();
     check(issues, outcome.status === "completed", "recover: completed");
     check(issues, runner.calls.length === 11, "recover: crashed op re-executed, everything ran");
-    const reloaded = loadBuildState(stateDir, "task_1", "build_test");
+    const reloaded = loadExecutionState(stateDir, "task_1", "run_test", "build_test");
     const statuses = reloaded.operation_attempts.map((attempt) => attempt.status);
     check(issues, statuses.includes("cancelled"), "recover: inflight attempt marked cancelled");
     check(issues, statuses.filter((status) => status === "succeeded").length === 11, "recover: 11 succeeded attempts");
@@ -427,9 +427,9 @@ export async function checkRuntimeParity(options: { outputRoot: string }): Promi
     // still holds: integrate can only re-run with a real upstream after
     // canonicalization ("cannot integrate zero sources"), never empty.
     const planB = buildOperationPlan(
-      parseDatasetBuildSpec({
+      parseDatasetExecutionSpec({
         schema_version: "1.0",
-        build_id: "build_test",
+        requirement_id: "build_test",
         objective: "compare expression",
         dataset_family: "gene_expression",
         row_granularity: "gene_sample_measurement",
@@ -457,7 +457,7 @@ export async function checkRuntimeParity(options: { outputRoot: string }): Promi
     const runner2 = new IntegrateGuardRunner();
     const second = await makeExecutor({ outputRoot: out, plan: planB, runner: runner2 }).run();
     check(issues, second.status === "completed", "stale digest: plan B completes without ghost integrate");
-    const state = loadBuildState(join(out, "state"), "task_1", "build_test");
+    const state = loadExecutionState(join(out, "state"), "task_1", "run_test", "build_test");
     const succeeded = state.operation_attempts.filter((attempt) => attempt.status === "succeeded");
     const skipped = state.operation_attempts.filter((attempt) => attempt.status === "skipped");
     check(issues, succeeded.length === 19, "stale digest: plan A (11) + plan B re-executes 8");
@@ -492,7 +492,7 @@ export async function checkRuntimeParity(options: { outputRoot: string }): Promi
     const outcome = await makeExecutor({ outputRoot: out, runner }).run();
     check(issues, outcome.status === "failed", "failure: status failed");
     check(issues, outcome.error !== null, "failure: structured error");
-    const state = loadBuildState(join(out, "state"), "task_1", "build_test");
+    const state = loadExecutionState(join(out, "state"), "task_1", "run_test", "build_test");
     const failed = state.operation_attempts.filter((attempt) => attempt.status === "failed");
     check(issues, failed.length === 1 && failed[0].operation_id === "integrate", "failure: failed attempt recorded");
     check(issues, failed[0].error !== null, "failure: failed attempt carries error");
@@ -503,7 +503,7 @@ export async function checkRuntimeParity(options: { outputRoot: string }): Promi
     const base = {
       operation_attempt_id: "operation_attempt_1",
       task_id: "task_1",
-      build_id: "build_1",
+      requirement_id: "build_1",
       operation_id: "acquire:src",
       attempt: 1,
       input_digest: "a".repeat(64),
@@ -539,17 +539,17 @@ export async function checkRuntimeParity(options: { outputRoot: string }): Promi
     check(issues, threw, "state machine: skipped requires reused_operation_attempt_id");
   }
 
-  // test_build_state_rejects_diverged_attempt_log
+  // test_execution_state_rejects_diverged_attempt_log
   {
     const out = join(outputRoot, "diverged-log");
     mkdirSync(out, { recursive: true });
     const stateDir = join(out, "state");
     mkdirSync(stateDir, { recursive: true });
-    saveBuildState(stateDir, newBuildState("task_1", "build_1"));
+    saveExecutionState(stateDir, newExecutionState("task_1", "run_test", "build_1"));
     const record = {
       operation_attempt_id: "operation_attempt_x",
       task_id: "task_1",
-      build_id: "build_1",
+      requirement_id: "build_1",
       operation_id: "acquire:src",
       attempt: 1,
       input_digest: "a".repeat(64),
@@ -563,7 +563,7 @@ export async function checkRuntimeParity(options: { outputRoot: string }): Promi
       reused_operation_attempt_id: null,
     };
     writeFileSync(join(stateDir, "operation_attempts.jsonl"), `${JSON.stringify(record)}\n`, "utf8");
-    const state = loadBuildState(stateDir, "task_1", "build_1");
+    const state = loadExecutionState(stateDir, "task_1", "run_test", "build_1");
     let threw = false;
     try {
       validateAttemptLogPrefix(state, join(stateDir, "operation_attempts.jsonl"));
@@ -577,7 +577,7 @@ export async function checkRuntimeParity(options: { outputRoot: string }): Promi
   {
     const out = join(outputRoot, "corrupt");
     mkdirSync(join(out, "state"), { recursive: true });
-    writeFileSync(join(out, "state", "build_state.json"), "{not valid json", "utf8");
+    writeFileSync(join(out, "state", "execution_state.json"), "{not valid json", "utf8");
     const outcome = await makeExecutor({ outputRoot: out, runner: new RecordingRunner() }).run();
     check(issues, outcome.status === "failed", "corrupt: status failed");
     check(issues, outcome.error !== null && outcome.error.code === "internal_error", "corrupt: internal_error code");

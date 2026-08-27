@@ -119,7 +119,7 @@ pnpm start
 - Agent staging workspace：`data/workspaces/<taskId>/`。
 - durable runtime 与正式输出：`data/output/tasks/<taskId>/`。
 - 权威事件：`events.jsonl`。
-- 不可变发布：`builds/<buildId>/publish/`。
+- 不可变发布：`dataset_runs/<runId>/<requirementId>/publish/`。
 
 workspace 外的文件和命令访问经过 `allow / ask / deny`。即使用户批准访问，Agent 产物仍必须经 registered asset、OperationResult、validation、assessment 和 Publisher 才能成为正式 Publication。
 

@@ -28,7 +28,7 @@ function request(overrides: Partial<CoreAcquisitionRequest> = {}): CoreAcquisiti
     schema_version: "1.0",
     request_id: "request_c2i",
     task_id: "task_c2i",
-    build_id: "build_c2i",
+    requirement_id: "build_c2i",
     binding_id: "binding_fixture",
     mode: "builtin",
     provider_id: "fixture_provider",
@@ -225,7 +225,7 @@ describe("TASK-C2I Core-owned acquisition", () => {
     const second = await fixture.runtime.acquire({
       ...request(),
       request_id: "request_second",
-      build_id: "build_second",
+      requirement_id: "build_second",
     });
     expect(second.sourceAsset?.asset_id).toBe(result.sourceAsset.asset_id);
     expect(second.requestIdentityDigest).not.toBe(result.requestIdentityDigest);

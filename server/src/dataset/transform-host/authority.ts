@@ -13,7 +13,7 @@ const CONTEXT_KEYS = new Set([
   "authorizationToken",
   "taskId",
   "runId",
-  "buildId",
+  "requirementId",
   "invocationId",
   "attempt",
   "generation",
@@ -70,7 +70,7 @@ export interface CoreAuthoritativeTransformContext {
   readonly authorizationToken: object;
   readonly taskId: string;
   readonly runId: string;
-  readonly buildId: string;
+  readonly requirementId: string;
   readonly invocationId: string;
   readonly attempt: number;
   readonly generation: number;
@@ -109,7 +109,7 @@ export function assertCoreAuthoritativeContext(
   for (const [label, value] of [
     ["taskId", context.taskId],
     ["runId", context.runId],
-    ["buildId", context.buildId],
+    ["requirementId", context.requirementId],
     ["invocationId", context.invocationId],
     ["resourceClassId", context.resourceClassId],
     ["cancelFence", context.cancelFence],

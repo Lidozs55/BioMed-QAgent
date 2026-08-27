@@ -18,7 +18,7 @@ function request(accession: string): CoreAcquisitionRequest {
     schema_version: "1.0",
     request_id: "request_taxonomy",
     task_id: "task_taxonomy",
-    build_id: "build_taxonomy",
+    requirement_id: "build_taxonomy",
     binding_id: "binding_taxonomy",
     mode: "builtin",
     provider_id: NCBI_TAXONOMY_FILES_PROVIDER_ID,

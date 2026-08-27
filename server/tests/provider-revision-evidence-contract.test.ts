@@ -63,7 +63,7 @@ describe("ProviderRevisionEvidenceV1 Core contract", () => {
     const raw = evidence();
     expect(() => parseProviderRevisionEvidenceV1({
       ...raw,
-      build_id: "build_must_not_be_revision_evidence",
+      requirement_id: "build_must_not_be_revision_evidence",
     })).toThrow(/unknown/);
     expect(() => parseProviderRevisionEvidenceV1({
       ...raw,

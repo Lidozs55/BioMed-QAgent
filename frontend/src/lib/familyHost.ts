@@ -19,7 +19,7 @@ export interface ProductAssessmentSummaryData {
 export interface DynamicFamilyToolOutput {
   ok: boolean;
   status: string | null;
-  build_id: string | null;
+  requirement_id: string | null;
   publication_id: string | null;
   manifest_id: string | null;
   manifest_sha256: string | null;
@@ -41,7 +41,7 @@ export interface PublicationAcceptanceEvidence {
   candidate: {
     candidate_id: string | null;
     task_id: string | null;
-    build_id: string | null;
+    requirement_id: string | null;
     dataset_family: string | null;
     row_granularity: string | null;
     canonical_sha256: string | null;
@@ -96,7 +96,7 @@ function parseError(value: unknown): DynamicFamilyToolOutput["error"] {
 }
 
 /**
- * Parse the current submit_dynamic_family_build tool response. This is a UI
+ * Parse the current submit_dynamic_family_publication tool response. This is a UI
  * projection only; the authoritative wire validation remains in contracts and
  * the server tool boundary.
  */
@@ -106,7 +106,7 @@ export function parseDynamicFamilyToolOutput(value: unknown): DynamicFamilyToolO
   return {
     ok: object.ok,
     status: stringValue(object.status),
-    build_id: stringValue(object.build_id),
+    requirement_id: stringValue(object.requirement_id),
     publication_id: stringValue(object.publication_id),
     manifest_id: stringValue(object.manifest_id),
     manifest_sha256: stringValue(object.manifest_sha256),
@@ -268,7 +268,7 @@ export function parsePublicationAcceptanceEvidence(
     candidate: {
       candidate_id: stringValue(candidate?.candidate_id),
       task_id: stringValue(candidate?.task_id),
-      build_id: stringValue(candidate?.build_id),
+      requirement_id: stringValue(candidate?.requirement_id),
       dataset_family: stringValue(candidate?.dataset_family),
       row_granularity: stringValue(candidate?.row_granularity),
       canonical_sha256: stringValue(candidate?.canonical_sha256),

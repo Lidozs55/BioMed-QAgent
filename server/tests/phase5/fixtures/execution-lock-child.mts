@@ -1,5 +1,5 @@
 /**
- * Cross-process build-lock child (I-04 final audit). Runs under tsx:
+ * Cross-process execution-lock child (I-04 final audit). Runs under tsx:
  * repeatedly acquires the task_1/build_1 lock, holds it briefly, verifies the
  * fence, releases.  Every transition is appended to <lockRoot>/events.log:
  *
@@ -10,7 +10,7 @@
 
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { acquireBuildLock } from "../../../src/dataset/service/build-lock.js";
+import { acquireExecutionLock } from "../../../src/dataset/service/execution-lock.js";
 
 const [lockRoot, roundsArg, holdMsArg, readyPath, startPath] = process.argv.slice(2);
 const rounds = Number(roundsArg);
@@ -19,7 +19,7 @@ const logPath = join(lockRoot, "events.log");
 const tag = `child-${process.pid}`;
 
 if (readyPath === undefined || startPath === undefined) {
-  throw new Error("build-lock child requires ready and start paths");
+  throw new Error("execution-lock child requires ready and start paths");
 }
 
 writeFileSync(readyPath, `${tag}\n`);
@@ -33,9 +33,9 @@ const log = (line: string): void => {
 };
 
 for (let round = 0; round < rounds; round += 1) {
-  let lease: Awaited<ReturnType<typeof acquireBuildLock>> | undefined;
+  let lease: Awaited<ReturnType<typeof acquireExecutionLock>> | undefined;
   try {
-    lease = await acquireBuildLock(
+    lease = await acquireExecutionLock(
       {
         lockRoot,
         retryMs: 20_000,

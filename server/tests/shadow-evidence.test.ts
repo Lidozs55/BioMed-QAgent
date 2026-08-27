@@ -31,7 +31,7 @@ function manifest(overrides: Partial<ShadowRunManifest> = {}): ShadowRunManifest
     run_id: "run-legacy-1",
     attempt: 1,
     task_id: TASK_ID,
-    build_id: BUILD_ID,
+    requirement_id: BUILD_ID,
     input_digest: DIGEST_A,
     parameter_digest: DIGEST_A,
     implementation_digest: DIGEST_A,
@@ -71,7 +71,7 @@ function resolvingInput(
 ): CompareSelectedShadowRunsInput {
   return {
     task_id: TASK_ID,
-    build_id: BUILD_ID,
+    requirement_id: BUILD_ID,
     legacy: LEGACY,
     host: HOST,
     resolve_run: async (selection) =>

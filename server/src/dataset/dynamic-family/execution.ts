@@ -147,7 +147,7 @@ export async function executeDynamicFamilyTransform(
       }]));
     const materialization = await materializeDynamicFamilyCandidate({
       taskId: context.taskId,
-      buildId: context.buildId,
+      requirementId: context.requirementId,
       familySpec: input.familySpec,
       projection: input.projection,
       tableOutputs,
@@ -208,7 +208,7 @@ function assertAuthorityClosure(
   const mismatched =
     context.taskId !== expected.task_id
     || context.runId !== expected.run_id
-    || context.buildId !== expected.build_id
+    || context.requirementId !== expected.requirement_id
     || context.invocationId !== expected.invocation_id
     || context.attempt !== expected.attempt
     || context.generation !== expected.generation
@@ -257,7 +257,8 @@ function operationExpectation(
   const operationIdentity = sha256(`${context.invocationId}\0${context.attempt}`).slice(0, 24);
   return {
     task_id: context.taskId,
-    build_id: context.buildId,
+    run_id: context.runId,
+    requirement_id: context.requirementId,
     attempt: context.attempt,
     generation: context.generation,
     expected_exit_state: "succeeded",

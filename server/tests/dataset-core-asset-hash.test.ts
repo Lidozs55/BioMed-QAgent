@@ -22,7 +22,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { parseDatasetBuildSpec } from "../src/dataset/contracts/index.js";
+import { parseDatasetExecutionSpec } from "../src/dataset/contracts/index.js";
 import { TypeScriptDatasetCore } from "../src/dataset/service/ts-core.js";
 import {
   resolveReferencedAsset,
@@ -45,10 +45,10 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-function spec(buildId: string): ReturnType<typeof parseDatasetBuildSpec> {
-  return parseDatasetBuildSpec({
+function spec(requirementId: string): ReturnType<typeof parseDatasetExecutionSpec> {
+  return parseDatasetExecutionSpec({
     schema_version: "1.0",
-    build_id: buildId,
+    requirement_id: requirementId,
     objective: "A1 asset stream hash parity",
     dataset_family: "gene_expression",
     row_granularity: "gene_sample_measurement",
@@ -328,7 +328,7 @@ describe("TASK-047-A1 streaming asset hash", () => {
     if (!envelope.ok) expect(envelope.error.code).toBe("cancelled");
     expect(records).toHaveLength(0);
     // Core was never entered: no build output directory was created.
-    await expect(stat(path.join(taskRoot, "datasets_build", "build_preabort"))).rejects.toThrow();
+    await expect(stat(path.join(taskRoot, "dataset_runs", "run_preabort", "build_preabort"))).rejects.toThrow();
   });
 
   it("abort interrupts a mid-hash asset and does not enter Core", async () => {
@@ -357,7 +357,7 @@ describe("TASK-047-A1 streaming asset hash", () => {
     // The hash never completed (256 MiB cannot finish in 20 ms) — no
     // resolved-asset record was produced and Core was not entered.
     expect(records).toHaveLength(0);
-    await expect(stat(path.join(taskRoot, "datasets_build", "build_abort"))).rejects.toThrow();
+    await expect(stat(path.join(taskRoot, "dataset_runs", "run_abort", "build_abort"))).rejects.toThrow();
   });
 
   it("rejects an asset that changes while hashing (TOCTOU fail-closed)", async () => {
@@ -392,7 +392,7 @@ describe("TASK-047-A1 streaming asset hash", () => {
       expect(envelope.error.message).toContain("changed while hashing");
     }
     expect(records).toHaveLength(0);
-    await expect(stat(path.join(taskRoot, "datasets_build", "build_toctou"))).rejects.toThrow();
+    await expect(stat(path.join(taskRoot, "dataset_runs", "run_toctou", "build_toctou"))).rejects.toThrow();
   });
 
   it("hashes a 256 MiB asset in a 64 MB-heap child without OOM", async () => {

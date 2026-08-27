@@ -609,7 +609,7 @@ export function createDownloadGeoPlatformAnnotationTool(
       "platform as an immutable SourceAsset. The annotation maps probe IDs " +
       "to gene identifiers and is required for a probe-platform (microarray) " +
       "GEO build to produce gene-level rows — pass the returned file via " +
-      "the ``mapping_files`` parameter of execute_dataset_build " +
+      "the ``mapping_files`` parameter of execute_dataset_execution " +
       "(binding_id -> annotation path). Parameters: ``gpl`` (required, " +
       "e.g. 'GPL570'), ``max_size_mb`` (optional, default 4096). Returns JSON " +
       "with platform, asset and local_files. Fails cleanly when the " +

@@ -6,22 +6,21 @@ import {
   buildTransformDescriptorDigestCanonical,
   computeFamilySpecDigest,
   computeImplementationDigest,
-  parseDatasetBuildProposal2,
-  parseDatasetBuildSpec2,
+  parseDatasetExecutionProposal2,
   parseDatasetIdentity,
   parseDatasetTransform,
   parseFamilySpec,
   parseImplementationDigestInput,
-  parseResolvedDatasetBuildSpec2,
+  parseResolvedDatasetExecutionSpec2,
   parseScopeQualifiedRef,
   parseTransformExecutionReceipt,
   stableStringify,
   verifyFamilySpecDigest,
-  type DatasetBuildProposal2,
+  type DatasetExecutionProposal2,
   type DatasetTransform,
   type FamilySpec,
   type ImplementationDigestInput,
-  type ResolvedDatasetBuildSpec2,
+  type ResolvedDatasetExecutionSpec2,
   type TransformDescriptorDigestInput,
   type TransformExecutionReceipt,
 } from "../src/family-transform";
@@ -87,10 +86,10 @@ const descriptorDigestInput: TransformDescriptorDigestInput = {
   resource_policy_digest: B,
 };
 
-const resolvedBuild: ResolvedDatasetBuildSpec2 = {
+const resolvedBuild: ResolvedDatasetExecutionSpec2 = {
   schema_version: "2.0",
   spec_kind: "resolved",
-  build_id: "build_1",
+  requirement_id: "build_1",
   family_spec_ref: { scope: "curated", id: "fs_x", version: "2.0.0", digest: A },
   projection_ref: "proj_gene",
   source_bindings: [
@@ -108,10 +107,10 @@ const resolvedBuild: ResolvedDatasetBuildSpec2 = {
   idempotency_identity: "idem_1",
 };
 
-const proposalBuild: DatasetBuildProposal2 = {
+const proposalBuild: DatasetExecutionProposal2 = {
   schema_version: "2.0",
   spec_kind: "proposal",
-  build_id: "build_1",
+  requirement_id: "build_1",
   family_spec_ref: { scope: "curated", id: "fs_x", version: "2.0.0", digest: A },
   projection_ref: "proj_gene",
   source_bindings: [
@@ -132,7 +131,7 @@ const receipt: TransformExecutionReceipt = {
   schema_version: "1.0",
   task_id: "task_1",
   run_id: "run_1",
-  build_id: "build_1",
+  requirement_id: "build_1",
   invocation_id: "inv_1",
   attempt: 1,
   generation: 1,
@@ -548,37 +547,35 @@ describe("implementation and descriptor canonical digest closure", () => {
   });
 });
 
-describe("BuildSpec 2.0 proposal/resolved split", () => {
+describe("dataset execution proposal/resolved split", () => {
   it("parses proposal and resolved contracts through distinct parsers", () => {
-    expect(parseDatasetBuildProposal2(proposalBuild, "$").spec_kind).toBe("proposal");
-    expect(parseResolvedDatasetBuildSpec2(resolvedBuild, "$").spec_kind).toBe("resolved");
+    expect(parseDatasetExecutionProposal2(proposalBuild, "$").spec_kind).toBe("proposal");
+    expect(parseResolvedDatasetExecutionSpec2(resolvedBuild, "$").spec_kind).toBe("resolved");
   });
 
   it("requires exactly one registered handle for each resolved binding", () => {
     const binding = resolvedBuild.source_bindings[0];
     if (!binding) throw new Error("test fixture binding missing");
-    expect(() => parseResolvedDatasetBuildSpec2({
+    expect(() => parseResolvedDatasetExecutionSpec2({
       ...resolvedBuild,
       source_bindings: [{ ...binding, registered_asset_ref: null, registered_result_ref: null }],
     }, "$")) .toThrow(/exactly one|registered/i);
-    expect(() => parseResolvedDatasetBuildSpec2({
+    expect(() => parseResolvedDatasetExecutionSpec2({
       ...resolvedBuild,
       source_bindings: [{ ...binding, registered_result_ref: "result_1" }],
     }, "$")) .toThrow(/exactly one|registered/i);
   });
 
-  it("never accepts a proposal through the resolved or compatibility parser", () => {
-    expect(() => parseResolvedDatasetBuildSpec2(proposalBuild, "$")) .toThrow(/proposal|resolved|spec_kind/);
-    expect(() => parseDatasetBuildSpec2(proposalBuild, "$")) .toThrow(/proposal|resolved|spec_kind/);
-    expect(parseDatasetBuildSpec2(resolvedBuild, "$")) .toEqual(parseResolvedDatasetBuildSpec2(resolvedBuild, "$"));
+  it("never accepts a proposal through the resolved parser", () => {
+    expect(() => parseResolvedDatasetExecutionSpec2(proposalBuild, "$")) .toThrow(/proposal|resolved|spec_kind/);
   });
 
   it("rejects 1.0/2.0 hybrid objects without fallback sniffing", () => {
-    expect(() => parseResolvedDatasetBuildSpec2({ ...resolvedBuild, schema_version: "1.0" }, "$")) .toThrow(/2.0/);
-    expect(() => parseResolvedDatasetBuildSpec2({ ...resolvedBuild, objective: "hybrid" }, "$"))
+    expect(() => parseResolvedDatasetExecutionSpec2({ ...resolvedBuild, schema_version: "1.0" }, "$")) .toThrow(/2.0/);
+    expect(() => parseResolvedDatasetExecutionSpec2({ ...resolvedBuild, objective: "hybrid" }, "$"))
       .toThrow(/Unknown field|objective/);
     const withoutKind = { ...resolvedBuild } as Record<string, unknown>;
     delete withoutKind.spec_kind;
-    expect(() => parseDatasetBuildSpec2(withoutKind, "$")) .toThrow(/spec_kind|required/);
+    expect(() => parseResolvedDatasetExecutionSpec2(withoutKind, "$")) .toThrow(/spec_kind|required/);
   });
 });

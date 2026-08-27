@@ -47,9 +47,6 @@ export interface GoldEvidenceIdentity {
 export interface GoldEvidenceObservedFacts {
   task_status: string | null;
   run_status: string | null;
-  build_status: string | null;
-  build_id: string | null;
-  build_publication_id: string | null;
   publication_ids: readonly string[];
   artifact_count: number | null;
   hil_count: number | null;
@@ -126,7 +123,6 @@ function chainBoundary(stage: TrustedEvidenceChainProjection["gaps"][number]["st
     case "terminal": return "evaluator";
     case "trusted_input": return "trusted_input";
     case "semantic_product": return "validation";
-    case "build": return "assembly";
     case "publication": return "publication";
     case "artifact": return "reproducibility";
     case "final_answer": return "reproducibility";
@@ -260,8 +256,6 @@ function extractObserved(evidence: JsonObject | null): GoldEvidenceObservedFacts
   const terminal = isObject(evidence?.terminal) ? evidence.terminal : {};
   const run = isObject(terminal.run) ? terminal.run : {};
   const task = isObject(terminal.task) ? terminal.task : {};
-  const summary = isObject(run.summary) ? run.summary : {};
-  const build = isObject(summary.build_result) ? summary.build_result : {};
   const publications = Array.isArray(terminal.publications)
     ? terminal.publications
     : Array.isArray(evidence?.publications) ? evidence.publications : [];
@@ -276,9 +270,6 @@ function extractObserved(evidence: JsonObject | null): GoldEvidenceObservedFacts
   return {
     task_status: statusOrUnknown(task.status),
     run_status: statusOrUnknown(run.status),
-    build_status: statusOrUnknown(build.status),
-    build_id: stringOrNull(build.build_id),
-    build_publication_id: stringOrNull(build.publication_id),
     publication_ids: [...new Set(publicationIds)],
     artifact_count: integerOrNull(task.artifact_count),
     hil_count: hilValues.length > 0 ? hilValues.length : null,
@@ -297,7 +288,7 @@ function checksFor(
     : observed.task_status === "completed" && observed.run_status === "completed"
       ? "pass"
       : observed.task_status === null && observed.run_status === null ? "unknown" : "fail";
-  const publication: InventoryStatus = chain?.publication.state === "present" && chain.publication.consistent_with_build
+  const publication: InventoryStatus = chain?.publication.state === "present"
     ? "pass"
     : chain?.publication.state === "conflicting" ? "fail" : "unknown";
   const semanticProduct: InventoryStatus = chain?.semantic_product.state === "present" &&
@@ -453,10 +444,7 @@ export async function loadGoldEvidenceInventory(
     })
     : null;
   if (trustedEvidenceChain !== null) findings.push(...chainFindings(trustedEvidenceChain));
-  if (observed.build_status === "succeeded" && observed.publication_ids.length === 0 && observed.build_publication_id === null) {
-    findings.push(finding("publication.publication_receipt_missing", "publication", "publication_receipt", "Build success is present but no publication receipt was observed", [evidenceRef]));
-  }
-  if ((observed.publication_ids.length > 0 || observed.build_publication_id !== null) &&
+  if (observed.publication_ids.length > 0 &&
       trustedEvidenceChain?.artifacts.all_publication_artifacts_verified !== true) {
     findings.push(finding("reproducibility.artifact_verification_missing", "reproducibility", "artifact_download_hash", "Publication identifiers are observed, but artifact download/hash evidence is absent", [evidenceRef]));
   }

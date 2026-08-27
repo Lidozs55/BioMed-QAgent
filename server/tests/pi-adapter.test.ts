@@ -90,7 +90,7 @@ describe("Pi system prompt", () => {
       /completion is determined by task semantics, never by the requested file format/i,
     );
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
-      /formal completion requires every requested semantic product to have a current-run Dataset Core BuildResult and immutable Publication/i,
+      /formal data product requires a current-run immutable Publication backed by OperationResults and ProductAssessment/i,
     );
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
       /do not fall back after the first obstacle/i,
@@ -117,7 +117,7 @@ describe("Pi system prompt", () => {
       /a dynamic-bindable provider is wired for trusted acquisition and input decoding/i,
     );
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/Core-acquisition-only binary carrier/i);
-    expect(PHASE1_SYSTEM_PROMPT).toMatch(/call inspect_dataset_build_routes/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/call inspect_dataset_execution_routes/i);
   });
 
   test("publishes a bounded tool catalog and cumulatively activates optional schemas", async () => {
@@ -128,9 +128,9 @@ describe("Pi system prompt", () => {
       parameters: { type: "object", properties: {} },
       execute: async () => ({ content: "{}" }),
     });
-    const core = tool("execute_dataset_build", "Execute a trusted Dataset Core build.");
-    const prepare = tool("prepare_dynamic_family_build", "Prepare a Dynamic Family build.");
-    const inspect = tool("inspect_dataset_build_routes", "Inspect formal Dataset Core routes.");
+    const core = tool("execute_dataset_execution", "Execute a trusted Dataset Core build.");
+    const prepare = tool("prepare_dynamic_family_publication", "Prepare a Dynamic Family build.");
+    const inspect = tool("inspect_dataset_execution_routes", "Inspect formal Dataset Core routes.");
     const pubmed = tool("search_pubmed", "Search PubMed.");
     const gwas = tool("lookup_gwas_catalog", "Look up GWAS Catalog records.");
     const tools = [inspect, core, prepare, pubmed, gwas];
@@ -138,9 +138,9 @@ describe("Pi system prompt", () => {
 
     const prompt = toolCatalogPrompt(tools, initial);
     expect(prompt).toContain("Available curated skill/tool map");
-    expect(prompt).toContain("inspect_dataset_build_routes (active)");
-    expect(prompt).toContain("execute_dataset_build (active)");
-    expect(prompt).toContain("prepare_dynamic_family_build (active)");
+    expect(prompt).toContain("inspect_dataset_execution_routes (active)");
+    expect(prompt).toContain("execute_dataset_execution (active)");
+    expect(prompt).toContain("prepare_dynamic_family_publication (active)");
     expect(prompt).toContain("lookup_gwas_catalog");
     expect(prompt.length).toBeLessThanOrEqual(16_000);
 

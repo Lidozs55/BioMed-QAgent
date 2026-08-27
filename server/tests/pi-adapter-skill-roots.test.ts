@@ -134,8 +134,8 @@ describe("PiAgentAdapter skill-root loading (Phase 2)", () => {
     const { adapter } = adapterWith(upstream, repositorySkillsRoot);
     const tools = [
       {
-        name: "execute_dataset_build",
-        label: "Execute DatasetBuild",
+        name: "execute_dataset_execution",
+        label: "Execute DatasetExecution",
         description: "Execute through Dataset Core.",
         parameters: { type: "object" },
         execute: async () => ({ content: "{}" }),
@@ -154,12 +154,12 @@ describe("PiAgentAdapter skill-root loading (Phase 2)", () => {
       runId: "run_test",
       cwd,
       tools,
-      initialToolNames: ["execute_dataset_build"],
+      initialToolNames: ["execute_dataset_execution"],
     });
 
     const prompt = upstream.configs[0]?.systemPrompt ?? "";
     expect(prompt).toContain("Available curated skill/tool map");
-    expect(prompt).toContain("execute_dataset_build (active)");
+    expect(prompt).toContain("execute_dataset_execution (active)");
     expect(prompt).toContain("lookup_gwas_catalog");
     expect(prompt).toContain("activate_agent_tools");
   });

@@ -7,7 +7,7 @@
  * compatibility gate -> integrate -> assemble -> validate profile -> publish fan back in.
  */
 
-import type { DatasetBuildSpec } from "../contracts/index.js";
+import type { DatasetExecutionSpec } from "../contracts/index.js";
 import {
   OperationKind,
   makeOperationSpec,
@@ -18,7 +18,7 @@ import {
  * The derive slot is server-owned and appears only when a trusted handler is
  * supplied; callers cannot add arbitrary operations. */
 export function buildOperationPlan(
-  spec: DatasetBuildSpec,
+  spec: DatasetExecutionSpec,
   options: { deriveHandler?: boolean } = {},
 ): OperationSpec[] {
   const ops: OperationSpec[] = [];

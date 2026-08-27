@@ -37,7 +37,8 @@ export type OperationResultAdmissionRejectionCode =
  */
 export interface ExpectedOperationAdmission {
   task_id: string;
-  build_id: string;
+  run_id?: string;
+  requirement_id: string;
   attempt: number;
   generation: number;
   /**

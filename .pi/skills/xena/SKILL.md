@@ -23,4 +23,4 @@ Use `search_xena` to discover datasets by term (cohort name, data type) and
 ## Build boundaries
 
 - Expression matrices enter the build through the xena.matrix.v1 adapter with
-  `source: "ucsc_xena"`. One DatasetBuildSpec per cohort/dataset family.
+  `source: "ucsc_xena"`. One DatasetExecutionSpec per cohort/dataset family.

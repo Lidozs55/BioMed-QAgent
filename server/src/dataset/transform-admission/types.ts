@@ -67,7 +67,7 @@ export interface ExpectedTransformInvocation {
   owner: "dataset_core";
   task_id: string;
   run_id: string;
-  build_id: string;
+  requirement_id: string;
   invocation_id: string;
   attempt: number;
   generation: number;
@@ -151,7 +151,7 @@ export interface TransformQuarantineAdmissionEvidence {
   host_receipt_digest: string | null;
   task_id: string | null;
   run_id: string | null;
-  build_id: string | null;
+  requirement_id: string | null;
   invocation_id: string | null;
   attempt: number | null;
   generation: number | null;

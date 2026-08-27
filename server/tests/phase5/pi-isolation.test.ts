@@ -9,7 +9,7 @@
  * Runtime gate: with an unreachable legacy endpoint, the DATASET_CORE=ts
  * profile still creates tasks and completes runs — no startup probe, no
  * business-tool degradation — while the python profile would require the
- * bridge only for DatasetBuild tools.
+ * bridge only for DatasetExecution tools.
  */
 
 import { createServer } from "node:http";
@@ -237,8 +237,8 @@ describe("runtime Pi-path isolation gate (P5-13)", () => {
       "download_from_page",
       "capture_web_page",
       "capture_page_section",
-      "inspect_dataset_build_routes",
-      "execute_dataset_build",
+      "inspect_dataset_execution_routes",
+      "execute_dataset_execution",
     ]) {
       expect(names.has(name), `expected ${name} to be wired into the Pi session`).toBe(true);
     }

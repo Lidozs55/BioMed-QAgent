@@ -49,9 +49,6 @@ function inventory(
     observed: {
       task_status: "completed",
       run_status: "completed",
-      build_status: "succeeded",
-      build_id: "build-a",
-      build_publication_id: null,
       publication_ids: [],
       artifact_count: null,
       hil_count: null,

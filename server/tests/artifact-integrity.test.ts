@@ -71,7 +71,7 @@ async function runtimeFixture() {
 
 function manifestJson(options: {
   taskId: string;
-  buildId: string;
+  requirementId: string;
   manifestId?: string;
   artifacts: Array<{
     artifact_id: string;
@@ -95,7 +95,7 @@ function manifestJson(options: {
   return JSON.stringify({
     manifest_id: options.manifestId ?? `manifest_${digest.slice(0, 16)}`,
     task_id: options.taskId,
-    build_id: options.buildId,
+    requirement_id: options.requirementId,
     sha256: digest,
     artifacts: options.artifacts,
   });
@@ -164,16 +164,17 @@ describe("publication integrity hardening (P7)", () => {
     const publicationDir = path.join(
       tasksRoot,
       taskId,
-      "datasets_build",
+      "dataset_runs",
+      "run_one",
       "build_one",
       "publish",
-      "version_1",
+      "publication_one",
     );
     await mkdir(path.join(publicationDir, "merged"), { recursive: true });
     await writeFile(path.join(publicationDir, "merged", "primary.csv"), primary, "utf8");
     const manifest = JSON.parse(manifestJson({
       taskId,
-      buildId: "build_one",
+      requirementId: "build_one",
       artifacts: [{
         artifact_id: "artifact_primary",
         role: "primary_dataset",
@@ -217,16 +218,17 @@ describe("publication integrity hardening (P7)", () => {
     const publicationDir = path.join(
       tasksRoot,
       taskId,
-      "datasets_build",
+      "dataset_runs",
+      "run_one",
       "build_one",
       "publish",
-      "version_1",
+      "publication_one",
     );
     await mkdir(path.join(publicationDir, "merged"), { recursive: true });
     await writeFile(path.join(publicationDir, "merged", "primary.csv"), primary, "utf8");
     const manifest = JSON.parse(manifestJson({
       taskId,
-      buildId: "build_one",
+      requirementId: "build_one",
       artifacts: [{
         artifact_id: "artifact_primary",
         role: "primary_dataset",
@@ -273,16 +275,17 @@ describe("publication integrity hardening (P7)", () => {
     const publicationDir = path.join(
       tasksRoot,
       taskId,
-      "datasets_build",
+      "dataset_runs",
+      "run_one",
       "build_one",
       "publish",
-      "version_1",
+      "publication_one",
     );
     await mkdir(path.join(publicationDir, "merged"), { recursive: true });
     await writeFile(path.join(publicationDir, "merged", "primary.csv"), forged, "utf8");
     const manifest = JSON.parse(manifestJson({
       taskId,
-      buildId: "build_one",
+      requirementId: "build_one",
       artifacts: [{
         artifact_id: "artifact_primary",
         role: "primary_dataset",
@@ -315,16 +318,17 @@ describe("publication integrity hardening (P7)", () => {
     const publicationDir = path.join(
       tasksRoot,
       taskId,
-      "datasets_build",
+      "dataset_runs",
+      "run_one",
       "build_one",
       "publish",
-      "version_1",
+      "publication_one",
     );
     await mkdir(path.join(publicationDir, "merged"), { recursive: true });
     await writeFile(path.join(publicationDir, "merged", "primary.csv"), primary, "utf8");
     const manifest = JSON.parse(manifestJson({
       taskId,
-      buildId: "build_one",
+      requirementId: "build_one",
       artifacts: [{
         artifact_id: "artifact_primary",
         role: "primary_dataset",
@@ -376,7 +380,7 @@ describe("publication integrity hardening (P7)", () => {
   test("a corrupt publication receipt surfaces as 409, never as a silent empty listing", async () => {
     const { baseUrl, runtime, server, workspacesRoot } = await runtimeFixture();
     const { task_id: taskId } = await createTask(baseUrl, "req_p7_corrupt");
-    const publicationDir = await publishSimpleBuild(workspacesRoot, taskId);
+    const publicationDir = await publishSimplePublication(workspacesRoot, taskId);
 
     // Corrupt the publication.json AFTER a valid publication exists: the
     // reader must fail closed (ArtifactIntegrityError → 409) instead of
@@ -388,7 +392,7 @@ describe("publication integrity hardening (P7)", () => {
     expect(body.detail).toMatch(/publication|corrupt|integrity/i);
 
     // A 1.1 record whose receipt was stripped is corrupt too.
-    await publishSimpleBuild(workspacesRoot, taskId);
+    await publishSimplePublication(workspacesRoot, taskId);
     const raw = JSON.parse(await readFile(
       path.join(publicationDir, "publication.json"),
       "utf8",
@@ -406,7 +410,7 @@ describe("publication integrity hardening (P7)", () => {
   test("round-4 audit: valid JSON missing contract fields is a 409, not a silent no-artifact", async () => {
     const { baseUrl, runtime, server, workspacesRoot } = await runtimeFixture();
     const { task_id: taskId } = await createTask(baseUrl, "req_p7_missing_fields");
-    const publicationDir = await publishSimpleBuild(workspacesRoot, taskId);
+    const publicationDir = await publishSimplePublication(workspacesRoot, taskId);
 
     // The record is VALID JSON and even has a schema_version + receipt, but
     // the exact-keys publication parser requires publication_id,
@@ -429,39 +433,14 @@ describe("publication integrity hardening (P7)", () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
-  test("legacy 1.0 publications stay readable at their pre-P7 trust level", async () => {
-    const { baseUrl, runtime, server, workspacesRoot } = await runtimeFixture();
-    const { task_id: taskId } = await createTask(baseUrl, "req_p7_legacy");
-    const publicationDir = await publishSimpleBuild(workspacesRoot, taskId);
-    // Downgrade the record to the pre-P7 schema: no receipt, but the
-    // package digest still binds the artifact entries.
-    const raw = JSON.parse(await readFile(
-      path.join(publicationDir, "publication.json"),
-      "utf8",
-    )) as Record<string, unknown>;
-    delete raw["manifest_sha256"];
-    raw["schema_version"] = "1.0";
-    await writeFile(path.join(publicationDir, "publication.json"), JSON.stringify(raw), "utf8");
-
-    // Legacy records remain servable (migration path, round-3 audit): the
-    // reader must not silently drop pre-existing publications from the API.
-    const listing = await fetch(`${baseUrl}/api/v1/tasks/${taskId}/artifacts`);
-    expect(listing.status).toBe(200);
-    expect((await listing.json() as { artifacts: Array<{ artifact_id: string }> }).artifacts.map(
-      (artifact) => artifact.artifact_id,
-    )).toContain("dataset_manifest");
-
-    await runtime.close();
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  });
 });
 
-async function publishSimpleBuild(workspacesRoot: string, taskId: string): Promise<string> {
+async function publishSimplePublication(workspacesRoot: string, taskId: string): Promise<string> {
   // One merged artifact + manifest + 1.1 publication (mirrors the Dataset
   // Core promotion layout). Returns the publication directory.
   const { packageDigest } = await import("../src/dataset/publish/manifest.js");
-  const buildDir = path.join(tasksRootOf(workspacesRoot), taskId, "datasets_build", "build_one");
-  const publicationDir = path.join(buildDir, "publish", "version_1");
+  const executionDir = path.join(tasksRootOf(workspacesRoot), taskId, "dataset_runs", "run_one", "build_one");
+  const publicationDir = path.join(executionDir, "publish", "publication_one");
   await mkdir(path.join(publicationDir, "merged"), { recursive: true });
   const primary = "gene_id,value\nTP53,1\n";
   const sha256 = createHash("sha256").update(primary).digest("hex");
@@ -478,7 +457,7 @@ async function publishSimpleBuild(workspacesRoot: string, taskId: string): Promi
   const manifest = {
     manifest_id: `manifest_${digest.slice(0, 16)}`,
     task_id: taskId,
-    build_id: "build_one",
+    requirement_id: "build_one",
     sha256: digest,
     artifacts: [{
       artifact_id: "artifact_primary",

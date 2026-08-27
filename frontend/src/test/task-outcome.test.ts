@@ -1,21 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  taskHasArtifacts,
-  taskOutcome,
-} from "@/components/taskOutcome";
-import type { BuildResultStatus, TaskSummary } from "@/runtime/contracts";
+import { taskHasArtifacts, taskOutcome } from "@/components/taskOutcome";
+import type { TaskSummary } from "@/runtime/contracts";
 import { createTaskProjection } from "@/runtime/reducer";
 
 const CREATED_AT = "2026-07-14T00:00:00Z";
 
 function projection(
   status: TaskSummary["status"],
-  options: {
-    artifactCount?: number;
-    buildStatus?: BuildResultStatus;
-    latestBuildStatus?: BuildResultStatus;
-  } = {},
+  options: { artifactCount?: number; publicationId?: string } = {},
 ) {
   const task = createTaskProjection({
     task_id: "task",
@@ -28,122 +21,34 @@ function projection(
     updated_at: CREATED_AT,
     latest_sequence: 1,
     artifact_count: options.artifactCount,
-    latest_build_status: options.latestBuildStatus,
   });
-  if (options.buildStatus !== undefined) {
-    return {
-      ...task,
-      runsById: {
-        run_latest: {
-          runId: "run_latest",
-          taskId: "task",
-          requestId: null,
-          status,
-          input: null,
-          createdAt: CREATED_AT,
-          updatedAt: CREATED_AT,
-          startedAt: CREATED_AT,
-          finishedAt: CREATED_AT,
-          error: null,
-          summary: {
-            run_status: status,
-            build_result: {
-              status: options.buildStatus,
-              valid_row_count: 0,
-              successful_sources: [],
-              rejected_sources: [],
-              available_artifact_roles: [],
-              publication_id: null,
-              reason_codes: [],
-              user_summary: "",
-              recommended_next_action: "",
-            },
-            error_code: null,
-            cancelled_at_stage: null,
-            user_message: null,
-          },
-        },
-      },
-      runOrder: ["run_latest"],
-    };
-  }
-  return task;
+  return options.publicationId === undefined
+    ? task
+    : { ...task, currentPublicationId: options.publicationId };
 }
 
 describe("taskOutcome", () => {
-  it("treats structured succeeded/partial_success as data", () => {
-    expect(
-      taskOutcome(projection("completed", { buildStatus: "succeeded" })),
-    ).toBe("data");
-    expect(
-      taskOutcome(projection("completed", { buildStatus: "partial_success" })),
-    ).toBe("data");
+  it("treats a verified Publication or artifact inventory as data", () => {
+    expect(taskOutcome(projection("completed", { publicationId: "pub_1" }))).toBe("data");
+    expect(taskOutcome(projection("completed", { artifactCount: 2 }))).toBe("data");
   });
 
-  it("treats structured no_data as neutral", () => {
-    expect(
-      taskOutcome(projection("completed", { buildStatus: "no_data" })),
-    ).toBe("neutral");
-  });
-
-  it("treats spec_rejected as a problem", () => {
-    expect(
-      taskOutcome(projection("completed", { buildStatus: "spec_rejected" })),
-    ).toBe("problem");
-  });
-
-  it("uses artifact_count when no run summary is hydrated (history rows)", () => {
-    expect(taskOutcome(projection("completed", { artifactCount: 2 }))).toBe(
-      "data",
-    );
-    expect(taskOutcome(projection("completed", { artifactCount: 0 }))).toBe(
-      "neutral",
-    );
-  });
-
-  it("classifies from summary.latest_build_status before runs hydrate", () => {
-    expect(
-      taskOutcome(
-        projection("failed", { latestBuildStatus: "no_data" }),
-      ),
-    ).toBe("neutral");
-    expect(
-      taskOutcome(
-        projection("completed", { latestBuildStatus: "succeeded" }),
-      ),
-    ).toBe("data");
-    expect(
-      taskOutcome(
-        projection("completed", { latestBuildStatus: "spec_rejected" }),
-      ),
-    ).toBe("problem");
-  });
-
-  it("treats cancellation as neutral and interruption as a problem", () => {
+  it("classifies terminal runs independently from product production", () => {
+    expect(taskOutcome(projection("completed", { artifactCount: 0 }))).toBe("neutral");
     expect(taskOutcome(projection("cancelled"))).toBe("neutral");
+    expect(taskOutcome(projection("failed"))).toBe("problem");
     expect(taskOutcome(projection("interrupted"))).toBe("problem");
   });
 
   it("keeps active statuses out of the terminal outcome", () => {
-    for (const status of [
-      "queued",
-      "running",
-      "finalizing",
-      "cancel_requested",
-      "awaiting_user_input",
-    ] as const) {
+    for (const status of ["queued", "running", "finalizing", "cancel_requested", "awaiting_user_input"] as const) {
       expect(taskOutcome(projection(status))).toBeNull();
     }
   });
 
-  it("detects artifacts from hydrated artifact collections as fallback", () => {
+  it("detects artifacts from hydrated artifact collections", () => {
     const task = projection("completed");
     expect(taskHasArtifacts(task)).toBe(false);
-    expect(
-      taskHasArtifacts({
-        ...task,
-        artifactOrder: ["artifact_1"],
-      }),
-    ).toBe(true);
+    expect(taskHasArtifacts({ ...task, artifactOrder: ["artifact_1"] })).toBe(true);
   });
 });

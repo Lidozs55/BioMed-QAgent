@@ -236,9 +236,9 @@ describe("BackgroundTaskNotifications", () => {
       fetchCacheDatasets: vi.fn().mockResolvedValue({ items: [] }),
       deleteCacheDataset: vi.fn().mockResolvedValue(undefined),
       clearCacheDatasets: vi.fn().mockResolvedValue(0),
-      fetchBuilds: vi.fn().mockResolvedValue({ items: [], next_cursor: null }),
-      fetchBuild: vi.fn(),
-      getBuildArtifactUrl: vi.fn(),
+      fetchPublications: vi.fn().mockResolvedValue({ items: [], next_cursor: null }),
+      fetchPublication: vi.fn(),
+      getPublicationArtifactUrl: vi.fn(),
     };
     const eventTransport: EventTransport = {
       connect: vi.fn().mockResolvedValue(undefined),

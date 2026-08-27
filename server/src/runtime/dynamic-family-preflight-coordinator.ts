@@ -1,13 +1,13 @@
 import type { DynamicFamilyPreflightReceipt } from "@biomed/contracts";
 
 export interface DynamicFamilyPreflightPreparation {
-  readonly buildId: string;
+  readonly requirementId: string;
   readonly generation: number;
   readonly sequence: number;
 }
 
 export interface DynamicFamilyPreflightReservation {
-  readonly buildId: string;
+  readonly requirementId: string;
   readonly generation: number;
   readonly receiptDigest: string;
 }
@@ -21,7 +21,7 @@ interface ActiveReceipt {
   reservationToken: object | null;
 }
 
-interface BuildState {
+interface ExecutionState {
   generation: number;
   sequence: number;
   hasPrepared: boolean;
@@ -29,14 +29,14 @@ interface BuildState {
 }
 
 interface ReservationState {
-  readonly buildId: string;
+  readonly requirementId: string;
   readonly generation: number;
   readonly token: object;
 }
 
 export interface DynamicFamilyPreflightCoordinator {
   /** Begin a new prepare and synchronously invalidate the prior receipt. */
-  beginPrepare(buildId: string): DynamicFamilyPreflightPreparation;
+  beginPrepare(requirementId: string): DynamicFamilyPreflightPreparation;
   /** Commit only the latest in-flight preparation for its build. */
   commitPrepare(
     preparation: DynamicFamilyPreflightPreparation,
@@ -52,36 +52,36 @@ export interface DynamicFamilyPreflightCoordinator {
 }
 
 export function createDynamicFamilyPreflightCoordinator(): DynamicFamilyPreflightCoordinator {
-  const states = new Map<string, BuildState>();
+  const states = new Map<string, ExecutionState>();
   const reservations = new WeakMap<object, ReservationState>();
 
-  const stateFor = (buildId: string): BuildState => {
-    const existing = states.get(buildId);
+  const stateFor = (requirementId: string): ExecutionState => {
+    const existing = states.get(requirementId);
     if (existing !== undefined) return existing;
-    const created: BuildState = { generation: 0, sequence: 0, hasPrepared: false, active: null };
-    states.set(buildId, created);
+    const created: ExecutionState = { generation: 0, sequence: 0, hasPrepared: false, active: null };
+    states.set(requirementId, created);
     return created;
   };
 
   return {
-    beginPrepare(buildId): DynamicFamilyPreflightPreparation {
-      const state = stateFor(buildId);
+    beginPrepare(requirementId): DynamicFamilyPreflightPreparation {
+      const state = stateFor(requirementId);
       if (state.hasPrepared) state.generation += 1;
       state.hasPrepared = true;
       state.sequence += 1;
       // A new prepare supersedes both an available and an in-flight receipt.
       state.active = null;
-      return Object.freeze({ buildId, generation: state.generation, sequence: state.sequence });
+      return Object.freeze({ requirementId, generation: state.generation, sequence: state.sequence });
     },
 
     commitPrepare(preparation, receipt, submissionDigest): void {
-      const state = states.get(preparation.buildId);
+      const state = states.get(preparation.requirementId);
       if (
         state === undefined
         || !state.hasPrepared
         || state.generation !== preparation.generation
         || state.sequence !== preparation.sequence
-        || receipt.build_id !== preparation.buildId
+        || receipt.requirement_id !== preparation.requirementId
         || receipt.generation !== preparation.generation
       ) {
         throw new Error("dynamic preflight preparation was superseded");
@@ -97,7 +97,7 @@ export function createDynamicFamilyPreflightCoordinator(): DynamicFamilyPrefligh
     },
 
     reserve(receipt, submissionDigest): DynamicFamilyPreflightReservation {
-      const state = states.get(receipt.build_id);
+      const state = states.get(receipt.requirement_id);
       if (state === undefined || receipt.generation !== state.generation) {
         throw new Error("dynamic preflight receipt has stale generation");
       }
@@ -115,16 +115,16 @@ export function createDynamicFamilyPreflightCoordinator(): DynamicFamilyPrefligh
       const token = {};
       active.reservationToken = token;
       const reservation = Object.freeze({
-        buildId: receipt.build_id,
+        requirementId: receipt.requirement_id,
         generation: receipt.generation,
         receiptDigest: receipt.receipt_digest,
       });
-      reservations.set(reservation, { buildId: receipt.build_id, generation: receipt.generation, token });
+      reservations.set(reservation, { requirementId: receipt.requirement_id, generation: receipt.generation, token });
       return reservation;
     },
 
     complete(reservation): void {
-      const state = states.get(reservation.buildId);
+      const state = states.get(reservation.requirementId);
       const internal = reservations.get(reservation);
       if (state !== undefined && internal !== undefined) {
         const active = state.active;
@@ -140,7 +140,7 @@ export function createDynamicFamilyPreflightCoordinator(): DynamicFamilyPrefligh
     },
 
     isCurrent(reservation): boolean {
-      const state = states.get(reservation.buildId);
+      const state = states.get(reservation.requirementId);
       const internal = reservations.get(reservation);
       const active = state?.active;
       return state !== undefined

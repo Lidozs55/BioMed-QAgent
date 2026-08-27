@@ -1,5 +1,5 @@
 /**
- * Cross-platform build lock (M2, I-04) — one publisher per task_id + build_id.
+ * Cross-platform execution lock — one publisher per task_id + requirement_id.
  *
  * Directory-based mutual exclusion (atomic ``mkdir``) — no POSIX-only flock
  * semantics, works on Windows.  Ownership is a *fenced lease*:
@@ -7,7 +7,7 @@
  * - ``owner.json`` records ``{ owner, pid, token, acquired_at }``; the file's
  *   mtime doubles as a heartbeat refreshed by the holder on an interval, so a
  *   live process is never preempted for age alone — ``acquired_at`` is
- *   informational, not a lease (final-audit I-04: a build may legitimately
+ *   informational, not a lease (an execution may legitimately
  *   run far longer than one operation timeout).
  * - A lock is stale only when the recorded PID is dead **or** the heartbeat
  *   is older than ``staleMs`` (a stalled event loop cannot refresh it, so a
@@ -20,7 +20,7 @@
  * - ``release()`` re-reads ``owner.json`` and deletes only a lock it still
  *   owns — a displaced lease can never remove the successor's lock.
  * - ``assertOwned()`` is the publish-time fence: the publisher re-checks the
- *   token + heartbeat immediately before the immutable rename, so a build
+ *   token + heartbeat immediately before the immutable rename, so an execution
  *   whose lease was taken over can never publish late.
  */
 
@@ -28,8 +28,8 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-export interface BuildLockOptions {
-  /** Lock directory root (e.g. <taskRoot>/state/build-locks). */
+export interface ExecutionLockOptions {
+  /** Lock directory root (e.g. <taskRoot>/state/execution-locks). */
   lockRoot: string;
   /** Heartbeat staleness threshold (default 10 s). */
   staleMs?: number;
@@ -49,9 +49,9 @@ export interface BuildLockOptions {
   isAlive?: (pid: number) => boolean;
 }
 
-export interface BuildLockLease {
+export interface ExecutionLockLease {
   taskId: string;
-  buildId: string;
+  requirementId: string;
   owner: string;
   /**
    * Fence: true while this lease still owns the lock (token matches and the
@@ -61,10 +61,10 @@ export interface BuildLockLease {
   release(): Promise<void>;
 }
 
-export class BuildLockError extends Error {
+export class ExecutionLockError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "BuildLockError";
+    this.name = "ExecutionLockError";
   }
 }
 
@@ -134,12 +134,12 @@ async function classify(lockDir: string, ownerJson: string, ctx: ClassifyContext
   return "held";
 }
 
-export async function acquireBuildLock(
-  options: BuildLockOptions,
+export async function acquireExecutionLock(
+  options: ExecutionLockOptions,
   taskId: string,
-  buildId: string,
+  requirementId: string,
   owner: string,
-): Promise<BuildLockLease> {
+): Promise<ExecutionLockLease> {
   const { lockRoot } = options;
   const staleMs = options.staleMs ?? 10_000;
   const heartbeatMs = options.heartbeatMs ?? 2_000;
@@ -149,7 +149,7 @@ export async function acquireBuildLock(
   const now = options.now ?? (() => new Date());
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const isAlive = options.isAlive ?? defaultIsProcessAlive;
-  const lockDir = path.join(lockRoot, taskId, `${buildId}.lock`);
+  const lockDir = path.join(lockRoot, taskId, `${requirementId}.lock`);
   const ownerJson = path.join(lockDir, "owner.json");
   const deadline = now().getTime() + retryMs;
 
@@ -169,8 +169,8 @@ export async function acquireBuildLock(
       if (status === "held") {
         if (now().getTime() >= deadline) {
           const recorded = await readOwner(lockDir);
-          throw new BuildLockError(
-            `build ${buildId} is locked by another publisher (owner: ${recorded?.owner ?? "unknown"})`,
+          throw new ExecutionLockError(
+            `requirement ${requirementId} is locked by another publisher (owner: ${recorded?.owner ?? "unknown"})`,
           );
         }
         await sleep(retryIntervalMs);
@@ -239,7 +239,7 @@ export async function acquireBuildLock(
     heartbeat.unref();
     return {
       taskId,
-      buildId,
+      requirementId,
       owner,
       assertOwned: async (): Promise<boolean> => {
         const recorded = await readOwner(lockDir);
@@ -261,5 +261,5 @@ export async function acquireBuildLock(
       },
     };
   }
-  throw new BuildLockError(`build ${buildId} lock could not be acquired`);
+  throw new ExecutionLockError(`requirement ${requirementId} lock could not be acquired`);
 }

@@ -20,7 +20,7 @@ export interface BrowserEvidenceAcceptance {
 export interface BrowserPublicationHandoffInput {
   taskId: string;
   runId: string;
-  buildId: string;
+  requirementId: string;
   generation: number;
   familySpec: FamilySpec;
   projection: Projection;
@@ -37,7 +37,7 @@ export interface BrowserPublicationHandoff {
   readonly kind: "browser_publication_handoff";
   readonly taskId: string;
   readonly runId: string;
-  readonly buildId: string;
+  readonly requirementId: string;
   readonly generation: number;
   readonly familySpec: FamilySpec;
   readonly projection: Projection;
@@ -58,7 +58,7 @@ export interface BrowserPublicationHandoff {
 export function createBrowserPublicationHandoff(
   input: BrowserPublicationHandoffInput,
 ): BrowserPublicationHandoff {
-  if (input.taskId.length === 0 || input.runId.length === 0 || input.buildId.length === 0) {
+  if (input.taskId.length === 0 || input.runId.length === 0 || input.requirementId.length === 0) {
     throw new TypeError("browser publication handoff requires task/run/build identity");
   }
   if (!Number.isSafeInteger(input.generation) || input.generation < 0) {
@@ -113,7 +113,7 @@ export function createBrowserPublicationHandoff(
     kind: "browser_publication_handoff",
     taskId: input.taskId,
     runId: input.runId,
-    buildId: input.buildId,
+    requirementId: input.requirementId,
     generation: input.generation,
     familySpec: input.familySpec,
     projection: input.projection,

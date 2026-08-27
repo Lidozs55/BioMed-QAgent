@@ -29,7 +29,7 @@ export type PublicationVerificationCheckId = (typeof CHECK_IDS)[number];
 
 export interface AuthoritativePublicationReuseRequest {
   readonly task_id: string;
-  readonly build_id: string;
+  readonly requirement_id: string;
   readonly run_id: string;
   readonly attempt: number;
   readonly publication_id: string;
@@ -59,7 +59,7 @@ export interface PublicationAssessmentIdentity {
 export interface AuthoritativePublicationReceipt {
   readonly schema_version: "1.0";
   readonly task_id: string;
-  readonly build_id: string;
+  readonly requirement_id: string;
   readonly run_id: string;
   readonly attempt: number;
   readonly generation: number;
@@ -97,7 +97,7 @@ export interface PublicationVerificationCheck {
 export interface AuthoritativePublicationEvidence {
   readonly kind: "authoritative_publication_evidence";
   readonly task_id: string;
-  readonly build_id: string;
+  readonly requirement_id: string;
   readonly run_id: string;
   readonly attempt: number;
   readonly generation: number;
@@ -160,7 +160,8 @@ export async function verifyAuthoritativePublicationForReuse(
     const operationResult = parseOperationResultManifest(
       resolved.operation_result,
       input.task_id,
-      input.build_id,
+      input.run_id,
+      input.requirement_id,
     );
     if (!validOperationResult(operationResult, input, receipt)) return deny();
     checks[3]!.passed = true;
@@ -181,7 +182,7 @@ export async function verifyAuthoritativePublicationForReuse(
     return freeze({
       kind: "authoritative_publication_evidence" as const,
       task_id: input.task_id,
-      build_id: input.build_id,
+      requirement_id: input.requirement_id,
       run_id: input.run_id,
       attempt: input.attempt,
       generation: receipt.generation,
@@ -200,8 +201,8 @@ export async function verifyAuthoritativePublicationForReuse(
 function validRequest(input: Readonly<AuthoritativePublicationReuseRequest>): boolean {
   if (!isPlainRecord(input)) return false;
   const keys = Object.keys(input).sort();
-  if (keys.join(",") !== "attempt,build_id,manifest_id,publication_id,run_id,task_id") return false;
-  return SAFE_ID.test(input.task_id) && SAFE_ID.test(input.build_id) && SAFE_ID.test(input.run_id) &&
+  if (keys.join(",") !== "attempt,manifest_id,publication_id,requirement_id,run_id,task_id") return false;
+  return SAFE_ID.test(input.task_id) && SAFE_ID.test(input.requirement_id) && SAFE_ID.test(input.run_id) &&
     SAFE_ID.test(input.publication_id) && SAFE_ID.test(input.manifest_id) &&
     Number.isSafeInteger(input.attempt) && input.attempt >= 1;
 }
@@ -211,7 +212,7 @@ function validateReceipt(value: AuthoritativePublicationReceipt): AuthoritativeP
   if (!isPlainRecord(snapshot)) return null;
   value = snapshot as unknown as AuthoritativePublicationReceipt;
   if (value.schema_version !== "1.0" || !SAFE_ID.test(value.task_id) ||
-      !SAFE_ID.test(value.build_id) || !SAFE_ID.test(value.run_id) ||
+      !SAFE_ID.test(value.requirement_id) || !SAFE_ID.test(value.run_id) ||
       !SAFE_ID.test(value.publication_id) || !SAFE_ID.test(value.manifest_id) ||
       !Number.isSafeInteger(value.attempt) || value.attempt < 1 ||
       !Number.isSafeInteger(value.generation) || value.generation < 0 ||
@@ -244,7 +245,7 @@ function sameIdentity(
   input: AuthoritativePublicationReuseRequest,
   receipt: AuthoritativePublicationReceipt,
 ): boolean {
-  return receipt.task_id === input.task_id && receipt.build_id === input.build_id &&
+  return receipt.task_id === input.task_id && receipt.requirement_id === input.requirement_id &&
     receipt.run_id === input.run_id && receipt.attempt === input.attempt &&
     receipt.publication_id === input.publication_id && receipt.manifest_id === input.manifest_id;
 }
@@ -258,7 +259,6 @@ function validOperationResult(
   return result.operation_kind === "publish" && result.output_kind === "publication_manifest" &&
     result.status === "succeeded" && result.output_digest !== null &&
     result.attempt === input.attempt && result.commit.state === "committed" &&
-    result.migration.mode === "native" &&
     summary.publication_id === receipt.publication_id && summary.manifest_id === receipt.manifest_id;
 }
 

@@ -82,7 +82,7 @@ export function PublicationAcceptanceReview({
             <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-xs sm:grid-cols-3">
               <div><dt className="text-muted-foreground">数据族</dt><dd className="mt-1 break-words font-medium">{value(candidate.dataset_family)}</dd></div>
               <div><dt className="text-muted-foreground">行粒度</dt><dd className="mt-1 break-words font-medium">{value(candidate.row_granularity)}</dd></div>
-              <div><dt className="text-muted-foreground">build_id</dt><dd className="mt-1 break-all font-mono">{value(candidate.build_id)}</dd></div>
+              <div><dt className="text-muted-foreground">requirement_id</dt><dd className="mt-1 break-all font-mono">{value(candidate.requirement_id)}</dd></div>
               <div><dt className="text-muted-foreground">候选规范 digest</dt><dd className="mt-1 break-all font-mono">{candidate.canonical_sha256 === null ? "未提供" : shortDigest(candidate.canonical_sha256)}</dd></div>
               <div><dt className="text-muted-foreground">注册来源数</dt><dd className="mt-1 font-medium tabular-nums">{candidate.registered_asset_ids.length}</dd></div>
               <div><dt className="text-muted-foreground">表数量</dt><dd className="mt-1 font-medium tabular-nums">{evidence.tables.length}</dd></div>

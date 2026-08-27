@@ -221,12 +221,12 @@ function checkAtomicPromotion(
 
   const versionDir = join(
     publishDir,
-    `${manifest.build_id}_${manifest.sha256.slice(0, 16)}`,
+    `${manifest.requirement_id}_${manifest.sha256.slice(0, 16)}`,
   );
   if (existsSync(versionDir)) {
     violations.push(
       "atomic promotion: version directory already exists for this " +
-        `digest (${manifest.build_id}_${manifest.sha256.slice(0, 16)}); ` +
+        `digest (${manifest.requirement_id}_${manifest.sha256.slice(0, 16)}); ` +
         "refusing to republish an immutable version",
     );
     return false;
@@ -236,19 +236,19 @@ function checkAtomicPromotion(
 
 /**
  * Return the publication_id of the newest immutable version.  Version
- * directories are content-addressed (``<build_id>_<digest16>``); the newest
+ * directories are content-addressed (``<requirement_id>_<digest16>``); the newest
  * version is the one with the latest ``published_at`` — never a lexicographic
- * ordering of publication_ids.  The lookup is BUILD-SCOPED when ``buildId``
+ * ordering of publication_ids.  The lookup is BUILD-SCOPED when ``requirementId``
  * is given (Python ``find_latest_publication``).
  */
 export function findLatestPublication(
   publishDir: string,
-  buildId?: string | null,
+  requirementId?: string | null,
 ): string | null {
   let newest: [publishedAt: string, publicationId: string] | null = null;
   for (const child of listDirectories(publishDir)) {
     if (child.startsWith(".")) continue;
-    if (buildId !== null && buildId !== undefined && !child.startsWith(`${buildId}_`)) {
+    if (requirementId !== null && requirementId !== undefined && !child.startsWith(`${requirementId}_`)) {
       continue;
     }
     const publicationPath = join(publishDir, child, "publication.json");

@@ -8,35 +8,29 @@
 
 ## 9. 运行状态、数据结果与发布状态
 
-系统使用四个正交概念，禁止一个状态字段同时回答执行、数据、验证和发布问题。
+系统使用五个边界清晰的概念，禁止一个状态字段同时回答执行、数据、产品完整性、验证和发布问题。
 
-### 9.1 四类正交状态
+### 9.1 执行、结果、评估、验证与发布
 
 | 概念 | 回答问题 | 典型值 |
 | --- | --- | --- |
 | `RunStatus` | 执行是否排队、运行、完成、失败或取消 | `QUEUED/RUNNING/COMPLETED/FAILED/CANCELLED` |
-| `BuildResult` | 正常完成后得到什么数据结果 | `SUCCEEDED/PARTIAL_SUCCESS/NO_DATA/SPEC_REJECTED` |
+| `OperationResult` | 某个确定性步骤提交了什么可验证结果 | committed result manifest + receipts |
+| `ProductAssessment` | requirement 的产品完整性和可发布性 | `publishable/validated/incomplete` |
 | `ValidationResult` | 某个 Manifest digest 是否通过 Profile | `PASSED/FAILED` |
 | `DatasetPublication` | 哪个不可变版本已正式提升 | `publication_id + supersedes` |
 
 Parser 崩溃、文件损坏和内部异常对应 `RunStatus=FAILED`；用户取消对应
 `RunStatus=CANCELLED`。这些不是数据业务结果。
 
-### 9.2 BuildResult：正常完成后的数据结果
+### 9.2 OperationResult 与 ProductAssessment
 
-只有 `RunStatus=COMPLETED` 才产生 `BuildResult`：
-
-| 结果 | 含义 | 是否可有 Publication |
-| --- | --- | --- |
-| `SUCCEEDED` | 主数据通过验证并发布 | 是 |
-| `PARTIAL_SUCCESS` | 部分来源失败，剩余来源有效并通过 Profile | 是 |
-| `NO_DATA` | 未得到可发布主数据，但运行正常结束 | 可有审计型 Publication |
-| `SPEC_REJECTED` | BuildSpec 不满足 Schema、能力、兼容性或资源约束 | 否 |
-
-`BuildResult` 至少包含有效行数、成功来源、拒绝来源、可用 Artifact Role、
-`publication_id`、原因码、用户摘要和建议下一步。
-
-不再定义 `EXECUTION_FAILED` 或 `CANCELLED` BuildResult；它们已由 RunStatus 表达。
+`OperationResult` 是 task/run/requirement-scoped 的确定性 checkpoint；它记录输入、参数、
+实现和输出 digest、文件 receipt 及依赖闭包。它不等于产品完成，也不拥有独立生命周期。
+`ProductAssessment` 根据 family 需求评估 schema、relations、identifiers、provenance、
+confidence 和 reproducibility；只有可发布评估与通过的 ValidationResult 才可进入 Publisher。
+规格拒绝、无数据、部分来源失败或取消由 typed execution result/error、RunSummary 和事件表达，
+不再投影为另一个业务状态机。
 
 ### 9.3 ValidationResult 与 DatasetPublication
 
@@ -44,7 +38,7 @@ Parser 崩溃、文件损坏和内部异常对应 `RunStatus=FAILED`；用户取
 - `DatasetPublication` 回答哪个不可变版本已经正式提升；
 - Task / Session 只保存 `current_publication_id`。
 
-一个 Build 可以产生 ValidationResult 但不发布；只有与当前 Manifest digest 对应的
+一个 requirement 可以产生 ValidationResult 但不发布；只有与当前 Manifest digest 对应的
 通过状态 ValidationResult 才能进入原子发布。
 
 ### 9.4 NO_DATA 是正式业务结果
@@ -57,7 +51,7 @@ Parser 崩溃、文件损坏和内部异常对应 `RunStatus=FAILED`；用户取
 
 ### 9.5 禁止 metadata-only 占位主表
 
-主表无合法记录时 BuildResult 为 `NO_DATA`；样本元数据保存为
+主表无合法记录时返回 typed `no_data` 且不产生 Publication；样本元数据保存为
 `supporting_dataset`；GEO series matrix 内嵌 metadata 与显式 family SOFT 共用
 `geo.sample-group.v1` 提取器。Validation 不允许 warning 或特殊字段豁免目标数据
 不存在；空主表不发布为 `SUCCEEDED`；可以发布归入 `audit_report` 的来源搜索、
@@ -65,7 +59,7 @@ Parser 崩溃、文件损坏和内部异常对应 `RunStatus=FAILED`；用户取
 
 ### 9.6 不通过 Artifact 数量判断成功
 
-系统由 RunStatus、BuildResult、ValidationResult 和 Publication 共同表达终态，
+系统由 RunStatus、OperationResult、ProductAssessment、ValidationResult 和 Publication 共同表达事实，
 不靠 Artifact 数量，也不靠前端解析错误文本。
 
 > 决策依据：ADR-010、ADR-011、ADR §21.4/§21.9（踩坑）。

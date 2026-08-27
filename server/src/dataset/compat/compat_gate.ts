@@ -15,7 +15,7 @@
 
 import type {
   DataBatch,
-  DatasetBuildSpec,
+  DatasetExecutionSpec,
 } from "../contracts/index.js";
 import { MAPPING_METHOD, VALUE_SCALE } from "../contracts/index.js";
 import { MeasurementIdentity } from "../canonicalizer/identity.js";
@@ -75,7 +75,7 @@ function hasFormalMappingEvidence(batch: DataBatch): boolean {
  * under ``spec``.  Deterministic; never mutates state.
  */
 export function checkExpressionCompatibility(options: {
-  spec: DatasetBuildSpec;
+  spec: DatasetExecutionSpec;
   results: CanonicalizationResult[];
 }): CompatibilityReport {
   const { spec, results } = options;

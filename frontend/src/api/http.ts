@@ -3,7 +3,7 @@
  *
  * Shared request plumbing (fetch, error mapping, query building, request ids,
  * admission retry) used by the per-endpoint client modules in ``./tasks.ts``,
- * ``./builds.ts``, ``./settings.ts``, ``./modelRegistry.ts`` and
+ * ``./publications.ts``, ``./settings.ts``, ``./modelRegistry.ts`` and
  * ``./databases.ts``.
  */
 import { APIError } from "@/api/errors";

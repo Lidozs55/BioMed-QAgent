@@ -1,12 +1,11 @@
-import type { BuildResult, DatasetBuildSpec, DatasetPublication } from "./dataset-build.js";
+import type { DatasetExecutionSpec, DatasetPublication } from "./dataset-execution.js";
 import type { JsonValue } from "./json.js";
 
 export const DATASET_BRIDGE_VERSION = 1 as const;
 
 export type DatasetBridgeOperation =
-  | "validate_dataset_build_spec"
-  | "execute_dataset_build"
-  | "get_build_result";
+  | "validate_dataset_execution_spec"
+  | "execute_dataset_execution";
 
 interface DatasetBridgeRequestBase {
   version: typeof DATASET_BRIDGE_VERSION;
@@ -19,21 +18,17 @@ interface DatasetBridgeRequestBase {
 
 export type DatasetBridgeRequest =
   | (DatasetBridgeRequestBase & {
-      op: "validate_dataset_build_spec";
-      args: { spec: DatasetBuildSpec };
+      op: "validate_dataset_execution_spec";
+      args: { spec: DatasetExecutionSpec };
     })
   | (DatasetBridgeRequestBase & {
-      op: "execute_dataset_build";
+      op: "execute_dataset_execution";
       args: {
-        spec: DatasetBuildSpec;
+        spec: DatasetExecutionSpec;
         source_files: Record<string, string>;
         mapping_files: Record<string, string>;
         metadata_files?: Record<string, string>;
       };
-    })
-  | (DatasetBridgeRequestBase & {
-      op: "get_build_result";
-      args: { build_id: string };
     });
 
 export interface DatasetBridgeValidationData {
@@ -43,13 +38,13 @@ export interface DatasetBridgeValidationData {
 }
 
 export interface DatasetBridgeManifestReference {
-  build_id: string;
+  requirement_id: string;
   manifest_id: string;
   sha256: string;
 }
 
 export interface DatasetBridgeArtifactReference {
-  build_id: string;
+  requirement_id: string;
   artifact_id: string;
   name: string;
   role: string;
@@ -60,13 +55,11 @@ export interface DatasetBridgeArtifactReference {
   generated_by_step_id: string;
 }
 
-export interface DatasetBridgeBuildData {
-  build_id: string;
-  build_result: BuildResult;
-  publication_id: string | null;
-  /** Core-owned publication receipt when the publish operation completed. */
-  publication?: DatasetPublication | null;
-  manifest: DatasetBridgeManifestReference | null;
+export interface DatasetBridgePublicationData {
+  requirement_id: string;
+  publication_id: string;
+  publication: DatasetPublication;
+  manifest: DatasetBridgeManifestReference;
   artifacts: DatasetBridgeArtifactReference[];
   validation_summary: Record<string, JsonValue> | null;
   registeredSourceAssetIds: string[];
@@ -86,8 +79,7 @@ export interface DatasetBridgeErrorDetails {
   fields?: string[];
   category?: string;
   cancellation_source?: string;
-  build_result?: BuildResult;
-  build_id?: string;
+  requirement_id?: string;
   publication_id?: string | null;
   manifest?: DatasetBridgeManifestReference | null;
   artifacts?: DatasetBridgeArtifactReference[];
@@ -106,7 +98,7 @@ export type DatasetBridgeResponse =
       version: typeof DATASET_BRIDGE_VERSION;
       request_id: string;
       ok: true;
-      data: DatasetBridgeValidationData | DatasetBridgeBuildData;
+      data: DatasetBridgeValidationData | DatasetBridgePublicationData;
       error: null;
     }
   | {
@@ -200,16 +192,16 @@ function taskRelativeRef(value: unknown, name: string): string {
   return text;
 }
 
-function parseSpec(value: unknown): DatasetBuildSpec {
+function parseSpec(value: unknown): DatasetExecutionSpec {
   const spec = record(value, "spec");
   exact(spec, [
-    "schema_version", "build_id", "objective", "dataset_family", "row_granularity",
+    "schema_version", "requirement_id", "objective", "dataset_family", "row_granularity",
     "entities", "cohort_filters", "required_fields", "schema_ref", "source_bindings",
     "normalization_profile_ref", "merge_strategy", "validation_profile_ref", "output_format",
     "target_entity_level",
   ], "spec");
   if (spec.schema_version !== undefined && spec.schema_version !== "1.0") throw new TypeError("spec.schema_version must be 1.0");
-  safeId(spec.build_id, "spec.build_id");
+  safeId(spec.requirement_id, "spec.requirement_id");
   for (const field of ["objective", "dataset_family", "row_granularity", "schema_ref", "merge_strategy", "validation_profile_ref", "output_format"] as const) {
     requiredString(spec[field], `spec.${field}`);
   }
@@ -240,7 +232,7 @@ function parseSpec(value: unknown): DatasetBuildSpec {
   if (spec.target_entity_level !== null && spec.target_entity_level !== undefined) {
     requiredString(spec.target_entity_level, "spec.target_entity_level");
   }
-  return value as DatasetBuildSpec;
+  return value as DatasetExecutionSpec;
 }
 
 function validateReferenceMap(value: unknown, name: string): Record<string, string> {
@@ -262,10 +254,10 @@ export function parseDatasetBridgeRequest(value: unknown): DatasetBridgeRequest 
   safeId(request.pi_session_id, "pi_session_id");
   safeId(request.tool_call_id, "tool_call_id");
   const args = record(request.args, "args");
-  if (request.op === "validate_dataset_build_spec") {
+  if (request.op === "validate_dataset_execution_spec") {
     exact(args, ["spec"], "validate args");
     parseSpec(args.spec);
-  } else if (request.op === "execute_dataset_build") {
+  } else if (request.op === "execute_dataset_execution") {
     exact(args, ["spec", "source_files", "mapping_files", "metadata_files"], "execute args");
     parseSpec(args.spec);
     validateReferenceMap(args.source_files, "source_files");
@@ -273,37 +265,16 @@ export function parseDatasetBridgeRequest(value: unknown): DatasetBridgeRequest 
     if (args.metadata_files !== undefined) {
       validateReferenceMap(args.metadata_files, "metadata_files");
     }
-  } else if (request.op === "get_build_result") {
-    exact(args, ["build_id"], "lookup args");
-    safeId(args.build_id, "build_id");
   } else {
     throw new TypeError("unsupported dataset bridge operation");
   }
   return value as DatasetBridgeRequest;
 }
 
-function parseBuildResult(value: unknown): BuildResult {
-  const result = record(value, "build_result");
-  exact(result, [
-    "schema_version", "status", "valid_row_count", "successful_sources", "rejected_sources",
-    "available_artifact_roles", "publication_id", "reason_codes", "user_summary",
-    "recommended_next_action", "build_id", "binding_failures",
-  ], "build_result");
-  if (!["succeeded", "partial_success", "no_data", "spec_rejected"].includes(String(result.status))) throw new TypeError("build_result.status is invalid");
-  if (!Number.isInteger(result.valid_row_count) || Number(result.valid_row_count) < 0) throw new TypeError("build_result.valid_row_count is invalid");
-  for (const field of ["successful_sources", "rejected_sources", "available_artifact_roles", "reason_codes"] as const) strings(result[field], `build_result.${field}`);
-  if (result.publication_id !== null && result.publication_id !== undefined) safeId(result.publication_id, "build_result.publication_id");
-  requiredString(result.user_summary, "build_result.user_summary");
-  if (typeof result.recommended_next_action !== "string") throw new TypeError("build_result.recommended_next_action must be a string");
-  if (result.build_id !== null && result.build_id !== undefined) safeId(result.build_id, "build_result.build_id");
-  if (result.binding_failures !== undefined && !Array.isArray(result.binding_failures)) throw new TypeError("build_result.binding_failures must be an array");
-  return value as BuildResult;
-}
-
 function parseManifestReference(value: unknown): DatasetBridgeManifestReference {
   const reference = record(value, "manifest reference");
-  exact(reference, ["build_id", "manifest_id", "sha256"], "manifest reference");
-  safeId(reference.build_id, "manifest.build_id");
+  exact(reference, ["requirement_id", "manifest_id", "sha256"], "manifest reference");
+  safeId(reference.requirement_id, "manifest.requirement_id");
   safeId(reference.manifest_id, "manifest.manifest_id");
   if (typeof reference.sha256 !== "string" || !SHA256.test(reference.sha256)) throw new TypeError("manifest.sha256 is invalid");
   return value as DatasetBridgeManifestReference;
@@ -313,8 +284,8 @@ function parseArtifacts(value: unknown): DatasetBridgeArtifactReference[] {
   if (!Array.isArray(value)) throw new TypeError("artifacts must be an array");
   for (const raw of value) {
     const artifact = record(raw, "artifact reference");
-    exact(artifact, ["build_id", "artifact_id", "name", "role", "relative_path", "media_type", "size_bytes", "sha256", "generated_by_step_id"], "artifact reference");
-    safeId(artifact.build_id, "artifact.build_id");
+    exact(artifact, ["requirement_id", "artifact_id", "name", "role", "relative_path", "media_type", "size_bytes", "sha256", "generated_by_step_id"], "artifact reference");
+    safeId(artifact.requirement_id, "artifact.requirement_id");
     safeId(artifact.artifact_id, "artifact.artifact_id");
     requiredString(artifact.name, "artifact.name");
     requiredString(artifact.role, "artifact.role");
@@ -327,14 +298,14 @@ function parseArtifacts(value: unknown): DatasetBridgeArtifactReference[] {
   return value as DatasetBridgeArtifactReference[];
 }
 
-function parseBuildData(value: unknown): DatasetBridgeBuildData {
-  const data = record(value, "build data");
-  exact(data, ["build_id", "build_result", "publication_id", "publication", "manifest", "artifacts", "validation_summary", "registeredSourceAssetIds"], "build data");
-  safeId(data.build_id, "build_id");
-  parseBuildResult(data.build_result);
-  if (data.publication_id !== null) safeId(data.publication_id, "publication_id");
-  if (data.publication !== undefined && data.publication !== null) {
+function parsePublicationData(value: unknown): DatasetBridgePublicationData {
+  const data = record(value, "publication data");
+  exact(data, ["requirement_id", "publication_id", "publication", "manifest", "artifacts", "validation_summary", "registeredSourceAssetIds"], "publication data");
+  safeId(data.requirement_id, "requirement_id");
+  safeId(data.publication_id, "publication_id");
+  {
     const publication = record(data.publication, "publication");
+    if (publication.schema_version !== "1.1") throw new TypeError("publication.schema_version must be 1.1");
     requiredString(publication.publication_id, "publication.publication_id");
     requiredString(publication.manifest_ref, "publication.manifest_ref");
     requiredString(publication.validation_result_ref, "publication.validation_result_ref");
@@ -342,18 +313,16 @@ function parseBuildData(value: unknown): DatasetBridgeBuildData {
     if (publication.supersedes_publication_id !== null && publication.supersedes_publication_id !== undefined) {
       requiredString(publication.supersedes_publication_id, "publication.supersedes_publication_id");
     }
-    if (publication.manifest_sha256 !== undefined) {
-      if (typeof publication.manifest_sha256 !== "string" || !SHA256.test(publication.manifest_sha256)) {
-        throw new TypeError("publication.manifest_sha256 is invalid");
-      }
+    if (typeof publication.manifest_sha256 !== "string" || !SHA256.test(publication.manifest_sha256)) {
+      throw new TypeError("publication.manifest_sha256 is invalid");
     }
   }
-  if (data.manifest !== null) parseManifestReference(data.manifest);
+  parseManifestReference(data.manifest);
   parseArtifacts(data.artifacts);
   if (data.validation_summary !== null && !jsonValue(data.validation_summary)) throw new TypeError("validation_summary must be JSON");
   const registeredSourceAssetIds = strings(data.registeredSourceAssetIds, "registeredSourceAssetIds");
   if (registeredSourceAssetIds.some((assetId) => !/^asset_[0-9a-f]{64}$/.test(assetId))) throw new TypeError("registeredSourceAssetIds must contain content-addressed asset IDs");
-  return value as DatasetBridgeBuildData;
+  return value as DatasetBridgePublicationData;
 }
 
 function parseValidationData(value: unknown): DatasetBridgeValidationData {
@@ -372,13 +341,12 @@ function parseError(value: unknown): DatasetBridgeError {
   requiredString(error.message, "bridge error message");
   if (typeof error.retryable !== "boolean") throw new TypeError("bridge error retryable must be boolean");
   const details = record(error.details, "bridge error details");
-  exact(details, ["reason_codes", "fields", "category", "cancellation_source", "build_result", "build_id", "publication_id", "manifest", "artifacts", "validation_summary"], "bridge error details");
+  exact(details, ["reason_codes", "fields", "category", "cancellation_source", "requirement_id", "publication_id", "manifest", "artifacts", "validation_summary"], "bridge error details");
   if (details.reason_codes !== undefined) strings(details.reason_codes, "details.reason_codes");
   if (details.fields !== undefined) strings(details.fields, "details.fields");
   if (details.category !== undefined) requiredString(details.category, "details.category");
   if (details.cancellation_source !== undefined) requiredString(details.cancellation_source, "details.cancellation_source");
-  if (details.build_result !== undefined) parseBuildResult(details.build_result);
-  if (details.build_id !== undefined) safeId(details.build_id, "details.build_id");
+  if (details.requirement_id !== undefined) safeId(details.requirement_id, "details.requirement_id");
   if (details.publication_id !== undefined && details.publication_id !== null) safeId(details.publication_id, "details.publication_id");
   if (details.manifest !== undefined && details.manifest !== null) parseManifestReference(details.manifest);
   if (details.artifacts !== undefined) parseArtifacts(details.artifacts);
@@ -395,7 +363,7 @@ export function parseDatasetBridgeResponse(value: unknown, expectedRequestId: st
     if (response.error !== null) throw new TypeError("successful bridge response cannot contain error");
     const data = record(response.data, "bridge response data");
     if (Object.prototype.hasOwnProperty.call(data, "valid")) parseValidationData(data);
-    else parseBuildData(data);
+    else parsePublicationData(data);
   } else if (response.ok === false) {
     if (response.data !== null) throw new TypeError("failed bridge response cannot contain data");
     parseError(response.error);
