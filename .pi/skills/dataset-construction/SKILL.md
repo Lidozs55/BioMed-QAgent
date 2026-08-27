@@ -36,6 +36,16 @@ output.
    task-relative source_files / mapping_files / metadata_files references.
    Omit missing source_files when the binding has a registered Core acquisition
    provider; do not download or parse that provider again with workspace commands.
+   - Fixed providers accept only `source`, `accession`, and `entities`; never put
+     build inputs into `binding.parameters` — those are rejected outright.
+   - Declare phenotype/study context once in the top-level spec `entities` map:
+     for gut_microbiome study bindings (`registered_gut_microbiome_study_json`)
+     live MGnify JSON:API carriers carry no disease annotations, so declare
+     `disease_id` (MeSH ID such as D003924), `disease_name`, and
+     `host_taxon_id` (e.g. 9606), plus the study identity via one of
+     `study_id`/`study_accession`/accession. Self-describing fixed carriers may
+     embed these fields themselves; live acquisitions cannot. Each entity value
+     is exactly one non-empty string.
 5. When a frozen multi-table topology cannot be expressed by a registered static
    family, use the fixed two-phase dynamic protocol: call
    `prepare_dynamic_family_publication` first, then call

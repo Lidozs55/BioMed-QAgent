@@ -83,6 +83,15 @@ export interface DatasetFamilySourceDefinition {
     parameters: Record<string, JsonValue>,
     normalizationProfile: NormalizationProfile,
   ) => DatasetFamilyValidationIssue[];
+  /**
+   * Entity groups that live provider carriers typically cannot self-describe,
+   * surfaced by route inspection so agents declare them as top-level
+   * ``spec.entities`` from the start. Each group lists interchangeable keys;
+   * at least one key per group must carry exactly one non-empty value when
+   * the registered carrier does not supply the field itself. Advisory only —
+   * enforcement happens at carrier dispatch, never through binding.parameters.
+   */
+  required_entity_groups?: readonly (readonly string[])[];
 }
 
 export interface DatasetFamilyDefinition {
@@ -608,6 +617,12 @@ export function proteinStructureFamilyDefinition(): DatasetFamilyDefinition {
   });
 }
 
+/**
+ * Interchangeable study-identity entity keys accepted by the gut microbiome
+ * dispatch (provider-transforms `studyIdFor`); mirrors its alias order.
+ */
+const GUT_STUDY_ENTITY_GROUP: readonly string[] = ["study_id", "study_ids", "study", "study_accession"];
+
 export function gutMicrobiomeFamilyDefinition(): DatasetFamilyDefinition {
   const registrations = createGutMicrobiomeRegisteredTableRegistry().entries();
   const definitions = gutMicrobiomeTableDefinitions();
@@ -616,26 +631,37 @@ export function gutMicrobiomeFamilyDefinition(): DatasetFamilyDefinition {
     (registration) => registration.parser.adapter_id !== GUT_MICROBIOME_TAXON_TSV_ADAPTER_ID,
   );
   const providerSources = [
-    { source: "mgnify", adapterId: "registered_gut_microbiome_study_json", schemaRef: "gut_microbiome.study.v1" },
-    { source: "mgnify", adapterId: "registered_gut_microbiome_taxon_long_tsv", schemaRef: "gut_microbiome.taxon_records.v1" },
-    { source: "mgnify", adapterId: "registered_gut_microbiome_taxon_json", schemaRef: "gut_microbiome.taxon_records.v1" },
-    { source: "mgnify", adapterId: "registered_gut_microbiome_differential_abundance_xlsx", schemaRef: "gut_microbiome.differential_abundance.v1" },
-    { source: "ncbi_taxonomy", adapterId: "gut_microbiome.ncbi_taxonomy_esearch_json.v1", schemaRef: "gut_microbiome.taxon_records.v1" },
-    { source: "ncbi_taxonomy", adapterId: "gut_microbiome.ncbi_taxonomy_efetch_xml.v1", schemaRef: "gut_microbiome.taxon_records.v1" },
-    { source: "gmrepo", adapterId: "gut_microbiome.gmrepo_associated_species_json.v1", schemaRef: "gut_microbiome.reference_prevalence.v1" },
+    {
+      source: "mgnify",
+      adapterId: "registered_gut_microbiome_study_json",
+      schemaRef: "gut_microbiome.study.v1",
+      required_entity_groups: [
+        GUT_STUDY_ENTITY_GROUP,
+        ["disease_id", "disease", "mesh_id"],
+        ["disease_name", "disease_label"],
+        ["host_taxon_id", "host_taxon", "host_species_taxon_id"],
+      ],
+    },
+    { source: "mgnify", adapterId: "registered_gut_microbiome_taxon_long_tsv", schemaRef: "gut_microbiome.taxon_records.v1", required_entity_groups: [GUT_STUDY_ENTITY_GROUP] },
+    { source: "mgnify", adapterId: "registered_gut_microbiome_taxon_json", schemaRef: "gut_microbiome.taxon_records.v1", required_entity_groups: [GUT_STUDY_ENTITY_GROUP] },
+    { source: "mgnify", adapterId: "registered_gut_microbiome_differential_abundance_xlsx", schemaRef: "gut_microbiome.differential_abundance.v1", required_entity_groups: [GUT_STUDY_ENTITY_GROUP] },
+    { source: "ncbi_taxonomy", adapterId: "gut_microbiome.ncbi_taxonomy_esearch_json.v1", schemaRef: "gut_microbiome.taxon_records.v1", required_entity_groups: [GUT_STUDY_ENTITY_GROUP] },
+    { source: "ncbi_taxonomy", adapterId: "gut_microbiome.ncbi_taxonomy_efetch_xml.v1", schemaRef: "gut_microbiome.taxon_records.v1", required_entity_groups: [GUT_STUDY_ENTITY_GROUP] },
+    { source: "gmrepo", adapterId: "gut_microbiome.gmrepo_associated_species_json.v1", schemaRef: "gut_microbiome.reference_prevalence.v1", required_entity_groups: [GUT_STUDY_ENTITY_GROUP] },
   ] as const;
   return registeredFamily({
     id: GUT_MICROBIOME_FAMILY_ID,
     schemas: gutMicrobiomeSchemas,
     profileRef: "gut_microbiome.release.v1",
     sources: [
-      ...providerSources.map(({ source, adapterId, schemaRef }) => ({
+      ...providerSources.map(({ source, adapterId, schemaRef, required_entity_groups }) => ({
         source,
         adapter_id: adapterId,
         schema_refs: [schemaRef],
         parameters_required: false,
         parameter_schema: emptyAdapterParameterSchema(),
         validateParameters: noAdapterParameters,
+        required_entity_groups,
       })),
       ...formalRegistrations.map((registration) => {
         const tableId = tableBySchema.get(registration.schema.schema_id);

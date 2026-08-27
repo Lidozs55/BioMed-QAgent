@@ -13,6 +13,7 @@ import {
   parseGutMicrobiomeCarrier,
 } from "../src/dataset/families/gut-microbiome/index.js";
 import { createDefaultDatasetFamilyRegistry } from "../src/dataset/families/index.js";
+import { datasetRouteCapabilities } from "../src/agent/tools/dataset-route-preflight.js";
 import { SpecValidator } from "../src/dataset/validation/spec_validator.js";
 import { executeRegisteredMultiTableBuild } from "../src/dataset/runtime/registered-multitable.js";
 import { providerCarrierBinding } from "../src/dataset/runtime/provider-bindings.js";
@@ -160,8 +161,12 @@ function spec(options: { requirementId: string; wrongProvider?: boolean; include
   };
 }
 
-async function registerCarriers(taskId: string, taskRoot: string) {
-  const study = await writeCarrier(taskRoot, "study.json", Buffer.from(JSON.stringify({
+async function registerCarriers(
+  taskId: string,
+  taskRoot: string,
+  options: { studyCarrier?: () => Buffer } = {},
+) {
+  const studyBytes = options.studyCarrier?.() ?? Buffer.from(JSON.stringify({
     study: {
       study_id: STUDY_ID,
       study_accession: STUDY_ID,
@@ -171,7 +176,8 @@ async function registerCarriers(taskId: string, taskRoot: string) {
       host_taxon_id: "9606",
       sample_count: 2,
     },
-  })), "application/json");
+  }));
+  const study = await writeCarrier(taskRoot, "study.json", studyBytes, "application/json");
   const taxon = await writeCarrier(taskRoot, "taxon.tsv", Buffer.from(
     "study_id\tsample_id\ttaxon_path\ttaxon_id\tabundance\n" +
     `${STUDY_ID}\tS1\tk__Bacteria;p__Firmicutes\t1234\t10\n`,
@@ -298,5 +304,82 @@ describe("Gold10 gut microbiome provider runtime dispatch", () => {
       adapterId: "registered_gut_microbiome_differential_abundance_xlsx",
       sourceId: receipts.differential.source_id,
     })).toThrow(/unapproved media type/);
+  });
+
+  it("declares required entity groups on family sources and route capabilities", () => {
+    const definition = createDefaultDatasetFamilyRegistry().definitionsList()
+      .find((family) => family.id === GUT_MICROBIOME_FAMILY_ID)!;
+    const studySource = definition.sources.find(
+      (source) => source.adapter_id === "registered_gut_microbiome_study_json",
+    )!;
+    expect(studySource.required_entity_groups).toEqual([
+      ["study_id", "study_ids", "study", "study_accession"],
+      ["disease_id", "disease", "mesh_id"],
+      ["disease_name", "disease_label"],
+      ["host_taxon_id", "host_taxon", "host_species_taxon_id"],
+    ]);
+    expect(definition.sources.some((source) => source.required_entity_groups === undefined)).toBe(true);
+    const routeSources = datasetRouteCapabilities().static.families
+      .find((family) => family.family_id === GUT_MICROBIOME_FAMILY_ID)!.sources;
+    expect(routeSources.find((source) => source.source === "gmrepo")!.required_entities).toEqual([
+      ["study_id", "study_ids", "study", "study_accession"],
+    ]);
+    expect(routeSources.find((source) => source.adapter_id === "registered_gut_microbiome_study_json")!
+      .required_entities).toEqual([
+      ["study_id", "study_ids", "study", "study_accession"],
+      ["disease_id", "disease", "mesh_id"],
+      ["disease_name", "disease_label"],
+      ["host_taxon_id", "host_taxon", "host_species_taxon_id"],
+    ]);
+  });
+
+  it("still accepts entity-light specs statically because carriers may self-describe disease fields", () => {
+    const registry = createDefaultDatasetFamilyRegistry();
+    const validator = new SpecValidator(registry.schemaRegistry(), registry.validationProfileRefs(), registry);
+    expect(validator.validate(spec({ requirementId: "req_gold10_entity_light" }))).toEqual({
+      valid: true,
+      reason_codes: [],
+      reasons: [],
+    });
+  });
+
+  it("accepts interchangeable alias entity keys during validation", () => {
+    const registry = createDefaultDatasetFamilyRegistry();
+    const validator = new SpecValidator(registry.schemaRegistry(), registry.validationProfileRefs(), registry);
+    const aliasedSpec: DatasetExecutionSpec = {
+      ...spec({ requirementId: "req_gold10_alias_entities" }),
+      entities: {
+        study_accession: [STUDY_ID],
+        mesh_id: ["D006262"],
+        disease_label: ["Type 2 diabetes mellitus"],
+        host_taxon: ["9606"],
+      },
+    };
+    expect(validator.validate(aliasedSpec)).toEqual({ valid: true, reason_codes: [], reasons: [] });
+  });
+
+  it("names the spec.entities remedy when study metadata is missing for JSON:API carriers", async () => {
+    const taskRoot = await mkdtemp(path.join(os.tmpdir(), "gold10-entity-remedy-"));
+    roots.push(taskRoot);
+    const taskId = "task_gold10_entity_remedy";
+    const receipts = await registerCarriers(taskId, taskRoot, { studyCarrier: () => Buffer.from(JSON.stringify({
+      data: {
+        id: STUDY_ID,
+        attributes: { accession: STUDY_ID, "study-name": "JSON API fixture", "samples-count": 3 },
+      },
+    })) });
+    await expect(executeRegisteredMultiTableBuild({
+      taskId,
+      taskRoot,
+      spec: spec({ requirementId: "req_gold10_entity_remedy" }),
+      registeredAssetIds: {
+        binding_study: receipts.study.asset_ref.asset_id,
+        binding_taxon: receipts.taxon.asset_ref.asset_id,
+        binding_differential: receipts.differential.asset_ref.asset_id,
+        binding_taxonomy_esearch: receipts.ncbiEsearch.asset_ref.asset_id,
+        binding_taxonomy_efetch: receipts.ncbiEfetch.asset_ref.asset_id,
+        binding_prevalence: receipts.prevalence.asset_ref.asset_id,
+      },
+    })).rejects.toThrow(/declare top-level spec\.entities[\s\S]*disease_id[\s\S]*binding\.parameters/);
   });
 });
