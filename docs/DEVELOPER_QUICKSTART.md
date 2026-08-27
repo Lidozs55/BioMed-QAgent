@@ -79,7 +79,7 @@ API 创建任务、续跑、事件重放与 HIL 示例见 [`AGENT_API_QUICKSTART
 1. 先复现问题或写出明确验收条件。
 2. bug fix 先提交失败测试；新功能与测试同行。
 3. 只改必要文件，wire DTO 先进入 `@biomed/contracts`。
-4. 跑定向测试，再跑全部质量门。
+4. 跑定向测试（只测改动区域）；失败用例先单独重跑至全部通过，再跑一次该区域定向套件确认。
 5. 同步 TODO/ISSUES、必要的架构或操作文档。
 
 常用定向命令：
@@ -91,17 +91,18 @@ pnpm --filter @biomed/contracts test
 pnpm --dir frontend tsc
 ```
 
-完整质量门：
+通用质量门（push / merge 前）：
 
 ```bash
-pnpm test
 pnpm lint
 pnpm typecheck
 pnpm build
-uv run python database/bridge.py --self-test
+uv run python database/bridge.py --self-test   # database/ 改动时，连同下面两条
 uv run pytest database/tests
 uv run ruff check database
 ```
+
+全量 `pnpm test` 仅在改动跨共享边界（`packages/contracts/`、根配置、`scripts/`）或无法定位影响面时本地执行；CI 会在每次 PR 和 main push 时自动跑全量。定向测试策略详见 [`../AGENTS.md`](../AGENTS.md) § Quality Gates。
 
 并发与内存调节见 [`architecture/test-concurrency.md`](architecture/test-concurrency.md)。提交规则见 [`git-hooks.md`](git-hooks.md)。
 

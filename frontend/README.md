@@ -28,10 +28,10 @@ pnpm test:watch   # Vitest watch
 pnpm preview      # 预览已构建静态资源
 ```
 
-任务结束仍需从仓库根执行完整质量门：
+任务结束时从仓库根执行 workspace 级质量门（`lint` / `typecheck` / `build`）与受影响区域的测试；全量 `pnpm test` 仅在跨共享边界改动时需要：
 
 ```bash
-pnpm test
+pnpm --filter @biomed/frontend test   # 定向测试
 pnpm lint
 pnpm typecheck
 pnpm build

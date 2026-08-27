@@ -15,7 +15,12 @@ Blocks commits with syntax errors, lint violations, or failing unit tests:
 2. `pnpm lint` — workspace ESLint (`--max-warnings 0`).
 3. Python bridge gates, **only when `database/**/*.py` files are staged**:
    `uv run ruff check database` then `uv run pytest database/tests`.
-4. `pnpm test` — workspace unit tests (bounded concurrency).
+4. Unit tests, **targeted to the staged workspaces** (`AGENTS.md` § Quality
+   Gates): `server/` → `pnpm --filter @biomed/server test`, `frontend/` →
+   `pnpm --filter @biomed/frontend test` (run sequentially with
+   `--workspace-concurrency=1`). Cross-cutting sources — root config files,
+   `scripts/`, or `packages/contracts/` — run the full `pnpm test` instead,
+   because their blast radius spans workspaces.
 
 **Skip rule**: if the staged set contains no code/config files (docs, assets,
 `.md`, `.gitignore`, ...), all gates are skipped so doc-only commits stay fast.

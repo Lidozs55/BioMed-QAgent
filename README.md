@@ -104,16 +104,26 @@ pnpm start
 
 ## 质量门
 
+默认**定向测试**：只测改动涉及的区域，不要每次提交都跑全量。
+
 ```bash
-pnpm test
+# 定向测试（按改动区域选择）
+pnpm --filter @biomed/server test     # server/ 改动
+pnpm --filter @biomed/frontend test   # frontend/ 改动
+uv run python database/bridge.py --self-test   # database/ 改动时，连同下面两条
+uv run pytest database/tests
+uv run ruff check database
+
+# 通用门（push / merge 前，workspace 级）
 pnpm lint
 pnpm typecheck
 pnpm build
 
-uv run python database/bridge.py --self-test
-uv run pytest database/tests
-uv run ruff check database
+# 全量测试（仅跨共享边界改动：packages/contracts、根配置、scripts/；CI 会自动跑）
+pnpm test
 ```
+
+有失败测试时先只重跑失败用例（`pnpm --filter <pkg> test -- <test-file>` 或 `pytest <file>::<case>`），全部通过后再跑一次该区域定向测试确认。完整策略见 [`AGENTS.md`](AGENTS.md) § Quality Gates。
 
 仓库使用单一 pnpm workspace lockfile。TypeScript 依赖只用 pnpm；Python 只服务根 `pyproject.toml` 下的 `database/` bridge，并用 uv 管理。测试并发策略见 [`docs/architecture/test-concurrency.md`](docs/architecture/test-concurrency.md)。
 

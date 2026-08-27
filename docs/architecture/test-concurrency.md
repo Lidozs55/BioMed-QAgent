@@ -23,7 +23,7 @@ workspace 并发 × vitest workers × test.concurrent
 
 跨 workspace 的 contracts 运行时产物由 `scripts/build-contracts-if-needed.mjs` 按源代码/配置内容指纹复用，并用原子构建锁避免同时启动多个 `tsc`；单包命令仍会在产物缺失或输入变化时自动构建。`build-lock.test.ts` 的黑盒竞争只启动 1 个真实子进程，由当前 Vitest worker 与之竞争，并用 ready/start 闩同步启动。
 
-`pnpm test` 与 `pnpm test:full` 都遵守同一上限；`test:full` 表示运行完整测试集合，不再表示解除并发限制。workspace 必须顺序执行，否则两个 workspace 各自启动 2 个 worker 时，全机实际会同时运行 4 个 worker，违反总预算。
+`pnpm test` 与 `pnpm test:full` 都遵守同一上限；`test:full` 表示运行完整测试集合，不再表示解除并发限制。workspace 必须顺序执行，否则两个 workspace 各自启动 2 个 worker 时，全机实际会同时运行 4 个 worker，违反总预算。pre-commit 钩子的定向测试（`pnpm --workspace-concurrency=1 --filter <pkg> test`）同样遵守该预算；focused 单文件测试（`pnpm --filter <pkg> test -- <file>`）不需要额外参数。
 
 ## 选型依据
 

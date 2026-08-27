@@ -6,7 +6,7 @@
 
 # Skip the heavy gates when only docs/assets are staged (no code/config touched).
 if ! git diff --cached --name-only --diff-filter=ACM | grep -Eq \
-  '^(frontend|server|packages|database|scripts|tests)/|\.(ts|tsx|js|mjs|cjs|jsx|py|css|html)$|^(package\.json|pnpm-workspace\.yaml|pnpm-lock\.yaml|pyproject\.toml|uv\.lock|tsconfig[^/]*)$'
+  '^(frontend|server|packages|database|scripts)/|\.(ts|tsx|js|mjs|cjs|jsx|py|css|html)$|^(package\.json|pnpm-workspace\.yaml|pnpm-lock\.yaml|pyproject\.toml|uv\.lock|tsconfig[^/]*)$'
 then
   echo "pre-commit: no code/config staged — skipping quality gates"
   exit 0
@@ -27,7 +27,26 @@ then
   uv run pytest database/tests
 fi
 
-echo "pre-commit: unit tests"
-pnpm test
+# Unit tests — targeted, not full-suite: run only the workspaces whose sources
+# are staged (AGENTS.md § Quality Gates). Cross-cutting sources (root config,
+# shared scripts, or the shared packages/contracts wire-DTO layer) fall back to
+# the full suite; CI also runs the full suite on every PR and push to main.
+staged=$(git diff --cached --name-only --diff-filter=ACM)
+if echo "$staged" | grep -qE '^(package\.json|pnpm-workspace\.yaml|pnpm-lock\.yaml|pyproject\.toml|uv\.lock|tsconfig[^/]*)$|^scripts/|^packages/'; then
+  echo "pre-commit: full unit tests (cross-cutting sources staged)"
+  pnpm test
+else
+  filters=""
+  echo "$staged" | grep -qE '^server/' && filters="$filters --filter @biomed/server"
+  echo "$staged" | grep -qE '^frontend/' && filters="$filters --filter @biomed/frontend"
+  if [ -n "$filters" ]; then
+    echo "pre-commit: targeted unit tests"
+    # --workspace-concurrency=1 keeps the machine-wide 2-worker budget
+    # (docs/architecture/test-concurrency.md).
+    pnpm --workspace-concurrency=1 $filters test
+  else
+    echo "pre-commit: no workspace sources staged — skipping unit tests"
+  fi
+fi
 
 echo "pre-commit: all quality gates passed"
