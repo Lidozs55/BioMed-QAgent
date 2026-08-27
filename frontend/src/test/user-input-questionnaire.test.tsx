@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { UserInputDialog } from "@/components/UserInputDialog";
+import { UserInputQuestionnaire } from "@/components/intervention/UserInputQuestionnaire";
 import type { ResumeRunInput, TaskSummary } from "@/runtime/contracts";
 import {
   createInitialRuntimeState,
@@ -105,7 +105,7 @@ function formalMappingTask(requestId: string): TaskProjection {
   });
 }
 
-describe("UserInputDialog", () => {
+describe("UserInputQuestionnaire", () => {
   it("renders a durable batch review and submits an evidence-bound decision", async () => {
     const onResumeRun = vi.fn().mockResolvedValue(undefined);
     const task = taskWithPrompt(
@@ -153,9 +153,9 @@ describe("UserInputDialog", () => {
         },
       },
     );
-    render(<UserInputDialog task={task} onResumeRun={onResumeRun} />);
+    render(<UserInputQuestionnaire task={task} onResumeRun={onResumeRun} />);
 
-    expect(screen.getByText("需要人工审核")).toBeVisible();
+    expect(screen.getAllByText("2 个字段映射需要审核")).toHaveLength(2);
     expect(screen.getByText("Gene Symbol → gene_id")).toBeVisible();
     expect(screen.getByText("Unit → expression_unit")).toBeVisible();
     expect(screen.getByText(/evidence aaaaaaaaaaaa/)).toBeVisible();
@@ -203,9 +203,9 @@ describe("UserInputDialog", () => {
         },
       },
     );
-    render(<UserInputDialog task={task} onResumeRun={onResumeRun} />);
+    render(<UserInputQuestionnaire task={task} onResumeRun={onResumeRun} />);
 
-    expect(screen.getByText("需要凭据授权")).toBeVisible();
+    expect(screen.getAllByText("允许本次调用使用 GDC API Key")).toHaveLength(2);
     expect(screen.getByRole("button", { name: "授权本次调用" })).toBeEnabled();
     expect(screen.queryByRole("button", { name: "修正整个审核批次" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "跳过整个审核批次" })).not.toBeInTheDocument();
@@ -226,7 +226,7 @@ describe("UserInputDialog", () => {
   it("resets batch action and correction JSON when the formal request changes", async () => {
     const onResumeRun = vi.fn().mockResolvedValue(undefined);
     const { rerender } = render(
-      <UserInputDialog task={formalMappingTask("hil_a")} onResumeRun={onResumeRun} />,
+      <UserInputQuestionnaire task={formalMappingTask("hil_a")} onResumeRun={onResumeRun} />,
     );
     fireEvent.click(screen.getByRole("button", { name: "修正" }));
     fireEvent.change(screen.getByLabelText("结构化修正（JSON）"), {
@@ -236,7 +236,7 @@ describe("UserInputDialog", () => {
 
     await act(async () => {
       rerender(
-        <UserInputDialog task={formalMappingTask("hil_b")} onResumeRun={onResumeRun} />,
+        <UserInputQuestionnaire task={formalMappingTask("hil_b")} onResumeRun={onResumeRun} />,
       );
     });
 
@@ -245,7 +245,7 @@ describe("UserInputDialog", () => {
     expect(screen.getByRole("button", { name: "接受整个审核批次" })).toBeEnabled();
   });
 
-  it("closes the dialog when the owning run is cancel-requested (F3 reducer path)", () => {
+  it("renders nothing when the owning run is cancel-requested (F3 reducer path)", () => {
     let state = mergeTaskPage(
       createInitialRuntimeState(),
       {
@@ -306,9 +306,9 @@ describe("UserInputDialog", () => {
     const task = state.tasksById.task_cancel;
     expect(task.pendingUserInput).toBeNull();
 
-    render(<UserInputDialog task={task} onResumeRun={vi.fn()} />);
+    render(<UserInputQuestionnaire task={task} onResumeRun={vi.fn()} />);
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "提交修正" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "确认" })).not.toBeInTheDocument();
   });
 
   it("disables actions while the prompt's run is no longer awaiting input (F3 defensive)", () => {
@@ -333,7 +333,7 @@ describe("UserInputDialog", () => {
       summary: null,
     };
     render(
-      <UserInputDialog
+      <UserInputQuestionnaire
         task={{
           ...task,
           runsById: { run_stale: staleRun },
@@ -342,8 +342,9 @@ describe("UserInputDialog", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "提交修正" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "跳过并继续" })).toBeDisabled();
+    expect(screen.getByRole("radio", { name: /^提交修正/ })).toBeDisabled();
+    expect(screen.getByRole("radio", { name: /^跳过并继续/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "确认" })).toBeDisabled();
   });
 
   it("isolates an in-flight prompt from its replacement and submits the pending Run", async () => {
@@ -375,27 +376,30 @@ describe("UserInputDialog", () => {
     );
 
     const { rerender } = render(
-      <UserInputDialog task={taskA} onResumeRun={onResumeRun} />,
+      <UserInputQuestionnaire task={taskA} onResumeRun={onResumeRun} />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "确认执行" }));
-    expect(screen.getByRole("button", { name: "确认执行" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("radio", { name: /^确认执行/ }));
+    fireEvent.click(screen.getByRole("button", { name: "确认" }));
+    expect(screen.getByRole("button", { name: "确认" })).toBeDisabled();
 
-    rerender(<UserInputDialog task={taskB} onResumeRun={onResumeRun} />);
+    rerender(<UserInputQuestionnaire task={taskB} onResumeRun={onResumeRun} />);
     expect(screen.getByText("Confirm task_b")).toBeVisible();
-    expect(screen.getByRole("button", { name: "确认执行" })).toBeEnabled();
+    expect(screen.getByRole("radio", { name: /^确认执行/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "确认" })).toBeEnabled();
 
     act(() => rejectFirst?.(new Error("Task A resume failed")));
     await waitFor(() => {
       expect(screen.queryByText("Task A resume failed")).toBeNull();
-      expect(screen.getByRole("button", { name: "确认执行" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "确认" })).toBeEnabled();
     });
 
-    rerender(<UserInputDialog task={taskA} onResumeRun={onResumeRun} />);
+    rerender(<UserInputQuestionnaire task={taskA} onResumeRun={onResumeRun} />);
     expect(screen.queryByText("Task A resume failed")).toBeNull();
-    expect(screen.getByRole("button", { name: "确认执行" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "确认" })).toBeEnabled();
 
-    rerender(<UserInputDialog task={taskB} onResumeRun={onResumeRun} />);
-    fireEvent.click(screen.getByRole("button", { name: "确认执行" }));
+    rerender(<UserInputQuestionnaire task={taskB} onResumeRun={onResumeRun} />);
+    fireEvent.click(screen.getByRole("radio", { name: /^确认执行/ }));
+    fireEvent.click(screen.getByRole("button", { name: "确认" }));
     await waitFor(() => expect(onResumeRun).toHaveBeenCalledTimes(2));
     expect(onResumeRun).toHaveBeenLastCalledWith("task_b", "run_b", {
       request_id: "request_b",
@@ -437,15 +441,17 @@ describe("UserInputDialog", () => {
     );
 
     const { rerender } = render(
-      <UserInputDialog task={taskA} onResumeRun={onResumeRun} />,
+      <UserInputQuestionnaire task={taskA} onResumeRun={onResumeRun} />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "确认执行" }));
-    rerender(<UserInputDialog task={taskB} onResumeRun={onResumeRun} />);
-    rerender(<UserInputDialog task={taskA} onResumeRun={onResumeRun} />);
-    expect(screen.getByRole("button", { name: "确认执行" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("radio", { name: /^确认执行/ }));
+    fireEvent.click(screen.getByRole("button", { name: "确认" }));
+    rerender(<UserInputQuestionnaire task={taskB} onResumeRun={onResumeRun} />);
+    rerender(<UserInputQuestionnaire task={taskA} onResumeRun={onResumeRun} />);
+    expect(screen.getByRole("button", { name: "确认" })).toBeEnabled();
 
-    fireEvent.click(screen.getByRole("button", { name: "确认执行" }));
-    expect(screen.getByRole("button", { name: "确认执行" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("radio", { name: /^确认执行/ }));
+    fireEvent.click(screen.getByRole("button", { name: "确认" }));
+    expect(screen.getByRole("button", { name: "确认" })).toBeDisabled();
 
     await act(async () => {
       rejectFirst?.(new Error("Stale A1 failure"));
@@ -453,7 +459,7 @@ describe("UserInputDialog", () => {
     });
     await waitFor(() => {
       expect(screen.queryByText("Stale A1 failure")).toBeNull();
-      expect(screen.getByRole("button", { name: "确认执行" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "确认" })).toBeDisabled();
     });
 
     await act(async () => {
@@ -465,13 +471,13 @@ describe("UserInputDialog", () => {
       // FIX 3: after a SUCCESSFUL resume the in-flight decision is retained
       // while the same prompt stays pending — buttons stay disabled instead
       // of briefly re-enabling before user_input_resumed arrives.
-      expect(screen.getByRole("button", { name: "确认执行" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "确认" })).toBeDisabled();
     });
     expect(onResumeRun).toHaveBeenCalledTimes(2);
 
     // The in-flight state clears only with the prompt lifecycle: removing the
     // prompt (pendingUserInput -> null) resets the submission; re-showing the
-    // same prompt starts fresh and re-enables the buttons.
+    // same prompt starts fresh and re-enables the actions.
     const noPromptSummary: TaskSummary = {
       task_id: "task_a",
       mode: "agent",
@@ -484,16 +490,16 @@ describe("UserInputDialog", () => {
       latest_sequence: 1,
     };
     rerender(
-      <UserInputDialog
+      <UserInputQuestionnaire
         task={createTaskProjection(noPromptSummary)}
         onResumeRun={onResumeRun}
       />,
     );
     await waitFor(() => {
-      expect(screen.queryByRole("button", { name: "确认执行" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "确认" })).not.toBeInTheDocument();
     });
-    rerender(<UserInputDialog task={taskA} onResumeRun={onResumeRun} />);
-    expect(screen.getByRole("button", { name: "确认执行" })).toBeEnabled();
+    rerender(<UserInputQuestionnaire task={taskA} onResumeRun={onResumeRun} />);
+    expect(screen.getByRole("button", { name: "确认" })).toBeEnabled();
   });
 
   it("retains the in-flight decision while the same prompt stays pending (FIX 3)", async () => {
@@ -523,23 +529,25 @@ describe("UserInputDialog", () => {
     );
 
     const { rerender } = render(
-      <UserInputDialog task={task} onResumeRun={onResumeRun} />,
+      <UserInputQuestionnaire task={task} onResumeRun={onResumeRun} />,
     );
     fireEvent.change(screen.getByRole("textbox"), {
       target: { value: "改用 GSE12345" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "提交修正" }));
-    expect(screen.getByRole("button", { name: "提交修正" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("radio", { name: /^提交修正/ }));
+    fireEvent.click(screen.getByRole("button", { name: "确认" }));
+    expect(screen.getByRole("button", { name: "确认" })).toBeDisabled();
 
     // resumeRun resolves (the manager returned its snapshot as-is), but the
-    // prompt is STILL pending: the dialog must stay in-flight — both buttons
-    // remain disabled and the spinner stays.
+    // prompt is STILL pending: the questionnaire must stay in-flight — both
+    // choices and the submit stay disabled and the spinner stays.
     await waitFor(() => expect(onResumeRun).toHaveBeenCalledTimes(1));
-    expect(screen.getByRole("button", { name: "提交修正" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "跳过并继续" })).toBeDisabled();
+    expect(screen.getByRole("radio", { name: /^提交修正/ })).toBeDisabled();
+    expect(screen.getByRole("radio", { name: /^跳过并继续/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "确认" })).toBeDisabled();
 
     // The prompt disappears (reducer processed user_input_resumed): the
-    // dialog closes and nothing in-flight leaks.
+    // questionnaire closes and nothing in-flight leaks.
     const noPromptSummary: TaskSummary = {
       task_id: "task_inflight",
       mode: "agent",
@@ -552,20 +560,21 @@ describe("UserInputDialog", () => {
       latest_sequence: 1,
     };
     rerender(
-      <UserInputDialog
+      <UserInputQuestionnaire
         task={createTaskProjection(noPromptSummary)}
         onResumeRun={onResumeRun}
       />,
     );
     await waitFor(() => {
-      expect(screen.queryByRole("button", { name: "提交修正" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "确认" })).not.toBeInTheDocument();
     });
 
     // Re-showing the same prompt starts fresh: the retained in-flight state
     // was cleared with the prompt lifecycle.
-    rerender(<UserInputDialog task={task} onResumeRun={onResumeRun} />);
-    expect(screen.getByRole("button", { name: "提交修正" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "跳过并继续" })).toBeEnabled();
+    rerender(<UserInputQuestionnaire task={task} onResumeRun={onResumeRun} />);
+    expect(screen.getByRole("radio", { name: /^提交修正/ })).toBeEnabled();
+    expect(screen.getByRole("radio", { name: /^跳过并继续/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "确认" })).toBeEnabled();
   });
 
   it("renders plan_confirmation detail as structured fields instead of raw JSON", () => {
@@ -600,7 +609,7 @@ describe("UserInputDialog", () => {
       "request_plan",
       { detail },
     );
-    render(<UserInputDialog task={task} onResumeRun={vi.fn()} />);
+    render(<UserInputQuestionnaire task={task} onResumeRun={vi.fn()} />);
 
     // 研究主题分段显示
     expect(screen.getByText("研究主题")).toBeVisible();
@@ -642,7 +651,7 @@ describe("UserInputDialog", () => {
       "request_no_topic",
       { detail: { queries: [] } },
     );
-    render(<UserInputDialog task={task} onResumeRun={vi.fn()} />);
+    render(<UserInputQuestionnaire task={task} onResumeRun={vi.fn()} />);
     expect(screen.queryByText("研究主题")).not.toBeInTheDocument();
     expect(screen.queryByText("检索查询")).not.toBeInTheDocument();
   });
@@ -659,19 +668,20 @@ describe("UserInputDialog", () => {
         detail: { max_turns: 15, resume_count: 0 },
       },
     );
-    render(<UserInputDialog task={task} onResumeRun={vi.fn()} />);
+    render(<UserInputQuestionnaire task={task} onResumeRun={vi.fn()} />);
 
     expect(screen.getByText("Agent 已达到最大轮次")).toBeVisible();
     expect(
       screen.getByText("Agent 已达到最大轮次 (15)，是否继续工作？"),
     ).toBeVisible();
-    expect(screen.getByRole("button", { name: "继续工作" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "停止" })).toBeVisible();
+    expect(screen.getByRole("radio", { name: /^继续工作/ })).toBeVisible();
+    expect(screen.getByRole("radio", { name: /^停止/ })).toBeVisible();
+    expect(screen.getByRole("button", { name: "确认" })).toBeVisible();
     // max_turns_reached 不应渲染 plan card
     expect(screen.queryByText("研究主题")).not.toBeInTheDocument();
   });
 
-  it("renders data_correction prompt with title, summary, textarea and both actions", () => {
+  it("renders data_correction prompt with title, summary, textarea and both choices", () => {
     const task = taskWithPrompt(
       "task_correction",
       "run_correction",
@@ -686,7 +696,7 @@ describe("UserInputDialog", () => {
         },
       },
     );
-    render(<UserInputDialog task={task} onResumeRun={vi.fn()} />);
+    render(<UserInputQuestionnaire task={task} onResumeRun={vi.fn()} />);
 
     expect(screen.getByText("需要人工修正")).toBeVisible();
     // T5 polish: summary 仅渲染一次(卡片突出展示;描述不再重复)。
@@ -694,8 +704,8 @@ describe("UserInputDialog", () => {
       screen.getAllByText("候选 GSE 无法判断，请确认使用哪个数据集？"),
     ).toHaveLength(1);
     expect(screen.getByRole("textbox")).toBeVisible();
-    expect(screen.getByRole("button", { name: "提交修正" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "跳过并继续" })).toBeVisible();
+    expect(screen.getByRole("radio", { name: /^提交修正/ })).toBeVisible();
+    expect(screen.getByRole("radio", { name: /^跳过并继续/ })).toBeVisible();
     // detail 字段只读展示（field/options 建议选项）
     expect(screen.getByText("field")).toBeVisible();
     expect(screen.getByText("options")).toBeVisible();
@@ -705,7 +715,7 @@ describe("UserInputDialog", () => {
     expect(screen.queryByText("研究主题")).not.toBeInTheDocument();
   });
 
-  it("disables 提交修正 while the correction text is empty and enables it once typed", () => {
+  it("keeps the submit button disabled for an empty correction and enables it once typed", () => {
     const task = taskWithPrompt(
       "task_correction",
       "run_correction",
@@ -716,17 +726,21 @@ describe("UserInputDialog", () => {
         summary: "请修正检索词",
       },
     );
-    render(<UserInputDialog task={task} onResumeRun={vi.fn()} />);
+    render(<UserInputQuestionnaire task={task} onResumeRun={vi.fn()} />);
 
-    const submit = screen.getByRole("button", { name: "提交修正" });
-    expect(submit).toBeDisabled();
+    const submit = screen.getByRole("button", { name: "确认" });
+    // 未选择任何选项时提交动作不生效（表单里没有 decision 值）。
+    expect(submit).toBeEnabled();
+    // 选择"提交修正"但修正内容为空时,提交被禁用。
+    fireEvent.click(screen.getByRole("radio", { name: /^提交修正/ }));
+    expect(screen.getByRole("button", { name: "确认" })).toBeDisabled();
     // 跳过并继续始终可用（拒绝并继续，空修正）
-    expect(screen.getByRole("button", { name: "跳过并继续" })).toBeEnabled();
+    expect(screen.getByRole("radio", { name: /^跳过并继续/ })).toBeEnabled();
 
     fireEvent.change(screen.getByRole("textbox"), {
       target: { value: "使用 GSE12345 并检索 PubMed" },
     });
-    expect(screen.getByRole("button", { name: "提交修正" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "确认" })).toBeEnabled();
   });
 
   it("submits approve with the correction text and skip rejects with an empty correction", async () => {
@@ -749,13 +763,14 @@ describe("UserInputDialog", () => {
       },
     );
     const { rerender } = render(
-      <UserInputDialog task={task} onResumeRun={onResumeRun} />,
+      <UserInputQuestionnaire task={task} onResumeRun={onResumeRun} />,
     );
 
     fireEvent.change(screen.getByRole("textbox"), {
       target: { value: "改用 GEO 数据 GSE12345" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "提交修正" }));
+    fireEvent.click(screen.getByRole("radio", { name: /^提交修正/ }));
+    fireEvent.click(screen.getByRole("button", { name: "确认" }));
     await waitFor(() => expect(onResumeRun).toHaveBeenCalledTimes(1));
     expect(onResumeRun).toHaveBeenLastCalledWith(
       "task_correction",
@@ -768,9 +783,11 @@ describe("UserInputDialog", () => {
     );
 
     // FIX 3: after a successful resume the SAME prompt stays in-flight — both
-    // buttons stay disabled until the prompt disappears (user_input_resumed).
-    expect(screen.getByRole("button", { name: "提交修正" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "跳过并继续" })).toBeDisabled();
+    // choices and the submit stay disabled until the prompt disappears
+    // (user_input_resumed).
+    expect(screen.getByRole("radio", { name: /^提交修正/ })).toBeDisabled();
+    expect(screen.getByRole("radio", { name: /^跳过并继续/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "确认" })).toBeDisabled();
 
     // A second decision needs a fresh prompt lifecycle: remove the prompt and
     // re-show it (the promptKey reset effect clears the in-flight state).
@@ -786,18 +803,19 @@ describe("UserInputDialog", () => {
       latest_sequence: 1,
     };
     rerender(
-      <UserInputDialog
+      <UserInputQuestionnaire
         task={createTaskProjection(noPromptSummary)}
         onResumeRun={onResumeRun}
       />,
     );
     await waitFor(() => {
-      expect(screen.queryByRole("button", { name: "跳过并继续" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "确认" })).not.toBeInTheDocument();
     });
-    rerender(<UserInputDialog task={task} onResumeRun={onResumeRun} />);
+    rerender(<UserInputQuestionnaire task={task} onResumeRun={onResumeRun} />);
 
     // 跳过并继续总是发送 reject + 空修正，忽略已输入的文本
-    fireEvent.click(screen.getByRole("button", { name: "跳过并继续" }));
+    fireEvent.click(screen.getByRole("radio", { name: /^跳过并继续/ }));
+    fireEvent.click(screen.getByRole("button", { name: "确认" }));
     await waitFor(() => expect(onResumeRun).toHaveBeenCalledTimes(2));
     expect(onResumeRun).toHaveBeenLastCalledWith(
       "task_correction",
@@ -834,13 +852,13 @@ describe("UserInputDialog", () => {
     );
 
     const { rerender } = render(
-      <UserInputDialog task={withExpiry} onResumeRun={vi.fn()} />,
+      <UserInputQuestionnaire task={withExpiry} onResumeRun={vi.fn()} />,
     );
     expect(
       screen.getByText(/需在 .*前答复，超时后将记录到 corrections_todo\.csv 并继续/),
     ).toBeVisible();
 
-    rerender(<UserInputDialog task={withoutExpiry} onResumeRun={vi.fn()} />);
+    rerender(<UserInputQuestionnaire task={withoutExpiry} onResumeRun={vi.fn()} />);
     expect(screen.queryByText(/corrections_todo\.csv/)).not.toBeInTheDocument();
   });
 
@@ -870,7 +888,7 @@ describe("UserInputDialog", () => {
     );
 
     const { rerender } = render(
-      <UserInputDialog task={correctionTask} onResumeRun={vi.fn()} />,
+      <UserInputQuestionnaire task={correctionTask} onResumeRun={vi.fn()} />,
     );
     fireEvent.change(screen.getByRole("textbox"), {
       target: { value: "改用 GEO 数据 GSE12345" },
@@ -880,11 +898,11 @@ describe("UserInputDialog", () => {
     );
 
     // Same task/run/request ids, different prompt kind → no textarea rendered.
-    rerender(<UserInputDialog task={noProgressTask} onResumeRun={vi.fn()} />);
+    rerender(<UserInputQuestionnaire task={noProgressTask} onResumeRun={vi.fn()} />);
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
 
     // Back to data_correction with the same ids: stale text must NOT leak back.
-    rerender(<UserInputDialog task={correctionTask} onResumeRun={vi.fn()} />);
+    rerender(<UserInputQuestionnaire task={correctionTask} onResumeRun={vi.fn()} />);
     expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("");
   });
 
@@ -912,13 +930,13 @@ describe("UserInputDialog", () => {
     );
 
     const { rerender } = render(
-      <UserInputDialog task={requestATask} onResumeRun={vi.fn()} />,
+      <UserInputQuestionnaire task={requestATask} onResumeRun={vi.fn()} />,
     );
     fireEvent.change(screen.getByRole("textbox"), {
       target: { value: "GSE12345" },
     });
 
-    rerender(<UserInputDialog task={requestBTask} onResumeRun={vi.fn()} />);
+    rerender(<UserInputQuestionnaire task={requestBTask} onResumeRun={vi.fn()} />);
     expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("");
   });
 
@@ -945,7 +963,7 @@ describe("UserInputDialog", () => {
     );
 
     const { rerender } = render(
-      <UserInputDialog task={correctionTask} onResumeRun={vi.fn()} />,
+      <UserInputQuestionnaire task={correctionTask} onResumeRun={vi.fn()} />,
     );
     expect(
       screen.getByText(
@@ -953,7 +971,7 @@ describe("UserInputDialog", () => {
       ),
     ).toBeVisible();
     // 其他分支(plan_confirmation 等)保留原有计划语义文案
-    rerender(<UserInputDialog task={planTask} onResumeRun={vi.fn()} />);
+    rerender(<UserInputQuestionnaire task={planTask} onResumeRun={vi.fn()} />);
     expect(
       screen.getByText(
         "当前为固定验收模式，仅供查看计划，确认按钮仅触发流程继续。",
@@ -1002,26 +1020,28 @@ describe("UserInputDialog", () => {
     );
 
     const { rerender } = render(
-      <UserInputDialog task={correctionTask} onResumeRun={onResumeRun} />,
+      <UserInputQuestionnaire task={correctionTask} onResumeRun={onResumeRun} />,
     );
     fireEvent.change(screen.getByRole("textbox"), {
       target: { value: "改用 GEO 数据 GSE12345" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "提交修正" }));
-    expect(screen.getByRole("button", { name: "提交修正" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("radio", { name: /^提交修正/ }));
+    fireEvent.click(screen.getByRole("button", { name: "确认" }));
+    expect(screen.getByRole("button", { name: "确认" })).toBeDisabled();
 
     // Same task/run/request ids, different prompt kind → new promptKey.
     rerender(
-      <UserInputDialog task={noProgressTask} onResumeRun={onResumeRun} />,
+      <UserInputQuestionnaire task={noProgressTask} onResumeRun={onResumeRun} />,
     );
-    expect(screen.getByRole("button", { name: "继续工作" })).toBeEnabled();
+    expect(screen.getByRole("radio", { name: /^继续工作/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "确认" })).toBeEnabled();
 
     // The OLD data_correction resume fails: the error is keyed to the old
     // prompt and must NOT appear on the no_progress prompt.
     act(() => rejectFirst?.(new Error("old correction resume failed")));
     await waitFor(() => {
       expect(screen.queryByText("old correction resume failed")).toBeNull();
-      expect(screen.getByRole("button", { name: "继续工作" })).toBeEnabled();
+      expect(screen.getByRole("radio", { name: /^继续工作/ })).toBeEnabled();
     });
   });
 
@@ -1042,11 +1062,12 @@ describe("UserInputDialog", () => {
         },
       },
     );
-    render(<UserInputDialog task={task} onResumeRun={vi.fn()} />);
+    render(<UserInputQuestionnaire task={task} onResumeRun={vi.fn()} />);
 
     expect(screen.getByText("检测到无进展")).toBeVisible();
-    expect(screen.getByRole("button", { name: "继续工作" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "停止" })).toBeVisible();
+    expect(screen.getByRole("radio", { name: /^继续工作/ })).toBeVisible();
+    expect(screen.getByRole("radio", { name: /^停止/ })).toBeVisible();
+    expect(screen.getByRole("button", { name: "确认" })).toBeVisible();
     // no_progress 不应渲染 plan card
     expect(screen.queryByText("研究主题")).not.toBeInTheDocument();
   });
@@ -1066,16 +1087,17 @@ describe("UserInputDialog", () => {
       },
     );
 
-    render(<UserInputDialog task={task} onResumeRun={vi.fn()} />);
+    render(<UserInputQuestionnaire task={task} onResumeRun={vi.fn()} />);
 
     expect(screen.getByText(/已超时/)).toBeVisible();
     expect(screen.queryByText(/需在 .*前答复/)).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "提交修正" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "跳过并继续" })).toBeDisabled();
+    expect(screen.getByRole("radio", { name: /^提交修正/ })).toBeDisabled();
+    expect(screen.getByRole("radio", { name: /^跳过并继续/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "确认" })).toBeDisabled();
     vi.useRealTimers();
   });
 
-  it("re-evaluates expiry while the dialog stays mounted (F3)", () => {
+  it("re-evaluates expiry while the questionnaire stays mounted (F3)", () => {
     vi.useFakeTimers();
     const now = new Date("2026-07-14T00:10:00Z");
     vi.setSystemTime(now);
@@ -1091,22 +1113,23 @@ describe("UserInputDialog", () => {
       },
     );
 
-    render(<UserInputDialog task={task} onResumeRun={vi.fn()} />);
+    render(<UserInputQuestionnaire task={task} onResumeRun={vi.fn()} />);
 
     // Deadline is 2s away: actions enabled, no expired state yet.
     expect(screen.queryByText(/已超时/)).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "跳过并继续" })).toBeEnabled();
+    expect(screen.getByRole("radio", { name: /^跳过并继续/ })).toBeEnabled();
 
-    // Cross the deadline while the dialog stays mounted: an interval tick
-    // must re-render and flip to the expired state, disabling the actions.
+    // Cross the deadline while the questionnaire stays mounted: an interval
+    // tick must re-render and flip to the expired state, disabling the actions.
     act(() => {
       vi.advanceTimersByTime(3_000);
     });
 
     expect(screen.getByText(/已超时/)).toBeVisible();
     expect(screen.queryByText(/需在 .*前答复/)).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "跳过并继续" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "提交修正" })).toBeDisabled();
+    expect(screen.getByRole("radio", { name: /^跳过并继续/ })).toBeDisabled();
+    expect(screen.getByRole("radio", { name: /^提交修正/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "确认" })).toBeDisabled();
     vi.useRealTimers();
   });
 
@@ -1137,18 +1160,19 @@ describe("UserInputDialog", () => {
     );
 
     const { rerender } = render(
-      <UserInputDialog task={futureTask} onResumeRun={vi.fn()} />,
+      <UserInputQuestionnaire task={futureTask} onResumeRun={vi.fn()} />,
     );
     expect(screen.queryByText(/已超时/)).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "跳过并继续" })).toBeEnabled();
+    expect(screen.getByRole("radio", { name: /^跳过并继续/ })).toBeEnabled();
     fireEvent.change(screen.getByRole("textbox"), {
       target: { value: "改用 GEO 数据" },
     });
-    expect(screen.getByRole("button", { name: "提交修正" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("radio", { name: /^提交修正/ }));
+    expect(screen.getByRole("button", { name: "确认" })).toBeEnabled();
 
-    rerender(<UserInputDialog task={invalidTask} onResumeRun={vi.fn()} />);
+    rerender(<UserInputQuestionnaire task={invalidTask} onResumeRun={vi.fn()} />);
     expect(screen.getByText(/已超时/)).toBeVisible();
-    expect(screen.getByRole("button", { name: "提交修正" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "确认" })).toBeDisabled();
     vi.useRealTimers();
   });
 });

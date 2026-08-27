@@ -18,8 +18,8 @@ import { operationDisplayLabel } from "@/components/conversation/operationMeta";
 import { STAGE_LABELS } from "@/components/conversation/stageLabels";
 import { openSubagentPanel } from "@/components/subagentPanelControl";
 import { TaskStatusIcon } from "@/components/taskStatus";
-import { UserInputDialog } from "@/components/UserInputDialog";
 import { PermissionQuestionnaire } from "@/components/intervention/PermissionQuestionnaire";
+import { UserInputQuestionnaire } from "@/components/intervention/UserInputQuestionnaire";
 import { isNothingToCompactError } from "@/lib/compactErrors";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -1043,6 +1043,19 @@ export function ChatPanel({
                   </MessageScrollerItem>
                 )}
 
+                {resumeRun !== undefined && activeTask?.pendingUserInput !== null && activeTask !== undefined && (
+                  <MessageScrollerItem
+                    messageId={`user-input:${activeTask.pendingUserInput.requestId}`}
+                    scrollAnchor
+                  >
+                    <UserInputQuestionnaire
+                      key={activeTask.pendingUserInput.requestId}
+                      task={activeTask}
+                      onResumeRun={resumeRun}
+                    />
+                  </MessageScrollerItem>
+                )}
+
                 {activeTask?.summary.status === "completed" && (
                   <MessageScrollerItem messageId={`complete:${activeTaskId}`}>
                     <Marker variant="separator">
@@ -1138,7 +1151,6 @@ export function ChatPanel({
           </div>
         </div>
       </MessageScrollerProvider>
-      {resumeRun !== undefined && <UserInputDialog task={activeTask} onResumeRun={resumeRun} />}
       {contextBudgetWarningDialog}
     </div>
   );

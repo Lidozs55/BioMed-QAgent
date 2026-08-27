@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-import { UserInputDialog } from "@/components/UserInputDialog";
+import { UserInputQuestionnaire } from "@/components/intervention/UserInputQuestionnaire";
 import type { APIClient } from "@/hooks/useAPI";
 import type {
   EventEnvelope,
@@ -23,12 +23,12 @@ import { useAgentStore } from "@/stores/agentStore";
 // T5 (Phase 4c) end-to-end: the FULL user-visible data_correction flow through
 // the REAL frontend runtime path — AgentEventTransport over a WebSocket-shaped
 // socket + the real store reducer + the real RuntimeController.resumeRun +
-// the rendered UserInputDialog:
+// the rendered UserInputQuestionnaire:
 //
-//   live user_input_required(data_correction) → dialog opens with the pending
-//   correction → user types + submits → controller.resumeRun posts the
+//   live user_input_required(data_correction) → questionnaire appears with the
+//   pending correction → user types + submits → controller.resumeRun posts the
 //   approve/correction payload → user_input_resumed + run_completed arrive
-//   over the socket → dialog closes and the Run is COMPLETED.
+//   over the socket → questionnaire closes and the Run is COMPLETED.
 //
 // This is the frontend twin of the server-side approval-gate E2E in
 // server/tests/phase5/approval-gate.test.ts. The transport layer
@@ -195,7 +195,7 @@ function ActiveTaskDialog({ controller }: { controller: RuntimeController }) {
     activeTaskId !== null ? state.tasksById[activeTaskId] : undefined,
   );
   return (
-    <UserInputDialog
+    <UserInputQuestionnaire
       task={task}
       onResumeRun={(taskId, runId, input) =>
         controller.resumeRun(taskId, runId, input)
@@ -204,7 +204,7 @@ function ActiveTaskDialog({ controller }: { controller: RuntimeController }) {
   );
 }
 
-describe("data_correction end-to-end (real transport + reducer + controller + dialog)", () => {
+describe("data_correction end-to-end (real transport + reducer + controller + questionnaire)", () => {
   beforeEach(() => {
     useAgentStore.setState(createInitialRuntimeState());
   });
@@ -262,7 +262,7 @@ describe("data_correction end-to-end (real transport + reducer + controller + di
       "awaiting_user_input",
     );
 
-    // 4) Render the real dialog bound to the store's active task.
+    // 4) Render the questionnaire bound to the store's active task.
     const { rerender } = render(
       <ActiveTaskDialog controller={controller} />,
     );
@@ -271,11 +271,12 @@ describe("data_correction end-to-end (real transport + reducer + controller + di
       screen.getByText("候选 GSE 无法判断，请确认使用哪个数据集？"),
     ).toBeVisible();
 
-    // 5) User types the correction and submits.
+    // 5) User picks the correction radio, types the correction, and submits.
+    fireEvent.click(screen.getByRole("radio", { name: /^提交修正/ }));
     fireEvent.change(screen.getByRole("textbox"), {
       target: { value: "改用 GEO 数据 GSE12345" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "提交修正" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认" }));
     await waitFor(() => expect(resumeSnapshot).toHaveBeenCalledTimes(1));
     expect(resumeSnapshot).toHaveBeenCalledWith(taskId, runId, {
       request_id: "data_correction-run_e2e-0",
@@ -309,7 +310,7 @@ describe("data_correction end-to-end (real transport + reducer + controller + di
     expect(
       useAgentStore.getState().tasksById[taskId].runsById[runId].status,
     ).toBe("completed");
-    // The dialog closed once the Run left AWAITING_USER_INPUT.
+    // The questionnaire closed once the Run left AWAITING_USER_INPUT.
     rerender(<ActiveTaskDialog controller={controller} />);
     expect(screen.queryByText("需要人工修正")).not.toBeInTheDocument();
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
