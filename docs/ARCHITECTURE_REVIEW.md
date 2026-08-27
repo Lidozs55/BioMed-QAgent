@@ -569,11 +569,13 @@ Bridge 拒绝任意 SQL，也不导入 Agent、Skill 或 Dataset Core。缓存�
 
 #### A. 动态 Transform 没有操作系统隔离
 
-这是部署安全风险，不是普通技术债。当前返回结果已经诚实标注 `security_boundary: false`，答辩材料也必须保持这个表述。上线公开多租户前，应以真正隔离的 worker/container 替换进程内执行，并让现有 sandbox proof gate 产生 Host 可验证而非 caller-reported 的证据。
+这是部署安全风险，不是普通技术债。当前返回结果已经诚实标注 `security_boundary: false`，答辩材料也必须保持这个表述。依据已接受的 ADR-039 和当前 [`TODO.md`](TODO.md)，`in_process_unisolated` 是受控环境基线，公开多租户中的不可信 Transform 不属于当前支持范围；隔离 worker/container/IPC 已列为 Deferred，只有新 ADR 重新定义安全边界、资源约束和 Host 可验证证据后才能恢复实现，不能作为当前既定升级路线表述。
 
 #### B. 图表提取尚未闭合到正式 Publication
 
 图表能力本身较完整，但默认注册表没有接入 chart-evidence Family 模块。建议最小化补齐一条受控正式路线：VLM 输出先生成带 bbox/model/prompt/transform/review 的 evidence asset，再由注册 Adapter、chart validation 和 ProductAssessment 发布。不要让任意 parsed CSV 直接获得发布权。
+
+**跟踪状态：** 已登记到 [`TODO.md`](TODO.md) P1“图表 evidence 到正式 Publication 闭环”，并加入 task ownership、fail-closed、点级 Gold、HIL correction、事件重放和 artifact hash 验收；本轮未把未接线模块误报为已完成产品能力。
 
 #### C. Publication Viewer artifact 路由参数（已修复）
 
@@ -582,6 +584,8 @@ Bridge 拒绝任意 SQL，也不导入 Agent、Skill 或 Dataset Core。缓存�
 #### D. 查找“完备性”缺乏可量化证明
 
 当前提示词要求报告 requested/succeeded/failed counts，但没有统一的 QueryPlan/SourceCoverage artifact 来证明搜索了哪些数据库、每个数据库的查询式、分页终点、时间窗口、去重前后数量和未覆盖原因。赛题第一评分项是“问题子领域内是否完备”，仅靠工具数量和 Agent 叙述说服力不足。
+
+**跟踪状态：** 已登记到 [`TODO.md`](TODO.md) P1“可验证的 QueryPlan / SourceCoverage 证据”。验收范围限定为预定义 source universe，并要求部分失败、分页、去重、排除原因、事件重放和 artifact hash 可核验；在该任务完成前，系统不得宣称绝对查全。
 
 ### 20.4 中优先级问题
 
@@ -644,4 +648,4 @@ Bridge 拒绝任意 SQL，也不导入 Agent、Skill 或 Dataset Core。缓存�
 
 当前架构的主干是合理且有必要的：Agent/Core 分权、固定规格、内容寻址、逐阶段 checkpoint、证据绑定 HIL 和原子发布都直接服务于赛题的“可靠、可追溯、可修正”，不是为了抽象而抽象。
 
-需要谨慎的不是再增加一层框架，而是继续补齐两项可验收闭环：图表 evidence 到 Publication、查询覆盖率 artifact，并维持前端正式 artifact 下载的回归覆盖。动态 transform 的非隔离边界必须继续如实披露，除非新 ADR 恢复隔离方向。完成这些后，项目最有竞争力的卖点会从“数据源和工具很多”提升为“每一条正式科学数据都能解释来源、处理、质量和修正历史”。
+需要谨慎的不是再增加一层框架，而是按 [`TODO.md`](TODO.md) 中的验收条件继续补齐两项闭环：图表 evidence 到 Publication、查询覆盖率 artifact，并维持前端正式 artifact 下载的回归覆盖。动态 transform 的非隔离边界必须继续如实披露，除非新 ADR 恢复隔离方向。完成这些后，项目最有竞争力的卖点会从“数据源和工具很多”提升为“每一条正式科学数据都能解释来源、处理、质量和修正历史”。
