@@ -47,6 +47,7 @@ import {
 } from "./task-repository.js";
 
 import { DurableHILStore, HILConflictError } from "./hil-store.js";
+import { claimTasksRootExclusive } from "./host-lease.js";
 
 import { readExecutionContinuation } from "./execution-continuation.js";
 
@@ -87,6 +88,12 @@ export interface DurableAgentWorkspace {
 
 export interface DurableAgentRuntimeOptions {
   tasksRoot: string;
+  /**
+   * Exclusive tasks-root lease test hook: `holderPid` simulates a lease
+   * recorded by that pid before claiming; `pid` simulates the claiming
+   * process id. Production callers omit it.
+   */
+  leaseOverride?: { holderPid?: number; pid?: number };
   /** Owns ``data/workspaces/<taskId>`` lifecycle (create/remove/restore). */
   workspaceManager?: WorkspaceManager;
   /** Live broker registry for preset-switch invalidation + grant management. */
@@ -306,6 +313,11 @@ function controlError(
 export async function createDurableAgentRuntime(
   options: DurableAgentRuntimeOptions,
 ): Promise<DurableAgentRuntime> {
+  // Fail fast before the recovery sweep: a second live host on the same
+  // tasks root would interrupt this process's runs and interleave
+  // events.jsonl appends (docs/ISSUES.md §运行环境).
+  await claimTasksRootExclusive(options.tasksRoot, options.leaseOverride);
+
   const repository = options.repository ?? new DurableTaskRepository(options.tasksRoot);
 
   const hilStore = new DurableHILStore(repository);
