@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseBuildDetail } from "@/lib/apiResponseParsers";
+import { parsePublicationDetail } from "@/lib/apiResponseParsers";
 
 const artifact = {
   artifact_id: "artifact_expression",
@@ -16,7 +16,7 @@ function v2Manifest() {
     schema_version: "2.0",
     manifest_id: "manifest_topology",
     task_id: "task_topology",
-    build_id: "build_topology",
+    requirement_id: "build_topology",
     dataset_family: "gene_expression",
     row_granularity: "measurement_by_sample",
     schema_ref: "schema.expression.v2",
@@ -77,7 +77,7 @@ function v1Manifest() {
   return {
     manifest_id: manifest.manifest_id,
     task_id: manifest.task_id,
-    build_id: manifest.build_id,
+    requirement_id: manifest.requirement_id,
     dataset_family: manifest.dataset_family,
     row_granularity: manifest.row_granularity,
     schema_ref: manifest.schema_ref,
@@ -94,19 +94,28 @@ function v1Manifest() {
 
 function detail(manifest: Record<string, unknown> = v2Manifest()) {
   return {
-    build_id: "build_topology",
+    publication_id: "publication_topology",
+    requirement_id: "build_topology",
+    run_id: "run_topology",
     task_id: "task_topology",
-    manifest_ref: "datasets_build/build_topology/dataset_manifest.json",
-    build_result: null,
+    manifest_ref: "dataset_runs/run_topology/build_topology/publish/publication_topology/dataset_manifest.json",
     manifest,
-    publication: null,
+    publication: {
+      schema_version: "1.1",
+      publication_id: "publication_topology",
+      manifest_ref: "dataset_manifest.json",
+      manifest_sha256: "c".repeat(64),
+      validation_result_ref: "validation_result.json",
+      published_at: "2026-08-27T00:00:00.000Z",
+      supersedes_publication_id: null,
+    },
     artifacts: manifest.artifacts,
   };
 }
 
-describe("V2 build manifest parsing", () => {
+describe("V2 publication manifest parsing", () => {
   it("preserves tables, relations, and candidate refs", () => {
-    const parsed = parseBuildDetail(detail());
+    const parsed = parsePublicationDetail(detail());
     expect(parsed.manifest.schema_version).toBe("2.0");
     if (parsed.manifest.schema_version !== "2.0") throw new Error("expected V2");
     expect(parsed.manifest.tables.map((table) => table.table_id)).toEqual(["expression", "samples"]);
@@ -120,7 +129,7 @@ describe("V2 build manifest parsing", () => {
     { relations: [{ ...v2Manifest().relations[0], to_fields: ["dataset_revision_id"] }] },
     { candidate_refs: [{ ...v2Manifest().candidate_refs[0], relation_ids: ["missing_relation"] }] },
   ])("rejects malformed topology references", (override) => {
-    expect(() => parseBuildDetail(detail({ ...v2Manifest(), ...override }))).toThrow();
+    expect(() => parsePublicationDetail(detail({ ...v2Manifest(), ...override }))).toThrow();
   });
 
   it.each([
@@ -132,11 +141,11 @@ describe("V2 build manifest parsing", () => {
     }],
     ["empty candidate refs", () => ({ candidate_refs: [] })],
   ])("rejects V2 structural invariant violation: %s", (_name, override) => {
-    expect(() => parseBuildDetail(detail({ ...v2Manifest(), ...override() }))).toThrow();
+    expect(() => parsePublicationDetail(detail({ ...v2Manifest(), ...override() }))).toThrow();
   });
 
   it("keeps the legacy V1 manifest shape unchanged", () => {
-    const parsed = parseBuildDetail(detail(v1Manifest()));
+    const parsed = parsePublicationDetail(detail(v1Manifest()));
     expect(parsed.manifest.schema_version).toBeUndefined();
     expect(parsed.manifest).toEqual(v1Manifest());
     expect("tables" in parsed.manifest).toBe(false);
@@ -159,7 +168,7 @@ describe("V2 build manifest parsing", () => {
       return { candidate_refs: manifest.candidate_refs };
     }],
   ])("rejects duplicate %s IDs", (_name, override) => {
-    expect(() => parseBuildDetail(detail({ ...v2Manifest(), ...override() }))).toThrow();
+    expect(() => parsePublicationDetail(detail({ ...v2Manifest(), ...override() }))).toThrow();
   });
 
   it.each([
@@ -179,6 +188,6 @@ describe("V2 build manifest parsing", () => {
       return { relations: manifest.relations };
     }],
   ])("rejects invalid %s", (_name, override) => {
-    expect(() => parseBuildDetail(detail({ ...v2Manifest(), ...override() }))).toThrow();
+    expect(() => parsePublicationDetail(detail({ ...v2Manifest(), ...override() }))).toThrow();
   });
 });

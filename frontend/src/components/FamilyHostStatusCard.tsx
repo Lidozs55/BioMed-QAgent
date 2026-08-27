@@ -96,7 +96,7 @@ function ProductAssessmentSummary({ assessment }: { assessment: ProductAssessmen
   );
 }
 
-/** Compact status/evidence presentation for submit_dynamic_family_build output. */
+/** Compact status/evidence presentation for submit_dynamic_family_publication output. */
 export function FamilyHostStatusCard({ output }: FamilyHostStatusCardProps) {
   const successful = output.ok && output.status === "published";
   return (
@@ -130,7 +130,7 @@ export function FamilyHostStatusCard({ output }: FamilyHostStatusCardProps) {
           </Alert>
           <div className="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-3">
             <div><span className="text-muted-foreground">状态</span><p className="font-medium">{statusLabel(output.status)}</p></div>
-            <div><span className="text-muted-foreground">build_id</span><p className="break-all font-mono">{output.build_id ?? "未提供"}</p></div>
+            <div><span className="text-muted-foreground">requirement_id</span><p className="break-all font-mono">{output.requirement_id ?? "未提供"}</p></div>
             <div><span className="text-muted-foreground">publication_id</span><p className="break-all font-mono">{output.publication_id ?? "未发布"}</p></div>
             <div><span className="text-muted-foreground">manifest</span><p className="break-all font-mono">{output.manifest_id ?? "未提供"}</p></div>
             <div><span className="text-muted-foreground">manifest digest</span><p className="break-all font-mono">{digest(output.manifest_sha256)}</p></div>
@@ -138,7 +138,7 @@ export function FamilyHostStatusCard({ output }: FamilyHostStatusCardProps) {
           </div>
           {output.error !== null && (
             <Alert variant="destructive">
-              <AlertTitle>{output.error.code ?? "dynamic_build_rejected"}</AlertTitle>
+              <AlertTitle>{output.error.code ?? "dynamic_publication_rejected"}</AlertTitle>
               <AlertDescription>{output.error.message ?? "动态构建被拒绝。"}</AlertDescription>
             </Alert>
           )}

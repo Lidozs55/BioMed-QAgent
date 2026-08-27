@@ -295,7 +295,7 @@ export class InProcessUnisolatedTransformHost {
       schema_version: "1.0",
       task_id: this.#context.taskId,
       run_id: this.#context.runId,
-      build_id: this.#context.buildId,
+      requirement_id: this.#context.requirementId,
       invocation_id: this.#context.invocationId,
       attempt: this.#context.attempt,
       generation: this.#context.generation,

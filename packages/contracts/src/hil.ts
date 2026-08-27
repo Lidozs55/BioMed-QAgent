@@ -65,7 +65,7 @@ export interface HILRequest {
   request_id: string;
   task_id: string;
   run_id: string;
-  build_id: string | null;
+  requirement_id: string | null;
   kind: HILKind;
   review_type: HILReviewType | null;
   status: HILStatus;
@@ -205,7 +205,7 @@ export function parseHILRequest(value: unknown, path = "hil_request"): HILReques
     request_id: assertString(obj.request_id, `${path}.request_id`, true),
     task_id: assertString(obj.task_id, `${path}.task_id`, true),
     run_id: assertString(obj.run_id, `${path}.run_id`, true),
-    build_id: assertStringOrNull(obj.build_id, `${path}.build_id`),
+    requirement_id: assertStringOrNull(obj.requirement_id, `${path}.requirement_id`),
     kind,
     review_type: reviewType,
     status: assertFinite(obj.status, `${path}.status`, HIL_STATUSES),

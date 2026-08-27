@@ -11,7 +11,7 @@ function request(providerId: string, source: string, accession: string): CoreAcq
     schema_version: "1.0",
     request_id: `request_${providerId.replaceAll(".", "_")}`,
     task_id: "task_catalog",
-    build_id: "build_catalog",
+    requirement_id: "build_catalog",
     binding_id: "binding_catalog",
     mode: "builtin",
     provider_id: providerId,

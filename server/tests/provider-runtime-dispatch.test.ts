@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { DatasetBuildSpec, SourceAsset } from "../src/dataset/contracts/index.js";
+import type { DatasetExecutionSpec, SourceAsset } from "../src/dataset/contracts/index.js";
 import {
   bioactivityActivitySchema,
   BIOACTIVITY_FAMILY_ID,
@@ -39,14 +39,14 @@ function sourceAssetFromReceipt(receipt: Awaited<ReturnType<SourceAssetRegistry[
 }
 
 function bioactivitySpec(options: {
-  buildId: string;
+  requirementId: string;
   includePubChem?: boolean;
   pubchemAccession?: string | null;
   entities?: Record<string, string[]>;
-}): DatasetBuildSpec {
+}): DatasetExecutionSpec {
   return {
     schema_version: "1.0",
-    build_id: options.buildId,
+    requirement_id: options.requirementId,
     objective: "Publish non-Gold receipt-backed bioactivity identity data",
     dataset_family: BIOACTIVITY_FAMILY_ID,
     row_granularity: BIOACTIVITY_ROW_GRANULARITY,
@@ -121,9 +121,9 @@ async function registerBioactivityCarriers(options: {
   return { chembl, pubchem };
 }
 
-async function publicationDirectories(taskRoot: string, buildId: string): Promise<string[]> {
+async function publicationDirectories(taskRoot: string, runId: string, requirementId: string): Promise<string[]> {
   try {
-    return await readdir(path.join(taskRoot, "datasets_build", buildId, "publish"));
+    return await readdir(path.join(taskRoot, "dataset_runs", runId, requirementId, "publish"));
   } catch (error) {
     if (error !== null && typeof error === "object" && Reflect.get(error, "code") === "ENOENT") return [];
     throw error;
@@ -171,7 +171,7 @@ describe("provider runtime dispatch", () => {
     });
     const spec = {
       schema_version: "1.0" as const,
-      build_id: "build_provider_chembl",
+      requirement_id: "build_provider_chembl",
       objective: "Publish fixed ChEMBL activity data",
       dataset_family: BIOACTIVITY_FAMILY_ID,
       row_granularity: BIOACTIVITY_ROW_GRANULARITY,
@@ -202,7 +202,7 @@ describe("provider runtime dispatch", () => {
     };
     const core = new TypeScriptDatasetCore({ taskId: "task_provider_chembl", taskRoot });
 
-    const result = await core.executeDatasetBuild(spec, {
+    const result = await core.executeDatasetExecution(spec, {
       runId: "run_provider_chembl",
       sourceAssets: { binding_chembl: sourceAssetFromReceipt(receipt) },
       registeredSourceAssetIds: new Set([receipt.asset_ref.asset_id]),
@@ -222,13 +222,13 @@ describe("provider runtime dispatch", () => {
 
   it("publishes exact ChEMBL-PubChem identity as five receipt-closed tables", async () => {
     const taskId = "task_provider_bioactivity_identity";
-    const buildId = "build_provider_bioactivity_identity";
+    const requirementId = "build_provider_bioactivity_identity";
     const taskRoot = await mkdtemp(path.join(os.tmpdir(), "provider-dispatch-bioactivity-identity-"));
     roots.push(taskRoot);
     const carriers = await registerBioactivityCarriers({ taskId, taskRoot });
     const core = new TypeScriptDatasetCore({ taskId, taskRoot });
 
-    const result = await core.executeDatasetBuild(bioactivitySpec({ buildId, includePubChem: true }), {
+    const result = await core.executeDatasetExecution(bioactivitySpec({ requirementId, includePubChem: true }), {
       runId: "run_provider_bioactivity_identity",
       sourceAssets: {
         binding_chembl: sourceAssetFromReceipt(carriers.chembl),
@@ -256,9 +256,9 @@ describe("provider runtime dispatch", () => {
     );
     expect(assessmentArtifact).toMatchObject({ role: "audit_report" });
 
-    const [version] = await publicationDirectories(taskRoot, buildId);
+    const [version] = await publicationDirectories(taskRoot, "run_provider_bioactivity_identity", requirementId);
     expect(version).toBeDefined();
-    const publicationDir = path.join(taskRoot, "datasets_build", buildId, "publish", version!);
+    const publicationDir = path.join(taskRoot, "dataset_runs", "run_provider_bioactivity_identity", requirementId, "publish", version!);
     const compounds = await readFile(path.join(publicationDir, "tables", "compounds.csv"), "utf8");
     const crosswalk = await readFile(path.join(publicationDir, "tables", "compound_crosswalks.csv"), "utf8");
     expect(compounds).toContain("CHEMBL_FIXTURE_25,chembl_compound");
@@ -303,7 +303,7 @@ describe("provider runtime dispatch", () => {
 
   it("fails closed before publication when PubChem identity does not exactly match", async () => {
     const taskId = "task_provider_bioactivity_conflict";
-    const buildId = "build_provider_bioactivity_conflict";
+    const requirementId = "build_provider_bioactivity_conflict";
     const taskRoot = await mkdtemp(path.join(os.tmpdir(), "provider-dispatch-bioactivity-conflict-"));
     roots.push(taskRoot);
     const document = JSON.parse(
@@ -313,7 +313,7 @@ describe("provider runtime dispatch", () => {
     const carriers = await registerBioactivityCarriers({ taskId, taskRoot, pubchemDocument: document });
     const core = new TypeScriptDatasetCore({ taskId, taskRoot });
 
-    await expect(core.executeDatasetBuild(bioactivitySpec({ buildId, includePubChem: true }), {
+    await expect(core.executeDatasetExecution(bioactivitySpec({ requirementId, includePubChem: true }), {
       runId: "run_provider_bioactivity_conflict",
       sourceAssets: {
         binding_chembl: sourceAssetFromReceipt(carriers.chembl),
@@ -324,7 +324,7 @@ describe("provider runtime dispatch", () => {
         carriers.pubchem.asset_ref.asset_id,
       ]),
     })).rejects.toThrow(/exact InChIKey|identity match|publishable/);
-    expect(await publicationDirectories(taskRoot, buildId)).toEqual([]);
+    expect(await publicationDirectories(taskRoot, "run_provider_bioactivity_conflict", requirementId)).toEqual([]);
   });
 
   it.each([
@@ -332,14 +332,14 @@ describe("provider runtime dispatch", () => {
     ["CID mismatch", { PropertyTable: { Properties: [{ CID: 9999, InChIKey: EXACT_INCHI_KEY }] } }, "2244", /CID does not match/],
   ])("fails closed on %s carrier data", async (_name, pubchemDocument, accession, error) => {
     const taskId = `task_provider_bioactivity_invalid_${accession}`;
-    const buildId = `build_provider_bioactivity_invalid_${accession}`;
+    const requirementId = `build_provider_bioactivity_invalid_${accession}`;
     const taskRoot = await mkdtemp(path.join(os.tmpdir(), "provider-dispatch-bioactivity-invalid-"));
     roots.push(taskRoot);
     const carriers = await registerBioactivityCarriers({ taskId, taskRoot, pubchemDocument });
     const core = new TypeScriptDatasetCore({ taskId, taskRoot });
 
-    await expect(core.executeDatasetBuild(bioactivitySpec({
-      buildId,
+    await expect(core.executeDatasetExecution(bioactivitySpec({
+      requirementId,
       includePubChem: true,
       pubchemAccession: accession,
     }), {
@@ -353,26 +353,26 @@ describe("provider runtime dispatch", () => {
         carriers.pubchem.asset_ref.asset_id,
       ]),
     })).rejects.toThrow(error);
-    expect(await publicationDirectories(taskRoot, buildId)).toEqual([]);
+    expect(await publicationDirectories(taskRoot, `run_provider_bioactivity_invalid_${accession}`, requirementId)).toEqual([]);
   });
 
   it("fails closed when the PubChem binding has no registered receipt", async () => {
     const taskId = "task_provider_bioactivity_missing_receipt";
-    const buildId = "build_provider_bioactivity_missing_receipt";
+    const requirementId = "build_provider_bioactivity_missing_receipt";
     const taskRoot = await mkdtemp(path.join(os.tmpdir(), "provider-dispatch-bioactivity-missing-"));
     roots.push(taskRoot);
     const carriers = await registerBioactivityCarriers({ taskId, taskRoot });
     const core = new TypeScriptDatasetCore({ taskId, taskRoot });
 
-    await expect(core.executeDatasetBuild(bioactivitySpec({ buildId, includePubChem: true }), {
+    await expect(core.executeDatasetExecution(bioactivitySpec({ requirementId, includePubChem: true }), {
       runId: "run_provider_bioactivity_missing_receipt",
       sourceAssets: { binding_chembl: sourceAssetFromReceipt(carriers.chembl) },
       registeredSourceAssetIds: new Set([carriers.chembl.asset_ref.asset_id]),
     })).rejects.toThrow(/binding_pubchem.*registered carrier asset ID|registered carrier asset ID.*binding_pubchem/);
-    expect(await publicationDirectories(taskRoot, buildId)).toEqual([]);
+    expect(await publicationDirectories(taskRoot, "run_provider_bioactivity_missing_receipt", requirementId)).toEqual([]);
   });
 
-  it("publishes a registered target carrier through executeDatasetBuild", async () => {
+  it("publishes a registered target carrier through executeDatasetExecution", async () => {
     const taskRoot = await mkdtemp(path.join(os.tmpdir(), "provider-dispatch-e2e-"));
     roots.push(taskRoot);
     await mkdir(path.join(taskRoot, "source_assets"), { recursive: true });
@@ -388,7 +388,7 @@ describe("provider runtime dispatch", () => {
     const sourceAsset = sourceAssetFromReceipt(receipt);
     const spec = {
       schema_version: "1.0" as const,
-      build_id: "build_provider_dispatch",
+      requirement_id: "build_provider_dispatch",
       objective: "Publish a target carrier",
       dataset_family: TARGET_EVIDENCE_FAMILY_ID,
       row_granularity: TARGET_EVIDENCE_ROW_GRANULARITY,
@@ -418,7 +418,7 @@ describe("provider runtime dispatch", () => {
       target_entity_level: null,
     };
     const core = new TypeScriptDatasetCore({ taskId: "task_provider_dispatch", taskRoot });
-    const result = await core.executeDatasetBuild(spec, {
+    const result = await core.executeDatasetExecution(spec, {
       runId: "run_provider_dispatch",
       sourceAssets: { binding_uniprot_carrier: sourceAsset },
       registeredSourceAssetIds: new Set([receipt.asset_ref.asset_id]),
@@ -432,9 +432,9 @@ describe("provider runtime dispatch", () => {
     expect(manifest.tables.map((table) => table.table_id)).toEqual([
       "targets", "evidence", "sources", "supporting",
     ]);
-    const publicationEntries = await readdir(path.join(taskRoot, "datasets_build", spec.build_id, "publish"));
+    const publicationEntries = await readdir(path.join(taskRoot, "dataset_runs", "run_provider_dispatch", spec.requirement_id, "publish"));
     expect(publicationEntries).toHaveLength(1);
-    const publicationDir = path.join(taskRoot, "datasets_build", spec.build_id, "publish", publicationEntries[0]!);
+    const publicationDir = path.join(taskRoot, "dataset_runs", "run_provider_dispatch", spec.requirement_id, "publish", publicationEntries[0]!);
     expect(await stat(path.join(publicationDir, "dataset_manifest.json"))).toMatchObject({});
     expect(await readFile(path.join(publicationDir, "tables", "targets.csv"), "utf8")).toContain("Q9Y243");
 
@@ -445,7 +445,7 @@ describe("provider runtime dispatch", () => {
       relativePath: invalidRelativePath,
       role: "carrier",
     });
-    await expect(core.executeDatasetBuild({ ...spec, build_id: "build_provider_dispatch_invalid" }, {
+    await expect(core.executeDatasetExecution({ ...spec, requirement_id: "build_provider_dispatch_invalid" }, {
       runId: "run_provider_dispatch_invalid",
       sourceAssets: { binding_uniprot_carrier: sourceAssetFromReceipt(invalidReceipt) },
       registeredSourceAssetIds: new Set([invalidReceipt.asset_ref.asset_id]),

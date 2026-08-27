@@ -3,7 +3,6 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import type {
-  BuildResult,
   DatasetManifest,
   DatasetPublication,
   EventEnvelope,
@@ -15,7 +14,6 @@ import type {
 
 interface ContractParityFixture {
   event_envelopes: EventEnvelope[];
-  build_results: BuildResult[];
   dataset_manifest: DatasetManifest;
   dataset_publication: DatasetPublication;
   task_modes: TaskMode[];
@@ -32,7 +30,6 @@ function assertParityFixture(value: unknown): asserts value is ContractParityFix
   if (
     !isRecord(value) ||
     !Array.isArray(value.event_envelopes) ||
-    !Array.isArray(value.build_results) ||
     !isRecord(value.dataset_manifest) ||
     !isRecord(value.dataset_publication) ||
     !Array.isArray(value.task_modes) ||
@@ -63,13 +60,7 @@ describe("shared wire contract fixture", () => {
     expect(fixture.event_envelopes[1]?.run_id).toBe("run_fixture_001");
   });
 
-  it("freezes build statuses and manifest artifact roles", () => {
-    expect(fixture.build_results.map((result) => result.status)).toEqual([
-      "succeeded",
-      "partial_success",
-      "no_data",
-      "spec_rejected",
-    ]);
+  it("freezes manifest artifact roles", () => {
     expect(fixture.dataset_manifest.artifacts.map((artifact) => artifact.role)).toEqual([
       "primary_dataset",
       "supporting_dataset",

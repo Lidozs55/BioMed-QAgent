@@ -76,7 +76,7 @@ export function datasetRouteCapabilities() {
       route_status: "registered_family_only",
       use_when:
         "One listed family, schema, row granularity, and source combination expresses the requested product.",
-      next_tools: ["validate_dataset_build", "execute_dataset_build"],
+      next_tools: ["validate_dataset_execution", "execute_dataset_execution"],
       families: registry.definitionsList().map((family) => ({
         family_id: family.id,
         row_granularities: family.granularities.map((item) => item.id),
@@ -92,7 +92,7 @@ export function datasetRouteCapabilities() {
       route_status: "task_scoped_family_spec",
       use_when:
         "No static entry expresses the required semantic topology, but every input can close through a direct binding below or a prior task-owned Core acquisition asset.",
-      next_tools: ["prepare_dynamic_family_build", "submit_dynamic_family_build"],
+      next_tools: ["prepare_dynamic_family_publication", "submit_dynamic_family_publication"],
       direct_bindings: directBindings,
     },
     core_acquisition_only: acquisitionOnly,
@@ -107,7 +107,7 @@ export function datasetRouteCapabilities() {
 
 export function createDatasetRoutePreflightTool(): BioMedAgentTool {
   return {
-    name: "inspect_dataset_build_routes",
+    name: "inspect_dataset_execution_routes",
     label: "Inspect Dataset Build Routes",
     description:
       "For every dataset-producing request, call before substantive acquisition. Returns current static family/source combinations, directly bindable Dynamic Family providers, and acquisition-only carriers with exact blockers. Read-only and side-effect-free; it does not validate a proposed build.",

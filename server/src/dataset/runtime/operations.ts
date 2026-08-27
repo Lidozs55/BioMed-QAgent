@@ -78,7 +78,7 @@ export function isOperationKind(value: string): value is OperationKind {
 export interface OperationAttempt {
   operation_attempt_id: string;
   task_id: string;
-  build_id: string;
+  requirement_id: string;
   operation_id: string;
   attempt: number;
   input_digest: string;
@@ -95,7 +95,7 @@ export interface OperationAttempt {
 const OPERATION_ATTEMPT_KEYS = [
   "operation_attempt_id",
   "task_id",
-  "build_id",
+  "requirement_id",
   "operation_id",
   "attempt",
   "input_digest",
@@ -188,7 +188,7 @@ export function parseOperationAttempt(value: unknown): OperationAttempt {
       "OperationAttempt.operation_attempt_id",
     ),
     task_id: assertNonEmptyString(record.task_id, "OperationAttempt.task_id"),
-    build_id: assertNonEmptyString(record.build_id, "OperationAttempt.build_id"),
+    requirement_id: assertNonEmptyString(record.requirement_id, "OperationAttempt.requirement_id"),
     operation_id: assertNonEmptyString(record.operation_id, "OperationAttempt.operation_id"),
     attempt,
     input_digest: inputDigest.toLowerCase(),

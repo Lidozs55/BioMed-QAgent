@@ -266,7 +266,7 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
         evidence_digest: stored.evidenceDigest,
         task_id: taskId,
         run_id: runId,
-        build_id: null,
+        requirement_id: null,
         generation: 1,
         recipe_id: recipeId,
         recipe_version: recipeVersion,
@@ -282,7 +282,7 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
         failure_reason: null,
       });
       const request: Parameters<DatasetHILGate["requestHIL"]>[0] = {
-        build_id: null,
+        requirement_id: null,
         kind: "data_review",
         review_type: "browser_evidence_acceptance",
         blocking: true,

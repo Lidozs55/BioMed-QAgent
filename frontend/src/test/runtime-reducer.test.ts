@@ -1044,46 +1044,39 @@ describe("runtime event projection", () => {
     expect(state.tasksById.task_a.runsById.run_second.status).toBe("running");
     expect(state.tasksById.task_a.summary.active_run_id).toBe("run_second");
   });
-  it("projects one build report per completed run with its exact build id", () => {
+  it("projects one report per publication with its exact run id", () => {
     let state = mergeTaskPage(
       createInitialRuntimeState(),
       page(summary("task_reports")),
       false,
     );
-    const completed = (runId: string, buildId: string, sequence: number) =>
+    const published = (runId: string, publicationId: string, sequence: number) =>
       envelope("task_reports", runId, sequence, {
-        type: "run_completed",
-        build_result: {
-          status: "succeeded",
-          valid_row_count: 3,
-          successful_sources: ["source_a"],
-          rejected_sources: [],
-          available_artifact_roles: ["primary_dataset"],
-          publication_id: "pub_" + buildId,
-          reason_codes: [],
-          user_summary: "完成",
-          recommended_next_action: "",
-          build_id: buildId,
-        },
-      } as EventPayload);
+        type: "publication_created",
+        publication_id: publicationId,
+        run_id: runId,
+        manifest_sha256: "a".repeat(64),
+        supersedes_publication_id: null,
+        published_at: CREATED_AT,
+      });
 
-    state = reduceRuntimeEvent(state, completed("run_first", "build_first", 1));
-    state = reduceRuntimeEvent(state, completed("run_second", "build_second", 2));
+    state = reduceRuntimeEvent(state, published("run_first", "pub_first", 1));
+    state = reduceRuntimeEvent(state, published("run_second", "pub_second", 2));
 
     expect(
-      state.tasksById.task_reports.items.filter((item) => item.kind === "build_report"),
+      state.tasksById.task_reports.items.filter((item) => item.kind === "publication_report"),
     ).toEqual([
       expect.objectContaining({
-        itemId: "report:run_first",
+        itemId: "publication:pub_first",
         runId: "run_first",
         taskId: "task_reports",
-        buildId: "build_first",
+        publicationId: "pub_first",
       }),
       expect.objectContaining({
-        itemId: "report:run_second",
+        itemId: "publication:pub_second",
         runId: "run_second",
         taskId: "task_reports",
-        buildId: "build_second",
+        publicationId: "pub_second",
       }),
     ]);
   });

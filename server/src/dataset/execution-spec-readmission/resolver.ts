@@ -6,23 +6,23 @@ import {
   assertObject,
   assertString,
   parseFamilySpec,
-  parseDatasetBuildProposal2,
-  parseResolvedDatasetBuildSpec2,
+  parseDatasetExecutionProposal2,
+  parseResolvedDatasetExecutionSpec2,
   stableStringify,
   verifyFamilySpecDigest,
-  type DatasetBuildProposal2,
+  type DatasetExecutionProposal2,
   type FamilySpec,
   type JsonValue,
-  type ResolvedDatasetBuildSpec2,
+  type ResolvedDatasetExecutionSpec2,
 } from "@biomed/contracts";
 
 import {
-  BuildSpecResolutionError,
-  type BuildSpecCapabilityRecord,
-  type BuildSpecRegisteredRecord,
-  type BuildSpecResolution,
-  type BuildSpecResolutionContext,
-  type BuildSpecResolutionEvidence,
+  ExecutionSpecResolutionError,
+  type ExecutionSpecCapabilityRecord,
+  type ExecutionSpecRegisteredRecord,
+  type ExecutionSpecResolution,
+  type ExecutionSpecResolutionContext,
+  type ExecutionSpecResolutionEvidence,
   type FamilyStatus,
 } from "./types.js";
 
@@ -39,7 +39,7 @@ const FAMILY_STATUSES: readonly FamilyStatus[] = [
 
 const CONTEXT_KEYS = new Set([
   "task_id",
-  "build_id",
+  "requirement_id",
   "registry_generation",
   "registry_snapshot_digest",
   "family",
@@ -55,7 +55,7 @@ const RECORD_KEYS = new Set([
   "source",
   "input_requirement_ref",
   "task_id",
-  "build_id",
+  "requirement_id",
   "generation",
   "registered_ref",
   "receipt_digest",
@@ -64,26 +64,24 @@ const RECORD_KEYS = new Set([
 function ownValue(object: Record<string, unknown>, key: string, path: string): unknown {
   const descriptor = Object.getOwnPropertyDescriptor(object, key);
   if (!descriptor || !("value" in descriptor)) {
-    throw new BuildSpecResolutionError("invalid_context", `Missing data property at ${path}.${key}`, `${path}.${key}`);
+    throw new ExecutionSpecResolutionError("invalid_context", `Missing data property at ${path}.${key}`, `${path}.${key}`);
   }
   return descriptor.value;
 }
-
 function strictRecord(value: unknown, path: string, allowed: ReadonlySet<string>): Record<string, unknown> {
   const object = assertObject(value, path);
   for (const key of Object.keys(object)) {
     if (!allowed.has(key)) {
-      throw new BuildSpecResolutionError("invalid_context", `Unknown field "${key}" at ${path}`, `${path}.${key}`);
+      throw new ExecutionSpecResolutionError("invalid_context", `Unknown field "${key}" at ${path}`, `${path}.${key}`);
     }
   }
   return object;
 }
-
 function safeString(value: unknown, path: string): string {
   try {
     return assertString(value, path, true);
   } catch (error) {
-    throw new BuildSpecResolutionError("invalid_context", error instanceof Error ? error.message : `Invalid string at ${path}`, path);
+    throw new ExecutionSpecResolutionError("invalid_context", error instanceof Error ? error.message : `Invalid string at ${path}`, path);
   }
 }
 
@@ -91,7 +89,7 @@ function safeHex(value: unknown, path: string): string {
   try {
     return assertHex64(value, path);
   } catch (error) {
-    throw new BuildSpecResolutionError("invalid_context", error instanceof Error ? error.message : `Invalid digest at ${path}`, path);
+    throw new ExecutionSpecResolutionError("invalid_context", error instanceof Error ? error.message : `Invalid digest at ${path}`, path);
   }
 }
 
@@ -99,31 +97,31 @@ function safeGeneration(value: unknown, path: string): number {
   try {
     return assertNonNegativeInt(value, path);
   } catch (error) {
-    throw new BuildSpecResolutionError("invalid_context", error instanceof Error ? error.message : `Invalid generation at ${path}`, path);
+    throw new ExecutionSpecResolutionError("invalid_context", error instanceof Error ? error.message : `Invalid generation at ${path}`, path);
   }
 }
 
 function parseStatus(value: unknown, path: string): FamilyStatus {
   const status = safeString(value, path);
   if (!FAMILY_STATUSES.includes(status as FamilyStatus)) {
-    throw new BuildSpecResolutionError("invalid_context", `Unknown family status "${status}" at ${path}`, path);
+    throw new ExecutionSpecResolutionError("invalid_context", `Unknown family status "${status}" at ${path}`, path);
   }
   return status as FamilyStatus;
 }
 
-function parseCapability(value: unknown, path: string): BuildSpecCapabilityRecord {
+function parseCapability(value: unknown, path: string): ExecutionSpecCapabilityRecord {
   const object = strictRecord(value, path, CAPABILITY_KEYS);
   const kind = safeString(ownValue(object, "kind", path), `${path}.kind`);
   if (kind !== "dataset_transform" && kind !== "policy") {
-    throw new BuildSpecResolutionError("invalid_context", `Unsupported capability kind at ${path}`, path);
+    throw new ExecutionSpecResolutionError("invalid_context", `Unsupported capability kind at ${path}`, path);
   }
   const scope = safeString(ownValue(object, "scope", path), `${path}.scope`);
   if (!["example", "task", "user", "curated", "system"].includes(scope)) {
-    throw new BuildSpecResolutionError("invalid_context", `Unsupported capability scope at ${path}`, path);
+    throw new ExecutionSpecResolutionError("invalid_context", `Unsupported capability scope at ${path}`, path);
   }
   return {
     kind,
-    scope: scope as BuildSpecCapabilityRecord["scope"],
+    scope: scope as ExecutionSpecCapabilityRecord["scope"],
     id: safeString(ownValue(object, "id", path), `${path}.id`),
     version: safeString(ownValue(object, "version", path), `${path}.version`),
     digest: safeHex(ownValue(object, "digest", path), `${path}.digest`),
@@ -131,7 +129,7 @@ function parseCapability(value: unknown, path: string): BuildSpecCapabilityRecor
   };
 }
 
-function parseRegisteredRecord(value: unknown, path: string): BuildSpecRegisteredRecord {
+function parseRegisteredRecord(value: unknown, path: string): ExecutionSpecRegisteredRecord {
   const object = strictRecord(value, path, RECORD_KEYS);
   return {
     binding_id: safeString(ownValue(object, "binding_id", path), `${path}.binding_id`),
@@ -140,16 +138,16 @@ function parseRegisteredRecord(value: unknown, path: string): BuildSpecRegistere
     task_id: ownValue(object, "task_id", path) === null
       ? null
       : safeString(ownValue(object, "task_id", path), `${path}.task_id`),
-    build_id: ownValue(object, "build_id", path) === null
+    requirement_id: ownValue(object, "requirement_id", path) === null
       ? null
-      : safeString(ownValue(object, "build_id", path), `${path}.build_id`),
+      : safeString(ownValue(object, "requirement_id", path), `${path}.requirement_id`),
     generation: safeGeneration(ownValue(object, "generation", path), `${path}.generation`),
     registered_ref: safeString(ownValue(object, "registered_ref", path), `${path}.registered_ref`),
     receipt_digest: safeHex(ownValue(object, "receipt_digest", path), `${path}.receipt_digest`),
   };
 }
 
-function parseContext(value: unknown): BuildSpecResolutionContext {
+function parseContext(value: unknown): ExecutionSpecResolutionContext {
   const object = strictRecord(assertJsonValue(value, "$context"), "$context", CONTEXT_KEYS);
   const familyObject = strictRecord(ownValue(object, "family", "$context"), "$context.family", FAMILY_KEYS);
   let familySpec: FamilySpec;
@@ -159,7 +157,7 @@ function parseContext(value: unknown): BuildSpecResolutionContext {
       "$context.family.family_spec",
     );
   } catch (error) {
-    throw new BuildSpecResolutionError("invalid_context", error instanceof Error ? error.message : "Invalid family_spec", "$context.family.family_spec");
+    throw new ExecutionSpecResolutionError("invalid_context", error instanceof Error ? error.message : "Invalid family_spec", "$context.family.family_spec");
   }
   const transforms = assertArray(
     ownValue(object, "transforms", "$context"),
@@ -183,7 +181,7 @@ function parseContext(value: unknown): BuildSpecResolutionContext {
   );
   return {
     task_id: safeString(ownValue(object, "task_id", "$context"), "$context.task_id"),
-    build_id: safeString(ownValue(object, "build_id", "$context"), "$context.build_id"),
+    requirement_id: safeString(ownValue(object, "requirement_id", "$context"), "$context.requirement_id"),
     registry_generation: safeGeneration(ownValue(object, "registry_generation", "$context"), "$context.registry_generation"),
     registry_snapshot_digest: safeHex(ownValue(object, "registry_snapshot_digest", "$context"), "$context.registry_snapshot_digest"),
     family: {
@@ -197,14 +195,14 @@ function parseContext(value: unknown): BuildSpecResolutionContext {
   };
 }
 
-function resolutionError(code: BuildSpecResolutionError["code"], message: string, path: string): never {
-  throw new BuildSpecResolutionError(code, message, path);
+function resolutionError(code: ExecutionSpecResolutionError["code"], message: string, path: string): never {
+  throw new ExecutionSpecResolutionError(code, message, path);
 }
 
 function resolveCapabilityRefs(
   refs: readonly { scope: string; id: string; version: string; digest: string }[],
-  records: readonly BuildSpecCapabilityRecord[],
-  kind: BuildSpecCapabilityRecord["kind"],
+  records: readonly ExecutionSpecCapabilityRecord[],
+  kind: ExecutionSpecCapabilityRecord["kind"],
 ): string[] {
   return refs.map((ref) => {
     const matches = records.filter((record) =>
@@ -234,10 +232,10 @@ function resolveCapabilityRefs(
   });
 }
 
-function digest(value: JsonValue | DatasetBuildProposal2 | ResolvedDatasetBuildSpec2): Promise<string> {
+function digest(value: JsonValue | DatasetExecutionProposal2 | ResolvedDatasetExecutionSpec2): Promise<string> {
   const subtle = globalThis.crypto?.subtle;
   if (!subtle) {
-    return Promise.reject(new BuildSpecResolutionError("invalid_context", "Web Crypto is unavailable", "$crypto"));
+    return Promise.reject(new ExecutionSpecResolutionError("invalid_context", "Web Crypto is unavailable", "$crypto"));
   }
   const bytes = new TextEncoder().encode(stableStringify(value));
   return subtle.digest("SHA-256", bytes).then((buffer) =>
@@ -246,10 +244,10 @@ function digest(value: JsonValue | DatasetBuildProposal2 | ResolvedDatasetBuildS
 }
 
 function findUniqueRecord(
-  records: readonly BuildSpecRegisteredRecord[],
-  binding: DatasetBuildProposal2["source_bindings"][number],
+  records: readonly ExecutionSpecRegisteredRecord[],
+  binding: DatasetExecutionProposal2["source_bindings"][number],
   label: "asset" | "result",
-): BuildSpecRegisteredRecord | null {
+): ExecutionSpecRegisteredRecord | null {
   const matches = records.filter((record) =>
     record.binding_id === binding.binding_id
     && record.source === binding.source
@@ -266,9 +264,9 @@ function findUniqueRecord(
 }
 
 function resolveBinding(
-  binding: DatasetBuildProposal2["source_bindings"][number],
-  context: BuildSpecResolutionContext,
-): [ResolvedDatasetBuildSpec2["source_bindings"][number], string] {
+  binding: DatasetExecutionProposal2["source_bindings"][number],
+  context: ExecutionSpecResolutionContext,
+): [ResolvedDatasetExecutionSpec2["source_bindings"][number], string] {
   const asset = findUniqueRecord(context.assets, binding, "asset");
   const result = findUniqueRecord(context.results, binding, "result");
   if (asset && result) {
@@ -281,8 +279,8 @@ function resolveBinding(
   if (record.task_id !== null && record.task_id !== context.task_id) {
     resolutionError("cross_task_binding", `Binding "${binding.binding_id}" belongs to another task`, `$.source_bindings.${binding.binding_id}`);
   }
-  if (record.build_id !== null && record.build_id !== context.build_id) {
-    resolutionError("build_mismatch", `Binding "${binding.binding_id}" belongs to another build`, `$.source_bindings.${binding.binding_id}`);
+  if (record.requirement_id !== null && record.requirement_id !== context.requirement_id) {
+    resolutionError("requirement_mismatch", `Binding "${binding.binding_id}" belongs to another requirement`, `$.source_bindings.${binding.binding_id}`);
   }
   if (record.generation !== context.registry_generation) {
     resolutionError("stale_generation", `Binding "${binding.binding_id}" is from generation ${record.generation}`, `$.source_bindings.${binding.binding_id}`);
@@ -302,15 +300,15 @@ function resolveBinding(
   ];
 }
 
-export async function resolveDatasetBuildProposal2(
+export async function resolveDatasetExecutionProposal2(
   proposalInput: unknown,
   contextInput: unknown,
-): Promise<BuildSpecResolution> {
-  let proposal: DatasetBuildProposal2;
+): Promise<ExecutionSpecResolution> {
+  let proposal: DatasetExecutionProposal2;
   try {
-    proposal = parseDatasetBuildProposal2(proposalInput, "$proposal");
+    proposal = parseDatasetExecutionProposal2(proposalInput, "$proposal");
   } catch (error) {
-    throw new BuildSpecResolutionError("invalid_proposal", error instanceof Error ? error.message : "Invalid proposal", "$proposal");
+    throw new ExecutionSpecResolutionError("invalid_proposal", error instanceof Error ? error.message : "Invalid proposal", "$proposal");
   }
   const context = parseContext(contextInput);
   if (context.family.family_status === "revoked") {
@@ -338,9 +336,9 @@ export async function resolveDatasetBuildProposal2(
   if (context.family.family_spec.scope === "example") {
     resolutionError("example_execution_forbidden", "Example-scoped family specs cannot execute", "$.context.family.family_spec.scope");
   }
-  const resolvedBindings: ResolvedDatasetBuildSpec2["source_bindings"] = [];
-  if (proposal.build_id !== context.build_id) {
-    resolutionError("build_mismatch", "Proposal build_id does not match the Core resolution context", "$.proposal.build_id");
+  const resolvedBindings: ResolvedDatasetExecutionSpec2["source_bindings"] = [];
+  if (proposal.requirement_id !== context.requirement_id) {
+    resolutionError("requirement_mismatch", "Proposal requirement_id does not match the Core resolution context", "$.proposal.requirement_id");
   }
   const orderedReceiptDigests: string[] = [];
   for (const binding of proposal.source_bindings) {
@@ -348,15 +346,15 @@ export async function resolveDatasetBuildProposal2(
     resolvedBindings.push(resolvedBinding);
     orderedReceiptDigests.push(receiptDigest);
   }
-  const resolved = parseResolvedDatasetBuildSpec2({
+  const resolved = parseResolvedDatasetExecutionSpec2({
     ...proposal,
     spec_kind: "resolved",
     source_bindings: resolvedBindings,
   }, "$resolved");
   const [proposalDigest, resolvedDigest] = await Promise.all([digest(proposal), digest(resolved)]);
-  const evidence: BuildSpecResolutionEvidence = {
+  const evidence: ExecutionSpecResolutionEvidence = {
     task_id: context.task_id,
-    build_id: context.build_id,
+    requirement_id: context.requirement_id,
     registry_generation: context.registry_generation,
     proposal_digest: proposalDigest,
     resolved_digest: resolvedDigest,
@@ -366,5 +364,3 @@ export async function resolveDatasetBuildProposal2(
   };
   return { resolved, evidence };
 }
-
-export const resolveBuildSpec2 = resolveDatasetBuildProposal2;

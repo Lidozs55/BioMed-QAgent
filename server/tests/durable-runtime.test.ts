@@ -41,7 +41,6 @@ describe("DurableTaskRepository", () => {
     const reopened = new DurableTaskRepository(first.tasksRoot);
     const next = await reopened.appendRunEvent(accepted.task_id, accepted.run_id, {
       type: "run_completed",
-      build_result: null,
     });
     const snapshot = await reopened.getSnapshot(accepted.task_id);
 
@@ -274,7 +273,6 @@ describe("DurableTaskRepository", () => {
     await repo.appendRunEvent(accepted.task_id, accepted.run_id, artifact);
     await repo.appendRunEvent(accepted.task_id, accepted.run_id, {
       type: "run_completed",
-      build_result: null,
     });
 
     const snapshot = await repo.getSnapshot(accepted.task_id);
@@ -321,7 +319,6 @@ describe("DurableTaskRepository", () => {
     })).rejects.toBeInstanceOf(DurableTaskConflictError);
     await repo.appendRunEvent(first.task_id, first.run_id, {
       type: "run_completed",
-      build_result: null,
     });
 
     const second = await repo.createRun(first.task_id, {
@@ -333,45 +330,6 @@ describe("DurableTaskRepository", () => {
     expect(second.run_id).not.toBe(first.run_id);
     expect(snapshot?.runs.map((run) => run.input)).toEqual(["first turn", "second turn"]);
     expect(snapshot?.task.active_run_id).toBe(second.run_id);
-  });
-
-  test("projects build status from the latest run only", async () => {
-    const repo = await repository();
-    const first = await repo.createTask({
-      requestId: "request-build-status-first",
-      input: "first build",
-      databases: [],
-      mode: "agent",
-    });
-    await repo.appendRunEvent(first.task_id, first.run_id, {
-      type: "run_completed",
-      build_result: {
-        status: "succeeded",
-        valid_row_count: 1,
-        successful_sources: ["source-1"],
-        rejected_sources: [],
-        available_artifact_roles: ["primary"],
-        publication_id: "publication-1",
-        reason_codes: [],
-        user_summary: "Build succeeded",
-        recommended_next_action: "Review the dataset",
-        build_id: "build-1",
-      },
-    });
-    expect((await repo.getSnapshot(first.task_id))?.task.latest_build_status).toBe("succeeded");
-
-    const second = await repo.createRun(first.task_id, {
-      requestId: "request-build-status-second",
-      input: "second build",
-    });
-    expect((await repo.getSnapshot(first.task_id))?.task.latest_build_status).toBeNull();
-
-    await repo.appendRunEvent(first.task_id, second.run_id, {
-      type: "run_failed",
-      error: "Second build failed",
-      error_code: "internal_error",
-    });
-    expect((await repo.getSnapshot(first.task_id))?.task.latest_build_status).toBeNull();
   });
 
   test("keeps sequence and snapshot projection correct beyond one replay page", async () => {
@@ -393,7 +351,6 @@ describe("DurableTaskRepository", () => {
 
     const terminal = await repo.appendRunEvent(accepted.task_id, accepted.run_id, {
       type: "run_completed",
-      build_result: null,
     });
     const snapshot = await repo.getSnapshot(accepted.task_id);
     const secondPage = await repo.listEvents(accepted.task_id, 1_000, 10);

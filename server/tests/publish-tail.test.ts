@@ -77,7 +77,7 @@ function buildMaterials(): BuildMaterials {
     schema_version: "1.0",
     manifest_id: "manifest_publish_tail",
     task_id: "task_1",
-    build_id: "build_1",
+    requirement_id: "build_1",
     dataset_family: "expression",
     row_granularity: "gene",
     schema_ref: "gene_expression.long.v1",
@@ -114,7 +114,7 @@ function buildMaterials(): BuildMaterials {
   }) as ValidationResult;
   const manifestBytes = Buffer.from(`${JSON.stringify(manifest)}\n`, "utf8");
   const projectedBytes = primaryBytes + provenanceBytes + manifestBytes.length;
-  const versionName = `${manifest.build_id}_${manifest.sha256.slice(0, 16)}`;
+  const versionName = `${manifest.requirement_id}_${manifest.sha256.slice(0, 16)}`;
   return {
     outputDir,
     primary,

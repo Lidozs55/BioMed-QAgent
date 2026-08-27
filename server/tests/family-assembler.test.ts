@@ -23,7 +23,8 @@ function integrationResult(
     schema_version: "1.0",
     result_manifest_id: "result_integrate_1",
     task_id: "task_1",
-    build_id: "build_1",
+    run_id: "run_test",
+    requirement_id: "build_1",
     operation_id: "integrate",
     operation_kind: "integrate",
     operation_attempt_id: "attempt_integrate_1",
@@ -58,11 +59,6 @@ function integrationResult(
       commit_id: "commit_integrate_1",
       committed_at: "2026-08-18T00:00:00Z",
     },
-    migration: {
-      mode: "native",
-      legacy_checkpoint_path: null,
-      migrated_at: null,
-    },
     ...overrides,
   };
 }
@@ -71,7 +67,7 @@ function assemble(result = integrationResult()): PublicationCandidate {
   const schema = createDefaultDatasetFamilyRegistry().get("gene_expression").schemas[0]!;
   return assembleExpressionCandidate({
     taskId: "task_1",
-    buildId: "build_1",
+    requirementId: "build_1",
     datasetFamily: "gene_expression",
     rowGranularity: schema.row_granularity,
     schema,
@@ -89,7 +85,7 @@ describe("family publication assembly", () => {
     expect(first).toMatchObject({
       schema_version: "1.0",
       task_id: "task_1",
-      build_id: "build_1",
+      requirement_id: "build_1",
       dataset_family: "gene_expression",
       tables: [{
         definition: {
@@ -134,14 +130,7 @@ describe("family publication assembly", () => {
 
   test("rejects non-integrate, cross-build, legacy and unreceipted results", () => {
     expect(() => assemble(integrationResult({ operation_kind: "canonicalize" }))).toThrow(/must be integrate/);
-    expect(() => assemble(integrationResult({ build_id: "build_other" }))).toThrow(/different build/);
-    expect(() => assemble(integrationResult({
-      migration: {
-        mode: "legacy_read_only",
-        legacy_checkpoint_path: "state/integrate.json",
-        migrated_at: "2026-08-18T00:00:00Z",
-      },
-    }))).toThrow(/must be native/);
+    expect(() => assemble(integrationResult({ requirement_id: "build_other" }))).toThrow(/different requirement/);
     expect(() => assemble(integrationResult({ output_files: [] }))).toThrow(/no file receipt/);
   });
 
@@ -199,7 +188,7 @@ describe("family publication assembly", () => {
     const schema = createDefaultDatasetFamilyRegistry().get("gene_expression").schemas[0]!;
     expect(() => capability.assemble({
       taskId: "task_1",
-      buildId: "build_1",
+      requirementId: "build_1",
       datasetFamily: "target_evidence",
       rowGranularity: schema.row_granularity,
       schema,

@@ -32,5 +32,5 @@
 ## 5. 边界
 
 - 上述源返回的是调研证据，**不得伪装成正式 CSV 产物**；正式产物仅由
-  `execute_dataset_build` 生成；
+  `execute_dataset_execution` 生成；
 - 结构/通路/化合物结果用于佐证假设，不作为差异分析主证据。

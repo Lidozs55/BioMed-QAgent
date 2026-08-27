@@ -242,18 +242,18 @@ export const SKILL_TOOL_MAP: readonly SkillToolMapping[] = Object.freeze([
     "dataset-construction",
     "analysis",
     [],
-    "Construct a DatasetBuild through the trusted Dataset Core boundary.",
+    "Construct a DatasetExecution through the trusted Dataset Core boundary.",
     "For dataset-producing work, inspect routes first. Use validate then execute only for an exact static match; otherwise prepare then submit only with dynamic-bindable inputs. Acquisition-only carriers still need formal extraction. Only Publication is formal.",
     // Pi-side tool names. The legacy Python Agent registers the equivalent
-    // pipeline tools as validate_dataset_build_spec / execute_dataset_build
-    // (backend/app/pipeline/dataset_build_tool.py); Phase 5/8 converges on
+    // pipeline tools as validate_dataset_execution_spec / execute_dataset_execution
+    // (backend/app/pipeline/dataset_execution_tool.py); Phase 5/8 converges on
     // these Pi names.
     [
-      "inspect_dataset_build_routes",
-      "validate_dataset_build",
-      "execute_dataset_build",
-      "prepare_dynamic_family_build",
-      "submit_dynamic_family_build",
+      "inspect_dataset_execution_routes",
+      "validate_dataset_execution",
+      "execute_dataset_execution",
+      "prepare_dynamic_family_publication",
+      "submit_dynamic_family_publication",
     ],
   ),
 ]);

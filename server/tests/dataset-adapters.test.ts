@@ -192,7 +192,7 @@ describe("streaming source parsing (WP-A2)", () => {
     controller.abort();
     await expect(
       gdc.parse(streamAsset(srcPath), srcPath, {
-        buildId: "build_test",
+        requirementId: "build_test",
         bindingId: "binding_1",
         schemaRef: "gene_expression.long.v1",
         outputDir: outDir,
@@ -224,7 +224,7 @@ describe("streaming source parsing (WP-A2)", () => {
       streamAsset(srcPath),
       srcPath,
       {
-        buildId: "build_test",
+        requirementId: "build_test",
         bindingId: "binding_1",
         schemaRef: "gene_expression.long.v1",
         outputDir: join(root, "out"),

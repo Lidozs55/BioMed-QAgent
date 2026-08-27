@@ -70,7 +70,7 @@ export type BioactivityConsumerBlockerCode =
 /** Every claim is bound to an exact execution, digest and legacy rollback. */
 export interface BioactivityEvidenceRef {
   readonly task_id: string;
-  readonly build_id: string;
+  readonly requirement_id: string;
   readonly run_id: string;
   readonly commit: string;
   readonly digest: string;
@@ -130,7 +130,7 @@ export interface BioactivityConsumerClaim {
   readonly revision_id: string;
   readonly dataset_ref: BioactivityEvidenceRef;
   readonly task_id: string;
-  readonly build_id: string;
+  readonly requirement_id: string;
   readonly run_id: string;
   readonly implementation_digest: string;
   readonly input_digest: string;
@@ -158,7 +158,7 @@ export interface BioactivityReferenceConsumer {
   readonly relation_semantics_digest: string;
   readonly assessment_semantics_digest: string;
   readonly task_id: string;
-  readonly build_id: string;
+  readonly requirement_id: string;
   readonly run_id: string;
   readonly implementation_digest: string;
   readonly input_digest: string;
@@ -245,7 +245,7 @@ function nonEmptyDigest(value: unknown, name: string): string {
 
 function validateRef(ref: BioactivityEvidenceRef, name: string): void {
   nonEmptyId(ref.task_id, `${name}.task_id`);
-  nonEmptyId(ref.build_id, `${name}.build_id`);
+  nonEmptyId(ref.requirement_id, `${name}.requirement_id`);
   nonEmptyId(ref.run_id, `${name}.run_id`);
   if (typeof ref.rollback_ref !== "string" || ref.rollback_ref.includes("\0")) {
     throw new BioactivityConsumerInputError(`${name}.rollback_ref must be a string without NUL`);
@@ -267,7 +267,7 @@ function validateClaim(claim: BioactivityConsumerClaim): void {
   nonEmptyId(claim.dataset_id, "consumer.dataset_id");
   nonEmptyId(claim.revision_id, "consumer.revision_id");
   nonEmptyId(claim.task_id, "consumer.task_id");
-  nonEmptyId(claim.build_id, "consumer.build_id");
+  nonEmptyId(claim.requirement_id, "consumer.requirement_id");
   nonEmptyId(claim.run_id, "consumer.run_id");
   nonEmptyDigest(claim.implementation_digest, "consumer.implementation_digest");
   nonEmptyDigest(claim.input_digest, "consumer.input_digest");
@@ -307,7 +307,7 @@ function validateReference(reference: BioactivityReferenceConsumer): void {
   nonEmptyId(reference.consumer_id, "reference.consumer_id");
   nonEmptyId(reference.family_id, "reference.family_id");
   nonEmptyId(reference.task_id, "reference.task_id");
-  nonEmptyId(reference.build_id, "reference.build_id");
+  nonEmptyId(reference.requirement_id, "reference.requirement_id");
   nonEmptyId(reference.run_id, "reference.run_id");
   nonEmptyDigest(reference.implementation_digest, "reference.implementation_digest");
   nonEmptyDigest(reference.input_digest, "reference.input_digest");
@@ -331,7 +331,7 @@ function validateInput(input: BioactivityConsumerInput): void {
 
 function refIsExact(ref: BioactivityEvidenceRef): boolean {
   return ref.task_id.trim().length > 0
-    && ref.build_id.trim().length > 0
+    && ref.requirement_id.trim().length > 0
     && ref.run_id.trim().length > 0
     && COMMIT.test(ref.commit)
     && HEX_DIGEST.test(ref.digest)
@@ -531,7 +531,7 @@ export function evaluateBioactivityConsumer(input: BioactivityConsumerInput): Bi
     && consumer.revision_id.length > 0
     && refIsExact(consumer.dataset_ref)
     && consumer.dataset_ref.task_id === consumer.task_id
-    && consumer.dataset_ref.build_id === consumer.build_id;
+    && consumer.dataset_ref.requirement_id === consumer.requirement_id;
 
   // Provenance/relation/assessment semantics must match the first consumer.
   const provenanceParity = consumer.provenance.semantics_digest === reference.provenance_semantics_digest;
@@ -561,14 +561,14 @@ export function evaluateBioactivityConsumer(input: BioactivityConsumerInput): Bi
 
   // Independent task/run/build/implementation/input/output/publication evidence.
   const independentFromReference = consumer.task_id !== reference.task_id
-    && consumer.build_id !== reference.build_id
+    && consumer.requirement_id !== reference.requirement_id
     && consumer.run_id !== reference.run_id
     && consumer.implementation_digest !== reference.implementation_digest
     && consumer.input_digest !== reference.input_digest
     && consumer.output_digest !== reference.output_digest
     && consumer.publication_ref.digest !== reference.publication_ref.digest;
   const internallyConsistent = allRefs.every(
-    (ref) => ref.task_id === consumer.task_id && ref.build_id === consumer.build_id,
+    (ref) => ref.task_id === consumer.task_id && ref.requirement_id === consumer.requirement_id,
   );
   if (!independentFromReference || !internallyConsistent) {
     blockers.push({

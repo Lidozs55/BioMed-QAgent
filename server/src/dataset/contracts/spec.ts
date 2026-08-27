@@ -1,14 +1,14 @@
 /**
- * DatasetBuildSpec contract (Python ``DatasetBuildSpec`` /
+ * DatasetExecutionSpec contract (Python ``DatasetExecutionSpec`` /
  * ``SourceBinding`` / ``SourceBindingAcquisition``). The wire shapes come
  * from ``@biomed/contracts``; these parsers enforce the path-safe identifier
  * and acquisition-mode invariants the Python spec validator relies on.
  */
 
 import type {
-  DatasetBuildSourceAcquisition,
-  DatasetBuildSourceBinding,
-  DatasetBuildSpec,
+  DatasetExecutionSourceAcquisition,
+  DatasetExecutionSourceBinding,
+  DatasetExecutionSpec,
 } from "@biomed/contracts";
 import {
   assertExactKeys,
@@ -26,9 +26,9 @@ import {
 } from "./primitives.js";
 
 export type {
-  DatasetBuildSourceAcquisition as SourceBindingAcquisition,
-  DatasetBuildSourceBinding as SourceBinding,
-  DatasetBuildSpec,
+  DatasetExecutionSourceAcquisition as SourceBindingAcquisition,
+  DatasetExecutionSourceBinding as SourceBinding,
+  DatasetExecutionSpec,
 } from "@biomed/contracts";
 
 const SOURCE_BINDING_ACQUISITION_KEYS = [
@@ -41,7 +41,7 @@ const SOURCE_BINDING_ACQUISITION_KEYS = [
 
 export function parseSourceBindingAcquisition(
   value: unknown,
-): DatasetBuildSourceAcquisition {
+): DatasetExecutionSourceAcquisition {
   const record = assertRecord(value, "SourceBindingAcquisition");
   assertExactKeys(record, SOURCE_BINDING_ACQUISITION_KEYS, "SourceBindingAcquisition");
   const mode = assertString(record.mode, "SourceBindingAcquisition.mode");
@@ -101,7 +101,7 @@ const SOURCE_BINDING_KEYS = [
   "parameters",
 ] as const;
 
-export function parseSourceBinding(value: unknown): DatasetBuildSourceBinding {
+export function parseSourceBinding(value: unknown): DatasetExecutionSourceBinding {
   const record = assertRecord(value, "SourceBinding");
   assertExactKeys(record, SOURCE_BINDING_KEYS, "SourceBinding");
   return {
@@ -119,7 +119,7 @@ export function parseSourceBinding(value: unknown): DatasetBuildSourceBinding {
 
 const DATASET_BUILD_SPEC_KEYS = [
   "schema_version",
-  "build_id",
+  "requirement_id",
   "objective",
   "dataset_family",
   "row_granularity",
@@ -135,13 +135,13 @@ const DATASET_BUILD_SPEC_KEYS = [
   "target_entity_level",
 ] as const;
 
-export function parseDatasetBuildSpec(value: unknown): DatasetBuildSpec {
-  const record = assertRecord(value, "DatasetBuildSpec");
-  assertExactKeys(record, DATASET_BUILD_SPEC_KEYS, "DatasetBuildSpec");
+export function parseDatasetExecutionSpec(value: unknown): DatasetExecutionSpec {
+  const record = assertRecord(value, "DatasetExecutionSpec");
+  assertExactKeys(record, DATASET_BUILD_SPEC_KEYS, "DatasetExecutionSpec");
   const sourceBindings = (() => {
     if (!Array.isArray(record.source_bindings) || record.source_bindings.length === 0) {
       throw new TypeError(
-        "DatasetBuildSpec.source_bindings must be a non-empty array",
+        "DatasetExecutionSpec.source_bindings must be a non-empty array",
       );
     }
     return record.source_bindings.map((binding) => parseSourceBinding(binding));
@@ -152,46 +152,46 @@ export function parseDatasetBuildSpec(value: unknown): DatasetBuildSpec {
     }
     return assertNonEmptyString(
       record.target_entity_level,
-      "DatasetBuildSpec.target_entity_level",
+      "DatasetExecutionSpec.target_entity_level",
     );
   })();
   return {
     schema_version: parseSchemaVersion(record),
-    build_id: assertSafeId(record.build_id, "DatasetBuildSpec.build_id"),
-    objective: assertNonEmptyString(record.objective, "DatasetBuildSpec.objective"),
+    requirement_id: assertSafeId(record.requirement_id, "DatasetExecutionSpec.requirement_id"),
+    objective: assertNonEmptyString(record.objective, "DatasetExecutionSpec.objective"),
     dataset_family: assertNonEmptyString(
       record.dataset_family,
-      "DatasetBuildSpec.dataset_family",
+      "DatasetExecutionSpec.dataset_family",
     ),
     row_granularity: assertNonEmptyString(
       record.row_granularity,
-      "DatasetBuildSpec.row_granularity",
+      "DatasetExecutionSpec.row_granularity",
     ),
     entities: record.entities === undefined
       ? {}
-      : assertStringRecord(record.entities, "DatasetBuildSpec.entities"),
+      : assertStringRecord(record.entities, "DatasetExecutionSpec.entities"),
     cohort_filters: record.cohort_filters === undefined
       ? {}
-      : assertStringRecord(record.cohort_filters, "DatasetBuildSpec.cohort_filters"),
+      : assertStringRecord(record.cohort_filters, "DatasetExecutionSpec.cohort_filters"),
     required_fields: record.required_fields === undefined
       ? []
-      : assertStringArray(record.required_fields, "DatasetBuildSpec.required_fields"),
-    schema_ref: assertNonEmptyString(record.schema_ref, "DatasetBuildSpec.schema_ref"),
+      : assertStringArray(record.required_fields, "DatasetExecutionSpec.required_fields"),
+    schema_ref: assertNonEmptyString(record.schema_ref, "DatasetExecutionSpec.schema_ref"),
     source_bindings: sourceBindings,
     normalization_profile_ref: assertOptionalString(
       record.normalization_profile_ref,
-      "DatasetBuildSpec.normalization_profile_ref",
+      "DatasetExecutionSpec.normalization_profile_ref",
     ),
     merge_strategy: record.merge_strategy === undefined
       ? "append_by_canonical_row"
-      : assertNonEmptyString(record.merge_strategy, "DatasetBuildSpec.merge_strategy"),
+      : assertNonEmptyString(record.merge_strategy, "DatasetExecutionSpec.merge_strategy"),
     validation_profile_ref: assertNonEmptyString(
       record.validation_profile_ref,
-      "DatasetBuildSpec.validation_profile_ref",
+      "DatasetExecutionSpec.validation_profile_ref",
     ),
     output_format: record.output_format === undefined
       ? "csv"
-      : assertNonEmptyString(record.output_format, "DatasetBuildSpec.output_format"),
+      : assertNonEmptyString(record.output_format, "DatasetExecutionSpec.output_format"),
     target_entity_level: targetEntityLevel,
   };
 }

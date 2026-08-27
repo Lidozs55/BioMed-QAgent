@@ -6,7 +6,8 @@ import type { DatasetSchema } from "../contracts/index.js";
 
 export interface FamilyAssemblyInput {
   taskId: string;
-  buildId: string;
+  runId?: string;
+  requirementId: string;
   datasetFamily: string;
   rowGranularity: string;
   schema: DatasetSchema;

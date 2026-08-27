@@ -46,7 +46,7 @@ describe("dataset formal-route capability preflight", () => {
     const tool = createDatasetRoutePreflightTool();
     const result = await tool.execute({});
 
-    expect(tool.name).toBe("inspect_dataset_build_routes");
+    expect(tool.name).toBe("inspect_dataset_execution_routes");
     expect(tool.parameters).toEqual({
       type: "object",
       properties: {},

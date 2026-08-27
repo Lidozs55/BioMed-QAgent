@@ -1,6 +1,4 @@
 import type { ArtifactManifestEntry } from "./artifacts.js";
-import type { BuildResult } from "./dataset-build.js";
-import type { DurableBuildEventPayload } from "./durable-build.js";
 import type { JsonValue } from "./json.js";
 import type { HILDecision, HILRequest } from "./hil.js";
 import type {
@@ -101,7 +99,6 @@ export type ContextUsagePayload = {
 };
 
 export type EventPayload =
-  | DurableBuildEventPayload
   | { type: "task_created"; topic: string }
   | { type: "plan_ready"; specification: Record<string, JsonValue> }
   | {
@@ -181,13 +178,12 @@ export type EventPayload =
         failed_count: number;
         report_path: string;
       };
-      build_result?: BuildResult | null;
     }
   | { type: "task_failed"; error: ErrorDetail }
   | { type: "run_queued"; request_id: string; input: string }
   | { type: "run_started" }
   | { type: "run_finalizing" }
-  | { type: "run_completed"; build_result?: BuildResult | null }
+  | { type: "run_completed" }
   | {
       type: "run_failed";
       error: string;
@@ -339,8 +335,8 @@ export interface EventEnvelope {
   type: EventPayload["type"];
   task_id: string;
   run_id: string | null;
-  /** Present for DatasetBuild lifecycle events; never inferred from run_id. */
-  build_id?: string | null;
+  /** Present for DatasetExecution lifecycle events; never inferred from run_id. */
+  requirement_id?: string | null;
   stage_attempt_id: string | null;
   subagent_id?: string | null;
   parent_tool_call_id?: string | null;

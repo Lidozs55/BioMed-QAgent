@@ -83,7 +83,7 @@ async function runAdapter(
   options: Partial<GeoParseOptions> = {},
 ) {
   return geoExpressionAdapter.parse(assetFor(sourcePath), sourcePath, {
-    buildId: "build_geo",
+    requirementId: "build_geo",
     bindingId: "binding_geo",
     schemaRef: "gene_expression.probe_long.v1",
     outputDir,
@@ -131,7 +131,7 @@ describe("adapter registry", () => {
           assetFor(fixturePath("tximport_counts_slice.tsv")),
           fixturePath("tximport_counts_slice.tsv"),
           {
-            buildId: "build_geo",
+            requirementId: "build_geo",
             bindingId: "binding_geo",
             schemaRef: "gene_expression.probe_long.v1",
             outputDir,
@@ -425,7 +425,7 @@ describe("fail-closed structure checks", () => {
       };
       await expect(
         geoExpressionAdapter.parse(tampered, sourcePath, {
-          buildId: "build_geo",
+          requirementId: "build_geo",
           bindingId: "binding_geo",
           schemaRef: "gene_expression.probe_long.v1",
           outputDir,

@@ -1,6 +1,6 @@
-import BuildResultsViewer from "@/components/BuildResultsViewer";
+import PublicationResultsViewer from "@/components/PublicationResultsViewer";
 import { ArtifactCard } from "@/components/artifacts/ArtifactCard";
-import { useTaskBuildId } from "@/hooks/useTaskBuild";
+import { useTaskPublicationId } from "@/hooks/useTaskPublication";
 import {
   Accordion,
   AccordionContent,
@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/empty";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
-import { DatabaseIcon, InfoIcon } from "@phosphor-icons/react";
+import { DatabaseIcon } from "@phosphor-icons/react";
 import type { ActivityProjection, ArtifactProjection } from "@/runtime/types";
 import {
   selectActiveActivities,
@@ -87,94 +87,34 @@ interface ResultsViewerProps {
   taskId?: string | null;
   artifacts?: readonly ArtifactProjection[];
   activities?: readonly ActivityProjection[];
-  /** V2 build id — renders the manifest-driven view for this build. */
-  buildId?: string | null;
+  /** Immutable Publication id for the manifest-driven product view. */
+  publicationId?: string | null;
 }
 
 export default function ResultsViewer({
   taskId: taskIdOverride,
   artifacts: artifactOverride,
   activities: activityOverride,
-  buildId: buildIdOverride,
+  publicationId: publicationIdOverride,
 }: ResultsViewerProps = {}) {
   const task = useAgentStore(selectActiveTask);
-  const tasksById = useAgentStore((state) => state.tasksById);
   const activeArtifacts = useAgentStore(selectActiveArtifacts);
   const activeActivities = useAgentStore(selectActiveActivities);
   const taskId = taskIdOverride ?? task?.summary.task_id ?? null;
   const artifacts = artifactOverride ?? activeArtifacts;
   const activities = activityOverride ?? activeActivities;
-  // V2 builds are served by the builds API, not the legacy artifact store
-  // (Phase 7 T1: V2 build files are deliberately not emitted as V1 artifact
-  // events). When a buildId is not given, derive it from the task's latest
-  // completed run via the builds API — but only for the full task view
-  // (no overrides), so the ArtifactSheet single-artifact preview keeps its
-  // legacy behavior.
+  // Publications are loaded from the product API. Without an explicit id, use
+  // the current task projection only for the full task view; an artifact-sheet
+  // override remains scoped to that artifact.
   const hasViewOverrides =
     artifactOverride !== undefined || activityOverride !== undefined;
-  const buildState = useTaskBuildId(
-    buildIdOverride == null && !hasViewOverrides ? taskId : null,
+  const executionState = useTaskPublicationId(
+    publicationIdOverride == null && !hasViewOverrides ? taskId : null,
   );
-  const resolvedBuildId = buildIdOverride ?? buildState.buildId;
-  // The run summary (latestRun/buildResult/noDataMessage) must describe the
-  // SAME task the rendered artifacts belong to. The store keeps every loaded
-  // task keyed by task_id, so when overrides target another task the summary
-  // resolves from that task's own runs; when the overridden task is not in
-  // the store the summary is suppressed entirely rather than misattributing
-  // the active task's outcome to another task's artifacts (final review
-  // FIX 3). The no-override path stays byte-identical.
-  const hasRunOverrides =
-    taskIdOverride !== undefined || artifactOverride !== undefined;
-  const runSourceTask = hasRunOverrides
-    ? (taskId === null ? undefined : tasksById[taskId])
-    : task;
-  const latestRunId =
-    runSourceTask?.runOrder[runSourceTask.runOrder.length - 1];
-  const latestRun =
-    latestRunId === undefined
-      ? undefined
-      : runSourceTask?.runsById[latestRunId];
-  const buildResult = latestRun?.summary?.build_result;
-  // The empty-state title and the per-artifact preview message describe the
-  // LATEST run's outcome. The empty state is only rendered when NO artifacts
-  // exist (ownership is trivially satisfied), so it may use the plain latest
-  // NO_DATA message. The preview message, however, renders over whatever
-  // artifacts are listed — the artifact list is reset at each run_manifest
-  // and accumulates that cycle's artifacts, so when the latest NO_DATA run
-  // produced none (available_artifact_roles: [] — e.g. acquisition found
-  // nothing), the visible artifacts belong to an EARLIER run and must not
-  // carry this run's NO_DATA message.
-  const noDataMessage =
-    buildResult?.status === "no_data"
-      ? latestRun?.summary?.user_message ?? "无数据"
-      : undefined;
-  const noDataOwnsArtifacts =
-    buildResult?.status === "no_data" &&
-    buildResult != null &&
-    buildResult.available_artifact_roles.length > 0 &&
-    artifacts.length > 0;
-  const previewNoDataMessage = noDataOwnsArtifacts
-    ? noDataMessage
-    : undefined;
-  const noDataContext =
-    buildResult?.status === "no_data" &&
-    (buildResult.user_summary !== "" ||
-      buildResult.recommended_next_action !== "")
-      ? {
-          userSummary:
-            buildResult.user_summary === ""
-              ? "无数据"
-              : buildResult.user_summary,
-          recommendedNextAction: buildResult.recommended_next_action,
-        }
-      : undefined;
-  // The banner describes the LATEST run's outcome, so it may only render
-  // over that run's OWN artifacts (see noDataOwnsArtifacts above).
-  const showNoDataBanner =
-    noDataContext !== undefined && noDataOwnsArtifacts;
+  const resolvedPublicationId = publicationIdOverride ?? executionState.publicationId;
 
-  if (resolvedBuildId !== null) {
-    return <BuildResultsViewer buildId={resolvedBuildId} taskId={taskId} />;
+  if (resolvedPublicationId !== null) {
+    return <PublicationResultsViewer publicationId={resolvedPublicationId} taskId={taskId} />;
   }
 
   if (taskId === null) {
@@ -203,7 +143,7 @@ export default function ResultsViewer({
     return (
       <Empty className="min-h-48">
         <EmptyHeader>
-          <EmptyTitle>{noDataMessage ?? "暂无结果"}</EmptyTitle>
+          <EmptyTitle>暂无结果</EmptyTitle>
           <EmptyDescription>该任务尚未生成可下载的产物。</EmptyDescription>
         </EmptyHeader>
       </Empty>
@@ -238,24 +178,6 @@ export default function ResultsViewer({
           </AccordionItem>
         </Accordion>
       )}
-      {showNoDataBanner && (
-        <div className="flex min-w-0 items-start gap-2 rounded-lg border border-info/30 bg-info/5 p-3">
-          <InfoIcon
-            aria-hidden="true"
-            className="mt-0.5 size-4 shrink-0 text-info"
-          />
-          <div className="min-w-0">
-            <p className="text-sm font-medium leading-snug">
-              {noDataContext.userSummary}
-            </p>
-            {noDataContext.recommendedNextAction !== "" && (
-              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                {noDataContext.recommendedNextAction}
-              </p>
-            )}
-          </div>
-        </div>
-      )}
       <ScrollArea className="min-h-0 min-w-0 flex-1">
         <div className="flex min-w-0 flex-col gap-3">
           {artifacts.map((artifact) => (
@@ -263,7 +185,6 @@ export default function ResultsViewer({
               key={artifact.artifact_id}
               artifact={artifact}
               taskId={taskId}
-              noDataMessage={previewNoDataMessage}
             />
           ))}
         </div>

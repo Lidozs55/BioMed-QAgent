@@ -1,5 +1,4 @@
 import { APIError } from "@/api/errors";
-import { parseBuildResult } from "@biomed/contracts";
 import type {
   EventPayload,
   JsonValue,
@@ -105,16 +104,8 @@ export function parseRuntimeEventPayload(payloadObj: Record<string, unknown>, pa
       return { type: "run_started" };
     case "run_finalizing":
       return { type: "run_finalizing" };
-    case "run_completed": {
-      const rawBuildResult = Reflect.get(payloadObj, "build_result");
-      return {
-        type: "run_completed",
-        build_result:
-          rawBuildResult === undefined || rawBuildResult === null
-            ? null
-            : parseBuildResult(rawBuildResult, path + ".build_result"),
-      };
-    }
+    case "run_completed":
+      return { type: "run_completed" };
     case "run_failed":
       return {
         type: "run_failed",

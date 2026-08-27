@@ -13,7 +13,7 @@ import {
 import { afterEach, describe, expect, test } from "vitest";
 
 import { canonicalDigest } from "../src/dataset/adapters/identity.js";
-import { submitDynamicFamilyBuild } from "../src/dataset/dynamic-family/submission.js";
+import { submitDynamicFamilyPublication } from "../src/dataset/dynamic-family/submission.js";
 import { publishDynamicFamily } from "../src/dataset/dynamic-family/publication.js";
 import type { BioMedAgentAdapter, BioMedAgentSession, BioMedSessionConfig } from "../src/agent/contracts.js";
 import {
@@ -97,8 +97,8 @@ async function rawSubmission(): Promise<Record<string, unknown>> {
         parameters: { source: "geo", accession: "GSE_PHASE3", entities: {} },
       },
     },
-    build_proposal: {
-      schema_version: "2.0", spec_kind: "proposal", build_id: "build_phase3",
+    execution_proposal: {
+      schema_version: "2.0", spec_kind: "proposal", requirement_id: "build_phase3",
       family_spec_ref: { scope: "task", id: family.family_spec_id, version: family.semantic_version, digest: family.canonical_digest },
       projection_ref: projection.projection_id,
       transform_refs: [{ scope: "task", id: "transform_phase3", version: "1.0.0", digest: DIGEST }],
@@ -127,7 +127,7 @@ describe("dynamic family phase3 composition fencing", () => {
     let acquisitionCalls = 0;
     let transformCalls = 0;
     let publicationCalls = 0;
-    const actualSubmit = submitDynamicFamilyBuild;
+    const actualSubmit = submitDynamicFamilyPublication;
     const actualPublish = publishDynamicFamily;
 
     const acquisitionRuntimeFactory: NonNullable<Phase3DynamicFamilySeams["createAcquisitionRuntime"]> = ({
@@ -166,8 +166,8 @@ describe("dynamic family phase3 composition fencing", () => {
     const adapter: BioMedAgentAdapter = {
       async createSession(config: BioMedSessionConfig): Promise<BioMedAgentSession> {
         const tools = config.tools ?? [];
-        const prepareTool = tools.find((tool) => tool.name === "prepare_dynamic_family_build");
-        const submitTool = tools.find((tool) => tool.name === "submit_dynamic_family_build");
+        const prepareTool = tools.find((tool) => tool.name === "prepare_dynamic_family_publication");
+        const submitTool = tools.find((tool) => tool.name === "submit_dynamic_family_publication");
         if (prepareTool === undefined || submitTool === undefined) throw new Error("dynamic tools were not injected");
         return {
           piSessionId: `pi_${config.taskId}`,
@@ -179,7 +179,7 @@ describe("dynamic family phase3 composition fencing", () => {
             if (prepared.isError === true) throw new Error(`prepare failed: ${prepared.content}`);
             const receipt = (JSON.parse(prepared.content) as { preflight_receipt: DynamicFamilyPreflightReceipt }).preflight_receipt;
             const submitPayload = structuredClone(raw);
-            (submitPayload.build_proposal as { transform_refs: Array<{ digest: string }> }).transform_refs[0]!.digest =
+            (submitPayload.execution_proposal as { transform_refs: Array<{ digest: string }> }).transform_refs[0]!.digest =
               receipt.host_descriptor_digest;
             submitPayload.preflight_receipt = receipt;
             const duplicateSubmits = [
@@ -214,7 +214,7 @@ describe("dynamic family phase3 composition fencing", () => {
       resolveRuntimeLimits: () => ({ ...DEFAULT_RUNTIME_LIMITS, build_timeout_seconds: 30 }),
       dynamicFamilySeams: {
         createAcquisitionRuntime: acquisitionRuntimeFactory,
-        assertBuildLockOwned: async (assertOwned) => {
+        assertExecutionLockOwned: async (assertOwned) => {
           if (inPromotionFence) {
             inPromotionFence = false;
             promotionFenceEntered.resolve();
@@ -222,7 +222,7 @@ describe("dynamic family phase3 composition fencing", () => {
           }
           return assertOwned();
         },
-        submitDynamicFamilyBuild: async (input) => {
+        submitDynamicFamilyPublication: async (input) => {
           const result = await actualSubmit(input);
           transformCalls += 1;
           transformEntered.resolve();
@@ -261,7 +261,7 @@ describe("dynamic family phase3 composition fencing", () => {
       const snapshot = await runtime.repository.getSnapshot(accepted.task_id);
       return snapshot?.runs.find((run) => run.run_id === accepted.run_id)?.status;
     }, { timeout: 30_000 }).toBe("completed");
-    const publishRoot = path.join(tasksRoot, accepted.task_id, "datasets_build", "build_phase3", "publish");
+    const publishRoot = path.join(tasksRoot, accepted.task_id, "dataset_runs", accepted.run_id, "build_phase3", "publish");
     await expect(readdir(publishRoot)).resolves.toEqual([]);
     const events = await runtime.repository.listEvents(accepted.task_id, 0);
     expect(events.some((event) => event.payload.type === "publication_created")).toBe(false);
@@ -276,7 +276,7 @@ describe("dynamic family phase3 composition fencing", () => {
     let acquisitionCalls = 0;
     let transformCalls = 0;
     let publicationCalls = 0;
-    const actualSubmit = submitDynamicFamilyBuild;
+    const actualSubmit = submitDynamicFamilyPublication;
     const actualPublish = publishDynamicFamily;
     const acquisitionRuntimeFactory: NonNullable<Phase3DynamicFamilySeams["createAcquisitionRuntime"]> = ({
       taskRoot,
@@ -313,8 +313,8 @@ describe("dynamic family phase3 composition fencing", () => {
     const adapter: BioMedAgentAdapter = {
       async createSession(config: BioMedSessionConfig): Promise<BioMedAgentSession> {
         const tools = config.tools ?? [];
-        const prepareTool = tools.find((tool) => tool.name === "prepare_dynamic_family_build");
-        const submitTool = tools.find((tool) => tool.name === "submit_dynamic_family_build");
+        const prepareTool = tools.find((tool) => tool.name === "prepare_dynamic_family_publication");
+        const submitTool = tools.find((tool) => tool.name === "submit_dynamic_family_publication");
         if (prepareTool === undefined || submitTool === undefined) throw new Error("dynamic tools were not injected");
         return {
           piSessionId: `pi_success_${config.taskId}`,
@@ -326,7 +326,7 @@ describe("dynamic family phase3 composition fencing", () => {
             if (prepared.isError === true) throw new Error(`prepare failed: ${prepared.content}`);
             const receipt = (JSON.parse(prepared.content) as { preflight_receipt: DynamicFamilyPreflightReceipt }).preflight_receipt;
             const submitPayload = structuredClone(raw);
-            (submitPayload.build_proposal as { transform_refs: Array<{ digest: string }> }).transform_refs[0]!.digest =
+            (submitPayload.execution_proposal as { transform_refs: Array<{ digest: string }> }).transform_refs[0]!.digest =
               receipt.host_descriptor_digest;
             submitPayload.preflight_receipt = receipt;
             const submitted = await submitTool.execute(submitPayload);
@@ -349,7 +349,7 @@ describe("dynamic family phase3 composition fencing", () => {
       resolveRuntimeLimits: () => ({ ...DEFAULT_RUNTIME_LIMITS, build_timeout_seconds: 30 }),
       dynamicFamilySeams: {
         createAcquisitionRuntime: acquisitionRuntimeFactory,
-        submitDynamicFamilyBuild: async (input) => {
+        submitDynamicFamilyPublication: async (input) => {
           transformCalls += 1;
           return actualSubmit(input);
         },
@@ -383,7 +383,7 @@ describe("dynamic family phase3 composition fencing", () => {
     expect(acquisitionCalls).toBe(1);
     expect(transformCalls).toBe(1);
     expect(publicationCalls).toBe(1);
-    await access(path.join(tasksRoot, accepted.task_id, "datasets_build", "build_phase3", "publish"));
+    await access(path.join(tasksRoot, accepted.task_id, "dataset_runs", accepted.run_id, "build_phase3", "publish"));
     const events = await runtime.repository.listEvents(accepted.task_id, 0);
     expect(events.some((event) => event.payload.type === "publication_created")).toBe(true);
     expect(events.some((event) => event.payload.type === "artifact_produced")).toBe(true);

@@ -56,13 +56,7 @@ function evidence(caseId = "case-a", productCommit = commit) {
         run_id: "run-a",
         task_id: "task-a",
         status: "completed",
-        summary: {
-          build_result: {
-            status: "succeeded",
-            build_id: "build-a",
-            publication_id: "publication-a",
-          },
-        },
+        summary: null,
       },
       task: {
         task_id: "task-a",
@@ -114,23 +108,7 @@ function evidenceWithAssessment(status: "publishable" | "validated" | "incomplet
     ...base,
     terminal: {
       ...base.terminal,
-      run: {
-        ...base.terminal.run,
-        summary: {
-          build_result: {
-            status: "succeeded",
-            valid_row_count: 2,
-            successful_sources: ["source-a"],
-            rejected_sources: [],
-            available_artifact_roles: ["audit_report"],
-            publication_id: "publication-a",
-            reason_codes: [],
-            user_summary: "Published fixture assessment.",
-            recommended_next_action: "none",
-            build_id: "build-a",
-          },
-        },
-      },
+      run: base.terminal.run,
     },
     events: [{
       schema_version: "2.0",
@@ -218,7 +196,7 @@ afterEach(async () => {
 });
 
 describe("loadGoldEvidenceInventory", () => {
-  test("loads observed task/run/build facts without promoting publication to reproducibility", async () => {
+  test("loads observed task/run/publication facts without promoting publication to reproducibility", async () => {
     const root = await makeRoot();
     await writePair(root);
     const result = await loadGoldEvidenceInventory({
@@ -231,19 +209,14 @@ describe("loadGoldEvidenceInventory", () => {
     expect(result.observed).toMatchObject({
       task_status: "completed",
       run_status: "completed",
-      build_status: "succeeded",
-      build_id: "build-a",
-      build_publication_id: "publication-a",
+      publication_ids: [],
       artifact_count: 2,
     });
     expect(result.checks.publication).toBe("unknown");
     expect(result.checks.reproducibility).toBe("unknown");
     expect(result.trusted_evidence_chain?.terminal.state).toBe("present");
     expect(result.trusted_evidence_chain?.publication.state).toBe("missing");
-    expect(result.trusted_evidence_chain?.gaps.map((gap) => gap.code)).toEqual(expect.arrayContaining([
-      "build.malformed",
-      "publication.missing",
-    ]));
+    expect(result.trusted_evidence_chain?.gaps.map((gap) => gap.code)).toContain("publication.missing");
     expect(result.trusted_evidence_chain?.semantic_product.state).toBe("missing");
     expect(result.findings.map((item) => item.code)).toContain("chain.semantic_product.not_projected");
   });

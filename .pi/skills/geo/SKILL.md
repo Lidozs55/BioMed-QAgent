@@ -15,7 +15,7 @@ enumerate files with `list_geo_supplementary_files`, download with
 For each candidate GSE, call `describe_geo` and check that the sample
 composition and platform match the research question: sample count,
 tumor/normal groups, and platform type (microarray vs RNA-seq). **Unvetted GSE
-must not be submitted to `execute_dataset_build`.** Vetting mismatch: pick a
+must not be submitted to `execute_dataset_execution`.** Vetting mismatch: pick a
 different dataset, do not retry the same accession.
 
 ## Probe (microarray) builds
@@ -25,7 +25,7 @@ different dataset, do not retry the same accession.
   otherwise geo.expression.v1 rejects the build.
 - Gene-level builds from probe data require a GPL platform annotation: pass
   the file from `download_geo_platform_annotation` (gpl from platform_ids in
-  the series matrix) via `execute_dataset_build`'s `mapping_files` so probe
+  the series matrix) via `execute_dataset_execution`'s `mapping_files` so probe
   rows map to genes.
 - If no usable annotation exists, do not present probe data as gene-level
   results — switch to GDC/Xena gene-level matrices or build at probe level.
@@ -45,7 +45,7 @@ different dataset, do not retry the same accession.
 
 ## Build boundaries
 
-- One DatasetBuildSpec and one `execute_dataset_build` call per distinct GSE —
+- One DatasetExecutionSpec and one `execute_dataset_execution` call per distinct GSE —
   never merge different GSE accessions into a single build; a failed or
   NO_DATA GSE must not block independent builds of the other GSEs.
 - Two-stage failure judgment: (a) file has no data table (empty series

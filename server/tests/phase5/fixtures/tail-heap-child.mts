@@ -134,7 +134,7 @@ const manifest = parseDatasetManifest({
   schema_version: "1.0",
   manifest_id: "manifest_tail",
   task_id: "task_tail",
-  build_id: "build_tail",
+  requirement_id: "build_tail",
   dataset_family: "gene_expression",
   row_granularity: "gene_sample_measurement",
   schema_ref: "gene_expression.long.v1",

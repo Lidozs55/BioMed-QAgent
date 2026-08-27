@@ -26,7 +26,7 @@ const operation: OperationSpec = {
 
 function scope(coreReleaseIdentity: string, operationIdentity = "derive-1"): DigestScope {
   return {
-    buildId: "build-1",
+    requirementId: "build-1",
     upstream: { "canonicalize:source": { digest: "b".repeat(64) } },
     parameterScope: { algorithm: "sequence" },
     coreReleaseIdentity,

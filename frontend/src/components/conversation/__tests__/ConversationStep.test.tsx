@@ -12,8 +12,8 @@ vi.mock("@/components/MarkdownContent", () => ({
     </div>
   ),
 }));
-vi.mock("@/components/conversation/BuildReportCard", () => ({
-  BuildReportCard: () => <div>加载构建结果...</div>,
+vi.mock("@/components/conversation/PublicationReportCard", () => ({
+  PublicationReportCard: () => <div>加载构建结果...</div>,
 }));
 
 const TIMESTAMP = "2026-07-20T00:00:00Z";
@@ -29,11 +29,11 @@ function makeItem(partial: Partial<ConversationItem> & { kind: ConversationItem[
 }
 
 describe("ConversationStep dispatcher", () => {
-  it("renders build_report items as an inline report card", () => {
+  it("renders publication_report items as an inline report card", () => {
     const item = makeItem({
-      kind: "build_report",
+      kind: "publication_report",
       taskId: "task-report",
-      buildId: "build-report",
+      publicationId: "publication-report",
     });
     render(<ConversationStep item={item} isActive={false} />);
     expect(screen.getByText("加载构建结果...")).toBeInTheDocument();

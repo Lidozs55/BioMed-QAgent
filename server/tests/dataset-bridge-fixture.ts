@@ -1,8 +1,8 @@
-import type { DatasetBuildSpec } from "@biomed/contracts";
+import type { DatasetExecutionSpec } from "@biomed/contracts";
 
-export const datasetBuildSpec: DatasetBuildSpec = {
+export const datasetExecutionSpec: DatasetExecutionSpec = {
   schema_version: "1.0",
-  build_id: "build_1",
+  requirement_id: "build_1",
   objective: "Build a fixture dataset",
   dataset_family: "gene_expression",
   row_granularity: "gene_sample_measurement",

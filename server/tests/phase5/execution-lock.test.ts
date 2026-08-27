@@ -1,7 +1,7 @@
 /**
  * I-04 build lock ownership/fencing tests (final-audit round 3).
  *
- * The lock must guarantee: one publisher per task_id + build_id, never two.
+ * The lock must guarantee: one publisher per task_id + requirement_id, never two.
  * Each scenario below was verified to fail against the pre-audit algorithm
  * (acquired_at-based staleness, blind rm, mkdir-only takeover).
  */
@@ -17,7 +17,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { parseDatasetManifest } from "../../src/dataset/contracts/manifest.js";
 import { parseValidationResult } from "../../src/dataset/contracts/validation.js";
 import { promotePublication } from "../../src/dataset/publish/publisher.js";
-import { LockLostError, acquireBuildLock, BuildLockError } from "../../src/dataset/service/build-lock.js";
+import { LockLostError, acquireExecutionLock, ExecutionLockError } from "../../src/dataset/service/execution-lock.js";
 
 const require = createRequire(import.meta.url);
 const roots: string[] = [];
@@ -46,7 +46,7 @@ async function writeFakeOwner(lockDir: string, pid: number, acquiredAt = new Dat
 describe("I-04 build lock ownership", () => {
   it("never preempts a live owner on age alone (heartbeat, not acquired_at, is the lease)", async () => {
     const root = await lockRoot();
-    const a = await acquireBuildLock(
+    const a = await acquireExecutionLock(
       { lockRoot: root, staleMs: 300, heartbeatMs: 40 },
       "task_1", "build_1", "run_a",
     );
@@ -56,7 +56,7 @@ describe("I-04 build lock ownership", () => {
     // Wait well past staleMs: the heartbeat must keep refreshing mtime.
     await new Promise((resolve) => setTimeout(resolve, 400));
     await expect(
-      acquireBuildLock({ lockRoot: root, staleMs: 300, heartbeatMs: 40, retryMs: 250 }, "task_1", "build_1", "run_b"),
+      acquireExecutionLock({ lockRoot: root, staleMs: 300, heartbeatMs: 40, retryMs: 250 }, "task_1", "build_1", "run_b"),
     ).rejects.toThrow(/locked by another publisher/);
     await expect(a.assertOwned()).resolves.toBe(true);
     await a.release();
@@ -73,7 +73,7 @@ describe("I-04 build lock ownership", () => {
       }, 300);
     });
     await expect(
-      acquireBuildLock(
+      acquireExecutionLock(
         { lockRoot: root, initGraceMs: 2_000, retryMs: 400 },
         "task_1", "build_1", "run_b",
       ),
@@ -90,7 +90,7 @@ describe("I-04 build lock ownership", () => {
     await mkdir(lockDir, { recursive: true });
     // No owner.json ever appears (owner crashed before init): after the init
     // grace the lock is reclaimable.
-    const lease = await acquireBuildLock(
+    const lease = await acquireExecutionLock(
       { lockRoot: root, initGraceMs: 100, retryMs: 2_000 },
       "task_1", "build_1", "run_a",
     );
@@ -100,7 +100,7 @@ describe("I-04 build lock ownership", () => {
 
   it("release() of a displaced lease never deletes the successor's lock", async () => {
     const root = await lockRoot();
-    const a = await acquireBuildLock(
+    const a = await acquireExecutionLock(
       { lockRoot: root, staleMs: 10_000, heartbeatMs: 60_000 },
       "task_1", "build_1", "run_a",
     );
@@ -108,7 +108,7 @@ describe("I-04 build lock ownership", () => {
     // process (this test) is still alive.
     const ownerJson = join(lockDirFor(root), "owner.json");
     await utimes(ownerJson, new Date(Date.now() - 3_600_000), new Date(Date.now() - 3_600_000));
-    const b = await acquireBuildLock(
+    const b = await acquireExecutionLock(
       { lockRoot: root, staleMs: 1_000, heartbeatMs: 60_000 },
       "task_1", "build_1", "run_b",
     );
@@ -126,11 +126,11 @@ describe("I-04 build lock ownership", () => {
       await mkdir(lockDir, { recursive: true });
       await writeFakeOwner(lockDir, 99_999_999); // dead pid => stale
       const results = await Promise.allSettled([
-        acquireBuildLock({ lockRoot: root, initGraceMs: 20, retryMs: 300 }, "task_1", "build_1", "run_b"),
-        acquireBuildLock({ lockRoot: root, initGraceMs: 20, retryMs: 300 }, "task_1", "build_1", "run_c"),
+        acquireExecutionLock({ lockRoot: root, initGraceMs: 20, retryMs: 300 }, "task_1", "build_1", "run_b"),
+        acquireExecutionLock({ lockRoot: root, initGraceMs: 20, retryMs: 300 }, "task_1", "build_1", "run_c"),
       ]);
       const winners = results.filter(
-        (r): r is PromiseFulfilledResult<Awaited<ReturnType<typeof acquireBuildLock>>> => r.status === "fulfilled",
+        (r): r is PromiseFulfilledResult<Awaited<ReturnType<typeof acquireExecutionLock>>> => r.status === "fulfilled",
       );
       expect(winners.length, `round ${round}: exactly one contender wins`).toBe(1);
       const winner = winners[0].value;
@@ -144,7 +144,7 @@ describe("I-04 build lock ownership", () => {
 
   it("real child processes serialize on the lock (cross-process mutual exclusion)", async () => {
     const root = await lockRoot();
-    const script = fileURLToPath(new URL("./fixtures/build-lock-child.mts", import.meta.url));
+    const script = fileURLToPath(new URL("./fixtures/execution-lock-child.mts", import.meta.url));
     const tsxEntry = require.resolve("tsx/cli");
 
     // Keep the black-box test within the worker budget: the Vitest worker
@@ -181,9 +181,9 @@ describe("I-04 build lock ownership", () => {
     };
     const runParent = async (): Promise<void> => {
       for (let round = 0; round < 2; round += 1) {
-        let lease: Awaited<ReturnType<typeof acquireBuildLock>> | undefined;
+        let lease: Awaited<ReturnType<typeof acquireExecutionLock>> | undefined;
         try {
-          lease = await acquireBuildLock(
+          lease = await acquireExecutionLock(
             { lockRoot: root, retryMs: 20_000, retryIntervalMs: 20, heartbeatMs: 150, staleMs: 1_500 },
             "task_1",
             "build_1",
@@ -265,7 +265,7 @@ describe("I-04 publish fence", () => {
       schema_version: "1.0",
       manifest_id: "manifest_fence_test",
       task_id: "task_1",
-      build_id: "build_1",
+      requirement_id: "build_1",
       dataset_family: "expression",
       row_granularity: "gene",
       schema_ref: "gene_expression.long.v1",
@@ -282,13 +282,13 @@ describe("I-04 publish fence", () => {
       failed_count: 0,
     });
 
-    const a = await acquireBuildLock(
+    const a = await acquireExecutionLock(
       { lockRoot: root, staleMs: 10_000, heartbeatMs: 60_000 },
       "task_1", "build_1", "run_a",
     );
     const ownerJson = join(lockDirFor(root), "owner.json");
     await utimes(ownerJson, new Date(Date.now() - 3_600_000), new Date(Date.now() - 3_600_000));
-    const b = await acquireBuildLock(
+    const b = await acquireExecutionLock(
       { lockRoot: root, staleMs: 1_000, heartbeatMs: 60_000 },
       "task_1", "build_1", "run_b",
     );
@@ -306,15 +306,15 @@ describe("I-04 publish fence", () => {
     await b.release();
   });
 
-  it("rejects with BuildLockError while a live owner holds (retry then fail)", async () => {
+  it("rejects with ExecutionLockError while a live owner holds (retry then fail)", async () => {
     const root = await lockRoot();
-    const a = await acquireBuildLock(
+    const a = await acquireExecutionLock(
       { lockRoot: root, staleMs: 10_000, heartbeatMs: 60_000 },
       "task_1", "build_1", "run_a",
     );
     await expect(
-      acquireBuildLock({ lockRoot: root, retryMs: 300 }, "task_1", "build_1", "run_b"),
-    ).rejects.toBeInstanceOf(BuildLockError);
+      acquireExecutionLock({ lockRoot: root, retryMs: 300 }, "task_1", "build_1", "run_b"),
+    ).rejects.toBeInstanceOf(ExecutionLockError);
     await a.release();
   });
 });

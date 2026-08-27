@@ -7,7 +7,7 @@ import {
 
 export interface BrowserFamilyMaterializationInput {
   taskId: string;
-  buildId: string;
+  requirementId: string;
   familySpec: FamilySpec;
   projection: Projection;
   tableOutputs: Readonly<Record<string, DynamicFamilyTableOutputs>>;
@@ -38,7 +38,7 @@ export async function materializeBrowserIntegratedFamily(
   }));
   return materializeDynamicFamilyCandidate({
     taskId: input.taskId,
-    buildId: input.buildId,
+    requirementId: input.requirementId,
     familySpec: input.familySpec,
     projection: input.projection,
     tableOutputs,

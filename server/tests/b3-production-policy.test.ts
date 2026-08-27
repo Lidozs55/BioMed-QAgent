@@ -96,7 +96,7 @@ describe("production B3 resource policy", () => {
     const factory = createProductionB3DiskFactory();
     expect(factory.factoryId).toMatch(/^[a-z0-9.-]+$/);
     const index = await factory.createIndex({
-      owner: { taskId: "task_policy", buildId: "build_policy", generation: 2 },
+      owner: { taskId: "task_policy", requirementId: "build_policy", generation: 2 },
       quotaBytes: 1024 * 1024,
     });
     try {

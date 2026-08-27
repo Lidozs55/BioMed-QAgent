@@ -38,7 +38,7 @@ export interface BioactivityTableAssemblyInput {
 
 export interface BioactivityAssemblyInput {
   taskId: string;
-  buildId: string;
+  requirementId: string;
   datasetFamily: string;
   rowGranularity: string;
   tables: readonly BioactivityTableAssemblyInput[];
@@ -130,7 +130,7 @@ function evidenceRefs(
   kind: "provenance" | "confidence",
 ): PublicationCandidateResultRef[] {
   if (results.length === 0) throw new Error(`bioactivity table '${tableId}' requires ${kind} results`);
-  return resultRefs({ results, taskId: input.taskId, buildId: input.buildId });
+  return resultRefs({ results, taskId: input.taskId, requirementId: input.requirementId });
 }
 
 export function assembleBioactivityCandidate(
@@ -171,7 +171,7 @@ export function assembleBioactivityCandidate(
     const result = requireCoreResult({
       result: tableInput.result,
       taskId: input.taskId,
-      buildId: input.buildId,
+      requirementId: input.requirementId,
       operationKind: "integrate",
       outputKind: "integrated_table",
     });
@@ -197,7 +197,7 @@ export function assembleBioactivityCandidate(
   const candidateBody = {
     schema_version: "1.0" as const,
     task_id: input.taskId,
-    build_id: input.buildId,
+    requirement_id: input.requirementId,
     dataset_family: BIOACTIVITY_FAMILY_ID,
     row_granularity: BIOACTIVITY_ROW_GRANULARITY,
     tables: validated.map((item) => ({
@@ -213,7 +213,7 @@ export function assembleBioactivityCandidate(
     audit_refs: resultRefs({
       results: input.auditResults ?? [],
       taskId: input.taskId,
-      buildId: input.buildId,
+      requirementId: input.requirementId,
     }),
     registered_asset_ids: assets,
   };

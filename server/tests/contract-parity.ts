@@ -8,8 +8,7 @@
  */
 
 import {
-  parseBuildResult,
-  parseDatasetBuildSpec,
+  parseDatasetExecutionSpec,
   parseDatasetManifest,
   parseDatasetPublication,
   parseValidationResult,
@@ -19,7 +18,6 @@ type Parser<T> = (value: unknown) => T;
 
 export interface GoldenFixture {
   spec: unknown;
-  build_result: unknown;
   validation_result: unknown | null;
   manifest: unknown | null;
   publication: unknown | null;
@@ -73,8 +71,7 @@ function checkRoundTrip<T>(
 /** Returns empty array when the fixture satisfies every contract parity check. */
 export function checkContractParity(fixture: GoldenFixture): string[] {
   const issues: string[] = [];
-  checkRoundTrip("spec", fixture.spec, parseDatasetBuildSpec, issues);
-  checkRoundTrip("build_result", fixture.build_result, parseBuildResult, issues);
+  checkRoundTrip("spec", fixture.spec, parseDatasetExecutionSpec, issues);
   checkRoundTrip(
     "validation_result",
     fixture.validation_result,

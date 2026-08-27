@@ -1,4 +1,3 @@
-import type { BuildResult, BuildResultStatus } from "./dataset-build.js";
 import type { JsonValue } from "./json.js";
 
 export type TaskMode = "agent" | "fixture" | "import";
@@ -44,13 +43,12 @@ export type ErrorCode =
 
 export interface RunSummary {
   run_status: RunStatus;
-  build_result: BuildResult | null;
   error_code: ErrorCode | null;
   cancelled_at_stage: StageName | null;
   user_message: string | null;
 }
 
-export interface PublicationSummary {
+export interface TaskPublicationSummary {
   publication_id: string;
   manifest_sha256: string;
   supersedes_publication_id: string | null;
@@ -190,11 +188,6 @@ export interface TaskSummary {
   latest_sequence: number;
   /** Number of validated artifacts produced by the task (absent in older snapshots). */
   artifact_count?: number;
-  /**
-   * Outcome of the most recent terminal run (absent in older snapshots).
-   * Lets the history list classify a conversation before its runs hydrate.
-   */
-  latest_build_status?: BuildResultStatus | null;
 }
 
 export interface RunRecord {
@@ -274,7 +267,7 @@ export interface TaskSnapshot {
   messages: MessageRecord[];
   subagents?: SubagentRecord[];
   current_publication_id?: string | null;
-  publications?: PublicationSummary[];
+  publications?: TaskPublicationSummary[];
   older_messages_cursor: string | null;
 }
 

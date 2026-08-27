@@ -67,8 +67,8 @@ BioMed-QAgent 是面向生物医学开放数据的智能检索与标准化系统
 许合并的数据必须属于同一数据域、可比较、可合并。
 
 **复合需求**：当一个用户请求涉及多个数据域或多种行粒度时，拆分为多个独立的
-DatasetBuild（见 §3）。会话可将多个 Build 放在同一任务下，但每个 Build 独立
-验证和发布。
+dataset requirement（见 §3）。一次 Run 可执行多个 requirement；每个 requirement
+独立验证，且只有满足产品门禁的结果才产生 Publication。
 
 > 决策依据：ADR-001（产品边界）、ADR-002（单族单粒度）、ADR-006（辅助数据）。
 
@@ -97,11 +97,11 @@ Pi Main Agent              TypeScript Dataset Core      TS DB client
 governed Workspace         deterministic operations          |
         |                          |                           v
         +--------------------------+                  database/bridge.py
-        | DatasetBuildSpec                            (named operations)
+        | DatasetExecutionSpec                        (named operations)
         v
 Dataset Construction Runtime（服务端固定构建骨架）
         | \
-        |  `-- reject -> BuildResult(SPEC_REJECTED) + RunSummary
+        |  `-- reject -> typed execution error + RunSummary
         |
         +-- acquire[*]                  每来源获取
         |     +-- built-in Acquisition Provider
@@ -118,7 +118,7 @@ Dataset Construction Runtime（服务端固定构建骨架）
                  |     +-- primary / supporting datasets
                  |     +-- schema + provenance
                  |     `-- audit reports
-                 `-- BuildResult + server-generated RunSummary
+                 `-- ProductAssessment + server-generated RunSummary
 ```
 
 方括号步骤可以按来源并发；fan-out / fan-in 属于 Runtime 内部控制流，不形成 Agent
@@ -142,7 +142,7 @@ scope 才匹配，API 缺省 project）；Restricted 切换会作废全部 pendi
 （canonical root + 子树），不覆盖整个 scope（ADR-026 §2）。
 
 当前不存在固定五阶段、固定 22 列 `main_data.csv` 全局协议或 metadata-only
-占位主表：Dataset Build 由自包含 `DatasetBuildSpec`（§3）驱动，产物由
+占位主表：dataset requirement 由自包含 `DatasetExecutionSpec`（§3）驱动，产物由
 `DatasetManifest` 按 Artifact Role 声明。
 
 > 决策依据：ADR-003（保留可信内核）、ADR-004（服务端固定构建骨架，不引入完整 DAG 或 BuildRecipe）。
@@ -151,9 +151,9 @@ scope 才匹配，API 缺省 project）；Restricted 切换会作废全部 pendi
 
 ## 3. 核心抽象
 
-### 3.1 DatasetBuildSpec（自包含）
+### 3.1 DatasetExecutionSpec（自包含）
 
-`DatasetBuildSpec` 是 Agent 在意图解析和来源发现后生成、提交给 Runtime 的**单一
+`DatasetExecutionSpec` 是 Agent 在意图解析和来源发现后生成、提交给 Runtime 的**单一
 权威输入契约**。它同时表达用户语义和受控构建参数，至少包含：
 
 - `dataset_family`：数据集族标识（如 `gene_expression`、`pathway_member`）；
@@ -180,11 +180,11 @@ family `runtime_id` 命中 Core 已实现的 runtime allowlist。仅有 Schema�
 
 不建立正式 `DatasetRequest` 契约。自然语言解析过程中可以使用 Agent 内部的
 `ParsedDatasetIntent`，但它不进入持久化、API 或执行协议，避免
-`DatasetRequest -> DatasetBuildSpec` 两个对象之间重复、漂移和跨引用读取。
+`DatasetRequest -> DatasetExecutionSpec` 两个对象之间重复、漂移和跨引用读取。
 
 ### 3.2 dataset_family 与 row_granularity
 
-一个 DatasetBuild 的主数据必须满足以下四元组均明确且兼容：
+一个 dataset requirement 的主数据必须满足以下四元组均明确且兼容：
 
 ```text
 dataset_family + row_granularity + key_semantics + measurement_semantics
@@ -264,9 +264,9 @@ Adapter、Schema Registry、可信元数据、明确规则或人工批准，不�
 
 ### 3.6 主数据与 Artifact Role
 
-一个 Build 只有一个主数据集族和一种行粒度。Manifest 只定义五类稳定角色：
+一个 requirement 只有一个主数据集族和一种行粒度。Manifest 只定义五类稳定角色：
 
-- `primary_dataset`：本次 Build 的核心标准数据集；
+- `primary_dataset`：本次 requirement 的核心标准数据集；
 - `supporting_dataset`：样本维表、队列信息等辅助结构化数据；
 - `schema`：Canonical Schema 和字段说明；
 - `provenance`：lineage、字段映射、实体映射和转换链；
@@ -287,7 +287,7 @@ Adapter、Schema Registry、可信元数据、明确规则或人工批准，不�
 程序不得硬编码 `main_data.csv`、`dataset.csv` 或任何固定文件名。Manifest 至少
 声明：
 
-- Build ID、版本和 Manifest digest；
+- Run/requirement identity、版本和 Manifest digest；
 - 主数据 Artifact ID；
 - dataset family 与 row granularity；
 - Canonical Schema 引用与版本；
@@ -320,7 +320,7 @@ supersedes_publication_id
 
 1. 一个主数据集只有一个 family；
 2. 一个主数据集只有一种 row granularity；
-3. 正式领域契约直接从自包含 `DatasetBuildSpec` 开始，不引入重复的
+3. 正式领域契约直接从自包含 `DatasetExecutionSpec` 开始，不引入重复的
    `DatasetRequest`；
 4. Dataset Runtime 使用服务端固定构建骨架，不新增数据集级 `BuildRecipe`；
 5. 主数据记录必须来自真实来源或可复算确定性派生；
@@ -331,7 +331,7 @@ supersedes_publication_id
 10. 字段名相似不等于语义相同；
 11. 单位、尺度和归一化状态不得静默丢失；
 12. metadata 不能冒充 measurement；
-13. 空主数据不能产生 `SUCCEEDED` BuildResult；
+13. 空主数据不能产生 Publication；
 14. `NO_DATA` 必须有明确用户输出；
 15. 部分成功必须列出失败来源；
 16. Validation 失败不得发布；
@@ -343,7 +343,7 @@ supersedes_publication_id
 22. 复合需求需要拆分或显式关系模型；
 23. 新来源接入不应修改多个数据库组合分支；
 24. `WorkflowRecipe` 只负责 Acquisition，生产自动执行必须为 `PROMOTED`；
-25. `RunStatus`、`BuildResult`、`ValidationResult` 和 `DatasetPublication` 不得
+25. `RunStatus`、`OperationResult`、`ProductAssessment`、`ValidationResult` 和 `DatasetPublication` 不得
     相互替代；
 26. 前端不得通过错误字符串或 Artifact 数量推断业务状态。
 

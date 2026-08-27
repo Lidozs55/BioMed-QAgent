@@ -46,7 +46,7 @@ describe("artifact FAB", () => {
       <ArtifactFab
         artifacts={[artifact("main_data.csv")]}
         taskId="task-artifacts"
-        buildId="build-v2"
+        publicationId="pub-v2"
       />,
     );
 

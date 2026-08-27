@@ -86,10 +86,10 @@ async function verifiedPath(buildDir: string, relativePath: string): Promise<str
 }
 
 async function loadLatestManifest(taskRoot: string): Promise<LoadedManifest | null> {
-  const buildsRoot = path.join(taskRoot, "datasets_build");
-  let entries;
+  const runsRoot = path.join(taskRoot, "dataset_runs");
+  let runEntries;
   try {
-    entries = await readdir(buildsRoot, { withFileTypes: true });
+    runEntries = await readdir(runsRoot, { withFileTypes: true });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
@@ -102,26 +102,31 @@ async function loadLatestManifest(taskRoot: string): Promise<LoadedManifest | nu
     schemaVersion: "1.0" | "1.1";
     manifestSha256: string | null;
   } | undefined;
-  for (const entry of entries) {
-    if (!entry.isDirectory() || !SAFE_ID.test(entry.name)) continue;
-    const buildDir = path.join(buildsRoot, entry.name);
-    try {
-      const publication = await latestPublication(buildDir);
-      if (publication === null) continue;
-      const manifestPath = path.join(publication.directory, "dataset_manifest.json");
-      const details = await stat(manifestPath);
-      if (newest === undefined || details.mtimeMs > newest.mtimeMs) {
-        newest = {
-          mtimeMs: details.mtimeMs,
-          publicationDir: publication.directory,
-          manifestPath,
-          manifestRef: publication.manifestRef,
-          schemaVersion: publication.schemaVersion,
-          manifestSha256: publication.manifestSha256,
-        };
+  for (const runEntry of runEntries) {
+    if (!runEntry.isDirectory() || !SAFE_ID.test(runEntry.name)) continue;
+    const runRoot = path.join(runsRoot, runEntry.name);
+    const requirements = await readdir(runRoot, { withFileTypes: true });
+    for (const requirement of requirements) {
+      if (!requirement.isDirectory() || !SAFE_ID.test(requirement.name)) continue;
+      const executionDir = path.join(runRoot, requirement.name);
+      try {
+        const publication = await latestPublication(executionDir);
+        if (publication === null) continue;
+        const manifestPath = path.join(publication.directory, "dataset_manifest.json");
+        const details = await stat(manifestPath);
+        if (newest === undefined || details.mtimeMs > newest.mtimeMs) {
+          newest = {
+            mtimeMs: details.mtimeMs,
+            publicationDir: publication.directory,
+            manifestPath,
+            manifestRef: publication.manifestRef,
+            schemaVersion: publication.schemaVersion,
+            manifestSha256: publication.manifestSha256,
+          };
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
   }
   if (newest === undefined) return null;
@@ -148,10 +153,10 @@ async function loadLatestManifest(taskRoot: string): Promise<LoadedManifest | nu
   }
   const manifest = record(parsed, "Build manifest");
   const taskId = path.basename(taskRoot);
-  const buildId = path.basename(path.dirname(path.dirname(newest.publicationDir)));
+  const requirementId = path.basename(path.dirname(path.dirname(newest.publicationDir)));
   if (
     manifest.task_id !== taskId ||
-    manifest.build_id !== buildId ||
+    manifest.requirement_id !== requirementId ||
     typeof manifest.manifest_id !== "string" ||
     manifest.manifest_id !== newest.manifestRef ||
     !Array.isArray(manifest.artifacts)

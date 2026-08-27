@@ -14,12 +14,12 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { parseDatasetBuildSpec, parseSourceAsset, type SourceAsset } from "../src/dataset/contracts/index.js";
+import { parseDatasetExecutionSpec, parseSourceAsset, type SourceAsset } from "../src/dataset/contracts/index.js";
 import { sha256Json } from "../src/dataset/runtime/digests.js";
 import {
   buildOperationPlan,
-  DatasetBuildExecutor,
-  loadBuildState,
+  DatasetExecutionExecutor,
+  loadExecutionState,
   loadOperationResultManifest,
   makeOperationOutput,
   type OperationOutput,
@@ -47,9 +47,9 @@ function binding(bindingId: string, source: string): Record<string, unknown> {
 }
 
 function spec() {
-  return parseDatasetBuildSpec({
+  return parseDatasetExecutionSpec({
     schema_version: "1.0",
-    build_id: "build_test",
+    requirement_id: "build_test",
     objective: "compare expression",
     dataset_family: "gene_expression",
     row_granularity: "gene_sample_measurement",
@@ -93,11 +93,11 @@ function makeExecutor(options: {
   runner: RecordingRunner;
   sourceAssets?: Readonly<Record<string, SourceAsset>> | null;
   implementationVersions?: Record<string, string> | null;
-}): DatasetBuildExecutor {
+}): DatasetExecutionExecutor {
   const buildSpec = spec();
-  return new DatasetBuildExecutor({
+  return new DatasetExecutionExecutor({
     taskId: "task_1",
-    buildId: buildSpec.build_id,
+    requirementId: buildSpec.requirement_id,
     stateDir: join(options.outputRoot, "state"),
     taskRoot: options.outputRoot,
     plan: buildOperationPlan(buildSpec),
@@ -151,7 +151,7 @@ describe("A5I Increment 2 operation result manifests", () => {
     expect(outcome.status).toBe("completed");
     expect(runner.calls.length).toBe(11);
 
-    const state = loadBuildState(stateDir, "task_1", "build_test");
+    const state = loadExecutionState(stateDir, "task_1", "run_test", "build_test");
     const expectedAssetIds = Object.values(sourceAssets)
       .map((asset) => asset.asset_id)
       .sort();
@@ -163,7 +163,8 @@ describe("A5I Increment 2 operation result manifests", () => {
 
       expect(m.schema_version).toBe("1.0");
       expect(m.task_id).toBe("task_1");
-      expect(m.build_id).toBe("build_test");
+      expect(m.run_id).toBe("run_test");
+      expect(m.requirement_id).toBe("build_test");
       expect(m.operation_id).toBe(opId);
       expect(m.status).toBe("succeeded");
       expect(m.attempt).toBeGreaterThanOrEqual(1);
@@ -172,7 +173,8 @@ describe("A5I Increment 2 operation result manifests", () => {
       expect(m.result_manifest_id).toBe(
         sha256Json({
           task_id: "task_1",
-          build_id: "build_test",
+          run_id: "run_test",
+          requirement_id: "build_test",
           operation_id: m.operation_id,
           operation_attempt_id: m.operation_attempt_id,
         }),
@@ -186,11 +188,6 @@ describe("A5I Increment 2 operation result manifests", () => {
         committed_at: m.commit.committed_at,
       });
       expect(Number.isNaN(Date.parse(m.commit.committed_at))).toBe(false);
-      expect(m.migration).toEqual({
-        mode: "native",
-        legacy_checkpoint_path: null,
-        migrated_at: null,
-      });
       expect(m.dependency_closure.parameter_digest).toBe(m.parameter_digest);
       expect(m.dependency_closure.implementation_digest).toBe(m.implementation_digest);
       expect(m.dependency_closure.input_asset_ids).toEqual(expectedAssetIds);

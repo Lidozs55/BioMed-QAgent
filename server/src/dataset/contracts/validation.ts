@@ -70,7 +70,8 @@ export interface MultiTableValidationPolicy {
 
 export interface MultiTableValidationRequest {
   task_id: string;
-  build_id: string;
+  run_id?: string;
+  requirement_id: string;
   candidate: PublicationCandidateRef;
   tables: MultiTableValidationTable[];
   relations: RelationDefinition[];

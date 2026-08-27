@@ -188,7 +188,8 @@ function uniqueStrings(values: readonly string[], code: OperationResultAdmission
 function validateExpectedOperation(expected: ExpectedOperationAdmission): void {
   for (const [name, value] of [
     ["task_id", expected.task_id],
-    ["build_id", expected.build_id],
+    ["run_id", expected.run_id ?? ""],
+    ["requirement_id", expected.requirement_id],
     ["operation_attempt_id", expected.operation_attempt_id],
   ] as const) {
     assertNonEmpty(value, "INVALID_EXPECTED_OPERATION", `expected.${name}`);
@@ -275,7 +276,7 @@ function validateEvidence(evidence: TransformQuarantineAdmissionEvidence): void 
   ) {
     rejection("INVALID_EVIDENCE", "evidence must carry an explicit receipt evidence class");
   }
-  for (const name of ["task_id", "run_id", "build_id", "invocation_id"] as const) {
+  for (const name of ["task_id", "run_id", "requirement_id", "invocation_id"] as const) {
     const value = evidence[name];
     if (value === null) {
       rejection("INVALID_EVIDENCE", `admitted evidence must carry ${name}`);
@@ -302,7 +303,7 @@ function assertInvocationBinding(
 ): void {
   if (
     evidence.task_id !== expected.task_id
-    || evidence.build_id !== expected.build_id
+    || evidence.requirement_id !== expected.requirement_id
     || evidence.attempt !== expected.attempt
   ) {
     rejection(
@@ -664,7 +665,8 @@ function buildManifest(
     .sort((left, right) => left.relative_path.localeCompare(right.relative_path));
   const resultManifestId = canonicalDigest({
     task_id: expected.task_id,
-    build_id: expected.build_id,
+    run_id: expected.run_id ?? "run_unknown",
+    requirement_id: expected.requirement_id,
     operation_id: expected.operation_id,
     operation_attempt_id: expected.operation_attempt_id,
   });
@@ -672,7 +674,8 @@ function buildManifest(
     schema_version: "1.0",
     result_manifest_id: resultManifestId,
     task_id: expected.task_id,
-    build_id: expected.build_id,
+    run_id: expected.run_id ?? "run_unknown",
+    requirement_id: expected.requirement_id,
     operation_id: expected.operation_id,
     operation_kind: expected.operation_kind,
     operation_attempt_id: expected.operation_attempt_id,
@@ -700,11 +703,6 @@ function buildManifest(
         committed_at: committedAt,
       }),
       committed_at: committedAt,
-    },
-    migration: {
-      mode: "native",
-      legacy_checkpoint_path: null,
-      migrated_at: null,
     },
   };
 }
@@ -748,11 +746,12 @@ export async function admitOperationResultFromQuarantine(
   await assertRootUnchanged(root, "committed root");
 
   const manifest = buildManifest(input.evidence, input.expected, committedAt, outputs);
-  parseOperationResultManifest(manifest, input.expected.task_id, input.expected.build_id);
+  parseOperationResultManifest(manifest, input.expected.task_id, input.expected.run_id, input.expected.requirement_id);
   parseOperationResultManifest(
     JSON.parse(JSON.stringify(manifest)) as unknown,
     input.expected.task_id,
-    input.expected.build_id,
+    input.expected.run_id,
+    input.expected.requirement_id,
   );
   return manifest;
 }

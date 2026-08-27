@@ -24,7 +24,7 @@ function fixture(): { evidence: BrowserAcquisitionEvidence; proposal: BrowserAcq
     download_attempt_id: "download_attempt_formal", provider_id: BROWSER_ACQUISITION_PROVIDER_ID, provider_implementation_digest: BROWSER_ACQUISITION_PROVIDER_IMPLEMENTATION_DIGEST,
   };
   const proposal: BrowserAcquisitionProposal = {
-    schema_version: "1.0", proposal_id: "browser_proposal_formal", evidence_digest: "", task_id: "task_formal", run_id: "run_formal", build_id: null, generation: 1,
+    schema_version: "1.0", proposal_id: "browser_proposal_formal", evidence_digest: "", task_id: "task_formal", run_id: "run_formal", requirement_id: null, generation: 1,
     recipe_id: "fixture.tsv", recipe_version: "1", binding_id: "source", family_id: "fixture_family", schema_ref: "fixture_schema", table_id: "fixture_table", input_role: "source", intended_role: "carrier", status: "accepted", created_at: evidence.retrieved_at, updated_at: evidence.retrieved_at, failure_reason: null,
   };
   const review: HumanReviewRecord = { schema_version: "1.0", review_id: "review_formal", request_id: "hil_formal", decision: { action: "accept" }, reviewer: "user", reviewed_at: evidence.retrieved_at, evidence_digest: "", reason: null };
@@ -80,7 +80,7 @@ describe("BrowserFormalizationService", () => {
     const proposalStore = new BrowserAcquisitionProposalStore(taskRoot);
     const proposal = await proposalStore.put({
       schema_version: "1.0", proposal_id: "browser_proposal_xlsx_formal", evidence_digest: stored.evidenceDigest,
-      task_id: "task_formal_xlsx", run_id: "run_formal_xlsx", build_id: null, generation: 1,
+      task_id: "task_formal_xlsx", run_id: "run_formal_xlsx", requirement_id: null, generation: 1,
       recipe_id: "browser.registered.registered_protein_structure_xlsx.1_0_0", recipe_version: "1",
       binding_id: "structure_binding", family_id: "protein_structure", schema_ref: "protein_structure.structure.v1",
       table_id: "structures", input_role: "structures", intended_role: "carrier", status: "accepted",

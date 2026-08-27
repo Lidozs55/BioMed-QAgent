@@ -19,7 +19,7 @@ in [migration/README.md](../migration/README.md) as historical evidence.
 | [ADR-007](007-agent-plans-not-data-values.md) | Agent decides the plan, not scientific data values | Accepted |
 | [ADR-008](008-availability-vs-mergeability.md) | Source availability and data mergeability are two dimensions | Accepted |
 | [ADR-009](009-string-similarity-proposes-not-approves.md) | String similarity only proposes mappings, cannot approve them | Accepted |
-| [ADR-010](010-run-build-validation-publication-orthogonal.md) | RunStatus / BuildResult / ValidationResult / Publication are orthogonal | Accepted |
+| [ADR-010](010-run-build-validation-publication-orthogonal.md) | Historical Run / BuildResult / Validation / Publication model | Superseded by ADR-041 |
 | [ADR-011](011-no-metadata-only-placeholder.md) | No metadata-only placeholder primary table | Accepted |
 | [ADR-012](012-profile-driven-validation.md) | Validation driven by Profile; architecture keeps three publication invariants | Accepted |
 | [ADR-013](013-explainable-confidence-levels.md) | Confidence uses explainable levels, not fake probabilities | Accepted |
@@ -28,7 +28,7 @@ in [migration/README.md](../migration/README.md) as historical evidence.
 | [ADR-016](016-strangler-migration.md) | Migration uses strangler pattern, not one-shot rewrite | Accepted |
 | [ADR-017](017-pi-agent-runtime.md) | Pi replaces the custom Agent layer, not deterministic dataset semantics | Accepted |
 | [ADR-018](018-single-ts-application-host.md) | One TypeScript Application Host and one browser-facing port | Accepted |
-| [ADR-019](019-session-task-run-build-boundary.md) | Pi Session, BioMed Task, Run, and DatasetBuild remain distinct | Accepted |
+| [ADR-019](019-session-task-run-build-boundary.md) | Historical Session / Task / Run / Build boundary | Superseded by ADR-041 |
 | [ADR-020](020-dataset-core-remains-deterministic.md) | Python V2 Dataset Core remains authoritative in Phase 0/1 | Superseded after Phase 8; historical Phase 0/1 decision |
 | [ADR-021](021-pi-adapter-boundary.md) | Pi dependencies are isolated behind one adapter | Accepted |
 | [ADR-022](022-phase1-legacy-core-bridge.md) | Phase 1 uses a named-operation Legacy Dataset Core bridge | Superseded after Phase 8; historical Phase 1 decision |
@@ -47,7 +47,7 @@ in [migration/README.md](../migration/README.md) as historical evidence.
 | [ADR-034](034-registered-table-adapter.md) | Registered-table adapters trust only Core asset receipts and registered parsers | Accepted |
 | [ADR-035](035-biomedical-common-schemas.md) | Parameterized biomedical common schemas remain non-production capabilities | Accepted |
 | [ADR-036](036-deterministic-derive-slot.md) | Fixed deterministic derive slot and registered algorithm provenance | Accepted |
-| [ADR-037](037-durable-build-api-state-machine.md) | Durable Build API, idempotency, and independent state machine | Accepted |
+| [ADR-037](037-durable-build-api-state-machine.md) | Historical Durable Build API and state machine | Superseded by ADR-041 |
 | [ADR-038](038-canonical-evidence-product-layer.md) | Canonical Evidence Product Layer separates execution from biomedical product completeness | Proposed; partially implemented; transform target superseded by accepted ADR-039 |
 
 > Historical note: two records were independently assigned number 026. This
@@ -56,6 +56,7 @@ in [migration/README.md](../migration/README.md) as historical evidence.
 
 | [ADR-039](039-family-transform-host.md) | FamilySpec and explicit in-process unisolated DatasetTransform execution remain subordinate to Core publication trust | Accepted |
 | [ADR-040](040-personalized-skill-iteration.md) | Historical personalization produces evidence-bound Skill candidates, never automatic activation | Accepted |
+| [ADR-041](041-remove-build-domain.md) | Remove Build; resume from events and verified checkpoints | Accepted |
 
 New records use the next available three-digit number and the sections `Status`,
 `Context`, `Decision`, and `Consequences`. A superseding ADR must link both ways;

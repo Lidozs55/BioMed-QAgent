@@ -16,7 +16,7 @@ import { relative } from "node:path";
 import type { JsonValue } from "@biomed/contracts";
 import type {
   ArtifactRole,
-  DatasetBuildSpec,
+  DatasetExecutionSpec,
   DatasetManifest,
   DatasetSchema,
   ManifestArtifactEntry,
@@ -390,8 +390,8 @@ export async function buildConfidenceSummary(outputDir: string, signal?: AbortSi
  */
 export async function assembleManifest(options: {
   taskId: string;
-  buildId: string;
-  spec: DatasetBuildSpec;
+  requirementId: string;
+  spec: DatasetExecutionSpec;
   schema: DatasetSchema;
   integration: IntegrationResult;
   canonicalResults: readonly CanonicalizationResult[];
@@ -435,7 +435,7 @@ export async function assembleManifest(options: {
     schema_version: "1.0",
     manifest_id: `manifest_${digest.slice(0, 16)}`,
     task_id: options.taskId,
-    build_id: options.buildId,
+    requirement_id: options.requirementId,
     dataset_family: options.spec.dataset_family,
     row_granularity: options.spec.row_granularity,
     schema_ref: options.schema.schema_id,

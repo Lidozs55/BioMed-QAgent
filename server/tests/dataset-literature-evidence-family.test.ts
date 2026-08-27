@@ -112,7 +112,8 @@ async function csvOperationResult(
     schema_version: "1.0",
     result_manifest_id: `result_${tableId}`,
     task_id: "task_literature",
-    build_id: "build_literature",
+    run_id: "run_literature",
+    requirement_id: "build_literature",
     operation_id: `${operationKind}_${tableId}`,
     operation_kind: operationKind,
     operation_attempt_id: `attempt_${tableId}`,
@@ -136,7 +137,6 @@ async function csvOperationResult(
       implementation_digest: DIGEST,
     },
     commit: { state: "committed", commit_id: `commit_${tableId}`, committed_at: "2026-08-18T00:00:00Z" },
-    migration: { mode: "native", legacy_checkpoint_path: null, migrated_at: null },
   };
 }
 
@@ -171,7 +171,7 @@ async function buildCandidate(root: string, sourceFile = "sources.csv", evidence
   const confidenceResults = await Promise.all(tableIds.map((tableId, index) => csvOperationResult(root, `confidence_${tableId}`, files[index]!, { table_id: tableId })));
   const candidate = assembleLiteratureEvidenceCandidate({
     taskId: "task_literature",
-    buildId: "build_literature",
+    requirementId: "build_literature",
     datasetFamily: LITERATURE_EVIDENCE_FAMILY_ID,
     rowGranularity: LITERATURE_EVIDENCE_ROW_GRANULARITY,
     schema: literatureEvidenceTables[0]!.schema,
@@ -328,10 +328,11 @@ describe("literature evidence family module", () => {
     }));
     const result = await executeRegisteredMultiTableBuild({
       taskId: "task_publication",
+      runId: "run_literature",
       taskRoot,
       spec: {
         schema_version: "1.0",
-        build_id: "build_publication",
+        requirement_id: "build_publication",
         objective: "Publish non-Gold structured literature evidence",
         dataset_family: LITERATURE_EVIDENCE_FAMILY_ID,
         row_granularity: LITERATURE_EVIDENCE_ROW_GRANULARITY,
@@ -353,7 +354,7 @@ describe("literature evidence family module", () => {
     expect(result.manifest.schema_version).toBe("2.0");
     expect(result.manifest.tables.map((table) => table.table_id)).toEqual(["literature_evidence", "papers", "sources"]);
     expect(result.publication.publicationId).toMatch(/^pub_build_publication_/);
-    expect(await stat(path.join(taskRoot, "datasets_build", "build_publication", result.publication.versionDir, "dataset_manifest.json"))).toMatchObject({});
+    expect(await stat(path.join(taskRoot, "dataset_runs", "run_literature", "build_publication", result.publication.versionDir, "dataset_manifest.json"))).toMatchObject({});
 
     await writeFile(path.join(taskRoot, relativePath), Buffer.alloc((await stat(path.join(taskRoot, relativePath))).size, "x"));
     const drifted = await new SourceAssetRegistry("task_publication", taskRoot).resolve(receipt.asset_ref.asset_id);

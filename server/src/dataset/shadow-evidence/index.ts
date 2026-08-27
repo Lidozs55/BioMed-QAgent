@@ -71,7 +71,7 @@ export interface ShadowRunManifest {
   readonly run_id: string;
   readonly attempt: number;
   readonly task_id: string;
-  readonly build_id: string;
+  readonly requirement_id: string;
   readonly input_digest: string;
   readonly parameter_digest: string;
   readonly implementation_digest: string;
@@ -104,7 +104,7 @@ export interface ShadowRecomputedBytes {
 
 export interface CompareSelectedShadowRunsInput {
   readonly task_id: string;
-  readonly build_id: string;
+  readonly requirement_id: string;
   readonly legacy: ShadowRunSelection;
   readonly host: ShadowRunSelection;
   /**
@@ -114,7 +114,7 @@ export interface CompareSelectedShadowRunsInput {
    */
   readonly resolve_run: (
     selection: ShadowRunSelection,
-    context: { readonly task_id: string; readonly build_id: string },
+    context: { readonly task_id: string; readonly requirement_id: string },
   ) => Promise<ShadowRunResolution>;
   /**
    * Core-owned byte recomputation for one declared output file. Returns
@@ -182,7 +182,7 @@ export interface ShadowEvidenceReport {
   report_kind: "shadow_evidence";
   report_id: string;
   task_id: string;
-  build_id: string;
+  requirement_id: string;
   legacy_run: ShadowRunSelection;
   host_run: ShadowRunSelection;
   verdict: ShadowEvidenceVerdict;
@@ -225,7 +225,7 @@ interface ReportBase {
   report_kind: "shadow_evidence";
   report_id: string;
   task_id: string;
-  build_id: string;
+  requirement_id: string;
   legacy_run: ShadowRunSelection;
   host_run: ShadowRunSelection;
   issued_at: string;
@@ -248,7 +248,7 @@ function validateSelection(selection: ShadowRunSelection, name: string): void {
 
 function validateInput(input: CompareSelectedShadowRunsInput): void {
   nonEmptyId(input.task_id, "task_id");
-  nonEmptyId(input.build_id, "build_id");
+  nonEmptyId(input.requirement_id, "requirement_id");
   validateSelection(input.legacy, "legacy");
   validateSelection(input.host, "host");
 }
@@ -288,7 +288,7 @@ async function resolveReadyRun(
   try {
     resolution = await input.resolve_run(selection, {
       task_id: input.task_id,
-      build_id: input.build_id,
+      requirement_id: input.requirement_id,
     });
   } catch {
     throw new NotReadySignal("host_unavailable", `Host unavailable: resolving the ${name} shadow run failed`);
@@ -358,7 +358,7 @@ export async function compareSelectedShadowRuns(
   const issuedAt = now.toISOString();
   const reportId = canonicalDigest({
     task_id: input.task_id,
-    build_id: input.build_id,
+    requirement_id: input.requirement_id,
     legacy: input.legacy,
     host: input.host,
   });
@@ -367,7 +367,7 @@ export async function compareSelectedShadowRuns(
     report_kind: "shadow_evidence",
     report_id: reportId,
     task_id: input.task_id,
-    build_id: input.build_id,
+    requirement_id: input.requirement_id,
     legacy_run: input.legacy,
     host_run: input.host,
     issued_at: issuedAt,
@@ -413,7 +413,7 @@ export async function compareSelectedShadowRuns(
       ["manifest_id", manifest.manifest_id, selection.manifest_id],
       ["run_id", manifest.run_id, selection.run_id],
       ["task_id", manifest.task_id, input.task_id],
-      ["build_id", manifest.build_id, input.build_id],
+      ["requirement_id", manifest.requirement_id, input.requirement_id],
     ];
     for (const [field, resolved, selected] of bindings) {
       if (resolved !== selected) {

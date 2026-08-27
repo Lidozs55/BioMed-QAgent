@@ -671,7 +671,7 @@ export interface TransformExecutionReceipt {
   schema_version: "1.0";
   task_id: string;
   run_id: string;
-  build_id: string;
+  requirement_id: string;
   invocation_id: string;
   attempt: number;
   generation: number;
@@ -760,7 +760,7 @@ const RECEIPT_KEYS = new Set([
   "schema_version",
   "task_id",
   "run_id",
-  "build_id",
+  "requirement_id",
   "invocation_id",
   "attempt",
   "generation",
@@ -1230,7 +1230,7 @@ export function parseTransformExecutionReceipt(value: unknown, path: string): Tr
     schema_version: "1.0",
     task_id: getSafeId(object, "task_id", path),
     run_id: getSafeId(object, "run_id", path),
-    build_id: getSafeId(object, "build_id", path),
+    requirement_id: getSafeId(object, "requirement_id", path),
     invocation_id: getSafeId(object, "invocation_id", path),
     attempt: assertNonNegativeInt(ownValue(object, "attempt", path), `${path}.attempt`),
     generation: assertNonNegativeInt(ownValue(object, "generation", path), `${path}.generation`),
@@ -1292,12 +1292,12 @@ export function parseTransformExecutionReceipt(value: unknown, path: string): Tr
 }
 
 /* ------------------------------------------------------------------ */
-/* BuildSpec 2.0 proposal / resolved wire separation                   */
+/* Dataset execution proposal / resolved wire separation             */
 /* ------------------------------------------------------------------ */
 
-interface DatasetBuildSpec2Base {
+interface DatasetExecutionSpec2Base {
   schema_version: "2.0";
-  build_id: string;
+  requirement_id: string;
   family_spec_ref: ScopeQualifiedRef;
   projection_ref: string;
   transform_refs: ScopeQualifiedRef[];
@@ -1306,14 +1306,14 @@ interface DatasetBuildSpec2Base {
   idempotency_identity: string;
 }
 
-export interface DatasetBuildProposal2SourceBinding {
+export interface DatasetExecutionProposal2SourceBinding {
   binding_id: string;
   source: string;
   input_requirement_ref: string;
   parameters: Record<string, JsonValue>;
 }
 
-export interface ResolvedBuildSpec2SourceBinding {
+export interface ResolvedDatasetExecutionSpec2SourceBinding {
   binding_id: string;
   source: string;
   registered_asset_ref: string | null;
@@ -1321,29 +1321,20 @@ export interface ResolvedBuildSpec2SourceBinding {
   parameters: Record<string, JsonValue>;
 }
 
-/** Compatibility type name: BuildSpec2 is the resolved, Core-admissible shape. */
-export type BuildSpec2SourceBinding = ResolvedBuildSpec2SourceBinding;
-
-export interface DatasetBuildProposal2 extends DatasetBuildSpec2Base {
+export interface DatasetExecutionProposal2 extends DatasetExecutionSpec2Base {
   spec_kind: "proposal";
-  source_bindings: DatasetBuildProposal2SourceBinding[];
+  source_bindings: DatasetExecutionProposal2SourceBinding[];
 }
 
-export interface ResolvedDatasetBuildSpec2 extends DatasetBuildSpec2Base {
+export interface ResolvedDatasetExecutionSpec2 extends DatasetExecutionSpec2Base {
   spec_kind: "resolved";
-  source_bindings: ResolvedBuildSpec2SourceBinding[];
+  source_bindings: ResolvedDatasetExecutionSpec2SourceBinding[];
 }
 
-/**
- * Compatibility alias retained for callers that imported DatasetBuildSpec2.
- * It has resolved-only semantics; it is never a proposal union.
- */
-export type DatasetBuildSpec2 = ResolvedDatasetBuildSpec2;
-
-const BUILD2_KEYS = new Set([
+const EXECUTION_SPEC2_KEYS = new Set([
   "schema_version",
   "spec_kind",
-  "build_id",
+  "requirement_id",
   "family_spec_ref",
   "projection_ref",
   "source_bindings",
@@ -1366,7 +1357,7 @@ const RESOLVED_BINDING_KEYS = new Set([
   "parameters",
 ]);
 
-function parseProposalBinding(value: unknown, path: string): DatasetBuildProposal2SourceBinding {
+function parseProposalBinding(value: unknown, path: string): DatasetExecutionProposal2SourceBinding {
   const object = strictObject(value, path, PROPOSAL_BINDING_KEYS);
   return {
     binding_id: getSafeId(object, "binding_id", path),
@@ -1376,7 +1367,7 @@ function parseProposalBinding(value: unknown, path: string): DatasetBuildProposa
   };
 }
 
-function parseResolvedBinding(value: unknown, path: string): ResolvedBuildSpec2SourceBinding {
+function parseResolvedBinding(value: unknown, path: string): ResolvedDatasetExecutionSpec2SourceBinding {
   const object = strictObject(value, path, RESOLVED_BINDING_KEYS);
   const registeredAssetRef = assertNullableSafeRef(
     ownValue(object, "registered_asset_ref", path),
@@ -1404,16 +1395,16 @@ function parseResolvedBinding(value: unknown, path: string): ResolvedBuildSpec2S
   };
 }
 
-function parseBuild2Base(
+function parseExecutionSpec2Base(
   object: Record<string, unknown>,
   path: string,
-): DatasetBuildSpec2Base {
+): DatasetExecutionSpec2Base {
   if (ownValue(object, "schema_version", path) !== "2.0") {
-    throw new APIError(502, `DatasetBuildSpec2.schema_version must be "2.0" at ${path}`);
+    throw new APIError(502, `Dataset execution schema_version must be "2.0" at ${path}`);
   }
   return {
     schema_version: "2.0",
-    build_id: getSafeId(object, "build_id", path),
+    requirement_id: getSafeId(object, "requirement_id", path),
     family_spec_ref: parseScopeQualifiedRef(
       ownValue(object, "family_spec_ref", path),
       `${path}.family_spec_ref`,
@@ -1430,11 +1421,11 @@ function parseBuild2Base(
   };
 }
 
-export function parseDatasetBuildProposal2(value: unknown, path: string): DatasetBuildProposal2 {
-  const object = strictObject(assertJsonValue(value, path), path, BUILD2_KEYS);
-  const base = parseBuild2Base(object, path);
+export function parseDatasetExecutionProposal2(value: unknown, path: string): DatasetExecutionProposal2 {
+  const object = strictObject(assertJsonValue(value, path), path, EXECUTION_SPEC2_KEYS);
+  const base = parseExecutionSpec2Base(object, path);
   if (ownValue(object, "spec_kind", path) !== "proposal") {
-    throw new APIError(502, `DatasetBuildProposal2.spec_kind must be "proposal" at ${path}`);
+    throw new APIError(502, `DatasetExecutionProposal2.spec_kind must be "proposal" at ${path}`);
   }
   return {
     ...base,
@@ -1445,14 +1436,14 @@ export function parseDatasetBuildProposal2(value: unknown, path: string): Datase
   };
 }
 
-export function parseResolvedDatasetBuildSpec2(
+export function parseResolvedDatasetExecutionSpec2(
   value: unknown,
   path: string,
-): ResolvedDatasetBuildSpec2 {
-  const object = strictObject(assertJsonValue(value, path), path, BUILD2_KEYS);
-  const base = parseBuild2Base(object, path);
+): ResolvedDatasetExecutionSpec2 {
+  const object = strictObject(assertJsonValue(value, path), path, EXECUTION_SPEC2_KEYS);
+  const base = parseExecutionSpec2Base(object, path);
   if (ownValue(object, "spec_kind", path) !== "resolved") {
-    throw new APIError(502, `ResolvedDatasetBuildSpec2.spec_kind must be "resolved" at ${path}`);
+    throw new APIError(502, `ResolvedDatasetExecutionSpec2.spec_kind must be "resolved" at ${path}`);
   }
   return {
     ...base,
@@ -1461,11 +1452,6 @@ export function parseResolvedDatasetBuildSpec2(
       parseResolvedBinding(item, `${path}.source_bindings[${index}]`),
     ),
   };
-}
-
-/** Resolved-only compatibility parser. No version or shape sniffing fallback. */
-export function parseDatasetBuildSpec2(value: unknown, path: string): DatasetBuildSpec2 {
-  return parseResolvedDatasetBuildSpec2(value, path);
 }
 
 /* ------------------------------------------------------------------ */

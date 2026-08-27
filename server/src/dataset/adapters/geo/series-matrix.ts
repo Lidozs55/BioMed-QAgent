@@ -177,7 +177,7 @@ function wideMatrixMappings(options: {
 }
 
 function longRow(options: {
-  buildId: string;
+  requirementId: string;
   sourceAsset: SourceAsset;
   geneIdRaw: string;
   declared: string;
@@ -194,7 +194,7 @@ function longRow(options: {
   return [
     ...sourceLongIdentityValues({
       identityContext: options.identityContext,
-      buildId: options.buildId,
+      requirementId: options.requirementId,
       sourceAsset: options.sourceAsset,
       geneIdRaw: options.geneIdRaw,
       sampleId: options.sampleId,
@@ -245,7 +245,7 @@ interface EmitCellsOptions {
   rejectedWriter: RowWriter;
   batchId: string;
   sourceAsset: SourceAsset;
-  buildId: string;
+  requirementId: string;
   sourceName: string;
   line: number;
   values: readonly string[];
@@ -286,7 +286,7 @@ function emitGeoCells(options: EmitCellsOptions): {
     }
     options.longWriter.writeRow(
       longRow({
-        buildId: options.buildId,
+        requirementId: options.requirementId,
         sourceAsset: options.sourceAsset,
         geneIdRaw,
         declared: options.declared,
@@ -335,7 +335,7 @@ function geoStatistics(options: {
 
 interface GeoExtractContext {
   sourceAsset: SourceAsset;
-  buildId: string;
+  requirementId: string;
   bindingId: string;
   sourceName: string;
   parameters: AdapterParams;
@@ -362,7 +362,7 @@ async function extractTximportRows(
   context: GeoExtractContext,
   signal?: AbortSignal | null,
 ): Promise<GeoExtractOutcome> {
-  const { sourceAsset, buildId, bindingId, sourceName, parameters, identityContext, schemaRef } = context;
+  const { sourceAsset, requirementId, bindingId, sourceName, parameters, identityContext, schemaRef } = context;
   let header: string[] | null = null;
   let samples: string[] = [];
   let mappings: FieldMapping[] = [];
@@ -427,7 +427,7 @@ async function extractTximportRows(
       rejectedWriter,
       batchId,
       sourceAsset,
-      buildId,
+      requirementId,
       sourceName,
       identityContext,
       line,
@@ -469,7 +469,7 @@ async function extractSeriesMatrixRows(
   context: GeoExtractContext,
   signal?: AbortSignal | null,
 ): Promise<GeoExtractOutcome> {
-  const { sourceAsset, buildId, bindingId, sourceName, parameters, identityContext, schemaRef } = context;
+  const { sourceAsset, requirementId, bindingId, sourceName, parameters, identityContext, schemaRef } = context;
   let inBlock = false;
   let header: string[] | null = null;
   let samples: string[] = [];
@@ -532,7 +532,7 @@ async function extractSeriesMatrixRows(
       rejectedWriter,
       batchId,
       sourceAsset,
-      buildId,
+      requirementId,
       sourceName,
       identityContext,
       line,
@@ -626,7 +626,7 @@ async function extractSupplementaryRows(
   context: GeoExtractContext,
   signal?: AbortSignal | null,
 ): Promise<GeoExtractOutcome> {
-  const { sourceAsset, buildId, bindingId, sourceName, parameters, identityContext, schemaRef } = context;
+  const { sourceAsset, requirementId, bindingId, sourceName, parameters, identityContext, schemaRef } = context;
   let delimiter = parameters.delimiter;
   let header: string[] | null = null;
   let samples: string[] = [];
@@ -703,7 +703,7 @@ async function extractSupplementaryRows(
       rejectedWriter,
       batchId,
       sourceAsset,
-      buildId,
+      requirementId,
       sourceName,
       identityContext,
       line,
@@ -753,7 +753,7 @@ async function extractSupplementaryRows(
 }
 
 export interface GeoParseOptions {
-  buildId: string;
+  requirementId: string;
   bindingId: string;
   schemaRef: string;
   outputDir: string;
@@ -785,7 +785,7 @@ export class GeoExpressionAdapter extends SourceAdapter {
     options: GeoParseOptions,
   ): Promise<DataBatch> {
     const {
-      buildId,
+      requirementId,
       bindingId,
       schemaRef,
       outputDir,
@@ -841,7 +841,7 @@ export class GeoExpressionAdapter extends SourceAdapter {
             rows,
             longWriter,
             rejectedWriter,
-            { sourceAsset, buildId, bindingId, sourceName, parameters, identityContext, schemaRef },
+            { sourceAsset, requirementId, bindingId, sourceName, parameters, identityContext, schemaRef },
             signal,
           );
         } catch (error) {
@@ -859,14 +859,14 @@ export class GeoExpressionAdapter extends SourceAdapter {
                 rows,
                 longWriter,
                 rejectedWriter,
-                { sourceAsset, buildId, bindingId, sourceName, parameters, identityContext, schemaRef },
+                { sourceAsset, requirementId, bindingId, sourceName, parameters, identityContext, schemaRef },
                 signal,
               )
             : await extractTximportRows(
                 rows,
                 longWriter,
                 rejectedWriter,
-                { sourceAsset, buildId, bindingId, sourceName, parameters, identityContext, schemaRef },
+                { sourceAsset, requirementId, bindingId, sourceName, parameters, identityContext, schemaRef },
                 signal,
               );
           sampleMetadataText = extraction.sampleMetadataText ?? null;
@@ -1024,7 +1024,7 @@ export class GeoExpressionAdapter extends SourceAdapter {
     }
     const geoContext: GeoExtractContext = {
       sourceAsset: context.sourceAsset,
-      buildId: context.buildId,
+      requirementId: context.requirementId,
       bindingId: context.bindingId,
       sourceName: context.sourceName,
       parameters: context.parameters,

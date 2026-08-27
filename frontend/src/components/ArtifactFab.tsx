@@ -3,7 +3,7 @@ import { FilesIcon } from "@phosphor-icons/react";
 
 import { ArtifactSheet } from "@/components/ArtifactSheet";
 import { Button } from "@/components/ui/button";
-import { useTaskBuildId } from "@/hooks/useTaskBuild";
+import { useTaskPublicationId } from "@/hooks/useTaskPublication";
 import type { ArtifactProjection } from "@/runtime/types";
 import {
   selectActiveArtifacts,
@@ -14,30 +14,29 @@ import { useAgentStore } from "@/stores/agentStore";
 interface ArtifactFabProps {
   artifacts?: readonly ArtifactProjection[];
   taskId?: string | null;
-  /** V2 build id — opens the manifest-driven build view. */
-  buildId?: string | null;
+  /** Immutable Publication ID for the manifest-driven result view. */
+  publicationId?: string | null;
 }
 
 export function ArtifactFab({
   artifacts: artifactOverride,
   taskId: taskIdOverride,
-  buildId: buildIdOverride,
+  publicationId: publicationIdOverride,
 }: ArtifactFabProps = {}) {
   const [open, setOpen] = useState(false);
   const activeArtifacts = useAgentStore(selectActiveArtifacts);
   const activeTask = useAgentStore(selectActiveTask);
   const artifacts = artifactOverride ?? activeArtifacts;
   const taskId = taskIdOverride ?? activeTask?.summary.task_id ?? null;
-  // V2 report cards own completed and loading build results; keep this FAB for legacy files only.
-  const buildState = useTaskBuildId(
-    buildIdOverride == null ? taskId : null,
+  // Publication report cards own formal results; keep this FAB for unpromoted files only.
+  const executionState = useTaskPublicationId(
+    publicationIdOverride == null ? taskId : null,
   );
-  const resolvedBuildId = buildIdOverride ?? buildState.buildId;
+  const resolvedPublicationId = publicationIdOverride ?? executionState.publicationId;
 
   if (
     taskId === null ||
-    buildState.status === "loading" ||
-    resolvedBuildId !== null ||
+    resolvedPublicationId !== null ||
     artifacts.length === 0
   ) {
     return null;
@@ -61,7 +60,7 @@ export function ArtifactFab({
         onOpenChange={setOpen}
         artifacts={artifacts}
         taskId={taskId}
-        buildId={resolvedBuildId}
+        publicationId={resolvedPublicationId}
       />
     </>
   );

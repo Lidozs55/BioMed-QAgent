@@ -27,19 +27,19 @@ import {
   type BindingRejection,
   type SourceAsset,
 } from "../contracts/index.js";
-import { AdapterError, BindingRejectedError, BuildError, EmptySourceError } from "../adapters/errors.js";
+import { AdapterError, BindingRejectedError, ExecutionError, EmptySourceError } from "../adapters/errors.js";
 import { OperationAbortedError, type OperationSuspension } from "../cooperative.js";
-import { LockLostError } from "../service/build-lock.js";
+import { LockLostError } from "../service/execution-lock.js";
 import {
   appendAttempt,
   findReusable,
   fixedOperationCheckpointIdentity,
-  loadBuildState,
+  loadExecutionState,
   loadOperationOutput,
   loadOperationResultManifest,
   markCompleted,
   markFixedOperationCheckpointIdentity,
-  saveBuildState,
+  saveExecutionState,
   saveOperationOutput,
   saveOperationResultManifest,
   validateAttemptLogPrefix,
@@ -64,10 +64,10 @@ import {
   type RuntimeErrorDetail,
 } from "./operations.js";
 
-export type BuildRunStatus = "completed" | "failed" | "cancelled";
+export type ExecutionRunStatus = "completed" | "failed" | "cancelled";
 
-export interface BuildRunOutcome {
-  status: BuildRunStatus;
+export interface ExecutionRunOutcome {
+  status: ExecutionRunStatus;
   error: RuntimeErrorDetail | null;
   completedOperationIds: string[];
 }
@@ -114,25 +114,25 @@ export class OperationTimeoutError extends Error {
 /** Core operation lifecycle events (M2, I-05) — the service layer maps these
  * onto stable EventPayloads before they reach the durable event log. */
 export type CoreOperationEvent =
-  | { type: "build_started" }
+  | { type: "execution_started" }
   | { type: "operation_started"; operationId: string; label: string | null; category: string; attempt: number }
   | { type: "operation_completed"; operationId: string; label: string | null; category: string; status: "succeeded" | "skipped"; outputDigest: string | null; reusedOperationAttemptId: string | null }
   | { type: "operation_failed"; operationId: string; label: string | null; category: string; status: "failed" | "cancelled"; error: { code: string; message: string } | null }
-  | { type: "build_completed" }
-  | { type: "build_failed"; error: { code: string; message: string } | null }
-  | { type: "build_cancelled" };
+  | { type: "execution_completed" }
+  | { type: "execution_failed"; error: { code: string; message: string } | null }
+  | { type: "execution_cancelled" };
 
 export type CoreEventSink = (event: CoreOperationEvent) => void | Promise<void>;
 
 /** Raised when cooperative cancellation stops the skeleton. */
-export class BuildCancelledError extends Error {}
+export class ExecutionCancelledError extends Error {}
 
 /**
  * Phase A rejected every source binding (Phase 5 T7 D5).  ``reasonCode``
  * collapses to the single distinct rejection reason when every binding
  * failed for the same reason, otherwise ``all_bindings_rejected``.
  */
-export class AllBindingsRejectedError extends BuildError {
+export class AllBindingsRejectedError extends ExecutionError {
   readonly perBindingOutcomes: Record<string, BindingRejection>;
   readonly reasonCode: string;
 
@@ -164,7 +164,8 @@ export const PHASE_A_KINDS: ReadonlySet<OperationKind> = new Set([
 
 export interface ExecutorOptions {
   taskId: string;
-  buildId: string;
+  runId?: string;
+  requirementId: string;
   stateDir: string;
   taskRoot: string;
   plan: readonly OperationSpec[];
@@ -218,9 +219,10 @@ export interface ExecutorOptions {
 }
 
 /** Executes one fixed skeleton with idempotent recovery and cancel support. */
-export class DatasetBuildExecutor {
+export class DatasetExecutionExecutor {
   private readonly taskId: string;
-  private readonly buildId: string;
+  private readonly runId: string;
+  private readonly requirementId: string;
   private readonly stateDir: string;
   private readonly taskRoot: string;
   private readonly plan: readonly OperationSpec[];
@@ -242,14 +244,15 @@ export class DatasetBuildExecutor {
   private readonly onRehydratedOperation: ((op: OperationSpec, output: Record<string, unknown>, manifest: OperationResultManifest) => void | Promise<void>) | null;
   private readonly eventSink: CoreEventSink | null;
 
-  private state: ReturnType<typeof loadBuildState> | null = null;
+  private state: ReturnType<typeof loadExecutionState> | null = null;
   private outputs: Record<string, Record<string, unknown>> = {};
   private persistedAttemptCount = 0;
   private lastReusedAttemptId: string | null = null;
 
   constructor(options: ExecutorOptions) {
     this.taskId = options.taskId;
-    this.buildId = options.buildId;
+    this.runId = options.runId ?? "run_test";
+    this.requirementId = options.requirementId;
     this.stateDir = options.stateDir;
     this.taskRoot = options.taskRoot;
     this.plan = options.plan;
@@ -286,10 +289,10 @@ export class DatasetBuildExecutor {
   }
 
   /** Execute the skeleton, guaranteeing a terminal outcome. */
-  async run(): Promise<BuildRunOutcome> {
-    await this.emit({ type: "build_started" });
+  async run(): Promise<ExecutionRunOutcome> {
+    await this.emit({ type: "execution_started" });
     try {
-      this.state = loadBuildState(this.stateDir, this.taskId, this.buildId);
+      this.state = loadExecutionState(this.stateDir, this.taskId, this.runId, this.requirementId);
       this.persistedAttemptCount = validateAttemptLogPrefix(
         this.state,
         this.attemptsPath(),
@@ -304,15 +307,15 @@ export class DatasetBuildExecutor {
     }
     try {
       const outcome = await this.runPlan();
-      await this.emit({ type: "build_completed" });
+      await this.emit({ type: "execution_completed" });
       return outcome;
     } catch (error) {
-      if (error instanceof BuildCancelledError) {
-        await this.emit({ type: "build_cancelled" });
+      if (error instanceof ExecutionCancelledError) {
+        await this.emit({ type: "execution_cancelled" });
         return this.finalizeCancelled();
       }
       await this.emit({
-        type: "build_failed",
+        type: "execution_failed",
         error: error instanceof Error
           ? { code: error instanceof OperationTimeoutError ? "timeout" : error instanceof LockLostError ? "lock_lost" : "internal_error", message: error.message }
           : { code: "internal_error", message: String(error) },
@@ -368,7 +371,7 @@ export class DatasetBuildExecutor {
     );
     if (completedPublish !== undefined) {
       delete state.completed_operations[completedPublish.operation_id];
-      saveBuildState(this.stateDir, state);
+      saveExecutionState(this.stateDir, state);
     }
     const hasIncomplete = this.plan.some(
       (op) => state.completed_operations[op.operation_id] === undefined,
@@ -389,10 +392,10 @@ export class DatasetBuildExecutor {
       if (reusable === null || reusable.output_digest !== outputDigest) continue;
       if (!this.isReusableCheckpointIdentity(op, state)) {
         delete state.completed_operations[op.operation_id];
-        saveBuildState(this.stateDir, state);
+        saveExecutionState(this.stateDir, state);
         continue;
       }
-      const resultManifest = loadOperationResultManifest(this.stateDir, op.operation_id);
+      const resultManifest = loadOperationResultManifest(this.stateDir, op.operation_id, this.taskId, this.runId, this.requirementId);
       if (
         resultManifest === null ||
         resultManifest.status !== "succeeded" ||
@@ -401,13 +404,14 @@ export class DatasetBuildExecutor {
         resultManifest.implementation_digest !== this.implementationDigest(op)
       ) {
         delete state.completed_operations[op.operation_id];
-        saveBuildState(this.stateDir, state);
+        saveExecutionState(this.stateDir, state);
         continue;
       }
       const loaded = await loadOperationOutput(this.stateDir, {
         taskRoot: this.taskRoot,
         taskId: this.taskId,
-        buildId: this.buildId,
+        runId: this.runId,
+        requirementId: this.requirementId,
         operationId: op.operation_id,
         operationAttemptId: reusable.operation_attempt_id,
         outputDigest: reusable.output_digest,
@@ -419,12 +423,12 @@ export class DatasetBuildExecutor {
         // makes runPlan re-execute the operation and its downstream closure
         // instead of resuming with stale state (WP-A5).
         delete state.completed_operations[op.operation_id];
-        saveBuildState(this.stateDir, state);
+        saveExecutionState(this.stateDir, state);
         continue;
       }
       this.outputs[op.operation_id] = loaded;
       if (this.onRehydratedOperation === null) continue;
-      const manifest = loadOperationResultManifest(this.stateDir, op.operation_id);
+      const manifest = loadOperationResultManifest(this.stateDir, op.operation_id, this.taskId, this.runId, this.requirementId);
       if (manifest !== null) {
         await this.onRehydratedOperation(op, loaded, manifest);
       }
@@ -448,11 +452,11 @@ export class DatasetBuildExecutor {
     );
     appendAttempt(state, cancelled);
     state.inflight_attempt = null;
-    saveBuildState(this.stateDir, state);
+    saveExecutionState(this.stateDir, state);
     this.persistAttempts();
   }
 
-  private async runPlan(): Promise<BuildRunOutcome> {
+  private async runPlan(): Promise<ExecutionRunOutcome> {
     const state = this.state;
     if (state === null) {
       throw new Error("build state not loaded");
@@ -460,7 +464,7 @@ export class DatasetBuildExecutor {
     let phaseADone = false;
     for (const op of this.plan) {
       if (this.isCancelled()) {
-        throw new BuildCancelledError("build was cancelled before an operation");
+        throw new ExecutionCancelledError("execution was cancelled before an operation");
       }
       if (PHASE_A_KINDS.has(op.kind)) {
         if (op.category in this.perBindingOutcomes) {
@@ -473,7 +477,7 @@ export class DatasetBuildExecutor {
             error instanceof BindingRejectedError ||
             error instanceof EmptySourceError ||
             error instanceof AdapterError ||
-            error instanceof BuildError
+            error instanceof ExecutionError
           ) {
             const rejection = this.rejectionForException(op.category, error);
             this.perBindingOutcomes[op.category] = rejection;
@@ -577,7 +581,7 @@ export class DatasetBuildExecutor {
     );
     appendAttempt(state, failed);
     state.inflight_attempt = null;
-    saveBuildState(this.stateDir, state);
+    saveExecutionState(this.stateDir, state);
     this.persistAttempts();
   }
 
@@ -585,7 +589,8 @@ export class DatasetBuildExecutor {
   private resultManifestId(operationId: string, operationAttemptId: string): string {
     return sha256Json({
       task_id: this.taskId,
-      build_id: this.buildId,
+      run_id: this.runId,
+      requirement_id: this.requirementId,
       operation_id: operationId,
       operation_attempt_id: operationAttemptId,
     });
@@ -610,7 +615,7 @@ export class DatasetBuildExecutor {
 
   private isReusableCheckpointIdentity(
     op: OperationSpec,
-    state: ReturnType<typeof loadBuildState>,
+    state: ReturnType<typeof loadExecutionState>,
   ): boolean {
     const persisted = fixedOperationCheckpointIdentity(state, op.operation_id);
     const decision = verifyFixedOperationCheckpointIdentity(
@@ -642,7 +647,7 @@ export class DatasetBuildExecutor {
   private upstreamResultManifestIds(op: OperationSpec): string[] {
     return op.upstream.flatMap((upstreamId) => {
       if (!(upstreamId in this.outputs)) return [];
-      const manifest = loadOperationResultManifest(this.stateDir, upstreamId);
+      const manifest = loadOperationResultManifest(this.stateDir, upstreamId, this.taskId, this.runId, this.requirementId);
       if (manifest === null) {
         throw new Error(`committed result manifest is missing for ${upstreamId}`);
       }
@@ -674,7 +679,8 @@ export class DatasetBuildExecutor {
       schema_version: "1.0",
       result_manifest_id: resultManifestId,
       task_id: this.taskId,
-      build_id: this.buildId,
+      run_id: this.runId,
+      requirement_id: this.requirementId,
       operation_id: op.operation_id,
       operation_kind: op.kind,
       operation_attempt_id: running.operation_attempt_id,
@@ -705,13 +711,8 @@ export class DatasetBuildExecutor {
         }),
         committed_at: committedAt,
       },
-      migration: {
-        mode: "native",
-        legacy_checkpoint_path: null,
-        migrated_at: null,
-      },
     };
-    parseOperationResultManifest(manifest, this.taskId, this.buildId);
+    parseOperationResultManifest(manifest, this.taskId, this.runId, this.requirementId);
     saveOperationResultManifest(this.stateDir, manifest);
   }
 
@@ -749,7 +750,7 @@ export class DatasetBuildExecutor {
       started,
     );
     state.inflight_attempt = running;
-    saveBuildState(this.stateDir, state);
+    saveExecutionState(this.stateDir, state);
     await this.emit({
       type: "operation_started",
       operationId: op.operation_id,
@@ -768,12 +769,12 @@ export class DatasetBuildExecutor {
         operationId: op.operation_id,
         label: op.label ?? null,
         category: op.category,
-        status: error instanceof BuildCancelledError ? "cancelled" : "failed",
+        status: error instanceof ExecutionCancelledError ? "cancelled" : "failed",
         error: error instanceof Error
           ? { code: error instanceof OperationTimeoutError ? "timeout" : "failed", message: error.message }
           : { code: "failed", message: String(error) },
       });
-      if (error instanceof BuildCancelledError) {
+      if (error instanceof ExecutionCancelledError) {
         const cancelled = this.buildAttempt(
           op.operation_id,
           inputDigest,
@@ -786,7 +787,7 @@ export class DatasetBuildExecutor {
         );
         appendAttempt(state, cancelled);
         state.inflight_attempt = null;
-        saveBuildState(this.stateDir, state);
+        saveExecutionState(this.stateDir, state);
         this.persistAttempts();
       }
       throw error;
@@ -796,13 +797,14 @@ export class DatasetBuildExecutor {
     // never publish its files, manifest, or identity into reusable state.
     if (this.isCancelled()) {
       this.discardOutputs?.(op);
-      throw new BuildCancelledError(`operation ${op.operation_id} completed after cancel request`);
+      throw new ExecutionCancelledError(`operation ${op.operation_id} completed after cancel request`);
     }
     const outputDigest = sha256Json(result.output);
     const finished = this.nowIso();
     saveOperationOutput(this.stateDir, {
       task_id: this.taskId,
-      build_id: this.buildId,
+      run_id: this.runId,
+      requirement_id: this.requirementId,
       operation_id: op.operation_id,
       operation_attempt_id: running.operation_attempt_id,
       output_digest: outputDigest,
@@ -835,7 +837,7 @@ export class DatasetBuildExecutor {
     state.inflight_attempt = null;
     markCompleted(state, op.operation_id, outputDigest);
     markFixedOperationCheckpointIdentity(state, op.operation_id, this.checkpointIdentity(op));
-    saveBuildState(this.stateDir, state);
+    saveExecutionState(this.stateDir, state);
     this.persistAttempts();
 
     this.outputs[op.operation_id] = result.output;
@@ -861,7 +863,7 @@ export class DatasetBuildExecutor {
     const reusable = findReusable(state, op.operation_id, inputDigest, parameterDigest);
     if (reusable === null || reusable.output_digest === null) return false;
     if (!this.isReusableCheckpointIdentity(op, state)) return false;
-    const resultManifest = loadOperationResultManifest(this.stateDir, op.operation_id);
+    const resultManifest = loadOperationResultManifest(this.stateDir, op.operation_id, this.taskId, this.runId, this.requirementId);
     if (
       resultManifest === null ||
       resultManifest.status !== "succeeded" ||
@@ -874,7 +876,8 @@ export class DatasetBuildExecutor {
     const loaded = await loadOperationOutput(this.stateDir, {
       taskRoot: this.taskRoot,
       taskId: this.taskId,
-      buildId: this.buildId,
+      runId: this.runId,
+      requirementId: this.requirementId,
       operationId: op.operation_id,
       operationAttemptId: reusable.operation_attempt_id,
       outputDigest: reusable.output_digest,
@@ -898,7 +901,7 @@ export class DatasetBuildExecutor {
       reusable.operation_attempt_id,
     );
     appendAttempt(state, skipped);
-    saveBuildState(this.stateDir, state);
+    saveExecutionState(this.stateDir, state);
     this.persistAttempts();
     return true;
   }
@@ -922,11 +925,11 @@ export class DatasetBuildExecutor {
   ): Record<string, OperationResultManifest> {
     return Object.fromEntries(op.upstream.flatMap((operationId) => {
       if (!(operationId in this.outputs)) return [];
-      const manifest = loadOperationResultManifest(this.stateDir, operationId);
+      const manifest = loadOperationResultManifest(this.stateDir, operationId, this.taskId, this.runId, this.requirementId);
       if (manifest === null) {
         throw new Error(`committed result manifest is missing for ${operationId}`);
       }
-      return [[operationId, parseOperationResultManifest(manifest, this.taskId, this.buildId)]];
+      return [[operationId, manifest]];
     }));
   }
 
@@ -936,7 +939,7 @@ export class DatasetBuildExecutor {
     upstreamResults: Readonly<Record<string, OperationResultManifest>>,
   ): Promise<OperationOutput> {
     if (this.isCancelled()) {
-      throw new BuildCancelledError(`operation ${op.operation_id} was cancelled`);
+      throw new ExecutionCancelledError(`operation ${op.operation_id} was cancelled`);
     }
     const operationController = new AbortController();
     const onCancellation = (): void => operationController.abort();
@@ -954,7 +957,7 @@ export class DatasetBuildExecutor {
         // abort marker onto the executor's cancel semantics so a cancelled
         // build finalizes as ``cancelled`` (not ``failed``).
         if (error instanceof OperationAbortedError) {
-          throw new BuildCancelledError(
+          throw new ExecutionCancelledError(
             `operation ${op.operation_id} was cancelled or timed out`,
           );
         }
@@ -967,7 +970,7 @@ export class DatasetBuildExecutor {
       // K1: the operation's files are finished but must be discarded — the
       // completed-too-late outputs never become part of the build state.
       this.discardOutputs?.(op);
-      throw new BuildCancelledError(
+      throw new ExecutionCancelledError(
         `operation ${op.operation_id} completed after cancel request`,
       );
     }
@@ -1045,7 +1048,7 @@ export class DatasetBuildExecutor {
         await Promise.race([
           pending.then(() => undefined, () => undefined),
           new Promise<void>((resolve) => {
-            setTimeout(resolve, DatasetBuildExecutor.STRAGGLER_SETTLE_GRACE_MS);
+            setTimeout(resolve, DatasetExecutionExecutor.STRAGGLER_SETTLE_GRACE_MS);
           }),
         ]);
       }
@@ -1057,10 +1060,10 @@ export class DatasetBuildExecutor {
       ? { ...this.parameterScope, derive_request: this.deriveRequest }
       : this.parameterScope;
     return {
-      buildId: this.buildId,
+      requirementId: this.requirementId,
       upstream: this.availableUpstream(op),
       upstreamResults: Object.fromEntries(op.upstream.flatMap((operationId) => {
-        const result = loadOperationResultManifest(this.stateDir, operationId);
+        const result = loadOperationResultManifest(this.stateDir, operationId, this.taskId, this.runId, this.requirementId);
         return result === null ? [] : [[operationId, result]];
       })),
       parameterScope: this.authoritativeIdentityDigest === null
@@ -1102,7 +1105,7 @@ export class DatasetBuildExecutor {
       operation_attempt_id:
         operationAttemptId ?? `operation_attempt_${randomUUID()}`,
       task_id: this.taskId,
-      build_id: this.buildId,
+      requirement_id: this.requirementId,
       operation_id: operationId,
       attempt,
       input_digest: inputDigest,
@@ -1136,7 +1139,7 @@ export class DatasetBuildExecutor {
     return max + 1;
   }
 
-  private finalizeCancelled(): BuildRunOutcome {
+  private finalizeCancelled(): ExecutionRunOutcome {
     const state = this.state;
     if (state === null) return { status: "cancelled", error: null, completedOperationIds: [] };
     const inflight = state.inflight_attempt;
@@ -1153,7 +1156,7 @@ export class DatasetBuildExecutor {
       );
       appendAttempt(state, cancelled);
       state.inflight_attempt = null;
-      saveBuildState(this.stateDir, state);
+      saveExecutionState(this.stateDir, state);
       this.persistAttempts();
     }
     return {
@@ -1163,7 +1166,7 @@ export class DatasetBuildExecutor {
     };
   }
 
-  private finalizeFailed(exc: unknown, errorCode: string): BuildRunOutcome {
+  private finalizeFailed(exc: unknown, errorCode: string): ExecutionRunOutcome {
     const details: Record<string, unknown> = {};
     const reasonCode = (exc as { reason_code?: string }).reason_code;
     if (reasonCode !== undefined && reasonCode !== null) {
@@ -1207,7 +1210,7 @@ export class DatasetBuildExecutor {
       );
       appendAttempt(state, failed);
       state.inflight_attempt = null;
-      saveBuildState(this.stateDir, state);
+      saveExecutionState(this.stateDir, state);
       this.persistAttempts();
     }
     return {
@@ -1217,7 +1220,7 @@ export class DatasetBuildExecutor {
     };
   }
 
-  private outcomeFailed(code: string, message: string): BuildRunOutcome {
+  private outcomeFailed(code: string, message: string): ExecutionRunOutcome {
     return {
       status: "failed",
       error: makeErrorDetail({ code, message, retryable: false }),

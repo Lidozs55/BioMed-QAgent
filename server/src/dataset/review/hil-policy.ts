@@ -5,7 +5,7 @@ import type {
 } from "@biomed/contracts";
 
 import type { BoundHILRequestInput } from "../../runtime/hil-gate.js";
-import { BuildError } from "../adapters/errors.js";
+import { ExecutionError } from "../adapters/errors.js";
 import type { OperationSuspension } from "../cooperative.js";
 import {
   parseDataBatch,
@@ -30,14 +30,14 @@ export interface ReviewedBatch {
 
 function jsonObject(value: JsonValue, path: string): Record<string, JsonValue> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new BuildError(`${path} must be an object`);
+    throw new ExecutionError(`${path} must be an object`);
   }
   return value;
 }
 
 function decisionFailure(decision: HILDecision, subject: string): never {
   const outcome = decision.action === "skip" ? "skipped" : "rejected";
-  throw new BuildError(`${subject} was ${outcome} by human review`);
+  throw new ExecutionError(`${subject} was ${outcome} by human review`);
 }
 
 interface MappingReviewResult {
@@ -53,7 +53,7 @@ function applyMappingReview(
     return decisionFailure(review.decision, "field mapping candidate");
   }
   if (review.decision.action === "approve") {
-    throw new BuildError("approve is not valid for field mapping review");
+    throw new ExecutionError("approve is not valid for field mapping review");
   }
   let corrections: Record<string, JsonValue> | null = null;
   if (review.decision.action === "correct") {
@@ -78,12 +78,12 @@ function applyMappingReview(
         `mapping correction.mappings.${mapping.mapping_id}`,
       );
       if (typeof item["target_field"] !== "string" || item["target_field"].trim() === "") {
-        throw new BuildError(`mapping correction for ${mapping.mapping_id} needs target_field`);
+        throw new ExecutionError(`mapping correction for ${mapping.mapping_id} needs target_field`);
       }
       targetField = item["target_field"];
       if (item["transform"] !== undefined) {
         if (typeof item["transform"] !== "string") {
-          throw new BuildError(`mapping correction for ${mapping.mapping_id} has invalid transform`);
+          throw new ExecutionError(`mapping correction for ${mapping.mapping_id} has invalid transform`);
         }
         transform = item["transform"];
       }
@@ -119,7 +119,7 @@ function registeredUnitCorrection(
   );
   if (candidates.length === 0) return null;
   if (candidates.length > 1) {
-    throw new BuildError(`multiple registered unit rules match '${sourceUnit}'`);
+    throw new ExecutionError(`multiple registered unit rules match '${sourceUnit}'`);
   }
   const rule = candidates[0];
   const formula = rule.formula.trim().toLowerCase();
@@ -140,7 +140,7 @@ function registeredUnitCorrection(
     }
   } else if ((match = new RegExp(`^value\\s*\\/\\s*${LINEAR_NUMBER}(?:\\s*([+-])\\s*${LINEAR_NUMBER})?$`, "i").exec(formula)) !== null) {
     const divisor = Number(match[1]);
-    if (divisor === 0) throw new BuildError(`registered unit rule '${rule.rule_id}' divides by zero`);
+    if (divisor === 0) throw new ExecutionError(`registered unit rule '${rule.rule_id}' divides by zero`);
     factor = 1 / divisor;
     if (match[2] !== undefined && match[3] !== undefined) {
       offset = (match[2] === "-" ? -1 : 1) * Number(match[3]);
@@ -148,12 +148,12 @@ function registeredUnitCorrection(
   } else if ((match = new RegExp(`^value\\s*([+-])\\s*${LINEAR_NUMBER}$`, "i").exec(formula)) !== null) {
     offset = (match[1] === "-" ? -1 : 1) * Number(match[2]);
   } else {
-    throw new BuildError(
+    throw new ExecutionError(
       `registered unit rule '${rule.rule_id}' must use a safe linear formula`,
     );
   }
   if (!Number.isFinite(factor) || !Number.isFinite(offset)) {
-    throw new BuildError(`registered unit rule '${rule.rule_id}' is not finite`);
+    throw new ExecutionError(`registered unit rule '${rule.rule_id}' is not finite`);
   }
   return {
     method: "registered_rule",
@@ -177,7 +177,7 @@ function parseUnitCorrection(
     return decisionFailure(decision, "unit conversion candidate");
   }
   if (decision.action !== "correct") {
-    throw new BuildError("unknown units require a structured correction");
+    throw new ExecutionError("unknown units require a structured correction");
   }
   const root = jsonObject(decision.correction, "unit correction");
   const correction = jsonObject(
@@ -190,19 +190,19 @@ function parseUnitCorrection(
   const offset = correction["offset"];
   const evidence = correction["evidence"];
   if (fromUnit !== sourceUnit) {
-    throw new BuildError("unit correction.from_unit does not match the reviewed evidence");
+    throw new ExecutionError("unit correction.from_unit does not match the reviewed evidence");
   }
   if (typeof toUnit !== "string" || !profile.allowed_units.includes(toUnit)) {
-    throw new BuildError("unit correction.to_unit is not allowed by the normalization profile");
+    throw new ExecutionError("unit correction.to_unit is not allowed by the normalization profile");
   }
   if (typeof factor !== "number" || !Number.isFinite(factor)) {
-    throw new BuildError("unit correction.factor must be a finite number");
+    throw new ExecutionError("unit correction.factor must be a finite number");
   }
   if (typeof offset !== "number" || !Number.isFinite(offset)) {
-    throw new BuildError("unit correction.offset must be a finite number");
+    throw new ExecutionError("unit correction.offset must be a finite number");
   }
   if (typeof evidence !== "string" || evidence.trim() === "") {
-    throw new BuildError("unit correction.evidence must be a non-empty string");
+    throw new ExecutionError("unit correction.evidence must be a non-empty string");
   }
   return {
     method: "human_correction",
@@ -220,14 +220,14 @@ export async function reviewBatchForHIL(options: {
   batch: DataBatch;
   profile: NormalizationProfile;
   gate: DatasetHILGate | null;
-  buildId: string;
+  requirementId: string;
   signal?: AbortSignal;
   /** Executor-provided handle: pauses the operation timeout during the wait. */
   suspension?: OperationSuspension | null;
 }): Promise<ReviewedBatch> {
   const requestHIL = async (input: BoundHILRequestInput): Promise<HumanReviewRecord> => {
     if (options.gate === null) {
-      throw new BuildError("human review is required but no durable HIL gate is available");
+      throw new ExecutionError("human review is required but no durable HIL gate is available");
     }
     options.suspension?.suspend();
     try {
@@ -244,7 +244,7 @@ export async function reviewBatchForHIL(options: {
   );
   if (proposed.length > 0) {
     const review = await requestHIL({
-      build_id: options.buildId,
+      requirement_id: options.requirementId,
       kind: "semantic_review",
       review_type: "field_mapping",
       blocking: true,
@@ -278,7 +278,7 @@ export async function reviewBatchForHIL(options: {
         })),
       },
       policy_ref: "dataset.field_mapping.v1",
-      idempotency_key: `${options.buildId}:${batch.binding_id}:field_mapping`,
+      idempotency_key: `${options.requirementId}:${batch.binding_id}:field_mapping`,
     });
     const mappingReview = applyMappingReview(batch.declared_mappings, review);
     batch = parseDataBatch({
@@ -315,10 +315,10 @@ export async function reviewBatchForHIL(options: {
       return { batch, unitCorrection: registeredCorrection };
     }
     if (options.gate === null) {
-      throw new BuildError("unknown units require a durable HIL gate");
+      throw new ExecutionError("unknown units require a durable HIL gate");
     }
     const review = await requestHIL({
-      build_id: options.buildId,
+      requirement_id: options.requirementId,
       kind: "semantic_review",
       review_type: "unit_conversion",
       blocking: true,
@@ -341,7 +341,7 @@ export async function reviewBatchForHIL(options: {
         allowed_units: options.profile.allowed_units,
       },
       policy_ref: "dataset.unit_conversion.v1",
-      idempotency_key: `${options.buildId}:${batch.binding_id}:unit_conversion:${declaredUnit}`,
+      idempotency_key: `${options.requirementId}:${batch.binding_id}:unit_conversion:${declaredUnit}`,
     });
     const unitCorrection = parseUnitCorrection(
       review.decision,

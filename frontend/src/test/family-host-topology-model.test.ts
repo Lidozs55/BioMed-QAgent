@@ -86,7 +86,7 @@ const manifest: DatasetManifestV2 = {
   schema_version: "2.0",
   manifest_id: "manifest_topology",
   task_id: "task_topology",
-  build_id: "build_topology",
+  requirement_id: "build_topology",
   dataset_family: "gene_expression",
   row_granularity: "measurement_by_sample",
   schema_ref: "schema.expression.v2",

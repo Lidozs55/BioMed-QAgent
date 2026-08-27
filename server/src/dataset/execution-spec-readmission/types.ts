@@ -1,10 +1,10 @@
 import type {
-  DatasetBuildProposal2,
+  DatasetExecutionProposal2,
   FamilySpec,
-  ResolvedDatasetBuildSpec2,
+  ResolvedDatasetExecutionSpec2,
 } from "@biomed/contracts";
 
-export type BuildSpecResolutionErrorCode =
+export type ExecutionSpecResolutionErrorCode =
   | "invalid_context"
   | "invalid_proposal"
   | "family_spec_digest_mismatch"
@@ -18,17 +18,17 @@ export type BuildSpecResolutionErrorCode =
   | "ambiguous_binding"
   | "cross_task_binding"
   | "stale_generation"
-  | "build_mismatch"
+  | "requirement_mismatch"
   | "binding_mismatch"
   | "example_execution_forbidden";
 
-export class BuildSpecResolutionError extends Error {
-  readonly code: BuildSpecResolutionErrorCode;
+export class ExecutionSpecResolutionError extends Error {
+  readonly code: ExecutionSpecResolutionErrorCode;
   readonly path: string;
 
-  constructor(code: BuildSpecResolutionErrorCode, message: string, path = "$") {
+  constructor(code: ExecutionSpecResolutionErrorCode, message: string, path = "$") {
     super(message);
-    this.name = "BuildSpecResolutionError";
+    this.name = "ExecutionSpecResolutionError";
     this.code = code;
     this.path = path;
   }
@@ -36,12 +36,12 @@ export class BuildSpecResolutionError extends Error {
 
 export type FamilyStatus = "submitted" | "sandbox_executable" | "fixture_verified" | "shadow_verified" | "trusted_e2e_verified" | "activated" | "revoked" | "retired";
 
-export interface BuildSpecRegistryFamilyRecord {
+export interface ExecutionSpecRegistryFamilyRecord {
   family_spec: FamilySpec;
   family_status: FamilyStatus;
 }
 
-export interface BuildSpecCapabilityRecord {
+export interface ExecutionSpecCapabilityRecord {
   kind: "dataset_transform" | "policy";
   scope: "example" | "task" | "user" | "curated" | "system";
   id: string;
@@ -50,32 +50,32 @@ export interface BuildSpecCapabilityRecord {
   status: FamilyStatus;
 }
 
-export interface BuildSpecRegisteredRecord {
+export interface ExecutionSpecRegisteredRecord {
   binding_id: string;
   source: string;
   input_requirement_ref: string;
   task_id: string | null;
-  build_id: string | null;
+  requirement_id: string | null;
   generation: number;
   registered_ref: string;
   receipt_digest: string;
 }
 
-export interface BuildSpecResolutionContext {
+export interface ExecutionSpecResolutionContext {
   task_id: string;
-  build_id: string;
+  requirement_id: string;
   registry_generation: number;
   registry_snapshot_digest: string;
-  family: BuildSpecRegistryFamilyRecord;
-  transforms: readonly BuildSpecCapabilityRecord[];
-  policies: readonly BuildSpecCapabilityRecord[];
-  assets: readonly BuildSpecRegisteredRecord[];
-  results: readonly BuildSpecRegisteredRecord[];
+  family: ExecutionSpecRegistryFamilyRecord;
+  transforms: readonly ExecutionSpecCapabilityRecord[];
+  policies: readonly ExecutionSpecCapabilityRecord[];
+  assets: readonly ExecutionSpecRegisteredRecord[];
+  results: readonly ExecutionSpecRegisteredRecord[];
 }
 
-export interface BuildSpecResolutionEvidence {
+export interface ExecutionSpecResolutionEvidence {
   task_id: string;
-  build_id: string;
+  requirement_id: string;
   registry_generation: number;
   proposal_digest: string;
   resolved_digest: string;
@@ -84,9 +84,9 @@ export interface BuildSpecResolutionEvidence {
   ordered_capability_refs: string[];
 }
 
-export interface BuildSpecResolution {
-  resolved: ResolvedDatasetBuildSpec2;
-  evidence: BuildSpecResolutionEvidence;
+export interface ExecutionSpecResolution {
+  resolved: ResolvedDatasetExecutionSpec2;
+  evidence: ExecutionSpecResolutionEvidence;
 }
 
-export type BuildSpecProposal = DatasetBuildProposal2;
+export type ExecutionSpecProposal = DatasetExecutionProposal2;

@@ -25,7 +25,7 @@ import { dirname, join, relative } from "node:path";
 import { deepEqual } from "./contract-parity.js";
 import type { JsonValue } from "@biomed/contracts";
 import {
-  parseDatasetBuildSpec,
+  parseDatasetExecutionSpec,
   parseDatasetManifest,
   parseDatasetPublication,
   parseManifestArtifactEntry,
@@ -33,12 +33,12 @@ import {
   parseValidationResult,
   type ArtifactRole,
   type DataBatch,
-  type DatasetBuildSpec,
+  type DatasetExecutionSpec,
   type DatasetManifest,
   type SourceAsset,
   type ValidationResult,
 } from "../src/dataset/contracts/index.js";
-import { BuildError } from "../src/dataset/adapters/errors.js";
+import { ExecutionError } from "../src/dataset/adapters/errors.js";
 import { getAdapter } from "../src/dataset/adapters/index.js";
 import { sha256File } from "../src/dataset/adapters/hashing.js";
 import { buildGeneExpressionSchema } from "../src/dataset/schema/index.js";
@@ -191,7 +191,7 @@ function manifestFor(
     schema_version: "1.0",
     manifest_id: `manifest_${digest.slice(0, 16)}`,
     task_id: "task_test",
-    build_id: "build_test",
+    requirement_id: "build_test",
     dataset_family: "gene_expression",
     row_granularity: "gene_sample_measurement",
     schema_ref: "gene_expression.long.v1",
@@ -501,7 +501,7 @@ function parseAdapterBatch(options: {
     `src_${options.bindingId}`,
   );
   return adapter.parse(asset, join(options.fixturesRoot, options.fixture), {
-    buildId: "build_test",
+    requirementId: "build_test",
     bindingId: options.bindingId,
     schemaRef: "gene_expression.long.v1",
     outputDir: options.outputDir,
@@ -562,16 +562,16 @@ async function buildChain(options: {
     results,
     mergeStrategy: "append_by_canonical_row",
     schema,
-    buildId: "build_test",
+    requirementId: "build_test",
     outputDir: options.outputDir,
   });
   return { schema, results, integration, assets };
 }
 
-function spec(): DatasetBuildSpec {
-  return parseDatasetBuildSpec({
+function spec(): DatasetExecutionSpec {
+  return parseDatasetExecutionSpec({
     schema_version: "1.0",
-    build_id: "build_test",
+    requirement_id: "build_test",
     objective: "compare TP53 expression",
     dataset_family: "gene_expression",
     row_granularity: "gene_sample_measurement",
@@ -610,7 +610,7 @@ async function assembleIn(options: {
   const auditPaths = options.auditPaths ?? results.flatMap((result) => result.auditPaths);
   const manifest = await assembleManifest({
     taskId: "task_test",
-    buildId: "build_test",
+    requirementId: "build_test",
     spec: spec(),
     schema,
     integration,
@@ -899,7 +899,7 @@ export async function checkPublisherParity(options: { outputRoot: string }): Pro
       publishedAt: "2026-08-07T12:00:00+00:00",
     });
     const stored = readFileSync(join(out, "publish",
-      `${manifest.build_id}_${manifest.sha256.slice(0, 16)}`,
+      `${manifest.requirement_id}_${manifest.sha256.slice(0, 16)}`,
       MANIFEST_FILE));
     const expectedBytes = Buffer.from(`${pythonJsonDumps(manifest)}
 `, "utf8");
@@ -934,7 +934,7 @@ export async function checkPublisherParity(options: { outputRoot: string }): Pro
         publishedAt: "2026-08-07T11:00:00+00:00",
       });
     } catch (error) {
-      threw = error instanceof BuildError && /already exists/.test(String(error.message));
+      threw = error instanceof ExecutionError && /already exists/.test(String(error.message));
     }
     check(issues, threw, "promote: duplicate version directory rejected");
   }
@@ -953,7 +953,7 @@ export async function checkPublisherParity(options: { outputRoot: string }): Pro
         publishedAt: "2026-08-07T10:00:00+00:00",
       });
     } catch (error) {
-      threw = error instanceof BuildError && /release invariants failed/.test(String(error.message));
+      threw = error instanceof ExecutionError && /release invariants failed/.test(String(error.message));
     }
     check(issues, threw, "promote: failed validation blocks promotion");
   }

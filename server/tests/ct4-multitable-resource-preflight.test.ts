@@ -100,7 +100,8 @@ async function validationRequest(content = "row_id\nrow-1\n"): Promise<MultiTabl
     schema_version: "1.0",
     result_manifest_id: "result_ct4_rows",
     task_id: "task_ct4",
-    build_id: "build_ct4",
+    run_id: "run_test",
+    requirement_id: "build_ct4",
     operation_id: "integrate_ct4_rows",
     operation_kind: "integrate",
     operation_attempt_id: "attempt_ct4_rows",
@@ -128,15 +129,11 @@ async function validationRequest(content = "row_id\nrow-1\n"): Promise<MultiTabl
       commit_id: "commit_ct4_rows",
       committed_at: "2026-08-22T00:00:00Z",
     },
-    migration: {
-      mode: "native",
-      legacy_checkpoint_path: null,
-      migrated_at: null,
-    },
   };
   return {
     task_id: "task_ct4",
-    build_id: "build_ct4",
+    run_id: "run_test",
+    requirement_id: "build_ct4",
     candidate: {
       candidate_id: "candidate_ct4",
       table_ids: [definition.table_id],
@@ -191,7 +188,7 @@ function b3Backend(
   overrides: Partial<MultiTableB3BackendOptions> = {},
 ): MultiTableB3BackendOptions {
   return {
-    owner: { taskId: request.task_id, buildId: request.build_id, generation: 3 },
+    owner: { taskId: request.task_id, requirementId: request.requirement_id, generation: 3 },
     factory: diskFactory(),
     snapshotImmutable: true,
     parityProof: { digest: "ab".repeat(32), ref: "b3-parity/evidence/test-1" },
@@ -513,7 +510,7 @@ describe("C-T4 multi-table measured resource preflight", () => {
       diskOptions(request, (event) => {
         diskTelemetry.push(event);
       }, {
-        owner: { taskId: request.task_id, buildId: request.build_id, generation: 4 },
+        owner: { taskId: request.task_id, requirementId: request.requirement_id, generation: 4 },
         batchSize: 2,
       }),
     );
@@ -539,7 +536,7 @@ describe("C-T4 multi-table measured resource preflight", () => {
   it("uses the selected disk PK result without falling back to the Map result", async () => {
     const request = await validationRequest();
     const options = diskOptions(request, () => undefined, {
-      owner: { taskId: request.task_id, buildId: request.build_id, generation: 5 },
+      owner: { taskId: request.task_id, requirementId: request.requirement_id, generation: 5 },
     });
     vi.spyOn(TupleIndex.prototype, "primaryKeyCheck").mockReturnValue({
       duplicateKeys: 7,
@@ -556,8 +553,8 @@ describe("C-T4 multi-table measured resource preflight", () => {
   });
 
   it.each([
-    ["another task", { taskId: "task_other", buildId: "build_ct4", generation: 3 }],
-    ["another build", { taskId: "task_ct4", buildId: "build_other", generation: 3 }],
+    ["another task", { taskId: "task_other", requirementId: "build_ct4", generation: 3 }],
+    ["another build", { taskId: "task_ct4", requirementId: "build_other", generation: 3 }],
   ])("fails closed on %s before any index creation", async (_label, owner) => {
     const request = await validationRequest();
     const options = diskOptions(request, () => undefined, { owner });
@@ -600,7 +597,7 @@ describe("C-T4 multi-table measured resource preflight", () => {
     const request = await validationRequest("row_id\nrow-1\nrow-2\n");
     const controller = new AbortController();
     const options = diskOptions(request, () => undefined, {
-      owner: { taskId: request.task_id, buildId: request.build_id, generation: 6 },
+      owner: { taskId: request.task_id, requirementId: request.requirement_id, generation: 6 },
     });
     const originalAddBatch = TupleIndex.prototype.addBatch;
     vi.spyOn(TupleIndex.prototype, "addBatch").mockImplementation(async function (
@@ -625,7 +622,7 @@ describe("C-T4 multi-table measured resource preflight", () => {
     );
     const request = await validationRequest(`row_id\n${values.join("\n")}\n`);
     const options = diskOptions(request, () => undefined, {
-      owner: { taskId: request.task_id, buildId: request.build_id, generation: 7 },
+      owner: { taskId: request.task_id, requirementId: request.requirement_id, generation: 7 },
       quotaBytesPerIndex: 32 * 1024,
       batchSize: 128,
     });

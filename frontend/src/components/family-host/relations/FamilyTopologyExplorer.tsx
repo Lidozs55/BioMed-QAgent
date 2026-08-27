@@ -86,7 +86,7 @@ export function TopologySummary({
           <Badge variant="outline">{manifest.row_granularity}</Badge>
         </div>
         <CardDescription>
-          {manifest.schema_ref} · 构建 {manifest.build_id}
+          {manifest.schema_ref} · 构建 {manifest.requirement_id}
         </CardDescription>
       </CardHeader>
       <CardContent className="flex min-w-0 flex-col gap-3">

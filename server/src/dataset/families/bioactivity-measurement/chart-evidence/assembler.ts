@@ -136,7 +136,7 @@ export function assembleBioactivityChartEvidenceCandidate(
     const result = requireCoreResult({
       result: tableInput.result,
       taskId: base.task_id,
-      buildId: base.build_id,
+      requirementId: base.requirement_id,
       operationKind: "integrate",
       outputKind: "integrated_table",
     });
@@ -158,12 +158,12 @@ export function assembleBioactivityChartEvidenceCandidate(
       provenance_refs: resultRefs({
         results: tableInput.provenanceResults,
         taskId: base.task_id,
-        buildId: base.build_id,
+        requirementId: base.requirement_id,
       }),
       confidence_refs: resultRefs({
         results: tableInput.confidenceResults,
         taskId: base.task_id,
-        buildId: base.build_id,
+        requirementId: base.requirement_id,
       }),
     };
   });
@@ -172,7 +172,7 @@ export function assembleBioactivityChartEvidenceCandidate(
     ...input.bioactivity.tables.map((table) => requireCoreResult({
       result: table.result,
       taskId: base.task_id,
-      buildId: base.build_id,
+      requirementId: base.requirement_id,
     })),
     ...chartResults,
   ];
@@ -180,7 +180,7 @@ export function assembleBioactivityChartEvidenceCandidate(
   const candidateBody = {
     schema_version: "1.0" as const,
     task_id: base.task_id,
-    build_id: base.build_id,
+    requirement_id: base.requirement_id,
     dataset_family: base.dataset_family,
     row_granularity: base.row_granularity,
     tables: [
@@ -201,7 +201,7 @@ export function assembleBioactivityChartEvidenceCandidate(
       ...resultRefs({
         results: input.auditResults ?? [],
         taskId: base.task_id,
-        buildId: base.build_id,
+        requirementId: base.requirement_id,
       }),
     ],
     registered_asset_ids: assets,

@@ -9,19 +9,19 @@ import {
   DeterministicDeriveRegistry,
   PDB_INTERFACE_DISTANCE_ALGORITHM_ID,
 } from "../src/dataset/derive/index.js";
-import { parseDatasetBuildSpec } from "../src/dataset/contracts/index.js";
+import { parseDatasetExecutionSpec } from "../src/dataset/contracts/index.js";
 import {
   buildOperationPlan,
-  DatasetBuildExecutor,
+  DatasetExecutionExecutor,
   loadOperationResultManifest,
   makeOperationOutput,
 } from "../src/dataset/runtime/index.js";
 import { createTsCoreOperationRunner } from "../src/dataset/service/ts-core.js";
 
 function spec() {
-  return parseDatasetBuildSpec({
+  return parseDatasetExecutionSpec({
     schema_version: "1.0",
-    build_id: "build_derive",
+    requirement_id: "build_derive",
     objective: "derive",
     dataset_family: "gene_expression",
     row_granularity: "gene_sample_measurement",
@@ -44,7 +44,7 @@ function request(mode: string): DeterministicDeriveRequest {
     slot: "derive" as const,
     request_id: "request_derive",
     task_id: "task_derive",
-    build_id: "build_derive",
+    requirement_id: "build_derive",
     algorithm_id: PDB_INTERFACE_DISTANCE_ALGORITHM_ID,
     algorithm_version: "1.0.0",
     implementation_digest: "a".repeat(64),
@@ -98,9 +98,9 @@ describe("fixed deterministic derive runtime slot", () => {
           bindings: new Map(),
           rehydratedBindingIds: new Set(),
         });
-        return new DatasetBuildExecutor({
+        return new DatasetExecutionExecutor({
           taskId: "task_derive",
-          buildId: buildSpec.build_id,
+          requirementId: buildSpec.requirement_id,
           stateDir: join(root, "state"),
           taskRoot: root,
           plan,

@@ -149,7 +149,7 @@ describe("event payload valid construction", () => {
           request_id: requestId,
           task_id: taskId,
           run_id: runId,
-          build_id: "build_1",
+          requirement_id: "build_1",
           kind: "semantic_review",
           review_type: "field_mapping",
           status: "pending",

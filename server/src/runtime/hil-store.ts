@@ -27,7 +27,7 @@ import type { DurableTaskRepository } from "./task-repository.js";
 export interface CreateHILRequestInput {
   task_id: string;
   run_id: string;
-  build_id: string | null;
+  requirement_id: string | null;
   kind: HILKind;
   review_type: HILReviewType | null;
   blocking: boolean;
@@ -170,7 +170,7 @@ export class DurableHILStore {
       request_id: requestId,
       task_id: input.task_id,
       run_id: input.run_id,
-      build_id: input.build_id,
+      requirement_id: input.requirement_id,
       kind: input.kind,
       review_type: input.review_type,
       status: "pending",

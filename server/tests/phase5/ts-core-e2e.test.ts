@@ -14,14 +14,14 @@ import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
-  parseDatasetBuildSpec,
+  parseDatasetExecutionSpec,
   parsePublicationCandidate,
   parseSourceAsset,
   type SourceAsset,
 } from "../../src/dataset/contracts/index.js";
 import { TypeScriptDatasetCore } from "../../src/dataset/service/ts-core.js";
 import { TsDatasetCoreAdapter } from "../../src/dataset/service/dataset-core.js";
-import { acquireBuildLock } from "../../src/dataset/service/build-lock.js";
+import { acquireExecutionLock } from "../../src/dataset/service/execution-lock.js";
 import type { CoreOperationEvent } from "../../src/dataset/runtime/executor.js";
 import { loadOperationResultManifest } from "../../src/dataset/runtime/index.js";
 import type { EventPayload } from "@biomed/contracts";
@@ -37,10 +37,10 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-function spec(overrides: Record<string, unknown> = {}): ReturnType<typeof parseDatasetBuildSpec> {
-  return parseDatasetBuildSpec({
+function spec(overrides: Record<string, unknown> = {}): ReturnType<typeof parseDatasetExecutionSpec> {
+  return parseDatasetExecutionSpec({
     schema_version: "1.0",
-    build_id: "build_e2e",
+    requirement_id: "build_e2e",
     objective: "compare TP53 expression",
     dataset_family: "gene_expression",
     row_granularity: "gene_sample_measurement",
@@ -107,10 +107,10 @@ async function assetFromBytes(
   });
 }
 
-function geoProbeSpec(): ReturnType<typeof parseDatasetBuildSpec> {
-  return parseDatasetBuildSpec({
+function geoProbeSpec(): ReturnType<typeof parseDatasetExecutionSpec> {
+  return parseDatasetExecutionSpec({
     schema_version: "1.0",
-    build_id: "build_geo_probe",
+    requirement_id: "build_geo_probe",
     objective: "map GEO probe rows to gene symbols",
     dataset_family: "gene_expression",
     row_granularity: "gene_sample_measurement",
@@ -136,10 +136,10 @@ function geoProbeSpec(): ReturnType<typeof parseDatasetBuildSpec> {
   });
 }
 
-function geoProbeLevelSpec(): ReturnType<typeof parseDatasetBuildSpec> {
-  return parseDatasetBuildSpec({
+function geoProbeLevelSpec(): ReturnType<typeof parseDatasetExecutionSpec> {
+  return parseDatasetExecutionSpec({
     ...geoProbeSpec(),
-    build_id: "build_geo_probe_level",
+    requirement_id: "build_geo_probe_level",
     objective: "publish GEO expression without guessing probe-to-gene mappings",
     row_granularity: "probe_sample_measurement",
     schema_ref: "gene_expression.probe_long.v1",
@@ -148,15 +148,15 @@ function geoProbeLevelSpec(): ReturnType<typeof parseDatasetBuildSpec> {
   });
 }
 
-async function newCore(): Promise<{ taskRoot: string; taskId: string; core: TypeScriptDatasetCore; events: Array<{ event: CoreOperationEvent; buildId: string }> }> {
+async function newCore(): Promise<{ taskRoot: string; taskId: string; core: TypeScriptDatasetCore; events: Array<{ event: CoreOperationEvent; requirementId: string }> }> {
   const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-core-"));
   roots.push(taskRoot);
-  const events: Array<{ event: CoreOperationEvent; buildId: string }> = [];
+  const events: Array<{ event: CoreOperationEvent; requirementId: string }> = [];
   const core = new TypeScriptDatasetCore({
     taskId: "task_e2e",
     taskRoot,
-    eventSink: async (event, buildId) => {
-      events.push({ event, buildId });
+    eventSink: async (event, requirementId) => {
+      events.push({ event, requirementId });
     },
   });
   return { taskRoot, taskId: "task_e2e", core, events };
@@ -166,7 +166,7 @@ describe("TS Core E2E golden outcomes (I-07)", () => {
   it("SUCCESS: gdc expression fixture completes, validates, and publishes immutably", async () => {
     const { taskRoot, core, events } = await newCore();
     const asset = await assetFor(taskRoot, "gdc/gdc_expression.tsv", "binding_gdc");
-    const record = await core.executeDatasetBuild(spec(), {
+    const record = await core.executeDatasetExecution(spec(), {
       runId: "run_e2e",
       sourceAssets: { binding_gdc: asset },
     });
@@ -176,11 +176,11 @@ describe("TS Core E2E golden outcomes (I-07)", () => {
     expect(record.publication_id).not.toBeNull();
     expect(record.manifest?.row_count).toBeGreaterThan(0);
     expect(record.manifest?.task_id).toBe("task_e2e");
-    expect(record.manifest?.build_id).toBe("build_e2e");
+    expect(record.manifest?.requirement_id).toBe("build_e2e");
     expect(record.validation?.status).toBe("passed");
-    const stateDir = path.join(taskRoot, "datasets_build", "build_e2e", "state");
-    const integrateResult = loadOperationResultManifest(stateDir, "integrate");
-    const assembleResult = loadOperationResultManifest(stateDir, "assemble");
+    const stateDir = path.join(taskRoot, "dataset_runs", "run_e2e", "build_e2e", "state");
+    const integrateResult = loadOperationResultManifest(stateDir, "integrate", "task_e2e", "run_e2e", "build_e2e");
+    const assembleResult = loadOperationResultManifest(stateDir, "assemble", "task_e2e", "run_e2e", "build_e2e");
     expect(assembleResult).toMatchObject({
       operation_kind: "assemble",
       output_kind: "publication_candidate",
@@ -192,23 +192,23 @@ describe("TS Core E2E golden outcomes (I-07)", () => {
     expect(JSON.stringify(candidate)).not.toContain("merged/primary.csv");
     expect(JSON.stringify(candidate)).not.toContain("data/workspaces");
     // Immutable publication on disk with the frozen layout
-    // (version dir = <build_id>_<digest16>; publication id = pub_ + version).
+    // (version dir = <requirement_id>_<digest16>; publication id = pub_ + version).
     const versionDir = path.join(
-      taskRoot, "datasets_build", "build_e2e", "publish",
+      taskRoot, "dataset_runs", "run_e2e", "build_e2e", "publish",
       (record.publication_id ?? "").replace(/^pub_/, ""),
     );
     const manifestStat = await stat(path.join(versionDir, "dataset_manifest.json"));
     expect(manifestStat.isFile()).toBe(true);
     // Event sink saw the full lifecycle.
     const kinds = events.map(({ event }) => event.type);
-    expect(kinds).toContain("build_started");
+    expect(kinds).toContain("execution_started");
     expect(kinds).toContain("operation_started");
     expect(kinds).toContain("operation_completed");
-    expect(kinds).toContain("build_completed");
-    // getBuild round-trips the manifest.
-    const loaded = await core.getBuild("build_e2e");
+    expect(kinds).toContain("execution_completed");
+    // getExecution round-trips the manifest.
+    const loaded = await core.getExecution("run_e2e", "build_e2e");
     expect(loaded?.manifest?.manifest_id).toBe(record.manifest?.manifest_id);
-    expect(await core.listBuildArtifacts("build_e2e")).toHaveLength(record.manifest?.artifacts.length ?? 0);
+    expect(await core.listExecutionArtifacts("run_e2e", "build_e2e")).toHaveLength(record.manifest?.artifacts.length ?? 0);
   });
 
   it("GEO: mappingAssets flow into the canonicalizer as probeMap", async () => {
@@ -240,7 +240,7 @@ describe("TS Core E2E golden outcomes (I-07)", () => {
       annotation,
       "binding_geo_annotation",
     );
-    const record = await core.executeDatasetBuild(geoProbeSpec(), {
+    const record = await core.executeDatasetExecution(geoProbeSpec(), {
       runId: "run_geo_probe",
       sourceAssets: { binding_geo: source },
       mappingAssets: { binding_geo: mapping },
@@ -248,7 +248,8 @@ describe("TS Core E2E golden outcomes (I-07)", () => {
     expect(record.status).toBe("completed");
     const canonicalPath = path.join(
       taskRoot,
-      "datasets_build",
+      "dataset_runs",
+      "run_geo_probe",
       "build_geo_probe",
       "canonical",
       "binding_geo.csv",
@@ -278,7 +279,7 @@ describe("TS Core E2E golden outcomes (I-07)", () => {
       "binding_geo",
     );
 
-    const record = await core.executeDatasetBuild(geoProbeLevelSpec(), {
+    const record = await core.executeDatasetExecution(geoProbeLevelSpec(), {
       runId: "run_geo_probe_level",
       sourceAssets: { binding_geo: source },
       mappingAssets: {},
@@ -289,7 +290,8 @@ describe("TS Core E2E golden outcomes (I-07)", () => {
     expect(record.manifest?.schema_ref).toBe("gene_expression.probe_long.v1");
     const primaryPath = path.join(
       taskRoot,
-      "datasets_build",
+      "dataset_runs",
+      "run_geo_probe_level",
       "build_geo_probe_level",
       "merged",
       "primary.csv",
@@ -299,11 +301,11 @@ describe("TS Core E2E golden outcomes (I-07)", () => {
     );
   });
 
-  it("PARTIAL_SUCCESS: one valid + one rejected binding publishes with partial status", async () => {
+  it("publishes valid rows while reporting rejected source bindings", async () => {
     const { taskRoot, core } = await newCore();
     const good = await assetFor(taskRoot, "gdc/gdc_expression.tsv", "binding_gdc");
     const bad = await assetFor(taskRoot, "gdc/gdc_clinical.tsv", "binding_xena");
-    const record = await core.executeDatasetBuild(spec({
+    const record = await core.executeDatasetExecution(spec({
       source_bindings: [
         {
           schema_version: "1.0",
@@ -333,25 +335,25 @@ describe("TS Core E2E golden outcomes (I-07)", () => {
       runId: "run_e2e",
       piSessionId: "pi_1",
       toolCallId: "t1",
-      spec: spec({ build_id: "build_e2e_partial_b" }),
+      spec: spec({ requirement_id: "build_e2e_partial_b" }),
       sourceFiles: { binding_gdc: good.relative_path },
       mappingFiles: {},
     });
     expect(envelope.ok).toBe(true);
     if (envelope.ok) {
-      const data = envelope.data as { build_result?: { status: string } };
-      expect(data.build_result?.status).toBe("succeeded");
+      expect("publication" in envelope.data).toBe(true);
+      if (!("publication" in envelope.data)) throw new Error("expected publication response");
+      expect(envelope.data.publication_id).not.toBeNull();
     }
-    // Adapter-level coverage gap closure: the SAME partial build through the
-    // frozen bridge shape must map to ``partial_success`` (one good binding
-    // + one rejected binding), not just the record-level rejected_sources.
+    // The bridge returns the immutable Publication; source rejection remains
+    // execution diagnostics rather than a second terminal-result contract.
     const partialEnvelope = await adapter.execute({
       taskId: "task_e2e",
       runId: "run_e2e",
       piSessionId: "pi_1",
       toolCallId: "t2",
       spec: spec({
-        build_id: "build_e2e_partial_c",
+        requirement_id: "build_e2e_partial_c",
         source_bindings: [
           {
             schema_version: "1.0",
@@ -374,13 +376,9 @@ describe("TS Core E2E golden outcomes (I-07)", () => {
     });
     expect(partialEnvelope.ok).toBe(true);
     if (partialEnvelope.ok) {
-      const data = partialEnvelope.data as {
-        build_result?: { status: string; rejected_sources: string[] };
-        publication_id: string | null;
-      };
-      expect(data.build_result?.status).toBe("partial_success");
-      expect(data.build_result?.rejected_sources).toContain("binding_xena");
-      expect(data.publication_id).not.toBeNull();
+      expect("publication" in partialEnvelope.data).toBe(true);
+      if (!("publication" in partialEnvelope.data)) throw new Error("expected publication response");
+      expect(partialEnvelope.data.publication_id).not.toBeNull();
     }
   });
 
@@ -392,8 +390,8 @@ describe("TS Core E2E golden outcomes (I-07)", () => {
       "ncbi/gse178352/xena_matrix.tsv",
       "binding_xena",
     );
-    const record = await core.executeDatasetBuild(spec({
-      build_id: "build_confidence_lineage",
+    const record = await core.executeDatasetExecution(spec({
+      requirement_id: "build_confidence_lineage",
       source_bindings: [
         {
           schema_version: "1.0",
@@ -417,7 +415,7 @@ describe("TS Core E2E golden outcomes (I-07)", () => {
 
     expect(record.status).toBe("completed");
     const confidence = JSON.parse(await readFile(
-      path.join(taskRoot, "datasets_build", "build_confidence_lineage", "confidence_records.json"),
+      path.join(taskRoot, "dataset_runs", "run_confidence_lineage", "build_confidence_lineage", "confidence_records.json"),
       "utf8",
     )) as { batch_defaults: Array<{ batch_id: string; record_count: number }> };
     expect(confidence.batch_defaults.reduce((total, item) => total + item.record_count, 0)).toBe(
@@ -428,10 +426,10 @@ describe("TS Core E2E golden outcomes (I-07)", () => {
     ]);
   });
 
-  it("NO_DATA: every binding rejected surfaces a no_data build result", async () => {
+  it("NO_DATA: every binding rejected surfaces a typed no_data error", async () => {
     const { taskRoot, core } = await newCore();
     const bad = await assetFor(taskRoot, "gdc/gdc_clinical.tsv", "binding_gdc");
-    const record = await core.executeDatasetBuild(spec(), {
+    const record = await core.executeDatasetExecution(spec(), {
       runId: "run_e2e",
       sourceAssets: { binding_gdc: bad },
     });
@@ -449,8 +447,8 @@ describe("TS Core E2E golden outcomes (I-07)", () => {
     });
     expect(envelope.ok).toBe(false);
     if (!envelope.ok) {
-      expect(envelope.error.code).toBe("core_execution_error");
-      expect(envelope.error.details.build_result?.status).toBe("no_data");
+      expect(envelope.error.code).toBe("no_data");
+      expect(envelope.error.details.requirement_id).toBe("build_e2e");
     }
   });
 
@@ -496,7 +494,7 @@ describe("TS Core E2E golden outcomes (I-07)", () => {
       runId: "run_cancel",
       piSessionId: "pi_1",
       toolCallId: "t1",
-      spec: spec({ build_id: "build_cancel" }),
+      spec: spec({ requirement_id: "build_cancel" }),
       sourceFiles: { binding_gdc: uploaded.relative_path },
       mappingFiles: {},
       signal: controller.signal,
@@ -510,18 +508,18 @@ describe("build lock (I-04)", () => {
   it("does not strand the build lock when family admission throws", async () => {
     const { taskRoot, core } = await newCore();
     const asset = await assetFor(taskRoot, "gdc/gdc_expression.tsv", "binding_gdc");
-    const buildId = "build_family_admission_lock";
+    const requirementId = "build_family_admission_lock";
     const invalid = {
-      ...spec({ build_id: buildId }),
+      ...spec({ requirement_id: requirementId }),
       dataset_family: "missing_family",
     };
 
-    await expect(core.executeDatasetBuild(invalid, {
+    await expect(core.executeDatasetExecution(invalid, {
       runId: "run_invalid_family",
       sourceAssets: { binding_gdc: asset },
     })).rejects.toThrow(/dataset family 'missing_family' is not registered/);
 
-    const record = await core.executeDatasetBuild(spec({ build_id: buildId }), {
+    const record = await core.executeDatasetExecution(spec({ requirement_id: requirementId }), {
       runId: "run_valid_family",
       sourceAssets: { binding_gdc: asset },
     });
@@ -532,21 +530,21 @@ describe("build lock (I-04)", () => {
   it("refuses a second concurrent publisher for the same task+build", async () => {
     const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-lock-"));
     roots.push(taskRoot);
-    const lockRoot = path.join(taskRoot, "state", "build-locks");
-    const lease = await acquireBuildLock({ lockRoot }, "task_1", "build_1", "run_a");
+    const lockRoot = path.join(taskRoot, "state", "execution-locks");
+    const lease = await acquireExecutionLock({ lockRoot }, "task_1", "build_1", "run_a");
     await expect(
-      acquireBuildLock({ lockRoot, retryMs: 200 }, "task_1", "build_1", "run_b"),
+      acquireExecutionLock({ lockRoot, retryMs: 200 }, "task_1", "build_1", "run_b"),
     ).rejects.toThrow(/locked by another publisher/);
     await lease.release();
     // Releasable after release.
-    const next = await acquireBuildLock({ lockRoot }, "task_1", "build_1", "run_c");
+    const next = await acquireExecutionLock({ lockRoot }, "task_1", "build_1", "run_c");
     await next.release();
   });
 
   it("reclaims a stale lock whose owner pid is dead", async () => {
     const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-lock-"));
     roots.push(taskRoot);
-    const lockRoot = path.join(taskRoot, "state", "build-locks");
+    const lockRoot = path.join(taskRoot, "state", "execution-locks");
     // Dead owner: a pid that cannot exist.
     const { mkdir, writeFile } = await import("node:fs/promises");
     const lockDir = path.join(lockRoot, "task_1", "build_1.lock");
@@ -555,24 +553,24 @@ describe("build lock (I-04)", () => {
       path.join(lockDir, "owner.json"),
       JSON.stringify({ owner: "dead", pid: 99999999, acquired_at: new Date().toISOString() }),
     );
-    const lease = await acquireBuildLock({ lockRoot }, "task_1", "build_1", "run_a");
+    const lease = await acquireExecutionLock({ lockRoot }, "task_1", "build_1", "run_a");
     await lease.release();
   });
 });
 
 describe("executor operation timeout (I-03)", () => {
   it("records a typed timeout failure when an operation exceeds its budget", async () => {
-    const { DatasetBuildExecutor } = await import("../../src/dataset/runtime/executor.js");
+    const { DatasetExecutionExecutor } = await import("../../src/dataset/runtime/executor.js");
     const { buildOperationPlan } = await import("../../src/dataset/runtime/index.js");
     const { makeOperationOutput } = await import("../../src/dataset/runtime/index.js");
     const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-timeout-"));
     roots.push(taskRoot);
-    const executor = new DatasetBuildExecutor({
+    const executor = new DatasetExecutionExecutor({
       taskId: "task_t",
-      buildId: "build_t",
+      requirementId: "build_t",
       stateDir: path.join(taskRoot, "state"),
       taskRoot,
-      plan: buildOperationPlan(spec({ build_id: "build_t" })),
+      plan: buildOperationPlan(spec({ requirement_id: "build_t" })),
       runOperation: async (op) => {
         if (op.kind === "acquire") {
           return makeOperationOutput({ binding_id: op.category, source_id: "s", asset_id: "a" });
@@ -589,19 +587,19 @@ describe("executor operation timeout (I-03)", () => {
   });
 
   it("passes an operation-level AbortSignal on timeout", async () => {
-    const { DatasetBuildExecutor } = await import("../../src/dataset/runtime/executor.js");
+    const { DatasetExecutionExecutor } = await import("../../src/dataset/runtime/executor.js");
     const { buildOperationPlan } = await import("../../src/dataset/runtime/index.js");
     const { makeOperationOutput } = await import("../../src/dataset/runtime/index.js");
     const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-op-signal-"));
     roots.push(taskRoot);
     const cancellationSignal = new AbortController().signal;
     let observedAbort = false;
-    const executor = new DatasetBuildExecutor({
+    const executor = new DatasetExecutionExecutor({
       taskId: "task_t",
-      buildId: "build_t",
+      requirementId: "build_t",
       stateDir: path.join(taskRoot, "state"),
       taskRoot,
-      plan: buildOperationPlan(spec({ build_id: "build_t" })),
+      plan: buildOperationPlan(spec({ requirement_id: "build_t" })),
       runOperation: async (op, _upstream, signal) => {
         if (op.kind === "acquire") {
           return makeOperationOutput({ binding_id: op.category, source_id: "s", asset_id: "a" });
@@ -622,14 +620,14 @@ describe("executor operation timeout (I-03)", () => {
 });
 
 describe("core event → payload mapping (I-05)", () => {
-  it("maps build lifecycle and operation events onto stable payloads", async () => {
+  it("maps execution lifecycle and operation events onto stable payloads", async () => {
     const { coreEventToPayload } = await import("../../src/dataset/service/events.js");
     const payloads: EventPayload[] = [
-      coreEventToPayload({ type: "build_started" }, "build_1"),
+      coreEventToPayload({ type: "execution_started" }, "build_1"),
       coreEventToPayload({ type: "operation_started", operationId: "parse:b1", label: "解析", category: "b1", attempt: 1 }, "build_1"),
       coreEventToPayload({ type: "operation_completed", operationId: "parse:b1", label: null, category: "b1", status: "succeeded", outputDigest: "d1", reusedOperationAttemptId: null }, "build_1"),
       coreEventToPayload({ type: "operation_failed", operationId: "parse:b2", label: null, category: "b2", status: "failed", error: { code: "parse_error", message: "x" } }, "build_1"),
-      coreEventToPayload({ type: "build_completed" }, "build_1"),
+      coreEventToPayload({ type: "execution_completed" }, "build_1"),
     ];
     expect(payloads.map((payload) => payload.type)).toEqual([
       "operation_started",
@@ -638,6 +636,6 @@ describe("core event → payload mapping (I-05)", () => {
       "operation_failed",
       "operation_completed",
     ]);
-    expect(payloads[0]).toEqual({ type: "operation_started", operation_id: "build:build_1", label: "构建", category: "build" });
+    expect(payloads[0]).toEqual({ type: "operation_started", operation_id: "execution:build_1", label: "数据处理", category: "execution" });
   });
 });

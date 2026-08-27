@@ -17,13 +17,13 @@ import { dirname, join } from "node:path";
 import { deepEqual } from "./contract-parity.js";
 import type {
   DataBatch,
-  DatasetBuildSpec,
+  DatasetExecutionSpec,
   FieldMapping,
   SourceAsset,
 } from "../src/dataset/contracts/index.js";
 import {
   parseDataBatch,
-  parseDatasetBuildSpec,
+  parseDatasetExecutionSpec,
   parseFieldMapping,
   parseSourceAsset,
 } from "../src/dataset/contracts/index.js";
@@ -197,7 +197,7 @@ function parseAdapterBatch(options: {
   const adapter = getAdapter(options.adapterId);
   const asset = sourceAssetFromFixture(options.fixturesRoot, options.fixture);
   return adapter.parse(asset, join(options.fixturesRoot, options.fixture), {
-    buildId: "build_test",
+    requirementId: "build_test",
     bindingId: options.bindingId ?? "binding_1",
     schemaRef: "gene_expression.long.v1",
     outputDir: options.outputDir,
@@ -314,10 +314,10 @@ function withBatch(
   return { ...result, batch };
 }
 
-function geneSpec(bindingIds: string[]): DatasetBuildSpec {
-  return parseDatasetBuildSpec({
+function geneSpec(bindingIds: string[]): DatasetExecutionSpec {
+  return parseDatasetExecutionSpec({
     schema_version: "1.0",
-    build_id: "build_test",
+    requirement_id: "build_test",
     objective: "compare TP53 expression",
     dataset_family: "gene_expression",
     row_granularity: "gene_sample_measurement",
@@ -333,10 +333,10 @@ function geneSpec(bindingIds: string[]): DatasetBuildSpec {
   });
 }
 
-function probeSpec(): DatasetBuildSpec {
-  return parseDatasetBuildSpec({
+function probeSpec(): DatasetExecutionSpec {
+  return parseDatasetExecutionSpec({
     schema_version: "1.0",
-    build_id: "build_test",
+    requirement_id: "build_test",
     objective: "compare probe expression",
     dataset_family: "gene_expression",
     row_granularity: "probe_sample_measurement",

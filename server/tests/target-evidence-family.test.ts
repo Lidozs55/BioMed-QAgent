@@ -92,7 +92,8 @@ function result(
     schema_version: "1.0",
     result_manifest_id: `result_${tableId}`,
     task_id: "task_target_1",
-    build_id: "build_target_1",
+    run_id: "run_target_1",
+    requirement_id: "build_target_1",
     operation_id: `integrate_${tableId}`,
     operation_kind: "integrate",
     operation_attempt_id: `attempt_${tableId}`,
@@ -118,7 +119,6 @@ function result(
       implementation_digest: DIGEST,
     },
     commit: { state: "committed", commit_id: `commit_${tableId}`, committed_at: "2026-08-18T00:00:00Z" },
-    migration: { mode: "native", legacy_checkpoint_path: null, migrated_at: null },
   };
 }
 
@@ -158,7 +158,7 @@ async function validationRequest(evidenceFile = "evidence.valid.csv"): Promise<M
   tempRoots.push(workspaceRoot);
   return {
     task_id: "task_target_1",
-    build_id: "build_target_1",
+    requirement_id: "build_target_1",
     candidate: {
       candidate_id: "candidate_target_1",
       table_ids: tables.map((table) => table.definition.table_id),
@@ -285,7 +285,7 @@ describe("target evidence family", () => {
     });
     const candidate = assembleTargetEvidenceCandidate({
       taskId: "task_target_1",
-      buildId: "build_target_1",
+      requirementId: "build_target_1",
       datasetFamily: "target_evidence",
       rowGranularity: TARGET_EVIDENCE_ROW_GRANULARITY,
       tables: tableInputs,
@@ -296,7 +296,7 @@ describe("target evidence family", () => {
     expect(candidate.candidate_id).toMatch(/^candidate_[0-9a-f]{32}$/);
     expect(() => assembleTargetEvidenceCandidate({
       taskId: "task_target_1",
-      buildId: "build_target_1",
+      requirementId: "build_target_1",
       datasetFamily: "target_evidence",
       rowGranularity: TARGET_EVIDENCE_ROW_GRANULARITY,
       tables: tableInputs.filter((table) => table.tableId !== "evidence"),

@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted
+Superseded by ADR-041 - 2026-08-27. The API and state machine described below
+were removed without compatibility.
 
 ## Context
 

@@ -92,11 +92,11 @@ describe("Family Host dataset identity primitives", () => {
     }
   });
 
-  it("does not include buildId in dataset or revision identity", () => {
-    const first = { ...DATASET_KEY, buildId: "build_first" };
-    const second = { ...DATASET_KEY, buildId: "build_second" };
-    const firstRevision = { ...REVISION, datasetId: createDatasetId(first), buildId: first.buildId };
-    const secondRevision = { ...REVISION, datasetId: createDatasetId(second), buildId: second.buildId };
+  it("does not include requirementId in dataset or revision identity", () => {
+    const first = { ...DATASET_KEY, requirementId: "build_first" };
+    const second = { ...DATASET_KEY, requirementId: "build_second" };
+    const firstRevision = { ...REVISION, datasetId: createDatasetId(first), requirementId: first.requirementId };
+    const secondRevision = { ...REVISION, datasetId: createDatasetId(second), requirementId: second.requirementId };
 
     expect(createDatasetId(first)).toBe(createDatasetId(second));
     expect(createDatasetRevisionId(firstRevision)).toBe(createDatasetRevisionId(secondRevision));
@@ -105,8 +105,8 @@ describe("Family Host dataset identity primitives", () => {
   it("constructs revision-scoped sample composite identity without build identity", () => {
     const datasetId = createDatasetId(DATASET_KEY);
     const datasetRevisionId = createDatasetRevisionId({ datasetId, ...REVISION });
-    const first = { datasetRevisionId, sampleId: " S1 ", buildId: "build_first" };
-    const second = { datasetRevisionId, sampleId: "S1", buildId: "build_second" };
+    const first = { datasetRevisionId, sampleId: " S1 ", requirementId: "build_first" };
+    const second = { datasetRevisionId, sampleId: "S1", requirementId: "build_second" };
 
     const identity = createSampleIdentity(first);
     expect(identity).toEqual({

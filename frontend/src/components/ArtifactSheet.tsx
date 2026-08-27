@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { DownloadIcon } from "@phosphor-icons/react";
 
-import BuildResultsViewer from "@/components/BuildResultsViewer";
+import PublicationResultsViewer from "@/components/PublicationResultsViewer";
 import ResultsViewer from "@/components/ResultsViewer";
 import {
   Attachment,
@@ -44,7 +44,7 @@ interface ArtifactSheetProps {
   artifacts: readonly ArtifactProjection[];
   taskId: string;
   /** V2 build id — shows the manifest-driven build view instead of legacy files. */
-  buildId?: string | null;
+  publicationId?: string | null;
   download?: DownloadArtifact;
 }
 
@@ -53,7 +53,7 @@ export function ArtifactSheet({
   onOpenChange,
   artifacts,
   taskId,
-  buildId = null,
+  publicationId = null,
   download = triggerArtifactDownload,
 }: ArtifactSheetProps) {
   const { getArtifactUrl } = useAPI();
@@ -80,12 +80,12 @@ export function ArtifactSheet({
         <SheetHeader>
           <SheetTitle>任务产物</SheetTitle>
           <SheetDescription>
-            {buildId !== null ? "V2 数据构建结果" : `${artifacts.length} 个已验证文件`}
+            {publicationId !== null ? "V2 数据构建结果" : `${artifacts.length} 个已验证文件`}
           </SheetDescription>
         </SheetHeader>
-        {buildId !== null ? (
+        {publicationId !== null ? (
           <div className="min-h-0 min-w-0 flex-1 overflow-y-auto px-4 pb-4">
-            <BuildResultsViewer buildId={buildId} taskId={taskId} />
+            <PublicationResultsViewer publicationId={publicationId} taskId={taskId} />
           </div>
         ) : (
         <Tabs
@@ -154,7 +154,7 @@ export function ArtifactSheet({
           </TabsContent>
         </Tabs>
         )}
-        {buildId === null && (
+        {publicationId === null && (
         <div className="flex justify-end px-4 pb-4">
           <Button
             type="button"

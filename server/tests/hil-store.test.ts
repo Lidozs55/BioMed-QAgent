@@ -50,7 +50,7 @@ describe("DurableHILStore", () => {
     const request = await store.createRequest({
       task_id: taskId,
       run_id: runId,
-      build_id: null,
+      requirement_id: null,
       kind: "semantic_review",
       review_type: "field_mapping",
       blocking: true,
@@ -88,7 +88,7 @@ describe("DurableHILStore", () => {
     const request = await first.createRequest({
       task_id: taskId,
       run_id: runId,
-      build_id: null,
+      requirement_id: null,
       kind: "semantic_review",
       review_type: "field_mapping",
       blocking: true,
@@ -109,7 +109,7 @@ describe("DurableHILStore", () => {
     const firstFixture = await fixture();
     const secondFixture = await fixture();
     const baseInput = {
-      build_id: "build_1",
+      requirement_id: "build_1",
       kind: "data_review" as const,
       review_type: "vlm_extraction" as const,
       blocking: true,
@@ -155,7 +155,7 @@ describe("DurableHILStore", () => {
     await store.createRequest({
       task_id: taskId,
       run_id: runId,
-      build_id: "build_1",
+      requirement_id: "build_1",
       kind: "data_review",
       review_type: "vlm_extraction",
       blocking: false,
@@ -182,7 +182,7 @@ describe("DurableHILStore", () => {
     const request = await store.createRequest({
       task_id: taskId,
       run_id: runId,
-      build_id: null,
+      requirement_id: null,
       kind: "semantic_review",
       review_type: "unit_conversion",
       blocking: true,
@@ -216,7 +216,7 @@ describe("DurableHILStore", () => {
     const input = {
       task_id: taskId,
       run_id: runId,
-      build_id: null,
+      requirement_id: null,
       kind: "permission" as const,
       review_type: null,
       blocking: true,
@@ -240,7 +240,7 @@ describe("DurableHILStore", () => {
     const request = await store.createRequest({
       task_id: taskId,
       run_id: runId,
-      build_id: null,
+      requirement_id: null,
       kind: "data_review",
       review_type: "vlm_extraction",
       blocking: true,
@@ -273,7 +273,7 @@ describe("DurableHILStore", () => {
     const request = await store.createRequest({
       task_id: taskId,
       run_id: runId,
-      build_id: null,
+      requirement_id: null,
       kind: "permission",
       review_type: null,
       blocking: true,
@@ -311,7 +311,7 @@ describe("DurableHILStore", () => {
     const request = await store.createRequest({
       task_id: taskId,
       run_id: runId,
-      build_id: null,
+      requirement_id: null,
       kind: "permission",
       review_type: null,
       blocking: true,

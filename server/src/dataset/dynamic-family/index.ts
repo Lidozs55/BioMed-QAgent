@@ -39,7 +39,8 @@ export interface DynamicFamilyTableOutputs {
 
 export interface DynamicFamilyAssemblyInput {
   readonly taskId: string;
-  readonly buildId: string;
+  readonly runId?: string;
+  readonly requirementId: string;
   readonly familySpec: FamilySpec;
   readonly projection: Projection;
   readonly tableOutputs: Readonly<Record<string, DynamicFamilyTableOutputs>>;
@@ -340,7 +341,7 @@ export async function materializeDynamicFamilyCandidate(
     const data = requireCoreResult({
       result: outputs.data,
       taskId: input.taskId,
-      buildId: input.buildId,
+      requirementId: input.requirementId,
       operationKind: "integrate",
       outputKind: "integrated_table",
     });
@@ -369,10 +370,10 @@ export async function materializeDynamicFamilyCandidate(
       const results = outputs[kind].map((result) => requireCoreResult({
         result,
         taskId: input.taskId,
-        buildId: input.buildId,
+        requirementId: input.requirementId,
       }));
       allResults.push(...results);
-      return resultRefs({ results, taskId: input.taskId, buildId: input.buildId });
+      return resultRefs({ results, taskId: input.taskId, requirementId: input.requirementId });
     };
     provenance.push(...tableEvidence("provenance"));
     confidence.push(...tableEvidence("confidence"));
@@ -387,7 +388,7 @@ export async function materializeDynamicFamilyCandidate(
   const candidateBody = {
     schema_version: "1.0" as const,
     task_id: input.taskId,
-    build_id: input.buildId,
+    requirement_id: input.requirementId,
     dataset_family: spec.family_spec_id,
     row_granularity: projection.row_granularity,
     tables,

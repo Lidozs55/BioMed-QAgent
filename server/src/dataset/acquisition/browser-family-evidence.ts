@@ -6,7 +6,8 @@ import type { DynamicFamilyTableOutputs } from "../dynamic-family/index.js";
 
 export interface BrowserFamilyEvidenceInput {
   readonly taskId: string;
-  readonly buildId: string;
+  readonly runId?: string;
+  readonly requirementId: string;
   readonly evidenceRoot: string;
   readonly implementationDigest: string;
   readonly integratedTables: Readonly<Record<string, OperationResultManifest>>;
@@ -61,7 +62,8 @@ async function writeEvidence(
     schema_version: "1.0",
     result_manifest_id: `result_${identity}`,
     task_id: input.taskId,
-    build_id: input.buildId,
+    run_id: input.runId ?? "run_test",
+    requirement_id: input.requirementId,
     operation_id: `derive_browser_${identity}`,
     operation_kind: "derive",
     operation_attempt_id: `attempt_${identity}`,
@@ -81,6 +83,5 @@ async function writeEvidence(
       implementation_digest: input.implementationDigest,
     },
     commit: { state: "committed", commit_id: `commit_${identity}`, committed_at: new Date().toISOString() },
-    migration: { mode: "native", legacy_checkpoint_path: null, migrated_at: null },
   };
 }

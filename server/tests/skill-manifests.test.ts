@@ -165,7 +165,7 @@ describe(".pi/skills manifest integrity", () => {
 
   test("dataset-construction documents the dynamic prepare/submit receipt protocol", async () => {
     const skill = await readSkill("dataset-construction");
-    expect(skill.body).toMatch(/prepare_dynamic_family_build/);
+    expect(skill.body).toMatch(/prepare_dynamic_family_publication/);
     expect(skill.body).toMatch(/bind[\s\S]*descriptor digest/i);
     expect(skill.body).toMatch(/unchanged receipt/i);
     expect(skill.body).toMatch(/fresh prepare[\s\S]*(?:source|projection|transform)[\s\S]*change/i);
@@ -176,13 +176,13 @@ describe(".pi/skills manifest integrity", () => {
     expect(skill.body).toMatch(/switch immediately to\s+the fixed dynamic\s+protocol/i);
     const recoveryStep = skill.body.slice(skill.body.indexOf("6. Treat a failed"));
     expect(recoveryStep).toMatch(/fixed dynamic\s+protocol/i);
-    const prepare = recoveryStep.indexOf("prepare_dynamic_family_build");
-    const submit = recoveryStep.indexOf("submit_dynamic_family_build", prepare);
+    const prepare = recoveryStep.indexOf("prepare_dynamic_family_publication");
+    const submit = recoveryStep.indexOf("submit_dynamic_family_publication", prepare);
     expect(prepare).toBeGreaterThanOrEqual(0);
     expect(submit).toBeGreaterThan(prepare);
-    expect(recoveryStep.slice(prepare, submit + "submit_dynamic_family_build".length))
+    expect(recoveryStep.slice(prepare, submit + "submit_dynamic_family_publication".length))
       .toMatch(/descriptor digest/i);
-    expect(recoveryStep).not.toMatch(/switch immediately to\s+\n?\s*`submit_dynamic_family_build`/i);
+    expect(recoveryStep).not.toMatch(/switch immediately to\s+\n?\s*`submit_dynamic_family_publication`/i);
   });
 
   test("dataset construction stays source-neutral while source skills own provider rules", async () => {

@@ -12,7 +12,7 @@ const COMMIT = "6ad0c6a9";
 function ref(runId: string, evidenceClass: FamilyReleaseEvidenceRef["evidence_class"] = "trusted"): FamilyReleaseEvidenceRef {
   return {
     task_id: "task-release",
-    build_id: "build-expression",
+    requirement_id: "build-expression",
     run_id: runId,
     commit: COMMIT,
     digest: DIGEST_1,

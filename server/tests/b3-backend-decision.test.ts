@@ -49,7 +49,7 @@ function measuredDecision(
 function input(overrides: Partial<B3BackendDecisionInput> = {}): B3BackendDecisionInput {
   return {
     taskId: "task-b3-staging",
-    buildId: "build-b3-staging",
+    requirementId: "build-b3-staging",
     generation: 3,
     measured: measuredDecision(),
     factory: {
@@ -62,7 +62,7 @@ function input(overrides: Partial<B3BackendDecisionInput> = {}): B3BackendDecisi
     parityProof: { digest: "ab".repeat(32), ref: "b3-parity/evidence/1" },
     signal: new AbortController().signal,
     cleanup: { ownerId: "owner-b3-staging", cleanup: async () => {} },
-    owner: { taskId: "task-b3-staging", buildId: "build-b3-staging", generation: 3 },
+    owner: { taskId: "task-b3-staging", requirementId: "build-b3-staging", generation: 3 },
     ...overrides,
   };
 }
@@ -84,7 +84,7 @@ describe("C-T4/T11 B3 backend decision gate", () => {
     expect(exact).toEqual({
       outcome: "memory",
       taskId: "task-b3-staging",
-      buildId: "build-b3-staging",
+      requirementId: "build-b3-staging",
       generation: 3,
       estimatedHeapBytes: MEMORY_THRESHOLD,
       effectiveMemoryThresholdBytes: MEMORY_THRESHOLD,
@@ -110,7 +110,7 @@ describe("C-T4/T11 B3 backend decision gate", () => {
     expect(decision).toEqual({
       outcome: "disk",
       taskId: "task-b3-staging",
-      buildId: "build-b3-staging",
+      requirementId: "build-b3-staging",
       generation: 3,
       factoryId: "isolated-tuple-index.v1",
       parityProofRef: "b3-parity/evidence/1",
@@ -153,17 +153,17 @@ describe("C-T4/T11 B3 backend decision gate", () => {
       { name: "missing owner", overrides: { owner: null }, reason: "owner_mismatch" },
       {
         name: "owner task mismatch",
-        overrides: { owner: { taskId: "task-other", buildId: "build-b3-staging", generation: 3 } },
+        overrides: { owner: { taskId: "task-other", requirementId: "build-b3-staging", generation: 3 } },
         reason: "owner_mismatch",
       },
       {
         name: "owner build mismatch",
-        overrides: { owner: { taskId: "task-b3-staging", buildId: "build-other", generation: 3 } },
+        overrides: { owner: { taskId: "task-b3-staging", requirementId: "build-other", generation: 3 } },
         reason: "owner_mismatch",
       },
       {
         name: "late owner generation",
-        overrides: { owner: { taskId: "task-b3-staging", buildId: "build-b3-staging", generation: 2 } },
+        overrides: { owner: { taskId: "task-b3-staging", requirementId: "build-b3-staging", generation: 2 } },
         reason: "late_generation",
       },
       { name: "no cancel signal", overrides: { signal: null }, reason: "cancel_unavailable" },

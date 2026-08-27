@@ -173,7 +173,7 @@ describe("business tool bundle (P5-02/P5-12)", () => {
       expect(toolOwner(name)).toBe(bundle.ownerOf(name));
     }
     // P5-12 registration rule: curated names == registered + unavailable.
-    const expected = new Set([...SKILL_TOOL_NAMES].filter((name) => !["validate_dataset_build", "execute_dataset_build"].includes(name)));
+    const expected = new Set([...SKILL_TOOL_NAMES].filter((name) => !["validate_dataset_execution", "execute_dataset_execution"].includes(name)));
     for (const name of expected) {
       expect(names.has(name) || bundle.unavailableTools.has(name), `tool ${name} missing from the bundle`).toBe(true);
     }
@@ -186,9 +186,9 @@ describe("business tool bundle (P5-02/P5-12)", () => {
       "search_local_cache",
       "describe_local_cache",
       "get_cache_dataset",
-      "inspect_dataset_build_routes",
-      "prepare_dynamic_family_build",
-      "submit_dynamic_family_build",
+      "inspect_dataset_execution_routes",
+      "prepare_dynamic_family_publication",
+      "submit_dynamic_family_publication",
     ]));
     // Analysis tools register with the full bundle.
     for (const name of [

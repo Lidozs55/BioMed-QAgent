@@ -89,7 +89,7 @@ describe("classifyStep", () => {
     expect(classifyStep("generate_heatmap")).toBe("deterministic");
     expect(classifyStep("basic_statistics")).toBe("deterministic");
     expect(classifyStep("extract_pdf_tables")).toBe("deterministic");
-    expect(classifyStep("execute_dataset_build")).toBe("deterministic");
+    expect(classifyStep("execute_dataset_execution")).toBe("deterministic");
     expect(classifyStep("get_research_data_guidance")).toBe("deterministic");
   });
 

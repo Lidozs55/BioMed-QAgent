@@ -4,7 +4,6 @@ import type {
   OperationResultFileReceipt,
   OperationResultKind,
   OperationResultManifest,
-  OperationResultMigration,
   OperationResultOutputKind,
   OperationResultStatus,
 } from "@biomed/contracts";
@@ -34,12 +33,11 @@ const STATUSES = new Set<OperationResultStatus>(["succeeded", "failed", "cancell
 const FILE_KEYS = ["relative_path", "size_bytes", "sha256"] as const;
 const CLOSURE_KEYS = ["input_asset_ids", "upstream_result_manifest_ids", "parameter_digest", "implementation_digest"] as const;
 const COMMIT_KEYS = ["state", "commit_id", "committed_at"] as const;
-const MIGRATION_KEYS = ["mode", "legacy_checkpoint_path", "migrated_at"] as const;
 const MANIFEST_KEYS = [
-  "schema_version", "result_manifest_id", "task_id", "build_id", "operation_id",
+  "schema_version", "result_manifest_id", "task_id", "run_id", "requirement_id", "operation_id",
   "operation_kind", "operation_attempt_id", "attempt", "status", "input_digest",
   "parameter_digest", "implementation_digest", "output_digest", "output_kind",
-  "output_summary", "output_files", "dependency_closure", "commit", "migration",
+  "output_summary", "output_files", "dependency_closure", "commit",
 ] as const;
 
 function enumValue<T extends string>(value: unknown, values: Set<T>, name: string): T {
@@ -94,25 +92,16 @@ function parseCommit(value: unknown): OperationResultCommitReceipt {
   };
 }
 
-function parseMigration(value: unknown): OperationResultMigration {
-  const record = assertRecord(value, "OperationResultMigration");
-  assertExactKeys(record, MIGRATION_KEYS, "OperationResultMigration");
-  if (record.mode !== "native" && record.mode !== "legacy_read_only") throw new TypeError("OperationResultMigration.mode is invalid");
-  const path = record.legacy_checkpoint_path === null ? null : assertRelativePath(record.legacy_checkpoint_path, "OperationResultMigration.legacy_checkpoint_path");
-  const migratedAt = record.migrated_at === null ? null : assertIsoDateTime(record.migrated_at, "OperationResultMigration.migrated_at");
-  if (record.mode === "native" && (path !== null || migratedAt !== null)) throw new TypeError("native result must not carry legacy migration fields");
-  if (record.mode === "legacy_read_only" && (path === null || migratedAt === null)) throw new TypeError("legacy result requires read-only checkpoint metadata");
-  return { mode: record.mode, legacy_checkpoint_path: path, migrated_at: migratedAt };
-}
-
-export function parseOperationResultManifest(value: unknown, expectedTaskId?: string, expectedBuildId?: string): OperationResultManifest {
+export function parseOperationResultManifest(value: unknown, expectedTaskId?: string, expectedRunId?: string, expectedRequirementId?: string): OperationResultManifest {
   const record = assertRecord(value, "OperationResultManifest");
   assertExactKeys(record, MANIFEST_KEYS, "OperationResultManifest");
   if (record.schema_version !== "1.0") throw new TypeError("OperationResultManifest.schema_version must be 1.0");
   const taskId = assertSafeId(record.task_id, "OperationResultManifest.task_id");
-  const buildId = assertSafeId(record.build_id, "OperationResultManifest.build_id");
+  const runId = assertSafeId(record.run_id, "OperationResultManifest.run_id");
+  const requirementId = assertSafeId(record.requirement_id, "OperationResultManifest.requirement_id");
   if (expectedTaskId !== undefined && taskId !== expectedTaskId) throw new TypeError("operation result belongs to a different task");
-  if (expectedBuildId !== undefined && buildId !== expectedBuildId) throw new TypeError("operation result belongs to a different build");
+  if (expectedRunId !== undefined && runId !== expectedRunId) throw new TypeError("operation result belongs to a different run");
+  if (expectedRequirementId !== undefined && requirementId !== expectedRequirementId) throw new TypeError("operation result belongs to a different requirement");
   const status = enumValue(record.status, STATUSES, "OperationResultManifest.status");
   const operationKind = enumValue(record.operation_kind, KINDS, "OperationResultManifest.operation_kind");
   const outputKind = enumValue(record.output_kind, OUTPUT_KINDS, "OperationResultManifest.output_kind");
@@ -134,7 +123,8 @@ export function parseOperationResultManifest(value: unknown, expectedTaskId?: st
     schema_version: "1.0",
     result_manifest_id: assertSafeId(record.result_manifest_id, "OperationResultManifest.result_manifest_id"),
     task_id: taskId,
-    build_id: buildId,
+    run_id: runId,
+    requirement_id: requirementId,
     operation_id: operationIdentifier(record.operation_id, "OperationResultManifest.operation_id"),
     operation_kind: operationKind,
     operation_attempt_id: assertSafeId(record.operation_attempt_id, "OperationResultManifest.operation_attempt_id"),
@@ -149,6 +139,5 @@ export function parseOperationResultManifest(value: unknown, expectedTaskId?: st
     output_files: outputFiles,
     dependency_closure: dependencyClosure,
     commit: parseCommit(record.commit),
-    migration: parseMigration(record.migration),
   };
 }
