@@ -381,7 +381,7 @@ describe("dynamic family build tool boundary", () => {
             error_code: "http_client_error",
             attempts: 1,
             binding_id: "binding_prevalence",
-            url: "https://gmrepo.humangut.info/api/getAssociatedSpeciesByMeshID/",
+            url: "https://gmrepo.humangut.info/api/getPhenotypesAndAbundanceSummaryOfAAssociatedTaxon/",
             endpoint_host: "gmrepo.humangut.info",
             elapsed_ms: 118,
             timeout_stage: null,

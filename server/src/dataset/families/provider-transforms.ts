@@ -30,7 +30,7 @@ const GUT_PROVIDER_ADAPTERS = new Map<string, ReadonlySet<string>>([
     "gut_microbiome.ncbi_taxonomy_efetch_xml.v1",
   ])],
   ["gmrepo.files.v1", new Set([
-    "gut_microbiome.gmrepo_associated_species_json.v1",
+    "gut_microbiome.gmrepo_taxon_phenotypes_json.v1",
   ])],
 ]);
 
@@ -103,7 +103,7 @@ function assertGutBinding(input: ProviderCarrierTransformInput): void {
     registered_gut_microbiome_differential_abundance_xlsx: new Set(["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"]),
     "gut_microbiome.ncbi_taxonomy_esearch_json.v1": new Set(["application/json", "text/plain"]),
     "gut_microbiome.ncbi_taxonomy_efetch_xml.v1": new Set(["application/xml", "text/xml", "text/plain"]),
-    "gut_microbiome.gmrepo_associated_species_json.v1": new Set(["application/json"]),
+    "gut_microbiome.gmrepo_taxon_phenotypes_json.v1": new Set(["application/json"]),
   };
   if (!mediaTypesByAdapter[input.adapterId]?.has(input.receipt.media_type.toLowerCase())) {
     fail(`adapter '${input.adapterId}' does not accept media type '${input.receipt.media_type}'`);

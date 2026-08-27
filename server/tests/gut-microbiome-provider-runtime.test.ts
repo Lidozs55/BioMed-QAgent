@@ -20,6 +20,8 @@ import { providerCarrierBinding } from "../src/dataset/runtime/provider-bindings
 import { SourceAssetRegistry } from "../src/runtime/source-assets/registry.js";
 
 const STUDY_ID = "MGYS00000001";
+/** NCBI taxid used by the taxonomy + GMRepo fixtures so relations close. */
+const STUDY_TAXON_ID = 1234;
 const roots: string[] = [];
 
 function sourceAssetFromReceipt(receipt: Awaited<ReturnType<SourceAssetRegistry["register"]>>): SourceAsset {
@@ -126,8 +128,8 @@ function spec(options: { requirementId: string; wrongProvider?: boolean; include
       binding_id: "binding_prevalence",
       source: "gmrepo",
       acquisition: { schema_version: "1.0" as const, mode: "builtin" as const, provider_id: providerForGmrepo, recipe_id: null, recipe_version: null },
-      adapter_id: "gut_microbiome.gmrepo_associated_species_json.v1",
-      accession: "D006262",
+      adapter_id: "gut_microbiome.gmrepo_taxon_phenotypes_json.v1",
+      accession: String(STUDY_TAXON_ID),
       parameters: {},
     },
   ];
@@ -184,8 +186,9 @@ async function registerCarriers(
   ), "text/tab-separated-values");
   const differential = await writeCarrier(taskRoot, "differential.xlsx", xlsxCarrier(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
   const prevalence = await writeCarrier(taskRoot, "prevalence.json", Buffer.from(JSON.stringify({
-    nr_valid_samples: 4,
-    associated_species: [{ ncbi_taxon_id: 1234, samples: 2 }],
+    phenotypes_associated_with_taxon: [
+      { disease: "D006262", term: "Health", ncbi_taxon_id: STUDY_TAXON_ID, samples: 2, all_samples: 4 },
+    ],
   })), "application/json");
   const ncbiEsearch = await writeCarrier(taskRoot, "taxonomy-esearch.json", Buffer.from(JSON.stringify({
     esearchresult: { idlist: ["1234"], querytranslation: "Blautia obeum[SCIN]" },
@@ -217,8 +220,8 @@ describe("Gold10 gut microbiome provider runtime dispatch", () => {
     expect(providerCarrierBinding("gut_microbiome", "mgnify", "registered_gut_microbiome_differential_abundance_xlsx", undefined, "mgnify.files.v1")).not.toBeNull();
     expect(providerCarrierBinding("gut_microbiome", "ncbi_taxonomy", "gut_microbiome.ncbi_taxonomy_esearch_json.v1", undefined, "ncbi.taxonomy.files.v1")).not.toBeNull();
     expect(providerCarrierBinding("gut_microbiome", "ncbi_taxonomy", "gut_microbiome.ncbi_taxonomy_efetch_xml.v1", undefined, "ncbi.taxonomy.files.v1")).not.toBeNull();
-    expect(providerCarrierBinding("gut_microbiome", "gmrepo", "gut_microbiome.gmrepo_associated_species_json.v1", undefined, "gmrepo.files.v1")).not.toBeNull();
-    expect(providerCarrierBinding("gut_microbiome", "gmrepo", "gut_microbiome.gmrepo_associated_species_json.v1", undefined, "mgnify.files.v1")).toBeNull();
+    expect(providerCarrierBinding("gut_microbiome", "gmrepo", "gut_microbiome.gmrepo_taxon_phenotypes_json.v1", undefined, "gmrepo.files.v1")).not.toBeNull();
+    expect(providerCarrierBinding("gut_microbiome", "gmrepo", "gut_microbiome.gmrepo_taxon_phenotypes_json.v1", undefined, "mgnify.files.v1")).toBeNull();
     expect(providerCarrierBinding("gut_microbiome", "mgnify", "registered_gut_microbiome_study_json", "gut_microbiome.taxon_records.v1", "mgnify.files.v1")).toBeNull();
   });
 

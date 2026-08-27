@@ -647,7 +647,7 @@ export function gutMicrobiomeFamilyDefinition(): DatasetFamilyDefinition {
     { source: "mgnify", adapterId: "registered_gut_microbiome_differential_abundance_xlsx", schemaRef: "gut_microbiome.differential_abundance.v1", required_entity_groups: [GUT_STUDY_ENTITY_GROUP] },
     { source: "ncbi_taxonomy", adapterId: "gut_microbiome.ncbi_taxonomy_esearch_json.v1", schemaRef: "gut_microbiome.taxon_records.v1", required_entity_groups: [GUT_STUDY_ENTITY_GROUP] },
     { source: "ncbi_taxonomy", adapterId: "gut_microbiome.ncbi_taxonomy_efetch_xml.v1", schemaRef: "gut_microbiome.taxon_records.v1", required_entity_groups: [GUT_STUDY_ENTITY_GROUP] },
-    { source: "gmrepo", adapterId: "gut_microbiome.gmrepo_associated_species_json.v1", schemaRef: "gut_microbiome.reference_prevalence.v1", required_entity_groups: [GUT_STUDY_ENTITY_GROUP] },
+    { source: "gmrepo", adapterId: "gut_microbiome.gmrepo_taxon_phenotypes_json.v1", schemaRef: "gut_microbiome.reference_prevalence.v1", required_entity_groups: [GUT_STUDY_ENTITY_GROUP] },
   ] as const;
   return registeredFamily({
     id: GUT_MICROBIOME_FAMILY_ID,

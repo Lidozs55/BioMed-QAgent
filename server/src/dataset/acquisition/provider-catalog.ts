@@ -46,7 +46,7 @@ export const CORE_ACQUISITION_PROVIDER_DESCRIPTORS: readonly CoreAcquisitionProv
   descriptor(EXTENDED_PROVIDER_IDS.openfda, "openfda_faers", "fixed", "One drug generic name per binding.", "utf8", "openfda"),
   descriptor(EXTENDED_PROVIDER_IDS.gwasCatalog, "gwas_catalog", "fixed", "One GCST study accession or rsID per binding.", "utf8", null),
   descriptor(EXTENDED_PROVIDER_IDS.europePmcSupplementary, "europepmc_supplementary", "fixed", "One PMCID per binding; retrieves the official supplementary ZIP carrier.", "binary_archive", null),
-  descriptor(GMREPO_FILES_PROVIDER_ID, "gmrepo", "fixed", "One MeSH disease ID per binding; POSTs the official GMRepo API for associated-species prevalence."),
+  descriptor(GMREPO_FILES_PROVIDER_ID, "gmrepo", "fixed", "One numeric NCBI taxon ID per binding; POSTs the official GMRepo API for that taxon's phenotype prevalence summary."),
   descriptor(GOLD9_PROVIDER_IDS.orphanetProduct1, "orphanet_en_product1", "fixed", "The fixed en_product1 Orphanet XML response form.", "utf8", null),
   descriptor(GOLD9_PROVIDER_IDS.orphanetProduct6, "orphanet_en_product6", "fixed", "The fixed en_product6 Orphanet XML response form.", "utf8", null),
   descriptor(GOLD9_PROVIDER_IDS.hgncApproved, "hgnc_approved", "fixed", "The current HGNC approved complete-set TSV.", "utf8", null),

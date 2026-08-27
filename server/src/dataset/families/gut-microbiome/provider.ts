@@ -239,24 +239,27 @@ function parseNcbiXml(request: GutMicrobiomeCarrierRequest, content: string): Gu
 }
 
 function parseGmrepoJson(request: GutMicrobiomeCarrierRequest, root: Record<string, unknown>): GutMicrobiomeCarrierRows {
-  const sourceRow = source(request, "gmrepo", "gmrepo_associated_species_json");
-  const taxa = array(root.associated_species, "associated_species").map((value, index): GutMicrobiomeReferencePrevalenceInput => {
-    const item = record(value, `associated_species[${index}]`);
-    const samples = integerValue(item.samples, `associated_species[${index}].samples`);
-    const total = integerValue(root.nr_valid_samples, "nr_valid_samples");
+  const sourceRow = source(request, "gmrepo", "gmrepo_taxon_phenotypes_json");
+  // Rows belong to exactly one queried taxon by construction: the fixed
+  // provider POSTs ``{"ncbi_taxon_id": <binding accession>}`` upstream, so
+  // the carrier needs no separate study/taxon equality check here.
+  const rows = array(root.phenotypes_associated_with_taxon, "phenotypes_associated_with_taxon").map((value, index): GutMicrobiomeReferencePrevalenceInput => {
+    const item = record(value, `phenotypes_associated_with_taxon[${index}]`);
+    const samples = integerValue(item.samples, `phenotypes_associated_with_taxon[${index}].samples`);
+    const total = integerValue(item.all_samples, `phenotypes_associated_with_taxon[${index}].all_samples`);
     if (total < 1 || samples < 0 || samples > total) fail("GMRepo sample counts are inconsistent");
     return {
       study_id: request.studyId,
-      taxon_id: String(integerValue(item.ncbi_taxon_id, `associated_species[${index}].ncbi_taxon_id`)),
-      reference_group: "gmrepo_reference",
+      taxon_id: String(integerValue(item.ncbi_taxon_id, `phenotypes_associated_with_taxon[${index}].ncbi_taxon_id`)),
+      reference_group: `gmrepo:${text(item.term ?? item.disease, `phenotypes_associated_with_taxon[${index}].term`)} (${text(item.disease, `phenotypes_associated_with_taxon[${index}].disease`)})`,
       prevalence: samples / total,
       reference_sample_count: total,
       source_id: sourceRow.source_id,
       source_asset_id: request.assetId,
-      source_locator: locator(request, `/associated_species/${index}`, JSON.stringify(item)),
+      source_locator: locator(request, `/phenotypes_associated_with_taxon/${index}`, JSON.stringify(item)),
     };
   });
-  return { studies: [], taxa: [], differentialAbundances: [], referencePrevalences: taxa, sources: [sourceRow] };
+  return { studies: [], taxa: [], differentialAbundances: [], referencePrevalences: rows, sources: [sourceRow] };
 }
 
 function parseDifferentialXlsx(request: GutMicrobiomeCarrierRequest, bytes: Uint8Array): GutMicrobiomeCarrierRows {
@@ -338,8 +341,8 @@ export function parseGutMicrobiomeCarrier(request: GutMicrobiomeCarrierRequest):
     case "gut_microbiome.ncbi_taxonomy_esearch_json.v1":
       if (document.esearchresult === undefined) fail("NCBI ESearch JSON must contain esearchresult");
       return parseNcbiJson(request, document);
-    case "gut_microbiome.gmrepo_associated_species_json.v1":
-      if (document.associated_species === undefined) fail("GMRepo JSON must contain associated_species");
+    case "gut_microbiome.gmrepo_taxon_phenotypes_json.v1":
+      if (document.phenotypes_associated_with_taxon === undefined) fail("GMRepo JSON must contain phenotypes_associated_with_taxon");
       return parseGmrepoJson(request, document);
     default:
       fail(`JSON carrier adapter '${request.adapterId ?? "missing"}' is not promoted`);
