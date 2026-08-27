@@ -22,11 +22,25 @@ export interface SolidFlow {
   acquire: SolidStep[];
 }
 
-export interface SkillEntry {
+export interface ToolDocEntry {
   name: string;
-  slug: string;
   description: string;
+  parametersSource: string;
+}
+
+export interface ToolFactoryEntry {
+  name: string;
+  signature: string;
+}
+
+export interface ToolModuleEntry {
+  moduleName: string;
+  slug: string;
+  purpose: string;
   sourcePath: string;
+  imports: string[];
+  factories: ToolFactoryEntry[];
+  tools: ToolDocEntry[];
 }
 
 export type StepKind = "deterministic" | "acquire" | "skip";
@@ -49,10 +63,8 @@ export function renderSkillCandidate(
   meta: { taskId?: string; runId?: string },
 ): string;
 
-export function parseFrontmatter(text: string): { description: string; body: string };
+export function scanToolModules(toolsRoot: string): Promise<ToolModuleEntry[]>;
 
-export function scanSkills(skillsRoot: string): Promise<SkillEntry[]>;
+export function renderToolkitDoc(entry: ToolModuleEntry): string;
 
-export function renderToolkitDoc(filepath: string, skillsRoot: string): Promise<string>;
-
-export function renderToolkitIndex(entries: SkillEntry[]): string;
+export function renderToolkitIndex(entries: ToolModuleEntry[]): string;

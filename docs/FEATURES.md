@@ -168,8 +168,9 @@ BioMed-QAgent 是一个**生物医学数据智能检索与整合系统**：用�
   配套 `server/src/agent/tools/` 为 TS 业务工具实现，稳定名称映射在
   `server/src/agent/skills/skill-tool-map.ts`；
 - **Skill 自迭代闭环**（`scripts/solidify-run.mjs`）：执行完成后把工具流还原为
-  **可复用 `.mjs` 脚本候选 + SKILL.md 候选 + 分析报告**（`--toolkit` 可生成独立
-  工具包文档）；生产路径固化需人工评审（详见
+  **可复用 `.mjs` 脚本候选 + SKILL.md 候选 + 分析报告**；`--toolkit` 从
+  `server/src/agent/tools/*.ts` 的静态工具元数据生成用途、参数、返回值、依赖和调用
+  骨架，不重复摘要 `SKILL.md`。生产路径固化需人工评审（详见
   [architecture/skill-self-iteration.md](architecture/skill-self-iteration.md)）。
 - **历史个性化 Skill 迭代**：设置页可选择一个 curated Skill 与最近已结束任务，
   由当前配置模型提炼带证据引用的用户偏好、数据处理方式和完整 SKILL.md 候选；

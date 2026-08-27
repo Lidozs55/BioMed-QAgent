@@ -35,8 +35,6 @@
   - 验收：变更有可复现实验对照，不引入 Gold case 特判，不放宽 Core 门禁。
 - [ ] **模型设置分页与搜索。** 为供应商/模型列表增加后端分页和搜索，并更新前端调用。
   - 验收：契约先进入 `@biomed/contracts`；边界、空页和 hostile-wire 用例有测试。
-- [ ] **可拆卸工具包纠错。** `scripts/solidify-run.mjs --toolkit` 应为 `server/src/agent/tools/` 的 TS 工具生成独立调用说明，而不是重复摘要 `SKILL.md`。
-  - 验收：输出包含用途、参数、返回值、依赖和独立调用方式，并有确定性 fixture 测试。
 - [ ] **Trait association / genomic annotation 可复用 family 闭包。** 按 [`architecture/trait-association-and-genomic-annotation-design.md`](architecture/trait-association-and-genomic-annotation-design.md) 实现来源无关的 projections 与 GWAS Catalog、supplementary archive、RefSNP 通用 providers；provider 与 family 保持多对多。
   - 验收：至少一个非 Alzheimer trait、两个不同数据库证明复用；variant/gene/region 粒度分别构建；不兼容 assembly、effect scale、allele/model 或 mapping method 的输入 fail closed；正式 Publication 通过 provenance/B3/ProductAssessment/Artifact hash 门。
 

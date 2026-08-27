@@ -3,7 +3,8 @@
 > Reference for the per-provider parameter profiles and model catalog data.
 > Current implementation (TypeScript): `server/src/settings/model-registry/` and
 > `packages/contracts/src/model-registry.ts`; the legacy `backend/` paths were
-> removed in Phase 8. Facts below were verified against official docs on 2026-08-24.
+> removed in Phase 8. Catalog facts were verified against official docs on
+> 2026-08-24; the Qwen3.8 runtime pitfall below was reproduced on 2026-08-27.
 
 ## Model catalog maintenance (verified 2026-08-24)
 
@@ -90,6 +91,46 @@
   JSON string (the registry/editor representation) to an object before the
   request, and `top_logprobs` is omitted unless `logprobs` is true — both are
   required to avoid OpenAI-compatible providers (e.g. DeepSeek) returning 400.
+
+### Confirmed runtime pitfall: Qwen3.8 thinking parameters (2026-08-27)
+
+Qwen3.8 must not receive `reasoning_effort` together with
+`enable_thinking: false`. DashScope rejects that combination with HTTP 400,
+`invalid_parameter_error`, and the message
+`'reasoning_effort' must be 'none' when 'enable_thinking' is false`.
+
+This was reproduced against the same regional DashScope MaaS endpoint and API
+key with both `qwen3.8-27b` and `qwen3.8-flash`:
+
+- provider model discovery returned HTTP 200 and listed both models;
+- a minimal chat request returned HTTP 200;
+- `reasoning_effort: "xhigh"` without `enable_thinking` returned HTTP 200;
+- adding `enable_thinking: false` made both models return the same HTTP 400.
+
+The application can currently produce the invalid pair through two overlapping
+configuration surfaces. A maintained model may retain both fields in `params`,
+while the global `advanced.thinking_mode` setting is also translated to
+`enable_thinking`. In addition, `usesDashScopeQwen` recognizes only the public
+`dashscope.aliyuncs.com/compatible-mode/v1` hostname. Regional MaaS endpoints
+such as `*.cn-beijing.maas.aliyuncs.com/compatible-mode/v1` therefore bypass
+the DashScope normalization branch even when the provider preset is
+`dashscope`.
+
+Until the adapter is made model-family-aware, use one Qwen3.8 control surface:
+send `reasoning_effort` and omit `enable_thinking` entirely. Do not apply this
+workaround indiscriminately to older Qwen families: Qwen3.5-Qwen3.7 use
+`enable_thinking` plus `thinking_budget` according to their own profile.
+Provider normalization must ultimately use provider identity and model family,
+not an exact hostname, and must enforce mutually exclusive parameters before
+the payload reaches Pi.
+
+The durable event adapter currently collapses the upstream provider error to
+`Pi turn failed` / `internal_error`. A run that fails immediately after
+`context_usage`, before any tool call, should therefore be checked with a
+credential-safe minimal request matrix before it is attributed to model access,
+networking, or Dataset Core. In the confirmed incident, DeepSeek worked because
+its payload did not receive the conflicting DashScope thinking fields; the
+DashScope account, regional endpoint, and model entitlement were all healthy.
 
 ## Verified parameter facts (2026-08-24)
 
