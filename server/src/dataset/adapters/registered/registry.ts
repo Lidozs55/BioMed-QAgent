@@ -15,9 +15,36 @@ function cloneSchema(schema: DatasetSchemaV2): DatasetSchemaV2 {
 }
 
 function cloneParser(parser: RegisteredTableParserDefinition): RegisteredTableParserDefinition {
-  return parser.format === "json"
-    ? { ...parser, media_types: [...parser.media_types], limits: { ...parser.limits }, fields: parser.fields.map((field) => ({ ...field })) }
-    : { ...parser, media_types: [...parser.media_types], limits: { ...parser.limits }, fields: parser.fields.map((field) => ({ ...field })) };
+  if (parser.format === "json") {
+    return {
+      ...parser,
+      media_types: [...parser.media_types],
+      limits: { ...parser.limits },
+      fields: parser.fields.map((field) => ({ ...field })),
+    };
+  }
+  if (parser.format === "xlsx") {
+    return {
+      ...parser,
+      media_types: [...parser.media_types],
+      limits: { ...parser.limits },
+      fields: parser.fields.map((field) => ({ ...field })),
+    };
+  }
+  return parser.layout === "sample_matrix" && parser.sample_matrix !== undefined
+    ? {
+        ...parser,
+        media_types: [...parser.media_types],
+        limits: { ...parser.limits },
+        fields: parser.fields.map((field) => ({ ...field })),
+        sample_matrix: { ...parser.sample_matrix },
+      }
+    : {
+        ...parser,
+        media_types: [...parser.media_types],
+        limits: { ...parser.limits },
+        fields: parser.fields.map((field) => ({ ...field })),
+      };
 }
 
 /**

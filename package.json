@@ -12,6 +12,7 @@
     "typecheck": "pnpm -r --if-present typecheck",
     "build": "pnpm -r --if-present build",
     "docs:check": "node scripts/check-doc-links.mjs",
+    "gold:supervise": "node scripts/gold-formal-supervisor.mjs",
     "prepare": "husky",
     "commit": "cz"
   },

@@ -175,6 +175,8 @@ describe("family publication assembly", () => {
     expect(registry.list()).toEqual([
       "bioactivity_measurement",
       "gene_expression",
+      "gut_microbiome",
+      "inherited_disease_gene_evidence",
       "literature_evidence",
       "protein_structure",
       "target_evidence",

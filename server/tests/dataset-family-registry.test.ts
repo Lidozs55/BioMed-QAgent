@@ -15,6 +15,8 @@ describe("DatasetFamilyRegistry", () => {
     expect(registry.list()).toEqual([
       "bioactivity_measurement",
       "gene_expression",
+      "gut_microbiome",
+      "inherited_disease_gene_evidence",
       "literature_evidence",
       "protein_structure",
       "target_evidence",
@@ -28,6 +30,8 @@ describe("DatasetFamilyRegistry", () => {
       "variant_evidence.assertion.v1",
       "protein_structure.structure.v1",
       "bioactivity_measurement.activity.v1",
+      "gut_microbiome.taxon_records.v1",
+      "inherited_disease_gene_evidence.gene_disease.v1",
     ]));
     expect(registry.validationProfileRefs()).toEqual(expect.arrayContaining([
       "gene_expression.probe_release.v1",
@@ -37,6 +41,8 @@ describe("DatasetFamilyRegistry", () => {
       "variant_evidence.release.v1",
       "protein_structure.release.v1",
       "bioactivity_measurement.release.v1",
+      "gut_microbiome.release.v1",
+      "inherited_disease_gene_evidence.release.v1",
     ]));
     expect(registry.get("gene_expression")).toMatchObject({
       id: "gene_expression",
@@ -70,6 +76,13 @@ describe("DatasetFamilyRegistry", () => {
         chains: { schema_id: "protein_structure.chain.v1" },
         ligands: { schema_id: "protein_structure.ligand.v1" },
         sources: { schema_id: "protein_structure.source.v1" },
+      });
+    expect(Object.fromEntries(registeredTableSchemasById(registry.get("inherited_disease_gene_evidence"))))
+      .toMatchObject({
+        gene_records: { schema_id: "inherited_disease_gene_evidence.gene.v1" },
+        disease_records: { schema_id: "inherited_disease_gene_evidence.disease.v1" },
+        gene_disease_records: { schema_id: "inherited_disease_gene_evidence.gene_disease.v1" },
+        gene_evidence_crosswalk: { schema_id: "inherited_disease_gene_evidence.gene_evidence_crosswalk.v1" },
       });
     expect(Object.fromEntries(registeredTableSchemasById(registry.get("bioactivity_measurement"))))
       .toMatchObject({

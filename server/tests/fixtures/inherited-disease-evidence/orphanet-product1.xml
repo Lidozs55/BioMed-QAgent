@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<JDBOR>
+  <DisorderList>
+    <Disorder>
+      <OrphaCode>101</OrphaCode>
+      <Name>Non-Gold immune deficiency</Name>
+      <DisorderGeneAssociationList>
+        <DisorderGeneAssociation>
+          <Gene>
+            <Symbol>NGD1</Symbol>
+            <Name>Non-Gold deficiency gene 1</Name>
+            <ExternalReferenceList>
+              <ExternalReference><Source>HGNC</Source><Reference>12345</Reference></ExternalReference>
+            </ExternalReferenceList>
+          </Gene>
+          <AssociationType>Disease-causing germline mutation(s) in</AssociationType>
+          <DisorderGeneAssociationStatus>Validated</DisorderGeneAssociationStatus>
+        </DisorderGeneAssociation>
+      </DisorderGeneAssociationList>
+    </Disorder>
+  </DisorderList>
+</JDBOR>

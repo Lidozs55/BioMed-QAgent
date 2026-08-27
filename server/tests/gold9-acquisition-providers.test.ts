@@ -34,7 +34,7 @@ const cases = [
   [GOLD9_PROVIDER_IDS.orphanetProduct1, "orphanet_en_product1", "en_product1", "https://www.orphadata.com/data/xml/en_product1.xml", "en_product1.xml", "application/xml"],
   [GOLD9_PROVIDER_IDS.orphanetProduct6, "orphanet_en_product6", "en_product6", "https://www.orphadata.com/data/xml/en_product6.xml", "en_product6.xml", "application/xml"],
   [GOLD9_PROVIDER_IDS.hgncApproved, "hgnc_approved", "current", "https://storage.googleapis.com/public-download-files/hgnc/tsv/tsv/hgnc_complete_set.txt", "hgnc_complete_set.txt", "text/tab-separated-values"],
-  [GOLD9_PROVIDER_IDS.clinvarGeneEsearch, "clinvar_gene_esearch", "BTK", "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=clinvar&retmode=json&retmax=0&term=BTK%5Bgene%5D", "BTK.json", "application/json"],
+  [GOLD9_PROVIDER_IDS.clinvarGeneEsearch, "clinvar_gene_esearch", "BTK", "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=clinvar&retmode=json&retmax=0&term=BTK%5Bgene%5D+AND+%28pathogenic%5BClinical+Significance%5D+OR+likely+pathogenic%5BClinical+Significance%5D%29", "BTK.json", "application/json"],
   [GOLD9_PROVIDER_IDS.clingenGeneValidity, "clingen_gene_validity", "current", "https://search.clinicalgenome.org/kb/gene-validity/download", "gene-validity.csv", "text/csv"],
 ] as const;
 
@@ -61,7 +61,7 @@ describe("Gold9 trusted Core acquisition providers", () => {
 
   it("recognizes the ClinVar gene ESearch JSON fixture as the documented response form", async () => {
     const fixture = JSON.parse(await readFile(path.join(import.meta.dirname, "fixtures", "gold9", "clinvar-gene-esearch.json"), "utf8")) as { esearchresult?: { querytranslation?: string } };
-    expect(fixture.esearchresult?.querytranslation).toBe("BTK[gene]");
+    expect(fixture.esearchresult?.querytranslation).toBe("BTK[gene] AND (pathogenic[Clinical Significance] OR likely pathogenic[Clinical Significance])");
   });
 
   it("projects Gold9 static bindings through the fixed Core parameter allowlist", () => {

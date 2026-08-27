@@ -38,6 +38,11 @@ import { promotePublication, type PublishResult } from "../publish/publisher.js"
 import { validateMultiTableCandidate } from "../validation/multitable.js";
 import { SourceAssetRegistry } from "../../runtime/source-assets/registry.js";
 import { providerCarrierBinding } from "./provider-bindings.js";
+import { createDefaultProviderCarrierTransformRegistry } from "../families/index.js";
+import {
+  providerCarrierTransformForFamily,
+  type ProviderCarrierTransformInput,
+} from "./provider-transforms.js";
 import { parseProteinStructureCarrier } from "../families/protein-structure/provider.js";
 import { transformChemblRegisteredAssets } from "../families/bioactivity-measurement/chembl.js";
 import {
@@ -316,6 +321,14 @@ function providerRows(input: {
   familyId: string;
   source: string;
   adapterId: string;
+  providerId?: string;
+  bindingId?: string;
+  tableId?: string;
+  inputRole?: string;
+  schemaRef?: string;
+  accession?: string | null;
+  parameters?: Readonly<Record<string, JsonValue>>;
+  entities?: Readonly<Record<string, readonly string[]>>;
   assetId: string;
   receipt: Awaited<ReturnType<SourceAssetRegistry["register"]>>;
   bytes: Buffer;
@@ -425,8 +438,16 @@ export async function executeRegisteredMultiTableBuild(
   let assessIdentityArtifacts: ((artifacts: readonly ProductArtifactFact[]) => ProductAssessment) | null = null;
   let productAssessment: ProductAssessment | null = null;
   const providerBindings = input.spec.source_bindings.filter((binding) =>
-    providerCarrierBinding(family.id, binding.source, binding.adapter_id) !== null,
+    providerCarrierBinding(
+      family.id,
+      binding.source,
+      binding.adapter_id,
+      undefined,
+      binding.acquisition.provider_id,
+    ) !== null,
   );
+  const providerTransformRegistry = createDefaultProviderCarrierTransformRegistry();
+  const familyProviderTransform = providerCarrierTransformForFamily(family.id, providerTransformRegistry);
   if (providerBindings.length > 0) {
     if (providerBindings.length !== input.spec.source_bindings.length) {
       throw new Error("provider carrier dispatch cannot mix provider and registered-table bindings");
@@ -434,14 +455,43 @@ export async function executeRegisteredMultiTableBuild(
     const aggregateRows: Record<string, object[]> = {};
     const assetIds: string[] = [];
     const pubchemCarriers: BioactivityPubChemCarrier[] = [];
+    const familyTransformInputs: ProviderCarrierTransformInput[] = [];
     let chemblCarrierCount = 0;
     for (const binding of providerBindings) {
-      const provider = providerCarrierBinding(family.id, binding.source, binding.adapter_id)!;
+      const provider = providerCarrierBinding(
+        family.id,
+        binding.source,
+        binding.adapter_id,
+        undefined,
+        binding.acquisition.provider_id,
+      );
+      if (provider === null) {
+        throw new Error(`provider binding '${binding.binding_id}' is not admitted for ${family.id}`);
+      }
       const assetId = input.registeredAssetIds[binding.binding_id];
       if (assetId === undefined) throw new Error(`binding '${binding.binding_id}' has no registered carrier asset ID`);
       const resolved = await carrierBytes(assetRegistry, assetId);
       sourceReceipts.set(assetId, resolved.receipt);
       assetIds.push(assetId);
+      if (familyProviderTransform !== null) {
+        familyTransformInputs.push({
+          familyId: family.id,
+          source: provider.source,
+          adapterId: provider.adapterId,
+          providerId: provider.providerId,
+          bindingId: binding.binding_id,
+          tableId: provider.tableId,
+          inputRole: provider.inputRole,
+          schemaRef: provider.schemaRefs?.[0],
+          accession: binding.accession,
+          assetId,
+          receipt: resolved.receipt,
+          bytes: resolved.bytes,
+          parameters: binding.parameters,
+          entities: input.spec.entities,
+        });
+        continue;
+      }
       if (family.id === "bioactivity_measurement" &&
           provider.source === "pubchem" &&
           provider.adapterId === "bioactivity.pubchem_identity.v1") {
@@ -462,10 +512,24 @@ export async function executeRegisteredMultiTableBuild(
         familyId: family.id,
         source: provider.source,
         adapterId: provider.adapterId,
+        providerId: provider.providerId,
+        bindingId: binding.binding_id,
+        tableId: provider.tableId,
+        inputRole: provider.inputRole,
+        schemaRef: provider.schemaRefs?.[0],
+        accession: binding.accession,
         assetId,
         receipt: resolved.receipt,
         bytes: resolved.bytes,
+        parameters: binding.parameters,
+        entities: input.spec.entities,
       });
+      for (const [tableId, rows] of Object.entries(expanded)) {
+        (aggregateRows[tableId] ??= []).push(...rows);
+      }
+    }
+    if (familyProviderTransform !== null) {
+      const expanded = familyProviderTransform(familyTransformInputs);
       for (const [tableId, rows] of Object.entries(expanded)) {
         (aggregateRows[tableId] ??= []).push(...rows);
       }

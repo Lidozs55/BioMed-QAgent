@@ -339,6 +339,11 @@ async function parseDelimited(
   audit: RegisteredTableAudit,
   signal?: AbortSignal | null,
 ): Promise<void> {
+  if (parser.layout === "sample_matrix") {
+    if (parser.format !== "tsv") throw new Error("sample matrix layout is only supported for TSV parsers");
+    await parseSampleMatrix(content, receipt, schema, parser, sink, audit, signal);
+    return;
+  }
   const expectedHeader = parser.fields.map((field) => field.source_column);
   const delimiter = parser.format === "csv" ? "," : "\t";
   const decoder = new StringDecoder("utf8");
@@ -426,6 +431,79 @@ async function parseDelimited(
   }
   if (pending.length > 0) await consumeLine(pending);
   if (!headerSeen) throw new Error("delimited asset is empty and has no header");
+  verifyDigest(audit, size, hasher.digest("hex"));
+}
+
+async function parseSampleMatrix(
+  content: AsyncIterable<Uint8Array>,
+  receipt: CoreResolvedRegisteredAsset["registration_receipt"],
+  schema: DatasetSchemaV2,
+  parser: RegisteredDelimitedParserDefinition,
+  sink: RegisteredTableSink,
+  audit: RegisteredTableAudit,
+  signal?: AbortSignal | null,
+): Promise<void> {
+  const delimiter = "\t";
+  const decoder = new StringDecoder("utf8");
+  const hasher = createHash("sha256");
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of content) {
+    throwIfAborted(signal);
+    const bytes = Buffer.from(chunk);
+    size += bytes.length;
+    if (size > parser.limits.max_bytes) throw new Error(`asset exceeds parser max_bytes (${parser.limits.max_bytes})`);
+    hasher.update(bytes);
+    chunks.push(bytes);
+  }
+  const text = decoder.end(Buffer.concat(chunks, size));
+  const lines = text.split(/\r\n|\n|\r/);
+  const headerLine = lines.shift() ?? "";
+  if (headerLine.length > parser.limits.max_line_characters) throw new Error("sample matrix header exceeds max_line_characters");
+  const header = parseStrictDelimitedLine(headerLine, delimiter);
+  if (header.length < 2 || header[0] !== "#SampleID") throw new Error("MGnify taxonomy TSV header must begin with #SampleID");
+  if (header.length > parser.limits.max_columns) throw new Error("sample matrix exceeds parser max_columns");
+  const expectedFields = parser.fields.map((field) => field.source_column);
+  if (expectedFields.length !== 3 || expectedFields[0] !== "sample_id" || expectedFields[1] !== "taxon_path" || expectedFields[2] !== "abundance") {
+    throw new Error("sample matrix parser requires the fixed MGnify taxonomy field mapping");
+  }
+  let sourceLineNumber = 2;
+  let sourceRowCount = 0;
+  let expandedRowIndex = 0;
+  for (const raw of lines) {
+    const currentSourceLine = sourceLineNumber;
+    sourceLineNumber += 1;
+    if (raw === "") continue;
+    sourceRowCount += 1;
+    if (sourceRowCount > parser.limits.max_rows) throw new Error(`asset exceeds parser max_rows (${parser.limits.max_rows})`);
+    if (raw.length > parser.limits.max_line_characters) throw new Error(`line ${currentSourceLine} exceeds max_line_characters`);
+    const values = parseStrictDelimitedLine(raw, delimiter);
+    if (values.length !== header.length) throw new Error(`sample matrix row ${sourceRowCount} width does not match header`);
+    const taxonPath = values[0] ?? "";
+    for (let sampleIndex = 1; sampleIndex < header.length; sampleIndex += 1) {
+      const sampleId = header[sampleIndex] ?? "";
+      const abundance = values[sampleIndex] ?? "";
+      expandedRowIndex += 1;
+      if (expandedRowIndex > parser.limits.max_rows) throw new Error(`expanded sample matrix exceeds parser max_rows (${parser.limits.max_rows})`);
+      const parsed = rowFromValues(
+        [sampleId, taxonPath, abundance],
+        schema,
+        (fieldIndex) => {
+          const sourceColumn = fieldIndex === 0 ? sampleId : fieldIndex === 1 ? "#SampleID" : sampleId;
+          const sourceColumnIndex = fieldIndex === 1 ? 0 : fieldIndex === 2 ? sampleIndex : fieldIndex;
+          const rawValue = fieldIndex === 0 ? sampleId : fieldIndex === 1 ? taxonPath : abundance;
+          return delimitedLocator(receipt.asset_ref.asset_id, receipt.relative_path, currentSourceLine, sourceColumnIndex, sourceColumn, rawValue);
+        },
+        expandedRowIndex,
+      );
+      if (parsed.rejection !== null) await writeRejection(sink, audit, parsed.rejection);
+      else {
+        await sink.writeRow(parsed.row);
+        audit.accepted_row_count += 1;
+      }
+    }
+  }
+  if (sourceRowCount === 0) throw new Error("sample matrix has no data rows");
   verifyDigest(audit, size, hasher.digest("hex"));
 }
 

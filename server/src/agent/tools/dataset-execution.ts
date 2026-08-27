@@ -10,6 +10,7 @@ import { parseJsonTextStrict } from "@biomed/contracts";
 
 import { saveExecutionContinuation } from "../../runtime/execution-continuation.js";
 import { fixedBiomedicalAcquisitionParameters } from "../../dataset/acquisition/biomedical-providers.js";
+import { CORE_ACQUISITION_PROVIDER_DESCRIPTORS } from "../../dataset/acquisition/provider-catalog.js";
 import {
   createDefaultDatasetFamilyRegistry,
 } from "../../dataset/families/index.js";
@@ -19,6 +20,7 @@ import type {
   BioMedToolResult,
 } from "../contracts.js";
 import { parseDatasetExecutionSpec } from "../../dataset/contracts/index.js";
+import { providerCarrierBinding } from "../../dataset/runtime/provider-bindings.js";
 import type { DatasetCoreService } from "../../dataset/service/dataset-core.js";
 
 const MAX_ID = 128;
@@ -301,6 +303,13 @@ function datasetExecutionSpecSchema(): object {
   const granularities = unique(schemas.map((schema) => schema.row_granularity));
   const sourceIds = unique(sources.map((source) => source.source));
   const adapterIds = unique(sources.map((source) => source.adapter_id));
+  const providerIds = unique([
+    "registered_asset",
+    ...CORE_ACQUISITION_PROVIDER_DESCRIPTORS.map((descriptor) => descriptor.providerId),
+    ...definitions.flatMap((definition) => definition.sources
+      .map((source) => providerCarrierBinding(definition.id, source.source, source.adapter_id)?.providerId ?? null)
+      .filter((providerId): providerId is string => providerId !== null)),
+  ]);
   const normalizationProfiles = unique(
     definitions.flatMap((definition) => [...definition.normalization_profile_refs]),
   );
@@ -324,7 +333,7 @@ function datasetExecutionSpecSchema(): object {
     properties: {
       schema_version: { type: "string", enum: ["1.0"] },
       mode: { type: "string", enum: ["builtin", "workflow_recipe"] },
-      provider_id: nullableString,
+      provider_id: { anyOf: [{ type: "string", enum: providerIds }, { type: "null" }] },
       recipe_id: nullableString,
       recipe_version: { anyOf: [{ type: "integer", minimum: 1 }, { type: "null" }] },
     },

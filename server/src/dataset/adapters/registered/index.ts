@@ -9,6 +9,8 @@ const REGISTERED_ADAPTER_PREFIXES = [
   "registered_variant_",
   "registered_protein_structure",
   "registered_bioactivity_",
+  "registered_gut_microbiome_",
+  "registered_inherited_disease_",
 ] as const;
 
 export function isRegisteredTableAdapterId(adapterId: string): boolean {

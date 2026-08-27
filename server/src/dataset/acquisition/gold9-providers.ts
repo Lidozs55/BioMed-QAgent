@@ -145,7 +145,7 @@ export function createGold9AcquisitionProviders(): readonly AcquisitionProviderH
       url.searchParams.set("db", "clinvar");
       url.searchParams.set("retmode", "json");
       url.searchParams.set("retmax", "0");
-      url.searchParams.set("term", `${accession}[gene]`);
+      url.searchParams.set("term", `${accession}[gene] AND (pathogenic[Clinical Significance] OR likely pathogenic[Clinical Significance])`);
       return plan({ providerId: GOLD9_PROVIDER_IDS.clinvarGeneEsearch, source: "clinvar_gene_esearch", database: "clinvar", accession, url: url.toString(), title: `ClinVar ESearch gene response ${accession}`, filename: `${accession}.json`, mediaTypes: json, accept: "application/json", host: "eutils.ncbi.nlm.nih.gov" });
     }),
     provider(GOLD9_PROVIDER_IDS.clingenGeneValidity, GOLD9_IMPLEMENTATION_DIGESTS.clingenGeneValidity, (request) => {

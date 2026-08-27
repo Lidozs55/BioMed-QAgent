@@ -32,10 +32,18 @@ interface RegisteredTableParserDefinitionBase {
   limits: RegisteredTableParserLimits;
 }
 
+export interface RegisteredSampleMatrixLayout {
+  sample_id_header: string;
+  row_label_column: string;
+  value_column: string;
+}
+
 export interface RegisteredDelimitedParserDefinition
   extends RegisteredTableParserDefinitionBase {
   format: "csv" | "tsv";
   fields: readonly RegisteredDelimitedFieldMapping[];
+  layout?: "records" | "sample_matrix";
+  sample_matrix?: RegisteredSampleMatrixLayout;
 }
 
 export interface RegisteredXlsxParserDefinition
