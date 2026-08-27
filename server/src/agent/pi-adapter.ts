@@ -378,6 +378,15 @@ function modelFromEnvironment(environment: Environment): BioMedModelConfig {
   return { provider, modelId, apiKey, baseUrl };
 }
 
+/**
+ * Kimi models on DashScope reject sampling overrides entirely (even
+ * `top_p: 1`); any temperature/top_p value yields a 400 invalid_parameter.
+ * They must run with provider-default sampling only.
+ */
+function rejectsSamplingOverrides(selected: BioMedModelConfig): boolean {
+  return selected.modelId.toLowerCase().startsWith("kimi");
+}
+
 function usesDashScopeQwen(selected: BioMedModelConfig): boolean {
   if (selected.baseUrl === undefined) return false;
   try {
@@ -494,6 +503,10 @@ export function applyModelProfileToPayload(
   }
   const next: Record<string, unknown> = { ...payload };
   const dashScopeQwen = usesDashScopeQwen(selected);
+  if (rejectsSamplingOverrides(selected)) {
+    delete next.temperature;
+    delete next.top_p;
+  }
   for (const [key, value] of Object.entries(selected.params ?? {})) {
     if (value === undefined) continue;
     if (key === "top_logprobs" && selected.params?.logprobs !== true) continue;

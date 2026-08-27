@@ -944,3 +944,34 @@ describe("PiAgentAdapter", () => {
     });
   });
 });
+
+describe("kimi sampling overrides", () => {
+  test("strips temperature/top_p for kimi models that reject them", () => {
+    const payload = {
+      model: "kimi-k3",
+      messages: [{ role: "user", content: "hi" }],
+      temperature: 0.2,
+      top_p: 1,
+    };
+    const result = applyModelProfileToPayload(payload, {
+      provider: "dashscope",
+      modelId: "kimi-k3",
+      apiKey: "sk-test",
+      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    }) as typeof payload;
+    expect(result.temperature).toBeUndefined();
+    expect(result.top_p).toBeUndefined();
+    expect(result.model).toBe("kimi-k3");
+  });
+
+  test("keeps sampling overrides for qwen models", () => {
+    const payload = { model: "qwen3.8-max", messages: [], temperature: 0.7 };
+    const result = applyModelProfileToPayload(payload, {
+      provider: "dashscope",
+      modelId: "qwen3.8-max",
+      apiKey: "sk-test",
+      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    }) as typeof payload;
+    expect(result.temperature).toBe(0.7);
+  });
+});
