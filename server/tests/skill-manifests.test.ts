@@ -32,6 +32,8 @@ const ALLOWED_BACKTICK_TOKENS = new Set([
   "no_primary_data",
   "retryable",
   "workspace_exec",
+  // route preflight route_status value (schema field, not a tool)
+  "requires_formal_extraction",
 ]);
 
 const SKILL_NAME = /^[a-z][a-z0-9_-]*$/;

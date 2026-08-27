@@ -25,6 +25,8 @@ const TRUSTED_EXECUTION = [
   "A non-retryable static adapter, transform, schema, or topology rejection means the static family is unsuitable. Stop unchanged retries and required-field probing, then use the dynamic route only when its FamilySpec, projection, transform, and Core-acquired inputs can close exactly.",
   "Use the matching skill for source-specific rules, table topologies, acquisition parameters, and evidence requirements. Do not duplicate or improvise those rules in the main prompt.",
   "Your working directory is your Task Workspace; create, write, and edit files there freely. Never use process.exec or workspace files to reimplement a registered provider or create formal artifacts.",
+  "Never use workspace_exec, shell interpreters, or subprocess network clients for acquisition, file copying, archive inspection, provider reimplementation, or formal carrier creation. Use governed workspace, browser, or Dataset Core tools instead.",
+  "When route preflight reports requires_formal_extraction and no supported Core extraction carrier exists, return the exact structured blocker or NO_DATA for that projection; do not unpack or parse it in the workspace.",
   "Workspace commands and paths outside it follow the permission policy; framework-protected settings, other tasks, state, logs, and artifacts remain denied. Task output may be read but never written.",
 ];
 

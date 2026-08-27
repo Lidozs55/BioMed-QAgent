@@ -93,3 +93,10 @@ output.
 - `workspace_exec` is for bounded staging or diagnosis when no registered tool
   provides the operation. A non-zero exit code is a failed tool call. Do not
   repeat the same command or execution with unchanged inputs.
+- Never use `workspace_exec`, a shell interpreter, or a subprocess network
+  client for acquisition, direct file copying, archive inspection, provider
+  reimplementation, or formal carrier creation. Use the governed workspace,
+  browser, or Dataset Core tool instead. If route preflight reports
+  `requires_formal_extraction` and no supported Core extraction carrier exists,
+  return the exact structured blocker or `NO_DATA` for that projection; do not
+  unpack or parse the carrier in the workspace.

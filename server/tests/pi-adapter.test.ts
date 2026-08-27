@@ -211,6 +211,15 @@ describe("Pi system prompt", () => {
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/openFDA FAERS aggregate lookup/i);
   });
 
+  test("forbids workspace exec acquisition bypasses and preserves extraction blockers", () => {
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /never use workspace_exec, shell interpreters, or subprocess network clients for acquisition/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /requires_formal_extraction[\s\S]*structured blocker or NO_DATA[\s\S]*do not unpack or parse it in the workspace/i,
+    );
+  });
+
   test("delegates source-specific topology and evidence rules to skills", () => {
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/matching skill/i);
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/source-specific rules/i);
