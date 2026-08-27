@@ -104,6 +104,24 @@ describe("Workspace project tools", () => {
       isError: true,
       details: { policy: "allowed", exitCode: 3, stderr: "failed" },
     });
+    await expect(exec?.execute({
+      executable: path.join(base, "missing", "curl.exe"),
+      args: [
+        "-sSL",
+        "--max-time",
+        "60",
+        "-o",
+        "staging/dilirank2_repo_README.md",
+        "https://raw.githubusercontent.com/georgyzaouk/dilirank2-prediction/main/README.md",
+      ],
+    })).resolves.toMatchObject({
+      isError: true,
+      details: {
+        policy: "rejected",
+        exitCode: null,
+        stderr: expect.stringMatching(/governed.*download_from_page.*Dataset Core provider/i),
+      },
+    });
     expect(JSON.stringify(tools)).not.toContain("@earendil-works");
   });
 
