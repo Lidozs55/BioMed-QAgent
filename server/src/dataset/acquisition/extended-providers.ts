@@ -198,6 +198,10 @@ const DEFINITIONS: readonly Definition[] = Object.freeze([
         maxMembers: 24,
         maxMemberBytes: 32 * 1024 * 1024,
         role: "carrier",
+        xlsxToCsv: {
+          maxWorksheets: 12,
+          maxCsvBytes: 32 * 1024 * 1024,
+        },
       },
     }),
   },

@@ -154,3 +154,27 @@ describeLive("live:provider-smoke (Gold10 acquisition providers)", () => {
     expect(failure.details.url).toContain("/api/getPhenotypesAndAbundanceSummaryOfAAssociatedTaxon/");
   });
 });
+
+describeLive("live:provider-smoke (supplementary xlsx extraction)", () => {
+  it("Europe PMC supplementary archive stages members and parses XLSX worksheets to CSV", { timeout: 180_000 }, async () => {
+    const fixture = await runtime(
+      (await import("../../src/dataset/acquisition/extended-providers.js")).createExtendedAcquisitionProviders()
+        .filter((provider) => provider.providerId === "europepmc.supplementary.v1"),
+    );
+    const result = await fixture.runtime.acquire(request("europepmc.supplementary.v1", "europepmc_supplementary", "PMC9005347"));
+    expect(result.sourceAsset.role).toBe("carrier");
+    expect(result.attempts.at(-1)?.status).toBe("succeeded");
+    // Real Bellenguez 2022 archive: the XLSX member stages raw plus one
+    // provenance-bound UTF-8 CSV per worksheet (Supplementary Table 5 is the
+    // gold7 locus summary table).
+    expect(result.extractionAssets.length).toBeGreaterThan(2);
+    const registry = new SourceAssetRegistry("task_provider_smoke", fixture.root);
+    const csvTexts: string[] = [];
+    for (const asset of result.extractionAssets.slice(1)) {
+      const chunks: Buffer[] = [];
+      for await (const chunk of (await registry.resolveAny(asset.asset_id)).content) chunks.push(Buffer.from(chunk));
+      csvTexts.push(Buffer.concat(chunks).toString("utf-8"));
+    }
+    expect(csvTexts.some((text) => text.includes("Supplementary Table"))).toBe(true);
+  });
+});

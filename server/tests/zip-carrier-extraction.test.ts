@@ -25,6 +25,7 @@ import {
   selectExtractableZipMembers,
   ZipFormatError,
 } from "../src/dataset/acquisition/zip-members.js";
+import { xlsxWorksheetsToCsv } from "../src/dataset/acquisition/xlsx-to-csv.js";
 import { ContentCache } from "../src/external/acquisition/content-cache.js";
 import { PublicHttpClient, type RequestExecutor } from "../src/external/network/http-client.js";
 import { SourceAssetRegistry } from "../src/runtime/source-assets/registry.js";
@@ -187,16 +188,15 @@ describe("zip member extraction", () => {
 
     expect(requests[0]!.url).toContain("/PMC9005347/supplementaryFiles");
     expect(result.sourceAsset.role).toBe("carrier");
-    expect(result.extractionAssets).toHaveLength(2);
+    // csv member, raw xlsx member, plus the parsed per-worksheet CSV of S2_counts.xlsx
+    expect(result.extractionAssets).toHaveLength(3);
     for (const ref of result.extractionAssets) expect(ref.role).toBe("carrier");
     expect(result.extractionAssets[0]!.asset_id).toBe(`asset_${createHash("sha256").update(csv).digest("hex")}`);
-    const xlsxMember = result.extractionAssets[1]!;
-    const converted = await assets.resolveAny(xlsxMember.asset_id);
-    const convertedChunks: Buffer[] = [];
-    for await (const chunk of converted.content) convertedChunks.push(Buffer.from(chunk));
-    const convertedText = Buffer.concat(convertedChunks).toString("utf-8");
-    // The .xlsx member must be staged as parsed CSV text, not raw bytes.
-    expect(convertedText).toContain("P. micra");
+    expect(result.extractionAssets[1]!.asset_id).toBe(`asset_${createHash("sha256").update(xlsx).digest("hex")}`);
+    const parsedCsvId = result.extractionAssets[2]!.asset_id;
+    const parsedBytes: Buffer[] = [];
+    for await (const chunk of (await assets.resolveAny(parsedCsvId)).content) parsedBytes.push(Buffer.from(chunk));
+    expect(Buffer.concat(parsedBytes).toString("utf-8")).toContain("P. micra");
     const resolved = await assets.resolveAny(result.extractionAssets[0]!.asset_id);
     const chunks: Buffer[] = [];
     for await (const chunk of resolved.content) chunks.push(Buffer.from(chunk));
@@ -209,5 +209,179 @@ describe("zip member extraction", () => {
       provider_id: "europepmc.supplementary.v1",
       canonical_accession: "PMC9005347",
     });
+    const parsedProvenance = await assets.resolveCoreAcquired(
+      parsedCsvId,
+      result.requestIdentityDigest,
+    );
+    expect(parsedProvenance.acquisition_provenance).toMatchObject({
+      provider_id: "europepmc.supplementary.v1",
+      canonical_accession: "PMC9005347",
+    });
+    expect(parsedProvenance.registration_receipt.relative_path).toContain("_p0.csv");
+  });
+
+  it("parses every bounded worksheet of an XLSX member into UTF-8 CSV extraction assets", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "epmc-xlsx-"));
+    roots.push(root);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(
+      workbook,
+      XLSX.utils.aoa_to_sheet([["locus", "odds_ratio"], ["rs123456", 1.25]]),
+      "Loci",
+    );
+    XLSX.utils.book_append_sheet(
+      workbook,
+      XLSX.utils.aoa_to_sheet([["gene", "chr"], ["APOE", 19]]),
+      "Genes",
+    );
+    const xlsx = Buffer.from(XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }));
+    const archive = storedZip([{ name: "bellenguez_tables.xlsx", content: xlsx }]);
+    const executor: RequestExecutor = async () => ({
+      status: 200,
+      headers: { "content-type": "application/zip", "content-length": String(archive.length) },
+      body: (async function* (): AsyncIterable<Buffer> { yield archive; })(),
+    });
+    const client = new PublicHttpClient({
+      resolve: async () => [{ address: "93.184.216.34", family: 4 }],
+      executor,
+    });
+    const registry = new CoreAcquisitionRegistry();
+    const providers = (await import("../src/dataset/acquisition/extended-providers.js"))
+      .createExtendedAcquisitionProviders();
+    registry.registerProvider(providers.find(
+      (entry) => entry.providerId === EXTENDED_PROVIDER_IDS.europePmcSupplementary,
+    )!);
+    const assets = new SourceAssetRegistry("task_epmc_xlsx", root, { now: () => new Date("2026-08-27T00:00:00.000Z") });
+    const runtime = new CoreAcquisitionRuntime({
+      taskId: "task_epmc_xlsx",
+      taskRoot: root,
+      cache: new ContentCache(path.join(root, "cache")),
+      client,
+      sourceAssetRegistry: assets,
+      registry,
+      maxAttempts: 2,
+    });
+    const request: CoreAcquisitionRequest = {
+      schema_version: "1.0",
+      request_id: "request_epmc_xlsx",
+      task_id: "task_epmc_xlsx",
+      requirement_id: "build_epmc_xlsx",
+      binding_id: "binding_epmc",
+      mode: "builtin",
+      provider_id: EXTENDED_PROVIDER_IDS.europePmcSupplementary,
+      recipe_id: null,
+      recipe_version: null,
+      parameters: { source: "europepmc_supplementary", accession: "PMC9005347", entities: {} },
+    };
+
+    const result = await runtime.acquire(request);
+
+    // raw xlsx member plus one parsed CSV per worksheet, in workbook order
+    expect(result.extractionAssets).toHaveLength(3);
+    const sheet0 = await readAll(assets, result.extractionAssets[1]!.asset_id);
+    const sheet1 = await readAll(assets, result.extractionAssets[2]!.asset_id);
+    expect(sheet0).toContain("rs123456");
+    expect(sheet0).toContain("odds_ratio");
+    expect(sheet1).toContain("APOE");
+  });
+
+  it("keeps a corrupt XLSX member staged without parsed assets and without failing acquisition", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "epmc-xlsx-bad-"));
+    roots.push(root);
+    const archive = storedZip([{ name: "broken.xlsx", content: Buffer.from("this is not a workbook") }]);
+    const executor: RequestExecutor = async () => ({
+      status: 200,
+      headers: { "content-type": "application/zip", "content-length": String(archive.length) },
+      body: (async function* (): AsyncIterable<Buffer> { yield archive; })(),
+    });
+    const client = new PublicHttpClient({
+      resolve: async () => [{ address: "93.184.216.34", family: 4 }],
+      executor,
+    });
+    const registry = new CoreAcquisitionRegistry();
+    const providers = (await import("../src/dataset/acquisition/extended-providers.js"))
+      .createExtendedAcquisitionProviders();
+    registry.registerProvider(providers.find(
+      (entry) => entry.providerId === EXTENDED_PROVIDER_IDS.europePmcSupplementary,
+    )!);
+    const assets = new SourceAssetRegistry("task_epmc_bad", root, { now: () => new Date("2026-08-27T00:00:00.000Z") });
+    const runtime = new CoreAcquisitionRuntime({
+      taskId: "task_epmc_bad",
+      taskRoot: root,
+      cache: new ContentCache(path.join(root, "cache")),
+      client,
+      sourceAssetRegistry: assets,
+      registry,
+      maxAttempts: 2,
+    });
+    const request: CoreAcquisitionRequest = {
+      schema_version: "1.0",
+      request_id: "request_epmc_bad",
+      task_id: "task_epmc_bad",
+      requirement_id: "build_epmc_bad",
+      binding_id: "binding_epmc",
+      mode: "builtin",
+      provider_id: EXTENDED_PROVIDER_IDS.europePmcSupplementary,
+      recipe_id: null,
+      recipe_version: null,
+      parameters: { source: "europepmc_supplementary", accession: "PMC9005347", entities: {} },
+    };
+
+    const result = await runtime.acquire(request);
+
+    const memberBytes = Buffer.from("this is not a workbook");
+    expect(result.extractionAssets).toHaveLength(1);
+    expect(result.extractionAssets[0]!.asset_id).toBe(`asset_${createHash("sha256").update(memberBytes).digest("hex")}`);
+  });
+});
+
+async function readAll(assets: SourceAssetRegistry, assetId: string): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of (await assets.resolveAny(assetId)).content) chunks.push(Buffer.from(chunk));
+  return Buffer.concat(chunks).toString("utf-8");
+}
+
+describe("xlsx worksheet to CSV conversion", () => {
+  function workbookWithSheets(sheets: Array<{ name: string; rows: unknown[][] }>): Buffer {
+    const workbook = XLSX.utils.book_new();
+    for (const sheet of sheets) {
+      XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(sheet.rows), sheet.name);
+    }
+    return Buffer.from(XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }));
+  }
+
+  it("emits every worksheet as UTF-8 CSV in workbook order", () => {
+    const parsed = xlsxWorksheetsToCsv(
+      workbookWithSheets([
+        { name: "Loci", rows: [["locus", "p_value"], ["rs1", 5e-8]] },
+        { name: "Genes", rows: [["gene"], ["APOE"]] },
+      ]),
+      { maxWorksheets: 8, maxCsvBytes: 1024 * 1024 },
+    );
+    expect(parsed.map((sheet) => sheet.sheetName)).toEqual(["Loci", "Genes"]);
+    expect(parsed[0]!.csv.toString("utf-8")).toContain("rs1");
+    expect(parsed[1]!.csv.toString("utf-8")).toContain("APOE");
+  });
+
+  it("keeps only the first bounded worksheets and skips oversized sheets", () => {
+    const many = xlsxWorksheetsToCsv(
+      workbookWithSheets([
+        { name: "S1", rows: [["a"], [1]] },
+        { name: "S2", rows: [["b"], [2]] },
+        { name: "S3", rows: [["c"], [3]] },
+      ]),
+      { maxWorksheets: 2, maxCsvBytes: 1024 * 1024 },
+    );
+    expect(many.map((sheet) => sheet.sheetName)).toEqual(["S1", "S2"]);
+
+    const oversized = xlsxWorksheetsToCsv(
+      workbookWithSheets([{ name: "Big", rows: [["value"], ["x".repeat(4096)]] }]),
+      { maxWorksheets: 2, maxCsvBytes: 64 },
+    );
+    expect(oversized).toEqual([]);
+  });
+
+  it("returns no sheets for unreadable workbooks", () => {
+    expect(xlsxWorksheetsToCsv(Buffer.from("not a workbook"), { maxWorksheets: 2, maxCsvBytes: 1024 })).toEqual([]);
   });
 });
