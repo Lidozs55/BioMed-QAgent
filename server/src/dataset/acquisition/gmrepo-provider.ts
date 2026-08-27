@@ -33,10 +33,12 @@ export const GMREPO_FILES_PROVIDER_ID = "gmrepo.files.v1";
  * ``sed '/^  "[0-9a-f]\{64\}" *;$/d' gmrepo-provider.ts | sha256sum``.
  */
 export const GMREPO_FILES_IMPLEMENTATION_DIGEST =
-  "d77e8835ad0bba0474fdec465da9d280d9c0fc45813e017008fcff35135cfecb";
+  "d01f160de5ecf2b3b37c9b3e704e76c1f9b05b80f325cc01139701edae397097";
 
 const GMREPO_HOST = "gmrepo.humangut.info";
-const GMREPO_ASSOCIATED_SPECIES_ENDPOINT = `https://${GMREPO_HOST}/api/getAssociatedSpeciesByMeshID`;
+// Trailing slash is mandatory: the Django endpoint runs with APPEND_SLASH,
+// which rejects slash-less POSTs with HTTP 500 (verified against the live API).
+const GMREPO_ASSOCIATED_SPECIES_ENDPOINT = `https://${GMREPO_HOST}/api/getAssociatedSpeciesByMeshID/`;
 const MAX_GMREPO_RESPONSE_BYTES = 64 * 1024 * 1024;
 const MESH_ID = /^D[0-9]{6}$/;
 const PARAMETER_KEYS = new Set(["source", "accession", "entities"]);
