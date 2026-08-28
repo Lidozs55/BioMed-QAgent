@@ -33,6 +33,7 @@ export interface DynamicFamilyPreflightReceipt {
   generation: number;
   family_spec_digest: string;
   projection_digest: string;
+  product_requirement_digest: string;
   host_descriptor_digest: string;
   submission_digest: string;
   required_input_roles: string[];
@@ -44,7 +45,7 @@ export interface DynamicFamilyPreflightReceipt {
 
 const RECEIPT_KEYS = new Set([
   "schema_version", "task_id", "requirement_id", "generation", "family_spec_digest",
-  "projection_digest", "host_descriptor_digest", "submission_digest",
+  "projection_digest", "product_requirement_digest", "host_descriptor_digest", "submission_digest",
   "required_input_roles", "output_closure", "topology_diagnostics", "acquisition_plan", "receipt_digest",
 ]);
 const DIAGNOSTIC_KEYS = new Set(["code", "path", "message", "object_id"]);
@@ -163,6 +164,10 @@ export function parseDynamicFamilyPreflightReceipt(
     generation: assertNonNegativeInt(object.generation, `${path}.generation`),
     family_spec_digest: assertHex64(object.family_spec_digest, `${path}.family_spec_digest`),
     projection_digest: assertHex64(object.projection_digest, `${path}.projection_digest`),
+    product_requirement_digest: assertHex64(
+      object.product_requirement_digest,
+      `${path}.product_requirement_digest`,
+    ),
     host_descriptor_digest: assertHex64(object.host_descriptor_digest, `${path}.host_descriptor_digest`),
     submission_digest: assertHex64(object.submission_digest, `${path}.submission_digest`),
     required_input_roles: requiredInputRoles,
@@ -184,6 +189,7 @@ export function dynamicFamilyPreflightReceiptDigestBody(
     generation: parsed.generation,
     family_spec_digest: parsed.family_spec_digest,
     projection_digest: parsed.projection_digest,
+    product_requirement_digest: parsed.product_requirement_digest,
     host_descriptor_digest: parsed.host_descriptor_digest,
     submission_digest: parsed.submission_digest,
     required_input_roles: parsed.required_input_roles,

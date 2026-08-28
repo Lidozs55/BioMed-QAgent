@@ -52,6 +52,10 @@ import {
 } from "../dataset/dynamic-family/preflight.js";
 import type { DynamicFamilyAcquisitionPlanningInput } from "../dataset/dynamic-family/preflight.js";
 import { publishDynamicFamily } from "../dataset/dynamic-family/publication.js";
+import {
+  resolveCoreProductTopologyRequirements,
+} from "../dataset/dynamic-family/product-requirement-registry.js";
+import type { CoreProductTopologyRequirements } from "../dataset/dynamic-family/product-requirements.js";
 import { TypeScriptDatasetCore } from "../dataset/service/ts-core.js";
 import { BrowserParserRecipeRegistry, createDefaultBrowserParserRecipeRegistry } from "../dataset/acquisition/browser-recipe-registry.js";
 import { PublicHttpClient } from "../external/network/http-client.js";
@@ -325,6 +329,8 @@ export interface Phase3DynamicFamilySeams {
   }) => Phase3AcquisitionRuntime;
   readonly submitDynamicFamilyPublication?: typeof submitDynamicFamilyPublication;
   readonly publishDynamicFamily?: typeof publishDynamicFamily;
+  /** Test-only Core product profile resolver. Production uses the trusted registry. */
+  readonly resolveProductRequirements?: (profileRef: string) => CoreProductTopologyRequirements;
   /** Test-only observation seam for deterministic final-fence races. */
   readonly assertExecutionLockOwned?: (assertOwned: () => Promise<boolean>) => Promise<boolean>;
   /** Test-only gate immediately before the publisher's final rename fence. */
@@ -544,12 +550,17 @@ export async function createPhase3Runtime(
       });
       const dynamicFamilyPrepareTool = createPrepareDynamicFamilyPublicationTool({
         prepare: async (submission) => {
+          const productRequirements = (
+            options.dynamicFamilySeams?.resolveProductRequirements
+            ?? resolveCoreProductTopologyRequirements
+          )(submission.family_spec.assessment_policy_ref);
           const preparation = dynamicFamilyPreflight.beginPrepare(submission.execution_proposal.requirement_id);
           const receipt = await prepareDynamicFamilyPublication({
             taskId,
             requirementId: submission.execution_proposal.requirement_id,
             generation: preparation.generation,
             submission,
+            productRequirements,
             runtimeLimits: limits,
             planAcquisition: (planning) => planCoreAcquisition(submission, planning),
           });
@@ -566,6 +577,10 @@ export async function createPhase3Runtime(
           if (preflightReceipt === undefined) {
             throw new Error("submit_dynamic_family_publication requires a preflight receipt");
           }
+          const productRequirements = (
+            options.dynamicFamilySeams?.resolveProductRequirements
+            ?? resolveCoreProductTopologyRequirements
+          )(submission.family_spec.assessment_policy_ref);
           await validateDynamicFamilyPreflightReceipt({
             receipt: preflightReceipt,
             submission,
@@ -574,6 +589,7 @@ export async function createPhase3Runtime(
             generation: preflightReceipt.generation,
             runtimeLimits: limits,
             planAcquisition: (planning) => planCoreAcquisition(submission, planning),
+            productRequirements,
           });
           const executionLock = await acquireExecutionLock(
             { lockRoot: path.join(taskRoot, "state", "execution-locks") },
@@ -645,6 +661,7 @@ export async function createPhase3Runtime(
             generation: preflightReceipt.generation,
             preflightReceipt,
             preflightSubmission: submission,
+            productRequirements,
             planAcquisition: (planning) => planCoreAcquisition(submission, planning),
             isGenerationCurrent: (candidateGeneration, cancelFence) =>
               candidateGeneration === reservation?.generation
@@ -668,6 +685,7 @@ export async function createPhase3Runtime(
             requirementId: submission.execution_proposal.requirement_id,
             execution: result,
             validationProfileRef: submission.family_spec.validation_policy_ref,
+            productRequirements,
             hilGate: approvalGate,
             signal,
             isGenerationCurrent: async () =>

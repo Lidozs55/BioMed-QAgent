@@ -37,6 +37,7 @@ import {
   executeDynamicFamilyTransform,
   type ExecuteDynamicFamilyTransformResult,
 } from "./execution.js";
+import type { CoreProductTopologyRequirements } from "./product-requirements.js";
 
 export interface SubmitDynamicFamilyPublicationInput {
   readonly taskId: string;
@@ -51,6 +52,8 @@ export interface SubmitDynamicFamilyPublicationInput {
   readonly preflightReceipt: DynamicFamilyPreflightReceipt;
   /** The exact proposal submitted to prepare, before Core resolves acquisitions. */
   readonly preflightSubmission: ParsedDynamicFamilyPublicationSubmission;
+  /** Exact Core-owned requested-product topology bound by preflight. */
+  readonly productRequirements: CoreProductTopologyRequirements;
   /** Core-only cheap provider planning reused to verify the committed receipt. */
   readonly planAcquisition?: (input: DynamicFamilyAcquisitionPlanningInput) => Promise<CoreAcquisitionPlan>;
   /** Live Core generation fence checked by the Host during execution. */
@@ -165,6 +168,9 @@ export async function submitDynamicFamilyPublication(
   if (input.preflightSubmission === undefined) {
     throw new TypeError("dynamic family submit requires the prepared submission");
   }
+  if (input.productRequirements === undefined) {
+    throw new TypeError("dynamic family submit requires Core-owned product requirements");
+  }
   if (!Number.isSafeInteger(input.generation) || input.generation < 0) {
     throw new TypeError("dynamic family submit requires a non-negative generation");
   }
@@ -176,6 +182,7 @@ export async function submitDynamicFamilyPublication(
     generation: input.generation,
     runtimeLimits: input.runtimeLimits,
     planAcquisition: input.planAcquisition,
+    productRequirements: input.productRequirements,
   });
   const proposal = input.submission.execution_proposal;
   const projection = input.submission.projection;

@@ -15,6 +15,11 @@ import { parseWorkflowRecipeRef } from "../contracts/acquisition.js";
 import { checkFamilySpecTopology } from "../family-spec-topology/index.js";
 import { materializeDynamicFamilySchemas } from "./index.js";
 import { prepareDynamicFamilyHostDescriptor } from "./submission.js";
+import {
+  coreProductTopologyDigest,
+  parseCoreProductTopologyRequirements,
+  type CoreProductTopologyRequirements,
+} from "./product-requirements.js";
 
 type Binding = ParsedDynamicFamilyPublicationSubmission["execution_proposal"]["source_bindings"][number];
 type AcquisitionRequest = ParsedDynamicFamilyPublicationSubmission["acquisition_requests"][string];
@@ -29,6 +34,7 @@ export interface PrepareDynamicFamilyPublicationInput {
   readonly requirementId: string;
   readonly generation: number;
   readonly submission: ParsedDynamicFamilyPublicationSubmission;
+  readonly productRequirements: CoreProductTopologyRequirements;
   readonly runtimeLimits?: RuntimeLimits;
   /** Provider planning only; this callback must not acquire or register bytes. */
   readonly planAcquisition?: (input: DynamicFamilyAcquisitionPlanningInput) => Promise<CoreAcquisitionPlan>;
@@ -40,6 +46,7 @@ export interface ValidateDynamicFamilyPreflightInput {
   readonly taskId: string;
   readonly requirementId: string;
   readonly generation: number;
+  readonly productRequirements: CoreProductTopologyRequirements;
   readonly runtimeLimits?: RuntimeLimits;
   /** Reuse the same cheap Core provider planning seam used by preparation. */
   readonly planAcquisition?: PrepareDynamicFamilyPublicationInput["planAcquisition"];
@@ -101,6 +108,48 @@ function assertDeclaredOutputClosure(submission: ParsedDynamicFamilyPublicationS
       throw new TypeError(`dynamic preflight output schema does not match table '${table.table_id}'`);
     }
   }
+}
+
+function assertProductRequirementClosure(
+  submission: ParsedDynamicFamilyPublicationSubmission,
+  value: CoreProductTopologyRequirements | undefined,
+): CoreProductTopologyRequirements {
+  if (value === undefined) {
+    throw new TypeError("dynamic preflight requires Core-owned product requirements");
+  }
+  const requirements = parseCoreProductTopologyRequirements(value);
+  if (submission.family_spec.assessment_policy_ref !== requirements.profile_ref) {
+    throw new TypeError("dynamic preflight assessment policy does not match Core-owned product requirements");
+  }
+  if (submission.family_spec.family_spec_id !== requirements.dataset_family) {
+    throw new TypeError("dynamic preflight family does not match Core-owned product requirements");
+  }
+  const definitions = new Map(
+    submission.family_spec.table_definitions.map((table) => [table.table_id, table]),
+  );
+  const selected = new Set(selectedOutputClosure(submission));
+  for (const requirement of requirements.tables) {
+    const definition = definitions.get(requirement.table_id);
+    if (definition === undefined || !selected.has(requirement.table_id)) {
+      throw new TypeError(`dynamic preflight is missing required product table '${requirement.table_id}'`);
+    }
+    if (definition.role !== requirement.role || definition.schema_ref !== requirement.schema_ref) {
+      throw new TypeError(`dynamic preflight product table '${requirement.table_id}' does not match its Core contract`);
+    }
+  }
+  if (selected.size !== requirements.tables.length) {
+    throw new TypeError("dynamic preflight product table closure does not exactly match its Core profile");
+  }
+  const selectedRelations = new Set(submission.projection.relations);
+  for (const relationId of requirements.relations) {
+    if (!selectedRelations.has(relationId)) {
+      throw new TypeError(`dynamic preflight is missing required product relation '${relationId}'`);
+    }
+  }
+  if (selectedRelations.size !== requirements.relations.length) {
+    throw new TypeError("dynamic preflight product relation closure does not exactly match its Core profile");
+  }
+  return requirements;
 }
 
 function logicalSubmissionDigestInput(submission: ParsedDynamicFamilyPublicationSubmission): JsonValue {
@@ -267,6 +316,10 @@ export async function prepareDynamicFamilyPublication(
     throw new TypeError(`dynamic preflight topology diagnostics: ${detail}`);
   }
   await materializeDynamicFamilySchemas(input.submission.family_spec, input.submission.projection);
+  const productRequirements = assertProductRequirementClosure(
+    input.submission,
+    input.productRequirements,
+  );
   const roles = requiredInputRoles(input.submission);
   assertDeclaredOutputClosure(input.submission);
   const descriptor = await prepareDynamicFamilyHostDescriptor({
@@ -281,6 +334,7 @@ export async function prepareDynamicFamilyPublication(
     generation: input.generation,
     family_spec_digest: input.submission.family_spec.canonical_digest,
     projection_digest: descriptor.projectionDigest,
+    product_requirement_digest: coreProductTopologyDigest(productRequirements),
     host_descriptor_digest: descriptor.transformDescriptorDigest,
     submission_digest: dynamicFamilyPreflightSubmissionDigest(input.submission),
     required_input_roles: roles,
@@ -322,12 +376,16 @@ export async function validateDynamicFamilyPreflightReceipt(
     submission: input.submission,
     runtimeLimits: input.runtimeLimits,
     planAcquisition: input.planAcquisition,
+    productRequirements: input.productRequirements,
   });
   if (receipt.family_spec_digest !== expected.family_spec_digest) {
     throw new TypeError("dynamic preflight FamilySpec digest drifted");
   }
   if (receipt.projection_digest !== expected.projection_digest) {
     throw new TypeError("dynamic preflight projection digest drifted");
+  }
+  if (receipt.product_requirement_digest !== expected.product_requirement_digest) {
+    throw new TypeError("dynamic preflight product requirement digest drifted");
   }
   if (receipt.host_descriptor_digest !== expected.host_descriptor_digest) {
     throw new TypeError("dynamic preflight Host descriptor digest drifted");

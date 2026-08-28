@@ -4,6 +4,7 @@ import {
   type CoreAcquisitionProviderDescriptor,
 } from "../../dataset/acquisition/provider-catalog.js";
 import { createDefaultDatasetFamilyRegistry } from "../../dataset/families/index.js";
+import { listCoreProductTopologyRequirements } from "../../dataset/dynamic-family/product-requirement-registry.js";
 import type { BioMedAgentTool } from "../contracts.js";
 
 type DirectDynamicProvider = {
@@ -94,6 +95,15 @@ export function datasetRouteCapabilities() {
         "No static entry expresses the required semantic topology, but every input can close through a direct binding below or a prior task-owned Core acquisition asset.",
       next_tools: ["prepare_dynamic_family_publication", "submit_dynamic_family_publication"],
       direct_bindings: directBindings,
+      product_requirement_profiles: listCoreProductTopologyRequirements().map((requirements) => ({
+        profile_ref: requirements.profile_ref,
+        dataset_family: requirements.dataset_family,
+        route_status: "core_owned_topology_only" as const,
+        tables: requirements.tables,
+        relations: requirements.relations,
+        blocker:
+          "The Core profile proves required table/relation topology only; it does not prove source availability, extraction closure, validation success, or publication eligibility.",
+      })),
     },
     core_acquisition_only: acquisitionOnly,
     rules: [

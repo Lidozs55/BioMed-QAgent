@@ -42,6 +42,23 @@ describe("dataset formal-route capability preflight", () => {
     );
   });
 
+  test("reports Core-owned product topology profiles without claiming source closure", () => {
+    const capabilities = datasetRouteCapabilities();
+    const profile = capabilities.dynamic.product_requirement_profiles.find(
+      (item) => item.profile_ref === "bioactivity_measurement.chart_evidence.release.v1",
+    );
+
+    expect(profile).toMatchObject({
+      dataset_family: "bioactivity_measurement",
+      route_status: "core_owned_topology_only",
+    });
+    expect(profile?.tables.map((table) => table.table_id)).toEqual([
+      "activities", "compounds", "assays", "targets",
+      "chart_series", "chart_points", "papers", "sources",
+    ]);
+    expect(profile?.blocker).toMatch(/does not prove source|extraction closure/i);
+  });
+
   test("returns the same bounded, side-effect-free facts through the Agent tool", async () => {
     const tool = createDatasetRoutePreflightTool();
     const result = await tool.execute({});

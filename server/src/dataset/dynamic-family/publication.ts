@@ -37,6 +37,11 @@ import {
 } from "../validation/b3-production-policy.js";
 import type { B3CleanupCapability } from "../validation/b3-backend-decision/index.js";
 import type { ResourceBaselinePolicy } from "../validation/resource-baseline.js";
+import {
+  assertProductTopology,
+  coreProductTopologyDigest,
+  type CoreProductTopologyRequirements,
+} from "./product-requirements.js";
 
 interface DynamicPublicationHILInput {
   readonly requirement_id: string | null;
@@ -76,6 +81,8 @@ export interface PublishDynamicFamilyInput {
   readonly requirementId: string;
   readonly execution: DynamicPublicationExecution;
   readonly validationProfileRef: string;
+  /** Core-owned requested-product closure; Agent FamilySpec cannot define it. */
+  readonly productRequirements: CoreProductTopologyRequirements;
   readonly signal?: AbortSignal;
   readonly publishedAt?: string;
   readonly hilGate?: DynamicPublicationHILGate | null;
@@ -137,6 +144,10 @@ export async function publishDynamicFamily(
   if (candidate.task_id !== input.taskId || candidate.requirement_id !== input.requirementId) {
     throw new TypeError("dynamic publication identity does not match the Core task/requirement");
   }
+  if (input.productRequirements === undefined) {
+    throw new TypeError("dynamic publication requires Core-owned product requirements");
+  }
+  assertProductTopology(candidate, input.productRequirements);
   await assertGenerationCurrent();
   const outputDir = path.join(input.taskRoot, "dataset_runs", runId, input.requirementId);
   await mkdir(outputDir, { recursive: true });
@@ -283,7 +294,13 @@ export async function publishDynamicFamily(
     schema.fields.some((field) => reviewFieldNames.has(field.name.replaceAll("-", "_"))),
   );
   let assessment = parseProductAssessment(
-    structuralAssessment(candidate, failed.length === 0, requiresHilAcceptance, browserExecution !== null),
+    structuralAssessment(
+      candidate,
+      input.productRequirements,
+      failed.length === 0,
+      requiresHilAcceptance,
+      browserExecution !== null,
+    ),
   );
   let hilAcceptance: Record<string, JsonValue> | null = null;
 
@@ -338,6 +355,12 @@ export async function publishDynamicFamily(
         checks_sha256: canonicalDigest(b3.checks),
         checked_count: b3.checks.length,
         failed_count: 0,
+      },
+      product_requirements: {
+        profile_ref: input.productRequirements.profile_ref,
+        digest: coreProductTopologyDigest(input.productRequirements),
+        table_ids: input.productRequirements.tables.map((table) => table.table_id),
+        relation_ids: input.productRequirements.relations,
       },
       tables,
     });
@@ -396,7 +419,7 @@ export async function publishDynamicFamily(
       reason: review.reason,
     };
     assessment = parseProductAssessment({
-      ...structuralAssessment(candidate, true, true, true),
+      ...structuralAssessment(candidate, input.productRequirements, true, true, true),
       human_review_evidence: [reviewEvidence],
     });
     hilAcceptance = toJsonValue({ ...reviewEvidence, reviewed_snapshot: reviewedSnapshot }) as Record<string, JsonValue>;
@@ -522,19 +545,20 @@ export async function publishDynamicFamily(
 
 function structuralAssessment(
   candidate: PublicationCandidate,
+  productRequirements: CoreProductTopologyRequirements,
   passed: boolean,
   requiresHilAcceptance: boolean,
   hilAccepted: boolean,
 ): ProductAssessment {
-  const tableCount = candidate.tables.length;
-  const relationCount = candidate.relations.length;
+  const tableCount = productRequirements.tables.length;
+  const relationCount = productRequirements.relations.length;
   const score = (dimension: ProductAssessment["scores"][number]["dimension"], satisfied: number, required: number) => ({
     dimension, score: required === 0 ? 1 : satisfied / required, satisfied, required,
   });
   return {
     schema_version: "1.0",
-    requirement_id: "dynamic_family_structural_b3.v1",
-    package_id: candidate.candidate_id,
+    requirement_id: productRequirements.profile_ref,
+    package_id: productRequirements.dataset_family,
     package_version: "1.0",
     product_status: passed && (!requiresHilAcceptance || hilAccepted) ? "publishable" : "incomplete",
     scores: [
@@ -546,12 +570,12 @@ function structuralAssessment(
       score("reproducibility", passed ? 1 : 0, 1),
     ],
     missing_requirements: [
-      ...(passed ? [] : ["dynamic_family_structural_b3.v1"]),
+      ...(passed ? [] : [productRequirements.profile_ref]),
       ...(requiresHilAcceptance && !hilAccepted ? ["dynamic_family_hil_acceptance.v1"] : []),
     ],
     blockers: [
       ...(passed ? [] : [{
-        requirement_id: "dynamic_family_structural_b3.v1",
+        requirement_id: productRequirements.profile_ref,
         dimension: "schema" as const,
         code: "artifact_incomplete" as const,
         message: "generic multi-table validation did not pass",

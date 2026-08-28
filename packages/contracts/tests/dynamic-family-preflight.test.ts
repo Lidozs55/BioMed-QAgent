@@ -17,6 +17,7 @@ function receipt(): DynamicFamilyPreflightReceipt {
     generation: 0,
     family_spec_digest: DIGEST,
     projection_digest: DIGEST,
+    product_requirement_digest: DIGEST,
     host_descriptor_digest: DIGEST,
     submission_digest: DIGEST,
     required_input_roles: ["source"],

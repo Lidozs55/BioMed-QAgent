@@ -44,6 +44,12 @@ output.
    after source/projection/transform changes is mandatory; also prepare after
    any committed role, binding, or acquisition-request change, FamilySpec,
    Projection, or transform fact changes. Use this protocol with:
+   - one `dynamic.product_requirement_profiles` entry returned by
+     `inspect_dataset_execution_routes`. Set assessment_policy_ref to that
+     exact Core profile and close its table IDs, roles, schema refs, and
+     relation IDs exactly. An Agent-authored assessment profile, a reduced
+     projection, or provider availability alone cannot reach HIL/publication;
+     preflight rejects it before acquisition;
    - `execution_backend="in_process_unisolated"` exactly. This backend is **not a
      sandbox, isolation mechanism, or security boundary**; never describe it as one.
    - a task/user/curated/system `FamilySpec`, selected Projection, strict

@@ -98,7 +98,7 @@ export function createDynamicFamilyPublicationTool(
     name: "submit_dynamic_family_publication",
     label: "Submit Dynamic Family Publication",
     description:
-      "Submit a strict FamilySpec + TypeScript DatasetTransform with the exact prepare_dynamic_family_publication receipt to the explicit in_process_unisolated runtime and trusted Core publication path. Use only providers reported in inspect_dataset_execution_routes.dynamic.direct_bindings; the acquisition_requests schema is the execution contract, not proof of semantic or publication closure. This is not a sandbox, isolation mechanism, or security boundary. Direct paths and discovery bytes are forbidden.",
+      "Submit a strict FamilySpec + TypeScript DatasetTransform with the exact prepare_dynamic_family_publication receipt to the explicit in_process_unisolated runtime and trusted Core publication path. The prepared receipt binds the matching Core-owned product requirement profile and its exact table/relation closure. Use only providers reported in inspect_dataset_execution_routes.dynamic.direct_bindings; the acquisition_requests schema is the execution contract, not proof of semantic or publication closure. This is not a sandbox, isolation mechanism, or security boundary. Direct paths and discovery bytes are forbidden.",
     parameters: dynamicFamilyPublicationParameters("submit"),
     async execute(value, signal, context): Promise<BioMedToolResult> {
       try {
@@ -125,7 +125,7 @@ export function createPrepareDynamicFamilyPublicationTool(
     name: "prepare_dynamic_family_publication",
     label: "Prepare Dynamic Family Publication",
     description:
-      "Use after inspect_dataset_execution_routes when no registered static family expresses the required topology and every input is dynamic-bindable or a prior task-owned Core asset. Do not prevalidate a dynamic FamilySpec with validate_dataset_execution. Submit semantic fields without derived digest properties. This deterministic, side-effect-free preflight derives all digest bindings, validates topology and acquisition planning, and returns prepared_submission plus a task/requirement/generation-bound preflight_receipt; pass both unchanged to submit_dynamic_family_publication.",
+      "Use after inspect_dataset_execution_routes when no registered static family expresses the required topology and every input is dynamic-bindable or a prior task-owned Core asset. The FamilySpec assessment_policy_ref and exact selected table/relation closure must match one Core-owned product requirement profile returned by inspect_dataset_execution_routes; custom assessment profiles cannot publish. Do not prevalidate a dynamic FamilySpec with validate_dataset_execution. Submit semantic fields without derived digest properties. This deterministic, side-effect-free preflight derives all digest bindings, validates topology, Core product closure, and acquisition planning, and returns prepared_submission plus a task/requirement/generation-bound preflight_receipt; pass both unchanged to submit_dynamic_family_publication.",
     parameters: dynamicFamilyPublicationParameters("prepare"),
     async execute(value, signal, context): Promise<BioMedToolResult> {
       try {
@@ -399,6 +399,7 @@ function dynamicFamilyPublicationParameters(mode: "prepare" | "submit"): Record<
       generation: { type: "integer", minimum: 0 },
       family_spec_digest: digest,
       projection_digest: digest,
+      product_requirement_digest: digest,
       host_descriptor_digest: digest,
       submission_digest: digest,
       required_input_roles: ids,
@@ -438,7 +439,7 @@ function dynamicFamilyPublicationParameters(mode: "prepare" | "submit"): Record<
     },
     required: [
       "schema_version", "task_id", "requirement_id", "generation", "family_spec_digest", "projection_digest",
-      "host_descriptor_digest", "submission_digest", "required_input_roles", "output_closure",
+      "product_requirement_digest", "host_descriptor_digest", "submission_digest", "required_input_roles", "output_closure",
       "topology_diagnostics", "acquisition_plan", "receipt_digest",
     ],
     additionalProperties: false,

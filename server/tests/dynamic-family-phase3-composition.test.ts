@@ -28,6 +28,15 @@ const servers: Server[] = [];
 const DIGEST = "b".repeat(64);
 const IMPLEMENTATION_DIGEST = "c".repeat(64);
 const REQUEST_DIGEST = "d".repeat(64);
+const PRODUCT_REQUIREMENTS = {
+  schema_version: "1.0" as const,
+  profile_ref: "policy_assessment",
+  dataset_family: "family_phase3",
+  tables: [
+    { table_id: "records", role: "primary" as const, schema_ref: "schema_records", min_rows: 1 },
+  ],
+  relations: [],
+};
 
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
@@ -213,6 +222,7 @@ describe("dynamic family phase3 composition fencing", () => {
       browserPool: null,
       resolveRuntimeLimits: () => ({ ...DEFAULT_RUNTIME_LIMITS, build_timeout_seconds: 30 }),
       dynamicFamilySeams: {
+        resolveProductRequirements: () => PRODUCT_REQUIREMENTS,
         createAcquisitionRuntime: acquisitionRuntimeFactory,
         assertExecutionLockOwned: async (assertOwned) => {
           if (inPromotionFence) {
@@ -348,6 +358,7 @@ describe("dynamic family phase3 composition fencing", () => {
       browserPool: null,
       resolveRuntimeLimits: () => ({ ...DEFAULT_RUNTIME_LIMITS, build_timeout_seconds: 30 }),
       dynamicFamilySeams: {
+        resolveProductRequirements: () => PRODUCT_REQUIREMENTS,
         createAcquisitionRuntime: acquisitionRuntimeFactory,
         submitDynamicFamilyPublication: async (input) => {
           transformCalls += 1;
