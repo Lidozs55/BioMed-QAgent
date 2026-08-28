@@ -48,6 +48,16 @@
 - **[P1] 新增（2026-08-25 live run `e2e-gold8-005`）：** 护栏与 tool-honesty 已 live 验证，但“用可达来源产出部分维度”仍未实现。Agent 在被取消前推理始终锁定在寻找 DILIrank 替代镜像（LTKB FTP / GitHub），从未调用已激活的 `lookup_openfda_dili_counts`；per-host fail-fast 的 `no_data:true` 结构化短路因每主机仅 1 次失败而从未命中。另发现护栏语义是**跨工具全局**连续失败计数：6 次 `navigate_page` + 2 次 `download_from_page`（分属不同主机）被合并判定为 “navigate_page failed 8 consecutive times”，有损多源 discovery 的合理性。**下一步**：(a) discovery 阶段对被标记不可达的浏览器调用显式注入“切换到可达来源工具（`lookup_openfda_dili_counts`）/ 报 NO_DATA”的引导（prompt 或 runtime 提示）；(b) 或把护栏改为 per-tool/per-host 计数，使多源探测不被全局计数误杀。改前不改数据源（外部 404 已复确认）。**2026-08-25 决定：guardrail 设计整体移除（跨工具全局计数 + `run_guardrail_triggered` + cancel 均有损多源探测合理性）、路线2（per-tool/per-host 计数）被用户否决，仅采纳路线1（引导 Agent）——见下方新增修复条目标记。**
 - **[P1] 修复（2026-08-25，路线1引导实现，TDD RED→GREEN 通过；配套移除 guardrail）：** `server/src/agent/phase1-prompt.ts` 的 `[Control and recovery]` 节写入固定恢复顺序：① 取数失败先调参重试同一路线（诊断错误并修正 URL/tool query/filename，仅对真瞬态 HTTP 429/5xx/timeout 重试；绝不重复未改动的失败调用）；② 调参重试仍失败才切换到真正独立的可靠来源验证同一事实（FDA 药物事件反应计数 → openFDA FAERS 聚合 `lookup_openfda_dili_counts`）；③ 换源失败或数据真实缺失才报 `NO_DATA`/来源不可用——不得提前放弃、避免滥用换源或误报。`server/tests/pi-adapter.test.ts` 新增契约测试 "guides adjusted-parameter retries before switching source or reporting NO_DATA"（RED→GREEN；正则锁定“调参重试 → 独立换源 → NO_DATA”的顺序与 openFDA FAERS 措辞；pi-adapter 29/29，prompt ≤7000 长度约束保持）。`server/src/runtime/durable-agent-runtime.ts` 的 `GUARDRAIL_MAX_CONSECUTIVE_FAILURES=8` 连续失败取消逻辑、`packages/contracts/src/events.ts` 的 `run_guardrail_triggered` 事件类型与 `server/tests/durable-agent-runtime.test.ts` 相关用例已全部移除。per-host fail-fast（`HOST_FAIL_FAST_THRESHOLD=2`、结构化 `no_data:true` 短路）与 tool-honesty（`isError:true`）作为引导的配套机制保留（不取消 run，只让 Agent 感知主机不可达）。质量门禁：contracts 120/120、server pi-adapter 29/29、browser 48/48 通过，workspace typecheck/lint 干净。**待 live 重跑验证引导生效**。
 
+## 代码质量 / CI
+
+### [P0] main 上 scaffold 提交带入 2 个红测（挡 CI）
+
+- **状态（2026-08-28）：** `bd4c990d`（spec scaffold 工具）+ `3163be69`（SKILL.md 路由到 scaffold 工具）合并后，`pnpm --filter @biomed/server test` 稳定失败 2 例，已排除与压缩修复（`766395c3`/`a48c5ebd`）的关联（纯 main 上复现）。
+- **失败 1：** `tests/family-host-core-dispatch-guard.test.ts` — "generic Core modules contain no family/provider-specific dispatch"（137ms）。scaffold 引入的 Core 模块路径或 dispatch 表触发了 generic Core 边界断言。
+- **失败 2：** `tests/skill-manifests.test.ts` — "no SKILL.md references phantom tools"：`dataset-construction` 引用未知工具 `scaffold_dataset_execution_spec`。工具本体存在（`server/src/dataset/scaffold/spec-scaffold.ts`），但稳定 skill↔tool map 未收录该名字（名字不匹配或注册缺失）。
+- **影响：** CI 对所有 PR/push 红色，掩盖真实回归；其他 agent 的失败测试循环被这两个噪音干扰。
+- **修法方向：** 对齐三处之一——工具注册名、`tests/skill-manifests` 的 stable map、SKILL.md 引用；dispatch guard 则检查 scaffold 模块是否应移出 generic Core 路径或以声明式注册替代 dispatch。修复者先读 `bd4c990d`/`3163be69` 的提交意图再动手。
+
 ## 可选测试缺口
 
 这些是非阻塞的覆盖增强，不代表已观察到生产故障：

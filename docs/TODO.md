@@ -24,6 +24,7 @@
   - 验收：现有权限和 publication acceptance 流程行为不回退；历史事件仍可重放。
 - [x] **数据集请求 formal-route scaffold。** 只读 capability preflight 已接入；继续由服务端生成 digest-bound dynamic execution skeleton，并为候选 semantic family/projection、单一行粒度、可用 Core providers 和缺失 blockers 提供确定性输入。
   - 验收：gold7 类复合请求可拆为多个 projection/requirement；无 provider 时形成结构化 blocker，且不把 workspace 文件提升为正式产物；事件重放结果一致。
+  - **遗留（2026-08-28）：** 该功能合入带入 2 个 main 红测（dispatch guard + skill map），见 [ISSUES §代码质量](ISSUES.md)；清零前 CI 保持红色。
 - [ ] **图表 evidence 到正式 Publication 闭环。** 将现有 `bioactivity-measurement/chart-evidence` 模块接入受控的 Family Registry、Adapter/Assembler、Validation、ProductAssessment 与 Publisher 路线；VLM/PDF/caption 输出必须先成为 task-owned、摘要绑定的 evidence asset，不能让任意 workspace CSV 直接获得正式发布权。
   - 验收：正式证据保留 source asset、page/bbox、模型及版本、prompt/transform digest、点级 confidence 与 review state；provenance 不闭合或需要复核时 fail closed；至少一个点级 Gold 覆盖 HIL correction、事件重放和 Publication artifact hash 端到端验证。
   - 前置：实现前先在对应 architecture topic 中固定 evidence asset ownership、review 状态机和现有 chart-evidence schema 的兼容策略；若改变 Core publication trust boundary，必须新增 ADR。
@@ -39,6 +40,10 @@
   - 验收：契约先进入 `@biomed/contracts`；边界、空页和 hostile-wire 用例有测试。
 - [ ] **Trait association / genomic annotation 可复用 family 闭包。** 按 [`architecture/trait-association-and-genomic-annotation-design.md`](architecture/trait-association-and-genomic-annotation-design.md) 实现来源无关的 projections 与 GWAS Catalog、supplementary archive、RefSNP 通用 providers；provider 与 family 保持多对多。
   - 验收：至少一个非 Alzheimer trait、两个不同数据库证明复用；variant/gene/region 粒度分别构建；不兼容 assembly、effect scale、allele/model 或 mapping method 的输入 fail closed；正式 Publication 通过 provenance/B3/ProductAssessment/Artifact hash 门。
+- [ ] **上下文压缩整改遗留（`main@1a62cfba`）。** 已合并：预算取较小值、压缩遥测、fail-closed（`766395c3`）、已发布 run 让路（`a48c5ebd`，gold9 r16 场景）。剩余：(a) run 入口 preflight——发起 Pi turn 前检查 `context_window - max_tokens - reserve > 0`，不足时以明确的 `context_budget_exhausted` 拒绝而非等 provider 400；(b) Gold live 复验——gold9 在 `a48c5ebd+` 基线重跑，确认 `succeeded_publication` closure 与真实 provider usage/Pi 估值一致。
+  - 验收：preflight 有复现测试（预算不足的 run 被结构化拒绝）；gold9 单次 fresh run 产出 `succeeded_publication` 且无 `CONTEXT_COMPACTION_INEFFECTIVE` 误杀。
+- [ ] **设置接线审计整改（2026-08-28，报告 [`audit/2026-08-28-settings-wiring-audit.md`](audit/2026-08-28-settings-wiring-audit.md)）。** 按报告顺序认领：P0 编辑活动模型参数不生效（`updateModel` 不回写 settings，须重新激活）；P1 跨字段校验缺失（target≥trigger 可落盘、`max_tokens` 无上界、params 不按 paramSpecs 校验）、`activateInMemory` max_tokens 残留旧模型值、personalization 域未接线（需产品决策，先 `[Q]`）、`safety_reserve_ratio` 半死；P2 共 11 项（删除残留、base_url 无 URL 校验、加载零校验、tmp 清扫、掩码边角、compaction 参数无前端入口等）。
+  - 验收：P0/P1 各有 RED→GREEN 回归测试；整改后重放设置审计报告的"主要可疑问题汇总"逐项可勾。
 
 ## Deferred / 非当前工作
 
