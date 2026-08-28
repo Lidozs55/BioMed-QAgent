@@ -50,6 +50,21 @@
 
 ## 代码质量 / CI
 
+### [P1] Provider 流挂起无超时，且 session.cancel 同路径无界等待（2026-08-28 gold9 实测）
+
+- **状态：** 强制取消已修复（`fix/run-context-budget-preflight` 分支 `46e961bf`，RED→GREEN 回归测试覆盖）；流级 idle timeout 仍未实现。
+- **现象：** deepseek-v4-flash（api.deepseek.com）经 Pi 发起的 provider 流式调用在 gold9 任务上两次无限挂起（`run_ts_8b23aefa` 17:16:54Z、`run_ts_bd01132a` 17:31:05Z，挂起点均在 54k/1M token、orphadata 浏览阶段之后）：零字节、零错误、零重试，run 永久 `running`。同 Host 并发的 gold8 请求正常，非账号级并发限制。
+- **连带缺陷：** `cancelRun` 先 `await task.session.cancel(...)` 再进 10s 终态竞速——cancel 本身挂起时 HTTP 取消调用超时（curl 000），run_cancelled 永不落盘；修复后 cancel 有界，超时即强制追加 `run_cancelled (forced)` 并将 runKey 加入 `suspendedRuns` 静音集，僵尸 loop 醒来也不会重复终态。另一残留：`close()`（优雅关停）仍 await 全部 activeExecutions，僵尸 execution 未醒时优雅关停会挂起（今天靠进程强杀恢复）。
+- **下一步：** 在 adapter 层为 provider 请求加 idle-byte watchdog（无数据 N 分钟即 abort 并按可重试错误处理）；`close()` 对僵尸 execution 设置宽限后放弃等待。复现证据：`data/gold-runs/e8d03589-gold9-dsflash-r1/-r2`。
+
+### [P1] dynamic submit 要求回显巨型 prepared_submission，小模型在输出预算边缘丢字段（2026-08-28 gold9 r3/r4）
+
+- **状态：** 待结构性修复；已确认非截断/非权限问题。
+- **现象：** prepare 成功返回 ~97KB JSON（模型在会话内收到全文，事件流里的 `[truncated]` 只是持久化投影），但 submit 要求把 prepared_submission + preflight_receipt 逐字回显进参数——约 25-30k token，正贴 32,768 输出预算边缘。deepseek-v4-flash 两次回显失真：r3 提交 >128 required_input_roles 的逐记录角色模型（submit schema 上限 128 直接拒），r4 提交了空 `registered_sources` map + 20 bindings，Core 以 "Core input handle closure must be immutable and bounded" 拒绝。gold7（3 源）与 gold8（2 源）spec 较小、回显远小于预算，同链路成功——缺陷与 payload 大小强相关。
+- **已落地的缓解：** preflight 现在早拒 >64 source bindings（对齐 Core MAX_AUTHORIZED_INPUTS），错误信息明确"按源建模、勿按记录"（`main@f83ceca0`）。
+- **结构性修法（TODO P1 scaffold 的子集）：** submit 支持 receipt 引用式提交——服务端 prepare 已持有 task/requirement/generation 绑定的 prepared 状态，submit 只需回传 `receipt_digest`（+可选覆盖项），免除巨型回显；wire 契约变更须先进 `@biomed/contracts` 并加 hostile 用例。
+- **复现：** `data/gold-runs/e8d03589-gold9-dsflash-r3/-r4`（失败 submit 实参均在事件流 `tool_started` 可见）。
+
 ### [P0] main 上 scaffold 提交带入 2 个红测（挡 CI）
 
 - **状态（2026-08-28，已修复 `main@d829c387`）：** 两测均已清零。dispatch guard：`spec-scaffold.ts` 的 `family.id ===` 比较改为 `registry.list().includes()` + `registry.get()`，generic Core 不再含 family equality 分支；skill map：`scaffold_dataset_execution_spec` 以注册名收录进 stable map（注册名 = SKILL.md = map 三处一致），并按既有模式在 `business-tools.ts` 标记 task-scoped unavailable、同步两处测试 pin。修复保留 scaffold 功能与全部既有测试。以下原始记录留档。
