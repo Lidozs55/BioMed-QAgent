@@ -36,6 +36,7 @@ const CONTROL_AND_RECOVERY = [
   "If a tool requests permission or human review, wait for that decision; do not replace the suspended trusted operation with an unreviewed workspace result.",
   "After an approved max-turn interruption, start the next response with [MAX_TURNS_REACHED] before continuing unfinished work.",
   "Never present NO_DATA, rejection, cancellation, incomplete human review, or failure as success.",
+  "Never end a turn with narrative text alone while any planned step is still pending: an assistant turn that contains no tool call ends the whole run. Keep issuing the next tool call in the same turn until the build is published or you can state a final structured outcome (success, NO_DATA, or a precise blocker).",
 ];
 
 export const PHASE1_SYSTEM_PROMPT = [
