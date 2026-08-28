@@ -21,7 +21,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { formatContextWindow } from "@/lib/tokenFormat";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -34,6 +34,7 @@ import {
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { ParameterEditor } from "@/components/settings/model/ParameterEditor";
+import { paramsValidationError } from "@/components/settings/model/paramValidation";
 import { ModelDetailDialog } from "@/components/settings/model/ModelDetailDialog";
 import type {
   DiscoveredModelInfo,
@@ -156,6 +157,7 @@ export function ModelImportSheet({
   const [manualLoading, setManualLoading] = useState(false);
   const [manualSpecs, setManualSpecs] = useState<ParameterSpec[]>([]);
   const [manualDraft, setManualDraft] = useState<ManualDraft>(EMPTY_MANUAL_DRAFT);
+  const [manualContextError, setManualContextError] = useState<string | null>(null);
   const wasOpenRef = useRef(false);
     const [manualJsonOpen, setManualJsonOpen] = useState(false);
     const [manualJsonText, setManualJsonText] = useState("");
@@ -182,6 +184,7 @@ export function ModelImportSheet({
     setDetailOpen(false);
     setManualOpen(false);
     setManualDraft(EMPTY_MANUAL_DRAFT);
+    setManualContextError(null);
     setManualJsonOpen(false);
     setManualJsonText("");
     setManualJsonError(null);
@@ -255,6 +258,7 @@ export function ModelImportSheet({
     setManualOpen(true);
     setManualLoading(true);
     setManualDraft(EMPTY_MANUAL_DRAFT);
+    setManualContextError(null);
     setManualJsonOpen(false);
     setManualJsonText("");
     
@@ -325,18 +329,26 @@ export function ModelImportSheet({
       toast.error("请输入模型 ID");
       return;
     }
+    // 非法 context_window 显式报错（与 ModelDetailDialog 行为一致），不再静默按“未提供”提交。
+    const rawWindow = manualDraft.contextWindow.trim();
+    const parsedWindow = rawWindow === "" ? null : Number(rawWindow);
+    if (parsedWindow !== null && (!Number.isFinite(parsedWindow) || parsedWindow <= 0)) {
+      setManualContextError("上下文窗口必须为正整数（Tokens）");
+      return;
+    }
+    setManualContextError(null);
+    const paramError = paramsValidationError(manualSpecs, manualDraft.params);
+    if (paramError) {
+      toast.error(paramError);
+      return;
+    }
     setSaving(true);
     try {
-      const rawWindow = manualDraft.contextWindow.trim();
-      const parsedWindow = rawWindow === "" ? null : Number(rawWindow);
       const created = await api.createManagedModel({
         provider_id: providerId,
         model_id: modelId,
         name: manualDraft.name.trim() || modelId,
-        context_window:
-          parsedWindow !== null && Number.isFinite(parsedWindow) && parsedWindow > 0
-            ? parsedWindow
-            : null,
+        context_window: parsedWindow,
         source: "manual",
         params: manualDraft.params,
       });
@@ -745,11 +757,15 @@ export function ModelImportSheet({
                 type="number"
                 min={1}
                 value={manualDraft.contextWindow}
-                onChange={(event) =>
-                  setManualDraft({ ...manualDraft, contextWindow: event.target.value })
-                }
+                onChange={(event) => {
+                  setManualDraft({ ...manualDraft, contextWindow: event.target.value });
+                  setManualContextError(null);
+                }}
                 placeholder="如 131072"
               />
+              {manualContextError && (
+                <FieldError aria-live="polite">{manualContextError}</FieldError>
+              )}
             </Field>
             <div className="border-t pt-3">
               <div className="mb-3 flex items-center justify-between gap-3">
