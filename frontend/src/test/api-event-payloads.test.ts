@@ -151,6 +151,31 @@ describe("parseEventPayload — runtime event family", () => {
     expect(() => parseEventPayload(o({ type: "conversation_compacted", compaction_id: "c1", covered_through_run_id: "r1", summary_digest: "bad" }), "conversation_compacted", "p")).toThrow(APIError);
   });
 
+  it("conversation_compacted — preserves compaction convergence telemetry", () => {
+    const digest = "a".repeat(64);
+    expect(parseEventPayload(o({
+      type: "conversation_compacted",
+      compaction_id: "c1",
+      covered_through_run_id: "r1",
+      summary_digest: digest,
+      reason: "threshold",
+      tokens_before: 100_000,
+      estimated_tokens_after: 55_000,
+      target_tokens: 60_000,
+      summary_tokens: 8_000,
+    }), "conversation_compacted", "p")).toEqual({
+      type: "conversation_compacted",
+      compaction_id: "c1",
+      covered_through_run_id: "r1",
+      summary_digest: digest,
+      reason: "threshold",
+      tokens_before: 100_000,
+      estimated_tokens_after: 55_000,
+      target_tokens: 60_000,
+      summary_tokens: 8_000,
+    });
+  });
+
   it("conversation_compaction_started — parses a compact request status", () => {
     const r = parseEventPayload(
       o({ type: "conversation_compaction_started", compaction_id: "c1", covered_through_run_id: "r1" }),

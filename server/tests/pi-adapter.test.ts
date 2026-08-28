@@ -7,8 +7,11 @@ import {
   PiAgentAdapter,
   applyModelProfileToPayload,
   resolvePiCompactionOverrides,
+  resolvePiCompactionTargetTokens,
   resolveManualPiCompactionOverrides,
+  resolveRequestMaxTokens,
   shouldReconfigureSession,
+  toUpstreamEvent,
   toolCatalogPrompt,
   TOOL_ACTIVATION_NAME,
   toPiCustomTools,
@@ -334,12 +337,23 @@ describe("PiAgentAdapter", () => {
     vi.useRealTimers();
   });
 
+  test("preserves Pi's stricter per-call output budget", () => {
+    expect(resolveRequestMaxTokens(32_768, 12_000)).toBe(12_000);
+    expect(resolveRequestMaxTokens(8_192, 12_000)).toBe(8_192);
+    expect(resolveRequestMaxTokens(32_768, undefined)).toBe(32_768);
+  });
+
   test("maps product compaction ratios onto Pi compaction settings", () => {
     expect(resolvePiCompactionOverrides(131_072, 0.85, 0.45)).toEqual({
       compaction: { enabled: true, reserveTokens: 19_661, keepRecentTokens: 43_253 },
     });
     expect(resolvePiCompactionOverrides(131_072, 0.95, 0.45).compaction.reserveTokens)
       .toBe(6_554);
+  });
+
+  test("resolves the observable compaction target from current usage", () => {
+    expect(resolvePiCompactionTargetTokens(100_000, 0.6, 100_000)).toBe(60_000);
+    expect(resolvePiCompactionTargetTokens(100_000, 0.99, null)).toBe(60_000);
   });
 
   test("clamps window-based fallback so compaction leaves room for the reserve budget", () => {
@@ -450,7 +464,12 @@ describe("PiAgentAdapter", () => {
       upstream.emit({
         type: "compaction_end",
         reason: "threshold",
-        compactionResult: { summary: "compacted checkpoint summary" },
+        compactionResult: {
+          summary: "compacted checkpoint summary",
+          tokensBefore: 100_000,
+          estimatedTokensAfter: 55_000,
+          summaryTokens: 8_000,
+        },
         aborted: false,
       });
     };
@@ -463,6 +482,45 @@ describe("PiAgentAdapter", () => {
     expect(events).toContainEqual({
       type: "context_compacted",
       summary: "compacted checkpoint summary",
+      reason: "threshold",
+      tokensBefore: 100_000,
+      estimatedTokensAfter: 55_000,
+      summaryTokens: 8_000,
+    });
+  });
+
+  test("preserves the full Pi compaction summary and token telemetry", () => {
+    const summary = "s".repeat(5_000);
+
+    expect(toUpstreamEvent({
+      type: "compaction_end",
+      reason: "threshold",
+      result: {
+        summary,
+        firstKeptEntryId: "entry-kept",
+        tokensBefore: 100_000,
+        estimatedTokensAfter: 55_000,
+        usage: {
+          input: 10_000,
+          output: 8_000,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 18_000,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      },
+      aborted: false,
+      willRetry: false,
+    } as never, 60_000)).toMatchObject({
+      type: "compaction_end",
+      reason: "threshold",
+      compactionResult: {
+        summary,
+        tokensBefore: 100_000,
+        estimatedTokensAfter: 55_000,
+        targetTokens: 60_000,
+        summaryTokens: 8_000,
+      },
     });
   });
 

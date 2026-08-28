@@ -8,6 +8,7 @@ import { once } from "node:events";
 import { afterEach, describe, expect, test } from "vitest";
 
 const supervisorUrl = new URL("../../scripts/gold-formal-supervisor.mjs", import.meta.url);
+const supervisorModule = await import(supervisorUrl.href);
 const {
   EXIT_CODES,
   classifyHIL,
@@ -16,10 +17,11 @@ const {
   currentPublicationIdFrom,
   digestManifestFile,
   digestPackage,
+  redacted: redactEvidence,
   supervise,
   validateCleanUtf8Bytes,
   verifyArtifactBytes,
-} = await import(supervisorUrl.href);
+} = supervisorModule;
 type JsonRecord = Record<string, unknown>;
 const roots: string[] = [];
 const TASK_ID = "task_ts_fixture";
@@ -233,6 +235,24 @@ afterEach(async () => {
 });
 
 describe("Gold formal rerun supervisor", () => {
+  test("preserves numeric token telemetry while redacting credentials", () => {
+    expect(redactEvidence({
+      tokens: 115_487,
+      tokens_before: 100_000,
+      estimated_tokens_after: 97_000,
+      target_tokens: 60_000,
+      summary_tokens: 32_000,
+      access_token: "secret-value",
+    })).toEqual({
+      tokens: 115_487,
+      tokens_before: 100_000,
+      estimated_tokens_after: 97_000,
+      target_tokens: 60_000,
+      summary_tokens: 32_000,
+      access_token: "[REDACTED]",
+    });
+  });
+
   test("exports stable exit codes and terminal classifications", () => {
     expect(EXIT_CODES.SUCCESS).toBe(0);
     expect(classifyTerminal({

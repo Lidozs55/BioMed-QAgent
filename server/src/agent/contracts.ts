@@ -5,6 +5,7 @@ export type BioMedAgentErrorCode =
   | "SESSION_DISPOSED"
   | "DUPLICATE_RUN"
   | "RUN_NOT_FOUND"
+  | "CONTEXT_COMPACTION_INEFFECTIVE"
   | "UPSTREAM_FAILURE";
 
 export class BioMedAgentError extends Error {
@@ -42,7 +43,15 @@ export type BioMedAgentEvent =
     }
   | { type: "turn_completed" }
   | { type: "turn_cancelled"; reason?: string }
-  | { type: "context_compacted"; summary: string }
+  | {
+      type: "context_compacted";
+      summary: string;
+      reason?: "manual" | "threshold" | "overflow";
+      tokensBefore?: number;
+      estimatedTokensAfter?: number;
+      targetTokens?: number;
+      summaryTokens?: number;
+    }
   | {
       type: "context_usage";
       tokens: number | null;

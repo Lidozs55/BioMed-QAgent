@@ -3017,7 +3017,7 @@ describe("conversation items projection", () => {
     });
   });
 
-  it("projects runtime context usage and resets it after compaction", () => {
+  it("projects runtime context usage and keeps Pi's post-compaction estimate", () => {
     let state = mergeTaskPage(
       createInitialRuntimeState(),
       page(summary("task_context")),
@@ -3047,11 +3047,14 @@ describe("conversation items projection", () => {
         compaction_id: "compaction-test-2",
         covered_through_run_id: "run_context",
         summary_digest: "digest",
+        tokens_before: 100_000,
+        estimated_tokens_after: 55_000,
+        target_tokens: 60_000,
       }),
     );
     expect(state.tasksById.task_context).toMatchObject({
-      contextTokensUsed: undefined,
-      contextTokensSource: undefined,
+      contextTokensUsed: 55_000,
+      contextTokensSource: "runtime",
       contextCompactionSequence: 2,
     });
   });

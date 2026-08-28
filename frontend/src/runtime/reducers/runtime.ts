@@ -542,8 +542,9 @@ export function applyConversationCompactedEvent(
   return {
     ...next,
     compacting: false,
-    contextTokensUsed: undefined,
-    contextTokensSource: undefined,
+    contextTokensUsed: payload.estimated_tokens_after,
+    contextTokensSource:
+      payload.estimated_tokens_after === undefined ? undefined : "runtime",
     contextCompactionSequence: envelope.sequence,
   };
 }

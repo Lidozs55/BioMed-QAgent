@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 
 import type { EventEnvelope, EventPayload, JsonValue } from "@biomed/contracts";
 
-import type { BioMedAgentEvent } from "./contracts.js";
+import { BioMedAgentError, type BioMedAgentEvent } from "./contracts.js";
 
 const MAX_CHUNK_LENGTH = 4_096;
 const MAX_ARGUMENT_STRING_LENGTH = 200;
@@ -182,6 +182,19 @@ export class PiEventAdapter {
             compaction_id: randomUUID(),
             covered_through_run_id: runId,
             summary_digest: createHash("sha256").update(event.summary, "utf8").digest("hex"),
+            ...(event.reason === undefined ? {} : { reason: event.reason }),
+            ...(event.tokensBefore === undefined
+              ? {}
+              : { tokens_before: event.tokensBefore }),
+            ...(event.estimatedTokensAfter === undefined
+              ? {}
+              : { estimated_tokens_after: event.estimatedTokensAfter }),
+            ...(event.targetTokens === undefined
+              ? {}
+              : { target_tokens: event.targetTokens }),
+            ...(event.summaryTokens === undefined
+              ? {}
+              : { summary_tokens: event.summaryTokens }),
           }),
         ];
       case "context_usage":
@@ -236,7 +249,16 @@ export class PiEventAdapter {
   }
 
   failed(runId: string, error: unknown): EventEnvelope[] {
-    void error;
+    if (
+      error instanceof BioMedAgentError &&
+      error.code === "CONTEXT_COMPACTION_INEFFECTIVE"
+    ) {
+      return this.terminal(runId, {
+        type: "run_failed",
+        error: "Context compaction did not reduce the estimated context",
+        error_code: "internal_error",
+      });
+    }
     return this.terminal(runId, {
       type: "run_failed",
       error: "Pi turn failed",
