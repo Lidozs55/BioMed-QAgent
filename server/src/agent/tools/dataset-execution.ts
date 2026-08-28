@@ -20,8 +20,10 @@ import type {
   BioMedToolResult,
 } from "../contracts.js";
 import { parseDatasetExecutionSpec } from "../../dataset/contracts/index.js";
+import { buildDatasetExecutionScaffold } from "../../dataset/scaffold/spec-scaffold.js";
 import { providerCarrierBinding } from "../../dataset/runtime/provider-bindings.js";
 import type { DatasetCoreService } from "../../dataset/service/dataset-core.js";
+import type { DatasetFamilyRegistry } from "../../dataset/families/index.js";
 
 const MAX_ID = 128;
 const MAX_CONTENT = 4_096;
@@ -47,6 +49,8 @@ export interface DatasetExecutionToolDiagnostic {
 export interface DatasetExecutionToolOptions {
   client: Pick<DatasetCoreService, "validate" | "execute"> &
     Partial<Pick<DatasetCoreService, "acquire">>;
+  /** Live family registry powering the read-only spec scaffolding tool. */
+  familyRegistry: DatasetFamilyRegistry;
   taskId: string;
   /** Task root on disk; the tool persists its invocation here so a
    * cross-restart resume can replay the exact same build deterministically
@@ -565,6 +569,111 @@ export function createDatasetExecutionTools(
         } catch (error) {
           diagnostic(options, "execute_dataset_execution", context, started, response, codeForCaught(error), requirementId);
           return caught(error);
+        }
+      },
+    },
+    {
+      name: "scaffold_dataset_execution_spec",
+      label: "Scaffold DatasetExecutionSpec",
+      description:
+        "Read-only helper: compose a complete, validate-ready DatasetExecutionSpec for a registered multitable " +
+        "family from just the family id, phenotype/study entities, and one {source, adapter_id, accession} tuple " +
+        "per binding. Use this instead of hand-writing the spec JSON — then pass the returned spec unchanged to " +
+        "validate_dataset_execution. One accession per binding; entities carry disease/study context.",
+      parameters: {
+        type: "object",
+        properties: {
+          family_id: { type: "string", description: "Registered dataset family id, e.g. gut_microbiome." },
+          requirement_id: { type: "string", description: "Stable requirement id for this build, e.g. gut_t2d_v1." },
+          objective: { type: "string", description: "Optional human-readable objective; defaulted when omitted." },
+          entities: {
+            type: "object",
+            description:
+              "Cross-cutting context as key/value strings, e.g. {\"disease_id\":\"D003924\",\"disease_name\":\"Diabetes Mellitus, Type 2\",\"host_taxon_id\":\"9606\",\"study_id\":\"MGYS00000322\"}.",
+            additionalProperties: { anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }] },
+          },
+          bindings: {
+            type: "array",
+            description: "One entry per provider binding. e.g. [{\"source\":\"mgnify\",\"adapter_id\":\"registered_gut_microbiome_study_json\",\"accession\":\"MGYS00000322\"}].",
+            minItems: 1,
+            items: {
+              type: "object",
+              properties: {
+                source: { type: "string" },
+                adapter_id: { type: "string" },
+                accession: { anyOf: [{ type: "string" }, { type: "null" }] },
+              },
+              required: ["source", "adapter_id"],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ["family_id", "requirement_id", "entities", "bindings"],
+        additionalProperties: false,
+      },
+      async execute(value) {
+        try {
+          const args = object(value);
+          const familyId = args.family_id;
+          const requirementId = args.requirement_id;
+          const objective = args.objective;
+          const entitiesInput = args.entities ?? {};
+          const bindingsInput = args.bindings;
+          if (typeof familyId !== "string" || familyId.trim() === "") {
+            throw new TypeError("scaffold_dataset_execution_spec requires a non-empty family_id");
+          }
+          if (typeof requirementId !== "string" || requirementId.trim() === "") {
+            throw new TypeError("scaffold_dataset_execution_spec requires a non-empty requirement_id");
+          }
+          if (typeof entitiesInput !== "object" || entitiesInput === null || Array.isArray(entitiesInput)) {
+            throw new TypeError("entities must be an object of string values");
+          }
+          if (!Array.isArray(bindingsInput)) {
+            throw new TypeError("bindings must be an array");
+          }
+          const entities: Record<string, string | string[]> = {};
+          for (const [key, value] of Object.entries(entitiesInput as Record<string, unknown>)) {
+            if (typeof value === "string") entities[key] = value;
+            else if (Array.isArray(value) && value.every((item): item is string => typeof item === "string")) entities[key] = value;
+            else throw new TypeError(`entities.${key} must be a string or string array`);
+          }
+          const bindings = bindingsInput.map((raw) => {
+            const item = typeof raw === "object" && raw !== null ? raw as Record<string, unknown> : {};
+            const source = item.source;
+            const adapterId = item.adapter_id;
+            if (typeof source !== "string" || typeof adapterId !== "string") {
+              throw new TypeError("each binding requires string source and adapter_id");
+            }
+            const accession = item.accession;
+            return {
+              source,
+              adapter_id: adapterId,
+              accession: typeof accession === "string" ? accession : null,
+            };
+          });
+          const { spec, notes } = buildDatasetExecutionScaffold(options.familyRegistry, {
+            family_id: familyId,
+            requirement_id: requirementId,
+            objective: typeof objective === "string" ? objective : undefined,
+            entities,
+            bindings,
+          });
+          return {
+            content: JSON.stringify({
+              ok: true,
+              spec,
+              notes,
+              next_step: "Pass this spec unchanged to validate_dataset_execution, then execute_dataset_execution.",
+            }),
+          };
+        } catch (error) {
+          return {
+            content: JSON.stringify({
+              ok: false,
+              error: { code: "scaffold_failed", message: error instanceof Error ? error.message : String(error) },
+            }),
+            isError: true,
+          };
         }
       },
     },

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import type { DatasetBridgeResponse } from "@biomed/contracts";
 import { createDatasetExecutionTools } from "../src/agent/tools/dataset-execution.js";
+import { createDefaultDatasetFamilyRegistry } from "../src/dataset/families/index.js";
 import { CoreAcquisitionError } from "../src/dataset/acquisition/runtime.js";
 import { readExecutionContinuation } from "../src/runtime/execution-continuation.js";
 import { datasetExecutionSpec as spec } from "./dataset-bridge-fixture.js";
@@ -25,6 +26,7 @@ afterEach(async () => {
 describe("Pi DatasetExecution tools", () => {
   test("exposes a compact DatasetExecutionSpec contract while retaining Core validation", async () => {
     const [validateTool, executeTool] = createDatasetExecutionTools({
+      familyRegistry: createDefaultDatasetFamilyRegistry(),
       client: { validate: vi.fn(), execute: vi.fn() },
       taskId: "task_tool",
       taskRoot: await toolTaskRoot(),
@@ -99,6 +101,7 @@ describe("Pi DatasetExecution tools", () => {
       error: { code: "no_data", message: "No data", retryable: false, details: {} },
     }));
     const [validateTool, executeTool] = createDatasetExecutionTools({
+      familyRegistry: createDefaultDatasetFamilyRegistry(),
       client: { validate, execute },
       taskId: "task_tool",
       taskRoot: await toolTaskRoot(),
@@ -151,6 +154,7 @@ describe("Pi DatasetExecution tools", () => {
       data: { valid: true, reason_codes: [], reasons: [] }, error: null,
     }));
     const tools = createDatasetExecutionTools({
+      familyRegistry: createDefaultDatasetFamilyRegistry(),
       client: { validate, execute },
       taskId: "task_tool", taskRoot: await toolTaskRoot(),
       runId: () => "run_tool", piSessionId: () => "pi_tool",
@@ -175,6 +179,7 @@ describe("Pi DatasetExecution tools", () => {
 
   test("labels DatasetExecutionSpec tools as static-route capabilities", async () => {
     const tools = createDatasetExecutionTools({
+      familyRegistry: createDefaultDatasetFamilyRegistry(),
       client: { validate: vi.fn(), execute: vi.fn() },
       taskId: "task_tool", taskRoot: await toolTaskRoot(),
       runId: () => "run_tool", piSessionId: () => "pi_tool",
@@ -190,6 +195,7 @@ describe("Pi DatasetExecution tools", () => {
       data: { valid: true, reason_codes: [], reasons: [] }, error: null,
     }));
     const [validateTool, executeTool] = createDatasetExecutionTools({
+      familyRegistry: createDefaultDatasetFamilyRegistry(),
       client: { validate, execute: vi.fn() },
       taskId: "task_tool",
       taskRoot: await toolTaskRoot(),
@@ -223,6 +229,7 @@ describe("Pi DatasetExecution tools", () => {
 
   test("rejects duplicate decoded keys in a JSON-encoded spec", async () => {
     const [validateTool] = createDatasetExecutionTools({
+      familyRegistry: createDefaultDatasetFamilyRegistry(),
       client: { validate: vi.fn(), execute: vi.fn() },
       taskId: "task_tool",
       taskRoot: await toolTaskRoot(),
@@ -244,6 +251,7 @@ describe("Pi DatasetExecution tools", () => {
 
   test("reports a clear error when the spec string is not valid JSON", async () => {
     const [validateTool] = createDatasetExecutionTools({
+      familyRegistry: createDefaultDatasetFamilyRegistry(),
       client: { validate: vi.fn(), execute: vi.fn() },
       taskId: "task_tool",
       taskRoot: await toolTaskRoot(),
@@ -274,6 +282,7 @@ describe("Pi DatasetExecution tools", () => {
       },
     }));
     const [, tool] = createDatasetExecutionTools({
+      familyRegistry: createDefaultDatasetFamilyRegistry(),
       client: {
         validate: async () => ({
           version: 1,
@@ -305,6 +314,7 @@ describe("Pi DatasetExecution tools", () => {
     });
 
     const invalidTool = createDatasetExecutionTools({
+      familyRegistry: createDefaultDatasetFamilyRegistry(),
       client: {
         validate: async () => {
           throw new TypeError("malformed spec");
@@ -322,6 +332,7 @@ describe("Pi DatasetExecution tools", () => {
     });
 
     const acquisitionTool = createDatasetExecutionTools({
+      familyRegistry: createDefaultDatasetFamilyRegistry(),
       client: {
         validate: async () => ({
           version: 1,
@@ -378,6 +389,7 @@ describe("Pi DatasetExecution tools", () => {
       error: { code: "no_data", message: "No data", retryable: false, details: {} },
     }));
     const tools = createDatasetExecutionTools({
+      familyRegistry: createDefaultDatasetFamilyRegistry(),
       client: { validate, acquire, execute },
       taskId: "task_tool",
       taskRoot: await toolTaskRoot(),
@@ -437,6 +449,7 @@ describe("Pi DatasetExecution tools", () => {
       error: { code: "no_data", message: "No data", retryable: false, details: {} },
     }));
     const tools = createDatasetExecutionTools({
+      familyRegistry: createDefaultDatasetFamilyRegistry(),
       client: { validate, acquire, execute },
       taskId: "task_tool",
       taskRoot: await toolTaskRoot(),
@@ -526,6 +539,7 @@ describe("Pi DatasetExecution tools", () => {
     const acquire = vi.fn();
     const execute = vi.fn();
     const tools = createDatasetExecutionTools({
+      familyRegistry: createDefaultDatasetFamilyRegistry(),
       client: { validate, acquire, execute },
       taskId: "task_tool",
       taskRoot: await toolTaskRoot(),
@@ -576,6 +590,7 @@ describe("Pi DatasetExecution tools", () => {
     };
     const onPublication = vi.fn();
     const tools = createDatasetExecutionTools({
+      familyRegistry: createDefaultDatasetFamilyRegistry(),
       client: {
         validate: async () => ({
           version: 1,
@@ -618,6 +633,7 @@ describe("Pi DatasetExecution tools", () => {
     const acquire = vi.fn();
     const execute = vi.fn();
     const tools = createDatasetExecutionTools({
+      familyRegistry: createDefaultDatasetFamilyRegistry(),
       client: { validate, acquire, execute },
       taskId: "task_tool",
       taskRoot: await toolTaskRoot(),
@@ -650,6 +666,7 @@ describe("Pi DatasetExecution tools", () => {
       },
     }));
     const tools = createDatasetExecutionTools({
+      familyRegistry: createDefaultDatasetFamilyRegistry(),
       client: { validate: async () => ({ version: 1, request_id: "r", ok: true, data: { valid: true, reason_codes: [], reasons: [] }, error: null }), execute },
       taskId: "task_tool",
       taskRoot: root,
@@ -687,6 +704,7 @@ describe("Pi DatasetExecution tools", () => {
   test("strictly parses the spec before calling the Dataset Core", async () => {
     const validate = vi.fn();
     const tools = createDatasetExecutionTools({
+      familyRegistry: createDefaultDatasetFamilyRegistry(),
       client: { validate, execute: vi.fn() },
       taskId: "task_tool",
       taskRoot: await toolTaskRoot(),
@@ -711,6 +729,7 @@ describe("Pi DatasetExecution tools", () => {
     const execute = vi.fn();
     const diagnostic = vi.fn();
     const tools = createDatasetExecutionTools({
+      familyRegistry: createDefaultDatasetFamilyRegistry(),
       client: { validate, execute }, taskId: "task_tool", taskRoot: await toolTaskRoot(), runId: () => "run_tool", piSessionId: () => "pi_tool", onDiagnostic: diagnostic,
     });
     const result = await tools[1]!.execute(
@@ -733,6 +752,7 @@ describe("Pi DatasetExecution tools", () => {
 
   test("exposes a compact typed DatasetExecutionSpec schema", async () => {
     const tools = createDatasetExecutionTools({
+      familyRegistry: createDefaultDatasetFamilyRegistry(),
       client: { validate: async () => ({ version: 1, request_id: "r", ok: true, data: { valid: true, reason_codes: [], reasons: [] }, error: null }), execute: async () => ({ version: 1, request_id: "r", ok: false, data: null, error: { code: "no_data", message: "x", retryable: false, details: {} } }) },
       taskId: "task_tool",
       taskRoot: await toolTaskRoot(),
@@ -775,6 +795,7 @@ describe("Pi DatasetExecution tools", () => {
       },
     }));
     const [validateTool] = createDatasetExecutionTools({
+      familyRegistry: createDefaultDatasetFamilyRegistry(),
       client: { validate, execute: vi.fn() },
       taskId: "task_tool",
       taskRoot: await toolTaskRoot(),

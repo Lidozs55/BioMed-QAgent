@@ -7,6 +7,7 @@ import { gzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 
 import { createDatasetExecutionTools } from "../src/agent/tools/dataset-execution.js";
+import { createDefaultDatasetFamilyRegistry } from "../src/dataset/families/index.js";
 import {
   CoreAcquisitionRegistry,
   CoreAcquisitionRuntime,
@@ -142,6 +143,7 @@ describe("Family Host identity review regressions", () => {
         validation_profile_ref: "gene_expression.release.v1",
       });
       const tools = createDatasetExecutionTools({
+      familyRegistry: createDefaultDatasetFamilyRegistry(),
         client: service,
         taskId: "task_identity_tool",
         taskRoot: root,

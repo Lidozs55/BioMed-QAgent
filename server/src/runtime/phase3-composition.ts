@@ -37,6 +37,7 @@ import {
   type PermissionPolicyStore,
 } from "../agent/permissions/index.js";
 import { createCoreAcquisitionProviders } from "../dataset/acquisition/provider-catalog.js";
+import { createDefaultDatasetFamilyRegistry } from "../dataset/families/index.js";
 import {
   CoreAcquisitionRegistry,
   CoreAcquisitionRuntime,
@@ -726,6 +727,7 @@ export async function createPhase3Runtime(
       });
       const datasetTools = createDatasetExecutionTools({
         client: service,
+        familyRegistry: createDefaultDatasetFamilyRegistry(),
         taskId,
         taskRoot,
         runId: () => currentRunId,
