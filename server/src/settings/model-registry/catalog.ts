@@ -462,20 +462,4 @@ export const VENDORS = [
   ["mistral", "Mistral AI", "https://api.mistral.ai/v1", false],
 ] as const;
 
-/** Coarse context-window guess for API-discovered models from their id. */
-export function guessContextWindow(modelId: string): number {
-  const normalized = modelId.toLowerCase();
-  if (normalized.includes("2m")) return 2_000_000;
-  if (normalized.includes("1m") || normalized.includes("million") ||
-      normalized.includes("max")) return 1_000_000;
-  if (normalized.includes("262144") || normalized.includes("256k")) return 262_144;
-  if (normalized.includes("131072") || normalized.includes("128k")) return 131_072;
-  if (normalized.includes("65536") || normalized.includes("64k")) return 65_536;
-  if (normalized.includes("32768") || normalized.includes("32k")) return 32_768;
-  if (normalized.includes("16384") || normalized.includes("16k")) return 16_384;
-  if (normalized.includes("8192") || normalized.includes("8k")) return 8_192;
-  if (normalized.includes("omni") || normalized.includes("vl")) return 131_072;
-  return 524_288;
-}
-
 export { catalogCapacity, catalogContextWindow, lookupModelCatalog };

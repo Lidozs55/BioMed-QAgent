@@ -178,12 +178,16 @@ export function createPermissionSettingsApi(
         // storing the raw string would let the evaluator's ``path.resolve``
         // apply Server-cwd-relative semantics, and a non-canonical form
         // would silently miss the exact target it was meant to cover.
+        const recursiveValue = body["recursive"];
+        if (recursiveValue !== undefined && typeof recursiveValue !== "boolean") {
+          throw new TypeError("recursive must be a boolean");
+        }
         const canonical = await canonicalRulePath(pathValue);
         const rule = await policyStore.addRule({
           capability,
           path: canonical,
           resource_scope: resourceScope as ResourceScope,
-          recursive: body["recursive"] === true,
+          recursive: recursiveValue === true,
           policy,
         });
         const added = rule.rules.at(-1) as FilePermissionRule | undefined;
