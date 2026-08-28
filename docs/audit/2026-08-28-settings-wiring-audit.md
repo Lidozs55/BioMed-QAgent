@@ -1,6 +1,6 @@
 # 设置项端到端接线审计(2026-08-28)
 
-> **整改进展(2026-08-28 晚,`main@2d503d1a`):** 已修复——P0(编辑活动模型参数不生效,`493218e7`);P1 跨字段校验(target≥trigger、max_tokens 对窗口预算、params 按 paramSpecs 校验,同上);P1 activate 残留 max_tokens(同上);P2 第 6 项 tmp 清扫、第 9 项 recursive 布尔校验、第 11 项死代码(`493218e7`);P2 第 3 项 ModelDetailDialog 基准、第 4 项 ParameterEditor JS 校验(含 JSON 通道复用)、第 6 项 ModelImportSheet 非法窗口报错、第 10 项初始化不对称(`2d503d1a`)。**仍未修:** P1 personalization 接线(需产品决策)、P1 safety_reserve_ratio 语义、P2 第 1 项删除残留、第 2 项 base_url URL 校验、第 3 项加载端 schema 校验、第 4 项迁移旁路、第 5 项 env 引导硬编码、第 7 项掩码边角、第 8 项 compaction 参数前端入口、前端 base_url/规则 path 校验。另:main 红测(scaffold 2 项)已由 `d829c387` 清零,本报告"附"节作废。
+> **整改进展(2026-08-28 晚,`main@523e0f29`):** 已修复——P0(编辑活动模型参数不生效,`493218e7`);P1 跨字段校验(target≥trigger、max_tokens 对窗口预算、params 按 paramSpecs 校验,同上);P1 activate 残留 max_tokens(同上);P2 第 1 项删除残留 + 第 2 项 base_url 写入端 URL 结构校验(含 updateProvider 先校验后赋值的原子性修复,`1a638d95`);P2 第 3 项加载端钳制校验(共享 bounds 表、坏值回退默认并告警)+ 第 4 项迁移旁路(JSON/SQLite 复用同一钳制)+ 第 5 项 env 引导改查模型目录(`523e0f29`);P2 第 6 项 tmp 清扫、第 9 项 recursive 布尔校验、第 11 项死代码(`493218e7`);前端三项(第 3 项 ModelDetailDialog 基准、第 4 项 ParameterEditor JS 校验含 JSON 通道复用、第 6 项 ModelImportSheet 非法窗口报错、第 10 项初始化不对称,`2d503d1a`)。**仍未修:** P1 personalization 接线(需产品决策)、P1 safety_reserve_ratio 语义、P2 第 7 项掩码边角、第 8 项 compaction 参数前端入口;前端 base_url/规则 path 校验。另:main 红测(scaffold 2 项)已由 `d829c387` 清零,本报告"附"节作废。
 
 > 审计基线:`main@766395c3`(含当日合并的 compaction convergence 修复)。
 > 范围:`server/src/settings/`、`server/src/settings/model-registry/`、
