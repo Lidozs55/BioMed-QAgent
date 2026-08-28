@@ -44,6 +44,10 @@ output.
    task-relative source_files / mapping_files / metadata_files references.
    Omit missing source_files when the binding has a registered Core acquisition
    provider; do not download or parse that provider again with workspace commands.
+   - Curated registered sources (`registered_*`) have no acquisition provider:
+     supply `source_files[<binding_id>]` with a task-owned asset id — for paper
+     supplementary data, call `acquire_core_carrier` first and reference one of
+     the returned extraction member asset ids.
    - Fixed providers accept only `source`, `accession`, and `entities`; never put
      build inputs into `binding.parameters` — those are rejected outright.
    - Declare phenotype/study context once in the top-level spec `entities` map:

@@ -514,6 +514,15 @@ export function createDatasetExecutionTools(
           assertKnownBindings(spec, metadataFiles, "metadata_files");
           for (const binding of spec.source_bindings) {
             if (sourceFiles[binding.binding_id] !== undefined) continue;
+            const curatedSource = providerCarrierBinding("", binding.source, binding.adapter_id) === null &&
+              binding.source.startsWith("registered_");
+            if (curatedSource || binding.acquisition?.provider_id === "registered_asset") {
+              throw new TypeError(
+                `binding '${binding.binding_id}' uses curated registered source '${binding.source}' — supply ` +
+                  `source_files["${binding.binding_id}"] with a task-owned asset id (e.g. an extraction member ` +
+                  "asset from acquire_core_carrier); curated sources have no acquisition provider",
+              );
+            }
             if (options.client.acquire === undefined) {
               throw new Error(`Core acquisition is unavailable for binding '${binding.binding_id}'`);
             }
