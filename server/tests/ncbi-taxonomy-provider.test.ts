@@ -96,4 +96,16 @@ describe("NCBI Taxonomy trusted Core provider", () => {
     injected.parameters.db = "protein";
     expect(() => provider.plan(injected)).toThrow(/only source, accession, and entities/);
   });
+it("accepts required context entity keys and still rejects reserved E-utility names", async () => {
+  const provider = createNcbiTaxonomyFilesProvider();
+  const context = request("Blautia obeum");
+  context.parameters.entities = { study_id: ["MGYS00000322"], disease_id: ["D003924"], mesh_id: ["D003924"] };
+  const plan = await provider.plan(context);
+  expect(plan.source.url).toContain("esearch.fcgi");
+  for (const reserved of ["term", "id", "db", "retmode"]) {
+    const injected = request("Blautia obeum");
+    injected.parameters.entities = { [reserved]: ["x"] };
+    expect(() => provider.plan(injected)).toThrow(/must not contain URL, path, database, or code controls/);
+  }
+});
 });
