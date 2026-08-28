@@ -53,6 +53,10 @@ export function resolveActiveConfig(
     baseUrl: provider?.base_url ?? settings.base_url,
     contextWindow: model?.context_window ?? settings.context_window ?? 131_072,
     maxTokens: settings.max_tokens,
+    safetyReserveTokens: Math.ceil(
+      (model?.context_window ?? settings.context_window ?? 131_072) *
+        settings.safety_reserve_ratio,
+    ),
     compactionTriggerRatio: settings.compaction_trigger_ratio,
     compactionTargetRatio: settings.compaction_target_ratio,
     temperature: settings.advanced.temperature,

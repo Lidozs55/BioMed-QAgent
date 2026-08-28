@@ -10,6 +10,7 @@ import {
   resolvePiCompactionTargetTokens,
   resolveManualPiCompactionOverrides,
   resolveRequestMaxTokens,
+  resolveSessionBudget,
   shouldReconfigureSession,
   toUpstreamEvent,
   toolCatalogPrompt,
@@ -443,6 +444,42 @@ describe("PiAgentAdapter", () => {
     await collect(session.run("continue"));
 
     expect(upstream.reconcileConfig).toHaveBeenCalledOnce();
+  });
+
+  test("exposes the upstream model budget for the run-entry preflight", async () => {
+    const upstream = new FakeUpstreamSession();
+    Object.assign(upstream, {
+      getBudget: () => ({ contextWindow: 100_000, maxTokens: 8_192, reserveTokens: 5_000 }),
+    });
+    const session = await new PiAgentAdapter({
+      createUpstreamSession: async () => upstream,
+    }).createSession(sessionConfig);
+
+    expect(session.getBudget?.()).toEqual({
+      contextWindow: 100_000,
+      maxTokens: 8_192,
+      reserveTokens: 5_000,
+    });
+  });
+
+  test("resolveSessionBudget defaults and explicit reserve", () => {
+    expect(resolveSessionBudget({ provider: "p", modelId: "m", apiKey: "k" })).toEqual({
+      contextWindow: 131_072,
+      maxTokens: 8_192,
+      reserveTokens: Math.round(131_072 * 0.05),
+    });
+    expect(resolveSessionBudget({
+      provider: "p",
+      modelId: "m",
+      apiKey: "k",
+      contextWindow: 1_000_000,
+      maxTokens: 32_768,
+      safetyReserveTokens: 50_000,
+    })).toEqual({
+      contextWindow: 1_000_000,
+      maxTokens: 32_768,
+      reserveTokens: 50_000,
+    });
   });
 
   test("reconciles the active model configuration before manual compaction", async () => {

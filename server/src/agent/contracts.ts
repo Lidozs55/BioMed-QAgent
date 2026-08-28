@@ -89,6 +89,8 @@ export interface BioMedModelConfig {
   baseUrl?: string;
   contextWindow?: number;
   maxTokens?: number;
+  /** Safety reserve in tokens (settings-derived), for run-entry preflight. */
+  safetyReserveTokens?: number;
   /** Auto-compaction trigger ratio of the context window (settings-derived). */
   compactionTriggerRatio?: number;
   /** Auto-compaction target ratio of the context window (settings-derived). */
@@ -123,6 +125,13 @@ export interface RunOptions {
   signal?: AbortSignal;
 }
 
+/** Model budget facts for the run-entry preflight. */
+export interface BioMedSessionBudget {
+  contextWindow: number;
+  maxTokens: number;
+  reserveTokens: number;
+}
+
 export interface BioMedAgentSession {
   readonly piSessionId: string;
   readonly taskId: string;
@@ -132,6 +141,8 @@ export interface BioMedAgentSession {
   steer?(text: string): Promise<void>;
   compact?(): Promise<{ summary: string }>;
   cancel(reason?: string): Promise<void>;
+  /** Current resolved model budget, for run-entry preflight checks. */
+  getBudget?(): BioMedSessionBudget | null;
   dispose(): Promise<void>;
 }
 

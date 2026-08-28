@@ -19,6 +19,7 @@ import {
   type BioMedAgentSession,
   type BioMedAgentTool,
   type BioMedModelConfig,
+  type BioMedSessionBudget,
   type BioMedSessionConfig,
   type RunOptions,
 } from "./contracts.js";
@@ -75,6 +76,8 @@ export interface PiUpstreamSession {
   reconcileConfig?(): Promise<void>;
   /** Current session context usage (token estimate and window percent). */
   contextUsage?(): { tokens: number | null; percent: number | null } | undefined;
+  /** Current model budget facts for the run-entry preflight. */
+  getBudget?(): { contextWindow: number; maxTokens: number; reserveTokens: number };
   getContextUsage?(): {
     tokens: number | null;
     contextWindow: number;
@@ -143,6 +146,8 @@ const DELTA_FLUSH_INTERVAL_MS = 32;
 // new assistant/reasoning/tool progress indicate a degenerate configuration.
 const MAX_STALLED_LENGTH_CONTINUATIONS = 3;
 const MIN_PROGRESS_CHARS = 32;
+/** Default safety-reserve share of the context window (settings default 5%). */
+const DEFAULT_SAFETY_RESERVE_RATIO = 0.05;
 /** Minimum recent context kept after compaction, as a fraction of the window. */
 const MIN_KEEP_RATIO = 0.05;
 /** Maximum final compaction target, as a fraction of the window. */
@@ -508,6 +513,17 @@ export function resolveManualPiCompactionOverrides(
   };
 }
 
+/** Model budget facts for the run-entry preflight, derived from config. */
+export function resolveSessionBudget(config: BioMedModelConfig): BioMedSessionBudget {
+  const contextWindow = config.contextWindow ?? 131_072;
+  return {
+    contextWindow,
+    maxTokens: config.maxTokens ?? 8_192,
+    reserveTokens: config.safetyReserveTokens
+      ?? Math.round(contextWindow * DEFAULT_SAFETY_RESERVE_RATIO),
+  };
+}
+
 /**
  * Whether a freshly resolved product config requires re-applying the Pi
  * session model / context window / compaction budgets.
@@ -867,6 +883,7 @@ async function createRealUpstreamSession(
       }
     },
     getContextUsage: () => session.getContextUsage(),
+    getBudget: () => resolveSessionBudget(current),
     reconcileConfig,
     contextUsage: () => {
       const usage = session.getContextUsage();
@@ -1027,6 +1044,10 @@ class PiBioMedAgentSession implements BioMedAgentSession {
     this.cleanup = config.cleanup;
     this.getCurrentPublicationId = config.getCurrentPublicationId;
     this.unsubscribe = upstream.subscribe((event) => this.handleEvent(event));
+  }
+
+  getBudget(): BioMedSessionBudget | null {
+    return this.upstream.getBudget?.() ?? null;
   }
 
   private handleEvent(event: PiUpstreamEvent): void {

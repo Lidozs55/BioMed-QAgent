@@ -32,6 +32,7 @@ export type AttemptStatus =
 
 export type ErrorCode =
   | "configuration_error"
+  | "context_budget_exhausted"
   | "network_error"
   | "timeout"
   | "download_incomplete"
