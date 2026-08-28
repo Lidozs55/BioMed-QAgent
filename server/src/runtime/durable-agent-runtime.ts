@@ -660,7 +660,15 @@ export async function createDurableAgentRuntime(
 
     // A suspended permission request must not outlive the cancelled run either.
     task.permissionBroker?.rejectPending(runId, new Error("run cancelled"));
-    await task.session.cancel("user requested");
+    // The session cancel can itself hang on a stream that never times out;
+    // bound it so the durable terminal is never hostage to the zombie stream.
+    let cancelTimer: NodeJS.Timeout | undefined;
+    await Promise.race([
+      task.session.cancel("user requested"),
+      new Promise<void>((resolve) => {
+        cancelTimer = setTimeout(resolve, options.cancellationTimeoutMs ?? 10_000);
+      }),
+    ]);
     let timer: NodeJS.Timeout | undefined;
     try {
       await Promise.race([
@@ -672,7 +680,21 @@ export async function createDurableAgentRuntime(
           );
         }),
       ]);
+    } catch {
+      // The session never acknowledged cancellation (observed with a provider
+      // stream that stays silent forever): force the durable terminal, free
+      // the in-memory active-run slot, and mute the zombie execution loop so
+      // it cannot append a duplicate terminal if it ever wakes.
+      const runKey = `${taskId}:${runId}`;
+      suspendedRuns.add(runKey);
+      if (task.activeRunId === runId) task.activeRunId = null;
+      task.workspace.onRunEnd?.(runId);
+      await repository.appendRunEvent(taskId, runId, {
+        type: "run_cancelled",
+        reason: "user requested (forced; agent session did not acknowledge cancellation)",
+      });
     } finally {
+      if (cancelTimer !== undefined) clearTimeout(cancelTimer);
       if (timer !== undefined) clearTimeout(timer);
       unsubscribeTerminal?.();
     }

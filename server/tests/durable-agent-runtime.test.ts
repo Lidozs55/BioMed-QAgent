@@ -357,6 +357,68 @@ describe("durable formal Agent runtime", () => {
     await runtime.close();
   });
 
+  test("forces a durable cancelled terminal when the session never acknowledges cancellation", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "biomed-durable-force-cancel-"));
+    roots.push(root);
+    let releaseCancel: () => void = () => undefined;
+    const cancelGate = new Promise<void>((done) => {
+      releaseCancel = done;
+    });
+    class UnacknowledgedCancelAdapter extends ControlledAdapter {
+      override async createSession(config: BioMedSessionConfig): Promise<BioMedAgentSession> {
+        const session = await super.createSession(config);
+        return { ...session, cancel: () => cancelGate };
+      }
+    }
+    const adapter = new UnacknowledgedCancelAdapter();
+    const runtime = await createDurableAgentRuntime({
+      tasksRoot: root,
+      adapter,
+      cancellationTimeoutMs: 50,
+      workspaceFactory: async () => ({ root, tools: [], dispose: async () => undefined }),
+    });
+    const server = createServer((request, response) => {
+      if (!runtime.handle(request, response)) response.writeHead(404).end();
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    servers.push(server);
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const accepted = await (await fetch(`${base}/api/v1/tasks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        request_id: "request-force-cancel",
+        input: "formal task",
+        databases: [],
+        mode: "agent",
+      }),
+    })).json() as { task_id: string; run_id: string };
+    await expect.poll(() => adapter.gates.length).toBe(1);
+
+    const cancelResponse = await fetch(
+      `${base}/api/v1/tasks/${accepted.task_id}/runs/${accepted.run_id}/cancel`,
+      { method: "POST" },
+    );
+    expect(cancelResponse.status).toBe(202);
+    await expect.poll(async () => {
+      const snapshot = await runtime.repository.getSnapshot(accepted.task_id);
+      return snapshot?.runs.at(-1);
+    }).toMatchObject({ status: "cancelled" });
+
+    const followUp = await fetch(`${base}/api/v1/tasks/${accepted.task_id}/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ request_id: "request-after-force-cancel", input: "next" }),
+    });
+    expect(followUp.status).toBe(202);
+    await expect.poll(() => adapter.runs.length).toBe(2);
+    // Wake the zombie execution and the follow-up turn so close() can settle.
+    for (const gate of adapter.gates) gate.resolve();
+    releaseCancel();
+    await runtime.close();
+  });
+
   test("compacts an idle task that has no active run", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "biomed-durable-idle-compact-"));
     roots.push(root);
