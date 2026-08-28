@@ -50,6 +50,7 @@ import {
   type ModelRecord,
   type ProviderRecord,
   type RegistryState,
+  type SettingsRecord,
 } from "./store.js";
 
 export interface ModelSettingsServiceOptions {
@@ -68,6 +69,13 @@ function maskApiKey(value: string): string {
 
 const DEFAULT_PAGE_SIZE = 20;
 
+/**
+ * 全局默认最大输出 tokens，与 store.ts ``defaultRegistry`` 的
+ * ``max_tokens`` 默认一致；激活三源皆空的模型时回退到它，
+ * 保证 ``settings.max_tokens`` 总有明确来源。
+ */
+const DEFAULT_MAX_TOKENS = 8192;
+
 function runtimeLimitsPatch(value: unknown): Partial<RuntimeLimits> {
   const record = asRecord(value);
   const patch: Partial<RuntimeLimits> = {};
@@ -83,6 +91,31 @@ function runtimeLimitsPatch(value: unknown): Partial<RuntimeLimits> {
     patch[key] = candidate as number;
   }
   return patch;
+}
+
+/**
+ * Derive the runtime ``settings.max_tokens`` from a model record:
+ * ``params.max_tokens`` wins, then ``suggested_max_tokens``, then
+ * ``max_output_tokens``. Returns ``null`` when all three sources are empty.
+ */
+function deriveModelMaxTokens(model: ModelRecord): number | null {
+  const value = model.params.max_tokens ?? model.suggested_max_tokens ?? model.max_output_tokens;
+  return typeof value === "number" ? value : null;
+}
+
+/**
+ * Apply the active model's derived parameters (max output + sampling) to the
+ * runtime settings. Shared by ``activateInMemory`` and ``updateModel`` so
+ * editing an active model takes effect without reactivation and the two
+ * call sites cannot drift apart.
+ */
+function applyModelDerivedParams(model: ModelRecord, settings: SettingsRecord): void {
+  settings.max_tokens = deriveModelMaxTokens(model) ?? DEFAULT_MAX_TOKENS;
+  if (typeof model.params.temperature === "number") settings.advanced.temperature = model.params.temperature;
+  if (typeof model.params.top_p === "number") settings.advanced.top_p = model.params.top_p;
+  if (typeof model.params.repetition_penalty === "number") settings.advanced.repetition_penalty = model.params.repetition_penalty;
+  if (typeof model.params.enable_search === "boolean") settings.advanced.enable_search = model.params.enable_search;
+  if (typeof model.params.thinking_mode === "boolean") settings.advanced.thinking_mode = model.params.thinking_mode;
 }
 
 export class ModelSettingsService {
@@ -218,6 +251,33 @@ export class ModelSettingsService {
         if (body.api_key !== maskApiKey(current)) {
           if (settings.provider_id === null) auth.direct_api_key = body.api_key;
           else auth.provider_api_keys[settings.provider_id] = body.api_key;
+        }
+      }
+      // 跨字段校验：仅在本次请求触及相关字段时校验写入后的组合，
+      // 磁盘上已有的历史违规组合不会锁死不相关字段的更新。
+      if (body.compaction_target_ratio !== undefined || body.compaction_trigger_ratio !== undefined) {
+        if (settings.compaction_target_ratio >= settings.compaction_trigger_ratio) {
+          throw new HttpError(
+            422,
+            `compaction_target_ratio (${settings.compaction_target_ratio}) 必须小于 ` +
+              `compaction_trigger_ratio (${settings.compaction_trigger_ratio})，` +
+              "请调低压缩目标比例或调高触发比例",
+          );
+        }
+      }
+      if (body.max_tokens !== undefined ||
+          body.context_window !== undefined ||
+          body.safety_reserve_ratio !== undefined) {
+        // context_window 为 null 时与运行时回退一致按 131072 计算。
+        const effectiveWindow = settings.context_window ?? 131_072;
+        const budget = effectiveWindow * (1 - settings.safety_reserve_ratio);
+        if (settings.max_tokens >= budget) {
+          throw new HttpError(
+            422,
+            `max_tokens (${settings.max_tokens}) 需小于上下文窗口 ${effectiveWindow} ` +
+              `扣除安全保留后的可用预算（约 ${Math.floor(budget)}），` +
+              "请调低 max_tokens 或扩大 context_window",
+          );
         }
       }
       this.registry.settings = settings;
@@ -400,7 +460,11 @@ export class ModelSettingsService {
       if (body.context_window !== undefined) model.context_window = body.context_window === null ? null : boundedNumber(body.context_window, "context_window", 1);
       if (body.max_output_tokens !== undefined) model.max_output_tokens = body.max_output_tokens === null ? null : boundedNumber(body.max_output_tokens, "max_output_tokens", 1);
       if (body.suggested_max_tokens !== undefined) model.suggested_max_tokens = body.suggested_max_tokens === null ? null : boundedNumber(body.suggested_max_tokens, "suggested_max_tokens", 1);
-      if (body.params !== undefined) model.params = { ...model.params, ...asRecord(body.params) };
+      if (body.params !== undefined) {
+        const mergedParams = { ...model.params, ...asRecord(body.params) };
+        this.validateModelParams(model, mergedParams);
+        model.params = mergedParams;
+      }
       if (body.context_window !== undefined ||
           body.max_output_tokens !== undefined ||
           body.suggested_max_tokens !== undefined ||
@@ -413,6 +477,14 @@ export class ModelSettingsService {
           this.registry.settings.active_model_id === id) {
         const settings = this.registry.settings;
         settings.context_window = model.context_window ?? settings.context_window;
+      }
+      // 活动模型的 max_tokens/采样参数派生同样回写运行时设置，
+      // 与 activateInMemory 共用同一份派生逻辑，参数编辑无需重新激活即生效。
+      if ((body.params !== undefined ||
+           body.max_output_tokens !== undefined ||
+           body.suggested_max_tokens !== undefined) &&
+          this.registry.settings.active_model_id === id) {
+        applyModelDerivedParams(model, this.registry.settings);
       }
       model.updated_at = timestamp();
       updated = model;
@@ -471,6 +543,29 @@ export class ModelSettingsService {
     return model;
   }
 
+  /**
+   * 按 ``paramSpecsFor(presetId, modelId)`` 对已知参数键校验 min/max，越界
+   * 抛 422；未知键保持现状语义放行。JSON 通道此前可绕过前端展示的
+   * min/max，这里在写入端补上。
+   */
+  private validateModelParams(model: ModelRecord, params: JsonObject): void {
+    const provider = this.provider(model.provider_id);
+    for (const spec of paramSpecsFor(provider.preset_id ?? provider.id, model.model_id)) {
+      const boundMin = spec.min ?? null;
+      const boundMax = spec.max ?? null;
+      if (boundMin === null && boundMax === null) continue;
+      const value = params[spec.key];
+      if (value === undefined) continue;
+      const inRange = typeof value === "number" &&
+        (boundMin === null || value >= boundMin) &&
+        (boundMax === null || value <= boundMax);
+      if (!inRange) {
+        const range = `[${boundMin ?? "不限"}, ${boundMax ?? "不限"}]`;
+        throw new HttpError(422, `模型参数 ${spec.key} (${String(value)}) 超出允许范围 ${range}`);
+      }
+    }
+  }
+
   public publicProvider(provider: ProviderRecord): JsonObject {
     const apiKey = this.auth.provider_api_keys[provider.id] ?? "";
     return { ...provider, api_key: maskApiKey(apiKey), api_key_configured: apiKey !== "" };
@@ -496,13 +591,7 @@ export class ModelSettingsService {
     settings.base_url = provider.base_url;
     settings.model_name = model.model_id;
     settings.context_window = model.context_window;
-    const maxTokens = model.params.max_tokens ?? model.suggested_max_tokens ?? model.max_output_tokens;
-    if (typeof maxTokens === "number") settings.max_tokens = maxTokens;
-    if (typeof model.params.temperature === "number") settings.advanced.temperature = model.params.temperature;
-    if (typeof model.params.top_p === "number") settings.advanced.top_p = model.params.top_p;
-    if (typeof model.params.repetition_penalty === "number") settings.advanced.repetition_penalty = model.params.repetition_penalty;
-    if (typeof model.params.enable_search === "boolean") settings.advanced.enable_search = model.params.enable_search;
-    if (typeof model.params.thinking_mode === "boolean") settings.advanced.thinking_mode = model.params.thinking_mode;
+    applyModelDerivedParams(model, settings);
   }
 
   /**
@@ -591,8 +680,8 @@ export class ModelSettingsService {
       const settings = this.registry.settings;
       settings.active_model_id = active.id;
       settings.context_window = active.context_window ?? settings.context_window;
-      const maxTokens = active.params.max_tokens ?? active.suggested_max_tokens ?? active.max_output_tokens;
-      if (typeof maxTokens === "number") settings.max_tokens = maxTokens;
+      const maxTokens = deriveModelMaxTokens(active);
+      if (maxTokens !== null) settings.max_tokens = maxTokens;
     }
   }
 
