@@ -51,6 +51,13 @@ function entityValue(input: ProviderCarrierTransformInput, keys: readonly string
 }
 
 function studyIdFor(input: ProviderCarrierTransformInput): string {
+  // A study carrier is the authoritative identity of its own accession: with
+  // multiple MGnify study bindings in one spec, the shared top-level entity
+  // must not overwrite each carrier's own study_id.
+  if (input.adapterId === "registered_gut_microbiome_study_json" &&
+      input.accession !== null && input.accession !== undefined && input.accession.trim() !== "") {
+    return input.accession.trim();
+  }
   const declaredKeys = GUT_STUDY_ENTITY_KEYS.filter((key) => input.entities?.[key] !== undefined);
   if (declaredKeys.length > 0) {
     if (declaredKeys.length !== 1) {
