@@ -52,7 +52,7 @@
 
 ### [P0] main 上 scaffold 提交带入 2 个红测（挡 CI）
 
-- **状态（2026-08-28）：** `bd4c990d`（spec scaffold 工具）+ `3163be69`（SKILL.md 路由到 scaffold 工具）合并后，`pnpm --filter @biomed/server test` 稳定失败 2 例，已排除与压缩修复（`766395c3`/`a48c5ebd`）的关联（纯 main 上复现）。
+- **状态（2026-08-28，已修复 `main@d829c387`）：** 两测均已清零。dispatch guard：`spec-scaffold.ts` 的 `family.id ===` 比较改为 `registry.list().includes()` + `registry.get()`，generic Core 不再含 family equality 分支；skill map：`scaffold_dataset_execution_spec` 以注册名收录进 stable map（注册名 = SKILL.md = map 三处一致），并按既有模式在 `business-tools.ts` 标记 task-scoped unavailable、同步两处测试 pin。修复保留 scaffold 功能与全部既有测试。以下原始记录留档。
 - **失败 1：** `tests/family-host-core-dispatch-guard.test.ts` — "generic Core modules contain no family/provider-specific dispatch"（137ms）。scaffold 引入的 Core 模块路径或 dispatch 表触发了 generic Core 边界断言。
 - **失败 2：** `tests/skill-manifests.test.ts` — "no SKILL.md references phantom tools"：`dataset-construction` 引用未知工具 `scaffold_dataset_execution_spec`。工具本体存在（`server/src/dataset/scaffold/spec-scaffold.ts`），但稳定 skill↔tool map 未收录该名字（名字不匹配或注册缺失）。
 - **影响：** CI 对所有 PR/push 红色，掩盖真实回归；其他 agent 的失败测试循环被这两个噪音干扰。
