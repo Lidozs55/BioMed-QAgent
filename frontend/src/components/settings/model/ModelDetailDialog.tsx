@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { ParameterEditor } from "@/components/settings/model/ParameterEditor";
+import { paramsValidationError } from "@/components/settings/model/paramValidation";
 import type {
   ManagedModelInfo,
   ManagedModelInput,
@@ -59,6 +60,16 @@ function allParamsJson(
   return JSON.stringify(merged, null, 2);
 }
 
+/**
+ * “最大输出 Tokens”的统一基准：params.max_tokens（运行时优先）优先，
+ * 未设置时回退到 max_output_tokens。初始化与保存比对必须使用同一函数，
+ * 否则两者不一致时会把未改动的 max_output_tokens 无条件覆盖为输入框值。
+ */
+function effectiveMaxTokens(model: ManagedModelInfo): number | null {
+  const fromParams = model.params.max_tokens;
+  return typeof fromParams === "number" ? fromParams : model.max_output_tokens;
+}
+
 export function ModelDetailDialog({
   open,
   onOpenChange,
@@ -74,10 +85,7 @@ export function ModelDetailDialog({
   );
   const [maxOutputTokens, setMaxOutputTokens] = useState(() => {
     if (model == null) return "";
-    // 以 params.max_tokens（运行时优先）为准；未设置时回退到 max_output_tokens。
-    const fromParams = model.params.max_tokens;
-    const effective =
-      typeof fromParams === "number" ? fromParams : model.max_output_tokens;
+    const effective = effectiveMaxTokens(model);
     return effective == null ? "" : String(effective);
   });
   const [jsonOpen, setJsonOpen] = useState(false);
@@ -150,10 +158,6 @@ export function ModelDetailDialog({
       return;
     }
 
-    const patch: Partial<ManagedModelInput> = {};
-    if (parsedContext !== model.context_window) {
-      patch.context_window = parsedContext;
-    }
     // “最大输出 Tokens”以顶部输入框为唯一入口：同步写入 params.max_tokens
     //（运行时优先字段），避免与图形编辑器中的同名列重复调整。
     const nextParams = { ...params };
@@ -162,8 +166,21 @@ export function ModelDetailDialog({
     } else {
       nextParams.max_tokens = parsedMax;
     }
+    // 提交前按 param spec 做 JS 强制校验（min/max 不只是 HTML 属性）；
+    // JSON 编辑器通道应用的 params 汇入同一 state，此处一并拦截。
+    const paramError = paramsValidationError(model.param_specs, nextParams);
+    if (paramError) {
+      toast.error(paramError);
+      return;
+    }
+
+    const patch: Partial<ManagedModelInput> = {};
+    if (parsedContext !== model.context_window) {
+      patch.context_window = parsedContext;
+    }
     patch.params = nextParams;
-    if (parsedMax !== model.max_output_tokens) {
+    // 与初始化同一基准比较：用户未实际改动时不重复提交 max_output_tokens。
+    if (parsedMax !== effectiveMaxTokens(model)) {
       patch.max_output_tokens = parsedMax;
     }
 
