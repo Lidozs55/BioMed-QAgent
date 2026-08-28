@@ -13,7 +13,7 @@ const STUDY_ID = "MGYS00000001";
 
 const BINDINGS = [
   { source: "mgnify", adapter_id: "registered_gut_microbiome_study_json", accession: STUDY_ID },
-  { source: "mgnify", adapter_id: "registered_gut_microbiome_taxon_long_tsv", accession: STUDY_ID },
+  { source: "ncbi_taxonomy", adapter_id: "gut_microbiome.ncbi_taxonomy_efetch_xml.v1", accession: "1234" },
   { source: "mgnify", adapter_id: "registered_gut_microbiome_differential_abundance_xlsx", accession: STUDY_ID },
   { source: "ncbi_taxonomy", adapter_id: "gut_microbiome.ncbi_taxonomy_esearch_json.v1", accession: "Blautia obeum" },
   { source: "gmrepo", adapter_id: "gut_microbiome.gmrepo_taxon_phenotypes_json.v1", accession: "1234" },

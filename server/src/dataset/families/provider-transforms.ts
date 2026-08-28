@@ -5,6 +5,7 @@ import {
 } from "../runtime/provider-transforms.js";
 import {
   assertGutMicrobiomeCarrierRows,
+  composeGutMicrobiomeCrosswalk,
   parseGutMicrobiomeCarrier,
   type GutMicrobiomeCarrierRows,
 } from "./gut-microbiome/index.js";
@@ -17,12 +18,11 @@ import {
 const GUT_MICROBIOME_FAMILY_ID = "gut_microbiome";
 const INHERITED_DISEASE_FAMILY_ID = "inherited_disease_gene_evidence";
 const GUT_STUDY_ENTITY_KEYS = ["study_id", "study_ids", "study", "study_accession"] as const;
+const GUT_TAXON_CROSSWALK_SCHEMA_ID = "gut_microbiome.taxon_name_crosswalk.v1";
 
 const GUT_PROVIDER_ADAPTERS = new Map<string, ReadonlySet<string>>([
   ["mgnify.files.v1", new Set([
     "registered_gut_microbiome_study_json",
-    "registered_gut_microbiome_taxon_long_tsv",
-    "registered_gut_microbiome_taxon_json",
     "registered_gut_microbiome_differential_abundance_xlsx",
   ])],
   ["ncbi.taxonomy.files.v1", new Set([
@@ -86,7 +86,7 @@ function assertGutBinding(input: ProviderCarrierTransformInput): void {
       ? { tableId: "differential_abundance_records", inputRole: "differential_abundance", schemaRef: "gut_microbiome.differential_abundance.v1" }
       : input.adapterId.includes("gmrepo")
         ? { tableId: "reference_prevalence_records", inputRole: "reference_prevalence", schemaRef: "gut_microbiome.reference_prevalence.v1" }
-        : { tableId: "taxon_records", inputRole: "taxon", schemaRef: "gut_microbiome.taxon_records.v1" };
+        : { tableId: "taxon_records", inputRole: "taxon", schemaRef: GUT_TAXON_CROSSWALK_SCHEMA_ID };
   if (binding !== null && JSON.stringify(binding) !== JSON.stringify(expected)) {
     fail(`adapter '${input.adapterId}' has an invalid table/input/schema binding`);
   }
@@ -98,8 +98,6 @@ function assertGutBinding(input: ProviderCarrierTransformInput): void {
   }
   const mediaTypesByAdapter: Readonly<Record<string, ReadonlySet<string>>> = {
     registered_gut_microbiome_study_json: new Set(["application/json", "application/vnd.api+json"]),
-    registered_gut_microbiome_taxon_long_tsv: new Set(["text/tab-separated-values"]),
-    registered_gut_microbiome_taxon_json: new Set(["application/json"]),
     registered_gut_microbiome_differential_abundance_xlsx: new Set(["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"]),
     "gut_microbiome.ncbi_taxonomy_esearch_json.v1": new Set(["application/json", "text/plain"]),
     "gut_microbiome.ncbi_taxonomy_efetch_xml.v1": new Set(["application/xml", "text/xml", "text/plain"]),
@@ -113,13 +111,15 @@ function assertGutBinding(input: ProviderCarrierTransformInput): void {
 
 function appendGutRows(target: {
   studies: GutMicrobiomeCarrierRows["studies"][number][];
-  taxa: GutMicrobiomeCarrierRows["taxa"][number][];
+  taxonResolutions: GutMicrobiomeCarrierRows["taxonResolutions"][number][];
+  taxonDetails: GutMicrobiomeCarrierRows["taxonDetails"][number][];
   differentialAbundances: GutMicrobiomeCarrierRows["differentialAbundances"][number][];
   referencePrevalences: GutMicrobiomeCarrierRows["referencePrevalences"][number][];
   sources: GutMicrobiomeCarrierRows["sources"][number][];
 }, rows: GutMicrobiomeCarrierRows): void {
   target.studies.push(...rows.studies);
-  target.taxa.push(...rows.taxa);
+  target.taxonResolutions.push(...rows.taxonResolutions);
+  target.taxonDetails.push(...rows.taxonDetails);
   target.differentialAbundances.push(...rows.differentialAbundances);
   target.referencePrevalences.push(...rows.referencePrevalences);
   target.sources.push(...rows.sources);
@@ -129,13 +129,15 @@ function gutMicrobiomeRows(inputs: readonly ProviderCarrierTransformInput[]): Pr
   if (inputs.length === 0) fail("at least one provider carrier is required");
   const aggregate = {
     studies: [],
-    taxa: [],
+    taxonResolutions: [],
+    taxonDetails: [],
     differentialAbundances: [],
     referencePrevalences: [],
     sources: [],
   } as {
     studies: GutMicrobiomeCarrierRows["studies"][number][];
-    taxa: GutMicrobiomeCarrierRows["taxa"][number][];
+    taxonResolutions: GutMicrobiomeCarrierRows["taxonResolutions"][number][];
+    taxonDetails: GutMicrobiomeCarrierRows["taxonDetails"][number][];
     differentialAbundances: GutMicrobiomeCarrierRows["differentialAbundances"][number][];
     referencePrevalences: GutMicrobiomeCarrierRows["referencePrevalences"][number][];
     sources: GutMicrobiomeCarrierRows["sources"][number][];
@@ -152,6 +154,7 @@ function gutMicrobiomeRows(inputs: readonly ProviderCarrierTransformInput[]): Pr
         bytes: input.bytes,
         studyId: studyIdFor(input),
         adapterId: input.adapterId,
+        accession: input.accession ?? undefined,
         sourceId: input.receipt.source_id,
         diseaseId: entityValue(input, ["disease_id", "disease", "mesh_id"]),
         diseaseName: entityValue(input, ["disease_name", "disease_label"]),
@@ -185,10 +188,17 @@ function gutMicrobiomeRows(inputs: readonly ProviderCarrierTransformInput[]): Pr
       throw error;
     }
   }
-  assertGutMicrobiomeCarrierRows(aggregate);
+  const crosswalk = composeGutMicrobiomeCrosswalk(aggregate.taxonResolutions, aggregate.taxonDetails);
+  assertGutMicrobiomeCarrierRows({
+    studies: aggregate.studies,
+    crosswalk,
+    differentialAbundances: aggregate.differentialAbundances,
+    referencePrevalences: aggregate.referencePrevalences,
+    sources: aggregate.sources,
+  });
   return {
     study_records: aggregate.studies,
-    taxon_records: aggregate.taxa,
+    taxon_records: crosswalk,
     differential_abundance_records: aggregate.differentialAbundances,
     reference_prevalence_records: aggregate.referencePrevalences,
   };

@@ -30,7 +30,7 @@ describe("DatasetFamilyRegistry", () => {
       "variant_evidence.assertion.v1",
       "protein_structure.structure.v1",
       "bioactivity_measurement.activity.v1",
-      "gut_microbiome.taxon_records.v1",
+      "gut_microbiome.taxon_name_crosswalk.v1",
       "inherited_disease_gene_evidence.gene_disease.v1",
     ]));
     expect(registry.validationProfileRefs()).toEqual(expect.arrayContaining([

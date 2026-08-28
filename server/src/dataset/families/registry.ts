@@ -642,11 +642,9 @@ export function gutMicrobiomeFamilyDefinition(): DatasetFamilyDefinition {
         ["host_taxon_id", "host_taxon", "host_species_taxon_id"],
       ],
     },
-    { source: "mgnify", adapterId: "registered_gut_microbiome_taxon_long_tsv", schemaRef: "gut_microbiome.taxon_records.v1", required_entity_groups: [GUT_STUDY_ENTITY_GROUP] },
-    { source: "mgnify", adapterId: "registered_gut_microbiome_taxon_json", schemaRef: "gut_microbiome.taxon_records.v1", required_entity_groups: [GUT_STUDY_ENTITY_GROUP] },
     { source: "mgnify", adapterId: "registered_gut_microbiome_differential_abundance_xlsx", schemaRef: "gut_microbiome.differential_abundance.v1", required_entity_groups: [GUT_STUDY_ENTITY_GROUP] },
-    { source: "ncbi_taxonomy", adapterId: "gut_microbiome.ncbi_taxonomy_esearch_json.v1", schemaRef: "gut_microbiome.taxon_records.v1", required_entity_groups: [GUT_STUDY_ENTITY_GROUP] },
-    { source: "ncbi_taxonomy", adapterId: "gut_microbiome.ncbi_taxonomy_efetch_xml.v1", schemaRef: "gut_microbiome.taxon_records.v1", required_entity_groups: [GUT_STUDY_ENTITY_GROUP] },
+    { source: "ncbi_taxonomy", adapterId: "gut_microbiome.ncbi_taxonomy_esearch_json.v1", schemaRef: "gut_microbiome.taxon_name_crosswalk.v1" },
+    { source: "ncbi_taxonomy", adapterId: "gut_microbiome.ncbi_taxonomy_efetch_xml.v1", schemaRef: "gut_microbiome.taxon_name_crosswalk.v1" },
     { source: "gmrepo", adapterId: "gut_microbiome.gmrepo_taxon_phenotypes_json.v1", schemaRef: "gut_microbiome.reference_prevalence.v1", required_entity_groups: [GUT_STUDY_ENTITY_GROUP] },
   ] as const;
   return registeredFamily({
@@ -654,14 +652,16 @@ export function gutMicrobiomeFamilyDefinition(): DatasetFamilyDefinition {
     schemas: gutMicrobiomeSchemas,
     profileRef: "gut_microbiome.release.v1",
     sources: [
-      ...providerSources.map(({ source, adapterId, schemaRef, required_entity_groups }) => ({
-        source,
-        adapter_id: adapterId,
-        schema_refs: [schemaRef],
+      ...providerSources.map((providerSource) => ({
+        source: providerSource.source,
+        adapter_id: providerSource.adapterId,
+        schema_refs: [providerSource.schemaRef],
         parameters_required: false,
         parameter_schema: emptyAdapterParameterSchema(),
         validateParameters: noAdapterParameters,
-        required_entity_groups,
+        required_entity_groups: "required_entity_groups" in providerSource
+          ? providerSource.required_entity_groups
+          : undefined,
       })),
       ...formalRegistrations.map((registration) => {
         const tableId = tableBySchema.get(registration.schema.schema_id);

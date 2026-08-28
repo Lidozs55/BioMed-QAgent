@@ -1,11 +1,13 @@
 import * as XLSX from "xlsx";
 import type { SourceLocatorV2 } from "@biomed/contracts";
 import type {
+  GutMicrobiomeCrosswalkInput,
   GutMicrobiomeDifferentialAbundanceInput,
   GutMicrobiomeReferencePrevalenceInput,
   GutMicrobiomeSourceInput,
   GutMicrobiomeStudyInput,
-  GutMicrobiomeTaxonInput,
+  GutMicrobiomeTaxonDetailInput,
+  GutMicrobiomeTaxonResolutionInput,
 } from "./types.js";
 import { assertGutMicrobiomeRows } from "./validation.js";
 
@@ -19,6 +21,8 @@ export interface GutMicrobiomeCarrierRequest {
   bytes: Uint8Array;
   studyId: string;
   adapterId?: string;
+  /** Binding accession: the verbatim literature name (ESearch) or numeric taxid (EFetch). */
+  accession?: string;
   sourceId?: string;
   diseaseId?: string;
   diseaseName?: string;
@@ -27,7 +31,8 @@ export interface GutMicrobiomeCarrierRequest {
 
 export interface GutMicrobiomeCarrierRows {
   studies: readonly GutMicrobiomeStudyInput[];
-  taxa: readonly GutMicrobiomeTaxonInput[];
+  taxonResolutions: readonly GutMicrobiomeTaxonResolutionInput[];
+  taxonDetails: readonly GutMicrobiomeTaxonDetailInput[];
   differentialAbundances: readonly GutMicrobiomeDifferentialAbundanceInput[];
   referencePrevalences: readonly GutMicrobiomeReferencePrevalenceInput[];
   sources: readonly GutMicrobiomeSourceInput[];
@@ -142,7 +147,7 @@ function parseStudyJson(request: GutMicrobiomeCarrierRequest, root: Record<strin
     source_asset_id: request.assetId,
     source_locator: locator(request, root.study === undefined ? "/data" : "/study", JSON.stringify(item)),
   };
-  return { studies: [study], taxa: [], differentialAbundances: [], referencePrevalences: [], sources: [sourceRow] };
+  return { studies: [study], taxonResolutions: [], taxonDetails: [], differentialAbundances: [], referencePrevalences: [], sources: [sourceRow] };
 }
 
 function safeTaxonId(value: unknown, label: string): string {
@@ -152,90 +157,179 @@ function safeTaxonId(value: unknown, label: string): string {
   return parsed;
 }
 
-function parseTaxonomyTsv(request: GutMicrobiomeCarrierRequest, content: string): GutMicrobiomeCarrierRows {
-  const sourceRow = source(request, "mgnify", "mgnify_taxonomy_tsv");
-  const lines = content.replaceAll("\r\n", "\n").split("\n").filter((line) => line.length > 0);
-  if (lines.length < 2) fail("MGnify taxonomy TSV must contain a header and at least one record");
-  const header = lines[0]!.split("\t");
-  const rawExpected = ["study_id", "sample_id", "taxon_path", "taxon_id", "abundance"];
-  const canonicalExpected = [...rawExpected, "source_id", "source_asset_id", "source_locator"];
-  const canonical = JSON.stringify(header) === JSON.stringify(canonicalExpected);
-  if (!canonical && JSON.stringify(header) !== JSON.stringify(rawExpected)) {
-    fail("MGnify taxonomy TSV header is not one of the fixed promoted schemas");
-  }
-  const taxa = lines.slice(1).map((line, index): GutMicrobiomeTaxonInput => {
-    const values = line.split("\t");
-    const expectedWidth = canonical ? canonicalExpected.length : rawExpected.length;
-    if (values.length !== expectedWidth) fail(`MGnify taxonomy TSV row ${index + 2} has the wrong width`);
-    if (values[0] !== request.studyId) fail(`MGnify taxonomy TSV row ${index + 2} belongs to a different study`);
-    return {
-      study_id: text(values[0], "study_id"),
-      sample_id: text(values[1], "sample_id"),
-      taxon_path: text(values[2], "taxon_path"),
-      taxon_id: safeTaxonId(values[3], `row ${index + 2}.taxon_id`),
-      abundance: integerValue(Number(values[4]), `row ${index + 2}.abundance`),
-      source_id: sourceRow.source_id,
-      source_asset_id: request.assetId,
-      source_locator: locator(request, `/rows/${index + 1}/taxon_id`, values[3] ?? ""),
-    };
-  });
-  return { studies: [], taxa, differentialAbundances: [], referencePrevalences: [], sources: [sourceRow] };
-}
-
-function parseTaxonomyJson(request: GutMicrobiomeCarrierRequest, root: Record<string, unknown>): GutMicrobiomeCarrierRows {
-  const sourceRow = source(request, "mgnify", "mgnify_taxonomy_json");
-  const rows = array(root.records, "records");
-  const taxa = rows.map((value, index): GutMicrobiomeTaxonInput => {
-    const item = record(value, `records[${index}]`);
-    const rowStudyId = item.study_id === undefined ? request.studyId : text(item.study_id, `records[${index}].study_id`);
-    if (rowStudyId !== request.studyId) fail(`records[${index}].study_id does not match the requested study`);
-    return {
-      study_id: rowStudyId,
-      sample_id: text(item.sample_id, `records[${index}].sample_id`),
-      taxon_path: text(item.taxon_path, `records[${index}].taxon_path`),
-      taxon_id: safeTaxonId(item.taxon_id, `records[${index}].taxon_id`),
-      abundance: integerValue(item.abundance, `records[${index}].abundance`),
-      source_id: sourceRow.source_id,
-      source_asset_id: request.assetId,
-      source_locator: locator(request, `/records/${index}`, JSON.stringify(item)),
-    };
-  });
-  return { studies: [], taxa, differentialAbundances: [], referencePrevalences: [], sources: [sourceRow] };
-}
-
 function parseNcbiJson(request: GutMicrobiomeCarrierRequest, root: Record<string, unknown>): GutMicrobiomeCarrierRows {
   const result = record(root.esearchresult, "esearchresult");
   const idList = array(result.idlist, "esearchresult.idlist");
-  if (idList.length !== 1 || typeof idList[0] !== "string" || !/^[1-9][0-9]{0,11}$/.test(idList[0])) fail("NCBI ESearch must return exactly one numeric taxid");
+  const queryName = (request.accession ?? request.studyId).trim();
+  if (queryName === "") fail("NCBI ESearch binding must carry the queried literature name as its accession");
   const sourceRow = source(request, "ncbi_taxonomy", "ncbi_taxonomy_esearch_json");
-  return { studies: [], taxa: [{
-    study_id: request.studyId,
-    sample_id: "taxonomy_reference",
-    taxon_path: text(result.querytranslation, "esearchresult.querytranslation"),
+  if (idList.length === 0) {
+    // An empty idlist is a legitimate unresolved-name outcome, not a parse
+    // failure: the name stays out of the crosswalk and rows keyed by it are
+    // skipped deterministically downstream.
+    return { studies: [], taxonResolutions: [{
+      query_name: queryName,
+      taxon_id: null,
+      source_id: sourceRow.source_id,
+      source_asset_id: request.assetId,
+      source_locator: locator(request, "/esearchresult/idlist", ""),
+    }], taxonDetails: [], differentialAbundances: [], referencePrevalences: [], sources: [sourceRow] };
+  }
+  if (idList.length !== 1 || typeof idList[0] !== "string" || !/^[1-9][0-9]{0,11}$/.test(idList[0])) fail("NCBI ESearch must return exactly one numeric taxid");
+  return { studies: [], taxonResolutions: [{
+    query_name: queryName,
     taxon_id: idList[0],
-    abundance: 0,
     source_id: sourceRow.source_id,
     source_asset_id: request.assetId,
     source_locator: locator(request, "/esearchresult/idlist/0", idList[0]),
-  }], differentialAbundances: [], referencePrevalences: [], sources: [sourceRow] };
+  }], taxonDetails: [], differentialAbundances: [], referencePrevalences: [], sources: [sourceRow] };
 }
 
+function decodeXmlEntities(value: string): string {
+  return value
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex: string) => String.fromCodePoint(Number.parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, dec: string) => String.fromCodePoint(Number(dec)))
+    .replace(/&quot;/g, "\"")
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
+/**
+ * NCBI name-class classification, shared by the ClassCDE/NameType element
+ * form and the legacy single-letter codes. Only the three crosswalk classes
+ * are tracked; authority, misspelling, common-name, and similar classes are
+ * intentionally dropped.
+ */
+function classifyNcbiNameClass(raw: string): "synonym" | "equivalent" | "historical" | null {
+  const code = raw.trim().toLowerCase();
+  if (code === "") return null;
+  if (code.includes("equivalent") || code === "e") return "equivalent";
+  if (code.includes("historical") || code === "h") return "historical";
+  if (code.includes("synonym") || code === "s" || code === "d") return "synonym";
+  return null;
+}
+
+const MAX_NAMES_PER_CLASS = 20;
+
 function parseNcbiXml(request: GutMicrobiomeCarrierRequest, content: string): GutMicrobiomeCarrierRows {
-  const taxId = /<TaxId>([1-9][0-9]{0,11})<\/TaxId>/.exec(content)?.[1];
-  const scientificName = /<ScientificName>([^<]+)<\/ScientificName>/.exec(content)?.[1];
-  const rank = /<Rank>([^<]+)<\/Rank>/.exec(content)?.[1];
-  if (taxId === undefined || scientificName === undefined || rank === undefined) fail("NCBI EFetch XML must contain TaxId, ScientificName, and Rank");
+  // LineageEx nests <Taxon> elements inside the requested taxon; strip those
+  // blocks first so top-level Taxon extraction cannot stop at a nested close.
+  const withoutLineageEx = content.replace(/<LineageEx>[\s\S]*?<\/LineageEx>/g, "");
+  const taxonBlocks = [...withoutLineageEx.matchAll(/<Taxon>([\s\S]*?)<\/Taxon>/g)].map((match) => match[1] ?? "");
+  if (taxonBlocks.length === 0) fail("NCBI EFetch XML must contain a Taxon record");
   const sourceRow = source(request, "ncbi_taxonomy", "ncbi_taxonomy_efetch_xml");
-  return { studies: [], taxa: [{
-    study_id: request.studyId,
-    sample_id: "taxonomy_reference",
-    taxon_path: `${rank}:${scientificName}`,
-    taxon_id: taxId,
-    abundance: 0,
-    source_id: sourceRow.source_id,
-    source_asset_id: request.assetId,
-    source_locator: locator(request, "/TaxaSet/Taxon/TaxId", taxId, true, "taxon_records", 1, 1),
-  }], differentialAbundances: [], referencePrevalences: [], sources: [sourceRow] };
+  const details: GutMicrobiomeTaxonDetailInput[] = [];
+  for (const [index, block] of taxonBlocks.entries()) {
+    const firstTag = (tag: string): string | null => {
+      const match = new RegExp(`<${tag}>([^<]*)</${tag}>`).exec(block);
+      const raw = match?.[1]?.trim();
+      return raw === undefined || raw === "" ? null : decodeXmlEntities(raw);
+    };
+    const taxId = firstTag("TaxId");
+    const scientificName = firstTag("ScientificName");
+    const rank = firstTag("Rank") ?? "no rank";
+    if (taxId === null || scientificName === null) fail(`NCBI EFetch Taxon record ${index} must contain TaxId and ScientificName`);
+    const synonyms: string[] = [];
+    const equivalents: string[] = [];
+    const historical: string[] = [];
+    const otherNames = /<OtherNames>([\s\S]*?)<\/OtherNames>/.exec(block)?.[1];
+    if (otherNames !== undefined) {
+      const push = (nameClass: "synonym" | "equivalent" | "historical" | null, value: string): void => {
+        if (nameClass === null) return;
+        const target = nameClass === "synonym" ? synonyms : nameClass === "equivalent" ? equivalents : historical;
+        if (target.length < MAX_NAMES_PER_CLASS) target.push(value);
+      };
+      for (const match of otherNames.matchAll(/<(Synonym|GenbankSynonym|EquivalentName)>([^<]*)<\/\1>/g)) {
+        const value = decodeXmlEntities((match[2] ?? "").trim());
+        if (value !== "") push(match[1] === "EquivalentName" ? "equivalent" : "synonym", value);
+      }
+      for (const match of otherNames.matchAll(/<Name>([\s\S]*?)<\/Name>/g)) {
+        const nameBlock = match[1] ?? "";
+        const classCode = /<(?:ClassCDE|NameType|Class)>([^<]+)<\/(?:ClassCDE|NameType|Class)>/.exec(nameBlock)?.[1];
+        const display = /<DispName>([^<]*)<\/DispName>/.exec(nameBlock)?.[1]?.trim();
+        const value = display === undefined || display === "" ? null : decodeXmlEntities(display);
+        if (classCode !== undefined && value !== null && value !== "") push(classifyNcbiNameClass(classCode), value);
+      }
+    }
+    details.push({
+      ncbi_taxon_id: taxId,
+      current_name: scientificName,
+      common_name: firstTag("CommonName"),
+      taxon_rank: rank,
+      parent_taxon_id: firstTag("ParentTaxId"),
+      lineage: firstTag("Lineage"),
+      synonyms,
+      equivalent_names: equivalents,
+      historical_names: historical,
+      source_id: sourceRow.source_id,
+      source_asset_id: request.assetId,
+      source_locator: locator(request, `/TaxaSet/Taxon/${index}/TaxId`, taxId, true, "taxon_records", index + 1, 1),
+    });
+  }
+  return { studies: [], taxonResolutions: [], taxonDetails: details, differentialAbundances: [], referencePrevalences: [], sources: [sourceRow] };
+}
+
+/**
+ * Compose the final taxon_records crosswalk rows: one row per EFetch detail,
+ * carrying the deduplicated literature query names that resolved to it.
+ * A resolution whose taxid has no EFetch detail binding fails closed with the
+ * exact missing accession so the caller can complete the binding pair.
+ */
+export function composeGutMicrobiomeCrosswalk(
+  resolutions: readonly GutMicrobiomeTaxonResolutionInput[],
+  details: readonly GutMicrobiomeTaxonDetailInput[],
+): GutMicrobiomeCrosswalkInput[] {
+  const detailsById = new Map<string, GutMicrobiomeTaxonDetailInput>();
+  for (const detail of details) {
+    const existing = detailsById.get(detail.ncbi_taxon_id);
+    if (existing !== undefined && JSON.stringify(existing) !== JSON.stringify(detail)) {
+      fail(`NCBI EFetch returned conflicting records for taxid ${detail.ncbi_taxon_id}`);
+    }
+    detailsById.set(detail.ncbi_taxon_id, detail);
+  }
+  const queryNamesByTaxid = new Map<string, string[]>();
+  for (const resolution of resolutions) {
+    if (resolution.taxon_id === null) continue;
+    const names = queryNamesByTaxid.get(resolution.taxon_id) ?? [];
+    if (!names.includes(resolution.query_name)) names.push(resolution.query_name);
+    queryNamesByTaxid.set(resolution.taxon_id, names);
+  }
+  const missing: string[] = [];
+  for (const taxid of queryNamesByTaxid.keys()) {
+    if (!detailsById.has(taxid)) missing.push(taxid);
+  }
+  if (missing.length > 0) {
+    fail(
+      `resolved taxid${missing.length === 1 ? "" : "s"} ${missing.sort().join(", ")} ha${missing.length === 1 ? "s" : "ve"} no NCBI EFetch detail binding — ` +
+        `add one gut_microbiome.ncbi_taxonomy_efetch_xml.v1 binding per taxid (numeric accession)`,
+    );
+  }
+  return [...detailsById.values()].map((detail): GutMicrobiomeCrosswalkInput => {
+    const names = queryNamesByTaxid.get(detail.ncbi_taxon_id) ?? [];
+    const alternativeNames = [...detail.synonyms, ...detail.equivalent_names, ...detail.historical_names]
+      .map((name) => name.trim().toLowerCase());
+    const nameChangeObserved = names.some((name) =>
+      name.trim().toLowerCase() !== detail.current_name.trim().toLowerCase() ||
+      alternativeNames.includes(name.trim().toLowerCase()));
+    return {
+      ncbi_taxon_id: detail.ncbi_taxon_id,
+      current_name: detail.current_name,
+      common_name: detail.common_name,
+      taxon_rank: detail.taxon_rank,
+      parent_taxon_id: detail.parent_taxon_id,
+      lineage: detail.lineage,
+      synonyms: detail.synonyms.join("; "),
+      equivalent_names: detail.equivalent_names.join("; "),
+      historical_names: detail.historical_names.join("; "),
+      name_change_observed: nameChangeObserved,
+      query_names: names.length === 0 ? null : names.join("; "),
+      source_id: detail.source_id,
+      source_asset_id: detail.source_asset_id,
+      source_locator: detail.source_locator,
+    };
+  });
 }
 
 function parseGmrepoJson(request: GutMicrobiomeCarrierRequest, root: Record<string, unknown>): GutMicrobiomeCarrierRows {
@@ -259,7 +353,7 @@ function parseGmrepoJson(request: GutMicrobiomeCarrierRequest, root: Record<stri
       source_locator: locator(request, `/phenotypes_associated_with_taxon/${index}`, JSON.stringify(item)),
     };
   });
-  return { studies: [], taxa: [], differentialAbundances: [], referencePrevalences: rows, sources: [sourceRow] };
+  return { studies: [], taxonResolutions: [], taxonDetails: [], differentialAbundances: [], referencePrevalences: rows, sources: [sourceRow] };
 }
 
 function parseDifferentialXlsx(request: GutMicrobiomeCarrierRequest, bytes: Uint8Array): GutMicrobiomeCarrierRows {
@@ -310,7 +404,7 @@ function parseDifferentialXlsx(request: GutMicrobiomeCarrierRequest, bytes: Uint
       ),
     };
   });
-  return { studies: [], taxa: [], differentialAbundances, referencePrevalences: [], sources: [sourceRow] };
+  return { studies: [], taxonResolutions: [], taxonDetails: [], differentialAbundances, referencePrevalences: [], sources: [sourceRow] };
 }
 
 export function parseGutMicrobiomeCarrier(request: GutMicrobiomeCarrierRequest): GutMicrobiomeCarrierRows {
@@ -326,7 +420,6 @@ export function parseGutMicrobiomeCarrier(request: GutMicrobiomeCarrierRequest):
     return parseDifferentialXlsx(request, request.bytes);
   }
   const content = new TextDecoder("utf-8", { fatal: true }).decode(request.bytes);
-  if (request.adapterId === "registered_gut_microbiome_taxon_long_tsv" || request.adapterId === "gut_microbiome.mgnify_taxon_tsv.v1") return parseTaxonomyTsv(request, content);
   if (request.mediaType.includes("xml") || content.trimStart().startsWith("<?xml")) return parseNcbiXml(request, content);
   let root: unknown;
   try { root = JSON.parse(content) as unknown; } catch (error) { fail(`carrier is not strict JSON: ${error instanceof Error ? error.message : String(error)}`); }
@@ -335,9 +428,6 @@ export function parseGutMicrobiomeCarrier(request: GutMicrobiomeCarrierRequest):
     case "registered_gut_microbiome_study_json":
       if (document.study === undefined && document.data === undefined) fail("MGnify study JSON must contain study or JSON:API data");
       return parseStudyJson(request, document);
-    case "registered_gut_microbiome_taxon_json":
-      if (document.records === undefined) fail("MGnify taxonomy JSON must contain records");
-      return parseTaxonomyJson(request, document);
     case "gut_microbiome.ncbi_taxonomy_esearch_json.v1":
       if (document.esearchresult === undefined) fail("NCBI ESearch JSON must contain esearchresult");
       return parseNcbiJson(request, document);
@@ -349,10 +439,16 @@ export function parseGutMicrobiomeCarrier(request: GutMicrobiomeCarrierRequest):
   }
 }
 
-export function assertGutMicrobiomeCarrierRows(rows: GutMicrobiomeCarrierRows): void {
+export function assertGutMicrobiomeCarrierRows(rows: {
+  studies: readonly GutMicrobiomeStudyInput[];
+  crosswalk: readonly GutMicrobiomeCrosswalkInput[];
+  differentialAbundances: readonly GutMicrobiomeDifferentialAbundanceInput[];
+  referencePrevalences: readonly GutMicrobiomeReferencePrevalenceInput[];
+  sources: readonly GutMicrobiomeSourceInput[];
+}): void {
   assertGutMicrobiomeRows({
     studies: rows.studies,
-    taxa: rows.taxa,
+    crosswalk: rows.crosswalk,
     differentialAbundances: rows.differentialAbundances,
     referencePrevalences: rows.referencePrevalences,
     sources: rows.sources,
