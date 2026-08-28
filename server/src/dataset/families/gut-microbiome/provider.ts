@@ -3,6 +3,7 @@ import type { SourceLocatorV2 } from "@biomed/contracts";
 import type {
   GutMicrobiomeCrosswalkInput,
   GutMicrobiomeDifferentialAbundanceInput,
+  GutMicrobiomePaperDifferentialInput,
   GutMicrobiomeReferencePrevalenceInput,
   GutMicrobiomeSourceInput,
   GutMicrobiomeStudyInput,
@@ -10,6 +11,8 @@ import type {
   GutMicrobiomeTaxonResolutionInput,
 } from "./types.js";
 import { assertGutMicrobiomeRows } from "./validation.js";
+
+export const GUT_MICROBIOME_PAPER_SUPPLEMENT_CSV_ADAPTER_ID = "gut_microbiome.paper_supplement_differential_abundance_csv.v1";
 
 const ASSET_ID = /^asset_[0-9a-f]{64}$/;
 
@@ -34,6 +37,7 @@ export interface GutMicrobiomeCarrierRows {
   taxonResolutions: readonly GutMicrobiomeTaxonResolutionInput[];
   taxonDetails: readonly GutMicrobiomeTaxonDetailInput[];
   differentialAbundances: readonly GutMicrobiomeDifferentialAbundanceInput[];
+  paperDifferentials: readonly GutMicrobiomePaperDifferentialInput[];
   referencePrevalences: readonly GutMicrobiomeReferencePrevalenceInput[];
   sources: readonly GutMicrobiomeSourceInput[];
 }
@@ -147,7 +151,7 @@ function parseStudyJson(request: GutMicrobiomeCarrierRequest, root: Record<strin
     source_asset_id: request.assetId,
     source_locator: locator(request, root.study === undefined ? "/data" : "/study", JSON.stringify(item)),
   };
-  return { studies: [study], taxonResolutions: [], taxonDetails: [], differentialAbundances: [], referencePrevalences: [], sources: [sourceRow] };
+  return { studies: [study], taxonResolutions: [], taxonDetails: [], differentialAbundances: [], paperDifferentials: [], referencePrevalences: [], sources: [sourceRow] };
 }
 
 function safeTaxonId(value: unknown, label: string): string {
@@ -173,7 +177,7 @@ function parseNcbiJson(request: GutMicrobiomeCarrierRequest, root: Record<string
       source_id: sourceRow.source_id,
       source_asset_id: request.assetId,
       source_locator: locator(request, "/esearchresult/idlist", ""),
-    }], taxonDetails: [], differentialAbundances: [], referencePrevalences: [], sources: [sourceRow] };
+    }], taxonDetails: [], differentialAbundances: [], paperDifferentials: [], referencePrevalences: [], sources: [sourceRow] };
   }
   if (idList.length !== 1 || typeof idList[0] !== "string" || !/^[1-9][0-9]{0,11}$/.test(idList[0])) fail("NCBI ESearch must return exactly one numeric taxid");
   return { studies: [], taxonResolutions: [{
@@ -182,7 +186,7 @@ function parseNcbiJson(request: GutMicrobiomeCarrierRequest, root: Record<string
     source_id: sourceRow.source_id,
     source_asset_id: request.assetId,
     source_locator: locator(request, "/esearchresult/idlist/0", idList[0]),
-  }], taxonDetails: [], differentialAbundances: [], referencePrevalences: [], sources: [sourceRow] };
+  }], taxonDetails: [], differentialAbundances: [], paperDifferentials: [], referencePrevalences: [], sources: [sourceRow] };
 }
 
 function decodeXmlEntities(value: string): string {
@@ -268,7 +272,50 @@ function parseNcbiXml(request: GutMicrobiomeCarrierRequest, content: string): Gu
       source_locator: locator(request, `/TaxaSet/Taxon/${index}/TaxId`, taxId, true, "taxon_records", index + 1, 1),
     });
   }
-  return { studies: [], taxonResolutions: [], taxonDetails: details, differentialAbundances: [], referencePrevalences: [], sources: [sourceRow] };
+  return { studies: [], taxonResolutions: [], taxonDetails: details, differentialAbundances: [], paperDifferentials: [], referencePrevalences: [], sources: [sourceRow] };
+}
+
+/**
+ * Join raw paper supplement records to NCBI taxids via the ESearch
+ * resolutions of the same spec. Records whose reported name has no resolved
+ * ESearch binding are skipped deterministically; a paper whose names all fail
+ * the join fails closed with the verbatim-name remedy.
+ */
+export function joinPaperDifferentials(
+  records: readonly GutMicrobiomePaperDifferentialInput[],
+  resolutions: readonly GutMicrobiomeTaxonResolutionInput[],
+): GutMicrobiomeDifferentialAbundanceInput[] {
+  const taxidByName = new Map<string, string>();
+  for (const resolution of resolutions) {
+    if (resolution.taxon_id !== null && !taxidByName.has(resolution.query_name.trim())) {
+      taxidByName.set(resolution.query_name.trim(), resolution.taxon_id);
+    }
+  }
+  const joined: GutMicrobiomeDifferentialAbundanceInput[] = [];
+  for (const record of records) {
+    const taxonId = taxidByName.get(record.reported_taxon_name.trim());
+    if (taxonId === undefined) continue;
+    joined.push({
+      study_id: record.study_id,
+      taxon_id: taxonId,
+      comparison_id: record.comparison_id,
+      comparison_label: record.comparison_label,
+      effect_size: record.effect_size,
+      p_value: record.p_value,
+      adjusted_p_value: record.adjusted_p_value,
+      effect_direction: record.effect_direction,
+      source_id: record.source_id,
+      source_asset_id: record.source_asset_id,
+      source_locator: record.source_locator,
+    });
+  }
+  if (records.length > 0 && joined.length === 0) {
+    fail(
+      "paper supplement records could not join any NCBI taxon — bind gut_microbiome.ncbi_taxonomy_esearch_json.v1 " +
+        "accessions with the verbatim reported taxon names of the supplement (e.g. '[Ruminococcus] torques')",
+    );
+  }
+  return joined;
 }
 
 /**
@@ -353,7 +400,173 @@ function parseGmrepoJson(request: GutMicrobiomeCarrierRequest, root: Record<stri
       source_locator: locator(request, `/phenotypes_associated_with_taxon/${index}`, JSON.stringify(item)),
     };
   });
-  return { studies: [], taxonResolutions: [], taxonDetails: [], differentialAbundances: [], referencePrevalences: rows, sources: [sourceRow] };
+  return { studies: [], taxonResolutions: [], taxonDetails: [], differentialAbundances: [], paperDifferentials: [], referencePrevalences: rows, sources: [sourceRow] };
+}
+
+/** RFC4180-style whole-document CSV parse: quoted fields may contain commas, CRLF, and doubled quotes. */
+function parseCsvDocument(content: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let inQuotes = false;
+  let fieldStarted = false;
+  const endField = (): void => { row.push(field); field = ""; fieldStarted = false; };
+  const endRow = (): void => { endField(); rows.push(row); row = []; };
+  for (let index = 0; index < content.length; index += 1) {
+    const ch = content[index];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (content[index + 1] === '"') { field += '"'; index += 1; } else { inQuotes = false; }
+      } else {
+        field += ch;
+      }
+      continue;
+    }
+    if (ch === '"' && !fieldStarted) { inQuotes = true; fieldStarted = true; continue; }
+    if (ch === ",") { endField(); continue; }
+    if (ch === "\n" || ch === "\r") {
+      if (ch === "\r" && content[index + 1] === "\n") index += 1;
+      endRow();
+      continue;
+    }
+    field += ch;
+    fieldStarted = true;
+  }
+  if (field !== "" || row.length > 0 || fieldStarted) endRow();
+  return rows;
+}
+
+type SupplementMetric = "effect" | "p_value" | "adjusted_p_value";
+
+/**
+ * Metric sub-header classification. Header cells are matched after folding to
+ * lower case and collapsing spacing, so `β`, `pvalue`, and `q value` all
+ * resolve while unrelated prose cells stay unmatched.
+ */
+function supplementMetricFor(cell: string): SupplementMetric | null {
+  const token = cell.trim().toLowerCase().replace(/\s+/g, " ");
+  if (["β", "beta", "b", "coefficient", "coeff", "effect", "effect size", "estimate", "fold change", "log2fc", "log2 fold change", "log fold change", "odds ratio", "difference"].includes(token)) return "effect";
+  if (["p", "p value", "pvalue", "p-value", "p val", "pval"].includes(token)) return "p_value";
+  if (["q", "q value", "qvalue", "q-value", "padj", "p adj", "p.adjust", "fdr", "adjusted p", "adjusted p value", "adjusted p-value"].includes(token)) return "adjusted_p_value";
+  return null;
+}
+
+function slug(value: string): string {
+  const normalized = value.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return normalized.slice(0, 60) || "col";
+}
+
+function parsePaperSupplementCsv(request: GutMicrobiomeCarrierRequest, content: string): GutMicrobiomeCarrierRows {
+  const sourceRow = source(request, "europepmc_supplement", "paper_supplement_differential_abundance_csv");
+  const rows = parseCsvDocument(content);
+  if (rows.length < 3) fail("paper supplement CSV must contain a header block and at least one record");
+
+  // 1) Locate the metric sub-header row: several cells that classify as
+  // effect/p/q metrics, with every non-empty cell a known metric.
+  let subHeaderIndex = -1;
+  let metricColumns = new Map<number, SupplementMetric>();
+  for (let index = 0; index < Math.min(rows.length, 12); index += 1) {
+    const metrics = new Map<number, SupplementMetric>();
+    let matched = 0;
+    for (const [column, cell] of rows[index]!.entries()) {
+      const metric = supplementMetricFor(cell);
+      if (metric !== null) { metrics.set(column, metric); matched += 1; }
+    }
+    if (matched >= 2 && [...rows[index]!.entries()].every(([column, cell]) => cell.trim() === "" || metrics.has(column))) {
+      subHeaderIndex = index;
+      metricColumns = metrics;
+      break;
+    }
+  }
+  if (subHeaderIndex < 1) fail("paper supplement CSV has no recognized metric sub-header row (expected effect/p/q column labels such as β, pvalue, q value)");
+  const groupRow = rows[subHeaderIndex - 1]!.map((cell) => cell.trim());
+
+  // 2) Entity column: labelled in the group row, empty in the sub-header row.
+  const firstMetricColumn = Math.min(...metricColumns.keys());
+  const entityColumn = groupRow.findIndex((cell, column) =>
+    cell !== "" && column < firstMetricColumn && (rows[subHeaderIndex]![column] ?? "").trim() === "");
+  if (entityColumn < 0) fail("paper supplement CSV has no entity column (group-header label with empty metric cell above the data rows)");
+
+  // 3) Forward-fill merged group labels, then derive each group's metric
+  // layout: labeled sub-header cells win; merged holes inherit the metric at
+  // the same offset of the previous complete group block (microsoft-style
+  // merged sub-headers like GCDCA's missing `pvalue` label).
+  const groups: string[] = [];
+  let lastGroup = "";
+  for (let column = entityColumn + 1; column < groupRow.length; column += 1) {
+    if (groupRow[column] !== "") lastGroup = groupRow[column]!;
+    groups[column] = lastGroup;
+  }
+  const groupSpans: { group: string; start: number; end: number }[] = [];
+  for (let column = entityColumn + 1; column < groups.length; column += 1) {
+    const group = groups[column] ?? "";
+    if (group === "") continue;
+    const last = groupSpans[groupSpans.length - 1];
+    if (last !== undefined && last.group === group) last.end = column + 1;
+    else groupSpans.push({ group, start: column, end: column + 1 });
+  }
+  const metricByColumn = new Map<number, SupplementMetric>();
+  let previousPattern: SupplementMetric[] = [];
+  for (const span of groupSpans) {
+    const block: SupplementMetric[] = [];
+    for (let column = span.start; column < span.end && column < span.start + 4; column += 1) {
+      const labeled = metricColumns.get(column);
+      const filled = labeled ?? previousPattern[column - span.start];
+      if (filled !== undefined) { block.push(filled); metricByColumn.set(column, filled); }
+    }
+    if (block.length >= 2) previousPattern = block;
+  }
+
+  // 4) Emit one record per (entity row, group block) with effect and p values.
+  const paperSegment = request.logicalFile.split(/[\\/]/).pop() ?? request.logicalFile;
+  const firstDot = paperSegment.indexOf(".");
+  const paperSlug = slug(firstDot === -1 ? paperSegment : paperSegment.slice(0, firstDot));
+  const records: GutMicrobiomePaperDifferentialInput[] = [];
+  const seenComparisons = new Set<string>();
+  for (let index = subHeaderIndex + 1; index < rows.length; index += 1) {
+    const cells = rows[index]!.map((cell) => cell.trim());
+    const entity = cells[entityColumn] ?? "";
+    if (entity === "") continue;
+    for (const span of groupSpans) {
+      const effectColumn = [...metricByColumn.entries()].find(([column, metric]) =>
+        column >= span.start && column < span.end && metric === "effect")?.[0];
+      const pColumn = [...metricByColumn.entries()].find(([column, metric]) =>
+        column >= span.start && column < span.end && metric === "p_value")?.[0];
+      if (effectColumn === undefined || pColumn === undefined) continue;
+      const adjustedColumn = [...metricByColumn.entries()].find(([column, metric]) =>
+        column >= span.start && column < span.end && metric === "adjusted_p_value")?.[0];
+      // Ragged trailing cells are blank by CSV convention, never an error.
+      const cellAt = (column: number): string => cells[column] ?? "";
+      const adjusted = adjustedColumn === undefined || cellAt(adjustedColumn) === "" ? null : Number(cellAt(adjustedColumn));
+      if (cellAt(effectColumn) === "" || cellAt(pColumn) === "") continue;
+      const effect = Number(cellAt(effectColumn));
+      const pValue = Number(cellAt(pColumn));
+      if (!Number.isFinite(effect) || !Number.isFinite(pValue) || pValue < 0 || pValue > 1) {
+        fail(`paper supplement CSV row ${index + 1} group '${span.group}' has a non-numeric effect or an out-of-range p value`);
+      }
+      if (adjusted !== null && (!Number.isFinite(adjusted) || adjusted < 0 || adjusted > 1)) {
+        fail(`paper supplement CSV row ${index + 1} group '${span.group}' has an out-of-range adjusted p value`);
+      }
+      const comparisonId = `${paperSlug}__${slug(entity)}__${slug(span.group)}`;
+      if (seenComparisons.has(comparisonId)) continue;
+      seenComparisons.add(comparisonId);
+      records.push({
+        study_id: request.studyId,
+        reported_taxon_name: entity,
+        comparison_id: comparisonId,
+        comparison_label: span.group,
+        effect_size: effect,
+        p_value: pValue,
+        adjusted_p_value: adjusted,
+        effect_direction: effect > 0 ? "increase" : effect < 0 ? "decrease" : "unchanged",
+        source_id: sourceRow.source_id,
+        source_asset_id: request.assetId,
+        source_locator: locator(request, `/row/${index}/col/${effectColumn}`, cellAt(effectColumn), true, "differential_abundance_records", index + 1, effectColumn + 1),
+      });
+    }
+  }
+  if (records.length === 0) fail("paper supplement CSV yielded no differential records from the recognized layout");
+  return { studies: [], taxonResolutions: [], taxonDetails: [], differentialAbundances: [], paperDifferentials: records, referencePrevalences: [], sources: [sourceRow] };
 }
 
 function parseDifferentialXlsx(request: GutMicrobiomeCarrierRequest, bytes: Uint8Array): GutMicrobiomeCarrierRows {
@@ -404,7 +617,7 @@ function parseDifferentialXlsx(request: GutMicrobiomeCarrierRequest, bytes: Uint
       ),
     };
   });
-  return { studies: [], taxonResolutions: [], taxonDetails: [], differentialAbundances, referencePrevalences: [], sources: [sourceRow] };
+  return { studies: [], taxonResolutions: [], taxonDetails: [], differentialAbundances, paperDifferentials: [], referencePrevalences: [], sources: [sourceRow] };
 }
 
 export function parseGutMicrobiomeCarrier(request: GutMicrobiomeCarrierRequest): GutMicrobiomeCarrierRows {
@@ -420,6 +633,12 @@ export function parseGutMicrobiomeCarrier(request: GutMicrobiomeCarrierRequest):
     return parseDifferentialXlsx(request, request.bytes);
   }
   const content = new TextDecoder("utf-8", { fatal: true }).decode(request.bytes);
+  if (request.adapterId === GUT_MICROBIOME_PAPER_SUPPLEMENT_CSV_ADAPTER_ID) {
+    if (request.mediaType.toLowerCase() !== "text/csv") {
+      fail("paper supplement differential CSV requires a text/csv extraction member asset (run acquire_core_carrier on europepmc.supplementary.v1 and bind the xlsx worksheet member asset via source_files)");
+    }
+    return parsePaperSupplementCsv(request, content);
+  }
   if (request.mediaType.includes("xml") || content.trimStart().startsWith("<?xml")) return parseNcbiXml(request, content);
   let root: unknown;
   try { root = JSON.parse(content) as unknown; } catch (error) { fail(`carrier is not strict JSON: ${error instanceof Error ? error.message : String(error)}`); }

@@ -75,8 +75,27 @@ function xlsxCarrier(): Buffer {
   return Buffer.from(XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }));
 }
 
-function spec(options: { requirementId: string; wrongProvider?: boolean; includeRegisteredBinding?: boolean }): DatasetExecutionSpec {
+function spec(options: { requirementId: string; wrongProvider?: boolean; includeRegisteredBinding?: boolean; paperBinding?: boolean }): DatasetExecutionSpec {
   const providerForGmrepo = options.wrongProvider === true ? "mgnify.files.v1" : "gmrepo.files.v1";
+  const differentialBinding = options.paperBinding === true
+    ? {
+      schema_version: "1.0" as const,
+      binding_id: "binding_differential",
+      source: "europepmc_supplement",
+      acquisition: { schema_version: "1.0" as const, mode: "builtin" as const, provider_id: "europepmc.supplementary.v1", recipe_id: null, recipe_version: null },
+      adapter_id: "gut_microbiome.paper_supplement_differential_abundance_csv.v1",
+      accession: "PMC5090114",
+      parameters: {},
+    }
+    : {
+      schema_version: "1.0" as const,
+      binding_id: "binding_differential",
+      source: "mgnify",
+      acquisition: { schema_version: "1.0" as const, mode: "builtin" as const, provider_id: "mgnify.files.v1", recipe_id: null, recipe_version: null },
+      adapter_id: "registered_gut_microbiome_differential_abundance_xlsx",
+      accession: STUDY_ID,
+      parameters: {},
+    };
   const bindings: DatasetExecutionSpec["source_bindings"] = [
     {
       schema_version: "1.0" as const,
@@ -105,15 +124,7 @@ function spec(options: { requirementId: string; wrongProvider?: boolean; include
       accession: "548",
       parameters: {},
     },
-    {
-      schema_version: "1.0" as const,
-      binding_id: "binding_differential",
-      source: "mgnify",
-      acquisition: { schema_version: "1.0" as const, mode: "builtin" as const, provider_id: "mgnify.files.v1", recipe_id: null, recipe_version: null },
-      adapter_id: "registered_gut_microbiome_differential_abundance_xlsx",
-      accession: STUDY_ID,
-      parameters: {},
-    },
+    differentialBinding,
     {
       schema_version: "1.0" as const,
       binding_id: "binding_taxonomy_esearch",
@@ -175,7 +186,7 @@ function spec(options: { requirementId: string; wrongProvider?: boolean; include
 async function registerCarriers(
   taskId: string,
   taskRoot: string,
-  options: { studyCarrier?: () => Buffer } = {},
+  options: { studyCarrier?: () => Buffer; paperCarrier?: () => Buffer } = {},
 ) {
   const studyBytes = options.studyCarrier?.() ?? Buffer.from(JSON.stringify({
     study: {
@@ -189,7 +200,9 @@ async function registerCarriers(
     },
   }));
   const study = await writeCarrier(taskRoot, "study.json", studyBytes, "application/json");
-  const differential = await writeCarrier(taskRoot, "differential.xlsx", xlsxCarrier(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  const differential = options.paperCarrier !== undefined
+    ? await writeCarrier(taskRoot, "paper-supplement.csv", options.paperCarrier(), "text/csv")
+    : await writeCarrier(taskRoot, "differential.xlsx", xlsxCarrier(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
   const prevalence = await writeCarrier(taskRoot, "prevalence.json", Buffer.from(JSON.stringify({
     phenotypes_associated_with_taxon: [
       { disease: "D006262", term: "Health", ncbi_taxon_id: STUDY_TAXON_ID, samples: 2, all_samples: 4 },
@@ -234,7 +247,12 @@ async function registerCarriers(
     study: await registry.register({ sourceId: "source_mgnify_study_fixture", relativePath: study.relativePath, role: "carrier", mediaType: "application/json" }),
     ncbiEsearchRenamed: await registry.register({ sourceId: "source_ncbi_esearch_renamed_fixture", relativePath: ncbiEsearchRenamed.relativePath, role: "carrier", mediaType: "application/json" }),
     ncbiEfetchRenamed: await registry.register({ sourceId: "source_ncbi_efetch_renamed_fixture", relativePath: ncbiEfetchRenamed.relativePath, role: "carrier", mediaType: "application/xml" }),
-    differential: await registry.register({ sourceId: "source_mgnify_differential_fixture", relativePath: differential.relativePath, role: "carrier", mediaType: differential.bytes.length > 0 ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : "application/octet-stream" }),
+    differential: await registry.register({
+      sourceId: "source_mgnify_differential_fixture",
+      relativePath: differential.relativePath,
+      role: "carrier",
+      mediaType: options.paperCarrier !== undefined ? "text/csv" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    }),
     prevalence: await registry.register({ sourceId: "source_gmrepo_prevalence_fixture", relativePath: prevalence.relativePath, role: "carrier", mediaType: "application/json" }),
     ncbiEsearch: await registry.register({ sourceId: "source_ncbi_esearch_fixture", relativePath: ncbiEsearch.relativePath, role: "carrier", mediaType: "application/json" }),
     ncbiEfetch: await registry.register({ sourceId: "source_ncbi_efetch_fixture", relativePath: ncbiEfetch.relativePath, role: "carrier", mediaType: "application/xml" }),
@@ -322,6 +340,57 @@ describe("Gold10 gut microbiome provider runtime dispatch", () => {
     expect(renamed[7]).toBe("Enterobacter aerogenes");
     expect(renamed[9]).toBe("true");
     expect(renamed[10]).toBe("Enterobacter aerogenes");
+  });
+
+  it("executes the static route with a pre-supplied paper supplement CSV member binding", async () => {
+    const taskRoot = await mkdtemp(path.join(os.tmpdir(), "gold10-paper-binding-"));
+    roots.push(taskRoot);
+    const taskId = "task_gold10_paper_binding";
+    const paperCsv = Buffer.from(
+      '"Panel title with an embedded\nnewline",,,,,,,,\n' +
+        "mOTU ,UDCA,,,GCDCA,,,,TLCA,,\n" +
+        ",β,pvalue,q value,β,,q value,,β,pvalue\n" +
+        "Blautia obeum,0.42,0.03,0.06,-0.25,0.5,0.6,,0.9,0.95\n" +
+        "motu linkage group 349,0.1,0.2,0.3,-0.4,0.5,0.6,,0.7,0.8",
+      "utf8",
+    );
+    const receipts = await registerCarriers(taskId, taskRoot, { paperCarrier: () => paperCsv });
+
+    const registry = createDefaultDatasetFamilyRegistry();
+    const validator = new SpecValidator(registry.schemaRegistry(), registry.validationProfileRefs(), registry);
+    expect(validator.validate(spec({ requirementId: "req_gold10_paper_binding", paperBinding: true }))).toEqual({
+      valid: true,
+      reason_codes: [],
+      reasons: [],
+    });
+
+    const result = await executeRegisteredMultiTableBuild({
+      taskId,
+      taskRoot,
+      spec: spec({ requirementId: "req_gold10_paper_binding", paperBinding: true }),
+      registeredAssetIds: {
+        binding_study: receipts.study.asset_ref.asset_id,
+        binding_differential: receipts.differential.asset_ref.asset_id,
+        binding_taxonomy_esearch: receipts.ncbiEsearch.asset_ref.asset_id,
+        binding_taxonomy_efetch: receipts.ncbiEfetch.asset_ref.asset_id,
+        binding_taxonomy_esearch_renamed: receipts.ncbiEsearchRenamed.asset_ref.asset_id,
+        binding_taxonomy_efetch_renamed: receipts.ncbiEfetchRenamed.asset_ref.asset_id,
+        binding_prevalence: receipts.prevalence.asset_ref.asset_id,
+      },
+    });
+    expect(result.publication.publicationId).toMatch(/^pub_req_gold10_paper_binding_/);
+    const output = await readFile(path.join(taskRoot, "dataset_runs", "run_test", "req_gold10_paper_binding", "tables", "differential_abundance_records.csv"), "utf8");
+    const lines = output.split("\n").filter((line) => line.length > 0);
+    // Only Blautia obeum joins the ESearch resolution; the unresolved mOTU group is skipped.
+    expect(lines).toHaveLength(4);
+    expect(lines[0]).toBe("study_id,taxon_id,comparison_id,comparison_label,effect_size,p_value,adjusted_p_value,effect_direction,source_id,source_asset_id,source_locator");
+    const firstRow = lines[1]!.split(",");
+    expect(firstRow[0]).toBe(STUDY_ID);
+    expect(firstRow[1]).toBe("1234");
+    expect(firstRow[2]).toBe("paper_supplement__blautia_obeum__udca");
+    expect(firstRow[3]).toBe("UDCA");
+    expect(firstRow[4]).toBe("0.42");
+    expect(firstRow[7]).toBe("increase");
   });
 
   it("fails closed on provider mismatch, wrong media, and mixed registered/provider bindings", async () => {
