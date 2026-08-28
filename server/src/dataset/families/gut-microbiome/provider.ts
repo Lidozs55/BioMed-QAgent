@@ -456,6 +456,108 @@ function slug(value: string): string {
   return normalized.slice(0, 60) || "col";
 }
 
+/**
+ * Reported names may arrive as dotted or pipe lineage strings; the terminal
+ * token is the comparable taxon name (mirrors the gold10 reference cleaning
+ * of pipe lineages).
+ */
+function terminalTaxonName(value: string): string {
+  const segments = value.split(/[.|]/).map((part) => part.trim()).filter((part) => part !== "");
+  if (segments.length <= 1) return value.trim();
+  return segments[segments.length - 1]!;
+}
+
+const STRICT_NUMBER = /^[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?$/;
+
+/**
+ * Single-header statistics panel (e.g. Morgan 2012 S9 LEfSe: `Clade | Max.
+ * value | Effect size | P`): one record per data row, categorical side label
+ * columns become the comparison context, and lineage-like entity cells keep
+ * only the terminal taxon name so ESearch bindings stay verbatim-comparable.
+ */
+function parsePaperSupplementSingleHeaderCsv(request: GutMicrobiomeCarrierRequest, rows: string[][]): GutMicrobiomeCarrierRows {
+  const sourceRow = source(request, "europepmc_supplementary", "paper_supplement_differential_abundance_csv");
+  let headerIndex = -1;
+  let metricColumns = new Map<number, SupplementMetric>();
+  let labelColumns: number[] = [];
+  for (let index = 0; index < Math.min(rows.length, 12); index += 1) {
+    const metrics = new Map<number, SupplementMetric>();
+    const labels: number[] = [];
+    for (const [column, cell] of rows[index]!.entries()) {
+      if (cell.trim() === "") continue;
+      const metric = supplementMetricFor(cell);
+      if (metric !== null) metrics.set(column, metric);
+      else labels.push(column);
+    }
+    if (metrics.size < 2 || labels.length < 1) continue;
+    const below = rows[index + 1] ?? [];
+    const numericBelow = [...metrics.keys()].filter((column) => STRICT_NUMBER.test((below[column] ?? "").trim())).length;
+    if (numericBelow >= 2) {
+      headerIndex = index;
+      metricColumns = metrics;
+      labelColumns = labels;
+      break;
+    }
+  }
+  if (headerIndex < 0 || labelColumns.length === 0) {
+    fail("paper supplement CSV has no recognized statistics panel header (two-row effect/p/q panels or single-row Clade/Effect size/P panels)");
+  }
+  const entityColumn = labelColumns[0]!;
+  const sideColumns = labelColumns.slice(1);
+  const columnFor = (metric: SupplementMetric): number | undefined =>
+    [...metricColumns.entries()].filter(([, value]) => value === metric).map(([column]) => column).sort((a, b) => a - b)[0];
+  const effectColumn = columnFor("effect");
+  const pColumn = columnFor("p_value");
+  const adjustedColumn = columnFor("adjusted_p_value");
+  if (effectColumn === undefined || pColumn === undefined) {
+    fail("paper supplement CSV single-row header lacks an effect or p-value column");
+  }
+
+  const paperSegment = request.logicalFile.split(/[\\/]/).pop() ?? request.logicalFile;
+  const firstDot = paperSegment.indexOf(".");
+  const paperSlug = slug(firstDot === -1 ? paperSegment : paperSegment.slice(0, firstDot));
+  const records: GutMicrobiomePaperDifferentialInput[] = [];
+  const seenComparisons = new Set<string>();
+  for (let index = headerIndex + 1; index < rows.length; index += 1) {
+    const cells = rows[index]!.map((cell) => cell.trim());
+    const cellAt = (column: number): string => cells[column] ?? "";
+    const rawEntity = cellAt(entityColumn);
+    if (rawEntity === "") continue;
+    const entity = terminalTaxonName(rawEntity);
+    if (entity === "") continue;
+    if (cellAt(effectColumn) === "" || cellAt(pColumn) === "") continue;
+    const effect = Number(cellAt(effectColumn));
+    const pValue = Number(cellAt(pColumn));
+    const adjusted = adjustedColumn === undefined || cellAt(adjustedColumn) === "" ? null : Number(cellAt(adjustedColumn));
+    if (!STRICT_NUMBER.test(cellAt(effectColumn)) || !STRICT_NUMBER.test(cellAt(pColumn)) ||
+        pValue < 0 || pValue > 1) {
+      fail(`paper supplement CSV row ${index + 1} has a non-numeric effect or an out-of-range p value`);
+    }
+    if (adjusted !== null && (!Number.isFinite(adjusted) || adjusted < 0 || adjusted > 1)) {
+      fail(`paper supplement CSV row ${index + 1} has an out-of-range adjusted p value`);
+    }
+    const sideLabel = sideColumns.map((column) => cellAt(column)).filter((value) => value !== "").join(" ");
+    let comparisonId = `${paperSlug}__${slug(entity)}${sideLabel === "" ? "" : `__${slug(sideLabel)}`}`;
+    if (seenComparisons.has(comparisonId)) comparisonId = `${comparisonId}__row${index + 1}`;
+    seenComparisons.add(comparisonId);
+    records.push({
+      study_id: request.studyId,
+      reported_taxon_name: entity,
+      comparison_id: comparisonId,
+      comparison_label: sideLabel === "" ? "association" : sideLabel,
+      effect_size: effect,
+      p_value: pValue,
+      adjusted_p_value: adjusted,
+      effect_direction: effect > 0 ? "increase" : effect < 0 ? "decrease" : "unchanged",
+      source_id: sourceRow.source_id,
+      source_asset_id: request.assetId,
+      source_locator: locator(request, `/row/${index}/col/${effectColumn}`, cellAt(effectColumn), true, "differential_abundance_records", index + 1, effectColumn + 1),
+    });
+  }
+  if (records.length === 0) fail("paper supplement CSV yielded no differential records from the recognized layout");
+  return { studies: [], taxonResolutions: [], taxonDetails: [], differentialAbundances: [], paperDifferentials: records, referencePrevalences: [], sources: [sourceRow] };
+}
+
 function parsePaperSupplementCsv(request: GutMicrobiomeCarrierRequest, content: string): GutMicrobiomeCarrierRows {
   const sourceRow = source(request, "europepmc_supplementary", "paper_supplement_differential_abundance_csv");
   const rows = parseCsvDocument(content);
@@ -478,7 +580,13 @@ function parsePaperSupplementCsv(request: GutMicrobiomeCarrierRequest, content: 
       break;
     }
   }
-  if (subHeaderIndex < 1) fail("paper supplement CSV has no recognized metric sub-header row (expected effect/p/q column labels such as β, pvalue, q value)");
+  if (subHeaderIndex < 1) {
+    // Fallback layout class: a SINGLE header row with metric labels plus
+    // non-metric label columns (e.g. Morgan 2012 S9: Clade | Max. value |
+    // Effect size | P). One record per data row; categorical side columns
+    // become the comparison label.
+    return parsePaperSupplementSingleHeaderCsv(request, rows);
+  }
   const groupRow = rows[subHeaderIndex - 1]!.map((cell) => cell.trim());
 
   // 2) Entity column: labelled in the group row, empty in the sub-header row.

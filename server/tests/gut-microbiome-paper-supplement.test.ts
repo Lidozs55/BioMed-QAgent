@@ -10,6 +10,7 @@ import {
 } from "../src/dataset/families/gut-microbiome/index.js";
 
 const FORSLUND_XLSX = "data/gold/gold10_gut_microbiome/raw/papers/forslund2017/MOESM4_ESM.xlsx";
+const MORGAN_S9_XLSX = "data/gold/gold10_gut_microbiome/raw/papers/morgan2012_ibd/gb-2012-13-9-r79-S9.XLSX";
 const RETRIEVED_AT = "2026-08-28T00:00:00Z";
 
 function paperRequest(bytes: Buffer, options: { logicalFile?: string; mediaType?: string } = {}) {
@@ -37,7 +38,38 @@ const SYNTHETIC_PANEL = Buffer.from(
   "utf8",
 );
 
+/** Same layout class as the Morgan 2012 S9 LEfSe panel (single header row, lineage entities). */
+const SINGLE_ROW_PANEL = Buffer.from(
+  "Clade,Max. value,Effect size,P\n" +
+    "Bacteria.Firmicutes.Clostridia.Clostridiales.Ruminococcaceae,RectumSigmoidRectosigmoid,4.81055595378,5.28296506597e-08\n" +
+    "Bacteria.Bacteroidetes.Bacteroidia.Bacteroidales.Prevotellaceae,Cecum,4.72531006384,2.56557737657e-07\n" +
+    "Bacteria.Firmicutes.Clostridia.Clostridiales.Lachnospiraceae,RectumSigmoidRectosigmoid,4.15620610914,4.78364532053e-06\n" +
+    "Bacteria.Firmicutes.Clostridia.Clostridiales.Ruminococcaceae,Cecum,4.16710937072,0.000182884055615",
+  "utf8",
+);
+
 describe("Gold10 paper supplement differential CSV", () => {
+  it("extracts single-header LEfSe panels with terminal taxon names and side-label comparisons", () => {
+    const rows = parseGutMicrobiomeCarrier(paperRequest(SINGLE_ROW_PANEL, { logicalFile: "PMC3506950_supplementary/gb-2012-13-9-r79-S9.XLSX__Sheet1.csv" }));
+    expect(rows.paperDifferentials).toHaveLength(4);
+    const first = rows.paperDifferentials[0]!;
+    expect(first).toMatchObject({
+      reported_taxon_name: "Ruminococcaceae",
+      comparison_label: "RectumSigmoidRectosigmoid",
+      effect_size: 4.81055595378,
+      p_value: 5.28296506597e-08,
+      adjusted_p_value: null,
+      effect_direction: "increase",
+    });
+    expect(first.comparison_id).toBe("gb_2012_13_9_r79_s9__ruminococcaceae__rectumsigmoidrectosigmoid");
+    // Same clade with a different side label keeps a distinct comparison id;
+    // exact duplicates fall back to a row-ordinal suffix.
+    const ids = rows.paperDifferentials.map((record) => record.comparison_id);
+    expect(new Set(ids).size).toBe(ids.length);
+    const cecum = rows.paperDifferentials.find((record) => record.comparison_label === "Cecum" && record.reported_taxon_name === "Ruminococcaceae")!;
+    expect(cecum.comparison_id).toBe("gb_2012_13_9_r79_s9__ruminococcaceae__cecum");
+  });
+
   it("extracts effect/p/adjusted-p records from a merged two-row-header statistics panel", () => {
     const rows = parseGutMicrobiomeCarrier(paperRequest(SYNTHETIC_PANEL));
     // 3 complete groups resolve for Alistipes (UDCA, GCDCA via pattern fill, TLCA)
@@ -111,5 +143,22 @@ describe("Gold10 paper supplement differential CSV", () => {
       (record) => record.reported_taxon_name === "[Ruminococcus] torques" && record.comparison_label === "GCDCA")!;
     // GCDCA's sub-header has a merged hole; the recurring β/p/q pattern must fill p from data columns 4/5.
     expect(gcdca).toMatchObject({ effect_size: 0.122225047, p_value: 0.235496392, adjusted_p_value: 0.714853005 });
+  });
+
+  it("parses the real Morgan S9 LEfSe worksheet CSV into terminal-taxon records", () => {
+    if (!existsSync(MORGAN_S9_XLSX)) return; // frozen gold fixture; skip when absent
+    const worksheets = xlsxWorksheetsToCsv(readFileSync(MORGAN_S9_XLSX), {
+      maxWorksheets: 12,
+      maxCsvBytes: 32 * 1024 * 1024,
+    });
+    expect(worksheets).toHaveLength(1);
+    const rows = parseGutMicrobiomeCarrier(paperRequest(Buffer.from(worksheets[0]!.csv), {
+      logicalFile: "PMC3506950_supplementary/gb-2012-13-9-r79-S9.XLSX__Sheet1.csv",
+    }));
+    expect(rows.paperDifferentials.length).toBeGreaterThanOrEqual(20);
+    const first = rows.paperDifferentials[0]!;
+    expect(first.reported_taxon_name).not.toContain(".");
+    expect(first).toMatchObject({ effect_size: 4.81055595378, p_value: 5.28296506597e-08, effect_direction: "increase" });
+    expect(first.comparison_label).toBe("RectumSigmoidRectosigmoid");
   });
 });
