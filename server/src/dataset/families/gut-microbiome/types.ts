@@ -99,6 +99,25 @@ export interface GutMicrobiomeCrosswalkInput {
   source_locator: SourceLocatorV2;
 }
 
+/**
+ * One raw differential result extracted from a paper supplement statistics
+ * panel, before the reported literature name is joined to an NCBI taxid via
+ * the ESearch resolutions of the same spec.
+ */
+export interface GutMicrobiomePaperDifferentialInput {
+  study_id: string;
+  reported_taxon_name: string;
+  comparison_id: string;
+  comparison_label: string;
+  effect_size: number;
+  p_value: number;
+  adjusted_p_value: number | null;
+  effect_direction: "increase" | "decrease" | "unchanged";
+  source_id: string;
+  source_asset_id: string;
+  source_locator: SourceLocatorV2;
+}
+
 export interface GutMicrobiomeDifferentialAbundanceInput {
   study_id: string;
   taxon_id: string;
@@ -126,7 +145,7 @@ export interface GutMicrobiomeReferencePrevalenceInput {
 
 export interface GutMicrobiomeSourceInput {
   source_id: string;
-  source_database: "mgnify" | "gmrepo" | "ncbi_taxonomy";
+  source_database: "mgnify" | "gmrepo" | "ncbi_taxonomy" | "europepmc_supplement";
   source_asset_id: string;
   source_locator: SourceLocatorV2;
   retrieved_at: string;

@@ -63,6 +63,16 @@ export const PROVIDER_CARRIER_BINDINGS: readonly ProviderCarrierBinding[] = Obje
   },
   {
     familyId: "gut_microbiome",
+    source: "europepmc_supplement",
+    adapterId: "gut_microbiome.paper_supplement_differential_abundance_csv.v1",
+    providerId: "europepmc.supplementary.v1",
+    tableId: "differential_abundance_records",
+    inputRole: "differential_abundance",
+    strictProviderId: true,
+    schemaRefs: ["gut_microbiome.differential_abundance.v1"],
+  },
+  {
+    familyId: "gut_microbiome",
     source: "ncbi_taxonomy",
     adapterId: "gut_microbiome.ncbi_taxonomy_esearch_json.v1",
     providerId: "ncbi.taxonomy.files.v1",

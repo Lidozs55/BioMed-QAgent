@@ -6,6 +6,7 @@ import {
 import {
   assertGutMicrobiomeCarrierRows,
   composeGutMicrobiomeCrosswalk,
+  joinPaperDifferentials,
   parseGutMicrobiomeCarrier,
   type GutMicrobiomeCarrierRows,
 } from "./gut-microbiome/index.js";
@@ -24,6 +25,9 @@ const GUT_PROVIDER_ADAPTERS = new Map<string, ReadonlySet<string>>([
   ["mgnify.files.v1", new Set([
     "registered_gut_microbiome_study_json",
     "registered_gut_microbiome_differential_abundance_xlsx",
+  ])],
+  ["europepmc.supplementary.v1", new Set([
+    "gut_microbiome.paper_supplement_differential_abundance_csv.v1",
   ])],
   ["ncbi.taxonomy.files.v1", new Set([
     "gut_microbiome.ncbi_taxonomy_esearch_json.v1",
@@ -71,6 +75,7 @@ function assertGutBinding(input: ProviderCarrierTransformInput): void {
   }
   const sourceByProvider: Readonly<Record<string, string>> = {
     "mgnify.files.v1": "mgnify",
+    "europepmc.supplementary.v1": "europepmc_supplement",
     "ncbi.taxonomy.files.v1": "ncbi_taxonomy",
     "gmrepo.files.v1": "gmrepo",
   };
@@ -99,12 +104,18 @@ function assertGutBinding(input: ProviderCarrierTransformInput): void {
   const mediaTypesByAdapter: Readonly<Record<string, ReadonlySet<string>>> = {
     registered_gut_microbiome_study_json: new Set(["application/json", "application/vnd.api+json"]),
     registered_gut_microbiome_differential_abundance_xlsx: new Set(["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"]),
+    "gut_microbiome.paper_supplement_differential_abundance_csv.v1": new Set(["text/csv"]),
     "gut_microbiome.ncbi_taxonomy_esearch_json.v1": new Set(["application/json", "text/plain"]),
     "gut_microbiome.ncbi_taxonomy_efetch_xml.v1": new Set(["application/xml", "text/xml", "text/plain"]),
     "gut_microbiome.gmrepo_taxon_phenotypes_json.v1": new Set(["application/json"]),
   };
   if (!mediaTypesByAdapter[input.adapterId]?.has(input.receipt.media_type.toLowerCase())) {
-    fail(`adapter '${input.adapterId}' does not accept media type '${input.receipt.media_type}'`);
+    fail(
+      `adapter '${input.adapterId}' does not accept media type '${input.receipt.media_type}'` +
+        (input.adapterId === "gut_microbiome.paper_supplement_differential_abundance_csv.v1"
+          ? " — supply source_files with the text/csv xlsx-worksheet extraction member asset from acquire_core_carrier, not the zip archive"
+          : ""),
+    );
   }
   if (input.receipt.source_id.trim() === "") fail(`binding '${input.bindingId}' has a blank source_id`);
 }
@@ -114,6 +125,7 @@ function appendGutRows(target: {
   taxonResolutions: GutMicrobiomeCarrierRows["taxonResolutions"][number][];
   taxonDetails: GutMicrobiomeCarrierRows["taxonDetails"][number][];
   differentialAbundances: GutMicrobiomeCarrierRows["differentialAbundances"][number][];
+  paperDifferentials: GutMicrobiomeCarrierRows["paperDifferentials"][number][];
   referencePrevalences: GutMicrobiomeCarrierRows["referencePrevalences"][number][];
   sources: GutMicrobiomeCarrierRows["sources"][number][];
 }, rows: GutMicrobiomeCarrierRows): void {
@@ -121,6 +133,7 @@ function appendGutRows(target: {
   target.taxonResolutions.push(...rows.taxonResolutions);
   target.taxonDetails.push(...rows.taxonDetails);
   target.differentialAbundances.push(...rows.differentialAbundances);
+  target.paperDifferentials.push(...rows.paperDifferentials);
   target.referencePrevalences.push(...rows.referencePrevalences);
   target.sources.push(...rows.sources);
 }
@@ -132,6 +145,7 @@ function gutMicrobiomeRows(inputs: readonly ProviderCarrierTransformInput[]): Pr
     taxonResolutions: [],
     taxonDetails: [],
     differentialAbundances: [],
+    paperDifferentials: [],
     referencePrevalences: [],
     sources: [],
   } as {
@@ -139,6 +153,7 @@ function gutMicrobiomeRows(inputs: readonly ProviderCarrierTransformInput[]): Pr
     taxonResolutions: GutMicrobiomeCarrierRows["taxonResolutions"][number][];
     taxonDetails: GutMicrobiomeCarrierRows["taxonDetails"][number][];
     differentialAbundances: GutMicrobiomeCarrierRows["differentialAbundances"][number][];
+    paperDifferentials: GutMicrobiomeCarrierRows["paperDifferentials"][number][];
     referencePrevalences: GutMicrobiomeCarrierRows["referencePrevalences"][number][];
     sources: GutMicrobiomeCarrierRows["sources"][number][];
   };
@@ -189,17 +204,21 @@ function gutMicrobiomeRows(inputs: readonly ProviderCarrierTransformInput[]): Pr
     }
   }
   const crosswalk = composeGutMicrobiomeCrosswalk(aggregate.taxonResolutions, aggregate.taxonDetails);
+  const differentialAbundances = [
+    ...aggregate.differentialAbundances,
+    ...joinPaperDifferentials(aggregate.paperDifferentials, aggregate.taxonResolutions),
+  ];
   assertGutMicrobiomeCarrierRows({
     studies: aggregate.studies,
     crosswalk,
-    differentialAbundances: aggregate.differentialAbundances,
+    differentialAbundances,
     referencePrevalences: aggregate.referencePrevalences,
     sources: aggregate.sources,
   });
   return {
     study_records: aggregate.studies,
     taxon_records: crosswalk,
-    differential_abundance_records: aggregate.differentialAbundances,
+    differential_abundance_records: differentialAbundances,
     reference_prevalence_records: aggregate.referencePrevalences,
   };
 }
