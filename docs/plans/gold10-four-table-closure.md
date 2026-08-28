@@ -1,10 +1,14 @@
 # Gold10 四表闭包开发指南（肠道微生物组疾病关联数据整合）
 
-> 状态：待开发（2026-08-28 立项）。本文是给接手 session 的完整交接文档：目标、已有资产、缺口、
-> 分步开发路线、验收口径与运行环境注意事项一次讲清。
-> 上游追踪：[`docs/TODO.md`](../TODO.md) P0 Gold10 条目、[`docs/ISSUES.md`](../ISSUES.md) §数据族与 Gold 评测
-> gold10 系列、runs-log 中 `fix/gold10-publication-closure` 与 `main rounds 4–6` 两节
-> （`data/gold/gold7_alzheimer_gwas/runs-log.md`，gold8–10 的运行史都在这个文件里）。
+> 状态：**已闭包（2026-08-28 深夜，main@d084a7e4）**——fresh run 内 supervisor closure
+> `succeeded_publication`（IBD 表型全四表；T2D/CRC 差异源结构化 blocked 并在终答显式标注）。
+> 证据 `data/gold-runs/d084a7e4-gold10-r1`（前序 r1-r3 迭代证据同目录前缀），运行史与
+> Core 落地片见 `data/gold/gold7_alzheimer_gwas/runs-log.md` 的
+> `e2e-gold10-fourtable-20260828` 节。§四的三个缺口处置：§4.2 crosswalk 已落地
+> （`gut_microbiome.taxon_name_crosswalk.v1`，替换 taxon_records 语义）；§4.3 已落地
+> 双版面（双层 β/p/q 面板 + 单行 LEfSe），但 forslund 面板在 Springer static 主机、
+> EPMC provider 不可达（做实 T2D 差异维度需新 provider）；§4.4 已 live 验证。
+> 本文其余内容保留为历史交接记录。
 
 ## 一、这是什么问题
 
