@@ -133,6 +133,32 @@ describe("dynamic family prepare/submit preflight", () => {
     expect(called).toBe(true);
   });
 
+  it("rejects per-record source binding floods before the receipt can exceed submit limits", async () => {
+    const raw = await rawSubmission();
+    const proposal = raw.execution_proposal as {
+      source_bindings: Array<{ binding_id: string; source: string; input_requirement_ref: string; parameters: Record<string, unknown> }>;
+    };
+    const metadata = raw.transform_metadata as {
+      declared_input_roles: Array<{ role: string; media_type: string; constraint_ref: string | null }>;
+    };
+    const sources = raw.registered_sources as Record<string, string>;
+    proposal.source_bindings = [];
+    metadata.declared_input_roles = [];
+    for (const key of Object.keys(sources)) delete sources[key];
+    for (let index = 0; index < 65; index += 1) {
+      const bindingId = `binding_${index + 1}`;
+      proposal.source_bindings.push({
+        binding_id: bindingId, source: "registered_asset", input_requirement_ref: `source_${index}`, parameters: {},
+      });
+      metadata.declared_input_roles.push({ role: `source_${index}`, media_type: "text/csv", constraint_ref: null });
+      sources[bindingId] = `asset_${DIGEST}`;
+    }
+    const parsed = await parseDynamicFamilyPublicationSubmission(raw);
+    await expect(prepareDynamicFamilyPublication({
+      taskId: "task_preflight", requirementId: "build_preflight", generation: 0, submission: parsed,
+    })).rejects.toThrow(/per data source/i);
+  });
+
   it("prepares facts without acquisition or prohibited result objects", async () => {
     let planned = 0;
     const submission = await parseDynamicFamilyPublicationSubmission(await rawSubmission());

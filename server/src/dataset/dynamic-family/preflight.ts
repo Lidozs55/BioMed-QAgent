@@ -84,6 +84,15 @@ function requiredInputRoles(submission: ParsedDynamicFamilyPublicationSubmission
   if (new Set(roles).size !== roles.length) {
     throw new TypeError("dynamic preflight input roles must be unique");
   }
+  // Aligns with the Core authority input cap (MAX_AUTHORIZED_INPUTS = 64);
+  // per-record binding floods pass prepare but can never be authorized or
+  // echoed back through the submit tool's 128-item receipt schema.
+  if (roles.length > 64) {
+    throw new TypeError(
+      `dynamic preflight declares ${roles.length} source bindings, above the Core maximum of 64; ` +
+      "model one binding per data source, never per record — rows belong to transform outputs",
+    );
+  }
   return roles;
 }
 
