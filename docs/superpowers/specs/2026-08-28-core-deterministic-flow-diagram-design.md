@@ -1,5 +1,31 @@
 # Dataset Core Deterministic Flow Diagram Design
 
+## Compact Mirrored-Timeline Revision (final)
+
+The user's final hand-tuned layout supersedes the intermediate narrow-corridor
+revision below. The canvas compresses to 980x1320 with gridSize 5. The right
+column is re-ordered as a mirrored timeline of the main axis: controlled inputs
+beside stages 01-02, the non-publication grid beside the compatibility gate,
+dynamic extension (a narrow 235-pixel panel, back on the right) beside stages
+05-06, reliability beside stages 07-08, and the authority note closing the
+column; the run-completion note sits under the main column and the footer moves
+inside the container. Stage cards tighten to 400x70 with 30px routine gaps and
+40-50px gaps at trust transitions.
+
+Wiring keeps the convenience principle: Rejected and Review pending hold the
+grid's left column facing the corridor, and the compatibility gate reaches
+Rejected with one short corridor jog. Because the grid now sits beside gate 04,
+the product gate's failure edge instead wraps around the outside of the right
+band (a clear vertical lane in the right margin) and enters Review pending from
+the bottom - no crossings and no shape pass-throughs. Grid cell widths are sized
+to their text rather than forced equal. The layout style is codified in the
+project skill `.agents/skills/drawio-diagram-style/`.
+
+Export tooling note: this draw.io version writes a wrong CRC into the embedded
+`mxGraphModel` zTXt chunk of `-e` PNG exports (in addition to the known
+truncated-IEND bug). Strict decoders such as Pillow reject the file until the
+zTXt CRC is recomputed; repair scripts must fix both.
+
 ## Narrow Corridor Revision
 
 The narrow revision keeps the top-to-bottom spine but compresses the canvas from

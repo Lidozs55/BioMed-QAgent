@@ -3,17 +3,19 @@
 ## Vertical Revision Override
 
 This approved revision supersedes the landscape and left-to-right layout details
-below. Regenerate the diagram as a compact top-to-bottom Core flow with narrow
-cards and variable vertical gaps. Keep the supplementary material in a narrow
-right-side column (controlled inputs, reliability, authority note, 2x2
-non-publication grid, run-completion note); dynamic Family execution is a left
-side-entry panel that feeds stage 06 with a short horizontal arrow. In the
-non-publication grid, put the two wired cells (Rejected, Review pending) in the
-left column facing the failure corridor so both gate failure edges stay short,
-right-angled, and crossing-free. Keep only architecture-level labels and the
-contracts `DatasetExecutionSpec`, `SourceAsset`, `OperationResult`,
-`ProductAssessment`, and `DatasetPublication`. Re-export and re-run the same
-structural, visual, and documentation checks defined by this plan.
+below. Regenerate the diagram as a compact top-to-bottom Core flow (final canvas
+980x1320) with narrow cards and variable vertical gaps. Arrange the right-side
+column as a mirrored timeline of the main axis - controlled inputs beside stages
+01-02, the 2x2 non-publication grid beside the compatibility gate, dynamic
+extension (narrow panel) beside stages 05-06, reliability beside stages 07-08,
+and the authority note closing the column. In the non-publication grid, put the
+two wired cells (Rejected, Review pending) in the left column facing the failure
+corridor; route the longer product-gate failure edge around the outside of the
+band so every edge stays crossing-free and passes through no shape. Keep only
+architecture-level labels and the contracts `DatasetExecutionSpec`,
+`SourceAsset`, `OperationResult`, `ProductAssessment`, and `DatasetPublication`.
+Re-export and re-run the same structural, visual, and documentation checks
+defined by this plan.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
