@@ -218,6 +218,11 @@ export type EventPayload =
       compaction_id: string;
       covered_through_run_id: string;
       summary_digest: string;
+      reason?: "manual" | "threshold" | "overflow";
+      tokens_before?: number;
+      estimated_tokens_after?: number;
+      target_tokens?: number;
+      summary_tokens?: number;
     }
   | {
       type: "conversation_compaction_started";

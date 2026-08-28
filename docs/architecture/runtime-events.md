@@ -160,6 +160,10 @@ Phase 8 移除 Python 运行时后该逻辑不复存在，自动压缩一度缺�
   当整个会话已经小于最终目标时，Pi 会保持全部内容并拒绝压缩（对应前端的“没有可压缩
   内容”提示）；`keepRecentTokens ≤ window - reserveTokens` 始终成立，避免小窗口下
   预算互相挤占。
+- Pi 为每次 provider 调用计算的 `maxTokens` 是调用级安全上限；adapter 只能将它与产品
+  模型设置的 `max_tokens` 取较小值，不能用常规生成上限覆盖压缩摘要或剩余窗口上限。
+  例如 100k 窗口、85% 触发比例对应 15k reserve，Pi 的摘要调用上限约为 12k；即使
+  模型设置允许 32,768 tokens，本次压缩请求仍必须保持 12k 上限。
 - 每轮 `run()` 与手动压缩前，adapter 都会用 `resolveActiveConfig` 重新解析当前模型；
   若 provider/模型/上下文窗口/压缩比例发生变化，会先在 Pi `ModelRuntime` 重新注册
   新模型并调用 `session.setModel()`，再重算 `CompactionSettings`。这解决了中途切换
@@ -184,13 +188,21 @@ Phase 8 移除 Python 运行时后该逻辑不复存在，自动压缩一度缺�
   请求期间显示压缩中状态，toast 覆盖所有成功/空会话/失败反馈。
 - Pi 的 `compaction_end`（成功且带摘要）经 adapter 投影为 BioMed 的
   `context_compacted`，再由 `PiEventAdapter` 持久化为
-  `conversation_compacted`（`summary_digest` 为摘要的 sha256）；前端据此在时间线
-  记录压缩活动并复位 `compacting`。aborted 或缺失摘要的压缩完成事件不产生
-  durable 事件，避免伪记录。
+  `conversation_compacted`（`summary_digest` 为完整摘要的 sha256）。事件同时保存
+  `reason`、`tokens_before`、`estimated_tokens_after`、`target_tokens` 与
+  `summary_tokens`；摘要正文不进入 durable log。若 Pi 的估值没有下降，或仍高于本次
+  `target_tokens`，adapter 在记录诊断事件后 fail closed，以明确的
+  `Context compaction did not reduce the estimated context` 终止 Run，不再自动发送
+  continuation prompt。aborted 或缺失摘要的压缩完成事件不产生 durable 事件，避免
+  伪记录。
 - Assistant `message_end` 与 `compaction_end` 同步读取 Pi 的
   `session.getContextUsage()`，投影为 durable `context_usage`（`tokens` / `percent`
   在 Pi 暂无可信值时为 `null`）。前端优先显示该运行时值；只有尚未收到可信值时，
-  才按当前保留的对话项估算，并在 `conversation_compacted` 后从压缩边界重新估算。
+  才按当前保留的对话项估算。`conversation_compacted` 携带
+  `estimated_tokens_after` 时，前端直接采用该 Pi 估值；只有历史事件不带该字段时才从
+  压缩边界重新估算。百分比文本和无障碍标签允许显示超过 100% 的真实值，进度条视觉
+  宽度单独钳制到 100%。Gold supervisor 的证据脱敏明确放行上述数值 token 遥测键，
+  但 `access_token` / `api_key` 等凭据仍必须脱敏。
 - 模型以 `stopReason=length` 截断时不能把 `session.prompt()` 的正常返回等同于任务
   完成。Pi 边界在其自动压缩结束后发送不可见的 runtime continuation，沿用同一
   Run、Session 与工具状态继续执行；只有后续 assistant 以非 `length` 原因结束，

@@ -45,7 +45,13 @@ export interface PiUpstreamEvent {
   reason?: "manual" | "threshold" | "overflow";
   aborted?: boolean;
   errorMessage?: string;
-  compactionResult?: { summary: string } | undefined;
+  compactionResult?: {
+    summary: string;
+    tokensBefore?: number;
+    estimatedTokensAfter?: number;
+    targetTokens?: number;
+    summaryTokens?: number;
+  } | undefined;
   contextUsage?: {
     tokens: number | null;
     contextWindow: number;
@@ -151,6 +157,15 @@ const LENGTH_CONTINUATION_MESSAGE =
   "Finish the remaining tool calls, required data artifacts, validation, and final response.";
 export const TOOL_ACTIVATION_NAME = "activate_agent_tools";
 const MAX_ACTIVATED_TOOLS = 12;
+
+export function resolveRequestMaxTokens(
+  configuredMaxTokens: number | undefined,
+  requestMaxTokens: number | undefined,
+): number | undefined {
+  if (configuredMaxTokens === undefined) return requestMaxTokens;
+  if (requestMaxTokens === undefined) return configuredMaxTokens;
+  return Math.min(configuredMaxTokens, requestMaxTokens);
+}
 
 function runProgressContextExtension(
   tracker: RunProgressContextTracker,
@@ -406,6 +421,23 @@ function usesDashScopeQwen(selected: BioMedModelConfig): boolean {
  * ``contextWindow - reserveTokens`` and keeps approximately
  * ``keepRecentTokens`` tokens from the end of the conversation.
  */
+export function resolvePiCompactionTargetTokens(
+  contextWindow: number,
+  targetRatio: number,
+  currentTokens?: number | null,
+): number {
+  const floorKeep = Math.round(contextWindow * MIN_KEEP_RATIO);
+  const capKeep = Math.round(contextWindow * MAX_KEEP_RATIO);
+  const hasKnownUsage = currentTokens !== null &&
+    currentTokens !== undefined &&
+    Number.isFinite(currentTokens) &&
+    currentTokens > 0;
+  const desiredTarget = hasKnownUsage
+    ? Math.round(currentTokens * targetRatio)
+    : Math.round(contextWindow * targetRatio);
+  return Math.min(Math.max(desiredTarget, floorKeep), capKeep);
+}
+
 export function resolvePiCompactionOverrides(
   contextWindow: number,
   triggerRatio: number,
@@ -416,15 +448,16 @@ export function resolvePiCompactionOverrides(
   // Pi caps the compaction summary at 80% of the reserve budget; pre-reserve
   // that headroom so a dense summary never displaces the recent context.
   const summaryBudget = Math.round(SUMMARY_BUDGET_RATIO * reserveTokens);
-  const floorKeep = Math.round(contextWindow * MIN_KEEP_RATIO);
-  const capKeep = Math.round(contextWindow * MAX_KEEP_RATIO);
   const hasKnownUsage = currentTokens !== null &&
     currentTokens !== undefined &&
     Number.isFinite(currentTokens) &&
     currentTokens > 0;
-  const finalTarget = hasKnownUsage
-    ? Math.min(Math.max(Math.round(currentTokens * targetRatio), floorKeep), capKeep)
-    : Math.min(Math.max(Math.round(contextWindow * targetRatio), floorKeep), capKeep);
+  const finalTarget = resolvePiCompactionTargetTokens(
+    contextWindow,
+    targetRatio,
+    currentTokens,
+  );
+  const floorKeep = Math.round(contextWindow * MIN_KEEP_RATIO);
   const desiredKeep = Math.max(floorKeep, finalTarget - summaryBudget);
   const keptRecent = Math.min(
     desiredKeep,
@@ -544,7 +577,10 @@ export function applyModelProfileToPayload(
   return next;
 }
 
-function toUpstreamEvent(event: AgentSessionEvent): PiUpstreamEvent {
+export function toUpstreamEvent(
+  event: AgentSessionEvent,
+  compactionTargetTokens?: number,
+): PiUpstreamEvent {
   switch (event.type) {
     case "message_end":
       return {
@@ -588,7 +624,19 @@ function toUpstreamEvent(event: AgentSessionEvent): PiUpstreamEvent {
         compactionResult:
           event.result === undefined
             ? undefined
-            : { summary: boundedText(event.result.summary) },
+            : {
+                summary: event.result.summary,
+                tokensBefore: event.result.tokensBefore,
+                ...(event.result.estimatedTokensAfter === undefined
+                  ? {}
+                  : { estimatedTokensAfter: event.result.estimatedTokensAfter }),
+                ...(compactionTargetTokens === undefined
+                  ? {}
+                  : { targetTokens: compactionTargetTokens }),
+                ...(event.result.usage === undefined
+                  ? {}
+                  : { summaryTokens: event.result.usage.output }),
+              },
         aborted: event.aborted,
         errorMessage:
           event.errorMessage === undefined
@@ -636,7 +684,7 @@ async function createRealUpstreamSession(
     const upstreamPayload = options?.onPayload;
     return streamSimple(model, context, {
       ...options,
-      maxTokens: current.maxTokens ?? options?.maxTokens,
+      maxTokens: resolveRequestMaxTokens(current.maxTokens, options?.maxTokens),
       temperature: current.temperature ?? options?.temperature,
       onPayload: async (payload, payloadModel) => {
         const transformed = upstreamPayload === undefined
@@ -828,7 +876,17 @@ async function createRealUpstreamSession(
     },
     subscribe(listener) {
       return session.subscribe((event) => {
-        const mapped = toUpstreamEvent(event);
+        const compactionTargetTokens =
+          event.type === "compaction_end" &&
+          event.result !== undefined &&
+          current.compactionTargetRatio !== undefined
+            ? resolvePiCompactionTargetTokens(
+                currentWindow(),
+                current.compactionTargetRatio,
+                event.result.tokensBefore,
+              )
+            : undefined;
+        const mapped = toUpstreamEvent(event, compactionTargetTokens);
         if (event.type === "message_end" && event.message.role === "assistant") {
           const usage = session.getContextUsage();
           listener(usage === undefined ? mapped : { ...mapped, contextUsage: usage });
@@ -1011,9 +1069,49 @@ class PiBioMedAgentSession implements BioMedAgentSession {
         },
       });
     } else if (event.type === "compaction_end") {
-      const summary = event.compactionResult?.summary;
-      if (event.aborted !== true && typeof summary === "string" && summary.trim() !== "") {
-        this.pushBoundary(active, { event: { type: "context_compacted", summary } });
+      const result = event.compactionResult;
+      if (
+        event.aborted !== true &&
+        result !== undefined &&
+        result.summary.trim() !== ""
+      ) {
+        const summary = result.summary;
+        this.pushBoundary(active, {
+          event: {
+            type: "context_compacted",
+            summary,
+            ...(event.reason === undefined ? {} : { reason: event.reason }),
+            ...(result.tokensBefore === undefined
+              ? {}
+              : { tokensBefore: result.tokensBefore }),
+            ...(result.estimatedTokensAfter === undefined
+              ? {}
+              : { estimatedTokensAfter: result.estimatedTokensAfter }),
+            ...(result.targetTokens === undefined
+              ? {}
+              : { targetTokens: result.targetTokens }),
+            ...(result.summaryTokens === undefined
+              ? {}
+              : { summaryTokens: result.summaryTokens }),
+          },
+        });
+        const didNotReduce =
+          result.tokensBefore !== undefined &&
+          result.estimatedTokensAfter !== undefined &&
+          result.estimatedTokensAfter >= result.tokensBefore;
+        const missedTarget =
+          result.targetTokens !== undefined &&
+          result.estimatedTokensAfter !== undefined &&
+          result.estimatedTokensAfter > result.targetTokens;
+        if (didNotReduce || missedTarget) {
+          this.finish(active, {
+            error: new BioMedAgentError(
+              "CONTEXT_COMPACTION_INEFFECTIVE",
+              "Context compaction did not reduce the estimated context",
+            ),
+          });
+          return;
+        }
       }
       if (event.contextUsage !== undefined) {
         this.pushBoundary(active, {

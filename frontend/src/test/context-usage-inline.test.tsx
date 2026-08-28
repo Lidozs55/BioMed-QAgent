@@ -4,6 +4,20 @@ import { describe, expect, it, vi } from "vitest";
 import { ContextUsageInline } from "@/components/ContextUsageInline";
 
 describe("ContextUsageInline", () => {
+  it("shows runtime context overflow above one hundred percent", () => {
+    render(
+      <ContextUsageInline
+        usedTokens={115_487}
+        totalTokens={100_000}
+        source="runtime"
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "上下文窗口已使用 115%（运行时）" }))
+      .toBeInTheDocument();
+    expect(screen.getByText("115%")).toBeInTheDocument();
+  });
+
   it("allows manual compaction even when context usage is low", () => {
     const onCompact = vi.fn();
     render(
