@@ -327,6 +327,16 @@ export class SourceAssetRegistry {
     };
   }
 
+  /** Registered relative_path for an asset id in any role, or null. */
+  async registeredRelativePath(assetId: string): Promise<string | null> {
+    await this.load();
+    for (const role of ["carrier", "source", "mapping", "metadata"] as const) {
+      const receipt = this.registrations.get(registrationKey(assetId, role));
+      if (receipt !== undefined) return receipt.relative_path;
+    }
+    return null;
+  }
+
   async resolveAny(assetId: string): Promise<CoreResolvedRegisteredAsset> {
     await this.load();
     const receipt = this.registrations.get(registrationKey(assetId, "carrier")) ??

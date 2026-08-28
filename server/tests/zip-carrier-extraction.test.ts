@@ -385,3 +385,23 @@ describe("xlsx worksheet to CSV conversion", () => {
     expect(xlsxWorksheetsToCsv(Buffer.from("not a workbook"), { maxWorksheets: 2, maxCsvBytes: 1024 })).toEqual([]);
   });
 });
+
+describe("extraction member resolution", () => {
+  it("resolves registered relative paths outside the legacy asset-id layout", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "gmrepo-"));
+    roots.push(root);
+    const registry = new SourceAssetRegistry("task_layout", root);
+    const { writeFile, mkdir } = await import("node:fs/promises");
+    const relativePath = "source_assets/extracted/digest123/0_TableS1.csv";
+    await mkdir(path.join(root, "source_assets", "extracted", "digest123"), { recursive: true });
+    await writeFile(path.join(root, ...relativePath.split("/")), "taxon,count\nA,1\n");
+    const receipt = await registry.register({
+      sourceId: "source_extracted_member",
+      relativePath,
+      role: "carrier",
+      mediaType: "text/csv",
+    });
+    expect(await registry.registeredRelativePath(receipt.asset_ref.asset_id)).toBe(relativePath);
+    expect(await registry.registeredRelativePath("asset_unknown")).toBeNull();
+  });
+});

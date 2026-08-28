@@ -161,14 +161,30 @@ function isRegisteredAssetId(reference: string): boolean {
   return REGISTERED_ASSET_ID.test(reference);
 }
 
-async function uniqueAssetFile(taskRoot: string, assetId: string, signal?: AbortSignal): Promise<string> {
-  const assetRoot = path.resolve(taskRoot, "source_assets", assetId);
+async function uniqueAssetFile(
+  taskRoot: string,
+  assetId: string,
+  signal?: AbortSignal,
+  registeredRelativePath?: string,
+): Promise<string> {
   const sourceRoot = path.resolve(taskRoot, "source_assets");
+  const assetRoot = path.resolve(taskRoot, "source_assets", assetId);
   if (!assetRoot.startsWith(`${sourceRoot}${path.sep}`)) {
     throw new ExecutionError(`registered asset '${assetId}' escaped source_assets`);
   }
   const rootInfo = await stat(assetRoot).catch(() => null);
   if (rootInfo === null || !rootInfo.isDirectory()) {
+    // Layout-agnostic fallback: extraction members register under
+    // source_assets/extracted/<digest>/ rather than source_assets/<assetId>/,
+    // so resolve through the recorded relative_path.
+    if (registeredRelativePath !== undefined && registeredRelativePath !== "") {
+      const candidate = path.resolve(taskRoot, ...registeredRelativePath.split("/"));
+      if (!candidate.startsWith(`${sourceRoot}${path.sep}`)) {
+        throw new ExecutionError(`registered asset '${assetId}' escaped source_assets`);
+      }
+      const fileInfo = await stat(candidate).catch(() => null);
+      if (fileInfo !== null && fileInfo.isFile()) return candidate;
+    }
     throw new ExecutionError(`registered asset '${assetId}' directory is missing`);
   }
   const files: string[] = [];
@@ -397,7 +413,8 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
       throwIfAborted(signal);
       if (isRegisteredAssetId(reference)) {
         try {
-          const relativePath = await uniqueAssetFile(this.taskRoot, reference, signal);
+          const registeredRelativePath = await registry.registeredRelativePath(reference).catch(() => null);
+      const relativePath = await uniqueAssetFile(this.taskRoot, reference, signal, registeredRelativePath ?? undefined);
           const receipt = await registry.register({
             sourceId: bindingId,
             relativePath,
