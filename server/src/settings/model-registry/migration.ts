@@ -13,12 +13,33 @@ import type { JsonObject } from "../../http/validation.js";
 import { optionalRecord } from "../../http/validation.js";
 import { readJsonFile } from "../../persistence/atomic-json.js";
 import {
+  clampBoolean,
+  clampNumber,
+  defaultRegistry,
+  normalizeRuntimeLimits,
   parseStoredJson,
+  SETTING_NUMBER_BOUNDS,
   timestamp,
   type AuthState,
   type ModelRecord,
   type RegistryState,
 } from "./store.js";
+
+/**
+ * SQLite model capacities: a positive safe integer is kept, anything else
+ * (bad type, out of range) becomes ``null`` (unknown) with a warning — the
+ * same fallback the non-number branch always used, now also covering bad
+ * values instead of trusting them.
+ */
+function clampLegacyCapacity(value: unknown, label: string): number | null {
+  return clampNumber(
+    value,
+    SETTING_NUMBER_BOUNDS.context_window.min,
+    SETTING_NUMBER_BOUNDS.context_window.max,
+    null,
+    { label, integer: true },
+  );
+}
 
 export async function migrateLegacySettings(
   registry: RegistryState,
@@ -30,15 +51,86 @@ export async function migrateLegacySettings(
   const legacy = await readJsonFile<JsonObject>(legacySettingsPath);
   if (legacy === undefined) return;
   const settings = registry.settings;
+  const defaults = defaultRegistry({}).settings;
+  const bounds = SETTING_NUMBER_BOUNDS;
   if (typeof legacy.base_url === "string") settings.base_url = legacy.base_url;
   if (typeof legacy.model_name === "string") settings.model_name = legacy.model_name;
-  if (typeof legacy.max_tokens === "number") settings.max_tokens = legacy.max_tokens;
-  if (typeof legacy.context_window === "number") settings.context_window = legacy.context_window;
-  for (const key of ["safety_reserve_ratio", "compaction_trigger_ratio", "compaction_target_ratio"] as const) {
-    if (typeof legacy[key] === "number") settings[key] = legacy[key];
+  // Legacy values predate load-time normalization, so every numeric/boolean
+  // write is clamped here through the same helpers — out-of-range values
+  // fall back to the field defaults instead of landing on disk.
+  if (legacy.max_tokens !== undefined) {
+    settings.max_tokens = clampNumber(
+      legacy.max_tokens,
+      bounds.max_tokens.min,
+      bounds.max_tokens.max,
+      defaults.max_tokens,
+      { label: "legacy model.json max_tokens", integer: true },
+    );
   }
-  settings.advanced = { ...settings.advanced, ...optionalRecord(legacy.advanced) };
-  settings.runtime_limits = { ...settings.runtime_limits, ...optionalRecord(legacy.runtime_limits) };
+  if (legacy.context_window !== undefined && legacy.context_window !== null) {
+    settings.context_window = clampNumber(
+      legacy.context_window,
+      bounds.context_window.min,
+      bounds.context_window.max,
+      defaults.context_window,
+      { label: "legacy model.json context_window", integer: true },
+    );
+  }
+  for (const key of ["safety_reserve_ratio", "compaction_trigger_ratio", "compaction_target_ratio"] as const) {
+    if (legacy[key] === undefined) continue;
+    const range = bounds[key];
+    settings[key] = clampNumber(legacy[key], range.min, range.max, defaults[key], {
+      label: `legacy model.json ${key}`,
+    });
+  }
+  const advanced = optionalRecord(legacy.advanced);
+  settings.advanced = {
+    temperature: advanced.temperature === undefined
+      ? settings.advanced.temperature
+      : clampNumber(
+        advanced.temperature,
+        bounds.temperature.min,
+        bounds.temperature.max,
+        defaults.advanced.temperature,
+        { label: "legacy model.json advanced.temperature" },
+      ),
+    top_p: advanced.top_p === undefined
+      ? settings.advanced.top_p
+      : clampNumber(
+        advanced.top_p,
+        bounds.top_p.min,
+        bounds.top_p.max,
+        defaults.advanced.top_p,
+        { label: "legacy model.json advanced.top_p" },
+      ),
+    repetition_penalty: advanced.repetition_penalty === undefined
+      ? settings.advanced.repetition_penalty
+      : clampNumber(
+        advanced.repetition_penalty,
+        bounds.repetition_penalty.min,
+        bounds.repetition_penalty.max,
+        defaults.advanced.repetition_penalty,
+        { label: "legacy model.json advanced.repetition_penalty" },
+      ),
+    enable_search: advanced.enable_search === undefined
+      ? settings.advanced.enable_search
+      : clampBoolean(
+        advanced.enable_search,
+        defaults.advanced.enable_search,
+        "legacy model.json advanced.enable_search",
+      ),
+    thinking_mode: advanced.thinking_mode === undefined
+      ? settings.advanced.thinking_mode
+      : clampBoolean(
+        advanced.thinking_mode,
+        defaults.advanced.thinking_mode,
+        "legacy model.json advanced.thinking_mode",
+      ),
+  };
+  settings.runtime_limits = normalizeRuntimeLimits({
+    ...settings.runtime_limits,
+    ...optionalRecord(legacy.runtime_limits),
+  });
   if (typeof legacy.api_key === "string") auth.direct_api_key = legacy.api_key;
 }
 
@@ -85,9 +177,9 @@ export async function migrateLegacyRegistry(
         model_id: String(row.model_id),
         name: String(row.name || row.model_id),
         description: String(row.description ?? ""),
-        context_window: typeof row.context_window === "number" ? row.context_window : null,
-        max_output_tokens: typeof row.max_output_tokens === "number" ? row.max_output_tokens : null,
-        suggested_max_tokens: typeof row.suggested_max_tokens === "number" ? row.suggested_max_tokens : null,
+        context_window: clampLegacyCapacity(row.context_window, "legacy sqlite context_window"),
+        max_output_tokens: clampLegacyCapacity(row.max_output_tokens, "legacy sqlite max_output_tokens"),
+        suggested_max_tokens: clampLegacyCapacity(row.suggested_max_tokens, "legacy sqlite suggested_max_tokens"),
         capabilities: {
           text: capabilities.text !== false,
           image: capabilities.image === true,
