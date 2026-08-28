@@ -44,3 +44,27 @@ NCBI 等来源的官方配额仍可采用更严格的专用 pacing。通用限�
 `WorkspaceExecResult.durationMs` 和 Node timer 仍使用毫秒。参数数组最多1,000项，
 单参数最多65,536字符；NUL、shell元字符、权限检查、进程树清理和环境变量白名单
 仍属于安全边界。
+
+## 浏览器渲染资源闸（代码级，不走 settings）
+
+渲染器工作集没有内建上限：数百 MB 的数据文件被当作页面导航（2026-08-28
+gold9 事故：agent 对 Orphadata `en_product1.xml` 整库 XML 调
+`navigate_page`）会在单个渲染进程内膨胀成约 10 倍体积的 DOM 树、占满单核，
+并把渲染进程卡死到 close 都无法应答——单 renderer 常驻 ~10.6 GB，run 挂死、
+cancel 无法确认、并发槽位泄漏。因此在 `server/src/external/browser/pool.ts`
+加入以下代码级闸门（与 `runtime_limits` 设置无关）：
+
+- 主帧导航在传输前按 URL 路径后缀拒绝数据文件（`.xml/.pdf/.zip/.gz/.tgz/
+  .tar/.7z/.rar/.bz2/.xz`，后缀匹配覆盖 `.vcf.gz` 等）；按响应
+  `content-type` 拒绝 XML/PDF/压缩包/`application/octet-stream` 与 `*+xml`；
+  声明 `content-length` 超过 `MAX_BROWSER_MAINFRAME_BYTES`（50 MiB）同样拒
+  绝。错误信息引导改走 `download_from_page`。
+- `route.fetch` 每跳受导航超时约束，停滞的主帧传输不会超出操作生命周期。
+- `page/context.close` 由 `settleWithin` 限时（`SESSION_CLOSE_TIMEOUT_MS`
+  = 5 s）兜底：卡死的渲染进程不再挂起工具调用或泄漏槽位。
+- 启动参数 `DEFAULT_BROWSER_LAUNCH_ARGS` 以
+  `--js-flags=--max-old-space-size=2048` 封顶渲染器 V8 堆，JS 堆炸弹以
+  "Page crashed" 干净失败而非吃满系统。
+
+已知残余边界：主帧 body 在 MIME/size 闸门前仍会完整缓冲一次（Node 侧瞬时
+峰值约等于响应体大小）；iframe 子帧导航不经过该闸门。

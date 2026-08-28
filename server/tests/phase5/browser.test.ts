@@ -14,11 +14,14 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 
 import {
   BROWSER_UA,
+  DEFAULT_BROWSER_LAUNCH_ARGS,
   MAX_BROWSER_CONTENT_BYTES,
+  MAX_BROWSER_MAINFRAME_BYTES,
   NodeBrowserPool,
   createStrictBrowserEgressPolicy,
   strictBrowserEgressPolicy,
 } from "../../src/external/browser/index.js";
+import { settleWithin } from "../../src/external/browser/pool.js";
 import { UnsafeUrlError } from "../../src/external/network/errors.js";
 import { PublicHttpClient } from "../../src/external/network/index.js";
 import { ContentCache } from "../../src/external/acquisition/content-cache.js";
@@ -139,6 +142,25 @@ describe("strict browser egress policy", () => {
   });
 });
 
+describe("renderer resource guards (unit)", () => {
+  it("default launch args pin the renderer V8 heap ceiling", () => {
+    expect(DEFAULT_BROWSER_LAUNCH_ARGS).toContain("--js-flags=--max-old-space-size=2048");
+  });
+
+  it("settleWithin resolves when the underlying promise settles", async () => {
+    const startedAt = Date.now();
+    await settleWithin(Promise.resolve(), 5_000);
+    await settleWithin(Promise.reject(new Error("already closed")), 5_000);
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+  });
+
+  it("settleWithin gives up after the bound when teardown never acknowledges", async () => {
+    const startedAt = Date.now();
+    await settleWithin(new Promise<void>(() => undefined), 50);
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(50);
+  });
+});
+
 describe("NodeBrowserPool (real chromium + fixture server)", () => {
   let server: FixtureServer;
   let pool: NodeBrowserPool;
@@ -199,6 +221,29 @@ describe("NodeBrowserPool (real chromium + fixture server)", () => {
       } else if (pathname === "/big") {
         res.writeHead(200, { "content-type": "text/html" });
         res.end(`<html><body>${"x".repeat(MAX_BROWSER_CONTENT_BYTES + 4096)}</body></html>`);
+      } else if (pathname === "/data-endpoint") {
+        res.writeHead(200, { "content-type": "application/xml" });
+        res.end("<root><child>data</child></root>");
+      } else if (pathname === "/huge-mainframe") {
+        // Streams slightly more than the main-frame cap with a declared
+        // content-length so the render gate can reject on size alone.
+        const total = MAX_BROWSER_MAINFRAME_BYTES + 1024 * 1024;
+        res.writeHead(200, { "content-type": "text/html", "content-length": String(total) });
+        const chunk = Buffer.alloc(1024 * 1024, 0x78);
+        let sent = 0;
+        res.on("close", () => {
+          sent = total; // The gate aborts mid-download; stop streaming.
+        });
+        (async () => {
+          while (sent < total) {
+            const slice = sent + chunk.length <= total ? chunk : chunk.subarray(0, total - sent);
+            sent += slice.length;
+            if (!res.write(slice)) {
+              await new Promise<void>((resolve) => res.once("drain", resolve));
+            }
+          }
+          res.end();
+        })().catch(() => undefined);
       } else if (pathname === "/form") {
         res.writeHead(200, { "content-type": "text/html" });
         res.end(
@@ -296,6 +341,30 @@ describe("NodeBrowserPool (real chromium + fixture server)", () => {
     await expect(pool.fetch(url("/big"))).rejects.toThrow(
       `browser content exceeded ${MAX_BROWSER_CONTENT_BYTES} byte limit`,
     );
+  });
+
+  it("refuses to render a data-file main-frame URL before any transport (renderer guard)", async () => {
+    const before = server.requests.length;
+    await expect(pool.fetch(url("/dumps/en_product1.xml"))).rejects.toThrow(
+      /browser refuses to render data-file URL \(path ends with \.xml\).*download_from_page/,
+    );
+    await expect(pool.fetch(url("/association.vcf.gz"))).rejects.toThrow(/path ends with \.gz/);
+    expect(server.requests.length).toBe(before);
+  });
+
+  it("refuses to render a main frame served with a data-file content-type", async () => {
+    await expect(pool.fetch(url("/data-endpoint"))).rejects.toThrow(
+      /browser refuses to render data-file content \(content-type application\/xml\).*download_from_page/,
+    );
+  });
+
+  it("refuses to render a main frame whose declared size exceeds the render bound", async () => {
+    await expect(pool.fetch(url("/huge-mainframe"))).rejects.toThrow(
+      `browser main-frame document exceeded ${MAX_BROWSER_MAINFRAME_BYTES} byte limit (content-length ${MAX_BROWSER_MAINFRAME_BYTES + 1024 * 1024})`,
+    );
+    // The pool must stay healthy after the abort mid-download.
+    const healthy = await pool.fetch(url("/simple"));
+    expect(healthy.status_code).toBe(200);
   });
 
   it("rejects oversize screenshots (>25MP) before navigation", async () => {
