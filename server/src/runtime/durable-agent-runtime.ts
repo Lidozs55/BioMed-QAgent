@@ -368,6 +368,23 @@ export async function createDurableAgentRuntime(
     if (task === undefined) return;
     const runKey = `${taskId}:${runId}`;
     try {
+      // Run-entry preflight: reject before the first Pi turn when the model
+      // budget cannot hold the prompt plus max_tokens and the safety reserve.
+      const budget = task.session.getBudget?.() ?? null;
+      if (
+        budget !== null &&
+        budget.contextWindow - budget.maxTokens - budget.reserveTokens <= 0
+      ) {
+        await repository.appendRunEvent(taskId, runId, {
+          type: "run_failed",
+          error:
+            `Context budget exhausted: context_window ${budget.contextWindow} minus ` +
+            `max_tokens ${budget.maxTokens} and safety reserve ${budget.reserveTokens} ` +
+            "leaves no room for the prompt",
+          error_code: "context_budget_exhausted",
+        });
+        return;
+      }
       let turnInput = input;
       for (let continuation = 0; ; continuation += 1) {
         let compacted = false;

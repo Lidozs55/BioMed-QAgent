@@ -306,6 +306,57 @@ describe("durable formal Agent runtime", () => {
     await runtime.close();
   });
 
+  test("rejects a run entry with an exhausted context budget before the first Pi turn", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "biomed-durable-budget-"));
+    roots.push(root);
+    const budget = { contextWindow: 100_000, maxTokens: 120_000, reserveTokens: 5_000 };
+    class ExhaustedBudgetAdapter extends ControlledAdapter {
+      override async createSession(config: BioMedSessionConfig): Promise<BioMedAgentSession> {
+        const session = await super.createSession(config);
+        return { ...session, getBudget: () => budget };
+      }
+    }
+    const adapter = new ExhaustedBudgetAdapter();
+    const runtime = await createDurableAgentRuntime({
+      tasksRoot: root,
+      adapter,
+      workspaceFactory: async () => ({ root, tools: [], dispose: async () => undefined }),
+    });
+    const server = createServer((request, response) => {
+      if (!runtime.handle(request, response)) response.writeHead(404).end();
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    servers.push(server);
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const accepted = await (await fetch(`${base}/api/v1/tasks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        request_id: "request-budget",
+        input: "formal task",
+        databases: [],
+        mode: "agent",
+      }),
+    })).json() as { task_id: string };
+    await expect.poll(async () => {
+      const snapshot = await runtime.repository.getSnapshot(accepted.task_id);
+      return snapshot?.runs.at(-1);
+    }).toMatchObject({ status: "failed", summary: { error_code: "context_budget_exhausted" } });
+    expect(adapter.runs).toEqual([]);
+
+    budget.maxTokens = 8_192;
+    const admitted = await fetch(`${base}/api/v1/tasks/${accepted.task_id}/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ request_id: "request-budget-ok", input: "next" }),
+    });
+    expect(admitted.status).toBe(202);
+    await expect.poll(() => adapter.runs.length).toBe(1);
+    adapter.gates[0]?.resolve();
+    await runtime.close();
+  });
+
   test("compacts an idle task that has no active run", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "biomed-durable-idle-compact-"));
     roots.push(root);
