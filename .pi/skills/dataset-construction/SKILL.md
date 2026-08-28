@@ -36,7 +36,11 @@ output.
      FamilySpec to `validate_dataset_execution`, and do not treat a static rejection
      or a source missing from static enums as evidence that dynamic acquisition
      is unavailable. Use the route preflight facts instead.
-4. On the static route, call `execute_dataset_execution` with the spec plus any already-registered
+4. On the static route, NEVER hand-write the spec JSON: call
+   `scaffold_dataset_execution_spec` with the family id, the context entities,
+   and one `{source, adapter_id, accession}` tuple per binding, then pass the
+   returned spec unchanged to `validate_dataset_execution` and
+   `execute_dataset_execution`. Then call `execute_dataset_execution` with the spec plus any already-registered
    task-relative source_files / mapping_files / metadata_files references.
    Omit missing source_files when the binding has a registered Core acquisition
    provider; do not download or parse that provider again with workspace commands.
