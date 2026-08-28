@@ -286,6 +286,37 @@ describe("DurableTaskRepository", () => {
     }]);
   });
 
+  test("registers the publication pointer even when the run later fails", async () => {
+    const repo = await repository();
+    const accepted = await repo.createTask({
+      requestId: "request-publication-then-failure",
+      input: "publish a dataset",
+      databases: [],
+      mode: "agent",
+    });
+    await repo.appendRunEvent(accepted.task_id, accepted.run_id, { type: "run_started" });
+    await repo.appendRunEvent(accepted.task_id, accepted.run_id, {
+      type: "publication_created",
+      publication_id: "pub_failed_run_publication",
+      run_id: accepted.run_id,
+      manifest_sha256: "c".repeat(64),
+      supersedes_publication_id: null,
+      published_at: "2026-08-20T00:00:00.000Z",
+    });
+    await repo.appendRunEvent(accepted.task_id, accepted.run_id, {
+      type: "run_failed",
+      error: "Context compaction did not reduce the estimated context",
+      error_code: "internal_error",
+    });
+
+    // The publication is an immutable product that already hit the event
+    // stream and disk; a subsequent run failure must not un-register it.
+    const snapshot = await repo.getSnapshot(accepted.task_id);
+    expect(snapshot?.current_publication_id).toBe("pub_failed_run_publication");
+    expect(snapshot?.publications).toHaveLength(1);
+    expect(snapshot?.runs[0]?.status).toBe("failed");
+  });
+
   test("makes request admission idempotent and rejects semantic request-id reuse", async () => {
     const repo = await repository();
     const input = {

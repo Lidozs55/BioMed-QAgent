@@ -383,10 +383,16 @@ export async function createDurableAgentRuntime(
         }
         // A threshold compaction ends the Pi turn without auto-continue; the
         // adapter therefore emitted no terminal event. Resume with a fresh
-        // turn so the agent can finish the task, unless the run was suspended
-        // or the resume budget is exhausted (then force the terminal event).
+        // turn so the agent can finish the task, unless the run was suspended,
+        // the resume budget is exhausted (then force the terminal event), or
+        // the run already emitted its publication — the product is complete,
+        // so post-publication compaction must not spawn busy-work turns.
         if (!compacted || suspendedRuns.has(runKey)) break;
-        if (continuation >= MAX_COMPACTION_CONTINUATIONS) {
+        const published = task.workspace.getCurrentPublicationId?.() ?? null;
+        if (
+          published !== null ||
+          continuation >= MAX_COMPACTION_CONTINUATIONS
+        ) {
           const payloads = task.adapter.completeRun(runId).map((event) => event.payload);
           if (payloads.length > 0) {
             await repository.appendRunEvents(taskId, runId, payloads);

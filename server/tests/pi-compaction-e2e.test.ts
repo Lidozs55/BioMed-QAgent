@@ -230,4 +230,66 @@ describe("Pi auto-compaction durable projection", () => {
 
     await runtime.close();
   });
+
+  test("lands the turn when ineffective compaction follows an emitted publication", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "biomed-pi-compaction-"));
+    roots.push(root);
+    const upstream = new IneffectiveCompactingUpstreamSession();
+    const runtime = await createDurableAgentRuntime({
+      tasksRoot: root,
+      adapter: new PiAgentAdapter({
+        createUpstreamSession: async () => upstream,
+      }),
+      workspaceFactory: async ({ taskId }) => {
+        const workspaceRoot = path.join(root, taskId);
+        await mkdir(workspaceRoot, { recursive: true });
+        return {
+          root: workspaceRoot,
+          tools: [],
+          dispose: async () => undefined,
+          getCurrentPublicationId: () => "pub_yield_guard_e2e",
+        };
+      },
+    });
+    const server = createServer((request, response) => {
+      if (!runtime.handle(request, response)) response.writeHead(404).end();
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    servers.push(server);
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+    const accepted = await (await fetch(`${base}/api/v1/tasks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        request_id: "request-published-ineffective-compaction-e2e",
+        input: "continue the study",
+        databases: [],
+        mode: "agent",
+      }),
+    })).json() as { task_id: string; run_id: string };
+
+    await expect.poll(async () => {
+      const snapshot = await runtime.repository.getSnapshot(accepted.task_id);
+      return snapshot?.task.status;
+    }).toBe("completed");
+
+    const events = await runtime.repository.listEvents(accepted.task_id, 0);
+    // Convergence telemetry is still persisted for post-hoc audit.
+    expect(events.find((event) => event.payload.type === "conversation_compacted")?.payload)
+      .toMatchObject({
+        type: "conversation_compacted",
+        reason: "threshold",
+        tokens_before: 100_000,
+        estimated_tokens_after: 97_000,
+        target_tokens: 60_000,
+      });
+    expect(events.some((event) => event.payload.type === "run_completed")).toBe(true);
+    expect(events.some((event) => event.payload.type === "run_failed")).toBe(false);
+    // The guard must not issue a continuation prompt after landing the turn.
+    expect(upstream.prompts).toBe(1);
+
+    await runtime.close();
+  });
 });

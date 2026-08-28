@@ -1015,6 +1015,7 @@ class PiBioMedAgentSession implements BioMedAgentSession {
   private readonly unsubscribe: () => void;
   private disposePromise?: Promise<void>;
   private readonly cleanup?: () => Promise<void>;
+  private readonly getCurrentPublicationId?: () => string | null;
 
   constructor(
     private readonly upstream: PiUpstreamSession,
@@ -1024,6 +1025,7 @@ class PiBioMedAgentSession implements BioMedAgentSession {
     this.taskId = config.taskId;
     this.runId = config.runId;
     this.cleanup = config.cleanup;
+    this.getCurrentPublicationId = config.getCurrentPublicationId;
     this.unsubscribe = upstream.subscribe((event) => this.handleEvent(event));
   }
 
@@ -1104,6 +1106,14 @@ class PiBioMedAgentSession implements BioMedAgentSession {
           result.estimatedTokensAfter !== undefined &&
           result.estimatedTokensAfter > result.targetTokens;
         if (didNotReduce || missedTarget) {
+          // Once the run has emitted its immutable publication, the closing
+          // turn cannot contribute further work: land it gracefully instead
+          // of failing the run, so publication registration and supervisor
+          // closure survive post-publication context exhaustion.
+          if ((this.getCurrentPublicationId?.() ?? null) !== null) {
+            this.finish(active, { event: { type: "turn_completed" } });
+            return;
+          }
           this.finish(active, {
             error: new BioMedAgentError(
               "CONTEXT_COMPACTION_INEFFECTIVE",
