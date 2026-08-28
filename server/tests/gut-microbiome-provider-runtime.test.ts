@@ -89,11 +89,20 @@ function spec(options: { requirementId: string; wrongProvider?: boolean; include
     },
     {
       schema_version: "1.0" as const,
-      binding_id: "binding_taxon",
-      source: "mgnify",
-      acquisition: { schema_version: "1.0" as const, mode: "builtin" as const, provider_id: "mgnify.files.v1", recipe_id: null, recipe_version: null },
-      adapter_id: "registered_gut_microbiome_taxon_long_tsv",
-      accession: STUDY_ID,
+      binding_id: "binding_taxonomy_esearch_renamed",
+      source: "ncbi_taxonomy",
+      acquisition: { schema_version: "1.0" as const, mode: "builtin" as const, provider_id: "ncbi.taxonomy.files.v1", recipe_id: null, recipe_version: null },
+      adapter_id: "gut_microbiome.ncbi_taxonomy_esearch_json.v1",
+      accession: "Enterobacter aerogenes",
+      parameters: {},
+    },
+    {
+      schema_version: "1.0" as const,
+      binding_id: "binding_taxonomy_efetch_renamed",
+      source: "ncbi_taxonomy",
+      acquisition: { schema_version: "1.0" as const, mode: "builtin" as const, provider_id: "ncbi.taxonomy.files.v1", recipe_id: null, recipe_version: null },
+      adapter_id: "gut_microbiome.ncbi_taxonomy_efetch_xml.v1",
+      accession: "548",
       parameters: {},
     },
     {
@@ -180,10 +189,6 @@ async function registerCarriers(
     },
   }));
   const study = await writeCarrier(taskRoot, "study.json", studyBytes, "application/json");
-  const taxon = await writeCarrier(taskRoot, "taxon.tsv", Buffer.from(
-    "study_id\tsample_id\ttaxon_path\ttaxon_id\tabundance\n" +
-    `${STUDY_ID}\tS1\tk__Bacteria;p__Firmicutes\t1234\t10\n`,
-  ), "text/tab-separated-values");
   const differential = await writeCarrier(taskRoot, "differential.xlsx", xlsxCarrier(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
   const prevalence = await writeCarrier(taskRoot, "prevalence.json", Buffer.from(JSON.stringify({
     phenotypes_associated_with_taxon: [
@@ -194,12 +199,41 @@ async function registerCarriers(
     esearchresult: { idlist: ["1234"], querytranslation: "Blautia obeum[SCIN]" },
   })), "application/json");
   const ncbiEfetch = await writeCarrier(taskRoot, "taxonomy-efetch.xml", Buffer.from(
-    "<TaxaSet><Taxon><TaxId>1234</TaxId><ScientificName>Blautia obeum</ScientificName><Rank>species</Rank></Taxon></TaxaSet>",
+    '<?xml version="1.0" ?><TaxaSet><Taxon>\n' +
+    "  <TaxId>1234</TaxId>\n" +
+    "  <ScientificName>Blautia obeum</ScientificName>\n" +
+    "  <OtherNames>\n" +
+    "    <Synonym>Blautia wexlerae homotypic group</Synonym>\n" +
+    '    <Name><ClassCDE>misspelling</ClassCDE><DispName>Blautium obeum</DispName></Name>\n' +
+    "  </OtherNames>\n" +
+    "  <ParentTaxId>416390</ParentTaxId>\n" +
+    "  <Rank>species</Rank>\n" +
+    "  <Lineage>cellular organisms; Bacteria; Bacillati; Clostridia</Lineage>\n" +
+    "  <LineageEx><Taxon><TaxId>1301</TaxId><ScientificName>Bacillati</ScientificName><Rank>phylum</Rank></Taxon></LineageEx>\n" +
+    "  <AkaTaxIds><TaxId>642001</TaxId></AkaTaxIds>\n" +
+    "</Taxon></TaxaSet>",
+  ), "application/xml");
+  const ncbiEsearchRenamed = await writeCarrier(taskRoot, "taxonomy-esearch-renamed.json", Buffer.from(JSON.stringify({
+    esearchresult: { idlist: ["548"], querytranslation: "Enterobacter aerogenes[SCIN]" },
+  })), "application/json");
+  const ncbiEfetchRenamed = await writeCarrier(taskRoot, "taxonomy-efetch-renamed.xml", Buffer.from(
+    "<TaxaSet><Taxon>" +
+    "<TaxId>548</TaxId>" +
+    "<ScientificName>Klebsiella aerogenes</ScientificName>" +
+    "<OtherNames>" +
+    '<Name><ClassCDE>equivalent name</ClassCDE><DispName>Enterobacter aerogenes</DispName></Name>' +
+    '<Name><ClassCDE>synonym</ClassCDE><DispName>Aerobacter aerogenes</DispName></Name>' +
+    "</OtherNames>" +
+    "<ParentTaxId>570</ParentTaxId>" +
+    "<Rank>species</Rank>" +
+    "<Lineage>cellular organisms; Bacteria; Pseudomonadota; Enterobacterales</Lineage>" +
+    "</Taxon></TaxaSet>",
   ), "application/xml");
   const registry = new SourceAssetRegistry(taskId, taskRoot);
   const receipts = {
     study: await registry.register({ sourceId: "source_mgnify_study_fixture", relativePath: study.relativePath, role: "carrier", mediaType: "application/json" }),
-    taxon: await registry.register({ sourceId: "source_mgnify_taxon_fixture", relativePath: taxon.relativePath, role: "carrier", mediaType: "text/tab-separated-values" }),
+    ncbiEsearchRenamed: await registry.register({ sourceId: "source_ncbi_esearch_renamed_fixture", relativePath: ncbiEsearchRenamed.relativePath, role: "carrier", mediaType: "application/json" }),
+    ncbiEfetchRenamed: await registry.register({ sourceId: "source_ncbi_efetch_renamed_fixture", relativePath: ncbiEfetchRenamed.relativePath, role: "carrier", mediaType: "application/xml" }),
     differential: await registry.register({ sourceId: "source_mgnify_differential_fixture", relativePath: differential.relativePath, role: "carrier", mediaType: differential.bytes.length > 0 ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : "application/octet-stream" }),
     prevalence: await registry.register({ sourceId: "source_gmrepo_prevalence_fixture", relativePath: prevalence.relativePath, role: "carrier", mediaType: "application/json" }),
     ncbiEsearch: await registry.register({ sourceId: "source_ncbi_esearch_fixture", relativePath: ncbiEsearch.relativePath, role: "carrier", mediaType: "application/json" }),
@@ -215,14 +249,13 @@ describe("Gold10 gut microbiome provider runtime dispatch", () => {
 
   it("registers fixed provider bindings for all promoted carrier roles", () => {
     expect(providerCarrierBinding("gut_microbiome", "mgnify", "registered_gut_microbiome_study_json", undefined, "mgnify.files.v1")).not.toBeNull();
-    expect(providerCarrierBinding("gut_microbiome", "mgnify", "registered_gut_microbiome_taxon_long_tsv", undefined, "mgnify.files.v1")).not.toBeNull();
-    expect(providerCarrierBinding("gut_microbiome", "mgnify", "registered_gut_microbiome_taxon_json", undefined, "mgnify.files.v1")).not.toBeNull();
     expect(providerCarrierBinding("gut_microbiome", "mgnify", "registered_gut_microbiome_differential_abundance_xlsx", undefined, "mgnify.files.v1")).not.toBeNull();
     expect(providerCarrierBinding("gut_microbiome", "ncbi_taxonomy", "gut_microbiome.ncbi_taxonomy_esearch_json.v1", undefined, "ncbi.taxonomy.files.v1")).not.toBeNull();
-    expect(providerCarrierBinding("gut_microbiome", "ncbi_taxonomy", "gut_microbiome.ncbi_taxonomy_efetch_xml.v1", undefined, "ncbi.taxonomy.files.v1")).not.toBeNull();
+    expect(providerCarrierBinding("gut_microbiome", "ncbi_taxonomy", "gut_microbiome.ncbi_taxonomy_efetch_xml.v1", "gut_microbiome.taxon_name_crosswalk.v1", "ncbi.taxonomy.files.v1")).not.toBeNull();
+    expect(providerCarrierBinding("gut_microbiome", "mgnify", "registered_gut_microbiome_taxon_long_tsv", undefined, "mgnify.files.v1")).toBeNull();
     expect(providerCarrierBinding("gut_microbiome", "gmrepo", "gut_microbiome.gmrepo_taxon_phenotypes_json.v1", undefined, "gmrepo.files.v1")).not.toBeNull();
     expect(providerCarrierBinding("gut_microbiome", "gmrepo", "gut_microbiome.gmrepo_taxon_phenotypes_json.v1", undefined, "mgnify.files.v1")).toBeNull();
-    expect(providerCarrierBinding("gut_microbiome", "mgnify", "registered_gut_microbiome_study_json", "gut_microbiome.taxon_records.v1", "mgnify.files.v1")).toBeNull();
+    expect(providerCarrierBinding("gut_microbiome", "mgnify", "registered_gut_microbiome_study_json", "gut_microbiome.taxon_name_crosswalk.v1", "mgnify.files.v1")).toBeNull();
   });
 
   it("rejects an unadmitted provider during dynamic-family admission", () => {
@@ -244,10 +277,11 @@ describe("Gold10 gut microbiome provider runtime dispatch", () => {
     const receipts = await registerCarriers(taskId, taskRoot);
     const sourceAssets = {
       binding_study: sourceAssetFromReceipt(receipts.study),
-      binding_taxon: sourceAssetFromReceipt(receipts.taxon),
       binding_differential: sourceAssetFromReceipt(receipts.differential),
       binding_taxonomy_esearch: sourceAssetFromReceipt(receipts.ncbiEsearch),
       binding_taxonomy_efetch: sourceAssetFromReceipt(receipts.ncbiEfetch),
+      binding_taxonomy_esearch_renamed: sourceAssetFromReceipt(receipts.ncbiEsearchRenamed),
+      binding_taxonomy_efetch_renamed: sourceAssetFromReceipt(receipts.ncbiEfetchRenamed),
       binding_prevalence: sourceAssetFromReceipt(receipts.prevalence),
     };
     const registeredAssetIds = new Set(Object.values(sourceAssets).map((asset) => asset.asset_id));
@@ -267,8 +301,27 @@ describe("Gold10 gut microbiome provider runtime dispatch", () => {
     expect(result.manifest.provenance_summary.source_count).toBe(registeredAssetIds.size);
     expect(result.candidate.registered_asset_ids.sort()).toEqual([...registeredAssetIds].sort());
     const output = await readFile(path.join(taskRoot, "dataset_runs", "run_test", "req_gold10_provider_runtime", "tables", "taxon_records.csv"), "utf8");
-    expect(output).toContain("1234");
-    expect(output).toContain("source_mgnify_taxon_fixture");
+    const header = output.split("\n")[0]!;
+    expect(header).toBe("ncbi_taxon_id,current_name,common_name,taxon_rank,parent_taxon_id,lineage,synonyms,equivalent_names,historical_names,name_change_observed,query_names,source_id,source_asset_id,source_locator");
+    const rows = output.split("\n").slice(1).filter((line) => line.length > 0).map((line) => line.split(","));
+    expect(rows).toHaveLength(2);
+    const blautia = rows.find((cells) => cells[0] === "1234")!;
+    expect(blautia[1]).toBe("Blautia obeum");
+    expect(blautia[3]).toBe("species");
+    expect(blautia[4]).toBe("416390");
+    expect(blautia[5]).toBe("cellular organisms; Bacteria; Bacillati; Clostridia");
+    expect(blautia[6]).toBe("Blautia wexlerae homotypic group");
+    expect(blautia[7]).toBe("");
+    expect(blautia[8]).toBe("");
+    expect(blautia[9]).toBe("false");
+    expect(blautia[10]).toBe("Blautia obeum");
+    expect(blautia[11]).toBe("source_ncbi_efetch_fixture");
+    const renamed = rows.find((cells) => cells[0] === "548")!;
+    expect(renamed[1]).toBe("Klebsiella aerogenes");
+    expect(renamed[6]).toBe("Aerobacter aerogenes");
+    expect(renamed[7]).toBe("Enterobacter aerogenes");
+    expect(renamed[9]).toBe("true");
+    expect(renamed[10]).toBe("Enterobacter aerogenes");
   });
 
   it("fails closed on provider mismatch, wrong media, and mixed registered/provider bindings", async () => {
@@ -278,10 +331,11 @@ describe("Gold10 gut microbiome provider runtime dispatch", () => {
     const receipts = await registerCarriers(taskId, taskRoot);
     const assets = {
       binding_study: receipts.study.asset_ref.asset_id,
-      binding_taxon: receipts.taxon.asset_ref.asset_id,
       binding_differential: receipts.differential.asset_ref.asset_id,
       binding_taxonomy_esearch: receipts.ncbiEsearch.asset_ref.asset_id,
       binding_taxonomy_efetch: receipts.ncbiEfetch.asset_ref.asset_id,
+      binding_taxonomy_esearch_renamed: receipts.ncbiEsearchRenamed.asset_ref.asset_id,
+      binding_taxonomy_efetch_renamed: receipts.ncbiEfetchRenamed.asset_ref.asset_id,
       binding_prevalence: receipts.prevalence.asset_ref.asset_id,
     };
     await expect(executeRegisteredMultiTableBuild({
@@ -402,10 +456,11 @@ describe("Gold10 gut microbiome provider runtime dispatch", () => {
       spec: spec({ requirementId: "req_gold10_entity_remedy" }),
       registeredAssetIds: {
         binding_study: receipts.study.asset_ref.asset_id,
-        binding_taxon: receipts.taxon.asset_ref.asset_id,
         binding_differential: receipts.differential.asset_ref.asset_id,
         binding_taxonomy_esearch: receipts.ncbiEsearch.asset_ref.asset_id,
         binding_taxonomy_efetch: receipts.ncbiEfetch.asset_ref.asset_id,
+        binding_taxonomy_esearch_renamed: receipts.ncbiEsearchRenamed.asset_ref.asset_id,
+        binding_taxonomy_efetch_renamed: receipts.ncbiEfetchRenamed.asset_ref.asset_id,
         binding_prevalence: receipts.prevalence.asset_ref.asset_id,
       },
     })).rejects.toThrow(/declare top-level spec\.entities[\s\S]*disease_id[\s\S]*binding\.parameters/);

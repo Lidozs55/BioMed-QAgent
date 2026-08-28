@@ -17,8 +17,12 @@ export const GUT_MICROBIOME_FAMILY_ID = "gut_microbiome";
 export const GUT_MICROBIOME_STUDY_SCHEMA_ID = "gut_microbiome.study.v1";
 /** Stable schema ID for the original MGnify wide-matrix carrier. */
 export const GUT_MICROBIOME_TAXON_SCHEMA_ID = "gut_microbiome.taxon.v1";
-/** Schema ID for the strict long-form taxon_records publication table. */
-export const GUT_MICROBIOME_TAXON_RECORD_SCHEMA_ID = "gut_microbiome.taxon_records.v1";
+/**
+ * Schema ID for the taxon name crosswalk publication table: one row per
+ * NCBI-resolved taxon, carrying the current name, classified alternative
+ * names, lineage, and the literature query names that resolved to it.
+ */
+export const GUT_MICROBIOME_TAXON_CROSSWALK_SCHEMA_ID = "gut_microbiome.taxon_name_crosswalk.v1";
 export const GUT_MICROBIOME_DIFFERENTIAL_ABUNDANCE_SCHEMA_ID = "gut_microbiome.differential_abundance.v1";
 export const GUT_MICROBIOME_REFERENCE_PREVALENCE_SCHEMA_ID = "gut_microbiome.reference_prevalence.v1";
 
@@ -28,7 +32,7 @@ export const GUT_MICROBIOME_DIFFERENTIAL_ABUNDANCE_TABLE_ID = "differential_abun
 export const GUT_MICROBIOME_REFERENCE_PREVALENCE_TABLE_ID = "reference_prevalence_records";
 
 export const GUT_MICROBIOME_ROW_GRANULARITY = "one gut microbiome disease association study";
-export const GUT_MICROBIOME_TAXON_ROW_GRANULARITY = "one taxon abundance record per sample";
+export const GUT_MICROBIOME_TAXON_ROW_GRANULARITY = "one NCBI taxon name resolution from literature names";
 export const GUT_MICROBIOME_DIFFERENTIAL_ABUNDANCE_ROW_GRANULARITY = "one differential abundance result per study taxon";
 export const GUT_MICROBIOME_REFERENCE_PREVALENCE_ROW_GRANULARITY = "one reference prevalence result per study taxon";
 
@@ -119,49 +123,78 @@ export const gutMicrobiomeStudySchema: DatasetSchemaV2 = parseDatasetSchemaV2({
   ],
 });
 
-export const gutMicrobiomeTaxonSchema: DatasetSchemaV2 = parseDatasetSchemaV2({
+export const gutMicrobiomeTaxonCrosswalkSchema: DatasetSchemaV2 = parseDatasetSchemaV2({
   schema_version: "2.0",
-  schema_id: GUT_MICROBIOME_TAXON_RECORD_SCHEMA_ID,
+  schema_id: GUT_MICROBIOME_TAXON_CROSSWALK_SCHEMA_ID,
   dataset_family: GUT_MICROBIOME_FAMILY_ID,
   row_granularity: GUT_MICROBIOME_TAXON_ROW_GRANULARITY,
-  primary_key: ["study_id", "sample_id", "taxon_path"],
+  primary_key: ["ncbi_taxon_id"],
   fields: [
-    field("study_id", {
-      semanticRole: "foreign_key",
-      description: "Study whose sample contains this taxonomy measurement.",
-    }),
-    field("sample_id", {
-      semanticRole: "sample_identifier",
-      description: "Source sample accession from the MGnify taxonomy matrix.",
-    }),
-    field("taxon_path", {
-      semanticRole: "taxon_lineage",
-      ontology: "NCBI Taxonomy",
-      description: "Taxonomic lineage token exactly as supplied by MGnify.",
-    }),
-    field("taxon_id", {
+    field("ncbi_taxon_id", {
       semanticRole: "taxon_identifier",
       ontology: "NCBI Taxonomy",
-      description: "Resolved NCBI Taxonomy identifier for the terminal taxon.",
+      description: "Current NCBI Taxonomy identifier for the resolved taxon.",
     }),
-    field("abundance", {
-      dataType: "integer",
-      semanticRole: "abundance_measurement",
-      unitPolicy: "read_count",
-      description: "Integer taxon abundance reported by the MGnify TSV.",
+    field("current_name", {
+      semanticRole: "taxon_label",
+      ontology: "NCBI Taxonomy",
+      description: "Current NCBI scientific name for the resolved taxon.",
+    }),
+    optionalField("common_name", {
+      semanticRole: "taxon_label",
+      description: "Common name when NCBI reports one for the taxon.",
+    }),
+    field("taxon_rank", {
+      semanticRole: "taxon_rank",
+      ontology: "NCBI Taxonomy",
+      description: "NCBI taxonomic rank of the resolved taxon.",
+    }),
+    optionalField("parent_taxon_id", {
+      semanticRole: "taxon_identifier",
+      ontology: "NCBI Taxonomy",
+      description: "NCBI Taxonomy identifier of the immediate parent taxon.",
+    }),
+    optionalField("lineage", {
+      semanticRole: "taxon_lineage",
+      ontology: "NCBI Taxonomy",
+      description: "Semicolon-delimited NCBI lineage string for the taxon.",
+    }),
+    optionalField("synonyms", {
+      semanticRole: "taxon_label",
+      ontology: "NCBI Taxonomy",
+      description: "Semicolon-delimited NCBI synonym and genbank synonym names.",
+    }),
+    optionalField("equivalent_names", {
+      semanticRole: "taxon_label",
+      ontology: "NCBI Taxonomy",
+      description: "Semicolon-delimited NCBI equivalent names for the taxon.",
+    }),
+    optionalField("historical_names", {
+      semanticRole: "taxon_label",
+      ontology: "NCBI Taxonomy",
+      description: "Semicolon-delimited NCBI historical names for the taxon.",
+    }),
+    field("name_change_observed", {
+      dataType: "boolean",
+      semanticRole: "normalization_flag",
+      description: "True when a literature query name differs from the current name or appears among the alternative names.",
+    }),
+    optionalField("query_names", {
+      semanticRole: "taxon_label",
+      description: "Semicolon-delimited literature names whose NCBI ESearch resolved to this taxon.",
     }),
     field("source_id", {
       semanticRole: "foreign_key",
-      description: "Source carrier record supporting this taxonomy row.",
+      description: "Source carrier record supporting this crosswalk row.",
     }),
     field("source_asset_id", {
       semanticRole: "source_asset_reference",
-      description: "Task-owned Core asset containing the exact taxonomy carrier.",
+      description: "Task-owned Core asset containing the exact EFetch carrier.",
     }),
     field("source_locator", {
       dataType: "json",
       semanticRole: "source_locator",
-      description: "SourceLocator 2.0 for the exact taxonomy cell.",
+      description: "SourceLocator 2.0 for the exact taxon record.",
     }),
   ],
 });
@@ -170,8 +203,9 @@ export const gutMicrobiomeTaxonSchema: DatasetSchemaV2 = parseDatasetSchemaV2({
  * Compatibility schema for the original MGnify wide matrix carrier. It
  * intentionally has the same stable schema ID as the historical parser; it is
  * registered only with the compatibility adapter and is not admitted by the
- * four-table family definition. The formal family uses gutMicrobiomeTaxonSchema
- * above and the independent long-form adapter.
+ * four-table family definition. The formal family uses
+ * gutMicrobiomeTaxonCrosswalkSchema above and the NCBI name-resolution
+ * provider chain.
  */
 export const gutMicrobiomeTaxonMatrixSchema: DatasetSchemaV2 = parseDatasetSchemaV2({
   schema_version: "2.0",
@@ -314,7 +348,7 @@ export const gutMicrobiomeSourceSchema = buildSourceTable({
 
 export const gutMicrobiomeSchemas = Object.freeze([
   gutMicrobiomeStudySchema,
-  gutMicrobiomeTaxonSchema,
+  gutMicrobiomeTaxonCrosswalkSchema,
   gutMicrobiomeDifferentialAbundanceSchema,
   gutMicrobiomeReferencePrevalenceSchema,
 ]);
@@ -325,16 +359,6 @@ export const gutMicrobiomeAllSchemas = Object.freeze([
 ]);
 
 export const gutMicrobiomeRelations: readonly RelationDefinition[] = Object.freeze([
-  buildBiomedicalRelation({
-    relationType: "entity_identity_link",
-    relationId: "taxon_study",
-    fromTableId: GUT_MICROBIOME_TAXON_TABLE_ID,
-    fromFields: ["study_id"],
-    toTableId: GUT_MICROBIOME_STUDY_TABLE_ID,
-    toFields: ["study_id"],
-    cardinality: "many_to_one",
-    missingPolicy: "reject",
-  }),
   buildBiomedicalRelation({
     relationType: "entity_identity_link",
     relationId: "differential_abundance_study",
@@ -359,9 +383,9 @@ export const gutMicrobiomeRelations: readonly RelationDefinition[] = Object.free
     relationType: "entity_identity_link",
     relationId: "differential_abundance_taxon",
     fromTableId: GUT_MICROBIOME_DIFFERENTIAL_ABUNDANCE_TABLE_ID,
-    fromFields: ["study_id", "taxon_id"],
+    fromFields: ["taxon_id"],
     toTableId: GUT_MICROBIOME_TAXON_TABLE_ID,
-    toFields: ["study_id", "taxon_id"],
+    toFields: ["ncbi_taxon_id"],
     cardinality: "many_to_many",
     missingPolicy: "reject",
   }),
@@ -369,9 +393,9 @@ export const gutMicrobiomeRelations: readonly RelationDefinition[] = Object.free
     relationType: "entity_identity_link",
     relationId: "reference_prevalence_taxon",
     fromTableId: GUT_MICROBIOME_REFERENCE_PREVALENCE_TABLE_ID,
-    fromFields: ["study_id", "taxon_id"],
+    fromFields: ["taxon_id"],
     toTableId: GUT_MICROBIOME_TAXON_TABLE_ID,
-    toFields: ["study_id", "taxon_id"],
+    toFields: ["ncbi_taxon_id"],
     cardinality: "many_to_many",
     missingPolicy: "reject",
   }),
@@ -392,7 +416,7 @@ function tableDefinition(tableId: string, schema: DatasetSchemaV2, role: "primar
 export function gutMicrobiomeTableDefinitions(): readonly TableDefinition[] {
   return [
     tableDefinition(GUT_MICROBIOME_STUDY_TABLE_ID, gutMicrobiomeStudySchema, "primary"),
-    tableDefinition(GUT_MICROBIOME_TAXON_TABLE_ID, gutMicrobiomeTaxonSchema, "supporting"),
+    tableDefinition(GUT_MICROBIOME_TAXON_TABLE_ID, gutMicrobiomeTaxonCrosswalkSchema, "supporting"),
     tableDefinition(GUT_MICROBIOME_DIFFERENTIAL_ABUNDANCE_TABLE_ID, gutMicrobiomeDifferentialAbundanceSchema, "supporting"),
     tableDefinition(GUT_MICROBIOME_REFERENCE_PREVALENCE_TABLE_ID, gutMicrobiomeReferencePrevalenceSchema, "supporting"),
   ];
