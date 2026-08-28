@@ -134,6 +134,208 @@ describe("TypeScript model settings", () => {
     expect(await service.resolveActiveModel()).toMatchObject({ contextWindow: 131072 });
   });
 
+  test("syncs active-model parameter edits into runtime settings without reactivation", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const provider = await service.createProvider({
+      name: "Custom OpenAI",
+      base_url: "https://models.example/v1",
+      api_key: "sk-provider",
+    });
+    const model = await service.createModel({
+      provider_id: provider.id,
+      model_id: "custom-chat",
+      context_window: 64000,
+      params: { max_tokens: 3072, temperature: 0.25 },
+    });
+    expect((await service.resolveActiveModel()).maxTokens).toBe(3072);
+
+    await service.updateModel(model.id, { params: { max_tokens: 2048, temperature: 0.9 } });
+    expect(await service.resolveActiveModel()).toMatchObject({ maxTokens: 2048, temperature: 0.9 });
+  });
+
+  test("syncs max_output_tokens edits for the active model when params lack max_tokens", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const provider = await service.createProvider({
+      name: "Custom OpenAI",
+      base_url: "https://models.example/v1",
+      api_key: "sk-provider",
+    });
+    const model = await service.createModel({
+      provider_id: provider.id,
+      model_id: "custom-chat",
+      context_window: 64000,
+      max_output_tokens: 8192,
+    });
+    expect((await service.resolveActiveModel()).maxTokens).toBe(8192);
+
+    await service.updateModel(model.id, { max_output_tokens: 2048 });
+    expect((await service.resolveActiveModel()).maxTokens).toBe(2048);
+  });
+
+  test("does not sync parameter edits for inactive models", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const provider = await service.createProvider({
+      name: "Custom OpenAI",
+      base_url: "https://models.example/v1",
+      api_key: "sk-provider",
+    });
+    await service.createModel({
+      provider_id: provider.id,
+      model_id: "model-a",
+      context_window: 64000,
+      params: { max_tokens: 3072 },
+    });
+    const inactive = await service.createModel({
+      provider_id: provider.id,
+      model_id: "model-b",
+      context_window: 64000,
+      params: { max_tokens: 9999 },
+    });
+
+    await service.updateModel(inactive.id, { params: { max_tokens: 12345, temperature: 1.5 } });
+    expect(await service.resolveActiveModel()).toMatchObject({ maxTokens: 3072, temperature: 0.7 });
+  });
+
+  test("falls back to the default max output when the activated model exposes none", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const provider = await service.createProvider({
+      name: "Custom OpenAI",
+      base_url: "https://models.example/v1",
+      api_key: "sk-provider",
+    });
+    await service.createModel({
+      provider_id: provider.id,
+      model_id: "model-a",
+      context_window: 262144,
+      params: { max_tokens: 32768 },
+    });
+    expect(service.getSettings().max_tokens).toBe(32768);
+
+    const withoutLimit = await service.createModel({
+      provider_id: provider.id,
+      model_id: "model-b",
+      context_window: 32000,
+    });
+    await service.activateModel(withoutLimit.id);
+    expect(service.getSettings().max_tokens).toBe(8192);
+    expect((await service.resolveActiveModel()).maxTokens).toBe(8192);
+  });
+
+  test("rejects compaction target ratios that do not stay below the trigger ratio", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const baseUrl = await serve(service);
+    const put = async (payload: Record<string, unknown>): Promise<Response> =>
+      fetch(`${baseUrl}/api/v1/settings`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+    const before = service.getSettings();
+    const bothFields = await put({ compaction_trigger_ratio: 0.1, compaction_target_ratio: 0.9 });
+    expect(bothFields.status).toBe(422);
+    expect(String((await bothFields.json() as Record<string, unknown>).detail))
+      .toContain("compaction_target_ratio");
+
+    // 单独修改 target 也要对照磁盘上的 trigger 校验写入后的组合。
+    const targetAlone = await put({ compaction_target_ratio: 0.9 });
+    expect(targetAlone.status).toBe(422);
+    expect(service.getSettings()).toEqual(before);
+
+    const valid = await put({ compaction_trigger_ratio: 0.9, compaction_target_ratio: 0.55 });
+    expect(valid.status).toBe(200);
+  });
+
+  test("rejects max_tokens that consume the reserved context window budget", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const baseUrl = await serve(service);
+    const put = async (payload: Record<string, unknown>): Promise<Response> =>
+      fetch(`${baseUrl}/api/v1/settings`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+    const before = service.getSettings();
+    const explicitWindow = await put({ max_tokens: 200000, context_window: 100000 });
+    expect(explicitWindow.status).toBe(422);
+    expect(String((await explicitWindow.json() as Record<string, unknown>).detail)).toContain("max_tokens");
+    expect(service.getSettings()).toEqual(before);
+
+    // context_window 为 null 时按回退值 131072 计算。
+    const inferredWindow = await put({ max_tokens: 131072 });
+    expect(inferredWindow.status).toBe(422);
+
+    const valid = await put({ max_tokens: 90000, context_window: 100000 });
+    expect(valid.status).toBe(200);
+  });
+
+  test("validates model params against the provider parameter specs", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const provider = await service.createProvider({
+      name: "Custom OpenAI",
+      base_url: "https://models.example/v1",
+      api_key: "sk-provider",
+    });
+    const model = await service.createModel({
+      provider_id: provider.id,
+      model_id: "custom-chat",
+      params: { temperature: 0.5 },
+    });
+
+    await expect(service.updateModel(model.id, { params: { temperature: 99 } }))
+      .rejects.toMatchObject({ status: 422 });
+    const stored = service.listModels().find((item) => String(item.id) === model.id);
+    expect(stored).toMatchObject({ params: { temperature: 0.5 } });
+
+    // 未知键保持现状语义放行，范围内的已知键正常更新。
+    await expect(service.updateModel(model.id, { params: { custom_flag: "yes" } }))
+      .resolves.toBeDefined();
+    await expect(service.updateModel(model.id, { params: { temperature: 1.5 } }))
+      .resolves.toBeDefined();
+  });
+
+  test("unrelated settings updates are not blocked by pre-existing invalid stored combinations", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    await mkdir(settingsDir, { recursive: true });
+    await writeFile(path.join(settingsDir, "model-registry.json"), JSON.stringify({
+      version: 1,
+      settings: {
+        provider_id: null,
+        active_model_id: null,
+        base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        model_name: "qwen3.7-plus",
+        max_tokens: 200000,
+        context_window: 100000,
+        safety_reserve_ratio: 0.05,
+        compaction_trigger_ratio: 0.1,
+        compaction_target_ratio: 0.9,
+        advanced: {
+          temperature: 0.7,
+          top_p: 1,
+          repetition_penalty: 1,
+          enable_search: false,
+          thinking_mode: false,
+        },
+        runtime_limits_version: 1,
+      },
+      providers: [],
+      models: [],
+    }));
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+
+    // 磁盘上的历史违规组合不锁死不相关字段的更新。
+    await expect(service.updateSettings({ model_name: "other-model" })).resolves.toBeUndefined();
+    expect(service.getSettings()).toMatchObject({ model_name: "other-model", max_tokens: 200000 });
+  });
+
   test("persists, validates, and resets runtime limits", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
     const service = await ModelSettingsService.create({ settingsDir, environment: {} });
