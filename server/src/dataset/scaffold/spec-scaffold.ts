@@ -64,13 +64,14 @@ export function buildDatasetExecutionScaffold(
   input: DatasetSpecScaffoldInput,
 ): DatasetSpecScaffold {
   const notes: string[] = [];
-  const definition = registry.definitionsList().find((family) => family.id === input.family_id);
-  if (definition === undefined) {
+  const registered = registry.list();
+  if (!registered.includes(input.family_id)) {
     throw new TypeError(
       `unknown dataset family ${JSON.stringify(input.family_id)}; registered: ` +
-        registry.definitionsList().map((family) => family.id).join(", "),
+        registered.join(", "),
     );
   }
+  const definition = registry.get(input.family_id);
   if (definition.runtime_id !== "registered_multitable.runtime.v1") {
     throw new TypeError(
       `scaffold supports registered-multitable families only; ${definition.id} uses ${definition.runtime_id}`,

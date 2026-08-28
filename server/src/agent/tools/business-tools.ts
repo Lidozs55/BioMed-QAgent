@@ -145,6 +145,7 @@ export async function createBusinessToolBundle(
   unavailable.add("inspect_dataset_execution_routes");
   unavailable.add("prepare_dynamic_family_publication");
   unavailable.add("submit_dynamic_family_publication");
+  unavailable.add("scaffold_dataset_execution_spec");
 
   // Curated external data sources (P5-03..P5-06).
   register(createPubmedTools({

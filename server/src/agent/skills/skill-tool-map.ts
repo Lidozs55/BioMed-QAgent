@@ -250,6 +250,7 @@ export const SKILL_TOOL_MAP: readonly SkillToolMapping[] = Object.freeze([
     // these Pi names.
     [
       "inspect_dataset_execution_routes",
+      "scaffold_dataset_execution_spec",
       "validate_dataset_execution",
       "execute_dataset_execution",
       "prepare_dynamic_family_publication",
