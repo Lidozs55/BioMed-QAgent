@@ -17,7 +17,7 @@ import type { AcquisitionDownloadPlan, AcquisitionProviderHandler } from "./runt
 export const NCBI_TAXONOMY_FILES_PROVIDER_ID = "ncbi.taxonomy.files.v1";
 /** Stable provider revision; the implementation digest excludes this constant line. */
 export const NCBI_TAXONOMY_FILES_IMPLEMENTATION_DIGEST =
-  "48f489e028803cb4cb81da8a4c353bc329e9776ee7c9487c38e0ee7918743e8d";
+  "c8c1704364b52da7a7ff8310836e3995c1461f9e5f90d007fbc8c77c67aa2ef9";
 
 const NCBI_EUTILS_HOST = "eutils.ncbi.nlm.nih.gov";
 const NCBI_EUTILS_BASE = `https://${NCBI_EUTILS_HOST}/entrez/eutils`;
@@ -32,7 +32,11 @@ const NCBI_EUTILITY_RESERVED_KEYS = new Set([
   "filename",
 ]);
 const TAXID = /^[1-9][0-9]{0,11}$/;
-const TAXONOMY_NAME = /^(?=.{1,240}$)(?=.*\p{L})[\p{L}\p{N}][\p{L}\p{N} .()'_-]*$/u;
+// Literature names arrive verbatim: bracketed genera (`[Ruminococcus] torques`),
+// mOTU hash annotations (`[h:1576]`, `[c:1104]`), `/`-alternatives
+// (`dorei/vulgatus`), and strain designations are all part of the accepted
+// domain; URL/query/path control characters remain rejected.
+const TAXONOMY_NAME = /^(?=.{1,240}$)(?=.*\p{L})[\p{L}\p{N}[(][\p{L}\p{N} .()'_/:[\]-]*$/u;
 
 function sourceId(accession: string): string {
   const digest = createHash("sha256")
@@ -93,6 +97,29 @@ function parseAccession(request: CoreAcquisitionRequest): string {
   return accession;
 }
 
+/**
+ * Derive a robust ESearch term from a verbatim literature name (the gold10
+ * reference recipe): a bracketed genus stays (`[Ruminococcus] torques` →
+ * `Ruminococcus torques`) because NCBI treats literal `[...]` as field tags,
+ * while hash annotations (`[h:1000]`, `[c:1104]`) are dropped entirely;
+ * unnamed prefixes, `/`-alternatives, `-complex` suffixes, and strain text
+ * after `sp.` are truncated. The accession itself keeps the verbatim name so
+ * crosswalk `query_names` preserve what the paper reported.
+ */
+export function cleanTaxonomySearchTerm(name: string): string {
+  let term = name
+    .replace(/\[([A-Za-z][A-Za-z0-9 .-]*)\]/g, "$1")
+    .replace(/\[[^\]]*\]/g, " ")
+    .replace(/^\s*unnamed\s+/i, "")
+    .replace(/\/.*$/, "")
+    .replace(/\s*-\s*.*$/, "")
+    .replace(/\s*complex\b.*$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (/\bsp\.?\s/i.test(term)) term = term.replace(/\bsp\.?\s.*$/i, " sp.");
+  return term.replace(/\s+/g, " ").trim();
+}
+
 function taxonomyUrl(accession: string): string {
   const url = new URL(`${NCBI_EUTILS_BASE}/${TAXID.test(accession) ? "efetch" : "esearch"}.fcgi`);
   url.searchParams.set("db", NCBI_TAXONOMY_DATABASE);
@@ -100,8 +127,10 @@ function taxonomyUrl(accession: string): string {
   if (TAXID.test(accession)) {
     url.searchParams.set("id", accession);
   } else {
+    const term = cleanTaxonomySearchTerm(accession);
+    if (term === "") throw new TypeError(`${NCBI_TAXONOMY_FILES_PROVIDER_ID} requires a valid taxonomy name or taxid`);
     url.searchParams.set("retmax", "1");
-    url.searchParams.set("term", `${accession}[SCIN]`);
+    url.searchParams.set("term", `${term}[SCIN]`);
   }
   return url.toString();
 }
