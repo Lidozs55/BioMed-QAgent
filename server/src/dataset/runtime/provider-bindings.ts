@@ -63,7 +63,7 @@ export const PROVIDER_CARRIER_BINDINGS: readonly ProviderCarrierBinding[] = Obje
   },
   {
     familyId: "gut_microbiome",
-    source: "europepmc_supplement",
+    source: "europepmc_supplementary",
     adapterId: "gut_microbiome.paper_supplement_differential_abundance_csv.v1",
     providerId: "europepmc.supplementary.v1",
     tableId: "differential_abundance_records",

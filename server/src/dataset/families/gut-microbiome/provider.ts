@@ -457,7 +457,7 @@ function slug(value: string): string {
 }
 
 function parsePaperSupplementCsv(request: GutMicrobiomeCarrierRequest, content: string): GutMicrobiomeCarrierRows {
-  const sourceRow = source(request, "europepmc_supplement", "paper_supplement_differential_abundance_csv");
+  const sourceRow = source(request, "europepmc_supplementary", "paper_supplement_differential_abundance_csv");
   const rows = parseCsvDocument(content);
   if (rows.length < 3) fail("paper supplement CSV must contain a header block and at least one record");
 

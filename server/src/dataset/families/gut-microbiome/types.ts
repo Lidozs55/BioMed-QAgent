@@ -145,7 +145,7 @@ export interface GutMicrobiomeReferencePrevalenceInput {
 
 export interface GutMicrobiomeSourceInput {
   source_id: string;
-  source_database: "mgnify" | "gmrepo" | "ncbi_taxonomy" | "europepmc_supplement";
+  source_database: "mgnify" | "gmrepo" | "ncbi_taxonomy" | "europepmc_supplementary";
   source_asset_id: string;
   source_locator: SourceLocatorV2;
   retrieved_at: string;

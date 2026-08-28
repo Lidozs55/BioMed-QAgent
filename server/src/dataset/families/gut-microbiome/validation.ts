@@ -50,7 +50,7 @@ function sourceLink(sourceId: string, assetId: string, sourceLocator: SourceLoca
 
 function assertSource(value: GutMicrobiomeSourceInput): void {
   safeId(value.source_id, "source_id");
-  if (!["mgnify", "gmrepo", "ncbi_taxonomy", "europepmc_supplement"].includes(value.source_database)) fail("source_database is not allowed");
+  if (!["mgnify", "gmrepo", "ncbi_taxonomy", "europepmc_supplementary"].includes(value.source_database)) fail("source_database is not allowed");
   if (!CONTENT_ASSET_ID.test(value.source_asset_id)) fail("source_asset_id must be content addressed");
   const parsed = locator(value.source_locator, "source_locator");
   if (parsed.asset_id !== value.source_asset_id) fail("source locator does not match source_asset_id");

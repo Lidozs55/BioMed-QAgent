@@ -75,7 +75,7 @@ function assertGutBinding(input: ProviderCarrierTransformInput): void {
   }
   const sourceByProvider: Readonly<Record<string, string>> = {
     "mgnify.files.v1": "mgnify",
-    "europepmc.supplementary.v1": "europepmc_supplement",
+    "europepmc.supplementary.v1": "europepmc_supplementary",
     "ncbi.taxonomy.files.v1": "ncbi_taxonomy",
     "gmrepo.files.v1": "gmrepo",
   };

@@ -523,6 +523,17 @@ export function createDatasetExecutionTools(
                   "asset from acquire_core_carrier); curated sources have no acquisition provider",
               );
             }
+            const archiveProvider = CORE_ACQUISITION_PROVIDER_DESCRIPTORS.find(
+              (entry) => entry.providerId === binding.acquisition.provider_id && entry.source === binding.source,
+            );
+            if (archiveProvider?.dynamicInput === "binary_archive") {
+              throw new TypeError(
+                `binding '${binding.binding_id}' acquires a binary archive provider '${binding.acquisition.provider_id}' — ` +
+                  `run acquire_core_carrier on that provider once, then supply ` +
+                  `source_files["${binding.binding_id}"] with the wanted extraction member asset id ` +
+                  "(e.g. the text/csv xlsx-worksheet member), not the archive itself",
+              );
+            }
             if (options.client.acquire === undefined) {
               throw new Error(`Core acquisition is unavailable for binding '${binding.binding_id}'`);
             }

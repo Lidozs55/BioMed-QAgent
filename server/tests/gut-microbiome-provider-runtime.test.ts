@@ -81,7 +81,7 @@ function spec(options: { requirementId: string; wrongProvider?: boolean; include
     ? {
       schema_version: "1.0" as const,
       binding_id: "binding_differential",
-      source: "europepmc_supplement",
+      source: "europepmc_supplementary",
       acquisition: { schema_version: "1.0" as const, mode: "builtin" as const, provider_id: "europepmc.supplementary.v1", recipe_id: null, recipe_version: null },
       adapter_id: "gut_microbiome.paper_supplement_differential_abundance_csv.v1",
       accession: "PMC5090114",
