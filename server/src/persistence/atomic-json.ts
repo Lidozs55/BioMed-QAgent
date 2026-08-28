@@ -5,8 +5,42 @@
  * ``product-api.ts`` (``readPersonalization``/``writePersonalization``).
  */
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+
+/** Temp files older than this are considered crashed-write leftovers. */
+const STALE_TEMP_MAX_AGE_MS = 60 * 60 * 1000;
+
+/**
+ * Best-effort sweep of stale ``<name>.<pid>.<uuid>.tmp`` leftovers: a process
+ * dying between the temp write and the rename strands them forever otherwise
+ * (observed piling up in ``data/settings/``). Fresh temps (< 1h) are left
+ * alone — they may belong to a concurrent write that is still in flight.
+ */
+async function sweepStaleTempFiles(filePath: string): Promise<void> {
+  const directory = path.dirname(filePath);
+  const prefix = `${path.basename(filePath)}.`;
+  let entries: string[];
+  try {
+    entries = await readdir(directory);
+  } catch {
+    return;
+  }
+  await Promise.all(entries
+    .filter((name) => name.startsWith(prefix) && name.endsWith(".tmp"))
+    .map(async (name) => {
+      const candidate = path.join(directory, name);
+      try {
+        const stats = await stat(candidate);
+        if (Date.now() - stats.mtimeMs > STALE_TEMP_MAX_AGE_MS) {
+          await unlink(candidate);
+        }
+      } catch {
+        // An unreadable or concurrently-removed temp file is not worth
+        // failing the actual write over.
+      }
+    }));
+}
 
 /** Read and JSON.parse a file; returns undefined on any failure (missing/parse). */
 export async function readJsonFile<T>(filePath: string): Promise<T | undefined> {
@@ -44,6 +78,7 @@ export async function writeJsonAtomic(
   options: { private?: boolean } = {},
 ): Promise<void> {
   await mkdir(path.dirname(filePath), { recursive: true });
+  await sweepStaleTempFiles(filePath);
   const temporary = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
   await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, {
     encoding: "utf8",
