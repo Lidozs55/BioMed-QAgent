@@ -1493,6 +1493,7 @@ export async function createDurableAgentRuntime(
       } else if (error instanceof RangeError) {
         sendJson(response, 413, { detail: error.message });
       } else {
+        console.error("task-runtime-failure", error);
         sendJson(response, 500, { detail: "Task runtime failed" });
       }
     }
