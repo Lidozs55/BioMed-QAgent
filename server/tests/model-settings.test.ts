@@ -11,7 +11,12 @@ import { afterEach, describe, expect, test } from "vitest";
 import { DEFAULT_RUNTIME_LIMITS } from "@biomed/contracts";
 
 import { ModelSettingsService } from "../src/settings/model-settings.js";
-import { ENV_BOOTSTRAP_PROVIDER_ID } from "../src/settings/model-registry/store.js";
+import {
+  bootstrapEnvironmentDefaults,
+  defaultRegistry,
+  ENV_BOOTSTRAP_PROVIDER_ID,
+  type AuthState,
+} from "../src/settings/model-registry/store.js";
 
 const servers: Server[] = [];
 
@@ -845,6 +850,47 @@ describe("TypeScript model settings", () => {
       modelId: "qwen3.7-plus",
       apiKey: "sk-dashscope-env",
       baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    });
+  });
+
+  test("env bootstrap honors catalog context facts for known models", () => {
+    const registry = defaultRegistry({});
+    const auth: AuthState = { version: 1, direct_api_key: "", provider_api_keys: {} };
+    // kimi-k3 in the local catalog: 1048576 window / 131072 output / 32768 suggested.
+    bootstrapEnvironmentDefaults(registry, auth, {
+      DASHSCOPE_API_KEY: "sk-dashscope-env",
+      PI_MODEL: "kimi-k3",
+    });
+    expect(registry.models[0]).toMatchObject({
+      model_id: "kimi-k3",
+      context_window: 1_048_576,
+      max_output_tokens: 131_072,
+      suggested_max_tokens: 32_768,
+      capabilities: { text: true, image: true, video: true, audio: false },
+    });
+    expect(registry.settings).toMatchObject({
+      model_name: "kimi-k3",
+      context_window: 1_048_576,
+      max_tokens: 32_768,
+    });
+  });
+
+  test("env bootstrap keeps the hardcoded fallback for models missing from the catalog", () => {
+    const registry = defaultRegistry({});
+    const auth: AuthState = { version: 1, direct_api_key: "", provider_api_keys: {} };
+    bootstrapEnvironmentDefaults(registry, auth, {
+      DASHSCOPE_API_KEY: "sk-dashscope-env",
+      PI_MODEL: "totally-unknown-model",
+    });
+    expect(registry.models[0]).toMatchObject({
+      model_id: "totally-unknown-model",
+      context_window: 131_072,
+      max_output_tokens: 8192,
+      suggested_max_tokens: 8192,
+    });
+    expect(registry.settings).toMatchObject({
+      context_window: 131_072,
+      max_tokens: 8192,
     });
   });
 
