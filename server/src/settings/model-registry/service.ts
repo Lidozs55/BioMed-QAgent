@@ -42,6 +42,7 @@ import { resolveActiveConfig, resolveVlmConfig } from "./model-resolution.js";
 import { createSettingsRouter } from "./routes.js";
 import {
   bootstrapEnvironmentDefaults,
+  defaultRegistry,
   loadAuthState,
   loadRegistryState,
   persistState,
@@ -116,6 +117,25 @@ function applyModelDerivedParams(model: ModelRecord, settings: SettingsRecord): 
   if (typeof model.params.repetition_penalty === "number") settings.advanced.repetition_penalty = model.params.repetition_penalty;
   if (typeof model.params.enable_search === "boolean") settings.advanced.enable_search = model.params.enable_search;
   if (typeof model.params.thinking_mode === "boolean") settings.advanced.thinking_mode = model.params.thinking_mode;
+}
+
+/**
+ * ``base_url`` 写入端的结构校验(updateSettings / createProvider /
+ * updateProvider 共用):必须能解析为 URL、协议为 http/https 且带 hostname。
+ * 刻意保持同步且不发网络请求——全局 IP/localhost 的运行时策略仍由
+ * discover 出站时的 ``publicProviderUrl``(url-policy.ts)把守,写入端只挡
+ * "明显不是 URL"的值。
+ */
+function assertHttpBaseUrl(value: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new HttpError(422, `base_url must be a valid http(s) URL: ${value}`);
+  }
+  if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || parsed.hostname === "") {
+    throw new HttpError(422, `base_url must be a valid http(s) URL: ${value}`);
+  }
 }
 
 export class ModelSettingsService {
@@ -223,7 +243,10 @@ export class ModelSettingsService {
     return this.mutate(() => {
       const settings = structuredClone(this.registry.settings);
       const auth = structuredClone(this.auth);
-      if (body.base_url !== undefined) settings.base_url = requiredString(body.base_url, "base_url");
+      if (body.base_url !== undefined) {
+        settings.base_url = requiredString(body.base_url, "base_url");
+        assertHttpBaseUrl(settings.base_url);
+      }
       if (body.model_name !== undefined) settings.model_name = requiredString(body.model_name, "model_name");
       if (body.max_tokens !== undefined) settings.max_tokens = boundedNumber(body.max_tokens, "max_tokens", 1);
       if (body.context_window === null) settings.context_window = null;
@@ -306,10 +329,12 @@ export class ModelSettingsService {
         throw new HttpError(409, "供应商名称已存在");
       }
       const current = timestamp();
+      const baseUrl = requiredString(body.base_url, "base_url");
+      assertHttpBaseUrl(baseUrl);
       created = {
         id: `provider_${randomUUID().replaceAll("-", "")}`,
         name,
-        base_url: requiredString(body.base_url, "base_url"),
+        base_url: baseUrl,
         preset_id: typeof body.preset_id === "string" ? body.preset_id : null,
         description: typeof body.description === "string" ? body.description : "",
         enabled: true,
@@ -326,7 +351,13 @@ export class ModelSettingsService {
     return this.mutate(() => {
       const provider = this.provider(id);
       if (body.name !== undefined) provider.name = requiredString(body.name, "name");
-      if (body.base_url !== undefined) provider.base_url = requiredString(body.base_url, "base_url");
+      if (body.base_url !== undefined) {
+        // 先校验再赋值:updateProvider 直接改活跃记录(非克隆),
+        // 失败的 PUT 不得留下脏的内存状态。
+        const baseUrl = requiredString(body.base_url, "base_url");
+        assertHttpBaseUrl(baseUrl);
+        provider.base_url = baseUrl;
+      }
       if (body.preset_id !== undefined) provider.preset_id = typeof body.preset_id === "string" ? body.preset_id : null;
       if (body.description !== undefined) provider.description = String(body.description);
       if (body.enabled !== undefined) provider.enabled = Boolean(body.enabled);
@@ -346,8 +377,7 @@ export class ModelSettingsService {
       this.registry.models = this.registry.models.filter((item) => item.provider_id !== id);
       delete this.auth.provider_api_keys[id];
       if (this.registry.settings.provider_id === id) {
-        this.registry.settings.provider_id = null;
-        this.registry.settings.active_model_id = null;
+        this.resetActiveConnectionSettings(true);
       }
     });
   }
@@ -496,7 +526,7 @@ export class ModelSettingsService {
       this.model(id);
       this.registry.models = this.registry.models.filter((item) => item.id !== id);
       if (this.registry.settings.active_model_id === id) {
-        this.registry.settings.active_model_id = null;
+        this.resetActiveConnectionSettings(false);
       }
     });
   }
@@ -592,6 +622,23 @@ export class ModelSettingsService {
     settings.model_name = model.model_id;
     settings.context_window = model.context_window;
     applyModelDerivedParams(model, settings);
+  }
+
+  /**
+   * 回到"未配置"语义:删除的是当前激活链路上的 provider/model 时,把连接
+   * 字段重置为 ``defaultRegistry`` 的默认值,避免 GET /settings 与运行时
+   * ``resolveActiveConfig`` 继续指向已删实体的幽灵 base_url/model_name;
+   * 用户随后必须显式激活模型。
+   */
+  private resetActiveConnectionSettings(clearProvider: boolean): void {
+    const defaults = defaultRegistry(this.environment).settings;
+    const settings = this.registry.settings;
+    if (clearProvider) settings.provider_id = null;
+    settings.active_model_id = null;
+    settings.base_url = defaults.base_url;
+    settings.model_name = defaults.model_name;
+    settings.context_window = null;
+    settings.max_tokens = defaults.max_tokens;
   }
 
   /**

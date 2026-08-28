@@ -225,6 +225,117 @@ describe("TypeScript model settings", () => {
     expect((await service.resolveActiveModel()).maxTokens).toBe(8192);
   });
 
+  test("resets ghost connection settings when deleting the active provider", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const provider = await service.createProvider({
+      name: "Custom OpenAI",
+      base_url: "https://models.example/v1",
+      api_key: "sk-provider",
+    });
+    const model = await service.createModel({
+      provider_id: provider.id,
+      model_id: "custom-chat",
+      context_window: 64000,
+      params: { max_tokens: 3072 },
+    });
+    await service.activateModel(model.id);
+    expect(service.getSettings()).toMatchObject({
+      base_url: "https://models.example/v1",
+      model_name: "custom-chat",
+    });
+
+    await service.deleteProvider(provider.id);
+    expect(service.getSettings()).toMatchObject({
+      base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      model_name: "qwen3.7-plus",
+      context_window_source: "inferred",
+      max_tokens: 8192,
+      api_key_configured: false,
+    });
+    const stored = await storedSettings(settingsDir);
+    expect(stored.provider_id).toBeNull();
+    expect(stored.active_model_id).toBeNull();
+  });
+
+  test("resets ghost model settings when deleting the active model", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const provider = await service.createProvider({
+      name: "Custom OpenAI",
+      base_url: "https://models.example/v1",
+      api_key: "sk-provider",
+    });
+    const model = await service.createModel({
+      provider_id: provider.id,
+      model_id: "custom-chat",
+      context_window: 64000,
+      params: { max_tokens: 3072 },
+    });
+    await service.activateModel(model.id);
+    expect(service.getSettings()).toMatchObject({ model_name: "custom-chat", max_tokens: 3072 });
+
+    await service.deleteModel(model.id);
+    expect(service.getSettings()).toMatchObject({
+      base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      model_name: "qwen3.7-plus",
+      context_window_source: "inferred",
+      max_tokens: 8192,
+    });
+    const stored = await storedSettings(settingsDir);
+    expect(stored.active_model_id).toBeNull();
+  });
+
+  test("rejects non-http(s) base_url values on settings and provider writes", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const baseUrl = await serve(service);
+    const put = async (payload: Record<string, unknown>): Promise<Response> =>
+      fetch(`${baseUrl}/api/v1/settings`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+    const before = service.getSettings();
+    const notUrl = await put({ base_url: "not a url" });
+    expect(notUrl.status).toBe(422);
+    expect(String((await notUrl.json() as Record<string, unknown>).detail)).toContain("base_url");
+    const ftp = await put({ base_url: "ftp://x" });
+    expect(ftp.status).toBe(422);
+    expect(service.getSettings()).toEqual(before);
+
+    // localhost/IP 策略是 discover 层(publicProviderUrl)的职责;
+    // 写入端只挡结构上明显不是 http(s) URL 的值。
+    const loopback = await put({ base_url: "http://127.0.0.1:9999/v1" });
+    expect(loopback.status).toBe(200);
+    expect(service.getSettings().base_url).toBe("http://127.0.0.1:9999/v1");
+
+    await expect(service.createProvider({
+      name: "Bad Provider",
+      base_url: "not a url",
+      api_key: "sk-bad",
+    })).rejects.toMatchObject({ status: 422 });
+    await expect(service.createProvider({
+      name: "Ftp Provider",
+      base_url: "ftp://x",
+    })).rejects.toMatchObject({ status: 422 });
+    await expect(service.createProvider({
+      name: "Loopback Provider",
+      base_url: "http://127.0.0.1:9999/v1",
+      api_key: "sk-loopback",
+    })).resolves.toMatchObject({ base_url: "http://127.0.0.1:9999/v1" });
+
+    const editable = await service.createProvider({
+      name: "Editable Provider",
+      base_url: "https://models.example/v1",
+      api_key: "sk-editable",
+    });
+    await expect(service.updateProvider(editable.id, { base_url: "not a url" }))
+      .rejects.toMatchObject({ status: 422 });
+    expect(service.getProvider(editable.id).base_url).toBe("https://models.example/v1");
+  });
+
   test("rejects compaction target ratios that do not stay below the trigger ratio", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
     const service = await ModelSettingsService.create({ settingsDir, environment: {} });
@@ -987,4 +1098,11 @@ describe("model registry list pagination and search", () => {
 
 function randomId(): string {
   return Math.random().toString(36).slice(2);
+}
+
+async function storedSettings(settingsDir: string): Promise<Record<string, unknown>> {
+  const stored = JSON.parse(await readFile(path.join(settingsDir, "model-registry.json"), "utf8")) as {
+    settings: Record<string, unknown>;
+  };
+  return stored.settings;
 }
