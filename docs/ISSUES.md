@@ -50,10 +50,10 @@
 
 ## 代码质量 / CI
 
-### [P1] Provider 流挂起无超时，且 session.cancel 同路径无界等待（2026-08-28 gold9 实测）
+### [P1] 会话内挂起无超时，且 session.cancel 同路径无界等待（2026-08-28 gold9 实测）
 
-- **状态：** 强制取消已修复（`fix/run-context-budget-preflight` 分支 `46e961bf`，RED→GREEN 回归测试覆盖）；流级 idle timeout 仍未实现。
-- **现象：** deepseek-v4-flash（api.deepseek.com）经 Pi 发起的 provider 流式调用在 gold9 任务上两次无限挂起（`run_ts_8b23aefa` 17:16:54Z、`run_ts_bd01132a` 17:31:05Z，挂起点均在 54k/1M token、orphadata 浏览阶段之后）：零字节、零错误、零重试，run 永久 `running`。同 Host 并发的 gold8 请求正常，非账号级并发限制。
+- **状态：** 两个独立修复均已合入 `main@05f43592` 前——(a) 协作者定位 r2 挂死真因为 `navigate_page` 渲染 54MB en_product1.xml 令渲染器内存爆至 ~10.6GB，浏览器主帧数据文件闸门与渲染器资源上限已修（`138d5166`，经 `78c97aa1`/`688409b1` 并入）；(b) 本会话的强制取消修复（`46e961bf`，RED→GREEN）独立成立。流级 idle timeout 仍未实现。
+- **现象：** gold9 任务两次无限挂起（`run_ts_8b23aefa` 17:16:54Z、`run_ts_bd01132a` 17:31:05Z，挂起点均在 54k/1M token、orphadata 浏览阶段之后）：零字节、零错误、零重试，run 永久 `running`；挂起源头按现有证据优先归因浏览器渲染器资源爆炸（r2 有 collaborator 会话的渲染器内存证据），provider 流独立挂起未被排除（r1 挂点无渲染活动记录）。
 - **连带缺陷：** `cancelRun` 先 `await task.session.cancel(...)` 再进 10s 终态竞速——cancel 本身挂起时 HTTP 取消调用超时（curl 000），run_cancelled 永不落盘；修复后 cancel 有界，超时即强制追加 `run_cancelled (forced)` 并将 runKey 加入 `suspendedRuns` 静音集，僵尸 loop 醒来也不会重复终态。另一残留：`close()`（优雅关停）仍 await 全部 activeExecutions，僵尸 execution 未醒时优雅关停会挂起（今天靠进程强杀恢复）。
 - **下一步：** 在 adapter 层为 provider 请求加 idle-byte watchdog（无数据 N 分钟即 abort 并按可重试错误处理）；`close()` 对僵尸 execution 设置宽限后放弃等待。复现证据：`data/gold-runs/e8d03589-gold9-dsflash-r1/-r2`。
 
