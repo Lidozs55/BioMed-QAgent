@@ -25,6 +25,12 @@ const NCBI_TAXONOMY_SOURCE = "ncbi_taxonomy";
 const NCBI_TAXONOMY_DATABASE = "taxonomy";
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 const PARAMETER_KEYS = new Set(["source", "accession", "entities"]);
+/** Exact E-utility parameter names that entities must never shadow. */
+const NCBI_EUTILITY_RESERVED_KEYS = new Set([
+  "id", "term", "db", "retmode", "rettype", "retstart", "retmax", "api_key",
+  "webenv", "usehistory", "tool", "email", "url", "path", "command", "script",
+  "filename",
+]);
 const TAXID = /^[1-9][0-9]{0,11}$/;
 const TAXONOMY_NAME = /^(?=.{1,240}$)(?=.*\p{L})[\p{L}\p{N}][\p{L}\p{N} .()'_-]*$/u;
 
@@ -69,7 +75,12 @@ function parseAccession(request: CoreAcquisitionRequest): string {
     throw new TypeError(`${NCBI_TAXONOMY_FILES_PROVIDER_ID} entities must be a string-array record`);
   }
   for (const [key, value] of Object.entries(entities)) {
-    if (/(?:^|_)(?:url|path|code|command|script|filename|database|db|retmode|term|id)(?:$|_)/i.test(key)) {
+    // Entities are declaration metadata (study_id, disease_id, ...) and are
+    // never forwarded into E-utilities; only EXACT reserved E-utility
+    // parameter names are rejected. The previous suffix match also blocked
+    // required context keys like `study_id`, breaking the esearch-based
+    // taxon closure path.
+    if (NCBI_EUTILITY_RESERVED_KEYS.has(key.toLowerCase())) {
       throw new TypeError(`${NCBI_TAXONOMY_FILES_PROVIDER_ID} entities must not contain URL, path, database, or code controls`);
     }
     if (!Array.isArray(value) || !value.every((entry): entry is string => typeof entry === "string")) {
