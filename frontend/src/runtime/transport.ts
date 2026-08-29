@@ -43,6 +43,7 @@ const EVENT_TYPES = new Set([
   "task_completed",
   "task_failed",
   "run_queued",
+  "run_steered",
   "run_started",
   "run_finalizing",
   "run_completed",
@@ -321,6 +322,7 @@ function isAssistantStreamFrame(value: unknown): value is AssistantStreamFrame {
 function isAssistantStreamBoundary(envelope: EventEnvelope): boolean {
   return (
     envelope.type === "tool_started" ||
+    envelope.type === "run_steered" ||
     envelope.type === "run_finalizing" ||
     envelope.type === "run_completed" ||
     envelope.type === "run_failed" ||
@@ -344,6 +346,8 @@ function payloadShapeMatches(
         typeof payload.request_id === "string" &&
         typeof payload.input === "string"
       );
+    case "run_steered":
+      return typeof payload.input === "string" && payload.input.length > 0;
     case "assistant_delta": {
       if (typeof payload.delta !== "string" || payload.delta.length === 0) {
         return false;

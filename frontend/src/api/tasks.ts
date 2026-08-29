@@ -25,8 +25,8 @@ export interface SteerResponse {
   status: "steered";
   task_id: string;
   run_id: string;
-  message_id?: string | null;
-  content?: string | null;
+  message_id: string;
+  content: string;
 }
 
 /** Summary row of a registered local cache dataset (``/api/v1/cache/datasets``). */
@@ -79,7 +79,9 @@ function parseSteerResponse(json: unknown): SteerResponse {
     typeof obj !== "object" ||
     obj["status"] !== "steered" ||
     typeof obj["task_id"] !== "string" ||
-    typeof obj["run_id"] !== "string"
+    typeof obj["run_id"] !== "string" ||
+    typeof obj["message_id"] !== "string" ||
+    typeof obj["content"] !== "string"
   ) {
     throw new APIError(502, "Invalid steer response");
   }
@@ -87,8 +89,8 @@ function parseSteerResponse(json: unknown): SteerResponse {
     status: "steered",
     task_id: obj["task_id"],
     run_id: obj["run_id"],
-    message_id: typeof obj["message_id"] === "string" ? obj["message_id"] : null,
-    content: typeof obj["content"] === "string" ? obj["content"] : null,
+    message_id: obj["message_id"],
+    content: obj["content"],
   };
 }
 

@@ -623,12 +623,36 @@ describe("durable formal Agent runtime", () => {
       body: JSON.stringify({ text: "focus on TP53", expected_run_id: accepted.run_id }),
     });
     expect(steered.status).toBe(202);
-    expect(await steered.json()).toMatchObject({
+    const steerResponse = await steered.json() as Record<string, unknown>;
+    expect(steerResponse).toMatchObject({
       status: "steered",
       task_id: accepted.task_id,
       run_id: accepted.run_id,
+      message_id: expect.stringMatching(/^message_event_/),
+      content: "focus on TP53",
     });
     expect(adapter.steering[0]).toContain("focus on TP53");
+
+    const steerEvents = await runtime.repository.listEvents(accepted.task_id, 0);
+    const steerEvent = steerEvents.find((event) => event.type === "run_steered");
+    expect(steerEvent).toMatchObject({
+      schema_version: "2.0",
+      run_id: accepted.run_id,
+      payload: { type: "run_steered", input: "focus on TP53" },
+    });
+    expect(steerResponse.message_id).toBe(`message_${steerEvent?.event_id}`);
+
+    const steeredSnapshot = await runtime.repository.getSnapshot(accepted.task_id);
+    const steeredMessage = steeredSnapshot?.messages.find(
+      (message) => message.message_id === steerResponse.message_id,
+    );
+    expect(steeredMessage).toMatchObject({
+      message_id: steerResponse.message_id,
+      run_id: accepted.run_id,
+      role: "user",
+      content: "focus on TP53",
+      sequence: steerEvent?.sequence,
+    });
 
     const corruptedSteer = await fetch(`${base}/api/v1/tasks/${accepted.task_id}/inject-context`, {
       method: "POST",
