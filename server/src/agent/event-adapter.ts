@@ -13,9 +13,6 @@ const MAX_DEPTH = 3;
 const MAX_ITEMS = 20;
 const SENSITIVE_KEY = /api[-_]?key|authorization|bearer|credential|password|secret|token/i;
 const BEARER_VALUE = /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi;
-const WINDOWS_ABSOLUTE_PATH = /\b[A-Za-z]:[\\/][^\s"']+/g;
-const UNC_PATH = /\\\\[^\s"']+/g;
-const POSIX_PRIVATE_PATH = /\/(?:Users|home|root|private|etc|var|tmp|mnt|opt|srv)\/[^\s"']+/g;
 
 export interface PiEventAdapterDiagnostic {
   code: "unknown_upstream_event" | "unmapped_upstream_event";
@@ -33,9 +30,6 @@ export interface PiEventAdapterOptions {
 function sanitizeText(value: string, limit: number): string {
   return value
     .replace(BEARER_VALUE, "[redacted]")
-    .replace(WINDOWS_ABSOLUTE_PATH, "[redacted-path]")
-    .replace(UNC_PATH, "[redacted-path]")
-    .replace(POSIX_PRIVATE_PATH, "[redacted-path]")
     .slice(0, limit);
 }
 
