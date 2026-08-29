@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import type { JsonValue, SourceLocatorV2 } from "@biomed/contracts";
 import { XMLParser, XMLValidator } from "fast-xml-parser";
 
+import { MAX_XML_CARRIER_BYTES } from "../../runtime/provider-limits.js";
+
 export const BIOC_LITERATURE_PROVIDER_ID = "literature.bioc_xml.v1";
 export const BIOC_LITERATURE_PROVIDER_VERSION = "1.0.0";
 
@@ -285,6 +287,14 @@ function parseDocument(options: {
 /** Fixed server-owned BioC XML transform. It never executes document-provided code. */
 export function transformBioCLiteratureEvidence(input: BioCLiteratureTransformInput): BioCLiteratureCanonicalTables {
   if (!/^asset_[0-9a-f]{64}$/.test(input.assetId)) throw new TypeError("assetId must be content addressed");
+  // 对象树闸门：整个 BioC 文档会被建成 JS 对象树（膨胀可达源文件 10 倍以上），
+  // 超大载体曾把 Node 堆撑到 OOM 崩溃（2026-08-29 gold9 事故）。
+  if (input.bytes.length > MAX_XML_CARRIER_BYTES) {
+    throw new TypeError(
+      `BioC XML carrier exceeded ${MAX_XML_CARRIER_BYTES} byte parse limit (${input.bytes.length} bytes); ` +
+        "the full object tree would expand ~10x in memory — use a narrower extract or a streaming/sharded parser instead",
+    );
+  }
   const validation = XMLValidator.validate(input.bytes.toString("utf8"));
   if (validation !== true) throw new TypeError("malformed BioC XML");
   const root = new XMLParser({

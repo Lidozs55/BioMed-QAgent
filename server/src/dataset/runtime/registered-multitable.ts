@@ -28,6 +28,7 @@ import {
 import { sha256FileStream } from "../adapters/hashing.js";
 import { createDefaultFamilyAssemblerRegistry } from "../assembly/index.js";
 import type { DatasetExecutionSpec, ValidationResult } from "../contracts/index.js";
+import { MAX_PROVIDER_CARRIER_BYTES } from "./provider-limits.js";
 import type { DatasetFamilyDefinition } from "../families/index.js";
 import {
   createDefaultDatasetFamilyRegistry,
@@ -323,8 +324,28 @@ async function carrierBytes(
   if (resolved.registration_receipt.asset_ref.role !== "carrier" && resolved.registration_receipt.asset_ref.role !== "source") {
     throw new Error("provider dispatch requires a registered source or carrier asset");
   }
+  // 内存闸门（读取前）：登记收据声明的载体大小超过预算时直接拒绝，不启动传输。
+  const declaredBytes = resolved.registration_receipt.size_bytes;
+  if (Number.isFinite(declaredBytes) && declaredBytes > MAX_PROVIDER_CARRIER_BYTES) {
+    throw new Error(
+      `provider carrier '${assetId}' exceeded ${MAX_PROVIDER_CARRIER_BYTES} byte limit (declared ${declaredBytes} bytes); ` +
+        "split the acquisition into narrower extracts or add a streaming/sharded adapter instead of loading it whole",
+    );
+  }
+  // 内存闸门（读取中）：累计字节超预算立即中止，防止无 content-length 的流把堆撑爆。
   const chunks: Buffer[] = [];
-  for await (const chunk of resolved.content) chunks.push(Buffer.from(chunk));
+  let received = 0;
+  for await (const chunk of resolved.content) {
+    const buffer = Buffer.from(chunk);
+    received += buffer.length;
+    if (received > MAX_PROVIDER_CARRIER_BYTES) {
+      throw new Error(
+        `provider carrier '${assetId}' exceeded ${MAX_PROVIDER_CARRIER_BYTES} byte limit while streaming (received ${received} bytes); ` +
+          "split the acquisition into narrower extracts or add a streaming/sharded adapter instead of loading it whole",
+      );
+    }
+    chunks.push(buffer);
+  }
   return { receipt: resolved.registration_receipt, bytes: Buffer.concat(chunks) };
 }
 
