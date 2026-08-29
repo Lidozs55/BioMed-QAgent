@@ -289,6 +289,11 @@ describe("dynamic family build tool boundary", () => {
     const result = await tool.execute(raw);
 
     expect(result.isError).not.toBe(true);
+    const receiptOffset = result.content.indexOf('"preflight_receipt"');
+    const submissionOffset = result.content.indexOf('"prepared_submission"');
+    expect(receiptOffset).toBeGreaterThanOrEqual(0);
+    expect(receiptOffset).toBeLessThan(256);
+    expect(receiptOffset).toBeLessThan(submissionOffset);
     expect(preparedSubmission).toMatchObject({
       family_spec: { canonical_digest: expect.stringMatching(/^[0-9a-f]{64}$/) },
       transform_metadata: {

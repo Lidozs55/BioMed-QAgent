@@ -180,7 +180,7 @@ export function createPrepareDynamicFamilyPublicationTool(
     name: "prepare_dynamic_family_publication",
     label: "Prepare Dynamic Family Publication",
     description:
-      "Call inspect_dataset_execution_routes, then use scaffold_dataset_profile when no registered static family expresses the required topology and every input is dynamic-bindable or a task-owned Core-derived asset. Do not prevalidate a dynamic FamilySpec with validate_dataset_execution. Pass the generated profile topology and proposal refs unchanged; only source/extraction facts are caller-owned, and prepare input must remain without derived digest properties. The FamilySpec assessment_policy_ref and exact selected table/relation closure must match the Core profile. This deterministic, side-effect-free preflight derives all digest bindings, validates topology, product closure, and acquisition planning, and returns prepared_submission plus a bound receipt. On rejection, use error.recovery.expected_family, expected_tables, and scaffold, modify facts, and prepare again; unchanged retry is forbidden.",
+      "Call inspect_dataset_execution_routes, then use scaffold_dataset_profile when no registered static family expresses the required topology and every input is dynamic-bindable or a task-owned Core-derived asset. Do not prevalidate a dynamic FamilySpec with validate_dataset_execution. Pass the generated profile topology and proposal refs unchanged; only source/extraction facts are caller-owned, and prepare input must remain without derived digest properties. The FamilySpec assessment_policy_ref and exact selected table/relation closure must match the Core profile. This deterministic, side-effect-free preflight derives all digest bindings, validates topology, product closure, and acquisition planning, and returns preflight_receipt first followed by prepared_submission. Copy both top-level values verbatim into submit_dynamic_family_publication. On rejection, use error.recovery.expected_family, expected_tables, and scaffold, modify facts, and prepare again; unchanged retry is forbidden.",
     parameters: dynamicFamilyPublicationParameters("prepare"),
     async execute(value, signal, context): Promise<BioMedToolResult> {
       try {
@@ -193,8 +193,8 @@ export function createPrepareDynamicFamilyPublicationTool(
         const details = {
           ok: true,
           status: "prepared",
-          prepared_submission: preparedSubmission,
           preflight_receipt: receipt,
+          prepared_submission: preparedSubmission,
         };
         return { content: JSON.stringify(details), details };
       } catch (error) {
