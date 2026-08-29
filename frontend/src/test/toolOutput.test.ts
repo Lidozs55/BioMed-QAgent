@@ -63,6 +63,20 @@ describe("unwrapToolOutput", () => {
     expect(unwrapToolOutput(output)?.text).toBe("inner message");
   });
 
+  it("treats empty details as missing and surfaces the content message", () => {
+    const output = JSON.stringify({
+      content: [{
+        type: "text",
+        text: 'Validation failed for tool "workspace_edit":\n - expectedOccurrences: must have required properties expectedOccurrences',
+      }],
+      details: {},
+    });
+    const result = unwrapToolOutput(output);
+    expect(result?.text).toContain("Validation failed for tool");
+    expect(result?.text).toContain("expectedOccurrences");
+    expect(result?.text).not.toContain("{");
+  });
+
   it("pretty-prints unknown detail shapes", () => {
     const result = unwrapToolOutput(envelope({ custom: 1 }));
     expect(result?.text).toContain('"custom": 1');

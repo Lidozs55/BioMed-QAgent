@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
+import { CodeBlock } from "../CodeBlock";
 import { DiffView } from "../DiffView";
 import { JsonBlock } from "../JsonBlock";
 
@@ -18,6 +19,28 @@ describe("JsonBlock", () => {
     render(<JsonBlock value={{ a: 1 }} />);
     expect(screen.getByRole("button", { name: "复制" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "复制" }));
+  });
+});
+
+describe("CodeBlock", () => {
+  it("defaults to the readable text and toggles to raw output", () => {
+    render(
+      <CodeBlock
+        text="print(1)"
+        rawText='{"content":[{"type":"text","text":"print(1)"}]}'
+      />,
+    );
+    expect(screen.getByText("print(1)")).toBeInTheDocument();
+    const toggle = screen.getByRole("button", { name: "原始输出" });
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(toggle);
+    expect(screen.getByText(/"content"/)).toBeInTheDocument();
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("hides the toggle when raw text equals the readable text", () => {
+    render(<CodeBlock text="plain" rawText="plain" />);
+    expect(screen.queryByRole("button", { name: "原始输出" })).not.toBeInTheDocument();
   });
 });
 

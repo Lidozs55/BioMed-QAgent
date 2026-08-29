@@ -34,11 +34,15 @@ export function FileWriteTool({ item, open, onOpenChange }: ToolRendererProps) {
       }
     >
       {isError ? (
-        unwrapped && <CodeBlock text={unwrapped.text} tone="error" />
+        unwrapped && (
+          <CodeBlock text={unwrapped.text} rawText={item.output ?? undefined} tone="error" />
+        )
       ) : content !== undefined ? (
         <DiffView added={added} />
       ) : (
-        unwrapped && <CodeBlock text={unwrapped.text} />
+        unwrapped && (
+          <CodeBlock text={unwrapped.text} rawText={item.output ?? undefined} />
+        )
       )}
     </ToolCallShell>
   );

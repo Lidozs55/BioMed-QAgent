@@ -1,5 +1,7 @@
-import { TerminalIcon } from "@phosphor-icons/react";
+import { useState } from "react";
+import { BracketsCurlyIcon, TerminalIcon } from "@phosphor-icons/react";
 
+import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { unwrapToolOutput } from "@/lib/toolOutput";
 import { cn } from "@/lib/utils";
@@ -31,6 +33,10 @@ export function BashTool({ item, open, onOpenChange }: ToolRendererProps) {
   const command = resolveCommand(item);
   const firstLine = command !== undefined ? command.split("\n")[0] : undefined;
   const unwrapped = unwrapToolOutput(item.output);
+  const [showRaw, setShowRaw] = useState(false);
+  const hasRawToggle =
+    item.output !== null && unwrapped !== null && item.output !== unwrapped.text;
+  const outputText = showRaw && item.output !== null ? item.output : unwrapped?.text;
   return (
     <ToolCallShell
       item={item}
@@ -44,14 +50,33 @@ export function BashTool({ item, open, onOpenChange }: ToolRendererProps) {
           "relative rounded-md bg-card-foreground p-3 font-mono text-xs leading-5 text-background",
         )}
       >
-        {unwrapped && (
-          <CopyButton text={unwrapped.text} className="absolute top-1.5 right-1.5 z-10" />
+        {outputText !== undefined && (
+          <div className="absolute top-1.5 right-1.5 z-10 flex gap-1">
+            {hasRawToggle && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label="原始输出"
+                aria-pressed={showRaw}
+                title="原始输出"
+                className={cn(
+                  "bg-background/80 text-muted-foreground hover:text-foreground",
+                  showRaw && "bg-muted text-foreground",
+                )}
+                onClick={() => setShowRaw((prev) => !prev)}
+              >
+                <BracketsCurlyIcon aria-hidden="true" />
+              </Button>
+            )}
+            <CopyButton text={outputText} />
+          </div>
         )}
-        <ScrollArea className={unwrapped ? "max-h-72 pr-8" : undefined}>
+        <ScrollArea className={outputText !== undefined ? "max-h-72 pr-8" : undefined}>
           <pre className="break-words whitespace-pre-wrap">
             <span className="opacity-60 select-none">$ </span>
             {command}
-            {unwrapped && <span>{"\n\n"}{unwrapped.text}</span>}
+            {outputText !== undefined && <span>{"\n\n"}{outputText}</span>}
           </pre>
         </ScrollArea>
       </div>

@@ -35,7 +35,9 @@ export function FileReadTool({ item, open, onOpenChange }: ToolRendererProps) {
         ) : undefined
       }
     >
-      {unwrapped && <CodeBlock text={unwrapped.text} />}
+      {unwrapped && (
+        <CodeBlock text={unwrapped.text} rawText={item.output ?? undefined} />
+      )}
     </ToolCallShell>
   );
 }

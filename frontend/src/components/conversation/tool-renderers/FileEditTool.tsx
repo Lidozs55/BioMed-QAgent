@@ -38,11 +38,15 @@ export function FileEditTool({ item, open, onOpenChange }: ToolRendererProps) {
       }
     >
       {isError ? (
-        unwrapped && <CodeBlock text={unwrapped.text} tone="error" />
+        unwrapped && (
+          <CodeBlock text={unwrapped.text} rawText={item.output ?? undefined} tone="error" />
+        )
       ) : hasDiff ? (
         <DiffView deleted={deleted.length > 0 ? deleted : undefined} added={added} />
       ) : (
-        unwrapped && <CodeBlock text={unwrapped.text} />
+        unwrapped && (
+          <CodeBlock text={unwrapped.text} rawText={item.output ?? undefined} />
+        )
       )}
     </ToolCallShell>
   );

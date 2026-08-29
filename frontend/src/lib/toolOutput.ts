@@ -33,7 +33,12 @@ export function unwrapToolOutput(
   const envelopeObj = asDetails(envelope);
   if (envelopeObj === null) return { text: output, details: null };
 
-  let details = asDetails(envelopeObj.details);
+  // 空 details(schema 校验失败等)视同缺失,回退到 content[0].text 的
+  // 人类可读消息。
+  const rawDetails = asDetails(envelopeObj.details);
+  let details =
+    rawDetails !== null && Object.keys(rawDetails).length > 0 ? rawDetails : null;
+  let contentText: string | null = null;
   if (details === null && Array.isArray(envelopeObj.content)) {
     const first: unknown = envelopeObj.content[0];
     const inner =
@@ -44,11 +49,17 @@ export function unwrapToolOutput(
       try {
         details = asDetails(JSON.parse(inner));
       } catch {
-        return { text: inner, details: null };
+        details = null;
       }
+      if (details === null) contentText = inner;
     }
   }
-  if (details === null) return { text: output, details: null };
+  if (details === null) {
+    return {
+      text: contentText ?? output,
+      details: null,
+    };
+  }
   return { text: renderDetails(details), details };
 }
 
