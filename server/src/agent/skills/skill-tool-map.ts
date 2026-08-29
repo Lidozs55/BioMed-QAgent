@@ -182,15 +182,15 @@ export const SKILL_TOOL_MAP: readonly SkillToolMapping[] = Object.freeze([
     "acquisition",
     ["browser", "http", "web"],
     "Render and navigate public web pages and download files through verified content-addressed staging with guarded browser automation.",
-    "Use for public-page research or known downloads. Browser-acquired text and files are staging evidence only and must never be substituted for a registered Core carrier.",
+    "Use for public-page research or known downloads.",
     ["navigate_page", "download_from_page"],
   ),
   mapping(
     "web_search_discovery",
     "discovery",
     ["web_search", "browser", "web"],
-    "Discover alternative official sources or download entries via an explicit public web search (e.g. Bing) through the guarded browser when registered API searches do not fit or an official source is unreachable.",
-    "Use as the deliberate fallback before any URL enumeration: read result-page links, prefer official hosts, then acquire real bytes through the browser skill or a registered Core provider; result-page hits are discovery leads, never evidence.",
+    "Find sources, official entries, and download locations on the open web via an explicit search-engine result page (e.g. Bing) through the guarded browser when registered provider searches do not already answer the question.",
+    "Use early during source discovery whenever a needed source or entry is not already in hand: read result-page links, prefer official hosts, then acquire real bytes through the browser skill or a registered Core provider.",
     ["navigate_page"],
   ),
   mapping(
