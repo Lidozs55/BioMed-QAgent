@@ -950,7 +950,7 @@ export async function supervise(input, dependencies = {}) {
     }
     const observedFinalCommit = checkExpectedCommit(options.expectedCommit, snapshot, publicationDetail);
     if (terminal.classification !== "succeeded_publication") {
-      await atomicWrite(path.join(options.evidenceDir, "closure.json"), `${JSON.stringify(redacted({ schema_version: "1.0", case_label: options.caseLabel, task_id: options.taskId, run_id: runId, expected_commit: options.expectedCommit ?? null, observed_commit: observedFinalCommit ?? healthCommit, health, terminal }), null, 2)}\n`);
+      await atomicWrite(path.join(options.evidenceDir, "closure.json"), `${JSON.stringify(redacted({ schema_version: "1.0", case_label: options.caseLabel, task_id: options.taskId, run_id: runId, expected_commit: options.expectedCommit ?? null, observed_commit: observedFinalCommit ?? healthCommit, health, terminal, run_usage: run.summary?.usage ?? null }), null, 2)}\n`);
       throw errorForTerminal(terminal);
     }
     const verified = await verifyArtifacts(api, options.taskId, options.evidenceDir, publicationDetail);
@@ -974,6 +974,7 @@ export async function supervise(input, dependencies = {}) {
       package_digest: verified.package_digest,
       manifest_file_digest: verified.manifest_file_digest,
       artifacts: verified.artifacts,
+      run_usage: redacted(run.summary?.usage ?? null),
     };
     await atomicWrite(path.join(options.evidenceDir, "closure.json"), `${JSON.stringify(closure, null, 2)}\n`);
     state.stopped = false;

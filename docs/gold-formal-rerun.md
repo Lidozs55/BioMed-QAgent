@@ -79,6 +79,11 @@ The closure records two different digests:
 - `package_digest` is recomputed from the registered non-manifest artifact
   `(relative_path, sha256)` pairs using the Dataset Core manifest algorithm.
 
+The closure also records `run_usage`: the reducer-aggregated provider token
+totals for the supervised run (`model_calls` / `input_tokens` /
+`output_tokens` / cache splits, from durable `context_usage.usage`), used for
+per-run cost reporting and prompt-optimization comparisons.
+
 A file-size/hash mismatch or package-digest mismatch exits with code `31`; no
 successful closure is emitted. Other exit codes are stable and specific:
 `10` health, `11` task, `12` active run, `30` terminal failure, `32` timeout,

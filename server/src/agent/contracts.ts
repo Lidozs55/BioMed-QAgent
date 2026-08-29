@@ -58,6 +58,15 @@ export type BioMedAgentEvent =
       contextWindow: number;
       percent: number | null;
       source: "runtime";
+      /** Provider-reported usage of the model call that triggered this event. */
+      usage?: {
+        input: number;
+        output: number;
+        cacheRead: number;
+        cacheWrite: number;
+        totalTokens: number;
+        reasoning?: number;
+      };
     };
 
 export interface BioMedToolResult {

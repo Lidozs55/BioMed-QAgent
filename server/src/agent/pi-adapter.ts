@@ -58,6 +58,14 @@ export interface PiUpstreamEvent {
     contextWindow: number;
     percent: number | null;
   };
+  usage?: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    totalTokens: number;
+    reasoning?: number;
+  };
 }
 
 export interface PiUpstreamSession {
@@ -195,6 +203,24 @@ function runProgressContextExtension(
 
 function boundedText(value: string): string {
   return value.slice(0, MAX_TEXT);
+}
+
+function toModelCallUsage(usage: {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  totalTokens: number;
+  reasoning?: number;
+}): PiUpstreamEvent["usage"] {
+  return {
+    input: usage.input,
+    output: usage.output,
+    cacheRead: usage.cacheRead,
+    cacheWrite: usage.cacheWrite,
+    totalTokens: usage.totalTokens,
+    ...(usage.reasoning === undefined ? {} : { reasoning: usage.reasoning }),
+  };
 }
 
 function boundedValue(value: unknown, depth = 0): unknown {
@@ -606,6 +632,10 @@ export function toUpstreamEvent(
           event.message.role === "assistant"
             ? event.message.stopReason
             : undefined,
+        usage:
+          event.message.role === "assistant"
+            ? toModelCallUsage(event.message.usage)
+            : undefined,
       };
     case "message_update":
       return {
@@ -659,6 +689,10 @@ export function toUpstreamEvent(
           event.errorMessage === undefined
             ? undefined
             : boundedText(event.errorMessage),
+        usage:
+          event.result === undefined || event.result.usage === undefined
+            ? undefined
+            : toModelCallUsage(event.result.usage),
       };
     default:
       return { type: event.type };
@@ -1153,6 +1187,7 @@ class PiBioMedAgentSession implements BioMedAgentSession {
             contextWindow: event.contextUsage.contextWindow,
             percent: event.contextUsage.percent,
             source: "runtime",
+            ...(event.usage === undefined ? {} : { usage: event.usage }),
           },
         });
       }
@@ -1166,6 +1201,7 @@ class PiBioMedAgentSession implements BioMedAgentSession {
             contextWindow: event.contextUsage.contextWindow,
             percent: event.contextUsage.percent,
             source: "runtime",
+            ...(event.usage === undefined ? {} : { usage: event.usage }),
           },
         });
       }

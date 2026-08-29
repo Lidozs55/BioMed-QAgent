@@ -82,6 +82,10 @@ function digest(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
+function usageCount(value: number): number {
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
 function sourceType(event: never): string {
   if (typeof event === "object" && event !== null && "type" in event) {
     const type = Reflect.get(event, "type");
@@ -205,6 +209,20 @@ export class PiEventAdapter {
             context_window: event.contextWindow,
             percent: event.percent,
             source: event.source,
+            ...(event.usage === undefined
+              ? {}
+              : {
+                  usage: {
+                    input_tokens: usageCount(event.usage.input),
+                    output_tokens: usageCount(event.usage.output),
+                    cache_read_tokens: usageCount(event.usage.cacheRead),
+                    cache_write_tokens: usageCount(event.usage.cacheWrite),
+                    total_tokens: usageCount(event.usage.totalTokens),
+                    ...(event.usage.reasoning === undefined
+                      ? {}
+                      : { reasoning_tokens: usageCount(event.usage.reasoning) }),
+                  },
+                }),
           }),
         ];
       case "turn_cancelled":
