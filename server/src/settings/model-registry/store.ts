@@ -194,7 +194,7 @@ export function defaultRegistry(environment: Record<string, string | undefined>)
       active_model_id: null,
       base_url: environment.PI_BASE_URL ?? environment.DASHSCOPE_BASE_URL ??
         "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      model_name: environment.PI_MODEL ?? environment.MODEL_NAME ?? "qwen3.7-plus",
+      model_name: environment.PI_MODEL ?? environment.MODEL_NAME ?? "",
       max_tokens: 8192,
       context_window: null,
       safety_reserve_ratio: 0.05,
@@ -223,8 +223,10 @@ export const ENV_BOOTSTRAP_MODEL_ID = "model_dashscope_env_default";
 
 /**
  * 一次性环境引导：当环境变量提供了 API key 且当前没有任何已配置服务商时，
- * 自动注册 DashScope 服务商并激活默认模型，使前端模型列表非空。
- * 仅在实际注入时置位 ``env_bootstrapped``，已有用户配置时绝不覆盖。
+ * 自动注册 DashScope 服务商并注入密钥，使凭据进入设置系统。**绝不臆造默认
+ * 模型**：只有 env 显式提供 PI_MODEL/MODEL_NAME 时才创建并激活模型记录；
+ * 否则 active_model_id 保持 null，`resolveActiveConfig` fail-closed，用户必须
+ * 在设置里选择模型后才会真正计费运行。已有用户配置时绝不覆盖。
  */
 export function bootstrapEnvironmentDefaults(
   registry: RegistryState,
@@ -240,7 +242,6 @@ export function bootstrapEnvironmentDefaults(
   const now = timestamp();
   const baseUrl = environment.PI_BASE_URL ?? environment.DASHSCOPE_BASE_URL ??
     "https://dashscope.aliyuncs.com/compatible-mode/v1";
-  const modelId = environment.PI_MODEL ?? environment.MODEL_NAME ?? "qwen3.7-plus";
   registry.providers.push({
     id: ENV_BOOTSTRAP_PROVIDER_ID,
     name: "DashScope",
@@ -252,9 +253,15 @@ export function bootstrapEnvironmentDefaults(
     updated_at: now,
   });
   auth.provider_api_keys[ENV_BOOTSTRAP_PROVIDER_ID] = apiKey;
+  const settings = registry.settings;
+  settings.provider_id = ENV_BOOTSTRAP_PROVIDER_ID;
+  settings.base_url = baseUrl;
+
+  const modelId = (environment.PI_MODEL ?? environment.MODEL_NAME ?? "").trim();
+  if (modelId === "") return;
   // Catalog facts win when the env model is verified locally (a 1M-window
-  // model must not be under-reported); the hardcoded 131072/8192 pair is only
-  // the fallback for models missing from the catalog.
+  // model must not be under-reported); the 131072/8192 pair is only the
+  // fallback for models missing from the catalog.
   const entry = lookupModelCatalog(modelId);
   const contextWindow = entry === undefined ? 131_072 : catalogContextWindow(entry);
   const maxOutputTokens = entry === undefined ? 8192 : catalogCapacity(entry.max_output_tokens);
@@ -278,10 +285,7 @@ export function bootstrapEnvironmentDefaults(
     created_at: now,
     updated_at: now,
   });
-  const settings = registry.settings;
-  settings.provider_id = ENV_BOOTSTRAP_PROVIDER_ID;
   settings.active_model_id = ENV_BOOTSTRAP_MODEL_ID;
-  settings.base_url = baseUrl;
   settings.model_name = modelId;
   settings.context_window = contextWindow;
   // Same derivation order as the active-model path: suggested, then max
