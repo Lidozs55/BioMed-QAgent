@@ -14,6 +14,8 @@ export interface FamilyAssemblyInput {
   integrationResult: OperationResultManifest;
   integrationResults?: Readonly<Record<string, OperationResultManifest>>;
   registeredAssetIds: readonly string[];
+  /** Parsed row values per table; required by assemblers with row-level gates. */
+  tableRows?: Readonly<Record<string, readonly Record<string, unknown>[]>>;
   provenanceResults?: readonly OperationResultManifest[];
   confidenceResults?: readonly OperationResultManifest[];
   auditResults?: readonly OperationResultManifest[];

@@ -4,6 +4,7 @@ import { createTargetEvidenceRegisteredTableRegistry } from "../../families/targ
 import { createVariantEvidenceRegisteredTableRegistry } from "../../families/variant-evidence/index.js";
 import { createProteinStructureRegisteredTableRegistry } from "../../families/protein-structure/index.js";
 import { createBioactivityRegisteredTableRegistry } from "../../families/bioactivity-measurement/index.js";
+import { createChartEvidenceRegisteredTableRegistry } from "../../families/bioactivity-measurement/chart-evidence/index.js";
 import { createGutMicrobiomeRegisteredTableRegistry } from "../../families/gut-microbiome/index.js";
 import { createInheritedDiseaseEvidenceRegisteredTableRegistry } from "../../families/inherited-disease-evidence/index.js";
 
@@ -15,6 +16,7 @@ export function createDefaultRegisteredTableRegistry(): RegisteredTableRegistry 
     createVariantEvidenceRegisteredTableRegistry(),
     createProteinStructureRegisteredTableRegistry(),
     createBioactivityRegisteredTableRegistry(),
+    createChartEvidenceRegisteredTableRegistry(),
     createGutMicrobiomeRegisteredTableRegistry(),
     createInheritedDiseaseEvidenceRegisteredTableRegistry(),
   ]) {

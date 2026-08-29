@@ -53,6 +53,15 @@ import {
 } from "../families/bioactivity-measurement/index.js";
 import { transformBioCLiteratureEvidence } from "../families/literature-evidence/provider.js";
 import { expandTargetEvidenceJsonCarriers } from "../families/target-evidence/provider-json.js";
+import {
+  CHART_PAPERS_TABLE_ID,
+  CHART_POINTS_TABLE_ID,
+  CHART_SERIES_TABLE_ID,
+  CHART_SOURCES_TABLE_ID,
+  chartEvidenceValidationPolicy,
+  evaluateChartEvidencePublication,
+  type ChartEvidenceRows,
+} from "../families/bioactivity-measurement/chart-evidence/index.js";
 const IMPLEMENTATION_DIGEST = createHash("sha256")
   .update("registered_multitable.runtime.v1")
   .digest("hex");
@@ -64,6 +73,7 @@ function csvCell(value: unknown): string {
 
 class CanonicalCsvSink implements RegisteredTableSink {
   readonly referencedSourceAssetIds = new Set<string>();
+  readonly rows: RegisteredTableRow[] = [];
   result: RegisteredTableAdapterResult | null = null;
 
   constructor(readonly filePath: string, readonly fields: readonly string[]) {
@@ -72,6 +82,7 @@ class CanonicalCsvSink implements RegisteredTableSink {
   }
 
   writeRow(row: RegisteredTableRow): void {
+    this.rows.push(row);
     const declaredAssetId = row.values.source_asset_id;
     const locator = row.values.source_locator;
     if (typeof declaredAssetId === "string") {
@@ -433,6 +444,7 @@ export async function executeRegisteredMultiTableBuild(
   const assetRegistry = new SourceAssetRegistry(input.taskId, input.taskRoot);
   const parserRegistry = createDefaultRegisteredTableRegistry();
   const tableResults: Record<string, OperationResultManifest> = {};
+  const tableRows: Record<string, Record<string, unknown>[]> = {};
   const audits: RegisteredTableAudit[] = [];
   const sourceReceipts = new Map<string, Awaited<ReturnType<SourceAssetRegistry["register"]>>>();
   let assessIdentityArtifacts: ((artifacts: readonly ProductArtifactFact[]) => ProductAssessment) | null = null;
@@ -601,6 +613,9 @@ export async function executeRegisteredMultiTableBuild(
       assetIds: [...new Set(assetIds)].sort(),
       allowEmptyTables: family.id === "protein_structure" ? ["ligands"] : [],
     }));
+    for (const [tableId, providerTableRows] of Object.entries(rows)) {
+      tableRows[tableId] = providerTableRows.map((row) => ({ ...(row as Record<string, unknown>) }));
+    }
     if (assessIdentityArtifacts !== null) {
       const compoundResult = tableResults.compounds;
       const crosswalkResult = tableResults.compound_crosswalks;
@@ -646,6 +661,7 @@ export async function executeRegisteredMultiTableBuild(
       parser_version: registration.parser.parser_version,
     }, resolved, sink);
     audits.push(parsed.audit);
+    tableRows[source.table_id] = sink.rows.map((row) => ({ ...row.values }));
     const rowAssetIds = new Set<string>([assetId]);
     for (const declaredAssetId of sink.referencedSourceAssetIds) {
       const carrier = await assetRegistry.resolve(declaredAssetId);
@@ -670,6 +686,40 @@ export async function executeRegisteredMultiTableBuild(
   const primaryResult = Object.values(tableResults).find((result) => result.output_summary.schema_ref === primarySchema.schema_id);
   if (primaryResult === undefined) throw new Error("registered multi-table build did not produce its primary schema");
   const registeredAssets = [...sourceReceipts.keys()].sort();
+  if (tableResults[CHART_SERIES_TABLE_ID] !== undefined) {
+    const missingChartTables = [
+      CHART_POINTS_TABLE_ID,
+      CHART_PAPERS_TABLE_ID,
+      CHART_SOURCES_TABLE_ID,
+    ].filter((tableId) => tableResults[tableId] === undefined);
+    if (missingChartTables.length > 0) {
+      throw new Error(`chart evidence build requires all chart tables; missing: ${missingChartTables.join(", ")}`);
+    }
+    const chartRows = {
+      chart_series: tableRows[CHART_SERIES_TABLE_ID] ?? [],
+      chart_points: tableRows[CHART_POINTS_TABLE_ID] ?? [],
+      papers: tableRows[CHART_PAPERS_TABLE_ID] ?? [],
+      sources: tableRows[CHART_SOURCES_TABLE_ID] ?? [],
+    } as unknown as ChartEvidenceRows;
+    const activityIds = new Set(
+      (tableRows.activities ?? []).flatMap((row) =>
+        typeof row.activity_id === "string" ? [row.activity_id] : []),
+    );
+    const chartGate = evaluateChartEvidencePublication(chartRows, activityIds);
+    if (!chartGate.publishable) {
+      const chartCheck = {
+        check_id: "chart_evidence_gate",
+        scope: "chart_evidence",
+        passed: false,
+        detail: chartGate.checks.map((item) => item.detail).join("; "),
+      };
+      await writeFile(path.join(outputDir, "validation_report.json"), `${JSON.stringify({
+        profile_ref: input.spec.validation_profile_ref,
+        checks: [chartCheck],
+      }, null, 2)}\n`, "utf8");
+      throw new Error(`registered multi-table validation failed: ${chartCheck.scope}:${chartCheck.check_id}: ${chartCheck.detail}`);
+    }
+  }
   const candidate = createDefaultFamilyAssemblerRegistry().createCapability(family.id).assemble({
     taskId: input.taskId,
     runId,
@@ -679,6 +729,7 @@ export async function executeRegisteredMultiTableBuild(
     schema: primarySchema,
     integrationResult: primaryResult,
     integrationResults: tableResults,
+    tableRows,
     registeredAssetIds: registeredAssets,
   });
 
@@ -711,7 +762,9 @@ export async function executeRegisteredMultiTableBuild(
     forbidden_roots: input.forbiddenRoots === undefined || input.forbiddenRoots.length === 0
       ? [defaultForbiddenRoot]
       : [...input.forbiddenRoots],
-    policy: family.multitable_validation_policy ?? { token_preservation_rules: [], profile_relation_missing_policies: {} },
+    policy: tableResults[CHART_SERIES_TABLE_ID] !== undefined
+      ? chartEvidenceValidationPolicy()
+      : family.multitable_validation_policy ?? { token_preservation_rules: [], profile_relation_missing_policies: {} },
   });
   const auditPath = path.join(outputDir, "registered_adapter_audit.json");
   await writeFile(auditPath, `${JSON.stringify(audits, null, 2)}\n`, "utf8");

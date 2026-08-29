@@ -118,8 +118,18 @@ export function assembleBioactivityChartEvidenceCandidate(
   const activityIds = new Set(input.bioactivityRows.activities.map((row) => row.activity_id));
   assertChartEvidenceRows(input.chartRows, activityIds);
 
+  // The base bioactivity closure may be a strict subset of the combined
+  // registered asset closure (chart carriers reference separate figure and
+  // upstream assets), so the base candidate is validated against its own
+  // exact closure while the combined candidate keeps the full closure.
+  const baseAssetIds = [
+    ...new Set(input.bioactivity.tables.flatMap((table) =>
+      table.result.dependency_closure.input_asset_ids)),
+  ].sort();
+
   const base = assembleBioactivityCandidate({
     ...input.bioactivity,
+    registeredAssetIds: baseAssetIds,
     rows: input.bioactivityRows,
   });
   const byId = new Map<ChartEvidenceTableAssemblyInput["tableId"], ChartEvidenceTableAssemblyInput>();
