@@ -182,6 +182,40 @@ describe("dynamic family prepare/submit preflight", () => {
     expect(called).toBe(true);
   });
 
+  it("returns the expected family, complete tables, scaffold, and reprepare action on rejection", async () => {
+    const prepare = createPrepareDynamicFamilyPublicationTool({
+      prepare: async () => { throw new Error("must not be called"); },
+    });
+    const result = await prepare.execute({
+      family_spec: {
+        assessment_policy_ref: "literature_experiment_chart.release.v1",
+      },
+    });
+    expect(result.isError).toBe(true);
+    expect(result.details).toMatchObject({
+      ok: false,
+      error: {
+        code: "dynamic_preflight_rejected",
+        recovery: {
+          retryable: false,
+          unchanged_retry_forbidden: true,
+          next_action: "modify_submission_from_scaffold_and_reprepare",
+          expected_family: "literature_experiment_chart",
+          scaffold: {
+            projection: { projection_id: "literature_experiment_chart.six_table.v1" },
+          },
+        },
+      },
+    });
+    const recovery = (result.details as {
+      error: { recovery: { expected_tables: Array<{ table_id: string }> } };
+    }).error.recovery;
+    expect(recovery.expected_tables.map((table) => table.table_id)).toEqual([
+      "activity_value_records", "paper_records", "experiment_records",
+      "chart_series", "chart_points", "supplementary_asset_records",
+    ]);
+  });
+
   it("prepares facts without acquisition or prohibited result objects", async () => {
     let planned = 0;
     const submission = await parseDynamicFamilyPublicationSubmission(await rawSubmission());

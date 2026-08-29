@@ -5,6 +5,10 @@ import {
 } from "../../dataset/acquisition/provider-catalog.js";
 import { createDefaultDatasetFamilyRegistry } from "../../dataset/families/index.js";
 import { listCoreProductTopologyRequirements } from "../../dataset/dynamic-family/product-requirement-registry.js";
+import {
+  buildCoreProfilePrepareSubmission,
+  coreProductProfileScaffold,
+} from "../../dataset/dynamic-family/profile-scaffold.js";
 import type { BioMedAgentTool } from "../contracts.js";
 
 type DirectDynamicProvider = {
@@ -93,12 +97,13 @@ export function datasetRouteCapabilities() {
       route_status: "task_scoped_family_spec",
       use_when:
         "No static entry expresses the required semantic topology, but every input can close through a direct binding below or a prior task-owned Core acquisition asset.",
-      next_tools: ["prepare_dynamic_family_publication", "submit_dynamic_family_publication"],
+      next_tools: ["scaffold_dataset_profile", "prepare_dynamic_family_publication", "submit_dynamic_family_publication"],
       direct_bindings: directBindings,
       product_requirement_profiles: listCoreProductTopologyRequirements().map((requirements) => ({
         profile_ref: requirements.profile_ref,
         dataset_family: requirements.dataset_family,
         route_status: "core_owned_topology_only" as const,
+        next_tool: "scaffold_dataset_profile" as const,
         tables: requirements.tables,
         relations: requirements.relations,
         blocker:
@@ -113,6 +118,106 @@ export function datasetRouteCapabilities() {
       "Choose one route per family and row granularity. Do not send a task-scoped Dynamic FamilySpec to the static validator.",
     ],
   } as const;
+}
+
+export function createDatasetProfileScaffoldTool(): BioMedAgentTool {
+  return {
+    name: "scaffold_dataset_profile",
+    label: "Scaffold Dataset Profile",
+    description:
+      "Generate the complete Core-owned FamilySpec, Projection, table definitions, relations, and transform output closure for one profile returned by inspect_dataset_execution_routes. With requirement/source/extraction facts, also returns the complete prepare submission; the Agent never authors profile topology, policy refs, or proposal refs. Read-only and side-effect-free.",
+    parameters: {
+      type: "object",
+      properties: {
+        profile_ref: { type: "string", minLength: 1 },
+        requirement_id: { type: "string", pattern: "^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,255}$" },
+        source_bindings: {
+          type: "array",
+          minItems: 1,
+          items: {
+            type: "object",
+            properties: {
+              binding_id: { type: "string" },
+              source: { type: "string" },
+              input_requirement_ref: { type: "string" },
+              parameters: { type: "object" },
+            },
+            required: ["binding_id", "source", "input_requirement_ref", "parameters"],
+            additionalProperties: false,
+          },
+        },
+        registered_sources: { type: "object", additionalProperties: { type: "string", pattern: "^asset_[0-9a-f]{64}$" } },
+        acquisition_requests: { type: "object", additionalProperties: { type: "object" } },
+        transform_source: { type: "string", minLength: 1 },
+        transform_input_roles: {
+          type: "array",
+          minItems: 1,
+          items: {
+            type: "object",
+            properties: {
+              role: { type: "string" },
+              media_type: { type: "string" },
+              constraint_ref: { anyOf: [{ type: "string" }, { type: "null" }] },
+            },
+            required: ["role", "media_type", "constraint_ref"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["profile_ref"],
+      additionalProperties: false,
+    },
+    async execute(value) {
+      try {
+        const profileRef = (value as { profile_ref?: unknown }).profile_ref;
+        if (typeof profileRef !== "string" || profileRef.trim() !== profileRef || profileRef === "") {
+          throw new TypeError("profile_ref must be a non-empty normalized string");
+        }
+        const scaffold = coreProductProfileScaffold(profileRef);
+        const record = value as Record<string, unknown>;
+        const submissionFields = [
+          "requirement_id", "source_bindings", "registered_sources",
+          "acquisition_requests", "transform_source", "transform_input_roles",
+        ] as const;
+        const provided = submissionFields.filter((field) => record[field] !== undefined);
+        if (provided.length !== 0 && provided.length !== submissionFields.length) {
+          throw new TypeError(`profile submission scaffold requires all fields: ${submissionFields.join(", ")}`);
+        }
+        const prepareSubmission = provided.length === 0
+          ? null
+          : buildCoreProfilePrepareSubmission({
+              profileRef,
+              requirementId: record.requirement_id as string,
+              sourceBindings: record.source_bindings as Parameters<typeof buildCoreProfilePrepareSubmission>[0]["sourceBindings"],
+              registeredSources: record.registered_sources as Parameters<typeof buildCoreProfilePrepareSubmission>[0]["registeredSources"],
+              acquisitionRequests: record.acquisition_requests as Parameters<typeof buildCoreProfilePrepareSubmission>[0]["acquisitionRequests"],
+              transformSource: record.transform_source as string,
+              transformInputRoles: record.transform_input_roles as Parameters<typeof buildCoreProfilePrepareSubmission>[0]["transformInputRoles"],
+            });
+        const details = {
+          ok: true,
+          status: "scaffolded",
+          scaffold,
+          prepare_submission: prepareSubmission,
+          next_action: prepareSubmission === null
+            ? "supply_source_and_extraction_facts_to_scaffold"
+            : "prepare_generated_submission",
+        };
+        return { content: JSON.stringify(details), details };
+      } catch (error) {
+        const details = {
+          ok: false,
+          error: {
+            code: "profile_scaffold_rejected",
+            message: error instanceof Error ? error.message : String(error),
+            retryable: false,
+            available_profiles: listCoreProductTopologyRequirements().map((item) => item.profile_ref),
+          },
+        };
+        return { content: JSON.stringify(details), details, isError: true };
+      }
+    },
+  };
 }
 
 export function createDatasetRoutePreflightTool(): BioMedAgentTool {

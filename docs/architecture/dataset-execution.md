@@ -49,12 +49,19 @@
 当前所有 user-selectable builtin database 都有 Core provider，并可复用于 task-scope
 Dynamic Family；dbSNP、MGnify、openFDA 和 GWAS Catalog association 也有受控官方 API
 provider。Dynamic transform 接受 UTF-8 与受 `temp_bytes` 上限约束的 gzip-compressed UTF-8，
-仍按原始 carrier SHA-256/receipt/provenance 建立权威输入闭包。ZIP/XLSX 等多附件 binary
-archive 只有在 Core 确定性选择附件、sheet 并提交可验证 extraction result 后才能进入
-Dynamic schema；仅下载并注册 archive 不等于可消费的 Dynamic input。
+也接受已通过 Core 派生输入 registry 验证的 UTF-8 evidence/parser 资产；每次解析后的输入
+递归闭合父 member、父 ZIP 与对应 OperationResult。ZIP/XLSX/PDF 不能直接进入 Dynamic
+schema：官方 archive 先由 Core 获取，bounded member extractor 记录父 ZIP/member hash，
+CSV/TSV、XLSX sheet 与 PDF table 再由固定 parser registry 生成 UTF-8 derived assets。
+仅下载、workspace 解包或浏览器暂存均不构成可消费输入。
 
 Agent 在数据获取前通过无副作用的 `inspect_dataset_execution_routes` 查看该能力清单的当前
-投影。输出严格区分 static exact match、Dynamic 可直接绑定的 UTF-8/gzip UTF-8 provider，
+投影。对于动态产品，随后调用 `scaffold_dataset_profile`；Core 根据 profile 生成完整
+FamilySpec、Projection、表定义、关系与输出 closure，并可在调用方只提交来源绑定、Core
+asset/provider 绑定、transform 输入角色与抽取实现时生成完整 prepare submission。Agent 不再
+手写 profile topology。prepare 拒绝会返回 expected family、完整表清单、可用 profile 与
+scaffold，标记 unchanged retry forbidden；修改来源/抽取事实后必须重新 scaffold/prepare。
+输出严格区分 static exact match、Dynamic 可直接绑定的 UTF-8/gzip UTF-8 provider，
 以及 acquisition-only binary carrier；provider 已接线只证明可信 acquisition/输入解码，
 不证明 FamilySpec/Projection/transform/源站可达性或 Publication closure。具体 Dynamic
 提交仍由 `acquisition_requests` schema 和 `prepare_dynamic_family_publication` receipt 校验。

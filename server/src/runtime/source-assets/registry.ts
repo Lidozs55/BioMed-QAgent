@@ -4,10 +4,16 @@ import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
 import type {
+  CoreDerivedAssetProvenance,
+  CoreDerivedAssetOperationKind,
+  JsonValue,
+  OperationResultManifest,
   RegisteredSourceAssetRole,
   SourceAssetRegistrationReceipt,
 } from "@biomed/contracts";
+import { parseCoreDerivedAssetProvenance } from "@biomed/contracts";
 
+import { parseOperationResultManifest } from "../../dataset/contracts/operation-result.js";
 import {
   parseRegisteredSourceAssetRef,
   parseSourceAssetRegistrationReceipt,
@@ -19,6 +25,8 @@ import { requireSafeId } from "../safe-id.js";
 
 const REGISTRY_FILE = "state/source-asset-registrations.json";
 const CORE_ACQUISITION_FILE = "state/core-acquisition-provenance.json";
+const DERIVED_ASSET_FILE = "state/core-derived-asset-provenance.json";
+const DERIVED_OPERATION_RESULT_DIR = "state/derived-operation-results";
 const DIGEST = /^[0-9a-f]{64}$/;
 const PROVIDER_ID = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/;
 const ROLES = new Set<RegisteredSourceAssetRole>(["source", "mapping", "metadata", "carrier"]);
@@ -30,6 +38,16 @@ export interface RegisterSourceAssetInput {
   relativePath: string;
   role?: RegisteredSourceAssetRole;
   mediaType?: string;
+}
+
+export interface RegisterDerivedSourceAssetInput extends RegisterSourceAssetInput {
+  readonly parentAssetIds: readonly string[];
+  readonly operationKind: CoreDerivedAssetOperationKind;
+  readonly operationResultId: string;
+  readonly implementationId: string;
+  readonly implementationVersion: string;
+  readonly parametersDigest: string;
+  readonly evidence: JsonValue;
 }
 
 export interface CoreAcquisitionProvenanceInput {
@@ -56,6 +74,11 @@ export interface CoreAcquisitionProvenance extends CoreAcquisitionProvenanceInpu
 
 export interface CoreResolvedAcquiredAsset extends CoreResolvedRegisteredAsset {
   readonly acquisition_provenance: CoreAcquisitionProvenance;
+}
+
+export interface CoreResolvedFormalInput extends CoreResolvedRegisteredAsset {
+  readonly acquisition_provenance: CoreAcquisitionProvenance | null;
+  readonly derived_provenance: CoreDerivedAssetProvenance | null;
 }
 
 export interface SourceAssetRegistryOptions {
@@ -108,6 +131,7 @@ export class SourceAssetRegistry {
   private readonly onTelemetry: ((event: TelemetryEvent, relativePath: string) => void) | null;
   private readonly registrations = new Map<string, SourceAssetRegistrationReceipt>();
   private readonly coreAcquisitions = new Map<string, CoreAcquisitionProvenance>();
+  private readonly derivedAssets = new Map<string, CoreDerivedAssetProvenance>();
   private loaded = false;
 
   constructor(
@@ -152,6 +176,21 @@ export class SourceAssetRegistry {
         this.coreAcquisitions.set(key, provenance);
       }
     }
+    const derivedRecords = await readJsonFileOrNull<unknown>(path.join(this.root, DERIVED_ASSET_FILE));
+    if (derivedRecords !== null) {
+      if (!Array.isArray(derivedRecords)) throw new TypeError("derived asset provenance must be an array");
+      for (const value of derivedRecords) {
+        const provenance = parseCoreDerivedAssetProvenance(value);
+        if (provenance.task_id !== this.taskId) {
+          throw new TypeError("derived asset provenance belongs to another task");
+        }
+        const existing = this.derivedAssets.get(provenance.asset_id);
+        if (existing !== undefined && JSON.stringify(existing) !== JSON.stringify(provenance)) {
+          throw new Error("derived asset provenance contains a conflicting asset identity");
+        }
+        this.derivedAssets.set(provenance.asset_id, provenance);
+      }
+    }
     this.loaded = true;
   }
 
@@ -161,6 +200,10 @@ export class SourceAssetRegistry {
 
   private async persistCoreAcquisitions(): Promise<void> {
     await writeJsonAtomic(path.join(this.root, CORE_ACQUISITION_FILE), [...this.coreAcquisitions.values()]);
+  }
+
+  private async persistDerivedAssets(): Promise<void> {
+    await writeJsonAtomic(path.join(this.root, DERIVED_ASSET_FILE), [...this.derivedAssets.values()]);
   }
 
   async register(input: RegisterSourceAssetInput): Promise<SourceAssetRegistrationReceipt> {
@@ -207,6 +250,193 @@ export class SourceAssetRegistry {
     this.registrations.set(key, receipt);
     await this.persist();
     return cloneReceipt(receipt);
+  }
+
+  async registerDerived(input: RegisterDerivedSourceAssetInput): Promise<{
+    receipt: SourceAssetRegistrationReceipt;
+    provenance: CoreDerivedAssetProvenance;
+  }> {
+    await this.load();
+    if (input.parentAssetIds.length === 0 || new Set(input.parentAssetIds).size !== input.parentAssetIds.length) {
+      throw new TypeError("derived source asset requires unique parent asset IDs");
+    }
+    for (const parentAssetId of input.parentAssetIds) {
+      const parent = this.registrations.get(registrationKey(parentAssetId, "carrier"))
+        ?? this.registrations.get(registrationKey(parentAssetId, "source"))
+        ?? this.registrations.get(registrationKey(parentAssetId, "mapping"))
+        ?? this.registrations.get(registrationKey(parentAssetId, "metadata"));
+      if (parent === undefined) throw new Error(`derived source asset parent '${parentAssetId}' is not registered`);
+      const formalParent = this.derivedAssets.get(parentAssetId);
+      if (formalParent !== undefined) {
+        await this.verifyCommittedDerivedAsset(formalParent, parent);
+      } else if (![...this.coreAcquisitions.values()].some((item) => item.asset_id === parentAssetId)) {
+        throw new Error(`derived source asset parent '${parentAssetId}' has no Core provenance`);
+      }
+      await this.checkedFile(parent);
+    }
+    const receipt = await this.register(input);
+    const existing = this.derivedAssets.get(receipt.asset_ref.asset_id);
+    const provenance = parseCoreDerivedAssetProvenance({
+      schema_version: "1.0",
+      task_id: this.taskId,
+      asset_id: receipt.asset_ref.asset_id,
+      parent_asset_ids: [...input.parentAssetIds],
+      operation_kind: input.operationKind,
+      operation_result_id: input.operationResultId,
+      implementation_id: input.implementationId,
+      implementation_version: input.implementationVersion,
+      parameters_digest: input.parametersDigest,
+      output_digest: receipt.sha256,
+      evidence: input.evidence,
+      created_at: existing?.created_at ?? this.now().toISOString(),
+    });
+    if (existing !== undefined && JSON.stringify(existing) !== JSON.stringify(provenance)) {
+      throw new Error("derived source asset has conflicting Core provenance");
+    }
+    this.derivedAssets.set(provenance.asset_id, provenance);
+    await this.persistDerivedAssets();
+    return { receipt, provenance: structuredClone(provenance) };
+  }
+
+  async resolveDerivedProvenance(assetId: string): Promise<CoreDerivedAssetProvenance> {
+    await this.load();
+    const provenance = this.derivedAssets.get(assetId);
+    if (provenance === undefined) throw new Error("derived source asset provenance was not found");
+    return structuredClone(provenance);
+  }
+
+  private async verifyCommittedDerivedAsset(
+    provenance: CoreDerivedAssetProvenance,
+    receipt: SourceAssetRegistrationReceipt,
+  ): Promise<void> {
+    const value = await readJsonFileOrNull<unknown>(path.join(
+      this.root,
+      DERIVED_OPERATION_RESULT_DIR,
+      `${provenance.operation_result_id}.json`,
+    ));
+    if (value === null) throw new Error("derived formal input has no committed OperationResult");
+    const result = parseOperationResultManifest(value, this.taskId);
+    if (result.status !== "succeeded" || result.commit.state !== "committed") {
+      throw new Error("derived formal input OperationResult did not succeed and commit");
+    }
+    if (!provenance.parent_asset_ids.every((assetId) =>
+      result.dependency_closure.input_asset_ids.includes(assetId))) {
+      throw new Error("derived formal input OperationResult does not close its parent assets");
+    }
+    const outputs = result.output_files.filter((output) =>
+      output.relative_path === receipt.relative_path
+      && output.sha256 === receipt.sha256
+      && output.size_bytes === receipt.size_bytes,
+    );
+    if (outputs.length !== 1 || provenance.output_digest !== receipt.sha256) {
+      throw new Error("derived formal input does not match its committed OperationResult output");
+    }
+  }
+
+  async resolveFormalProvenanceClosure(
+    assetId: string,
+  ): Promise<readonly (CoreDerivedAssetProvenance | CoreAcquisitionProvenance)[]> {
+    await this.load();
+    const result: (CoreDerivedAssetProvenance | CoreAcquisitionProvenance)[] = [];
+    const visited = new Set<string>();
+    const visit = async (currentAssetId: string): Promise<void> => {
+      if (visited.has(currentAssetId)) return;
+      visited.add(currentAssetId);
+      const derived = this.derivedAssets.get(currentAssetId);
+      if (derived !== undefined) {
+        for (const parentAssetId of derived.parent_asset_ids) await visit(parentAssetId);
+        const receipt = this.registrations.get(registrationKey(currentAssetId, "source"))
+          ?? this.registrations.get(registrationKey(currentAssetId, "carrier"))
+          ?? this.registrations.get(registrationKey(currentAssetId, "mapping"))
+          ?? this.registrations.get(registrationKey(currentAssetId, "metadata"));
+        if (receipt === undefined) throw new Error("formal provenance references an unregistered asset");
+        await this.verifyCommittedDerivedAsset(derived, receipt);
+        result.push(structuredClone(derived));
+        return;
+      }
+      const receipt = this.registrations.get(registrationKey(currentAssetId, "carrier"))
+        ?? this.registrations.get(registrationKey(currentAssetId, "source"))
+        ?? this.registrations.get(registrationKey(currentAssetId, "mapping"))
+        ?? this.registrations.get(registrationKey(currentAssetId, "metadata"));
+      if (receipt === undefined) throw new Error("formal provenance references an unregistered parent asset");
+      const acquisition = [...this.coreAcquisitions.values()].filter((item) =>
+        item.asset_id === currentAssetId && item.role === receipt.asset_ref.role,
+      );
+      if (acquisition.length !== 1) throw new Error("formal provenance parent lacks one Core acquisition receipt");
+      result.push(structuredClone(acquisition[0]!));
+    };
+    await visit(assetId);
+    if (result.length === 0) throw new Error("formal provenance was not found");
+    return Object.freeze(result);
+  }
+
+  async resolveDerivedProvenanceClosure(assetId: string): Promise<readonly CoreDerivedAssetProvenance[]> {
+    await this.load();
+    const result: CoreDerivedAssetProvenance[] = [];
+    const visited = new Set<string>();
+    const visit = async (currentAssetId: string): Promise<void> => {
+      if (visited.has(currentAssetId)) return;
+      visited.add(currentAssetId);
+      const provenance = this.derivedAssets.get(currentAssetId);
+      if (provenance === undefined) return;
+      for (const parentAssetId of provenance.parent_asset_ids) await visit(parentAssetId);
+      const receipt = this.registrations.get(registrationKey(currentAssetId, "source"))
+        ?? this.registrations.get(registrationKey(currentAssetId, "carrier"))
+        ?? this.registrations.get(registrationKey(currentAssetId, "mapping"))
+        ?? this.registrations.get(registrationKey(currentAssetId, "metadata"));
+      if (receipt === undefined) throw new Error("derived provenance references an unregistered asset");
+      await this.verifyCommittedDerivedAsset(provenance, receipt);
+      result.push(structuredClone(provenance));
+    };
+    await visit(assetId);
+    if (result.length === 0) throw new Error("derived source asset provenance was not found");
+    return Object.freeze(result);
+  }
+
+  async recordDerivedOperationResult(value: OperationResultManifest): Promise<OperationResultManifest> {
+    await this.load();
+    const result = parseOperationResultManifest(value, this.taskId);
+    for (const upstreamId of result.dependency_closure.upstream_result_manifest_ids) {
+      const upstream = await readJsonFileOrNull<unknown>(
+        path.join(this.root, DERIVED_OPERATION_RESULT_DIR, `${upstreamId}.json`),
+      );
+      if (upstream === null) throw new Error("derived OperationResult has a missing upstream result");
+      parseOperationResultManifest(upstream, this.taskId);
+    }
+    for (const output of result.output_files) {
+      const receipt = [...this.registrations.values()].find((item) =>
+        item.relative_path === output.relative_path
+        && item.sha256 === output.sha256
+        && item.size_bytes === output.size_bytes,
+      );
+      if (receipt === undefined) {
+        throw new Error("derived OperationResult output is not a registered task asset");
+      }
+      const provenance = this.derivedAssets.get(receipt.asset_ref.asset_id);
+      if (provenance?.operation_result_id !== result.result_manifest_id) {
+        throw new Error("derived OperationResult output provenance does not bind the result identity");
+      }
+    }
+    const file = path.join(this.root, DERIVED_OPERATION_RESULT_DIR, `${result.result_manifest_id}.json`);
+    const existing = await readJsonFileOrNull<unknown>(file);
+    if (existing !== null) {
+      const parsed = parseOperationResultManifest(existing, this.taskId);
+      if (JSON.stringify(parsed) !== JSON.stringify(result)) {
+        throw new Error("derived OperationResult identity has conflicting content");
+      }
+      return structuredClone(parsed);
+    }
+    await writeJsonAtomic(file, result);
+    return structuredClone(result);
+  }
+
+  async resolveDerivedOperationResult(resultManifestId: string): Promise<OperationResultManifest> {
+    requireSafeId(resultManifestId, "resultManifestId");
+    const value = await readJsonFileOrNull<unknown>(
+      path.join(this.root, DERIVED_OPERATION_RESULT_DIR, `${resultManifestId}.json`),
+    );
+    if (value === null) throw new Error("derived OperationResult was not found");
+    return parseOperationResultManifest(value, this.taskId);
   }
 
   recordLegacyPathCompatibilityUse(relativePath: string): void {
@@ -324,6 +554,46 @@ export class SourceAssetRegistry {
       registration_receipt: cloneReceipt(receipt),
       content: this.verifiedStream(file, receipt),
       acquisition_provenance: structuredClone(provenance),
+    };
+  }
+
+  async resolveFormalInput(
+    assetId: string,
+    requestIdentityDigest?: string,
+  ): Promise<CoreResolvedFormalInput> {
+    await this.load();
+    const derived = this.derivedAssets.get(assetId);
+    if (derived === undefined) {
+      const acquired = await this.resolveCoreAcquired(assetId, requestIdentityDigest);
+      return {
+        registration_receipt: acquired.registration_receipt,
+        content: acquired.content,
+        acquisition_provenance: acquired.acquisition_provenance,
+        derived_provenance: null,
+      };
+    }
+    if (requestIdentityDigest !== undefined) {
+      throw new TypeError("derived formal input cannot claim a provider request identity");
+    }
+    for (const parentAssetId of derived.parent_asset_ids) {
+      const parent = this.registrations.get(registrationKey(parentAssetId, "carrier"))
+        ?? this.registrations.get(registrationKey(parentAssetId, "source"));
+      if (parent === undefined) throw new Error("derived formal input has an unregistered parent");
+      await this.checkedFile(parent);
+    }
+    const closure = await this.resolveDerivedProvenanceClosure(assetId);
+    const resolved = await this.resolveAny(assetId);
+    const immediate = closure.at(-1);
+    if (immediate === undefined || immediate.asset_id !== assetId) {
+      throw new Error("derived formal input closure does not end at the requested asset");
+    }
+    if (resolved.registration_receipt.sha256 !== derived.output_digest) {
+      throw new Error("derived formal input provenance does not match registered bytes");
+    }
+    return {
+      ...resolved,
+      acquisition_provenance: null,
+      derived_provenance: structuredClone(derived),
     };
   }
 

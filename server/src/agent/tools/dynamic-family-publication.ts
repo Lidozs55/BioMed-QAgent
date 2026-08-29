@@ -15,6 +15,10 @@ import {
 } from "@biomed/contracts";
 
 import { canonicalDigest } from "../../dataset/adapters/identity.js";
+import {
+  listCoreProductTopologyRequirements,
+} from "../../dataset/dynamic-family/product-requirement-registry.js";
+import { coreProductProfileScaffold } from "../../dataset/dynamic-family/profile-scaffold.js";
 import { DYNAMIC_ACQUISITION_PROVIDER_DESCRIPTORS } from "../../dataset/acquisition/provider-catalog.js";
 import type {
   BioMedAgentTool,
@@ -91,6 +95,57 @@ function structuredError(error: unknown): Record<string, unknown> {
   return body;
 }
 
+function preflightRecovery(value: unknown, error: unknown): Record<string, unknown> {
+  let profileRef: string | null = null;
+  if (
+    value !== null
+    && typeof value === "object"
+    && !Array.isArray(value)
+    && !types.isProxy(value)
+  ) {
+    const family = Object.getOwnPropertyDescriptor(value, "family_spec")?.value;
+    if (
+      family !== null
+      && typeof family === "object"
+      && !Array.isArray(family)
+      && !types.isProxy(family)
+    ) {
+      const candidate = Object.getOwnPropertyDescriptor(
+        family,
+        "assessment_policy_ref",
+      )?.value;
+      if (typeof candidate === "string") profileRef = candidate;
+    }
+  }
+  let scaffold: ReturnType<typeof coreProductProfileScaffold> | null = null;
+  if (profileRef !== null) {
+    try {
+      scaffold = coreProductProfileScaffold(profileRef);
+    } catch {
+      scaffold = null;
+    }
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    retryable: false,
+    next_action: scaffold === null
+      ? "select_available_profile_and_scaffold"
+      : "modify_submission_from_scaffold_and_reprepare",
+    unchanged_retry_forbidden: true,
+    expected_family: scaffold?.dataset_family ?? null,
+    expected_tables: scaffold?.family_spec.table_definitions.map((table) => ({
+      table_id: table.table_id,
+      role: table.role,
+      schema_ref: table.schema_ref,
+      required: table.required,
+      allow_empty: table.allow_empty,
+    })) ?? [],
+    scaffold,
+    available_profiles: listCoreProductTopologyRequirements().map((item) => item.profile_ref),
+    rejection: message,
+  };
+}
+
 export function createDynamicFamilyPublicationTool(
   options: DynamicFamilyPublicationToolOptions,
 ): BioMedAgentTool {
@@ -125,7 +180,7 @@ export function createPrepareDynamicFamilyPublicationTool(
     name: "prepare_dynamic_family_publication",
     label: "Prepare Dynamic Family Publication",
     description:
-      "Use after inspect_dataset_execution_routes when no registered static family expresses the required topology and every input is dynamic-bindable or a prior task-owned Core asset. The FamilySpec assessment_policy_ref and exact selected table/relation closure must match one Core-owned product requirement profile returned by inspect_dataset_execution_routes; custom assessment profiles cannot publish. Do not prevalidate a dynamic FamilySpec with validate_dataset_execution. Submit semantic fields without derived digest properties. This deterministic, side-effect-free preflight derives all digest bindings, validates topology, Core product closure, and acquisition planning, and returns prepared_submission plus a task/requirement/generation-bound preflight_receipt; pass both unchanged to submit_dynamic_family_publication.",
+      "Call inspect_dataset_execution_routes, then use scaffold_dataset_profile when no registered static family expresses the required topology and every input is dynamic-bindable or a task-owned Core-derived asset. Do not prevalidate a dynamic FamilySpec with validate_dataset_execution. Pass the generated profile topology and proposal refs unchanged; only source/extraction facts are caller-owned, and prepare input must remain without derived digest properties. The FamilySpec assessment_policy_ref and exact selected table/relation closure must match the Core profile. This deterministic, side-effect-free preflight derives all digest bindings, validates topology, product closure, and acquisition planning, and returns prepared_submission plus a bound receipt. On rejection, use error.recovery.expected_family, expected_tables, and scaffold, modify facts, and prepare again; unchanged retry is forbidden.",
     parameters: dynamicFamilyPublicationParameters("prepare"),
     async execute(value, signal, context): Promise<BioMedToolResult> {
       try {
@@ -144,9 +199,16 @@ export function createPrepareDynamicFamilyPublicationTool(
         return { content: JSON.stringify(details), details };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        const recovery = preflightRecovery(value, error);
         return {
-          content: JSON.stringify({ ok: false, error: { code: "dynamic_preflight_rejected", message } }),
-          details: { ok: false, error: { code: "dynamic_preflight_rejected", message } },
+          content: JSON.stringify({
+            ok: false,
+            error: { code: "dynamic_preflight_rejected", message, recovery },
+          }),
+          details: {
+            ok: false,
+            error: { code: "dynamic_preflight_rejected", message, recovery },
+          },
           isError: true,
         };
       }
@@ -462,11 +524,11 @@ function dynamicFamilyPublicationParameters(mode: "prepare" | "submit"): Record<
       transform_metadata: transformMetadata,
       execution_proposal: buildProposal,
       registered_sources: {
-        type: "object", description: "Usually {}. Only Core-acquired asset IDs are accepted.",
+        type: "object", description: "Task-owned Core-acquired or Core-derived asset IDs only. Derived inputs must have a persisted OperationResult and complete parent closure.",
         additionalProperties: { type: "string", pattern: "^asset_[0-9a-f]{64}$" },
       },
       acquisition_requests: {
-        type: "object", description: "Preferred formal input path. Every provider listed here is runtime-wired for Dynamic Family acquisition; absence means unavailable through this route. Keys exactly match unresolved execution_proposal source binding IDs. Create one binding/request per formal carrier.",
+        type: "object", description: "Preferred for direct providers. Every provider listed here is runtime-wired for Dynamic Family acquisition; Core-derived VLM/archive/parser assets instead belong in registered_sources. Keys exactly match unresolved source binding IDs.",
         additionalProperties: acquisition,
       },
     },

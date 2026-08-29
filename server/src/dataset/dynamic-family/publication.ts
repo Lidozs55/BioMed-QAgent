@@ -4,6 +4,7 @@ import path from "node:path";
 
 import {
   parseProductAssessment,
+  type CoreDerivedAssetProvenance,
   type DatasetManifestV2,
   type HILReviewItem,
   type HILSubject,
@@ -26,6 +27,7 @@ import { computeHILEvidenceDigest } from "../contracts/hil-evidence.js";
 import { packageDigest } from "../publish/manifest.js";
 import { promotePublication, type PublishResult } from "../publish/publisher.js";
 import { validateMultiTableCandidate } from "../validation/multitable.js";
+import { validateLiteratureExperimentChartProfile } from "../families/index.js";
 import {
   PRODUCTION_B3_CONFIGURED_HEAP_BYTES,
   PRODUCTION_B3_CONFIGURED_TEMP_BYTES,
@@ -172,6 +174,7 @@ export async function publishDynamicFamily(
   const outputForRef = (ref: { result_manifest_id: string; output_file_index: number }) =>
     resultForRef(ref).output_files[ref.output_file_index];
   const validationTables = [];
+  const stagedTablePaths = new Map<string, string>();
   for (const [tableIndex, table] of candidate.tables.entries()) {
     await assertGenerationCurrent();
     const output = outputForRef(table.data_ref);
@@ -190,6 +193,7 @@ export async function publishDynamicFamily(
     if ((await sha256FileStream(destination)) !== output.sha256) {
       throw new Error(`dynamic product copy drifted for '${table.definition.table_id}'`);
     }
+    stagedTablePaths.set(table.definition.table_id, destination);
     const provenanceRef = candidate.provenance_refs[tableIndex];
     const confidenceRef = candidate.confidence_refs[tableIndex];
     if (provenanceRef === undefined || confidenceRef === undefined) {
@@ -210,6 +214,12 @@ export async function publishDynamicFamily(
       confidence_refs: [key(confidenceRef)],
     });
   }
+  await validateLiteratureExperimentChartProfile({
+    profileRef: input.productRequirements.profile_ref,
+    stagedTablePaths,
+    sourceInputProvenance: transformExecution?.sourceInputProvenance ?? [],
+    signal: input.signal,
+  });
   await assertGenerationCurrent();
   await mkdir(input.workspaceRoot, { recursive: true });
   const b3Policy = input.b3Validation?.policy ?? PRODUCTION_B3_RESOURCE_POLICY;
@@ -427,6 +437,34 @@ export async function publishDynamicFamily(
     await writeFile(assessmentPath, `${JSON.stringify(assessment, null, 2)}\n`, "utf8");
   }
 
+  const acquisitionByAsset = new Map(
+    sourceAcquisitionProvenance.map((item) => [item.asset_id, item]),
+  );
+  const derivedByAsset = new Map(
+    (transformExecution?.sourceInputProvenance ?? [])
+      .filter((item): item is CoreDerivedAssetProvenance => "operation_kind" in item)
+      .map((item) => [item.asset_id, item]),
+  );
+  const inputReceiptByAsset = new Map(
+    (transformExecution?.receipt.input_asset_receipts ?? [])
+      .map((item) => [item.asset_id, item]),
+  );
+  const provenanceSources = candidate.registered_asset_ids.map((assetId) => {
+    const acquisition = acquisitionByAsset.get(assetId);
+    const derived = derivedByAsset.get(assetId);
+    const receipt = inputReceiptByAsset.get(assetId);
+    return {
+      asset_id: assetId,
+      locator_ref:
+        acquisition?.canonical_accession
+        ?? acquisition?.provider_id
+        ?? derived?.operation_result_id
+        ?? assetId,
+      sha256: receipt?.sha256 ?? assetId.slice("asset_".length),
+      size_bytes: receipt?.size_bytes ?? null,
+    };
+  });
+
   await assertGenerationCurrent();
   await writeFile(path.join(outputDir, "provenance.json"), `${JSON.stringify({
     schema_version: "1.0",
@@ -440,14 +478,12 @@ export async function publishDynamicFamily(
       input_asset_receipts: transformExecution!.receipt.input_asset_receipts,
     } : {}),
     operation_result_manifest_ids: integratedResults.map((result) => result.result_manifest_id),
-    sources: sourceAcquisitionProvenance.map((provenance) => ({
-      asset_id: provenance.asset_id,
-      locator_ref: provenance.canonical_accession ?? provenance.provider_id,
-      sha256: null,
-      size_bytes: null,
-    })),
+    sources: provenanceSources,
     source_receipts: [],
     core_acquisition_provenance: sourceAcquisitionProvenance,
+    ...(browserExecution === null ? {
+      core_input_provenance: transformExecution!.sourceInputProvenance,
+    } : {}),
     ...(hilAcceptance === null ? {} : { hil_acceptance: hilAcceptance }),
     ...(browserExecution === null ? {} : { browser_evidence_acceptance: browserExecution.browserEvidenceAcceptance }),
   }, null, 2)}\n`, "utf8");

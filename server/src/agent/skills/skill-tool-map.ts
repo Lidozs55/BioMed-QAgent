@@ -57,7 +57,7 @@ export const SKILL_TOOL_MAP: readonly SkillToolMapping[] = Object.freeze([
     ["pubmed", "ncbi"],
     "Search PubMed/NCBI for biomedical literature and download supplementary materials from PMC open-access articles.",
     "Use for literature and supplementary discovery. Search, supplementary, PDF, and workspace bytes are preparation only; formal open-access full text uses one verified PMCID per binding through Core provider pubmed.files.v1.",
-    ["search_pubmed", "download_supplementary"],
+    ["search_pubmed", "download_supplementary", "extract_supplementary_archive"],
   ),
   mapping(
     "dbsnp",
@@ -243,13 +243,14 @@ export const SKILL_TOOL_MAP: readonly SkillToolMapping[] = Object.freeze([
     "analysis",
     [],
     "Construct a DatasetExecution through the trusted Dataset Core boundary.",
-    "For dataset-producing work, inspect routes first. Use validate then execute only for an exact static match; otherwise prepare then submit only with dynamic-bindable inputs. Acquisition-only carriers still need formal extraction. Only Publication is formal.",
+    "Inspect routes first. Use validate/execute only for an exact static match. Otherwise request the Core profile scaffold, then prepare/submit with dynamic-bindable or Core-derived inputs. Acquisition-only carriers require formal extraction. Only Publication is formal.",
     // Pi-side tool names. The legacy Python Agent registers the equivalent
     // pipeline tools as validate_dataset_execution_spec / execute_dataset_execution
     // (backend/app/pipeline/dataset_execution_tool.py); Phase 5/8 converges on
     // these Pi names.
     [
       "inspect_dataset_execution_routes",
+      "scaffold_dataset_profile",
       "validate_dataset_execution",
       "execute_dataset_execution",
       "prepare_dynamic_family_publication",

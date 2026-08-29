@@ -6,7 +6,11 @@ import { DEFAULT_RUNTIME_LIMITS, type RuntimeLimits } from "@biomed/contracts";
 import type { BioMedAgentAdapter, BioMedModelConfig } from "../agent/contracts.js";
 import { PiAgentAdapter } from "../agent/pi-adapter.js";
 import { createDatasetExecutionTools } from "../agent/tools/dataset-execution.js";
-import { createDatasetRoutePreflightTool } from "../agent/tools/dataset-route-preflight.js";
+import { createSupplementaryArchiveExtractionTool } from "../agent/tools/supplementary-archive.js";
+import {
+  createDatasetProfileScaffoldTool,
+  createDatasetRoutePreflightTool,
+} from "../agent/tools/dataset-route-preflight.js";
 import {
   createDynamicFamilyPublicationTool,
   createPrepareDynamicFamilyPublicationTool,
@@ -37,6 +41,9 @@ import {
   type PermissionPolicyStore,
 } from "../agent/permissions/index.js";
 import { createCoreAcquisitionProviders } from "../dataset/acquisition/provider-catalog.js";
+import { EXTENDED_PROVIDER_IDS } from "../dataset/acquisition/extended-providers.js";
+import { extractRegisteredZipMembers } from "../dataset/archive/zip-members.js";
+import { parseRegisteredArchiveMembers } from "../dataset/archive/member-parsers.js";
 import {
   CoreAcquisitionRegistry,
   CoreAcquisitionRuntime,
@@ -734,6 +741,7 @@ export async function createPhase3Runtime(
             relations: result.materialization.candidate.relations.map((relation) => relation.relation_id),
             artifacts: product.manifest.artifacts,
             source_acquisition_provenance: result.sourceAcquisitionProvenance,
+            source_input_provenance: result.sourceInputProvenance,
             backend: result.receipt.sandbox_backend,
             security_boundary: false,
           };
@@ -785,6 +793,40 @@ export async function createPhase3Runtime(
         },
       });
       const datasetRoutePreflightTool = createDatasetRoutePreflightTool();
+      const datasetProfileScaffoldTool = createDatasetProfileScaffoldTool();
+      const supplementaryArchiveTool = createSupplementaryArchiveExtractionTool({
+        extract: async (pmcid, signal) => {
+          const requirementId = `supplementary_${pmcid.toLowerCase()}`;
+          const acquired = await acquisitionRuntime.acquire({
+            schema_version: "1.0",
+            request_id: `request_${randomUUID()}`,
+            task_id: taskId,
+            requirement_id: requirementId,
+            binding_id: `archive_${pmcid.toLowerCase()}`,
+            mode: "builtin",
+            provider_id: EXTENDED_PROVIDER_IDS.europePmcSupplementary,
+            recipe_id: null,
+            recipe_version: null,
+            parameters: { source: "europepmc_supplementary", accession: pmcid, entities: {} },
+          }, signal);
+          if (acquired.sourceAsset === null) {
+            throw new Error(`Europe PMC did not return a supplementary ZIP for ${pmcid}`);
+          }
+          const extraction = await extractRegisteredZipMembers({
+            taskId,
+            taskRoot,
+            archiveAssetId: acquired.sourceAsset.asset_id,
+            sourceAssetRegistry,
+          });
+          const parsed = await parseRegisteredArchiveMembers({
+            taskId,
+            taskRoot,
+            sourceAssetRegistry,
+            members: extraction.members,
+          });
+          return { ...extraction, ...parsed };
+        },
+      });
       // Import tasks (user-uploaded files): restore the LLM cleaning flow —
       // inspect the uploaded files and commit the cleaned raw files into the
       // global cache under the user_import namespace.
@@ -797,6 +839,8 @@ export async function createPhase3Runtime(
         ...dynamicTools,
         ...datasetTools,
         datasetRoutePreflightTool,
+        datasetProfileScaffoldTool,
+        supplementaryArchiveTool,
         dynamicFamilyPrepareTool,
         dynamicFamilyTool,
         ...importTools,
@@ -809,6 +853,8 @@ export async function createPhase3Runtime(
           ...dynamicTools,
           ...datasetTools,
           datasetRoutePreflightTool,
+          datasetProfileScaffoldTool,
+          supplementaryArchiveTool,
           dynamicFamilyPrepareTool,
           dynamicFamilyTool,
           ...importTools,

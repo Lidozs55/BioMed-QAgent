@@ -6,6 +6,7 @@ import {
   buildTransformDescriptorDigestCanonical,
   computeImplementationDigest,
   DEFAULT_RUNTIME_LIMITS,
+  type CoreDerivedAssetProvenance,
   type DynamicFamilyPreflightReceipt,
   type InputAssetReceipt,
   type OperationResultManifest,
@@ -156,6 +157,10 @@ export interface DynamicFamilyExecutionResult extends ExecuteDynamicFamilyTransf
   /** Core-only root; callers must never expose this path to the Agent. */
   readonly trustedRoot: string;
   readonly sourceAcquisitionProvenance: readonly CoreAcquisitionProvenance[];
+  readonly sourceInputProvenance: readonly (
+    | CoreAcquisitionProvenance
+    | CoreDerivedAssetProvenance
+  )[];
 }
 
 export async function submitDynamicFamilyPublication(
@@ -194,6 +199,7 @@ export async function submitDynamicFamilyPublication(
 
   const assetReceipts: InputAssetReceipt[] = [];
   const sourceAcquisitionProvenance: CoreAcquisitionProvenance[] = [];
+  const sourceInputProvenance: (CoreAcquisitionProvenance | CoreDerivedAssetProvenance)[] = [];
   const sourceLocators: SourceLocatorV2[] = [];
   const runtimeInputs: Readonly<InProcessUnisolatedInputBytes>[] = [];
   for (const [index, binding] of bindings.entries()) {
@@ -204,13 +210,22 @@ export async function submitDynamicFamilyPublication(
       );
     }
     const assetId = input.submission.registered_sources[binding.binding_id]!;
-    const resolved = await input.sourceAssetRegistry.resolveCoreAcquired(
+    const resolved = await input.sourceAssetRegistry.resolveFormalInput(
       assetId,
       input.sourceAcquisitionRequestDigests?.[binding.binding_id],
     );
     const bytes = await collectBytes(resolved.content, 512 * 1024 * 1024);
     const registration = resolved.registration_receipt;
-    sourceAcquisitionProvenance.push(resolved.acquisition_provenance);
+    if (resolved.acquisition_provenance !== null) {
+      sourceAcquisitionProvenance.push(resolved.acquisition_provenance);
+      sourceInputProvenance.push(resolved.acquisition_provenance);
+    } else if (resolved.derived_provenance !== null) {
+      sourceInputProvenance.push(
+        ...await input.sourceAssetRegistry.resolveFormalProvenanceClosure(assetId),
+      );
+    } else {
+      throw new Error("formal dynamic input lacks Core provenance");
+    }
     const receipt = Object.freeze({
       asset_id: registration.asset_ref.asset_id,
       role: binding.input_requirement_ref,
@@ -421,6 +436,7 @@ export async function submitDynamicFamilyPublication(
     materialization,
     trustedRoot,
     sourceAcquisitionProvenance: Object.freeze(sourceAcquisitionProvenance),
+    sourceInputProvenance: Object.freeze(sourceInputProvenance),
   };
 }
 

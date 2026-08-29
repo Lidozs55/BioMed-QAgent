@@ -206,6 +206,44 @@ function assertSeries(series: ChartSeriesInput): void {
   assertProvenance(series.transform_provenance, series, `series ${series.chart_series_id} provenance`);
 }
 
+export function assertChartPointReviewClosure(input: {
+  pointId: string;
+  estimatedOrExact: string;
+  extractionConfidence: string;
+  reviewStatus: string;
+  reviewId: string | null;
+  transformProvenance: unknown;
+}): void {
+  const reviewed = input.reviewStatus === "accepted" || input.reviewStatus === "corrected";
+  if (input.estimatedOrExact === "estimated" && !reviewed) {
+    fail(`estimated point ${input.pointId} requires accepted or corrected review`);
+  }
+  if (input.extractionConfidence === "low" && !reviewed) {
+    fail(`low-confidence primary point ${input.pointId} requires review`);
+  }
+  if (reviewed && (input.reviewId === null || input.reviewId.trim() === "")) {
+    fail(`point ${input.pointId} reviewed state requires review_id`);
+  }
+  if (reviewed) {
+    if (input.transformProvenance === null || typeof input.transformProvenance !== "object" || Array.isArray(input.transformProvenance)) {
+      fail(`point ${input.pointId} reviewed state requires transform provenance`);
+    }
+    const review = (input.transformProvenance as { review?: unknown }).review;
+    if (review === null || typeof review !== "object" || Array.isArray(review)) {
+      fail(`point ${input.pointId} reviewed state requires review provenance`);
+    }
+    const record = review as { review_id?: unknown; status?: unknown; evidence_digest?: unknown };
+    if (
+      record.review_id !== input.reviewId
+      || record.status !== input.reviewStatus
+      || typeof record.evidence_digest !== "string"
+      || !SHA256.test(record.evidence_digest)
+    ) {
+      fail(`point ${input.pointId} review provenance does not match its reviewed state`);
+    }
+  }
+}
+
 function assertPoint(point: ChartPointInput, series: ChartSeriesInput): void {
   safeId(point.point_id, "point_id");
   safeId(point.chart_series_id, "chart_series_id");
@@ -229,12 +267,14 @@ function assertPoint(point: ChartPointInput, series: ChartSeriesInput): void {
     fail(`point ${point.point_id} locator does not match its chart figure`);
   }
   if (point.review_status === "rejected") fail(`point ${point.point_id} was rejected`);
-  if (point.estimated_or_exact === "estimated" && !REVIEWED.has(point.review_status)) {
-    fail(`estimated point ${point.point_id} requires accepted or corrected review`);
-  }
-  if (point.extraction_confidence === "low" && !REVIEWED.has(point.review_status)) {
-    fail(`low-confidence primary point ${point.point_id} requires review`);
-  }
+  assertChartPointReviewClosure({
+    pointId: point.point_id,
+    estimatedOrExact: point.estimated_or_exact,
+    extractionConfidence: point.extraction_confidence,
+    reviewStatus: point.review_status,
+    reviewId: point.review_id,
+    transformProvenance: point.transform_provenance,
+  });
   if (point.estimated_or_exact === "exact" &&
       (series.axis_validation_status === "unclear" || series.legend_validation_status === "unclear")) {
     fail(`exact point ${point.point_id} cannot use unclear axis or legend semantics`);

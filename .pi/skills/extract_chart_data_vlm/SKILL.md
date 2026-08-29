@@ -11,15 +11,20 @@ PNG/JPG image or PDF.
 
 ## Accepted inputs
 
-- Outputs of `capture_web_page` and `capture_page_section` (screenshots).
-- PDFs from `download_supplementary`.
-- Standalone JPG/WEBP figure images.
+- For formal evidence, pass a task-owned Core source_asset_id returned by
+  Core acquisition or `extract_supplementary_archive`.
+- source_path accepts preparation-only screenshots/PDFs and never creates a
+  formal carrier.
 
 ## Behavior
 
 - Three-tier degradation: L1 Qwen-VL → L2 pdfplumber tables → L3 caption text.
 - Raises on full failure — no silent empty-data fallback.
-- Writes chart_data.csv and chart_data_points.csv under parsed/chart_data/.
+- Writes chart_data.csv, chart_data_points.csv and a content-addressed evidence
+  manifest under parsed/chart_data/.
+- With source_asset_id, Dataset Core registers the evidence manifest and a
+  matching OperationResult. The manifest binds model/version, prompt digest,
+  page/bbox, confidence and point-level HIL facts.
 
 ## When not to use
 
@@ -29,8 +34,9 @@ PNG/JPG image or PDF.
 
 ## Constraints
 
-- Extracted data is preparation material, not a formal artifact: it may inform
-  research but never replaces the trusted Dataset Core publication path.
+- Path-based extracted data is preparation material, not a formal artifact.
+  Only the Core-registered evidence manifest returned for source_asset_id may
+  enter a profile-scaffolded formal build.
 - A literature-derived quantitative product uses the tables paper_records,
   experiment_records, primary activity_value_records, chart_series,
   chart_points, and supplementary_asset_records; do not collapse it into a

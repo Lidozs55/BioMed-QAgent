@@ -145,6 +145,8 @@ export async function createBusinessToolBundle(
   // This task/run-scoped tool is injected by phase3-composition once the
   // authoritative SourceAssetRegistry and Dataset Core context exist.
   unavailable.add("inspect_dataset_execution_routes");
+  unavailable.add("scaffold_dataset_profile");
+  unavailable.add("extract_supplementary_archive");
   unavailable.add("prepare_dynamic_family_publication");
   unavailable.add("submit_dynamic_family_publication");
 
@@ -297,6 +299,7 @@ export async function createBusinessToolBundle(
     onWarning: context.onWarning,
     hilGate: context.hilGate,
     approvalGate: context.approvalGate,
+    sourceAssetRegistry: context.sourceAssetRegistry,
   }), "extract_chart_data_vlm");
 
   // Analysis tools (P5-09): Welch/BH/correlation/clustering with scipy

@@ -37,7 +37,11 @@ output.
    Omit missing source_files when the binding has a registered Core acquisition
    provider; do not download or parse that provider again with workspace commands.
 5. When a frozen multi-table topology cannot be expressed by a registered static
-   family, use the fixed two-phase dynamic protocol: call
+   family, call `scaffold_dataset_profile` with the exact Core profile returned
+   by route inspection. Use its FamilySpec, Projection, table definitions,
+   relations, and output closure unchanged; supply only source bindings,
+   registered/Core acquisition bindings, transform input roles, and extraction
+   source. Then use the fixed two-phase dynamic protocol: call
    `prepare_dynamic_family_publication` first, then call
    `submit_dynamic_family_publication` with the returned server-bound submission
    and unchanged receipt. A fresh prepare
@@ -45,11 +49,11 @@ output.
    any committed role, binding, or acquisition-request change, FamilySpec,
    Projection, or transform fact changes. Use this protocol with:
    - one `dynamic.product_requirement_profiles` entry returned by
-     `inspect_dataset_execution_routes`. Set assessment_policy_ref to that
-     exact Core profile and close its table IDs, roles, schema refs, and
-     relation IDs exactly. An Agent-authored assessment profile, a reduced
-     projection, or provider availability alone cannot reach HIL/publication;
-     preflight rejects it before acquisition;
+     `inspect_dataset_execution_routes`. Never hand-write, rename, remove, or
+     re-role its tables and relations after `scaffold_dataset_profile`. Set
+     assessment_policy_ref to that exact Core profile. An Agent-authored
+     assessment profile, a reduced projection, or provider availability alone
+     cannot reach HIL/publication; preflight rejects it before acquisition;
    - `execution_backend="in_process_unisolated"` exactly. This backend is **not a
      sandbox, isolation mechanism, or security boundary**; never describe it as one.
    - a task/user/curated/system `FamilySpec`, selected Projection, strict
@@ -58,8 +62,11 @@ output.
    - Close every source binding exactly once with either:
      - an acquisition-requests object mapping each binding ID to a provider
        enumerated in the dynamic tool schema plus its parameters (preferred), or
-     - a registered-sources object mapping each binding ID to an asset SHA-256 ID only when that asset ID was returned by a previous fixed Core acquisition.
-     Browser/download/discovery registrations are rejected as formal carriers. Registered assets live in Core task storage, not the Agent Workspace: never use workspace search or process execution to locate or parse them. Never pass paths or response bytes.
+     - a registered-sources object mapping each binding ID to an asset SHA-256 ID returned by fixed Core acquisition, `extract_supplementary_archive`, or formal VLM evidence registration. Derived assets must carry a persisted OperationResult and complete parent closure.
+   Archive/VLM/parser assets live in Core task storage, not the Agent Workspace:
+   never use workspace search or process execution to locate or parse them.
+   Browser/download/discovery registrations are rejected as formal carriers.
+   Never pass paths or response bytes.
    - Runtime inputs are ordered by source bindings and use handles in-0, in-1,
      …, not binding IDs. Every bracket element-access syntax is rejected,
      including array indexes and regex match indexes; use destructuring,
@@ -79,7 +86,8 @@ output.
    static adapter/transform rejection or requested-field/topology mismatch means
    the registered static family is unsuitable: stop static execution and required-
    field vocabulary probing, then switch immediately to the fixed dynamic
-   protocol: call `prepare_dynamic_family_publication`, then call
+   protocol: call `scaffold_dataset_profile`, then
+   `prepare_dynamic_family_publication`, then call
    `submit_dynamic_family_publication` with its unchanged prepared submission,
    whose descriptor digest is server-bound, and receipt. For a permission
    or human-review request, wait for the decision instead of replacing the
