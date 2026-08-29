@@ -13,8 +13,13 @@ import { GenericToolCall } from "./tool-renderers/GenericToolCall";
 import type { ToolRendererProps } from "./tool-renderers/types";
 
 /**
- * Pi 内置编码工具的专用渲染器;其余工具走 GenericToolCall(中文标签 +
+ * 内置编码工具的专用渲染器;其余工具走 GenericToolCall(中文标签 +
  * JSON 自动格式化)。未知未来工具自动落入通用路径。
+ *
+ * Pi 原生工具名为 read/write/edit/bash;服务端 workspace 沙箱工具名为
+ * workspace_read/write/edit/exec(server/src/agent/workspace/tools.ts),
+ * 参数形状兼容,共用同一组渲染器(workspace_exec 走 BashTool 的
+ * { executable, args } 适配分支)。
  */
 const DEDICATED_RENDERERS: Partial<
   Record<string, ComponentType<ToolRendererProps>>
@@ -23,6 +28,10 @@ const DEDICATED_RENDERERS: Partial<
   write: FileWriteTool,
   edit: FileEditTool,
   bash: BashTool,
+  workspace_read: FileReadTool,
+  workspace_write: FileWriteTool,
+  workspace_edit: FileEditTool,
+  workspace_exec: BashTool,
 };
 
 interface ToolCallStepProps {

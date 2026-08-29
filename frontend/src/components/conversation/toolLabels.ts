@@ -37,6 +37,32 @@ const TOOL_LABEL_MAP: Record<string, ToolLabelFormatter> = {
     verb: "列出",
     target: args?.path ? String(args.path) : "目录",
   }),
+  // 服务端 workspace 沙箱工具(server/src/agent/workspace/tools.ts;
+  // read/write/edit 由专用渲染器渲染,这里同样是通用路径兜底)
+  workspace_read: (args) => ({
+    verb: "读取",
+    target: args?.path ? String(args.path) : "工作区文件",
+  }),
+  workspace_write: (args) => ({
+    verb: "写入",
+    target: args?.path ? String(args.path) : "工作区文件",
+  }),
+  workspace_edit: (args) => ({
+    verb: "编辑",
+    target: args?.path ? String(args.path) : "工作区文件",
+  }),
+  workspace_exec: (args) => ({
+    verb: "执行",
+    target: args?.executable ? String(args.executable) : "命令",
+  }),
+  workspace_list: (args) => ({
+    verb: "列出",
+    target: args?.path ? String(args.path) : "工作区目录",
+  }),
+  workspace_search: (args) => ({
+    verb: "搜索",
+    target: args?.query ? `内容 ${args.query}` : "工作区文件",
+  }),
   // PubMed (legacy alias kept for replaying pre-Phase 2 events.jsonl)
   search_pubmed_adapter: (args) => searchLabel("PubMed", args),
   search_pubmed: (args) => searchLabel("PubMed", args),

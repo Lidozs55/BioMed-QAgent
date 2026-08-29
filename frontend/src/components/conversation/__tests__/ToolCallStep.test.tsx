@@ -154,6 +154,42 @@ describe("ToolCallStep", () => {
 });
 
 describe("ToolCallStep dedicated renderers", () => {
+  it("dispatches workspace_write to FileWriteTool (server sandbox tool name)", () => {
+    render(
+      <ToolCallStep
+        item={makeToolCall({
+          toolName: "workspace_write",
+          arguments: { path: "hello.py", content: "print(1)\nprint(2)" },
+          output: "ok",
+        })}
+      />,
+    );
+    expect(screen.getByText("hello.py")).toBeInTheDocument();
+    expect(screen.getByText("+2")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /hello\.py/ }));
+    expect(screen.getAllByText("+", { selector: "span[aria-hidden='true']" })).toHaveLength(2);
+  });
+
+  it("dispatches workspace_exec to BashTool with executable + args command", () => {
+    render(
+      <ToolCallStep
+        item={makeToolCall({
+          toolName: "workspace_exec",
+          arguments: {
+            executable: "C:\\Program Files\\Python313\\python.exe",
+            args: ["hello.py"],
+          },
+          output: "Hello, World!",
+        })}
+      />,
+    );
+    expect(
+      screen.getByText(/python\.exe hello\.py/),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /python\.exe/ }));
+    expect(screen.getByText("Hello, World!")).toBeInTheDocument();
+  });
+
   it("dispatches read to FileReadTool with path title and line range badge", () => {
     render(
       <ToolCallStep

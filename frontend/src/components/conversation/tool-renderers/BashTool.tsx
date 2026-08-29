@@ -7,9 +7,27 @@ import { CopyButton } from "./CopyButton";
 import { ToolCallShell } from "./ToolCallShell";
 import { readStringArg, type ToolRendererProps } from "./types";
 
-/** bash 专用渲染:命令首行收起态,展开为反转终端块(命令 + 输出)。 */
-export function BashTool({ item, open, onOpenChange }: ToolRendererProps) {
+/**
+ * 命令执行专用渲染(bash / workspace_exec):命令首行收起态,
+ * 展开为反转终端块(命令 + 输出)。
+ *
+ * bash 参数是 { command }?workspace_exec 是 { executable, args[] },
+ * 这里统一拼成一条命令串展示。
+ */
+function resolveCommand(item: ToolRendererProps["item"]): string | undefined {
   const command = readStringArg(item.arguments, "command");
+  if (command !== undefined) return command;
+  const executable = readStringArg(item.arguments, "executable");
+  if (executable === undefined) return undefined;
+  const args = item.arguments?.args;
+  const argText = Array.isArray(args)
+    ? args.filter((a): a is string => typeof a === "string").join(" ")
+    : "";
+  return argText.length > 0 ? `${executable} ${argText}` : executable;
+}
+
+export function BashTool({ item, open, onOpenChange }: ToolRendererProps) {
+  const command = resolveCommand(item);
   const firstLine = command !== undefined ? command.split("\n")[0] : undefined;
   return (
     <ToolCallShell
