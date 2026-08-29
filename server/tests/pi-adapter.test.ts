@@ -580,6 +580,36 @@ describe("PiAgentAdapter", () => {
     });
   });
 
+  test("extracts provider usage from an assistant message_end upstream event", () => {
+    expect(toUpstreamEvent({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        stopReason: "stop",
+        usage: {
+          input: 38_000,
+          output: 2_000,
+          cacheRead: 30_000,
+          cacheWrite: 0,
+          totalTokens: 40_000,
+          reasoning: 500,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      },
+    } as never)).toMatchObject({
+      type: "message_end",
+      assistantStopReason: "stop",
+      usage: {
+        input: 38_000,
+        output: 2_000,
+        cacheRead: 30_000,
+        cacheWrite: 0,
+        totalTokens: 40_000,
+        reasoning: 500,
+      },
+    });
+  });
+
   test("publishes runtime context usage after an assistant response", async () => {
     const upstream = new FakeUpstreamSession();
     upstream.promptImplementation = async () => {
@@ -601,6 +631,44 @@ describe("PiAgentAdapter", () => {
       contextWindow: 131_072,
       percent: 9.41,
       source: "runtime",
+    });
+  });
+
+  test("attaches provider usage to the context usage event after an assistant response", async () => {
+    const upstream = new FakeUpstreamSession();
+    upstream.promptImplementation = async () => {
+      upstream.emit({
+        type: "message_end",
+        assistantStopReason: "stop",
+        contextUsage: { tokens: 40_000, contextWindow: 256_000, percent: 15.6 },
+        usage: {
+          input: 38_000,
+          output: 2_000,
+          cacheRead: 30_000,
+          cacheWrite: 0,
+          totalTokens: 40_000,
+        },
+      });
+    };
+    const session = await new PiAgentAdapter({
+      createUpstreamSession: async () => upstream,
+    }).createSession(sessionConfig);
+
+    const events = await collect(session.run("report token usage"));
+
+    expect(events).toContainEqual({
+      type: "context_usage",
+      tokens: 40_000,
+      contextWindow: 256_000,
+      percent: 15.6,
+      source: "runtime",
+      usage: {
+        input: 38_000,
+        output: 2_000,
+        cacheRead: 30_000,
+        cacheWrite: 0,
+        totalTokens: 40_000,
+      },
     });
   });
 

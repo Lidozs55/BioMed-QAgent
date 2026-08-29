@@ -203,6 +203,12 @@ Phase 8 移除 Python 运行时后该逻辑不复存在，自动压缩一度缺�
   压缩边界重新估算。百分比文本和无障碍标签允许显示超过 100% 的真实值，进度条视觉
   宽度单独钳制到 100%。Gold supervisor 的证据脱敏明确放行上述数值 token 遥测键，
   但 `access_token` / `api_key` 等凭据仍必须脱敏。
+- `context_usage` 可选携带 `usage`（本次调用的 provider 精确用量：
+  `input_tokens` / `output_tokens` / `cache_read_tokens` / `cache_write_tokens` /
+  `total_tokens`，provider 暴露时另有 `reasoning_tokens`；上游未报告时该字段缺失，
+  估算路径不变）。task reducer 将其按 Run 累计，在终态 `RunSummary.usage`
+  （含 `model_calls`）中输出，snapshot API 直接可见；gold supervisor 把
+  `run_usage` 写入 closure.json，供报告的"性能与资源消耗"与提示词优化对照使用。
 - 除压缩路径外，Run 入口另有独立预算 preflight：session 预算
   `context_window - max_tokens - reserve <= 0` 时在首个 Pi 回合前直接落盘
   `run_failed`（`error_code: "context_budget_exhausted"`），不启动注定超限的会话。
