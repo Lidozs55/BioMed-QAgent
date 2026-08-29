@@ -91,6 +91,7 @@ coverage.xml
 .cache
 .trae/
 .pi-subagents/
+.zcode
 
 # Local MCP server builds (configure-glm-vision skill)
 outputs/
