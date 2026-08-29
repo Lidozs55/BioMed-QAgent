@@ -48,8 +48,13 @@ describe("dataset formal-route capability preflight", () => {
 
   test("reports Core-owned product topology profiles without claiming source closure", () => {
     const capabilities = datasetRouteCapabilities();
+    expect(capabilities.dynamic.product_requirement_profiles[0]?.profile_ref)
+      .toBe("literature_experiment_chart.release.v1");
     const profile = capabilities.dynamic.product_requirement_profiles.find(
       (item) => item.profile_ref === "bioactivity_measurement.chart_evidence.release.v1",
+    );
+    const literature = capabilities.dynamic.product_requirement_profiles.find(
+      (item) => item.profile_ref === "literature_experiment_chart.release.v1",
     );
 
     expect(profile).toMatchObject({
@@ -61,6 +66,9 @@ describe("dataset formal-route capability preflight", () => {
       "chart_series", "chart_points", "papers", "sources",
     ]);
     expect(profile?.blocker).toMatch(/does not prove source|extraction closure/i);
+    expect(profile?.use_when).toMatch(/normalized compound.*assay.*target/i);
+    expect(profile?.do_not_use_when).toMatch(/paper_records.*experiment_records.*supplementary_asset_records/i);
+    expect(literature?.use_when).toMatch(/paper_records.*experiment_records.*supplementary_asset_records/i);
   });
 
   test("generates the formal six-table literature chart scaffold from Core facts", async () => {

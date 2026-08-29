@@ -66,6 +66,13 @@ scaffold，标记 unchanged retry forbidden；修改来源/抽取事实后必须
 不证明 FamilySpec/Projection/transform/源站可达性或 Publication closure。具体 Dynamic
 提交仍由 `acquisition_requests` schema 和 `prepare_dynamic_family_publication` receipt 校验。
 
+Profile 选择按语义和表闭包从具体到通用：要求 `paper_records`、
+`experiment_records`、`activity_value_records`、图表系列/点和补充资产共同闭合的论文实验
+产品必须使用 `literature_experiment_chart.release.v1`；旧的
+`bioactivity_measurement.chart_evidence.release.v1` 只用于 compound-assay-target 归一化
+矩阵附带图表证据，不能替代论文六表产品。route preflight 以该顺序返回并携带
+`use_when` / `do_not_use_when`。
+
 ---
 
 ## 5. 执行模型：服务端固定构建骨架

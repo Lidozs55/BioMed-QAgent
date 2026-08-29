@@ -28,6 +28,28 @@ type AcquisitionOnlyProvider = {
   blocker: string;
 };
 
+const LITERATURE_EXPERIMENT_CHART_PROFILE = "literature_experiment_chart.release.v1";
+
+function productProfileGuidance(profileRef: string): {
+  use_when: string;
+  do_not_use_when: string;
+} {
+  if (profileRef === LITERATURE_EXPERIMENT_CHART_PROFILE) {
+    return {
+      use_when:
+        "The requested product requires paper_records, experiment_records, activity_value_records, chart_series/chart_points, and supplementary_asset_records as one literature experiment closure.",
+      do_not_use_when:
+        "The product is only a normalized compound-assay-target activity matrix without paper experiment or supplementary-asset tables.",
+    };
+  }
+  return {
+    use_when:
+      "The requested product is a normalized compound, assay, and target activity matrix with optional chart evidence.",
+    do_not_use_when:
+      "The request requires paper_records, experiment_records, or supplementary_asset_records; use literature_experiment_chart.release.v1 instead.",
+  };
+}
+
 function directProvider(
   descriptor: CoreAcquisitionProviderDescriptor,
 ): DirectDynamicProvider {
@@ -99,9 +121,17 @@ export function datasetRouteCapabilities() {
         "No static entry expresses the required semantic topology, but every input can close through a direct binding below or a prior task-owned Core acquisition asset.",
       next_tools: ["scaffold_dataset_profile", "prepare_dynamic_family_publication", "submit_dynamic_family_publication"],
       direct_bindings: directBindings,
-      product_requirement_profiles: listCoreProductTopologyRequirements().map((requirements) => ({
+      product_requirement_profiles: [...listCoreProductTopologyRequirements()]
+        .sort((left, right) =>
+          left.profile_ref === LITERATURE_EXPERIMENT_CHART_PROFILE
+            ? -1
+            : right.profile_ref === LITERATURE_EXPERIMENT_CHART_PROFILE
+              ? 1
+              : left.profile_ref.localeCompare(right.profile_ref))
+        .map((requirements) => ({
         profile_ref: requirements.profile_ref,
         dataset_family: requirements.dataset_family,
+        ...productProfileGuidance(requirements.profile_ref),
         route_status: "core_owned_topology_only" as const,
         next_tool: "scaffold_dataset_profile" as const,
         tables: requirements.tables,
@@ -115,6 +145,7 @@ export function datasetRouteCapabilities() {
       "A source missing from the static families can still use Dynamic Family when it appears in dynamic.direct_bindings.",
       "Provider wiring proves only trusted acquisition/input decoding; it does not prove semantic family, projection, transform, source availability, validation, or publication closure.",
       "A provider in core_acquisition_only is not a direct Dynamic Family input. Resolve its stated extraction blocker or report the affected projection as blocked/NO_DATA.",
+      "A literature experiment request requiring paper_records, experiment_records, activity_value_records, chart_series, chart_points, and supplementary_asset_records must use literature_experiment_chart.release.v1, not the legacy normalized bioactivity chart profile.",
       "Choose one route per family and row granularity. Do not send a task-scoped Dynamic FamilySpec to the static validator.",
     ],
   } as const;
@@ -125,7 +156,7 @@ export function createDatasetProfileScaffoldTool(): BioMedAgentTool {
     name: "scaffold_dataset_profile",
     label: "Scaffold Dataset Profile",
     description:
-      "Generate the complete Core-owned FamilySpec, Projection, table definitions, relations, and transform output closure for one profile returned by inspect_dataset_execution_routes. With requirement/source/extraction facts, also returns the complete prepare submission; the Agent never authors profile topology, policy refs, or proposal refs. Read-only and side-effect-free.",
+      "Generate the complete Core-owned FamilySpec, Projection, table definitions, relations, and transform output closure for one profile returned by inspect_dataset_execution_routes. Literature products requiring paper_records + experiment_records + activity_value_records + chart_series/points + supplementary_asset_records must select literature_experiment_chart.release.v1, never the legacy normalized bioactivity chart profile. With requirement/source/extraction facts, also returns the complete prepare submission; the Agent never authors profile topology, policy refs, or proposal refs. Read-only and side-effect-free.",
     parameters: {
       type: "object",
       properties: {
