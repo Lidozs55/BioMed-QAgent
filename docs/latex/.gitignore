@@ -1,0 +1,5 @@
+# LaTeX 构建产物（latexmk -outdir=build）
+build/
+
+# SVG→PDF 转换的临时文件（tools/svg2pdf.mjs 残留）
+images/_tmp_*

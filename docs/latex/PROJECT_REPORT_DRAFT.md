@@ -110,7 +110,7 @@ BioMed-QAgent 的目的不是"替研究者得出科学结论"，而是赛题明�
 
 ## 三、Core 外部：系统组成与 Agent 设计
 
-![BioMed QAgent主架构图](architecture/biomed-qagent-main.svg)
+![BioMed QAgent主架构图](../architecture/biomed-qagent-main.svg)
 
 BioMed 的整体设计遵循一个核心原则：开放式理解交给 LLM，正式数据改变交给确定性 Dataset Core，两者通过声明式规格与事件日志耦合，使"找到什么、怎么解析、如何清洗、从哪里来、输出成什么"都可检查、可回溯。主图给出整体分层与赛题评分维度的对照；本章描述 Core 之外的部分，Dataset Core 内部的固定流水线在第四章展开。
 
@@ -193,7 +193,7 @@ BioMed QAgent 系统向大模型暴露当前真实能力与相关参数。静态
 
 Dataset Core 是系统唯一的数据信任边界：八阶段固定流水线 acquire → parse → normalize → compat → integrate → derive → validate → publish（采集 → 解析 → 规范化 → 兼容性检查 → 整合 → 派生 → 校验 → 发布），每一步都有显式输入、操作收据、输出摘要与失败语义。Agent 不能编排执行路线，也不能直接制造数据值；动态 Family（多表数据家族）在严格协议下扩展"能读什么"，而不扩展"能写什么"。
 
-![Dataset Core 确定性数据流详图](architecture/biomed-qagent-core-deterministic-flow.svg)
+![Dataset Core 确定性数据流详图](../architecture/biomed-qagent-core-deterministic-flow.svg)
 
 详图展开 Core 内部：A 路线是已注册数据家族的固定操作骨架；B 路线是动态规格——变换方只交付候选字节，经隔离区与 Core 准入校验（重新计算摘要、闭世界检查）统一把关，且不能选择校验、评估或发布模块（创新点二的机制基础）。八阶段运行在共同的全链路可靠性基座上：内容摘要与可信收据、检查点与重放身份、超时/取消与执行锁、可持久化事件日志与可重建状态、证据绑定的人工确认（见 4.9）。流水线之外，系统以显式终态保证"运行完成 ≠ 正式发布"（拿不准就拒绝：Rejected / NO_DATA / Failed / Cancelled）。以下按八个阶段依次说明。
 
@@ -364,7 +364,7 @@ HIL 不是聊天中的一句"请确认"。请求和决策均落盘，进程重�
 
 ### 5.5 可调用测试 API 与可交互前端
 
-系统以 HTTP API 与 Web 前端同时暴露全部能力，评审可不经代码直接复现上述案例：
+系统以 HTTP API 与 Web 前端同时暴露全部能力：
 
 | 端点 | 方法 | 作用 |
 | --- | --- | --- |
