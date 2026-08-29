@@ -213,13 +213,48 @@ describe("dynamic family build tool boundary", () => {
         parameters: {
           source: "pubmed",
           accession: "PMC10408569",
-          entities: {},
+          entities: {
+            paper: ["PMC10408569"],
+            target: ["EGFR"],
+            mutations: ["L858R", "T790M"],
+            inhibitors: ["gefitinib"],
+          },
         },
       },
     };
     const parsed = await parseDynamicFamilyPublicationSubmission(raw);
     expect(parsed.acquisition_requests.source_binding?.provider_id).toBe("pubmed.files.v1");
+    expect(parsed.acquisition_requests.source_binding?.parameters.entities).toEqual({
+      paper: ["PMC10408569"],
+      target: ["EGFR"],
+      mutations: ["L858R", "T790M"],
+      inhibitors: ["gefitinib"],
+    });
     expect(parsed.registered_sources).toEqual({});
+
+    const prepare = createPrepareDynamicFamilyPublicationTool({
+      prepare: async () => { throw new Error("not called"); },
+    });
+    const alternatives = (prepare.parameters as {
+      properties: {
+        acquisition_requests: {
+          additionalProperties: {
+            oneOf: Array<{
+              properties: {
+                provider_id: { enum: string[] };
+                parameters: { properties: { entities: { additionalProperties: unknown } } };
+              };
+            }>;
+          };
+        };
+      };
+    }).properties.acquisition_requests.additionalProperties.oneOf;
+    const pubmed = alternatives.find((candidate) =>
+      candidate.properties.provider_id.enum.includes("pubmed.files.v1"));
+    expect(pubmed?.properties.parameters.properties.entities.additionalProperties).toEqual({
+      type: "array",
+      items: { type: "string" },
+    });
   });
 
   test("exposes the complete nested contract and fixed-provider parameter guidance", () => {

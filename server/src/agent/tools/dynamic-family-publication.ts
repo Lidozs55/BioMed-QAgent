@@ -414,7 +414,10 @@ function dynamicFamilyPublicationParameters(mode: "prepare" | "submit"): Record<
     properties: {
       source: { type: "string", enum: ["pubmed"] },
       accession: { type: "string", pattern: "^PMC[1-9][0-9]*$" },
-      entities: { type: "object", properties: {}, additionalProperties: false },
+      entities: {
+        type: "object",
+        additionalProperties: { type: "array", items: { type: "string" } },
+      },
     },
     required: ["source", "accession", "entities"], additionalProperties: false,
   };
