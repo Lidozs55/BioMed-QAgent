@@ -600,7 +600,7 @@ export async function parseDynamicFamilyPublicationPrepareSubmission(
   });
 }
 
-function dynamicFamilyPublicationWire(
+export function dynamicFamilyPublicationWire(
   submission: ParsedDynamicFamilyPublicationSubmission,
   hostDescriptorDigest: string,
 ): Record<string, unknown> {

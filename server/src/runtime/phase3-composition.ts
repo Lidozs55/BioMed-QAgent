@@ -10,6 +10,7 @@ import { createDatasetRoutePreflightTool } from "../agent/tools/dataset-route-pr
 import { createCoreAssetTools } from "../agent/tools/core-asset-tools.js";
 import {
   createDynamicFamilyPublicationTool,
+  dynamicFamilyPublicationWire,
   createPrepareDynamicFamilyPublicationTool,
   type ParsedDynamicFamilyPublicationSubmission,
 } from "../agent/tools/dynamic-family-publication.js";
@@ -558,7 +559,7 @@ export async function createPhase3Runtime(
             preparation,
             receipt,
             dynamicFamilyPreflightSubmissionDigest(submission),
-            submission,
+            dynamicFamilyPublicationWire(submission, receipt.host_descriptor_digest),
           );
           return receipt;
         },
