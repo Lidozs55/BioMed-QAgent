@@ -387,3 +387,11 @@ Verdict after round 3: still no completed formal Publication for gold10 on `deep
   3. System prompt: new `[Dynamic publication mechanics]` section teaching prepare semantics, receipt-only submit, closure parity, input/output envelopes, rejection-persistence, and the no-outside-filesystem rule. Prompt cap raised 7000 -> 7400 with the section mandated by the methodology reset.
   4. Supervisor `--adopt`: attaches to the task's current or latest run instead of posting its own — the real user question becomes run 1 directly, no bootstrap sentinel.
 - Tests: receipt-only submit round-trip + unsupported-resolver + extra-keys rejection (dynamic-family-preflight.test.ts), placeholder rows (transform-admission admission.test.ts), prompt section + cap (pi-adapter.test.ts).
+
+## 2026-08-29 direct-methodology gold7 r1 (b98db211) — workspace_exec bypass stopped; sandbox dialect taught in system prompt
+
+- First run under the reset methodology: `TOPIC.txt` sent verbatim as the task input (no bootstrap), supervisor `--adopt` attached to run 1. Task `task_ts_8685a03d-77df-4023-a693-ce835e3e3a87`, run `run_ts_2fdd7595-…`, evidence `data/gold-runs/b98db211-gold7-qwen37flash-direct-r1/`, model qwen3.7-flash@256k.
+- Major improvement from the product fixes: prepare converged to 5 attempts (previous record 19-35), rejection messages were precise (one tool-schema field error, then transform sandbox "Computed property access is forbidden"). Zero submits, zero placeholder publications, zero fake digests.
+- Terminal stop (exit 20): after prepare rejections the model wrote `scripts/integrate_ad_gwas.py` and requested `workspace_exec` — the classic workspace bypass, correctly denied then stopped by the supervisor. Root cause: the transform no-bracket-indexing dialect rule existed only in the tool description, not the system prompt.
+- Fix: system prompt [Dynamic publication mechanics] now teaches the sandbox dialect (no bracket access; destructuring/.map/dot props/named regex groups only) and that Core decodes acquired archives/spreadsheets (never python/shell/workspace_exec extraction). Cap stays 7400 via section compression.
+- r2 launched identically on baseline 635025ba (also carries the parallel session's chat-conversation-order PR).
