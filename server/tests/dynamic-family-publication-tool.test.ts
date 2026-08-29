@@ -315,6 +315,15 @@ describe("dynamic family build tool boundary", () => {
     });
     expect(submit.submission.execution_proposal.transform_refs[0]?.digest)
       .toBe(submit.preflightReceipt.host_descriptor_digest);
+
+    const submitTool = createDynamicFamilyPublicationTool({
+      submit: async () => ({ ok: true }),
+    });
+    const roundTrip = await submitTool.execute({
+      preflight_receipt: details.preflight_receipt,
+      prepared_submission: details.prepared_submission,
+    });
+    expect(roundTrip.isError).not.toBe(true);
   });
 
   test("prepare schema omits derived digests while retaining strict-request compatibility", async () => {

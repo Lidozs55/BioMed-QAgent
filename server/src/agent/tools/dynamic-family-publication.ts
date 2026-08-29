@@ -153,7 +153,7 @@ export function createDynamicFamilyPublicationTool(
     name: "submit_dynamic_family_publication",
     label: "Submit Dynamic Family Publication",
     description:
-      "Submit a strict FamilySpec + TypeScript DatasetTransform with the exact prepare_dynamic_family_publication receipt to the explicit in_process_unisolated runtime and trusted Core publication path. The prepared receipt binds the matching Core-owned product requirement profile and its exact table/relation closure. Use only providers reported in inspect_dataset_execution_routes.dynamic.direct_bindings; the acquisition_requests schema is the execution contract, not proof of semantic or publication closure. This is not a sandbox, isolation mechanism, or security boundary. Direct paths and discovery bytes are forbidden.",
+      "Submit the exact two top-level values returned by prepare_dynamic_family_publication: {preflight_receipt, prepared_submission}. Do not flatten, rebuild, or modify either value. The prepared receipt binds the matching Core-owned product requirement profile and its exact table/relation closure to the explicit in_process_unisolated runtime and trusted Core publication path. Use only providers reported in inspect_dataset_execution_routes.dynamic.direct_bindings; the acquisition_requests schema is the execution contract, not proof of semantic or publication closure. This is not a sandbox, isolation mechanism, or security boundary. Direct paths and discovery bytes are forbidden.",
     parameters: dynamicFamilyPublicationParameters("submit"),
     async execute(value, signal, context): Promise<BioMedToolResult> {
       try {
@@ -535,12 +535,16 @@ function dynamicFamilyPublicationParameters(mode: "prepare" | "submit"): Record<
     required: [...TOP_KEYS],
     additionalProperties: false,
   };
-  if (mode === "submit") {
-    const properties = schema.properties as Record<string, unknown>;
-    properties.preflight_receipt = preflightReceipt;
-    (schema.required as string[]).push("preflight_receipt");
-  }
-  return schema;
+  if (mode === "prepare") return schema;
+  return {
+    type: "object",
+    properties: {
+      preflight_receipt: preflightReceipt,
+      prepared_submission: schema,
+    },
+    required: ["preflight_receipt", "prepared_submission"],
+    additionalProperties: false,
+  };
 }
 
 const FAMILY_SPEC_DRAFT_KEYS = new Set([
@@ -733,6 +737,27 @@ export interface ParsedDynamicFamilyPublicationSubmitRequest {
 export async function parseDynamicFamilyPublicationSubmitRequest(
   value: unknown,
 ): Promise<ParsedDynamicFamilyPublicationSubmitRequest> {
+  if (
+    value !== null
+    && typeof value === "object"
+    && !Array.isArray(value)
+    && !types.isProxy(value)
+    && Object.hasOwn(value, "prepared_submission")
+  ) {
+    const envelope = exactDataRecord(
+      value,
+      new Set(["preflight_receipt", "prepared_submission"]),
+      "$dynamic_family_publication_submit",
+    );
+    const submission = await parseDynamicFamilyPublicationSubmission(
+      envelope.prepared_submission,
+    );
+    const preflightReceipt = parseDynamicFamilyPreflightReceipt(
+      envelope.preflight_receipt,
+      "$.preflight_receipt",
+    );
+    return Object.freeze({ submission, preflightReceipt });
+  }
   const keys = new Set([...TOP_KEYS, "preflight_receipt"]);
   const record = exactDataRecord(value, keys, "$dynamic_family_publication_submit");
   if (!Object.hasOwn(record, "preflight_receipt")) {
