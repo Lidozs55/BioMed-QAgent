@@ -430,3 +430,12 @@ Verdict after round 3: still no completed formal Publication for gold10 on `deep
 - `prepare_dynamic_family_publication` description now carries the exact top-level key list; `exactDataRecord` rejections name the missing/unexpected key diff instead of "unknown or missing fields".
 - System prompt: binary_archive line swapped to the two tools (cap kept 7400 via trims); conflict with the parallel session's browser-route unblocking resolved keeping their staging-evidence phrasing (pi-adapter pins intact, 50/50).
 - Direct r3 (qwen3.7-flash@256k, TOPIC verbatim, no bootstrap, --adopt): task `task_ts_3de09ebd-…`, evidence `data/gold-runs/22d87d15-gold7-qwen37flash-direct-r3/`.
+
+## 2026-08-29 campaign closed by user decision: one case suffices
+
+- User closed the qwen direct-validation campaign after direct r4's start (r4c cancelled mid-flight; temperature restored to 0.7; remote synced at a249ce7c including tool-call renderers and the execution-backend/source-admission rename).
+- Campaign yield (10 direct/scaffolded runs across qwen3.7-flash, qwen3.8-flash, deepseek-v4-flash):
+  - Product fixes landed on main: receipt-only submit with wire-bound stored submission, PLACEHOLDER_CONTENT admission screening, [Dynamic publication mechanics] system-prompt section (sandbox dialect, tool names), prepare key-diff errors + top-level key list, publishability rejections carrying check detail, supervisor --adopt (no bootstrap), preview_core_asset / extract_core_archive tools (stdlib zip reader).
+  - Best qwen-flash result: direct r3 reached transform-executed + product-assessed (rejected on resource_measurement detail that was then invisible); no fabricated rows ever entered a verified publication.
+  - Report samples remain the 2026-08-28 deepseek-v4-flash gold7/8/9 publications; the qwen campaign is itself reportable as a guardrail/model-capability study.
+- Deferred: end-of-run publication gate (P2), resource_measurement detail surfaced to agents at submit time (partially done via rejection message), model-settings inherited test failure (parallel domain).
