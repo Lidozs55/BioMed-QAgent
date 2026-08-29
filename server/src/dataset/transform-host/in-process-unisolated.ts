@@ -312,8 +312,8 @@ export class InProcessUnisolatedTransformHost {
       input_result_receipts: this.#context.inputResultReceipts.map((entry) => ({ ...entry })),
       granted_capabilities: ["bounded_log", "bounded_output"],
       resource_limits: { ...this.#context.resourceLimits },
-      sandbox_backend: "in_process_unisolated",
-      sandbox_config_digest: sha256Bytes(JSON.stringify({
+      execution_backend: "in_process_unisolated",
+      execution_config_digest: sha256Bytes(JSON.stringify({
         backend: "in_process_unisolated",
         policyVersion: RUNTIME_POLICY,
         securityBoundary: false,

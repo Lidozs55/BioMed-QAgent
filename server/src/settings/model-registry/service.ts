@@ -490,15 +490,32 @@ export class ModelSettingsService {
       if (body.context_window !== undefined) model.context_window = body.context_window === null ? null : boundedNumber(body.context_window, "context_window", 1);
       if (body.max_output_tokens !== undefined) model.max_output_tokens = body.max_output_tokens === null ? null : boundedNumber(body.max_output_tokens, "max_output_tokens", 1);
       if (body.suggested_max_tokens !== undefined) model.suggested_max_tokens = body.suggested_max_tokens === null ? null : boundedNumber(body.suggested_max_tokens, "suggested_max_tokens", 1);
+      // 模态（capabilities）用户可编辑：与 createModel 同一套归一化语义
+      // （text 未显式 false 即开启，其余显式 opt-in），写 user 后不再被目录同步覆盖。
+      if (body.capabilities !== undefined) {
+        const caps = optionalRecord(body.capabilities);
+        model.capabilities = {
+          text: caps.text !== false,
+          image: caps.image === true,
+          video: caps.video === true,
+          audio: caps.audio === true,
+        };
+      }
       if (body.params !== undefined) {
         const mergedParams = { ...model.params, ...asRecord(body.params) };
         this.validateModelParams(model, mergedParams);
         model.params = mergedParams;
       }
-      if (body.context_window !== undefined ||
+      // 只要任一用户可编辑字段被修改（与默认/目录元数据不再一致），就标记为
+      // 用户手动配置：此后不再被目录启动同步覆盖，前端来源徽标据此显示
+      // "手动配置"。
+      if (body.name !== undefined ||
+          body.description !== undefined ||
+          body.context_window !== undefined ||
           body.max_output_tokens !== undefined ||
           body.suggested_max_tokens !== undefined ||
-          body.capabilities !== undefined) {
+          body.capabilities !== undefined ||
+          body.params !== undefined) {
         model.metadata_source = "user";
       }
       // 活动模型的上下文窗口被用户修改后，跟随同步运行时设置，

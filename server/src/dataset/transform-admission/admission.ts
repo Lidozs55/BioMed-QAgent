@@ -395,7 +395,7 @@ async function validateExpectedInvocation(
   assertDigest(expected.compiler_digest, "compiler_digest");
   assertDigest(expected.runtime_digest, "runtime_digest");
   assertDigest(expected.backend_policy.policy_digest, "backend_policy.policy_digest");
-  assertDigest(expected.backend_policy.sandbox_config_digest, "backend_policy.sandbox_config_digest");
+  assertDigest(expected.backend_policy.execution_config_digest, "backend_policy.execution_config_digest");
   if (new Set(expected.backend_policy.granted_capabilities).size !== expected.backend_policy.granted_capabilities.length) {
     rejection("INVALID_EXPECTED_INVOCATION", "granted capabilities must be unique");
   }
@@ -445,8 +445,8 @@ function assertInvocationBinding(
     ["compiler_digest", receipt.compiler_digest, expected.compiler_digest],
     ["runtime_digest", receipt.runtime_digest, expected.runtime_digest],
     ["policy_digest", receipt.policy_digest, expected.backend_policy.policy_digest],
-    ["sandbox_backend", receipt.sandbox_backend, expected.backend_policy.sandbox_backend],
-    ["sandbox_config_digest", receipt.sandbox_config_digest, expected.backend_policy.sandbox_config_digest],
+    ["execution_backend", receipt.execution_backend, expected.backend_policy.execution_backend],
+    ["execution_config_digest", receipt.execution_config_digest, expected.backend_policy.execution_config_digest],
     ["host_implementation_digest", receipt.host_implementation_digest, expected.implementation_digest],
     ["deadline_at", receipt.deadline_at, expected.deadline_fence.deadline_at],
     ["cancellation_state", receipt.cancellation_state, expected.cancel_fence.cancellation_state],

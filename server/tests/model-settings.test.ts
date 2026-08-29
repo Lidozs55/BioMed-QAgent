@@ -139,6 +139,81 @@ describe("TypeScript model settings", () => {
     expect(await service.resolveActiveModel()).toMatchObject({ contextWindow: 131072 });
   });
 
+  test("allows editing model modalities (capabilities) via updateModel", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const provider = await service.createProvider({
+      name: "Custom OpenAI",
+      base_url: "https://models.example/v1",
+      api_key: "sk-modality",
+    });
+    const model = await service.createModel({
+      provider_id: provider.id,
+      model_id: "custom-chat",
+      source: "api",
+    });
+    expect(model.capabilities).toEqual({ text: true, image: false, video: false, audio: false });
+    expect(model.metadata_source).toBe("api");
+
+    // 用户勾选图像/音频模态：落盘且归一化（未勾选的 video 保持 false）。
+    const updated = await service.updateModel(model.id, {
+      capabilities: { text: true, image: true, audio: true },
+    });
+    expect(updated.capabilities).toEqual({ text: true, image: true, video: false, audio: true });
+    expect(updated.metadata_source).toBe("user");
+
+    // 不传 capabilities 时不得改动已有模态。
+    const untouched = await service.updateModel(model.id, { description: "note" });
+    expect(untouched.capabilities).toEqual({ text: true, image: true, video: false, audio: true });
+  });
+
+  test("accepts max_tokens values beyond the legacy spec upper bound", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const provider = await service.createProvider({
+      name: "Custom OpenAI",
+      base_url: "https://models.example/v1",
+      api_key: "sk-max-tokens",
+    });
+    const model = await service.createModel({
+      provider_id: provider.id,
+      model_id: "custom-chat",
+    });
+
+    // 旧规格上限为 262144/131072，现已取消：超大值允许保存（仅要求正整数）。
+    const updated = await service.updateModel(model.id, { params: { max_tokens: 400_000 } });
+    expect(updated.params.max_tokens).toBe(400_000);
+  });
+
+  test("marks metadata as user-edited when any editable field changes", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const provider = await service.createProvider({
+      name: "Custom OpenAI",
+      base_url: "https://models.example/v1",
+      api_key: "sk-user-edit",
+    });
+    const model = await service.createModel({
+      provider_id: provider.id,
+      model_id: "custom-chat",
+      source: "api",
+    });
+    expect(model.metadata_source).toBe("api");
+
+    // 参数被编辑即视为手动配置（不再被目录启动同步覆盖）。
+    const paramsEdited = await service.updateModel(model.id, { params: { temperature: 0.1 } });
+    expect(paramsEdited.metadata_source).toBe("user");
+
+    // 名称被编辑同样标记。
+    const second = await service.createModel({
+      provider_id: provider.id,
+      model_id: "custom-chat-2",
+      source: "api",
+    });
+    const named = await service.updateModel(second.id, { name: "My Model" });
+    expect(named.metadata_source).toBe("user");
+  });
+
   test("syncs active-model parameter edits into runtime settings without reactivation", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
     const service = await ModelSettingsService.create({ settingsDir, environment: {} });
@@ -253,7 +328,7 @@ describe("TypeScript model settings", () => {
     await service.deleteProvider(provider.id);
     expect(service.getSettings()).toMatchObject({
       base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      model_name: "qwen3.7-plus",
+      model_name: "",
       context_window_source: "inferred",
       max_tokens: 8192,
       api_key_configured: false,
@@ -283,7 +358,7 @@ describe("TypeScript model settings", () => {
     await service.deleteModel(model.id);
     expect(service.getSettings()).toMatchObject({
       base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      model_name: "qwen3.7-plus",
+      model_name: "",
       context_window_source: "inferred",
       max_tokens: 8192,
     });
@@ -574,7 +649,7 @@ describe("TypeScript model settings", () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
     const service = await ModelSettingsService.create({
       settingsDir,
-      environment: { PI_API_KEY: "sk-direct-secret" },
+      environment: { PI_API_KEY: "sk-direct-secret", PI_MODEL: "qwen3.8-flash" },
     });
     const baseUrl = await serve(service);
 
@@ -874,7 +949,7 @@ describe("TypeScript model settings", () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
     const service = await ModelSettingsService.create({
       settingsDir,
-      environment: { PI_API_KEY: "sk-direct-secret" },
+      environment: { PI_API_KEY: "sk-direct-secret", PI_MODEL: "qwen3.8-flash" },
     });
     const baseUrl = await serve(service);
     const current = await (await fetch(`${baseUrl}/api/v1/settings`)).json() as Record<string, unknown>;
@@ -931,7 +1006,7 @@ describe("TypeScript model settings", () => {
     const providers = await (await fetch(`${baseUrl}/api/v1/model-registry/providers`)).json() as unknown[];
     expect(providers).toHaveLength(1);
   });
-  test("bootstraps a DashScope provider from DASHSCOPE_API_KEY when no providers exist", async () => {
+  test("bootstraps a DashScope provider from DASHSCOPE_API_KEY without inventing a model", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
     const service = await ModelSettingsService.create({
       settingsDir,
@@ -948,20 +1023,17 @@ describe("TypeScript model settings", () => {
       api_key_configured: true,
     });
 
+    // Key-only bootstrap must NOT fabricate an active model: running on an
+    // unchosen model silently bills the wrong account (2026-08-29 incident).
     const models = await (await fetch(`${baseUrl}/api/v1/model-registry/models`))
-      .json() as Array<Record<string, unknown>>;
-    expect(models).toHaveLength(1);
-    expect(models[0]).toMatchObject({ model_id: "qwen3.7-plus", active: true });
+      .json() as unknown[];
+    expect(models).toHaveLength(0);
 
     const settings = await (await fetch(`${baseUrl}/api/v1/settings`)).json() as Record<string, unknown>;
-    expect(settings.model_name).toBe("qwen3.7-plus");
+    expect(settings.model_name).toBe("");
     expect(settings.api_key_configured).toBe(true);
-    await expect(service.resolveActiveModel()).resolves.toMatchObject({
-      provider: "dashscope",
-      modelId: "qwen3.7-plus",
-      apiKey: "sk-dashscope-env",
-      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    });
+    expect(settings.run_ready).toBe(false);
+    await expect(service.resolveActiveModel()).rejects.toThrow("model are required");
   });
 
   test("env bootstrap honors catalog context facts for known models", () => {
@@ -1034,12 +1106,14 @@ describe("TypeScript model settings", () => {
     expect(customProviders[0]).toMatchObject({ name: "Custom" });
   });
 
-  test("falls back to qwen3.7-plus as the default model name", async () => {
+  test("ships no default model name: unconfigured until the user selects one", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
     const service = await ModelSettingsService.create({ settingsDir, environment: {} });
     const baseUrl = await serve(service);
     const settings = await (await fetch(`${baseUrl}/api/v1/settings`)).json() as Record<string, unknown>;
-    expect(settings.model_name).toBe("qwen3.7-plus");
+    expect(settings.model_name).toBe("");
+    expect(settings.run_ready).toBe(false);
+    expect(settings.run_block_reason).toBe("provider credentials are required");
   });
 });
 

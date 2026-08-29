@@ -215,8 +215,8 @@ describe("A-T1 DatasetTransform descriptor + TransformExecutionReceipt", () => {
       open_files: 64,
       pids: 1,
     },
-    sandbox_backend: "container",
-    sandbox_config_digest: HEX,
+    execution_backend: "container",
+    execution_config_digest: HEX,
     exit_state: "succeeded",
     exit_code: 0,
     exit_signal: null,
@@ -243,8 +243,31 @@ describe("A-T1 DatasetTransform descriptor + TransformExecutionReceipt", () => {
     expect(parseTransformExecutionReceipt(receipt, "$").exit_state).toBe("succeeded");
     expect(parseTransformExecutionReceipt({
       ...receipt,
+      execution_backend: "in_process_unisolated",
+    }, "$").execution_backend).toBe("in_process_unisolated");
+  });
+
+  it("maps legacy sandbox_backend receipt fields onto current execution_backend names", () => {
+    const legacyReceipt: Record<string, unknown> = {
+      ...receipt,
       sandbox_backend: "in_process_unisolated",
-    }, "$").sandbox_backend).toBe("in_process_unisolated");
+      sandbox_config_digest: HEX,
+    };
+    delete legacyReceipt["execution_backend"];
+    delete legacyReceipt["execution_config_digest"];
+    const parsed = parseTransformExecutionReceipt(legacyReceipt, "$");
+    expect(parsed.execution_backend).toBe("in_process_unisolated");
+    expect(parsed.execution_config_digest).toBe(HEX);
+  });
+
+  it("REJECTS a receipt mixing legacy and current execution backend fields", () => {
+    expect(() =>
+      parseTransformExecutionReceipt({
+        ...receipt,
+        sandbox_backend: "in_process_unisolated",
+        sandbox_config_digest: HEX,
+      }, "$"),
+    ).toThrow(/legacy "sandbox_backend"/);
   });
 
   it("REJECTS a receipt missing any required digest", () => {

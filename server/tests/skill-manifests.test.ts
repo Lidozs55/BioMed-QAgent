@@ -51,6 +51,9 @@ const ALLOWED_BACKTICK_TOKENS = new Set([
   "registered_gut_microbiome_study_json",
   "study_accession",
   "study_id",
+  // acquisition-only carrier route referenced by dataset-construction guidance;
+  // registered contextually by the dynamic-family toolset, not a curated bundle entry
+  "acquire_core_carrier",
 ]);
 
 const SKILL_NAME = /^[a-z][a-z0-9_-]*$/;

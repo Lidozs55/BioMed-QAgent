@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import type { SourceLocatorV2 } from "@biomed/contracts";
 import { XMLParser, XMLValidator } from "fast-xml-parser";
 
+import { MAX_XML_CARRIER_BYTES } from "../../runtime/provider-limits.js";
 import { assertInheritedDiseaseEvidenceRows } from "./validation.js";
 import type {
   InheritedDiseaseDiseaseRecord,
@@ -250,6 +251,14 @@ function geneSymbol(value: string): string {
 }
 
 function parseOrphanetCarrier(carrier: InheritedDiseaseEvidenceCarrier): ParsedCarrierParts {
+  // 对象树闸门：fast-xml-parser 会把整个文档建成 JS 对象树（膨胀可达源文件 10 倍以上），
+  // 大型 Orphadata 全库 XML 曾把 Node 堆撑到 OOM 崩溃（2026-08-29 gold9 事故）。
+  if (carrier.bytes.length > MAX_XML_CARRIER_BYTES) {
+    fail(
+      `${carrier.source} exceeded ${MAX_XML_CARRIER_BYTES} byte XML parse limit (${carrier.bytes.length} bytes); ` +
+        "the full object tree would expand ~10x in memory — use a narrower extract or a streaming/sharded parser instead",
+    );
+  }
   const xml = carrier.bytes.toString("utf8");
   if (XMLValidator.validate(xml) !== true) fail(`${carrier.source} contains malformed XML`);
   let parsed: unknown;

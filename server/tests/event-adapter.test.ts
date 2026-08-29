@@ -274,4 +274,54 @@ describe("PiEventAdapter", () => {
     expect(serialized).toContain("[redacted]");
     expect(serialized).toContain("[truncated]");
   });
+
+  test("serializes tool output with windows paths as valid JSON", () => {
+    const { adapter } = createAdapter();
+    const events = [
+      ...adapter.adapt(runId, {
+        type: "tool_completed",
+        toolCallId: "call-9",
+        toolName: "workspace_exec",
+        result: {
+          content: JSON.stringify({
+            command: ["C:\\Program Files\\Python313\\python.exe", "hello.py"],
+            exitCode: 0,
+            stdout: "Modified Hello, World!\r\n",
+          }),
+          details: {
+            command: ["C:\\Program Files\\Python313\\python.exe", "hello.py"],
+            exitCode: 0,
+            stdout: "Modified Hello, World!\r\n",
+          },
+          isError: false,
+        },
+        isError: false,
+      }),
+      ...adapter.adapt(runId, { type: "turn_completed" }),
+    ];
+    const output = (events[0]?.payload as { output?: string }).output ?? "";
+    // 序列化结果必须是合法 JSON——不得对序列化后的 JSON 再跑脱敏正则,
+    // 否则转义序列被咬坏,前端 toolOutput 解包会失败回退原文。
+    const parsed = JSON.parse(output) as { details?: { stdout?: string } };
+    expect(parsed.details?.stdout).toBe("Modified Hello, World!\r\n");
+  });
+
+  test("wraps oversized tool output in a truncated envelope that stays valid JSON", () => {
+    const { adapter } = createAdapter();
+    const big: Record<string, string> = {};
+    for (let index = 0; index < 40; index += 1) {
+      // MAX_ITEMS=20 只保留前 20 个字段,单字段拉长确保总量超过 MAX_OUTPUT_LENGTH。
+      big[`field_${index}`] = `value-${index}-${"z".repeat(190)}`;
+    }
+    const events = adapter.adapt(runId, {
+      type: "tool_completed",
+      toolCallId: "call-10",
+      toolName: "probe",
+      result: big,
+      isError: false,
+    });
+    const output = (events[0]?.payload as { output?: string }).output ?? "";
+    const parsed = JSON.parse(output) as { truncated?: boolean };
+    expect(parsed.truncated).toBe(true);
+  });
 });

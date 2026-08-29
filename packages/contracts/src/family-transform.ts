@@ -62,7 +62,7 @@ export type TerminalReason =
 
 export type CancellationState = "none" | "requested" | "acknowledged" | "terminated";
 
-export type SandboxBackend =
+export type ExecutionBackend =
   | "unavailable"
   | "container"
   | "linux_namespace"
@@ -95,7 +95,7 @@ const CANCELLATION_STATES: readonly CancellationState[] = [
   "acknowledged",
   "terminated",
 ];
-const SANDBOX_BACKENDS: readonly SandboxBackend[] = [
+const EXECUTION_BACKENDS: readonly ExecutionBackend[] = [
   "unavailable",
   "container",
   "linux_namespace",
@@ -688,8 +688,8 @@ export interface TransformExecutionReceipt {
   input_result_receipts: InputResultReceipt[];
   granted_capabilities: string[];
   resource_limits: ResourceLimits;
-  sandbox_backend: SandboxBackend;
-  sandbox_config_digest: string;
+  execution_backend: ExecutionBackend;
+  execution_config_digest: string;
   exit_state: TerminalReason;
   exit_code: number | null;
   exit_signal: string | null;
@@ -777,8 +777,8 @@ const RECEIPT_KEYS = new Set([
   "input_result_receipts",
   "granted_capabilities",
   "resource_limits",
-  "sandbox_backend",
-  "sandbox_config_digest",
+  "execution_backend",
+  "execution_config_digest",
   "exit_state",
   "exit_code",
   "exit_signal",
@@ -1103,8 +1103,45 @@ function parseResourceLimits(value: unknown, path: string): ResourceLimits {
   };
 }
 
+/** Pre-2026-08 receipt field names kept parseable so stored receipts replay. */
+const LEGACY_RECEIPT_FIELD_ALIASES: Readonly<Record<string, string>> = Object.freeze({
+  sandbox_backend: "execution_backend",
+  sandbox_config_digest: "execution_config_digest",
+});
+
+const RECEIPT_PARSE_KEYS: ReadonlySet<string> = new Set([
+  ...RECEIPT_KEYS,
+  ...Object.keys(LEGACY_RECEIPT_FIELD_ALIASES),
+]);
+
+/**
+ * Accepts historical receipts written with the former `sandbox_backend` /
+ * `sandbox_config_digest` field names by mapping them onto the current names.
+ * Mixing legacy and current names in one object stays a hard error.
+ */
+function normalizeLegacyReceiptFields(object: Record<string, unknown>, path: string): Record<string, unknown> {
+  const legacyPresent = Object.keys(object).filter((key) => key in LEGACY_RECEIPT_FIELD_ALIASES);
+  if (legacyPresent.length === 0) return object;
+  const normalized: Record<string, unknown> = { ...object };
+  for (const legacyKey of legacyPresent) {
+    const currentKey = LEGACY_RECEIPT_FIELD_ALIASES[legacyKey]!;
+    if (currentKey in normalized) {
+      throw new APIError(
+        502,
+        `Receipt provides both legacy "${legacyKey}" and current "${currentKey}" at ${path}`,
+      );
+    }
+    normalized[currentKey] = normalized[legacyKey];
+    delete normalized[legacyKey];
+  }
+  return normalized;
+}
+
 export function parseTransformExecutionReceipt(value: unknown, path: string): TransformExecutionReceipt {
-  const object = strictObject(assertJsonValue(value, path), path, RECEIPT_KEYS);
+  const object = normalizeLegacyReceiptFields(
+    strictObject(assertJsonValue(value, path), path, RECEIPT_PARSE_KEYS),
+    path,
+  );
   if (ownValue(object, "schema_version", path) !== "1.0") {
     throw new APIError(502, `TransformExecutionReceipt.schema_version must be "1.0" at ${path}`);
   }
@@ -1150,11 +1187,11 @@ export function parseTransformExecutionReceipt(value: unknown, path: string): Tr
       `cancel_requested_at must fall between started_at and finished_at at ${path}`,
     );
   }
-  const sandboxBackend = assertEnum(
-    ownValue(object, "sandbox_backend", path),
-    `${path}.sandbox_backend`,
-    SANDBOX_BACKENDS,
-    "sandbox_backend",
+  const executionBackend = assertEnum(
+    ownValue(object, "execution_backend", path),
+    `${path}.execution_backend`,
+    EXECUTION_BACKENDS,
+    "execution_backend",
   );
   const exitState = assertEnum(
     ownValue(object, "exit_state", path),
@@ -1162,10 +1199,10 @@ export function parseTransformExecutionReceipt(value: unknown, path: string): Tr
     TERMINAL_REASONS,
     "exit_state",
   );
-  if ((sandboxBackend === "unavailable") !== (exitState === "sandbox_unavailable")) {
+  if ((executionBackend === "unavailable") !== (exitState === "sandbox_unavailable")) {
     throw new APIError(
       502,
-      `sandbox_backend "unavailable" and exit_state "sandbox_unavailable" must occur together at ${path}`,
+      `execution_backend "unavailable" and exit_state "sandbox_unavailable" must occur together at ${path}`,
     );
   }
   if (exitState === "cancelled" && cancellationState === "none") {
@@ -1263,10 +1300,10 @@ export function parseTransformExecutionReceipt(value: unknown, path: string): Tr
     ),
     granted_capabilities: getSafeIdArray(object, "granted_capabilities", path),
     resource_limits: resourceLimits,
-    sandbox_backend: sandboxBackend,
-    sandbox_config_digest: assertHex64(
-      ownValue(object, "sandbox_config_digest", path),
-      `${path}.sandbox_config_digest`,
+    execution_backend: executionBackend,
+    execution_config_digest: assertHex64(
+      ownValue(object, "execution_config_digest", path),
+      `${path}.execution_config_digest`,
     ),
     exit_state: exitState,
     exit_code: exitCode,

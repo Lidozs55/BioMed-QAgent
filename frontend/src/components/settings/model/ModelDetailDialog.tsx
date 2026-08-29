@@ -36,17 +36,19 @@ function errorText(error: unknown): string {
 }
 
 function sourceBadgeLabel(model: ManagedModelInfo): string {
-  return model.source === "manual" ? "手动配置" : model.provider_name;
+  // 与列表来源徽标同一判定：手动添加或元数据被用户改过即为“手动配置”。
+  return model.source === "manual" || model.metadata_source === "user"
+    ? "手动配置"
+    : model.provider_name;
 }
 
-function capabilitiesLabel(capabilities: ModelCapabilities): string {
-  const labels: string[] = [];
-  if (capabilities.text) labels.push("文本");
-  if (capabilities.image) labels.push("图像");
-  if (capabilities.video) labels.push("视频");
-  if (capabilities.audio) labels.push("音频");
-  return labels.length > 0 ? labels.join("、") : "—";
-}
+/** 模态勾选项：与 ModelCapabilities 字段一一对应。 */
+const MODALITY_OPTIONS = [
+  ["text", "文本"],
+  ["image", "图像"],
+  ["video", "视频"],
+  ["audio", "音频"],
+] as const;
 
 function allParamsJson(
   specs: ParameterSpec[],
@@ -88,6 +90,11 @@ export function ModelDetailDialog({
     const effective = effectiveMaxTokens(model);
     return effective == null ? "" : String(effective);
   });
+  const [capabilities, setCapabilities] = useState<ModelCapabilities>(() =>
+    model
+      ? { ...model.capabilities }
+      : { text: true, image: false, video: false, audio: false },
+  );
   const [jsonOpen, setJsonOpen] = useState(false);
   const [jsonText, setJsonText] = useState(() =>
     model ? allParamsJson(model.param_specs, model.params) : "",
@@ -183,6 +190,15 @@ export function ModelDetailDialog({
     if (parsedMax !== effectiveMaxTokens(model)) {
       patch.max_output_tokens = parsedMax;
     }
+    // 模态有实际改动才提交，避免无谓地把 metadata_source 标成 user。
+    if (
+      capabilities.text !== model.capabilities.text ||
+      capabilities.image !== model.capabilities.image ||
+      capabilities.video !== model.capabilities.video ||
+      capabilities.audio !== model.capabilities.audio
+    ) {
+      patch.capabilities = capabilities;
+    }
 
     setSaving(true);
     try {
@@ -211,8 +227,32 @@ export function ModelDetailDialog({
             <dd className="truncate">{model.provider_name}</dd>
             <dt className="text-muted-foreground">模型 ID</dt>
             <dd className="truncate">{model.model_id}</dd>
-            <dt className="text-muted-foreground">能力</dt>
-            <dd>{capabilitiesLabel(model.capabilities)}</dd>
+            <dt className="self-center text-muted-foreground">模态</dt>
+            <dd>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                {MODALITY_OPTIONS.map(([key, label]) => (
+                  <label
+                    key={key}
+                    className="flex cursor-pointer items-center gap-1.5 text-xs"
+                    title={`模型${label}模态`}
+                  >
+                    <input
+                      type="checkbox"
+                      className="size-3.5 cursor-pointer accent-primary"
+                      checked={capabilities[key]}
+                      onChange={(event) =>
+                        setCapabilities((current) => ({
+                          ...current,
+                          [key]: event.target.checked,
+                        }))
+                      }
+                      aria-label={`模态：${label}`}
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+            </dd>
             <dt className="text-muted-foreground">来源</dt>
             <dd>{sourceBadgeLabel(model)}</dd>
           </dl>

@@ -7,6 +7,8 @@ import { BioMedAgentError, type BioMedAgentEvent } from "./contracts.js";
 const MAX_CHUNK_LENGTH = 4_096;
 const MAX_ARGUMENT_STRING_LENGTH = 200;
 const MAX_OUTPUT_LENGTH = 4_096;
+/** 长驻 Host 进程中 terminalRuns 集合的条目上限（按插入序淘汰最旧条目）。 */
+const MAX_TERMINAL_RUNS = 4_096;
 const MAX_DEPTH = 3;
 const MAX_ITEMS = 20;
 const SENSITIVE_KEY = /api[-_]?key|authorization|bearer|credential|password|secret|token/i;
@@ -75,7 +77,14 @@ function asArguments(value: unknown): Record<string, JsonValue> {
 function serializedOutput(value: unknown): string {
   const bounded = sanitizeValue(value, 0, MAX_ARGUMENT_STRING_LENGTH);
   const serialized = typeof bounded === "string" ? bounded : JSON.stringify(bounded);
-  return sanitizeText(serialized, MAX_OUTPUT_LENGTH);
+  if (serialized.length <= MAX_OUTPUT_LENGTH) return serialized;
+  // 超限时把截断文本包成 JSON 字符串字段返回。不得对序列化后的 JSON 再跑
+  // 脱敏正则/slice——路径正则会咬坏转义序列、slice 会截断结构,产出非法
+  // JSON(前端 toolOutput 解包会因此失败回退原文)。
+  return JSON.stringify({
+    truncated: true,
+    output: serialized.slice(0, MAX_OUTPUT_LENGTH),
+  });
 }
 
 function digest(value: unknown): string {
@@ -286,6 +295,12 @@ export class PiEventAdapter {
 
   private terminal(runId: string, payload: EventPayload): EventEnvelope[] {
     if (this.terminalRuns.has(runId)) return [];
+    // 防御上限：长驻 Host 进程里该集合只增不减（每个 run 一个短字符串），
+    // 超过上限时按插入序淘汰最旧条目，避免无界增长。
+    if (this.terminalRuns.size >= MAX_TERMINAL_RUNS) {
+      const oldest = this.terminalRuns.values().next().value;
+      if (oldest !== undefined) this.terminalRuns.delete(oldest);
+    }
     this.terminalRuns.add(runId);
     return [this.envelope(runId, payload)];
   }

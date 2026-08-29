@@ -30,6 +30,11 @@ export interface SkillToolMapping {
   readonly routing: string;
   /** Tool names the Agent runtimes register for this skill. */
   readonly tools: readonly string[];
+  /**
+   * Guidance-only skills teach routes over tools owned by operational skills;
+   * toolOwner() skips them so every tool keeps exactly one operational owner.
+   */
+  readonly guidance_only?: boolean;
 }
 
 function mapping(
@@ -39,6 +44,7 @@ function mapping(
   description: string,
   routing: string,
   tools: readonly string[],
+  options: { readonly guidanceOnly?: boolean } = {},
 ): SkillToolMapping {
   return Object.freeze({
     name,
@@ -47,6 +53,7 @@ function mapping(
     description,
     routing,
     tools: Object.freeze([...tools]),
+    ...(options.guidanceOnly ? { guidance_only: true as const } : {}),
   });
 }
 
@@ -189,9 +196,10 @@ export const SKILL_TOOL_MAP: readonly SkillToolMapping[] = Object.freeze([
     "web_search_discovery",
     "discovery",
     ["web_search", "browser", "web"],
-    "Find sources, official entries, and download locations on the open web via an explicit search-engine result page (e.g. Bing) through the guarded browser when registered provider searches do not already answer the question.",
+    "Find sources, official entries, and download locations on the open web via a search-engine result page (e.g. Bing) through the guarded browser.",
     "Use early during source discovery whenever a needed source or entry is not already in hand: read result-page links, prefer official hosts, then acquire real bytes through the browser skill or a registered Core provider.",
     ["navigate_page"],
+    { guidanceOnly: true },
   ),
   mapping(
     "local_cache",
@@ -261,7 +269,6 @@ export const SKILL_TOOL_MAP: readonly SkillToolMapping[] = Object.freeze([
       "scaffold_dataset_execution_spec",
       "validate_dataset_execution",
       "execute_dataset_execution",
-      "acquire_core_carrier",
       "prepare_dynamic_family_publication",
       "submit_dynamic_family_publication",
     ],
@@ -274,6 +281,7 @@ export const SKILL_TOOL_NAMES: ReadonlySet<string> = new Set(
 
 export function toolOwner(toolName: string): string | undefined {
   for (const entry of SKILL_TOOL_MAP) {
+    if (entry.guidance_only === true) continue;
     if (entry.tools.includes(toolName)) return entry.name;
   }
   return undefined;

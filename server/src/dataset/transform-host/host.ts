@@ -18,7 +18,7 @@ import {
   type TransformInvocationV1,
   type TransformTerminalV1,
 } from "./protocol.js";
-import { detectSandboxAvailability, type SandboxAvailability } from "./sandbox.js";
+import { detectIsolationAvailability, type IsolationAvailability } from "./isolation-availability.js";
 
 export interface DisabledHostRequest {
   invocation: unknown;
@@ -28,7 +28,7 @@ export interface DisabledHostRequest {
 export interface DisabledHostResult {
   terminal: TransformTerminalV1;
   receipt: TransformExecutionReceipt;
-  sandbox: SandboxAvailability;
+  isolation: IsolationAvailability;
 }
 
 export interface NonProductionTransformHostOptions {
@@ -67,7 +67,7 @@ export class NonProductionTransformHost {
     assertCoreAuthorityClaim(this.#context, request.authorityClaim);
     const invocation = parseTransformInvocationV1(request.invocation);
     assertInvocationMatchesContext(invocation, this.#context);
-    const sandbox = detectSandboxAvailability(this.#platform);
+    const isolation = detectIsolationAvailability(this.#platform);
     const issuedAt = this.#now();
     if (!Number.isFinite(issuedAt.getTime())) {
       throw new TransformHostError("protocol_invalid", "Host clock returned an invalid timestamp");
@@ -75,7 +75,7 @@ export class NonProductionTransformHost {
     const terminal = sandboxUnavailableTerminal(
       this.#context.invocationId,
       this.#context.generation,
-      sandbox.detail,
+      isolation.detail,
     );
     const timestamp = issuedAt.toISOString();
     if (Date.parse(timestamp) > Date.parse(this.#context.deadline)) {
@@ -105,10 +105,10 @@ export class NonProductionTransformHost {
       input_result_receipts: this.#context.inputResultReceipts.map((entry) => ({ ...entry })),
       granted_capabilities: [],
       resource_limits: { ...this.#context.resourceLimits },
-      sandbox_backend: "unavailable",
-      sandbox_config_digest: sha256Bytes(JSON.stringify({
+      execution_backend: "unavailable",
+      execution_config_digest: sha256Bytes(JSON.stringify({
         available: false,
-        platform: sandbox.platform,
+        platform: isolation.platform,
         policyVersion: "disabled-unavailable.1",
       })),
       exit_state: "sandbox_unavailable",
@@ -132,7 +132,7 @@ export class NonProductionTransformHost {
       host_implementation_digest: this.#hostImplementationDigest,
       host_issued_at: timestamp,
     }, "$.disabled_transform_host_receipt");
-    return { sandbox, terminal, receipt };
+    return { isolation, terminal, receipt };
   }
 }
 

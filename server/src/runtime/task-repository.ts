@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, open, readFile, readdir, rm } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 
 import type {
@@ -56,6 +56,33 @@ export interface DurableTaskRepositoryOptions {
 
 type EventListener = (event: EventEnvelope) => void;
 
+/**
+ * Parsed event cache for one task's append-only ``events.jsonl``.
+ *
+ * ``byteLength`` is the file size the cache covers (always on a line
+ * boundary); ``approximateBytes`` estimates parsed-object memory from the
+ * file bytes for the global eviction budget.
+ */
+interface EventCacheEntry {
+  byteLength: number;
+  events: EventEnvelope[];
+  approximateBytes: number;
+  lastAccess: number;
+}
+
+/** Global parsed-event cache budget (bytes of FILE content covered). */
+const EVENT_CACHE_MAX_BYTES = 256 * 1024 * 1024;
+
+/**
+ * Parsed-object memory estimate factor over raw file bytes: readAllEvents
+ * previously re-read and re-parsed the WHOLE events.jsonl on every snapshot,
+ * list, and WebSocket replay call — for a 28k-event run this produced
+ * repeated multi-hundred-MB transient allocations and contributed to the
+ * 2026-08-29 host OOM crash. The cache trades bounded resident memory for
+ * the removal of those spikes.
+ */
+const EVENT_CACHE_MEMORY_FACTOR = 3;
+
 function requireCleanUtf8(value: string): void {
   if (/\uFFFD/u.test(value)) {
     throw new TypeError(
@@ -70,7 +97,15 @@ function taskTitle(input: string): string {
   return firstLine.slice(0, 120) || "New task";
 }
 
-function parseEvents(text: string): EventEnvelope[] {
+/**
+ * Parse event lines with strict sequence-continuity validation.
+ *
+ * ``startSequence`` is the sequence of the event immediately BEFORE this text
+ * (0 for a fresh file): when greater than 0 the first parsed event must be
+ * ``startSequence + 1``. This lets an incremental tail chunk be validated
+ * against the cached prefix without re-reading the whole file.
+ */
+function parseEvents(text: string, startSequence = 0): EventEnvelope[] {
   const events: EventEnvelope[] = [];
   const lines = text.split(/\r?\n/);
   for (let index = 0; index < lines.length; index += 1) {
@@ -89,7 +124,7 @@ function parseEvents(text: string): EventEnvelope[] {
     if (typeof sequence !== "number" || !Number.isInteger(sequence) || sequence < 1) {
       throw new Error(`events.jsonl line ${index + 1} has an invalid sequence`);
     }
-    const previous = events.at(-1)?.sequence;
+    const previous = startSequence > 0 && events.length === 0 ? startSequence : events.at(-1)?.sequence;
     if (previous !== undefined && sequence !== previous + 1) {
       throw new Error(`events.jsonl sequence gap at line ${index + 1}: expected ${previous + 1}, got ${sequence}`);
     }
@@ -105,6 +140,8 @@ export class DurableTaskRepository {
   private readonly pending = new Map<string, Promise<unknown>>();
   private readonly listeners = new Set<EventListener>();
   private readonly latestSequence = new Map<string, number>();
+  private readonly eventCache = new Map<string, EventCacheEntry>();
+  private eventCacheBytes = 0;
 
   constructor(tasksRoot: string, options: DurableTaskRepositoryOptions = {}) {
     this.tasksRoot = path.resolve(tasksRoot);
@@ -258,17 +295,17 @@ export class DurableTaskRepository {
         payload,
       }));
       await mkdir(this.taskRoot(taskId), { recursive: true });
+      const appendedText = `${events.map((event) => JSON.stringify(event)).join("\n")}\n`;
       const handle = await open(this.eventsPath(taskId), "a");
       try {
-        await handle.writeFile(
-          `${events.map((event) => JSON.stringify(event)).join("\n")}\n`,
-          "utf8",
-        );
+        await handle.writeFile(appendedText, "utf8");
         await handle.sync();
       } finally {
         await handle.close();
       }
       this.latestSequence.set(taskId, events.at(-1)?.sequence ?? sequence);
+      // Keep the parsed-event cache in sync with the append (no re-read needed).
+      this.cacheAppend(taskId, events, Buffer.byteLength(appendedText, "utf8"));
       for (const event of events) {
         for (const listener of this.listeners) listener(event);
       }
@@ -319,6 +356,7 @@ export class DurableTaskRepository {
       throw new DurableTaskConflictError("active_run", "Active tasks cannot be deleted");
     }
     await rm(this.taskRoot(taskId), { recursive: true, force: false });
+    this.evictEventCache(taskId);
     this.latestSequence.delete(taskId);
   }
 
@@ -453,11 +491,115 @@ export class DurableTaskRepository {
   }
 
   private async readAllEvents(taskId: string): Promise<EventEnvelope[]> {
+    let fileSize: number;
     try {
-      return parseEvents(await readFile(this.eventsPath(taskId), "utf8"));
+      fileSize = (await stat(this.eventsPath(taskId))).size;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        this.evictEventCache(taskId);
+        return [];
+      }
       throw error;
+    }
+    const cached = this.eventCache.get(taskId);
+    if (cached !== undefined && fileSize === cached.byteLength) {
+      cached.lastAccess = this.now().getTime();
+      return cached.events;
+    }
+    if (cached === undefined || fileSize < cached.byteLength) {
+      // Cold read, or the file was truncated/rewritten: parse the whole file.
+      const text = await readFile(this.eventsPath(taskId), "utf8");
+      const events = parseEvents(text);
+      this.replaceEventCache(taskId, events, fileSize);
+      return events;
+    }
+    // Append-only growth: read only the bytes past the cached prefix. The
+    // cache offset always sits on a line boundary, so the chunk starts at a
+    // line start; a trailing partial line (mid-write tail) is left unread.
+    const handle = await open(this.eventsPath(taskId), "r");
+    let chunk: Buffer;
+    try {
+      chunk = Buffer.alloc(fileSize - cached.byteLength);
+      await handle.read(chunk, 0, chunk.length, cached.byteLength);
+    } finally {
+      await handle.close();
+    }
+    const lastNewline = chunk.lastIndexOf(0x0A);
+    if (lastNewline === -1) {
+      // No complete line yet: keep serving the cached prefix.
+      return cached.events;
+    }
+    const complete = chunk.subarray(0, lastNewline + 1);
+    const appended = parseEvents(complete.toString("utf8"), cached.events.at(-1)?.sequence ?? 0);
+    if (appended.length === 0) {
+      return cached.events;
+    }
+    cached.events.push(...appended);
+    const consumedBytes = cached.byteLength + complete.length;
+    this.eventCacheBytes -= cached.approximateBytes;
+    cached.byteLength = consumedBytes;
+    cached.approximateBytes = consumedBytes * EVENT_CACHE_MEMORY_FACTOR;
+    cached.lastAccess = this.now().getTime();
+    this.eventCacheBytes += cached.approximateBytes;
+    this.evictOverBudgetCache(taskId);
+    return cached.events;
+  }
+
+  /** Replace one task's cached events wholesale and account the memory budget. */
+  private replaceEventCache(taskId: string, events: EventEnvelope[], byteLength: number): void {
+    this.evictEventCache(taskId);
+    const approximateBytes = byteLength * EVENT_CACHE_MEMORY_FACTOR;
+    this.eventCache.set(taskId, {
+      byteLength,
+      events,
+      approximateBytes,
+      lastAccess: this.now().getTime(),
+    });
+    this.eventCacheBytes += approximateBytes;
+    this.evictOverBudgetCache(taskId);
+  }
+
+  /** Fold a successful append into an existing cache entry (write path). */
+  private cacheAppend(taskId: string, events: readonly EventEnvelope[], appendedBytes: number): void {
+    const cached = this.eventCache.get(taskId);
+    if (cached === undefined) return; // Cold task: the read path builds the cache on demand.
+    const expected = (cached.events.at(-1)?.sequence ?? 0) + 1;
+    if (cached.events.length > 0 && events[0]?.sequence !== expected) {
+      // Cache and file disagree (external mutation): drop and rebuild on next read.
+      this.evictEventCache(taskId);
+      return;
+    }
+    cached.events.push(...events);
+    const nextBytes = cached.byteLength + appendedBytes;
+    this.eventCacheBytes -= cached.approximateBytes;
+    cached.byteLength = nextBytes;
+    cached.approximateBytes = nextBytes * EVENT_CACHE_MEMORY_FACTOR;
+    cached.lastAccess = this.now().getTime();
+    this.eventCacheBytes += cached.approximateBytes;
+    this.evictOverBudgetCache(taskId);
+  }
+
+  private evictEventCache(taskId: string): void {
+    const entry = this.eventCache.get(taskId);
+    if (entry === undefined) return;
+    this.eventCacheBytes -= entry.approximateBytes;
+    this.eventCache.delete(taskId);
+  }
+
+  /** LRU eviction over the global parsed-event budget, protecting the pinned task. */
+  private evictOverBudgetCache(pinnedTaskId: string): void {
+    while (this.eventCacheBytes > EVENT_CACHE_MAX_BYTES && this.eventCache.size > 1) {
+      let oldestKey: string | null = null;
+      let oldestAccess = Number.POSITIVE_INFINITY;
+      for (const [key, entry] of this.eventCache) {
+        if (key === pinnedTaskId) continue;
+        if (entry.lastAccess < oldestAccess) {
+          oldestAccess = entry.lastAccess;
+          oldestKey = key;
+        }
+      }
+      if (oldestKey === null) break;
+      this.evictEventCache(oldestKey);
     }
   }
 }

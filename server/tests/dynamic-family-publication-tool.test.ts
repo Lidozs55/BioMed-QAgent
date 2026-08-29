@@ -458,7 +458,7 @@ describe("dynamic family build tool boundary", () => {
         sourceAssetRegistry: registry, taskRoot: root, runtimeLimits: DEFAULT_RUNTIME_LIMITS,
         generation: 0, preflightReceipt: prepared.receipt, preflightSubmission: parsed,
       });
-      expect(result.receipt.sandbox_backend).toBe("in_process_unisolated");
+      expect(result.receipt.execution_backend).toBe("in_process_unisolated");
       expect(result.operationResult.output_summary).toMatchObject({ tables: { records: { row_count: 1 } } });
       expect(result.materialization.candidate.tables[0]?.definition.table_id).toBe("records");
       const publishInput = {

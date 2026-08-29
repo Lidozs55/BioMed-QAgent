@@ -39,16 +39,21 @@ describe("stable Skill ↔ Tool mapping", () => {
     expect(new Set(names).size).toBe(names.length);
   });
 
-  test("tool names are unique, snake-case, and each belongs to exactly one skill", () => {
-    const tools = SKILL_TOOL_MAP.flatMap((mapping) => mapping.tools);
+  test("tool names are unique, snake-case, and each belongs to exactly one operational skill", () => {
+    const operational = SKILL_TOOL_MAP.filter((mapping) => mapping.guidance_only !== true);
+    const tools = operational.flatMap((mapping) => mapping.tools);
     expect(new Set(tools).size).toBe(tools.length);
     expect(collect(SKILL_TOOL_NAMES).length).toBe(tools.length);
-    for (const tool of tools) {
+    for (const tool of collect(SKILL_TOOL_NAMES)) {
       expect(tool, tool).toMatch(TOOL_NAME);
     }
     for (const mapping of SKILL_TOOL_MAP) {
       for (const tool of mapping.tools) {
-        expect(toolOwner(tool), tool).toBe(mapping.name);
+        if (mapping.guidance_only === true) {
+          expect(toolOwner(tool), `${mapping.name} is guidance-only for ${tool}`).not.toBe(mapping.name);
+        } else {
+          expect(toolOwner(tool), tool).toBe(mapping.name);
+        }
       }
     }
   });

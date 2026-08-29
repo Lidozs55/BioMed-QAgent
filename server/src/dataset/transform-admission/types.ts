@@ -5,7 +5,7 @@ import type {
   InputAssetReceipt,
   InputResultReceipt,
   ResourceLimits,
-  SandboxBackend,
+  ExecutionBackend,
   SourceLocatorV2,
   TransformDescriptorDigestInput,
 } from "@biomed/contracts";
@@ -43,8 +43,8 @@ export interface ExpectedTransformOutputDescriptor {
 }
 
 export interface ExpectedTransformBackendPolicy {
-  sandbox_backend: SandboxBackend;
-  sandbox_config_digest: string;
+  execution_backend: ExecutionBackend;
+  execution_config_digest: string;
   policy_digest: string;
   granted_capabilities: readonly string[];
   resource_limits: ResourceLimits;
