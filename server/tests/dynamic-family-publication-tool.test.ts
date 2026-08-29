@@ -20,7 +20,10 @@ import {
   prepareDynamicFamilyPublication as prepareDynamicFamilyPublicationCore,
 } from "../src/dataset/dynamic-family/preflight.js";
 import { computeHILEvidenceDigest } from "../src/dataset/contracts/hil-evidence.js";
-import { expectedOutputLocatorClosure } from "../src/dataset/dynamic-family/execution.js";
+import {
+  expectedOutputLocatorClosure,
+  runtimeOutputLocatorClosure,
+} from "../src/dataset/dynamic-family/execution.js";
 import { publishDynamicFamily, type PublishDynamicFamilyInput } from "../src/dataset/dynamic-family/publication.js";
 import {
   PRODUCTION_B3_CONFIGURED_HEAP_BYTES,
@@ -177,6 +180,11 @@ describe("dynamic family build tool boundary", () => {
       output("supporting", "asset_source_a"),
       output("derived", "asset_source_b"),
     ])).toEqual(["asset_source_a", "asset_source_b"]);
+    expect(runtimeOutputLocatorClosure([
+      { locator_ref: "asset_source_a" },
+      { locator_ref: "asset_source_b" },
+      { locator_ref: "asset_source_a" },
+    ])).toEqual(["asset_source_a", "asset_source_b"]);
   });
 
   test("parses only an explicitly unisolated, digest-bound submission", async () => {
@@ -273,6 +281,7 @@ describe("dynamic family build tool boundary", () => {
     expect(schema).toContain('"field_names"');
     expect(schema).toContain('"product_requirement_digest"');
     expect(schema).toContain("Synchronous TypeScript only");
+    expect(schema).toMatch(/EVERY CSV field.*quoted.*double/i);
     expect(schema).toContain("target_records");
     expect(schema).toContain("maxItems");
     expect(schema).toContain("chembl.files.v1");

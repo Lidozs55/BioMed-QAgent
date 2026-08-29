@@ -296,6 +296,12 @@ describe("PiAgentAdapter", () => {
     expect(isRecoverablePiStreamError(undefined)).toBe(false);
   });
 
+  test("does not switch a selected dynamic requirement back to static execution", () => {
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /Once the dynamic route is selected[\s\S]*never authorizes validate_dataset_execution or execute_dataset_execution/i,
+    );
+  });
+
   test("keeps retryable provider failures within a bounded long-running retry window", () => {
     expect(resolvePiRetryOverrides()).toEqual({
       retry: {
