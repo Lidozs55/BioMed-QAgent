@@ -186,6 +186,14 @@ export const SKILL_TOOL_MAP: readonly SkillToolMapping[] = Object.freeze([
     ["navigate_page", "download_from_page"],
   ),
   mapping(
+    "web_search_discovery",
+    "discovery",
+    ["web_search", "browser", "web"],
+    "Discover alternative official sources or download entries via an explicit public web search (e.g. Bing) through the guarded browser when registered API searches do not fit or an official source is unreachable.",
+    "Use as the deliberate fallback before any URL enumeration: read result-page links, prefer official hosts, then acquire real bytes through the browser skill or a registered Core provider; result-page hits are discovery leads, never evidence.",
+    ["navigate_page"],
+  ),
+  mapping(
     "local_cache",
     "acquisition",
     ["local_cache"],
@@ -253,6 +261,7 @@ export const SKILL_TOOL_MAP: readonly SkillToolMapping[] = Object.freeze([
       "scaffold_dataset_execution_spec",
       "validate_dataset_execution",
       "execute_dataset_execution",
+      "acquire_core_carrier",
       "prepare_dynamic_family_publication",
       "submit_dynamic_family_publication",
     ],
