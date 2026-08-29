@@ -12,7 +12,6 @@ import {
   type CreateHILRequestInput,
 } from "./hil-store.js";
 import type { HILGatePreReview } from "./hil-pre-review.js";
-import { inspectHilAutoRequest } from "./hil-auto-guard.js";
 import type { DurableTaskRepository } from "./task-repository.js";
 
 export type BoundHILRequestInput = Omit<
@@ -213,16 +212,14 @@ export class DurableHILGate implements HILGateHandle {
   }
 
   /**
-   * Approval-policy short-circuit (three-tier HIL approval settings).
-   * Every auto path first runs the deterministic auto-approval guard: a
-   * forged or bypass-shaped request is resolved as ``reject`` (never
-   * auto-approved, never parked for a human rubber-stamp) and surfaces an
-   * ``HIL_AUTO_REJECTED`` warning. ``auto_approve`` then resolves with the
-   * kind's affirmative decision (reviewer ``auto``); ``llm_pre_review``
-   * consults the model and resolves on a pass (reviewer ``model``). A model
-   * ``fail`` verdict or any reviewer error escalates to the classic human
-   * flow (fail-safe). Resolved requests never emit ``user_input_required``,
-   * so the run is not paused.
+   * Approval-policy short-circuit (three-tier HIL approval settings):
+   * ``auto_approve`` resolves immediately with the kind's affirmative
+   * decision (reviewer ``auto``); ``llm_pre_review`` consults the model —
+   * whose prompt directs it to fail bypass-shaped requests — and resolves on
+   * a pass (reviewer ``model``). A model ``fail`` verdict or any reviewer
+   * error escalates to the classic human flow (fail-safe; never a silent
+   * pass). Resolved requests never emit ``user_input_required``, so the run
+   * is not paused.
    */
   private async tryPreReviewResolve(
     runId: string,
@@ -231,17 +228,6 @@ export class DurableHILGate implements HILGateHandle {
     if (this.preReview === null) return null;
     const mode = await this.preReview.modeFor(request.kind, request.review_type);
     if (mode === "human_review") return null;
-    const guard = inspectHilAutoRequest(request);
-    if (guard.decision === "deny") {
-      return this.resolveWithoutHuman(runId, request, {
-        decision: { action: "reject" },
-        reason: `auto-rejected by HIL auto-approval guard: ${guard.reason}`,
-        reviewer: "auto",
-        warningCode: "HIL_AUTO_REJECTED",
-        message:
-          `HIL request ${request.request_id} auto-rejected by approval guard: ${guard.reason}`,
-      });
-    }
     if (mode === "auto_approve") {
       return this.resolveWithoutHuman(runId, request, {
         decision: request.kind === "permission" ? { action: "approve" } : { action: "accept" },

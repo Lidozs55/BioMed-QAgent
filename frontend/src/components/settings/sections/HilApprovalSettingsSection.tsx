@@ -125,8 +125,7 @@ export function HilApprovalSettingsSection({ api }: HilApprovalSettingsSectionPr
           <AlertTitle>发布边界始终人工把关</AlertTitle>
           <AlertDescription>
             图表数据抽取、浏览器证据接受与发布验收是发布信任边界的最终门禁，下游校验要求
-            reviewer 必须是真人，因此这三类固定为人工审批。自动档（大模型初审 / 不审批）在放行前会先做确定性守卫校验：非固定管线来源
-            （policy_ref 未注册或与请求形态不符）以及带“绕过门禁 / 脚本直改数据”意图的请求一律拒绝并返回警告，不会自动通过；大模型初审失败或调用异常时同样回退人工审批（fail-safe）。
+            reviewer 必须是真人，因此这三类固定为人工审批。“大模型初审”的提示词会拦截绕过系统设计的请求（如脚本直改数据、跳过校验门禁），判为不通过即回退人工审批；模型调用异常同样回退人工（fail-safe）。“不审批”档不做任何内容审查，请求一律自动通过。
           </AlertDescription>
         </Alert>
         <SettingCard>

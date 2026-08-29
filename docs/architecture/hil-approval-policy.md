@@ -51,58 +51,33 @@ PUT /api/v1/settings/hil-approval   { default_mode?, review_modes? }
 这与 `docs/TODO.md` 中"极低风险正式化免人审路径(待产品决策,先 `[Q]`)"一致:
 自动档不绕过发布边界。
 
-## 3. 自动档确定性守卫 (hil-auto-guard)
-
-自动档(两个自动路径)在放行前必须先通过 `inspectHilAutoRequest`
-(`server/src/runtime/hil-auto-guard.ts`)的确定性校验,防止主模型构造
-"绕过系统限制、通过脚本直改数据"式的请求被自动盖章:
-
-1. **结构符合性** — `policy_ref` 必须属于 `HIL_POLICY_REGISTRY` 中注册的
-   固定管线生产方,且与请求 `kind`/`review_type` 精确匹配。当前注册表:
-
-   | policy_ref | kind | review_type |
-   | --- | --- | --- |
-   | `runtime.credential.v1` | permission | null |
-   | `dataset.field_mapping.v1` | semantic_review | field_mapping |
-   | `dataset.unit_conversion.v1` | semantic_review | unit_conversion |
-   | `dataset.vlm_extraction.v1` | data_review | vlm_extraction |
-   | `browser.acquisition.evidence-acceptance.v1` | data_review | browser_evidence_acceptance |
-   | `dynamic_family_hil_acceptance.v1` | data_review | publication_acceptance |
-
-   新增 HIL 生产方**必须**同步注册,否则自动档一律拒绝(fail-closed)。
-2. **绕过意图标记** — summary / review_items 内容(evidence、proposed_value)
-   命中明确的"绕过/跳过门禁、直接写数据、script/SQL 直写"类标记即拒绝;
-   permission 请求的操作名是用户声明的标识符,只做绕过意图扫描,不做
-   SQL/脚本标记匹配,避免误伤。
-
-**拒绝语义**:守卫拒绝时请求以 `{action:"reject"}`(reviewer `auto`)解决,
-理由写入 review 记录,并追加 `HIL_AUTO_REJECTED:<request_id>` warning 事件;
-确定性消费方按既有 reject 语义让该操作显式失败。守卫拒绝在模型咨询之前
-生效——`llm_pre_review` 模式下被守卫拒绝的请求不会调用模型。
-
-## 4. 大模型初审客户端
+## 3. 大模型初审客户端
 
 `server/src/runtime/hil-pre-review.ts`:
 
 - `createHilModelReviewer(resolveModel)` — OpenAI 兼容
   `POST {baseUrl}/chat/completions`(复用活动会话模型配置 + `PublicHttpClient`
-  URL 策略,60s 超时,temperature 0)。输入为请求的 review_items JSON;输出要求
-  严格 `{"verdict":"pass"|"fail","reason":"…"}`,`parseVerdict` 做容错解析
-  (剥离代码围栏、裁剪 reason 到 500 字符)。
+  URL 策略,60s 超时,temperature 0)。输入为请求的 review_items JSON(含
+  `policy_ref`);输出要求严格 `{"verdict":"pass"|"fail","reason":"…"}`,
+  `parseVerdict` 做容错解析(剥离代码围栏、裁剪 reason 到 500 字符)。
+- **绕过系统设计的请求由提示词语义判断**:提示词明确要求对"脚本/shell 直写
+  数据、写入受保护输出路径或管线外数据库、跳过校验门禁、内容与声明的
+  review_type/policy_ref 矛盾"的请求判 `fail`。判 fail 只会回退人工审批,
+  不会拒绝合法请求(无误杀;代价是可疑请求多走一次人工)。
 - 任何错误(HTTP 非 2xx、非 JSON、verdict 非法、无模型可用)一律视为
   `fail` → 回退人工审批;**自动档宁可不生效,也不放行未经确认的请求**。
+- 历史说明:曾实现确定性守卫(`hil-auto-guard.ts`,policy_ref 注册表 +
+  绕过标记扫描,拒绝路径 `HIL_AUTO_REJECTED`),因内容标记存在误杀合法
+  请求的风险,按产品决策移除(见 git 历史 `3f58a530`)。`auto_approve` 档
+  因此不做任何内容审查——这是该档位"不审批"语义的一部分。
 
-## 5. 接入点
+## 4. 接入点
 
 ```text
 DurableHILGate.requestHIL (server/src/runtime/hil-gate.ts)
   ├─ 创建 request(store,幂等)
   ├─ tryPreReviewResolve
   │    ├─ modeFor(kind, review_type)          ← JsonHilApprovalPolicyStore
-  │    ├─ inspectHilAutoRequest (hil-auto-guard)
-  │    │    ├─ deny → resolveRequest(reject, reviewer:"auto")
-  │    │    │        + HIL_AUTO_REJECTED warning
-  │    │    └─ allow ↓
   │    ├─ auto_approve → resolveRequest(肯定决定, reviewer:"auto")
   │    ├─ llm_pre_review → modelReview(request)
   │    │    ├─ pass   → resolveRequest(reviewer:"model")
@@ -114,7 +89,7 @@ DurableHILGate.requestHIL (server/src/runtime/hil-gate.ts)
 确定性续跑(execution continuation)天然兼容:已自动解决的请求在重放时由
 store 幂等返回既有 review,与人工决定走同一条路径。
 
-## 6. 已知边界(文档化的行为,非缺陷)
+## 5. 已知边界(文档化的行为,非缺陷)
 
 - `unit_conversion` 的肯定决定是 `accept`,而该审核**结构性需要结构化修正**
   (`parseUnitCorrection`)。因此"不审批"档会让该操作显式失败

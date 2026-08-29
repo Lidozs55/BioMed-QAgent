@@ -136,7 +136,7 @@ BioMed-QAgent 是一个**生物医学数据智能检索与整合系统**：用�
 - 前端通过统一 Questionnaire 基础设施承载各类人机交互（`intervention/UserInputQuestionnaire`、`intervention/PermissionQuestionnaire`）；
 - **三档 HIL 审批档位**（设置 → Agent → HIL 审批）：按审核范围把每个 blocking 审批分配为
   人工审批 / **大模型初审**（初审通过自动接受，仅不通过进入人工审批）/ 不审批；
-  自动档放行前经确定性守卫校验（未注册管线来源、绕过门禁或脚本直改数据的请求一律拒绝并告警）；
+  大模型初审的提示词会拦截绕过系统设计的请求（判不通过即回退人工审批）；
   发布边界（图表抽取、浏览器证据接受、发布验收）始终人工审批，详见
   [architecture/hil-approval-policy.md](architecture/hil-approval-policy.md)。
 
