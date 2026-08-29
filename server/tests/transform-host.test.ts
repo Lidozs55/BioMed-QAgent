@@ -14,7 +14,7 @@ import {
   compileTransformFixtureOnly,
   copyHostCompiledFixtureBytes,
   createFixtureDatasetTransform,
-  detectSandboxAvailability,
+  detectIsolationAvailability,
   InvocationQuarantine,
   NonProductionTransformHost,
   normalizeTransformSource,
@@ -315,7 +315,7 @@ describe("Host-owned bundle and input snapshots", () => {
 describe("versioned permanently-disabled Host protocol", () => {
   test("reports sandbox_unavailable honestly on every platform and issues no output", () => {
     for (const platform of ["win32", "linux", "darwin"] as const) {
-      expect(detectSandboxAvailability(platform)).toMatchObject({
+      expect(detectIsolationAvailability(platform)).toMatchObject({
         available: false,
         reason: "sandbox_unavailable",
         platform,
@@ -333,10 +333,10 @@ describe("versioned permanently-disabled Host protocol", () => {
       authorityClaim: claim(context),
     });
 
-    expect(result.sandbox.available).toBe(false);
+    expect(result.isolation.available).toBe(false);
     expect(result.terminal.reason).toBe("sandbox_unavailable");
     expect(result.receipt).toMatchObject({
-      sandbox_backend: "unavailable",
+      execution_backend: "unavailable",
       exit_state: "sandbox_unavailable",
       exit_code: null,
       exit_signal: null,

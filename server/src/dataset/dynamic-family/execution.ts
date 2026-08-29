@@ -81,7 +81,7 @@ export async function executeDynamicFamilyTransform(
   }
 
   if (
-    expected.backend_policy.sandbox_backend !== "in_process_unisolated"
+    expected.backend_policy.execution_backend !== "in_process_unisolated"
     || expected.cancel_fence.cancellation_state !== "none"
   ) {
     throw new TypeError("Dynamic execution requires the explicit unisolated backend and an open cancel fence");

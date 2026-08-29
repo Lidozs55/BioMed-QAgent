@@ -155,8 +155,8 @@ async function createFixture(): Promise<Fixture> {
     input_result_receipts: [],
     granted_capabilities: ["bounded_reader"],
     resource_limits: resourceLimits,
-    sandbox_backend: "container",
-    sandbox_config_digest: HEX_8,
+    execution_backend: "container",
+    execution_config_digest: HEX_8,
     exit_state: "succeeded",
     exit_code: 0,
     exit_signal: null,
@@ -213,8 +213,8 @@ async function createFixture(): Promise<Fixture> {
     input_asset_receipts: [inputAsset],
     input_result_receipts: [],
     backend_policy: {
-      sandbox_backend: "container",
-      sandbox_config_digest: HEX_8,
+      execution_backend: "container",
+      execution_config_digest: HEX_8,
       policy_digest: HEX_9,
       granted_capabilities: ["bounded_reader"],
       resource_limits: resourceLimits,
@@ -386,7 +386,7 @@ describe("Core transform quarantine admission", () => {
     const fixture = await createFixture();
     const unavailable: TransformExecutionReceipt = {
       ...fixture.receipt,
-      sandbox_backend: "unavailable",
+      execution_backend: "unavailable",
       exit_state: "sandbox_unavailable",
       exit_code: null,
       output_bytes: 0,

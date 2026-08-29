@@ -721,7 +721,7 @@ export async function createPhase3Runtime(
             relations: result.materialization.candidate.relations.map((relation) => relation.relation_id),
             artifacts: product.manifest.artifacts,
             source_acquisition_provenance: result.sourceAcquisitionProvenance,
-            backend: result.receipt.sandbox_backend,
+            backend: result.receipt.execution_backend,
             security_boundary: false,
           };
           } finally {

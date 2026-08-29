@@ -1,4 +1,4 @@
-export interface SandboxAvailability {
+export interface IsolationAvailability {
   available: false;
   reason: "sandbox_unavailable";
   platform: NodeJS.Platform;
@@ -10,7 +10,7 @@ export interface SandboxAvailability {
  * Windows is not downgraded to worker_threads, node:vm, or a same-account
  * child process. Callers must keep Agent-authored transforms disabled.
  */
-export function detectSandboxAvailability(platform: NodeJS.Platform = process.platform): SandboxAvailability {
+export function detectIsolationAvailability(platform: NodeJS.Platform = process.platform): IsolationAvailability {
   const platformDetail = platform === "win32"
     ? "Windows service-account/ACL + Job Object + network-deny isolation is not implemented"
     : `No approved OS isolation backend is configured for ${platform}`;

@@ -167,8 +167,8 @@ const receipt: TransformExecutionReceipt = {
     open_files: 64,
     pids: 1,
   },
-  sandbox_backend: "container",
-  sandbox_config_digest: D,
+  execution_backend: "container",
+  execution_config_digest: D,
   exit_state: "succeeded",
   exit_code: 0,
   exit_signal: null,
@@ -388,7 +388,7 @@ describe("family-transform strict lexical policies", () => {
   it("represents an unavailable backend honestly and binds backend to terminal state", () => {
     const unavailable: TransformExecutionReceipt = {
       ...receipt,
-      sandbox_backend: "unavailable",
+      execution_backend: "unavailable",
       exit_state: "sandbox_unavailable",
       exit_code: null,
       exit_signal: null,
@@ -403,12 +403,12 @@ describe("family-transform strict lexical policies", () => {
     expect(parseTransformExecutionReceipt(unavailable, "$")).toEqual(unavailable);
     expect(() => parseTransformExecutionReceipt({
       ...receipt,
-      sandbox_backend: "unavailable",
-    }, "$")) .toThrow(/unavailable|sandbox_backend|exit_state/);
+      execution_backend: "unavailable",
+    }, "$")) .toThrow(/unavailable|execution_backend|exit_state/);
     expect(() => parseTransformExecutionReceipt({
       ...unavailable,
-      sandbox_backend: "container",
-    }, "$")) .toThrow(/unavailable|sandbox_backend|exit_state/);
+      execution_backend: "container",
+    }, "$")) .toThrow(/unavailable|execution_backend|exit_state/);
   });
 
   it("binds terminal, cancellation, deadline, and resource usage facts", () => {

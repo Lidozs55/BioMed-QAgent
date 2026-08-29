@@ -269,12 +269,13 @@ describe("business tool bundle (P5-02/P5-12)", () => {
   it("every curated SKILL_TOOL_MAP tool name is owned by exactly one skill", () => {
     const map = new Map<string, string[]>();
     for (const entry of SKILL_TOOL_MAP) {
+      if (entry.guidance_only === true) continue;
       for (const tool of entry.tools) {
         map.set(tool, [...(map.get(tool) ?? []), entry.name]);
       }
     }
     for (const [tool, owners] of map) {
-      expect(owners, `tool ${tool} must have a single owner`).toHaveLength(1);
+      expect(owners, `tool ${tool} must have a single operational owner`).toHaveLength(1);
     }
   });
 });

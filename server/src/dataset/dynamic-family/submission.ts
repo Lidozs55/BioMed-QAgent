@@ -281,7 +281,7 @@ export async function submitDynamicFamilyPublication(
   const requestDigest = canonicalDigest({ proposal, registered_sources: input.submission.registered_sources });
   const parametersDigest = canonicalDigest(bindings.map((binding) => binding.parameters));
   const deadline = new Date(now().getTime() + resourceLimits.wall_ms).toISOString();
-  const sandboxConfigDigest = sha256(JSON.stringify({
+  const executionConfigDigest = sha256(JSON.stringify({
     backend: "in_process_unisolated",
     policyVersion: compiled.policyVersion,
     securityBoundary: false,
@@ -307,8 +307,8 @@ export async function submitDynamicFamilyPublication(
     input_asset_receipts: assetReceipts,
     input_result_receipts: [],
     backend_policy: {
-      sandbox_backend: "in_process_unisolated",
-      sandbox_config_digest: sandboxConfigDigest,
+      execution_backend: "in_process_unisolated",
+      execution_config_digest: executionConfigDigest,
       policy_digest: compiled.policyDigest,
       granted_capabilities: ["bounded_log", "bounded_output"],
       resource_limits: resourceLimits,
