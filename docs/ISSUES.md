@@ -51,7 +51,7 @@
 
 ### [P1] 正式发布管道无法检测占位符/空壳内容（2026-08-29 gold7 qwen r4 实证）
 
-- **状态：** 2026-08-29 gold7 qwen3.7-flash@256k rerun r4（`data/gold-runs/57af4fec-gold7-qwen37flash-r4`，run `run_ts_43f4f82b-…`）实证。未修复。
+- **状态（2026-08-29，第一层已修复，分支 `feat/receipt-referenced-submit`）：** transform admission 新增确定性 `PLACEHOLDER_CONTENT` 拒绝——数据行中出现哨兵词单元格（placeholder/unknown/tbd/n/a/not_found/no_records_found_in_input_json，大小写不敏感精确匹配）或整行无任何真实值即拒，复现测试覆盖真实 admit 管道（`admission.test.ts`）。**仍开放：** (a) 内容完备性维度（对照 requirement 的规模预期，如行数量级）尚未进 product_assessment；(b) 词表筛查是精确匹配，语义级占位（真实查得到但抄错来源的行）不在防护范围。
 - **现象：** run 全程程序性合规——prepare/submit 契约通过、supervisor 产物重下载+SHA-256 复核通过（exit 0）、validation 40/40、product_assessment 六维（schema/relations/identifiers/provenance/confidence/reproducibility）全结构分判 `publishable`。但三张发布表各只有一行字面占位数据：`UNKNOWN,UNKNOWN,UNKNOWN,UNKNOWN`、`NONE,NONE,placeholder`、`NO_RECORDS_FOUND_IN_INPUT_JSON,,,,,,,`；仅 1 个来源资产被绑定（run 实际已获取 GWAS Catalog、Bellenguez 补充 ZIP、PubMed 元数据）；题目要求的 dbSNP GRCh38 补全完全未执行（`lookup_dbsnp` 零调用）。
 - **影响：** "正式发布 = 结构 + 溯源 + 可复现"的等式缺一角——内容完备性无人把关，空壳数据可以拿全绿发布并顶替真样例。评审语境下这比 blocked 更糟：blocked 是诚实缺口，空壳 publication 是制度性造假通道（本例模型并非恶意，是 transform 解析失败后选择"凑满闭包"）。
 - **最小复现：** 以 r4 证据包重放即可；任何让 transform 输出占位行满足投影闭包的 run 都会复现。
@@ -106,3 +106,7 @@
 ## 维护规则
 
 新增条目必须写出状态、影响、最小复现和下一步。修复从失败测试开始；合并后从本文件删除，由测试和提交历史承担关闭证据。架构 hardening 或产品里程碑不得重复登记在这里和 `TODO.md`。
+
+## 代码质量 / CI（2026-08-29 追加观察）
+
+- main@b52bb8bd 上 `tests/model-settings.test.ts`（resolveActiveModel 期望 temperature 0.25 等字段不匹配）与 `tests/skill-manifests.test.ts`（dataset-construction SKILL.md 引用未注册工具 `acquire_core_carrier`）失败。二者均与 settings 整改/skill 领域相关，属并行工作区遗留，与本轮 dynamic publication 改动无关（相关路径 diff 为空）；由对应领域负责人收敛。

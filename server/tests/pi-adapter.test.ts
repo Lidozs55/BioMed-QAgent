@@ -87,9 +87,12 @@ async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
 describe("Pi system prompt", () => {
   test("defines dataset completion by task semantics instead of requested file format", () => {
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
-      /^\[Dataset completion contract\][\s\S]*\[Evidence integrity\][\s\S]*\[Trusted execution\][\s\S]*\[Control and recovery\][\s\S]*$/,
+      /^\[Dataset completion contract\][\s\S]*\[Evidence integrity\][\s\S]*\[Trusted execution\][\s\S]*\[Dynamic publication mechanics\][\s\S]*\[Control and recovery\][\s\S]*$/,
     );
-    expect(PHASE1_SYSTEM_PROMPT.length).toBeLessThanOrEqual(7_000);
+    // 7_400 = former 7_000 budget plus the [Dynamic publication mechanics]
+    // section (~1.1k chars) that moves prepare/submit contract knowledge out of
+    // user prompts; still caps per-call system-prompt growth.
+    expect(PHASE1_SYSTEM_PROMPT.length).toBeLessThanOrEqual(7_400);
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
       /completion is determined by task semantics, never by the requested file format/i,
     );
@@ -228,6 +231,17 @@ describe("Pi system prompt", () => {
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/matching skill/i);
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/source-specific rules/i);
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/Do not duplicate or improvise/i);
+  });
+
+  test("teaches the receipt-only dynamic submit path and placeholder rejection", () => {
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /submit then needs only schema_version and that unchanged preflight_receipt/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /input_requirement_ref is a declared_input_roles role, not a binding id/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/placeholder sentinels are rejected/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/never request file access outside the Task Workspace/i);
   });
 });
 

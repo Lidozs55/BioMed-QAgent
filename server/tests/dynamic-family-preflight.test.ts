@@ -12,6 +12,7 @@ import {
 import { canonicalDigest } from "../src/dataset/adapters/identity.js";
 import type { CoreAcquisitionPlan } from "../src/dataset/acquisition/runtime.js";
 import {
+  dynamicFamilyPreflightSubmissionDigest,
   prepareDynamicFamilyPublication,
   validateDynamicFamilyPreflightReceipt,
 } from "../src/dataset/dynamic-family/preflight.js";
@@ -131,6 +132,64 @@ describe("dynamic family prepare/submit preflight", () => {
     const accepted = await submit.execute(raw);
     expect(accepted.isError).not.toBe(true);
     expect(called).toBe(true);
+  });
+
+  it("resolves the stored prepared submission for receipt-only submit", async () => {
+    const raw = await rawSubmission();
+    const parsed = await parseDynamicFamilyPublicationSubmission(raw);
+    const coordinator = createDynamicFamilyPreflightCoordinator();
+    const preparation = coordinator.beginPrepare(parsed.execution_proposal.requirement_id);
+    const receipt = await prepareDynamicFamilyPublication({
+      taskId: "task_preflight",
+      requirementId: parsed.execution_proposal.requirement_id,
+      generation: preparation.generation,
+      submission: parsed,
+    });
+    coordinator.commitPrepare(
+      preparation,
+      receipt,
+      dynamicFamilyPreflightSubmissionDigest(parsed),
+      parsed,
+    );
+    expect(coordinator.resolveSubmission(receipt)).toBe(parsed);
+    expect(() =>
+      coordinator.resolveSubmission({ ...receipt, receipt_digest: "f".repeat(64) }),
+    ).toThrow(/unknown or superseded/);
+
+    let received: unknown = null;
+    const submit = createDynamicFamilyPublicationTool({
+      resolveSubmission: (preflightReceipt) =>
+        Promise.resolve(coordinator.resolveSubmission<typeof parsed>(preflightReceipt)),
+      submit: async (submission, _signal, _context, submittedReceipt) => {
+        received = { submission, receiptDigest: submittedReceipt?.receipt_digest };
+        return { ok: true };
+      },
+    });
+    const receiptOnly = await submit.execute({
+      schema_version: "1.0",
+      preflight_receipt: receipt,
+    });
+    expect(receiptOnly.isError).not.toBe(true);
+    expect(JSON.parse(receiptOnly.content)).toMatchObject({ ok: true });
+    expect(received).toMatchObject({
+      submission: parsed,
+      receiptDigest: receipt.receipt_digest,
+    });
+
+    const unsupported = createDynamicFamilyPublicationTool({
+      submit: async () => ({ ok: true }),
+    });
+    const missingResolver = await unsupported.execute({
+      schema_version: "1.0",
+      preflight_receipt: receipt,
+    });
+    expect(missingResolver.isError).toBe(true);
+    const extraKeys = await unsupported.execute({
+      schema_version: "1.0",
+      preflight_receipt: receipt,
+      registered_sources: {},
+    });
+    expect(extraKeys.isError).toBe(true);
   });
 
   it("rejects per-record source binding floods before the receipt can exceed submit limits", async () => {
