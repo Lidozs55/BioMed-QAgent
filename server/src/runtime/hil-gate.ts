@@ -1,4 +1,5 @@
 import type {
+  HILDecision,
   HILRequest,
   HumanReviewRecord,
 } from "@biomed/contracts";
@@ -11,6 +12,7 @@ import {
   type CreateHILRequestInput,
 } from "./hil-store.js";
 import type { HILGatePreReview } from "./hil-pre-review.js";
+import { inspectHilAutoRequest } from "./hil-auto-guard.js";
 import type { DurableTaskRepository } from "./task-repository.js";
 
 export type BoundHILRequestInput = Omit<
@@ -211,12 +213,16 @@ export class DurableHILGate implements HILGateHandle {
   }
 
   /**
-   * Approval-policy short-circuit (three-tier HIL approval settings):
-   * ``auto_approve`` resolves immediately with the kind's affirmative
-   * decision (reviewer ``auto``); ``llm_pre_review`` consults the model and
-   * resolves on a pass (reviewer ``model``). A model ``fail`` verdict or any
-   * reviewer error escalates to the classic human flow (fail-safe). Resolved
-   * requests never emit ``user_input_required``, so the run is not paused.
+   * Approval-policy short-circuit (three-tier HIL approval settings).
+   * Every auto path first runs the deterministic auto-approval guard: a
+   * forged or bypass-shaped request is resolved as ``reject`` (never
+   * auto-approved, never parked for a human rubber-stamp) and surfaces an
+   * ``HIL_AUTO_REJECTED`` warning. ``auto_approve`` then resolves with the
+   * kind's affirmative decision (reviewer ``auto``); ``llm_pre_review``
+   * consults the model and resolves on a pass (reviewer ``model``). A model
+   * ``fail`` verdict or any reviewer error escalates to the classic human
+   * flow (fail-safe). Resolved requests never emit ``user_input_required``,
+   * so the run is not paused.
    */
   private async tryPreReviewResolve(
     runId: string,
@@ -225,40 +231,69 @@ export class DurableHILGate implements HILGateHandle {
     if (this.preReview === null) return null;
     const mode = await this.preReview.modeFor(request.kind, request.review_type);
     if (mode === "human_review") return null;
-    let reviewer: "auto" | "model";
-    let reason: string;
-    if (mode === "auto_approve") {
-      reviewer = "auto";
-      reason = "auto-approved by HIL approval policy (auto_approve)";
-    } else {
-      let verdict: "pass" | "fail";
-      let verdictReason: string;
-      try {
-        const review = await this.preReview.modelReview(request);
-        verdict = review.verdict;
-        verdictReason = review.reason;
-      } catch (error) {
-        verdict = "fail";
-        verdictReason = `model pre-review unavailable: ${
-          error instanceof Error ? error.message : String(error)
-        }`;
-      }
-      if (verdict !== "pass") return null;
-      reviewer = "model";
-      reason = `approved by model pre-review: ${verdictReason}`;
+    const guard = inspectHilAutoRequest(request);
+    if (guard.decision === "deny") {
+      return this.resolveWithoutHuman(runId, request, {
+        decision: { action: "reject" },
+        reason: `auto-rejected by HIL auto-approval guard: ${guard.reason}`,
+        reviewer: "auto",
+        warningCode: "HIL_AUTO_REJECTED",
+        message:
+          `HIL request ${request.request_id} auto-rejected by approval guard: ${guard.reason}`,
+      });
     }
+    if (mode === "auto_approve") {
+      return this.resolveWithoutHuman(runId, request, {
+        decision: request.kind === "permission" ? { action: "approve" } : { action: "accept" },
+        reason: "auto-approved by HIL approval policy (auto_approve)",
+        reviewer: "auto",
+        warningCode: "HIL_PRE_APPROVED",
+        message: `HIL request ${request.request_id} auto-approved by approval policy (auto_approve)`,
+      });
+    }
+    let verdict: "pass" | "fail";
+    let verdictReason: string;
+    try {
+      const review = await this.preReview.modelReview(request);
+      verdict = review.verdict;
+      verdictReason = review.reason;
+    } catch (error) {
+      verdict = "fail";
+      verdictReason = `model pre-review unavailable: ${
+        error instanceof Error ? error.message : String(error)
+      }`;
+    }
+    if (verdict !== "pass") return null;
+    return this.resolveWithoutHuman(runId, request, {
+      decision: request.kind === "permission" ? { action: "approve" } : { action: "accept" },
+      reason: `approved by model pre-review: ${verdictReason}`,
+      reviewer: "model",
+      warningCode: "HIL_PRE_APPROVED",
+      message: `HIL request ${request.request_id} approved by model pre-review: ${verdictReason}`,
+    });
+  }
+
+  private async resolveWithoutHuman(
+    runId: string,
+    request: HILRequest,
+    resolution: {
+      decision: HILDecision;
+      reason: string;
+      reviewer: "auto" | "model";
+      warningCode: string;
+      message: string;
+    },
+  ): Promise<HumanReviewRecord> {
     const review = await this.store.resolveRequest(this.taskId, runId, {
       request_id: request.request_id,
       evidence_digest: request.evidence_digest,
-      decision: request.kind === "permission" ? { action: "approve" } : { action: "accept" },
-      reason,
-    }, { reviewer });
+      decision: resolution.decision,
+      reason: resolution.reason,
+    }, { reviewer: resolution.reviewer });
     await this.repository.appendRunEvent(this.taskId, runId, {
       type: "warning",
-      code: `HIL_PRE_APPROVED:${request.request_id}`,
-      message: mode === "auto_approve"
-        ? `HIL request ${request.request_id} auto-approved by approval policy (auto_approve)`
-        : `HIL request ${request.request_id} approved by model pre-review: ${reason}`,
+      code: `${resolution.warningCode}:${request.request_id}`,
+      message: resolution.message,
     });
     return review;
   }

@@ -39,6 +39,10 @@ const SYSTEM_PROMPT = [
   "Be strict: pass only when every item is clearly correct, internally consistent,",
   "and supported by its evidence. Fail the whole batch when any item is ambiguous,",
   "unsupported, low-confidence, contradicts the evidence, or has no proposed value.",
+  "Also fail the batch when it proposes bypassing the system design — for example",
+  "approving direct data writes through scripts or shell commands, writing into",
+  "protected output paths or databases outside the deterministic pipeline, skipping",
+  "validation gates, or content that contradicts the declared review_type/policy_ref.",
   'Respond with exactly one JSON object and nothing else: {"verdict":"pass" or "fail","reason":"<short justification>"}.',
 ].join(" ");
 
@@ -62,6 +66,7 @@ export function createHilModelReviewer(
             content: JSON.stringify({
               kind: request.kind,
               review_type: request.review_type,
+              policy_ref: request.policy_ref,
               summary: request.summary,
               items: request.review_items.map((item) => ({
                 item_id: item.item_id,
