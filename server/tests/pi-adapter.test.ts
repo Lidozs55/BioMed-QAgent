@@ -7,6 +7,7 @@ import {
   PiAgentAdapter,
   applyModelProfileToPayload,
   resolvePiCompactionOverrides,
+  resolvePiRetryOverrides,
   resolveManualPiCompactionOverrides,
   shouldReconfigureSession,
   toolCatalogPrompt,
@@ -286,6 +287,17 @@ describe("Pi model profile mapping", () => {
   });
 });
 describe("PiAgentAdapter", () => {
+  test("keeps retryable provider failures within a bounded long-running retry window", () => {
+    expect(resolvePiRetryOverrides()).toEqual({
+      retry: {
+        enabled: true,
+        maxRetries: 6,
+        baseDelayMs: 3_000,
+        provider: { maxRetryDelayMs: 60_000 },
+      },
+    });
+  });
+
   afterEach(() => {
     vi.useRealTimers();
   });

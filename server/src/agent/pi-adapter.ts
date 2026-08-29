@@ -467,6 +467,30 @@ export function resolveManualPiCompactionOverrides(
 }
 
 /**
+ * Formal dataset runs often span many provider turns. Keep transient 429/5xx
+ * failures inside one durable run long enough for a short upstream throttle
+ * window to clear, while Pi's retry classifier still fails non-transient
+ * errors immediately.
+ */
+export function resolvePiRetryOverrides(): {
+  retry: {
+    enabled: true;
+    maxRetries: number;
+    baseDelayMs: number;
+    provider: { maxRetryDelayMs: number };
+  };
+} {
+  return {
+    retry: {
+      enabled: true,
+      maxRetries: 6,
+      baseDelayMs: 3_000,
+      provider: { maxRetryDelayMs: 60_000 },
+    },
+  };
+}
+
+/**
  * Whether a freshly resolved product config requires re-applying the Pi
  * session model / context window / compaction budgets.
  */
@@ -636,7 +660,7 @@ async function createRealUpstreamSession(
       "Configured Pi model is unavailable",
     );
   }
-  const settingsManager = SettingsManager.inMemory();
+  const settingsManager = SettingsManager.inMemory(resolvePiRetryOverrides());
   if (
     current.compactionTriggerRatio !== undefined &&
     current.compactionTargetRatio !== undefined
