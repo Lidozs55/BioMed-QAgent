@@ -46,7 +46,7 @@ const FIXED_PARSER_SCRIPT = /^parse(?:[-_][a-z0-9][a-z0-9_-]*)?\.m?js$/iu;
 const KNOWN_SHELL_WRAPPER = /(?:^|[\\/])(?:bash|cmd(?:\.exe)?|powershell(?:\.exe)?|pwsh(?:\.exe)?|sh)(?:\s|$)/iu;
 const KNOWN_NETWORK_BYPASS = /(?:^|[\\/])(?:curl|wget)(?:\.exe)?(?:\s|$)|https?:\/\//iu;
 const SECRET_KEY = /(?:access[_-]?token|api[_-]?key|authorization|credential|password|private[_-]?key|secret|token)/iu;
-const TOKEN_TELEMETRY_KEY = /^(?:tokens|tokens_before|estimated_tokens_after|target_tokens|summary_tokens)$/iu;
+const TOKEN_TELEMETRY_KEY = /^(?:tokens|tokens_before|estimated_tokens_after|target_tokens|summary_tokens|input_tokens|output_tokens|cache_read_tokens|cache_write_tokens|total_tokens|reasoning_tokens)$/iu;
 const SECRET_BASENAME = /^(?:\.env(?!\.example$)(?:\..*)?|credentials?\.json|secrets?\.json|.*\.(?:key|pem|p12|pfx)|.*(?:secret|credential|token|password|private[_-]?key).*)$/iu;
 const SHELL_META = /[;&|<>`\n\r$()]/u;
 
