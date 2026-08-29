@@ -1,6 +1,6 @@
 <mxfile host="65bd71144e">
     <diagram id="biomed-architecture-overview" name="系统架构总览">
-        <mxGraphModel dx="1385" dy="1005" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="810" math="0" shadow="0">
+        <mxGraphModel dx="726" dy="527" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="810" math="0" shadow="0">
             <root>
                 <mxCell id="0"/>
                 <mxCell id="1" parent="0"/>
@@ -91,28 +91,28 @@
                 <mxCell id="cs3" value="&lt;b&gt;&lt;font style=&quot;font-size:13px;&quot;&gt;门禁与发布&lt;/font&gt;&lt;/b&gt;&lt;br&gt;Validation Gate&lt;br&gt;失败不发布 · 不可变" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;spacing=2;" parent="core" vertex="1">
                     <mxGeometry x="515" y="34" width="128" height="58" as="geometry"/>
                 </mxCell>
-                <mxCell id="pc1" value="acquire" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=9.5;" parent="core" vertex="1">
+                <mxCell id="pc1" value="&lt;font style=&quot;font-size: 12px;&quot;&gt;acquire&lt;/font&gt;" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=9.5;" parent="core" vertex="1">
                     <mxGeometry x="225" y="34" width="64" height="26" as="geometry"/>
                 </mxCell>
-                <mxCell id="pc2" value="parse" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=9.5;" parent="core" vertex="1">
+                <mxCell id="pc2" value="&lt;font style=&quot;font-size: 12px;&quot;&gt;parse&lt;/font&gt;" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=9.5;" parent="core" vertex="1">
                     <mxGeometry x="225" y="66" width="64" height="26" as="geometry"/>
                 </mxCell>
-                <mxCell id="pc3" value="normalize" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=9.5;" parent="core" vertex="1">
+                <mxCell id="pc3" value="&lt;font style=&quot;font-size: 12px;&quot;&gt;normalize&lt;/font&gt;" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=9.5;" parent="core" vertex="1">
                     <mxGeometry x="295" y="66" width="64" height="26" as="geometry"/>
                 </mxCell>
-                <mxCell id="pc4" value="compat" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=9.5;" parent="core" vertex="1">
+                <mxCell id="pc4" value="&lt;font style=&quot;font-size: 12px;&quot;&gt;compat&lt;/font&gt;" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=9.5;" parent="core" vertex="1">
                     <mxGeometry x="295" y="34" width="64" height="26" as="geometry"/>
                 </mxCell>
-                <mxCell id="pc5" value="integrate" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=9.5;" parent="core" vertex="1">
+                <mxCell id="pc5" value="&lt;font style=&quot;font-size: 12px;&quot;&gt;integrate&lt;/font&gt;" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=9.5;" parent="core" vertex="1">
                     <mxGeometry x="365" y="34" width="64" height="26" as="geometry"/>
                 </mxCell>
-                <mxCell id="pc6" value="derive" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=9.5;" parent="core" vertex="1">
+                <mxCell id="pc6" value="&lt;font style=&quot;font-size: 12px;&quot;&gt;derive&lt;/font&gt;" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=9.5;" parent="core" vertex="1">
                     <mxGeometry x="365" y="66" width="64" height="26" as="geometry"/>
                 </mxCell>
-                <mxCell id="pc7" value="validate" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=9.5;" parent="core" vertex="1">
+                <mxCell id="pc7" value="&lt;font style=&quot;font-size: 12px;&quot;&gt;validate&lt;/font&gt;" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=9.5;" parent="core" vertex="1">
                     <mxGeometry x="435" y="66" width="64" height="26" as="geometry"/>
                 </mxCell>
-                <mxCell id="pc8" value="publish" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9.5;fontStyle=1;" parent="core" vertex="1">
+                <mxCell id="pc8" value="&lt;font style=&quot;font-size: 12px;&quot;&gt;publish&lt;/font&gt;" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9.5;fontStyle=1;" parent="core" vertex="1">
                     <mxGeometry x="435" y="34" width="64" height="26" as="geometry"/>
                 </mxCell>
                 <mxCell id="c_note" value="确定性流水线为服务端固定骨架（Agent 不可编排 DAG）· 确定性可复算 · &lt;b&gt;&lt;font style=&quot;font-size:12px;&quot;&gt;Agent 不能直接制造数据值&lt;/font&gt;&lt;/b&gt;" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;fontColor=#8a5a00;" parent="core" vertex="1">
@@ -139,7 +139,7 @@
                 <mxCell id="e_pc7_pc8" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#d79b00;endArrow=classic;endFill=1;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" parent="core" source="pc7" target="pc8" edge="1">
                     <mxGeometry relative="1" as="geometry"/>
                 </mxCell>
-                <mxCell id="e_pc8_cs3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#d79b00;endArrow=classic;endFill=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.25;entryDx=0;entryDy=0;" edge="1" parent="core" source="pc8" target="cs3">
+                <mxCell id="e_pc8_cs3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#d79b00;endArrow=classic;endFill=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.25;entryDx=0;entryDy=0;" parent="core" source="pc8" target="cs3" edge="1">
                     <mxGeometry relative="1" as="geometry">
                         <Array as="points">
                             <mxPoint x="499" y="48"/>
@@ -148,7 +148,7 @@
                     </mxGeometry>
                 </mxCell>
                 <mxCell id="data" value="最终数据产出 · Data（已发布不可变）" style="swimlane;startSize=30;rounded=1;arcSize=4;fontSize=14;fontStyle=1;html=1;whiteSpace=wrap;fillColor=#82b366;strokeColor=#5f8a45;swimlaneFillColor=#f4faf1;" parent="1" vertex="1">
-                    <mxGeometry x="1190" y="340" width="280" height="310" as="geometry"/>
+                    <mxGeometry x="1162" y="370" width="280" height="310" as="geometry"/>
                 </mxCell>
                 <mxCell id="t1" value="&lt;b&gt;&lt;font style=&quot;font-size:13px;&quot;&gt;DatasetPublication（不可变）&lt;/font&gt;&lt;/b&gt;&lt;br&gt;current 指针 · supersedes 版本链" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=11;spacing=2;" parent="data" vertex="1">
                     <mxGeometry x="20" y="36" width="240" height="44" as="geometry"/>
@@ -216,13 +216,15 @@
                 <mxCell id="e_rt_core" value="构建事件留痕" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;fontSize=11;fontColor=#333333;labelBackgroundColor=#ffffff;strokeColor=#59636e;endArrow=classic;endFill=1;startArrow=none;exitX=0.8587;exitY=0;exitDx=0;exitDy=0;entryX=0.8587;entryY=1;entryDx=0;entryDy=0;" parent="1" source="core" target="band" edge="1">
                     <mxGeometry relative="1" as="geometry"/>
                 </mxCell>
-                <mxCell id="e_core_data" value="&lt;font style=&quot;font-size: 12px;&quot;&gt;原子发布&lt;/font&gt;" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;fontSize=11;fontColor=#333333;labelBackgroundColor=#ffffff;strokeColor=#59636e;endArrow=classic;endFill=1;startArrow=none;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.9194;entryDx=0;entryDy=0;" parent="1" source="cs3" target="data" edge="1">
-                    <mxGeometry relative="1" as="geometry"/>
+                <mxCell id="e_core_data" value="&lt;font style=&quot;font-size: 12px;&quot;&gt;原子发布&lt;/font&gt;" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;fontSize=11;fontColor=#333333;labelBackgroundColor=#ffffff;strokeColor=#59636e;endArrow=classic;endFill=1;startArrow=none;exitX=1;exitY=0.5;exitDx=0;exitDy=0;" parent="1" source="cs3" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <mxPoint x="1162" y="625" as="targetPoint"/>
+                    </mxGeometry>
                 </mxCell>
                 <mxCell id="e_data_fe" value="&lt;font style=&quot;font-size: 12px;&quot;&gt;产物 API&lt;/font&gt;" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;fontSize=11;fontColor=#333333;labelBackgroundColor=#ffffff;strokeColor=#59636e;endArrow=classic;endFill=1;startArrow=classic;startFill=1;exitX=0.25;exitY=0;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="data" target="frontend" edge="1">
                     <mxGeometry x="0.1128" y="-2" relative="1" as="geometry">
                         <Array as="points">
-                            <mxPoint x="1260" y="242"/>
+                            <mxPoint x="1232" y="242"/>
                         </Array>
                         <mxPoint x="-1" as="offset"/>
                     </mxGeometry>
@@ -230,7 +232,7 @@
                 <mxCell id="e_data_res" value="&lt;font style=&quot;font-size: 12px;&quot;&gt;最终交付 · hash 校验&lt;/font&gt;" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;fontSize=11;fontColor=#333333;labelBackgroundColor=#ffffff;strokeColor=#59636e;endArrow=classic;endFill=1;startArrow=none;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="data" target="researcher" edge="1">
                     <mxGeometry x="0.2516" y="-2" relative="1" as="geometry">
                         <Array as="points">
-                            <mxPoint x="1330" y="92"/>
+                            <mxPoint x="1302" y="92"/>
                         </Array>
                         <mxPoint as="offset"/>
                     </mxGeometry>
