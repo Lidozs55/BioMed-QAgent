@@ -71,7 +71,13 @@
 
 ### P2 token 用量记账（小改造，可选但直接服务报告）
 
-若 Pi 上游响应暴露 usage（compaction 已读到 `event.result.usage.output`），
+**2026-08-29 已实现（main@02e3f412）**：Pi `message_end`/`compaction_end` 的
+provider 精确 usage 随 durable `context_usage.usage` 落盘（input/output/
+cache_read/cache_write/total，reasoning 有则报），task reducer 按 run 累计进
+终态 `RunSummary.usage`（含 `model_calls`），snapshot API 直接可见；gold
+supervisor 把 `run_usage` 写入 closure.json。成本仍 = tokens × 手工价格表。
+
+原设计：若 Pi 上游响应暴露 usage（compaction 已读到 `event.result.usage.output`），
 在会话层累计 input/output tokens 写入 run 汇总 + 测试；不可行则报告用
 `context_usage` 估算值并明确标注"估算"。成本 = tokens × 手工价格表。
 
