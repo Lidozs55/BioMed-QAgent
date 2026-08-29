@@ -1,0 +1,116 @@
+%% =====================================================================
+%% BioMed-QAgent 参赛作品报告 —— 主文件
+%% 源内容：PROJECT_REPORT_DRAFT.md（机械转换，章节文件在 chapters/）
+%% 编译：latexmk -xelatex -outdir=build main.tex
+%% 依赖：TeX Live（xelatex）；中文排版走 ctex；无外部字体要求
+%% =====================================================================
+\documentclass[UTF8, scheme=chinese, zihao=-4, oneside]{ctexbook}
+
+% 让 xdvipdfmx 为 CJK 写 ToUnicode：PDF 中文可复制/可搜索
+\XeTeXgenerateactualtext=1
+
+% ---------------------------------------------------------------- 页面
+\usepackage[a4paper, top=2.6cm, bottom=2.6cm, left=2.8cm, right=2.8cm]{geometry}
+\emergencystretch=3em
+
+% ---------------------------------------------------------------- 常用宏包
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{xltabular}   % 支持跨页的 tabularx（长表 + 自动换列）
+\usepackage{seqsplit}    % 超长 token（如 SHA-256）可断行
+\usepackage{listings}
+\usepackage{enumitem}
+\usepackage{caption}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{newunicodechar}
+% 正文中直接出现的数学符号（不在拉丁字体里）映射到数学字体
+\newunicodechar{≠}{\ensuremath{\neq}}
+\newunicodechar{↔}{\ensuremath{\leftrightarrow}}
+
+% ---------------------------------------------------------------- 表格列型
+% 中文论文表体左对齐、自动换行（X 列），配合 xltabular 使用
+\newcolumntype{L}{>{\raggedright\arraybackslash}X}
+
+% ---------------------------------------------------------------- 行内代码
+% seqsplit：长标识符（SHA-256、路径、authorReportedGenes 等）可在任意字符处折行，
+% 仅在行尾放不下时触发，正常排版无视觉变化；robust 使 \code 可用在 caption 等移动参数
+\DeclareRobustCommand{\code}[1]{\texttt{\seqsplit{#1}}}
+
+% ---------------------------------------------------------------- 代码块
+\definecolor{papercodeframe}{gray}{0.62}
+\lstdefinestyle{papercode}{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  postbreak=\mbox{\textcolor{papercodeframe}{$\hookrightarrow$}\space},
+  frame=single,
+  framerule=0.3pt,
+  framesep=6pt,
+  aboveskip=1em,
+  belowskip=1em,
+  xleftmargin=1.2em,
+  xrightmargin=1.2em,
+  showstringspaces=false,
+  columns=fullflexible,
+  keepspaces=true,
+  tabsize=2,
+}
+
+% ---------------------------------------------------------------- 列表
+\setlist[itemize]{topsep=4pt, itemsep=2pt, parsep=0pt}
+\setlist[enumerate]{topsep=4pt, itemsep=2pt, parsep=0pt}
+
+% ---------------------------------------------------------------- 图表题注
+\captionsetup{font=small, labelfont=bf}
+
+% ---------------------------------------------------------------- 页眉页脚
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[C]{\small\leftmark}
+\fancyfoot[C]{\small\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+% ---------------------------------------------------------------- 交叉引用与书签
+\usepackage[bookmarksnumbered=true, hidelinks]{hyperref}
+\hypersetup{
+  pdftitle={BioMed-QAgent：可信科学数据编译器——参赛作品报告},
+  pdfauthor={BioMed-QAgent 项目组},
+}
+
+% ---------------------------------------------------------------- 目录深度
+\setcounter{tocdepth}{3}
+\setcounter{secnumdepth}{3}
+
+\begin{document}
+
+% ================================================================ 封面
+\begin{titlepage}
+  \centering
+  \vspace*{2.8cm}
+  {\zihao{1} BioMed-QAgent}\par
+  \vspace{1.1em}
+  {\zihao{3} 可信科学数据编译器}\par
+  \vspace{0.8em}
+  {\zihao{4} —— 面向科研数据查找与整合的参赛作品报告 ——}\par
+  \vspace{5.5cm}
+  {\zihao{4} 2026 年 8 月}\par
+  \vfill
+\end{titlepage}
+
+% ================================================================ 前置部分
+\frontmatter
+\include{chapters/ch00-abstract}
+
+\tableofcontents
+
+% ================================================================ 正文
+\mainmatter
+\include{chapters/ch01-introduction}
+\include{chapters/ch02-problem-definition}
+\include{chapters/ch03-system-overview}
+\include{chapters/ch04-dataset-core}
+\include{chapters/ch05-experiments}
+\include{chapters/ch06-conclusion}
+
+\end{document}
