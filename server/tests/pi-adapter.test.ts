@@ -242,6 +242,12 @@ describe("Pi system prompt", () => {
     );
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/placeholder sentinels are rejected/i);
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/never request file access outside the Task Workspace/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /Transform sandbox forbids every bracket element access/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /never run python, shell, or workspace_exec extraction scripts/i,
+    );
   });
 });
 
