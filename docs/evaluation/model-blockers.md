@@ -30,6 +30,23 @@
 | B6 | **GDC 替代源浅尝辄止 + 搜索结果相关性差**。`search_gdc("breast cancer TCGA")` 首结果 TCGA-**LUAD**（肺癌，seq 809）；`describe_gdc(TCGA-BRCA)` 已确认 1098 病例 / 4876 转录组文件（seq 823，可行路径！），模型一句"需要更多配置"放弃，零次 validate 尝试 | prompt + 产品 | seq 809/823 输出；正文 150→160 行 | search_gdc 查询词到 project 的映射排序修复；提示词：候选源已被证实存在时必须完成一次最小 formal 尝试再比较成本 |
 | B7 | **【环境陷阱】settings PUT 与实际执行模型不一致 → 静默跑错模型**。`PUT /api/v1/settings {model_name}` 只改 `settings.model_name`（显示层），但 `resolveActiveConfig` 用 `active_model_id` 指向的 registry model 记录（`model?.model_id ?? settings.model_name`）。Host 启动时 `bootstrapEnvironmentDefaults` 从 env 引导出一个 `model_dashscope_env_default`（model_id=当时的 qwen3.7-plus、context_window=1M、active=true）；之后 PUT 只改 `settings.model_name=qwen3.8-flash`，未动 active model 记录→**35 次调用全部实际打到 qwen3.7-plus、窗口 1M**（Pi session `model_change` 条目与 assistant.message.model 均为 qwen3.7-plus，铁证），与控制台 qwen3.7-plus 扣费一致。`GET /api/v1/settings` 又回显 `settings.model_name`，看似"已切 3.8-flash"，掩盖了不一致 | 产品（设置接线） | pi-session jsonl `model_change provider=dashscope modelId=qwen3.7-plus`；assistant `model:"qwen3.7-plus"`；registry active=`model_dashscope_env_default`(qwen3.7-plus/1M) 而 settings.model_name=qwen3.8-flash/256k | 正确做法：走 `POST /api/v1/model-registry/models` 建 3.8-flash 记录 + `.../activate`（会同步 settings）；**修复方向**：PUT settings.model_name 若与 active model 冲突应拒绝或级联切换 active；`GET /settings` 应回显真正解析出的 `resolveActiveConfig().modelId` 而非 `settings.model_name`；运行前用 session `model_change` 条目做身份断言。**部分修复（2026-08-29）**：`store.ts` 两处硬编码 `?? "qwen3.7-plus"` 已删除——无 env 模型名时 bootstrap 只注册 provider+key、绝不臆造 active model，`resolveActiveConfig` fail-closed；PUT/active 级联与显示层 truth 化仍待分流修复 |
 
+## gold1-r3 @ qwen3.8-flash（2026-08-29，main@c22eb2452af7，task_ts_b5dccb47-29af-4668-896f-e210d9e8169d）
+
+> 身份断言通过（settings/registry 双层 + Pi session `model_change` 铁证）。终态 **succeeded_publication**：`pub_brca_gse15852_gene_v1_86b05b62073c9e82`（GSE15852/GPL96 长表，8 artifacts，run 绑定）。
+> 用量：60 calls / 1463s / input 534,599 / output 14,470 / cache_read 5,158,272 / 峰值上下文 136,294（256k 窗口，0 压缩，1 次权限停审，0 HIL）。
+> 对照 r1（3.7-plus）：275s/35 calls/blocked_no_publication → r3 慢 5.3 倍但**产物正确闭环**；变慢主因见 C2。
+
+| # | 卡点 | 归类 | 证据 | 建议修法（暂不执行） |
+| - | ---- | ---- | ---- | -------------------- |
+| C1 | **检视 gzip 平台注释的诉求走向 shell 绕路**。seq 185 `process.exec bash.exe -lc "gzip -dc GPL96.annot.gz \| sed \| cut"` 被 supervisor fail-closed 停审（操作员 deny 后 run 恢复，模型改走 workspace_read/preview 正常完成任务）。核心资产预览/解压工具链只覆盖 zip，不覆盖单文件 gzip，模型看 .gz 内容只剩 bash 一条路 | 产品 | events seq 185 permission_requested；permissions.jsonl；deny 后 seq 200+ 正常推进 | extract/preview 支持 gzip 成员或加 `read_core_asset_text(decompress=auto)`；提示词明示"gz 载体勿走 shell" |
+| C2 | **发布后验证循环冗长（本次耗时大头）**。`publication_created`(seq435) 之后又烧了 ~570 事件/30+ calls：`workspace_read`×28 逐回执反复读、5+ 次重复同一句"I'll verify the remaining receipts"自述、`workspace_edit`×2 修订自己的措辞（其中 1 次失败 seq724）。诚实复核是好行为，但**无界重复**——已验证过的回执被再读 2-3 遍 | prompt | tools 计数：workspace_read 28 vs r1 全 run 仅 33 tool_started；24min 时点事件分布（19-23min 每分钟仅 30 事件，全在读文件） | 提示词加收敛规则："每个 artifact/回执验证一次即记录结论；发布后回合预算 ≤N 次工具调用；发现重复读同一文件即停止" |
+| C3 | **basic_statistics 对 536MB 主表字符串溢出**。工具报 `Cannot create a string longer than 0x1fffffe8 characters`（V8 单串上限），导致主表描述性统计未执行，模型如实标注"数值有效性仅依赖 Core expression_value_numeric 检查" | 产品（工具） | 终答"需要你协助"第 4 点；events 中 basic_statistics err 输出 | basic_statistics 改流式/分块解析或声明行数上限 + 抽样统计 |
+| C4 | **无 SOFT 注释平台在 gene 级 schema 下直接不可闭合**。`download_geo_platform_annotation(GPL17586)` 返回 no downloadable annotation table → GSE76250（398 样本，最大配对系列）无法进 gene 级主表；模型未猜映射（正确），但该数据获取面在 gold 标准集上直接封顶 | 产品（覆盖面） | 终答阻塞清单第 2 点；tool_completed GPL17586 输出 | geo_platform adapter 支持 from library/探针命名推断的替代映射源（GeneCards/UniProt gene symbol 表）或提供 probe 序列比对通道 |
+| C5 | **发现查询收窄空转**。追加 3 次 `search_geo`（GPL96/HGU133A 变体）total_count 0/1/0——在已知无同平台第二系列的方向上重复碰瓷 | prompt（轻） | 终答"发现查询收窄失败"段 | 同一约束变体重试 ≤2 次即止损（与 r1-B4 同族，正样本对照下影响小） |
+
+- **行为正样本（值得保留进 prompt 教学）**：单平台同粒度设计优先（43T+43N/GPL96）、拒绝跨 GSE 拼行、发现"probe-mapping 行数未独立验证"后主动修订而非宣称、Benford/末位数偏差如实保留并解释为 MAS5 log2 平台特征、pairing 推导规则交人确认——r1 的 B2/B3（动态路由零调用、时限幻觉）在 r3 未复现。
+- 基础设施观察（非模型问题，不入模板）：supervisor 死于 Host 瞬时 HTTP 500（seq≤207 journal 断档）；watcher 进程被控制台会话回收。durable 存储为唯一权威记录（1005 事件完整）。
+
 ## gold7–gold10 @ 复跑（2026-08-29 之后，待组员执行）
 
 （空。每完成一个案例，按模板追加；同步把 `closure.json` 的 `run_usage` 抄入本表上方案例头部，便于比较提示词/路线变化对 token 的影响。）
