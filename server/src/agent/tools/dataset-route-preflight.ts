@@ -30,6 +30,72 @@ type AcquisitionOnlyProvider = {
 
 const LITERATURE_EXPERIMENT_CHART_PROFILE = "literature_experiment_chart.release.v1";
 
+function sourceEntryRecord(value: unknown): Record<string, string> {
+  if (!Array.isArray(value)) return value as Record<string, string>;
+  const result: Record<string, string> = {};
+  for (const raw of value) {
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new TypeError("registered_sources entries must be objects");
+    }
+    const entry = raw as Record<string, unknown>;
+    if (typeof entry.binding_id !== "string" || typeof entry.asset_id !== "string") {
+      throw new TypeError("registered_sources entries require binding_id and asset_id");
+    }
+    if (Object.hasOwn(result, entry.binding_id)) {
+      throw new TypeError(`registered_sources contains duplicate binding '${entry.binding_id}'`);
+    }
+    result[entry.binding_id] = entry.asset_id;
+  }
+  return result;
+}
+
+function acquisitionEntryRecord(value: unknown): Record<string, { provider_id: string; parameters: Record<string, unknown> }> {
+  if (!Array.isArray(value)) {
+    return value as Record<string, { provider_id: string; parameters: Record<string, unknown> }>;
+  }
+  const result: Record<string, { provider_id: string; parameters: Record<string, unknown> }> = {};
+  for (const raw of value) {
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new TypeError("acquisition_requests entries must be objects");
+    }
+    const entry = raw as Record<string, unknown>;
+    if (
+      typeof entry.binding_id !== "string"
+      || typeof entry.provider_id !== "string"
+      || entry.parameters === null
+      || typeof entry.parameters !== "object"
+      || Array.isArray(entry.parameters)
+    ) {
+      throw new TypeError("acquisition_requests entries require binding_id, provider_id, and parameters");
+    }
+    if (Object.hasOwn(result, entry.binding_id)) {
+      throw new TypeError(`acquisition_requests contains duplicate binding '${entry.binding_id}'`);
+    }
+    result[entry.binding_id] = {
+      provider_id: entry.provider_id,
+      parameters: entry.parameters as Record<string, unknown>,
+    };
+  }
+  return result;
+}
+
+function agentPrepareSubmission(
+  submission: ReturnType<typeof buildCoreProfilePrepareSubmission>,
+): Record<string, unknown> {
+  const registeredSources = submission.registered_sources as Readonly<Record<string, string>>;
+  const acquisitionRequests = submission.acquisition_requests as Readonly<Record<string, {
+    readonly provider_id: string;
+    readonly parameters: Readonly<Record<string, unknown>>;
+  }>>;
+  return {
+    ...submission,
+    registered_sources: Object.entries(registeredSources)
+      .map(([binding_id, asset_id]) => ({ binding_id, asset_id })),
+    acquisition_requests: Object.entries(acquisitionRequests)
+      .map(([binding_id, request]) => ({ binding_id, ...request })),
+  };
+}
+
 function productProfileGuidance(profileRef: string): {
   use_when: string;
   do_not_use_when: string;
@@ -177,8 +243,31 @@ export function createDatasetProfileScaffoldTool(): BioMedAgentTool {
             additionalProperties: false,
           },
         },
-        registered_sources: { type: "object", additionalProperties: { type: "string", pattern: "^asset_[0-9a-f]{64}$" } },
-        acquisition_requests: { type: "object", additionalProperties: { type: "object" } },
+        registered_sources: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              binding_id: { type: "string" },
+              asset_id: { type: "string", pattern: "^asset_[0-9a-f]{64}$" },
+            },
+            required: ["binding_id", "asset_id"],
+            additionalProperties: false,
+          },
+        },
+        acquisition_requests: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              binding_id: { type: "string" },
+              provider_id: { type: "string" },
+              parameters: { type: "object" },
+            },
+            required: ["binding_id", "provider_id", "parameters"],
+            additionalProperties: false,
+          },
+        },
         transform_source: { type: "string", minLength: 1 },
         transform_input_roles: {
           type: "array",
@@ -214,17 +303,20 @@ export function createDatasetProfileScaffoldTool(): BioMedAgentTool {
         if (provided.length !== 0 && provided.length !== submissionFields.length) {
           throw new TypeError(`profile submission scaffold requires all fields: ${submissionFields.join(", ")}`);
         }
-        const prepareSubmission = provided.length === 0
+        const corePrepareSubmission = provided.length === 0
           ? null
           : buildCoreProfilePrepareSubmission({
               profileRef,
               requirementId: record.requirement_id as string,
               sourceBindings: record.source_bindings as Parameters<typeof buildCoreProfilePrepareSubmission>[0]["sourceBindings"],
-              registeredSources: record.registered_sources as Parameters<typeof buildCoreProfilePrepareSubmission>[0]["registeredSources"],
-              acquisitionRequests: record.acquisition_requests as Parameters<typeof buildCoreProfilePrepareSubmission>[0]["acquisitionRequests"],
+              registeredSources: sourceEntryRecord(record.registered_sources),
+              acquisitionRequests: acquisitionEntryRecord(record.acquisition_requests) as Parameters<typeof buildCoreProfilePrepareSubmission>[0]["acquisitionRequests"],
               transformSource: record.transform_source as string,
               transformInputRoles: record.transform_input_roles as Parameters<typeof buildCoreProfilePrepareSubmission>[0]["transformInputRoles"],
             });
+        const prepareSubmission = corePrepareSubmission === null
+          ? null
+          : agentPrepareSubmission(corePrepareSubmission);
         const details = {
           ok: true,
           status: "scaffolded",

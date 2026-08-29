@@ -493,9 +493,7 @@ function dynamicFamilyPublicationParameters(mode: "prepare" | "submit"): Record<
     },
     required: ["source", "accession", "entities"], additionalProperties: false,
   };
-  const acquisition = {
-    type: "object",
-    oneOf: DYNAMIC_ACQUISITION_PROVIDER_DESCRIPTORS.map((descriptor) => {
+  const acquisitionAlternatives = DYNAMIC_ACQUISITION_PROVIDER_DESCRIPTORS.map((descriptor) => {
       const parameters = descriptor.parameterContract === "pubchem"
         ? pubchemParameters
         : descriptor.parameterContract === "pubmed"
@@ -503,13 +501,13 @@ function dynamicFamilyPublicationParameters(mode: "prepare" | "submit"): Record<
           : fixedParameters(descriptor.source, descriptor.inputHint);
       return {
         properties: {
+          binding_id: safeId,
           provider_id: { type: "string", enum: [descriptor.providerId] },
           parameters,
         },
-        required: ["provider_id", "parameters"], additionalProperties: false,
+        required: ["binding_id", "provider_id", "parameters"], additionalProperties: false,
       };
-    }),
-  };
+    });
   const preflightReceipt = {
     type: "object",
     properties: {
@@ -582,12 +580,20 @@ function dynamicFamilyPublicationParameters(mode: "prepare" | "submit"): Record<
       transform_metadata: transformMetadata,
       execution_proposal: buildProposal,
       registered_sources: {
-        type: "object", description: "Task-owned Core-acquired or Core-derived asset IDs only. Derived inputs must have a persisted OperationResult and complete parent closure.",
-        additionalProperties: { type: "string", pattern: "^asset_[0-9a-f]{64}$" },
+        type: "array", description: "Task-owned Core-acquired or Core-derived asset entries only. Use one {binding_id,asset_id} item per registered binding. Derived inputs must have a persisted OperationResult and complete parent closure.",
+        items: {
+          type: "object",
+          properties: {
+            binding_id: safeId,
+            asset_id: { type: "string", pattern: "^asset_[0-9a-f]{64}$" },
+          },
+          required: ["binding_id", "asset_id"],
+          additionalProperties: false,
+        },
       },
       acquisition_requests: {
-        type: "object", description: "Preferred for direct providers. Every provider listed here is runtime-wired for Dynamic Family acquisition; Core-derived VLM/archive/parser assets instead belong in registered_sources. Keys exactly match unresolved source binding IDs.",
-        additionalProperties: acquisition,
+        type: "array", description: "Preferred for direct providers. Use one {binding_id,provider_id,parameters} item per acquisition binding. Every provider listed here is runtime-wired for Dynamic Family acquisition; Core-derived VLM/archive/parser assets instead belong in registered_sources.",
+        items: { type: "object", oneOf: acquisitionAlternatives },
       },
     },
     required: [...TOP_KEYS],
@@ -833,6 +839,27 @@ function parseRegisteredSources(
   proposal: DatasetExecutionProposal2,
 ): Readonly<Record<string, string>> {
   const bindingIds = new Set(proposal.source_bindings.map((binding) => binding.binding_id));
+  if (Array.isArray(value) && !types.isProxy(value)) {
+    const result = Object.create(null) as Record<string, string>;
+    for (const [index, raw] of value.entries()) {
+      const entry = exactDataRecord(
+        raw,
+        new Set(["binding_id", "asset_id"]),
+        `$.registered_sources[${index}]`,
+      );
+      if (typeof entry.binding_id !== "string" || !bindingIds.has(entry.binding_id)) {
+        throw new TypeError(`$.registered_sources[${index}].binding_id is not a declared source binding`);
+      }
+      if (Object.hasOwn(result, entry.binding_id)) {
+        throw new TypeError(`registered_sources contains duplicate binding '${entry.binding_id}'`);
+      }
+      if (typeof entry.asset_id !== "string" || !/^asset_[0-9a-f]{64}$/.test(entry.asset_id)) {
+        throw new TypeError(`registered_sources.${entry.binding_id} must be a task-owned asset_<sha256> ID`);
+      }
+      result[entry.binding_id] = entry.asset_id;
+    }
+    return Object.freeze(result);
+  }
   const record = subsetDataRecord(value, bindingIds, "$.registered_sources");
   const result = Object.create(null) as Record<string, string>;
   for (const [bindingId, assetId] of Object.entries(record)) {
@@ -849,7 +876,29 @@ function parseAcquisitionRequests(
   proposal: DatasetExecutionProposal2,
 ): ParsedDynamicFamilyPublicationSubmission["acquisition_requests"] {
   const bindingIds = new Set(proposal.source_bindings.map((binding) => binding.binding_id));
-  const record = subsetDataRecord(value, bindingIds, "$.acquisition_requests");
+  let record: DataRecord;
+  if (Array.isArray(value) && !types.isProxy(value)) {
+    record = Object.create(null) as DataRecord;
+    for (const [index, raw] of value.entries()) {
+      const entry = exactDataRecord(
+        raw,
+        new Set(["binding_id", "provider_id", "parameters"]),
+        `$.acquisition_requests[${index}]`,
+      );
+      if (typeof entry.binding_id !== "string" || !bindingIds.has(entry.binding_id)) {
+        throw new TypeError(`$.acquisition_requests[${index}].binding_id is not a declared source binding`);
+      }
+      if (Object.hasOwn(record, entry.binding_id)) {
+        throw new TypeError(`acquisition_requests contains duplicate binding '${entry.binding_id}'`);
+      }
+      record[entry.binding_id] = {
+        provider_id: entry.provider_id,
+        parameters: entry.parameters,
+      };
+    }
+  } else {
+    record = subsetDataRecord(value, bindingIds, "$.acquisition_requests");
+  }
   const result = Object.create(null) as Record<string, { provider_id: string; parameters: Readonly<Record<string, import("@biomed/contracts").JsonValue>> }>;
   for (const [bindingId, raw] of Object.entries(record)) {
     const request = exactDataRecord(raw, new Set(["provider_id", "parameters"]), `$.acquisition_requests.${bindingId}`);

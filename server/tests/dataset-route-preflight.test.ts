@@ -115,8 +115,8 @@ describe("dataset formal-route capability preflight", () => {
         input_requirement_ref: "paper_source",
         parameters: {},
       }],
-      registered_sources: { paper_xml: `asset_${"a".repeat(64)}` },
-      acquisition_requests: {},
+      registered_sources: [{ binding_id: "paper_xml", asset_id: `asset_${"a".repeat(64)}` }],
+      acquisition_requests: [],
       transform_source: "export const transform = { run() { return { outputs: [] }; } };",
       transform_input_roles: [{ role: "paper_source", media_type: "application/xml", constraint_ref: null }],
     });
@@ -138,6 +138,8 @@ describe("dataset formal-route capability preflight", () => {
           { table_id: "chart_points" },
         ],
       },
+      registered_sources: [{ binding_id: "paper_xml", asset_id: `asset_${"a".repeat(64)}` }],
+      acquisition_requests: [],
     });
     await expect(parseDynamicFamilyPublicationPrepareSubmission(submission)).resolves.toMatchObject({
       family_spec: { family_spec_id: "literature_experiment_chart" },

@@ -194,6 +194,15 @@ describe("dynamic family build tool boundary", () => {
     expect(parsed.projection.projection_id).toBe("projection_dynamic");
   });
 
+  test("accepts strict-tool-safe source entry arrays and normalizes them to Core maps", async () => {
+    const raw = await submission();
+    raw.registered_sources = [{ binding_id: "source_binding", asset_id: `asset_${A}` }];
+    raw.acquisition_requests = [];
+    const parsed = await parseDynamicFamilyPublicationSubmission(raw);
+    expect(parsed.registered_sources).toEqual({ source_binding: `asset_${A}` });
+    expect(parsed.acquisition_requests).toEqual({});
+  });
+
   test("accepts a fixed Core provider request instead of a pre-registered carrier", async () => {
     const raw = await submission();
     raw.registered_sources = {};
@@ -243,10 +252,12 @@ describe("dynamic family build tool boundary", () => {
     const prepare = createPrepareDynamicFamilyPublicationTool({
       prepare: async () => { throw new Error("not called"); },
     });
-    const alternatives = (prepare.parameters as {
+    const sourceSchemas = (prepare.parameters as {
       properties: {
+        registered_sources: { type: string; items: { required: string[] } };
         acquisition_requests: {
-          additionalProperties: {
+          type: string;
+          items: {
             oneOf: Array<{
               properties: {
                 provider_id: { enum: string[] };
@@ -256,7 +267,10 @@ describe("dynamic family build tool boundary", () => {
           };
         };
       };
-    }).properties.acquisition_requests.additionalProperties.oneOf;
+    }).properties;
+    expect(sourceSchemas.registered_sources.type).toBe("array");
+    expect(sourceSchemas.registered_sources.items.required).toEqual(["binding_id", "asset_id"]);
+    const alternatives = sourceSchemas.acquisition_requests.items.oneOf;
     const pubmed = alternatives.find((candidate) =>
       candidate.properties.provider_id.enum.includes("pubmed.files.v1"));
     expect(pubmed?.properties.parameters.properties.entities.additionalProperties).toEqual({

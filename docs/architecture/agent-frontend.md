@@ -116,6 +116,10 @@ exact static match 时才走 `validate -> execute`；否则仅在各输入被列
 只描述 static registry，不能用于判断 dynamic provider 是否接线。Dynamic 工具的
 `acquisition_requests` schema 仍是具体提交的执行契约，但 route capability view 来自同一
 `provider-catalog.ts`；handler/descriptor、route view/schema 均通过派生/闭包测试防止漂移。
+为兼容 strict function-tool schema，Agent wire 把动态绑定写成
+`registered_sources: [{binding_id, asset_id}]` 与
+`acquisition_requests: [{binding_id, provider_id, parameters}]`；adapter 在进入 Core 前将其
+归一化为以 binding ID 为键的 map，Core 提交/摘要契约不变。
 binary archive 即使已有 Core acquisition handler，也会显示为 acquisition-only，不能误报为
 Dynamic transform 已可直接消费。
 
