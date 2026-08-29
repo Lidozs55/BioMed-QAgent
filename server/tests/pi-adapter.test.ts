@@ -244,8 +244,9 @@ describe("Pi system prompt", () => {
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
       /Transform sandbox forbids every bracket element access/i,
     );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/preview_core_asset lists members/i);
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
-      /never run python, shell, or workspace_exec extraction scripts/i,
+      /never run python, shell, or workspace_exec extraction/i,
     );
   });
 });
