@@ -7,6 +7,62 @@ export interface ToolLabel {
 type ToolLabelFormatter = (args: Record<string, unknown> | null) => ToolLabel;
 
 const TOOL_LABEL_MAP: Record<string, ToolLabelFormatter> = {
+  // Pi 内置编码工具(read/write/edit/bash 由专用渲染器渲染,
+  // 这里是通用路径的兜底标签)
+  read: (args) => ({
+    verb: "读取",
+    target: args?.path ? String(args.path) : "文件",
+  }),
+  write: (args) => ({
+    verb: "写入",
+    target: args?.path ? String(args.path) : "文件",
+  }),
+  edit: (args) => ({
+    verb: "编辑",
+    target: args?.path ? String(args.path) : "文件",
+  }),
+  bash: (args) => ({
+    verb: "执行",
+    target: args?.command ? String(args.command).split("\n")[0] : "命令",
+  }),
+  grep: (args) => ({
+    verb: "搜索",
+    target: args?.pattern ? `内容 ${args.pattern}` : "文件内容",
+  }),
+  find: (args) => ({
+    verb: "查找",
+    target: args?.pattern ? `文件 ${args.pattern}` : "文件",
+  }),
+  ls: (args) => ({
+    verb: "列出",
+    target: args?.path ? String(args.path) : "目录",
+  }),
+  // 服务端 workspace 沙箱工具(server/src/agent/workspace/tools.ts;
+  // read/write/edit 由专用渲染器渲染,这里同样是通用路径兜底)
+  workspace_read: (args) => ({
+    verb: "读取",
+    target: args?.path ? String(args.path) : "工作区文件",
+  }),
+  workspace_write: (args) => ({
+    verb: "写入",
+    target: args?.path ? String(args.path) : "工作区文件",
+  }),
+  workspace_edit: (args) => ({
+    verb: "编辑",
+    target: args?.path ? String(args.path) : "工作区文件",
+  }),
+  workspace_exec: (args) => ({
+    verb: "执行",
+    target: args?.executable ? String(args.executable) : "命令",
+  }),
+  workspace_list: (args) => ({
+    verb: "列出",
+    target: args?.path ? String(args.path) : "工作区目录",
+  }),
+  workspace_search: (args) => ({
+    verb: "搜索",
+    target: args?.query ? `内容 ${args.query}` : "工作区文件",
+  }),
   // PubMed (legacy alias kept for replaying pre-Phase 2 events.jsonl)
   search_pubmed_adapter: (args) => searchLabel("PubMed", args),
   search_pubmed: (args) => searchLabel("PubMed", args),

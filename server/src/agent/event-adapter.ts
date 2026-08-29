@@ -69,7 +69,14 @@ function asArguments(value: unknown): Record<string, JsonValue> {
 function serializedOutput(value: unknown): string {
   const bounded = sanitizeValue(value, 0, MAX_ARGUMENT_STRING_LENGTH);
   const serialized = typeof bounded === "string" ? bounded : JSON.stringify(bounded);
-  return sanitizeText(serialized, MAX_OUTPUT_LENGTH);
+  if (serialized.length <= MAX_OUTPUT_LENGTH) return serialized;
+  // 超限时把截断文本包成 JSON 字符串字段返回。不得对序列化后的 JSON 再跑
+  // 脱敏正则/slice——路径正则会咬坏转义序列、slice 会截断结构,产出非法
+  // JSON(前端 toolOutput 解包会因此失败回退原文)。
+  return JSON.stringify({
+    truncated: true,
+    output: serialized.slice(0, MAX_OUTPUT_LENGTH),
+  });
 }
 
 function digest(value: unknown): string {
