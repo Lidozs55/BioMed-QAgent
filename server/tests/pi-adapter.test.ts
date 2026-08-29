@@ -245,8 +245,9 @@ describe("Pi system prompt", () => {
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/placeholder sentinels are rejected/i);
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/never request file access outside the Task Workspace/i);
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
-      /Transform source admission rejects eval-class identifiers/i,
+      /Transform source admission rejects eval-class identifiers and EVERY bracket access/i,
     );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/admission reports all violations with line:column/i);
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/preview_core_asset lists members/i);
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
       /never run python, shell, or workspace_exec extraction/i,

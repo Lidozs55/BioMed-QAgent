@@ -179,6 +179,14 @@ describe("Transform Host fixture-only compilation", () => {
     await expect(compileTransformFixtureOnly({ source })).rejects.toThrow(message);
   });
 
+  test("reports every source violation with line and column positions", async () => {
+    await expect(compileTransformFixtureOnly({
+      source: 'import { readFile } from "node:fs";\nconst a = rows[0];\nconst b = process.env.X;\n',
+    })).rejects.toThrow(
+      /rejected 3 violation\(s\): L1C1 Module "node:fs".*L2C11 Computed property access.*L3C11 Identifier "process"/s,
+    );
+  });
+
   test("rejects caller-provided compiler/bundle/policy facts and structural result forgery", async () => {
     await expect(compileTransformFixtureOnly({
       source: VALID_SOURCE,
