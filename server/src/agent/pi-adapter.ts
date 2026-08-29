@@ -487,7 +487,7 @@ export function resolvePiRetryOverrides(): {
   return {
     retry: {
       enabled: true,
-      maxRetries: 6,
+      maxRetries: 12,
       baseDelayMs: 3_000,
       provider: { maxRetryDelayMs: 60_000 },
     },
