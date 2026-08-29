@@ -1,7 +1,13 @@
-import { useCallback, useEffect, useState } from "react";
-import { MagnifyingGlassIcon, PlusIcon, StarIcon } from "@phosphor-icons/react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  ArrowClockwiseIcon,
+  MagnifyingGlassIcon,
+  PlusIcon,
+  StarIcon,
+} from "@phosphor-icons/react";
 import { toast } from "sonner";
 
+import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,15 +31,17 @@ interface ModelListManagerProps {
   onChanged: () => void;
 }
 
-const MODEL_PAGE_SIZE = 20;
+const MODEL_PAGE_SIZE = 8;
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : "请求失败";
 }
 
-/** 来源标签：API/目录导入的模型显示供应商名称，手动添加的显示“手动配置”。 */
+/** 来源标签：手动添加，或元数据被用户改过（与默认值不再一致）时显示“手动配置”，否则显示供应商名称。 */
 function sourceBadgeLabel(model: ManagedModelInfo): string {
-  return model.source === "manual" ? "手动配置" : model.provider_name;
+  return model.source === "manual" || model.metadata_source === "user"
+    ? "手动配置"
+    : model.provider_name;
 }
 
 export function ModelListManager({
@@ -55,8 +63,13 @@ export function ModelListManager({
   const [pageModels, setPageModels] = useState<ManagedModelInfo[]>([]);
   const [pageTotal, setPageTotal] = useState(0);
   const [pageLoading, setPageLoading] = useState(true);
+  // 新增模型后置位：列表加载完成后跳到最后一页（新模型按插入顺序追加在末尾）
+  const revealNewModelRef = useRef(false);
+  // 请求序号：丢弃乱序返回的过期响应，避免旧数据覆盖新数据
+  const fetchSeqRef = useRef(0);
 
   const loadPage = useCallback(async () => {
+    const seq = ++fetchSeqRef.current;
     setPageLoading(true);
     try {
       const q = search.trim();
@@ -65,12 +78,31 @@ export function ModelListManager({
         size: MODEL_PAGE_SIZE,
         q: q === "" ? undefined : q,
       });
-      setPageModels(result.items);
+      if (seq !== fetchSeqRef.current) return;
       setPageTotal(result.total);
+      const totalPages = Math.max(1, Math.ceil(result.total / MODEL_PAGE_SIZE));
+      if (page > totalPages) {
+        // 当前页越界（如删除末页仅剩的模型）时回退到实际最后一页，页码变化会触发自动重载
+        revealNewModelRef.current = false;
+        setPage(totalPages);
+        return;
+      }
+      if (revealNewModelRef.current && page < totalPages) {
+        // 新增模型追加在列表末尾：跳到最后一页确保立即可见，页码变化会触发自动重载
+        revealNewModelRef.current = false;
+        setPage(totalPages);
+        return;
+      }
+      revealNewModelRef.current = false;
+      setPageModels(result.items);
     } catch (error) {
-      toast.error("模型列表加载失败", { description: errorText(error) });
+      if (seq === fetchSeqRef.current) {
+        toast.error("模型列表加载失败", { description: errorText(error) });
+      }
     } finally {
-      setPageLoading(false);
+      if (seq === fetchSeqRef.current) {
+        setPageLoading(false);
+      }
     }
   }, [api, page, search]);
 
@@ -82,6 +114,29 @@ export function ModelListManager({
   }, [loadPage]);
 
   const totalPages = Math.max(1, Math.ceil(pageTotal / MODEL_PAGE_SIZE));
+
+  /**
+   * 添加/导入/编辑模型后刷新列表。
+   * 新增的模型总是追加在列表末尾（后端按插入顺序返回），
+   * 刷新后由 loadPage 自动跳到最后一页确保新模型立即可见。
+   */
+  const handleSaved = useCallback(
+    (created?: ManagedModelInfo) => {
+      onChanged();
+      if (created) {
+        revealNewModelRef.current = true;
+      }
+      void loadPage();
+    },
+    [onChanged, loadPage],
+  );
+
+  /** 手动刷新：同时刷新供应商/模型注册表与当前分页列表。 */
+  const handleManualRefresh = useCallback(() => {
+    revealNewModelRef.current = false;
+    onChanged();
+    void loadPage();
+  }, [onChanged, loadPage]);
 
   const openAdd = () => {
     setSheetOpen(true);
@@ -126,15 +181,30 @@ export function ModelListManager({
         <p className="text-sm text-muted-foreground">
           维护各供应商下的模型：可从供应商返回的列表导入，也可手动添加。
         </p>
-        <Button
-          size="sm"
-          onClick={openAdd}
-          disabled={providers.length === 0}
-          title={providers.length === 0 ? "请先添加供应商" : undefined}
-        >
-          <PlusIcon data-icon="inline-start" />
-          添加模型
-        </Button>
+        <div className="flex shrink-0 items-center gap-2">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={handleManualRefresh}
+            disabled={pageLoading}
+            aria-label="刷新模型列表"
+            title="刷新模型列表"
+          >
+            <ArrowClockwiseIcon
+              className={cn("size-3.5", pageLoading && "animate-spin")}
+              aria-hidden="true"
+            />
+          </Button>
+          <Button
+            size="sm"
+            onClick={openAdd}
+            disabled={providers.length === 0}
+            title={providers.length === 0 ? "请先添加供应商" : undefined}
+          >
+            <PlusIcon data-icon="inline-start" />
+            添加模型
+          </Button>
+        </div>
       </div>
       {providers.length === 0 && (
         <p className="text-xs text-muted-foreground">
@@ -266,7 +336,7 @@ export function ModelListManager({
           }}
         model={detailModel}
         api={api}
-        onSaved={onChanged}
+        onSaved={handleSaved}
       />
 
       <ModelImportSheet
@@ -275,7 +345,7 @@ export function ModelListManager({
         api={api}
         providers={providers}
         managedModels={managedModels}
-        onSaved={onChanged}
+        onSaved={handleSaved}
       />
     </div>
   );

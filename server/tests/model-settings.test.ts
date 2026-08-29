@@ -139,6 +139,81 @@ describe("TypeScript model settings", () => {
     expect(await service.resolveActiveModel()).toMatchObject({ contextWindow: 131072 });
   });
 
+  test("allows editing model modalities (capabilities) via updateModel", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const provider = await service.createProvider({
+      name: "Custom OpenAI",
+      base_url: "https://models.example/v1",
+      api_key: "sk-modality",
+    });
+    const model = await service.createModel({
+      provider_id: provider.id,
+      model_id: "custom-chat",
+      source: "api",
+    });
+    expect(model.capabilities).toEqual({ text: true, image: false, video: false, audio: false });
+    expect(model.metadata_source).toBe("api");
+
+    // 用户勾选图像/音频模态：落盘且归一化（未勾选的 video 保持 false）。
+    const updated = await service.updateModel(model.id, {
+      capabilities: { text: true, image: true, audio: true },
+    });
+    expect(updated.capabilities).toEqual({ text: true, image: true, video: false, audio: true });
+    expect(updated.metadata_source).toBe("user");
+
+    // 不传 capabilities 时不得改动已有模态。
+    const untouched = await service.updateModel(model.id, { description: "note" });
+    expect(untouched.capabilities).toEqual({ text: true, image: true, video: false, audio: true });
+  });
+
+  test("accepts max_tokens values beyond the legacy spec upper bound", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const provider = await service.createProvider({
+      name: "Custom OpenAI",
+      base_url: "https://models.example/v1",
+      api_key: "sk-max-tokens",
+    });
+    const model = await service.createModel({
+      provider_id: provider.id,
+      model_id: "custom-chat",
+    });
+
+    // 旧规格上限为 262144/131072，现已取消：超大值允许保存（仅要求正整数）。
+    const updated = await service.updateModel(model.id, { params: { max_tokens: 400_000 } });
+    expect(updated.params.max_tokens).toBe(400_000);
+  });
+
+  test("marks metadata as user-edited when any editable field changes", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const provider = await service.createProvider({
+      name: "Custom OpenAI",
+      base_url: "https://models.example/v1",
+      api_key: "sk-user-edit",
+    });
+    const model = await service.createModel({
+      provider_id: provider.id,
+      model_id: "custom-chat",
+      source: "api",
+    });
+    expect(model.metadata_source).toBe("api");
+
+    // 参数被编辑即视为手动配置（不再被目录启动同步覆盖）。
+    const paramsEdited = await service.updateModel(model.id, { params: { temperature: 0.1 } });
+    expect(paramsEdited.metadata_source).toBe("user");
+
+    // 名称被编辑同样标记。
+    const second = await service.createModel({
+      provider_id: provider.id,
+      model_id: "custom-chat-2",
+      source: "api",
+    });
+    const named = await service.updateModel(second.id, { name: "My Model" });
+    expect(named.metadata_source).toBe("user");
+  });
+
   test("syncs active-model parameter edits into runtime settings without reactivation", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
     const service = await ModelSettingsService.create({ settingsDir, environment: {} });

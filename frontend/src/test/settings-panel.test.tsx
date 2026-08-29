@@ -159,7 +159,7 @@ function mockApi(overrides: Partial<SettingsAPIClient> = {}): SettingsAPIClient 
       items: TEST_MODELS,
       total: TEST_MODELS.length,
       page: 1,
-      size: 20,
+      size: 8,
     }),
     createManagedModel: vi.fn().mockImplementation((input) =>
       Promise.resolve({
@@ -670,13 +670,13 @@ describe("SettingsPanel model registry", () => {
           items: TEST_MODELS,
           total: TEST_MODELS.length,
           page: 1,
-          size: 20,
+          size: 8,
         })
         .mockResolvedValue({
           items: [{ ...TEST_MODELS[0], active: true }],
           total: 1,
           page: 1,
-          size: 20,
+          size: 8,
         }),
       activateManagedModel: vi.fn().mockResolvedValue({
         ...TEST_SETTINGS,
@@ -758,7 +758,7 @@ describe("SettingsPanel model registry", () => {
         ],
         total: 1,
         page: 1,
-        size: 20,
+        size: 8,
       }),
     });
     renderSettings(api);
@@ -813,7 +813,26 @@ describe("SettingsPanel model registry", () => {
         items: [{ ...TEST_MODELS[0], source: "manual" }],
         total: 1,
         page: 1,
-        size: 20,
+        size: 8,
+      }),
+    });
+    renderSettings(api);
+    expect(await screen.findByText("手动配置", {}, { timeout: 5_000 })).toBeInTheDocument();
+  });
+
+  it("shows the manual-config badge when user-edited metadata differs from the default", async () => {
+    // API 导入的模型，只要元数据被用户改过（metadata_source: "user"）即视为手动配置。
+    const api = mockApi({
+      fetchManagedModels: vi
+        .fn()
+        .mockResolvedValue([
+          { ...TEST_MODELS[0], source: "api", metadata_source: "user" },
+        ]),
+      fetchManagedModelsPage: vi.fn().mockResolvedValue({
+        items: [{ ...TEST_MODELS[0], source: "api", metadata_source: "user" }],
+        total: 1,
+        page: 1,
+        size: 8,
       }),
     });
     renderSettings(api);
@@ -872,7 +891,7 @@ describe("SettingsPanel model registry", () => {
     await waitFor(() => {
       expect(api.fetchManagedModelsPage).toHaveBeenLastCalledWith({
         page: 1,
-        size: 20,
+        size: 8,
         q: "deepseek-reasoner",
       });
     });
@@ -884,7 +903,7 @@ describe("SettingsPanel model registry", () => {
         items: [],
         total: 0,
         page: 1,
-        size: 20,
+        size: 8,
       }),
     });
     renderSettings(api);
@@ -903,14 +922,14 @@ describe("SettingsPanel model registry", () => {
         items: TEST_MODELS,
         total: 25,
         page: 1,
-        size: 20,
+        size: 8,
       }),
     });
     renderSettings(api);
 
     await screen.findByText("DeepSeek Reasoner");
     expect(screen.getByText("共 25 条")).toBeInTheDocument();
-    expect(screen.getByText("第 1 / 2 页")).toBeInTheDocument();
+    expect(screen.getByText("第 1 / 4 页")).toBeInTheDocument();
 
     const next = screen.getByRole("button", { name: "下一页" });
     expect(next).not.toBeDisabled();
@@ -919,7 +938,7 @@ describe("SettingsPanel model registry", () => {
     await waitFor(() => {
       expect(api.fetchManagedModelsPage).toHaveBeenLastCalledWith({
         page: 2,
-        size: 20,
+        size: 8,
         q: undefined,
       });
     });
