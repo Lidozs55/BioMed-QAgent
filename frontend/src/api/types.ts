@@ -91,6 +91,24 @@ export type {
   AgentPermissionSettings,
 };
 
+export type {
+  HILApprovalMode,
+  HILApprovalScope,
+  HILApprovalSettings,
+} from "@biomed/contracts";
+export { HIL_HUMAN_MANDATORY_SCOPES } from "@biomed/contracts";
+
+/** Partial update for the three-tier HIL approval assignment; null clears a scope back to default_mode. */
+export interface HilApprovalSettingsPatch {
+  default_mode?: HILApprovalMode;
+  review_modes?: Partial<Record<HILApprovalScope, HILApprovalMode | null>>;
+}
+import type {
+  HILApprovalMode,
+  HILApprovalScope,
+  HILApprovalSettings,
+} from "@biomed/contracts";
+
 /* ---- Settings API client (frontend-side interface) ---- */
 export interface SettingsAPIClient {
   fetchSettings: () => Promise<ModelSettings>;
@@ -134,6 +152,8 @@ export interface SettingsAPIClient {
   removeAgentPermissionRule: (ruleId: string) => Promise<AgentPermissionSettings>;
   fetchAgentTempGrants: () => Promise<AgentTempGrant[]>;
   revokeAgentTempGrant: (grantId: string) => Promise<void>;
+  fetchHilApproval: () => Promise<HILApprovalSettings>;
+  saveHilApproval: (patch: HilApprovalSettingsPatch) => Promise<HILApprovalSettings>;
   fetchCacheDatasets: (params?: {
     namespace?: string;
     keyword?: string;

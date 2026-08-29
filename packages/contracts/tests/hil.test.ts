@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  DEFAULT_HIL_APPROVAL_SETTINGS,
+  HIL_HUMAN_MANDATORY_SCOPES,
   parseHILDecision,
   parseHILRequest,
   parseHumanReviewRecord,
+  parseHilApprovalSettings,
   parseResumeHILInput,
 } from "../src/index.js";
 
@@ -186,5 +189,76 @@ describe("durable HIL contracts", () => {
         resolved_at: null,
       }),
     ).toThrow(/review_type/);
+  });
+});
+
+describe("HIL approval policy contracts", () => {
+  it("parses default and overridden approval settings", () => {
+    expect(
+      parseHilApprovalSettings({
+        schema_version: "1.0",
+        default_mode: "human_review",
+        review_modes: {
+          permission: "auto_approve",
+          field_mapping: "llm_pre_review",
+        },
+      }),
+    ).toEqual({
+      schema_version: "1.0",
+      default_mode: "human_review",
+      review_modes: {
+        permission: "auto_approve",
+        field_mapping: "llm_pre_review",
+      },
+    });
+  });
+
+  it("treats missing review_modes as empty and rejects invalid modes/scopes", () => {
+    expect(
+      parseHilApprovalSettings({
+        default_mode: "auto_approve",
+        review_modes: null,
+      }),
+    ).toEqual({ default_mode: "auto_approve", review_modes: {} });
+
+    expect(() =>
+      parseHilApprovalSettings({ default_mode: "ask", review_modes: {} }),
+    ).toThrow(/default_mode/);
+    expect(() =>
+      parseHilApprovalSettings({
+        default_mode: "human_review",
+        review_modes: { nonsense_scope: "auto_approve" },
+      }),
+    ).toThrow(/review_modes key/);
+    expect(() =>
+      parseHilApprovalSettings({
+        default_mode: "human_review",
+        review_modes: { field_mapping: "sometimes" },
+      }),
+    ).toThrow(/review_modes\.field_mapping/);
+  });
+
+  it("keeps human-mandatory scopes exported for the settings surface", () => {
+    expect(HIL_HUMAN_MANDATORY_SCOPES).toEqual([
+      "vlm_extraction",
+      "browser_evidence_acceptance",
+      "publication_acceptance",
+    ]);
+    expect(DEFAULT_HIL_APPROVAL_SETTINGS.default_mode).toBe("human_review");
+  });
+
+  it("accepts model and auto reviewers on review records", () => {
+    const base = {
+      schema_version: "1.0",
+      review_id: "review_123",
+      request_id: "hil_123",
+      decision: { action: "accept" as const },
+      reviewed_at: "2026-08-16T01:03:00.000Z",
+      evidence_digest: DIGEST,
+      reason: "approved by model pre-review: clear mapping",
+    };
+    expect(parseHumanReviewRecord({ ...base, reviewer: "model" }).reviewer).toBe("model");
+    expect(parseHumanReviewRecord({ ...base, reviewer: "auto" }).reviewer).toBe("auto");
+    expect(() => parseHumanReviewRecord({ ...base, reviewer: "robot" })).toThrow(/reviewer/);
   });
 });

@@ -47,6 +47,7 @@ import {
 } from "./task-repository.js";
 
 import { DurableHILStore, HILConflictError } from "./hil-store.js";
+import type { HILGatePreReview } from "./hil-pre-review.js";
 import { claimTasksRootExclusive } from "./host-lease.js";
 
 import { readExecutionContinuation } from "./execution-continuation.js";
@@ -98,6 +99,11 @@ export interface DurableAgentRuntimeOptions {
   workspaceManager?: WorkspaceManager;
   /** Live broker registry for preset-switch invalidation + grant management. */
   permissionBrokerRegistry?: PermissionBrokerRegistry;
+  /**
+   * Three-tier HIL approval seam (human_review / llm_pre_review /
+   * auto_approve). Null keeps the classic human-only flow.
+   */
+  hilPreReview?: HILGatePreReview | null;
   adapter: BioMedAgentAdapter;
   workspaceFactory: (identity: {
     taskId: string;
@@ -451,7 +457,13 @@ export async function createDurableAgentRuntime(
   }
 
   async function createSession(taskId: string, runId: string, mode: TaskMode): Promise<ActiveTask> {
-    const approvalGate = new DurableApprovalGate(taskId, repository, runId, hilStore);
+    const approvalGate = new DurableApprovalGate(
+      taskId,
+      repository,
+      runId,
+      hilStore,
+      options.hilPreReview ?? null,
+    );
     const workspace = await options.workspaceFactory({
       taskId,
       runId,

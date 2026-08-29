@@ -46,6 +46,7 @@
 | — 缓存设计 | Cache 契约、Schema 标识与构建参数 | [architecture/result-validation.md](architecture/result-validation.md) §9-13 + [ADR-015](adr/015-cache-schema-build-parameters.md) |
 | — 模型供应商参数 | 供应商/模型参数与目录事实（现行 TS `server/src/settings/model-registry/`） | [architecture/model-provider-params.md](architecture/model-provider-params.md) |
 | — 运行限制 | 运行时资源上限与设置契约 | [architecture/runtime-limits.md](architecture/runtime-limits.md) |
+| — HIL 审批档位 | 三档审批权限分配与大模型初审（人工审批 / llm_pre_review / auto_approve） | [architecture/hil-approval-policy.md](architecture/hil-approval-policy.md) |
 | — 测试并发预算 | 本地有界并发、CI 放宽与 worker 预算 | [architecture/test-concurrency.md](architecture/test-concurrency.md) |
 
 ---
