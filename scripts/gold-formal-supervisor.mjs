@@ -740,6 +740,7 @@ function parseOptions(argv) {
     pageSize: DEFAULT_PAGE_SIZE,
     workspaceRoot: null,
     resume: false,
+    adopt: false,
   };
   const next = (index, label) => {
     const value = argv[index + 1];
@@ -749,6 +750,7 @@ function parseOptions(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--resume") options.resume = true;
+    else if (arg === "--adopt") options.adopt = true;
     else if (arg === "--base-url") { options.baseUrl = next(index, arg); index += 1; }
     else if (arg === "--task-id") { options.taskId = next(index, arg); index += 1; }
     else if (arg === "--request-id") { options.requestId = next(index, arg); index += 1; }
@@ -765,7 +767,7 @@ function parseOptions(argv) {
   if (options.help) return options;
   for (const [name, value] of [["task-id", options.taskId], ["evidence-dir", options.evidenceDir], ["case-label", options.caseLabel]]) if (typeof value !== "string" || value.trim() === "") throw new SupervisorError("usage", `--${name} is required`);
   safeId(options.taskId, "task-id");
-  if (!options.resume) {
+  if (!options.resume && !options.adopt) {
     if (typeof options.requestId !== "string" || typeof options.promptFile !== "string") throw new SupervisorError("usage", "--request-id and --prompt-file are required for a fresh run");
     safeId(options.requestId, "request-id");
   } else if (options.requestId !== null) safeId(options.requestId, "request-id");
@@ -785,18 +787,18 @@ export async function supervise(input, dependencies = {}) {
   options.baseUrl = normalizedBaseUrl(options.baseUrl);
   safeId(options.taskId, "taskId");
   if (typeof options.caseLabel !== "string" || options.caseLabel.trim() === "") throw new SupervisorError("usage", "caseLabel is required");
-  if (!options.resume) {
+  if (!options.resume && !options.adopt) {
     safeId(options.requestId, "requestId");
     if (typeof options.promptFile !== "string") throw new SupervisorError("usage", "promptFile is required");
   }
   if (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs < 1) throw new SupervisorError("usage", "timeout must be positive");
   options.pageSize = options.pageSize ?? DEFAULT_PAGE_SIZE;
   if (!Number.isSafeInteger(options.pageSize) || options.pageSize < 1 || options.pageSize > 1000) throw new SupervisorError("usage", "pageSize must be 1..1000");
-  const prompt = options.resume ? null : await readCleanPrompt(options.promptFile);
+  const prompt = (options.resume || options.adopt) ? null : await readCleanPrompt(options.promptFile);
   await mkdir(options.evidenceDir, { recursive: true });
   const state = await readState(options.evidenceDir);
   if (state.task_id !== null && state.task_id !== options.taskId) throw new SupervisorError("protocol", "evidence state belongs to another task");
-  if (!options.resume && state.request_id !== null && state.request_id !== options.requestId) throw new SupervisorError("protocol", "evidence state belongs to another request");
+  if (!options.resume && options.requestId !== null && state.request_id !== null && state.request_id !== options.requestId) throw new SupervisorError("protocol", "evidence state belongs to another request");
   if (options.resume && options.requestId !== null && state.request_id !== null && options.requestId !== state.request_id) throw new SupervisorError("protocol", "--resume request id does not match evidence state");
   const api = dependencies.api ?? createApiClient(options.baseUrl, options.timeoutMs, dependencies.fetchImpl);
   const health = await api.request("GET", "/api/v1/health");
@@ -807,8 +809,21 @@ export async function supervise(input, dependencies = {}) {
   let runId = state.run_id;
   const active = activeRunId(snapshot);
   if (active === undefined) throw new SupervisorError("protocol", "task active_run_id is missing");
-  if (active !== null && (!options.resume || active !== runId)) throw new SupervisorError("active_run", "task already has an active run");
-  if (!options.resume) {
+  if (!options.adopt && active !== null && (!options.resume || active !== runId)) throw new SupervisorError("active_run", "task already has an active run");
+  if (options.adopt && !options.resume) {
+    const adoptId = typeof active === "string"
+      ? active
+      : (Array.isArray(snapshot?.runs)
+        ? snapshot.runs.filter((run) => isRecord(run) && typeof run.run_id === "string").at(-1)?.run_id ?? null
+        : null);
+    if (typeof adoptId !== "string") throw new SupervisorError("protocol", "--adopt requires at least one run on the task");
+    if (state.run_id !== null && state.run_id !== adoptId) throw new SupervisorError("protocol", "evidence state belongs to another run");
+    runId = adoptId;
+    state.request_id = runFrom(snapshot, adoptId)?.request_id ?? state.request_id;
+    state.stopped = false;
+    state.pending_hil = null;
+    await writeState(options.evidenceDir, { ...state, task_id: options.taskId, case_label: options.caseLabel, expected_commit: options.expectedCommit ?? null, observed_commit: healthCommit });
+  } else if (!options.resume) {
     const accepted = await postNewRun(api, options.taskId, options.requestId, prompt);
     runId = accepted.run_id;
     state.request_id = accepted.request_id;
@@ -979,6 +994,7 @@ export function usage() {
     "  --expected-commit H  expected frozen product commit",
     "  --page-size N        event page size, 1..1000",
     "  --workspace-root DIR current task workspace (defaults to data/workspaces/<task-id>)",
+    "  --adopt              attach to the task's current (or latest) run instead of posting a new one; no --prompt-file needed",
     "  --resume             resume only after an explicit human resolution",
     "  --help",
   ].join("\n");

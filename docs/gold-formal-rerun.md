@@ -105,3 +105,26 @@ fails fast with `HostLeaseHeldError` instead of silently interrupting the
 first host's runs. A lease left by a dead process is taken over. Hosts built
 before this change write no lease, so during upgrades still verify manually
 that no old instance is running.
+
+## Test-prompt methodology (mandatory since 2026-08-29)
+
+Gold reruns evaluate the product, not prompt engineering. Every run must:
+
+1. **Send the real question directly.** Create the task via
+   `POST /api/v1/tasks` with the actual research question as the input; that
+   auto-launched run IS the evaluated run. Never create a separate bootstrap
+   task (the old "Reply with READY" sentinel stays in the session history and
+   light models have been observed obeying it at run end — gold7 qwen r1).
+   Attach the supervisor with `--adopt`, which journals the already-running
+   (or latest) run instead of posting its own.
+2. **Use a human-plausible prompt.** The run input describes only the topic,
+   direction, and target artifacts — what a researcher would actually type.
+   Constraints, execution mechanics (prepare/submit contract details, digest
+   rules, error-recovery recipes) belong in the shared system prompt
+   (`server/src/agent/phase1-prompt.ts`), never in the user message. Per-case
+   requirement notes (e.g. "the crosswalk must carry per-source value columns")
+   are legitimate target-artifact descriptions; tool-call instructions are not.
+
+Prompt files used for a run stay in the evidence pack for transparency.
+`scripts/gold-formal-supervisor.mjs --adopt` journals events from sequence 0,
+so attaching a few seconds after task creation loses nothing.

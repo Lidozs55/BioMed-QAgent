@@ -17,6 +17,8 @@ interface ActiveReceipt {
   readonly sequence: number;
   readonly receiptDigest: string;
   readonly submissionDigest: string;
+  /** Server-side copy of the prepared submission enabling receipt-only submit. */
+  readonly storedSubmission: unknown;
   consumed: boolean;
   reservationToken: object | null;
 }
@@ -42,7 +44,15 @@ export interface DynamicFamilyPreflightCoordinator {
     preparation: DynamicFamilyPreflightPreparation,
     receipt: DynamicFamilyPreflightReceipt,
     submissionDigest: string,
+    storedSubmission?: unknown,
   ): void;
+  /**
+   * Resolve the server-side prepared submission bound to a live (not yet
+   * consumed) receipt. Receipt-only submit uses this instead of re-echoing the
+   * whole payload; the returned reference is the exact object passed to
+   * commitPrepare, so integrity is anchored by the receipt digest chain.
+   */
+  resolveSubmission<T = unknown>(receipt: DynamicFamilyPreflightReceipt): T;
   /** Atomically consume the current receipt before any acquisition side effect. */
   reserve(receipt: DynamicFamilyPreflightReceipt, submissionDigest: string): DynamicFamilyPreflightReservation;
   /** Clear a consumed receipt after success or failure. */
@@ -74,7 +84,7 @@ export function createDynamicFamilyPreflightCoordinator(): DynamicFamilyPrefligh
       return Object.freeze({ requirementId, generation: state.generation, sequence: state.sequence });
     },
 
-    commitPrepare(preparation, receipt, submissionDigest): void {
+    commitPrepare(preparation, receipt, submissionDigest, storedSubmission): void {
       const state = states.get(preparation.requirementId);
       if (
         state === undefined
@@ -91,9 +101,28 @@ export function createDynamicFamilyPreflightCoordinator(): DynamicFamilyPrefligh
         sequence: preparation.sequence,
         receiptDigest: receipt.receipt_digest,
         submissionDigest,
+        storedSubmission,
         consumed: false,
         reservationToken: null,
       };
+    },
+
+    resolveSubmission<T = unknown>(receipt: DynamicFamilyPreflightReceipt): T {
+      const state = states.get(receipt.requirement_id);
+      if (state === undefined || receipt.generation !== state.generation) {
+        throw new Error("dynamic preflight receipt has stale generation");
+      }
+      const active = state.active;
+      if (active === null || active.receiptDigest !== receipt.receipt_digest) {
+        throw new Error("dynamic preflight receipt is unknown or superseded");
+      }
+      if (active.consumed) {
+        throw new Error("dynamic preflight receipt was already consumed");
+      }
+      if (active.storedSubmission === undefined) {
+        throw new Error("dynamic preflight receipt has no stored submission; echo the prepared_submission instead");
+      }
+      return active.storedSubmission as T;
     },
 
     reserve(receipt, submissionDigest): DynamicFamilyPreflightReservation {

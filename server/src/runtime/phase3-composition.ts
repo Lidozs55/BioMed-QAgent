@@ -557,11 +557,14 @@ export async function createPhase3Runtime(
             preparation,
             receipt,
             dynamicFamilyPreflightSubmissionDigest(submission),
+            submission,
           );
           return receipt;
         },
       });
       const dynamicFamilyTool = createDynamicFamilyPublicationTool({
+        resolveSubmission: async (preflightReceipt) =>
+          dynamicFamilyPreflight.resolveSubmission<ParsedDynamicFamilyPublicationSubmission>(preflightReceipt),
         submit: async (submission, signal, _context, preflightReceipt) => {
           if (preflightReceipt === undefined) {
             throw new Error("submit_dynamic_family_publication requires a preflight receipt");

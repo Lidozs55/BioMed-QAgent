@@ -117,6 +117,7 @@ export type TransformAdmissionRejectionCode =
   | "OUTPUT_BYTES_MISMATCH"
   | "OUTPUT_HEADER_MISMATCH"
   | "OUTPUT_ROW_COUNT_MISMATCH"
+  | "PLACEHOLDER_CONTENT"
   | "ATOMIC_COMMIT_FAILED";
 
 export interface CoreCommittedTransformOutput {

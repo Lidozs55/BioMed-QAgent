@@ -676,6 +676,7 @@ class DelimitedShapeScanner {
   private fields: string[] = [];
   private headerValue: string[] | null = null;
   private dataRows = 0;
+  private rowHasRealValue = false;
   private sawInput = false;
 
   constructor(private readonly delimiter: "," | "\t") {}
@@ -752,6 +753,18 @@ class DelimitedShapeScanner {
   }
 
   private endField(): void {
+    if (this.headerValue !== null) {
+      const trimmed = this.field.trim();
+      if (trimmed.length > 0) {
+        if (PLACEHOLDER_CELL_VALUES.has(trimmed.toLowerCase())) {
+          rejection(
+            "PLACEHOLDER_CONTENT",
+            `output table contains placeholder cell value "${trimmed}"`,
+          );
+        }
+        this.rowHasRealValue = true;
+      }
+    }
     this.fields.push(this.field);
     this.field = "";
     this.state = "field_start";
@@ -764,11 +777,30 @@ class DelimitedShapeScanner {
       if (this.fields.length !== this.headerValue.length) {
         rejection("OUTPUT_BYTES_MISMATCH", "output table row width does not match its header");
       }
+      if (!this.rowHasRealValue) {
+        rejection("PLACEHOLDER_CONTENT", "output table contains a data row with no real values");
+      }
       this.dataRows += 1;
     }
     this.fields = [];
+    this.rowHasRealValue = false;
   }
 }
+
+/**
+ * Deterministic content sanity screen (gold7 qwen r4: a formally verified
+ * publication shipped rows like `UNKNOWN,UNKNOWN` / `NONE,NONE,placeholder`).
+ * Exact cell match only, applied to data rows; partial empty cells stay legal
+ * because missing data is represented as empties, never as sentinel words.
+ */
+const PLACEHOLDER_CELL_VALUES = new Set([
+  "placeholder",
+  "unknown",
+  "tbd",
+  "n/a",
+  "not_found",
+  "no_records_found_in_input_json",
+]);
 
 async function inspectHandle(
   source: FileHandle,

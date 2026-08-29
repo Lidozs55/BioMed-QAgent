@@ -275,7 +275,9 @@ describe("dynamic family build tool boundary", () => {
       ...details.prepared_submission,
       preflight_receipt: details.preflight_receipt,
     });
-    expect(submit.submission.execution_proposal.transform_refs[0]?.digest)
+    const echoSubmission = submit.submission;
+    if (echoSubmission === null) throw new Error("echo submit must carry the full prepared submission");
+    expect(echoSubmission.execution_proposal.transform_refs[0]?.digest)
       .toBe(submit.preflightReceipt.host_descriptor_digest);
   });
 
