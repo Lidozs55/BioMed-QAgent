@@ -14,9 +14,8 @@
 
 ## P1 — Runtime and evidence hardening
 
-- [ ] **图表 evidence 到正式 Publication 闭环。** 将现有 `bioactivity-measurement/chart-evidence` 模块接入受控的 Family Registry、Adapter/Assembler、Validation、ProductAssessment 与 Publisher 路线；VLM/PDF/caption 输出必须先成为 task-owned、摘要绑定的 evidence asset，不能让任意 workspace CSV 直接获得正式发布权。
-  - 验收：正式证据保留 source asset、page/bbox、模型及版本、prompt/transform digest、点级 confidence 与 review state；provenance 不闭合或需要复核时 fail closed；至少一个点级 Gold 覆盖 HIL correction、事件重放和 Publication artifact hash 端到端验证。
-  - 前置：实现前先在对应 architecture topic 中固定 evidence asset ownership、review 状态机和现有 chart-evidence schema 的兼容策略；若改变 Core publication trust boundary，必须新增 ADR。
+- [x] **图表 evidence 到正式 Publication 闭环。** 将现有 `bioactivity-measurement/chart-evidence` 模块接入受控的 Family Registry、Adapter/Assembler、Validation、ProductAssessment 与 Publisher 路线；VLM/PDF/caption 输出必须先成为 task-owned、摘要绑定的 evidence asset，不能让任意 workspace CSV 直接获得正式发布权。
+  - 验收（2026-08-29 达成）：chart 四表进入生产 `bioactivity_measurement` family（schema + registered JSON parsers + 组装分派），点级 provenance/review 门在组装前 fail-closed（结构化 `chart_evidence:chart_evidence_gate` 检查写入 validation_report，不产生 Publication），经 B3 + Publisher 走既有原子发布。点级 Gold（`server/tests/chart-evidence-publication-closure.test.ts`）覆盖 accepted/corrected（HIL correction 保留 original 值与 human_correction 步骤）、artifact bytes 与 SHA-256 重算、pending review 与缺表拒绝；`publication_created`/`artifact_produced` 事件重放由既有 durable-runtime 测试锁定。evidence ownership、review 状态机与 schema 兼容策略见 `architecture/canonical-evidence.md` § figure/chart evidence publication route；未改变 Core publication trust boundary，无需新 ADR。
 - [ ] **可验证的 QueryPlan / SourceCoverage 证据。** 在 `@biomed/contracts` 先定义稳定 wire DTO，由 Core 拥有并生成检索计划与覆盖结果；覆盖证据作为 Manifest 的 `audit_report` artifact 发布，不冒充逐行 provenance 或主数据。
   - 验收：记录 source universe、source、query、filters、time window、requested/succeeded pages、raw/deduplicated/selected counts、失败与排除原因及 `retrieved_at`；只在预先定义的 source universe 内计算 coverage/recall，不允许 Agent 文本自行宣称“全网查全”。
   - 测试：覆盖 hostile wire、分页中断、重复来源、部分来源失败、事件重放和 artifact hash；任何部分失败都在正式结果中显式可见。

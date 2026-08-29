@@ -38,6 +38,10 @@ import {
   BIOACTIVITY_FAMILY_ID,
 } from "./bioactivity-measurement/index.js";
 import {
+  chartEvidenceTables,
+  createChartEvidenceRegisteredTableRegistry,
+} from "./bioactivity-measurement/chart-evidence/index.js";
+import {
   createGutMicrobiomeRegisteredTableRegistry,
   GUT_MICROBIOME_TAXON_TSV_ADAPTER_ID,
   gutMicrobiomeSchemas,
@@ -722,9 +726,14 @@ export function inheritedDiseaseEvidenceFamilyDefinition(): DatasetFamilyDefinit
 export function bioactivityMeasurementFamilyDefinition(): DatasetFamilyDefinition {
   const entries = bioactivityTableEntries();
   const registrations = createBioactivityRegisteredTableRegistry().entries();
+  const chartRegistrations = createChartEvidenceRegisteredTableRegistry().entries();
   return registeredFamily({
     id: BIOACTIVITY_FAMILY_ID,
-    schemas: [...entries.map((entry) => entry.schema), bioactivityCompoundCrosswalkSchema],
+    schemas: [
+      ...entries.map((entry) => entry.schema),
+      bioactivityCompoundCrosswalkSchema,
+      ...chartEvidenceTables.map((entry) => entry.schema),
+    ],
     profileRef: "bioactivity_measurement.release.v1",
     validationPolicy: bioactivityValidationPolicy(),
     sources: [{
@@ -745,6 +754,17 @@ export function bioactivityMeasurementFamilyDefinition(): DatasetFamilyDefinitio
     }, ...registrations.map((registration) => {
       const entry = entries.find((item) => item.schema.schema_id === registration.schema.schema_id)!;
       return registeredSource({ source: `registered_bioactivity_${entry.tableId}`, tableId: entry.tableId, adapterId: registration.parser.adapter_id, schemaRef: registration.schema.schema_id });
+    }), ...chartRegistrations.map((registration) => {
+      const entry = chartEvidenceTables.find((item) => item.schema.schema_id === registration.schema.schema_id);
+      if (entry === undefined) {
+        throw new Error(`chart evidence parser schema '${registration.schema.schema_id}' is not registered`);
+      }
+      return registeredSource({
+        source: `registered_bioactivity_${entry.definition.table_id}`,
+        tableId: entry.definition.table_id,
+        adapterId: registration.parser.adapter_id,
+        schemaRef: registration.schema.schema_id,
+      });
     })],
   });
 }
