@@ -181,6 +181,7 @@ export type EventPayload =
     }
   | { type: "task_failed"; error: ErrorDetail }
   | { type: "run_queued"; request_id: string; input: string }
+  | { type: "run_steered"; input: string }
   | { type: "run_started" }
   | { type: "run_finalizing" }
   | { type: "run_completed" }
