@@ -153,6 +153,11 @@ const STREAM_RECOVERY_MESSAGE =
   "The previous assistant turn was interrupted by a transient provider stream read failure. " +
   "Continue the same task from durable state without repeating completed calls or claiming the interrupted action succeeded.";
 const MAX_STREAM_RECOVERY_ATTEMPTS = 3;
+const PROVIDER_RECOVERY_MESSAGE =
+  "The previous assistant turn exhausted its normal retries because the provider was temporarily rate limited or unavailable. " +
+  "Continue the same task from durable state without repeating completed calls or claiming the interrupted action succeeded.";
+const MAX_PROVIDER_RECOVERY_ATTEMPTS = 3;
+const PROVIDER_RECOVERY_DELAY_MS = 60_000;
 export const TOOL_ACTIVATION_NAME = "activate_agent_tools";
 const MAX_ACTIVATED_TOOLS = 12;
 
@@ -498,6 +503,19 @@ export function isRecoverablePiStreamError(message: string | undefined): boolean
   return typeof message === "string" && /(?:^|\b)stream_read_error(?:\b|$)/iu.test(message);
 }
 
+export function isRecoverablePiProviderError(message: string | undefined): boolean {
+  if (typeof message !== "string") return false;
+  const normalized = message.trim();
+  return (
+    /^429:/u.test(normalized)
+    && /(?:upstream rate limit exceeded|rate_limit_error)/iu.test(normalized)
+    && !/(?:insufficient_quota|billing|quota exhausted)/iu.test(normalized)
+  ) || (
+    /^503:/u.test(normalized)
+    && /(?:service temporarily unavailable|api_error)/iu.test(normalized)
+  );
+}
+
 async function waitForStreamRecovery(delayMs: number, signal: AbortSignal): Promise<boolean> {
   if (signal.aborted) return false;
   return new Promise<boolean>((resolve) => {
@@ -765,6 +783,10 @@ async function createRealUpstreamSession(
     lastAssistantOutcome !== undefined
     && lastAssistantOutcome.stopReason === "error"
     && isRecoverablePiStreamError(lastAssistantOutcome.errorMessage);
+  const shouldRecoverProviderFailure = (): boolean =>
+    lastAssistantOutcome !== undefined
+    && lastAssistantOutcome.stopReason === "error"
+    && isRecoverablePiProviderError(lastAssistantOutcome.errorMessage);
   const promptWithStreamRecovery = async (input: string): Promise<void> => {
     const controller = new AbortController();
     streamRecoveryController?.abort();
@@ -772,18 +794,26 @@ async function createRealUpstreamSession(
     try {
       lastAssistantOutcome = undefined;
       await session.prompt(input);
-      for (
-        let attempt = 1;
-        attempt <= MAX_STREAM_RECOVERY_ATTEMPTS
-          && shouldRecoverInterruptedStream();
-        attempt += 1
-      ) {
-        const ready = await waitForStreamRecovery(3_000 * 2 ** (attempt - 1), controller.signal);
+      let streamAttempt = 0;
+      let providerAttempt = 0;
+      while (shouldRecoverInterruptedStream() || shouldRecoverProviderFailure()) {
+        const streamInterrupted = shouldRecoverInterruptedStream();
+        if (streamInterrupted) {
+          streamAttempt += 1;
+          if (streamAttempt > MAX_STREAM_RECOVERY_ATTEMPTS) break;
+        } else {
+          providerAttempt += 1;
+          if (providerAttempt > MAX_PROVIDER_RECOVERY_ATTEMPTS) break;
+        }
+        const delayMs = streamInterrupted
+          ? 3_000 * 2 ** (streamAttempt - 1)
+          : PROVIDER_RECOVERY_DELAY_MS;
+        const ready = await waitForStreamRecovery(delayMs, controller.signal);
         if (!ready) return;
         lastAssistantOutcome = undefined;
         await session.sendCustomMessage({
-          customType: "biomed_stream_recovery",
-          content: STREAM_RECOVERY_MESSAGE,
+          customType: streamInterrupted ? "biomed_stream_recovery" : "biomed_provider_recovery",
+          content: streamInterrupted ? STREAM_RECOVERY_MESSAGE : PROVIDER_RECOVERY_MESSAGE,
           display: false,
         }, { triggerTurn: true });
       }

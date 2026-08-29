@@ -100,10 +100,12 @@ failure-aware 后续动作。工具结果只记录名称与状态，不复制参
 业务工具的共享失败形状为 `{ error, code, retryable, status_code? }`；只有底层错误
 明确携带 `retryable` 时才允许透传 true，普通参数/解析异常默认不可重试。
 Pi 模型调用只对其上游分类器认定的瞬时错误（如 429、503）自动重试：最多 6 次、
-3 秒指数退避，provider 单次退避上限 60 秒。部分兼容 API 会把连接中断仅报告为裸
-`stream_read_error`，adapter 对这一精确错误额外执行至多 3 次隐藏 continuation；不会把
-它扩展到认证、参数或普通业务错误。所有恢复保持在同一个 durable Run 内，不新建 task
-或冒充成功。
+3 秒指数退避；`provider.maxRetryDelayMs=60s` 只限制服务端 `Retry-After`，不是外层指数
+退避上限。正常重试耗尽后，adapter 只对明确的 `429 rate_limit_error` 或
+`503 service temporarily unavailable` 冷却 60 秒并执行隐藏 continuation，最多 3 轮。
+部分兼容 API 会把连接中断仅报告为裸 `stream_read_error`，adapter 对这一精确错误也额外
+执行至多 3 次隐藏 continuation；不会把两类恢复扩展到配额/计费、认证、参数或普通业务
+错误。所有恢复保持在同一个 durable Run 内，不新建 task 或冒充成功。
 权限或 evidence-bound HIL 挂起的可信调用必须等待原调用恢复，不能以 workspace
 脚本产物替代。
 

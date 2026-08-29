@@ -6,6 +6,7 @@ import {
   activationToolDefinition,
   PiAgentAdapter,
   applyModelProfileToPayload,
+  isRecoverablePiProviderError,
   isRecoverablePiStreamError,
   resolvePiCompactionOverrides,
   resolvePiRetryOverrides,
@@ -294,6 +295,19 @@ describe("PiAgentAdapter", () => {
     expect(isRecoverablePiStreamError("429 rate limit")).toBe(false);
     expect(isRecoverablePiStreamError("invalid API key")).toBe(false);
     expect(isRecoverablePiStreamError(undefined)).toBe(false);
+  });
+
+  test("recovers only exhausted transient provider throttling and availability errors", () => {
+    expect(isRecoverablePiProviderError(
+      '429: {"message":"Upstream rate limit exceeded, please retry later","type":"rate_limit_error"}',
+    )).toBe(true);
+    expect(isRecoverablePiProviderError(
+      '503: {"message":"Service temporarily unavailable","type":"api_error"}',
+    )).toBe(true);
+    expect(isRecoverablePiProviderError("429: insufficient_quota")).toBe(false);
+    expect(isRecoverablePiProviderError("401: invalid API key")).toBe(false);
+    expect(isRecoverablePiProviderError("stream_read_error")).toBe(false);
+    expect(isRecoverablePiProviderError(undefined)).toBe(false);
   });
 
   test("does not switch a selected dynamic requirement back to static execution", () => {
