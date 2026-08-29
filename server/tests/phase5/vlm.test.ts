@@ -462,9 +462,19 @@ describe("extract_chart_data_vlm tool", () => {
       res.end(JSON.stringify({ choices: [{ message: { content: GOOD_VLM_JSON } }] }));
     });
     fixtures.push(fixture);
+    let activeApprovals = 0;
+    let maximumActiveApprovals = 0;
     const [tool] = createChartDataVlmTool({
       taskRoot,
-      approvalGate: { request: async () => "approve" },
+      approvalGate: {
+        request: async () => {
+          activeApprovals += 1;
+          maximumActiveApprovals = Math.max(maximumActiveApprovals, activeApprovals);
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          activeApprovals -= 1;
+          return "approve";
+        },
+      },
       vlmConfig: { apiKey: "k", baseUrl: "https://vlm.example.com/v1", model: "qwen-vl-max" },
       httpClient: new PublicHttpClient({
         resolve: fakeResolver({ "vlm.example.com": [PUBLIC_IP] }),
@@ -483,6 +493,7 @@ describe("extract_chart_data_vlm tool", () => {
       tool.execute({ source_path: "source_assets/figures/second.png" }),
     ]);
 
+    expect(maximumActiveApprovals).toBe(1);
     expect(results.every((result) => JSON.parse(result.content).status === "ok")).toBe(true);
     const pointCsv = await readFile(
       path.join(taskRoot, "parsed", "chart_data", CHART_POINTS_CSV_NAME),

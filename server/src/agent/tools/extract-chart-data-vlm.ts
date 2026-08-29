@@ -243,6 +243,20 @@ export function createChartDataVlmTool(deps: ChartDataVlmToolDeps): BioMedAgentT
     httpClient: deps.httpClient,
     hilGate: deps.hilGate,
   });
+  let invocationTail = Promise.resolve();
+  async function serializeInvocation<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = invocationTail;
+    let release = (): void => undefined;
+    invocationTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
+  }
 
   const tool: BioMedAgentTool = {
     name: EXTRACT_CHART_DATA_VLM_TOOL_NAME,
@@ -256,7 +270,8 @@ export function createChartDataVlmTool(deps: ChartDataVlmToolDeps): BioMedAgentT
       "images and runs VLM on each (up to 10 per file). Writes chart_data.csv " +
       "and chart_data_points.csv to parsed/chart_data/. Falls back to PDF " +
       "tables (L2) then caption text (L3) if VLM fails. Returns an error if " +
-      "all tiers fail.",
+      "all tiers fail. Concurrent calls are queued so each credential and data-review HIL " +
+      "remains bound to exactly one invocation.",
     parameters: {
       type: "object",
       properties: {
@@ -286,7 +301,7 @@ export function createChartDataVlmTool(deps: ChartDataVlmToolDeps): BioMedAgentT
       ],
       additionalProperties: false,
     },
-    execute: async (argumentsValue, signal) => {
+    execute: (argumentsValue, signal) => serializeInvocation(async () => {
       const record = argumentsValue as Record<string, unknown>;
       const sourceAssetId = expectString(record.source_asset_id, "source_asset_id", "");
       let sourcePath = expectString(record.source_path, "source_path", "");
@@ -374,7 +389,7 @@ export function createChartDataVlmTool(deps: ChartDataVlmToolDeps): BioMedAgentT
         };
       }
       return { content: JSON.stringify(result, null, 2), details: result };
-    },
+    }),
   };
 
   return [tool];

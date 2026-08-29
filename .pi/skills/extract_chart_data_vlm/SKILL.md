@@ -25,6 +25,9 @@ PNG/JPG image or PDF.
 - With source_asset_id, Dataset Core registers the evidence manifest and a
   matching OperationResult. The manifest binds model/version, prompt digest,
   page/bbox, confidence and point-level HIL facts.
+- Concurrent tool calls are queued and executed one at a time. Each invocation
+  keeps its own credential and data-review HIL; a pending review must never
+  cause sibling figure extractions to fail or bypass review.
 
 ## When not to use
 
