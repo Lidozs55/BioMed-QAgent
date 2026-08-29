@@ -69,7 +69,10 @@ Publication 分别证明产品完整性与正式发布。Snapshot 只是 `events
 
 `tool_started` 携带可选 `arguments` dict（深度截断 3、字符串 200 字符、列表 20
 项），`tool_completed.output` 截断到 4096 个字符，前端据此渲染"检索 PubMed · 查询:
-..."标签而无需回拉。
+..."标签而无需回拉。`PiEventAdapter` 对 Assistant / Reasoning 文本、工具参数、
+工具输出和取消原因中的路径保持原文，不以占位符替换 Windows、UNC 或 POSIX 路径；
+否则路径型工具结果会失去可解析性。凭据字段与 Bearer 值仍独立脱敏，长度、深度和
+列表数量边界保持不变。
 
 ### 14.3 双通道 WebSocket
 

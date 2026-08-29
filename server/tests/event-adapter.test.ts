@@ -245,7 +245,44 @@ describe("PiEventAdapter", () => {
     expect(JSON.stringify(onDiagnostic.mock.calls).length).toBeLessThan(1_000);
   });
 
-  test("bounds and redacts browser payloads while sequences continue across runs", () => {
+  test("preserves absolute and private paths across streamed event payloads", () => {
+    const { adapter } = createAdapter();
+    const windowsPath = "C:\\Users\\cheng\\BioMed-QAgent\\server\\src\\agent\\event-adapter.ts";
+    const uncPath = "\\\\lab-server\\shared\\datasets\\input.csv";
+    const posixPath = "/home/cheng/BioMed-QAgent/data/input.csv";
+    const events = [
+      ...adapter.adapt(runId, {
+        type: "assistant_delta",
+        delta: `Read ${windowsPath}`,
+      }),
+      ...adapter.adapt(runId, {
+        type: "reasoning_delta",
+        delta: `Compare ${uncPath}`,
+      }),
+      ...adapter.adapt(runId, {
+        type: "tool_started",
+        toolCallId: "call-paths",
+        toolName: "workspace_read",
+        arguments: { path: posixPath },
+      }),
+      ...adapter.adapt(runId, {
+        type: "tool_completed",
+        toolCallId: "call-paths",
+        toolName: "workspace_read",
+        result: { source: windowsPath, mirror: uncPath, output: posixPath },
+        isError: false,
+      }),
+      adapter.cancellationRequested("run-path-cancel", `Stop reading ${posixPath}`),
+    ];
+    const serialized = JSON.stringify(events);
+
+    expect(serialized).toContain(windowsPath.replaceAll("\\", "\\\\"));
+    expect(serialized).toContain(uncPath.replaceAll("\\", "\\\\"));
+    expect(serialized).toContain(posixPath);
+    expect(serialized).not.toContain("[redacted-path]");
+  });
+
+  test("bounds browser payloads and redacts credentials while preserving paths", () => {
     const { adapter } = createAdapter();
     const oversized = "z".repeat(10_000);
     const events = [
@@ -269,7 +306,7 @@ describe("PiEventAdapter", () => {
     expect(events.map((event) => event.sequence)).toEqual([1, 2, 3, 4]);
     expect((events[0]?.payload as { delta: string }).delta.length).toBeLessThanOrEqual(4_096);
     expect(serialized).not.toContain("credential-value");
-    expect(serialized).not.toContain("Users\\\\private");
+    expect(serialized).toContain("C:\\\\Users\\\\private\\\\secret.txt");
     expect(serialized).not.toContain(oversized);
     expect(serialized).toContain("[redacted]");
     expect(serialized).toContain("[truncated]");
