@@ -90,6 +90,13 @@ BioMed-QAgent 是一个**生物医学数据智能检索与整合系统**：用�
 - 论文 / 附件 / 网页 / 图表数据的解析支持（PDF、VLM 图表抽取）；
 - 压缩载体成员提取：`acquire_core_carrier` 把 zip 成员与 xlsx 工作表确定性转换为
   CSV extraction assets（Core 拥有并登记 provenance）；
+- **Core 资产预览/解压工具**：`preview_core_asset` 只读列出 zip 成员清单并预览
+  成员头部文本，`extract_core_archive` 把单个成员解出并注册为**新的 Core 资产**
+  （derived 溯源，可直接绑入 dynamic family 的 `registered_sources`）；两者由
+  Host 内置 stdlib ZIP 读取器确定性完成，模型无需也不允许再借道 python/shell
+  解压（配套系统提示词 `[Dynamic publication mechanics]` 段，2026-08-29 直问
+  验证 campaign 落地，见
+  [reports/2026-08-29-gold-qwen-direct-validation-study.md](reports/2026-08-29-gold-qwen-direct-validation-study.md)）；
 - 注册式多表 family 可由服务端 `scaffold_dataset_execution_spec` 从 live Family
   Registry 组合出 validate-ready 的完整执行规格，Agent 只提供 family、实体和来源绑定。
 
@@ -145,6 +152,13 @@ BioMed-QAgent 是一个**生物医学数据智能检索与整合系统**：用�
 - 任务的权威事实来源是追加写入的 `<task_id>/events.jsonl`，snapshot 可从事件重建；
 - 支持任务 / Run 生命周期、取消、恢复（重启后 `recoverActiveRuns`）、事件重放、
   构建记录与本地缓存；
+- 正式评测 supervisor（`scripts/gold-formal-supervisor.mjs`）支持 **`--adopt`**：
+  直接附加到任务当前/最新 Run 从序列 0 采证——直问建任务（无 bootstrap 占位），
+  自动启动的 Run 即被测 Run（方法学与 campaign 见
+  [reports/2026-08-29-gold-qwen-direct-validation-study.md](reports/2026-08-29-gold-qwen-direct-validation-study.md)）；
+- dynamic family 发布为 **receipt-only submit**：submit 只需 `schema_version` 与
+  prepare 返回的 `preflight_receipt`，服务端按收据解析已存储的 prepared
+  submission（全量回显仍兼容）；发布拒绝消息携带失败检查的 `detail`；
 - 前端状态是后端事件的**投影**，不是事实来源。
 
 ### 4.2 实时反馈与界面

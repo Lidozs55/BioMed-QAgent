@@ -133,3 +133,7 @@ Gold reruns evaluate the product, not prompt engineering. Every run must:
 Prompt files used for a run stay in the evidence pack for transparency.
 `scripts/gold-formal-supervisor.mjs --adopt` journals events from sequence 0,
 so attaching a few seconds after task creation loses nothing.
+
+The full multi-model campaign that produced this methodology (failure-mode
+matrix, guardrail mapping, and the product fixes it drove) is consolidated in
+[`reports/2026-08-29-gold-qwen-direct-validation-study.md`](reports/2026-08-29-gold-qwen-direct-validation-study.md).

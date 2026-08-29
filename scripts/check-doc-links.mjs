@@ -15,6 +15,7 @@ const skippedDirectories = new Set([
   ".sisyphus",
   ".superpowers",
   ".worktree",
+  ".worktrees",
 ]);
 const historicalRoots = [
   resolve(repoRoot, "docs/archive"),
