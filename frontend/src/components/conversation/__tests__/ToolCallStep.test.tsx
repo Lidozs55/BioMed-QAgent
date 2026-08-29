@@ -357,6 +357,8 @@ describe("ToolCallStep dedicated renderers", () => {
     expect(screen.getByText(/--coverage/)).toBeInTheDocument();
     expect(screen.getByText("all good")).toBeInTheDocument();
     expect(screen.getByText("$", { selector: "span.select-none" })).toBeInTheDocument();
+    // 终端块使用主题无关的固定深色 token(双主题深底浅字,深色模式不刺眼)。
+    expect(document.querySelector(".bg-terminal")).not.toBeNull();
   });
 
   it("keeps non-builtin tools on the generic path", () => {

@@ -87,7 +87,7 @@ export function BashTool({ item, open, onOpenChange }: ToolRendererProps) {
     >
       <div
         className={cn(
-          "relative rounded-md bg-card-foreground p-3 font-mono text-xs leading-5 text-background",
+          "relative rounded-md border border-border bg-terminal p-3 font-mono text-xs leading-5 text-terminal-foreground",
         )}
       >
         {outputText !== undefined && (
@@ -101,15 +101,18 @@ export function BashTool({ item, open, onOpenChange }: ToolRendererProps) {
                 aria-pressed={showRaw}
                 title="原始输出"
                 className={cn(
-                  "bg-background/80 text-muted-foreground hover:text-foreground",
-                  showRaw && "bg-muted text-foreground",
+                  "bg-terminal-foreground/10 text-terminal-foreground/70 hover:bg-terminal-foreground/20 hover:text-terminal-foreground",
+                  showRaw && "bg-terminal-foreground/20 text-terminal-foreground",
                 )}
                 onClick={() => setShowRaw((prev) => !prev)}
               >
                 <BracketsCurlyIcon aria-hidden="true" />
               </Button>
             )}
-            <CopyButton text={outputText} />
+            <CopyButton
+              text={outputText}
+              className="bg-terminal-foreground/10 text-terminal-foreground/70 hover:bg-terminal-foreground/20 hover:text-terminal-foreground"
+            />
           </div>
         )}
         <ScrollArea className={outputText !== undefined ? "max-h-72 pr-8" : undefined}>

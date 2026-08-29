@@ -30,6 +30,10 @@
   --warning-foreground: #ffffff;
   --info: #0284c7;
   --info-foreground: #ffffff;
+  /* 终端块(工具命令输出):主题无关的固定深底浅字,双主题同一取值,
+     仅在 :root 定义;.dark 不覆盖。 */
+  --terminal: oklch(0.218 0.008 223.9);
+  --terminal-foreground: oklch(0.971 0.005 236);
   --border: oklch(0.925 0.005 214.3);
   --input: oklch(0.925 0.005 214.3);
   --ring: oklch(0.723 0.014 214.4);
@@ -115,6 +119,8 @@
   --color-warning-foreground: var(--warning-foreground);
   --color-info: var(--info);
   --color-info-foreground: var(--info-foreground);
+  --color-terminal: var(--terminal);
+  --color-terminal-foreground: var(--terminal-foreground);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
