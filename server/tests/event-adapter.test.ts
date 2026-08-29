@@ -250,36 +250,49 @@ describe("PiEventAdapter", () => {
     const windowsPath = "C:\\Users\\cheng\\BioMed-QAgent\\server\\src\\agent\\event-adapter.ts";
     const uncPath = "\\\\lab-server\\shared\\datasets\\input.csv";
     const posixPath = "/home/cheng/BioMed-QAgent/data/input.csv";
-    const events = [
-      ...adapter.adapt(runId, {
-        type: "assistant_delta",
-        delta: `Read ${windowsPath}`,
-      }),
-      ...adapter.adapt(runId, {
-        type: "reasoning_delta",
-        delta: `Compare ${uncPath}`,
-      }),
-      ...adapter.adapt(runId, {
-        type: "tool_started",
-        toolCallId: "call-paths",
-        toolName: "workspace_read",
-        arguments: { path: posixPath },
-      }),
-      ...adapter.adapt(runId, {
-        type: "tool_completed",
-        toolCallId: "call-paths",
-        toolName: "workspace_read",
-        result: { source: windowsPath, mirror: uncPath, output: posixPath },
-        isError: false,
-      }),
-      adapter.cancellationRequested("run-path-cancel", `Stop reading ${posixPath}`),
-    ];
-    const serialized = JSON.stringify(events);
+    const assistant = adapter.adapt(runId, {
+      type: "assistant_delta",
+      delta: `Read ${windowsPath}`,
+    });
+    const reasoning = adapter.adapt(runId, {
+      type: "reasoning_delta",
+      delta: `Compare ${uncPath}`,
+    });
+    const toolStarted = adapter.adapt(runId, {
+      type: "tool_started",
+      toolCallId: "call-paths",
+      toolName: "workspace_read",
+      arguments: { path: posixPath },
+    });
+    const toolCompleted = adapter.adapt(runId, {
+      type: "tool_completed",
+      toolCallId: "call-paths",
+      toolName: "workspace_read",
+      result: { source: windowsPath, mirror: uncPath, output: posixPath },
+      isError: false,
+    });
+    const cancelled = adapter.adapt("run-path-cancel", {
+      type: "turn_cancelled",
+      reason: `Stop reading ${posixPath}`,
+    });
 
-    expect(serialized).toContain(windowsPath.replaceAll("\\", "\\\\"));
-    expect(serialized).toContain(uncPath.replaceAll("\\", "\\\\"));
-    expect(serialized).toContain(posixPath);
-    expect(serialized).not.toContain("[redacted-path]");
+    expect(assistant[0]?.payload).toMatchObject({ delta: `Read ${windowsPath}` });
+    expect(reasoning[0]?.payload).toMatchObject({ delta: `Compare ${uncPath}` });
+    expect(toolStarted[0]?.payload).toMatchObject({ arguments: { path: posixPath } });
+    expect(toolStarted[1]?.payload).toMatchObject({ arguments: { path: posixPath } });
+    expect(JSON.parse((toolCompleted[0]?.payload as { output: string }).output)).toEqual({
+      source: windowsPath,
+      mirror: uncPath,
+      output: posixPath,
+    });
+    expect(cancelled[0]?.payload).toMatchObject({ reason: `Stop reading ${posixPath}` });
+    expect(JSON.stringify([
+      ...assistant,
+      ...reasoning,
+      ...toolStarted,
+      ...toolCompleted,
+      ...cancelled,
+    ])).not.toContain("[redacted-path]");
   });
 
   test("bounds browser payloads and redacts credentials while preserving paths", () => {
@@ -293,6 +306,7 @@ describe("PiEventAdapter", () => {
         toolName: "bridge",
         arguments: {
           api_key: "credential-value",
+          note: "Authorization: Bearer bearer-value-1234",
           absolute: "C:\\Users\\private\\secret.txt",
           nested: { one: { two: { three: { four: "hidden" } } } },
           list: Array.from({ length: 40 }, (_, index) => index),
@@ -306,6 +320,8 @@ describe("PiEventAdapter", () => {
     expect(events.map((event) => event.sequence)).toEqual([1, 2, 3, 4]);
     expect((events[0]?.payload as { delta: string }).delta.length).toBeLessThanOrEqual(4_096);
     expect(serialized).not.toContain("credential-value");
+    expect(serialized).not.toContain("bearer-value-1234");
+    expect(serialized).toContain("Authorization: [redacted]");
     expect(serialized).toContain("C:\\\\Users\\\\private\\\\secret.txt");
     expect(serialized).not.toContain(oversized);
     expect(serialized).toContain("[redacted]");
