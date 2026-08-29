@@ -333,6 +333,8 @@ describe("ToolCallStep dedicated renderers", () => {
     );
     expect(screen.getByText(/搜索/)).toBeInTheDocument();
     expect(screen.getByText(/EGFR/)).toBeInTheDocument();
+    // 通用工具渲染扳手图标(完成态不再有状态圆圈,靠工具图标占位)。
+    expect(document.querySelector('[data-slot="marker-icon"] svg')).not.toBeNull();
   });
 });
 

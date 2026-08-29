@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { WrenchIcon } from "@phosphor-icons/react";
 
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -36,7 +37,7 @@ export function GenericToolCall({ item, open, onOpenChange }: ToolRendererProps)
       item={item}
       open={open}
       onOpenChange={onOpenChange}
-      icon={null}
+      icon={<WrenchIcon />}
       title={
         <span className="break-words">
           {label.verb} {label.target}
