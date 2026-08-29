@@ -149,6 +149,10 @@ const LENGTH_CONTINUATION_MESSAGE =
   "The previous assistant turn was truncated by the model length limit. " +
   "Continue the same task from the compacted context without repeating completed work. " +
   "Finish the remaining tool calls, required data artifacts, validation, and final response.";
+const STREAM_RECOVERY_MESSAGE =
+  "The previous assistant turn was interrupted by a transient provider stream read failure. " +
+  "Continue the same task from durable state without repeating completed calls or claiming the interrupted action succeeded.";
+const MAX_STREAM_RECOVERY_ATTEMPTS = 3;
 export const TOOL_ACTIVATION_NAME = "activate_agent_tools";
 const MAX_ACTIVATED_TOOLS = 12;
 
@@ -490,6 +494,25 @@ export function resolvePiRetryOverrides(): {
   };
 }
 
+export function isRecoverablePiStreamError(message: string | undefined): boolean {
+  return typeof message === "string" && /(?:^|\b)stream_read_error(?:\b|$)/iu.test(message);
+}
+
+async function waitForStreamRecovery(delayMs: number, signal: AbortSignal): Promise<boolean> {
+  if (signal.aborted) return false;
+  return new Promise<boolean>((resolve) => {
+    const timeout = setTimeout(() => {
+      signal.removeEventListener("abort", abort);
+      resolve(true);
+    }, delayMs);
+    const abort = (): void => {
+      clearTimeout(timeout);
+      resolve(false);
+    };
+    signal.addEventListener("abort", abort, { once: true });
+  });
+}
+
 /**
  * Whether a freshly resolved product config requires re-applying the Pi
  * session model / context window / compaction budgets.
@@ -728,6 +751,46 @@ async function createRealUpstreamSession(
   if (configuredTools.length > 0) {
     session.setActiveToolsByName([...initialToolNames, TOOL_ACTIVATION_NAME]);
   }
+  let lastAssistantOutcome: { stopReason: string | undefined; errorMessage: string | undefined } | undefined;
+  let streamRecoveryController: AbortController | undefined;
+  const recoverySubscription = session.subscribe((event) => {
+    if (event.type === "message_end" && event.message.role === "assistant") {
+      lastAssistantOutcome = {
+        stopReason: event.message.stopReason,
+        errorMessage: event.message.errorMessage,
+      };
+    }
+  });
+  const shouldRecoverInterruptedStream = (): boolean =>
+    lastAssistantOutcome !== undefined
+    && lastAssistantOutcome.stopReason === "error"
+    && isRecoverablePiStreamError(lastAssistantOutcome.errorMessage);
+  const promptWithStreamRecovery = async (input: string): Promise<void> => {
+    const controller = new AbortController();
+    streamRecoveryController?.abort();
+    streamRecoveryController = controller;
+    try {
+      lastAssistantOutcome = undefined;
+      await session.prompt(input);
+      for (
+        let attempt = 1;
+        attempt <= MAX_STREAM_RECOVERY_ATTEMPTS
+          && shouldRecoverInterruptedStream();
+        attempt += 1
+      ) {
+        const ready = await waitForStreamRecovery(3_000 * 2 ** (attempt - 1), controller.signal);
+        if (!ready) return;
+        lastAssistantOutcome = undefined;
+        await session.sendCustomMessage({
+          customType: "biomed_stream_recovery",
+          content: STREAM_RECOVERY_MESSAGE,
+          display: false,
+        }, { triggerTurn: true });
+      }
+    } finally {
+      if (streamRecoveryController === controller) streamRecoveryController = undefined;
+    }
+  };
   const reconcileConfig = resolveModel === undefined
     ? undefined
     : async (): Promise<void> => {
@@ -782,7 +845,7 @@ async function createRealUpstreamSession(
     };
   return {
     sessionId: session.sessionId,
-    prompt: (input) => session.prompt(input),
+    prompt: promptWithStreamRecovery,
     resetRunProgress: () => runProgressTracker?.reset(),
     continueAfterLength: () => session.sendCustomMessage({
       customType: "biomed_length_continuation",
@@ -849,8 +912,15 @@ async function createRealUpstreamSession(
         listener(mapped);
       });
     },
-    abort: () => session.abort(),
-    dispose: () => session.dispose(),
+    abort: () => {
+      streamRecoveryController?.abort();
+      return session.abort();
+    },
+    dispose: () => {
+      streamRecoveryController?.abort();
+      recoverySubscription();
+      session.dispose();
+    },
   };
 }
 

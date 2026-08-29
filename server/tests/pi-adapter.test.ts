@@ -6,6 +6,7 @@ import {
   activationToolDefinition,
   PiAgentAdapter,
   applyModelProfileToPayload,
+  isRecoverablePiStreamError,
   resolvePiCompactionOverrides,
   resolvePiRetryOverrides,
   resolveManualPiCompactionOverrides,
@@ -287,6 +288,14 @@ describe("Pi model profile mapping", () => {
   });
 });
 describe("PiAgentAdapter", () => {
+  test("recovers only interrupted provider streams outside Pi's normal retry classifier", () => {
+    expect(isRecoverablePiStreamError("stream_read_error")).toBe(true);
+    expect(isRecoverablePiStreamError("upstream stream_read_error after partial response")).toBe(true);
+    expect(isRecoverablePiStreamError("429 rate limit")).toBe(false);
+    expect(isRecoverablePiStreamError("invalid API key")).toBe(false);
+    expect(isRecoverablePiStreamError(undefined)).toBe(false);
+  });
+
   test("keeps retryable provider failures within a bounded long-running retry window", () => {
     expect(resolvePiRetryOverrides()).toEqual({
       retry: {

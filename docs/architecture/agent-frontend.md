@@ -99,9 +99,11 @@ failure-aware 后续动作。工具结果只记录名称与状态，不复制参
 不写 durable event，不改变 reducer，也不阻止或生成 `run_completed`。
 业务工具的共享失败形状为 `{ error, code, retryable, status_code? }`；只有底层错误
 明确携带 `retryable` 时才允许透传 true，普通参数/解析异常默认不可重试。
-Pi 模型调用只对其上游分类器认定的瞬时错误（如 429、503 和流中断）自动重试：
-最多 6 次、3 秒指数退避，provider 单次退避上限 60 秒。参数、认证和其他非瞬时错误
-仍立即失败；重试保持在同一个 durable Run 内，不新建 task 或冒充成功。
+Pi 模型调用只对其上游分类器认定的瞬时错误（如 429、503）自动重试：最多 6 次、
+3 秒指数退避，provider 单次退避上限 60 秒。部分兼容 API 会把连接中断仅报告为裸
+`stream_read_error`，adapter 对这一精确错误额外执行至多 3 次隐藏 continuation；不会把
+它扩展到认证、参数或普通业务错误。所有恢复保持在同一个 durable Run 内，不新建 task
+或冒充成功。
 权限或 evidence-bound HIL 挂起的可信调用必须等待原调用恢复，不能以 workspace
 脚本产物替代。
 
