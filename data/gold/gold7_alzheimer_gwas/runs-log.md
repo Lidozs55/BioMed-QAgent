@@ -433,6 +433,8 @@ Verdict after round 3: still no completed formal Publication for gold10 on `deep
 
 ## 2026-08-29 campaign closed by user decision: one case suffices
 
+> Consolidated study (methodology, run matrix, guardrail mapping, fixes): `docs/reports/2026-08-29-gold-qwen-direct-validation-study.md`.
+
 - User closed the qwen direct-validation campaign after direct r4's start (r4c cancelled mid-flight; temperature restored to 0.7; remote synced at a249ce7c including tool-call renderers and the execution-backend/source-admission rename).
 - Campaign yield (10 direct/scaffolded runs across qwen3.7-flash, qwen3.8-flash, deepseek-v4-flash):
   - Product fixes landed on main: receipt-only submit with wire-bound stored submission, PLACEHOLDER_CONTENT admission screening, [Dynamic publication mechanics] system-prompt section (sandbox dialect, tool names), prepare key-diff errors + top-level key list, publishability rejections carrying check detail, supervisor --adopt (no bootstrap), preview_core_asset / extract_core_archive tools (stdlib zip reader).
