@@ -61,15 +61,18 @@ describe("ToolCallStep", () => {
     fireEvent.click(button);
     expect(screen.getByText("输入参数")).toBeInTheDocument();
     expect(screen.getByText("输出")).toBeInTheDocument();
-    expect(screen.getByText(/"query": "lung cancer"/)).toBeInTheDocument();
+    // JsonBlock 高亮会把行拆进多个 span,用 textContent 断言整行。
+    expect(screen.getByTestId("json-block").textContent).toContain(
+      '"query": "lung cancer"',
+    );
     expect(screen.getByText("search completed")).toBeInTheDocument();
   });
 
   it("collapses again on second click", () => {
     render(<ToolCallStep item={makeToolCall({})} />);
-    const button = screen.getByRole("button");
-    fireEvent.click(button);
-    fireEvent.click(button);
+    const trigger = () => screen.getByRole("button", { name: /检索/ });
+    fireEvent.click(trigger());
+    fireEvent.click(trigger());
     expect(screen.queryByText("输入参数")).not.toBeInTheDocument();
     expect(screen.queryByText("输出")).not.toBeInTheDocument();
   });
@@ -147,6 +150,92 @@ describe("ToolCallStep", () => {
     );
     expect(screen.getByText(/检索\s+GEO/)).toBeInTheDocument();
     expect(screen.getByText(/METTL5/)).toBeInTheDocument();
+  });
+});
+
+describe("ToolCallStep dedicated renderers", () => {
+  it("dispatches read to FileReadTool with path title and line range badge", () => {
+    render(
+      <ToolCallStep
+        item={makeToolCall({
+          toolName: "read",
+          arguments: { path: "src/lib/utils.ts" },
+          output: "line1\nline2\nline3",
+        })}
+      />,
+    );
+    expect(screen.getByText("src/lib/utils.ts")).toBeInTheDocument();
+    expect(screen.getByText("L1–L3")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /utils\.ts/ }));
+    // pre 文本经 testing-library 归一化后换行折叠为空格,用正则匹配。
+    expect(screen.getByText(/line1\s+line2\s+line3/)).toBeInTheDocument();
+  });
+
+  it("dispatches write to FileWriteTool with added-line count and green view", () => {
+    render(
+      <ToolCallStep
+        item={makeToolCall({
+          toolName: "write",
+          arguments: { path: "docs/notes.md", content: "alpha\nbeta" },
+          output: "ok",
+        })}
+      />,
+    );
+    expect(screen.getByText("docs/notes.md")).toBeInTheDocument();
+    expect(screen.getByText("+2")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /notes\.md/ }));
+    expect(screen.getAllByText("+", { selector: "span[aria-hidden='true']" })).toHaveLength(2);
+    expect(screen.getByText("alpha")).toBeInTheDocument();
+  });
+
+  it("dispatches edit to FileEditTool with ±badge and diff rows", () => {
+    render(
+      <ToolCallStep
+        item={makeToolCall({
+          toolName: "edit",
+          arguments: { path: "src/a.ts", oldText: "const a = 1;", newText: "const a = 2;\nconst b = 3;" },
+          output: "edited",
+        })}
+      />,
+    );
+    expect(screen.getByText("src/a.ts")).toBeInTheDocument();
+    expect(screen.getByText("+2")).toBeInTheDocument();
+    expect(screen.getByText("−1")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /a\.ts/ }));
+    const removed = screen.getByText("const a = 1;").closest("[class*='border-l-destructive']");
+    expect(removed).not.toBeNull();
+    expect(screen.getByText("const a = 2;").closest("[class*='border-l-success']")).not.toBeNull();
+  });
+
+  it("dispatches bash to BashTool with first-line title and terminal block", () => {
+    render(
+      <ToolCallStep
+        item={makeToolCall({
+          toolName: "bash",
+          arguments: { command: "pnpm test\n--coverage" },
+          output: "all good",
+        })}
+      />,
+    );
+    expect(screen.getByText("pnpm test")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /pnpm test/ }));
+    expect(screen.getByText(/--coverage/)).toBeInTheDocument();
+    expect(screen.getByText("all good")).toBeInTheDocument();
+    expect(screen.getByText("$", { selector: "span.select-none" })).toBeInTheDocument();
+  });
+
+  it("keeps non-builtin tools on the generic path", () => {
+    render(
+      <ToolCallStep
+        item={makeToolCall({
+          toolName: "grep",
+          arguments: { pattern: "EGFR" },
+          output: null,
+        })}
+      />,
+    );
+    expect(screen.getByText(/搜索/)).toBeInTheDocument();
+    expect(screen.getByText(/EGFR/)).toBeInTheDocument();
   });
 });
 

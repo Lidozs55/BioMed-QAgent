@@ -57,33 +57,47 @@
 
 ## 3. 组件结构
 
+> 评审修订(用户确认):**收起态一律用 `Marker` 组件**(与 PermissionStep
+> 同款 `variant="border"`),点击 Marker 才展开下方设计好的卡片;全部复用
+> shadcn 组件(Collapsible / Marker / Badge / Button / ScrollArea /
+> Message+Bubble),图标用项目 iconLibrary `@phosphor-icons/react`,不重造
+> 轮子、不用原生元素替代已有组件。
+
 ```
 frontend/src/components/conversation/
   ToolCallStep.tsx              # 改造为按 toolName 分发的 dispatcher,
                                 # 保留 download / dynamicFamily 现有逻辑
   toolLabels.ts                 # 新增 read/write/edit/bash/grep/find/ls 兜底标签
   tool-renderers/
-    ToolHeader.tsx              # 通用折叠头(状态图标+工具图标+标题+Badge+caret)
-    CodeBlock.tsx               # 等宽文本块 + 复制按钮 + max-h 滚动
+    ToolCallMarker.tsx          # 收起态:CollapsibleTrigger(render=Marker variant="border"
+                                #   → button),状态图标+工具图标+mono 标题+Badge+caret
+    CodeBlock.tsx               # ScrollArea(max-h) + 等宽文本 + 复制 Button
     JsonBlock.tsx               # JSON 自动格式化 + 高亮 + 复制(CodeBlock 之上)
     DiffView.tsx                # 行级 diff 渲染(deleted/added 行;write 复用 added-only)
     FileReadTool.tsx            # read 专用
     FileWriteTool.tsx           # write 专用
     FileEditTool.tsx            # edit 专用
     BashTool.tsx                # bash 专用
+    GenericToolCall.tsx         # 通用工具(Marker + 输入参数 JsonBlock / 输出 CodeBlock)
   __tests__/
     (新增 tool-renderers 各自的 *.test.tsx)
 frontend/src/lib/
   jsonHighlight.ts              # JSON tokenizer → 带 className 的 span 片段
 frontend/src/hooks/
-  useCopy.ts                    # 复制 + 1.5s 成功反馈(clipboard API,失败降级 execCommand 不做,直接吞错并保持图标)
+  useCopy.ts                    # 复制 + 1.5s 成功反馈
+frontend/src/components/ui/
+  collapsible.tsx               # shadcn add collapsible(base-ui 版,本项目新增)
 ```
+
+结构:每个工具步骤 = `<Collapsible>`(受控 open)+ Marker 触发行 +
+`<CollapsibleContent>` 内的 outline Bubble 卡片体。下载进度条逻辑保留在
+Collapsible 之外(运行中收起也可见,现有测试契约)。
 
 ## 4. 分发规则(ToolCallStep)
 
 ```
-toolName ∈ {read, write, edit, bash}  → 对应专用渲染器(outline 卡片)
-其余                                  → GenericToolCall(现 ghost bubble + JsonBlock)
+toolName ∈ {read, write, edit, bash}  → 对应专用渲染器(outline 卡片体)
+其余                                  → GenericToolCall(Marker + JsonBlock 卡片体)
 ```
 
 - `isDownload`(progress.kind === "downloaded_bytes")与
@@ -107,20 +121,21 @@ toolName ∈ {read, write, edit, bash}  → 对应专用渲染器(outline 卡片
   注意 bubble 默认 `max-w-[80%]`,须显式 `max-w-full`。
 - 通用工具:维持现有 `variant="ghost"`(`ghost` 自带 `max-w-full`)。
 
-### 5.1 ToolHeader(专用渲染器共用折叠头)
+### 5.1 ToolCallMarker(收起态触发行,专用/通用渲染器共用)
 
 ```
-[状态图标] [工具图标] 标题(font-mono truncate)   [Badge 元信息…] [⌄]
+[状态图标][工具图标] 标题(font-mono truncate)   [Badge 元信息…] [⌄]
 ```
 
-- 状态图标沿用现状:`running`→`Spinner`,`error`→`WarningCircleIcon`
-  (destructive),否则 `CheckCircleIcon`,均 `size-4 shrink-0`。
-- 工具图标(phosphor,`size-4 text-muted-foreground`):
-  read=`FileTextIcon`,write=`FilePlusIcon`,edit=`FileDiffIcon`,
-  bash=`TerminalIcon`。
-- 标题 `font-mono text-sm truncate`;右侧 Badge 用
-  `variant="secondary"` + `font-mono text-[11px]`;行整体为
-  `button aria-expanded`,点击切换展开,`CaretDownIcon` 旋转 180°。
+- 实现:`CollapsibleTrigger` render 成 `Marker variant="border"`
+  (内层再 render 成 `<button>`,与 PermissionStep 的 border Marker 同款
+  视觉;展开状态由 ToolCallStep 受控提升,供下载进度条共享)。
+- 状态图标沿用现状:`running`→`Spinner`,`error`→`WarningCircleIcon`,
+  否则 `CheckCircleIcon`;工具图标(phosphor):read=`FileTextIcon`,
+  write=`FilePlusIcon`,edit=`GitDiffIcon`(注:该版 phosphor 无
+  FileDiff),bash=`TerminalIcon`,均经 `MarkerIcon` 获得 size-4。
+- 标题 `font-mono truncate`;右侧 Badge `variant="secondary"` +
+  `font-mono text-[11px]`;行尾 `CaretDownIcon` 展开时旋转 180°。
 
 ### 5.2 read — FileReadTool
 
