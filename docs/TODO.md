@@ -48,6 +48,11 @@
 - [ ] **极低风险正式化免人审路径（待产品决策，先 `[Q]`）。** `propose_browser_evidence_acceptance` 目前一律 blocking HIL（policy `browser.acquisition.evidence-acceptance.v1`）。对确定性可校验的极低风险证据（例如 media type 为 JSON 且与 PROMOTED recipe 的 registered parser/schema 双 digest 绑定）可考虑免人审自动过。该路径削弱 fail-closed 评审门，实施前需先 `[Q]` 明确风险边界（限定媒体类型与 digest 绑定、上线初期抽审、可回滚开关）。
   - 验收：符合限定条件的证据自动 formalize 并在事件流记录 auto-accept 依据与 policy ref；其余路径门禁不变；有复现测试与开关回退验证。
 
+## 模型卡点收集期（只登记，暂不修）
+
+- [ ] **gold 案例批量测完后统一分流修复模型卡点。** 收集清单见 [`evaluation/model-blockers.md`](evaluation/model-blockers.md)（gold1@qwen3.8-flash 已登记 B1–B6：观察缺口盲猜参数、动态路由零调用、时限幻觉、同路撞墙、activate 摩擦、GDC 浅尝辄止）。等组员把其余 gold 案例跑完补齐清单后，再按 prompt/产品/接口陷阱分流立项修复；期间**不改** `phase1-prompt.ts`、适配器或工具行为。
+  - 验收：清单每条有证据（seq/正文）与归类；修复立项后逐条回写去向（prompt 提交 / TODO 新项 / ISSUES）。
+
 ## Deferred / 非当前工作
 
 - **Publication 驱动 Run 终态闭包：** 不实施“只有产生 Publication 时 Run 才完成”。非数据汇报无需 Publication；简短 Run progress context 仅作软提示，数据产品的正式完成由 ProductAssessment + Publication 证明。
