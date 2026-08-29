@@ -346,3 +346,12 @@ Verdict after round 3: still no completed formal Publication for gold10 on `deep
 - Systemic finding: validation passed 40/40 and product_assessment scored `publishable` with all six dimensions structural (schema/relations/identifiers/provenance/confidence/reproducibility) and zero content-completeness requirements — the formal pipeline verifies structure/provenance/reproducibility but cannot detect placeholder or empty-shell content. Filed in docs/ISSUES.md.
 - Verdict: procedurally valid, substantively degenerate. NOT usable as a report sample. Kept as evidence of the validation gap.
 - r5: switched active model to `qwen3.8-flash` (registered, same 256k window) and appended rules D/E/F — no placeholder rows ever, registered sources must cover every acquired source and the transform must parse all of them, dbSNP GRCh38 completion required, locus table needs dozens of real rows before submitting.
+
+## 2026-08-29 qwen3.7-flash@256k gold9 r1 — interrupted (Host 进程重启，非模型判定)
+
+- Task `task_ts_a6c3581c`、run `run_ts_05cbf58e`（request `gold9-qwen37flash-rerun-57af4fec-r1`），07:57:58Z→09:40:01Z（约 42 min），28,064 events 已存 `data/gold-runs/57af4fec-gold9-qwen37flash-r1/`。bootstrap 握手 READY 正常，run 说明 = 交叉表跨源列闭合目标版（`…-gold9-qwen37flash-r1-prompt.txt`）。
+- 09:40:01Z Host server 子进程死亡（tsx watch 于 09:40:02 重启出 PID 124564），活跃 run 被标记 `interrupted`，supervisor "fetch failed" 退出。**崩溃原因未定位**——仓库内无文件变更触发，崩溃栈在用户的 `pnpm dev` 终端里，待用户回看。这是当日第二次上下文中断类事故（第一次为 r1 session 断开导致 supervisor 存活脱管）。
+- 中断前进度：44× prepare 全部被拒（同 gold7 r2 的 spec 生成悬崖）；13× validate / 3× execute（静态路线探索）；navigate_page 4 / download_from_page 3（浏览器抓取尝试）；search_local_cache 7；1 次压缩（峰值 250,588/256k，98%）——**压缩链第二次活体验证**。0 提交、0 编造。
+- 44 次拒绝分类：schema 层 transform_metadata 多余属性×8、acquisition_requests 多余属性×4 等；语义层 "Computed property access is forbidden in fixture source"×15、orphanet/hgnc "requires an accession"×12+、primary table×1、role mismatch×1。
+- r2 处置（run 说明层修复，系统提示词不动）：新 prompt `…-gold9-qwen37flash-r2-prompt.txt` 加入六条 schema 纪律（accession 显式值 en_product1/en_product6/current——取自 dsflash r5 成功 provenance 的 canonical_accession；transform_source 禁动态键访问；禁额外属性；必填字段与 row_granularity pattern；单 primary table 与 role 一致；失败后精确修 listed paths 整体重发）。fresh task `task_ts_b50302a0`，evidence `data/gold-runs/57af4fec-gold9-qwen37flash-r2/`。
+- 并行运行警示：17:42 起同一 Host 上有另一 gold7 `qwen38flash` 标注的 supervisor（PID 111324，非本 session 启动）与本 gold9 r2 并行。两个 run 共享全局模型设置与 Host 进程——任一方在 run 中切模型都会影响对方；17:40 的 Host 崩溃若复发会同时打断两个 run。
