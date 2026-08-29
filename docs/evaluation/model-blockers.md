@@ -17,7 +17,8 @@
 
 ## gold1 @ qwen3.7-plus（2026-08-29，main@5ac29b1dbf7d，task_ts_374f1e07-7255-41c3-92b7-6357c04ff12d）
 
-> ⚠️ 模型身份更正：此 run 标称 qwen3.8-flash，**实际执行 qwen3.7-plus**（原因见 B7）。B1–B6 观察均基于 3.7-plus 行为；qwen3.8-flash 的真实行为以复跑 r2 为准。
+> ⚠️ 模型身份更正：此 run 标称 qwen3.8-flash，**实际执行 qwen3.7-plus**（原因见 B7）。B1–B6 观察均基于 3.7-plus 行为；qwen3.8-flash 的真实行为以复跑 r3 为准。
+> **2026-08-29 证据清理**：按操作员指示仅保留 r3；本 run 的 `data/gold-runs/...qwen37plus-misrun-r1`、`data/gold-runs/...qwen38flash-r2`（中断的 3.8-flash 早期尝试）及对应 durable 任务目录均已删除。B1–B7 保留为已记录结论（seq/数字为本机实测后归档前抄录）。
 > 证据包 `data/gold-runs/5ac29b1dbf7d-gold1-qwen37plus-misrun-r1/`；终态 completed / **blocked_no_publication**；35 次模型调用、275s、input 663,823 / output 6,510 / cache_read 2,012,800、上下文峰值 109,936。
 
 | # | 卡点 | 归类 | 证据 | 建议修法（暂不执行） |
