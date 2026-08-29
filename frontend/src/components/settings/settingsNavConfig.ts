@@ -3,6 +3,7 @@ import {
   Cpu,
   Database,
   Keyboard,
+  ListChecks,
   Palette,
   ShieldCheck,
   SlidersHorizontal,
@@ -53,6 +54,7 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
     items: [
       { id: "skill-iteration", label: "Skill 迭代", icon: Sparkles },
       { id: "permissions", label: "权限", icon: ShieldCheck },
+      { id: "hil-approval", label: "HIL 审批", icon: ListChecks },
       { id: "runtime-limits", label: "运行限制", icon: Timer },
     ],
   },

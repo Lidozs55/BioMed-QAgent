@@ -5,6 +5,7 @@
  */
 import type { Http } from "@/api/http";
 import {
+  parseHilApprovalSettings,
   parseModelSettings,
   parseModelsEnvelope,
   parsePersonalization,
@@ -14,6 +15,8 @@ import {
 } from "@biomed/contracts";
 import type {
   AgentTempGrant,
+  HILApprovalSettings,
+  HilApprovalSettingsPatch,
   ModelInfo,
   ModelPreviewRequest,
   ModelSettings,
@@ -42,6 +45,8 @@ export interface SettingsApi {
   removeAgentPermissionRule: (ruleId: string) => Promise<AgentPermissionSettings>;
   fetchAgentTempGrants: () => Promise<AgentTempGrant[]>;
   revokeAgentTempGrant: (grantId: string) => Promise<void>;
+  fetchHilApproval: () => Promise<HILApprovalSettings>;
+  saveHilApproval: (patch: HilApprovalSettingsPatch) => Promise<HILApprovalSettings>;
 }
 
 export type AgentPermissionPreset = "restricted" | "ask_when_needed" | "full_access";
@@ -137,5 +142,13 @@ export function createSettingsApi(http: Http): SettingsApi {
       http.requestVoid(`${http.baseUrl}/settings/agent-permissions/temp-grants/${http.encodeId(grantId)}`, {
         method: "DELETE",
       }),
+    fetchHilApproval: () =>
+      http.request(`${http.baseUrl}/settings/hil-approval`).then((b) => parseHilApprovalSettings(b)),
+    saveHilApproval: (patch) =>
+      http.request(`${http.baseUrl}/settings/hil-approval`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      }).then((b) => parseHilApprovalSettings(b)),
   };
 }

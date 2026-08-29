@@ -67,6 +67,8 @@ import {
   createDurableAgentRuntime,
   type DurableAgentRuntime,
 } from "./durable-agent-runtime.js";
+import { createHilGatePreReview } from "./hil-pre-review.js";
+import type { HILApprovalPolicyStore } from "./hil-approval-store.js";
 import { createDynamicFamilyPreflightCoordinator } from "./dynamic-family-preflight-coordinator.js";
 
 export { createDynamicFamilyPreflightCoordinator } from "./dynamic-family-preflight-coordinator.js";
@@ -289,6 +291,12 @@ export interface Phase3RuntimeOptions {
   agentExecPolicy: "deny" | "ask" | "allow" | null;
   /** Shared persistent permission settings (presets + rules). */
   permissionPolicyStore?: PermissionPolicyStore;
+  /**
+   * Shared three-tier HIL approval settings store (human_review /
+   * llm_pre_review / auto_approve per scope). Combined with ``resolveModel``
+   * it enables the LLM pre-review stage in the HIL gate.
+   */
+  hilApprovalPolicy?: HILApprovalPolicyStore;
   /** Live permission brokers per task (preset switch invalidation, grant view/revoke). */
   permissionBrokerRegistry?: PermissionBrokerRegistry;
   adapter?: BioMedAgentAdapter;
@@ -378,6 +386,10 @@ export async function createPhase3Runtime(
     tasksRoot: options.tasksRoot,
     workspaceManager,
     permissionBrokerRegistry: options.permissionBrokerRegistry,
+    hilPreReview: createHilGatePreReview(
+      options.hilApprovalPolicy ?? null,
+      options.resolveModel ?? null,
+    ),
     adapter: options.adapter ?? new PiAgentAdapter({
       environment: process.env,
       resolveModel: options.resolveModel,

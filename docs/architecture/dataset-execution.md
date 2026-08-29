@@ -183,6 +183,11 @@ warning。用户 correction 必须进入转换与 provenance 链，不能直接�
 配置错误并 fail-closed。DashScope VLM 的模型凭据在每次外部调用前仍需 Runtime
 permission HIL，数据点审核不能替代凭据授权。
 
+Blocking HIL 请求进入人工等待前可经三档审批档位（人工审批 / 大模型初审 /
+不审批，按 scope 分配）短路：仅大模型初审不通过（或自动档之外的失败）才暂停
+等待人工，发布边界 scope 始终人工审批。详见
+[hil-approval-policy.md](hil-approval-policy.md)。
+
 > 决策依据：ADR-007。
 
 ---

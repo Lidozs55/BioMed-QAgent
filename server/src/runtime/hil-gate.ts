@@ -10,6 +10,7 @@ import {
   userInputRequiredPayload,
   type CreateHILRequestInput,
 } from "./hil-store.js";
+import type { HILGatePreReview } from "./hil-pre-review.js";
 import type { DurableTaskRepository } from "./task-repository.js";
 
 export type BoundHILRequestInput = Omit<
@@ -40,6 +41,7 @@ export class DurableHILGate implements HILGateHandle {
   private readonly taskId: string;
   private readonly repository: DurableTaskRepository;
   private readonly store: DurableHILStore;
+  private readonly preReview: HILGatePreReview | null;
   private runId: string | null;
   private permissionInvocation = 0;
   private readonly pending = new Map<string, PendingReview>();
@@ -49,10 +51,12 @@ export class DurableHILGate implements HILGateHandle {
     repository: DurableTaskRepository,
     runId?: string,
     store = new DurableHILStore(repository),
+    preReview: HILGatePreReview | null = null,
   ) {
     this.taskId = taskId;
     this.repository = repository;
     this.store = store;
+    this.preReview = preReview;
     this.runId = runId ?? null;
   }
 
@@ -129,6 +133,9 @@ export class DurableHILGate implements HILGateHandle {
       throw new OperationAbortedError("operation aborted before human review could be awaited");
     }
 
+    const preResolved = await this.tryPreReviewResolve(runId, request);
+    if (preResolved !== null) return preResolved;
+
     const decision = new Promise<HumanReviewRecord>((resolve, reject) => {
       const cleanup = (): void => signal?.removeEventListener("abort", abort);
       const abort = (): void => {
@@ -201,6 +208,59 @@ export class DurableHILGate implements HILGateHandle {
       this.resolvePending(runId, resolvedDuringEmission);
     }
     return decision;
+  }
+
+  /**
+   * Approval-policy short-circuit (three-tier HIL approval settings):
+   * ``auto_approve`` resolves immediately with the kind's affirmative
+   * decision (reviewer ``auto``); ``llm_pre_review`` consults the model and
+   * resolves on a pass (reviewer ``model``). A model ``fail`` verdict or any
+   * reviewer error escalates to the classic human flow (fail-safe). Resolved
+   * requests never emit ``user_input_required``, so the run is not paused.
+   */
+  private async tryPreReviewResolve(
+    runId: string,
+    request: HILRequest,
+  ): Promise<HumanReviewRecord | null> {
+    if (this.preReview === null) return null;
+    const mode = await this.preReview.modeFor(request.kind, request.review_type);
+    if (mode === "human_review") return null;
+    let reviewer: "auto" | "model";
+    let reason: string;
+    if (mode === "auto_approve") {
+      reviewer = "auto";
+      reason = "auto-approved by HIL approval policy (auto_approve)";
+    } else {
+      let verdict: "pass" | "fail";
+      let verdictReason: string;
+      try {
+        const review = await this.preReview.modelReview(request);
+        verdict = review.verdict;
+        verdictReason = review.reason;
+      } catch (error) {
+        verdict = "fail";
+        verdictReason = `model pre-review unavailable: ${
+          error instanceof Error ? error.message : String(error)
+        }`;
+      }
+      if (verdict !== "pass") return null;
+      reviewer = "model";
+      reason = `approved by model pre-review: ${verdictReason}`;
+    }
+    const review = await this.store.resolveRequest(this.taskId, runId, {
+      request_id: request.request_id,
+      evidence_digest: request.evidence_digest,
+      decision: request.kind === "permission" ? { action: "approve" } : { action: "accept" },
+      reason,
+    }, { reviewer });
+    await this.repository.appendRunEvent(this.taskId, runId, {
+      type: "warning",
+      code: `HIL_PRE_APPROVED:${request.request_id}`,
+      message: mode === "auto_approve"
+        ? `HIL request ${request.request_id} auto-approved by approval policy (auto_approve)`
+        : `HIL request ${request.request_id} approved by model pre-review: ${reason}`,
+    });
+    return review;
   }
 
   async recordAdvisoryHIL(input: BoundHILRequestInput): Promise<HILRequest> {

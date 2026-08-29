@@ -9,6 +9,7 @@ import {
   type HILKind,
   type HILRequest,
   type HILReviewItem,
+  type HILReviewer,
   type HILReviewType,
   type HILSubject,
   type HumanReviewRecord,
@@ -280,6 +281,7 @@ export class DurableHILStore {
     taskId: string,
     runId: string,
     rawInput: ResumeHILInput,
+    options: { reviewer?: HILReviewer } = {},
   ): Promise<HumanReviewRecord> {
     requireSafeId(taskId, "task_id");
     requireSafeId(runId, "run_id");
@@ -316,7 +318,7 @@ export class DurableHILStore {
         }).slice(0, 32)}`,
         request_id: request.request_id,
         decision: input.decision,
-        reviewer: "user",
+        reviewer: options.reviewer ?? "user",
         reviewed_at: reviewedAt,
         evidence_digest: request.evidence_digest,
         reason: input.reason,

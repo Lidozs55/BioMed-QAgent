@@ -194,6 +194,8 @@ function mockApi(overrides: Partial<SettingsAPIClient> = {}): SettingsAPIClient 
     fetchAgentPermissions: vi.fn().mockResolvedValue({ schema_version: 1, preset: "ask_when_needed", rules: [], persistent_exec_allow: false }),
     fetchAgentTempGrants: vi.fn().mockResolvedValue([]),
     revokeAgentTempGrant: vi.fn().mockResolvedValue(undefined),
+        fetchHilApproval: vi.fn().mockResolvedValue({ schema_version: "1.0", default_mode: "human_review", review_modes: {} }),
+    saveHilApproval: vi.fn(),
     setAgentPermissionsPreset: vi.fn(),
     setAgentPermissionsPersistentExec: vi.fn(),
     addAgentPermissionRule: vi.fn(),
