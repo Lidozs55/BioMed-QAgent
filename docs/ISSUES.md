@@ -111,3 +111,7 @@
 ## 代码质量 / CI（2026-08-29 追加观察）
 
 - main@b52bb8bd 上 `tests/model-settings.test.ts`（resolveActiveModel 期望 temperature 0.25 等字段不匹配）与 `tests/skill-manifests.test.ts`（dataset-construction SKILL.md 引用未注册工具 `acquire_core_carrier`）失败。二者均与 settings 整改/skill 领域相关，属并行工作区遗留，与本轮 dynamic publication 改动无关（相关路径 diff 为空）；由对应领域负责人收敛。
+- **状态（2026-08-29 晚，`main@e85f5fa5`…`bd871416` 对照轮）：** server 套件存在**逐轮轮换的负载抖动失败**，5 轮内出现 4 种不同失败组合：`durable-agent-runtime.test.ts` 每轮失败用例都不同（lists durable tasks… / maps steer and compaction… / replays persisted events… / forces a durable cancelled terminal…，单轮最多同时挂 3 个用例）、`phase5/approval-gate.test.ts`（HIL suspend/resume）、`permission-api.test.ts`（422 用例）、`integrator-heap.test.ts`（堆测量）、`phase5/hil-timeout-suspension.test.ts`（resolvePending 竞态）。隔离复跑可复现其中一部分（approval-gate 稳定、durable 换用例），permission-api 隔离即过。**归因证据**：把 `fix/remove-path-redaction` 的源码 delta 临时还原成纯净 origin/main 后重跑，同样失败（且 durable 该轮反而转绿）——确认与该分支无关，属 main 基线/环境问题。稳定失败仍为两条既有基线：`model-settings`（`safetyReserveTokens` 期望值缺失，`3941a843` 合入后仍红）与 `transform-host-architecture-guard`（未接受 `core-asset-tools.ts`）。
+- **影响：** 高负载时段（并行会话/评测）失败测试循环被噪音干扰，agent 容易把抖动误判为回归；每次归因都要额外跑对照轮，浪费 2 分钟级×N。
+- **最小复现：** 机器有并行测试/gold run 负载时连续跑 `pnpm --filter @biomed/server test` 数轮，观察失败文件/用例逐轮轮换。
+- **下一步：** (a) 高负载时段归因一律用"与纯净 main 对照"或还原 delta 法，勿直接按红测返工；(b) 给 durable/HIL/permission API 用例补独立临时 data 目录与确定性时钟（当前疑似受共享 `data/` 与真实定时器影响）；(c) 两条稳定基线由 settings/架构守卫对应领域收敛。
