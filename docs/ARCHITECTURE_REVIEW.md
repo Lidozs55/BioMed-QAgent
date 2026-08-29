@@ -1,6 +1,6 @@
 # BioMed-QAgent 架构与赛题解法
 
-> 静态逆向基线：2026-08-27  
+> 静态逆向基线：2026-08-27（`75120d4f`）；2026-08-29 修订，纳入其后 main 上的架构级变更（静态 Family 扩至 8 个、spec scaffold、Core 载体成员提取、Host 独占租约、上下文预算与压缩 fail-closed、exec 旁路封堵、HIL Questionnaire 统一）  
 > 事实来源：当前仓库代码与 `PROBLEM.md`。本文不依赖已删除文档，也不把测试名称、历史注释或旧迁移方案当成现行架构事实。  
 > 评估边界：本文说明代码表达的设计与调用关系；没有把外部数据源可用性、模型效果或真实大规模运行结果当成已经验证的结论。
 
@@ -23,7 +23,7 @@ BioMed-QAgent 不是让大模型直接生成一份 CSV，而是把大模型限�
 | 赛题要求 | 项目机制 | 可信边界 |
 | --- | --- | --- |
 | 数据查找 | Pi Agent、数据库专用工具、声明式数据库工具、浏览器、PubMed/GEO/GDC 等来源客户端 | Agent 负责查询策略；工具负责受限网络访问和返回真实响应 |
-| 数据采集 | Core acquisition provider、统一下载器、内容缓存、断点续传、重试和大小限制 | Provider 决定 URL、方法、请求头和预期媒体类型，Agent 不能注入代码或路径 |
+| 数据采集 | Core acquisition provider、统一下载器、压缩载体（zip/xlsx）成员提取、内容缓存、断点续传、重试和大小限制 | Provider 决定 URL、方法、请求头和预期媒体类型，Agent 不能注入代码或路径 |
 | 数据解析 | 注册 Adapter、GEO/表达矩阵解析器、XML/JSON/XLSX/PDF 解析器、Qwen-VL 图表提取 | 正式静态路线只接受已注册 Adapter；PDF/VLM 输出默认先是暂存结果 |
 | 数据清洗 | 类型检查、缺失值门禁、命名空间授权、单位/尺度/语义检查、无效行隔离 | 确定性代码执行，异常行进入 audit，而不是静默修补 |
 | 字段对齐 | Schema、FieldMapping、NormalizationProfile、probe-to-gene 映射、HIL 字段修正 | 模糊映射不能自动升级为已确认映射 |
@@ -63,6 +63,8 @@ flowchart LR
 - 生产 `pnpm start` 先构建 Server，再由同一 Host 提供静态前端。
 - Host 先绑定端口，再初始化数据库桥、浏览器池、模型配置和正式运行时；初始化期间 API 返回 503。
 - `SIGINT`/`SIGHUP` 走生命周期关闭；开发 watch 的 `SIGTERM` 直接退出，遗留活跃 run 在下次启动时由 durable repository 标记为 interrupted。
+
+Host 启动时通过 [`server/src/runtime/host-lease.ts`](../server/src/runtime/host-lease.ts) 在 tasks root 写入 `.host-lease.json` 独占租约：第二个存活 Host 会 fail-fast 拒绝启动（`HostLeaseHeldError`），已死亡进程的租约视为过期可接管。“同一 data root 只允许一个存活 Host”由此从流程约束升级为代码强制。
 
 装配中心是 [`server/src/bootstrap.ts`](../server/src/bootstrap.ts) 和 [`server/src/runtime/phase3-composition.ts`](../server/src/runtime/phase3-composition.ts)。每个任务会得到独立的 Workspace、Dataset Core、SourceAssetRegistry、权限 Broker、HIL Gate、采集运行时和工具集合。
 
@@ -137,6 +139,8 @@ Workspace 文件是 Agent 暂存物，不因存在就成为可信产物；`outpu
 
 SourceAssetRegistry 只接受 `source_assets/` 下的普通文件，拒绝目录逃逸、符号链接和任务间复用。旧式相对路径仍可在静态执行入口被登记，但会记录 compatibility telemetry；动态路线只接受任务拥有的 Core asset ID。
 
+Core 拥有的压缩载体成员提取会把 zip 成员与 xlsx 工作表确定性转换为 CSV extraction assets，登记在 `source_assets/extracted/<请求身份摘要>/` 下并附 Core acquisition provenance；Registry 同时记录每个 asset 的相对路径，消费端在常规 asset 目录缺失时按该记录回退解析（仍限缩在 `source_assets/` 内）。
+
 ### 5.3 OperationResult 与 checkpoint
 
 每个执行操作有输入摘要、参数摘要、实现版本、输出摘要、输出文件清单和状态。成功输出只有在文件摘要与结果清单闭合时才能复用。
@@ -145,6 +149,7 @@ Executor 将 attempt 追加保存，并为操作输出写 checkpoint。重启时
 
 - 已完成且摘要一致的操作可以跳过；
 - 缺失、损坏或身份不匹配的 checkpoint 失效并重跑；
+- Executor 启动时会先清理自描述的孤儿操作 checkpoint（best-effort，失败不阻塞 run），避免历史异常退出的残留参与复用判断；
 - parse 的完整 `DataBatch` 另外持久化，避免恢复时用不完整统计“猜回”解析状态；
 - publish 前再次检查锁 fence，防止超时或失去租约的旧执行晚到发布。
 
@@ -210,6 +215,8 @@ Agent 的系统提示强制数据生产请求先调用 `inspect_dataset_executio
 - 静态拓扑不能表达需求，但每个输入都能由 Core Provider 获取或已有 Core asset 时，走动态 Family；
 - 两条正式路线确实无法闭合时，才允许交付明确标注为 provisional 的工作区 CSV，并同时报告缺失来源和阻塞原因。
 
+对注册式多表 Family，Agent 还可以先调用 `scaffold_dataset_execution_spec`：服务端从 live Family Registry 组合出 validate-ready 的完整 `DatasetExecutionSpec`，Agent 只需提供 family、实体和一个 `{source, adapter_id, accession}` 绑定列表，然后必须把 scaffold 结果原样交给 `validate_dataset_execution`，不得改写。该 scaffold 目前只覆盖静态注册式多表 spec；digest-bound 的动态 execution skeleton 与候选 projection 分解尚未实现（跟踪于 [`TODO.md`](TODO.md)）。
+
 ## 7. 数据查找与来源发现
 
 数据查找层是“Agent 规划 + 专用工具执行”，不是一个全局搜索 API。
@@ -249,6 +256,8 @@ Agent 的系统提示强制数据生产请求先调用 `inspect_dataset_executio
 - DNS/URL policy 与允许 Host；
 - attempt、cache lineage、resume 来源和最终 asset 回执持久化；
 - 成功后登记到任务 SourceAsset，并可登记到全局缓存。
+
+对 acquisition-only 的二进制压缩载体（如 EuropePMC 补充材料 zip），Agent 通过 `acquire_core_carrier` 工具交由 Core 完成获取与成员提取：Core 选择可提取成员，把 zip 成员与 xlsx 工作表确定性转换为 CSV extraction assets 并登记 provenance；Agent 只能引用返回的 asset ID，不能自行解包正式载体。
 
 ## 8. 数据解析
 
@@ -335,7 +344,7 @@ GEO 表达路线还区分 series matrix、supplementary matrix、样本元数据
 
 ## 11. 当前静态数据族
 
-默认 Family Registry 注册 6 个正式数据族：
+默认 Family Registry 注册 8 个正式数据族：
 
 | Family | 运行时 | 主要正式来源/表拓扑 |
 | --- | --- | --- |
@@ -345,8 +354,12 @@ GEO 表达路线还区分 series matrix、supplementary matrix、样本元数据
 | `variant_evidence` | 注册式多表 | `variant_assertions` 主表 + `evidence` + `sources`，并有受信任 derived mapping 能力 |
 | `protein_structure` | 注册式多表 | `structures` 主表 + `chains` + `ligands` + `sources`；PDB carrier |
 | `bioactivity_measurement` | 注册式多表 | `activities` 主表 + compounds/assays/targets，ChEMBL；可选 PubChem crosswalk |
+| `gut_microbiome` | 注册式多表 | study 主表 + taxon name crosswalk + differential abundance + reference prevalence 四表；MGnify 研究、EuropePMC 论文补充材料 CSV/XLSX（含双层统计表头解析）、NCBI Taxonomy esearch/efetch 同义/历史名 crosswalk、GMRepo taxon phenotypes |
+| `inherited_disease_gene_evidence` | 注册式多表 | genes + diseases + gene-disease 关联 + gene-evidence crosswalk；Orphanet product1/product6、HGNC approved、ClinVar gene esearch、ClinGen gene validity |
 
-“采集目录存在某 Provider”不等于“静态 Family 已支持它”。例如 GWAS Catalog、MGnify、OpenFDA、GMRepo、Orphanet、HGNC、ClinGen 和 NCBI Taxonomy 可以被 Core 正式采集，但若没有精确静态拓扑，应走动态 Family，而不是伪装成已有 Family。
+后两个 Family 为 2026-08-28 前后新增。`gut_microbiome` 已在同一冻结 commit 的 fresh run 中完成 IBD 表型四表正式闭包（`pub_gm_integrated_ibd_v1_*`，证据 `data/gold-runs/d084a7e4-gold10-r1`）；`inherited_disease_gene_evidence` 已有 IEI/PID 发布记录（gold9，证据 `data/gold-runs/e8d03589-gold9-dsflash-r5`）。
+
+“采集目录存在某 Provider”不等于“静态 Family 已支持它”。例如 GWAS Catalog、OpenFDA 等可以被 Core 正式采集，但若没有精确静态拓扑，应走动态 Family，而不是伪装成已有 Family。
 
 ## 12. 固定执行骨架
 
@@ -395,6 +408,7 @@ Agent 必须一次提交完整且闭合的：
 
 1. `prepare_dynamic_family_publication` 是无副作用 preflight：验证 canonical digest、拓扑闭包、transform descriptor、资源策略和采集可计划性，返回 task/requirement/generation/submission-bound receipt。
 2. `submit_dynamic_family_publication` 必须携带同一 receipt。Host 重新计算并核对全部摘要，取得 execution lock，按 preflight 计划采集输入，并拒绝 generation 或请求身份漂移。
+3. preflight 在必需输入角色超过 64 个时直接早拒（与 Transform Host 的 `MAX_AUTHORIZED_INPUTS` 对齐），避免提交通过后才命中授权上限。
 
 ### 13.3 Transform 和 Core admission
 
@@ -453,6 +467,8 @@ HIL 覆盖字段映射、单位换算、浏览器证据接受和 publication acc
 
 请求与决策写入 Durable store 和任务事件流。Host 重启后会恢复未完成请求；决定已经存在时，操作按相同 checkpoint 重放，而不是让模型再次解释一段自然语言。
 
+前端所有 durable 人工输入已统一到 Questionnaire 基础设施：用户输入走 `UserInputQuestionnaire`，权限与 publication acceptance 走 `PermissionQuestionnaire`，二者共享 `ui/questionnaire.tsx` 原语；原 `UserInputDialog` 已移除，事件重放语义不变。
+
 ## 15. 图表数据的实际完成度
 
 从静态调用关系看，需要区分三个层次：
@@ -505,7 +521,7 @@ Product API 枚举 Publication 时重新计算 manifest 文件摘要；下载 ar
 - `POST /api/v1/import/tasks`；
 - run permission resolution；
 - `GET /api/v1/publications`、publication detail 和 artifact download；
-- databases、cache、settings/model registry、personalization 和 skill iteration；
+- databases、cache、settings/model registry（供应商与模型列表支持 `page`/`size`/`q` 分页搜索；设置在加载与迁移时统一钳制校验，base_url 结构不符返回 422，删除实体时重置幽灵设置）、personalization 和 skill iteration；
 - `WS /api/v1/ws` 用于增量事件与控制帧。
 
 WebSocket 只接管固定 upgrade path；连接有 message size 和 buffered bytes 上限。前端启动时先用 HTTP hydrate durable snapshot，再订阅 WebSocket 增量，reducer 保持同一状态模型。
@@ -524,7 +540,7 @@ Bridge 拒绝任意 SQL，也不导入 Agent、Skill 或 Dataset Core。缓存�
 系统有四个不同的信任边界，不应混为一谈：
 
 1. **Agent Workspace 权限**：读写/搜索/执行命令经过路径策略、protected paths、临时 grant 和 append-only audit。
-2. **外部网络权限**：公共 HTTP client 执行 URL/DNS 策略；浏览器池限制 context；VLM 凭据使用需要 permission gate。
+2. **外部网络权限**：公共 HTTP client 执行 URL/DNS 策略；浏览器池限制 context，主帧拒绝渲染数据文件（按路径后缀/响应媒体类型，提示改用下载通道）、施加 50 MiB 主帧字节上限并约束渲染进程 V8 堆与序列化；VLM 凭据使用需要 permission gate。Agent 的 workspace exec 命中直连网络可执行文件（curl/wget）或 HTTP URL 参数时会被工具层拒绝，监督器与系统提示同向禁止以 exec 绕过 Core 采集——网络获取必须走受限研究工具或注册 Provider。
 3. **数据正式化权限**：只有 SourceAssetRegistry、Dataset Core、Validation 和 Publisher 可以把工作文件提升为正式数据产品。
 4. **动态代码执行权限**：当前仅有进程内非隔离限制，不是完整安全边界。
 
@@ -541,6 +557,9 @@ Bridge 拒绝任意 SQL，也不导入 Agent、Skill 或 Dataset Core。缓存�
 - HIL 未完成时暂停，不能绕过为工作区结果；
 - timeout/cancel 后即使旧 operation 晚到，也会被 cancel/lock/generation fence 阻止发布；
 - checkpoint 文件缺失或摘要漂移时重跑；
+- run 入口做 session 预算 preflight：`context_window - max_tokens - reserve <= 0` 时在首个 Agent 回合前落盘 `run_failed(context_budget_exhausted)`，不带病启动；
+- 上下文压缩带 fail-closed 收敛 guard：压缩后估算 token 未下降或未达目标即触发 `CONTEXT_COMPACTION_INEFFECTIVE` 终态 `run_failed`；已产出正式 Publication 的 run 则优雅收尾，不无限派生续回合；
+- cancel 长时间未被 agent session 确认时，超时（默认 10 秒）后强制落盘 durable `run_cancelled` 终态并静音僵尸执行循环；
 - Publication 消费时发现摘要不符返回损坏错误，而不是继续展示。
 
 ## 20. 作为评审的静态评价
@@ -579,7 +598,7 @@ Bridge 拒绝任意 SQL，也不导入 Agent、Skill 或 Dataset Core。缓存�
 
 #### C. Publication Viewer artifact 路由参数（已修复）
 
-[`frontend/src/components/PublicationResultsViewer.tsx`](../frontend/src/components/PublicationResultsViewer.tsx) 已将所有 `PublicationArtifactCard` 统一改为传入 `detail.publication_id`。[`frontend/src/test/publication-components.test.tsx`](../frontend/src/test/publication-components.test.tsx) 使用 `publication_id !== requirement_id` 且包含主数据 artifact 的详情对象锁定实际请求 URL，覆盖了此前 manifest 无 artifact 时遗漏的回归场景。
+[`frontend/src/components/PublicationResultsViewer.tsx`](../frontend/src/components/PublicationResultsViewer.tsx) 已将所有 `PublicationArtifactCard` 统一改为传入 `detail.publication_id`。[`frontend/src/test/publication-components.test.tsx`](../frontend/src/test/publication-components.test.tsx) 使用 `publication_id !== requirement_id` 且包含主数据 artifact 的详情对象锁定实际请求 URL，覆盖了此前 manifest 无 artifact 时遗漏的回归场景。发布端 store 也同时接受带与不带 `pub_` 前缀的 publication id，并按规范 id 索引。
 
 #### D. 查找“完备性”缺乏可量化证明
 
@@ -594,6 +613,7 @@ Bridge 拒绝任意 SQL，也不导入 Agent、Skill 或 Dataset Core。缓存�
 - `first source wins` 保证了确定性，不保证冲突值正确；前端应把 conflict audit 作为醒目质量信号。
 - PDF 无框线表格的位置聚类是启发式，复杂跨页、合并单元格和旋转表格需要专门基准。
 - 统计异常目前多为 warning，不自动阻止发布；答辩时应说明这是“提示人工判断”而不是自动纠错。
+- 动态路线的服务端 scaffold 目前只覆盖静态注册式多表 spec；digest-bound 动态 skeleton 与候选 projection 分解尚未实现（见 [`TODO.md`](TODO.md)），模型独立完成全套动态提交的成功率风险因此更高。
 
 ## 21. 面向答辩的推荐叙事
 
@@ -626,9 +646,12 @@ Bridge 拒绝任意 SQL，也不导入 Agent、Skill 或 Dataset Core。缓存�
 | 共享执行契约 | [`packages/contracts/src/dataset-execution.ts`](../packages/contracts/src/dataset-execution.ts) |
 | 静态路线工具 | [`server/src/agent/tools/dataset-execution.ts`](../server/src/agent/tools/dataset-execution.ts) |
 | Family Registry | [`server/src/dataset/families/registry.ts`](../server/src/dataset/families/registry.ts) |
+| gut microbiome Family | [`server/src/dataset/families/gut-microbiome`](../server/src/dataset/families/gut-microbiome) |
 | Core service boundary | [`server/src/dataset/service/dataset-core.ts`](../server/src/dataset/service/dataset-core.ts) |
 | Core 实现 | [`server/src/dataset/service/ts-core.ts`](../server/src/dataset/service/ts-core.ts) |
 | 固定操作计划 | [`server/src/dataset/runtime/plan.ts`](../server/src/dataset/runtime/plan.ts) |
+| Spec scaffold | [`server/src/dataset/scaffold/spec-scaffold.ts`](../server/src/dataset/scaffold/spec-scaffold.ts) |
+| 压缩载体成员提取（zip/xlsx→CSV） | [`server/src/dataset/acquisition/zip-members.ts`](../server/src/dataset/acquisition/zip-members.ts)、[`server/src/dataset/acquisition/xlsx-to-csv.ts`](../server/src/dataset/acquisition/xlsx-to-csv.ts) |
 | Adapter | [`server/src/dataset/adapters`](../server/src/dataset/adapters) |
 | Canonicalizer | [`server/src/dataset/canonicalizer/canonicalizer.ts`](../server/src/dataset/canonicalizer/canonicalizer.ts) |
 | Integrator | [`server/src/dataset/integrator/integrator.ts`](../server/src/dataset/integrator/integrator.ts) |
@@ -638,9 +661,11 @@ Bridge 拒绝任意 SQL，也不导入 Agent、Skill 或 Dataset Core。缓存�
 | Publisher | [`server/src/dataset/publish/publisher.ts`](../server/src/dataset/publish/publisher.ts) |
 | Publication 产品 API | [`server/src/product/publication-store.ts`](../server/src/product/publication-store.ts) |
 | Durable Runtime | [`server/src/runtime/durable-agent-runtime.ts`](../server/src/runtime/durable-agent-runtime.ts) |
+| Host 独占租约 | [`server/src/runtime/host-lease.ts`](../server/src/runtime/host-lease.ts) |
 | HIL | [`server/src/runtime/hil-store.ts`](../server/src/runtime/hil-store.ts)、[`server/src/dataset/review/hil-policy.ts`](../server/src/dataset/review/hil-policy.ts) |
 | PDF/VLM | [`server/src/processing/pdf`](../server/src/processing/pdf)、[`server/src/processing/vlm`](../server/src/processing/vlm) |
 | 前端事件投影 | [`frontend/src/runtime`](../frontend/src/runtime) |
+| 前端 HIL Questionnaire | [`frontend/src/components/intervention`](../frontend/src/components/intervention) |
 | Publication Viewer | [`frontend/src/components/PublicationResultsViewer.tsx`](../frontend/src/components/PublicationResultsViewer.tsx) |
 | Python named-op bridge | [`server/src/persistence/db-client.ts`](../server/src/persistence/db-client.ts)、[`database/bridge.py`](../database/bridge.py) |
 
@@ -648,4 +673,4 @@ Bridge 拒绝任意 SQL，也不导入 Agent、Skill 或 Dataset Core。缓存�
 
 当前架构的主干是合理且有必要的：Agent/Core 分权、固定规格、内容寻址、逐阶段 checkpoint、证据绑定 HIL 和原子发布都直接服务于赛题的“可靠、可追溯、可修正”，不是为了抽象而抽象。
 
-需要谨慎的不是再增加一层框架，而是按 [`TODO.md`](TODO.md) 中的验收条件继续补齐两项闭环：图表 evidence 到 Publication、查询覆盖率 artifact，并维持前端正式 artifact 下载的回归覆盖。动态 transform 的非隔离边界必须继续如实披露，除非新 ADR 恢复隔离方向。完成这些后，项目最有竞争力的卖点会从“数据源和工具很多”提升为“每一条正式科学数据都能解释来源、处理、质量和修正历史”。
+需要谨慎的不是再增加一层框架，而是按 [`TODO.md`](TODO.md) 中的验收条件继续补齐闭环：图表 evidence 到 Publication、查询覆盖率 artifact、digest-bound 动态 execution skeleton，并维持前端正式 artifact 下载的回归覆盖。动态 transform 的非隔离边界必须继续如实披露，除非新 ADR 恢复隔离方向。完成这些后，项目最有竞争力的卖点会从“数据源和工具很多”提升为“每一条正式科学数据都能解释来源、处理、质量和修正历史”。

@@ -61,7 +61,7 @@ Agent、Transform、FamilySpec、workspace 和 Host receipt 都不能直接创�
 
 ### 4. 严格 submission 与 identity
 
-`submit_dynamic_family_build` 只接受 exact-key、descriptor-safe、digest-bound input：
+`submit_dynamic_family_publication`（本 ADR 撰写时名为 `submit_dynamic_family_build`）只接受 exact-key、descriptor-safe、digest-bound input：
 
 - valid `FamilySpec` canonical digest 和 selected Projection digest；
 - Host-compiled transform descriptor digest（首次 mismatch 会返回 expected digest，调用方

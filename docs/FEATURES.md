@@ -59,17 +59,20 @@ BioMed-QAgent 是一个**生物医学数据智能检索与整合系统**：用�
 | GEO | 支持管线 | 基因表达数据、平台、probe mapping、尺度和归一化兼容性 |
 | GDC | 支持管线 | TCGA 级别癌症基因组数据 |
 | Xena | 支持管线 | UCSC Xena 表达/元数据镜像 |
-| Reactome | 研究辅助 | 通路成员（独立 `pathway_member` 数据集族） |
-| ChEMBL | 研究辅助 | 生物活性测量 |
-| UniProt | 研究辅助 | 蛋白注释 |
-| PDB | 研究辅助 | 蛋白结构（含 mmCIF 解析、结构距离/序列比对衍生） |
-| PubChem | 研究辅助 | 化合物信息 |
+| dbSNP | 支持管线 | 变异参考记录 |
+| ClinVar | 支持管线 | 变异-疾病断言与临床证据 |
+| MGnify | 支持管线 | 肠道微生物组研究（`gut_microbiome` family study 表） |
+| ChEMBL | 支持管线 | 生物活性测量（`bioactivity_measurement` family） |
+| UniProt | 支持管线 | 蛋白注释与靶点证据 |
+| PDB | 支持管线 | 蛋白结构（含 mmCIF 解析、结构距离/序列比对衍生） |
+| PubChem | 支持管线 | 化合物信息与 crosswalk |
+| Reactome | 支持管线 | 通路/蛋白注释检索 |
+| OpenFDA | 支持管线 | 药物不良事件检索 |
 | 本地缓存 / 文件 | 能力 | `local_cache`、本地源导入（CSV/TSV/JSON） |
 
-> 说明：「支持管线」指该来源的数据能进入受信任的 Dataset Core 摄取路径；
-> 「研究辅助」指当前作为 Agent 检索/研究能力使用（产物停在 workspace/cache），
-> 部分来源正按演进计划接入受信任的多表 Publication（见
-> [TODO.md](TODO.md) §gold3–6 缺口 与 [roadmap.md](architecture/roadmap.md) §22）。
+> 说明：「支持管线」指该来源的数据能进入受信任的 Dataset Core 摄取路径（静态注册
+> family 或经动态 Family 路线的正式采集）。其余研究辅助能力（文献理解、PDF/图表
+> 抽取、浏览器、缓存）不属于用户可选数据库，产物停在 workspace/cache。
 
 其他检索/解析能力（非用户可选数据库，属 Agent 能力包）：
 - **PubMed / 文献理解 / PDF 抽取**：从正文、表格、附件提取信息；
@@ -84,7 +87,11 @@ BioMed-QAgent 是一个**生物医学数据智能检索与整合系统**：用�
   不可变 `SourceAsset`（带 hash / media type / size 校验，ADR-029）；
 - 通过 `Schema-driven RegisteredSourceAssetAdapter` 支持 CSV / TSV / JSON 的严格
   表头 / 行宽 / 类型校验，失败行进入审计拒绝记录（ADR-034）；
-- 论文 / 附件 / 网页 / 图表数据的解析支持（PDF、VLM 图表抽取）。
+- 论文 / 附件 / 网页 / 图表数据的解析支持（PDF、VLM 图表抽取）；
+- 压缩载体成员提取：`acquire_core_carrier` 把 zip 成员与 xlsx 工作表确定性转换为
+  CSV extraction assets（Core 拥有并登记 provenance）；
+- 注册式多表 family 可由服务端 `scaffold_dataset_execution_spec` 从 live Family
+  Registry 组合出 validate-ready 的完整执行规格，Agent 只提供 family、实体和来源绑定。
 
 ### 3.3 数据清洗与字段对齐 · 可靠性核心
 
@@ -119,7 +126,7 @@ BioMed-QAgent 是一个**生物医学数据智能检索与整合系统**：用�
 - 任务 / Run 支持**暂停 / 继续**，等待用户输入（计划确认、数据修正、达到轮次上限）；
 - Agent 的文件访问与命令执行经 `allow / ask / deny` 权限系统，`ask` 挂起单个 Tool Call
   等待用户批准（durable events + `/permissions/{requestId}`，ADR-026）；
-- 前端通过统一 `UserInputDialog` 承载各类人机交互。
+- 前端通过统一 Questionnaire 基础设施承载各类人机交互（`intervention/UserInputQuestionnaire`、`intervention/PermissionQuestionnaire`）。
 
 ### 3.6 图表 / 图像数据提取 · 视觉证据
 

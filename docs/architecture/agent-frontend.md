@@ -268,7 +268,7 @@ transaction 中顺序 reduce；sequence gap 语义不变，React 只收到一次
 `itemId` 规则保证按工具调用分段、同 operation 共用项、同 kind progress 原位更新。
 `run_queued` / `user_input_required` / `user_input_resumed` /
 `conversation_compacted` / `plan_ready` / Run 终态事件**不创建 item**，分别由
-ChatPanel 草稿态、`pendingUserInput` + UserInputDialog、状态条分隔符处理。
+ChatPanel 草稿态、`pendingUserInput` + UserInputQuestionnaire、状态条分隔符处理。
 
 **`sequence` 是不可变的首次进入时间线位置**：`upsertItem` 更新已有 item 时保留
 原 `sequence` 与 `createdAt`，只有新增才写入序列；后续更新（如

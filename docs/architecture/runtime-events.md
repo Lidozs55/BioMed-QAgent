@@ -124,7 +124,7 @@ Task 只允许一个 nonterminal Run，后续提交返回冲突。`awaiting_user
 `UserInputRequiredPayload.prompt_kind` 联合覆盖 `plan_confirmation` /
 `max_turns_reached` / `no_progress` / `data_correction` /
 `api_key_or_credential`。正式场景通过 `hil_request.review_type` 扩展，不继续增加
-顶层 prompt kind。前端 `UserInputDialog` 按 Run 与
+顶层 prompt kind。前端 `UserInputQuestionnaire` 按 Run 与
 submission attempt ID 隔离 A → B → A 切换中的旧 Promise settlement。
 
 ### 14.5 模型配置与 Run 自有生成设置
@@ -203,6 +203,11 @@ Phase 8 移除 Python 运行时后该逻辑不复存在，自动压缩一度缺�
   压缩边界重新估算。百分比文本和无障碍标签允许显示超过 100% 的真实值，进度条视觉
   宽度单独钳制到 100%。Gold supervisor 的证据脱敏明确放行上述数值 token 遥测键，
   但 `access_token` / `api_key` 等凭据仍必须脱敏。
+- 除压缩路径外，Run 入口另有独立预算 preflight：session 预算
+  `context_window - max_tokens - reserve <= 0` 时在首个 Pi 回合前直接落盘
+  `run_failed`（`error_code: "context_budget_exhausted"`），不启动注定超限的会话。
+  `cancelRun` 在超时（默认 10 秒）未获 agent session 确认时，强制落盘 durable
+  `run_cancelled` 终态并静音僵尸执行循环。
 - 模型以 `stopReason=length` 截断时不能把 `session.prompt()` 的正常返回等同于任务
   完成。Pi 边界在其自动压缩结束后发送不可见的 runtime continuation，沿用同一
   Run、Session 与工具状态继续执行；只有后续 assistant 以非 `length` 原因结束，

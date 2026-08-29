@@ -180,7 +180,7 @@ workspace integration script。终态是：
 
 ### 7.1 路径选择失败
 
-`submit_dynamic_family_build` 当时已由 runtime 注入；system prompt 也规定正式 artifact
+`submit_dynamic_family_build`（现名 `submit_dynamic_family_publication`）当时已由 runtime 注入；system prompt 也规定正式 artifact
 只能经 Core，但只把“CSV 不使 Publication 可选”写成并列规则，没有定义不可绕过的
 dataset completion contract。Agent 因而仍选择更熟悉、更短的 workspace/Python 流程，
 并主动推断“用户只要 CSV，所以 formal Publication 可能没有必要”。Prompt 现已改为按
