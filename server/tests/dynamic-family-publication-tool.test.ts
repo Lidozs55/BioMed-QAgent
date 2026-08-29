@@ -310,6 +310,7 @@ describe("dynamic family build tool boundary", () => {
     delete proposal.transform_refs[0]!.digest;
 
     let preparedSubmission: unknown;
+    let storedPreparedWire: unknown;
     const tool = createPrepareDynamicFamilyPublicationTool({
       prepare: async (value) => {
         preparedSubmission = value;
@@ -319,6 +320,9 @@ describe("dynamic family build tool boundary", () => {
           generation: 0,
           submission: value,
         });
+      },
+      onPrepared: (value) => {
+        storedPreparedWire = value;
       },
     });
     const result = await tool.execute(raw);
@@ -353,12 +357,15 @@ describe("dynamic family build tool boundary", () => {
 
     const submitTool = createDynamicFamilyPublicationTool({
       submit: async () => ({ ok: true }),
+      resolvePreparedSubmission: () => storedPreparedWire,
     });
     const roundTrip = await submitTool.execute({
       preflight_receipt: details.preflight_receipt,
-      prepared_submission: details.prepared_submission,
     });
     expect(roundTrip.isError).not.toBe(true);
+    expect((submitTool.parameters as { required: string[] }).required).toEqual([
+      "preflight_receipt",
+    ]);
   });
 
   test("prepare schema omits derived digests while retaining strict-request compatibility", async () => {

@@ -398,6 +398,7 @@ export async function createPhase3Runtime(
       let currentPiSessionId = "pi_session_pending";
       let currentPublicationId: string | null = null;
       const dynamicFamilyPreflight = createDynamicFamilyPreflightCoordinator();
+      const preparedDynamicSubmissions = new Map<string, Readonly<Record<string, unknown>>>();
       // Agent-owned directory: data/workspaces/<taskId> (plan §2.1).
       const workspaceRoot = await workspaceManager.ensure(taskId);
       // Framework-owned output: data/output/tasks/<taskId> (plan §3.2).
@@ -578,9 +579,16 @@ export async function createPhase3Runtime(
           );
           return receipt;
         },
+        onPrepared: (submission, receipt) => {
+          preparedDynamicSubmissions.clear();
+          preparedDynamicSubmissions.set(receipt.receipt_digest, submission);
+        },
       });
       const dynamicFamilyTool = createDynamicFamilyPublicationTool({
+        resolvePreparedSubmission: (receipt) =>
+          preparedDynamicSubmissions.get(receipt.receipt_digest),
         submit: async (submission, signal, _context, preflightReceipt) => {
+          preparedDynamicSubmissions.delete(preflightReceipt.receipt_digest);
           if (preflightReceipt === undefined) {
             throw new Error("submit_dynamic_family_publication requires a preflight receipt");
           }

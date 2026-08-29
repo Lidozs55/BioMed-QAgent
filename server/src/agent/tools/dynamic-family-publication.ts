@@ -67,6 +67,9 @@ export interface DynamicFamilyPublicationToolOptions {
     context: BioMedToolExecutionContext | undefined,
     preflightReceipt: DynamicFamilyPreflightReceipt,
   ) => Promise<unknown>;
+  readonly resolvePreparedSubmission?: (
+    preflightReceipt: DynamicFamilyPreflightReceipt,
+  ) => unknown | Promise<unknown>;
 }
 
 export interface PrepareDynamicFamilyPublicationToolOptions {
@@ -75,6 +78,10 @@ export interface PrepareDynamicFamilyPublicationToolOptions {
     signal: AbortSignal | undefined,
     context: BioMedToolExecutionContext | undefined,
   ) => Promise<DynamicFamilyPreflightReceipt>;
+  readonly onPrepared?: (
+    preparedSubmission: Readonly<Record<string, unknown>>,
+    preflightReceipt: DynamicFamilyPreflightReceipt,
+  ) => void | Promise<void>;
 }
 
 /**
@@ -149,15 +156,40 @@ function preflightRecovery(value: unknown, error: unknown): Record<string, unkno
 export function createDynamicFamilyPublicationTool(
   options: DynamicFamilyPublicationToolOptions,
 ): BioMedAgentTool {
+  const resolvePreparedSubmission = options.resolvePreparedSubmission;
   return {
     name: "submit_dynamic_family_publication",
     label: "Submit Dynamic Family Publication",
-    description:
-      "Submit the exact two top-level values returned by prepare_dynamic_family_publication: {preflight_receipt, prepared_submission}. Do not flatten, rebuild, or modify either value. The prepared receipt binds the matching Core-owned product requirement profile and its exact table/relation closure to the explicit in_process_unisolated runtime and trusted Core publication path. Use only providers reported in inspect_dataset_execution_routes.dynamic.direct_bindings; the acquisition_requests schema is the execution contract, not proof of semantic or publication closure. This is not a sandbox, isolation mechanism, or security boundary. Direct paths and discovery bytes are forbidden.",
-    parameters: dynamicFamilyPublicationParameters("submit"),
+    description: resolvePreparedSubmission === undefined
+      ? "Submit the exact two top-level values returned by prepare_dynamic_family_publication: {preflight_receipt, prepared_submission}. Do not flatten, rebuild, or modify either value. The prepared receipt binds the matching Core-owned product requirement profile and its exact table/relation closure to the explicit in_process_unisolated runtime and trusted Core publication path. Use only providers reported in inspect_dataset_execution_routes.dynamic.direct_bindings; the acquisition_requests schema is the execution contract, not proof of semantic or publication closure. This is not a sandbox, isolation mechanism, or security boundary. Direct paths and discovery bytes are forbidden."
+      : "Submit only the exact preflight_receipt returned by prepare_dynamic_family_publication. The Host retrieves the bound prepared submission by receipt digest; never reconstruct or echo the large prepared_submission. The receipt binds the matching Core-owned product requirement profile and its exact table/relation closure to the explicit in_process_unisolated runtime and trusted Core publication path. This is not a sandbox, isolation mechanism, or security boundary.",
+    parameters: resolvePreparedSubmission === undefined
+      ? dynamicFamilyPublicationParameters("submit")
+      : dynamicFamilyReceiptOnlyParameters(),
     async execute(value, signal, context): Promise<BioMedToolResult> {
       try {
-        const parsed = await parseDynamicFamilyPublicationSubmitRequest(value);
+        let parsed: ParsedDynamicFamilyPublicationSubmitRequest;
+        if (resolvePreparedSubmission === undefined) {
+          parsed = await parseDynamicFamilyPublicationSubmitRequest(value);
+        } else {
+          const request = exactDataRecord(
+            value,
+            new Set(["preflight_receipt"]),
+            "$dynamic_family_publication_submit",
+          );
+          const preflightReceipt = parseDynamicFamilyPreflightReceipt(
+            request.preflight_receipt,
+            "$.preflight_receipt",
+          );
+          const prepared = await resolvePreparedSubmission(preflightReceipt);
+          if (prepared === undefined || prepared === null) {
+            throw new Error("prepared dynamic submission is unavailable or superseded");
+          }
+          parsed = Object.freeze({
+            submission: await parseDynamicFamilyPublicationSubmission(prepared),
+            preflightReceipt,
+          });
+        }
         const details = await options.submit(parsed.submission, signal, context, parsed.preflightReceipt);
         return { content: JSON.stringify(details), details };
       } catch (error) {
@@ -180,7 +212,7 @@ export function createPrepareDynamicFamilyPublicationTool(
     name: "prepare_dynamic_family_publication",
     label: "Prepare Dynamic Family Publication",
     description:
-      "Call inspect_dataset_execution_routes, then use scaffold_dataset_profile when no registered static family expresses the required topology and every input is dynamic-bindable or a task-owned Core-derived asset. Do not prevalidate a dynamic FamilySpec with validate_dataset_execution. Pass the generated profile topology and proposal refs unchanged; only source/extraction facts are caller-owned, and prepare input must remain without derived digest properties. The FamilySpec assessment_policy_ref and exact selected table/relation closure must match the Core profile. This deterministic, side-effect-free preflight derives all digest bindings, validates topology, product closure, and acquisition planning, and returns preflight_receipt first followed by prepared_submission. Copy both top-level values verbatim into submit_dynamic_family_publication. On rejection, use error.recovery.expected_family, expected_tables, and scaffold, modify facts, and prepare again; unchanged retry is forbidden.",
+      "Call inspect_dataset_execution_routes, then use scaffold_dataset_profile when no registered static family expresses the required topology and every input is dynamic-bindable or a task-owned Core-derived asset. Do not prevalidate a dynamic FamilySpec with validate_dataset_execution. Pass the generated profile topology and proposal refs unchanged; only source/extraction facts are caller-owned, and prepare input must remain without derived digest properties. The FamilySpec assessment_policy_ref and exact selected table/relation closure must match the Core profile. This deterministic, side-effect-free preflight derives all digest bindings, validates topology, product closure, and acquisition planning, and returns preflight_receipt first followed by prepared_submission. When the Host retains prepared submissions, pass only preflight_receipt to submit_dynamic_family_publication; never reconstruct the large prepared_submission. On rejection, use error.recovery.expected_family, expected_tables, and scaffold, modify facts, and prepare again; unchanged retry is forbidden.",
     parameters: dynamicFamilyPublicationParameters("prepare"),
     async execute(value, signal, context): Promise<BioMedToolResult> {
       try {
@@ -196,6 +228,7 @@ export function createPrepareDynamicFamilyPublicationTool(
           preflight_receipt: receipt,
           prepared_submission: preparedSubmission,
         };
+        await options.onPrepared?.(preparedSubmission, receipt);
         return { content: JSON.stringify(details), details };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -220,10 +253,32 @@ export function createDynamicFamilyPublicationTools(options: {
   readonly prepare: PrepareDynamicFamilyPublicationToolOptions["prepare"];
   readonly submit: DynamicFamilyPublicationToolOptions["submit"];
 }): readonly [BioMedAgentTool, BioMedAgentTool] {
+  const prepared = new Map<string, Readonly<Record<string, unknown>>>();
   return [
-    createPrepareDynamicFamilyPublicationTool({ prepare: options.prepare }),
-    createDynamicFamilyPublicationTool({ submit: options.submit }),
+    createPrepareDynamicFamilyPublicationTool({
+      prepare: options.prepare,
+      onPrepared: (submission, receipt) => {
+        prepared.clear();
+        prepared.set(receipt.receipt_digest, submission);
+      },
+    }),
+    createDynamicFamilyPublicationTool({
+      submit: options.submit,
+      resolvePreparedSubmission: (receipt) => prepared.get(receipt.receipt_digest),
+    }),
   ];
+}
+
+function dynamicFamilyReceiptOnlyParameters(): Record<string, unknown> {
+  const envelope = dynamicFamilyPublicationParameters("submit") as {
+    properties: { preflight_receipt: unknown };
+  };
+  return {
+    type: "object",
+    properties: { preflight_receipt: envelope.properties.preflight_receipt },
+    required: ["preflight_receipt"],
+    additionalProperties: false,
+  };
 }
 
 function dynamicFamilyPublicationParameters(mode: "prepare" | "submit"): Record<string, unknown> {

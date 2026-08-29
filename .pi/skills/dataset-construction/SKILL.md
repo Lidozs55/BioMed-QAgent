@@ -43,8 +43,9 @@ output.
    registered/Core acquisition bindings, transform input roles, and extraction
    source. Then use the fixed two-phase dynamic protocol: call
    `prepare_dynamic_family_publication` first, then call
-   `submit_dynamic_family_publication` with the returned server-bound submission
-   and unchanged receipt. A fresh prepare
+   `submit_dynamic_family_publication` with only the unchanged receipt. The Host
+   retrieves the server-bound prepared submission by receipt digest; never copy
+   or reconstruct that large object. A fresh prepare
    after source/projection/transform changes is mandatory; also prepare after
    any committed role, binding, or acquisition-request change, FamilySpec,
    Projection, or transform fact changes. Use this protocol with:
@@ -74,9 +75,9 @@ output.
    - deterministic output handles out-0, out-1, … in primary + supporting +
      derived projection order. Each output needs a non-empty registered input
      receipt ID as locator; multiple tables from one source may share it.
-   The Host owns compilation. Pass the prepared submission and unchanged
-   preflight receipt directly to submit. Its Host descriptor digest is
-   server-bound; do not recompute or edit digest bindings. Do not repeat a failure-driven descriptor handshake, bypass
+   The Host owns compilation and retains the prepared submission. Pass only the
+   unchanged preflight receipt to submit; the Host descriptor digest is
+   server-bound. Do not recompute or edit digest bindings. Do not repeat a failure-driven descriptor handshake, bypass
    the receipt, or invent a digest. Treat only the returned immutable
    Publication as formal output. A schema containing
    review-status or human-review-status remains human-review-pending until
@@ -88,8 +89,8 @@ output.
    field vocabulary probing, then switch immediately to the fixed dynamic
    protocol: call `scaffold_dataset_profile`, then
    `prepare_dynamic_family_publication`, then call
-   `submit_dynamic_family_publication` with its unchanged prepared submission,
-   whose descriptor digest is server-bound, and receipt. For a permission
+   `submit_dynamic_family_publication` with only its unchanged receipt; the Host
+   retains and revalidates the server-bound prepared submission. For a permission
    or human-review request, wait for the decision instead of replacing the
    trusted operation with workspace output.
 7. Only a successful Publication is formal output. Never describe rejection,
