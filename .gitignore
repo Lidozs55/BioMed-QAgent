@@ -112,3 +112,4 @@ fix_ruff.py
 # CLI webhook-SDK 脚手架脚本会在首次运行时在此生成 agent，
 # 其中的 .commonly-env 含运行时 token，绝不入库
 /scripts/commonly-agent/
+*.bkp
