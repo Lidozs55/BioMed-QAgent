@@ -328,7 +328,7 @@ describe("TypeScript model settings", () => {
     await service.deleteProvider(provider.id);
     expect(service.getSettings()).toMatchObject({
       base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      model_name: "qwen3.7-plus",
+      model_name: "",
       context_window_source: "inferred",
       max_tokens: 8192,
       api_key_configured: false,
@@ -358,7 +358,7 @@ describe("TypeScript model settings", () => {
     await service.deleteModel(model.id);
     expect(service.getSettings()).toMatchObject({
       base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      model_name: "qwen3.7-plus",
+      model_name: "",
       context_window_source: "inferred",
       max_tokens: 8192,
     });
@@ -649,7 +649,7 @@ describe("TypeScript model settings", () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
     const service = await ModelSettingsService.create({
       settingsDir,
-      environment: { PI_API_KEY: "sk-direct-secret" },
+      environment: { PI_API_KEY: "sk-direct-secret", PI_MODEL: "qwen3.8-flash" },
     });
     const baseUrl = await serve(service);
 
@@ -949,7 +949,7 @@ describe("TypeScript model settings", () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
     const service = await ModelSettingsService.create({
       settingsDir,
-      environment: { PI_API_KEY: "sk-direct-secret" },
+      environment: { PI_API_KEY: "sk-direct-secret", PI_MODEL: "qwen3.8-flash" },
     });
     const baseUrl = await serve(service);
     const current = await (await fetch(`${baseUrl}/api/v1/settings`)).json() as Record<string, unknown>;
@@ -1006,7 +1006,7 @@ describe("TypeScript model settings", () => {
     const providers = await (await fetch(`${baseUrl}/api/v1/model-registry/providers`)).json() as unknown[];
     expect(providers).toHaveLength(1);
   });
-  test("bootstraps a DashScope provider from DASHSCOPE_API_KEY when no providers exist", async () => {
+  test("bootstraps a DashScope provider from DASHSCOPE_API_KEY without inventing a model", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
     const service = await ModelSettingsService.create({
       settingsDir,
@@ -1023,20 +1023,17 @@ describe("TypeScript model settings", () => {
       api_key_configured: true,
     });
 
+    // Key-only bootstrap must NOT fabricate an active model: running on an
+    // unchosen model silently bills the wrong account (2026-08-29 incident).
     const models = await (await fetch(`${baseUrl}/api/v1/model-registry/models`))
-      .json() as Array<Record<string, unknown>>;
-    expect(models).toHaveLength(1);
-    expect(models[0]).toMatchObject({ model_id: "qwen3.7-plus", active: true });
+      .json() as unknown[];
+    expect(models).toHaveLength(0);
 
     const settings = await (await fetch(`${baseUrl}/api/v1/settings`)).json() as Record<string, unknown>;
-    expect(settings.model_name).toBe("qwen3.7-plus");
+    expect(settings.model_name).toBe("");
     expect(settings.api_key_configured).toBe(true);
-    await expect(service.resolveActiveModel()).resolves.toMatchObject({
-      provider: "dashscope",
-      modelId: "qwen3.7-plus",
-      apiKey: "sk-dashscope-env",
-      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    });
+    expect(settings.run_ready).toBe(false);
+    await expect(service.resolveActiveModel()).rejects.toThrow("model are required");
   });
 
   test("env bootstrap honors catalog context facts for known models", () => {
@@ -1109,12 +1106,14 @@ describe("TypeScript model settings", () => {
     expect(customProviders[0]).toMatchObject({ name: "Custom" });
   });
 
-  test("falls back to qwen3.7-plus as the default model name", async () => {
+  test("ships no default model name: unconfigured until the user selects one", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
     const service = await ModelSettingsService.create({ settingsDir, environment: {} });
     const baseUrl = await serve(service);
     const settings = await (await fetch(`${baseUrl}/api/v1/settings`)).json() as Record<string, unknown>;
-    expect(settings.model_name).toBe("qwen3.7-plus");
+    expect(settings.model_name).toBe("");
+    expect(settings.run_ready).toBe(false);
+    expect(settings.run_block_reason).toBe("provider credentials are required");
   });
 });
 
