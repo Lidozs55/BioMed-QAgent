@@ -19,7 +19,7 @@
 > - **验证与失效**：每个里程碑、每次新增/修订 ADR、数据族接入或执行模型变化
 >   时对照本文校验一致性；与代码现状矛盾且未标注待落地、或被新 ADR 推翻而未
 >   同步修订时，本文标记为 `stale`。
-> - **最后验证（Last Verified）**：2026-08-24（对照 `main@a884b159`）。
+> - **最后验证（Last Verified）**：2026-08-29（对照 `main@8d174f1a`，重点复核 family 清单、API 路由与前端组件名）。
 > - **交叉引用约定**：本文档章节写作 `§N`；引用 ADR 索引的章节写作 `ADR §N`。
 
 ---
@@ -88,7 +88,7 @@ React/shadcn Frontend
 TypeScript Application Host
         +-- Vite middleware / HMR
         +-- /api/v1/tasks* + /api/v1/ws -> TS durable runtime
-        +-- settings / model-registry / databases / builds / cache -> native TS APIs
+        +-- settings / model-registry / databases / cache -> native TS APIs
         |
         +--------------------------+-----------------------------+
         |                          |                             |
@@ -156,7 +156,7 @@ scope 才匹配，API 缺省 project）；Restricted 切换会作废全部 pendi
 `DatasetExecutionSpec` 是 Agent 在意图解析和来源发现后生成、提交给 Runtime 的**单一
 权威输入契约**。它同时表达用户语义和受控构建参数，至少包含：
 
-- `dataset_family`：数据集族标识（如 `gene_expression`、`pathway_member`）；
+- `dataset_family`：数据集族标识（如 `gene_expression`、`gut_microbiome`）；
 - `row_granularity`：行粒度定义（如 "基因 × 样本 × 测量"）；
 - `schema_ref`：目标 Schema 的注册引用（见 §3.3）；
 - `required_fields`：必需字段清单；
@@ -194,7 +194,7 @@ dataset_family + row_granularity + key_semantics + measurement_semantics
 
 - 多来源 gene-sample expression；
 - 多论文中采用同一指标和同一对象粒度的实验测量；
-- 多数据库的 pathway-member 记录。
+- 多数据库的基因-疾病关联记录。
 
 **不能直接合并**的示例：
 

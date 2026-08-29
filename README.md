@@ -149,7 +149,7 @@ Agent workspace 与 Core publication 物理分离。API 只暴露经 manifest �
 - `/api/v1/tasks`：创建、读取、续跑和删除终态任务。
 - `/api/v1/tasks/{taskId}/events`：durable 事件重放。
 - `/api/v1/ws`：实时事件；断线后仍以 HTTP replay 补齐。
-- `/api/v1/publications`、`/api/v1/products`、`/api/v1/artifacts`：发布、产品评估和产物。
+- `/api/v1/publications`：发布与产品评估（ProductAssessment 在详情内，artifact 经 `/api/v1/publications/{id}/artifacts/{artifactId}` 下载）；任务产物另有 `/api/v1/tasks/{taskId}/artifacts`。
 - `/api/v1/settings`：模型与应用设置，密钥始终掩码返回。
 
 可执行调用示例、HIL 和终态处理见 [`docs/AGENT_API_QUICKSTART.md`](docs/AGENT_API_QUICKSTART.md)。
