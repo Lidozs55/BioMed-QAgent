@@ -16,6 +16,7 @@ import {
   applyFixtureEvent,
   applyPublicationCreatedEvent,
   applyRunQueuedEvent,
+  applyRunSteeredEvent,
   applyRunTerminalEvent,
   applyRunTransitionEvent,
   applySubagentEvent,
@@ -101,6 +102,10 @@ export function reduceRuntimeEvent(
     }
     case "run_queued": {
       task = applyRunQueuedEvent(task, envelope, payload);
+      break;
+    }
+    case "run_steered": {
+      task = applyRunSteeredEvent(task, envelope, payload);
       break;
     }
     case "run_started":

@@ -299,6 +299,43 @@ export function applyRunQueuedEvent(
   };
 }
 
+export function applyRunSteeredEvent(
+  task: TaskProjection,
+  envelope: EventEnvelope,
+  payload: Extract<EventPayload, { type: "run_steered" }>,
+): TaskProjection {
+  const runId = envelope.run_id;
+  if (runId === null) return task;
+  const messageId = `message_${envelope.event_id}`;
+  let next = deactivateRunAssistantStream(task, runId);
+  next = deactivateRunStreamingItems(next, runId);
+  next = upsertMessage(next, {
+    messageId,
+    taskId: envelope.task_id,
+    runId,
+    ordinal: null,
+    role: "user",
+    content: payload.input,
+    createdAt: envelope.timestamp,
+    sequence: envelope.sequence,
+  });
+  next = upsertItem(next, {
+    kind: "user_message",
+    itemId: `msg:${messageId}`,
+    runId,
+    sequence: envelope.sequence,
+    createdAt: envelope.timestamp,
+    content: payload.input,
+  });
+  return {
+    ...next,
+    currentReasoningSegmentByRun: {
+      ...next.currentReasoningSegmentByRun,
+      [runId]: (next.currentReasoningSegmentByRun[runId] ?? 0) + 1,
+    },
+  };
+}
+
 export function applyRunTransitionEvent(
   task: TaskProjection,
   envelope: EventEnvelope,

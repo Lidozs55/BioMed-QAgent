@@ -42,11 +42,24 @@ export type ErrorCode =
   | "cancelled"
   | "internal_error";
 
+export interface RunUsageTotals {
+  model_calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  total_tokens: number;
+  /** Sum of provider-reported reasoning splits (absent when never reported). */
+  reasoning_tokens?: number;
+}
+
 export interface RunSummary {
   run_status: RunStatus;
   error_code: ErrorCode | null;
   cancelled_at_stage: StageName | null;
   user_message: string | null;
+  /** Provider-reported token usage aggregated over the run (absent in older snapshots). */
+  usage?: RunUsageTotals;
 }
 
 export interface TaskPublicationSummary {
@@ -216,6 +229,8 @@ export interface MessageRecord {
   role: MessageRole;
   content: string;
   created_at: string;
+  /** Task event sequence that created this message; absent on legacy records. */
+  sequence?: number;
 }
 
 export interface SubagentRequest {

@@ -63,6 +63,14 @@ export interface DynamicFamilyPublicationToolOptions {
     context: BioMedToolExecutionContext | undefined,
     preflightReceipt: DynamicFamilyPreflightReceipt,
   ) => Promise<unknown>;
+  /**
+   * Resolves the server-side prepared submission for receipt-only submit.
+   * When absent, receipt-only requests are rejected with an explicit error and
+   * callers must re-echo the full prepared_submission.
+   */
+  readonly resolveSubmission?: (
+    preflightReceipt: DynamicFamilyPreflightReceipt,
+  ) => Promise<ParsedDynamicFamilyPublicationSubmission>;
 }
 
 export interface PrepareDynamicFamilyPublicationToolOptions {
@@ -98,12 +106,21 @@ export function createDynamicFamilyPublicationTool(
     name: "submit_dynamic_family_publication",
     label: "Submit Dynamic Family Publication",
     description:
-      "Submit a strict FamilySpec + TypeScript DatasetTransform with the exact prepare_dynamic_family_publication receipt to the explicit in_process_unisolated runtime and trusted Core publication path. Use only providers reported in inspect_dataset_execution_routes.dynamic.direct_bindings; the acquisition_requests schema is the execution contract, not proof of semantic or publication closure. This is not a sandbox, isolation mechanism, or security boundary. Direct paths and discovery bytes are forbidden.",
+      "Submit a prepared Dynamic Family publication. Preferred wire: pass schema_version plus the unchanged preflight_receipt returned by prepare_dynamic_family_publication — the server resolves the stored prepared submission, so no payload re-echo is needed. Re-echoing the full prepared_submission together with the receipt is still accepted. Use only providers reported in inspect_dataset_execution_routes.dynamic.direct_bindings; the acquisition_requests schema is the execution contract, not proof of semantic or publication closure. This is not a sandbox, isolation mechanism, or security boundary. Direct paths and discovery bytes are forbidden.",
     parameters: dynamicFamilyPublicationParameters("submit"),
     async execute(value, signal, context): Promise<BioMedToolResult> {
       try {
         const parsed = await parseDynamicFamilyPublicationSubmitRequest(value);
-        const details = await options.submit(parsed.submission, signal, context, parsed.preflightReceipt);
+        let submission = parsed.submission;
+        if (submission === null) {
+          if (options.resolveSubmission === undefined) {
+            throw new Error(
+              "receipt-only submit is not available for this task; re-echo the full prepared_submission with the preflight_receipt",
+            );
+          }
+          submission = await options.resolveSubmission(parsed.preflightReceipt);
+        }
+        const details = await options.submit(submission, signal, context, parsed.preflightReceipt);
         return { content: JSON.stringify(details), details };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -125,7 +142,7 @@ export function createPrepareDynamicFamilyPublicationTool(
     name: "prepare_dynamic_family_publication",
     label: "Prepare Dynamic Family Publication",
     description:
-      "Use after inspect_dataset_execution_routes when no registered static family expresses the required topology and every input is dynamic-bindable or a prior task-owned Core asset. Do not prevalidate a dynamic FamilySpec with validate_dataset_execution. Submit semantic fields without derived digest properties. This deterministic, side-effect-free preflight derives all digest bindings, validates topology and acquisition planning, and returns prepared_submission plus a task/requirement/generation-bound preflight_receipt; pass both unchanged to submit_dynamic_family_publication.",
+      "Use after inspect_dataset_execution_routes when no registered static family expresses the required topology and every input is dynamic-bindable or a prior task-owned Core asset. Do not prevalidate a dynamic FamilySpec with validate_dataset_execution. Submit semantic fields without derived digest properties. This deterministic, side-effect-free preflight derives all digest bindings, validates topology and acquisition planning, and returns prepared_submission plus a task/requirement/generation-bound preflight_receipt; pass both unchanged to submit_dynamic_family_publication. Top-level keys, exactly: schema_version, execution_backend, family_spec, projection_id, transform_source, transform_metadata, registered_sources, acquisition_requests, execution_proposal.",
     parameters: dynamicFamilyPublicationParameters("prepare"),
     async execute(value, signal, context): Promise<BioMedToolResult> {
       try {
@@ -469,13 +486,14 @@ function dynamicFamilyPublicationParameters(mode: "prepare" | "submit"): Record<
         additionalProperties: acquisition,
       },
     },
-    required: [...TOP_KEYS],
     additionalProperties: false,
   };
   if (mode === "submit") {
     const properties = schema.properties as Record<string, unknown>;
     properties.preflight_receipt = preflightReceipt;
-    (schema.required as string[]).push("preflight_receipt");
+    // Receipt-only submit is the preferred wire: the payload fields stay
+    // optional and the server resolves the stored prepared submission.
+    schema.required = ["schema_version", "preflight_receipt"];
   }
   return schema;
 }
@@ -582,7 +600,7 @@ export async function parseDynamicFamilyPublicationPrepareSubmission(
   });
 }
 
-function dynamicFamilyPublicationWire(
+export function dynamicFamilyPublicationWire(
   submission: ParsedDynamicFamilyPublicationSubmission,
   hostDescriptorDigest: string,
 ): Record<string, unknown> {
@@ -662,16 +680,39 @@ export async function parseDynamicFamilyPublicationSubmission(
 }
 
 export interface ParsedDynamicFamilyPublicationSubmitRequest {
-  readonly submission: ParsedDynamicFamilyPublicationSubmission;
+  /** null for receipt-only submit; the runtime resolves the stored submission. */
+  readonly submission: ParsedDynamicFamilyPublicationSubmission | null;
   readonly preflightReceipt: DynamicFamilyPreflightReceipt;
 }
 
-/** Strict submit wire parser; production callers must present the receipt. */
+/**
+ * Strict submit wire parser; production callers must present the receipt.
+ * Accepts the receipt-only minimal wire ({ schema_version, preflight_receipt }),
+ * in which case ``submission`` is null and the caller resolves the stored
+ * prepared submission from the task-scoped preflight store.
+ */
 export async function parseDynamicFamilyPublicationSubmitRequest(
   value: unknown,
 ): Promise<ParsedDynamicFamilyPublicationSubmitRequest> {
-  const keys = new Set([...TOP_KEYS, "preflight_receipt"]);
-  const record = exactDataRecord(value, keys, "$dynamic_family_publication_submit");
+  const label = "$dynamic_family_publication_submit";
+  if (value !== null && typeof value === "object" && !Array.isArray(value) && !types.isProxy(value)) {
+    const ownKeys = new Set(
+      Reflect.ownKeys(value).filter((key): key is string => typeof key === "string"),
+    );
+    if (ownKeys.has("preflight_receipt") && !ownKeys.has("family_spec")) {
+      const allowed = new Set(["schema_version", "preflight_receipt"]);
+      const unexpected = [...ownKeys].filter((key) => !allowed.has(key));
+      if (unexpected.length > 0) {
+        throw new TypeError(
+          `${label} receipt-only submit accepts schema_version and preflight_receipt only; unexpected keys: ${unexpected.join(", ")}`,
+        );
+      }
+      const record = exactDataRecord(value, allowed, label);
+      const preflightReceipt = parseDynamicFamilyPreflightReceipt(record.preflight_receipt, "$.preflight_receipt");
+      return Object.freeze({ submission: null, preflightReceipt });
+    }
+  }
+  const record = exactDataRecord(value, new Set([...TOP_KEYS, "preflight_receipt"]), label);
   if (!Object.hasOwn(record, "preflight_receipt")) {
     throw new TypeError("submit_dynamic_family_publication requires preflight_receipt from prepare_dynamic_family_publication");
   }
@@ -779,7 +820,12 @@ function exactDataRecord(value: unknown, keys: ReadonlySet<string>, label: strin
   const descriptors = Object.getOwnPropertyDescriptors(value);
   const ownKeys = Reflect.ownKeys(descriptors);
   if (ownKeys.length !== keys.size || ownKeys.some((key) => typeof key !== "string" || !keys.has(key))) {
-    throw new TypeError(`${label} has unknown or missing fields`);
+    const presentStrings = new Set(ownKeys.filter((key): key is string => typeof key === "string"));
+    const missing = [...keys].filter((key) => !presentStrings.has(key));
+    const unexpected = ownKeys.filter((key) => typeof key !== "string" || !keys.has(key)).map(String);
+    throw new TypeError(
+      `${label} has unknown or missing fields (missing: ${missing.join(", ") || "none"}; unexpected: ${unexpected.join(", ") || "none"})`,
+    );
   }
   const result = Object.create(null) as DataRecord;
   for (const key of ownKeys) {

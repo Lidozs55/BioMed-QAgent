@@ -452,7 +452,7 @@ export async function publishDynamicFamily(
   }, null, 2)}\n`, "utf8");
   if (validation.status !== "passed") {
     const reasons = [
-      ...failed.map((check) => `${check.scope}:${check.check_id}`),
+      ...failed.map((check) => `${check.scope}:${check.check_id}${check.detail ? ` (${check.detail})` : ""}`),
       ...assessment.blockers.map((blocker) => `${blocker.requirement_id}:${blocker.code}`),
     ];
     throw new Error(`dynamic multi-table product is not publishable: ${reasons.join(", ")}`);

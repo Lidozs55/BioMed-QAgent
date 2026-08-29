@@ -242,6 +242,13 @@ describe("Gold formal rerun supervisor", () => {
       estimated_tokens_after: 97_000,
       target_tokens: 60_000,
       summary_tokens: 32_000,
+      model_calls: 18,
+      input_tokens: 401_776,
+      output_tokens: 12_345,
+      cache_read_tokens: 380_000,
+      cache_write_tokens: 6_000,
+      total_tokens: 414_121,
+      reasoning_tokens: 2_400,
       access_token: "secret-value",
     })).toEqual({
       tokens: 115_487,
@@ -249,6 +256,13 @@ describe("Gold formal rerun supervisor", () => {
       estimated_tokens_after: 97_000,
       target_tokens: 60_000,
       summary_tokens: 32_000,
+      model_calls: 18,
+      input_tokens: 401_776,
+      output_tokens: 12_345,
+      cache_read_tokens: 380_000,
+      cache_write_tokens: 6_000,
+      total_tokens: 414_121,
+      reasoning_tokens: 2_400,
       access_token: "[REDACTED]",
     });
   });

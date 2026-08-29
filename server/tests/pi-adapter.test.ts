@@ -46,6 +46,9 @@ class FakeUpstreamSession implements PiUpstreamSession {
   readonly compact = vi.fn(async (): Promise<{ summary: string }> => ({
     summary: "compacted manually",
   }));
+  readonly steer = vi.fn(async (text: string): Promise<void> => {
+    void text;
+  });
   private readonly listeners = new Set<(event: PiUpstreamEvent) => void>();
   promptImplementation: (input: string) => Promise<void> = async () => undefined;
   continueAfterLengthImplementation: () => Promise<void> = async () => undefined;
@@ -87,9 +90,12 @@ async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
 describe("Pi system prompt", () => {
   test("defines dataset completion by task semantics instead of requested file format", () => {
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
-      /^\[Dataset completion contract\][\s\S]*\[Evidence integrity\][\s\S]*\[Trusted execution\][\s\S]*\[Control and recovery\][\s\S]*$/,
+      /^\[Dataset completion contract\][\s\S]*\[Evidence integrity\][\s\S]*\[Trusted execution\][\s\S]*\[Dynamic publication mechanics\][\s\S]*\[Control and recovery\][\s\S]*$/,
     );
-    expect(PHASE1_SYSTEM_PROMPT.length).toBeLessThanOrEqual(7_000);
+    // 7_400 = former 7_000 budget plus the [Dynamic publication mechanics]
+    // section (~1.1k chars) that moves prepare/submit contract knowledge out of
+    // user prompts; still caps per-call system-prompt growth.
+    expect(PHASE1_SYSTEM_PROMPT.length).toBeLessThanOrEqual(7_400);
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
       /completion is determined by task semantics, never by the requested file format/i,
     );
@@ -195,7 +201,6 @@ describe("Pi system prompt", () => {
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/report exact requested, succeeded, and failed counts/i);
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/never turn a plan, workspace file, successful subset, or intended next step into a completed action/i);
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/declare the matching semantic family, projection, and row granularity/i);
-    expect(PHASE1_SYSTEM_PROMPT).toMatch(/workspace outputs are staging evidence only/i);
   });
 
   test("marks an approved max-turn continuation explicitly", () => {
@@ -228,6 +233,24 @@ describe("Pi system prompt", () => {
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/matching skill/i);
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/source-specific rules/i);
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/Do not duplicate or improvise/i);
+  });
+
+  test("teaches the receipt-only dynamic submit path and placeholder rejection", () => {
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /submit then needs only schema_version and that unchanged preflight_receipt/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /input_requirement_ref is a declared_input_roles role, not a binding id/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/placeholder sentinels are rejected/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/never request file access outside the Task Workspace/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /Transform sandbox forbids every bracket element access/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/preview_core_asset lists members/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /never run python, shell, or workspace_exec extraction/i,
+    );
   });
 });
 
@@ -561,6 +584,36 @@ describe("PiAgentAdapter", () => {
     });
   });
 
+  test("extracts provider usage from an assistant message_end upstream event", () => {
+    expect(toUpstreamEvent({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        stopReason: "stop",
+        usage: {
+          input: 38_000,
+          output: 2_000,
+          cacheRead: 30_000,
+          cacheWrite: 0,
+          totalTokens: 40_000,
+          reasoning: 500,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      },
+    } as never)).toMatchObject({
+      type: "message_end",
+      assistantStopReason: "stop",
+      usage: {
+        input: 38_000,
+        output: 2_000,
+        cacheRead: 30_000,
+        cacheWrite: 0,
+        totalTokens: 40_000,
+        reasoning: 500,
+      },
+    });
+  });
+
   test("publishes runtime context usage after an assistant response", async () => {
     const upstream = new FakeUpstreamSession();
     upstream.promptImplementation = async () => {
@@ -582,6 +635,44 @@ describe("PiAgentAdapter", () => {
       contextWindow: 131_072,
       percent: 9.41,
       source: "runtime",
+    });
+  });
+
+  test("attaches provider usage to the context usage event after an assistant response", async () => {
+    const upstream = new FakeUpstreamSession();
+    upstream.promptImplementation = async () => {
+      upstream.emit({
+        type: "message_end",
+        assistantStopReason: "stop",
+        contextUsage: { tokens: 40_000, contextWindow: 256_000, percent: 15.6 },
+        usage: {
+          input: 38_000,
+          output: 2_000,
+          cacheRead: 30_000,
+          cacheWrite: 0,
+          totalTokens: 40_000,
+        },
+      });
+    };
+    const session = await new PiAgentAdapter({
+      createUpstreamSession: async () => upstream,
+    }).createSession(sessionConfig);
+
+    const events = await collect(session.run("report token usage"));
+
+    expect(events).toContainEqual({
+      type: "context_usage",
+      tokens: 40_000,
+      contextWindow: 256_000,
+      percent: 15.6,
+      source: "runtime",
+      usage: {
+        input: 38_000,
+        output: 2_000,
+        cacheRead: 30_000,
+        cacheWrite: 0,
+        totalTokens: 40_000,
+      },
     });
   });
 
@@ -827,6 +918,48 @@ describe("PiAgentAdapter", () => {
     });
     pending.resolve();
     await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: { type: "turn_completed" },
+    });
+    await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
+  });
+
+  test("delivers pending assistant text before accepting a direction adjustment", async () => {
+    const upstream = new FakeUpstreamSession();
+    const pending = deferred<void>();
+    upstream.promptImplementation = () => pending.promise;
+    const session = await new PiAgentAdapter({
+      createUpstreamSession: async () => upstream,
+    }).createSession(sessionConfig);
+    const iterator = session.run("steer boundary")[Symbol.asyncIterator]();
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: { type: "turn_started" },
+    });
+
+    upstream.emit({
+      type: "message_update",
+      assistantMessageEvent: { type: "text_delta", delta: "before steer" },
+    });
+    if (session.steer === undefined) throw new Error("steer is unavailable");
+    let steerResolved = false;
+    const steerPromise = session.steer("focus on TP53").then(() => {
+      steerResolved = true;
+    });
+    await Promise.resolve();
+
+    expect(steerResolved).toBe(false);
+    expect(upstream.steer).not.toHaveBeenCalled();
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: { type: "assistant_delta", delta: "before steer" },
+    });
+    const completion = iterator.next();
+    await expect(steerPromise).resolves.toBeUndefined();
+    expect(upstream.steer).toHaveBeenCalledWith("focus on TP53");
+
+    pending.resolve();
+    await expect(completion).resolves.toEqual({
       done: false,
       value: { type: "turn_completed" },
     });

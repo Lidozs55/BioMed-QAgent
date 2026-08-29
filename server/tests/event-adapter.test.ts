@@ -134,6 +134,42 @@ describe("PiEventAdapter", () => {
     });
   });
 
+  test("carries provider-reported usage into the durable context_usage payload", () => {
+    const { adapter } = createAdapter();
+
+    const events = adapter.adapt(runId, {
+      type: "context_usage",
+      tokens: 40_000,
+      contextWindow: 256_000,
+      percent: 15.6,
+      source: "runtime",
+      usage: {
+        input: 38_000,
+        output: 2_000,
+        cacheRead: 30_000,
+        cacheWrite: 0,
+        totalTokens: 40_000,
+        reasoning: 500,
+      },
+    });
+
+    expect(events[0]?.payload).toEqual({
+      type: "context_usage",
+      tokens: 40_000,
+      context_window: 256_000,
+      percent: 15.6,
+      source: "runtime",
+      usage: {
+        input_tokens: 38_000,
+        output_tokens: 2_000,
+        cache_read_tokens: 30_000,
+        cache_write_tokens: 0,
+        total_tokens: 40_000,
+        reasoning_tokens: 500,
+      },
+    });
+  });
+
   test("a turn that ended after compaction is not terminal until completeRun", () => {
     const { adapter } = createAdapter();
     const events = [

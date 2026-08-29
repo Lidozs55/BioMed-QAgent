@@ -545,14 +545,7 @@ export function ChatPanel({
       const activeRunId = task?.summary.active_run_id ?? null;
       setSteeringRuns((current) => ({ ...current, [taskId]: activeRunId }));
       try {
-        const response = await injectTaskContext(taskId, text, activeRunId);
-        if (response.message_id && response.content) {
-          // 中途转向：后端把标注后的文本写入会话，这里同步显示用户气泡，
-          // 使用后端的 message_id 保证刷新/拉历史时不会重复。
-          useAgentStore
-            .getState()
-            .appendSteerMessage(taskId, response.content, response.message_id);
-        }
+        await injectTaskContext(taskId, text, activeRunId);
         toast.success("已调整方向，正在重新生成…");
         return true;
       } catch (error) {

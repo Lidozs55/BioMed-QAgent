@@ -100,6 +100,11 @@ export function parseRuntimeEventPayload(payloadObj: Record<string, unknown>, pa
       if (input.length === 0) throw new APIError(502, "Expected non-empty input at " + path + ".input");
       return { type: "run_queued", request_id: assertString(Reflect.get(payloadObj, "request_id"), path + ".request_id"), input };
     }
+    case "run_steered":
+      return {
+        type: "run_steered",
+        input: assertRequiredString(Reflect.get(payloadObj, "input"), path + ".input"),
+      };
     case "run_started":
       return { type: "run_started" };
     case "run_finalizing":

@@ -1,6 +1,8 @@
 import type {
   EventEnvelope,
   MessageRecord,
+  ModelCallUsage,
+  RunUsageTotals,
   TaskPublicationSummary,
   RunRecord,
   RunStatus,
@@ -97,7 +99,33 @@ function message(
     role,
     content,
     created_at: event.timestamp,
+    sequence: event.sequence,
   };
+}
+
+function accumulateRunUsage(
+  usageByRun: Map<string, RunUsageTotals>,
+  runId: string,
+  usage: ModelCallUsage,
+): void {
+  const totals: RunUsageTotals = usageByRun.get(runId) ?? {
+    model_calls: 0,
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_read_tokens: 0,
+    cache_write_tokens: 0,
+    total_tokens: 0,
+  };
+  totals.model_calls += 1;
+  totals.input_tokens += usage.input_tokens;
+  totals.output_tokens += usage.output_tokens;
+  totals.cache_read_tokens += usage.cache_read_tokens;
+  totals.cache_write_tokens += usage.cache_write_tokens;
+  totals.total_tokens += usage.total_tokens;
+  if (usage.reasoning_tokens !== undefined) {
+    totals.reasoning_tokens = (totals.reasoning_tokens ?? 0) + usage.reasoning_tokens;
+  }
+  usageByRun.set(runId, totals);
 }
 
 export function reduceTaskEvents(
@@ -109,6 +137,7 @@ export function reduceTaskEvents(
   const publications: TaskPublicationSummary[] = [];
   const artifactIds = new Set<string>();
   const assistantByRun = new Map<string, MessageRecord>();
+  const usageByRun = new Map<string, RunUsageTotals>();
   let currentPublicationId: string | null = null;
   let artifactCount = 0;
 
@@ -135,6 +164,13 @@ export function reduceTaskEvents(
     const run = event.run_id === null
       ? undefined
       : runs.find((candidate) => candidate.run_id === event.run_id);
+    if (
+      event.payload.type === "context_usage" &&
+      event.payload.usage !== undefined &&
+      event.run_id !== null
+    ) {
+      accumulateRunUsage(usageByRun, event.run_id, event.payload.usage);
+    }
     const nextStatus = statusFor(event);
     if (run !== undefined && nextStatus !== undefined) {
       run.status = nextStatus;
@@ -143,6 +179,10 @@ export function reduceTaskEvents(
       if (!ACTIVE_STATUSES.has(nextStatus)) run.finished_at = event.timestamp;
       if (event.payload.type === "run_failed") run.error = event.payload.error;
       run.summary = terminalSummary(nextStatus, event);
+      const usageTotals = usageByRun.get(run.run_id);
+      if (run.summary && usageTotals !== undefined) {
+        run.summary.usage = usageTotals;
+      }
     }
 
     if (event.payload.type === "assistant_delta" && event.run_id !== null) {
@@ -154,6 +194,11 @@ export function reduceTaskEvents(
       } else {
         existing.content += event.payload.delta;
       }
+    } else if (event.payload.type === "run_steered" && event.run_id !== null) {
+      messages.push(message(metadata, event, "user", event.payload.input, messages.length + 1));
+      // Text generated after the direction change belongs to a new assistant
+      // turn in the snapshot rather than the pre-steer assistant message.
+      assistantByRun.delete(event.run_id);
     } else if (event.payload.type === "publication_created") {
       const publication: TaskPublicationSummary = {
         publication_id: event.payload.publication_id,

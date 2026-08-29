@@ -8,12 +8,23 @@ import type { TaskProjection } from "@/runtime/types";
  * caches self-heal and never bypass deduplication.
  */
 
-const CACHE_VERSION = 1;
+// Version 1 could persist user-message timeline positions derived from message
+// ordinals. Those positions cannot be reconciled when the cache already covers
+// the snapshot watermark, so force one authoritative event replay after the
+// timeline switched to stable event-sequence ordering.
+const CACHE_VERSION = 2;
+const LEGACY_CACHE_VERSIONS = [1] as const;
 const KEY_PREFIX = "biomed-qagent:task-projection:v";
 const MAX_CACHE_CHARS = 4 * 1024 * 1024;
 
 function cacheKey(taskId: string): string {
   return `${KEY_PREFIX}${CACHE_VERSION}:${taskId}`;
+}
+
+function clearLegacyTaskProjections(taskId: string): void {
+  for (const version of LEGACY_CACHE_VERSIONS) {
+    localStorage.removeItem(`${KEY_PREFIX}${version}:${taskId}`);
+  }
 }
 
 function isUsableProjection(value: unknown, taskId: string): value is TaskProjection {
@@ -34,7 +45,10 @@ export function loadTaskProjection(taskId: string): TaskProjection | null {
   if (typeof localStorage === "undefined") return null;
   try {
     const raw = localStorage.getItem(cacheKey(taskId));
-    if (raw === null) return null;
+    if (raw === null) {
+      clearLegacyTaskProjections(taskId);
+      return null;
+    }
     const parsed: unknown = JSON.parse(raw);
     if (!isUsableProjection(parsed, taskId)) {
       localStorage.removeItem(cacheKey(taskId));
@@ -75,6 +89,7 @@ export function clearTaskProjection(taskId: string): void {
   if (typeof localStorage === "undefined") return;
   try {
     localStorage.removeItem(cacheKey(taskId));
+    clearLegacyTaskProjections(taskId);
   } catch {
     // Best-effort cleanup.
   }

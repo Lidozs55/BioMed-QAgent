@@ -7,8 +7,10 @@ import type { BioMedAgentAdapter, BioMedModelConfig } from "../agent/contracts.j
 import { PiAgentAdapter } from "../agent/pi-adapter.js";
 import { createDatasetExecutionTools } from "../agent/tools/dataset-execution.js";
 import { createDatasetRoutePreflightTool } from "../agent/tools/dataset-route-preflight.js";
+import { createCoreAssetTools } from "../agent/tools/core-asset-tools.js";
 import {
   createDynamicFamilyPublicationTool,
+  dynamicFamilyPublicationWire,
   createPrepareDynamicFamilyPublicationTool,
   type ParsedDynamicFamilyPublicationSubmission,
 } from "../agent/tools/dynamic-family-publication.js";
@@ -557,11 +559,14 @@ export async function createPhase3Runtime(
             preparation,
             receipt,
             dynamicFamilyPreflightSubmissionDigest(submission),
+            dynamicFamilyPublicationWire(submission, receipt.host_descriptor_digest),
           );
           return receipt;
         },
       });
       const dynamicFamilyTool = createDynamicFamilyPublicationTool({
+        resolveSubmission: async (preflightReceipt) =>
+          dynamicFamilyPreflight.resolveSubmission<ParsedDynamicFamilyPublicationSubmission>(preflightReceipt),
         submit: async (submission, signal, _context, preflightReceipt) => {
           if (preflightReceipt === undefined) {
             throw new Error("submit_dynamic_family_publication requires a preflight receipt");
@@ -725,6 +730,10 @@ export async function createPhase3Runtime(
           }
         },
       });
+      const coreAssetTools = createCoreAssetTools({
+        sourceAssetRegistry,
+        sourceAssetsRoot: taskRoot,
+      });
       const datasetTools = createDatasetExecutionTools({
         client: service,
         familyRegistry: createDefaultDatasetFamilyRegistry(),
@@ -782,6 +791,7 @@ export async function createPhase3Runtime(
         datasetRoutePreflightTool,
         dynamicFamilyPrepareTool,
         dynamicFamilyTool,
+        ...coreAssetTools,
         ...importTools,
       ]);
       return {
@@ -794,6 +804,7 @@ export async function createPhase3Runtime(
           datasetRoutePreflightTool,
           dynamicFamilyPrepareTool,
           dynamicFamilyTool,
+          ...coreAssetTools,
           ...importTools,
         ],
         permissionBroker,

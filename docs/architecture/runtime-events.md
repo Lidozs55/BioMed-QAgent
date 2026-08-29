@@ -52,7 +52,7 @@ Publication 分别证明产品完整性与正式发布。Snapshot 只是 `events
   Core-owned publication receipt 和 manifest artifact receipts 由 Host 原样投影为
   `publication_created` / `artifact_produced`，不通过扫描 workspace 或猜测文件名；
   reducer 按 publication/artifact ID 幂等去重。
-- Run 类：`run_queued` / `run_started` / `run_finalizing` / `run_completed` /
+- Run 类：`run_queued` / `run_steered` / `run_started` / `run_finalizing` / `run_completed` /
   `run_failed` / `run_cancel_requested` / `run_cancelled` / `run_interrupted`、
   `publication_created`、`assistant_delta` / `assistant_reasoning_delta`、
   `tool_started`、`conversation_compacted`；
@@ -203,6 +203,12 @@ Phase 8 移除 Python 运行时后该逻辑不复存在，自动压缩一度缺�
   压缩边界重新估算。百分比文本和无障碍标签允许显示超过 100% 的真实值，进度条视觉
   宽度单独钳制到 100%。Gold supervisor 的证据脱敏明确放行上述数值 token 遥测键，
   但 `access_token` / `api_key` 等凭据仍必须脱敏。
+- `context_usage` 可选携带 `usage`（本次调用的 provider 精确用量：
+  `input_tokens` / `output_tokens` / `cache_read_tokens` / `cache_write_tokens` /
+  `total_tokens`，provider 暴露时另有 `reasoning_tokens`；上游未报告时该字段缺失，
+  估算路径不变）。task reducer 将其按 Run 累计，在终态 `RunSummary.usage`
+  （含 `model_calls`）中输出，snapshot API 直接可见；gold supervisor 把
+  `run_usage` 写入 closure.json，供报告的"性能与资源消耗"与提示词优化对照使用。
 - 除压缩路径外，Run 入口另有独立预算 preflight：session 预算
   `context_window - max_tokens - reserve <= 0` 时在首个 Pi 回合前直接落盘
   `run_failed`（`error_code: "context_budget_exhausted"`），不启动注定超限的会话。
@@ -235,7 +241,11 @@ system prompt；该能力经 `server/src/agent/pi-adapter.ts` 边界承载，SDK
 即时生效；自定义颜色留空时保持主题默认。
 
 编辑器「跟进处理方式」提供两种策略：加入队列（当前回答结束后自动发送）与
-调整方向（取消当前回答，任务回到空闲后立即用新消息重新引导）；发送时按住
+调整方向（通过 Pi steer 在当前 active Run 内立即补充指令）。调整方向成功后，Host
+将原始用户输入持久化为 Task 级 sequence 的 `run_steered`；snapshot 据此把调整前后
+的 Assistant 文本拆成两个消息段，前端只消费 durable 事件，不在 HTTP 响应后自行
+推测时间线位置。Pi adapter 在调用 upstream steer 前先冲刷并等待消费此前积压的
+Assistant delta，保证用户已看到的旧文本 sequence 早于 `run_steered`。发送时按住
 Ctrl+⌘ 可对单条消息执行相反操作。半透明侧边栏开启时，在 body 上追加一层极淡
 渐变背景作衬托，配合 backdrop blur 呈现毛玻璃效果（桌面侧边栏为 fixed 定位，
 内容区并不在其后方，单纯降低透明度看不到效果）。
@@ -280,6 +290,7 @@ Ctrl+⌘ 可对单条消息执行相反操作。半透明侧边栏开启时，�
 | GET | `/tasks/{task_id}` | 返回权威 `TaskSnapshot` |
 | DELETE | `/tasks/{task_id}` | 删除 terminal Task 及其历史 |
 | POST | `/tasks/{task_id}/compact` | 压缩任务会话 |
+| POST | `/tasks/{task_id}/inject-context` | 在 active Run 内调整方向并持久化 `run_steered` |
 | POST | `/tasks/{task_id}/runs` | 为 idle Agent Task 排队下一轮 Run |
 | POST | `/tasks/{task_id}/runs/{run_id}/cancel` | 取消 queued / running Run |
 | POST | `/tasks/{task_id}/runs/{run_id}/resume` | 提交人在回路决策 |

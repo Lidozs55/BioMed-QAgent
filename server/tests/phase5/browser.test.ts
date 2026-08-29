@@ -519,6 +519,82 @@ describe("browser tools", () => {
     expect(queries).toEqual([["https://example.com/paper", "browser", "success", 1]]);
   });
 
+  function navigateToolWithHtml(html: string) {
+    const fakePool: BrowserPoolClient = {
+      fetch: async (value) => ({
+        url: value,
+        content: html,
+        status_code: 200,
+        elapsed_ms: 1,
+        headers: { "content-type": "text/html; charset=utf-8" },
+      }),
+      screenshot: async () => {
+        throw new Error("unused in this test");
+      },
+    };
+    const facade = new CrawlerFacade({ browserPool: fakePool, minInterval: 0 });
+    const [navigatePage] = createBrowserTools({
+      taskRoot: root,
+      cache: new ContentCache(path.join(root, "cache")),
+      client: new PublicHttpClient(),
+      crawler: facade,
+    });
+    return navigatePage;
+  }
+
+  it("navigate_page resolves and deduplicates absolute links for download-entry discovery", async () => {
+    const html = [
+      "<html><head><title>Links</title></head><body>",
+      '<a href="files/dilirank.xlsx">DILIrank download</a>',
+      '<a href="https://www.ncbi.nlm.nih.gov/ftp">NCBI FTP mirror</a>',
+      '<a href="https://www.fda.gov/media/files/dilirank.xlsx">duplicate target</a>',
+      '<a href="#section">fragment only</a>',
+      '<a href="mailto:webmaster@fda.gov">mail</a>',
+      '<a href="javascript:void(0)">script</a>',
+      '<a href="ftp://ftp.fda.gov/dilirank.xlsx">ftp mirror file</a>',
+      "<a>no href</a>",
+      "</body></html>",
+    ].join("");
+    const result = await navigateToolWithHtml(html).execute({ url: "https://www.fda.gov/media/list" });
+    const data = JSON.parse(result.content) as { links: Array<{ href: string; text: string }>; links_total: number };
+    expect(data.links).toEqual([
+      { href: "https://www.fda.gov/media/files/dilirank.xlsx", text: "DILIrank download" },
+      { href: "https://www.ncbi.nlm.nih.gov/ftp", text: "NCBI FTP mirror" },
+      { href: "ftp://ftp.fda.gov/dilirank.xlsx", text: "ftp mirror file" },
+    ]);
+    expect(data.links_total).toBe(3);
+  });
+
+  it("navigate_page pages long body text via max_chars and offset", async () => {
+    const early = `${"A".repeat(6000)}EARLY_MARKER`;
+    const late = `LATE_MARKER_${"B".repeat(300)}`;
+    const html = `<html><head><title>Long</title></head><body>${early}${late}</body></html>`;
+    const navigatePage = navigateToolWithHtml(html);
+
+    const first = await navigatePage.execute({ url: "https://example.com/long" });
+    const firstData = JSON.parse(first.content) as Record<string, unknown>;
+    expect(firstData["body_text_total_chars"]).toBe(early.length + late.length);
+    expect(firstData["body_text_preview"]).toHaveLength(5000);
+    expect(String(firstData["body_text_preview"]).startsWith("AAAA")).toBe(true);
+    expect(firstData["body_text_offset"]).toBe(0);
+    expect(firstData["body_text_truncated"]).toBe(true);
+    expect(String(firstData["body_text_preview"])).not.toContain("EARLY_MARKER");
+
+    const next = await navigatePage.execute({ url: "https://example.com/long", offset: 5000 });
+    const nextData = JSON.parse(next.content) as Record<string, unknown>;
+    expect(nextData["body_text_offset"]).toBe(5000);
+    const nextText = String(nextData["body_text_preview"]);
+    expect(nextText).toBe(`${early}${late}`.slice(5000));
+    expect(nextText).toContain("EARLY_MARKER");
+    expect(nextText).toContain("LATE_MARKER_");
+    expect(nextData["body_text_truncated"]).toBe(false);
+
+    const full = await navigatePage.execute({ url: "https://example.com/long", max_chars: 999999 });
+    const fullData = JSON.parse(full.content) as Record<string, unknown>;
+    expect(fullData["body_text_preview"]).toBe(`${early}${late}`);
+    expect(fullData["body_text_truncated"]).toBe(false);
+  });
+
   it("navigate_page degrades exactly like Python when the browser pool is unavailable", async () => {
     const facade = new CrawlerFacade({ minInterval: 0 });
     const [navigatePage] = createBrowserTools({
