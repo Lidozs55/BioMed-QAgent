@@ -1,6 +1,7 @@
 import { TerminalIcon } from "@phosphor-icons/react";
 
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { unwrapToolOutput } from "@/lib/toolOutput";
 import { cn } from "@/lib/utils";
 
 import { CopyButton } from "./CopyButton";
@@ -29,6 +30,7 @@ function resolveCommand(item: ToolRendererProps["item"]): string | undefined {
 export function BashTool({ item, open, onOpenChange }: ToolRendererProps) {
   const command = resolveCommand(item);
   const firstLine = command !== undefined ? command.split("\n")[0] : undefined;
+  const unwrapped = unwrapToolOutput(item.output);
   return (
     <ToolCallShell
       item={item}
@@ -42,14 +44,14 @@ export function BashTool({ item, open, onOpenChange }: ToolRendererProps) {
           "relative rounded-md bg-card-foreground p-3 font-mono text-xs leading-5 text-background",
         )}
       >
-        {item.output && (
-          <CopyButton text={item.output} className="absolute top-1.5 right-1.5 z-10" />
+        {unwrapped && (
+          <CopyButton text={unwrapped.text} className="absolute top-1.5 right-1.5 z-10" />
         )}
-        <ScrollArea className={item.output ? "max-h-72 pr-8" : undefined}>
+        <ScrollArea className={unwrapped ? "max-h-72 pr-8" : undefined}>
           <pre className="break-words whitespace-pre-wrap">
             <span className="opacity-60 select-none">$ </span>
             {command}
-            {item.output && <span>{"\n\n"}{item.output}</span>}
+            {unwrapped && <span>{"\n\n"}{unwrapped.text}</span>}
           </pre>
         </ScrollArea>
       </div>

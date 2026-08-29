@@ -190,6 +190,67 @@ describe("ToolCallStep dedicated renderers", () => {
     expect(screen.getByText("Hello, World!")).toBeInTheDocument();
   });
 
+  it("shows unwrapped exec stdout instead of the JSON envelope", () => {
+    const envelope = JSON.stringify({
+      content: [{ type: "text", text: JSON.stringify({ exitCode: 0, stdout: "Modified\n", stderr: "" }) }],
+      details: { command: ["python", "hello.py"], exitCode: 0, stdout: "Modified\n", stderr: "" },
+    });
+    render(
+      <ToolCallStep
+        item={makeToolCall({
+          toolName: "workspace_exec",
+          arguments: { executable: "python", args: ["hello.py"] },
+          output: envelope,
+        })}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /python hello\.py/ }));
+    expect(screen.getByText(/Modified/)).toBeInTheDocument();
+    expect(screen.queryByText(/"details"/)).not.toBeInTheDocument();
+  });
+
+  it("shows an error message instead of the diff for a failed edit", () => {
+    const envelope = JSON.stringify({
+      content: [{ type: "text", text: JSON.stringify({ code: "PRECONDITION_FAILED", message: "expectedOccurrences is required" }) }],
+      details: { code: "PRECONDITION_FAILED", message: "expectedOccurrences is required" },
+    });
+    render(
+      <ToolCallStep
+        item={makeToolCall({
+          toolName: "workspace_edit",
+          status: "error",
+          arguments: { path: "hello.py", oldText: "a", newText: "b" },
+          output: envelope,
+        })}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /hello\.py/ }));
+    expect(screen.queryByText("+", { selector: "span[aria-hidden='true']" })).not.toBeInTheDocument();
+    expect(
+      screen.getByText("PRECONDITION_FAILED: expectedOccurrences is required"),
+    ).toBeInTheDocument();
+  });
+
+  it("shows workspace_read text content with a character-count badge", () => {
+    const envelope = JSON.stringify({
+      content: [{ type: "text", text: JSON.stringify({ path: "hello.py", text: 'print("Hello, World!")\n', offset: 0, characters: 23, truncated: false }) }],
+      details: { path: "hello.py", text: 'print("Hello, World!")\n', offset: 0, characters: 23, truncated: false },
+    });
+    render(
+      <ToolCallStep
+        item={makeToolCall({
+          toolName: "workspace_read",
+          arguments: { path: "hello.py" },
+          output: envelope,
+        })}
+      />,
+    );
+    expect(screen.getByText("23 字符")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /hello\.py/ }));
+    expect(screen.getByText(/print\("Hello, World!"\)/)).toBeInTheDocument();
+    expect(screen.queryByText(/"details"/)).not.toBeInTheDocument();
+  });
+
   it("dispatches read to FileReadTool with path title and line range badge", () => {
     render(
       <ToolCallStep
