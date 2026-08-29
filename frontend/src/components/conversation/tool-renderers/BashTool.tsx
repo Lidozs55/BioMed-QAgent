@@ -1,14 +1,28 @@
 import { useState } from "react";
 import { BracketsCurlyIcon, TerminalIcon } from "@phosphor-icons/react";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { unwrapToolOutput } from "@/lib/toolOutput";
 import { cn } from "@/lib/utils";
 
 import { CopyButton } from "./CopyButton";
 import { ToolCallShell } from "./ToolCallShell";
 import { readStringArg, type ToolRendererProps } from "./types";
+
+function formatDuration(ms: number): string {
+  if (ms < 1_000) return `${ms}ms`;
+  if (ms < 60_000) return `${(ms / 1_000).toFixed(1)}s`;
+  const minutes = Math.floor(ms / 60_000);
+  const seconds = Math.round((ms % 60_000) / 1_000);
+  return `${minutes}m${String(seconds).padStart(2, "0")}s`;
+}
 
 /**
  * 命令执行专用渲染(bash / workspace_exec):命令首行收起态,
@@ -37,6 +51,12 @@ export function BashTool({ item, open, onOpenChange }: ToolRendererProps) {
   const hasRawToggle =
     item.output !== null && unwrapped !== null && item.output !== unwrapped.text;
   const outputText = showRaw && item.output !== null ? item.output : unwrapped?.text;
+  // 运行时长与超时:来自 exec details,超时时长标红 + tooltip(用户反馈)。
+  const durationMs =
+    typeof unwrapped?.details?.durationMs === "number"
+      ? unwrapped.details.durationMs
+      : null;
+  const timedOut = unwrapped?.details?.timedOut === true;
   return (
     <ToolCallShell
       item={item}
@@ -44,6 +64,26 @@ export function BashTool({ item, open, onOpenChange }: ToolRendererProps) {
       onOpenChange={onOpenChange}
       icon={<TerminalIcon />}
       title={<span className="truncate">{firstLine ?? "bash"}</span>}
+      badges={
+        durationMs !== null ? (
+          timedOut ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Badge variant="secondary" className="font-mono text-[11px] text-destructive">
+                    {formatDuration(durationMs)}
+                  </Badge>
+                }
+              />
+              <TooltipContent>命令运行超时</TooltipContent>
+            </Tooltip>
+          ) : (
+            <Badge variant="secondary" className="font-mono text-[11px]">
+              {formatDuration(durationMs)}
+            </Badge>
+          )
+        ) : undefined
+      }
     >
       <div
         className={cn(

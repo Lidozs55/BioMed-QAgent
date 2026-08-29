@@ -209,6 +209,44 @@ describe("ToolCallStep dedicated renderers", () => {
     expect(screen.queryByText(/"details"/)).not.toBeInTheDocument();
   });
 
+  it("shows the exec duration badge on the marker row", () => {
+    const envelope = JSON.stringify({
+      content: [{ type: "text", text: JSON.stringify({ exitCode: 0, stdout: "ok", durationMs: 2230 }) }],
+      details: { command: ["python"], exitCode: 0, stdout: "ok", durationMs: 2230, timedOut: false },
+    });
+    render(
+      <ToolCallStep
+        item={makeToolCall({
+          toolName: "workspace_exec",
+          arguments: { executable: "python", args: ["hello.py"] },
+          output: envelope,
+        })}
+      />,
+    );
+    expect(screen.getByText("2.2s")).toBeInTheDocument();
+    const badge = screen.getByText("2.2s").closest("[data-slot='badge']");
+    expect(badge?.className).not.toContain("text-destructive");
+  });
+
+  it("marks the duration badge red for a timed-out command", () => {
+    const envelope = JSON.stringify({
+      content: [{ type: "text", text: JSON.stringify({ exitCode: null, stdout: "", timedOut: true, durationMs: 65_000 }) }],
+      details: { command: ["python"], exitCode: null, stdout: "", timedOut: true, durationMs: 65_000 },
+    });
+    render(
+      <ToolCallStep
+        item={makeToolCall({
+          toolName: "workspace_exec",
+          arguments: { executable: "python", args: ["long.py"] },
+          output: envelope,
+        })}
+      />,
+    );
+    const badge = screen.getByText("1m05s");
+    // TooltipTrigger 的 render 合并会丢掉 data-slot 属性,直接断言样式类。
+    expect(badge.className).toContain("text-destructive");
+  });
+
   it("shows an error message instead of the diff for a failed edit", () => {
     const envelope = JSON.stringify({
       content: [{ type: "text", text: JSON.stringify({ code: "PRECONDITION_FAILED", message: "expectedOccurrences is required" }) }],
