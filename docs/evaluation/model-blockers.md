@@ -33,14 +33,23 @@
 
 ## gold1-r3 @ qwen3.8-flash（2026-08-29，main@c22eb2452af7，task_ts_b5dccb47-29af-4668-896f-e210d9e8169d）
 
-> 身份断言通过（settings/registry 双层 + Pi session `model_change` 铁证）。终态 **succeeded_publication**：`pub_brca_gse15852_gene_v1_86b05b62073c9e82`（GSE15852/GPL96 长表，8 artifacts，run 绑定）。
-> 用量：60 calls / 1463s / input 534,599 / output 14,470 / cache_read 5,158,272 / 峰值上下文 136,294（256k 窗口，0 压缩，1 次权限停审，0 HIL）。
-> 对照 r1（3.7-plus）：275s/35 calls/blocked_no_publication → r3 慢 5.3 倍但**产物正确闭环**；变慢主因见 C2。
+> 身份断言通过（settings/registry 双层 + Pi session `model_change` 铁证）。终态 **succeeded_publication**：`pub_brca_gse15852_gene_v1_86b05b62073c9e82`（GSE15852/GPL96 长表，8 artifacts，run 绑定）。0 压缩、1 次权限停审、0 HIL。
+>
+> **Token 消耗**（来源：`closure.json.run_usage`，即 usage 记账特性；发布前后拆分来自事件流逐调用 usage）：
+>
+> | 阶段 | 调用 | input | output | cache_read | 总计费 token | 墙钟 |
+> | --- | --- | --- | --- | --- | --- | --- |
+> | 发布前（发现→构建→Publication） | 19 | 207,693 | 3,967 | 987,136 | 1,198,796 | 663s |
+> | 发布后（回执验证+报告） | **41** | 326,906 | **10,503** | 4,171,136 | **4,508,545** | 592s |
+> | 合计 | 60 | 534,599 | 14,470 | 5,158,272 | 5,707,341 | 1463s |
+>
+> 上下文峰值 136,294 / 256k；首轮 29,157。**发布后阶段占 79% 计费 token、一半墙钟、73% 输出**——C2 的定量代价。成本 = 各列 × DashScope 单价（手工价格表）。
+> 记账缺口（待分流）：usage 目前只聚合到 run 级（`RunSummary.usage`），阶段/单轮拆分每次要手写脚本扫 `context_usage.usage` 事件——应补一条持久聚合命令（如 `gold:usage <evidence-dir>` 输出 pre/post 与逐轮表）。
 
 | # | 卡点 | 归类 | 证据 | 建议修法（暂不执行） |
 | - | ---- | ---- | ---- | -------------------- |
 | C1 | **检视 gzip 平台注释的诉求走向 shell 绕路**。seq 185 `process.exec bash.exe -lc "gzip -dc GPL96.annot.gz \| sed \| cut"` 被 supervisor fail-closed 停审（操作员 deny 后 run 恢复，模型改走 workspace_read/preview 正常完成任务）。核心资产预览/解压工具链只覆盖 zip，不覆盖单文件 gzip，模型看 .gz 内容只剩 bash 一条路 | 产品 | events seq 185 permission_requested；permissions.jsonl；deny 后 seq 200+ 正常推进 | extract/preview 支持 gzip 成员或加 `read_core_asset_text(decompress=auto)`；提示词明示"gz 载体勿走 shell" |
-| C2 | **发布后验证循环冗长（本次耗时大头）**。`publication_created`(seq435) 之后又烧了 ~570 事件/30+ calls：`workspace_read`×28 逐回执反复读、5+ 次重复同一句"I'll verify the remaining receipts"自述、`workspace_edit`×2 修订自己的措辞（其中 1 次失败 seq724）。诚实复核是好行为，但**无界重复**——已验证过的回执被再读 2-3 遍 | prompt | tools 计数：workspace_read 28 vs r1 全 run 仅 33 tool_started；24min 时点事件分布（19-23min 每分钟仅 30 事件，全在读文件） | 提示词加收敛规则："每个 artifact/回执验证一次即记录结论；发布后回合预算 ≤N 次工具调用；发现重复读同一文件即停止" |
+| C2 | **发布后验证循环冗长（定量：41/60 次调用、79% 计费 token、592/1463s 墙钟花在 Publication 之后）**。`publication_created`(seq435) 之后又烧了 ~570 事件：`workspace_read`×27 逐回执反复读、5+ 次重复同一句"I'll verify the remaining receipts"自述、`workspace_edit`×2 修订自己的措辞（其中 1 次失败 seq724）。诚实复核是好行为，但**无界重复**——已验证过的回执被再读 2-3 遍 | prompt | tools 计数：workspace_read 28 vs r1 全 run 仅 33 tool_started；上方阶段拆分表 | 提示词加收敛规则："每个 artifact/回执验证一次即记录结论；发布后回合预算 ≤N 次工具调用；发现重复读同一文件即停止" |
 | C3 | **basic_statistics 对 536MB 主表字符串溢出**。工具报 `Cannot create a string longer than 0x1fffffe8 characters`（V8 单串上限），导致主表描述性统计未执行，模型如实标注"数值有效性仅依赖 Core expression_value_numeric 检查" | 产品（工具） | 终答"需要你协助"第 4 点；events 中 basic_statistics err 输出 | basic_statistics 改流式/分块解析或声明行数上限 + 抽样统计 |
 | C4 | **无 SOFT 注释平台在 gene 级 schema 下直接不可闭合**。`download_geo_platform_annotation(GPL17586)` 返回 no downloadable annotation table → GSE76250（398 样本，最大配对系列）无法进 gene 级主表；模型未猜映射（正确），但该数据获取面在 gold 标准集上直接封顶 | 产品（覆盖面） | 终答阻塞清单第 2 点；tool_completed GPL17586 输出 | geo_platform adapter 支持 from library/探针命名推断的替代映射源（GeneCards/UniProt gene symbol 表）或提供 probe 序列比对通道 |
 | C5 | **发现查询收窄空转**。追加 3 次 `search_geo`（GPL96/HGU133A 变体）total_count 0/1/0——在已知无同平台第二系列的方向上重复碰瓷 | prompt（轻） | 终答"发现查询收窄失败"段 | 同一约束变体重试 ≤2 次即止损（与 r1-B4 同族，正样本对照下影响小） |
