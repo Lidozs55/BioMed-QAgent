@@ -7,6 +7,7 @@ import type { BioMedAgentAdapter, BioMedModelConfig } from "../agent/contracts.j
 import { PiAgentAdapter } from "../agent/pi-adapter.js";
 import { createDatasetExecutionTools } from "../agent/tools/dataset-execution.js";
 import { createDatasetRoutePreflightTool } from "../agent/tools/dataset-route-preflight.js";
+import { createCoreAssetTools } from "../agent/tools/core-asset-tools.js";
 import {
   createDynamicFamilyPublicationTool,
   createPrepareDynamicFamilyPublicationTool,
@@ -728,6 +729,10 @@ export async function createPhase3Runtime(
           }
         },
       });
+      const coreAssetTools = createCoreAssetTools({
+        sourceAssetRegistry,
+        sourceAssetsRoot: taskRoot,
+      });
       const datasetTools = createDatasetExecutionTools({
         client: service,
         familyRegistry: createDefaultDatasetFamilyRegistry(),
@@ -785,6 +790,7 @@ export async function createPhase3Runtime(
         datasetRoutePreflightTool,
         dynamicFamilyPrepareTool,
         dynamicFamilyTool,
+        ...coreAssetTools,
         ...importTools,
       ]);
       return {
@@ -797,6 +803,7 @@ export async function createPhase3Runtime(
           datasetRoutePreflightTool,
           dynamicFamilyPrepareTool,
           dynamicFamilyTool,
+          ...coreAssetTools,
           ...importTools,
         ],
         permissionBroker,

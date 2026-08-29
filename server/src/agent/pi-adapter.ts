@@ -110,6 +110,7 @@ interface QueueItem {
   event?: BioMedAgentEvent;
   error?: BioMedAgentError;
   done?: true;
+  barrier?: () => void;
 }
 
 class EventQueue {
@@ -1344,6 +1345,10 @@ class PiBioMedAgentSession implements BioMedAgentSession {
         const item = await active.queue.next();
         if (item.error !== undefined) throw item.error;
         if (item.done === true) break;
+        if (item.barrier !== undefined) {
+          item.barrier();
+          continue;
+        }
         if (item.event !== undefined) yield item.event;
       }
     } finally {
@@ -1388,12 +1393,19 @@ class PiBioMedAgentSession implements BioMedAgentSession {
   }
 
   async steer(text: string): Promise<void> {
-    if (this.activeTurn === undefined || this.activeTurn.terminal) {
+    const active = this.activeTurn;
+    if (active === undefined || active.terminal) {
       throw new BioMedAgentError("SESSION_BUSY", "Agent session has no active turn to steer");
     }
     if (this.upstream.steer === undefined) {
       throw new BioMedAgentError("UPSTREAM_FAILURE", "Agent runtime does not support steering");
     }
+    // The realtime stream can be ahead of the coalesced durable event stream.
+    // Flush and wait until the run consumer has processed every earlier event
+    // before accepting the new user turn, so run_steered receives a sequence
+    // after the text the user already saw.
+    this.flushPendingDelta(active);
+    await new Promise<void>((resolve) => active.queue.push({ barrier: resolve }));
     await this.upstream.steer(text);
   }
 

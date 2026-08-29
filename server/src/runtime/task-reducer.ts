@@ -99,6 +99,7 @@ function message(
     role,
     content,
     created_at: event.timestamp,
+    sequence: event.sequence,
   };
 }
 
@@ -193,6 +194,11 @@ export function reduceTaskEvents(
       } else {
         existing.content += event.payload.delta;
       }
+    } else if (event.payload.type === "run_steered" && event.run_id !== null) {
+      messages.push(message(metadata, event, "user", event.payload.input, messages.length + 1));
+      // Text generated after the direction change belongs to a new assistant
+      // turn in the snapshot rather than the pre-steer assistant message.
+      assistantByRun.delete(event.run_id);
     } else if (event.payload.type === "publication_created") {
       const publication: TaskPublicationSummary = {
         publication_id: event.payload.publication_id,

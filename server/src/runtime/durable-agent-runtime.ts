@@ -1295,12 +1295,16 @@ export async function createDurableAgentRuntime(
       `具体依照用户语义完成：\n${text}`
     );
     await task.session.steer(content);
+    const event = await repository.appendRunEvent(taskId, runId, {
+      type: "run_steered",
+      input: text,
+    });
     return {
       status: "steered",
       task_id: taskId,
       run_id: runId,
-      message_id: null,
-      content,
+      message_id: `message_${event.event_id}`,
+      content: text,
     };
   }
 

@@ -229,6 +229,8 @@ export interface MessageRecord {
   role: MessageRole;
   content: string;
   created_at: string;
+  /** Task event sequence that created this message; absent on legacy records. */
+  sequence?: number;
 }
 
 export interface SubagentRequest {

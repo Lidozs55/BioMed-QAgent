@@ -142,7 +142,7 @@ export function createPrepareDynamicFamilyPublicationTool(
     name: "prepare_dynamic_family_publication",
     label: "Prepare Dynamic Family Publication",
     description:
-      "Use after inspect_dataset_execution_routes when no registered static family expresses the required topology and every input is dynamic-bindable or a prior task-owned Core asset. Do not prevalidate a dynamic FamilySpec with validate_dataset_execution. Submit semantic fields without derived digest properties. This deterministic, side-effect-free preflight derives all digest bindings, validates topology and acquisition planning, and returns prepared_submission plus a task/requirement/generation-bound preflight_receipt; pass both unchanged to submit_dynamic_family_publication.",
+      "Use after inspect_dataset_execution_routes when no registered static family expresses the required topology and every input is dynamic-bindable or a prior task-owned Core asset. Do not prevalidate a dynamic FamilySpec with validate_dataset_execution. Submit semantic fields without derived digest properties. This deterministic, side-effect-free preflight derives all digest bindings, validates topology and acquisition planning, and returns prepared_submission plus a task/requirement/generation-bound preflight_receipt; pass both unchanged to submit_dynamic_family_publication. Top-level keys, exactly: schema_version, execution_backend, family_spec, projection_id, transform_source, transform_metadata, registered_sources, acquisition_requests, execution_proposal.",
     parameters: dynamicFamilyPublicationParameters("prepare"),
     async execute(value, signal, context): Promise<BioMedToolResult> {
       try {
@@ -820,7 +820,12 @@ function exactDataRecord(value: unknown, keys: ReadonlySet<string>, label: strin
   const descriptors = Object.getOwnPropertyDescriptors(value);
   const ownKeys = Reflect.ownKeys(descriptors);
   if (ownKeys.length !== keys.size || ownKeys.some((key) => typeof key !== "string" || !keys.has(key))) {
-    throw new TypeError(`${label} has unknown or missing fields`);
+    const presentStrings = new Set(ownKeys.filter((key): key is string => typeof key === "string"));
+    const missing = [...keys].filter((key) => !presentStrings.has(key));
+    const unexpected = ownKeys.filter((key) => typeof key !== "string" || !keys.has(key)).map(String);
+    throw new TypeError(
+      `${label} has unknown or missing fields (missing: ${missing.join(", ") || "none"}; unexpected: ${unexpected.join(", ") || "none"})`,
+    );
   }
   const result = Object.create(null) as DataRecord;
   for (const key of ownKeys) {

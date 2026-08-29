@@ -122,6 +122,22 @@ describe("runtime REST client", () => {
     });
   });
 
+  it("requires the durable message identity in a steer response", async () => {
+    const fetcher = vi.fn<FetchLike>().mockResolvedValue(
+      jsonResponse({
+        status: "steered",
+        task_id: "task_1",
+        run_id: "run_1",
+        content: "focus on TP53",
+      }, 202),
+    );
+    const api = createAPIClient({ fetcher });
+
+    await expect(
+      api.injectTaskContext("task_1", "focus on TP53", "run_1"),
+    ).rejects.toBeInstanceOf(APIError);
+  });
+
   it("uses the authoritative page, snapshot, message, event, and cancel paths", async () => {
     const taskPage: TaskPage = {
       schema_version: "1.0",

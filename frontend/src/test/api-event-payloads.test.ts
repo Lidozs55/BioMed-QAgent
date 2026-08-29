@@ -258,6 +258,19 @@ describe("parseEventPayload — runtime event family", () => {
     expect(() => parseEventPayload(o({ type: "run_queued", request_id: "r1", input: "" }), "run_queued", "p")).toThrow(APIError);
   });
 
+  it("run_steered — preserves non-empty user input and rejects an empty adjustment", () => {
+    expect(
+      parseEventPayload(
+        o({ type: "run_steered", input: "focus on TP53" }),
+        "run_steered",
+        "p",
+      ),
+    ).toEqual({ type: "run_steered", input: "focus on TP53" });
+    expect(() =>
+      parseEventPayload(o({ type: "run_steered", input: "" }), "run_steered", "p"),
+    ).toThrow(APIError);
+  });
+
   it("subagent_queued — validates required request fields and preserves forward-compatible fields", () => {
     const r = parseEventPayload(
       o({

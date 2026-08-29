@@ -225,7 +225,7 @@ function projectMessage(record: MessageRecord): ProjectedMessage {
     role: record.role,
     content: record.content,
     createdAt: record.created_at,
-    sequence: null,
+    sequence: record.sequence ?? null,
   };
 }
 
@@ -496,11 +496,9 @@ export function prepareTaskSnapshotReplay(
       ...hydrated.tasksById,
       [snapshot.task.task_id]: {
         ...hydrated.tasksById[snapshot.task.task_id],
-        // The snapshot carries message ordinals, not durable event sequence
-        // numbers. Keep its message records for the final reconciliation, but
-        // do not seed timeline items before replay: otherwise upsertItem's
-        // immutable first-entry position prevents run_queued/assistant events
-        // from restoring the authoritative event clock.
+        // Legacy snapshots may carry only message ordinals. Keep message
+        // records for final reconciliation, but do not seed timeline items
+        // before replay: durable events remain the authoritative event clock.
         items: [],
         itemSequences: {},
         lastSequence: 0,
@@ -663,7 +661,8 @@ export function upsertItem(
 
 function projectMessageToItem(
   message: ProjectedMessage,
-  userSequenceByRun?: ReadonlyMap<string, number>,
+  userItemId?: string,
+  userSequenceByItemId?: ReadonlyMap<string, number>,
 ): ConversationItem | null {
   const runId = message.runId ?? "";
   // User messages are re-projected from snapshot.messages during hydration.
@@ -671,8 +670,8 @@ function projectMessageToItem(
   // so sorting stays chronological; fall back to message.sequence ?? ordinal
   // when the event was not replayed (e.g. truncated event page).
   const userEventSequence =
-    message.role === "user" && runId !== ""
-      ? userSequenceByRun?.get(runId)
+    message.role === "user" && userItemId !== undefined
+      ? userSequenceByItemId?.get(userItemId)
       : undefined;
   const sequence =
     userEventSequence ??
@@ -682,10 +681,7 @@ function projectMessageToItem(
   if (message.role === "user") {
     return {
       kind: "user_message",
-      itemId:
-        message.runId === null
-          ? `msg:${message.messageId}`
-          : `user:${message.runId}`,
+      itemId: userItemId ?? `msg:${message.messageId}`,
       runId,
       sequence,
       createdAt: message.createdAt,
@@ -730,11 +726,11 @@ function mergeMessagesIntoItems(
       )
       .map((item) => item.runId),
   );
-  const userSequenceByRun = new Map<string, number>();
+  const userSequenceByItemId = new Map<string, number>();
   const items = task.items.filter((item) => {
     if (item.kind === "user_message" && userRunIds.has(item.runId)) {
       if (preserveUserSequences) {
-        userSequenceByRun.set(item.runId, item.sequence);
+        userSequenceByItemId.set(item.itemId, item.sequence);
       }
       return false;
     }
@@ -744,12 +740,20 @@ function mergeMessagesIntoItems(
     );
   });
   let next = items.length === task.items.length ? task : { ...task, items };
-  const projectedUserRunIds = new Set<string>();
+  const projectedLegacyUserRunIds = new Set<string>();
 
   for (const message of task.messages) {
+    let userItemId: string | undefined;
     if (message.role === "user" && message.runId !== null) {
-      if (projectedUserRunIds.has(message.runId)) continue;
-      projectedUserRunIds.add(message.runId);
+      if (message.sequence !== null) {
+        userItemId = `msg:${message.messageId}`;
+      } else {
+        if (projectedLegacyUserRunIds.has(message.runId)) continue;
+        projectedLegacyUserRunIds.add(message.runId);
+        userItemId = `user:${message.runId}`;
+      }
+    } else if (message.role === "user") {
+      userItemId = `msg:${message.messageId}`;
     }
     if (
       message.role === "assistant" &&
@@ -760,7 +764,8 @@ function mergeMessagesIntoItems(
     }
     const item = projectMessageToItem(
       message,
-      preserveUserSequences ? userSequenceByRun : undefined,
+      userItemId,
+      preserveUserSequences ? userSequenceByItemId : undefined,
     );
     if (item === null) continue;
     next = upsertItem(next, item);

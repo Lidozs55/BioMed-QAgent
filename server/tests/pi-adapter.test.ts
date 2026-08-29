@@ -46,6 +46,9 @@ class FakeUpstreamSession implements PiUpstreamSession {
   readonly compact = vi.fn(async (): Promise<{ summary: string }> => ({
     summary: "compacted manually",
   }));
+  readonly steer = vi.fn(async (text: string): Promise<void> => {
+    void text;
+  });
   private readonly listeners = new Set<(event: PiUpstreamEvent) => void>();
   promptImplementation: (input: string) => Promise<void> = async () => undefined;
   continueAfterLengthImplementation: () => Promise<void> = async () => undefined;
@@ -244,8 +247,9 @@ describe("Pi system prompt", () => {
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
       /Transform sandbox forbids every bracket element access/i,
     );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/preview_core_asset lists members/i);
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
-      /never run python, shell, or workspace_exec extraction scripts/i,
+      /never run python, shell, or workspace_exec extraction/i,
     );
   });
 });
@@ -914,6 +918,48 @@ describe("PiAgentAdapter", () => {
     });
     pending.resolve();
     await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: { type: "turn_completed" },
+    });
+    await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
+  });
+
+  test("delivers pending assistant text before accepting a direction adjustment", async () => {
+    const upstream = new FakeUpstreamSession();
+    const pending = deferred<void>();
+    upstream.promptImplementation = () => pending.promise;
+    const session = await new PiAgentAdapter({
+      createUpstreamSession: async () => upstream,
+    }).createSession(sessionConfig);
+    const iterator = session.run("steer boundary")[Symbol.asyncIterator]();
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: { type: "turn_started" },
+    });
+
+    upstream.emit({
+      type: "message_update",
+      assistantMessageEvent: { type: "text_delta", delta: "before steer" },
+    });
+    if (session.steer === undefined) throw new Error("steer is unavailable");
+    let steerResolved = false;
+    const steerPromise = session.steer("focus on TP53").then(() => {
+      steerResolved = true;
+    });
+    await Promise.resolve();
+
+    expect(steerResolved).toBe(false);
+    expect(upstream.steer).not.toHaveBeenCalled();
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: { type: "assistant_delta", delta: "before steer" },
+    });
+    const completion = iterator.next();
+    await expect(steerPromise).resolves.toBeUndefined();
+    expect(upstream.steer).toHaveBeenCalledWith("focus on TP53");
+
+    pending.resolve();
+    await expect(completion).resolves.toEqual({
       done: false,
       value: { type: "turn_completed" },
     });
