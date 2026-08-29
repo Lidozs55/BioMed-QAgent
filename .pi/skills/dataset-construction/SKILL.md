@@ -119,7 +119,57 @@ output.
    NO_DATA, cancellation, incomplete review, or failure as success; never
    fabricate file names when reporting artifacts.
 
+## Transform source admission dialect
+
+Dynamic transforms are statically admitted before execution. The admission
+AST policy rejects eval-class identifiers and **every** bracket access —
+including a literal index like `rows[0]` — plus computed property names and
+bracket enumeration of any kind. It reports **all** violations with `L`/`C`
+line-column positions in one rejection; fix every listed position, then
+resubmit once.
+
+Reading data inside the dialect:
+
+- Arrays: destructuring (`const [drug_name, pt, count] = line.split(",")`),
+  `.at(i)`, `.slice()`, `.shift()`, `.map`, `.filter`, `.join`.
+- Objects: dot paths only (`request.inputs`, `match.groups.severity`).
+- Available globals: `JSON.parse`, `String`, `Number`, `Math`.
+
+Minimal passing shape (CSV in, CSV out):
+
+```ts
+import { defineTransform } from "@biomed/transform-sdk/v1";
+
+export const transform = defineTransform({
+  run(request) {
+    const source = request.inputs.at(0);
+    const lines = source.text.split("
+").filter((line) => line !== "");
+    const rows = lines.slice(1).map((line) => {
+      const [drug_name, pt, count] = line.split(",");
+      return { drug_name, pt, count: Number(count) };
+    });
+    const content = "drug_name,pt,count
+" + rows
+      .map((row) => row.drug_name + "," + row.pt + "," + String(row.count))
+      .join("
+");
+    return {
+      outputs: [{
+        content,
+        handle: "out_0",
+        locator_ref: source.receipt_id,
+        row_count: rows.length,
+        schema_ref: "schema_from_your_projection",
+        table_id: "table_from_your_projection",
+      }],
+    };
+  },
+});
+```
+
 ## Boundaries
+
 
 - The trusted Dataset Core owns acquisition for registered providers,
   validation, compatibility gating, integration, and immutable publication.
