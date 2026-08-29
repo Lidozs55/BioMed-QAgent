@@ -28,12 +28,12 @@
 
 BioMed-QAgent 面向的不是“替研究者得出科学结论”，而是赛题明确提出的上游问题：将自然语言研究目标转换为一份可以继续分析、可以追溯来源、可以检查质量并可以在反馈后修正的结构化科学数据产品。
 
-系统试图解决四个连续问题：
+系统试图解决四个连续问题，四者依次覆盖“Agent 外部工作 → Dataset Core 确定性流水线”的主链路：
 
-1. 根据研究目标定位合适的论文、数据库、附件、表格或图像数据；
-2. 把异构载体解析为明确 Schema 和行粒度下的规范记录；
-3. 在不掩盖缺失、重复、单位差异和身份冲突的前提下完成多源整合；
-4. 将每一步的来源、输入摘要、处理版本、质量判断和人工修正一起发布，使结果能被验证和复用。
+1. 根据研究目标定位合适的论文、数据库、附件、表格或图像数据（Agent 侧的需求编译与来源发现）；
+2. 把异构载体解析为明确 Schema 和行粒度下的规范记录（Core 的 parse、normalize 阶段）；
+3. 在不掩盖缺失、重复、单位差异和身份冲突的前提下完成多源整合（Core 的 compat、integrate、derive 阶段）；
+4. 将每一步的来源、输入摘要、处理版本、质量判断和人工修正一起发布，使结果能被验证和复用（Core 的 validate、publish 阶段与 Durable HIL）。
 
 系统有意不把科研分析和结论生成纳入正式完成标准。这样既符合赛题 1A 的任务边界，也避免将“数据是否正确”与“模型解释是否听起来合理”混在一起。
 
@@ -71,11 +71,11 @@ BioMed-QAgent 面向的不是“替研究者得出科学结论”，而是赛题
 
 本文将实际完成的功能归纳为三个贡献。
 
-创新点一：以“Agent 规划、Core 裁决”替代模型直接生成数据。 Qwen/Pi Agent 负责研究需求理解、来源探索和声明式工具选择，Dataset Core 独占正式数据变换与发布权。Agent 不能提交任意执行步骤，也不能仅凭工作区文件宣告任务完成。这一分权把模型适合处理的开放语义问题与代码适合处理的确定性质量问题分开。
+创新点一：以“Agent 规划、Core 裁决”替代模型直接生成数据。 Qwen/Pi Agent 负责研究需求理解、来源探索和声明式工具选择，Dataset Core 独占正式数据变换与发布权。Agent 不能提交任意执行步骤，也不能仅凭工作区文件宣告任务完成。这一分权把模型适合处理的开放语义问题与代码适合处理的确定性质量问题分开（对应第三章 Agent 侧的需求编译与路线检查，以及第四章的声明式工具与完成契约）。
 
-创新点二：构建从来源字节到正式 Publication 的可验证证据链。 系统以 SourceAsset、SHA-256、Provider 请求身份、版本证据、SourceLocator、OperationResult、Validation Report 和 Manifest 串联数据生命周期。正式完成不是一个聊天答案或临时 CSV，而是一组内容寻址、摘要可重验、关系可检查的数据产品文件。
+创新点二：构建从来源字节到正式 Publication 的可验证证据链。 系统以 SourceAsset、SHA-256、Provider 请求身份、版本证据、SourceLocator、OperationResult、Validation Report 和 Manifest 串联数据生命周期。正式完成不是一个聊天答案或临时 CSV，而是一组内容寻址、摘要可重验、关系可检查的数据产品文件（对应第三章从正式采集到不可变发布的流水线各阶段，核心机制为 SourceAsset 与 Manifest）。
 
-创新点三：把质量反馈和人工判断纳入可恢复闭环。 模糊字段映射、未知单位、低置信度图表点或动态产品接纳可触发 Durable HIL。人工选择以结构化 decision 与 evidence digest 绑定到 task/run/requirement；进程重启后从同一 checkpoint 恢复，修正结果可形成新的 Publication，并保留版本替代关系。
+创新点三：把质量反馈和人工判断纳入可恢复闭环。 模糊字段映射、未知单位、低置信度图表点或动态产品接纳可触发 Durable HIL。人工选择以结构化 decision 与 evidence digest 绑定到 task/run/requirement；进程重启后从同一 checkpoint 恢复，修正结果可形成新的 Publication，并保留版本替代关系（对应第三章的 Durable HIL 与 checkpoint 恢复机制）。
 
 ## 二、问题定义
 
@@ -87,13 +87,13 @@ BioMed-QAgent 面向的不是“替研究者得出科学结论”，而是赛题
 
 ### 2.2 设计目标
 
-1. 可用性：输出为明确 Schema 下的 CSV 单表或多表，可直接进入 R/Python/统计软件或后续知识图谱流程。
-2. 可追溯性：每个正式来源绑定文件摘要和来源身份；记录尽可能携带可返回原载体的定位信息。
-3. 可靠性：解析、规范化、整合和发布由注册代码执行；缺失、重复、冲突和单位问题显式记录。
-4. 可修正性：需要研究者判断时暂停并请求结构化输入；反馈后从同一任务状态恢复。
-5. 可恢复性：下载和长流程操作可重试；已完成且摘要一致的阶段可从 checkpoint 复用。
-6. 能力诚实性：工作区暂存、正式候选和已发布产品分层；系统不能以对话措辞替代发布证据。
-7. 可扩展性：固定 Family 覆盖成熟高频场景，动态 Family 在严格协议下表达未注册多表拓扑。
+1. 可用性：输出为明确 Schema 下的 CSV 单表或多表，可直接进入 R/Python/统计软件或后续知识图谱流程（由 publish 阶段的 Manifest 标准化发布承载）。
+2. 可追溯性：每个正式来源绑定文件摘要和来源身份；记录尽可能携带可返回原载体的定位信息（由 acquire 阶段的 SourceAsset 与 SourceLocator 承载）。
+3. 可靠性：解析、规范化、整合和发布由注册代码执行；缺失、重复、冲突和单位问题显式记录（由注册 Adapter 与确定性流水线承载）。
+4. 可修正性：需要研究者判断时暂停并请求结构化输入；反馈后从同一任务状态恢复（由 Durable HIL 承载）。
+5. 可恢复性：下载和长流程操作可重试；已完成且摘要一致的阶段可从 checkpoint 复用（由事件溯源与 checkpoint 承载）。
+6. 能力诚实性：工作区暂存、正式候选和已发布产品分层；系统不能以对话措辞替代发布证据（由三层产物模型承载）。
+7. 可扩展性：固定 Family 覆盖成熟高频场景，动态 Family 在严格协议下表达未注册多表拓扑（由 Family Registry 与动态 FamilySpec 协议承载）。
 
 系统重点防范以下失败：来源 URL 或版本漂移；下载中断或内容类型错误；字段映射模糊；单位、尺度或行粒度不兼容；重复与冲突被静默覆盖；模型输出无证据；任务重启后重复或改变处理；过期执行晚到发布；正式文件被修改后仍被展示。
 
@@ -143,7 +143,7 @@ Agent 首先把用户问题中的目标实体、数据类型、样本或队列�
 
 表达数据的 Adapter 需要识别样本列、实体标识、测量值和表达语义。例如 GEO 既可能提供 gene-level 结果，也可能只提供 probe-level 矩阵；系统不会在缺少可信 annotation 时直接把 probe 当成 gene。GDC 与 Xena 的输入形态不同，但都需要转换到目标表达 Schema 后才可合并。
 
-注册式多表 Family 则将每个来源表映射到明确 table definition，并在后续 Assembly 中检查关系（多表示例见 3.8）。
+注册式多表 Family 则将每个来源表映射到明确 table definition，并在后续 Assembly 中检查关系（多表示例见 3.7）。
 
 #### 3.5.2 PDF 表格
 
@@ -151,7 +151,7 @@ PDF 解析保留页面和位置证据。对于可提取文本的表格，可依�
 
 #### 3.5.3 图表与视觉模型
 
-图表工具采用多层降级：优先通过 Qwen-VL 理解页面图像或嵌入图像；失败时尝试 PDF 表格；再失败时提取 caption 作为有限信息。模型抽取结果必须携带 model_name，点级结果包含 confidence_level 与 confidence_reason；其可信级受 3.9 的确定性上限约束，不会因模型自报 high 而自动成为正式真值。
+图表工具采用多层降级：优先通过 Qwen-VL 理解页面图像或嵌入图像；失败时尝试 PDF 表格；再失败时提取 caption 作为有限信息。模型抽取结果必须携带 model_name，点级结果包含 confidence_level 与 confidence_reason；其可信级受 3.8 的确定性上限约束，不会因模型自报 high 而自动成为正式真值。
 
 但当前默认正式产品链仍缺少从图表 evidence asset 到发布门的完整接线，正式汇报应将其展示为 processing preview，待接线和 Gold 验证完成后再宣称端到端发布。
 
@@ -159,25 +159,23 @@ PDF 解析保留页面和位置证据。对于可提取文本的表格，可依�
 
 解析后的来源记录仍不能直接拼接。Canonicalizer 按目标 Schema 完成类型转换、规范字段命名、实体标识表达和必要的值标准化。其核心原则是：只有被目标 Schema 和规范化配置授权的变化才可以自动执行。
 
-字段对齐处理来源列名到规范字段的映射、类型转换、缺失标记统一、实体 ID 与 namespace 表达、单位与测量语义检查、probe-to-gene 等外部映射资产转换，并保留原始 token 与规范值之间的 lineage。
+字段对齐处理来源列名到规范字段的映射、类型转换、缺失标记统一、实体 ID 与 namespace 表达、单位与测量语义检查、probe-to-gene 等外部映射资产转换，并保留原始 token 与规范值之间的 lineage。缺失与重复也在本阶段按类型处理：必填字段缺失时拒绝或阻断，可选字段缺失保留为空并计入完整性统计；完全重复按确定性 key 去重；主键重复且值一致时合并 lineage、保留多来源。每类处理都保留对应证据（locator、来源集合等），使后续可复核。
 
-兼容性门检查各批次是否在 Family、Schema、行粒度、实体层级、单位、语义和尺度上可合并。未知单位、未知 value semantics 或不受支持的 scale 不会被模型根据常识静默修正；系统可以阻断，或以 HIL 询问研究者选择合法 correction。
+兼容性门检查各批次是否在 Family、Schema、行粒度、实体层级、单位、语义和尺度上可合并。未知单位、未知 value semantics 或不受支持的 scale 不会被模型根据常识静默修正；单位不一致仅在注册转换存在时换算，否则系统阻断，或以 HIL 询问研究者选择合法 correction。
 
 对于 probe-to-gene，映射资产本身也需要 SourceAsset 与摘要。未映射 probe、一个 probe 对应多个 gene、annotation 与表达平台不匹配等情况应进入 coverage、rejected 或 ambiguity 记录。Gold 案例应报告映射覆盖率，而不能只展示最终成功行。
 
-### 3.7 第六步：缺失、重复与冲突处理
+### 3.7 第六步：多源整合与多表组装
 
-系统不把所有质量问题都归为“清洗成功”，而是按问题类型采用不同语义：必填字段缺失时拒绝或阻断，可选字段缺失保留为空并计入完整性统计；完全重复按确定性 key 去重；主键重复且值一致时合并 lineage、保留多来源，值冲突时按注册策略保留 source-of-record 并写 conflict audit，必要时阻断；单位不一致仅在注册转换存在时换算，否则阻断或进入 HIL；实体 identity 冲突不强制合并而保留 crosswalk；统计异常作为 warning 或人工核查信号，不默认自动改值。每类处理都保留对应证据（locator、来源集合、冲突候选值与决策等），使后续可复核。
+对同一规范 Schema 的批次，Integrator 按注册 merge strategy 合并，并在最终 source-of-record 行上重新汇总 lineage 和 confidence。合并时的冲突按注册策略处理：主键重复且值冲突时保留 source-of-record 并写 conflict audit，必要时阻断；实体 identity 冲突不强制合并而保留 crosswalk；统计异常作为 warning 或人工核查信号，不默认自动改值。
 
 当前表达整合采用确定性策略，冲突时的 first source wins 能保证复现，但不能证明第一个值在科学上更正确。因此冲突审计必须进入正式产物，答辩中也不能把“处理稳定”表述为“冲突值自动判真”。
 
-### 3.8 第七步：多源整合与多表组装
-
-对同一规范 Schema 的批次，Integrator 按注册 merge strategy 合并，并在最终 source-of-record 行上重新汇总 lineage 和 confidence。对需要多实体关系的数据，Family Assembly 生成多表候选，并检查主键、外键、基数和表角色。
+对需要多实体关系的数据，Family Assembly 生成多表候选，并检查主键、外键、基数和表角色。
 
 多表设计比单一宽表更适合生物医学对象。以生物活性数据为例，可拆分为 activities（测量值）、assays（实验条件）、compounds/targets（规范身份）、sources 与 compound crosswalks 等表，而不是压成重复严重的宽表。多表 Publication Manifest 记录 tables、relations、provenance refs 和 confidence refs。这样既减少宽表重复，也让下游使用者能明确关联规则，而不是根据列名猜 join key。
 
-### 3.9 第八步：Validation、Confidence 与 ProductAssessment
+### 3.8 第七步：Validation、Confidence 与 ProductAssessment
 
 Validation Profile 对候选结果执行发布前检查，覆盖 Schema 与字段类型、必填字段完整性与允许缺失率、主键唯一性与外键关系基数、实体标识 namespace 与 token preservation、单位/值尺度/允许语义、provenance 与 source locator 覆盖、confidence 记录与最终行对齐、artifact 摘要闭合，以及可复现性所需的输入与实现身份。
 
@@ -185,21 +183,25 @@ Validation Profile 对候选结果执行发布前检查，覆盖 Schema 与字�
 
 置信度按证据类型受到上限约束。确定性、受版本约束的解析可以获得较高可信等级；VLM、LLM、OCR 和 web extraction 等非确定性来源最高封顶为 medium，并可按记录进入人工审核。系统关注的是“该记录由何种证据和处理产生”，而不是让模型自由输出一个看似精确的概率。
 
-### 3.10 第九步：Durable HIL 与反馈修正
+### 3.9 第八步：Durable HIL 与反馈修正
 
 遇到模型或规则无法安全决定的问题时，Core 创建结构化 HIL 请求。请求包含合法选项、相关记录、证据摘要和 task/run/requirement 身份。前端允许用户 approve、reject 或 correct；响应只有在 evidence digest 和任务身份匹配时才可恢复原操作。
 
 典型 HIL 场景包括字段映射存在多个候选、未知单位或测量语义、probe-to-gene 映射歧义、低置信度图表点确认、动态 Family 候选是否接受为正式产品，以及冲突记录需指定保留策略等。
 
+从审批对象看，HIL 覆盖三级：工具许可与凭据授权（approve/reject）、数据审核（字段映射、单位、图表与网页证据）、发布验收。其中发布验收不可绕过——只有人工 accept 后系统才执行发布，这与“Core 独占发布权”互为表里。
+
 HIL 不是聊天中的一句“请确认”。请求和决策均落盘，进程重启后可以确定性恢复。对于数据更正，系统应重新执行受影响阶段并发布新版本，通过 supersedes 关系保留旧版本历史，而不是覆盖原 Publication。
 
-### 3.11 第十步：不可变发布与消费时重验
+### 3.10 第九步：不可变发布与消费时重验
 
 发布器把通过质量门的候选复制到独立目录，生成 Manifest，并记录每个 artifact 的相对路径、媒体类型、字节数和 SHA-256。典型正式产物包括 primary_dataset 与 supporting_dataset CSV、Schema、Provenance、Audit/Validation 报告，以及 Manifest 与 Publication receipt。
 
 发布采用临时目录与原子切换，且在发布前检查执行锁和 generation fence，防止 timeout/cancel 后的旧操作晚到覆盖新结果。产品 API 在消费时重新验证 Manifest 与 artifact 摘要；若文件被修改或损坏，应返回错误而不是继续展示。
 
 ## 四、LLM 使用方法与上下文工程
+
+本章展开 Agent 侧（Dataset Core 外部）的实现细节，对应 1.5 的创新点一；其中 4.4 的置信度控制与验证阶段的确定性上限、Durable HIL 直接衔接。
 
 ### 4.1 系统提示中的完成契约
 
