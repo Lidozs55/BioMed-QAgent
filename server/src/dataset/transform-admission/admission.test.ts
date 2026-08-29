@@ -370,6 +370,51 @@ describe("Core transform quarantine admission", () => {
     ]);
   });
 
+  it("accepts an output-specific locator from the admitted input closure", async () => {
+    const fixture = await createFixture();
+    const inputLocator = fixture.expected.input_asset_receipts[0]!.locator_ref;
+    const receipt: TransformExecutionReceipt = {
+      ...fixture.receipt,
+      quarantined_output_receipts: [{
+        ...fixture.receipt.quarantined_output_receipts[0]!,
+        locator_ref: inputLocator,
+      }],
+    };
+    const evidence = await admitTransformExecution({
+      ...fixture.request,
+      receipt_evidence: {
+        evidence_class: "synthetic_test_fixture_receipt",
+        fixture_id: "fixture_input_locator_receipt",
+        fixture_receipt: receipt,
+      },
+    });
+
+    expect(evidence.decision).toBe("admitted");
+    expect(evidence.outputs[0]?.locator_ref).toBe(inputLocator);
+  });
+
+  it("rejects an output-specific locator outside the admitted input closure", async () => {
+    const fixture = await createFixture();
+    const receipt: TransformExecutionReceipt = {
+      ...fixture.receipt,
+      quarantined_output_receipts: [{
+        ...fixture.receipt.quarantined_output_receipts[0]!,
+        locator_ref: "locator_unknown_external",
+      }],
+    };
+    const evidence = await admitTransformExecution({
+      ...fixture.request,
+      receipt_evidence: {
+        evidence_class: "synthetic_test_fixture_receipt",
+        fixture_id: "fixture_unknown_locator_receipt",
+        fixture_receipt: receipt,
+      },
+    });
+
+    expect(evidence.decision).toBe("rejected");
+    expect(evidence.rejection_code).toBe("OUTPUT_CLOSURE_MISMATCH");
+  });
+
   it("rejects receipt-shaped input without an explicit evidence class", async () => {
     const fixture = await createFixture();
     const evidence = await admitTransformExecution({
