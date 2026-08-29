@@ -81,11 +81,11 @@ describe("hydration cache", () => {
   });
 
   it("returns null for corrupt JSON and drops the entry", () => {
-    localStorage.setItem("biomed-qagent:task-projection:v1:task_cache", "{nope");
+    localStorage.setItem("biomed-qagent:task-projection:v2:task_cache", "{nope");
 
     expect(loadTaskProjection("task_cache")).toBeNull();
     expect(
-      localStorage.getItem("biomed-qagent:task-projection:v1:task_cache"),
+      localStorage.getItem("biomed-qagent:task-projection:v2:task_cache"),
     ).toBeNull();
   });
 
