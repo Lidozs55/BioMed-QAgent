@@ -3257,4 +3257,166 @@ describe("runtime orchestration", () => {
     expect(fetchEvents).not.toHaveBeenCalled();
     expect(eventTransport.subscribe).not.toHaveBeenCalled();
   });
+
+  it("rebuilds a legacy cached timeline whose user messages use message ordinals", async () => {
+    const taskId = "task_legacy_order_cache";
+    const firstRunId = "run_bootstrap";
+    const secondRunId = "run_research";
+    const legacy = createTaskProjection(summary(taskId, "running", 17));
+    legacy.hydration = "snapshot";
+    legacy.lastSequence = 17;
+    legacy.items = [
+      {
+        itemId: `user:${firstRunId}`,
+        kind: "user_message",
+        runId: firstRunId,
+        sequence: 1,
+        createdAt: CREATED_AT,
+        content: "Bootstrap task",
+      },
+      {
+        itemId: `user:${secondRunId}`,
+        kind: "user_message",
+        runId: secondRunId,
+        sequence: 3,
+        createdAt: CREATED_AT,
+        content: "Research request",
+      },
+      {
+        itemId: `assistant:live:${firstRunId}:0`,
+        kind: "assistant_segment",
+        runId: firstRunId,
+        sequence: 14,
+        createdAt: CREATED_AT,
+        streamId: `live:${firstRunId}:0`,
+        content: "READY",
+        isStreaming: false,
+        finishReason: null,
+      },
+    ];
+    legacy.itemSequences = Object.fromEntries(
+      legacy.items.map((item) => [item.itemId, item.sequence]),
+    );
+    localStorage.setItem(
+      `biomed-qagent:task-projection:v1:${taskId}`,
+      JSON.stringify(legacy),
+    );
+
+    useAgentStore.getState().mergeTaskPage(
+      page([summary(taskId, "running", 17)]),
+      false,
+    );
+
+    const events = Array.from({ length: 17 }, (_, index) => {
+      const sequence = index + 1;
+      const base = {
+        schema_version: "2.0" as const,
+        event_id: `event_${taskId}_${sequence}`,
+        task_id: taskId,
+        stage_attempt_id: null,
+        sequence,
+        timestamp: `2026-07-14T00:00:${String(sequence).padStart(2, "0")}Z`,
+      };
+      if (sequence === 2 || sequence === 17) {
+        const runId = sequence === 2 ? firstRunId : secondRunId;
+        return {
+          ...base,
+          type: "run_queued" as const,
+          run_id: runId,
+          payload: {
+            type: "run_queued" as const,
+            request_id: `request_${runId}`,
+            input: sequence === 2 ? "Bootstrap task" : "Research request",
+          },
+        };
+      }
+      if (sequence === 14) {
+        return {
+          ...base,
+          type: "assistant_delta" as const,
+          run_id: firstRunId,
+          payload: {
+            type: "assistant_delta" as const,
+            delta: "READY",
+          },
+        };
+      }
+      return {
+        ...base,
+        type: "run_started" as const,
+        run_id: sequence < 17 ? firstRunId : secondRunId,
+        payload: { type: "run_started" as const },
+      };
+    }) satisfies EventEnvelope[];
+    const detail: TaskSnapshot = {
+      task: {
+        ...summary(taskId, "running", 17),
+        active_run_id: secondRunId,
+      },
+      runs: [],
+      messages: [
+        {
+          message_id: "message_user_bootstrap",
+          task_id: taskId,
+          run_id: firstRunId,
+          ordinal: 1,
+          role: "user",
+          content: "Bootstrap task",
+          created_at: CREATED_AT,
+        },
+        {
+          message_id: "message_ready",
+          task_id: taskId,
+          run_id: firstRunId,
+          ordinal: 2,
+          role: "assistant",
+          content: "READY",
+          created_at: CREATED_AT,
+        },
+        {
+          message_id: "message_user_research",
+          task_id: taskId,
+          run_id: secondRunId,
+          ordinal: 3,
+          role: "user",
+          content: "Research request",
+          created_at: CREATED_AT,
+        },
+      ],
+      older_messages_cursor: null,
+    };
+    const fetchEvents = vi.fn<APIClient["fetchEvents"]>().mockResolvedValue(events);
+    const controller = new RuntimeController(
+      api({
+        fetchTask: vi.fn().mockResolvedValue(detail),
+        fetchEvents,
+        fetchArtifacts: vi.fn().mockResolvedValue([]),
+      }),
+      transport(),
+    );
+
+    await controller.selectTask(taskId);
+
+    expect(fetchEvents).toHaveBeenCalledWith(taskId, {
+      afterSequence: 0,
+      limit: 1000,
+    });
+    expect(
+      localStorage.getItem(`biomed-qagent:task-projection:v1:${taskId}`),
+    ).toBeNull();
+    expect(
+      localStorage.getItem(`biomed-qagent:task-projection:v2:${taskId}`),
+    ).not.toBeNull();
+    expect(
+      useAgentStore.getState().tasksById[taskId].items
+        .filter((item) =>
+          item.kind === "user_message" || item.kind === "assistant_segment",
+        )
+        .map((item) => [item.kind, item.sequence, "content" in item ? item.content : null]),
+    ).toEqual([
+      ["user_message", 2, "Bootstrap task"],
+      ["assistant_segment", 14, "READY"],
+      ["user_message", 17, "Research request"],
+    ]);
+  });
 });

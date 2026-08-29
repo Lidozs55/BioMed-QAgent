@@ -496,6 +496,13 @@ export function prepareTaskSnapshotReplay(
       ...hydrated.tasksById,
       [snapshot.task.task_id]: {
         ...hydrated.tasksById[snapshot.task.task_id],
+        // The snapshot carries message ordinals, not durable event sequence
+        // numbers. Keep its message records for the final reconciliation, but
+        // do not seed timeline items before replay: otherwise upsertItem's
+        // immutable first-entry position prevents run_queued/assistant events
+        // from restoring the authoritative event clock.
+        items: [],
+        itemSequences: {},
         lastSequence: 0,
         hydration: "summary",
       },
