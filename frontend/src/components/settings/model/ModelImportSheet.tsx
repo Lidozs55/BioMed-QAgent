@@ -51,7 +51,7 @@ interface ModelImportSheetProps {
   api: SettingsAPIClient;
   providers: ProviderInfo[];
   managedModels: ManagedModelInfo[];
-  onSaved: () => void;
+  onSaved: (created?: ManagedModelInfo) => void | Promise<void>;
   initialProviderId?: string | null;
   initialModelId?: string | null;
 }
@@ -353,7 +353,7 @@ export function ModelImportSheet({
         params: manualDraft.params,
       });
       toast.success(`已添加 ${created.name}`);
-      await onSaved();
+      await onSaved(created);
       setSelectedId(created.id);
       setManualOpen(false);
       setManualDraft(EMPTY_MANUAL_DRAFT);
@@ -402,6 +402,7 @@ export function ModelImportSheet({
       context_window: item.context_window ?? null,
       max_output_tokens: item.max_output_tokens ?? item.suggested_max_tokens ?? null,
       suggested_max_tokens: item.suggested_max_tokens ?? null,
+      capabilities: item.capabilities,
       source: "api",
       params: defaultParams(item),
     });
@@ -412,7 +413,7 @@ export function ModelImportSheet({
     try {
       const created = await createFromDiscovered(item);
       toast.success(`已导入 ${created.name}`);
-      await onSaved();
+      await onSaved(created);
       setSelectedId(created.id);
       setSelectedIds(new Set());
     } catch (error) {
@@ -450,7 +451,7 @@ export function ModelImportSheet({
         last = await createFromDiscovered(item);
       }
       toast.success(`已导入 ${pending.length} 个模型`);
-      await onSaved();
+      await onSaved(last ?? undefined);
       if (last) {
         setSelectedId(last.id);
       }

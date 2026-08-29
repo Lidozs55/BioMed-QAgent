@@ -7,6 +7,8 @@ import { BioMedAgentError, type BioMedAgentEvent } from "./contracts.js";
 const MAX_CHUNK_LENGTH = 4_096;
 const MAX_ARGUMENT_STRING_LENGTH = 200;
 const MAX_OUTPUT_LENGTH = 4_096;
+/** 长驻 Host 进程中 terminalRuns 集合的条目上限（按插入序淘汰最旧条目）。 */
+const MAX_TERMINAL_RUNS = 4_096;
 const MAX_DEPTH = 3;
 const MAX_ITEMS = 20;
 const SENSITIVE_KEY = /api[-_]?key|authorization|bearer|credential|password|secret|token/i;
@@ -287,6 +289,12 @@ export class PiEventAdapter {
 
   private terminal(runId: string, payload: EventPayload): EventEnvelope[] {
     if (this.terminalRuns.has(runId)) return [];
+    // 防御上限：长驻 Host 进程里该集合只增不减（每个 run 一个短字符串），
+    // 超过上限时按插入序淘汰最旧条目，避免无界增长。
+    if (this.terminalRuns.size >= MAX_TERMINAL_RUNS) {
+      const oldest = this.terminalRuns.values().next().value;
+      if (oldest !== undefined) this.terminalRuns.delete(oldest);
+    }
     this.terminalRuns.add(runId);
     return [this.envelope(runId, payload)];
   }

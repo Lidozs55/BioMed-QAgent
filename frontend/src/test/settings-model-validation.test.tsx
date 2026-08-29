@@ -184,6 +184,62 @@ describe("ModelDetailDialog max-tokens baseline", () => {
   });
 });
 
+describe("ModelDetailDialog modality editing", () => {
+  it("submits capabilities when the user toggles a modality", async () => {
+    const model = makeModel({
+      capabilities: { text: true, image: false, video: false, audio: false },
+    });
+    const updateManagedModel = vi.fn().mockResolvedValue(model);
+    const api = mockApi({ updateManagedModel });
+
+    render(
+      <ModelDetailDialog
+        open
+        onOpenChange={() => undefined}
+        model={model}
+        api={api}
+        onSaved={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText("模态：图像"));
+    fireEvent.click(screen.getByRole("button", { name: "保存参数" }));
+    await waitFor(() => {
+      expect(updateManagedModel).toHaveBeenCalledTimes(1);
+    });
+
+    expect(updateManagedModel.mock.calls[0][1].capabilities).toEqual({
+      text: true,
+      image: true,
+      video: false,
+      audio: false,
+    });
+  });
+
+  it("does not resubmit capabilities when nothing changed", async () => {
+    const model = makeModel({});
+    const updateManagedModel = vi.fn().mockResolvedValue(model);
+    const api = mockApi({ updateManagedModel });
+
+    render(
+      <ModelDetailDialog
+        open
+        onOpenChange={() => undefined}
+        model={model}
+        api={api}
+        onSaved={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "保存参数" }));
+    await waitFor(() => {
+      expect(updateManagedModel).toHaveBeenCalledTimes(1);
+    });
+
+    expect(updateManagedModel.mock.calls[0][1].capabilities).toBeUndefined();
+  });
+});
+
 describe("ModelImportSheet manual context window", () => {
   function renderSheet(api: SettingsAPIClient) {
     return render(
