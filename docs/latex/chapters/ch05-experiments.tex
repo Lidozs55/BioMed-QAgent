@@ -231,9 +231,9 @@ gold9 & 需求指定的四源整合（Orphadata、HGNC、ClinVar、ClinGen） & 
 
 \section{可调用测试 API 与可交互前端}\label{sec:api}
 
-系统以 HTTP API 与 Web 前端同时暴露全部能力：API 覆盖健康自检、任务创建与名单、run 续跑/\allowbreak{}取消/\allowbreak{}恢复、权限裁决（approve/\allowbreak{}deny，绑定证据摘要）、发布物与逐 artifact 下载（消费时重验 SHA-256）
+系统以 HTTP API 与 Web 前端同时暴露全部能力：API 覆盖健康自检、任务创建与名单、run 续跑/\allowbreak{}取消/\allowbreak{}恢复、权限裁决（approve/\allowbreak{}deny，绑定证据摘要）、发布物与逐 artifact 下载（消费时重验 SHA-256）、任务级非权威工件隔离区的上传与下载（\ref{sec:three-layer} 节；multipart 提交，服务端重算摘要，收据固定标注非权威）
 及事件流实时订阅；前端（React 19 +\allowbreak{} Vite +\allowbreak{} Tailwind）提供任务列表与创建、run 事件时间线、发布物查看、人工确认结构化问卷（approve/\allowbreak{}reject/\allowbreak{}correct，
-覆盖字段映射/\allowbreak{}单位/\allowbreak{}发布确认等场景）与模型设置页。开发入口 \code{pnpm dev}（Host 8000 +\allowbreak{} 前端中间件），生产入口 \code{pnpm start}；案例的完整复现命令已在仓库
+覆盖字段映射/\allowbreak{}单位/\allowbreak{}发布确认等场景）、非权威工件隔离区入口（上传外部文件、查看覆盖/缺失范围与非权威标注、按收据下载）与模型设置页。开发入口 \code{pnpm dev}（Host 8000 +\allowbreak{} 前端中间件），生产入口 \code{pnpm start}；案例的完整复现命令已在仓库
 \code{docs/\allowbreak{}plans/\allowbreak{}} 与 \code{docs/\allowbreak{}gold-formal-rerun.md} 固化。
 
 \section{结构化输出样例与字段说明}\label{sec:samples}
