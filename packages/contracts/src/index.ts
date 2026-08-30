@@ -22,6 +22,7 @@ export * from "./hil.js";
 export type * from "./experimental-pi.js";
 export type * from "./json.js";
 export * from "./task-run.js";
+export * from "./untrusted-artifact-submission.js";
 export type * from "./websocket.js";
 
 /* ---- Wire DTO types (settings / model registry / declarative databases) ---- */

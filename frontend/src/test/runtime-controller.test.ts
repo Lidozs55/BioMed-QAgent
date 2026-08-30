@@ -315,7 +315,7 @@ describe("runtime orchestration", () => {
     const startup = startRuntime({ api: apiClient, transport: eventTransport });
 
     expect(apiClient.fetchDatabases).toHaveBeenCalledTimes(1);
-    expect(apiClient.fetchTasks).toHaveBeenCalledWith({ limit: 10 });
+    expect(apiClient.fetchTasks).toHaveBeenCalledWith({ limit: 15 });
     expect(eventTransport.connect).toHaveBeenCalledTimes(1);
     tasks.resolve(page([summary("task_active", "running", 7)]));
     await Promise.resolve();
@@ -2886,6 +2886,10 @@ describe("runtime orchestration", () => {
 
     const loading = controller.loadMoreTasks();
     await vi.waitFor(() => expect(apiClient.fetchTasks).toHaveBeenCalledTimes(1));
+    expect(apiClient.fetchTasks).toHaveBeenCalledWith({
+      limit: 10,
+      cursor: "cursor_delete_race",
+    });
     await controller.deleteTask("task_delete_page_race");
     nextPage.resolve(
       page(

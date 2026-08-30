@@ -18,7 +18,14 @@ import type {
   TaskMode,
   WebSocketControlFrame,
 } from "@biomed/contracts";
-import { parseJsonTextStrict, parseResumeHILInput } from "@biomed/contracts";
+import {
+  APIError,
+  parseJsonTextStrict,
+  parseResumeHILInput,
+  parseUntrustedArtifactMetadata,
+  parseUntrustedArtifactReceipt,
+  type UntrustedArtifactReceipt,
+} from "@biomed/contracts";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 
 import {
@@ -41,6 +48,12 @@ import {
   getTaskArtifact,
   listTaskArtifacts,
 } from "./artifact-store.js";
+import {
+  getUntrustedArtifact,
+  getUntrustedArtifactContent,
+  listUntrustedArtifacts,
+  storeUntrustedArtifact,
+} from "./untrusted-artifact-store.js";
 import {
   DurableTaskConflictError,
   DurableTaskRepository,
@@ -305,6 +318,21 @@ function isDynamicPublicationAcceptance(
   request: Pick<HILRequest, "requirement_id" | "review_type"> | null,
 ): boolean {
   return request?.requirement_id !== null && request?.review_type === "publication_acceptance";
+}
+
+/** GET quarantine listing response body (receipts are not formal artifacts). */
+interface QuarantineListing {
+  items: UntrustedArtifactReceipt[];
+}
+
+function quarantineListing(receipts: UntrustedArtifactReceipt[]): QuarantineListing {
+  return { items: receipts.map((receipt) => parseUntrustedArtifactReceipt(receipt)) };
+}
+
+function sanitizeQuarantineFilename(value: string): string {
+  const base = path.posix.basename(value.replaceAll("\\", "/"));
+  const sanitized = base.replace(/[^A-Za-z0-9._-]/g, "_");
+  return sanitized === "" ? "artifact.bin" : sanitized;
 }
 
 function controlError(
@@ -874,6 +902,66 @@ export async function createDurableAgentRuntime(
     }
     handle.controller.abort();
     return { status: "cancel_requested", task_id: taskId };
+  }
+
+  /**
+   * Receive an opaque, explicitly non-authoritative artifact into the task's
+   * quarantine (review/download only). Never a publication: no publish/, no
+   * events.jsonl append, no formal projection, no source_assets write.
+   */
+  async function submitQuarantineArtifact(taskId: string, request: IncomingMessage): Promise<unknown> {
+    if (await repository.getSnapshot(taskId) === null) throw new ReferenceError("Task not found");
+    const contentType = request.headers["content-type"];
+    if (contentType === undefined || !contentType.toLowerCase().startsWith("multipart/form-data")) {
+      throw new TypeError("Quarantine submission requires multipart/form-data");
+    }
+    const form = await new Response(Readable.toWeb(request), {
+      headers: { "content-type": contentType },
+    }).formData();
+    const metadataValue = form.get("metadata");
+    const fileValue = form.get("file");
+    if (typeof metadataValue !== "string") throw new TypeError("metadata is required");
+    if (fileValue === null || typeof fileValue === "string") throw new TypeError("file is required");
+    if (fileValue.size === 0) throw new TypeError("Submitted file is empty");
+    if (fileValue.size > MAX_IMPORT_FILE_BYTES) throw new RangeError("Submitted file exceeds limit");
+    let metadata;
+    try {
+      metadata = parseUntrustedArtifactMetadata(parseJsonTextStrict(metadataValue));
+    } catch (error) {
+      if (error instanceof APIError) throw new TypeError(error.message, { cause: error });
+      throw error;
+    }
+    return storeUntrustedArtifact(
+      pathForTask(options.tasksRoot, taskId),
+      taskId,
+      metadata,
+      Buffer.from(await fileValue.arrayBuffer()),
+    );
+  }
+
+  async function listQuarantineArtifacts(taskId: string): Promise<QuarantineListing> {
+    if (await repository.getSnapshot(taskId) === null) throw new ReferenceError("Task not found");
+    return quarantineListing(await listUntrustedArtifacts(pathForTask(options.tasksRoot, taskId)));
+  }
+
+  async function getQuarantineArtifact(taskId: string, submissionId: string): Promise<unknown> {
+    if (await repository.getSnapshot(taskId) === null) throw new ReferenceError("Task not found");
+    const receipt = await getUntrustedArtifact(pathForTask(options.tasksRoot, taskId), submissionId);
+    if (receipt === null) throw new ReferenceError("Quarantine submission not found");
+    return receipt;
+  }
+
+  async function getQuarantineArtifactContent(
+    taskId: string,
+    submissionId: string,
+  ): Promise<{ receipt: UntrustedArtifactReceipt; bytes: Buffer }> {
+    if (await repository.getSnapshot(taskId) === null) throw new ReferenceError("Task not found");
+    const stored = await getUntrustedArtifactContent(pathForTask(options.tasksRoot, taskId), submissionId);
+    if (stored === null) throw new ReferenceError("Quarantine submission not found");
+    if (stored.bytes.length !== stored.receipt.size_bytes || sha256Bytes(stored.bytes) !== stored.receipt.sha256) {
+      throw new ArtifactIntegrityError("Quarantine artifact bytes do not match its receipt");
+    }
+    return stored;
   }
 
   async function resumeRunOnce(taskId: string, runId: string, body: Record<string, unknown>): Promise<unknown> {
@@ -1504,6 +1592,41 @@ export async function createDurableAgentRuntime(
           "content-length": String(Buffer.byteLength(file.content, "utf8")),
         });
         response.end(file.content);
+        return;
+      }
+      const quarantineList = /^\/api\/v1\/tasks\/([^/]+)\/quarantine$/.exec(url.pathname);
+      if (request.method === "GET" && quarantineList !== null) {
+        sendJson(response, 200, await listQuarantineArtifacts(decodeURIComponent(quarantineList[1] ?? "")));
+        return;
+      }
+      if (request.method === "POST" && quarantineList !== null) {
+        sendJson(response, 201, await submitQuarantineArtifact(
+          decodeURIComponent(quarantineList[1] ?? ""),
+          request,
+        ));
+        return;
+      }
+      const quarantineGet = /^\/api\/v1\/tasks\/([^/]+)\/quarantine\/([^/]+)$/.exec(url.pathname);
+      if (request.method === "GET" && quarantineGet !== null) {
+        sendJson(response, 200, await getQuarantineArtifact(
+          decodeURIComponent(quarantineGet[1] ?? ""),
+          decodeURIComponent(quarantineGet[2] ?? ""),
+        ));
+        return;
+      }
+      const quarantineContent = /^\/api\/v1\/tasks\/([^/]+)\/quarantine\/([^/]+)\/content$/.exec(url.pathname);
+      if (request.method === "GET" && quarantineContent !== null) {
+        const { receipt, bytes } = await getQuarantineArtifactContent(
+          decodeURIComponent(quarantineContent[1] ?? ""),
+          decodeURIComponent(quarantineContent[2] ?? ""),
+        );
+        response.writeHead(200, {
+          "content-type": receipt.media_type,
+          "content-length": String(bytes.length),
+          "content-disposition": `attachment; filename="${sanitizeQuarantineFilename(receipt.name)}"`,
+          "x-untrusted-artifact": "true",
+        });
+        response.end(bytes);
         return;
       }
       const runs = /^\/api\/v1\/tasks\/([^/]+)\/runs$/.exec(url.pathname);
