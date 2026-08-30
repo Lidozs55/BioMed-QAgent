@@ -47,6 +47,10 @@ import type {
 } from "@/runtime/contracts";
 import { parseEventPayload } from "@/lib/eventParsers";
 import { formalHILLinkageMatches } from "@/lib/eventParsersPipeline";
+import {
+  parseUntrustedArtifactReceipt,
+  type UntrustedArtifactReceipt,
+} from "@biomed/contracts";
 
 function optionalNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
@@ -700,5 +704,20 @@ export function parsePublicationDetail(json: unknown): PublicationDetail {
     manifest: parseVersionedDatasetManifest(Reflect.get(obj, "manifest"), "publication response.manifest"),
     publication: parseDatasetPublication(Reflect.get(obj, "publication"), "publication response.publication"),
     artifacts: assertArray(Reflect.get(obj, "artifacts"), "publication response.artifacts", (value, index) => parseManifestArtifactEntry(value, `publication response.artifacts[${index}]`)),
+  };
+}
+
+export function parseQuarantineReceipt(json: unknown): UntrustedArtifactReceipt {
+  return parseUntrustedArtifactReceipt(json, "quarantine receipt");
+}
+
+export function parseQuarantineReceiptPage(json: unknown): { items: UntrustedArtifactReceipt[] } {
+  const obj = assertObject(json, "quarantine response");
+  return {
+    items: assertArray(
+      Reflect.get(obj, "items"),
+      "quarantine response.items",
+      parseQuarantineReceipt,
+    ),
   };
 }
