@@ -119,6 +119,58 @@ describe("core asset preview/extract tools", () => {
     expect(resolved.registration_receipt.media_type).toBe("text/csv");
   });
 
+  it("registers extracted members with their true media types (case-insensitive, nested paths, extension-only)", async () => {
+    const { root, registry, tools } = await createFixture();
+    const typedArchive = buildZip([
+      { name: "article.xml", data: Buffer.from("<?xml version='1.0'?><article/>", "utf8"), deflate: true },
+      { name: "UPPER.XML", data: Buffer.from("<doc/>", "utf8"), deflate: false },
+      { name: "nested/path/inner.xml", data: Buffer.from("<inner/>", "utf8"), deflate: false },
+      { name: "table.tsv", data: Buffer.from("a\tb\n1\t2\n", "utf8"), deflate: false },
+      { name: "meta.json", data: Buffer.from('{"ok":true}', "utf8"), deflate: false },
+      { name: "paper.pdf", data: Buffer.from("%PDF-1.4\n", "utf8"), deflate: false },
+      { name: "sheet.xlsx", data: Buffer.from("PK\u0003\u0004stub", "utf8"), deflate: false },
+      // Misleading extension: content sniffing is out of scope; the extension
+      // alone decides the media type.
+      { name: "lies.xml", data: Buffer.from("locus,pvalue\nrs1,1e-9\n", "utf8"), deflate: false },
+      { name: "noext", data: Buffer.from("\u0000\u0001\u0002opaque", "utf8"), deflate: false },
+      { name: "unknown.xyz", data: Buffer.from("mystery", "utf8"), deflate: false },
+    ]);
+    await writeFile(path.join(root, "source_assets", "typed.zip"), typedArchive);
+    const typedReceipt = await registry.register({
+      sourceId: "typed_fixture",
+      relativePath: "source_assets/typed.zip",
+      mediaType: "application/zip",
+    });
+    const [, extract] = tools;
+    const cases: ReadonlyArray<readonly [member: string, expectedMediaType: string]> = [
+      ["article.xml", "application/xml"],
+      ["UPPER.XML", "application/xml"],
+      ["nested/path/inner.xml", "application/xml"],
+      ["table.tsv", "text/tab-separated-values"],
+      ["meta.json", "application/json"],
+      ["paper.pdf", "application/pdf"],
+      ["sheet.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
+      ["lies.xml", "application/xml"],
+      ["noext", "application/octet-stream"],
+      ["unknown.xyz", "application/octet-stream"],
+    ];
+    const extractedIds = new Map<string, string>();
+    for (const [member, expectedMediaType] of cases) {
+      const result = await extract.execute({ asset_id: typedReceipt.asset_ref.asset_id, member });
+      expect(result.isError, member).not.toBe(true);
+      const body = JSON.parse(result.content) as { ok: boolean; asset_id: string; media_type: string };
+      expect(body.ok, member).toBe(true);
+      expect(body.media_type, member).toBe(expectedMediaType);
+      extractedIds.set(member, body.asset_id);
+    }
+    // The receipt the registry recorded (what XML-expecting registered parsers
+    // gate on) carries the corrected media type, not just the tool result body.
+    const xmlAssetId = extractedIds.get("article.xml") ?? "";
+    expect(xmlAssetId).toMatch(/^asset_[0-9a-f]{64}$/);
+    const resolved = await registry.resolveAny(xmlAssetId);
+    expect(resolved.registration_receipt.media_type).toBe("application/xml");
+  });
+
   it("rejects unknown members and unsafe names with explicit errors", async () => {
     const { tools, zipAssetId } = await createFixture();
     const [preview, extract] = tools;

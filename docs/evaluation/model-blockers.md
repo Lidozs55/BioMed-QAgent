@@ -34,12 +34,13 @@
 | I1(模型半) | **可行方案不执行、上交待确认**：模型自己诊断出"拆三次独立 build"是正解且完全在其权限内（prepare/submit 自家工具），却写进"需要您的协助"第 3 条终止——因权限面 deny 经验（C1/D1）错误泛化为"改构建形态需请示"；63/240 轮即收尾 | **执行优先条款**：凡不超出已激活工具权限、不需要外部凭证的方案，进求助清单前必须本 run 内实际执行一次并报告成败；求助清单只放真正的用户输入（凭证/文件/口径决策） |
 | I4 | **单点探测失败即判整通道死**：gold7 对 `dbsnp.files.v1` 只试 1 个 rsID 空回就归因"provider 不可用"；无法区分"全灭 vs 该记录缺失"，也给框架立项报了过重的诊断 | 归因前 ≥2-3 个独立样本探测，终答按样本粒度报告失败率 |
 | J4 | **可达面自我设限（穷尽界新亚型）**：gold8 FAERS 绑定不依赖已阵亡的名册（逐药 openFDA 可查，历史成功 9 药 68 行），本次只绑 1 药即以"仅 acetaminophen 有可溯源记录"收尾——与历史事实矛盾，成功形态未复制到达可及样本上限 | 穷尽界条款扩展：**已在本案跑通一次的绑定形态，须复制到全部已核实可达样本或在终答逐样本说明放弃原因**；终答"只有 X 可行"前须列尝试矩阵 |
+| K3（调试半） | **同错误签名连续重复不最小化定位**：gold9 从首次 `OUTPUT_BYTES_MISMATCH` 到自检出 JSON 换行符 bug（`\n`→字面 backslash-n）用了约 15 轮、~10+ 次同型失败，靠灵感而非二分复现 | 调试纪律条款：**同一错误签名连续 ≥3 次即停止常规重试，改用单变量最小化复现**；把该能力写进 [Control and recovery] 段（此 bug 最终由模型自行定位，教学只为省成本不是救正确性） |
 
 ### B 类：框架限制 → 需动代码
 
 | ID | 一句话病因 | 修复入口（立项建议） |
 |---|---|---|
-| B1 / D1 / D3 / E5 / G1 / H4 / I3 | **载体检视与发布回执链**（同一根因链，最高优先）：preview/extract 不认 gzip；download 后资产首查 "not found"（D3/H4/I3 三个入口实例）；execute 不回传 artifact `asset_id`；已发布产物全工具面零读取通道（artifact_32hex/裸 digest/workspace 路径全不可达）——gold4 实证烧 81% token 撞墙，gold2 因此把题面字段判成不可核实 | 一个代码立项：① execute/publication detail 返回 artifact asset_ids（最小修）② preview/extract 支持 gzip ③ 所有 download/acquire 工具落盘+登记同事务原子化 |
+| B1 / D1 / D3 / E5 / G1 / H4 / I3 | **载体检视与发布回执链**（同一根因链，最高优先）：preview/extract 不认 gzip；download 后资产首查 "not found"（D3/H4/I3 三个入口实例）；execute 不回传 artifact `asset_id`；已发布产物全工具面零读取通道（artifact_32hex/裸 digest/workspace 路径全不可达；gold9-K5 五件 artifact 全读不回，模型如实画界"ID-form gate + Core storage isolation"）——gold4 实证烧 81% token 撞墙，gold2/gold8 把题面字段判成不可核实 | 一个代码立项：① execute/publication detail 返回 artifact asset_ids（最小修）② preview/extract 支持 gzip ③ 所有 download/acquire 工具落盘+登记同事务原子化 ④ permission deny 响应附"无此读取通道"语义 |
 | E1 / E2 / G2 | **变异/试验发现链缺失**：clinvar.files.v1 要逐条 VCV 但无 accession 发现工具；clinicaltrials provider 要具体 NCT 但无检索工具；`variant_evidence` 静态族无 live provider | 补 esearch 家族发现工具 + variant_evidence 接 live provider（同族合并） |
 | D2 / C4 | **表达能力缺口**：gene-level 映射在正式路线中不可表达（mapping_files 拒 workspace 路径、probe_long.v2 无 gene 维度）；无 SOFT 注释平台直接不可闭合 | gene_expression family 增加 crosswalk 支撑表（参照 gold10 taxon crosswalk 方案）+ mapping_files 支持 Core-acquired 绑定 |
 | B7 | **配置双轨**：PUT settings 只改显示层、registry active 记录才是执行层（r1 整场跑错模型计费）。硬编码 default 那半已修（`fix/no-hardcoded-model-defaults`） | 剩余：PUT/active 级联或冲突拒绝；GET /settings 回显 `resolveActiveConfig()` 真值 |
@@ -53,7 +54,10 @@
 | I3 / J3 | staging 资产命名空间割裂新增实例：`download_supplementary` 的 ZIP 落 source_assets 但 preview "registered asset was not found"；**gold8 把该链的发布回执端放大到极限——为读回 1 个发布回执烧 29 调用/71% 墙钟，preview×17 全拒、4 次 `/publications/*` 外部锚定停审 deny**（链 1 断点最全形态） | 链 1 修复时覆盖 download_supplementary 登记原子性 + permission deny 响应附"无此读取通道"语义 |
 | J1 | **名册类外部源零 provider + 官方站全灭 + 无"用户上传→Core 权威资产"通道**：DILIrank 六通道逐 URL 实证不可达（DNS/404/401/ETIMEDOUT），题面 2/4 表 NO_DATA；quarantine 旁路明确非权威、进不了正式链 | 定义"用户上传→task-owned Core 资产→绑定"受治理正式通道（区别于 quarantine 非权威旁路）；DILIrank 镜像准入 |
 | J2 | **Bookshelf/LiverTox HTML 无 formalize provider**：页面可读（navigate 成功）但无 Core provider 把 HTML 变不可变载体 → "not publishable"。即 TODO"Recipe 格式宽路径（HTML/PDF）"的实测代价 | 按 Recipe 宽路径立项：HTML→registered parser→field_mapping HIL |
-| — | **wire 缺陷（gold7 新证，gold8 第 3 案）**：全量重建后 receipt-only submit 仍现 `Expected object at $projection`×3，随后自行消失进入实质迭代；gold8 submit@796/815 同错再现——**3/3 动态案全中**，stale-build 之外存在 stored-submission 重解析缺陷（疑与 a98a151a proposal 变更相关） | 写复现用例钉死（receipt-only + 无 echo 形态），修 contracts/proposal 版本兼容 |
+| — | **wire 缺陷（gold7 新证，gold8 第 3 案，gold9-K4 第 4 案）**：全量重建后 receipt-only submit 仍现 `Expected object at $projection`×3，随后自行消失进入实质迭代；gold8 submit@796/815 同错再现；**gold9 模型自己数出 receipt-only `$projection undefined`×3 计入对账表——4/4 动态案全中**，stored-submission 重解析缺陷（疑与 a98a151a proposal 变更相关） | 写复现用例钉死（receipt-only + 无 echo 形态），修 contracts/proposal 版本兼容。**优先级最高** |
+| K1 | **静态适配器 32MiB 容量上限**：Orphadata 54MB XML 物理进不了 registered 文件通道，题面起点（疾病目录）只剩动态 transform 硬啃 | 大 XML 分块/流式 provider 或容量分级准入 |
+| K2 | **transform_source 尺寸天花板**：完整四表 integrator 装不进一次 prepare/submit 信封，多次截断失败后模型被迫发 383 字节"通路探针"代替产品 | prepare 分步传模块 / 提上限 / receipt 端存代码、submit 只传引用 |
+| K3（方言半） | **transform 沙箱方言陷阱**：禁 bracket access + JSON 内 `\n` 到 Core 变字面 backslash-n，同一 OUTPUT_BYTES_MISMATCH 烧 ~10+ 轮，是 20M token 主要来源 | admission 报错附最小可复现样例 + 官方 workaround 清单（换行用 String.fromCharCode(10) 等）写进 transform 工具描述 |
 | — | supervisor 对 Host events 瞬时 HTTP 500 零容错（3 连败，均在 operation_progress 风暴时段）+ Host 端 500 本身 | 运维面：supervisor 加重试；查 server events 端点 500 根因（疑似独立 bug） |
 | H3 | **stale-build 撕裂**：`node dist/index.js --static` 裸启动绕过 `prestart/build-contracts-if-needed`，contracts dist 落后 server 源码一个 rename（c005e323）→ gold5-r1 全场 thrash 报废 | 运维纪律：重启 static Host 前强制 `pnpm build`；或给 supervisor/runner 加 dist-vs-src mtime 启动断言 |
 
@@ -251,7 +255,30 @@ Host 的 `contracts/dist`（21:38 构建）落后于队友 `c005e323`（23:07，
 - **正样本**：browser 韧性首次全面生效——官方源探测六通道**逐 URL 带失败原因**（对比历史上 555 次暴力枚举是行为质变）；拒绝用模型记忆臆造 50 药名册；两个无匹配 PT 记 unavailable 不记 0；求助清单含可执行域名/文件类型。
 - 诚实边界与历史一致：FAERS 计数=MedDRA PT 报告次数语义已在终答声明；部分维度正式+其余结构化阻断仍是该上游条件下的正确终态。
 
-## gold9–gold10 @ 复跑（待组员执行）
+## gold9 @ qwen3.8-flash（2026-08-30，main@0335ce92a1f8，task_ts_ea697df6-40a4-46b5-aab0-52db247419c2）
+
+> 题面依 §5.4 重建。**全九案成本之王：20.49M token（次高 2.6 倍）/ 118 calls / 90 分钟 / output 217.6k**。终态 succeeded_publication——**但正式物本身是 383 字节的通路探针**（transform=`pid.nlfix_probe`，BTK 单基因 2 行，row_count 硬编码），模型自己在终答里这么定性："该发布证明 Dynamic 路线可对 Core-acquired 载体执行发布——**不是**已完成的 PID 产品，我不作超额宣称"。四表实际状态：T1 基因/T4 跨源证据 有行（provisional workspace 层，回读验证）；T2 疾病/T3 关联 **故意留空 NO_DATA**（无可达源，填=造假）。
+> 前 35 分钟：Orphadata 官方端点 ~15KB/s 爬完 74MB（execute 下载阶段**零进度事件**，与挂死无法区分——观测点）。
+>
+> | 阶段 | 调用 | input | output | cache_read | token | 墙钟 |
+> | --- | --- | --- | --- | --- | --- | --- |
+> | 发布前（prepare×22+submit×15） | 98 | 1,628,412 | **211,798** | 14,336,128 | 16,176,338 | 5035s |
+> | 发布后 | 20 | 68,541 | 5,804 | 4,240,512 | 4,314,857 | 325s |
+>
+> 42 次工具错误；0 压缩/停审/HIL。**模型对 42 失败做了逐类对账表**（见正样本）。
+
+| # | 卡点 | 归类 | 证据 | 建议修法（暂不执行） |
+| - | ---- | ---- | ---- | -------------------- |
+| K1 | **静态适配器 32MiB 容量上限**：Orphadata en_product1.xml 54MB 物理进不了 `registered` 文件通道 → 疾病目录这一题面起点只剩动态 transform 自己啃 | 框架（容量） | 终答 ledger reconciliation "static adapter caps (54 MB > 32 MiB)" | 大 XML 分块/流式 provider，或容量分级准入 |
+| K2 | **transform_source 尺寸天花板 → 四表 integrator 装不进一次提交，被迫降级发探针**：完整变换（多 binding+列映射）超 envelope 被截断（模型多次 truncated echo 失败），最终只能发"通路证明"探针版 | 框架（提交面契约） | 终答求助 2（"Server-side preflight_receipt resolution, or a larger transform_source envelope"） | prepare 分步提交 transform 模块 / 提高上限 / receipt 端存代码只传引用 |
+| K3 | **transform 方言限制的成本中心**：禁 bracket access（`a[0]`）+ 模型在 JSON 里写 `\n` 到 Core 变字面 backslash-n——**同一 OUTPUT_BYTES_MISMATCH 烧 ~10+ 轮** 才自检出 `String.fromCharCode(10)` workaround。九案 20M token 的主要来源是这 37 次 dynamic 迭代 | 框架（方言教学）+ 提示词（二分定位） | 终答收回声明 1；prepare/submit 错误谱 262→882 | 方言文档给出换行/下标的官方 workaround 清单； admission 报错附最小可复现样例 |
+| K4 | **`$projection` wire 缺陷第 4 案实锤**：模型自己数出 "receipt-only `$projection undefined` ×3" 并列入对账表 | 框架 | 终答 ledger reconciliation | 同 wire 行，**优先级=最高**（4/4 动态案全中） |
+| K5 | **G1 依旧**：发布物 5 件 artifact 全部读不回（"ID-form gate + Core storage isolation"），verification limits 段如实画界 | 框架（链 1） | 终答 verification limits | 链 1 |
+
+- **正样本（九案诚实度峰值）**：**自我收回两个结论**（"Orphanet 空载体"撤回并归因自身换行 bug；"583=pathogenic+likely" 改标 "pathogenic-only，total 1158"）；对 42 失败做逐类别对账；探针发布不作产品宣称；T2/T3 宁空不造；ClinVar 复核 ADA/CARD11/RAG1 与 Table4 逐值一致后才写报告。
+- 提示词面唯一改进：从首次 MISMATCH 到定位换行 bug 用了 ~15 轮——"同一错误签名连续 3 次即最小化单变量复现"的调试纪律可以教（它最终是自己找到的，教学可压缩成本）。
+
+## gold10 @ 复跑（待组员执行）
 
 
 

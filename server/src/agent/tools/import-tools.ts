@@ -47,7 +47,9 @@ const MEDIA_TYPES: Readonly<Record<string, string>> = {
   ".csv.gz": "application/gzip",
 };
 
-function mediaTypeFor(filename: string): string {
+/** Extension-based media type (case-insensitive, deterministic); shared with
+ * the Core asset tools so extracted archive members register true types. */
+export function mediaTypeFor(filename: string): string {
   const lower = filename.toLowerCase();
   for (const suffix of [".tsv.gz", ".csv.gz", ".gz", ".zip", ".xlsx", ".xls", ".pdf", ".csv", ".tsv", ".txt", ".json", ".xml", ".sdf", ".mol", ".pdb", ".cif"]) {
     if (lower.endsWith(suffix)) return MEDIA_TYPES[suffix] ?? "application/octet-stream";
