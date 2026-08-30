@@ -55,7 +55,7 @@ VLM/\allowbreak{}PDF/\allowbreak{}caption 的抽取结果先固化为任务所�
 
 对同一规范表结构的批次，整合器按注册的合并策略合并，并在最终 source-of-record 行上重新汇总血缘和置信度。合并时的冲突按注册策略处理：主键重复且值冲突时保留 source-of-record 并写冲突审计，必要时阻断；实体身份冲突不强制合并而保留交叉映射表；统计异常作为警告或人工核查信号，不默认自动改值。
 
-gold7 是这组规则的实测样本：\code{locus} 表以 rsID 为合并键，GWAS Catalog 关联与补充材料 75 位点表在主键上重叠、值一致时合并血缘并保留双来源标记（\code{in\_\allowbreak{}supp\_\allowbreak{}75\_\allowbreak{}loci}）；同一坐标的两个来源值以双列并排保留而非静默取舍，冲突审计随产物交付。当前表达整合采用确定性策略：冲突时 first source wins 保证可复现，冲突审计随正式产物交付，裁真保留给研究者与人工确认（边界定性见 \ref{sec:boundaries} 节）。
+整合层优先做“可复核的记录”，而不是“替研究者定案”。gold7 是实测样本：\code{locus} 表以 rsID 为合并键，GWAS Catalog 关联与补充材料 75 位点表在主键上重叠、值一致时合并血缘并保留双来源标记（\code{in\_\allowbreak{}supp\_\allowbreak{}75\_\allowbreak{}loci}）；同一坐标的两个来源值以双列并排保留而非静默取舍——这些字段对齐与冲突记录由规范化、兼容性阶段与整合器的确定性规则共同完成，冲突审计随产物交付，无法自动裁决时才发起人工确认（\ref{sec:hil} 节）。真正需要“二选一”的少数同键冲突，表达整合采用 first source wins 作为可复现的终局裁决；裁真仍显式保留给研究者与人工确认（边界定性见 \ref{sec:boundaries} 节边界 5）。
 
 \section{阶段6 derive：多表组装}\label{sec:stage6-derive}
 
@@ -86,7 +86,7 @@ gold7 是这组规则的实测样本：\code{locus} 表以 rsID 为合并键，G
 
 审批档位按对象配置：每类审批范围可设 \code{human\_\allowbreak{}review}（人工审批）、\code{llm\_\allowbreak{}pre\_\allowbreak{}review}（LLM 初审，仅不通过项上报人工）或 \code{auto\_\allowbreak{}approve}（显式自动通过）；初审不通过或模型调用失败一律回退人工（fail-safe），发布边界范围强制人工、配置其他档位会被直接拒绝。低风险确认可配置自动放行，发布验收始终人工。
 
-请求和决策均落盘，进程重启后可以确定性恢复：系统持久化审批挂起时的原始工具调用，恢复时以原调用重放并由执行器从检查点续跑，零 LLM 参与；主机重启后无法确定性续跑的发布验收直接判整 run 失败，悬空的权限请求一律清算为拒绝。对于数据更正，系统重新执行受影响阶段并发布新版本，通过 supersedes 关系保留旧版本历史。
+请求和决策均落盘，进程重启后可以确定性恢复：系统持久化审批挂起时的原始工具调用，恢复时以原调用重放并由执行器从检查点续跑，零 LLM 参与；主机重启后无法确定性续跑的发布验收直接判整 run 失败，悬空的权限请求一律清算为拒绝。对于数据更正，系统重新执行受影响阶段并发布新版本，通过 supersedes 关系保留旧版本历史。需要澄清的是：判失败的是无法确定性续跑的单个 run，其中已完成且摘要一致的阶段仍经检查点复用、不会整体重跑（gold9 中断后续测一次通过即为实例，见 \ref{sec:reliability-base} 节），因此基础设施故障不会丢失已完成的工作。
 
 \section{可靠性基座}\label{sec:reliability-base}
 
