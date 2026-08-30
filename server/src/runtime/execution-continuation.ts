@@ -27,6 +27,7 @@ export interface SuspendedExecutionContinuation {
   source_files: Record<string, string>;
   mapping_files: Record<string, string>;
   metadata_files: Record<string, string>;
+  cleaning_rule_receipt?: import("@biomed/contracts").CleaningRulePreflightReceipt;
   registered_source_asset_ids: string[];
   created_at: string;
 }

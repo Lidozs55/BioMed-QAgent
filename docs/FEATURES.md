@@ -19,7 +19,8 @@
 ## 1. 一句话定位
 
 BioMed-QAgent 是一个**生物医学数据智能检索与整合系统**：用户用自然语言描述
-研究主题，系统自动完成「查找来源 → 获取原始数据 → 解析/清洗/字段对齐 → 整合 →
+研究主题，系统对已注册执行路线（family/schema/provider 闭合、输入闭包明确）的任务
+自动完成「查找来源 → 获取原始数据 → 解析/清洗/字段对齐 → 整合 →
 带来源与审计的标准化输出」，让数据处理**可追溯、可验证、可恢复**。
 
 它**不**直接"猜"出一个 CSV，也不会在缺少数据证据时生成科研或临床结论——所有
@@ -108,7 +109,12 @@ BioMed-QAgent 是一个**生物医学数据智能检索与整合系统**：用�
 2. **解析（Parse）**：按来源 Adapter 解析为 `DataBatch`；
 3. **归一化（Canonicalize / Normalize）**：字段映射、实体与单位规范化；字符串相似度
    只能产生 `proposed` 候选，必须经 Adapter / Schema Registry / 可信元数据 / 人工
-   批准才进入正式合并（ADR §字段映射）；
+   批准才进入正式合并（ADR §字段映射）。Agent 可用 `preflight_cleaning_rules` 获取
+   Core 重排的候选与注册规则预检；预检 receipt 只在需要应用已接受规则时作为 execute
+   的必要输入，`needs_hil` 是“应走后续 HIL 流程”的标记而非自动创建的 durable HIL，
+   通用字段映射 transform 当前不执行（仅注册单位规则与精确 schema identity 可自动接受）；
+   `inspect_source_coverage` 可消费已发布的
+   `source_coverage_report.json`，据声明绑定范围内的失败项决定补源，不能宣称全网查全；
 4. **兼容性门禁（Compatibility Gate）**：family / row granularity / key / measurement
    兼容，才允许合并；
 5. **整合（Integrate）**：确定性合并，含磁盘化去重（`node:sqlite` temp table + 资源上限）；
@@ -145,8 +151,12 @@ BioMed-QAgent 是一个**生物医学数据智能检索与整合系统**：用�
 - 可选使用 Playwright 对网页 / 论文页面截图；
 - 以 **Qwen-VL / PDF 解析 / caption 文本** 组成**降级链路**提取图表数据；
 - 提取产物带 `estimated` / `axis_unclear` / `legend_unclear` / `human_review_status`
-  质量字段，可复用 Durable HIL / Confidence 协议做人工审核（进阶能力，规划接入受信任
-  Publication，见 [roadmap.md](architecture/roadmap.md)）。
+  质量字段，可复用 Durable HIL / Confidence 协议做人工审核。
+- 能力分两段：**canonical `chart-evidence` 数据 → 生产 `bioactivity_measurement`
+  图表四表的正式发布已闭环**（schema + registered parsers + 组装分派、点级
+  `chart_evidence_gate` fail-closed、HIL correction 与逐件 SHA-256，见
+  [TODO.md](TODO.md) 完成记录）；`extract_chart_data_vlm` 的 workspace CSV →
+  canonical evidence 注册的生产桥接与自然语言端到端案例**仍待办**（[TODO.md](TODO.md) P0）。
 
 ---
 
@@ -163,7 +173,9 @@ BioMed-QAgent 是一个**生物医学数据智能检索与整合系统**：用�
   [reports/2026-08-29-gold-qwen-direct-validation-study.md](reports/2026-08-29-gold-qwen-direct-validation-study.md)）；
 - dynamic family 发布为 **receipt-only submit**：submit 只需 `schema_version` 与
   prepare 返回的 `preflight_receipt`，服务端按收据解析已存储的 prepared
-  submission（全量回显仍兼容）；发布拒绝消息携带失败检查的 `detail`；
+  submission（全量回显仍兼容）；prepared submission 存储在 Host 进程内
+  coordinator（`server/src/runtime/dynamic-family-preflight-coordinator.ts`），
+  不是跨重启 durable store；发布拒绝消息携带失败检查的 `detail`；
 - 前端状态是后端事件的**投影**，不是事实来源。
 
 ### 4.2 实时反馈与界面

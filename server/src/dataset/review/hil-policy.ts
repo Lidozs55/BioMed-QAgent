@@ -110,7 +110,7 @@ function applyMappingReview(
 
 const LINEAR_NUMBER = "([+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:e[+-]?\\d+)?)";
 
-function registeredUnitCorrection(
+export function registeredUnitCorrection(
   sourceUnit: string,
   profile: NormalizationProfile,
 ): UnitCorrection | null {

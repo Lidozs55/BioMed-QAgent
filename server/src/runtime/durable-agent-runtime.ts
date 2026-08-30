@@ -1194,6 +1194,9 @@ export async function createDurableAgentRuntime(
         ...(Object.keys(continuation.metadata_files).length > 0
           ? { metadata_files: continuation.metadata_files }
           : {}),
+        ...(continuation.cleaning_rule_receipt === undefined
+          ? {}
+          : { cleaning_rule_receipt: continuation.cleaning_rule_receipt }),
       },
       controller.signal,
     ).finally(() => {

@@ -7,8 +7,12 @@ description: Execute a dataset requirement through the trusted Dataset Core boun
 
 Prepare a DatasetExecutionSpec, validate it with `validate_dataset_execution`, correct
 any structured validation errors, then execute it through
-`execute_dataset_execution`. Treat only the resulting Publication as formal
-output.
+`execute_dataset_execution`. After a publication, inspect Core coverage with
+`inspect_source_coverage`; failed or not-attempted declared bindings require an
+independent source attempt and a new formal build. Use `preflight_cleaning_rules`
+for unit or field-mapping proposals: only unique Core-registered rules may be
+accepted automatically; similarity-only or ambiguous candidates remain HIL-bound.
+Treat only the resulting Publication as formal output.
 
 ## Protocol
 
