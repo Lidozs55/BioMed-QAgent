@@ -35,6 +35,7 @@
 | I4 | **单点探测失败即判整通道死**：gold7 对 `dbsnp.files.v1` 只试 1 个 rsID 空回就归因"provider 不可用"；无法区分"全灭 vs 该记录缺失"，也给框架立项报了过重的诊断 | 归因前 ≥2-3 个独立样本探测，终答按样本粒度报告失败率 |
 | J4 | **可达面自我设限（穷尽界新亚型）**：gold8 FAERS 绑定不依赖已阵亡的名册（逐药 openFDA 可查，历史成功 9 药 68 行），本次只绑 1 药即以"仅 acetaminophen 有可溯源记录"收尾——与历史事实矛盾，成功形态未复制到达可及样本上限 | 穷尽界条款扩展：**已在本案跑通一次的绑定形态，须复制到全部已核实可达样本或在终答逐样本说明放弃原因**；终答"只有 X 可行"前须列尝试矩阵 |
 | K3（调试半） | **同错误签名连续重复不最小化定位**：gold9 从首次 `OUTPUT_BYTES_MISMATCH` 到自检出 JSON 换行符 bug（`\n`→字面 backslash-n）用了约 15 轮、~10+ 次同型失败，靠灵感而非二分复现 | 调试纪律条款：**同一错误签名连续 ≥3 次即停止常规重试，改用单变量最小化复现**；把该能力写进 [Control and recovery] 段（此 bug 最终由模型自行定位，教学只为省成本不是救正确性） |
+| L1 | **回声死循环（退化形态，gold10 末段）**：~20 轮复读同一句"I'll test the two decisive facts"零工具调用，run 在"明知三表可发"状态下自我终止 0 发布；模型侧无法自纠（复读本身消耗了停止线） | 提示词只救一半（"计划句必须绑定工具调用"）；主修在框架行（runtime 相似度检测→steer/no_progress 护栏） |
 
 ### B 类：框架限制 → 需动代码
 
@@ -56,6 +57,8 @@
 | J2 | **Bookshelf/LiverTox HTML 无 formalize provider**：页面可读（navigate 成功）但无 Core provider 把 HTML 变不可变载体 → "not publishable"。即 TODO"Recipe 格式宽路径（HTML/PDF）"的实测代价 | 按 Recipe 宽路径立项：HTML→registered parser→field_mapping HIL |
 | — | **wire 缺陷（gold7 新证，gold8 第 3 案，gold9-K4 第 4 案）**：全量重建后 receipt-only submit 仍现 `Expected object at $projection`×3，随后自行消失进入实质迭代；gold8 submit@796/815 同错再现；**gold9 模型自己数出 receipt-only `$projection undefined`×3 计入对账表——4/4 动态案全中**，stored-submission 重解析缺陷（疑与 a98a151a proposal 变更相关） | 写复现用例钉死（receipt-only + 无 echo 形态），修 contracts/proposal 版本兼容。**优先级最高** |
 | K1 | **静态适配器 32MiB 容量上限**：Orphadata 54MB XML 物理进不了 registered 文件通道，题面起点（疾病目录）只剩动态 transform 硬啃 | 大 XML 分块/流式 provider 或容量分级准入 |
+| L2 | **DA 载体 media-type 断链（gold10）**：论文补充 xlsx 经 acquire/extract 全链路 media type 恒为 `application/octet-stream`，DA 适配器只收 `text/csv`/真 xlsx → 唯一现实数据源进不去；`paper_supplement_differential_abundance` xlsx 解析通道存在但 guidance 未覆盖，模型外围试探 20+ 次不可见 | extract 解码产物按成员真实类型标注 media type；research_data_guidance microbiome 段点名 xlsx→DA 绑定姿势 |
+| L5 | **spec-as-string 4096 字符 transport 限制**（与 K2 同族）：多绑定四表 spec 逼近上限，压缩 transform 表达 | 与 K2 信封提升合并立项 |
 | K2 | **transform_source 尺寸天花板**：完整四表 integrator 装不进一次 prepare/submit 信封，多次截断失败后模型被迫发 383 字节"通路探针"代替产品 | prepare 分步传模块 / 提上限 / receipt 端存代码、submit 只传引用 |
 | K3（方言半） | **transform 沙箱方言陷阱**：禁 bracket access + JSON 内 `\n` 到 Core 变字面 backslash-n，同一 OUTPUT_BYTES_MISMATCH 烧 ~10+ 轮，是 20M token 主要来源 | admission 报错附最小可复现样例 + 官方 workaround 清单（换行用 String.fromCharCode(10) 等）写进 transform 工具描述 |
 | — | supervisor 对 Host events 瞬时 HTTP 500 零容错（3 连败，均在 operation_progress 风暴时段）+ Host 端 500 本身 | 运维面：supervisor 加重试；查 server events 端点 500 根因（疑似独立 bug） |
@@ -278,7 +281,36 @@ Host 的 `contracts/dist`（21:38 构建）落后于队友 `c005e323`（23:07，
 - **正样本（九案诚实度峰值）**：**自我收回两个结论**（"Orphanet 空载体"撤回并归因自身换行 bug；"583=pathogenic+likely" 改标 "pathogenic-only，total 1158"）；对 42 失败做逐类别对账；探针发布不作产品宣称；T2/T3 宁空不造；ClinVar 复核 ADA/CARD11/RAG1 与 Table4 逐值一致后才写报告。
 - 提示词面唯一改进：从首次 MISMATCH 到定位换行 bug 用了 ~15 轮——"同一错误签名连续 3 次即最小化单变量复现"的调试纪律可以教（它最终是自己找到的，教学可压缩成本）。
 
-## gold10 @ 复跑（待组员执行）
+## gold10 @ qwen3.8-flash（2026-08-30，main@1a8161cd，task_ts_6da1b112-27e9-4a7b-9416-84140379da5e）
+
+> 题面依 `docs/plans/gold10-four-table-closure.md` 重建。终态 **blocked_no_publication**——历史同题（main@d084a7e4）曾四表正式闭包，本次回退。108 calls / 1185s / 9.2M token 全烧在发布前（post=0）；峰值上下文 135k；44 工具错误（execute×22 失败）。
+> 模型自己确认的关键事实链：① `gut_microbiome` 静态族 `registered_multitable_identity` **要求每次 run 四表全非空**（部分 build 结构性拒绝）；② 差异丰度（DA）表唯一输入=补充材料，但 **xlsx 成员与 extract_core_archive 解码产物 media type 全是 `application/octet-stream`**，DA 适配器只接受 `text/csv`/xlsx 真型 → DA 断链 → 四表整体 all-or-nothing 连坐；③ 模型退而求其次试 **三表 partial（转动态）——prepare×7/submit×2 全败**，其中 `Expected object at $projection` 第 5 案（seq1240）。
+
+| # | 卡点 | 归类 | 证据 | 建议修法（暂不执行） |
+| - | ---- | ---- | ---- | -------------------- |
+| L1 | **模型回声死循环（十案未见的新退化形态）**：末段 ~20 轮把"I'll test the two decisive remaining facts (GMRepo reachability, plain text/csv members)"同句复读 10+ 次而**不产生对应工具调用**，最终 run 在"明知三表可发"（终答原话 "Three tables now close; only differential abundance blocks"）状态下自我终止、0 发布。GMRepo 可达性始终未实测 | 模型（退化）+ 框架（无 nudge 机制） | assistant-messages.md 尾部复读段；events 尾部 tool_started 空白区 | 运行时检测：连续 N 轮正文相似度高且零工具调用 → 注入一次 steer（"执行你反复声称要测的那一个调用"）或触发 no_progress 护栏；提示词侧：要求每段计划句必须绑定一个工具调用 |
+| L2 | **DA 载体 media-type 断链**：论文补充 xlsx（该表现实世界主形态）经 acquire→preview/extract 全链路后 media type 停在 octet-stream，DA 适配器拒收；d084a7e4 落地的 `paper_supplement_differential_abundance` xlsx 解析通道**存在但 guidance 未覆盖**，模型找不到只能外围试探 20+ 次 | 框架（通道可见性）+ 提示词（guidance） | 终答 "Decoded worksheet is still application/octet-stream, not text/csv" | extract 解码产物按成员真实类型标注 media type；research_data_guidance 的 microbiome 段点名 xlsx→DA 适配器绑定姿势 |
+| L3 | **静态多表族 all-or-nothing 的又一处实例**（I1 同族，静态侧）：四表强制齐闭合 → 一个载体的 media-type 缺陷连坐全案 | 框架 | "Confirmed: ...requires all four tables non-empty in every run" | I1 合并立项：partial publish + 缺失维度结构化声明 |
+| L4 | **`$projection` wire 缺陷第 5 案**（seq1240），且这次连 3 表 partial 转动态也杀掉 | 框架 | submit@1240 | 同 wire 行（5/5 动态案全中，已是铁案） |
+| L5 | **spec 作为 JSON string 有 4096 字符 transport 限制**（模型原话"named a transport limit (4096 chars), not data"）：多绑定四表 spec 逼近上限，进一步压缩 transform 表达空间（K2 同族） | 框架 | 终答三表尝试段 | 与 K2 信封提升合并 |
+
+- **诚实面**：全程零臆造（DA 拿不到就明说 GMRepo 未测、xlsx-only pattern 如实标注）；对每次拒绝都按"Core 指名的精确事实"逐条修正（这句口头禅质量高）。但 L1 使诚实结论本身也没能送达（末段退化，终答不完整）。
+
+## 十案全景（gold1–gold10 全部 @ qwen3.8-flash，除 r1 系 3.7-plus）
+
+| case | 交付 | token | 墙钟 | 主病因 |
+|---|---|---|---|---|
+| gold1-r3 | 1 pub ✔ | 5.71M | 24min | C2 复核黑洞 |
+| gold2 | 1/3 | 7.67M | 40min | D1 视检死路 + D2 表达缺口 |
+| gold3 | 1/5 | 0.78M | 2.3min | E3 工具不用（提前收手） |
+| gold4 | 2/4 | 4.49M | 5.9min | G1 回执黑洞 |
+| gold5 | 1/3 | 6.16M | 16min | H1 发现-绑定断链 |
+| gold7 | 1/3 | 7.94M | 24min | I1 projection 耦合 |
+| gold8 | 1/4(1药) | 6.42M | 31min | J1 名册源全灭 + J4 设限 |
+| gold9 | 探针 | 20.49M | 90min | K2 信封 + K3 方言 |
+| gold10 | 0 | 9.20M | 20min | L1 回声死循环 + L2 media-type 断链 |
+
+**跨案恒等式**：① `$projection` 5/5；② 链 1（视检/回执）9/9 案至少付一次税；③ all-or-nothing 在静态（L3）与动态（I1）两侧都存在；④ 行为两极（提前收手 gold3/J4 vs 无界烧钱 C2/G4/L1）需提示词双向约束。合计 10 案 ~69M token、≈3.4 小时 live run。
 
 
 
