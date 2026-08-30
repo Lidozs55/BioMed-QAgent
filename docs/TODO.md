@@ -13,6 +13,8 @@
   - 前置：应用 provider 账户与 live source 可用；运行期间不得并行启动第二个 Host（并行 Host 现已由 tasks-root 独占租约在代码层拒绝，见 `server/src/runtime/host-lease.ts`）。
 - [ ] **端到端图表 Gold 案例（对齐加分项"自动识别图表坐标轴或图例解析错误"）。** 图表证据已接通正式发布闭环（见下方已完成项），但 gold7–9 未有含图表场景的端到端案例；评审明确将其列为最高优先级失分点（"图表数据处理"是赛题核心能力）。补一个自然语言 TOPIC 出发、含论文图表抽取与坐标轴/图例核验的端到端 Gold 案例。
   - 验收：TOPIC → VLM/PDF/caption 抽取 → chart 四表（chart_series / chart_points / papers / sources）→ 正式 Publication；坐标轴名/单位/刻度与图例状态经 `axis_validation_status` / `legend_validation_status` 门禁；exact 点与 unclear 轴/图例语义冲突 fail-closed；单位 token 不漂移；低置信度点经 HIL 修正后保留 original 值；评审可经报告 5.5 所述 API/前端复现。
+- [ ] **参考集对照准确性评测（G1 evaluator 落地，报告最高权重项零量化）。** 评分标准"科学事实表达准确性（0-15）"与"数据查找完备性"目前没有任何对照参考数据的量化证据：gold7 正式发布 88/3,109 参考 locus 行、gold8 覆盖 9/约 50 请求药物，报告均只作定性披露；`docs/evaluation/gold-v1/` 的 manifest 已预留 final G1 evaluator，但对照评测未实现（strict 计分 0/6）。实现 publication-vs-reference 对照评测：行级覆盖率、字段命中率、数值一致性抽样（可先为 gold7/8/9 冻结参考 + 脚本化，后续并入 gold-v1 全六例），并顺带完成三案例（冻结提交 `e8d03589`，早于占位符筛查 `22d87d15`）的内容级复核，回应时间线质疑。来源见 [reports/2026-08-30-architecture-and-report-review.md](reports/2026-08-30-architecture-and-report-review.md) §4.2。
+  - 验收：每案例产出可复核对照表（覆盖行数、字段命中率、数值一致率 + 不一致样例）并可直接引用进报告第五章；gold-v1 strict 计分推进，或在报告中显式说明未全量重跑的原因。
 
 ## P1 — Runtime and evidence hardening
 
@@ -32,6 +34,10 @@
   - 验收：官方入口不可达时 Agent 可经搜索发现等价官方/权威入口并进入 formal 路线；搜索调用有结构化证据、速率限制与结果上限；无结果时显式 NO_DATA；搜索结果不直读为正式证据（仍经 browser/download 工具取证）。
 - [ ] **Recipe 格式宽路径：DOCX/XLS/HTML/PDF 与"通用 CSV/TSV + 人审字段映射"。** 现有 registered parser 均为 family 特定形状（`server/src/dataset/adapters/registered/default-registry.ts`），浏览器 formalization 无法消费这些媒体类型，Agent 遇到即绕路（gold8 rerun3 的 openpyxl 探测被拒）。按 canonical-evidence 发布路线新增 registered 通用格式 parser：CSV/TSV 宽路径起步（列名 → 目标 schema 字段映射经既有 field_mapping HIL 门禁），再扩 DOCX/XLS/HTML/PDF；recipe 仍只从 Core-owned registered registry promote，不为 Agent 输入开放任意映射。
   - 验收：标准表格/文档文件可经 recipe → parser → schema 绑定进入正式维度；未知列/字段映射经人审后落表；media type 校验、implementation digest 与 hostile 用例（错位列、BOM、合并单元格等）覆盖；不放宽既有 family 解析器门禁。
+- [ ] **Qwen 高档位正式发布案例（赛题模型导向证据）。** 赛题导向"基于国产开源大模型（如 Qwen）"，但报告三个旗舰案例均由 DeepSeek-V4-Flash 完成；Qwen 侧仅 qwen3.8-27B 的 gold8 一例，qwen3.7-plus 在 gold7 多轮失败（`data/gold/gold7_alzheimer_gwas/runs-log.md` 2026-08-25~27：不走正式路线、谎报完成、Catalog 端点 404）。在 Qwen 非 flash 档（plus/max）于 gold7 或 gold9 完成正式发布并留完整事件流，作为报告"模型能力分层表"的 Qwen 侧证据。来源见 [reports/2026-08-30-architecture-and-report-review.md](reports/2026-08-30-architecture-and-report-review.md) §4.3。
+  - 验收：至少一个 Qwen 非 flash 档正式 Publication（逐件 SHA-256 重验通过）；与 deepseek 结果的结构差异（若有）有解释；不为此放宽任何门禁。
+- [ ] **HIL 交互案例级证据归档（创新点三的实证缺口）。** 报告自述三旗舰案例"零权限暂停"，"更早轮次已单独验证"无可引用档案，创新点三目前只有测试级（`server/tests/chart-evidence-publication-closure.test.ts` 的 corrected 路径）与组件级证据。把一次真实 HIL 闭环全程留档（请求/暂停/决策/恢复事件流 + 前端截图 + 决策记录），候选场景：图表低置信度点 correct、单位结构化修正、发布验收 accept。前置：P0 端到端图表 Gold 案例或 Gold1-6 冻结证据项中的真实 `publication_acceptance`。来源见评审报告 §3.3。
+  - 验收：形成可引用证据包（含事件流与截图），报告 4.9 与创新点三可指向该档案；HIL 三档审批策略（含 llm_pre_review 的 fail-safe 回退）在报告中有一句话说明。
 
 ## P2 — Product and developer experience
 
@@ -48,6 +54,8 @@
   - 验收：存在可选宽表导出且与多表 Manifest 逐表可对账；现行单表交付（如 gold8 FAERS 计数）不受影响。
 - [ ] **极低风险正式化免人审路径（待产品决策，先 `[Q]`）。** `propose_browser_evidence_acceptance` 目前一律 blocking HIL（policy `browser.acquisition.evidence-acceptance.v1`）。对确定性可校验的极低风险证据（例如 media type 为 JSON 且与 PROMOTED recipe 的 registered parser/schema 双 digest 绑定）可考虑免人审自动过。该路径削弱 fail-closed 评审门，实施前需先 `[Q]` 明确风险边界（限定媒体类型与 digest 绑定、上线初期抽审、可回滚开关）。
   - 验收：符合限定条件的证据自动 formalize 并在事件流记录 auto-accept 依据与 policy ref；其余路径门禁不变；有复现测试与开关回退验证。
+- [ ] **闭世界准入不变量 ↔ 守卫测试映射（回应"需形式化"评审意见）。** 从 `ARCHITECTURE.md` §19 顶层不变量提炼动态 Family 准入相关不变量（输入角色闭包、输出精确闭合、闭世界校验只接受注册规则或绑定证据的变更、变换方不可选择校验/评估/发布模块、逐文件摘要重算），形成"不变量 → 守卫测试/实现位置"映射表，落 `docs/architecture/` 对应章节并作为论文素材。来源见 [reports/2026-08-30-architecture-and-report-review.md](reports/2026-08-30-architecture-and-report-review.md) §3.2。
+  - 验收：每条准入不变量可指到守卫测试或代码位置（如 `server/tests/phase8-architecture-guard.test.ts` 对应项）；映射表进架构文档并被报告引用。
 
 ## 模型卡点收集期（只登记，暂不修）
 

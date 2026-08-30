@@ -7,6 +7,7 @@
 ```
 docs/latex/
 ├── PROJECT_REPORT_DRAFT.md   # 唯一事实源（md 初稿；图片引用 ../architecture/*.svg）
+├── REVISION-GUIDE.md         # 30 页改版指南（页面预算/逐章指令/取数清单）
 ├── main.tex                  # 主文件：ctexbook 文档类、宏包、封面/前言/目录、章节装配
 ├── chapters/                 # 每章一个 .tex（由脚本生成，勿手改）
 │   ├── ch00-abstract.tex     #   参赛作品简介（不编号章）
