@@ -190,6 +190,8 @@ describe("business tool bundle (P5-02/P5-12)", () => {
       "prepare_dynamic_family_publication",
       "submit_dynamic_family_publication",
       "scaffold_dataset_execution_spec",
+      "preflight_cleaning_rules",
+      "inspect_source_coverage",
     ]));
     // Analysis tools register with the full bundle.
     for (const name of [
