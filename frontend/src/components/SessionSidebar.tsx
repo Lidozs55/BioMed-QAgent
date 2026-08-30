@@ -4,7 +4,7 @@ import {
   TrashIcon,
   XIcon,
 } from "@phosphor-icons/react";
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import biomedLogoV2 from "../../../assets/logo/Logo-title.svg";
@@ -162,7 +162,6 @@ export function SessionSidebar({
   const historyStatus = useAgentStore((state) => state.historyStatus);
   const historyError = useAgentStore((state) => state.historyError);
   const { isMobile, setOpenMobile } = useSidebar();
-  const historyContentRef = useRef<HTMLDivElement>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [pendingCancels, setPendingCancels] = useState<Set<string>>(
     () => new Set(),
@@ -227,19 +226,6 @@ export function SessionSidebar({
       setLoadingMore(false);
     }
   }, [loadingMore, onLoadMore, nextCursor]);
-
-  // A page that does not overflow the viewport never fires the scroll
-  // handler, so the next history page is fetched automatically whenever
-  // the content still fits on screen. The zero-height guard keeps hidden
-  // sidebars and jsdom (which has no layout) from triggering the effect.
-  useEffect(() => {
-    if (nextCursor === null || loadingMore) return;
-    const element = historyContentRef.current;
-    if (element === null || element.clientHeight === 0) return;
-    if (element.scrollHeight <= element.clientHeight) {
-      void loadMore();
-    }
-  }, [loadMore, loadingMore, nextCursor, visibleTasks.length]);
 
   const retryHistory = async () => {
     if (onRetryHistory === undefined || historyStatus === "loading") return;
@@ -333,15 +319,7 @@ export function SessionSidebar({
           </Button>
         </SidebarHeader>
 
-        <SidebarContent
-          ref={historyContentRef}
-          onScroll={(event) => {
-            const element = event.currentTarget;
-            if (element.scrollHeight - element.scrollTop - element.clientHeight < 160) {
-              void loadMore();
-            }
-          }}
-        >
+        <SidebarContent>
           <SidebarGroup>
             <SidebarGroupContent>
               {historyStatus === "error" && (
@@ -379,14 +357,24 @@ export function SessionSidebar({
                   </EmptyHeader>
                 </Empty>
               ) : null}
-              {loadingMore && (
-                <div
-                  role="status"
-                  className="flex items-center justify-center gap-2 p-3 text-xs text-muted-foreground"
+              {nextCursor !== null && visibleTasks.length > 0 && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="w-full justify-center text-xs text-muted-foreground"
+                  disabled={loadingMore}
+                  onClick={() => void loadMore()}
+                  aria-label="展开显示更多历史对话"
                 >
-                  <Spinner className="size-3.5" aria-hidden="true" />
-                  正在加载
-                </div>
+                  {loadingMore && (
+                    <Spinner
+                      className="size-3.5"
+                      data-icon="inline-start"
+                      aria-hidden="true"
+                    />
+                  )}
+                  {loadingMore ? "加载中" : "展开显示"}
+                </Button>
               )}
             </SidebarGroupContent>
           </SidebarGroup>
