@@ -85,7 +85,6 @@ describe("TypeScript model settings", () => {
       temperature: 0.25,
       topP: 0.8,
       repetitionPenalty: 1,
-      safetyReserveTokens: 3200,
       enableSearch: false,
       thinkingMode: false,
       params: { max_tokens: 3072, temperature: 0.25, top_p: 0.8 },

@@ -114,3 +114,4 @@ fix_ruff.py
 # 其中的 .commonly-env 含运行时 token，绝不入库
 /scripts/commonly-agent/
 *.bkp
+/target/

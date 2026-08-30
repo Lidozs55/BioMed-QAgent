@@ -186,9 +186,15 @@ importers:
       pngjs:
         specifier: ^7.0.0
         version: 7.0.0
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
       vite:
         specifier: ^5.4.11
         version: 5.4.21(@types/node@26.1.1)(lightningcss@1.32.0)
+      ws:
+        specifier: ^8.18.3
+        version: 8.21.3
       xlsx:
         specifier: ^0.18.5
         version: 0.18.5
@@ -214,18 +220,12 @@ importers:
       tsx:
         specifier: ^4.23.12
         version: 4.23.12
-      typescript:
-        specifier: ^5.6.3
-        version: 5.9.3
       typescript-eslint:
         specifier: ^8.63.0
         version: 8.63.0(eslint@10.7.0(jiti@2.7.0))(typescript@5.9.3)
       vitest:
         specifier: 3.2.7
         version: 3.2.7(@types/debug@4.1.13)(@types/node@26.1.1)(jsdom@29.1.1)(lightningcss@1.32.0)
-      ws:
-        specifier: ^8.18.3
-        version: 8.21.3
 
 packages:
 
@@ -1095,6 +1095,9 @@ packages:
 
   '@jridgewell/sourcemap-codec@1.5.5':
     resolution: {integrity: sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og==}
+
+  '@jridgewell/sourcemap-codec@1.6.0':
+    resolution: {integrity: sha512-T7jf+5zgsZHwNJ4lvQ7/aezbyk0nNX+zJVWpmHA7VYsEx7a7qr5Rg5IbtJFqkgze5Y2sruq1RUY8Q837Od7iFw==}
 
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
@@ -5768,7 +5771,7 @@ snapshots:
 
   '@jridgewell/gen-mapping@0.3.13':
     dependencies:
-      '@jridgewell/sourcemap-codec': 1.5.5
+      '@jridgewell/sourcemap-codec': 1.6.0
       '@jridgewell/trace-mapping': 0.3.31
 
   '@jridgewell/remapping@2.3.5':
@@ -5780,10 +5783,12 @@ snapshots:
 
   '@jridgewell/sourcemap-codec@1.5.5': {}
 
+  '@jridgewell/sourcemap-codec@1.6.0': {}
+
   '@jridgewell/trace-mapping@0.3.31':
     dependencies:
       '@jridgewell/resolve-uri': 3.1.2
-      '@jridgewell/sourcemap-codec': 1.5.5
+      '@jridgewell/sourcemap-codec': 1.6.0
 
   '@mariozechner/clipboard-darwin-arm64@0.3.9':
     optional: true
