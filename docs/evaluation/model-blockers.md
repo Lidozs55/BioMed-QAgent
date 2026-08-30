@@ -43,7 +43,10 @@
 | C3 | basic_statistics 对大表字符串溢出（V8 单串上限） | 流式/分块解析或声明上限+抽样 |
 | G3 | literature_evidence provider 可靠性：Europe PMC `http_client_error` 双复现、BioC 空文档回 `invalid_input` 误导重试 | 复现对照 headers；空全文应回结构化 `no_fulltext` |
 | B6（后半） | search_gdc 查询 "breast cancer TCGA" 首结果 TCGA-LUAD | provider 查询→project 映射排序修复 |
+| H1 | **ChEMBL 发现→绑定断链**：`search_chembl` 拿到的真 CHEMBL ID 喂不进 `chembl.files.v1` 固定 provider 的 validity 门（~11 种参数形态全拒），gold5 题面 activity 数据结构性进不来 | 复现并修复 provider accession 校验门，接受自家发现工具的输出形态（链 2 合并立项） |
+| H2 | **`validate_dataset_execution` 假绿灯**：valid:true 但 schema 表达不了需求字段（`activity.v1` 对 assay 条件/单位/跨源列全 `unknown_required_field`）——校验层与表达层脱节 | validate 增加"spec 需求字段 × schema 能力"覆盖检查，不可表达直接 invalid 并指路 |
 | — | supervisor 对 Host events 瞬时 HTTP 500 零容错（3 连败，均在 operation_progress 风暴时段）+ Host 端 500 本身 | 运维面：supervisor 加重试；查 server events 端点 500 根因（疑似独立 bug） |
+| H3 | **stale-build 撕裂**：`node dist/index.js --static` 裸启动绕过 `prestart/build-contracts-if-needed`，contracts dist 落后 server 源码一个 rename（c005e323）→ gold5-r1 全场 thrash 报废 | 运维纪律：重启 static Host 前强制 `pnpm build`；或给 supervisor/runner 加 dist-vs-src mtime 启动断言 |
 
 ### 不属于两类（外部源边界，合理阻断）
 
@@ -163,7 +166,38 @@
 - **正样本（本四案最强）**：载体甄别——search_pdb 假命中 5 件（7AN4 弯曲菌差向异构酶、6VN2 USP7、7NX3 ALK…）**全部剔除且给出物种/蛋白理由**；保留结构逐条带分辨率+PMID；"载体获取失败 ≠ 文献不存在"的区分；拒绝臆造变异行；Dynamic 变异构建给出完整方案后请求范围确认（对比 gold3-E4 的"要清单但工具在手不用"，这次的确认请求附了具体 provider/位点方案，属合理边界）。
 - 四案纵向（同模型同 Host）：gold1-r3 24min/60calls/5.71M → gold2 40min/69calls/7.67M → gold3 2.3min/20calls/0.78M（提前收手）→ gold4 5.9min/79calls/4.49M（构建高效+死墙实证）。行为方差极大，提示词需要"穷尽界+收敛界"双向约束。
 
+## gold5 @ qwen3.8-flash（2026-08-30，main@1a9c070dfb1b）
+
+### r1（task_ts_9046f9e7，已取消）＝ stale-build 灾难样本（H3）
+
+Host 的 `contracts/dist`（21:38 构建）落后于队友 `c005e323`（23:07，receipt 字段 `sandbox_backend`→`execution_backend`）；重启 Host 时只重编 server 没重编 contracts → **producer（server，新）生成的 receipt 被 consumer（contracts dist，旧）判 `Unknown field "execution_backend"`**。模型 146 轮/89 错/48% 错误率，prepare×22 / submit×23 全灭（错误分布：`$projection undefined`×10、`Unknown field execution_backend`×4、缺字段×3、receipt superseded×2、carrier provenance×2），峰值上下文 237k/256k 贴线挣扎后被操作员取消。证据保留于 `data/gold-runs/1a9c070dfb1b-gold5-qwen38flash-r1-stalebuild/`。
+**教训（运维纪律）**：`node dist/index.js --static` 裸启动绕过了 `prestart/build-contracts-if-needed` 钩子——重启 static Host 前必须 `pnpm build`（或至少 contracts+server 同批构建）。此错误分布本身即"撕裂版本"的铁证，不记为模型卡点。
+
+### r2（task_ts_090c5c7c，全量重建后）＝ succeeded_publication（1/3 交付）
+
+> 身份断言通过。终态：动态路线正式发表 `pub_egfr_pubchem_structure_v1_35f249ec7077b0ee`（erlotinib 完整结构记录：CID 176870、分子式/MW/SMILES/InChIKey/IUPAC，绑定 `pubchem.files.v1` receipt+carrier 闭环）。
+> 题面交付：PubChem 结构 ✔（仅 1 药）；**ChEMBL assay/activity ✘ NO_DATA（0 行）**；L858R/T790M 变异语境 ✘；跨源整合 ✘。零臆造、无 provisional CSV、未发布候选（gefitinib/afatinib/osimertinib CID + 7 个 ChEMBL ID）如实列发现级。
+>
+> | 阶段 | 调用 | input | output | cache_read | 总计费 token | 墙钟 |
+> | --- | --- | --- | --- | --- | --- | --- |
+> | 发布前（含 19×prepare） | 74 | 317,011 | 45,100 | 4,595,712 | 4,957,823 | 850s |
+> | 发布后 | 9 | 11,533 | 2,403 | 1,191,936 | 1,205,872 | 93s |
+> | 合计 | 83 | 328,544 | **47,503** | 5,787,648 | 6,163,695 | 963s |
+>
+> 峰值上下文 136,407/256k；0 压缩/停审/HIL。**成本形态反转**：动态路线把开销推前到构建段（prepare×19、output 47.5k 为五案最高），发布后黑洞（G1）本次仅 9 轮。
+
+| # | 卡点 | 归类 | 证据 | 建议修法（暂不执行） |
+| - | ---- | ---- | ---- | -------------------- |
+| H1 | **ChEMBL 发现→绑定断链（题面核心死锁）**：`search_chembl` 能拿到真实 CHEMBL ID（5 次成功），但 `chembl.files.v1` 动态绑定校验门 ~11 种参数形态全拒（"does not accept binding parameters; fixed provider"、"requires 1-32 valid ChEMBL compound IDs"、comma-list/entities-carried 均不行）——**发现工具的输出喂不进同源的 fixed provider**，activity 数据结构性进不来 | 框架（与链 2 同族） | prepare×19 错误分布；终答 blocker 段 | 复现 `chembl.files.v1` accession 校验逻辑，接受 search_chembl 产出的 ID 形态；不通则 B 类新增"ChEMBL 绑定门"实例 |
+| H2 | **validate 假绿灯**：静态 `bioactivity_measurement` `validate_dataset_execution` 返回 `valid:true`，但 `activity.v1` schema 对题面明列字段（`assay_condition/assay_description/canonical_smiles/document_doi/pchembl_value/published_*`）全报 `unknown_required_field`，跨源 spec `entity_level_schema_mismatch`——**validate 通过 ≠ 需求可表达**，模型依绿灯走了弯路才发现 | 框架（校验语义） | 终答"Exact blocker"段；validate/execute 矛盾记录 | validate 应把 spec 需求字段与 schema 能力做覆盖检查，表达不了直接 invalid + 指路动态/替代族 |
+| H3 | （r1，见上）stale-build 撕裂 + 裸启动绕过构建钩子 | 运维纪律 | r1 错误分布 + dist/src mtime 对照 | gold 流程文档加一条：重启 static Host 前必须全量 `pnpm build` |
+| H4 | **发布产物读取四命名空间混乱再实证（E5/G1 续）**：模型试 `workspace_read(tables/…)`（发布表不在 Agent 视图）→ `preview(artifact_32hex)`→ `preview(裸 digest)`→ 只有 `preview(carrier asset_64hex)` 通 | 框架 | 终答自述 4 种失败与各自原因 | 同链 1 修复：publication detail 直接给可 preview 的 asset_id |
+
+- **正样本（显著成长）**：发布后自检仅 9 轮即止损——逐一试探 4 种 ID 命名空间、**主动修正自己上一条的 overstatement**（"Correction: … 那言过其实了"）、明确"没有读取路径我就不声称读过"；突变体处理给出专业判断（L858R/T790M 应为 assay 的 variant_context 列而非独立 target ID，并请用户确认口径）；候选药物 CID/InChIKey 全部真值留档不冒充已发布。
+
 ## gold7–gold10 @ 复跑（2026-08-29 之后，待组员执行）
+
+
 
 （空。每完成一个案例，按模板追加；同步把 `closure.json` 的 `run_usage` 抄入本表上方案例头部，便于比较提示词/路线变化对 token 的影响。）
 
