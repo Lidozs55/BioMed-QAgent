@@ -149,6 +149,18 @@ function mockApi(overrides: Partial<SettingsAPIClient> = {}): SettingsAPIClient 
     discoverProviderModels: vi.fn().mockResolvedValue(DISCOVERED),
     fetchProviderParamSpecs: vi.fn().mockResolvedValue(SPECS),
     fetchManagedModels: vi.fn().mockResolvedValue(TEST_MODELS),
+    fetchProvidersPage: vi.fn().mockResolvedValue({
+      items: TEST_PROVIDERS,
+      total: TEST_PROVIDERS.length,
+      page: 1,
+      size: 20,
+    }),
+    fetchManagedModelsPage: vi.fn().mockResolvedValue({
+      items: TEST_MODELS,
+      total: TEST_MODELS.length,
+      page: 1,
+      size: 8,
+    }),
     createManagedModel: vi.fn().mockImplementation((input) =>
       Promise.resolve({
         ...TEST_MODELS[0],
@@ -182,6 +194,8 @@ function mockApi(overrides: Partial<SettingsAPIClient> = {}): SettingsAPIClient 
     fetchAgentPermissions: vi.fn().mockResolvedValue({ schema_version: 1, preset: "ask_when_needed", rules: [], persistent_exec_allow: false }),
     fetchAgentTempGrants: vi.fn().mockResolvedValue([]),
     revokeAgentTempGrant: vi.fn().mockResolvedValue(undefined),
+        fetchHilApproval: vi.fn().mockResolvedValue({ schema_version: "1.0", default_mode: "human_review", review_modes: {} }),
+    saveHilApproval: vi.fn(),
     setAgentPermissionsPreset: vi.fn(),
     setAgentPermissionsPersistentExec: vi.fn(),
     addAgentPermissionRule: vi.fn(),
@@ -652,6 +666,20 @@ describe("SettingsPanel model registry", () => {
         .fn()
         .mockResolvedValueOnce(TEST_MODELS)
         .mockResolvedValue([{ ...TEST_MODELS[0], active: true }]),
+      fetchManagedModelsPage: vi
+        .fn()
+        .mockResolvedValueOnce({
+          items: TEST_MODELS,
+          total: TEST_MODELS.length,
+          page: 1,
+          size: 8,
+        })
+        .mockResolvedValue({
+          items: [{ ...TEST_MODELS[0], active: true }],
+          total: 1,
+          page: 1,
+          size: 8,
+        }),
       activateManagedModel: vi.fn().mockResolvedValue({
         ...TEST_SETTINGS,
         model_name: "deepseek-reasoner",
@@ -715,6 +743,49 @@ describe("SettingsPanel model registry", () => {
     });
   });
 
+  it("keeps a single max-output control and syncs params.max_tokens on save", async () => {
+    const api = mockApi({
+      fetchManagedModels: vi.fn().mockResolvedValue([
+        {
+          ...TEST_MODELS[0],
+          params: { temperature: 0.5, max_tokens: 8192, enable_thinking: false },
+        },
+      ]),
+      fetchManagedModelsPage: vi.fn().mockResolvedValue({
+        items: [
+          {
+            ...TEST_MODELS[0],
+            params: { temperature: 0.5, max_tokens: 8192, enable_thinking: false },
+          },
+        ],
+        total: 1,
+        page: 1,
+        size: 8,
+      }),
+    });
+    renderSettings(api);
+
+    const modelRow = (await screen.findByText("DeepSeek Reasoner", {}, { timeout: 5_000 })).closest("li");
+    expect(modelRow).not.toBeNull();
+    fireEvent.click(within(modelRow as HTMLElement).getByRole("button", { name: "详情" }));
+
+    const detailDialog = await screen.findByRole("dialog", { name: "模型详情" });
+    // 顶部输入框是“最大输出 Tokens”的唯一调整入口：图形参数区不再重复该行，
+    // 旧存储的 max_tokens/enable_thinking 也不会落入“额外参数”。
+    const maxOutputInputs = within(detailDialog).getAllByLabelText("最大输出 Tokens");
+    expect(maxOutputInputs).toHaveLength(1);
+    expect(maxOutputInputs[0]).toHaveValue(8192);
+
+    fireEvent.change(maxOutputInputs[0], { target: { value: "16384" } });
+    fireEvent.click(within(detailDialog).getByRole("button", { name: "保存参数" }));
+
+    await waitFor(() => expect(api.updateManagedModel).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.updateManagedModel).mock.calls[0]?.[1]).toMatchObject({
+      max_output_tokens: 16384,
+      params: { temperature: 0.5, max_tokens: 16384 },
+    });
+  });
+
   it("returns from the JSON view back to the graphical editor without applying", async () => {
     const api = mockApi();
     renderSettings(api);
@@ -740,6 +811,31 @@ describe("SettingsPanel model registry", () => {
       fetchManagedModels: vi
         .fn()
         .mockResolvedValue([{ ...TEST_MODELS[0], source: "manual" }]),
+      fetchManagedModelsPage: vi.fn().mockResolvedValue({
+        items: [{ ...TEST_MODELS[0], source: "manual" }],
+        total: 1,
+        page: 1,
+        size: 8,
+      }),
+    });
+    renderSettings(api);
+    expect(await screen.findByText("手动配置", {}, { timeout: 5_000 })).toBeInTheDocument();
+  });
+
+  it("shows the manual-config badge when user-edited metadata differs from the default", async () => {
+    // API 导入的模型，只要元数据被用户改过（metadata_source: "user"）即视为手动配置。
+    const api = mockApi({
+      fetchManagedModels: vi
+        .fn()
+        .mockResolvedValue([
+          { ...TEST_MODELS[0], source: "api", metadata_source: "user" },
+        ]),
+      fetchManagedModelsPage: vi.fn().mockResolvedValue({
+        items: [{ ...TEST_MODELS[0], source: "api", metadata_source: "user" }],
+        total: 1,
+        page: 1,
+        size: 8,
+      }),
     });
     renderSettings(api);
     expect(await screen.findByText("手动配置", {}, { timeout: 5_000 })).toBeInTheDocument();
@@ -783,6 +879,120 @@ describe("SettingsPanel model registry", () => {
       model_id: "deepseek-chat",
       source: "api",
     });
+  });
+
+  it("searches the maintained model list through the paginated API", async () => {
+    const api = mockApi();
+    renderSettings(api);
+
+    await screen.findByText("DeepSeek Reasoner");
+
+    const searchInput = screen.getByRole("textbox", { name: "搜索模型" });
+    fireEvent.change(searchInput, { target: { value: "deepseek-reasoner" } });
+
+    await waitFor(() => {
+      expect(api.fetchManagedModelsPage).toHaveBeenLastCalledWith({
+        page: 1,
+        size: 8,
+        q: "deepseek-reasoner",
+      });
+    });
+  });
+
+  it("shows an empty state when the search has no matches", async () => {
+    const api = mockApi({
+      fetchManagedModelsPage: vi.fn().mockResolvedValue({
+        items: [],
+        total: 0,
+        page: 1,
+        size: 8,
+      }),
+    });
+    renderSettings(api);
+
+    await screen.findByText("还没有维护的模型，点击“添加模型”开始。");
+
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索模型" }), {
+      target: { value: "zzz" },
+    });
+    expect(await screen.findByText("没有找到匹配的模型。")).toBeInTheDocument();
+  });
+
+  it("navigates pages of the maintained model list", async () => {
+    const api = mockApi({
+      fetchManagedModelsPage: vi.fn().mockResolvedValue({
+        items: TEST_MODELS,
+        total: 25,
+        page: 1,
+        size: 8,
+      }),
+    });
+    renderSettings(api);
+
+    await screen.findByText("DeepSeek Reasoner");
+    expect(screen.getByText("共 25 条")).toBeInTheDocument();
+    expect(screen.getByText("第 1 / 4 页")).toBeInTheDocument();
+
+    const next = screen.getByRole("button", { name: "下一页" });
+    expect(next).not.toBeDisabled();
+    fireEvent.click(next);
+
+    await waitFor(() => {
+      expect(api.fetchManagedModelsPage).toHaveBeenLastCalledWith({
+        page: 2,
+        size: 8,
+        q: undefined,
+      });
+    });
+  });
+
+  it("selects a visual extraction model while leaving the current main model unchanged", async () => {
+    const VISUAL_MODEL: ManagedModelInfo = {
+      ...TEST_MODELS[0],
+      id: "model-vision",
+      model_id: "qwen3.5-vl-plus",
+      name: "Qwen VL Plus",
+      capabilities: { text: true, image: true, video: false, audio: false },
+    };
+    const api = mockApi({
+      // Hostile backend fixture: a raw (unmasked) key must never reach the DOM.
+      fetchProviders: vi.fn().mockResolvedValue([
+        { ...TEST_PROVIDERS[0], api_key: "sk-vision-raw-key-9876" },
+      ]),
+      fetchManagedModels: vi.fn().mockResolvedValue([TEST_MODELS[0], VISUAL_MODEL]),
+      fetchManagedModelsPage: vi.fn().mockResolvedValue({
+        items: [TEST_MODELS[0], VISUAL_MODEL],
+        total: 2,
+        page: 1,
+        size: 8,
+      }),
+      saveSettings: vi.fn().mockResolvedValue({
+        ...TEST_SETTINGS,
+        vision_model_id: "model-vision",
+        vision_model_name: "Qwen VL Plus",
+        vision_provider_name: "DeepSeek",
+        vision_model_ready: true,
+        vision_block_reason: null,
+      }),
+    });
+    renderSettings(api);
+
+    fireEvent.click(await screen.findByRole("combobox", { name: "视觉抽取模型" }));
+    const option = await screen.findByRole("option", { name: /Qwen VL Plus/ });
+    fireEvent.pointerDown(option);
+    fireEvent.click(option);
+
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalledTimes(1));
+    // Only the visual role is saved: the active main model is not touched.
+    expect(vi.mocked(api.saveSettings).mock.calls[0]?.[0]).toEqual({
+      vision_model_id: "model-vision",
+    });
+
+    // Readiness message reflects the saved role.
+    expect(await screen.findByText(/视觉抽取就绪：DeepSeek · Qwen VL Plus/)).toBeVisible();
+
+    // No raw credential material anywhere in the rendered settings page.
+    expect(document.body.textContent).not.toContain("sk-vision-raw-key-9876");
   });
 
 });

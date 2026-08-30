@@ -1,0 +1,46 @@
+%% =====================================================================
+%% BioMed-QAgent 参赛作品报告 — 主入口
+%%
+%% 本文件只保留:文档类、项目元信息、正文装配。
+%% 所有排版(页面/字体/标题/页眉页脚/表格/代码/提示框)见:
+%%   biomed-report.cls          — 模板入口
+%%   biomed-report-theme.sty    — 视觉主题
+%%
+%% 编译(latexmk,产物在 build/):
+%%   latexmk -xelatex -outdir=build main.tex
+%% =====================================================================
+
+\documentclass{biomed-report}
+
+% ------------------------- 项目元信息 -------------------------
+\reporttitle{BioMed QAgent}
+\reportsubtitle{面向生物医学研究的多源数据智能采集与分析系统}
+\reportshorttitle{BioMed QAgent · 参赛作品报告}
+\reportteam{BioMed-QAgent 项目组}
+\reportschool{北京航空航天大学}
+\reporttrack{赛道二-方向1A}
+\reportdate{2026 年 8 月}
+
+% ------------------------- 正文装配 -------------------------
+\begin{document}
+
+% 封面(不显示页码)
+\makereporttitle
+
+% 前置部分:目录(罗马页码)
+% 参赛作品简介章已撤:其信息表移到封面(见 chapters/ch00-submission-table.tex)
+\frontmatter
+
+\tableofcontents
+
+% 正文:从 1 开始的阿拉伯页码
+\mainmatter
+
+\input{chapters/ch01-introduction}
+\input{chapters/ch02-problem-definition}
+\input{chapters/ch03-system-overview}
+\input{chapters/ch04-dataset-core}
+\input{chapters/ch05-experiments}
+\input{chapters/ch06-conclusion}
+
+\end{document}

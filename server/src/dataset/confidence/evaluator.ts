@@ -6,6 +6,7 @@ import type {
 } from "../contracts/data.js";
 import type { ConfidenceLevel } from "../contracts/enums.js";
 import { parseConfidenceRecord } from "../contracts/data.js";
+import type { DigitAnomalyResult } from "./digit-anomaly.js";
 
 const NONDETERMINISTIC_CHANNELS = new Set([
   "vlm",
@@ -27,6 +28,8 @@ export interface EvaluateConfidenceInput {
   channel: string;
   components: Omit<ConfidenceComponents, "schema_version"> | ConfidenceComponents;
   reasons?: string[];
+  /** Fixed-code digit-regularity screen result; "flagged" forces low. */
+  digitAnomaly?: DigitAnomalyResult;
 }
 
 export interface MappingConfidenceInput {
@@ -71,6 +74,10 @@ export function evaluateConfidence(input: EvaluateConfidenceInput): ConfidenceRe
   if (NONDETERMINISTIC_CHANNELS.has(input.channel) && level === "high") {
     level = "medium";
     reasons.push(`${input.channel} extraction is capped at medium`);
+  }
+  if (input.digitAnomaly !== undefined && input.digitAnomaly.verdict === "flagged") {
+    level = "low";
+    reasons.push(...input.digitAnomaly.reasons);
   }
   if (applicable.length === 0) reasons.push("no applicable evidence reliability was supplied");
 

@@ -1,4 +1,5 @@
 import type {
+  HILDecision,
   HILRequest,
   HumanReviewRecord,
 } from "@biomed/contracts";
@@ -10,6 +11,7 @@ import {
   userInputRequiredPayload,
   type CreateHILRequestInput,
 } from "./hil-store.js";
+import type { HILGatePreReview } from "./hil-pre-review.js";
 import type { DurableTaskRepository } from "./task-repository.js";
 
 export type BoundHILRequestInput = Omit<
@@ -36,23 +38,36 @@ interface PendingReview {
   reject: (error: Error) => void;
 }
 
+/**
+ * In-flight credential decisions keyed by ``<run_id>:<operation>``. Parallel
+ * governed tool calls in one run share one credential approval: the first
+ * caller creates the durable request, later callers await the SAME pending
+ * decision instead of conflict-failing with "another HIL request is already
+ * pending".
+ */
+type CredentialDecision = Promise<"approve" | "reject">;
+
 export class DurableHILGate implements HILGateHandle {
   private readonly taskId: string;
   private readonly repository: DurableTaskRepository;
   private readonly store: DurableHILStore;
+  private readonly preReview: HILGatePreReview | null;
   private runId: string | null;
   private permissionInvocation = 0;
   private readonly pending = new Map<string, PendingReview>();
+  private readonly credentialRequests = new Map<string, CredentialDecision>();
 
   constructor(
     taskId: string,
     repository: DurableTaskRepository,
     runId?: string,
     store = new DurableHILStore(repository),
+    preReview: HILGatePreReview | null = null,
   ) {
     this.taskId = taskId;
     this.repository = repository;
     this.store = store;
+    this.preReview = preReview;
     this.runId = runId ?? null;
   }
 
@@ -70,6 +85,30 @@ export class DurableHILGate implements HILGateHandle {
   }
 
   async request(
+    operation: string,
+    signal?: AbortSignal,
+    invocationId?: string,
+  ): Promise<"approve" | "reject"> {
+    const runId = this.runId;
+    if (runId === null) throw new Error("HIL gate is not bound to a run");
+    // Coalesce concurrent credential approvals per run + operation scope:
+    // parallel governed tool calls await ONE durable decision.
+    const key = `${runId}:${operation}`;
+    const existing = this.credentialRequests.get(key);
+    if (existing !== undefined) return existing;
+    const decision = this.requestCredential(operation, signal, invocationId);
+    this.credentialRequests.set(key, decision);
+    void decision
+      .catch(() => undefined)
+      .finally(() => {
+        if (this.credentialRequests.get(key) === decision) {
+          this.credentialRequests.delete(key);
+        }
+      });
+    return decision;
+  }
+
+  private async requestCredential(
     operation: string,
     signal?: AbortSignal,
     invocationId?: string,
@@ -128,6 +167,9 @@ export class DurableHILGate implements HILGateHandle {
       await this.store.cancelPendingForRun(this.taskId, runId);
       throw new OperationAbortedError("operation aborted before human review could be awaited");
     }
+
+    const preResolved = await this.tryPreReviewResolve(runId, request);
+    if (preResolved !== null) return preResolved;
 
     const decision = new Promise<HumanReviewRecord>((resolve, reject) => {
       const cleanup = (): void => signal?.removeEventListener("abort", abort);
@@ -201,6 +243,79 @@ export class DurableHILGate implements HILGateHandle {
       this.resolvePending(runId, resolvedDuringEmission);
     }
     return decision;
+  }
+
+  /**
+   * Approval-policy short-circuit (three-tier HIL approval settings):
+   * ``auto_approve`` resolves immediately with the kind's affirmative
+   * decision (reviewer ``auto``); ``llm_pre_review`` consults the model —
+   * whose prompt directs it to fail bypass-shaped requests — and resolves on
+   * a pass (reviewer ``model``). A model ``fail`` verdict or any reviewer
+   * error escalates to the classic human flow (fail-safe; never a silent
+   * pass). Resolved requests never emit ``user_input_required``, so the run
+   * is not paused.
+   */
+  private async tryPreReviewResolve(
+    runId: string,
+    request: HILRequest,
+  ): Promise<HumanReviewRecord | null> {
+    if (this.preReview === null) return null;
+    const mode = await this.preReview.modeFor(request.kind, request.review_type);
+    if (mode === "human_review") return null;
+    if (mode === "auto_approve") {
+      return this.resolveWithoutHuman(runId, request, {
+        decision: request.kind === "permission" ? { action: "approve" } : { action: "accept" },
+        reason: "auto-approved by HIL approval policy (auto_approve)",
+        reviewer: "auto",
+        warningCode: "HIL_PRE_APPROVED",
+        message: `HIL request ${request.request_id} auto-approved by approval policy (auto_approve)`,
+      });
+    }
+    let verdict: "pass" | "fail";
+    let verdictReason: string;
+    try {
+      const review = await this.preReview.modelReview(request);
+      verdict = review.verdict;
+      verdictReason = review.reason;
+    } catch (error) {
+      verdict = "fail";
+      verdictReason = `model pre-review unavailable: ${
+        error instanceof Error ? error.message : String(error)
+      }`;
+    }
+    if (verdict !== "pass") return null;
+    return this.resolveWithoutHuman(runId, request, {
+      decision: request.kind === "permission" ? { action: "approve" } : { action: "accept" },
+      reason: `approved by model pre-review: ${verdictReason}`,
+      reviewer: "model",
+      warningCode: "HIL_PRE_APPROVED",
+      message: `HIL request ${request.request_id} approved by model pre-review: ${verdictReason}`,
+    });
+  }
+
+  private async resolveWithoutHuman(
+    runId: string,
+    request: HILRequest,
+    resolution: {
+      decision: HILDecision;
+      reason: string;
+      reviewer: "auto" | "model";
+      warningCode: string;
+      message: string;
+    },
+  ): Promise<HumanReviewRecord> {
+    const review = await this.store.resolveRequest(this.taskId, runId, {
+      request_id: request.request_id,
+      evidence_digest: request.evidence_digest,
+      decision: resolution.decision,
+      reason: resolution.reason,
+    }, { reviewer: resolution.reviewer });
+    await this.repository.appendRunEvent(this.taskId, runId, {
+      type: "warning",
+      code: `${resolution.warningCode}:${request.request_id}`,
+      message: resolution.message,
+    });
+    return review;
   }
 
   async recordAdvisoryHIL(input: BoundHILRequestInput): Promise<HILRequest> {

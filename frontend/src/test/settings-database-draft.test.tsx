@@ -1,4 +1,4 @@
-﻿import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { SettingsPanel } from "@/components/SettingsPanel";
@@ -43,6 +43,8 @@ function mockApi(overrides: Partial<SettingsAPIClient> = {}): SettingsAPIClient 
     discoverProviderModels: vi.fn().mockResolvedValue([]),
     fetchProviderParamSpecs: vi.fn().mockResolvedValue([]),
     fetchManagedModels: vi.fn().mockResolvedValue([]),
+    fetchProvidersPage: vi.fn().mockResolvedValue({ items: [], total: 0, page: 1, size: 20 }),
+    fetchManagedModelsPage: vi.fn().mockResolvedValue({ items: [], total: 0, page: 1, size: 20 }),
     createManagedModel: vi.fn(),
     updateManagedModel: vi.fn(),
     deleteManagedModel: vi.fn(),
@@ -53,6 +55,8 @@ function mockApi(overrides: Partial<SettingsAPIClient> = {}): SettingsAPIClient 
     fetchAgentPermissions: vi.fn().mockResolvedValue({ schema_version: 1, preset: "ask_when_needed", rules: [], persistent_exec_allow: false }),
     fetchAgentTempGrants: vi.fn().mockResolvedValue([]),
     revokeAgentTempGrant: vi.fn().mockResolvedValue(undefined),
+        fetchHilApproval: vi.fn().mockResolvedValue({ schema_version: "1.0", default_mode: "human_review", review_modes: {} }),
+    saveHilApproval: vi.fn(),
     setAgentPermissionsPreset: vi.fn(),
     setAgentPermissionsPersistentExec: vi.fn(), addAgentPermissionRule: vi.fn(), removeAgentPermissionRule: vi.fn(),
     fetchCacheDatasets: vi.fn().mockResolvedValue({ items: [] }),

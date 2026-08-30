@@ -20,6 +20,11 @@ which can fail independently of the API.
 - When GMRepo or another requested source is unavailable, report that source as
   unavailable and continue only with independently retrieved real evidence,
   such as MGnify records or paper supplementary files.
+- GMRepo formal acquisition (`gmrepo.files.v1`) queries per-taxon phenotype
+  prevalence: the binding accession is a numeric NCBI taxon ID (the one
+  resolved for that species), never a MeSH ID or study accession. The returned
+  payload covers every phenotype cohort for that taxon; case/control filtering
+  stays a spec-level semantic decision, not an acquisition input.
 
 ## Publication boundary
 

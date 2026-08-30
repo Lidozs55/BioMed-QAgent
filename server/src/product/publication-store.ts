@@ -91,7 +91,8 @@ function parsePublication(value: unknown, versionName: string): DatasetPublicati
   const item = object(value, "Publication receipt");
   if (
     item.schema_version !== "1.1" || typeof item.publication_id !== "string" ||
-    !SAFE_ID.test(item.publication_id) || item.publication_id !== `pub_${versionName}` ||
+    !SAFE_ID.test(item.publication_id) ||
+    (item.publication_id !== versionName && item.publication_id !== `pub_${versionName}`) ||
     typeof item.manifest_ref !== "string" || typeof item.validation_result_ref !== "string" ||
     typeof item.published_at !== "string" || typeof item.manifest_sha256 !== "string" ||
     !SHA256.test(item.manifest_sha256) ||

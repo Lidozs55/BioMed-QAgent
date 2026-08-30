@@ -11,6 +11,8 @@ const SECRET_ARGUMENT = /(?:api[-_]?key|authorization|password|secret|token)(?:=
 /** ``--token value`` style flag whose NEXT argument is the secret value. */
 const SECRET_FLAG = /^--?(?:api[-_]?key|authorization|password|secret|token)$/i;
 const EXECUTABLE_METACHARACTERS = /[&|;<>\r\n\0]/u;
+const DIRECT_NETWORK_EXECUTABLES = new Set(["curl", "curl.exe", "wget", "wget.exe"]);
+const HTTP_URL_ARGUMENT = /https?:\/\//iu;
 const SAFE_ENVIRONMENT_KEYS = new Set([
   "COMSPEC",
   "LANG",
@@ -208,6 +210,13 @@ function validateCommand(input: {
     )
   ) {
     return "Executable arguments are invalid";
+  }
+  const executableBase = input.executable.replaceAll("\\", "/").split("/").at(-1)?.toLowerCase();
+  if (
+    (executableBase !== undefined && DIRECT_NETWORK_EXECUTABLES.has(executableBase)) ||
+    input.args.some((argument) => HTTP_URL_ARGUMENT.test(argument))
+  ) {
+    return "Direct network transport through workspace_exec is not allowed; use governed navigate_page/download_from_page tools or a registered Dataset Core provider";
   }
   if (
     input.timeoutMs !== undefined &&

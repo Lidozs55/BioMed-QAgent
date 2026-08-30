@@ -30,6 +30,16 @@
  *
  * Output caps (Python parity): page/extract 10 MiB, screenshot 25 MiB and
  * 25,000,000 pixels.
+ *
+ * Renderer resource guard (Node-only; Python never had this class of bug
+ * surfaced): the renderer working set is unbounded, so a multi-hundred-MB
+ * data file navigated as a page (e.g. an Orphadata XML dump) expands into a
+ * ~10x DOM tree, pegs the CPU, and can wedge the renderer so completely that
+ * even close never acknowledges. Main-frame navigations are therefore
+ * refused before render when the URL path or response content-type names a
+ * data file, or the declared content-length exceeds the main-frame byte
+ * cap; session/page teardown is bounded so a wedged renderer cannot hang
+ * the tool call and leak the pool slot.
  */
 
 import { chromium, type Browser, type BrowserContext, type Page, type Request, type Response, type Route } from "playwright";
@@ -49,6 +59,19 @@ export const DEFAULT_BROWSER_NAVIGATION_TIMEOUT_MS = 60_000;
 
 /** Manual main-frame redirect hop bound (Chromium's native cap). */
 export const MAX_BROWSER_REDIRECT_HOPS = 20;
+
+/** Main-frame document bound: larger declared responses are refused (bytes). */
+export const MAX_BROWSER_MAINFRAME_BYTES = 50 * 1024 * 1024;
+
+/** Best-effort window for page/context teardown before abandoning it (ms). */
+export const SESSION_CLOSE_TIMEOUT_MS = 5_000;
+
+/**
+ * Renderer V8 heap ceiling (MB) passed at launch. A JS-heap bomb then fails
+ * the operation with a clean "Page crashed" instead of eating the machine;
+ * DOM growth is bounded separately by the main-frame render gate.
+ */
+export const DEFAULT_BROWSER_LAUNCH_ARGS = ["--js-flags=--max-old-space-size=2048"];
 
 /** Bounding-box wait before a missing screenshot selector fails (ms). */
 const SCREENSHOT_SELECTOR_TIMEOUT_MS = 1_500;
@@ -246,16 +269,78 @@ function resourceTypeOf(request: Request, page: Page | null): string {
 }
 
 /**
+ * Data-file URL path suffixes that must never be rendered as a page. Suffix
+ * matching also covers composed names like ``.vcf.gz`` / ``.tar.gz``.
+ */
+const DATA_FILE_PATH_SUFFIXES = [".xml", ".pdf", ".zip", ".gz", ".tgz", ".tar", ".7z", ".rar", ".bz2", ".xz"] as const;
+
+/** Exact media types refused as main-frame documents (binary data payloads). */
+const DATA_FILE_MEDIA_TYPES = new Set([
+  "application/xml",
+  "text/xml",
+  "application/pdf",
+  "application/zip",
+  "application/gzip",
+  "application/x-gzip",
+  "application/x-tar",
+  "application/x-7z-compressed",
+  "application/octet-stream",
+]);
+
+function mainFrameDataFileSuffix(target: string): string | null {
+  let pathname: string;
+  try {
+    pathname = new URL(target).pathname.toLowerCase();
+  } catch {
+    return null; // Malformed targets are rejected by the egress policy.
+  }
+  return DATA_FILE_PATH_SUFFIXES.find((suffix) => pathname.endsWith(suffix)) ?? null;
+}
+
+function isDataFileMediaType(mediaType: string): boolean {
+  const normalized = mediaType.split(";", 1)[0].trim().toLowerCase();
+  if (normalized === "") return false;
+  return DATA_FILE_MEDIA_TYPES.has(normalized) || normalized.endsWith("+xml");
+}
+
+/**
+ * Resolve when *promise* settles, or after *timeoutMs* regardless: a wedged
+ * renderer stops pumping CDP, so page/context close can otherwise hang
+ * forever and leak the pool slot. Rejections are swallowed (best-effort
+ * teardown); the abandoned promise keeps its handlers, so it can never
+ * surface as an unhandled rejection.
+ */
+export function settleWithin(promise: Promise<unknown>, timeoutMs: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(() => resolve(), timeoutMs);
+    promise.then(
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+    );
+  });
+}
+
+/**
  * Follow one main-frame navigation hop-by-hop through ``route.fetch``,
  * authorizing every hop (including each redirect target) before transport,
  * then fulfill the final response to the page. Playwright 1.62 skips routing
  * for redirect hops after ``route.continue()``/``fallback()``, so the chain
  * is walked manually (Python egress-proxy parity: the proxy authorizes every
- * CONNECT, redirect hops included).
+ * CONNECT, redirect hops included). Each hop's transport is bounded by
+ * *hopTimeoutMs* so a stalled main-frame fetch cannot outlive the operation,
+ * and the final response passes the data-file/size render gate before it
+ * ever reaches the renderer.
  */
 async function followMainFrameNavigation(
   route: Route,
   authorizeRequest: BrowserRequestAuthorizer,
+  hopTimeoutMs: number,
 ): Promise<void> {
   const request = route.request();
   let currentUrl = request.url();
@@ -263,6 +348,12 @@ async function followMainFrameNavigation(
   let postData: Buffer | null = request.postDataBuffer();
   for (let hop = 0; hop < MAX_BROWSER_REDIRECT_HOPS; hop += 1) {
     await authorizeRequest(currentUrl, "main_frame");
+    const dataSuffix = mainFrameDataFileSuffix(currentUrl);
+    if (dataSuffix !== null) {
+      throw new Error(
+        `browser refuses to render data-file URL (path ends with ${dataSuffix}): ${currentUrl}; download the file (download_from_page) instead of rendering it`,
+      );
+    }
     const headers = { ...request.headers() };
     delete headers["host"];
     delete headers["connection"];
@@ -274,7 +365,7 @@ async function followMainFrameNavigation(
       headers,
       postData: postData ?? undefined,
       maxRedirects: 0,
-      timeout: 0,
+      timeout: hopTimeoutMs,
     });
     const status = response.status();
     if (status >= 300 && status < 400) {
@@ -288,6 +379,18 @@ async function followMainFrameNavigation(
         postData = null;
       }
       continue;
+    }
+    const mediaType = response.headers()["content-type"] ?? "";
+    if (isDataFileMediaType(mediaType)) {
+      throw new Error(
+        `browser refuses to render data-file content (content-type ${mediaType.split(";", 1)[0].trim()}); download the file (download_from_page) instead of rendering it`,
+      );
+    }
+    const declaredBytes = Number.parseInt(response.headers()["content-length"] ?? "", 10);
+    if (Number.isFinite(declaredBytes) && declaredBytes > MAX_BROWSER_MAINFRAME_BYTES) {
+      throw new Error(
+        `browser main-frame document exceeded ${MAX_BROWSER_MAINFRAME_BYTES} byte limit (content-length ${declaredBytes}); download the file (download_from_page) instead of rendering it`,
+      );
     }
     await route.fulfill({ response });
     return;
@@ -378,17 +481,11 @@ export class BrowserSession {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
-    try {
-      await this.page.close();
-    } catch {
-      // The page may already be closed (crash, cancellation); the context
-      // must still be released.
-    }
-    try {
-      await this.context.close();
-    } catch {
-      // Context teardown must not mask the operation's own error.
-    }
+    // Teardown is best-effort and bounded: a wedged renderer (pathological
+    // document pegging the main thread) never acknowledges close, and the
+    // pool slot must still be released for later operations.
+    await settleWithin(this.page.close(), SESSION_CLOSE_TIMEOUT_MS);
+    await settleWithin(this.context.close(), SESSION_CLOSE_TIMEOUT_MS);
     this.pool.endOperation();
   }
 
@@ -422,7 +519,7 @@ export interface BrowserPoolOptions {
   policy?: BrowserEgressPolicy;
   /** Bounded navigation timeout applied to every ``page.goto`` (ms). */
   navigationTimeoutMs?: number;
-  /** Injectable browser launcher (tests); defaults to headless chromium. */
+  /** Injectable browser launcher (tests); defaults to headless chromium with ``DEFAULT_BROWSER_LAUNCH_ARGS``. */
   launcher?: () => Promise<Browser>;
 }
 
@@ -467,7 +564,8 @@ export class NodeBrowserPool {
     }
     this.policy = options.policy ?? strictBrowserEgressPolicy;
     this.navigationTimeoutMs = options.navigationTimeoutMs ?? DEFAULT_BROWSER_NAVIGATION_TIMEOUT_MS;
-    this.launcher = options.launcher ?? (async () => chromium.launch({ headless: true }));
+    this.launcher =
+      options.launcher ?? (async () => chromium.launch({ headless: true, args: DEFAULT_BROWSER_LAUNCH_ARGS }));
     this.semaphore = new Semaphore(this.maxContextsValue);
   }
 
@@ -628,7 +726,7 @@ export class NodeBrowserPool {
           const isMainFrame = isMainFrameRequest(request, page);
           try {
             if (isMainFrame) {
-              await followMainFrameNavigation(route, authorizeRequest);
+              await followMainFrameNavigation(route, authorizeRequest, this.navigationTimeoutMs);
             } else {
               await authorizeRequest(request.url(), resourceTypeOf(request, page));
               await route.continue();
@@ -645,16 +743,10 @@ export class NodeBrowserPool {
         page = await context.newPage();
         return new BrowserSession(this, context, page, routeErrors);
       } catch (error) {
-        try {
-          await page?.close();
-        } catch {
-          // Page teardown is best-effort on the failure path.
-        }
-        try {
-          await context?.close();
-        } catch {
-          // Context teardown is best-effort on the failure path.
-        }
+        // Best-effort bounded teardown on the failure path (mirrors
+        // ``BrowserSession.close``).
+        if (page !== null) await settleWithin(page.close(), SESSION_CLOSE_TIMEOUT_MS);
+        if (context !== null) await settleWithin(context.close(), SESSION_CLOSE_TIMEOUT_MS);
         throw error;
       }
     } catch (error) {

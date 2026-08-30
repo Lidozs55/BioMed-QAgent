@@ -6,9 +6,10 @@ import type {
   DatasetBridgePublicationData,
   DatasetExecutionSpec,
 } from "@biomed/contracts";
-import { parseJsonTextStrict } from "@biomed/contracts";
+import { parseCleaningRulePreflightReceipt, parseJsonTextStrict } from "@biomed/contracts";
 
 import { saveExecutionContinuation } from "../../runtime/execution-continuation.js";
+import { ArtifactIntegrityError, readLatestSourceCoverageReport } from "../../runtime/artifact-store.js";
 import { fixedBiomedicalAcquisitionParameters } from "../../dataset/acquisition/biomedical-providers.js";
 import { CORE_ACQUISITION_PROVIDER_DESCRIPTORS } from "../../dataset/acquisition/provider-catalog.js";
 import {
@@ -20,8 +21,11 @@ import type {
   BioMedToolResult,
 } from "../contracts.js";
 import { parseDatasetExecutionSpec } from "../../dataset/contracts/index.js";
+import { buildDatasetExecutionScaffold } from "../../dataset/scaffold/spec-scaffold.js";
 import { providerCarrierBinding } from "../../dataset/runtime/provider-bindings.js";
+import { preflightCleaningRules } from "../../dataset/cleaning/preflight.js";
 import type { DatasetCoreService } from "../../dataset/service/dataset-core.js";
+import type { DatasetFamilyRegistry } from "../../dataset/families/index.js";
 
 const MAX_ID = 128;
 const MAX_CONTENT = 4_096;
@@ -47,6 +51,8 @@ export interface DatasetExecutionToolDiagnostic {
 export interface DatasetExecutionToolOptions {
   client: Pick<DatasetCoreService, "validate" | "execute"> &
     Partial<Pick<DatasetCoreService, "acquire">>;
+  /** Live family registry powering the read-only spec scaffolding tool. */
+  familyRegistry: DatasetFamilyRegistry;
   taskId: string;
   /** Task root on disk; the tool persists its invocation here so a
    * cross-restart resume can replay the exact same build deterministically
@@ -54,6 +60,8 @@ export interface DatasetExecutionToolOptions {
   taskRoot: string;
   runId: () => string;
   piSessionId: () => string;
+  /** Runtime discovery observations for the source coverage evidence. */
+  discoveryLedger?: () => import("@biomed/contracts").DiscoveryQueryRecord[] | null;
   onDiagnostic?: (diagnostic: DatasetExecutionToolDiagnostic) => void;
   onPublication?: (data: DatasetBridgePublicationData) => void | Promise<void>;
   now?: () => number;
@@ -162,7 +170,27 @@ function dynamicFallback(response: DatasetBridgeResponse): Record<string, unknow
   return {};
 }
 
-function resultSummary(response: DatasetBridgeResponse): Record<string, unknown> {
+function coverageSummary(report: import("@biomed/contracts").SourceCoverageReport): Record<string, unknown> {
+  return {
+    universe_scope: report.universe_scope,
+    scope_note: report.scope_note,
+    summary: report.summary,
+    bindings: report.acquisition_coverage
+      .filter((entry) => entry.status !== "acquired" || entry.exclusion_reasons.length > 0)
+      .slice(0, 32)
+      .map((entry) => ({
+        binding_id: entry.binding_id,
+        source: entry.source,
+        status: entry.status,
+        exclusion_reasons: entry.exclusion_reasons.slice(0, 16),
+      })),
+  };
+}
+
+function resultSummary(
+  response: DatasetBridgeResponse,
+  coverage?: Record<string, unknown> | null,
+): Record<string, unknown> {
   if (!response.ok) {
     return {
       ...STATIC_ROUTE_CONTEXT,
@@ -188,6 +216,7 @@ function resultSummary(response: DatasetBridgeResponse): Record<string, unknown>
       artifact_count: response.data.artifacts.length,
       artifact_roles: boundedStrings(response.data.artifacts.map((artifact) => artifact.role)),
       registered_source_asset_count: response.data.registeredSourceAssetIds.length,
+      ...(coverage === undefined ? {} : { coverage }),
     };
   }
   return {
@@ -200,7 +229,10 @@ function resultSummary(response: DatasetBridgeResponse): Record<string, unknown>
   };
 }
 
-function resultFor(response: DatasetBridgeResponse): BioMedToolResult {
+function resultFor(
+  response: DatasetBridgeResponse,
+  coverage?: Record<string, unknown> | null,
+): BioMedToolResult {
   const details = response.ok
     ? { ...STATIC_ROUTE_CONTEXT, code: "ok", request_id: response.request_id, data: response.data }
     : {
@@ -213,7 +245,7 @@ function resultFor(response: DatasetBridgeResponse): BioMedToolResult {
         ...STATIC_ROUTE_CONTEXT,
       };
   return {
-    content: JSON.stringify(resultSummary(response)),
+    content: JSON.stringify(resultSummary(response, coverage)),
     details,
     isError: !response.ok,
   };
@@ -405,7 +437,7 @@ export function createDatasetExecutionTools(
       { type: "string", minLength: 1 },
     ],
     description:
-      "Frozen DatasetExecutionSpec. Pass it as a JSON object, or as a JSON-encoded string for compatibility with clients that serialize nested arguments.",
+      "Frozen DatasetExecutionSpec. Pass it as a JSON object, or as a JSON-encoded string for compatibility with clients that serialize nested arguments. Phenotype/study context goes into entities (one non-empty string per key: study identity plus required_entities groups like disease_id/disease_name/host_taxon_id for gut_microbiome) — binding.parameters carries none of them.",
   } as const;
   const sourceFilesSchema = {
     type: "object",
@@ -430,7 +462,7 @@ export function createDatasetExecutionTools(
       name: "validate_dataset_execution",
       label: "Validate DatasetExecutionSpec",
       description:
-        "Static registered-family route only: validate a DatasetExecutionSpec whose family, schema, source, and topology are an exact match from inspect_dataset_execution_routes. This does not test Dynamic Family provider availability.",
+        "Static registered-family route only: validate a DatasetExecutionSpec whose family, schema, source, and topology are an exact match from inspect_dataset_execution_routes. This does not test Dynamic Family provider availability. Static-first mandate: when the route inspection lists a family covering the requested product (e.g. gut_microbiome), validate this spec FIRST before any further research or workspace staging. Declare cross-cutting context such as disease_id / disease_name / host_taxon_id once in top-level spec.entities (mirroring that inspection output's required_entities); never inside binding.parameters.",
       parameters: {
         type: "object",
         properties: { spec: specSchema },
@@ -476,6 +508,7 @@ export function createDatasetExecutionTools(
           source_files: sourceFilesSchema,
           mapping_files: mappingFilesSchema,
           metadata_files: metadataFilesSchema,
+          cleaning_rule_receipt: { type: "object", description: "Unchanged Core-issued receipt from preflight_cleaning_rules." },
         },
         required: ["spec"],
         additionalProperties: false,
@@ -510,10 +543,33 @@ export function createDatasetExecutionTools(
           assertKnownBindings(spec, metadataFiles, "metadata_files");
           for (const binding of spec.source_bindings) {
             if (sourceFiles[binding.binding_id] !== undefined) continue;
+            const curatedSource = providerCarrierBinding("", binding.source, binding.adapter_id) === null &&
+              binding.source.startsWith("registered_");
+            if (curatedSource || binding.acquisition?.provider_id === "registered_asset") {
+              throw new TypeError(
+                `binding '${binding.binding_id}' uses curated registered source '${binding.source}' — supply ` +
+                  `source_files["${binding.binding_id}"] with a task-owned asset id (e.g. an extraction member ` +
+                  "asset from acquire_core_carrier); curated sources have no acquisition provider",
+              );
+            }
+            const archiveProvider = CORE_ACQUISITION_PROVIDER_DESCRIPTORS.find(
+              (entry) => entry.providerId === binding.acquisition.provider_id && entry.source === binding.source,
+            );
+            if (archiveProvider?.dynamicInput === "binary_archive") {
+              throw new TypeError(
+                `binding '${binding.binding_id}' acquires a binary archive provider '${binding.acquisition.provider_id}' — ` +
+                  `run acquire_core_carrier on that provider once, then supply ` +
+                  `source_files["${binding.binding_id}"] with the wanted extraction member asset id ` +
+                  "(e.g. the text/csv xlsx-worksheet member), not the archive itself",
+              );
+            }
             if (options.client.acquire === undefined) {
               throw new Error(`Core acquisition is unavailable for binding '${binding.binding_id}'`);
             }
-            const acquired = await options.client.acquire({
+            if (options.client.acquire === undefined) {
+            throw new TypeError("Core acquisition is unavailable");
+          }
+          const acquired = await options.client.acquire({
               ...identity,
               request: acquisitionRequest(options, spec, binding),
             });
@@ -534,6 +590,9 @@ export function createDatasetExecutionTools(
               source_files: sourceFiles,
               mapping_files: mappingFiles,
               metadata_files: metadataFiles,
+              ...(args.cleaning_rule_receipt === undefined || args.cleaning_rule_receipt === null
+                ? {}
+                : { cleaning_rule_receipt: parseCleaningRulePreflightReceipt(args.cleaning_rule_receipt) }),
               registered_source_asset_ids: registeredSourceAssetIds(sourceFiles),
               created_at: new Date().toISOString(),
             });
@@ -547,8 +606,26 @@ export function createDatasetExecutionTools(
             sourceFiles,
             mappingFiles,
             metadataFiles,
+            cleaningRuleReceipt: args.cleaning_rule_receipt === undefined
+              ? null
+              : parseCleaningRulePreflightReceipt(args.cleaning_rule_receipt),
+            discoveryQueries: options.discoveryLedger?.() ?? null,
           });
           await capturePublication(options, response);
+          let coverage: Record<string, unknown> | null | undefined;
+          if (response.ok && "publication" in response.data) {
+            try {
+              const report = await readLatestSourceCoverageReport(options.taskRoot);
+              coverage = report === null
+                ? { status: "coverage_unavailable", reason: "no_source_coverage_artifact" }
+                : coverageSummary(report.report);
+            } catch (error) {
+              coverage = {
+                status: "coverage_unavailable",
+                reason: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500),
+              };
+            }
+          }
           diagnostic(
             options,
             "execute_dataset_execution",
@@ -558,10 +635,330 @@ export function createDatasetExecutionTools(
             response.ok ? "ok" : response.error.code,
             requirementId,
           );
-          return resultFor(response);
+          return resultFor(response, coverage);
         } catch (error) {
           diagnostic(options, "execute_dataset_execution", context, started, response, codeForCaught(error), requirementId);
           return caught(error);
+        }
+      },
+    },
+    {
+      name: "preflight_cleaning_rules",
+      label: "Preflight Cleaning Rules",
+      description:
+        "Submit cleaning proposals for Core preflight. Registered unit rules may be accepted automatically; field mappings and ambiguous or unregistered rules remain proposed and require HIL.",
+      parameters: {
+        type: "object",
+        properties: {
+          requirement_id: { type: "string", minLength: 1 },
+          proposals: {
+            type: "array",
+            minItems: 1,
+            description: "Agent proposals only; Core recomputes candidate ranking and registry matches.",
+          },
+        },
+        required: ["requirement_id", "proposals"],
+        additionalProperties: false,
+      },
+      async execute(value) {
+        try {
+          const args = object(value);
+          const requirementId = args.requirement_id;
+          if (typeof requirementId !== "string" || requirementId.trim() === "") {
+            throw new TypeError("requirement_id is required");
+          }
+          const result = preflightCleaningRules(options.familyRegistry, {
+            task_id: options.taskId,
+            run_id: options.runId(),
+            requirement_id: requirementId,
+            proposals: args.proposals,
+          });
+          return {
+            content: JSON.stringify({
+              ok: true,
+              proposals_digest: result.proposals_digest,
+              items: result.items,
+              candidate_set_digests: Object.fromEntries(
+                Object.entries(result.candidate_sets).map(([id, set]) => [id, set.digest]),
+              ),
+              receipt: result.receipt,
+            }),
+            details: result,
+          };
+        } catch (error) {
+          return {
+            content: JSON.stringify({
+              ok: false,
+              error: { code: "cleaning_preflight_failed", message: error instanceof Error ? error.message : String(error) },
+            }),
+            isError: true,
+          };
+        }
+      },
+    },
+    {
+      name: "inspect_source_coverage",
+      label: "Inspect Source Coverage",
+      description:
+        "Read the latest immutable Core source coverage report. Use failed or not_attempted declared bindings to decide whether an independent supplemental source is needed; this is not a whole-web completeness claim.",
+      parameters: {
+        type: "object",
+        properties: {},
+        additionalProperties: false,
+      },
+      async execute(value) {
+        if (
+          value !== undefined &&
+          value !== null &&
+          typeof value === "object" &&
+          Object.keys(value as object).length > 0
+        ) {
+          return {
+            content: JSON.stringify({
+              ok: false,
+              error: { code: "invalid_input", message: "inspect_source_coverage takes no arguments" },
+            }),
+            isError: true,
+          };
+        }
+        try {
+          const result = await readLatestSourceCoverageReport(options.taskRoot);
+          if (result === null) {
+            return {
+              content: JSON.stringify({
+                ok: false,
+                status: "coverage_unavailable",
+                reason: "no_source_coverage_artifact",
+              }),
+              isError: true,
+            };
+          }
+          return {
+            content: JSON.stringify({
+              ok: true,
+              publication_id: result.publication_id,
+              artifact_id: result.artifact_id,
+              artifact_sha256: result.artifact_sha256,
+              manifest_sha256: result.manifest_sha256,
+              coverage: coverageSummary(result.report),
+            }),
+            details: result.report,
+          };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          return {
+            content: JSON.stringify({
+              ok: false,
+              error: {
+                code: error instanceof ArtifactIntegrityError ? "artifact_integrity" : "coverage_invalid",
+                message,
+              },
+            }),
+            isError: true,
+          };
+        }
+      },
+    },
+    {
+      name: "scaffold_dataset_execution_spec",
+      label: "Scaffold DatasetExecutionSpec",
+      description:
+        "Read-only helper: compose a complete, validate-ready DatasetExecutionSpec for a registered multitable " +
+        "family from just the family id, phenotype/study entities, and one {source, adapter_id, accession} tuple " +
+        "per binding. Use this instead of hand-writing the spec JSON — then pass the returned spec unchanged to " +
+        "validate_dataset_execution. One accession per binding; entities carry disease/study context.",
+      parameters: {
+        type: "object",
+        properties: {
+          family_id: { type: "string", description: "Registered dataset family id, e.g. gut_microbiome." },
+          requirement_id: { type: "string", description: "Stable requirement id for this build, e.g. gut_t2d_v1." },
+          objective: { type: "string", description: "Optional human-readable objective; defaulted when omitted." },
+          entities: {
+            type: "object",
+            description:
+              "Cross-cutting context as key/value strings, e.g. {\"disease_id\":\"D003924\",\"disease_name\":\"Diabetes Mellitus, Type 2\",\"host_taxon_id\":\"9606\",\"study_id\":\"MGYS00000322\"}.",
+            additionalProperties: { anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }] },
+          },
+          bindings: {
+            type: "array",
+            description: "One entry per provider binding. e.g. [{\"source\":\"mgnify\",\"adapter_id\":\"registered_gut_microbiome_study_json\",\"accession\":\"MGYS00000322\"}].",
+            minItems: 1,
+            items: {
+              type: "object",
+              properties: {
+                source: { type: "string" },
+                adapter_id: { type: "string" },
+                accession: { anyOf: [{ type: "string" }, { type: "null" }] },
+              },
+              required: ["source", "adapter_id"],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ["family_id", "requirement_id", "entities", "bindings"],
+        additionalProperties: false,
+      },
+      async execute(value) {
+        try {
+          const args = object(value);
+          const familyId = args.family_id;
+          const requirementId = args.requirement_id;
+          const objective = args.objective;
+          const entitiesInput = args.entities ?? {};
+          const bindingsInput = args.bindings;
+          if (typeof familyId !== "string" || familyId.trim() === "") {
+            throw new TypeError("scaffold_dataset_execution_spec requires a non-empty family_id");
+          }
+          if (typeof requirementId !== "string" || requirementId.trim() === "") {
+            throw new TypeError("scaffold_dataset_execution_spec requires a non-empty requirement_id");
+          }
+          if (typeof entitiesInput !== "object" || entitiesInput === null || Array.isArray(entitiesInput)) {
+            throw new TypeError("entities must be an object of string values");
+          }
+          if (!Array.isArray(bindingsInput)) {
+            throw new TypeError("bindings must be an array");
+          }
+          const entities: Record<string, string | string[]> = {};
+          for (const [key, value] of Object.entries(entitiesInput as Record<string, unknown>)) {
+            if (typeof value === "string") entities[key] = value;
+            else if (Array.isArray(value) && value.every((item): item is string => typeof item === "string")) entities[key] = value;
+            else throw new TypeError(`entities.${key} must be a string or string array`);
+          }
+          const bindings = bindingsInput.map((raw) => {
+            const item = typeof raw === "object" && raw !== null ? raw as Record<string, unknown> : {};
+            const source = item.source;
+            const adapterId = item.adapter_id;
+            if (typeof source !== "string" || typeof adapterId !== "string") {
+              throw new TypeError("each binding requires string source and adapter_id");
+            }
+            const accession = item.accession;
+            return {
+              source,
+              adapter_id: adapterId,
+              accession: typeof accession === "string" ? accession : null,
+            };
+          });
+          const { spec, notes } = buildDatasetExecutionScaffold(options.familyRegistry, {
+            family_id: familyId,
+            requirement_id: requirementId,
+            objective: typeof objective === "string" ? objective : undefined,
+            entities,
+            bindings,
+          });
+          return {
+            content: JSON.stringify({
+              ok: true,
+              spec,
+              notes,
+              next_step: "Pass this spec unchanged to validate_dataset_execution, then execute_dataset_execution.",
+            }),
+          };
+        } catch (error) {
+          return {
+            content: JSON.stringify({
+              ok: false,
+              error: { code: "scaffold_failed", message: error instanceof Error ? error.message : String(error) },
+            }),
+            isError: true,
+          };
+        }
+      },
+    },
+    {
+      name: "acquire_core_carrier",
+      label: "Acquire Core-Only Carrier",
+      description:
+        "Fixed Core acquisition for acquisition-only carriers such as Europe PMC supplementary archives. " +
+        "Run ONE provider per call with a valid binding accession; returns the immutable carrier asset id plus " +
+        "provenance-bound extracted member asset ids (csv/tsv/xlsx). Reference those member asset ids as " +
+        "registered sources on the dynamic route — never browser or workspace downloads.",
+      parameters: {
+        type: "object",
+        properties: {
+          provider_id: {
+            type: "string",
+            description: "Exactly one acquisition-only provider id, e.g. europepmc.supplementary.v1.",
+          },
+          source: { type: "string", description: "The provider's declared source, e.g. europepmc_supplementary." },
+          accession: { type: "string", description: "One valid accession for the provider, e.g. PMC9005347." },
+        },
+        required: ["provider_id", "source", "accession"],
+        additionalProperties: false,
+      },
+      async execute(value, signal, context) {
+        try {
+          const args = object(value);
+          const nonEmpty = (key: string): string => {
+            const value1 = args[key];
+            if (typeof value1 !== "string" || value1.trim() === "") {
+              throw new TypeError(`acquire_core_carrier requires a non-empty ${key}`);
+            }
+            return value1.trim();
+          };
+          const providerId = nonEmpty("provider_id");
+          const source = nonEmpty("source");
+          const accession = nonEmpty("accession");
+          const descriptor = CORE_ACQUISITION_PROVIDER_DESCRIPTORS.find(
+            (entry) => entry.providerId === providerId && entry.source === source,
+          );
+          if (descriptor === undefined || descriptor.dynamicInput !== "binary_archive") {
+            return {
+              content: JSON.stringify({
+                ok: false,
+                error: {
+                  code: "provider_not_acquisition_only",
+                  message:
+                    `${providerId}/${source} is not an acquisition-only binary carrier; ` +
+                    "use its binding provider through validate/execute or the dynamic acquisition requests instead",
+                },
+              }),
+              isError: true,
+            };
+          }
+          const requirementId = `carrier_${providerId}_${accession}`.replace(/[^A-Za-z0-9_-]/g, "_");
+          if (options.client.acquire === undefined) {
+            throw new TypeError("Core acquisition is unavailable");
+          }
+          const acquired = await options.client.acquire({
+            taskId: options.taskId,
+            runId: options.runId(),
+            piSessionId: options.piSessionId(),
+            toolCallId: context?.toolCallId ?? "unknown",
+            signal,
+            request: {
+              schema_version: "1.0",
+              request_id: `req_${requirementId}`.slice(0, 128),
+              task_id: options.taskId,
+              requirement_id: requirementId,
+              binding_id: "binding_carrier",
+              mode: "builtin",
+              provider_id: providerId,
+              recipe_id: null,
+              recipe_version: null,
+              parameters: { source, accession, entities: {} },
+            },
+          });
+          return {
+            content: JSON.stringify({
+              ok: true,
+              carrier_asset_id: acquired.sourceAsset.asset_id,
+              media_type: null,
+              extraction_assets: acquired.extractionAssets.map((asset) => ({
+                asset_id: asset.asset_id,
+                role: asset.role,
+              })),
+              next_step:
+                "Reference these extraction asset ids in the dynamic route's registered_sources for the matching binding.",
+            }),
+          };
+        } catch (error) {
+          return {
+            content: JSON.stringify({
+              ok: false,
+              error: { code: "acquire_failed", message: error instanceof Error ? error.message : String(error) },
+            }),
+            isError: true,
+          };
         }
       },
     },

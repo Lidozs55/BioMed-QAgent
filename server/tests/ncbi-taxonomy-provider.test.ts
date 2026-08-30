@@ -56,6 +56,24 @@ describe("NCBI Taxonomy trusted Core provider", () => {
     });
   });
 
+  it("keeps verbatim literature names as accessions while cleaning the ESearch term", async () => {
+    const provider = createNcbiTaxonomyFilesProvider();
+    const cases: ReadonlyArray<[string, string]> = [
+      ["[Ruminococcus] torques", "Ruminococcus+torques"],
+      ["Faecalibacterium prausnitzii [h:1576]", "Faecalibacterium+prausnitzii"],
+      ["Bacteroides dorei/vulgatus [c:1104]", "Bacteroides+dorei"],
+      ["unnamed Ruminococcus sp. SR1/5 [u:1621]", "Ruminococcus+sp."],
+      ["Bifidobacterium catenulatum-Bifidobacterium pseudocatenulatum complex", "Bifidobacterium+catenulatum"],
+    ];
+    for (const [accession, expectedTerm] of cases) {
+      const plan = await provider.plan(request(accession));
+      expect(plan.source.accession).toBe(accession);
+      expect(plan.source.url).toBe(
+        `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=taxonomy&retmode=json&retmax=1&term=${expectedTerm}%5BSCIN%5D`,
+      );
+    }
+  });
+
   it("plans a taxid EFetch response when the accession is an NCBI taxid", async () => {
     const plan = await createNcbiTaxonomyFilesProvider().plan(request("562"));
     expect(plan.source.url).toBe(
@@ -84,10 +102,11 @@ describe("NCBI Taxonomy trusted Core provider", () => {
     const provider = createNcbiTaxonomyFilesProvider();
     for (const accession of [
       "https://evil.example/?db=taxonomy",
-      "taxonomy/562",
       "562&db=protein",
       "Escherichia coli\n&retmode=xml",
       "*",
+      "Bacteria|Firmicutes",
+      "../etc/passwd",
     ]) {
       expect(() => provider.plan(request(accession))).toThrow(/valid taxonomy name or taxid/);
     }
@@ -96,4 +115,16 @@ describe("NCBI Taxonomy trusted Core provider", () => {
     injected.parameters.db = "protein";
     expect(() => provider.plan(injected)).toThrow(/only source, accession, and entities/);
   });
+it("accepts required context entity keys and still rejects reserved E-utility names", async () => {
+  const provider = createNcbiTaxonomyFilesProvider();
+  const context = request("Blautia obeum");
+  context.parameters.entities = { study_id: ["MGYS00000322"], disease_id: ["D003924"], mesh_id: ["D003924"] };
+  const plan = await provider.plan(context);
+  expect(plan.source.url).toContain("esearch.fcgi");
+  for (const reserved of ["term", "id", "db", "retmode"]) {
+    const injected = request("Blautia obeum");
+    injected.parameters.entities = { [reserved]: ["x"] };
+    expect(() => provider.plan(injected)).toThrow(/must not contain URL, path, database, or code controls/);
+  }
+});
 });

@@ -28,12 +28,14 @@ import {
 import { sha256FileStream } from "../adapters/hashing.js";
 import { createDefaultFamilyAssemblerRegistry } from "../assembly/index.js";
 import type { DatasetExecutionSpec, ValidationResult } from "../contracts/index.js";
+import { MAX_PROVIDER_CARRIER_BYTES } from "./provider-limits.js";
 import type { DatasetFamilyDefinition } from "../families/index.js";
 import {
   createDefaultDatasetFamilyRegistry,
   registeredTableSchemasById,
 } from "../families/index.js";
 import { packageDigest } from "../publish/manifest.js";
+import { buildSourceCoverageReport, SOURCE_COVERAGE_ARTIFACT_FILE, writeSourceCoverageReport } from "../audit/source-coverage.js";
 import { promotePublication, type PublishResult } from "../publish/publisher.js";
 import { validateMultiTableCandidate } from "../validation/multitable.js";
 import { SourceAssetRegistry } from "../../runtime/source-assets/registry.js";
@@ -53,6 +55,26 @@ import {
 } from "../families/bioactivity-measurement/index.js";
 import { transformBioCLiteratureEvidence } from "../families/literature-evidence/provider.js";
 import { expandTargetEvidenceJsonCarriers } from "../families/target-evidence/provider-json.js";
+import {
+  CHART_PAPERS_TABLE_ID,
+  CHART_POINTS_TABLE_ID,
+  CHART_SERIES_TABLE_ID,
+  CHART_SOURCES_TABLE_ID,
+  chartEvidenceValidationPolicy,
+  evaluateChartEvidencePublication,
+  type ChartEvidenceRows,
+} from "../families/bioactivity-measurement/chart-evidence/index.js";
+import {
+  ACTIVITY_VALUE_RECORDS_TABLE_ID,
+  derivePaperCanonicalIdentities,
+  evaluatePaperEvidencePublication,
+  EXPERIMENT_RECORDS_TABLE_ID,
+  paperEvidenceValidationPolicy,
+  PAPER_EVIDENCE_TABLE_IDS,
+  PAPER_RECORDS_TABLE_ID,
+  SUPPLEMENTARY_ASSET_RECORDS_TABLE_ID,
+  type PaperEvidenceRows,
+} from "../families/bioactivity-measurement/paper-evidence/index.js";
 const IMPLEMENTATION_DIGEST = createHash("sha256")
   .update("registered_multitable.runtime.v1")
   .digest("hex");
@@ -64,6 +86,7 @@ function csvCell(value: unknown): string {
 
 class CanonicalCsvSink implements RegisteredTableSink {
   readonly referencedSourceAssetIds = new Set<string>();
+  readonly rows: RegisteredTableRow[] = [];
   result: RegisteredTableAdapterResult | null = null;
 
   constructor(readonly filePath: string, readonly fields: readonly string[]) {
@@ -72,6 +95,7 @@ class CanonicalCsvSink implements RegisteredTableSink {
   }
 
   writeRow(row: RegisteredTableRow): void {
+    this.rows.push(row);
     const declaredAssetId = row.values.source_asset_id;
     const locator = row.values.source_locator;
     if (typeof declaredAssetId === "string") {
@@ -236,6 +260,8 @@ export interface RegisteredMultiTableExecutionInput {
   forbiddenRoots?: readonly string[];
   publishedAt?: string;
   runId?: string;
+  /** Runtime discovery observations for the source coverage evidence. */
+  discoveryQueries?: readonly import("@biomed/contracts").DiscoveryQueryRecord[] | null;
 }
 
 export interface RegisteredMultiTableExecutionResult {
@@ -312,8 +338,28 @@ async function carrierBytes(
   if (resolved.registration_receipt.asset_ref.role !== "carrier" && resolved.registration_receipt.asset_ref.role !== "source") {
     throw new Error("provider dispatch requires a registered source or carrier asset");
   }
+  // 内存闸门（读取前）：登记收据声明的载体大小超过预算时直接拒绝，不启动传输。
+  const declaredBytes = resolved.registration_receipt.size_bytes;
+  if (Number.isFinite(declaredBytes) && declaredBytes > MAX_PROVIDER_CARRIER_BYTES) {
+    throw new Error(
+      `provider carrier '${assetId}' exceeded ${MAX_PROVIDER_CARRIER_BYTES} byte limit (declared ${declaredBytes} bytes); ` +
+        "split the acquisition into narrower extracts or add a streaming/sharded adapter instead of loading it whole",
+    );
+  }
+  // 内存闸门（读取中）：累计字节超预算立即中止，防止无 content-length 的流把堆撑爆。
   const chunks: Buffer[] = [];
-  for await (const chunk of resolved.content) chunks.push(Buffer.from(chunk));
+  let received = 0;
+  for await (const chunk of resolved.content) {
+    const buffer = Buffer.from(chunk);
+    received += buffer.length;
+    if (received > MAX_PROVIDER_CARRIER_BYTES) {
+      throw new Error(
+        `provider carrier '${assetId}' exceeded ${MAX_PROVIDER_CARRIER_BYTES} byte limit while streaming (received ${received} bytes); ` +
+          "split the acquisition into narrower extracts or add a streaming/sharded adapter instead of loading it whole",
+      );
+    }
+    chunks.push(buffer);
+  }
   return { receipt: resolved.registration_receipt, bytes: Buffer.concat(chunks) };
 }
 
@@ -418,6 +464,45 @@ async function writeProviderTables(options: {
   return results;
 }
 
+/**
+ * Rewrites one canonical table CSV so deterministically derived rows (paper
+ * evidence identities) become part of the published table bytes, replacing
+ * the parse-loop result for that table.
+ */
+async function rewriteIntegratedTable(options: {
+  outputDir: string;
+  taskId: string;
+  runId: string;
+  requirementId: string;
+  familyId: string;
+  tableId: string;
+  schema: DatasetSchemaV2;
+  rows: readonly Record<string, unknown>[];
+  relativePath: string;
+  assetIds: readonly string[];
+}): Promise<OperationResultManifest> {
+  const absolutePath = path.join(options.outputDir, ...options.relativePath.split("/"));
+  const content = [
+    options.schema.fields.map((field) => field.name).join(","),
+    ...options.rows.map((row) =>
+      options.schema.fields
+        .map((field) => csvCell(jsonCompatible(row[field.name], `${options.tableId}.${field.name}`)))
+        .join(",")),
+  ].join("\n") + "\n";
+  await writeFile(absolutePath, content, "utf8");
+  return tableResult({
+    taskId: options.taskId,
+    runId: options.runId,
+    requirementId: options.requirementId,
+    familyId: options.familyId,
+    tableId: options.tableId,
+    schema: options.schema,
+    relativePath: options.relativePath,
+    absolutePath,
+    assetIds: options.assetIds,
+  });
+}
+
 /** Server-owned fixed registered asset -> parse -> assemble -> B3 -> Publisher capability. */
 export async function executeRegisteredMultiTableBuild(
   input: RegisteredMultiTableExecutionInput,
@@ -433,6 +518,7 @@ export async function executeRegisteredMultiTableBuild(
   const assetRegistry = new SourceAssetRegistry(input.taskId, input.taskRoot);
   const parserRegistry = createDefaultRegisteredTableRegistry();
   const tableResults: Record<string, OperationResultManifest> = {};
+  const tableRows: Record<string, Record<string, unknown>[]> = {};
   const audits: RegisteredTableAudit[] = [];
   const sourceReceipts = new Map<string, Awaited<ReturnType<SourceAssetRegistry["register"]>>>();
   let assessIdentityArtifacts: ((artifacts: readonly ProductArtifactFact[]) => ProductAssessment) | null = null;
@@ -601,6 +687,9 @@ export async function executeRegisteredMultiTableBuild(
       assetIds: [...new Set(assetIds)].sort(),
       allowEmptyTables: family.id === "protein_structure" ? ["ligands"] : [],
     }));
+    for (const [tableId, providerTableRows] of Object.entries(rows)) {
+      tableRows[tableId] = providerTableRows.map((row) => ({ ...(row as Record<string, unknown>) }));
+    }
     if (assessIdentityArtifacts !== null) {
       const compoundResult = tableResults.compounds;
       const crosswalkResult = tableResults.compound_crosswalks;
@@ -646,6 +735,7 @@ export async function executeRegisteredMultiTableBuild(
       parser_version: registration.parser.parser_version,
     }, resolved, sink);
     audits.push(parsed.audit);
+    tableRows[source.table_id] = sink.rows.map((row) => ({ ...row.values }));
     const rowAssetIds = new Set<string>([assetId]);
     for (const declaredAssetId of sink.referencedSourceAssetIds) {
       const carrier = await assetRegistry.resolve(declaredAssetId);
@@ -670,6 +760,116 @@ export async function executeRegisteredMultiTableBuild(
   const primaryResult = Object.values(tableResults).find((result) => result.output_summary.schema_ref === primarySchema.schema_id);
   if (primaryResult === undefined) throw new Error("registered multi-table build did not produce its primary schema");
   const registeredAssets = [...sourceReceipts.keys()].sort();
+  const missingPaperTables = PAPER_EVIDENCE_TABLE_IDS.filter((tableId) => tableResults[tableId] === undefined);
+  const paperEvidencePresent = missingPaperTables.length < PAPER_EVIDENCE_TABLE_IDS.length;
+  if (paperEvidencePresent && missingPaperTables.length > 0) {
+    throw new Error(`paper evidence build requires all paper tables; missing: ${missingPaperTables.join(", ")}`);
+  }
+  if (paperEvidencePresent) {
+    if (tableResults[CHART_SERIES_TABLE_ID] === undefined) {
+      throw new Error("paper evidence build requires the chart evidence tables (chart_series, chart_points, papers, sources)");
+    }
+    const paperRows = {
+      paper_records: tableRows[PAPER_RECORDS_TABLE_ID] ?? [],
+      experiment_records: tableRows[EXPERIMENT_RECORDS_TABLE_ID] ?? [],
+      activity_value_records: tableRows[ACTIVITY_VALUE_RECORDS_TABLE_ID] ?? [],
+      supplementary_asset_records: tableRows[SUPPLEMENTARY_ASSET_RECORDS_TABLE_ID] ?? [],
+    } as unknown as PaperEvidenceRows;
+    const paperGate = evaluatePaperEvidencePublication(paperRows, new Set(registeredAssets));
+    if (!paperGate.publishable) {
+      const paperCheck = {
+        check_id: "paper_evidence_gate",
+        scope: "paper_evidence",
+        passed: false,
+        detail: paperGate.checks.map((item) => item.detail).join("; "),
+      };
+      await writeFile(path.join(outputDir, "validation_report.json"), `${JSON.stringify({
+        profile_ref: input.spec.validation_profile_ref,
+        checks: [paperCheck],
+      }, null, 2)}\n`, "utf8");
+      throw new Error(`registered multi-table validation failed: ${paperCheck.scope}:${paperCheck.check_id}: ${paperCheck.detail}`);
+    }
+    // Deterministic core-side identity derivation: canonical activities,
+    // compounds, assays, and targets are derived from the admitted paper
+    // evidence and merged into the canonical tables so chart points can
+    // reference real primary activity IDs in the published bytes.
+    const derived = derivePaperCanonicalIdentities(paperRows);
+    const mergedTables: Readonly<Record<"activities" | "compounds" | "assays" | "targets", Record<string, unknown>[]>> = {
+      activities: [
+        ...(tableRows.activities ?? []),
+        ...derived.activities.map((row): Record<string, unknown> => ({ ...row })),
+      ],
+      compounds: [
+        ...(tableRows.compounds ?? []),
+        ...derived.compounds.map((row): Record<string, unknown> => ({ ...row })),
+      ],
+      assays: [
+        ...(tableRows.assays ?? []),
+        ...derived.assays.map((row): Record<string, unknown> => ({ ...row })),
+      ],
+      targets: [
+        ...(tableRows.targets ?? []),
+        ...derived.targets.map((row): Record<string, unknown> => ({ ...row })),
+      ],
+    };
+    const canonicalSchemas = registeredTableSchemasById(family);
+    for (const tableId of ["activities", "compounds", "assays", "targets"] as const) {
+      const schema = canonicalSchemas.get(tableId);
+      if (schema === undefined) {
+        throw new Error(`canonical table '${tableId}' has no registered schema for the paper identity merge`);
+      }
+      tableResults[tableId] = await rewriteIntegratedTable({
+        outputDir,
+        taskId: input.taskId,
+        runId,
+        requirementId: input.spec.requirement_id,
+        familyId: family.id,
+        tableId,
+        schema,
+        rows: mergedTables[tableId],
+        relativePath: `tables/${tableId}.csv`,
+        assetIds: registeredAssets,
+      });
+    }
+    tableRows.activities = mergedTables.activities;
+    tableRows.compounds = mergedTables.compounds;
+    tableRows.assays = mergedTables.assays;
+    tableRows.targets = mergedTables.targets;
+  }
+  if (tableResults[CHART_SERIES_TABLE_ID] !== undefined) {
+    const missingChartTables = [
+      CHART_POINTS_TABLE_ID,
+      CHART_PAPERS_TABLE_ID,
+      CHART_SOURCES_TABLE_ID,
+    ].filter((tableId) => tableResults[tableId] === undefined);
+    if (missingChartTables.length > 0) {
+      throw new Error(`chart evidence build requires all chart tables; missing: ${missingChartTables.join(", ")}`);
+    }
+    const chartRows = {
+      chart_series: tableRows[CHART_SERIES_TABLE_ID] ?? [],
+      chart_points: tableRows[CHART_POINTS_TABLE_ID] ?? [],
+      papers: tableRows[CHART_PAPERS_TABLE_ID] ?? [],
+      sources: tableRows[CHART_SOURCES_TABLE_ID] ?? [],
+    } as unknown as ChartEvidenceRows;
+    const activityIds = new Set(
+      (tableRows.activities ?? []).flatMap((row) =>
+        typeof row.activity_id === "string" ? [row.activity_id] : []),
+    );
+    const chartGate = evaluateChartEvidencePublication(chartRows, activityIds);
+    if (!chartGate.publishable) {
+      const chartCheck = {
+        check_id: "chart_evidence_gate",
+        scope: "chart_evidence",
+        passed: false,
+        detail: chartGate.checks.map((item) => item.detail).join("; "),
+      };
+      await writeFile(path.join(outputDir, "validation_report.json"), `${JSON.stringify({
+        profile_ref: input.spec.validation_profile_ref,
+        checks: [chartCheck],
+      }, null, 2)}\n`, "utf8");
+      throw new Error(`registered multi-table validation failed: ${chartCheck.scope}:${chartCheck.check_id}: ${chartCheck.detail}`);
+    }
+  }
   const candidate = createDefaultFamilyAssemblerRegistry().createCapability(family.id).assemble({
     taskId: input.taskId,
     runId,
@@ -679,6 +879,7 @@ export async function executeRegisteredMultiTableBuild(
     schema: primarySchema,
     integrationResult: primaryResult,
     integrationResults: tableResults,
+    tableRows,
     registeredAssetIds: registeredAssets,
   });
 
@@ -711,7 +912,11 @@ export async function executeRegisteredMultiTableBuild(
     forbidden_roots: input.forbiddenRoots === undefined || input.forbiddenRoots.length === 0
       ? [defaultForbiddenRoot]
       : [...input.forbiddenRoots],
-    policy: family.multitable_validation_policy ?? { token_preservation_rules: [], profile_relation_missing_policies: {} },
+    policy: tableResults[PAPER_RECORDS_TABLE_ID] !== undefined
+      ? paperEvidenceValidationPolicy()
+      : tableResults[CHART_SERIES_TABLE_ID] !== undefined
+        ? chartEvidenceValidationPolicy()
+        : family.multitable_validation_policy ?? { token_preservation_rules: [], profile_relation_missing_policies: {} },
   });
   const auditPath = path.join(outputDir, "registered_adapter_audit.json");
   await writeFile(auditPath, `${JSON.stringify(audits, null, 2)}\n`, "utf8");
@@ -731,6 +936,34 @@ export async function executeRegisteredMultiTableBuild(
     );
   }
 
+  // Source coverage evidence (TODO P1 #21): asset evidence is resolved from
+  // the build's own registration receipts, keyed by spec binding.
+  const coverageAssetByBinding: Record<
+    string,
+    { asset_id: string; sha256: string; size_bytes: number; media_type: string }
+  > = {};
+  for (const [bindingId, assetId] of Object.entries(input.registeredAssetIds)) {
+    const receipt = sourceReceipts.get(assetId);
+    if (receipt === undefined) continue;
+    coverageAssetByBinding[bindingId] = {
+      asset_id: receipt.asset_ref.asset_id,
+      sha256: receipt.sha256,
+      size_bytes: receipt.size_bytes,
+      media_type: receipt.media_type,
+    };
+  }
+  await writeSourceCoverageReport(
+    outputDir,
+    buildSourceCoverageReport({
+      taskId: input.taskId,
+      spec: input.spec,
+      sourceAssets: coverageAssetByBinding,
+      registrationReceipts: [...sourceReceipts.values()],
+      integratedRows: null,
+      discoveryQueries: input.discoveryQueries ?? null,
+    }),
+  );
+
   const entries: ManifestArtifactEntry[] = [];
   for (const table of candidate.tables) {
     entries.push(await artifact(outputDir, tableResults[table.definition.table_id]!.output_files[0]!.relative_path,
@@ -742,6 +975,7 @@ export async function executeRegisteredMultiTableBuild(
   if (productAssessment !== null) {
     entries.push(await artifact(outputDir, "product_assessment.json", "audit_report", "application/json"));
   }
+  entries.push(await artifact(outputDir, SOURCE_COVERAGE_ARTIFACT_FILE, "audit_report", "application/json"));
   const packageSha = packageDigest(entries);
   const failedChecks = b3.checks.filter((check) => !check.passed);
   const validation: ValidationResult = {

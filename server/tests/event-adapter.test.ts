@@ -134,6 +134,42 @@ describe("PiEventAdapter", () => {
     });
   });
 
+  test("carries provider-reported usage into the durable context_usage payload", () => {
+    const { adapter } = createAdapter();
+
+    const events = adapter.adapt(runId, {
+      type: "context_usage",
+      tokens: 40_000,
+      contextWindow: 256_000,
+      percent: 15.6,
+      source: "runtime",
+      usage: {
+        input: 38_000,
+        output: 2_000,
+        cacheRead: 30_000,
+        cacheWrite: 0,
+        totalTokens: 40_000,
+        reasoning: 500,
+      },
+    });
+
+    expect(events[0]?.payload).toEqual({
+      type: "context_usage",
+      tokens: 40_000,
+      context_window: 256_000,
+      percent: 15.6,
+      source: "runtime",
+      usage: {
+        input_tokens: 38_000,
+        output_tokens: 2_000,
+        cache_read_tokens: 30_000,
+        cache_write_tokens: 0,
+        total_tokens: 40_000,
+        reasoning_tokens: 500,
+      },
+    });
+  });
+
   test("a turn that ended after compaction is not terminal until completeRun", () => {
     const { adapter } = createAdapter();
     const events = [
@@ -209,7 +245,57 @@ describe("PiEventAdapter", () => {
     expect(JSON.stringify(onDiagnostic.mock.calls).length).toBeLessThan(1_000);
   });
 
-  test("bounds and redacts browser payloads while sequences continue across runs", () => {
+  test("preserves absolute and private paths across streamed event payloads", () => {
+    const { adapter } = createAdapter();
+    const windowsPath = "C:\\Users\\cheng\\BioMed-QAgent\\server\\src\\agent\\event-adapter.ts";
+    const uncPath = "\\\\lab-server\\shared\\datasets\\input.csv";
+    const posixPath = "/home/cheng/BioMed-QAgent/data/input.csv";
+    const assistant = adapter.adapt(runId, {
+      type: "assistant_delta",
+      delta: `Read ${windowsPath}`,
+    });
+    const reasoning = adapter.adapt(runId, {
+      type: "reasoning_delta",
+      delta: `Compare ${uncPath}`,
+    });
+    const toolStarted = adapter.adapt(runId, {
+      type: "tool_started",
+      toolCallId: "call-paths",
+      toolName: "workspace_read",
+      arguments: { path: posixPath },
+    });
+    const toolCompleted = adapter.adapt(runId, {
+      type: "tool_completed",
+      toolCallId: "call-paths",
+      toolName: "workspace_read",
+      result: { source: windowsPath, mirror: uncPath, output: posixPath },
+      isError: false,
+    });
+    const cancelled = adapter.adapt("run-path-cancel", {
+      type: "turn_cancelled",
+      reason: `Stop reading ${posixPath}`,
+    });
+
+    expect(assistant[0]?.payload).toMatchObject({ delta: `Read ${windowsPath}` });
+    expect(reasoning[0]?.payload).toMatchObject({ delta: `Compare ${uncPath}` });
+    expect(toolStarted[0]?.payload).toMatchObject({ arguments: { path: posixPath } });
+    expect(toolStarted[1]?.payload).toMatchObject({ arguments: { path: posixPath } });
+    expect(JSON.parse((toolCompleted[0]?.payload as { output: string }).output)).toEqual({
+      source: windowsPath,
+      mirror: uncPath,
+      output: posixPath,
+    });
+    expect(cancelled[0]?.payload).toMatchObject({ reason: `Stop reading ${posixPath}` });
+    expect(JSON.stringify([
+      ...assistant,
+      ...reasoning,
+      ...toolStarted,
+      ...toolCompleted,
+      ...cancelled,
+    ])).not.toContain("[redacted-path]");
+  });
+
+  test("bounds browser payloads and redacts credentials while preserving paths", () => {
     const { adapter } = createAdapter();
     const oversized = "z".repeat(10_000);
     const events = [
@@ -220,6 +306,7 @@ describe("PiEventAdapter", () => {
         toolName: "bridge",
         arguments: {
           api_key: "credential-value",
+          note: "Authorization: Bearer bearer-value-1234",
           absolute: "C:\\Users\\private\\secret.txt",
           nested: { one: { two: { three: { four: "hidden" } } } },
           list: Array.from({ length: 40 }, (_, index) => index),
@@ -233,9 +320,61 @@ describe("PiEventAdapter", () => {
     expect(events.map((event) => event.sequence)).toEqual([1, 2, 3, 4]);
     expect((events[0]?.payload as { delta: string }).delta.length).toBeLessThanOrEqual(4_096);
     expect(serialized).not.toContain("credential-value");
-    expect(serialized).not.toContain("Users\\\\private");
+    expect(serialized).not.toContain("bearer-value-1234");
+    expect(serialized).toContain("Authorization: [redacted]");
+    expect(serialized).toContain("C:\\\\Users\\\\private\\\\secret.txt");
     expect(serialized).not.toContain(oversized);
     expect(serialized).toContain("[redacted]");
     expect(serialized).toContain("[truncated]");
+  });
+
+  test("serializes tool output with windows paths as valid JSON", () => {
+    const { adapter } = createAdapter();
+    const events = [
+      ...adapter.adapt(runId, {
+        type: "tool_completed",
+        toolCallId: "call-9",
+        toolName: "workspace_exec",
+        result: {
+          content: JSON.stringify({
+            command: ["C:\\Program Files\\Python313\\python.exe", "hello.py"],
+            exitCode: 0,
+            stdout: "Modified Hello, World!\r\n",
+          }),
+          details: {
+            command: ["C:\\Program Files\\Python313\\python.exe", "hello.py"],
+            exitCode: 0,
+            stdout: "Modified Hello, World!\r\n",
+          },
+          isError: false,
+        },
+        isError: false,
+      }),
+      ...adapter.adapt(runId, { type: "turn_completed" }),
+    ];
+    const output = (events[0]?.payload as { output?: string }).output ?? "";
+    // 序列化结果必须是合法 JSON——不得对序列化后的 JSON 再跑脱敏正则,
+    // 否则转义序列被咬坏,前端 toolOutput 解包会失败回退原文。
+    const parsed = JSON.parse(output) as { details?: { stdout?: string } };
+    expect(parsed.details?.stdout).toBe("Modified Hello, World!\r\n");
+  });
+
+  test("wraps oversized tool output in a truncated envelope that stays valid JSON", () => {
+    const { adapter } = createAdapter();
+    const big: Record<string, string> = {};
+    for (let index = 0; index < 40; index += 1) {
+      // MAX_ITEMS=20 只保留前 20 个字段,单字段拉长确保总量超过 MAX_OUTPUT_LENGTH。
+      big[`field_${index}`] = `value-${index}-${"z".repeat(190)}`;
+    }
+    const events = adapter.adapt(runId, {
+      type: "tool_completed",
+      toolCallId: "call-10",
+      toolName: "probe",
+      result: big,
+      isError: false,
+    });
+    const output = (events[0]?.payload as { output?: string }).output ?? "";
+    const parsed = JSON.parse(output) as { truncated?: boolean };
+    expect(parsed.truncated).toBe(true);
   });
 });

@@ -1,11 +1,32 @@
-import type { DatasetSchemaV2, JsonValue, OperationResultManifest } from "@biomed/contracts";
+import type { DatasetSchemaV2, JsonValue, OperationResultManifest, PublicationCandidate } from "@biomed/contracts";
 import { parseDatasetSchemaV2 } from "../contracts/index.js";
 import type { FamilyAssemblerHandler, FamilyAssemblyInput } from "./types.js";
 import { assembleLiteratureEvidenceCandidate, literatureEvidenceTables } from "../families/literature-evidence/index.js";
 import { assembleTargetEvidenceCandidate } from "../families/target-evidence/index.js";
 import { assembleVariantEvidenceCandidate } from "../families/variant-evidence/index.js";
 import { assembleProteinStructureCandidate } from "../families/protein-structure/index.js";
-import { assembleBioactivityCandidate } from "../families/bioactivity-measurement/index.js";
+import { assembleBioactivityCandidate, type BioactivityRows } from "../families/bioactivity-measurement/index.js";
+import {
+  assembleBioactivityChartEvidenceCandidate,
+  CHART_PAPERS_TABLE_ID,
+  CHART_POINTS_TABLE_ID,
+  CHART_SERIES_TABLE_ID,
+  CHART_SOURCES_TABLE_ID,
+  type ChartEvidenceRows,
+  type ChartEvidenceTableAssemblyInput,
+} from "../families/bioactivity-measurement/chart-evidence/index.js";
+import {
+  ACTIVITY_VALUE_RECORDS_TABLE_ID,
+  assembleBioactivityPaperEvidenceCandidate,
+  type BioactivityPaperEvidenceAssemblyInput,
+  EXPERIMENT_RECORDS_TABLE_ID,
+  type PaperEvidenceRows,
+  type PaperEvidenceTableAssemblyInput,
+  type PaperEvidenceTableId,
+  PAPER_EVIDENCE_TABLE_IDS,
+  PAPER_RECORDS_TABLE_ID,
+  SUPPLEMENTARY_ASSET_RECORDS_TABLE_ID,
+} from "../families/bioactivity-measurement/paper-evidence/index.js";
 import { assembleGutMicrobiomeCandidate } from "../families/gut-microbiome/index.js";
 import { inheritedDiseaseEvidenceAssembler } from "../families/inherited-disease-evidence/index.js";
 
@@ -152,6 +173,26 @@ export const bioactivityRegisteredAssembler: FamilyAssemblerHandler = {
   familyId: "bioactivity_measurement",
   handlerId: "bioactivity_measurement.assembler.v1",
   assemble: (input) => {
+    const tableResults = results(input);
+    const presentPaperTables = PAPER_EVIDENCE_TABLE_IDS.filter(
+      (tableId) => tableResults[tableId] !== undefined,
+    );
+    if (presentPaperTables.length > 0 && presentPaperTables.length !== PAPER_EVIDENCE_TABLE_IDS.length) {
+      throw new Error(
+        `paper evidence assembly requires all paper tables; missing: ${
+          PAPER_EVIDENCE_TABLE_IDS.filter((tableId) => !presentPaperTables.includes(tableId)).join(", ")
+        }`,
+      );
+    }
+    if (presentPaperTables.length === PAPER_EVIDENCE_TABLE_IDS.length) {
+      if (tableResults[CHART_SERIES_TABLE_ID] === undefined) {
+        throw new Error("paper evidence assembly requires the chart evidence tables (chart_series, chart_points, papers, sources)");
+      }
+      return assembleBioactivityPaperEvidenceCandidate(paperAssemblyInput(input, tableResults));
+    }
+    if (tableResults[CHART_SERIES_TABLE_ID] !== undefined) {
+      return assembleBioactivityChartCandidate(input, tableResults);
+    }
     const baseTables = tableInputs(input, ["activities", "compounds", "assays", "targets"] as const);
     const identityTables = results(input).compound_crosswalks === undefined
       ? []
@@ -166,3 +207,128 @@ export const bioactivityRegisteredAssembler: FamilyAssemblerHandler = {
     });
   },
 };
+
+function paperRowsFrom(input: FamilyAssemblyInput): PaperEvidenceRows {
+  const rows = input.tableRows;
+  if (rows === undefined) {
+    throw new Error("paper evidence assembly requires parsed paper rows");
+  }
+  return {
+    paper_records: rows[PAPER_RECORDS_TABLE_ID] ?? [],
+    experiment_records: rows[EXPERIMENT_RECORDS_TABLE_ID] ?? [],
+    activity_value_records: rows[ACTIVITY_VALUE_RECORDS_TABLE_ID] ?? [],
+    supplementary_asset_records: rows[SUPPLEMENTARY_ASSET_RECORDS_TABLE_ID] ?? [],
+  } as unknown as PaperEvidenceRows;
+}
+
+function paperAssemblyInput(
+  input: FamilyAssemblyInput,
+  tableResults: Readonly<Record<string, OperationResultManifest>>,
+): BioactivityPaperEvidenceAssemblyInput {
+  const baseRows = input.tableRows;
+  if (baseRows === undefined) {
+    throw new Error("paper evidence assembly requires parsed bioactivity, chart, and paper rows");
+  }
+  const bioactivityRows = {
+    activities: baseRows.activities ?? [],
+    compounds: baseRows.compounds ?? [],
+    assays: baseRows.assays ?? [],
+    targets: baseRows.targets ?? [],
+  } as unknown as BioactivityRows;
+  return {
+    bioactivity: {
+      taskId: input.taskId,
+      requirementId: input.requirementId,
+      datasetFamily: input.datasetFamily,
+      rowGranularity: input.rowGranularity,
+      tables: tableInputs(input, ["activities", "compounds", "assays", "targets"] as const),
+      registeredAssetIds: input.registeredAssetIds,
+      rows: bioactivityRows,
+    },
+    chartTables: CHART_TABLE_IDS.map((tableId): ChartEvidenceTableAssemblyInput => ({
+      tableId,
+      result: tableResults[tableId]!,
+      provenanceResults: [tableResults[tableId]!],
+      confidenceResults: [tableResults[tableId]!],
+    })),
+    chartRows: {
+      chart_series: chartRowsFrom(input, CHART_SERIES_TABLE_ID) as unknown as ChartEvidenceRows["chart_series"],
+      chart_points: chartRowsFrom(input, CHART_POINTS_TABLE_ID) as unknown as ChartEvidenceRows["chart_points"],
+      papers: chartRowsFrom(input, CHART_PAPERS_TABLE_ID) as unknown as ChartEvidenceRows["papers"],
+      sources: chartRowsFrom(input, CHART_SOURCES_TABLE_ID) as unknown as ChartEvidenceRows["sources"],
+    },
+    bioactivityRows,
+    paperTables: PAPER_EVIDENCE_TABLE_IDS.map((tableId): PaperEvidenceTableAssemblyInput => ({
+      tableId: tableId as PaperEvidenceTableId,
+      result: tableResults[tableId]!,
+      provenanceResults: [tableResults[tableId]!],
+      confidenceResults: [tableResults[tableId]!],
+    })),
+    paperRows: paperRowsFrom(input),
+    registeredAssetIds: input.registeredAssetIds,
+  };
+}
+
+const CHART_TABLE_IDS = [
+  CHART_SERIES_TABLE_ID,
+  CHART_POINTS_TABLE_ID,
+  CHART_PAPERS_TABLE_ID,
+  CHART_SOURCES_TABLE_ID,
+] as const;
+
+function chartRowsFrom(
+  input: FamilyAssemblyInput,
+  tableId: (typeof CHART_TABLE_IDS)[number],
+): readonly Record<string, unknown>[] {
+  const rows = input.tableRows?.[tableId];
+  if (rows === undefined) {
+    throw new Error(`chart evidence assembly requires parsed rows for '${tableId}'`);
+  }
+  return rows;
+}
+
+function assembleBioactivityChartCandidate(
+  input: FamilyAssemblyInput,
+  tableResults: Readonly<Record<string, OperationResultManifest>>,
+): PublicationCandidate {
+  const missing = CHART_TABLE_IDS.filter((tableId) => tableResults[tableId] === undefined);
+  if (missing.length > 0) {
+    throw new Error(`chart evidence assembly requires all chart tables; missing: ${missing.join(", ")}`);
+  }
+  const baseRows = input.tableRows;
+  if (baseRows === undefined) {
+    throw new Error("chart evidence assembly requires parsed bioactivity and chart rows");
+  }
+  const bioactivityRows = {
+    activities: baseRows.activities ?? [],
+    compounds: baseRows.compounds ?? [],
+    assays: baseRows.assays ?? [],
+    targets: baseRows.targets ?? [],
+  } as unknown as BioactivityRows;
+  const chartRows: ChartEvidenceRows = {
+    chart_series: chartRowsFrom(input, CHART_SERIES_TABLE_ID) as unknown as ChartEvidenceRows["chart_series"],
+    chart_points: chartRowsFrom(input, CHART_POINTS_TABLE_ID) as unknown as ChartEvidenceRows["chart_points"],
+    papers: chartRowsFrom(input, CHART_PAPERS_TABLE_ID) as unknown as ChartEvidenceRows["papers"],
+    sources: chartRowsFrom(input, CHART_SOURCES_TABLE_ID) as unknown as ChartEvidenceRows["sources"],
+  };
+  return assembleBioactivityChartEvidenceCandidate({
+    bioactivity: {
+      taskId: input.taskId,
+      requirementId: input.requirementId,
+      datasetFamily: input.datasetFamily,
+      rowGranularity: input.rowGranularity,
+      tables: tableInputs(input, ["activities", "compounds", "assays", "targets"] as const),
+      registeredAssetIds: input.registeredAssetIds,
+      rows: bioactivityRows,
+    },
+    chartTables: CHART_TABLE_IDS.map((tableId): ChartEvidenceTableAssemblyInput => ({
+      tableId,
+      result: tableResults[tableId]!,
+      provenanceResults: [tableResults[tableId]!],
+      confidenceResults: [tableResults[tableId]!],
+    })),
+    chartRows,
+    bioactivityRows,
+    registeredAssetIds: input.registeredAssetIds,
+  });
+}

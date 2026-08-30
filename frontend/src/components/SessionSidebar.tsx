@@ -4,7 +4,7 @@ import {
   TrashIcon,
   XIcon,
 } from "@phosphor-icons/react";
-import { useCallback, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import biomedLogoV2 from "../../../assets/logo/Logo-title.svg";
@@ -12,6 +12,7 @@ import biomedLogoV2 from "../../../assets/logo/Logo-title.svg";
 import { TaskStatusIcon } from "@/components/taskStatus";
 import { TASK_STATUS_META } from "@/components/taskStatusMeta";
 import { taskOutcome } from "@/components/taskOutcome";
+import { SidebarChartPanel } from "@/components/SidebarChartPanel";
 import {
   Alert,
   AlertDescription,
@@ -62,7 +63,12 @@ interface SessionSidebarProps {
   onDeleteTask?: (taskId: string) => Promise<void>;
 }
 
-function TaskRow({
+/**
+ * Memoized because ``tasksById`` in the agent store changes on every runtime
+ * event (including assistant stream frames); without memoization every event
+ * re-rendered every history row, which is noticeable with a long sidebar.
+ */
+const TaskRow = memo(function TaskRow({
   task,
   selected,
   pendingCancel,
@@ -73,9 +79,9 @@ function TaskRow({
   task: TaskProjection;
   selected: boolean;
   pendingCancel: boolean;
-  onSelect: () => void;
-  onCancel: () => void;
-  onDelete: () => void;
+  onSelect: (taskId: string) => void;
+  onCancel: (task: TaskProjection) => void;
+  onDelete: (taskId: string) => void;
 }) {
   const { summary } = task;
   const status = TASK_STATUS_META[summary.status];
@@ -94,7 +100,7 @@ function TaskRow({
     <SidebarMenuItem>
       <SidebarMenuButton
         isActive={selected}
-        onClick={onSelect}
+        onClick={() => onSelect(task.summary.task_id)}
         tooltip={summary.title}
         aria-label={`${summary.title} ${status.label}`}
         className={
@@ -120,7 +126,7 @@ function TaskRow({
           }
           title={cancelling ? "正在取消" : "取消任务"}
           disabled={cancelling}
-          onClick={onCancel}
+          onClick={() => onCancel(task)}
         >
           {cancelling ? <Spinner /> : <XIcon />}
         </SidebarMenuAction>
@@ -130,14 +136,14 @@ function TaskRow({
           showOnHover
           aria-label={`删除 ${summary.title}`}
           title="删除任务"
-          onClick={onDelete}
+          onClick={() => onDelete(task.summary.task_id)}
         >
           <TrashIcon />
         </SidebarMenuAction>
       )}
     </SidebarMenuItem>
   );
-}
+});
 
 export function SessionSidebar({
   onNewDraft,
@@ -174,14 +180,22 @@ export function SessionSidebar({
     if (isMobile) setOpenMobile(false);
   }, [isMobile, setOpenMobile]);
 
-  const selectTask = async (taskId: string) => {
+  const selectTask = useCallback(async (taskId: string) => {
     closeMobile();
     try {
       await onSelectTask(taskId);
     } catch (error) {
       toast.error("打开任务失败", { description: errorMessage(error) });
     }
-  };
+  }, [closeMobile, onSelectTask]);
+
+  const handleSelectTask = useCallback((taskId: string) => {
+    void selectTask(taskId);
+  }, [selectTask]);
+
+  const handleDeleteTask = useCallback((taskId: string) => {
+    setDeleteTargetId(taskId);
+  }, []);
 
   const showNewDraft = useCallback(() => {
     onNewDraft();
@@ -199,7 +213,7 @@ export function SessionSidebar({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [showNewDraft]);
 
-  const loadMore = async () => {
+  const loadMore = useCallback(async () => {
     if (loadingMore || onLoadMore === undefined || nextCursor === null) return;
     setLoadingMore(true);
     try {
@@ -211,7 +225,7 @@ export function SessionSidebar({
     } finally {
       setLoadingMore(false);
     }
-  };
+  }, [loadingMore, onLoadMore, nextCursor]);
 
   const retryHistory = async () => {
     if (onRetryHistory === undefined || historyStatus === "loading") return;
@@ -224,7 +238,7 @@ export function SessionSidebar({
     }
   };
 
-  const cancelTask = async (task: TaskProjection) => {
+  const cancelTask = useCallback(async (task: TaskProjection) => {
     const runId = task.summary.active_run_id;
     if (runId === null || onCancelRun === undefined) return;
     setPendingCancels((current) => new Set(current).add(task.summary.task_id));
@@ -239,7 +253,11 @@ export function SessionSidebar({
         return next;
       });
     }
-  };
+  }, [onCancelRun]);
+
+  const handleCancelTask = useCallback((task: TaskProjection) => {
+    void cancelTask(task);
+  }, [cancelTask]);
 
   const confirmDelete = async () => {
     if (deleteTargetId === null || onDeleteTask === undefined || deleting) return;
@@ -262,9 +280,9 @@ export function SessionSidebar({
           task={task}
           selected={task.summary.task_id === activeTaskId}
           pendingCancel={pendingCancels.has(task.summary.task_id)}
-          onSelect={() => void selectTask(task.summary.task_id)}
-          onCancel={() => void cancelTask(task)}
-          onDelete={() => setDeleteTargetId(task.summary.task_id)}
+          onSelect={handleSelectTask}
+          onCancel={handleCancelTask}
+          onDelete={handleDeleteTask}
         />
       ))}
     </SidebarMenu>
@@ -301,14 +319,7 @@ export function SessionSidebar({
           </Button>
         </SidebarHeader>
 
-        <SidebarContent
-          onScroll={(event) => {
-            const element = event.currentTarget;
-            if (element.scrollHeight - element.scrollTop - element.clientHeight < 160) {
-              void loadMore();
-            }
-          }}
-        >
+        <SidebarContent>
           <SidebarGroup>
             <SidebarGroupContent>
               {historyStatus === "error" && (
@@ -346,17 +357,28 @@ export function SessionSidebar({
                   </EmptyHeader>
                 </Empty>
               ) : null}
-              {loadingMore && (
-                <div
-                  role="status"
-                  className="flex items-center justify-center gap-2 p-3 text-xs text-muted-foreground"
+              {nextCursor !== null && visibleTasks.length > 0 && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="w-full justify-center text-xs text-muted-foreground"
+                  disabled={loadingMore}
+                  onClick={() => void loadMore()}
+                  aria-label="展开显示更多历史对话"
                 >
-                  <Spinner className="size-3.5" aria-hidden="true" />
-                  正在加载
-                </div>
+                  {loadingMore && (
+                    <Spinner
+                      className="size-3.5"
+                      data-icon="inline-start"
+                      aria-hidden="true"
+                    />
+                  )}
+                  {loadingMore ? "加载中" : "展开显示"}
+                </Button>
               )}
             </SidebarGroupContent>
           </SidebarGroup>
+          <SidebarChartPanel />
         </SidebarContent>
 
         <SidebarFooter>

@@ -16,6 +16,7 @@
  * output is the diagnostic value.
  */
 
+import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -130,16 +131,16 @@ describeLive("live:provider-smoke (Gold10 acquisition providers)", () => {
     expect(result.asset).not.toBeNull();
   });
 
-  it("GMRepo associated-species classifies upstream failures with per-binding diagnostics", async () => {
+  it("GMRepo taxon phenotype summary classifies upstream failures with per-binding diagnostics", async () => {
     const fixture = await runtime([createGmrepoFilesProvider()]);
-    const outcome = await fixture.runtime.acquire(request("gmrepo.files.v1", "gmrepo", "D006262"))
+    const outcome = await fixture.runtime.acquire(request("gmrepo.files.v1", "gmrepo", "1234"))
       .then((result) => ({ ok: true as const, result }))
       .catch((error: unknown) => ({ ok: false as const, error }));
     if (outcome.ok) {
       expect(outcome.result.sourceAsset.role).toBe("carrier");
       return;
     }
-    // Upstream is known-unhealthy (2026-08): a failure is only acceptable when
+    // The live endpoint is normally healthy; a failure is only acceptable when
     // it is fully attributed — classified error code plus binding/provider/
     // host/elapsed diagnostics on the CoreAcquisitionError.
     expect(outcome.error).toBeInstanceOf(CoreAcquisitionError);
@@ -151,6 +152,88 @@ describeLive("live:provider-smoke (Gold10 acquisition providers)", () => {
     expect(failure.details.binding_id).toBe("binding_smoke_gmrepo_files_v1");
     expect(failure.details.endpoint_host).toBe("gmrepo.humangut.info");
     expect(typeof failure.details.elapsed_ms).toBe("number");
-    expect(failure.details.url).toContain("/api/getAssociatedSpeciesByMeshID/");
+    expect(failure.details.url).toContain("/api/getPhenotypesAndAbundanceSummaryOfAAssociatedTaxon/");
+  });
+});
+
+describeLive("live:provider-smoke (supplementary xlsx extraction)", () => {
+  it("Europe PMC supplementary archive stages members and parses XLSX worksheets to CSV", { timeout: 180_000 }, async () => {
+    const fixture = await runtime(
+      (await import("../../src/dataset/acquisition/extended-providers.js")).createExtendedAcquisitionProviders()
+        .filter((provider) => provider.providerId === "europepmc.supplementary.v1"),
+    );
+    const result = await fixture.runtime.acquire(request("europepmc.supplementary.v1", "europepmc_supplementary", "PMC9005347"));
+    expect(result.sourceAsset.role).toBe("carrier");
+    expect(result.attempts.at(-1)?.status).toBe("succeeded");
+    // Real Bellenguez 2022 archive: the XLSX member stages raw plus one
+    // provenance-bound UTF-8 CSV per worksheet (Supplementary Table 5 is the
+    // gold7 locus summary table).
+    expect(result.extractionAssets.length).toBeGreaterThan(2);
+    const registry = new SourceAssetRegistry("task_provider_smoke", fixture.root);
+    const csvTexts: string[] = [];
+    for (const asset of result.extractionAssets.slice(1)) {
+      const chunks: Buffer[] = [];
+      for await (const chunk of (await registry.resolveAny(asset.asset_id)).content) chunks.push(Buffer.from(chunk));
+      csvTexts.push(Buffer.concat(chunks).toString("utf-8"));
+    }
+    expect(csvTexts.some((text) => text.includes("Supplementary Table"))).toBe(true);
+  });
+});
+
+describeLive("live:provider-smoke (Europe PMC PDF carrier)", () => {
+  it("registers the official full-text PDF with a %PDF- magic and intact receipt", { timeout: 180_000 }, async () => {
+    const fixture = await runtime(
+      (await import("../../src/dataset/acquisition/extended-providers.js")).createExtendedAcquisitionProviders()
+        .filter((provider) => provider.providerId === "europepmc.pdf.v1"),
+    );
+    const result = await fixture.runtime.acquire(request("europepmc.pdf.v1", "europepmc_pdf", "PMC9005347"));
+    expect(result.sourceAsset.role).toBe("carrier");
+    expect(result.attempts.at(-1)?.status).toBe("succeeded");
+    expect(result.sourceAsset.asset_id).toMatch(/^asset_[0-9a-f]{64}$/);
+
+    // Receipt verification against the downloaded bytes; everything stays in
+    // the task temp dir removed by afterAll — nothing is stored in git.
+    const registry = new SourceAssetRegistry("task_provider_smoke", fixture.root);
+    const resolved = await registry.resolveCarrier(result.sourceAsset.asset_id);
+    const receipt = resolved.registration_receipt;
+    expect(receipt.media_type).toBe("application/pdf");
+
+    const chunks: Buffer[] = [];
+    for await (const chunk of resolved.content) chunks.push(Buffer.from(chunk));
+    const pdf = Buffer.concat(chunks);
+    expect(pdf.subarray(0, 5).toString("latin1")).toBe("%PDF-");
+    expect(pdf.length).toBe(receipt.size_bytes);
+    const sha256 = createHash("sha256").update(pdf).digest("hex");
+    expect(receipt.sha256).toBe(sha256);
+    expect(result.sourceAsset.asset_id).toBe(`asset_${sha256}`);
+  });
+});
+
+describeLive("live:provider-smoke (Europe PMC full-text XML carrier)", () => {
+  it("registers the official full-text XML with a '<' magic and intact receipt", { timeout: 180_000 }, async () => {
+    const fixture = await runtime(
+      (await import("../../src/dataset/acquisition/extended-providers.js")).createExtendedAcquisitionProviders()
+        .filter((provider) => provider.providerId === "europepmc.fulltext_xml.v1"),
+    );
+    const result = await fixture.runtime.acquire(request("europepmc.fulltext_xml.v1", "europepmc_fulltext_xml", "PMC10408569"));
+    expect(result.sourceAsset.role).toBe("carrier");
+    expect(result.attempts.at(-1)?.status).toBe("succeeded");
+    expect(result.sourceAsset.asset_id).toMatch(/^asset_[0-9a-f]{64}$/);
+
+    // Receipt verification against the downloaded bytes; everything stays in
+    // the task temp dir removed by afterAll — nothing is stored in git.
+    const registry = new SourceAssetRegistry("task_provider_smoke", fixture.root);
+    const resolved = await registry.resolveCarrier(result.sourceAsset.asset_id);
+    const receipt = resolved.registration_receipt;
+    expect(receipt.media_type).toBe("application/xml");
+
+    const chunks: Buffer[] = [];
+    for await (const chunk of resolved.content) chunks.push(Buffer.from(chunk));
+    const xml = Buffer.concat(chunks);
+    expect(xml.subarray(0, 1).toString("latin1")).toBe("<");
+    expect(xml.length).toBe(receipt.size_bytes);
+    const sha256 = createHash("sha256").update(xml).digest("hex");
+    expect(receipt.sha256).toBe(sha256);
+    expect(result.sourceAsset.asset_id).toBe(`asset_${sha256}`);
   });
 });

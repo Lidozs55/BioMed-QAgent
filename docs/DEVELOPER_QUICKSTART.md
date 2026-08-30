@@ -59,7 +59,7 @@ uv run python database/bridge.py --self-test
 pnpm dev
 ```
 
-打开 `http://127.0.0.1:5173`。这一个进程/端口同时承载 React/Vite、`/api/v1/*`、`/api/v1/ws`、Pi Agent、durable runtime、TypeScript Dataset Core 和按需启动的 Python database bridge。
+Host 首选 `http://127.0.0.1:5173`。若该端口已被占用，Host 会让操作系统分配可用端口；请打开启动输出中 `BIOMED_QAGENT_URL=...` 指向的实际地址。这一个进程/端口同时承载 React/Vite、`/api/v1/*`、`/api/v1/ws`、Pi Agent、durable runtime、TypeScript Dataset Core 和按需启动的 Python database bridge。
 
 `pnpm --dir frontend dev` 或根 `pnpm dev:frontend-standalone` 只用于前端定向诊断。不要启动 legacy Python web server；仓库不存在该拓扑。
 
@@ -113,7 +113,7 @@ pnpm build
 pnpm start
 ```
 
-`pnpm start` 服务已经生成的生产 bundle。不要把 `pnpm dev` 或 Vite standalone 当成生产部署方式。
+`pnpm start` 服务已经生成的生产 bundle，因此应先执行 `pnpm build`（发布 ZIP 已包含构建产物）。静态生产入口按当前 OS 用户持有唯一实例租约：已有实例时第二次启动打印 `BioMed-QAgent is already running.` 并以成功状态退出，不创建第二个 Host。不要把 `pnpm dev` 或 Vite standalone 当成生产部署方式。
 
 ## 7. 数据与权限
 

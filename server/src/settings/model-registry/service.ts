@@ -15,6 +15,7 @@ import path from "node:path";
 import {
   DEFAULT_RUNTIME_LIMITS,
   RUNTIME_LIMIT_RANGES,
+  type ModelRegistryListQuery,
   type ParameterSpec,
   type RuntimeLimits,
 } from "@biomed/contracts";
@@ -37,10 +38,17 @@ import {
 } from "../../http/validation.js";
 import { catalogCapacity, catalogContextWindow, lookupModelCatalog, paramSpecsFor } from "./catalog.js";
 import { migrateLegacyRegistry, migrateLegacySettings } from "./migration.js";
-import { resolveActiveConfig, resolveVlmConfig } from "./model-resolution.js";
+import {
+  resolveActiveConfig,
+  resolveVlmConfig,
+  VisionConfigError,
+  visionAssignmentProblem,
+  visionSettingsFacts,
+} from "./model-resolution.js";
 import { createSettingsRouter } from "./routes.js";
 import {
   bootstrapEnvironmentDefaults,
+  defaultRegistry,
   loadAuthState,
   loadRegistryState,
   persistState,
@@ -49,6 +57,7 @@ import {
   type ModelRecord,
   type ProviderRecord,
   type RegistryState,
+  type SettingsRecord,
 } from "./store.js";
 
 export interface ModelSettingsServiceOptions {
@@ -65,6 +74,15 @@ function maskApiKey(value: string): string {
   return `${value.slice(0, 8)}...${value.slice(-4)}`;
 }
 
+const DEFAULT_PAGE_SIZE = 20;
+
+/**
+ * 全局默认最大输出 tokens，与 store.ts ``defaultRegistry`` 的
+ * ``max_tokens`` 默认一致；激活三源皆空的模型时回退到它，
+ * 保证 ``settings.max_tokens`` 总有明确来源。
+ */
+const DEFAULT_MAX_TOKENS = 8192;
+
 function runtimeLimitsPatch(value: unknown): Partial<RuntimeLimits> {
   const record = asRecord(value);
   const patch: Partial<RuntimeLimits> = {};
@@ -80,6 +98,50 @@ function runtimeLimitsPatch(value: unknown): Partial<RuntimeLimits> {
     patch[key] = candidate as number;
   }
   return patch;
+}
+
+/**
+ * Derive the runtime ``settings.max_tokens`` from a model record:
+ * ``params.max_tokens`` wins, then ``suggested_max_tokens``, then
+ * ``max_output_tokens``. Returns ``null`` when all three sources are empty.
+ */
+function deriveModelMaxTokens(model: ModelRecord): number | null {
+  const value = model.params.max_tokens ?? model.suggested_max_tokens ?? model.max_output_tokens;
+  return typeof value === "number" ? value : null;
+}
+
+/**
+ * Apply the active model's derived parameters (max output + sampling) to the
+ * runtime settings. Shared by ``activateInMemory`` and ``updateModel`` so
+ * editing an active model takes effect without reactivation and the two
+ * call sites cannot drift apart.
+ */
+function applyModelDerivedParams(model: ModelRecord, settings: SettingsRecord): void {
+  settings.max_tokens = deriveModelMaxTokens(model) ?? DEFAULT_MAX_TOKENS;
+  if (typeof model.params.temperature === "number") settings.advanced.temperature = model.params.temperature;
+  if (typeof model.params.top_p === "number") settings.advanced.top_p = model.params.top_p;
+  if (typeof model.params.repetition_penalty === "number") settings.advanced.repetition_penalty = model.params.repetition_penalty;
+  if (typeof model.params.enable_search === "boolean") settings.advanced.enable_search = model.params.enable_search;
+  if (typeof model.params.thinking_mode === "boolean") settings.advanced.thinking_mode = model.params.thinking_mode;
+}
+
+/**
+ * ``base_url`` 写入端的结构校验(updateSettings / createProvider /
+ * updateProvider 共用):必须能解析为 URL、协议为 http/https 且带 hostname。
+ * 刻意保持同步且不发网络请求——全局 IP/localhost 的运行时策略仍由
+ * discover 出站时的 ``publicProviderUrl``(url-policy.ts)把守,写入端只挡
+ * "明显不是 URL"的值。
+ */
+function assertHttpBaseUrl(value: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new HttpError(422, `base_url must be a valid http(s) URL: ${value}`);
+  }
+  if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || parsed.hostname === "") {
+    throw new HttpError(422, `base_url must be a valid http(s) URL: ${value}`);
+  }
 }
 
 export class ModelSettingsService {
@@ -135,12 +197,26 @@ export class ModelSettingsService {
 
   resolveRuntimeLimits = (): RuntimeLimits => ({ ...this.registry.settings.runtime_limits });
 
-  /** Resolve VLM chart-extraction config from active settings when possible. */
-  resolveVlmConfig = (): Promise<{
+  /**
+   * Resolve the visual-extraction config at call time (never snapshotted at
+   * bootstrap). A stale assignment is cleared first; anything unresolvable
+   * fails closed with an actionable ``VisionConfigError``. The API key is
+   * returned to the caller only — it is never logged or persisted here.
+   */
+  resolveVlmConfig = async (): Promise<{
     apiKey: string;
     baseUrl: string;
     model: string;
-  }> => Promise.resolve(resolveVlmConfig(this.registry, this.auth, this.environment));
+  }> => {
+    const stale = visionAssignmentProblem(this.registry);
+    if (stale !== null) {
+      await this.mutate(() => {
+        this.registry.settings.vision_model_id = null;
+      });
+      throw new VisionConfigError(stale);
+    }
+    return resolveVlmConfig(this.registry, this.auth, this.environment);
+  };
 
   /* ---- Routes surface ---- */
 
@@ -180,6 +256,7 @@ export class ModelSettingsService {
       run_ready: apiKey !== "" && modelName !== "",
       run_block_reason: runBlockReason,
       runtime_limits: settings.runtime_limits,
+      ...visionSettingsFacts(this.registry, this.auth, this.environment),
     };
   }
 
@@ -187,7 +264,10 @@ export class ModelSettingsService {
     return this.mutate(() => {
       const settings = structuredClone(this.registry.settings);
       const auth = structuredClone(this.auth);
-      if (body.base_url !== undefined) settings.base_url = requiredString(body.base_url, "base_url");
+      if (body.base_url !== undefined) {
+        settings.base_url = requiredString(body.base_url, "base_url");
+        assertHttpBaseUrl(settings.base_url);
+      }
       if (body.model_name !== undefined) settings.model_name = requiredString(body.model_name, "model_name");
       if (body.max_tokens !== undefined) settings.max_tokens = boundedNumber(body.max_tokens, "max_tokens", 1);
       if (body.context_window === null) settings.context_window = null;
@@ -200,6 +280,28 @@ export class ModelSettingsService {
       if (body.repetition_penalty !== undefined) settings.advanced.repetition_penalty = boundedNumber(body.repetition_penalty, "repetition_penalty", 0);
       if (body.enable_search !== undefined) settings.advanced.enable_search = Boolean(body.enable_search);
       if (body.thinking_mode !== undefined) settings.advanced.thinking_mode = Boolean(body.thinking_mode);
+      // Visual-extraction role: persist the managed-model record id only, and
+      // only for an enabled provider's image-capable model (fail fast with an
+      // actionable message); null clears the role.
+      if (body.vision_model_id === null) {
+        settings.vision_model_id = null;
+      } else if (body.vision_model_id !== undefined) {
+        const visionModel = this.model(requiredString(body.vision_model_id, "vision_model_id"));
+        const visionProvider = this.provider(visionModel.provider_id);
+        if (visionProvider.enabled === false) {
+          throw new HttpError(
+            422,
+            `供应商「${visionProvider.name}」已停用，不能将其模型设为视觉抽取模型`,
+          );
+        }
+        if (visionModel.capabilities.image !== true) {
+          throw new HttpError(
+            422,
+            `模型「${visionModel.name}」未开启图像能力，不能作为视觉抽取模型`,
+          );
+        }
+        settings.vision_model_id = visionModel.id;
+      }
       if (body.runtime_limits === null) {
         settings.runtime_limits = { ...DEFAULT_RUNTIME_LIMITS };
       } else if (body.runtime_limits !== undefined) {
@@ -215,6 +317,33 @@ export class ModelSettingsService {
         if (body.api_key !== maskApiKey(current)) {
           if (settings.provider_id === null) auth.direct_api_key = body.api_key;
           else auth.provider_api_keys[settings.provider_id] = body.api_key;
+        }
+      }
+      // 跨字段校验：仅在本次请求触及相关字段时校验写入后的组合，
+      // 磁盘上已有的历史违规组合不会锁死不相关字段的更新。
+      if (body.compaction_target_ratio !== undefined || body.compaction_trigger_ratio !== undefined) {
+        if (settings.compaction_target_ratio >= settings.compaction_trigger_ratio) {
+          throw new HttpError(
+            422,
+            `compaction_target_ratio (${settings.compaction_target_ratio}) 必须小于 ` +
+              `compaction_trigger_ratio (${settings.compaction_trigger_ratio})，` +
+              "请调低压缩目标比例或调高触发比例",
+          );
+        }
+      }
+      if (body.max_tokens !== undefined ||
+          body.context_window !== undefined ||
+          body.safety_reserve_ratio !== undefined) {
+        // context_window 为 null 时与运行时回退一致按 131072 计算。
+        const effectiveWindow = settings.context_window ?? 131_072;
+        const budget = effectiveWindow * (1 - settings.safety_reserve_ratio);
+        if (settings.max_tokens >= budget) {
+          throw new HttpError(
+            422,
+            `max_tokens (${settings.max_tokens}) 需小于上下文窗口 ${effectiveWindow} ` +
+              `扣除安全保留后的可用预算（约 ${Math.floor(budget)}），` +
+              "请调低 max_tokens 或扩大 context_window",
+          );
         }
       }
       this.registry.settings = settings;
@@ -243,10 +372,12 @@ export class ModelSettingsService {
         throw new HttpError(409, "供应商名称已存在");
       }
       const current = timestamp();
+      const baseUrl = requiredString(body.base_url, "base_url");
+      assertHttpBaseUrl(baseUrl);
       created = {
         id: `provider_${randomUUID().replaceAll("-", "")}`,
         name,
-        base_url: requiredString(body.base_url, "base_url"),
+        base_url: baseUrl,
         preset_id: typeof body.preset_id === "string" ? body.preset_id : null,
         description: typeof body.description === "string" ? body.description : "",
         enabled: true,
@@ -263,10 +394,25 @@ export class ModelSettingsService {
     return this.mutate(() => {
       const provider = this.provider(id);
       if (body.name !== undefined) provider.name = requiredString(body.name, "name");
-      if (body.base_url !== undefined) provider.base_url = requiredString(body.base_url, "base_url");
+      if (body.base_url !== undefined) {
+        // 先校验再赋值:updateProvider 直接改活跃记录(非克隆),
+        // 失败的 PUT 不得留下脏的内存状态。
+        const baseUrl = requiredString(body.base_url, "base_url");
+        assertHttpBaseUrl(baseUrl);
+        provider.base_url = baseUrl;
+      }
       if (body.preset_id !== undefined) provider.preset_id = typeof body.preset_id === "string" ? body.preset_id : null;
       if (body.description !== undefined) provider.description = String(body.description);
       if (body.enabled !== undefined) provider.enabled = Boolean(body.enabled);
+      // Disabling a provider clears its models' visual role (case: disabled
+      // visual model clears the assignment instead of failing at extraction).
+      if (provider.enabled === false) {
+        const visionModelId = this.registry.settings.vision_model_id;
+        if (visionModelId !== null &&
+            this.registry.models.some((item) => item.id === visionModelId && item.provider_id === id)) {
+          this.registry.settings.vision_model_id = null;
+        }
+      }
       if (typeof body.api_key === "string" &&
           body.api_key !== maskApiKey(this.auth.provider_api_keys[id] ?? "")) {
         this.auth.provider_api_keys[id] = body.api_key;
@@ -283,14 +429,62 @@ export class ModelSettingsService {
       this.registry.models = this.registry.models.filter((item) => item.provider_id !== id);
       delete this.auth.provider_api_keys[id];
       if (this.registry.settings.provider_id === id) {
-        this.registry.settings.provider_id = null;
-        this.registry.settings.active_model_id = null;
+        this.resetActiveConnectionSettings(true);
+      }
+      // The visual role dies with its provider's models (no dangling id).
+      const visionModelId = this.registry.settings.vision_model_id;
+      if (visionModelId !== null && !this.registry.models.some((item) => item.id === visionModelId)) {
+        this.registry.settings.vision_model_id = null;
       }
     });
   }
 
   listModels(): JsonObject[] {
     return this.registry.models.map((model) => this.publicModel(model));
+  }
+
+  listProvidersPage(query: ModelRegistryListQuery): JsonObject {
+    return this.paginate(
+      this.registry.providers,
+      query,
+      (provider) => this.publicProvider(provider),
+      (provider, q) =>
+        [provider.name, provider.base_url, provider.preset_id ?? "", provider.description]
+          .some((value) => value.toLowerCase().includes(q)),
+    );
+  }
+
+  listModelsPage(query: ModelRegistryListQuery): JsonObject {
+    return this.paginate(
+      this.registry.models,
+      query,
+      (model) => this.publicModel(model),
+      (model, q) => this.matchesModelQ(model, q),
+    );
+  }
+
+  private paginate<T>(
+    records: T[],
+    query: ModelRegistryListQuery,
+    toPublic: (record: T) => JsonObject,
+    matches: (record: T, q: string) => boolean,
+  ): JsonObject {
+    const page = query.page ?? 1;
+    const size = query.size ?? DEFAULT_PAGE_SIZE;
+    const q = (query.q ?? "").trim().toLowerCase();
+    const filtered = q === "" ? records : records.filter((record) => matches(record, q));
+    return {
+      items: filtered.slice((page - 1) * size, page * size).map(toPublic),
+      total: filtered.length,
+      page,
+      size,
+    };
+  }
+
+  private matchesModelQ(model: ModelRecord, q: string): boolean {
+    const providerName = this.registry.providers.find((item) => item.id === model.provider_id)?.name ?? "";
+    return [model.model_id, model.name, model.description, model.source, providerName]
+      .some((value) => value.toLowerCase().includes(q));
   }
 
   createModel(body: JsonObject): Promise<ModelRecord> {
@@ -353,11 +547,37 @@ export class ModelSettingsService {
       if (body.context_window !== undefined) model.context_window = body.context_window === null ? null : boundedNumber(body.context_window, "context_window", 1);
       if (body.max_output_tokens !== undefined) model.max_output_tokens = body.max_output_tokens === null ? null : boundedNumber(body.max_output_tokens, "max_output_tokens", 1);
       if (body.suggested_max_tokens !== undefined) model.suggested_max_tokens = body.suggested_max_tokens === null ? null : boundedNumber(body.suggested_max_tokens, "suggested_max_tokens", 1);
-      if (body.params !== undefined) model.params = { ...model.params, ...asRecord(body.params) };
-      if (body.context_window !== undefined ||
+      // 模态（capabilities）用户可编辑：与 createModel 同一套归一化语义
+      // （text 未显式 false 即开启，其余显式 opt-in），写 user 后不再被目录同步覆盖。
+      if (body.capabilities !== undefined) {
+        const caps = optionalRecord(body.capabilities);
+        model.capabilities = {
+          text: caps.text !== false,
+          image: caps.image === true,
+          video: caps.video === true,
+          audio: caps.audio === true,
+        };
+        // A selected visual model that loses its image capability no longer
+        // serves the role.
+        if (model.capabilities.image === false && this.registry.settings.vision_model_id === id) {
+          this.registry.settings.vision_model_id = null;
+        }
+      }
+      if (body.params !== undefined) {
+        const mergedParams = { ...model.params, ...asRecord(body.params) };
+        this.validateModelParams(model, mergedParams);
+        model.params = mergedParams;
+      }
+      // 只要任一用户可编辑字段被修改（与默认/目录元数据不再一致），就标记为
+      // 用户手动配置：此后不再被目录启动同步覆盖，前端来源徽标据此显示
+      // "手动配置"。
+      if (body.name !== undefined ||
+          body.description !== undefined ||
+          body.context_window !== undefined ||
           body.max_output_tokens !== undefined ||
           body.suggested_max_tokens !== undefined ||
-          body.capabilities !== undefined) {
+          body.capabilities !== undefined ||
+          body.params !== undefined) {
         model.metadata_source = "user";
       }
       // 活动模型的上下文窗口被用户修改后，跟随同步运行时设置，
@@ -366,6 +586,14 @@ export class ModelSettingsService {
           this.registry.settings.active_model_id === id) {
         const settings = this.registry.settings;
         settings.context_window = model.context_window ?? settings.context_window;
+      }
+      // 活动模型的 max_tokens/采样参数派生同样回写运行时设置，
+      // 与 activateInMemory 共用同一份派生逻辑，参数编辑无需重新激活即生效。
+      if ((body.params !== undefined ||
+           body.max_output_tokens !== undefined ||
+           body.suggested_max_tokens !== undefined) &&
+          this.registry.settings.active_model_id === id) {
+        applyModelDerivedParams(model, this.registry.settings);
       }
       model.updated_at = timestamp();
       updated = model;
@@ -377,7 +605,10 @@ export class ModelSettingsService {
       this.model(id);
       this.registry.models = this.registry.models.filter((item) => item.id !== id);
       if (this.registry.settings.active_model_id === id) {
-        this.registry.settings.active_model_id = null;
+        this.resetActiveConnectionSettings(false);
+      }
+      if (this.registry.settings.vision_model_id === id) {
+        this.registry.settings.vision_model_id = null;
       }
     });
   }
@@ -424,6 +655,29 @@ export class ModelSettingsService {
     return model;
   }
 
+  /**
+   * 按 ``paramSpecsFor(presetId, modelId)`` 对已知参数键校验 min/max，越界
+   * 抛 422；未知键保持现状语义放行。JSON 通道此前可绕过前端展示的
+   * min/max，这里在写入端补上。
+   */
+  private validateModelParams(model: ModelRecord, params: JsonObject): void {
+    const provider = this.provider(model.provider_id);
+    for (const spec of paramSpecsFor(provider.preset_id ?? provider.id, model.model_id)) {
+      const boundMin = spec.min ?? null;
+      const boundMax = spec.max ?? null;
+      if (boundMin === null && boundMax === null) continue;
+      const value = params[spec.key];
+      if (value === undefined) continue;
+      const inRange = typeof value === "number" &&
+        (boundMin === null || value >= boundMin) &&
+        (boundMax === null || value <= boundMax);
+      if (!inRange) {
+        const range = `[${boundMin ?? "不限"}, ${boundMax ?? "不限"}]`;
+        throw new HttpError(422, `模型参数 ${spec.key} (${String(value)}) 超出允许范围 ${range}`);
+      }
+    }
+  }
+
   public publicProvider(provider: ProviderRecord): JsonObject {
     const apiKey = this.auth.provider_api_keys[provider.id] ?? "";
     return { ...provider, api_key: maskApiKey(apiKey), api_key_configured: apiKey !== "" };
@@ -449,13 +703,24 @@ export class ModelSettingsService {
     settings.base_url = provider.base_url;
     settings.model_name = model.model_id;
     settings.context_window = model.context_window;
-    const maxTokens = model.params.max_tokens ?? model.suggested_max_tokens ?? model.max_output_tokens;
-    if (typeof maxTokens === "number") settings.max_tokens = maxTokens;
-    if (typeof model.params.temperature === "number") settings.advanced.temperature = model.params.temperature;
-    if (typeof model.params.top_p === "number") settings.advanced.top_p = model.params.top_p;
-    if (typeof model.params.repetition_penalty === "number") settings.advanced.repetition_penalty = model.params.repetition_penalty;
-    if (typeof model.params.enable_search === "boolean") settings.advanced.enable_search = model.params.enable_search;
-    if (typeof model.params.thinking_mode === "boolean") settings.advanced.thinking_mode = model.params.thinking_mode;
+    applyModelDerivedParams(model, settings);
+  }
+
+  /**
+   * 回到"未配置"语义:删除的是当前激活链路上的 provider/model 时,把连接
+   * 字段重置为 ``defaultRegistry`` 的默认值,避免 GET /settings 与运行时
+   * ``resolveActiveConfig`` 继续指向已删实体的幽灵 base_url/model_name;
+   * 用户随后必须显式激活模型。
+   */
+  private resetActiveConnectionSettings(clearProvider: boolean): void {
+    const defaults = defaultRegistry(this.environment).settings;
+    const settings = this.registry.settings;
+    if (clearProvider) settings.provider_id = null;
+    settings.active_model_id = null;
+    settings.base_url = defaults.base_url;
+    settings.model_name = defaults.model_name;
+    settings.context_window = null;
+    settings.max_tokens = defaults.max_tokens;
   }
 
   /**
@@ -544,8 +809,8 @@ export class ModelSettingsService {
       const settings = this.registry.settings;
       settings.active_model_id = active.id;
       settings.context_window = active.context_window ?? settings.context_window;
-      const maxTokens = active.params.max_tokens ?? active.suggested_max_tokens ?? active.max_output_tokens;
-      if (typeof maxTokens === "number") settings.max_tokens = maxTokens;
+      const maxTokens = deriveModelMaxTokens(active);
+      if (maxTokens !== null) settings.max_tokens = maxTokens;
     }
   }
 

@@ -1,6 +1,15 @@
 import { createHash } from "node:crypto";
-import { mkdir, stat } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+
+import {
+  extractZipMember,
+  readZipCentralDirectory,
+  selectExtractableZipMembers,
+  ZipFormatError,
+  type ZipMemberEntry,
+} from "./zip-members.js";
+import { xlsxWorksheetsToCsv } from "./xlsx-to-csv.js";
 
 import type {
   CoreAcquisitionRequest,
@@ -70,6 +79,30 @@ export interface AcquisitionDownloadPlan {
   timeoutMs?: number;
   /** Trusted provider-produced extraction outputs; never populated by request parameters. */
   extractionAssets?: readonly AcquisitionExtractionAsset[];
+  /**
+   * Trusted provider policy for in-place ZIP member extraction: after a
+   * successful download whose media type is a ZIP archive, members matching
+   * the extension allowlist are inflated, CRC-verified, staged, and
+   * registered as separate Core assets carrying the same acquisition
+   * provenance. Never populated by request parameters.
+   */
+  zipMemberExtraction?: {
+    extensions: readonly string[];
+    maxMembers: number;
+    maxMemberBytes: number;
+    role: "source" | "mapping" | "metadata" | "carrier";
+    /**
+     * Optional trusted policy to additionally parse staged `.xlsx` members
+     * into per-worksheet UTF-8 CSV assets so dynamic transforms can consume
+     * supplementary tables without workspace parsing. Raw members stay
+     * registered for the archive → attachment → parsed-table provenance
+     * chain; parsing is best-effort and never fails the acquisition.
+     */
+    xlsxToCsv?: {
+      maxWorksheets: number;
+      maxCsvBytes: number;
+    };
+  };
   /**
    * Trusted provider-produced revision facts.  These facts are attached to
    * the exact registration receipt by CoreAcquisitionRuntime; request
@@ -361,6 +394,50 @@ export class CoreAcquisitionRuntime {
       await this.#appendAttempt(attempt);
       if (asset !== null) {
         const extractionAssets: RegisteredSourceAssetRef[] = [];
+        const zipConfig = plan.zipMemberExtraction;
+        if (zipConfig !== undefined && result.asset !== null) {
+          const stagedZipMembers = await extractZipCarrierMembers(
+            this.#taskRoot,
+            { asset: result.asset, requestIdentityDigest },
+            zipConfig,
+          );
+          for (const member of stagedZipMembers) {
+            const memberProvenanceFacts = {
+              provider_id: handler.providerId,
+              implementation_digest: implementationDigest,
+              request_identity_digest: requestIdentityDigest,
+              ...(providerRevisionFacts === null ? {} : {
+                canonical_accession: providerRevisionFacts.canonical_accession,
+                provider_snapshot_identity: providerRevisionFacts.provider_snapshot_identity,
+                provider_revision_token: providerRevisionFacts.provider_revision_token,
+              }),
+            };
+            const receipt = await this.#assets.register({
+              sourceId: `${result.asset.source_id}_x${member.index}`,
+              relativePath: member.relativePath,
+              role: zipConfig.role,
+              mediaType: member.mediaType,
+            });
+            await this.#assets.registerCoreAcquisitionProvenance(receipt, memberProvenanceFacts);
+            extractionAssets.push(receipt.asset_ref);
+            if (providerRevisionFacts !== null) {
+              providerRevisionEvidence.push(evidenceForReceipt(providerRevisionFacts, receipt));
+            }
+            for (const parsed of member.parsedCsvs) {
+              const parsedReceipt = await this.#assets.register({
+                sourceId: `${result.asset.source_id}_x${member.index}_p${parsed.sheetIndex}`,
+                relativePath: parsed.relativePath,
+                role: zipConfig.role,
+                mediaType: "text/csv",
+              });
+              await this.#assets.registerCoreAcquisitionProvenance(parsedReceipt, memberProvenanceFacts);
+              extractionAssets.push(parsedReceipt.asset_ref);
+              if (providerRevisionFacts !== null) {
+                providerRevisionEvidence.push(evidenceForReceipt(providerRevisionFacts, parsedReceipt));
+              }
+            }
+          }
+        }
         for (const extraction of plan.extractionAssets ?? []) {
           const receipt = await this.#assets.register(extraction);
           await this.#assets.registerCoreAcquisitionProvenance(receipt, {
@@ -487,4 +564,77 @@ function canonicalJson(value: JsonValue): string {
     return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key]!)}`).join(",")}}`;
   }
   return JSON.stringify(value);
+}
+
+const ZIP_MEMBER_MEDIA_TYPES: Readonly<Record<string, string>> = {
+  ".csv": "text/csv",
+  ".tsv": "text/tab-separated-values",
+  ".tab": "text/tab-separated-values",
+  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ".txt": "text/plain",
+  ".json": "application/json",
+};
+
+interface StagedParsedCsv {
+  sheetIndex: number;
+  sheetName: string;
+  relativePath: string;
+}
+
+interface StagedZipMember {
+  index: number;
+  relativePath: string;
+  mediaType: string;
+  parsedCsvs: StagedParsedCsv[];
+}
+
+/**
+ * Inflate plan-approved members of a downloaded ZIP carrier into
+ * ``source_assets/extracted/<request digest>/`` so they can be registered as
+ * provenance-bound Core assets. Non-ZIP carriers and structurally invalid
+ * archives stage nothing; extraction is best-effort by policy — a malformed
+ * member only shrinks the selection, never fabricates bytes. When the plan
+ * enables `xlsxToCsv`, staged `.xlsx` members are additionally converted into
+ * one UTF-8 CSV per bounded worksheet next to the raw member.
+ */
+async function extractZipCarrierMembers(
+  taskRoot: string,
+  result: { asset: { relative_path: string; media_type: string }; requestIdentityDigest: string },
+  config: NonNullable<AcquisitionDownloadPlan["zipMemberExtraction"]>,
+): Promise<StagedZipMember[]> {
+  const mediaType = (result.asset.media_type ?? "").toLowerCase();
+  const looksLikeZip = mediaType.includes("zip") || result.asset.relative_path.toLowerCase().endsWith(".zip");
+  if (!looksLikeZip) return [];
+  const archivePath = path.join(taskRoot, ...result.asset.relative_path.split("/"));
+  const buffer = await readFile(archivePath);
+  let entries: ZipMemberEntry[];
+  try {
+    entries = readZipCentralDirectory(buffer);
+  } catch (error) {
+    if (error instanceof ZipFormatError) return [];
+    throw error;
+  }
+  const members = selectExtractableZipMembers(entries, config);
+  const staged: StagedZipMember[] = [];
+  for (const [index, member] of members.entries()) {
+    const content = extractZipMember(buffer, member);
+    const relativePath = `source_assets/extracted/${result.requestIdentityDigest}/${index}_${member.storedName}`;
+    const absolutePath = path.join(taskRoot, ...relativePath.split("/"));
+    await mkdir(path.dirname(absolutePath), { recursive: true });
+    await writeFile(absolutePath, content);
+    const extension = member.storedName.slice(member.storedName.lastIndexOf(".")).toLowerCase();
+    const parsedCsvs: StagedParsedCsv[] = [];
+    if (extension === ".xlsx" && config.xlsxToCsv !== undefined) {
+      for (const sheet of xlsxWorksheetsToCsv(content, config.xlsxToCsv).entries()) {
+        const [sheetIndex, { sheetName, csv }] = sheet;
+        const safeSheetName = sheetName.replaceAll(/[^A-Za-z0-9_.-]/gu, "_").slice(0, 64) || "sheet";
+        const parsedPath = `source_assets/extracted/${result.requestIdentityDigest}/${index}_${member.storedName.slice(0, 140)}_p${sheetIndex}.csv`;
+        const parsedAbsolutePath = path.join(taskRoot, ...parsedPath.split("/"));
+        await writeFile(parsedAbsolutePath, csv);
+        parsedCsvs.push({ sheetIndex, sheetName: safeSheetName, relativePath: parsedPath });
+      }
+    }
+    staged.push({ index, relativePath, mediaType: ZIP_MEMBER_MEDIA_TYPES[extension] ?? "application/octet-stream", parsedCsvs });
+  }
+  return staged;
 }

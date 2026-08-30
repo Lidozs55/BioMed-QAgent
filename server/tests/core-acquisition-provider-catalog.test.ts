@@ -37,7 +37,9 @@ describe("Core acquisition provider catalog", () => {
     ["openfda.files.v1", "openfda_faers", "ibuprofen", "api.fda.gov", "openfda"],
     ["gwas-catalog.associations.v1", "gwas_catalog", "rs429358", "www.ebi.ac.uk", "gwas_catalog"],
     ["europepmc.supplementary.v1", "europepmc_supplementary", "PMC9005347", "www.ebi.ac.uk", "pubmed"],
-    ["gmrepo.files.v1", "gmrepo", "D006262", "gmrepo.humangut.info", "gmrepo"],
+    ["europepmc.pdf.v1", "europepmc_pdf", "PMC9005347", "europepmc.org", "pubmed"],
+    ["europepmc.fulltext_xml.v1", "europepmc_fulltext_xml", "PMC9005347", "www.ebi.ac.uk", "pubmed"],
+    ["gmrepo.files.v1", "gmrepo", "1234", "gmrepo.humangut.info", "gmrepo"],
   ])("plans %s through a provider-owned endpoint", async (providerId, source, accession, host, database) => {
     const provider = createCoreAcquisitionProviders().find((entry) => entry.providerId === providerId);
     expect(provider).toBeDefined();
@@ -70,5 +72,29 @@ describe("Core acquisition provider catalog", () => {
     const toil = await xena.plan(request("xena.files.v1", "xena", "probeMap/hugo_gencode_good_hg19_V24lift37"));
     expect(new URL(tcga.source.url).hostname).toBe("tcga-xena-hub.s3.us-east-1.amazonaws.com");
     expect(new URL(toil.source.url).hostname).toBe("toil-xena-hub.s3.us-east-1.amazonaws.com");
+  });
+
+  it("plans the fixed Europe PMC PDF carrier as an acquisition-only binary asset", async () => {
+    const providers = createCoreAcquisitionProviders();
+    const pdf = providers.find((entry) => entry.providerId === "europepmc.pdf.v1");
+    expect(pdf).toBeDefined();
+    const plan = await pdf!.plan(request("europepmc.pdf.v1", "europepmc_pdf", "PMC9005347"));
+    expect(plan.source.url).toBe("https://europepmc.org/api/getPdf?pmcid=PMC9005347");
+    expect(plan.filename).toBe("PMC9005347.pdf");
+    expect(plan.expectedMediaTypes).toEqual(new Set(["application/pdf"]));
+    expect(plan.allowedHosts).toEqual(new Set(["europepmc.org"]));
+    expect(plan.assetRole).toBe("carrier");
+  });
+
+  it("plans the fixed Europe PMC full-text XML carrier as an acquisition-only binary asset", async () => {
+    const providers = createCoreAcquisitionProviders();
+    const xml = providers.find((entry) => entry.providerId === "europepmc.fulltext_xml.v1");
+    expect(xml).toBeDefined();
+    const plan = await xml!.plan(request("europepmc.fulltext_xml.v1", "europepmc_fulltext_xml", "PMC9005347"));
+    expect(plan.source.url).toBe("https://www.ebi.ac.uk/europepmc/webservices/rest/PMC9005347/fullTextXML");
+    expect(plan.filename).toBe("PMC9005347.xml");
+    expect(plan.expectedMediaTypes).toEqual(new Set(["application/xml"]));
+    expect(plan.allowedHosts).toEqual(new Set(["www.ebi.ac.uk"]));
+    expect(plan.assetRole).toBe("carrier");
   });
 });

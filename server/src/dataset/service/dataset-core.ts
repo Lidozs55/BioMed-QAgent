@@ -9,7 +9,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { readdir, stat } from "node:fs/promises";
+import { mkdir, readdir, stat } from "node:fs/promises";
 import { performance } from "node:perf_hooks";
 import path from "node:path";
 
@@ -19,6 +19,8 @@ import { OperationAbortedError, throwIfAborted } from "../cooperative.js";
 
 import {
   DATASET_BRIDGE_VERSION,
+  parseCleaningRulePreflightReceipt,
+  type CleaningRulePreflightReceipt,
   type CoreAcquisitionRequest,
   type DatasetBridgeResponse,
   type DatasetExecutionSpec,
@@ -33,6 +35,7 @@ import {
 } from "../contracts/index.js";
 import type { CoreAcquisitionResult } from "../acquisition/runtime.js";
 import { createDefaultDatasetFamilyRegistry } from "../families/index.js";
+import { validateCleaningRuleReceipt } from "../cleaning/preflight.js";
 import { providerCarrierBinding } from "../runtime/provider-bindings.js";
 import { SourceAssetRegistry } from "../../runtime/source-assets/registry.js";
 import type { SpecValidationResult } from "../validation/index.js";
@@ -57,8 +60,15 @@ export interface ExecuteDatasetExecutionInput extends DatasetCoreIdentity {
   sourceFiles: Record<string, string>;
   mappingFiles: Record<string, string>;
   metadataFiles?: Record<string, string>;
+  /** Core-issued cleaning preflight receipt; never accepted from an unbound task. */
+  cleaningRuleReceipt?: CleaningRulePreflightReceipt | null;
   /** Task-owned provider facts; never synthesized from build or request data. */
   providerRevisionEvidence?: readonly ProviderRevisionEvidenceV1[];
+  /**
+   * Runtime discovery observations for the source coverage evidence. Audit
+   * input only — never part of the build's authoritative identity.
+   */
+  discoveryQueries?: readonly import("@biomed/contracts").DiscoveryQueryRecord[] | null;
 }
 
 export interface DatasetCoreCancelInput {
@@ -161,14 +171,30 @@ function isRegisteredAssetId(reference: string): boolean {
   return REGISTERED_ASSET_ID.test(reference);
 }
 
-async function uniqueAssetFile(taskRoot: string, assetId: string, signal?: AbortSignal): Promise<string> {
-  const assetRoot = path.resolve(taskRoot, "source_assets", assetId);
+async function uniqueAssetFile(
+  taskRoot: string,
+  assetId: string,
+  signal?: AbortSignal,
+  registeredRelativePath?: string,
+): Promise<string> {
   const sourceRoot = path.resolve(taskRoot, "source_assets");
+  const assetRoot = path.resolve(taskRoot, "source_assets", assetId);
   if (!assetRoot.startsWith(`${sourceRoot}${path.sep}`)) {
     throw new ExecutionError(`registered asset '${assetId}' escaped source_assets`);
   }
   const rootInfo = await stat(assetRoot).catch(() => null);
   if (rootInfo === null || !rootInfo.isDirectory()) {
+    // Layout-agnostic fallback: extraction members register under
+    // source_assets/extracted/<digest>/ rather than source_assets/<assetId>/,
+    // so resolve through the recorded relative_path.
+    if (registeredRelativePath !== undefined && registeredRelativePath !== "") {
+      const candidate = path.resolve(taskRoot, ...registeredRelativePath.split("/"));
+      if (!candidate.startsWith(`${sourceRoot}${path.sep}`)) {
+        throw new ExecutionError(`registered asset '${assetId}' escaped source_assets`);
+      }
+      const fileInfo = await stat(candidate).catch(() => null);
+      if (fileInfo !== null && fileInfo.isFile()) return candidate;
+    }
     throw new ExecutionError(`registered asset '${assetId}' directory is missing`);
   }
   const files: string[] = [];
@@ -300,6 +326,30 @@ function newRequestId(): string {
   return `core_req_${randomUUID()}`;
 }
 
+async function consumeCleaningRuleReceipt(
+  taskRoot: string,
+  receipt: CleaningRulePreflightReceipt,
+): Promise<void> {
+  const markerRoot = path.join(
+    taskRoot,
+    "state",
+    "cleaning-receipts",
+    receipt.task_id,
+    receipt.run_id,
+    receipt.requirement_id,
+  );
+  await mkdir(markerRoot, { recursive: true });
+  const marker = path.join(markerRoot, receipt.receipt_digest);
+  try {
+    await mkdir(marker);
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST") {
+      throw new ExecutionError("cleaning rule receipt has already been consumed");
+    }
+    throw error;
+  }
+}
+
 function invalidInputEnvelope(message: string, fields: string[]): DatasetBridgeResponse {
   return {
     version: DATASET_BRIDGE_VERSION,
@@ -397,7 +447,8 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
       throwIfAborted(signal);
       if (isRegisteredAssetId(reference)) {
         try {
-          const relativePath = await uniqueAssetFile(this.taskRoot, reference, signal);
+          const registeredRelativePath = await registry.registeredRelativePath(reference).catch(() => null);
+      const relativePath = await uniqueAssetFile(this.taskRoot, reference, signal, registeredRelativePath ?? undefined);
           const receipt = await registry.register({
             sourceId: bindingId,
             relativePath,
@@ -497,7 +548,35 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
       input.spec.source_bindings[0]?.adapter_id ?? "",
       input.spec.schema_ref,
     );
+    const familyRegistry = createDefaultDatasetFamilyRegistry();
+    const family = familyRegistry.get(input.spec.dataset_family);
+    let cleaningRuleReceipt: CleaningRulePreflightReceipt | null = null;
+    if (input.cleaningRuleReceipt !== undefined && input.cleaningRuleReceipt !== null) {
+      try {
+        cleaningRuleReceipt = parseCleaningRulePreflightReceipt(input.cleaningRuleReceipt);
+        validateCleaningRuleReceipt(familyRegistry, cleaningRuleReceipt, {
+          task_id: input.taskId,
+          run_id: input.runId,
+          requirement_id: input.spec.requirement_id,
+          binding_ids: input.spec.source_bindings.map((binding) => binding.binding_id),
+        });
+      } catch (error) {
+        return invalidInputEnvelope(
+          `cleaning rule receipt was rejected: ${error instanceof Error ? error.message : String(error)}`,
+          ["cleaningRuleReceipt"],
+        );
+      }
+      if (family.runtime_id === "registered_multitable.runtime.v1") {
+        return invalidInputEnvelope(
+          "cleaning rule receipts are not supported by registered multi-table execution",
+          ["cleaningRuleReceipt"],
+        );
+      }
+    }
     try {
+      if (cleaningRuleReceipt !== null) {
+        await consumeCleaningRuleReceipt(this.taskRoot, cleaningRuleReceipt);
+      }
       const buildReceipts = new Map<string, SourceAssetRegistrationReceipt>();
       await this.resolveAll(
         input.sourceFiles,
@@ -535,7 +614,6 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
         sourceAssetRegistry,
         buildReceipts,
       );
-      const family = createDefaultDatasetFamilyRegistry().get(input.spec.dataset_family);
       const registeredIdsForCore = family.runtime_id === "registered_multitable.runtime.v1"
         ? registeredSourceAssetIds
         : undefined;
@@ -547,6 +625,8 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
         metadataAssets,
         providerRevisionEvidence,
         registrationReceipts: Object.freeze([...buildReceipts.values()]),
+        cleaningRuleReceipt,
+        discoveryQueries: input.discoveryQueries ?? null,
         signal: input.signal,
       });
       return this.buildExecutionEnvelope(record, registeredSourceAssetIds);

@@ -1,4 +1,5 @@
 export {
+  parseVlmJsonObject,
   ChartExtractionError,
   CHART_DATA_COLUMNS,
   CHART_DATA_POINTS_COLUMNS,
@@ -22,6 +23,7 @@ export {
   encodeImageBase64,
   MAX_VLM_IMAGE_BYTES,
   VL_MODEL_NAME,
+  type VlmCallResult,
   type VlmClient,
   type VlmConfig,
 } from "./vlm-client.js";
@@ -30,7 +32,16 @@ export {
   MAX_PDF_IMAGES_PER_FILE,
   type ExtractedPdfImage,
   type PdfImageExtraction,
+  type PdfPageRaster,
 } from "./pdf-images.js";
+export {
+  MAX_PDF_PAGES_PER_FILE,
+  RENDER_DPI,
+  renderPdfPages,
+  type PdfPageRendering,
+  type RenderedPdfPage,
+  type RenderPdfPagesOptions,
+} from "./pdf-pages.js";
 export {
   createVlmTools,
   ensureImageInFigures,
@@ -46,3 +57,22 @@ export {
   type VlmTools,
   type VlmToolsConfig,
 } from "./chart-extraction.js";
+export {
+  extractRegisteredPaperChartEvidence,
+  parseRegisteredPaperChartResponse,
+  REGISTERED_PAPER_CHART_CARRIER_KIND,
+  REGISTERED_PAPER_CHART_EXTRACTION_IMPLEMENTATION,
+  REGISTERED_PAPER_CHART_EXTRACTION_VERSION,
+  REGISTERED_PAPER_CHART_PROMPT,
+  REGISTERED_PAPER_CHART_PROMPT_VERSION,
+  type ParsedActivityCandidate,
+  type ParsedExperimentCandidate,
+  type ParsedPaperMetaCandidate,
+  type ParsedPointCandidate,
+  type ParsedSeriesCandidate,
+  type RegisteredPaperChartCarrierSummary,
+  type RegisteredPaperChartEvidenceResult,
+  type RegisteredPaperChartExtractionDeps,
+  type RegisteredPaperChartExtractionRequest,
+  type RegisteredPaperChartResponse,
+} from "./registered-paper-chart-extraction.js";

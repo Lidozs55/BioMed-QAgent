@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { BioMedAgentError } from "../src/agent/contracts.js";
+import { BioMedAgentError, type BioMedSessionConfig } from "../src/agent/contracts.js";
 import { SKILL_TOOL_NAMES } from "../src/agent/skills/skill-tool-map.js";
 import {
   activationToolDefinition,
@@ -10,8 +10,14 @@ import {
   isRecoverablePiStreamError,
   resolvePiCompactionOverrides,
   resolvePiRetryOverrides,
+  resolvePiCompactionTargetTokens,
   resolveManualPiCompactionOverrides,
+  resolveRequestMaxTokens,
+  resolveSessionBudget,
   shouldReconfigureSession,
+  SYSTEM_CONTEXT_SECTION_BEGIN,
+  SYSTEM_CONTEXT_SECTION_END,
+  toUpstreamEvent,
   toolCatalogPrompt,
   TOOL_ACTIVATION_NAME,
   toPiCustomTools,
@@ -45,6 +51,9 @@ class FakeUpstreamSession implements PiUpstreamSession {
   readonly compact = vi.fn(async (): Promise<{ summary: string }> => ({
     summary: "compacted manually",
   }));
+  readonly steer = vi.fn(async (text: string): Promise<void> => {
+    void text;
+  });
   private readonly listeners = new Set<(event: PiUpstreamEvent) => void>();
   promptImplementation: (input: string) => Promise<void> = async () => undefined;
   continueAfterLengthImplementation: () => Promise<void> = async () => undefined;
@@ -86,9 +95,13 @@ async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
 describe("Pi system prompt", () => {
   test("defines dataset completion by task semantics instead of requested file format", () => {
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
-      /^\[Dataset completion contract\][\s\S]*\[Evidence integrity\][\s\S]*\[Trusted execution\][\s\S]*\[Control and recovery\][\s\S]*$/,
+      /^\[Dataset completion contract\][\s\S]*\[Evidence integrity\][\s\S]*\[Trusted execution\][\s\S]*\[Dynamic publication mechanics\][\s\S]*\[Control and recovery\][\s\S]*$/,
     );
-    expect(PHASE1_SYSTEM_PROMPT.length).toBeLessThanOrEqual(7_000);
+    // 8_000 = former 7_400 budget plus the [Dataset completion contract]
+    // execution-context line and the governed paper-chart route line in
+    // [Trusted execution] (Gold6 vision repair Task 8); still caps per-call
+    // system-prompt growth.
+    expect(PHASE1_SYSTEM_PROMPT.length).toBeLessThanOrEqual(8_000);
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
       /completion is determined by task semantics, never by the requested file format/i,
     );
@@ -194,7 +207,6 @@ describe("Pi system prompt", () => {
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/report exact requested, succeeded, and failed counts/i);
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/never turn a plan, workspace file, successful subset, or intended next step into a completed action/i);
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/declare the matching semantic family, projection, and row granularity/i);
-    expect(PHASE1_SYSTEM_PROMPT).toMatch(/workspace outputs are staging evidence only/i);
   });
 
   test("marks an approved max-turn continuation explicitly", () => {
@@ -214,10 +226,60 @@ describe("Pi system prompt", () => {
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/openFDA FAERS aggregate lookup/i);
   });
 
+  test("forbids workspace exec acquisition bypasses and preserves extraction blockers", () => {
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /never use workspace_exec, shell interpreters, or subprocess network clients for acquisition/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /requires_formal_extraction[\s\S]*structured blocker or NO_DATA[\s\S]*do not unpack or parse it in the workspace/i,
+    );
+  });
+
   test("delegates source-specific topology and evidence rules to skills", () => {
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/matching skill/i);
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/source-specific rules/i);
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/Do not duplicate or improvise/i);
+  });
+
+  test("teaches the receipt-only dynamic submit path and placeholder rejection", () => {
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /submit then needs only schema_version and that unchanged preflight_receipt/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /input_requirement_ref is a declared_input_roles role, not a binding id/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/placeholder sentinels are rejected/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/never request file access outside the Task Workspace/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /Transform source admission rejects eval-class identifiers and EVERY bracket access/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/admission reports all violations with line:column/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/preview_core_asset lists members/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /never run python, shell, or workspace_exec extraction/i,
+    );
+  });
+
+  test("binds the frozen execution context as semantics and routes paper charts through governed extraction", () => {
+    // The frozen Gold6 execution context is task semantics, never a way to
+    // claim completion or publication authority.
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /Treat the frozen execution context \(system prompt\) as binding task semantics/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /never as publication authority: only a current-run immutable Publication proves completion/i,
+    );
+    // Gold6-like work must go through registered carriers plus the governed
+    // extraction tool, with structured blockers instead of workspace CSV.
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /acquire registered full-text XML\/PDF\/supplement carriers through fixed Core acquisition/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /call extract_registered_paper_chart_evidence on task-owned asset ids/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /If any carrier, visual model, locator, or required review is unavailable, return the structured blocker instead of a workspace CSV/i,
+    );
   });
 });
 
@@ -287,6 +349,41 @@ describe("Pi model profile mapping", () => {
       tool_choice: "required",
     });
   });
+
+  test("treats merged reasoning_effort 'off' as thinking disabled", () => {
+    // DashScope: explicit 关闭 wins over the legacy chain-of-thought toggle and
+    // the invalid "off" value is never forwarded upstream.
+    expect(applyModelProfileToPayload(
+      { model: "qwen-plus", messages: [] },
+      {
+        provider: "dashscope",
+        modelId: "qwen-plus",
+        apiKey: "secret",
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        thinkingMode: true,
+        params: { reasoning_effort: "off", temperature: 0.2 },
+      },
+    )).toEqual({
+      model: "qwen-plus",
+      messages: [],
+      enable_thinking: false,
+    });
+
+    // Other providers: just drop the invalid value, keep the rest.
+    expect(applyModelProfileToPayload(
+      { model: "custom-chat" },
+      {
+        provider: "custom",
+        modelId: "custom-chat",
+        apiKey: "secret",
+        baseUrl: "https://models.example/v1",
+        params: { reasoning_effort: "off", tool_choice: "auto" },
+      },
+    )).toEqual({
+      model: "custom-chat",
+      tool_choice: "auto",
+    });
+  });
 });
 describe("PiAgentAdapter", () => {
   test("recovers only interrupted provider streams outside Pi's normal retry classifier", () => {
@@ -334,12 +431,23 @@ describe("PiAgentAdapter", () => {
     vi.useRealTimers();
   });
 
+  test("preserves Pi's stricter per-call output budget", () => {
+    expect(resolveRequestMaxTokens(32_768, 12_000)).toBe(12_000);
+    expect(resolveRequestMaxTokens(8_192, 12_000)).toBe(8_192);
+    expect(resolveRequestMaxTokens(32_768, undefined)).toBe(32_768);
+  });
+
   test("maps product compaction ratios onto Pi compaction settings", () => {
     expect(resolvePiCompactionOverrides(131_072, 0.85, 0.45)).toEqual({
       compaction: { enabled: true, reserveTokens: 19_661, keepRecentTokens: 43_253 },
     });
     expect(resolvePiCompactionOverrides(131_072, 0.95, 0.45).compaction.reserveTokens)
       .toBe(6_554);
+  });
+
+  test("resolves the observable compaction target from current usage", () => {
+    expect(resolvePiCompactionTargetTokens(100_000, 0.6, 100_000)).toBe(60_000);
+    expect(resolvePiCompactionTargetTokens(100_000, 0.99, null)).toBe(60_000);
   });
 
   test("clamps window-based fallback so compaction leaves room for the reserve budget", () => {
@@ -431,6 +539,82 @@ describe("PiAgentAdapter", () => {
     expect(upstream.reconcileConfig).toHaveBeenCalledOnce();
   });
 
+  test("appends the frozen execution context to the system prompt and never to the user prompt", async () => {
+    const upstream = new FakeUpstreamSession();
+    const capturedConfigs: BioMedSessionConfig[] = [];
+    const systemContext = [
+      "{",
+      '  "case_id": "gold6",',
+      '  "prompt_sha256": "f30ab31099da23c75a3e0037ee303b8814c7c124bc1e84be149d2c6f4c8fc298"',
+      "}",
+    ].join("\n");
+    const session = await new PiAgentAdapter({
+      createUpstreamSession: async (config) => {
+        capturedConfigs.push(config);
+        return upstream;
+      },
+    }).createSession({ ...sessionConfig, systemContext });
+
+    await collect(session.run("frozen gold6 user prompt"));
+
+    const systemPrompt = capturedConfigs[0]?.systemPrompt ?? "";
+    expect(systemPrompt.split(SYSTEM_CONTEXT_SECTION_BEGIN)).toHaveLength(2);
+    expect(systemPrompt.split(SYSTEM_CONTEXT_SECTION_END)).toHaveLength(2);
+    expect(systemPrompt).toContain('"case_id": "gold6"');
+    expect(systemPrompt.indexOf(SYSTEM_CONTEXT_SECTION_BEGIN)).toBeGreaterThan(
+      systemPrompt.indexOf("[Dataset completion contract]"),
+    );
+    // The upstream user prompt stays byte-identical to the run input; the
+    // frozen context never rides along in the user message.
+    expect(upstream.prompts).toEqual(["frozen gold6 user prompt"]);
+
+    // Without frozen context the section markers never appear.
+    const bareConfigs: BioMedSessionConfig[] = [];
+    await new PiAgentAdapter({
+      createUpstreamSession: async (config) => {
+        bareConfigs.push(config);
+        return new FakeUpstreamSession();
+      },
+    }).createSession(sessionConfig);
+    expect(bareConfigs[0]?.systemPrompt).not.toContain("Frozen execution context");
+  });
+
+  test("exposes the upstream model budget for the run-entry preflight", async () => {
+    const upstream = new FakeUpstreamSession();
+    Object.assign(upstream, {
+      getBudget: () => ({ contextWindow: 100_000, maxTokens: 8_192, reserveTokens: 5_000 }),
+    });
+    const session = await new PiAgentAdapter({
+      createUpstreamSession: async () => upstream,
+    }).createSession(sessionConfig);
+
+    expect(session.getBudget?.()).toEqual({
+      contextWindow: 100_000,
+      maxTokens: 8_192,
+      reserveTokens: 5_000,
+    });
+  });
+
+  test("resolveSessionBudget defaults and explicit reserve", () => {
+    expect(resolveSessionBudget({ provider: "p", modelId: "m", apiKey: "k" })).toEqual({
+      contextWindow: 131_072,
+      maxTokens: 8_192,
+      reserveTokens: Math.round(131_072 * 0.05),
+    });
+    expect(resolveSessionBudget({
+      provider: "p",
+      modelId: "m",
+      apiKey: "k",
+      contextWindow: 1_000_000,
+      maxTokens: 32_768,
+      safetyReserveTokens: 50_000,
+    })).toEqual({
+      contextWindow: 1_000_000,
+      maxTokens: 32_768,
+      reserveTokens: 50_000,
+    });
+  });
+
   test("reconciles the active model configuration before manual compaction", async () => {
     const upstream = new FakeUpstreamSession();
     const session = await new PiAgentAdapter({
@@ -450,7 +634,12 @@ describe("PiAgentAdapter", () => {
       upstream.emit({
         type: "compaction_end",
         reason: "threshold",
-        compactionResult: { summary: "compacted checkpoint summary" },
+        compactionResult: {
+          summary: "compacted checkpoint summary",
+          tokensBefore: 100_000,
+          estimatedTokensAfter: 55_000,
+          summaryTokens: 8_000,
+        },
         aborted: false,
       });
     };
@@ -463,6 +652,75 @@ describe("PiAgentAdapter", () => {
     expect(events).toContainEqual({
       type: "context_compacted",
       summary: "compacted checkpoint summary",
+      reason: "threshold",
+      tokensBefore: 100_000,
+      estimatedTokensAfter: 55_000,
+      summaryTokens: 8_000,
+    });
+  });
+
+  test("preserves the full Pi compaction summary and token telemetry", () => {
+    const summary = "s".repeat(5_000);
+
+    expect(toUpstreamEvent({
+      type: "compaction_end",
+      reason: "threshold",
+      result: {
+        summary,
+        firstKeptEntryId: "entry-kept",
+        tokensBefore: 100_000,
+        estimatedTokensAfter: 55_000,
+        usage: {
+          input: 10_000,
+          output: 8_000,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 18_000,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      },
+      aborted: false,
+      willRetry: false,
+    } as never, 60_000)).toMatchObject({
+      type: "compaction_end",
+      reason: "threshold",
+      compactionResult: {
+        summary,
+        tokensBefore: 100_000,
+        estimatedTokensAfter: 55_000,
+        targetTokens: 60_000,
+        summaryTokens: 8_000,
+      },
+    });
+  });
+
+  test("extracts provider usage from an assistant message_end upstream event", () => {
+    expect(toUpstreamEvent({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        stopReason: "stop",
+        usage: {
+          input: 38_000,
+          output: 2_000,
+          cacheRead: 30_000,
+          cacheWrite: 0,
+          totalTokens: 40_000,
+          reasoning: 500,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      },
+    } as never)).toMatchObject({
+      type: "message_end",
+      assistantStopReason: "stop",
+      usage: {
+        input: 38_000,
+        output: 2_000,
+        cacheRead: 30_000,
+        cacheWrite: 0,
+        totalTokens: 40_000,
+        reasoning: 500,
+      },
     });
   });
 
@@ -487,6 +745,44 @@ describe("PiAgentAdapter", () => {
       contextWindow: 131_072,
       percent: 9.41,
       source: "runtime",
+    });
+  });
+
+  test("attaches provider usage to the context usage event after an assistant response", async () => {
+    const upstream = new FakeUpstreamSession();
+    upstream.promptImplementation = async () => {
+      upstream.emit({
+        type: "message_end",
+        assistantStopReason: "stop",
+        contextUsage: { tokens: 40_000, contextWindow: 256_000, percent: 15.6 },
+        usage: {
+          input: 38_000,
+          output: 2_000,
+          cacheRead: 30_000,
+          cacheWrite: 0,
+          totalTokens: 40_000,
+        },
+      });
+    };
+    const session = await new PiAgentAdapter({
+      createUpstreamSession: async () => upstream,
+    }).createSession(sessionConfig);
+
+    const events = await collect(session.run("report token usage"));
+
+    expect(events).toContainEqual({
+      type: "context_usage",
+      tokens: 40_000,
+      contextWindow: 256_000,
+      percent: 15.6,
+      source: "runtime",
+      usage: {
+        input: 38_000,
+        output: 2_000,
+        cacheRead: 30_000,
+        cacheWrite: 0,
+        totalTokens: 40_000,
+      },
     });
   });
 
@@ -738,6 +1034,48 @@ describe("PiAgentAdapter", () => {
     await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
   });
 
+  test("delivers pending assistant text before accepting a direction adjustment", async () => {
+    const upstream = new FakeUpstreamSession();
+    const pending = deferred<void>();
+    upstream.promptImplementation = () => pending.promise;
+    const session = await new PiAgentAdapter({
+      createUpstreamSession: async () => upstream,
+    }).createSession(sessionConfig);
+    const iterator = session.run("steer boundary")[Symbol.asyncIterator]();
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: { type: "turn_started" },
+    });
+
+    upstream.emit({
+      type: "message_update",
+      assistantMessageEvent: { type: "text_delta", delta: "before steer" },
+    });
+    if (session.steer === undefined) throw new Error("steer is unavailable");
+    let steerResolved = false;
+    const steerPromise = session.steer("focus on TP53").then(() => {
+      steerResolved = true;
+    });
+    await Promise.resolve();
+
+    expect(steerResolved).toBe(false);
+    expect(upstream.steer).not.toHaveBeenCalled();
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: { type: "assistant_delta", delta: "before steer" },
+    });
+    const completion = iterator.next();
+    await expect(steerPromise).resolves.toBeUndefined();
+    expect(upstream.steer).toHaveBeenCalledWith("focus on TP53");
+
+    pending.resolve();
+    await expect(completion).resolves.toEqual({
+      done: false,
+      value: { type: "turn_completed" },
+    });
+    await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
+  });
+
   test("starts a new delta event before the coalesced payload exceeds 4096 characters", async () => {
     const upstream = new FakeUpstreamSession();
     upstream.promptImplementation = async () => {
@@ -942,5 +1280,46 @@ describe("PiAgentAdapter", () => {
     await expect(adapter.createSession(sessionConfig)).rejects.toMatchObject({
       code: "INVALID_CONFIGURATION",
     });
+  });
+});
+
+describe("kimi sampling overrides", () => {
+  test("strips temperature/top_p for kimi models that reject them", () => {
+    const payload = {
+      model: "kimi-k3",
+      messages: [{ role: "user", content: "hi" }],
+      temperature: 0.2,
+      top_p: 1,
+    };
+    const result = applyModelProfileToPayload(payload, {
+      provider: "dashscope",
+      modelId: "kimi-k3",
+      apiKey: "sk-test",
+      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    }) as typeof payload;
+    expect(result.temperature).toBeUndefined();
+    expect(result.top_p).toBeUndefined();
+    expect(result.model).toBe("kimi-k3");
+
+    const withTopP = { model: "kimi-k3", messages: [], top_p: 1 };
+    const strippedTopP = applyModelProfileToPayload(withTopP, {
+      provider: "dashscope",
+      modelId: "kimi-k3",
+      apiKey: "sk-test",
+      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      topP: 1,
+    }) as typeof withTopP & { top_p?: number };
+    expect(strippedTopP.top_p).toBeUndefined();
+  });
+
+  test("keeps sampling overrides for qwen models", () => {
+    const payload = { model: "qwen3.8-max", messages: [], temperature: 0.7 };
+    const result = applyModelProfileToPayload(payload, {
+      provider: "dashscope",
+      modelId: "qwen3.8-max",
+      apiKey: "sk-test",
+      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    }) as typeof payload;
+    expect(result.temperature).toBe(0.7);
   });
 });

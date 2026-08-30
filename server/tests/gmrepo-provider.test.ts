@@ -12,7 +12,9 @@
  * limits, media-type checks, content cache) and CoreAcquisitionRuntime
  * registers the verified bytes with hash/provenance. POST never resumes
  * (no Range), and distinct POST bodies on the same URL never share a cache
- * entry.
+ * entry. Since 2026-08 the endpoint is
+ * ``getPhenotypesAndAbundanceSummaryOfAAssociatedTaxon/`` keyed by a numeric
+ * NCBI taxon ID; the legacy per-MeSH endpoints are dead upstream (HTTP 500).
  */
 
 import { createHash } from "node:crypto";
@@ -41,24 +43,38 @@ import { SourceAssetRegistry } from "../src/runtime/source-assets/registry.js";
 const roots: string[] = [];
 const HOST = "gmrepo.humangut.info";
 // Trailing slash is part of the contract: Django APPEND_SLASH turns a
-// slash-less POST into HTTP 500 (the Gold10 "network_error" root cause).
-const ENDPOINT = `https://${HOST}/api/getAssociatedSpeciesByMeshID/`;
-const MESH_HEALTH = "D006262";
-const MESH_UC = "D003093";
+// slash-less POST into HTTP 500 (verified against the live API).
+const ENDPOINT = `https://${HOST}/api/getPhenotypesAndAbundanceSummaryOfAAssociatedTaxon/`;
+const TAXON_HEALTHY_REFERENCE = 1234;
+const TAXON_SECOND = 562;
 
-const SPECIES_PAYLOAD = (meshId: string): string => JSON.stringify({
-  mesh_id: meshId,
-  nr_valid_samples: 1234,
-  associated_species: [
-    { ncbi_taxon_id: 40520, scientific_name: "Blautia obeum", samples: 1123 },
-    { ncbi_taxon_id: 562, scientific_name: "Escherichia coli", samples: 89 },
+const TAXON_PAYLOAD = (taxonId: number): string => JSON.stringify({
+  phenotypes_associated_with_taxon: [
+    {
+      id: 94,
+      disease: "D006262",
+      term: "Health",
+      taxon_rank_level: "species",
+      ncbi_taxon_id: taxonId,
+      samples: 1123,
+      all_samples: 2000,
+    },
+    {
+      id: 183,
+      disease: "D010437",
+      term: "Peptic Ulcer",
+      taxon_rank_level: "species",
+      ncbi_taxon_id: taxonId,
+      samples: 25,
+      all_samples: 64,
+    },
   ],
 });
 
-function request(meshId: string): CoreAcquisitionRequest {
+function request(taxonId: number | string): CoreAcquisitionRequest {
   return {
     schema_version: "1.0",
-    request_id: `request_gmrepo_${meshId}`,
+    request_id: `request_gmrepo_${taxonId}`,
     task_id: "task_gmrepo",
     requirement_id: "build_gmrepo",
     binding_id: "binding_gmrepo",
@@ -66,7 +82,7 @@ function request(meshId: string): CoreAcquisitionRequest {
     provider_id: GMREPO_FILES_PROVIDER_ID,
     recipe_id: null,
     recipe_version: null,
-    parameters: { source: "gmrepo", accession: meshId, entities: {} },
+    parameters: { source: "gmrepo", accession: String(taxonId), entities: {} },
   };
 }
 
@@ -124,9 +140,9 @@ function gmrepoExecutor(log: Array<{ method: string; body: string | null; url: s
         })(),
       };
     }
-    let meshId: string;
+    let taxonId: number;
     try {
-      meshId = (JSON.parse(request.body?.toString("utf8") ?? "{}") as { mesh_id?: unknown }).mesh_id as string;
+      taxonId = Number((JSON.parse(request.body?.toString("utf8") ?? "{}") as { ncbi_taxon_id?: unknown }).ncbi_taxon_id);
     } catch {
       return {
         status: 400,
@@ -136,7 +152,7 @@ function gmrepoExecutor(log: Array<{ method: string; body: string | null; url: s
         })(),
       };
     }
-    const payload = SPECIES_PAYLOAD(meshId);
+    const payload = TAXON_PAYLOAD(Number.isFinite(taxonId) && taxonId > 0 ? taxonId : 1234);
     return {
       status: 200,
       headers: {
@@ -186,7 +202,7 @@ describe("GMRepo POST-only acquisition", () => {
       executor: gmrepoExecutor(requests),
     });
     const raw = {
-      ...request(MESH_HEALTH),
+      ...request(TAXON_HEALTHY_REFERENCE),
       request_id: "request_get_only",
       provider_id: "gmrepo.get-only.v1",
     };
@@ -205,18 +221,18 @@ describe("GMRepo POST-only acquisition", () => {
     expect(requests[0]!.body === null).toBe(true);
   });
 
-  it("acquires GMRepo species data through the trusted POST acquisition path", async () => {
+  it("acquires GMRepo taxon phenotype summaries through the trusted POST acquisition path", async () => {
     const requests: Array<{ method: string; body: string | null; url: string }> = [];
     const fixture_ = await fixture({ executor: gmrepoExecutor(requests) });
 
-    const result = await fixture_.runtime.acquire(request(MESH_HEALTH));
+    const result = await fixture_.runtime.acquire(request(TAXON_HEALTHY_REFERENCE));
 
     expect(requests).toHaveLength(1);
     expect(requests[0]).toMatchObject({ method: "POST", url: ENDPOINT });
-    expect(JSON.parse(requests[0]!.body ?? "")).toEqual({ mesh_id: MESH_HEALTH });
+    expect(JSON.parse(requests[0]!.body ?? "")).toEqual({ ncbi_taxon_id: TAXON_HEALTHY_REFERENCE });
     expect(result.sourceAsset).toEqual({
       schema_version: "1.0",
-      asset_id: `asset_${createHash("sha256").update(SPECIES_PAYLOAD(MESH_HEALTH)).digest("hex")}`,
+      asset_id: `asset_${createHash("sha256").update(TAXON_PAYLOAD(TAXON_HEALTHY_REFERENCE)).digest("hex")}`,
       task_id: "task_gmrepo",
       role: "carrier",
     });
@@ -228,71 +244,75 @@ describe("GMRepo POST-only acquisition", () => {
       provider_id: GMREPO_FILES_PROVIDER_ID,
       implementation_digest: GMREPO_FILES_IMPLEMENTATION_DIGEST,
       request_identity_digest: result.requestIdentityDigest,
-      canonical_accession: MESH_HEALTH,
+      canonical_accession: String(TAXON_HEALTHY_REFERENCE),
       provider_snapshot_identity: `${GMREPO_FILES_PROVIDER_ID}:official-api`,
     });
     const chunks: Buffer[] = [];
     for await (const chunk of (await fixture_.assets.resolveAny(result.sourceAsset.asset_id)).content) {
       chunks.push(Buffer.from(chunk));
     }
-    expect(Buffer.concat(chunks).toString("utf8")).toBe(SPECIES_PAYLOAD(MESH_HEALTH));
+    expect(Buffer.concat(chunks).toString("utf8")).toBe(TAXON_PAYLOAD(TAXON_HEALTHY_REFERENCE));
   });
 
   it("keeps distinct POST bodies on the same endpoint in distinct cache entries", async () => {
     const requests: Array<{ method: string; body: string | null; url: string }> = [];
     const fixture_ = await fixture({ executor: gmrepoExecutor(requests) });
 
-    const first = await fixture_.runtime.acquire(request(MESH_HEALTH));
-    const second = await fixture_.runtime.acquire(request(MESH_UC));
+    const first = await fixture_.runtime.acquire(request(TAXON_HEALTHY_REFERENCE));
+    const second = await fixture_.runtime.acquire(request(TAXON_SECOND));
 
     // A cache-key collision on the URL would serve the first body's bytes for
     // the second request; the variant key must force a second network call.
     expect(requests).toHaveLength(2);
-    expect(JSON.parse(requests[1]!.body ?? "")).toEqual({ mesh_id: MESH_UC });
+    expect(JSON.parse(requests[1]!.body ?? "")).toEqual({ ncbi_taxon_id: TAXON_SECOND });
     expect(second.sourceAsset.asset_id).not.toBe(first.sourceAsset.asset_id);
-    const secondBytes = await readFile(path.join(fixture_.root, "source_assets", second.sourceAsset.asset_id, `gmrepo_species_${MESH_UC}.json`), "utf8");
-    expect(secondBytes).toBe(SPECIES_PAYLOAD(MESH_UC));
+    const secondBytes = await readFile(
+      path.join(fixture_.root, "source_assets", second.sourceAsset.asset_id, `gmrepo_taxon_phenotypes_${TAXON_SECOND}.json`),
+      "utf8",
+    );
+    expect(secondBytes).toBe(TAXON_PAYLOAD(TAXON_SECOND));
   });
 
   it("plans a fixed POST contract pinned to the official endpoint", async () => {
     const provider = createGmrepoFilesProvider();
-    const plan = await provider.plan(request(MESH_HEALTH));
+    const plan = await provider.plan(request(TAXON_HEALTHY_REFERENCE));
 
     expect(plan.source).toMatchObject({
-      source_id: `source_gmrepo_${createHash("sha256").update(`${GMREPO_FILES_PROVIDER_ID}\u0000${MESH_HEALTH}`).digest("hex").slice(0, 20)}`,
+      source_id: `source_gmrepo_${createHash("sha256").update(`${GMREPO_FILES_PROVIDER_ID}\u0000${TAXON_HEALTHY_REFERENCE}`).digest("hex").slice(0, 20)}`,
       database: "gmrepo",
-      accession: MESH_HEALTH,
+      accession: String(TAXON_HEALTHY_REFERENCE),
       url: ENDPOINT,
     });
     expect(plan.method).toBe("POST");
-    expect(JSON.parse(plan.body!)).toEqual({ mesh_id: MESH_HEALTH });
-    expect(plan.filename).toBe(`gmrepo_species_${MESH_HEALTH}.json`);
+    expect(JSON.parse(plan.body!)).toEqual({ ncbi_taxon_id: TAXON_HEALTHY_REFERENCE });
+    expect(plan.filename).toBe(`gmrepo_taxon_phenotypes_${TAXON_HEALTHY_REFERENCE}.json`);
     expect(plan.allowedHosts).toEqual(new Set([HOST]));
     expect(plan.expectedMediaTypes).toEqual(new Set(["application/json"]));
     expect(plan.assetRole).toBe("carrier");
     expect(plan.providerRevisionFacts).toEqual({
-      canonical_accession: MESH_HEALTH,
+      canonical_accession: String(TAXON_HEALTHY_REFERENCE),
       provider_snapshot_identity: `${GMREPO_FILES_PROVIDER_ID}:official-api`,
       provider_revision_token: null,
     });
   });
 
-  it("rejects non-MeSH accessions and mismatched binding sources", async () => {
+  it("rejects non-numeric accessions and mismatched binding sources", async () => {
     const provider = createGmrepoFilesProvider();
-    await expect(provider.plan(request("not-a-mesh"))).rejects.toThrow(/valid MeSH ID/);
-    await expect(provider.plan(request("d006262"))).resolves.toMatchObject({
+    await expect(provider.plan(request("not-a-taxid"))).rejects.toThrow(/valid numeric NCBI taxon ID/);
+    await expect(provider.plan(request("mesh:D006262"))).rejects.toThrow(/valid numeric NCBI taxon ID/);
+    await expect(provider.plan(request(" 1234 "))).resolves.toMatchObject({
       method: "POST",
     });
-    const wrongSource = request(MESH_HEALTH);
+    const wrongSource = request(TAXON_HEALTHY_REFERENCE);
     wrongSource.parameters.source = "browser";
     await expect(provider.plan(wrongSource)).rejects.toThrow(/binding source 'gmrepo'/);
-    const injected = request(MESH_HEALTH);
+    const injected = request(TAXON_HEALTHY_REFERENCE);
     injected.parameters.url = "https://evil.example/api";
     await expect(provider.plan(injected)).rejects.toThrow(/only source, accession, and entities/);
   });
 
   it("fails closed on invalid method/body plan combinations", async () => {
-    const base = await createGmrepoFilesProvider().plan(request(MESH_HEALTH));
+    const base = await createGmrepoFilesProvider().plan(request(TAXON_HEALTHY_REFERENCE));
     const registry = new CoreAcquisitionRegistry();
     registry.registerProvider({
       providerId: "gmrepo.bad-plan.v1",
@@ -304,7 +324,7 @@ describe("GMRepo POST-only acquisition", () => {
       executor: gmrepoExecutor(),
     });
     await expect(fixture_.runtime.acquire({
-      ...request(MESH_HEALTH),
+      ...request(TAXON_HEALTHY_REFERENCE),
       provider_id: "gmrepo.bad-plan.v1",
     })).rejects.toThrow(/requires a JSON request body/);
   });

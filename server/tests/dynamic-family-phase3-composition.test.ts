@@ -266,8 +266,12 @@ describe("dynamic family phase3 composition fencing", () => {
     const accepted = await created.json() as { task_id: string; run_id: string };
     await expect.poll(async () => {
       const snapshot = await runtime.repository.getSnapshot(accepted.task_id);
-      return snapshot?.runs.find((run) => run.run_id === accepted.run_id)?.status;
-    }, { timeout: 30_000 }).toBe("completed");
+      const status = snapshot?.runs.find((run) => run.run_id === accepted.run_id)?.status;
+      return status === "completed" || status === "failed" || status === "cancelled";
+    }, { timeout: 30_000 }).toBe(true);
+    const finalSnapshot = await runtime.repository.getSnapshot(accepted.task_id);
+    const finalRun = finalSnapshot?.runs.find((run) => run.run_id === accepted.run_id);
+    expect(finalRun?.status, JSON.stringify(finalRun)).toBe("completed");
     const publishRoot = path.join(tasksRoot, accepted.task_id, "dataset_runs", accepted.run_id, "build_phase3", "publish");
     await expect(readdir(publishRoot)).resolves.toEqual([]);
     const events = await runtime.repository.listEvents(accepted.task_id, 0);
@@ -283,6 +287,7 @@ describe("dynamic family phase3 composition fencing", () => {
     let acquisitionCalls = 0;
     let transformCalls = 0;
     let publicationCalls = 0;
+    let submitFailure: string | null = null;
     const actualSubmit = submitDynamicFamilyPublication;
     const actualPublish = publishDynamicFamily;
     const acquisitionRuntimeFactory: NonNullable<Phase3DynamicFamilySeams["createAcquisitionRuntime"]> = ({
@@ -334,6 +339,7 @@ describe("dynamic family phase3 composition fencing", () => {
             const receipt = (JSON.parse(prepared.content) as { preflight_receipt: DynamicFamilyPreflightReceipt }).preflight_receipt;
             const submitPayload = { preflight_receipt: receipt };
             const submitted = await submitTool.execute(submitPayload);
+            if (submitted.isError === true) submitFailure = submitted.content;
             expect(submitted.isError).not.toBe(true);
             yield { type: "turn_completed" };
           },
@@ -383,8 +389,12 @@ describe("dynamic family phase3 composition fencing", () => {
     const accepted = await created.json() as { task_id: string; run_id: string };
     await expect.poll(async () => {
       const snapshot = await runtime.repository.getSnapshot(accepted.task_id);
-      return snapshot?.runs.find((run) => run.run_id === accepted.run_id)?.status;
-    }, { timeout: 30_000 }).toBe("completed");
+      const status = snapshot?.runs.find((run) => run.run_id === accepted.run_id)?.status;
+      return status === "completed" || status === "failed" || status === "cancelled";
+    }, { timeout: 30_000 }).toBe(true);
+    const finalSnapshot = await runtime.repository.getSnapshot(accepted.task_id);
+    const finalRun = finalSnapshot?.runs.find((run) => run.run_id === accepted.run_id);
+    expect(finalRun?.status, submitFailure ?? JSON.stringify(finalRun)).toBe("completed");
     expect(acquisitionCalls).toBe(1);
     expect(transformCalls).toBe(1);
     expect(publicationCalls).toBe(1);
@@ -392,6 +402,63 @@ describe("dynamic family phase3 composition fencing", () => {
     const events = await runtime.repository.listEvents(accepted.task_id, 0);
     expect(events.some((event) => event.payload.type === "publication_created")).toBe(true);
     expect(events.some((event) => event.payload.type === "artifact_produced")).toBe(true);
+    await runtime.close();
+  });
+
+  test("composes the governed registered paper chart evidence tool next to the exploratory VLM tool", async () => {
+    const tasksRoot = await mkdtemp(path.join(os.tmpdir(), "phase3-registered-chart-"));
+    roots.push(tasksRoot);
+    const workspacesRoot = await mkdtemp(path.join(os.tmpdir(), "phase3-registered-chart-workspaces-"));
+    roots.push(workspacesRoot);
+    const composedToolNames: string[] = [];
+
+    const adapter: BioMedAgentAdapter = {
+      async createSession(config: BioMedSessionConfig): Promise<BioMedAgentSession> {
+        composedToolNames.push(...(config.tools ?? []).map((tool) => tool.name));
+        return {
+          piSessionId: `pi_${config.taskId}`,
+          taskId: config.taskId,
+          runId: config.runId,
+          run: async function* run(): AsyncIterable<import("../src/agent/contracts.js").BioMedAgentEvent> {
+            yield { type: "turn_completed" };
+          },
+          cancel: async () => undefined,
+          dispose: async () => undefined,
+        };
+      },
+    };
+    const runtime = await createPhase3Runtime({
+      tasksRoot,
+      workspacesRoot,
+      repositoryRoot: path.resolve("."),
+      agentExecPolicy: null,
+      adapter,
+      database: null,
+      browserPool: null,
+    });
+    const server = createServer((request, response) => { void runtime.handle(request, response); });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (address === null || typeof address === "string") throw new Error("phase3 chart tool test server has no address");
+    const created = await fetch(`http://127.0.0.1:${address.port}/api/v1/tasks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        request_id: "phase3_registered_chart_tool",
+        input: "compose the governed paper chart extraction tool",
+        databases: [],
+        mode: "agent",
+      }),
+    });
+    expect(created.status).toBe(202);
+    const accepted = await created.json() as { task_id: string; run_id: string };
+    await expect.poll(async () => {
+      const snapshot = await runtime.repository.getSnapshot(accepted.task_id);
+      return snapshot?.runs.find((run) => run.run_id === accepted.run_id)?.status;
+    }, { timeout: 30_000 }).toBe("completed");
+    expect(composedToolNames).toContain("extract_registered_paper_chart_evidence");
+    expect(composedToolNames).toContain("extract_chart_data_vlm");
     await runtime.close();
   });
 });

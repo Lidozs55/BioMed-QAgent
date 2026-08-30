@@ -17,7 +17,11 @@ import {
   type Phase3RuntimeOptions,
 } from "./runtime/phase3-composition.js";
 import { ModelSettingsService } from "./settings/model-settings.js";
+import { createHilApprovalSettingsApi } from "./settings/hil-approval-settings.js";
 import { createPermissionSettingsApi } from "./settings/permission-settings.js";
+import {
+  JsonHilApprovalPolicyStore,
+} from "./runtime/hil-approval-store.js";
 import {
   JsonPermissionPolicyStore,
   PermissionBrokerRegistry,
@@ -30,7 +34,8 @@ interface ApiSurface {
 interface ModelSettingsSurface extends ApiSurface {
   resolveActiveModel(): Promise<BioMedModelConfig>;
   resolveRuntimeLimits?(): RuntimeLimits;
-  resolveVlmConfig?(): Promise<Partial<VlmConfig>>;
+  /** Consulted per extraction call, never snapshotted at bootstrap. */
+  resolveVlmConfig?(): Promise<VlmConfig>;
 }
 
 type FormalRuntime = Pick<
@@ -73,6 +78,9 @@ export async function createBootstrapOptions(input: BootstrapInput): Promise<Boo
   const permissionPolicyStore = new JsonPermissionPolicyStore(
     path.join(settingsDir, "agent-permissions.json"),
   );
+  const hilApprovalPolicy = new JsonHilApprovalPolicyStore(
+    path.join(settingsDir, "hil-approval.json"),
+  );
   const database = input.database ?? new DatabaseClient({ cacheDir, databasesDir });
   const browserPool = input.browserPool ?? new NodeBrowserPool({ maxContexts: 4 });
   const modelSettings = input.modelSettings ?? await ModelSettingsService.create({
@@ -93,9 +101,6 @@ export async function createBootstrapOptions(input: BootstrapInput): Promise<Boo
     resolveModel: modelSettings.resolveActiveModel,
   });
   const permissionBrokerRegistry = new PermissionBrokerRegistry();
-  const vlmConfig = modelSettings.resolveVlmConfig === undefined
-    ? undefined
-    : await modelSettings.resolveVlmConfig().catch(() => undefined);
   const lifecycle = new LifecycleRegistry({ timeoutMs: config.shutdownTimeoutMs + 5_000 });
   const formalFactory = input.createFormalRuntime ?? createPhase3Runtime;
 
@@ -113,6 +118,7 @@ export async function createBootstrapOptions(input: BootstrapInput): Promise<Boo
       skillIterationApi,
       modelSettings,
       createPermissionSettingsApi(permissionPolicyStore, permissionBrokerRegistry),
+      createHilApprovalSettingsApi(hilApprovalPolicy),
     ),
     formalRuntime: () => formalFactory({
       tasksRoot,
@@ -122,11 +128,12 @@ export async function createBootstrapOptions(input: BootstrapInput): Promise<Boo
       operationTimeoutMs: config.operationTimeoutMs,
       permissionPolicyStore,
       permissionBrokerRegistry,
+      hilApprovalPolicy,
       resolveModel: modelSettings.resolveActiveModel,
       resolveRuntimeLimits: modelSettings.resolveRuntimeLimits,
       database,
       browserPool,
-      vlmConfig,
+      resolveVlmConfig: modelSettings.resolveVlmConfig,
     }),
   };
 }

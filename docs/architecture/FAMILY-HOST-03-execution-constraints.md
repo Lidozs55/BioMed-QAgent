@@ -7,7 +7,7 @@
 ## 不变边界
 
 1. **Execution honesty**：backend/receipt 固定声明 `in_process_unisolated`；`node:vm` 只用于同步 timeout，不得称为 sandbox、isolation 或 security boundary。
-2. **Explicit opt-in**：只有 `submit_dynamic_family_build` 的 exact `execution_backend=in_process_unisolated` 可进入动态fixed slot；不能静默fallback或从static build自动切换。
+2. **Explicit opt-in**：只有 `submit_dynamic_family_publication` 的 exact `execution_backend=in_process_unisolated` 可进入动态fixed slot；不能静默fallback或从static build自动切换。
 3. **Registered immutable input**：正式输入必须闭合到当前task的registered SourceAsset/committed OperationResult receipt；按handle/order/owner/size/SHA-256重验。workspace path和discovery bytes不是carrier。
 4. **Compile/descriptor closure**：normalized source、emitted bundle、compiler/options、dependency/runtime/policy、FamilySpec、Projection和declared output digests必须在执行前精确闭合。
 5. **Host receipt != Core trust**：runtime bytes必须进入私有quarantine，Core重hash、closed-world admission并创建native OperationResult；不能直接成为candidate/publication。
@@ -46,6 +46,11 @@ registered immutable source receipts
   -> atomic immutable Publication
   -> Artifact API download + SHA-256 verification
 ```
+
+receipt-only submit（`submit_dynamic_family_publication` 只回传 `preflight_receipt`）
+依赖 Host 进程内 preflight coordinator 保存的 prepared submission
+（`server/src/runtime/dynamic-family-preflight-coordinator.ts`）；这不是跨重启
+durable prepared-submission store，Host 重启后必须重新 prepare。
 
 ## 未来isolated backend
 

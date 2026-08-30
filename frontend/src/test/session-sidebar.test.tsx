@@ -85,25 +85,6 @@ function seedRunSummary(
   });
 }
 
-function scrollSidebarToBottom() {
-  const content = document.querySelector(
-    '[data-slot="sidebar-content"]',
-  ) as HTMLElement;
-  Object.defineProperty(content, "scrollHeight", {
-    value: 1000,
-    configurable: true,
-  });
-  Object.defineProperty(content, "clientHeight", {
-    value: 200,
-    configurable: true,
-  });
-  Object.defineProperty(content, "scrollTop", {
-    value: 760,
-    configurable: true,
-  });
-  fireEvent.scroll(content);
-}
-
 function renderSidebar(
   props: Partial<React.ComponentProps<typeof SessionSidebar>> = {},
 ) {
@@ -183,7 +164,7 @@ describe("SessionSidebar", () => {
     ).toHaveLength(10);
   });
 
-  it("loads another stable page without changing foreground selection", async () => {
+  it("loads another stable page when the expand button is clicked", async () => {
     useAgentStore.getState().mergeTaskPage(
       {
         active_items: [summary("active_a", "running", "Active A")],
@@ -212,15 +193,84 @@ describe("SessionSidebar", () => {
     );
     renderSidebar({ onLoadMore });
 
-    scrollSidebarToBottom();
+    const expand = screen.getByRole("button", { name: "展开显示更多历史对话" });
+    expect(expand).toBeEnabled();
+    fireEvent.click(expand);
 
     expect(onLoadMore).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole("status")).toBeVisible();
+    expect(screen.getByRole("button", { name: "展开显示更多历史对话" })).toBeDisabled();
+    expect(screen.getByText("加载中")).toBeVisible();
     expect(screen.getAllByText("Active A")).toHaveLength(1);
     act(() => resolveLoad?.());
 
     await waitFor(() => expect(screen.getByText("History B")).toBeVisible());
     expect(useAgentStore.getState().activeTaskId).toBe("history_a");
+    expect(
+      screen.queryByRole("button", { name: "展开显示更多历史对话" }),
+    ).toBeNull();
+  });
+
+  it("keeps the first page on demand and expands only on click", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      {
+        active_items: [],
+        items: [summary("history_a", "completed", "History A")],
+        next_cursor: "page_2",
+      },
+      false,
+    );
+    const onLoadMore = vi.fn().mockResolvedValue(undefined);
+    renderSidebar({ onLoadMore });
+
+    // A short list must stay as-is: no auto-fill, no scroll trigger — the
+    // next page loads exclusively through the explicit expand button.
+    const content = document.querySelector(
+      '[data-slot="sidebar-content"]',
+    ) as HTMLElement;
+    Object.defineProperty(content, "clientHeight", {
+      value: 300,
+      configurable: true,
+    });
+    Object.defineProperty(content, "scrollHeight", {
+      value: 200,
+      configurable: true,
+    });
+    act(() => {
+      useAgentStore.getState().mergeTaskPage(
+        {
+          active_items: [],
+          items: [summary("history_b", "completed", "History B")],
+          next_cursor: "page_2",
+        },
+        true,
+      );
+      fireEvent.scroll(content);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(onLoadMore).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("button", { name: "展开显示更多历史对话" }),
+    ).toBeEnabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "展开显示更多历史对话" }));
+    await waitFor(() => expect(onLoadMore).toHaveBeenCalledTimes(1));
+  });
+
+  it("hides the expand button when history is exhausted", () => {
+    useAgentStore.getState().mergeTaskPage(
+      {
+        active_items: [],
+        items: [summary("history_a", "completed", "History A")],
+        next_cursor: null,
+      },
+      false,
+    );
+    renderSidebar();
+
+    expect(
+      screen.queryByRole("button", { name: "展开显示更多历史对话" }),
+    ).toBeNull();
   });
 
   it("shows a visible error when loading another history page fails", async () => {
@@ -235,7 +285,7 @@ describe("SessionSidebar", () => {
     const onLoadMore = vi.fn().mockRejectedValue(new Error("history unavailable"));
     renderSidebar({ onLoadMore });
 
-    scrollSidebarToBottom();
+    fireEvent.click(screen.getByRole("button", { name: "展开显示更多历史对话" }));
 
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith(
@@ -243,6 +293,9 @@ describe("SessionSidebar", () => {
         expect.objectContaining({ description: "history unavailable" }),
       ),
     );
+    expect(
+      screen.getByRole("button", { name: "展开显示更多历史对话" }),
+    ).toBeEnabled();
   });
 
   it("keeps a retry action visible after initial history loading fails", async () => {

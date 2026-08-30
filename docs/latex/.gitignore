@@ -1,0 +1,15 @@
+# LaTeX 构建产物（latexmk -outdir=build）
+build/
+
+# LaTeX 编译中间产物（无论是否落在 build/ 内）
+*.aux
+*.log
+*.out
+*.toc
+*.xdv
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+
+# SVG→PDF 转换的临时文件（tools/svg2pdf.mjs 残留）
+images/_tmp_*

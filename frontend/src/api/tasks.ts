@@ -25,8 +25,8 @@ export interface SteerResponse {
   status: "steered";
   task_id: string;
   run_id: string;
-  message_id?: string | null;
-  content?: string | null;
+  message_id: string;
+  content: string;
 }
 
 /** Summary row of a registered local cache dataset (``/api/v1/cache/datasets``). */
@@ -79,7 +79,9 @@ function parseSteerResponse(json: unknown): SteerResponse {
     typeof obj !== "object" ||
     obj["status"] !== "steered" ||
     typeof obj["task_id"] !== "string" ||
-    typeof obj["run_id"] !== "string"
+    typeof obj["run_id"] !== "string" ||
+    typeof obj["message_id"] !== "string" ||
+    typeof obj["content"] !== "string"
   ) {
     throw new APIError(502, "Invalid steer response");
   }
@@ -87,8 +89,8 @@ function parseSteerResponse(json: unknown): SteerResponse {
     status: "steered",
     task_id: obj["task_id"],
     run_id: obj["run_id"],
-    message_id: typeof obj["message_id"] === "string" ? obj["message_id"] : null,
-    content: typeof obj["content"] === "string" ? obj["content"] : null,
+    message_id: obj["message_id"],
+    content: obj["content"],
   };
 }
 
@@ -135,6 +137,8 @@ export interface TasksApi {
   deleteTask: (taskId: string) => Promise<void>;
   fetchArtifacts: (taskId: string) => Promise<ArtifactRecord[]>;
   getArtifactUrl: (taskId: string, artifactId: string) => string;
+  /** Reads a task-workspace text file (task-relative path) for UI rendering. */
+  fetchTaskFileText: (taskId: string, relativePath: string) => Promise<string>;
   getCacheExportUrl: () => string;
   fetchCacheDatasets: (params?: {
     namespace?: string;
@@ -216,6 +220,11 @@ export function createTasksApi(http: Http): TasksApi {
       http.request(`${http.baseUrl}/tasks/${http.encodeId(taskId)}/artifacts`).then((b) => parseArtifactsEnvelope(b)).then(({ artifacts }) => artifacts),
     getArtifactUrl: (taskId, artifactId) =>
       `${http.baseUrl}/tasks/${http.encodeId(taskId)}/artifacts/${http.encodeId(artifactId)}`,
+    fetchTaskFileText: (taskId, relativePath) =>
+      http.requestText(http.withQuery(
+        `${http.baseUrl}/tasks/${http.encodeId(taskId)}/file`,
+        [["path", relativePath]],
+      )),
     getCacheExportUrl: () => `${http.baseUrl}/cache/export`,
     fetchCacheDatasets: (params = {}) =>
       http.request(http.withQuery(`${http.baseUrl}/cache/datasets`, [

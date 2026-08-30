@@ -58,11 +58,21 @@ export async function encodeImageBase64(filePath: string): Promise<string> {
   return raw.toString("base64");
 }
 
+export interface VlmCallResult {
+  /** Assistant text content of the first choice. */
+  content: string;
+  /** Provider-echoed model identifier (null when the body omits it). */
+  model: string | null;
+}
+
 export interface VlmClient {
   call(imagePath: string, prompt: string, signal?: AbortSignal): Promise<string>;
+  /** ``call`` plus the provider-echoed model identity for provenance. */
+  callWithMeta(imagePath: string, prompt: string, signal?: AbortSignal): Promise<VlmCallResult>;
 }
 
 interface ChatCompletionResponse {
+  model?: unknown;
   choices?: Array<{ message?: { content?: unknown } }>;
 }
 
@@ -75,65 +85,70 @@ export function createVlmClient(
   config: VlmConfig,
   httpClient: PublicHttpClient,
 ): VlmClient {
+  const callWithMeta = async (imagePath: string, prompt: string, signal?: AbortSignal): Promise<VlmCallResult> => {
+    if (config.apiKey.trim() === "") {
+      throw new ChartExtractionError(
+        `DASHSCOPE_API_KEY (VLM credential) is missing; cannot call ${config.model}`,
+      );
+    }
+    const mime = inferMime(imagePath);
+    const base64 = await encodeImageBase64(imagePath);
+    const endpoint = new URL(`${config.baseUrl.replace(/\/+$/, "")}/chat/completions`);
+    const payload = JSON.stringify({
+      model: config.model,
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: prompt },
+            { type: "image_url", image_url: { url: `data:${mime};base64,${base64}` } },
+          ],
+        },
+      ],
+      temperature: 0.1,
+    });
+    const response = await httpClient.request(endpoint.toString(), {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${config.apiKey}`,
+        "content-type": "application/json",
+      },
+      body: payload,
+      signal: AbortSignal.any([
+        signal ?? new AbortController().signal,
+        AbortSignal.timeout(httpClient.timeoutMs ?? VLM_TIMEOUT_MS),
+      ]),
+      validateRedirect: () => {
+        throw new Error("VLM endpoint must not redirect");
+      },
+    });
+    if (response.status < 200 || response.status >= 300) {
+      await response.discard();
+      throw new ChartExtractionError(
+        `${config.model} call failed for ${imagePath}: HTTP ${response.status}`,
+      );
+    }
+    const chunks: Buffer[] = [];
+    for await (const chunk of response.body) chunks.push(chunk as Buffer);
+    let parsed: ChatCompletionResponse;
+    try {
+      parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")) as ChatCompletionResponse;
+    } catch (error) {
+      throw new ChartExtractionError(
+        `${config.model} returned non-JSON HTTP body for ${imagePath}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    const content = parsed.choices?.[0]?.message?.content;
+    if (typeof content !== "string" || content === "") {
+      throw new ChartExtractionError(`${config.model} returned empty content for ${imagePath}`);
+    }
+    return {
+      content,
+      model: typeof parsed.model === "string" && parsed.model.trim() !== "" ? parsed.model : null,
+    };
+  };
   return {
-    call: async (imagePath, prompt, signal) => {
-      if (config.apiKey.trim() === "") {
-        throw new ChartExtractionError(
-          "DASHSCOPE_API_KEY (VLM credential) is missing; cannot call qwen-vl-max",
-        );
-      }
-      const mime = inferMime(imagePath);
-      const base64 = await encodeImageBase64(imagePath);
-      const endpoint = new URL(`${config.baseUrl.replace(/\/+$/, "")}/chat/completions`);
-      const payload = JSON.stringify({
-        model: config.model,
-        messages: [
-          {
-            role: "user",
-            content: [
-              { type: "text", text: prompt },
-              { type: "image_url", image_url: { url: `data:${mime};base64,${base64}` } },
-            ],
-          },
-        ],
-        temperature: 0.1,
-      });
-      const response = await httpClient.request(endpoint.toString(), {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${config.apiKey}`,
-          "content-type": "application/json",
-        },
-        body: payload,
-        signal: AbortSignal.any([
-          signal ?? new AbortController().signal,
-          AbortSignal.timeout(httpClient.timeoutMs ?? VLM_TIMEOUT_MS),
-        ]),
-        validateRedirect: () => {
-          throw new Error("VLM endpoint must not redirect");
-        },
-      });
-      if (response.status < 200 || response.status >= 300) {
-        await response.discard();
-        throw new ChartExtractionError(
-          `qwen-vl-max call failed for ${imagePath}: HTTP ${response.status}`,
-        );
-      }
-      const chunks: Buffer[] = [];
-      for await (const chunk of response.body) chunks.push(chunk as Buffer);
-      let parsed: ChatCompletionResponse;
-      try {
-        parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")) as ChatCompletionResponse;
-      } catch (error) {
-        throw new ChartExtractionError(
-          `qwen-vl-max returned non-JSON HTTP body for ${imagePath}: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
-      const content = parsed.choices?.[0]?.message?.content;
-      if (typeof content !== "string" || content === "") {
-        throw new ChartExtractionError(`qwen-vl-max returned empty content for ${imagePath}`);
-      }
-      return content;
-    },
+    call: async (imagePath, prompt, signal) => (await callWithMeta(imagePath, prompt, signal)).content,
+    callWithMeta,
   };
 }

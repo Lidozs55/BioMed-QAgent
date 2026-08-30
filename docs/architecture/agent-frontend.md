@@ -274,7 +274,7 @@ transaction 中顺序 reduce；sequence gap 语义不变，React 只收到一次
 
 | kind | 来源事件 | 渲染组件 | 默认状态 |
 | --- | --- | --- | --- |
-| `user_message` | `MessageRecord(role=user)` hydrate | `UserMessageBubble` | 右对齐气泡 |
+| `user_message` | `run_queued` / `run_steered`，以及 `MessageRecord(role=user)` hydrate | `UserMessageBubble` | 右对齐气泡 |
 | `assistant_segment` | `assistant_delta`（按 `stream_id` 分段） | `AssistantSegment` | 展开，流式时末尾光标 |
 | `reasoning` | `assistant_reasoning_delta`（按 tool call 分段） | `ReasoningBlock` | 折叠；流式时展开 |
 | `tool_call` | `tool_started` + `tool_completed` | `ToolCallStep` | 折叠；running Spinner |
@@ -284,9 +284,14 @@ transaction 中顺序 reduce；sequence gap 语义不变，React 只收到一次
 | `artifact` | `artifact_produced` | `ArtifactStep` | 展开（含大小 Badge） |
 
 `itemId` 规则保证按工具调用分段、同 operation 共用项、同 kind progress 原位更新。
-`run_queued` / `user_input_required` / `user_input_resumed` /
+`user_input_required` / `user_input_resumed` /
 `conversation_compacted` / `plan_ready` / Run 终态事件**不创建 item**，分别由
-ChatPanel 草稿态、`pendingUserInput` + UserInputDialog、状态条分隔符处理。
+ChatPanel 草稿态、`pendingUserInput` + UserInputQuestionnaire、状态条分隔符处理。
+
+`run_steered` 是 active Run 内的 durable 用户消息边界：它先结束当前 Assistant
+流式段，再按事件 `sequence` 插入调整方向气泡，并让后续 `assistant_delta` 开启新段。
+HTTP `/inject-context` 的响应不直接生成本地气泡，因此回放、刷新和实时显示使用同一
+顺序来源。
 
 **`sequence` 是不可变的首次进入时间线位置**：`upsertItem` 更新已有 item 时保留
 原 `sequence` 与 `createdAt`，只有新增才写入序列；后续更新（如
@@ -351,8 +356,11 @@ Agent 任务处于 `running` / `finalizing` 时，顶部任务状态条常驻"�
 **不硬编码 22 列 Schema**；`PublicationResultsViewer` 读取 Publication 与
 `dataset_manifest.json`（含 `dataset_family`），识别主数据与辅助表并按数据族
 选择结果 Tab 与列渲染策略。界面必须显式展示 family、row granularity、有效行数、
-来源覆盖、Validation 状态、confidence 分布、provenance 覆盖率，以及
-`PARTIAL_SUCCESS` / `NO_DATA` 的原因。
+Validation 状态、confidence 分布、逐行 provenance 覆盖率（traced/untraced 行数与
+覆盖率），以及 `PARTIAL_SUCCESS` / `NO_DATA` 的原因。结果页展示的“覆盖”是
+逐行溯源覆盖，不等同于完整 SourceCoverage 语义报告：后者（universe scope、query
+plan、采集行数记账等）以 manifest 的 `audit_report` 角色交付，结果页完整语义报告的
+复现仍是待办。
 
 正式 HIL 由 shadcn `Dialog` 中的批量审核卡片承载：一个 blocking 请求可展示多个
 review item，数据审核提供接受/结构化修正/拒绝/跳过，凭据授权严格只提供授权/拒绝。

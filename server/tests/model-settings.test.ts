@@ -11,7 +11,12 @@ import { afterEach, describe, expect, test } from "vitest";
 import { DEFAULT_RUNTIME_LIMITS } from "@biomed/contracts";
 
 import { ModelSettingsService } from "../src/settings/model-settings.js";
-import { ENV_BOOTSTRAP_PROVIDER_ID } from "../src/settings/model-registry/store.js";
+import {
+  bootstrapEnvironmentDefaults,
+  defaultRegistry,
+  ENV_BOOTSTRAP_PROVIDER_ID,
+  type AuthState,
+} from "../src/settings/model-registry/store.js";
 
 const servers: Server[] = [];
 
@@ -74,6 +79,7 @@ describe("TypeScript model settings", () => {
       baseUrl: "https://models.example/v1",
       contextWindow: 64000,
       maxTokens: 3072,
+      safetyReserveTokens: 3200,
       compactionTriggerRatio: 0.85,
       compactionTargetRatio: 0.45,
       temperature: 0.25,
@@ -132,6 +138,394 @@ describe("TypeScript model settings", () => {
     const settings = await (await fetch(`${baseUrl}/api/v1/settings`)).json() as Record<string, unknown>;
     expect(settings.context_window).toBe(131072);
     expect(await service.resolveActiveModel()).toMatchObject({ contextWindow: 131072 });
+  });
+
+  test("allows editing model modalities (capabilities) via updateModel", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const provider = await service.createProvider({
+      name: "Custom OpenAI",
+      base_url: "https://models.example/v1",
+      api_key: "sk-modality",
+    });
+    const model = await service.createModel({
+      provider_id: provider.id,
+      model_id: "custom-chat",
+      source: "api",
+    });
+    expect(model.capabilities).toEqual({ text: true, image: false, video: false, audio: false });
+    expect(model.metadata_source).toBe("api");
+
+    // 用户勾选图像/音频模态：落盘且归一化（未勾选的 video 保持 false）。
+    const updated = await service.updateModel(model.id, {
+      capabilities: { text: true, image: true, audio: true },
+    });
+    expect(updated.capabilities).toEqual({ text: true, image: true, video: false, audio: true });
+    expect(updated.metadata_source).toBe("user");
+
+    // 不传 capabilities 时不得改动已有模态。
+    const untouched = await service.updateModel(model.id, { description: "note" });
+    expect(untouched.capabilities).toEqual({ text: true, image: true, video: false, audio: true });
+  });
+
+  test("accepts max_tokens values beyond the legacy spec upper bound", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const provider = await service.createProvider({
+      name: "Custom OpenAI",
+      base_url: "https://models.example/v1",
+      api_key: "sk-max-tokens",
+    });
+    const model = await service.createModel({
+      provider_id: provider.id,
+      model_id: "custom-chat",
+    });
+
+    // 旧规格上限为 262144/131072，现已取消：超大值允许保存（仅要求正整数）。
+    const updated = await service.updateModel(model.id, { params: { max_tokens: 400_000 } });
+    expect(updated.params.max_tokens).toBe(400_000);
+  });
+
+  test("marks metadata as user-edited when any editable field changes", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const provider = await service.createProvider({
+      name: "Custom OpenAI",
+      base_url: "https://models.example/v1",
+      api_key: "sk-user-edit",
+    });
+    const model = await service.createModel({
+      provider_id: provider.id,
+      model_id: "custom-chat",
+      source: "api",
+    });
+    expect(model.metadata_source).toBe("api");
+
+    // 参数被编辑即视为手动配置（不再被目录启动同步覆盖）。
+    const paramsEdited = await service.updateModel(model.id, { params: { temperature: 0.1 } });
+    expect(paramsEdited.metadata_source).toBe("user");
+
+    // 名称被编辑同样标记。
+    const second = await service.createModel({
+      provider_id: provider.id,
+      model_id: "custom-chat-2",
+      source: "api",
+    });
+    const named = await service.updateModel(second.id, { name: "My Model" });
+    expect(named.metadata_source).toBe("user");
+  });
+
+  test("syncs active-model parameter edits into runtime settings without reactivation", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const provider = await service.createProvider({
+      name: "Custom OpenAI",
+      base_url: "https://models.example/v1",
+      api_key: "sk-provider",
+    });
+    const model = await service.createModel({
+      provider_id: provider.id,
+      model_id: "custom-chat",
+      context_window: 64000,
+      params: { max_tokens: 3072, temperature: 0.25 },
+    });
+    expect((await service.resolveActiveModel()).maxTokens).toBe(3072);
+
+    await service.updateModel(model.id, { params: { max_tokens: 2048, temperature: 0.9 } });
+    expect(await service.resolveActiveModel()).toMatchObject({ maxTokens: 2048, temperature: 0.9 });
+  });
+
+  test("syncs max_output_tokens edits for the active model when params lack max_tokens", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const provider = await service.createProvider({
+      name: "Custom OpenAI",
+      base_url: "https://models.example/v1",
+      api_key: "sk-provider",
+    });
+    const model = await service.createModel({
+      provider_id: provider.id,
+      model_id: "custom-chat",
+      context_window: 64000,
+      max_output_tokens: 8192,
+    });
+    expect((await service.resolveActiveModel()).maxTokens).toBe(8192);
+
+    await service.updateModel(model.id, { max_output_tokens: 2048 });
+    expect((await service.resolveActiveModel()).maxTokens).toBe(2048);
+  });
+
+  test("does not sync parameter edits for inactive models", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const provider = await service.createProvider({
+      name: "Custom OpenAI",
+      base_url: "https://models.example/v1",
+      api_key: "sk-provider",
+    });
+    await service.createModel({
+      provider_id: provider.id,
+      model_id: "model-a",
+      context_window: 64000,
+      params: { max_tokens: 3072 },
+    });
+    const inactive = await service.createModel({
+      provider_id: provider.id,
+      model_id: "model-b",
+      context_window: 64000,
+      params: { max_tokens: 9999 },
+    });
+
+    await service.updateModel(inactive.id, { params: { max_tokens: 12345, temperature: 1.5 } });
+    expect(await service.resolveActiveModel()).toMatchObject({ maxTokens: 3072, temperature: 0.7 });
+  });
+
+  test("falls back to the default max output when the activated model exposes none", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const provider = await service.createProvider({
+      name: "Custom OpenAI",
+      base_url: "https://models.example/v1",
+      api_key: "sk-provider",
+    });
+    await service.createModel({
+      provider_id: provider.id,
+      model_id: "model-a",
+      context_window: 262144,
+      params: { max_tokens: 32768 },
+    });
+    expect(service.getSettings().max_tokens).toBe(32768);
+
+    const withoutLimit = await service.createModel({
+      provider_id: provider.id,
+      model_id: "model-b",
+      context_window: 32000,
+    });
+    await service.activateModel(withoutLimit.id);
+    expect(service.getSettings().max_tokens).toBe(8192);
+    expect((await service.resolveActiveModel()).maxTokens).toBe(8192);
+  });
+
+  test("resets ghost connection settings when deleting the active provider", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const provider = await service.createProvider({
+      name: "Custom OpenAI",
+      base_url: "https://models.example/v1",
+      api_key: "sk-provider",
+    });
+    const model = await service.createModel({
+      provider_id: provider.id,
+      model_id: "custom-chat",
+      context_window: 64000,
+      params: { max_tokens: 3072 },
+    });
+    await service.activateModel(model.id);
+    expect(service.getSettings()).toMatchObject({
+      base_url: "https://models.example/v1",
+      model_name: "custom-chat",
+    });
+
+    await service.deleteProvider(provider.id);
+    expect(service.getSettings()).toMatchObject({
+      base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      model_name: "",
+      context_window_source: "inferred",
+      max_tokens: 8192,
+      api_key_configured: false,
+    });
+    const stored = await storedSettings(settingsDir);
+    expect(stored.provider_id).toBeNull();
+    expect(stored.active_model_id).toBeNull();
+  });
+
+  test("resets ghost model settings when deleting the active model", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const provider = await service.createProvider({
+      name: "Custom OpenAI",
+      base_url: "https://models.example/v1",
+      api_key: "sk-provider",
+    });
+    const model = await service.createModel({
+      provider_id: provider.id,
+      model_id: "custom-chat",
+      context_window: 64000,
+      params: { max_tokens: 3072 },
+    });
+    await service.activateModel(model.id);
+    expect(service.getSettings()).toMatchObject({ model_name: "custom-chat", max_tokens: 3072 });
+
+    await service.deleteModel(model.id);
+    expect(service.getSettings()).toMatchObject({
+      base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      model_name: "",
+      context_window_source: "inferred",
+      max_tokens: 8192,
+    });
+    const stored = await storedSettings(settingsDir);
+    expect(stored.active_model_id).toBeNull();
+  });
+
+  test("rejects non-http(s) base_url values on settings and provider writes", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const baseUrl = await serve(service);
+    const put = async (payload: Record<string, unknown>): Promise<Response> =>
+      fetch(`${baseUrl}/api/v1/settings`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+    const before = service.getSettings();
+    const notUrl = await put({ base_url: "not a url" });
+    expect(notUrl.status).toBe(422);
+    expect(String((await notUrl.json() as Record<string, unknown>).detail)).toContain("base_url");
+    const ftp = await put({ base_url: "ftp://x" });
+    expect(ftp.status).toBe(422);
+    expect(service.getSettings()).toEqual(before);
+
+    // localhost/IP 策略是 discover 层(publicProviderUrl)的职责;
+    // 写入端只挡结构上明显不是 http(s) URL 的值。
+    const loopback = await put({ base_url: "http://127.0.0.1:9999/v1" });
+    expect(loopback.status).toBe(200);
+    expect(service.getSettings().base_url).toBe("http://127.0.0.1:9999/v1");
+
+    await expect(service.createProvider({
+      name: "Bad Provider",
+      base_url: "not a url",
+      api_key: "sk-bad",
+    })).rejects.toMatchObject({ status: 422 });
+    await expect(service.createProvider({
+      name: "Ftp Provider",
+      base_url: "ftp://x",
+    })).rejects.toMatchObject({ status: 422 });
+    await expect(service.createProvider({
+      name: "Loopback Provider",
+      base_url: "http://127.0.0.1:9999/v1",
+      api_key: "sk-loopback",
+    })).resolves.toMatchObject({ base_url: "http://127.0.0.1:9999/v1" });
+
+    const editable = await service.createProvider({
+      name: "Editable Provider",
+      base_url: "https://models.example/v1",
+      api_key: "sk-editable",
+    });
+    await expect(service.updateProvider(editable.id, { base_url: "not a url" }))
+      .rejects.toMatchObject({ status: 422 });
+    expect(service.getProvider(editable.id).base_url).toBe("https://models.example/v1");
+  });
+
+  test("rejects compaction target ratios that do not stay below the trigger ratio", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const baseUrl = await serve(service);
+    const put = async (payload: Record<string, unknown>): Promise<Response> =>
+      fetch(`${baseUrl}/api/v1/settings`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+    const before = service.getSettings();
+    const bothFields = await put({ compaction_trigger_ratio: 0.1, compaction_target_ratio: 0.9 });
+    expect(bothFields.status).toBe(422);
+    expect(String((await bothFields.json() as Record<string, unknown>).detail))
+      .toContain("compaction_target_ratio");
+
+    // 单独修改 target 也要对照磁盘上的 trigger 校验写入后的组合。
+    const targetAlone = await put({ compaction_target_ratio: 0.9 });
+    expect(targetAlone.status).toBe(422);
+    expect(service.getSettings()).toEqual(before);
+
+    const valid = await put({ compaction_trigger_ratio: 0.9, compaction_target_ratio: 0.55 });
+    expect(valid.status).toBe(200);
+  });
+
+  test("rejects max_tokens that consume the reserved context window budget", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const baseUrl = await serve(service);
+    const put = async (payload: Record<string, unknown>): Promise<Response> =>
+      fetch(`${baseUrl}/api/v1/settings`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+    const before = service.getSettings();
+    const explicitWindow = await put({ max_tokens: 200000, context_window: 100000 });
+    expect(explicitWindow.status).toBe(422);
+    expect(String((await explicitWindow.json() as Record<string, unknown>).detail)).toContain("max_tokens");
+    expect(service.getSettings()).toEqual(before);
+
+    // context_window 为 null 时按回退值 131072 计算。
+    const inferredWindow = await put({ max_tokens: 131072 });
+    expect(inferredWindow.status).toBe(422);
+
+    const valid = await put({ max_tokens: 90000, context_window: 100000 });
+    expect(valid.status).toBe(200);
+  });
+
+  test("validates model params against the provider parameter specs", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const provider = await service.createProvider({
+      name: "Custom OpenAI",
+      base_url: "https://models.example/v1",
+      api_key: "sk-provider",
+    });
+    const model = await service.createModel({
+      provider_id: provider.id,
+      model_id: "custom-chat",
+      params: { temperature: 0.5 },
+    });
+
+    await expect(service.updateModel(model.id, { params: { temperature: 99 } }))
+      .rejects.toMatchObject({ status: 422 });
+    const stored = service.listModels().find((item) => String(item.id) === model.id);
+    expect(stored).toMatchObject({ params: { temperature: 0.5 } });
+
+    // 未知键保持现状语义放行，范围内的已知键正常更新。
+    await expect(service.updateModel(model.id, { params: { custom_flag: "yes" } }))
+      .resolves.toBeDefined();
+    await expect(service.updateModel(model.id, { params: { temperature: 1.5 } }))
+      .resolves.toBeDefined();
+  });
+
+  test("unrelated settings updates are not blocked by pre-existing invalid stored combinations", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    await mkdir(settingsDir, { recursive: true });
+    await writeFile(path.join(settingsDir, "model-registry.json"), JSON.stringify({
+      version: 1,
+      settings: {
+        provider_id: null,
+        active_model_id: null,
+        base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        model_name: "qwen3.7-plus",
+        max_tokens: 200000,
+        context_window: 100000,
+        safety_reserve_ratio: 0.05,
+        compaction_trigger_ratio: 0.1,
+        compaction_target_ratio: 0.9,
+        advanced: {
+          temperature: 0.7,
+          top_p: 1,
+          repetition_penalty: 1,
+          enable_search: false,
+          thinking_mode: false,
+        },
+        runtime_limits_version: 1,
+      },
+      providers: [],
+      models: [],
+    }));
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+
+    // 磁盘上的历史违规组合不锁死不相关字段的更新。
+    await expect(service.updateSettings({ model_name: "other-model" })).resolves.toBeUndefined();
+    expect(service.getSettings()).toMatchObject({ model_name: "other-model", max_tokens: 200000 });
   });
 
   test("persists, validates, and resets runtime limits", async () => {
@@ -256,7 +650,7 @@ describe("TypeScript model settings", () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
     const service = await ModelSettingsService.create({
       settingsDir,
-      environment: { PI_API_KEY: "sk-direct-secret" },
+      environment: { PI_API_KEY: "sk-direct-secret", PI_MODEL: "qwen3.8-flash" },
     });
     const baseUrl = await serve(service);
 
@@ -478,7 +872,48 @@ describe("TypeScript model settings", () => {
       ]));
   });
 
-  test("VLM fallback does not leak a non-DashScope active provider key", async () => {
+  test("merges the thinking toggle into reasoning_effort with an off default", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const baseUrl = await serve(service);
+
+    const createProvider = async (name: string, presetId?: string) => {
+      const response = await fetch(`${baseUrl}/api/v1/model-registry/providers`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name,
+          base_url: "https://models.example/v1",
+          api_key: "sk-test",
+          ...(presetId === undefined ? {} : { preset_id: presetId }),
+        }),
+      });
+      return (await response.json()) as { id: string };
+    };
+
+    // DashScope profile and the generic fallback both expose the merged
+    // control and no longer carry the separate enable_thinking toggle.
+    const dashscope = await createProvider("DashScope Test", "dashscope");
+    const fallback = await createProvider("Generic Test");
+    for (const provider of [dashscope, fallback]) {
+      const specs = await (await fetch(
+        `${baseUrl}/api/v1/model-registry/providers/${provider.id}/param-specs`,
+      )).json() as Array<Record<string, unknown>>;
+
+      expect(specs).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          key: "reasoning_effort",
+          default: "off",
+          options: expect.arrayContaining([
+            expect.objectContaining({ value: "off", label: "关闭" }),
+          ]),
+        }),
+      ]));
+      expect(specs.some((spec) => spec.key === "enable_thinking")).toBe(false);
+    }
+  });
+
+  test("VLM resolution fails closed instead of returning the hidden qwen-vl-max default", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
     const service = await ModelSettingsService.create({ settingsDir, environment: {} });
     const baseUrl = await serve(service);
@@ -504,18 +939,23 @@ describe("TypeScript model settings", () => {
     await fetch(`${baseUrl}/api/v1/model-registry/models/${String(model.id)}/activate`, {
       method: "POST",
     });
-    expect(await service.resolveVlmConfig()).toEqual({
-      apiKey: "",
-      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      model: "qwen-vl-max",
-    });
+    // Non-visual active model and no explicit vision assignment: extraction
+    // must fail closed with an actionable blocker, never fall back to the
+    // hard-coded DashScope default model.
+    const failure = await service.resolveVlmConfig().then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).not.toContain("qwen-vl-max");
+    expect((failure as Error).message).toContain("视觉抽取模型");
   });
 
   test("preserves a masked key and clears it only on an explicit empty value", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
     const service = await ModelSettingsService.create({
       settingsDir,
-      environment: { PI_API_KEY: "sk-direct-secret" },
+      environment: { PI_API_KEY: "sk-direct-secret", PI_MODEL: "qwen3.8-flash" },
     });
     const baseUrl = await serve(service);
     const current = await (await fetch(`${baseUrl}/api/v1/settings`)).json() as Record<string, unknown>;
@@ -572,7 +1012,7 @@ describe("TypeScript model settings", () => {
     const providers = await (await fetch(`${baseUrl}/api/v1/model-registry/providers`)).json() as unknown[];
     expect(providers).toHaveLength(1);
   });
-  test("bootstraps a DashScope provider from DASHSCOPE_API_KEY when no providers exist", async () => {
+  test("bootstraps a DashScope provider from DASHSCOPE_API_KEY without inventing a model", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
     const service = await ModelSettingsService.create({
       settingsDir,
@@ -589,19 +1029,57 @@ describe("TypeScript model settings", () => {
       api_key_configured: true,
     });
 
+    // Key-only bootstrap must NOT fabricate an active model: running on an
+    // unchosen model silently bills the wrong account (2026-08-29 incident).
     const models = await (await fetch(`${baseUrl}/api/v1/model-registry/models`))
-      .json() as Array<Record<string, unknown>>;
-    expect(models).toHaveLength(1);
-    expect(models[0]).toMatchObject({ model_id: "qwen3.7-plus", active: true });
+      .json() as unknown[];
+    expect(models).toHaveLength(0);
 
     const settings = await (await fetch(`${baseUrl}/api/v1/settings`)).json() as Record<string, unknown>;
-    expect(settings.model_name).toBe("qwen3.7-plus");
+    expect(settings.model_name).toBe("");
     expect(settings.api_key_configured).toBe(true);
-    await expect(service.resolveActiveModel()).resolves.toMatchObject({
-      provider: "dashscope",
-      modelId: "qwen3.7-plus",
-      apiKey: "sk-dashscope-env",
-      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    expect(settings.run_ready).toBe(false);
+    await expect(service.resolveActiveModel()).rejects.toThrow("model are required");
+  });
+
+  test("env bootstrap honors catalog context facts for known models", () => {
+    const registry = defaultRegistry({});
+    const auth: AuthState = { version: 1, direct_api_key: "", provider_api_keys: {} };
+    // kimi-k3 in the local catalog: 1048576 window / 131072 output / 32768 suggested.
+    bootstrapEnvironmentDefaults(registry, auth, {
+      DASHSCOPE_API_KEY: "sk-dashscope-env",
+      PI_MODEL: "kimi-k3",
+    });
+    expect(registry.models[0]).toMatchObject({
+      model_id: "kimi-k3",
+      context_window: 1_048_576,
+      max_output_tokens: 131_072,
+      suggested_max_tokens: 32_768,
+      capabilities: { text: true, image: true, video: true, audio: false },
+    });
+    expect(registry.settings).toMatchObject({
+      model_name: "kimi-k3",
+      context_window: 1_048_576,
+      max_tokens: 32_768,
+    });
+  });
+
+  test("env bootstrap keeps the hardcoded fallback for models missing from the catalog", () => {
+    const registry = defaultRegistry({});
+    const auth: AuthState = { version: 1, direct_api_key: "", provider_api_keys: {} };
+    bootstrapEnvironmentDefaults(registry, auth, {
+      DASHSCOPE_API_KEY: "sk-dashscope-env",
+      PI_MODEL: "totally-unknown-model",
+    });
+    expect(registry.models[0]).toMatchObject({
+      model_id: "totally-unknown-model",
+      context_window: 131_072,
+      max_output_tokens: 8192,
+      suggested_max_tokens: 8192,
+    });
+    expect(registry.settings).toMatchObject({
+      context_window: 131_072,
+      max_tokens: 8192,
     });
   });
 
@@ -634,15 +1112,329 @@ describe("TypeScript model settings", () => {
     expect(customProviders[0]).toMatchObject({ name: "Custom" });
   });
 
-  test("falls back to qwen3.7-plus as the default model name", async () => {
+  test("ships no default model name: unconfigured until the user selects one", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
     const service = await ModelSettingsService.create({ settingsDir, environment: {} });
     const baseUrl = await serve(service);
     const settings = await (await fetch(`${baseUrl}/api/v1/settings`)).json() as Record<string, unknown>;
-    expect(settings.model_name).toBe("qwen3.7-plus");
+    expect(settings.model_name).toBe("");
+    expect(settings.run_ready).toBe(false);
+    expect(settings.run_block_reason).toBe("provider credentials are required");
+  });
+});
+
+describe("visual extraction model role", () => {
+  interface VisionFixture {
+    service: ModelSettingsService;
+    baseUrl: string;
+    settingsDir: string;
+    mainModelId: string;
+    visionModelId: string;
+    visionProviderId: string;
+  }
+
+  /**
+   * Non-visual active main model on "Main Provider" plus an image-capable
+   * model on a second, inactive "Vision Provider".
+   */
+  async function visionFixture(): Promise<VisionFixture> {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const baseUrl = await serve(service);
+    const createProvider = async (name: string, baseUrlValue: string, apiKey: string): Promise<string> => {
+      const response = await fetch(`${baseUrl}/api/v1/model-registry/providers`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name, base_url: baseUrlValue, api_key: apiKey }),
+      });
+      return String((await response.json() as Record<string, unknown>).id);
+    };
+    const createModel = async (providerId: string, modelId: string, image: boolean): Promise<string> => {
+      const response = await fetch(`${baseUrl}/api/v1/model-registry/models`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          provider_id: providerId,
+          model_id: modelId,
+          capabilities: image
+            ? { text: true, image: true }
+            : { text: true, image: false },
+        }),
+      });
+      return String((await response.json() as Record<string, unknown>).id);
+    };
+    const mainProviderId = await createProvider("Main Provider", "https://main.example/v1", "sk-main-provider");
+    const mainModelId = await createModel(mainProviderId, "main-text-chat", false);
+    const visionProviderId = await createProvider("Vision Provider", "https://vision.example/v1", "sk-vision-provider");
+    const visionModelId = await createModel(visionProviderId, "vision-chat-vl", true);
+    return { service, baseUrl, settingsDir, mainModelId, visionModelId, visionProviderId };
+  }
+
+  test("uses the selected inactive visual model with its own provider key and base URL", async () => {
+    const fixture = await visionFixture();
+    await fixture.service.updateSettings({ vision_model_id: fixture.visionModelId });
+
+    await expect(fixture.service.resolveVlmConfig()).resolves.toEqual({
+      apiKey: "sk-vision-provider",
+      baseUrl: "https://vision.example/v1",
+      model: "vision-chat-vl",
+    });
+    // The main (non-visual) model stays active and untouched.
+    expect(fixture.service.getSettings()).toMatchObject({
+      model_name: "main-text-chat",
+      vision_model_id: fixture.visionModelId,
+      vision_model_name: "vision-chat-vl",
+      vision_provider_name: "Vision Provider",
+      vision_model_ready: true,
+      vision_block_reason: null,
+    });
+    await expect(fixture.service.resolveActiveModel()).resolves.toMatchObject({
+      modelId: "main-text-chat",
+      apiKey: "sk-main-provider",
+    });
+  });
+
+  test("persists the selected visual model id and reloads it", async () => {
+    const fixture = await visionFixture();
+    await fixture.service.updateSettings({ vision_model_id: fixture.visionModelId });
+    expect(await storedSettings(fixture.settingsDir)).toMatchObject({
+      vision_model_id: fixture.visionModelId,
+    });
+
+    const reloaded = await ModelSettingsService.create({ settingsDir: fixture.settingsDir, environment: {} });
+    await expect(reloaded.resolveVlmConfig()).resolves.toMatchObject({
+      apiKey: "sk-vision-provider",
+      model: "vision-chat-vl",
+    });
+  });
+
+  test("rejects selecting a model without the image capability", async () => {
+    const fixture = await visionFixture();
+    await expect(fixture.service.updateSettings({ vision_model_id: fixture.mainModelId }))
+      .rejects.toMatchObject({ status: 422 });
+    expect(await storedSettings(fixture.settingsDir)).toMatchObject({ vision_model_id: null });
+
+    await expect(fixture.service.updateSettings({ vision_model_id: "model_missing" }))
+      .rejects.toMatchObject({ status: 404 });
+  });
+
+  test("clears the assignment when the selected visual model is deleted and reports an actionable blocker", async () => {
+    const fixture = await visionFixture();
+    await fixture.service.updateSettings({ vision_model_id: fixture.visionModelId });
+
+    await fixture.service.deleteModel(fixture.visionModelId);
+
+    expect(await storedSettings(fixture.settingsDir)).toMatchObject({ vision_model_id: null });
+    expect(fixture.service.getSettings()).toMatchObject({
+      vision_model_id: null,
+      vision_model_ready: false,
+    });
+    // Non-visual main model remains: extraction fails closed with guidance,
+    // never a hidden default.
+    await expect(fixture.service.resolveVlmConfig()).rejects.toThrow(/视觉抽取模型/);
+  });
+
+  test("clears the assignment when the selected model's provider is disabled", async () => {
+    const fixture = await visionFixture();
+    await fixture.service.updateSettings({ vision_model_id: fixture.visionModelId });
+
+    await fixture.service.updateProvider(fixture.visionProviderId, { enabled: false });
+
+    expect(await storedSettings(fixture.settingsDir)).toMatchObject({ vision_model_id: null });
+    await expect(fixture.service.resolveVlmConfig()).rejects.toThrow(/视觉抽取模型/);
+    // Re-enabling the provider does not resurrect the cleared assignment.
+    await fixture.service.updateProvider(fixture.visionProviderId, { enabled: true });
+    expect(await storedSettings(fixture.settingsDir)).toMatchObject({ vision_model_id: null });
+  });
+
+  test("reports a credential blocker when the selected provider has no API key", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const provider = await service.createProvider({
+      name: "Keyless Vision Provider",
+      base_url: "https://keyless.example/v1",
+      api_key: "sk-temp",
+    });
+    const visual = await service.createModel({
+      provider_id: provider.id,
+      model_id: "keyless-vl",
+      capabilities: { text: true, image: true },
+    });
+    // The main provider holds the only credential; the vision provider's key
+    // is removed after creation.
+    await service.updateProvider(provider.id, { api_key: "" });
+    await service.updateSettings({ vision_model_id: visual.id });
+
+    const settings = service.getSettings();
+    expect(settings).toMatchObject({
+      vision_model_id: visual.id,
+      vision_model_ready: false,
+    });
+    expect(String(settings.vision_block_reason)).toContain("API Key");
+    await expect(service.resolveVlmConfig()).rejects.toThrow(/API Key/);
+  });
+
+  test("uses the active model for extraction when it is visual and no assignment exists", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const provider = await service.createProvider({
+      name: "Visual Active Provider",
+      base_url: "https://visual-active.example/v1",
+      api_key: "sk-visual-active",
+    });
+    await service.createModel({
+      provider_id: provider.id,
+      model_id: "active-vision-chat",
+      capabilities: { text: true, image: true },
+    });
+
+    expect(service.getSettings()).toMatchObject({
+      vision_model_id: null,
+      vision_model_name: "active-vision-chat",
+      vision_provider_name: "Visual Active Provider",
+      vision_model_ready: true,
+    });
+    await expect(service.resolveVlmConfig()).resolves.toEqual({
+      apiKey: "sk-visual-active",
+      baseUrl: "https://visual-active.example/v1",
+      model: "active-vision-chat",
+    });
+  });
+
+  test("clears a stale on-disk assignment at resolution time and fails with guidance", async () => {
+    // Simulate a hand-edited registry whose vision_model_id points nowhere
+    // (updateSettings would reject the unknown id, so write it to disk).
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const first = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const provider = await first.createProvider({
+      name: "Main Provider",
+      base_url: "https://main.example/v1",
+      api_key: "sk-main-provider",
+    });
+    await first.createModel({
+      provider_id: provider.id,
+      model_id: "main-text-chat",
+      capabilities: { text: true, image: false },
+    });
+    const registryPath = path.join(settingsDir, "model-registry.json");
+    const stored = JSON.parse(await readFile(registryPath, "utf8")) as {
+      settings: Record<string, unknown>;
+    };
+    stored.settings.vision_model_id = "model_ghost";
+    await writeFile(registryPath, JSON.stringify(stored), "utf8");
+
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    await expect(service.resolveVlmConfig()).rejects.toThrow(/重新选择/);
+    expect(await storedSettings(settingsDir)).toMatchObject({ vision_model_id: null });
+  });
+});
+
+describe("model registry list pagination and search", () => {
+  async function loadedRegistry(): Promise<{ service: ModelSettingsService; baseUrl: string }> {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const baseUrl = await serve(service);
+    const createProvider = async (name: string): Promise<string> => {
+      const response = await fetch(`${baseUrl}/api/v1/model-registry/providers`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name,
+          base_url: `https://${name.toLowerCase().replaceAll(" ", "-")}.example/v1`,
+          api_key: `sk-${name.toLowerCase().replaceAll(" ", "-")}`,
+        }),
+      });
+      return String((await response.json() as Record<string, unknown>).id);
+    };
+    const alpha = await createProvider("Alpha Labs");
+    const beta = await createProvider("Beta Works");
+    await fetch(`${baseUrl}/api/v1/model-registry/models`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ provider_id: alpha, model_id: "alpha-chat" }),
+    });
+    await fetch(`${baseUrl}/api/v1/model-registry/models`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ provider_id: alpha, model_id: "zeta-pro", description: "long reasoning" }),
+    });
+    await fetch(`${baseUrl}/api/v1/model-registry/models`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ provider_id: beta, model_id: "beta-embed" }),
+    });
+    return { service, baseUrl };
+  }
+
+  test("paginates providers and models with stable totals and empty pages", async () => {
+    const { baseUrl } = await loadedRegistry();
+    const first = await (await fetch(`${baseUrl}/api/v1/model-registry/providers?page=1&size=2`))
+      .json() as Record<string, unknown>;
+    expect(Array.isArray(first.items)).toBe(true);
+    expect(first.items as unknown[]).toHaveLength(2);
+    expect(first.total).toBe(2);
+    expect(first.page).toBe(1);
+    expect(first.size).toBe(2);
+
+    const second = await (await fetch(`${baseUrl}/api/v1/model-registry/providers?page=2&size=2`))
+      .json() as Record<string, unknown>;
+    expect(second.items as unknown[]).toHaveLength(0);
+    expect(second.total).toBe(2);
+
+    const empty = await (await fetch(`${baseUrl}/api/v1/model-registry/models?page=9&size=2`))
+      .json() as Record<string, unknown>;
+    expect(empty.items as unknown[]).toHaveLength(0);
+    expect(empty.total).toBe(3);
+  });
+
+  test("filters providers and models by case-insensitive keyword", async () => {
+    const { baseUrl } = await loadedRegistry();
+    const providers = await (await fetch(`${baseUrl}/api/v1/model-registry/providers?q=alpha&page=1&size=10`))
+      .json() as Record<string, unknown>;
+    expect(providers.total).toBe(1);
+    expect((providers.items as Array<Record<string, unknown>>)[0]).toMatchObject({ name: "Alpha Labs" });
+
+    const byModelId = await (await fetch(`${baseUrl}/api/v1/model-registry/models?q=chat&page=1&size=10`))
+      .json() as Record<string, unknown>;
+    expect(byModelId.total).toBe(1);
+
+    const byProviderName = await (await fetch(`${baseUrl}/api/v1/model-registry/models?q=labs&page=1&size=10`))
+      .json() as Record<string, unknown>;
+    expect(byProviderName.total).toBe(2);
+
+    const byDescription = await (await fetch(`${baseUrl}/api/v1/model-registry/models?q=reasoning&page=1&size=10`))
+      .json() as Record<string, unknown>;
+    expect(byDescription.total).toBe(1);
+  });
+
+  test("rejects malformed pagination and search parameters", async () => {
+    const { baseUrl } = await loadedRegistry();
+    expect((await fetch(`${baseUrl}/api/v1/model-registry/providers?page=0`)).status).toBe(422);
+    expect((await fetch(`${baseUrl}/api/v1/model-registry/models?page=1.5`)).status).toBe(422);
+    expect((await fetch(`${baseUrl}/api/v1/model-registry/providers?size=abc`)).status).toBe(422);
+    expect((await fetch(`${baseUrl}/api/v1/model-registry/models?size=101`)).status).toBe(422);
+    expect((await fetch(`${baseUrl}/api/v1/model-registry/providers?q=a&size=0`)).status).toBe(422);
+  });
+
+  test("returns bare arrays without query params and envelopes once any param is present", async () => {
+    const { baseUrl } = await loadedRegistry();
+    const bare = await (await fetch(`${baseUrl}/api/v1/model-registry/providers`)).json() as unknown;
+    expect(Array.isArray(bare)).toBe(true);
+
+    const envelope = await (await fetch(`${baseUrl}/api/v1/model-registry/providers?q=`))
+      .json() as Record<string, unknown>;
+    expect(Array.isArray(envelope.items)).toBe(true);
+    expect(envelope.total).toBe(2);
   });
 });
 
 function randomId(): string {
   return Math.random().toString(36).slice(2);
+}
+
+async function storedSettings(settingsDir: string): Promise<Record<string, unknown>> {
+  const stored = JSON.parse(await readFile(path.join(settingsDir, "model-registry.json"), "utf8")) as {
+    settings: Record<string, unknown>;
+  };
+  return stored.settings;
 }

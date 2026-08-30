@@ -19,7 +19,8 @@
 ## 1. 一句话定位
 
 BioMed-QAgent 是一个**生物医学数据智能检索与整合系统**：用户用自然语言描述
-研究主题，系统自动完成「查找来源 → 获取原始数据 → 解析/清洗/字段对齐 → 整合 →
+研究主题，系统对已注册执行路线（family/schema/provider 闭合、输入闭包明确）的任务
+自动完成「查找来源 → 获取原始数据 → 解析/清洗/字段对齐 → 整合 →
 带来源与审计的标准化输出」，让数据处理**可追溯、可验证、可恢复**。
 
 它**不**直接"猜"出一个 CSV，也不会在缺少数据证据时生成科研或临床结论——所有
@@ -59,17 +60,20 @@ BioMed-QAgent 是一个**生物医学数据智能检索与整合系统**：用�
 | GEO | 支持管线 | 基因表达数据、平台、probe mapping、尺度和归一化兼容性 |
 | GDC | 支持管线 | TCGA 级别癌症基因组数据 |
 | Xena | 支持管线 | UCSC Xena 表达/元数据镜像 |
-| Reactome | 研究辅助 | 通路成员（独立 `pathway_member` 数据集族） |
-| ChEMBL | 研究辅助 | 生物活性测量 |
-| UniProt | 研究辅助 | 蛋白注释 |
-| PDB | 研究辅助 | 蛋白结构（含 mmCIF 解析、结构距离/序列比对衍生） |
-| PubChem | 研究辅助 | 化合物信息 |
+| dbSNP | 支持管线 | 变异参考记录 |
+| ClinVar | 支持管线 | 变异-疾病断言与临床证据 |
+| MGnify | 支持管线 | 肠道微生物组研究（`gut_microbiome` family study 表） |
+| ChEMBL | 支持管线 | 生物活性测量（`bioactivity_measurement` family） |
+| UniProt | 支持管线 | 蛋白注释与靶点证据 |
+| PDB | 支持管线 | 蛋白结构（含 mmCIF 解析、结构距离/序列比对衍生） |
+| PubChem | 支持管线 | 化合物信息与 crosswalk |
+| Reactome | 支持管线 | 通路/蛋白注释检索 |
+| OpenFDA | 支持管线 | 药物不良事件检索 |
 | 本地缓存 / 文件 | 能力 | `local_cache`、本地源导入（CSV/TSV/JSON） |
 
-> 说明：「支持管线」指该来源的数据能进入受信任的 Dataset Core 摄取路径；
-> 「研究辅助」指当前作为 Agent 检索/研究能力使用（产物停在 workspace/cache），
-> 部分来源正按演进计划接入受信任的多表 Publication（见
-> [TODO.md](TODO.md) §gold3–6 缺口 与 [roadmap.md](architecture/roadmap.md) §22）。
+> 说明：「支持管线」指该来源的数据能进入受信任的 Dataset Core 摄取路径（静态注册
+> family 或经动态 Family 路线的正式采集）。其余研究辅助能力（文献理解、PDF/图表
+> 抽取、浏览器、缓存）不属于用户可选数据库，产物停在 workspace/cache。
 
 其他检索/解析能力（非用户可选数据库，属 Agent 能力包）：
 - **PubMed / 文献理解 / PDF 抽取**：从正文、表格、附件提取信息；
@@ -87,6 +91,17 @@ BioMed-QAgent 是一个**生物医学数据智能检索与整合系统**：用�
 - 论文 / 附件 / 网页 / 图表数据的解析支持（PDF、VLM 图表抽取）；正式补充材料路线由
   Core 获取 Europe PMC ZIP，bounded member extractor 记录父 ZIP/member hash，随后固定
   CSV/TSV、XLSX、PDF table parser 生成可绑定的 UTF-8 derived assets；
+- 压缩载体成员提取：`acquire_core_carrier` 把 zip 成员与 xlsx 工作表确定性转换为
+  CSV extraction assets（Core 拥有并登记 provenance）；
+- **Core 资产预览/解压工具**：`preview_core_asset` 只读列出 zip 成员清单并预览
+  成员头部文本，`extract_core_archive` 把单个成员解出并注册为**新的 Core 资产**
+  （derived 溯源，可直接绑入 dynamic family 的 `registered_sources`）；两者由
+  Host 内置 stdlib ZIP 读取器确定性完成，模型无需也不允许再借道 python/shell
+  解压（配套系统提示词 `[Dynamic publication mechanics]` 段，2026-08-29 直问
+  验证 campaign 落地，见
+  [reports/2026-08-29-gold-qwen-direct-validation-study.md](reports/2026-08-29-gold-qwen-direct-validation-study.md)）；
+- 注册式多表 family 可由服务端 `scaffold_dataset_execution_spec` 从 live Family
+  Registry 组合出 validate-ready 的完整执行规格，Agent 只提供 family、实体和来源绑定。
 - 文献定量产品使用 Core-owned `literature_experiment_chart.release.v1` 六表 projection，
   profile scaffold 固定表/关系，Agent 只提交来源与抽取事实。
 
@@ -98,7 +113,12 @@ BioMed-QAgent 是一个**生物医学数据智能检索与整合系统**：用�
 2. **解析（Parse）**：按来源 Adapter 解析为 `DataBatch`；
 3. **归一化（Canonicalize / Normalize）**：字段映射、实体与单位规范化；字符串相似度
    只能产生 `proposed` 候选，必须经 Adapter / Schema Registry / 可信元数据 / 人工
-   批准才进入正式合并（ADR §字段映射）；
+   批准才进入正式合并（ADR §字段映射）。Agent 可用 `preflight_cleaning_rules` 获取
+   Core 重排的候选与注册规则预检；预检 receipt 只在需要应用已接受规则时作为 execute
+   的必要输入，`needs_hil` 是“应走后续 HIL 流程”的标记而非自动创建的 durable HIL，
+   通用字段映射 transform 当前不执行（仅注册单位规则与精确 schema identity 可自动接受）；
+   `inspect_source_coverage` 可消费已发布的
+   `source_coverage_report.json`，据声明绑定范围内的失败项决定补源，不能宣称全网查全；
 4. **兼容性门禁（Compatibility Gate）**：family / row granularity / key / measurement
    兼容，才允许合并；
 5. **整合（Integrate）**：确定性合并，含磁盘化去重（`node:sqlite` temp table + 资源上限）；
@@ -106,7 +126,8 @@ BioMed-QAgent 是一个**生物医学数据智能检索与整合系统**：用�
 7. **发布（Publish）**：通过验证才**原子提升**为不可变 `DatasetPublication`。
 
 **自动识别异常**（加分项）：缺失、重复、单位不一致的识别；低置信图表值的坐标轴 /
-图例校验；需要时请求人工建议后修正（HIL，见 §3.5）。
+图例校验；对论文源数值做末位数 / 末两位数分布与插值规律检测（固定代码卡方检验，
+异常时该图表置信度降级为 low）；需要时请求人工建议后修正（HIL，见 §3.5）。
 
 ### 3.4 来源标注 · 可追溯性
 
@@ -123,7 +144,12 @@ BioMed-QAgent 是一个**生物医学数据智能检索与整合系统**：用�
 - 任务 / Run 支持**暂停 / 继续**，等待用户输入（计划确认、数据修正、达到轮次上限）；
 - Agent 的文件访问与命令执行经 `allow / ask / deny` 权限系统，`ask` 挂起单个 Tool Call
   等待用户批准（durable events + `/permissions/{requestId}`，ADR-026）；
-- 前端通过统一 `UserInputDialog` 承载各类人机交互。
+- 前端通过统一 Questionnaire 基础设施承载各类人机交互（`intervention/UserInputQuestionnaire`、`intervention/PermissionQuestionnaire`）；
+- **三档 HIL 审批档位**（设置 → Agent → HIL 审批）：按审核范围把每个 blocking 审批分配为
+  人工审批 / **大模型初审**（初审通过自动接受，仅不通过进入人工审批）/ 不审批；
+  大模型初审的提示词会拦截绕过系统设计的请求（判不通过即回退人工审批）；
+  发布边界（图表抽取、浏览器证据接受、发布验收）始终人工审批，详见
+  [architecture/hil-approval-policy.md](architecture/hil-approval-policy.md)。
 
 ### 3.6 图表 / 图像数据提取 · 视觉证据
 
@@ -133,6 +159,13 @@ BioMed-QAgent 是一个**生物医学数据智能检索与整合系统**：用�
   与点级 HIL 的 evidence manifest 和 OperationResult；
 - 低置信图点先经过 `vlm_extraction` HIL，Core 在 B3 前逐点核对 evidence manifest；
   最终 Publication 仍需独立 `publication_acceptance`，二者不能由 credential approval 代替。
+- 提取产物带 `estimated` / `axis_unclear` / `legend_unclear` / `human_review_status`
+  质量字段，可复用 Durable HIL / Confidence 协议做人工审核。
+- 能力分两段：**canonical `chart-evidence` 数据 → 生产 `bioactivity_measurement`
+  图表四表的正式发布已闭环**（schema + registered parsers + 组装分派、点级
+  `chart_evidence_gate` fail-closed、HIL correction 与逐件 SHA-256，见
+  [TODO.md](TODO.md) 完成记录）；`extract_chart_data_vlm` 的 workspace CSV →
+  canonical evidence 注册的生产桥接与自然语言端到端案例**仍待办**（[TODO.md](TODO.md) P0）。
 
 ---
 
@@ -143,6 +176,15 @@ BioMed-QAgent 是一个**生物医学数据智能检索与整合系统**：用�
 - 任务的权威事实来源是追加写入的 `<task_id>/events.jsonl`，snapshot 可从事件重建；
 - 支持任务 / Run 生命周期、取消、恢复（重启后 `recoverActiveRuns`）、事件重放、
   构建记录与本地缓存；
+- 正式评测 supervisor（`scripts/gold-formal-supervisor.mjs`）支持 **`--adopt`**：
+  直接附加到任务当前/最新 Run 从序列 0 采证——直问建任务（无 bootstrap 占位），
+  自动启动的 Run 即被测 Run（方法学与 campaign 见
+  [reports/2026-08-29-gold-qwen-direct-validation-study.md](reports/2026-08-29-gold-qwen-direct-validation-study.md)）；
+- dynamic family 发布为 **receipt-only submit**：submit 只需 `schema_version` 与
+  prepare 返回的 `preflight_receipt`，服务端按收据解析已存储的 prepared
+  submission（全量回显仍兼容）；prepared submission 存储在 Host 进程内
+  coordinator（`server/src/runtime/dynamic-family-preflight-coordinator.ts`），
+  不是跨重启 durable store；发布拒绝消息携带失败检查的 `detail`；
 - 前端状态是后端事件的**投影**，不是事实来源。
 
 ### 4.2 实时反馈与界面
@@ -163,6 +205,10 @@ BioMed-QAgent 是一个**生物医学数据智能检索与整合系统**：用�
 
 - 正式分发为**跨平台源码包**（`frontend/dist` + `server/dist` + `database/` +
   `.pi/skills`），由 TS Host 静态托管（`pnpm start`）；
+- 静态生产入口按 OS 用户持有唯一实例租约：已有实例时第二次 `pnpm start` 正常
+  no-op，不创建第二个 Host；开发入口仍允许使用不同端口和 data root 的隔离实例；
+- Host 首选 5173；端口被占用时由操作系统原子分配替代端口，实际地址通过
+  `BIOMED_QAGENT_URL=<url>` 启动行公布；
 - GitHub Actions 在推 `v*` 标签时构建并上传 bundle（不再使用 PyInstaller 单文件）。
 
 ---

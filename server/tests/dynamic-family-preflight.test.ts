@@ -12,6 +12,7 @@ import {
 import { canonicalDigest } from "../src/dataset/adapters/identity.js";
 import type { CoreAcquisitionPlan } from "../src/dataset/acquisition/runtime.js";
 import {
+  dynamicFamilyPreflightSubmissionDigest,
   prepareDynamicFamilyPublication as prepareDynamicFamilyPublicationCore,
   validateDynamicFamilyPreflightReceipt as validateDynamicFamilyPreflightReceiptCore,
 } from "../src/dataset/dynamic-family/preflight.js";
@@ -214,6 +215,90 @@ describe("dynamic family prepare/submit preflight", () => {
       "activity_value_records", "paper_records", "experiment_records",
       "chart_series", "chart_points", "supplementary_asset_records",
     ]);
+  });
+
+  it("resolves the stored prepared submission for receipt-only submit", async () => {
+    const raw = await rawSubmission();
+    const parsed = await parseDynamicFamilyPublicationSubmission(raw);
+    const coordinator = createDynamicFamilyPreflightCoordinator();
+    const preparation = coordinator.beginPrepare(parsed.execution_proposal.requirement_id);
+    const receipt = await prepareDynamicFamilyPublication({
+      taskId: "task_preflight",
+      requirementId: parsed.execution_proposal.requirement_id,
+      generation: preparation.generation,
+      submission: parsed,
+    });
+    coordinator.commitPrepare(
+      preparation,
+      receipt,
+      dynamicFamilyPreflightSubmissionDigest(parsed),
+      parsed,
+    );
+    expect(coordinator.resolveSubmission(receipt)).toBe(parsed);
+    expect(() =>
+      coordinator.resolveSubmission({ ...receipt, receipt_digest: "f".repeat(64) }),
+    ).toThrow(/unknown or superseded/);
+
+    let received: unknown = null;
+    const submit = createDynamicFamilyPublicationTool({
+      resolveSubmission: (preflightReceipt) =>
+        Promise.resolve(coordinator.resolveSubmission<typeof parsed>(preflightReceipt)),
+      submit: async (submission, _signal, _context, submittedReceipt) => {
+        received = { submission, receiptDigest: submittedReceipt?.receipt_digest };
+        return { ok: true };
+      },
+    });
+    const receiptOnly = await submit.execute({
+      schema_version: "1.0",
+      preflight_receipt: receipt,
+    });
+    expect(receiptOnly.isError).not.toBe(true);
+    expect(JSON.parse(receiptOnly.content)).toMatchObject({ ok: true });
+    expect(received).toMatchObject({
+      submission: parsed,
+      receiptDigest: receipt.receipt_digest,
+    });
+
+    const unsupported = createDynamicFamilyPublicationTool({
+      submit: async () => ({ ok: true }),
+    });
+    const missingResolver = await unsupported.execute({
+      schema_version: "1.0",
+      preflight_receipt: receipt,
+    });
+    expect(missingResolver.isError).toBe(true);
+    const extraKeys = await unsupported.execute({
+      schema_version: "1.0",
+      preflight_receipt: receipt,
+      registered_sources: {},
+    });
+    expect(extraKeys.isError).toBe(true);
+  });
+
+  it("rejects per-record source binding floods before the receipt can exceed submit limits", async () => {
+    const raw = await rawSubmission();
+    const proposal = raw.execution_proposal as {
+      source_bindings: Array<{ binding_id: string; source: string; input_requirement_ref: string; parameters: Record<string, unknown> }>;
+    };
+    const metadata = raw.transform_metadata as {
+      declared_input_roles: Array<{ role: string; media_type: string; constraint_ref: string | null }>;
+    };
+    const sources = raw.registered_sources as Record<string, string>;
+    proposal.source_bindings = [];
+    metadata.declared_input_roles = [];
+    for (const key of Object.keys(sources)) delete sources[key];
+    for (let index = 0; index < 65; index += 1) {
+      const bindingId = `binding_${index + 1}`;
+      proposal.source_bindings.push({
+        binding_id: bindingId, source: "registered_asset", input_requirement_ref: `source_${index}`, parameters: {},
+      });
+      metadata.declared_input_roles.push({ role: `source_${index}`, media_type: "text/csv", constraint_ref: null });
+      sources[bindingId] = `asset_${DIGEST}`;
+    }
+    const parsed = await parseDynamicFamilyPublicationSubmission(raw);
+    await expect(prepareDynamicFamilyPublication({
+      taskId: "task_preflight", requirementId: "build_preflight", generation: 0, submission: parsed,
+    })).rejects.toThrow(/per data source/i);
   });
 
   it("prepares facts without acquisition or prohibited result objects", async () => {

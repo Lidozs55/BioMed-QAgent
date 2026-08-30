@@ -15,10 +15,20 @@ import type {
   HILRequest,
   JsonValue,
   ResumeHILInput,
+  TaskExecutionContext,
   TaskMode,
   WebSocketControlFrame,
 } from "@biomed/contracts";
-import { parseJsonTextStrict, parseResumeHILInput } from "@biomed/contracts";
+import {
+  APIError,
+  parseJsonTextStrict,
+  parseResumeHILInput,
+  parseTaskExecutionContext,
+  parseUntrustedArtifactMetadata,
+  parseUntrustedArtifactReceipt,
+  stableTaskExecutionContextJson,
+  type UntrustedArtifactReceipt,
+} from "@biomed/contracts";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 
 import {
@@ -42,13 +52,26 @@ import {
   listTaskArtifacts,
 } from "./artifact-store.js";
 import {
+  getUntrustedArtifact,
+  getUntrustedArtifactContent,
+  listUntrustedArtifacts,
+  storeUntrustedArtifact,
+} from "./untrusted-artifact-store.js";
+import {
   DurableTaskConflictError,
   DurableTaskRepository,
 } from "./task-repository.js";
 
 import { DurableHILStore, HILConflictError } from "./hil-store.js";
+import { readTaskTextFile } from "./task-file.js";
+import type { HILGatePreReview } from "./hil-pre-review.js";
+import { claimTasksRootExclusive } from "./host-lease.js";
 
 import { readExecutionContinuation } from "./execution-continuation.js";
+import {
+  completePublicationAcceptanceContinuation,
+  loadBoundPublicationAcceptanceContinuation,
+} from "../dataset/dynamic-family/publication.js";
 
 import { DiskWorkspaceManager, type WorkspaceManager } from "../agent/workspace/workspace-manager.js";
 
@@ -87,10 +110,21 @@ export interface DurableAgentWorkspace {
 
 export interface DurableAgentRuntimeOptions {
   tasksRoot: string;
+  /**
+   * Exclusive tasks-root lease test hook: `holderPid` simulates a lease
+   * recorded by that pid before claiming; `pid` simulates the claiming
+   * process id. Production callers omit it.
+   */
+  leaseOverride?: { holderPid?: number; pid?: number };
   /** Owns ``data/workspaces/<taskId>`` lifecycle (create/remove/restore). */
   workspaceManager?: WorkspaceManager;
   /** Live broker registry for preset-switch invalidation + grant management. */
   permissionBrokerRegistry?: PermissionBrokerRegistry;
+  /**
+   * Three-tier HIL approval seam (human_review / llm_pre_review /
+   * auto_approve). Null keeps the classic human-only flow.
+   */
+  hilPreReview?: HILGatePreReview | null;
   adapter: BioMedAgentAdapter;
   workspaceFactory: (identity: {
     taskId: string;
@@ -217,6 +251,20 @@ function databases(value: unknown): string[] {
   return value as string[];
 }
 
+/**
+ * Exact wire validation of the frozen execution context attached to a run
+ * admission; absent/null means "no frozen contract". Invalid contexts reject
+ * the request instead of being coerced.
+ */
+function executionContext(value: unknown): TaskExecutionContext | null {
+  if (value === undefined || value === null) return null;
+  try {
+    return parseTaskExecutionContext(value, "execution_context");
+  } catch (error) {
+    throw new TypeError(`execution_context is invalid: ${(error as Error).message}`, { cause: error });
+  }
+}
+
 interface ImportUpload {
   name: string;
   bytes: Buffer;
@@ -293,6 +341,21 @@ function isDynamicPublicationAcceptance(
   return request?.requirement_id !== null && request?.review_type === "publication_acceptance";
 }
 
+/** GET quarantine listing response body (receipts are not formal artifacts). */
+interface QuarantineListing {
+  items: UntrustedArtifactReceipt[];
+}
+
+function quarantineListing(receipts: UntrustedArtifactReceipt[]): QuarantineListing {
+  return { items: receipts.map((receipt) => parseUntrustedArtifactReceipt(receipt)) };
+}
+
+function sanitizeQuarantineFilename(value: string): string {
+  const base = path.posix.basename(value.replaceAll("\\", "/"));
+  const sanitized = base.replace(/[^A-Za-z0-9._-]/g, "_");
+  return sanitized === "" ? "artifact.bin" : sanitized;
+}
+
 function controlError(
   code: string,
   message: string,
@@ -306,6 +369,11 @@ function controlError(
 export async function createDurableAgentRuntime(
   options: DurableAgentRuntimeOptions,
 ): Promise<DurableAgentRuntime> {
+  // Fail fast before the recovery sweep: a second live host on the same
+  // tasks root would interrupt this process's runs and interleave
+  // events.jsonl appends (docs/ISSUES.md §运行环境).
+  await claimTasksRootExclusive(options.tasksRoot, options.leaseOverride);
+
   const repository = options.repository ?? new DurableTaskRepository(options.tasksRoot);
 
   const hilStore = new DurableHILStore(repository);
@@ -341,6 +409,82 @@ export async function createDurableAgentRuntime(
     }
   };
 
+  /**
+   * Deterministic post-restart resume for a dynamic publication whose
+   * ``publication_acceptance`` review was resolved. Returns:
+   * - "resumed":  the publication completed (durable events appended).
+   * - "pending":  a durable continuation exists; the review is unresolved,
+   *               so the request survives the restart and keeps waiting.
+   * - "rejected": a continuation exists but resuming failed (run_failed).
+   * - "absent":   no durable continuation (caller decides fail-closed).
+   */
+  const resumePublicationAcceptance = async (
+    taskId: string,
+    runId: string,
+    request: HILRequest | null,
+  ): Promise<"resumed" | "pending" | "rejected" | "absent"> => {
+    const requirementId = request?.requirement_id ?? null;
+    if (requirementId === null) return "absent";
+    const taskRoot = pathForTask(options.tasksRoot, taskId);
+    const continuation = await loadBoundPublicationAcceptanceContinuation(
+      taskRoot,
+      taskId,
+      requirementId,
+    );
+    if (continuation === null) return "absent";
+    const review = await hilStore.getReviewForRequest(taskId, continuation.requested_review_id);
+    if (review === null) return "pending";
+    try {
+      const completed = await completePublicationAcceptanceContinuation({
+        continuation,
+        taskRoot,
+        runId,
+        review,
+      });
+      await repository.appendRunEvent(taskId, runId, {
+        type: "publication_created",
+        publication_id: completed.publication.publication_id,
+        run_id: runId,
+        manifest_sha256: completed.publication.manifest_sha256,
+        supersedes_publication_id: completed.publication.supersedes_publication_id,
+        published_at: completed.publication.published_at,
+      });
+      for (const artifact of completed.manifest.artifacts) {
+        await repository.appendRunEvent(taskId, runId, {
+          type: "artifact_produced",
+          artifact: {
+            artifact_id: artifact.artifact_id,
+            name: artifact.relative_path.split("/").at(-1) ?? artifact.relative_path,
+            role: artifact.role,
+            relative_path: artifact.relative_path,
+            media_type: artifact.media_type,
+            size_bytes: artifact.size_bytes,
+            sha256: artifact.sha256,
+            generated_by_step_id: `dynamic:${requirementId}`,
+          },
+        });
+      }
+      await repository.appendRunEvent(taskId, runId, { type: "run_completed" });
+      return "resumed";
+    } catch (error) {
+      const snapshot = await repository.getSnapshot(taskId);
+      const run = snapshot?.runs.find((candidate) => candidate.run_id === runId);
+      if (
+        run !== undefined &&
+        run.status !== "completed" &&
+        run.status !== "failed" &&
+        run.status !== "cancelled"
+      ) {
+        const message = error instanceof Error ? error.message : String(error);
+        await repository.appendRunEvent(taskId, runId, {
+          type: "run_failed",
+          error: message.slice(0, 4_000),
+        });
+      }
+      return "rejected";
+    }
+  };
+
   const activeTasks = new Map<string, ActiveTask>();
   const activeDownloads = new Map<string, ActiveDownloadHandle>();
   const activeContinuations = new Map<string, ActiveContinuationHandle>();
@@ -356,6 +500,23 @@ export async function createDurableAgentRuntime(
     if (task === undefined) return;
     const runKey = `${taskId}:${runId}`;
     try {
+      // Run-entry preflight: reject before the first Pi turn when the model
+      // budget cannot hold the prompt plus max_tokens and the safety reserve.
+      const budget = task.session.getBudget?.() ?? null;
+      if (
+        budget !== null &&
+        budget.contextWindow - budget.maxTokens - budget.reserveTokens <= 0
+      ) {
+        await repository.appendRunEvent(taskId, runId, {
+          type: "run_failed",
+          error:
+            `Context budget exhausted: context_window ${budget.contextWindow} minus ` +
+            `max_tokens ${budget.maxTokens} and safety reserve ${budget.reserveTokens} ` +
+            "leaves no room for the prompt",
+          error_code: "context_budget_exhausted",
+        });
+        return;
+      }
       let turnInput = input;
       for (let continuation = 0; ; continuation += 1) {
         let compacted = false;
@@ -371,10 +532,16 @@ export async function createDurableAgentRuntime(
         }
         // A threshold compaction ends the Pi turn without auto-continue; the
         // adapter therefore emitted no terminal event. Resume with a fresh
-        // turn so the agent can finish the task, unless the run was suspended
-        // or the resume budget is exhausted (then force the terminal event).
+        // turn so the agent can finish the task, unless the run was suspended,
+        // the resume budget is exhausted (then force the terminal event), or
+        // the run already emitted its publication — the product is complete,
+        // so post-publication compaction must not spawn busy-work turns.
         if (!compacted || suspendedRuns.has(runKey)) break;
-        if (continuation >= MAX_COMPACTION_CONTINUATIONS) {
+        const published = task.workspace.getCurrentPublicationId?.() ?? null;
+        if (
+          published !== null ||
+          continuation >= MAX_COMPACTION_CONTINUATIONS
+        ) {
           const payloads = task.adapter.completeRun(runId).map((event) => event.payload);
           if (payloads.length > 0) {
             await repository.appendRunEvents(taskId, runId, payloads);
@@ -416,7 +583,18 @@ export async function createDurableAgentRuntime(
   }
 
   async function createSession(taskId: string, runId: string, mode: TaskMode): Promise<ActiveTask> {
-    const approvalGate = new DurableApprovalGate(taskId, repository, runId, hilStore);
+    // The frozen evaluation contract of THIS run is bound through the system
+    // prompt; the user message is never modified (durable-context invariant).
+    const runSnapshot = await repository.getSnapshot(taskId);
+    const executionContext =
+      runSnapshot?.runs.find((run) => run.run_id === runId)?.execution_context ?? null;
+    const approvalGate = new DurableApprovalGate(
+      taskId,
+      repository,
+      runId,
+      hilStore,
+      options.hilPreReview ?? null,
+    );
     const workspace = await options.workspaceFactory({
       taskId,
       runId,
@@ -452,6 +630,9 @@ export async function createDurableAgentRuntime(
           "submit_dynamic_family_publication",
         ],
         getCurrentPublicationId: () => workspace.getCurrentPublicationId?.() ?? null,
+        ...(executionContext === null
+          ? {}
+          : { systemContext: stableTaskExecutionContextJson(executionContext) }),
         cleanup: disposeWorkspace,
       });
       workspace.setPiSessionId?.(session.piSessionId);
@@ -486,6 +667,7 @@ export async function createDurableAgentRuntime(
       input: inputString(body),
       databases: databases(body.databases),
       mode,
+      executionContext: executionContext(body.execution_context),
     });
     await launchAcceptedTask(accepted, body.input as string);
     return accepted;
@@ -532,6 +714,7 @@ export async function createDurableAgentRuntime(
       input: durableInput,
       databases: [],
       mode: "import",
+      executionContext: null,
     });
     await launchAcceptedTask(accepted, durableInput, async (taskRoot) => {
       const sourceAssets = path.join(taskRoot, "source_assets");
@@ -551,6 +734,7 @@ export async function createDurableAgentRuntime(
     const accepted = await repository.createRun(taskId, {
       requestId,
       input: inputString(body),
+      executionContext: executionContext(body.execution_context),
     });
     if (existingRun !== undefined) return accepted;
     let task = activeTasks.get(taskId);
@@ -625,7 +809,15 @@ export async function createDurableAgentRuntime(
 
     // A suspended permission request must not outlive the cancelled run either.
     task.permissionBroker?.rejectPending(runId, new Error("run cancelled"));
-    await task.session.cancel("user requested");
+    // The session cancel can itself hang on a stream that never times out;
+    // bound it so the durable terminal is never hostage to the zombie stream.
+    let cancelTimer: NodeJS.Timeout | undefined;
+    await Promise.race([
+      task.session.cancel("user requested"),
+      new Promise<void>((resolve) => {
+        cancelTimer = setTimeout(resolve, options.cancellationTimeoutMs ?? 10_000);
+      }),
+    ]);
     let timer: NodeJS.Timeout | undefined;
     try {
       await Promise.race([
@@ -637,7 +829,21 @@ export async function createDurableAgentRuntime(
           );
         }),
       ]);
+    } catch {
+      // The session never acknowledged cancellation (observed with a provider
+      // stream that stays silent forever): force the durable terminal, free
+      // the in-memory active-run slot, and mute the zombie execution loop so
+      // it cannot append a duplicate terminal if it ever wakes.
+      const runKey = `${taskId}:${runId}`;
+      suspendedRuns.add(runKey);
+      if (task.activeRunId === runId) task.activeRunId = null;
+      task.workspace.onRunEnd?.(runId);
+      await repository.appendRunEvent(taskId, runId, {
+        type: "run_cancelled",
+        reason: "user requested (forced; agent session did not acknowledge cancellation)",
+      });
     } finally {
+      if (cancelTimer !== undefined) clearTimeout(cancelTimer);
       if (timer !== undefined) clearTimeout(timer);
       unsubscribeTerminal?.();
     }
@@ -806,6 +1012,66 @@ export async function createDurableAgentRuntime(
     return { status: "cancel_requested", task_id: taskId };
   }
 
+  /**
+   * Receive an opaque, explicitly non-authoritative artifact into the task's
+   * quarantine (review/download only). Never a publication: no publish/, no
+   * events.jsonl append, no formal projection, no source_assets write.
+   */
+  async function submitQuarantineArtifact(taskId: string, request: IncomingMessage): Promise<unknown> {
+    if (await repository.getSnapshot(taskId) === null) throw new ReferenceError("Task not found");
+    const contentType = request.headers["content-type"];
+    if (contentType === undefined || !contentType.toLowerCase().startsWith("multipart/form-data")) {
+      throw new TypeError("Quarantine submission requires multipart/form-data");
+    }
+    const form = await new Response(Readable.toWeb(request), {
+      headers: { "content-type": contentType },
+    }).formData();
+    const metadataValue = form.get("metadata");
+    const fileValue = form.get("file");
+    if (typeof metadataValue !== "string") throw new TypeError("metadata is required");
+    if (fileValue === null || typeof fileValue === "string") throw new TypeError("file is required");
+    if (fileValue.size === 0) throw new TypeError("Submitted file is empty");
+    if (fileValue.size > MAX_IMPORT_FILE_BYTES) throw new RangeError("Submitted file exceeds limit");
+    let metadata;
+    try {
+      metadata = parseUntrustedArtifactMetadata(parseJsonTextStrict(metadataValue));
+    } catch (error) {
+      if (error instanceof APIError) throw new TypeError(error.message, { cause: error });
+      throw error;
+    }
+    return storeUntrustedArtifact(
+      pathForTask(options.tasksRoot, taskId),
+      taskId,
+      metadata,
+      Buffer.from(await fileValue.arrayBuffer()),
+    );
+  }
+
+  async function listQuarantineArtifacts(taskId: string): Promise<QuarantineListing> {
+    if (await repository.getSnapshot(taskId) === null) throw new ReferenceError("Task not found");
+    return quarantineListing(await listUntrustedArtifacts(pathForTask(options.tasksRoot, taskId)));
+  }
+
+  async function getQuarantineArtifact(taskId: string, submissionId: string): Promise<unknown> {
+    if (await repository.getSnapshot(taskId) === null) throw new ReferenceError("Task not found");
+    const receipt = await getUntrustedArtifact(pathForTask(options.tasksRoot, taskId), submissionId);
+    if (receipt === null) throw new ReferenceError("Quarantine submission not found");
+    return receipt;
+  }
+
+  async function getQuarantineArtifactContent(
+    taskId: string,
+    submissionId: string,
+  ): Promise<{ receipt: UntrustedArtifactReceipt; bytes: Buffer }> {
+    if (await repository.getSnapshot(taskId) === null) throw new ReferenceError("Task not found");
+    const stored = await getUntrustedArtifactContent(pathForTask(options.tasksRoot, taskId), submissionId);
+    if (stored === null) throw new ReferenceError("Quarantine submission not found");
+    if (stored.bytes.length !== stored.receipt.size_bytes || sha256Bytes(stored.bytes) !== stored.receipt.sha256) {
+      throw new ArtifactIntegrityError("Quarantine artifact bytes do not match its receipt");
+    }
+    return stored;
+  }
+
   async function resumeRunOnce(taskId: string, runId: string, body: Record<string, unknown>): Promise<unknown> {
     const snapshot = await repository.getSnapshot(taskId);
     const run = snapshot?.runs.find((candidate) => candidate.run_id === runId);
@@ -900,7 +1166,10 @@ export async function createDurableAgentRuntime(
             storedRequest?.requirement_id ?? null,
           );
           if (!started && isDynamicPublicationAcceptance(storedRequest)) {
-            await failClosedDynamicPublicationRecovery(taskId, runId);
+            const outcome = await resumePublicationAcceptance(taskId, runId, storedRequest);
+            if (outcome === "absent") {
+              await failClosedDynamicPublicationRecovery(taskId, runId);
+            }
           }
         }
         return repository.getSnapshot(taskId);
@@ -945,7 +1214,10 @@ export async function createDurableAgentRuntime(
       );
       if (started) return repository.getSnapshot(taskId);
       if (isDynamicPublicationAcceptance(storedRequest)) {
-        await failClosedDynamicPublicationRecovery(taskId, runId);
+        const outcome = await resumePublicationAcceptance(taskId, runId, storedRequest);
+        if (outcome === "absent") {
+          await failClosedDynamicPublicationRecovery(taskId, runId);
+        }
         return repository.getSnapshot(taskId);
       }
     }
@@ -1036,6 +1308,9 @@ export async function createDurableAgentRuntime(
         ...(Object.keys(continuation.metadata_files).length > 0
           ? { metadata_files: continuation.metadata_files }
           : {}),
+        ...(continuation.cleaning_rule_receipt === undefined
+          ? {}
+          : { cleaning_rule_receipt: continuation.cleaning_rule_receipt }),
       },
       controller.signal,
     ).finally(() => {
@@ -1238,12 +1513,16 @@ export async function createDurableAgentRuntime(
       `具体依照用户语义完成：\n${text}`
     );
     await task.session.steer(content);
+    const event = await repository.appendRunEvent(taskId, runId, {
+      type: "run_steered",
+      input: text,
+    });
     return {
       status: "steered",
       task_id: taskId,
       run_id: runId,
-      message_id: null,
-      content,
+      message_id: `message_${event.event_id}`,
+      content: text,
     };
   }
 
@@ -1317,7 +1596,8 @@ export async function createDurableAgentRuntime(
       }
       if (request.method === "GET" && url.pathname === "/api/v1/tasks") {
         const limit = Number(url.searchParams.get("limit") ?? "50");
-        sendJson(response, 200, await repository.listTasks(limit));
+        const cursor = url.searchParams.get("cursor");
+        sendJson(response, 200, await repository.listTasks(limit, cursor));
         return;
       }
       const task = /^\/api\/v1\/tasks\/([^/]+)$/.exec(url.pathname);
@@ -1403,6 +1683,66 @@ export async function createDurableAgentRuntime(
         resolved.stream.pipe(response);
         return;
       }
+      const taskFile = /^\/api\/v1\/tasks\/([^/]+)\/file$/.exec(url.pathname);
+      if (request.method === "GET" && taskFile !== null) {
+        const taskId = decodeURIComponent(taskFile[1] ?? "");
+        if (await repository.getSnapshot(taskId) === null) {
+          sendJson(response, 404, { detail: "Task not found" });
+          return;
+        }
+        const relativePath = url.searchParams.get("path") ?? "";
+        const file = await readTaskTextFile(
+          workspaceManager.getPath(taskId),
+          relativePath,
+        );
+        if (!file.ok) {
+          const status =
+            file.code === "invalid_path" ? 400 : file.code === "too_large" ? 413 : 404;
+          sendJson(response, status, { detail: file.code });
+          return;
+        }
+        response.writeHead(200, {
+          "content-type": file.mediaType,
+          "content-length": String(Buffer.byteLength(file.content, "utf8")),
+        });
+        response.end(file.content);
+        return;
+      }
+      const quarantineList = /^\/api\/v1\/tasks\/([^/]+)\/quarantine$/.exec(url.pathname);
+      if (request.method === "GET" && quarantineList !== null) {
+        sendJson(response, 200, await listQuarantineArtifacts(decodeURIComponent(quarantineList[1] ?? "")));
+        return;
+      }
+      if (request.method === "POST" && quarantineList !== null) {
+        sendJson(response, 201, await submitQuarantineArtifact(
+          decodeURIComponent(quarantineList[1] ?? ""),
+          request,
+        ));
+        return;
+      }
+      const quarantineGet = /^\/api\/v1\/tasks\/([^/]+)\/quarantine\/([^/]+)$/.exec(url.pathname);
+      if (request.method === "GET" && quarantineGet !== null) {
+        sendJson(response, 200, await getQuarantineArtifact(
+          decodeURIComponent(quarantineGet[1] ?? ""),
+          decodeURIComponent(quarantineGet[2] ?? ""),
+        ));
+        return;
+      }
+      const quarantineContent = /^\/api\/v1\/tasks\/([^/]+)\/quarantine\/([^/]+)\/content$/.exec(url.pathname);
+      if (request.method === "GET" && quarantineContent !== null) {
+        const { receipt, bytes } = await getQuarantineArtifactContent(
+          decodeURIComponent(quarantineContent[1] ?? ""),
+          decodeURIComponent(quarantineContent[2] ?? ""),
+        );
+        response.writeHead(200, {
+          "content-type": receipt.media_type,
+          "content-length": String(bytes.length),
+          "content-disposition": `attachment; filename="${sanitizeQuarantineFilename(receipt.name)}"`,
+          "x-untrusted-artifact": "true",
+        });
+        response.end(bytes);
+        return;
+      }
       const runs = /^\/api\/v1\/tasks\/([^/]+)\/runs$/.exec(url.pathname);
       if (request.method === "POST" && runs !== null) {
         sendJson(response, 202, await createRun(decodeURIComponent(runs[1] ?? ""), request));
@@ -1475,6 +1815,7 @@ export async function createDurableAgentRuntime(
       } else if (error instanceof RangeError) {
         sendJson(response, 413, { detail: error.message });
       } else {
+        console.error("task-runtime-failure", error);
         sendJson(response, 500, { detail: "Task runtime failed" });
       }
     }
@@ -1579,6 +1920,12 @@ export async function createDurableAgentRuntime(
 
   for (const recovery of hilRecoveries) {
     if (isDynamicPublicationAcceptance(recovery.request)) {
+      const resumed = await resumePublicationAcceptance(
+        recovery.task_id,
+        recovery.run_id,
+        recovery.request,
+      );
+      if (resumed !== "absent") continue;
       await failClosedDynamicPublicationRecovery(recovery.task_id, recovery.run_id);
       continue;
     }
@@ -1619,8 +1966,6 @@ export async function createDurableAgentRuntime(
         return true;
       }
       if (requestPath === "/api/v1/tasks") {
-        const url = new URL(request.url ?? "/api/v1/tasks", "http://application-host");
-        if (request.method === "GET" && url.searchParams.has("cursor")) return false;
         void dispatch(request, response);
         return true;
       }

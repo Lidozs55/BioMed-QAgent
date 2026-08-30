@@ -12,6 +12,7 @@ import {
 import { ContextUsageInline } from "@/components/ContextUsageInline";
 import { DatabaseSelector } from "@/components/DatabaseSelector";
 import { ArtifactFab } from "@/components/ArtifactFab";
+import { QuarantineSheet } from "@/components/QuarantineSheet";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -333,6 +334,7 @@ export function AgentComposer({
       )}
       <div className="flex min-w-0 items-center gap-1.5 px-2 py-2">
         <ArtifactFab />
+        <QuarantineSheet />
         <DropdownMenu>
           <DropdownMenuTrigger
             render={

@@ -5,6 +5,7 @@ export type BioMedAgentErrorCode =
   | "SESSION_DISPOSED"
   | "DUPLICATE_RUN"
   | "RUN_NOT_FOUND"
+  | "CONTEXT_COMPACTION_INEFFECTIVE"
   | "UPSTREAM_FAILURE";
 
 export class BioMedAgentError extends Error {
@@ -42,13 +43,30 @@ export type BioMedAgentEvent =
     }
   | { type: "turn_completed" }
   | { type: "turn_cancelled"; reason?: string }
-  | { type: "context_compacted"; summary: string }
+  | {
+      type: "context_compacted";
+      summary: string;
+      reason?: "manual" | "threshold" | "overflow";
+      tokensBefore?: number;
+      estimatedTokensAfter?: number;
+      targetTokens?: number;
+      summaryTokens?: number;
+    }
   | {
       type: "context_usage";
       tokens: number | null;
       contextWindow: number;
       percent: number | null;
       source: "runtime";
+      /** Provider-reported usage of the model call that triggered this event. */
+      usage?: {
+        input: number;
+        output: number;
+        cacheRead: number;
+        cacheWrite: number;
+        totalTokens: number;
+        reasoning?: number;
+      };
     };
 
 export interface BioMedToolResult {
@@ -80,6 +98,8 @@ export interface BioMedModelConfig {
   baseUrl?: string;
   contextWindow?: number;
   maxTokens?: number;
+  /** Safety reserve in tokens (settings-derived), for run-entry preflight. */
+  safetyReserveTokens?: number;
   /** Auto-compaction trigger ratio of the context window (settings-derived). */
   compactionTriggerRatio?: number;
   /** Auto-compaction target ratio of the context window (settings-derived). */
@@ -102,6 +122,11 @@ export interface BioMedSessionConfig {
   resourceRoots?: readonly string[];
   skillRoots?: readonly string[];
   systemPrompt?: string;
+  /**
+   * Frozen run context (already serialized as a delimited section) appended to
+   * the system prompt. Never placed in the upstream user message.
+   */
+  systemContext?: string;
   tools?: readonly BioMedAgentTool[];
   /** Tools whose full schemas are available on the first model turn. */
   initialToolNames?: readonly string[];
@@ -114,6 +139,13 @@ export interface RunOptions {
   signal?: AbortSignal;
 }
 
+/** Model budget facts for the run-entry preflight. */
+export interface BioMedSessionBudget {
+  contextWindow: number;
+  maxTokens: number;
+  reserveTokens: number;
+}
+
 export interface BioMedAgentSession {
   readonly piSessionId: string;
   readonly taskId: string;
@@ -123,6 +155,8 @@ export interface BioMedAgentSession {
   steer?(text: string): Promise<void>;
   compact?(): Promise<{ summary: string }>;
   cancel(reason?: string): Promise<void>;
+  /** Current resolved model budget, for run-entry preflight checks. */
+  getBudget?(): BioMedSessionBudget | null;
   dispose(): Promise<void>;
 }
 

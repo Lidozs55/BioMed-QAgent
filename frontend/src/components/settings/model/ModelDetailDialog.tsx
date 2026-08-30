@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { ParameterEditor } from "@/components/settings/model/ParameterEditor";
+import { paramsValidationError } from "@/components/settings/model/paramValidation";
 import type {
   ManagedModelInfo,
   ManagedModelInput,
@@ -35,17 +36,19 @@ function errorText(error: unknown): string {
 }
 
 function sourceBadgeLabel(model: ManagedModelInfo): string {
-  return model.source === "manual" ? "手动配置" : model.provider_name;
+  // 与列表来源徽标同一判定：手动添加或元数据被用户改过即为“手动配置”。
+  return model.source === "manual" || model.metadata_source === "user"
+    ? "手动配置"
+    : model.provider_name;
 }
 
-function capabilitiesLabel(capabilities: ModelCapabilities): string {
-  const labels: string[] = [];
-  if (capabilities.text) labels.push("文本");
-  if (capabilities.image) labels.push("图像");
-  if (capabilities.video) labels.push("视频");
-  if (capabilities.audio) labels.push("音频");
-  return labels.length > 0 ? labels.join("、") : "—";
-}
+/** 模态勾选项：与 ModelCapabilities 字段一一对应。 */
+const MODALITY_OPTIONS = [
+  ["text", "文本"],
+  ["image", "图像"],
+  ["video", "视频"],
+  ["audio", "音频"],
+] as const;
 
 function allParamsJson(
   specs: ParameterSpec[],
@@ -57,6 +60,16 @@ function allParamsJson(
   }
   for (const [key, value] of Object.entries(params)) merged[key] = value;
   return JSON.stringify(merged, null, 2);
+}
+
+/**
+ * “最大输出 Tokens”的统一基准：params.max_tokens（运行时优先）优先，
+ * 未设置时回退到 max_output_tokens。初始化与保存比对必须使用同一函数，
+ * 否则两者不一致时会把未改动的 max_output_tokens 无条件覆盖为输入框值。
+ */
+function effectiveMaxTokens(model: ManagedModelInfo): number | null {
+  const fromParams = model.params.max_tokens;
+  return typeof fromParams === "number" ? fromParams : model.max_output_tokens;
 }
 
 export function ModelDetailDialog({
@@ -72,8 +85,15 @@ export function ModelDetailDialog({
   const [contextWindow, setContextWindow] = useState(() =>
     model?.context_window == null ? "" : String(model.context_window),
   );
-  const [maxOutputTokens, setMaxOutputTokens] = useState(() =>
-    model?.max_output_tokens == null ? "" : String(model.max_output_tokens),
+  const [maxOutputTokens, setMaxOutputTokens] = useState(() => {
+    if (model == null) return "";
+    const effective = effectiveMaxTokens(model);
+    return effective == null ? "" : String(effective);
+  });
+  const [capabilities, setCapabilities] = useState<ModelCapabilities>(() =>
+    model
+      ? { ...model.capabilities }
+      : { text: true, image: false, video: false, audio: false },
   );
   const [jsonOpen, setJsonOpen] = useState(false);
   const [jsonText, setJsonText] = useState(() =>
@@ -145,12 +165,39 @@ export function ModelDetailDialog({
       return;
     }
 
-    const patch: Partial<ManagedModelInput> = { params };
+    // “最大输出 Tokens”以顶部输入框为唯一入口：同步写入 params.max_tokens
+    //（运行时优先字段），避免与图形编辑器中的同名列重复调整。
+    const nextParams = { ...params };
+    if (parsedMax === null) {
+      delete nextParams.max_tokens;
+    } else {
+      nextParams.max_tokens = parsedMax;
+    }
+    // 提交前按 param spec 做 JS 强制校验（min/max 不只是 HTML 属性）；
+    // JSON 编辑器通道应用的 params 汇入同一 state，此处一并拦截。
+    const paramError = paramsValidationError(model.param_specs, nextParams);
+    if (paramError) {
+      toast.error(paramError);
+      return;
+    }
+
+    const patch: Partial<ManagedModelInput> = {};
     if (parsedContext !== model.context_window) {
       patch.context_window = parsedContext;
     }
-    if (parsedMax !== model.max_output_tokens) {
+    patch.params = nextParams;
+    // 与初始化同一基准比较：用户未实际改动时不重复提交 max_output_tokens。
+    if (parsedMax !== effectiveMaxTokens(model)) {
       patch.max_output_tokens = parsedMax;
+    }
+    // 模态有实际改动才提交，避免无谓地把 metadata_source 标成 user。
+    if (
+      capabilities.text !== model.capabilities.text ||
+      capabilities.image !== model.capabilities.image ||
+      capabilities.video !== model.capabilities.video ||
+      capabilities.audio !== model.capabilities.audio
+    ) {
+      patch.capabilities = capabilities;
     }
 
     setSaving(true);
@@ -180,8 +227,32 @@ export function ModelDetailDialog({
             <dd className="truncate">{model.provider_name}</dd>
             <dt className="text-muted-foreground">模型 ID</dt>
             <dd className="truncate">{model.model_id}</dd>
-            <dt className="text-muted-foreground">能力</dt>
-            <dd>{capabilitiesLabel(model.capabilities)}</dd>
+            <dt className="self-center text-muted-foreground">模态</dt>
+            <dd>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                {MODALITY_OPTIONS.map(([key, label]) => (
+                  <label
+                    key={key}
+                    className="flex cursor-pointer items-center gap-1.5 text-xs"
+                    title={`模型${label}模态`}
+                  >
+                    <input
+                      type="checkbox"
+                      className="size-3.5 cursor-pointer accent-primary"
+                      checked={capabilities[key]}
+                      onChange={(event) =>
+                        setCapabilities((current) => ({
+                          ...current,
+                          [key]: event.target.checked,
+                        }))
+                      }
+                      aria-label={`模态：${label}`}
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+            </dd>
             <dt className="text-muted-foreground">来源</dt>
             <dd>{sourceBadgeLabel(model)}</dd>
           </dl>
@@ -270,6 +341,7 @@ export function ModelDetailDialog({
               specs={model.param_specs}
               params={params}
               onChange={setParams}
+              hiddenKeys={["max_tokens", "enable_thinking"]}
             />
           )}
         </div>

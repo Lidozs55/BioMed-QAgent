@@ -9,6 +9,7 @@ import {
   type HILKind,
   type HILRequest,
   type HILReviewItem,
+  type HILReviewer,
   type HILReviewType,
   type HILSubject,
   type HumanReviewRecord,
@@ -20,7 +21,10 @@ import {
 
 import { readJsonFileOrNull, writeJsonAtomic } from "../persistence/atomic-json.js";
 import { canonicalDigest, canonicalJson } from "../dataset/adapters/identity.js";
-import { computeHILEvidenceDigest } from "../dataset/contracts/hil-evidence.js";
+import {
+  computeHILEvidenceDigest,
+  type HILEvidenceDigestInput,
+} from "../dataset/contracts/hil-evidence.js";
 import { requireSafeId, SAFE_ID } from "./safe-id.js";
 import type { DurableTaskRepository } from "./task-repository.js";
 
@@ -48,6 +52,31 @@ export interface CreateHILRequestOptions {
    * A replay must never await a request the store would refuse to resolve.
    */
   recreateIfTerminal?: boolean;
+}
+
+/**
+ * The base (generation-1) request id a ``createRequest`` call will produce.
+ * Pure function of the task/run/policy/idempotency key and the review
+ * evidence, so callers that must persist a reference to the request BEFORE
+ * creating it (the publication acceptance continuation) can compute it
+ * deterministically.
+ */
+export function deterministicHILRequestId(input: {
+  task_id: string;
+  run_id: string;
+  policy_ref: string;
+  idempotency_key: string;
+  /** The full evidence-digest input (kind, review_type, subject, …). */
+  review: HILEvidenceDigestInput;
+}): string {
+  const evidenceDigest = computeHILEvidenceDigest(input.review);
+  return `hil_${canonicalDigest({
+    task_id: input.task_id,
+    run_id: input.run_id,
+    policy_ref: input.policy_ref,
+    idempotency_key: input.idempotency_key,
+    evidence_digest: evidenceDigest,
+  }).slice(0, 32)}`;
 }
 
 export interface DurableHILStoreOptions {
@@ -123,13 +152,13 @@ export class DurableHILStore {
       throw new TypeError("idempotency_key must not be empty");
     }
     const evidenceDigest = computeHILEvidenceDigest(input);
-    const baseRequestId = `hil_${canonicalDigest({
+    const baseRequestId = deterministicHILRequestId({
       task_id: input.task_id,
       run_id: input.run_id,
       policy_ref: input.policy_ref,
       idempotency_key: input.idempotency_key,
-      evidence_digest: evidenceDigest,
-    }).slice(0, 32)}`;
+      review: input,
+    });
     return this.serialized(`${input.task_id}:${input.run_id}`, async () => {
       const existing = await this.readRequest(input.task_id, baseRequestId);
       if (existing !== null) {
@@ -280,6 +309,7 @@ export class DurableHILStore {
     taskId: string,
     runId: string,
     rawInput: ResumeHILInput,
+    options: { reviewer?: HILReviewer } = {},
   ): Promise<HumanReviewRecord> {
     requireSafeId(taskId, "task_id");
     requireSafeId(runId, "run_id");
@@ -316,7 +346,7 @@ export class DurableHILStore {
         }).slice(0, 32)}`,
         request_id: request.request_id,
         decision: input.decision,
-        reviewer: "user",
+        reviewer: options.reviewer ?? "user",
         reviewed_at: reviewedAt,
         evidence_digest: request.evidence_digest,
         reason: input.reason,

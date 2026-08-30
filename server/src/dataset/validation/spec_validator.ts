@@ -64,6 +64,26 @@ const DATABASE_IDENTIFIER_ALIASES: Record<string, string> = {
 };
 
 /**
+ * Static accession contracts for fixed builtin providers whose carriers are
+ * provider-carrier bindings. Lets the validator reject missing/invalid
+ * accessions and rejected binding parameters for EVERY binding in one pass,
+ * instead of surfacing them one at a time through acquisition failures.
+ * Providers absent from this map keep the previous behavior. geo/gdc are
+ * exempt from the parameter rejection exactly like the acquisition layer.
+ */
+const FIXED_PROVIDER_ACCESSION_RULES: Record<string, { pattern: RegExp; example: string }> = {
+  "mgnify.files.v1": { pattern: /^MGYS[0-9]{8}$/, example: "MGYS00000322" },
+  "gmrepo.files.v1": { pattern: /^[1-9][0-9]{0,11}$/, example: "1234" },
+  "europepmc.supplementary.v1": { pattern: /^PMC[1-9][0-9]*$/, example: "PMC9005347" },
+  "dbsnp.files.v1": { pattern: /^rs[1-9][0-9]*$/, example: "rs429358" },
+  "ncbi.taxonomy.files.v1": { pattern: /^\S.{0,199}$/, example: "'Blautia obeum' or '1234'" },
+  "xena.files.v1": { pattern: /^\S.{0,200}$/, example: "'TCGA.BRCA.sampleMap/HiSeqV2'" },
+  "reactome.files.v1": { pattern: /^R-[A-Z]{3}-[1-9][0-9]*$/, example: "R-HSA-199420" },
+  "openfda.files.v1": { pattern: /^\S.{0,128}$/, example: "'ibuprofen'" },
+};
+const FIXED_PROVIDERS_ACCEPTING_PARAMETERS = new Set(["geo.files.v1", "gdc.files.v1"]);
+
+/**
  * Resolve a validation profile's ``required_entity_level`` (Phase 5 D4).
  * Returns ``null`` when the profile cannot be resolved — an allowed-but-
  * unregistered profile is a server misconfiguration; the allowlist already
@@ -379,6 +399,44 @@ export class SpecValidator {
             `binding ${pyRepr(binding.binding_id)} provider ${pyRepr(binding.acquisition?.provider_id ?? null)} ` +
               `is not admitted for ${pyRepr(canonicalSource)}/${pyRepr(binding.adapter_id)}`,
           );
+        }
+        const providerId = binding.acquisition?.mode === "builtin" ? binding.acquisition.provider_id : null;
+        const fixedRule = providerId === null || providerId === undefined
+          ? undefined
+          : FIXED_PROVIDER_ACCESSION_RULES[providerId];
+        if (
+          declaredProviderBinding !== null &&
+          fixedRule !== undefined &&
+          providerId !== null && providerId !== undefined
+        ) {
+          const accession = binding.accession?.trim() ?? "";
+          if (accession === "") {
+            codes.push("binding_accession_missing");
+            reasons.push(
+              `binding ${pyRepr(binding.binding_id)} requires a non-empty binding.accession for ` +
+                `${pyRepr(providerId)} (e.g. ${fixedRule.example}); ` +
+                "one accession per binding, cross-cutting context goes to spec.entities",
+            );
+          } else if (!fixedRule.pattern.test(accession)) {
+            codes.push("binding_accession_invalid");
+            reasons.push(
+              `binding ${pyRepr(binding.binding_id)} has an accession that ${pyRepr(providerId)} ` +
+                `rejects: expected format matching ${pyRepr(String(fixedRule.pattern))}, ` +
+                `e.g. ${fixedRule.example}`,
+            );
+          }
+          const parameterKeys = Object.keys(binding.parameters ?? {});
+          if (
+            parameterKeys.length > 0 &&
+            !FIXED_PROVIDERS_ACCEPTING_PARAMETERS.has(providerId)
+          ) {
+            codes.push("binding_parameters_rejected");
+            reasons.push(
+              `binding ${pyRepr(binding.binding_id)} sends binding.parameters to fixed provider ` +
+                `${pyRepr(providerId)}, which rejects them; ` +
+                "put its identifier in binding.accession and cross-cutting study context in top-level spec.entities",
+            );
+          }
         }
         if (sourceDefinition === undefined && sourceDefinitionBySource !== undefined) {
           codes.push("adapter_source_mismatch");

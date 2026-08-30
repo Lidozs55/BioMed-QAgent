@@ -469,6 +469,9 @@ function resolveServerOwnedProfile(): ServerOwnedAdmissionProfile {
   return FIXTURE_PROFILE;
 }
 
+/** Upper bound on reported violations so pathological sources stay bounded. */
+const MAX_REPORTED_SOURCE_VIOLATIONS = 8;
+
 function inspectSource(
   normalizedSource: string,
   profile: ServerOwnedAdmissionProfile,
@@ -482,48 +485,67 @@ function inspectSource(
   );
   const importedModules = new Set<string>();
   const allowedModules = new Set<string>(profile.allowedModules);
-  const reject = (message: string): never => {
-    throw new TransformHostError("source_policy_violation", message);
+  const violations: string[] = [];
+  let totalViolations = 0;
+  // Recording (not throwing) lets one pass report every violation with its
+  // position, so authors fix all of them instead of iterating blind retries.
+  const record = (node: ts.Node, message: string): void => {
+    totalViolations += 1;
+    if (violations.length >= MAX_REPORTED_SOURCE_VIOLATIONS) return;
+    const { line, character } = file.getLineAndCharacterOfPosition(node.getStart(file));
+    violations.push(`L${line + 1}C${character + 1} ${message}`);
   };
   const inspect = (node: ts.Node): void => {
     if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
       const specifier = node.moduleSpecifier;
       if (specifier && ts.isStringLiteralLike(specifier)) {
         if (!allowedModules.has(specifier.text)) {
-          reject(`Module "${specifier.text}" is not in the server-owned Transform SDK allowlist`);
+          record(node, `Module "${specifier.text}" is not in the server-owned Transform SDK allowlist`);
+        } else {
+          importedModules.add(specifier.text);
         }
-        importedModules.add(specifier.text);
       } else {
-        reject("Transform imports and re-exports must use a static string module specifier");
+        record(node, "Transform imports and re-exports must use a static string module specifier");
       }
     }
     if (ts.isImportEqualsDeclaration(node)) {
-      reject("TypeScript import-equals declarations are forbidden in DatasetTransform source");
+      record(node, "TypeScript import-equals declarations are forbidden in DatasetTransform source");
     }
     if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
-      reject("Dynamic module loading is forbidden in DatasetTransform source");
+      record(node, "Dynamic module loading is forbidden in DatasetTransform source");
     }
     if (ts.isMetaProperty(node) && node.keywordToken === ts.SyntaxKind.ImportKeyword) {
-      reject("Module metadata access is forbidden in DatasetTransform source");
+      record(node, "Module metadata access is forbidden in DatasetTransform source");
     }
     if (ts.isElementAccessExpression(node)) {
-      reject("Computed property access is forbidden in fixture source because it can hide prototype escapes");
+      record(
+        node,
+        "Computed property access is forbidden: every bracket access (a[0] included, literal or not) is rejected because bracket targets are not statically checkable; read array elements with destructuring, .at(), or .shift() and object fields with dot properties",
+      );
     }
     if (ts.isComputedPropertyName(node)) {
-      reject("Computed property names are forbidden in fixture source");
+      record(node, "Computed property names are forbidden in fixture source");
     }
     if (ts.isIdentifier(node) && FORBIDDEN_IDENTIFIER_SET.has(node.text)) {
-      reject(`Identifier "${node.text}" is forbidden in DatasetTransform source`);
+      record(node, `Identifier "${node.text}" is forbidden in DatasetTransform source`);
     }
     if (
       (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node))
       && FORBIDDEN_IDENTIFIER_SET.has(node.text)
     ) {
-      reject(`Property escape token "${node.text}" is forbidden in DatasetTransform source`);
+      record(node, `Property escape token "${node.text}" is forbidden in DatasetTransform source`);
     }
     ts.forEachChild(node, inspect);
   };
   inspect(file);
+  if (violations.length > 0) {
+    const listed = violations.join("; ");
+    const more = totalViolations > violations.length ? `; and ${totalViolations - violations.length} more` : "";
+    throw new TransformHostError(
+      "source_policy_violation",
+      `transform source admission rejected ${totalViolations} violation(s): ${listed}${more}`,
+    );
+  }
   return Object.freeze([...importedModules].sort());
 }
 

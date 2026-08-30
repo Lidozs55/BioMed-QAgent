@@ -208,6 +208,40 @@ describe("agent permission settings API (P6)", () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
+  test("POST rules rejects non-boolean recursive instead of silently storing false", async () => {
+    const { base, server } = await fixture();
+    const ruleRoot = await mkdtemp(path.join(os.tmpdir(), "biomed-rule-root-"));
+    roots.push(ruleRoot);
+    const target = path.join(ruleRoot, "dir");
+    await mkdir(target, { recursive: true });
+
+    const rejected = await fetch(`${base}/api/v1/settings/agent-permissions/rules`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        capability: "fs.read",
+        path: target,
+        recursive: "yes",
+        policy: "allow",
+      }),
+    });
+    expect(rejected.status).toBe(422);
+
+    // Omitting recursive entirely stays valid (defaults apply).
+    const omitted = await fetch(`${base}/api/v1/settings/agent-permissions/rules`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        capability: "fs.read",
+        path: target,
+        policy: "allow",
+      }),
+    });
+    expect(omitted.status).toBe(201);
+
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
   test("a freshly created store instance reads the same persisted settings", async () => {
     const { base, filePath, server } = await fixture();
     await fetch(`${base}/api/v1/settings/agent-permissions`, {

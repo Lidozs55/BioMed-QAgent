@@ -66,6 +66,39 @@ measurement semantics, identity rules, and valid artifact projections. A
 requirement manifest may require a complete or partial closure of a package, but
 it cannot introduce an unregistered topology.
 
+### Figure/chart evidence publication route (implemented)
+
+The `figure_evidence` capability is realized by the
+`bioactivity-measurement/chart-evidence` module and now runs inside the same
+Core trust boundary as every other family:
+
+- **Ownership.** VLM/PDF/caption extraction output enters the formal route only
+  as task-owned registered SourceAssets parsed by Core-owned registered table
+  parsers (`registered_bioactivity_chart_*_json`). A workspace CSV or agent
+  transcript never becomes a publication input; every table row carries a
+  content-addressed `source_asset_id` plus a SourceLocator 2.0 page/bbox
+  locator that Core re-validates at parse time.
+- **Provenance retention.** The formal publication keeps, per series and per
+  point: source asset, page/bbox locator, extraction model name and pinned
+  version, every transform step (`vlm_extract`, `coordinate_transform`,
+  `unit_transform`, `human_correction`) with input/output digests and prompt
+  parameters, point-level confidence with reason, and review state.
+- **Review state machine.** `not_required | pending | accepted | corrected |
+  rejected`; human review may change values (corrected) but never upgrades
+  source or extraction reliability. Estimated or low-confidence primary points
+  require `accepted`/`corrected` review; rejected rows never publish.
+- **Fail-closed gates.** The chart gate (`evaluateChartEvidencePublication`)
+  runs before assembly and again inside validation; provenance gaps, missing
+  transform digests, invalid locators, or pending reviews fail the build with a
+  structured `chart_evidence:chart_evidence_gate` check in
+  `validation_report.json`, and no immutable Publication is promoted.
+- **Assembly.** When chart tables are bound, the bioactivity registered
+  assembler dispatches to `assembleBioactivityChartEvidenceCandidate`, which
+  requires all four chart tables, validates the exact per-route asset closures
+  (base tables may reference a strict subset of the combined registered assets),
+  and emits the eight-table candidate through the normal B3 validation and
+  Publisher.
+
 ## Product Assessment
 
 `ExecutionResult` describes whether fixed operations ran. `ProductAssessment`

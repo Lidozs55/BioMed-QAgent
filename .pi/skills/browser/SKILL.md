@@ -22,5 +22,3 @@ checksum-addressed SourceAsset validation and linked download provenance.
 - Requests use a real browser User-Agent, Referer/Accept headers, and rate
   limiting.
 - Downloads must be content-verified and recorded in provenance.
-- **Research-only source.** Browser-acquired data is for investigation and
-  evidence only — never declare `browser` as a dataset build source.

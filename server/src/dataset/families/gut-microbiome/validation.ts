@@ -4,12 +4,12 @@ import { parseSourceLocator } from "../../contracts/index.js";
 import { validateMultiTableCandidate } from "../../validation/multitable.js";
 import { gutMicrobiomeRelations, gutMicrobiomeTableDefinitions, gutMicrobiomeValidationPolicy } from "./schemas.js";
 import type {
+  GutMicrobiomeCrosswalkInput,
   GutMicrobiomeDifferentialAbundanceInput,
   GutMicrobiomeReferencePrevalenceInput,
   GutMicrobiomeRows,
   GutMicrobiomeStudyInput,
   GutMicrobiomeSourceInput,
-  GutMicrobiomeTaxonInput,
 } from "./types.js";
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/;
@@ -50,7 +50,7 @@ function sourceLink(sourceId: string, assetId: string, sourceLocator: SourceLoca
 
 function assertSource(value: GutMicrobiomeSourceInput): void {
   safeId(value.source_id, "source_id");
-  if (!["mgnify", "gmrepo", "ncbi_taxonomy"].includes(value.source_database)) fail("source_database is not allowed");
+  if (!["mgnify", "gmrepo", "ncbi_taxonomy", "europepmc_supplementary"].includes(value.source_database)) fail("source_database is not allowed");
   if (!CONTENT_ASSET_ID.test(value.source_asset_id)) fail("source_asset_id must be content addressed");
   const parsed = locator(value.source_locator, "source_locator");
   if (parsed.asset_id !== value.source_asset_id) fail("source locator does not match source_asset_id");
@@ -71,15 +71,23 @@ function assertStudy(value: GutMicrobiomeStudyInput, sources: ReadonlyMap<string
   sourceLink(value.source_id, value.source_asset_id, locator(value.source_locator, "source_locator"), sources, `study ${value.study_id}`);
 }
 
-function assertTaxon(value: GutMicrobiomeTaxonInput, sources: ReadonlyMap<string, GutMicrobiomeSourceInput>): void {
-  safeId(value.study_id, "study_id");
-  safeId(value.sample_id, "sample_id");
-  text(value.taxon_path, "taxon_path");
-  safeId(value.taxon_id, "taxon_id");
-  if (!Number.isSafeInteger(value.abundance) || value.abundance < 0) fail("abundance must be a non-negative integer");
+function assertCrosswalk(value: GutMicrobiomeCrosswalkInput, sources: ReadonlyMap<string, GutMicrobiomeSourceInput>): void {
+  safeId(value.ncbi_taxon_id, "ncbi_taxon_id");
+  text(value.current_name, "current_name");
+  if (value.common_name !== null) text(value.common_name, "common_name");
+  text(value.taxon_rank, "taxon_rank");
+  if (value.parent_taxon_id !== null) safeId(value.parent_taxon_id, "parent_taxon_id");
+  if (value.lineage !== null) text(value.lineage, "lineage");
+  // Joined alternative-name lists are legitimately empty strings when NCBI
+  // reports no names of that class for the taxon.
+  if (typeof value.synonyms !== "string") fail("synonyms must be a joined string");
+  if (typeof value.equivalent_names !== "string") fail("equivalent_names must be a joined string");
+  if (typeof value.historical_names !== "string") fail("historical_names must be a joined string");
+  if (typeof value.name_change_observed !== "boolean") fail("name_change_observed must be a boolean");
+  if (value.query_names !== null) text(value.query_names, "query_names");
   safeId(value.source_id, "source_id");
   if (!CONTENT_ASSET_ID.test(value.source_asset_id)) fail("source_asset_id must be content addressed");
-  sourceLink(value.source_id, value.source_asset_id, locator(value.source_locator, "source_locator"), sources, `taxon ${value.taxon_id}`);
+  sourceLink(value.source_id, value.source_asset_id, locator(value.source_locator, "source_locator"), sources, `crosswalk taxon ${value.ncbi_taxon_id}`);
 }
 
 function assertDifferential(value: GutMicrobiomeDifferentialAbundanceInput, sources: ReadonlyMap<string, GutMicrobiomeSourceInput>): void {
@@ -109,7 +117,7 @@ function assertPrevalence(value: GutMicrobiomeReferencePrevalenceInput, sources:
 
 export function assertGutMicrobiomeRows(rows: GutMicrobiomeRows): void {
   if (rows.studies.length === 0) fail("study table must not be empty");
-  if (rows.taxa.length === 0) fail("taxon table must not be empty");
+  if (rows.crosswalk.length === 0) fail("taxon crosswalk table must not be empty");
   if (rows.differentialAbundances.length === 0) fail("differential abundance table must not be empty");
   if (rows.referencePrevalences.length === 0) fail("reference prevalence table must not be empty");
   if (rows.sources.length === 0) fail("source table must not be empty");
@@ -126,17 +134,16 @@ export function assertGutMicrobiomeRows(rows: GutMicrobiomeRows): void {
     studies.add(study.study_id);
   }
   const taxa = new Set<string>();
-  for (const taxon of rows.taxa) {
-    assertTaxon(taxon, sources);
-    if (!studies.has(taxon.study_id)) fail(`taxon ${taxon.taxon_id} references missing study`);
-    const key = `${taxon.study_id}\u001f${taxon.taxon_id}`;
-    taxa.add(key);
+  for (const taxon of rows.crosswalk) {
+    assertCrosswalk(taxon, sources);
+    if (taxa.has(taxon.ncbi_taxon_id)) fail(`duplicate crosswalk taxon ${taxon.ncbi_taxon_id}`);
+    taxa.add(taxon.ncbi_taxon_id);
   }
   const differentialIds = new Set<string>();
   for (const value of rows.differentialAbundances) {
     assertDifferential(value, sources);
     if (!studies.has(value.study_id)) fail(`differential result ${value.comparison_id} references missing study`);
-    if (!taxa.has(`${value.study_id}\u001f${value.taxon_id}`)) fail(`differential result ${value.comparison_id} references missing taxon`);
+    if (!taxa.has(value.taxon_id)) fail(`differential result ${value.comparison_id} references missing crosswalk taxon`);
     const key = `${value.study_id}\u001f${value.taxon_id}\u001f${value.comparison_id}`;
     if (differentialIds.has(key)) fail(`duplicate differential result ${value.comparison_id}`);
     differentialIds.add(key);
@@ -145,7 +152,7 @@ export function assertGutMicrobiomeRows(rows: GutMicrobiomeRows): void {
   for (const value of rows.referencePrevalences) {
     assertPrevalence(value, sources);
     if (!studies.has(value.study_id)) fail(`prevalence ${value.taxon_id} references missing study`);
-    if (!taxa.has(`${value.study_id}\u001f${value.taxon_id}`)) fail(`prevalence ${value.taxon_id} references missing taxon`);
+    if (!taxa.has(value.taxon_id)) fail(`prevalence ${value.taxon_id} references missing crosswalk taxon`);
     const key = `${value.study_id}\u001f${value.taxon_id}\u001f${value.reference_group}`;
     if (prevalenceIds.has(key)) fail(`duplicate prevalence ${value.taxon_id}`);
     prevalenceIds.add(key);

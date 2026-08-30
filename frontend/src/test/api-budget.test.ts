@@ -26,7 +26,7 @@ describe("API settings/catalog management contracts", () => {
         context_window: 32768, context_window_source: "catalog",
         safety_reserve_ratio: 0.05, safety_reserve_tokens: 16384,
         compaction_trigger_ratio: 0.85, compaction_target_ratio: 0.60,
-        available_input_tokens: 4096, advanced: {},
+        available_input_tokens: 4096, vision_model_ready: false, advanced: {},
       }))
       .mockResolvedValueOnce(jsonResponse({ vendors: [] }))
       .mockResolvedValueOnce(jsonResponse({ models: [], total_count: 0 }))
@@ -54,7 +54,7 @@ describe("API budget field contracts", () => {
       model_name: "provider-only", max_tokens: 4096, context_window: 0, context_window_source: "unknown",
       safety_reserve_ratio: 0.05, safety_reserve_tokens: 0,
       compaction_trigger_ratio: 0.85, compaction_target_ratio: 0.60,
-      available_input_tokens: 0, advanced: {},
+      available_input_tokens: 0, vision_model_ready: false, advanced: {},
     }));
     const settings = await createAPIClient({ fetcher }).fetchSettings();
     expect(settings.context_window_source).toBe("unknown");
@@ -69,7 +69,7 @@ describe("API budget field contracts", () => {
       model_name: "demo", max_tokens: 4096, context_window: 32768, context_window_source: "catalog",
       safety_reserve_ratio: 0.05, safety_reserve_tokens: 16384,
       compaction_trigger_ratio: 0.85, compaction_target_ratio: 0.60,
-      available_input_tokens: 4096, advanced: {},
+      available_input_tokens: 4096, vision_model_ready: false, advanced: {},
     }));
     const api = createAPIClient({ fetcher });
     const settings: ModelSettings = await api.fetchSettings();
@@ -88,7 +88,7 @@ describe("API budget field contracts", () => {
       model_name: "demo", max_tokens: 4096, context_window: 32768, context_window_source: "catalog",
       safety_reserve_ratio: 0.05, safety_reserve_tokens: 16384,
       compaction_trigger_ratio: 0.85, compaction_target_ratio: 0.60,
-      available_input_tokens: 4096, advanced: {},
+      available_input_tokens: 4096, vision_model_ready: false, advanced: {},
     }));
     const api = createAPIClient({ fetcher });
     await api.saveSettings({ safety_reserve_ratio: 0.10 });
@@ -102,7 +102,7 @@ describe("API budget field contracts", () => {
       model_name: "demo", max_tokens: 4096, context_window: 32768, context_window_source: "catalog",
       safety_reserve_ratio: 0.05, safety_reserve_tokens: 16384,
       compaction_trigger_ratio: 0.85, compaction_target_ratio: 0.60,
-      available_input_tokens: 4096, advanced: {},
+      available_input_tokens: 4096, vision_model_ready: false, advanced: {},
     }));
     const api = createAPIClient({ fetcher });
     await api.saveSettings({ context_window: null });

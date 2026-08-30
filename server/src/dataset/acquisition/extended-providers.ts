@@ -14,6 +14,8 @@ export const EXTENDED_PROVIDER_IDS = Object.freeze({
   openfda: "openfda.files.v1",
   gwasCatalog: "gwas-catalog.associations.v1",
   europePmcSupplementary: "europepmc.supplementary.v1",
+  europePmcPdf: "europepmc.pdf.v1",
+  europePmcFulltextXml: "europepmc.fulltext_xml.v1",
 });
 
 const IMPLEMENTATION_DIGESTS: Readonly<Record<keyof typeof EXTENDED_PROVIDER_IDS, string>> = Object.freeze({
@@ -24,11 +26,15 @@ const IMPLEMENTATION_DIGESTS: Readonly<Record<keyof typeof EXTENDED_PROVIDER_IDS
   openfda: "209eb79c902cafaa40295ee64da023599ca15e2dc26494b00909ab7671a4b4e1",
   gwasCatalog: "04c46c50d13b03b6920d75b8122370141c6a748b3deeed605991cf324c3741e0",
   europePmcSupplementary: "f87e4e571724fdcb8b22c52aac97164f195a7ad8ff64cfd760dd930e5e60134d",
+  europePmcPdf: "efccecd0d26cbf932f06c43228c90fc21fd18f01d98264add7d4f741a148ed17",
+  europePmcFulltextXml: "6c1216185b7a48b8eb42c6b3bf2b3ef1644850f70477f47c81957612a00254ee",
 });
 
 const PARAMETER_KEYS = new Set(["source", "accession", "entities"]);
 const MAX_JSON_BYTES = 32 * 1024 * 1024;
 const MAX_DATASET_BYTES = 4096 * 1024 * 1024;
+const MAX_PDF_BYTES = 128 * 1024 * 1024;
+const MAX_XML_BYTES = 64 * 1024 * 1024;
 
 type Parameters = {
   source: string;
@@ -43,6 +49,8 @@ type Definition = {
   normalize: (value: string) => string;
   validate: (value: string) => boolean;
   identifierName: string;
+  /** Concrete valid-accession example surfaced verbatim in rejection messages. */
+  accessionExample?: string;
   plan: (identifier: string, entities: Parameters["entities"]) => Omit<AcquisitionDownloadPlan, "source"> & {
     url: string;
     title: string;
@@ -60,12 +68,20 @@ function parseParameters(request: CoreAcquisitionRequest, definition: Definition
   if (request.parameters.source !== definition.source) {
     throw new TypeError(`${providerId} requires binding source '${definition.source}'`);
   }
-  if (typeof request.parameters.accession !== "string") {
-    throw new TypeError(`${providerId} requires a ${definition.identifierName}`);
+  const accessionHint = definition.accessionExample === undefined
+    ? ""
+    : ` (one accession per binding, e.g. ${definition.accessionExample})`;
+  if (typeof request.parameters.accession !== "string" || request.parameters.accession.trim() === "") {
+    throw new TypeError(
+      `${providerId} requires a ${definition.identifierName} in binding.accession${accessionHint}; ` +
+        "put cross-cutting study context in spec.entities instead of binding.parameters",
+    );
   }
   const identifier = definition.normalize(request.parameters.accession.trim());
   if (!definition.validate(identifier)) {
-    throw new TypeError(`${providerId} requires a valid ${definition.identifierName}`);
+    throw new TypeError(
+      `${providerId} requires a valid ${definition.identifierName}${accessionHint}`,
+    );
   }
   const rawEntities = request.parameters.entities;
   if (rawEntities === null || Array.isArray(rawEntities) || typeof rawEntities !== "object") {
@@ -136,6 +152,7 @@ const DEFINITIONS: readonly Definition[] = Object.freeze([
   },
   {
     key: "mgnify", source: "mgnify", database: "mgnify", identifierName: "MGnify study accession",
+    accessionExample: "MGYS00000322",
     normalize: (value) => value.toUpperCase(), validate: (value) => /^MGYS[0-9]{8}$/.test(value),
     plan: (identifier) => ({
       url: `https://www.ebi.ac.uk/metagenomics/api/v1/studies/${identifier}`,
@@ -182,6 +199,41 @@ const DEFINITIONS: readonly Definition[] = Object.freeze([
       dataLevel: "repository_processed", maxBytes: MAX_DATASET_BYTES,
       expectedMediaTypes: new Set(["application/zip", "application/octet-stream"]),
       accept: "application/zip", allowedHosts: new Set(["www.ebi.ac.uk"]), assetRole: "carrier",
+      zipMemberExtraction: {
+        extensions: [".csv", ".tsv", ".tab", ".xlsx"],
+        maxMembers: 24,
+        maxMemberBytes: 32 * 1024 * 1024,
+        role: "carrier",
+        xlsxToCsv: {
+          maxWorksheets: 12,
+          maxCsvBytes: 32 * 1024 * 1024,
+        },
+      },
+    }),
+  },
+  {
+    key: "europePmcPdf", source: "europepmc_pdf", database: "pubmed",
+    identifierName: "PMCID", normalize: (value) => value.toUpperCase(), validate: (value) => /^PMC[1-9][0-9]*$/.test(value),
+    plan: (identifier) => {
+      const url = new URL("https://europepmc.org/api/getPdf");
+      url.searchParams.set("pmcid", identifier);
+      return {
+        url: url.toString(), title: `Europe PMC full-text PDF ${identifier}`, filename: `${identifier}.pdf`,
+        dataLevel: "repository_processed", maxBytes: MAX_PDF_BYTES,
+        expectedMediaTypes: new Set(["application/pdf"]), accept: "application/pdf",
+        allowedHosts: new Set(["europepmc.org"]), assetRole: "carrier",
+      };
+    },
+  },
+  {
+    key: "europePmcFulltextXml", source: "europepmc_fulltext_xml", database: "pubmed",
+    identifierName: "PMCID", normalize: (value) => value.toUpperCase(), validate: (value) => /^PMC[1-9][0-9]*$/.test(value),
+    plan: (identifier) => ({
+      url: `https://www.ebi.ac.uk/europepmc/webservices/rest/${identifier}/fullTextXML`,
+      title: `Europe PMC full-text XML ${identifier}`, filename: `${identifier}.xml`,
+      dataLevel: "repository_processed", maxBytes: MAX_XML_BYTES,
+      expectedMediaTypes: new Set(["application/xml"]), accept: "application/xml,text/xml;q=0.9",
+      allowedHosts: new Set(["www.ebi.ac.uk"]), assetRole: "carrier",
     }),
   },
 ]);
@@ -212,6 +264,7 @@ export function createExtendedAcquisitionProviders(): readonly AcquisitionProvid
           accept: planned.accept,
           allowedHosts: planned.allowedHosts,
           assetRole: planned.assetRole,
+          zipMemberExtraction: planned.zipMemberExtraction,
           providerRevisionFacts: {
             canonical_accession: parameters.accession,
             provider_snapshot_identity: `${providerId}:official-endpoint`,

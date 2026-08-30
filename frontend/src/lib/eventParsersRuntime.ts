@@ -14,6 +14,7 @@ import {
   assertFinite,
   assertHex64,
   assertNonNegativeInt,
+  parseTaskExecutionContext,
   ERROR_CODES,
   STAGE_NAMES,
   SUBAGENT_ERROR_CODES,
@@ -98,8 +99,22 @@ export function parseRuntimeEventPayload(payloadObj: Record<string, unknown>, pa
     case "run_queued": {
       const input = assertString(Reflect.get(payloadObj, "input"), path + ".input");
       if (input.length === 0) throw new APIError(502, "Expected non-empty input at " + path + ".input");
-      return { type: "run_queued", request_id: assertString(Reflect.get(payloadObj, "request_id"), path + ".request_id"), input };
+      return {
+        type: "run_queued",
+        request_id: assertString(Reflect.get(payloadObj, "request_id"), path + ".request_id"),
+        input,
+        execution_context: assertOptionalNull(
+          Reflect.get(payloadObj, "execution_context"),
+          path + ".execution_context",
+          (v, p) => parseTaskExecutionContext(v, p),
+        ),
+      };
     }
+    case "run_steered":
+      return {
+        type: "run_steered",
+        input: assertRequiredString(Reflect.get(payloadObj, "input"), path + ".input"),
+      };
     case "run_started":
       return { type: "run_started" };
     case "run_finalizing":
@@ -180,7 +195,33 @@ export function parseRuntimeEventPayload(payloadObj: Record<string, unknown>, pa
       const covered_through_run_id = assertString(Reflect.get(payloadObj, "covered_through_run_id"), path + ".covered_through_run_id");
       const summary_digest = assertString(Reflect.get(payloadObj, "summary_digest"), path + ".summary_digest");
       if (!/^[0-9a-f]{64}$/.test(summary_digest)) throw new APIError(502, "Expected 64-char hex string at " + path + ".summary_digest");
-      return { type: "conversation_compacted", compaction_id, covered_through_run_id, summary_digest };
+      const reasonValue = Reflect.get(payloadObj, "reason");
+      const reason = reasonValue === undefined
+        ? undefined
+        : assertFinite(reasonValue, path + ".reason", ["manual", "threshold", "overflow"] as const);
+      const optionalTokenCount = (key: string): number | undefined => {
+        const value = Reflect.get(payloadObj, key);
+        return value === undefined
+          ? undefined
+          : assertNonNegativeInt(value, `${path}.${key}`);
+      };
+      const tokensBefore = optionalTokenCount("tokens_before");
+      const estimatedTokensAfter = optionalTokenCount("estimated_tokens_after");
+      const targetTokens = optionalTokenCount("target_tokens");
+      const summaryTokens = optionalTokenCount("summary_tokens");
+      return {
+        type: "conversation_compacted",
+        compaction_id,
+        covered_through_run_id,
+        summary_digest,
+        ...(reason === undefined ? {} : { reason }),
+        ...(tokensBefore === undefined ? {} : { tokens_before: tokensBefore }),
+        ...(estimatedTokensAfter === undefined
+          ? {}
+          : { estimated_tokens_after: estimatedTokensAfter }),
+        ...(targetTokens === undefined ? {} : { target_tokens: targetTokens }),
+        ...(summaryTokens === undefined ? {} : { summary_tokens: summaryTokens }),
+      };
     }
     case "conversation_compaction_started": {
       const compaction_id = assertString(Reflect.get(payloadObj, "compaction_id"), path + ".compaction_id");

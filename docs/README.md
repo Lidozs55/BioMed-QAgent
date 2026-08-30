@@ -27,6 +27,7 @@
 | 现行规范 | `ARCHITECTURE.md`、`architecture/`、`adr/` | 当前边界、契约、已接受决策 | 分支进度、临时任务 |
 | 操作指南 | 根 `README.md`、`DEVELOPER_QUICKSTART.md`、专题 quickstart | 可执行命令、故障排查 | 架构决策全文 |
 | 产品说明 | `FEATURES.md`、`reports/` | 能力与演示叙事 | 新的技术权威定义 |
+| 评测研究 | `reports/`（如 [`reports/2026-08-29-gold-qwen-direct-validation-study.md`](reports/2026-08-29-gold-qwen-direct-validation-study.md)） | 带日期的多轮评测结论、失败模式与修复映射 | 散装 run 日志（归 runs-log 与证据包） |
 | 当前计划 | `TODO.md`、`plans/` | 开放任务、验收条件、确有需要的活跃计划 | 已完成日志、长期架构解释 |
 | 问题追踪 | `ISSUES.md` | 可复现问题、影响、下一步 | 已关闭问题全文 |
 | 证据快照 | `audit/`、`evaluation/` | 带日期/commit 的审计和评估证据 | 无时间边界的“当前状态” |

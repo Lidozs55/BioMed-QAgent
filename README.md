@@ -91,7 +91,7 @@ uv sync
 pnpm dev
 ```
 
-在 `.env` 中至少配置可用的模型 API key。默认监听 `http://127.0.0.1:5173`；`pnpm dev` 是唯一正常开发入口，`dev:frontend-standalone` 只用于迁移/诊断。
+在 `.env` 中至少配置可用的模型 API key。Host 首选 `http://127.0.0.1:5173`；若端口已被占用，则由操作系统分配可用端口，实际地址以启动输出 `BIOMED_QAGENT_URL=...` 为准。`pnpm dev` 是唯一正常开发入口，`dev:frontend-standalone` 只用于迁移/诊断。
 
 生产构建与启动：
 
@@ -99,6 +99,8 @@ pnpm dev
 pnpm build
 pnpm start
 ```
+
+生产静态入口按当前 OS 用户禁止多开；已有实例时第二次 `pnpm start` 会提示已在运行并正常退出，不启动第二个 Host。
 
 详细安装、Windows smoke test 和故障排查见 [`docs/DEVELOPER_QUICKSTART.md`](docs/DEVELOPER_QUICKSTART.md)。
 
@@ -149,7 +151,7 @@ Agent workspace 与 Core publication 物理分离。API 只暴露经 manifest �
 - `/api/v1/tasks`：创建、读取、续跑和删除终态任务。
 - `/api/v1/tasks/{taskId}/events`：durable 事件重放。
 - `/api/v1/ws`：实时事件；断线后仍以 HTTP replay 补齐。
-- `/api/v1/publications`、`/api/v1/products`、`/api/v1/artifacts`：发布、产品评估和产物。
+- `/api/v1/publications`：发布与产品评估（ProductAssessment 在详情内，artifact 经 `/api/v1/publications/{id}/artifacts/{artifactId}` 下载）；任务产物另有 `/api/v1/tasks/{taskId}/artifacts`。
 - `/api/v1/settings`：模型与应用设置，密钥始终掩码返回。
 
 可执行调用示例、HIL 和终态处理见 [`docs/AGENT_API_QUICKSTART.md`](docs/AGENT_API_QUICKSTART.md)。

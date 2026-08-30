@@ -98,6 +98,8 @@ jobs:
           cp -r database staging/database
           cp package.json pnpm-workspace.yaml pnpm-lock.yaml pyproject.toml uv.lock staging/
           cp tsconfig.base.json staging/
+          mkdir -p staging/scripts
+          cp scripts/build-contracts-if-needed.mjs staging/scripts/
           cp -r packages staging/packages
           rm -rf staging/packages/contracts/node_modules
           cp -r server/src staging/server/src
@@ -171,25 +173,58 @@ jobs:
         working-directory: ./bundle
         run: uv run python database/bridge.py --self-test
 
-      - name: Start production host and probe health
+      - name: Verify port fallback and production single-instance behavior
         working-directory: ./bundle
         run: |
-          pnpm start > start.log 2>&1 &
-          pid=$!
-          ok=""
+          python -m http.server 5173 --bind 127.0.0.1 > port-holder.log 2>&1 &
+          blocker_pid=$!
+          host_pid=""
+          cleanup() {
+            if [ -n "$host_pid" ]; then kill "$host_pid" 2>/dev/null || true; fi
+            kill "$blocker_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          pnpm --filter @biomed/server run prestart
+          node --env-file-if-exists=.env server/dist/index.js --static > start.log 2>&1 &
+          host_pid=$!
+          base_url=""
           for i in $(seq 1 60); do
             sleep 2
-            if curl -sf http://127.0.0.1:5173/api/v1/health > health.json 2>/dev/null; then ok=1; break; fi
+            base_url="$(grep -m1 '^BIOMED_QAGENT_URL=' start.log 2>/dev/null | cut -d= -f2- || true)"
+            if [ -n "$base_url" ] && curl -sf "$base_url/api/v1/health" > health.json 2>/dev/null; then break; fi
           done
-          if [ -z "$ok" ]; then
+          if [ -z "$base_url" ] || ! curl -sf "$base_url/api/v1/health" > health.json 2>/dev/null; then
             echo "host did not become healthy; start.log:"
             tail -40 start.log
             exit 1
           fi
+          test "$base_url" != "http://127.0.0.1:5173"
           cat health.json
-          curl -sf -o /dev/null -w "GET / -> %{http_code}\n" http://127.0.0.1:5173/
-          curl -sf http://127.0.0.1:5173/api/v1/databases | python -c "import json,sys; d=json.load(sys.stdin); print('GET /api/v1/databases ->', len(d['databases']), 'entries')"
-          kill $pid 2>/dev/null || true
+          curl -sf -o /dev/null -w "GET / -> %{http_code}\n" "$base_url/"
+          curl -sf "$base_url/api/v1/databases" | python -c "import json,sys; d=json.load(sys.stdin); print('GET /api/v1/databases ->', len(d['databases']), 'entries')"
+
+          pnpm start > second-instance.log 2>&1
+          grep -q '^BioMed-QAgent is already running\.$' second-instance.log
+          curl -sf "$base_url/api/v1/health" > /dev/null
+
+          kill "$host_pid"
+          wait "$host_pid" || true
+          host_pid=""
+
+          node --env-file-if-exists=.env server/dist/index.js --static > restart.log 2>&1 &
+          host_pid=$!
+          restarted_url=""
+          for i in $(seq 1 60); do
+            sleep 2
+            restarted_url="$(grep -m1 '^BIOMED_QAGENT_URL=' restart.log 2>/dev/null | cut -d= -f2- || true)"
+            if [ -n "$restarted_url" ] && curl -sf "$restarted_url/api/v1/health" > /dev/null 2>&1; then break; fi
+          done
+          if [ -z "$restarted_url" ] || ! curl -sf "$restarted_url/api/v1/health" > /dev/null 2>&1; then
+            echo "host did not restart after releasing the instance lock; restart.log:"
+            tail -40 restart.log
+            exit 1
+          fi
 
   release:
     name: Create Release

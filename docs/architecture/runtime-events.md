@@ -20,6 +20,22 @@ WebSocket runtime；`<task_id>/events.jsonl` 是事实源，纯 reducer 重建 T
 重启时仍 active 的普通 Run 被确定性投影为 `run_interrupted`；存在未解决 durable
 HIL 的 `awaiting_user_input` Run 保持暂停，等待恢复协议继续。
 
+`GET /api/v1/tasks` 的列表路径使用按 stat 键失效的任务摘要缓存：以
+`state/task.json` 与 `events.jsonl` 的 mtime+size 组成失效键，未变化任务的
+TaskSummary 直接读取 `state/summary.json`（派生缓存，重启后仍有效）或内存副本，
+不解析事件日志；只有文件变化的任务（通常是运行中的那个）才重新 reduce 全部
+事件。修改 `task-reducer.ts` 的 TaskSummary 派生逻辑或 DTO 字段时，必须同步
+递增 `task-repository.ts` 的 `SUMMARY_CACHE_REDUCER_REVISION`，否则旧
+sidecar 会带着旧字段继续被当作有效缓存服务。
+
+历史页 cursor 语义是**排他续读**：`next_cursor` 恒等于本页最后一条历史项的
+`task_id`，下一页从该条之后切片；`active_items` 在每一页（含 cursor 页）都
+原样返回，reducer 按 task_id 幂等去重。未知 cursor（如任务在翻页间隙被删除）
+返回空页且 `next_cursor: null`，客户端据此停止翻页而不是循环或报错。前端
+侧边栏为**按需加载**模式：首拉 15 条，列表尾部展示"展开显示"按钮，点击后
+每次追加 10 条；`next_cursor` 耗尽或列表为空时按钮隐藏，滚动与内容不足一屏
+都不触发拉取。
+
 `RunStatus` 生命周期：
 
 ```text
@@ -52,7 +68,7 @@ Publication 分别证明产品完整性与正式发布。Snapshot 只是 `events
   Core-owned publication receipt 和 manifest artifact receipts 由 Host 原样投影为
   `publication_created` / `artifact_produced`，不通过扫描 workspace 或猜测文件名；
   reducer 按 publication/artifact ID 幂等去重。
-- Run 类：`run_queued` / `run_started` / `run_finalizing` / `run_completed` /
+- Run 类：`run_queued` / `run_steered` / `run_started` / `run_finalizing` / `run_completed` /
   `run_failed` / `run_cancel_requested` / `run_cancelled` / `run_interrupted`、
   `publication_created`、`assistant_delta` / `assistant_reasoning_delta`、
   `tool_started`、`conversation_compacted`；
@@ -69,7 +85,10 @@ Publication 分别证明产品完整性与正式发布。Snapshot 只是 `events
 
 `tool_started` 携带可选 `arguments` dict（深度截断 3、字符串 200 字符、列表 20
 项），`tool_completed.output` 截断到 4096 个字符，前端据此渲染"检索 PubMed · 查询:
-..."标签而无需回拉。
+..."标签而无需回拉。`PiEventAdapter` 对 Assistant / Reasoning 文本、工具参数、
+工具输出和取消原因中的路径保持原文，不以占位符替换 Windows、UNC 或 POSIX 路径；
+否则路径型工具结果会失去可解析性。凭据字段与 Bearer 值仍独立脱敏，长度、深度和
+列表数量边界保持不变。
 
 ### 14.3 双通道 WebSocket
 
@@ -124,7 +143,7 @@ Task 只允许一个 nonterminal Run，后续提交返回冲突。`awaiting_user
 `UserInputRequiredPayload.prompt_kind` 联合覆盖 `plan_confirmation` /
 `max_turns_reached` / `no_progress` / `data_correction` /
 `api_key_or_credential`。正式场景通过 `hil_request.review_type` 扩展，不继续增加
-顶层 prompt kind。前端 `UserInputDialog` 按 Run 与
+顶层 prompt kind。前端 `UserInputQuestionnaire` 按 Run 与
 submission attempt ID 隔离 A → B → A 切换中的旧 Promise settlement。
 
 ### 14.5 模型配置与 Run 自有生成设置
@@ -160,6 +179,10 @@ Phase 8 移除 Python 运行时后该逻辑不复存在，自动压缩一度缺�
   当整个会话已经小于最终目标时，Pi 会保持全部内容并拒绝压缩（对应前端的“没有可压缩
   内容”提示）；`keepRecentTokens ≤ window - reserveTokens` 始终成立，避免小窗口下
   预算互相挤占。
+- Pi 为每次 provider 调用计算的 `maxTokens` 是调用级安全上限；adapter 只能将它与产品
+  模型设置的 `max_tokens` 取较小值，不能用常规生成上限覆盖压缩摘要或剩余窗口上限。
+  例如 100k 窗口、85% 触发比例对应 15k reserve，Pi 的摘要调用上限约为 12k；即使
+  模型设置允许 32,768 tokens，本次压缩请求仍必须保持 12k 上限。
 - 每轮 `run()` 与手动压缩前，adapter 都会用 `resolveActiveConfig` 重新解析当前模型；
   若 provider/模型/上下文窗口/压缩比例发生变化，会先在 Pi `ModelRuntime` 重新注册
   新模型并调用 `session.setModel()`，再重算 `CompactionSettings`。这解决了中途切换
@@ -184,13 +207,32 @@ Phase 8 移除 Python 运行时后该逻辑不复存在，自动压缩一度缺�
   请求期间显示压缩中状态，toast 覆盖所有成功/空会话/失败反馈。
 - Pi 的 `compaction_end`（成功且带摘要）经 adapter 投影为 BioMed 的
   `context_compacted`，再由 `PiEventAdapter` 持久化为
-  `conversation_compacted`（`summary_digest` 为摘要的 sha256）；前端据此在时间线
-  记录压缩活动并复位 `compacting`。aborted 或缺失摘要的压缩完成事件不产生
-  durable 事件，避免伪记录。
+  `conversation_compacted`（`summary_digest` 为完整摘要的 sha256）。事件同时保存
+  `reason`、`tokens_before`、`estimated_tokens_after`、`target_tokens` 与
+  `summary_tokens`；摘要正文不进入 durable log。若 Pi 的估值没有下降，或仍高于本次
+  `target_tokens`，adapter 在记录诊断事件后 fail closed，以明确的
+  `Context compaction did not reduce the estimated context` 终止 Run，不再自动发送
+  continuation prompt。aborted 或缺失摘要的压缩完成事件不产生 durable 事件，避免
+  伪记录。
 - Assistant `message_end` 与 `compaction_end` 同步读取 Pi 的
   `session.getContextUsage()`，投影为 durable `context_usage`（`tokens` / `percent`
   在 Pi 暂无可信值时为 `null`）。前端优先显示该运行时值；只有尚未收到可信值时，
-  才按当前保留的对话项估算，并在 `conversation_compacted` 后从压缩边界重新估算。
+  才按当前保留的对话项估算。`conversation_compacted` 携带
+  `estimated_tokens_after` 时，前端直接采用该 Pi 估值；只有历史事件不带该字段时才从
+  压缩边界重新估算。百分比文本和无障碍标签允许显示超过 100% 的真实值，进度条视觉
+  宽度单独钳制到 100%。Gold supervisor 的证据脱敏明确放行上述数值 token 遥测键，
+  但 `access_token` / `api_key` 等凭据仍必须脱敏。
+- `context_usage` 可选携带 `usage`（本次调用的 provider 精确用量：
+  `input_tokens` / `output_tokens` / `cache_read_tokens` / `cache_write_tokens` /
+  `total_tokens`，provider 暴露时另有 `reasoning_tokens`；上游未报告时该字段缺失，
+  估算路径不变）。task reducer 将其按 Run 累计，在终态 `RunSummary.usage`
+  （含 `model_calls`）中输出，snapshot API 直接可见；gold supervisor 把
+  `run_usage` 写入 closure.json，供报告的"性能与资源消耗"与提示词优化对照使用。
+- 除压缩路径外，Run 入口另有独立预算 preflight：session 预算
+  `context_window - max_tokens - reserve <= 0` 时在首个 Pi 回合前直接落盘
+  `run_failed`（`error_code: "context_budget_exhausted"`），不启动注定超限的会话。
+  `cancelRun` 在超时（默认 10 秒）未获 agent session 确认时，强制落盘 durable
+  `run_cancelled` 终态并静音僵尸执行循环。
 - 模型以 `stopReason=length` 截断时不能把 `session.prompt()` 的正常返回等同于任务
   完成。Pi 边界在其自动压缩结束后发送不可见的 runtime continuation，沿用同一
   Run、Session 与工具状态继续执行；只有后续 assistant 以非 `length` 原因结束，
@@ -218,7 +260,11 @@ system prompt；该能力经 `server/src/agent/pi-adapter.ts` 边界承载，SDK
 即时生效；自定义颜色留空时保持主题默认。
 
 编辑器「跟进处理方式」提供两种策略：加入队列（当前回答结束后自动发送）与
-调整方向（取消当前回答，任务回到空闲后立即用新消息重新引导）；发送时按住
+调整方向（通过 Pi steer 在当前 active Run 内立即补充指令）。调整方向成功后，Host
+将原始用户输入持久化为 Task 级 sequence 的 `run_steered`；snapshot 据此把调整前后
+的 Assistant 文本拆成两个消息段，前端只消费 durable 事件，不在 HTTP 响应后自行
+推测时间线位置。Pi adapter 在调用 upstream steer 前先冲刷并等待消费此前积压的
+Assistant delta，保证用户已看到的旧文本 sequence 早于 `run_steered`。发送时按住
 Ctrl+⌘ 可对单条消息执行相反操作。半透明侧边栏开启时，在 body 上追加一层极淡
 渐变背景作衬托，配合 backdrop blur 呈现毛玻璃效果（桌面侧边栏为 fixed 定位，
 内容区并不在其后方，单纯降低透明度看不到效果）。
@@ -227,8 +273,10 @@ Ctrl+⌘ 可对单条消息执行相反操作。半透明侧边栏开启时，�
 
 ## 15. API 面
 
-统一前缀 `/api/v1`。下表为当前正式 API 面，路由由 TypeScript Host 原生处理
-（`server/src/settings/model-registry/routes.ts`、`server/src/product/product-api.ts`、
+统一前缀 `/api/v1`。下表为**核心 API 概览**（非逐 endpoint 穷举；覆盖任务、产物、
+模型设置、HIL 审批、权限解析与下载续传/取消），路由由 TypeScript Host 原生处理
+（`server/src/settings/model-registry/routes.ts`、`server/src/settings/hil-approval-settings.ts`、
+`server/src/settings/permission-settings.ts`、`server/src/product/product-api.ts`、
 `server/src/runtime/durable-agent-runtime.ts`），不存在 Python 路由层。
 
 | Method | Path | Purpose |
@@ -263,6 +311,7 @@ Ctrl+⌘ 可对单条消息执行相反操作。半透明侧边栏开启时，�
 | GET | `/tasks/{task_id}` | 返回权威 `TaskSnapshot` |
 | DELETE | `/tasks/{task_id}` | 删除 terminal Task 及其历史 |
 | POST | `/tasks/{task_id}/compact` | 压缩任务会话 |
+| POST | `/tasks/{task_id}/inject-context` | 在 active Run 内调整方向并持久化 `run_steered` |
 | POST | `/tasks/{task_id}/runs` | 为 idle Agent Task 排队下一轮 Run |
 | POST | `/tasks/{task_id}/runs/{run_id}/cancel` | 取消 queued / running Run |
 | POST | `/tasks/{task_id}/runs/{run_id}/resume` | 提交人在回路决策 |
@@ -280,6 +329,14 @@ Ctrl+⌘ 可对单条消息执行相反操作。半透明侧边栏开启时，�
 | GET | `/cache/export` | 全量缓存 ZIP 导出 |
 | GET | `/skill-iterations/context` | 列出 curated Skill 目标与可选的终态历史范围 |
 | POST | `/skill-iterations` | 调用当前模型生成并持久化个性化 Skill 审查候选 |
+| GET | `/settings/hil-approval` | 读取 HIL 三档审批设置（默认档位 + per-scope 档位） |
+| PUT | `/settings/hil-approval` | 更新 HIL 审批设置；发布边界 scope 拒绝非人工档 |
+| GET | `/settings/agent-permissions` | 读取 Agent 权限 preset 与路径规则 |
+| PUT | `/settings/agent-permissions` | 切换权限 preset（restricted 作废全部 pending）；`/persistent-exec`、`/rules`、`/temp-grants` 子路由管理执行开关、规则与临时授权 |
+| POST | `/tasks/{task_id}/runs/{run_id}/permissions/{request_id}` | 解析挂起的权限请求（approve / reject，可选 grant scope） |
+| POST | `/tasks/{task_id}/downloads/resume` | 恢复中断下载（携带原 run_id + tool_call_id 回放到原 Run 事件流，不新建 Run） |
+| POST | `/tasks/{task_id}/downloads/cancel` | 中止在途下载（不打终态事件，前端回退为“恢复下载”） |
+| GET | `/tasks/{task_id}/file` | 按相对路径读取任务文件文本 |
 | WS | `/ws` | durable events + realtime assistant stream |
 
 **API 不变量**：

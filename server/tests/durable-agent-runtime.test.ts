@@ -2,12 +2,24 @@ import { once } from "node:events";
 import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdir, mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import type { EventEnvelope } from "@biomed/contracts";
 import { packageDigest } from "../src/dataset/publish/manifest.js";
+import { canonicalDigest } from "../src/dataset/adapters/identity.js";
+import { computeHILEvidenceDigest } from "../src/dataset/contracts/hil-evidence.js";
+import {
+  completePublicationAcceptanceContinuation,
+} from "../src/dataset/dynamic-family/publication.js";
+import {
+  readPublicationAcceptanceContinuation,
+  savePublicationAcceptanceContinuation,
+  type PublicationAcceptanceContinuationV1,
+} from "../src/runtime/execution-continuation.js";
+import { DurableHILStore } from "../src/runtime/hil-store.js";
+import { DurableTaskRepository } from "../src/runtime/task-repository.js";
 import { afterEach, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
 
@@ -252,6 +264,71 @@ describe("durable formal Agent runtime", () => {
     await runtime.close();
   });
 
+  test("serves cursor-paginated task history pages instead of falling through", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "biomed-durable-cursor-"));
+    roots.push(root);
+    const adapter = new ControlledAdapter();
+    const runtime = await createDurableAgentRuntime({
+      tasksRoot: root,
+      adapter,
+      workspaceFactory: async () => ({ root, tools: [], dispose: async () => undefined }),
+    });
+    const server = createServer((request, response) => {
+      if (!runtime.handle(request, response)) response.writeHead(404).end();
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    servers.push(server);
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+    const completed: string[] = [];
+    for (const requestId of ["request-cursor-a", "request-cursor-b"]) {
+      const accepted = await (await fetch(`${base}/api/v1/tasks`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          request_id: requestId,
+          input: `cursor ${requestId}`,
+          databases: [],
+          mode: "agent",
+        }),
+      })).json() as { task_id: string; run_id: string };
+      await fetch(`${base}/api/v1/tasks/${accepted.task_id}/runs/${accepted.run_id}/cancel`, {
+        method: "POST",
+      });
+      completed.push(accepted.task_id);
+    }
+    // The cancel endpoint acknowledges before the terminal events land; poll
+    // the real list endpoint until both tasks left the active set.
+    await expect
+      .poll(async () => {
+        const page = (await (await fetch(`${base}/api/v1/tasks`)).json()) as {
+          active_items: unknown[];
+        };
+        return page.active_items.length;
+      }, { timeout: 15_000 })
+      .toBe(0);
+
+    const page1 = (await (await fetch(`${base}/api/v1/tasks?limit=1`)).json()) as {
+      active_items: unknown[];
+      items: { task_id: string }[];
+      next_cursor: string | null;
+    };
+    expect(page1).toMatchObject({ active_items: [], next_cursor: completed[1] });
+    expect(page1.items).toHaveLength(1);
+
+    const cursor = page1.next_cursor as string;
+    const page2Response = await fetch(`${base}/api/v1/tasks?limit=1&cursor=${cursor}`);
+    expect(page2Response.status).toBe(200);
+    const page2 = await page2Response.json();
+    expect(page2).toMatchObject({
+      active_items: [],
+      items: [{ task_id: completed[0] }],
+      next_cursor: null,
+    });
+    await runtime.close();
+  });
+
   test("does not execute an idempotent run admission retry twice", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "biomed-durable-run-retry-"));
     roots.push(root);
@@ -303,6 +380,119 @@ describe("durable formal Agent runtime", () => {
     expect(await retry.json()).toEqual(await admitted.json());
     expect(adapter.runs).toEqual(["initial", "next"]);
     adapter.gates[1]?.resolve();
+    await runtime.close();
+  });
+
+  test("rejects a run entry with an exhausted context budget before the first Pi turn", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "biomed-durable-budget-"));
+    roots.push(root);
+    const budget = { contextWindow: 100_000, maxTokens: 120_000, reserveTokens: 5_000 };
+    class ExhaustedBudgetAdapter extends ControlledAdapter {
+      override async createSession(config: BioMedSessionConfig): Promise<BioMedAgentSession> {
+        const session = await super.createSession(config);
+        return { ...session, getBudget: () => budget };
+      }
+    }
+    const adapter = new ExhaustedBudgetAdapter();
+    const runtime = await createDurableAgentRuntime({
+      tasksRoot: root,
+      adapter,
+      workspaceFactory: async () => ({ root, tools: [], dispose: async () => undefined }),
+    });
+    const server = createServer((request, response) => {
+      if (!runtime.handle(request, response)) response.writeHead(404).end();
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    servers.push(server);
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const accepted = await (await fetch(`${base}/api/v1/tasks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        request_id: "request-budget",
+        input: "formal task",
+        databases: [],
+        mode: "agent",
+      }),
+    })).json() as { task_id: string };
+    await expect.poll(async () => {
+      const snapshot = await runtime.repository.getSnapshot(accepted.task_id);
+      return snapshot?.runs.at(-1);
+    }).toMatchObject({ status: "failed", summary: { error_code: "context_budget_exhausted" } });
+    expect(adapter.runs).toEqual([]);
+
+    budget.maxTokens = 8_192;
+    const admitted = await fetch(`${base}/api/v1/tasks/${accepted.task_id}/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ request_id: "request-budget-ok", input: "next" }),
+    });
+    expect(admitted.status).toBe(202);
+    await expect.poll(() => adapter.runs.length).toBe(1);
+    adapter.gates[0]?.resolve();
+    await runtime.close();
+  });
+
+  test("forces a durable cancelled terminal when the session never acknowledges cancellation", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "biomed-durable-force-cancel-"));
+    roots.push(root);
+    let releaseCancel: () => void = () => undefined;
+    const cancelGate = new Promise<void>((done) => {
+      releaseCancel = done;
+    });
+    class UnacknowledgedCancelAdapter extends ControlledAdapter {
+      override async createSession(config: BioMedSessionConfig): Promise<BioMedAgentSession> {
+        const session = await super.createSession(config);
+        return { ...session, cancel: () => cancelGate };
+      }
+    }
+    const adapter = new UnacknowledgedCancelAdapter();
+    const runtime = await createDurableAgentRuntime({
+      tasksRoot: root,
+      adapter,
+      cancellationTimeoutMs: 50,
+      workspaceFactory: async () => ({ root, tools: [], dispose: async () => undefined }),
+    });
+    const server = createServer((request, response) => {
+      if (!runtime.handle(request, response)) response.writeHead(404).end();
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    servers.push(server);
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const accepted = await (await fetch(`${base}/api/v1/tasks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        request_id: "request-force-cancel",
+        input: "formal task",
+        databases: [],
+        mode: "agent",
+      }),
+    })).json() as { task_id: string; run_id: string };
+    await expect.poll(() => adapter.gates.length).toBe(1);
+
+    const cancelResponse = await fetch(
+      `${base}/api/v1/tasks/${accepted.task_id}/runs/${accepted.run_id}/cancel`,
+      { method: "POST" },
+    );
+    expect(cancelResponse.status).toBe(202);
+    await expect.poll(async () => {
+      const snapshot = await runtime.repository.getSnapshot(accepted.task_id);
+      return snapshot?.runs.at(-1);
+    }).toMatchObject({ status: "cancelled" });
+
+    const followUp = await fetch(`${base}/api/v1/tasks/${accepted.task_id}/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ request_id: "request-after-force-cancel", input: "next" }),
+    });
+    expect(followUp.status).toBe(202);
+    await expect.poll(() => adapter.runs.length).toBe(2);
+    // Wake the zombie execution and the follow-up turn so close() can settle.
+    for (const gate of adapter.gates) gate.resolve();
+    releaseCancel();
     await runtime.close();
   });
 
@@ -510,12 +700,36 @@ describe("durable formal Agent runtime", () => {
       body: JSON.stringify({ text: "focus on TP53", expected_run_id: accepted.run_id }),
     });
     expect(steered.status).toBe(202);
-    expect(await steered.json()).toMatchObject({
+    const steerResponse = await steered.json() as Record<string, unknown>;
+    expect(steerResponse).toMatchObject({
       status: "steered",
       task_id: accepted.task_id,
       run_id: accepted.run_id,
+      message_id: expect.stringMatching(/^message_event_/),
+      content: "focus on TP53",
     });
     expect(adapter.steering[0]).toContain("focus on TP53");
+
+    const steerEvents = await runtime.repository.listEvents(accepted.task_id, 0);
+    const steerEvent = steerEvents.find((event) => event.type === "run_steered");
+    expect(steerEvent).toMatchObject({
+      schema_version: "2.0",
+      run_id: accepted.run_id,
+      payload: { type: "run_steered", input: "focus on TP53" },
+    });
+    expect(steerResponse.message_id).toBe(`message_${steerEvent?.event_id}`);
+
+    const steeredSnapshot = await runtime.repository.getSnapshot(accepted.task_id);
+    const steeredMessage = steeredSnapshot?.messages.find(
+      (message) => message.message_id === steerResponse.message_id,
+    );
+    expect(steeredMessage).toMatchObject({
+      message_id: steerResponse.message_id,
+      run_id: accepted.run_id,
+      role: "user",
+      content: "focus on TP53",
+      sequence: steerEvent?.sequence,
+    });
 
     const corruptedSteer = await fetch(`${base}/api/v1/tasks/${accepted.task_id}/inject-context`, {
       method: "POST",
@@ -1206,5 +1420,377 @@ describe("durable formal Agent runtime", () => {
     // no terminal event.
     expect(resumeEvents.map((event) => event.type)).toEqual(["tool_started"]);
     await runtimeB.close();
+  });
+});
+
+describe("publication acceptance restart continuation (Gold6 T6)", () => {
+  const REQUIREMENT_ID = "build_pub_resume";
+  const PRIMARY_CSV = "record_id,value\nr1,1\nr2,2\n";
+  const REGISTERED_ASSET_ID = `asset_${"a".repeat(64)}`;
+
+  function sha256(text: string): string {
+    return createHash("sha256").update(text, "utf8").digest("hex");
+  }
+
+  function candidateFixture(taskId: string) {
+    const primarySha = sha256(PRIMARY_CSV);
+    return {
+      schema_version: "1.0",
+      candidate_id: "candidate_pub_resume",
+      task_id: taskId,
+      requirement_id: REQUIREMENT_ID,
+      dataset_family: "gene_expression",
+      row_granularity: "gene_sample_measurement",
+      tables: [{
+        definition: {
+          table_id: "primary",
+          schema_ref: "gene_expression.long.v1",
+          role: "primary",
+          required: true,
+          allow_empty: false,
+          primary_key: ["record_id"],
+          field_names: ["record_id", "value"],
+        },
+        data_ref: {
+          result_manifest_id: "result_pub_resume",
+          output_kind: "integrated_table",
+          output_file_index: 0,
+          output_file_sha256: primarySha,
+        },
+        row_count: 2,
+      }],
+      relations: [],
+      provenance_refs: [{
+        result_manifest_id: "result_pub_resume",
+        output_kind: "integrated_table",
+        output_file_index: 0,
+        output_file_sha256: primarySha,
+      }],
+      confidence_refs: [{
+        result_manifest_id: "result_pub_resume",
+        output_kind: "integrated_table",
+        output_file_index: 0,
+        output_file_sha256: primarySha,
+      }],
+      audit_refs: [],
+      registered_asset_ids: [REGISTERED_ASSET_ID],
+    } as const;
+  }
+
+  interface StagedPublication {
+    taskId: string;
+    runId: string;
+    requestId: string;
+    evidenceDigest: string;
+    continuation: PublicationAcceptanceContinuationV1;
+  }
+
+  /** Stage what publishDynamicFamily leaves on disk while the review pends. */
+  async function stagePendingPublication(root: string): Promise<StagedPublication> {
+    const repository = new DurableTaskRepository(root);
+    const accepted = await repository.createTask({
+      requestId: `request_pub_resume_${root.length}`,
+      input: "publish the dynamic family",
+      databases: [],
+      mode: "agent",
+    });
+    const taskId = accepted.task_id;
+    const runId = accepted.run_id;
+    await repository.appendRunEvent(taskId, runId, { type: "run_started" });
+
+    const outputDir = path.join(root, taskId, "dataset_runs", runId, REQUIREMENT_ID);
+    await mkdir(path.join(outputDir, "tables"), { recursive: true });
+    await writeFile(path.join(outputDir, "tables", "primary.csv"), PRIMARY_CSV, "utf8");
+    await writeFile(path.join(outputDir, "schema.json"), `${JSON.stringify({
+      schema_version: "1.0",
+      schema_id: "gene_expression.long.v1",
+    })}\n`, "utf8");
+    const assessment = {
+      schema_version: "1.0",
+      requirement_id: "dynamic_family_structural_b3.v1",
+      package_id: "candidate_pub_resume",
+      package_version: "1.0",
+      product_status: "incomplete",
+      scores: [],
+      missing_requirements: ["dynamic_family_hil_acceptance.v1"],
+      blockers: [{
+        requirement_id: "dynamic_family_hil_acceptance.v1",
+        dimension: "confidence",
+        code: "human_review_pending",
+        message: "review-status fields require genuine HIL acceptance evidence before publication",
+      }],
+    };
+    const assessmentText = JSON.stringify(assessment);
+    await writeFile(path.join(outputDir, "product_assessment.json"), assessmentText, "utf8");
+
+    const candidate = candidateFixture(taskId);
+    const primarySha = sha256(PRIMARY_CSV);
+    const reviewItems = [{
+      item_id: candidate.candidate_id,
+      summary: "Review the evidence-bound dynamic publication candidate",
+      subject: {
+        candidate_ids: [candidate.candidate_id],
+        table_ids: ["primary"],
+      },
+      evidence: { reviewed_snapshot: { candidate: candidate.candidate_id } },
+      proposed_value: { action: "publish" },
+      confidence_level: null,
+    }];
+    const requestInput = {
+      task_id: taskId,
+      run_id: runId,
+      requirement_id: REQUIREMENT_ID,
+      kind: "data_review" as const,
+      review_type: "publication_acceptance" as const,
+      blocking: true,
+      subject: { candidate_ids: [candidate.candidate_id], table_ids: ["primary"] },
+      review_items: reviewItems,
+      summary: "Accept the evidence-bound dynamic publication candidate",
+      evidence: { reviewed_snapshot: { candidate: candidate.candidate_id } },
+      policy_ref: "dynamic_family_hil_acceptance.v1",
+      idempotency_key: `dynamic-family-publication:${REQUIREMENT_ID}:candidate_pub_resume:${sha256(assessmentText)}`,
+    };
+    const store = new DurableHILStore(repository);
+    const request = await store.createRequest(requestInput);
+    await repository.appendRunEvent(taskId, runId, {
+      type: "user_input_required",
+      request_id: request.request_id,
+      prompt_kind: "data_correction",
+      summary: requestInput.summary,
+      expires_at: null,
+      fixture_exempt: false,
+      detail: {},
+      hil_request: request,
+    });
+
+    const b3Checks = [
+      { check_id: "fixture_check", scope: "fixture", passed: true, detail: "ok" },
+    ];
+    const continuation: PublicationAcceptanceContinuationV1 = {
+      schema_version: 1,
+      continuation_kind: "publication_acceptance",
+      task_id: taskId,
+      run_id: runId,
+      requirement_id: REQUIREMENT_ID,
+      candidate_digest: canonicalDigest(candidate),
+      candidate: candidate,
+      registered_input_asset_ids: [REGISTERED_ASSET_ID],
+      assessment_digest: sha256(assessmentText),
+      assessment_size_bytes: Buffer.byteLength(assessmentText, "utf8"),
+      expected_evidence_digest: computeHILEvidenceDigest({
+        kind: requestInput.kind,
+        review_type: requestInput.review_type,
+        subject: requestInput.subject,
+        review_items: reviewItems,
+        summary: requestInput.summary,
+        evidence: requestInput.evidence,
+        policy_ref: requestInput.policy_ref,
+      }),
+      requested_review_id: request.request_id,
+      submission_receipt_digest: sha256("submission-receipt"),
+      reviewed_snapshot: { candidate: candidate.candidate_id },
+      validation_profile_ref: "gene_expression.release.v1",
+      b3_checked_count: b3Checks.length,
+      b3_checks_sha256: canonicalDigest(b3Checks),
+      b3_checks: b3Checks,
+      provenance_base: {
+        schema_version: "1.0",
+        task_id: taskId,
+        requirement_id: REQUIREMENT_ID,
+        registered_asset_ids: [REGISTERED_ASSET_ID],
+        execution_kind: "transform",
+        operation_result_manifest_ids: ["result_pub_resume"],
+        sources: [{ asset_id: REGISTERED_ASSET_ID }],
+        source_receipts: [],
+        core_acquisition_provenance: [],
+      },
+      tables: [{
+        table_id: "primary",
+        schema_ref: "gene_expression.long.v1",
+        role: "primary",
+        relative_path: "tables/primary.csv",
+        row_count: 2,
+        sha256: primarySha,
+        size_bytes: Buffer.byteLength(PRIMARY_CSV, "utf8"),
+      }],
+      published_publication_id: null,
+      created_at: "2026-08-30T00:00:00.000Z",
+    };
+    await savePublicationAcceptanceContinuation(path.join(root, taskId), continuation);
+    return {
+      taskId,
+      runId,
+      requestId: request.request_id,
+      evidenceDigest: request.evidence_digest,
+      continuation,
+    };
+  }
+
+  test("publishes exactly once after a restart with a resolved acceptance review", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "durable-pub-continuation-"));
+    roots.push(root);
+    const staged = await stagePendingPublication(root);
+
+    // Host restart: the pending publication acceptance must survive the
+    // restart (no fail-closed run_failed) while it waits for the user.
+    const runtime = await createDurableAgentRuntime({
+      tasksRoot: root,
+      adapter: { async createSession(): Promise<never> { throw new Error("unused"); } },
+      workspaceFactory: async () => ({
+        root: path.join(root, "workspace"),
+        tools: [],
+        dispose: async () => undefined,
+      }),
+    });
+    const server = createServer((request, response) => {
+      if (!runtime.handle(request, response)) response.writeHead(404).end();
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    servers.push(server);
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+    const eventsBefore = await runtime.repository.listEvents(staged.taskId, 0);
+    expect(eventsBefore.some(
+      (event) =>
+        event.type === "run_failed" &&
+        event.payload.type === "run_failed" &&
+        event.payload.error.includes("Dynamic publication HIL cannot continue"),
+    )).toBe(false);
+    expect((await runtime.repository.getSnapshot(staged.taskId))?.runs[0]?.status).toBe(
+      "awaiting_user_input",
+    );
+
+    // The user resolves the SAME pending review after the restart.
+    const resumed = await fetch(`${base}/api/v1/tasks/${staged.taskId}/runs/${staged.runId}/resume`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        request_id: staged.requestId,
+        evidence_digest: staged.evidenceDigest,
+        decision: { action: "accept" },
+        reason: null,
+      }),
+    });
+    expect(resumed.status).toBe(200);
+
+    await expect.poll(async () => {
+      const status = (await runtime.repository.getSnapshot(staged.taskId))?.runs[0]?.status;
+      return status === "completed" || status === "failed" || status === "cancelled";
+    }).toBe(true);
+    const finalSnapshot = await runtime.repository.getSnapshot(staged.taskId);
+    const finalEvents = await runtime.repository.listEvents(staged.taskId, 0);
+    const lastFailure = [...finalEvents].reverse().find((event) => event.type === "run_failed");
+    expect(
+      finalSnapshot?.runs[0]?.status,
+      JSON.stringify(lastFailure ?? finalSnapshot?.runs[0]),
+    ).toBe("completed");
+
+    // Exactly ONE immutable publication, bound to the ORIGINAL candidate.
+    const publishDir = path.join(
+      root, staged.taskId, "dataset_runs", staged.runId, REQUIREMENT_ID, "publish",
+    );
+    const versions = (await readdir(publishDir)).filter((name) => !name.startsWith("."));
+    expect(versions).toHaveLength(1);
+    const versionDir = path.join(publishDir, versions[0] ?? "");
+    const publication = JSON.parse(
+      await readFile(path.join(versionDir, "publication.json"), "utf8"),
+    ) as { publication_id: string; manifest_sha256: string };
+    const manifest = JSON.parse(
+      await readFile(path.join(versionDir, "dataset_manifest.json"), "utf8"),
+    ) as {
+      sha256: string;
+      candidate_refs: Array<{
+        provenance_refs: string[];
+      }>;
+      artifacts: Array<{ role: string; sha256: string; relative_path: string }>;
+    };
+    expect(versions[0]).toBe(`${REQUIREMENT_ID}_${manifest.sha256.slice(0, 16)}`);
+    expect(publication.manifest_sha256).toBeTypeOf("string");
+    // The original candidate digest survives the restart: the promoted primary
+    // table is byte-identical and matches the candidate's bound digest.
+    const promotedPrimary = await readFile(path.join(versionDir, "tables", "primary.csv"), "utf8");
+    expect(promotedPrimary).toBe(PRIMARY_CSV);
+    expect(manifest.artifacts.find((artifact) => artifact.role === "primary_dataset")?.sha256).toBe(
+      sha256(PRIMARY_CSV),
+    );
+    expect(manifest.candidate_refs[0]?.provenance_refs[0]).toBe(
+      `result_pub_resume:integrated_table:0:${sha256(PRIMARY_CSV)}`,
+    );
+    // Review provenance is recorded and the run completed exactly once.
+    const events = await runtime.repository.listEvents(staged.taskId, 0);
+    expect(events.some((event) => event.type === "publication_created")).toBe(true);
+    expect(events.filter((event) => event.type === "user_input_resumed")).toHaveLength(1);
+    expect(events.some(
+      (event) => event.type === "run_failed" &&
+        event.payload.type === "run_failed" &&
+        event.payload.error.includes("Dynamic publication HIL cannot continue"),
+    )).toBe(false);
+
+    // The consumed continuation records the publication (resume-once fence).
+    const consumed = await readPublicationAcceptanceContinuation(
+      path.join(root, staged.taskId),
+      REQUIREMENT_ID,
+    );
+    expect(consumed?.published_publication_id).toBe(publication.publication_id);
+
+    // A second resolution attempt must not publish again.
+    const replay = await fetch(`${base}/api/v1/tasks/${staged.taskId}/runs/${staged.runId}/resume`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        request_id: staged.requestId,
+        evidence_digest: staged.evidenceDigest,
+        decision: { action: "reject" },
+        reason: null,
+      }),
+    });
+    expect([200, 409]).toContain(replay.status);
+    expect((await readdir(publishDir)).filter((name) => !name.startsWith("."))).toHaveLength(1);
+    await runtime.close();
+  });
+
+  test("rejects the publication continuation on staged drift or a different run", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "durable-pub-continuation-drift-"));
+    roots.push(root);
+    const staged = await stagePendingPublication(root);
+    const taskRoot = path.join(root, staged.taskId);
+    const outputDir = path.join(taskRoot, "dataset_runs", staged.runId, REQUIREMENT_ID);
+    const store = new DurableHILStore(new DurableTaskRepository(root));
+    const review = await store.resolveRequest(staged.taskId, staged.runId, {
+      request_id: staged.requestId,
+      evidence_digest: staged.evidenceDigest,
+      decision: { action: "accept" },
+      reason: null,
+    });
+
+    // Digest drift: the staged provisional assessment was edited after the
+    // candidate was persisted.
+    await writeFile(
+      path.join(outputDir, "product_assessment.json"),
+      JSON.stringify({ tampered: true }),
+      "utf8",
+    );
+    await expect(completePublicationAcceptanceContinuation({
+      continuation: staged.continuation,
+      taskRoot,
+      runId: staged.runId,
+      review,
+    })).rejects.toThrow(/drift/i);
+
+    // A different run must not drive this continuation.
+    const fresh = await stagePendingPublication(root);
+    const freshReview = await store.resolveRequest(fresh.taskId, fresh.runId, {
+      request_id: fresh.requestId,
+      evidence_digest: fresh.evidenceDigest,
+      decision: { action: "accept" },
+      reason: null,
+    });
+    await expect(completePublicationAcceptanceContinuation({
+      continuation: fresh.continuation,
+      taskRoot: path.join(root, fresh.taskId),
+      runId: "run_other",
+      review: freshReview,
+    })).rejects.toThrow(/run/i);
   });
 });

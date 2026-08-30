@@ -40,7 +40,14 @@ export interface ChartDataVlmToolDeps extends ToolServiceDeps {
   /** Agent-owned preparation root. Framework output remains authoritative. */
   workspaceRoot?: string;
   hooks?: ToolHooks;
+  /** Static config (fixtures); ignored when ``resolveVlmConfig`` is provided. */
   vlmConfig?: Partial<VlmConfig>;
+  /**
+   * Live resolver consulted immediately before each governed extraction
+   * request, so visual-model role changes apply without restart. The resolved
+   * API key stays in memory and never enters tool results or events.
+   */
+  resolveVlmConfig?: () => Promise<VlmConfig>;
   /** Injectable HTTP client (fixture tests; default is the public policy client). */
   httpClient?: PublicHttpClient;
   /** Warning surface (Python ``run_ctx.add_warning`` parity). */
@@ -236,13 +243,6 @@ export function createChartDataVlmTool(deps: ChartDataVlmToolDeps): BioMedAgentT
     onProgress: hooks.onProgress,
     onWarning: deps.onWarning,
   };
-  const tools = createVlmTools({
-    taskRoot: deps.taskRoot,
-    hooks: vlmHooks,
-    vlmConfig: deps.vlmConfig,
-    httpClient: deps.httpClient,
-    hilGate: deps.hilGate,
-  });
   let invocationTail = Promise.resolve();
   async function serializeInvocation<T>(operation: () => Promise<T>): Promise<T> {
     const previous = invocationTail;
@@ -263,8 +263,10 @@ export function createChartDataVlmTool(deps: ChartDataVlmToolDeps): BioMedAgentT
     label: "Extract chart data via Qwen-VL",
     description:
       "Extract structured chart data (chart_type, axes, data_points, legend) " +
-      "from a Core-registered paper figure image or PDF using the Qwen-VL visual model. " +
-      "source_asset_id is required for formal evidence registration; source_path keeps the legacy preparation-only mode. " +
+      "from a paper figure image or PDF using the configured visual model. " +
+      "source_path is exploratory preparation-only material; source_asset_id is " +
+      "the Core-registered input required for formal evidence registration. " +
+      "Formal paper chart promotion must use extract_registered_paper_chart_evidence. " +
       "Accepts PNG/JPG/WEBP/GIF images (e.g., from capture_web_page) or PDF " +
       "files (e.g., from download_supplementary). For PDFs, extracts embedded " +
       "images and runs VLM on each (up to 10 per file). Writes chart_data.csv " +
@@ -350,6 +352,17 @@ export function createChartDataVlmTool(deps: ChartDataVlmToolDeps): BioMedAgentT
       }
       let result: VlmResult;
       try {
+        // Resolve the visual-extraction config immediately before the governed
+        // request; failures surface as actionable tool errors.
+        const tools = createVlmTools({
+          taskRoot: deps.taskRoot,
+          hooks: vlmHooks,
+          vlmConfig: deps.resolveVlmConfig === undefined
+            ? deps.vlmConfig
+            : await deps.resolveVlmConfig(),
+          httpClient: deps.httpClient,
+          hilGate: deps.hilGate,
+        });
         result = await tools.extractChartDataVlm(
           sourcePath,
           hint,
@@ -385,6 +398,15 @@ export function createChartDataVlmTool(deps: ChartDataVlmToolDeps): BioMedAgentT
             ...(failure.details as object),
           }),
           details: failure.details,
+          isError: true,
+        };
+      }
+      // A processor-returned {status:"error"} result is a tool error too —
+      // never an unmarked success payload.
+      if (result.status === "error") {
+        return {
+          content: JSON.stringify(result, null, 2),
+          details: { status: "error", error: result.error },
           isError: true,
         };
       }

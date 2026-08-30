@@ -52,6 +52,7 @@ function message(
     runId?: string | null;
     role?: MessageRecord["role"];
     content?: string;
+    sequence?: number;
   } = {},
 ): MessageRecord {
   return {
@@ -62,6 +63,7 @@ function message(
     role: options.role ?? "user",
     content: options.content ?? `message ${ordinal}`,
     created_at: `2026-07-14T00:00:${String(ordinal).padStart(2, "0")}Z`,
+    ...(options.sequence === undefined ? {} : { sequence: options.sequence }),
   };
 }
 
@@ -2933,6 +2935,98 @@ describe("conversation items projection", () => {
     });
   });
 
+  it("keeps a durable direction adjustment between the assistant segments it interrupts", () => {
+    let state = setup();
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 1, {
+        type: "run_queued",
+        request_id: "req_1",
+        input: "original question",
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 2, {
+        type: "assistant_delta",
+        delta: "answer before steering",
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 3, {
+        type: "run_steered",
+        input: "focus on TP53",
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 4, {
+        type: "assistant_delta",
+        delta: "answer after steering",
+      }),
+    );
+
+    const visibleTimeline = () =>
+      state.tasksById.task_items.items
+        .filter(
+          (item) =>
+            item.kind === "user_message" || item.kind === "assistant_segment",
+        )
+        .map((item) => [item.kind, item.sequence, item.content]);
+
+    expect(visibleTimeline()).toEqual([
+      ["user_message", 1, "original question"],
+      ["assistant_segment", 2, "answer before steering"],
+      ["user_message", 3, "focus on TP53"],
+      ["assistant_segment", 4, "answer after steering"],
+    ]);
+
+    state = hydrateTaskSnapshot(state, {
+      task: {
+        ...summary("task_items", "running", 4),
+        active_run_id: "run_items",
+      },
+      runs: [runRecord("task_items", "run_items", "running")],
+      messages: [
+        message("task_items", 1, {
+          messageId: "message_event_task_items_1",
+          runId: "run_items",
+          content: "original question",
+          sequence: 1,
+        }),
+        message("task_items", 2, {
+          messageId: "message_before",
+          runId: "run_items",
+          role: "assistant",
+          content: "answer before steering",
+          sequence: 2,
+        }),
+        message("task_items", 3, {
+          messageId: "message_event_task_items_3",
+          runId: "run_items",
+          content: "focus on TP53",
+          sequence: 3,
+        }),
+        message("task_items", 4, {
+          messageId: "message_after",
+          runId: "run_items",
+          role: "assistant",
+          content: "answer after steering",
+          sequence: 4,
+        }),
+      ],
+      older_messages_cursor: null,
+    });
+
+    expect(visibleTimeline()).toEqual([
+      ["user_message", 1, "original question"],
+      ["assistant_segment", 2, "answer before steering"],
+      ["user_message", 3, "focus on TP53"],
+      ["assistant_segment", 4, "answer after steering"],
+    ]);
+  });
+
   it("creates a completed compaction timeline item for conversation_compacted", () => {
     let state = setup();
     state = reduceRuntimeEvent(
@@ -3017,7 +3111,7 @@ describe("conversation items projection", () => {
     });
   });
 
-  it("projects runtime context usage and resets it after compaction", () => {
+  it("projects runtime context usage and keeps Pi's post-compaction estimate", () => {
     let state = mergeTaskPage(
       createInitialRuntimeState(),
       page(summary("task_context")),
@@ -3047,11 +3141,14 @@ describe("conversation items projection", () => {
         compaction_id: "compaction-test-2",
         covered_through_run_id: "run_context",
         summary_digest: "digest",
+        tokens_before: 100_000,
+        estimated_tokens_after: 55_000,
+        target_tokens: 60_000,
       }),
     );
     expect(state.tasksById.task_context).toMatchObject({
-      contextTokensUsed: undefined,
-      contextTokensSource: undefined,
+      contextTokensUsed: 55_000,
+      contextTokensSource: "runtime",
       contextCompactionSequence: 2,
     });
   });

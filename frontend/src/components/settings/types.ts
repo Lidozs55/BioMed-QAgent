@@ -1,10 +1,19 @@
-import type { DatabaseItem, ModelSettings, SettingsAPIClient } from "@/hooks/useAPI";
+import type { DatabaseItem, ManagedModelInfo, ModelSettings, ProviderInfo, SettingsAPIClient } from "@/hooks/useAPI";
 
 export interface ModelSettingsSectionProps {
   api: SettingsAPIClient;
   settings: ModelSettings | null;
   highlightAnchor: string | null;
   onActivated: (settings: ModelSettings) => void;
+}
+
+/** Props for the explicit visual-extraction model role selector. */
+export interface VisionModelSelectorProps {
+  api: SettingsAPIClient;
+  settings: ModelSettings;
+  managedModels: ManagedModelInfo[];
+  providers: ProviderInfo[];
+  onSaved: (settings: ModelSettings) => void;
 }
 
 export interface DatabaseSettingsSectionProps {

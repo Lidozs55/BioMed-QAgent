@@ -82,7 +82,7 @@ describe("DurableApprovalGate", () => {
     expect(gate.hasPending(accepted.run_id)).toBe(false);
   });
 
-  it("rejects duplicate concurrent requests (single-flight per run)", async () => {
+  it("rejects duplicate concurrent requests for different operations (single-flight per run)", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "p5-approval-"));
     roots.push(root);
     const repository = new DurableTaskRepository(root);
@@ -98,6 +98,67 @@ describe("DurableApprovalGate", () => {
     await expect(gate.request("op_b")).rejects.toThrow("another blocking HIL request is already pending");
     gate.rejectPending(accepted.run_id, new Error("cancelled"));
     await firstRejection;
+  });
+
+  it("coalesces four concurrent extraction credential requests into one review", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "p5-approval-coalesce-"));
+    roots.push(root);
+    const repository = new DurableTaskRepository(root);
+    const accepted = await repository.createTask({
+      requestId: "req_coalesce",
+      input: "four parallel credentialed extractions",
+      databases: [],
+      mode: "agent",
+    });
+    const gate = new DurableApprovalGate(accepted.task_id, repository, accepted.run_id);
+
+    // Four concurrent governed extraction calls share one run and one
+    // credential operation scope: they must await ONE pending decision
+    // instead of conflict-failing each other.
+    const callers = [
+      gate.request("extract_chart_data_vlm"),
+      gate.request("extract_chart_data_vlm"),
+      gate.request("extract_chart_data_vlm"),
+      gate.request("extract_chart_data_vlm"),
+    ];
+
+    await expect.poll(async () => {
+      const events = await repository.listEvents(accepted.task_id, 0);
+      return events.filter((event) => event.type === "user_input_required").length;
+    }).toBe(1);
+
+    const events = await repository.listEvents(accepted.task_id, 0);
+    const required = events.find((event) => event.type === "user_input_required");
+    if (required?.payload.type !== "user_input_required" || required.payload.hil_request == null) {
+      throw new Error("missing durable HIL request");
+    }
+    // Exactly one durable credential request exists for the run.
+    expect(
+      events.filter(
+        (event) =>
+          event.payload.type === "user_input_required" &&
+          event.payload.hil_request?.kind === "permission",
+      ),
+    ).toHaveLength(1);
+
+    const store = new DurableHILStore(repository);
+    const review = await store.resolveRequest(accepted.task_id, accepted.run_id, {
+      request_id: required.payload.hil_request.request_id,
+      evidence_digest: required.payload.hil_request.evidence_digest,
+      decision: { action: "approve" },
+      reason: null,
+    });
+    expect(gate.resolvePending(accepted.run_id, review)).toBe(true);
+
+    // Every caller resolves with the SAME single decision; none observed the
+    // "another HIL request is already pending" conflict.
+    await expect(Promise.all(callers)).resolves.toEqual([
+      "approve",
+      "approve",
+      "approve",
+      "approve",
+    ]);
+    expect(gate.hasPending(accepted.run_id)).toBe(false);
   });
 
   it("aborts when the run signal fires", async () => {

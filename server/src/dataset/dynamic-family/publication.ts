@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { copyFile, mkdir, rm, stat, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { copyFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -16,6 +17,7 @@ import {
 } from "@biomed/contracts";
 
 import type { ValidationResult } from "../contracts/validation.js";
+import { parsePublicationCandidate } from "../contracts/index.js";
 
 import type { DynamicFamilyExecutionResult } from "./submission.js";
 import type { OperationResultManifest } from "@biomed/contracts";
@@ -28,6 +30,12 @@ import { packageDigest } from "../publish/manifest.js";
 import { promotePublication, type PublishResult } from "../publish/publisher.js";
 import { validateMultiTableCandidate } from "../validation/multitable.js";
 import { validateLiteratureExperimentChartProfile } from "../families/index.js";
+import {
+  readPublicationAcceptanceContinuation,
+  savePublicationAcceptanceContinuation,
+  type PublicationAcceptanceContinuationV1,
+} from "../../runtime/execution-continuation.js";
+import { deterministicHILRequestId } from "../../runtime/hil-store.js";
 import {
   PRODUCTION_B3_CONFIGURED_HEAP_BYTES,
   PRODUCTION_B3_CONFIGURED_TEMP_BYTES,
@@ -313,12 +321,65 @@ export async function publishDynamicFamily(
     ),
   );
   let hilAcceptance: Record<string, JsonValue> | null = null;
+  // Durable restart continuation for the acceptance review (HIL path only).
+  let savedContinuation: PublicationAcceptanceContinuationV1 | null = null;
+  let continuationReviewRequestId: string | null = null;
 
   await assertGenerationCurrent();
   await writeFile(path.join(outputDir, "schema.json"), `${JSON.stringify(input.execution.materialization.schemas, null, 2)}\n`, "utf8");
   const assessmentPath = path.join(outputDir, "product_assessment.json");
   await assertGenerationCurrent();
   await writeFile(assessmentPath, `${JSON.stringify(assessment, null, 2)}\n`, "utf8");
+  const acquisitionByAsset = new Map(
+    sourceAcquisitionProvenance.map((item) => [item.asset_id, item]),
+  );
+  const derivedByAsset = new Map(
+    (transformExecution?.sourceInputProvenance ?? [])
+      .filter((item): item is CoreDerivedAssetProvenance => "operation_kind" in item)
+      .map((item) => [item.asset_id, item]),
+  );
+  const inputReceiptByAsset = new Map(
+    (transformExecution?.receipt.input_asset_receipts ?? [])
+      .map((item) => [item.asset_id, item]),
+  );
+  const provenanceSources = candidate.registered_asset_ids.map((assetId) => {
+    const acquisition = acquisitionByAsset.get(assetId);
+    const derived = derivedByAsset.get(assetId);
+    const receipt = inputReceiptByAsset.get(assetId);
+    return {
+      asset_id: assetId,
+      locator_ref:
+        acquisition?.canonical_accession
+        ?? acquisition?.provider_id
+        ?? derived?.operation_result_id
+        ?? assetId,
+      sha256: receipt?.sha256 ?? assetId.slice("asset_".length),
+      size_bytes: receipt?.size_bytes ?? null,
+    };
+  });
+  // Built before the acceptance review so the durable publication
+  // continuation can carry the exact provenance base; ``hil_acceptance`` is
+  // appended after the review (or on its post-restart resume).
+  const provenanceDocument = JSON.parse(JSON.stringify({
+    schema_version: "1.0",
+    task_id: input.taskId,
+    requirement_id: input.requirementId,
+    registered_asset_ids: candidate.registered_asset_ids,
+    execution_kind: browserExecution === null ? "transform" : "browser",
+    ...(browserExecution === null ? {
+      transform_digest: transformExecution!.receipt.transform_digest,
+      implementation_digest: transformExecution!.receipt.host_implementation_digest,
+      input_asset_receipts: transformExecution!.receipt.input_asset_receipts,
+    } : {}),
+    operation_result_manifest_ids: integratedResults.map((result) => result.result_manifest_id),
+    sources: provenanceSources,
+    source_receipts: [],
+    core_acquisition_provenance: sourceAcquisitionProvenance,
+    ...(browserExecution === null ? {
+      core_input_provenance: transformExecution!.sourceInputProvenance,
+    } : {}),
+    ...(browserExecution === null ? {} : { browser_evidence_acceptance: browserExecution.browserEvidenceAcceptance }),
+  })) as Record<string, unknown>;
 
   if (failed.length === 0 && requiresHilAcceptance && browserExecution === null) {
     if (input.hilGate === undefined || input.hilGate === null) {
@@ -398,10 +459,69 @@ export async function publishDynamicFamily(
       policy_ref: "dynamic_family_hil_acceptance.v1" as const,
       idempotency_key: `dynamic-family-publication:${input.requirementId}:${candidate.candidate_id}:${provisionalAssessment.sha256}`,
     };
-    await assertGenerationCurrent();
     const expectedEvidenceDigest = computeHILEvidenceDigest(request);
+    // Persist the deterministic publication continuation BEFORE the blocking
+    // acceptance request exists, so an Application Host restart while the
+    // review is pending can still complete the publication exactly once.
+    const requestedReviewId = deterministicHILRequestId({
+      task_id: input.taskId,
+      run_id: input.runId,
+      policy_ref: request.policy_ref,
+      idempotency_key: request.idempotency_key,
+      review: request,
+    });
+    const submissionReceipt = toJsonValue({
+      kind: "transform",
+      generation: transformExecution!.receipt.generation,
+      transform_digest: transformExecution!.receipt.transform_digest,
+      host_implementation_digest: transformExecution!.receipt.host_implementation_digest,
+    });
+    const savedContinuationValue: PublicationAcceptanceContinuationV1 = {
+      schema_version: 1,
+      continuation_kind: "publication_acceptance",
+      task_id: input.taskId,
+      run_id: input.runId,
+      requirement_id: input.requirementId,
+      candidate_digest: canonicalDigest(candidate),
+      candidate: toJsonValue(candidate),
+      registered_input_asset_ids: [...candidate.registered_asset_ids],
+      assessment_digest: provisionalAssessment.sha256,
+      assessment_size_bytes: provisionalAssessment.size_bytes,
+      expected_evidence_digest: expectedEvidenceDigest,
+      requested_review_id: requestedReviewId,
+      submission_receipt_digest: canonicalDigest(submissionReceipt),
+      reviewed_snapshot: reviewedSnapshot,
+      validation_profile_ref: input.validationProfileRef,
+      b3_checked_count: b3.checks.length,
+      b3_checks_sha256: canonicalDigest(b3.checks),
+      b3_checks: toArray(toJsonValue(b3.checks)),
+      provenance_base: provenanceDocument,
+      tables: tables.map((table) => ({
+        table_id: table.table_id,
+        schema_ref: table.schema_ref,
+        role: table.role,
+        relative_path: table.relative_path,
+        row_count: table.row_count,
+        sha256: table.sha256,
+        size_bytes: table.size_bytes,
+      })),
+      published_publication_id: null,
+      created_at: new Date().toISOString(),
+    };
+    savedContinuation = savedContinuationValue;
+    await savePublicationAcceptanceContinuation(input.taskRoot, savedContinuationValue);
+    await assertGenerationCurrent();
     const review = await input.hilGate.requestHIL(request, input.signal);
     await assertGenerationCurrent();
+    if (review.request_id !== requestedReviewId) {
+      // The store replayed onto a fresh request generation: re-bind the
+      // continuation to the request id the durable review actually carries.
+      continuationReviewRequestId = review.request_id;
+      await savePublicationAcceptanceContinuation(input.taskRoot, {
+        ...savedContinuationValue,
+        requested_review_id: review.request_id,
+      });
+    }
     if (review.evidence_digest !== expectedEvidenceDigest) {
       throw new Error("dynamic publication review evidence digest does not match the reviewed candidate");
     }
@@ -437,56 +557,14 @@ export async function publishDynamicFamily(
     await writeFile(assessmentPath, `${JSON.stringify(assessment, null, 2)}\n`, "utf8");
   }
 
-  const acquisitionByAsset = new Map(
-    sourceAcquisitionProvenance.map((item) => [item.asset_id, item]),
-  );
-  const derivedByAsset = new Map(
-    (transformExecution?.sourceInputProvenance ?? [])
-      .filter((item): item is CoreDerivedAssetProvenance => "operation_kind" in item)
-      .map((item) => [item.asset_id, item]),
-  );
-  const inputReceiptByAsset = new Map(
-    (transformExecution?.receipt.input_asset_receipts ?? [])
-      .map((item) => [item.asset_id, item]),
-  );
-  const provenanceSources = candidate.registered_asset_ids.map((assetId) => {
-    const acquisition = acquisitionByAsset.get(assetId);
-    const derived = derivedByAsset.get(assetId);
-    const receipt = inputReceiptByAsset.get(assetId);
-    return {
-      asset_id: assetId,
-      locator_ref:
-        acquisition?.canonical_accession
-        ?? acquisition?.provider_id
-        ?? derived?.operation_result_id
-        ?? assetId,
-      sha256: receipt?.sha256 ?? assetId.slice("asset_".length),
-      size_bytes: receipt?.size_bytes ?? null,
-    };
-  });
-
   await assertGenerationCurrent();
-  await writeFile(path.join(outputDir, "provenance.json"), `${JSON.stringify({
-    schema_version: "1.0",
-    task_id: input.taskId,
-    requirement_id: input.requirementId,
-    registered_asset_ids: candidate.registered_asset_ids,
-    execution_kind: browserExecution === null ? "transform" : "browser",
-    ...(browserExecution === null ? {
-      transform_digest: transformExecution!.receipt.transform_digest,
-      implementation_digest: transformExecution!.receipt.host_implementation_digest,
-      input_asset_receipts: transformExecution!.receipt.input_asset_receipts,
-    } : {}),
-    operation_result_manifest_ids: integratedResults.map((result) => result.result_manifest_id),
-    sources: provenanceSources,
-    source_receipts: [],
-    core_acquisition_provenance: sourceAcquisitionProvenance,
-    ...(browserExecution === null ? {
-      core_input_provenance: transformExecution!.sourceInputProvenance,
-    } : {}),
-    ...(hilAcceptance === null ? {} : { hil_acceptance: hilAcceptance }),
-    ...(browserExecution === null ? {} : { browser_evidence_acceptance: browserExecution.browserEvidenceAcceptance }),
-  }, null, 2)}\n`, "utf8");
+  await writeFile(path.join(outputDir, "provenance.json"), `${JSON.stringify(
+    hilAcceptance === null
+      ? provenanceDocument
+      : { ...provenanceDocument, hil_acceptance: hilAcceptance },
+    null,
+    2,
+  )}\n`, "utf8");
 
   const artifacts: ManifestArtifactEntry[] = [];
   for (const table of candidate.tables) {
@@ -518,7 +596,7 @@ export async function publishDynamicFamily(
   }, null, 2)}\n`, "utf8");
   if (validation.status !== "passed") {
     const reasons = [
-      ...failed.map((check) => `${check.scope}:${check.check_id}`),
+      ...failed.map((check) => `${check.scope}:${check.check_id}${check.detail ? ` (${check.detail})` : ""}`),
       ...assessment.blockers.map((blocker) => `${blocker.requirement_id}:${blocker.code}`),
     ];
     throw new Error(`dynamic multi-table product is not publishable: ${reasons.join(", ")}`);
@@ -576,10 +654,24 @@ export async function publishDynamicFamily(
       return true;
     },
   });
+  // The in-process acceptance path completed: consume the continuation so a
+  // later restart can never resume an already-promoted publication.
+  if (savedContinuation !== null) {
+    await savePublicationAcceptanceContinuation(input.taskRoot, {
+      ...savedContinuation,
+      requested_review_id: continuationReviewRequestId ?? savedContinuation.requested_review_id,
+      published_publication_id: publication.publication.publication_id,
+    });
+  }
   return { candidate, manifest, validation, assessment, publication };
 }
 
-function structuralAssessment(
+/**
+ * Structural (B3-passed, acceptance-applied) product assessment. Shared with
+ * the post-restart publication continuation resume so the resumed assessment
+ * is byte-identical to the in-process one.
+ */
+export function structuralAssessment(
   candidate: PublicationCandidate,
   productRequirements: CoreProductTopologyRequirements,
   passed: boolean,
@@ -643,12 +735,17 @@ function toJsonValue(value: unknown): JsonValue {
   return JSON.parse(JSON.stringify(value)) as JsonValue;
 }
 
+function toArray(value: JsonValue): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
 async function fileReceipt(absolutePath: string): Promise<{ sha256: string; size_bytes: number }> {
   const info = await stat(absolutePath);
   return { sha256: await sha256FileStream(absolutePath), size_bytes: info.size };
 }
 
-async function artifact(
+/** Receipt for one staged build artifact (relative to ``outputDir``). */
+export async function artifact(
   root: string,
   relativePath: string,
   role: ManifestArtifactEntry["role"],
@@ -666,4 +763,260 @@ async function artifact(
     size_bytes: info.size,
     sha256,
   };
+}
+
+export interface CompletePublicationAcceptanceInput {
+  continuation: PublicationAcceptanceContinuationV1;
+  taskRoot: string;
+  /** The run the caller believes owns this continuation (drift fence). */
+  runId: string;
+  /** The resolved ``publication_acceptance`` review record. */
+  review: HumanReviewRecord;
+  publishedAt?: string;
+  signal?: AbortSignal | null;
+}
+
+export interface CompletedPublicationAcceptance {
+  publication: PublishResult["publication"];
+  manifest: DatasetManifestV2;
+  versionDir: string;
+}
+
+/**
+ * Deterministically complete a dynamic-family publication whose
+ * ``publication_acceptance`` review was resolved (possibly after an
+ * Application Host restart). Re-verifies every persisted binding — run
+ * identity, candidate digest, staged assessment/table receipts, requested
+ * review id, evidence digest — rebuilds the accepted assessment, provenance,
+ * validation report, and manifest from the staged bytes, and promotes exactly
+ * once (an existing immutable version is returned instead of re-promoted, and
+ * the continuation is consumed).
+ */
+export async function completePublicationAcceptanceContinuation(
+  input: CompletePublicationAcceptanceInput,
+): Promise<CompletedPublicationAcceptance> {
+  const record = input.continuation;
+  if (record.run_id !== input.runId) {
+    throw new Error(
+      `publication continuation belongs to run ${record.run_id}, not ${input.runId}`,
+    );
+  }
+  if (record.published_publication_id !== null) {
+    throw new Error(
+      `publication continuation was already consumed by ${record.published_publication_id}`,
+    );
+  }
+  const candidate = parsePublicationCandidate(record.candidate);
+  if (canonicalDigest(candidate) !== record.candidate_digest) {
+    throw new Error("publication continuation candidate digest drift");
+  }
+  const outputDir = path.join(
+    input.taskRoot, "dataset_runs", record.run_id, record.requirement_id,
+  );
+  const assessmentReceipt = await fileReceipt(
+    path.join(outputDir, "product_assessment.json"),
+  );
+  if (
+    assessmentReceipt.sha256 !== record.assessment_digest ||
+    assessmentReceipt.size_bytes !== record.assessment_size_bytes
+  ) {
+    throw new Error("publication continuation staged assessment drift");
+  }
+  for (const table of record.tables) {
+    const receipt = await fileReceipt(
+      path.join(outputDir, ...table.relative_path.split("/")),
+    );
+    if (receipt.sha256 !== table.sha256 || receipt.size_bytes !== table.size_bytes) {
+      throw new Error(`publication continuation staged table '${table.table_id}' drift`);
+    }
+  }
+  if (input.review.request_id !== record.requested_review_id) {
+    throw new Error(
+      "publication continuation was resolved by a different review request",
+    );
+  }
+  if (input.review.evidence_digest !== record.expected_evidence_digest) {
+    throw new Error(
+      "publication continuation review evidence digest does not match the reviewed candidate",
+    );
+  }
+  if (input.review.decision.action !== "accept") {
+    throw new Error(
+      `publication continuation review was not accepted: ${input.review.decision.action}`,
+    );
+  }
+
+  const reviewEvidence = {
+    policy_ref: "dynamic_family_hil_acceptance.v1",
+    request_id: input.review.request_id,
+    review_id: input.review.review_id,
+    evidence_digest: input.review.evidence_digest,
+    decision: "accept" as const,
+    reviewer: input.review.reviewer,
+    reviewed_at: input.review.reviewed_at,
+    reason: input.review.reason,
+  };
+  const productRequirements: CoreProductTopologyRequirements = {
+    schema_version: "1.0",
+    profile_ref: record.validation_profile_ref,
+    dataset_family: candidate.dataset_family,
+    tables: candidate.tables.map((table) => ({
+      table_id: table.definition.table_id,
+      role: table.definition.role,
+      schema_ref: table.definition.schema_ref,
+      min_rows: table.definition.allow_empty ? 0 : 1,
+    })),
+    relations: candidate.relations.map((relation) => relation.relation_id),
+  };
+  const assessment = parseProductAssessment({
+    ...structuralAssessment(candidate, productRequirements, true, true, true),
+    human_review_evidence: [reviewEvidence],
+  });
+  await writeFile(
+    path.join(outputDir, "product_assessment.json"),
+    `${JSON.stringify(assessment, null, 2)}\n`,
+    "utf8",
+  );
+  await writeFile(
+    path.join(outputDir, "provenance.json"),
+    `${JSON.stringify({
+      ...record.provenance_base,
+      hil_acceptance: toJsonValue({
+        ...reviewEvidence,
+        reviewed_snapshot: record.reviewed_snapshot,
+      }),
+    }, null, 2)}\n`,
+    "utf8",
+  );
+
+  const artifacts: ManifestArtifactEntry[] = [];
+  for (const table of record.tables) {
+    artifacts.push(await artifact(
+      outputDir,
+      table.relative_path,
+      table.role === "primary" ? "primary_dataset" : "supporting_dataset",
+      "text/csv",
+    ));
+  }
+  artifacts.push(await artifact(outputDir, "schema.json", "schema", "application/json"));
+  artifacts.push(await artifact(outputDir, "provenance.json", "provenance", "application/json"));
+  artifacts.push(await artifact(outputDir, "product_assessment.json", "audit_report", "application/json"));
+  const packageSha = packageDigest(artifacts);
+  const validation: ValidationResult = {
+    schema_version: "1.0",
+    manifest_digest: packageSha,
+    profile_ref: record.validation_profile_ref,
+    status: "passed",
+    checked_count: record.b3_checked_count,
+    failed_count: 0,
+    report_path: "validation_report.json",
+  };
+  await writeFile(
+    path.join(outputDir, "validation_report.json"),
+    `${JSON.stringify({
+      profile_ref: validation.profile_ref,
+      checks: record.b3_checks,
+      product_assessment: assessment,
+    }, null, 2)}\n`,
+    "utf8",
+  );
+  const primary = candidate.tables.find((table) => table.definition.role === "primary");
+  if (primary === undefined) throw new Error("dynamic product has no primary table");
+  const manifest: DatasetManifestV2 = {
+    schema_version: "2.0",
+    manifest_id: `manifest_${packageSha.slice(0, 16)}`,
+    task_id: candidate.task_id,
+    requirement_id: candidate.requirement_id,
+    dataset_family: candidate.dataset_family,
+    row_granularity: candidate.row_granularity,
+    schema_ref: primary.definition.schema_ref,
+    primary_key: [...primary.definition.primary_key],
+    row_count: primary.row_count,
+    sha256: packageSha,
+    artifacts,
+    source_summary: Object.fromEntries(
+      candidate.registered_asset_ids.map((assetId) => [assetId, { asset_id: assetId }]),
+    ),
+    validation_summary: {
+      profile_ref: validation.profile_ref,
+      status: validation.status,
+      checked_count: validation.checked_count,
+      failed_count: validation.failed_count,
+      report_path: validation.report_path,
+    },
+    confidence_summary: {
+      source: "dynamic_string_preserving_b3",
+      product_status: assessment.product_status,
+      product_scores: JSON.parse(JSON.stringify(assessment.scores)) as JsonValue,
+      product_blockers: JSON.parse(JSON.stringify(assessment.blockers)) as JsonValue,
+    },
+    provenance_summary: {
+      source_count: candidate.registered_asset_ids.length,
+      coverage: { traced_rows: primary.row_count, untraced_rows: 0, coverage_ratio: 1 },
+    },
+    tables: candidate.tables.map((table) => table.definition),
+    relations: candidate.relations,
+    candidate_refs: [candidateReference(candidate)],
+  };
+  await writeFile(
+    path.join(outputDir, "dataset_manifest.json"),
+    `${JSON.stringify(manifest)}\n`,
+    "utf8",
+  );
+
+  const consume = async (publicationId: string): Promise<void> => {
+    await savePublicationAcceptanceContinuation(input.taskRoot, {
+      ...record,
+      published_publication_id: publicationId,
+    });
+  };
+  // Exactly-once fence: a previous attempt may have promoted but crashed
+  // before consuming the continuation — return the existing immutable
+  // version instead of promoting twice.
+  const existingVersionDir = path.join(
+    outputDir,
+    "publish",
+    `${manifest.requirement_id}_${manifest.sha256.slice(0, 16)}`,
+  );
+  if (existsSync(existingVersionDir)) {
+    const existing = JSON.parse(
+      await readFile(path.join(existingVersionDir, "publication.json"), "utf8"),
+    ) as PublishResult["publication"];
+    await consume(existing.publication_id);
+    return {
+      publication: existing,
+      manifest,
+      versionDir: `publish/${manifest.requirement_id}_${manifest.sha256.slice(0, 16)}`,
+    };
+  }
+  const publication = await promotePublication({
+    outputDir,
+    manifest,
+    validation,
+    publicationCandidate: candidate,
+    expectedSourceAssetIds: new Set(record.registered_input_asset_ids),
+    publishedAt: input.publishedAt,
+    signal: input.signal ?? null,
+  });
+  await consume(publication.publication.publication_id);
+  return {
+    publication: publication.publication,
+    manifest,
+    versionDir: publication.versionDir,
+  };
+}
+
+/**
+ * Load the publication continuation for a requirement, rejecting a task or
+ * requirement identity mismatch (returns null when no record exists).
+ */
+export async function loadBoundPublicationAcceptanceContinuation(
+  taskRoot: string,
+  taskId: string,
+  requirementId: string,
+): Promise<PublicationAcceptanceContinuationV1 | null> {
+  const record = await readPublicationAcceptanceContinuation(taskRoot, requirementId);
+  if (record === null) return null;
+  if (record.task_id !== taskId || record.requirement_id !== requirementId) return null;
+  return record;
 }

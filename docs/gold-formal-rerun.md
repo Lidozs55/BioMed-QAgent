@@ -44,11 +44,12 @@ used to exercise/restrict event pages.
    reuses that run and cursor; it never posts a second run.
 5. Permission requests are classified without executing anything. Only a
    canonical `fs.read` in the current task workspace (excluding secret-named
-   files) and the fixed diagnostic command strings (`node --version`,
-   `node -v`, `python --version`, `python3 --version`, `git --version`) with a
-   workspace cwd are automatically allowed, once. Network, shell fragments,
-   writes/edits, secrets, external paths, and unknown/越界 requests stop with
-   exit code `20`.
+   files) and the argument-free, workspace-local fixed parser form
+   `node parse*.js` / `node parse*.mjs` are automatically allowed, once.
+   Recognized shell-wrapper or subprocess-network bypasses are automatically
+   denied once so the same run can recover through governed tools. Malformed,
+   secret, external, unknown, and other out-of-policy requests remain
+   fail-closed and stop with exit code `20`.
 6. Every `kind=data_review` request stops with exit code `21` and writes
    `HIL-STOP.json`. `browser_evidence_acceptance` and
    `publication_acceptance` are treated as data-review stops regardless of
@@ -78,9 +79,61 @@ The closure records two different digests:
 - `package_digest` is recomputed from the registered non-manifest artifact
   `(relative_path, sha256)` pairs using the Dataset Core manifest algorithm.
 
+The closure also records `run_usage`: the reducer-aggregated provider token
+totals for the supervised run (`model_calls` / `input_tokens` /
+`output_tokens` / cache splits, from durable `context_usage.usage`), used for
+per-run cost reporting and prompt-optimization comparisons.
+
 A file-size/hash mismatch or package-digest mismatch exits with code `31`; no
 successful closure is emitted. Other exit codes are stable and specific:
 `10` health, `11` task, `12` active run, `30` terminal failure, `32` timeout,
 and `33` protocol/HTTP validation failure. Standard output is a minimal closure
 identity only; prompts, response bodies, URLs containing credentials, and
 permission arguments are not printed.
+
+## Single-instance requirement
+
+The tasks root (`data/output/tasks/`) admits exactly **one** live Application
+Host process at a time. Every Host startup runs `recoverActiveRuns` over the
+whole directory and marks every active run that is not in its own memory as
+`run_interrupted`; two live instances therefore kill each other's runs, and
+concurrent event appends can corrupt `events.jsonl` badly enough that the next
+Host startup fails on a sequence-gap parse error. Before starting a Host or
+attaching a supervisor, confirm no other instance (dev or `--static`) is
+already serving the same data directory, and never run a second instance "just
+to be safe" — a restart sweep is guaranteed. See docs/ISSUES.md §运行环境 for
+the 2026-08-27 incident and repair notes.
+
+Since `ac2ffaba` the runtime enforces this at startup: every Host claims an
+exclusive `.host-lease.json` on the tasks root, and a second **live** instance
+fails fast with `HostLeaseHeldError` instead of silently interrupting the
+first host's runs. A lease left by a dead process is taken over. Hosts built
+before this change write no lease, so during upgrades still verify manually
+that no old instance is running.
+
+## Test-prompt methodology (mandatory since 2026-08-29)
+
+Gold reruns evaluate the product, not prompt engineering. Every run must:
+
+1. **Send the real question directly.** Create the task via
+   `POST /api/v1/tasks` with the actual research question as the input; that
+   auto-launched run IS the evaluated run. Never create a separate bootstrap
+   task (the old "Reply with READY" sentinel stays in the session history and
+   light models have been observed obeying it at run end — gold7 qwen r1).
+   Attach the supervisor with `--adopt`, which journals the already-running
+   (or latest) run instead of posting its own.
+2. **Use a human-plausible prompt.** The run input describes only the topic,
+   direction, and target artifacts — what a researcher would actually type.
+   Constraints, execution mechanics (prepare/submit contract details, digest
+   rules, error-recovery recipes) belong in the shared system prompt
+   (`server/src/agent/phase1-prompt.ts`), never in the user message. Per-case
+   requirement notes (e.g. "the crosswalk must carry per-source value columns")
+   are legitimate target-artifact descriptions; tool-call instructions are not.
+
+Prompt files used for a run stay in the evidence pack for transparency.
+`scripts/gold-formal-supervisor.mjs --adopt` journals events from sequence 0,
+so attaching a few seconds after task creation loses nothing.
+
+The full multi-model campaign that produced this methodology (failure-mode
+matrix, guardrail mapping, and the product fixes it drove) is consolidated in
+[`reports/2026-08-29-gold-qwen-direct-validation-study.md`](reports/2026-08-29-gold-qwen-direct-validation-study.md).

@@ -15,6 +15,7 @@ import { GeneralSettingsSection } from "@/components/settings/sections/GeneralSe
 import { ModelSettingsSection } from "@/components/settings/sections/ModelSettingsSection";
 import { PersonalizationSettingsSection } from "@/components/settings/sections/PersonalizationSettingsSection";
 import { AgentPermissionSettingsSection } from "@/components/settings/sections/AgentPermissionSettingsSection";
+import { HilApprovalSettingsSection } from "@/components/settings/sections/HilApprovalSettingsSection";
 import { RuntimeLimitsSettingsSection } from "@/components/settings/sections/RuntimeLimitsSettingsSection";
 import { SkillIterationSettingsSection } from "@/components/settings/sections/SkillIterationSettingsSection";
 import {
@@ -72,6 +73,7 @@ const SECTION_DESCRIPTIONS: Record<string, string> = {
   general: "管理本地数据与查看版本信息。",
   personalization: "配置适用于所有任务的额外指令与默认回复语气。",
   permissions: "控制 Agent 对工作区外资源的访问与命令执行权限。",
+  "hil-approval": "分配 HIL 审核请求的审批档位：人工审批、大模型初审或不审批。",
   "skill-iteration": "基于已结束任务的历史交互，为当前 curated Skill 生成个性化审查候选。",
   "runtime-limits": "调整命令、网络、下载和数据构建的运行预算。",
 };
@@ -361,6 +363,9 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
                   )}
                   {activeSection === "permissions" && (
                     <AgentPermissionSettingsSection api={api} />
+                  )}
+                  {activeSection === "hil-approval" && (
+                    <HilApprovalSettingsSection api={api} />
                   )}
                   {activeSection === "skill-iteration" && (
                     <SkillIterationSettingsSection api={api} />

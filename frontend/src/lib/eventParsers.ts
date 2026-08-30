@@ -11,7 +11,7 @@ const PIPELINE_TYPES = new Set([
 ]);
 
 const RUNTIME_TYPES = new Set([
-  "run_queued", "run_started", "run_finalizing", "run_completed", "run_failed",
+  "run_queued", "run_steered", "run_started", "run_finalizing", "run_completed", "run_failed",
   "run_cancel_requested", "run_cancelled", "run_interrupted", "publication_created",
   "assistant_delta", "assistant_reasoning_delta", "tool_started", "context_usage", "conversation_compacted",
   "conversation_compaction_started", "conversation_compaction_failed",

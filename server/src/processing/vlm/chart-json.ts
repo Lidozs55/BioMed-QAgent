@@ -59,6 +59,20 @@ export interface VlmChartJson {
 
 /** Parse a VLM response into a chart JSON dict (Python ``_parse_vlm_json``). */
 export function parseVlmJson(raw: string, sourceLabel: string): Record<string, unknown> {
+  return parseVlmJsonObject(raw, sourceLabel, ["chart_type", "axes", "data_points"]);
+}
+
+/**
+ * Fence/trailing-prose tolerant strict-JSON object parser shared by the
+ * exploratory chart contract and the governed registered-paper contract.
+ * Error strings name the source label, never a hard-coded model: callers
+ * record the actually resolved model in their own provenance.
+ */
+export function parseVlmJsonObject(
+  raw: string,
+  sourceLabel: string,
+  requiredKeys: readonly string[],
+): Record<string, unknown> {
   let text = raw.trim();
   const fenceMatch = MD_FENCE_RE.exec(text);
   if (fenceMatch !== null) {
@@ -89,20 +103,19 @@ export function parseVlmJson(raw: string, sourceLabel: string): Record<string, u
     data = JSON.parse(text);
   } catch (error) {
     throw new ChartExtractionError(
-      `qwen-vl-max returned non-JSON for ${sourceLabel}: ${error instanceof Error ? error.message : String(error)}`,
+      `VLM returned non-JSON for ${sourceLabel}: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
   if (typeof data !== "object" || data === null || Array.isArray(data)) {
     throw new ChartExtractionError(
-      `qwen-vl-max returned non-object JSON for ${sourceLabel}: ${Array.isArray(data) ? "Array" : typeof data}`,
+      `VLM returned non-object JSON for ${sourceLabel}: ${Array.isArray(data) ? "Array" : typeof data}`,
     );
   }
   const record = data as Record<string, unknown>;
-  const required = ["chart_type", "axes", "data_points"] as const;
-  const missing = required.filter((key) => !(key in record));
+  const missing = requiredKeys.filter((key) => !(key in record));
   if (missing.length > 0) {
     throw new ChartExtractionError(
-      `qwen-vl-max JSON missing required keys ${JSON.stringify(missing)} for ${sourceLabel}`,
+      `VLM JSON missing required keys ${JSON.stringify(missing)} for ${sourceLabel}`,
     );
   }
   return record;

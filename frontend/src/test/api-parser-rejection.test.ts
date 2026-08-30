@@ -59,7 +59,7 @@ describe("malformed settings response rejection", () => {
       context_window: 0, context_window_source: "unknown",
       safety_reserve_ratio: 0.05, safety_reserve_tokens: 0,
       compaction_trigger_ratio: 0.85, compaction_target_ratio: 0.60,
-      available_input_tokens: 0, advanced: {},
+      available_input_tokens: 0, vision_model_ready: false, advanced: {},
     }));
     const api = createAPIClient({ fetcher });
     await expect(api.fetchSettings()).resolves.toMatchObject({
@@ -219,6 +219,7 @@ describe("valid response preservation", () => {
       safety_reserve_ratio: 0.05, safety_reserve_tokens: 16384,
       compaction_trigger_ratio: 0.85, compaction_target_ratio: 0.60,
       available_input_tokens: 4096,
+      vision_model_ready: false,
       advanced: {},
     }));
     const api = createAPIClient({ fetcher });

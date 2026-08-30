@@ -404,6 +404,9 @@ describe("literature experiment chart formal closure", () => {
       ...preparedDetails.prepared_submission,
       preflight_receipt: preparedDetails.preflight_receipt,
     });
+    if (submitRequest.submission === null) {
+      throw new Error("full submit request must include the prepared submission");
+    }
     const execution = await submitDynamicFamilyPublication({
       taskId: "task_literature_chart",
       runId: "run_literature_chart",

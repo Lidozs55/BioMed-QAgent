@@ -20,6 +20,11 @@ const SETTINGS: ModelSettings = {
   advanced: {},
   run_block_reason: null,
   runtime_limits: DEFAULT_RUNTIME_LIMITS,
+  vision_model_id: null,
+  vision_model_name: null,
+  vision_provider_name: null,
+  vision_model_ready: false,
+  vision_block_reason: null,
 };
 
 function api(saveSettings: SettingsAPIClient["saveSettings"]): SettingsAPIClient {

@@ -12,8 +12,10 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -602,6 +604,67 @@ export function loadOperationResultManifest(
   } catch {
     return null;
   }
+}
+
+const CHECKPOINT_FILE_SUFFIX = /_(?:output|result)\.json$/u;
+
+/**
+ * Read the operation id a checkpoint file describes, or null when the file
+ * is unreadable or does not describe exactly one operation. The embedded id
+ * is authoritative because ``operationFilename`` collapses ':', so filename
+ * stems are ambiguous.
+ */
+function checkpointOperationId(stateDir: string, fileName: string): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(join(stateDir, fileName), "utf8"));
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null;
+  }
+  const operationId = (parsed as { operation_id?: unknown }).operation_id;
+  return typeof operationId === "string" ? operationId : null;
+}
+
+/**
+ * Best-effort checkpoint hygiene (K1): delete ``state/<op>_output.json`` and
+ * ``state/<op>_result.json`` files whose embedded operation id is absent from
+ * ``knownOperationIds`` (the live plan). Reuse only ever looks up checkpoints
+ * for plan operations, so such files are inert and accumulate whenever the
+ * fixed skeleton changes between runs. Only self-describing files are
+ * removed, and unreadable files are left untouched (fail-closed: a live
+ * operation's checkpoint is never removed on a parse failure). Returns the
+ * count of files removed; never throws.
+ */
+export function cleanupOrphanedOperationCheckpoints(
+  stateDir: string,
+  knownOperationIds: ReadonlySet<string>,
+): number {
+  if (!existsSync(stateDir)) return 0;
+  let names: string[];
+  try {
+    names = readdirSync(stateDir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && CHECKPOINT_FILE_SUFFIX.test(entry.name))
+      .map((entry) => entry.name);
+  } catch {
+    // Best-effort hygiene: an unreadable state directory leaves orphans in
+    // place; cleanup failure must not fail the run.
+    return 0;
+  }
+  let removed = 0;
+  for (const name of names) {
+    const operationId = checkpointOperationId(stateDir, name);
+    if (operationId === null || knownOperationIds.has(operationId)) continue;
+    try {
+      rmSync(join(stateDir, name));
+      removed += 1;
+    } catch {
+      // Best-effort hygiene: a removal failure must not fail the run.
+    }
+  }
+  return removed;
 }
 
 export type { OperationOutput };

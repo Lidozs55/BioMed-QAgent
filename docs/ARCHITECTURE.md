@@ -19,7 +19,7 @@
 > - **验证与失效**：每个里程碑、每次新增/修订 ADR、数据族接入或执行模型变化
 >   时对照本文校验一致性；与代码现状矛盾且未标注待落地、或被新 ADR 推翻而未
 >   同步修订时，本文标记为 `stale`。
-> - **最后验证（Last Verified）**：2026-08-24（对照 `main@a884b159`）。
+> - **最后验证（Last Verified）**：2026-08-29（对照 `main@8d174f1a`，重点复核 family 清单、API 路由与前端组件名）。
 > - **交叉引用约定**：本文档章节写作 `§N`；引用 ADR 索引的章节写作 `ADR §N`。
 
 ---
@@ -46,6 +46,7 @@
 | — 缓存设计 | Cache 契约、Schema 标识与构建参数 | [architecture/result-validation.md](architecture/result-validation.md) §9-13 + [ADR-015](adr/015-cache-schema-build-parameters.md) |
 | — 模型供应商参数 | 供应商/模型参数与目录事实（现行 TS `server/src/settings/model-registry/`） | [architecture/model-provider-params.md](architecture/model-provider-params.md) |
 | — 运行限制 | 运行时资源上限与设置契约 | [architecture/runtime-limits.md](architecture/runtime-limits.md) |
+| — HIL 审批档位 | 三档审批权限分配与大模型初审（人工审批 / llm_pre_review / auto_approve） | [architecture/hil-approval-policy.md](architecture/hil-approval-policy.md) |
 | — 测试并发预算 | 本地有界并发、CI 放宽与 worker 预算 | [architecture/test-concurrency.md](architecture/test-concurrency.md) |
 
 ---
@@ -88,7 +89,7 @@ React/shadcn Frontend
 TypeScript Application Host
         +-- Vite middleware / HMR
         +-- /api/v1/tasks* + /api/v1/ws -> TS durable runtime
-        +-- settings / model-registry / databases / builds / cache -> native TS APIs
+        +-- settings / model-registry / databases / cache -> native TS APIs
         |
         +--------------------------+-----------------------------+
         |                          |                             |
@@ -124,6 +125,12 @@ Dataset Construction Runtime（服务端固定构建骨架）
 方括号步骤可以按来源并发；fan-out / fan-in 属于 Runtime 内部控制流，不形成 Agent
 可编排 DAG，也不形成数据集级 Recipe。
 
+**Host 启动边界**（ADR-042）：Host 首选配置端口（默认 5173），只有实际绑定返回
+`EADDRINUSE` 时才以 `port 0` 让操作系统原子选择可用端口；实际入口由启动日志
+`BIOMED_QAGENT_URL` 公布。`pnpm start` / `--static` 在端口与资源初始化前持有每用户
+生产实例租约，第二次启动正常退出且不创建 Host；开发模式不持有产品级租约，但同一
+data root 的 durable writer 独占租约在所有模式下仍然生效。
+
 **可靠性内核**（见 §4）：SourceAsset、DownloadAttempt、内容 hash、
 Attempt 输入/参数/输出摘要、任务锁、checkpoint、timeout/cancel、durable event、
 durable evidence-bound HIL、staging、Validation Gate、原子发布、fixture/live 区分。
@@ -156,7 +163,7 @@ scope 才匹配，API 缺省 project）；Restricted 切换会作废全部 pendi
 `DatasetExecutionSpec` 是 Agent 在意图解析和来源发现后生成、提交给 Runtime 的**单一
 权威输入契约**。它同时表达用户语义和受控构建参数，至少包含：
 
-- `dataset_family`：数据集族标识（如 `gene_expression`、`pathway_member`）；
+- `dataset_family`：数据集族标识（如 `gene_expression`、`gut_microbiome`）；
 - `row_granularity`：行粒度定义（如 "基因 × 样本 × 测量"）；
 - `schema_ref`：目标 Schema 的注册引用（见 §3.3）；
 - `required_fields`：必需字段清单；
@@ -173,8 +180,8 @@ source/schema 与 schema/profile 兼容关系、family-owned 默认 Normalizatio
 合并策略、输出格式和 Adapter 参数契约绑定为一个受信任 admission 能力单元。多表 family 的 assembler
 通过独立 handler registry 注册；缺 handler 时不能构造 assembly capability。Core-only
 `PublicationCandidate` 只引用 committed Core result receipts 和 registered asset IDs，
-不接受 Agent path。runtime/checkpoint/publisher 接线仍属 TASK-048-B2W，基础 Registry
-不能据此伪装未闭环 family 已实现。Agent Tool Schema 与 Core Spec Validator 从同一 Registry 派生；production Registry 还要求
+不接受 Agent path。runtime/checkpoint/publisher 与 derive 接线已随 TS Dataset Core 落地（原
+TASK-048-B2W/B6W 跟踪项已闭环）；基础 Registry 仍不能据此伪装未闭环 family 已实现。Agent Tool Schema 与 Core Spec Validator 从同一 Registry 派生；production Registry 还要求
 family `runtime_id` 命中 Core 已实现的 runtime allowlist。仅有 Schema、或 Adapter/Profile
 无真实实现的数据族不得进入 production default Registry（ADR-027）。
 
@@ -194,7 +201,7 @@ dataset_family + row_granularity + key_semantics + measurement_semantics
 
 - 多来源 gene-sample expression；
 - 多论文中采用同一指标和同一对象粒度的实验测量；
-- 多数据库的 pathway-member 记录。
+- 多数据库的基因-疾病关联记录。
 
 **不能直接合并**的示例：
 

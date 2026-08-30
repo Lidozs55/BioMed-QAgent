@@ -395,7 +395,7 @@ async function validateExpectedInvocation(
   assertDigest(expected.compiler_digest, "compiler_digest");
   assertDigest(expected.runtime_digest, "runtime_digest");
   assertDigest(expected.backend_policy.policy_digest, "backend_policy.policy_digest");
-  assertDigest(expected.backend_policy.sandbox_config_digest, "backend_policy.sandbox_config_digest");
+  assertDigest(expected.backend_policy.execution_config_digest, "backend_policy.execution_config_digest");
   if (new Set(expected.backend_policy.granted_capabilities).size !== expected.backend_policy.granted_capabilities.length) {
     rejection("INVALID_EXPECTED_INVOCATION", "granted capabilities must be unique");
   }
@@ -445,8 +445,8 @@ function assertInvocationBinding(
     ["compiler_digest", receipt.compiler_digest, expected.compiler_digest],
     ["runtime_digest", receipt.runtime_digest, expected.runtime_digest],
     ["policy_digest", receipt.policy_digest, expected.backend_policy.policy_digest],
-    ["sandbox_backend", receipt.sandbox_backend, expected.backend_policy.sandbox_backend],
-    ["sandbox_config_digest", receipt.sandbox_config_digest, expected.backend_policy.sandbox_config_digest],
+    ["execution_backend", receipt.execution_backend, expected.backend_policy.execution_backend],
+    ["execution_config_digest", receipt.execution_config_digest, expected.backend_policy.execution_config_digest],
     ["host_implementation_digest", receipt.host_implementation_digest, expected.implementation_digest],
     ["deadline_at", receipt.deadline_at, expected.deadline_fence.deadline_at],
     ["cancellation_state", receipt.cancellation_state, expected.cancel_fence.cancellation_state],
@@ -680,6 +680,7 @@ class DelimitedShapeScanner {
   private fields: string[] = [];
   private headerValue: string[] | null = null;
   private dataRows = 0;
+  private rowHasRealValue = false;
   private sawInput = false;
 
   constructor(private readonly delimiter: "," | "\t") {}
@@ -756,6 +757,18 @@ class DelimitedShapeScanner {
   }
 
   private endField(): void {
+    if (this.headerValue !== null) {
+      const trimmed = this.field.trim();
+      if (trimmed.length > 0) {
+        if (PLACEHOLDER_CELL_VALUES.has(trimmed.toLowerCase())) {
+          rejection(
+            "PLACEHOLDER_CONTENT",
+            `output table contains placeholder cell value "${trimmed}"`,
+          );
+        }
+        this.rowHasRealValue = true;
+      }
+    }
     this.fields.push(this.field);
     this.field = "";
     this.state = "field_start";
@@ -768,11 +781,30 @@ class DelimitedShapeScanner {
       if (this.fields.length !== this.headerValue.length) {
         rejection("OUTPUT_BYTES_MISMATCH", "output table row width does not match its header");
       }
+      if (!this.rowHasRealValue) {
+        rejection("PLACEHOLDER_CONTENT", "output table contains a data row with no real values");
+      }
       this.dataRows += 1;
     }
     this.fields = [];
+    this.rowHasRealValue = false;
   }
 }
+
+/**
+ * Deterministic content sanity screen (gold7 qwen r4: a formally verified
+ * publication shipped rows like `UNKNOWN,UNKNOWN` / `NONE,NONE,placeholder`).
+ * Exact cell match only, applied to data rows; partial empty cells stay legal
+ * because missing data is represented as empties, never as sentinel words.
+ */
+const PLACEHOLDER_CELL_VALUES = new Set([
+  "placeholder",
+  "unknown",
+  "tbd",
+  "n/a",
+  "not_found",
+  "no_records_found_in_input_json",
+]);
 
 async function inspectHandle(
   source: FileHandle,

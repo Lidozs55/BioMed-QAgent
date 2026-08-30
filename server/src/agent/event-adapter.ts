@@ -2,18 +2,17 @@ import { createHash, randomUUID } from "node:crypto";
 
 import type { EventEnvelope, EventPayload, JsonValue } from "@biomed/contracts";
 
-import type { BioMedAgentEvent } from "./contracts.js";
+import { BioMedAgentError, type BioMedAgentEvent } from "./contracts.js";
 
 const MAX_CHUNK_LENGTH = 4_096;
 const MAX_ARGUMENT_STRING_LENGTH = 200;
 const MAX_OUTPUT_LENGTH = 4_096;
+/** 长驻 Host 进程中 terminalRuns 集合的条目上限（按插入序淘汰最旧条目）。 */
+const MAX_TERMINAL_RUNS = 4_096;
 const MAX_DEPTH = 3;
 const MAX_ITEMS = 20;
 const SENSITIVE_KEY = /api[-_]?key|authorization|bearer|credential|password|secret|token/i;
 const BEARER_VALUE = /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi;
-const WINDOWS_ABSOLUTE_PATH = /\b[A-Za-z]:[\\/][^\s"']+/g;
-const UNC_PATH = /\\\\[^\s"']+/g;
-const POSIX_PRIVATE_PATH = /\/(?:Users|home|root|private|etc|var|tmp|mnt|opt|srv)\/[^\s"']+/g;
 
 export interface PiEventAdapterDiagnostic {
   code: "unknown_upstream_event" | "unmapped_upstream_event";
@@ -31,9 +30,6 @@ export interface PiEventAdapterOptions {
 function sanitizeText(value: string, limit: number): string {
   return value
     .replace(BEARER_VALUE, "[redacted]")
-    .replace(WINDOWS_ABSOLUTE_PATH, "[redacted-path]")
-    .replace(UNC_PATH, "[redacted-path]")
-    .replace(POSIX_PRIVATE_PATH, "[redacted-path]")
     .slice(0, limit);
 }
 
@@ -75,11 +71,22 @@ function asArguments(value: unknown): Record<string, JsonValue> {
 function serializedOutput(value: unknown): string {
   const bounded = sanitizeValue(value, 0, MAX_ARGUMENT_STRING_LENGTH);
   const serialized = typeof bounded === "string" ? bounded : JSON.stringify(bounded);
-  return sanitizeText(serialized, MAX_OUTPUT_LENGTH);
+  if (serialized.length <= MAX_OUTPUT_LENGTH) return serialized;
+  // 超限时把截断文本包成 JSON 字符串字段返回。不得对序列化后的 JSON 再跑
+  // 脱敏正则/slice——路径正则会咬坏转义序列、slice 会截断结构,产出非法
+  // JSON(前端 toolOutput 解包会因此失败回退原文)。
+  return JSON.stringify({
+    truncated: true,
+    output: serialized.slice(0, MAX_OUTPUT_LENGTH),
+  });
 }
 
 function digest(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+function usageCount(value: number): number {
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
 }
 
 function sourceType(event: never): string {
@@ -182,6 +189,19 @@ export class PiEventAdapter {
             compaction_id: randomUUID(),
             covered_through_run_id: runId,
             summary_digest: createHash("sha256").update(event.summary, "utf8").digest("hex"),
+            ...(event.reason === undefined ? {} : { reason: event.reason }),
+            ...(event.tokensBefore === undefined
+              ? {}
+              : { tokens_before: event.tokensBefore }),
+            ...(event.estimatedTokensAfter === undefined
+              ? {}
+              : { estimated_tokens_after: event.estimatedTokensAfter }),
+            ...(event.targetTokens === undefined
+              ? {}
+              : { target_tokens: event.targetTokens }),
+            ...(event.summaryTokens === undefined
+              ? {}
+              : { summary_tokens: event.summaryTokens }),
           }),
         ];
       case "context_usage":
@@ -192,6 +212,20 @@ export class PiEventAdapter {
             context_window: event.contextWindow,
             percent: event.percent,
             source: event.source,
+            ...(event.usage === undefined
+              ? {}
+              : {
+                  usage: {
+                    input_tokens: usageCount(event.usage.input),
+                    output_tokens: usageCount(event.usage.output),
+                    cache_read_tokens: usageCount(event.usage.cacheRead),
+                    cache_write_tokens: usageCount(event.usage.cacheWrite),
+                    total_tokens: usageCount(event.usage.totalTokens),
+                    ...(event.usage.reasoning === undefined
+                      ? {}
+                      : { reasoning_tokens: usageCount(event.usage.reasoning) }),
+                  },
+                }),
           }),
         ];
       case "turn_cancelled":
@@ -236,7 +270,16 @@ export class PiEventAdapter {
   }
 
   failed(runId: string, error: unknown): EventEnvelope[] {
-    void error;
+    if (
+      error instanceof BioMedAgentError &&
+      error.code === "CONTEXT_COMPACTION_INEFFECTIVE"
+    ) {
+      return this.terminal(runId, {
+        type: "run_failed",
+        error: "Context compaction did not reduce the estimated context",
+        error_code: "internal_error",
+      });
+    }
     return this.terminal(runId, {
       type: "run_failed",
       error: "Pi turn failed",
@@ -246,6 +289,12 @@ export class PiEventAdapter {
 
   private terminal(runId: string, payload: EventPayload): EventEnvelope[] {
     if (this.terminalRuns.has(runId)) return [];
+    // 防御上限：长驻 Host 进程里该集合只增不减（每个 run 一个短字符串），
+    // 超过上限时按插入序淘汰最旧条目，避免无界增长。
+    if (this.terminalRuns.size >= MAX_TERMINAL_RUNS) {
+      const oldest = this.terminalRuns.values().next().value;
+      if (oldest !== undefined) this.terminalRuns.delete(oldest);
+    }
     this.terminalRuns.add(runId);
     return [this.envelope(runId, payload)];
   }

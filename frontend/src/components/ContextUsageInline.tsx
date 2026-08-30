@@ -60,7 +60,8 @@ export function ContextUsageInline({
 }: ContextUsageInlineProps) {
   const [open, setOpen] = useState(false);
 
-  const pct = totalTokens > 0 ? Math.min(100, Math.round((usedTokens / totalTokens) * 100)) : 0;
+  const pct = totalTokens > 0 ? Math.max(0, Math.round((usedTokens / totalTokens) * 100)) : 0;
+  const barPct = Math.min(100, pct);
 
   const handleCompact = useCallback(() => {
     onCompact?.();
@@ -82,7 +83,7 @@ export function ContextUsageInline({
             <div className="relative h-1 w-10 overflow-hidden rounded-full bg-muted">
               <div
                 className={cn("h-full rounded-full transition-all duration-300", barColor(pct))}
-                style={{ width: `${pct}%` }}
+                style={{ width: `${barPct}%` }}
               />
             </div>
             <span className={cn("font-mono text-[9px] tabular-nums", textColor(pct))}>
@@ -108,7 +109,7 @@ export function ContextUsageInline({
           <div className="relative h-2 overflow-hidden rounded-full bg-muted">
             <div
               className={cn("h-full rounded-full transition-all duration-300", barColor(pct))}
-              style={{ width: `${pct}%` }}
+              style={{ width: `${barPct}%` }}
             />
           </div>
           {/* Token count detail */}

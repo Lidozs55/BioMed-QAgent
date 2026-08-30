@@ -40,7 +40,7 @@ describe("dataset formal-route capability preflight", () => {
       input_kind: "binary_archive",
       route_status: "requires_formal_extraction",
     });
-    expect(supplementary?.blocker).toMatch(/provenance-bound UTF-8 extraction asset/i);
+    expect(supplementary?.blocker).toMatch(/acquire_core_carrier/i);
     expect(capabilities.dynamic.direct_bindings).not.toContainEqual(
       expect.objectContaining({ provider_id: "europepmc.supplementary.v1" }),
     );
@@ -160,6 +160,42 @@ describe("dataset formal-route capability preflight", () => {
     expect(JSON.stringify(result.details)).toContain("literature_experiment_chart.release.v1");
   });
 
+  test("directs the Agent to acquire one Europe PMC PDF carrier per frozen PMCID", () => {
+    const capabilities = datasetRouteCapabilities();
+    const pdf = capabilities.core_acquisition_only.find(
+      (provider) => provider.provider_id === "europepmc.pdf.v1",
+    );
+
+    expect(pdf).toMatchObject({
+      source: "europepmc_pdf",
+      input_kind: "binary_archive",
+      route_status: "requires_formal_extraction",
+    });
+    expect(pdf?.input_hint).toMatch(/PMCID/);
+    expect(pdf?.blocker).toMatch(/acquire_core_carrier/i);
+    expect(capabilities.dynamic.direct_bindings).not.toContainEqual(
+      expect.objectContaining({ provider_id: "europepmc.pdf.v1" }),
+    );
+  });
+
+  test("directs the Agent to acquire one Europe PMC full-text XML carrier per frozen PMCID", () => {
+    const capabilities = datasetRouteCapabilities();
+    const xml = capabilities.core_acquisition_only.find(
+      (provider) => provider.provider_id === "europepmc.fulltext_xml.v1",
+    );
+
+    expect(xml).toMatchObject({
+      source: "europepmc_fulltext_xml",
+      input_kind: "binary_archive",
+      route_status: "requires_formal_extraction",
+    });
+    expect(xml?.input_hint).toMatch(/PMCID/);
+    expect(xml?.blocker).toMatch(/acquire_core_carrier/i);
+    expect(capabilities.dynamic.direct_bindings).not.toContainEqual(
+      expect.objectContaining({ provider_id: "europepmc.fulltext_xml.v1" }),
+    );
+  });
+
   test("returns the same bounded, side-effect-free facts through the Agent tool", async () => {
     const tool = createDatasetRoutePreflightTool();
     const result = await tool.execute({});
@@ -172,6 +208,6 @@ describe("dataset formal-route capability preflight", () => {
     });
     expect(result.isError).not.toBe(true);
     expect(result.details).toEqual(datasetRouteCapabilities());
-    expect(result.content.length).toBeLessThan(20_000);
+    expect(result.content.length).toBeLessThan(25_000);
   });
 });

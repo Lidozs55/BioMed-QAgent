@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 
-import { DEFAULT_RUNTIME_LIMITS, type RuntimeLimits } from "@biomed/contracts";
+import { DEFAULT_RUNTIME_LIMITS, type DiscoveryQueryRecord, type RuntimeLimits } from "@biomed/contracts";
 
 import type { BioMedAgentAdapter, BioMedModelConfig } from "../agent/contracts.js";
 import { PiAgentAdapter } from "../agent/pi-adapter.js";
@@ -11,8 +11,11 @@ import {
   createDatasetProfileScaffoldTool,
   createDatasetRoutePreflightTool,
 } from "../agent/tools/dataset-route-preflight.js";
+import { createCoreAssetTools } from "../agent/tools/core-asset-tools.js";
 import {
   createDynamicFamilyPublicationTool,
+  dynamicFamilyPublicationWire,
+  parseDynamicFamilyPublicationSubmission,
   createPrepareDynamicFamilyPublicationTool,
   type ParsedDynamicFamilyPublicationSubmission,
 } from "../agent/tools/dynamic-family-publication.js";
@@ -44,6 +47,7 @@ import { createCoreAcquisitionProviders } from "../dataset/acquisition/provider-
 import { EXTENDED_PROVIDER_IDS } from "../dataset/acquisition/extended-providers.js";
 import { extractRegisteredZipMembers } from "../dataset/archive/zip-members.js";
 import { parseRegisteredArchiveMembers } from "../dataset/archive/member-parsers.js";
+import { createDefaultDatasetFamilyRegistry } from "../dataset/families/index.js";
 import {
   CoreAcquisitionRegistry,
   CoreAcquisitionRuntime,
@@ -75,6 +79,8 @@ import {
   createDurableAgentRuntime,
   type DurableAgentRuntime,
 } from "./durable-agent-runtime.js";
+import { createHilGatePreReview } from "./hil-pre-review.js";
+import type { HILApprovalPolicyStore } from "./hil-approval-store.js";
 import { createDynamicFamilyPreflightCoordinator } from "./dynamic-family-preflight-coordinator.js";
 
 export { createDynamicFamilyPreflightCoordinator } from "./dynamic-family-preflight-coordinator.js";
@@ -131,6 +137,10 @@ export function createPhase3ToolHooks(
   currentRunId: () => string,
 ): ToolHooks {
   const startedProgressOps = new Set<string>();
+  // Discovery ledger (source coverage evidence): one record per terminal
+  // onQuery call, handed to the Dataset Core at execute time and projected
+  // from persisted events on recovery (discovery-ledger.ts).
+  const discoveryRecords: DiscoveryQueryRecord[] = [];
   // Per-source sequence for call-scoped query ids (``tool:<source>:query:<seq>``)
   // and the started-but-not-yet-finished queries awaiting their terminal call.
   const querySequences = new Map<string, number>();
@@ -186,6 +196,7 @@ export function createPhase3ToolHooks(
     return nextQueryId(source);
   };
   return {
+    discoveryLedger: (): DiscoveryQueryRecord[] => [...discoveryRecords],
     onQueryStarted: (query, source) => {
       const operationId = nextQueryId(source);
       const entry = { query, source, operationId };
@@ -207,6 +218,15 @@ export function createPhase3ToolHooks(
     },
     onQuery: (query, source, status, recordsCount = 0, callToken) => {
       const operationId = consumeQueryId(query, source, callToken);
+      discoveryRecords.push({
+        operation_id: operationId,
+        source,
+        query,
+        status,
+        result_count: Math.max(0, recordsCount),
+        requested_limit: null,
+        retrieved_at: new Date().toISOString(),
+      });
       void recordRunEvent({
         type: "operation_progress",
         operation_id: operationId,
@@ -297,6 +317,12 @@ export interface Phase3RuntimeOptions {
   agentExecPolicy: "deny" | "ask" | "allow" | null;
   /** Shared persistent permission settings (presets + rules). */
   permissionPolicyStore?: PermissionPolicyStore;
+  /**
+   * Shared three-tier HIL approval settings store (human_review /
+   * llm_pre_review / auto_approve per scope). Combined with ``resolveModel``
+   * it enables the LLM pre-review stage in the HIL gate.
+   */
+  hilApprovalPolicy?: HILApprovalPolicyStore;
   /** Live permission brokers per task (preset switch invalidation, grant view/revoke). */
   permissionBrokerRegistry?: PermissionBrokerRegistry;
   adapter?: BioMedAgentAdapter;
@@ -312,8 +338,19 @@ export interface Phase3RuntimeOptions {
   /** Business capabilities: DB bridge, browser pool, secrets. */
   database?: DatabaseClient | null;
   browserPool?: import("../external/browser/pool.js").NodeBrowserPool | null;
-  /** VLM chart-extraction config; missing fields keep env defaults. */
-  vlmConfig?: Partial<VlmConfig> | null;
+  /**
+   * VLM chart-extraction config resolver; consulted per governed extraction
+   * call (not snapshotted at composition time), so visual-model role changes
+   * apply without a restart. The resolved API key stays in memory only.
+   */
+  resolveVlmConfig?: () => Promise<VlmConfig>;
+  /**
+   * Transport for governed visual-model calls. Defaults to the shared policy
+   * client; composition hosts (evaluation harnesses) inject a fixture
+   * transport so the fake visual model stays behind the same URL policy
+   * without network access.
+   */
+  vlmHttpClient?: PublicHttpClient;
   /** Core-promoted browser parser registry shared by all task runs. */
   browserRecipeRegistry?: BrowserParserRecipeRegistry;
   /**
@@ -388,6 +425,10 @@ export async function createPhase3Runtime(
     tasksRoot: options.tasksRoot,
     workspaceManager,
     permissionBrokerRegistry: options.permissionBrokerRegistry,
+    hilPreReview: createHilGatePreReview(
+      options.hilApprovalPolicy ?? null,
+      options.resolveModel ?? null,
+    ),
     adapter: options.adapter ?? new PiAgentAdapter({
       environment: process.env,
       resolveModel: options.resolveModel,
@@ -398,7 +439,6 @@ export async function createPhase3Runtime(
       let currentPiSessionId = "pi_session_pending";
       let currentPublicationId: string | null = null;
       const dynamicFamilyPreflight = createDynamicFamilyPreflightCoordinator();
-      const preparedDynamicSubmissions = new Map<string, Readonly<Record<string, unknown>>>();
       // Agent-owned directory: data/workspaces/<taskId> (plan §2.1).
       const workspaceRoot = await workspaceManager.ensure(taskId);
       // Framework-owned output: data/output/tasks/<taskId> (plan §3.2).
@@ -521,7 +561,8 @@ export async function createPhase3Runtime(
         browser,
         hooks: toolHooks,
         runId: () => currentRunId,
-        vlmConfig: options.vlmConfig ?? undefined,
+        resolveVlmConfig: options.resolveVlmConfig,
+        vlmHttpClient: options.vlmHttpClient,
         limits,
         registrar,
         taskId,
@@ -576,19 +617,17 @@ export async function createPhase3Runtime(
             preparation,
             receipt,
             dynamicFamilyPreflightSubmissionDigest(submission),
+            dynamicFamilyPublicationWire(submission, receipt.host_descriptor_digest),
           );
           return receipt;
         },
-        onPrepared: (submission, receipt) => {
-          preparedDynamicSubmissions.clear();
-          preparedDynamicSubmissions.set(receipt.receipt_digest, submission);
-        },
       });
       const dynamicFamilyTool = createDynamicFamilyPublicationTool({
-        resolvePreparedSubmission: (receipt) =>
-          preparedDynamicSubmissions.get(receipt.receipt_digest),
+        resolveSubmission: async (preflightReceipt) =>
+          parseDynamicFamilyPublicationSubmission(
+            dynamicFamilyPreflight.resolveSubmission(preflightReceipt),
+          ),
         submit: async (submission, signal, _context, preflightReceipt) => {
-          preparedDynamicSubmissions.delete(preflightReceipt.receipt_digest);
           if (preflightReceipt === undefined) {
             throw new Error("submit_dynamic_family_publication requires a preflight receipt");
           }
@@ -750,7 +789,7 @@ export async function createPhase3Runtime(
             artifacts: product.manifest.artifacts,
             source_acquisition_provenance: result.sourceAcquisitionProvenance,
             source_input_provenance: result.sourceInputProvenance,
-            backend: result.receipt.sandbox_backend,
+            backend: result.receipt.execution_backend,
             security_boundary: false,
           };
           } finally {
@@ -759,12 +798,18 @@ export async function createPhase3Runtime(
           }
         },
       });
+      const coreAssetTools = createCoreAssetTools({
+        sourceAssetRegistry,
+        sourceAssetsRoot: taskRoot,
+      });
       const datasetTools = createDatasetExecutionTools({
         client: service,
+        familyRegistry: createDefaultDatasetFamilyRegistry(),
         taskId,
         taskRoot,
         runId: () => currentRunId,
         piSessionId: () => currentPiSessionId,
+        discoveryLedger: () => toolHooks.discoveryLedger?.() ?? null,
         onDiagnostic: (diagnostic) => {
           console.info("tool.dataset_execution", diagnostic);
         },
@@ -851,6 +896,7 @@ export async function createPhase3Runtime(
         supplementaryArchiveTool,
         dynamicFamilyPrepareTool,
         dynamicFamilyTool,
+        ...coreAssetTools,
         ...importTools,
       ]);
       return {
@@ -865,6 +911,7 @@ export async function createPhase3Runtime(
           supplementaryArchiveTool,
           dynamicFamilyPrepareTool,
           dynamicFamilyTool,
+          ...coreAssetTools,
           ...importTools,
         ],
         permissionBroker,

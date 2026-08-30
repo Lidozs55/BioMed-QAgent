@@ -1,4 +1,5 @@
 import type { JsonValue } from "./json.js";
+import type { TaskExecutionContext } from "./task-execution-context.js";
 
 export type TaskMode = "agent" | "fixture" | "import";
 
@@ -32,6 +33,7 @@ export type AttemptStatus =
 
 export type ErrorCode =
   | "configuration_error"
+  | "context_budget_exhausted"
   | "network_error"
   | "timeout"
   | "download_incomplete"
@@ -41,11 +43,24 @@ export type ErrorCode =
   | "cancelled"
   | "internal_error";
 
+export interface RunUsageTotals {
+  model_calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  total_tokens: number;
+  /** Sum of provider-reported reasoning splits (absent when never reported). */
+  reasoning_tokens?: number;
+}
+
 export interface RunSummary {
   run_status: RunStatus;
   error_code: ErrorCode | null;
   cancelled_at_stage: StageName | null;
   user_message: string | null;
+  /** Provider-reported token usage aggregated over the run (absent in older snapshots). */
+  usage?: RunUsageTotals;
 }
 
 export interface TaskPublicationSummary {
@@ -204,6 +219,8 @@ export interface RunRecord {
   error: string | null;
   /** Server-generated per-run outcome summary (absent in older snapshots). */
   summary?: RunSummary | null;
+  /** Frozen evaluation contract bound at queue time (absent in older snapshots; null when none was admitted). */
+  execution_context?: TaskExecutionContext | null;
 }
 
 export interface MessageRecord {
@@ -215,6 +232,8 @@ export interface MessageRecord {
   role: MessageRole;
   content: string;
   created_at: string;
+  /** Task event sequence that created this message; absent on legacy records. */
+  sequence?: number;
 }
 
 export interface SubagentRequest {

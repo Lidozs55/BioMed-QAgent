@@ -10,12 +10,19 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { paramValueError } from "@/components/settings/model/paramValidation";
 import type { ParameterSpec } from "@/hooks/useAPI";
 
 interface ParameterEditorProps {
   specs: ParameterSpec[];
   params: Record<string, unknown>;
   onChange: (next: Record<string, unknown>) => void;
+  /**
+   * Spec keys to hide from the graphical editor (and from the extra-params
+   * list), e.g. when the same setting is exposed as a dedicated control above
+   * the editor. Stored values remain untouched.
+   */
+  hiddenKeys?: string[];
 }
 
 function currentValue(params: Record<string, unknown>, spec: ParameterSpec): unknown {
@@ -118,12 +125,21 @@ function SpecField({
   );
 }
 
-export function ParameterEditor({ specs, params, onChange }: ParameterEditorProps) {
+export function ParameterEditor({
+  specs,
+  params,
+  onChange,
+  hiddenKeys = [],
+}: ParameterEditorProps) {
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  const specKeys = new Set(specs.map((spec) => spec.key));
-  const extraKeys = Object.keys(params).filter((key) => !specKeys.has(key));
-  const advancedSpecs = specs.filter((spec) => spec.advanced);
-  const regularSpecs = specs.filter((spec) => !spec.advanced);
+  const hidden = new Set(hiddenKeys);
+  const visibleSpecs = specs.filter((spec) => !hidden.has(spec.key));
+  const specKeys = new Set(visibleSpecs.map((spec) => spec.key));
+  const extraKeys = Object.keys(params).filter(
+    (key) => !specKeys.has(key) && !hidden.has(key),
+  );
+  const advancedSpecs = visibleSpecs.filter((spec) => spec.advanced);
+  const regularSpecs = visibleSpecs.filter((spec) => !spec.advanced);
 
   const patch = (key: string, next: unknown) => {
     const updated = { ...params };
@@ -137,25 +153,35 @@ export function ParameterEditor({ specs, params, onChange }: ParameterEditorProp
 
   return (
     <div className="flex flex-col gap-2">
-      {regularSpecs.map((spec) => (
-        <div key={spec.key} className="flex items-center justify-between gap-3">
-          <label
-            htmlFor={`param-${spec.key}`}
-            className="text-sm text-foreground"
-            title={spec.description}
-          >
-            {spec.label}
-          </label>
-          <div className="w-40 shrink-0">
-            <SpecField
-              spec={spec}
-              value={currentValue(params, spec)}
-              controlId={`param-${spec.key}`}
-              onChange={(next) => patch(spec.key, next)}
-            />
+      {regularSpecs.map((spec) => {
+        const error = paramValueError(spec, params[spec.key]);
+        return (
+          <div key={spec.key} className="flex flex-col gap-1">
+            <div className="flex items-center justify-between gap-3">
+              <label
+                htmlFor={`param-${spec.key}`}
+                className="text-sm text-foreground"
+                title={spec.description}
+              >
+                {spec.label}
+              </label>
+              <div className="w-40 shrink-0">
+                <SpecField
+                  spec={spec}
+                  value={currentValue(params, spec)}
+                  controlId={`param-${spec.key}`}
+                  onChange={(next) => patch(spec.key, next)}
+                />
+              </div>
+            </div>
+            {error && (
+              <p className="text-xs text-destructive" role="alert">
+                {error}
+              </p>
+            )}
           </div>
-        </div>
-      ))}
+        );
+      })}
       {advancedSpecs.length > 0 && (
         <div className="border-t pt-2">
           <button
@@ -166,29 +192,39 @@ export function ParameterEditor({ specs, params, onChange }: ParameterEditorProp
             <span>高级参数（{advancedSpecs.length}）</span>
             <span>{advancedOpen ? "收起" : "展开"}</span>
           </button>
-          {advancedOpen && (
-            <div className="mt-2 flex flex-col gap-2">
-              {advancedSpecs.map((spec) => (
-                <div key={spec.key} className="flex items-center justify-between gap-3">
-                  <label
-                    htmlFor={`param-${spec.key}`}
-                    className="text-sm text-foreground"
-                    title={spec.description}
-                  >
-                    {spec.label}
-                  </label>
-                  <div className="w-40 shrink-0">
-                    <SpecField
-                      spec={spec}
-                      value={currentValue(params, spec)}
-                      controlId={`param-${spec.key}`}
-                      onChange={(next) => patch(spec.key, next)}
-                    />
-                  </div>
+              {advancedOpen && (
+                <div className="mt-2 flex flex-col gap-2">
+                  {advancedSpecs.map((spec) => {
+                    const error = paramValueError(spec, params[spec.key]);
+                    return (
+                      <div key={spec.key} className="flex flex-col gap-1">
+                        <div className="flex items-center justify-between gap-3">
+                          <label
+                            htmlFor={`param-${spec.key}`}
+                            className="text-sm text-foreground"
+                            title={spec.description}
+                          >
+                            {spec.label}
+                          </label>
+                          <div className="w-40 shrink-0">
+                            <SpecField
+                              spec={spec}
+                              value={currentValue(params, spec)}
+                              controlId={`param-${spec.key}`}
+                              onChange={(next) => patch(spec.key, next)}
+                            />
+                          </div>
+                        </div>
+                        {error && (
+                          <p className="text-xs text-destructive" role="alert">
+                            {error}
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
-              ))}
-            </div>
-          )}
+              )}
         </div>
       )}
       {extraKeys.length > 0 && (

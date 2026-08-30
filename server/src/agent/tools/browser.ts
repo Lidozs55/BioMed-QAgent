@@ -57,6 +57,12 @@ import { noopHooks } from "./tool-hooks.js";
 import { errorMessage } from "./result.js";
 
 const MAX_BODY_CHARS = 5000;
+/** Hard ceiling for one navigate_page body-text window; longer pages are read through `offset` windows. */
+const MAX_BODY_CHARS_LIMIT = 20000;
+/** Bounded link list so download entries on list pages are discoverable without reading the full body. */
+const MAX_PAGE_LINKS = 50;
+const MAX_LINK_TEXT_CHARS = 120;
+const SKIP_LINK_PATTERN = /^(?:javascript|mailto|tel|data):/i;
 const SOURCE = "browser";
 const BROWSER_PROVIDER_IMPLEMENTATION_DIGEST = BROWSER_ACQUISITION_PROVIDER_IMPLEMENTATION_DIGEST;
 const HOST_FAIL_FAST_THRESHOLD = 2;
@@ -85,6 +91,39 @@ function extractBodyText(html: string): string {
   const $ = load(html);
   $("script, style, head, noscript").remove();
   return $.root().text().replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Node-side addition beyond Python parity: absolute-resolved, deduplicated
+ * in-document links in document order (fragment-only, scheme-less-empty and
+ * non-http(s) navigation links are dropped) so the Agent can discover download
+ * entries from list pages that exceed the body-text window.
+ */
+function extractLinks(html: string, baseUrl: string): { links: Array<{ href: string; text: string }>; total: number } {
+  const $ = load(html);
+  const links: Array<{ href: string; text: string }> = [];
+  const seen = new Set<string>();
+  let total = 0;
+  for (const element of $("a[href]").toArray()) {
+    const raw = ($(element).attr("href") ?? "").trim();
+    if (raw === "" || raw.startsWith("#") || SKIP_LINK_PATTERN.test(raw)) continue;
+    let absolute: string;
+    try {
+      absolute = new URL(raw, baseUrl).toString();
+    } catch {
+      continue;
+    }
+    if (seen.has(absolute)) continue;
+    seen.add(absolute);
+    total += 1;
+    if (links.length < MAX_PAGE_LINKS) {
+      links.push({
+        href: absolute,
+        text: $(element).text().replace(/\s+/g, " ").trim().slice(0, MAX_LINK_TEXT_CHARS),
+      });
+    }
+  }
+  return { links, total };
 }
 
 /** Downloader ``sha256File`` parity: streaming checksum of one local file. */
@@ -159,20 +198,44 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
     label: "Navigate web page",
     description:
       "Navigate with the guarded Playwright crawler (real browser headers, " +
-      "2s rate limiting) and return page metadata and visible text. Extracts " +
-      "the <title> and visible body text (up to 5000 characters). Use for " +
-      "direct web navigation and reading page content on any public URL.",
+      "2s rate limiting) and return page metadata, visible text, and links. " +
+      "Extracts the <title>, a visible body-text window (default 5000 " +
+      "characters, up to 20000 via max_chars; page through longer text with " +
+      "offset), and up to 50 deduplicated absolute links with anchor text " +
+      "(links_total counts the rest) for discovering download entries on " +
+      "list pages. Use for direct web navigation and reading page content " +
+      "on any public URL.",
     parameters: {
       type: "object",
       properties: {
         url: { type: "string", description: "Target HTTP(S) URL. Must resolve to a public address." },
+        max_chars: {
+          type: "integer",
+          default: 5000,
+          description: "Body-text window length to return (default 5000, max 20000).",
+        },
+        offset: {
+          type: "integer",
+          default: 0,
+          description:
+            "Start position in the extracted body text (default 0). Use with " +
+            "body_text_truncated/body_text_total_chars to read long pages in windows.",
+        },
       },
       required: ["url"],
       additionalProperties: false,
     },
     execute: async (argumentsValue, signal) => {
-      const record = argumentsValue as { url?: unknown };
+      const record = argumentsValue as { url?: unknown; max_chars?: unknown; offset?: unknown };
       const url = typeof record.url === "string" ? record.url : "";
+      const maxChars =
+        typeof record.max_chars === "number" && Number.isInteger(record.max_chars) && record.max_chars > 0
+          ? Math.min(record.max_chars, MAX_BODY_CHARS_LIMIT)
+          : MAX_BODY_CHARS;
+      const offset =
+        typeof record.offset === "number" && Number.isInteger(record.offset) && record.offset > 0
+          ? record.offset
+          : 0;
       hooks.onQueryStarted(url, SOURCE);
       try {
         const result = await options.crawler.browser(url, signal);
@@ -189,6 +252,8 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
           };
         }
         const html = result.content;
+        const bodyText = extractBodyText(html);
+        const { links, total: linksTotal } = extractLinks(html, url);
         hooks.onQuery(url, SOURCE, "success", 1);
         return {
           content: JSON.stringify({
@@ -196,7 +261,12 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
             status_code: result.status_code,
             method_used: result.method_used,
             title: extractTitle(html),
-            body_text_preview: extractBodyText(html).slice(0, MAX_BODY_CHARS),
+            body_text_preview: bodyText.slice(offset, offset + maxChars),
+            body_text_offset: offset,
+            body_text_total_chars: bodyText.length,
+            body_text_truncated: offset + maxChars < bodyText.length,
+            links,
+            links_total: linksTotal,
             content_type: result.headers["content-type"] ?? "",
           }),
         };

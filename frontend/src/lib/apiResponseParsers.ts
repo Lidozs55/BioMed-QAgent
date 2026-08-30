@@ -16,7 +16,9 @@ import {
   optSchemaVersion,
   assertHex64,
   assertNonNegativeInt,
+  assertPositiveInt,
   assertJsonRecord,
+  parseTaskExecutionContext,
   ERROR_CODES,
   MESSAGE_ROLES,
   RUN_STATUSES,
@@ -46,6 +48,10 @@ import type {
 } from "@/runtime/contracts";
 import { parseEventPayload } from "@/lib/eventParsers";
 import { formalHILLinkageMatches } from "@/lib/eventParsersPipeline";
+import {
+  parseUntrustedArtifactReceipt,
+  type UntrustedArtifactReceipt,
+} from "@biomed/contracts";
 
 function optionalNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
@@ -55,7 +61,7 @@ function optionalNumber(value: unknown): number | undefined {
 
 const STAGE_EVENT_TYPES = new Set(["stage_started", "stage_completed", "stage_failed", "stage_skipped"]);
 const RUNTIME_EVENT_TYPES = new Set([
-  "run_queued", "run_started", "run_finalizing", "run_completed", "run_failed",
+  "run_queued", "run_steered", "run_started", "run_finalizing", "run_completed", "run_failed",
   "run_cancel_requested", "run_cancelled", "run_interrupted", "publication_created",
   "assistant_delta", "assistant_reasoning_delta", "tool_started", "context_usage", "conversation_compacted",
   "conversation_compaction_started", "conversation_compaction_failed",
@@ -90,14 +96,14 @@ function assertEventSchemaVersion(v: unknown, path: string): "1.0" | "2.0" {
   throw new APIError(502, `Expected "1.0"|"2.0" at ${path}, got ${String(v)}`);
 }
 
-export function assertEventType(v: unknown, path: string): "task_created" | "plan_ready" | "user_input_required" | "user_input_resumed" | "stage_started" | "stage_completed" | "stage_failed" | "stage_skipped" | "stage_progress" | "tool_called" | "tool_completed" | "tool_started" | "warning" | "artifact_produced" | "task_cancel_requested" | "task_cancelled" | "task_recovered" | "task_completed" | "task_failed" | "run_queued" | "run_started" | "run_finalizing" | "run_completed" | "run_failed" | "run_cancel_requested" | "run_cancelled" | "run_interrupted" | "publication_created" | "assistant_delta" | "assistant_reasoning_delta" | "context_usage" | "conversation_compacted" | "conversation_compaction_started" | "conversation_compaction_failed" | "permission_requested" | "permission_resolved" | "operation_started" | "operation_progress" | "operation_completed" | "operation_failed" | "subagent_queued" | "subagent_started" | "subagent_progress" | "subagent_completed" | "subagent_failed" | "subagent_cancel_requested" | "subagent_cancelled" | "subagent_interrupted" | "subagent_input_required" | "subagent_input_resumed" {
+export function assertEventType(v: unknown, path: string): "task_created" | "plan_ready" | "user_input_required" | "user_input_resumed" | "stage_started" | "stage_completed" | "stage_failed" | "stage_skipped" | "stage_progress" | "tool_called" | "tool_completed" | "tool_started" | "warning" | "artifact_produced" | "task_cancel_requested" | "task_cancelled" | "task_recovered" | "task_completed" | "task_failed" | "run_queued" | "run_steered" | "run_started" | "run_finalizing" | "run_completed" | "run_failed" | "run_cancel_requested" | "run_cancelled" | "run_interrupted" | "publication_created" | "assistant_delta" | "assistant_reasoning_delta" | "context_usage" | "conversation_compacted" | "conversation_compaction_started" | "conversation_compaction_failed" | "permission_requested" | "permission_resolved" | "operation_started" | "operation_progress" | "operation_completed" | "operation_failed" | "subagent_queued" | "subagent_started" | "subagent_progress" | "subagent_completed" | "subagent_failed" | "subagent_cancel_requested" | "subagent_cancelled" | "subagent_interrupted" | "subagent_input_required" | "subagent_input_resumed" {
   if (typeof v !== "string") throw new APIError(502, `Expected event type string at ${path}, got ${typeof v}`);
   switch (v) {
     case "task_created": case "plan_ready": case "user_input_required": case "user_input_resumed":
     case "stage_started": case "stage_completed": case "stage_failed": case "stage_skipped": case "stage_progress":
     case "tool_called": case "tool_completed": case "tool_started": case "warning": case "artifact_produced":
     case "task_cancel_requested": case "task_cancelled": case "task_recovered": case "task_completed": case "task_failed":
-    case "run_queued": case "run_started": case "run_finalizing": case "run_completed": case "run_failed":
+    case "run_queued": case "run_steered": case "run_started": case "run_finalizing": case "run_completed": case "run_failed":
     case "run_cancel_requested": case "run_cancelled": case "run_interrupted": case "publication_created":
     case "assistant_delta": case "assistant_reasoning_delta": case "context_usage": case "conversation_compacted":
     case "conversation_compaction_started": case "conversation_compaction_failed":
@@ -154,6 +160,11 @@ function parseRunRecord(json: unknown, idx: number): TaskSnapshot["runs"][number
       `runs[${idx}].summary`,
       (value, path) => parseRunSummary(value, path),
     ),
+    execution_context: assertOptionalNull(
+      Reflect.get(obj, "execution_context"),
+      `runs[${idx}].execution_context`,
+      (value, path) => parseTaskExecutionContext(value, path),
+    ),
   };
 }
 
@@ -180,6 +191,7 @@ function parseTaskPublicationSummary(json: unknown, idx: number): TaskPublicatio
 
 function parseMessageRecord(json: unknown, idx: number): TaskSnapshot["messages"][number] {
   const obj = assertObject(json, `messages[${idx}]`);
+  const rawSequence = Reflect.get(obj, "sequence");
   return {
     schema_version: optSchemaVersion(Reflect.get(obj, "schema_version"), `messages[${idx}].schema_version`),
     message_id: assertString(Reflect.get(obj, "message_id"), `messages[${idx}].message_id`),
@@ -189,6 +201,9 @@ function parseMessageRecord(json: unknown, idx: number): TaskSnapshot["messages"
     role: assertMessageRole(Reflect.get(obj, "role"), `messages[${idx}].role`),
     content: assertString(Reflect.get(obj, "content"), `messages[${idx}].content`),
     created_at: assertString(Reflect.get(obj, "created_at"), `messages[${idx}].created_at`),
+    ...(rawSequence === undefined
+      ? {}
+      : { sequence: assertPositiveInt(rawSequence, `messages[${idx}].sequence`) }),
   };
 }
 
@@ -695,5 +710,20 @@ export function parsePublicationDetail(json: unknown): PublicationDetail {
     manifest: parseVersionedDatasetManifest(Reflect.get(obj, "manifest"), "publication response.manifest"),
     publication: parseDatasetPublication(Reflect.get(obj, "publication"), "publication response.publication"),
     artifacts: assertArray(Reflect.get(obj, "artifacts"), "publication response.artifacts", (value, index) => parseManifestArtifactEntry(value, `publication response.artifacts[${index}]`)),
+  };
+}
+
+export function parseQuarantineReceipt(json: unknown): UntrustedArtifactReceipt {
+  return parseUntrustedArtifactReceipt(json, "quarantine receipt");
+}
+
+export function parseQuarantineReceiptPage(json: unknown): { items: UntrustedArtifactReceipt[] } {
+  const obj = assertObject(json, "quarantine response");
+  return {
+    items: assertArray(
+      Reflect.get(obj, "items"),
+      "quarantine response.items",
+      parseQuarantineReceipt,
+    ),
   };
 }

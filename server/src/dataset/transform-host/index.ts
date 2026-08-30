@@ -8,4 +8,4 @@ export * from "./host.js";
 export * from "./in-process-unisolated.js";
 export * from "./protocol.js";
 export * from "./quarantine.js";
-export * from "./sandbox.js";
+export * from "./isolation-availability.js";

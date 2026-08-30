@@ -39,6 +39,58 @@ export type HILStatus = (typeof HIL_STATUSES)[number];
 export const HIL_CONFIDENCE_LEVELS = ["high", "medium", "low"] as const;
 export type HILConfidenceLevel = (typeof HIL_CONFIDENCE_LEVELS)[number];
 
+/**
+ * Who resolved a review request. ``user`` is the classic human decision;
+ * ``model`` is an LLM pre-review pass (``hil_pre_review`` approval mode);
+ * ``auto`` is the ``auto_approve`` mode short-circuit. Publication-boundary
+ * consumers (product assessment, chart evidence, browser handoff) still
+ * require ``"user"`` and reject the other two at their own gates.
+ */
+export const HIL_REVIEWERS = ["user", "model", "auto"] as const;
+export type HILReviewer = (typeof HIL_REVIEWERS)[number];
+
+/**
+ * Three-tier approval authority per HIL scope (AGENTS HIL approval policy):
+ *
+ * - ``human_review`` — every request waits for a human decision (classic).
+ * - ``llm_pre_review`` — an LLM reviews first; only requests it fails are
+ *   escalated to a human. A pass resolves as the kind's affirmative decision
+ *   (``approve`` for permission, ``accept`` for reviews) with reviewer
+ *   ``model``.
+ * - ``auto_approve`` — no review at all: resolves immediately with the
+ *   affirmative decision and reviewer ``auto``.
+ */
+export const HIL_APPROVAL_MODES = ["human_review", "llm_pre_review", "auto_approve"] as const;
+export type HILApprovalMode = (typeof HIL_APPROVAL_MODES)[number];
+
+export const HIL_APPROVAL_SCOPES = ["permission", ...HIL_REVIEW_TYPES] as const;
+export type HILApprovalScope = (typeof HIL_APPROVAL_SCOPES)[number];
+
+/**
+ * Scopes whose consumers structurally require a human reviewer
+ * (``reviewer === "user"`` is validated downstream): VLM chart-evidence
+ * publication, browser evidence acceptance, and dynamic-family publication
+ * acceptance. The settings API rejects non-human modes for these.
+ */
+export const HIL_HUMAN_MANDATORY_SCOPES: readonly HILApprovalScope[] = [
+  "vlm_extraction",
+  "browser_evidence_acceptance",
+  "publication_acceptance",
+];
+
+export const DEFAULT_HIL_APPROVAL_SETTINGS: HILApprovalSettings = {
+  schema_version: "1.0",
+  default_mode: "human_review",
+  review_modes: {},
+};
+
+export interface HILApprovalSettings {
+  schema_version?: "1.0";
+  default_mode: HILApprovalMode;
+  /** Per-scope overrides; scopes omitted here fall back to ``default_mode``. */
+  review_modes: Partial<Record<HILApprovalScope, HILApprovalMode>>;
+}
+
 export interface HILSubject {
   binding_id?: string;
   record_ids?: string[];
@@ -98,7 +150,7 @@ export interface HumanReviewRecord {
   review_id: string;
   request_id: string;
   decision: HILDecision;
-  reviewer: "user";
+  reviewer: HILReviewer;
   reviewed_at: string;
   evidence_digest: string;
   reason: string | null;
@@ -240,7 +292,7 @@ export function parseHumanReviewRecord(
   path = "human_review_record",
 ): HumanReviewRecord {
   const obj = assertObject(value, path);
-  const reviewer = assertFinite(obj.reviewer, `${path}.reviewer`, ["user"] as const);
+  const reviewer = assertFinite(obj.reviewer, `${path}.reviewer`, HIL_REVIEWERS);
   return {
     schema_version: optSchemaVersion(obj.schema_version, `${path}.schema_version`),
     review_id: assertString(obj.review_id, `${path}.review_id`, true),
@@ -251,4 +303,30 @@ export function parseHumanReviewRecord(
     evidence_digest: assertHex64(obj.evidence_digest, `${path}.evidence_digest`),
     reason: assertStringOrNull(obj.reason, `${path}.reason`),
   };
+}
+
+export function parseHilApprovalSettings(
+  value: unknown,
+  path = "hil_approval_settings",
+): HILApprovalSettings {
+  const obj = assertObject(value, path);
+  return {
+    schema_version: optSchemaVersion(obj.schema_version, `${path}.schema_version`),
+    default_mode: assertFinite(obj.default_mode, `${path}.default_mode`, HIL_APPROVAL_MODES),
+    review_modes: parseApprovalScopeModes(obj.review_modes, `${path}.review_modes`),
+  };
+}
+
+function parseApprovalScopeModes(
+  value: unknown,
+  path: string,
+): HILApprovalSettings["review_modes"] {
+  if (value === undefined || value === null) return {};
+  const obj = assertObject(value, path);
+  const modes: HILApprovalSettings["review_modes"] = {};
+  for (const [scope, mode] of Object.entries(obj)) {
+    const key = assertFinite(scope, `${path} key`, HIL_APPROVAL_SCOPES);
+    modes[key] = assertFinite(mode, `${path}.${scope}`, HIL_APPROVAL_MODES);
+  }
+  return modes;
 }

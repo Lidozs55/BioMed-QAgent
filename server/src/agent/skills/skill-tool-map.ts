@@ -30,6 +30,11 @@ export interface SkillToolMapping {
   readonly routing: string;
   /** Tool names the Agent runtimes register for this skill. */
   readonly tools: readonly string[];
+  /**
+   * Guidance-only skills teach routes over tools owned by operational skills;
+   * toolOwner() skips them so every tool keeps exactly one operational owner.
+   */
+  readonly guidance_only?: boolean;
 }
 
 function mapping(
@@ -39,6 +44,7 @@ function mapping(
   description: string,
   routing: string,
   tools: readonly string[],
+  options: { readonly guidanceOnly?: boolean } = {},
 ): SkillToolMapping {
   return Object.freeze({
     name,
@@ -47,6 +53,7 @@ function mapping(
     description,
     routing,
     tools: Object.freeze([...tools]),
+    ...(options.guidanceOnly ? { guidance_only: true as const } : {}),
   });
 }
 
@@ -182,8 +189,17 @@ export const SKILL_TOOL_MAP: readonly SkillToolMapping[] = Object.freeze([
     "acquisition",
     ["browser", "http", "web"],
     "Render and navigate public web pages and download files through verified content-addressed staging with guarded browser automation.",
-    "Use for public-page research or known downloads. Browser-acquired text and files are staging evidence only and must never be substituted for a registered Core carrier.",
+    "Use for public-page research or known downloads.",
     ["navigate_page", "download_from_page"],
+  ),
+  mapping(
+    "web_search_discovery",
+    "discovery",
+    ["web_search", "browser", "web"],
+    "Find sources, official entries, and download locations on the open web via a search-engine result page (e.g. Bing) through the guarded browser.",
+    "Use early during source discovery whenever a needed source or entry is not already in hand: read result-page links, prefer official hosts, then acquire real bytes through the browser skill or a registered Core provider.",
+    ["navigate_page"],
+    { guidanceOnly: true },
   ),
   mapping(
     "local_cache",
@@ -212,10 +228,10 @@ export const SKILL_TOOL_MAP: readonly SkillToolMapping[] = Object.freeze([
   mapping(
     "extract_chart_data_vlm",
     "processing",
-    ["extract_chart_data_vlm", "vlm", "chart_extraction"],
-    "Extract structured chart data from paper figures or PDFs using the Qwen-VL visual model.",
-    "Use only for genuine charts or figures. Outputs are staging; estimated or uncertain points require evidence-bound human review before any formal publication.",
-    ["extract_chart_data_vlm"],
+    ["extract_chart_data_vlm", "extract_registered_paper_chart_evidence", "vlm", "chart_extraction"],
+    "Extract structured chart data from paper figures or PDFs with the visual model; registered paper evidence is the only promotion path.",
+    "Use only for genuine charts or figures. extract_chart_data_vlm is exploratory staging and cannot publish. Formal promotion runs only through extract_registered_paper_chart_evidence on registered paper assets; points stay pending evidence-bound review.",
+    ["extract_chart_data_vlm", "extract_registered_paper_chart_evidence"],
   ),
   mapping(
     "analysis",
@@ -247,11 +263,14 @@ export const SKILL_TOOL_MAP: readonly SkillToolMapping[] = Object.freeze([
     // Pi-side tool names. The legacy Python Agent registers the equivalent
     // pipeline tools as validate_dataset_execution_spec / execute_dataset_execution
     // (backend/app/pipeline/dataset_execution_tool.py); Phase 5/8 converges on
-    // these Pi names.
-    [
-      "inspect_dataset_execution_routes",
-      "scaffold_dataset_profile",
-      "validate_dataset_execution",
+      // these Pi names.
+      [
+        "inspect_dataset_execution_routes",
+        "scaffold_dataset_profile",
+        "scaffold_dataset_execution_spec",
+        "preflight_cleaning_rules",
+        "inspect_source_coverage",
+        "validate_dataset_execution",
       "execute_dataset_execution",
       "prepare_dynamic_family_publication",
       "submit_dynamic_family_publication",
@@ -265,6 +284,7 @@ export const SKILL_TOOL_NAMES: ReadonlySet<string> = new Set(
 
 export function toolOwner(toolName: string): string | undefined {
   for (const entry of SKILL_TOOL_MAP) {
+    if (entry.guidance_only === true) continue;
     if (entry.tools.includes(toolName)) return entry.name;
   }
   return undefined;

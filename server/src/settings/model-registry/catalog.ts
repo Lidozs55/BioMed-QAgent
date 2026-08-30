@@ -50,7 +50,7 @@ function spec(
 }
 
 export const FALLBACK_PARAM_SPECS: ParameterSpec[] = [
-  spec("max_tokens", "最大输出 Tokens", "integer", { defaultValue: 8192, min: 1, max: 262144 }),
+  spec("max_tokens", "最大输出 Tokens", "integer", { defaultValue: 8192, min: 1 }),
   spec("temperature", "Temperature", "number", { defaultValue: 0.7, min: 0, max: 2 }),
   spec("top_p", "Top P", "number", { defaultValue: 1, min: 0, max: 1 }),
   spec("top_k", "Top K", "integer", { min: 1, max: 100, advanced: true }),
@@ -60,9 +60,11 @@ export const FALLBACK_PARAM_SPECS: ParameterSpec[] = [
     "思考强度",
     "select",
     {
-      defaultValue: "high",
+      // 思考开关已并入思考强度：选择“关闭”即关闭思考（运行时不再透传）。
+      defaultValue: "off",
       advanced: true,
       options: [
+        { value: "off", label: "关闭" },
         { value: "low", label: "低" },
         { value: "medium", label: "中" },
         { value: "high", label: "高" },
@@ -70,7 +72,6 @@ export const FALLBACK_PARAM_SPECS: ParameterSpec[] = [
       ],
     },
   ),
-  spec("enable_thinking", "思考模式", "boolean", { defaultValue: false, advanced: true }),
   spec("thinking_budget", "思考预算（Tokens）", "integer", { min: 0, advanced: true }),
   spec("stop", "停止词（多个用英文逗号分隔）", "string", { advanced: true }),
   spec("stream", "流式输出", "boolean", { defaultValue: true, advanced: true }),
@@ -100,22 +101,23 @@ export const FALLBACK_PARAM_SPECS: ParameterSpec[] = [
 
 export const PROFILE_PROVIDER_SPECS: Record<string, ParameterSpec[]> = {
   dashscope: [
-    spec("max_tokens", "最大输出 Tokens", "integer", { defaultValue: 8192, min: 1, max: 262144 }),
+    spec("max_tokens", "最大输出 Tokens", "integer", { defaultValue: 8192, min: 1 }),
     spec("temperature", "Temperature", "number", { defaultValue: 0.7, min: 0, max: 2 }),
     spec("top_p", "Top P", "number", { defaultValue: 1, min: 0, max: 1 }),
     spec("top_k", "Top K", "integer", { min: 1, max: 100, advanced: true }),
     spec("repetition_penalty", "重复惩罚", "number", { defaultValue: 1, min: 0, max: 2 }),
     spec("stop", "停止词（多个用英文逗号分隔）", "string", { advanced: true }),
-    spec("enable_thinking", "思考模式", "boolean", { defaultValue: false, advanced: true }),
     spec("thinking_budget", "思考预算（Tokens）", "integer", { min: 0, advanced: true }),
     spec(
       "reasoning_effort",
       "思考强度（Qwen3.8）",
       "select",
       {
-        defaultValue: "xhigh",
+        // 思考开关已并入思考强度：选择“关闭”即关闭思考（运行时不再透传）。
+        defaultValue: "off",
         advanced: true,
         options: [
+          { value: "off", label: "关闭" },
           { value: "low", label: "低" },
           { value: "medium", label: "中" },
           { value: "xhigh", label: "超高" },
@@ -126,7 +128,7 @@ export const PROFILE_PROVIDER_SPECS: Record<string, ParameterSpec[]> = {
     spec("thinking_mode", "思维链模式", "boolean", { defaultValue: false, advanced: true }),
   ],
   openai: [
-    spec("max_tokens", "最大输出 Tokens", "integer", { defaultValue: 4096, min: 1, max: 262144 }),
+    spec("max_tokens", "最大输出 Tokens", "integer", { defaultValue: 4096, min: 1 }),
     spec("temperature", "Temperature", "number", { defaultValue: 0.7, min: 0, max: 2 }),
     spec("top_p", "Top P", "number", { defaultValue: 1, min: 0, max: 1 }),
     spec("presence_penalty", "存在惩罚", "number", { defaultValue: 0, min: -2, max: 2 }),
@@ -165,7 +167,7 @@ export const PROFILE_PROVIDER_SPECS: Record<string, ParameterSpec[]> = {
     spec("top_logprobs", "Top Logprobs", "integer", { defaultValue: 0, min: 0, max: 20, advanced: true }),
   ],
   deepseek: [
-    spec("max_tokens", "最大输出 Tokens", "integer", { defaultValue: 8192, min: 1, max: 262144 }),
+    spec("max_tokens", "最大输出 Tokens", "integer", { defaultValue: 8192, min: 1 }),
     spec("temperature", "Temperature", "number", { defaultValue: 1, min: 0, max: 2 }),
     spec("top_p", "Top P", "number", { defaultValue: 1, min: 0, max: 1 }),
     spec("presence_penalty", "存在惩罚", "number", { defaultValue: 0, min: -2, max: 2 }),
@@ -194,7 +196,7 @@ export const PROFILE_PROVIDER_SPECS: Record<string, ParameterSpec[]> = {
     }),
   ],
   zhipu: [
-    spec("max_tokens", "最大输出 Tokens", "integer", { defaultValue: 65536, min: 1, max: 131072 }),
+    spec("max_tokens", "最大输出 Tokens", "integer", { defaultValue: 65536, min: 1 }),
     spec("temperature", "Temperature", "number", { defaultValue: 0.95, min: 0, max: 2 }),
     spec("top_p", "Top P", "number", { defaultValue: 0.7, min: 0, max: 1 }),
     spec("do_sample", "采样", "boolean", { defaultValue: true }),
@@ -226,7 +228,7 @@ export const PROFILE_PROVIDER_SPECS: Record<string, ParameterSpec[]> = {
     }),
   ],
   moonshot: [
-    spec("max_tokens", "最大输出 Tokens", "integer", { defaultValue: 32768, min: 1, max: 131072 }),
+    spec("max_tokens", "最大输出 Tokens", "integer", { defaultValue: 32768, min: 1 }),
     spec("temperature", "Temperature", "number", { defaultValue: 1, min: 0, max: 2 }),
     spec("top_p", "Top P", "number", { defaultValue: 0.95, min: 0, max: 1 }),
     spec("stream", "流式输出", "boolean", { defaultValue: true, advanced: true }),
@@ -268,7 +270,7 @@ export const PROFILE_PROVIDER_SPECS: Record<string, ParameterSpec[]> = {
     ),
   ],
   groq: [
-    spec("max_tokens", "最大输出 Tokens", "integer", { defaultValue: 8192, min: 1, max: 131072 }),
+    spec("max_tokens", "最大输出 Tokens", "integer", { defaultValue: 8192, min: 1 }),
     spec("temperature", "Temperature", "number", { defaultValue: 0.7, min: 0, max: 2 }),
     spec("top_p", "Top P", "number", { defaultValue: 1, min: 0, max: 1 }),
     spec("presence_penalty", "存在惩罚", "number", { defaultValue: 0, min: -2, max: 2 }),
@@ -293,7 +295,7 @@ export const PROFILE_PROVIDER_SPECS: Record<string, ParameterSpec[]> = {
     spec("top_logprobs", "Top Logprobs", "integer", { defaultValue: 0, min: 0, max: 20, advanced: true }),
   ],
   xai: [
-    spec("max_tokens", "最大输出 Tokens", "integer", { defaultValue: 8192, min: 1, max: 131072 }),
+    spec("max_tokens", "最大输出 Tokens", "integer", { defaultValue: 8192, min: 1 }),
     spec("temperature", "Temperature", "number", { defaultValue: 0.7, min: 0, max: 2 }),
     spec("top_p", "Top P", "number", { defaultValue: 1, min: 0, max: 1 }),
     spec(
@@ -331,7 +333,7 @@ export const PROFILE_PROVIDER_SPECS: Record<string, ParameterSpec[]> = {
     ),
   ],
   mistral: [
-    spec("max_tokens", "最大输出 Tokens", "integer", { defaultValue: 16384, min: 1, max: 262144 }),
+    spec("max_tokens", "最大输出 Tokens", "integer", { defaultValue: 16384, min: 1 }),
     spec("temperature", "Temperature", "number", { defaultValue: 0.7, min: 0, max: 2 }),
     spec("top_p", "Top P", "number", { defaultValue: 1, min: 0, max: 1 }),
     spec("top_k", "Top K", "integer", { min: 1, max: 100, advanced: true }),
@@ -342,7 +344,7 @@ export const PROFILE_PROVIDER_SPECS: Record<string, ParameterSpec[]> = {
     spec("n", "生成结果数", "integer", { defaultValue: 1, min: 1, max: 8, advanced: true }),
   ],
   baichuan: [
-    spec("max_tokens", "最大输出 Tokens", "integer", { defaultValue: 4096, min: 1, max: 262144 }),
+    spec("max_tokens", "最大输出 Tokens", "integer", { defaultValue: 4096, min: 1 }),
     spec("temperature", "Temperature", "number", { defaultValue: 0.3, min: 0, max: 2 }),
     spec("top_p", "Top P", "number", { defaultValue: 0.85, min: 0, max: 1 }),
     spec("top_k", "Top K", "integer", { defaultValue: 5, min: 1, max: 100 }),
@@ -355,7 +357,7 @@ export const PARAM_SPECS = FALLBACK_PARAM_SPECS;
 
 const MODEL_PARAM_OVERRIDES: Record<string, ParameterSpec[]> = {
   "kimi-k3": [
-    spec("max_tokens", "最大输出 Tokens", "integer", { defaultValue: 32768, min: 1, max: 131072 }),
+    spec("max_tokens", "最大输出 Tokens", "integer", { defaultValue: 32768, min: 1 }),
     spec("stream", "流式输出", "boolean", { defaultValue: true, advanced: true }),
     spec("enable_search", "联网搜索", "boolean", { defaultValue: false, advanced: true }),
     spec(
@@ -389,7 +391,7 @@ const MODEL_PARAM_OVERRIDES: Record<string, ParameterSpec[]> = {
     ),
   ],
   "kimi/kimi-k3": [
-    spec("max_tokens", "最大输出 Tokens", "integer", { defaultValue: 32768, min: 1, max: 131072 }),
+    spec("max_tokens", "最大输出 Tokens", "integer", { defaultValue: 32768, min: 1 }),
     spec("stream", "流式输出", "boolean", { defaultValue: true, advanced: true }),
     spec("enable_search", "联网搜索", "boolean", { defaultValue: false, advanced: true }),
     spec(
@@ -459,21 +461,5 @@ export const VENDORS = [
   ["xai", "xAI", "https://api.x.ai/v1", false],
   ["mistral", "Mistral AI", "https://api.mistral.ai/v1", false],
 ] as const;
-
-/** Coarse context-window guess for API-discovered models from their id. */
-export function guessContextWindow(modelId: string): number {
-  const normalized = modelId.toLowerCase();
-  if (normalized.includes("2m")) return 2_000_000;
-  if (normalized.includes("1m") || normalized.includes("million") ||
-      normalized.includes("max")) return 1_000_000;
-  if (normalized.includes("262144") || normalized.includes("256k")) return 262_144;
-  if (normalized.includes("131072") || normalized.includes("128k")) return 131_072;
-  if (normalized.includes("65536") || normalized.includes("64k")) return 65_536;
-  if (normalized.includes("32768") || normalized.includes("32k")) return 32_768;
-  if (normalized.includes("16384") || normalized.includes("16k")) return 16_384;
-  if (normalized.includes("8192") || normalized.includes("8k")) return 8_192;
-  if (normalized.includes("omni") || normalized.includes("vl")) return 131_072;
-  return 524_288;
-}
 
 export { catalogCapacity, catalogContextWindow, lookupModelCatalog };

@@ -243,7 +243,7 @@ describe("explicit in-process unisolated Transform Host", () => {
       });
 
       expect(result.receipt).toMatchObject({
-        sandbox_backend: "in_process_unisolated",
+        execution_backend: "in_process_unisolated",
         exit_state: "succeeded",
         transform_digest: fixture.authority.transformDescriptorDigest,
         bundle_digest: fixture.bundle.sha256,
@@ -474,7 +474,7 @@ describe("explicit in-process unisolated Transform Host", () => {
         isGenerationCurrent: current,
       });
       expect(result.receipt).toMatchObject({
-        sandbox_backend: "in_process_unisolated",
+        execution_backend: "in_process_unisolated",
         exit_state: "timeout",
         output_bytes: 0,
         quarantined_output_receipts: [],

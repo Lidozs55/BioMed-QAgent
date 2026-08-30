@@ -376,7 +376,9 @@ describe("dynamic family build tool boundary", () => {
       ...details.prepared_submission,
       preflight_receipt: details.preflight_receipt,
     });
-    expect(submit.submission.execution_proposal.transform_refs[0]?.digest)
+    const echoSubmission = submit.submission;
+    if (echoSubmission === null) throw new Error("echo submit must carry the full prepared submission");
+    expect(echoSubmission.execution_proposal.transform_refs[0]?.digest)
       .toBe(submit.preflightReceipt.host_descriptor_digest);
 
     const submitTool = createDynamicFamilyPublicationTool({
@@ -386,7 +388,7 @@ describe("dynamic family build tool boundary", () => {
     const roundTrip = await submitTool.execute({
       preflight_receipt: details.preflight_receipt,
     });
-    expect(roundTrip.isError).not.toBe(true);
+    if (roundTrip.isError === true) throw new Error(roundTrip.content);
     expect((submitTool.parameters as { required: string[] }).required).toEqual([
       "preflight_receipt",
     ]);
@@ -494,7 +496,7 @@ describe("dynamic family build tool boundary", () => {
             error_code: "http_client_error",
             attempts: 1,
             binding_id: "binding_prevalence",
-            url: "https://gmrepo.humangut.info/api/getAssociatedSpeciesByMeshID/",
+            url: "https://gmrepo.humangut.info/api/getPhenotypesAndAbundanceSummaryOfAAssociatedTaxon/",
             endpoint_host: "gmrepo.humangut.info",
             elapsed_ms: 118,
             timeout_stage: null,
@@ -569,7 +571,7 @@ describe("dynamic family build tool boundary", () => {
         sourceAssetRegistry: registry, taskRoot: root, runtimeLimits: DEFAULT_RUNTIME_LIMITS,
         generation: 0, preflightReceipt: prepared.receipt, preflightSubmission: parsed,
       });
-      expect(result.receipt.sandbox_backend).toBe("in_process_unisolated");
+      expect(result.receipt.execution_backend).toBe("in_process_unisolated");
       expect(result.operationResult.output_summary).toMatchObject({ tables: { records: { row_count: 1 } } });
       expect(result.materialization.candidate.tables[0]?.definition.table_id).toBe("records");
       const publishInput = {

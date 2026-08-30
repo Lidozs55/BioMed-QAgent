@@ -19,6 +19,7 @@ import {
   type BioMedAgentSession,
   type BioMedAgentTool,
   type BioMedModelConfig,
+  type BioMedSessionBudget,
   type BioMedSessionConfig,
   type RunOptions,
 } from "./contracts.js";
@@ -45,11 +46,25 @@ export interface PiUpstreamEvent {
   reason?: "manual" | "threshold" | "overflow";
   aborted?: boolean;
   errorMessage?: string;
-  compactionResult?: { summary: string } | undefined;
+  compactionResult?: {
+    summary: string;
+    tokensBefore?: number;
+    estimatedTokensAfter?: number;
+    targetTokens?: number;
+    summaryTokens?: number;
+  } | undefined;
   contextUsage?: {
     tokens: number | null;
     contextWindow: number;
     percent: number | null;
+  };
+  usage?: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    totalTokens: number;
+    reasoning?: number;
   };
 }
 
@@ -69,6 +84,8 @@ export interface PiUpstreamSession {
   reconcileConfig?(): Promise<void>;
   /** Current session context usage (token estimate and window percent). */
   contextUsage?(): { tokens: number | null; percent: number | null } | undefined;
+  /** Current model budget facts for the run-entry preflight. */
+  getBudget?(): { contextWindow: number; maxTokens: number; reserveTokens: number };
   getContextUsage?(): {
     tokens: number | null;
     contextWindow: number;
@@ -93,6 +110,7 @@ interface QueueItem {
   event?: BioMedAgentEvent;
   error?: BioMedAgentError;
   done?: true;
+  barrier?: () => void;
 }
 
 class EventQueue {
@@ -137,6 +155,8 @@ const DELTA_FLUSH_INTERVAL_MS = 32;
 // new assistant/reasoning/tool progress indicate a degenerate configuration.
 const MAX_STALLED_LENGTH_CONTINUATIONS = 3;
 const MIN_PROGRESS_CHARS = 32;
+/** Default safety-reserve share of the context window (settings default 5%). */
+const DEFAULT_SAFETY_RESERVE_RATIO = 0.05;
 /** Minimum recent context kept after compaction, as a fraction of the window. */
 const MIN_KEEP_RATIO = 0.05;
 /** Maximum final compaction target, as a fraction of the window. */
@@ -160,6 +180,15 @@ const MAX_PROVIDER_RECOVERY_ATTEMPTS = 3;
 const PROVIDER_RECOVERY_DELAY_MS = 60_000;
 export const TOOL_ACTIVATION_NAME = "activate_agent_tools";
 const MAX_ACTIVATED_TOOLS = 12;
+
+export function resolveRequestMaxTokens(
+  configuredMaxTokens: number | undefined,
+  requestMaxTokens: number | undefined,
+): number | undefined {
+  if (configuredMaxTokens === undefined) return requestMaxTokens;
+  if (requestMaxTokens === undefined) return configuredMaxTokens;
+  return Math.min(configuredMaxTokens, requestMaxTokens);
+}
 
 function runProgressContextExtension(
   tracker: RunProgressContextTracker,
@@ -185,6 +214,24 @@ function boundedText(value: string): string {
   return value.slice(0, MAX_TEXT);
 }
 
+function toModelCallUsage(usage: {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  totalTokens: number;
+  reasoning?: number;
+}): PiUpstreamEvent["usage"] {
+  return {
+    input: usage.input,
+    output: usage.output,
+    cacheRead: usage.cacheRead,
+    cacheWrite: usage.cacheWrite,
+    totalTokens: usage.totalTokens,
+    ...(usage.reasoning === undefined ? {} : { reasoning: usage.reasoning }),
+  };
+}
+
 function boundedValue(value: unknown, depth = 0): unknown {
   if (typeof value === "string") return boundedText(value);
   if (
@@ -206,6 +253,26 @@ function boundedValue(value: unknown, depth = 0): unknown {
     );
   }
   return String(value).slice(0, MAX_TEXT);
+}
+
+/**
+ * Delimited marker pair for frozen run context carried by ``systemContext``.
+ * The agent must treat the section as binding evidence and never echo it into
+ * the user-visible conversation.
+ */
+export const SYSTEM_CONTEXT_SECTION_BEGIN = "[Begin Frozen execution context]";
+export const SYSTEM_CONTEXT_SECTION_END = "[End Frozen execution context]";
+
+/** Appends the serialized frozen run context to the system prompt. */
+export function systemContextSection(systemContext: string | undefined): string {
+  if (systemContext === undefined || systemContext.trim() === "") return "";
+  return [
+    "",
+    "",
+    SYSTEM_CONTEXT_SECTION_BEGIN,
+    systemContext.trim(),
+    SYSTEM_CONTEXT_SECTION_END,
+  ].join("\n");
 }
 
 export function toolCatalogPrompt(
@@ -387,6 +454,15 @@ function modelFromEnvironment(environment: Environment): BioMedModelConfig {
   return { provider, modelId, apiKey, baseUrl };
 }
 
+/**
+ * Kimi models on DashScope reject sampling overrides entirely (even
+ * `top_p: 1`); any temperature/top_p value yields a 400 invalid_parameter.
+ * They must run with provider-default sampling only.
+ */
+function rejectsSamplingOverrides(selected: BioMedModelConfig): boolean {
+  return selected.modelId.toLowerCase().startsWith("kimi");
+}
+
 function usesDashScopeQwen(selected: BioMedModelConfig): boolean {
   if (selected.baseUrl === undefined) return false;
   try {
@@ -406,6 +482,23 @@ function usesDashScopeQwen(selected: BioMedModelConfig): boolean {
  * ``contextWindow - reserveTokens`` and keeps approximately
  * ``keepRecentTokens`` tokens from the end of the conversation.
  */
+export function resolvePiCompactionTargetTokens(
+  contextWindow: number,
+  targetRatio: number,
+  currentTokens?: number | null,
+): number {
+  const floorKeep = Math.round(contextWindow * MIN_KEEP_RATIO);
+  const capKeep = Math.round(contextWindow * MAX_KEEP_RATIO);
+  const hasKnownUsage = currentTokens !== null &&
+    currentTokens !== undefined &&
+    Number.isFinite(currentTokens) &&
+    currentTokens > 0;
+  const desiredTarget = hasKnownUsage
+    ? Math.round(currentTokens * targetRatio)
+    : Math.round(contextWindow * targetRatio);
+  return Math.min(Math.max(desiredTarget, floorKeep), capKeep);
+}
+
 export function resolvePiCompactionOverrides(
   contextWindow: number,
   triggerRatio: number,
@@ -416,15 +509,16 @@ export function resolvePiCompactionOverrides(
   // Pi caps the compaction summary at 80% of the reserve budget; pre-reserve
   // that headroom so a dense summary never displaces the recent context.
   const summaryBudget = Math.round(SUMMARY_BUDGET_RATIO * reserveTokens);
-  const floorKeep = Math.round(contextWindow * MIN_KEEP_RATIO);
-  const capKeep = Math.round(contextWindow * MAX_KEEP_RATIO);
   const hasKnownUsage = currentTokens !== null &&
     currentTokens !== undefined &&
     Number.isFinite(currentTokens) &&
     currentTokens > 0;
-  const finalTarget = hasKnownUsage
-    ? Math.min(Math.max(Math.round(currentTokens * targetRatio), floorKeep), capKeep)
-    : Math.min(Math.max(Math.round(contextWindow * targetRatio), floorKeep), capKeep);
+  const finalTarget = resolvePiCompactionTargetTokens(
+    contextWindow,
+    targetRatio,
+    currentTokens,
+  );
+  const floorKeep = Math.round(contextWindow * MIN_KEEP_RATIO);
   const desiredKeep = Math.max(floorKeep, finalTarget - summaryBudget);
   const keptRecent = Math.min(
     desiredKeep,
@@ -472,6 +566,17 @@ export function resolveManualPiCompactionOverrides(
       ...auto.compaction,
       keepRecentTokens,
     },
+  };
+}
+
+/** Model budget facts for the run-entry preflight, derived from config. */
+export function resolveSessionBudget(config: BioMedModelConfig): BioMedSessionBudget {
+  const contextWindow = config.contextWindow ?? 131_072;
+  return {
+    contextWindow,
+    maxTokens: config.maxTokens ?? 8_192,
+    reserveTokens: config.safetyReserveTokens
+      ?? Math.round(contextWindow * DEFAULT_SAFETY_RESERVE_RATIO),
   };
 }
 
@@ -563,10 +668,15 @@ export function applyModelProfileToPayload(
   }
   const next: Record<string, unknown> = { ...payload };
   const dashScopeQwen = usesDashScopeQwen(selected);
+  if (rejectsSamplingOverrides(selected)) {
+    delete next.temperature;
+    delete next.top_p;
+  }
   for (const [key, value] of Object.entries(selected.params ?? {})) {
     if (value === undefined) continue;
     if (key === "top_logprobs" && selected.params?.logprobs !== true) continue;
     if (key === "max_tokens" || key === "temperature" || key === "top_p") continue;
+    if (key === "reasoning_effort" && value === "off") continue; // 思考强度=关闭：不向上游透传无效值
     if (key === "context_window" || key === "max_output_tokens" ||
         key === "suggested_max_tokens" || key === "capabilities") continue;
     if (dashScopeQwen &&
@@ -585,18 +695,24 @@ export function applyModelProfileToPayload(
         })()
       : value;
   }
-  if (selected.topP !== undefined) next.top_p = selected.topP;
+  if (selected.topP !== undefined && !rejectsSamplingOverrides(selected)) next.top_p = selected.topP;
   if (dashScopeQwen) {
     if (selected.repetitionPenalty !== undefined) {
       next.repetition_penalty = selected.repetitionPenalty;
     }
     if (selected.enableSearch !== undefined) next.enable_search = selected.enableSearch;
     if (selected.thinkingMode !== undefined) next.enable_thinking = selected.thinkingMode;
+    // 思考开关已并入思考强度：显式选择“关闭”时强制关闭思考，
+    // 优先级高于旧的思维链模式开关。
+    if (selected.params?.reasoning_effort === "off") next.enable_thinking = false;
   }
   return next;
 }
 
-function toUpstreamEvent(event: AgentSessionEvent): PiUpstreamEvent {
+export function toUpstreamEvent(
+  event: AgentSessionEvent,
+  compactionTargetTokens?: number,
+): PiUpstreamEvent {
   switch (event.type) {
     case "message_end":
       return {
@@ -604,6 +720,10 @@ function toUpstreamEvent(event: AgentSessionEvent): PiUpstreamEvent {
         assistantStopReason:
           event.message.role === "assistant"
             ? event.message.stopReason
+            : undefined,
+        usage:
+          event.message.role === "assistant"
+            ? toModelCallUsage(event.message.usage)
             : undefined,
       };
     case "message_update":
@@ -640,12 +760,28 @@ function toUpstreamEvent(event: AgentSessionEvent): PiUpstreamEvent {
         compactionResult:
           event.result === undefined
             ? undefined
-            : { summary: boundedText(event.result.summary) },
+            : {
+                summary: event.result.summary,
+                tokensBefore: event.result.tokensBefore,
+                ...(event.result.estimatedTokensAfter === undefined
+                  ? {}
+                  : { estimatedTokensAfter: event.result.estimatedTokensAfter }),
+                ...(compactionTargetTokens === undefined
+                  ? {}
+                  : { targetTokens: compactionTargetTokens }),
+                ...(event.result.usage === undefined
+                  ? {}
+                  : { summaryTokens: event.result.usage.output }),
+              },
         aborted: event.aborted,
         errorMessage:
           event.errorMessage === undefined
             ? undefined
             : boundedText(event.errorMessage),
+        usage:
+          event.result === undefined || event.result.usage === undefined
+            ? undefined
+            : toModelCallUsage(event.result.usage),
       };
     default:
       return { type: event.type };
@@ -688,7 +824,7 @@ async function createRealUpstreamSession(
     const upstreamPayload = options?.onPayload;
     return streamSimple(model, context, {
       ...options,
-      maxTokens: current.maxTokens ?? options?.maxTokens,
+      maxTokens: resolveRequestMaxTokens(current.maxTokens, options?.maxTokens),
       temperature: current.temperature ?? options?.temperature,
       onPayload: async (payload, payloadModel) => {
         const transformed = upstreamPayload === undefined
@@ -923,6 +1059,7 @@ async function createRealUpstreamSession(
       }
     },
     getContextUsage: () => session.getContextUsage(),
+    getBudget: () => resolveSessionBudget(current),
     reconcileConfig,
     contextUsage: () => {
       const usage = session.getContextUsage();
@@ -932,7 +1069,17 @@ async function createRealUpstreamSession(
     },
     subscribe(listener) {
       return session.subscribe((event) => {
-        const mapped = toUpstreamEvent(event);
+        const compactionTargetTokens =
+          event.type === "compaction_end" &&
+          event.result !== undefined &&
+          current.compactionTargetRatio !== undefined
+            ? resolvePiCompactionTargetTokens(
+                currentWindow(),
+                current.compactionTargetRatio,
+                event.result.tokensBefore,
+              )
+            : undefined;
+        const mapped = toUpstreamEvent(event, compactionTargetTokens);
         if (event.type === "message_end" && event.message.role === "assistant") {
           const usage = session.getContextUsage();
           listener(usage === undefined ? mapped : { ...mapped, contextUsage: usage });
@@ -1068,6 +1215,7 @@ class PiBioMedAgentSession implements BioMedAgentSession {
   private readonly unsubscribe: () => void;
   private disposePromise?: Promise<void>;
   private readonly cleanup?: () => Promise<void>;
+  private readonly getCurrentPublicationId?: () => string | null;
 
   constructor(
     private readonly upstream: PiUpstreamSession,
@@ -1077,7 +1225,12 @@ class PiBioMedAgentSession implements BioMedAgentSession {
     this.taskId = config.taskId;
     this.runId = config.runId;
     this.cleanup = config.cleanup;
+    this.getCurrentPublicationId = config.getCurrentPublicationId;
     this.unsubscribe = upstream.subscribe((event) => this.handleEvent(event));
+  }
+
+  getBudget(): BioMedSessionBudget | null {
+    return this.upstream.getBudget?.() ?? null;
   }
 
   private handleEvent(event: PiUpstreamEvent): void {
@@ -1122,9 +1275,57 @@ class PiBioMedAgentSession implements BioMedAgentSession {
         },
       });
     } else if (event.type === "compaction_end") {
-      const summary = event.compactionResult?.summary;
-      if (event.aborted !== true && typeof summary === "string" && summary.trim() !== "") {
-        this.pushBoundary(active, { event: { type: "context_compacted", summary } });
+      const result = event.compactionResult;
+      if (
+        event.aborted !== true &&
+        result !== undefined &&
+        result.summary.trim() !== ""
+      ) {
+        const summary = result.summary;
+        this.pushBoundary(active, {
+          event: {
+            type: "context_compacted",
+            summary,
+            ...(event.reason === undefined ? {} : { reason: event.reason }),
+            ...(result.tokensBefore === undefined
+              ? {}
+              : { tokensBefore: result.tokensBefore }),
+            ...(result.estimatedTokensAfter === undefined
+              ? {}
+              : { estimatedTokensAfter: result.estimatedTokensAfter }),
+            ...(result.targetTokens === undefined
+              ? {}
+              : { targetTokens: result.targetTokens }),
+            ...(result.summaryTokens === undefined
+              ? {}
+              : { summaryTokens: result.summaryTokens }),
+          },
+        });
+        const didNotReduce =
+          result.tokensBefore !== undefined &&
+          result.estimatedTokensAfter !== undefined &&
+          result.estimatedTokensAfter >= result.tokensBefore;
+        const missedTarget =
+          result.targetTokens !== undefined &&
+          result.estimatedTokensAfter !== undefined &&
+          result.estimatedTokensAfter > result.targetTokens;
+        if (didNotReduce || missedTarget) {
+          // Once the run has emitted its immutable publication, the closing
+          // turn cannot contribute further work: land it gracefully instead
+          // of failing the run, so publication registration and supervisor
+          // closure survive post-publication context exhaustion.
+          if ((this.getCurrentPublicationId?.() ?? null) !== null) {
+            this.finish(active, { event: { type: "turn_completed" } });
+            return;
+          }
+          this.finish(active, {
+            error: new BioMedAgentError(
+              "CONTEXT_COMPACTION_INEFFECTIVE",
+              "Context compaction did not reduce the estimated context",
+            ),
+          });
+          return;
+        }
       }
       if (event.contextUsage !== undefined) {
         this.pushBoundary(active, {
@@ -1134,6 +1335,7 @@ class PiBioMedAgentSession implements BioMedAgentSession {
             contextWindow: event.contextUsage.contextWindow,
             percent: event.contextUsage.percent,
             source: "runtime",
+            ...(event.usage === undefined ? {} : { usage: event.usage }),
           },
         });
       }
@@ -1147,6 +1349,7 @@ class PiBioMedAgentSession implements BioMedAgentSession {
             contextWindow: event.contextUsage.contextWindow,
             percent: event.contextUsage.percent,
             source: "runtime",
+            ...(event.usage === undefined ? {} : { usage: event.usage }),
           },
         });
       }
@@ -1290,6 +1493,10 @@ class PiBioMedAgentSession implements BioMedAgentSession {
         const item = await active.queue.next();
         if (item.error !== undefined) throw item.error;
         if (item.done === true) break;
+        if (item.barrier !== undefined) {
+          item.barrier();
+          continue;
+        }
         if (item.event !== undefined) yield item.event;
       }
     } finally {
@@ -1334,12 +1541,19 @@ class PiBioMedAgentSession implements BioMedAgentSession {
   }
 
   async steer(text: string): Promise<void> {
-    if (this.activeTurn === undefined || this.activeTurn.terminal) {
+    const active = this.activeTurn;
+    if (active === undefined || active.terminal) {
       throw new BioMedAgentError("SESSION_BUSY", "Agent session has no active turn to steer");
     }
     if (this.upstream.steer === undefined) {
       throw new BioMedAgentError("UPSTREAM_FAILURE", "Agent runtime does not support steering");
     }
+    // The realtime stream can be ahead of the coalesced durable event stream.
+    // Flush and wait until the run consumer has processed every earlier event
+    // before accepting the new user turn, so run_steered receives a sequence
+    // after the text the user already saw.
+    this.flushPendingDelta(active);
+    await new Promise<void>((resolve) => active.queue.push({ barrier: resolve }));
     await this.upstream.steer(text);
   }
 
@@ -1421,7 +1635,8 @@ export class PiAgentAdapter implements BioMedAgentAdapter {
         ...config,
         systemPrompt:
           PHASE1_SYSTEM_PROMPT +
-          toolCatalogPrompt(config.tools ?? [], config.initialToolNames ?? (config.tools ?? []).map((tool) => tool.name)),
+          toolCatalogPrompt(config.tools ?? [], config.initialToolNames ?? (config.tools ?? []).map((tool) => tool.name)) +
+          systemContextSection(config.systemContext),
         skillRoots: [...optionalSkillRoots, ...(config.skillRoots ?? [])],
       });
       const upstream = await this.createUpstreamSession(validated);

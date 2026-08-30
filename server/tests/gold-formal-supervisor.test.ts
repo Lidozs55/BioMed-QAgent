@@ -8,17 +8,20 @@ import { once } from "node:events";
 import { afterEach, describe, expect, test } from "vitest";
 
 const supervisorUrl = new URL("../../scripts/gold-formal-supervisor.mjs", import.meta.url);
+const supervisorModule = await import(supervisorUrl.href);
 const {
   EXIT_CODES,
   classifyHIL,
   classifyPermission,
   classifyTerminal,
+  currentPublicationIdFrom,
   digestManifestFile,
   digestPackage,
+  redacted: redactEvidence,
   supervise,
   validateCleanUtf8Bytes,
   verifyArtifactBytes,
-} = await import(supervisorUrl.href);
+} = supervisorModule;
 type JsonRecord = Record<string, unknown>;
 const roots: string[] = [];
 const TASK_ID = "task_ts_fixture";
@@ -101,13 +104,6 @@ function taskSnapshot(status: string, activeRunId: string | null, currentPublica
       title: "fixture",
       status,
       active_run_id: activeRunId,
-      current_publication_id: currentPublicationId,
-      publications: currentPublicationId === null ? [] : [{
-        publication_id: currentPublicationId,
-        manifest_sha256: MANIFEST_SHA,
-        supersedes_publication_id: null,
-        published_at: "2026-08-26T00:00:03.000Z",
-      }],
       created_at: "2026-08-26T00:00:00.000Z",
       updated_at: "2026-08-26T00:00:00.000Z",
       latest_sequence: 3,
@@ -127,6 +123,13 @@ function taskSnapshot(status: string, activeRunId: string | null, currentPublica
     }],
     messages: [],
     older_messages_cursor: null,
+    current_publication_id: currentPublicationId,
+    publications: currentPublicationId === null ? [] : [{
+      publication_id: currentPublicationId,
+      manifest_sha256: MANIFEST_SHA,
+      supersedes_publication_id: null,
+      published_at: "2026-08-26T00:00:03.000Z",
+    }],
   };
 }
 
@@ -172,7 +175,7 @@ function healthy(): JsonRecord {
   return { status: "ok", app_host: "ts", agent_runtime: "pi", dataset_core: "ts" };
 }
 
-function apiServer(config: { events: JsonRecord[]; snapshot: JsonRecord; completeOnRun?: boolean; onRun?: (body: JsonRecord) => void; onResume?: (body: JsonRecord) => void }): Promise<{ server: Server; baseUrl: string }> {
+function apiServer(config: { events: JsonRecord[]; snapshot: JsonRecord; completeOnRun?: boolean; onRun?: (body: JsonRecord) => void; onPermission?: (body: JsonRecord) => void; onResume?: (body: JsonRecord) => void }): Promise<{ server: Server; baseUrl: string }> {
   let snapshot = config.snapshot;
   return listen((request, response) => {
     void (async () => {
@@ -193,6 +196,7 @@ function apiServer(config: { events: JsonRecord[]; snapshot: JsonRecord; complet
         return;
       }
       if (url.pathname.startsWith(`/api/v1/tasks/${TASK_ID}/runs/${RUN_ID}/permissions/`) && request.method === "POST") {
+        config.onPermission?.(JSON.parse(await readBody(request)) as JsonRecord);
         json(response, 200, { status: "resolved" });
         return;
       }
@@ -231,6 +235,38 @@ afterEach(async () => {
 });
 
 describe("Gold formal rerun supervisor", () => {
+  test("preserves numeric token telemetry while redacting credentials", () => {
+    expect(redactEvidence({
+      tokens: 115_487,
+      tokens_before: 100_000,
+      estimated_tokens_after: 97_000,
+      target_tokens: 60_000,
+      summary_tokens: 32_000,
+      model_calls: 18,
+      input_tokens: 401_776,
+      output_tokens: 12_345,
+      cache_read_tokens: 380_000,
+      cache_write_tokens: 6_000,
+      total_tokens: 414_121,
+      reasoning_tokens: 2_400,
+      access_token: "secret-value",
+    })).toEqual({
+      tokens: 115_487,
+      tokens_before: 100_000,
+      estimated_tokens_after: 97_000,
+      target_tokens: 60_000,
+      summary_tokens: 32_000,
+      model_calls: 18,
+      input_tokens: 401_776,
+      output_tokens: 12_345,
+      cache_read_tokens: 380_000,
+      cache_write_tokens: 6_000,
+      total_tokens: 414_121,
+      reasoning_tokens: 2_400,
+      access_token: "[REDACTED]",
+    });
+  });
+
   test("exports stable exit codes and terminal classifications", () => {
     expect(EXIT_CODES.SUCCESS).toBe(0);
     expect(classifyTerminal({
@@ -240,16 +276,74 @@ describe("Gold formal rerun supervisor", () => {
     expect(classifyTerminal({ run: { status: "completed" }, publication: null }).classification).toBe("blocked_no_publication");
   });
 
+  test("reads current_publication_id from the snapshot top level, not from the task object", () => {
+    // The durable reducer emits current_publication_id as a top-level
+    // snapshot field (task-reducer.ts); snapshot.task carries no such key.
+    // Reading it from snapshot.task silently downgraded every supervised
+    // publication closure to blocked_no_publication.
+    expect(currentPublicationIdFrom({
+      task: { task_id: "task_ts_x" },
+      current_publication_id: PUBLICATION_ID,
+    })).toBe(PUBLICATION_ID);
+    expect(currentPublicationIdFrom({ task: { task_id: "task_ts_x" }, current_publication_id: null })).toBe(null);
+    expect(currentPublicationIdFrom({ task: { current_publication_id: PUBLICATION_ID } })).toBe(null);
+  });
+
   test("rejects replacement-character and malformed UTF-8 prompts", () => {
     expect(() => validateCleanUtf8Bytes(Buffer.from("bad\uFFFD", "utf8"), "prompt")).toThrow(/U\+FFFD/);
     expect(() => validateCleanUtf8Bytes(Uint8Array.from([0xc3, 0x28]), "prompt")).toThrow(/UTF-8/);
   });
 
-  test("classifies only strict workspace reads and fixed diagnostic commands as safe", () => {
+  test("allows only strict workspace reads and fixed parser commands while denying known exec bypasses", () => {
     expect(classifyPermission({ capability: "fs.read", scope: "workspace", canonical_resource: path.join(WORKSPACE_ROOT, "input.csv") }, { workspaceRoot: WORKSPACE_ROOT }).action).toBe("allow");
     expect(classifyPermission({ capability: "fs.read", scope: "workspace", canonical_resource: path.join(WORKSPACE_ROOT, ".env") }, { workspaceRoot: WORKSPACE_ROOT }).action).toBe("stop");
     expect(classifyPermission({ capability: "process.exec", scope: "workspace", command: "node parse-fixture.mjs", cwd: WORKSPACE_ROOT }, { workspaceRoot: WORKSPACE_ROOT }).action).toBe("allow");
-    expect(classifyPermission({ capability: "process.exec", scope: "workspace", command: "node -e fetch('https://evil')", cwd: WORKSPACE_ROOT }, { workspaceRoot: WORKSPACE_ROOT }).action).toBe("stop");
+    expect(classifyPermission({
+      capability: "process.exec",
+      scope: "workspace",
+      command: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -Command New-Item -ItemType Directory -Force -Path raw\\gwas_catalog; Copy-Item source_assets\\asset.json raw\\gwas_catalog\\asset.json",
+      cwd: WORKSPACE_ROOT,
+    }, { workspaceRoot: WORKSPACE_ROOT }).action).toBe("deny");
+    expect(classifyPermission({
+      capability: "process.exec",
+      scope: "workspace",
+      command: "C:\\Program Files\\Git\\mingw64\\bin\\curl.exe -sSL --max-time 60 -o staging/dilirank.md https://raw.githubusercontent.com/example/repo/main/README.md",
+      cwd: WORKSPACE_ROOT,
+    }, { workspaceRoot: WORKSPACE_ROOT }).action).toBe("deny");
+    expect(classifyPermission({ capability: "process.exec", scope: "workspace", command: "python analysis.py", cwd: WORKSPACE_ROOT }, { workspaceRoot: WORKSPACE_ROOT }).action).toBe("stop");
+    expect(classifyPermission({ capability: "process.exec", scope: "workspace", command: "node -e fetch('https://evil')", cwd: WORKSPACE_ROOT }, { workspaceRoot: WORKSPACE_ROOT }).action).toBe("deny");
+  });
+
+  test("posts deny for a known exec bypass and continues the same run", async () => {
+    const fixture = await setup();
+    const permissionBodies: JsonRecord[] = [];
+    const host = await apiServer({
+      events: [
+        event(1, {
+          type: "permission_requested",
+          request_id: "permission_network",
+          capability: "process.exec",
+          scope: "workspace",
+          command: "curl.exe -sSL https://example.test/data.csv",
+          cwd: WORKSPACE_ROOT,
+        }, "permission_requested"),
+        event(2, { type: "run_completed" }, "run_completed"),
+      ],
+      snapshot: taskSnapshot("queued", null),
+      completeOnRun: true,
+      onPermission: (body) => permissionBodies.push(body),
+    });
+    try {
+      const result = await supervise(options({ ...fixture, baseUrl: host.baseUrl }));
+      expect(result.terminal.classification).toBe("succeeded_publication");
+      expect(permissionBodies).toEqual([{ decision: "deny", grant_scope: null }]);
+      const records = (await readFile(path.join(fixture.evidenceDir, "permissions.jsonl"), "utf8")).trim().split("\n");
+      expect(records).toHaveLength(1);
+      expect(JSON.parse(records[0] ?? "{}")).toMatchObject({
+        request_id: "permission_network",
+        decision: { action: "deny" },
+      });
+    } finally { await close(host.server); }
   });
 
   test("fails closed when task has an active run", async () => {

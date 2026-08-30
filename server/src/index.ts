@@ -3,14 +3,28 @@ import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 
 import { createApplicationHost } from "./app/create-app.js";
+import { LifecycleRegistry } from "./app/lifecycle.js";
 import { createBootstrapOptions, type BootstrapOptions } from "./bootstrap.js";
 import { parseHostConfig, resolveOutputDir, resolveWorkspacesRoot } from "./config.js";
 import { createViteMiddleware } from "./dev/vite-middleware.js";
 import { createStaticMiddleware } from "./dev/static-middleware.js";
+import { acquireApplicationInstanceLock } from "./runtime/application-instance-lock.js";
 
 function bannerHost(publicHost: string, port: number): string {
   const host = publicHost === "0.0.0.0" || publicHost === "::" ? "127.0.0.1" : publicHost;
-  return `${host}:${port}`;
+  return `${host.includes(":") ? `[${host}]` : host}:${port}`;
+}
+
+function installGracefulSignal(
+  signal: "SIGINT" | "SIGTERM" | "SIGHUP",
+  close: () => Promise<void>,
+): void {
+  process.once(signal, () => {
+    void close().catch((error: unknown) => {
+      console.error("Application Host shutdown failed", error);
+      process.exitCode = 1;
+    });
+  });
 }
 
 async function main(): Promise<void> {
@@ -24,6 +38,16 @@ async function main(): Promise<void> {
   const workspacesRoot = resolveWorkspacesRoot(repositoryRoot, process.env.OUTPUT_DIR);
 
   const startedAt = performance.now();
+  const lifecycle = new LifecycleRegistry({ timeoutMs: config.shutdownTimeoutMs });
+  if (serveStatic) {
+    const instanceLock = await acquireApplicationInstanceLock();
+    if (instanceLock.status === "already_running") {
+      console.log("BioMed-QAgent is already running.");
+      return;
+    }
+    lifecycle.add("production application instance lock", instanceLock.lease.release);
+  }
+
   console.log("BioMed-QAgent starting...");
 
   // bootstrap（model settings / product API / db bridge / browser pool）与
@@ -33,8 +57,14 @@ async function main(): Promise<void> {
   const host = await createApplicationHost({
     publicHost: config.publicHost,
     publicPort: config.publicPort,
+    lifecycle,
     onListening: (address) => {
-      console.log(`  ➜ Host:  http://${bannerHost(config.publicHost, address.port)}/`);
+      if (config.publicPort !== 0 && address.port !== config.publicPort) {
+        console.warn(`Port ${config.publicPort} is already in use; using OS-assigned port ${address.port}.`);
+      }
+      const baseUrl = `http://${bannerHost(config.publicHost, address.port)}`;
+      console.log(`BIOMED_QAGENT_URL=${baseUrl}`);
+      console.log(`  ➜ Host:  ${baseUrl}/`);
       console.log("  ➜ State: initializing runtime...");
     },
     initializeLifecycle: async (lifecycle) => {
@@ -83,18 +113,13 @@ async function main(): Promise<void> {
     shutdown ??= host.close();
     return shutdown;
   };
-  // tsx watch 重启进程时发 SIGTERM：优雅关闭会拖延端口释放，新进程立即
-  // listen 会 EADDRINUSE。watch 场景直接退出，未终结的 run 由 durable
-  // repository 在下次启动时 recoverActiveRuns() 标记 interrupted。
-  process.once("SIGTERM", () => process.exit(0));
-  for (const signal of ["SIGINT", "SIGHUP"] as const) {
-    process.once(signal, () => {
-      void close().catch((error: unknown) => {
-        console.error("Application Host shutdown failed", error);
-        process.exitCode = 1;
-      });
-    });
-  }
+  // tsx watch 重启进程时发 SIGTERM：开发模式直接退出，未终结的 run 由
+  // durable repository 在下次启动时 recoverActiveRuns() 标记 interrupted。
+  // 静态生产模式则须完成有界关闭，最后释放应用单实例租约。
+  if (serveStatic) installGracefulSignal("SIGTERM", close);
+  else process.once("SIGTERM", () => process.exit(0));
+  installGracefulSignal("SIGINT", close);
+  installGracefulSignal("SIGHUP", close);
 }
 
 main().catch((error: unknown) => {

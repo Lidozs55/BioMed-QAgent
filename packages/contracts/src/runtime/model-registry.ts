@@ -1,7 +1,27 @@
-/** Strict parsers for model-registry list responses. */
-import type { ManagedModelInfo, ModelCapabilities, ParameterSpec, ProviderInfo } from "../model-registry.js";
+/**
+ * Strict parsers for model-registry list responses.
+ */
+import type {
+  ManagedModelInfo,
+  ModelCapabilities,
+  ModelRegistryPage,
+  ParameterSpec,
+  ProviderInfo,
+} from "../model-registry.js";
 import { APIError } from "./errors.js";
-import { assertArray, assertBoolean, assertJsonRecord, assertJsonValue, assertNumber, assertObject, assertString, optBoolean, optString } from "./primitives.js";
+import {
+  assertArray,
+  assertBoolean,
+  assertJsonRecord,
+  assertJsonValue,
+  assertNonNegativeInt,
+  assertNumber,
+  assertObject,
+  assertPositiveInt,
+  assertString,
+  optBoolean,
+  optString,
+} from "./primitives.js";
 
 function nullableNumber(value: unknown, path: string): number | null {
   return value === null ? null : assertNumber(value, path);
@@ -120,4 +140,26 @@ export function parseProvidersEnvelope(body: unknown): ProviderInfo[] {
 
 export function parseManagedModelsEnvelope(body: unknown): ManagedModelInfo[] {
   return assertArray(body, "models", parseManagedModel);
+}
+
+function parseListPage<T>(
+  body: unknown,
+  path: string,
+  itemParse: (value: unknown, index: number) => T,
+): ModelRegistryPage<T> {
+  const object = assertObject(body, path);
+  return {
+    items: assertArray(Reflect.get(object, "items"), `${path}.items`, itemParse),
+    total: assertNonNegativeInt(Reflect.get(object, "total"), `${path}.total`),
+    page: assertPositiveInt(Reflect.get(object, "page"), `${path}.page`),
+    size: assertPositiveInt(Reflect.get(object, "size"), `${path}.size`),
+  };
+}
+
+export function parseProvidersPage(body: unknown): ModelRegistryPage<ProviderInfo> {
+  return parseListPage(body, "providers", parseProvider);
+}
+
+export function parseManagedModelsPage(body: unknown): ModelRegistryPage<ManagedModelInfo> {
+  return parseListPage(body, "models", parseManagedModel);
 }

@@ -9,12 +9,14 @@ const skippedDirectories = new Set([
   ".ruff_cache",
   "data",
   "dist",
+  "target",
   "node_modules",
   ".venv",
   ".omo",
   ".sisyphus",
   ".superpowers",
   ".worktree",
+  ".worktrees",
 ]);
 const historicalRoots = [
   resolve(repoRoot, "docs/archive"),

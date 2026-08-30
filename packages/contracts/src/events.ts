@@ -7,6 +7,7 @@ import type {
   SubagentRequest,
   SubagentResult,
 } from "./task-run.js";
+import type { TaskExecutionContext } from "./task-execution-context.js";
 
 export interface ErrorDetail {
   schema_version?: "1.0";
@@ -89,6 +90,17 @@ export type AssistantReasoningDeltaPayload = {
   delta: string;
 };
 
+/** Provider-reported token usage for the model call that just completed. */
+export interface ModelCallUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  total_tokens: number;
+  /** Subset of output_tokens; present only when the provider reports the split. */
+  reasoning_tokens?: number;
+}
+
 export type ContextUsagePayload = {
   type: "context_usage";
   /** Runtime-reported context tokens; null means Pi has no trustworthy value yet. */
@@ -96,6 +108,8 @@ export type ContextUsagePayload = {
   context_window: number;
   percent: number | null;
   source: "runtime";
+  /** Exact provider usage of the triggering call; absent when upstream reported none. */
+  usage?: ModelCallUsage;
 };
 
 export type EventPayload =
@@ -180,7 +194,14 @@ export type EventPayload =
       };
     }
   | { type: "task_failed"; error: ErrorDetail }
-  | { type: "run_queued"; request_id: string; input: string }
+  | {
+      type: "run_queued";
+      request_id: string;
+      input: string;
+      /** Frozen evaluation contract the run was admitted under; absent/null on events persisted before the field existed. */
+      execution_context?: TaskExecutionContext | null;
+    }
+  | { type: "run_steered"; input: string }
   | { type: "run_started" }
   | { type: "run_finalizing" }
   | { type: "run_completed" }
@@ -218,6 +239,11 @@ export type EventPayload =
       compaction_id: string;
       covered_through_run_id: string;
       summary_digest: string;
+      reason?: "manual" | "threshold" | "overflow";
+      tokens_before?: number;
+      estimated_tokens_after?: number;
+      target_tokens?: number;
+      summary_tokens?: number;
     }
   | {
       type: "conversation_compaction_started";

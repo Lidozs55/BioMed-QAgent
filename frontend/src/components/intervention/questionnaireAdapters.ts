@@ -78,3 +78,24 @@ export function permissionResolutionFromForm(form: FormData): PermissionResoluti
     scopeWide: true,
   };
 }
+
+export interface UserInputResolution {
+  decision: "approve" | "reject";
+}
+
+export function userInputQuestionnaireItems() {
+  return [
+    {
+      name: "decision",
+      required: true,
+      choices: [{ value: "approve" }, { value: "reject" }],
+    },
+  ] as const;
+}
+
+export function userInputResolutionFromForm(form: FormData): UserInputResolution | null {
+  const decision = form.get("decision");
+  if (decision === "approve") return { decision: "approve" };
+  if (decision === "reject") return { decision: "reject" };
+  return null;
+}

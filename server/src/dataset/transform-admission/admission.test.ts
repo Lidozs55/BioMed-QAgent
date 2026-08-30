@@ -155,8 +155,8 @@ async function createFixture(): Promise<Fixture> {
     input_result_receipts: [],
     granted_capabilities: ["bounded_reader"],
     resource_limits: resourceLimits,
-    sandbox_backend: "container",
-    sandbox_config_digest: HEX_8,
+    execution_backend: "container",
+    execution_config_digest: HEX_8,
     exit_state: "succeeded",
     exit_code: 0,
     exit_signal: null,
@@ -213,8 +213,8 @@ async function createFixture(): Promise<Fixture> {
     input_asset_receipts: [inputAsset],
     input_result_receipts: [],
     backend_policy: {
-      sandbox_backend: "container",
-      sandbox_config_digest: HEX_8,
+      execution_backend: "container",
+      execution_config_digest: HEX_8,
       policy_digest: HEX_9,
       granted_capabilities: ["bounded_reader"],
       resource_limits: resourceLimits,
@@ -431,7 +431,7 @@ describe("Core transform quarantine admission", () => {
     const fixture = await createFixture();
     const unavailable: TransformExecutionReceipt = {
       ...fixture.receipt,
-      sandbox_backend: "unavailable",
+      execution_backend: "unavailable",
       exit_state: "sandbox_unavailable",
       exit_code: null,
       output_bytes: 0,
@@ -464,6 +464,50 @@ describe("Core transform quarantine admission", () => {
     expect(failedEvidence.rejection_code).toBe("NON_SUCCESS_TERMINAL_STATE");
     expect(cancelEvidence.rejection_code).toBe("LATE_CANCELLATION");
     await expect(readdir(fixture.commitParent)).resolves.toEqual([]);
+  });
+
+  it("rejects placeholder cell values and all-empty data rows", async () => {
+    const placeholderTable = Buffer.from("sample_id,value\nUNKNOWN,placeholder\n", "utf8");
+    const placeholderFixture = await createFixture();
+    await writeFile(path.join(placeholderFixture.quarantineRoot, "expression.csv"), placeholderTable);
+    const placeholderReceipt = {
+      ...placeholderFixture.receipt,
+      output_bytes: placeholderTable.byteLength,
+      quarantined_output_receipts: [
+        {
+          ...placeholderFixture.receipt.quarantined_output_receipts[0]!,
+          sha256: sha256(placeholderTable),
+          size_bytes: placeholderTable.byteLength,
+          row_count: 1,
+        },
+      ],
+    };
+    const placeholderEvidence = await admitTransformExecution(
+      productionRequest(placeholderFixture, placeholderReceipt),
+    );
+    expect(placeholderEvidence.rejection_code).toBe("PLACEHOLDER_CONTENT");
+
+    const emptyRowTable = Buffer.from("sample_id,value\nS1,7\n,\n", "utf8");
+    const emptyRowFixture = await createFixture();
+    await writeFile(path.join(emptyRowFixture.quarantineRoot, "expression.csv"), emptyRowTable);
+    const emptyRowReceipt = {
+      ...emptyRowFixture.receipt,
+      output_bytes: emptyRowTable.byteLength,
+      quarantined_output_receipts: [
+        {
+          ...emptyRowFixture.receipt.quarantined_output_receipts[0]!,
+          sha256: sha256(emptyRowTable),
+          size_bytes: emptyRowTable.byteLength,
+          row_count: 2,
+        },
+      ],
+    };
+    const emptyRowEvidence = await admitTransformExecution(
+      productionRequest(emptyRowFixture, emptyRowReceipt),
+    );
+    expect(emptyRowEvidence.rejection_code).toBe("PLACEHOLDER_CONTENT");
+    await expect(readdir(placeholderFixture.commitParent)).resolves.toEqual([]);
+    await expect(readdir(emptyRowFixture.commitParent)).resolves.toEqual([]);
   });
 
   it("rejects non-canonical expected digests and expired deadlines before copying", async () => {

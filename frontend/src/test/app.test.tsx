@@ -143,7 +143,7 @@ describe("App startup ownership", () => {
         if (url === "/api/v1/databases") {
           return Promise.resolve(new Response(JSON.stringify({ databases: [] }), { status: 200 }));
         }
-        if (url === "/api/v1/tasks?limit=10") {
+        if (url === "/api/v1/tasks?limit=15") {
           if (historyFailure) {
             return Promise.reject(new Error("history unavailable"));
           }

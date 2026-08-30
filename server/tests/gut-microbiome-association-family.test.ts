@@ -24,7 +24,7 @@ describe("gut microbiome disease-association family", () => {
       "gut_microbiome.differential_abundance.v1",
       "gut_microbiome.reference_prevalence.v1",
       "gut_microbiome.study.v1",
-      "gut_microbiome.taxon_records.v1",
+      "gut_microbiome.taxon_name_crosswalk.v1",
     ]);
     expect(createDefaultFamilyAssemblerRegistry().list()).toContain(FAMILY_ID);
   });

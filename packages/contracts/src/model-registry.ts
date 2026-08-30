@@ -105,3 +105,18 @@ export interface DiscoveredModelInfo {
   capability_source?: "catalog" | "api";
   metadata_source?: "catalog" | "api" | "user";
 }
+
+/** Paged list-envelope used by ``?page&size`` list responses of the registry. */
+export interface ModelRegistryPage<T> {
+  items: T[];
+  total: number;
+  page: number;
+  size: number;
+}
+
+/** Query accepted by registry list endpoints (``?page`` / ``?size`` / ``?q``). */
+export interface ModelRegistryListQuery {
+  page?: number;
+  size?: number;
+  q?: string;
+}

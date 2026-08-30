@@ -28,3 +28,24 @@ needs — do not load the whole set. When unsure, start with the strategy
 Querying only 1-2 data sources severely underestimates coverage. Before
 building, state explicitly: sources queried, and topic-relevant sources not
 queried (or "none").
+
+## Formal-build gate (dataset requests)
+
+When the request asks for an integrated dataset/tables, discovery research is
+only phase one. As soon as `inspect_dataset_execution_routes` shows a static
+family covering the product, switch to
+`validate_dataset_execution` -> `execute_dataset_execution` with a spec whose
+`entities` carry the phenotype/study context. Workspace CSVs, literature
+summaries, and downloads are staging: the task is finished only by a Dataset
+Core Publication or an explicit structured NO_DATA - never by staging files
+alone.
+
+## Unreachable-source rule
+
+When the official/authoritative source for a requested dimension is
+unreachable (DNS failure, persistent HTTP error, or a dead endpoint), report
+that dimension as a structured NO_DATA/blocked outcome naming the source and
+the observed failure. Never substitute a third-party mirror, copied file, or
+unverified re-host of the same data: provenance cannot be established through
+them. Continue with the reachable official sources for the remaining
+dimensions instead of abandoning the whole request.

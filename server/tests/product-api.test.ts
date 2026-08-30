@@ -140,6 +140,8 @@ describe("Phase 7 product API", () => {
     const taskId = "task_ts_example";
     const runId = "run_example";
     const requirementId = "build_example";
+    // Writers name the publish directory without the `pub_` prefix while the
+    // receipt carries the canonical prefixed id queried by API callers.
     const versionName = "build_example_0123456789abcdef";
     const publicationId = `pub_${versionName}`;
     const executionDir = path.join(root, "output", "tasks", taskId, "dataset_runs", runId, requirementId);
