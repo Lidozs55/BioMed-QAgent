@@ -13,6 +13,7 @@
   - 前置：应用 provider 账户与 live source 可用；运行期间不得并行启动第二个 Host（并行 Host 现已由 tasks-root 独占租约在代码层拒绝，见 `server/src/runtime/host-lease.ts`）。
 - [ ] **端到端图表 Gold 案例（对齐加分项"自动识别图表坐标轴或图例解析错误"）。** 图表证据已接通正式发布闭环（见下方已完成项），但 gold7–9 未有含图表场景的端到端案例；评审明确将其列为最高优先级失分点（"图表数据处理"是赛题核心能力）。补一个自然语言 TOPIC 出发、含论文图表抽取与坐标轴/图例核验的端到端 Gold 案例。
   - 验收：TOPIC → VLM/PDF/caption 抽取 → chart 四表（chart_series / chart_points / papers / sources）→ 正式 Publication；坐标轴名/单位/刻度与图例状态经 `axis_validation_status` / `legend_validation_status` 门禁；exact 点与 unclear 轴/图例语义冲突 fail-closed；单位 token 不漂移；低置信度点经 HIL 修正后保留 original 值；评审可经报告 5.5 所述 API/前端复现。
+  - 当前边界（2026-08-30）：现有闭环从已注册的富 `chart-evidence.json` 开始，`extract_chart_data_vlm` 的 workspace CSV 尚无生产转换/注册路径；Gold6 runner 也未把冻结 source/schema 约束送入 Run。先按 [Gold6 图像链修复实施计划](superpowers/plans/2026-08-30-gold6-vision-pipeline-repair.md) 闭合当前 Gold6，再决定是否新增 gold7–9 图表案例。
 - [ ] **参考集对照准确性评测（G1 evaluator 落地，报告最高权重项零量化）。** 评分标准"科学事实表达准确性（0-15）"与"数据查找完备性"目前没有任何对照参考数据的量化证据：gold7 正式发布 88/3,109 参考 locus 行、gold8 覆盖 9/约 50 请求药物，报告均只作定性披露；`docs/evaluation/gold-v1/` 的 manifest 已预留 final G1 evaluator，但对照评测未实现（strict 计分 0/6）。实现 publication-vs-reference 对照评测：行级覆盖率、字段命中率、数值一致性抽样（可先为 gold7/8/9 冻结参考 + 脚本化，后续并入 gold-v1 全六例），并顺带完成三案例（冻结提交 `e8d03589`，早于占位符筛查 `22d87d15`）的内容级复核，回应时间线质疑。来源见 `reports/2026-08-30-architecture-and-report-review.md`（评审报告待提交入库） §4.2。
   - 验收：每案例产出可复核对照表（覆盖行数、字段命中率、数值一致率 + 不一致样例）并可直接引用进报告第五章；gold-v1 strict 计分推进，或在报告中显式说明未全量重跑的原因。
 
