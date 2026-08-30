@@ -103,8 +103,9 @@ Pi 模型调用只对其上游分类器认定的瞬时错误（如 429、503）�
 3 秒指数退避；`provider.maxRetryDelayMs=60s` 只限制服务端 `Retry-After`，不是外层指数
 退避上限。正常重试耗尽后，adapter 只对明确的 `429 rate_limit_error` 或
 `503 service temporarily unavailable` 冷却 60 秒并执行隐藏 continuation，最多 3 轮。
-部分兼容 API 会把连接中断仅报告为裸 `stream_read_error`，adapter 对这一精确错误也额外
-执行至多 3 次隐藏 continuation；不会把两类恢复扩展到配额/计费、认证、参数或普通业务
+部分兼容 API 会把连接中断报告为裸 `stream_read_error`，或精确的
+`stream disconnected before completion: stream closed before response.completed`；adapter 对
+这两种已知流中断额外执行至多 3 次隐藏 continuation，不会把恢复扩展到配额/计费、认证、参数或普通业务
 错误。所有恢复保持在同一个 durable Run 内，不新建 task 或冒充成功。
 权限或 evidence-bound HIL 挂起的可信调用必须等待原调用恢复，不能以 workspace
 脚本产物替代。

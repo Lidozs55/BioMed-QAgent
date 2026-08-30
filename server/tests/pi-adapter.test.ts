@@ -292,6 +292,9 @@ describe("PiAgentAdapter", () => {
   test("recovers only interrupted provider streams outside Pi's normal retry classifier", () => {
     expect(isRecoverablePiStreamError("stream_read_error")).toBe(true);
     expect(isRecoverablePiStreamError("upstream stream_read_error after partial response")).toBe(true);
+    expect(isRecoverablePiStreamError(
+      "stream error: stream disconnected before completion: stream closed before response.completed",
+    )).toBe(true);
     expect(isRecoverablePiStreamError("429 rate limit")).toBe(false);
     expect(isRecoverablePiStreamError("invalid API key")).toBe(false);
     expect(isRecoverablePiStreamError(undefined)).toBe(false);

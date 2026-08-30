@@ -500,7 +500,11 @@ export function resolvePiRetryOverrides(): {
 }
 
 export function isRecoverablePiStreamError(message: string | undefined): boolean {
-  return typeof message === "string" && /(?:^|\b)stream_read_error(?:\b|$)/iu.test(message);
+  return typeof message === "string" && (
+    /(?:^|\b)stream_read_error(?:\b|$)/iu.test(message)
+    || /^stream error:\s*stream disconnected before completion:\s*stream closed before response\.completed$/iu
+      .test(message.trim())
+  );
 }
 
 export function isRecoverablePiProviderError(message: string | undefined): boolean {
