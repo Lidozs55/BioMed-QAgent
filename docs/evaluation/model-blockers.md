@@ -2,7 +2,7 @@
 
 > 目的：集中收集各 gold 案例正式运行中暴露的 **Agent 行为卡点**（提示词、产品、接口陷阱三类），供后续**批量**修复与提示词优化对照。
 > **当前处于收集期：只登记，不修改代码。** 等组员把其余案例测完后再统一分流修复（跟踪项见 [TODO](../TODO.md)）。
-> 纪律：每条卡点必须给出证据（事件 seq / 证据包路径 / 正文原话），不可证的不进表；证据包在 `data/gold-runs/`（git 忽略，随 run 机器保留）；用量与终态见各包 `closure.json`（`run_usage`）。
+> 纪律：每条卡点必须给出证据（事件 seq / 证据包路径 / 正文原话），不可证的不进表；证据包在 `data/gold-runs/`（**已入 git 跟踪**，`data/.gitignore` 白名单 `!gold-runs/`、`!gold/`；其余 data/ 仍全忽略，durable 原始任务目录 `data/output/tasks/` 含 GB 级载体不入库）；用量与终态见各包 `closure.json`（`run_usage`）。
 
 ## 条目模板
 
