@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { crc32 } from "../../dataset/acquisition/zip-members.js";
 import { SourceAssetRegistry } from "../../runtime/source-assets/registry.js";
 import { createCoreAssetTools } from "./core-asset-tools.js";
 
@@ -38,7 +39,7 @@ function buildZip(entries: ReadonlyArray<{ name: string; data: Buffer; deflate: 
     localParts.push(local);
     centralParts.push(Buffer.concat([
       u32(0x02014b50), u16(20), u16(20), u16(0), u16(method), u16(0),
-      u16(0), u32(0), u32(compressed.byteLength), u32(entry.data.byteLength),
+      u16(0), u32(crc32(entry.data)), u32(compressed.byteLength), u32(entry.data.byteLength),
       u16(nameBytes.byteLength), u16(0), u16(0), u16(0), u16(0), u32(0),
       u32(localBytes), nameBytes,
     ]));
