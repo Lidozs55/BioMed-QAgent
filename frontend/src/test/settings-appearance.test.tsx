@@ -144,6 +144,7 @@ describe("settings appearance font import", () => {
       darkColors: { background: "", foreground: "" },
     });
     document.getElementById("imported-font-faces")?.remove();
+    window.localStorage.removeItem("biomed.preferences");
   });
 
   it("preserves the original casing of a preset color when selected", async () => {
