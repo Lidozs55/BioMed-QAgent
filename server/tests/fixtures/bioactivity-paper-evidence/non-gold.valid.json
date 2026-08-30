@@ -1,0 +1,134 @@
+{
+  "paper_records": [
+    {
+      "pmid": "31234567",
+      "pmcid": "none",
+      "doi": "none",
+      "title": "Quantitative inhibition of EGFR signaling in a cellular assay",
+      "journal": "Open Kinase Methods",
+      "publication_date": "2020-04-03",
+      "authors": ["A. Researcher", "B. Scientist"],
+      "open_access_status": "gold",
+      "source_url": "https://pubmed.ncbi.nlm.nih.gov/31234567/",
+      "paper_key": "paper_61c24be3438bc9cda08d90c85aad8d54",
+      "source_id": "source_paper_evidence_carrier"
+    }
+  ],
+  "experiment_records": [
+    {
+      "experiment_id": "exp_fig2_erlotinib",
+      "paper_id": "paper_61c24be3438bc9cda08d90c85aad8d54",
+      "protein": "EGFR",
+      "variant": "none",
+      "construct": "wild-type EGFR cytoplasmic domain",
+      "ligand": "erlotinib",
+      "assay_type": "cellular kinase assay",
+      "cell_line_or_system": "HCC827 cells",
+      "temperature": "37 C",
+      "buffer": "complete RPMI",
+      "incubation_time": "72 h",
+      "source_locator": {
+        "locator_version": "2.0",
+        "locator_type": "pdf_region",
+        "asset_id": "asset_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "logical_file": "PMC8123456/paper.pdf",
+        "raw_value": "Figure 2A dose response experiment",
+        "page_number": 5,
+        "table_id": null,
+        "figure_id": "Figure_2A",
+        "row_label": null,
+        "column_label": null
+      },
+      "extraction_method": "vlm"
+    }
+  ],
+  "activity_value_records": [
+    {
+      "experiment_id": "exp_fig2_erlotinib",
+      "compound": "Erlotinib",
+      "protein_variant": "EGFR",
+      "activity_type": "IC50",
+      "activity_value": "12.5",
+      "activity_unit": "nM",
+      "relation": "<",
+      "replicate_count": 3,
+      "error_value": null,
+      "error_type": null,
+      "original_text": "erlotinib inhibited EGFR signalling with an IC50 of 12.5 nM (Figure 2A)",
+      "table_or_figure": "Figure_2A",
+      "page_number": 5,
+      "row_label": "none",
+      "column_label": "none",
+      "confidence_level": "high",
+      "source_id": "source_paper_evidence_carrier",
+      "source_asset_id": "asset_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_locator": {
+        "locator_version": "2.0",
+        "locator_type": "pdf_region",
+        "asset_id": "asset_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "logical_file": "PMC8123456/paper.pdf",
+        "raw_value": "IC50 of 12.5 nM (Figure 2A)",
+        "page_number": 5,
+        "table_id": null,
+        "figure_id": "Figure_2A",
+        "row_label": null,
+        "column_label": null
+      },
+      "retrieved_at": "2026-08-18T10:00:00Z"
+    },
+    {
+      "experiment_id": "exp_fig2_erlotinib",
+      "compound": "Erlotinib",
+      "protein_variant": "EGFR",
+      "activity_type": "IC50",
+      "activity_value": "0.5",
+      "activity_unit": "uM",
+      "relation": "=",
+      "replicate_count": 2,
+      "error_value": 12.5,
+      "error_type": "standard_deviation",
+      "original_text": "Table 1 reports 0.5 uM for the replicate plate reader readout",
+      "table_or_figure": "Table_1",
+      "page_number": 6,
+      "row_label": "erlotinib",
+      "column_label": "IC50 (uM)",
+      "confidence_level": "medium",
+      "source_id": "source_paper_evidence_carrier",
+      "source_asset_id": "asset_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_locator": {
+        "locator_version": "2.0",
+        "locator_type": "pdf_region",
+        "asset_id": "asset_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "logical_file": "PMC8123456/paper.pdf",
+        "raw_value": "0.5 uM (Table 1)",
+        "page_number": 6,
+        "table_id": "Table_1",
+        "figure_id": null,
+        "row_label": "erlotinib",
+        "column_label": "IC50 (uM)"
+      },
+      "retrieved_at": "2026-08-18T10:00:00Z"
+    }
+  ],
+  "supplementary_asset_records": [
+    {
+      "paper_id": "paper_61c24be3438bc9cda08d90c85aad8d54",
+      "asset_name": "supplementary_table_s1",
+      "asset_type": "csv_table",
+      "download_url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC8123456/bin/s1.csv",
+      "sha256": "9999999999999999999999999999999999999999999999999999999999999999",
+      "file_size": 256,
+      "parse_status": "parsed",
+      "table_count": 1,
+      "source_locator": {
+        "locator_version": "2.0",
+        "locator_type": "json_pointer",
+        "asset_id": "asset_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "logical_file": "source_assets/supplement-s1.csv",
+        "raw_value": "supplementary table S1 dose response values",
+        "json_pointer": "/supplementary_table_s1"
+      },
+      "source_asset_id": "asset_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  ]
+}
