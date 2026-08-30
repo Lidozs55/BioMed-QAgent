@@ -120,6 +120,9 @@ exact static match 时才走 `validate -> execute`；否则仅在各输入被列
 `registered_sources: [{binding_id, asset_id}]` 与
 `acquisition_requests: [{binding_id, provider_id, parameters}]`；adapter 在进入 Core 前将其
 归一化为以 binding ID 为键的 map，Core 提交/摘要契约不变。
+`literature_experiment_chart` 的图系列/点定位必须使用 SourceLocator 2.0 `image_bbox`
+精确字段，补充资产定位使用 SourceLocator 2.0 `json_pointer` 精确字段；JSON 作为 CSV 字段时
+仍需整体双引号转义。`locator`、`source_logical_file`、`source_raw_value` 等别名不在契约内。
 binary archive 即使已有 Core acquisition handler，也会显示为 acquisition-only，不能误报为
 Dynamic transform 已可直接消费。
 
