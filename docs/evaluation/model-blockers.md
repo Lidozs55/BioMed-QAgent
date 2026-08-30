@@ -57,6 +57,32 @@
 - **行为正样本（值得保留进 prompt 教学）**：单平台同粒度设计优先（43T+43N/GPL96）、拒绝跨 GSE 拼行、发现"probe-mapping 行数未独立验证"后主动修订而非宣称、Benford/末位数偏差如实保留并解释为 MAS5 log2 平台特征、pairing 推导规则交人确认——r1 的 B2/B3（动态路由零调用、时限幻觉）在 r3 未复现。
 - 基础设施观察（非模型问题，不入模板）：supervisor 死于 Host 瞬时 HTTP 500（seq≤207 journal 断档）；watcher 进程被控制台会话回收。durable 存储为唯一权威记录（1005 事件完整）。
 
+## gold2 @ qwen3.8-flash（2026-08-30，main@74b81a19c1ff，task_ts_183292cd-0e9d-439d-a5ae-2786fa9eba34）
+
+> 身份断言通过（`model_change`=dashscope/qwen3.8-flash）。终态 **succeeded_publication（部分交付）**：`pub_luad_egfr_gse31852_probe_v1_8c9cb8a834cae23b`，probe-level 长表 4,128,828 行（33,297 探针×124 样本），validation 10/10 passed，coverage 1.0，7 artifacts。
+> **但 gold2 题面三要求只闭合 1/3**：probe-level ✔；样本临床/EGFR 分组 ✘（NO_DATA）；gene-level 映射表 ✘（blocked）。模型对后两项给出了逐项尝试日志与请求清单，零虚构、零临时 CSV 冒充。
+>
+> **Token 消耗**（`closure.json.run_usage`）：
+>
+> | 阶段 | 调用 | input | output | cache_read | 总计费 token | 墙钟 |
+> | --- | --- | --- | --- | --- | --- | --- |
+> | 发布前（发现→验证→构建） | 39 | 550,645 | 6,244 | 3,239,040 | 3,795,929 | 1552s |
+> | 发布后（回执+报告） | 30 | 165,667 | 4,681 | 3,705,856 | 3,876,204 | **267s** |
+> | 合计 | 69 | 716,312 | 10,925 | 6,944,896 | 7,672,133 | 2414s（40min） |
+>
+> 上下文峰值 148,116/256k；0 压缩；1 次权限停审 + 1 次 workspace_exec 工具层直接拒绝（seq 848）；0 HIL。发布后 token 占 50% 但墙钟仅 11%——gold1 的 C2（无界验证环）规模显著缩小但仍存在（workspace_list×11 + workspace_read×11 复查回执）。
+
+| # | 卡点 | 归类 | 证据 | 建议修法（暂不执行） |
+| - | ---- | ---- | ---- | -------------------- |
+| D1 | **gzip 载体检视五路全封 → 题面核心字段（EGFR 状态）无法核实**（C1 升级版）。模型想看 GSE31852 series_matrix 的 `!Sample_characteristics_*` 头：① bash/python gzip → 权限停审 deny（seq 698）+ 二次 workspace_exec 被工具层直接拒（seq 848）② curl → 生产快速拒绝 ③ preview_core_asset → 3 次失败 ④ navigate_page(E-utilities) → **本机 Chromium 未装** ⑤ scaffold → 不支持。结果 124 样本 `sample_group` 全 unknown，"突变 vs 野生"比较无法成立，只能报 NO_DATA | 产品 + 环境 | permission events；终答"尝试过的合法途径"清单（逐条带拒绝原因）；`npx playwright install chromium` 是其明示请求 | 同 C1（gzip 检视通道）+ run 机装 Playwright 浏览器；提示词可教"series_matrix 头可用 GEO SOFT 端点替代"（若 SOFT 通道存在） |
+| D2 | **gene-level 映射在正式路线中不可表达**：GPL6244 注释已成功下载并 SHA-256 校验（7.19MB asset），但 mapping_files 传 workspace 路径被拒（`authoritative dataset identity requires Core acquisition provenance`），probe_long.v2 schema 无 gene 维度承载 → 题面"可追溯 gene-level 映射表"结构性无法闭合。模型没有伪造，正确 blocked | 产品（表达能力） | 终答未闭合项 2；execute@1009 err（带 mapping_files 的首次尝试） | gene_expression family 增加 probe→gene crosswalk 支撑表形态（gold10 taxon crosswalk 同族方案）或 mapping_files 支持 Core-acquired 资产绑定 |
+| D3 | **`preview_core_asset` "registered asset was not found" 复现**（seq 799，下载后的资产首查不可解析）——r1-B7/B1、r3-C1 同一注册时序缺口未修，每次 run 都在重新付学费 | 产品 | events seq 783/799 两次 preview 失败对照 | 修 download→register 原子性（已在 B7/C1 建议内，此处是第 N 次实证） |
+| D4 | **scaffold_dataset_execution_spec 空参调用 + gene_expression 不支持**：seq 967 先以 `args={}` 空调用失败，seq 973 带参仍失败（gene_expression 无 scaffold 路径） | prompt（轻）+ 产品 | events seq 969/973 | 工具 schema 必填校验前置提示；scaffold 支持面在 guidance 里写清 |
+| D5 | **发现候选池枯竭无第二方案**：模型如实报告"搜过的 5 个系列中同时满足（人+LUAD+组织+矩阵+显式 WT/mut）仅 GSE31852，其余为小队列 PDX/细胞系/miRNA"——诚实，但未尝试"换检索式扩池"后再断言池枯竭 | prompt（轻） | 终答请求协助第 4 点 | 断言"唯一候选"前要求 ≥N 个不同检索式扩池（可与 gold8 搜索发现工具联合） |
+
+- **正样本（保留进教学素材）**：execute 一次失败后自纠参数重试成功；124 样本组标签拒绝用模型知识填充（宁 NO_DATA）；拒绝 provisional CSV；请求清单可直接执行（含安装命令与授权选项）；发布后收敛比 gold1 快 2.2 倍（267s vs 592s）。
+- 基础设施观察：supervisor 第 3 次死于 `operation_progress` 事件风暴时段的 Host 瞬时 HTTP 500（journal 停在 seq≤200）；本 run 起改用"人工监控+durable 归档"，证据完整性不再依赖 supervisor 存活。
+
 ## gold7–gold10 @ 复跑（2026-08-29 之后，待组员执行）
 
 （空。每完成一个案例，按模板追加；同步把 `closure.json` 的 `run_usage` 抄入本表上方案例头部，便于比较提示词/路线变化对 token 的影响。）
