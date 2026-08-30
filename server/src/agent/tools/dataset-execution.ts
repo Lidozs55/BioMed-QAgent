@@ -6,9 +6,10 @@ import type {
   DatasetBridgePublicationData,
   DatasetExecutionSpec,
 } from "@biomed/contracts";
-import { parseJsonTextStrict } from "@biomed/contracts";
+import { parseCleaningRulePreflightReceipt, parseJsonTextStrict } from "@biomed/contracts";
 
 import { saveExecutionContinuation } from "../../runtime/execution-continuation.js";
+import { ArtifactIntegrityError, readLatestSourceCoverageReport } from "../../runtime/artifact-store.js";
 import { fixedBiomedicalAcquisitionParameters } from "../../dataset/acquisition/biomedical-providers.js";
 import { CORE_ACQUISITION_PROVIDER_DESCRIPTORS } from "../../dataset/acquisition/provider-catalog.js";
 import {
@@ -22,6 +23,7 @@ import type {
 import { parseDatasetExecutionSpec } from "../../dataset/contracts/index.js";
 import { buildDatasetExecutionScaffold } from "../../dataset/scaffold/spec-scaffold.js";
 import { providerCarrierBinding } from "../../dataset/runtime/provider-bindings.js";
+import { preflightCleaningRules } from "../../dataset/cleaning/preflight.js";
 import type { DatasetCoreService } from "../../dataset/service/dataset-core.js";
 import type { DatasetFamilyRegistry } from "../../dataset/families/index.js";
 
@@ -168,7 +170,27 @@ function dynamicFallback(response: DatasetBridgeResponse): Record<string, unknow
   return {};
 }
 
-function resultSummary(response: DatasetBridgeResponse): Record<string, unknown> {
+function coverageSummary(report: import("@biomed/contracts").SourceCoverageReport): Record<string, unknown> {
+  return {
+    universe_scope: report.universe_scope,
+    scope_note: report.scope_note,
+    summary: report.summary,
+    bindings: report.acquisition_coverage
+      .filter((entry) => entry.status !== "acquired" || entry.exclusion_reasons.length > 0)
+      .slice(0, 32)
+      .map((entry) => ({
+        binding_id: entry.binding_id,
+        source: entry.source,
+        status: entry.status,
+        exclusion_reasons: entry.exclusion_reasons.slice(0, 16),
+      })),
+  };
+}
+
+function resultSummary(
+  response: DatasetBridgeResponse,
+  coverage?: Record<string, unknown> | null,
+): Record<string, unknown> {
   if (!response.ok) {
     return {
       ...STATIC_ROUTE_CONTEXT,
@@ -194,6 +216,7 @@ function resultSummary(response: DatasetBridgeResponse): Record<string, unknown>
       artifact_count: response.data.artifacts.length,
       artifact_roles: boundedStrings(response.data.artifacts.map((artifact) => artifact.role)),
       registered_source_asset_count: response.data.registeredSourceAssetIds.length,
+      ...(coverage === undefined ? {} : { coverage }),
     };
   }
   return {
@@ -206,7 +229,10 @@ function resultSummary(response: DatasetBridgeResponse): Record<string, unknown>
   };
 }
 
-function resultFor(response: DatasetBridgeResponse): BioMedToolResult {
+function resultFor(
+  response: DatasetBridgeResponse,
+  coverage?: Record<string, unknown> | null,
+): BioMedToolResult {
   const details = response.ok
     ? { ...STATIC_ROUTE_CONTEXT, code: "ok", request_id: response.request_id, data: response.data }
     : {
@@ -219,7 +245,7 @@ function resultFor(response: DatasetBridgeResponse): BioMedToolResult {
         ...STATIC_ROUTE_CONTEXT,
       };
   return {
-    content: JSON.stringify(resultSummary(response)),
+    content: JSON.stringify(resultSummary(response, coverage)),
     details,
     isError: !response.ok,
   };
@@ -482,6 +508,7 @@ export function createDatasetExecutionTools(
           source_files: sourceFilesSchema,
           mapping_files: mappingFilesSchema,
           metadata_files: metadataFilesSchema,
+          cleaning_rule_receipt: { type: "object", description: "Unchanged Core-issued receipt from preflight_cleaning_rules." },
         },
         required: ["spec"],
         additionalProperties: false,
@@ -563,6 +590,9 @@ export function createDatasetExecutionTools(
               source_files: sourceFiles,
               mapping_files: mappingFiles,
               metadata_files: metadataFiles,
+              ...(args.cleaning_rule_receipt === undefined || args.cleaning_rule_receipt === null
+                ? {}
+                : { cleaning_rule_receipt: parseCleaningRulePreflightReceipt(args.cleaning_rule_receipt) }),
               registered_source_asset_ids: registeredSourceAssetIds(sourceFiles),
               created_at: new Date().toISOString(),
             });
@@ -576,9 +606,26 @@ export function createDatasetExecutionTools(
             sourceFiles,
             mappingFiles,
             metadataFiles,
+            cleaningRuleReceipt: args.cleaning_rule_receipt === undefined
+              ? null
+              : parseCleaningRulePreflightReceipt(args.cleaning_rule_receipt),
             discoveryQueries: options.discoveryLedger?.() ?? null,
           });
           await capturePublication(options, response);
+          let coverage: Record<string, unknown> | null | undefined;
+          if (response.ok && "publication" in response.data) {
+            try {
+              const report = await readLatestSourceCoverageReport(options.taskRoot);
+              coverage = report === null
+                ? { status: "coverage_unavailable", reason: "no_source_coverage_artifact" }
+                : coverageSummary(report.report);
+            } catch (error) {
+              coverage = {
+                status: "coverage_unavailable",
+                reason: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500),
+              };
+            }
+          }
           diagnostic(
             options,
             "execute_dataset_execution",
@@ -588,10 +635,127 @@ export function createDatasetExecutionTools(
             response.ok ? "ok" : response.error.code,
             requirementId,
           );
-          return resultFor(response);
+          return resultFor(response, coverage);
         } catch (error) {
           diagnostic(options, "execute_dataset_execution", context, started, response, codeForCaught(error), requirementId);
           return caught(error);
+        }
+      },
+    },
+    {
+      name: "preflight_cleaning_rules",
+      label: "Preflight Cleaning Rules",
+      description:
+        "Submit cleaning proposals for Core preflight. Registered unit rules may be accepted automatically; field mappings and ambiguous or unregistered rules remain proposed and require HIL.",
+      parameters: {
+        type: "object",
+        properties: {
+          requirement_id: { type: "string", minLength: 1 },
+          proposals: {
+            type: "array",
+            minItems: 1,
+            description: "Agent proposals only; Core recomputes candidate ranking and registry matches.",
+          },
+        },
+        required: ["requirement_id", "proposals"],
+        additionalProperties: false,
+      },
+      async execute(value) {
+        try {
+          const args = object(value);
+          const requirementId = args.requirement_id;
+          if (typeof requirementId !== "string" || requirementId.trim() === "") {
+            throw new TypeError("requirement_id is required");
+          }
+          const result = preflightCleaningRules(options.familyRegistry, {
+            task_id: options.taskId,
+            run_id: options.runId(),
+            requirement_id: requirementId,
+            proposals: args.proposals,
+          });
+          return {
+            content: JSON.stringify({
+              ok: true,
+              proposals_digest: result.proposals_digest,
+              items: result.items,
+              candidate_set_digests: Object.fromEntries(
+                Object.entries(result.candidate_sets).map(([id, set]) => [id, set.digest]),
+              ),
+              receipt: result.receipt,
+            }),
+            details: result,
+          };
+        } catch (error) {
+          return {
+            content: JSON.stringify({
+              ok: false,
+              error: { code: "cleaning_preflight_failed", message: error instanceof Error ? error.message : String(error) },
+            }),
+            isError: true,
+          };
+        }
+      },
+    },
+    {
+      name: "inspect_source_coverage",
+      label: "Inspect Source Coverage",
+      description:
+        "Read the latest immutable Core source coverage report. Use failed or not_attempted declared bindings to decide whether an independent supplemental source is needed; this is not a whole-web completeness claim.",
+      parameters: {
+        type: "object",
+        properties: {},
+        additionalProperties: false,
+      },
+      async execute(value) {
+        if (
+          value !== undefined &&
+          value !== null &&
+          typeof value === "object" &&
+          Object.keys(value as object).length > 0
+        ) {
+          return {
+            content: JSON.stringify({
+              ok: false,
+              error: { code: "invalid_input", message: "inspect_source_coverage takes no arguments" },
+            }),
+            isError: true,
+          };
+        }
+        try {
+          const result = await readLatestSourceCoverageReport(options.taskRoot);
+          if (result === null) {
+            return {
+              content: JSON.stringify({
+                ok: false,
+                status: "coverage_unavailable",
+                reason: "no_source_coverage_artifact",
+              }),
+              isError: true,
+            };
+          }
+          return {
+            content: JSON.stringify({
+              ok: true,
+              publication_id: result.publication_id,
+              artifact_id: result.artifact_id,
+              artifact_sha256: result.artifact_sha256,
+              manifest_sha256: result.manifest_sha256,
+              coverage: coverageSummary(result.report),
+            }),
+            details: result.report,
+          };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          return {
+            content: JSON.stringify({
+              ok: false,
+              error: {
+                code: error instanceof ArtifactIntegrityError ? "artifact_integrity" : "coverage_invalid",
+                message,
+              },
+            }),
+            isError: true,
+          };
         }
       },
     },

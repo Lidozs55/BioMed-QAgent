@@ -233,6 +233,23 @@ function nonEmptyStringArray(value: unknown, name: string): string[] {
   return items;
 }
 
+const LINEAR_NUMBER = "([+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:e[+-]?\\d+)?)";
+
+function isSafeLinearFormula(formula: string): boolean {
+  const value = formula.trim().toLowerCase();
+  if (value === "value") return true;
+  const patterns = [
+    new RegExp(`^value\\s*\\*\\s*${LINEAR_NUMBER}(?:\\s*[+-]\\s*${LINEAR_NUMBER})?$`, "i"),
+    new RegExp(`^${LINEAR_NUMBER}\\s*\\*\\s*value(?:\\s*[+-]\\s*${LINEAR_NUMBER})?$`, "i"),
+    new RegExp(`^value\\s*\\/\\s*${LINEAR_NUMBER}(?:\\s*[+-]\\s*${LINEAR_NUMBER})?$`, "i"),
+    new RegExp(`^value\\s*[+-]\\s*${LINEAR_NUMBER}$`, "i"),
+  ];
+  if (!patterns.some((pattern) => pattern.test(value))) return false;
+  const numbers = value.match(/[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?/giu) ?? [];
+  return numbers.every((item) => Number.isFinite(Number(item))) &&
+    !/^value\s*\/\s*0(?:\.0*)?(?:e[+-]?0+)?(?:\s|$)/iu.test(value);
+}
+
 export function parseNormalizationProfile(value: unknown): NormalizationProfile {
   const record = assertRecord(value, "NormalizationProfile");
   assertExactKeys(record, NORMALIZATION_PROFILE_KEYS, "NormalizationProfile");
@@ -250,6 +267,7 @@ export function parseNormalizationProfile(value: unknown): NormalizationProfile 
     }
     return scales;
   })();
+  const allowedUnits = nonEmptyStringArray(record.allowed_units, "NormalizationProfile.allowed_units");
   return {
     schema_version: parseSchemaVersion(record),
     profile_id: assertNonEmptyString(record.profile_id, "NormalizationProfile.profile_id"),
@@ -261,10 +279,7 @@ export function parseNormalizationProfile(value: unknown): NormalizationProfile 
       record.allowed_namespaces,
       "NormalizationProfile.allowed_namespaces",
     ),
-    allowed_units: nonEmptyStringArray(
-      record.allowed_units,
-      "NormalizationProfile.allowed_units",
-    ),
+    allowed_units: allowedUnits,
     allowed_semantics: nonEmptyStringArray(
       record.allowed_semantics,
       "NormalizationProfile.allowed_semantics",
@@ -276,7 +291,27 @@ export function parseNormalizationProfile(value: unknown): NormalizationProfile 
           if (!Array.isArray(record.unit_conversions)) {
             throw new TypeError("NormalizationProfile.unit_conversions must be an array");
           }
-          return record.unit_conversions.map((rule) => parseUnitConversionRule(rule));
+          const rules = record.unit_conversions.map((rule) => parseUnitConversionRule(rule));
+          const ruleIds = new Set<string>();
+          const routes = new Set<string>();
+          for (const rule of rules) {
+            if (ruleIds.has(rule.rule_id)) {
+              throw new TypeError(`NormalizationProfile.unit_conversions has duplicate rule_id '${rule.rule_id}'`);
+            }
+            ruleIds.add(rule.rule_id);
+            const route = `${rule.from_unit}\u0000${rule.to_unit}`;
+            if (routes.has(route)) {
+              throw new TypeError(`NormalizationProfile.unit_conversions has duplicate route '${rule.from_unit}' -> '${rule.to_unit}'`);
+            }
+            routes.add(route);
+            if (!allowedUnits.includes(rule.to_unit)) {
+              throw new TypeError(`NormalizationProfile unit rule '${rule.rule_id}' targets unit '${rule.to_unit}' outside allowed_units`);
+            }
+            if (!isSafeLinearFormula(rule.formula)) {
+              throw new TypeError(`NormalizationProfile unit rule '${rule.rule_id}' must use a safe finite linear formula`);
+            }
+          }
+          return rules;
         })(),
     aggregation_policy: record.aggregation_policy === undefined
       ? "keep_all"

@@ -1,0 +1,1 @@
+{"request_id":"permission_0d7080f5-7484-4ffd-a37f-a417a905e063","decision":{"action":"deny","reason":"operator: non-fixed-parser process.exec (python gzip read); consistent with supervisor policy"}}

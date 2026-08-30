@@ -31,5 +31,12 @@ export default {
     "type-empty": [0],
     "subject-empty": [0],
     "header-pattern": [2, "always"],
+
+    // Override @commitlint/config-conventional's 100-char line limit for the
+    // body/footer (and each body line), so long commit bodies are not rejected.
+    // The default "body-leading-blank" / "footer-leading-blank" formatting
+    // rules are kept.
+    "body-max-line-length": [0],
+    "footer-max-line-length": [0],
   },
 };

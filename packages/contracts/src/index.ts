@@ -14,6 +14,7 @@ export * from "./family-transform.js";
 export * from "./dynamic-family-preflight.js";
 export * from "./browser-acquisition.js";
 export * from "./source-coverage.js";
+export * from "./cleaning-rules.js";
 export type * from "./acquisition.js";
 export * from "./dataset-bridge.js";
 export type * from "./events.js";
@@ -22,6 +23,7 @@ export type * from "./experimental-pi.js";
 export type * from "./json.js";
 export * from "./task-run.js";
 export * from "./task-execution-context.js";
+export * from "./untrusted-artifact-submission.js";
 export type * from "./websocket.js";
 
 /* ---- Wire DTO types (settings / model registry / declarative databases) ---- */

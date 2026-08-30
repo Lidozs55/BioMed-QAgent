@@ -83,8 +83,8 @@ acquire[*]
 它只接受 registered SourceAsset 或 committed Core result，使用服务端 registry 中的
 算法，并将参数、reference version、input digest 和 output digest 写入 derived
 provenance。PDB distance 与 sequence alignment 共用该 contract；两者的参数和输出
-schema 由各自算法/family 定义。runtime/checkpoint/publisher 接线由 TASK-048-B6W
-负责。
+schema 由各自算法/family 定义。该 slot 的 runtime/checkpoint/publisher 接线已随
+TS Dataset Core 落地（原 TASK-048-B6W 跟踪项闭环）。
 
 方括号步骤按来源独立执行并可内部并发。fan-out / fan-in 是 Runtime 实现细节，
 不是通用 DAG。只有当用户自定义任意分析链、多级条件分支、节点复用和分布式执行
@@ -199,7 +199,13 @@ Blocking HIL 请求进入人工等待前可经三档审批档位（人工审批 
 ### 7.1 Adapter capability（系统能否安全获取和解析该来源）
 
 声明系统对该来源的获取与解析能力：能否搜索、能否下载、能否解析、是否需要
-fixture 豁免、是否仅研究用途。以 `SOURCE_CAPABILITIES` 单一事实表声明。
+fixture 豁免、是否仅研究用途。能力口径由多套来源表共同承载、需要统一治理，任何
+单一表都不自称“唯一事实源”：界面可选择的内置数据库目录
+（`server/src/product/builtin-databases.ts`）、Dataset Core 的 acquisition provider
+catalog（`server/src/dataset/acquisition/provider-catalog.ts`，capability 路由与动态
+绑定 schema 都从它派生）与静态 spec validator 的 family/schema 注册表
+（`DatasetFamilyRegistry`）分工不同——provider 已接线只证明可信 acquisition/输入解码，
+不证明对应 family 已实现或可发布；新增来源时须三处同步更新并通过派生/闭包测试断言一致。
 
 ### 7.2 Dataset compatibility（本次数据能否映射至目标 Schema 并合并）
 
@@ -235,8 +241,9 @@ Canonical Schema、Adapter、Validation Profile 和 Publication manifest；图�
 在这些组件落地前，运行可以正常结束并产出审计型报告，但不得设置
 `current_publication_id` 或伪造可下载主数据。
 
-> gold3–gold6 的 2026-08-17 真实 run 证明当前仅有 workspace 摘要，不满足该边界；
-> 由 Commonly `TASK-048` 跟踪。
+> gold3–gold6 的 2026-08-17 真实 run 当时仅有 workspace 摘要、不满足该边界；该缺口
+> 已由后续注册式/动态发布路线（gold7–gold9 正式发布）闭环，原 Commonly
+> `TASK-048` 跟踪项结束。
 
 ---
 
@@ -254,8 +261,10 @@ Canonical Schema、Adapter、Validation Profile 和 Publication manifest；图�
 
 ### 8.2 字符串相似度只提议，不批准
 
-列名包含关系与公共前缀相似度（阈值 `>= 0.7`）只作为**候选生成器**，默认状态为
-`proposed`，不直接进入正式数据。
+列名包含、token 重叠与公共前缀相似度（`string_similarity.v1`，NFKC 归一后计算，
+阈值 `>= 0.7`、并列判定 `ε=0.05`，候选集携带排序与 sha256 digest）是**可复现的
+轻量词法候选排序器**，不是生物医学语义理解模型；其输出默认状态为 `proposed`，
+不直接进入正式数据。
 
 **原因**：列名相似无法证明同一语义、同一单位、同一粒度、同一值域、同一实体
 ID、一对一关系。相似度规则足以将看似相似、实际不同的字段对齐，垂向合并
@@ -265,6 +274,18 @@ ID、一对一关系。相似度规则足以将看似相似、实际不同的字
 
 字段映射在 Schema Registry 中以状态机管理：`proposed` → `approved` /
 `rejected`。批准来源记录在案，便于审计与回滚。
+
+Agent 可通过 `preflight_cleaning_rules` 提交单位/字段映射提议；Core 会重新按
+注册 NormalizationProfile/Schema Registry 校验并稳定排序候选。只有唯一且命中
+Core 注册规则的项可标为 `accepted_registered_rule`；相似度-only、并列或近似并列
+候选仍保持 proposed 并进入 HIL。需要把已接受规则应用到 execute 时（不是所有
+execute 的全局必需），必须携带 Core 重算并签发、绑定当前 task/run/requirement/binding
+的 digest receipt；未携带任何接受规则时 execute 可按无清洗规则继续。`needs_hil`
+是预检标记，表示该项应走后续 HIL 流程，不等于工具自动创建 durable HIL；通用字段
+映射（非 schema-identity、非注册单位规则）不会被执行，registered-multitable 路线
+当前也显式拒绝 cleaning rule receipt。receipt digest 漂移、事实重投影不一致或
+task-owned 原子消费标记已存在时 fail-closed。已注册单位规则沿用 canonicalizer 的
+`value * factor + offset` 路径；任意字段 transform 仍不能改变 canonicalizer 行为。
 
 > 决策依据：ADR-009、ADR §21.6（踩坑）。
 
@@ -294,11 +315,22 @@ Core 在发布装配时确定性生成 `source_coverage_report.json`，以 `audi
 - summary 由解析器强制与条目一致（汇总撒谎即拒绝）；
 - discovery 台账为审计输入，不参与构建的 authoritative identity digest。
 
+**Agent 消费与补源**：发布后的 Agent 可调用 `inspect_source_coverage`，读取经
+manifest/artifact SHA-256 校验的 Core 报告；只能依据声明绑定范围内的 failed /
+not_attempted 项决定独立补源，不能把报告表述为全网查全。Dynamic Family 当前
+没有规格绑定的 coverage artifact，必须显式报告 coverage unavailable。
+
 **路线覆盖与恢复**：V1 静态路线经 `validate_profile` 的 `auditPaths` 进入清单；
 V2 注册式路线在发布条目中追加；动态 Family 路线的发布层目前没有规格绑定与
 完整回执，暂不产出该报告（跟进项）。runtime 恢复时用
 `server/src/runtime/discovery-ledger.ts` 的 `projectDiscoveryQueries` 从既有
 `operation_*` 事件重建检索台账，不新增事件类型。
+
+**遗留项**：完整检索 `filters`、`time_window`、requested/succeeded pages 与
+raw/deduplicated/selected counts 语义尚未进入 DTO（当前只有 `requested_limit`
+与解析/规范化行数记账），列为遗留；生产运行是否持有 ToolHooks ledger 决定
+`discovery_queries` 是否填充，缺失时报告该字段为 null——恢复时把生产 ledger
+重新注入具体构建的完整接线仍属部分完成。
 
 ---
 

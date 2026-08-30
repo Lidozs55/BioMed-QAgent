@@ -13,6 +13,7 @@
   （`REASON_PROBE_MAPPING_UNAVAILABLE_REQUIRED_GENE_LEVEL`）；
 - **版本保留**：ENSG 带版本后缀时拆出 `gene_id_version`，不丢失；
 - namespace 权威性来自 adapter 声明（`gene_id_namespace_declared`），**不按 ID 形状猜测**。
+- 字段对齐先调用 `preflight_cleaning_rules`：Core 重新按注册 Schema 生成候选并稳定排序；唯一相似候选没有注册语义规则时仍保持 proposed，只有注册规则可自动应用，歧义项进入 HIL。
 
 ## 2. 单位/语义/尺度（profile 一致）
 
