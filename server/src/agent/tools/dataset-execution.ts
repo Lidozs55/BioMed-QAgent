@@ -58,6 +58,8 @@ export interface DatasetExecutionToolOptions {
   taskRoot: string;
   runId: () => string;
   piSessionId: () => string;
+  /** Runtime discovery observations for the source coverage evidence. */
+  discoveryLedger?: () => import("@biomed/contracts").DiscoveryQueryRecord[] | null;
   onDiagnostic?: (diagnostic: DatasetExecutionToolDiagnostic) => void;
   onPublication?: (data: DatasetBridgePublicationData) => void | Promise<void>;
   now?: () => number;
@@ -574,6 +576,7 @@ export function createDatasetExecutionTools(
             sourceFiles,
             mappingFiles,
             metadataFiles,
+            discoveryQueries: options.discoveryLedger?.() ?? null,
           });
           await capturePublication(options, response);
           diagnostic(

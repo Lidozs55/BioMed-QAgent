@@ -35,6 +35,12 @@ export interface ToolHooks {
   ) => void;
   /** Python stage progress parity (stage, kind, payload). */
   onProgress?: (stage: string, kind: string, payload: Record<string, unknown>) => void;
+  /**
+   * Runtime-owned discovery ledger accessor (source coverage evidence): the
+   * observations accumulated so far in this session, handed to the Dataset
+   * Core at execute time. Absent on hooks that do not track discovery.
+   */
+  discoveryLedger?: () => import("@biomed/contracts").DiscoveryQueryRecord[];
 }
 
 /** Common dependency surface every networked business tool needs. */
@@ -70,6 +76,7 @@ export function noopHooks(hooks?: ToolHooks): Required<ToolHooks> {
     onQueryStarted: hooks?.onQueryStarted ?? (() => undefined),
     onQuery: hooks?.onQuery ?? (() => undefined),
     onProgress: hooks?.onProgress ?? (() => undefined),
+    discoveryLedger: hooks?.discoveryLedger ?? (() => []),
   };
 }
 

@@ -59,6 +59,11 @@ export interface ExecuteDatasetExecutionInput extends DatasetCoreIdentity {
   metadataFiles?: Record<string, string>;
   /** Task-owned provider facts; never synthesized from build or request data. */
   providerRevisionEvidence?: readonly ProviderRevisionEvidenceV1[];
+  /**
+   * Runtime discovery observations for the source coverage evidence. Audit
+   * input only — never part of the build's authoritative identity.
+   */
+  discoveryQueries?: readonly import("@biomed/contracts").DiscoveryQueryRecord[] | null;
 }
 
 export interface DatasetCoreCancelInput {
@@ -564,6 +569,7 @@ export class TsDatasetCoreAdapter implements DatasetCoreService {
         metadataAssets,
         providerRevisionEvidence,
         registrationReceipts: Object.freeze([...buildReceipts.values()]),
+        discoveryQueries: input.discoveryQueries ?? null,
         signal: input.signal,
       });
       return this.buildExecutionEnvelope(record, registeredSourceAssetIds);
