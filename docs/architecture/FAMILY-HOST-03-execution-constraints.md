@@ -41,6 +41,11 @@ registered immutable source receipts
   -> Artifact API download + SHA-256 verification
 ```
 
+receipt-only submit（`submit_dynamic_family_publication` 只回传 `preflight_receipt`）
+依赖 Host 进程内 preflight coordinator 保存的 prepared submission
+（`server/src/runtime/dynamic-family-preflight-coordinator.ts`）；这不是跨重启
+durable prepared-submission store，Host 重启后必须重新 prepare。
+
 ## 未来isolated backend
 
 若未来增加isolated backend，必须使用独立ADR，证明低权限OS identity、network deny、credential stripping、read-only inputs、hard quota/kill/process-tree cleanup、restart/cancel/replay和same-commit release evidence。当前backend不能通过改名、`node:vm`、worker thread或普通child process升级为“sandbox”。

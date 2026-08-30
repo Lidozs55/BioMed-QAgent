@@ -272,8 +272,10 @@ Ctrl+⌘ 可对单条消息执行相反操作。半透明侧边栏开启时，�
 
 ## 15. API 面
 
-统一前缀 `/api/v1`。下表为当前正式 API 面，路由由 TypeScript Host 原生处理
-（`server/src/settings/model-registry/routes.ts`、`server/src/product/product-api.ts`、
+统一前缀 `/api/v1`。下表为**核心 API 概览**（非逐 endpoint 穷举；覆盖任务、产物、
+模型设置、HIL 审批、权限解析与下载续传/取消），路由由 TypeScript Host 原生处理
+（`server/src/settings/model-registry/routes.ts`、`server/src/settings/hil-approval-settings.ts`、
+`server/src/settings/permission-settings.ts`、`server/src/product/product-api.ts`、
 `server/src/runtime/durable-agent-runtime.ts`），不存在 Python 路由层。
 
 | Method | Path | Purpose |
@@ -326,6 +328,14 @@ Ctrl+⌘ 可对单条消息执行相反操作。半透明侧边栏开启时，�
 | GET | `/cache/export` | 全量缓存 ZIP 导出 |
 | GET | `/skill-iterations/context` | 列出 curated Skill 目标与可选的终态历史范围 |
 | POST | `/skill-iterations` | 调用当前模型生成并持久化个性化 Skill 审查候选 |
+| GET | `/settings/hil-approval` | 读取 HIL 三档审批设置（默认档位 + per-scope 档位） |
+| PUT | `/settings/hil-approval` | 更新 HIL 审批设置；发布边界 scope 拒绝非人工档 |
+| GET | `/settings/agent-permissions` | 读取 Agent 权限 preset 与路径规则 |
+| PUT | `/settings/agent-permissions` | 切换权限 preset（restricted 作废全部 pending）；`/persistent-exec`、`/rules`、`/temp-grants` 子路由管理执行开关、规则与临时授权 |
+| POST | `/tasks/{task_id}/runs/{run_id}/permissions/{request_id}` | 解析挂起的权限请求（approve / reject，可选 grant scope） |
+| POST | `/tasks/{task_id}/downloads/resume` | 恢复中断下载（携带原 run_id + tool_call_id 回放到原 Run 事件流，不新建 Run） |
+| POST | `/tasks/{task_id}/downloads/cancel` | 中止在途下载（不打终态事件，前端回退为“恢复下载”） |
+| GET | `/tasks/{task_id}/file` | 按相对路径读取任务文件文本 |
 | WS | `/ws` | durable events + realtime assistant stream |
 
 **API 不变量**：

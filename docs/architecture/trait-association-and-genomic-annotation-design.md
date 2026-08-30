@@ -188,9 +188,11 @@ dataset completion contract。Agent 因而仍选择更熟悉、更短的 workspa
 BuildResult + immutable Publication 才能声明正式完成。缺 provider/carrier 时不得在首次
 受阻后立即降级；应先尝试可用 static/dynamic 路径并寻找独立真实来源。合理路径耗尽后可
 交付明确标注为 provisional 的 workspace CSV，但必须同步报告 blocked/NO_DATA、覆盖缺口并
-请求具体帮助，且不得称其为 Dataset Core Publication 或正式成功。该改动只是路径选择的局部缓解：当前仍没有
-capability preflight 强制调研前选择 formal projection，也没有终态门阻止从未提交 Build
-的 dataset-producing request 报告 completed。
+请求具体帮助，且不得称其为 Dataset Core Publication 或正式成功。该改动只是路径选择的局部缓解：route preflight（`inspect_dataset_execution_routes`，无副作用
+capability 视图）现已在调研前给出候选 family/projection、可直接绑定的动态 provider 与
+acquisition-only carrier，供 Agent 选择 formal projection；但统一终态门仍不存在——从未提交
+Build 的 dataset-producing request 仍可报告 completed，只能由 supervisor 事后诚实分类（end-of-run
+publication gate 属 TODO P2）。
 
 ### 7.2 动态工具可用性不足
 
@@ -231,13 +233,15 @@ acquisition provenance 的 task-owned asset。Dynamic Family 解决 family/topol
 不负责把任意 discovery、浏览器或 workspace bytes 提升为可信输入；后者仍需通用 Core
 provider，或未来由 Core 提交并可验证 provenance 的 parser/extraction result。
 
-Bellenguez supplementary 仍有第二层阻塞：dynamic transform host 不能直接消费 ZIP/XLSX。
-Core acquisition 已能通过 `europepmc.supplementary.v1` 登记官方 archive carrier，也能登记
-provider-declared `extractionAssets`，但
-phase3 dynamic binding 当前固定选择 `acquired.sourceAsset`，没有选择可信解析后 extraction
-asset 的协议。因此，仅新增一个下载 supplementary ZIP 的 provider 仍然不能接通 gold7；
-必须让 Core 确定性提取/解析并把 provenance-bound UTF-8 CSV/JSON 选为 formal binding，
-或扩展 dynamic input 以接受 Core committed parser OperationResult。后者范围更大。
+Bellenguez supplementary 的二进制阻塞已被解除：Core acquisition 现支持
+provider-declared `extractionAssets` 计划与确定性 XLSX→CSV 工作表抽取
+（`xlsx-to-csv.ts`），`acquire_core_carrier` 把 zip 成员/xlsx 工作表转换为
+provenance-bound extraction member asset；`extract_core_archive` 可把单个成员解出并
+注册为新的 Core 资产。因此仅下载 zip 不再阻塞 dynamic binding——绑定应为
+acquisition 返回的 `extractionAssets`（或 Core committed parser OperationResult），
+而不是 `acquired.sourceAsset` 原始 archive。剩余的缺口在动态语义侧：服务端
+digest-bound dynamic execution skeleton（候选 projection 分解、单一行粒度、可用
+providers 与缺失 blockers 的确定性输入）未完成（TODO P1）。
 
 ### 7.4 错误成功终态
 
@@ -261,11 +265,11 @@ row granularity；`variant_evidence` 又不能承载统计关联语义。
    study `GCST90012877` 返回 HTTP 200。
 2. **已完成：** RefSNP provider 按受控 rsID 请求返回官方 UTF-8 JSON，保留原始 placement
    和 allele provenance；live smoke 以非 gold `rs7412` 返回 HTTP 200。
-3. **待完成：** Europe PMC supplementary provider 已下载并登记官方 archive；Core 仍需
-   确定性选择附件、解析 XLSX
-   sheet 为 UTF-8 CSV，并把 raw archive -> attachment -> parsed table 的 hash/locator 链
-   绑定到所选 formal input。优先扩展 acquisition result 以显式选择 provider-owned
-   extraction asset；不要让 Agent 指定路径，也不要把 workspace 解析结果提升为 carrier。
+3. **已完成：** Europe PMC supplementary provider 登记官方 archive 后，Core 已能经
+   `extractionAssets` 计划确定性选择附件、把 XLSX sheet 解析为 UTF-8 CSV，并把
+   raw archive -> attachment -> parsed table 的 hash/locator 链绑定到所选 formal
+   input（`acquire_core_carrier` / `extract_core_archive`）。不让 Agent 指定路径，
+   也不把 workspace 解析结果提升为 carrier 的原则不变。
 4. 用上述 Core-acquired 文本输入走现有 prepare/submit、generic multi-table B3、
    ProductAssessment 和 immutable Publication。先用非 Alzheimer trait 与至少两个来源
    证明 provider/family 多对多，再决定是否把已验证 FamilySpec 提升到 production Registry。
