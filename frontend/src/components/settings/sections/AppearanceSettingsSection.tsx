@@ -602,8 +602,12 @@ function ThemeColorPicker({
           value={value === "" ? ["default"] : [value.toLowerCase()]}
           onValueChange={(next) => {
             const selected = next[0];
-            if (selected === "default") onChange("");
-            else if (selected) onChange(selected);
+            if (selected === "default") {
+              onChange("");
+              return;
+            }
+            const original = options.find((hex) => hex.toLowerCase() === selected);
+            if (original) onChange(original);
           }}
           aria-label={`${label}预设`}
           className="flex flex-wrap items-center gap-2"
