@@ -47,6 +47,7 @@ import type {
 } from "@/runtime/contracts";
 import { parseEventPayload } from "@/lib/eventParsers";
 import { formalHILLinkageMatches } from "@/lib/eventParsersPipeline";
+import type { QuarantineReceipt } from "@/api/quarantine";
 
 function optionalNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
@@ -700,5 +701,49 @@ export function parsePublicationDetail(json: unknown): PublicationDetail {
     manifest: parseVersionedDatasetManifest(Reflect.get(obj, "manifest"), "publication response.manifest"),
     publication: parseDatasetPublication(Reflect.get(obj, "publication"), "publication response.publication"),
     artifacts: assertArray(Reflect.get(obj, "artifacts"), "publication response.artifacts", (value, index) => parseManifestArtifactEntry(value, `publication response.artifacts[${index}]`)),
+  };
+}
+
+function parseQuarantineCoverageStatus(value: unknown, path: string): QuarantineReceipt["coverage_status"] {
+  return assertFinite(value, path, ["complete", "partial", "unknown"] as const);
+}
+
+function parseQuarantineScope(value: unknown, path: string): string[] {
+  return assertArray(value, path, (entry, index) => assertString(entry, `${path}[${index}]`));
+}
+
+export function parseQuarantineReceipt(json: unknown): QuarantineReceipt {
+  const obj = assertObject(json, "quarantine receipt");
+  if (Reflect.get(obj, "schema_version") !== "1.0") {
+    throw new APIError(502, "quarantine receipt.schema_version must be 1.0");
+  }
+  if (Reflect.get(obj, "authoritative") !== false) {
+    throw new APIError(502, "quarantine receipt.authoritative must be false");
+  }
+  if (Reflect.get(obj, "trust") !== "untrusted") {
+    throw new APIError(502, "quarantine receipt.trust must be untrusted");
+  }
+  return {
+    schema_version: "1.0",
+    submission_id: assertString(Reflect.get(obj, "submission_id"), "quarantine receipt.submission_id", true),
+    task_id: assertString(Reflect.get(obj, "task_id"), "quarantine receipt.task_id", true),
+    name: assertString(Reflect.get(obj, "name"), "quarantine receipt.name", true),
+    media_type: assertString(Reflect.get(obj, "media_type"), "quarantine receipt.media_type", true),
+    source_note: assertStringOrNull(Reflect.get(obj, "source_note"), "quarantine receipt.source_note"),
+    coverage_status: parseQuarantineCoverageStatus(Reflect.get(obj, "coverage_status"), "quarantine receipt.coverage_status"),
+    covered_scope: parseQuarantineScope(Reflect.get(obj, "covered_scope"), "quarantine receipt.covered_scope"),
+    missing_scope: parseQuarantineScope(Reflect.get(obj, "missing_scope"), "quarantine receipt.missing_scope"),
+    size_bytes: assertNonNegativeInt(Reflect.get(obj, "size_bytes"), "quarantine receipt.size_bytes"),
+    sha256: assertHex64(Reflect.get(obj, "sha256"), "quarantine receipt.sha256"),
+    submitted_at: assertString(Reflect.get(obj, "submitted_at"), "quarantine receipt.submitted_at", true),
+    authoritative: false,
+    trust: "untrusted",
+  };
+}
+
+export function parseQuarantineReceiptPage(json: unknown): { items: QuarantineReceipt[] } {
+  const obj = assertObject(json, "quarantine response");
+  return {
+    items: assertArray(Reflect.get(obj, "items"), "quarantine response.items", (value) => parseQuarantineReceipt(value)),
   };
 }

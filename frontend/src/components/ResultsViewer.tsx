@@ -1,4 +1,5 @@
 import PublicationResultsViewer from "@/components/PublicationResultsViewer";
+import QuarantinePanel from "@/components/QuarantinePanel";
 import { ArtifactCard } from "@/components/artifacts/ArtifactCard";
 import { useTaskPublicationId } from "@/hooks/useTaskPublication";
 import {
@@ -114,7 +115,12 @@ export default function ResultsViewer({
   const resolvedPublicationId = publicationIdOverride ?? executionState.publicationId;
 
   if (resolvedPublicationId !== null) {
-    return <PublicationResultsViewer publicationId={resolvedPublicationId} taskId={taskId} />;
+    return (
+      <div className="flex min-h-0 min-w-0 flex-col gap-4 overflow-y-auto">
+        <PublicationResultsViewer publicationId={resolvedPublicationId} taskId={taskId} />
+        {taskId !== null && <QuarantinePanel taskId={taskId} />}
+      </div>
+    );
   }
 
   if (taskId === null) {
@@ -133,20 +139,26 @@ export default function ResultsViewer({
     isActiveStatus(task.summary.status);
   if (artifacts.length === 0 && isActive) {
     return (
-      <div className="flex min-w-0 items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
-        <Spinner />
-        处理中...
+      <div className="flex h-full min-h-0 min-w-0 flex-col gap-4 overflow-y-auto">
+        <div className="flex min-w-0 items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
+          <Spinner />
+          处理中...
+        </div>
+        <QuarantinePanel taskId={taskId} />
       </div>
     );
   }
   if (artifacts.length === 0) {
     return (
-      <Empty className="min-h-48">
-        <EmptyHeader>
-          <EmptyTitle>暂无结果</EmptyTitle>
-          <EmptyDescription>该任务尚未生成可下载的产物。</EmptyDescription>
-        </EmptyHeader>
-      </Empty>
+      <div className="flex h-full min-h-0 min-w-0 flex-col gap-4 overflow-y-auto">
+        <Empty className="min-h-48">
+          <EmptyHeader>
+            <EmptyTitle>暂无结果</EmptyTitle>
+            <EmptyDescription>该任务尚未生成可下载的产物。</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+        <QuarantinePanel taskId={taskId} />
+      </div>
     );
   }
 
@@ -187,6 +199,7 @@ export default function ResultsViewer({
               taskId={taskId}
             />
           ))}
+          <QuarantinePanel taskId={taskId} />
         </div>
       </ScrollArea>
     </div>
