@@ -1,0 +1,4 @@
+{"request_id":"permission_b98ae368-2a73-4c19-ad1e-985eab378ef9","decision":{"action":"deny","reason":"operator: fs.read resolved outside workspace (C:\\publications), external scope"}}
+{"request_id":"permission_db8b6136-a0b5-40cb-9bce-3062b2fa734a","decision":{"action":"deny","reason":"operator: 2nd external-anchor guess (pub layout path guessing); G1 gap behavior evidence"}}
+{"request_id":"third","decision":{"action":"deny","reason":"operator: 3rd consecutive publication-layout guess via workspace_search"}}
+{"request_id":"fourth","decision":{"action":"deny","reason":"operator: 4th consecutive guess; deny result carries no steer -> guess loop (ledger J-series candidate)"}}

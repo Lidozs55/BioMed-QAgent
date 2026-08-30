@@ -33,6 +33,7 @@
 | E3 | 四个发现工具全激活零调用，向用户要本可自得的清单（PDB 子集/NCT） | **穷尽界**："请用户提供 X"前必须实际调用能拿到 X 的已激活工具并附证据 |
 | I1(模型半) | **可行方案不执行、上交待确认**：模型自己诊断出"拆三次独立 build"是正解且完全在其权限内（prepare/submit 自家工具），却写进"需要您的协助"第 3 条终止——因权限面 deny 经验（C1/D1）错误泛化为"改构建形态需请示"；63/240 轮即收尾 | **执行优先条款**：凡不超出已激活工具权限、不需要外部凭证的方案，进求助清单前必须本 run 内实际执行一次并报告成败；求助清单只放真正的用户输入（凭证/文件/口径决策） |
 | I4 | **单点探测失败即判整通道死**：gold7 对 `dbsnp.files.v1` 只试 1 个 rsID 空回就归因"provider 不可用"；无法区分"全灭 vs 该记录缺失"，也给框架立项报了过重的诊断 | 归因前 ≥2-3 个独立样本探测，终答按样本粒度报告失败率 |
+| J4 | **可达面自我设限（穷尽界新亚型）**：gold8 FAERS 绑定不依赖已阵亡的名册（逐药 openFDA 可查，历史成功 9 药 68 行），本次只绑 1 药即以"仅 acetaminophen 有可溯源记录"收尾——与历史事实矛盾，成功形态未复制到达可及样本上限 | 穷尽界条款扩展：**已在本案跑通一次的绑定形态，须复制到全部已核实可达样本或在终答逐样本说明放弃原因**；终答"只有 X 可行"前须列尝试矩阵 |
 
 ### B 类：框架限制 → 需动代码
 
@@ -49,8 +50,10 @@
 | H2 | **`validate_dataset_execution` 假绿灯**：valid:true 但 schema 表达不了需求字段（`activity.v1` 对 assay 条件/单位/跨源列全 `unknown_required_field`）——校验层与表达层脱节 | validate 增加"spec 需求字段 × schema 能力"覆盖检查，不可表达直接 invalid 并指路 |
 | I1 | **Dynamic 单 projection 全表耦合**：一张空表（variant_genes）拖死同 build 内数据已全部核实的 studies 表，gold7 因此 2/3 交付 | per-table partial publish，或拒绝信息直接指路"拆独立 build"；另：模型给出拆建方案后停手等确认——穷尽界提示词一并覆盖 |
 | I2 | `dbsnp.files.v1` Core provider 返回空载荷（工具面 lookup_dbsnp 正常）→ GRCh38 坐标核验进不了正式链 | 复现 provider egress/解析；并入链 2 变异发现立项 |
-| I3 | staging 资产命名空间割裂新增实例：`download_supplementary` 的 ZIP 落 source_assets 但 preview "registered asset was not found"（链 1 断点的又一入口） | 链 1 修复时覆盖 download_supplementary 登记原子性 |
-| — | **wire 缺陷（gold7 新证）**：全量重建后 receipt-only submit 仍现 `Expected object at $projection`×3，随后自行消失进入实质迭代——stale-build 之外存在 stored-submission 重解析缺陷（疑与 a98a151a proposal 变更相关） | 写复现用例钉死（receipt-only + 无 echo 形态），修 contracts/proposal 版本兼容 |
+| I3 / J3 | staging 资产命名空间割裂新增实例：`download_supplementary` 的 ZIP 落 source_assets 但 preview "registered asset was not found"；**gold8 把该链的发布回执端放大到极限——为读回 1 个发布回执烧 29 调用/71% 墙钟，preview×17 全拒、4 次 `/publications/*` 外部锚定停审 deny**（链 1 断点最全形态） | 链 1 修复时覆盖 download_supplementary 登记原子性 + permission deny 响应附"无此读取通道"语义 |
+| J1 | **名册类外部源零 provider + 官方站全灭 + 无"用户上传→Core 权威资产"通道**：DILIrank 六通道逐 URL 实证不可达（DNS/404/401/ETIMEDOUT），题面 2/4 表 NO_DATA；quarantine 旁路明确非权威、进不了正式链 | 定义"用户上传→task-owned Core 资产→绑定"受治理正式通道（区别于 quarantine 非权威旁路）；DILIrank 镜像准入 |
+| J2 | **Bookshelf/LiverTox HTML 无 formalize provider**：页面可读（navigate 成功）但无 Core provider 把 HTML 变不可变载体 → "not publishable"。即 TODO"Recipe 格式宽路径（HTML/PDF）"的实测代价 | 按 Recipe 宽路径立项：HTML→registered parser→field_mapping HIL |
+| — | **wire 缺陷（gold7 新证，gold8 第 3 案）**：全量重建后 receipt-only submit 仍现 `Expected object at $projection`×3，随后自行消失进入实质迭代；gold8 submit@796/815 同错再现——**3/3 动态案全中**，stale-build 之外存在 stored-submission 重解析缺陷（疑与 a98a151a proposal 变更相关） | 写复现用例钉死（receipt-only + 无 echo 形态），修 contracts/proposal 版本兼容 |
 | — | supervisor 对 Host events 瞬时 HTTP 500 零容错（3 连败，均在 operation_progress 风暴时段）+ Host 端 500 本身 | 运维面：supervisor 加重试；查 server events 端点 500 根因（疑似独立 bug） |
 | H3 | **stale-build 撕裂**：`node dist/index.js --static` 裸启动绕过 `prestart/build-contracts-if-needed`，contracts dist 落后 server 源码一个 rename（c005e323）→ gold5-r1 全场 thrash 报废 | 运维纪律：重启 static Host 前强制 `pnpm build`；或给 supervisor/runner 加 dist-vs-src mtime 启动断言 |
 
@@ -224,7 +227,31 @@ Host 的 `contracts/dist`（21:38 构建）落后于队友 `c005e323`（23:07，
 - **正样本（继续保持高水准）**：`_embedded.associations` 嵌套路径探测失败后写出**根因说明**（顶层键探测→0 行）供后续复用；明确拒绝"从未可读出的压缩包臆测 75 位点"；终答自带**证据分级提示**（"勿据已发布表宣称复现分阶段结果"）；发布后 7 轮即收。
 - 提交侧错误谱（18 次 submit 全记录在 assistant-messages/closure）：$projection×3（wire 缺陷，见上）→ digest drifted×2 → transform 只读赋值错误 → OUTPUT_BYTES_MISMATCH → 空表×4 → TS 语法 → receipt superseded → 成功。形态=有效学习曲线，与 gold5-r1 的平线 thrash 形成对照（那次是撕裂构建，这次错误每轮变化）。
 
-## gold8–gold10 @ 复跑（待组员执行）
+## gold8 @ qwen3.8-flash（2026-08-30，main@0335ce92a1f8，task_ts_304c82c8-7dfe-4372-8479-d99efa121e0a）
+
+> 题面依 §5.3 重建（无 prompts 文件）。终态 **succeeded_publication（1/4 表，且仅 1 药）**：`pub_dili_faers_counts_15070cb556142758`（动态 Family，acetaminophen 的 FAERS PT 计数，4 artifacts，载体经 `openfda.files.v1` Core 采集）。历史对照：e2e-rerun3 同题发过 9 药 68 行——本次回退到 1 药（J4）。
+> 78 calls / 1864s / 6.42M token；4 次人工权限裁决（全 deny，外部锚定）；0 HIL/压缩。
+>
+> | 阶段 | 调用 | input | output | cache_read | token | 墙钟 |
+> | --- | --- | --- | --- | --- | --- | --- |
+> | 发布前 | 49 | 166,036 | 16,304 | 3,011,968 | 3,194,308 | 538s |
+> | 发布后 | 29 | 140,340 | 3,815 | 3,079,168 | 3,223,323 | **1316s（71%）** |
+> | 合计 | 78 | 306,376 | 20,119 | 6,091,136 | 6,417,631 | 1864s |
+>
+> 峰值上下文 121,086/256k。
+
+| # | 卡点 | 归类 | 证据 | 建议修法（暂不执行） |
+| - | ---- | ---- | ---- | -------------------- |
+| J1 | **名册类外部源零 provider + 官方站全灭**：DILIrank 六通道逐一实证不可达（`dilibank.ncats.io` DNS ENOTFOUND、GitHub 页 404、ftp 镜像 404、DOI 404、code search 401、论文闭源无 OA 附表）→ 名册/标签两表 NO_DATA，题面 2/4 表依赖它。系统只有"用户提供文件"一条路，而**用户上传→Core 权威资产**的正式通道不存在（quarantine 旁路明确非权威、不进发布链） | 框架（覆盖面）+ 外部事实 | 终答 §3 逐 URL 列表；navigate_page 错误谱 | 定义"用户上传→task-owned Core 资产→绑定"的受治理正式通道（区别于 quarantine）；DILIrank 镜像准入 |
+| J2 | **Bookshelf HTML 无 formalize provider**：LiverTox 专论页面**可读**（navigate 成功）但没有 Core provider 把 HTML 变不可变载体 → "not publishable"。即 TODO"Recipe 格式宽路径（HTML/PDF+人审字段映射）"的实测代价 | 框架（覆盖面） | 终答 §3 Table 3 行 | 按 TODO 宽路径立项，先打通 HTML→registered parser→field_mapping HIL |
+| J3 | **G1 回执黑洞的最大形态**：发布后 29 调用/71% 墙钟全花在"想读回自己发布的回执"——`preview_core_asset`×17（16 拒：artifact 32hex≠asset_64hex）、workspace 探测×12、`/publications/*` 外部锚定 4 次权限停审全 deny。终答结论健康（"receipt-asserted, not independently confirmed"），但代价 22 分钟 | 框架（链 1 定量） | tool_errors 25+；permissions.jsonl 4 条；终答 §2 | 链 1 修复（execute 返回 asset_ids）同时消掉此形态；权限拒绝响应应附"该路径不存在读取通道"语义（现在只有 denied，模型只能继续猜） |
+| J4 | **可达面自我设限**：FAERS 计数不依赖名册（逐药 openFDA 可查），历史 9 药 68 行成功；本次只绑 1 药即收尾，终答解释"只有 acetaminophen 有可溯源真记录"与历史事实矛盾（amox-clav 404 是名称形态问题，其余药物未见逐个尝试记录） | 模型（穷尽界）+ 待复现区分 | tool 计数 lookup×2/acquire×2 vs 历史 9 绑定 | 复现确认：若动态绑定 per-drug 成本过高→框架（批量绑定）；若模型没试→穷尽界条款覆盖"同类可复制的成功绑定应做到样本上限再收" |
+| J5 | **`$projection` wire 缺陷第 3 案**：submit@796/815 同错复现（全新构建），模型再次绕路成功 | 框架 | 本案 + gold5-r1 + gold7 | 同"wire 缺陷"行，优先级升高（3/3 动态案全中） |
+
+- **正样本**：browser 韧性首次全面生效——官方源探测六通道**逐 URL 带失败原因**（对比历史上 555 次暴力枚举是行为质变）；拒绝用模型记忆臆造 50 药名册；两个无匹配 PT 记 unavailable 不记 0；求助清单含可执行域名/文件类型。
+- 诚实边界与历史一致：FAERS 计数=MedDRA PT 报告次数语义已在终答声明；部分维度正式+其余结构化阻断仍是该上游条件下的正确终态。
+
+## gold9–gold10 @ 复跑（待组员执行）
 
 
 
