@@ -55,7 +55,7 @@ describe("fetchDatabases exact preservation", () => {
 /* ---- saveSettings preserves response ---- */
 describe("saveSettings preserves response", () => {
   it("returns parsed settings after save", async () => {
-    const saved = { base_url: "https://example.com/v1", api_key: "sk-****", api_key_configured: true, model_name: "qwen-plus", max_tokens: 8192, context_window: 131072, context_window_source: "catalog", safety_reserve_ratio: 0.05, safety_reserve_tokens: 16384, compaction_trigger_ratio: 0.85, compaction_target_ratio: 0.60, available_input_tokens: 110592, advanced: { temperature: 0.7 } };
+    const saved = { base_url: "https://example.com/v1", api_key: "sk-****", api_key_configured: true, model_name: "qwen-plus", max_tokens: 8192, context_window: 131072, context_window_source: "catalog", safety_reserve_ratio: 0.05, safety_reserve_tokens: 16384, compaction_trigger_ratio: 0.85, compaction_target_ratio: 0.60, available_input_tokens: 110592, vision_model_ready: false, advanced: { temperature: 0.7 } };
     const fetcher = vi.fn<FetchLike>().mockResolvedValue(jsonResponse(saved));
     const api = createAPIClient({ fetcher });
     const result = await api.saveSettings({ model_name: "qwen-plus" });

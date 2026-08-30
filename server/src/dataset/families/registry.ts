@@ -42,6 +42,10 @@ import {
   createChartEvidenceRegisteredTableRegistry,
 } from "./bioactivity-measurement/chart-evidence/index.js";
 import {
+  createPaperEvidenceRegisteredTableRegistry,
+  paperEvidenceTables,
+} from "./bioactivity-measurement/paper-evidence/index.js";
+import {
   createGutMicrobiomeRegisteredTableRegistry,
   GUT_MICROBIOME_TAXON_TSV_ADAPTER_ID,
   gutMicrobiomeSchemas,
@@ -727,12 +731,14 @@ export function bioactivityMeasurementFamilyDefinition(): DatasetFamilyDefinitio
   const entries = bioactivityTableEntries();
   const registrations = createBioactivityRegisteredTableRegistry().entries();
   const chartRegistrations = createChartEvidenceRegisteredTableRegistry().entries();
+  const paperRegistrations = createPaperEvidenceRegisteredTableRegistry().entries();
   return registeredFamily({
     id: BIOACTIVITY_FAMILY_ID,
     schemas: [
       ...entries.map((entry) => entry.schema),
       bioactivityCompoundCrosswalkSchema,
       ...chartEvidenceTables.map((entry) => entry.schema),
+      ...paperEvidenceTables.map((entry) => entry.schema),
     ],
     profileRef: "bioactivity_measurement.release.v1",
     validationPolicy: bioactivityValidationPolicy(),
@@ -758,6 +764,17 @@ export function bioactivityMeasurementFamilyDefinition(): DatasetFamilyDefinitio
       const entry = chartEvidenceTables.find((item) => item.schema.schema_id === registration.schema.schema_id);
       if (entry === undefined) {
         throw new Error(`chart evidence parser schema '${registration.schema.schema_id}' is not registered`);
+      }
+      return registeredSource({
+        source: `registered_bioactivity_${entry.definition.table_id}`,
+        tableId: entry.definition.table_id,
+        adapterId: registration.parser.adapter_id,
+        schemaRef: registration.schema.schema_id,
+      });
+    }), ...paperRegistrations.map((registration) => {
+      const entry = paperEvidenceTables.find((item) => item.schema.schema_id === registration.schema.schema_id);
+      if (entry === undefined) {
+        throw new Error(`paper evidence parser schema '${registration.schema.schema_id}' is not registered`);
       }
       return registeredSource({
         source: `registered_bioactivity_${entry.definition.table_id}`,

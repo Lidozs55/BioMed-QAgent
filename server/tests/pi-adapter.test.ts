@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { BioMedAgentError } from "../src/agent/contracts.js";
+import { BioMedAgentError, type BioMedSessionConfig } from "../src/agent/contracts.js";
 import { SKILL_TOOL_NAMES } from "../src/agent/skills/skill-tool-map.js";
 import {
   activationToolDefinition,
@@ -12,6 +12,8 @@ import {
   resolveRequestMaxTokens,
   resolveSessionBudget,
   shouldReconfigureSession,
+  SYSTEM_CONTEXT_SECTION_BEGIN,
+  SYSTEM_CONTEXT_SECTION_END,
   toUpstreamEvent,
   toolCatalogPrompt,
   TOOL_ACTIVATION_NAME,
@@ -92,10 +94,11 @@ describe("Pi system prompt", () => {
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
       /^\[Dataset completion contract\][\s\S]*\[Evidence integrity\][\s\S]*\[Trusted execution\][\s\S]*\[Dynamic publication mechanics\][\s\S]*\[Control and recovery\][\s\S]*$/,
     );
-    // 7_400 = former 7_000 budget plus the [Dynamic publication mechanics]
-    // section (~1.1k chars) that moves prepare/submit contract knowledge out of
-    // user prompts; still caps per-call system-prompt growth.
-    expect(PHASE1_SYSTEM_PROMPT.length).toBeLessThanOrEqual(7_400);
+    // 8_000 = former 7_400 budget plus the [Dataset completion contract]
+    // execution-context line and the governed paper-chart route line in
+    // [Trusted execution] (Gold6 vision repair Task 8); still caps per-call
+    // system-prompt growth.
+    expect(PHASE1_SYSTEM_PROMPT.length).toBeLessThanOrEqual(8_000);
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
       /completion is determined by task semantics, never by the requested file format/i,
     );
@@ -251,6 +254,28 @@ describe("Pi system prompt", () => {
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/preview_core_asset lists members/i);
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
       /never run python, shell, or workspace_exec extraction/i,
+    );
+  });
+
+  test("binds the frozen execution context as semantics and routes paper charts through governed extraction", () => {
+    // The frozen Gold6 execution context is task semantics, never a way to
+    // claim completion or publication authority.
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /Treat the frozen execution context \(system prompt\) as binding task semantics/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /never as publication authority: only a current-run immutable Publication proves completion/i,
+    );
+    // Gold6-like work must go through registered carriers plus the governed
+    // extraction tool, with structured blockers instead of workspace CSV.
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /acquire registered full-text XML\/PDF\/supplement carriers through fixed Core acquisition/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /call extract_registered_paper_chart_evidence on task-owned asset ids/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /If any carrier, visual model, locator, or required review is unavailable, return the structured blocker instead of a workspace CSV/i,
     );
   });
 });
@@ -468,6 +493,46 @@ describe("PiAgentAdapter", () => {
     await collect(session.run("continue"));
 
     expect(upstream.reconcileConfig).toHaveBeenCalledOnce();
+  });
+
+  test("appends the frozen execution context to the system prompt and never to the user prompt", async () => {
+    const upstream = new FakeUpstreamSession();
+    const capturedConfigs: BioMedSessionConfig[] = [];
+    const systemContext = [
+      "{",
+      '  "case_id": "gold6",',
+      '  "prompt_sha256": "f30ab31099da23c75a3e0037ee303b8814c7c124bc1e84be149d2c6f4c8fc298"',
+      "}",
+    ].join("\n");
+    const session = await new PiAgentAdapter({
+      createUpstreamSession: async (config) => {
+        capturedConfigs.push(config);
+        return upstream;
+      },
+    }).createSession({ ...sessionConfig, systemContext });
+
+    await collect(session.run("frozen gold6 user prompt"));
+
+    const systemPrompt = capturedConfigs[0]?.systemPrompt ?? "";
+    expect(systemPrompt.split(SYSTEM_CONTEXT_SECTION_BEGIN)).toHaveLength(2);
+    expect(systemPrompt.split(SYSTEM_CONTEXT_SECTION_END)).toHaveLength(2);
+    expect(systemPrompt).toContain('"case_id": "gold6"');
+    expect(systemPrompt.indexOf(SYSTEM_CONTEXT_SECTION_BEGIN)).toBeGreaterThan(
+      systemPrompt.indexOf("[Dataset completion contract]"),
+    );
+    // The upstream user prompt stays byte-identical to the run input; the
+    // frozen context never rides along in the user message.
+    expect(upstream.prompts).toEqual(["frozen gold6 user prompt"]);
+
+    // Without frozen context the section markers never appear.
+    const bareConfigs: BioMedSessionConfig[] = [];
+    await new PiAgentAdapter({
+      createUpstreamSession: async (config) => {
+        bareConfigs.push(config);
+        return new FakeUpstreamSession();
+      },
+    }).createSession(sessionConfig);
+    expect(bareConfigs[0]?.systemPrompt).not.toContain("Frozen execution context");
   });
 
   test("exposes the upstream model budget for the run-entry preflight", async () => {

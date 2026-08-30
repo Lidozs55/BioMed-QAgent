@@ -4,8 +4,10 @@ import { toast } from "sonner";
 
 import { ModelDetailDialog } from "@/components/settings/model/ModelDetailDialog";
 import { ModelImportSheet } from "@/components/settings/model/ModelImportSheet";
+import { VisionModelSelector } from "@/components/settings/model/VisionModelSelector";
 import type {
   ManagedModelInfo,
+  ModelSettings,
   ParameterSpec,
   ProviderInfo,
   SettingsAPIClient,
@@ -358,5 +360,182 @@ describe("ParameterEditor range enforcement", () => {
     expect(updateManagedModel.mock.calls[0][1].params).toMatchObject({
       temperature: 1.5,
     });
+  });
+});
+
+describe("VisionModelSelector", () => {
+  const SETTINGS: ModelSettings = {
+    base_url: "https://api.deepseek.com/v1",
+    api_key: "sk-****",
+    api_key_configured: true,
+    model_name: "deepseek-chat",
+    max_tokens: 4096,
+    context_window: 65536,
+    context_window_source: "catalog",
+    safety_reserve_ratio: 0.05,
+    safety_reserve_tokens: 8192,
+    compaction_trigger_ratio: 0.85,
+    compaction_target_ratio: 0.6,
+    available_input_tokens: 49152,
+    advanced: {
+      temperature: 0.7,
+      top_p: 1.0,
+      repetition_penalty: 1.0,
+      enable_search: false,
+      thinking_mode: false,
+    },
+    run_block_reason: null,
+    runtime_limits: {
+      command_timeout_seconds: 600,
+      command_output_kib: 256,
+      workspace_read_kib: 256,
+      workspace_write_kib: 1024,
+      workspace_search_file_mib: 16,
+      workspace_search_max_files: 2000,
+      http_timeout_seconds: 300,
+      download_timeout_seconds: 3600,
+      browser_timeout_seconds: 300,
+      dataset_operation_timeout_seconds: 3600,
+      database_timeout_seconds: 600,
+      max_download_mib: 8192,
+      gdc_max_files: 50,
+      request_interval_ms: 500,
+    },
+    vision_model_id: null,
+    vision_model_name: null,
+    vision_provider_name: null,
+    vision_model_ready: false,
+    vision_block_reason: null,
+  };
+
+  const VISUAL_OK = makeModel({
+    id: "vl-ready",
+    model_id: "qwen3.5-vl-plus",
+    name: "Qwen VL Plus",
+    capabilities: { text: true, image: true, video: false, audio: false },
+  });
+  const VISUAL_NO_KEY = makeModel({
+    id: "vl-nokey",
+    provider_id: "p2",
+    provider_name: "Keyless",
+    provider_api_key_configured: false,
+    model_id: "vl-nokey-model",
+    name: "VL No Key",
+    capabilities: { text: true, image: true, video: false, audio: false },
+  });
+  const TEXT_ONLY = makeModel({ id: "text-only", model_id: "deepseek-chat", name: "DeepSeek Chat" });
+  const DISABLED_PROVIDER_VISUAL = makeModel({
+    id: "vl-disabled",
+    provider_id: "p-off",
+    provider_name: "Disabled Co",
+    model_id: "vl-off",
+    name: "VL Disabled",
+    capabilities: { text: true, image: true, video: false, audio: false },
+  });
+  const PROVIDERS: ProviderInfo[] = [
+    PROVIDER,
+    { ...PROVIDER, id: "p2", name: "Keyless", api_key_configured: false, api_key: "" },
+    { ...PROVIDER, id: "p-off", name: "Disabled Co", enabled: false },
+  ];
+
+  function renderSelector(
+    api: SettingsAPIClient,
+    settings: ModelSettings = SETTINGS,
+  ) {
+    return render(
+      <VisionModelSelector
+        api={api}
+        settings={settings}
+        managedModels={[VISUAL_OK, VISUAL_NO_KEY, TEXT_ONLY, DISABLED_PROVIDER_VISUAL]}
+        providers={PROVIDERS}
+        onSaved={() => undefined}
+      />,
+    );
+  }
+
+  async function openOptions() {
+    fireEvent.click(screen.getByRole("combobox", { name: "视觉抽取模型" }));
+    return await screen.findAllByRole("option");
+  }
+
+  it("lists only image-capable models from enabled providers with credential readiness", async () => {
+    renderSelector(mockApi());
+    const options = await openOptions();
+    const labels = options.map((option) => option.textContent ?? "");
+
+    expect(labels.some((label) => label.includes("Qwen VL Plus"))).toBe(true);
+    expect(labels.some((label) => label.includes("VL No Key"))).toBe(true);
+    expect(labels.some((label) => label.includes("DeepSeek Chat"))).toBe(false);
+    expect(labels.some((label) => label.includes("VL Disabled"))).toBe(false);
+    // Credential readiness is surfaced per option.
+    expect(labels.find((label) => label.includes("Qwen VL Plus"))).toContain("密钥已配置");
+    expect(labels.find((label) => label.includes("VL No Key"))).toContain("未配置密钥");
+  });
+
+  it("saves only the visual role when a model is chosen", async () => {
+    const saveSettings = vi.fn().mockResolvedValue({
+      ...SETTINGS,
+      vision_model_id: "vl-ready",
+      vision_model_name: "Qwen VL Plus",
+      vision_provider_name: "DashScope",
+      vision_model_ready: true,
+      vision_block_reason: null,
+    });
+    const view = renderSelector(mockApi({ saveSettings }));
+
+    const options = await openOptions();
+    const ready = options.find((option) => (option.textContent ?? "").includes("Qwen VL Plus"));
+    expect(ready).toBeDefined();
+    fireEvent.pointerDown(ready as HTMLElement);
+    fireEvent.click(ready as HTMLElement);
+
+    await waitFor(() => expect(saveSettings).toHaveBeenCalledTimes(1));
+    expect(saveSettings.mock.calls[0][0]).toEqual({ vision_model_id: "vl-ready" });
+
+    // The parent applies the saved settings; readiness becomes visible.
+    view.rerender(
+      <VisionModelSelector
+        api={mockApi({ saveSettings })}
+        settings={{
+          ...SETTINGS,
+          vision_model_id: "vl-ready",
+          vision_model_name: "Qwen VL Plus",
+          vision_provider_name: "DashScope",
+          vision_model_ready: true,
+          vision_block_reason: null,
+        }}
+        managedModels={[VISUAL_OK, VISUAL_NO_KEY, TEXT_ONLY, DISABLED_PROVIDER_VISUAL]}
+        providers={PROVIDERS}
+        onSaved={() => undefined}
+      />,
+    );
+    expect(screen.getByText(/视觉抽取就绪/)).toBeInTheDocument();
+  });
+
+  it("clears the assignment by saving null", async () => {
+    const saveSettings = vi.fn().mockResolvedValue({ ...SETTINGS, vision_model_id: null });
+    renderSelector(
+      mockApi({ saveSettings }),
+      { ...SETTINGS, vision_model_id: "vl-ready", vision_model_name: "Qwen VL Plus", vision_provider_name: "DashScope", vision_model_ready: true, vision_block_reason: null },
+    );
+
+    const options = await openOptions();
+    const none = options.find((option) => (option.textContent ?? "").includes("未选择"));
+    expect(none).toBeDefined();
+    fireEvent.pointerDown(none as HTMLElement);
+    fireEvent.click(none as HTMLElement);
+
+    await waitFor(() => expect(saveSettings).toHaveBeenCalledTimes(1));
+    expect(saveSettings.mock.calls[0][0]).toEqual({ vision_model_id: null });
+  });
+
+  it("surfaces the server-side blocker and explains the extraction path", () => {
+    renderSelector(
+      mockApi(),
+      { ...SETTINGS, vision_block_reason: "供应商「Keyless」尚未配置 API Key，视觉抽取不可用。" },
+    );
+    expect(screen.getByText(/尚未配置 API Key/)).toBeInTheDocument();
+    // Uploaded images go through the extraction tool, not the main chat model.
+    expect(screen.getByText(/视觉抽取工具处理/)).toBeInTheDocument();
   });
 });

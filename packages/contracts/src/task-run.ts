@@ -1,4 +1,5 @@
 import type { JsonValue } from "./json.js";
+import type { TaskExecutionContext } from "./task-execution-context.js";
 
 export type TaskMode = "agent" | "fixture" | "import";
 
@@ -218,6 +219,8 @@ export interface RunRecord {
   error: string | null;
   /** Server-generated per-run outcome summary (absent in older snapshots). */
   summary?: RunSummary | null;
+  /** Frozen evaluation contract bound at queue time (absent in older snapshots; null when none was admitted). */
+  execution_context?: TaskExecutionContext | null;
 }
 
 export interface MessageRecord {

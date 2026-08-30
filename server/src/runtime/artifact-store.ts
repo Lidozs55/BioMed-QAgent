@@ -2,7 +2,8 @@ import { createReadStream, type ReadStream } from "node:fs";
 import { readFile, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
-import type { ArtifactRecord } from "@biomed/contracts";
+import type { ArtifactRecord, SourceCoverageReport } from "@biomed/contracts";
+import { parseSourceCoverageReport } from "@biomed/contracts";
 import { parseDatasetPublication, parseManifestArtifactEntry } from "../dataset/contracts/manifest.js";
 import { sha256Bytes, sha256FileStreamWithSize } from "../dataset/adapters/hashing.js";
 import {
@@ -17,6 +18,7 @@ type ManifestArtifact = ManifestArtifactEntry;
 
 interface LoadedManifest {
   publicationDir: string;
+  publicationId: string;
   manifestPath: string;
   manifestBytes: Buffer;
   artifacts: ManifestArtifact[];
@@ -24,6 +26,7 @@ interface LoadedManifest {
 
 interface PublicationLocation {
   directory: string;
+  publicationId: string;
   manifestRef: string;
   /** ``"1.1"`` records carry the file-byte receipt; ``"1.0"`` are legacy. */
   schemaVersion: "1.0" | "1.1";
@@ -97,6 +100,7 @@ async function loadLatestManifest(taskRoot: string): Promise<LoadedManifest | nu
   let newest: {
     mtimeMs: number;
     publicationDir: string;
+    publicationId: string;
     manifestPath: string;
     manifestRef: string;
     schemaVersion: "1.0" | "1.1";
@@ -118,6 +122,7 @@ async function loadLatestManifest(taskRoot: string): Promise<LoadedManifest | nu
           newest = {
             mtimeMs: details.mtimeMs,
             publicationDir: publication.directory,
+            publicationId: publication.publicationId,
             manifestPath,
             manifestRef: publication.manifestRef,
             schemaVersion: publication.schemaVersion,
@@ -181,6 +186,7 @@ async function loadLatestManifest(taskRoot: string): Promise<LoadedManifest | nu
   }
   return {
     publicationDir: newest.publicationDir,
+    publicationId: newest.publicationId,
     manifestPath: newest.manifestPath,
     manifestBytes,
     artifacts,
@@ -200,6 +206,7 @@ async function latestPublication(buildDir: string): Promise<PublicationLocation 
   let newest: {
     publishedAt: string;
     directory: string;
+    publicationId: string;
     manifestRef: string;
     schemaVersion: "1.0" | "1.1";
     manifestSha256: string | null;
@@ -246,6 +253,7 @@ async function latestPublication(buildDir: string): Promise<PublicationLocation 
       newest = {
         publishedAt: publication.published_at,
         directory,
+        publicationId: publication.publication_id,
         manifestRef: publication.manifest_ref,
         schemaVersion: publication.schema_version ?? "1.1",
         manifestSha256: publication.manifest_sha256 ?? null,
@@ -256,6 +264,7 @@ async function latestPublication(buildDir: string): Promise<PublicationLocation 
     ? null
     : {
         directory: newest.directory,
+        publicationId: newest.publicationId,
         manifestRef: newest.manifestRef,
         schemaVersion: newest.schemaVersion,
         manifestSha256: newest.manifestSha256,
@@ -275,6 +284,61 @@ async function verifyArtifactReceipt(
   }
   // Pass 2: reopen for the streaming body; safe under an immutable publication.
   return { stream: createReadStream(file), sizeBytes: bytes };
+}
+
+export interface LatestSourceCoverageReport {
+  publication_id: string;
+  manifest_sha256: string;
+  artifact_id: string;
+  artifact_sha256: string;
+  report: SourceCoverageReport;
+}
+
+/**
+ * Read the latest immutable publication's Core-generated coverage report.
+ * The caller supplies only a task root; publication and artifact paths are
+ * resolved from the verified manifest, never from Agent input.
+ */
+export async function readLatestSourceCoverageReport(
+  taskRoot: string,
+): Promise<LatestSourceCoverageReport | null> {
+  const loaded = await loadLatestManifest(taskRoot);
+  if (loaded === null) return null;
+  const candidates = loaded.artifacts.filter(
+    (artifact) => artifact.role === "audit_report" && path.basename(artifact.relative_path) === "source_coverage_report.json",
+  );
+  if (candidates.length === 0) return null;
+  if (candidates.length !== 1) {
+    throw new ArtifactIntegrityError("Publication contains multiple source coverage reports");
+  }
+  const artifact = candidates[0];
+  const file = await verifiedPath(loaded.publicationDir, artifact.relative_path);
+  const { sha256, bytes } = await sha256FileStreamWithSize(file);
+  if (bytes !== artifact.size_bytes || sha256 !== artifact.sha256) {
+    throw new ArtifactIntegrityError("Source coverage artifact integrity check failed");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse((await readFile(file)).toString("utf8"));
+  } catch (error) {
+    throw new ArtifactIntegrityError(`Source coverage report is invalid: ${String(error)}`);
+  }
+  let report: SourceCoverageReport;
+  try {
+    report = parseSourceCoverageReport(parsed);
+  } catch (error) {
+    throw new ArtifactIntegrityError(`Source coverage report is invalid: ${String(error)}`);
+  }
+  if (report.task_id !== path.basename(taskRoot)) {
+    throw new ArtifactIntegrityError("Source coverage report task identity is invalid");
+  }
+  return {
+    publication_id: loaded.publicationId,
+    manifest_sha256: sha256Bytes(loaded.manifestBytes),
+    artifact_id: artifact.artifact_id,
+    artifact_sha256: artifact.sha256,
+    report,
+  };
 }
 
 export async function listTaskArtifacts(taskRoot: string): Promise<ArtifactRecord[]> {

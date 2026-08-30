@@ -1,0 +1,121 @@
+{
+  "schema_version": "1.0",
+  "case_label": "gold5",
+  "observed_commit": "1a9c070dfb1b",
+  "task_id": "task_ts_090c5c7c-aa13-4d21-872d-f52bf86b52c0",
+  "run_id": "run_ts_1f1b143f-740d-41c8-93fd-17c5bc9baf7f",
+  "model_verified": "pi-session model_change asserted pre-launch (qwen3.8-flash)",
+  "terminal": {
+    "status": "completed",
+    "classification": "succeeded_publication"
+  },
+  "wall": {
+    "started_at": "2026-08-30T08:41:14.453Z",
+    "finished_at": "2026-08-30T08:57:17.148Z",
+    "seconds": 963
+  },
+  "events_total": 1878,
+  "context_peak_tokens": 136407,
+  "compactions": 0,
+  "permission_stops": 0,
+  "hil": 0,
+  "publication": {
+    "publication_id": "pub_egfr_pubchem_structure_v1_35f249ec7077b0ee",
+    "manifest_sha256": "738e63fe997dbce46ea44a970376d7bd373d096e4d8d6bd2bf491719ae2a094f",
+    "supersedes_publication_id": null,
+    "published_at": "2026-08-30T08:55:30.015000Z"
+  },
+  "publication_artifacts": [
+    "artifact_8cb750abb67bd7d09141b1e0e59f2800",
+    "artifact_0946fc54ed892df8b8f03b2c4668fbfd",
+    "artifact_84e9d3c4bbcbd9ba6ccac47a88a8c25f",
+    "artifact_e8d8aa8f5b2ddd97942b0af0613575ca"
+  ],
+  "phase_split": {
+    "pre_publication": {
+      "calls": 74,
+      "input": 317011,
+      "output": 45100,
+      "cache": 4595712,
+      "total": 4957823,
+      "seconds": 850
+    },
+    "post_publication": {
+      "calls": 9,
+      "input": 11533,
+      "output": 2403,
+      "cache": 1191936,
+      "total": 1205872,
+      "seconds": 93
+    }
+  },
+  "tool_counts": {
+    "inspect_dataset_execution_routes": 1,
+    "activate_agent_tools": 7,
+    "get_research_data_guidance": 2,
+    "search_chembl": 5,
+    "validate_dataset_execution": 6,
+    "search_pubchem": 6,
+    "acquire_core_carrier": 2,
+    "workspace_list": 4,
+    "execute_dataset_execution": 7,
+    "prepare_dynamic_family_publication": 19,
+    "get_compound": 4,
+    "download_pubchem": 1,
+    "search_pubmed": 4,
+    "preview_core_asset": 4,
+    "workspace_read": 3,
+    "submit_dynamic_family_publication": 7
+  },
+  "tool_errors": [
+    "acquire_core_carrier@164",
+    "workspace_list@234",
+    "validate_dataset_execution@281",
+    "validate_dataset_execution@305",
+    "execute_dataset_execution@337",
+    "execute_dataset_execution@354",
+    "execute_dataset_execution@364",
+    "execute_dataset_execution@383",
+    "execute_dataset_execution@398",
+    "execute_dataset_execution@415",
+    "execute_dataset_execution@431",
+    "prepare_dynamic_family_publication@537",
+    "prepare_dynamic_family_publication@551",
+    "prepare_dynamic_family_publication@570",
+    "prepare_dynamic_family_publication@590",
+    "prepare_dynamic_family_publication@602",
+    "prepare_dynamic_family_publication@618",
+    "prepare_dynamic_family_publication@636",
+    "prepare_dynamic_family_publication@661",
+    "prepare_dynamic_family_publication@728",
+    "prepare_dynamic_family_publication@746",
+    "prepare_dynamic_family_publication@838",
+    "prepare_dynamic_family_publication@870",
+    "prepare_dynamic_family_publication@898",
+    "prepare_dynamic_family_publication@927",
+    "prepare_dynamic_family_publication@999",
+    "prepare_dynamic_family_publication@1026",
+    "prepare_dynamic_family_publication@1145",
+    "prepare_dynamic_family_publication@1218",
+    "submit_dynamic_family_publication@1392",
+    "submit_dynamic_family_publication@1410",
+    "submit_dynamic_family_publication@1425",
+    "submit_dynamic_family_publication@1441",
+    "submit_dynamic_family_publication@1460",
+    "submit_dynamic_family_publication@1485",
+    "workspace_read@1518",
+    "workspace_list@1575",
+    "preview_core_asset@1604",
+    "workspace_read@1626",
+    "preview_core_asset@1671"
+  ],
+  "run_usage": {
+    "model_calls": 83,
+    "input_tokens": 328544,
+    "output_tokens": 47503,
+    "cache_read_tokens": 5787648,
+    "cache_write_tokens": 0,
+    "total_tokens": 6163695,
+    "reasoning_tokens": 0
+  }
+}

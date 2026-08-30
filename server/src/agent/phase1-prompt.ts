@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 const DATASET_COMPLETION_CONTRACT = [
   "[Dataset completion contract]",
   "Treat any request for datasets, CSV files, tables, or multi-source records as dataset-producing; completion is determined by task semantics, never by the requested file format.",
+  "Treat the frozen execution context (system prompt) as binding task semantics - expected family, required tables, allowed sources, success definition - but never as publication authority: only a current-run immutable Publication proves completion.",
   "Before substantive acquisition call inspect_dataset_execution_routes, then declare the matching semantic family, projection, and row granularity from its facts. Build one family and granularity at a time; split multi-product requests into separate builds.",
   "A formal data product requires a current-run immutable Publication backed by OperationResults and ProductAssessment. Workspace files are staging only and never establish publication.",
   "Do not fall back after the first obstacle. First try the applicable static or dynamic Dataset Core route, correct invalid inputs, retry only genuinely retryable failures, and research genuinely independent real-source alternatives.",
@@ -21,6 +22,7 @@ const TRUSTED_EXECUTION = [
   "[Trusted execution]",
   "Choose one formal build route using inspect_dataset_execution_routes. Use the static route only for an exact listed family, schema, source, and topology match with validate_dataset_execution passing before execute_dataset_execution; otherwise prepare_dynamic_family_publication then submit_dynamic_family_publication only when every input is dynamic-bindable or already has a task-owned Core asset. Do not pass a dynamic FamilySpec to the static validator.",
   "Never infer provider availability from static enums. A dynamic-bindable provider is wired for trusted acquisition and input decoding even without a static family — proving neither topology, transform, source availability, validation, nor publication closure; a Core-acquisition-only binary carrier still needs the reported provenance-bound extraction path before Dynamic Family submission.",
+  "For paper-chart evidence products, acquire registered full-text XML/PDF/supplement carriers through fixed Core acquisition, then call extract_registered_paper_chart_evidence on task-owned asset ids. If any carrier, visual model, locator, or required review is unavailable, return the structured blocker instead of a workspace CSV.",
   "Close every formal source binding exactly once through a fixed Dataset Core acquisition provider or prior Core-returned asset IDs. Registered assets live in Core task storage, not the Agent Workspace.",
   "A non-retryable static adapter, transform, schema, or topology rejection means the static family is unsuitable: stop unchanged retries and required-field probing, then use the dynamic route only when its FamilySpec, projection, transform, and Core-acquired inputs can close exactly.",
   "Use the matching skill for source-specific rules and evidence requirements. Do not duplicate or improvise those rules in the main prompt.",

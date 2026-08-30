@@ -27,6 +27,7 @@ import type {
   ProviderRevisionEvidenceV1,
   PublicationCandidate,
   SourceAssetRegistrationReceipt,
+  CleaningRulePreflightReceipt,
 } from "@biomed/contracts";
 
 import type {
@@ -71,6 +72,8 @@ import { createDefaultDatasetFamilyRegistry } from "../families/index.js";
 import { acquireExecutionLock, type ExecutionLockLease } from "./execution-lock.js";
 import type { DatasetHILGate } from "../review/hil-policy.js";
 import { reviewBatchForHIL } from "../review/hil-policy.js";
+import { validateCleaningRuleReceipt } from "../cleaning/preflight.js";
+import { unitCorrectionFromReceipt } from "../cleaning/receipt-application.js";
 import { evaluateConfidence, mappingConfidence } from "../confidence/evaluator.js";
 import { writeConfidenceArtifact } from "../confidence/artifact.js";
 import { delimitedRowsFromFileAsync } from "../adapters/text.js";
@@ -120,6 +123,8 @@ export interface ExecuteContext {
   providerRevisionEvidence?: readonly ProviderRevisionEvidenceV1[] | null;
   /** Exact task-owned registration receipts resolved for this build. */
   registrationReceipts?: readonly SourceAssetRegistrationReceipt[] | null;
+  /** Core-issued, identity-bound cleaning actions to apply before canonicalization. */
+  cleaningRuleReceipt?: CleaningRulePreflightReceipt | null;
   /**
    * Runtime discovery observations for the source coverage evidence. Audit
    * input only — never part of the build's authoritative identity.
@@ -373,6 +378,8 @@ export function createTsCoreOperationRunner(options: {
   rehydratedBindingIds: Set<string>;
   /** Exact task-owned registration receipts for the source coverage evidence. */
   registrationReceipts?: readonly SourceAssetRegistrationReceipt[] | null;
+  /** Core-issued, identity-bound cleaning actions to apply before canonicalization. */
+  cleaningRuleReceipt?: CleaningRulePreflightReceipt | null;
   /** Runtime discovery observations for the source coverage evidence. */
   discoveryQueries?: readonly DiscoveryQueryRecord[] | null;
   /** I-04 publish fence: true while this build still owns its lock. */
@@ -391,6 +398,7 @@ export function createTsCoreOperationRunner(options: {
     bindings,
     rehydratedBindingIds,
     registrationReceipts,
+    cleaningRuleReceipt,
     discoveryQueries,
   } = options;
   const identityContexts = options.identityContexts ?? new Map<string, ExpressionAdapterIdentityContext>();
@@ -485,6 +493,11 @@ export function createTsCoreOperationRunner(options: {
           throw new ExecutionError(`no parsed batch cached for binding ${op.category!}`);
         }
         const normalizationProfile = expressionNormalizationV1();
+        const receiptCorrection = unitCorrectionFromReceipt(
+          cleaningRuleReceipt,
+          op.category,
+          normalizationProfile,
+        );
         const reviewed = await reviewBatchForHIL({
           batch: parsedBatch,
           profile: normalizationProfile,
@@ -536,7 +549,7 @@ export function createTsCoreOperationRunner(options: {
               outputDir,
               probeIndex,
               probeTargetNamespace,
-              unitCorrection: reviewed.unitCorrection,
+              unitCorrection: receiptCorrection ?? reviewed.unitCorrection,
             },
             signal,
           );
@@ -880,6 +893,17 @@ export class TypeScriptDatasetCore {
     const familyRegistry = createDefaultDatasetFamilyRegistry();
     const family = familyRegistry.get(spec.dataset_family);
     familyRegistry.schemaRegistry().get(spec.schema_ref);
+    if (context.cleaningRuleReceipt !== undefined && context.cleaningRuleReceipt !== null) {
+      validateCleaningRuleReceipt(familyRegistry, context.cleaningRuleReceipt, {
+        task_id: taskId,
+        run_id: context.runId,
+        requirement_id: requirementId,
+        binding_ids: spec.source_bindings.map((binding) => binding.binding_id),
+      });
+      if (family.runtime_id === "registered_multitable.runtime.v1") {
+        throw new ExecutionError("cleaning rule receipts are not supported by registered multi-table execution");
+      }
+    }
     const trustedProviderRevisionEvidence = await acquireTrustedProviderRevisionEvidence({
       spec,
       taskId,
@@ -971,6 +995,7 @@ export class TypeScriptDatasetCore {
       bindings,
       rehydratedBindingIds,
       registrationReceipts: context.registrationReceipts ?? null,
+      cleaningRuleReceipt: context.cleaningRuleReceipt ?? null,
       discoveryQueries: context.discoveryQueries ?? null,
       fence: async (): Promise<boolean> => lease.assertOwned(),
       hilGate: this.options.hilGate ?? null,

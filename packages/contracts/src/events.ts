@@ -7,6 +7,7 @@ import type {
   SubagentRequest,
   SubagentResult,
 } from "./task-run.js";
+import type { TaskExecutionContext } from "./task-execution-context.js";
 
 export interface ErrorDetail {
   schema_version?: "1.0";
@@ -193,7 +194,13 @@ export type EventPayload =
       };
     }
   | { type: "task_failed"; error: ErrorDetail }
-  | { type: "run_queued"; request_id: string; input: string }
+  | {
+      type: "run_queued";
+      request_id: string;
+      input: string;
+      /** Frozen evaluation contract the run was admitted under; absent/null on events persisted before the field existed. */
+      execution_context?: TaskExecutionContext | null;
+    }
   | { type: "run_steered"; input: string }
   | { type: "run_started" }
   | { type: "run_finalizing" }

@@ -93,6 +93,24 @@ function listenPublic(server: Server, port: number, host: string): Promise<void>
   });
 }
 
+function isAddressInUse(error: unknown): boolean {
+  return error instanceof Error && (error as NodeJS.ErrnoException).code === "EADDRINUSE";
+}
+
+async function listenWithSystemFallback(
+  listen: (server: Server, port: number, host: string) => Promise<void>,
+  server: Server,
+  preferredPort: number,
+  host: string,
+): Promise<void> {
+  try {
+    await listen(server, preferredPort, host);
+  } catch (error) {
+    if (preferredPort === 0 || !isAddressInUse(error)) throw error;
+    await listen(server, 0, host);
+  }
+}
+
 function closePublicServer(server: Server, upgradedSockets: Set<Duplex>): Promise<void> {
   for (const socket of upgradedSockets) socket.destroy();
   return new Promise((resolve, reject) => {
@@ -145,7 +163,8 @@ export async function createApplicationHost(
 
   try {
     // 端口立即打开：初始化期间请求拿到 503 starting，而不是“程序像死了一样”。
-    await (dependencies.listenPublic ?? listenPublic)(
+    await listenWithSystemFallback(
+      dependencies.listenPublic ?? listenPublic,
       server,
       options.publicPort,
       options.publicHost,

@@ -3,9 +3,10 @@
  * degradation, CSV outputs, provenance, size caps (Python parity).
  */
 
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PNG } from "pngjs";
@@ -24,11 +25,22 @@ import {
   VLM_PROMPT,
   ChartExtractionError,
   MAX_PDF_IMAGES_PER_FILE,
+  MAX_PDF_PAGES_PER_FILE,
+  RENDER_DPI,
+  renderPdfPages,
 } from "../../src/processing/vlm/index.js";
+import { extractPdfImages } from "../../src/processing/vlm/pdf-images.js";
 import { createChartDataVlmTool } from "../../src/agent/tools/extract-chart-data-vlm.js";
 import { PublicHttpClient } from "../../src/external/network/http-client.js";
 import { fakeResolver, localExecutor, PUBLIC_IP, startFixtureServer, type FixtureServer } from "./helpers.js";
 import { SKILL_TOOL_NAMES, toolOwner } from "../../src/agent/skills/skill-tool-map.js";
+
+const VECTOR_PDF_FIXTURE = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "fixtures",
+  "pdf",
+  "vector-dose-response.pdf",
+);
 
 const roots: string[] = [];
 const fixtures: FixtureServer[] = [];
@@ -80,6 +92,70 @@ const LOW_VLM_JSON = JSON.stringify({
   ],
   legend: [],
 });
+
+const MIXED_VLM_JSON = JSON.stringify({
+  chart_type: "bar",
+  title: "Mixed-confidence expression",
+  axes: {
+    x: { label: "sample", unit: "", scale: "linear" },
+    y: { label: "expression", unit: "TPM", scale: "linear" },
+  },
+  data_points: [
+    { x: "S1", y: "1.2", confidence_level: "medium", confidence_reason: "interpolated from axis ticks" },
+    { x: "S2", y: "2.4", confidence_level: "low", confidence_reason: "bar overlaps a faint grid line" },
+  ],
+  legend: [],
+});
+
+const DOSE_RESPONSE_VLM_JSON = JSON.stringify({
+  chart_type: "line",
+  title: "Erlotinib dose-response",
+  axes: {
+    x: { label: "Concentration", unit: "nM", scale: "log" },
+    y: { label: "Viability", unit: "%", scale: "linear" },
+  },
+  data_points: [
+    { x: "1", y: "95", series_label: "Erlotinib", confidence_level: "medium", confidence_reason: "curve vertex read against axis ticks" },
+    { x: "100", y: "40", series_label: "Erlotinib", confidence_level: "medium", confidence_reason: "curve vertex read against axis ticks" },
+  ],
+  legend: ["Erlotinib"],
+});
+
+/**
+ * Minimal multi-page text-only PDF (no caption tokens: "fig", "dose",
+ * "response") for the page-render cap test — same hand-assembled byte layout
+ * as the committed vector fixture.
+ */
+function buildTextOnlyPdf(pageCount: number): Buffer {
+  const objects: string[] = [];
+  objects[1] = "<< /Type /Catalog /Pages 2 0 R >>";
+  const pageIds = Array.from({ length: pageCount }, (_, index) => 5 + index * 2);
+  objects[2] =
+    `<< /Type /Pages /Kids [${pageIds.map((id) => `${id} 0 R`).join(" ")}] /Count ${pageCount} >>`;
+  objects[3] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>";
+  for (let index = 0; index < pageCount; index += 1) {
+    const contentsId = 4 + index * 2;
+    const text = `BT /F1 11 Tf 72 700 Td (Cohort ${index + 1} observations were recorded.) Tj ET`;
+    objects[contentsId] = `<< /Length ${Buffer.byteLength(text, "latin1")} >>\nstream\n${text}\nendstream`;
+    objects[contentsId + 1] =
+      "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] " +
+      `/Resources << /Font << /F1 3 0 R >> >> /Contents ${contentsId} 0 R >>`;
+  }
+  const bytes: Buffer[] = [Buffer.from("%PDF-1.4\n", "latin1")];
+  const offsets: number[] = [];
+  for (let num = 1; num < objects.length; num += 1) {
+    offsets[num] = bytes.reduce((sum, part) => sum + part.length, 0);
+    bytes.push(Buffer.from(`${num} 0 obj\n${objects[num]}\nendobj\n`, "latin1"));
+  }
+  const startxref = bytes.reduce((sum, part) => sum + part.length, 0);
+  let xref = `xref\n0 ${objects.length}\n0000000000 65535 f \n`;
+  for (let num = 1; num < objects.length; num += 1) {
+    xref += `${String(offsets[num]).padStart(10, "0")} 00000 n \n`;
+  }
+  xref += `trailer\n<< /Size ${objects.length} /Root 1 0 R >>\nstartxref\n${startxref}\n%%EOF\n`;
+  bytes.push(Buffer.from(xref, "latin1"));
+  return Buffer.concat(bytes);
+}
 
 describe("parseVlmJson strictness", () => {
   it("parses plain JSON", () => {
@@ -309,6 +385,18 @@ describe("extract_chart_data_vlm tool", () => {
       approvalGate: { request: async () => "approve" },
       vlmConfig: { apiKey: "k", baseUrl: "https://vlm.example.com/v1", model: "qwen-vl-max" },
       httpClient,
+      hilGate: {
+        requestHIL: async () => ({
+          schema_version: "1.0",
+          review_id: "review_vlm_ok",
+          request_id: "request_vlm_ok",
+          decision: { action: "accept" },
+          reviewer: "user",
+          reviewed_at: "2026-08-16T00:00:00.000Z",
+          evidence_digest: "a".repeat(64),
+          reason: null,
+        }),
+      },
     });
     const figureDir = path.join(taskRoot, "source_assets", "figures");
     await mkdir(figureDir, { recursive: true });
@@ -344,7 +432,7 @@ describe("extract_chart_data_vlm tool", () => {
       expect.objectContaining({
         channel: "vlm",
         level: "medium",
-        components: expect.objectContaining({ human_review_state: "pending" }),
+        components: expect.objectContaining({ human_review_state: "accepted" }),
       }),
     ]));
     const pointCsv = await readFile(
@@ -353,6 +441,7 @@ describe("extract_chart_data_vlm tool", () => {
     );
     expect(pointCsv).not.toContain(",high,");
     expect(pointCsv).not.toContain(",not_required,");
+    expect(pointCsv).toContain("accepted,review_vlm_ok");
     await writeFile(path.join(figureDir, "chart-second.png"), tinyPng(100));
     const secondResult = await tool.execute({
       source_path: "source_assets/figures/chart-second.png",
@@ -368,12 +457,12 @@ describe("extract_chart_data_vlm tool", () => {
     expect(toolOwner("extract_chart_data_vlm")).toBe("extract_chart_data_vlm");
   }, 60_000);
 
-  it("batches low-confidence points for review without upgrading their evidence", async () => {
+  it("batches every pending VLM estimate into one data_review request", async () => {
     const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-vlm-review-"));
     roots.push(taskRoot);
     const fixture = await startFixtureServer((_req, res) => {
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ choices: [{ message: { content: LOW_VLM_JSON } }] }));
+      res.end(JSON.stringify({ choices: [{ message: { content: MIXED_VLM_JSON } }] }));
     });
     fixtures.push(fixture);
     const requests: Array<{ review_type: string | null; item_count: number }> = [];
@@ -406,13 +495,124 @@ describe("extract_chart_data_vlm tool", () => {
     await writeFile(path.join(figureDir, "chart.png"), tinyPng());
     const result = await tool.execute({ source_path: "source_assets/figures/chart.png" });
     expect(result.isError).toBeUndefined();
-    expect(requests).toEqual([{ review_type: "vlm_extraction", item_count: 1 }]);
+    // Medium- and low-confidence VLM estimates are BOTH pending review: one
+    // coalesced data_review request covers the whole source.
+    expect(requests).toEqual([{ review_type: "vlm_extraction", item_count: 2 }]);
     const points = await readFile(
       path.join(taskRoot, "parsed", "chart_data", CHART_POINTS_CSV_NAME),
       "utf8",
     );
     expect(points).toContain("confidence_level");
+    expect(points).toContain("medium,interpolated from axis ticks,accepted,review_vlm_1");
     expect(points).toContain("low,bar overlaps a faint grid line,accepted,review_vlm_1");
+  }, 60_000);
+
+  it("records review provenance on a correct decision while preserving original values", async () => {
+    const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-vlm-correct-"));
+    roots.push(taskRoot);
+    const fixture = await startFixtureServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ choices: [{ message: { content: LOW_VLM_JSON } }] }));
+    });
+    fixtures.push(fixture);
+    const [tool] = createChartDataVlmTool({
+      taskRoot,
+      approvalGate: { request: async () => "approve" },
+      vlmConfig: { apiKey: "k", baseUrl: "https://vlm.example.com/v1", model: "qwen-vl-max" },
+      httpClient: new PublicHttpClient({
+        resolve: fakeResolver({ "vlm.example.com": [PUBLIC_IP] }),
+        executor: localExecutor(fixture.port),
+      }),
+      hilGate: {
+        requestHIL: async (input) => ({
+          schema_version: "1.0",
+          review_id: "review_vlm_correct",
+          request_id: "request_vlm_correct",
+          decision: {
+            action: "correct",
+            correction: {
+              points: Object.fromEntries(input.review_items.map((item) => [
+                item.item_id,
+                { y_value: "3.3" },
+              ])),
+            },
+          },
+          reviewer: "user",
+          reviewed_at: "2026-08-16T02:00:00.000Z",
+          evidence_digest: "b".repeat(64),
+          reason: "bar top misread",
+        }),
+      },
+    });
+    const figureDir = path.join(taskRoot, "source_assets", "figures");
+    await mkdir(figureDir, { recursive: true });
+    await writeFile(path.join(figureDir, "chart.png"), tinyPng());
+    const result = await tool.execute({ source_path: "source_assets/figures/chart.png" });
+    expect(result.isError).toBeUndefined();
+    const rows = (await readFile(
+      path.join(taskRoot, "parsed", "chart_data", CHART_POINTS_CSV_NAME),
+      "utf8",
+    )).trim().split(/\r?\n/);
+    // header + the single corrected point; original x/y survive correction.
+    expect(rows).toHaveLength(2);
+    const columns = rows[0]?.split(",");
+    const values = rows[1]?.split(",");
+    if (columns === undefined || values === undefined) throw new Error("missing CSV rows");
+    const xIndex = columns.indexOf("x_value");
+    const yIndex = columns.indexOf("y_value");
+    const originalXIndex = columns.indexOf("original_x_value");
+    const originalYIndex = columns.indexOf("original_y_value");
+    const stateIndex = columns.indexOf("human_review_state");
+    const reviewIndex = columns.indexOf("review_id");
+    expect(values[stateIndex]).toBe("corrected");
+    expect(values[reviewIndex]).toBe("review_vlm_correct");
+    expect(values[yIndex]).toBe("3.3");
+    expect(values[originalYIndex]).toBe("1.2");
+    expect(values[originalXIndex]).toBe(values[xIndex]);
+  }, 60_000);
+
+  it("leaves no publishable estimate when the review skips pending points", async () => {
+    const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-vlm-skip-"));
+    roots.push(taskRoot);
+    const fixture = await startFixtureServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ choices: [{ message: { content: LOW_VLM_JSON } }] }));
+    });
+    fixtures.push(fixture);
+    const [tool] = createChartDataVlmTool({
+      taskRoot,
+      approvalGate: { request: async () => "approve" },
+      vlmConfig: { apiKey: "k", baseUrl: "https://vlm.example.com/v1", model: "qwen-vl-max" },
+      httpClient: new PublicHttpClient({
+        resolve: fakeResolver({ "vlm.example.com": [PUBLIC_IP] }),
+        executor: localExecutor(fixture.port),
+      }),
+      hilGate: {
+        requestHIL: async () => ({
+          schema_version: "1.0",
+          review_id: "review_vlm_skip",
+          request_id: "request_vlm_skip",
+          decision: { action: "skip" },
+          reviewer: "user",
+          reviewed_at: "2026-08-16T03:00:00.000Z",
+          evidence_digest: "c".repeat(64),
+          reason: "illegible source",
+        }),
+      },
+    });
+    const figureDir = path.join(taskRoot, "source_assets", "figures");
+    await mkdir(figureDir, { recursive: true });
+    await writeFile(path.join(figureDir, "chart.png"), tinyPng());
+    const result = await tool.execute({ source_path: "source_assets/figures/chart.png" });
+    expect(result.isError).toBeUndefined();
+    const parsed = JSON.parse(result.content) as { status: string; total_data_points: number };
+    expect(parsed.status).toBe("ok");
+    expect(parsed.total_data_points).toBe(0);
+    const points = (await readFile(
+      path.join(taskRoot, "parsed", "chart_data", CHART_POINTS_CSV_NAME),
+      "utf8",
+    )).trim().split(/\r?\n/);
+    expect(points).toHaveLength(1); // header only: the skipped estimate is gone
   }, 60_000);
 
   it("keeps CSV rows and confidence records aligned across concurrent invocations", async () => {
@@ -431,6 +631,18 @@ describe("extract_chart_data_vlm tool", () => {
         resolve: fakeResolver({ "vlm.example.com": [PUBLIC_IP] }),
         executor: localExecutor(fixture.port),
       }),
+      hilGate: {
+        requestHIL: async () => ({
+          schema_version: "1.0",
+          review_id: "review_vlm_concurrent",
+          request_id: "request_vlm_concurrent",
+          decision: { action: "accept" },
+          reviewer: "user",
+          reviewed_at: "2026-08-16T04:00:00.000Z",
+          evidence_digest: "d".repeat(64),
+          reason: null,
+        }),
+      },
     });
     const figureDir = path.join(taskRoot, "source_assets", "figures");
     await mkdir(figureDir, { recursive: true });
@@ -458,7 +670,7 @@ describe("extract_chart_data_vlm tool", () => {
     expect(confidence.record_overrides).toHaveLength(pointCount);
   }, 60_000);
 
-  it("fails (not empty success) when every tier fails", async () => {
+  it("marks a processor-returned error as a tool error (isError, not empty success)", async () => {
     const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-vlm-"));
     roots.push(taskRoot);
     const [tool] = createChartDataVlmTool({
@@ -475,6 +687,8 @@ describe("extract_chart_data_vlm tool", () => {
     const parsed = JSON.parse(result.content) as { status: string; error?: string };
     expect(parsed.status).toBe("error");
     expect(parsed.error).toBeTruthy();
+    // A {status:"error"} processor result must surface as a tool error.
+    expect(result.isError).toBe(true);
   }, 60_000);
 });
 
@@ -482,5 +696,189 @@ describe("PDF image extraction cap", () => {
   it("keeps the Python-parity cap constant", () => {
     expect(MAX_PDF_IMAGES_PER_FILE).toBeGreaterThan(0);
     expect(MAX_PDF_IMAGES_PER_FILE).toBeLessThanOrEqual(100);
+  });
+});
+
+describe("vector PDF page rendering tier", () => {
+  it("finds no embedded raster in the vector-only fixture (embedded rasters stay the first tier)", async () => {
+    const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-vlm-"));
+    roots.push(taskRoot);
+    const extraction = await extractPdfImages(VECTOR_PDF_FIXTURE, path.join(taskRoot, "download_tmp"));
+    expect(extraction.images).toEqual([]);
+    expect(extraction.skippedExtra).toBe(0);
+  });
+
+  it("selects the caption page and renders it at 144 DPI with a detected pixel bbox", async () => {
+    const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-vlm-"));
+    roots.push(taskRoot);
+    const rendering = await renderPdfPages(VECTOR_PDF_FIXTURE, path.join(taskRoot, "rendered_pages"));
+    // Page 1 carries no caption tokens, so only page 2 is a caption candidate.
+    expect(rendering.selection).toBe("caption");
+    expect(rendering.pages.map((page) => page.pageIndex)).toEqual([2]);
+    const page = rendering.pages[0];
+    if (page === undefined) throw new Error("caption page was not rendered");
+    const png = PNG.sync.read(await readFile(page.path));
+    expect(png.width).toBe(Math.round((612 * RENDER_DPI) / 72));
+    expect(png.height).toBe(Math.round((792 * RENDER_DPI) / 72));
+    const bbox = page.bbox.split(",").map((value) => Number(value));
+    expect(bbox).toHaveLength(4);
+    const [x0, y0, x1, y1] = bbox;
+    if (x0 === undefined || y0 === undefined || x1 === undefined || y1 === undefined) {
+      throw new Error("rendered page bbox is incomplete");
+    }
+    // Detected drawing region, not the full-page rectangle.
+    expect(x0).toBeGreaterThan(0);
+    expect(y0).toBeGreaterThan(0);
+    expect(x1).toBeLessThanOrEqual(png.width);
+    expect(y1).toBeLessThanOrEqual(png.height);
+    expect(x1).toBeGreaterThan(x0);
+    expect(y1).toBeGreaterThan(y0);
+  }, 60_000);
+
+  it("caps page rendering at 12 pages and falls back to the first pages without caption candidates", async () => {
+    expect(MAX_PDF_PAGES_PER_FILE).toBe(12);
+    const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-vlm-"));
+    roots.push(taskRoot);
+    const pdfPath = path.join(taskRoot, "text_only_pages.pdf");
+    await writeFile(pdfPath, buildTextOnlyPdf(16));
+    const rendering = await renderPdfPages(pdfPath, path.join(taskRoot, "rendered_pages"));
+    expect(rendering.selection).toBe("first_pages");
+    expect(rendering.pages).toHaveLength(MAX_PDF_PAGES_PER_FILE);
+    expect(rendering.skippedPages).toBe(4);
+    for (const [index, page] of rendering.pages.entries()) {
+      // First-pages fallback keeps source order with 1-based page numbers.
+      expect(page.pageIndex).toBe(index + 1);
+    }
+  }, 60_000);
+
+  it("raises a typed extraction error when page rendering is cancelled", async () => {
+    const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-vlm-"));
+    roots.push(taskRoot);
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      renderPdfPages(VECTOR_PDF_FIXTURE, path.join(taskRoot, "rendered_pages"), {
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow(/cancel/i);
+    await expect(
+      renderPdfPages(VECTOR_PDF_FIXTURE, path.join(taskRoot, "rendered_pages"), {
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow(ChartExtractionError);
+  });
+
+  it("raises a typed extraction error when the PDF cannot be opened for rendering", async () => {
+    const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-vlm-"));
+    roots.push(taskRoot);
+    const garbage = path.join(taskRoot, "garbage.pdf");
+    await writeFile(garbage, "this is not a real pdf at all");
+    await expect(renderPdfPages(garbage, path.join(taskRoot, "rendered_pages"))).rejects.toThrow(
+      /page rendering/,
+    );
+    await expect(renderPdfPages(garbage, path.join(taskRoot, "rendered_pages"))).rejects.toThrow(
+      ChartExtractionError,
+    );
+  });
+
+  it("recovers a vector chart through the fake VLM with a 1-based page locator and pixel bbox", async () => {
+    const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-vlm-vector-"));
+    roots.push(taskRoot);
+    const imageUrls: string[] = [];
+    const fixture = await startFixtureServer((_req, res, requests) => {
+      const body = JSON.parse(requests.at(-1)?.body ?? "{}") as {
+        messages: Array<{ content: Array<{ type: string; image_url?: { url: string } }> }>;
+      };
+      const part = (body.messages.at(-1)?.content ?? []).find((item) => item.type === "image_url");
+      imageUrls.push(part?.image_url?.url ?? "");
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ choices: [{ message: { content: DOSE_RESPONSE_VLM_JSON } }] }));
+    });
+    fixtures.push(fixture);
+    const [tool] = createChartDataVlmTool({
+      taskRoot,
+      approvalGate: { request: async () => "approve" },
+      vlmConfig: { apiKey: "k", baseUrl: "https://vlm.example.com/v1", model: "qwen-vl-max" },
+      httpClient: new PublicHttpClient({
+        resolve: fakeResolver({ "vlm.example.com": [PUBLIC_IP] }),
+        executor: localExecutor(fixture.port),
+      }),
+      hilGate: {
+        requestHIL: async () => ({
+          schema_version: "1.0",
+          review_id: "review_vlm_vector",
+          request_id: "request_vlm_vector",
+          decision: { action: "accept" },
+          reviewer: "user",
+          reviewed_at: "2026-08-30T05:00:00.000Z",
+          evidence_digest: "e".repeat(64),
+          reason: null,
+        }),
+      },
+    });
+    const sourceDir = path.join(taskRoot, "source_assets");
+    await mkdir(sourceDir, { recursive: true });
+    await copyFile(VECTOR_PDF_FIXTURE, path.join(sourceDir, "vector-dose-response.pdf"));
+
+    const result = await tool.execute({ source_path: "source_assets/vector-dose-response.pdf" });
+    expect(result.isError).toBeUndefined();
+    const parsed = JSON.parse(result.content) as {
+      status: string;
+      total_charts: number;
+      total_data_points: number;
+      degradation?: string[];
+      metas: Array<{ tier: string; sha256: string }>;
+    };
+    expect(parsed.status).toBe("ok");
+    expect(parsed.total_charts).toBe(1);
+    expect(parsed.total_data_points).toBe(2);
+    expect(parsed.metas[0]?.tier).toBe("L1_vlm_page_render");
+    expect(parsed.metas[0]?.sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(parsed.degradation).toContain("L1_vlm_page_render");
+
+    // Caption guidance: only the page carrying "Figure 1" reaches the model.
+    expect(imageUrls).toHaveLength(1);
+    const dataUrl = imageUrls[0] ?? "";
+    const base64Prefix = "data:image/png;base64,";
+    expect(dataUrl.startsWith(base64Prefix)).toBe(true);
+    const pageImage = PNG.sync.read(Buffer.from(dataUrl.slice(base64Prefix.length), "base64"));
+    expect(pageImage.width).toBe(1224); // 612pt page at 144 DPI
+    expect(pageImage.height).toBe(1584); // 792pt page at 144 DPI
+
+    // SourceLocator 2.0 payload: 1-based page number + detected pixel bbox.
+    const chartCsv = await readFile(path.join(taskRoot, "parsed", "chart_data", CHART_CSV_NAME), "utf8");
+    const rows = chartCsv.replace(/^\ufeff/, "").trim().split(/\r?\n/);
+    expect(rows).toHaveLength(2);
+    const columns = rows[0]?.split(",") ?? [];
+    const values = rows[1] ?? "";
+    const pageNumberIndex = columns.indexOf("page_number");
+    expect(pageNumberIndex).toBeGreaterThan(0);
+    expect(values.split(",")[pageNumberIndex]).toBe("2");
+    const bboxMatch = /"(\d+),(\d+),(\d+),(\d+)"/.exec(values);
+    if (bboxMatch === null) throw new Error("chart row carries no pixel bbox");
+    const [, x0, y0, x1, y1] = bboxMatch;
+    expect(Number(x0)).toBeGreaterThan(0);
+    expect(Number(y0)).toBeGreaterThan(0);
+    expect(Number(x1)).toBeLessThanOrEqual(pageImage.width);
+    expect(Number(y1)).toBeLessThanOrEqual(pageImage.height);
+  }, 60_000);
+
+  it("surfaces a page-render failure as a tool error instead of an empty success", async () => {
+    const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-vlm-vector-"));
+    roots.push(taskRoot);
+    const [tool] = createChartDataVlmTool({
+      taskRoot,
+      approvalGate: { request: async () => "approve" },
+      vlmConfig: { apiKey: "k", baseUrl: "https://vlm.example.com/v1", model: "qwen-vl-max" },
+    });
+    const sourceDir = path.join(taskRoot, "source_assets");
+    await mkdir(sourceDir, { recursive: true });
+    await writeFile(path.join(sourceDir, "garbage.pdf"), "this is not a real pdf at all");
+
+    const result = await tool.execute({ source_path: "source_assets/garbage.pdf" });
+    const parsed = JSON.parse(result.content) as { status: string; error?: string };
+    expect(parsed.status).toBe("error");
+    expect(parsed.error).toMatch(/page rendering/);
+    expect(result.isError).toBe(true);
   });
 });

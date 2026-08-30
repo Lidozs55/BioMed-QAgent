@@ -125,6 +125,12 @@ Dataset Construction Runtime（服务端固定构建骨架）
 方括号步骤可以按来源并发；fan-out / fan-in 属于 Runtime 内部控制流，不形成 Agent
 可编排 DAG，也不形成数据集级 Recipe。
 
+**Host 启动边界**（ADR-042）：Host 首选配置端口（默认 5173），只有实际绑定返回
+`EADDRINUSE` 时才以 `port 0` 让操作系统原子选择可用端口；实际入口由启动日志
+`BIOMED_QAGENT_URL` 公布。`pnpm start` / `--static` 在端口与资源初始化前持有每用户
+生产实例租约，第二次启动正常退出且不创建 Host；开发模式不持有产品级租约，但同一
+data root 的 durable writer 独占租约在所有模式下仍然生效。
+
 **可靠性内核**（见 §4）：SourceAsset、DownloadAttempt、内容 hash、
 Attempt 输入/参数/输出摘要、任务锁、checkpoint、timeout/cancel、durable event、
 durable evidence-bound HIL、staging、Validation Gate、原子发布、fixture/live 区分。
@@ -174,8 +180,8 @@ source/schema 与 schema/profile 兼容关系、family-owned 默认 Normalizatio
 合并策略、输出格式和 Adapter 参数契约绑定为一个受信任 admission 能力单元。多表 family 的 assembler
 通过独立 handler registry 注册；缺 handler 时不能构造 assembly capability。Core-only
 `PublicationCandidate` 只引用 committed Core result receipts 和 registered asset IDs，
-不接受 Agent path。runtime/checkpoint/publisher 接线仍属 TASK-048-B2W，基础 Registry
-不能据此伪装未闭环 family 已实现。Agent Tool Schema 与 Core Spec Validator 从同一 Registry 派生；production Registry 还要求
+不接受 Agent path。runtime/checkpoint/publisher 与 derive 接线已随 TS Dataset Core 落地（原
+TASK-048-B2W/B6W 跟踪项已闭环）；基础 Registry 仍不能据此伪装未闭环 family 已实现。Agent Tool Schema 与 Core Spec Validator 从同一 Registry 派生；production Registry 还要求
 family `runtime_id` 命中 Core 已实现的 runtime allowlist。仅有 Schema、或 Adapter/Profile
 无真实实现的数据族不得进入 production default Registry（ADR-027）。
 

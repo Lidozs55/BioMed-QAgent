@@ -47,6 +47,7 @@ import { createReactomeTools } from "./reactome.js";
 import { createLocalCacheTools } from "./local-cache.js";
 import { createPdfTools } from "./pdf.js";
 import { createChartDataVlmTool } from "./extract-chart-data-vlm.js";
+import { createRegisteredPaperChartEvidenceTool } from "./extract-registered-paper-chart-evidence.js";
 import type { VlmConfig } from "../../processing/vlm/vlm-client.js";
 import type { ToolApprovalGate, ToolHooks, ToolServiceDeps } from "./tool-hooks.js";
 import type { DatasetHILGate } from "../../dataset/review/hil-policy.js";
@@ -79,8 +80,12 @@ export interface BusinessToolBundleContext {
     client: PublicHttpClient;
     fallback: BrowserFallback;
   } | null;
-  /** VLM model config for chart extraction (defaults to env config). */
-  vlmConfig?: Partial<VlmConfig>;
+  /** VLM config resolver, consulted per extraction call so settings changes
+   * apply without restart; resolved keys stay in memory only. */
+  resolveVlmConfig?: () => Promise<VlmConfig>;
+  /** Optional dedicated transport for governed visual-model calls (evaluation
+   * harnesses inject a fixture transport; default is the shared client). */
+  vlmHttpClient?: PublicHttpClient;
   /** Operational budgets snapshotted for this run. */
   limits?: RuntimeLimits;
   /** Warning surface (Python run_ctx.add_warning parity). */
@@ -146,6 +151,8 @@ export async function createBusinessToolBundle(
   unavailable.add("prepare_dynamic_family_publication");
   unavailable.add("submit_dynamic_family_publication");
   unavailable.add("scaffold_dataset_execution_spec");
+  unavailable.add("preflight_cleaning_rules");
+  unavailable.add("inspect_source_coverage");
 
   // Curated external data sources (P5-03..P5-06).
   register(createPubmedTools({
@@ -290,12 +297,27 @@ export async function createBusinessToolBundle(
   register(createPdfTools(shared), "pdf_extraction");
   register(createChartDataVlmTool({
     ...shared,
-    vlmConfig: context.vlmConfig,
+    resolveVlmConfig: context.resolveVlmConfig,
     httpClient: client,
     onWarning: context.onWarning,
     hilGate: context.hilGate,
     approvalGate: context.approvalGate,
   }), "extract_chart_data_vlm");
+  // Governed paper chart evidence (Gold6 T5): requires the task-owned
+  // SourceAssetRegistry; without it the promotion path stays explicitly
+  // unavailable instead of degrading to path-based inputs.
+  if (context.sourceAssetRegistry !== undefined) {
+    register(createRegisteredPaperChartEvidenceTool({
+      ...shared,
+      sourceAssetRegistry: context.sourceAssetRegistry,
+      resolveVlmConfig: context.resolveVlmConfig,
+      httpClient: context.vlmHttpClient ?? client,
+      approvalGate: context.approvalGate,
+      hilGate: context.hilGate,
+    }), "extract_chart_data_vlm");
+  } else {
+    unavailable.add("extract_registered_paper_chart_evidence");
+  }
 
   // Analysis tools (P5-09): Welch/BH/correlation/clustering with scipy
   // numeric parity; outputs confined to staging/analysis/<runId> (P5-D5).

@@ -60,6 +60,12 @@ export interface ModelRecord {
 export interface SettingsRecord {
   provider_id: string | null;
   active_model_id: string | null;
+  /**
+   * Explicit visual-extraction role: managed-model record id (never a provider
+   * model name), or null when unset. Existing registries migrate to null; a
+   * manually edited image capability is never promoted into this role.
+   */
+  vision_model_id: string | null;
   base_url: string;
   model_name: string;
   max_tokens: number;
@@ -192,6 +198,7 @@ export function defaultRegistry(environment: Record<string, string | undefined>)
     settings: {
       provider_id: null,
       active_model_id: null,
+      vision_model_id: null,
       base_url: environment.PI_BASE_URL ?? environment.DASHSCOPE_BASE_URL ??
         "https://dashscope.aliyuncs.com/compatible-mode/v1",
       model_name: environment.PI_MODEL ?? environment.MODEL_NAME ?? "",
@@ -301,6 +308,18 @@ export function bootstrapEnvironmentDefaults(
 function normalizeLoadedSettings(settings: SettingsRecord): void {
   const defaults = defaultRegistry({}).settings;
   const bounds = SETTING_NUMBER_BOUNDS;
+  // vision_model_id: absent (pre-vision registries) and null both mean "no
+  // explicit role"; only a non-empty string is kept, anything else is corrupt.
+  settings.vision_model_id = settings.vision_model_id === undefined ||
+      settings.vision_model_id === null
+    ? defaults.vision_model_id
+    : typeof settings.vision_model_id === "string" && settings.vision_model_id.trim() !== ""
+      ? settings.vision_model_id
+      : (console.warn(
+        `[model-registry] settings.vision_model_id: invalid value ` +
+          `${String(settings.vision_model_id)}, falling back to null`,
+      ),
+        defaults.vision_model_id);
   settings.max_tokens = clampNumber(
     settings.max_tokens,
     bounds.max_tokens.min,

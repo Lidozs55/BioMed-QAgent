@@ -2,6 +2,11 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import {
+  parseTaskExecutionContext,
+  stableTaskExecutionContextJson,
+  type TaskExecutionContext,
+} from "@biomed/contracts";
 import { afterEach, describe, expect, test } from "vitest";
 
 import {
@@ -21,7 +26,96 @@ async function repository(): Promise<DurableTaskRepository> {
   return new DurableTaskRepository(root);
 }
 
+function frozenGold6Context(
+  overrides: Record<string, unknown> = {},
+): TaskExecutionContext {
+  return parseTaskExecutionContext({
+    schema_version: "1.0",
+    kind: "frozen_evaluation",
+    manifest_id: "gold-v1",
+    case_id: "gold6",
+    manifest_sha256: "a".repeat(64),
+    case_spec_sha256: "b".repeat(64),
+    prompt_sha256: "f30ab31099da23c75a3e0037ee303b8814c7c124bc1e84be149d2c6f4c8fc298",
+    runtime_profile_sha256: "c".repeat(64),
+    expected_family: "bioactivity_measurement",
+    required_tables: ["paper_records", "chart_points"],
+    allowed_sources: ["PubMed", "Europe PMC"],
+    source_selection: { papers: ["PMC10408569"] },
+    success_definition: "registered bioactivity publication with reverified artifact hashes",
+    forbidden_shortcuts: ["prompt modification"],
+    ...overrides,
+  });
+}
+
 describe("DurableTaskRepository", () => {
+  test("compares the frozen execution context on request-id reuse and replays it byte-equivalently after a Host restart", async () => {
+    const repo = await repository();
+    const executionContext = frozenGold6Context();
+    const input = {
+      requestId: "request-frozen-context",
+      input: "frozen gold6 prompt",
+      databases: [],
+      mode: "agent" as const,
+      executionContext,
+    };
+
+    const first = await repo.createTask(input);
+    expect(await repo.createTask(input)).toEqual(first);
+    await expect(repo.createTask({ ...input, executionContext: null })).rejects.toBeInstanceOf(
+      DurableTaskConflictError,
+    );
+    await expect(
+      repo.createTask({
+        ...input,
+        executionContext: frozenGold6Context({ case_id: "gold5" }),
+      }),
+    ).rejects.toBeInstanceOf(DurableTaskConflictError);
+
+    // Host restart: a fresh repository instance replays the event log and
+    // returns a byte-equivalent context.
+    const restarted = new DurableTaskRepository(repo.tasksRoot);
+    const snapshot = await restarted.getSnapshot(first.task_id);
+    const replayed = snapshot?.runs[0]?.execution_context;
+    expect(replayed).toEqual(executionContext);
+    expect(stableTaskExecutionContextJson(replayed!)).toBe(
+      stableTaskExecutionContextJson(executionContext),
+    );
+  });
+
+  test("compares the frozen execution context when a run request id is reused", async () => {
+    const repo = await repository();
+    const accepted = await repo.createTask({
+      requestId: "request-frozen-first",
+      input: "first turn",
+      databases: [],
+      mode: "agent",
+      executionContext: null,
+    });
+    await repo.appendRunEvent(accepted.task_id, accepted.run_id, { type: "run_completed" });
+    const context = frozenGold6Context();
+
+    const queued = await repo.createRun(accepted.task_id, {
+      requestId: "request-frozen-run",
+      input: "frozen follow-up",
+      executionContext: context,
+    });
+    expect(
+      await repo.createRun(accepted.task_id, {
+        requestId: "request-frozen-run",
+        input: "frozen follow-up",
+        executionContext: context,
+      }),
+    ).toEqual(queued);
+    await expect(
+      repo.createRun(accepted.task_id, {
+        requestId: "request-frozen-run",
+        input: "frozen follow-up",
+        executionContext: frozenGold6Context({ case_id: "gold5" }),
+      }),
+    ).rejects.toBeInstanceOf(DurableTaskConflictError);
+  });
+
   test("continues per-task event sequence and rebuilds a snapshot after reopen", async () => {
     const first = await repository();
     const accepted = await first.createTask({

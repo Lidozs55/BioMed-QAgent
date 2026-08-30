@@ -2,7 +2,11 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { BioMedAgentTool, BioMedToolResult } from "../contracts.js";
-import { isZipArchive, listZipMembers, readZipMemberBytes } from "../../dataset/transform-host/zip.js";
+import {
+  extractZipMember,
+  readZipCentralDirectory,
+  type ZipMemberEntry,
+} from "../../dataset/acquisition/zip-members.js";
 import type { SourceAssetRegistry } from "../../runtime/source-assets/registry.js";
 
 /**
@@ -50,6 +54,26 @@ function textHead(bytes: Uint8Array): { head: string; truncated: boolean } {
   return { head, truncated: bytes.byteLength > PREVIEW_HEAD_CHARS };
 }
 
+function isZipArchive(bytes: Uint8Array): boolean {
+  return bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b
+    && (bytes[2] === 0x03 || bytes[2] === 0x05 || bytes[2] === 0x07);
+}
+
+function zipMembers(bytes: Buffer): readonly ZipMemberEntry[] {
+  const members = readZipCentralDirectory(bytes);
+  if (members.length > 4096) throw new TypeError("zip archive exceeds the 4096-member cap");
+  return members;
+}
+
+function zipMemberBytes(bytes: Buffer, memberName: string): Buffer {
+  const member = zipMembers(bytes).find((entry) => entry.name === memberName);
+  if (member === undefined) throw new TypeError(`zip member '${memberName}' not found in archive`);
+  if (member.uncompressedSize > 256 * 1024 * 1024) {
+    throw new TypeError(`zip member '${memberName}' exceeds the 268435456-byte extraction cap`);
+  }
+  return extractZipMember(bytes, member);
+}
+
 export function createPreviewCoreAssetTool(
   options: CoreAssetToolOptions,
 ): BioMedAgentTool {
@@ -91,7 +115,7 @@ export function createPreviewCoreAssetTool(
             details: { ok: true },
           };
         }
-        const members = listZipMembers(bytes);
+        const members = zipMembers(bytes);
         if (request.member === undefined) {
           return {
             content: JSON.stringify({
@@ -100,12 +124,17 @@ export function createPreviewCoreAssetTool(
               relative_path: relativePath,
               is_zip: true,
               member_count: members.length,
-              members: members.slice(0, 128),
+              members: members.slice(0, 128).map((member) => ({
+                name: member.name,
+                compressedBytes: member.compressedSize,
+                uncompressedBytes: member.uncompressedSize,
+                method: member.method,
+              })),
             }),
             details: { ok: true },
           };
         }
-        const memberBytes = readZipMemberBytes(bytes, request.member);
+        const memberBytes = zipMemberBytes(bytes, request.member);
         const head = textHead(memberBytes);
         return {
           content: JSON.stringify({
@@ -159,7 +188,7 @@ export function createExtractCoreArchiveTool(
         if (!isZipArchive(bytes)) {
           throw new TypeError("asset is not a zip archive");
         }
-        const memberBytes = readZipMemberBytes(bytes, request.member);
+        const memberBytes = zipMemberBytes(bytes, request.member);
         const baseName = path.posix.basename(request.member.replaceAll("\\", "/"));
         if (!SAFE_FILE_NAME.test(baseName)) {
           throw new TypeError(

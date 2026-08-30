@@ -946,4 +946,53 @@ describe("SettingsPanel model registry", () => {
     });
   });
 
+  it("selects a visual extraction model while leaving the current main model unchanged", async () => {
+    const VISUAL_MODEL: ManagedModelInfo = {
+      ...TEST_MODELS[0],
+      id: "model-vision",
+      model_id: "qwen3.5-vl-plus",
+      name: "Qwen VL Plus",
+      capabilities: { text: true, image: true, video: false, audio: false },
+    };
+    const api = mockApi({
+      // Hostile backend fixture: a raw (unmasked) key must never reach the DOM.
+      fetchProviders: vi.fn().mockResolvedValue([
+        { ...TEST_PROVIDERS[0], api_key: "sk-vision-raw-key-9876" },
+      ]),
+      fetchManagedModels: vi.fn().mockResolvedValue([TEST_MODELS[0], VISUAL_MODEL]),
+      fetchManagedModelsPage: vi.fn().mockResolvedValue({
+        items: [TEST_MODELS[0], VISUAL_MODEL],
+        total: 2,
+        page: 1,
+        size: 8,
+      }),
+      saveSettings: vi.fn().mockResolvedValue({
+        ...TEST_SETTINGS,
+        vision_model_id: "model-vision",
+        vision_model_name: "Qwen VL Plus",
+        vision_provider_name: "DeepSeek",
+        vision_model_ready: true,
+        vision_block_reason: null,
+      }),
+    });
+    renderSettings(api);
+
+    fireEvent.click(await screen.findByRole("combobox", { name: "视觉抽取模型" }));
+    const option = await screen.findByRole("option", { name: /Qwen VL Plus/ });
+    fireEvent.pointerDown(option);
+    fireEvent.click(option);
+
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalledTimes(1));
+    // Only the visual role is saved: the active main model is not touched.
+    expect(vi.mocked(api.saveSettings).mock.calls[0]?.[0]).toEqual({
+      vision_model_id: "model-vision",
+    });
+
+    // Readiness message reflects the saved role.
+    expect(await screen.findByText(/视觉抽取就绪：DeepSeek · Qwen VL Plus/)).toBeVisible();
+
+    // No raw credential material anywhere in the rendered settings page.
+    expect(document.body.textContent).not.toContain("sk-vision-raw-key-9876");
+  });
+
 });

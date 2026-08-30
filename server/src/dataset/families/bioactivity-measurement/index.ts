@@ -5,3 +5,4 @@ export * from "./registered.js";
 export * from "./assembler.js";
 export * from "./chembl.js";
 export * from "./identity.js";
+export * from "./paper-evidence/index.js";

@@ -9,10 +9,13 @@
  * images are extracted per file (VLM cost cap, Python parity); the rest are
  * counted as skipped.
  *
- * Spike degradation D1/D2 (docs/migration/phase5-pdf-spike.md §4.2): the TS
- * tier extracts embedded raster images only (no page rasterization — no
- * Canvas 2D backend is installed), and the bbox is the clip-path
- * approximation when a simple axis-aligned rect exists.
+ * Spike degradation D1/D2 (docs/migration/phase5-pdf-spike.md §4.2) was "no
+ * page rasterization — no Canvas 2D backend is installed". Since Gold6 task 7
+ * a caption-guided page-rendering fallback tier exists
+ * (``pdf-pages.ts``, ``@napi-rs/canvas``): this module remains the FIRST tier
+ * (embedded raster extraction only), and the page renderer only runs when this
+ * tier finds nothing usable. The bbox is still the clip-path approximation
+ * when a simple axis-aligned rect exists.
  */
 
 import { mkdir } from "node:fs/promises";
@@ -26,13 +29,20 @@ import { ChartExtractionError } from "./chart-json.js";
 /** Maximum images extracted from a single PDF (Python ``_MAX_PDF_IMAGES_PER_FILE``). */
 export const MAX_PDF_IMAGES_PER_FILE = 10;
 
-export interface ExtractedPdfImage {
+/** Minimal page-raster descriptor shared by both PDF raster tiers. */
+export interface PdfPageRaster {
   path: string;
   /** 1-based page index. */
   pageIndex: number;
-  /** Clip-rect approximation ``x0,top,x1,bottom`` in PDF points ("" when unknown). */
+  /**
+   * Bbox ``x0,top,x1,bottom`` ("" when unknown). Embedded rasters carry the
+   * clip-rect approximation in PDF points; rendered pages carry detected
+   * pixel coordinates of the rendered image.
+   */
   bbox: string;
 }
+
+export type ExtractedPdfImage = PdfPageRaster;
 
 export interface PdfImageExtraction {
   images: ExtractedPdfImage[];

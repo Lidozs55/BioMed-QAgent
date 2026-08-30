@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * svg2pdf.mjs — 把 docs/architecture/*.svg 转成 docs/latex/images/*.pdf。
+ * svg2pdf.mjs — 把 docs/architecture/*.svg 转成 docs/latex/figures/*.pdf。
  *
  * 原理：本机无 inkscape/pandoc，但装有 Edge（Chromium）。用 Edge headless 把
  * 包着 <img> 的临时 HTML（@page 尺寸 = SVG 宽高）打印为矢量 PDF。
@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..'); // docs/latex
 const REPO = resolve(ROOT, '..', '..'); // 仓库根
-const OUT_DIR = join(ROOT, 'images');
+const OUT_DIR = join(ROOT, 'figures');
 
 const EDGE_CANDIDATES = [
   'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',

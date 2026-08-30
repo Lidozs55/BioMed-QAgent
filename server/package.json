@@ -8,7 +8,7 @@
     "dev": "tsx watch --ignore ../data --ignore ../frontend --ignore ../server/data --env-file-if-exists=../.env src/index.ts",
     "build": "tsc -p tsconfig.json",
     "prestart": "node ../scripts/build-contracts-if-needed.mjs",
-    "start": "tsc -p tsconfig.json && node --env-file-if-exists=../.env dist/index.js --static",
+    "start": "node --env-file-if-exists=../.env dist/index.js --static",
     "pretest": "node ../scripts/build-contracts-if-needed.mjs",
     "test": "vitest run",
     "lint": "eslint . --max-warnings 0",
@@ -17,6 +17,7 @@
   "dependencies": {
     "@biomed/contracts": "workspace:*",
     "@earendil-works/pi-coding-agent": "0.82.1",
+    "@napi-rs/canvas": "1.0.5",
     "cheerio": "^1.2.0",
     "fast-xml-parser": "^5.10.1",
     "pdfjs-dist": "^6.2.108",

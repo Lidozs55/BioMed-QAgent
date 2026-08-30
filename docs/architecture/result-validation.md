@@ -161,6 +161,10 @@ count；被去重或冲突淘汰的来源记录不能继续影响 low fraction �
 medium，全部 high 才 high；VLM-only、未审核 proposed/string-similarity mapping 与
 跨源冲突使用显式 cap。`requires_human_review` 是 evaluator 派生值，不由 Adapter 设置。
 
+对论文源数值（图表 y 值）另做固定代码数字规律筛查，灵感来自公开的医学论文数据
+打假方法：末位数 / 末两位数分布均匀性卡方检验、插值（等差）规律与重复值检测；
+统计异常时该图表置信度降级为 `low`。
+
 ### 11.3 与 Validation 的关系
 
 置信度不是 Validation 的替代。Validation 判断是否满足发布规则；Confidence 描

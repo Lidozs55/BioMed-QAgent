@@ -2,9 +2,9 @@
 
 \section{相较基线的收益与消耗}
 
-分别以"纯人工整理"和"纯 Agent 问答"为基线，表~\ref{tab:benefit-cost} 归纳本系统的收益与新增消耗。
+分别以“纯人工整理”和“纯 Agent 问答”为基线，表~\ref{tab:benefit-cost} 归纳本系统的收益与新增消耗。
 
-\begin{xltabular}{\linewidth}{LLL}
+\begin{xltabular}{\linewidth}{>{\hsize=0.7\hsize}L>{\hsize=1.2\hsize}L>{\hsize=1.1\hsize}L}
 \caption{相较两条基线的收益与消耗}\label{tab:benefit-cost}\\
 \toprule
 \textbf{基线} & \textbf{本系统的收益} & \textbf{新增消耗} \\
@@ -14,21 +14,35 @@
 \textbf{基线} & \textbf{本系统的收益} & \textbf{新增消耗} \\
 \midrule
 \endhead
-纯人工整理 & 消除多库重复查询与下载、手工复制对列与统一缺失值、逐条查证来源与版本、人工检查主外键/重复/冲突、任务中断后重做、错误后整体重做，以及为下游补写表结构与来源说明 & token 与模型调用费用（Agent 推理、Qwen-VL 图表抽取）、来源文件/检查点/审计/发布物的存储、SHA-256 与验证的计算开销、专用数据 API 访问费用、模糊映射与冲突的人工审核、新数据源接入的一次性适配 \\
-纯 Agent 问答 & 把对话输出升级为可复用、可核验的数据产品：确定性可复现、来源与版本证据、发布前质量门与冲突审计、可恢复可修正（检查点、人工确认与 supersedes），而纯 Agent 的自由改写难以稳定复现、中断后往往整体重来 & 高于"一次问答"的模型与验证开销、产物持久化与维护、流程中的人工介入点（纯 Agent"先回答后纠错"完全自助但没有质量保证）、数据家族表结构/解析器/校验配置的一次性投入 \\
+纯人工整理 & 消除多库重复查询与下载、手工复制对列与统一缺失值、逐条查证来源与版本、人工检查主外键/重复/冲突、中断与错误后的重做，以及为下游补写表结构与来源说明 & token 与模型调用费用（Agent 推理、Qwen-VL 图表抽取）、来源文件/检查点/审计/发布物的存储、SHA-256 与验证的计算开销、数据 API 访问费用、模糊映射与冲突的人工审核、新数据源接入的一次性适配 \\
+纯 Agent 问答 & 把对话输出升级为可复用、可核验的数据产品：确定性可复现、来源与版本证据、发布前质量门与冲突审计、可恢复可修正，而纯 Agent 的自由改写难以稳定复现、中断后往往整体重来 & 高于“一次问答”的模型与验证开销、产物持久化与维护、流程中的人工介入点（纯 Agent“先回答后纠错”完全自助但没有质量保证）、数据家族表结构/解析器/校验配置的一次性投入 \\
 \bottomrule
 \end{xltabular}
 
-项目的价值不应表述为"消除人工"，而应表述为：把人工从重复搬运转向对科学语义、不确定性和冲突的高价值核对，并使这些核对结果可持续复用。
+项目的价值不应表述为“消除人工”，而应表述为：把人工从重复搬运转向对科学语义、不确定性和冲突的高价值核对，并使这些核对结果可持续复用。
 
 \section{对科研数据适用性的实际意义}
 
-对研究者而言，正式发布物比聊天答案更接近可纳入科研流程的数据对象：它能被脚本读取，有明确表结构，包含来源与质量说明，可以在发现错误时定位并修正。对团队协作而言，发布清单和 supersedes 关系降低了"每个人手里有一份不同 CSV"的风险。对后续知识图谱、统计分析或证据推理而言，多表关系和溯源提供了比宽表复制更稳定的输入。
+对研究者而言，正式发布物比聊天答案更接近可纳入科研流程的数据对象：它能被脚本读取，有明确表结构，包含来源与质量说明，可以在发现错误时定位并修正。对团队协作而言，发布清单和 supersedes 关系降低了“每个人手里有一份不同 CSV”的风险。
 
-这种意义的前提，是能力边界作为产品属性被显式交付，而非以对话措辞掩盖——三案例的边界与改进状态见 \ref{sec:boundaries} 节。
+对后续知识图谱、统计分析或证据推理而言，多表关系和溯源提供了比宽表复制更稳定的输入。能力边界随正式产物显式交付（\ref{sec:boundaries} 节），是上述意义成立的前提。
 
 \section{结论}
 
-BioMed-QAgent 针对赛题"从科学问题到可用数据"建立了一条从自然语言需求、来源发现、正式采集、异构解析、字段规范化、多源整合、质量反馈到不可变发布的闭环。其关键不在于让 Qwen 直接生成更多内容，而在于把模型放在适合开放式推理的位置，并把正式数据改变交给可验证的 Dataset Core。
+BioMed-QAgent 针对赛题“从科学问题到可用数据”建立了一条从自然语言需求、来源发现、正式采集、异构解析、字段规范化、多源整合、质量反馈到不可变发布的闭环。
 
-系统把"任务完成"定义为可重验的数据产品，而不是一次性问答结果：每条正式数据都能说明它从哪里来、经过什么处理、质量如何、何处不确定，收到反馈后能定位修正并形成可追溯的新版本。这些能力直接对应赛题的数据质量控制、来源追溯与图表数据提取要求，三个 Gold 案例的逐维度实证见 \ref{sec:eval-criteria} 节。量化结论上，多模型对抗验证中十一轮的每一次错误都落在正确拦截层、零编造行进入受验发布，唯一穿透已修复为准入筛查（\ref{sec:multimodel} 节）；与参考集的规模对照及在办的脚本化覆盖率评测见 \ref{sec:ref-compare} 节。
+其关键在于把模型放在适合开放式推理的位置——Agent 作为数据产品的设计者，自主主导检索策略、来源评估、多表规格设计与自检换版（\ref{sec:agent-autonomy} 节）——并把正式数据改变交给可验证的 Dataset Core。
+
+系统把“任务完成”定义为可重验的数据产品：每条正式数据都能说明它从哪里来、经过什么处理、质量如何、何处不确定，收到反馈后能定位修正并形成可追溯的新版本。这些能力直接对应赛题的数据质量控制、来源追溯与图表数据提取要求，案例的逐维度实证见 \ref{sec:eval-criteria} 节。
+
+量化结论上，多模型对抗验证中十一轮的每一次错误都落在正确拦截层、受验发布中零编造行进入——该结论限定在占位符、空行、未绑定来源与结构/\allowbreak{}摘要闭合等代码可证明的检查范围，科学值的全面正确性仍需参考集核对（\ref{sec:ref-compare} 节）；唯一穿透已修复为准入筛查（\ref{sec:multimodel} 节）。
+
+\renewcommand{\bibname}{参考文献}
+\begin{thebibliography}{9}
+\bibitem{langgraph} LangChain. LangGraph: Orchestrate LLM agents as stateful graphs [OL]. https://github.com/langchain-ai/langgraph, 2025.
+\bibitem{autogen} Wu Q., Bansal G., et al. AutoGen: Enabling Next-Gen LLM Applications via Multi-Agent Conversation [C/OL]. arXiv:2308.08155, 2023.
+\bibitem{openai-agents} OpenAI. OpenAI Agents SDK: Lightweight agent harness [OL]. https://openai.github.io/openai-agents-python/, 2025.
+\bibitem{docetl} Shankar S., et al. DocETL: A Deeply Optimized Declarative ETL System for Complex Data [C/OL]. arXiv:2410.12189, 2024.
+\bibitem{palimpzest} Shankar S., et al. Palimpzest: Optimizing AI-Powered Data Pipelines with Adaptive Declarative Programming [C/OL]. arXiv:2405.14696, 2024.
+\bibitem{temporal-approval} Temporal Technologies. Temporal Design Patterns: Human Approval [OL]. https://docs.temporal.io/develop/, 2026-08 检索.
+\end{thebibliography}
