@@ -18,7 +18,7 @@ pnpm run pack -- --keep-temp                 # 保留中间构建目录（调试
 
 注意：`pnpm pack`（不带 run）是 pnpm 的内置 tarball 命令，与脚本同名会被内置命令抢占，因此务必写 `pnpm run pack`，或使用无冲突的别名 `pnpm pack:target`。
 
-构建机要求：git、pnpm（锁文件版本）、Node 22、tar、curl。依赖 store 已热时全程可离线；运行时下载见下节。
+构建机要求：git、pnpm（锁文件版本）、Node 22、tar、curl。依赖 store 已热时全程可离线；运行时下载见下节。交叉打包（构建非本机平台的 bundle）额外要求 PATH 上有任意带 pip 的 CPython（见"内嵌科学计算栈"）。
 
 ## 产物布局
 
@@ -34,6 +34,7 @@ target/biomed-qagent-<version>-<win|linux|macos>/
 └── runtime/
     ├── node/                内嵌 Node.js 便携版
     └── python/              内嵌 CPython（python-build-standalone）
+                             预装 numpy + scipy（见"内嵌科学计算栈"）
 ```
 
 ## 集成点（为什么不需要改业务源码）
@@ -51,6 +52,18 @@ GitHub 不可达时走代理重试：
 ```bash
 https_proxy=http://127.0.0.1:7897 pnpm run pack
 ```
+
+## 内嵌科学计算栈（numpy / scipy）
+
+内嵌 Python 预装 `PYTHON_EXTRAS` 钉死的科学计算包（当前 numpy 2.5.2、scipy 1.18.1），供目标机上的分析类脚本直接使用。要点：
+
+- **安装方式**：`pip install --platform <目标平台标签> --python-version 3.12.14 --implementation cp --only-binary=:all: --no-deps --target <内嵌 site-packages>`。wheel 按目标平台标签解析与解包，目标平台代码从不在构建机执行，因此交叉打包（如在 Windows 上出 linux 包）同样可用。
+- **平台标签**：win → `win_amd64`；linux → `manylinux_2_28_x86_64`（兼容 `manylinux_2_27.manylinux_2_28` 复合标签 wheel）；macOS → `macosx_11_0_arm64` + `macosx_12_0_arm64` 两个标签都传（numpy 用前者、scipy 用后者）。
+- **平台约束**：linux 包要求目标机 glibc ≥ 2.28（Ubuntu 20.04+ / Debian 11+ 等）；macOS 包要求 Apple Silicon + macOS 12+。
+- **体积影响**：wheel 下载量每平台约 +47 MB（压缩态）；解压进 bundle 约 +180 MB（实测 win：534.8 → 715.1 MiB，scipy 占大头，捆绑 OpenBLAS 二进制）。
+- **升级**：改脚本顶部 `PYTHON_EXTRAS` 常量。若新版本在某平台缺 cp312 wheel，打包会在该步显式失败（不会静默产出缺包 bundle）。
+- **架构边界不变**：`database/` 与 `pyproject.toml` 仍是纯标准库，numpy/scipy 只存在于分发包的内嵌运行时；bridge 与开发环境均不感知、不受影响。
+- **交叉打包前置**：跨平台打包时 pip 进程本身要能跑，要求构建机 PATH 上有任意带 pip 的 CPython（同平台打包直接用内嵌解释器，无额外要求）。
 
 ## 边界与已知事项
 

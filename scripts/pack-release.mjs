@@ -11,6 +11,7 @@
 //     .env.example           configuration template
 //     runtime/node/          embedded Node.js (portable, nodejs.org)
 //     runtime/python/        embedded CPython (python-build-standalone, same distro uv uses)
+//                            with the pinned scientific stack preinstalled (PYTHON_EXTRAS)
 //
 // The target machine needs nothing preinstalled: no Node, no Python, no pnpm, no uv.
 // The host resolves the Python interpreter via BIOMED_PYTHON_BIN (see
@@ -20,6 +21,10 @@
 // Usage (from the repository root):
 //   pnpm run pack [-- --platform=win|linux|macos|all] [--out=<dir>] [--ref=<git-ref>] [--keep-temp]
 //   pnpm pack:target --platform=all     (alias; plain `pnpm pack` is pnpm's built-in tarball command)
+//
+// Cross-packing (building a bundle for a different OS than the host) additionally
+// needs any host CPython with pip on PATH — the wheel step never executes target
+// code, but the pip process itself must run somewhere (see installPythonExtras).
 //
 // If runtime downloads fail (e.g. GitHub unreachable), set HTTPS_PROXY and retry:
 //   https_proxy=http://127.0.0.1:7897 pnpm run pack
@@ -46,6 +51,14 @@ import { parseArgs } from "node:util";
 const NODE_VERSION = "22.21.0";
 const PYTHON_VERSION = "3.12.14";
 const PYTHON_PBS_TAG = "20260825";
+// Scientific stack preinstalled into the embedded runtime (see installPythonExtras).
+// Fully pinned for reproducible bundles; bump deliberately and keep all three
+// platform wheels available (see docs/packaging.md).
+const PYTHON_EXTRAS = [
+  { name: "numpy", version: "2.5.2" },
+  { name: "scipy", version: "1.18.1" },
+];
+const PYTHON_MAJOR_MINOR = PYTHON_VERSION.split(".").slice(0, 2).join(".");
 
 const NODE_DIST = "https://nodejs.org/dist";
 const PBS_DIST =
@@ -58,6 +71,9 @@ const PLATFORMS = {
     nodeBin: "node.exe",
     pyTriple: "x86_64-pc-windows-msvc",
     pythonBin: "python.exe",
+    sitePackages: "Lib/site-packages",
+    // pip --platform tags matching the cp312 wheels of PYTHON_EXTRAS
+    pipPlatforms: ["win_amd64"],
     launcher: "start.bat",
   },
   linux: {
@@ -66,6 +82,9 @@ const PLATFORMS = {
     nodeBin: "bin/node",
     pyTriple: "x86_64-unknown-linux-gnu",
     pythonBin: "bin/python3",
+    sitePackages: `lib/python${PYTHON_MAJOR_MINOR}/site-packages`,
+    // manylinux_2_28 also matches the manylinux_2_27.manylinux_2_28 compound wheels
+    pipPlatforms: ["manylinux_2_28_x86_64"],
     launcher: "start.sh",
   },
   macos: {
@@ -74,6 +93,9 @@ const PLATFORMS = {
     nodeBin: "bin/node",
     pyTriple: "aarch64-apple-darwin",
     pythonBin: "bin/python3",
+    sitePackages: `lib/python${PYTHON_MAJOR_MINOR}/site-packages`,
+    // numpy ships macosx_11_0, scipy macosx_12_0 — allow both
+    pipPlatforms: ["macosx_11_0_arm64", "macosx_12_0_arm64"],
     launcher: "start.sh",
   },
 };
@@ -148,6 +170,66 @@ function extract(archiveFile, destDir) {
   const relArchive = path.basename(archiveFile);
   const relDest = path.relative(archiveDir, destDir).replaceAll("\\", "/");
   runOrDie(tarBinaryFor(archiveFile), ["-xf", relArchive, "-C", relDest], { cwd: archiveDir });
+}
+
+// Interpreter that drives pip. For the host platform the embedded interpreter
+// itself runs; when cross-packing (e.g. the linux bundle on a Windows host) the
+// embedded binary cannot execute, so fall back to any host CPython. Either way
+// target code is never executed — pip only unpacks wheels built for the target
+// platform tags into --target.
+function resolvePipDriver(key, platform, pythonRoot) {
+  if (key === defaultPlatform()) {
+    return path.join(pythonRoot, platform.pythonBin);
+  }
+  for (const name of process.platform === "win32" ? ["python", "py"] : ["python3", "python"]) {
+    const probe = run(name, ["-c", "import sys"], { capture: true });
+    if (probe.status === 0) return name;
+  }
+  fail(`cross-packing ${key} needs a host CPython with pip on PATH (none found)`);
+}
+
+// Installs the pinned scientific stack (PYTHON_EXTRAS) into the embedded
+// runtime. pip resolves wheels against the TARGET platform tags, downloads
+// them, and unpacks straight into the runtime's site-packages via --target —
+// no venv, no compilation, reproducible via pinned versions + --no-deps.
+function installPythonExtras(key, platform, pythonRoot, pipCacheDir) {
+  if (PYTHON_EXTRAS.length === 0) return;
+  const sitePackages = path.join(pythonRoot, platform.sitePackages);
+  mkdirSync(sitePackages, { recursive: true });
+  const driver = resolvePipDriver(key, platform, pythonRoot);
+  const requirements = PYTHON_EXTRAS.map((extra) => `${extra.name}==${extra.version}`);
+  console.log(
+    `[pack]   installing ${requirements.join(" ")} into embedded Python ` +
+      `(${platform.pipPlatforms.join(" / ")})`,
+  );
+  runOrDie(driver, [
+    "-m", "pip", "install",
+    "--quiet", "--progress-bar", "off",
+    ...platform.pipPlatforms.flatMap((tag) => ["--platform", tag]),
+    "--python-version", PYTHON_VERSION,
+    "--implementation", "cp",
+    "--only-binary=:all:",
+    "--no-deps",
+    "--cache-dir", pipCacheDir,
+    "--target", sitePackages,
+    ...requirements,
+  ]);
+  for (const extra of PYTHON_EXTRAS) {
+    if (!existsSync(path.join(sitePackages, extra.name))) {
+      fail(`embedded Python missing ${extra.name} after pip install`);
+    }
+  }
+  if (key === defaultPlatform()) {
+    // Smoke test only possible when the embedded interpreter runs on this host.
+    const body = PYTHON_EXTRAS.map((extra) => `print("${extra.name}", ${extra.name}.__version__)`)
+      .join("; ");
+    const check = runOrDie(
+      path.join(pythonRoot, platform.pythonBin),
+      ["-c", `import ${PYTHON_EXTRAS.map((extra) => extra.name).join(", ")}; ${body}`],
+      { capture: true },
+    );
+    console.log(`[pack]   import check: ${String(check.stdout).trim().replaceAll("\n", " · ")}`);
+  }
 }
 
 function removeStaleTempDirs(outRoot) {
@@ -238,6 +320,7 @@ function readmeText(version, platform) {
     "",
     `Embedded runtimes: Node.js v${NODE_VERSION} · CPython ${PYTHON_VERSION}`,
     `(python-build-standalone ${PYTHON_PBS_TAG}, same distribution uv uses)`,
+    `Python runtime ships with: ${PYTHON_EXTRAS.map((extra) => `${extra.name} ${extra.version}`).join(" · ")}`,
     "No preinstalled Node/Python/pnpm/uv is required on the target machine.",
     "",
     "Run:",
@@ -384,6 +467,7 @@ for (const key of selected) {
     fail(`unexpected Python archive layout: ${pyInner} lacks ${platform.pythonBin}`);
   }
   renameSync(pyInner, path.join(packageDir, "runtime", "python"));
+  installPythonExtras(key, platform, path.join(packageDir, "runtime", "python"), path.join(cacheDir, "pip"));
 
   step(7, "write launchers and README");
   writeFileSync(path.join(packageDir, "start.bat"), startBatScript());
