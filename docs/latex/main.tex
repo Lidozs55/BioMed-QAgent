@@ -4,13 +4,14 @@
 %% 编译：latexmk -xelatex -outdir=build main.tex
 %% 依赖：TeX Live（xelatex）；中文排版走 ctex；无外部字体要求
 %% =====================================================================
-\documentclass[UTF8, scheme=chinese, zihao=-4, oneside]{ctexbook}
+\documentclass[UTF8, scheme=chinese, zihao=5, oneside]{ctexbook}
 
 % 让 xdvipdfmx 为 CJK 写 ToUnicode：PDF 中文可复制/可搜索
 \XeTeXgenerateactualtext=1
 
 % ---------------------------------------------------------------- 页面
-\usepackage[a4paper, top=2.6cm, bottom=2.6cm, left=2.8cm, right=2.8cm]{geometry}
+\usepackage[a4paper, top=2.2cm, bottom=2.2cm, left=2.2cm, right=2.2cm]{geometry}
+\usepackage{pdflscape}   % 主架构图整页横排（ch03 landscape 环境）
 \emergencystretch=3em
 
 % ---------------------------------------------------------------- 常用宏包
@@ -28,6 +29,15 @@
 % 正文中直接出现的数学符号（不在拉丁字体里）映射到数学字体
 \newunicodechar{≠}{\ensuremath{\neq}}
 \newunicodechar{↔}{\ensuremath{\leftrightarrow}}
+
+% ---------------------------------------------------------------- 章前空白
+% ctexbook 默认章标题前留 ~50pt 弹性空白， competition 报告页数紧张，收紧到 16pt；
+% beforeskip 需为负值（绝对量）以免首行被吞（同 titlesec 约定），afterskip 保持默认
+\ctexset{
+  chapter/beforeskip = -16pt,
+  section/beforeskip = 1.2ex plus 0.3ex,
+  subsection/beforeskip = 1ex plus 0.2ex,
+}
 
 % ---------------------------------------------------------------- 表格列型
 % 中文论文表体左对齐、自动换行（X 列），配合 xltabular 使用
@@ -74,12 +84,12 @@
 % ---------------------------------------------------------------- 交叉引用与书签
 \usepackage[bookmarksnumbered=true, hidelinks]{hyperref}
 \hypersetup{
-  pdftitle={BioMed-QAgent：可信科学数据编译器——参赛作品报告},
+  pdftitle={BioMed QAgent：面向生物医学研究的多源数据智能采集与分析系统——参赛作品报告},
   pdfauthor={BioMed-QAgent 项目组},
 }
 
 % ---------------------------------------------------------------- 目录深度
-\setcounter{tocdepth}{3}
+\setcounter{tocdepth}{0}
 \setcounter{secnumdepth}{3}
 
 \begin{document}
@@ -88,11 +98,11 @@
 \begin{titlepage}
   \centering
   \vspace*{2.8cm}
-  {\zihao{1} BioMed-QAgent}\par
+  {\zihao{1} BioMed QAgent}\par
   \vspace{1.1em}
-  {\zihao{3} 可信科学数据编译器}\par
+  {\zihao{3} 面向生物医学研究的多源数据智能采集与分析系统}\par
   \vspace{0.8em}
-  {\zihao{4} —— 面向科研数据查找与整合的参赛作品报告 ——}\par
+  {\zihao{4} —— 参赛作品报告 ——}\par
   \vspace{5.5cm}
   {\zihao{4} 2026 年 8 月}\par
   \vfill

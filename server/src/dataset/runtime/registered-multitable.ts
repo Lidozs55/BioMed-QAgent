@@ -35,6 +35,7 @@ import {
   registeredTableSchemasById,
 } from "../families/index.js";
 import { packageDigest } from "../publish/manifest.js";
+import { buildSourceCoverageReport, SOURCE_COVERAGE_ARTIFACT_FILE, writeSourceCoverageReport } from "../audit/source-coverage.js";
 import { promotePublication, type PublishResult } from "../publish/publisher.js";
 import { validateMultiTableCandidate } from "../validation/multitable.js";
 import { SourceAssetRegistry } from "../../runtime/source-assets/registry.js";
@@ -248,6 +249,8 @@ export interface RegisteredMultiTableExecutionInput {
   forbiddenRoots?: readonly string[];
   publishedAt?: string;
   runId?: string;
+  /** Runtime discovery observations for the source coverage evidence. */
+  discoveryQueries?: readonly import("@biomed/contracts").DiscoveryQueryRecord[] | null;
 }
 
 export interface RegisteredMultiTableExecutionResult {
@@ -805,6 +808,34 @@ export async function executeRegisteredMultiTableBuild(
     );
   }
 
+  // Source coverage evidence (TODO P1 #21): asset evidence is resolved from
+  // the build's own registration receipts, keyed by spec binding.
+  const coverageAssetByBinding: Record<
+    string,
+    { asset_id: string; sha256: string; size_bytes: number; media_type: string }
+  > = {};
+  for (const [bindingId, assetId] of Object.entries(input.registeredAssetIds)) {
+    const receipt = sourceReceipts.get(assetId);
+    if (receipt === undefined) continue;
+    coverageAssetByBinding[bindingId] = {
+      asset_id: receipt.asset_ref.asset_id,
+      sha256: receipt.sha256,
+      size_bytes: receipt.size_bytes,
+      media_type: receipt.media_type,
+    };
+  }
+  await writeSourceCoverageReport(
+    outputDir,
+    buildSourceCoverageReport({
+      taskId: input.taskId,
+      spec: input.spec,
+      sourceAssets: coverageAssetByBinding,
+      registrationReceipts: [...sourceReceipts.values()],
+      integratedRows: null,
+      discoveryQueries: input.discoveryQueries ?? null,
+    }),
+  );
+
   const entries: ManifestArtifactEntry[] = [];
   for (const table of candidate.tables) {
     entries.push(await artifact(outputDir, tableResults[table.definition.table_id]!.output_files[0]!.relative_path,
@@ -816,6 +847,7 @@ export async function executeRegisteredMultiTableBuild(
   if (productAssessment !== null) {
     entries.push(await artifact(outputDir, "product_assessment.json", "audit_report", "application/json"));
   }
+  entries.push(await artifact(outputDir, SOURCE_COVERAGE_ARTIFACT_FILE, "audit_report", "application/json"));
   const packageSha = packageDigest(entries);
   const failedChecks = b3.checks.filter((check) => !check.passed);
   const validation: ValidationResult = {

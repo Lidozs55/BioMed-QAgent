@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 
-import { DEFAULT_RUNTIME_LIMITS, type RuntimeLimits } from "@biomed/contracts";
+import { DEFAULT_RUNTIME_LIMITS, type DiscoveryQueryRecord, type RuntimeLimits } from "@biomed/contracts";
 
 import type { BioMedAgentAdapter, BioMedModelConfig } from "../agent/contracts.js";
 import { PiAgentAdapter } from "../agent/pi-adapter.js";
@@ -125,6 +125,10 @@ export function createPhase3ToolHooks(
   currentRunId: () => string,
 ): ToolHooks {
   const startedProgressOps = new Set<string>();
+  // Discovery ledger (source coverage evidence): one record per terminal
+  // onQuery call, handed to the Dataset Core at execute time and projected
+  // from persisted events on recovery (discovery-ledger.ts).
+  const discoveryRecords: DiscoveryQueryRecord[] = [];
   // Per-source sequence for call-scoped query ids (``tool:<source>:query:<seq>``)
   // and the started-but-not-yet-finished queries awaiting their terminal call.
   const querySequences = new Map<string, number>();
@@ -180,6 +184,7 @@ export function createPhase3ToolHooks(
     return nextQueryId(source);
   };
   return {
+    discoveryLedger: (): DiscoveryQueryRecord[] => [...discoveryRecords],
     onQueryStarted: (query, source) => {
       const operationId = nextQueryId(source);
       const entry = { query, source, operationId };
@@ -201,6 +206,15 @@ export function createPhase3ToolHooks(
     },
     onQuery: (query, source, status, recordsCount = 0, callToken) => {
       const operationId = consumeQueryId(query, source, callToken);
+      discoveryRecords.push({
+        operation_id: operationId,
+        source,
+        query,
+        status,
+        result_count: Math.max(0, recordsCount),
+        requested_limit: null,
+        retrieved_at: new Date().toISOString(),
+      });
       void recordRunEvent({
         type: "operation_progress",
         operation_id: operationId,
@@ -753,6 +767,7 @@ export async function createPhase3Runtime(
         taskRoot,
         runId: () => currentRunId,
         piSessionId: () => currentPiSessionId,
+        discoveryLedger: () => toolHooks.discoveryLedger?.() ?? null,
         onDiagnostic: (diagnostic) => {
           console.info("tool.dataset_execution", diagnostic);
         },
