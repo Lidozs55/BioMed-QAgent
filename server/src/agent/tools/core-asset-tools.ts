@@ -8,6 +8,7 @@ import {
   type ZipMemberEntry,
 } from "../../dataset/acquisition/zip-members.js";
 import type { SourceAssetRegistry } from "../../runtime/source-assets/registry.js";
+import { mediaTypeFor } from "./import-tools.js";
 
 /**
  * Core-owned archive access for agents: preview lists/reads what a Core asset
@@ -202,6 +203,9 @@ export function createExtractCoreArchiveTool(
         const receipt = await options.sourceAssetRegistry.register({
           sourceId: `extract_${request.asset_id.slice("asset_".length, "asset_".length + 12)}`,
           relativePath: memberRelative,
+          // Register the member's true media type (registry fallback is
+          // octet-stream for .xml/.pdf/... which blocks media-gated parsers).
+          mediaType: mediaTypeFor(baseName),
         });
         return {
           content: JSON.stringify({

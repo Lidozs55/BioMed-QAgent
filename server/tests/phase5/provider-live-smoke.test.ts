@@ -208,3 +208,32 @@ describeLive("live:provider-smoke (Europe PMC PDF carrier)", () => {
     expect(result.sourceAsset.asset_id).toBe(`asset_${sha256}`);
   });
 });
+
+describeLive("live:provider-smoke (Europe PMC full-text XML carrier)", () => {
+  it("registers the official full-text XML with a '<' magic and intact receipt", { timeout: 180_000 }, async () => {
+    const fixture = await runtime(
+      (await import("../../src/dataset/acquisition/extended-providers.js")).createExtendedAcquisitionProviders()
+        .filter((provider) => provider.providerId === "europepmc.fulltext_xml.v1"),
+    );
+    const result = await fixture.runtime.acquire(request("europepmc.fulltext_xml.v1", "europepmc_fulltext_xml", "PMC10408569"));
+    expect(result.sourceAsset.role).toBe("carrier");
+    expect(result.attempts.at(-1)?.status).toBe("succeeded");
+    expect(result.sourceAsset.asset_id).toMatch(/^asset_[0-9a-f]{64}$/);
+
+    // Receipt verification against the downloaded bytes; everything stays in
+    // the task temp dir removed by afterAll — nothing is stored in git.
+    const registry = new SourceAssetRegistry("task_provider_smoke", fixture.root);
+    const resolved = await registry.resolveCarrier(result.sourceAsset.asset_id);
+    const receipt = resolved.registration_receipt;
+    expect(receipt.media_type).toBe("application/xml");
+
+    const chunks: Buffer[] = [];
+    for await (const chunk of resolved.content) chunks.push(Buffer.from(chunk));
+    const xml = Buffer.concat(chunks);
+    expect(xml.subarray(0, 1).toString("latin1")).toBe("<");
+    expect(xml.length).toBe(receipt.size_bytes);
+    const sha256 = createHash("sha256").update(xml).digest("hex");
+    expect(receipt.sha256).toBe(sha256);
+    expect(result.sourceAsset.asset_id).toBe(`asset_${sha256}`);
+  });
+});
